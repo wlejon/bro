@@ -1618,6 +1618,139 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Async re-decode — bro.tts.decodeFrom(kokoro, voice, asr, F0, N, nPhonemes, opts)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// The prosody-editing seam (kokoro.decodeFrom) on a background thread, so the UI
+// never blocks while the user scrubs the timing / pitch / energy and we re-decode
+// the back half on every change. Same result as the sync method
+// ({ samples, sampleRate, stages? }); opts.onDone(result, info) fires once on the
+// JS thread, info = { cancelled, error? }. Single-owner like synthesize: a second
+// op while one is in flight throws, and .cancel() aborts the in-flight decode.
+
+// Shared between the work thread (sole writer) and the JS thread (sole reader /
+// caller of onDone). Held by shared_ptr.
+struct DecodeJob {
+    VoiceWrapper*           vw = nullptr;             // borrowed via voiceRef dup
+    std::vector<float>      asr, F0, N;               // edited back-half inputs
+    int                     total = 0;
+    int                     nph = 0;
+    bool                    wantTrace = false;
+    brosoundml::KokoroTrace trace;                    // filled by work() if wantTrace
+    std::vector<float>      samples;                  // filled by work()
+    int                     sample_rate = 24000;      // filled by work()
+    JSValue                 onDone    = JS_UNDEFINED; // dup'd; UNDEFINED if absent
+    JSValue                 kokoroRef = JS_UNDEFINED; // dup of the kokoro JS object
+    JSValue                 voiceRef  = JS_UNDEFINED; // dup of the voice JS object
+    bool                    hasOnDone = false;
+};
+
+static JSValue js_kokoro_decodeFrom_async(JSContext* ctx, int argc,
+                                          JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<KokoroWrapper>(ctx, argv[0]);  // non-null (caller)
+    if (argc < 6)
+        return JS_ThrowTypeError(ctx, "decodeFrom(kokoro, voice, asr, F0, N, "
+            "nPhonemes, opts?): voice, asr, F0, N and nPhonemes required");
+
+    auto* vw = qjsbind::unwrap<VoiceWrapper>(ctx, argv[1]);
+    if (!vw)
+        return JS_ThrowTypeError(ctx, "decodeFrom: voice must be a Voice");
+
+    // Parse + validate everything BEFORE claiming the model, so an early return
+    // never leaks the busy lock.
+    auto job = std::make_shared<DecodeJob>();
+    job->vw  = vw;
+    job->asr = qjsbind::read_float32_array(ctx, argv[2]);
+    job->F0  = qjsbind::read_float32_array(ctx, argv[3]);
+    job->N   = qjsbind::read_float32_array(ctx, argv[4]);
+    if (job->asr.empty() || job->F0.empty() || job->N.empty())
+        return JS_ThrowTypeError(ctx,
+            "decodeFrom: asr, F0 and N must be non-empty Float32Arrays");
+    if (job->F0.size() % 2 != 0)
+        return JS_ThrowTypeError(ctx, "decodeFrom: F0 length must be even (2*total)");
+    JS_ToInt32(ctx, &job->nph, argv[5]);
+    job->total = static_cast<int>(job->F0.size() / 2);
+
+    JSValue onDone = JS_UNDEFINED;
+    if (argc >= 7 && JS_IsObject(argv[6])) {
+        JSValue tv = JS_GetPropertyStr(ctx, argv[6], "trace");
+        job->wantTrace = JS_ToBool(ctx, tv) > 0;
+        JS_FreeValue(ctx, tv);
+        onDone = JS_GetPropertyStr(ctx, argv[6], "onDone");
+    }
+
+    // Claim the model for this decode (single-owner; one in flight).
+    bool expected = false;
+    if (!w->busy.compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowInternalError(ctx,
+            "decodeFrom: an operation is already in flight on this model");
+    }
+
+    job->hasOnDone  = JS_IsFunction(ctx, onDone);
+    job->onDone     = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->kokoroRef  = JS_DupValue(ctx, argv[0]);  // keep the model alive
+    job->voiceRef   = JS_DupValue(ctx, argv[1]);  // keep the voice alive
+    JS_FreeValue(ctx, onDone);
+
+    KokoroWrapper* mw = w;
+
+    // Background thread: re-decode the back half from the edited asr/F0/N. A
+    // barge-in flips the cancel flag; decode_from polls it between stages and in
+    // the generator's upsample loop, returning an empty buffer so the GPU stops
+    // and `busy` is released promptly (the cancelled result is discarded).
+    auto work = [job, mw](const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(mw->device);
+        auto buf = mw->kokoro->decode_from(
+            job->vw->voice, job->nph, job->asr, job->total, job->F0, job->N,
+            [&cancel] { return cancel.load(std::memory_order_acquire); },
+            job->wantTrace ? &job->trace : nullptr);
+        job->samples     = std::move(buf.samples);
+        job->sample_rate = buf.sample_rate;
+    };
+
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        // Release the model BEFORE onDone so the callback can immediately launch
+        // the next decode of the latest edit without tripping the in-flight guard.
+        mw->busy.store(false, std::memory_order_release);
+        if (job->hasOnDone) {
+            JSValue result = JS_NewObject(c);
+            JS_SetPropertyStr(c, result, "samples",
+                qjsbind::make_float32_array(c, job->samples));
+            JS_SetPropertyStr(c, result, "sampleRate",
+                JS_NewInt32(c, job->sample_rate));
+            if (job->wantTrace && !cancelled && error.empty())
+                JS_SetPropertyStr(c, result, "stages",
+                    traceStagesToJs(c, job->trace));
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { result, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, result);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnDone) JS_FreeValue(c, job->onDone);
+        JS_FreeValue(c, job->kokoroRef);
+        JS_FreeValue(c, job->voiceRef);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+static JSValue js_tts_decodeFrom(JSContext* ctx, JSValueConst,
+                                 int argc, JSValueConst* argv) {
+    if (argc < 1 || !qjsbind::unwrap<KokoroWrapper>(ctx, argv[0]))
+        return JS_ThrowTypeError(ctx,
+            "decodeFrom(kokoro, voice, asr, F0, N, nPhonemes, opts?): "
+            "a Kokoro model is required");
+    return js_kokoro_decodeFrom_async(ctx, argc, argv);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Install
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1652,6 +1785,8 @@ void installTtsBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_setAssets, "setAssets", 1));
     JS_SetPropertyStr(ctx, tts, "synthesize",
         JS_NewCFunction(ctx, js_tts_synthesize, "synthesize", 4));
+    JS_SetPropertyStr(ctx, tts, "decodeFrom",
+        JS_NewCFunction(ctx, js_tts_decodeFrom, "decodeFrom", 7));
     JS_SetPropertyStr(ctx, broObj, "tts", tts);
 
     JS_FreeValue(ctx, broObj);

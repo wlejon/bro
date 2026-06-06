@@ -166,6 +166,47 @@ const handle = bro.tts.synthesize(kokoro, phonemeIds, voice, {
 });
 // handle.cancel();  // drop the in-flight synthesis; onDone fires cancelled:true
 
+// ── Async re-decode (prosody editing, non-blocking) ─────────────────────────
+
+/**
+ * bro.tts.decodeFrom(kokoro, voice, asr, F0, N, nPhonemes, opts) → AsyncHandle
+ *
+ * The prosody-editing seam: re-run only the decoder BACK HALF (skipping plBERT /
+ * encoders / predictor) from EDITED intermediates, on a background thread. This
+ * is what lets an editor scrub timing / pitch / energy and re-synthesize on every
+ * change without ever blocking the JS thread. The async, latest-wins sibling of
+ * the synchronous kokoro.decodeFrom(voice, asr, F0, N, nPhonemes, opts?) method.
+ *
+ * Inputs are the edited 'asr', 'F0_pred' and 'N_pred' stages from a prior trace:
+ *   - asr   length-regulated content, hiddenDim * total floats.
+ *   - F0    pitch contour, 2 * total floats. total is inferred as F0.length / 2.
+ *   - N     energy contour, 2 * total floats.
+ *   - nPhonemes  the 'phonemes' stage length (picks the voice's style row).
+ * Editing F0/N only: pass the original asr unchanged. Editing durations: rebuild
+ * asr (re-expand the text-encoder features) and resample F0/N to the new frame
+ * count first.
+ *
+ * @param {KokoroModel} kokoro            - from loadKokoro().
+ * @param {Voice}  voice                  - from loadVoice()/createVoice().
+ * @param {Float32Array} asr, F0, N       - the edited back-half grids (above).
+ * @param {number} nPhonemes              - the 'phonemes' stage length.
+ * @param {Object} [opts]
+ * @param {boolean}  [opts.trace=false]   - also return the re-decoded back-half
+ *        `stages` ([{ name, h, w, data }]), built on the background thread.
+ * @param {function} [opts.onDone]        - onDone(result, info) on the JS thread:
+ *        result = { samples: Float32Array, sampleRate: number } (+ stages when
+ *        opts.trace), info = { cancelled: boolean, error?: string }.
+ * @returns {AsyncHandle}  - { cancel(): void }. Throws if another op is already
+ *          in flight on this model (it is single-owner, like synthesize).
+ */
+bro.tts.decodeFrom(kokoro, voice, editedAsr, editedF0, editedN, nPhonemes, {
+    trace: true,
+    onDone: (result, info) => {
+        if (info.cancelled || info.error) return;
+        // play result.samples; result.stages has the new gen_in/har/audio grids.
+    },
+});
+
 // ── Word/phoneme timing from durations ───────────────────────────────────────
 // The output sample count is a fixed multiple of the summed frame count, so:
 //   samplesPerFrame = out.samples.length / sum(out.durations)
