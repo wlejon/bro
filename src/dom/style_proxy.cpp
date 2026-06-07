@@ -20,6 +20,14 @@ std::string StyleProxy::getProperty(const std::string& name) const {
 }
 
 void StyleProxy::setProperty(const std::string& name, const std::string& value) {
+    // CSSOM: setting a property to the empty string removes it (so the cascade
+    // falls back to author stylesheets). This is what `el.style.display = ''`
+    // and setProperty(name, '') both mean — without it the empty declaration
+    // lingers and shadows a stylesheet rule (e.g. a `.panel { display:flex }`).
+    {
+        size_t b = value.find_first_not_of(" \t\r\n");
+        if (b == std::string::npos) { removeProperty(name); return; }
+    }
     // Skip if value unchanged — avoids expensive style sync + layout
     auto it = properties_.find(name);
     if (it != properties_.end() && it->second == value) return;
