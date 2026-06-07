@@ -277,6 +277,10 @@ void Engine::run() {
         // refreshed the tree.
         if (document_ && !document_->isStructureDirty()) {
             document_->drainPendingFrees();
+            // The drain just destroyed nodes the input layer may still cache as
+            // raw pointers (hover/drag/click targets). Null any that died before
+            // the next mouse event dispatches into freed memory.
+            reapDeadInputPointers();
         }
 
         // Pump HTMLMediaElement events on every <video> — must happen on the

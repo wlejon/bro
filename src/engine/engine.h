@@ -370,6 +370,17 @@ private:
 
     dom::Element* hitTest(float x, float y);
 
+    // Null out any cached app-document Element* the input layer holds across
+    // frames (hover/drag/click targets) whose node was just freed. A DOM
+    // mutation — e.g. a render that rebuilds the nodes under the cursor — frees
+    // those elements via drainPendingFrees(), leaving these raw pointers
+    // dangling; the next mouse event would dispatch into freed memory. Uses
+    // Document::isNodeLive (a pointer-value check, safe on a dangling pointer),
+    // the same guard CanvasScene uses for its backing-Element pointer. Called
+    // right after drainPendingFrees(). Scene-HtmlNode and system-panel mirrors
+    // belong to other documents and are intentionally not scrubbed here.
+    void reapDeadInputPointers();
+
     // Find the scene graph whose canvas element is under (x, y) in screen
     // coords. Returns nullptr if none. Writes canvas-local coords (top-left
     // origin) into outLocalX/Y when it returns a graph.

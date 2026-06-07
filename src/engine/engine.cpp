@@ -145,6 +145,26 @@ dom::Element* Engine::hitTest(float x, float y) {
     return hit;
 }
 
+void Engine::reapDeadInputPointers() {
+    if (!document_) return;
+    // isNodeLive is a pointer-value lookup — safe to call on an already-freed
+    // pointer (it never dereferences). A node is reported dead only once
+    // drainPendingFrees() has actually destroyed it, so this must run after the
+    // drain. Each cached pointer below targets the app document; the scene
+    // HtmlNode mirrors and systemHoverTarget_ live in other documents and are
+    // left alone (isNodeLive against this document would wrongly null them).
+    auto dead = [&](const dom::Node* n) { return n && !document_->isNodeLive(n); };
+    if (dead(hoveredElement_)) hoveredElement_ = nullptr;
+    if (dead(scrollbarHoveredElement_)) scrollbarHoveredElement_ = nullptr;
+    // scrollbarDragTarget_ may belong to a system panel (scrollbarDragSystemDoc_
+    // non-null); only scrub it when it's an app-document element.
+    if (!scrollbarDragSystemDoc_ && dead(scrollbarDragTarget_)) scrollbarDragTarget_ = nullptr;
+    if (dead(lockedElement_)) lockedElement_ = nullptr;
+    if (dead(selectionAnchorNode_)) { selectionAnchorNode_ = nullptr; selectionDragging_ = false; }
+    if (dead(appMouseState_.mouseDownTarget)) appMouseState_.mouseDownTarget = nullptr;
+    if (dead(appMouseState_.lastClickTarget)) appMouseState_.lastClickTarget = nullptr;
+}
+
 // ---------------------------------------------------------------------------
 // Event dispatch to JS (delegates to shared implementation)
 // ---------------------------------------------------------------------------
