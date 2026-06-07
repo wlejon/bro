@@ -1589,6 +1589,7 @@ struct QwenSynthJob {
     std::string        speaker;
     std::string        language = "english";
     std::string        instruct;                  // VoiceDesign voice description
+    std::vector<float> xvector;                   // designer x-vector (Base); empty = speaker/instruct path
     brosoundml::QwenTtsSampling sampling;         // temperature/top_k/top_p/seed
     std::vector<float> samples;                  // filled by work()
     int                sample_rate = 24000;       // filled by work()
@@ -1621,6 +1622,13 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
         readQwenSynthOpts(ctx, argv[2], job->speaker, job->language, job->instruct);
         readQwenSampling(ctx, argv[2], job->sampling);
         job->wantTrace = getBool(ctx, argv[2], "trace");
+        // opts.xvector (Base designer): render off-thread from a designed speaker
+        // x-vector instead of a preset/instruct — the async twin of the sync
+        // synthesizeFromXvector, so the voice designer never blocks the JS thread.
+        JSValue xv = JS_GetPropertyStr(ctx, argv[2], "xvector");
+        if (!JS_IsUndefined(xv) && !JS_IsNull(xv))
+            job->xvector = qjsbind::read_float32_array(ctx, xv);
+        JS_FreeValue(ctx, xv);
         onDone = JS_GetPropertyStr(ctx, argv[2], "onDone");
     }
 
@@ -1643,10 +1651,16 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
     // per frame (QwenTts::synthesize returns an empty buffer on cancel).
     auto work = [job, mw](const std::atomic<bool>& cancel) {
         brotensor::DeviceScope scope(mw->device);
-        auto buf = mw->qwen->synthesize(
-            job->text, job->speaker, job->language, job->instruct,
-            [&cancel] { return cancel.load(std::memory_order_acquire); },
-            job->sampling, job->wantTrace ? &job->trace : nullptr);
+        auto cancelFn = [&cancel] { return cancel.load(std::memory_order_acquire); };
+        brosoundml::AudioBuffer buf;
+        if (!job->xvector.empty())
+            buf = mw->qwen->synthesize_with_xvector(
+                job->text, job->xvector, job->language, cancelFn,
+                job->sampling, job->wantTrace ? &job->trace : nullptr);
+        else
+            buf = mw->qwen->synthesize(
+                job->text, job->speaker, job->language, job->instruct,
+                cancelFn, job->sampling, job->wantTrace ? &job->trace : nullptr);
         job->samples     = std::move(buf.samples);
         job->sample_rate = buf.sample_rate;
     };

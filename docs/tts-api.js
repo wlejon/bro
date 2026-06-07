@@ -413,7 +413,14 @@ const xvec = enc.embedSpeaker(monoSamples, { sampleRate: 24000 });  // Float32Ar
  * @param {Object} [opts]
  * @param {string} [opts.speaker]  - preset speaker name (CustomVoice).
  * @param {string} [opts.instruct] - natural-language voice description (VoiceDesign).
+ * @param {Float32Array} [opts.xvector] - designer speaker x-vector (Base variant;
+ *        enc_dim, from embedSpeaker / a blend). The off-thread twin of the sync
+ *        synthesizeFromXvector — takes precedence over speaker/instruct when present,
+ *        so the voice designer renders without blocking the JS thread. Supports
+ *        opts.trace + sampling like the speaker path.
  * @param {string} [opts.language='english']
+ * @param {number} [opts.temperature] / [opts.topK] / [opts.topP] / [opts.seed] - sampling.
+ * @param {boolean} [opts.trace] - also return `stages` (codes raster + c0_confidence).
  * @param {function} [opts.onDone] - onDone(result, info) on the JS thread, where
  *        result = { samples: Float32Array, sampleRate: number } and
  *        info = { cancelled: boolean, error?: string }.
