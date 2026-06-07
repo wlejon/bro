@@ -277,12 +277,20 @@ const qwen = bro.tts.loadQwen('../brosoundml/weights/qwen-tts/0.6B-customvoice')
  *        (VoiceDesign), e.g. 'a warm, low-pitched elderly storyteller'. Ignored
  *        by the 0.6B CustomVoice checkpoint.
  * @param {string} [opts.language='english'] - 'english' | 'chinese' | 'auto' | ...
+ * @param {number} [opts.temperature=0]  - 0 = greedy/deterministic (default; the
+ *        bit-exact upstream policy). >0 makes the autoregressive loop stochastic:
+ *        every code is drawn through a seeded sampler, giving take-to-take variation.
+ * @param {number} [opts.topK=0]   - keep only the top-K logits when sampling (0 = off).
+ * @param {number} [opts.topP=1]   - nucleus cap when sampling (1 = off).
+ * @param {number} [opts.seed=0]   - RNG seed; a fixed (temperature, seed) reproduces
+ *        the exact utterance, different seeds give different takes.
  * @returns {{ samples: Float32Array, sampleRate: number }} - 24 kHz mono, [-1, 1].
  *
  * No durations: Qwen3-TTS is autoregressive over codec frames, not phonemes, so
  * there is no per-phoneme timing array (unlike Kokoro).
  */
 const qout = qwen.synthesize('Hello there.', { speaker: 'serena', language: 'english' });
+// A varied take: qwen.synthesize(text, { speaker: 'serena', temperature: 0.8, topP: 0.95, seed: 7 });
 console.log(`${qout.samples.length} samples @ ${qout.sampleRate} Hz`);
 
 // VoiceDesign: same call, but describe the voice instead of naming a speaker.
@@ -314,6 +322,42 @@ const cloned = qwen.synthesizeClone('Hello there.', 'weights/myvoice.wav', { lan
 // Requires the Base checkpoint:
 // const qbase = bro.tts.loadQwen('../brosoundml/weights/qwen-tts/0.6B-Base');
 // qbase.variant === 'base'
+
+/**
+ * QwenTtsModel.synthesizeFromXvector(text, xvec, opts?) → { samples, sampleRate }  (sync)
+ *
+ * Render `text` from a caller-supplied speaker x-vector directly — synthesizeClone
+ * without the WAV enrollment. `xvec` is a Float32Array of enc_dim (1024) floats, as
+ * embedSpeaker() returns. This is the voice-designer seam: enroll real voices to
+ * x-vectors, then interpolate / morph / steer in that continuous space and render
+ * the designed point — no reference clip per render. Base variant only.
+ *
+ * @param {string} text   - the text to speak.
+ * @param {Float32Array} xvec - enc_dim (1024) speaker x-vector (from embedSpeaker, or
+ *        a blend of several). Throws if the width is wrong or the model isn't Base.
+ * @param {Object} [opts]  - opts.language + the sampling controls (temperature/topK/
+ *        topP/seed) from synthesize().
+ * @returns {{ samples: Float32Array, sampleRate: number }} - 24 kHz mono, [-1, 1].
+ */
+const va = qwen.embedSpeaker(refA, { sampleRate: 24000 });   // Float32Array(1024)
+const vb = qwen.embedSpeaker(refB, { sampleRate: 24000 });
+const mix = va.map((x, i) => 0.5 * x + 0.5 * vb[i]);          // morph halfway between A and B
+const designed = qwen.synthesizeFromXvector('Hello there.', mix, { language: 'english' });
+
+/**
+ * QwenTtsModel.encodeAudio(audio, opts?) → { codes, numQuantizers, numFrames }  (sync)
+ * QwenTtsModel.decodeCodes(codes, numQuantizers, numFrames) → { samples, sampleRate }  (sync)
+ *
+ * The codec analysis / synthesis tail, exposed directly. encodeAudio turns mono PCM
+ * (Float32Array; opts.sampleRate default 24000, resampled internally) into the RVQ
+ * code stream — `codes` is an Int32Array of numQuantizers*numFrames, codebook-major
+ * (codes[k*numFrames + t]). decodeCodes runs the deterministic codec decoder over a
+ * code stream back to 24 kHz (numFrames*1920 samples). Same layout both ways, so
+ * encode ▸ decode round-trips. Lets an editor splice / prefix-lock / round-trip a
+ * code stream and re-render the audio without re-running the autoregressive Talker.
+ */
+const e = qwen.encodeAudio(somePcm, { sampleRate: 24000 });
+const back = qwen.decodeCodes(e.codes, e.numQuantizers, e.numFrames);  // back.samples ≈ somePcm
 
 /**
  * bro.tts.loadSpeakerEncoder(dir, opts?) → SpeakerEncoder   (sync)

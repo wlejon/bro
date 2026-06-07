@@ -604,11 +604,32 @@ static void readQwenSynthOpts(JSContext* ctx, JSValueConst opts,
     JS_FreeValue(ctx, ins);
 }
 
+// Read the optional sampling controls (opts.temperature / topK / topP / seed)
+// into a QwenTtsSampling. Omitted keys keep the struct defaults — temperature 0,
+// i.e. the deterministic greedy policy. Shared by the sync + async synth paths.
+static void readQwenSampling(JSContext* ctx, JSValueConst opts,
+                             brosoundml::QwenTtsSampling& s) {
+    if (!JS_IsObject(opts)) return;
+    getNum(ctx, opts, "temperature", s.temperature);
+    getNum(ctx, opts, "topP", s.top_p);
+    JSValue tk = JS_GetPropertyStr(ctx, opts, "topK");
+    if (JS_IsNumber(tk)) { int32_t t = s.top_k; JS_ToInt32(ctx, &t, tk); s.top_k = t; }
+    JS_FreeValue(ctx, tk);
+    JSValue sd = JS_GetPropertyStr(ctx, opts, "seed");
+    if (JS_IsNumber(sd)) {
+        int64_t t = 0; JS_ToInt64(ctx, &t, sd);
+        s.seed = static_cast<std::uint64_t>(t);
+    }
+    JS_FreeValue(ctx, sd);
+}
+
 // qwen.synthesize(text, opts?) -> { samples, sampleRate }      (sync, blocking)
 //   opts.speaker:  preset speaker name (CustomVoice; e.g. 'serena').
 //   opts.language: 'english' (default), 'chinese', 'auto', ...
 //   opts.instruct: natural-language voice description (VoiceDesign; ignored by
 //                  the 0.6B CustomVoice checkpoint).
+//   opts.temperature / topK / topP / seed: sampling controls (temperature 0 =
+//                  greedy/deterministic, the default; >0 draws a varied take).
 //   The async, cancellable form is bro.tts.synthesize(qwen, text, opts).
 static JSValue js_qwen_synthesize(JSContext* ctx, JSValueConst this_val,
                                   int argc, JSValueConst* argv) {
@@ -618,10 +639,14 @@ static JSValue js_qwen_synthesize(JSContext* ctx, JSValueConst this_val,
     if (argc < 1 || !argStr(ctx, argv[0], text))
         return JS_ThrowTypeError(ctx, "synthesize(text, opts?): text string required");
     std::string speaker, language = "english", instruct;
-    if (argc >= 2) readQwenSynthOpts(ctx, argv[1], speaker, language, instruct);
+    brosoundml::QwenTtsSampling sampling;
+    if (argc >= 2) {
+        readQwenSynthOpts(ctx, argv[1], speaker, language, instruct);
+        readQwenSampling(ctx, argv[1], sampling);
+    }
     try {
         brotensor::DeviceScope scope(w->device);
-        auto buf = w->qwen->synthesize(text, speaker, language, instruct);
+        auto buf = w->qwen->synthesize(text, speaker, language, instruct, {}, sampling);
         return audioBufferToJs(ctx, buf);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "synthesize: %s", e.what());
@@ -644,19 +669,124 @@ static JSValue js_qwen_synthesize_clone(JSContext* ctx, JSValueConst this_val,
     if (argc < 2 || !argStr(ctx, argv[1], refPath))
         return JS_ThrowTypeError(ctx, "synthesizeClone(text, refPath, opts?): refPath (WAV path) string required");
     std::string language = "english";
+    brosoundml::QwenTtsSampling sampling;
     if (argc >= 3 && JS_IsObject(argv[2])) {
         JSValue lv = JS_GetPropertyStr(ctx, argv[2], "language");
         std::string l;
         if (JS_IsString(lv) && argStr(ctx, lv, l)) language = std::move(l);
         JS_FreeValue(ctx, lv);
+        readQwenSampling(ctx, argv[2], sampling);
     }
     try {
         brotensor::DeviceScope scope(w->device);
         brosoundml::AudioBuffer ref = brosoundml::read_wav(refPath);
-        auto buf = w->qwen->synthesize_clone(text, ref, language);
+        auto buf = w->qwen->synthesize_clone(text, ref, language, {}, sampling);
         return audioBufferToJs(ctx, buf);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "synthesizeClone: %s", e.what());
+    }
+}
+
+// qwen.synthesizeFromXvector(text, xvec, opts?) -> { samples, sampleRate }  (sync)
+//   Render `text` from a caller-supplied speaker x-vector (Float32Array of
+//   enc_dim — 1024 — floats, as embedSpeaker returns), bypassing the WAV
+//   enrollment of synthesizeClone. This is the voice-designer seam: enroll real
+//   voices to x-vectors, interpolate / morph / steer in that space, then render
+//   the designed point. Base variant only. opts.language + sampling controls as
+//   synthesize(). Throws if the checkpoint is not Base or the vector width wrong.
+static JSValue js_qwen_synthesize_from_xvector(JSContext* ctx, JSValueConst this_val,
+                                               int argc, JSValueConst* argv) {
+    auto* w = qwenSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "synthesizeFromXvector: not a QwenTts");
+    std::string text;
+    if (argc < 1 || !argStr(ctx, argv[0], text))
+        return JS_ThrowTypeError(ctx,
+            "synthesizeFromXvector(text, xvec, opts?): text string required");
+    std::vector<float> xvec = qjsbind::read_float32_array(ctx, argv[1]);
+    if (xvec.empty())
+        return JS_ThrowTypeError(ctx,
+            "synthesizeFromXvector: xvec must be a non-empty Float32Array");
+    std::string language = "english";
+    brosoundml::QwenTtsSampling sampling;
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        JSValue lv = JS_GetPropertyStr(ctx, argv[2], "language");
+        std::string l;
+        if (JS_IsString(lv) && argStr(ctx, lv, l)) language = std::move(l);
+        JS_FreeValue(ctx, lv);
+        readQwenSampling(ctx, argv[2], sampling);
+    }
+    try {
+        brotensor::DeviceScope scope(w->device);
+        auto buf = w->qwen->synthesize_with_xvector(text, xvec, language, {}, sampling);
+        return audioBufferToJs(ctx, buf);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "synthesizeFromXvector: %s", e.what());
+    }
+}
+
+// qwen.decodeCodes(codes, numQuantizers, numFrames) -> { samples, sampleRate }  (sync)
+//   Decode a precomputed RVQ code stream straight through the bundled 12 Hz codec
+//   to a 24 kHz waveform — the deterministic tail of synthesis. `codes` is an
+//   Int32Array (or number[]) of numQuantizers*numFrames codes, codebook-major
+//   (codes[k*numFrames + t]); the same layout encodeAudio returns. Lets an editor
+//   splice / prefix-lock / round-trip a code stream and re-render it.
+static JSValue js_qwen_decode_codes(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    auto* w = qwenSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "decodeCodes: not a QwenTts");
+    if (argc < 3)
+        return JS_ThrowTypeError(ctx,
+            "decodeCodes(codes, numQuantizers, numFrames): three arguments required");
+    std::vector<int32_t> codes = readIdArray(ctx, argv[0]);
+    if (codes.empty())
+        return JS_ThrowTypeError(ctx, "decodeCodes: codes must be a non-empty Int32Array");
+    int32_t nq = 0, nf = 0;
+    JS_ToInt32(ctx, &nq, argv[1]);
+    JS_ToInt32(ctx, &nf, argv[2]);
+    if (nq <= 0 || nf <= 0 ||
+        static_cast<size_t>(nq) * static_cast<size_t>(nf) != codes.size())
+        return JS_ThrowTypeError(ctx,
+            "decodeCodes: numQuantizers*numFrames must equal codes.length");
+    try {
+        brotensor::DeviceScope scope(w->device);
+        auto buf = w->qwen->decode_codes(codes, nq, nf);
+        return audioBufferToJs(ctx, buf);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "decodeCodes: %s", e.what());
+    }
+}
+
+// qwen.encodeAudio(audio, opts?) -> { codes, numQuantizers, numFrames }  (sync)
+//   The analysis path (inverse of decodeCodes): encode mono PCM into the codec's
+//   RVQ codes. audio: Float32Array of mono samples; opts.sampleRate (default
+//   24000, resampled internally). codes is an Int32Array of numQuantizers*
+//   numFrames, codebook-major — feed straight back to decodeCodes to round-trip.
+static JSValue js_qwen_encode_audio(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    auto* w = qwenSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "encodeAudio: not a QwenTts");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "encodeAudio(audio, opts?): audio required");
+    std::vector<float> audio = qjsbind::read_float32_array(ctx, argv[0]);
+    if (audio.empty())
+        return JS_ThrowTypeError(ctx, "encodeAudio: audio must be a non-empty Float32Array");
+    float sr = 24000.0f;
+    if (argc >= 2 && JS_IsObject(argv[1])) getNum(ctx, argv[1], "sampleRate", sr);
+    try {
+        brotensor::DeviceScope scope(w->device);
+        brosoundml::AudioBuffer ref;
+        ref.samples     = std::move(audio);
+        ref.sample_rate = static_cast<int>(sr);
+        int nf = 0;
+        std::vector<int32_t> codes = w->qwen->encode_audio(ref, &nf);
+        const int nq = nf > 0 ? static_cast<int>(codes.size() / nf) : 0;
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "codes", qjsbind::make_int32_array(ctx, codes));
+        JS_SetPropertyStr(ctx, obj, "numQuantizers", JS_NewInt32(ctx, nq));
+        JS_SetPropertyStr(ctx, obj, "numFrames", JS_NewInt32(ctx, nf));
+        return obj;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "encodeAudio: %s", e.what());
     }
 }
 
@@ -851,6 +981,9 @@ static void registerQwenClass(JSContext* ctx) {
         .get("modelSize",  [](QwenTtsWrapper* w) { return w->qwen->config().model_size; })
         .method_raw("synthesize",      js_qwen_synthesize,       2)
         .method_raw("synthesizeClone", js_qwen_synthesize_clone, 3)
+        .method_raw("synthesizeFromXvector", js_qwen_synthesize_from_xvector, 3)
+        .method_raw("decodeCodes",     js_qwen_decode_codes,     3)
+        .method_raw("encodeAudio",     js_qwen_encode_audio,     2)
         .method_raw("embedSpeaker",    js_qwen_embed_speaker,    2)
         .method_raw("speakers",       js_qwen_speakers,        0)
         .method_raw("languages",      js_qwen_languages,       0)
@@ -1419,6 +1552,7 @@ struct QwenSynthJob {
     std::string        speaker;
     std::string        language = "english";
     std::string        instruct;                  // VoiceDesign voice description
+    brosoundml::QwenTtsSampling sampling;         // temperature/top_k/top_p/seed
     std::vector<float> samples;                  // filled by work()
     int                sample_rate = 24000;       // filled by work()
     JSValue            onDone  = JS_UNDEFINED;     // dup'd; UNDEFINED if absent
@@ -1446,6 +1580,7 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
     JSValue onDone = JS_UNDEFINED;
     if (argc >= 3 && JS_IsObject(argv[2])) {
         readQwenSynthOpts(ctx, argv[2], job->speaker, job->language, job->instruct);
+        readQwenSampling(ctx, argv[2], job->sampling);
         onDone = JS_GetPropertyStr(ctx, argv[2], "onDone");
     }
 
@@ -1470,7 +1605,8 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
         brotensor::DeviceScope scope(mw->device);
         auto buf = mw->qwen->synthesize(
             job->text, job->speaker, job->language, job->instruct,
-            [&cancel] { return cancel.load(std::memory_order_acquire); });
+            [&cancel] { return cancel.load(std::memory_order_acquire); },
+            job->sampling);
         job->samples     = std::move(buf.samples);
         job->sample_rate = buf.sample_rate;
     };
