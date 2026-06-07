@@ -420,3 +420,37 @@ const qhandle = bro.tts.synthesize(qwen, 'Hello there.', {
     },
 });
 // qhandle.cancel();  // abort mid-utterance; onDone fires cancelled:true
+
+/**
+ * bro.tts.synthesizeStream(qwen, text, opts) → AsyncHandle   (streaming, QwenTts only)
+ *
+ * Like the async synthesize, but the audio is delivered in chunks AS the
+ * autoregressive loop produces it, so playback can start before generation
+ * finishes — the lowest-latency path. opts.onChunk(samples) fires on the JS thread
+ * each time the codec decodes a new chunk (the codec is causal, so chunk samples
+ * are final and can be queued straight into an AudioContext); opts.onDone(result,
+ * info) fires once at the end with the complete buffer. .cancel() is real barge-in:
+ * the AR loop stops within a frame, onDone fires { cancelled: true }, and chunks
+ * already delivered stay played.
+ *
+ * @param {QwenTtsModel} qwen
+ * @param {string} text
+ * @param {Object} [opts]
+ * @param {number}   [opts.chunkFrames=25] - 12.5 Hz frames per chunk (25 ≈ 2 s; a
+ *        smaller value = lower first-audio latency, more onChunk calls).
+ * @param {function} [opts.onChunk]  - onChunk(samples: Float32Array) per decoded
+ *        chunk, 24 kHz mono, in order.
+ * @param {function} [opts.onDone]   - onDone(result, info); result = { samples, sampleRate }
+ *        is the whole utterance, info = { cancelled, error? }.
+ * @param {string}   [opts.speaker] / [opts.language] / [opts.instruct]   - as synthesize().
+ * @param {number}   [opts.temperature] / [opts.topK] / [opts.topP] / [opts.seed]  - sampling.
+ * @returns {AsyncHandle} - { cancel(): void }. Throws if another op is in flight,
+ *          or if `qwen` is not a QwenTts (Kokoro synthesis is monolithic).
+ */
+const shandle = bro.tts.synthesizeStream(qwen, 'A longer line that streams as it generates.', {
+    speaker: 'serena',
+    chunkFrames: 8,
+    onChunk: (samples) => { /* queue into an AudioContext buffer for gapless playback */ },
+    onDone: (result, info) => { if (!info.cancelled && !info.error) console.log('done', result.samples.length); },
+});
+// shandle.cancel();  // barge-in: stops within a frame; already-streamed chunks keep playing

@@ -1639,6 +1639,153 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
+// Streaming Qwen synthesis. Same as the async synthesize, but audio is delivered
+// in chunks as the AR loop produces it: opts.onChunk(Float32Array) fires on the JS
+// thread as each codec chunk is decoded (so playback can start before generation
+// finishes), then opts.onDone(result, info) fires once with the full buffer. The
+// work thread is the sole writer of a committed chunk prefix published via an
+// atomic; the JS-thread poll drains it — lock-free, no mutex.
+struct QwenStreamJob {
+    std::string        text;
+    std::string        speaker;
+    std::string        language = "english";
+    std::string        instruct;
+    int                chunkFrames = 25;          // ~2 s at 12.5 Hz
+    brosoundml::QwenTtsSampling sampling;
+    std::vector<float> samples;                   // full audio (onDone), filled by work
+    int                sample_rate = 24000;
+    JSValue            onChunk = JS_UNDEFINED;     // dup'd; UNDEFINED if absent
+    JSValue            onDone  = JS_UNDEFINED;
+    JSValue            qwenRef = JS_UNDEFINED;
+    bool               hasOnChunk = false;
+    bool               hasOnDone  = false;
+    // SPSC handoff: work thread writes chunkSlots[produced] then bumps `produced`;
+    // the JS-thread poll reads up to `produced` and advances `drained`.
+    std::vector<std::vector<float>> chunkSlots;
+    std::atomic<size_t> produced{0};
+    size_t              drained = 0;
+};
+
+// bro.tts.synthesizeStream(qwen, text, opts?) -> AsyncHandle
+static JSValue js_qwen_synthesize_stream(JSContext* ctx, int argc,
+                                         JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<QwenTtsWrapper>(ctx, argv[0]);  // non-null (caller)
+    std::string text;
+    if (argc < 2 || !argStr(ctx, argv[1], text))
+        return JS_ThrowTypeError(ctx,
+            "synthesizeStream(qwen, text, opts?): text string required");
+
+    auto job = std::make_shared<QwenStreamJob>();
+    job->text = std::move(text);
+
+    JSValue onChunk = JS_UNDEFINED, onDone = JS_UNDEFINED;
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        readQwenSynthOpts(ctx, argv[2], job->speaker, job->language, job->instruct);
+        readQwenSampling(ctx, argv[2], job->sampling);
+        JSValue cf = JS_GetPropertyStr(ctx, argv[2], "chunkFrames");
+        if (JS_IsNumber(cf)) {
+            int32_t t = job->chunkFrames; JS_ToInt32(ctx, &t, cf);
+            if (t > 0) job->chunkFrames = t;
+        }
+        JS_FreeValue(ctx, cf);
+        onChunk = JS_GetPropertyStr(ctx, argv[2], "onChunk");
+        onDone  = JS_GetPropertyStr(ctx, argv[2], "onDone");
+    }
+    // Pre-size the chunk slots so the work thread never reallocates while the JS
+    // thread reads: at most (max_frames / chunkFrames) + 1 (final flush) chunks,
+    // bounded by the generator's 4096-frame cap regardless of chunkFrames.
+    job->chunkSlots.resize(4098);
+
+    // Claim the model for this synthesis (single-owner; one in flight).
+    bool expected = false;
+    if (!w->busy.compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onChunk);
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowInternalError(ctx,
+            "synthesizeStream: an operation is already in flight on this model");
+    }
+
+    job->hasOnChunk = JS_IsFunction(ctx, onChunk);
+    job->onChunk    = job->hasOnChunk ? JS_DupValue(ctx, onChunk) : JS_UNDEFINED;
+    job->hasOnDone  = JS_IsFunction(ctx, onDone);
+    job->onDone     = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->qwenRef    = JS_DupValue(ctx, argv[0]);
+    JS_FreeValue(ctx, onChunk);
+    JS_FreeValue(ctx, onDone);
+
+    QwenTtsWrapper* mw = w;
+
+    auto work = [job, mw](const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(mw->device);
+        // on_chunk runs on THIS (background) thread: copy the samples into the
+        // next slot and publish it. No JS here — the JS-thread poll fires onChunk.
+        auto onChunkCb = [job](const float* s, int n) {
+            const size_t idx = job->produced.load(std::memory_order_relaxed);
+            if (idx >= job->chunkSlots.size()) return;   // bound guard
+            job->chunkSlots[idx].assign(s, s + n);
+            job->produced.store(idx + 1, std::memory_order_release);
+        };
+        auto buf = mw->qwen->synthesize_stream(
+            job->text, job->speaker, job->chunkFrames, onChunkCb,
+            job->language, job->instruct,
+            [&cancel] { return cancel.load(std::memory_order_acquire); },
+            job->sampling);
+        job->samples     = std::move(buf.samples);
+        job->sample_rate = buf.sample_rate;
+    };
+
+    auto poll = [job](JSContext* c) {
+        if (!job->hasOnChunk) return;
+        const size_t n = job->produced.load(std::memory_order_acquire);
+        while (job->drained < n) {
+            std::vector<float>& chunk = job->chunkSlots[job->drained];
+            JSValue arr = qjsbind::make_float32_array(c, chunk);
+            JSValue r = JS_Call(c, job->onChunk, JS_UNDEFINED, 1, &arr);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, arr);
+            std::vector<float>().swap(chunk);   // release the slot's memory
+            job->drained++;
+        }
+    };
+
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        mw->busy.store(false, std::memory_order_release);
+        if (job->hasOnDone) {
+            JSValue result = JS_NewObject(c);
+            JS_SetPropertyStr(c, result, "samples",
+                qjsbind::make_float32_array(c, job->samples));
+            JS_SetPropertyStr(c, result, "sampleRate",
+                JS_NewInt32(c, job->sample_rate));
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { result, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, result);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnChunk) JS_FreeValue(c, job->onChunk);
+        if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
+        JS_FreeValue(c, job->qwenRef);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
+}
+
+// bro.tts.synthesizeStream(qwen, text, opts) — streaming, QwenTts only.
+static JSValue js_tts_synthesize_stream(JSContext* ctx, JSValueConst,
+                                        int argc, JSValueConst* argv) {
+    if (argc < 1 || !qjsbind::unwrap<QwenTtsWrapper>(ctx, argv[0]))
+        return JS_ThrowTypeError(ctx,
+            "synthesizeStream(qwen, text, opts?): a QwenTts model is required "
+            "(Kokoro synthesis is monolithic — use synthesize)");
+    return js_qwen_synthesize_stream(ctx, argc, argv);
+}
+
 static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
                                  int argc, JSValueConst* argv) {
     if (argc < 1)
@@ -1921,6 +2068,8 @@ void installTtsBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_setAssets, "setAssets", 1));
     JS_SetPropertyStr(ctx, tts, "synthesize",
         JS_NewCFunction(ctx, js_tts_synthesize, "synthesize", 4));
+    JS_SetPropertyStr(ctx, tts, "synthesizeStream",
+        JS_NewCFunction(ctx, js_tts_synthesize_stream, "synthesizeStream", 3));
     JS_SetPropertyStr(ctx, tts, "decodeFrom",
         JS_NewCFunction(ctx, js_tts_decodeFrom, "decodeFrom", 7));
     JS_SetPropertyStr(ctx, broObj, "tts", tts);
