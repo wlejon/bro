@@ -284,7 +284,16 @@ const qwen = bro.tts.loadQwen('../brosoundml/weights/qwen-tts/0.6B-customvoice')
  * @param {number} [opts.topP=1]   - nucleus cap when sampling (1 = off).
  * @param {number} [opts.seed=0]   - RNG seed; a fixed (temperature, seed) reproduces
  *        the exact utterance, different seeds give different takes.
- * @returns {{ samples: Float32Array, sampleRate: number }} - 24 kHz mono, [-1, 1].
+ * @param {boolean} [opts.trace=false] - also return `stages` — the AR trace for
+ *        visualization ("watch it take shape"). Each stage is { name, h, w, data:
+ *        Float32Array } (h×w row-major), same shape as Kokoro's trace:
+ *          • 'codes'         — the 16×F multi-codebook RVQ raster (row k = codebook
+ *                              k, column t = frame t), code ids as floats.
+ *          • 'c0_confidence' — 1×F, per-frame top-1 softmax probability of codebook
+ *                              0 (how sure the model was that frame).
+ *        Also supported on synthesizeFromXvector and the async synthesize.
+ * @returns {{ samples: Float32Array, sampleRate: number, stages?: Array }} - 24 kHz
+ *        mono, [-1, 1]; `stages` present when opts.trace.
  *
  * No durations: Qwen3-TTS is autoregressive over codec frames, not phonemes, so
  * there is no per-phoneme timing array (unlike Kokoro).

@@ -111,6 +111,15 @@ static void getNum(JSContext* ctx, JSValueConst obj, const char* key,
     JS_FreeValue(ctx, v);
 }
 
+// Read a truthy boolean option (absent / undefined => false).
+static bool getBool(JSContext* ctx, JSValueConst obj, const char* key) {
+    if (!JS_IsObject(obj)) return false;
+    JSValue v = JS_GetPropertyStr(ctx, obj, key);
+    const bool r = JS_ToBool(ctx, v) == 1;
+    JS_FreeValue(ctx, v);
+    return r;
+}
+
 // Pick the default device — CUDA, then Metal, then CPU. brotensor::init()
 // must have been called beforehand so the GPU backend probes have run.
 static brotensor::Device autoDevice() {
@@ -623,6 +632,22 @@ static void readQwenSampling(JSContext* ctx, JSValueConst opts,
     JS_FreeValue(ctx, sd);
 }
 
+// Marshal a QwenTtsTrace to a JS stages array [{ name, h, w, data:Float32Array }] —
+// the same shape Kokoro's traceStagesToJs uses, so a UI renders both uniformly.
+static JSValue qwenTraceToJs(JSContext* ctx, const brosoundml::QwenTtsTrace& tr) {
+    JSValue stages = JS_NewArray(ctx);
+    std::uint32_t i = 0;
+    for (const auto& s : tr.stages) {
+        JSValue st = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, st, "name", JS_NewString(ctx, s.name.c_str()));
+        JS_SetPropertyStr(ctx, st, "h",    JS_NewInt32(ctx, s.h));
+        JS_SetPropertyStr(ctx, st, "w",    JS_NewInt32(ctx, s.w));
+        JS_SetPropertyStr(ctx, st, "data", qjsbind::make_float32_array(ctx, s.data));
+        JS_SetPropertyUint32(ctx, stages, i++, st);
+    }
+    return stages;
+}
+
 // qwen.synthesize(text, opts?) -> { samples, sampleRate }      (sync, blocking)
 //   opts.speaker:  preset speaker name (CustomVoice; e.g. 'serena').
 //   opts.language: 'english' (default), 'chinese', 'auto', ...
@@ -640,14 +665,20 @@ static JSValue js_qwen_synthesize(JSContext* ctx, JSValueConst this_val,
         return JS_ThrowTypeError(ctx, "synthesize(text, opts?): text string required");
     std::string speaker, language = "english", instruct;
     brosoundml::QwenTtsSampling sampling;
+    bool wantTrace = false;
     if (argc >= 2) {
         readQwenSynthOpts(ctx, argv[1], speaker, language, instruct);
         readQwenSampling(ctx, argv[1], sampling);
+        wantTrace = getBool(ctx, argv[1], "trace");
     }
     try {
         brotensor::DeviceScope scope(w->device);
-        auto buf = w->qwen->synthesize(text, speaker, language, instruct, {}, sampling);
-        return audioBufferToJs(ctx, buf);
+        brosoundml::QwenTtsTrace trace;
+        auto buf = w->qwen->synthesize(text, speaker, language, instruct, {}, sampling,
+                                       wantTrace ? &trace : nullptr);
+        JSValue obj = audioBufferToJs(ctx, buf);
+        if (wantTrace) JS_SetPropertyStr(ctx, obj, "stages", qwenTraceToJs(ctx, trace));
+        return obj;
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "synthesize: %s", e.what());
     }
@@ -708,17 +739,23 @@ static JSValue js_qwen_synthesize_from_xvector(JSContext* ctx, JSValueConst this
             "synthesizeFromXvector: xvec must be a non-empty Float32Array");
     std::string language = "english";
     brosoundml::QwenTtsSampling sampling;
+    bool wantTrace = false;
     if (argc >= 3 && JS_IsObject(argv[2])) {
         JSValue lv = JS_GetPropertyStr(ctx, argv[2], "language");
         std::string l;
         if (JS_IsString(lv) && argStr(ctx, lv, l)) language = std::move(l);
         JS_FreeValue(ctx, lv);
         readQwenSampling(ctx, argv[2], sampling);
+        wantTrace = getBool(ctx, argv[2], "trace");
     }
     try {
         brotensor::DeviceScope scope(w->device);
-        auto buf = w->qwen->synthesize_with_xvector(text, xvec, language, {}, sampling);
-        return audioBufferToJs(ctx, buf);
+        brosoundml::QwenTtsTrace trace;
+        auto buf = w->qwen->synthesize_with_xvector(text, xvec, language, {}, sampling,
+                                                    wantTrace ? &trace : nullptr);
+        JSValue obj = audioBufferToJs(ctx, buf);
+        if (wantTrace) JS_SetPropertyStr(ctx, obj, "stages", qwenTraceToJs(ctx, trace));
+        return obj;
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "synthesizeFromXvector: %s", e.what());
     }
@@ -1555,6 +1592,8 @@ struct QwenSynthJob {
     brosoundml::QwenTtsSampling sampling;         // temperature/top_k/top_p/seed
     std::vector<float> samples;                  // filled by work()
     int                sample_rate = 24000;       // filled by work()
+    bool               wantTrace = false;         // capture the AR trace
+    brosoundml::QwenTtsTrace trace;               // filled by work() when wantTrace
     JSValue            onDone  = JS_UNDEFINED;     // dup'd; UNDEFINED if absent
     JSValue            qwenRef = JS_UNDEFINED;     // dup of the qwen JS object
     bool               hasOnDone = false;
@@ -1581,6 +1620,7 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
     if (argc >= 3 && JS_IsObject(argv[2])) {
         readQwenSynthOpts(ctx, argv[2], job->speaker, job->language, job->instruct);
         readQwenSampling(ctx, argv[2], job->sampling);
+        job->wantTrace = getBool(ctx, argv[2], "trace");
         onDone = JS_GetPropertyStr(ctx, argv[2], "onDone");
     }
 
@@ -1606,7 +1646,7 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
         auto buf = mw->qwen->synthesize(
             job->text, job->speaker, job->language, job->instruct,
             [&cancel] { return cancel.load(std::memory_order_acquire); },
-            job->sampling);
+            job->sampling, job->wantTrace ? &job->trace : nullptr);
         job->samples     = std::move(buf.samples);
         job->sample_rate = buf.sample_rate;
     };
@@ -1621,6 +1661,8 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
                 qjsbind::make_float32_array(c, job->samples));
             JS_SetPropertyStr(c, result, "sampleRate",
                 JS_NewInt32(c, job->sample_rate));
+            if (job->wantTrace)
+                JS_SetPropertyStr(c, result, "stages", qwenTraceToJs(c, job->trace));
             JSValue info = JS_NewObject(c);
             JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
             if (!error.empty())
