@@ -334,6 +334,31 @@ class SceneGraph {
   createMesh(opts) {}
 
   /**
+   * Create a 3D Gaussian Splat node and add it to the root. Renders a splat
+   * cloud with EWA splatting (per-splat anisotropic Gaussians, view-dependent
+   * SH color, back-to-front sorted). Supply the cloud one of two ways:
+   *
+   *   // from a .ply on disk (INRIA/3DGS field convention)
+   *   scene.createGaussianSplat({ path: "model.ply", scale: 1 });
+   *
+   *   // from an in-memory cloud — the SoA typed arrays bro.triposplat.generate
+   *   // returns drop straight in
+   *   const cloud = pipeline.generate(image);
+   *   const node = scene.createGaussianSplat({ cloud });
+   *   node.savePly("out.ply");        // round-trip it back to disk
+   *
+   * @param {Object} [opts]
+   * @param {string} [opts.path] - .ply to load (resolved app-relative / mounts)
+   * @param {Object} [opts.cloud] - in-memory cloud { positions, scales,
+   *        rotations, opacities, sh, shDegree } (Float32Array SoA)
+   * @param {string} [opts.name]
+   * @param {number} [opts.x=0] @param {number} [opts.y=0] @param {number} [opts.z=0]
+   * @param {number} [opts.scale=1] - uniform scale
+   * @returns {SceneNode} - exposes .splatCount and .savePly(path)
+   */
+  createGaussianSplat(opts) {}
+
+  /**
    * Configure global wind sway. Per-vertex windBend (vertex color R, 0..1)
    * modulates: pos += direction * sin(time*frequency + dot(pos.xz, k)) * strength * bend.
    * The engine advances `windTime` from the per-frame virtual delta so offline
@@ -731,6 +756,23 @@ class SceneNode {
 
   /** Explicitly mark the HtmlNode dirty (forces a re-raster next frame). */
   markHtmlDirty() {}
+
+
+  // --- GaussianSplat-only ---------------------------------------------------
+
+  /** Number of splats in the cloud (0 on non-splat nodes). */
+  get splatCount() {}
+
+  /**
+   * Write the splat cloud to a 3D-Gaussian-Splat .ply (INRIA/3DGS field
+   * convention) so it can be reopened here or in any splat viewer. `path` is
+   * resolved like createGaussianSplat's path (absolute/drive pass through,
+   * leading-slash consults mounts, else app-relative). Throws if the node is
+   * not a GaussianSplat, the cloud is empty, or the write fails.
+   * @param {string} path
+   * @returns {boolean} true on success
+   */
+  savePly(path) {}
 
 
   // --- Shape Properties (ShapeNode only) ------------------------------------

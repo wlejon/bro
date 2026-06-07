@@ -339,6 +339,30 @@ static JSValue js_node_markHtmlDirty(JSContext* ctx, JSValueConst this_val, int,
     return JS_UNDEFINED;
 }
 
+// savePly(path) — GaussianSplat only. Writes the node's splat cloud to a
+// 3D-Gaussian-Splat .ply (the INRIA/3DGS field convention bromesh emits), so a
+// reconstructed cloud can be saved and reopened (here or in any splat viewer).
+// `path` is resolved like createGaussianSplat's: absolute/drive paths pass
+// through, leading-slash consults mounts, else app-relative. Returns true on
+// success.
+static JSValue js_node_savePly(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || argc < 1)
+        return JS_ThrowTypeError(ctx, "savePly(path): path required");
+    if (w->node->type() != scene::SceneNode::Type::GaussianSplat)
+        return JS_ThrowTypeError(ctx, "savePly: node is not a GaussianSplat");
+    auto* sn = static_cast<scene::GaussianSplatNode*>(w->node);
+    if (sn->splatCount() == 0)
+        return JS_ThrowTypeError(ctx, "savePly: splat cloud is empty");
+    std::string path = resolveAppPath(jsStr(ctx, argv[0]));
+    bool ok = bromesh::saveSplatPLY(sn->cloud(), path);
+    if (!ok)
+        return JS_ThrowInternalError(ctx, "savePly: failed to write '%s'", path.c_str());
+    LOG_INFO("savePly: wrote %zu splats (SH deg %d) to '%s'",
+             sn->cloud().count(), sn->cloud().shDegree, path.c_str());
+    return JS_NewBool(ctx, 1);
+}
+
 // setBaseColorTexture(tex|null) — replace or clear the baseColor texture at
 // runtime. `tex` shape matches createMesh's `texture` option:
 // { width, height, data: Uint8Array(rgba8) }. Pass null/undefined to clear
@@ -2739,6 +2763,11 @@ void SceneBindings::install(JSContext* ctx) {
                 return (int)static_cast<scene::InstancedMeshNode*>(w->node)->instanceCount();
             return 0;
         })
+        .get("splatCount", [](NodeWrapper* w) -> int {
+            if (w && w->node && w->node->type() == scene::SceneNode::Type::GaussianSplat)
+                return (int)static_cast<scene::GaussianSplatNode*>(w->node)->splatCount();
+            return 0;
+        })
         .get("atlasCols", [](NodeWrapper* w) -> int {
             if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
                 return static_cast<scene::InstancedMeshNode*>(w->node)->atlasCols();
@@ -2779,7 +2808,9 @@ void SceneBindings::install(JSContext* ctx) {
                 case scene::SceneNode::Type::Sprite:  return JS_NewString(ctx, "sprite");
                 case scene::SceneNode::Type::Physics: return JS_NewString(ctx, "physics");
                 case scene::SceneNode::Type::Html:    return JS_NewString(ctx, "html");
+                case scene::SceneNode::Type::GaussianSplat: return JS_NewString(ctx, "gaussianSplat");
                 case scene::SceneNode::Type::Base:    return JS_NewString(ctx, "group");
+                default: break;
             }
             return JS_UNDEFINED;
         })
@@ -3373,6 +3404,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setBaseColorTexture", js_node_setBaseColorTexture, 1)
         .method_raw("setHtml", js_node_setHtml, 1)
         .method_raw("markHtmlDirty", js_node_markHtmlDirty, 0)
+        .method_raw("savePly", js_node_savePly, 1)
         .method_raw("attachAgent", nodeAttachAgent, 3)
         .method_raw("detachAgent", nodeDetachAgent, 0)
         // Sprite animation + Particles control
