@@ -2412,8 +2412,21 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
         auto* n = static_cast<bro::dom::Element*>(el);
         while (n->parentNode()) n = static_cast<bro::dom::Element*>(n->parentNode());
         bool connected = (n->tagName() == "html" || n->tagName() == "HTML");
-        if (!connected) {
-            // Stale entry — element disconnected from DOM, pointer reused
+        // A freed canvas Element*'s address can be reused by a brand-new canvas
+        // before this entry is evicted: eviction is tied to GC of the old
+        // wrapper (js_element_finalizer), but the engine frees the Element — and
+        // its CanvasScene — deterministically at drainPendingFrees, much earlier.
+        // The reused element is connected, so connectedness alone can't tell it
+        // apart from the original, and returning the cached wrapper would hand
+        // back a CanvasScene that was freed with the old element — a
+        // use-after-free on the next draw. A live context always leaves its
+        // backing on the element (setCanvasScene for 2d/scene, setWebglContext
+        // for webgl); a freshly reused Element starts with neither, so a cached
+        // entry with no live backing is stale.
+        bool hasBacking = (el->canvasScene() != nullptr) || (el->webglContext() != nullptr);
+        if (!connected || !hasBacking) {
+            // Stale entry — element disconnected, or its address was reused by a
+            // new canvas whose own context hasn't been created yet.
             JS_FreeValue(ctx, cacheIt->second.val);
             s_canvas_contexts.erase(cacheIt);
         } else {
