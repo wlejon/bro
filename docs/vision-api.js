@@ -269,6 +269,9 @@ const mid = gan.synthesize(someWPlus);   // mid.image
  * @param {number}   [opts.regW=0]         L2 pull of w+ toward w_avg (>0 stays on-manifold / more editable)
  * @param {number}   [opts.initNoise=0]    stddev of gaussian jitter on the w_avg init
  * @param {number}   [opts.seed=0]         rng for initNoise
+ * @param {Float32Array} [opts.initW]      start latent (num_ws*w_dim) to resume/refine
+ *   from instead of w_avg — run invert in chunks (feed back the previous `w`) for
+ *   live progressive refinement, or seed it from a known latent. regW still pulls toward w_avg.
  * @param {function} [opts.onDone]         run async — RECOMMENDED, inversion is slow (hundreds of synthesis passes)
  * @returns {{ width, height, image: ImageBitmap, w: Float32Array, numWs, wDim,
  *             loss: number, lossCurve: Float32Array }}

@@ -1713,6 +1713,7 @@ struct Sg3Op {
     int       inv_steps = 350;
     float     inv_lr = 0.05f, inv_regW = 0.0f, inv_initNoise = 0.0f;
     long long inv_seed = 0;
+    std::vector<float> inv_initW;   // (num_ws*w_dim) start latent, else empty
     // outputs:
     sg3::Image img;
     std::vector<float> ws_out;  // (num_ws*w_dim) when returnLatents
@@ -1918,6 +1919,22 @@ static JSValue js_stylegan3_invert(JSContext* ctx, JSValueConst this_val,
     }
     if (op->inv_steps < 1) op->inv_steps = 1;
 
+    // Optional start latent (resume / progressive refinement): full w+ only.
+    if (JS_IsObject(opts)) {
+        JSValue iw = JS_GetPropertyStr(ctx, opts, "initW");
+        if (JS_IsObject(iw) && !JS_IsNull(iw)) {
+            std::vector<float> v = qjsbind::read_float32_array(ctx, iw);
+            const int full = w->num_ws * w->w_dim;
+            if (static_cast<int>(v.size()) == full) op->inv_initW = std::move(v);
+            else if (!v.empty()) {
+                JS_FreeValue(ctx, iw);
+                return JS_ThrowTypeError(ctx,
+                    "invert: opts.initW must have length %d (num_ws*w_dim)", full);
+            }
+        }
+        JS_FreeValue(ctx, iw);
+    }
+
     if (w->busy.exchange(true))
         return JS_ThrowInternalError(ctx, "invert: generator busy");
 
@@ -1936,6 +1953,9 @@ static JSValue js_stylegan3_invert(JSContext* ctx, JSValueConst this_val,
         io.reg_w      = op->inv_regW;
         io.init_noise = op->inv_initNoise;
         io.seed       = static_cast<std::uint64_t>(op->inv_seed);
+        if (!op->inv_initW.empty())
+            io.init_w = brotensor::Tensor::from_host_on(
+                ww->device, op->inv_initW.data(), ww->num_ws, ww->w_dim);
         // on_step runs on this compute thread; pushing to op (owned by the op's
         // shared_ptr, read on the JS thread only after done) is race-free.
         op->loss_curve.reserve(op->inv_steps);
