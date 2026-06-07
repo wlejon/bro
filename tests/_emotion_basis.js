@@ -15,12 +15,21 @@
 // export.py (parquet -> FLAC + manifest) and embed.js (decode + quality + embed)
 //   -> cameo/_probe/styles.jsonl {file,dataset,lang,emo,actor,license,clip,...,style}
 //
-// Per emotion e: within-speaker neutral->e centroid shift (per-actor mean removed):
-//   full[e]  = mean_sc(style | e) - mean_sc(style | NEU)
-//   resid[e] = full[e] with the voice_basis prosody axes projected out (timbre).
-// The lab applies `full` (its prosody-correlated components drive Kokoro's
-// duration/F0/energy predictor → emotional pitch/energy/pace + timbre); resid
-// alone left predicted prosody flat, so it didn't read as the emotion.
+// CONTRASTIVE centering (per-actor mean removed throughout). Each direction is
+// measured against the grand EMOTION mean, NOT neutral:
+//   grand     = mean_e mean_sc(style | e)            (equal weight per emotion)
+//   full[e]   = mean_sc(style | e) - grand  +  EXPRESS_BETA · (grand - mean_sc(style | NEU))
+//   resid[e]  = full[e] with the voice_basis prosody axes projected out (timbre).
+// Why: neutral->emotion shifts collapse onto ONE shared expressivity/arousal axis
+// (SV1 ~93% of energy, ~0.95 mutual cosine) — six labels for one knob, which moves
+// pitch/pace/brightness but reads as no particular emotion. The contrast c[e]-grand
+// keeps only what makes THIS emotion differ from the average emotion, restoring
+// opponent structure (anger vs sad, etc.) and giving each emotion the correct sign
+// of arousal (sad lower, anger higher). EXPRESS_BETA optionally re-adds a dose of the
+// shared expressivity offset so it still reads as "aroused": 0 = pure contrastive,
+// 1 = the old neutral-relative shift. The lab applies `full` (its prosody-correlated
+// components drive Kokoro's duration/F0/energy predictor → emotional pitch/energy/
+// pace + timbre); resid alone left predicted prosody flat, so it didn't read.
 //
 // Run:  node bro/tests/_emotion_basis.js
 
@@ -34,6 +43,8 @@ const DROP_DATASETS = ['mesd'];   // recorded hot — 50% of clips clip
 const CLIP_MAX = 0.01;            // drop individual clips with any clipping
 const LABELS = { ANG:'angry', SAD:'sad', HAP:'happy', FEA:'fearful', DIS:'disgust', SUR:'surprise', NEU:'neutral' };
 const TARGET_SIGMA = 0.55;        // σ of the FULL shift the default intensity aims for
+const EXPRESS_BETA = 0;           // 0 = pure contrastive; up to 1 re-adds shared expressivity (grand->neutral)
+const ALPHA_MAX = 5;              // slider ceiling + default-alpha cap
 
 function writeBoth(name, data) {
   for (const dir of [DATA_DIR, MODEL_DIR]) {
@@ -78,15 +89,24 @@ function centroidSC(emo) {
 }
 const neu = centroidSC('NEU');
 
+// Per-emotion speaker-centered centroids + the grand emotion mean (equal weight per
+// emotion, so a large corpus can't pull the reference). `shared` is the common
+// expressivity offset every emotion has over neutral — the axis that swamped the old
+// neutral-relative directions; here it is re-added only in the EXPRESS_BETA dose.
+const cen = {}; for (const e of EMOS) cen[e] = centroidSC(e);
+const grand = new Float64Array(DIM);
+for (const e of EMOS) for (let d = 0; d < DIM; d++) grand[d] += cen[e].m[d] / EMOS.length;
+const shared = new Float64Array(DIM); for (let d = 0; d < DIM; d++) shared[d] = grand[d] - neu.m[d];
+
 const round = (arr, p) => Array.from(arr).map((v) => +v.toFixed(p));
 const full = {}, resid = {}, sigmaFull = {}, sigmaResid = {}, defaultAlpha = {}, count = {};
 for (const e of EMOS) {
-  const c = centroidSC(e); count[e] = c.n;
-  const f = new Float64Array(DIM); for (let d = 0; d < DIM; d++) f[d] = c.m[d] - neu.m[d];
+  count[e] = cen[e].n;
+  const f = new Float64Array(DIM); for (let d = 0; d < DIM; d++) f[d] = (cen[e].m[d] - grand[d]) + EXPRESS_BETA * shared[d];
   const r = projOutProsody(f);
   full[e] = round(f, 6); resid[e] = round(r, 6);
   sigmaFull[e] = +sigmaOf(f).toFixed(4); sigmaResid[e] = +sigmaOf(r).toFixed(4);
-  defaultAlpha[e] = +Math.max(0.5, Math.min(4, TARGET_SIGMA / (sigmaFull[e] || 1))).toFixed(2);
+  defaultAlpha[e] = +Math.max(0.5, Math.min(ALPHA_MAX, TARGET_SIGMA / (sigmaFull[e] || 1))).toFixed(2);
 }
 
 // ── per-source attribution (for the dataset-repo license pairing) ────────────
@@ -101,9 +121,9 @@ for (const e of EMOS) console.log('  ' + (LABEL[e] + ' (' + e + ')').padEnd(16) 
 
 const out = {
   dim: DIM, source: SOURCE, license: 'CC BY 4.0',
-  method: 'within-speaker neutral->emotion centroid, pooled across languages; resid = prosody-axes projected out',
+  method: 'within-speaker contrastive: emotion centroid - grand emotion mean (+ ' + EXPRESS_BETA + '·shared expressivity), pooled across languages; resid = prosody-axes projected out',
   emotions: EMOS, label: LABEL,
-  resid, full, sigmaResid, sigmaFull, defaultAlpha, alphaMax: 5,
+  resid, full, sigmaResid, sigmaFull, defaultAlpha, alphaMax: ALPHA_MAX,
   neutralClips: neu.n, actors: Object.keys(byActor).length, sources,
 };
 writeBoth('emotion_basis.json', JSON.stringify(out));
