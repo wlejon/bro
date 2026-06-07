@@ -26,6 +26,7 @@
 #include "js/stt_bindings.h"
 #include "js/lm_bindings.h"
 #include "js/tts_bindings.h"
+#include "js/rave_bindings.h"
 #include "layout/box.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
@@ -145,6 +146,7 @@ Engine::~Engine() {
         js::cleanupSttBindings(ctx);
         js::cleanupLmBindings(ctx);
         js::cleanupTtsBindings(ctx);
+        js::cleanupRaveBindings(ctx);
         js::cleanupWorkerBindings(ctx);
         js::ServerBindings::cleanup(ctx);
         js::NetBindings::cleanup(ctx);
