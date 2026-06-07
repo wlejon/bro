@@ -33,6 +33,7 @@
 #include <brovisionml/mlsd.h>
 #include <brovisionml/openpose.h>
 #include <brovisionml/segformer.h>
+#include <brovisionml/stylegan3.h>
 
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
@@ -50,6 +51,7 @@
 #include <exception>
 #include <functional>
 #include <memory>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -1672,6 +1674,233 @@ static JSValue js_loadSegformer(JSContext* ctx, JSValueConst, int argc,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// StyleGAN3-R — bro.vision.loadStyleGAN3 / Generator.generate / .synthesize
+//
+// The one *generative* model here: a latent → RGB image, the reverse of every
+// image→X model above. generate() samples (or takes) a z and renders; the
+// returned w+ (opts.returnLatents) plus synthesize(w+) give a lab the W+ surface
+// for interpolation / editing without touching tensors — typed arrays only.
+// ═══════════════════════════════════════════════════════════════════════════
+
+namespace sg3 = brovisionml::stylegan3;
+
+struct VisionStyleGAN3Wrapper {
+    std::unique_ptr<sg3::Generator> gen;
+    brotensor::Device device = brotensor::Device::CPU;
+    int z_dim = 512, num_ws = 16, w_dim = 512, resolution = 256;
+    std::atomic<bool> busy{false};   // generate / synthesize are single-owner
+};
+
+static sg3::Config sg3ConfigForResolution(int res) {
+    if (res == 1024) return sg3::Config::r1024();
+    if (res == 512)  return sg3::Config::r512();
+    return sg3::Config::r256();
+}
+
+// Shared state for a generate / synthesize op (host-side in/out; the compute
+// lambda runs on a background thread and must not touch the JS context).
+struct Sg3Op {
+    VisionStyleGAN3Wrapper* w = nullptr;
+    std::vector<float> ws_in;   // (num_ws*w_dim) for synthesize, else empty
+    std::vector<float> z;       // (z_dim) for generate, else empty
+    float psi = 1.0f;
+    int   cutoff = -1;
+    bool  returnLatents = false;
+    long long seed = -1;        // echoed back when generate seeded its own z
+    // outputs:
+    sg3::Image img;
+    std::vector<float> ws_out;  // (num_ws*w_dim) when returnLatents
+};
+
+// Build the result object { image, width, height, [seed], [w, numWs, wDim] }.
+static JSValue sg3BuildResult(JSContext* ctx, const std::shared_ptr<Sg3Op>& op) {
+    JSValue res = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, res, "image",
+        makeBitmapRGB(ctx, op->img.rgb.data(), op->img.width, op->img.height));
+    JS_SetPropertyStr(ctx, res, "width",  JS_NewInt32(ctx, op->img.width));
+    JS_SetPropertyStr(ctx, res, "height", JS_NewInt32(ctx, op->img.height));
+    if (op->seed >= 0)
+        JS_SetPropertyStr(ctx, res, "seed", JS_NewInt64(ctx, op->seed));
+    if (!op->ws_out.empty()) {
+        JS_SetPropertyStr(ctx, res, "w", qjsbind::make_float32_array(ctx, op->ws_out));
+        JS_SetPropertyStr(ctx, res, "numWs", JS_NewInt32(ctx, op->w->num_ws));
+        JS_SetPropertyStr(ctx, res, "wDim",  JS_NewInt32(ctx, op->w->w_dim));
+    }
+    return res;
+}
+
+// StyleGAN3.generate(opts?) → { image, width, height, seed?, w? } | AsyncHandle
+//   opts.seed (int)              — sample z ~ N(0,1) from this seed (default 0)
+//   opts.z (Float32Array z_dim)  — use this latent instead of a seed
+//   opts.truncation (psi, 1.0)   — truncation toward w_avg; <1 = tamer/typical
+//   opts.truncationCutoff (-1)   — rows to truncate; -1 = all
+//   opts.returnLatents (false)   — also return the mapped w+ as a Float32Array
+//   opts.onDone                  — run async
+static JSValue js_stylegan3_generate(JSContext* ctx, JSValueConst this_val,
+                                     int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<VisionStyleGAN3Wrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "generate: not a StyleGAN3 generator");
+    JSValueConst opts = (argc >= 1) ? argv[0] : JS_UNDEFINED;
+
+    auto op = std::make_shared<Sg3Op>();
+    op->w = w;
+    getFloat(ctx, opts, "truncation", op->psi);
+    getInt(ctx, opts, "truncationCutoff", op->cutoff);
+    op->returnLatents = getBool(ctx, opts, "returnLatents", false);
+
+    // Latent: explicit z (Float32Array length z_dim) takes priority over a seed.
+    bool gotZ = false;
+    if (JS_IsObject(opts)) {
+        JSValue zv = JS_GetPropertyStr(ctx, opts, "z");
+        if (JS_IsObject(zv) && !JS_IsNull(zv)) {
+            std::vector<float> zz = qjsbind::read_float32_array(ctx, zv);
+            if (static_cast<int>(zz.size()) == w->z_dim) { op->z = std::move(zz); gotZ = true; }
+            else if (!zz.empty()) {
+                JS_FreeValue(ctx, zv);
+                return JS_ThrowTypeError(ctx, "generate: opts.z must have length %d", w->z_dim);
+            }
+        }
+        JS_FreeValue(ctx, zv);
+    }
+    if (!gotZ) {
+        long long seed = 0;
+        if (JS_IsObject(opts)) {
+            JSValue sv = JS_GetPropertyStr(ctx, opts, "seed");
+            if (JS_IsNumber(sv)) JS_ToInt64(ctx, &seed, sv);
+            JS_FreeValue(ctx, sv);
+        }
+        op->seed = seed;
+        op->z.resize(w->z_dim);
+        std::mt19937_64 rng(static_cast<unsigned long long>(seed));
+        std::normal_distribution<float> nd(0.0f, 1.0f);
+        for (float& v : op->z) v = nd(rng);
+    }
+
+    if (w->busy.exchange(true))
+        return JS_ThrowInternalError(ctx, "generate: generator busy");
+
+    auto compute = [op](const std::atomic<bool>&) {
+        VisionStyleGAN3Wrapper* ww = op->w;
+        brotensor::DeviceScope scope(ww->device);
+        brotensor::Tensor z = brotensor::Tensor::mat(1, ww->z_dim);
+        for (int i = 0; i < ww->z_dim; ++i) z[i] = op->z[i];
+        if (ww->device != brotensor::Device::CPU) z = z.to(ww->device);
+        brotensor::Tensor ws = ww->gen->map(z, op->psi, op->cutoff);
+        op->img = ww->gen->render(ws);
+        if (op->returnLatents) {
+            brotensor::Tensor wc = ws.to(brotensor::Device::CPU);
+            const float* p = wc.host_f32();
+            op->ws_out.assign(p, p + static_cast<std::size_t>(ww->num_ws) * ww->w_dim);
+        }
+    };
+    auto build   = [op](JSContext* c) { return sg3BuildResult(c, op); };
+    auto release = [op]() { op->w->busy = false; };
+
+    JSValue onDone = getOnDone(ctx, opts);
+    JSValue r = runVisionOp(ctx, onDone, std::move(compute), std::move(build),
+                            std::move(release));
+    JS_FreeValue(ctx, onDone);
+    return r;
+}
+
+// StyleGAN3.synthesize(w, opts?) → { image, width, height } | AsyncHandle
+//   w: Float32Array — either the full w+ (num_ws*w_dim) or a single w (w_dim),
+//      broadcast across all rows. The path for rendering an edited / interpolated
+//      latent obtained from generate({ returnLatents: true }).
+static JSValue js_stylegan3_synthesize(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<VisionStyleGAN3Wrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "synthesize: not a StyleGAN3 generator");
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "synthesize(w, opts?): w Float32Array required");
+
+    std::vector<float> win = qjsbind::read_float32_array(ctx, argv[0]);
+    const int full = w->num_ws * w->w_dim;
+    if (static_cast<int>(win.size()) != full &&
+        static_cast<int>(win.size()) != w->w_dim)
+        return JS_ThrowTypeError(ctx, "synthesize: w must have length %d (w+) or %d (single w)",
+                                 full, w->w_dim);
+
+    auto op = std::make_shared<Sg3Op>();
+    op->w = w;
+    op->ws_in = std::move(win);
+
+    if (w->busy.exchange(true))
+        return JS_ThrowInternalError(ctx, "synthesize: generator busy");
+
+    auto compute = [op](const std::atomic<bool>&) {
+        VisionStyleGAN3Wrapper* ww = op->w;
+        brotensor::DeviceScope scope(ww->device);
+        brotensor::Tensor ws = brotensor::Tensor::mat(ww->num_ws, ww->w_dim);
+        const bool single = static_cast<int>(op->ws_in.size()) == ww->w_dim;
+        for (int r = 0; r < ww->num_ws; ++r)
+            for (int c = 0; c < ww->w_dim; ++c)
+                ws[r * ww->w_dim + c] = op->ws_in[single ? c : r * ww->w_dim + c];
+        if (ww->device != brotensor::Device::CPU) ws = ws.to(ww->device);
+        op->img = ww->gen->render(ws);
+    };
+    auto build   = [op](JSContext* c) { return sg3BuildResult(c, op); };
+    auto release = [op]() { op->w->busy = false; };
+
+    JSValueConst opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    JSValue onDone = getOnDone(ctx, opts);
+    JSValue r = runVisionOp(ctx, onDone, std::move(compute), std::move(build),
+                            std::move(release));
+    JS_FreeValue(ctx, onDone);
+    return r;
+}
+
+static void registerStyleGAN3Class(JSContext* ctx) {
+    qjsbind::Class<VisionStyleGAN3Wrapper>(ctx, "StyleGAN3", qjsbind::NoGlobal)
+        .get("device", [](VisionStyleGAN3Wrapper* w) {
+            return std::string(deviceName(w->device));
+        })
+        .get("resolution", [](VisionStyleGAN3Wrapper* w) { return w->resolution; })
+        .get("zDim",  [](VisionStyleGAN3Wrapper* w) { return w->z_dim; })
+        .get("numWs", [](VisionStyleGAN3Wrapper* w) { return w->num_ws; })
+        .get("wDim",  [](VisionStyleGAN3Wrapper* w) { return w->w_dim; })
+        .method_raw("generate",   js_stylegan3_generate, 1)
+        .method_raw("synthesize", js_stylegan3_synthesize, 2);
+}
+
+// bro.vision.loadStyleGAN3(modelDir, opts?) → StyleGAN3 | AsyncHandle
+//   modelDir holds model.safetensors (convert with scripts/convert-stylegan3.py).
+//   opts.resolution: 256 (default) | 512 | 1024 — must match the checkpoint.
+//   opts.device: 'cuda' | 'cpu'; opts.onReady/onError: load on a worker thread.
+static JSValue js_loadStyleGAN3(JSContext* ctx, JSValueConst, int argc,
+                                JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadStyleGAN3(modelDir, opts?): path required");
+    JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    brotensor::Device dev; JSValue thrown;
+    if (!resolveDevice(ctx, "loadStyleGAN3", opts, dev, thrown)) return thrown;
+
+    int res = 256;
+    getInt(ctx, opts, "resolution", res);
+    if (res != 256 && res != 512 && res != 1024)
+        return JS_ThrowTypeError(ctx, "loadStyleGAN3: resolution must be 256, 512, or 1024");
+
+    return loadModel<VisionStyleGAN3Wrapper>(ctx, "loadStyleGAN3", opts,
+        [dir, dev, res]() {
+            auto w = std::make_unique<VisionStyleGAN3Wrapper>();
+            w->device = dev;
+            w->resolution = res;
+            const sg3::Config cfg = sg3ConfigForResolution(res);
+            w->z_dim = cfg.z_dim;
+            w->w_dim = cfg.w_dim;
+            w->num_ws = cfg.num_ws();
+            w->gen = std::make_unique<sg3::Generator>(cfg);
+            brotensor::DeviceScope scope(dev);
+            w->gen->load(dir);
+            w->gen->to(dev);
+            std::fprintf(stderr, "[INFO] [vision] StyleGAN3-R (%dx%d) loaded on %s\n",
+                         res, res, deviceName(dev));
+            return w;
+        });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // bro.vision free functions + install
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1693,6 +1922,7 @@ void installVisionBindings(JSContext* ctx) {
     registerMlsdClass(ctx);
     registerOpenposeClass(ctx);
     registerSegformerClass(ctx);
+    registerStyleGAN3Class(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
@@ -1721,6 +1951,8 @@ void installVisionBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadOpenpose, "loadOpenpose", 2));
     JS_SetPropertyStr(ctx, vision, "loadSegformer",
         JS_NewCFunction(ctx, js_loadSegformer, "loadSegformer", 2));
+    JS_SetPropertyStr(ctx, vision, "loadStyleGAN3",
+        JS_NewCFunction(ctx, js_loadStyleGAN3, "loadStyleGAN3", 2));
     JS_SetPropertyStr(ctx, broObj, "vision", vision);
 
     JS_FreeValue(ctx, broObj);

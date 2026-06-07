@@ -5,7 +5,8 @@
  * boxes: promptable segmentation (SAM), monocular depth (Depth-Anything-V2),
  * surface normals (DSINE), and the ControlNet conditioning annotators — soft
  * edges (HED), line drawing (lineart), straight lines (MLSD), body pose
- * (OpenPose), semantic segmentation (SegFormer).
+ * (OpenPose), semantic segmentation (SegFormer). Plus one *generative* model
+ * that runs the other way, latent → image: StyleGAN3-R (loadStyleGAN3).
  *
  * Backed by brovisionml on top of brotensor + broimage. Models run on CUDA by
  * default — pass { device: 'cpu' } to force the CPU backend. brovisionml ships
@@ -202,6 +203,56 @@ const pose = openpose.detect(img);   // pose.bodies, pose.image
  */
 const segformer = bro.vision.loadSegformer('weights/segformer-b0-ade');
 const sem = segformer.detect(img);   // sem.classes, sem.image
+
+
+// ── StyleGAN3-R — image generation (the one generative model) ────────────────
+
+/**
+ * Load an NVlabs StyleGAN3-R generator. Unlike the image→X models above, this
+ * one runs latent → RGB. The checkpoint is a CONVERTED safetensors (StyleGAN3
+ * ships Python pickles): brovisionml/scripts/download-stylegan3.sh fetches +
+ * converts a released config-R model into weights/<name>/model.safetensors.
+ * @param {string} dir   holds model.safetensors
+ * @param {Object} [opts]
+ * @param {number} [opts.resolution=256]  256 | 512 | 1024 — must match the checkpoint
+ * @param {string} [opts.device='cuda']   'cuda' | 'cpu'
+ * @param {function} [opts.onReady]        async load: onReady(gen)
+ * @param {function} [opts.onError]
+ * @returns {StyleGAN3|AsyncHandle}
+ *   props: device, resolution, zDim (512), numWs (16), wDim (512)
+ */
+const gan = bro.vision.loadStyleGAN3('weights/stylegan3-r-ffhqu-256', { resolution: 256 });
+
+/**
+ * StyleGAN3.generate(opts?) — sample/render an image.
+ * @param {Object} [opts]
+ * @param {number}       [opts.seed=0]            sample z ~ N(0,1) from this seed
+ * @param {Float32Array} [opts.z]                 use this latent (length zDim) instead of a seed
+ * @param {number}       [opts.truncation=1.0]    truncation psi toward w_avg; <1 = tamer/more typical
+ * @param {number}       [opts.truncationCutoff=-1] rows to truncate; -1 = all
+ * @param {boolean}      [opts.returnLatents=false] also return the mapped w+
+ * @param {function}     [opts.onDone]            run async
+ * @returns {{ width, height, image: ImageBitmap, seed?, w?: Float32Array, numWs?, wDim? }}
+ *   `image` is the RGB result (drawImage / WebGL texImage2D ready). `seed` echoes
+ *   the seed when one was used. With returnLatents, `w` is the (numWs*wDim) W+
+ *   row-major — edit/interpolate it and feed it back through synthesize().
+ */
+const r = gan.generate({ seed: 42, truncation: 0.7 });   // r.image, r.seed
+
+/**
+ * StyleGAN3.synthesize(w, opts?) — render an explicit W+ (skip the mapping).
+ * @param {Float32Array} w   the full w+ (numWs*wDim) OR a single w (wDim),
+ *                           broadcast across all rows.
+ * @param {Object} [opts]    onDone — run async
+ * @returns {{ width, height, image: ImageBitmap }}
+ *
+ *   Latent-space interpolation, end to end:
+ *     const a = gan.generate({ seed: 1, returnLatents: true }).w;
+ *     const b = gan.generate({ seed: 2, returnLatents: true }).w;
+ *     const t = 0.5, mix = a.map((v, i) => v * (1 - t) + b[i] * t);
+ *     const img = gan.synthesize(mix).image;   // the W+ midpoint face
+ */
+const mid = gan.synthesize(someWPlus);   // mid.image
 
 
 // ── Pipe an annotator into bro.diffusion ─────────────────────────────────────
