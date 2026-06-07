@@ -254,6 +254,36 @@ const r = gan.generate({ seed: 42, truncation: 0.7 });   // r.image, r.seed
  */
 const mid = gan.synthesize(someWPlus);   // mid.image
 
+/**
+ * StyleGAN3.invert(image, opts?) — recover a W+ latent from an image (the
+ * reverse of synthesize). Optimization-based GAN inversion: Adam on the W+ rows
+ * minimizing image-space MSE through the frozen synthesis network. The recovered
+ * `w` drops straight back into synthesize() / interpolation / style-mixing, so an
+ * arbitrary face can be edited in the same latent space as a sampled one.
+ * @param {ImageBitmap|{data,width,height}} image  RGBA source; MUST be the model
+ *   resolution (e.g. 256×256) — resize the source first (drawImage onto a
+ *   resolution-sized canvas) if it isn't.
+ * @param {Object} [opts]
+ * @param {number}   [opts.steps=350]      Adam iterations (more = closer fit, slower)
+ * @param {number}   [opts.lr=0.05]        Adam learning rate (peak; warmup+cosine schedule)
+ * @param {number}   [opts.regW=0]         L2 pull of w+ toward w_avg (>0 stays on-manifold / more editable)
+ * @param {number}   [opts.initNoise=0]    stddev of gaussian jitter on the w_avg init
+ * @param {number}   [opts.seed=0]         rng for initNoise
+ * @param {function} [opts.onDone]         run async — RECOMMENDED, inversion is slow (hundreds of synthesis passes)
+ * @returns {{ width, height, image: ImageBitmap, w: Float32Array, numWs, wDim,
+ *             loss: number, lossCurve: Float32Array }}
+ *   `image` is the re-rendered recovered face, `w` the (numWs*wDim) W+, `loss`
+ *   the final image-space MSE, `lossCurve` the per-step MSE (plot to watch convergence).
+ *
+ *   Invert then edit, end to end (async — the windowed event loop drives onDone):
+ *     gan.invert(photo256, { steps: 300, onDone(res) {
+ *       const w = res.w;                       // recovered latent
+ *       // …interpolate / style-mix `w` like any sampled latent, then:
+ *       const edited = gan.synthesize(w).image;
+ *     }});
+ */
+const rec = gan.invert(photo256, { steps: 300 });   // rec.image, rec.w, rec.loss
+
 
 // ── Pipe an annotator into bro.diffusion ─────────────────────────────────────
 //

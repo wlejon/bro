@@ -1707,9 +1707,18 @@ struct Sg3Op {
     int   cutoff = -1;
     bool  returnLatents = false;
     long long seed = -1;        // echoed back when generate seeded its own z
+    // invert inputs:
+    std::vector<unsigned char> target_rgb;  // (h*w*3) HWC for invert, else empty
+    int       target_w = 0, target_h = 0;
+    int       inv_steps = 350;
+    float     inv_lr = 0.05f, inv_regW = 0.0f, inv_initNoise = 0.0f;
+    long long inv_seed = 0;
     // outputs:
     sg3::Image img;
     std::vector<float> ws_out;  // (num_ws*w_dim) when returnLatents
+    bool  has_loss = false;
+    float loss = 0.0f;          // final image-space MSE (invert)
+    std::vector<float> loss_curve;  // per-step MSE (invert)
 };
 
 // Build the result object { image, width, height, [seed], [w, numWs, wDim] }.
@@ -1726,6 +1735,11 @@ static JSValue sg3BuildResult(JSContext* ctx, const std::shared_ptr<Sg3Op>& op) 
         JS_SetPropertyStr(ctx, res, "numWs", JS_NewInt32(ctx, op->w->num_ws));
         JS_SetPropertyStr(ctx, res, "wDim",  JS_NewInt32(ctx, op->w->w_dim));
     }
+    if (op->has_loss)
+        JS_SetPropertyStr(ctx, res, "loss", JS_NewFloat64(ctx, op->loss));
+    if (!op->loss_curve.empty())
+        JS_SetPropertyStr(ctx, res, "lossCurve",
+                          qjsbind::make_float32_array(ctx, op->loss_curve));
     return res;
 }
 
@@ -1850,6 +1864,102 @@ static JSValue js_stylegan3_synthesize(JSContext* ctx, JSValueConst this_val,
     return r;
 }
 
+// StyleGAN3.invert(image, opts?) → { image, width, height, w, numWs, wDim,
+//                                     loss, lossCurve } | AsyncHandle
+//   image: ImageBitmap or { data, width, height } — must be the model resolution.
+//   Optimization-based GAN inversion: Adam on the W+ rows minimizing image-space
+//   MSE through the frozen synthesis. Returns the recovered w+ (feed straight to
+//   synthesize() / interpolate / mix) plus the re-rendered image and the loss.
+//     opts.steps (350)        — Adam iterations
+//     opts.lr (0.05)          — Adam learning rate (peak; warmup+cosine schedule)
+//     opts.regW (0)           — L2 pull of w+ toward w_avg (>0 stays on-manifold)
+//     opts.initNoise (0)      — stddev of gaussian jitter on the w_avg init
+//     opts.seed (0)           — rng for initNoise
+//     opts.onDone             — run async (recommended: inversion is slow)
+static JSValue js_stylegan3_invert(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<VisionStyleGAN3Wrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "invert: not a StyleGAN3 generator");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "invert(image, opts?): image required");
+
+    std::vector<std::uint8_t> rgba;
+    int iw = 0, ih = 0;
+    std::string err;
+    if (!readImageArg(ctx, argv[0], rgba, iw, ih, err))
+        return JS_ThrowTypeError(ctx, "invert: %s", err.c_str());
+    if (iw != w->resolution || ih != w->resolution)
+        return JS_ThrowTypeError(ctx,
+            "invert: image must be %dx%d (the model resolution); got %dx%d. "
+            "Resize the source first (e.g. drawImage onto a %dx%d canvas).",
+            w->resolution, w->resolution, iw, ih, w->resolution, w->resolution);
+
+    auto op = std::make_shared<Sg3Op>();
+    op->w = w;
+    op->returnLatents = true;       // inversion's whole point is the recovered w+
+    op->target_w = iw;
+    op->target_h = ih;
+    op->target_rgb.resize(static_cast<std::size_t>(iw) * ih * 3);
+    for (std::size_t i = 0, n = static_cast<std::size_t>(iw) * ih; i < n; ++i) {
+        op->target_rgb[3 * i + 0] = rgba[4 * i + 0];
+        op->target_rgb[3 * i + 1] = rgba[4 * i + 1];
+        op->target_rgb[3 * i + 2] = rgba[4 * i + 2];
+    }
+
+    JSValueConst opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    getInt(ctx, opts, "steps", op->inv_steps);
+    getFloat(ctx, opts, "lr", op->inv_lr);
+    getFloat(ctx, opts, "regW", op->inv_regW);
+    getFloat(ctx, opts, "initNoise", op->inv_initNoise);
+    if (JS_IsObject(opts)) {
+        JSValue sv = JS_GetPropertyStr(ctx, opts, "seed");
+        if (JS_IsNumber(sv)) JS_ToInt64(ctx, &op->inv_seed, sv);
+        JS_FreeValue(ctx, sv);
+    }
+    if (op->inv_steps < 1) op->inv_steps = 1;
+
+    if (w->busy.exchange(true))
+        return JS_ThrowInternalError(ctx, "invert: generator busy");
+
+    auto compute = [op](const std::atomic<bool>&) {
+        VisionStyleGAN3Wrapper* ww = op->w;
+        brotensor::DeviceScope scope(ww->device);
+        sg3::Image target;
+        target.width = op->target_w;
+        target.height = op->target_h;
+        target.channels = 3;
+        target.rgb = std::move(op->target_rgb);
+
+        sg3::Generator::InvertOptions io;
+        io.num_steps  = op->inv_steps;
+        io.lr         = op->inv_lr;
+        io.reg_w      = op->inv_regW;
+        io.init_noise = op->inv_initNoise;
+        io.seed       = static_cast<std::uint64_t>(op->inv_seed);
+        // on_step runs on this compute thread; pushing to op (owned by the op's
+        // shared_ptr, read on the JS thread only after done) is race-free.
+        op->loss_curve.reserve(op->inv_steps);
+        io.on_step = [op](int, float l) { op->loss_curve.push_back(l); };
+
+        sg3::Generator::InvertResult r = ww->gen->invert(target, io);
+        op->has_loss = true;
+        op->loss = r.loss;
+
+        brotensor::Tensor wc = r.w.to(brotensor::Device::CPU);
+        const float* p = wc.host_f32();
+        op->ws_out.assign(p, p + static_cast<std::size_t>(ww->num_ws) * ww->w_dim);
+        op->img = ww->gen->render(r.w);
+    };
+    auto build   = [op](JSContext* c) { return sg3BuildResult(c, op); };
+    auto release = [op]() { op->w->busy = false; };
+
+    JSValue onDone = getOnDone(ctx, opts);
+    JSValue rr = runVisionOp(ctx, onDone, std::move(compute), std::move(build),
+                             std::move(release));
+    JS_FreeValue(ctx, onDone);
+    return rr;
+}
+
 static void registerStyleGAN3Class(JSContext* ctx) {
     qjsbind::Class<VisionStyleGAN3Wrapper>(ctx, "StyleGAN3", qjsbind::NoGlobal)
         .get("device", [](VisionStyleGAN3Wrapper* w) {
@@ -1860,7 +1970,8 @@ static void registerStyleGAN3Class(JSContext* ctx) {
         .get("numWs", [](VisionStyleGAN3Wrapper* w) { return w->num_ws; })
         .get("wDim",  [](VisionStyleGAN3Wrapper* w) { return w->w_dim; })
         .method_raw("generate",   js_stylegan3_generate, 1)
-        .method_raw("synthesize", js_stylegan3_synthesize, 2);
+        .method_raw("synthesize", js_stylegan3_synthesize, 2)
+        .method_raw("invert",     js_stylegan3_invert, 2);
 }
 
 // bro.vision.loadStyleGAN3(modelDir, opts?) → StyleGAN3 | AsyncHandle
