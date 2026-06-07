@@ -220,12 +220,18 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
     // options
     int   seed = 42, steps = 20, numGaussians = 131072;
     float guidance = 3.0f, shift = 3.0f;
+    // BiRefNet bg-removal runs whenever the matte model is loaded; opts can turn
+    // it off per call (e.g. for an already-masked input) without a reload.
+    bool  removeBackground = (w->rmbg != nullptr);
     if (argc > 1 && JS_IsObject(argv[1])) {
         tsGetInt(ctx, argv[1], "seed", seed);
         tsGetInt(ctx, argv[1], "steps", steps);
         tsGetInt(ctx, argv[1], "numGaussians", numGaussians);
         tsGetFloat(ctx, argv[1], "guidanceScale", guidance);
         tsGetFloat(ctx, argv[1], "shift", shift);
+        JSValue rb = JS_GetPropertyStr(ctx, argv[1], "removeBackground");
+        if (!JS_IsUndefined(rb)) removeBackground = JS_ToBool(ctx, rb);
+        JS_FreeValue(ctx, rb);
     }
 
     // 1) read + preprocess the image (JS thread).
@@ -236,7 +242,7 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         return JS_ThrowTypeError(ctx, "triposplat: %s", err.c_str());
     // Optional BiRefNet bg-removal: replace the image alpha with the predicted
     // matte so the composite-over-black isolates the subject.
-    if (w->rmbg) {
+    if (w->rmbg && removeBackground) {
         try {
             std::vector<float> rgb(static_cast<std::size_t>(iw) * ih * 3);
             for (std::size_t i = 0; i < static_cast<std::size_t>(iw) * ih; ++i) {
@@ -360,6 +366,9 @@ void tsRegisterClass(JSContext* ctx) {
                 default:                return std::string("CPU");
             }
         })
+        // True when a BiRefNet matte model was loaded — i.e. generate() can
+        // isolate the subject. Lets a UI gate its "remove background" control.
+        .get("backgroundRemoval", [](TripoSplatWrapper* w) { return w->rmbg != nullptr; })
         .method_raw("generate", tsGenerate, 2);
 }
 

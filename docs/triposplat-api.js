@@ -60,6 +60,11 @@ class TripoSplatPipeline {
   /** Device the models run on ("CUDA" | "Metal" | "CPU"). */
   get device() {}
 
+  /** True when a BiRefNet matte model was loaded (the `birefnet` path was
+   *  given to load()) — i.e. generate() can isolate the subject. Use it to
+   *  gate a "remove background" toggle in a UI. */
+  get backgroundRemoval() {}
+
   /**
    * Reconstruct a Gaussian cloud from a single image.
    *
@@ -72,6 +77,10 @@ class TripoSplatPipeline {
    * @param {number} [opts.shift=3.0]          Flow-matching timestep-schedule shift.
    * @param {number} [opts.numGaussians=131072] Target splat count (rounded down to a
    *        multiple of 32; 32768–262144 recommended).
+   * @param {boolean} [opts.removeBackground] Run BiRefNet matting on this image
+   *        before reconstruction. Defaults to true when load() was given a
+   *        `birefnet` checkpoint, false otherwise. Set false to skip matting for
+   *        an already-masked / foreground-on-black input (no reload needed).
    * @returns {{positions: Float32Array, scales: Float32Array, rotations: Float32Array,
    *           opacities: Float32Array, sh: Float32Array, shDegree: number, count: number}}
    *   Render-ready SoA (positions xyz / scales xyz linear / rotations xyzw unit /
