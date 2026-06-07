@@ -34,6 +34,7 @@
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -613,14 +614,22 @@ static void readQwenSynthOpts(JSContext* ctx, JSValueConst opts,
     JS_FreeValue(ctx, ins);
 }
 
-// Read the optional sampling controls (opts.temperature / topK / topP / seed)
-// into a QwenTtsSampling. Omitted keys keep the struct defaults — temperature 0,
-// i.e. the deterministic greedy policy. Shared by the sync + async synth paths.
+// Read the optional sampling controls into a QwenTtsSampling. Omitted keys keep
+// the struct defaults — temperature 0 (deterministic greedy), repetition penalty
+// 1.05 (the upstream policy). Shared by the sync + async synth paths. The Talker
+// steering knobs:
+//   opts.repetitionPenalty  > 1 discourages the AR Talker's droning / looping.
+//   opts.logitBias          { codeId: delta, ... } additive codebook-0 bias
+//                           (delta -Infinity forbids a code). Opaque RVQ ids.
+//   opts.adaptive           > 0 scales the codebook-0 temperature per frame by
+//                           how unsure the model is — hotter only where it hedged.
 static void readQwenSampling(JSContext* ctx, JSValueConst opts,
                              brosoundml::QwenTtsSampling& s) {
     if (!JS_IsObject(opts)) return;
     getNum(ctx, opts, "temperature", s.temperature);
     getNum(ctx, opts, "topP", s.top_p);
+    getNum(ctx, opts, "repetitionPenalty", s.repetition_penalty);
+    getNum(ctx, opts, "adaptive", s.adaptive);
     JSValue tk = JS_GetPropertyStr(ctx, opts, "topK");
     if (JS_IsNumber(tk)) { int32_t t = s.top_k; JS_ToInt32(ctx, &t, tk); s.top_k = t; }
     JS_FreeValue(ctx, tk);
@@ -630,6 +639,28 @@ static void readQwenSampling(JSContext* ctx, JSValueConst opts,
         s.seed = static_cast<std::uint64_t>(t);
     }
     JS_FreeValue(ctx, sd);
+    // logitBias: a plain object mapping codebook-0 id -> additive logit delta.
+    JSValue lb = JS_GetPropertyStr(ctx, opts, "logitBias");
+    if (JS_IsObject(lb) && !JS_IsFunction(ctx, lb)) {
+        JSPropertyEnum* tab = nullptr;
+        uint32_t len = 0;
+        if (JS_GetOwnPropertyNames(ctx, &tab, &len, lb, JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+            for (uint32_t i = 0; i < len; ++i) {
+                const char* key = JS_AtomToCString(ctx, tab[i].atom);
+                JSValue v = JS_GetProperty(ctx, lb, tab[i].atom);
+                double d = 0;
+                if (key && JS_IsNumber(v) && JS_ToFloat64(ctx, &d, v) == 0) {
+                    int id = std::atoi(key);
+                    s.logit_bias.emplace_back(id, static_cast<float>(d));
+                }
+                if (key) JS_FreeCString(ctx, key);
+                JS_FreeValue(ctx, v);
+                JS_FreeAtom(ctx, tab[i].atom);
+            }
+            js_free(ctx, tab);
+        }
+    }
+    JS_FreeValue(ctx, lb);
 }
 
 // Marshal a QwenTtsTrace to a JS stages array [{ name, h, w, data:Float32Array }] —
