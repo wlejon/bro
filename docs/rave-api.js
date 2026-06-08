@@ -31,6 +31,11 @@
  * FFT filtered-noise synthesizer — the breathy / unvoiced / textural energy the
  * deterministic branch can't make. The noise is resampled each call, so the
  * output then varies unless you pin it with a fixed `seed`.
+ *
+ * Stereo: { channels: 2 } returns an interleaved 2-channel buffer. RAVE has no
+ * stereo decoder — it decodes the mono latent once per channel and the two
+ * channels decorrelate only via an independent N(0,1) pad on the discarded latent
+ * dims (the `stereoWidth` knob). Pin `seed` to make the width reproducible.
  */
 
 
@@ -113,19 +118,34 @@ for (let c = 0; c < nLatent; c++) {
  * @param {Object} [opts]
  * @param {boolean} [opts.addNoise=false] - run the stochastic noise-synth branch
  *        for breathy / textural realism (off = deterministic & reproducible).
- * @param {number}  [opts.seed=0]         - RNG seed for the noise when addNoise
- *        is set; fixing it makes the noisy output reproducible too.
- * @returns {{ samples: Float32Array, sampleRate: number }} - mono PCM,
- *        frames * totalRatio samples at rave.sampleRate.
+ * @param {number}  [opts.seed=0]         - RNG seed for the noise AND the stereo
+ *        latent pad; fixing it makes the noisy / stereo output reproducible too.
+ * @param {number}  [opts.channels=1]     - >1 returns an INTERLEAVED multi-channel
+ *        buffer (samples[t*channels + c]). RAVE has no stereo decoder: it runs the
+ *        mono decoder once per channel and the channels decorrelate only via the
+ *        per-channel latent pad below.
+ * @param {number}  [opts.stereoWidth]    - std of the independent N(0,1) pad on
+ *        the discarded latent dims, per channel — the sole source of L/R width.
+ *        RAVE-native is 1.0 (the default when channels>1). Larger = wider/looser,
+ *        0 = both channels identical.
+ * @returns {{ samples: Float32Array, sampleRate: number, channels: number }} -
+ *        PCM at rave.sampleRate; frames * totalRatio samples PER channel
+ *        (interleaved when channels>1).
  */
 const out = rave.decode(latent, frames);
 // out.samples.length === frames * rave.totalRatio
-// out.sampleRate === rave.sampleRate
+// out.sampleRate === rave.sampleRate ; out.channels === 1
 
 // Add breathy/unvoiced texture (varies per call):
 const noisy = rave.decode(latent, frames, { addNoise: true });
 // Reproducible noisy decode (pin the RNG):
 const noisyFixed = rave.decode(latent, frames, { addNoise: true, seed: 42 });
+
+// Stereo decode — interleaved L/R, reproducible width via the seed:
+const stereo = rave.decode(latent, frames, { channels: 2, stereoWidth: 1.0, seed: 1 });
+// stereo.channels === 2 ; stereo.samples.length === frames * rave.totalRatio * 2
+// (interleaved: samples[t*2] = L, samples[t*2 + 1] = R). Feed straight to a
+// 2-channel sink, e.g. audioCtx.createClip(stereo.samples, 2).
 
 
 // ── Morph: encode → edit a curve → decode ────────────────────────────────────

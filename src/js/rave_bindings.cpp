@@ -118,13 +118,22 @@ static JSValue js_rave_encode(JSContext* ctx, JSValueConst this_val,
     }
 }
 
-// rave.decode(latent, frames, opts?) -> { samples: Float32Array, sampleRate }
+// rave.decode(latent, frames, opts?) -> { samples, sampleRate, channels }
 //   latent: Float32Array of nLatent*frames, channel-major (latent[c*frames + t]).
-//   Produces frames * totalRatio samples. nLatent is inferred as latent.length /
-//   frames and must equal rave.nLatent.
-//   opts (optional): { addNoise?: bool, seed?: number }. addNoise runs RAVE's
-//   stochastic FFT noise-synth branch (breathy/unvoiced texture); seed pins its
-//   white noise so the output is reproducible (default deterministic, no noise).
+//   Produces frames * totalRatio samples per channel. nLatent is inferred as
+//   latent.length / frames and must equal rave.nLatent.
+//   opts (optional):
+//     addNoise?: bool   run RAVE's stochastic FFT noise-synth branch (breathy /
+//                       unvoiced texture).
+//     seed?:     number pins the white noise + stereo latent pad so the output
+//                       is reproducible (default deterministic, no noise).
+//     channels?: number >1 returns an INTERLEAVED multi-channel buffer
+//                       (samples[t*channels + c]); RAVE's stereo decode runs the
+//                       mono decoder once per channel.
+//     stereoWidth?: number  std of the independent N(0,1) pad on the discarded
+//                       latent dims per channel — the source of L/R decorrelation
+//                       (RAVE-native = 1.0; defaults to 1.0 when channels>1).
+//   `channels` in the result is the channel count (1 = plain mono).
 static JSValue js_rave_decode(JSContext* ctx, JSValueConst this_val,
                               int argc, JSValueConst* argv) {
     auto* w = raveSelf(ctx, this_val);
@@ -141,6 +150,7 @@ static JSValue js_rave_decode(JSContext* ctx, JSValueConst this_val,
     const int n_latent = static_cast<int>(latent.size() / static_cast<size_t>(frames));
 
     brosoundml::RaveDecodeOptions opts;
+    bool widthSet = false;
     if (argc >= 3 && JS_IsObject(argv[2])) {
         JSValue an = JS_GetPropertyStr(ctx, argv[2], "addNoise");
         opts.add_noise = JS_ToBool(ctx, an) > 0;
@@ -152,13 +162,42 @@ static JSValue js_rave_decode(JSContext* ctx, JSValueConst this_val,
             opts.seed = static_cast<uint64_t>(s);
         }
         JS_FreeValue(ctx, sv);
+        JSValue cv = JS_GetPropertyStr(ctx, argv[2], "channels");
+        if (!JS_IsUndefined(cv)) {
+            int32_t c = 1;
+            JS_ToInt32(ctx, &c, cv);
+            opts.channels = c < 1 ? 1 : c;
+        }
+        JS_FreeValue(ctx, cv);
+        JSValue wv = JS_GetPropertyStr(ctx, argv[2], "stereoWidth");
+        if (!JS_IsUndefined(wv)) {
+            double width = 1.0;
+            JS_ToFloat64(ctx, &width, wv);
+            opts.latent_pad_std = static_cast<float>(width);
+            widthSet = true;
+        }
+        JS_FreeValue(ctx, wv);
     }
+    // Stereo with no explicit width: use RAVE's native unit-variance pad so the
+    // channels actually decorrelate (otherwise both channels would be identical).
+    if (opts.channels > 1 && !widthSet) opts.latent_pad_std = 1.0f;
+
     try {
         brotensor::DeviceScope scope(w->device);
-        brosoundml::AudioBuffer buf = w->rave->decode(latent.data(), n_latent, frames, opts);
+        if (opts.channels <= 1) {
+            brosoundml::AudioBuffer buf = w->rave->decode(latent.data(), n_latent, frames, opts);
+            JSValue obj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, obj, "samples", qjsbind::make_float32_array(ctx, buf.samples));
+            JS_SetPropertyStr(ctx, obj, "sampleRate", JS_NewInt32(ctx, buf.sample_rate));
+            JS_SetPropertyStr(ctx, obj, "channels", JS_NewInt32(ctx, 1));
+            return obj;
+        }
+        brosoundml::RaveMultiBuffer buf =
+            w->rave->decode_multi(latent.data(), n_latent, frames, opts);
         JSValue obj = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, obj, "samples", qjsbind::make_float32_array(ctx, buf.samples));
         JS_SetPropertyStr(ctx, obj, "sampleRate", JS_NewInt32(ctx, buf.sample_rate));
+        JS_SetPropertyStr(ctx, obj, "channels", JS_NewInt32(ctx, buf.channels));
         return obj;
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "decode: %s", e.what());
