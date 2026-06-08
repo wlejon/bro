@@ -118,10 +118,13 @@ static JSValue js_rave_encode(JSContext* ctx, JSValueConst this_val,
     }
 }
 
-// rave.decode(latent, frames) -> { samples: Float32Array, sampleRate }
+// rave.decode(latent, frames, opts?) -> { samples: Float32Array, sampleRate }
 //   latent: Float32Array of nLatent*frames, channel-major (latent[c*frames + t]).
 //   Produces frames * totalRatio samples. nLatent is inferred as latent.length /
 //   frames and must equal rave.nLatent.
+//   opts (optional): { addNoise?: bool, seed?: number }. addNoise runs RAVE's
+//   stochastic FFT noise-synth branch (breathy/unvoiced texture); seed pins its
+//   white noise so the output is reproducible (default deterministic, no noise).
 static JSValue js_rave_decode(JSContext* ctx, JSValueConst this_val,
                               int argc, JSValueConst* argv) {
     auto* w = raveSelf(ctx, this_val);
@@ -136,9 +139,23 @@ static JSValue js_rave_decode(JSContext* ctx, JSValueConst this_val,
     if (frames <= 0 || latent.size() % static_cast<size_t>(frames) != 0)
         return JS_ThrowTypeError(ctx, "decode: latent.length must be a positive multiple of frames");
     const int n_latent = static_cast<int>(latent.size() / static_cast<size_t>(frames));
+
+    brosoundml::RaveDecodeOptions opts;
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        JSValue an = JS_GetPropertyStr(ctx, argv[2], "addNoise");
+        opts.add_noise = JS_ToBool(ctx, an) > 0;
+        JS_FreeValue(ctx, an);
+        JSValue sv = JS_GetPropertyStr(ctx, argv[2], "seed");
+        if (!JS_IsUndefined(sv)) {
+            int64_t s = 0;
+            JS_ToInt64(ctx, &s, sv);
+            opts.seed = static_cast<uint64_t>(s);
+        }
+        JS_FreeValue(ctx, sv);
+    }
     try {
         brotensor::DeviceScope scope(w->device);
-        brosoundml::AudioBuffer buf = w->rave->decode(latent.data(), n_latent, frames);
+        brosoundml::AudioBuffer buf = w->rave->decode(latent.data(), n_latent, frames, opts);
         JSValue obj = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, obj, "samples", qjsbind::make_float32_array(ctx, buf.samples));
         JS_SetPropertyStr(ctx, obj, "sampleRate", JS_NewInt32(ctx, buf.sample_rate));

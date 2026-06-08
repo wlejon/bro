@@ -26,8 +26,11 @@
  * other bro audio APIs use: { samples: Float32Array, sampleRate }.
  *
  * Determinism: encode() uses the posterior mean (no sampling); decode() runs the
- * deterministic waveform + loudness branches (the model's stochastic FFT
- * noise-synth branch is not applied), so encode→decode round-trips reproducibly.
+ * deterministic waveform + loudness branches by default, so encode→decode
+ * round-trips reproducibly. Pass { addNoise: true } to also run RAVE's stochastic
+ * FFT filtered-noise synthesizer — the breathy / unvoiced / textural energy the
+ * deterministic branch can't make. The noise is resampled each call, so the
+ * output then varies unless you pin it with a fixed `seed`.
  */
 
 
@@ -101,18 +104,28 @@ for (let c = 0; c < nLatent; c++) {
 // ── Decode ──────────────────────────────────────────────────────────────────
 
 /**
- * Decode a latent back to a waveform. Runs the deterministic synthesis branches.
+ * Decode a latent back to a waveform.
  *
  * @param {Float32Array} latent - nLatent * frames floats, channel-major
  *        (latent[c * frames + t]) — the same layout encode() returns. nLatent is
  *        inferred as latent.length / frames and must equal rave.nLatent.
  * @param {number} frames       - frame count (the encode() result's `frames`).
+ * @param {Object} [opts]
+ * @param {boolean} [opts.addNoise=false] - run the stochastic noise-synth branch
+ *        for breathy / textural realism (off = deterministic & reproducible).
+ * @param {number}  [opts.seed=0]         - RNG seed for the noise when addNoise
+ *        is set; fixing it makes the noisy output reproducible too.
  * @returns {{ samples: Float32Array, sampleRate: number }} - mono PCM,
  *        frames * totalRatio samples at rave.sampleRate.
  */
 const out = rave.decode(latent, frames);
 // out.samples.length === frames * rave.totalRatio
 // out.sampleRate === rave.sampleRate
+
+// Add breathy/unvoiced texture (varies per call):
+const noisy = rave.decode(latent, frames, { addNoise: true });
+// Reproducible noisy decode (pin the RNG):
+const noisyFixed = rave.decode(latent, frames, { addNoise: true, seed: 42 });
 
 
 // ── Morph: encode → edit a curve → decode ────────────────────────────────────
