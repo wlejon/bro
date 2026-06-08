@@ -205,21 +205,24 @@ const segformer = bro.vision.loadSegformer('weights/segformer-b0-ade');
 const sem = segformer.detect(img);   // sem.classes, sem.image
 
 
-// ── StyleGAN3-R — image generation (the one generative model) ────────────────
+// ── StyleGAN3 — image generation (the one generative model) ──────────────────
 
 /**
- * Load an NVlabs StyleGAN3-R generator. Unlike the image→X models above, this
- * one runs latent → RGB. The checkpoint is a CONVERTED safetensors (StyleGAN3
- * ships Python pickles): brovisionml/scripts/download-stylegan3.sh fetches +
- * converts a released config-R model into weights/<name>/model.safetensors.
+ * Load an NVlabs StyleGAN3 generator. Unlike the image→X models above, this one
+ * runs latent → RGB. The checkpoint is a CONVERTED safetensors (StyleGAN3 ships
+ * Python pickles): brovisionml/scripts/download-stylegan3.sh fetches + converts
+ * a released model into weights/<name>/model.safetensors. Both config families
+ * load — config-R (rotation-equivariant, the default) and config-T
+ * (translation-equivariant); pass `variant` to pick, matching the checkpoint.
  * @param {string} dir   holds model.safetensors
  * @param {Object} [opts]
  * @param {number} [opts.resolution=256]  256 | 512 | 1024 — must match the checkpoint
+ * @param {string} [opts.variant='r']     'r' (config-R) | 't' (config-T) — must match too
  * @param {string} [opts.device='cuda']   'cuda' | 'cpu'
  * @param {function} [opts.onReady]        async load: onReady(gen)
  * @param {function} [opts.onError]
  * @returns {StyleGAN3|AsyncHandle}
- *   props: device, resolution, zDim (512), numWs (16), wDim (512)
+ *   props: device, resolution, variant ('r'|'t'), zDim (512), numWs (16), wDim (512)
  */
 const gan = bro.vision.loadStyleGAN3('weights/stylegan3-r-ffhqu-256', { resolution: 256 });
 

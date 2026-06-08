@@ -1693,10 +1693,19 @@ struct VisionStyleGAN3Wrapper {
     std::unique_ptr<sg3::Generator> gen;
     brotensor::Device device = brotensor::Device::CPU;
     int z_dim = 512, num_ws = 16, w_dim = 512, resolution = 256;
+    char variant = 'r';              // 'r' (config-R) or 't' (config-T)
     std::atomic<bool> busy{false};   // generate / synthesize are single-owner
 };
 
-static sg3::Config sg3ConfigForResolution(int res) {
+// Pick the preset for a (resolution, variant) pair. variant 't' selects the
+// translation-equivariant config-T family (3x3 conv, 16384/512 channels);
+// anything else is the default rotation-equivariant config-R.
+static sg3::Config sg3ConfigFor(int res, char variant) {
+    if (variant == 't') {
+        if (res == 1024) return sg3::Config::t1024();
+        if (res == 512)  return sg3::Config::t512();
+        return sg3::Config::t256();
+    }
     if (res == 1024) return sg3::Config::r1024();
     if (res == 512)  return sg3::Config::r512();
     return sg3::Config::r256();
@@ -1991,6 +2000,9 @@ static void registerStyleGAN3Class(JSContext* ctx) {
             return std::string(deviceName(w->device));
         })
         .get("resolution", [](VisionStyleGAN3Wrapper* w) { return w->resolution; })
+        .get("variant", [](VisionStyleGAN3Wrapper* w) {
+            return std::string(1, w->variant);   // "r" or "t"
+        })
         .get("zDim",  [](VisionStyleGAN3Wrapper* w) { return w->z_dim; })
         .get("numWs", [](VisionStyleGAN3Wrapper* w) { return w->num_ws; })
         .get("wDim",  [](VisionStyleGAN3Wrapper* w) { return w->w_dim; })
@@ -2002,6 +2014,7 @@ static void registerStyleGAN3Class(JSContext* ctx) {
 // bro.vision.loadStyleGAN3(modelDir, opts?) → StyleGAN3 | AsyncHandle
 //   modelDir holds model.safetensors (convert with scripts/convert-stylegan3.py).
 //   opts.resolution: 256 (default) | 512 | 1024 — must match the checkpoint.
+//   opts.variant: 'r' (default, config-R) | 't' (config-T) — must match too.
 //   opts.device: 'cuda' | 'cpu'; opts.onReady/onError: load on a worker thread.
 static JSValue js_loadStyleGAN3(JSContext* ctx, JSValueConst, int argc,
                                 JSValueConst* argv) {
@@ -2017,12 +2030,19 @@ static JSValue js_loadStyleGAN3(JSContext* ctx, JSValueConst, int argc,
     if (res != 256 && res != 512 && res != 1024)
         return JS_ThrowTypeError(ctx, "loadStyleGAN3: resolution must be 256, 512, or 1024");
 
+    std::string variantStr = "r";
+    getStr(ctx, opts, "variant", variantStr);
+    if (variantStr != "r" && variantStr != "t")
+        return JS_ThrowTypeError(ctx, "loadStyleGAN3: variant must be 'r' or 't'");
+    const char variant = variantStr[0];
+
     return loadModel<VisionStyleGAN3Wrapper>(ctx, "loadStyleGAN3", opts,
-        [dir, dev, res]() {
+        [dir, dev, res, variant]() {
             auto w = std::make_unique<VisionStyleGAN3Wrapper>();
             w->device = dev;
             w->resolution = res;
-            const sg3::Config cfg = sg3ConfigForResolution(res);
+            w->variant = variant;
+            const sg3::Config cfg = sg3ConfigFor(res, variant);
             w->z_dim = cfg.z_dim;
             w->w_dim = cfg.w_dim;
             w->num_ws = cfg.num_ws();
@@ -2030,8 +2050,8 @@ static JSValue js_loadStyleGAN3(JSContext* ctx, JSValueConst, int argc,
             brotensor::DeviceScope scope(dev);
             w->gen->load(dir);
             w->gen->to(dev);
-            std::fprintf(stderr, "[INFO] [vision] StyleGAN3-R (%dx%d) loaded on %s\n",
-                         res, res, deviceName(dev));
+            std::fprintf(stderr, "[INFO] [vision] StyleGAN3-%c (%dx%d) loaded on %s\n",
+                         variant == 't' ? 'T' : 'R', res, res, deviceName(dev));
             return w;
         });
 }
