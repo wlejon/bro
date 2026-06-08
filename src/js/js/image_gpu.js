@@ -1,4 +1,14 @@
-// bro.image.gpu — hardware-accelerated counterparts to bro.image (CPU/brokit).
+// bro.image.gpu — hardware-accelerated counterparts to bro.image, the CPU
+// kernels backed by the broimage C++ library (surfaced via brokit).
+//
+// Boundary note: this module lives entirely in bro and is a WebGL2 *renderer*
+// — it draws to an HTMLCanvasElement via fragment shaders using the engine's
+// GL context. It is NOT part of broimage and cannot move there: broimage is a
+// CPU library whose only GPU path is brotensor (CUDA/Metal) compute on tensors,
+// not browser-canvas rendering. The shared `bro.image.gpu` namespace is an
+// ergonomic pairing with the CPU kernels (e.g. CPU `lookup` ↔ GPU `colormap`,
+// both consuming a LUT built by broimage's `bro.image.gradient`), not common
+// ownership.
 //
 // V1 surface: colormap(canvas, src, lut, params).
 //

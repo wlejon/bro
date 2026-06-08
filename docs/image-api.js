@@ -233,8 +233,16 @@ const image = {
 
 
 // =============================================================================
-// bro.image.gpu — WebGL2-backed counterparts (lives in bro, not brokit)
+// bro.image.gpu — WebGL2-backed counterparts (lives in bro, NOT broimage)
 // =============================================================================
+//
+// Ownership boundary: the CPU `bro.image` kernels above are the broimage C++
+// library (surfaced via brokit). `bro.image.gpu.*` is a separate, bro-side
+// WebGL2 *renderer* — it draws to a canvas via fragment shaders and shares the
+// namespace only for ergonomics (CPU `lookup` ↔ GPU `colormap`, both consuming
+// a `bro.image.gradient` LUT). It is not part of broimage and does not dispatch
+// through brotensor; broimage's own GPU path is CUDA/Metal compute on tensors,
+// which is a different thing from rendering to a browser canvas.
 //
 // V1 surface: colormap.
 //
