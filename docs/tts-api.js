@@ -465,7 +465,11 @@ const qhandle = bro.tts.synthesize(qwen, 'Hello there.', {
  *                  single flat id array is accepted and treated as one chunk.
  * @param {Voice} [voice]            - Kokoro only (3rd arg), from loadVoice().
  * @param {Object} [opts]
- * @param {function} [opts.onChunk]  - onChunk(samples) per chunk, 24 kHz mono, in order.
+ * @param {function} [opts.onChunk]  - per chunk, 24 kHz mono, in order. Qwen:
+ *        onChunk(samples). Kokoro: onChunk(samples, durations) — `durations` is
+ *        an Int32Array of that chunk's per-phoneme frame counts (BOS/EOS-wrapped,
+ *        length = chunk.length + 2), so words can be aligned to the chunk's audio
+ *        precisely, exactly like synthesize()'s `durations`.
  * @param {function} [opts.onDone]   - onDone(result, info) once at the end.
  * @param {number}   [opts.speed=1]  - Kokoro: duration scale (applies to every chunk).
  * @param {number}   [opts.chunkFrames=25]                       - Qwen: 12.5 Hz frames per
@@ -490,6 +494,6 @@ const kchunks = [[]];
 for (const id of ids) { if (id === space && kchunks[kchunks.length - 1].length) kchunks.push([]); else kchunks[kchunks.length - 1].push(id); }
 bro.tts.synthesizeStream(kokoro, kchunks, voice, {
     speed: 1.0,
-    onChunk: (samples) => { /* play this clause now */ },
+    onChunk: (samples, durations) => { /* play this clause now; durations aligns its words */ },
     onDone:  (result, info) => { if (!info.cancelled && !info.error) console.log('full', result.samples.length); },
 });

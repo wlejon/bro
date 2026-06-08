@@ -1889,9 +1889,11 @@ struct KokoroStreamJob {
     JSValue            voiceRef  = JS_UNDEFINED;
     bool               hasOnChunk = false;
     bool               hasOnDone  = false;
-    // SPSC handoff: work thread writes chunkSlots[produced] then bumps `produced`;
-    // the JS-thread poll reads up to `produced` and advances `drained`.
-    std::vector<std::vector<float>> chunkSlots;
+    // SPSC handoff: work thread writes chunkSlots[produced] (samples + the
+    // chunk's per-phoneme durations) then bumps `produced`; the JS-thread poll
+    // reads up to `produced` and advances `drained`.
+    std::vector<std::vector<float>>   chunkSlots;
+    std::vector<std::vector<int32_t>> durSlots;
     std::atomic<size_t> produced{0};
     size_t              drained = 0;
 };
@@ -1955,6 +1957,7 @@ static JSValue js_kokoro_synthesize_stream(JSContext* ctx, int argc,
     // One slot per chunk; the work thread never reallocates while the JS thread
     // reads (each chunk emits exactly once, in order).
     job->chunkSlots.resize(job->chunks.size());
+    job->durSlots.resize(job->chunks.size());
 
     // Claim the model for this synthesis (single-owner; one in flight).
     bool expected = false;
@@ -1978,12 +1981,15 @@ static JSValue js_kokoro_synthesize_stream(JSContext* ctx, int argc,
 
     auto work = [job, mw](const std::atomic<bool>& cancel) {
         brotensor::DeviceScope scope(mw->device);
-        // on_chunk runs on THIS (background) thread: copy the samples into the
-        // next slot and publish it. No JS here — the JS-thread poll fires onChunk.
-        auto onChunkCb = [job](const float* s, int n) {
+        // on_chunk runs on THIS (background) thread: copy the samples + the
+        // chunk's per-phoneme durations into the next slot and publish it. No JS
+        // here — the JS-thread poll fires onChunk.
+        auto onChunkCb = [job](const float* s, int n,
+                               const int32_t* d, int nd) {
             const size_t idx = job->produced.load(std::memory_order_relaxed);
             if (idx >= job->chunkSlots.size()) return;   // bound guard
             job->chunkSlots[idx].assign(s, s + n);
+            if (d && nd > 0) job->durSlots[idx].assign(d, d + nd);
             job->produced.store(idx + 1, std::memory_order_release);
         };
         auto buf = mw->kokoro->synthesize_stream(
@@ -1997,13 +2003,20 @@ static JSValue js_kokoro_synthesize_stream(JSContext* ctx, int argc,
         if (!job->hasOnChunk) return;
         const size_t n = job->produced.load(std::memory_order_acquire);
         while (job->drained < n) {
-            std::vector<float>& chunk = job->chunkSlots[job->drained];
-            JSValue arr = qjsbind::make_float32_array(c, chunk);
-            JSValue r = JS_Call(c, job->onChunk, JS_UNDEFINED, 1, &arr);
+            std::vector<float>&   chunk = job->chunkSlots[job->drained];
+            std::vector<int32_t>& dur   = job->durSlots[job->drained];
+            // onChunk(samples: Float32Array, durations: Int32Array) — durations is
+            // the chunk's per-phoneme frame counts (BOS/EOS-wrapped), so a caller
+            // can align words to this chunk's audio precisely.
+            JSValue args[2] = { qjsbind::make_float32_array(c, chunk),
+                                qjsbind::make_int32_array(c, dur) };
+            JSValue r = JS_Call(c, job->onChunk, JS_UNDEFINED, 2, args);
             if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
             JS_FreeValue(c, r);
-            JS_FreeValue(c, arr);
-            std::vector<float>().swap(chunk);   // release the slot's memory
+            JS_FreeValue(c, args[0]);
+            JS_FreeValue(c, args[1]);
+            std::vector<float>().swap(chunk);      // release the slot's memory
+            std::vector<int32_t>().swap(dur);
             job->drained++;
         }
     };
