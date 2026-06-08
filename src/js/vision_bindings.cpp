@@ -356,13 +356,18 @@ static JSValue runVisionOp(JSContext* ctx, JSValueConst onDoneVal,
         } else {
             result = build(c);
         }
+        // Free the model (clear `busy`, drop the keep-alive ref) BEFORE the JS
+        // callback so an onDone that synchronously starts the next op on the same
+        // model sees a free generator. Otherwise a chained call (e.g. a multi-step
+        // walk/mix sequence kicking step i+1 from step i's onDone) hits the still-
+        // set busy flag and throws "generator busy".
+        release();
         JSValue args[2] = { result, info };
         JSValue rr = JS_Call(c, onDone, JS_UNDEFINED, 2, args);
         if (JS_IsException(rr)) JS_FreeValue(c, JS_GetException(c));
         JS_FreeValue(c, rr);
         JS_FreeValue(c, result);
         JS_FreeValue(c, info);
-        release();
         JS_FreeValue(c, onDone);
     };
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
