@@ -438,30 +438,42 @@ const qhandle = bro.tts.synthesize(qwen, 'Hello there.', {
 // qhandle.cancel();  // abort mid-utterance; onDone fires cancelled:true
 
 /**
- * bro.tts.synthesizeStream(qwen, text, opts) → AsyncHandle   (streaming, QwenTts only)
+ * bro.tts.synthesizeStream(model, …) → AsyncHandle   (streaming, dispatched by type)
  *
- * Like the async synthesize, but the audio is delivered in chunks AS the
- * autoregressive loop produces it, so playback can start before generation
- * finishes — the lowest-latency path. opts.onChunk(samples) fires on the JS thread
- * each time the codec decodes a new chunk (the codec is causal, so chunk samples
- * are final and can be queued straight into an AudioContext); opts.onDone(result,
- * info) fires once at the end with the complete buffer. .cancel() is real barge-in:
- * the AR loop stops within a frame, onDone fires { cancelled: true }, and chunks
- * already delivered stay played.
+ *   QwenTts:  synthesizeStream(qwen, text, opts)
+ *   Kokoro:   synthesizeStream(kokoro, phonemeChunks, voice, opts)
  *
- * @param {QwenTtsModel} qwen
- * @param {string} text
+ * Audio is delivered in chunks via opts.onChunk(samples: Float32Array @ 24 kHz
+ * mono, in order) so playback can start before the whole utterance finishes;
+ * opts.onDone(result, info) then fires once with the complete concatenated buffer
+ * ({ samples, sampleRate } + { cancelled, error? }). .cancel() is real barge-in:
+ * synthesis stops promptly, onDone fires { cancelled: true }, and chunks already
+ * delivered stay played.
+ *
+ * Qwen3-TTS is autoregressive, so it streams the GROWING token tail: opts.onChunk
+ * fires each time the codec decodes a new chunk (the codec is causal, so chunk
+ * samples are final). Kokoro is a single non-autoregressive forward pass, so there
+ * is no internal point at which a prefix is final — streaming chunks the INPUT
+ * instead: you pass an array of phoneme-id chunks (split at sentence / clause /
+ * word boundaries, e.g. on the space token kokoro.vocab()[' ']) and each chunk is
+ * synthesized as an independent forward pass whose audio is emitted as it lands.
+ *
+ * @param {QwenTtsModel|Kokoro} model
+ * @param {string|Array<Int32Array|number[]>} input
+ *        - Qwen:   the text string.
+ *        - Kokoro: an array of phoneme-id chunks (each Int32Array/number[]); a
+ *                  single flat id array is accepted and treated as one chunk.
+ * @param {Voice} [voice]            - Kokoro only (3rd arg), from loadVoice().
  * @param {Object} [opts]
- * @param {number}   [opts.chunkFrames=25] - 12.5 Hz frames per chunk (25 ≈ 2 s; a
- *        smaller value = lower first-audio latency, more onChunk calls).
- * @param {function} [opts.onChunk]  - onChunk(samples: Float32Array) per decoded
- *        chunk, 24 kHz mono, in order.
- * @param {function} [opts.onDone]   - onDone(result, info); result = { samples, sampleRate }
- *        is the whole utterance, info = { cancelled, error? }.
- * @param {string}   [opts.speaker] / [opts.language] / [opts.instruct]   - as synthesize().
- * @param {number}   [opts.temperature] / [opts.topK] / [opts.topP] / [opts.seed]  - sampling.
- * @returns {AsyncHandle} - { cancel(): void }. Throws if another op is in flight,
- *          or if `qwen` is not a QwenTts (Kokoro synthesis is monolithic).
+ * @param {function} [opts.onChunk]  - onChunk(samples) per chunk, 24 kHz mono, in order.
+ * @param {function} [opts.onDone]   - onDone(result, info) once at the end.
+ * @param {number}   [opts.speed=1]  - Kokoro: duration scale (applies to every chunk).
+ * @param {number}   [opts.chunkFrames=25]                       - Qwen: 12.5 Hz frames per
+ *        chunk (smaller = lower first-audio latency, more onChunk calls).
+ * @param {string}   [opts.speaker] / [opts.language] / [opts.instruct]  - Qwen, as synthesize().
+ * @param {number}   [opts.temperature] / [opts.topK] / [opts.topP] / [opts.seed] - Qwen sampling.
+ * @returns {AsyncHandle} - { cancel(): void }. Throws if another op is in flight on
+ *          this model, or if `model` is neither a Kokoro nor a QwenTts.
  */
 const shandle = bro.tts.synthesizeStream(qwen, 'A longer line that streams as it generates.', {
     speaker: 'serena',
@@ -470,3 +482,14 @@ const shandle = bro.tts.synthesizeStream(qwen, 'A longer line that streams as it
     onDone: (result, info) => { if (!info.cancelled && !info.error) console.log('done', result.samples.length); },
 });
 // shandle.cancel();  // barge-in: stops within a frame; already-streamed chunks keep playing
+
+// Kokoro — chunk the phoneme stream at the space token so each clause streams out:
+const ids = bro.tts.phonemize('A longer line, split into clauses, that streams as it synthesizes.');
+const space = kokoro.vocab()[' '];
+const kchunks = [[]];
+for (const id of ids) { if (id === space && kchunks[kchunks.length - 1].length) kchunks.push([]); else kchunks[kchunks.length - 1].push(id); }
+bro.tts.synthesizeStream(kokoro, kchunks, voice, {
+    speed: 1.0,
+    onChunk: (samples) => { /* play this clause now */ },
+    onDone:  (result, info) => { if (!info.cancelled && !info.error) console.log('full', result.samples.length); },
+});

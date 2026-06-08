@@ -361,6 +361,14 @@ static WhisperWrapper* whisperSelf(JSContext* ctx, JSValueConst this_val) {
 //   audio:    Float32Array @ 16 kHz, OR { samples, sampleRate } object.
 //   promptIds: Int32Array of decoder prefix (from tokenizer.buildPrompt()).
 //   opts.maxNewTokens: cap on autoregressive loop (0 = model.maxTargetPositions).
+//                      In long-form mode this caps EACH 30 s window independently.
+//   opts.timestampBeginId: tokenizer.firstTimestampId — when set (>= 0) AND the
+//                      audio is longer than 30 s, the input is windowed into 30 s
+//                      segments (Whisper sequential long-form decode) instead of
+//                      truncated to the first window. Requires a timestamps prompt
+//                      (buildPrompt(lang, task, true)).
+//   opts.onToken(id):  invoked once per decoded token, in order, as it is produced
+//                      (synchronously on this thread) — for live partial decode.
 static JSValue js_whisper_transcribe(JSContext* ctx, JSValueConst this_val,
                                      int argc, JSValueConst* argv) {
     auto* w = whisperSelf(ctx, this_val);
@@ -380,16 +388,35 @@ static JSValue js_whisper_transcribe(JSContext* ctx, JSValueConst this_val,
             "transcribe: promptIds must be a non-empty Int32Array or number[] "
             "(use tokenizer.buildPrompt(lang, task))");
 
-    int maxNew = 0;
-    if (argc >= 3 && JS_IsObject(argv[2]))
-        getInt(ctx, argv[2], "maxNewTokens", maxNew);
-
-    try {
-        auto out = w->whisper->transcribe(audio, prompt, maxNew);
-        return qjsbind::make_int32_array(ctx, out.token_ids);
-    } catch (const std::exception& e) {
-        return JS_ThrowInternalError(ctx, "transcribe: %s", e.what());
+    brosoundml::Whisper::TranscribeOptions opts;
+    JSValue onToken = JS_UNDEFINED;
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        getInt(ctx, argv[2], "maxNewTokens", opts.max_new_tokens);
+        opts.timestamp_begin_id = -1;
+        getInt(ctx, argv[2], "timestampBeginId", opts.timestamp_begin_id);
+        onToken = JS_GetPropertyStr(ctx, argv[2], "onToken");
     }
+    // The callback fires synchronously inside transcribe() on this (JS) thread,
+    // so it can call straight back into JS — no handoff needed for the sync path.
+    if (JS_IsFunction(ctx, onToken)) {
+        opts.on_token = [ctx, onToken](int32_t id) {
+            JSValue a = JS_NewInt32(ctx, id);
+            JSValue r = JS_Call(ctx, onToken, JS_UNDEFINED, 1, &a);
+            if (JS_IsException(r)) JS_FreeValue(ctx, JS_GetException(ctx));
+            JS_FreeValue(ctx, r);
+            JS_FreeValue(ctx, a);
+        };
+    }
+
+    JSValue result;
+    try {
+        auto out = w->whisper->transcribe(audio, prompt, opts);
+        result = qjsbind::make_int32_array(ctx, out.token_ids);
+    } catch (const std::exception& e) {
+        result = JS_ThrowInternalError(ctx, "transcribe: %s", e.what());
+    }
+    JS_FreeValue(ctx, onToken);
+    return result;
 }
 
 static void registerWhisperClass(JSContext* ctx) {
@@ -624,13 +651,17 @@ static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // Runs Whisper's autoregressive decode on a background thread via the async-job
-// runner, so the JS thread stays responsive. There is no per-token streaming
-// poll (the ids are delivered once at the end), but cancellation is real:
-// brosoundml's greedy loop checks the async-job cancel flag once per token, so
-// .cancel() stops the decode within ~1 token and frees the model's busy lock
-// rather than running to completion. Returns an AsyncHandle with .cancel();
-// opts.onDone(ids, info) fires once on the JS thread with info being
-// { cancelled, error? }.
+// runner, so the JS thread stays responsive. Cancellation is real: brosoundml's
+// greedy loop checks the async-job cancel flag once per token, so .cancel() stops
+// the decode within ~1 token and frees the model's busy lock rather than running
+// to completion. Returns an AsyncHandle with .cancel(); opts.onDone(ids, info)
+// fires once on the JS thread with info being { cancelled, error? }.
+//
+// opts.onToken(id) streams each decoded token id as it is produced: the work
+// thread (sole writer) publishes a committed token prefix via an atomic and the
+// JS-thread poll drains it and fires onToken — lock-free, no mutex, same SPSC
+// handoff as the Qwen-TTS streaming path. opts.timestampBeginId enables long-form
+// (>30 s) windowed decode instead of truncating to the first 30 s window.
 
 // Shared between the work thread (sole writer of token_ids) and the JS thread
 // (sole reader / caller of onDone). Held by shared_ptr.
@@ -638,10 +669,18 @@ struct SttJob {
     brosoundml::AudioBuffer audio;
     std::vector<int32_t>    prompt;
     int                     maxNew = 0;
+    int                     timestampBeginId = -1;     // long-form seek anchor; <0 = off
     std::vector<int32_t>    token_ids;          // filled by work()
     JSValue                 onDone     = JS_UNDEFINED;  // dup'd; UNDEFINED if absent
+    JSValue                 onToken    = JS_UNDEFINED;  // dup'd; UNDEFINED if absent
     JSValue                 whisperRef = JS_UNDEFINED;  // dup of the whisper JS object
     bool                    hasOnDone  = false;
+    bool                    hasOnToken = false;
+    // SPSC token handoff: work thread writes tokenSlots[produced] then bumps
+    // `produced`; the JS-thread poll reads up to `produced` and advances `drained`.
+    std::vector<int32_t>    tokenSlots;
+    std::atomic<size_t>     produced{0};
+    size_t                  drained = 0;
 };
 
 static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
@@ -664,24 +703,35 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
             "transcribe: promptIds must be a non-empty Int32Array or number[] "
             "(use tokenizer.buildPrompt(lang, task))");
 
-    JSValue onDone = JS_UNDEFINED;
+    JSValue onDone = JS_UNDEFINED, onToken = JS_UNDEFINED;
     if (argc >= 4 && JS_IsObject(argv[3])) {
         getInt(ctx, argv[3], "maxNewTokens", job->maxNew);
-        onDone = JS_GetPropertyStr(ctx, argv[3], "onDone");
+        getInt(ctx, argv[3], "timestampBeginId", job->timestampBeginId);
+        onDone  = JS_GetPropertyStr(ctx, argv[3], "onDone");
+        onToken = JS_GetPropertyStr(ctx, argv[3], "onToken");
     }
 
     // Claim the model for this transcription (single-owner; one in flight).
     bool expected = false;
     if (!w->busy.compare_exchange_strong(expected, true)) {
         JS_FreeValue(ctx, onDone);
+        JS_FreeValue(ctx, onToken);
         return JS_ThrowInternalError(ctx,
             "transcribe: an operation is already in flight on this model");
     }
 
     job->hasOnDone  = JS_IsFunction(ctx, onDone);
     job->onDone     = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->hasOnToken = JS_IsFunction(ctx, onToken);
+    job->onToken    = job->hasOnToken ? JS_DupValue(ctx, onToken) : JS_UNDEFINED;
     job->whisperRef = JS_DupValue(ctx, argv[0]);  // keep the model alive
     JS_FreeValue(ctx, onDone);
+    JS_FreeValue(ctx, onToken);
+    // Pre-size the token slots so the work thread never reallocates while the JS
+    // thread reads. Generous fixed cap (covers a long-form transcription of many
+    // 30 s windows); if exceeded, streaming stops emitting but the full id stream
+    // still arrives via onDone.
+    if (job->hasOnToken) job->tokenSlots.resize(1u << 16);
 
     WhisperWrapper* mw = w;
 
@@ -693,10 +743,36 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
     // reference is safe.
     auto work = [job, mw](const std::atomic<bool>& cancel) {
         brotensor::DeviceScope scope(mw->device);
-        auto out = mw->whisper->transcribe(
-            job->audio, job->prompt, job->maxNew,
-            [&cancel] { return cancel.load(std::memory_order_acquire); });
+        brosoundml::Whisper::TranscribeOptions opts;
+        opts.max_new_tokens      = job->maxNew;
+        opts.timestamp_begin_id  = job->timestampBeginId;
+        opts.cancel = [&cancel] { return cancel.load(std::memory_order_acquire); };
+        if (job->hasOnToken) {
+            // Runs on THIS (background) thread: publish into the next slot; the
+            // JS-thread poll fires onToken. No JS here.
+            opts.on_token = [job](int32_t id) {
+                const size_t idx = job->produced.load(std::memory_order_relaxed);
+                if (idx >= job->tokenSlots.size()) return;   // bound guard
+                job->tokenSlots[idx] = id;
+                job->produced.store(idx + 1, std::memory_order_release);
+            };
+        }
+        auto out = mw->whisper->transcribe(job->audio, job->prompt, opts);
         job->token_ids = std::move(out.token_ids);
+    };
+
+    // JS thread, drains committed tokens and fires onToken for each.
+    auto poll = [job](JSContext* c) {
+        if (!job->hasOnToken) return;
+        const size_t n = job->produced.load(std::memory_order_acquire);
+        while (job->drained < n) {
+            JSValue a = JS_NewInt32(c, job->tokenSlots[job->drained]);
+            JSValue r = JS_Call(c, job->onToken, JS_UNDEFINED, 1, &a);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, a);
+            job->drained++;
+        }
     };
 
     // JS thread, once: hand the id array + {cancelled,error} to onDone, free the
@@ -715,12 +791,13 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
             JS_FreeValue(c, arr);
             JS_FreeValue(c, info);
         }
-        if (job->hasOnDone) JS_FreeValue(c, job->onDone);
+        if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
+        if (job->hasOnToken) JS_FreeValue(c, job->onToken);
         JS_FreeValue(c, job->whisperRef);
         mw->busy.store(false, std::memory_order_release);
     };
 
-    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+    return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

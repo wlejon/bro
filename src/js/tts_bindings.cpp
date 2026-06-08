@@ -1863,14 +1863,193 @@ static JSValue js_qwen_synthesize_stream(JSContext* ctx, int argc,
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
 }
 
-// bro.tts.synthesizeStream(qwen, text, opts) — streaming, QwenTts only.
+// ─────────────────────────────────────────────────────────────────────────────
+// Streaming Kokoro synthesis — bro.tts.synthesizeStream(kokoro, chunks, voice, opts)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Kokoro is a single non-autoregressive forward pass, so unlike Qwen there is no
+// internal point at which a prefix is final. Streaming therefore chunks the
+// *input*: the caller hands an array of phoneme-id chunks (split at sentence /
+// clause / word boundaries, e.g. on the space token kokoro.vocab()[' ']), each
+// chunk is synthesized as an independent forward pass, and its 24 kHz samples are
+// emitted via opts.onChunk(Float32Array) the moment that chunk completes — so
+// playback can start before the whole script is synthesized. opts.onDone(result,
+// info) then fires once with the full concatenated buffer. Same SPSC handoff as
+// the Qwen path: the work thread is the sole writer of a committed chunk prefix
+// published via an atomic; the JS-thread poll drains it — lock-free, no mutex.
+struct KokoroStreamJob {
+    std::vector<std::vector<int32_t>> chunks;     // one phoneme-id vector per chunk
+    VoiceWrapper*      vw = nullptr;               // borrowed via voiceRef dup
+    float              speed = 1.0f;
+    std::vector<float> samples;                    // full audio (onDone), filled by work
+    int                sample_rate = 24000;
+    JSValue            onChunk = JS_UNDEFINED;     // dup'd; UNDEFINED if absent
+    JSValue            onDone  = JS_UNDEFINED;
+    JSValue            kokoroRef = JS_UNDEFINED;
+    JSValue            voiceRef  = JS_UNDEFINED;
+    bool               hasOnChunk = false;
+    bool               hasOnDone  = false;
+    // SPSC handoff: work thread writes chunkSlots[produced] then bumps `produced`;
+    // the JS-thread poll reads up to `produced` and advances `drained`.
+    std::vector<std::vector<float>> chunkSlots;
+    std::atomic<size_t> produced{0};
+    size_t              drained = 0;
+};
+
+// bro.tts.synthesizeStream(kokoro, phonemeChunks, voice, opts?) -> AsyncHandle
+//   phonemeChunks: an array of phoneme-id chunks (each an Int32Array or number[]),
+//                  OR a single flat Int32Array/number[] treated as one chunk.
+static JSValue js_kokoro_synthesize_stream(JSContext* ctx, int argc,
+                                           JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<KokoroWrapper>(ctx, argv[0]);  // non-null (caller)
+    if (argc < 3)
+        return JS_ThrowTypeError(ctx,
+            "synthesizeStream(kokoro, phonemeChunks, voice, opts?): kokoro, "
+            "phonemeChunks and voice required");
+
+    auto job = std::make_shared<KokoroStreamJob>();
+
+    // phonemeChunks is an array of id-arrays. To stay friendly, a flat id array
+    // (first element is a number, not an array) is treated as a single chunk.
+    JSValueConst chunksArg = argv[1];
+    bool isChunkArray = false;
+    if (JS_IsArray(chunksArg)) {
+        JSValue first = JS_GetPropertyUint32(ctx, chunksArg, 0);
+        size_t firstLen = 0;
+        isChunkArray = JS_IsArray(first) ||
+                       getInt32Array(ctx, first, firstLen) != nullptr;
+        JS_FreeValue(ctx, first);
+    }
+    if (isChunkArray) {
+        std::uint32_t n = 0;
+        JSValue lv = JS_GetPropertyStr(ctx, chunksArg, "length");
+        JS_ToUint32(ctx, &n, lv);
+        JS_FreeValue(ctx, lv);
+        for (std::uint32_t i = 0; i < n; ++i) {
+            JSValue e = JS_GetPropertyUint32(ctx, chunksArg, i);
+            std::vector<int32_t> ids = readIdArray(ctx, e);
+            JS_FreeValue(ctx, e);
+            if (!ids.empty()) job->chunks.push_back(std::move(ids));  // skip empties
+        }
+    } else {
+        std::vector<int32_t> ids = readIdArray(ctx, chunksArg);
+        if (!ids.empty()) job->chunks.push_back(std::move(ids));
+    }
+    if (job->chunks.empty())
+        return JS_ThrowTypeError(ctx,
+            "synthesizeStream: phonemeChunks must be a non-empty array of "
+            "Int32Array/number[] chunks (or a single id array)");
+
+    auto* vw = qjsbind::unwrap<VoiceWrapper>(ctx, argv[2]);
+    if (!vw)
+        return JS_ThrowTypeError(ctx,
+            "synthesizeStream: voice must be a Voice (returned by loadVoice)");
+    job->vw = vw;
+
+    JSValue onChunk = JS_UNDEFINED, onDone = JS_UNDEFINED;
+    if (argc >= 4 && JS_IsObject(argv[3])) {
+        getNum(ctx, argv[3], "speed", job->speed);
+        onChunk = JS_GetPropertyStr(ctx, argv[3], "onChunk");
+        onDone  = JS_GetPropertyStr(ctx, argv[3], "onDone");
+    }
+    // One slot per chunk; the work thread never reallocates while the JS thread
+    // reads (each chunk emits exactly once, in order).
+    job->chunkSlots.resize(job->chunks.size());
+
+    // Claim the model for this synthesis (single-owner; one in flight).
+    bool expected = false;
+    if (!w->busy.compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onChunk);
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowInternalError(ctx,
+            "synthesizeStream: an operation is already in flight on this model");
+    }
+
+    job->hasOnChunk = JS_IsFunction(ctx, onChunk);
+    job->onChunk    = job->hasOnChunk ? JS_DupValue(ctx, onChunk) : JS_UNDEFINED;
+    job->hasOnDone  = JS_IsFunction(ctx, onDone);
+    job->onDone     = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->kokoroRef  = JS_DupValue(ctx, argv[0]);
+    job->voiceRef   = JS_DupValue(ctx, argv[2]);
+    JS_FreeValue(ctx, onChunk);
+    JS_FreeValue(ctx, onDone);
+
+    KokoroWrapper* mw = w;
+
+    auto work = [job, mw](const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(mw->device);
+        // on_chunk runs on THIS (background) thread: copy the samples into the
+        // next slot and publish it. No JS here — the JS-thread poll fires onChunk.
+        auto onChunkCb = [job](const float* s, int n) {
+            const size_t idx = job->produced.load(std::memory_order_relaxed);
+            if (idx >= job->chunkSlots.size()) return;   // bound guard
+            job->chunkSlots[idx].assign(s, s + n);
+            job->produced.store(idx + 1, std::memory_order_release);
+        };
+        auto buf = mw->kokoro->synthesize_stream(
+            job->chunks, job->vw->voice, onChunkCb, job->speed,
+            [&cancel] { return cancel.load(std::memory_order_acquire); });
+        job->samples     = std::move(buf.samples);
+        job->sample_rate = buf.sample_rate;
+    };
+
+    auto poll = [job](JSContext* c) {
+        if (!job->hasOnChunk) return;
+        const size_t n = job->produced.load(std::memory_order_acquire);
+        while (job->drained < n) {
+            std::vector<float>& chunk = job->chunkSlots[job->drained];
+            JSValue arr = qjsbind::make_float32_array(c, chunk);
+            JSValue r = JS_Call(c, job->onChunk, JS_UNDEFINED, 1, &arr);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, arr);
+            std::vector<float>().swap(chunk);   // release the slot's memory
+            job->drained++;
+        }
+    };
+
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        mw->busy.store(false, std::memory_order_release);
+        if (job->hasOnDone) {
+            JSValue result = JS_NewObject(c);
+            JS_SetPropertyStr(c, result, "samples",
+                qjsbind::make_float32_array(c, job->samples));
+            JS_SetPropertyStr(c, result, "sampleRate",
+                JS_NewInt32(c, job->sample_rate));
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { result, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, result);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnChunk) JS_FreeValue(c, job->onChunk);
+        if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
+        JS_FreeValue(c, job->kokoroRef);
+        JS_FreeValue(c, job->voiceRef);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
+}
+
+// bro.tts.synthesizeStream(model, ...) — streaming synthesis, dispatched by type.
+//   QwenTts:  synthesizeStream(qwen, text, opts?)               — chunks the AR tail
+//   Kokoro:   synthesizeStream(kokoro, phonemeChunks, voice, opts?) — chunks the input
 static JSValue js_tts_synthesize_stream(JSContext* ctx, JSValueConst,
                                         int argc, JSValueConst* argv) {
-    if (argc < 1 || !qjsbind::unwrap<QwenTtsWrapper>(ctx, argv[0]))
+    if (argc < 1)
         return JS_ThrowTypeError(ctx,
-            "synthesizeStream(qwen, text, opts?): a QwenTts model is required "
-            "(Kokoro synthesis is monolithic — use synthesize)");
-    return js_qwen_synthesize_stream(ctx, argc, argv);
+            "synthesizeStream(model, ...): a Kokoro or QwenTts model is required");
+    if (qjsbind::unwrap<QwenTtsWrapper>(ctx, argv[0]))
+        return js_qwen_synthesize_stream(ctx, argc, argv);
+    if (qjsbind::unwrap<KokoroWrapper>(ctx, argv[0]))
+        return js_kokoro_synthesize_stream(ctx, argc, argv);
+    return JS_ThrowTypeError(ctx,
+        "synthesizeStream: arg 0 must be a Kokoro or QwenTts");
 }
 
 static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
@@ -2156,7 +2335,7 @@ void installTtsBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, tts, "synthesize",
         JS_NewCFunction(ctx, js_tts_synthesize, "synthesize", 4));
     JS_SetPropertyStr(ctx, tts, "synthesizeStream",
-        JS_NewCFunction(ctx, js_tts_synthesize_stream, "synthesizeStream", 3));
+        JS_NewCFunction(ctx, js_tts_synthesize_stream, "synthesizeStream", 4));
     JS_SetPropertyStr(ctx, tts, "decodeFrom",
         JS_NewCFunction(ctx, js_tts_decodeFrom, "decodeFrom", 7));
     JS_SetPropertyStr(ctx, broObj, "tts", tts);

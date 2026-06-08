@@ -92,10 +92,24 @@ const prompt = tok.buildPrompt('en', 'transcribe', /*timestamps=*/false);
  *         `prompt`, returning the generated token ids.
  *
  *         audio: { samples: Float32Array, sampleRate: number }  (16 kHz mono)
- *         opts:  { maxNewTokens } — cap on decoded tokens.
+ *         opts:  { maxNewTokens, timestampBeginId, onToken } — see below.
+ *
+ * opts.timestampBeginId (= tok.firstTimestampId) turns on Whisper's sequential
+ *   long-form decode: when set AND the audio is longer than 30 s, the input is
+ *   windowed into 30 s segments and seeked by the last emitted timestamp instead
+ *   of being truncated to the first window. Requires a timestamps prompt
+ *   (buildPrompt(lang, task, /*withTimestamps=* /true)). Omit (or < 0) for the
+ *   legacy single-window behaviour.
+ * opts.onToken(id) fires once per decoded token, in order, as it is produced —
+ *   detokenize incrementally for a live partial transcript. Runs synchronously
+ *   inside transcribe() on this thread; keep it cheap.
  */
 const audio = { samples: /* Float32Array */ null, sampleRate: 16000 };
-const ids   = whisper.transcribe(audio, prompt, { maxNewTokens: 96 });
+const ids   = whisper.transcribe(audio, prompt, {
+    maxNewTokens: 96,
+    timestampBeginId: tok.firstTimestampId,   // long-form (>30 s) windowing
+    onToken: (id) => { /* incremental decode */ },
+});
 const text  = tok.decode(ids, /*skipSpecial=*/true);
 console.log(text.trim());
 
