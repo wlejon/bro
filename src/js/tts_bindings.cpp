@@ -623,6 +623,10 @@ static void readQwenSynthOpts(JSContext* ctx, JSValueConst opts,
 //                           (delta -Infinity forbids a code). Opaque RVQ ids.
 //   opts.adaptive           > 0 scales the codebook-0 temperature per frame by
 //                           how unsure the model is — hotter only where it hedged.
+//   opts.voiceSteer         Float32Array, talker-hidden width: an additive offset
+//                           on the prefill speaker-slot row (the emotion / masc-fem
+//                           direction-add). Works on any variant with a speaker
+//                           slot — CustomVoice presets and Base x-vectors alike.
 static void readQwenSampling(JSContext* ctx, JSValueConst opts,
                              brosoundml::QwenTtsSampling& s) {
     if (!JS_IsObject(opts)) return;
@@ -661,6 +665,12 @@ static void readQwenSampling(JSContext* ctx, JSValueConst opts,
         }
     }
     JS_FreeValue(ctx, lb);
+    // voiceSteer: a Float32Array additive offset on the prefill speaker slot.
+    // Length is validated downstream against the talker hidden width.
+    JSValue vs = JS_GetPropertyStr(ctx, opts, "voiceSteer");
+    if (!JS_IsUndefined(vs) && !JS_IsNull(vs))
+        s.voice_steer = qjsbind::read_float32_array(ctx, vs);
+    JS_FreeValue(ctx, vs);
 }
 
 // Marshal a QwenTtsTrace to a JS stages array [{ name, h, w, data:Float32Array }] —
