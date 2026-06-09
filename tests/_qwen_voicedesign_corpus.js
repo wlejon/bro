@@ -36,9 +36,12 @@ const ENC_DIR = 'D:/projects/brosoundml-data/qwen-tts/speaker-encoder';
 // MODE=grid → tight attribute factorial (good for supervised axes, but PCA over it
 // is lopsided — variance piles on pitch). MODE=diverse → rich free-text character
 // prompts spanning many timbres, so PCA variance spreads across axes (a balanced,
-// broad basis, the right input for the voice-map sliders). Default: diverse.
+// broad basis, the right input for the voice-map sliders). MODE=emotion → each of N
+// diverse base voices rendered with all 12 EMO emotions (6 basic + 6 dyad blends),
+// for a within-voice contrastive emotion basis on Qwen's manifold. Default: diverse.
 const MODE = (_env('BRO_CORPUS_MODE') || 'diverse').toLowerCase();
-const OUT_DIR = 'D:/projects/brosoundml-data/qwen-tts/voicedesign-corpus' + (MODE === 'diverse' ? '-diverse' : '');
+const OUT_DIR = 'D:/projects/brosoundml-data/qwen-tts/voicedesign-corpus' +
+  (MODE === 'diverse' ? '-diverse' : MODE === 'emotion' ? '-emotion' : '');
 // A phonetically broad, fixed sentence: identity-bearing, ~3 s, same for every
 // recipe so the only thing that varies across rows is the requested voice.
 const TEXT = 'The quick brown fox jumps over the lazy dog while she sells sea shells.';
@@ -90,17 +93,48 @@ const D_ROLE   = ['', '', '', 'radio announcer', 'storyteller', 'news anchor', '
   'cartoon character', 'drill sergeant', 'wizard', 'pirate', 'professor', 'noir detective', 'game-show host'];
 const D_ENERGY = ['', '', 'energetic', 'calm', 'languid', 'brisk', 'weary', 'excited'];
 
-function sampleDiverse() {
+// A base voice (no energy/emotion tail) — the part held FIXED across emotions in
+// emotion mode, and the body of a diverse-mode prompt.
+function diverseBase() {
   const [ageW, age] = pick(D_AGE), [genW, gender] = pick(D_GENDER), [pchW, pitch] = pick(D_PITCH);
-  const role = pick(D_ROLE), energy = pick(D_ENERGY);
+  const role = pick(D_ROLE);
   const nT = 1 + Math.floor(rnd() * 3);                  // 1–3 timbre adjectives, distinct
   const tset = new Set(); while (tset.size < nT) tset.add(pick(D_TIMBRE));
   const timbre = [...tset];
   const subject = (ageW + ' ' + (role || genW)).trim();
   const quals = [pchW].filter(Boolean).concat(timbre);
+  return { head: 'A ' + subject + ' with a ' + quals.join(', ') + ' voice',
+           attrs: { gender, age, pitch, timbre: timbre.join('+'), role: role || '' } };
+}
+function sampleDiverse() {
+  const b = diverseBase();
+  const energy = pick(D_ENERGY);
   const tail = energy ? ', speaking in ' + (/^[aeiou]/i.test(energy) ? 'an ' : 'a ') + energy + ' way' : '';
-  const instruct = 'A ' + subject + ' with a ' + quals.join(', ') + ' voice' + tail + '.';
-  return { attrs: { gender, age, pitch, timbre: timbre.join('+'), role: role || '', energy: energy || '' }, instruct };
+  return { attrs: { ...b.attrs, energy: energy || '' }, instruct: b.head + tail + '.' };
+}
+
+// ── emotion mode: 12 emotions over the 6 basic axes (6 basic + 6 dyad blends) ──
+// The 6 BASIC are the sliders; the 6 BLENDS are 0.5/0.5 dyads of two basics, so the
+// emotion-basis regression (_qwen_emotion_basis_vd.js) sees the inter-emotion space
+// and "slider A + slider B" lands where Qwen actually renders the blend. `comp` is
+// each emotion's composition over BASIC6 — the regression design row.
+const BASIC6 = ['ANG', 'DIS', 'FEA', 'HAP', 'SAD', 'SUR'];
+const EMO = [
+  { code: 'ANG', word: 'angry',        comp: { ANG: 1 } },
+  { code: 'DIS', word: 'disgusted',    comp: { DIS: 1 } },
+  { code: 'FEA', word: 'fearful',      comp: { FEA: 1 } },
+  { code: 'HAP', word: 'happy',        comp: { HAP: 1 } },
+  { code: 'SAD', word: 'sad',          comp: { SAD: 1 } },
+  { code: 'SUR', word: 'surprised',    comp: { SUR: 1 } },
+  { code: 'CON', word: 'contemptuous', comp: { ANG: 0.5, DIS: 0.5 } },   // contempt
+  { code: 'OUT', word: 'outraged',     comp: { ANG: 0.5, SUR: 0.5 } },   // outrage
+  { code: 'EXC', word: 'excited',      comp: { HAP: 0.5, SUR: 0.5 } },   // excitement
+  { code: 'BIT', word: 'bittersweet',  comp: { HAP: 0.5, SAD: 0.5 } },   // bittersweet
+  { code: 'AWE', word: 'awestruck',    comp: { FEA: 0.5, SUR: 0.5 } },   // awe
+  { code: 'ANX', word: 'anxious',      comp: { FEA: 0.5, SAD: 0.5 } },   // anxiety
+];
+function emotionInstruct(head, word) {
+  return head + ', speaking in ' + (/^[aeiou]/i.test(word) ? 'an ' : 'a ') + word + ' tone.';
 }
 
 function pumpUntil(pred, budgetMs) {
@@ -126,23 +160,47 @@ fs.writeFileSync(outPath, '');           // truncate; rows are appended as they 
 
 let DIM = 0, ok = 0, bad = 0;
 const t0 = Date.now();
-for (let i = 0; i < N; i++) {
-  const rec = MODE === 'diverse' ? sampleDiverse() : (() => { const r = sampleRecipe(); return { attrs: r, instruct: instructOf(r) }; })();
-  const r = rec.attrs;
-  const instruct = rec.instruct;
-  try {
-    const buf = vd.synthesize(TEXT, { instruct, language: 'english' });   // greedy → deterministic per prompt
-    if (!buf || !buf.samples || !buf.samples.length) { bad++; console.log('  [' + i + '] empty audio: ' + instruct); continue; }
-    const x = enc.embedSpeaker(buf.samples, { sampleRate: buf.sampleRate });
-    if (!DIM) DIM = x.length;
-    let nf = 0; for (let d = 0; d < x.length; d++) if (!isFinite(x[d])) nf++;
-    if (nf) { bad++; console.log('  [' + i + '] non-finite x-vector'); continue; }
-    fs.appendFileSync(outPath, JSON.stringify({ id: i, attrs: r, instruct, x: Array.from(x, (v) => +v.toFixed(6)) }) + '\n');
-    ok++;
-  } catch (e) { bad++; console.log('  [' + i + '] synth failed: ' + e.message); }
-  if ((i + 1) % 16 === 0 || i + 1 === N) {
-    const el = (Date.now() - t0) / 1000;
-    console.log('  ' + (i + 1) + '/' + N + ' · ok ' + ok + ' · ' + el.toFixed(0) + 's · ' + (el / (i + 1)).toFixed(2) + 's/clip');
+
+// Greedy synth + ECAPA embed of one prompt → x-vector (or null on empty/non-finite).
+function renderEmbed(instruct) {
+  const buf = vd.synthesize(TEXT, { instruct, language: 'english' });   // greedy → deterministic per prompt
+  if (!buf || !buf.samples || !buf.samples.length) return null;
+  const x = enc.embedSpeaker(buf.samples, { sampleRate: buf.sampleRate });
+  for (let d = 0; d < x.length; d++) if (!isFinite(x[d])) return null;
+  if (!DIM) DIM = x.length;
+  return x;
+}
+function progress(done, total) {
+  const el = (Date.now() - t0) / 1000;
+  console.log('  ' + done + '/' + total + ' · ok ' + ok + ' · ' + el.toFixed(0) + 's · ' + (el / done).toFixed(2) + 's/clip');
+}
+
+if (MODE === 'emotion') {
+  // N base voices, each rendered with all 12 emotions (the base voice held fixed).
+  const total = N * EMO.length;
+  let done = 0;
+  for (let v = 0; v < N; v++) {
+    const base = diverseBase();
+    for (const em of EMO) {
+      const instruct = emotionInstruct(base.head, em.word);
+      try {
+        const x = renderEmbed(instruct);
+        if (!x) { bad++; console.log('  [v' + v + ' ' + em.code + '] empty/non-finite'); }
+        else { fs.appendFileSync(outPath, JSON.stringify({ voice: v, emotion: em.code, comp: em.comp, attrs: base.attrs, instruct, x: Array.from(x, (q) => +q.toFixed(6)) }) + '\n'); ok++; }
+      } catch (e) { bad++; console.log('  [v' + v + ' ' + em.code + '] synth failed: ' + e.message); }
+      done++;
+      if (done % 16 === 0 || done === total) progress(done, total);
+    }
+  }
+} else {
+  for (let i = 0; i < N; i++) {
+    const rec = MODE === 'diverse' ? sampleDiverse() : (() => { const r = sampleRecipe(); return { attrs: r, instruct: instructOf(r) }; })();
+    try {
+      const x = renderEmbed(rec.instruct);
+      if (!x) { bad++; console.log('  [' + i + '] empty/non-finite: ' + rec.instruct); }
+      else { fs.appendFileSync(outPath, JSON.stringify({ id: i, attrs: rec.attrs, instruct: rec.instruct, x: Array.from(x, (q) => +q.toFixed(6)) }) + '\n'); ok++; }
+    } catch (e) { bad++; console.log('  [' + i + '] synth failed: ' + e.message); }
+    if ((i + 1) % 16 === 0 || i + 1 === N) progress(i + 1, N);
   }
 }
 
@@ -151,6 +209,7 @@ fs.writeFileSync(OUT_DIR + '/corpus_meta.json', JSON.stringify({
   source: 'Qwen3-TTS 1.7B VoiceDesign, greedy, self-rendered; ECAPA x-vectors',
   grid: MODE === 'grid' ? { attrs: ATTRS, pools: POOL } : undefined,
   diverse: MODE === 'diverse' ? { timbre: D_TIMBRE, roles: D_ROLE.filter(Boolean), energy: D_ENERGY.filter(Boolean) } : undefined,
+  emotion: MODE === 'emotion' ? { voices: N, basic: BASIC6, emotions: EMO.map((e) => ({ code: e.code, word: e.word, comp: e.comp })) } : undefined,
 }, null, 2));
 
 console.log('—');
