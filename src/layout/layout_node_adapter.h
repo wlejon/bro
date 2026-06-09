@@ -199,6 +199,17 @@ public:
         return false;
     }
 
+    // Replaced *media* carry a fixed intrinsic aspect ratio: when one axis is
+    // constrained (e.g. max-width:100% on a canvas), the other scales to match.
+    // Form controls (input/textarea/select) report an intrinsic size but no
+    // locked ratio, so they're excluded here.
+    bool hasIntrinsicRatio() const override {
+        if (!elem_) return false;
+        std::string_view tag = elem_->tagName();
+        return tag == "img" || tag == "IMG" || tag == "canvas" || tag == "CANVAS" ||
+               tag == "video" || tag == "VIDEO" || tag == "svg" || tag == "SVG";
+    }
+
     // Write layout results back to the DOM element/text node
     void syncBoxToElement() {
         if (pseudoHost_ && !pseudoIsText_) {
