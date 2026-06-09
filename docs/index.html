@@ -4,116 +4,400 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bro — HTML/CSS/JS runtime for desktop apps and games</title>
-<meta name="description" content="Bro is a desktop app and game runtime that renders HTML/CSS/JS with its own pipeline — Skia, SDL_GPU, QuickJS — and wires 3D, physics, audio, and game networking straight into the DOM.">
+<meta name="description" content="Bro is a desktop app and game runtime that renders HTML/CSS/JS with its own pipeline — Skia, SDL_GPU, QuickJS — and wires 3D, physics, audio, game networking, and on-device AI/ML straight into the DOM.">
+<meta property="og:title" content="Bro — HTML/CSS/JS runtime for desktop apps and games">
+<meta property="og:description" content="An Electron-shaped runtime with its own rendering pipeline: HTML/CSS/JS for the UI, with 3D, physics, audio, game networking, and on-device AI/ML wired straight into the DOM.">
+<meta property="og:type" content="website">
 <style>
-:root { color-scheme: light; }
+:root {
+  color-scheme: dark;
+  --bg:      #080a0f;
+  --bg2:     #0b0e14;
+  --panel:   #0f141c;
+  --panel2:  #11171f;
+  --border:  #1b2330;
+  --border2: #28323f;
+  --text:    #c3ccd8;
+  --dim:     #828d9c;
+  --faint:   #5c6573;
+  --head:    #eef2f7;
+  --cyan:    #34e3c9;
+  --violet:  #a78bfa;
+  --amber:   #f0b35b;
+  --mono: ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, sans-serif;
+}
 * { box-sizing: border-box; }
-body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #fafafa; color: #1a1a1a; line-height: 1.55; }
-a { color: #1f6feb; text-decoration: none; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: var(--sans); line-height: 1.6; font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--cyan); text-decoration: none; }
 a:hover { text-decoration: underline; }
-.wrap { max-width: 980px; margin: 0 auto; padding: 48px 24px; }
-header { margin-bottom: 36px; }
-h1 { font-size: 38px; margin: 0 0 6px; letter-spacing: -0.01em; }
-.tag { color: #606060; font-size: 16px; }
-.warn { display: inline-block; background: #fff5e6; border: 1px solid #ffd699; color: #804000; font-size: 12px; padding: 4px 10px; border-radius: 999px; margin-top: 14px; }
-section { background: #fff; border: 1px solid #e0e0e0; border-radius: 8px; padding: 22px 24px; margin-bottom: 18px; }
-section h2 { margin: 0 0 12px; font-size: 18px; }
-section p { margin: 0 0 12px; }
-section p:last-child { margin: 0; }
-.lede { font-size: 15px; }
-.shot { display: block; max-width: 100%; height: auto; margin: 14px 0 4px; border: 1px solid #d0d0d0; border-radius: 6px; }
-.shot-cap { font-size: 12px; color: #808080; text-align: center; margin-top: 6px; }
-pre { background: #f4f4f4; border: 1px solid #e8e8e8; border-radius: 6px; padding: 12px 14px; overflow-x: auto; font-size: 13px; line-height: 1.45; margin: 8px 0; }
-code { font-family: "SF Mono", Menlo, Consolas, monospace; font-size: 13px; }
-section p code, li code { background: #f4f4f4; padding: 1px 5px; border-radius: 3px; }
-ul { margin: 0; padding-left: 20px; }
-li { margin-bottom: 4px; }
-.parity { background: linear-gradient(180deg, #fff 0%, #f7f9ff 100%); border-color: #c8d6f0; }
-.parity .stat { display: flex; gap: 24px; margin: 12px 0 16px; flex-wrap: wrap; }
-.parity .stat .m { min-width: 140px; }
-.parity .stat .v { font-size: 26px; font-weight: 600; font-variant-numeric: tabular-nums; }
-.parity .stat .l { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: #707070; }
-.cta { display: inline-block; background: #1f6feb; color: #fff; padding: 10px 18px; border-radius: 6px; font-weight: 500; margin-top: 4px; }
-.cta:hover { background: #1858c4; text-decoration: none; }
-.cta:visited { color: #fff; }
-.parity .stat .m.plat { min-width: 200px; }
-.parity .stat .m.plat .v { font-size: 22px; }
-.parity .stat .m.plat .sub { font-size: 11px; color: #909090; margin-top: 2px; }
-.parity .err { color: #909090; font-size: 13px; }
-.docgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-top: 6px; }
-.docgrid a { display: block; background: #fafafa; border: 1px solid #e8e8e8; border-radius: 6px; padding: 10px 12px; color: inherit; }
-.docgrid a:hover { border-color: #1f6feb; text-decoration: none; }
-.docgrid .n { font-size: 13px; font-weight: 600; color: #1f6feb; font-family: "SF Mono", Menlo, Consolas, monospace; }
-.docgrid .d { font-size: 12px; color: #606060; margin-top: 2px; }
-footer { margin-top: 32px; color: #909090; font-size: 12px; text-align: center; }
-footer a { color: #707070; }
+code, pre, .mono { font-family: var(--mono); }
+
+/* ---- top nav ---- */
+.nav {
+  position: sticky; top: 0; z-index: 20;
+  background: rgba(8,10,15,0.82); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+.nav .inner {
+  max-width: 1080px; margin: 0 auto; padding: 0 24px;
+  height: 56px; display: flex; align-items: center; gap: 24px;
+}
+.nav .brand { font-family: var(--mono); font-weight: 700; font-size: 17px; color: var(--head); letter-spacing: 0.02em; }
+.nav .brand .dot { color: var(--cyan); }
+.nav .links { margin-left: auto; display: flex; gap: 22px; align-items: center; }
+.nav .links a { color: var(--dim); font-size: 14px; }
+.nav .links a:hover { color: var(--text); text-decoration: none; }
+.nav .links a.gh { color: var(--text); }
+
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+/* ---- hero ---- */
+.hero { position: relative; overflow: hidden; border-bottom: 1px solid var(--border); }
+.hero::before {
+  content: ""; position: absolute; inset: 0; z-index: 0;
+  background:
+    radial-gradient(820px 400px at 78% -8%, rgba(52,227,201,0.16), transparent 60%),
+    radial-gradient(700px 420px at 12% 8%, rgba(167,139,250,0.14), transparent 62%);
+  pointer-events: none;
+}
+.hero::after {
+  content: ""; position: absolute; inset: 0; z-index: 0; opacity: 0.5;
+  background-image:
+    linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+  background-size: 44px 44px;
+  mask-image: radial-gradient(680px 360px at 50% 0%, #000 35%, transparent 78%);
+  pointer-events: none;
+}
+.hero .inner { position: relative; z-index: 1; padding: 72px 0 64px; }
+.hero-grid { display: grid; grid-template-columns: 1.05fr 0.95fr; gap: 48px; align-items: center; }
+.pill {
+  display: inline-flex; align-items: center; gap: 8px; font-family: var(--mono);
+  font-size: 12px; color: var(--amber); background: rgba(240,179,91,0.08);
+  border: 1px solid rgba(240,179,91,0.28); padding: 4px 12px; border-radius: 999px; margin-bottom: 22px;
+}
+.pill .blip { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+h1 {
+  font-size: 46px; line-height: 1.08; margin: 0 0 18px; color: var(--head);
+  letter-spacing: -0.02em; font-weight: 700;
+}
+h1 .grad {
+  background: linear-gradient(100deg, var(--cyan), var(--violet));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.lede { font-size: 18px; color: var(--dim); margin: 0 0 30px; max-width: 540px; }
+.cta-row { display: flex; gap: 12px; flex-wrap: wrap; }
+.btn {
+  display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 500;
+  padding: 11px 20px; border-radius: 8px; border: 1px solid transparent; cursor: pointer;
+}
+.btn.primary { background: linear-gradient(100deg, var(--cyan), #4cc8e0); color: #04201c; }
+.btn.primary:hover { text-decoration: none; filter: brightness(1.08); }
+.btn.ghost { border-color: var(--border2); color: var(--text); background: rgba(255,255,255,0.02); }
+.btn.ghost:hover { border-color: var(--cyan); color: var(--head); text-decoration: none; }
+
+/* code card in hero */
+.codecard { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: 0 24px 60px -30px rgba(0,0,0,0.8); }
+.codecard .bar { display: flex; align-items: center; gap: 7px; padding: 11px 14px; border-bottom: 1px solid var(--border); background: var(--bg2); }
+.codecard .bar .d { width: 11px; height: 11px; border-radius: 50%; background: #2a3340; }
+.codecard .bar .name { margin-left: 8px; font-family: var(--mono); font-size: 12px; color: var(--faint); }
+.codecard pre { margin: 0; padding: 18px 18px; font-size: 13px; line-height: 1.7; overflow-x: auto; }
+.codecard pre + pre { border-top: 1px solid var(--border); background: var(--bg2); }
+.tok-tag { color: var(--violet); }
+.tok-atr { color: var(--cyan); }
+.tok-str { color: #e3a06b; }
+.tok-fn  { color: #7fd3ff; }
+.tok-kw  { color: var(--violet); }
+.tok-com { color: var(--faint); }
+.tok-pun { color: var(--dim); }
+.prompt-line .p { color: var(--cyan); }
+
+/* ---- generic section ---- */
+section { padding: 64px 0; border-bottom: 1px solid var(--border); }
+.kicker { font-family: var(--mono); font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan); margin: 0 0 12px; }
+h2 { font-size: 28px; margin: 0 0 14px; color: var(--head); letter-spacing: -0.01em; }
+.section-lede { font-size: 17px; color: var(--dim); max-width: 680px; margin: 0 0 8px; }
+p { margin: 0 0 14px; }
+b, strong { color: var(--text); font-weight: 600; }
+
+.two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
+.prose p { color: var(--dim); }
+.prose p strong { color: var(--text); }
+
+/* ---- parity ---- */
+.parity-card {
+  background: linear-gradient(180deg, var(--panel) 0%, rgba(52,227,201,0.03) 100%);
+  border: 1px solid var(--border2); border-radius: 12px; padding: 26px 28px;
+}
+.parity-stats { display: flex; gap: 14px; flex-wrap: wrap; margin: 18px 0 20px; }
+.pstat { flex: 1 1 180px; background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 16px 18px; }
+.pstat .v { font-size: 30px; font-weight: 700; color: var(--head); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.pstat .v small { font-size: 13px; font-weight: 500; color: var(--cyan); }
+.pstat .os { font-family: var(--mono); font-size: 12px; color: var(--text); margin-top: 4px; }
+.pstat .sub { font-size: 12px; color: var(--faint); margin-top: 2px; }
+.pstat.loading .v { color: var(--faint); }
+.perr { color: var(--faint); font-size: 14px; }
+
+/* ---- capability grid ---- */
+.cap-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; margin-top: 28px; }
+.cap {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 22px 22px;
+  transition: border-color 0.15s, transform 0.15s;
+}
+.cap:hover { border-color: var(--border2); }
+.cap.feat { grid-column: span 2; background: linear-gradient(180deg, var(--panel) 0%, rgba(167,139,250,0.04) 100%); border-color: var(--border2); }
+.cap h3 { margin: 0 0 6px; font-size: 16px; color: var(--head); display: flex; align-items: center; gap: 9px; }
+.cap h3 .ic { color: var(--cyan); font-family: var(--mono); font-size: 14px; }
+.cap.feat h3 .ic { color: var(--violet); }
+.cap p { font-size: 14px; color: var(--dim); margin: 0 0 12px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  font-family: var(--mono); font-size: 12px; color: var(--text);
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px;
+}
+.cap.feat .chip { border-color: var(--border2); }
+.chip.accent { color: var(--cyan); border-color: rgba(52,227,201,0.3); }
+.cap.feat .chip.accent { color: var(--violet); border-color: rgba(167,139,250,0.32); }
+
+/* ---- architecture ---- */
+.arch-diagram {
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 12px;
+  padding: 22px 24px; margin: 8px 0 26px; overflow-x: auto;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.9; color: var(--dim); white-space: pre;
+}
+.arch-diagram .l { color: var(--head); }
+.arch-diagram .a { color: var(--cyan); }
+.arch-diagram .ar { color: var(--faint); }
+.repos { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.repo { display: block; background: var(--panel); border: 1px solid var(--border); border-radius: 9px; padding: 12px 14px; }
+.repo:hover { border-color: var(--cyan); text-decoration: none; }
+.repo .n { font-family: var(--mono); font-size: 13px; color: var(--cyan); }
+.repo .d { font-size: 12px; color: var(--faint); margin-top: 3px; }
+
+/* ---- reference cta ---- */
+.ref-cta { display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap;
+  background: var(--panel); border: 1px solid var(--border2); border-radius: 12px; padding: 26px 28px; }
+.ref-cta .t h3 { margin: 0 0 6px; font-size: 19px; color: var(--head); }
+.ref-cta .t p { margin: 0; color: var(--dim); font-size: 15px; max-width: 560px; }
+
+/* ---- footer ---- */
+footer { padding: 40px 0 56px; }
+.foot-inner { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 14px; color: var(--faint); font-size: 13px; }
+.foot-inner a { color: var(--dim); }
+.foot-note { font-size: 12px; color: var(--faint); margin-top: 18px; max-width: 720px; line-height: 1.6; }
+
+@media (max-width: 880px) {
+  .hero-grid { grid-template-columns: 1fr; gap: 32px; }
+  .two-col { grid-template-columns: 1fr; gap: 28px; }
+  .cap-grid { grid-template-columns: 1fr; }
+  .cap.feat { grid-column: span 1; }
+  h1 { font-size: 36px; }
+  .nav .links a:not(.gh) { display: none; }
+}
 </style>
 </head>
 <body>
-<div class="wrap">
 
-<header>
-  <h1>Bro</h1>
-  <div class="tag">An HTML/CSS/JS runtime for desktop apps and games — QuickJS, a custom layout engine, Skia, and SDL_GPU, with 3D, physics, audio, and game networking wired straight into the DOM.</div>
-  <div class="warn">pre-release · pre-alpha · vibe-coded</div>
+<div class="nav">
+  <div class="inner">
+    <span class="brand">bro<span class="dot">.</span></span>
+    <nav class="links">
+      <a href="#what">What it is</a>
+      <a href="#capabilities">Capabilities</a>
+      <a href="#architecture">Architecture</a>
+      <a href="reference.html">Reference</a>
+      <a class="gh" href="https://github.com/wlejon/bro">GitHub ↗</a>
+    </nav>
+  </div>
+</div>
+
+<header class="hero">
+  <div class="wrap inner">
+    <div class="hero-grid">
+      <div>
+        <span class="pill"><span class="blip"></span> pre-release · pre-alpha</span>
+        <h1>An HTML/CSS/JS runtime for <span class="grad">desktop apps and games</span>.</h1>
+        <p class="lede">Electron-shaped, but the rendering pipeline is ours — QuickJS, a custom layout engine, Skia, and SDL_GPU. So 3D, physics, audio, game networking, and on-device AI/ML wire straight into the DOM, in one process, no IPC to a Chromium renderer.</p>
+        <div class="cta-row">
+          <a class="btn primary" href="reference.html">Browse the reference →</a>
+          <a class="btn ghost" href="https://github.com/wlejon/bro">View on GitHub ↗</a>
+        </div>
+      </div>
+      <div class="codecard">
+        <div class="bar"><span class="d"></span><span class="d"></span><span class="d"></span><span class="name">hello/index.html</span></div>
+<pre><span class="tok-com">&lt;!-- a bro app is just a folder with an index.html --&gt;</span>
+<span class="tok-pun">&lt;</span><span class="tok-tag">h1</span> <span class="tok-atr">id</span>=<span class="tok-str">"msg"</span><span class="tok-pun">&gt;</span>Hello<span class="tok-pun">&lt;/</span><span class="tok-tag">h1</span><span class="tok-pun">&gt;</span>
+<span class="tok-pun">&lt;</span><span class="tok-tag">button</span> <span class="tok-atr">id</span>=<span class="tok-str">"btn"</span><span class="tok-pun">&gt;</span>Click me<span class="tok-pun">&lt;/</span><span class="tok-tag">button</span><span class="tok-pun">&gt;</span>
+<span class="tok-pun">&lt;</span><span class="tok-tag">script</span><span class="tok-pun">&gt;</span>
+  <span class="tok-fn">document</span>.<span class="tok-fn">getElementById</span>(<span class="tok-str">'btn'</span>).<span class="tok-fn">addEventListener</span>(<span class="tok-str">'click'</span>, () <span class="tok-kw">=&gt;</span> {
+    <span class="tok-fn">document</span>.<span class="tok-fn">getElementById</span>(<span class="tok-str">'msg'</span>).textContent = <span class="tok-str">'Hello, bro'</span>;
+  });
+<span class="tok-pun">&lt;/</span><span class="tok-tag">script</span><span class="tok-pun">&gt;</span></pre>
+<pre class="prompt-line"><span class="p">$</span> bro path/to/hello</pre>
+      </div>
+    </div>
+  </div>
 </header>
 
-<section>
-  <h2>What it is</h2>
-  <p class="lede">Coding agents build web UIs really well. Native UIs take more debugging to get right. Electron solves that, but only for what the web platform natively supports.</p>
-  <p>In bro, HTML/CSS/JS is the UI/app layer like Electron, but the rendering pipeline is ours — which means we can plug in whatever we want underneath. And we have: a 3D scene graph, Jolt physics, a real-time audio engine, mesh generation and CSG, navmesh pathfinding, game networking over GNS, native file dialogs, menu bars. All exposed to JS, all running in one process, no IPC to a Chromium renderer.</p>
-  <p>None of this is new. It's a reconfiguration that works better for coding agents.</p>
-</section>
-
-<section class="parity">
-  <h2>Rendering parity vs Chromium</h2>
-  <p>Bro renders HTML and CSS with its own engine — not by embedding Chromium. <a href="https://github.com/wlejon/broparity">Broparity</a> is a side-by-side test suite that compares bro's output to Chromium pixel-by-pixel and structurally, on a curated set of layout cases. Latest published numbers, by host platform:</p>
-  <div class="stat" id="parity-stats">
-    <div class="m"><div class="v">…</div><div class="l">loading</div></div>
+<section id="what">
+  <div class="wrap">
+    <div class="two-col">
+      <div>
+        <p class="kicker">Why it exists</p>
+        <h2>The web platform is a great UI layer. The rest, we built in.</h2>
+        <p class="section-lede">Coding agents build web UIs really well. Native UIs take more debugging to get right. Electron solves that — but only for what the web platform natively supports.</p>
+      </div>
+      <div class="prose">
+        <p>In bro, HTML/CSS/JS is the UI/app layer like Electron. But the rendering pipeline is ours, which means we can plug in whatever we want underneath. And we have: a <strong>3D scene graph</strong>, <strong>Jolt physics</strong>, a real-time <strong>audio engine</strong>, <strong>mesh generation and CSG</strong>, <strong>navmesh pathfinding</strong>, <strong>game networking over GNS</strong>, and a full <strong>on-device AI/ML inference stack</strong> — all exposed to JS, all running in one process, no IPC to a Chromium renderer.</p>
+        <p>None of this is new. It's a reconfiguration that works better for coding agents.</p>
+      </div>
+    </div>
   </div>
-  <p><a class="cta" href="https://wlejon.github.io/broparity/">View live parity report →</a></p>
 </section>
 
-<section>
-  <h2>Hello world</h2>
-<pre><code>&lt;!-- hello/index.html --&gt;
-&lt;h1 id="msg"&gt;Hello&lt;/h1&gt;
-&lt;button id="btn"&gt;Click me&lt;/button&gt;
-&lt;script&gt;
-  document.getElementById('btn').addEventListener('click', () =&gt; {
-    document.getElementById('msg').textContent = 'Hello, bro';
-  });
-&lt;/script&gt;</code></pre>
-<pre><code>bro path/to/hello</code></pre>
-  <p>Naked <code>bro</code> opens the built-in project manager. The launcher and a curated set of starter apps live in the sibling <a href="https://github.com/wlejon/broworkshop">broworkshop</a> repo — games, tools, demos, and AI/research apps you can clone and reshape.</p>
-  <img class="shot" src="launcher.png" alt="bro launcher with broworkshop loaded">
-  <div class="shot-cap">The launcher with <a href="https://github.com/wlejon/broworkshop">broworkshop</a> loaded — games, tools, demos.</div>
+<section id="parity">
+  <div class="wrap">
+    <p class="kicker">Rendering parity vs Chromium</p>
+    <h2>Bro draws its own pixels.</h2>
+    <p class="section-lede">HTML and CSS are rendered by our own engine — not by embedding Chromium. <a href="https://github.com/wlejon/broparity">Broparity</a> is a side-by-side test suite that compares bro's output to Chromium, pixel-by-pixel and structurally, on a curated set of layout cases.</p>
+    <div class="parity-card" style="margin-top:22px;">
+      <div class="parity-stats" id="parity-stats">
+        <div class="pstat loading"><div class="v">…</div><div class="os">loading</div><div class="sub">fetching live numbers</div></div>
+      </div>
+      <a class="btn ghost" href="https://wlejon.github.io/broparity/">View the live parity report →</a>
+    </div>
+  </div>
 </section>
 
-<section>
-  <h2>What you get</h2>
-  <p><b>Web platform</b> — HTML5 parsing, CSS (flexbox, gradients, border radius, overflow/scroll), SVG, Canvas 2D, WebGL 2.0, Web Components with Shadow DOM, Web Workers, Fetch, localStorage, form controls with real text editing. three.js and jQuery work.</p>
-  <p><b>Beyond the web</b> — 3D scene graph with mesh rendering and terrain (<code>bro.scene</code>), Jolt rigid-body physics with contact events, Web Audio with synthesis / effects / spatial / MIDI, mesh generation and CSG, navmesh and A* pathfinding (<code>bro.ai.game</code>), game networking over GameNetworkingSockets (<code>bro.net</code>), native file dialogs, native menu bars, 3D transform gizmos, native crosshair overlay.</p>
-  <p><b>For development</b> — Headless mode runs the full pipeline (GPU, real fonts, WebGL) without a window, driven by JS with virtual time for deterministic testing.</p>
+<section id="capabilities">
+  <div class="wrap">
+    <p class="kicker">What you get</p>
+    <h2>A web runtime, plus everything a game and an AI app need.</h2>
+    <p class="section-lede">Every surface below is exposed to JavaScript and documented in the <a href="reference.html">reference</a>.</p>
+
+    <div class="cap-grid">
+      <div class="cap">
+        <h3><span class="ic">&lt;/&gt;</span> Web platform</h3>
+        <p>HTML5 parsing, CSS (flexbox, gradients, border-radius, overflow/scroll), SVG, Canvas 2D, WebGL 2.0, Web Components with Shadow DOM, Web Workers, Fetch, localStorage, and form controls with real text editing. three.js and jQuery work.</p>
+        <div class="chips"><span class="chip">HTML5 + CSS</span><span class="chip">Canvas 2D</span><span class="chip">WebGL 2.0</span><span class="chip">Shadow DOM</span><span class="chip">Workers</span><span class="chip">Fetch</span></div>
+      </div>
+
+      <div class="cap">
+        <h3><span class="ic">◆</span> Graphics &amp; 3D</h3>
+        <p>A 3D scene graph with mesh rendering and voxel terrain, PBR lighting, procedural mesh generation and CSG, SIMD noise, an ecosystem sim, and transform gizmos for editing.</p>
+        <div class="chips"><span class="chip accent">bro.scene</span><span class="chip accent">bro.mesh</span><span class="chip accent">bro.noise</span><span class="chip accent">bro.flora</span><span class="chip accent">bro.gizmo</span></div>
+      </div>
+
+      <div class="cap">
+        <h3><span class="ic">▸</span> Physics &amp; audio</h3>
+        <p>Jolt rigid-body physics with contact events, wired into the scene graph. A real-time Web Audio engine with synthesis, effects, spatialization, and MIDI — plus live mic capture.</p>
+        <div class="chips"><span class="chip accent">Physics</span><span class="chip accent">AudioContext</span><span class="chip accent">bro.mic</span></div>
+      </div>
+
+      <div class="cap">
+        <h3><span class="ic">⬡</span> Game systems</h3>
+        <p>Navmesh and A* pathfinding, steering, and perception for game agents. Peer-to-peer game networking over Valve's GameNetworkingSockets. Native file dialogs, menu bars, and a crosshair overlay.</p>
+        <div class="chips"><span class="chip accent">bro.ai.game</span><span class="chip accent">bro.net</span><span class="chip accent">dialogs</span><span class="chip accent">bro.menu</span></div>
+      </div>
+
+      <div class="cap feat">
+        <h3><span class="ic">✦</span> On-device AI/ML inference</h3>
+        <p>GPU-accelerated model inference wired into JS — CUDA / Metal with a CPU fallback (<code style="font-family:var(--mono);color:var(--text)">bro.gpu</code> probes the live backend). A unified tensor type and op set underpins text generation, diffusion, speech, and vision — all running locally, no server.</p>
+        <div class="chips">
+          <span class="chip accent">bro.tensor</span>
+          <span class="chip accent">bro.lm — Qwen3</span>
+          <span class="chip accent">bro.diffusion — SD U-Net/VAE/LoRA</span>
+          <span class="chip accent">bro.tts — Kokoro · Qwen3-TTS</span>
+          <span class="chip accent">bro.stt — Whisper</span>
+          <span class="chip accent">bro.wake</span>
+          <span class="chip accent">bro.vision — SAM · depth · normals · ControlNet</span>
+          <span class="chip accent">bro.image</span>
+          <span class="chip accent">triposplat — image → 3D</span>
+        </div>
+      </div>
+
+      <div class="cap">
+        <h3><span class="ic">⌘</span> Built for development</h3>
+        <p>Headless mode runs the full pipeline — GPU, real fonts, WebGL — without a window, driven by JS with virtual time for deterministic testing. A DOM inspector, settings system, and line-coverage reports round it out.</p>
+        <div class="chips"><span class="chip">bro-headless</span><span class="chip">virtual time</span><span class="chip">inspect()</span><span class="chip">coverage</span></div>
+      </div>
+
+      <div class="cap">
+        <h3><span class="ic">⊞</span> The launcher</h3>
+        <p>Naked <code style="font-family:var(--mono);color:var(--text)">bro</code> opens a built-in project manager. The launcher and a curated set of starter apps live in the sibling <a href="https://github.com/wlejon/broworkshop">broworkshop</a> repo — games, tools, demos, and AI/research apps you can clone and reshape.</p>
+        <div class="chips"><span class="chip">games</span><span class="chip">tools</span><span class="chip">demos</span><span class="chip">ai</span></div>
+      </div>
+    </div>
+  </div>
 </section>
 
-<section>
-  <h2>Reference</h2>
-  <p>Each API surface — audio, scene, physics, mesh, networking, AI, and the rest — is documented as an annotated <code>.js</code> file with JSDoc and usage examples. Guides cover headless mode, settings, the DOM inspector, projects, and multi-repo workflow.</p>
-  <p style="margin-top: 14px;"><a class="cta" href="reference.html">Browse the reference →</a></p>
+<section id="architecture">
+  <div class="wrap">
+    <p class="kicker">Architecture</p>
+    <h2>One engine, layered cleanly.</h2>
+    <p class="section-lede">HTML is parsed into a single DOM, CSS resolved by a cascade, layout computed, and the tree rasterized by Skia — then composited with the 3D scene layer through SDL_GPU. The subsystems stack:</p>
+    <div class="arch-diagram"><span class="ar">       </span><span class="l">util</span>  <span class="ar">logging · strings (standalone)</span>
+<span class="ar">         ↑</span>
+<span class="ar">     </span><span class="l">platform</span>  <span class="ar">SDL3 window · event loop</span>
+<span class="ar">         ↑</span>
+<span class="ar">      </span><span class="l">render</span>  <span class="ar">Renderer · SkiaRenderer · RasterRenderer</span>
+<span class="ar">         ↑</span>
+<span class="ar">  </span><span class="l">svg → layout → dom</span>  <span class="ar">htmlayout adapters · draw traversal · tree</span>
+<span class="ar">         ↑</span>
+<span class="a">canvas</span>  <span class="a">webgl</span>  <span class="a">scene</span>  <span class="a">physics</span>  <span class="a">tensor</span>   <span class="ar">2D · WebGL2 · 3D · Jolt · ML</span>
+<span class="ar">         ↑</span>
+<span class="ar">       </span><span class="l">js</span>  <span class="ar">QuickJS + qjsbind bindings for all of the above</span>
+<span class="ar">         ↑</span>
+<span class="ar">     </span><span class="l">engine</span>  <span class="ar">orchestrates every subsystem · main loop</span></div>
+
+    <p class="section-lede" style="margin-bottom:18px;">Each piece lives in its own sibling repo so it can be used independently of bro:</p>
+    <div class="repos">
+      <a class="repo" href="https://github.com/wlejon/qjsbind"><div class="n">qjsbind</div><div class="d">C++/JS bindings for QuickJS</div></a>
+      <a class="repo" href="https://github.com/wlejon/brokit"><div class="n">brokit</div><div class="d">web + system APIs (fetch, fs, crypto)</div></a>
+      <a class="repo" href="https://github.com/wlejon/htmlayout"><div class="n">htmlayout</div><div class="d">HTML parse · CSS · layout</div></a>
+      <a class="repo" href="https://github.com/wlejon/broaudio"><div class="n">broaudio</div><div class="d">real-time audio engine</div></a>
+      <a class="repo" href="https://github.com/wlejon/bromesh"><div class="n">bromesh</div><div class="d">mesh generation · CSG · I/O</div></a>
+      <a class="repo" href="https://github.com/wlejon/bromath"><div class="n">bromath</div><div class="d">header-only math: Vec/Quat/Mat</div></a>
+      <a class="repo" href="https://github.com/wlejon/brotensor"><div class="n">brotensor</div><div class="d">tensor + ops · CPU/CUDA/Metal · training</div></a>
+      <a class="repo" href="https://github.com/wlejon/brolm"><div class="n">brolm</div><div class="d">language/text-model inference</div></a>
+      <a class="repo" href="https://github.com/wlejon/brodiffusion"><div class="n">brodiffusion</div><div class="d">text-to-image diffusion</div></a>
+      <a class="repo" href="https://github.com/wlejon/brosoundml"><div class="n">brosoundml</div><div class="d">TTS · STT · neural codec</div></a>
+      <a class="repo" href="https://github.com/wlejon/brovisionml"><div class="n">brovisionml</div><div class="d">SAM · depth · normals · ControlNet</div></a>
+      <a class="repo" href="https://github.com/wlejon/broimage"><div class="n">broimage</div><div class="d">image decode + composable kernels</div></a>
+      <a class="repo" href="https://github.com/wlejon/brogameagent"><div class="n">brogameagent</div><div class="d">navmesh · pathfinding · perception</div></a>
+      <a class="repo" href="https://github.com/wlejon/broflora"><div class="n">broflora</div><div class="d">ecosystem simulation</div></a>
+    </div>
+    <p class="section-lede" style="margin-top:24px; font-size:15px;">Plus <b>Jolt</b> for physics, <b>Skia</b> for rasterization, <b>SDL3</b> for windowing and GPU display, and <b>QuickJS</b> as the JS engine.</p>
+  </div>
 </section>
 
-<section>
-  <h2>Architecture</h2>
-  <p>QuickJS for JS · qjsbind for C++/JS bindings · brokit for web/system APIs · htmlayout for HTML parsing, CSS, and layout · broaudio for audio · bromesh for meshes · brogameagent for game AI · Jolt for physics · Skia for raster rendering · SDL3 for windowing and GPU display.</p>
-  <p>Each piece lives in its own sibling repo so it can be used independently of bro: <a href="https://github.com/wlejon/qjsbind">qjsbind</a>, <a href="https://github.com/wlejon/brokit">brokit</a>, <a href="https://github.com/wlejon/htmlayout">htmlayout</a>, <a href="https://github.com/wlejon/broaudio">broaudio</a>, <a href="https://github.com/wlejon/bromesh">bromesh</a>, <a href="https://github.com/wlejon/brogameagent">brogameagent</a>.</p>
+<section id="reference" style="border-bottom:none;">
+  <div class="wrap">
+    <div class="ref-cta">
+      <div class="t">
+        <h3>Read the reference</h3>
+        <p>Every API surface — audio, scene, physics, mesh, networking, AI/ML, and the rest — is documented as an annotated <code style="font-family:var(--mono);color:var(--text)">.js</code> file with JSDoc and usage examples. Guides cover headless mode, settings, the inspector, projects, and multi-repo workflow.</p>
+      </div>
+      <a class="btn primary" href="reference.html">Browse the reference →</a>
+    </div>
+  </div>
 </section>
 
 <footer>
-  <a href="https://github.com/wlejon/bro">github.com/wlejon/bro</a> · MIT
+  <div class="wrap">
+    <div class="foot-inner">
+      <span><a href="https://github.com/wlejon/bro">github.com/wlejon/bro</a> · MIT</span>
+      <span>QuickJS · htmlayout · Skia · SDL_GPU · Jolt · brotensor</span>
+    </div>
+    <p class="foot-note">Heads up: bro exposes far more of your system to JavaScript than a browser does, and was not built with a security sandbox. Don't point it at untrusted code.</p>
+  </div>
 </footer>
-
-</div>
 
 <script>
 (async function loadParity() {
@@ -124,20 +408,20 @@ footer a { color: #707070; }
     if (!res.ok) throw new Error(res.status);
     const data = await res.json();
     const platforms = Object.entries(data.platforms || {}).sort(([a], [b]) => a.localeCompare(b));
-    if (!platforms.length) { el.innerHTML = `<div class="err">No platforms published yet.</div>`; return; }
+    if (!platforms.length) { el.innerHTML = `<div class="perr">No platforms published yet.</div>`; return; }
     el.innerHTML = platforms.map(([slug, p]) => {
       const layout = ((p.overall?.layoutScore ?? 0) * 100).toFixed(1);
       const pixel = ((p.overall?.pixelScore ?? 0) * 100).toFixed(1);
       const cases = p.overall?.caseCount ?? 0;
       const osLabel = p.system?.os || slug;
-      return `<div class="m plat">
-        <div class="v">${layout}% <span style="font-size:13px;color:#707070;font-weight:400;">layout</span></div>
-        <div class="l">${osLabel}</div>
+      return `<div class="pstat">
+        <div class="v">${layout}<small>% layout</small></div>
+        <div class="os">${osLabel}</div>
         <div class="sub">${pixel}% pixels · ${cases} cases</div>
       </div>`;
     }).join("");
   } catch (e) {
-    el.innerHTML = `<div class="err">Couldn't load live parity numbers — see the <a href="https://wlejon.github.io/broparity/">parity site</a> for current data.</div>`;
+    el.innerHTML = `<div class="perr">Couldn't load live parity numbers — see the <a href="https://wlejon.github.io/broparity/">parity site</a> for current data.</div>`;
   }
 })();
 </script>
