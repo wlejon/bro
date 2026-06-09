@@ -450,6 +450,24 @@ bool dispatchDocMousePress(
     return false;
 }
 
+// A disabled form control is inert: per HTML it has no activation behavior, so it
+// dispatches no click/dblclick (and no submit/reset/disclosure default action).
+// Walk up from the event target so a click on a child node (an icon/span inside a
+// <button>) counts too, and so a disabled <fieldset> disables its descendants.
+static bool isInDisabledControl(dom::Element* el) {
+    for (auto* e = el; e; e = e->parentElement()) {
+        const std::string& tag = e->tagName();
+        const bool formControl =
+            tag == "BUTTON"   || tag == "button"   ||
+            tag == "INPUT"    || tag == "input"    ||
+            tag == "SELECT"   || tag == "select"   ||
+            tag == "TEXTAREA" || tag == "textarea" ||
+            tag == "FIELDSET" || tag == "fieldset";
+        if (formControl && e->hasAttribute("disabled")) return true;
+    }
+    return false;
+}
+
 void dispatchDocMouseRelease(
     const ControlContext& ctx,
     MouseDispatchState& state,
@@ -467,9 +485,10 @@ void dispatchDocMouseRelease(
         js::dispatchDomEvent(ctx.jsCtx, target, upEvt);
     }
 
-    // Click fires only when mouseup lands on the same element as mousedown.
+    // Click fires only when mouseup lands on the same element as mousedown —
+    // and never on a disabled form control (which has no activation behavior).
     bool sameTarget = (target && target == state.mouseDownTarget);
-    if (sameTarget) {
+    if (sameTarget && !isInDisabledControl(target)) {
         // Rolling double-click detection.
         if (state.lastClickTarget == target &&
             (nowMs - state.lastClickTimeMs) < dblThresholdMs &&

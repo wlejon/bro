@@ -1758,6 +1758,7 @@ struct QwenStreamJob {
     std::string        instruct;
     int                chunkFrames = 25;          // ~2 s at 12.5 Hz
     brosoundml::QwenTtsSampling sampling;
+    std::vector<float> xvector;                    // Base designer: stream a designed x-vector
     std::vector<float> samples;                   // full audio (onDone), filled by work
     int                sample_rate = 24000;
     JSValue            onChunk = JS_UNDEFINED;     // dup'd; UNDEFINED if absent
@@ -1788,6 +1789,13 @@ static JSValue js_qwen_synthesize_stream(JSContext* ctx, int argc,
     if (argc >= 3 && JS_IsObject(argv[2])) {
         readQwenSynthOpts(ctx, argv[2], job->speaker, job->language, job->instruct);
         readQwenSampling(ctx, argv[2], job->sampling);
+        // opts.xvector (Base designer): stream from a designed speaker x-vector
+        // instead of a preset — the streaming twin of the async synthesize path,
+        // so the Base voice designer can stream too (not just Render).
+        JSValue xv = JS_GetPropertyStr(ctx, argv[2], "xvector");
+        if (!JS_IsUndefined(xv) && !JS_IsNull(xv))
+            job->xvector = qjsbind::read_float32_array(ctx, xv);
+        JS_FreeValue(ctx, xv);
         JSValue cf = JS_GetPropertyStr(ctx, argv[2], "chunkFrames");
         if (JS_IsNumber(cf)) {
             int32_t t = job->chunkFrames; JS_ToInt32(ctx, &t, cf);
@@ -1831,11 +1839,16 @@ static JSValue js_qwen_synthesize_stream(JSContext* ctx, int argc,
             job->chunkSlots[idx].assign(s, s + n);
             job->produced.store(idx + 1, std::memory_order_release);
         };
-        auto buf = mw->qwen->synthesize_stream(
-            job->text, job->speaker, job->chunkFrames, onChunkCb,
-            job->language, job->instruct,
-            [&cancel] { return cancel.load(std::memory_order_acquire); },
-            job->sampling);
+        auto cancelFn = [&cancel] { return cancel.load(std::memory_order_acquire); };
+        brosoundml::AudioBuffer buf;
+        if (!job->xvector.empty())
+            buf = mw->qwen->synthesize_stream_with_xvector(
+                job->text, job->xvector, job->chunkFrames, onChunkCb,
+                job->language, cancelFn, job->sampling);
+        else
+            buf = mw->qwen->synthesize_stream(
+                job->text, job->speaker, job->chunkFrames, onChunkCb,
+                job->language, job->instruct, cancelFn, job->sampling);
         job->samples     = std::move(buf.samples);
         job->sample_rate = buf.sample_rate;
     };
