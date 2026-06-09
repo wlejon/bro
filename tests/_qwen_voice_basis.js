@@ -165,6 +165,12 @@ for (const i of picked) {
   anchors.push(Array.from(coordsOf[i], (z) => +z.toFixed(4)));
 }
 
+// ── all actors as map points: [genderCode, c0..c_{k-1}] in σ units ───────────
+// The full coords per actor (not just the 2 map axes) so clicking a point on the
+// 2-D voice map snaps to that real speaker's COMPLETE identity, not a flattened one.
+const gCode = { F: 0, M: 1, C: 2 };
+const points = actors.map((a, i) => [gCode[a.gender]].concat(Array.from(coordsOf[i], (z) => +z.toFixed(3))));
+
 // ── write qwen_voice_basis.json ──────────────────────────────────────────────
 const round = (arr, p) => Array.from(arr).map((v) => +v.toFixed(p));
 const basis = {
@@ -177,6 +183,7 @@ const basis = {
   range, varExplained,
   axisName, genderCos,
   names, anchors, label,
+  points,
 };
 const json = JSON.stringify(basis);
 writeBoth('qwen_voice_basis.json', json);

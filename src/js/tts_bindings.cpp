@@ -627,6 +627,9 @@ static void readQwenSynthOpts(JSContext* ctx, JSValueConst opts,
 //                           on the prefill speaker-slot row (the emotion / masc-fem
 //                           direction-add). Works on any variant with a speaker
 //                           slot — CustomVoice presets and Base x-vectors alike.
+//   opts.speakerVector      Float32Array, talker-hidden width: REPLACES the speaker
+//                           slot with a designed voice (e.g. a voice-basis point
+//                           rendered through CustomVoice instead of a preset).
 static void readQwenSampling(JSContext* ctx, JSValueConst opts,
                              brosoundml::QwenTtsSampling& s) {
     if (!JS_IsObject(opts)) return;
@@ -671,6 +674,12 @@ static void readQwenSampling(JSContext* ctx, JSValueConst opts,
     if (!JS_IsUndefined(vs) && !JS_IsNull(vs))
         s.voice_steer = qjsbind::read_float32_array(ctx, vs);
     JS_FreeValue(ctx, vs);
+    // speakerVector: a Float32Array that REPLACES the speaker slot (a designed
+    // voice on any variant — e.g. a voice-basis point rendered through CustomVoice).
+    JSValue sv = JS_GetPropertyStr(ctx, opts, "speakerVector");
+    if (!JS_IsUndefined(sv) && !JS_IsNull(sv))
+        s.speaker_vector = qjsbind::read_float32_array(ctx, sv);
+    JS_FreeValue(ctx, sv);
 }
 
 // Marshal a QwenTtsTrace to a JS stages array [{ name, h, w, data:Float32Array }] —
