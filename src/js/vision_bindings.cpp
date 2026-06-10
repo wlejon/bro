@@ -1720,13 +1720,13 @@ struct Sg3Op {
     float psi = 1.0f;
     int   cutoff = -1;
     bool  returnLatents = false;
-    long long seed = -1;        // echoed back when generate seeded its own z
+    int64_t   seed = -1;        // echoed back when generate seeded its own z
     // invert inputs:
     std::vector<unsigned char> target_rgb;  // (h*w*3) HWC for invert, else empty
     int       target_w = 0, target_h = 0;
     int       inv_steps = 350;
     float     inv_lr = 0.05f, inv_regW = 0.0f, inv_initNoise = 0.0f;
-    long long inv_seed = 0;
+    int64_t   inv_seed = 0;
     std::vector<float> inv_initW;   // (num_ws*w_dim) start latent, else empty
     // outputs:
     sg3::Image img;
@@ -1792,7 +1792,7 @@ static JSValue js_stylegan3_generate(JSContext* ctx, JSValueConst this_val,
         JS_FreeValue(ctx, zv);
     }
     if (!gotZ) {
-        long long seed = 0;
+        int64_t seed = 0;
         if (JS_IsObject(opts)) {
             JSValue sv = JS_GetPropertyStr(ctx, opts, "seed");
             if (JS_IsNumber(sv)) JS_ToInt64(ctx, &seed, sv);
