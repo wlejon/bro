@@ -1,16 +1,24 @@
 /**
- * bro.stt — Speech-to-text (Whisper)
+ * bro.stt — Speech-to-text (Whisper, Parakeet)
  *
- * Transcribes 16 kHz mono audio to text with a Whisper encoder/decoder.
+ * Transcribes 16 kHz mono audio to text. Two model families:
+ *   - Whisper: encoder/decoder transformer. Prompted (language/task), 30 s
+ *     windows with optional sequential long-form decode.
+ *   - Parakeet (NVIDIA Parakeet-TDT-0.6B-v3): FastConformer encoder + TDT
+ *     transducer. Unconditional (no prompt), multilingual (25 European
+ *     languages), single-pass over the whole clip, and reports per-token
+ *     encoder-frame positions for word timestamps. Faster than Whisper at
+ *     the same size thanks to TDT frame-skipping.
+ *
  * Backed by brosoundml (audio-ML inference) on top of brotensor. Defaults to
  * CUDA; pass { device: 'cpu' } to force the CPU backend.
  *
- * A transcription needs two pieces: the Whisper model (loadWhisper) and a
- * BPE tokenizer (loadTokenizer) for building the decoder prompt and decoding
- * the output ids back to text.
+ * A transcription needs two pieces: the model (loadWhisper / loadParakeet)
+ * and its tokenizer (loadTokenizer / loadParakeetTokenizer) for decoding the
+ * output ids back to text (and, for Whisper, building the decoder prompt).
  *
  * Audio is supplied as { samples: Float32Array, sampleRate: number } in the
- * [-1, 1] range. Whisper expects 16 kHz mono — resample/downmix before
+ * [-1, 1] range. Both models expect 16 kHz mono — resample/downmix before
  * calling (see tests/smoke_voice_pipeline.js for a WAV reader that does this).
  */
 
@@ -120,10 +128,11 @@ console.log(text.trim());
  * bro.stt.transcribe(whisper, audio, promptIds, opts) → AsyncHandle
  *
  * Runs Whisper's autoregressive decode on a background thread so the JS thread
- * (and the app) stays responsive. STT runs once per turn (pre-reply), so this
- * is a MONOLITHIC op: there is no per-token streaming, and the decode loop is
- * internal to brosoundml. Cancellation (handle.cancel()) drops the result —
- * onDone still fires with { cancelled: true }.
+ * (and the app) stays responsive. opts.onToken(id) streams each decoded token
+ * to the JS thread as it is produced (lock-free handoff, drained once per
+ * frame). Cancellation (handle.cancel()) is real — the decode loop polls the
+ * flag once per token and stops — and drops the result; onDone still fires
+ * with { cancelled: true }.
  *
  * @param {WhisperModel} whisper           - from loadWhisper().
  * @param {Float32Array|{samples,sampleRate}} audio - 16 kHz mono; a bare
@@ -131,6 +140,7 @@ console.log(text.trim());
  * @param {Int32Array|number[]} promptIds  - decoder prompt (tok.buildPrompt()).
  * @param {Object} [opts]
  * @param {number}   [opts.maxNewTokens=0] - cap on decoded tokens (0 = model max).
+ * @param {function} [opts.onToken]        - onToken(id) per decoded token.
  * @param {function} [opts.onDone]         - onDone(ids, info) on the JS thread:
  *        ids  = Int32Array of token ids (includes the prompt prefix).
  *        info = { cancelled: boolean, error?: string }.
@@ -148,3 +158,101 @@ const handle = bro.stt.transcribe(whisper, audio, prompt, {
     },
 });
 // handle.cancel();  // e.g. on barge-in — onDone fires with cancelled:true
+
+
+// ── Parakeet ────────────────────────────────────────────────────────────────
+
+/**
+ * Load a Parakeet-TDT model from a weights directory (config.json +
+ * model.safetensors — the HF `transformers` checkpoint layout, e.g.
+ * nvidia/parakeet-tdt-0.6b-v3 fetched by brosoundml/scripts/download-parakeet.sh).
+ *
+ * @param {string} dir            - Parakeet weights directory.
+ * @param {Object} [opts]
+ * @param {string} [opts.device='cuda'] - 'cuda' or 'cpu'.
+ * @param {function} [opts.onReady]     - async load: onReady(parakeet).
+ * @param {function} [opts.onError]     - async load: onError(message).
+ * @returns {ParakeetModel|AsyncHandle} - same sync/async convention as
+ *          loadWhisper.
+ */
+const parakeet = bro.stt.loadParakeet('../brosoundml/weights/parakeet/0.6b-v3');
+// parakeet.sampleRate   === 16000
+// parakeet.vocabSize    === 8193    (8192 SentencePiece pieces + blank)
+// parakeet.frameSeconds === 0.08    (seconds of audio per encoder frame)
+
+/**
+ * Load Parakeet's SentencePiece tokenizer (the tokenizer.json beside the
+ * checkpoint).
+ *
+ * @param {string} path              - path to tokenizer.json.
+ * @param {Object} [opts]
+ * @param {function} [opts.onReady]  - async load: onReady(tokenizer).
+ * @param {function} [opts.onError]  - async load: onError(message).
+ * @returns {ParakeetTokenizer|AsyncHandle}
+ *
+ * ParakeetTokenizer:
+ * @method decode(ids) → string
+ *         Detokenize piece ids to text. Ids outside the vocab (blank/pad) are
+ *         skipped, so the raw transcription id stream decodes directly.
+ * @method tokenize(text) → Int32Array
+ *         Text to unigram piece ids (no eos/padding) — handy for tests.
+ * @property {number} vocabCount
+ */
+const ptok = bro.stt.loadParakeetTokenizer(
+    '../brosoundml/weights/parakeet/0.6b-v3/tokenizer.json');
+
+/**
+ * ParakeetModel
+ *
+ * @property {boolean} loaded
+ * @property {number}  sampleRate    - 16000 (fixed).
+ * @property {number}  vocabSize
+ * @property {number}  blankTokenId
+ * @property {number}  frameSeconds  - seconds per encoder frame (0.08 for v3);
+ *           tokenFrames[i] * frameSeconds = token i's start time.
+ *
+ * @method transcribe(audio, opts) → { tokenIds, tokenFrames }
+ *         Run the full pipeline over `audio` (no prompt — Parakeet is
+ *         unconditional). Single pass over the whole clip; no windowing.
+ *
+ *         audio: Float32Array @ 16 kHz, or { samples, sampleRate } (16 kHz mono)
+ *         opts:  { maxNewTokens=0 (0 = whole clip), onToken }
+ *         tokenIds:    Int32Array of SentencePiece piece ids (no blank/pad).
+ *         tokenFrames: Int32Array — encoder frame each token was emitted at.
+ *
+ * opts.onToken(id) fires once per emitted token, in order, synchronously on
+ *   this thread — detokenize incrementally for a live partial transcript.
+ */
+const res = parakeet.transcribe(audio);
+console.log(ptok.decode(res.tokenIds).trim());
+for (let i = 0; i < res.tokenIds.length; i++) {
+    const t = res.tokenFrames[i] * parakeet.frameSeconds;
+    console.log(t.toFixed(2) + '\t' + ptok.decode([res.tokenIds[i]]));
+}
+
+/**
+ * bro.stt.transcribe(parakeet, audio, opts) → AsyncHandle
+ *
+ * Async Parakeet decode on a background thread — same machinery as the
+ * Whisper form (the first argument selects the model family; Parakeet takes
+ * no promptIds). opts.onToken streams tokens; handle.cancel() is real (the
+ * TDT loop polls once per encoder frame).
+ *
+ * @param {ParakeetModel} parakeet         - from loadParakeet().
+ * @param {Float32Array|{samples,sampleRate}} audio - 16 kHz mono.
+ * @param {Object} [opts]
+ * @param {number}   [opts.maxNewTokens=0] - cap on emitted tokens (0 = whole clip).
+ * @param {function} [opts.onToken]        - onToken(id) per emitted token.
+ * @param {function} [opts.onDone]         - onDone(result, info) on the JS thread:
+ *        result = { tokenIds: Int32Array, tokenFrames: Int32Array }.
+ *        info   = { cancelled: boolean, error?: string }.
+ * @returns {AsyncHandle}  - { cancel(): void }. Rejects (throws) if another
+ *          transcribe() is already in flight on this model.
+ */
+bro.stt.transcribe(parakeet, audio, {
+    onToken: (id) => { /* live partial transcript */ },
+    onDone: (result, info) => {
+        if (info.cancelled || info.error) return;
+        console.log(ptok.decode(result.tokenIds).trim());
+    },
+});

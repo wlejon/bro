@@ -1,15 +1,17 @@
-// JS bindings for brosoundml::Whisper — speech-to-text inference.
+// JS bindings for brosoundml speech-to-text inference — Whisper and Parakeet.
 //
-// Installed onto bro.stt.* by installSttBindings(). The Whisper model
-// (encoder + KV-cached decoder, ~150 MB - ~3 GB depending on checkpoint) and
-// its tokenizer (brolm::whisper::Tokenizer) live behind opaque qjsbind
-// handles.
+// Installed onto bro.stt.* by installSttBindings(). The models (Whisper:
+// encoder + KV-cached decoder, ~150 MB - ~3 GB; Parakeet-TDT-0.6B-v3:
+// FastConformer encoder + TDT decoder, ~2.4 GB) and their tokenizers
+// (brolm::whisper::Tokenizer / brolm::t5::Tokenizer SentencePiece) live
+// behind opaque qjsbind handles.
 //
-// The model runs on GPU by default — loadWhisper places it on CUDA when a GPU
-// backend is available (pass opts.device 'cpu' to force CPU). transcribe()
-// takes 16 kHz mono FP32 audio and returns the raw token id stream —
-// `transcribeText` adds the build_prompt / decode round-trip and hands back
-// plain text.
+// Both models run on GPU by default — the loaders place them on CUDA when a
+// GPU backend is available (pass opts.device 'cpu' to force CPU). transcribe()
+// takes 16 kHz mono FP32 audio and returns the raw token id stream; the caller
+// detokenizes. Whisper needs a decoder prompt (tokenizer.buildPrompt());
+// Parakeet is unconditional and additionally reports per-token encoder-frame
+// positions for word timestamps.
 
 #include "js/stt_bindings.h"
 #include "js/async_job.h"
@@ -17,9 +19,11 @@
 #include <qjsbind/qjsbind.h>
 
 #include <brosoundml/whisper.h>
+#include <brosoundml/parakeet.h>
 #include <brosoundml/audio.h>
 
 #include <brolm/whisper_tokenizer.h>
+#include <brolm/tokenizer_t5.h>
 
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
@@ -50,6 +54,20 @@ struct WhisperWrapper {
 
 struct WhisperTokenizerWrapper {
     std::unique_ptr<brolm::whisper::Tokenizer> tok;
+};
+
+struct ParakeetWrapper {
+    std::unique_ptr<brosoundml::Parakeet> parakeet;
+    brotensor::Device device = brotensor::Device::CPU;  // captured at load
+    // Same single-owner discipline as Whisper: one async transcribe in flight.
+    std::atomic<bool> busy{false};
+};
+
+// Parakeet's tokenizer is a HF tokenizer.json SentencePiece unigram — the
+// brolm::t5::Tokenizer parses that format and its decode() skips out-of-vocab
+// ids, which is exactly what an ASR id stream (no blank/pad) needs.
+struct ParakeetTokenizerWrapper {
+    std::unique_ptr<brolm::t5::Tokenizer> tok;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -350,6 +368,57 @@ static void registerTokenizerClass(JSContext* ctx) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// ParakeetTokenizer methods
+// ═══════════════════════════════════════════════════════════════════════════
+
+static ParakeetTokenizerWrapper* ptokSelf(JSContext* ctx, JSValueConst this_val) {
+    return qjsbind::unwrap<ParakeetTokenizerWrapper>(ctx, this_val);
+}
+
+// tokenize(text) -> Int32Array — unigram pieces only, no eos/padding.
+static JSValue js_ptok_tokenize(JSContext* ctx, JSValueConst this_val,
+                                int argc, JSValueConst* argv) {
+    auto* w = ptokSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "tokenize: not a ParakeetTokenizer");
+    std::string text;
+    if (argc < 1 || !argStr(ctx, argv[0], text))
+        return JS_ThrowTypeError(ctx, "tokenize(text): text required");
+    try {
+        auto ids = w->tok->tokenize(text);
+        return qjsbind::make_int32_array(ctx, ids);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "tokenize: %s", e.what());
+    }
+}
+
+// decode(ids) -> string — ids outside the vocab (blank/pad) are skipped, so
+// the raw Parakeet id stream decodes directly.
+static JSValue js_ptok_decode(JSContext* ctx, JSValueConst this_val,
+                              int argc, JSValueConst* argv) {
+    auto* w = ptokSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "decode: not a ParakeetTokenizer");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "decode(ids): ids required");
+    auto ids = readIdArray(ctx, argv[0]);
+    try {
+        return JS_NewString(ctx, w->tok->decode(ids).c_str());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "decode: %s", e.what());
+    }
+}
+
+static void registerParakeetTokenizerClass(JSContext* ctx) {
+    qjsbind::Class<ParakeetTokenizerWrapper>(ctx, "ParakeetTokenizer",
+                                             qjsbind::NoGlobal)
+        .get("vocabCount", [](ParakeetTokenizerWrapper* w) { return (int)w->tok->vocab_count(); })
+        .get("padId",      [](ParakeetTokenizerWrapper* w) { return w->tok->pad_id(); })
+        .get("eosId",      [](ParakeetTokenizerWrapper* w) { return w->tok->eos_id(); })
+        .get("unkId",      [](ParakeetTokenizerWrapper* w) { return w->tok->unk_id(); })
+        .method_raw("tokenize", js_ptok_tokenize, 1)
+        .method_raw("decode",   js_ptok_decode,   1);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Whisper methods
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -431,6 +500,83 @@ static void registerWhisperClass(JSContext* ctx) {
         .get("eosTokenId",          [](WhisperWrapper* w) { return w->whisper->config().eos_token_id; })
         .get("decoderStartTokenId", [](WhisperWrapper* w) { return w->whisper->config().decoder_start_token_id; })
         .method_raw("transcribe", js_whisper_transcribe, 3);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Parakeet methods
+// ═══════════════════════════════════════════════════════════════════════════
+
+static ParakeetWrapper* parakeetSelf(JSContext* ctx, JSValueConst this_val) {
+    return qjsbind::unwrap<ParakeetWrapper>(ctx, this_val);
+}
+
+// { tokenIds: Int32Array, tokenFrames: Int32Array } — tokenFrames[i] is the
+// encoder-frame index token i was emitted at; * frameSeconds for a start time.
+static JSValue makeParakeetResult(JSContext* c,
+                                  const std::vector<int32_t>& ids,
+                                  const std::vector<int32_t>& frames) {
+    JSValue obj = JS_NewObject(c);
+    JS_SetPropertyStr(c, obj, "tokenIds",    qjsbind::make_int32_array(c, ids));
+    JS_SetPropertyStr(c, obj, "tokenFrames", qjsbind::make_int32_array(c, frames));
+    return obj;
+}
+
+// transcribe(audio, opts?) -> { tokenIds, tokenFrames }
+//   audio: Float32Array @ 16 kHz, OR { samples, sampleRate } object. Parakeet
+//          is unconditional — no prompt.
+//   opts.maxNewTokens: cap on emitted tokens (0 = decode the whole clip).
+//   opts.onToken(id):  invoked once per emitted token, in order, synchronously
+//                      on this thread — for live partial decode.
+static JSValue js_parakeet_transcribe(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv) {
+    auto* w = parakeetSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "transcribe: not a Parakeet");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "transcribe(audio, opts?): audio required");
+
+    brosoundml::AudioBuffer audio;
+    std::string err;
+    if (!readAudioBuffer(ctx, argv[0], audio, err))
+        return JS_ThrowTypeError(ctx, "transcribe: %s", err.c_str());
+
+    brosoundml::Parakeet::TranscribeOptions opts;
+    JSValue onToken = JS_UNDEFINED;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        getInt(ctx, argv[1], "maxNewTokens", opts.max_new_tokens);
+        onToken = JS_GetPropertyStr(ctx, argv[1], "onToken");
+    }
+    // Fires synchronously inside transcribe() on this (JS) thread, so it can
+    // call straight back into JS — no handoff needed for the sync path.
+    if (JS_IsFunction(ctx, onToken)) {
+        opts.on_token = [ctx, onToken](int32_t id) {
+            JSValue a = JS_NewInt32(ctx, id);
+            JSValue r = JS_Call(ctx, onToken, JS_UNDEFINED, 1, &a);
+            if (JS_IsException(r)) JS_FreeValue(ctx, JS_GetException(ctx));
+            JS_FreeValue(ctx, r);
+            JS_FreeValue(ctx, a);
+        };
+    }
+
+    JSValue result;
+    try {
+        brotensor::DeviceScope scope(w->device);
+        auto out = w->parakeet->transcribe(audio, opts);
+        result = makeParakeetResult(ctx, out.token_ids, out.token_frames);
+    } catch (const std::exception& e) {
+        result = JS_ThrowInternalError(ctx, "transcribe: %s", e.what());
+    }
+    JS_FreeValue(ctx, onToken);
+    return result;
+}
+
+static void registerParakeetClass(JSContext* ctx) {
+    qjsbind::Class<ParakeetWrapper>(ctx, "Parakeet", qjsbind::NoGlobal)
+        .get("loaded",       [](ParakeetWrapper* w) { return w->parakeet->loaded(); })
+        .get("sampleRate",   [](ParakeetWrapper* w) { return w->parakeet->config().sample_rate; })
+        .get("vocabSize",    [](ParakeetWrapper* w) { return w->parakeet->config().vocab_size; })
+        .get("blankTokenId", [](ParakeetWrapper* w) { return w->parakeet->config().blank_token_id; })
+        .get("frameSeconds", [](ParakeetWrapper* w) { return w->parakeet->config().frame_seconds(); })
+        .method_raw("transcribe", js_parakeet_transcribe, 2);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -646,8 +792,200 @@ static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
+// Build + load the Parakeet model from a checkpoint dir. Heavy + blocking
+// (file IO + GPU upload); shared by the sync and async loadParakeet paths.
+// Throws on error.
+static void buildParakeet(const std::string& dir, brotensor::Device dev,
+                          std::unique_ptr<ParakeetWrapper>& w_out) {
+    auto w = std::make_unique<ParakeetWrapper>();
+    w->device   = dev;
+    w->parakeet = std::make_unique<brosoundml::Parakeet>();
+    {
+        brotensor::DeviceScope scope(dev);
+        w->parakeet->load(dir, dev);
+    }
+    std::fprintf(stderr, "[INFO] [stt] Parakeet loaded on %s\n", deviceName(dev));
+    w_out = std::move(w);
+}
+
+// State for an async loadParakeet — same shape as WhisperLoadState.
+struct ParakeetLoadState {
+    std::string                      dir;
+    brotensor::Device                dev = brotensor::Device::CPU;
+    std::unique_ptr<ParakeetWrapper> w;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.stt.loadParakeet(modelDir, opts?) -> Parakeet         (sync)
+//                                       -> AsyncHandle      (async, if opts.onReady)
+//   modelDir contains config.json + model.safetensors (HF Parakeet-TDT
+//   checkpoint, e.g. nvidia/parakeet-tdt-0.6b-v3).
+//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
+//   opts.onReady(parakeet) / opts.onError(message): when onReady is a function
+//   the load runs on a background thread and these fire on the JS thread.
+static JSValue js_loadParakeet(JSContext* ctx, JSValueConst,
+                               int argc, JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadParakeet(modelDir, opts?): path required");
+
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    if (argc >= 2) {
+        std::string err;
+        if (!parseDeviceOpt(ctx, argv[1], dev, err))
+            return JS_ThrowTypeError(ctx, "loadParakeet: %s", err.c_str());
+    }
+
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<ParakeetWrapper> w;
+            buildParakeet(dir, dev, w);
+            return qjsbind::wrap<ParakeetWrapper>(ctx, w.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadParakeet: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<ParakeetLoadState>();
+    ls->dir      = dir;
+    ls->dev      = dev;
+    ls->hasReady = true;
+    ls->onReady  = JS_DupValue(ctx, onReady);
+    ls->hasError = JS_IsFunction(ctx, onError);
+    ls->onError  = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildParakeet(ls->dir, ls->dev, ls->w);  // throws -> error
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->w) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadParakeet failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<ParakeetWrapper>(c, ls->w.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// Build the SentencePiece tokenizer from a HF tokenizer.json. Cheap relative
+// to the model, but the async path keeps the loader API uniform.
+static void buildParakeetTokenizer(const std::string& path,
+                                   std::unique_ptr<ParakeetTokenizerWrapper>& tw_out) {
+    auto tw = std::make_unique<ParakeetTokenizerWrapper>();
+    tw->tok = std::make_unique<brolm::t5::Tokenizer>(
+        brolm::t5::Tokenizer::load(path));
+    tw_out = std::move(tw);
+}
+
+// State for an async loadParakeetTokenizer.
+struct ParakeetTokLoadState {
+    std::string                               path;
+    std::unique_ptr<ParakeetTokenizerWrapper> tw;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.stt.loadParakeetTokenizer(tokenizerJsonPath, opts?)
+//   -> ParakeetTokenizer  (sync)
+//   -> AsyncHandle        (async, if opts.onReady)
+//   tokenizerJsonPath: the HF tokenizer.json beside the model checkpoint.
+static JSValue js_loadParakeetTokenizer(JSContext* ctx, JSValueConst,
+                                        int argc, JSValueConst* argv) {
+    std::string path;
+    if (argc < 1 || !argStr(ctx, argv[0], path))
+        return JS_ThrowTypeError(ctx,
+            "loadParakeetTokenizer(tokenizerJsonPath, opts?): path required");
+
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<ParakeetTokenizerWrapper> tw;
+            buildParakeetTokenizer(path, tw);
+            return qjsbind::wrap<ParakeetTokenizerWrapper>(ctx, tw.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadParakeetTokenizer: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<ParakeetTokLoadState>();
+    ls->path     = path;
+    ls->hasReady = true;
+    ls->onReady  = JS_DupValue(ctx, onReady);
+    ls->hasError = JS_IsFunction(ctx, onError);
+    ls->onError  = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildParakeetTokenizer(ls->path, ls->tw);  // throws -> error
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->tw) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty()
+                                                ? "loadParakeetTokenizer failed"
+                                                : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<ParakeetTokenizerWrapper>(c, ls->tw.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Async transcription — bro.stt.transcribe(whisper, audio, promptIds, opts)
+//                       bro.stt.transcribe(parakeet, audio, opts)
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // Runs Whisper's autoregressive decode on a background thread via the async-job
@@ -683,14 +1021,133 @@ struct SttJob {
     size_t                  drained = 0;
 };
 
+// Shared between the work thread (sole writer of the result vectors) and the
+// JS thread (sole reader / caller of onDone). Held by shared_ptr. Same SPSC
+// token handoff as SttJob.
+struct ParakeetJob {
+    brosoundml::AudioBuffer audio;
+    int                     maxNew = 0;
+    std::vector<int32_t>    token_ids;     // filled by work()
+    std::vector<int32_t>    token_frames;  // filled by work()
+    JSValue                 onDone      = JS_UNDEFINED;
+    JSValue                 onToken     = JS_UNDEFINED;
+    JSValue                 parakeetRef = JS_UNDEFINED;
+    bool                    hasOnDone   = false;
+    bool                    hasOnToken  = false;
+    std::vector<int32_t>    tokenSlots;
+    std::atomic<size_t>     produced{0};
+    size_t                  drained = 0;
+};
+
+// bro.stt.transcribe(parakeet, audio, opts?) — async Parakeet decode on a
+// background thread. Mirrors the Whisper path below: real cancellation (the
+// TDT loop polls the flag once per encoder frame), SPSC onToken streaming,
+// onDone(result, info) with result = { tokenIds, tokenFrames }.
+static JSValue js_stt_transcribe_parakeet(JSContext* ctx, ParakeetWrapper* w,
+                                          int argc, JSValueConst* argv) {
+    auto job = std::make_shared<ParakeetJob>();
+    std::string err;
+    if (!readAudioBuffer(ctx, argv[1], job->audio, err))
+        return JS_ThrowTypeError(ctx, "transcribe: %s", err.c_str());
+
+    JSValue onDone = JS_UNDEFINED, onToken = JS_UNDEFINED;
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        getInt(ctx, argv[2], "maxNewTokens", job->maxNew);
+        onDone  = JS_GetPropertyStr(ctx, argv[2], "onDone");
+        onToken = JS_GetPropertyStr(ctx, argv[2], "onToken");
+    }
+
+    // Claim the model for this transcription (single-owner; one in flight).
+    bool expected = false;
+    if (!w->busy.compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onDone);
+        JS_FreeValue(ctx, onToken);
+        return JS_ThrowInternalError(ctx,
+            "transcribe: an operation is already in flight on this model");
+    }
+
+    job->hasOnDone   = JS_IsFunction(ctx, onDone);
+    job->onDone      = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->hasOnToken  = JS_IsFunction(ctx, onToken);
+    job->onToken     = job->hasOnToken ? JS_DupValue(ctx, onToken) : JS_UNDEFINED;
+    job->parakeetRef = JS_DupValue(ctx, argv[0]);  // keep the model alive
+    JS_FreeValue(ctx, onDone);
+    JS_FreeValue(ctx, onToken);
+    if (job->hasOnToken) job->tokenSlots.resize(1u << 16);
+
+    ParakeetWrapper* mw = w;
+
+    auto work = [job, mw](const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(mw->device);
+        brosoundml::Parakeet::TranscribeOptions opts;
+        opts.max_new_tokens = job->maxNew;
+        opts.cancel = [&cancel] { return cancel.load(std::memory_order_acquire); };
+        if (job->hasOnToken) {
+            opts.on_token = [job](int32_t id) {
+                const size_t idx = job->produced.load(std::memory_order_relaxed);
+                if (idx >= job->tokenSlots.size()) return;   // bound guard
+                job->tokenSlots[idx] = id;
+                job->produced.store(idx + 1, std::memory_order_release);
+            };
+        }
+        auto out = mw->parakeet->transcribe(job->audio, opts);
+        job->token_ids    = std::move(out.token_ids);
+        job->token_frames = std::move(out.token_frames);
+    };
+
+    auto poll = [job](JSContext* c) {
+        if (!job->hasOnToken) return;
+        const size_t n = job->produced.load(std::memory_order_acquire);
+        while (job->drained < n) {
+            JSValue a = JS_NewInt32(c, job->tokenSlots[job->drained]);
+            JSValue r = JS_Call(c, job->onToken, JS_UNDEFINED, 1, &a);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, a);
+            job->drained++;
+        }
+    };
+
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        if (job->hasOnDone) {
+            JSValue res  = makeParakeetResult(c, job->token_ids, job->token_frames);
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { res, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, res);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
+        if (job->hasOnToken) JS_FreeValue(c, job->onToken);
+        JS_FreeValue(c, job->parakeetRef);
+        mw->busy.store(false, std::memory_order_release);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
+}
+
 static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
                                  int argc, JSValueConst* argv) {
+    if (argc < 2)
+        return JS_ThrowTypeError(ctx,
+            "transcribe(model, audio, ...): model and audio required");
+
+    // Parakeet path — no prompt: transcribe(parakeet, audio, opts?).
+    if (auto* p = qjsbind::unwrap<ParakeetWrapper>(ctx, argv[0]))
+        return js_stt_transcribe_parakeet(ctx, p, argc, argv);
+
     if (argc < 3)
         return JS_ThrowTypeError(ctx,
             "transcribe(whisper, audio, promptIds, opts?): whisper, audio and "
             "promptIds required");
     auto* w = qjsbind::unwrap<WhisperWrapper>(ctx, argv[0]);
-    if (!w) return JS_ThrowTypeError(ctx, "transcribe: arg 0 must be a Whisper");
+    if (!w) return JS_ThrowTypeError(ctx,
+        "transcribe: arg 0 must be a Whisper or Parakeet");
 
     auto job = std::make_shared<SttJob>();
     std::string err;
@@ -807,6 +1264,8 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
 void installSttBindings(JSContext* ctx) {
     registerTokenizerClass(ctx);
     registerWhisperClass(ctx);
+    registerParakeetTokenizerClass(ctx);
+    registerParakeetClass(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
@@ -823,6 +1282,10 @@ void installSttBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadWhisper, "loadWhisper", 2));
     JS_SetPropertyStr(ctx, stt, "loadTokenizer",
         JS_NewCFunction(ctx, js_loadTokenizer, "loadTokenizer", 1));
+    JS_SetPropertyStr(ctx, stt, "loadParakeet",
+        JS_NewCFunction(ctx, js_loadParakeet, "loadParakeet", 2));
+    JS_SetPropertyStr(ctx, stt, "loadParakeetTokenizer",
+        JS_NewCFunction(ctx, js_loadParakeetTokenizer, "loadParakeetTokenizer", 2));
     JS_SetPropertyStr(ctx, stt, "transcribe",
         JS_NewCFunction(ctx, js_stt_transcribe, "transcribe", 4));
     JS_SetPropertyStr(ctx, broObj, "stt", stt);

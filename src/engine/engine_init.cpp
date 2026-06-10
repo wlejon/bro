@@ -214,8 +214,8 @@ Engine::Engine(const EngineConfig& config)
     // forward on a CPU-only build.
     js::installLmBindings(jsRuntime_->getContext());
 
-    // bro.stt (Whisper STT via brosoundml + brolm siblings). CPU-only today;
-    // audio must be 16 kHz mono FP32 — callers resample upstream.
+    // bro.stt (Whisper + Parakeet STT via brosoundml + brolm siblings). GPU by
+    // default; audio must be 16 kHz mono FP32 — callers resample upstream.
     js::installSttBindings(jsRuntime_->getContext());
 
     // bro.tts (Kokoro-82M TTS via brosoundml sibling). CPU-only today; emits
