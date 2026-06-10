@@ -9,10 +9,11 @@
 // Threading model:
 //   - bro.mic.start() registers a broaudio MicTap (targetRate, chunkFrames,
 //     optional AGC). broaudio owns the polyphase resampler, the AGC, and the
-//     chunk buffering; the tap callback runs on the audio thread and only
-//     computes peak/RMS over the fixed-size frame and publishes them into a
-//     lock-free SPSC ring (single producer = the audio thread or, in headless
-//     feed mode, the JS thread; single consumer = the JS main thread).
+//     chunk buffering; the tap callback runs on the audio thread and computes
+//     peak/RMS over the fixed-size frame — plus, with opts.samples, a copy of
+//     the frame's raw PCM — and publishes them into a lock-free SPSC ring
+//     (single producer = the audio thread or, in headless feed mode, the JS
+//     thread; single consumer = the JS main thread).
 //   - tickMic() drains the ring once per frame and fires onChunk per new chunk.
 //     No JS runs on the audio thread.
 //   - bro.mic.levels() / stats() read the ring + tap stats synchronously, so a
@@ -30,12 +31,16 @@
 #include <broaudio/engine.h>
 #include <broaudio/mic_tap.h>
 
+#include <qjsbind/qjsbind.h>
+
 #include <quickjs.h>
 
 #include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <vector>
 
 namespace bro::js {
 
@@ -61,6 +66,15 @@ struct MicState {
     std::atomic<uint64_t> writeCount{0};   // total chunks ever published
     std::atomic<uint64_t> dropped{0};      // chunks the drain had to skip
 
+    // Optional raw-PCM delivery (opts.samples). The producer copies each
+    // chunk's samples into sampleRing[slot * chunkFrames] BEFORE the release
+    // store of writeCount, so the same publish that makes peak/rms visible
+    // makes the samples visible — still the one SPSC ring, no extra
+    // synchronization. Sized once at start() (kMicRing * chunkFrames floats;
+    // 2.6 MB at the 160-frame default), never reallocated while live.
+    bool               wantSamples = false;
+    std::vector<float> sampleRing;
+
     uint64_t lastFired = 0;   // main-thread only
 
     bool active = false;
@@ -82,6 +96,9 @@ void shutdownActiveMic() {
     g_mic.dropped.store(0, std::memory_order_relaxed);
     g_mic.lastFired = 0;
     g_mic.chunkFrames = 0;
+    g_mic.wantSamples = false;
+    g_mic.sampleRing.clear();
+    g_mic.sampleRing.shrink_to_fit();
     g_mic.active = false;
 }
 
@@ -121,6 +138,7 @@ JSValue js_start(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     int  targetRate  = 16000;   // 0 = engine native rate (no resampling)
     bool agc         = false;   // meter shows true input level by default
     bool live        = true;    // open the recording device; false = feed-only
+    bool samples     = false;   // deliver each chunk's raw PCM to onChunk
     broaudio::AgcConfig agcCfg;
 
     JSValue onChunkVal = JS_UNDEFINED;
@@ -129,6 +147,7 @@ JSValue js_start(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         getInt(ctx, opts, "targetRate", targetRate);
         getBool(ctx, opts, "agc", agc);
         getBool(ctx, opts, "live", live);
+        getBool(ctx, opts, "samples", samples);
 
         double d;
         if (getNum(ctx, opts, "targetPeak",  d)) agcCfg.targetPeak  = static_cast<float>(d);
@@ -148,6 +167,12 @@ JSValue js_start(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         return JS_ThrowRangeError(ctx,
             "bro.mic.start: chunkFrames and targetRate must be >= 0");
     }
+    if (samples && chunkFrames <= 0) {
+        JS_FreeValue(ctx, onChunkVal);
+        return JS_ThrowRangeError(ctx,
+            "bro.mic.start: opts.samples needs a fixed chunkFrames (> 0) — the "
+            "sample ring is sized once at start");
+    }
 
     // Replace any prior consumer before installing the new one.
     shutdownActiveMic();
@@ -163,6 +188,11 @@ JSValue js_start(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     g_mic.onChunk     = JS_IsFunction(ctx, onChunkVal) ? JS_DupValue(ctx, onChunkVal)
                                                        : JS_UNDEFINED;
     JS_FreeValue(ctx, onChunkVal);
+    g_mic.wantSamples = samples;
+    if (samples) {
+        g_mic.sampleRing.assign(
+            static_cast<size_t>(kMicRing) * static_cast<size_t>(chunkFrames), 0.0f);
+    }
     g_mic.writeCount.store(0, std::memory_order_relaxed);
     g_mic.dropped.store(0, std::memory_order_relaxed);
     g_mic.lastFired = 0;
@@ -184,8 +214,18 @@ JSValue js_start(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
                 static_cast<int>(peak * 10000.0f), std::memory_order_relaxed);
             g_mic.rmsRingX10000[slot].store(
                 static_cast<int>(rms * 10000.0f), std::memory_order_relaxed);
+            if (g_mic.wantSamples) {
+                const int cf = g_mic.chunkFrames;
+                const int m  = n < cf ? n : cf;
+                float* dst = g_mic.sampleRing.data()
+                           + static_cast<size_t>(slot) * static_cast<size_t>(cf);
+                std::memcpy(dst, samples, static_cast<size_t>(m) * sizeof(float));
+                if (m < cf)  // short tail chunk (flush) — zero-pad
+                    std::memset(dst + m, 0, static_cast<size_t>(cf - m) * sizeof(float));
+            }
             // Publish last — release pairs with the acquire load in tickMic /
-            // levels so the slot writes are visible before the count advances.
+            // levels so the slot writes (peak/rms AND samples) are visible
+            // before the count advances.
             g_mic.writeCount.store(idx + 1, std::memory_order_release);
         });
     if (g_mic.tapId == broaudio::kInvalidMicTapId) {
@@ -205,9 +245,10 @@ JSValue js_start(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     const int micRate = g_mic.audioEngine->sampleRate();
     const int effRate = targetRate > 0 ? targetRate : micRate;
     std::fprintf(stderr,
-        "[INFO] [mic] started (mic=%d Hz, target=%d Hz%s, chunkFrames=%d, agc=%s, %s)\n",
+        "[INFO] [mic] started (mic=%d Hz, target=%d Hz%s, chunkFrames=%d, agc=%s, %s%s)\n",
         micRate, effRate, (targetRate > 0 && targetRate != micRate) ? ", resampling" : "",
-        chunkFrames, agc ? "on" : "off", live ? "live" : "feed-only");
+        chunkFrames, agc ? "on" : "off", live ? "live" : "feed-only",
+        samples ? ", samples" : "");
     return JS_UNDEFINED;
 }
 
@@ -367,6 +408,17 @@ void tickMic(JSContext* ctx) {
         JS_SetPropertyStr(ctx, o, "index", JS_NewInt64(ctx, static_cast<int64_t>(i)));
         JS_SetPropertyStr(ctx, o, "peak",  JS_NewFloat64(ctx, pk / 10000.0));
         JS_SetPropertyStr(ctx, o, "rms",   JS_NewFloat64(ctx, rms / 10000.0));
+        if (g_mic.wantSamples) {
+            // Copy out of the ring slot (the JS array owns its bytes). Like the
+            // peak/rms reads above, a slot being lapped mid-read is possible
+            // only in a pathological backlog where chunks are already being
+            // dropped — the copy is then stale, never torn memory.
+            const float* src = g_mic.sampleRing.data()
+                + static_cast<size_t>(slot) * static_cast<size_t>(g_mic.chunkFrames);
+            JS_SetPropertyStr(ctx, o, "samples",
+                qjsbind::make_float32_array(ctx, src,
+                    static_cast<size_t>(g_mic.chunkFrames)));
+        }
         JSValue argv[1] = { o };
         JSValue r = JS_Call(ctx, g_mic.onChunk, JS_UNDEFINED, 1, argv);
         if (JS_IsException(r)) {

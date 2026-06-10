@@ -106,4 +106,43 @@ function ok(name) { passed++; console.log('  ok - ' + name); }
   ok('feed() guards against use without an active tap');
 }
 
-console.log(`\nbro.mic: ${passed}/4 checks passed`);
+// ── 5. samples mode delivers each chunk's raw PCM ────────────────────────────
+// onChunk gains c.samples (Float32Array of chunkFrames). Concatenating the
+// chunks reconstructs the fed signal — the capture path for recording / STT.
+{
+  const CHUNK = 441;            // engine rate, no resampler: exact passthrough
+  const got = [];
+  bro.mic.start({
+    chunkFrames: CHUNK, targetRate: 0, agc: false, live: false, samples: true,
+    onChunk: (c) => got.push(c),
+  });
+
+  const sig = tone(0.25, 440, ENGINE_RATE, 0.5);
+  bro.mic.feed(sig, ENGINE_RATE);
+  sleep(50);                     // tick the engine so the drain fires onChunk
+
+  const expected = Math.floor(sig.length / CHUNK);
+  assert(got.length === expected, `onChunk fired ${got.length}, want ${expected}`);
+  let off = 0, maxErr = 0;
+  for (const c of got) {
+    assert(c.samples instanceof Float32Array, 'chunk.samples is a Float32Array');
+    assert(c.samples.length === CHUNK, 'chunk.samples has chunkFrames samples');
+    for (let i = 0; i < CHUNK; i++) {
+      const e = Math.abs(c.samples[i] - sig[off + i]);
+      if (e > maxErr) maxErr = e;
+    }
+    off += CHUNK;
+  }
+  assert(maxErr < 1e-6, `reassembled PCM differs from fed signal (maxErr ${maxErr})`);
+
+  // samples mode requires fixed-size chunks.
+  let threw = false;
+  try { bro.mic.start({ chunkFrames: 0, samples: true, live: false }); }
+  catch (e) { threw = true; }
+  assert(threw, 'samples with chunkFrames:0 should throw');
+
+  bro.mic.stop();
+  ok('samples mode delivers per-chunk PCM that reassembles the input');
+}
+
+console.log(`\nbro.mic: ${passed}/5 checks passed`);

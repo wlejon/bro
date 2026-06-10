@@ -45,10 +45,19 @@
  * @param {boolean}  [opts.live=true]       - Open the recording device. Set
  *                                            false for headless/offline use and
  *                                            drive the tap with bro.mic.feed().
+ * @param {boolean}  [opts.samples=false]   - Deliver each chunk's raw PCM:
+ *                                            onChunk's argument gains a
+ *                                            `samples` Float32Array
+ *                                            (chunkFrames mono samples at
+ *                                            targetRate). Requires a fixed
+ *                                            chunkFrames (> 0). This is the
+ *                                            capture path for recording /
+ *                                            STT consumers — concatenate the
+ *                                            chunks for the utterance.
  * @param {Function} [opts.onChunk]         - Called per chunk on the JS thread
- *                                            with { index, peak, rms }. index is
- *                                            the absolute chunk counter (gaps
- *                                            indicate dropped chunks).
+ *                                            with { index, peak, rms, samples? }.
+ *                                            index is the absolute chunk counter
+ *                                            (gaps indicate dropped chunks).
  * @param {number}   [opts.targetPeak]      - AGC: target peak (default 0.95).
  * @param {number}   [opts.halfLifeSec]     - AGC: running-peak decay half-life.
  * @param {number}   [opts.noiseGate]       - AGC: chunks below this don't raise
