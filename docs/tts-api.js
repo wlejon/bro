@@ -284,6 +284,24 @@ const qwen = bro.tts.loadQwen('../brosoundml/weights/qwen-tts/0.6B-customvoice')
  * @param {number} [opts.topP=1]   - nucleus cap when sampling (1 = off).
  * @param {number} [opts.seed=0]   - RNG seed; a fixed (temperature, seed) reproduces
  *        the exact utterance, different seeds give different takes.
+ * @param {number} [opts.repetitionPenalty=1.05] - >1 discourages the AR Talker's
+ *        droning / looping (the upstream default policy).
+ * @param {Object} [opts.logitBias] - { codeId: delta, ... } additive bias on the
+ *        codebook-0 logits before sampling (delta -Infinity forbids a code). Keys
+ *        are opaque RVQ code ids — e.g. read one off the 'codes' trace, row 0.
+ * @param {number} [opts.adaptive=0] - >0 scales the codebook-0 temperature per
+ *        frame by how unsure the model was that frame — hotter only where it hedged.
+ * @param {Float32Array} [opts.voiceSteer] - Talker-hidden-width additive offset on
+ *        the prefill speaker-slot row: the emotion / masc-fem direction-add. Works on
+ *        any variant with a speaker slot — CustomVoice presets AND Base x-vectors
+ *        alike (on the 0.6B checkpoints the slot width equals embedSpeaker's 1024, so
+ *        an x-vector-space direction is addable to a preset slot). Composes with the
+ *        slot source: slot = (speakerVector || preset/xvec) + voiceSteer.
+ * @param {Float32Array} [opts.speakerVector] - Talker-hidden-width vector that
+ *        REPLACES the speaker slot with a designed voice (e.g. a voice-basis point
+ *        rendered through a CustomVoice Talker instead of a named preset). Wrong width
+ *        throws. The off-thread async synthesize takes opts.xvector for the same intent
+ *        on the Base variant; speakerVector is the in-slot replacement that works on any.
  * @param {boolean} [opts.trace=false] - also return `stages` — the AR trace for
  *        visualization ("watch it take shape"). Each stage is { name, h, w, data:
  *        Float32Array } (h×w row-major), same shape as Kokoro's trace:
@@ -420,6 +438,8 @@ const xvec = enc.embedSpeaker(monoSamples, { sampleRate: 24000 });  // Float32Ar
  *        opts.trace + sampling like the speaker path.
  * @param {string} [opts.language='english']
  * @param {number} [opts.temperature] / [opts.topK] / [opts.topP] / [opts.seed] - sampling.
+ *        The full Talker-steering surface from the sync synthesize() also applies here:
+ *        opts.repetitionPenalty / logitBias / adaptive / voiceSteer / speakerVector.
  * @param {boolean} [opts.trace] - also return `stages` (codes raster + c0_confidence).
  * @param {function} [opts.onDone] - onDone(result, info) on the JS thread, where
  *        result = { samples: Float32Array, sampleRate: number } and
@@ -476,6 +496,8 @@ const qhandle = bro.tts.synthesize(qwen, 'Hello there.', {
  *        chunk (smaller = lower first-audio latency, more onChunk calls).
  * @param {string}   [opts.speaker] / [opts.language] / [opts.instruct]  - Qwen, as synthesize().
  * @param {number}   [opts.temperature] / [opts.topK] / [opts.topP] / [opts.seed] - Qwen sampling.
+ *        The Talker-steering knobs from synthesize() (repetitionPenalty / logitBias /
+ *        adaptive / voiceSteer / speakerVector) apply to the streamed path too.
  * @returns {AsyncHandle} - { cancel(): void }. Throws if another op is in flight on
  *          this model, or if `model` is neither a Kokoro nor a QwenTts.
  */
