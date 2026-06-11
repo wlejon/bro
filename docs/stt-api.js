@@ -1,7 +1,7 @@
 /**
- * bro.stt — Speech-to-text (Whisper, Parakeet)
+ * bro.stt — Speech-to-text (Whisper, Parakeet, Qwen3-ASR)
  *
- * Transcribes 16 kHz mono audio to text. Two model families:
+ * Transcribes 16 kHz mono audio to text. Three model families:
  *   - Whisper: encoder/decoder transformer. Prompted (language/task), 30 s
  *     windows with optional sequential long-form decode.
  *   - Parakeet (NVIDIA Parakeet-TDT-0.6B-v3): FastConformer encoder + TDT
@@ -9,16 +9,23 @@
  *     languages), single-pass over the whole clip, and reports per-token
  *     encoder-frame positions for word timestamps. Faster than Whisper at
  *     the same size thanks to TDT frame-skipping.
+ *   - Qwen3-ASR (Qwen/Qwen3-ASR-0.6B / -1.7B): AuT audio encoder + Qwen3
+ *     text decoder. Unconditional, 52 languages + language ID, optional
+ *     context biasing (names / domain terms), and an encoder-only streaming
+ *     latent tap (loadQwenAsrStream) for incremental mic-feed pipelines.
  *
  * Backed by brosoundml (audio-ML inference) on top of brotensor. Defaults to
  * CUDA; pass { device: 'cpu' } to force the CPU backend.
  *
- * A transcription needs two pieces: the model (loadWhisper / loadParakeet)
- * and its tokenizer (loadTokenizer / loadParakeetTokenizer) for decoding the
- * output ids back to text (and, for Whisper, building the decoder prompt).
+ * A transcription needs two pieces: the model (loadWhisper / loadParakeet /
+ * loadQwenAsr) and its tokenizer for decoding the output ids back to text
+ * (and, for Whisper, building the decoder prompt). Whisper and Parakeet have
+ * dedicated tokenizer loaders (loadTokenizer / loadParakeetTokenizer);
+ * Qwen3-ASR uses the Qwen BPE tokenizer already bound as bro.lm.loadTokenizer
+ * (vocab.json + merges.txt sit in the model dir).
  *
  * Audio is supplied as { samples: Float32Array, sampleRate: number } in the
- * [-1, 1] range. Both models expect 16 kHz mono — resample/downmix before
+ * [-1, 1] range. All models expect 16 kHz mono — resample/downmix before
  * calling (see tests/smoke_voice_pipeline.js for a WAV reader that does this).
  */
 
@@ -256,3 +263,141 @@ bro.stt.transcribe(parakeet, audio, {
         console.log(ptok.decode(result.tokenIds).trim());
     },
 });
+
+
+// ── Qwen3-ASR ───────────────────────────────────────────────────────────────
+
+/**
+ * Load a Qwen3-ASR model from a weights directory (config.json +
+ * model.safetensors — the HF checkpoint layout, e.g. Qwen/Qwen3-ASR-0.6B).
+ *
+ * @param {string} dir            - Qwen3-ASR weights directory.
+ * @param {Object} [opts]
+ * @param {string} [opts.device='cuda'] - 'cuda' or 'cpu'.
+ * @param {function} [opts.onReady]     - async load: onReady(asr).
+ * @param {function} [opts.onError]     - async load: onError(message).
+ * @returns {QwenAsrModel|AsyncHandle}  - same sync/async convention as
+ *          loadWhisper.
+ */
+const asr = bro.stt.loadQwenAsr('../brosoundml/weights/qwen-asr/0.6B');
+// asr.sampleRate === 16000
+// asr.latentDim  === 1024   (decoder hidden width)
+// asr.latentHz   === 12.5   (encoder latents per second)
+
+// The Qwen BPE tokenizer files live in the model dir; bro.lm's tokenizer
+// loader reads them. encode() also produces contextIds for biasing.
+const qtok = bro.lm.loadTokenizer({
+    vocabPath:  '../brosoundml/weights/qwen-asr/0.6B/vocab.json',
+    mergesPath: '../brosoundml/weights/qwen-asr/0.6B/merges.txt',
+});
+
+/**
+ * QwenAsrModel
+ *
+ * @property {boolean} loaded
+ * @property {number}  sampleRate - 16000 (fixed).
+ * @property {number}  latentDim  - encoder latent width (= decoder hidden).
+ * @property {number}  latentHz   - encoder latents per second (12.5).
+ * @property {number}  vocabSize
+ * @property {number}  asrTextId  - the <asr_text> marker id (151704).
+ *
+ * @method transcribe(audio, opts) → Int32Array
+ *         Run the full pipeline (mel → AuT encoder → autoregressive Qwen3
+ *         decode) and return the GENERATED token ids only. The stream is the
+ *         model's native "language <Language><asr_text>transcript" format —
+ *         split the ID STREAM on asrTextId, then decode each side with the
+ *         Qwen tokenizer. (The marker detokenizes to an empty string, so a
+ *         text-level split does not work.)
+ *
+ *         audio: Float32Array @ 16 kHz, or { samples, sampleRate } (16 kHz mono)
+ *         opts:  { maxNewTokens=0 (0 = 1024), contextIds, onToken }
+ *
+ * opts.contextIds (Int32Array from qtok.encode(text)) biases recognition
+ *   toward names / domain terms — the ids land in the chat template's system
+ *   block.
+ * opts.onToken(id) fires once per decoded token, in order, synchronously on
+ *   this thread — detokenize incrementally for a live partial transcript.
+ *
+ * @method encode(audio) → { latents, frames, latentDim, latentHz }
+ *         Latent tap: AuT encoder + projector only (no decoder). `latents` is
+ *         a row-major (frames, latentDim) Float32Array on the host — the rows
+ *         transcribe() splices over the <|audio_pad|> block. For bridge
+ *         pipelines that drive a separate decoder.
+ */
+const asrIds = Array.from(
+    asr.transcribe(audio, { contextIds: qtok.encode('Jonny Brannum') }));
+const cut = asrIds.indexOf(asr.asrTextId);
+console.log(qtok.decode(asrIds.slice(cut + 1)).trim());   // transcript
+console.log(qtok.decode(asrIds.slice(0, cut)).trim());    // "language English"
+
+/**
+ * bro.stt.transcribe(asr, audio, opts) → AsyncHandle
+ *
+ * Async Qwen3-ASR decode on a background thread — same machinery as the
+ * Whisper/Parakeet forms (the first argument selects the model family; Qwen3-ASR
+ * takes no promptIds). opts.onToken streams tokens; handle.cancel() is real
+ * (the greedy loop polls once per token).
+ *
+ * @param {QwenAsrModel} asr               - from loadQwenAsr().
+ * @param {Float32Array|{samples,sampleRate}} audio - 16 kHz mono.
+ * @param {Object} [opts]
+ * @param {number}   [opts.maxNewTokens=0] - cap on decoded tokens (0 = 1024).
+ * @param {Int32Array|number[]} [opts.contextIds] - context biasing ids.
+ * @param {function} [opts.onToken]        - onToken(id) per decoded token.
+ * @param {function} [opts.onDone]         - onDone(ids, info) on the JS thread:
+ *        ids  = Int32Array of generated token ids.
+ *        info = { cancelled: boolean, error?: string }.
+ * @returns {AsyncHandle}  - { cancel(): void }. Rejects (throws) if another
+ *          transcribe() is already in flight on this model.
+ */
+bro.stt.transcribe(asr, audio, {
+    onDone: (ids, info) => {
+        if (info.cancelled || info.error) return;
+        const a = Array.from(ids);
+        console.log(qtok.decode(a.slice(a.indexOf(asr.asrTextId) + 1)).trim());
+    },
+});
+
+/**
+ * Load the encoder-only streaming tap (no decoder weights). Feed mic chunks;
+ * latent rows finalize per block (~blockChunks seconds) and never change —
+ * the encoder's attention is windowed within a block, so nothing is
+ * re-encoded. A single-block clip streams bit-identically to asr.encode().
+ *
+ * @param {string} dir            - same Qwen3-ASR weights directory.
+ * @param {Object} [opts]
+ * @param {number} [opts.blockChunks=1] - block size in ~1 s conv-chunks
+ *        (clamped to the model's attention-window cap; 1 = lowest latency,
+ *        ~13 latents per block).
+ * @param {string} [opts.device='cuda'] - 'cuda' or 'cpu'.
+ * @param {function} [opts.onReady]     - async load: onReady(stream).
+ * @param {function} [opts.onError]     - async load: onError(message).
+ * @returns {QwenAsrStream|AsyncHandle}
+ *
+ * QwenAsrStream:
+ * @property {boolean} loaded
+ * @property {number}  sampleRate  - 16000 (fixed).
+ * @property {number}  latentDim
+ * @property {number}  latentHz
+ * @property {number}  frames      - total finalized latent rows so far.
+ * @property {number}  blockChunks - block size in conv-chunks.
+ * @property {number}  blockFrames - mel frames per full block.
+ *
+ * @method feed(samples) → number
+ *         Feed mono 16 kHz Float32Array samples (e.g. a bro.mic chunk).
+ *         Returns the number of newly finalized latent rows (0 if no block
+ *         boundary was crossed).
+ * @method finish() → number
+ *         Flush the trailing partial block as a final, shorter block.
+ * @method latents(startFrame=0, count=rest) → Float32Array
+ *         Copy of finalized rows [startFrame, startFrame+count), row-major
+ *         (count, latentDim).
+ */
+const stream = bro.stt.loadQwenAsrStream('../brosoundml/weights/qwen-asr/0.6B');
+bro.mic.start({ chunkFrames: 160, onChunk: (chunk) => {
+    const fresh = stream.feed(chunk.samples);
+    if (fresh > 0) {
+        const rows = stream.latents(stream.frames - fresh, fresh);
+        // hand `rows` to a downstream decoder bridge
+    }
+}});

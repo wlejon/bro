@@ -1,17 +1,21 @@
-// JS bindings for brosoundml speech-to-text inference — Whisper and Parakeet.
+// JS bindings for brosoundml speech-to-text inference — Whisper, Parakeet,
+// and Qwen3-ASR.
 //
 // Installed onto bro.stt.* by installSttBindings(). The models (Whisper:
 // encoder + KV-cached decoder, ~150 MB - ~3 GB; Parakeet-TDT-0.6B-v3:
-// FastConformer encoder + TDT decoder, ~2.4 GB) and their tokenizers
+// FastConformer encoder + TDT decoder, ~2.4 GB; Qwen3-ASR-0.6B/-1.7B: AuT
+// encoder + Qwen3 decoder, 52-language + language ID) and their tokenizers
 // (brolm::whisper::Tokenizer / brolm::t5::Tokenizer SentencePiece) live
-// behind opaque qjsbind handles.
+// behind opaque qjsbind handles. Qwen3-ASR detokenizes with the Qwen BPE
+// tokenizer already bound as bro.lm.loadTokenizer.
 //
-// Both models run on GPU by default — the loaders place them on CUDA when a
+// All models run on GPU by default — the loaders place them on CUDA when a
 // GPU backend is available (pass opts.device 'cpu' to force CPU). transcribe()
 // takes 16 kHz mono FP32 audio and returns the raw token id stream; the caller
 // detokenizes. Whisper needs a decoder prompt (tokenizer.buildPrompt());
 // Parakeet is unconditional and additionally reports per-token encoder-frame
-// positions for word timestamps.
+// positions for word timestamps; Qwen3-ASR is unconditional with optional
+// context biasing and a streaming encoder tap (loadQwenAsrStream).
 
 #include "js/stt_bindings.h"
 #include "js/async_job.h"
@@ -20,6 +24,7 @@
 
 #include <brosoundml/whisper.h>
 #include <brosoundml/parakeet.h>
+#include <brosoundml/qwen_asr.h>
 #include <brosoundml/audio.h>
 
 #include <brolm/whisper_tokenizer.h>
@@ -68,6 +73,23 @@ struct ParakeetWrapper {
 // ids, which is exactly what an ASR id stream (no blank/pad) needs.
 struct ParakeetTokenizerWrapper {
     std::unique_ptr<brolm::t5::Tokenizer> tok;
+};
+
+// Qwen3-ASR detokenizes with the Qwen BPE tokenizer already bound as
+// bro.lm.loadTokenizer (vocab.json + merges.txt sit in the model dir), so no
+// new tokenizer wrapper here — brosoundml emits and consumes raw id streams.
+struct QwenAsrWrapper {
+    std::unique_ptr<brosoundml::QwenAsr> asr;
+    brotensor::Device device = brotensor::Device::CPU;  // captured at load
+    // Same single-owner discipline as Whisper: one async transcribe in flight.
+    std::atomic<bool> busy{false};
+};
+
+// Encoder-only streaming tap. feed()/finish() run synchronously on the JS
+// thread (one encoder block is ~1 s of audio — cheap on GPU), so no busy flag.
+struct QwenAsrStreamWrapper {
+    std::unique_ptr<brosoundml::QwenAsrStream> stream;
+    brotensor::Device device = brotensor::Device::CPU;  // captured at load
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -580,6 +602,196 @@ static void registerParakeetClass(JSContext* ctx) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// QwenAsr methods
+// ═══════════════════════════════════════════════════════════════════════════
+
+static QwenAsrWrapper* qwenAsrSelf(JSContext* ctx, JSValueConst this_val) {
+    return qjsbind::unwrap<QwenAsrWrapper>(ctx, this_val);
+}
+
+// transcribe(audio, opts?) -> Int32Array (generated ids only)
+//   audio: Float32Array @ 16 kHz, OR { samples, sampleRate } object.
+//   opts.maxNewTokens: cap on the autoregressive loop (0 = 1024).
+//   opts.contextIds:   Int32Array of Qwen BPE ids (bro.lm tokenizer.encode())
+//                      placed in the chat template's system block — biases
+//                      recognition toward names / domain terms.
+//   opts.onToken(id):  invoked once per decoded token, in order, synchronously
+//                      on this thread — for live partial decode.
+// The stream is the model's native "language <Language><asr_text>transcript"
+// format — split the id stream on model.asrTextId, then decode each side
+// with the Qwen tokenizer (the marker detokenizes to an empty string, so a
+// text-level split does not work).
+static JSValue js_qwenasr_transcribe(JSContext* ctx, JSValueConst this_val,
+                                     int argc, JSValueConst* argv) {
+    auto* w = qwenAsrSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "transcribe: not a QwenAsr");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "transcribe(audio, opts?): audio required");
+
+    brosoundml::AudioBuffer audio;
+    std::string err;
+    if (!readAudioBuffer(ctx, argv[0], audio, err))
+        return JS_ThrowTypeError(ctx, "transcribe: %s", err.c_str());
+
+    brosoundml::QwenAsr::TranscribeOptions opts;
+    JSValue onToken = JS_UNDEFINED;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        getInt(ctx, argv[1], "maxNewTokens", opts.max_new_tokens);
+        JSValue cv = JS_GetPropertyStr(ctx, argv[1], "contextIds");
+        if (!JS_IsUndefined(cv) && !JS_IsNull(cv))
+            opts.context_ids = readIdArray(ctx, cv);
+        JS_FreeValue(ctx, cv);
+        onToken = JS_GetPropertyStr(ctx, argv[1], "onToken");
+    }
+    // Fires synchronously inside transcribe() on this (JS) thread, so it can
+    // call straight back into JS — no handoff needed for the sync path.
+    if (JS_IsFunction(ctx, onToken)) {
+        opts.on_token = [ctx, onToken](int32_t id) {
+            JSValue a = JS_NewInt32(ctx, id);
+            JSValue r = JS_Call(ctx, onToken, JS_UNDEFINED, 1, &a);
+            if (JS_IsException(r)) JS_FreeValue(ctx, JS_GetException(ctx));
+            JS_FreeValue(ctx, r);
+            JS_FreeValue(ctx, a);
+        };
+    }
+
+    JSValue result;
+    try {
+        brotensor::DeviceScope scope(w->device);
+        auto out = w->asr->transcribe(audio, opts);
+        result = qjsbind::make_int32_array(ctx, out.token_ids);
+    } catch (const std::exception& e) {
+        result = JS_ThrowInternalError(ctx, "transcribe: %s", e.what());
+    }
+    JS_FreeValue(ctx, onToken);
+    return result;
+}
+
+// encode(audio) -> { latents: Float32Array, frames, latentDim, latentHz }
+//   Latent tap: AuT encoder + projector only (no decoder). `latents` is
+//   row-major (frames, latentDim) on the host — the rows transcribe() splices
+//   over the <|audio_pad|> block, at latentHz rows/second.
+static JSValue js_qwenasr_encode(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv) {
+    auto* w = qwenAsrSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "encode: not a QwenAsr");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "encode(audio): audio required");
+
+    brosoundml::AudioBuffer audio;
+    std::string err;
+    if (!readAudioBuffer(ctx, argv[0], audio, err))
+        return JS_ThrowTypeError(ctx, "encode: %s", err.c_str());
+
+    try {
+        brotensor::DeviceScope scope(w->device);
+        std::vector<float> latents;
+        const int frames = w->asr->encode_to_host(audio, latents);
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "latents",
+                          qjsbind::make_float32_array(ctx, latents));
+        JS_SetPropertyStr(ctx, obj, "frames", JS_NewInt32(ctx, frames));
+        JS_SetPropertyStr(ctx, obj, "latentDim",
+                          JS_NewInt32(ctx, w->asr->config().latent_dim));
+        JS_SetPropertyStr(ctx, obj, "latentHz",
+                          JS_NewFloat64(ctx, w->asr->config().latent_hz));
+        return obj;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "encode: %s", e.what());
+    }
+}
+
+static void registerQwenAsrClass(JSContext* ctx) {
+    qjsbind::Class<QwenAsrWrapper>(ctx, "QwenAsr", qjsbind::NoGlobal)
+        .get("loaded",     [](QwenAsrWrapper* w) { return w->asr->loaded(); })
+        .get("sampleRate", [](QwenAsrWrapper* w) { return w->asr->config().sample_rate; })
+        .get("latentDim",  [](QwenAsrWrapper* w) { return w->asr->config().latent_dim; })
+        .get("latentHz",   [](QwenAsrWrapper* w) { return (double)w->asr->config().latent_hz; })
+        .get("vocabSize",  [](QwenAsrWrapper* w) { return w->asr->config().vocab_size; })
+        .get("asrTextId",  [](QwenAsrWrapper* w) { return w->asr->config().asr_text_token_id; })
+        .method_raw("transcribe", js_qwenasr_transcribe, 2)
+        .method_raw("encode",     js_qwenasr_encode,     1);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// QwenAsrStream methods
+// ═══════════════════════════════════════════════════════════════════════════
+
+static QwenAsrStreamWrapper* qwenAsrStreamSelf(JSContext* ctx,
+                                               JSValueConst this_val) {
+    return qjsbind::unwrap<QwenAsrStreamWrapper>(ctx, this_val);
+}
+
+// feed(samples) -> number of newly finalized latent rows
+//   samples: Float32Array of mono 16 kHz PCM (e.g. a bro.mic chunk). Encodes
+//   every block that completed on this call; 0 if no block boundary crossed.
+static JSValue js_qwenasrstream_feed(JSContext* ctx, JSValueConst this_val,
+                                     int argc, JSValueConst* argv) {
+    auto* w = qwenAsrStreamSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "feed: not a QwenAsrStream");
+    size_t cnt = 0;
+    const float* p = (argc >= 1) ? getFloatArray(ctx, argv[0], cnt) : nullptr;
+    if (!p)
+        return JS_ThrowTypeError(ctx, "feed(samples): Float32Array required");
+    try {
+        brotensor::DeviceScope scope(w->device);
+        return JS_NewInt32(ctx, w->stream->feed(p, (int)cnt));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "feed: %s", e.what());
+    }
+}
+
+// finish() -> number of newly finalized latent rows (flush the partial block)
+static JSValue js_qwenasrstream_finish(JSContext* ctx, JSValueConst this_val,
+                                       int, JSValueConst*) {
+    auto* w = qwenAsrStreamSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "finish: not a QwenAsrStream");
+    try {
+        brotensor::DeviceScope scope(w->device);
+        return JS_NewInt32(ctx, w->stream->finish());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "finish: %s", e.what());
+    }
+}
+
+// latents(startFrame=0, count=rest) -> Float32Array
+//   Copy of the finalized latent rows [startFrame, startFrame+count), row-major
+//   (count, latentDim). Callers polling feed()'s return value slice just the
+//   new rows: stream.latents(stream.frames - newRows, newRows).
+static JSValue js_qwenasrstream_latents(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    auto* w = qwenAsrStreamSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "latents: not a QwenAsrStream");
+    const int dim    = w->stream->config().latent_dim;
+    const int total  = w->stream->frames();
+    int start = 0, count = -1;
+    if (argc >= 1 && JS_IsNumber(argv[0])) JS_ToInt32(ctx, &start, argv[0]);
+    if (argc >= 2 && JS_IsNumber(argv[1])) JS_ToInt32(ctx, &count, argv[1]);
+    if (start < 0 || start > total)
+        return JS_ThrowRangeError(ctx, "latents: startFrame out of range");
+    if (count < 0) count = total - start;
+    if (count > total - start)
+        return JS_ThrowRangeError(ctx, "latents: count out of range");
+    const auto& all = w->stream->latents();
+    return qjsbind::make_float32_array(
+        ctx, all.data() + (size_t)start * dim, (size_t)count * dim);
+}
+
+static void registerQwenAsrStreamClass(JSContext* ctx) {
+    qjsbind::Class<QwenAsrStreamWrapper>(ctx, "QwenAsrStream", qjsbind::NoGlobal)
+        .get("loaded",      [](QwenAsrStreamWrapper* w) { return w->stream->loaded(); })
+        .get("sampleRate",  [](QwenAsrStreamWrapper* w) { return w->stream->config().sample_rate; })
+        .get("latentDim",   [](QwenAsrStreamWrapper* w) { return w->stream->config().latent_dim; })
+        .get("latentHz",    [](QwenAsrStreamWrapper* w) { return (double)w->stream->config().latent_hz; })
+        .get("frames",      [](QwenAsrStreamWrapper* w) { return w->stream->frames(); })
+        .get("blockChunks", [](QwenAsrStreamWrapper* w) { return w->stream->block_chunks(); })
+        .get("blockFrames", [](QwenAsrStreamWrapper* w) { return w->stream->block_frames(); })
+        .method_raw("feed",    js_qwenasrstream_feed,    1)
+        .method_raw("finish",  js_qwenasrstream_finish,  0)
+        .method_raw("latents", js_qwenasrstream_latents, 2);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // bro.stt free functions
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -983,9 +1195,228 @@ static JSValue js_loadParakeetTokenizer(JSContext* ctx, JSValueConst,
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
+// Build + load the Qwen3-ASR model from a checkpoint dir. Heavy + blocking
+// (file IO + GPU upload); shared by the sync and async loadQwenAsr paths.
+// Throws on error.
+static void buildQwenAsr(const std::string& dir, brotensor::Device dev,
+                         std::unique_ptr<QwenAsrWrapper>& w_out) {
+    auto w = std::make_unique<QwenAsrWrapper>();
+    w->device = dev;
+    w->asr    = std::make_unique<brosoundml::QwenAsr>();
+    {
+        brotensor::DeviceScope scope(dev);
+        w->asr->load(dir, dev);
+    }
+    std::fprintf(stderr, "[INFO] [stt] Qwen3-ASR loaded on %s\n", deviceName(dev));
+    w_out = std::move(w);
+}
+
+// State for an async loadQwenAsr — same shape as WhisperLoadState.
+struct QwenAsrLoadState {
+    std::string                     dir;
+    brotensor::Device               dev = brotensor::Device::CPU;
+    std::unique_ptr<QwenAsrWrapper> w;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.stt.loadQwenAsr(modelDir, opts?) -> QwenAsr           (sync)
+//                                      -> AsyncHandle       (async, if opts.onReady)
+//   modelDir contains config.json + model.safetensors (HF Qwen3-ASR
+//   checkpoint, e.g. Qwen/Qwen3-ASR-0.6B). The Qwen BPE tokenizer files
+//   (vocab.json + merges.txt) sit in the same dir — load them with
+//   bro.lm.loadTokenizer to detokenize the id stream.
+//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available, else CPU.
+//   opts.onReady(asr) / opts.onError(message): when onReady is a function the
+//   load runs on a background thread and these fire on the JS thread.
+static JSValue js_loadQwenAsr(JSContext* ctx, JSValueConst,
+                              int argc, JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadQwenAsr(modelDir, opts?): path required");
+
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    if (argc >= 2) {
+        std::string err;
+        if (!parseDeviceOpt(ctx, argv[1], dev, err))
+            return JS_ThrowTypeError(ctx, "loadQwenAsr: %s", err.c_str());
+    }
+
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<QwenAsrWrapper> w;
+            buildQwenAsr(dir, dev, w);
+            return qjsbind::wrap<QwenAsrWrapper>(ctx, w.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadQwenAsr: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<QwenAsrLoadState>();
+    ls->dir      = dir;
+    ls->dev      = dev;
+    ls->hasReady = true;
+    ls->onReady  = JS_DupValue(ctx, onReady);
+    ls->hasError = JS_IsFunction(ctx, onError);
+    ls->onError  = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildQwenAsr(ls->dir, ls->dev, ls->w);  // throws -> error
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->w) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadQwenAsr failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<QwenAsrWrapper>(c, ls->w.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// Build + load the encoder-only streaming tap. Lighter than the full model
+// (no decoder weights) but still file IO + GPU upload.
+static void buildQwenAsrStream(const std::string& dir, int blockChunks,
+                               brotensor::Device dev,
+                               std::unique_ptr<QwenAsrStreamWrapper>& w_out) {
+    auto w = std::make_unique<QwenAsrStreamWrapper>();
+    w->device = dev;
+    w->stream = std::make_unique<brosoundml::QwenAsrStream>();
+    {
+        brotensor::DeviceScope scope(dev);
+        w->stream->load(dir, blockChunks, dev);
+    }
+    std::fprintf(stderr, "[INFO] [stt] Qwen3-ASR stream encoder loaded on %s\n",
+                 deviceName(dev));
+    w_out = std::move(w);
+}
+
+// State for an async loadQwenAsrStream.
+struct QwenAsrStreamLoadState {
+    std::string                           dir;
+    int                                   blockChunks = 1;
+    brotensor::Device                     dev = brotensor::Device::CPU;
+    std::unique_ptr<QwenAsrStreamWrapper> w;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.stt.loadQwenAsrStream(modelDir, opts?) -> QwenAsrStream  (sync)
+//                                            -> AsyncHandle    (async, if opts.onReady)
+//   Encoder-only incremental tap: feed() mic chunks, get finalized latent rows
+//   back per ~blockChunks seconds of audio. Same modelDir as loadQwenAsr; only
+//   the audio-tower weights are read.
+//   opts.blockChunks: block size in ~1 s conv-chunks (default 1 = lowest
+//   latency, ~13 latents per second-block).
+//   opts.device / opts.onReady / opts.onError: as loadQwenAsr.
+static JSValue js_loadQwenAsrStream(JSContext* ctx, JSValueConst,
+                                    int argc, JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx,
+            "loadQwenAsrStream(modelDir, opts?): path required");
+
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    int blockChunks = 1;
+    if (argc >= 2) {
+        std::string err;
+        if (!parseDeviceOpt(ctx, argv[1], dev, err))
+            return JS_ThrowTypeError(ctx, "loadQwenAsrStream: %s", err.c_str());
+        if (JS_IsObject(argv[1])) getInt(ctx, argv[1], "blockChunks", blockChunks);
+    }
+
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<QwenAsrStreamWrapper> w;
+            buildQwenAsrStream(dir, blockChunks, dev, w);
+            return qjsbind::wrap<QwenAsrStreamWrapper>(ctx, w.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadQwenAsrStream: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<QwenAsrStreamLoadState>();
+    ls->dir         = dir;
+    ls->blockChunks = blockChunks;
+    ls->dev         = dev;
+    ls->hasReady    = true;
+    ls->onReady     = JS_DupValue(ctx, onReady);
+    ls->hasError    = JS_IsFunction(ctx, onError);
+    ls->onError     = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildQwenAsrStream(ls->dir, ls->blockChunks, ls->dev, ls->w);
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->w) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty()
+                                                ? "loadQwenAsrStream failed"
+                                                : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<QwenAsrStreamWrapper>(c, ls->w.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Async transcription — bro.stt.transcribe(whisper, audio, promptIds, opts)
 //                       bro.stt.transcribe(parakeet, audio, opts)
+//                       bro.stt.transcribe(qwenAsr, audio, opts)
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // Runs Whisper's autoregressive decode on a background thread via the async-job
@@ -1038,6 +1469,121 @@ struct ParakeetJob {
     std::atomic<size_t>     produced{0};
     size_t                  drained = 0;
 };
+
+// Shared between the work thread (sole writer of token_ids) and the JS thread
+// (sole reader / caller of onDone). Held by shared_ptr. Same SPSC token
+// handoff as SttJob.
+struct QwenAsrJob {
+    brosoundml::AudioBuffer audio;
+    int                     maxNew = 0;
+    std::vector<int32_t>    contextIds;
+    std::vector<int32_t>    token_ids;     // filled by work()
+    JSValue                 onDone  = JS_UNDEFINED;
+    JSValue                 onToken = JS_UNDEFINED;
+    JSValue                 asrRef  = JS_UNDEFINED;
+    bool                    hasOnDone  = false;
+    bool                    hasOnToken = false;
+    std::vector<int32_t>    tokenSlots;
+    std::atomic<size_t>     produced{0};
+    size_t                  drained = 0;
+};
+
+// bro.stt.transcribe(qwenAsr, audio, opts?) — async Qwen3-ASR decode on a
+// background thread. Mirrors the Parakeet path below: real cancellation (the
+// greedy loop polls the flag once per token), SPSC onToken streaming,
+// onDone(tokenIds, info). opts.contextIds biases recognition (see the sync
+// method).
+static JSValue js_stt_transcribe_qwenasr(JSContext* ctx, QwenAsrWrapper* w,
+                                         int argc, JSValueConst* argv) {
+    auto job = std::make_shared<QwenAsrJob>();
+    std::string err;
+    if (!readAudioBuffer(ctx, argv[1], job->audio, err))
+        return JS_ThrowTypeError(ctx, "transcribe: %s", err.c_str());
+
+    JSValue onDone = JS_UNDEFINED, onToken = JS_UNDEFINED;
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        getInt(ctx, argv[2], "maxNewTokens", job->maxNew);
+        JSValue cv = JS_GetPropertyStr(ctx, argv[2], "contextIds");
+        if (!JS_IsUndefined(cv) && !JS_IsNull(cv))
+            job->contextIds = readIdArray(ctx, cv);
+        JS_FreeValue(ctx, cv);
+        onDone  = JS_GetPropertyStr(ctx, argv[2], "onDone");
+        onToken = JS_GetPropertyStr(ctx, argv[2], "onToken");
+    }
+
+    // Claim the model for this transcription (single-owner; one in flight).
+    bool expected = false;
+    if (!w->busy.compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onDone);
+        JS_FreeValue(ctx, onToken);
+        return JS_ThrowInternalError(ctx,
+            "transcribe: an operation is already in flight on this model");
+    }
+
+    job->hasOnDone  = JS_IsFunction(ctx, onDone);
+    job->onDone     = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->hasOnToken = JS_IsFunction(ctx, onToken);
+    job->onToken    = job->hasOnToken ? JS_DupValue(ctx, onToken) : JS_UNDEFINED;
+    job->asrRef     = JS_DupValue(ctx, argv[0]);  // keep the model alive
+    JS_FreeValue(ctx, onDone);
+    JS_FreeValue(ctx, onToken);
+    if (job->hasOnToken) job->tokenSlots.resize(1u << 16);
+
+    QwenAsrWrapper* mw = w;
+
+    auto work = [job, mw](const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(mw->device);
+        brosoundml::QwenAsr::TranscribeOptions opts;
+        opts.max_new_tokens = job->maxNew;
+        opts.context_ids    = job->contextIds;
+        opts.cancel = [&cancel] { return cancel.load(std::memory_order_acquire); };
+        if (job->hasOnToken) {
+            opts.on_token = [job](int32_t id) {
+                const size_t idx = job->produced.load(std::memory_order_relaxed);
+                if (idx >= job->tokenSlots.size()) return;   // bound guard
+                job->tokenSlots[idx] = id;
+                job->produced.store(idx + 1, std::memory_order_release);
+            };
+        }
+        auto out = mw->asr->transcribe(job->audio, opts);
+        job->token_ids = std::move(out.token_ids);
+    };
+
+    auto poll = [job](JSContext* c) {
+        if (!job->hasOnToken) return;
+        const size_t n = job->produced.load(std::memory_order_acquire);
+        while (job->drained < n) {
+            JSValue a = JS_NewInt32(c, job->tokenSlots[job->drained]);
+            JSValue r = JS_Call(c, job->onToken, JS_UNDEFINED, 1, &a);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, a);
+            job->drained++;
+        }
+    };
+
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        if (job->hasOnDone) {
+            JSValue arr  = qjsbind::make_int32_array(c, job->token_ids);
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { arr, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, arr);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
+        if (job->hasOnToken) JS_FreeValue(c, job->onToken);
+        JS_FreeValue(c, job->asrRef);
+        mw->busy.store(false, std::memory_order_release);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
+}
 
 // bro.stt.transcribe(parakeet, audio, opts?) — async Parakeet decode on a
 // background thread. Mirrors the Whisper path below: real cancellation (the
@@ -1141,13 +1687,17 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
     if (auto* p = qjsbind::unwrap<ParakeetWrapper>(ctx, argv[0]))
         return js_stt_transcribe_parakeet(ctx, p, argc, argv);
 
+    // Qwen3-ASR path — no prompt: transcribe(qwenAsr, audio, opts?).
+    if (auto* q = qjsbind::unwrap<QwenAsrWrapper>(ctx, argv[0]))
+        return js_stt_transcribe_qwenasr(ctx, q, argc, argv);
+
     if (argc < 3)
         return JS_ThrowTypeError(ctx,
             "transcribe(whisper, audio, promptIds, opts?): whisper, audio and "
             "promptIds required");
     auto* w = qjsbind::unwrap<WhisperWrapper>(ctx, argv[0]);
     if (!w) return JS_ThrowTypeError(ctx,
-        "transcribe: arg 0 must be a Whisper or Parakeet");
+        "transcribe: arg 0 must be a Whisper, Parakeet, or QwenAsr");
 
     auto job = std::make_shared<SttJob>();
     std::string err;
@@ -1266,6 +1816,8 @@ void installSttBindings(JSContext* ctx) {
     registerWhisperClass(ctx);
     registerParakeetTokenizerClass(ctx);
     registerParakeetClass(ctx);
+    registerQwenAsrClass(ctx);
+    registerQwenAsrStreamClass(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
@@ -1286,6 +1838,10 @@ void installSttBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadParakeet, "loadParakeet", 2));
     JS_SetPropertyStr(ctx, stt, "loadParakeetTokenizer",
         JS_NewCFunction(ctx, js_loadParakeetTokenizer, "loadParakeetTokenizer", 2));
+    JS_SetPropertyStr(ctx, stt, "loadQwenAsr",
+        JS_NewCFunction(ctx, js_loadQwenAsr, "loadQwenAsr", 2));
+    JS_SetPropertyStr(ctx, stt, "loadQwenAsrStream",
+        JS_NewCFunction(ctx, js_loadQwenAsrStream, "loadQwenAsrStream", 2));
     JS_SetPropertyStr(ctx, stt, "transcribe",
         JS_NewCFunction(ctx, js_stt_transcribe, "transcribe", 4));
     JS_SetPropertyStr(ctx, broObj, "stt", stt);
