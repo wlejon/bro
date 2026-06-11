@@ -1247,6 +1247,14 @@ static JSValue js_audioctx_playClip(JSContext* ctx, JSValueConst this_val, int a
     bool loop = false;
     if (argc >= 2) { double v; JS_ToFloat64(ctx, &v, argv[1]); gain = static_cast<float>(v); }
     if (argc >= 3) { loop = JS_ToBool(ctx, argv[2]); }
+    // Optional 4th arg: a sample-accurate start time (engine seconds, from
+    // ctx.currentTime). Streaming uses it to queue chunks on the audio clock so
+    // they join gaplessly — no main-thread setTimeout jitter or clock drift. A
+    // `when` at/before now plays immediately, same as the 3-arg form.
+    if (argc >= 4 && JS_IsNumber(argv[3])) {
+        double when; JS_ToFloat64(ctx, &when, argv[3]);
+        return JS_NewInt32(ctx, d->engine->playClipAt(clipId, when, gain, loop));
+    }
     return JS_NewInt32(ctx, d->engine->playClip(clipId, gain, loop));
 }
 
@@ -1999,7 +2007,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
             .method("getClipChannels",
                 [](AudioCtxData* d, int id) -> int { return d->engine->getClipChannels(id); })
             .method_raw("getClipWaveform", js_audioctx_getClipWaveform, 2)
-            .method_raw("playClip", js_audioctx_playClip, 3)
+            .method_raw("playClip", js_audioctx_playClip, 4)
             .method("stopPlayback",
                 [](AudioCtxData* d, int id) { d->engine->stopPlayback(id); })
             .method("setPlaybackGain",
