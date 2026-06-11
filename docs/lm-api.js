@@ -1,18 +1,37 @@
 /**
- * bro.lm — Language-model text generation (Qwen3)
+ * bro.lm — Language-model text generation (Qwen3, Mistral 3.1, Qwen3.5)
  *
- * Loads a Qwen3 GGUF checkpoint and runs autoregressive text generation with
- * a KV cache. Backed by brolm (tokenizers + transformer text models) on top
- * of brotensor. Defaults to CUDA; pass { device: 'cpu' } to force the CPU
- * backend.
+ * Backed by brolm (tokenizers + transformer text models) on top of brotensor.
+ * Defaults to CUDA; pass { device: 'cpu' } to force the CPU backend.
  *
- * A load returns two objects: a `model` (the transformer + KV cache) and a
- * `tokenizer` (BPE encode/decode + chat templating). They are paired — encode
- * a prompt with the tokenizer, generate with the model, decode the result.
+ * Three model families:
+ *   - Qwen3 (loadQwen): GGUF checkpoint, Qwen BPE tokenizer, ChatML chat
+ *     template. The original surface — most of this file documents it.
+ *   - Mistral 3.1 text (loadMistral): quantized GGUF + the native "tekken"
+ *     tokenizer (tekken.json), [INST] chat template. Returns the same
+ *     { model, tokenizer } pair, and the model speaks the same LMModel API
+ *     (generate / generateStream / async bro.lm.generate / cache control);
+ *     model.family distinguishes 'qwen3' from 'mistral3'. See the Mistral
+ *     section at the bottom.
+ *   - Qwen3.5 (loadQwen35): safetensors checkpoint dir driven by brolm's VLM
+ *     driver (hybrid full/linear-attention decoder, M-RoPE). The driver owns
+ *     tokenization, so generate() takes a STRING prompt and the model exposes
+ *     encode()/decode() itself — no separate tokenizer handle. See the
+ *     Qwen3.5 section at the bottom.
+ *
+ * A loadQwen/loadMistral load returns two objects: a `model` (the transformer
+ * + KV cache) and a `tokenizer` (BPE encode/decode + chat templating). They
+ * are paired — encode a prompt with the tokenizer, generate with the model,
+ * decode the result.
+ *
+ * Sampling defaults to temperature 1.0 (full sampling) for every family —
+ * pass sampling: { temperature: 0 } for greedy decoding.
  *
  * Generation is synchronous and blocks the JS thread for its duration; for a
  * 0.6B model on CUDA expect a few ms per token. Allocate the KV cache once
- * (promptLen + maxNewTokens) before the first generate().
+ * (promptLen + maxNewTokens) before the first generate(). For non-blocking,
+ * cancellable generation use bro.lm.generate(model, promptIds, opts) — the
+ * async form every family shares (see the voice-pipeline app).
  */
 
 
@@ -138,3 +157,109 @@ model.generateStream(promptIds, {
     if (delta) process.stdout.write(delta);   // or postMessage(delta) from a worker
     return true;                              // return false to stop early
 });
+
+
+// ── Async generation (all families) ──────────────────────────────────────────
+
+/**
+ * bro.lm.generate(model, promptIds, opts) → AsyncHandle
+ *
+ * Runs the same prefill + decode loop as generateStream(), but on a background
+ * thread so the JS thread (and the app) stays responsive, with real
+ * cancellation. opts.onToken(id) streams each token to the JS thread as it is
+ * produced; opts.onDone(ids, info) fires once with the full Int32Array and
+ * info = { cancelled, error? }. handle.cancel() stops the decode within one
+ * token (barge-in). Works for Qwen3 and Mistral models (promptIds) and for
+ * Qwen3.5 (pass the STRING prompt instead of promptIds).
+ *
+ * Throws if a generation is already in flight on this model (single-owner).
+ */
+const h = bro.lm.generate(model, promptIds, {
+    maxNewTokens: 256,
+    eosId: tokenizer.imEndId,
+    sampling: { temperature: 0.7, topK: 40, topP: 0.95 },
+    onToken: (id) => { /* live decode */ },
+    onDone:  (ids, info) => { if (!info.cancelled) console.log(tokenizer.decode(ids)); },
+});
+// h.cancel();   // e.g. on barge-in
+
+
+// ── Mistral 3.1 ───────────────────────────────────────────────────────────────
+
+/**
+ * Load the Mistral 3.1 text decoder from a quantized GGUF (Q4_K / Q6_K /
+ * Q8_0) + its native tekken tokenizer. The quant matmul path is GPU-only —
+ * loading works on CPU but the first forward throws without a GPU backend.
+ *
+ * @param {string} ggufPath           - the text .gguf (not the mmproj one).
+ * @param {Object} opts
+ * @param {string} opts.tokenizerPath - tekken.json (REQUIRED — Mistral has no
+ *                                      vocab.json + merges.txt).
+ * @param {string} [opts.device='cuda']
+ * @param {function} [opts.onReady]   - async load: onReady({model, tokenizer}).
+ * @param {function} [opts.onError]
+ * @returns {{ model: LMModel, tokenizer: MistralTokenizer }}
+ *
+ * MistralTokenizer:
+ * @property {number} eosId, bosId, vocabCount
+ * @method encode(text, addSpecial=false) → Int32Array
+ *         addSpecial prepends BOS (<s>). A bare prompt wants it; the output
+ *         of applyChatTemplate does NOT (the template emits its own <s>).
+ * @method decode(ids) → string
+ * @method applyChatTemplate(messages, addGenerationPrompt=true) → string
+ *         Mistral's [INST] template.
+ *
+ * The returned model is the same LMModel class as loadQwen's (family
+ * 'mistral3') — generate, generateStream, and async bro.lm.generate all work.
+ */
+const mis = bro.lm.loadMistral(
+    '../brolm/weights/Mistral-Small-3.1-24B-Instruct-2503-GGUF/mistralai_Mistral-Small-3.1-24B-Instruct-2503-Q4_K_M.gguf',
+    { tokenizerPath: '../brolm/weights/Mistral-Small-3.1-24B-Instruct-2503/tekken.json' });
+const mPrompt = mis.tokenizer.applyChatTemplate(
+    [{ role: 'user', content: 'One-sentence fun fact about owls.' }], true);
+const mIds = mis.model.generate(mis.tokenizer.encode(mPrompt, /*addSpecial=*/false), {
+    maxNewTokens: 64,
+    eosId: mis.tokenizer.eosId,
+    sampling: { temperature: 0 },
+});
+console.log(mis.tokenizer.decode(mIds));
+
+
+// ── Qwen3.5 ───────────────────────────────────────────────────────────────────
+
+/**
+ * Load a Qwen3.5 checkpoint directory (HF layout: config.json, vocab.json +
+ * merges.txt, model.safetensors shard(s) — e.g. Qwen3.5-0.8B). Driven by
+ * brolm's qwen35::VLM driver, which owns the tokenizer and the M-RoPE/hybrid
+ * cache plumbing.
+ *
+ * @param {string} checkpointDir
+ * @param {Object} [opts]
+ * @param {number} [opts.maxSeqLen=4096] - KV/state capacity per generate call.
+ * @param {string} [opts.device='cuda']
+ * @param {function} [opts.onReady]      - async load: onReady(model).
+ * @param {function} [opts.onError]
+ * @returns {Qwen35Model}
+ *
+ * Qwen35Model:
+ * @property {string} family       - 'qwen35'.
+ * @property {number} vocabSize, hiddenSize, numLayers, maxSeqLen
+ * @property {number} eosId, imEndId, endoftextId
+ * @method encode(text, addSpecial?) → Int32Array
+ * @method decode(ids) → string
+ * @method generate(prompt, opts) → Int32Array
+ *         prompt is a STRING — the driver tokenizes. Wrap chat turns in
+ *         ChatML yourself:
+ *           '<|im_start|>user\n' + text + '<|im_end|>\n<|im_start|>assistant\n'
+ *         Generation stops on <|im_end|> / <|endoftext|> or maxNewTokens.
+ *         opts: { maxNewTokens, sampling: {temperature, topK, topP, seed},
+ *                 onToken(id) → return false to stop early }
+ *
+ * Async: bro.lm.generate(q35, promptString, opts) — same streaming/cancel
+ * contract as the LMModel form.
+ */
+const q35 = bro.lm.loadQwen35('../brolm/weights/Qwen3.5-0.8B');
+const ids35 = q35.generate(
+    '<|im_start|>user\nOne-word answer: capital of France?<|im_end|>\n<|im_start|>assistant\n',
+    { maxNewTokens: 16, sampling: { temperature: 0 } });
+console.log(q35.decode(ids35));
