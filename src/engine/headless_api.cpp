@@ -18,6 +18,7 @@
 #include "js/event_dispatch.h"
 #include "js/worker.h"
 #include "js/wake_bindings.h"
+#include "js/kws_bindings.h"
 #include "js/mic_bindings.h"
 #include "js/async_job.h"
 #include "js/net_bindings.h"
@@ -248,6 +249,7 @@ void Engine::advanceTime(double ms) {
         // so wake fires are produced deterministically before we deliver them.
         if (audioInference_) audioInference_->stepInline();
         bro::js::tickWake(jsRuntime_->getContext());
+        bro::js::tickKws(jsRuntime_->getContext());
         bro::js::tickMic(jsRuntime_->getContext());
         bro::js::tickAsync(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();

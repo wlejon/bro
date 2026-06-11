@@ -54,6 +54,7 @@
 #include "js/triposplat_bindings.h"
 #include "js/vision_bindings.h"
 #include "js/wake_bindings.h"
+#include "js/kws_bindings.h"
 #include "js/mic_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/net_bindings.h"
@@ -337,6 +338,12 @@ Engine::Engine(const EngineConfig& config)
     // JS surface itself is inert until the app calls bro.wake.listen().
     js::installWakeBindings(jsRuntime_->getContext(), audioEngine_.get(),
                             audioInference_.get());
+
+    // bro.kws (brosoundml::PhonemeSpotter — open-vocabulary streaming keyword
+    // spotting). Same tenant shape as bro.wake: mic tap -> ring -> inference
+    // worker -> tickKws delivery. Inert until the app calls bro.kws.load().
+    js::installKwsBindings(jsRuntime_->getContext(), audioEngine_.get(),
+                           audioInference_.get());
 
     // bro.mic (general live-mic chunk consumer — the worked example of
     // broaudio's chunkFrames feature). Same shape as wake: a mic tap on the

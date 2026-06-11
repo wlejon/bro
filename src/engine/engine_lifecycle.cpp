@@ -22,6 +22,7 @@
 #include "js/terrain_bindings.h"
 #include "js/custom_elements.h"
 #include "js/wake_bindings.h"
+#include "js/kws_bindings.h"
 #include "js/mic_bindings.h"
 #include "js/stt_bindings.h"
 #include "js/lm_bindings.h"
@@ -137,6 +138,7 @@ Engine::~Engine() {
         // torn down by static destructors — which has produced kernel-level
         // driver faults on exit.
         js::cleanupWakeBindings(ctx);
+        js::cleanupKwsBindings(ctx);
         js::cleanupMicBindings(ctx);
         // Join the audio-inference worker now: the tap is detached (no more ring
         // writes) and the wake task unregistered, so the worker drains its final
