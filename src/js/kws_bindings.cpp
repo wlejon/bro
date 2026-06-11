@@ -334,6 +334,13 @@ JSValue js_load(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         return JS_ThrowTypeError(ctx,
             "bro.kws.load: opts.weights (PhonemeNet checkpoint path) required");
     }
+    // init() BEFORE the device probe — the GPU backends only register on the
+    // driver probe, so autoDevice() before init() silently lands on CPU.
+    try {
+        brotensor::init();
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "bro.kws.load: %s", e.what());
+    }
     brotensor::Device dev = autoDevice();
     {
         std::string err;
@@ -342,7 +349,6 @@ JSValue js_load(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     }
 
     try {
-        brotensor::init();
         auto spotter = std::make_shared<brosoundml::PhonemeSpotter>();
         {
             brotensor::DeviceScope scope(dev);
