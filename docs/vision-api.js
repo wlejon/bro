@@ -205,6 +205,29 @@ const segformer = bro.vision.loadSegformer('weights/segformer-b0-ade');
 const sem = segformer.detect(img);   // sem.classes, sem.image
 
 
+// ── BiRefNet — background removal ─────────────────────────────────────────────
+
+/**
+ * BiRefNet dichotomous segmentation / background removal —
+ * bro.vision.loadBirefnet(safetensorsPath, { device, modelSize, onReady })
+ *   safetensorsPath: the Swin-L BiRefNet checkpoint file (the same one
+ *   bro.triposplat takes as its optional `birefnet` matting front-end).
+ *   modelSize: square inference resolution, multiple of 32 (default 1024 — the
+ *   reference recipe; lower for speed at the cost of edge fidelity).
+ *
+ * BackgroundRemover.removeBackground(image, opts?{onDone}) →
+ *   { width, height,
+ *     alpha: Float32Array(h*w, [0,1])  - the predicted matte,
+ *     matte: ImageBitmap               - grayscale matte (drawable),
+ *     image: ImageBitmap               - the input with alpha = matte: a
+ *                                        ready-to-draw cutout }
+ */
+const rembg = bro.vision.loadBirefnet(
+    'weights/triposplat/background_removal/birefnet.safetensors');
+const cut = rembg.removeBackground(img);
+// ctx.drawImage(cut.image, 0, 0);   // subject only, transparent background
+
+
 // ── StyleGAN3 — image generation (the one generative model) ──────────────────
 
 /**

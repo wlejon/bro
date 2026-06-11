@@ -33,6 +33,7 @@
 #include <brovisionml/mlsd.h>
 #include <brovisionml/openpose.h>
 #include <brovisionml/segformer.h>
+#include <brovisionml/birefnet.h>
 #include <brovisionml/stylegan3.h>
 
 #include <brotensor/runtime.h>
@@ -1678,6 +1679,124 @@ static JSValue js_loadSegformer(JSContext* ctx, JSValueConst, int argc,
         });
 }
 
+// ── BiRefNet — background removal ───────────────────────────────────────────
+
+struct VisionBirefnetWrapper {
+    std::unique_ptr<brovisionml::birefnet::BiRefNet> net;
+    int modelSize = 1024;            // square inference resolution
+    brotensor::Device device = brotensor::Device::CPU;
+    std::atomic<bool> busy{false};
+};
+
+struct BirefnetJob {
+    VisionBirefnetWrapper*    w = nullptr;
+    std::vector<std::uint8_t> rgba;
+    int in_w = 0, in_h = 0;
+    brovisionml::birefnet::Matte matte;
+    JSValue selfRef = JS_UNDEFINED;
+};
+
+// BackgroundRemover.removeBackground(image, opts?) → { width, height,
+//   alpha: Float32Array(h*w, [0,1]),
+//   matte: ImageBitmap (grayscale alpha),
+//   image: ImageBitmap (the input with its alpha replaced by the matte —
+//          a ready-to-draw cutout) }
+static JSValue js_birefnet_remove(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<VisionBirefnetWrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "removeBackground: not a BackgroundRemover");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx,
+            "removeBackground(image, opts?): image required");
+    auto job = std::make_shared<BirefnetJob>();
+    JSValue thrown;
+    if (!prepDetect(ctx, this_val, w, argv[0], *job, "removeBackground", thrown))
+        return thrown;
+    JSValue onDone = getOnDone(ctx, (argc >= 2) ? argv[1] : JS_UNDEFINED);
+
+    auto compute = [job](const std::atomic<bool>&) {
+        // removeBackground() consumes interleaved float RGB; the alpha plane
+        // of the decoded image (if any) does not participate in matting.
+        const size_t n = static_cast<size_t>(job->in_w) * job->in_h;
+        std::vector<float> rgb(n * 3);
+        for (size_t i = 0; i < n; ++i) {
+            rgb[3 * i + 0] = job->rgba[4 * i + 0];
+            rgb[3 * i + 1] = job->rgba[4 * i + 1];
+            rgb[3 * i + 2] = job->rgba[4 * i + 2];
+        }
+        brotensor::DeviceScope scope(job->w->device);
+        job->matte = job->w->net->removeBackground(
+            rgb.data(), job->in_w, job->in_h, /*rgbIs255=*/true,
+            job->w->modelSize);
+    };
+    auto build = [job](JSContext* c) -> JSValue {
+        const auto& m = job->matte;
+        JSValue res = JS_NewObject(c);
+        JS_SetPropertyStr(c, res, "width",  JS_NewInt32(c, m.width));
+        JS_SetPropertyStr(c, res, "height", JS_NewInt32(c, m.height));
+        JS_SetPropertyStr(c, res, "alpha",  qjsbind::make_float32_array(c, m.alpha));
+        JS_SetPropertyStr(c, res, "matte",
+            makeUnitScalarBitmap(c, m.alpha, m.width, m.height, false));
+        // Cutout: the original pixels with alpha = matte.
+        std::vector<std::uint8_t> cut = job->rgba;
+        for (size_t i = 0; i < m.alpha.size() && i * 4 + 3 < cut.size(); ++i) {
+            const float a = std::clamp(m.alpha[i], 0.0f, 1.0f);
+            cut[4 * i + 3] = (std::uint8_t)std::lround(a * 255.0f);
+        }
+        JS_SetPropertyStr(c, res, "image",
+            makeBitmap(c, cut.data(), m.width, m.height));
+        return res;
+    };
+    JSValue r = runVisionOp(ctx, onDone, std::move(compute), std::move(build),
+                            makeRelease(ctx, job));
+    JS_FreeValue(ctx, onDone);
+    return r;
+}
+
+static void registerBirefnetClass(JSContext* ctx) {
+    qjsbind::Class<VisionBirefnetWrapper>(ctx, "BackgroundRemover",
+                                          qjsbind::NoGlobal)
+        .get("device", [](VisionBirefnetWrapper* w) {
+            return std::string(deviceName(w->device));
+        })
+        .get("modelSize", [](VisionBirefnetWrapper* w) { return w->modelSize; })
+        .method_raw("removeBackground", js_birefnet_remove, 2);
+}
+
+// bro.vision.loadBirefnet(safetensorsPath, opts?) — the same Swin-L BiRefNet
+// checkpoint bro.triposplat consumes as its optional `birefnet` matting
+// front-end, exposed standalone.
+//   opts.modelSize: square inference resolution (multiple of 32; default 1024,
+//   the reference recipe — lower for speed at the cost of edge fidelity).
+static JSValue js_loadBirefnet(JSContext* ctx, JSValueConst, int argc,
+                               JSValueConst* argv) {
+    std::string path;
+    if (argc < 1 || !argStr(ctx, argv[0], path))
+        return JS_ThrowTypeError(ctx,
+            "loadBirefnet(safetensorsPath, opts?): path required");
+    JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    brotensor::Device dev; JSValue thrown;
+    if (!resolveDevice(ctx, "loadBirefnet", opts, dev, thrown)) return thrown;
+    int modelSize = 1024;
+    getInt(ctx, opts, "modelSize", modelSize);
+    if (modelSize <= 0 || modelSize % 32 != 0)
+        return JS_ThrowTypeError(ctx,
+            "loadBirefnet: opts.modelSize must be a positive multiple of 32");
+    return loadModel<VisionBirefnetWrapper>(ctx, "loadBirefnet", opts,
+        [path, dev, modelSize]() {
+            auto w = std::make_unique<VisionBirefnetWrapper>();
+            w->device    = dev;
+            w->modelSize = modelSize;
+            w->net = std::make_unique<brovisionml::birefnet::BiRefNet>();
+            brotensor::DeviceScope scope(dev);
+            w->net->load(path);
+            w->net->to(dev);
+            std::fprintf(stderr, "[INFO] [vision] BiRefNet loaded on %s\n",
+                         deviceName(dev));
+            return w;
+        });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // StyleGAN3-R — bro.vision.loadStyleGAN3 / Generator.generate / .synthesize
 //
@@ -2078,6 +2197,7 @@ void installVisionBindings(JSContext* ctx) {
     registerMlsdClass(ctx);
     registerOpenposeClass(ctx);
     registerSegformerClass(ctx);
+    registerBirefnetClass(ctx);
     registerStyleGAN3Class(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
@@ -2107,6 +2227,8 @@ void installVisionBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadOpenpose, "loadOpenpose", 2));
     JS_SetPropertyStr(ctx, vision, "loadSegformer",
         JS_NewCFunction(ctx, js_loadSegformer, "loadSegformer", 2));
+    JS_SetPropertyStr(ctx, vision, "loadBirefnet",
+        JS_NewCFunction(ctx, js_loadBirefnet, "loadBirefnet", 2));
     JS_SetPropertyStr(ctx, vision, "loadStyleGAN3",
         JS_NewCFunction(ctx, js_loadStyleGAN3, "loadStyleGAN3", 2));
     JS_SetPropertyStr(ctx, broObj, "vision", vision);
