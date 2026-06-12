@@ -180,13 +180,25 @@ const char* deviceName(brotensor::Device d) {
 
 // Overlay detector-policy keys present on `obj` onto `cfg`:
 //   threshold, refractoryMs, minPhonemes, entrySilenceFrames, emissionFloor,
-//   enrollGaps, gapMinFrames, gapTolerance, smoothing: { hits, window }.
+//   minCoverage, scoreNorm, enrollGaps, gapMinFrames, gapTolerance,
+//   smoothing: { hits, window }.
 // Used for the global defaults (load) and per-template overrides (enroll).
 void readPolicy(JSContext* ctx, JSValueConst obj, brosoundml::SpotterConfig& cfg) {
     if (!JS_IsObject(obj)) return;
     double d;
     if (getNum(ctx, obj, "threshold", d))     cfg.threshold      = (float)d;
     if (getNum(ctx, obj, "emissionFloor", d)) cfg.emission_floor = (float)d;
+    // Proportional coverage gate: a completion must have at least
+    // ceil(minCoverage * L) of the template's phonemes ACTUALLY emitted (not
+    // merely riding the emission floor). This is what stops a long phrase from
+    // firing on a short suffix — "what is the first" completing on just
+    // "first", with the leading phonemes floored. 0 (default) = absolute
+    // min_phonemes gate only. See SpotterConfig::min_coverage_frac.
+    if (getNum(ctx, obj, "minCoverage", d))   cfg.min_coverage_frac = (float)d;
+    // Competition-normalization strength [0,1]: puts templates of differing
+    // phoneme make-up on one score scale so a single threshold transfers
+    // across them. 0 (default) = raw posterior. See SpotterConfig::score_norm.
+    if (getNum(ctx, obj, "scoreNorm", d))     cfg.score_norm     = (float)d;
     if (getNum(ctx, obj, "gapTolerance", d))  cfg.gap_tolerance  = (float)d;
     getInt(ctx, obj, "refractoryMs",       cfg.refractory_ms);
     getInt(ctx, obj, "minPhonemes",        cfg.min_phonemes);
@@ -315,7 +327,8 @@ JSValue throwIfListening(JSContext* ctx, const char* what) {
 
 // bro.kws.load({ weights, device?, threshold?, refractoryMs?, smoothing?,
 //                minPhonemes?, entrySilenceFrames?, emissionFloor?,
-//                enrollGaps?, gapMinFrames?, gapTolerance? })
+//                minCoverage?, scoreNorm?, enrollGaps?, gapMinFrames?,
+//                gapTolerance? })
 // Load the PhonemeNet checkpoint (+ its embedded class map) and set the
 // global detector-policy defaults. Enroll templates next, then listen().
 JSValue js_load(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -458,6 +471,52 @@ JSValue js_enrollFromAudio(JSContext* ctx, JSValueConst, int argc,
     }
 }
 
+// bro.kws.enrollFromClasses(name, classIds, policy?) -> template length
+//   classIds: Int32Array/number[] of phoneme-CLASS ids (already in [0,K) — the
+//   matcher's own alphabet, e.g. an edited sequence from bro.kws.inspect). The
+//   library drops the silence class (0) and collapses adjacent duplicates. This
+//   is the re-enroll path for an edited template: inspect a template, trim the
+//   token sequence, enroll the result back under the same name.
+JSValue js_enrollFromClasses(JSContext* ctx, JSValueConst, int argc,
+                             JSValueConst* argv) {
+    if (!g_kws.spotter)
+        return JS_ThrowInternalError(ctx,
+            "bro.kws.enrollFromClasses: call bro.kws.load first");
+    JSValue guard = throwIfListening(ctx, "enrollFromClasses");
+    if (JS_IsException(guard)) return guard;
+    if (argc < 2 || !JS_IsString(argv[0])) {
+        return JS_ThrowTypeError(ctx,
+            "bro.kws.enrollFromClasses(name, classIds, policy?): name and "
+            "classIds required");
+    }
+    const char* s = JS_ToCString(ctx, argv[0]);
+    if (!s) return JS_EXCEPTION;
+    std::string name = s;
+    JS_FreeCString(ctx, s);
+
+    std::vector<int> ids = readIds(ctx, argv[1]);
+    if (ids.empty()) {
+        return JS_ThrowTypeError(ctx,
+            "bro.kws.enrollFromClasses: classIds must be a non-empty "
+            "Int32Array or number[]");
+    }
+    try {
+        brosoundml::SpotterConfig pol;
+        const bool hasPol = (argc >= 3) && readPolicyOverride(ctx, argv[2],
+                                                              *g_kws.spotter, pol);
+        const int len = g_kws.spotter->enroll_from_classes(name, ids,
+                                                           hasPol ? &pol : nullptr);
+        if (len <= 0) {
+            return JS_ThrowInternalError(ctx,
+                "bro.kws.enrollFromClasses: '%s' produced an empty template "
+                "(only silence-class ids?)", name.c_str());
+        }
+        return JS_NewInt32(ctx, len);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "bro.kws.enrollFromClasses: %s", e.what());
+    }
+}
+
 JSValue js_remove(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (!g_kws.spotter)
         return JS_ThrowInternalError(ctx, "bro.kws.remove: nothing loaded");
@@ -492,6 +551,54 @@ JSValue js_templates(JSContext* ctx, JSValueConst, int, JSValueConst*) {
         JS_SetPropertyUint32(ctx, arr, i, JS_NewString(ctx, names[i].c_str()));
     }
     return arr;
+}
+
+// bro.kws.inspect(name) -> { name, threshold, frameMs, hasGaps, states:[...] }
+//   or null if no such template. Each state is the decoded view of one template
+//   position: { cls, label, gap, gapLo, gapHi }. `label` is the phoneme name
+//   from the model's class map ("gap" for a timed silence state). This is the
+//   human-legible "what did my clip/phrase actually become" surface — show it,
+//   let the user edit the cls sequence, re-enroll via enrollFromClasses. Safe
+//   to call while listening (reads immutable per-template structure).
+JSValue js_inspect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (!g_kws.spotter) return JS_NULL;
+    if (argc < 1 || !JS_IsString(argv[0]))
+        return JS_ThrowTypeError(ctx, "bro.kws.inspect(name): name required");
+    const char* s = JS_ToCString(ctx, argv[0]);
+    if (!s) return JS_EXCEPTION;
+    std::string name = s;
+    JS_FreeCString(ctx, s);
+
+    brosoundml::TemplateView view;
+    if (!g_kws.spotter->inspect(name, view)) return JS_NULL;
+
+    const auto& cm = g_kws.spotter->class_map();
+    const int   K  = cm.num_classes;
+
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, view.name.c_str()));
+    JS_SetPropertyStr(ctx, obj, "threshold", JS_NewFloat64(ctx, view.threshold));
+    JS_SetPropertyStr(ctx, obj, "frameMs", JS_NewFloat64(ctx, view.frame_ms));
+    JS_SetPropertyStr(ctx, obj, "hasGaps", JS_NewBool(ctx, view.has_gaps));
+    JSValue arr = JS_NewArray(ctx);
+    for (std::uint32_t i = 0; i < view.states.size(); ++i) {
+        const brosoundml::TemplateState& st = view.states[i];
+        JSValue t = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, t, "cls", JS_NewInt32(ctx, st.cls));
+        const char* label =
+            st.gap ? "gap"
+                   : (st.cls >= 0 && st.cls < K &&
+                      st.cls < (int)cm.class_names.size())
+                         ? cm.class_names[(std::size_t)st.cls].c_str()
+                         : "?";
+        JS_SetPropertyStr(ctx, t, "label", JS_NewString(ctx, label));
+        JS_SetPropertyStr(ctx, t, "gap", JS_NewBool(ctx, st.gap));
+        JS_SetPropertyStr(ctx, t, "gapLo", JS_NewInt32(ctx, st.gap_lo));
+        JS_SetPropertyStr(ctx, t, "gapHi", JS_NewInt32(ctx, st.gap_hi));
+        JS_SetPropertyUint32(ctx, arr, i, t);
+    }
+    JS_SetPropertyStr(ctx, obj, "states", arr);
+    return obj;
 }
 
 JSValue js_reset(JSContext* ctx, JSValueConst, int, JSValueConst*) {
@@ -734,6 +841,10 @@ void installKwsBindings(JSContext* ctx, broaudio::Engine* audioEngine,
         JS_NewCFunction(ctx, js_enroll, "enroll", 3));
     JS_SetPropertyStr(ctx, kws, "enrollFromAudio",
         JS_NewCFunction(ctx, js_enrollFromAudio, "enrollFromAudio", 3));
+    JS_SetPropertyStr(ctx, kws, "enrollFromClasses",
+        JS_NewCFunction(ctx, js_enrollFromClasses, "enrollFromClasses", 3));
+    JS_SetPropertyStr(ctx, kws, "inspect",
+        JS_NewCFunction(ctx, js_inspect, "inspect", 1));
     JS_SetPropertyStr(ctx, kws, "remove",
         JS_NewCFunction(ctx, js_remove, "remove", 1));
     JS_SetPropertyStr(ctx, kws, "clear",

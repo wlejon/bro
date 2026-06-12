@@ -55,6 +55,17 @@
  * @param {number} [opts.emissionFloor=0.15]  - per-frame log-posterior floor;
  *        keeps one unreliable transient phoneme (stop burst, glide) from
  *        vetoing a whole citation template. 0 disables.
+ * @param {number} [opts.minCoverage=0]       - proportional coverage gate: a
+ *        completion must have at least ceil(minCoverage * length) of the
+ *        template's phonemes ACTUALLY emitted (above the emission floor), not
+ *        merely floored. This is what stops a long phrase from firing on a
+ *        short suffix — "what is the first" completing on just "first" with the
+ *        leading phonemes riding the floor. 0 = absolute minPhonemes gate only;
+ *        ~0.6–0.8 makes a typed phrase require most of itself to be heard.
+ * @param {number} [opts.scoreNorm=0]         - competition-normalization
+ *        strength [0,1]: divides each frame's emission by the frame's winning
+ *        posterior so templates of different phoneme make-up land on one score
+ *        scale (one threshold transfers across them). 0 = raw posterior.
  * @param {boolean} [opts.enrollGaps=false]   - rhythm templates: when
  *        enrolling FROM AUDIO, keep internal silence runs as TIMED gap states
  *        instead of dropping them. Off, click·gap·click collapses to just
@@ -92,8 +103,10 @@ bro.kws.load({ weights: '../brosoundml/weights/phoneme/english.bpm' });
  *
  * The optional per-template policy object accepts the same keys as load()
  * (threshold, refractoryMs, smoothing, minPhonemes, entrySilenceFrames,
- * emissionFloor, enrollGaps, gapMinFrames, gapTolerance) and overrides the
- * global defaults for this template only.
+ * emissionFloor, minCoverage, scoreNorm, enrollGaps, gapMinFrames,
+ * gapTolerance) and overrides the global defaults for this template only.
+ * For a typed phrase you usually want minCoverage ~0.6–0.8 so the whole
+ * phrase must be heard, not just a discriminative suffix.
  *
  * @param {string} name                    - event name passed to onSpot.
  * @param {Int32Array|number[]} phonemeIds - from bro.tts.phonemize(text).
@@ -113,6 +126,45 @@ const len = bro.kws.enroll('lights-on', bro.tts.phonemize('turn on the lights'))
  * @returns {number} template length.
  */
 // bro.kws.enrollFromAudio('jingle', refSamples);
+
+/**
+ * Re-enroll from raw phoneme-CLASS ids (already in [0,K) — the matcher's own
+ * alphabet, e.g. an edited `cls` sequence from bro.kws.inspect). Silence (class
+ * 0) is dropped and adjacent duplicates collapsed. This is the EDIT path: read
+ * a template with inspect(), trim/reorder its tokens, enroll the result back.
+ * Throws while listening.
+ *
+ * @param {string} name
+ * @param {Int32Array|number[]} classIds - phoneme class ids.
+ * @param {Object} [policy]
+ * @returns {number} template length.
+ */
+// bro.kws.enrollFromClasses('lights-on', [12, 7, 33]);
+
+/**
+ * Inspect an enrolled template — its decoded token sequence, so a tool can show
+ * the user "you enrolled 'what is the first' as [W AH T · IH Z · DH AH ·
+ * F ER S T]", reveal why a suffix matches, and offer an edit. Each state is one
+ * template position; for a rhythm template (enrollGaps) gap states carry their
+ * legal dwell window (gapLo..gapHi frames; multiply by frameMs for ms). Safe to
+ * call while listening. Pair with enrollFromClasses to apply an edit.
+ *
+ * @param {string} name
+ * @returns {null | {
+ *   name: string,
+ *   threshold: number,      // this template's fire threshold
+ *   frameMs: number,        // ms per frame (gap-window unit)
+ *   hasGaps: boolean,       // any timed gap state present
+ *   states: Array<{
+ *     cls: number,          // phoneme class id (0 == a timed gap state)
+ *     label: string,        // phoneme name from the class map ("gap" for a gap)
+ *     gap: boolean,
+ *     gapLo: number,        // gap dwell window in frames (gap states only)
+ *     gapHi: number,
+ *   }>
+ * }} null if no such template.
+ */
+// const view = bro.kws.inspect('lights-on');
 
 /** @returns {boolean} whether the named template existed. Throws while listening. */
 // bro.kws.remove('lights-on');
