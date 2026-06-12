@@ -1321,10 +1321,16 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                     std::string repeat = layerRepeat.empty() ? "repeat" : layerRepeat;
 
                     if (repeat == "no-repeat") {
+                        // Clip to the box so an oversized image (e.g.
+                        // background-size: cover, or a natural-size image larger
+                        // than the element) doesn't bleed past its bounds.
+                        renderer_->save();
+                        renderer_->setClip(x, y, w, h);
                         renderer_->drawImage(imgCacheIt->second.data.data(),
                                             imgCacheIt->second.data.size(),
                                             posX, posY, drawW, drawH,
                                             imgCacheIt->second.id);
+                        renderer_->restore();
                     } else {
                         // Tile the image
                         renderer_->save();
@@ -1932,6 +1938,42 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
     float R = box.border.right;
     float T = box.border.top;
     float B = box.border.bottom;
+
+    // Rounded borders whose sides differ only in COLOR (uniform width, all four
+    // visible, all solid): stroke the full rounded rect once per side, clipped
+    // to that side's outer-corner→inner-corner wedge. Each side shows its own
+    // color and the corners split along the diagonal — matching CSS. (The
+    // all-same-color rounded fast path above already returned; this handles the
+    // per-side-colored ring, e.g. a CSS loading spinner.)
+    if (rounded && allSameWidth && allFourVisible && !anyNonSolid) {
+        float avgWidth = firstWidth;
+        float half = avgWidth / 2;
+        render::Radii inner = radii;
+        for (int i = 0; i < 4; ++i) {
+            inner.x[i] = std::max(0.0f, radii.x[i] - half);
+            inner.y[i] = std::max(0.0f, radii.y[i] - half);
+        }
+        float ox0 = x,         oy0 = y;
+        float ox1 = x + w,     oy1 = y + h;
+        float ix0 = x + L,     iy0 = y + T;
+        float ix1 = x + w - R, iy1 = y + h - B;
+        struct Wedge { const char* colorProp; render::PointF p[4]; };
+        Wedge wedges[4] = {
+            {"border-top-color",    {{ox0, oy0}, {ox1, oy0}, {ix1, iy0}, {ix0, iy0}}},
+            {"border-right-color",  {{ox1, oy0}, {ox1, oy1}, {ix1, iy1}, {ix1, iy0}}},
+            {"border-bottom-color", {{ox1, oy1}, {ox0, oy1}, {ix0, iy1}, {ix1, iy1}}},
+            {"border-left-color",   {{ox0, oy1}, {ox0, oy0}, {ix0, iy0}, {ix0, iy1}}},
+        };
+        for (auto& wd : wedges) {
+            auto c = getBorderColor(wd.colorProp);
+            renderer_->save();
+            renderer_->setClipPolygon(std::span<const render::PointF>(wd.p, 4));
+            renderer_->drawRoundRectRadii(x + half, y + half, w - avgWidth, h - avgWidth,
+                                          inner, avgWidth, c);
+            renderer_->restore();
+        }
+        return;
+    }
 
     // Uniform non-rounded borders (all four sides same color, same width):
     // emit axis-aligned rects to match prior antialiasing exactly. Trapezoid
