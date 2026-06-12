@@ -55,6 +55,7 @@
 #include "js/vision_bindings.h"
 #include "js/wake_bindings.h"
 #include "js/kws_bindings.h"
+#include "js/sense_bindings.h"
 #include "js/mic_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/net_bindings.h"
@@ -344,6 +345,14 @@ Engine::Engine(const EngineConfig& config)
     // worker -> tickKws delivery. Inert until the app calls bro.kws.load().
     js::installKwsBindings(jsRuntime_->getContext(), audioEngine_.get(),
                            audioInference_.get());
+
+    // bro.sense (brosoundml::SensorHub — the tier-0 acoustic sensor bus:
+    // model-free per-frame level/VAD, onset, and tonality sensors). Same
+    // tenant shape minus the result ring — the hub's lock-free snapshot IS
+    // the delivery, polled via bro.sense.snapshot(). Inert until
+    // bro.sense.start().
+    js::installSenseBindings(jsRuntime_->getContext(), audioEngine_.get(),
+                             audioInference_.get());
 
     // bro.mic (general live-mic chunk consumer — the worked example of
     // broaudio's chunkFrames feature). Same shape as wake: a mic tap on the
