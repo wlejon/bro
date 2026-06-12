@@ -34,8 +34,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <random>
 #include <stdexcept>
@@ -89,6 +92,32 @@ void tsGetFloat(JSContext* ctx, JSValueConst obj, const char* key, float& dst) {
 // steps. Both contexts share this one process-global, so no message-passing —
 // and no mutex — is involved.
 std::atomic<bool> g_cancelRequested{false};
+
+// Stage profiler, enabled with BRO_TRIPOSPLAT_PROFILE=1. Every probe point in
+// tsGenerate sits right after a bt::sync_all() (or is pure host work), so the
+// wall-clock deltas are true per-stage GPU+host costs, not async launch skew.
+struct TsProfiler {
+    using clock = std::chrono::steady_clock;
+    bool on = false;
+    clock::time_point t0, tStage;
+    void start() {
+        const char* e = std::getenv("BRO_TRIPOSPLAT_PROFILE");
+        on = e && e[0] && e[0] != '0';
+        if (on) t0 = tStage = clock::now();
+    }
+    void stage(const char* name) {
+        if (!on) return;
+        const auto now = clock::now();
+        std::fprintf(stderr, "[triposplat] %-28s %8.1f ms\n", name,
+                     std::chrono::duration<double, std::milli>(now - tStage).count());
+        tStage = now;
+    }
+    void total() {
+        if (!on) return;
+        std::fprintf(stderr, "[triposplat] %-28s %8.1f ms\n", "TOTAL",
+                     std::chrono::duration<double, std::milli>(clock::now() - t0).count());
+    }
+};
 
 bt::Device tsAutoDevice() {
     if (bt::is_available(bt::Device::CUDA))  return bt::Device::CUDA;
@@ -255,12 +284,16 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         JS_FreeValue(ctx, rb);
     }
 
+    TsProfiler prof;
+    prof.start();
+
     // 1) read + preprocess the image (JS thread).
     std::vector<std::uint8_t> rgba;
     int iw = 0, ih = 0;
     std::string err;
     if (!tsReadImage(ctx, argv[0], rgba, iw, ih, err))
         return JS_ThrowTypeError(ctx, "triposplat: %s", err.c_str());
+    prof.stage("read image");
     // Optional BiRefNet bg-removal: replace the image alpha with the predicted
     // matte so the composite-over-black isolates the subject.
     if (w->rmbg && removeBackground) {
@@ -278,9 +311,11 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         } catch (const std::exception& e) {
             return JS_ThrowTypeError(ctx, "triposplat: birefnet: %s", e.what());
         }
+        prof.stage("birefnet matte");
     }
     std::vector<float> rgb01;
     tsPreprocess(rgba, iw, ih, rgb01);
+    prof.stage("preprocess 1024^2 (host)");
 
     try {
         const int HW = kCanvas * kCanvas;
@@ -294,8 +329,10 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
                 dino_in[static_cast<std::size_t>(c) * HW + i] =
                     (rgb01[static_cast<std::size_t>(i) * 3 + c] - kMean[c]) / kStd[c];
         bt::Tensor dino_px = bt::Tensor::from_host_on(w->dino->device(), dino_in.data(), 1, 3 * HW);
+        prof.stage("dino input prep (host)");
         dv3::BackboneOutput dout = w->dino->encode(dino_px, kCanvas, kCanvas);
         bt::sync_all();
+        prof.stage("dinov3 encode");
         if (cancelled()) throw tsp::SampleCancelled();
 
         // feature1 = affine-free LayerNorm over the 1280 channels (reference does
@@ -315,6 +352,7 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
             for (int j = 0; j < D1; ++j) row[j] = (row[j] - mean) * inv;
         }
         bt::Tensor feature1 = tsUploadCompute(f1.data(), K, D1);
+        prof.stage("feature1 layernorm (host)");
 
         // 2b) VAE input: (1, 3*HW) NCHW in [-1,1] at the compute dtype.
         std::vector<float> vae_in(static_cast<std::size_t>(3) * HW);
@@ -323,9 +361,11 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
                 vae_in[static_cast<std::size_t>(c) * HW + i] =
                     rgb01[static_cast<std::size_t>(i) * 3 + c] * 2.0f - 1.0f;
         bt::Tensor vae_px = tsUploadCompute(vae_in.data(), 1, 3 * HW);
+        prof.stage("vae input prep (host)");
         bt::Tensor vae_tok;
         w->vae->encode(vae_px, kCanvas, kCanvas, vae_tok);
         bt::sync_all();
+        prof.stage("vae encode");
         if (cancelled()) throw tsp::SampleCancelled();
 
         // feature2 = [5 zero tokens ; vae tokens] to align with feature1's
@@ -338,6 +378,7 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         std::vector<float> f2(static_cast<std::size_t>(K) * D2, 0.0f);
         std::copy(vt.begin(), vt.end(), f2.begin() + static_cast<std::size_t>(prefix) * D2);
         bt::Tensor feature2 = tsUploadCompute(f2.data(), K, D2);
+        prof.stage("feature2 assemble (host)");
 
         // 3) seeded noise (our own RNG — deterministic; the reference's torch
         // randn is not reproducible in C++).
@@ -360,11 +401,17 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         bt::Tensor latent;
         tsp::sample_latent(*w->flow, feature1, feature2, noise_lat, noise_cam, sopts, latent);
         bt::sync_all();
+        if (prof.on) {
+            char label[64];
+            std::snprintf(label, sizeof label, "flow sampler (%d steps)", steps);
+            prof.stage(label);
+        }
         if (cancelled()) throw tsp::SampleCancelled();
 
         // 5) octree decode -> Gaussian cloud.
         tsp::GaussianSplats splats =
             w->decoder->decode(latent, numGaussians, static_cast<std::uint64_t>(static_cast<std::uint32_t>(seed)));
+        prof.stage("octree decode");
 
         // 6) return typed arrays (the GaussianSplats SoA already matches the
         // scene GaussianSplatNode / bromesh::GaussianSplatCloud convention).
@@ -376,6 +423,8 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         JS_SetPropertyStr(ctx, out, "sh",        tsFloat32Array(ctx, splats.sh.data(), splats.sh.size()));
         JS_SetPropertyStr(ctx, out, "shDegree",  JS_NewInt32(ctx, splats.shDegree));
         JS_SetPropertyStr(ctx, out, "count",     JS_NewInt64(ctx, static_cast<int64_t>(splats.count())));
+        prof.stage("pack typed arrays");
+        prof.total();
         return out;
     } catch (const tsp::SampleCancelled&) {
         // User-requested abort — not an error. Hand back a small marker the
