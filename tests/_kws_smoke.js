@@ -166,11 +166,22 @@ const refClip = speak('open the pod bay doors', rate);
 const len2 = bro.kws.enrollFromAudio('pod-bay', refClip);
 assert(len2 >= 3, 'audio-enrolled template len >= 3 (got ' + len2 + ')');
 
+// Rhythm policy plumbing: the same clip enrolled with enrollGaps keeps any
+// internal silence as timed gap states (a speech clip may or may not contain
+// one — the matcher semantics are pinned by the brosoundml unit tests; this
+// checks the policy reaches the library and self-detection still holds).
+const len3 = bro.kws.enrollFromAudio('pod-bay-gaps', refClip, { enrollGaps: true });
+assert(len3 >= len2, 'gap-enrolled template at least as long (got ' + len3 +
+       ' vs ' + len2 + ')');
+console.log('[smoke] enrollFromAudio len ' + len2 + ', with enrollGaps ' + len3);
+
 const spots2 = [];
 bro.kws.listen({ onSpot: (name, confidence) => spots2.push({ name, confidence }) });
 const events2 = feedClip(refClip, rate);
 assert(events2.some((e) => e.name === 'pod-bay'),
        'audio-enrolled template fired (' + JSON.stringify(events2) + ')');
+assert(events2.some((e) => e.name === 'pod-bay-gaps'),
+       'gap-enrolled template self-fires too (' + JSON.stringify(events2) + ')');
 
 // ── 6. teardown ──────────────────────────────────────────────────────────────
 bro.kws.stop();

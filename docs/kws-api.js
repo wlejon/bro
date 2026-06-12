@@ -55,6 +55,20 @@
  * @param {number} [opts.emissionFloor=0.15]  - per-frame log-posterior floor;
  *        keeps one unreliable transient phoneme (stop burst, glide) from
  *        vetoing a whole citation template. 0 disables.
+ * @param {boolean} [opts.enrollGaps=false]   - rhythm templates: when
+ *        enrolling FROM AUDIO, keep internal silence runs as TIMED gap states
+ *        instead of dropping them. Off, click·gap·click collapses to just
+ *        "click"; on, the rhythm itself — sound, a timed gap, sound — is the
+ *        template, and a re-performance at the wrong tempo is an illegal
+ *        path, not a low score. The matcher is stricter for gap templates
+ *        (transitions need real evidence; floor-riding is bounded), so
+ *        percussive gestures usually also want minPhonemes lowered.
+ * @param {number} [opts.gapMinFrames=5]      - internal silence shorter than
+ *        this (10 ms frames) still collapses out — speech stop closures stay
+ *        invisible, so enrollGaps is safe for spoken phrases too.
+ * @param {number} [opts.gapTolerance=0.5]    - gap duration window as a
+ *        fraction of the enrolled gap g: legal dwell is [g*(1-tol), g*(1+tol)]
+ *        frames. Tighten for stricter rhythm matching.
  */
 bro.kws.load({ weights: '../brosoundml/weights/phoneme/english.bpm' });
 // bro.kws.isLoaded()   === true
@@ -74,7 +88,8 @@ bro.kws.load({ weights: '../brosoundml/weights/phoneme/english.bpm' });
  *
  * The optional per-template policy object accepts the same keys as load()
  * (threshold, refractoryMs, smoothing, minPhonemes, entrySilenceFrames,
- * emissionFloor) and overrides the global defaults for this template only.
+ * emissionFloor, enrollGaps, gapMinFrames, gapTolerance) and overrides the
+ * global defaults for this template only.
  *
  * @param {string} name                    - event name passed to onSpot.
  * @param {Int32Array|number[]} phonemeIds - from bro.tts.phonemize(text).

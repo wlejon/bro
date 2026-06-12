@@ -180,16 +180,22 @@ const char* deviceName(brotensor::Device d) {
 
 // Overlay detector-policy keys present on `obj` onto `cfg`:
 //   threshold, refractoryMs, minPhonemes, entrySilenceFrames, emissionFloor,
-//   smoothing: { hits, window }.
+//   enrollGaps, gapMinFrames, gapTolerance, smoothing: { hits, window }.
 // Used for the global defaults (load) and per-template overrides (enroll).
 void readPolicy(JSContext* ctx, JSValueConst obj, brosoundml::SpotterConfig& cfg) {
     if (!JS_IsObject(obj)) return;
     double d;
     if (getNum(ctx, obj, "threshold", d))     cfg.threshold      = (float)d;
     if (getNum(ctx, obj, "emissionFloor", d)) cfg.emission_floor = (float)d;
+    if (getNum(ctx, obj, "gapTolerance", d))  cfg.gap_tolerance  = (float)d;
     getInt(ctx, obj, "refractoryMs",       cfg.refractory_ms);
     getInt(ctx, obj, "minPhonemes",        cfg.min_phonemes);
     getInt(ctx, obj, "entrySilenceFrames", cfg.entry_silence_frames);
+    getInt(ctx, obj, "gapMinFrames",       cfg.gap_min_frames);
+    JSValue gv = JS_GetPropertyStr(ctx, obj, "enrollGaps");
+    if (!JS_IsUndefined(gv) && !JS_IsNull(gv))
+        cfg.enroll_gaps = JS_ToBool(ctx, gv) > 0;
+    JS_FreeValue(ctx, gv);
     JSValue sm = JS_GetPropertyStr(ctx, obj, "smoothing");
     if (JS_IsObject(sm)) {
         getInt(ctx, sm, "hits",   cfg.smoothing_hits);
@@ -308,7 +314,8 @@ JSValue throwIfListening(JSContext* ctx, const char* what) {
 // ─── JS-callable functions ─────────────────────────────────────────────────
 
 // bro.kws.load({ weights, device?, threshold?, refractoryMs?, smoothing?,
-//                minPhonemes?, entrySilenceFrames?, emissionFloor? })
+//                minPhonemes?, entrySilenceFrames?, emissionFloor?,
+//                enrollGaps?, gapMinFrames?, gapTolerance? })
 // Load the PhonemeNet checkpoint (+ its embedded class map) and set the
 // global detector-policy defaults. Enroll templates next, then listen().
 JSValue js_load(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
