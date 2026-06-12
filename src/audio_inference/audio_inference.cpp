@@ -91,7 +91,35 @@ AudioInference::TaskId AudioInference::addTask(std::shared_ptr<PcmRing> ring,
 void AudioInference::removeTask(TaskId id) {
     if (id == kInvalidTask) return;
     pushCommand(new Command{Command::Remove, id, nullptr, ProcessFn{}});
-    if (!thread_.joinable()) drainCommands();
+    if (!thread_.joinable()) { drainCommands(); return; }
+
+    // Threaded: BLOCK until the worker has applied this command. removeTask is a
+    // barrier, not a fire-and-forget: callers detach a tenant precisely so they
+    // can then mutate (or destroy) that tenant's model state from the main
+    // thread — enroll/remove/clear on a PhonemeSpotter, etc. If we returned
+    // while the worker was still inside the pump that runs the tenant's closure,
+    // the main thread would mutate the model concurrently with feed() (the
+    // worker iterating PhonemeSpotter::matchers, say) — a data race and heap
+    // corruption. The shared_ptr in the closure keeps the model ALIVE across the
+    // pump, but does nothing to serialize access to its mutable state; that is
+    // what this barrier provides, upholding the single-producer discipline the
+    // bindings assume.
+    //
+    // drainCommands() runs at the TOP of the worker loop, before each
+    // pumpTasks(). So once cmdHead_ reaches the tail we just published, the
+    // command has been applied (the task erased) AND the pump that may still
+    // have been running the removed task's closure — sequenced before that
+    // drain — has completed. (A pump that starts after the drain no longer sees
+    // the task.) The state_ guard avoids spinning forever should the worker have
+    // exited; removeTask and shutdown() are both main-thread, so they never race.
+    // Short sleeps, not a yield spin: the worker only drains every
+    // kDrainInterval (5 ms), so a tight yield loop would burn a core for the
+    // whole wait. Removal latency is irrelevant (user-action cadence).
+    const std::size_t target = cmdTail_.load(std::memory_order_relaxed);
+    while (cmdHead_.load(std::memory_order_acquire) < target &&
+           state_.load(std::memory_order_acquire) != kShutdown) {
+        std::this_thread::sleep_for(std::chrono::microseconds(500));
+    }
 }
 
 void AudioInference::drainCommands() {

@@ -98,6 +98,13 @@ public:
 
     // Unregister a tenant. The worker destroys the task (dropping its model ref)
     // on its own thread. Safe to call with an unknown/stale id.
+    //
+    // BARRIER (threaded mode): blocks until the worker has applied the removal,
+    // which guarantees any in-flight pump still running the removed task's
+    // closure has completed. So once this returns the caller may safely mutate
+    // (or destroy) that tenant's model from the main thread — there is no longer
+    // any worker access to it. Must be called from the main thread, never from a
+    // task's process() callback (it would deadlock against its own worker).
     void removeTask(TaskId id);
 
     // Headless: drain rings + run process() for every task on the calling
