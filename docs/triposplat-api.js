@@ -82,12 +82,28 @@ class TripoSplatPipeline {
    *        `birefnet` checkpoint, false otherwise. Set false to skip matting for
    *        an already-masked / foreground-on-black input (no reload needed).
    * @returns {{positions: Float32Array, scales: Float32Array, rotations: Float32Array,
-   *           opacities: Float32Array, sh: Float32Array, shDegree: number, count: number}}
+   *           opacities: Float32Array, sh: Float32Array, shDegree: number, count: number}
+   *           | {cancelled: true}}
    *   Render-ready SoA (positions xyz / scales xyz linear / rotations xyzw unit /
    *   opacities [0,1] / SH-DC color). Feeds scene.createGaussianSplat({ cloud }).
+   *   Returns `{ cancelled: true }` instead (no cloud) when bro.triposplat.cancel()
+   *   was called during the run — check for it before reading `.count`.
    */
   generate(image, opts) {}
 }
+
+/**
+ * Request that an in-flight generate() abort. generate() is a single synchronous
+ * native call — run it inside a Worker and call this from the MAIN thread to
+ * interrupt it. The cancel is cooperative: it lands at the next stage boundary
+ * (after the DINOv3 / VAE encoders) or between Euler sampler steps, so a run
+ * stuck in the octree decode finishes that stage first. The aborted generate()
+ * resolves with `{ cancelled: true }`. No-op when nothing is running; the flag
+ * is cleared at the start of each generate().
+ *
+ * @function cancel
+ * @memberof bro.triposplat
+ */
 
 // -----------------------------------------------------------------------------
 // Example

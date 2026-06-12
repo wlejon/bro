@@ -32,6 +32,7 @@
 #include <include/core/SkImageInfo.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <memory>
@@ -78,6 +79,15 @@ void tsGetFloat(JSContext* ctx, JSValueConst obj, const char* key, float& dst) {
     if (JS_IsNumber(v)) { double t = dst; JS_ToFloat64(ctx, &t, v); dst = (float)t; }
     JS_FreeValue(ctx, v);
 }
+
+// Process-global cooperative-cancel flag. generate() runs as one synchronous
+// native call inside a Worker, so the worker's JS thread is blocked and can't
+// receive a "cancel" postMessage mid-run. Instead the MAIN thread calls
+// bro.triposplat.cancel(), which flips this atomic; the in-flight generate()
+// (on the worker thread) polls it at every stage boundary and between sampler
+// steps. Both contexts share this one process-global, so no message-passing —
+// and no mutex — is involved.
+std::atomic<bool> g_cancelRequested{false};
 
 bt::Device tsAutoDevice() {
     if (bt::is_available(bt::Device::CUDA))  return bt::Device::CUDA;
@@ -217,6 +227,10 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         return JS_ThrowTypeError(ctx, "triposplat: pipeline not loaded");
     if (argc < 1) return JS_ThrowTypeError(ctx, "generate(image, opts): image required");
 
+    // Start a fresh run: drop any cancel request left over from a prior call.
+    g_cancelRequested.store(false, std::memory_order_relaxed);
+    auto cancelled = [] { return g_cancelRequested.load(std::memory_order_relaxed); };
+
     // options
     int   seed = 42, steps = 20, numGaussians = 131072;
     float guidance = 3.0f, shift = 3.0f;
@@ -275,6 +289,7 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         bt::Tensor dino_px = bt::Tensor::from_host_on(w->dino->device(), dino_in.data(), 1, 3 * HW);
         dv3::BackboneOutput dout = w->dino->encode(dino_px, kCanvas, kCanvas);
         bt::sync_all();
+        if (cancelled()) throw tsp::SampleCancelled();
 
         // feature1 = affine-free LayerNorm over the 1280 channels (reference does
         // F.layer_norm(dinov3_feat, [-1])), at the compute dtype.
@@ -304,6 +319,7 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         bt::Tensor vae_tok;
         w->vae->encode(vae_px, kCanvas, kCanvas, vae_tok);
         bt::sync_all();
+        if (cancelled()) throw tsp::SampleCancelled();
 
         // feature2 = [5 zero tokens ; vae tokens] to align with feature1's
         // cls+4-register prefix; (K, 128) at the compute dtype.
@@ -333,9 +349,11 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         sopts.steps = steps;
         sopts.guidance_scale = guidance;
         sopts.shift = shift;
+        sopts.should_cancel = cancelled;   // abort between Euler steps on request
         bt::Tensor latent;
         tsp::sample_latent(*w->flow, feature1, feature2, noise_lat, noise_cam, sopts, latent);
         bt::sync_all();
+        if (cancelled()) throw tsp::SampleCancelled();
 
         // 5) octree decode -> Gaussian cloud.
         tsp::GaussianSplats splats =
@@ -352,9 +370,24 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         JS_SetPropertyStr(ctx, out, "shDegree",  JS_NewInt32(ctx, splats.shDegree));
         JS_SetPropertyStr(ctx, out, "count",     JS_NewInt64(ctx, static_cast<int64_t>(splats.count())));
         return out;
+    } catch (const tsp::SampleCancelled&) {
+        // User-requested abort — not an error. Hand back a small marker the
+        // caller can distinguish from a real cloud.
+        JSValue out = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, out, "cancelled", JS_TRUE);
+        return out;
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "triposplat.generate failed: %s", e.what());
     }
+}
+
+// bro.triposplat.cancel() — request that an in-flight generate() abort. Safe to
+// call from any context/thread (e.g. the main thread while a Worker runs
+// generate). No-op if nothing is running.
+JSValue tsCancel(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    (void)ctx;
+    g_cancelRequested.store(true, std::memory_order_relaxed);
+    return JS_UNDEFINED;
 }
 
 void tsRegisterClass(JSContext* ctx) {
@@ -449,6 +482,7 @@ void installTriposplatBindings(JSContext* ctx) {
     JSValue ns = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, ns, "init", JS_NewCFunction(ctx, tsInit, "init", 0));
     JS_SetPropertyStr(ctx, ns, "load", JS_NewCFunction(ctx, tsLoad, "load", 1));
+    JS_SetPropertyStr(ctx, ns, "cancel", JS_NewCFunction(ctx, tsCancel, "cancel", 0));
     JS_SetPropertyStr(ctx, broObj, "triposplat", ns);
 
     JS_FreeValue(ctx, broObj);
