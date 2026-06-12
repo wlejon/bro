@@ -61,8 +61,12 @@
  *        "click"; on, the rhythm itself — sound, a timed gap, sound — is the
  *        template, and a re-performance at the wrong tempo is an illegal
  *        path, not a low score. The matcher is stricter for gap templates
- *        (transitions need real evidence; floor-riding is bounded), so
- *        percussive gestures usually also want minPhonemes lowered.
+ *        (every state must actually be heard — entry may precede evidence
+ *        by a few frames, but floor-riding is bounded), so percussive
+ *        gestures usually also want minPhonemes lowered. Enroll rhythm
+ *        gestures from a clip recorded in the room they'll be performed in:
+ *        the streaming front-end adapts to the ambient, and a mic recording
+ *        carries that same ambient into enrollment's offline pass.
  * @param {number} [opts.gapMinFrames=5]      - internal silence shorter than
  *        this (10 ms frames) still collapses out — speech stop closures stay
  *        invisible, so enrollGaps is safe for spoken phrases too.
