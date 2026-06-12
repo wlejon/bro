@@ -22,6 +22,7 @@
 #include "js/terrain_bindings.h"
 #include "js/custom_elements.h"
 #include "js/wake_bindings.h"
+#include "js/gesture_bindings.h"
 #include "js/kws_bindings.h"
 #include "js/listen_host.h"
 #include "js/sense_bindings.h"
@@ -154,6 +155,7 @@ Engine::~Engine() {
         js::cleanupWakeBindings(ctx);
         js::cleanupKwsBindings(ctx);
         js::cleanupSenseBindings(ctx);
+        js::cleanupGestureBindings(ctx);
         // Both listen-host members are detached now (their cleanups above ran
         // Set*(nullptr), which tears down the shared tap + task on the last
         // detach); this just drops the host's subsystem pointers.

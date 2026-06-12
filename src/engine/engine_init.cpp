@@ -54,6 +54,7 @@
 #include "js/triposplat_bindings.h"
 #include "js/vision_bindings.h"
 #include "js/wake_bindings.h"
+#include "js/gesture_bindings.h"
 #include "js/kws_bindings.h"
 #include "js/listen_host.h"
 #include "js/sense_bindings.h"
@@ -361,6 +362,13 @@ Engine::Engine(const EngineConfig& config)
     // bro.sense.start().
     js::installSenseBindings(jsRuntime_->getContext(), audioEngine_.get(),
                              audioInference_.get());
+
+    // bro.gesture (brosoundml::GestureSpotter — tier-0 non-speech gesture
+    // matching: enrolled rhythm/tone gestures over the shared SensorHub stream,
+    // for the clicks/whistles the speech model can't represent). A listen-host
+    // member with its own SPSC ring -> tickGesture. Inert until enroll/listen.
+    js::installGestureBindings(jsRuntime_->getContext(), audioEngine_.get(),
+                               audioInference_.get());
 
     // bro.mic (general live-mic chunk consumer — the worked example of
     // broaudio's chunkFrames feature). Same shape as wake: a mic tap on the

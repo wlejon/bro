@@ -147,6 +147,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/kws-api.js` | `bro.kws` — open-vocabulary streaming keyword spotting (brosoundml::PhonemeSpotter): enroll phrases from `bro.tts.phonemize` ids or reference audio, named onSpot events off the mic tap |
 | `docs/mic-api.js` | `bro.mic` — live mic chunk consumer: fixed-size frames (chunkFrames) from broaudio's mic tap, per-chunk peak/RMS, resample + AGC |
 | `docs/sense-api.js` | `bro.sense` — tier-0 acoustic sensor bus (brosoundml::SensorHub): model-free per-frame level/VAD, spectral-flux onset, autocorrelation tonality off the mic tap; poll-only lock-free snapshot with monotonic event counters |
+| `docs/gesture-api.js` | `bro.gesture` — open-vocabulary NON-speech gesture matching (brosoundml::GestureSpotter): enroll rhythm (onset-interval) and tone (sustained-pitch) gestures by example over the shared SensorHub stream, named onGesture events — the tier-0 path for clicks/taps/whistles the speech model can't represent. Needs bro.sense active |
 | `docs/worker-api.js` | `Worker` — web worker threads |
 | `docs/ai-game-api.js` | `bro.ai.game` — navmesh, pathfinding, steering, perception, capabilities, AgentBinding |
 | `docs/gpu-api.js` | `bro.gpu` — always-present runtime backend probe (brotensor): `available`, `backend` ('cuda'/'metal'/'cpu'), `devices`. Honest signal for "will an ML model run on GPU or fall back to CPU" — gate large-model loads on it |

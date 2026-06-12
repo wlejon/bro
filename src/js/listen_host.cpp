@@ -34,10 +34,12 @@ struct ListenHostState {
     std::shared_ptr<brosoundml::SensorHub>      hub;
     std::shared_ptr<brosoundml::PhonemeSpotter> spotter;
     std::shared_ptr<brosoundml::WakeWord>       wake;
+    std::shared_ptr<brosoundml::GestureSpotter> gesture;
     brotensor::Device spotterDevice = brotensor::Device::CPU;
     brotensor::Device wakeDevice    = brotensor::Device::CPU;
     ListenSpotsFn     onSpots;
     ListenWakeFn      onWake;
+    ListenGesturesFn  onGestures;
 
     // The DeviceScope for the whole bus feed. Both model consumers run under
     // one scope; when only the wake member is attached, use its device.
@@ -72,21 +74,24 @@ void teardownInfra() {
 // only ever runs under one closure at a time.
 void rebuildTask() {
     removeTaskIfAny();
-    if (!g_listen.hub && !g_listen.spotter && !g_listen.wake) {
+    if (!g_listen.hub && !g_listen.spotter && !g_listen.wake &&
+        !g_listen.gesture) {
         teardownInfra();
         return;
     }
 
-    auto bus     = g_listen.bus;
-    auto hub     = g_listen.hub;
-    auto spotter = g_listen.spotter;
-    auto wake    = g_listen.wake;
-    auto device  = g_listen.scopeDevice();
-    auto onSpots = g_listen.onSpots;
-    auto onWake  = g_listen.onWake;
+    auto bus        = g_listen.bus;
+    auto hub        = g_listen.hub;
+    auto spotter    = g_listen.spotter;
+    auto wake       = g_listen.wake;
+    auto gesture    = g_listen.gesture;
+    auto device     = g_listen.scopeDevice();
+    auto onSpots    = g_listen.onSpots;
+    auto onWake     = g_listen.onWake;
+    auto onGestures = g_listen.onGestures;
     g_listen.taskId = g_listen.inference->addTask(
         g_listen.ring,
-        [bus, hub, spotter, wake, device, onSpots, onWake](
+        [bus, hub, spotter, wake, gesture, device, onSpots, onWake, onGestures](
             const float* samples, int n) {
             brosoundml::ListenFeedResult r;
             try {
@@ -94,13 +99,14 @@ void rebuildTask() {
                 // not the host-syncing default.
                 brotensor::DeviceScope scope(device);
                 r = bus->feed(samples, n, hub.get(), spotter.get(),
-                              wake.get());
+                              wake.get(), gesture.get());
             } catch (const std::exception& e) {
                 std::fprintf(stderr, "[ERROR] [listen] feed: %s\n", e.what());
                 return;
             }
             if (onSpots && !r.spots.empty()) onSpots(r.spots);
             if (onWake && wake) onWake(r.wake_fired);
+            if (onGestures && !r.gestures.empty()) onGestures(r.gestures);
         });
 }
 
@@ -149,8 +155,10 @@ void shutdownListenHost() {
     g_listen.hub.reset();
     g_listen.spotter.reset();
     g_listen.wake.reset();
-    g_listen.onSpots = nullptr;
-    g_listen.onWake  = nullptr;
+    g_listen.gesture.reset();
+    g_listen.onSpots    = nullptr;
+    g_listen.onWake     = nullptr;
+    g_listen.onGestures = nullptr;
     teardownInfra();
     g_listen.audioEngine = nullptr;
     g_listen.inference   = nullptr;
@@ -189,6 +197,18 @@ void listenHostSetWake(std::shared_ptr<brosoundml::WakeWord> wake,
     rebuildTask();
 }
 
+void listenHostSetGesture(std::shared_ptr<brosoundml::GestureSpotter> gesture,
+                          ListenGesturesFn onGestures) {
+    // The gesture spotter reads the SensorHub's per-frame snapshot — it needs
+    // no model device and no front-end of its own (it rides the hub bro.sense
+    // already runs). Compatibility is implicit: it consumes whatever the hub
+    // publishes, and does nothing on frames where no hub is attached.
+    if (gesture) ensureInfra();
+    g_listen.gesture    = std::move(gesture);
+    g_listen.onGestures = std::move(onGestures);
+    rebuildTask();
+}
+
 broaudio::MicTapId listenHostTapId() { return g_listen.tapId; }
 
 void listenHostWriteRing(const float* samples, int n) {
@@ -201,9 +221,11 @@ brosoundml::ListenFeedResult listenHostFeedInline(const float* samples, int n) {
     brotensor::DeviceScope scope(g_listen.scopeDevice());
     r = g_listen.bus->feed(samples, n,
                            g_listen.hub.get(), g_listen.spotter.get(),
-                           g_listen.wake.get());
+                           g_listen.wake.get(), g_listen.gesture.get());
     if (g_listen.onSpots && !r.spots.empty()) g_listen.onSpots(r.spots);
     if (g_listen.onWake && g_listen.wake) g_listen.onWake(r.wake_fired);
+    if (g_listen.onGestures && !r.gestures.empty())
+        g_listen.onGestures(r.gestures);
     return r;
 }
 

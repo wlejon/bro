@@ -48,6 +48,10 @@ using ListenSpotsFn =
 // is attached (not only on fires) so the tenant can publish per-block score
 // telemetry alongside the fire flag.
 using ListenWakeFn = std::function<void(bool fired)>;
+// Invoked on the inference thread after a bus feed when a gesture member is
+// attached and at least one gesture fired this block.
+using ListenGesturesFn =
+    std::function<void(const std::vector<brosoundml::GestureEvent>&)>;
 
 // Wire the host to the engine's subsystems (engine init) / drop everything
 // (engine teardown — also detaches any remaining members).
@@ -64,6 +68,8 @@ void listenHostSetSpotter(std::shared_ptr<brosoundml::PhonemeSpotter> spotter,
                           brotensor::Device device, ListenSpotsFn onSpots);
 void listenHostSetWake(std::shared_ptr<brosoundml::WakeWord> wake,
                        brotensor::Device device, ListenWakeFn onWake);
+void listenHostSetGesture(std::shared_ptr<brosoundml::GestureSpotter> gesture,
+                          ListenGesturesFn onGestures);
 
 // The shared tap (kInvalidMicTapId when no member is attached) — for the
 // tenants' stats() surfaces.

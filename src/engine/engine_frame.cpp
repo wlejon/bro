@@ -15,6 +15,7 @@
 #include "js/net_bindings.h"
 #include "js/worker.h"
 #include "js/wake_bindings.h"
+#include "js/gesture_bindings.h"
 #include "js/kws_bindings.h"
 #include "js/async_job.h"
 #include "js/mic_bindings.h"
@@ -117,6 +118,7 @@ void Engine::run() {
             // drains the mic rings on its own clock — it is not pumped from here.
             js::tickWake(jsRuntime_->getContext());
             js::tickKws(jsRuntime_->getContext());
+            js::tickGesture(jsRuntime_->getContext());
             js::tickMic(jsRuntime_->getContext());
             js::tickAsync(jsRuntime_->getContext());
             jsRuntime_->executePendingJobs();
@@ -425,6 +427,7 @@ void Engine::run() {
         // mic rings on its own clock — it is not pumped from here.
         js::tickWake(jsRuntime_->getContext());
         js::tickKws(jsRuntime_->getContext());
+        js::tickGesture(jsRuntime_->getContext());
         js::tickMic(jsRuntime_->getContext());
         js::tickAsync(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();

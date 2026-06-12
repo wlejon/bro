@@ -82,6 +82,7 @@ add_library(bro_js STATIC
     listen_host.cpp
     kws_bindings.cpp
     sense_bindings.cpp
+    gesture_bindings.cpp
     mic_bindings.cpp
     ai_learn_bindings.cpp
     ai_belief_bindings.cpp
