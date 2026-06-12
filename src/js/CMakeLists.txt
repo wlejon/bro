@@ -79,6 +79,7 @@ add_library(bro_js STATIC
     vision_bindings.cpp
     triposplat_bindings.cpp
     wake_bindings.cpp
+    listen_host.cpp
     kws_bindings.cpp
     sense_bindings.cpp
     mic_bindings.cpp

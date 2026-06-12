@@ -23,6 +23,11 @@
 // signals into a conclusion. Latency is one mel frame (10 ms) + your poll
 // interval.
 //
+// Plumbing: bro.sense is a member of the engine's SHARED listen host — one
+// raw (no-AGC) mic tap + ring + inference task drive a single PCEN front-end
+// feeding every attached tenant, so running bro.sense alongside bro.kws costs
+// one feature pass and both hear the SAME stream.
+//
 // There are no callbacks. Every momentary boolean (onset, voice, tonal) is
 // paired with a monotonic counter (onsets, voiceEvents, tonalEvents) and a
 // last-event frame index, so polling at frame rate — or slower — still
@@ -120,10 +125,12 @@ setInterval(() => {
 
 // ─── Headless / scripted feeding ────────────────────────────────────────────
 
-// In headless mode (no inference worker) feed() runs the hub synchronously
-// and returns the post-feed snapshot — deterministic for tests. While an
-// inference worker is running, feed() writes the live ring instead (returns
-// undefined) and you poll snapshot() as usual. Refused while the real mic is
-// capturing.
+// In headless mode (no inference worker) feed() runs the shared bus
+// synchronously and returns the post-feed snapshot — deterministic for
+// tests. The listen host carries ONE stream, so the feed advances every
+// attached tenant (audio fed here also drives bro.kws, and vice versa).
+// While an inference worker is running, feed() writes the live shared ring
+// instead (returns undefined) and you poll snapshot() as usual. Refused
+// while the real mic is capturing.
 const pcm = new Float32Array(16000);   // 1 s of synthetic 16 kHz audio
 const snap = bro.sense.feed(pcm);

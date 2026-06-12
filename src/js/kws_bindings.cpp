@@ -7,18 +7,21 @@
 // bro.kws is the open-vocab sibling of bro.wake: where bro.wake runs one
 // trained-in keyword logit, bro.kws aligns enrolled phoneme-sequence templates
 // (from bro.tts.phonemize ids, raw class ids, or reference audio) against
-// PhonemeNet's streaming per-frame posteriors and fires named events. Same
-// engine plumbing, three concerns on three threads:
+// PhonemeNet's streaming per-frame posteriors and fires named events.
 //
-//   - PRODUCER (real-time audio thread): listen() registers a broaudio MicTap
-//     at the spotter's sample rate. No AGC — the spotter's PCEN mel front-end
-//     is loudness-robust by construction (per-channel energy normalisation),
-//     unlike the peak-normalised wake training recipe. The callback copies
-//     samples into a lock-free SPSC ring; nothing else.
+// The audio plumbing lives in the shared listen host (listen_host.h): ONE raw
+// no-AGC mic tap + ring + inference task drive a brosoundml::ListenBus that
+// this binding's spotter joins as a member (alongside bro.sense's SensorHub),
+// so the whole stack costs one PCEN feature pass and one PhonemeNet forward.
+// Three concerns on three threads:
+//
+//   - PRODUCER (real-time audio thread): the host's tap callback copies
+//     samples into the shared lock-free SPSC ring; nothing else.
 //   - INFERENCE thread (engine::AudioInference worker; or, headless, the
-//     calling thread via stepInline()): drains the ring, runs
-//     PhonemeSpotter::feed(), and publishes fired events into a fixed SPSC
-//     slot ring (template index + confidence — no strings cross threads).
+//     calling thread): the host's task drains the ring, runs the bus (mel →
+//     PhonemeSpotter::feed_mel), and hands fired events to this binding's
+//     onSpots hook, which publishes them into a fixed SPSC slot ring
+//     (template index + confidence — no strings cross threads).
 //   - MAIN thread: tickKws() drains the slots and invokes the JS onSpot
 //     callback, so onSpot always runs single-threaded with the rest of the app.
 //
@@ -36,6 +39,7 @@
 #include "js/kws_bindings.h"
 
 #include "audio_inference/audio_inference.h"
+#include "js/listen_host.h"
 
 #include <broaudio/engine.h>
 #include <broaudio/mic_tap.h>
@@ -59,7 +63,6 @@ namespace bro::js {
 namespace {
 
 using engine::AudioInference;
-using engine::PcmRing;
 
 // Fired events cross inference -> main as (template index, confidence) pairs
 // in a fixed SPSC slot ring. 64 slots is generous — spot events arrive at
@@ -91,17 +94,11 @@ struct KwsState {
     std::atomic<std::uint64_t> produced{0};
     std::atomic<std::uint64_t> drained{0};
 
-    std::shared_ptr<PcmRing> ring;
-    AudioInference::TaskId   taskId = AudioInference::kInvalidTask;
-    broaudio::MicTapId       tapId  = broaudio::kInvalidMicTapId;
-
     // Gates onSpot delivery, never audio processing (the posterior stream and
     // every template's DP state keep rolling so resume never faces a cold
     // matcher). Written by suspend()/resume() (main), read by the inference
     // thread.
     std::atomic<bool> suspended{false};
-
-    std::vector<float> feedScratch;  // js_feed staging (main thread)
 
     bool listening = false;
 };
@@ -280,15 +277,10 @@ int nameIndexOf(const std::vector<std::string>& names, const std::string& n) {
 
 void stopListening() {
     if (!g_kws.listening) return;
-    // Producer first, so no more samples enter the ring.
-    if (g_kws.audioEngine && g_kws.tapId != broaudio::kInvalidMicTapId) {
-        g_kws.audioEngine->removeMicTap(g_kws.tapId);
-    }
-    g_kws.tapId = broaudio::kInvalidMicTapId;
-    if (g_kws.inference && g_kws.taskId != AudioInference::kInvalidTask) {
-        g_kws.inference->removeTask(g_kws.taskId);
-    }
-    g_kws.taskId = AudioInference::kInvalidTask;
+    // Detach from the shared listen host. The host replaces (or tears down)
+    // the inference task; if bro.sense is still a member, its stream keeps
+    // rolling untouched.
+    listenHostSetSpotter(nullptr, brotensor::Device::CPU, nullptr);
     if (g_kws.ctx && !JS_IsUndefined(g_kws.onSpot)) {
         JS_FreeValue(g_kws.ctx, g_kws.onSpot);
         g_kws.onSpot = JS_UNDEFINED;
@@ -296,7 +288,6 @@ void stopListening() {
     g_kws.produced.store(0, std::memory_order_relaxed);
     g_kws.drained.store(0, std::memory_order_relaxed);
     g_kws.suspended.store(false, std::memory_order_relaxed);
-    g_kws.ring.reset();
     g_kws.names.clear();
     g_kws.listening = false;
 }
@@ -304,7 +295,6 @@ void stopListening() {
 void unloadSpotter() {
     stopListening();
     g_kws.spotter.reset();
-    g_kws.feedScratch.clear();
 }
 
 // Reject single-producer mutators while the inference thread owns feed().
@@ -536,10 +526,6 @@ JSValue js_listen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     }
 
     try {
-        const int rate = g_kws.spotter->sample_rate();
-        auto ring = std::make_shared<PcmRing>(static_cast<std::size_t>(rate) * 2u);
-
-        g_kws.ring   = ring;
         g_kws.names  = names;
         g_kws.onSpot = JS_DupValue(ctx, onSpotVal);
         g_kws.produced.store(0, std::memory_order_relaxed);
@@ -547,55 +533,29 @@ JSValue js_listen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         g_kws.suspended.store(false, std::memory_order_relaxed);
         JS_FreeValue(ctx, onSpotVal);
 
-        // Inference task: feed the spotter, publish fired events. Captures the
-        // spotter (strong ref) and the name snapshot — the enrolled set cannot
-        // change while listening, so name -> index lookups stay valid.
-        auto spotter = g_kws.spotter;
-        auto device  = g_kws.device;
-        g_kws.taskId = g_kws.inference->addTask(
-            ring,
-            [spotter, device, names](const float* samples, int n) {
-                std::vector<brosoundml::SpotEvent> events;
-                try {
-                    brotensor::DeviceScope scope(device);
-                    events = spotter->feed(samples, n);
-                } catch (const std::exception& e) {
-                    std::fprintf(stderr, "[ERROR] [kws] feed: %s\n", e.what());
-                    return;
-                }
+        // Join the shared listen host. The host's single task drives the bus
+        // (mel -> one PhonemeNet forward) and calls this hook on the inference
+        // thread with whatever fired. Captures the name snapshot — the
+        // enrolled set cannot change while listening, so name -> index lookups
+        // stay valid; g_kws's atomics live for the program's lifetime.
+        listenHostSetSpotter(
+            g_kws.spotter, g_kws.device,
+            [names](const std::vector<brosoundml::SpotEvent>& events) {
                 if (g_kws.suspended.load(std::memory_order_relaxed)) return;
                 for (const auto& ev : events) {
                     const int idx = nameIndexOf(names, ev.name);
                     if (idx >= 0) publishEvent(idx, ev.confidence);
                 }
             });
-
-        // Mic tap at the spotter's rate. No AGC (PCEN front-end); the callback
-        // only writes the ring.
-        broaudio::MicTapConfig tapCfg;
-        tapCfg.targetRate  = rate;
-        tapCfg.chunkFrames = 0;
-        tapCfg.agc         = false;
-        auto ringRef = ring;
-        g_kws.tapId = g_kws.audioEngine->addMicTap(
-            tapCfg,
-            [ringRef](const float* samples, int n) { ringRef->write(samples, n); });
-        if (g_kws.tapId == broaudio::kInvalidMicTapId) {
-            g_kws.listening = true;  // let stopListening tear down the task
-            stopListening();
-            return JS_ThrowInternalError(ctx, "bro.kws.listen: addMicTap failed");
-        }
-        if (!g_kws.audioEngine->isMicCapturing()) {
-            g_kws.audioEngine->startMicCapture();
-        }
         g_kws.listening = true;
 
         std::fprintf(stderr,
             "[INFO] [kws] listening (device=%s, %zu template%s, mic=%d Hz, model=%d Hz)\n",
             deviceName(g_kws.device), names.size(), names.size() == 1 ? "" : "s",
-            g_kws.audioEngine->sampleRate(), rate);
+            g_kws.audioEngine->sampleRate(), g_kws.spotter->sample_rate());
         return JS_UNDEFINED;
     } catch (const std::exception& e) {
+        g_kws.listening = true;   // let stopListening clear the partial state
         stopListening();
         return JS_ThrowInternalError(ctx, "bro.kws.listen: %s", e.what());
     }
@@ -639,13 +599,14 @@ JSValue js_prefixProgress(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_NewFloat64(ctx, g_kws.spotter->prefix_progress());
 }
 
-// Diagnostic surface over the underlying broaudio mic tap (cf. bro.wake.stats).
+// Diagnostic surface over the SHARED listen-host mic tap (cf. bro.wake.stats).
 JSValue js_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    const broaudio::MicTapId tap = listenHostTapId();
     if (!g_kws.listening || !g_kws.audioEngine ||
-        g_kws.tapId == broaudio::kInvalidMicTapId) {
+        tap == broaudio::kInvalidMicTapId) {
         return JS_NULL;
     }
-    auto s = g_kws.audioEngine->getMicTapStats(g_kws.tapId);
+    auto s = g_kws.audioEngine->getMicTapStats(tap);
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "framesDelivered",
         JS_NewInt64(ctx, static_cast<int64_t>(s.framesDelivered)));
@@ -670,14 +631,16 @@ JSValue makeEventArray(JSContext* ctx,
 
 // Manual feed for tests / scripted scenarios. Samples must already be at the
 // spotter's rate. Mirrors bro.wake.feed's mode split:
-//   - Headless (no inference worker): feed() runs synchronously on this (the
-//     inference) thread; returns the fired events as [{name, confidence}].
-//     Suspended fires are still returned (the caller asked) but not queued.
-//   - Threaded: samples go into the live ring; events surface via onSpot.
-//     Returns undefined.
+//   - Headless (no inference worker): the shared bus runs synchronously on
+//     this (the inference) thread — it is ONE stream, so the feed advances
+//     every attached tenant (bro.sense included) — and the fired events come
+//     back as [{name, confidence}]. Suspended fires are still returned (the
+//     caller asked) but not queued for onSpot.
+//   - Threaded: samples go into the live shared ring; events surface via
+//     onSpot. Returns undefined.
 // Refuses to run while live capture is active (two-producer race on the ring).
 JSValue js_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!g_kws.listening || !g_kws.ring)
+    if (!g_kws.listening)
         return JS_ThrowInternalError(ctx, "bro.kws.feed: not listening");
     if (g_kws.audioEngine && g_kws.audioEngine->isMicCapturing()) {
         return JS_ThrowInternalError(ctx,
@@ -691,24 +654,19 @@ JSValue js_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         return JS_ThrowTypeError(ctx, "bro.kws.feed(Float32Array)");
 
     if (g_kws.inference && g_kws.inference->threaded()) {
-        g_kws.ring->write(p, n);
+        listenHostWriteRing(p, n);
         return JS_UNDEFINED;
     }
 
-    std::vector<brosoundml::SpotEvent> events;
+    brosoundml::ListenFeedResult r;
     try {
-        brotensor::DeviceScope scope(g_kws.device);
-        events = g_kws.spotter->feed(p, n);
+        // The host runs the device scope and delivers spots through the same
+        // onSpots hook the live path uses (suspended-gated there).
+        r = listenHostFeedInline(p, n);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "bro.kws.feed: %s", e.what());
     }
-    if (!g_kws.suspended.load(std::memory_order_relaxed)) {
-        for (const auto& ev : events) {
-            const int idx = nameIndexOf(g_kws.names, ev.name);
-            if (idx >= 0) publishEvent(idx, ev.confidence);
-        }
-    }
-    return makeEventArray(ctx, events);
+    return makeEventArray(ctx, r.spots);
 }
 
 } // namespace

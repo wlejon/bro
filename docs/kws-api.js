@@ -15,9 +15,14 @@
  *   - reference audio              →  bro.kws.enrollFromAudio(name, samples)
  *   - raw class ids                →  enroll() accepts those too
  *
- * Same engine plumbing as bro.wake — mic tap (audio thread) → lock-free ring
- * → PhonemeSpotter::feed() (inference thread) → onSpot (main thread). No AGC
- * on the tap: the spotter's PCEN mel front-end is loudness-robust by design.
+ * Plumbing: bro.kws is a member of the engine's SHARED listen host — one raw
+ * (no-AGC) mic tap + lock-free ring + inference task drive a single PCEN mel
+ * front-end (brosoundml::ListenBus) feeding every attached tenant, so running
+ * bro.kws alongside bro.sense costs one feature pass and one PhonemeNet
+ * forward, and both hear the SAME stream. Result delivery is still bro.kws's
+ * own: spot events → onSpot (main thread). No AGC anywhere on this path: the
+ * PCEN front-end is loudness-robust by design (bro.wake keeps its own AGC'd
+ * tap — its model is trained on peak-normalised audio).
  *
  * Single-producer rule: enroll/remove/clear/reset share the spotter's feed
  * thread, so they are only allowed while NOT listening — load, enroll, then
@@ -141,19 +146,22 @@ bro.kws.listen({
 const progress = bro.kws.prefixProgress();
 
 /**
- * Mic-tap diagnostics while listening (cf. bro.wake.stats), or null.
+ * Diagnostics over the SHARED listen-host mic tap (cf. bro.wake.stats), or
+ * null. bro.sense.stats() reports the same tap while both are live.
  * @returns {{framesDelivered, samplesDelivered, rollingPeak}|null}
  */
 const stats = bro.kws.stats();
 
 /**
  * Manual feed for tests / scripted scenarios (headless). Samples must be at
- * bro.kws.sampleRate(). Refused while live mic capture is active.
- *   - Headless: runs the spotter synchronously and returns the events fired
- *     during this call as [{ name, confidence }] (onSpot also fires on the
- *     next tick unless suspended).
- *   - Windowed/threaded: writes the live ring (events surface via onSpot)
- *     and returns undefined.
+ * bro.kws.sampleRate(). Refused while live mic capture is active. The listen
+ * host carries ONE stream, so this advances every attached tenant — audio fed
+ * here also moves bro.sense's sensors, and vice versa.
+ *   - Headless: runs the shared bus synchronously and returns the events
+ *     fired during this call as [{ name, confidence }] (onSpot also fires on
+ *     the next tick unless suspended).
+ *   - Windowed/threaded: writes the live shared ring (events surface via
+ *     onSpot) and returns undefined.
  * @param {Float32Array} samples
  * @returns {Array<{name: string, confidence: number}>|undefined}
  */

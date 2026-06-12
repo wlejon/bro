@@ -19,21 +19,25 @@ namespace bro::js {
 // frame, so heavier tenants (bro.wake, bro.kws, streaming STT) can be gated,
 // confirmed, or fused against it.
 //
-// Same engine plumbing as bro.wake/bro.kws, minus the result ring — the hub's
-// snapshot is itself the lock-free cross-thread surface, so there is no tick:
-//   - audio thread: the tap callback copies resampled mic samples into a
-//     lock-free ring. No AGC — the level sensor is the stack's one absolute-
-//     loudness signal, and the PCEN-derived sensors are gain-robust anyway.
+// The audio plumbing is the SHARED listen host's (listen_host.h): one raw
+// no-AGC tap + ring + inference task drive a brosoundml::ListenBus the hub
+// joins as a member (alongside bro.kws's spotter) — one PCEN feature pass for
+// the whole stack. bro.sense itself has no result ring and no tick — the
+// hub's snapshot is the lock-free cross-thread surface:
+//   - audio thread: the host's tap callback copies resampled mic samples into
+//     the shared lock-free ring. No AGC — the level sensor is the stack's one
+//     absolute-loudness signal, and the PCEN-derived sensors are gain-robust.
 //   - inference thread (engine::AudioInference worker; headless: the calling
-//     thread via stepInline): drains the ring, runs SensorHub::feed().
+//     thread): the host's task runs the bus, which drives the hub per frame.
 //   - main thread (or any thread): bro.sense.snapshot() — a seqlock read.
 //     Momentary booleans are paired with monotonic counters, so polling at
 //     frame rate still observes every onset/voice/tonal event.
 void installSenseBindings(JSContext* ctx, broaudio::Engine* audioEngine,
                           engine::AudioInference* inference);
 
-// Symmetric cleanup hook. Detaches the mic tap, unregisters the inference
-// task, and drops the hub. Safe to call multiple times.
+// Symmetric cleanup hook. Detaches the hub from the listen host (the host
+// tears down the shared tap/task when its last member leaves) and drops the
+// hub. Safe to call multiple times.
 void cleanupSenseBindings(JSContext* ctx);
 
 }  // namespace bro::js

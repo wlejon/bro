@@ -11,6 +11,7 @@
 #include "js/sense_bindings.h"
 
 #include "audio_inference/audio_inference.h"
+#include "js/listen_host.h"
 
 #include <broaudio/engine.h>
 #include <broaudio/mic_tap.h>
@@ -31,20 +32,17 @@ namespace bro::js {
 namespace {
 
 using engine::AudioInference;
-using engine::PcmRing;
 
 struct SenseState {
     broaudio::Engine* audioEngine = nullptr;
     AudioInference*   inference   = nullptr;
     JSContext*        ctx         = nullptr;
 
-    // The hub. Owned by the binding while active; the inference task closure
-    // holds a second strong ref so a late pump after stop() is harmless.
+    // The hub. Owned by the binding while active; the listen host's task
+    // closure holds a second strong ref so a late pump after stop() is
+    // harmless. The audio plumbing (tap, ring, inference task, mel front-end)
+    // is the SHARED listen host's — bro.sense is just a member.
     std::shared_ptr<brosoundml::SensorHub> hub;
-
-    std::shared_ptr<PcmRing> ring;
-    AudioInference::TaskId   taskId = AudioInference::kInvalidTask;
-    broaudio::MicTapId       tapId  = broaudio::kInvalidMicTapId;
 
     bool active = false;
 };
@@ -137,16 +135,10 @@ JSValue makeSnapshot(JSContext* ctx, const brosoundml::SensorSnapshot& s) {
 
 void stopSensing() {
     if (!g_sense.active) return;
-    // Producer first, so no more samples enter the ring.
-    if (g_sense.audioEngine && g_sense.tapId != broaudio::kInvalidMicTapId) {
-        g_sense.audioEngine->removeMicTap(g_sense.tapId);
-    }
-    g_sense.tapId = broaudio::kInvalidMicTapId;
-    if (g_sense.inference && g_sense.taskId != AudioInference::kInvalidTask) {
-        g_sense.inference->removeTask(g_sense.taskId);
-    }
-    g_sense.taskId = AudioInference::kInvalidTask;
-    g_sense.ring.reset();
+    // Detach from the shared listen host. The host replaces (or tears down)
+    // the inference task; if bro.kws is still a member, its stream keeps
+    // rolling untouched.
+    listenHostSetHub(nullptr);
     g_sense.hub.reset();
     g_sense.active = false;
 }
@@ -180,48 +172,20 @@ JSValue js_start(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         if (argc >= 1) readConfig(ctx, argv[0], cfg);
         auto hub = std::make_shared<brosoundml::SensorHub>(cfg);
 
-        const int rate = hub->sample_rate();
-        auto ring = std::make_shared<PcmRing>(static_cast<std::size_t>(rate) * 2u);
-
-        g_sense.hub  = hub;
-        g_sense.ring = ring;
-
-        // Inference task: just feed the hub — its snapshot IS the delivery.
-        g_sense.taskId = g_sense.inference->addTask(
-            ring,
-            [hub](const float* samples, int n) {
-                try {
-                    hub->feed(samples, n);
-                } catch (const std::exception& e) {
-                    std::fprintf(stderr, "[ERROR] [sense] feed: %s\n", e.what());
-                }
-            });
-
-        // Mic tap at the hub's rate. No AGC — bro.sense owns the stack's one
-        // absolute-loudness signal; the callback only writes the ring.
-        broaudio::MicTapConfig tapCfg;
-        tapCfg.targetRate  = rate;
-        tapCfg.chunkFrames = 0;
-        tapCfg.agc         = false;
-        auto ringRef = ring;
-        g_sense.tapId = g_sense.audioEngine->addMicTap(
-            tapCfg,
-            [ringRef](const float* samples, int n) { ringRef->write(samples, n); });
-        if (g_sense.tapId == broaudio::kInvalidMicTapId) {
-            g_sense.active = true;  // let stopSensing tear down the task
-            stopSensing();
-            return JS_ThrowInternalError(ctx, "bro.sense.start: addMicTap failed");
-        }
-        if (!g_sense.audioEngine->isMicCapturing()) {
-            g_sense.audioEngine->startMicCapture();
-        }
+        // Join the shared listen host: one raw tap + ring + task drive the
+        // hub (alongside bro.kws's spotter, if live) off ONE mel pass. The
+        // hub's snapshot IS the delivery — no per-frame callback.
+        listenHostSetHub(hub);
+        g_sense.hub    = hub;
         g_sense.active = true;
 
         std::fprintf(stderr,
             "[INFO] [sense] sensor bus active (mic=%d Hz, hub=%d Hz, hop=%d)\n",
-            g_sense.audioEngine->sampleRate(), rate, cfg.mel.hop_length);
+            g_sense.audioEngine->sampleRate(), hub->sample_rate(),
+            cfg.mel.hop_length);
         return JS_UNDEFINED;
     } catch (const std::exception& e) {
+        g_sense.active = true;   // let stopSensing clear the partial state
         stopSensing();
         return JS_ThrowInternalError(ctx, "bro.sense.start: %s", e.what());
     }
@@ -249,13 +213,14 @@ JSValue js_sampleRate(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_NewInt32(ctx, g_sense.hub ? g_sense.hub->sample_rate() : 0);
 }
 
-// Diagnostic surface over the underlying broaudio mic tap (cf. bro.kws.stats).
+// Diagnostic surface over the SHARED listen-host mic tap (cf. bro.kws.stats).
 JSValue js_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    const broaudio::MicTapId tap = listenHostTapId();
     if (!g_sense.active || !g_sense.audioEngine ||
-        g_sense.tapId == broaudio::kInvalidMicTapId) {
+        tap == broaudio::kInvalidMicTapId) {
         return JS_NULL;
     }
-    auto s = g_sense.audioEngine->getMicTapStats(g_sense.tapId);
+    auto s = g_sense.audioEngine->getMicTapStats(tap);
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "framesDelivered",
         JS_NewInt64(ctx, static_cast<int64_t>(s.framesDelivered)));
@@ -267,13 +232,15 @@ JSValue js_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 
 // Manual feed for tests / scripted scenarios. Samples must already be at the
 // hub's rate. Mirrors bro.kws.feed's mode split:
-//   - Headless (no inference worker): feed() runs synchronously on this (the
-//     inference) thread; returns the post-feed snapshot object.
-//   - Threaded: samples go into the live ring; poll snapshot() as usual.
-//     Returns undefined.
+//   - Headless (no inference worker): the shared bus runs synchronously on
+//     this (the inference) thread — it is ONE stream, so the feed advances
+//     every attached tenant (bro.kws included) — and the post-feed snapshot
+//     comes back.
+//   - Threaded: samples go into the live shared ring; poll snapshot() as
+//     usual. Returns undefined.
 // Refuses to run while live capture is active (two-producer race on the ring).
 JSValue js_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!g_sense.active || !g_sense.ring)
+    if (!g_sense.active || !g_sense.hub)
         return JS_ThrowInternalError(ctx, "bro.sense.feed: not active");
     if (g_sense.audioEngine && g_sense.audioEngine->isMicCapturing()) {
         return JS_ThrowInternalError(ctx,
@@ -287,12 +254,12 @@ JSValue js_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         return JS_ThrowTypeError(ctx, "bro.sense.feed(Float32Array)");
 
     if (g_sense.inference && g_sense.inference->threaded()) {
-        g_sense.ring->write(p, n);
+        listenHostWriteRing(p, n);
         return JS_UNDEFINED;
     }
 
     try {
-        g_sense.hub->feed(p, n);
+        listenHostFeedInline(p, n);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "bro.sense.feed: %s", e.what());
     }

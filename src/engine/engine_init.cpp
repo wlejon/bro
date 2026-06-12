@@ -55,6 +55,7 @@
 #include "js/vision_bindings.h"
 #include "js/wake_bindings.h"
 #include "js/kws_bindings.h"
+#include "js/listen_host.h"
 #include "js/sense_bindings.h"
 #include "js/mic_bindings.h"
 #include "js/terrain_bindings.h"
@@ -340,16 +341,23 @@ Engine::Engine(const EngineConfig& config)
     js::installWakeBindings(jsRuntime_->getContext(), audioEngine_.get(),
                             audioInference_.get());
 
+    // The shared listen host: ONE raw (no-AGC) mic tap + ring + inference
+    // task driving a brosoundml::ListenBus that bro.kws's spotter and
+    // bro.sense's hub join as members — one PCEN feature pass, one PhonemeNet
+    // forward, N listeners. (bro.wake stays on its own AGC'd tap above until
+    // retrained AGC-free.) Inert until a member attaches.
+    js::installListenHost(audioEngine_.get(), audioInference_.get());
+
     // bro.kws (brosoundml::PhonemeSpotter — open-vocabulary streaming keyword
-    // spotting). Same tenant shape as bro.wake: mic tap -> ring -> inference
-    // worker -> tickKws delivery. Inert until the app calls bro.kws.load().
+    // spotting). A listen-host member; result delivery stays its own
+    // (SPSC event ring -> tickKws). Inert until the app calls bro.kws.load().
     js::installKwsBindings(jsRuntime_->getContext(), audioEngine_.get(),
                            audioInference_.get());
 
     // bro.sense (brosoundml::SensorHub — the tier-0 acoustic sensor bus:
-    // model-free per-frame level/VAD, onset, and tonality sensors). Same
-    // tenant shape minus the result ring — the hub's lock-free snapshot IS
-    // the delivery, polled via bro.sense.snapshot(). Inert until
+    // model-free per-frame level/VAD, onset, and tonality sensors). A
+    // listen-host member with no result ring at all — the hub's lock-free
+    // snapshot IS the delivery, polled via bro.sense.snapshot(). Inert until
     // bro.sense.start().
     js::installSenseBindings(jsRuntime_->getContext(), audioEngine_.get(),
                              audioInference_.get());
