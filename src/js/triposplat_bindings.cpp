@@ -28,6 +28,8 @@
 #include <brotensor/safetensors.h>
 #include <brotensor/tensor.h>
 
+#include <broimage/encode.h>
+
 #include <include/core/SkData.h>
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
@@ -183,42 +185,89 @@ bool tsReadImage(JSContext* ctx, JSValueConst val, std::vector<std::uint8_t>& rg
     return true;
 }
 
-// "Cover" bilinear resample of an RGBA8 image to 1024x1024, compositing alpha
-// over black (the encoders saw an RGB-on-black 1024 canvas). This is the
-// lightweight stand-in for the reference preprocess_image; the BiRefNet
-// background-removal stage is deferred, so a pre-masked / already-foreground
-// image gives the best result.
+// Reference-faithful preprocess (preprocess_image in the upstream pipeline):
+//   1. erode the alpha matte (min filter, radius ~1 at the reference's
+//      1024-short-side scale) to kill segmentation-border bleed,
+//   2. find the alpha>0 bbox and take a square crop at its center with a
+//      1.2x margin of the larger bbox side (the model trains on subjects
+//      centered and scaled to ~83% of the canvas — feeding it the raw frame
+//      is off-distribution),
+//   3. bilinear-resample the crop to 1024^2, compositing alpha over black.
+// Out-of-crop samples are transparent (black). A fully-transparent matte
+// falls back to a plain centered "cover" fit of the whole frame. (The
+// reference resamples with Lanczos; bilinear here.)
 constexpr int kCanvas = 1024;
 
 void tsPreprocess(const std::vector<std::uint8_t>& rgba, int w, int h,
-                  std::vector<float>& rgb01 /* 3 * kCanvas * kCanvas, NCHW-friendly HWC */) {
+                  std::vector<float>& rgb01 /* 3 * kCanvas * kCanvas, HWC */) {
     rgb01.assign(static_cast<std::size_t>(kCanvas) * kCanvas * 3, 0.0f);
-    const float s = static_cast<float>(kCanvas) / static_cast<float>(std::min(w, h));
-    const float sw = w * s, sh = h * s;
-    const float offx = (sw - kCanvas) * 0.5f, offy = (sh - kCanvas) * 0.5f;
+
+    // 1. erode alpha: min over a (2r+1)^2 window, r scaled so it matches the
+    //    reference's radius-1 erosion at short-side-1024 resolution.
+    const int er = std::max(1, static_cast<int>(std::lround(std::min(w, h) / 1024.0)));
+    std::vector<std::uint8_t> alpha(static_cast<std::size_t>(w) * h);
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            std::uint8_t m = 255;
+            for (int dy = -er; dy <= er; ++dy) {
+                const int yy = std::min(std::max(y + dy, 0), h - 1);
+                for (int dx = -er; dx <= er; ++dx) {
+                    const int xx = std::min(std::max(x + dx, 0), w - 1);
+                    m = std::min(m, rgba[(static_cast<std::size_t>(yy) * w + xx) * 4 + 3]);
+                }
+            }
+            alpha[static_cast<std::size_t>(y) * w + x] = m;
+        }
+    }
+
+    // 2. subject bbox over the eroded alpha; square crop, 1.2x margin.
+    int x0 = w, y0 = h, x1 = -1, y1 = -1;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            if (alpha[static_cast<std::size_t>(y) * w + x] > 0) {
+                x0 = std::min(x0, x); x1 = std::max(x1, x);
+                y0 = std::min(y0, y); y1 = std::max(y1, y);
+            }
+
+    float cx, cy, half;
+    if (x1 < 0) {
+        // no subject — fall back to a centered cover crop of the whole frame
+        cx = w * 0.5f; cy = h * 0.5f;
+        half = std::min(w, h) * 0.5f;
+        std::fill(alpha.begin(), alpha.end(), std::uint8_t(255));
+    } else {
+        cx = (x0 + x1) * 0.5f;
+        cy = (y0 + y1) * 0.5f;
+        half = std::max(x1 - x0, y1 - y0) * 0.5f * 1.2f;
+        if (half < 1.0f) half = 1.0f;
+    }
+
+    // 3. bilinear resample of the crop square to 1024^2; out-of-bounds is
+    //    transparent, and the (eroded) alpha composites the RGB over black.
     auto px = [&](int x, int y, int c) -> float {
-        x = std::min(std::max(x, 0), w - 1);
-        y = std::min(std::max(y, 0), h - 1);
+        if (x < 0 || y < 0 || x >= w || y >= h) return 0.0f;
+        if (c == 3) return static_cast<float>(alpha[static_cast<std::size_t>(y) * w + x]);
         return static_cast<float>(rgba[(static_cast<std::size_t>(y) * w + x) * 4 + c]);
     };
+    const float step = 2.0f * half / kCanvas;
     for (int ty = 0; ty < kCanvas; ++ty) {
         for (int tx = 0; tx < kCanvas; ++tx) {
-            const float fx = (static_cast<float>(tx) + offx) / s;
-            const float fy = (static_cast<float>(ty) + offy) / s;
-            const int x0 = static_cast<int>(std::floor(fx)), y0 = static_cast<int>(std::floor(fy));
-            const float ax = fx - x0, ay = fy - y0;
-            float rgbV[4];
+            const float fx = cx - half + (tx + 0.5f) * step - 0.5f;
+            const float fy = cy - half + (ty + 0.5f) * step - 0.5f;
+            const int ix = static_cast<int>(std::floor(fx)), iy = static_cast<int>(std::floor(fy));
+            const float ax = fx - ix, ay = fy - iy;
+            float v[4];
             for (int c = 0; c < 4; ++c) {
-                const float c00 = px(x0, y0, c), c10 = px(x0 + 1, y0, c);
-                const float c01 = px(x0, y0 + 1, c), c11 = px(x0 + 1, y0 + 1, c);
-                rgbV[c] = (c00 * (1 - ax) + c10 * ax) * (1 - ay) +
-                          (c01 * (1 - ax) + c11 * ax) * ay;
+                const float c00 = px(ix, iy, c), c10 = px(ix + 1, iy, c);
+                const float c01 = px(ix, iy + 1, c), c11 = px(ix + 1, iy + 1, c);
+                v[c] = (c00 * (1 - ax) + c10 * ax) * (1 - ay) +
+                       (c01 * (1 - ax) + c11 * ax) * ay;
             }
-            const float alpha = rgbV[3] / 255.0f;   // composite over black
+            const float a = v[3] / 255.0f;   // composite over black
             float* o = &rgb01[(static_cast<std::size_t>(ty) * kCanvas + tx) * 3];
-            o[0] = rgbV[0] / 255.0f * alpha;
-            o[1] = rgbV[1] / 255.0f * alpha;
-            o[2] = rgbV[2] / 255.0f * alpha;
+            o[0] = v[0] / 255.0f * a;
+            o[1] = v[1] / 255.0f * a;
+            o[2] = v[2] / 255.0f * a;
         }
     }
 }
@@ -316,6 +365,16 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
     std::vector<float> rgb01;
     tsPreprocess(rgba, iw, ih, rgb01);
     prof.stage("preprocess 1024^2 (host)");
+    // BRO_TRIPOSPLAT_DUMP=<dir>: write the exact 1024^2 composite the encoders
+    // see (post matte/erode/bbox-crop, on black) for conditioning debugging.
+    if (const char* dd = std::getenv("BRO_TRIPOSPLAT_DUMP"); dd && *dd) {
+        std::vector<std::uint8_t> png(rgb01.size());
+        for (std::size_t i = 0; i < rgb01.size(); ++i)
+            png[i] = static_cast<std::uint8_t>(
+                std::min(std::max(rgb01[i], 0.0f), 1.0f) * 255.0f + 0.5f);
+        broimage::encode_png_file(std::string(dd) + "/ts_preprocessed.png",
+                                  png.data(), kCanvas, kCanvas, 3);
+    }
 
     try {
         const int HW = kCanvas * kCanvas;
@@ -412,6 +471,30 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         tsp::GaussianSplats splats =
             w->decoder->decode(latent, numGaussians, static_cast<std::uint64_t>(static_cast<std::uint32_t>(seed)));
         prof.stage("octree decode");
+
+        // 5b) model space -> scene space. The model is z-up; the reference
+        // applies [[1,0,0],[0,0,-1],[0,1,0]] (R_x(+90°): y->z, z->-y) when
+        // exporting .ply/.splat, and our y-up scene wants the same frame, so
+        // the in-memory cloud matches a loaded reference .ply. Positions map
+        // (x,y,z)->(x,-z,y); quats are left-composed with r = (w,x) = (s,s),
+        // s = sqrt(1/2); per-local-axis scales are unaffected.
+        {
+            const float s2 = 0.70710678118654752440f;
+            float* P = splats.positions.data();
+            float* R = splats.rotations.data();
+            const std::size_t n = splats.count();
+            for (std::size_t i = 0; i < n; ++i) {
+                const float py = P[i * 3 + 1], pz = P[i * 3 + 2];
+                P[i * 3 + 1] = -pz;
+                P[i * 3 + 2] = py;
+                const float qx = R[i * 4 + 0], qy = R[i * 4 + 1];
+                const float qz = R[i * 4 + 2], qw = R[i * 4 + 3];
+                R[i * 4 + 0] = s2 * (qx + qw);   // x' = rw qx + rx qw
+                R[i * 4 + 1] = s2 * (qy - qz);   // y' = rw qy - rx qz
+                R[i * 4 + 2] = s2 * (qz + qy);   // z' = rw qz + rx qy
+                R[i * 4 + 3] = s2 * (qw - qx);   // w' = rw qw - rx qx
+            }
+        }
 
         // 6) return typed arrays (the GaussianSplats SoA already matches the
         // scene GaussianSplatNode / bromesh::GaussianSplatCloud convention).
