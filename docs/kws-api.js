@@ -21,8 +21,8 @@
  * bro.kws alongside bro.sense costs one feature pass and one PhonemeNet
  * forward, and both hear the SAME stream. Result delivery is still bro.kws's
  * own: spot events → onSpot (main thread). No AGC anywhere on this path: the
- * PCEN front-end is loudness-robust by design (bro.wake keeps its own AGC'd
- * tap — its model is trained on peak-normalised audio).
+ * PCEN front-end is loudness-robust by design. bro.wake is a third member of
+ * the same host — its AGC-free-trained model hears this stream too.
  *
  * Single-producer rule: enroll/remove/clear/reset share the spotter's feed
  * thread, so they are only allowed while NOT listening — load, enroll, then

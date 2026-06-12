@@ -20,14 +20,15 @@ namespace bro::js {
 
 // ─── ListenHost — the engine's one shared listening front-end ───────────────
 //
-// bro.kws and bro.sense used to each own a mic tap, a PcmRing, and an
-// AudioInference task — parallel copies of the same plumbing computing the
-// same PCEN mel per tenant. The host collapses that to ONE raw (no-AGC)
-// 16 kHz tap + ONE ring + ONE inference task driving a
+// bro.kws, bro.sense, and bro.wake used to each own a mic tap, a PcmRing,
+// and an AudioInference task — parallel copies of the same plumbing
+// computing the same PCEN mel per tenant. The host collapses that to ONE
+// raw (no-AGC) 16 kHz tap + ONE ring + ONE inference task driving a
 // brosoundml::ListenBus, with the tenants' consumers (SensorHub,
-// PhonemeSpotter) attached as members: one feature pass, one PhonemeNet
-// forward, N listeners. bro.wake stays on its own tap — its model is trained
-// on AGC'd audio, so its input stream is genuinely different until retrained.
+// PhonemeSpotter, WakeWord) attached as members: one feature pass, one
+// forward per model, N listeners. bro.wake joined once its model was
+// retrained on the AGC-free recipe (random presentation level — the
+// detector is level-invariant, so it hears the same raw stream).
 //
 // Threading / membership: the bus is single-producer and is ONLY ever touched
 // from inference-task closures. A membership change replaces the whole task
@@ -43,6 +44,10 @@ namespace bro::js {
 
 using ListenSpotsFn =
     std::function<void(const std::vector<brosoundml::SpotEvent>&)>;
+// Invoked on the inference thread after EVERY bus feed while a wake member
+// is attached (not only on fires) so the tenant can publish per-block score
+// telemetry alongside the fire flag.
+using ListenWakeFn = std::function<void(bool fired)>;
 
 // Wire the host to the engine's subsystems (engine init) / drop everything
 // (engine teardown — also detaches any remaining members).
@@ -57,6 +62,8 @@ void shutdownListenHost();
 void listenHostSetHub(std::shared_ptr<brosoundml::SensorHub> hub);
 void listenHostSetSpotter(std::shared_ptr<brosoundml::PhonemeSpotter> spotter,
                           brotensor::Device device, ListenSpotsFn onSpots);
+void listenHostSetWake(std::shared_ptr<brosoundml::WakeWord> wake,
+                       brotensor::Device device, ListenWakeFn onWake);
 
 // The shared tap (kInvalidMicTapId when no member is attached) — for the
 // tenants' stats() surfaces.

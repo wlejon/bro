@@ -1,12 +1,15 @@
-// Smoke test for the shared listen host — bro.kws and bro.sense live at the
-// same time on ONE stream (one tap, one ring, one PCEN front-end, one
-// PhonemeNet forward). The cross-tenant assertions are the point:
+// Smoke test for the shared listen host — bro.kws, bro.sense, AND bro.wake
+// live at the same time on ONE stream (one raw no-AGC tap, one ring, one
+// PCEN front-end, one forward per model). The cross-tenant assertions are
+// the point:
 //   - audio fed through bro.kws.feed advances bro.sense's sensors
 //   - audio fed through bro.sense.feed fires bro.kws's onSpot
-//   - stopping one tenant leaves the other's stream rolling
+//   - a "computer" utterance fed through bro.sense.feed fires bro.wake
+//   - stopping one tenant leaves the others' stream rolling
 // Run against the minimal smoke app:
 //   bro-headless tests/_smoke_app tests/_listen_smoke.js
-// Needs the Kokoro weights and a trained PhonemeNet checkpoint (.bpm).
+// Needs the Kokoro weights, a trained PhonemeNet checkpoint (.bpm), and the
+// trained wake checkpoint (.bw).
 
 function pumpUntil(pred, budgetMs) {
     const start = Date.now();
@@ -24,6 +27,8 @@ const KWS_CANDIDATES = [
 ];
 const KWS_WEIGHTS = KWS_CANDIDATES.find((p) => fs.existsSync(p));
 assert(KWS_WEIGHTS, 'a PhonemeNet checkpoint exists (' + KWS_CANDIDATES.join(', ') + ')');
+const WAKE_WEIGHTS = '../brosoundml/weights/wake/computer.bw';
+assert(fs.existsSync(WAKE_WEIGHTS), 'wake checkpoint exists (' + WAKE_WEIGHTS + ')');
 
 const RATE = 16000;
 
@@ -84,7 +89,7 @@ function feedChunks(all, feedFn) {
     return events;
 }
 
-// ── 1. both tenants up on the shared host ───────────────────────────────────
+// ── 1. all three tenants up on the shared host ──────────────────────────────
 
 bro.sense.start({});
 assert(bro.sense.isActive(), 'sense active');
@@ -98,7 +103,17 @@ const spots = [];
 bro.kws.listen({ onSpot: (name, confidence) => spots.push({ name, confidence }) });
 assert(bro.kws.isActive(), 'kws listening');
 assert(bro.sense.isActive(), 'sense still active after kws joined');
-console.log('[smoke] both tenants live on the shared host');
+
+let wakeFires = 0;
+bro.wake.listen({
+    weights:   WAKE_WEIGHTS,
+    threshold: 0.85,
+    onFire:    () => { wakeFires++; },
+});
+assert(bro.wake.isActive(), 'wake listening');
+assert(bro.kws.isActive() && bro.sense.isActive(),
+       'kws + sense unaffected by wake joining');
+console.log('[smoke] all three tenants live on the shared host');
 
 // ── 2. cross-tenant: feed a tone through bro.kws.feed, sense must see it ────
 
@@ -127,22 +142,43 @@ assert(sVoice.voiceEvents >= 1, 'sense counted the speech as voice too');
 console.log('[smoke] phrase fed via bro.sense.feed -> kws spotted it (conf ' +
             spots.find((s) => s.name === 'hello-there').confidence.toFixed(3) + ')');
 
-// ── 4. shared tap diagnostics agree ─────────────────────────────────────────
+// ── 4. cross-tenant: "computer" through bro.sense.feed fires bro.wake ───────
+//
+// The wake model rode the same single stream the whole time: the tone, the
+// "hello there" phrase, and now its own keyword — all one PCEN front-end.
+// The AGC-free model is level-invariant, so the raw Kokoro level (no AGC,
+// no normalization) must fire it as-is.
 
-const ks = bro.kws.stats(), ss = bro.sense.stats();
-if (ks && ss) {
-    assert(ks.framesDelivered === ss.framesDelivered,
-           'both tenants report the SAME tap');
+assert(wakeFires === 0, 'wake silent through tone + non-keyword speech');
+const computer = concat(silence(0.4), speak('computer'), silence(0.3));
+feedChunks(computer, (c) => bro.sense.feed(c));
+assert(pumpUntil(() => wakeFires >= 1, 10000),
+       'wake fired from audio fed via bro.sense.feed');
+console.log('[smoke] "computer" fed via bro.sense.feed -> wake fired (score max ' +
+            bro.wake.stats().scoreMax.toFixed(3) + ')');
+
+// ── 5. shared tap diagnostics agree ─────────────────────────────────────────
+
+const ks = bro.kws.stats(), ss = bro.sense.stats(), ws = bro.wake.stats();
+if (ks && ss && ws) {
+    assert(ks.framesDelivered === ss.framesDelivered &&
+           ks.framesDelivered === ws.framesDelivered,
+           'all three tenants report the SAME tap');
 }
 
-// ── 5. one tenant leaving does not disturb the other ────────────────────────
+// ── 6. one tenant leaving does not disturb the others ───────────────────────
+
+bro.wake.stop();
+assert(!bro.wake.isActive(), 'wake stopped');
+assert(bro.kws.isActive() && bro.sense.isActive(),
+       'kws + sense unaffected by wake leaving');
 
 bro.sense.stop();
 assert(!bro.sense.isActive(), 'sense stopped');
 assert(bro.kws.isActive(), 'kws unaffected by sense leaving');
 const again = feedChunks(phrase, (c) => bro.kws.feed(c));
 assert(again.some((e) => e.name === 'hello-there'),
-       'kws still spots after sense left (' + JSON.stringify(again) + ')');
+       'kws still spots after wake + sense left (' + JSON.stringify(again) + ')');
 
 bro.kws.stop();
 bro.kws.unload();

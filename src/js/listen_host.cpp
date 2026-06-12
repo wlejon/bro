@@ -33,8 +33,17 @@ struct ListenHostState {
     // task closure (which captures its own strong refs).
     std::shared_ptr<brosoundml::SensorHub>      hub;
     std::shared_ptr<brosoundml::PhonemeSpotter> spotter;
+    std::shared_ptr<brosoundml::WakeWord>       wake;
     brotensor::Device spotterDevice = brotensor::Device::CPU;
+    brotensor::Device wakeDevice    = brotensor::Device::CPU;
     ListenSpotsFn     onSpots;
+    ListenWakeFn      onWake;
+
+    // The DeviceScope for the whole bus feed. Both model consumers run under
+    // one scope; when only the wake member is attached, use its device.
+    brotensor::Device scopeDevice() const {
+        return spotter ? spotterDevice : wakeDevice;
+    }
 };
 
 ListenHostState g_listen;
@@ -63,7 +72,7 @@ void teardownInfra() {
 // only ever runs under one closure at a time.
 void rebuildTask() {
     removeTaskIfAny();
-    if (!g_listen.hub && !g_listen.spotter) {
+    if (!g_listen.hub && !g_listen.spotter && !g_listen.wake) {
         teardownInfra();
         return;
     }
@@ -71,22 +80,27 @@ void rebuildTask() {
     auto bus     = g_listen.bus;
     auto hub     = g_listen.hub;
     auto spotter = g_listen.spotter;
-    auto device  = g_listen.spotterDevice;
+    auto wake    = g_listen.wake;
+    auto device  = g_listen.scopeDevice();
     auto onSpots = g_listen.onSpots;
+    auto onWake  = g_listen.onWake;
     g_listen.taskId = g_listen.inference->addTask(
         g_listen.ring,
-        [bus, hub, spotter, device, onSpots](const float* samples, int n) {
+        [bus, hub, spotter, wake, device, onSpots, onWake](
+            const float* samples, int n) {
             brosoundml::ListenFeedResult r;
             try {
-                // DeviceScope so the spotter's per-block forward runs on its
-                // own stream, not the host-syncing default (cf. bro.wake).
+                // DeviceScope so the model forwards run on their own stream,
+                // not the host-syncing default.
                 brotensor::DeviceScope scope(device);
-                r = bus->feed(samples, n, hub.get(), spotter.get());
+                r = bus->feed(samples, n, hub.get(), spotter.get(),
+                              wake.get());
             } catch (const std::exception& e) {
                 std::fprintf(stderr, "[ERROR] [listen] feed: %s\n", e.what());
                 return;
             }
             if (onSpots && !r.spots.empty()) onSpots(r.spots);
+            if (onWake && wake) onWake(r.wake_fired);
         });
 }
 
@@ -134,7 +148,9 @@ void installListenHost(broaudio::Engine* audio,
 void shutdownListenHost() {
     g_listen.hub.reset();
     g_listen.spotter.reset();
+    g_listen.wake.reset();
     g_listen.onSpots = nullptr;
+    g_listen.onWake  = nullptr;
     teardownInfra();
     g_listen.audioEngine = nullptr;
     g_listen.inference   = nullptr;
@@ -161,6 +177,18 @@ void listenHostSetSpotter(std::shared_ptr<brosoundml::PhonemeSpotter> spotter,
     rebuildTask();
 }
 
+void listenHostSetWake(std::shared_ptr<brosoundml::WakeWord> wake,
+                       brotensor::Device device, ListenWakeFn onWake) {
+    if (wake) {
+        ensureInfra();
+        g_listen.bus->check_compatible(*wake);
+    }
+    g_listen.wake       = std::move(wake);
+    g_listen.wakeDevice = device;
+    g_listen.onWake     = std::move(onWake);
+    rebuildTask();
+}
+
 broaudio::MicTapId listenHostTapId() { return g_listen.tapId; }
 
 void listenHostWriteRing(const float* samples, int n) {
@@ -170,10 +198,12 @@ void listenHostWriteRing(const float* samples, int n) {
 brosoundml::ListenFeedResult listenHostFeedInline(const float* samples, int n) {
     brosoundml::ListenFeedResult r;
     if (!g_listen.bus) return r;
-    brotensor::DeviceScope scope(g_listen.spotterDevice);
+    brotensor::DeviceScope scope(g_listen.scopeDevice());
     r = g_listen.bus->feed(samples, n,
-                           g_listen.hub.get(), g_listen.spotter.get());
+                           g_listen.hub.get(), g_listen.spotter.get(),
+                           g_listen.wake.get());
     if (g_listen.onSpots && !r.spots.empty()) g_listen.onSpots(r.spots);
+    if (g_listen.onWake && g_listen.wake) g_listen.onWake(r.wake_fired);
     return r;
 }
 

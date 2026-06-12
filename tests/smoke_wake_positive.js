@@ -4,16 +4,18 @@
 // Run from bro repo root:
 //   ./build/Debug/bro-headless.exe ../broworkshop tests/smoke_wake_positive.js
 //
-// Picks up a small selection of clean and noisy positives. Each is replayed
-// in 10 ms chunks at 16 kHz (the wake model's native rate). bro.wake.feed runs
-// the binding's per-call AGC + WakeWord::feed — the wake-rate path. The SDL
-// resampler that the live mic uses is exercised separately, against broaudio's
-// shared tap, by tests/smoke_mic_chunks.js.
+// Picks up a small selection of clean and noisy positives from the
+// raw-level (AGC-free recipe) dataset. Each is replayed in 10 ms chunks at
+// 16 kHz (the wake model's native rate). bro.wake.feed pushes the samples
+// RAW through the shared listen host's bus — no AGC anywhere; the model is
+// level-invariant by training. The SDL resampler that the live mic uses is
+// exercised separately, against broaudio's shared tap, by
+// tests/smoke_mic_chunks.js.
 
 const FS = require('node:fs');
 
 const WEIGHTS = '../brosoundml/weights/wake/computer.bw';
-const ROOT    = '../brosoundml-data/wake/computer/positives';
+const ROOT    = '../brosoundml-data/wake/computer-rawlevel/positives';
 
 const CLIPS = [
     'pos_af_bella_sp095_clean.wav',
@@ -93,7 +95,7 @@ for (const name of CLIPS) {
         'len=' + (r.durMs/1000).toFixed(2) + 's');
 }
 
-console.log('--- 16 kHz native at 0.10 peak (simulates quiet mic; AGC must lift) ---');
+console.log('--- 16 kHz native at 0.10 peak (quiet mic; level-invariant model, no AGC) ---');
 for (const name of CLIPS) {
     const wav = readWav16Mono(ROOT + '/' + name);
     const quiet = new Float32Array(wav.samples.length);
