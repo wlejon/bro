@@ -16,7 +16,7 @@ I'm targeting feature parity with godot's engine (no editor) and rendering parit
 
 ![launcher](docs/launcher.png)
 
-The launcher and a curated set of starter apps live in the sibling [broworkshop](../broworkshop) repo — games, tools, demos, and AI/research apps you can clone and reshape for your own thing. bro is the runtime; the workshop is where the patterns are worked out.
+The launcher and a curated set of starter apps live in the sibling [broworkshop](https://github.com/wlejon/broworkshop) repo — games, tools, demos, and AI/research apps you can clone and reshape for your own thing. bro is the runtime; the workshop is where the patterns are worked out.
 
 ## Why
 
