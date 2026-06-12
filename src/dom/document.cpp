@@ -101,6 +101,7 @@ void Document::parse(const std::string& html, const std::string& authorCss,
     root_ = nullptr;
     documentElement_ = nullptr;
     body_ = nullptr;
+    focusedElement_ = nullptr;   // ownedNodes_.clear() bypasses freeNode's scrub
     idMap_.clear();
     // LayoutRoot points into ownedNodes_ via raw Element*; clear it first so
     // we don't hold dangling pointers when ownedNodes_ drops its unique_ptrs.
@@ -469,6 +470,14 @@ void Document::freeNode(Node* node) {
         std::string id = elem->id();
         if (!id.empty())
             unregisterElementId(id);
+        // The focused element is about to be deallocated — drop the document's
+        // reference so activeElement() can never hand out freed memory. (The
+        // engine polls activeElement() on every mouse event: a button that
+        // removes itself from its own click handler — focused by the very
+        // mousedown that triggered it — would otherwise dangle here and crash
+        // the next mousemove. Engine::reapDeadInputPointers scrubs the
+        // engine's own cached pointers but not this document-owned one.)
+        if (elem == focusedElement_) focusedElement_ = nullptr;
     }
     // Move the owning unique_ptr into pendingFrees_ rather than destroying
     // it now. The raster thread may still hold a raw pointer from an
