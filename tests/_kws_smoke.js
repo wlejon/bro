@@ -104,6 +104,43 @@ assert(pumpUntil(() => spots.some((s) => s.name === 'hello-there'), 10000),
        'onSpot delivered on the main thread');
 console.log('[smoke] spotted "hello there" (confidence ' + conf.toFixed(3) + ')');
 
+// ── 2b. progress(): per-template partial evidence rises mid-phrase ──────────
+// The fused-surface poll: where onSpot reports a completed match, progress()
+// exposes the prefix alignment as it accumulates. Feed the phrase chunk by
+// chunk and watch the entry climb, then confirm the completion counters tick.
+const p0 = bro.kws.progress();
+assert(p0 && p0.templates.length === 1 && p0.templates[0].name === 'hello-there',
+       'progress(): one entry for the enrolled template');
+assert(p0.templates[0].length === tlen, 'progress(): entry length == template len');
+const fires0 = p0.templates[0].completions;
+
+// 0.6 s lead-in: re-opens the entry gate AND clears the refractory window
+// from section 2's fire, so this pass can fire again.
+bro.kws.feed(new Float32Array(Math.floor(rate * 0.6)));
+let maxProgress = 0, confAtMax = 0;
+const PCHUNK = Math.floor(rate / 10);
+for (let off = 0; off < positive.length; off += PCHUNK) {
+    bro.kws.feed(positive.subarray(off, Math.min(off + PCHUNK, positive.length)));
+    const t = bro.kws.progress().templates[0];
+    if (t.progress >= maxProgress) { maxProgress = t.progress; confAtMax = t.confidence; }
+}
+bro.kws.feed(new Float32Array(Math.floor(rate * 0.3)));
+const p1 = bro.kws.progress();
+assert(p1.frames > p0.frames, 'progress(): frames advanced with the feed');
+assert(p1.generation === p0.generation, 'progress(): generation stable (no re-enroll)');
+assert(maxProgress > 0.5,
+       'progress(): prefix climbed past 0.5 mid-phrase (max ' + maxProgress.toFixed(2) + ')');
+assert(confAtMax > 0 && confAtMax <= 1, 'progress(): partial confidence in (0,1]');
+assert(p1.templates[0].completions > fires0, 'progress(): completions ticked on the fire');
+assert(p1.templates[0].lastFireFrame > 0 && p1.templates[0].lastFireFrame <= p1.frames,
+       'progress(): lastFireFrame inside the stream');
+console.log('[smoke] progress: max prefix ' + maxProgress.toFixed(2) +
+            ' @ conf ' + confAtMax.toFixed(2) +
+            ', completions ' + p1.templates[0].completions);
+// Drain this section's queued onSpot before later sections count deliveries.
+assert(pumpUntil(() => spots.filter((s) => s.name === 'hello-there').length >= 2, 10000),
+       'progress(): the second fire also reached onSpot');
+
 // ── 3. negative phrase (report, no hard assert — open-vocab FA is a tuning
 //       property, not a binding property) ────────────────────────────────────
 const negativeEvents = feedClip(speak('banana smoothie recipe', rate), rate);

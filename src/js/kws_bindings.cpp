@@ -599,6 +599,39 @@ JSValue js_prefixProgress(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_NewFloat64(ctx, g_kws.spotter->prefix_progress());
 }
 
+// Per-template alignment telemetry — the spotter's contribution to the fused
+// listening surface. One coherent lock-free snapshot (all entries taken after
+// the same posterior frame): prefix depth, partial confidence (the same
+// statistic the firing threshold tests), and poll-safe completion counters,
+// for fusing against bro.sense.snapshot(). Null until weights are loaded.
+JSValue js_progress(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    if (!g_kws.spotter) return JS_NULL;
+    const brosoundml::ProgressSnapshot s = g_kws.spotter->progress_snapshot();
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "frames", JS_NewInt64(ctx, s.frames));
+    JS_SetPropertyStr(ctx, obj, "generation", JS_NewUint32(ctx, s.generation));
+    JSValue arr = JS_NewArray(ctx);
+    for (int i = 0; i < s.count; ++i) {
+        const brosoundml::TemplateProgress& e = s.templates[i];
+        JSValue t = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, t, "name", JS_NewString(ctx, e.name));
+        JS_SetPropertyStr(ctx, t, "matched", JS_NewInt32(ctx, e.matched));
+        JS_SetPropertyStr(ctx, t, "length", JS_NewInt32(ctx, e.length));
+        JS_SetPropertyStr(ctx, t, "progress", JS_NewFloat64(ctx, e.progress));
+        JS_SetPropertyStr(ctx, t, "confidence",
+                          JS_NewFloat64(ctx, e.confidence));
+        JS_SetPropertyStr(ctx, t, "completions",
+                          JS_NewInt64(ctx, e.completions));
+        JS_SetPropertyStr(ctx, t, "lastAdvanceFrame",
+                          JS_NewInt64(ctx, e.last_advance_frame));
+        JS_SetPropertyStr(ctx, t, "lastFireFrame",
+                          JS_NewInt64(ctx, e.last_fire_frame));
+        JS_SetPropertyUint32(ctx, arr, static_cast<std::uint32_t>(i), t);
+    }
+    JS_SetPropertyStr(ctx, obj, "templates", arr);
+    return obj;
+}
+
 // Diagnostic surface over the SHARED listen-host mic tap (cf. bro.wake.stats).
 JSValue js_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     const broaudio::MicTapId tap = listenHostTapId();
@@ -720,6 +753,8 @@ void installKwsBindings(JSContext* ctx, broaudio::Engine* audioEngine,
         JS_NewCFunction(ctx, js_sampleRate, "sampleRate", 0));
     JS_SetPropertyStr(ctx, kws, "prefixProgress",
         JS_NewCFunction(ctx, js_prefixProgress, "prefixProgress", 0));
+    JS_SetPropertyStr(ctx, kws, "progress",
+        JS_NewCFunction(ctx, js_progress, "progress", 0));
     JS_SetPropertyStr(ctx, kws, "stats",
         JS_NewCFunction(ctx, js_stats, "stats", 0));
     JS_SetPropertyStr(ctx, kws, "feed",

@@ -120,6 +120,14 @@ setInterval(() => {
   if (s.voice && !last.voice) {
     /* someone started making sound `s.t` seconds in */
   }
+
+  // Fuse with tier-2 partial evidence: bro.kws.progress() is the same kind of
+  // lock-free poll, so one loop reads "voice is live AND a phrase is mostly
+  // matched" before any onSpot fires.
+  const prog = bro.kws.progress();
+  if (s.voice && prog && prog.templates.some(t => t.progress > 0.6)) {
+    /* arm a heavier confirmation tier (e.g. streaming STT) */
+  }
   last = s;
 }, 50);
 

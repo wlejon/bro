@@ -143,7 +143,39 @@ bro.kws.listen({
  * while live (e.g. a "heard so far" meter).
  * @returns {number}
  */
-const progress = bro.kws.prefixProgress();
+const best = bro.kws.prefixProgress();
+
+/**
+ * Per-template alignment telemetry — the spotter's contribution to the fused
+ * listening surface. One coherent lock-free snapshot, every entry taken after
+ * the SAME posterior frame, pollable from any thread while live. Where onSpot
+ * reports a completed match after the fact, this reports partial evidence as
+ * it accumulates: poll it alongside bro.sense.snapshot() to fuse "voice is
+ * live AND 'hello there' is 5/7 deep, scoring 0.6" seconds before any event
+ * fires (gate a heavier tier, light a per-phrase UI meter).
+ *
+ * `confidence` is the geometric-mean posterior over the matched prefix — the
+ * same statistic the firing threshold tests on completion, so it is directly
+ * comparable to the template's threshold. `completions` and the last-*frame
+ * indices are monotonic (they survive bro.kws.reset()), so diff them between
+ * polls like bro.sense's counters. `frames` counts posterior frames over the
+ * spotter's life; `generation` bumps whenever the template set changes.
+ *
+ * @returns {null | {
+ *   frames: number, generation: number,
+ *   templates: Array<{
+ *     name: string,
+ *     matched: number,           // prefix depth reached (phonemes)
+ *     length: number,            // template length
+ *     progress: number,          // matched / length, [0,1]
+ *     confidence: number,        // geometric-mean posterior over the prefix
+ *     completions: number,       // fires since enroll (monotonic)
+ *     lastAdvanceFrame: number,  // `frames` value when matched last grew (-1 = never)
+ *     lastFireFrame: number,     // `frames` value of the latest fire (-1 = never)
+ *   }>
+ * }} null until weights are loaded.
+ */
+const prog = bro.kws.progress();
 
 /**
  * Diagnostics over the SHARED listen-host mic tap (cf. bro.wake.stats), or
