@@ -53,6 +53,10 @@ void requestInterrupt() {
     LOG_INFO("Interrupt requested — stopping JS.");
 }
 
+void beginShutdown() {
+    g_interrupted.store(true, std::memory_order_relaxed);
+}
+
 void installSignalHandler() {
     if (g_handlerInstalled.exchange(true))
         return;

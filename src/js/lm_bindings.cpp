@@ -28,6 +28,7 @@
 // something this binding can paper over.
 
 #include "js/lm_bindings.h"
+#include "util/interrupt.h"
 #include "js/async_job.h"
 
 #include <qjsbind/qjsbind.h>
@@ -560,6 +561,10 @@ static std::vector<int32_t> runDecode(LMDecoder& model,
         if (stop && next == eos_id) break;
         generated.push_back(static_cast<int32_t>(next));
         if (static_cast<int>(generated.size()) >= opts.max_new_tokens) break;
+        // Return what we have on process interrupt (Ctrl+C / window close /
+        // engine teardown) — this sync loop is otherwise unbreakable and
+        // would block shutdown for the full decode.
+        if (bro::util::interrupted()) break;
         int32_t cur = generated.back();
         model.forward(&cur, 1, logits);
         row = lastRowFp32(logits);
@@ -676,6 +681,7 @@ static JSValue js_model_generateStream(JSContext* ctx, JSValueConst this_val,
             }
 
             if (static_cast<int>(generated.size()) >= opts.max_new_tokens) break;
+            if (bro::util::interrupted()) break;  // shutdown: return what we have
 
             int32_t cur = generated.back();
             w->model->forward(&cur, 1, logits);
@@ -767,10 +773,13 @@ static JSValue js_q35_generate(JSContext* ctx, JSValueConst this_val,
     }
     const bool hasCb = JS_IsFunction(ctx, onToken);
 
+    // The per-token hook doubles as the interrupt poll: stop on Ctrl+C /
+    // window close / engine teardown even when the caller passed no onToken.
     brolm::qwen35::VLM::TokenCallback hook;
     bool cbThrew = false;
     if (hasCb) {
         hook = [ctx, onToken, &cbThrew](int id) -> bool {
+            if (bro::util::interrupted()) return false;
             JSValue a = JS_NewInt32(ctx, id);
             JSValue r = JS_Call(ctx, onToken, JS_UNDEFINED, 1, &a);
             JS_FreeValue(ctx, a);
@@ -779,6 +788,8 @@ static JSValue js_q35_generate(JSContext* ctx, JSValueConst this_val,
             JS_FreeValue(ctx, r);
             return keepGoing;
         };
+    } else {
+        hook = [](int) -> bool { return !bro::util::interrupted(); };
     }
 
     JSValue result;
@@ -1320,7 +1331,8 @@ static JSValue js_lm_generate_qwen35(JSContext* ctx, Qwen35Wrapper* w,
         mw->vlm->generate_tokens(prompt, {}, [st, &cancel](int id) -> bool {
             st->ids.push_back(static_cast<int32_t>(id));
             st->produced.store(st->ids.size(), std::memory_order_release);
-            return !cancel.load(std::memory_order_acquire);
+            return !cancel.load(std::memory_order_acquire)
+                && !bro::util::interrupted();
         });
     };
 
@@ -1439,7 +1451,8 @@ static JSValue js_lm_generate(JSContext* ctx, JSValueConst,
             if (stop && next == eos_id) break;
             st->ids.push_back(next);
             st->produced.store(st->ids.size(), std::memory_order_release);
-            if (cancel.load(std::memory_order_acquire)) break;
+            if (cancel.load(std::memory_order_acquire)
+                || bro::util::interrupted()) break;
             if (static_cast<int>(st->ids.size()) >= opts.max_new_tokens) break;
             int32_t cur = next;
             mw->model->forward(&cur, 1, logits);

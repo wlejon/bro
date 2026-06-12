@@ -27,6 +27,20 @@ bool interrupted();
 /// process. Same path as Ctrl+C / SIGTERM / window close.
 void requestInterrupt();
 
+/// Mark the process as shutting down. Sets the same flag interrupted() reads,
+/// but never escalates to a hard exit the way a repeated requestInterrupt()
+/// does, so it is safe to call unconditionally (e.g. after Ctrl+C already set
+/// the flag). Engine teardown calls this before joining worker threads.
+///
+/// Why it matters: long-running model inference is one synchronous native call
+/// on its thread, so the QuickJS interrupt can't break it — the only way out
+/// is the op's cooperative-cancel hook, and every such hook polls
+/// interrupted(). Without this, teardown's join blocks until the op finishes;
+/// the window sits unresponsive and a user force-close then kills threads
+/// mid-CUDA-dispatch, which races the display driver's per-process cleanup
+/// and has bugchecked the machine (0x139 CORRUPT_LIST_ENTRY in nvlddmkm).
+void beginShutdown();
+
 /// Install the platform signal handler (SIGINT on Unix,
 /// SetConsoleCtrlHandler on Windows). Idempotent.
 void installSignalHandler();

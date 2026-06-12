@@ -16,6 +16,7 @@
 // PipelineState class is added alongside it.
 
 #include "js/diffusion_bindings.h"
+#include "util/interrupt.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -505,6 +506,9 @@ static JSValue js_pipeline_clearControlNets(JSContext* ctx, JSValueConst this_va
 // generate(prompt, opts) -> { width, height, data } — one-shot txt2img.
 // Blocking; intended for a worker thread. The main thread should drive the
 // step-wise prime()/stepOnce()/decode() API instead.
+// Returns { cancelled: true } (no pixels) when the process is shutting down
+// (Ctrl+C / window close / engine teardown) — the denoise loop polls the
+// interrupt once per step so teardown never blocks on a full generation.
 static JSValue js_pipeline_generate(JSContext* ctx, JSValueConst this_val,
                                     int argc, JSValueConst* argv) {
     auto* w = pipelineSelf(ctx, this_val);
@@ -518,10 +522,15 @@ static JSValue js_pipeline_generate(JSContext* ctx, JSValueConst this_val,
     JSValueConst optsv = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     bdp::GenerateOptions opts = parseGenerateOptions(ctx, optsv);
     const bool includeFp32 = JS_IsObject(optsv) && getBool(ctx, optsv, "includeFp32");
+    opts.should_cancel = bro::util::interrupted;
 
     try {
         std::vector<float> img = w->pipeline->generate(prompt, opts);
         return makeImageResult(ctx, img, opts.height, opts.width, includeFp32);
+    } catch (const bdp::GenerateCancelled&) {
+        JSValue out = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, out, "cancelled", JS_TRUE);
+        return out;
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "generate: %s", e.what());
     }

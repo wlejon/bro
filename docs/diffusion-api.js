@@ -182,9 +182,13 @@ class Pipeline {
    * the step-wise prime()/stepOnce()/decode() API so the event loop stays
    * responsive.
    *
+   * If the process is shutting down (Ctrl+C / window close / engine teardown)
+   * the denoise loop aborts at the next step and generate() returns
+   * { cancelled: true } with no pixels — check for it before using the result.
+   *
    * @param {string} prompt
    * @param {object} [opts]                 - see GenerateOptions below
-   * @returns {ImageResult} { width, height, data }
+   * @returns {ImageResult} { width, height, data } — or { cancelled: true }
    *
    * @example
    *   const img = pipe.generate('a cat astronaut, oil painting', {

@@ -45,6 +45,7 @@
 #include "layout/draw_traversal.h"
 #include "engine/gizmo.h"
 #include <broaudio/engine.h>
+#include "util/interrupt.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
@@ -53,6 +54,17 @@
 
 namespace bro::engine {
 Engine::~Engine() {
+    // Teardown is beginning: flip the process-wide interrupt flag (without the
+    // repeated-Ctrl+C hard-exit escalation) so every in-flight model op aborts
+    // at its next cooperative-cancel poll. The worker joins below would
+    // otherwise block on long synchronous native inference calls — the JS
+    // interrupt can't break a native call — leaving the app unresponsive,
+    // and a user force-close then kills threads mid-CUDA-dispatch (see
+    // util/interrupt.h: that has bugchecked the machine via nvlddmkm).
+    // Windowed close and Ctrl+C already set the flag before we get here;
+    // this covers headless script-end and error-path teardown.
+    util::beginShutdown();
+
     // Release screenshot pool surfaces while the main GL context is still
     // current. Safe to skip if the pool is empty (windowed mode never uses it).
     if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {

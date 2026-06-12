@@ -12,6 +12,7 @@
 
 #include "js/triposplat_bindings.h"
 #include "js/imagebitmap_bindings.h"
+#include "util/interrupt.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -228,8 +229,14 @@ JSValue tsGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
     if (argc < 1) return JS_ThrowTypeError(ctx, "generate(image, opts): image required");
 
     // Start a fresh run: drop any cancel request left over from a prior call.
+    // Also honor the process-wide interrupt (Ctrl+C / window close / engine
+    // teardown): this generate is one long synchronous native call on its
+    // worker thread, so this poll is the only way shutdown can reach it.
     g_cancelRequested.store(false, std::memory_order_relaxed);
-    auto cancelled = [] { return g_cancelRequested.load(std::memory_order_relaxed); };
+    auto cancelled = [] {
+        return g_cancelRequested.load(std::memory_order_relaxed)
+            || bro::util::interrupted();
+    };
 
     // options
     int   seed = 42, steps = 20, numGaussians = 131072;

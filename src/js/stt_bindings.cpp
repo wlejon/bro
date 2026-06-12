@@ -18,6 +18,7 @@
 // context biasing and a streaming encoder tap (loadQwenAsrStream).
 
 #include "js/stt_bindings.h"
+#include "util/interrupt.h"
 #include "js/async_job.h"
 
 #include <qjsbind/qjsbind.h>
@@ -499,6 +500,10 @@ static JSValue js_whisper_transcribe(JSContext* ctx, JSValueConst this_val,
         };
     }
 
+    // Abort on process interrupt (Ctrl+C / window close / engine teardown) —
+    // the sync call would otherwise block shutdown for the full transcription.
+    opts.cancel = [] { return bro::util::interrupted(); };
+
     JSValue result;
     try {
         auto out = w->whisper->transcribe(audio, prompt, opts);
@@ -579,6 +584,9 @@ static JSValue js_parakeet_transcribe(JSContext* ctx, JSValueConst this_val,
         };
     }
 
+    // Abort on process interrupt (Ctrl+C / window close / engine teardown).
+    opts.cancel = [] { return bro::util::interrupted(); };
+
     JSValue result;
     try {
         brotensor::DeviceScope scope(w->device);
@@ -654,6 +662,9 @@ static JSValue js_qwenasr_transcribe(JSContext* ctx, JSValueConst this_val,
             JS_FreeValue(ctx, a);
         };
     }
+
+    // Abort on process interrupt (Ctrl+C / window close / engine teardown).
+    opts.cancel = [] { return bro::util::interrupted(); };
 
     JSValue result;
     try {
@@ -1536,7 +1547,9 @@ static JSValue js_stt_transcribe_qwenasr(JSContext* ctx, QwenAsrWrapper* w,
         brosoundml::QwenAsr::TranscribeOptions opts;
         opts.max_new_tokens = job->maxNew;
         opts.context_ids    = job->contextIds;
-        opts.cancel = [&cancel] { return cancel.load(std::memory_order_acquire); };
+        opts.cancel = [&cancel] {
+            return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+        };
         if (job->hasOnToken) {
             opts.on_token = [job](int32_t id) {
                 const size_t idx = job->produced.load(std::memory_order_relaxed);
@@ -1627,7 +1640,9 @@ static JSValue js_stt_transcribe_parakeet(JSContext* ctx, ParakeetWrapper* w,
         brotensor::DeviceScope scope(mw->device);
         brosoundml::Parakeet::TranscribeOptions opts;
         opts.max_new_tokens = job->maxNew;
-        opts.cancel = [&cancel] { return cancel.load(std::memory_order_acquire); };
+        opts.cancel = [&cancel] {
+            return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+        };
         if (job->hasOnToken) {
             opts.on_token = [job](int32_t id) {
                 const size_t idx = job->produced.load(std::memory_order_relaxed);
@@ -1753,7 +1768,9 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
         brosoundml::Whisper::TranscribeOptions opts;
         opts.max_new_tokens      = job->maxNew;
         opts.timestamp_begin_id  = job->timestampBeginId;
-        opts.cancel = [&cancel] { return cancel.load(std::memory_order_acquire); };
+        opts.cancel = [&cancel] {
+            return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+        };
         if (job->hasOnToken) {
             // Runs on THIS (background) thread: publish into the next slot; the
             // JS-thread poll fires onToken. No JS here.

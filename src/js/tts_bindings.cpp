@@ -11,6 +11,7 @@
 // Output is mono 24 kHz FP32 in a Float32Array.
 
 #include "js/tts_bindings.h"
+#include "util/interrupt.h"
 #include "js/async_job.h"
 
 #include <qjsbind/qjsbind.h>
@@ -406,7 +407,8 @@ static JSValue js_kokoro_synthesize(JSContext* ctx, JSValueConst this_val,
     try {
         brotensor::DeviceScope scope(w->device);   // ops create tensors on the model's device
         std::vector<int32_t> pred_dur;
-        auto buf = w->kokoro->synthesize(ids, vw->voice, speed, &pred_dur);
+        auto buf = w->kokoro->synthesize(ids, vw->voice, speed, &pred_dur,
+                                         bro::util::interrupted);
         JSValue out = audioBufferToJs(ctx, buf);
         JS_SetPropertyStr(ctx, out, "durations",
             qjsbind::make_int32_array(ctx, pred_dur));
@@ -467,7 +469,8 @@ static JSValue js_kokoro_synthesizeTraced(JSContext* ctx, JSValueConst this_val,
         brotensor::DeviceScope scope(w->device);   // ops create tensors on the model's device
         std::vector<int32_t> pred_dur;
         brosoundml::KokoroTrace tr;
-        auto buf = w->kokoro->synthesize(ids, vw->voice, speed, &pred_dur, {}, &tr);
+        auto buf = w->kokoro->synthesize(ids, vw->voice, speed, &pred_dur,
+                                         bro::util::interrupted, &tr);
         JSValue out = audioBufferToJs(ctx, buf);
         JS_SetPropertyStr(ctx, out, "durations",
             qjsbind::make_int32_array(ctx, pred_dur));
@@ -724,7 +727,8 @@ static JSValue js_qwen_synthesize(JSContext* ctx, JSValueConst this_val,
     try {
         brotensor::DeviceScope scope(w->device);
         brosoundml::QwenTtsTrace trace;
-        auto buf = w->qwen->synthesize(text, speaker, language, instruct, {}, sampling,
+        auto buf = w->qwen->synthesize(text, speaker, language, instruct,
+                                       bro::util::interrupted, sampling,
                                        wantTrace ? &trace : nullptr);
         JSValue obj = audioBufferToJs(ctx, buf);
         if (wantTrace) JS_SetPropertyStr(ctx, obj, "stages", qwenTraceToJs(ctx, trace));
@@ -761,7 +765,8 @@ static JSValue js_qwen_synthesize_clone(JSContext* ctx, JSValueConst this_val,
     try {
         brotensor::DeviceScope scope(w->device);
         brosoundml::AudioBuffer ref = brosoundml::read_wav(refPath);
-        auto buf = w->qwen->synthesize_clone(text, ref, language, {}, sampling);
+        auto buf = w->qwen->synthesize_clone(text, ref, language,
+                                             bro::util::interrupted, sampling);
         return audioBufferToJs(ctx, buf);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "synthesizeClone: %s", e.what());
@@ -801,7 +806,8 @@ static JSValue js_qwen_synthesize_from_xvector(JSContext* ctx, JSValueConst this
     try {
         brotensor::DeviceScope scope(w->device);
         brosoundml::QwenTtsTrace trace;
-        auto buf = w->qwen->synthesize_with_xvector(text, xvec, language, {}, sampling,
+        auto buf = w->qwen->synthesize_with_xvector(text, xvec, language,
+                                                    bro::util::interrupted, sampling,
                                                     wantTrace ? &trace : nullptr);
         JSValue obj = audioBufferToJs(ctx, buf);
         if (wantTrace) JS_SetPropertyStr(ctx, obj, "stages", qwenTraceToJs(ctx, trace));
@@ -1701,7 +1707,9 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
     // per frame (QwenTts::synthesize returns an empty buffer on cancel).
     auto work = [job, mw](const std::atomic<bool>& cancel) {
         brotensor::DeviceScope scope(mw->device);
-        auto cancelFn = [&cancel] { return cancel.load(std::memory_order_acquire); };
+        auto cancelFn = [&cancel] {
+            return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+        };
         brosoundml::AudioBuffer buf;
         if (!job->xvector.empty())
             buf = mw->qwen->synthesize_with_xvector(
@@ -1839,7 +1847,9 @@ static JSValue js_qwen_synthesize_stream(JSContext* ctx, int argc,
             job->chunkSlots[idx].assign(s, s + n);
             job->produced.store(idx + 1, std::memory_order_release);
         };
-        auto cancelFn = [&cancel] { return cancel.load(std::memory_order_acquire); };
+        auto cancelFn = [&cancel] {
+            return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+        };
         brosoundml::AudioBuffer buf;
         if (!job->xvector.empty())
             buf = mw->qwen->synthesize_stream_with_xvector(
@@ -2026,7 +2036,9 @@ static JSValue js_kokoro_synthesize_stream(JSContext* ctx, int argc,
         };
         auto buf = mw->kokoro->synthesize_stream(
             job->chunks, job->vw->voice, onChunkCb, job->speed,
-            [&cancel] { return cancel.load(std::memory_order_acquire); });
+            [&cancel] {
+                return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+            });
         job->samples     = std::move(buf.samples);
         job->sample_rate = buf.sample_rate;
     };
@@ -2165,7 +2177,9 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
         std::vector<int32_t> pred_dur;
         auto buf = mw->kokoro->synthesize(
             job->ids, job->vw->voice, job->speed, &pred_dur,
-            [&cancel] { return cancel.load(std::memory_order_acquire); },
+            [&cancel] {
+                return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+            },
             job->wantTrace ? &job->trace : nullptr);
         job->samples     = std::move(buf.samples);
         job->sample_rate = buf.sample_rate;
@@ -2297,7 +2311,9 @@ static JSValue js_kokoro_decodeFrom_async(JSContext* ctx, int argc,
         brotensor::DeviceScope scope(mw->device);
         auto buf = mw->kokoro->decode_from(
             job->vw->voice, job->nph, job->asr, job->total, job->F0, job->N,
-            [&cancel] { return cancel.load(std::memory_order_acquire); },
+            [&cancel] {
+                return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+            },
             job->wantTrace ? &job->trace : nullptr);
         job->samples     = std::move(buf.samples);
         job->sample_rate = buf.sample_rate;
