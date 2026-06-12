@@ -2403,30 +2403,31 @@ static JSValue js_element_getContext(JSContext* ctx, JSValueConst this_val,
     if (typeStr) JS_FreeCString(ctx, typeStr);
     if (type != "2d" && type != "webgl" && type != "webgl2" && type != "scene") return JS_NULL;
 
-    // Return cached context if one already exists for this element.
-    // Verify the element is still in the DOM — if it was removed and a new
-    // element was allocated at the same address, the stale entry must be evicted.
+    // Return cached context if one already exists for this element. Per the
+    // HTML spec getContext must return the SAME context object for the life of
+    // the canvas — including canvases that were never inserted into the DOM
+    // (off-screen scratch canvases for decode/readback are idiomatic; handing
+    // back a fresh context per call silently makes draw-then-getImageData read
+    // a blank surface).
     auto cacheIt = s_canvas_contexts.find(el);
     if (cacheIt != s_canvas_contexts.end()) {
-        // Check if element is still connected to the document tree
-        auto* n = static_cast<bro::dom::Element*>(el);
-        while (n->parentNode()) n = static_cast<bro::dom::Element*>(n->parentNode());
-        bool connected = (n->tagName() == "html" || n->tagName() == "HTML");
-        // A freed canvas Element*'s address can be reused by a brand-new canvas
-        // before this entry is evicted: eviction is tied to GC of the old
-        // wrapper (js_element_finalizer), but the engine frees the Element — and
-        // its CanvasScene — deterministically at drainPendingFrees, much earlier.
-        // The reused element is connected, so connectedness alone can't tell it
-        // apart from the original, and returning the cached wrapper would hand
-        // back a CanvasScene that was freed with the old element — a
+        // Staleness: a freed canvas Element*'s address can be reused by a
+        // brand-new canvas before this entry is evicted — eviction is tied to
+        // GC of the old wrapper (js_element_finalizer), but the engine frees
+        // the Element — and its CanvasScene — deterministically at
+        // drainPendingFrees, much earlier. Returning the cached wrapper would
+        // hand back a CanvasScene freed with the old element — a
         // use-after-free on the next draw. A live context always leaves its
         // backing on the element (setCanvasScene for 2d/scene, setWebglContext
-        // for webgl); a freshly reused Element starts with neither, so a cached
-        // entry with no live backing is stale.
+        // for webgl) from the moment of creation, DOM-connected or not, and
+        // the backing is cleared when the element is destroyed — so a cached
+        // entry with no live backing is the one-and-only stale case.
+        // (Deliberately NOT a DOM-connectedness check: off-DOM canvases keep
+        // their context.)
         bool hasBacking = (el->canvasScene() != nullptr) || (el->webglContext() != nullptr);
-        if (!connected || !hasBacking) {
-            // Stale entry — element disconnected, or its address was reused by a
-            // new canvas whose own context hasn't been created yet.
+        if (!hasBacking) {
+            // Stale entry — the element's address was reused by a new canvas
+            // whose own context hasn't been created yet.
             JS_FreeValue(ctx, cacheIt->second.val);
             s_canvas_contexts.erase(cacheIt);
         } else {
