@@ -50,8 +50,13 @@
  * @param {Object} [policy]
  * @param {number} [policy.tempoTol=0.40]  - rhythm: each observed inter-onset
  *        interval must be within this fraction of the enrolled one.
- * @param {number} [policy.pitchTol=0.12]  - tone: pitch must be within this
+ * @param {number} [policy.pitchTol=0.12]  - tone: mean pitch must be within this
  *        fraction of the enrolled pitch.
+ * @param {number} [policy.pitchStabilityTol=0.06] - tone: the run's per-frame
+ *        pitch spread (std/mean) must stay below this to fire. A whistle holds a
+ *        steady pitch; a cough/throat-clear sweeps through the band at the same
+ *        mean and is rejected. Loosen toward pitchTol if a real whistle is too
+ *        wobbly to fire; tighten to cut false positives harder.
  * @param {number} [policy.refractoryFrames=40] - suppress re-fires (~10 ms/frame).
  * @param {number} [policy.minOnsets=2]    - a rhythm needs at least this many onsets.
  * @param {number} [policy.minToneFrames=8]- a tone's run must last at least this long.
@@ -83,6 +88,8 @@
  *   intervalsMs: number[],      // rhythm: inter-onset intervals in ms (empty for tone)
  *   toneHz: number,             // tone: dominant pitch (0 for rhythm)
  *   toneMs: number,             // tone: enrolled run length in ms (0 for rhythm)
+ *   toneSpread: number,         // tone: enrolled pitch spread (std/mean) — how
+ *                               //       steady the captured tone was (~0 = clean)
  * }} null if no such gesture.
  */
 // const view = bro.gesture.inspect('double-knock');

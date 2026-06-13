@@ -19,6 +19,7 @@
 #include <brotensor/runtime.h>
 
 #include <quickjs.h>
+#include <qjsbind/qjsbind.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -266,6 +267,70 @@ JSValue js_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     return makeSnapshot(ctx, g_sense.hub->snapshot());
 }
 
+// bro.sense.analyze(samples, opts?) -> per-frame sensor timeline for a clip.
+// Runs a PRIVATE SensorHub over the clip offline — no live tap, no effect on
+// the shared bus, callable any time — and returns columnar arrays so a tool can
+// map frame f to samples [f*hop, f*hop+win) and overlay onsets / tonal runs /
+// pitch onto a waveform. This is the SAME stream bro.gesture.enrollFromAudio
+// sees, so a clip editor can show exactly what the matcher captured (and why a
+// cough's wandering pitch reads tonal but unsteady). opts overlays the same
+// sensor-policy keys as start(). flags packs bit0=voice, bit1=tonal, bit2=onset.
+JSValue js_analyze(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    int n = 0;
+    const float* p = (argc >= 1) ? readFloats(ctx, argv[0], n) : nullptr;
+    if (!p || n <= 0)
+        return JS_ThrowTypeError(ctx, "bro.sense.analyze(Float32Array, opts?)");
+    try {
+        brotensor::init();
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "bro.sense.analyze: %s", e.what());
+    }
+
+    brosoundml::SensorHubConfig cfg;
+    if (argc >= 2) readConfig(ctx, argv[1], cfg);
+
+    brosoundml::SensorHub hub(cfg);
+    const int win = cfg.mel.win_length, hop = cfg.mel.hop_length;
+    std::vector<float>   db, hz, per;
+    std::vector<int32_t> flags;
+    auto take = [&](const brosoundml::SensorSnapshot& s) {
+        db.push_back(s.db);
+        hz.push_back(s.dominant_hz);
+        per.push_back(s.periodicity);
+        int32_t f = 0;
+        if (s.voice) f |= 1;
+        if (s.tonal) f |= 2;
+        if (s.onset) f |= 4;
+        flags.push_back(f);
+    };
+    // Prime one window, then advance one hop per frame — identical framing to
+    // the enroll path, so frame indices line up with what a gesture captures.
+    if (n >= win) {
+        hub.feed(p, win);
+        take(hub.snapshot());
+        int pos = win;
+        while (pos + hop <= n) {
+            hub.feed(p + pos, hop);
+            take(hub.snapshot());
+            pos += hop;
+        }
+    }
+
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "frames", JS_NewInt32(ctx, static_cast<int>(db.size())));
+    JS_SetPropertyStr(ctx, o, "hop",  JS_NewInt32(ctx, hop));
+    JS_SetPropertyStr(ctx, o, "win",  JS_NewInt32(ctx, win));
+    JS_SetPropertyStr(ctx, o, "rate", JS_NewInt32(ctx, cfg.mel.sample_rate));
+    JS_SetPropertyStr(ctx, o, "frameMs",
+        JS_NewFloat64(ctx, 1000.0 * static_cast<double>(hop) /
+                               static_cast<double>(cfg.mel.sample_rate)));
+    JS_SetPropertyStr(ctx, o, "db",          qjsbind::make_float32_array(ctx, db));
+    JS_SetPropertyStr(ctx, o, "dominantHz",  qjsbind::make_float32_array(ctx, hz));
+    JS_SetPropertyStr(ctx, o, "periodicity", qjsbind::make_float32_array(ctx, per));
+    JS_SetPropertyStr(ctx, o, "flags",       qjsbind::make_int32_array(ctx, flags));
+    return o;
+}
+
 }  // namespace
 
 void installSenseBindings(JSContext* ctx, broaudio::Engine* audioEngine,
@@ -297,6 +362,8 @@ void installSenseBindings(JSContext* ctx, broaudio::Engine* audioEngine,
         JS_NewCFunction(ctx, js_stats, "stats", 0));
     JS_SetPropertyStr(ctx, sense, "feed",
         JS_NewCFunction(ctx, js_feed, "feed", 1));
+    JS_SetPropertyStr(ctx, sense, "analyze",
+        JS_NewCFunction(ctx, js_analyze, "analyze", 2));
     JS_SetPropertyStr(ctx, broObj, "sense", sense);
 
     JS_FreeValue(ctx, broObj);

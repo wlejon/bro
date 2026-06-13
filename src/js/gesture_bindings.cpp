@@ -76,13 +76,14 @@ bool getInt(JSContext* ctx, JSValueConst obj, const char* key, int& dst) {
     return ok;
 }
 
-// Overlay gesture-policy keys: tempoTol, pitchTol, refractoryFrames, minOnsets,
-// minToneFrames.
+// Overlay gesture-policy keys: tempoTol, pitchTol, pitchStabilityTol,
+// refractoryFrames, minOnsets, minToneFrames.
 void readPolicy(JSContext* ctx, JSValueConst obj, brosoundml::GestureConfig& cfg) {
     if (!JS_IsObject(obj)) return;
     double d;
     if (getNum(ctx, obj, "tempoTol", d)) cfg.tempo_tol = (float)d;
     if (getNum(ctx, obj, "pitchTol", d)) cfg.pitch_tol = (float)d;
+    if (getNum(ctx, obj, "pitchStabilityTol", d)) cfg.pitch_stability_tol = (float)d;
     getInt(ctx, obj, "refractoryFrames", cfg.refractory_frames);
     getInt(ctx, obj, "minOnsets",        cfg.min_onsets);
     getInt(ctx, obj, "minToneFrames",    cfg.min_tone_frames);
@@ -250,6 +251,7 @@ JSValue js_inspect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     JS_SetPropertyStr(ctx, o, "toneHz", JS_NewFloat64(ctx, v.tone_hz));
     JS_SetPropertyStr(ctx, o, "toneMs",
         JS_NewFloat64(ctx, v.tone_frames * v.frame_ms));
+    JS_SetPropertyStr(ctx, o, "toneSpread", JS_NewFloat64(ctx, v.tone_spread));
     return o;
 }
 

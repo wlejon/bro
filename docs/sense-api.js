@@ -142,3 +142,30 @@ setInterval(() => {
 // while the real mic is capturing.
 const pcm = new Float32Array(16000);   // 1 s of synthetic 16 kHz audio
 const snap = bro.sense.feed(pcm);
+
+// ─── Offline clip analysis ──────────────────────────────────────────────────
+//
+// bro.sense.analyze(samples, opts?) runs a PRIVATE SensorHub over a clip with
+// no effect on the live bus (callable any time, even before start()), returning
+// the per-frame sensor timeline as columnar typed arrays. It is the SAME stream
+// bro.gesture.enrollFromAudio sees, so a tool can map each frame to its samples
+// and overlay onsets / tonal runs / pitch onto a waveform — e.g. to show why a
+// clip enrolled the way it did, or why a cough's wandering pitch reads tonal but
+// unsteady. `opts` overlays the same sensor-policy keys as start().
+//
+//   const a = bro.sense.analyze(clip);   // clip: Float32Array @ sampleRate()
+//   // a = {
+//   //   frames: 142,            // number of sensor frames
+//   //   hop: 160, win: 400,     // frame f covers samples [f*hop, f*hop+win)
+//   //   rate: 16000,
+//   //   frameMs: 10,
+//   //   db:          Float32Array(frames),   // per-frame level
+//   //   dominantHz:  Float32Array(frames),   // per-frame pitch (sub-lag refined)
+//   //   periodicity: Float32Array(frames),   // per-frame autocorrelation peak
+//   //   flags:       Int32Array(frames),     // bit0 voice, bit1 tonal, bit2 onset
+//   // }
+//   for (let f = 0; f < a.frames; f++) {
+//     const onset = (a.flags[f] & 4) !== 0;
+//     const tonal = (a.flags[f] & 2) !== 0;
+//     if (tonal) markPitch(f * a.hop, a.dominantHz[f]);
+//   }
