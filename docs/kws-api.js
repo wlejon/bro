@@ -10,6 +10,13 @@
  * word-boundary entry check, an M-of-N smoother, and a per-template
  * refractory debounce.
  *
+ * PER STREAM. bro.kws.load() loads PhonemeNet ONCE into a shared net; bro.kws.*
+ * targets the default microphone, and stream.kws.* (on a bro.listen.open()
+ * handle — see docs/listen-api.js) targets that stream, each with its own
+ * templates + matcher over the shared weights. So you can spot one vocabulary on
+ * the mic and another on system audio at once. The two homes are one
+ * implementation; everything below applies to either.
+ *
  * Three ways to enroll a phrase:
  *   - bro.tts.phonemize(text) ids  →  bro.kws.enroll(name, ids)   (citation)
  *   - reference audio              →  bro.kws.enrollFromAudio(name, samples)

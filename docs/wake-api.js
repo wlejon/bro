@@ -3,8 +3,15 @@
  *
  * Always-on detector that fires a JS callback when a target keyword is
  * spoken. Backed by brosoundml::WakeWord (a streaming 2D BC-ResNet over PCEN
- * mel features); the wake model stays loaded for the lifetime of the
- * listen() call.
+ * mel features).
+ *
+ * PER STREAM. The BC-ResNet weights load ONCE into a shared net — explicitly via
+ * bro.wake.load(), or lazily on the first listen() carrying a `weights` path.
+ * bro.wake.* targets the default microphone; stream.wake.* (on a
+ * bro.listen.open() handle — see docs/listen-api.js) targets that stream, each
+ * with its own detector (threshold/refractory) over the shared weights. So the
+ * same wake word can run on the mic AND on system audio at once. The two homes
+ * are one implementation; everything below applies to either.
  *
  * Plumbing: bro.wake is a member of the engine's SHARED listen host — one
  * raw (no-AGC) mic tap + lock-free ring + inference task drive a single PCEN

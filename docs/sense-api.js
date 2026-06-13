@@ -6,6 +6,13 @@
 // of per-frame DSP sensors — no model, no enrollment, no GPU — and publishes
 // every signal into one lock-free snapshot you poll:
 //
+// PER STREAM. Model-free, so each stream just gets its own SensorHub.
+// bro.sense.* targets the default microphone; stream.sense.* (on a
+// bro.listen.open() handle — see docs/listen-api.js) targets that stream, so you
+// can sense the mic and system audio independently. The two homes are one
+// implementation; everything below applies to either. (bro.sense.analyze() is
+// an offline op over a private hub — not stream-scoped.)
+//
 //   level     window RMS / peak / dBFS on raw PCM (no AGC — this is the
 //             stack's one absolute-loudness signal).
 //   voice     energy VAD: adaptive noise floor + SNR gate + hangover.

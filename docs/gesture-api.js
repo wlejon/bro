@@ -8,6 +8,12 @@
  * NON-speech gestures over the shared listen host's tier-0 SensorHub stream
  * instead, so clicks, taps, knocks, and whistles fire reliably:
  *
+ * PER STREAM. Model-free, so each stream gets its own GestureSpotter riding THAT
+ * stream's SensorHub. bro.gesture.* targets the default microphone (needs
+ * bro.sense active); stream.gesture.* (on a bro.listen.open() handle — see
+ * docs/listen-api.js) targets that stream (needs that stream's .sense active).
+ * The two homes are one implementation; everything below applies to either.
+ *
  *   rhythm  >= 2 onsets — the inter-onset intervals are the template. A
  *           re-performance whose taps land at the same spacing (within a tempo
  *           tolerance) fires. A single lone transient is too ambiguous to
