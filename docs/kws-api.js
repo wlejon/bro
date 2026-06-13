@@ -249,6 +249,26 @@ const best = bro.kws.prefixProgress();
 const prog = bro.kws.progress();
 
 /**
+ * The model's RAW per-frame readout: which phoneme PhonemeNet is hearing right
+ * now, independent of any enrolled template. Where progress() reports template
+ * ALIGNMENT and inspect() reports the enrolled SEQUENCE, posterior() exposes the
+ * underlying per-frame posterior stream both are built on — so a HUD can show
+ * the live decoded phoneme(s), and a fuser can use "a real phoneme is present
+ * (not silence/churn)" as its own speech-evidence sensor (e.g. to discount a
+ * tier-0 gesture match that coincides with actual speech).
+ *
+ * Lock-free seqlock read, safe to poll while the inference thread feeds. `top`
+ * is the `topK` classes by posterior, descending; class 0 ("sil") is silence.
+ * `frame` is the spotter's monotonic frame counter — aligns with
+ * progress().frames and bro.sense.snapshot().frames.
+ *
+ * @param {number} [topK=3]
+ * @returns {{ frame: number, top: Array<{cls:number, label:string, p:number}> }|null}
+ *          null until weights are loaded / before the first frame.
+ */
+const post = bro.kws.posterior(3);   // post.top[0].label === current phoneme
+
+/**
  * Diagnostics over the SHARED listen-host mic tap (cf. bro.wake.stats), or
  * null. bro.sense.stats() reports the same tap while both are live.
  * @returns {{framesDelivered, samplesDelivered, rollingPeak}|null}

@@ -746,6 +746,60 @@ JSValue js_progress(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return obj;
 }
 
+// bro.kws.posterior(topK=3) -> { frame, top: [{ cls, label, p }, ...] } or null.
+//
+// The model's RAW per-frame readout: what phoneme PhonemeNet is hearing right
+// now, independent of any template. Where progress() reports template alignment
+// and inspect() reports the enrolled sequence, this exposes the underlying
+// posterior stream — the evidence both are built on — so a HUD can show the
+// live decoded phoneme(s) and an app can confirm "this is speech" (a real
+// phoneme, not silence/churn) as its own sensor. last_posterior() is a lock-free
+// seqlock read, safe while the inference thread feeds. `top` is the topK classes
+// by posterior, descending. Null until weights are loaded / before the first
+// frame. `frame` is the spotter's monotonic frame counter (align with
+// progress().frames and SensorHub frames).
+JSValue js_posterior(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (!g_kws.spotter || !g_kws.spotter->loaded()) return JS_NULL;
+    const std::vector<float> post = g_kws.spotter->last_posterior();
+    if (post.empty()) return JS_NULL;
+
+    int topK = 3;
+    if (argc >= 1 && JS_IsNumber(argv[0])) {
+        int32_t k = 0;
+        JS_ToInt32(ctx, &k, argv[0]);
+        if (k > 0) topK = k;
+    }
+    const int K = static_cast<int>(post.size());
+    if (topK > K) topK = K;
+
+    const auto& cm = g_kws.spotter->class_map();
+    // Partial top-K by repeated argmax (K is small — a few dozen classes).
+    std::vector<int> taken(static_cast<std::size_t>(K), 0);
+    JSValue arr = JS_NewArray(ctx);
+    for (int r = 0; r < topK; ++r) {
+        int best = -1;
+        float bestP = -1.0f;
+        for (int c = 0; c < K; ++c) {
+            if (taken[(std::size_t)c]) continue;
+            if (post[(std::size_t)c] > bestP) { bestP = post[(std::size_t)c]; best = c; }
+        }
+        if (best < 0) break;
+        taken[(std::size_t)best] = 1;
+        const char* label = (best < (int)cm.class_names.size())
+                                ? cm.class_names[(std::size_t)best].c_str() : "?";
+        JSValue e = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, e, "cls", JS_NewInt32(ctx, best));
+        JS_SetPropertyStr(ctx, e, "label", JS_NewString(ctx, label));
+        JS_SetPropertyStr(ctx, e, "p", JS_NewFloat64(ctx, bestP));
+        JS_SetPropertyUint32(ctx, arr, static_cast<std::uint32_t>(r), e);
+    }
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "frame",
+                      JS_NewInt64(ctx, g_kws.spotter->progress_snapshot().frames));
+    JS_SetPropertyStr(ctx, obj, "top", arr);
+    return obj;
+}
+
 // Diagnostic surface over the SHARED listen-host mic tap (cf. bro.wake.stats).
 JSValue js_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     const broaudio::MicTapId tap = listenHostTapId();
@@ -873,6 +927,8 @@ void installKwsBindings(JSContext* ctx, broaudio::Engine* audioEngine,
         JS_NewCFunction(ctx, js_prefixProgress, "prefixProgress", 0));
     JS_SetPropertyStr(ctx, kws, "progress",
         JS_NewCFunction(ctx, js_progress, "progress", 0));
+    JS_SetPropertyStr(ctx, kws, "posterior",
+        JS_NewCFunction(ctx, js_posterior, "posterior", 1));
     JS_SetPropertyStr(ctx, kws, "stats",
         JS_NewCFunction(ctx, js_stats, "stats", 0));
     JS_SetPropertyStr(ctx, kws, "feed",
