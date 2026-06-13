@@ -100,6 +100,13 @@ void listenHostClose(StreamId id);
 
 bool listenHostValid(StreamId id);
 
+// The id of the shared default-microphone stream (the one the global tenant
+// bindings target), creating it if needed. Stable for the session — the default
+// mic stream is never erased, only its infra cycles with membership. Tenant
+// bindings resolve `bro.kws`/`bro.wake`/… (no stream handle) to this id. Main
+// thread only.
+StreamId listenHostDefaultMicId();
+
 // Is render-side (loopback / per-process) capture available on this build/OS?
 bool listenHostLoopbackSupported();
 // Applications currently holding a render audio session (for an app picker).

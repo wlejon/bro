@@ -4,6 +4,7 @@
 
 #include "js/listen_bindings.h"
 
+#include "js/kws_bindings.h"
 #include "js/listen_host.h"
 
 #include <broaudio/loopback_capture.h>
@@ -288,7 +289,14 @@ JSValue js_open(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
             "or the audio subsystem is not ready)");
 
     auto* h = new StreamHandle{id, src.kind};
-    return qjsbind::wrap<StreamHandle>(ctx, h);
+    JSValue wrapper = qjsbind::wrap<StreamHandle>(ctx, h);
+    // Per-stream tenant views. Each carries this stream's id and exposes the
+    // model bindings scoped to it (stream.kws.enroll/listen/…). The shared
+    // weights load once via the namespace op (bro.kws.load); each stream
+    // attaches its own spotter/session over them. (wake/sense/gesture join
+    // here as their slices land.)
+    JS_SetPropertyStr(ctx, wrapper, "kws", kwsViewFor(ctx, id));
+    return wrapper;
 }
 
 // bro.listen.supported() -> bool. Is render-side (system / per-app) capture

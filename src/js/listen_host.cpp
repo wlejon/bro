@@ -387,6 +387,8 @@ void listenHostClose(StreamId id) {
 
 bool listenHostValid(StreamId id) { return g_mgr.find(id) != nullptr; }
 
+StreamId listenHostDefaultMicId() { return g_mgr.ensureDefaultMic()->id; }
+
 bool listenHostLoopbackSupported() {
     return broaudio::LoopbackCapture::isSupported();
 }
