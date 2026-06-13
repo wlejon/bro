@@ -80,6 +80,7 @@ add_library(bro_js STATIC
     triposplat_bindings.cpp
     wake_bindings.cpp
     listen_host.cpp
+    listen_bindings.cpp
     kws_bindings.cpp
     sense_bindings.cpp
     gesture_bindings.cpp

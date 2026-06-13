@@ -84,4 +84,44 @@ broaudio::MicTapId listenHostTapId();
 void listenHostWriteRing(const float* samples, int n);
 brosoundml::ListenFeedResult listenHostFeedInline(const float* samples, int n);
 
+// ─── Stream retention (opt-in) ──────────────────────────────────────────────
+//
+// A ring of the RAW samples driving the shared stream, so recent audio can be
+// scrubbed / replayed by frame range (e.g. to hear exactly what a match fired
+// on). Source-AGNOSTIC by design: it captures whatever feeds the bus — the live
+// mic tap, a scripted feed(), and any future non-mic source (system-audio
+// loopback) that drives this host — so it works for every input the stack ever
+// listens to, not just the mic. Off by default (no memory cost until enabled).
+//
+// Single-producer writer (the feed thread, at the bus chokepoint); the reader
+// (main thread) copies a behind-the-head window, race-free without a lock
+// because a slot is only overwritten after a full retention period.
+//
+// Frame axis: samples-consumed / hop — the same axis bro.sense reports (sense
+// is the host's first/always member). A fresh stream (first attach after a full
+// teardown) restarts the axis at 0, mirroring the tenants.
+
+// Enable/resize retention to `seconds` of audio (0 disables + frees it). Takes
+// effect immediately if the stream is up, else on the next attach. Main thread.
+void listenHostSetRetention(int seconds);
+
+// Current stream frame (total samples consumed / hop) — the retention axis.
+std::int64_t listenHostStreamFrame();
+
+// Copy retained raw PCM for the inclusive frame range [startFrame, endFrame]
+// into `out`. Returns samples copied (0 if disabled or the range fell outside
+// the retained window). Main thread.
+int listenHostReadAudio(std::int64_t startFrame, std::int64_t endFrame,
+                        std::vector<float>& out);
+
+struct ListenRetentionInfo {
+    bool         active = false;   // retention enabled
+    int          seconds = 0;      // configured depth
+    int          rate = 0;         // PCM sample rate
+    int          hop = 0;          // samples per frame (frame->sample factor)
+    std::int64_t streamFrame = 0;  // current stream frame
+    std::int64_t heldFrames = 0;   // frames currently available to read back
+};
+ListenRetentionInfo listenHostRetentionInfo();
+
 }  // namespace bro::js

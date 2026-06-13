@@ -56,6 +56,7 @@
 #include "js/wake_bindings.h"
 #include "js/gesture_bindings.h"
 #include "js/kws_bindings.h"
+#include "js/listen_bindings.h"
 #include "js/listen_host.h"
 #include "js/sense_bindings.h"
 #include "js/mic_bindings.h"
@@ -348,6 +349,10 @@ Engine::Engine(const EngineConfig& config)
     // forward, N listeners. (bro.wake stays on its own AGC'd tap above until
     // retrained AGC-free.) Inert until a member attaches.
     js::installListenHost(audioEngine_.get(), audioInference_.get());
+
+    // bro.listen — the shared stream's own JS surface (opt-in raw-audio
+    // retention for replay/scrub by frame range). Inert until bro.listen.retain.
+    js::installListenBindings(jsRuntime_->getContext());
 
     // bro.kws (brosoundml::PhonemeSpotter — open-vocabulary streaming keyword
     // spotting). A listen-host member; result delivery stays its own

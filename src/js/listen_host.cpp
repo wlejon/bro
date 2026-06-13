@@ -7,10 +7,15 @@
 #include <broaudio/engine.h>
 #include <brotensor/runtime.h>
 
+#include <algorithm>
+#include <atomic>
+#include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <exception>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 namespace bro::js {
 
@@ -18,6 +23,83 @@ namespace {
 
 using engine::AudioInference;
 using engine::PcmRing;
+
+// ── Stream retention ring ─────────────────────────────────────────────────────
+// Captures the raw samples driving the bus (source-agnostic). Single producer
+// (feed thread) appends; the main thread reads a behind-the-head window. `cap`
+// is fixed once configured so slots are only reused after a full period — a read
+// of data comfortably behind `written` never races the writer.
+struct Retention {
+    std::vector<float>        buf;            // ring; size == cap
+    std::size_t               cap = 0;        // 0 = disabled
+    int                       seconds = 0;
+    int                       rate = 16000;
+    int                       hop = 160;
+    std::atomic<std::int64_t> written{0};     // total samples ever written
+
+    void configure(int secs, int rate_, int hop_) {
+        rate = rate_ > 0 ? rate_ : 16000;
+        hop  = hop_  > 0 ? hop_  : 160;
+        seconds = secs > 0 ? secs : 0;
+        cap = static_cast<std::size_t>(seconds) * static_cast<std::size_t>(rate);
+        buf.assign(cap, 0.0f);
+        written.store(0, std::memory_order_release);
+    }
+    void disable() {
+        cap = 0; seconds = 0;
+        buf.clear(); buf.shrink_to_fit();
+        written.store(0, std::memory_order_release);
+    }
+    void restart() {                          // fresh stream: keep config, rewind
+        if (cap) std::fill(buf.begin(), buf.end(), 0.0f);
+        written.store(0, std::memory_order_release);
+    }
+
+    // Producer thread. Append n samples.
+    void write(const float* s, int n) {
+        if (cap == 0 || n <= 0) return;
+        const std::int64_t w = written.load(std::memory_order_relaxed);
+        std::size_t pos = static_cast<std::size_t>(w % static_cast<std::int64_t>(cap));
+        std::size_t rem = static_cast<std::size_t>(n);
+        const float* src = s;
+        while (rem > 0) {
+            const std::size_t chunk = std::min(rem, cap - pos);
+            std::memcpy(&buf[pos], src, chunk * sizeof(float));
+            src += chunk; pos += chunk; if (pos == cap) pos = 0; rem -= chunk;
+        }
+        written.store(w + n, std::memory_order_release);
+    }
+
+    // Main thread. Copy absolute sample range [a, b) clamped to the held window.
+    int readSamples(std::int64_t a, std::int64_t b, std::vector<float>& out) {
+        out.clear();
+        if (cap == 0) return 0;
+        const std::int64_t w  = written.load(std::memory_order_acquire);
+        const std::int64_t lo = std::max<std::int64_t>(0, w - static_cast<std::int64_t>(cap));
+        a = std::max(a, lo);
+        b = std::min(b, w);
+        if (b <= a) return 0;
+        const std::size_t count = static_cast<std::size_t>(b - a);
+        out.resize(count);
+        std::size_t pos = static_cast<std::size_t>(a % static_cast<std::int64_t>(cap));
+        std::size_t rem = count, off = 0;
+        while (rem > 0) {
+            const std::size_t chunk = std::min(rem, cap - pos);
+            std::memcpy(out.data() + off, &buf[pos], chunk * sizeof(float));
+            off += chunk; pos += chunk; if (pos == cap) pos = 0; rem -= chunk;
+        }
+        return static_cast<int>(count);
+    }
+
+    std::int64_t streamFrame() const {
+        return written.load(std::memory_order_acquire) / static_cast<std::int64_t>(hop);
+    }
+    std::int64_t heldFrames() const {
+        const std::int64_t w = written.load(std::memory_order_acquire);
+        const std::int64_t held = std::min<std::int64_t>(w, static_cast<std::int64_t>(cap));
+        return held / static_cast<std::int64_t>(hop);
+    }
+};
 
 struct ListenHostState {
     broaudio::Engine* audioEngine = nullptr;
@@ -40,6 +122,12 @@ struct ListenHostState {
     ListenSpotsFn     onSpots;
     ListenWakeFn      onWake;
     ListenGesturesFn  onGestures;
+
+    // Opt-in raw-audio retention over the shared stream (see header). Captured
+    // at the bus chokepoint; survives membership changes (samples keep flowing),
+    // rewound when the whole stream tears down + restarts.
+    Retention retention;
+    int       retentionSeconds = 0;   // requested depth; applied on infra create
 
     // The DeviceScope for the whole bus feed. Both model consumers run under
     // one scope; when only the wake member is attached, use its device.
@@ -66,6 +154,9 @@ void teardownInfra() {
     removeTaskIfAny();
     g_listen.ring.reset();
     g_listen.bus.reset();
+    // The stream is gone; rewind retention so a fresh attach restarts its axis
+    // at 0 (mirroring the tenants' frame counters) and stale audio isn't read.
+    g_listen.retention.restart();
 }
 
 // Replace the inference task with one for the CURRENT membership (or tear
@@ -93,6 +184,9 @@ void rebuildTask() {
         g_listen.ring,
         [bus, hub, spotter, wake, gesture, device, onSpots, onWake, onGestures](
             const float* samples, int n) {
+            // Retain the raw stream (no-op when disabled). Producer thread; the
+            // retention object lives for the host's life.
+            g_listen.retention.write(samples, n);
             brosoundml::ListenFeedResult r;
             try {
                 // DeviceScope so the model forwards run on their own stream,
@@ -141,6 +235,13 @@ void ensureInfra() {
     g_listen.bus   = std::move(bus);
     g_listen.ring  = std::move(ring);
     g_listen.tapId = tap;
+
+    // Fresh stream: (re)configure retention if the app requested it.
+    if (g_listen.retentionSeconds > 0) {
+        g_listen.retention.configure(g_listen.retentionSeconds,
+                                     g_listen.bus->sample_rate(),
+                                     g_listen.bus->config().hop_length);
+    }
 }
 
 }  // namespace
@@ -218,6 +319,7 @@ void listenHostWriteRing(const float* samples, int n) {
 brosoundml::ListenFeedResult listenHostFeedInline(const float* samples, int n) {
     brosoundml::ListenFeedResult r;
     if (!g_listen.bus) return r;
+    g_listen.retention.write(samples, n);
     brotensor::DeviceScope scope(g_listen.scopeDevice());
     r = g_listen.bus->feed(samples, n,
                            g_listen.hub.get(), g_listen.spotter.get(),
@@ -227,6 +329,48 @@ brosoundml::ListenFeedResult listenHostFeedInline(const float* samples, int n) {
     if (g_listen.onGestures && !r.gestures.empty())
         g_listen.onGestures(r.gestures);
     return r;
+}
+
+// ─── Retention API ───────────────────────────────────────────────────────────
+
+void listenHostSetRetention(int seconds) {
+    g_listen.retentionSeconds = seconds > 0 ? seconds : 0;
+    if (!g_listen.bus) return;                 // applied on the next attach
+    if (g_listen.retentionSeconds > 0) {
+        g_listen.retention.configure(g_listen.retentionSeconds,
+                                     g_listen.bus->sample_rate(),
+                                     g_listen.bus->config().hop_length);
+    } else {
+        g_listen.retention.disable();
+    }
+}
+
+std::int64_t listenHostStreamFrame() {
+    return g_listen.retention.streamFrame();
+}
+
+int listenHostReadAudio(std::int64_t startFrame, std::int64_t endFrame,
+                        std::vector<float>& out) {
+    out.clear();
+    if (g_listen.retention.cap == 0) return 0;
+    const int hop = g_listen.retention.hop;
+    if (startFrame < 0) startFrame = 0;
+    if (endFrame < startFrame) return 0;
+    // Inclusive frame range -> [start*hop, (end+1)*hop) sample span.
+    const std::int64_t a = startFrame * hop;
+    const std::int64_t b = (endFrame + 1) * hop;
+    return g_listen.retention.readSamples(a, b, out);
+}
+
+ListenRetentionInfo listenHostRetentionInfo() {
+    ListenRetentionInfo info;
+    info.active      = g_listen.retention.cap != 0;
+    info.seconds     = g_listen.retention.seconds;
+    info.rate        = g_listen.retention.rate;
+    info.hop         = g_listen.retention.hop;
+    info.streamFrame = g_listen.retention.streamFrame();
+    info.heldFrames  = g_listen.retention.heldFrames();
+    return info;
 }
 
 }  // namespace bro::js
