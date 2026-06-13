@@ -181,6 +181,16 @@ class AudioContext {
   /** @param {number} ms - attack time in milliseconds, clamped to [0.1, 100] */ setCompressorAttack(ms) {}
   /** @param {number} ms - release time in milliseconds, clamped to [1, 1000] */ setCompressorRelease(ms) {}
 
+  // Master limiter — a lookahead peak limiter on the master bus, applied after
+  // master gain. Catches inter-sample peaks the compressor misses; keep it on
+  // to prevent clipping when many voices stack up.
+  //   ctx.setLimiterEnabled(true);
+  //   ctx.setLimiterThreshold(-1.0);   // ceiling in dBFS
+  //   ctx.setLimiterRelease(80);       // ms
+  /** @param {boolean} enabled */ setLimiterEnabled(enabled) {}
+  /** @param {number} dB - ceiling in dBFS (e.g. -1.0); peaks above are limited */ setLimiterThreshold(dB) {}
+  /** @param {number} ms - gain-recovery release time in milliseconds */ setLimiterRelease(ms) {}
+
 
   // --- Mix Bus API ----------------------------------------------------------
 
@@ -321,6 +331,15 @@ class AudioContext {
   /** @param {number} voiceId @param {number} seconds */ setVoiceDecay(voiceId, seconds) {}
   /** @param {number} voiceId @param {number} level - 0.0 to 1.0 */ setVoiceSustain(voiceId, level) {}
   /** @param {number} voiceId @param {number} seconds */ setVoiceRelease(voiceId, seconds) {}
+
+  /**
+   * Pitch-bend a voice by a semitone offset (applied on top of its frequency).
+   * Positive bends up, negative down; 0 is no bend. OscillatorNode also exposes
+   * this as a `pitchBend` AudioParam (osc.pitchBend.value = 2).
+   * @param {number} voiceId
+   * @param {number} semitones - e.g. 2 = up a whole tone, -12 = down an octave
+   */
+  setVoicePitchBend(voiceId, semitones) {}
 
   // Unison
   /** @param {number} voiceId @param {number} count */ setVoiceUnisonCount(voiceId, count) {}
@@ -583,6 +602,79 @@ class AudioContext {
    * @returns {Float32Array} processed output
    */
   processEffectsOffline(busId, input) {}
+
+  /**
+   * Render `numFrames` through the full pipeline (voices, clips, bus effects,
+   * mix, limiter) WITHOUT a playback device, then return the latest mono
+   * mixdown as a Float32Array. This is the offline/headless pump — in
+   * bro-headless there is no audio device thread, so call this (or advanceTime,
+   * which renders for you) to advance audio. Do NOT call it in a windowed app
+   * with a live device: it would race the audio callback.
+   *
+   * @param {number} numFrames - frames to render (capped to the analysis ring)
+   * @param {Float32Array} [out] - optional buffer to fill in place (up to its
+   *        length); when omitted a fresh Float32Array(numFrames) is returned
+   * @returns {Float32Array} the rendered mono samples
+   *
+   * @example
+   *   const v = ctx.createVoice();
+   *   ctx.setVoiceFrequency(v, 440);
+   *   ctx.startVoice(v, ctx.currentTime);
+   *   const pcm = ctx.renderBlock(4096);   // non-zero samples once the voice rings
+   */
+  renderBlock(numFrames, out) {}
+
+
+  // --- Presets (serialization) ----------------------------------------------
+  //
+  // Presets are plain JS objects that mirror broaudio's preset structs. Build
+  // one in JS (or load JSON), serialize/save it, and later load/deserialize and
+  // apply it to the live engine. Enum fields use the same lowercase strings as
+  // the rest of this API (waveform, filter type, distortion mode, LFO shape,
+  // mod source/dest, effect-order slot names).
+  //
+  //   VoicePreset { waveform, frequency, gain, pan, pitchBend, attackTime,
+  //                 decayTime, sustainLevel, releaseTime, filterEnabled,
+  //                 filterType, filterFreq, filterQ, unisonCount, unisonDetune,
+  //                 unisonStereoWidth }
+  //   BusPreset   { gain, pan, effectOrder:[slot...], filters:[FilterPreset x4],
+  //                 delay, compressor, reverb, chorus, distortion, eq }
+  //   ModPreset   { lfos:[LfoPreset x4], routes:[RoutePreset...] }
+  //   EnginePreset{ masterGain, limiter:{enabled,thresholdDb,releaseMs},
+  //                 masterBus:BusPreset, buses:[BusPreset...], modulation:ModPreset }
+  //
+  //   const patch = { waveform: "sawtooth", filterEnabled: true, filterFreq: 800 };
+  //   const json  = ctx.voicePresetToJson(patch);
+  //   ctx.savePreset(json, "lead.json");
+  //   const back  = ctx.voicePresetFromJson(ctx.loadPreset("lead.json"));
+  //   ctx.applyVoicePreset(myVoiceId, back);
+
+  /** @param {object} voicePreset @returns {string} JSON */ voicePresetToJson(voicePreset) {}
+  /** @param {object} busPreset @returns {string} JSON */ busPresetToJson(busPreset) {}
+  /** @param {object} modPreset @returns {string} JSON */ modPresetToJson(modPreset) {}
+  /** @param {object} enginePreset @returns {string} JSON */ enginePresetToJson(enginePreset) {}
+
+  /** @param {string} json @returns {object} voice preset */ voicePresetFromJson(json) {}
+  /** @param {string} json @returns {object} bus preset */ busPresetFromJson(json) {}
+  /** @param {string} json @returns {object} mod preset */ modPresetFromJson(json) {}
+  /** @param {string} json @returns {object} engine preset */ enginePresetFromJson(json) {}
+
+  /** @param {number} voiceId @param {object} voicePreset */ applyVoicePreset(voiceId, voicePreset) {}
+  /** @param {number} busId @param {object} busPreset */ applyBusPreset(busId, busPreset) {}
+  /** @param {object} modPreset - applied to the shared ModMatrix */ applyModPreset(modPreset) {}
+  /** @param {object} enginePreset - master gain, limiter, buses, modulation */ applyEnginePreset(enginePreset) {}
+
+  /**
+   * Write a preset JSON string to a file.
+   * @param {string} json @param {string} path @returns {boolean} success
+   */
+  savePreset(json, path) {}
+
+  /**
+   * Read a preset JSON string from a file.
+   * @param {string} path @returns {string|null} the JSON, or null if not readable
+   */
+  loadPreset(path) {}
 }
 
 
@@ -617,6 +709,9 @@ class OscillatorNode {
 
   /** @type {AudioParam} ADSR release time in seconds (default 0.04). */
   release;
+
+  /** @type {AudioParam} Pitch bend in semitones, applied on top of frequency (default 0). */
+  pitchBend;
 
   /**
    * Connect this oscillator to another node (typically a GainNode or the destination).
@@ -998,6 +1093,13 @@ class Sequence {
   /** @param {number} index */ removeNote(index) {}
   clearNotes() {}
 
+  /**
+   * Read back a note event by index (notes are kept sorted by beat).
+   * @param {number} index - 0 .. noteCount-1
+   * @returns {{beat:number, note:number, velocity:number, duration:number}|null}
+   */
+  note(index) {}
+
   /** @param {number} [when=currentTime] */ play(when) {}
   stop() {}
   /** @param {number} [when=currentTime] */ pause(when) {}
@@ -1048,6 +1150,22 @@ class Sequence {
    * @param {string} mode - "linear"|"step"|"smooth"
    */
   setAutomationInterpMode(laneIndex, mode) {}
+
+  // --- Automation read-back -------------------------------------------------
+
+  /** @param {number} laneIndex @returns {number} number of breakpoints in the lane */
+  automationPointCount(laneIndex) {}
+
+  /**
+   * Read back an automation breakpoint (points are kept sorted by beat).
+   * @param {number} laneIndex
+   * @param {number} pointIndex - 0 .. automationPointCount(laneIndex)-1
+   * @returns {{beat:number, value:number}|null}
+   */
+  automationPoint(laneIndex, pointIndex) {}
+
+  /** @param {number} laneIndex @returns {string|null} "linear"|"step"|"smooth" */
+  automationInterpMode(laneIndex) {}
 }
 
 

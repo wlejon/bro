@@ -122,7 +122,7 @@ struct AudioParamData {
     int voiceId;
     enum class Target {
         Frequency, Gain, Pan, Attack, Decay, SustainLevel, Release,
-        FilterFrequency, FilterQ, FilterGain
+        FilterFrequency, FilterQ, FilterGain, PitchBend
     } target;
     float value;
 };
@@ -718,6 +718,7 @@ static JSValue js_audioctx_createOscillator(JSContext* ctx, JSValueConst this_va
     JS_SetPropertyStr(ctx, obj, "decay", makeParam(AudioParamData::Target::Decay, 0.1f));
     JS_SetPropertyStr(ctx, obj, "sustain", makeParam(AudioParamData::Target::SustainLevel, 1.0f));
     JS_SetPropertyStr(ctx, obj, "release", makeParam(AudioParamData::Target::Release, 0.04f));
+    JS_SetPropertyStr(ctx, obj, "pitchBend", makeParam(AudioParamData::Target::PitchBend, 0.0f));
 
     return obj;
 }
@@ -1338,6 +1339,681 @@ static JSValue js_va_setStealPolicy(JSContext* ctx, JSValueConst this_val, int a
 }
 
 // ---------------------------------------------------------------------------
+// Preset (de)serialization — JS object <-> broaudio preset structs
+// ---------------------------------------------------------------------------
+//
+// broaudio's toJson/fromJson operate on plain preset structs (VoicePreset,
+// BusPreset, ModPreset, EnginePreset). The engine has no getter that reads its
+// live state back into a preset, so the JS surface marshals a plain JS object
+// into a preset struct (for toJson / applyXPreset) and a struct back into a JS
+// object (for fromJson). Enums round-trip as the same lowercase strings the
+// rest of this file already uses.
+
+// --- JS object field readers (return default when absent) ---
+
+static double jsObjNum(JSContext* ctx, JSValueConst o, const char* k, double def) {
+    JSValue v = JS_GetPropertyStr(ctx, o, k);
+    if (JS_IsUndefined(v) || JS_IsNull(v)) { JS_FreeValue(ctx, v); return def; }
+    double d = def; JS_ToFloat64(ctx, &d, v); JS_FreeValue(ctx, v); return d;
+}
+static bool jsObjBool(JSContext* ctx, JSValueConst o, const char* k, bool def) {
+    JSValue v = JS_GetPropertyStr(ctx, o, k);
+    if (JS_IsUndefined(v) || JS_IsNull(v)) { JS_FreeValue(ctx, v); return def; }
+    bool b = JS_ToBool(ctx, v) != 0; JS_FreeValue(ctx, v); return b;
+}
+static int jsObjInt(JSContext* ctx, JSValueConst o, const char* k, int def) {
+    JSValue v = JS_GetPropertyStr(ctx, o, k);
+    if (JS_IsUndefined(v) || JS_IsNull(v)) { JS_FreeValue(ctx, v); return def; }
+    int i = def; JS_ToInt32(ctx, &i, v); JS_FreeValue(ctx, v); return i;
+}
+static std::string jsObjStr(JSContext* ctx, JSValueConst o, const char* k, const char* def) {
+    JSValue v = JS_GetPropertyStr(ctx, o, k);
+    std::string out = def;
+    if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        if (s) { out = s; JS_FreeCString(ctx, s); }
+    }
+    JS_FreeValue(ctx, v);
+    return out;
+}
+static uint32_t jsArrayLen(JSContext* ctx, JSValueConst v) {
+    JSValue l = JS_GetPropertyStr(ctx, v, "length");
+    uint32_t n = 0; JS_ToUint32(ctx, &n, l); JS_FreeValue(ctx, l); return n;
+}
+
+// --- Enum <-> string (reverse of the parse* helpers above) ---
+
+static const char* waveformToString(broaudio::Waveform w) {
+    switch (w) {
+        case broaudio::Waveform::Square:     return "square";
+        case broaudio::Waveform::Sawtooth:   return "sawtooth";
+        case broaudio::Waveform::Triangle:   return "triangle";
+        case broaudio::Waveform::Wavetable:  return "wavetable";
+        case broaudio::Waveform::WhiteNoise: return "whitenoise";
+        case broaudio::Waveform::PinkNoise:  return "pinknoise";
+        case broaudio::Waveform::BrownNoise: return "brownnoise";
+        default:                             return "sine";
+    }
+}
+static const char* filterTypeToString(broaudio::BiquadFilter::Type t) {
+    switch (t) {
+        case broaudio::BiquadFilter::Type::Highpass:  return "highpass";
+        case broaudio::BiquadFilter::Type::Bandpass:  return "bandpass";
+        case broaudio::BiquadFilter::Type::Notch:     return "notch";
+        case broaudio::BiquadFilter::Type::Allpass:   return "allpass";
+        case broaudio::BiquadFilter::Type::Peaking:   return "peaking";
+        case broaudio::BiquadFilter::Type::Lowshelf:  return "lowshelf";
+        case broaudio::BiquadFilter::Type::Highshelf: return "highshelf";
+        default:                                      return "lowpass";
+    }
+}
+static broaudio::DistortionMode parseDistortionMode(const std::string& m) {
+    if (m == "hardclip") return broaudio::DistortionMode::HardClip;
+    if (m == "foldback") return broaudio::DistortionMode::Foldback;
+    if (m == "bitcrush") return broaudio::DistortionMode::Bitcrush;
+    return broaudio::DistortionMode::SoftClip;
+}
+static const char* distortionModeToString(broaudio::DistortionMode m) {
+    switch (m) {
+        case broaudio::DistortionMode::HardClip: return "hardclip";
+        case broaudio::DistortionMode::Foldback: return "foldback";
+        case broaudio::DistortionMode::Bitcrush: return "bitcrush";
+        default:                                 return "softclip";
+    }
+}
+static broaudio::EffectSlot parseEffectSlot(const std::string& s, broaudio::EffectSlot def) {
+    if (s == "filter")     return broaudio::EffectSlot::Filter;
+    if (s == "delay")      return broaudio::EffectSlot::Delay;
+    if (s == "compressor") return broaudio::EffectSlot::Compressor;
+    if (s == "chorus")     return broaudio::EffectSlot::Chorus;
+    if (s == "reverb")     return broaudio::EffectSlot::Reverb;
+    if (s == "equalizer")  return broaudio::EffectSlot::Equalizer;
+    if (s == "distortion") return broaudio::EffectSlot::Distortion;
+    return def;
+}
+static const char* effectSlotToString(broaudio::EffectSlot s) {
+    switch (s) {
+        case broaudio::EffectSlot::Delay:      return "delay";
+        case broaudio::EffectSlot::Compressor: return "compressor";
+        case broaudio::EffectSlot::Chorus:     return "chorus";
+        case broaudio::EffectSlot::Reverb:     return "reverb";
+        case broaudio::EffectSlot::Equalizer:  return "equalizer";
+        case broaudio::EffectSlot::Distortion: return "distortion";
+        default:                               return "filter";
+    }
+}
+static const char* lfoShapeToString(broaudio::LfoShape s) {
+    switch (s) {
+        case broaudio::LfoShape::Triangle:      return "triangle";
+        case broaudio::LfoShape::Square:        return "square";
+        case broaudio::LfoShape::SawUp:         return "sawup";
+        case broaudio::LfoShape::SawDown:       return "sawdown";
+        case broaudio::LfoShape::SampleAndHold: return "sampleandhold";
+        default:                                return "sine";
+    }
+}
+static const char* modSourceToString(broaudio::ModSource s) {
+    switch (s) {
+        case broaudio::ModSource::Lfo2:        return "lfo2";
+        case broaudio::ModSource::Lfo3:        return "lfo3";
+        case broaudio::ModSource::Lfo4:        return "lfo4";
+        case broaudio::ModSource::Envelope:    return "envelope";
+        case broaudio::ModSource::Velocity:    return "velocity";
+        case broaudio::ModSource::KeyTracking: return "keytracking";
+        case broaudio::ModSource::ModWheel:    return "modwheel";
+        case broaudio::ModSource::Aftertouch:  return "aftertouch";
+        default:                               return "lfo1";
+    }
+}
+static const char* modDestToString(broaudio::ModDest d) {
+    switch (d) {
+        case broaudio::ModDest::Gain:       return "gain";
+        case broaudio::ModDest::Pan:        return "pan";
+        case broaudio::ModDest::FilterFreq: return "filterfreq";
+        case broaudio::ModDest::FilterQ:    return "filterq";
+        case broaudio::ModDest::PulseWidth: return "pulsewidth";
+        case broaudio::ModDest::DelaySend:  return "delaysend";
+        default:                            return "pitch";
+    }
+}
+
+// --- JS object -> preset struct ---
+
+static broaudio::VoicePreset jsToVoicePreset(JSContext* ctx, JSValueConst o) {
+    broaudio::VoicePreset p;
+    if (JS_IsUndefined(o) || JS_IsNull(o) || !JS_IsObject(o)) return p;
+    p.waveform          = parseWaveform(jsObjStr(ctx, o, "waveform", "sine").c_str());
+    p.frequency         = (float)jsObjNum(ctx, o, "frequency", p.frequency);
+    p.gain              = (float)jsObjNum(ctx, o, "gain", p.gain);
+    p.pan               = (float)jsObjNum(ctx, o, "pan", p.pan);
+    p.pitchBend         = (float)jsObjNum(ctx, o, "pitchBend", p.pitchBend);
+    p.attackTime        = (float)jsObjNum(ctx, o, "attackTime", p.attackTime);
+    p.decayTime         = (float)jsObjNum(ctx, o, "decayTime", p.decayTime);
+    p.sustainLevel      = (float)jsObjNum(ctx, o, "sustainLevel", p.sustainLevel);
+    p.releaseTime       = (float)jsObjNum(ctx, o, "releaseTime", p.releaseTime);
+    p.filterEnabled     = jsObjBool(ctx, o, "filterEnabled", p.filterEnabled);
+    p.filterType        = parseFilterType(jsObjStr(ctx, o, "filterType", "lowpass").c_str());
+    p.filterFreq        = (float)jsObjNum(ctx, o, "filterFreq", p.filterFreq);
+    p.filterQ           = (float)jsObjNum(ctx, o, "filterQ", p.filterQ);
+    p.unisonCount       = jsObjInt(ctx, o, "unisonCount", p.unisonCount);
+    p.unisonDetune      = (float)jsObjNum(ctx, o, "unisonDetune", p.unisonDetune);
+    p.unisonStereoWidth = (float)jsObjNum(ctx, o, "unisonStereoWidth", p.unisonStereoWidth);
+    return p;
+}
+static broaudio::FilterPreset jsToFilterPreset(JSContext* ctx, JSValueConst o) {
+    broaudio::FilterPreset p;
+    if (!JS_IsObject(o)) return p;
+    p.enabled   = jsObjBool(ctx, o, "enabled", p.enabled);
+    p.type      = parseFilterType(jsObjStr(ctx, o, "type", "lowpass").c_str());
+    p.frequency = (float)jsObjNum(ctx, o, "frequency", p.frequency);
+    p.Q         = (float)jsObjNum(ctx, o, "Q", p.Q);
+    p.gainDB    = (float)jsObjNum(ctx, o, "gainDB", p.gainDB);
+    return p;
+}
+static broaudio::DelayPreset jsToDelayPreset(JSContext* ctx, JSValueConst o) {
+    broaudio::DelayPreset p;
+    if (!JS_IsObject(o)) return p;
+    p.enabled  = jsObjBool(ctx, o, "enabled", p.enabled);
+    p.time     = (float)jsObjNum(ctx, o, "time", p.time);
+    p.feedback = (float)jsObjNum(ctx, o, "feedback", p.feedback);
+    p.mix      = (float)jsObjNum(ctx, o, "mix", p.mix);
+    return p;
+}
+static broaudio::CompressorPreset jsToCompressorPreset(JSContext* ctx, JSValueConst o) {
+    broaudio::CompressorPreset p;
+    if (!JS_IsObject(o)) return p;
+    p.enabled   = jsObjBool(ctx, o, "enabled", p.enabled);
+    p.threshold = (float)jsObjNum(ctx, o, "threshold", p.threshold);
+    p.ratio     = (float)jsObjNum(ctx, o, "ratio", p.ratio);
+    p.attackMs  = (float)jsObjNum(ctx, o, "attackMs", p.attackMs);
+    p.releaseMs = (float)jsObjNum(ctx, o, "releaseMs", p.releaseMs);
+    return p;
+}
+static broaudio::ReverbPreset jsToReverbPreset(JSContext* ctx, JSValueConst o) {
+    broaudio::ReverbPreset p;
+    if (!JS_IsObject(o)) return p;
+    p.enabled  = jsObjBool(ctx, o, "enabled", p.enabled);
+    p.roomSize = (float)jsObjNum(ctx, o, "roomSize", p.roomSize);
+    p.damping  = (float)jsObjNum(ctx, o, "damping", p.damping);
+    p.mix      = (float)jsObjNum(ctx, o, "mix", p.mix);
+    return p;
+}
+static broaudio::ChorusPreset jsToChorusPreset(JSContext* ctx, JSValueConst o) {
+    broaudio::ChorusPreset p;
+    if (!JS_IsObject(o)) return p;
+    p.enabled   = jsObjBool(ctx, o, "enabled", p.enabled);
+    p.rate      = (float)jsObjNum(ctx, o, "rate", p.rate);
+    p.depth     = (float)jsObjNum(ctx, o, "depth", p.depth);
+    p.mix       = (float)jsObjNum(ctx, o, "mix", p.mix);
+    p.feedback  = (float)jsObjNum(ctx, o, "feedback", p.feedback);
+    p.baseDelay = (float)jsObjNum(ctx, o, "baseDelay", p.baseDelay);
+    return p;
+}
+static broaudio::DistortionPreset jsToDistortionPreset(JSContext* ctx, JSValueConst o) {
+    broaudio::DistortionPreset p;
+    if (!JS_IsObject(o)) return p;
+    p.enabled    = jsObjBool(ctx, o, "enabled", p.enabled);
+    p.mode       = parseDistortionMode(jsObjStr(ctx, o, "mode", "softclip"));
+    p.drive      = (float)jsObjNum(ctx, o, "drive", p.drive);
+    p.mix        = (float)jsObjNum(ctx, o, "mix", p.mix);
+    p.outputGain = (float)jsObjNum(ctx, o, "outputGain", p.outputGain);
+    p.crushBits  = (float)jsObjNum(ctx, o, "crushBits", p.crushBits);
+    p.crushRate  = (float)jsObjNum(ctx, o, "crushRate", p.crushRate);
+    return p;
+}
+static broaudio::EqPreset jsToEqPreset(JSContext* ctx, JSValueConst o) {
+    broaudio::EqPreset p;
+    if (!JS_IsObject(o)) return p;
+    p.enabled    = jsObjBool(ctx, o, "enabled", p.enabled);
+    p.masterGain = (float)jsObjNum(ctx, o, "masterGain", p.masterGain);
+    JSValue bg = JS_GetPropertyStr(ctx, o, "bandGains");
+    if (JS_IsObject(bg)) {
+        for (int i = 0; i < 7; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, bg, i);
+            if (!JS_IsUndefined(e) && !JS_IsNull(e)) {
+                double d = p.bandGains[i]; JS_ToFloat64(ctx, &d, e); p.bandGains[i] = (float)d;
+            }
+            JS_FreeValue(ctx, e);
+        }
+    }
+    JS_FreeValue(ctx, bg);
+    return p;
+}
+static broaudio::BusPreset jsToBusPreset(JSContext* ctx, JSValueConst o) {
+    broaudio::BusPreset p;
+    if (!JS_IsObject(o)) return p;
+    p.gain = (float)jsObjNum(ctx, o, "gain", p.gain);
+    p.pan  = (float)jsObjNum(ctx, o, "pan", p.pan);
+
+    const int slotCount = static_cast<int>(broaudio::EffectSlot::Count);
+    JSValue ord = JS_GetPropertyStr(ctx, o, "effectOrder");
+    if (JS_IsObject(ord)) {
+        for (int i = 0; i < slotCount; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, ord, i);
+            const char* s = JS_ToCString(ctx, e);
+            if (s) { p.effectOrder[i] = parseEffectSlot(s, p.effectOrder[i]); JS_FreeCString(ctx, s); }
+            JS_FreeValue(ctx, e);
+        }
+    }
+    JS_FreeValue(ctx, ord);
+
+    JSValue filt = JS_GetPropertyStr(ctx, o, "filters");
+    if (JS_IsObject(filt)) {
+        for (int i = 0; i < broaudio::BusPreset::MAX_FILTERS; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, filt, i);
+            if (JS_IsObject(e)) p.filters[i] = jsToFilterPreset(ctx, e);
+            JS_FreeValue(ctx, e);
+        }
+    }
+    JS_FreeValue(ctx, filt);
+
+    JSValue v;
+    v = JS_GetPropertyStr(ctx, o, "delay");      p.delay      = jsToDelayPreset(ctx, v);      JS_FreeValue(ctx, v);
+    v = JS_GetPropertyStr(ctx, o, "compressor"); p.compressor = jsToCompressorPreset(ctx, v); JS_FreeValue(ctx, v);
+    v = JS_GetPropertyStr(ctx, o, "reverb");     p.reverb     = jsToReverbPreset(ctx, v);     JS_FreeValue(ctx, v);
+    v = JS_GetPropertyStr(ctx, o, "chorus");     p.chorus     = jsToChorusPreset(ctx, v);     JS_FreeValue(ctx, v);
+    v = JS_GetPropertyStr(ctx, o, "distortion"); p.distortion = jsToDistortionPreset(ctx, v); JS_FreeValue(ctx, v);
+    v = JS_GetPropertyStr(ctx, o, "eq");         p.eq         = jsToEqPreset(ctx, v);         JS_FreeValue(ctx, v);
+    return p;
+}
+static broaudio::LfoPreset jsToLfoPreset(JSContext* ctx, JSValueConst o) {
+    broaudio::LfoPreset p;
+    if (!JS_IsObject(o)) return p;
+    p.shape   = parseLfoShape(jsObjStr(ctx, o, "shape", "sine").c_str());
+    p.rate    = (float)jsObjNum(ctx, o, "rate", p.rate);
+    p.depth   = (float)jsObjNum(ctx, o, "depth", p.depth);
+    p.offset  = (float)jsObjNum(ctx, o, "offset", p.offset);
+    p.bipolar = jsObjBool(ctx, o, "bipolar", p.bipolar);
+    p.sync    = jsObjBool(ctx, o, "sync", p.sync);
+    return p;
+}
+static broaudio::RoutePreset jsToRoutePreset(JSContext* ctx, JSValueConst o) {
+    broaudio::RoutePreset p;
+    if (!JS_IsObject(o)) return p;
+    p.source  = parseModSource(jsObjStr(ctx, o, "source", "lfo1").c_str());
+    p.dest    = parseModDest(jsObjStr(ctx, o, "dest", "pitch").c_str());
+    p.amount  = (float)jsObjNum(ctx, o, "amount", p.amount);
+    p.enabled = jsObjBool(ctx, o, "enabled", p.enabled);
+    return p;
+}
+static broaudio::ModPreset jsToModPreset(JSContext* ctx, JSValueConst o) {
+    broaudio::ModPreset p;
+    if (!JS_IsObject(o)) return p;
+    JSValue lfos = JS_GetPropertyStr(ctx, o, "lfos");
+    if (JS_IsObject(lfos)) {
+        for (int i = 0; i < broaudio::ModPreset::MAX_LFOS; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, lfos, i);
+            if (JS_IsObject(e)) p.lfos[i] = jsToLfoPreset(ctx, e);
+            JS_FreeValue(ctx, e);
+        }
+    }
+    JS_FreeValue(ctx, lfos);
+
+    JSValue routes = JS_GetPropertyStr(ctx, o, "routes");
+    if (JS_IsObject(routes)) {
+        uint32_t n = jsArrayLen(ctx, routes);
+        for (uint32_t i = 0; i < n; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, routes, i);
+            if (JS_IsObject(e)) p.routes.push_back(jsToRoutePreset(ctx, e));
+            JS_FreeValue(ctx, e);
+        }
+    }
+    JS_FreeValue(ctx, routes);
+    return p;
+}
+static broaudio::EnginePreset jsToEnginePreset(JSContext* ctx, JSValueConst o) {
+    broaudio::EnginePreset p;
+    if (!JS_IsObject(o)) return p;
+    p.masterGain = (float)jsObjNum(ctx, o, "masterGain", p.masterGain);
+
+    JSValue lim = JS_GetPropertyStr(ctx, o, "limiter");
+    if (JS_IsObject(lim)) {
+        p.limiter.enabled     = jsObjBool(ctx, lim, "enabled", p.limiter.enabled);
+        p.limiter.thresholdDb = (float)jsObjNum(ctx, lim, "thresholdDb", p.limiter.thresholdDb);
+        p.limiter.releaseMs   = (float)jsObjNum(ctx, lim, "releaseMs", p.limiter.releaseMs);
+    }
+    JS_FreeValue(ctx, lim);
+
+    JSValue mb = JS_GetPropertyStr(ctx, o, "masterBus");
+    if (JS_IsObject(mb)) p.masterBus = jsToBusPreset(ctx, mb);
+    JS_FreeValue(ctx, mb);
+
+    JSValue mod = JS_GetPropertyStr(ctx, o, "modulation");
+    if (JS_IsObject(mod)) p.modulation = jsToModPreset(ctx, mod);
+    JS_FreeValue(ctx, mod);
+
+    JSValue buses = JS_GetPropertyStr(ctx, o, "buses");
+    if (JS_IsObject(buses)) {
+        uint32_t n = jsArrayLen(ctx, buses);
+        for (uint32_t i = 0; i < n; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, buses, i);
+            if (JS_IsObject(e)) p.buses.push_back(jsToBusPreset(ctx, e));
+            JS_FreeValue(ctx, e);
+        }
+    }
+    JS_FreeValue(ctx, buses);
+    return p;
+}
+
+// --- preset struct -> JS object ---
+
+static JSValue voicePresetToJs(JSContext* ctx, const broaudio::VoicePreset& p) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "waveform", JS_NewString(ctx, waveformToString(p.waveform)));
+    JS_SetPropertyStr(ctx, o, "frequency", JS_NewFloat64(ctx, p.frequency));
+    JS_SetPropertyStr(ctx, o, "gain", JS_NewFloat64(ctx, p.gain));
+    JS_SetPropertyStr(ctx, o, "pan", JS_NewFloat64(ctx, p.pan));
+    JS_SetPropertyStr(ctx, o, "pitchBend", JS_NewFloat64(ctx, p.pitchBend));
+    JS_SetPropertyStr(ctx, o, "attackTime", JS_NewFloat64(ctx, p.attackTime));
+    JS_SetPropertyStr(ctx, o, "decayTime", JS_NewFloat64(ctx, p.decayTime));
+    JS_SetPropertyStr(ctx, o, "sustainLevel", JS_NewFloat64(ctx, p.sustainLevel));
+    JS_SetPropertyStr(ctx, o, "releaseTime", JS_NewFloat64(ctx, p.releaseTime));
+    JS_SetPropertyStr(ctx, o, "filterEnabled", JS_NewBool(ctx, p.filterEnabled));
+    JS_SetPropertyStr(ctx, o, "filterType", JS_NewString(ctx, filterTypeToString(p.filterType)));
+    JS_SetPropertyStr(ctx, o, "filterFreq", JS_NewFloat64(ctx, p.filterFreq));
+    JS_SetPropertyStr(ctx, o, "filterQ", JS_NewFloat64(ctx, p.filterQ));
+    JS_SetPropertyStr(ctx, o, "unisonCount", JS_NewInt32(ctx, p.unisonCount));
+    JS_SetPropertyStr(ctx, o, "unisonDetune", JS_NewFloat64(ctx, p.unisonDetune));
+    JS_SetPropertyStr(ctx, o, "unisonStereoWidth", JS_NewFloat64(ctx, p.unisonStereoWidth));
+    return o;
+}
+static JSValue filterPresetToJs(JSContext* ctx, const broaudio::FilterPreset& p) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "enabled", JS_NewBool(ctx, p.enabled));
+    JS_SetPropertyStr(ctx, o, "type", JS_NewString(ctx, filterTypeToString(p.type)));
+    JS_SetPropertyStr(ctx, o, "frequency", JS_NewFloat64(ctx, p.frequency));
+    JS_SetPropertyStr(ctx, o, "Q", JS_NewFloat64(ctx, p.Q));
+    JS_SetPropertyStr(ctx, o, "gainDB", JS_NewFloat64(ctx, p.gainDB));
+    return o;
+}
+static JSValue busPresetToJs(JSContext* ctx, const broaudio::BusPreset& p) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "gain", JS_NewFloat64(ctx, p.gain));
+    JS_SetPropertyStr(ctx, o, "pan", JS_NewFloat64(ctx, p.pan));
+
+    const int slotCount = static_cast<int>(broaudio::EffectSlot::Count);
+    JSValue ord = JS_NewArray(ctx);
+    for (int i = 0; i < slotCount; i++)
+        JS_SetPropertyUint32(ctx, ord, i, JS_NewString(ctx, effectSlotToString(p.effectOrder[i])));
+    JS_SetPropertyStr(ctx, o, "effectOrder", ord);
+
+    JSValue filt = JS_NewArray(ctx);
+    for (int i = 0; i < broaudio::BusPreset::MAX_FILTERS; i++)
+        JS_SetPropertyUint32(ctx, filt, i, filterPresetToJs(ctx, p.filters[i]));
+    JS_SetPropertyStr(ctx, o, "filters", filt);
+
+    JSValue dl = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, dl, "enabled", JS_NewBool(ctx, p.delay.enabled));
+    JS_SetPropertyStr(ctx, dl, "time", JS_NewFloat64(ctx, p.delay.time));
+    JS_SetPropertyStr(ctx, dl, "feedback", JS_NewFloat64(ctx, p.delay.feedback));
+    JS_SetPropertyStr(ctx, dl, "mix", JS_NewFloat64(ctx, p.delay.mix));
+    JS_SetPropertyStr(ctx, o, "delay", dl);
+
+    JSValue cp = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, cp, "enabled", JS_NewBool(ctx, p.compressor.enabled));
+    JS_SetPropertyStr(ctx, cp, "threshold", JS_NewFloat64(ctx, p.compressor.threshold));
+    JS_SetPropertyStr(ctx, cp, "ratio", JS_NewFloat64(ctx, p.compressor.ratio));
+    JS_SetPropertyStr(ctx, cp, "attackMs", JS_NewFloat64(ctx, p.compressor.attackMs));
+    JS_SetPropertyStr(ctx, cp, "releaseMs", JS_NewFloat64(ctx, p.compressor.releaseMs));
+    JS_SetPropertyStr(ctx, o, "compressor", cp);
+
+    JSValue rv = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, rv, "enabled", JS_NewBool(ctx, p.reverb.enabled));
+    JS_SetPropertyStr(ctx, rv, "roomSize", JS_NewFloat64(ctx, p.reverb.roomSize));
+    JS_SetPropertyStr(ctx, rv, "damping", JS_NewFloat64(ctx, p.reverb.damping));
+    JS_SetPropertyStr(ctx, rv, "mix", JS_NewFloat64(ctx, p.reverb.mix));
+    JS_SetPropertyStr(ctx, o, "reverb", rv);
+
+    JSValue ch = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, ch, "enabled", JS_NewBool(ctx, p.chorus.enabled));
+    JS_SetPropertyStr(ctx, ch, "rate", JS_NewFloat64(ctx, p.chorus.rate));
+    JS_SetPropertyStr(ctx, ch, "depth", JS_NewFloat64(ctx, p.chorus.depth));
+    JS_SetPropertyStr(ctx, ch, "mix", JS_NewFloat64(ctx, p.chorus.mix));
+    JS_SetPropertyStr(ctx, ch, "feedback", JS_NewFloat64(ctx, p.chorus.feedback));
+    JS_SetPropertyStr(ctx, ch, "baseDelay", JS_NewFloat64(ctx, p.chorus.baseDelay));
+    JS_SetPropertyStr(ctx, o, "chorus", ch);
+
+    JSValue ds = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, ds, "enabled", JS_NewBool(ctx, p.distortion.enabled));
+    JS_SetPropertyStr(ctx, ds, "mode", JS_NewString(ctx, distortionModeToString(p.distortion.mode)));
+    JS_SetPropertyStr(ctx, ds, "drive", JS_NewFloat64(ctx, p.distortion.drive));
+    JS_SetPropertyStr(ctx, ds, "mix", JS_NewFloat64(ctx, p.distortion.mix));
+    JS_SetPropertyStr(ctx, ds, "outputGain", JS_NewFloat64(ctx, p.distortion.outputGain));
+    JS_SetPropertyStr(ctx, ds, "crushBits", JS_NewFloat64(ctx, p.distortion.crushBits));
+    JS_SetPropertyStr(ctx, ds, "crushRate", JS_NewFloat64(ctx, p.distortion.crushRate));
+    JS_SetPropertyStr(ctx, o, "distortion", ds);
+
+    JSValue eq = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, eq, "enabled", JS_NewBool(ctx, p.eq.enabled));
+    JS_SetPropertyStr(ctx, eq, "masterGain", JS_NewFloat64(ctx, p.eq.masterGain));
+    JSValue bands = JS_NewArray(ctx);
+    for (int i = 0; i < 7; i++) JS_SetPropertyUint32(ctx, bands, i, JS_NewFloat64(ctx, p.eq.bandGains[i]));
+    JS_SetPropertyStr(ctx, eq, "bandGains", bands);
+    JS_SetPropertyStr(ctx, o, "eq", eq);
+    return o;
+}
+static JSValue modPresetToJs(JSContext* ctx, const broaudio::ModPreset& p) {
+    JSValue o = JS_NewObject(ctx);
+    JSValue lfos = JS_NewArray(ctx);
+    for (int i = 0; i < broaudio::ModPreset::MAX_LFOS; i++) {
+        const broaudio::LfoPreset& l = p.lfos[i];
+        JSValue lo = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, lo, "shape", JS_NewString(ctx, lfoShapeToString(l.shape)));
+        JS_SetPropertyStr(ctx, lo, "rate", JS_NewFloat64(ctx, l.rate));
+        JS_SetPropertyStr(ctx, lo, "depth", JS_NewFloat64(ctx, l.depth));
+        JS_SetPropertyStr(ctx, lo, "offset", JS_NewFloat64(ctx, l.offset));
+        JS_SetPropertyStr(ctx, lo, "bipolar", JS_NewBool(ctx, l.bipolar));
+        JS_SetPropertyStr(ctx, lo, "sync", JS_NewBool(ctx, l.sync));
+        JS_SetPropertyUint32(ctx, lfos, i, lo);
+    }
+    JS_SetPropertyStr(ctx, o, "lfos", lfos);
+
+    JSValue routes = JS_NewArray(ctx);
+    for (size_t i = 0; i < p.routes.size(); i++) {
+        const broaudio::RoutePreset& r = p.routes[i];
+        JSValue ro = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, ro, "source", JS_NewString(ctx, modSourceToString(r.source)));
+        JS_SetPropertyStr(ctx, ro, "dest", JS_NewString(ctx, modDestToString(r.dest)));
+        JS_SetPropertyStr(ctx, ro, "amount", JS_NewFloat64(ctx, r.amount));
+        JS_SetPropertyStr(ctx, ro, "enabled", JS_NewBool(ctx, r.enabled));
+        JS_SetPropertyUint32(ctx, routes, (uint32_t)i, ro);
+    }
+    JS_SetPropertyStr(ctx, o, "routes", routes);
+    return o;
+}
+static JSValue enginePresetToJs(JSContext* ctx, const broaudio::EnginePreset& p) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "masterGain", JS_NewFloat64(ctx, p.masterGain));
+
+    JSValue lim = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, lim, "enabled", JS_NewBool(ctx, p.limiter.enabled));
+    JS_SetPropertyStr(ctx, lim, "thresholdDb", JS_NewFloat64(ctx, p.limiter.thresholdDb));
+    JS_SetPropertyStr(ctx, lim, "releaseMs", JS_NewFloat64(ctx, p.limiter.releaseMs));
+    JS_SetPropertyStr(ctx, o, "limiter", lim);
+
+    JS_SetPropertyStr(ctx, o, "masterBus", busPresetToJs(ctx, p.masterBus));
+    JS_SetPropertyStr(ctx, o, "modulation", modPresetToJs(ctx, p.modulation));
+
+    JSValue buses = JS_NewArray(ctx);
+    for (size_t i = 0; i < p.buses.size(); i++)
+        JS_SetPropertyUint32(ctx, buses, (uint32_t)i, busPresetToJs(ctx, p.buses[i]));
+    JS_SetPropertyStr(ctx, o, "buses", buses);
+    return o;
+}
+
+// --- AudioContext preset raw methods ---
+
+static JSValue js_audioctx_voicePresetToJson(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    std::string j = broaudio::toJson(jsToVoicePreset(ctx, argv[0]));
+    return JS_NewStringLen(ctx, j.data(), j.size());
+}
+static JSValue js_audioctx_busPresetToJson(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    std::string j = broaudio::toJson(jsToBusPreset(ctx, argv[0]));
+    return JS_NewStringLen(ctx, j.data(), j.size());
+}
+static JSValue js_audioctx_modPresetToJson(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    std::string j = broaudio::toJson(jsToModPreset(ctx, argv[0]));
+    return JS_NewStringLen(ctx, j.data(), j.size());
+}
+static JSValue js_audioctx_enginePresetToJson(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    std::string j = broaudio::toJson(jsToEnginePreset(ctx, argv[0]));
+    return JS_NewStringLen(ctx, j.data(), j.size());
+}
+static JSValue js_audioctx_voicePresetFromJson(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    const char* s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NULL;
+    broaudio::VoicePreset p = broaudio::voicePresetFromJson(s); JS_FreeCString(ctx, s);
+    return voicePresetToJs(ctx, p);
+}
+static JSValue js_audioctx_busPresetFromJson(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    const char* s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NULL;
+    broaudio::BusPreset p = broaudio::busPresetFromJson(s); JS_FreeCString(ctx, s);
+    return busPresetToJs(ctx, p);
+}
+static JSValue js_audioctx_modPresetFromJson(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    const char* s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NULL;
+    broaudio::ModPreset p = broaudio::modPresetFromJson(s); JS_FreeCString(ctx, s);
+    return modPresetToJs(ctx, p);
+}
+static JSValue js_audioctx_enginePresetFromJson(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    const char* s = JS_ToCString(ctx, argv[0]); if (!s) return JS_NULL;
+    broaudio::EnginePreset p = broaudio::enginePresetFromJson(s); JS_FreeCString(ctx, s);
+    return enginePresetToJs(ctx, p);
+}
+static JSValue js_audioctx_applyVoicePreset(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int voiceId; JS_ToInt32(ctx, &voiceId, argv[0]);
+    d->engine->applyVoicePreset(voiceId, jsToVoicePreset(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+static JSValue js_audioctx_applyBusPreset(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
+    if (!d || argc < 2) return JS_UNDEFINED;
+    int busId; JS_ToInt32(ctx, &busId, argv[0]);
+    d->engine->applyBusPreset(busId, jsToBusPreset(ctx, argv[1]));
+    return JS_UNDEFINED;
+}
+static JSValue js_audioctx_applyModPreset(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
+    if (!d || argc < 1) return JS_UNDEFINED;
+    d->engine->applyModPreset(jsToModPreset(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+static JSValue js_audioctx_applyEnginePreset(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
+    if (!d || argc < 1) return JS_UNDEFINED;
+    d->engine->applyEnginePreset(jsToEnginePreset(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+static JSValue js_audioctx_savePreset(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_FALSE;
+    const char* j = JS_ToCString(ctx, argv[0]);
+    const char* path = JS_ToCString(ctx, argv[1]);
+    bool ok = false;
+    if (j && path) ok = broaudio::savePresetToFile(j, path);
+    if (j) JS_FreeCString(ctx, j);
+    if (path) JS_FreeCString(ctx, path);
+    return JS_NewBool(ctx, ok);
+}
+static JSValue js_audioctx_loadPreset(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    const char* path = JS_ToCString(ctx, argv[0]); if (!path) return JS_NULL;
+    std::string s = broaudio::loadPresetFromFile(path); JS_FreeCString(ctx, path);
+    if (s.empty()) return JS_NULL;
+    return JS_NewStringLen(ctx, s.data(), s.size());
+}
+
+// --- Offline render (headless) ---
+
+// Render numFrames through the full pipeline (no device) and return the latest
+// mono mixdown as a Float32Array. If a Float32Array is passed as the 2nd arg it
+// is filled in place (up to its length) and returned. Headless only — driving
+// the pipeline from the main thread while a live device callback runs would race.
+static JSValue js_audioctx_renderBlock(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int numFrames; JS_ToInt32(ctx, &numFrames, argv[0]);
+    if (numFrames <= 0) return JS_UNDEFINED;
+
+    d->engine->renderBlock(numFrames);
+
+    int cap = d->engine->outputBuffer().capacity();
+    int n = std::min(numFrames, cap);
+
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        size_t len = 0;
+        uint8_t* raw = getTypedArrayPtr(ctx, argv[1], len);
+        if (raw) {
+            int rc = std::min(n, static_cast<int>(len / sizeof(float)));
+            if (rc > 0) d->engine->outputBuffer().readLatest(reinterpret_cast<float*>(raw), rc);
+            return JS_DupValue(ctx, argv[1]);
+        }
+    }
+
+    JSValue lenVal = JS_NewInt32(ctx, n);
+    JSValue arr = JS_NewTypedArray(ctx, 1, &lenVal, JS_TYPED_ARRAY_FLOAT32);
+    JS_FreeValue(ctx, lenVal);
+    if (JS_IsException(arr)) return arr;
+
+    size_t byteOff = 0, viewLen = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, arr, &byteOff, &viewLen, nullptr);
+    if (!JS_IsException(abuf)) {
+        size_t abufLen = 0;
+        uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+        if (ptr) d->engine->outputBuffer().readLatest(reinterpret_cast<float*>(ptr + byteOff), n);
+        JS_FreeValue(ctx, abuf);
+    }
+    return arr;
+}
+
+// --- Sequence read-back raw methods ---
+
+static JSValue js_seq_note(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<SequenceData>(ctx, this_val);
+    if (!d || argc < 1) return JS_NULL;
+    int idx; JS_ToInt32(ctx, &idx, argv[0]);
+    if (idx < 0 || idx >= d->seq->noteCount()) return JS_NULL;
+    const broaudio::NoteEvent& n = d->seq->note(idx);
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "beat", JS_NewFloat64(ctx, n.beatPosition));
+    JS_SetPropertyStr(ctx, o, "note", JS_NewInt32(ctx, n.note));
+    JS_SetPropertyStr(ctx, o, "velocity", JS_NewFloat64(ctx, n.velocity));
+    JS_SetPropertyStr(ctx, o, "duration", JS_NewFloat64(ctx, n.duration));
+    return o;
+}
+static JSValue js_seq_automationPoint(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<SequenceData>(ctx, this_val);
+    if (!d || argc < 2) return JS_NULL;
+    int lane, pt; JS_ToInt32(ctx, &lane, argv[0]); JS_ToInt32(ctx, &pt, argv[1]);
+    if (lane < 0 || lane >= d->seq->automationLaneCount()) return JS_NULL;
+    const broaudio::AutomationLane& L = d->seq->automationLane(lane);
+    if (pt < 0 || pt >= L.pointCount()) return JS_NULL;
+    const broaudio::AutomationPoint& p = L.point(pt);
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "beat", JS_NewFloat64(ctx, p.beat));
+    JS_SetPropertyStr(ctx, o, "value", JS_NewFloat64(ctx, p.value));
+    return o;
+}
+static JSValue js_seq_automationInterpMode(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<SequenceData>(ctx, this_val);
+    if (!d || argc < 1) return JS_NULL;
+    int lane; JS_ToInt32(ctx, &lane, argv[0]);
+    if (lane < 0 || lane >= d->seq->automationLaneCount()) return JS_NULL;
+    broaudio::InterpMode m = d->seq->automationLane(lane).interpMode();
+    const char* s = (m == broaudio::InterpMode::Step) ? "step"
+                  : (m == broaudio::InterpMode::Smooth) ? "smooth" : "linear";
+    return JS_NewString(ctx, s);
+}
+
+// ---------------------------------------------------------------------------
 // Install — register all classes using qjsbind::Class<T>
 // ---------------------------------------------------------------------------
 
@@ -1373,6 +2049,8 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                             p->engine->setFilterQ(p->voiceId, p->value); break;
                         case AudioParamData::Target::FilterGain:
                             p->engine->setFilterGain(p->voiceId, p->value); break;
+                        case AudioParamData::Target::PitchBend:
+                            p->engine->setVoicePitchBend(p->voiceId, p->value); break;
                     }
                 });
     }
@@ -1621,6 +2299,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 [](SequenceData* d) -> bool { return d->seq->isLoopEnabled(); })
             .get("noteCount",
                 [](SequenceData* d) -> int { return d->seq->noteCount(); })
+            .method_raw("note", js_seq_note, 1)
             .method_raw("addAutomationLane", js_seq_addAutomationLane, 1)
             .method_raw("removeAutomationLane", js_seq_removeAutomationLane, 1)
             .method_raw("clearAutomationLanes", js_seq_clearAutomationLanes, 0)
@@ -1640,6 +2319,13 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                         d->seq->automationLane(laneIdx).clearPoints();
                 })
             .method_raw("setAutomationInterpMode", js_seq_setAutomationInterpMode, 2)
+            .method("automationPointCount",
+                [](SequenceData* d, int lane) -> int {
+                    if (lane < 0 || lane >= d->seq->automationLaneCount()) return 0;
+                    return d->seq->automationLane(lane).pointCount();
+                })
+            .method_raw("automationPoint", js_seq_automationPoint, 2)
+            .method_raw("automationInterpMode", js_seq_automationInterpMode, 1)
             .get("automationLaneCount",
                 [](SequenceData* d) -> int { return d->seq->automationLaneCount(); });
     }
@@ -1728,6 +2414,14 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 [](AudioCtxData* d, double v) { d->engine->setBusCompressorAttack(0, static_cast<float>(v)); })
             .method("setCompressorRelease",
                 [](AudioCtxData* d, double v) { d->engine->setBusCompressorRelease(0, static_cast<float>(v)); })
+
+            // Master limiter (lookahead peak limiter on the master bus)
+            .method("setLimiterEnabled",
+                [](AudioCtxData* d, bool v) { d->engine->setLimiterEnabled(v); })
+            .method("setLimiterThreshold",
+                [](AudioCtxData* d, double dB) { d->engine->setLimiterThreshold(static_cast<float>(dB)); })
+            .method("setLimiterRelease",
+                [](AudioCtxData* d, double ms) { d->engine->setLimiterRelease(static_cast<float>(ms)); })
 
             // Mix bus API
             .method("createBus",
@@ -1848,6 +2542,25 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
             // Offline effect processing
             .method_raw("processEffectsOffline", js_audioctx_processEffectsOffline, 2)
 
+            // Offline render (headless — pump the full pipeline without a device)
+            .method_raw("renderBlock", js_audioctx_renderBlock, 1)
+
+            // Preset serialization (JS object <-> JSON) + apply to live engine
+            .method_raw("voicePresetToJson", js_audioctx_voicePresetToJson, 1)
+            .method_raw("busPresetToJson", js_audioctx_busPresetToJson, 1)
+            .method_raw("modPresetToJson", js_audioctx_modPresetToJson, 1)
+            .method_raw("enginePresetToJson", js_audioctx_enginePresetToJson, 1)
+            .method_raw("voicePresetFromJson", js_audioctx_voicePresetFromJson, 1)
+            .method_raw("busPresetFromJson", js_audioctx_busPresetFromJson, 1)
+            .method_raw("modPresetFromJson", js_audioctx_modPresetFromJson, 1)
+            .method_raw("enginePresetFromJson", js_audioctx_enginePresetFromJson, 1)
+            .method_raw("applyVoicePreset", js_audioctx_applyVoicePreset, 2)
+            .method_raw("applyBusPreset", js_audioctx_applyBusPreset, 2)
+            .method_raw("applyModPreset", js_audioctx_applyModPreset, 1)
+            .method_raw("applyEnginePreset", js_audioctx_applyEnginePreset, 1)
+            .method_raw("savePreset", js_audioctx_savePreset, 2)
+            .method_raw("loadPreset", js_audioctx_loadPreset, 1)
+
             // Voice lifecycle
             .method("createVoice",
                 [](AudioCtxData* d) -> int { return d->engine->createVoice(); })
@@ -1882,6 +2595,8 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 [](AudioCtxData* d, int voiceId, double v) { d->engine->setSustainLevel(voiceId, static_cast<float>(v)); })
             .method("setVoiceRelease",
                 [](AudioCtxData* d, int voiceId, double v) { d->engine->setReleaseTime(voiceId, static_cast<float>(v)); })
+            .method("setVoicePitchBend",
+                [](AudioCtxData* d, int voiceId, double semitones) { d->engine->setVoicePitchBend(voiceId, static_cast<float>(semitones)); })
 
             // Unison
             .method("setVoiceUnisonCount",
