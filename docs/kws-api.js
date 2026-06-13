@@ -186,13 +186,18 @@ const names = bro.kws.templates();
  * on the main thread.
  *
  * @param {Object} opts
- * @param {function} opts.onSpot - onSpot(name, confidence): an enrolled
+ * @param {function} opts.onSpot - onSpot(name, confidence, span): an enrolled
  *        template completed an alignment. confidence is the geometric-mean
- *        posterior over the matched span, (0, 1].
+ *        posterior over the matched span, (0, 1]. `span` is the matched region
+ *        on the frames axis: { startFrame, endFrame, matchedFrames } (same axis
+ *        as progress().frames / bro.sense frames) — use it to mark where in the
+ *        stream the match landed. Backward-compatible: (name, confidence)
+ *        handlers ignore the 3rd arg.
  */
 bro.kws.listen({
-    onSpot: (name, confidence) => {
-        console.log('spotted', name, 'at', confidence.toFixed(2));
+    onSpot: (name, confidence, span) => {
+        console.log('spotted', name, 'at', confidence.toFixed(2),
+                    'frames', span.startFrame, '-', span.endFrame);
     },
 });
 

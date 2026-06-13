@@ -91,6 +91,8 @@ struct KwsState {
     // drained. The producer drops events when the ring is full.
     int                        eventIdx[kEventSlots]  = {};
     float                      eventConf[kEventSlots] = {};
+    std::int64_t               eventStart[kEventSlots] = {};   // matched-span frames
+    std::int64_t               eventEnd[kEventSlots]   = {};   //   (absolute, frames axis)
     std::atomic<std::uint64_t> produced{0};
     std::atomic<std::uint64_t> drained{0};
 
@@ -279,11 +281,14 @@ const float* readFloats(JSContext* ctx, JSValueConst v, int& count) {
 // Publish one fired event into the SPSC ring (inference thread). Drops on
 // overflow — a stalled main thread loses the oldest unprocessed... rather,
 // the newest event, never corrupts the ring.
-void publishEvent(int nameIdx, float confidence) {
+void publishEvent(int nameIdx, float confidence,
+                  std::int64_t startFrame, std::int64_t endFrame) {
     const std::uint64_t p = g_kws.produced.load(std::memory_order_relaxed);
     if (p - g_kws.drained.load(std::memory_order_acquire) >= kEventSlots) return;
-    g_kws.eventIdx[p % kEventSlots]  = nameIdx;
-    g_kws.eventConf[p % kEventSlots] = confidence;
+    g_kws.eventIdx[p % kEventSlots]   = nameIdx;
+    g_kws.eventConf[p % kEventSlots]  = confidence;
+    g_kws.eventStart[p % kEventSlots] = startFrame;
+    g_kws.eventEnd[p % kEventSlots]   = endFrame;
     g_kws.produced.store(p + 1, std::memory_order_release);
 }
 
@@ -658,7 +663,8 @@ JSValue js_listen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
                 if (g_kws.suspended.load(std::memory_order_relaxed)) return;
                 for (const auto& ev : events) {
                     const int idx = nameIndexOf(names, ev.name);
-                    if (idx >= 0) publishEvent(idx, ev.confidence);
+                    if (idx >= 0)
+                        publishEvent(idx, ev.confidence, ev.start_frame, ev.end_frame);
                 }
             });
         g_kws.listening = true;
@@ -945,18 +951,29 @@ void tickKws(JSContext* ctx) {
     std::uint64_t drained = g_kws.drained.load(std::memory_order_relaxed);
     if (drained >= produced || JS_IsUndefined(g_kws.onSpot)) return;
     while (drained < produced) {
-        const int   idx  = g_kws.eventIdx[drained % kEventSlots];
-        const float conf = g_kws.eventConf[drained % kEventSlots];
+        const int   idx   = g_kws.eventIdx[drained % kEventSlots];
+        const float conf  = g_kws.eventConf[drained % kEventSlots];
+        const std::int64_t startF = g_kws.eventStart[drained % kEventSlots];
+        const std::int64_t endF   = g_kws.eventEnd[drained % kEventSlots];
         drained++;
         // Publish the consumption BEFORE the JS call: the producer only needs
         // the slot back, and onSpot may run for a while.
         g_kws.drained.store(drained, std::memory_order_release);
         if (idx < 0 || idx >= (int)g_kws.names.size()) continue;
-        JSValue args[2] = {
+        // 3rd arg: the matched span on the frames axis (align with
+        // bro.kws.progress().frames / bro.sense frames). Backward-compatible —
+        // existing onSpot(name, conf) handlers ignore it.
+        JSValue span = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, span, "startFrame", JS_NewInt64(ctx, startF));
+        JS_SetPropertyStr(ctx, span, "endFrame", JS_NewInt64(ctx, endF));
+        JS_SetPropertyStr(ctx, span, "matchedFrames",
+                          JS_NewInt64(ctx, endF >= startF ? endF - startF + 1 : 0));
+        JSValue args[3] = {
             JS_NewString(ctx, g_kws.names[(std::size_t)idx].c_str()),
             JS_NewFloat64(ctx, conf),
+            span,
         };
-        JSValue r = JS_Call(ctx, g_kws.onSpot, JS_UNDEFINED, 2, args);
+        JSValue r = JS_Call(ctx, g_kws.onSpot, JS_UNDEFINED, 3, args);
         if (JS_IsException(r)) {
             JSValue exc = JS_GetException(ctx);
             const char* s = JS_ToCString(ctx, exc);
@@ -967,6 +984,7 @@ void tickKws(JSContext* ctx) {
         JS_FreeValue(ctx, r);
         JS_FreeValue(ctx, args[0]);
         JS_FreeValue(ctx, args[1]);
+        JS_FreeValue(ctx, args[2]);
     }
 }
 

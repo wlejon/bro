@@ -96,14 +96,19 @@
  * matcher reads the SensorHub snapshot).
  *
  * @param {Object} opts
- * @param {function} opts.onGesture - onGesture(name, confidence, kind): an
- *        enrolled gesture re-occurred. confidence is in (0, 1] (1 == exact
- *        reproduction); kind is 'rhythm' or 'tone'.
+ * @param {function} opts.onGesture - onGesture(name, confidence, kind, span):
+ *        an enrolled gesture re-occurred. confidence is in (0, 1] (1 == exact
+ *        reproduction); kind is 'rhythm' or 'tone'. `span` is the matched region
+ *        on the SensorHub frames axis: { startFrame, endFrame, matchedFrames }
+ *        (rhythm: first..last matched onset; tone: run start..fire) — align with
+ *        bro.sense.snapshot().frames to mark it. Backward-compatible: existing
+ *        (name, confidence, kind) handlers ignore the 4th arg.
  */
 // bro.sense.start({});
 // bro.gesture.listen({
-//     onGesture: (name, confidence, kind) => {
-//         console.log('gesture', name, '(' + kind + ')', confidence.toFixed(2));
+//     onGesture: (name, confidence, kind, span) => {
+//         console.log('gesture', name, '(' + kind + ')', confidence.toFixed(2),
+//                     'frames', span.startFrame, '-', span.endFrame);
 //     },
 // });
 

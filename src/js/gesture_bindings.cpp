@@ -50,6 +50,8 @@ struct GestureState {
     int                        eventIdx[kEventSlots]  = {};
     float                      eventConf[kEventSlots] = {};
     std::uint8_t               eventTone[kEventSlots] = {};   // 1 = tone, 0 = rhythm
+    std::int64_t               eventStart[kEventSlots] = {};  // matched-span frames
+    std::int64_t               eventEnd[kEventSlots]   = {};  //   (SensorHub frames axis)
     std::atomic<std::uint64_t> produced{0};
     std::atomic<std::uint64_t> drained{0};
 
@@ -99,12 +101,15 @@ const float* readFloats(JSContext* ctx, JSValueConst v, int& count) {
     return reinterpret_cast<const float*>(p + byteOff);
 }
 
-void publishEvent(int nameIdx, float confidence, bool isTone) {
+void publishEvent(int nameIdx, float confidence, bool isTone,
+                  std::int64_t startFrame, std::int64_t endFrame) {
     const std::uint64_t p = g_gesture.produced.load(std::memory_order_relaxed);
     if (p - g_gesture.drained.load(std::memory_order_acquire) >= kEventSlots) return;
-    g_gesture.eventIdx[p % kEventSlots]  = nameIdx;
-    g_gesture.eventConf[p % kEventSlots] = confidence;
-    g_gesture.eventTone[p % kEventSlots] = isTone ? 1u : 0u;
+    g_gesture.eventIdx[p % kEventSlots]   = nameIdx;
+    g_gesture.eventConf[p % kEventSlots]  = confidence;
+    g_gesture.eventTone[p % kEventSlots]  = isTone ? 1u : 0u;
+    g_gesture.eventStart[p % kEventSlots] = startFrame;
+    g_gesture.eventEnd[p % kEventSlots]   = endFrame;
     g_gesture.produced.store(p + 1, std::memory_order_release);
 }
 
@@ -298,7 +303,8 @@ JSValue js_listen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
                     const int idx = nameIndexOf(names, ev.name);
                     if (idx >= 0)
                         publishEvent(idx, ev.confidence,
-                                     ev.kind == brosoundml::GestureKind::Tone);
+                                     ev.kind == brosoundml::GestureKind::Tone,
+                                     ev.start_frame, ev.end_frame);
                 }
             });
         g_gesture.listening = true;
@@ -378,15 +384,26 @@ void tickGesture(JSContext* ctx) {
         const int   idx  = g_gesture.eventIdx[drained % kEventSlots];
         const float conf = g_gesture.eventConf[drained % kEventSlots];
         const bool  tone = g_gesture.eventTone[drained % kEventSlots] != 0u;
+        const std::int64_t startF = g_gesture.eventStart[drained % kEventSlots];
+        const std::int64_t endF   = g_gesture.eventEnd[drained % kEventSlots];
         drained++;
         g_gesture.drained.store(drained, std::memory_order_release);
         if (idx < 0 || idx >= (int)g_gesture.names.size()) continue;
-        JSValue args[3] = {
+        // 4th arg: the matched span on the SensorHub frames axis (align with
+        // bro.sense.snapshot().frames). Backward-compatible with
+        // onGesture(name, conf, kind) handlers.
+        JSValue span = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, span, "startFrame", JS_NewInt64(ctx, startF));
+        JS_SetPropertyStr(ctx, span, "endFrame", JS_NewInt64(ctx, endF));
+        JS_SetPropertyStr(ctx, span, "matchedFrames",
+                          JS_NewInt64(ctx, endF >= startF ? endF - startF + 1 : 0));
+        JSValue args[4] = {
             JS_NewString(ctx, g_gesture.names[(std::size_t)idx].c_str()),
             JS_NewFloat64(ctx, conf),
             JS_NewString(ctx, tone ? "tone" : "rhythm"),
+            span,
         };
-        JSValue r = JS_Call(ctx, g_gesture.onGesture, JS_UNDEFINED, 3, args);
+        JSValue r = JS_Call(ctx, g_gesture.onGesture, JS_UNDEFINED, 4, args);
         if (JS_IsException(r)) {
             JSValue exc = JS_GetException(ctx);
             const char* s = JS_ToCString(ctx, exc);
@@ -398,6 +415,7 @@ void tickGesture(JSContext* ctx) {
         JS_FreeValue(ctx, args[0]);
         JS_FreeValue(ctx, args[1]);
         JS_FreeValue(ctx, args[2]);
+        JS_FreeValue(ctx, args[3]);
     }
 }
 
