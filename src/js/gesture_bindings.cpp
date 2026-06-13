@@ -1,15 +1,22 @@
 // JS bindings for brosoundml::GestureSpotter — open-vocabulary non-speech
-// gesture matching (rhythm / tone) over the shared listen host's tier-0 sensor
-// stream. The tier-0 sibling of bro.kws: where bro.kws aligns phoneme
-// templates, bro.gesture matches enrolled onset-rhythm and sustained-pitch
-// gestures, so clicks/taps/whistles fire reliably where the speech model only
-// hears garbage.
+// gesture matching (rhythm / tone), dual-homed per audio stream.
 //
-// Same three-thread split and single-producer discipline as bro.kws (see
-// kws_bindings.cpp): enroll/remove/clear/reset only while NOT listening; fired
-// gestures cross inference->main through a fixed SPSC slot ring drained by
-// tickGesture. The matcher consumes the SensorHub snapshot, so it only fires
-// while bro.sense is a live member of the host too.
+// The tier-0 sibling of bro.kws: where bro.kws aligns phoneme templates,
+// bro.gesture matches enrolled onset-rhythm and sustained-pitch gestures, so
+// clicks/taps/whistles fire reliably where the speech model only hears garbage.
+//
+// Model-free: each stream gets its OWN GestureSpotter. The matcher consumes that
+// stream's SensorHub snapshot, so a stream only fires gestures while its
+// bro.sense (stream.sense) is also a live member. bro.gesture targets the shared
+// default-microphone stream; stream.gesture (the GestureView a
+// bro.listen.open() handle exposes) targets that handle's stream. Each op
+// resolves its per-stream tenant from `this`: unwrap<GestureView> → that view's
+// stream, else default mic.
+//
+// Same three-thread split and single-producer discipline as bro.kws: a stream's
+// enroll/remove/clear/reset only while that stream is NOT listening; fired
+// gestures cross inference->main through the tenant's fixed SPSC slot ring,
+// drained by tickGesture (which also prunes tenants whose stream has closed).
 
 #include "js/gesture_bindings.h"
 
@@ -20,6 +27,7 @@
 #include <brosoundml/gesture_spotter.h>
 
 #include <quickjs.h>
+#include <qjsbind/qjsbind.h>
 
 #include <atomic>
 #include <cstdint>
@@ -27,6 +35,7 @@
 #include <exception>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace bro::js {
@@ -37,28 +46,42 @@ using engine::AudioInference;
 
 constexpr std::uint64_t kEventSlots = 64;
 
-struct GestureState {
-    broaudio::Engine* audioEngine = nullptr;
-    AudioInference*   inference   = nullptr;
-    JSContext*        ctx         = nullptr;
+// ─── One stream's gesture tenant ─────────────────────────────────────────────
+//
+// Address-stable (held by unique_ptr in g_gesture.tenants), so the inference-
+// thread onGestures closure can capture a raw GestureTenant* and publish into it.
+struct GestureTenant {
+    StreamId streamId = kInvalidStream;
 
     std::shared_ptr<brosoundml::GestureSpotter> spotter;
 
     std::vector<std::string> names;   // listen()-time snapshot; index i = idx i
     JSValue onGesture = JS_UNDEFINED;
 
-    int                        eventIdx[kEventSlots]  = {};
-    float                      eventConf[kEventSlots] = {};
-    std::uint8_t               eventTone[kEventSlots] = {};   // 1 = tone, 0 = rhythm
-    std::int64_t               eventStart[kEventSlots] = {};  // matched-span frames
-    std::int64_t               eventEnd[kEventSlots]   = {};  //   (SensorHub frames axis)
+    int                        eventIdx[kEventSlots]   = {};
+    float                      eventConf[kEventSlots]  = {};
+    std::uint8_t               eventTone[kEventSlots]  = {};   // 1 = tone, 0 = rhythm
+    std::int64_t               eventStart[kEventSlots] = {};   // matched-span frames
+    std::int64_t               eventEnd[kEventSlots]   = {};   //   (SensorHub frames axis)
     std::atomic<std::uint64_t> produced{0};
     std::atomic<std::uint64_t> drained{0};
 
     bool listening = false;
 };
 
-GestureState g_gesture;
+struct GestureNamespace {
+    broaudio::Engine* audioEngine = nullptr;
+    AudioInference*   inference   = nullptr;
+    JSContext*        ctx         = nullptr;
+    std::unordered_map<StreamId, std::unique_ptr<GestureTenant>> tenants;
+};
+
+GestureNamespace g_gesture;
+
+// A per-stream view object: `stream.gesture`. Carries only the stream id.
+struct GestureView {
+    StreamId streamId = kInvalidStream;
+};
 
 bool getNum(JSContext* ctx, JSValueConst obj, const char* key, double& dst) {
     JSValue v = JS_GetPropertyStr(ctx, obj, key);
@@ -104,16 +127,16 @@ const float* readFloats(JSContext* ctx, JSValueConst v, int& count) {
     return reinterpret_cast<const float*>(p + byteOff);
 }
 
-void publishEvent(int nameIdx, float confidence, bool isTone,
+void publishEvent(GestureTenant* t, int nameIdx, float confidence, bool isTone,
                   std::int64_t startFrame, std::int64_t endFrame) {
-    const std::uint64_t p = g_gesture.produced.load(std::memory_order_relaxed);
-    if (p - g_gesture.drained.load(std::memory_order_acquire) >= kEventSlots) return;
-    g_gesture.eventIdx[p % kEventSlots]   = nameIdx;
-    g_gesture.eventConf[p % kEventSlots]  = confidence;
-    g_gesture.eventTone[p % kEventSlots]  = isTone ? 1u : 0u;
-    g_gesture.eventStart[p % kEventSlots] = startFrame;
-    g_gesture.eventEnd[p % kEventSlots]   = endFrame;
-    g_gesture.produced.store(p + 1, std::memory_order_release);
+    const std::uint64_t p = t->produced.load(std::memory_order_relaxed);
+    if (p - t->drained.load(std::memory_order_acquire) >= kEventSlots) return;
+    t->eventIdx[p % kEventSlots]   = nameIdx;
+    t->eventConf[p % kEventSlots]  = confidence;
+    t->eventTone[p % kEventSlots]  = isTone ? 1u : 0u;
+    t->eventStart[p % kEventSlots] = startFrame;
+    t->eventEnd[p % kEventSlots]   = endFrame;
+    t->produced.store(p + 1, std::memory_order_release);
 }
 
 int nameIndexOf(const std::vector<std::string>& names, const std::string& n) {
@@ -122,49 +145,73 @@ int nameIndexOf(const std::vector<std::string>& names, const std::string& n) {
     return -1;
 }
 
-void stopListening() {
-    if (!g_gesture.listening) return;
-    listenHostSetGesture(nullptr, nullptr);
-    if (g_gesture.ctx && !JS_IsUndefined(g_gesture.onGesture)) {
-        JS_FreeValue(g_gesture.ctx, g_gesture.onGesture);
-        g_gesture.onGesture = JS_UNDEFINED;
-    }
-    g_gesture.produced.store(0, std::memory_order_relaxed);
-    g_gesture.drained.store(0, std::memory_order_relaxed);
-    g_gesture.names.clear();
-    g_gesture.listening = false;
-}
-
-void unloadSpotter() {
-    stopListening();
-    g_gesture.spotter.reset();
-}
-
-JSValue throwIfListening(JSContext* ctx, const char* what) {
-    if (!g_gesture.listening) return JS_UNDEFINED;
-    return JS_ThrowInternalError(ctx,
-        "bro.gesture.%s: not allowed while listening (enroll/remove/clear/reset "
-        "share the matcher's feed thread — call bro.gesture.stop() first)", what);
-}
-
-// Lazily create the spotter on first enroll.
-brosoundml::GestureSpotter& ensureSpotter() {
-    if (!g_gesture.spotter)
-        g_gesture.spotter = std::make_shared<brosoundml::GestureSpotter>();
-    return *g_gesture.spotter;
-}
-
 const char* kindName(brosoundml::GestureKind k) {
     return k == brosoundml::GestureKind::Tone ? "tone" : "rhythm";
 }
 
+// ─── Tenant registry ─────────────────────────────────────────────────────────
+
+GestureTenant* findTenant(StreamId id) {
+    auto it = g_gesture.tenants.find(id);
+    return it == g_gesture.tenants.end() ? nullptr : it->second.get();
+}
+
+GestureTenant* ensureTenant(StreamId id) {
+    if (id == kInvalidStream) return nullptr;
+    if (GestureTenant* t = findTenant(id)) return t;
+    auto t = std::make_unique<GestureTenant>();
+    t->streamId = id;
+    GestureTenant* p = t.get();
+    g_gesture.tenants[id] = std::move(t);
+    return p;
+}
+
+// Lazily create the tenant's spotter on first enroll.
+brosoundml::GestureSpotter& ensureSpotter(GestureTenant* t) {
+    if (!t->spotter)
+        t->spotter = std::make_shared<brosoundml::GestureSpotter>();
+    return *t->spotter;
+}
+
+void stopListening(GestureTenant* t) {
+    if (!t->listening) return;
+    listenStreamSetGesture(t->streamId, nullptr, nullptr);
+    if (g_gesture.ctx && !JS_IsUndefined(t->onGesture)) {
+        JS_FreeValue(g_gesture.ctx, t->onGesture);
+        t->onGesture = JS_UNDEFINED;
+    }
+    t->produced.store(0, std::memory_order_relaxed);
+    t->drained.store(0, std::memory_order_relaxed);
+    t->names.clear();
+    t->listening = false;
+}
+
+JSValue throwIfListening(JSContext* ctx, const GestureTenant* t, const char* what) {
+    if (!t || !t->listening) return JS_UNDEFINED;
+    return JS_ThrowInternalError(ctx,
+        "bro.gesture.%s: not allowed while this stream is listening "
+        "(enroll/remove/clear/reset share the matcher's feed thread — stop() "
+        "first)", what);
+}
+
+// ─── Tenant resolution (the dual-home seam) ──────────────────────────────────
+
+StreamId streamOf(JSContext* ctx, JSValueConst this_val) {
+    if (GestureView* v = qjsbind::unwrap<GestureView>(ctx, this_val)) return v->streamId;
+    return listenHostDefaultMicId();
+}
+
 // ─── JS-callable functions ─────────────────────────────────────────────────
 
-// bro.gesture.enrollFromAudio(name, samples, policy?) -> beats
-//   samples: Float32Array mono PCM at bro.gesture.sampleRate(). Runs the clip
-//   through a private SensorHub and stores the extracted rhythm/tone template.
-JSValue js_enrollFromAudio(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    JSValue guard = throwIfListening(ctx, "enrollFromAudio");
+// enrollFromAudio(name, samples, policy?) -> beats
+//   samples: Float32Array mono PCM at sampleRate(). Runs the clip through a
+//   private SensorHub and stores the extracted rhythm/tone template on THIS
+//   stream's spotter.
+JSValue js_enrollFromAudio(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    GestureTenant* t = ensureTenant(streamOf(ctx, this_val));
+    if (!t)
+        return JS_ThrowInternalError(ctx, "bro.gesture.enrollFromAudio: no stream");
+    JSValue guard = throwIfListening(ctx, t, "enrollFromAudio");
     if (JS_IsException(guard)) return guard;
     if (argc < 2 || !JS_IsString(argv[0])) {
         return JS_ThrowTypeError(ctx,
@@ -183,7 +230,7 @@ JSValue js_enrollFromAudio(JSContext* ctx, JSValueConst, int argc, JSValueConst*
             "bro.gesture.enrollFromAudio: samples must be a non-empty Float32Array");
     }
     try {
-        brosoundml::GestureSpotter& g = ensureSpotter();
+        brosoundml::GestureSpotter& g = ensureSpotter(t);
         brosoundml::GestureConfig pol = g.config();
         const bool hasPol = (argc >= 3) && JS_IsObject(argv[2]);
         if (hasPol) readPolicy(ctx, argv[2], pol);
@@ -194,43 +241,48 @@ JSValue js_enrollFromAudio(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     }
 }
 
-JSValue js_remove(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!g_gesture.spotter)
+JSValue js_remove(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    GestureTenant* t = findTenant(streamOf(ctx, this_val));
+    if (!t || !t->spotter)
         return JS_ThrowInternalError(ctx, "bro.gesture.remove: nothing enrolled");
-    JSValue guard = throwIfListening(ctx, "remove");
+    JSValue guard = throwIfListening(ctx, t, "remove");
     if (JS_IsException(guard)) return guard;
     if (argc < 1 || !JS_IsString(argv[0]))
         return JS_ThrowTypeError(ctx, "bro.gesture.remove(name): name required");
     const char* s = JS_ToCString(ctx, argv[0]);
     if (!s) return JS_EXCEPTION;
-    const bool removed = g_gesture.spotter->remove(s);
+    const bool removed = t->spotter->remove(s);
     JS_FreeCString(ctx, s);
     return JS_NewBool(ctx, removed);
 }
 
-JSValue js_clear(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    if (!g_gesture.spotter) return JS_UNDEFINED;
-    JSValue guard = throwIfListening(ctx, "clear");
+JSValue js_clear(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    GestureTenant* t = findTenant(streamOf(ctx, this_val));
+    if (!t || !t->spotter) return JS_UNDEFINED;
+    JSValue guard = throwIfListening(ctx, t, "clear");
     if (JS_IsException(guard)) return guard;
-    g_gesture.spotter->clear();
+    t->spotter->clear();
     return JS_UNDEFINED;
 }
 
-JSValue js_templates(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+JSValue js_templates(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     JSValue arr = JS_NewArray(ctx);
+    GestureTenant* t = findTenant(streamOf(ctx, this_val));
+    if (!t) return arr;
     const std::vector<std::string> names =
-        g_gesture.listening ? g_gesture.names
-        : (g_gesture.spotter ? g_gesture.spotter->templates()
-                             : std::vector<std::string>{});
+        t->listening ? t->names
+        : (t->spotter ? t->spotter->templates() : std::vector<std::string>{});
     for (std::uint32_t i = 0; i < names.size(); ++i)
         JS_SetPropertyUint32(ctx, arr, i, JS_NewString(ctx, names[i].c_str()));
     return arr;
 }
 
-// bro.gesture.inspect(name) -> { name, kind, frameMs, intervalsMs:[...],
-//   toneHz, toneMs } or null. The legible view of an enrolled gesture.
-JSValue js_inspect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!g_gesture.spotter) return JS_NULL;
+// inspect(name) -> { name, kind, frameMs, intervalsMs:[...], onsets:[...],
+//   toneHz, toneMs, toneSpread } or null. The legible view of an enrolled
+//   gesture on THIS stream.
+JSValue js_inspect(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    GestureTenant* t = findTenant(streamOf(ctx, this_val));
+    if (!t || !t->spotter) return JS_NULL;
     if (argc < 1 || !JS_IsString(argv[0]))
         return JS_ThrowTypeError(ctx, "bro.gesture.inspect(name): name required");
     const char* s = JS_ToCString(ctx, argv[0]);
@@ -239,7 +291,7 @@ JSValue js_inspect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     JS_FreeCString(ctx, s);
 
     brosoundml::GestureView v;
-    if (!g_gesture.spotter->inspect(name, v)) return JS_NULL;
+    if (!t->spotter->inspect(name, v)) return JS_NULL;
 
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "name", JS_NewString(ctx, v.name.c_str()));
@@ -250,8 +302,6 @@ JSValue js_inspect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         JS_SetPropertyUint32(ctx, arr, i,
             JS_NewFloat64(ctx, v.intervals[i] * v.frame_ms));
     JS_SetPropertyStr(ctx, o, "intervalsMs", arr);
-    // Per-beat acoustic signature (rhythm): voiced [0,1], pitchHz (0 if
-    // unvoiced), bright [0,1]. Lets a tool show what each beat must sound like.
     JSValue onsets = JS_NewArray(ctx);
     for (std::uint32_t i = 0; i < v.onsets.size(); ++i) {
         JSValue b = JS_NewObject(ctx);
@@ -268,27 +318,30 @@ JSValue js_inspect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     return o;
 }
 
-JSValue js_reset(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    if (!g_gesture.spotter) return JS_UNDEFINED;
-    JSValue guard = throwIfListening(ctx, "reset");
+JSValue js_reset(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    GestureTenant* t = findTenant(streamOf(ctx, this_val));
+    if (!t || !t->spotter) return JS_UNDEFINED;
+    JSValue guard = throwIfListening(ctx, t, "reset");
     if (JS_IsException(guard)) return guard;
-    g_gesture.spotter->reset();
+    t->spotter->reset();
     return JS_UNDEFINED;
 }
 
-// bro.gesture.listen({ onGesture }) — start matching on the shared host.
-// Requires at least one enrolled gesture; needs bro.sense active to actually
-// fire (the matcher reads the SensorHub snapshot).
-JSValue js_listen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+// listen({ onGesture }) — start matching on THIS stream. Requires at least one
+// enrolled gesture; needs the stream's bro.sense active to actually fire (the
+// matcher reads the SensorHub snapshot).
+JSValue js_listen(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (!g_gesture.audioEngine || !g_gesture.inference)
         return JS_ThrowInternalError(ctx,
             "bro.gesture.listen: audio subsystems not available");
-    if (!g_gesture.spotter)
+    const StreamId sid = streamOf(ctx, this_val);
+    GestureTenant* t = ensureTenant(sid);
+    if (!t || !t->spotter)
         return JS_ThrowInternalError(ctx,
             "bro.gesture.listen: enroll a gesture first");
-    if (g_gesture.listening)
+    if (t->listening)
         return JS_ThrowInternalError(ctx,
-            "bro.gesture.listen: already listening (bro.gesture.stop() first)");
+            "bro.gesture.listen: this stream is already listening (stop() first)");
     if (argc < 1 || !JS_IsObject(argv[0]))
         return JS_ThrowTypeError(ctx, "bro.gesture.listen(opts): opts object required");
 
@@ -298,62 +351,136 @@ JSValue js_listen(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         return JS_ThrowTypeError(ctx,
             "bro.gesture.listen: opts.onGesture (function) required");
     }
-    const std::vector<std::string> names = g_gesture.spotter->templates();
+    const std::vector<std::string> names = t->spotter->templates();
     if (names.empty()) {
         JS_FreeValue(ctx, cb);
         return JS_ThrowInternalError(ctx,
-            "bro.gesture.listen: no gestures enrolled (enrollFromAudio first)");
+            "bro.gesture.listen: no gestures enrolled on this stream "
+            "(enrollFromAudio first)");
     }
     try {
-        g_gesture.names     = names;
-        g_gesture.onGesture = JS_DupValue(ctx, cb);
-        g_gesture.produced.store(0, std::memory_order_relaxed);
-        g_gesture.drained.store(0, std::memory_order_relaxed);
+        t->names     = names;
+        t->onGesture = JS_DupValue(ctx, cb);
+        t->produced.store(0, std::memory_order_relaxed);
+        t->drained.store(0, std::memory_order_relaxed);
         JS_FreeValue(ctx, cb);
 
-        listenHostSetGesture(
-            g_gesture.spotter,
-            [names](const std::vector<brosoundml::GestureEvent>& events) {
+        listenStreamSetGesture(
+            sid, t->spotter,
+            [t, names](const std::vector<brosoundml::GestureEvent>& events) {
                 for (const auto& ev : events) {
                     const int idx = nameIndexOf(names, ev.name);
                     if (idx >= 0)
-                        publishEvent(idx, ev.confidence,
+                        publishEvent(t, idx, ev.confidence,
                                      ev.kind == brosoundml::GestureKind::Tone,
                                      ev.start_frame, ev.end_frame);
                 }
             });
-        g_gesture.listening = true;
-        std::fprintf(stderr, "[INFO] [gesture] listening (%zu gesture%s)\n",
-                     names.size(), names.size() == 1 ? "" : "s");
+        t->listening = true;
+        std::fprintf(stderr, "[INFO] [gesture] listening on stream %u (%zu gesture%s)\n",
+                     sid, names.size(), names.size() == 1 ? "" : "s");
         return JS_UNDEFINED;
     } catch (const std::exception& e) {
-        g_gesture.listening = true;
-        stopListening();
+        t->listening = true;
+        stopListening(t);
         return JS_ThrowInternalError(ctx, "bro.gesture.listen: %s", e.what());
     }
 }
 
-JSValue js_stop(JSContext*, JSValueConst, int, JSValueConst*) {
-    stopListening();
+JSValue js_stop(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    if (GestureTenant* t = findTenant(streamOf(ctx, this_val))) stopListening(t);
     return JS_UNDEFINED;
 }
 
-JSValue js_isActive(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    return JS_NewBool(ctx, g_gesture.listening);
+JSValue js_isActive(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    GestureTenant* t = findTenant(streamOf(ctx, this_val));
+    return JS_NewBool(ctx, t && t->listening);
 }
 
-JSValue js_sampleRate(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    return JS_NewInt32(ctx, g_gesture.spotter ? g_gesture.spotter->sample_rate()
-                                              : 16000);
+JSValue js_sampleRate(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    GestureTenant* t = findTenant(streamOf(ctx, this_val));
+    return JS_NewInt32(ctx,
+        (t && t->spotter) ? t->spotter->sample_rate() : 16000);
+}
+
+// Drain one tenant's gesture event ring into its onGesture callback (main thread).
+void drainTenant(JSContext* ctx, GestureTenant* t) {
+    if (!t->listening) return;
+    const std::uint64_t produced = t->produced.load(std::memory_order_acquire);
+    std::uint64_t drained = t->drained.load(std::memory_order_relaxed);
+    if (drained >= produced || JS_IsUndefined(t->onGesture)) return;
+    while (drained < produced) {
+        const int   idx  = t->eventIdx[drained % kEventSlots];
+        const float conf = t->eventConf[drained % kEventSlots];
+        const bool  tone = t->eventTone[drained % kEventSlots] != 0u;
+        const std::int64_t startF = t->eventStart[drained % kEventSlots];
+        const std::int64_t endF   = t->eventEnd[drained % kEventSlots];
+        drained++;
+        t->drained.store(drained, std::memory_order_release);
+        if (idx < 0 || idx >= (int)t->names.size()) continue;
+        // 4th arg: the matched span on the SensorHub frames axis (align with
+        // bro.sense.snapshot().frames). Backward-compatible with
+        // onGesture(name, conf, kind) handlers.
+        JSValue span = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, span, "startFrame", JS_NewInt64(ctx, startF));
+        JS_SetPropertyStr(ctx, span, "endFrame", JS_NewInt64(ctx, endF));
+        JS_SetPropertyStr(ctx, span, "matchedFrames",
+                          JS_NewInt64(ctx, endF >= startF ? endF - startF + 1 : 0));
+        JSValue args[4] = {
+            JS_NewString(ctx, t->names[(std::size_t)idx].c_str()),
+            JS_NewFloat64(ctx, conf),
+            JS_NewString(ctx, tone ? "tone" : "rhythm"),
+            span,
+        };
+        JSValue r = JS_Call(ctx, t->onGesture, JS_UNDEFINED, 4, args);
+        if (JS_IsException(r)) {
+            JSValue exc = JS_GetException(ctx);
+            const char* s = JS_ToCString(ctx, exc);
+            std::fprintf(stderr, "[ERROR] [gesture] onGesture threw: %s\n", s ? s : "?");
+            if (s) JS_FreeCString(ctx, s);
+            JS_FreeValue(ctx, exc);
+        }
+        JS_FreeValue(ctx, r);
+        JS_FreeValue(ctx, args[0]);
+        JS_FreeValue(ctx, args[1]);
+        JS_FreeValue(ctx, args[2]);
+        JS_FreeValue(ctx, args[3]);
+    }
+}
+
+// ─── View class registration ──────────────────────────────────────────────
+
+void registerGestureViewClass(JSContext* ctx) {
+    qjsbind::Class<GestureView>(ctx, "GestureStreamView", qjsbind::NoGlobal)
+        .get("active", [](GestureView* v) {
+            GestureTenant* t = findTenant(v->streamId);
+            return t && t->listening;
+        })
+        .method_raw("enrollFromAudio", js_enrollFromAudio, 3)
+        .method_raw("remove",          js_remove, 1)
+        .method_raw("clear",           js_clear, 0)
+        .method_raw("templates",       js_templates, 0)
+        .method_raw("inspect",         js_inspect, 1)
+        .method_raw("reset",           js_reset, 0)
+        .method_raw("listen",          js_listen, 1)
+        .method_raw("stop",            js_stop, 0)
+        .method_raw("isActive",        js_isActive, 0)
+        .method_raw("sampleRate",      js_sampleRate, 0);
 }
 
 }  // namespace
+
+JSValue gestureViewFor(JSContext* ctx, std::uint32_t id) {
+    return qjsbind::wrap<GestureView>(ctx, new GestureView{static_cast<StreamId>(id)});
+}
 
 void installGestureBindings(JSContext* ctx, broaudio::Engine* audioEngine,
                             engine::AudioInference* inference) {
     g_gesture.audioEngine = audioEngine;
     g_gesture.inference   = inference;
     g_gesture.ctx         = ctx;
+
+    registerGestureViewClass(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
@@ -391,51 +518,25 @@ void installGestureBindings(JSContext* ctx, broaudio::Engine* audioEngine,
 }
 
 void tickGesture(JSContext* ctx) {
-    if (!g_gesture.listening) return;
-    const std::uint64_t produced = g_gesture.produced.load(std::memory_order_acquire);
-    std::uint64_t drained = g_gesture.drained.load(std::memory_order_relaxed);
-    if (drained >= produced || JS_IsUndefined(g_gesture.onGesture)) return;
-    while (drained < produced) {
-        const int   idx  = g_gesture.eventIdx[drained % kEventSlots];
-        const float conf = g_gesture.eventConf[drained % kEventSlots];
-        const bool  tone = g_gesture.eventTone[drained % kEventSlots] != 0u;
-        const std::int64_t startF = g_gesture.eventStart[drained % kEventSlots];
-        const std::int64_t endF   = g_gesture.eventEnd[drained % kEventSlots];
-        drained++;
-        g_gesture.drained.store(drained, std::memory_order_release);
-        if (idx < 0 || idx >= (int)g_gesture.names.size()) continue;
-        // 4th arg: the matched span on the SensorHub frames axis (align with
-        // bro.sense.snapshot().frames). Backward-compatible with
-        // onGesture(name, conf, kind) handlers.
-        JSValue span = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, span, "startFrame", JS_NewInt64(ctx, startF));
-        JS_SetPropertyStr(ctx, span, "endFrame", JS_NewInt64(ctx, endF));
-        JS_SetPropertyStr(ctx, span, "matchedFrames",
-                          JS_NewInt64(ctx, endF >= startF ? endF - startF + 1 : 0));
-        JSValue args[4] = {
-            JS_NewString(ctx, g_gesture.names[(std::size_t)idx].c_str()),
-            JS_NewFloat64(ctx, conf),
-            JS_NewString(ctx, tone ? "tone" : "rhythm"),
-            span,
-        };
-        JSValue r = JS_Call(ctx, g_gesture.onGesture, JS_UNDEFINED, 4, args);
-        if (JS_IsException(r)) {
-            JSValue exc = JS_GetException(ctx);
-            const char* s = JS_ToCString(ctx, exc);
-            std::fprintf(stderr, "[ERROR] [gesture] onGesture threw: %s\n", s ? s : "?");
-            if (s) JS_FreeCString(ctx, s);
-            JS_FreeValue(ctx, exc);
+    for (auto it = g_gesture.tenants.begin(); it != g_gesture.tenants.end(); ) {
+        GestureTenant* t = it->second.get();
+        // Prune a tenant whose stream has closed (handle .close()'d or GC'd).
+        // The stream's teardown removed its inference task (a barrier), so the
+        // onGestures closure can no longer run — safe to drop. Default mic is
+        // never invalid.
+        if (!listenHostValid(t->streamId)) {
+            stopListening(t);   // frees onGesture (detach is a no-op — stream gone)
+            it = g_gesture.tenants.erase(it);
+            continue;
         }
-        JS_FreeValue(ctx, r);
-        JS_FreeValue(ctx, args[0]);
-        JS_FreeValue(ctx, args[1]);
-        JS_FreeValue(ctx, args[2]);
-        JS_FreeValue(ctx, args[3]);
+        drainTenant(ctx, t);
+        ++it;
     }
 }
 
 void cleanupGestureBindings(JSContext* /*ctx*/) {
-    unloadSpotter();
+    for (auto& kv : g_gesture.tenants) stopListening(kv.second.get());
+    g_gesture.tenants.clear();
     g_gesture.audioEngine = nullptr;
     g_gesture.inference   = nullptr;
     g_gesture.ctx         = nullptr;

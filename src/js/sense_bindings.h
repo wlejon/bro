@@ -4,6 +4,8 @@ extern "C" {
 #include "quickjs.h"
 }
 
+#include <cstdint>
+
 namespace broaudio { class Engine; }
 namespace bro::engine { class AudioInference; }
 
@@ -32,8 +34,16 @@ namespace bro::js {
 //   - main thread (or any thread): bro.sense.snapshot() — a seqlock read.
 //     Momentary booleans are paired with monotonic counters, so polling at
 //     frame rate still observes every onset/voice/tonal event.
+// Each stream gets its OWN SensorHub: bro.sense targets the shared default-mic
+// stream; stream.sense (the view a bro.listen.open() handle exposes) targets
+// that handle's stream. One implementation resolves its tenant from `this`.
 void installSenseBindings(JSContext* ctx, broaudio::Engine* audioEngine,
                           engine::AudioInference* inference);
+
+// Build a `stream.sense` view object bound to stream `id` (a brosoundml
+// StreamId). Same start/snapshot/… surface as bro.sense but scoped to `id`.
+// Called by the bro.listen.open() handle to expose its .sense sub-object.
+JSValue senseViewFor(JSContext* ctx, std::uint32_t id);
 
 // Symmetric cleanup hook. Detaches the hub from the listen host (the host
 // tears down the shared tap/task when its last member leaves) and drops the

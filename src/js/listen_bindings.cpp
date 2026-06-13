@@ -4,8 +4,10 @@
 
 #include "js/listen_bindings.h"
 
+#include "js/gesture_bindings.h"
 #include "js/kws_bindings.h"
 #include "js/listen_host.h"
+#include "js/sense_bindings.h"
 #include "js/wake_bindings.h"
 
 #include <broaudio/loopback_capture.h>
@@ -291,13 +293,16 @@ JSValue js_open(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
 
     auto* h = new StreamHandle{id, src.kind};
     JSValue wrapper = qjsbind::wrap<StreamHandle>(ctx, h);
-    // Per-stream tenant views. Each carries this stream's id and exposes the
-    // model bindings scoped to it (stream.kws.enroll/listen/…). The shared
-    // weights load once via the namespace op (bro.kws.load); each stream
-    // attaches its own spotter/session over them. (wake/sense/gesture join
-    // here as their slices land.)
-    JS_SetPropertyStr(ctx, wrapper, "kws",  kwsViewFor(ctx, id));
-    JS_SetPropertyStr(ctx, wrapper, "wake", wakeViewFor(ctx, id));
+    // Per-stream tenant views. Each carries this stream's id and exposes a
+    // listen-host model binding scoped to it: stream.kws / .wake (weights load
+    // once via the namespace op; each stream attaches its own spotter/session
+    // over the shared net) and the model-free stream.sense / .gesture (each
+    // stream gets its own SensorHub / GestureSpotter). The globals (bro.kws,
+    // bro.wake, bro.sense, bro.gesture) target the shared default-mic stream.
+    JS_SetPropertyStr(ctx, wrapper, "kws",     kwsViewFor(ctx, id));
+    JS_SetPropertyStr(ctx, wrapper, "wake",    wakeViewFor(ctx, id));
+    JS_SetPropertyStr(ctx, wrapper, "sense",   senseViewFor(ctx, id));
+    JS_SetPropertyStr(ctx, wrapper, "gesture", gestureViewFor(ctx, id));
     return wrapper;
 }
 

@@ -1,12 +1,19 @@
-// JS bindings for brosoundml::SensorHub — the tier-0 acoustic sensor bus.
+// JS bindings for brosoundml::SensorHub — the tier-0 acoustic sensor bus,
+// dual-homed per audio stream.
 //
-// Installed onto bro.sense.* by installSenseBindings(). One hub at a time per
-// JS context. See sense_bindings.h for the thread split; the short version:
-// the hub's feed() runs on the inference thread (headless: inline), and
-// snapshot() is a lock-free seqlock read the main thread polls — there is no
-// per-frame tick and no callback registry, because every sensor pairs its
-// momentary boolean with a monotonic counter, so a poller can never miss an
-// event, only observe it one poll late.
+// Model-free: each stream gets its OWN SensorHub (pure CPU DSP over the stream's
+// shared PCEN mel pass). bro.sense targets the shared default-microphone stream;
+// stream.sense (the SenseView a bro.listen.open() handle exposes) targets that
+// handle's stream — so an app can run tier-0 sensing on system audio AND the mic
+// at once. Each op resolves its per-stream tenant from `this`: unwrap<SenseView>
+// → that view's stream, else default mic.
+//
+// Threading: the hub's feed() runs on the stream's inference thread (headless:
+// inline), and snapshot() is a lock-free seqlock read the main thread polls —
+// there is no per-frame tick and no callback registry, because every sensor
+// pairs its momentary boolean with a monotonic counter, so a poller can never
+// miss an event, only observe it one poll late. (No tick means tenants for
+// closed streams are pruned lazily on access + swept at cleanup.)
 
 #include "js/sense_bindings.h"
 
@@ -26,6 +33,7 @@
 #include <exception>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace bro::js {
@@ -34,21 +42,28 @@ namespace {
 
 using engine::AudioInference;
 
-struct SenseState {
+// ─── One stream's sensor tenant ──────────────────────────────────────────────
+struct SenseTenant {
+    StreamId                               streamId = kInvalidStream;
+    // The hub. Owned by the tenant while active; the stream's task closure holds
+    // a second strong ref so a late pump after stop() is harmless.
+    std::shared_ptr<brosoundml::SensorHub> hub;
+    bool                                   active = false;
+};
+
+struct SenseNamespace {
     broaudio::Engine* audioEngine = nullptr;
     AudioInference*   inference   = nullptr;
     JSContext*        ctx         = nullptr;
-
-    // The hub. Owned by the binding while active; the listen host's task
-    // closure holds a second strong ref so a late pump after stop() is
-    // harmless. The audio plumbing (tap, ring, inference task, mel front-end)
-    // is the SHARED listen host's — bro.sense is just a member.
-    std::shared_ptr<brosoundml::SensorHub> hub;
-
-    bool active = false;
+    std::unordered_map<StreamId, std::unique_ptr<SenseTenant>> tenants;
 };
 
-SenseState g_sense;
+SenseNamespace g_sense;
+
+// A per-stream view object: `stream.sense`. Carries only the stream id.
+struct SenseView {
+    StreamId streamId = kInvalidStream;
+};
 
 bool getNum(JSContext* ctx, JSValueConst obj, const char* key, double& dst) {
     JSValue v = JS_GetPropertyStr(ctx, obj, key);
@@ -135,31 +150,70 @@ JSValue makeSnapshot(JSContext* ctx, const brosoundml::SensorSnapshot& s) {
     return o;
 }
 
-void stopSensing() {
-    if (!g_sense.active) return;
-    // Detach from the shared listen host. The host replaces (or tears down)
-    // the inference task; if bro.kws is still a member, its stream keeps
-    // rolling untouched.
-    listenHostSetHub(nullptr);
-    g_sense.hub.reset();
-    g_sense.active = false;
+// ─── Tenant registry ─────────────────────────────────────────────────────────
+
+SenseTenant* findTenant(StreamId id) {
+    auto it = g_sense.tenants.find(id);
+    return it == g_sense.tenants.end() ? nullptr : it->second.get();
+}
+
+void dropTenant(StreamId id) {
+    auto it = g_sense.tenants.find(id);
+    if (it == g_sense.tenants.end()) return;
+    if (it->second->active)
+        listenStreamSetHub(id, nullptr);   // detach (no-op if the stream is gone)
+    g_sense.tenants.erase(it);
+}
+
+// The stream `this` addresses: a SenseView → its stream; bro.sense → default
+// mic. Returns kInvalidStream (and prunes the tenant) if a view's stream has
+// closed.
+StreamId streamOf(JSContext* ctx, JSValueConst this_val) {
+    if (SenseView* v = qjsbind::unwrap<SenseView>(ctx, this_val)) {
+        if (!listenHostValid(v->streamId)) { dropTenant(v->streamId); return kInvalidStream; }
+        return v->streamId;
+    }
+    return listenHostDefaultMicId();
+}
+
+SenseTenant* ensureTenant(StreamId id) {
+    if (id == kInvalidStream) return nullptr;
+    if (SenseTenant* t = findTenant(id)) return t;
+    auto t = std::make_unique<SenseTenant>();
+    t->streamId = id;
+    SenseTenant* p = t.get();
+    g_sense.tenants[id] = std::move(t);
+    return p;
+}
+
+void stopSensing(SenseTenant* t) {
+    if (!t->active) return;
+    // Detach from the listen host. The host replaces (or tears down) the
+    // stream's task; any other member (bro.kws) keeps rolling.
+    listenStreamSetHub(t->streamId, nullptr);
+    t->hub.reset();
+    t->active = false;
 }
 
 // ─── JS-callable functions ─────────────────────────────────────────────────
 
-// bro.sense.start(opts?) — build the hub and go live on the mic.
+// start(opts?) — build the hub and go live on THIS stream.
 //   opts (all optional): vadFloorDb, vadSnrDb, vadRiseDbps, vadHangFrames,
 //   onsetRatio, onsetAbs, onsetEma, onsetRefractoryFrames,
 //   tonalMinPeriodicity, tonalFminHz, tonalFmaxHz.
-JSValue js_start(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+JSValue js_start(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     if (!g_sense.audioEngine)
         return JS_ThrowInternalError(ctx, "bro.sense.start: audio engine not available");
     if (!g_sense.inference)
         return JS_ThrowInternalError(ctx,
             "bro.sense.start: audio-inference subsystem not available");
-    if (g_sense.active)
+    const StreamId sid = streamOf(ctx, this_val);
+    if (sid == kInvalidStream)
+        return JS_ThrowInternalError(ctx, "bro.sense.start: stream is closed");
+    SenseTenant* t = ensureTenant(sid);
+    if (t->active)
         return JS_ThrowInternalError(ctx,
-            "bro.sense.start: already active (bro.sense.stop() first)");
+            "bro.sense.start: this stream is already sensing (stop() first)");
 
     // The hub is pure CPU DSP, but its mel front-end runs on brotensor ops —
     // init() is idempotent and cheap.
@@ -174,51 +228,56 @@ JSValue js_start(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         if (argc >= 1) readConfig(ctx, argv[0], cfg);
         auto hub = std::make_shared<brosoundml::SensorHub>(cfg);
 
-        // Join the shared listen host: one raw tap + ring + task drive the
-        // hub (alongside bro.kws's spotter, if live) off ONE mel pass. The
+        // Join the listen host on this stream: one source + ring + task drive
+        // the hub (alongside bro.kws's spotter, if live) off ONE mel pass. The
         // hub's snapshot IS the delivery — no per-frame callback.
-        listenHostSetHub(hub);
-        g_sense.hub    = hub;
-        g_sense.active = true;
+        listenStreamSetHub(sid, hub);
+        t->hub    = hub;
+        t->active = true;
 
         std::fprintf(stderr,
-            "[INFO] [sense] sensor bus active (mic=%d Hz, hub=%d Hz, hop=%d)\n",
-            g_sense.audioEngine->sampleRate(), hub->sample_rate(),
-            cfg.mel.hop_length);
+            "[INFO] [sense] sensor bus active on stream %u (hub=%d Hz, hop=%d)\n",
+            sid, hub->sample_rate(), cfg.mel.hop_length);
         return JS_UNDEFINED;
     } catch (const std::exception& e) {
-        g_sense.active = true;   // let stopSensing clear the partial state
-        stopSensing();
+        t->active = true;   // let stopSensing clear the partial state
+        stopSensing(t);
         return JS_ThrowInternalError(ctx, "bro.sense.start: %s", e.what());
     }
 }
 
-JSValue js_stop(JSContext*, JSValueConst, int, JSValueConst*) {
-    stopSensing();
+JSValue js_stop(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    if (SenseTenant* t = findTenant(streamOf(ctx, this_val))) stopSensing(t);
     return JS_UNDEFINED;
 }
 
-JSValue js_isActive(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    return JS_NewBool(ctx, g_sense.active);
+JSValue js_isActive(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    SenseTenant* t = findTenant(streamOf(ctx, this_val));
+    return JS_NewBool(ctx, t && t->active);
 }
 
-// bro.sense.snapshot() -> {frames, t, rms, peak, db, voice, ..., tonal, ...}
-// Lock-free seqlock read of the latest coherent sensor frame; null when
-// inactive. Counters (onsets, voiceEvents, tonalEvents) are monotonic, so a
+// snapshot() -> {frames, t, rms, peak, db, voice, ..., tonal, ...}
+// Lock-free seqlock read of THIS stream's latest coherent sensor frame; null
+// when inactive. Counters (onsets, voiceEvents, tonalEvents) are monotonic, so a
 // poller detects events as deltas even when the boolean has already cleared.
-JSValue js_snapshot(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    if (!g_sense.hub) return JS_NULL;
-    return makeSnapshot(ctx, g_sense.hub->snapshot());
+JSValue js_snapshot(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    SenseTenant* t = findTenant(streamOf(ctx, this_val));
+    if (!t || !t->hub) return JS_NULL;
+    return makeSnapshot(ctx, t->hub->snapshot());
 }
 
-JSValue js_sampleRate(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    return JS_NewInt32(ctx, g_sense.hub ? g_sense.hub->sample_rate() : 0);
+JSValue js_sampleRate(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    SenseTenant* t = findTenant(streamOf(ctx, this_val));
+    return JS_NewInt32(ctx, (t && t->hub) ? t->hub->sample_rate() : 0);
 }
 
-// Diagnostic surface over the SHARED listen-host mic tap (cf. bro.kws.stats).
-JSValue js_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    const broaudio::MicTapId tap = listenHostTapId();
-    if (!g_sense.active || !g_sense.audioEngine ||
+// Diagnostic surface over THIS stream's mic tap (cf. bro.kws.stats). Null for a
+// non-mic loopback stream.
+JSValue js_stats(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    SenseTenant* t = findTenant(streamOf(ctx, this_val));
+    const broaudio::MicTapId tap =
+        t ? listenStreamTapId(t->streamId) : broaudio::kInvalidMicTapId;
+    if (!t || !t->active || !g_sense.audioEngine ||
         tap == broaudio::kInvalidMicTapId) {
         return JS_NULL;
     }
@@ -232,18 +291,16 @@ JSValue js_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return o;
 }
 
-// Manual feed for tests / scripted scenarios. Samples must already be at the
-// hub's rate. Mirrors bro.kws.feed's mode split:
-//   - Headless (no inference worker): the shared bus runs synchronously on
-//     this (the inference) thread — it is ONE stream, so the feed advances
-//     every attached tenant (bro.kws included) — and the post-feed snapshot
-//     comes back.
-//   - Threaded: samples go into the live shared ring; poll snapshot() as
-//     usual. Returns undefined.
-// Refuses to run while live capture is active (two-producer race on the ring).
-JSValue js_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!g_sense.active || !g_sense.hub)
-        return JS_ThrowInternalError(ctx, "bro.sense.feed: not active");
+// Manual feed for tests / scripted scenarios on THIS stream. Samples must
+// already be at the hub's rate. Mode split mirrors bro.kws.feed:
+//   - Headless (no inference worker): the stream's bus runs synchronously and
+//     the post-feed snapshot comes back.
+//   - Threaded: samples go into the stream's ring; poll snapshot() as usual.
+// Refuses to run while live MIC capture is active (two-producer race).
+JSValue js_feed(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    SenseTenant* t = findTenant(streamOf(ctx, this_val));
+    if (!t || !t->active || !t->hub)
+        return JS_ThrowInternalError(ctx, "bro.sense.feed: this stream is not sensing");
     if (g_sense.audioEngine && g_sense.audioEngine->isMicCapturing()) {
         return JS_ThrowInternalError(ctx,
             "bro.sense.feed: cannot feed while live mic capture is active "
@@ -256,26 +313,22 @@ JSValue js_feed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         return JS_ThrowTypeError(ctx, "bro.sense.feed(Float32Array)");
 
     if (g_sense.inference && g_sense.inference->threaded()) {
-        listenHostWriteRing(p, n);
+        listenStreamWriteRing(t->streamId, p, n);
         return JS_UNDEFINED;
     }
 
     try {
-        listenHostFeedInline(p, n);
+        listenStreamFeedInline(t->streamId, p, n);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "bro.sense.feed: %s", e.what());
     }
-    return makeSnapshot(ctx, g_sense.hub->snapshot());
+    return makeSnapshot(ctx, t->hub->snapshot());
 }
 
 // bro.sense.analyze(samples, opts?) -> per-frame sensor timeline for a clip.
-// Runs a PRIVATE SensorHub over the clip offline — no live tap, no effect on
-// the shared bus, callable any time — and returns columnar arrays so a tool can
-// map frame f to samples [f*hop, f*hop+win) and overlay onsets / tonal runs /
-// pitch onto a waveform. This is the SAME stream bro.gesture.enrollFromAudio
-// sees, so a clip editor can show exactly what the matcher captured (and why a
-// cough's wandering pitch reads tonal but unsteady). opts overlays the same
-// sensor-policy keys as start(). flags packs bit0=voice, bit1=tonal, bit2=onset.
+// Runs a PRIVATE SensorHub over the clip offline — no live tap, no stream, no
+// effect on any bus, callable any time — and returns columnar arrays. Namespace
+// op (not stream-scoped). flags packs bit0=voice, bit1=tonal, bit2=onset.
 JSValue js_analyze(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     int n = 0;
     const float* p = (argc >= 1) ? readFloats(ctx, argv[0], n) : nullptr;
@@ -334,13 +387,37 @@ JSValue js_analyze(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     return o;
 }
 
+// ─── View class registration ──────────────────────────────────────────────
+
+void registerSenseViewClass(JSContext* ctx) {
+    qjsbind::Class<SenseView>(ctx, "SenseStreamView", qjsbind::NoGlobal)
+        .get("active", [](SenseView* v) {
+            SenseTenant* t = findTenant(v->streamId);
+            return t && t->active;
+        })
+        .method_raw("start",      js_start, 1)
+        .method_raw("stop",       js_stop, 0)
+        .method_raw("isActive",   js_isActive, 0)
+        .method_raw("snapshot",   js_snapshot, 0)
+        .method_raw("sampleRate", js_sampleRate, 0)
+        .method_raw("stats",      js_stats, 0)
+        .method_raw("feed",       js_feed, 1)
+        .method_raw("analyze",    js_analyze, 2);   // offline; ignores the stream
+}
+
 }  // namespace
+
+JSValue senseViewFor(JSContext* ctx, std::uint32_t id) {
+    return qjsbind::wrap<SenseView>(ctx, new SenseView{static_cast<StreamId>(id)});
+}
 
 void installSenseBindings(JSContext* ctx, broaudio::Engine* audioEngine,
                           engine::AudioInference* inference) {
     g_sense.audioEngine = audioEngine;
     g_sense.inference   = inference;
     g_sense.ctx         = ctx;
+
+    registerSenseViewClass(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
@@ -374,7 +451,8 @@ void installSenseBindings(JSContext* ctx, broaudio::Engine* audioEngine,
 }
 
 void cleanupSenseBindings(JSContext* /*ctx*/) {
-    stopSensing();
+    for (auto& kv : g_sense.tenants) stopSensing(kv.second.get());
+    g_sense.tenants.clear();
     g_sense.audioEngine = nullptr;
     g_sense.inference   = nullptr;
     g_sense.ctx         = nullptr;
