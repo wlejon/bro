@@ -4,17 +4,29 @@ extern "C" {
 #include "quickjs.h"
 }
 
+#include <cstdint>
+
 namespace broaudio { class Engine; }
 namespace bro::engine { class AudioInference; }
 
 namespace bro::js {
 
 // Install the `bro.wake` namespace — streaming wake-word detection via
-// brosoundml::WakeWord. bro.wake is a tenant of the engine's SHARED listen
-// host (listen_host.h): listen() attaches the model as a ListenBus member,
-// so one raw (no-AGC) tap + one PCEN mel pass serve it alongside
-// bro.kws / bro.sense. The AGC-free trained model is level-invariant — it
-// hears the same raw stream as the rest of the stack.
+// brosoundml::WakeWord. The BC-ResNet weights load ONCE (bro.wake.load, or
+// lazily on the first listen() with a weights path) into a shared read-only
+// net; each listened-on stream gets its OWN WakeWord built over it via
+// WakeWord(shared_ptr<const BcResnet2d>), so the same wake word runs on N
+// streams (mic + system audio + one app) without copying weights.
+//
+// Dual-homed: listen/stop/… live on both bro.wake (the shared default-mic
+// stream) and stream.wake (the view a bro.listen.open() handle exposes); one
+// implementation resolves its per-stream tenant from `this`.
+//
+// bro.wake is a tenant of the engine's SHARED listen host (listen_host.h):
+// listen() attaches the model as a ListenBus member, so per stream one raw
+// (no-AGC) source + one PCEN mel pass serve it alongside bro.kws / bro.sense.
+// The AGC-free trained model is level-invariant — it hears the same raw stream
+// as the rest of the stack.
 //
 // All three concerns live in their own thread:
 //   - audio thread: the host's tap callback copies resampled raw mic samples
@@ -31,6 +43,12 @@ namespace bro::js {
 // destructor.
 void installWakeBindings(JSContext* ctx, broaudio::Engine* audioEngine,
                          engine::AudioInference* inference);
+
+// Build a `stream.wake` view object bound to stream `id` (a brosoundml
+// StreamId). Same listen/stop/… surface as bro.wake but scoped to `id`. Called
+// by the bro.listen.open() handle to expose its .wake sub-object. Requires
+// installWakeBindings() to have registered the view class.
+JSValue wakeViewFor(JSContext* ctx, std::uint32_t id);
 
 // Per-frame result delivery. Drains the atomic fire counter published by the
 // inference thread and invokes the stored JS onFire callback once per pending

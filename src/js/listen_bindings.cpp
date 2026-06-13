@@ -6,6 +6,7 @@
 
 #include "js/kws_bindings.h"
 #include "js/listen_host.h"
+#include "js/wake_bindings.h"
 
 #include <broaudio/loopback_capture.h>
 #include <brosoundml/listen_bus.h>
@@ -295,7 +296,8 @@ JSValue js_open(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     // weights load once via the namespace op (bro.kws.load); each stream
     // attaches its own spotter/session over them. (wake/sense/gesture join
     // here as their slices land.)
-    JS_SetPropertyStr(ctx, wrapper, "kws", kwsViewFor(ctx, id));
+    JS_SetPropertyStr(ctx, wrapper, "kws",  kwsViewFor(ctx, id));
+    JS_SetPropertyStr(ctx, wrapper, "wake", wakeViewFor(ctx, id));
     return wrapper;
 }
 
