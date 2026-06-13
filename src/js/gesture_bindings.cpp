@@ -76,17 +76,19 @@ bool getInt(JSContext* ctx, JSValueConst obj, const char* key, int& dst) {
     return ok;
 }
 
-// Overlay gesture-policy keys: tempoTol, pitchTol, pitchStabilityTol,
-// refractoryFrames, minOnsets, minToneFrames.
+// Overlay gesture-policy keys: tempoTol, pitchTol, pitchStabilityTol, shapeTol,
+// refractoryFrames, minOnsets, minToneFrames, onsetSigFrames.
 void readPolicy(JSContext* ctx, JSValueConst obj, brosoundml::GestureConfig& cfg) {
     if (!JS_IsObject(obj)) return;
     double d;
     if (getNum(ctx, obj, "tempoTol", d)) cfg.tempo_tol = (float)d;
     if (getNum(ctx, obj, "pitchTol", d)) cfg.pitch_tol = (float)d;
     if (getNum(ctx, obj, "pitchStabilityTol", d)) cfg.pitch_stability_tol = (float)d;
+    if (getNum(ctx, obj, "shapeTol", d)) cfg.shape_tol = (float)d;
     getInt(ctx, obj, "refractoryFrames", cfg.refractory_frames);
     getInt(ctx, obj, "minOnsets",        cfg.min_onsets);
     getInt(ctx, obj, "minToneFrames",    cfg.min_tone_frames);
+    getInt(ctx, obj, "onsetSigFrames",   cfg.onset_sig_frames);
 }
 
 const float* readFloats(JSContext* ctx, JSValueConst v, int& count) {
@@ -248,6 +250,17 @@ JSValue js_inspect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         JS_SetPropertyUint32(ctx, arr, i,
             JS_NewFloat64(ctx, v.intervals[i] * v.frame_ms));
     JS_SetPropertyStr(ctx, o, "intervalsMs", arr);
+    // Per-beat acoustic signature (rhythm): voiced [0,1], pitchHz (0 if
+    // unvoiced), bright [0,1]. Lets a tool show what each beat must sound like.
+    JSValue onsets = JS_NewArray(ctx);
+    for (std::uint32_t i = 0; i < v.onsets.size(); ++i) {
+        JSValue b = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, b, "voiced", JS_NewFloat64(ctx, v.onsets[i].voiced));
+        JS_SetPropertyStr(ctx, b, "pitchHz", JS_NewFloat64(ctx, v.onsets[i].pitch));
+        JS_SetPropertyStr(ctx, b, "bright", JS_NewFloat64(ctx, v.onsets[i].bright));
+        JS_SetPropertyUint32(ctx, onsets, i, b);
+    }
+    JS_SetPropertyStr(ctx, o, "onsets", onsets);
     JS_SetPropertyStr(ctx, o, "toneHz", JS_NewFloat64(ctx, v.tone_hz));
     JS_SetPropertyStr(ctx, o, "toneMs",
         JS_NewFloat64(ctx, v.tone_frames * v.frame_ms));

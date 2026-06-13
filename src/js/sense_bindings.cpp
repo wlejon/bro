@@ -131,6 +131,7 @@ JSValue makeSnapshot(JSContext* ctx, const brosoundml::SensorSnapshot& s) {
     JS_SetPropertyStr(ctx, o, "tonalFrames", JS_NewInt64(ctx, s.tonal_frames));
     JS_SetPropertyStr(ctx, o, "tonalEvents", JS_NewInt64(ctx, s.tonal_events));
     JS_SetPropertyStr(ctx, o, "lastTonalFrame", JS_NewInt64(ctx, s.last_tonal_frame));
+    JS_SetPropertyStr(ctx, o, "centroid",    JS_NewFloat64(ctx, s.centroid));
     return o;
 }
 
@@ -291,12 +292,13 @@ JSValue js_analyze(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
 
     brosoundml::SensorHub hub(cfg);
     const int win = cfg.mel.win_length, hop = cfg.mel.hop_length;
-    std::vector<float>   db, hz, per;
+    std::vector<float>   db, hz, per, cen;
     std::vector<int32_t> flags;
     auto take = [&](const brosoundml::SensorSnapshot& s) {
         db.push_back(s.db);
         hz.push_back(s.dominant_hz);
         per.push_back(s.periodicity);
+        cen.push_back(s.centroid);
         int32_t f = 0;
         if (s.voice) f |= 1;
         if (s.tonal) f |= 2;
@@ -327,6 +329,7 @@ JSValue js_analyze(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     JS_SetPropertyStr(ctx, o, "db",          qjsbind::make_float32_array(ctx, db));
     JS_SetPropertyStr(ctx, o, "dominantHz",  qjsbind::make_float32_array(ctx, hz));
     JS_SetPropertyStr(ctx, o, "periodicity", qjsbind::make_float32_array(ctx, per));
+    JS_SetPropertyStr(ctx, o, "centroid",    qjsbind::make_float32_array(ctx, cen));
     JS_SetPropertyStr(ctx, o, "flags",       qjsbind::make_int32_array(ctx, flags));
     return o;
 }

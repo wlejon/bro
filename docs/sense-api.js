@@ -97,6 +97,11 @@ const s = bro.sense.snapshot();
 //                          //   reads as a long run with stable dominantHz)
 //   tonalEvents: 5,
 //   lastTonalFrame: 1233,
+//
+//   // spectral shape
+//   centroid: 0.41,        // energy-weighted mel-bin center [0,1] (0 = dark,
+//                          //   1 = bright). A cheap, gain-robust timbre axis:
+//                          //   a thump reads low, a finger snap high.
 // }
 
 // ─── Typical fusion loop ────────────────────────────────────────────────────
@@ -162,6 +167,7 @@ const snap = bro.sense.feed(pcm);
 //   //   db:          Float32Array(frames),   // per-frame level
 //   //   dominantHz:  Float32Array(frames),   // per-frame pitch (sub-lag refined)
 //   //   periodicity: Float32Array(frames),   // per-frame autocorrelation peak
+//   //   centroid:    Float32Array(frames),   // per-frame brightness [0,1]
 //   //   flags:       Int32Array(frames),     // bit0 voice, bit1 tonal, bit2 onset
 //   // }
 //   for (let f = 0; f < a.frames; f++) {
