@@ -1057,7 +1057,25 @@ static JSValue js_audioctx_createClip(JSContext* ctx, JSValueConst this_val, int
     int numSamples = static_cast<int>(len / sizeof(float));
     int channels = 1;
     if (argc >= 2) JS_ToInt32(ctx, &channels, argv[1]);
-    int id = d->engine->createClip(reinterpret_cast<float*>(raw), numSamples, channels);
+
+    // Optional 3rd arg: the PCM's source sample rate. When it differs from the
+    // engine rate, resample so the clip plays at the right pitch/speed (mirrors
+    // decodeAudioData). Without it, the samples are assumed to be at engine rate.
+    const float* samples = reinterpret_cast<float*>(raw);
+    std::vector<float> resampled;
+    if (argc >= 3 && JS_IsNumber(argv[2])) {
+        int srcRate = 0; JS_ToInt32(ctx, &srcRate, argv[2]);
+        const int engRate = d->engine->sampleRate();
+        if (srcRate > 0 && srcRate != engRate && channels > 0) {
+            resampled = broaudio::resample(samples, numSamples / channels,
+                                           channels, srcRate, engRate);
+            if (!resampled.empty()) {
+                samples = resampled.data();
+                numSamples = static_cast<int>(resampled.size());
+            }
+        }
+    }
+    int id = d->engine->createClip(samples, numSamples, channels);
     return JS_NewInt32(ctx, id);
 }
 

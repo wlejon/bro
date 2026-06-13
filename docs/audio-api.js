@@ -527,9 +527,12 @@ class AudioContext {
    * Create an audio clip from sample data.
    * @param {Float32Array} samples
    * @param {number} [channels=1] - 1 for mono, 2 for stereo (interleaved)
+   * @param {number} [sampleRate] - source rate of `samples`; when it differs
+   *   from the engine rate the clip is resampled so it plays at the right
+   *   pitch/speed. Omit when `samples` are already at the engine rate.
    * @returns {number} clipId
    */
-  createClip(samples, channels) {}
+  createClip(samples, channels, sampleRate) {}
 
   /** @param {number} clipId */ deleteClip(clipId) {}
   /** @param {number} clipId @returns {number} */ getClipSampleCount(clipId) {}
