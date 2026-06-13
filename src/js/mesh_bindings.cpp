@@ -54,6 +54,8 @@
 #include <bromesh/io/ply.h>
 #include <bromesh/io/stl.h>
 #include <bromesh/io/vox.h>
+#include <bromesh/io/splat_ply.h>
+#include <bromesh/gaussian_splat.h>
 #include <bromesh/reconstruction/reconstruct.h>
 #include <bromesh/manipulation/sweep.h>
 #include <bromesh/manipulation/bezier_sweep.h>
@@ -1455,6 +1457,44 @@ struct LSystemWrapper {
 using LSW = LSystemWrapper;
 
 // ---------------------------------------------------------------------------
+// Helpers — Gaussian Splat cloud <-> JS SoA object
+//
+// Mirrors the exact SoA shape scene.createGaussianSplat({cloud}) consumes and
+// bro.triposplat.generate() returns: { positions, scales, rotations,
+// opacities, sh, shDegree, count } as Float32Arrays (+ ints). A cloud loaded
+// from a .ply here passes straight into scene.createGaussianSplat with no
+// reshaping.
+// ---------------------------------------------------------------------------
+
+static JSValue makeSplatCloud(JSContext* ctx, const bromesh::GaussianSplatCloud& cloud) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "positions", make_float32_array(ctx, cloud.positions));
+    JS_SetPropertyStr(ctx, obj, "scales",    make_float32_array(ctx, cloud.scales));
+    JS_SetPropertyStr(ctx, obj, "rotations", make_float32_array(ctx, cloud.rotations));
+    JS_SetPropertyStr(ctx, obj, "opacities", make_float32_array(ctx, cloud.opacities));
+    JS_SetPropertyStr(ctx, obj, "sh",        make_float32_array(ctx, cloud.sh));
+    JS_SetPropertyStr(ctx, obj, "shDegree",  JS_NewInt32(ctx, cloud.shDegree));
+    JS_SetPropertyStr(ctx, obj, "count",     JS_NewInt64(ctx, (int64_t)cloud.count()));
+    return obj;
+}
+
+// Read a { positions, scales, rotations, opacities, sh, shDegree } JS object
+// into a GaussianSplatCloud. Missing attribute arrays are left empty (the
+// saver tolerates absent normals/colors-equivalents the same way it would an
+// SH-degree-0 cloud). Returns false only if there are no positions.
+static bool readSplatCloud(JSContext* ctx, JSValueConst obj,
+                           bromesh::GaussianSplatCloud& cloud) {
+    if (!JS_IsObject(obj)) return false;
+    readFloatArray(ctx, obj, "positions", cloud.positions);
+    readFloatArray(ctx, obj, "scales",    cloud.scales);
+    readFloatArray(ctx, obj, "rotations", cloud.rotations);
+    readFloatArray(ctx, obj, "opacities", cloud.opacities);
+    readFloatArray(ctx, obj, "sh",        cloud.sh);
+    cloud.shDegree = objInt(ctx, obj, "shDegree", 0);
+    return !cloud.positions.empty();
+}
+
+// ---------------------------------------------------------------------------
 // Install
 // ---------------------------------------------------------------------------
 
@@ -2401,6 +2441,27 @@ void MeshBindings::install(JSContext* ctx) {
         }
         return obj;
     })
+
+    // ── Static: Gaussian Splat .ply I/O ─────────────────────────────────
+    // Load/save a 3D Gaussian Splat cloud as a standard 3DGS .ply (INRIA /
+    // PlayCanvas). The returned cloud SoA matches scene.createGaussianSplat
+    // and bro.triposplat.generate exactly, so a loaded .ply feeds straight
+    // into scene.createGaussianSplat({ cloud }) with no reshaping.
+    .static_method("loadSplatPLY", [](JSContext* ctx, std::string path) -> JSValue {
+        return makeSplatCloud(ctx, bromesh::loadSplatPLY(path));
+    })
+    .static_raw("saveSplatPLY",
+        [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
+            if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsObject(argv[1]))
+                return JS_ThrowTypeError(ctx, "saveSplatPLY(path, cloud)");
+            const char* p = JS_ToCString(ctx, argv[0]);
+            std::string path = p ? p : "";
+            if (p) JS_FreeCString(ctx, p);
+            bromesh::GaussianSplatCloud cloud;
+            if (!readSplatCloud(ctx, argv[1], cloud))
+                return JS_ThrowTypeError(ctx, "saveSplatPLY: cloud has no positions");
+            return JS_NewBool(ctx, bromesh::saveSplatPLY(cloud, path));
+        }, 2)
 
     // ── Static: Reconstruction ──────────────────────────────────────────
     .static_raw("reconstruct", js_reconstruct, 1)

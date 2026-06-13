@@ -442,6 +442,50 @@ class Mesh {
   static loadVOX(path) {}
 
 
+  // --- Static: Gaussian Splat .ply I/O -------------------------------------
+
+  /**
+   * Load a 3D Gaussian Splat cloud from a standard 3DGS .ply (INRIA /
+   * PlayCanvas layout, binary-LE or ASCII). The SH degree is inferred from
+   * the f_rest_* property count; values are returned render-ready (linear
+   * scales, [0,1] opacities, normalized quaternions).
+   *
+   * The returned object is the exact SoA shape that
+   * `scene.createGaussianSplat({ cloud })` consumes and that
+   * `bro.triposplat.generate()` produces, so a loaded .ply feeds straight in
+   * with no reshaping. Returns an empty cloud (count 0) on failure.
+   *
+   *   const cloud = Mesh.loadSplatPLY('scene.ply');
+   *   const scene = canvas.getContext('scene');
+   *   scene.createGaussianSplat({ cloud, scale: 1 });
+   *
+   * @param {string} path
+   * @returns {{ positions: Float32Array,   // xyz, stride 3
+   *             scales: Float32Array,       // xyz linear std-dev, stride 3
+   *             rotations: Float32Array,    // xyzw unit quat, stride 4
+   *             opacities: Float32Array,    // [0,1] alpha, stride 1
+   *             sh: Float32Array,           // SH coeffs, stride 3*(deg+1)^2
+   *             shDegree: number,           // 0..3
+   *             count: number }}
+   */
+  static loadSplatPLY(path) {}
+
+  /**
+   * Save a Gaussian Splat cloud as a standard 3DGS binary-LE .ply, inverting
+   * the load activations (log scale, logit opacity) so the result round-trips
+   * through standard 3DGS tooling and back through `Mesh.loadSplatPLY`.
+   * `cloud` is the same SoA object `loadSplatPLY` returns / that
+   * `scene.createGaussianSplat({ cloud })` accepts — only `positions` is
+   * required; omitted attributes are written as defaults.
+   * @param {string} path
+   * @param {{ positions: Float32Array, scales?: Float32Array,
+   *           rotations?: Float32Array, opacities?: Float32Array,
+   *           sh?: Float32Array, shDegree?: number }} cloud
+   * @returns {boolean} true on success
+   */
+  static saveSplatPLY(path, cloud) {}
+
+
   // --- Static: Reconstruction ----------------------------------------------
 
   /**
