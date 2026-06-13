@@ -458,6 +458,20 @@ brosoundml::ListenFeedResult listenStreamFeedInline(StreamId id,
     return s->feedInline(samples, n);
 }
 
+brosoundml::ListenFeedResult listenStreamFeed(StreamId id,
+                                              const float* samples, int n) {
+    ListenStream* s = g_mgr.find(id);
+    if (!s) return {};
+    // Threaded: hand the samples to the live ring; the inference worker drains
+    // it and delivers any events through the attached members' callbacks.
+    if (g_mgr.inference && g_mgr.inference->threaded()) {
+        if (s->ring) s->ring->write(samples, n);
+        return {};
+    }
+    // Headless / no worker: run the bus now on this thread for every member.
+    return s->feedInline(samples, n);
+}
+
 void listenStreamSetRetention(StreamId id, int seconds) {
     if (ListenStream* s = g_mgr.find(id)) s->applyRetention(seconds);
 }

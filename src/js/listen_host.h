@@ -128,6 +128,11 @@ broaudio::MicTapId listenStreamTapId(StreamId id);
 void listenStreamWriteRing(StreamId id, const float* samples, int n);
 brosoundml::ListenFeedResult listenStreamFeedInline(StreamId id,
                                                     const float* samples, int n);
+// Feed the stream, letting the host pick the path: threaded → write the live
+// ring (events surface via member callbacks, returns empty); headless/no worker
+// → run the bus synchronously now and return the result. The handle's .feed().
+brosoundml::ListenFeedResult listenStreamFeed(StreamId id,
+                                              const float* samples, int n);
 
 // Per-stream raw-audio retention (see the retention notes below).
 void listenStreamSetRetention(StreamId id, int seconds);
