@@ -49,13 +49,32 @@ namespace bro::js {
 // Wrapper structs
 // ═══════════════════════════════════════════════════════════════════════════
 
+// The model + its single-owner gate are held by shared_ptr so they outlive the
+// JS model handle whenever a session (see *SessionWrapper below) is still alive,
+// and so EVERY inference over one model — module-level bro.stt.transcribe(model)
+// AND every session.transcribe() — serializes on the ONE busy flag. brosoundml's
+// session tier for these models is SHARED WEIGHTS / SERIALIZED decode (the GPU
+// runs one stream and the captured decoder step-graph is shared), so concurrent
+// decode over sessions of one model is unsupported and must be gated here.
 struct WhisperWrapper {
-    std::unique_ptr<brosoundml::Whisper> whisper;
+    std::shared_ptr<brosoundml::Whisper> whisper;
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
-    // Set while an async bro.stt.transcribe() runs on this model's background
-    // thread; rejects a second concurrent op (the decoder + KV cache are
-    // single-owner). Cleared on the JS thread when the job's done() fires.
-    std::atomic<bool> busy{false};
+    // Set while an async bro.stt.transcribe() / session.transcribe() runs on a
+    // background thread; rejects a second concurrent op (the decoder + KV cache
+    // are single-owner). Cleared on the JS thread when the job's done() fires.
+    // shared_ptr so sessions share this exact gate with the model.
+    std::shared_ptr<std::atomic<bool>> busy =
+        std::make_shared<std::atomic<bool>>(false);
+};
+
+// A Whisper decode session over shared weights: its own KV-cache, one per stream.
+// Holds the model + busy gate alive by shared_ptr (the model JS handle may be
+// dropped while a session lives) and the move-only brosoundml::WhisperSession.
+struct WhisperSessionWrapper {
+    std::shared_ptr<brosoundml::Whisper> model;
+    std::shared_ptr<std::atomic<bool>>   busy;   // shared with the model + siblings
+    brotensor::Device                    device = brotensor::Device::CPU;
+    brosoundml::WhisperSession           session;
 };
 
 struct WhisperTokenizerWrapper {
@@ -63,10 +82,24 @@ struct WhisperTokenizerWrapper {
 };
 
 struct ParakeetWrapper {
-    std::unique_ptr<brosoundml::Parakeet> parakeet;
+    std::shared_ptr<brosoundml::Parakeet> parakeet;
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
     // Same single-owner discipline as Whisper: one async transcribe in flight.
-    std::atomic<bool> busy{false};
+    // shared_ptr so sessions share this exact gate with the model.
+    std::shared_ptr<std::atomic<bool>> busy =
+        std::make_shared<std::atomic<bool>>(false);
+};
+
+// A Parakeet decode session over shared weights: its own TDT prediction-net
+// state, one per stream. brosoundml's tier here is CONCURRENT (the forward
+// touches no shared mutable state), but the bro async runner still serializes
+// on the shared busy gate to match the other models and the single GPU stream —
+// correctness is identical, only parallelism is given up.
+struct ParakeetSessionWrapper {
+    std::shared_ptr<brosoundml::Parakeet> model;
+    std::shared_ptr<std::atomic<bool>>    busy;
+    brotensor::Device                     device = brotensor::Device::CPU;
+    brosoundml::ParakeetSession           session;
 };
 
 // Parakeet's tokenizer is a HF tokenizer.json SentencePiece unigram — the
@@ -80,10 +113,21 @@ struct ParakeetTokenizerWrapper {
 // bro.lm.loadTokenizer (vocab.json + merges.txt sit in the model dir), so no
 // new tokenizer wrapper here — brosoundml emits and consumes raw id streams.
 struct QwenAsrWrapper {
-    std::unique_ptr<brosoundml::QwenAsr> asr;
+    std::shared_ptr<brosoundml::QwenAsr> asr;
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
     // Same single-owner discipline as Whisper: one async transcribe in flight.
-    std::atomic<bool> busy{false};
+    // shared_ptr so sessions share this exact gate with the model.
+    std::shared_ptr<std::atomic<bool>> busy =
+        std::make_shared<std::atomic<bool>>(false);
+};
+
+// A Qwen3-ASR decode session over shared weights: its own decoder KV-cache, one
+// per stream. CONCURRENT tier in brosoundml, serialized here on the shared gate.
+struct QwenAsrSessionWrapper {
+    std::shared_ptr<brosoundml::QwenAsr> model;
+    std::shared_ptr<std::atomic<bool>>   busy;
+    brotensor::Device                    device = brotensor::Device::CPU;
+    brosoundml::QwenAsrSession           session;
 };
 
 // Encoder-only streaming tap. feed()/finish() run synchronously on the JS
@@ -92,6 +136,12 @@ struct QwenAsrStreamWrapper {
     std::unique_ptr<brosoundml::QwenAsrStream> stream;
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
 };
+
+// createSession() factory methods, registered on the model classes below but
+// defined down in the session section (after the async-job structs they reuse).
+static JSValue js_whisper_createSession(JSContext*, JSValueConst, int, JSValueConst*);
+static JSValue js_parakeet_createSession(JSContext*, JSValueConst, int, JSValueConst*);
+static JSValue js_qwenasr_createSession(JSContext*, JSValueConst, int, JSValueConst*);
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Helpers (TU-local — same shape as the lm/diffusion bindings)
@@ -526,7 +576,8 @@ static void registerWhisperClass(JSContext* ctx) {
         .get("vocabSize",           [](WhisperWrapper* w) { return w->whisper->config().vocab_size; })
         .get("eosTokenId",          [](WhisperWrapper* w) { return w->whisper->config().eos_token_id; })
         .get("decoderStartTokenId", [](WhisperWrapper* w) { return w->whisper->config().decoder_start_token_id; })
-        .method_raw("transcribe", js_whisper_transcribe, 3);
+        .method_raw("transcribe", js_whisper_transcribe, 3)
+        .method_raw("createSession", js_whisper_createSession, 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -606,7 +657,8 @@ static void registerParakeetClass(JSContext* ctx) {
         .get("vocabSize",    [](ParakeetWrapper* w) { return w->parakeet->config().vocab_size; })
         .get("blankTokenId", [](ParakeetWrapper* w) { return w->parakeet->config().blank_token_id; })
         .get("frameSeconds", [](ParakeetWrapper* w) { return w->parakeet->config().frame_seconds(); })
-        .method_raw("transcribe", js_parakeet_transcribe, 2);
+        .method_raw("transcribe", js_parakeet_transcribe, 2)
+        .method_raw("createSession", js_parakeet_createSession, 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -721,7 +773,8 @@ static void registerQwenAsrClass(JSContext* ctx) {
         .get("vocabSize",  [](QwenAsrWrapper* w) { return w->asr->config().vocab_size; })
         .get("asrTextId",  [](QwenAsrWrapper* w) { return w->asr->config().asr_text_token_id; })
         .method_raw("transcribe", js_qwenasr_transcribe, 2)
-        .method_raw("encode",     js_qwenasr_encode,     1);
+        .method_raw("encode",     js_qwenasr_encode,     1)
+        .method_raw("createSession", js_qwenasr_createSession, 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1524,7 +1577,7 @@ static JSValue js_stt_transcribe_qwenasr(JSContext* ctx, QwenAsrWrapper* w,
 
     // Claim the model for this transcription (single-owner; one in flight).
     bool expected = false;
-    if (!w->busy.compare_exchange_strong(expected, true)) {
+    if (!w->busy->compare_exchange_strong(expected, true)) {
         JS_FreeValue(ctx, onDone);
         JS_FreeValue(ctx, onToken);
         return JS_ThrowInternalError(ctx,
@@ -1592,7 +1645,7 @@ static JSValue js_stt_transcribe_qwenasr(JSContext* ctx, QwenAsrWrapper* w,
         if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
         if (job->hasOnToken) JS_FreeValue(c, job->onToken);
         JS_FreeValue(c, job->asrRef);
-        mw->busy.store(false, std::memory_order_release);
+        mw->busy->store(false, std::memory_order_release);
     };
 
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
@@ -1618,7 +1671,7 @@ static JSValue js_stt_transcribe_parakeet(JSContext* ctx, ParakeetWrapper* w,
 
     // Claim the model for this transcription (single-owner; one in flight).
     bool expected = false;
-    if (!w->busy.compare_exchange_strong(expected, true)) {
+    if (!w->busy->compare_exchange_strong(expected, true)) {
         JS_FreeValue(ctx, onDone);
         JS_FreeValue(ctx, onToken);
         return JS_ThrowInternalError(ctx,
@@ -1686,7 +1739,7 @@ static JSValue js_stt_transcribe_parakeet(JSContext* ctx, ParakeetWrapper* w,
         if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
         if (job->hasOnToken) JS_FreeValue(c, job->onToken);
         JS_FreeValue(c, job->parakeetRef);
-        mw->busy.store(false, std::memory_order_release);
+        mw->busy->store(false, std::memory_order_release);
     };
 
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
@@ -1735,7 +1788,7 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
 
     // Claim the model for this transcription (single-owner; one in flight).
     bool expected = false;
-    if (!w->busy.compare_exchange_strong(expected, true)) {
+    if (!w->busy->compare_exchange_strong(expected, true)) {
         JS_FreeValue(ctx, onDone);
         JS_FreeValue(ctx, onToken);
         return JS_ThrowInternalError(ctx,
@@ -1818,10 +1871,466 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
         if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
         if (job->hasOnToken) JS_FreeValue(c, job->onToken);
         JS_FreeValue(c, job->whisperRef);
-        mw->busy.store(false, std::memory_order_release);
+        mw->busy->store(false, std::memory_order_release);
     };
 
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Multi-stream sessions — model.createSession() + session.transcribe()/reset()
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// One loaded model behind N per-stream sessions (own KV-cache / prediction
+// state) over ONE shared weight set — the STT analog of N wake detectors on one
+// shared net. session.transcribe(...) reuses the exact async-job dispatch as the
+// module-level bro.stt.transcribe(model, ...) (real cancellation, SPSC onToken
+// streaming, onDone(result, info)) but drives the session's own state and claims
+// the model's SHARED busy gate. brosoundml's tier for these models is SHARED
+// WEIGHTS / SERIALIZED decode (one GPU stream, shared captured step-graph), so
+// calls over one model — module-level and any session — never overlap: a second
+// in-flight op throws. Sessions isolate STATE, not parallel execution; drive
+// them from one worker / queue. Each session's transcript is bit-identical to
+// the same call on a fresh model.
+
+// ── Whisper session ──
+static WhisperSessionWrapper* whisperSessionSelf(JSContext* ctx, JSValueConst v) {
+    return qjsbind::unwrap<WhisperSessionWrapper>(ctx, v);
+}
+
+// whisper.createSession() -> WhisperSession
+static JSValue js_whisper_createSession(JSContext* ctx, JSValueConst this_val,
+                                        int, JSValueConst*) {
+    auto* w = whisperSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "createSession: not a Whisper");
+    if (!w->whisper || !w->whisper->loaded())
+        return JS_ThrowInternalError(ctx, "createSession: model is not loaded");
+    try {
+        brotensor::DeviceScope scope(w->device);
+        auto sw = std::make_unique<WhisperSessionWrapper>();
+        sw->model   = w->whisper;   // share weights (outlives the model handle)
+        sw->busy    = w->busy;      // share the single-owner gate
+        sw->device  = w->device;
+        sw->session = w->whisper->make_session();
+        return qjsbind::wrap<WhisperSessionWrapper>(ctx, sw.release());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "createSession: %s", e.what());
+    }
+}
+
+// session.transcribe(audio, promptIds, opts?) -> AsyncHandle
+static JSValue js_whisper_session_transcribe(JSContext* ctx, JSValueConst this_val,
+                                             int argc, JSValueConst* argv) {
+    auto* sw = whisperSessionSelf(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "transcribe: not a WhisperSession");
+    if (argc < 2)
+        return JS_ThrowTypeError(ctx,
+            "transcribe(audio, promptIds, opts?): audio and promptIds required");
+
+    auto job = std::make_shared<SttJob>();
+    std::string err;
+    if (!readAudioBuffer(ctx, argv[0], job->audio, err))
+        return JS_ThrowTypeError(ctx, "transcribe: %s", err.c_str());
+
+    job->prompt = readIdArray(ctx, argv[1]);
+    if (job->prompt.empty())
+        return JS_ThrowTypeError(ctx,
+            "transcribe: promptIds must be a non-empty Int32Array or number[] "
+            "(use tokenizer.buildPrompt(lang, task))");
+
+    JSValue onDone = JS_UNDEFINED, onToken = JS_UNDEFINED;
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        getInt(ctx, argv[2], "maxNewTokens", job->maxNew);
+        getInt(ctx, argv[2], "timestampBeginId", job->timestampBeginId);
+        onDone  = JS_GetPropertyStr(ctx, argv[2], "onDone");
+        onToken = JS_GetPropertyStr(ctx, argv[2], "onToken");
+    }
+
+    bool expected = false;
+    if (!sw->busy->compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onDone);
+        JS_FreeValue(ctx, onToken);
+        return JS_ThrowInternalError(ctx,
+            "transcribe: an operation is already in flight on this model "
+            "(sessions over one model serialize — drive them from one queue)");
+    }
+
+    job->hasOnDone  = JS_IsFunction(ctx, onDone);
+    job->onDone     = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->hasOnToken = JS_IsFunction(ctx, onToken);
+    job->onToken    = job->hasOnToken ? JS_DupValue(ctx, onToken) : JS_UNDEFINED;
+    job->whisperRef = JS_DupValue(ctx, this_val);  // keep the session (+ model) alive
+    JS_FreeValue(ctx, onDone);
+    JS_FreeValue(ctx, onToken);
+    if (job->hasOnToken) job->tokenSlots.resize(1u << 16);
+
+    WhisperSessionWrapper* mw = sw;
+
+    auto work = [job, mw](const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(mw->device);
+        brosoundml::Whisper::TranscribeOptions opts;
+        opts.max_new_tokens     = job->maxNew;
+        opts.timestamp_begin_id = job->timestampBeginId;
+        opts.cancel = [&cancel] {
+            return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+        };
+        if (job->hasOnToken) {
+            opts.on_token = [job](int32_t id) {
+                const size_t idx = job->produced.load(std::memory_order_relaxed);
+                if (idx >= job->tokenSlots.size()) return;
+                job->tokenSlots[idx] = id;
+                job->produced.store(idx + 1, std::memory_order_release);
+            };
+        }
+        auto out = mw->model->transcribe(mw->session, job->audio, job->prompt, opts);
+        job->token_ids = std::move(out.token_ids);
+    };
+
+    auto poll = [job](JSContext* c) {
+        if (!job->hasOnToken) return;
+        const size_t n = job->produced.load(std::memory_order_acquire);
+        while (job->drained < n) {
+            JSValue a = JS_NewInt32(c, job->tokenSlots[job->drained]);
+            JSValue r = JS_Call(c, job->onToken, JS_UNDEFINED, 1, &a);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, a);
+            job->drained++;
+        }
+    };
+
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        if (job->hasOnDone) {
+            JSValue arr  = qjsbind::make_int32_array(c, job->token_ids);
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { arr, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, arr);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
+        if (job->hasOnToken) JS_FreeValue(c, job->onToken);
+        JS_FreeValue(c, job->whisperRef);
+        mw->busy->store(false, std::memory_order_release);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
+}
+
+// session.reset() — clear the session's KV-cache for a fresh, unrelated clip.
+static JSValue js_whisper_session_reset(JSContext* ctx, JSValueConst this_val,
+                                        int, JSValueConst*) {
+    auto* sw = whisperSessionSelf(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "reset: not a WhisperSession");
+    if (sw->busy->load(std::memory_order_acquire))
+        return JS_ThrowInternalError(ctx, "reset: a transcribe is in flight on this model");
+    try {
+        brotensor::DeviceScope scope(sw->device);
+        sw->model->reset(sw->session);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "reset: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+static void registerWhisperSessionClass(JSContext* ctx) {
+    qjsbind::Class<WhisperSessionWrapper>(ctx, "WhisperSession", qjsbind::NoGlobal)
+        .get("loaded", [](WhisperSessionWrapper* w) { return w->model && w->model->loaded(); })
+        .method_raw("transcribe", js_whisper_session_transcribe, 3)
+        .method_raw("reset",      js_whisper_session_reset,      0);
+}
+
+// ── Parakeet session ──
+static ParakeetSessionWrapper* parakeetSessionSelf(JSContext* ctx, JSValueConst v) {
+    return qjsbind::unwrap<ParakeetSessionWrapper>(ctx, v);
+}
+
+static JSValue js_parakeet_createSession(JSContext* ctx, JSValueConst this_val,
+                                         int, JSValueConst*) {
+    auto* w = parakeetSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "createSession: not a Parakeet");
+    if (!w->parakeet || !w->parakeet->loaded())
+        return JS_ThrowInternalError(ctx, "createSession: model is not loaded");
+    try {
+        brotensor::DeviceScope scope(w->device);
+        auto sw = std::make_unique<ParakeetSessionWrapper>();
+        sw->model   = w->parakeet;
+        sw->busy    = w->busy;
+        sw->device  = w->device;
+        sw->session = w->parakeet->make_session();
+        return qjsbind::wrap<ParakeetSessionWrapper>(ctx, sw.release());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "createSession: %s", e.what());
+    }
+}
+
+// session.transcribe(audio, opts?) -> AsyncHandle ({ tokenIds, tokenFrames })
+static JSValue js_parakeet_session_transcribe(JSContext* ctx, JSValueConst this_val,
+                                              int argc, JSValueConst* argv) {
+    auto* sw = parakeetSessionSelf(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "transcribe: not a ParakeetSession");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "transcribe(audio, opts?): audio required");
+
+    auto job = std::make_shared<ParakeetJob>();
+    std::string err;
+    if (!readAudioBuffer(ctx, argv[0], job->audio, err))
+        return JS_ThrowTypeError(ctx, "transcribe: %s", err.c_str());
+
+    JSValue onDone = JS_UNDEFINED, onToken = JS_UNDEFINED;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        getInt(ctx, argv[1], "maxNewTokens", job->maxNew);
+        onDone  = JS_GetPropertyStr(ctx, argv[1], "onDone");
+        onToken = JS_GetPropertyStr(ctx, argv[1], "onToken");
+    }
+
+    bool expected = false;
+    if (!sw->busy->compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onDone);
+        JS_FreeValue(ctx, onToken);
+        return JS_ThrowInternalError(ctx,
+            "transcribe: an operation is already in flight on this model "
+            "(sessions over one model serialize — drive them from one queue)");
+    }
+
+    job->hasOnDone   = JS_IsFunction(ctx, onDone);
+    job->onDone      = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->hasOnToken  = JS_IsFunction(ctx, onToken);
+    job->onToken     = job->hasOnToken ? JS_DupValue(ctx, onToken) : JS_UNDEFINED;
+    job->parakeetRef = JS_DupValue(ctx, this_val);  // keep the session (+ model) alive
+    JS_FreeValue(ctx, onDone);
+    JS_FreeValue(ctx, onToken);
+    if (job->hasOnToken) job->tokenSlots.resize(1u << 16);
+
+    ParakeetSessionWrapper* mw = sw;
+
+    auto work = [job, mw](const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(mw->device);
+        brosoundml::Parakeet::TranscribeOptions opts;
+        opts.max_new_tokens = job->maxNew;
+        opts.cancel = [&cancel] {
+            return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+        };
+        if (job->hasOnToken) {
+            opts.on_token = [job](int32_t id) {
+                const size_t idx = job->produced.load(std::memory_order_relaxed);
+                if (idx >= job->tokenSlots.size()) return;
+                job->tokenSlots[idx] = id;
+                job->produced.store(idx + 1, std::memory_order_release);
+            };
+        }
+        auto out = mw->model->transcribe(mw->session, job->audio, opts);
+        job->token_ids    = std::move(out.token_ids);
+        job->token_frames = std::move(out.token_frames);
+    };
+
+    auto poll = [job](JSContext* c) {
+        if (!job->hasOnToken) return;
+        const size_t n = job->produced.load(std::memory_order_acquire);
+        while (job->drained < n) {
+            JSValue a = JS_NewInt32(c, job->tokenSlots[job->drained]);
+            JSValue r = JS_Call(c, job->onToken, JS_UNDEFINED, 1, &a);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, a);
+            job->drained++;
+        }
+    };
+
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        if (job->hasOnDone) {
+            JSValue res  = makeParakeetResult(c, job->token_ids, job->token_frames);
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { res, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, res);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
+        if (job->hasOnToken) JS_FreeValue(c, job->onToken);
+        JS_FreeValue(c, job->parakeetRef);
+        mw->busy->store(false, std::memory_order_release);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
+}
+
+static JSValue js_parakeet_session_reset(JSContext* ctx, JSValueConst this_val,
+                                         int, JSValueConst*) {
+    auto* sw = parakeetSessionSelf(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "reset: not a ParakeetSession");
+    if (sw->busy->load(std::memory_order_acquire))
+        return JS_ThrowInternalError(ctx, "reset: a transcribe is in flight on this model");
+    try {
+        brotensor::DeviceScope scope(sw->device);
+        sw->model->reset(sw->session);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "reset: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+static void registerParakeetSessionClass(JSContext* ctx) {
+    qjsbind::Class<ParakeetSessionWrapper>(ctx, "ParakeetSession", qjsbind::NoGlobal)
+        .get("loaded", [](ParakeetSessionWrapper* w) { return w->model && w->model->loaded(); })
+        .method_raw("transcribe", js_parakeet_session_transcribe, 2)
+        .method_raw("reset",      js_parakeet_session_reset,      0);
+}
+
+// ── Qwen3-ASR session ──
+static QwenAsrSessionWrapper* qwenAsrSessionSelf(JSContext* ctx, JSValueConst v) {
+    return qjsbind::unwrap<QwenAsrSessionWrapper>(ctx, v);
+}
+
+static JSValue js_qwenasr_createSession(JSContext* ctx, JSValueConst this_val,
+                                        int, JSValueConst*) {
+    auto* w = qwenAsrSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "createSession: not a QwenAsr");
+    if (!w->asr || !w->asr->loaded())
+        return JS_ThrowInternalError(ctx, "createSession: model is not loaded");
+    try {
+        brotensor::DeviceScope scope(w->device);
+        auto sw = std::make_unique<QwenAsrSessionWrapper>();
+        sw->model   = w->asr;
+        sw->busy    = w->busy;
+        sw->device  = w->device;
+        sw->session = w->asr->make_session();
+        return qjsbind::wrap<QwenAsrSessionWrapper>(ctx, sw.release());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "createSession: %s", e.what());
+    }
+}
+
+// session.transcribe(audio, opts?) -> AsyncHandle (Int32Array of generated ids)
+static JSValue js_qwenasr_session_transcribe(JSContext* ctx, JSValueConst this_val,
+                                             int argc, JSValueConst* argv) {
+    auto* sw = qwenAsrSessionSelf(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "transcribe: not a QwenAsrSession");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "transcribe(audio, opts?): audio required");
+
+    auto job = std::make_shared<QwenAsrJob>();
+    std::string err;
+    if (!readAudioBuffer(ctx, argv[0], job->audio, err))
+        return JS_ThrowTypeError(ctx, "transcribe: %s", err.c_str());
+
+    JSValue onDone = JS_UNDEFINED, onToken = JS_UNDEFINED;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        getInt(ctx, argv[1], "maxNewTokens", job->maxNew);
+        JSValue cv = JS_GetPropertyStr(ctx, argv[1], "contextIds");
+        if (!JS_IsUndefined(cv) && !JS_IsNull(cv))
+            job->contextIds = readIdArray(ctx, cv);
+        JS_FreeValue(ctx, cv);
+        onDone  = JS_GetPropertyStr(ctx, argv[1], "onDone");
+        onToken = JS_GetPropertyStr(ctx, argv[1], "onToken");
+    }
+
+    bool expected = false;
+    if (!sw->busy->compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onDone);
+        JS_FreeValue(ctx, onToken);
+        return JS_ThrowInternalError(ctx,
+            "transcribe: an operation is already in flight on this model "
+            "(sessions over one model serialize — drive them from one queue)");
+    }
+
+    job->hasOnDone  = JS_IsFunction(ctx, onDone);
+    job->onDone     = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->hasOnToken = JS_IsFunction(ctx, onToken);
+    job->onToken    = job->hasOnToken ? JS_DupValue(ctx, onToken) : JS_UNDEFINED;
+    job->asrRef     = JS_DupValue(ctx, this_val);  // keep the session (+ model) alive
+    JS_FreeValue(ctx, onDone);
+    JS_FreeValue(ctx, onToken);
+    if (job->hasOnToken) job->tokenSlots.resize(1u << 16);
+
+    QwenAsrSessionWrapper* mw = sw;
+
+    auto work = [job, mw](const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(mw->device);
+        brosoundml::QwenAsr::TranscribeOptions opts;
+        opts.max_new_tokens = job->maxNew;
+        opts.context_ids    = job->contextIds;
+        opts.cancel = [&cancel] {
+            return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+        };
+        if (job->hasOnToken) {
+            opts.on_token = [job](int32_t id) {
+                const size_t idx = job->produced.load(std::memory_order_relaxed);
+                if (idx >= job->tokenSlots.size()) return;
+                job->tokenSlots[idx] = id;
+                job->produced.store(idx + 1, std::memory_order_release);
+            };
+        }
+        auto out = mw->model->transcribe(mw->session, job->audio, opts);
+        job->token_ids = std::move(out.token_ids);
+    };
+
+    auto poll = [job](JSContext* c) {
+        if (!job->hasOnToken) return;
+        const size_t n = job->produced.load(std::memory_order_acquire);
+        while (job->drained < n) {
+            JSValue a = JS_NewInt32(c, job->tokenSlots[job->drained]);
+            JSValue r = JS_Call(c, job->onToken, JS_UNDEFINED, 1, &a);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, a);
+            job->drained++;
+        }
+    };
+
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        if (job->hasOnDone) {
+            JSValue arr  = qjsbind::make_int32_array(c, job->token_ids);
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { arr, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, arr);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
+        if (job->hasOnToken) JS_FreeValue(c, job->onToken);
+        JS_FreeValue(c, job->asrRef);
+        mw->busy->store(false, std::memory_order_release);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
+}
+
+static JSValue js_qwenasr_session_reset(JSContext* ctx, JSValueConst this_val,
+                                        int, JSValueConst*) {
+    auto* sw = qwenAsrSessionSelf(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "reset: not a QwenAsrSession");
+    if (sw->busy->load(std::memory_order_acquire))
+        return JS_ThrowInternalError(ctx, "reset: a transcribe is in flight on this model");
+    try {
+        brotensor::DeviceScope scope(sw->device);
+        sw->model->reset(sw->session);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "reset: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+static void registerQwenAsrSessionClass(JSContext* ctx) {
+    qjsbind::Class<QwenAsrSessionWrapper>(ctx, "QwenAsrSession", qjsbind::NoGlobal)
+        .get("loaded", [](QwenAsrSessionWrapper* w) { return w->model && w->model->loaded(); })
+        .method_raw("transcribe", js_qwenasr_session_transcribe, 2)
+        .method_raw("reset",      js_qwenasr_session_reset,      0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1835,6 +2344,9 @@ void installSttBindings(JSContext* ctx) {
     registerParakeetClass(ctx);
     registerQwenAsrClass(ctx);
     registerQwenAsrStreamClass(ctx);
+    registerWhisperSessionClass(ctx);
+    registerParakeetSessionClass(ctx);
+    registerQwenAsrSessionClass(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");

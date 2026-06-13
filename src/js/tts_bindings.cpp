@@ -52,16 +52,25 @@ namespace bro::js {
 // Wrapper structs
 // ═══════════════════════════════════════════════════════════════════════════
 
+// The model + its single-owner gate are held by shared_ptr so they outlive the
+// JS model handle whenever a KokoroSession over it is still alive, and so EVERY
+// synthesis over one model — module-level bro.tts.synthesize(model) AND every
+// session.synthesize() — serializes on the ONE busy flag. brosoundml's Kokoro
+// session tier is SHARED WEIGHTS / SERIALIZED synthesis (one GPU stream, a
+// lazily captured CUDA graph with shared step buffers), so sessions isolate the
+// VOICE, not parallel execution; concurrent synthesis must be gated here.
 struct KokoroWrapper {
-    std::unique_ptr<brosoundml::Kokoro> kokoro;
+    std::shared_ptr<brosoundml::Kokoro> kokoro;
     // Lazily constructed on first encodePhonemes() call. Borrows the
     // Kokoro instance's vocab map (lifetime tied to `kokoro` above).
     std::unique_ptr<brosoundml::g2p::PhonemeAdapter> adapter;
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
-    // Set while an async bro.tts.synthesize() runs on this model's background
-    // thread; rejects a second concurrent op (the model is single-owner).
-    // Cleared on the JS thread when the job's done() fires.
-    std::atomic<bool> busy{false};
+    // Set while an async bro.tts.synthesize() / session.synthesize() runs on a
+    // background thread; rejects a second concurrent op (the model is
+    // single-owner). Cleared on the JS thread when the job's done() fires.
+    // shared_ptr so sessions share this exact gate with the model.
+    std::shared_ptr<std::atomic<bool>> busy =
+        std::make_shared<std::atomic<bool>>(false);
 };
 
 struct VoiceWrapper {
@@ -72,10 +81,36 @@ struct VoiceWrapper {
 // pipeline (Talker + Code Predictor + bundled codec) and the device it loaded
 // on. Like Kokoro it is single-owner: `busy` rejects a second concurrent op.
 struct QwenTtsWrapper {
-    std::unique_ptr<brosoundml::QwenTts> qwen;
+    std::shared_ptr<brosoundml::QwenTts> qwen;
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
-    std::atomic<bool> busy{false};
+    // shared_ptr so sessions share this exact gate with the model.
+    std::shared_ptr<std::atomic<bool>> busy =
+        std::make_shared<std::atomic<bool>>(false);
 };
+
+// ── Session wrappers (multi-voice / multi-stream over shared weights) ──
+// A Kokoro speaking handle bound to a Voice: brosoundml::KokoroSession holds the
+// model by shared_ptr<const Kokoro> internally; we add the shared busy gate +
+// device so session.synthesize() serializes with every other op on the model.
+struct KokoroSessionWrapper {
+    std::shared_ptr<std::atomic<bool>> busy;    // shared with the model + siblings
+    brotensor::Device                  device = brotensor::Device::CPU;
+    std::unique_ptr<brosoundml::KokoroSession> session;  // move-only; ctor needs model+voice
+};
+
+// A QwenTts voice session: its own Talker + Code Predictor AR scratch over the
+// shared weights. SERIALIZED tier — gated on the shared busy flag.
+struct QwenTtsSessionWrapper {
+    std::shared_ptr<brosoundml::QwenTts> model;
+    std::shared_ptr<std::atomic<bool>>   busy;
+    brotensor::Device                    device = brotensor::Device::CPU;
+    brosoundml::QwenTtsSession           session;
+};
+
+// createSession() factory methods, registered on the model classes below but
+// defined down in the session section (after the async-job structs they reuse).
+static JSValue js_kokoro_createSession(JSContext*, JSValueConst, int, JSValueConst*);
+static JSValue js_qwen_createSession(JSContext*, JSValueConst, int, JSValueConst*);
 
 // Standalone ECAPA-TDNN speaker encoder (bro.tts.loadSpeakerEncoder) — the
 // voice-clone enrollment front-end on its own, without loading all of Qwen-Base.
@@ -584,7 +619,8 @@ static void registerKokoroClass(JSContext* ctx) {
         .method_raw("synthesizeTraced", js_kokoro_synthesizeTraced, 3)
         .method_raw("decodeFrom",     js_kokoro_decodeFrom,     6)
         .method_raw("vocab",          js_kokoro_vocab,          0)
-        .method_raw("encodePhonemes", js_kokoro_encodePhonemes, 1);
+        .method_raw("encodePhonemes", js_kokoro_encodePhonemes, 1)
+        .method_raw("createSession",  js_kokoro_createSession,  1);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1080,7 +1116,8 @@ static void registerQwenClass(JSContext* ctx) {
         .method_raw("embedSpeaker",    js_qwen_embed_speaker,    2)
         .method_raw("speakers",       js_qwen_speakers,        0)
         .method_raw("languages",      js_qwen_languages,       0)
-        .method_raw("speakerDialect", js_qwen_speaker_dialect, 1);
+        .method_raw("speakerDialect", js_qwen_speaker_dialect, 1)
+        .method_raw("createSession",  js_qwen_createSession,   0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1690,7 +1727,7 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
 
     // Claim the model for this synthesis (single-owner; one in flight).
     bool expected = false;
-    if (!w->busy.compare_exchange_strong(expected, true)) {
+    if (!w->busy->compare_exchange_strong(expected, true)) {
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
             "synthesize: an operation is already in flight on this model");
@@ -1726,7 +1763,7 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
         // Release the model BEFORE invoking onDone so the callback may start the
         // next synth on this same model without tripping the in-flight guard.
-        mw->busy.store(false, std::memory_order_release);
+        mw->busy->store(false, std::memory_order_release);
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -1820,7 +1857,7 @@ static JSValue js_qwen_synthesize_stream(JSContext* ctx, int argc,
 
     // Claim the model for this synthesis (single-owner; one in flight).
     bool expected = false;
-    if (!w->busy.compare_exchange_strong(expected, true)) {
+    if (!w->busy->compare_exchange_strong(expected, true)) {
         JS_FreeValue(ctx, onChunk);
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
@@ -1879,7 +1916,7 @@ static JSValue js_qwen_synthesize_stream(JSContext* ctx, int argc,
     };
 
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
-        mw->busy.store(false, std::memory_order_release);
+        mw->busy->store(false, std::memory_order_release);
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -2003,7 +2040,7 @@ static JSValue js_kokoro_synthesize_stream(JSContext* ctx, int argc,
 
     // Claim the model for this synthesis (single-owner; one in flight).
     bool expected = false;
-    if (!w->busy.compare_exchange_strong(expected, true)) {
+    if (!w->busy->compare_exchange_strong(expected, true)) {
         JS_FreeValue(ctx, onChunk);
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
@@ -2066,7 +2103,7 @@ static JSValue js_kokoro_synthesize_stream(JSContext* ctx, int argc,
     };
 
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
-        mw->busy.store(false, std::memory_order_release);
+        mw->busy->store(false, std::memory_order_release);
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -2151,7 +2188,7 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
 
     // Claim the model for this synthesis (single-owner; one in flight).
     bool expected = false;
-    if (!w->busy.compare_exchange_strong(expected, true)) {
+    if (!w->busy->compare_exchange_strong(expected, true)) {
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
             "synthesize: an operation is already in flight on this model");
@@ -2194,7 +2231,7 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
         // guard (e.g. kokoro-lab's fast audio pass immediately chaining a trace
         // pass). The result's host data is already copied off `job`, so a new
         // op claiming the model can't disturb what onDone is reading here.
-        mw->busy.store(false, std::memory_order_release);
+        mw->busy->store(false, std::memory_order_release);
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -2289,7 +2326,7 @@ static JSValue js_kokoro_decodeFrom_async(JSContext* ctx, int argc,
 
     // Claim the model for this decode (single-owner; one in flight).
     bool expected = false;
-    if (!w->busy.compare_exchange_strong(expected, true)) {
+    if (!w->busy->compare_exchange_strong(expected, true)) {
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
             "decodeFrom: an operation is already in flight on this model");
@@ -2322,7 +2359,7 @@ static JSValue js_kokoro_decodeFrom_async(JSContext* ctx, int argc,
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
         // Release the model BEFORE onDone so the callback can immediately launch
         // the next decode of the latest edit without tripping the in-flight guard.
-        mw->busy.store(false, std::memory_order_release);
+        mw->busy->store(false, std::memory_order_release);
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -2361,6 +2398,297 @@ static JSValue js_tts_decodeFrom(JSContext* ctx, JSValueConst,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Multi-voice / multi-stream sessions — model.createSession() + session.*
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// One loaded model behind N per-stream sessions over ONE shared weight set — the
+// TTS analog of N wake detectors on one shared net (give N NPCs distinct voices
+// without N weight copies). session.synthesize(...) reuses the exact async-job
+// dispatch as the module-level bro.tts.synthesize(model, ...) (real cancellation,
+// onDone(result, info)) but drives the session's own scratch and claims the
+// model's SHARED busy gate. brosoundml's tier here is SHARED WEIGHTS / SERIALIZED
+// synthesis (one GPU stream, shared captured graph), so calls over one model —
+// module-level and any session — never overlap: a second in-flight op throws.
+// Sessions isolate the VOICE / AR scratch, not parallel execution; drive them
+// from one synth worker / queue (the NPC turn-taking pattern). Output is
+// bit-identical to the same call on a fresh model.
+
+// ── Kokoro session (bound voice) ──
+static KokoroSessionWrapper* kokoroSessionSelf(JSContext* ctx, JSValueConst v) {
+    return qjsbind::unwrap<KokoroSessionWrapper>(ctx, v);
+}
+
+// kokoro.createSession(voice) -> KokoroSession (an NPC speaking handle)
+static JSValue js_kokoro_createSession(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    auto* w = kokoroSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "createSession: not a Kokoro");
+    if (!w->kokoro || !w->kokoro->loaded())
+        return JS_ThrowInternalError(ctx, "createSession: model is not loaded");
+    auto* vw = (argc >= 1) ? qjsbind::unwrap<VoiceWrapper>(ctx, argv[0]) : nullptr;
+    if (!vw)
+        return JS_ThrowTypeError(ctx,
+            "createSession(voice): voice must be a Voice (loadVoice/createVoice)");
+    try {
+        brotensor::DeviceScope scope(w->device);
+        auto sw = std::make_unique<KokoroSessionWrapper>();
+        sw->busy    = w->busy;
+        sw->device  = w->device;
+        // KokoroSession holds the model by shared_ptr<const Kokoro> internally.
+        sw->session = std::make_unique<brosoundml::KokoroSession>(w->kokoro,
+                                                                  vw->voice);
+        return qjsbind::wrap<KokoroSessionWrapper>(ctx, sw.release());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "createSession: %s", e.what());
+    }
+}
+
+// session.synthesize(phonemeIds, opts?) -> AsyncHandle ({ samples, sampleRate,
+// durations, stages? }, info). The bound voice is supplied for you.
+static JSValue js_kokoro_session_synthesize(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* sw = kokoroSessionSelf(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "synthesize: not a KokoroSession");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx,
+            "synthesize(phonemeIds, opts?): phonemeIds required");
+
+    auto job = std::make_shared<TtsJob>();
+    job->ids = readIdArray(ctx, argv[0]);
+    if (job->ids.empty())
+        return JS_ThrowTypeError(ctx,
+            "synthesize: phonemeIds must be a non-empty Int32Array or number[]");
+
+    JSValue onDone = JS_UNDEFINED;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        getNum(ctx, argv[1], "speed", job->speed);
+        JSValue tv = JS_GetPropertyStr(ctx, argv[1], "trace");
+        job->wantTrace = JS_ToBool(ctx, tv) == 1;
+        JS_FreeValue(ctx, tv);
+        onDone = JS_GetPropertyStr(ctx, argv[1], "onDone");
+    }
+
+    bool expected = false;
+    if (!sw->busy->compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowInternalError(ctx,
+            "synthesize: an operation is already in flight on this model "
+            "(sessions over one model serialize — drive them from one queue)");
+    }
+
+    job->hasOnDone = JS_IsFunction(ctx, onDone);
+    job->onDone    = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->kokoroRef = JS_DupValue(ctx, this_val);  // keep the session (+ model + voice) alive
+    job->voiceRef  = JS_UNDEFINED;                 // voice is owned by the session
+    JS_FreeValue(ctx, onDone);
+
+    KokoroSessionWrapper* mw = sw;
+
+    auto work = [job, mw](const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(mw->device);
+        std::vector<int32_t> pred_dur;
+        auto buf = mw->session->synthesize(
+            job->ids, job->speed, &pred_dur,
+            [&cancel] {
+                return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+            },
+            job->wantTrace ? &job->trace : nullptr);
+        job->samples     = std::move(buf.samples);
+        job->sample_rate = buf.sample_rate;
+        job->durations   = std::move(pred_dur);
+    };
+
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        mw->busy->store(false, std::memory_order_release);
+        if (job->hasOnDone) {
+            JSValue result = JS_NewObject(c);
+            JS_SetPropertyStr(c, result, "samples",
+                qjsbind::make_float32_array(c, job->samples));
+            JS_SetPropertyStr(c, result, "sampleRate",
+                JS_NewInt32(c, job->sample_rate));
+            JS_SetPropertyStr(c, result, "durations",
+                qjsbind::make_int32_array(c, job->durations));
+            if (job->wantTrace && !cancelled && error.empty())
+                JS_SetPropertyStr(c, result, "stages",
+                    traceStagesToJs(c, job->trace));
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { result, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, result);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnDone) JS_FreeValue(c, job->onDone);
+        JS_FreeValue(c, job->kokoroRef);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// session.setVoice(voice) — re-skin this NPC without touching shared weights.
+static JSValue js_kokoro_session_setVoice(JSContext* ctx, JSValueConst this_val,
+                                          int argc, JSValueConst* argv) {
+    auto* sw = kokoroSessionSelf(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "setVoice: not a KokoroSession");
+    auto* vw = (argc >= 1) ? qjsbind::unwrap<VoiceWrapper>(ctx, argv[0]) : nullptr;
+    if (!vw)
+        return JS_ThrowTypeError(ctx, "setVoice(voice): voice must be a Voice");
+    if (sw->busy->load(std::memory_order_acquire))
+        return JS_ThrowInternalError(ctx, "setVoice: a synthesis is in flight on this model");
+    sw->session->set_voice(vw->voice);
+    return JS_UNDEFINED;
+}
+
+static void registerKokoroSessionClass(JSContext* ctx) {
+    qjsbind::Class<KokoroSessionWrapper>(ctx, "KokoroSession", qjsbind::NoGlobal)
+        .method_raw("synthesize", js_kokoro_session_synthesize, 2)
+        .method_raw("setVoice",   js_kokoro_session_setVoice,   1);
+}
+
+// ── QwenTts session ──
+static QwenTtsSessionWrapper* qwenSessionSelf(JSContext* ctx, JSValueConst v) {
+    return qjsbind::unwrap<QwenTtsSessionWrapper>(ctx, v);
+}
+
+// qwen.createSession() -> QwenTtsSession (own Talker + Code Predictor scratch)
+static JSValue js_qwen_createSession(JSContext* ctx, JSValueConst this_val,
+                                     int, JSValueConst*) {
+    auto* w = qwenSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "createSession: not a QwenTts");
+    if (!w->qwen || !w->qwen->loaded())
+        return JS_ThrowInternalError(ctx, "createSession: model is not loaded");
+    try {
+        brotensor::DeviceScope scope(w->device);
+        auto sw = std::make_unique<QwenTtsSessionWrapper>();
+        sw->model   = w->qwen;
+        sw->busy    = w->busy;
+        sw->device  = w->device;
+        sw->session = w->qwen->make_session();
+        return qjsbind::wrap<QwenTtsSessionWrapper>(ctx, sw.release());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "createSession: %s", e.what());
+    }
+}
+
+// session.synthesize(text, opts?) -> AsyncHandle ({ samples, sampleRate, stages? },
+// info). opts: speaker/language/instruct + sampling controls (incl. voiceSteer /
+// speakerVector for designed voices) + xvector (Base designer). Same opts as the
+// module-level bro.tts.synthesize(qwen, ...).
+static JSValue js_qwen_session_synthesize(JSContext* ctx, JSValueConst this_val,
+                                          int argc, JSValueConst* argv) {
+    auto* sw = qwenSessionSelf(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "synthesize: not a QwenTtsSession");
+    std::string text;
+    if (argc < 1 || !argStr(ctx, argv[0], text))
+        return JS_ThrowTypeError(ctx,
+            "synthesize(text, opts?): text string required");
+
+    auto job = std::make_shared<QwenSynthJob>();
+    job->text = std::move(text);
+
+    JSValue onDone = JS_UNDEFINED;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        readQwenSynthOpts(ctx, argv[1], job->speaker, job->language, job->instruct);
+        readQwenSampling(ctx, argv[1], job->sampling);
+        job->wantTrace = getBool(ctx, argv[1], "trace");
+        JSValue xv = JS_GetPropertyStr(ctx, argv[1], "xvector");
+        if (!JS_IsUndefined(xv) && !JS_IsNull(xv))
+            job->xvector = qjsbind::read_float32_array(ctx, xv);
+        JS_FreeValue(ctx, xv);
+        onDone = JS_GetPropertyStr(ctx, argv[1], "onDone");
+    }
+
+    bool expected = false;
+    if (!sw->busy->compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowInternalError(ctx,
+            "synthesize: an operation is already in flight on this model "
+            "(sessions over one model serialize — drive them from one queue)");
+    }
+
+    job->hasOnDone = JS_IsFunction(ctx, onDone);
+    job->onDone    = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->qwenRef   = JS_DupValue(ctx, this_val);  // keep the session (+ model) alive
+    JS_FreeValue(ctx, onDone);
+
+    QwenTtsSessionWrapper* mw = sw;
+
+    auto work = [job, mw](const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(mw->device);
+        auto cancelFn = [&cancel] {
+            return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
+        };
+        brosoundml::AudioBuffer buf;
+        if (!job->xvector.empty())
+            buf = mw->model->synthesize_with_xvector(
+                mw->session, job->text, job->xvector, job->language, cancelFn,
+                job->sampling, job->wantTrace ? &job->trace : nullptr);
+        else
+            buf = mw->model->synthesize(
+                mw->session, job->text, job->speaker, job->language, job->instruct,
+                cancelFn, job->sampling, job->wantTrace ? &job->trace : nullptr);
+        job->samples     = std::move(buf.samples);
+        job->sample_rate = buf.sample_rate;
+    };
+
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        mw->busy->store(false, std::memory_order_release);
+        if (job->hasOnDone) {
+            JSValue result = JS_NewObject(c);
+            JS_SetPropertyStr(c, result, "samples",
+                qjsbind::make_float32_array(c, job->samples));
+            JS_SetPropertyStr(c, result, "sampleRate",
+                JS_NewInt32(c, job->sample_rate));
+            if (job->wantTrace)
+                JS_SetPropertyStr(c, result, "stages", qwenTraceToJs(c, job->trace));
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { result, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, result);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnDone) JS_FreeValue(c, job->onDone);
+        JS_FreeValue(c, job->qwenRef);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// session.reset() — zero the session's AR scratch (drops its captured graphs).
+static JSValue js_qwen_session_reset(JSContext* ctx, JSValueConst this_val,
+                                     int, JSValueConst*) {
+    auto* sw = qwenSessionSelf(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "reset: not a QwenTtsSession");
+    if (sw->busy->load(std::memory_order_acquire))
+        return JS_ThrowInternalError(ctx, "reset: a synthesis is in flight on this model");
+    try {
+        brotensor::DeviceScope scope(sw->device);
+        sw->model->reset(sw->session);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "reset: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+static void registerQwenSessionClass(JSContext* ctx) {
+    qjsbind::Class<QwenTtsSessionWrapper>(ctx, "QwenTtsSession", qjsbind::NoGlobal)
+        .get("loaded",  [](QwenTtsSessionWrapper* w) { return w->model && w->model->loaded(); })
+        .get("variant", [](QwenTtsSessionWrapper* w) {
+            return std::string(qwenVariantName(w->model->config().variant)); })
+        .method_raw("synthesize", js_qwen_session_synthesize, 2)
+        .method_raw("reset",      js_qwen_session_reset,      0);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Install
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -2369,6 +2697,8 @@ void installTtsBindings(JSContext* ctx) {
     registerKokoroClass(ctx);
     registerQwenClass(ctx);
     registerSpeakerEncoderClass(ctx);
+    registerKokoroSessionClass(ctx);
+    registerQwenSessionClass(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");

@@ -401,3 +401,57 @@ bro.mic.start({ chunkFrames: 160, onChunk: (chunk) => {
         // hand `rows` to a downstream decoder bridge
     }
 }});
+
+/**
+ * ── Multi-stream sessions (load-once weights, N decode streams) ──────────────
+ *
+ * model.createSession() turns one loaded model into N independent transcription
+ * streams over ONE shared weight set — the STT analog of N wake detectors on a
+ * single shared net. Each session owns its own decode state (Whisper/QwenAsr KV
+ * cache; Parakeet TDT prediction state); the immutable weights stay read-only in
+ * the model. Use it to transcribe several mic / system / per-NPC streams without
+ * copying the weights once per stream.
+ *
+ * Concurrency: SERIALIZED, INDEPENDENT STATE. Every inference over one model —
+ * the module-level bro.stt.transcribe(model, ...) AND each session.transcribe()
+ * — shares a single in-flight gate, because the GPU runs one stream and the
+ * captured decoder step-graph is shared across sessions of a model. A second
+ * call while one is in flight throws ("an operation is already in flight on this
+ * model"); drive the streams from one worker / queue (run them back-to-back, or
+ * await each onDone before starting the next). Sessions isolate STATE, not
+ * parallel execution — but a session's transcript is bit-identical to the same
+ * call on a fresh model, so interleaving streams never cross-talks.
+ *
+ * The model handle may be dropped while a session is still alive — the session
+ * keeps the weights (and the shared gate) alive on its own.
+ *
+ * @method Whisper#createSession() → WhisperSession
+ * @method Parakeet#createSession() → ParakeetSession
+ * @method QwenAsr#createSession() → QwenAsrSession
+ *
+ * Each session is driven with the SAME async dispatch as bro.stt.transcribe:
+ * @method WhisperSession#transcribe(audio, promptIds, opts?) → AsyncHandle
+ *         opts: { maxNewTokens, timestampBeginId, onToken(id), onDone(ids, info) }.
+ * @method ParakeetSession#transcribe(audio, opts?) → AsyncHandle
+ *         opts: { maxNewTokens, onToken(id), onDone({tokenIds,tokenFrames}, info) }.
+ * @method QwenAsrSession#transcribe(audio, opts?) → AsyncHandle
+ *         opts: { maxNewTokens, contextIds, onToken(id), onDone(ids, info) }.
+ *         AsyncHandle.cancel() aborts the in-flight decode; info = { cancelled,
+ *         error? }. The session methods are async only (the streaming path).
+ * @method *Session#reset()
+ *         Clear the session's decode state for a fresh, unrelated clip. Throws
+ *         if a transcribe is in flight on the model.
+ * @property *Session.loaded {boolean}
+ */
+// Two NPC mics transcribed over ONE Parakeet weight set, driven serially:
+const parakeet = bro.stt.loadParakeet('../brosoundml/weights/parakeet');
+const tok      = bro.stt.loadParakeetTokenizer('../brosoundml/weights/parakeet/tokenizer.json');
+const sessionA = parakeet.createSession();   // stream A's TDT state
+const sessionB = parakeet.createSession();   // stream B's TDT state — independent
+sessionA.transcribe(clipA, { onDone(a) {
+    console.log('A:', tok.decode(Array.from(a.tokenIds)));
+    // start B only after A finishes (one model = one in-flight op)
+    sessionB.transcribe(clipB, { onDone(b) {
+        console.log('B:', tok.decode(Array.from(b.tokenIds)));
+    }});
+}});

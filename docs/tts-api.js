@@ -519,3 +519,59 @@ bro.tts.synthesizeStream(kokoro, kchunks, voice, {
     onChunk: (samples, durations) => { /* play this clause now; durations aligns its words */ },
     onDone:  (result, info) => { if (!info.cancelled && !info.error) console.log('full', result.samples.length); },
 });
+
+/**
+ * ── Multi-voice / multi-stream sessions (load-once weights, N voices) ─────────
+ *
+ * model.createSession() turns one loaded model into N independent speaking
+ * handles over ONE shared weight set — give N NPCs distinct voices without
+ * copying the ~82M (Kokoro) / multi-GB (Qwen3-TTS) weights once per NPC. Kokoro
+ * sessions bind a Voice; Qwen3-TTS sessions own their own Talker + Code Predictor
+ * AR scratch and pick the voice per-call (preset speaker / instruct / x-vector).
+ *
+ * Concurrency: SERIALIZED, INDEPENDENT STATE. Every synthesis over one model —
+ * the module-level bro.tts.synthesize(model, ...) AND each session.synthesize()
+ * — shares a single in-flight gate, because the GPU runs one stream and the
+ * captured synthesis graph / step buffers are shared across sessions. A second
+ * call while one is in flight throws ("an operation is already in flight on this
+ * model"); drive the voices from one synth worker / queue (the NPC turn-taking
+ * pattern — await each onDone, or chain them). Sessions isolate the VOICE / AR
+ * scratch, not parallel execution; output is bit-identical to the same call on a
+ * fresh model. The model handle may be dropped while a session is alive — the
+ * session keeps the weights (and the shared gate) alive on its own.
+ *
+ * @method Kokoro#createSession(voice) → KokoroSession   (an NPC bound to a voice)
+ * @method KokoroSession#synthesize(phonemeIds, opts?) → AsyncHandle
+ *         opts: { speed, trace, onDone(result, info) }; result = { samples,
+ *         sampleRate, durations, stages? }, info = { cancelled, error? }. The
+ *         bound voice is supplied for you. AsyncHandle.cancel() aborts synthesis.
+ * @method KokoroSession#setVoice(voice)   Re-skin this NPC (shares weights).
+ *
+ * @method QwenTts#createSession() → QwenTtsSession
+ * @method QwenTtsSession#synthesize(text, opts?) → AsyncHandle
+ *         Same opts as bro.tts.synthesize(qwen, ...): { speaker, language,
+ *         instruct, temperature, topK, topP, seed, repetitionPenalty, logitBias,
+ *         voiceSteer, speakerVector, xvector, trace, onDone(result, info) }.
+ *         result = { samples, sampleRate, stages? }, info = { cancelled, error? }.
+ * @method QwenTtsSession#reset()   Zero the AR scratch (drops captured graphs).
+ * @property QwenTtsSession.loaded {boolean}
+ * @property QwenTtsSession.variant {string}
+ */
+// Three NPCs, three voices, ONE Kokoro weight set — spoken one at a time:
+const kok   = bro.tts.loadKokoro('../brosoundml/weights/kokoro');
+const vA = kok.loadVoice('../brosoundml-data/kokoro/voices/af_heart.bin');
+const vB = kok.loadVoice('../brosoundml-data/kokoro/voices/am_michael.bin');
+const heart   = kok.createSession(vA);   // NPC "Heart"
+const michael = kok.createSession(vB);   // NPC "Michael" — distinct voice, shared net
+const line = bro.tts.phonemize('Hello there, traveller.');
+heart.synthesize(line, { onDone(a) {
+    // play a.samples … then the next NPC speaks (one model = one in-flight op)
+    michael.synthesize(line, { onDone(b) { /* play b.samples */ } });
+}});
+
+// Qwen3-TTS — two CustomVoice NPCs over one weight set, turn by turn:
+const qtts = bro.tts.loadQwen('../brosoundml/weights/qwen-tts');
+const s1 = qtts.createSession(), s2 = qtts.createSession();
+s1.synthesize('Halt! Who goes there?', { speaker: 'serena', onDone() {
+    s2.synthesize('A friend.', { speaker: 'ethan' });
+}});
