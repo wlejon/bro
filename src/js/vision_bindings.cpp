@@ -35,6 +35,8 @@
 #include <brovisionml/segformer.h>
 #include <brovisionml/birefnet.h>
 #include <brovisionml/stylegan3.h>
+#include <brovisionml/dinov2.h>
+#include <brovisionml/dinov3.h>
 
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
@@ -225,6 +227,57 @@ static JSValue makeUint8Array(JSContext* ctx, const std::uint8_t* d, size_t n) {
     JSValue ta = JS_NewTypedArray(ctx, 1, a, JS_TYPED_ARRAY_UINT8);
     JS_FreeValue(ctx, ab);
     return ta;
+}
+
+// Download a tensor's contents to a host FP32 vector, converting from FP16 if a
+// GPU backend left it half-precision. The DINOv2/DINOv3 backbones return their
+// final-LayerNorm output FP32 even on GPU, but handle FP16 defensively.
+static std::vector<float> downloadF32(const brotensor::Tensor& t) {
+    if (t.dtype == brotensor::Dtype::FP16) {
+        std::vector<std::uint16_t> bits = t.to_host_vector_fp16();
+        std::vector<float> out(bits.size());
+        for (std::size_t i = 0; i < bits.size(); ++i)
+            out[i] = brotensor::fp16_bits_to_fp32(bits[i]);
+        return out;
+    }
+    return t.to_host_vector();
+}
+
+// Resize an RGBA8 image to size×size (bilinear stretch), normalize each channel
+// with the ImageNet mean/std DINOv2 and DINOv3 both expect, and write planar
+// NCHW FP32 (3*size*size). Aspect ratio is not preserved — the source is
+// stretched to the square the backbone consumes.
+static void dinoPreprocess(const std::vector<std::uint8_t>& rgba, int w, int h,
+                           int size, std::vector<float>& nchw) {
+    static const float kMean[3] = {0.485f, 0.456f, 0.406f};
+    static const float kStd[3]  = {0.229f, 0.224f, 0.225f};
+    const std::size_t plane = static_cast<std::size_t>(size) * size;
+    nchw.assign(plane * 3, 0.0f);
+    auto px = [&](int x, int y, int c) -> float {
+        x = std::clamp(x, 0, w - 1);
+        y = std::clamp(y, 0, h - 1);
+        return static_cast<float>(rgba[(static_cast<std::size_t>(y) * w + x) * 4 + c]);
+    };
+    const float sx = static_cast<float>(w) / size;
+    const float sy = static_cast<float>(h) / size;
+    for (int ty = 0; ty < size; ++ty) {
+        for (int tx = 0; tx < size; ++tx) {
+            const float fx = (tx + 0.5f) * sx - 0.5f;
+            const float fy = (ty + 0.5f) * sy - 0.5f;
+            const int ix = static_cast<int>(std::floor(fx));
+            const int iy = static_cast<int>(std::floor(fy));
+            const float ax = fx - ix, ay = fy - iy;
+            for (int c = 0; c < 3; ++c) {
+                const float c00 = px(ix, iy, c),     c10 = px(ix + 1, iy, c);
+                const float c01 = px(ix, iy + 1, c), c11 = px(ix + 1, iy + 1, c);
+                const float v = (c00 * (1 - ax) + c10 * ax) * (1 - ay) +
+                                (c01 * (1 - ax) + c11 * ax) * ay;
+                nchw[static_cast<std::size_t>(c) * plane +
+                     static_cast<std::size_t>(ty) * size + tx] =
+                    (v / 255.0f - kMean[c]) / kStd[c];
+            }
+        }
+    }
 }
 
 // Min-max normalize a scalar map to a grayscale ImageBitmap. `invert` flips so
@@ -2176,6 +2229,281 @@ static JSValue js_loadStyleGAN3(JSContext* ctx, JSValueConst, int argc,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// DINOv2 backbone — bro.vision.loadDinov2 / Dinov2Backbone.encode
+//
+// The ViT feature extractor behind Depth-Anything-V2, exposed standalone for raw
+// patch features. encode() returns the four DPT-stage hidden states (each the
+// backbone's final-LayerNorm output, row 0 = cls token).
+// ═══════════════════════════════════════════════════════════════════════════
+
+struct VisionDinov2Wrapper {
+    std::unique_ptr<brovisionml::dinov2::Backbone> net;
+    brotensor::Device device = brotensor::Device::CPU;
+    int size = 518;                  // default square encode resolution (img_size)
+    std::atomic<bool> busy{false};
+};
+
+static brovisionml::dinov2::Config dinov2ConfigForVariant(const std::string& v) {
+    if (v == "base"  || v == "vit_b") return brovisionml::dinov2::Config::vit_b();
+    if (v == "large" || v == "vit_l") return brovisionml::dinov2::Config::vit_l();
+    return brovisionml::dinov2::Config::vit_s();   // 'small' (default)
+}
+
+struct Dinov2Job {
+    VisionDinov2Wrapper*      w = nullptr;
+    std::vector<std::uint8_t> rgba;
+    int in_w = 0, in_h = 0;
+    int size = 0;
+    brovisionml::dinov2::BackboneOutput out;
+    JSValue selfRef = JS_UNDEFINED;
+};
+
+// Dinov2Backbone.encode(image, opts?) → result | AsyncHandle
+//   opts.size: square input side (multiple of patchSize; default the model's
+//              img_size). The image is bilinear-stretched to size×size.
+//   result: { features: [Float32Array(tokens*dim) per stage], stages: [3,6,9,12],
+//             tokens, dim, patchH, patchW, numPrefixTokens: 1 }
+static JSValue js_dinov2_encode(JSContext* ctx, JSValueConst this_val,
+                                int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<VisionDinov2Wrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "encode: not a Dinov2Backbone");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "encode(image, opts?): image required");
+
+    JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    int size = w->size;
+    getInt(ctx, opts, "size", size);
+    const int ps = w->net->config().patch_size;
+    if (size <= 0 || size % ps != 0)
+        return JS_ThrowTypeError(ctx,
+            "encode: opts.size must be a positive multiple of %d", ps);
+
+    auto job = std::make_shared<Dinov2Job>();
+    job->size = size;
+    JSValue thrown;
+    if (!prepDetect(ctx, this_val, w, argv[0], *job, "encode", thrown))
+        return thrown;
+    JSValue onDone = getOnDone(ctx, opts);
+
+    auto compute = [job](const std::atomic<bool>&) {
+        std::vector<float> nchw;
+        dinoPreprocess(job->rgba, job->in_w, job->in_h, job->size, nchw);
+        brotensor::DeviceScope scope(job->w->device);
+        brotensor::Tensor px = brotensor::Tensor::from_host_on(
+            job->w->device, nchw.data(), 1,
+            3 * job->size * job->size);
+        job->out = job->w->net->encode(px, job->size, job->size);
+    };
+    auto build = [job](JSContext* c) -> JSValue {
+        const auto& o = job->out;
+        JSValue feats = JS_NewArray(c);
+        int tokens = 0, dim = 0;
+        for (std::uint32_t i = 0; i < o.feature_maps.size(); ++i) {
+            std::vector<float> f = downloadF32(o.feature_maps[i]);
+            tokens = o.feature_maps[i].rows;
+            dim    = o.feature_maps[i].cols;
+            JS_SetPropertyUint32(c, feats, i, qjsbind::make_float32_array(c, f));
+        }
+        JSValue stages = JS_NewArray(c);
+        const auto& si = job->w->net->config().out_stages;
+        for (std::uint32_t i = 0; i < si.size(); ++i)
+            JS_SetPropertyUint32(c, stages, i, JS_NewInt32(c, si[i]));
+        JSValue res = JS_NewObject(c);
+        JS_SetPropertyStr(c, res, "features", feats);
+        JS_SetPropertyStr(c, res, "stages",  stages);
+        JS_SetPropertyStr(c, res, "tokens",  JS_NewInt32(c, tokens));
+        JS_SetPropertyStr(c, res, "dim",     JS_NewInt32(c, dim));
+        JS_SetPropertyStr(c, res, "patchH",  JS_NewInt32(c, o.patch_h));
+        JS_SetPropertyStr(c, res, "patchW",  JS_NewInt32(c, o.patch_w));
+        JS_SetPropertyStr(c, res, "numPrefixTokens", JS_NewInt32(c, 1));
+        return res;
+    };
+    JSValue r = runVisionOp(ctx, onDone, std::move(compute), std::move(build),
+                            makeRelease(ctx, job));
+    JS_FreeValue(ctx, onDone);
+    return r;
+}
+
+static void registerDinov2Class(JSContext* ctx) {
+    qjsbind::Class<VisionDinov2Wrapper>(ctx, "Dinov2Backbone", qjsbind::NoGlobal)
+        .get("device", [](VisionDinov2Wrapper* w) {
+            return std::string(deviceName(w->device));
+        })
+        .get("patchSize", [](VisionDinov2Wrapper* w) {
+            return w->net->config().patch_size;
+        })
+        .get("embedDim", [](VisionDinov2Wrapper* w) {
+            return w->net->config().embed_dim;
+        })
+        .get("defaultSize", [](VisionDinov2Wrapper* w) { return w->size; })
+        .method_raw("encode", js_dinov2_encode, 2);
+}
+
+// bro.vision.loadDinov2(modelDir, opts?) → Dinov2Backbone | AsyncHandle
+//   modelDir holds model.safetensors (the `backbone.` namespace of an HF
+//   DepthAnythingForDepthEstimation / Dinov2 checkpoint).
+//   opts.variant: 'small' (default) | 'base' | 'large'
+//   opts.device / opts.onReady / opts.onError: as the other loaders.
+static JSValue js_loadDinov2(JSContext* ctx, JSValueConst, int argc,
+                             JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadDinov2(modelDir, opts?): path required");
+    JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    brotensor::Device dev; JSValue thrown;
+    if (!resolveDevice(ctx, "loadDinov2", opts, dev, thrown)) return thrown;
+    std::string variant = "small";
+    getStr(ctx, opts, "variant", variant);
+    const brovisionml::dinov2::Config cfg = dinov2ConfigForVariant(variant);
+    return loadModel<VisionDinov2Wrapper>(ctx, "loadDinov2", opts,
+        [dir, dev, cfg, variant]() {
+            auto w = std::make_unique<VisionDinov2Wrapper>();
+            w->device = dev;
+            w->size   = cfg.img_size;
+            w->net = std::make_unique<brovisionml::dinov2::Backbone>(cfg);
+            brotensor::DeviceScope scope(dev);
+            w->net->load(dir);
+            w->net->to(dev);
+            std::fprintf(stderr, "[INFO] [vision] DINOv2 (%s) loaded on %s\n",
+                         variant.c_str(), deviceName(dev));
+            return w;
+        });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// DINOv3 backbone — bro.vision.loadDinov3 / Dinov3Backbone.encode
+//
+// The ViT feature extractor behind TripoSplat, exposed standalone. Sequence is
+// [cls, register×4, patch tokens]; encode() returns the single final hidden
+// state (final LayerNorm applied), the same entry points TripoSplat drives.
+// ═══════════════════════════════════════════════════════════════════════════
+
+struct VisionDinov3Wrapper {
+    std::unique_ptr<brovisionml::dinov3::Backbone> net;
+    brotensor::Device device = brotensor::Device::CPU;
+    int size = 224;                  // default square encode resolution (img_size)
+    std::atomic<bool> busy{false};
+};
+
+struct Dinov3Job {
+    VisionDinov3Wrapper*      w = nullptr;
+    std::vector<std::uint8_t> rgba;
+    int in_w = 0, in_h = 0;
+    int size = 0;
+    brovisionml::dinov3::BackboneOutput out;
+    JSValue selfRef = JS_UNDEFINED;
+};
+
+// Dinov3Backbone.encode(image, opts?) → result | AsyncHandle
+//   opts.size: square input side (multiple of patchSize=16; default 224). The
+//              image is bilinear-stretched to size×size.
+//   result: { features: Float32Array(tokens*dim), tokens, dim, patchH, patchW,
+//             numPrefixTokens }  — rows [0,numPrefixTokens) are cls+register
+//             tokens, the rest patch tokens in row-major order.
+static JSValue js_dinov3_encode(JSContext* ctx, JSValueConst this_val,
+                                int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<VisionDinov3Wrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "encode: not a Dinov3Backbone");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "encode(image, opts?): image required");
+
+    JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    int size = w->size;
+    getInt(ctx, opts, "size", size);
+    const int ps = w->net->config().patch_size;
+    if (size <= 0 || size % ps != 0)
+        return JS_ThrowTypeError(ctx,
+            "encode: opts.size must be a positive multiple of %d", ps);
+
+    auto job = std::make_shared<Dinov3Job>();
+    job->size = size;
+    JSValue thrown;
+    if (!prepDetect(ctx, this_val, w, argv[0], *job, "encode", thrown))
+        return thrown;
+    JSValue onDone = getOnDone(ctx, opts);
+
+    auto compute = [job](const std::atomic<bool>&) {
+        std::vector<float> nchw;
+        dinoPreprocess(job->rgba, job->in_w, job->in_h, job->size, nchw);
+        brotensor::DeviceScope scope(job->w->device);
+        brotensor::Tensor px = brotensor::Tensor::from_host_on(
+            job->w->device, nchw.data(), 1,
+            3 * job->size * job->size);
+        job->out = job->w->net->encode(px, job->size, job->size);
+    };
+    auto build = [job](JSContext* c) -> JSValue {
+        const auto& o = job->out;
+        std::vector<float> f = downloadF32(o.last_hidden_state);
+        JSValue res = JS_NewObject(c);
+        JS_SetPropertyStr(c, res, "features",
+            qjsbind::make_float32_array(c, f));
+        JS_SetPropertyStr(c, res, "tokens",  JS_NewInt32(c, o.last_hidden_state.rows));
+        JS_SetPropertyStr(c, res, "dim",     JS_NewInt32(c, o.last_hidden_state.cols));
+        JS_SetPropertyStr(c, res, "patchH",  JS_NewInt32(c, o.patch_h));
+        JS_SetPropertyStr(c, res, "patchW",  JS_NewInt32(c, o.patch_w));
+        JS_SetPropertyStr(c, res, "numPrefixTokens",
+            JS_NewInt32(c, o.num_prefix_tokens));
+        return res;
+    };
+    JSValue r = runVisionOp(ctx, onDone, std::move(compute), std::move(build),
+                            makeRelease(ctx, job));
+    JS_FreeValue(ctx, onDone);
+    return r;
+}
+
+static void registerDinov3Class(JSContext* ctx) {
+    qjsbind::Class<VisionDinov3Wrapper>(ctx, "Dinov3Backbone", qjsbind::NoGlobal)
+        .get("device", [](VisionDinov3Wrapper* w) {
+            return std::string(deviceName(w->device));
+        })
+        .get("patchSize", [](VisionDinov3Wrapper* w) {
+            return w->net->config().patch_size;
+        })
+        .get("embedDim", [](VisionDinov3Wrapper* w) {
+            return w->net->config().embed_dim;
+        })
+        .get("numRegisterTokens", [](VisionDinov3Wrapper* w) {
+            return w->net->config().num_register_tokens;
+        })
+        .get("defaultSize", [](VisionDinov3Wrapper* w) { return w->size; })
+        .method_raw("encode", js_dinov3_encode, 2);
+}
+
+// bro.vision.loadDinov3(modelPath, opts?) → Dinov3Backbone | AsyncHandle
+//   modelPath is either the `dino_v3_vit_h.safetensors` file (the VAST-AI/
+//   TripoSplat bundle) or a directory containing it — the same checkpoint and
+//   entry points bro.triposplat loads.
+//   opts.device / opts.onReady / opts.onError: as the other loaders.
+static JSValue js_loadDinov3(JSContext* ctx, JSValueConst, int argc,
+                             JSValueConst* argv) {
+    std::string path;
+    if (argc < 1 || !argStr(ctx, argv[0], path))
+        return JS_ThrowTypeError(ctx, "loadDinov3(modelPath, opts?): path required");
+    JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    brotensor::Device dev; JSValue thrown;
+    if (!resolveDevice(ctx, "loadDinov3", opts, dev, thrown)) return thrown;
+    return loadModel<VisionDinov3Wrapper>(ctx, "loadDinov3", opts,
+        [path, dev]() {
+            auto w = std::make_unique<VisionDinov3Wrapper>();
+            w->device = dev;
+            const brovisionml::dinov3::Config cfg =
+                brovisionml::dinov3::Config::vit_h();
+            w->size = cfg.img_size;
+            w->net = std::make_unique<brovisionml::dinov3::Backbone>(cfg);
+            brotensor::DeviceScope scope(dev);
+            const std::string ext = ".safetensors";
+            const bool isFile = path.size() >= ext.size() &&
+                path.compare(path.size() - ext.size(), ext.size(), ext) == 0;
+            if (isFile) w->net->load_file(path);
+            else        w->net->load(path);
+            w->net->to(dev);
+            std::fprintf(stderr, "[INFO] [vision] DINOv3 ViT-H loaded on %s\n",
+                         deviceName(dev));
+            return w;
+        });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // bro.vision free functions + install
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -2199,6 +2527,8 @@ void installVisionBindings(JSContext* ctx) {
     registerSegformerClass(ctx);
     registerBirefnetClass(ctx);
     registerStyleGAN3Class(ctx);
+    registerDinov2Class(ctx);
+    registerDinov3Class(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
@@ -2231,6 +2561,10 @@ void installVisionBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadBirefnet, "loadBirefnet", 2));
     JS_SetPropertyStr(ctx, vision, "loadStyleGAN3",
         JS_NewCFunction(ctx, js_loadStyleGAN3, "loadStyleGAN3", 2));
+    JS_SetPropertyStr(ctx, vision, "loadDinov2",
+        JS_NewCFunction(ctx, js_loadDinov2, "loadDinov2", 2));
+    JS_SetPropertyStr(ctx, vision, "loadDinov3",
+        JS_NewCFunction(ctx, js_loadDinov3, "loadDinov3", 2));
     JS_SetPropertyStr(ctx, broObj, "vision", vision);
 
     JS_FreeValue(ctx, broObj);

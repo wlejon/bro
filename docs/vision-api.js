@@ -314,6 +314,75 @@ const mid = gan.synthesize(someWPlus);   // mid.image
 const rec = gan.invert(photo256, { steps: 300 });   // rec.image, rec.w, rec.loss
 
 
+// ── DINOv2 backbone (raw ViT features) ───────────────────────────────────────
+
+/**
+ * Load the DINOv2 ViT feature-extractor backbone — the image encoder behind
+ * Depth-Anything-V2, exposed standalone for raw patch features. Reads
+ * `model.safetensors` from the dir (the `backbone.` namespace of an HF
+ * DepthAnythingForDepthEstimation / DINOv2 checkpoint).
+ * @param {string} dir
+ * @param {Object} [opts]
+ * @param {string} [opts.variant='small']  'small' | 'base' | 'large'
+ * @param {string} [opts.device='cuda']    'cuda' | 'cpu'
+ * @param {function} [opts.onReady]         async load: onReady(backbone)
+ * @param {function} [opts.onError]         async load: onError(message)
+ * @returns {Dinov2Backbone|AsyncHandle}
+ */
+bro.vision.loadDinov2(dir, opts);
+
+/**
+ * Dinov2Backbone.encode(image, opts?) — run the backbone and return the four
+ * DPT-stage hidden states (HF Dinov2Backbone out_features stage3/6/9/12). Each
+ * feature map has the backbone's final LayerNorm applied; token row 0 is the
+ * cls token, the rest are patch tokens in row-major (h-major) order.
+ * @param {ImageBitmap|{data,width,height}} image  RGBA source (stretched to a square)
+ * @param {Object} [opts]
+ * @param {number}   [opts.size]    square input side, multiple of patchSize (default img_size, 518)
+ * @param {function} [opts.onDone]  run async — onDone(result, info)
+ * @returns {{ features: Float32Array[], stages: number[], tokens: number,
+ *             dim: number, patchH: number, patchW: number, numPrefixTokens: 1 }}
+ *   `features[i]` is the (tokens*dim) stage map for `stages[i]`; tokens =
+ *   1 + patchH*patchW.
+ * Properties: `device`, `patchSize`, `embedDim`, `defaultSize`.
+ */
+const d2 = bro.vision.loadDinov2('weights/Depth-Anything-V2-Small');
+const f2 = d2.encode(photo);          // f2.features[3] = last-stage (tokens*dim)
+
+
+// ── DINOv3 backbone (raw ViT features) ───────────────────────────────────────
+
+/**
+ * Load the DINOv3 ViT-H backbone — the image encoder behind TripoSplat, exposed
+ * standalone. `modelPath` is the `dino_v3_vit_h.safetensors` file (or a dir
+ * containing it); the same checkpoint and entry points bro.triposplat drives.
+ * @param {string} modelPath
+ * @param {Object} [opts]
+ * @param {string} [opts.device='cuda']    'cuda' | 'cpu'
+ * @param {function} [opts.onReady]         async load: onReady(backbone)
+ * @param {function} [opts.onError]         async load: onError(message)
+ * @returns {Dinov3Backbone|AsyncHandle}
+ */
+bro.vision.loadDinov3(modelPath, opts);
+
+/**
+ * Dinov3Backbone.encode(image, opts?) — run the backbone and return the single
+ * final hidden state (final LayerNorm applied). The token sequence is
+ * [cls, register×4, patch tokens]: rows [0, numPrefixTokens) are the cls +
+ * register tokens, the rest patch tokens in row-major order.
+ * @param {ImageBitmap|{data,width,height}} image  RGBA source (stretched to a square)
+ * @param {Object} [opts]
+ * @param {number}   [opts.size]    square input side, multiple of patchSize=16 (default 224)
+ * @param {function} [opts.onDone]  run async — onDone(result, info)
+ * @returns {{ features: Float32Array, tokens: number, dim: number,
+ *             patchH: number, patchW: number, numPrefixTokens: number }}
+ *   `features` is the (tokens*dim) map; tokens = numPrefixTokens + patchH*patchW.
+ * Properties: `device`, `patchSize`, `embedDim`, `numRegisterTokens`, `defaultSize`.
+ */
+const d3 = bro.vision.loadDinov3('weights/triposplat/clip_vision/dino_v3_vit_h.safetensors');
+const f3 = d3.encode(photo, { size: 224 });   // f3.features = (tokens*dim) patch features
+
+
 // ── Pipe an annotator into bro.diffusion ─────────────────────────────────────
 //
 // The five ControlNet annotators produce conditioning images that feed
