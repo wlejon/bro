@@ -112,6 +112,11 @@ struct ConstraintOptions {
         Fixed,
         Slider,
         Wheel,    // Box2D-style: suspension axis (slider + spring) + wheel pin (hinge + motor)
+        Cone,            // point + limited swing about a twist axis (e.g. ragdoll shoulder)
+        SwingTwist,      // ragdoll joint: independent swing-Y/swing-Z cone + twist limits
+        Pulley,          // rope over two fixed pivots: len(b1..f1) + ratio*len(b2..f2) constrained
+        Gear,            // couples the rotation of two hinge constraints by a gear ratio
+        RackAndPinion,   // couples a hinge (pinion) to a slider (rack) by a ratio
     };
     Type type = Distance;
     JPH::BodyID body1;
@@ -148,6 +153,36 @@ struct ConstraintOptions {
     bool  wheelEnableMotor = false;
     float wheelMotorSpeed = 0.0f;             // rad/s
     float wheelMaxMotorTorque = 0.0f;         // N·m
+
+    // --- Cone (uses point1/point2 as the pivot, `axis` as the twist axis) ---
+    float coneHalfAngle = 0.0f;               // max swing half-angle (radians)
+
+    // --- SwingTwist (uses point1/point2 as the pivot, `axis` as the twist axis) ---
+    JPH::Vec3 planeAxis{0, 1, 0};             // swing plane axis (world; ⟂ to twist axis)
+    float normalHalfConeAngle = 0.0f;         // swing-Y half-angle (radians)
+    float planeHalfConeAngle = 0.0f;          // swing-Z half-angle (radians)
+    float twistMinAngle = 0.0f;               // radians, [-π, π]
+    float twistMaxAngle = 0.0f;               // radians, [-π, π]
+    float maxFrictionTorque = 0.0f;           // N·m friction when unpowered
+
+    // --- Pulley ---
+    JPH::RVec3 bodyPoint1{0, 0, 0};           // attachment on body1 (world)
+    JPH::RVec3 fixedPoint1{0, 0, 0};          // fixed pivot 1 (world)
+    JPH::RVec3 bodyPoint2{0, 0, 0};           // attachment on body2 (world)
+    JPH::RVec3 fixedPoint2{0, 0, 0};          // fixed pivot 2 (world)
+    float ratio = 1.0f;                       // pulley/gear/rack ratio
+    float minLength = 0.0f;                   // pulley min total length (<0 = current)
+    float maxLength = -1.0f;                  // pulley max total length (<0 = current)
+
+    // --- Gear / RackAndPinion ---
+    // Gear:  hingeAxis1/hingeAxis2 = the two gears' rotation axes (world)
+    // Rack:  hingeAxis1 = pinion rotation axis, hingeAxis2 = rack slide axis (world)
+    JPH::Vec3 hingeAxis1{1, 0, 0};
+    JPH::Vec3 hingeAxis2{1, 0, 0};
+    // Handles of the two constraints the gear/rack couples (returned by an
+    // earlier createConstraint). Gear: two hinges. Rack: pinion hinge + rack slider.
+    uint32_t dependentConstraint1 = 0;
+    uint32_t dependentConstraint2 = 0;
 };
 
 class PhysicsWorld {
@@ -273,6 +308,11 @@ public:
     void setConstraintEnabled(uint32_t handle, bool enabled);
     /// Adjust a wheel constraint's motor at runtime (no-op for non-wheel handles).
     void setWheelMotor(uint32_t handle, bool enabled, float speed, float maxTorque);
+    /// Set/get a constraint's breaking impulse threshold (0 = never break).
+    /// When the constraint's applied position impulse exceeds this in a step the
+    /// constraint is auto-disabled and reported via drainBrokenConstraints().
+    void setConstraintBreakingImpulse(uint32_t handle, float threshold);
+    float getConstraintBreakingImpulse(uint32_t handle) const;
     /// Returns and clears any constraint-broken events accumulated since last call.
     std::vector<uint32_t> drainBrokenConstraints();
 
@@ -319,9 +359,17 @@ private:
     struct ConstraintEntry {
         JPH::Ref<JPH::Constraint> ref;
         JPH::Ref<JPH::Constraint> ref2;
+        float breakingImpulse = 0.0f;  // 0 = never break
     };
     std::unordered_map<uint32_t, ConstraintEntry> constraints_;
     uint32_t nextConstraintHandle_ = 1;
+
+    // Constraints that broke (exceeded breaking impulse) since the last drain.
+    std::vector<uint32_t> brokenConstraints_;
+    // After each Update(), disable any constraint whose applied impulse exceeded
+    // its breaking threshold and record its handle. Called on the physics thread
+    // (consumeStep) or inline (stepInline) — single-owner, no locking.
+    void checkBrokenConstraints();
 
     // Thread state
     struct Shared {

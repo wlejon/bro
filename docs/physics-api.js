@@ -288,16 +288,49 @@ Physics.moveKinematic(id, x, y, z, qx, qy, qz, qw, dt);
  *
  * @param {Object} opts
  * @param {string} opts.type      - "distance" | "point" | "hinge" | "fixed" | "slider" | "wheel"
+ *                                  | "cone" | "swingTwist" | "pulley" | "gear" | "rackAndPinion"
  * @param {number} opts.body1     - first body tag
  * @param {number} [opts.body2]   - second body tag (omit / pass -1 to attach to world)
- * @param {{x,y,z}} [opts.point1] - world-space anchor on body1 (also: wheel hub)
+ * @param {{x,y,z}} [opts.point1] - world-space anchor on body1 (also: wheel hub, cone/swingTwist pivot)
  * @param {{x,y,z}} [opts.point2] - world-space anchor on body2
  * @param {number}  [opts.minDistance]   - distance: lower bound (negative = use rest length)
  * @param {number}  [opts.maxDistance]   - distance: upper bound
- * @param {{x,y,z}} [opts.axis]          - hinge / slider: world-space axis
+ * @param {{x,y,z}} [opts.axis]          - hinge / slider: world-space axis; cone / swingTwist: twist axis
  * @param {number}  [opts.limitMin]      - hinge: min angle (rad); slider: min position
  * @param {number}  [opts.limitMax]      - hinge: max angle (rad); slider: max position
  * @param {boolean} [opts.collideConnected=false]
+ * @param {number}  [opts.breakingImpulse=0] - auto-break threshold (N·s); 0 = never break.
+ *                                  When exceeded in a step the constraint is disabled and
+ *                                  reported by Physics.getBrokenConstraints(). Also settable
+ *                                  later via setConstraintBreakingImpulse().
+ *
+ * Cone-only fields (point + limited swing about the twist axis — e.g. a shoulder):
+ * @param {number}  [opts.halfConeAngle=0]   - max swing half-angle (radians)
+ *
+ * SwingTwist-only fields (ragdoll joint: independent swing + twist limits):
+ * @param {{x,y,z}} [opts.planeAxis={0,1,0}] - swing plane axis (⟂ to twist axis)
+ * @param {number}  [opts.normalHalfConeAngle=0] - swing-Y half-angle (rad)
+ * @param {number}  [opts.planeHalfConeAngle=0]  - swing-Z half-angle (rad)
+ * @param {number}  [opts.twistMinAngle=0]       - twist lower limit (rad, [-π,π])
+ * @param {number}  [opts.twistMaxAngle=0]       - twist upper limit (rad, [-π,π])
+ * @param {number}  [opts.maxFrictionTorque=0]   - friction torque when unpowered (N·m)
+ *
+ * Pulley-only fields (rope of fixed length over two pivots):
+ * @param {{x,y,z}} [opts.bodyPoint1]  - attachment on body1 (world)
+ * @param {{x,y,z}} [opts.fixedPoint1] - fixed pivot 1 (world)
+ * @param {{x,y,z}} [opts.bodyPoint2]  - attachment on body2 (world)
+ * @param {{x,y,z}} [opts.fixedPoint2] - fixed pivot 2 (world)
+ * @param {number}  [opts.ratio=1]     - len(b1..f1) + ratio·len(b2..f2) = constant
+ * @param {number}  [opts.minLength=0] - min total rope length (<0 = current)
+ * @param {number}  [opts.maxLength=-1]- max total rope length (<0 = current)
+ *
+ * Gear / RackAndPinion fields (couple two EXISTING constraints by their handles):
+ * @param {{x,y,z}} [opts.hingeAxis1]  - gear: gear-1 rotation axis; rack: pinion rotation axis
+ * @param {{x,y,z}} [opts.hingeAxis2]  - gear: gear-2 rotation axis (gear only)
+ * @param {{x,y,z}} [opts.sliderAxis]  - rack: rack slide axis (rackAndPinion only)
+ * @param {number}  [opts.ratio=1]     - gear/rack ratio
+ * @param {number}  opts.constraint1   - handle of the first coupled constraint (gear: hinge; rack: pinion hinge)
+ * @param {number}  opts.constraint2   - handle of the second coupled constraint (gear: hinge; rack: rack slider)
  *
  * Wheel-only fields (Box2D-style; backed by a SixDOFConstraint):
  * @param {{x,y,z}} [opts.suspensionAxis={0,1,0}] - translation axis (suspension)
@@ -331,8 +364,74 @@ const wheel = Physics.createConstraint({
     enableMotor: true, motorSpeed: -10, maxMotorTorque: 50,
 });
 
+// Cone: limit body2 to swing within a 30° half-angle about the twist axis.
+const cone = Physics.createConstraint({
+    type: 'cone',
+    body1: a, body2: b,
+    point1: {x:0, y:5, z:0}, point2: {x:0, y:5, z:0},
+    axis: {x:0, y:1, z:0},
+    halfConeAngle: Math.PI / 6,
+});
+
+// SwingTwist: ragdoll-style joint with independent swing + twist limits.
+const shoulder = Physics.createConstraint({
+    type: 'swingTwist',
+    body1: torso, body2: upperArm,
+    point1: {x:0, y:2, z:0}, point2: {x:0, y:2, z:0},
+    axis: {x:1, y:0, z:0}, planeAxis: {x:0, y:1, z:0},
+    normalHalfConeAngle: 0.6, planeHalfConeAngle: 0.4,
+    twistMinAngle: -0.3, twistMaxAngle: 0.3,
+});
+
+// Pulley: two bodies share a rope of fixed length routed over two pivots.
+const rope = Physics.createConstraint({
+    type: 'pulley',
+    body1: weightA, body2: weightB,
+    bodyPoint1: {x:-1, y:3, z:0}, fixedPoint1: {x:-1, y:6, z:0},
+    bodyPoint2: {x: 1, y:3, z:0}, fixedPoint2: {x: 1, y:6, z:0},
+    ratio: 1.0,
+});
+
+// Gear: couple the rotation of two wheels (each pinned to the world by a hinge).
+const hingeA = Physics.createConstraint({ type:'hinge', body1: gearA, body2:-1,
+    point1:{x:-1,y:0,z:0}, point2:{x:-1,y:0,z:0}, axis:{x:0,y:0,z:1} });
+const hingeB = Physics.createConstraint({ type:'hinge', body1: gearB, body2:-1,
+    point1:{x: 1,y:0,z:0}, point2:{x: 1,y:0,z:0}, axis:{x:0,y:0,z:1} });
+const gear = Physics.createConstraint({
+    type: 'gear',
+    body1: gearA, body2: gearB,
+    hingeAxis1: {x:0,y:0,z:1}, hingeAxis2: {x:0,y:0,z:1},
+    ratio: 2.0,                         // gearB turns half as fast as gearA
+    constraint1: hingeA, constraint2: hingeB,
+});
+
+// RackAndPinion: a pinion hinge drives a rack slider.
+const rack = Physics.createConstraint({
+    type: 'rackAndPinion',
+    body1: pinion, body2: rackBody,
+    hingeAxis1: {x:0,y:0,z:1}, sliderAxis: {x:1,y:0,z:0},
+    ratio: 4.0,
+    constraint1: pinionHinge, constraint2: rackSlider,
+});
+
 /** Adjust a wheel constraint's motor at runtime. No-op for non-wheel handles. */
 Physics.setWheelMotor(wheel, /*enabled*/ true, /*speed*/ -8.0, /*maxTorque*/ 60);
+
+/**
+ * Breakable constraints. Set a breaking-impulse threshold (N·s) on any handle;
+ * when the constraint's applied position impulse exceeds it in a step the
+ * constraint is auto-disabled. Pass 0 to make it unbreakable again.
+ */
+Physics.setConstraintBreakingImpulse(handle, 500.0);
+const threshold = Physics.getConstraintBreakingImpulse(handle);
+
+/**
+ * Drain the handles of constraints that broke since the last call (call once
+ * per frame). Broken constraints are disabled, not destroyed — call
+ * destroyConstraint() if you want them gone.
+ * @returns {number[]} handles that broke this frame
+ */
+for (const h of Physics.getBrokenConstraints()) console.log('snapped', h);
 
 /** Disable / enable a constraint without destroying it. */
 Physics.setConstraintEnabled(handle, true);
@@ -352,6 +451,17 @@ Physics.destroyConstraint(handle);
  *          bodyId is -1 if a hit body has no JS tag (engine-owned body).
  */
 const hits = Physics.raycast(ox, oy, oz, dx, dy, dz, /*maxDist*/ 100);
+
+/**
+ * Cast a ray and return ONLY the nearest hit (or null if nothing was hit).
+ * Cheaper than raycast() for long-range line-of-sight / pick queries since it
+ * collects a single closest hit instead of sorting an array.
+ *
+ * @returns {{ bodyId:number, fraction:number, position:{x,y,z}, userData:bigint } | null}
+ *          bodyId is -1 if the hit body has no JS tag (engine-owned body).
+ */
+const hit = Physics.raycastClosest(ox, oy, oz, dx, dy, dz, /*maxDist*/ 100);
+if (hit) console.log('nearest', hit.bodyId, hit.fraction);
 
 
 // -----------------------------------------------------------------------------
@@ -448,8 +558,12 @@ w.destroyBody(tag);
 
 const c = w.createConstraint({ type:'distance', body1:a, body2:b, ... });
 w.destroyConstraint(c);
+w.setConstraintBreakingImpulse(c, 500);    // auto-break threshold (N·s); 0 = never
+w.getConstraintBreakingImpulse(c);
+const broke = w.getBrokenConstraints();    // handles broken since last call
 
 const hits = w.raycast(ox, oy, oz, dx, dy, dz, /*maxDist*/ 100);
+const hit  = w.raycastClosest(ox, oy, oz, dx, dy, dz, /*maxDist*/ 100); // nearest or null
 const evs  = w.getContacts();              // independent event queue
 
 w.destroyAll();      // wipe contents but keep the world (level-restart pattern)

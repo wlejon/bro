@@ -478,6 +478,44 @@ static JSValue worldRaycast(JSContext* ctx, JsWorld* w, int argc, JSValueConst* 
     return arr;
 }
 
+static JSValue worldRaycastClosest(JSContext* ctx, JsWorld* w, int argc, JSValueConst* argv) {
+    if (!w || !w->world || argc < 6) return JS_NULL;
+    double ox, oy, oz, dx, dy, dz;
+    JS_ToFloat64(ctx, &ox, argv[0]); JS_ToFloat64(ctx, &oy, argv[1]); JS_ToFloat64(ctx, &oz, argv[2]);
+    JS_ToFloat64(ctx, &dx, argv[3]); JS_ToFloat64(ctx, &dy, argv[4]); JS_ToFloat64(ctx, &dz, argv[5]);
+    double maxDist = 1000.0;
+    if (argc >= 7) JS_ToFloat64(ctx, &maxDist, argv[6]);
+
+    physics::RayHit hit;
+    bool ok = w->world->raycastClosest(
+        JPH::RVec3((float)ox, (float)oy, (float)oz),
+        JPH::Vec3((float)dx, (float)dy, (float)dz),
+        hit, (float)maxDist);
+    if (!ok) return JS_NULL;
+
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "bodyId", JS_NewInt32(ctx, w->tagForBodyId(hit.bodyID)));
+    JS_SetPropertyStr(ctx, obj, "fraction", JS_NewFloat64(ctx, hit.fraction));
+    JS_SetPropertyStr(ctx, obj, "userData",
+        JS_NewBigUint64(ctx, hit.bodyID.IsInvalid() ? 0 : w->world->getUserData(hit.bodyID)));
+    JSValue posObj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, posObj, "x", JS_NewFloat64(ctx, hit.position.GetX()));
+    JS_SetPropertyStr(ctx, posObj, "y", JS_NewFloat64(ctx, hit.position.GetY()));
+    JS_SetPropertyStr(ctx, posObj, "z", JS_NewFloat64(ctx, hit.position.GetZ()));
+    JS_SetPropertyStr(ctx, obj, "position", posObj);
+    return obj;
+}
+
+static JSValue worldGetBrokenConstraints(JSContext* ctx, JsWorld* w) {
+    if (!w || !w->world) return JS_NewArray(ctx);
+    auto broken = w->world->drainBrokenConstraints();
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (uint32_t h : broken)
+        JS_SetPropertyUint32(ctx, arr, i++, JS_NewUint32(ctx, h));
+    return arr;
+}
+
 static JSValue worldGetContacts(JSContext* ctx, JsWorld* w) {
     if (!w || !w->world) return JS_NewArray(ctx);
     auto events = w->world->drainContactEvents();
@@ -510,7 +548,12 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
     else if (type == "fixed") cs.type = physics::ConstraintOptions::Fixed;
     else if (type == "slider") cs.type = physics::ConstraintOptions::Slider;
     else if (type == "wheel")  cs.type = physics::ConstraintOptions::Wheel;
-    else return JS_ThrowTypeError(ctx, "constraint type required (distance|point|hinge|fixed|slider|wheel)");
+    else if (type == "cone")   cs.type = physics::ConstraintOptions::Cone;
+    else if (type == "swingTwist" || type == "swing-twist") cs.type = physics::ConstraintOptions::SwingTwist;
+    else if (type == "pulley") cs.type = physics::ConstraintOptions::Pulley;
+    else if (type == "gear")   cs.type = physics::ConstraintOptions::Gear;
+    else if (type == "rackAndPinion" || type == "rack-and-pinion") cs.type = physics::ConstraintOptions::RackAndPinion;
+    else return JS_ThrowTypeError(ctx, "constraint type required (distance|point|hinge|fixed|slider|wheel|cone|swingTwist|pulley|gear|rackAndPinion)");
 
     JSValue b1v = JS_GetPropertyStr(ctx, o, "body1");
     JSValue b2v = JS_GetPropertyStr(ctx, o, "body2");
@@ -571,6 +614,51 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
         cs.wheelEnableMotor = jsGetBool(ctx, o, "enableMotor", false);
         cs.wheelMotorSpeed = (float)jsGetNum(ctx, o, "motorSpeed", 0.0);
         cs.wheelMaxMotorTorque = (float)jsGetNum(ctx, o, "maxMotorTorque", 0.0);
+    }
+
+    if (cs.type == physics::ConstraintOptions::Cone) {
+        cs.coneHalfAngle = (float)jsGetNum(ctx, o, "halfConeAngle", 0.0);
+    }
+
+    if (cs.type == physics::ConstraintOptions::SwingTwist) {
+        JSValue pa = JS_GetPropertyStr(ctx, o, "planeAxis");
+        cs.planeAxis = readVec3(ctx, pa, JPH::Vec3(0, 1, 0)); JS_FreeValue(ctx, pa);
+        cs.normalHalfConeAngle = (float)jsGetNum(ctx, o, "normalHalfConeAngle", 0.0);
+        cs.planeHalfConeAngle = (float)jsGetNum(ctx, o, "planeHalfConeAngle", 0.0);
+        cs.twistMinAngle = (float)jsGetNum(ctx, o, "twistMinAngle", 0.0);
+        cs.twistMaxAngle = (float)jsGetNum(ctx, o, "twistMaxAngle", 0.0);
+        cs.maxFrictionTorque = (float)jsGetNum(ctx, o, "maxFrictionTorque", 0.0);
+    }
+
+    if (cs.type == physics::ConstraintOptions::Pulley) {
+        JSValue bp1 = JS_GetPropertyStr(ctx, o, "bodyPoint1");
+        cs.bodyPoint1 = readVec3(ctx, bp1); JS_FreeValue(ctx, bp1);
+        JSValue fp1 = JS_GetPropertyStr(ctx, o, "fixedPoint1");
+        cs.fixedPoint1 = readVec3(ctx, fp1); JS_FreeValue(ctx, fp1);
+        JSValue bp2 = JS_GetPropertyStr(ctx, o, "bodyPoint2");
+        cs.bodyPoint2 = readVec3(ctx, bp2); JS_FreeValue(ctx, bp2);
+        JSValue fp2 = JS_GetPropertyStr(ctx, o, "fixedPoint2");
+        cs.fixedPoint2 = readVec3(ctx, fp2); JS_FreeValue(ctx, fp2);
+        cs.ratio = (float)jsGetNum(ctx, o, "ratio", 1.0);
+        cs.minLength = (float)jsGetNum(ctx, o, "minLength", 0.0);
+        cs.maxLength = (float)jsGetNum(ctx, o, "maxLength", -1.0);
+    }
+
+    if (cs.type == physics::ConstraintOptions::Gear ||
+        cs.type == physics::ConstraintOptions::RackAndPinion) {
+        JSValue ha1 = JS_GetPropertyStr(ctx, o, "hingeAxis1");
+        cs.hingeAxis1 = readVec3(ctx, ha1, JPH::Vec3(1, 0, 0)); JS_FreeValue(ctx, ha1);
+        JSValue ha2 = JS_GetPropertyStr(ctx, o, cs.type == physics::ConstraintOptions::Gear ? "hingeAxis2" : "sliderAxis");
+        cs.hingeAxis2 = readVec3(ctx, ha2, JPH::Vec3(1, 0, 0)); JS_FreeValue(ctx, ha2);
+        cs.ratio = (float)jsGetNum(ctx, o, "ratio", 1.0);
+        cs.dependentConstraint1 = (uint32_t)jsGetNum(ctx, o, "constraint1", 0.0);
+        cs.dependentConstraint2 = (uint32_t)jsGetNum(ctx, o, "constraint2", 0.0);
+        if (!cs.dependentConstraint1 || !cs.dependentConstraint2) {
+            const char* m = cs.type == physics::ConstraintOptions::Gear
+                ? "gear requires constraint1/constraint2 (two hinge constraint handles)"
+                : "rackAndPinion requires constraint1 (pinion hinge) and constraint2 (rack slider) handles";
+            return JS_ThrowTypeError(ctx, "%s", m);
+        }
     }
 
     uint32_t handle = w->world->createConstraint(cs);
@@ -819,6 +907,11 @@ static JSValue js_physics_raycast(JSContext* ctx, JSValueConst, int argc, JSValu
     return worldRaycast(ctx, s_defaultWorld, argc, argv);
 }
 
+static JSValue js_physics_raycastClosest(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (!s_defaultWorld) return JS_NULL;
+    return worldRaycastClosest(ctx, s_defaultWorld, argc, argv);
+}
+
 static JSValue js_physics_getContacts(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     if (!s_defaultWorld) return JS_NewArray(ctx);
     return worldGetContacts(ctx, s_defaultWorld);
@@ -914,6 +1007,27 @@ static JSValue js_physics_setWheelMotor(JSContext* ctx, JSValueConst, int argc, 
     JS_ToFloat64(ctx, &torque, argv[3]);
     s_defaultWorld->world->setWheelMotor(h, en, (float)speed, (float)torque);
     return JS_UNDEFINED;
+}
+
+static JSValue js_physics_setConstraintBreakingImpulse(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 2) return JS_ThrowTypeError(ctx, "setConstraintBreakingImpulse(handle, threshold)");
+    uint32_t h; JS_ToUint32(ctx, &h, argv[0]);
+    double t = 0; JS_ToFloat64(ctx, &t, argv[1]);
+    s_defaultWorld->world->setConstraintBreakingImpulse(h, (float)t);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_physics_getConstraintBreakingImpulse(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 1) return JS_UNDEFINED;
+    uint32_t h; JS_ToUint32(ctx, &h, argv[0]);
+    return JS_NewFloat64(ctx, s_defaultWorld->world->getConstraintBreakingImpulse(h));
+}
+
+static JSValue js_physics_getBrokenConstraints(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    if (!s_defaultWorld) return JS_NewArray(ctx);
+    return worldGetBrokenConstraints(ctx, s_defaultWorld);
 }
 
 // ---------------------------------------------------------------------------
@@ -1092,10 +1206,38 @@ static JSValue jsw_raycast(JSContext* ctx, JSValueConst thisVal, int argc, JSVal
     return worldRaycast(ctx, w, argc, argv);
 }
 
+static JSValue jsw_raycastClosest(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w) return JS_NULL;
+    return worldRaycastClosest(ctx, w, argc, argv);
+}
+
 static JSValue jsw_getContacts(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
     JsWorld* w = worldFromThis(ctx, thisVal);
     if (!w) return JS_NewArray(ctx);
     return worldGetContacts(ctx, w);
+}
+
+static JSValue jsw_getBrokenConstraints(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w) return JS_NewArray(ctx);
+    return worldGetBrokenConstraints(ctx, w);
+}
+
+static JSValue jsw_setConstraintBreakingImpulse(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world || argc < 2) return JS_UNDEFINED;
+    uint32_t h; JS_ToUint32(ctx, &h, argv[0]);
+    double t = 0; JS_ToFloat64(ctx, &t, argv[1]);
+    w->world->setConstraintBreakingImpulse(h, (float)t);
+    return JS_UNDEFINED;
+}
+
+static JSValue jsw_getConstraintBreakingImpulse(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world || argc < 1) return JS_UNDEFINED;
+    uint32_t h; JS_ToUint32(ctx, &h, argv[0]);
+    return JS_NewFloat64(ctx, w->world->getConstraintBreakingImpulse(h));
 }
 
 static JSValue jsw_createConstraint(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
@@ -1254,9 +1396,13 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("getUserData", 1, jsw_getUserData),
     JS_CFUNC_DEF("activate", 1, jsw_activate),
     JS_CFUNC_DEF("raycast", 7, jsw_raycast),
+    JS_CFUNC_DEF("raycastClosest", 7, jsw_raycastClosest),
     JS_CFUNC_DEF("getContacts", 0, jsw_getContacts),
     JS_CFUNC_DEF("createConstraint", 1, jsw_createConstraint),
     JS_CFUNC_DEF("destroyConstraint", 1, jsw_destroyConstraint),
+    JS_CFUNC_DEF("setConstraintBreakingImpulse", 2, jsw_setConstraintBreakingImpulse),
+    JS_CFUNC_DEF("getConstraintBreakingImpulse", 1, jsw_getConstraintBreakingImpulse),
+    JS_CFUNC_DEF("getBrokenConstraints", 0, jsw_getBrokenConstraints),
 };
 
 static JSValue js_physics_createWorldHandle(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -1338,6 +1484,7 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("setKinematic", js_physics_setKinematic, 1)
         .function("moveKinematic", js_physics_moveKinematic, 5)
         .function("raycast", js_physics_raycast, 7)
+        .function("raycastClosest", js_physics_raycastClosest, 7)
         .function("getContacts", js_physics_getContacts, 0)
         .function("setTimeStep", js_physics_setTimeStep, 1)
         .function("isActive", js_physics_isActive, 1)
@@ -1346,7 +1493,10 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("createConstraint", js_physics_createConstraint, 1)
         .function("destroyConstraint", js_physics_destroyConstraint, 1)
         .function("setConstraintEnabled", js_physics_setConstraintEnabled, 2)
-        .function("setWheelMotor", js_physics_setWheelMotor, 4);
+        .function("setWheelMotor", js_physics_setWheelMotor, 4)
+        .function("setConstraintBreakingImpulse", js_physics_setConstraintBreakingImpulse, 2)
+        .function("getConstraintBreakingImpulse", js_physics_getConstraintBreakingImpulse, 1)
+        .function("getBrokenConstraints", js_physics_getBrokenConstraints, 0);
 }
 
 void PhysicsBindings::cleanup(JSContext* ctx) {

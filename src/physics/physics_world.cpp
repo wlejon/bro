@@ -24,11 +24,17 @@
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
 #include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/Constraints/SixDOFConstraint.h>
+#include <Jolt/Physics/Constraints/ConeConstraint.h>
+#include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
+#include <Jolt/Physics/Constraints/PulleyConstraint.h>
+#include <Jolt/Physics/Constraints/GearConstraint.h>
+#include <Jolt/Physics/Constraints/RackAndPinionConstraint.h>
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 
 #include "util/log.h"
 
 #include <algorithm>
+#include <cmath>
 #include <mutex>
 
 JPH_SUPPRESS_WARNINGS
@@ -270,6 +276,7 @@ bool PhysicsWorld::consumeStep() {
     if (listener_) {
         contactsFront_ = listener_->drain();
     }
+    checkBrokenConstraints();
 
     shared_.state.store(kPhysicsIdle, std::memory_order_release);
     return true;
@@ -285,6 +292,7 @@ void PhysicsWorld::stepInline() {
     if (listener_) {
         contactsFront_ = listener_->drain();
     }
+    checkBrokenConstraints();
 }
 
 void PhysicsWorld::shutdown() {
@@ -743,7 +751,7 @@ uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& opts) {
         }
 
         uint32_t handle = nextConstraintHandle_++;
-        constraints_[handle] = ConstraintEntry{c};
+        constraints_[handle] = ConstraintEntry{c, nullptr, opts.breakingImpulse};
         return handle;
     }
 
@@ -807,6 +815,65 @@ uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& opts) {
             settings = s;
             break;
         }
+        case ConstraintOptions::Cone: {
+            auto* s = new ConeConstraintSettings();
+            s->mPoint1 = opts.point1;
+            s->mPoint2 = opts.point2;
+            s->mTwistAxis1 = opts.axis.NormalizedOr(Vec3::sAxisX());
+            s->mTwistAxis2 = opts.axis.NormalizedOr(Vec3::sAxisX());
+            s->mHalfConeAngle = opts.coneHalfAngle;
+            s->mSpace = EConstraintSpace::WorldSpace;
+            settings = s;
+            break;
+        }
+        case ConstraintOptions::SwingTwist: {
+            auto* s = new SwingTwistConstraintSettings();
+            s->mPosition1 = opts.point1;
+            s->mPosition2 = opts.point2;
+            s->mTwistAxis1 = opts.axis.NormalizedOr(Vec3::sAxisX());
+            s->mTwistAxis2 = opts.axis.NormalizedOr(Vec3::sAxisX());
+            s->mPlaneAxis1 = opts.planeAxis.NormalizedOr(Vec3::sAxisY());
+            s->mPlaneAxis2 = opts.planeAxis.NormalizedOr(Vec3::sAxisY());
+            s->mNormalHalfConeAngle = opts.normalHalfConeAngle;
+            s->mPlaneHalfConeAngle = opts.planeHalfConeAngle;
+            s->mTwistMinAngle = opts.twistMinAngle;
+            s->mTwistMaxAngle = opts.twistMaxAngle;
+            s->mMaxFrictionTorque = opts.maxFrictionTorque;
+            s->mSpace = EConstraintSpace::WorldSpace;
+            settings = s;
+            break;
+        }
+        case ConstraintOptions::Pulley: {
+            auto* s = new PulleyConstraintSettings();
+            s->mBodyPoint1 = opts.bodyPoint1;
+            s->mFixedPoint1 = opts.fixedPoint1;
+            s->mBodyPoint2 = opts.bodyPoint2;
+            s->mFixedPoint2 = opts.fixedPoint2;
+            s->mRatio = opts.ratio;
+            s->mMinLength = opts.minLength;
+            s->mMaxLength = opts.maxLength;
+            s->mSpace = EConstraintSpace::WorldSpace;
+            settings = s;
+            break;
+        }
+        case ConstraintOptions::Gear: {
+            auto* s = new GearConstraintSettings();
+            s->mHingeAxis1 = opts.hingeAxis1.NormalizedOr(Vec3::sAxisX());
+            s->mHingeAxis2 = opts.hingeAxis2.NormalizedOr(Vec3::sAxisX());
+            s->mRatio = opts.ratio;
+            s->mSpace = EConstraintSpace::WorldSpace;
+            settings = s;
+            break;
+        }
+        case ConstraintOptions::RackAndPinion: {
+            auto* s = new RackAndPinionConstraintSettings();
+            s->mHingeAxis = opts.hingeAxis1.NormalizedOr(Vec3::sAxisX());
+            s->mSliderAxis = opts.hingeAxis2.NormalizedOr(Vec3::sAxisX());
+            s->mRatio = opts.ratio;
+            s->mSpace = EConstraintSpace::WorldSpace;
+            settings = s;
+            break;
+        }
         case ConstraintOptions::Wheel:
             // handled above; unreachable here.
             return 0;
@@ -819,16 +886,32 @@ uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& opts) {
     if (!raw) return 0;
     Ref<Constraint> c(raw);
 
-    if (opts.breakingImpulse > 0) {
-        // Jolt breaking is handled via two-body constraint settings in some types only;
-        // for now, we record threshold for future use. Jolt has no universal break-impulse
-        // setter on the base Constraint, so we leave this as a no-op placeholder.
+    // Gear / rack-and-pinion couple two *existing* constraints; wire them up from
+    // the registry handles before adding to the system.
+    if (opts.type == ConstraintOptions::Gear) {
+        auto it1 = constraints_.find(opts.dependentConstraint1);
+        auto it2 = constraints_.find(opts.dependentConstraint2);
+        if (it1 == constraints_.end() || it2 == constraints_.end() ||
+            !it1->second.ref || !it2->second.ref) {
+            return 0;  // gear requires two valid existing hinge constraints
+        }
+        static_cast<GearConstraint*>(raw)->SetConstraints(
+            it1->second.ref.GetPtr(), it2->second.ref.GetPtr());
+    } else if (opts.type == ConstraintOptions::RackAndPinion) {
+        auto it1 = constraints_.find(opts.dependentConstraint1);
+        auto it2 = constraints_.find(opts.dependentConstraint2);
+        if (it1 == constraints_.end() || it2 == constraints_.end() ||
+            !it1->second.ref || !it2->second.ref) {
+            return 0;  // requires a valid pinion hinge + rack slider
+        }
+        static_cast<RackAndPinionConstraint*>(raw)->SetConstraints(
+            it1->second.ref.GetPtr(), it2->second.ref.GetPtr());
     }
 
     physicsSystem_.AddConstraint(c.GetPtr());
 
     uint32_t handle = nextConstraintHandle_++;
-    constraints_[handle] = ConstraintEntry{c};
+    constraints_[handle] = ConstraintEntry{c, nullptr, opts.breakingImpulse};
     return handle;
 }
 
@@ -858,11 +941,63 @@ void PhysicsWorld::setWheelMotor(uint32_t handle, bool enabled, float speed, flo
     sd->GetMotorSettings(EAxis::RotationZ).SetTorqueLimit(maxTorque);
 }
 
+void PhysicsWorld::setConstraintBreakingImpulse(uint32_t handle, float threshold) {
+    auto it = constraints_.find(handle);
+    if (it == constraints_.end()) return;
+    it->second.breakingImpulse = threshold < 0.0f ? 0.0f : threshold;
+}
+
+float PhysicsWorld::getConstraintBreakingImpulse(uint32_t handle) const {
+    auto it = constraints_.find(handle);
+    return it == constraints_.end() ? 0.0f : it->second.breakingImpulse;
+}
+
+// Magnitude of the position-constraint impulse (N·s) applied last step. Jolt has
+// no generic accessor (see Constraint.h ~150), so dispatch on the sub-type. This
+// is the "force holding the bodies together" — the natural breaking metric.
+static float constraintPositionImpulse(JPH::Constraint* c) {
+    switch (c->GetSubType()) {
+        case EConstraintSubType::Point:
+            return static_cast<PointConstraint*>(c)->GetTotalLambdaPosition().Length();
+        case EConstraintSubType::Distance:
+            return std::abs(static_cast<DistanceConstraint*>(c)->GetTotalLambdaPosition());
+        case EConstraintSubType::Fixed:
+            return static_cast<FixedConstraint*>(c)->GetTotalLambdaPosition().Length();
+        case EConstraintSubType::Hinge:
+            return static_cast<HingeConstraint*>(c)->GetTotalLambdaPosition().Length();
+        case EConstraintSubType::Slider: {
+            auto v = static_cast<SliderConstraint*>(c)->GetTotalLambdaPosition();
+            return std::sqrt(v[0] * v[0] + v[1] * v[1]);
+        }
+        case EConstraintSubType::Cone:
+            return static_cast<ConeConstraint*>(c)->GetTotalLambdaPosition().Length();
+        case EConstraintSubType::SwingTwist:
+            return static_cast<SwingTwistConstraint*>(c)->GetTotalLambdaPosition().Length();
+        case EConstraintSubType::Pulley:
+            return std::abs(static_cast<PulleyConstraint*>(c)->GetTotalLambdaPosition());
+        case EConstraintSubType::SixDOF:
+            return static_cast<SixDOFConstraint*>(c)->GetTotalLambdaPosition().Length();
+        default:
+            return 0.0f;  // gear/rack/path/vehicle — no meaningful position impulse
+    }
+}
+
+void PhysicsWorld::checkBrokenConstraints() {
+    for (auto& [handle, entry] : constraints_) {
+        if (entry.breakingImpulse <= 0.0f || !entry.ref) continue;
+        if (!entry.ref->GetEnabled()) continue;
+        if (constraintPositionImpulse(entry.ref.GetPtr()) > entry.breakingImpulse) {
+            entry.ref->SetEnabled(false);
+            if (entry.ref2) entry.ref2->SetEnabled(false);
+            brokenConstraints_.push_back(handle);
+        }
+    }
+}
+
 std::vector<uint32_t> PhysicsWorld::drainBrokenConstraints() {
-    // Jolt does not expose an automatic "broken" event on the base constraint.
-    // We treat this as a no-op for now; a future enhancement could subscribe to
-    // contact-listener-style hooks per type. Returning empty is safe.
-    return {};
+    std::vector<uint32_t> out;
+    out.swap(brokenConstraints_);
+    return out;
 }
 
 // --- Raycasts ---
