@@ -30,6 +30,7 @@
 #include "js/lm_bindings.h"
 #include "util/interrupt.h"
 #include "js/async_job.h"
+#include "js/imagebitmap_bindings.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -40,9 +41,20 @@
 #include <brolm/mistral3_text.h>
 #include <brolm/mistral_tokenizer.h>
 #include <brolm/qwen35_vl.h>
+#include <brolm/clip.h>
+#include <brolm/clip_image.h>
+#include <brolm/clip_score.h>
+#include <brolm/tokenizer.h>
+#include <brolm/t5.h>
+#include <brolm/tokenizer_t5.h>
 
 #include <brotensor/gguf.h>
+#include <brotensor/safetensors.h>
 #include <brotensor/runtime.h>
+
+#include <include/core/SkData.h>
+#include <include/core/SkImage.h>
+#include <include/core/SkImageInfo.h>
 
 #include <atomic>
 #include <cstdint>
@@ -138,6 +150,29 @@ struct Qwen35Wrapper {
     int maxSeqLen = 4096;
     brotensor::Device device = brotensor::Device::CPU;
     std::atomic<bool> generating{false};
+};
+
+// CLIP ViT-L/14 cross-modal scorer. Owns the tokenizer, text tower, image
+// tower, and the CLIPScorer that holds the two cross-modal projections. The
+// scorer stores *references* to the three sub-objects, so they live behind
+// unique_ptrs (stable addresses) and the scorer is built last, once they are
+// populated.
+struct ClipWrapper {
+    std::unique_ptr<brolm::clip::Tokenizer>          tok;
+    std::unique_ptr<brolm::clip::TextEncoder>        text;
+    std::unique_ptr<brolm::clip_image::ImageEncoder> image;
+    std::unique_ptr<brolm::clip_score::CLIPScorer>   scorer;
+    brotensor::Device device = brotensor::Device::CPU;
+};
+
+// T5 encoder (T5-XXL by default — Flux's second text encoder). Owns the
+// SentencePiece-Unigram tokenizer and the encoder-only transformer.
+struct T5Wrapper {
+    std::unique_ptr<brolm::t5::Tokenizer>   tok;
+    std::unique_ptr<brolm::t5::TextEncoder> enc;
+    int               maxLength = 512;
+    int               dModel    = 4096;
+    brotensor::Device device    = brotensor::Device::CPU;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -269,6 +304,147 @@ static std::vector<int32_t> readIdArray(JSContext* ctx, JSValueConst v) {
         }
     }
     return out;
+}
+
+// Read `val` (an ImageBitmap or an ImageData-shaped { data, width, height }
+// with RGBA Uint8/Uint8Clamped pixels) into a contiguous RGBA8 buffer. Mirrors
+// bro.vision's readImageArg so image input is marshalled the same way across
+// the ML bindings. Returns false + sets `err` on a bad source. JS-thread only.
+static bool readImageArg(JSContext* ctx, JSValueConst val,
+                         std::vector<std::uint8_t>& rgba, int& w, int& h,
+                         std::string& err) {
+    if (sk_sp<SkImage> img = ImageBitmapBindings::getImage(val)) {
+        w = img->width();
+        h = img->height();
+        if (w <= 0 || h <= 0) { err = "ImageBitmap has zero size"; return false; }
+        rgba.assign(static_cast<std::size_t>(w) * h * 4, 0);
+        SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType,
+                                             kUnpremul_SkAlphaType);
+        if (!img->readPixels(info, rgba.data(),
+                             static_cast<std::size_t>(w) * 4, 0, 0)) {
+            err = "ImageBitmap readPixels failed";
+            return false;
+        }
+        return true;
+    }
+    if (!JS_IsObject(val)) {
+        err = "image must be an ImageBitmap or { data, width, height }";
+        return false;
+    }
+    w = 0; h = 0;
+    getInt(ctx, val, "width", w);
+    getInt(ctx, val, "height", h);
+    if (w <= 0 || h <= 0) {
+        err = "image { width, height } must be positive";
+        return false;
+    }
+    JSValue dataV = JS_GetPropertyStr(ctx, val, "data");
+    std::size_t byteOff = 0, viewLen = 0, bpe = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, dataV, &byteOff, &viewLen, &bpe);
+    if (JS_IsException(abuf)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_FreeValue(ctx, dataV);
+        err = "image.data must be a Uint8Array/Uint8ClampedArray (RGBA)";
+        return false;
+    }
+    std::size_t abufLen = 0;
+    std::uint8_t* p = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+    JS_FreeValue(ctx, abuf);
+    JS_FreeValue(ctx, dataV);
+    const std::size_t need = static_cast<std::size_t>(w) * h * 4;
+    if (!p || viewLen < need) {
+        err = "image.data too small for width*height*4 (RGBA expected)";
+        return false;
+    }
+    rgba.assign(p + byteOff, p + byteOff + need);
+    return true;
+}
+
+// RGBA8 HWC (0..255) → planar NCHW FP32, 3 channels, values in [-1, 1]. This
+// is the input format brolm::clip_score::CLIPScorer::score() expects (the same
+// shape brodiffusion's generate() emits); the scorer owns the resize-to-224 +
+// CLIP normalisation downstream.
+static std::vector<float> rgbaToNchwSigned(const std::vector<std::uint8_t>& rgba,
+                                           int w, int h) {
+    const int plane = w * h;
+    std::vector<float> out(static_cast<std::size_t>(3) * plane);
+    for (int i = 0; i < plane; ++i)
+        for (int c = 0; c < 3; ++c)
+            out[static_cast<std::size_t>(c) * plane + i] =
+                rgba[static_cast<std::size_t>(4) * i + c] / 255.0f * 2.0f - 1.0f;
+    return out;
+}
+
+// RGBA8 HWC (0..255) → planar CHW FP32, 3 channels, values in [0, 1]. This is
+// the format brolm::qwen35::VLM::ImageInput expects.
+static std::vector<float> rgbaToChwUnit(const std::vector<std::uint8_t>& rgba,
+                                        int w, int h) {
+    const int plane = w * h;
+    std::vector<float> out(static_cast<std::size_t>(3) * plane);
+    for (int i = 0; i < plane; ++i)
+        for (int c = 0; c < 3; ++c)
+            out[static_cast<std::size_t>(c) * plane + i] =
+                rgba[static_cast<std::size_t>(4) * i + c] / 255.0f;
+    return out;
+}
+
+// Download a brotensor::Tensor to host FP32, converting FP16 bits if needed.
+static std::vector<float> downloadFloats(const brotensor::Tensor& t) {
+    if (t.dtype == brotensor::Dtype::FP16) {
+        std::vector<std::uint16_t> bits = t.to_host_vector_fp16();
+        std::vector<float> out(bits.size());
+        for (std::size_t i = 0; i < bits.size(); ++i)
+            out[i] = brotensor::fp16_bits_to_fp32(bits[i]);
+        return out;
+    }
+    return t.to_host_vector();
+}
+
+// One decoded VLM image: planar CHW [0,1] pixels + dims, ready to wrap as a
+// brolm::qwen35::ImageInput. Owns its pixel buffer so it can be moved onto a
+// background generate thread.
+struct VlmImage {
+    std::vector<float> chw;
+    int H = 0;
+    int W = 0;
+};
+
+// Read opts.images — an ImageBitmap/ImageData or an array of them — into CHW
+// [0,1] buffers. Absent `images` yields an empty list (text-only generate).
+// JS-thread only. Returns false + sets `err` on a bad image source.
+static bool readVlmImages(JSContext* ctx, JSValueConst opts,
+                          std::vector<VlmImage>& out, std::string& err) {
+    out.clear();
+    if (!JS_IsObject(opts)) return true;
+    JSValue arr = JS_GetPropertyStr(ctx, opts, "images");
+    if (JS_IsUndefined(arr) || JS_IsNull(arr)) { JS_FreeValue(ctx, arr); return true; }
+
+    auto readOne = [&](JSValueConst v) -> bool {
+        std::vector<std::uint8_t> rgba;
+        int w = 0, h = 0;
+        if (!readImageArg(ctx, v, rgba, w, h, err)) return false;
+        out.push_back(VlmImage{ rgbaToChwUnit(rgba, w, h), h, w });
+        return true;
+    };
+
+    if (!JS_IsArray(arr)) {
+        bool ok = readOne(arr);
+        JS_FreeValue(ctx, arr);
+        return ok;
+    }
+    std::uint32_t n = 0;
+    JSValue lv = JS_GetPropertyStr(ctx, arr, "length");
+    JS_ToUint32(ctx, &n, lv);
+    JS_FreeValue(ctx, lv);
+    out.reserve(n);
+    for (std::uint32_t i = 0; i < n; ++i) {
+        JSValue e = JS_GetPropertyUint32(ctx, arr, i);
+        bool ok = readOne(e);
+        JS_FreeValue(ctx, e);
+        if (!ok) { JS_FreeValue(ctx, arr); return false; }
+    }
+    JS_FreeValue(ctx, arr);
+    return true;
 }
 
 // Map a JS opts object onto brolm::qwen::GenerateOptions (defaults preserved
@@ -755,6 +931,11 @@ static JSValue js_q35_decode(JSContext* ctx, JSValueConst this_val,
 //     <|im_start|>user\n{...}<|im_end|>\n<|im_start|>assistant\n
 //   Generation stops on <|im_end|> / <|endoftext|> or the budget.
 //   opts.maxNewTokens / opts.sampling.{temperature, topK, topP, seed}
+//   opts.images: an ImageBitmap/ImageData or an array of them — vision input.
+//     The prompt must already contain one
+//       <|vision_start|><|image_pad|><|vision_end|>
+//     placeholder per image, in the position each image should appear; images
+//     are consumed in order.
 //   opts.onToken(id): per generated token, synchronous on this thread;
 //   return false to stop early.
 static JSValue js_q35_generate(JSContext* ctx, JSValueConst this_val,
@@ -767,9 +948,15 @@ static JSValue js_q35_generate(JSContext* ctx, JSValueConst this_val,
 
     brolm::qwen::GenerateOptions opts;
     JSValue onToken = JS_UNDEFINED;
+    std::vector<VlmImage> images;
     if (argc >= 2 && JS_IsObject(argv[1])) {
         opts = parseGenerateOptions(ctx, argv[1]);
         onToken = JS_GetPropertyStr(ctx, argv[1], "onToken");
+        std::string imgErr;
+        if (!readVlmImages(ctx, argv[1], images, imgErr)) {
+            JS_FreeValue(ctx, onToken);
+            return JS_ThrowTypeError(ctx, "generate: %s", imgErr.c_str());
+        }
     }
     const bool hasCb = JS_IsFunction(ctx, onToken);
 
@@ -798,7 +985,11 @@ static JSValue js_q35_generate(JSContext* ctx, JSValueConst this_val,
         w->vlm->set_generation(opts.max_new_tokens, opts.sampling.temperature,
                                opts.sampling.top_k, opts.sampling.top_p,
                                opts.sampling.seed);
-        auto ids = w->vlm->generate_tokens(prompt, {}, hook);
+        std::vector<brolm::qwen35::ImageInput> inputs;
+        inputs.reserve(images.size());
+        for (auto& im : images)
+            inputs.push_back(brolm::qwen35::ImageInput{ im.chw.data(), im.H, im.W });
+        auto ids = w->vlm->generate_tokens(prompt, inputs, hook);
         result = cbThrew ? JS_EXCEPTION
                          : qjsbind::make_int32_array(
                                ctx, std::vector<int32_t>(ids.begin(), ids.end()));
@@ -1288,10 +1479,17 @@ static JSValue js_lm_generate_qwen35(JSContext* ctx, Qwen35Wrapper* w,
 
     brolm::qwen::GenerateOptions opts;
     JSValue onToken = JS_UNDEFINED, onDone = JS_UNDEFINED;
+    std::vector<VlmImage> images;
     if (argc >= 3 && JS_IsObject(argv[2])) {
         opts = parseGenerateOptions(ctx, argv[2]);
         onToken = JS_GetPropertyStr(ctx, argv[2], "onToken");
         onDone  = JS_GetPropertyStr(ctx, argv[2], "onDone");
+        std::string imgErr;
+        if (!readVlmImages(ctx, argv[2], images, imgErr)) {
+            JS_FreeValue(ctx, onToken);
+            JS_FreeValue(ctx, onDone);
+            return JS_ThrowTypeError(ctx, "generate: %s", imgErr.c_str());
+        }
     }
     if (opts.max_new_tokens <= 0) {
         JS_FreeValue(ctx, onToken);
@@ -1322,13 +1520,17 @@ static JSValue js_lm_generate_qwen35(JSContext* ctx, Qwen35Wrapper* w,
     // Background thread: drive the VLM's decode loop, publishing each token
     // through the brolm per-token hook; returning false on a flipped cancel
     // flag stops the decode within one token.
-    auto work = [st, mw, prompt = std::move(prompt), opts]
+    auto work = [st, mw, prompt = std::move(prompt), opts, imgs = std::move(images)]
                 (const std::atomic<bool>& cancel) {
         brotensor::DeviceScope scope(mw->device);
         mw->vlm->set_generation(opts.max_new_tokens, opts.sampling.temperature,
                                 opts.sampling.top_k, opts.sampling.top_p,
                                 opts.sampling.seed);
-        mw->vlm->generate_tokens(prompt, {}, [st, &cancel](int id) -> bool {
+        std::vector<brolm::qwen35::ImageInput> inputs;
+        inputs.reserve(imgs.size());
+        for (auto& im : imgs)
+            inputs.push_back(brolm::qwen35::ImageInput{ im.chw.data(), im.H, im.W });
+        mw->vlm->generate_tokens(prompt, inputs, [st, &cancel](int id) -> bool {
             st->ids.push_back(static_cast<int32_t>(id));
             st->produced.store(st->ids.size(), std::memory_order_release);
             return !cancel.load(std::memory_order_acquire)
@@ -1501,6 +1703,398 @@ static JSValue js_lm_generate(JSContext* ctx, JSValueConst,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// CLIP — ViT-L/14 cross-modal scorer (text↔image cosine similarity)
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Wraps brolm::clip_score::CLIPScorer, which stitches the CLIP BPE tokenizer,
+// the text tower (brolm::clip::TextEncoder), the image tower
+// (brolm::clip_image::ImageEncoder), and the two cross-modal projections into a
+// single text↔image scorer. The construction path mirrors brodiffusion's reuse
+// of these same brolm entry points.
+//
+// The scorer exposes the projected, L2-normalised TEXT feature (text_feature())
+// and a fused image score(image) against the cached prompt — it does NOT expose
+// a standalone projected IMAGE feature. So the headline op is the cross-modal
+// score (the zero-shot-classification primitive: score one image against many
+// candidate texts). encodeText() returns the projected text embedding;
+// score(text|text[], image) returns the cosine(s). A standalone encodeImage()
+// returning a comparable embedding (and a score(textEmb, imageEmb) over two
+// embeddings) would need a brolm accessor for the projected image feature that
+// the public CLIPScorer surface does not have today.
+
+static ClipWrapper* clipSelf(JSContext* ctx, JSValueConst this_val) {
+    return qjsbind::unwrap<ClipWrapper>(ctx, this_val);
+}
+
+// encodeText(str | str[]) -> Float32Array | Float32Array[]
+//   The projected, L2-normalised text feature(s) in the shared cross-modal
+//   space (length = projectionDim). Encoding a string array returns an array of
+//   Float32Array, one per prompt.
+static JSValue js_clip_encodeText(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv) {
+    auto* w = clipSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "encodeText: not a ClipModel");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "encodeText(text | text[]): text required");
+    try {
+        brotensor::DeviceScope scope(w->device);
+        if (JS_IsArray(argv[0])) {
+            std::uint32_t n = 0;
+            JSValue lv = JS_GetPropertyStr(ctx, argv[0], "length");
+            JS_ToUint32(ctx, &n, lv);
+            JS_FreeValue(ctx, lv);
+            JSValue out = JS_NewArray(ctx);
+            for (std::uint32_t i = 0; i < n; ++i) {
+                JSValue e = JS_GetPropertyUint32(ctx, argv[0], i);
+                std::string s;
+                if (!argStr(ctx, e, s)) {
+                    JS_FreeValue(ctx, e);
+                    JS_FreeValue(ctx, out);
+                    return JS_ThrowTypeError(ctx,
+                        "encodeText: text[] entries must be strings");
+                }
+                JS_FreeValue(ctx, e);
+                w->scorer->set_prompt(s);
+                JS_SetPropertyUint32(ctx, out, i,
+                    qjsbind::make_float32_array(ctx, w->scorer->text_feature()));
+            }
+            return out;
+        }
+        std::string s;
+        if (!argStr(ctx, argv[0], s))
+            return JS_ThrowTypeError(ctx, "encodeText: text must be a string");
+        w->scorer->set_prompt(s);
+        return qjsbind::make_float32_array(ctx, w->scorer->text_feature());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "encodeText: %s", e.what());
+    }
+}
+
+// score(text | text[], image) -> number | number[]
+//   Cosine similarity in [-1, 1] between `image` and each prompt. `image` is an
+//   ImageBitmap or { data, width, height } (RGBA). Passing a string array
+//   scores the one image against every candidate prompt — the zero-shot
+//   classification call (pick the argmax).
+static JSValue js_clip_score(JSContext* ctx, JSValueConst this_val,
+                             int argc, JSValueConst* argv) {
+    auto* w = clipSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "score: not a ClipModel");
+    if (argc < 2)
+        return JS_ThrowTypeError(ctx, "score(text | text[], image): two args required");
+
+    std::vector<std::uint8_t> rgba;
+    int iw = 0, ih = 0;
+    std::string err;
+    if (!readImageArg(ctx, argv[1], rgba, iw, ih, err))
+        return JS_ThrowTypeError(ctx, "score: %s", err.c_str());
+    std::vector<float> img = rgbaToNchwSigned(rgba, iw, ih);
+
+    try {
+        brotensor::DeviceScope scope(w->device);
+        if (JS_IsArray(argv[0])) {
+            std::uint32_t n = 0;
+            JSValue lv = JS_GetPropertyStr(ctx, argv[0], "length");
+            JS_ToUint32(ctx, &n, lv);
+            JS_FreeValue(ctx, lv);
+            JSValue out = JS_NewArray(ctx);
+            for (std::uint32_t i = 0; i < n; ++i) {
+                JSValue e = JS_GetPropertyUint32(ctx, argv[0], i);
+                std::string s;
+                if (!argStr(ctx, e, s)) {
+                    JS_FreeValue(ctx, e);
+                    JS_FreeValue(ctx, out);
+                    return JS_ThrowTypeError(ctx,
+                        "score: text[] entries must be strings");
+                }
+                JS_FreeValue(ctx, e);
+                w->scorer->set_prompt(s);
+                JS_SetPropertyUint32(ctx, out, i,
+                    JS_NewFloat64(ctx, w->scorer->score(img, ih, iw)));
+            }
+            return out;
+        }
+        std::string text;
+        if (!argStr(ctx, argv[0], text))
+            return JS_ThrowTypeError(ctx, "score: text must be a string");
+        w->scorer->set_prompt(text);
+        return JS_NewFloat64(ctx, w->scorer->score(img, ih, iw));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "score: %s", e.what());
+    }
+}
+
+static void registerClipClass(JSContext* ctx) {
+    qjsbind::Class<ClipWrapper>(ctx, "ClipModel", qjsbind::NoGlobal)
+        .get("projectionDim", [](ClipWrapper* w) {
+            return w->scorer->config().projection_dim; })
+        .method_raw("encodeText", js_clip_encodeText, 1)
+        .method_raw("score",      js_clip_score,      2);
+}
+
+// bro.lm.loadClip(opts) -> ClipModel
+//   Loads the CLIP ViT-L/14 cross-modal scorer (openai/clip-vit-large-patch14
+//   layout). Blocking (file IO + GPU upload), matching brodiffusion's loaders.
+//   opts.vocabPath / opts.mergesPath (REQUIRED) — the CLIP BPE tokenizer.
+//   opts.weightsPath — one safetensors holding the text tower (text_model.*),
+//     the vision tower (vision_model.*), and the two projections
+//     (text_projection.weight / visual_projection.weight). The single-file CLIP
+//     export. Used as the default for any of the three component paths below.
+//   opts.textPath / opts.imagePath / opts.projectionPath — load each component
+//     from its own safetensors instead (each defaults to weightsPath).
+//   opts.textPrefix ("text_model."), opts.visionPrefix ("vision_model."),
+//     opts.projectionPrefix ("") — tensor-name prefixes for forks.
+//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available.
+static JSValue js_loadClip(JSContext* ctx, JSValueConst,
+                           int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "loadClip(opts): opts object required");
+
+    std::string vocab, merges;
+    if (!getStr(ctx, argv[0], "vocabPath", vocab) ||
+        !getStr(ctx, argv[0], "mergesPath", merges))
+        return JS_ThrowTypeError(ctx,
+            "loadClip: opts.vocabPath and opts.mergesPath required");
+
+    std::string weights;
+    getStr(ctx, argv[0], "weightsPath", weights);
+    std::string textPath = weights, imagePath = weights, projPath = weights;
+    getStr(ctx, argv[0], "textPath",       textPath);
+    getStr(ctx, argv[0], "imagePath",      imagePath);
+    getStr(ctx, argv[0], "projectionPath", projPath);
+    if (textPath.empty() || imagePath.empty() || projPath.empty())
+        return JS_ThrowTypeError(ctx,
+            "loadClip: opts.weightsPath (single file) or "
+            "opts.textPath + opts.imagePath + opts.projectionPath required");
+
+    std::string textPrefix = "text_model.", visionPrefix = "vision_model.",
+                projPrefix  = "";
+    getStr(ctx, argv[0], "textPrefix",       textPrefix);
+    getStr(ctx, argv[0], "visionPrefix",     visionPrefix);
+    getStr(ctx, argv[0], "projectionPrefix", projPrefix);
+
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    {
+        std::string e;
+        if (!parseDeviceOpt(ctx, argv[0], dev, e))
+            return JS_ThrowTypeError(ctx, "loadClip: %s", e.c_str());
+    }
+
+    try {
+        auto w = std::make_unique<ClipWrapper>();
+        w->device = dev;
+        brotensor::DeviceScope scope(dev);
+
+        w->tok = std::make_unique<brolm::clip::Tokenizer>(
+            brolm::clip::Tokenizer::load(vocab, merges));
+
+        w->text = std::make_unique<brolm::clip::TextEncoder>(
+            brolm::clip::TextEncoderConfig{});
+        {
+            auto f = brotensor::safetensors::File::open(textPath);
+            w->text->load_weights(f, textPrefix);
+        }
+
+        w->image = std::make_unique<brolm::clip_image::ImageEncoder>(
+            brolm::clip_image::ImageEncoderConfig{});
+        {
+            auto f = brotensor::safetensors::File::open(imagePath);
+            w->image->load_weights(f, visionPrefix);
+        }
+
+        w->scorer = std::make_unique<brolm::clip_score::CLIPScorer>(
+            *w->tok, *w->text, *w->image);
+        {
+            auto f = brotensor::safetensors::File::open(projPath);
+            w->scorer->load_projections(f, projPrefix);
+        }
+
+        std::fprintf(stderr, "[INFO] [lm] CLIP ViT-L/14 loaded on %s\n",
+                     deviceName(dev));
+        return qjsbind::wrap<ClipWrapper>(ctx, w.release());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "loadClip: %s", e.what());
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T5 — encoder-only text encoder (T5-XXL, Flux's second text encoder)
+// ═══════════════════════════════════════════════════════════════════════════
+
+static T5Wrapper* t5Self(JSContext* ctx, JSValueConst this_val) {
+    return qjsbind::unwrap<T5Wrapper>(ctx, this_val);
+}
+
+// encode(text, opts?) -> { data: Float32Array, length, dim, ids: Int32Array }
+//   Encodes `text` to a fixed-length sequence (eos + pad to maxLength), runs the
+//   T5 encoder, and returns the (length, dim) hidden states flattened row-major.
+//   Padded positions are masked from attention; rows at padded positions are not
+//   meaningful but are returned so the buffer matches Flux's full-length T5
+//   conditioning. opts.maxLength overrides the handle default for this call.
+static JSValue js_t5_encode(JSContext* ctx, JSValueConst this_val,
+                            int argc, JSValueConst* argv) {
+    auto* w = t5Self(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "encode: not a T5Model");
+    std::string text;
+    if (argc < 1 || !argStr(ctx, argv[0], text))
+        return JS_ThrowTypeError(ctx, "encode(text, opts?): text string required");
+    int maxLen = w->maxLength;
+    if (argc >= 2 && JS_IsObject(argv[1])) getInt(ctx, argv[1], "maxLength", maxLen);
+    if (maxLen <= 0)
+        return JS_ThrowTypeError(ctx, "encode: maxLength must be > 0");
+
+    try {
+        std::vector<int32_t> ids = w->tok->encode(text, maxLen);
+        const int L = static_cast<int>(ids.size());
+        brotensor::DeviceScope scope(w->device);
+        brotensor::Tensor out;
+        w->enc->forward(ids.data(), L, out, w->tok->pad_id());
+        brotensor::sync_all();
+        std::vector<float> host = downloadFloats(out);
+
+        JSValue res = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, res, "data",
+                          qjsbind::make_float32_array(ctx, host));
+        JS_SetPropertyStr(ctx, res, "length", JS_NewInt32(ctx, L));
+        JS_SetPropertyStr(ctx, res, "dim",    JS_NewInt32(ctx, w->dModel));
+        JS_SetPropertyStr(ctx, res, "ids",    qjsbind::make_int32_array(ctx, ids));
+        return res;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "encode: %s", e.what());
+    }
+}
+
+static void registerT5Class(JSContext* ctx) {
+    qjsbind::Class<T5Wrapper>(ctx, "T5Model", qjsbind::NoGlobal)
+        .get("dModel",     [](T5Wrapper* w) { return w->dModel; })
+        .get("maxLength",  [](T5Wrapper* w) { return w->maxLength; })
+        .get("padId",      [](T5Wrapper* w) { return w->tok->pad_id(); })
+        .get("eosId",      [](T5Wrapper* w) { return w->tok->eos_id(); })
+        .get("vocabCount", [](T5Wrapper* w) { return (int)w->tok->vocab_count(); })
+        .method_raw("encode", js_t5_encode, 2);
+}
+
+// bro.lm.loadT5(opts) -> T5Model
+//   Loads the T5 encoder. Defaults to the T5-XXL config (Flux's second text
+//   encoder); the architectural dims can be overridden for smaller T5 variants.
+//   Blocking, matching brodiffusion's loaders.
+//   opts.tokenizerPath (REQUIRED) — the SentencePiece-Unigram tokenizer.json.
+//   opts.ggufPath — a T5 .gguf (config + weights read from the file); takes
+//     precedence and ignores the config overrides below.
+//   opts.weightsPath — a single safetensors file (T5EncoderModel export).
+//   opts.shards — an array of safetensors paths (the diffusers sharded T5-XXL).
+//   opts.prefix ("") — tensor-name prefix.
+//   opts.maxLength (512) — fixed sequence length for encode().
+//   opts.quantizeWeights (false) — INT8 (W8A16) attention/FFN weights (GPU-only).
+//   opts.config { vocabSize, dModel, dFf, dKv, numHeads, numLayers } — override
+//     the T5-XXL defaults for safetensors/shard loads.
+//   opts.device: 'cuda' | 'cpu' — defaults to CUDA when available.
+static JSValue js_loadT5(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "loadT5(opts): opts object required");
+
+    std::string tokPath;
+    if (!getStr(ctx, argv[0], "tokenizerPath", tokPath))
+        return JS_ThrowTypeError(ctx,
+            "loadT5: opts.tokenizerPath (tokenizer.json) required");
+
+    std::string gguf, weights;
+    getStr(ctx, argv[0], "ggufPath",    gguf);
+    getStr(ctx, argv[0], "weightsPath", weights);
+
+    std::vector<std::string> shards;
+    {
+        JSValue sv = JS_GetPropertyStr(ctx, argv[0], "shards");
+        if (JS_IsArray(sv)) {
+            std::uint32_t n = 0;
+            JSValue lv = JS_GetPropertyStr(ctx, sv, "length");
+            JS_ToUint32(ctx, &n, lv);
+            JS_FreeValue(ctx, lv);
+            for (std::uint32_t i = 0; i < n; ++i) {
+                JSValue e = JS_GetPropertyUint32(ctx, sv, i);
+                std::string s;
+                if (argStr(ctx, e, s)) shards.push_back(std::move(s));
+                JS_FreeValue(ctx, e);
+            }
+        }
+        JS_FreeValue(ctx, sv);
+    }
+    if (gguf.empty() && weights.empty() && shards.empty())
+        return JS_ThrowTypeError(ctx,
+            "loadT5: opts.ggufPath, opts.weightsPath, or opts.shards required");
+
+    std::string prefix = "";
+    getStr(ctx, argv[0], "prefix", prefix);
+    int maxLength = 512;
+    getInt(ctx, argv[0], "maxLength", maxLength);
+    if (maxLength <= 0)
+        return JS_ThrowTypeError(ctx, "loadT5: opts.maxLength must be > 0");
+    const bool quantize = getBool(ctx, argv[0], "quantizeWeights");
+
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    {
+        std::string e;
+        if (!parseDeviceOpt(ctx, argv[0], dev, e))
+            return JS_ThrowTypeError(ctx, "loadT5: %s", e.c_str());
+    }
+
+    try {
+        auto w = std::make_unique<T5Wrapper>();
+        w->device    = dev;
+        w->maxLength = maxLength;
+        brotensor::DeviceScope scope(dev);
+
+        w->tok = std::make_unique<brolm::t5::Tokenizer>(
+            brolm::t5::Tokenizer::load(tokPath));
+
+        if (!gguf.empty()) {
+            brotensor::gguf::File f = brotensor::gguf::File::open(gguf);
+            brolm::t5::T5Config cfg = brolm::t5::T5Config::from_gguf(f);
+            cfg.quantize_weights = quantize;
+            w->enc = std::make_unique<brolm::t5::TextEncoder>(cfg);
+            w->enc->load_weights(f);
+            w->dModel = cfg.d_model;
+        } else {
+            brolm::t5::T5Config cfg;  // T5-XXL defaults
+            JSValue cv = JS_GetPropertyStr(ctx, argv[0], "config");
+            if (JS_IsObject(cv)) {
+                getInt(ctx, cv, "vocabSize", cfg.vocab_size);
+                getInt(ctx, cv, "dModel",    cfg.d_model);
+                getInt(ctx, cv, "dFf",       cfg.d_ff);
+                getInt(ctx, cv, "dKv",       cfg.d_kv);
+                getInt(ctx, cv, "numHeads",  cfg.num_heads);
+                getInt(ctx, cv, "numLayers", cfg.num_layers);
+            }
+            JS_FreeValue(ctx, cv);
+            cfg.quantize_weights = quantize;
+            w->enc = std::make_unique<brolm::t5::TextEncoder>(cfg);
+
+            if (!shards.empty()) {
+                std::vector<brotensor::safetensors::File> files;
+                files.reserve(shards.size());
+                for (const auto& p : shards)
+                    files.push_back(brotensor::safetensors::File::open(p));
+                std::vector<const brotensor::safetensors::File*> ptrs;
+                ptrs.reserve(files.size());
+                for (const auto& f : files) ptrs.push_back(&f);
+                w->enc->load_weights(ptrs, prefix);
+            } else {
+                auto f = brotensor::safetensors::File::open(weights);
+                w->enc->load_weights(f, prefix);
+            }
+            w->dModel = cfg.d_model;
+        }
+
+        std::fprintf(stderr, "[INFO] [lm] T5 encoder loaded on %s\n",
+                     deviceName(dev));
+        return qjsbind::wrap<T5Wrapper>(ctx, w.release());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "loadT5: %s", e.what());
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Install
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1509,6 +2103,8 @@ void installLmBindings(JSContext* ctx) {
     registerMistralTokenizerClass(ctx);
     registerModelClass(ctx);
     registerQwen35Class(ctx);
+    registerClipClass(ctx);
+    registerT5Class(ctx);
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
@@ -1529,6 +2125,10 @@ void installLmBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadQwen35, "loadQwen35", 2));
     JS_SetPropertyStr(ctx, lm, "loadTokenizer",
         JS_NewCFunction(ctx, js_loadTokenizer, "loadTokenizer", 1));
+    JS_SetPropertyStr(ctx, lm, "loadClip",
+        JS_NewCFunction(ctx, js_loadClip, "loadClip", 1));
+    JS_SetPropertyStr(ctx, lm, "loadT5",
+        JS_NewCFunction(ctx, js_loadT5, "loadT5", 1));
     JS_SetPropertyStr(ctx, lm, "generate",
         JS_NewCFunction(ctx, js_lm_generate, "generate", 3));
     JS_SetPropertyStr(ctx, broObj, "lm", lm);

@@ -253,13 +253,127 @@ console.log(mis.tokenizer.decode(mIds));
  *           '<|im_start|>user\n' + text + '<|im_end|>\n<|im_start|>assistant\n'
  *         Generation stops on <|im_end|> / <|endoftext|> or maxNewTokens.
  *         opts: { maxNewTokens, sampling: {temperature, topK, topP, seed},
- *                 onToken(id) → return false to stop early }
+ *                 images, onToken(id) → return false to stop early }
+ *
+ *         VISION INPUT — opts.images is an ImageBitmap / ImageData
+ *         ({data,width,height}, RGBA) or an array of them. The prompt must
+ *         already contain one placeholder triple per image, in the position the
+ *         image should appear:
+ *           <|vision_start|><|image_pad|><|vision_end|>
+ *         Images are consumed in order. Supported on the async
+ *         bro.lm.generate(q35, prompt, { images, onToken, onDone }) too.
  *
  * Async: bro.lm.generate(q35, promptString, opts) — same streaming/cancel
- * contract as the LMModel form.
+ * contract as the LMModel form (opts.images supported there too).
  */
 const q35 = bro.lm.loadQwen35('../brolm/weights/Qwen3.5-0.8B');
 const ids35 = q35.generate(
     '<|im_start|>user\nOne-word answer: capital of France?<|im_end|>\n<|im_start|>assistant\n',
     { maxNewTokens: 16, sampling: { temperature: 0 } });
 console.log(q35.decode(ids35));
+
+// Vision: caption an image (the prompt carries the image placeholder triple).
+const visBmp = await createImageBitmap(someImageData);
+const visIds = q35.generate(
+    '<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>' +
+    'Describe this image.<|im_end|>\n<|im_start|>assistant\n',
+    { maxNewTokens: 64, images: visBmp, sampling: { temperature: 0 } });
+console.log(q35.decode(visIds));
+
+
+// ── CLIP — ViT-L/14 cross-modal scorer (text ↔ image) ───────────────────────────
+
+/**
+ * Load the CLIP ViT-L/14 cross-modal scorer (openai/clip-vit-large-patch14):
+ * the CLIP BPE tokenizer + text tower + image tower + the two cross-modal
+ * projections, wrapped as brolm's CLIPScorer. Blocking (file IO + GPU upload),
+ * matching the bro.diffusion loaders. CUDA by default.
+ *
+ * @param {Object} opts
+ * @param {string} opts.vocabPath        - CLIP tokenizer vocab.json (required).
+ * @param {string} opts.mergesPath       - CLIP tokenizer merges.txt (required).
+ * @param {string} [opts.weightsPath]    - one safetensors holding the text tower
+ *        (text_model.*), the vision tower (vision_model.*), and the projections
+ *        (text_projection.weight / visual_projection.weight). The single-file
+ *        CLIP export; used as the default for the three component paths below.
+ * @param {string} [opts.textPath]       - load the text tower from its own file.
+ * @param {string} [opts.imagePath]      - load the vision tower from its own file.
+ * @param {string} [opts.projectionPath] - load the projections from their own file.
+ * @param {string} [opts.textPrefix='text_model.']
+ * @param {string} [opts.visionPrefix='vision_model.']
+ * @param {string} [opts.projectionPrefix='']
+ * @param {string} [opts.device='cuda']
+ * @returns {ClipModel}
+ *
+ * ClipModel:
+ * @property {number} projectionDim - shared cross-modal embedding dim (768).
+ * @method encodeText(text|text[]) → Float32Array | Float32Array[]
+ *         Projected, L2-normalised text feature(s) in the shared space.
+ * @method score(text|text[], image) → number | number[]
+ *         Cosine similarity in [-1, 1] between `image` (ImageBitmap / ImageData)
+ *         and each prompt. Passing a text[] scores the one image against every
+ *         candidate — the zero-shot-classification call (take the argmax).
+ *
+ * NOTE: the scorer exposes the projected TEXT feature and a fused
+ * score(image)-vs-cached-prompt, but not a standalone projected IMAGE feature,
+ * so there is no encodeImage()/score(textEmb, imageEmb) — the brolm CLIPScorer
+ * surface has no public accessor for the projected image embedding.
+ */
+const clip = bro.lm.loadClip({
+    vocabPath:   '../clip-vit-large-patch14/vocab.json',
+    mergesPath:  '../clip-vit-large-patch14/merges.txt',
+    weightsPath: '../clip-vit-large-patch14/model.safetensors',
+});
+// Zero-shot image classification: score one image against candidate labels.
+const photo  = await createImageBitmap(someImageData);
+const labels = ['a photo of a cat', 'a photo of a dog', 'a photo of a car'];
+const scores = clip.score(labels, photo);
+const best   = labels[scores.indexOf(Math.max(...scores))];
+console.log('best match:', best, scores);
+// Text embeddings (e.g. to cache / cluster prompts).
+const emb = clip.encodeText('a photo of an astronaut riding a horse');
+
+
+// ── T5 — encoder-only text encoder (T5-XXL, Flux's second text encoder) ──────────
+
+/**
+ * Load the T5 encoder (brolm's t5::TextEncoder). Defaults to the T5-XXL config —
+ * Flux's second text encoder — but the architectural dims can be overridden for
+ * smaller T5 variants. Blocking, matching the bro.diffusion loaders. CUDA by
+ * default.
+ *
+ * @param {Object} opts
+ * @param {string} opts.tokenizerPath      - SentencePiece-Unigram tokenizer.json
+ *        (required).
+ * @param {string} [opts.ggufPath]         - a T5 .gguf (config + weights read
+ *        from the file; takes precedence and ignores the config overrides).
+ * @param {string} [opts.weightsPath]      - a single safetensors (T5EncoderModel).
+ * @param {string[]} [opts.shards]         - safetensors paths (the diffusers
+ *        sharded T5-XXL). One of ggufPath / weightsPath / shards is required.
+ * @param {string} [opts.prefix='']        - tensor-name prefix.
+ * @param {number} [opts.maxLength=512]    - fixed encode() sequence length.
+ * @param {boolean} [opts.quantizeWeights=false] - INT8 (W8A16) attn/FFN weights
+ *        (GPU-only; ignored on CPU).
+ * @param {Object} [opts.config]           - override the T5-XXL defaults for a
+ *        safetensors/shard load: { vocabSize, dModel, dFf, dKv, numHeads,
+ *        numLayers }.
+ * @param {string} [opts.device='cuda']
+ * @returns {T5Model}
+ *
+ * T5Model:
+ * @property {number} dModel, maxLength, padId, eosId, vocabCount
+ * @method encode(text, opts?) → { data: Float32Array, length, dim, ids: Int32Array }
+ *         Encodes to a fixed-length sequence (eos + pad to maxLength), runs the
+ *         encoder, and returns the (length × dim) hidden states flattened
+ *         row-major. Padded positions are masked from attention; their rows are
+ *         still returned so the buffer matches Flux's full-length conditioning.
+ *         opts.maxLength overrides the handle default for this call.
+ */
+const t5 = bro.lm.loadT5({
+    tokenizerPath: '../FLUX.1-schnell/tokenizer_2/tokenizer.json',
+    shards: ['../FLUX.1-schnell/text_encoder_2/model-00001-of-00002.safetensors',
+             '../FLUX.1-schnell/text_encoder_2/model-00002-of-00002.safetensors'],
+    maxLength: 256,
+});
+const t5enc = t5.encode('a serene mountain lake at dawn');
+console.log(t5enc.length, 'tokens ×', t5enc.dim, 'dims =', t5enc.data.length, 'floats');
