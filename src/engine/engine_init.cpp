@@ -127,6 +127,18 @@ Engine::Engine(const EngineConfig& config)
         };
         tryMount("lib",    config.libDirName.empty()    ? "lib"    : config.libDirName);
         tryMount("system", config.systemDirName.empty() ? "system" : config.systemDirName);
+        // Shared ES-module std lib. App-local `<app>/std` wins (e.g. a tool
+        // piloting the lib in-tree); otherwise the project-root `std/`. Apps
+        // import it by virtual path (`/std/dom.js`) regardless of where it
+        // lives, so moving the folder needs no import edits.
+        tryMount("std", "std");
+        // `/app` always points at the running app's own root, so an app's
+        // internal modules import each other by absolute virtual path
+        // (`/app/lib/foo.js`) without fragile `../` traversal.
+        if (!config.appDir.empty()) {
+            std::error_code ec;
+            assetMounts_.addMount("/app", fs::absolute(config.appDir, ec).string());
+        }
     }
 
     // === Settings system ===
@@ -155,7 +167,7 @@ Engine::Engine(const EngineConfig& config)
 
     // 4. JS runtime + bindings
     jsRuntime_ = std::make_unique<js::Runtime>();
-    jsRuntime_->setModuleLoader();
+    jsRuntime_->setModuleLoader(&assetMounts_);
 
     // Wire brokit logging through bro's LOG_* macros
     brokit::Runtime::setLogCallback([](brokit::Runtime::LogLevel level, const std::string& msg) {
@@ -770,16 +782,27 @@ Engine::Engine(const EngineConfig& config)
     js::installWorkerBindings(jsRuntime_->getContext(), manifest_.basePath,
                               netService_.get(), &assetMounts_);
 
-    // 10. Load and execute scripts (external + inline, in document order)
+    // 10. Load and execute scripts (external + inline, in document order).
+    //     `type="module"` scripts go through evalModule so `import`/`export`
+    //     and the file-based module loader (mount-aware for `/lib/...`) work.
+    //     Inline modules resolve relative imports against the app base path.
     for (auto& script : manifest_.scripts) {
         if (script.isInline()) {
-            if (!jsRuntime_->eval(script.code, "<inline>")) {
+            if (script.isModule) {
+                std::string filename = manifest_.basePath + "/<inline-module>";
+                if (!jsRuntime_->evalModule(script.code, filename)) {
+                    LOG_ERROR("Failed to execute inline module script");
+                }
+            } else if (!jsRuntime_->eval(script.code, "<inline>")) {
                 LOG_ERROR("Failed to execute inline script");
             }
         } else {
             std::string code = AppLoader::loadFile(script.path);
             if (!code.empty()) {
-                if (!jsRuntime_->eval(code, script.path)) {
+                bool ok = script.isModule
+                              ? jsRuntime_->evalModule(code, script.path)
+                              : jsRuntime_->eval(code, script.path);
+                if (!ok) {
                     LOG_ERROR("Failed to execute script: %s", script.path.c_str());
                 }
             }

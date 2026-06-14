@@ -8,6 +8,8 @@ extern "C" {
 #include "quickjs.h"
 }
 
+namespace bro::util { class AssetMounts; }
+
 namespace bro::js {
 
 /// Where a JS invocation came from. Used purely for the log line — error
@@ -73,8 +75,12 @@ public:
     /// Drain the microtask / promise job queue. Errors flow through the funnel.
     void executePendingJobs();
 
-    /// Install a custom ES-module loader (file-based).
-    void setModuleLoader();
+    /// Install a custom ES-module loader (file-based). When `mounts` is
+    /// supplied, `/`-prefixed import specifiers (e.g. `import "/lib/x.js"`)
+    /// resolve through the engine's asset mounts; relative specifiers always
+    /// resolve against the importing module's path. `mounts` must outlive any
+    /// module evaluation (it is held as the loader's opaque pointer).
+    void setModuleLoader(const util::AssetMounts* mounts = nullptr);
 
     // -----------------------------------------------------------------------
     // The error funnel.

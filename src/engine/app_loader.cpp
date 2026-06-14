@@ -96,19 +96,22 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
                             std::regex_constants::icase);
         std::regex srcRe(R"(src\s*=\s*["']([^"']+)["'])",
                          std::regex_constants::icase);
+        std::regex moduleRe(R"(type\s*=\s*["']module["'])",
+                            std::regex_constants::icase);
         auto begin = std::sregex_iterator(html.begin(), html.end(), scriptRe);
         auto end = std::sregex_iterator();
         for (auto it = begin; it != end; ++it) {
             std::string attrs = (*it)[1].str();
             std::string body = (*it)[2].str();
+            bool isModule = std::regex_search(attrs, moduleRe);
             std::smatch srcMatch;
             if (std::regex_search(attrs, srcMatch, srcRe)) {
                 // External script
                 std::string resolved = resolvePath(appDir, srcMatch[1].str(), mounts);
-                manifest.scripts.push_back({resolved, {}});
+                manifest.scripts.push_back({resolved, {}, isModule});
             } else if (!body.empty()) {
                 // Inline script
-                manifest.scripts.push_back({{}, body});
+                manifest.scripts.push_back({{}, body, isModule});
             }
         }
     }

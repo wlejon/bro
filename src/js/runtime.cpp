@@ -1,4 +1,5 @@
 #include "js/runtime.h"
+#include "util/asset_mounts.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 #include "util/time.h"
@@ -8,6 +9,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <list>
 #include <sstream>
@@ -25,12 +27,15 @@ namespace bro::js {
 // ---------------------------------------------------------------------------
 
 static char* module_normalize(JSContext* ctx, const char* base_name,
-                              const char* name, void* /*opaque*/)
+                              const char* name, void* opaque)
 {
     if (!name) return nullptr;
 
+    const auto* mounts = static_cast<const util::AssetMounts*>(opaque);
+
     std::string result;
     if (name[0] == '.' && base_name) {
+        // Relative specifier — resolve against the importing module's path.
         std::string base(base_name);
         auto slash = base.find_last_of("/\\");
         if (slash != std::string::npos) {
@@ -38,8 +43,26 @@ static char* module_normalize(JSContext* ctx, const char* base_name,
         } else {
             result = name;
         }
+    } else if (name[0] == '/' && mounts) {
+        // Engine-mounted specifier (e.g. "/lib/foo.js"). Rewrite through the
+        // asset mounts so the shared stdlib is importable by virtual path.
+        // Falls through to the literal path if no mount prefix matches.
+        std::string mounted = mounts->resolve(name);
+        result = mounted.empty() ? name : mounted;
     } else {
         result = name;
+    }
+
+    // Canonicalize lexically so different spellings of the same file
+    // ("a/./b.js", "a/x/../b.js") collapse to one module name. QuickJS keys its
+    // module cache on this string, so without this a module imported two ways
+    // is instantiated twice — breaking any module-level singleton state.
+    if (result.find('/') != std::string::npos ||
+        result.find('\\') != std::string::npos) {
+        std::error_code ec;
+        std::string normalized =
+            std::filesystem::path(result).lexically_normal().string();
+        if (!normalized.empty()) result = normalized;
     }
 
     char* buf = static_cast<char*>(js_malloc(ctx, result.size() + 1));
@@ -563,9 +586,12 @@ JSContext* Runtime::createContext()
     return JS_NewContext(rt_);
 }
 
-void Runtime::setModuleLoader()
+void Runtime::setModuleLoader(const util::AssetMounts* mounts)
 {
-    JS_SetModuleLoaderFunc(rt_, module_normalize, module_loader, nullptr);
+    // The mounts pointer is handed to QuickJS as the loader opaque and reaches
+    // both module_normalize and module_loader. It must outlive module eval.
+    JS_SetModuleLoaderFunc(rt_, module_normalize, module_loader,
+                           const_cast<util::AssetMounts*>(mounts));
 }
 
 JSValue Runtime::callJs(JSContext* ctx, JSValueConst fn, JSValueConst thisVal,
