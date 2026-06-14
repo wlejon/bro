@@ -115,6 +115,78 @@ static bool evalCode(JSContext* ctx, bro::js::Runtime* rt,
     return true;
 }
 
+/// Heuristic: does this top-level script use ES-module syntax? Scans for a line
+/// whose first non-space token is a static `import`/`export` (a bare `import(`
+/// dynamic import is valid in a classic script and is intentionally excluded).
+static bool looksLikeModule(const std::string& code) {
+    const size_t n = code.size();
+    size_t i = 0;
+    while (i < n) {
+        size_t j = i;
+        while (j < n && (code[j] == ' ' || code[j] == '\t')) j++;
+        auto starts = [&](const char* kw) {
+            size_t k = 0;
+            while (kw[k]) {
+                if (j + k >= n || code[j + k] != kw[k]) return false;
+                ++k;
+            }
+            char c = (j + k < n) ? code[j + k] : '\0';
+            // Static import/export is followed by a space, brace, star, or quote.
+            return c == ' ' || c == '\t' || c == '{' || c == '*' ||
+                   c == '"' || c == '\'';
+        };
+        if (starts("import") || starts("export")) return true;
+        while (i < n && code[i] != '\n') i++;
+        if (i < n) i++;
+    }
+    return false;
+}
+
+/// Evaluate a script file as an ES module (so it can `import` the app's
+/// already-loaded modules — e.g. test harnesses importing from /app/*). Module
+/// evaluation is async, so drain microtasks until the evaluation promise settles
+/// and surface a rejected body (a failed assert / ReferenceError) as an error —
+/// otherwise it would be silently swallowed.
+static bool evalModuleFile(JSContext* ctx, bro::js::Runtime* rt,
+                           const std::string& code, const char* filename) {
+    JSValue func = JS_Eval(ctx, code.c_str(), code.size(), filename,
+                           JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
+    if (JS_IsException(func)) {
+        bro::js::Runtime::checkException(ctx, func);
+        JS_FreeValue(ctx, func);
+        return false;
+    }
+    JSValue result = JS_EvalFunction(ctx, func);
+    if (JS_IsException(result)) {
+        bro::js::Runtime::checkException(ctx, result);
+        JS_FreeValue(ctx, result);
+        return false;
+    }
+    bool ok = true;
+    if (JS_IsPromise(result)) {
+        while (JS_PromiseState(ctx, result) == JS_PROMISE_PENDING)
+            rt->executePendingJobs();
+        if (JS_PromiseState(ctx, result) == JS_PROMISE_REJECTED) {
+            JSValue reason = JS_PromiseResult(ctx, result);
+            const char* msg = JS_ToCString(ctx, reason);
+            JSValue stack = JS_GetPropertyStr(ctx, reason, "stack");
+            const char* st = JS_IsUndefined(stack) ? nullptr
+                                                   : JS_ToCString(ctx, stack);
+            LOG_ERROR("Module error: %s%s%s", msg ? msg : "(unknown)",
+                      st ? "\n" : "", st ? st : "");
+            if (msg) JS_FreeCString(ctx, msg);
+            if (st) JS_FreeCString(ctx, st);
+            JS_FreeValue(ctx, stack);
+            JS_FreeValue(ctx, reason);
+            ok = false;
+        }
+    } else {
+        rt->executePendingJobs();
+    }
+    JS_FreeValue(ctx, result);
+    return ok;
+}
+
 /// Run a JS REPL on stdin.
 static void runRepl(JSContext* ctx, bro::js::Runtime* rt,
                     bro::engine::Engine* engine) {
@@ -336,7 +408,11 @@ int main(int argc, char* argv[]) {
             } else {
                 std::ostringstream oss;
                 oss << ifs.rdbuf();
-                if (!evalCode(ctx, rt, oss.str(), scriptPath.c_str()))
+                std::string src = oss.str();
+                bool ok = looksLikeModule(src)
+                              ? evalModuleFile(ctx, rt, src, scriptPath.c_str())
+                              : evalCode(ctx, rt, src, scriptPath.c_str());
+                if (!ok)
                     exitCode = 1;
             }
         } else {
