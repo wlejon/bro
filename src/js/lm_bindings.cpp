@@ -1551,6 +1551,13 @@ static JSValue js_lm_generate_qwen35(JSContext* ctx, Qwen35Wrapper* w,
     };
 
     auto done = [st, mw](JSContext* c, bool cancelled, const std::string& error) {
+        // Release the single-owner lock BEFORE invoking onDone so a callback that
+        // synchronously starts the next generation on this model (a serialized
+        // queue, e.g. listen-lab's translation drain) succeeds instead of tripping
+        // the in-flight guard. The work thread has finished and joined; this job's
+        // output lives on `st`, so a new op claiming the model can't disturb what
+        // onDone reads here. (Matches the STT/TTS bindings.)
+        mw->generating.store(false, std::memory_order_release);
         const size_t n = st->produced.load(std::memory_order_acquire);
         if (st->hasOnDone) {
             JSValue arr  = qjsbind::make_int32_array(c, st->ids.data(), n);
@@ -1568,7 +1575,6 @@ static JSValue js_lm_generate_qwen35(JSContext* ctx, Qwen35Wrapper* w,
         if (st->hasOnToken) JS_FreeValue(c, st->onToken);
         if (st->hasOnDone)  JS_FreeValue(c, st->onDone);
         JS_FreeValue(c, st->modelRef);
-        mw->generating.store(false, std::memory_order_release);
     };
 
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
@@ -1679,6 +1685,13 @@ static JSValue js_lm_generate(JSContext* ctx, JSValueConst,
     // JS thread, once: hand the full id array + {cancelled,error} to onDone,
     // free the dup'd values, release the model.
     auto done = [st, mw](JSContext* c, bool cancelled, const std::string& error) {
+        // Release the single-owner lock BEFORE invoking onDone so a callback that
+        // synchronously starts the next generation on this model (a serialized
+        // queue, e.g. listen-lab's translation drain) succeeds instead of tripping
+        // the in-flight guard. The work thread has finished and joined; this job's
+        // output lives on `st`, so a new op claiming the model can't disturb what
+        // onDone reads here. (Matches the STT/TTS bindings.)
+        mw->generating.store(false, std::memory_order_release);
         const size_t n = st->produced.load(std::memory_order_acquire);
         if (st->hasOnDone) {
             JSValue arr  = qjsbind::make_int32_array(c, st->ids.data(), n);
@@ -1696,7 +1709,6 @@ static JSValue js_lm_generate(JSContext* ctx, JSValueConst,
         if (st->hasOnToken) JS_FreeValue(c, st->onToken);
         if (st->hasOnDone)  JS_FreeValue(c, st->onDone);
         JS_FreeValue(c, st->modelRef);
-        mw->generating.store(false, std::memory_order_release);
     };
 
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));

@@ -1629,6 +1629,14 @@ static JSValue js_stt_transcribe_qwenasr(JSContext* ctx, QwenAsrWrapper* w,
     };
 
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        // Release the single-owner lock BEFORE invoking onDone so a callback that
+        // synchronously starts the next transcription on this model (the natural
+        // serialized-queue pattern, e.g. listen-lab's rolling transcript) succeeds
+        // instead of tripping the in-flight guard. The work thread has finished
+        // and joined; the result's host data is already on `job`, so a new op
+        // claiming the model can't disturb what onDone reads here. (Matches the
+        // TTS bindings, which release before onDone for the same reason.)
+        mw->busy->store(false, std::memory_order_release);
         if (job->hasOnDone) {
             JSValue arr  = qjsbind::make_int32_array(c, job->token_ids);
             JSValue info = JS_NewObject(c);
@@ -1645,7 +1653,6 @@ static JSValue js_stt_transcribe_qwenasr(JSContext* ctx, QwenAsrWrapper* w,
         if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
         if (job->hasOnToken) JS_FreeValue(c, job->onToken);
         JS_FreeValue(c, job->asrRef);
-        mw->busy->store(false, std::memory_order_release);
     };
 
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
@@ -1723,6 +1730,12 @@ static JSValue js_stt_transcribe_parakeet(JSContext* ctx, ParakeetWrapper* w,
     };
 
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        // Release the single-owner lock BEFORE invoking onDone so a callback that
+        // synchronously starts the next transcription on this model (a serialized
+        // queue) succeeds instead of tripping the in-flight guard. The work thread
+        // has finished and joined; the result's host data is already on `job`, so
+        // a new op claiming the model can't disturb what onDone reads here.
+        mw->busy->store(false, std::memory_order_release);
         if (job->hasOnDone) {
             JSValue res  = makeParakeetResult(c, job->token_ids, job->token_frames);
             JSValue info = JS_NewObject(c);
@@ -1739,7 +1752,6 @@ static JSValue js_stt_transcribe_parakeet(JSContext* ctx, ParakeetWrapper* w,
         if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
         if (job->hasOnToken) JS_FreeValue(c, job->onToken);
         JS_FreeValue(c, job->parakeetRef);
-        mw->busy->store(false, std::memory_order_release);
     };
 
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
@@ -1855,6 +1867,12 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
     // JS thread, once: hand the id array + {cancelled,error} to onDone, free the
     // dup'd values, release the model.
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        // Release the single-owner lock BEFORE invoking onDone so a callback that
+        // synchronously starts the next transcription on this model (a serialized
+        // queue) succeeds instead of tripping the in-flight guard. The work thread
+        // has finished and joined; the result's host data is already on `job`, so
+        // a new op claiming the model can't disturb what onDone reads here.
+        mw->busy->store(false, std::memory_order_release);
         if (job->hasOnDone) {
             JSValue arr  = qjsbind::make_int32_array(c, job->token_ids);
             JSValue info = JS_NewObject(c);
@@ -1871,7 +1889,6 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
         if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
         if (job->hasOnToken) JS_FreeValue(c, job->onToken);
         JS_FreeValue(c, job->whisperRef);
-        mw->busy->store(false, std::memory_order_release);
     };
 
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
@@ -2000,6 +2017,12 @@ static JSValue js_whisper_session_transcribe(JSContext* ctx, JSValueConst this_v
     };
 
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        // Release the single-owner lock BEFORE invoking onDone so a callback that
+        // synchronously starts the next transcription on this model (a serialized
+        // queue) succeeds instead of tripping the in-flight guard. The work thread
+        // has finished and joined; the result's host data is already on `job`, so
+        // a new op claiming the model can't disturb what onDone reads here.
+        mw->busy->store(false, std::memory_order_release);
         if (job->hasOnDone) {
             JSValue arr  = qjsbind::make_int32_array(c, job->token_ids);
             JSValue info = JS_NewObject(c);
@@ -2016,7 +2039,6 @@ static JSValue js_whisper_session_transcribe(JSContext* ctx, JSValueConst this_v
         if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
         if (job->hasOnToken) JS_FreeValue(c, job->onToken);
         JS_FreeValue(c, job->whisperRef);
-        mw->busy->store(false, std::memory_order_release);
     };
 
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
@@ -2143,6 +2165,12 @@ static JSValue js_parakeet_session_transcribe(JSContext* ctx, JSValueConst this_
     };
 
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        // Release the single-owner lock BEFORE invoking onDone so a callback that
+        // synchronously starts the next transcription on this model (a serialized
+        // queue) succeeds instead of tripping the in-flight guard. The work thread
+        // has finished and joined; the result's host data is already on `job`, so
+        // a new op claiming the model can't disturb what onDone reads here.
+        mw->busy->store(false, std::memory_order_release);
         if (job->hasOnDone) {
             JSValue res  = makeParakeetResult(c, job->token_ids, job->token_frames);
             JSValue info = JS_NewObject(c);
@@ -2159,7 +2187,6 @@ static JSValue js_parakeet_session_transcribe(JSContext* ctx, JSValueConst this_
         if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
         if (job->hasOnToken) JS_FreeValue(c, job->onToken);
         JS_FreeValue(c, job->parakeetRef);
-        mw->busy->store(false, std::memory_order_release);
     };
 
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
@@ -2289,6 +2316,14 @@ static JSValue js_qwenasr_session_transcribe(JSContext* ctx, JSValueConst this_v
     };
 
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        // Release the single-owner lock BEFORE invoking onDone so a callback that
+        // synchronously starts the next transcription on this model (the natural
+        // serialized-queue pattern, e.g. listen-lab's rolling transcript) succeeds
+        // instead of tripping the in-flight guard. The work thread has finished
+        // and joined; the result's host data is already on `job`, so a new op
+        // claiming the model can't disturb what onDone reads here. (Matches the
+        // TTS bindings, which release before onDone for the same reason.)
+        mw->busy->store(false, std::memory_order_release);
         if (job->hasOnDone) {
             JSValue arr  = qjsbind::make_int32_array(c, job->token_ids);
             JSValue info = JS_NewObject(c);
@@ -2305,7 +2340,6 @@ static JSValue js_qwenasr_session_transcribe(JSContext* ctx, JSValueConst this_v
         if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
         if (job->hasOnToken) JS_FreeValue(c, job->onToken);
         JS_FreeValue(c, job->asrRef);
-        mw->busy->store(false, std::memory_order_release);
     };
 
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
