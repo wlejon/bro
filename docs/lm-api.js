@@ -1,10 +1,11 @@
 /**
- * bro.lm — Language-model text generation (Qwen3, Mistral 3.1, Qwen3.5)
+ * bro.lm — Language-model text generation (Qwen3, Mistral 3.1, Qwen3.5) +
+ *          NLLB-200 machine translation
  *
  * Backed by brolm (tokenizers + transformer text models) on top of brotensor.
  * Defaults to CUDA; pass { device: 'cpu' } to force the CPU backend.
  *
- * Three model families:
+ * Generation model families (plus the NLLB-200 translator — see its section):
  *   - Qwen3 (loadQwen): GGUF checkpoint, Qwen BPE tokenizer, ChatML chat
  *     template. The original surface — most of this file documents it.
  *   - Mistral 3.1 text (loadMistral): quantized GGUF + the native "tekken"
@@ -279,6 +280,56 @@ const visIds = q35.generate(
     'Describe this image.<|im_end|>\n<|im_start|>assistant\n',
     { maxNewTokens: 64, images: visBmp, sampling: { temperature: 0 } });
 console.log(q35.decode(visIds));
+
+
+// ── NLLB-200 — encoder-decoder machine translation ──────────────────────────────
+
+/**
+ * Load an NLLB-200 checkpoint directory (the converted HF layout: config.json,
+ * tokenizer.json, model.safetensors — e.g. nllb-200-distilled-600M). brolm's
+ * Translator owns the SentencePiece-metaspace-BPE tokenizer, the M2M-100
+ * encoder-decoder transformer, and beam search; the model translates between any
+ * pair of the 200+ FLORES-200 languages. CUDA by default; CPU FP32 otherwise.
+ *
+ * @param {string} checkpointDir
+ * @param {Object} [opts]
+ * @param {string} [opts.device='cuda']
+ * @param {function} [opts.onReady]  - async load: onReady(model). The weights
+ *        are ≈2.4 GB, so prefer the async form to keep the UI responsive.
+ * @param {function} [opts.onError]
+ * @returns {NllbModel}
+ *
+ * NllbModel:
+ * @property {string} family         - 'nllb'.
+ * @property {number} vocabSize, dModel, encoderLayers, decoderLayers
+ * @property {number} languageCount  - number of FLORES-200 codes the tokenizer
+ *           knows (200+).
+ * @method hasLanguage(code) → boolean
+ *         True if `code` (a FLORES-200 code like 'eng_Latn') is supported.
+ * @method translate(text, srcLang, tgtLang, opts?) → string | AsyncHandle
+ *         srcLang / tgtLang are FLORES-200 codes ('eng_Latn', 'fra_Latn',
+ *         'spa_Latn', 'zho_Hans', 'arb_Arab', ...). Throws on an unknown code.
+ *         opts: { numBeams=5, maxNewTokens=200, lengthPenalty=1.0 }
+ *         SYNC by default — returns the translated string (blocks on the beam
+ *         search). If opts.onDone is a function the search runs on a background
+ *         thread and the call returns an AsyncHandle:
+ *           opts.onDone(text)      - the translation, on the JS thread.
+ *           opts.onError(message)  - on failure.
+ *         handle.cancel() drops the pending result (the in-flight search is
+ *         monolithic — it runs to completion but onDone is not fired).
+ *         One translation per model at a time: a second concurrent call throws.
+ */
+const nllb = bro.lm.loadNllb('../brolm/weights/nllb-200-distilled-600M');
+// Sync — short text, blocks until done.
+console.log(nllb.translate('Hello, world!', 'eng_Latn', 'fra_Latn'));
+// Async — keep the UI responsive on longer text.
+const tr = nllb.translate('The quick brown fox jumps over the lazy dog.',
+    'eng_Latn', 'spa_Latn', {
+        numBeams: 5,
+        onDone: (text) => console.log('translation:', text),
+        onError: (e) => console.error('translate failed:', e),
+    });
+// tr.cancel();  // abandon the pending result if needed
 
 
 // ── CLIP — ViT-L/14 cross-modal scorer (text ↔ image) ───────────────────────────

@@ -41,6 +41,7 @@
 #include <brolm/mistral3_text.h>
 #include <brolm/mistral_tokenizer.h>
 #include <brolm/qwen35_vl.h>
+#include <brolm/nllb.h>
 #include <brolm/clip.h>
 #include <brolm/clip_image.h>
 #include <brolm/clip_score.h>
@@ -163,6 +164,18 @@ struct ClipWrapper {
     std::unique_ptr<brolm::clip_image::ImageEncoder> image;
     std::unique_ptr<brolm::clip_score::CLIPScorer>   scorer;
     brotensor::Device device = brotensor::Device::CPU;
+};
+
+// NLLB-200 encoder-decoder translator (M2M-100 arch). brolm's Translator owns
+// the SentencePiece-metaspace-BPE tokenizer, the config, the encoder, the
+// decoder, and the per-call beam-search scratch. translate() runs a monolithic
+// beam search over that single-owner scratch, so a `translating` guard rejects a
+// second concurrent translation on the same model (the model + scratch can't be
+// shared across two in-flight calls).
+struct NllbWrapper {
+    std::unique_ptr<brolm::nllb::Translator> tr;
+    brotensor::Device device = brotensor::Device::CPU;
+    std::atomic<bool> translating{false};
 };
 
 // T5 encoder (T5-XXL by default — Flux's second text encoder). Owns the
@@ -2107,6 +2120,263 @@ static JSValue js_loadT5(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// NLLB-200 translator — bro.lm.loadNllb + NllbModel.translate
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Build the Translator from a converted NLLB checkpoint directory (config.json +
+// tokenizer.json + model.safetensors). Heavy + blocking (≈2.4 GB safetensors +
+// GPU upload); shared by the sync and async loadNllb paths. Throws on error.
+static void buildNllb(const std::string& dir, brotensor::Device dev,
+                      std::unique_ptr<NllbWrapper>& w_out) {
+    auto w = std::make_unique<NllbWrapper>();
+    w->device = dev;
+    {
+        brotensor::DeviceScope scope(dev);
+        w->tr = std::make_unique<brolm::nllb::Translator>(
+            brolm::nllb::Translator::load(dir));
+    }
+    std::fprintf(stderr, "[INFO] [lm] NLLB-200 loaded on %s\n", deviceName(dev));
+    w_out = std::move(w);
+}
+
+struct NllbLoadState {
+    std::string                  dir;
+    brotensor::Device            dev = brotensor::Device::CPU;
+    std::unique_ptr<NllbWrapper> w;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.lm.loadNllb(checkpointDir, opts?) -> NllbModel    (sync)
+//                                       -> AsyncHandle  (async, if opts.onReady)
+//   checkpointDir: the converted NLLB-200 layout — config.json, tokenizer.json,
+//   model.safetensors (e.g. nllb-200-distilled-600M). The Translator owns the
+//   tokenizer, so there's no separate tokenizer handle: the model exposes
+//   translate() over FLORES-200 language codes.
+//   opts.device / opts.onReady / opts.onError: as loadQwen.
+static JSValue js_loadNllb(JSContext* ctx, JSValueConst,
+                           int argc, JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx,
+            "loadNllb(checkpointDir, opts?): path string required");
+
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    if (argc >= 2) {
+        std::string err;
+        if (!parseDeviceOpt(ctx, argv[1], dev, err))
+            return JS_ThrowTypeError(ctx, "loadNllb: %s", err.c_str());
+    }
+
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<NllbWrapper> w;
+            buildNllb(dir, dev, w);
+            return qjsbind::wrap<NllbWrapper>(ctx, w.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadNllb: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<NllbLoadState>();
+    ls->dir      = dir;
+    ls->dev      = dev;
+    ls->hasReady = true;
+    ls->onReady  = JS_DupValue(ctx, onReady);
+    ls->hasError = JS_IsFunction(ctx, onError);
+    ls->onError  = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildNllb(ls->dir, ls->dev, ls->w);  // throws -> error
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->w) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadNllb failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<NllbWrapper>(c, ls->w.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+static NllbWrapper* nllbSelf(JSContext* ctx, JSValueConst this_val) {
+    return qjsbind::unwrap<NllbWrapper>(ctx, this_val);
+}
+
+// hasLanguage(code) -> bool. `code` is a FLORES-200 code such as "eng_Latn".
+static JSValue js_nllb_hasLanguage(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    auto* w = nllbSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "hasLanguage: not an NllbModel");
+    std::string code;
+    if (argc < 1 || !argStr(ctx, argv[0], code))
+        return JS_ThrowTypeError(ctx, "hasLanguage(code): code string required");
+    return JS_NewBool(ctx, w->tr->tokenizer().has_lang(code));
+}
+
+// Per-call beam-search state shared between the work thread (sole writer of
+// `result`) and the JS thread (fires onDone/onError). `w` is borrowed; the dup
+// of the model JS object keeps the wrapper alive across the job.
+struct NllbTranslateState {
+    NllbWrapper*             w = nullptr;
+    std::string              text, src, tgt, result;
+    brolm::nllb::BeamOptions opts;
+    JSValue modelRef = JS_UNDEFINED;
+    JSValue onDone   = JS_UNDEFINED;
+    JSValue onError  = JS_UNDEFINED;
+    bool    hasDone = false, hasError = false;
+};
+
+// translate(text, srcLang, tgtLang, opts?) -> string         (sync)
+//                                          -> AsyncHandle     (async, if opts.onDone)
+//   srcLang / tgtLang: FLORES-200 codes ("eng_Latn", "fra_Latn", ...).
+//   opts.numBeams (5) / opts.maxNewTokens (200) / opts.lengthPenalty (1.0):
+//     beam-search controls (brolm::nllb::BeamOptions).
+//   opts.onDone(text): when a function, the beam search runs on a background
+//     thread (non-blocking) and onDone fires with the translation on the JS
+//     thread; the call returns an AsyncHandle. opts.onError(message) on failure.
+//   Beam search is monolithic — AsyncHandle.cancel() drops the pending result
+//     (the in-flight search runs to completion but onDone is not fired).
+static JSValue js_nllb_translate(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv) {
+    auto* w = nllbSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "translate: not an NllbModel");
+    std::string text, src, tgt;
+    if (argc < 3 || !argStr(ctx, argv[0], text) || !argStr(ctx, argv[1], src) ||
+        !argStr(ctx, argv[2], tgt))
+        return JS_ThrowTypeError(ctx,
+            "translate(text, srcLang, tgtLang, opts?): three strings required");
+
+    brolm::nllb::BeamOptions bopts;
+    JSValue onDone = JS_UNDEFINED, onError = JS_UNDEFINED;
+    if (argc >= 4 && JS_IsObject(argv[3])) {
+        getInt(ctx, argv[3], "numBeams",      bopts.num_beams);
+        getInt(ctx, argv[3], "maxNewTokens",  bopts.max_new_tokens);
+        getNum(ctx, argv[3], "lengthPenalty", bopts.length_penalty);
+        onDone  = JS_GetPropertyStr(ctx, argv[3], "onDone");
+        onError = JS_GetPropertyStr(ctx, argv[3], "onError");
+    }
+    const bool async = JS_IsFunction(ctx, onDone);
+
+    // Validate language codes up front (throws synchronously in either mode).
+    if (!w->tr->tokenizer().has_lang(src)) {
+        JS_FreeValue(ctx, onDone); JS_FreeValue(ctx, onError);
+        return JS_ThrowTypeError(ctx,
+            "translate: unknown source language '%s'", src.c_str());
+    }
+    if (!w->tr->tokenizer().has_lang(tgt)) {
+        JS_FreeValue(ctx, onDone); JS_FreeValue(ctx, onError);
+        return JS_ThrowTypeError(ctx,
+            "translate: unknown target language '%s'", tgt.c_str());
+    }
+
+    // Single-owner guard: the Translator's beam scratch can't host two
+    // concurrent searches.
+    bool expected = false;
+    if (!w->translating.compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, onDone); JS_FreeValue(ctx, onError);
+        return JS_ThrowInternalError(ctx,
+            "translate: a translation is already in progress on this model");
+    }
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onDone); JS_FreeValue(ctx, onError);
+        try {
+            brotensor::DeviceScope scope(w->device);
+            std::string out = w->tr->translate(text, src, tgt, bopts);
+            w->translating.store(false);
+            return JS_NewString(ctx, out.c_str());
+        } catch (const std::exception& e) {
+            w->translating.store(false);
+            return JS_ThrowInternalError(ctx, "translate: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto st = std::make_shared<NllbTranslateState>();
+    st->w        = w;
+    st->text     = std::move(text);
+    st->src      = std::move(src);
+    st->tgt      = std::move(tgt);
+    st->opts     = bopts;
+    st->modelRef = JS_DupValue(ctx, this_val);
+    st->hasDone  = true;
+    st->onDone   = JS_DupValue(ctx, onDone);
+    st->hasError = JS_IsFunction(ctx, onError);
+    st->onError  = st->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onDone);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [st](const std::atomic<bool>&) {
+        brotensor::DeviceScope scope(st->w->device);
+        st->result = st->w->tr->translate(st->text, st->src, st->tgt, st->opts);
+    };
+    auto done = [st](JSContext* c, bool cancelled, const std::string& error) {
+        st->w->translating.store(false);
+        if (!error.empty()) {
+            if (st->hasError) {
+                JSValue e = JS_NewString(c, error.c_str());
+                JSValue r = JS_Call(c, st->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else if (!cancelled && st->hasDone) {
+            JSValue s = JS_NewString(c, st->result.c_str());
+            JSValue r = JS_Call(c, st->onDone, JS_UNDEFINED, 1, &s);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, s);
+        }
+        if (st->hasDone)  JS_FreeValue(c, st->onDone);
+        if (st->hasError) JS_FreeValue(c, st->onError);
+        JS_FreeValue(c, st->modelRef);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+static void registerNllbClass(JSContext* ctx) {
+    qjsbind::Class<NllbWrapper>(ctx, "NllbModel", qjsbind::NoGlobal)
+        .get("family",        [](NllbWrapper*)   { return std::string("nllb"); })
+        .get("vocabSize",     [](NllbWrapper* w) { return w->tr->config().vocab_size; })
+        .get("dModel",        [](NllbWrapper* w) { return w->tr->config().d_model; })
+        .get("encoderLayers", [](NllbWrapper* w) { return w->tr->config().encoder_layers; })
+        .get("decoderLayers", [](NllbWrapper* w) { return w->tr->config().decoder_layers; })
+        .get("languageCount", [](NllbWrapper* w) { return (int)w->tr->tokenizer().language_count(); })
+        .method_raw("translate",   js_nllb_translate,   4)
+        .method_raw("hasLanguage", js_nllb_hasLanguage, 1);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Install
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -2115,6 +2385,7 @@ void installLmBindings(JSContext* ctx) {
     registerMistralTokenizerClass(ctx);
     registerModelClass(ctx);
     registerQwen35Class(ctx);
+    registerNllbClass(ctx);
     registerClipClass(ctx);
     registerT5Class(ctx);
 
@@ -2135,6 +2406,8 @@ void installLmBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadMistral, "loadMistral", 2));
     JS_SetPropertyStr(ctx, lm, "loadQwen35",
         JS_NewCFunction(ctx, js_loadQwen35, "loadQwen35", 2));
+    JS_SetPropertyStr(ctx, lm, "loadNllb",
+        JS_NewCFunction(ctx, js_loadNllb, "loadNllb", 2));
     JS_SetPropertyStr(ctx, lm, "loadTokenizer",
         JS_NewCFunction(ctx, js_loadTokenizer, "loadTokenizer", 1));
     JS_SetPropertyStr(ctx, lm, "loadClip",
