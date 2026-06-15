@@ -1809,7 +1809,8 @@ static void registerSupertonicClass(JSContext* ctx) {
 // the sync/async callers resolve themselves). Omitted keys keep the defaults.
 static void readSupertonicOpts(JSContext* ctx, JSValueConst opts,
                                std::string& language, int& steps, float& speed,
-                               std::uint64_t& seed, bool& longForm, float& gapSeconds) {
+                               std::uint64_t& seed, bool& longForm, float& gapSeconds,
+                               float& guidance) {
     if (!JS_IsObject(opts)) return;
     std::string lang;
     JSValue lg = JS_GetPropertyStr(ctx, opts, "language");
@@ -1820,6 +1821,7 @@ static void readSupertonicOpts(JSContext* ctx, JSValueConst opts,
     JS_FreeValue(ctx, st);
     getNum(ctx, opts, "speed", speed);
     getNum(ctx, opts, "gapSeconds", gapSeconds);
+    getNum(ctx, opts, "guidance", guidance);
     JSValue sd = JS_GetPropertyStr(ctx, opts, "seed");
     if (JS_IsNumber(sd)) { int64_t t = 0; JS_ToInt64(ctx, &t, sd); seed = (std::uint64_t)t; }
     JS_FreeValue(ctx, sd);
@@ -1842,12 +1844,12 @@ static JSValue js_supertonic_synthesize(JSContext* ctx, JSValueConst this_val,
     SupertonicVoiceWrapper* vw = nullptr;
     std::string language = "en";
     int steps = 8; float speed = 1.05f; std::uint64_t seed = 0;
-    bool longForm = false; float gap = 0.3f;
+    bool longForm = false; float gap = 0.3f; float guidance = 3.0f;
     if (argc >= 2 && JS_IsObject(argv[1])) {
         JSValue vv = JS_GetPropertyStr(ctx, argv[1], "voice");
         vw = qjsbind::unwrap<SupertonicVoiceWrapper>(ctx, vv);
         JS_FreeValue(ctx, vv);
-        readSupertonicOpts(ctx, argv[1], language, steps, speed, seed, longForm, gap);
+        readSupertonicOpts(ctx, argv[1], language, steps, speed, seed, longForm, gap, guidance);
     }
     if (!vw)
         return JS_ThrowTypeError(ctx,
@@ -1855,8 +1857,8 @@ static JSValue js_supertonic_synthesize(JSContext* ctx, JSValueConst this_val,
     try {
         brotensor::DeviceScope scope(w->device);
         brosoundml::AudioBuffer buf =
-            longForm ? w->model->synthesize_long(text, language, vw->style, steps, speed, seed, gap)
-                     : w->model->synthesize(text, language, vw->style, steps, speed, seed);
+            longForm ? w->model->synthesize_long(text, language, vw->style, steps, speed, seed, gap, 300, guidance)
+                     : w->model->synthesize(text, language, vw->style, steps, speed, seed, guidance);
         return audioBufferToJs(ctx, buf);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "synthesize: %s", e.what());
@@ -1873,6 +1875,7 @@ struct SupertonicSynthJob {
     std::uint64_t      seed     = 0;
     bool               longForm = false;
     float              gapSeconds = 0.3f;
+    float              guidance = 3.0f;
     SupertonicVoiceWrapper* vw = nullptr;          // borrowed via voiceRef dup
     std::vector<float> samples;                    // filled by work()
     int                sample_rate = 44100;        // filled by work()
@@ -1890,6 +1893,8 @@ struct SupertonicSynthJob {
 //   opts.seed        Philox seed for the N(0,1) flow noise (0 default).
 //   opts.longForm    bool — split into sentences + concat (synthesize_long).
 //   opts.gapSeconds  silence between sentences when longForm (0.3 default).
+//   opts.guidance    CFG scale w (3 default): higher = crisper/more articulated,
+//                    lower = flatter/breathier. Flow-matching only (no Kokoro/Qwen).
 //   opts.onDone(result, info) fires once on the JS thread; result =
 //   { samples, sampleRate }, info = { cancelled, error? }. Single-owner: a second
 //   op while one is in flight throws.
@@ -1910,7 +1915,7 @@ static JSValue js_supertonic_synthesize_async(JSContext* ctx, int argc,
         voiceVal = JS_GetPropertyStr(ctx, argv[2], "voice");
         job->vw = qjsbind::unwrap<SupertonicVoiceWrapper>(ctx, voiceVal);
         readSupertonicOpts(ctx, argv[2], job->language, job->steps, job->speed,
-                           job->seed, job->longForm, job->gapSeconds);
+                           job->seed, job->longForm, job->gapSeconds, job->guidance);
         onDone = JS_GetPropertyStr(ctx, argv[2], "onDone");
     }
 
@@ -1949,9 +1954,9 @@ static JSValue js_supertonic_synthesize_async(JSContext* ctx, int argc,
             job->longForm
                 ? mw->model->synthesize_long(job->text, job->language, job->vw->style,
                                              job->steps, job->speed, job->seed,
-                                             job->gapSeconds)
+                                             job->gapSeconds, 300, job->guidance)
                 : mw->model->synthesize(job->text, job->language, job->vw->style,
-                                        job->steps, job->speed, job->seed);
+                                        job->steps, job->speed, job->seed, job->guidance);
         job->samples     = std::move(buf.samples);
         job->sample_rate = buf.sample_rate;
     };

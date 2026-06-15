@@ -620,6 +620,12 @@ const voice = supertonic.loadVoiceStyle('../brosoundml-data/supertonic/voice_sty
  * @param {number} [opts.speed=1.05]        - >1 shortens the utterance.
  * @param {number} [opts.seed=0]            - Philox seed for the N(0,1) flow noise;
  *        same seed → identical take, different seed → a different draw.
+ * @param {number} [opts.guidance=3]        - classifier-free-guidance scale w: each
+ *        Euler step applies field = (1+w)·cond − w·uncond. w=3 (default) is the
+ *        upstream voice; lower (→0) relaxes toward the unconditional field
+ *        (flatter, breathier), higher pushes toward the text/style conditioning
+ *        (crisper, more articulated). Past ~6 it overdrives into clipping. Unique
+ *        to the flow-matching model — Kokoro/Qwen have no equivalent. Clamped ≥0.
  * @param {boolean} [opts.longForm=false]   - split into sentences + concatenate
  *        (for paragraphs); each sentence gets its own duration + flow pass.
  * @param {number} [opts.gapSeconds=0.3]    - silence between sentences (longForm).
