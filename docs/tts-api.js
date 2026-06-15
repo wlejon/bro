@@ -1,9 +1,10 @@
 /**
- * bro.tts — Text-to-speech (Kokoro + Qwen3-TTS)
+ * bro.tts — Text-to-speech (Kokoro + Qwen3-TTS + Supertonic)
  *
- * Synthesizes 24 kHz mono speech. Backed by brosoundml (audio-ML inference) on
- * top of brotensor. Defaults to CUDA; pass { device: 'cpu' } to force the CPU
- * backend. Two pipelines are exposed:
+ * Synthesizes mono speech (24 kHz for Kokoro/Qwen, 44.1 kHz for Supertonic).
+ * Backed by brosoundml (audio-ML inference) on top of brotensor. Defaults to
+ * CUDA; pass { device: 'cpu' } to force the CPU backend. Three pipelines are
+ * exposed:
  *
  *   Kokoro (loadKokoro) — the 82M phoneme-driven pipeline. It takes phoneme
  *   ids, not raw text: use bro.tts.phonemize(text) to convert a string into the
@@ -575,3 +576,68 @@ const s1 = qtts.createSession(), s2 = qtts.createSession();
 s1.synthesize('Halt! Who goes there?', { speaker: 'serena', onDone() {
     s2.synthesize('A friend.', { speaker: 'ethan' });
 }});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Supertonic-3 (flow-matching multilingual) — text in, 44.1 kHz speech out
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// Supertonic is text-driven end-to-end with a CODEPOINT frontend — no G2P, no
+// phonemize(), no voice pack. The pipeline: a codepoint text encoder + a duration
+// predictor condition a flow-matching vector estimator that denoises N(0,1) noise
+// to a latent over `steps` classifier-free-guided Euler steps, which a vocoder
+// turns into 44.1 kHz mono. A voice is a VoiceStyle PRESET (two style matrices)
+// loaded from the converted model's voice_styles/. Defaults to CUDA.
+
+// Load a converted model directory (tts.json + per-model *.safetensors +
+// unicode_indexer.json + voice_styles/). model.sampleRate === 44100.
+const supertonic = bro.tts.loadSupertonic('../brosoundml-data/supertonic');
+// Async load (same shape as loadKokoro/loadQwen):
+// bro.tts.loadSupertonic('../brosoundml-data/supertonic', {
+//     onReady: (m) => { /* m.loaded === true */ },
+//     onError: (msg) => console.error('supertonic load failed:', msg),
+// });
+
+/**
+ * SupertonicModel.loadVoiceStyle(path) → SupertonicVoice   (sync)
+ *
+ * Parse a voice_styles/<name>.json preset (the style_ttl / style_dp matrices)
+ * into an opaque voice handle. Host-side + small; cache the handles you reuse.
+ * The handle carries its file stem as `.name`.
+ */
+const voice = supertonic.loadVoiceStyle('../brosoundml-data/supertonic/voice_styles/F1.json');
+// voice.name === 'F1'
+
+/**
+ * SupertonicModel.synthesize(text, opts) → { samples, sampleRate }  (sync, blocking)
+ *
+ * @param {string} text                    - the text to speak (codepoint frontend).
+ * @param {Object} opts
+ * @param {SupertonicVoice} opts.voice      - REQUIRED, from loadVoiceStyle().
+ * @param {string} [opts.language='en']     - one of the 31 codes (en, ko, ja, de,
+ *        es, fr, …) or 'na' (no language tag). Throws on an unknown code.
+ * @param {number} [opts.steps=8]           - flow-matching Euler steps; more =
+ *        smoother latent, slower.
+ * @param {number} [opts.speed=1.05]        - >1 shortens the utterance.
+ * @param {number} [opts.seed=0]            - Philox seed for the N(0,1) flow noise;
+ *        same seed → identical take, different seed → a different draw.
+ * @param {boolean} [opts.longForm=false]   - split into sentences + concatenate
+ *        (for paragraphs); each sentence gets its own duration + flow pass.
+ * @param {number} [opts.gapSeconds=0.3]    - silence between sentences (longForm).
+ * @returns {{ samples: Float32Array, sampleRate: number }} - 44.1 kHz mono, [-1, 1].
+ *
+ * The async, latest-wins form is bro.tts.synthesize(supertonic, text, opts) — it
+ * dispatches on the model type and runs off-thread, firing opts.onDone(result,
+ * info) on the JS thread (info = { cancelled, error? }). Supertonic has no
+ * per-step cancel hook (the flow loop is short), so a barge-in / queued change
+ * takes effect at the next completion rather than mid-flight.
+ */
+const out = supertonic.synthesize('Hello there.', { voice, language: 'en', steps: 8, seed: 0 });
+// out.samples → Float32Array @ 44100 Hz. A different take: { voice, seed: 7 }.
+// A paragraph: supertonic.synthesize(para, { voice, longForm: true, gapSeconds: 0.3 }).
+
+// Async (non-blocking, the windowed path):
+// const handle = bro.tts.synthesize(supertonic, 'Hello there.', {
+//     voice, language: 'en', steps: 8, seed: 0,
+//     onDone: (r, info) => { if (!info.cancelled && !info.error) play(r.samples); },
+// });
+// handle.cancel();  // drop the queued/in-flight synthesis

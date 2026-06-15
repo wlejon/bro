@@ -18,6 +18,7 @@
 
 #include <brosoundml/kokoro.h>
 #include <brosoundml/qwen_tts.h>
+#include <brosoundml/supertonic.h>
 #include <brosoundml/speaker_encoder.h>
 #include <brosoundml/audio.h>
 
@@ -86,6 +87,24 @@ struct QwenTtsWrapper {
     // shared_ptr so sessions share this exact gate with the model.
     std::shared_ptr<std::atomic<bool>> busy =
         std::make_shared<std::atomic<bool>>(false);
+};
+
+// Supertonic-3 — flow-matching multilingual TTS (Supertone). Text-driven
+// (codepoint frontend, no G2P, no phoneme step); a voice is a VoiceStyle preset
+// loaded from the model's voice_styles/. Like Kokoro it is single-owner: `busy`
+// rejects a second concurrent synthesis on the model.
+struct SupertonicWrapper {
+    std::shared_ptr<brosoundml::Supertonic> model;
+    brotensor::Device device = brotensor::Device::CPU;  // captured at load
+    std::shared_ptr<std::atomic<bool>> busy =
+        std::make_shared<std::atomic<bool>>(false);
+};
+
+// An opaque Supertonic voice preset (the two style matrices), returned by
+// supertonic.loadVoiceStyle() and passed back via synthesize opts.voice.
+struct SupertonicVoiceWrapper {
+    brosoundml::VoiceStyle style;
+    std::string            name;
 };
 
 // ── Session wrappers (multi-voice / multi-stream over shared weights) ──
@@ -1644,6 +1663,329 @@ static JSValue js_loadSpeakerEncoder(JSContext* ctx, JSValueConst,
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Supertonic loader + class
+// ═══════════════════════════════════════════════════════════════════════════
+
+// Build + load a Supertonic model from a converted directory (tts.json +
+// per-model *.safetensors + unicode_indexer.json + voice_styles/). Heavy +
+// blocking; shared by the sync and async loadSupertonic paths. Throws on error.
+static void buildSupertonic(const std::string& dir, brotensor::Device dev,
+                            std::unique_ptr<SupertonicWrapper>& w_out) {
+    auto w = std::make_unique<SupertonicWrapper>();
+    w->device = dev;
+    w->model = std::make_shared<brosoundml::Supertonic>();
+    {
+        brotensor::DeviceScope scope(dev);
+        w->model->load(dir, dev);
+    }
+    std::fprintf(stderr, "[INFO] [tts] Supertonic loaded on %s\n", deviceName(dev));
+    w_out = std::move(w);
+}
+
+struct SupertonicLoadState {
+    std::string                         dir;
+    brotensor::Device                   dev = brotensor::Device::CPU;
+    std::unique_ptr<SupertonicWrapper>  w;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.tts.loadSupertonic(modelDir, opts?) -> Supertonic     (sync)
+//                                         -> AsyncHandle     (async, if opts.onReady)
+//   modelDir is the converted layout (tts.json + *.safetensors + the codepoint
+//   frontend tables + voice_styles/). Supertonic is text-driven end to end — no
+//   phonemize() step; a voice is a VoiceStyle preset via loadVoiceStyle().
+//   opts.device: 'cuda' | 'cpu' | 'metal' — defaults to CUDA when available.
+//   opts.onReady(supertonic) / opts.onError(message): when onReady is a function
+//   the load runs on a background thread and these fire on the JS thread.
+static JSValue js_loadSupertonic(JSContext* ctx, JSValueConst,
+                                 int argc, JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "loadSupertonic(modelDir, opts?): path required");
+
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    if (argc >= 2) {
+        std::string err;
+        if (!parseDeviceOpt(ctx, argv[1], dev, err))
+            return JS_ThrowTypeError(ctx, "loadSupertonic: %s", err.c_str());
+    }
+
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<SupertonicWrapper> w;
+            buildSupertonic(dir, dev, w);
+            return qjsbind::wrap<SupertonicWrapper>(ctx, w.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadSupertonic: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<SupertonicLoadState>();
+    ls->dir      = dir;
+    ls->dev      = dev;
+    ls->hasReady = true;
+    ls->onReady  = JS_DupValue(ctx, onReady);
+    ls->hasError = JS_IsFunction(ctx, onError);
+    ls->onError  = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildSupertonic(ls->dir, ls->dev, ls->w);  // throws -> error
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->w) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadSupertonic failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<SupertonicWrapper>(c, ls->w.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// supertonic.loadVoiceStyle(path) -> SupertonicVoice
+//   Parse a voice_styles/<name>.json preset (the style_ttl / style_dp matrices)
+//   into an opaque voice handle. Host-side + small; runs synchronously.
+static JSValue js_supertonic_loadVoiceStyle(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<SupertonicWrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "loadVoiceStyle: not a Supertonic");
+    std::string path;
+    if (argc < 1 || !argStr(ctx, argv[0], path))
+        return JS_ThrowTypeError(ctx, "loadVoiceStyle(path): path string required");
+    try {
+        auto vw = std::make_unique<SupertonicVoiceWrapper>();
+        vw->style = w->model->load_voice_style(path);
+        vw->name  = std::filesystem::path(path).stem().string();
+        return qjsbind::wrap<SupertonicVoiceWrapper>(ctx, vw.release());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "loadVoiceStyle: %s", e.what());
+    }
+}
+
+static void registerSupertonicVoiceClass(JSContext* ctx) {
+    qjsbind::Class<SupertonicVoiceWrapper>(ctx, "SupertonicVoice", qjsbind::NoGlobal)
+        .get("name", [](SupertonicVoiceWrapper* w) { return w->name; });
+}
+
+static JSValue js_supertonic_synthesize(JSContext*, JSValueConst, int, JSValueConst*);
+
+static void registerSupertonicClass(JSContext* ctx) {
+    qjsbind::Class<SupertonicWrapper>(ctx, "Supertonic", qjsbind::NoGlobal)
+        .get("loaded",     [](SupertonicWrapper* w) { return w->model->loaded(); })
+        .get("sampleRate", [](SupertonicWrapper* w) { return w->model->config().sample_rate; })
+        .method_raw("loadVoiceStyle", js_supertonic_loadVoiceStyle, 1)
+        .method_raw("synthesize",     js_supertonic_synthesize, 2);
+}
+
+// Read the scalar Supertonic synth opts (everything but the voice handle, which
+// the sync/async callers resolve themselves). Omitted keys keep the defaults.
+static void readSupertonicOpts(JSContext* ctx, JSValueConst opts,
+                               std::string& language, int& steps, float& speed,
+                               std::uint64_t& seed, bool& longForm, float& gapSeconds) {
+    if (!JS_IsObject(opts)) return;
+    std::string lang;
+    JSValue lg = JS_GetPropertyStr(ctx, opts, "language");
+    if (JS_IsString(lg) && argStr(ctx, lg, lang)) language = std::move(lang);
+    JS_FreeValue(ctx, lg);
+    JSValue st = JS_GetPropertyStr(ctx, opts, "steps");
+    if (JS_IsNumber(st)) { int32_t t = steps; JS_ToInt32(ctx, &t, st); steps = t; }
+    JS_FreeValue(ctx, st);
+    getNum(ctx, opts, "speed", speed);
+    getNum(ctx, opts, "gapSeconds", gapSeconds);
+    JSValue sd = JS_GetPropertyStr(ctx, opts, "seed");
+    if (JS_IsNumber(sd)) { int64_t t = 0; JS_ToInt64(ctx, &t, sd); seed = (std::uint64_t)t; }
+    JS_FreeValue(ctx, sd);
+    longForm = getBool(ctx, opts, "longForm");
+    if (steps < 1) steps = 1;
+}
+
+// supertonic.synthesize(text, opts) -> { samples, sampleRate }   (sync, blocking)
+//   opts.voice (required SupertonicVoice), opts.language / steps / speed / seed /
+//   longForm / gapSeconds as documented on bro.tts.synthesize. The async,
+//   latest-wins form is bro.tts.synthesize(supertonic, text, opts).
+static JSValue js_supertonic_synthesize(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<SupertonicWrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "synthesize: not a Supertonic");
+    std::string text;
+    if (argc < 1 || !argStr(ctx, argv[0], text))
+        return JS_ThrowTypeError(ctx, "synthesize(text, opts): text string required");
+
+    SupertonicVoiceWrapper* vw = nullptr;
+    std::string language = "en";
+    int steps = 8; float speed = 1.05f; std::uint64_t seed = 0;
+    bool longForm = false; float gap = 0.3f;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        JSValue vv = JS_GetPropertyStr(ctx, argv[1], "voice");
+        vw = qjsbind::unwrap<SupertonicVoiceWrapper>(ctx, vv);
+        JS_FreeValue(ctx, vv);
+        readSupertonicOpts(ctx, argv[1], language, steps, speed, seed, longForm, gap);
+    }
+    if (!vw)
+        return JS_ThrowTypeError(ctx,
+            "synthesize: opts.voice must be a SupertonicVoice (from loadVoiceStyle)");
+    try {
+        brotensor::DeviceScope scope(w->device);
+        brosoundml::AudioBuffer buf =
+            longForm ? w->model->synthesize_long(text, language, vw->style, steps, speed, seed, gap)
+                     : w->model->synthesize(text, language, vw->style, steps, speed, seed);
+        return audioBufferToJs(ctx, buf);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "synthesize: %s", e.what());
+    }
+}
+
+// Shared by the Supertonic async synthesize path. The work thread is the sole
+// writer of samples/sample_rate; the JS thread reads them in done().
+struct SupertonicSynthJob {
+    std::string        text;
+    std::string        language = "en";
+    int                steps    = 8;
+    float              speed    = 1.05f;
+    std::uint64_t      seed     = 0;
+    bool               longForm = false;
+    float              gapSeconds = 0.3f;
+    SupertonicVoiceWrapper* vw = nullptr;          // borrowed via voiceRef dup
+    std::vector<float> samples;                    // filled by work()
+    int                sample_rate = 44100;        // filled by work()
+    JSValue            onDone   = JS_UNDEFINED;     // dup'd; UNDEFINED if absent
+    JSValue            modelRef = JS_UNDEFINED;     // dup of the supertonic JS object
+    JSValue            voiceRef = JS_UNDEFINED;     // dup of the voice JS object
+    bool               hasOnDone = false;
+};
+
+// bro.tts.synthesize(supertonic, text, opts) -> AsyncHandle
+//   opts.voice       SupertonicVoice (required) — a loadVoiceStyle() preset.
+//   opts.language    ISO tag ('en' default; one of the 31 supported, or 'na').
+//   opts.steps       flow-matching Euler steps (8 default; more = smoother/slower).
+//   opts.speed       > 1 shortens the utterance (1.05 upstream default).
+//   opts.seed        Philox seed for the N(0,1) flow noise (0 default).
+//   opts.longForm    bool — split into sentences + concat (synthesize_long).
+//   opts.gapSeconds  silence between sentences when longForm (0.3 default).
+//   opts.onDone(result, info) fires once on the JS thread; result =
+//   { samples, sampleRate }, info = { cancelled, error? }. Single-owner: a second
+//   op while one is in flight throws.
+static JSValue js_supertonic_synthesize_async(JSContext* ctx, int argc,
+                                              JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<SupertonicWrapper>(ctx, argv[0]);  // non-null (caller)
+    std::string text;
+    if (argc < 2 || !argStr(ctx, argv[1], text))
+        return JS_ThrowTypeError(ctx,
+            "synthesize(supertonic, text, opts): text string required");
+
+    auto job = std::make_shared<SupertonicSynthJob>();
+    job->text = std::move(text);
+
+    JSValue onDone = JS_UNDEFINED;
+    JSValue voiceVal = JS_UNDEFINED;
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        voiceVal = JS_GetPropertyStr(ctx, argv[2], "voice");
+        job->vw = qjsbind::unwrap<SupertonicVoiceWrapper>(ctx, voiceVal);
+        readSupertonicOpts(ctx, argv[2], job->language, job->steps, job->speed,
+                           job->seed, job->longForm, job->gapSeconds);
+        onDone = JS_GetPropertyStr(ctx, argv[2], "onDone");
+    }
+
+    if (!job->vw) {
+        JS_FreeValue(ctx, voiceVal);
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowTypeError(ctx,
+            "synthesize: opts.voice must be a SupertonicVoice (from loadVoiceStyle)");
+    }
+
+    // Claim the model for this synthesis (single-owner; one in flight).
+    bool expected = false;
+    if (!w->busy->compare_exchange_strong(expected, true)) {
+        JS_FreeValue(ctx, voiceVal);
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowInternalError(ctx,
+            "synthesize: an operation is already in flight on this model");
+    }
+
+    job->hasOnDone = JS_IsFunction(ctx, onDone);
+    job->onDone    = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
+    job->modelRef  = JS_DupValue(ctx, argv[0]);    // keep the model alive
+    job->voiceRef  = JS_DupValue(ctx, voiceVal);   // keep the voice alive
+    JS_FreeValue(ctx, voiceVal);
+    JS_FreeValue(ctx, onDone);
+
+    SupertonicWrapper* mw = w;
+
+    // Background thread: run the flow-matching pipeline + vocoder. Supertonic's
+    // synthesize() has no per-step cancel hook (the flow loop is short), so the
+    // async-job cancel flag isn't polled; barge-in is realised by the busy gate
+    // (latest-wins re-kicks once this run completes).
+    auto work = [job, mw](const std::atomic<bool>&) {
+        brotensor::DeviceScope scope(mw->device);
+        brosoundml::AudioBuffer buf =
+            job->longForm
+                ? mw->model->synthesize_long(job->text, job->language, job->vw->style,
+                                             job->steps, job->speed, job->seed,
+                                             job->gapSeconds)
+                : mw->model->synthesize(job->text, job->language, job->vw->style,
+                                        job->steps, job->speed, job->seed);
+        job->samples     = std::move(buf.samples);
+        job->sample_rate = buf.sample_rate;
+    };
+
+    auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
+        // Release the model BEFORE invoking onDone so the callback may start the
+        // next synth on this same model without tripping the in-flight guard.
+        mw->busy->store(false, std::memory_order_release);
+        if (job->hasOnDone) {
+            JSValue result = JS_NewObject(c);
+            JS_SetPropertyStr(c, result, "samples",
+                qjsbind::make_float32_array(c, job->samples));
+            JS_SetPropertyStr(c, result, "sampleRate",
+                JS_NewInt32(c, job->sample_rate));
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { result, info };
+            JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, result);
+            JS_FreeValue(c, info);
+        }
+        if (job->hasOnDone) JS_FreeValue(c, job->onDone);
+        JS_FreeValue(c, job->modelRef);
+        JS_FreeValue(c, job->voiceRef);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Async synthesis — bro.tts.synthesize(kokoro, phonemeIds, voice, opts)
 //                   bro.tts.synthesize(qwen, text, opts)
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2152,14 +2494,17 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
         return JS_ThrowTypeError(ctx,
             "synthesize(model, ...): a Kokoro or QwenTts model is required");
 
-    // Dispatch on model type. QwenTts is text-driven — synthesize(qwen, text,
-    // opts?). Kokoro takes phoneme ids — synthesize(kokoro, phonemeIds, voice).
+    // Dispatch on model type. QwenTts and Supertonic are text-driven —
+    // synthesize(model, text, opts?). Kokoro takes phoneme ids —
+    // synthesize(kokoro, phonemeIds, voice).
     if (qjsbind::unwrap<QwenTtsWrapper>(ctx, argv[0]))
         return js_qwen_synthesize_async(ctx, argc, argv);
+    if (qjsbind::unwrap<SupertonicWrapper>(ctx, argv[0]))
+        return js_supertonic_synthesize_async(ctx, argc, argv);
 
     auto* w = qjsbind::unwrap<KokoroWrapper>(ctx, argv[0]);
     if (!w) return JS_ThrowTypeError(ctx,
-        "synthesize: arg 0 must be a Kokoro or QwenTts");
+        "synthesize: arg 0 must be a Kokoro, QwenTts, or Supertonic");
     if (argc < 3)
         return JS_ThrowTypeError(ctx,
             "synthesize(kokoro, phonemeIds, voice, opts?): kokoro, phonemeIds "
@@ -2696,6 +3041,8 @@ void installTtsBindings(JSContext* ctx) {
     registerVoiceClass(ctx);
     registerKokoroClass(ctx);
     registerQwenClass(ctx);
+    registerSupertonicVoiceClass(ctx);
+    registerSupertonicClass(ctx);
     registerSpeakerEncoderClass(ctx);
     registerKokoroSessionClass(ctx);
     registerQwenSessionClass(ctx);
@@ -2715,6 +3062,8 @@ void installTtsBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadKokoro, "loadKokoro", 2));
     JS_SetPropertyStr(ctx, tts, "loadQwen",
         JS_NewCFunction(ctx, js_loadQwen, "loadQwen", 2));
+    JS_SetPropertyStr(ctx, tts, "loadSupertonic",
+        JS_NewCFunction(ctx, js_loadSupertonic, "loadSupertonic", 2));
     JS_SetPropertyStr(ctx, tts, "loadSpeakerEncoder",
         JS_NewCFunction(ctx, js_loadSpeakerEncoder, "loadSpeakerEncoder", 2));
     JS_SetPropertyStr(ctx, tts, "phonemize",
