@@ -7,6 +7,7 @@
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
 #include "js/tts_bindings.h"
+#include "js/diar_bindings.h"
 #include "js/triposplat_bindings.h"
 #include "js/vision_bindings.h"
 #include "js/imagebitmap_bindings.h"
@@ -258,6 +259,11 @@ void Worker::threadFunc()
 
     // --- 3b''''''. Install bro.tts (Kokoro TTS, brosoundml sibling). ---
     installTtsBindings(ctx);
+
+    // --- 3b''''''ᵈ. Install bro.diar (Sortformer diarization, brosoundml
+    // sibling). Same binding as the main context; this worker owns its own
+    // model. ---
+    installDiarBindings(ctx);
 
     // --- 3b''''''ᵛ. Install bro.vision (vision-ML inference, brovisionml
     // sibling). Same binding as the main context; dense-map results build

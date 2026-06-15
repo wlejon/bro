@@ -50,6 +50,7 @@
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
 #include "js/tts_bindings.h"
+#include "js/diar_bindings.h"
 #include "js/rave_bindings.h"
 #include "js/triposplat_bindings.h"
 #include "js/vision_bindings.h"
@@ -239,6 +240,11 @@ Engine::Engine(const EngineConfig& config)
     // mono 24 kHz FP32. G2P is the caller's responsibility — Kokoro takes
     // already-tokenized phoneme ids.
     js::installTtsBindings(jsRuntime_->getContext());
+
+    // bro.diar (streaming Sortformer speaker diarization via brosoundml
+    // sibling). GPU by default; 16 kHz mono FP32 in, per-frame 4-speaker
+    // activity probabilities out. Offline diarize() + streaming sessions.
+    js::installDiarBindings(jsRuntime_->getContext());
 
     // bro.rave (RAVE neural audio autoencoder via brosoundml sibling). GPU by
     // default; encode/decode a waveform through a PCA-sorted latent for morphing.

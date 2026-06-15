@@ -75,6 +75,7 @@ add_library(bro_js STATIC
     lm_bindings.cpp
     stt_bindings.cpp
     tts_bindings.cpp
+    diar_bindings.cpp
     rave_bindings.cpp
     vision_bindings.cpp
     triposplat_bindings.cpp
