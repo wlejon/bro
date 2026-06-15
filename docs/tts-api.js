@@ -608,6 +608,31 @@ const voice = supertonic.loadVoiceStyle('../brosoundml-data/supertonic/voice_sty
 // voice.name === 'F1'
 
 /**
+ * SupertonicVoice — an opaque style preset. Read its two matrices to design voices:
+ *   .name              file stem ('F1') or the createVoice() name ('custom').
+ *   .ttl  Float32Array style_ttl, 50*256 row-major (token-major: ttl[s*256 + c]).
+ *   .dp   Float32Array style_dp,  8*16 row-major (dp[i*16 + j]).
+ *   .ttlRows/.ttlCols (50/256), .dpRows/.dpCols (8/16) — the matrix shapes.
+ *
+ * SupertonicModel.createVoice(ttl, dp, name?) → SupertonicVoice   (sync)
+ *
+ * Author a voice from raw style matrices (Float32Array or number[]; ttl 50*256,
+ * dp 8*16) instead of a file — so the app can blend presets, build a masc↔fem
+ * axis from the labeled palette, or scale a voice's identity, and synthesize the
+ * result. The style space is linear: combinations of preset matrices decode to
+ * valid, smoothly-varying voices (a preset blend glides F0 monotonically; the
+ * centroid(M)−centroid(F) direction is a working gender axis). Throws if either
+ * matrix is mis-sized.
+ */
+const A = supertonic.loadVoiceStyle('…/voice_styles/F1.json');
+const B = supertonic.loadVoiceStyle('…/voice_styles/M5.json');
+const t = 0.5, mix = new Float32Array(A.ttl.length);
+for (let i = 0; i < mix.length; i++) mix[i] = A.ttl[i] * (1 - t) + B.ttl[i] * t;
+const mixDp = new Float32Array(A.dp.length);
+for (let i = 0; i < mixDp.length; i++) mixDp[i] = A.dp[i] * (1 - t) + B.dp[i] * t;
+const blended = supertonic.createVoice(mix, mixDp, 'F1×M5');
+
+/**
  * SupertonicModel.synthesize(text, opts) → { samples, sampleRate }  (sync, blocking)
  *
  * @param {string} text                    - the text to speak (codepoint frontend).

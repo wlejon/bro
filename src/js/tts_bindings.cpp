@@ -1790,9 +1790,66 @@ static JSValue js_supertonic_loadVoiceStyle(JSContext* ctx, JSValueConst this_va
     }
 }
 
+// Read a float-array argument: a Float32Array (fast path) or a plain number[].
+static std::vector<float> readFloatArg(JSContext* ctx, JSValueConst v) {
+    std::vector<float> data = qjsbind::read_float32_array(ctx, v);
+    if (data.empty() && JS_IsArray(v)) {              // accept a plain number[]
+        std::uint32_t n = 0;
+        JSValue lv = JS_GetPropertyStr(ctx, v, "length");
+        JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
+        data.reserve(n);
+        for (std::uint32_t i = 0; i < n; ++i) {
+            JSValue e = JS_GetPropertyUint32(ctx, v, i);
+            double d = 0; JS_ToFloat64(ctx, &d, e); JS_FreeValue(ctx, e);
+            data.push_back(static_cast<float>(d));
+        }
+    }
+    return data;
+}
+
+// supertonic.createVoice(ttl, dp, name?) -> SupertonicVoice
+//   Author a voice from raw style matrices instead of a file: ttl is 50*256
+//   token-major (style_ttl), dp is 8*16 row-major (style_dp). Lets the app read
+//   presets out via the SupertonicVoice .ttl / .dp getters, blend them, build a
+//   masc<->fem axis or scale a voice's identity, and play the result through
+//   synthesize(). Throws if either matrix is the wrong size.
+static JSValue js_supertonic_createVoice(JSContext* ctx, JSValueConst this_val,
+                                         int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<SupertonicWrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "createVoice: not a Supertonic");
+    if (argc < 2)
+        return JS_ThrowTypeError(ctx, "createVoice(ttl, dp, name?): ttl and dp required");
+    std::vector<float> ttl = readFloatArg(ctx, argv[0]);
+    std::vector<float> dp  = readFloatArg(ctx, argv[1]);
+    if (ttl.size() != 50u * 256u)
+        return JS_ThrowTypeError(ctx, "createVoice: ttl must have 50*256 = 12800 floats");
+    if (dp.size() != 8u * 16u)
+        return JS_ThrowTypeError(ctx, "createVoice: dp must have 8*16 = 128 floats");
+    std::string name = "custom";
+    if (argc >= 3) { std::string s; if (argStr(ctx, argv[2], s)) name = s; }
+    auto vw = std::make_unique<SupertonicVoiceWrapper>();
+    vw->style.ttl = std::move(ttl);
+    vw->style.dp  = std::move(dp);
+    vw->name      = std::move(name);
+    return qjsbind::wrap<SupertonicVoiceWrapper>(ctx, vw.release());
+}
+
 static void registerSupertonicVoiceClass(JSContext* ctx) {
     qjsbind::Class<SupertonicVoiceWrapper>(ctx, "SupertonicVoice", qjsbind::NoGlobal)
-        .get("name", [](SupertonicVoiceWrapper* w) { return w->name; });
+        .get("name", [](SupertonicVoiceWrapper* w) { return w->name; })
+        // The two style matrices as row-major Float32Arrays, so the app can read
+        // presets out, blend / axis-project / scale them, and feed the result to
+        // supertonic.createVoice(). ttl = 50x256 (style_ttl), dp = 8x16 (style_dp).
+        .get("ttl", [](SupertonicVoiceWrapper* w, JSContext* c) -> JSValue {
+            return qjsbind::make_float32_array(c, w->style.ttl);
+        })
+        .get("dp", [](SupertonicVoiceWrapper* w, JSContext* c) -> JSValue {
+            return qjsbind::make_float32_array(c, w->style.dp);
+        })
+        .get("ttlRows", [](SupertonicVoiceWrapper*) { return 50; })
+        .get("ttlCols", [](SupertonicVoiceWrapper*) { return 256; })
+        .get("dpRows",  [](SupertonicVoiceWrapper*) { return 8; })
+        .get("dpCols",  [](SupertonicVoiceWrapper*) { return 16; });
 }
 
 static JSValue js_supertonic_synthesize(JSContext*, JSValueConst, int, JSValueConst*);
@@ -1802,6 +1859,7 @@ static void registerSupertonicClass(JSContext* ctx) {
         .get("loaded",     [](SupertonicWrapper* w) { return w->model->loaded(); })
         .get("sampleRate", [](SupertonicWrapper* w) { return w->model->config().sample_rate; })
         .method_raw("loadVoiceStyle", js_supertonic_loadVoiceStyle, 1)
+        .method_raw("createVoice",    js_supertonic_createVoice, 3)
         .method_raw("synthesize",     js_supertonic_synthesize, 2);
 }
 
