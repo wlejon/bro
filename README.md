@@ -1,12 +1,18 @@
 # Bro
 
-An HTML/CSS/JS runtime for desktop apps and games — QuickJS, a custom layout engine, Skia, and SDL_GPU, with 3D, physics, audio, and game networking wired straight into the DOM. Windows, Mac, and Linux are currently supported. 
+Build desktop apps and games in **HTML/CSS/JS** — with 3D, physics, audio, and on-device AI wired into the same JavaScript, in one native process. QuickJS, a custom layout engine, Skia, and SDL_GPU underneath. Windows, Mac, and Linux.
 
 ** this is pre-release, pre-alpha **
 
 ## What can I compare it to?
 
-I'm targeting feature parity with godot's engine (no editor) and rendering parity with chromium (html/css). It's not there yet, but that's the goal.
+Two familiar yardsticks, plus one that doesn't have a name yet:
+
+- **Rendering parity with Chromium** (HTML/CSS) — the app layer should look right.
+- **Feature parity with Godot's engine** (no editor) — 3D, physics, audio, the game runtime.
+- **On-device generation and perception as a native engine subsystem** — every modality the engine renders, it can also generate and understand, locally and in real time. There isn't an existing engine to point at for this one.
+
+It's not there yet on any of the three, but that's the goal.
 
 ## Broworkshop
 
@@ -47,11 +53,29 @@ See [broworkshop](https://github.com/wlejon/broworkshop) for example application
 
 ## What you get
 
-**Web platform** — HTML5 parsing, CSS (flexbox, gradients, border radius, overflow/scroll), SVG, Canvas 2D, WebGL 2.0, Web Components with Shadow DOM, Web Workers, Fetch, localStorage, form controls with real text editing. threejs, jQuery, work.
+**The app layer** — write the UI the way you already do. HTML5, CSS (flexbox, grid, gradients, border radius, overflow/scroll), SVG, Canvas 2D, WebGL 2.0, Web Components with Shadow DOM, Web Workers, Fetch, localStorage, form controls with real text editing. three.js and jQuery just work — your web knowledge (and your coding agent's) transfers.
 
-**Beyond the web** — 3D scene graph with mesh rendering and terrain (`bro.scene`), Jolt rigid-body physics with contact events, Web Audio with synthesis / effects / spatial / MIDI (broaudio), mesh generation and CSG (bromesh), navmesh and A* pathfinding (`bro.ai.game`), game networking over GameNetworkingSockets (`bro.net`), native file dialogs, native menu bars, 3D transform gizmos, native crosshair.
+**Beyond the web** — reachable from the same JS, one process, no IPC:
 
-**On-device AI/ML** — GPU-accelerated model inference wired into JS, CUDA/Metal with a CPU fallback (`bro.gpu` probes the live backend): text generation with Qwen3 (`bro.lm`), text-to-image diffusion with U-Net/VAE, LoRA, and schedulers (`bro.diffusion`), text-to-speech via Kokoro and Qwen3-TTS (`bro.tts`), Whisper speech-to-text (`bro.stt`), streaming wake-word and live mic capture (`bro.wake` / `bro.mic`), and vision models — SAM segmentation, depth, surface normals, ControlNet annotators (`bro.vision`). A unified tensor type and op set (`bro.tensor`) and composable image kernels (`bro.image`) underpin them.
+| Reach for | to |
+|---|---|
+| `bro.scene` | 3D scene graph — meshes, terrain, sprites, particles, tilemaps, PBR lighting |
+| `Physics` / physics nodes | Jolt rigid bodies, contact events, constraints, raycasts |
+| `AudioContext` (broaudio) | real-time audio — synthesis, effects, spatial, MIDI |
+| `bro.mesh` · `bro.ai.game` · `bro.net` | mesh generation + CSG · navmesh + A* pathfinding · game networking (GNS) |
+| native dialogs · menu bars · gizmos · crosshair | OS-native app chrome |
+
+**On-device AI** — every modality above, the engine can also **generate and perceive** — locally, on the GPU, in the frame loop. No API key, no network, runs offline; `bro.gpu` probes the live CUDA/Metal/CPU backend.
+
+| Reach for | to |
+|---|---|
+| `bro.lm` | generate & understand **text** (local LLMs — Qwen3, Mistral) |
+| `bro.diffusion` · `bro.vision` | generate **images** (U-Net/VAE, LoRA) · perceive them (SAM, depth, normals, ControlNet) |
+| `bro.triposplat` | generate **3D** from a single image |
+| `bro.tts` · `bro.stt` · `bro.wake` / `bro.mic` / `bro.sense` | **speak** (Kokoro, Qwen3-TTS) · **hear** (Whisper, Parakeet) · **listen** (wake-word, mic, sensors) |
+| `bro.tensor` · `bro.image` | the tensor + image-kernel substrate underneath them all |
+
+The left-hand `bro.*` names are the whole surface — each has an annotated JSDoc reference in [`docs/`](docs/) (read the `.js` files, not the source).
 
 **For development** — Headless mode runs the full pipeline (GPU, real fonts, WebGL) without a window, driven by JS with virtual time for deterministic testing. See [docs/headless.md](docs/headless.md). Line-coverage reports via OpenCppCoverage are wired up for bro and every sibling — `pwsh scripts/coverage.ps1` in any repo. See [docs/coverage.md](docs/coverage.md).
 
