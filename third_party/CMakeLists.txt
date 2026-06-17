@@ -55,14 +55,13 @@ if(NOT TARGET bromath)
 endif()
 
 # --- broimage (image decode/encode + composable kernels) ---
-# Single home for image work that used to be duplicated across the stack
-# (bro's HTML Image decode, bro.image JS kernels in brokit, brolm/brodiffusion
-# host-side preprocessing). Depends on bromath (header-only, added above) and
-# brotensor (CPU + optional CUDA/Metal). brotensor's backend is decided at
-# first add_subdirectory(), so this block pulls brotensor in here; brogameagent
-# will reuse the same target later via if(NOT TARGET brotensor) guards. The
-# GPU cache vars are forwarded in bro's top-level CMakeLists.txt so a
-# BROGAMEAGENT_WITH_CUDA=ON build still picks the right brotensor backend.
+# Single home for image work that used to be duplicated across the stack.
+# Depends on bromath (header-only, added above) and brotensor (CPU + optional
+# CUDA/Metal). brotensor's backend is decided at first add_subdirectory(), so
+# this block is the first loader of brotensor; later siblings reuse the same
+# target via if(NOT TARGET brotensor) guards. The GPU cache vars are forwarded
+# in bro's top-level CMakeLists.txt before this point, so the backend is
+# already set when brotensor loads here.
 #
 # Must be added before brokit, because brokit's bro.image kernels delegate
 # into broimage.
@@ -167,13 +166,11 @@ else()
     add_subdirectory(brogameagent EXCLUDE_FROM_ALL)
 endif()
 
-# --- brolm (tokenizers + text encoders — diffusion's text frontend) ---
+# --- brolm ---
 # Prefer the standalone repo at ../brolm for local development.
 # Falls back to the git submodule at third_party/brolm.
-# MUST be added after brogameagent (which pulls in brotensor + bromath
-# transitively) and before brodiffusion (which depends on brolm). brolm's
-# CMake guards bromath/brotensor with if(NOT TARGET ...) so it reuses the
-# targets added above.
+# MUST be added before brodiffusion (which depends on brolm). Guards
+# bromath/brotensor with if(NOT TARGET ...) so it reuses the already-added targets.
 set(BROLM_DIR "${CMAKE_SOURCE_DIR}/../brolm" CACHE PATH "Path to standalone brolm repo")
 if(EXISTS "${BROLM_DIR}/CMakeLists.txt")
     message(STATUS "brolm: using standalone repo at ${BROLM_DIR}")
@@ -183,12 +180,12 @@ else()
     add_subdirectory(brolm EXCLUDE_FROM_ALL)
 endif()
 
-# --- brosoundml (audio-ML model inference — Whisper STT, Kokoro TTS) ---
+# --- brosoundml ---
 # Prefer the standalone repo at ../brosoundml for local development.
 # Falls back to the git submodule at third_party/brosoundml.
-# MUST be added after brolm: brosoundml's Whisper target depends on
-# brolm::whisper::Tokenizer. brosoundml's CMake guards bromath/brotensor with
-# if(NOT TARGET ...) so it reuses the targets brolm/brogameagent added.
+# MUST be added after brolm: a brosoundml tokenizer target links a brolm
+# tokenizer target. Guards bromath/brotensor with if(NOT TARGET ...) so it
+# reuses the already-added targets.
 set(BROSOUNDML_DIR "${CMAKE_SOURCE_DIR}/../brosoundml" CACHE PATH "Path to standalone brosoundml repo")
 if(EXISTS "${BROSOUNDML_DIR}/CMakeLists.txt")
     message(STATUS "brosoundml: using standalone repo at ${BROSOUNDML_DIR}")
@@ -198,14 +195,12 @@ else()
     add_subdirectory(brosoundml EXCLUDE_FROM_ALL)
 endif()
 
-# --- brodiffusion (Stable Diffusion 1.5 text-to-image inference) ---
+# --- brodiffusion ---
 # Prefer the standalone repo at ../brodiffusion for local development.
 # Falls back to the git submodule at third_party/brodiffusion.
-# MUST be added after brogameagent: brogameagent pulls in brotensor + bromath
-# transitively and (with BROGAMEAGENT_WITH_CUDA=ON) force-sets the
-# BROTENSOR_WITH_CUDA/_METAL cache vars. brodiffusion's CMake guards
-# bromath/brotensor with if(NOT TARGET ...) so it reuses those targets and
-# reads those cache vars instead of re-adding or defaulting them.
+# MUST be added after brolm (which it depends on). Guards bromath/brotensor
+# with if(NOT TARGET ...) so it reuses those targets and reads the GPU cache
+# vars instead of re-adding or defaulting them.
 set(BRODIFFUSION_DIR "${CMAKE_SOURCE_DIR}/../brodiffusion" CACHE PATH "Path to standalone brodiffusion repo")
 if(EXISTS "${BRODIFFUSION_DIR}/CMakeLists.txt")
     message(STATUS "brodiffusion: using standalone repo at ${BRODIFFUSION_DIR}")
@@ -215,15 +210,12 @@ else()
     add_subdirectory(brodiffusion EXCLUDE_FROM_ALL)
 endif()
 
-# --- brovisionml (vision-ML inference — SAM, depth, normals, ControlNet annotators) ---
+# --- brovisionml ---
 # Prefer the standalone repo at ../brovisionml for local development.
 # Falls back to the git submodule at third_party/brovisionml.
 # Depends on bromath + brotensor + broimage; all three are already targets by
-# this point (broimage at the top of this file pulls brotensor + bromath in,
-# and brogameagent force-sets the BROTENSOR_WITH_CUDA/_METAL cache vars).
-# brovisionml's CMake guards all three with if(NOT TARGET ...) so it reuses
-# those targets and reads those cache vars. It ships its own DSINE CUDA kernels
-# gated on BROTENSOR_WITH_CUDA, so a GPU build compiles them automatically.
+# this point. Guards all three with if(NOT TARGET ...) so it reuses those
+# targets and reads the GPU cache vars.
 set(BROVISIONML_DIR "${CMAKE_SOURCE_DIR}/../brovisionml" CACHE PATH "Path to standalone brovisionml repo")
 if(EXISTS "${BROVISIONML_DIR}/CMakeLists.txt")
     message(STATUS "brovisionml: using standalone repo at ${BROVISIONML_DIR}")
