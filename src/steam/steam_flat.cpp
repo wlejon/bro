@@ -66,6 +66,7 @@ bool loadSteamFlat(SteamFlatApi& api) {
     resolve(h, "SteamAPI_ManualDispatch_RunFrame",         api.ManualDispatch_RunFrame);
     resolve(h, "SteamAPI_ManualDispatch_GetNextCallback",  api.ManualDispatch_GetNextCallback);
     resolve(h, "SteamAPI_ManualDispatch_FreeLastCallback", api.ManualDispatch_FreeLastCallback);
+    resolve(h, "SteamAPI_ManualDispatch_GetAPICallResult", api.ManualDispatch_GetAPICallResult);
     resolve(h, "SteamAPI_ISteamUser_GetSteamID",         api.User_GetSteamID);
     resolve(h, "SteamAPI_ISteamFriends_GetPersonaName",  api.Friends_GetPersonaName);
     resolve(h, "SteamAPI_ISteamUtils_GetAppID",          api.Utils_GetAppID);
@@ -87,6 +88,30 @@ bool loadSteamFlat(SteamFlatApi& api) {
     resolve(h, "SteamAPI_ISteamFriends_GetLargeFriendAvatar",     api.Friends_GetLargeFriendAvatar);
     resolve(h, "SteamAPI_ISteamUtils_GetImageSize",               api.Utils_GetImageSize);
     resolve(h, "SteamAPI_ISteamUtils_GetImageRGBA",               api.Utils_GetImageRGBA);
+
+    // Matchmaking / lobbies (M3) — optional; absence degrades the feature.
+    resolve(h, "SteamAPI_ISteamMatchmaking_CreateLobby",                      api.Matchmaking_CreateLobby);
+    resolve(h, "SteamAPI_ISteamMatchmaking_JoinLobby",                        api.Matchmaking_JoinLobby);
+    resolve(h, "SteamAPI_ISteamMatchmaking_LeaveLobby",                       api.Matchmaking_LeaveLobby);
+    resolve(h, "SteamAPI_ISteamMatchmaking_SetLobbyData",                     api.Matchmaking_SetLobbyData);
+    resolve(h, "SteamAPI_ISteamMatchmaking_GetLobbyData",                     api.Matchmaking_GetLobbyData);
+    resolve(h, "SteamAPI_ISteamMatchmaking_GetLobbyDataCount",               api.Matchmaking_GetLobbyDataCount);
+    resolve(h, "SteamAPI_ISteamMatchmaking_GetLobbyDataByIndex",             api.Matchmaking_GetLobbyDataByIndex);
+    resolve(h, "SteamAPI_ISteamMatchmaking_GetNumLobbyMembers",              api.Matchmaking_GetNumLobbyMembers);
+    resolve(h, "SteamAPI_ISteamMatchmaking_GetLobbyMemberByIndex",           api.Matchmaking_GetLobbyMemberByIndex);
+    resolve(h, "SteamAPI_ISteamMatchmaking_GetLobbyOwner",                    api.Matchmaking_GetLobbyOwner);
+    resolve(h, "SteamAPI_ISteamMatchmaking_SetLobbyMemberData",              api.Matchmaking_SetLobbyMemberData);
+    resolve(h, "SteamAPI_ISteamMatchmaking_GetLobbyMemberData",              api.Matchmaking_GetLobbyMemberData);
+    resolve(h, "SteamAPI_ISteamMatchmaking_GetLobbyMemberLimit",            api.Matchmaking_GetLobbyMemberLimit);
+    resolve(h, "SteamAPI_ISteamMatchmaking_SetLobbyMemberLimit",            api.Matchmaking_SetLobbyMemberLimit);
+    resolve(h, "SteamAPI_ISteamMatchmaking_SetLobbyType",                     api.Matchmaking_SetLobbyType);
+    resolve(h, "SteamAPI_ISteamMatchmaking_SetLobbyJoinable",                api.Matchmaking_SetLobbyJoinable);
+    resolve(h, "SteamAPI_ISteamMatchmaking_InviteUserToLobby",              api.Matchmaking_InviteUserToLobby);
+    resolve(h, "SteamAPI_ISteamMatchmaking_RequestLobbyList",                api.Matchmaking_RequestLobbyList);
+    resolve(h, "SteamAPI_ISteamMatchmaking_GetLobbyByIndex",                 api.Matchmaking_GetLobbyByIndex);
+    resolve(h, "SteamAPI_ISteamMatchmaking_AddRequestLobbyListStringFilter", api.Matchmaking_AddRequestLobbyListStringFilter);
+    resolve(h, "SteamAPI_ISteamMatchmaking_AddRequestLobbyListNumericalFilter", api.Matchmaking_AddRequestLobbyListNumericalFilter);
+    resolve(h, "SteamAPI_ISteamMatchmaking_AddRequestLobbyListResultCountFilter", api.Matchmaking_AddRequestLobbyListResultCountFilter);
 
     // The init + pump symbols are the floor — without them the library is
     // unusable. (Either Init or InitFlat is enough.)

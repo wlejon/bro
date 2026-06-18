@@ -24,6 +24,10 @@ namespace {
 const char* kUserVersions[]    = { "SteamUser023", "SteamUser022", "SteamUser021", "SteamUser020" };
 const char* kFriendsVersions[] = { "SteamFriends017", "SteamFriends018", "SteamFriends015" };
 const char* kUtilsVersions[]   = { "SteamUtils010", "SteamUtils009" };
+// ISteamMatchmaking has been version 009 since ~SDK 1.36 and is 009 in our
+// reference redistributable (SDK 1.57). Lead with the matching version (see the
+// vtable hazard note above); 008 is the only realistic older fallback.
+const char* kMatchmakingVersions[] = { "SteamMatchMaking009", "SteamMatchMaking008" };
 
 // k_EFriendFlagImmediate — "regular" friends (the people on your friends list).
 constexpr int kFriendFlagImmediate = 0x04;
@@ -35,6 +39,19 @@ constexpr uint64_t kFriendsRebuildEvery = 50;
 constexpr int kCbPersonaStateChange          = 300 + 4;  // 304
 constexpr int kCbGameOverlayActivated        = 300 + 31; // 331
 constexpr int kCbGameRichPresenceJoinRequest = 300 + 37; // 337
+
+// Matchmaking callback ids (k_iSteamMatchmakingCallbacks == 500) + the async
+// call-result completion id (k_iSteamUtilsCallbacks + 3 == 703).
+constexpr int kCbLobbyDataUpdate    = 500 + 5;  // 505
+constexpr int kCbLobbyChatUpdate    = 500 + 6;  // 506
+constexpr int kCbLobbyEnter         = 500 + 4;  // 504 (also JoinLobby call result)
+constexpr int kCbLobbyCreated       = 500 + 13; // 513 (CreateLobby call result)
+constexpr int kCbSteamAPICallCompleted = 700 + 3; // 703
+
+// EChatMemberStateChange bits that mean "this member is gone".
+constexpr uint32_t kChatMemberLeftMask = 0x0002 /*Left*/ | 0x0004 /*Disconnected*/ |
+                                         0x0008 /*Kicked*/ | 0x0010 /*Banned*/;
+constexpr int kEResultOK = 1;
 
 // Param structs for the callbacks above — layouts match Steam's headers exactly.
 #pragma pack(push, 8)
@@ -51,6 +68,33 @@ struct GameOverlayActivated_t {
 struct GameRichPresenceJoinRequested_t {
     uint64_t m_steamIDFriend;
     char     m_rgchConnect[256];
+};
+// --- matchmaking (M3). Layouts match Steam's isteammatchmaking.h exactly. ---
+struct SteamAPICallCompleted_t {
+    uint64_t m_hAsyncCall;
+    int      m_iCallback;
+    uint32_t m_cubParam;
+};
+struct LobbyCreated_t {
+    int      m_eResult;        // EResult (k_EResultOK == 1)
+    uint64_t m_ulSteamIDLobby;
+};
+struct LobbyEnter_t {
+    uint64_t m_ulSteamIDLobby;
+    uint32_t m_rgfChatPermissions;     // legacy, unused
+    uint8_t  m_bLocked;
+    uint32_t m_EChatRoomEnterResponse; // k_EChatRoomEnterResponseSuccess == 1
+};
+struct LobbyDataUpdate_t {
+    uint64_t m_ulSteamIDLobby;
+    uint64_t m_ulSteamIDMember; // == lobby id when lobby data changed
+    uint8_t  m_bSuccess;
+};
+struct LobbyChatUpdate_t {
+    uint64_t m_ulSteamIDLobby;
+    uint64_t m_ulSteamIDUserChanged;
+    uint64_t m_ulSteamIDMakingChange;
+    uint32_t m_rgfChatMemberStateChange; // EChatMemberStateChange bitfield
 };
 #pragma pack(pop)
 
@@ -93,6 +137,21 @@ void SteamSubscriber::poll() {
                                  ev->avatar->rgba.data(), ev->avatar->rgba.size());
                     delete ev->avatar; // ownership transferred via the event
                 }
+                break;
+            case SteamEvent::LobbyCreated:
+                if (onLobbyCreated) onLobbyCreated(ev->reqId, ev->u64, ev->i32 != 0);
+                break;
+            case SteamEvent::LobbyEntered:
+                if (onLobbyEntered) onLobbyEntered(ev->reqId, ev->u64, ev->i32, ev->u64b == 0);
+                break;
+            case SteamEvent::LobbyUpdated:
+                if (ev->lobby) {
+                    if (onLobbyUpdated) onLobbyUpdated(*ev->lobby);
+                    delete ev->lobby; // ownership transferred via the event
+                }
+                break;
+            case SteamEvent::LobbyLeft:
+                if (onLobbyLeft) onLobbyLeft(ev->u64);
                 break;
         }
         delete ev;
@@ -202,6 +261,74 @@ void SteamService::requestAvatar(uint32_t subscriberId, uint32_t reqId, uint64_t
     postCommand(c);
 }
 
+void SteamService::createLobby(uint32_t subscriberId, uint32_t reqId, int lobbyType, int maxMembers) {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::CreateLobby;
+    c->subscriberId = subscriberId;
+    c->reqId = reqId;
+    c->i32 = lobbyType;
+    c->i32b = maxMembers;
+    postCommand(c);
+}
+
+void SteamService::joinLobby(uint32_t subscriberId, uint32_t reqId, uint64_t lobbyId) {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::JoinLobby;
+    c->subscriberId = subscriberId;
+    c->reqId = reqId;
+    c->u64 = lobbyId;
+    postCommand(c);
+}
+
+void SteamService::leaveLobby(uint64_t lobbyId) {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::LeaveLobby;
+    c->u64 = lobbyId;
+    postCommand(c);
+}
+
+void SteamService::setLobbyData(uint64_t lobbyId, const std::string& key, const std::string& value) {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::SetLobbyData;
+    c->u64 = lobbyId;
+    c->strA = key;
+    c->strB = value;
+    postCommand(c);
+}
+
+void SteamService::setLobbyMemberData(uint64_t lobbyId, const std::string& key, const std::string& value) {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::SetLobbyMemberData;
+    c->u64 = lobbyId;
+    c->strA = key;
+    c->strB = value;
+    postCommand(c);
+}
+
+void SteamService::setLobbyJoinable(uint64_t lobbyId, bool joinable) {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::SetLobbyJoinable;
+    c->u64 = lobbyId;
+    c->i32 = joinable ? 1 : 0;
+    postCommand(c);
+}
+
+void SteamService::setLobbyType(uint64_t lobbyId, int lobbyType) {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::SetLobbyType;
+    c->u64 = lobbyId;
+    c->i32 = lobbyType;
+    postCommand(c);
+}
+
+void SteamService::setLobbyMemberLimit(uint64_t lobbyId, int maxMembers) {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::SetLobbyMemberLimit;
+    c->u64 = lobbyId;
+    c->i32 = maxMembers;
+    postCommand(c);
+}
+
 // ---------------------------------------------------------------------------
 // Lock-free MPSC push — CAS the node onto the stack head.
 // ---------------------------------------------------------------------------
@@ -288,6 +415,64 @@ void SteamService::handleCommand(SteamCommand& cmd) {
             postEventTo(cmd.subscriberId, ev);
             break;
         }
+        case SteamCommand::CreateLobby: {
+            uint64_t call = 0;
+            if (iMatchmaking_ && api_.Matchmaking_CreateLobby)
+                call = api_.Matchmaking_CreateLobby(iMatchmaking_, cmd.i32, cmd.i32b);
+            if (call) {
+                pendingCalls_[call] = { cmd.subscriberId, cmd.reqId, kCbLobbyCreated };
+            } else {
+                // Couldn't even issue the call — settle the promise as failure.
+                auto* ev = new SteamEvent();
+                ev->type = SteamEvent::LobbyCreated;
+                ev->reqId = cmd.reqId;
+                postEventTo(cmd.subscriberId, ev);
+            }
+            break;
+        }
+        case SteamCommand::JoinLobby: {
+            uint64_t call = 0;
+            if (iMatchmaking_ && api_.Matchmaking_JoinLobby)
+                call = api_.Matchmaking_JoinLobby(iMatchmaking_, cmd.u64);
+            if (call) {
+                pendingCalls_[call] = { cmd.subscriberId, cmd.reqId, kCbLobbyEnter };
+            } else {
+                auto* ev = new SteamEvent();
+                ev->type = SteamEvent::LobbyEntered;
+                ev->reqId = cmd.reqId;
+                ev->u64 = cmd.u64;
+                ev->i32 = 0; // no response
+                postEventTo(cmd.subscriberId, ev);
+            }
+            break;
+        }
+        case SteamCommand::LeaveLobby:
+            if (iMatchmaking_ && api_.Matchmaking_LeaveLobby)
+                api_.Matchmaking_LeaveLobby(iMatchmaking_, cmd.u64);
+            joinedLobbies_.erase(cmd.u64);
+            // Steam doesn't deliver a self-leave callback, so notify here.
+            emitToAll(SteamEvent::LobbyLeft, cmd.u64);
+            break;
+        case SteamCommand::SetLobbyData:
+            if (iMatchmaking_ && api_.Matchmaking_SetLobbyData)
+                api_.Matchmaking_SetLobbyData(iMatchmaking_, cmd.u64, cmd.strA.c_str(), cmd.strB.c_str());
+            break;
+        case SteamCommand::SetLobbyMemberData:
+            if (iMatchmaking_ && api_.Matchmaking_SetLobbyMemberData)
+                api_.Matchmaking_SetLobbyMemberData(iMatchmaking_, cmd.u64, cmd.strA.c_str(), cmd.strB.c_str());
+            break;
+        case SteamCommand::SetLobbyJoinable:
+            if (iMatchmaking_ && api_.Matchmaking_SetLobbyJoinable)
+                api_.Matchmaking_SetLobbyJoinable(iMatchmaking_, cmd.u64, cmd.i32 != 0);
+            break;
+        case SteamCommand::SetLobbyType:
+            if (iMatchmaking_ && api_.Matchmaking_SetLobbyType)
+                api_.Matchmaking_SetLobbyType(iMatchmaking_, cmd.u64, cmd.i32);
+            break;
+        case SteamCommand::SetLobbyMemberLimit:
+            if (iMatchmaking_ && api_.Matchmaking_SetLobbyMemberLimit)
+                api_.Matchmaking_SetLobbyMemberLimit(iMatchmaking_, cmd.u64, cmd.i32);
+            break;
     }
 }
 
@@ -338,6 +523,99 @@ void SteamService::emitToAll(SteamEvent::Type type, uint64_t u64, const std::str
     }
 }
 
+// Snapshot a lobby's membership + data from the Steam API and ship it to every
+// subscriber as a LobbyUpdated event (each gets its own copy). The JS thread
+// keeps this as a cache and serves getLobbyMembers/Owner/Data from it. Service
+// thread only.
+void SteamService::buildAndEmitLobby(uint64_t lobbyId) {
+    if (!iMatchmaking_) return;
+
+    LobbyState st;
+    st.lobbyId = lobbyId;
+    if (api_.Matchmaking_GetLobbyOwner)
+        st.owner = api_.Matchmaking_GetLobbyOwner(iMatchmaking_, lobbyId);
+    if (api_.Matchmaking_GetLobbyMemberLimit)
+        st.memberLimit = api_.Matchmaking_GetLobbyMemberLimit(iMatchmaking_, lobbyId);
+
+    int n = api_.Matchmaking_GetNumLobbyMembers
+                ? api_.Matchmaking_GetNumLobbyMembers(iMatchmaking_, lobbyId) : 0;
+    if (n > 0) st.members.reserve(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i) {
+        LobbyMember m;
+        if (api_.Matchmaking_GetLobbyMemberByIndex)
+            m.steamId = api_.Matchmaking_GetLobbyMemberByIndex(iMatchmaking_, lobbyId, i);
+        if (m.steamId && iFriends_ && api_.Friends_GetFriendPersonaName) {
+            const char* nm = api_.Friends_GetFriendPersonaName(iFriends_, m.steamId);
+            m.name = nm ? nm : "";
+        }
+        st.members.push_back(std::move(m));
+    }
+
+    int dc = api_.Matchmaking_GetLobbyDataCount
+                 ? api_.Matchmaking_GetLobbyDataCount(iMatchmaking_, lobbyId) : 0;
+    for (int i = 0; i < dc; ++i) {
+        char key[256] = {0};
+        char val[8192] = {0}; // k_cubChatMetadataMax
+        if (api_.Matchmaking_GetLobbyDataByIndex &&
+            api_.Matchmaking_GetLobbyDataByIndex(iMatchmaking_, lobbyId, i,
+                                                 key, sizeof(key), val, sizeof(val)))
+            st.data.emplace_back(key, val);
+    }
+
+    for (auto& [sid, sub] : subscribers_) {
+        auto* ev = new SteamEvent();
+        ev->type = SteamEvent::LobbyUpdated;
+        ev->lobby = new LobbyState(st); // per-subscriber copy
+        postEventTo(sid, ev);
+    }
+}
+
+// Emit a LobbyEntered event. When broadcast, every subscriber gets the event
+// (only the requester carries `reqId`, so only its promise resolves). When not
+// broadcast, only the requester is notified — used when the physical enter was
+// already announced and all that's left is to settle a late-arriving promise.
+void SteamService::emitLobbyEntered(uint32_t requesterSub, uint32_t reqId,
+                                    uint64_t lobbyId, int response, bool broadcast) {
+    if (!broadcast) {
+        if (requesterSub == 0) return;
+        auto* ev = new SteamEvent();
+        ev->type = SteamEvent::LobbyEntered;
+        ev->u64 = lobbyId;
+        ev->i32 = response;
+        ev->reqId = reqId;
+        ev->u64b = 1; // promise-only: settle, but don't refire onlobbyentered
+        postEventTo(requesterSub, ev);
+        return;
+    }
+    for (auto& [sid, sub] : subscribers_) {
+        auto* ev = new SteamEvent();
+        ev->type = SteamEvent::LobbyEntered;
+        ev->u64 = lobbyId;
+        ev->i32 = response;
+        ev->reqId = (sid == requesterSub) ? reqId : 0;
+        postEventTo(sid, ev);
+    }
+}
+
+// Steam can deliver entry for one lobby twice (a CreateLobby/JoinLobby call
+// result AND a spontaneous LobbyEnter_t). Funnel both through here so the app
+// sees onlobbyentered exactly once: the first arrival snapshots + broadcasts;
+// a later duplicate only settles a still-pending promise.
+void SteamService::enterLobby(uint32_t requesterSub, uint32_t reqId,
+                              uint64_t lobbyId, int response) {
+    if (!lobbyId) {                       // failed enter — settle the promise only
+        emitLobbyEntered(requesterSub, reqId, lobbyId, response, /*broadcast=*/false);
+        return;
+    }
+    bool first = joinedLobbies_.insert(lobbyId).second;
+    if (first) {
+        buildAndEmitLobby(lobbyId);
+        emitLobbyEntered(requesterSub, reqId, lobbyId, response, /*broadcast=*/true);
+    } else {
+        emitLobbyEntered(requesterSub, reqId, lobbyId, response, /*broadcast=*/false);
+    }
+}
+
 // Translate a raw Steam callback (pulled via ManualDispatch) into our events.
 // Service thread only. Unknown callbacks are ignored — they're already freed by
 // the caller's FreeLastCallback.
@@ -360,6 +638,82 @@ void SteamService::dispatchCallback(const CallbackMsg_t& msg) {
                 auto* p = reinterpret_cast<const GameRichPresenceJoinRequested_t*>(msg.m_pubParam);
                 // m_rgchConnect is NUL-terminated by Steam.
                 emitToAll(SteamEvent::JoinRequested, p->m_steamIDFriend, p->m_rgchConnect);
+            }
+            break;
+
+        // --- lobbies (M3) ---
+        case kCbSteamAPICallCompleted: {
+            // The result of an async SteamAPICall_t (CreateLobby / JoinLobby) is
+            // ready. Pull it and route it back to the request that issued it.
+            if (!msg.m_pubParam || !api_.ManualDispatch_GetAPICallResult) break;
+            auto* cc = reinterpret_cast<const SteamAPICallCompleted_t*>(msg.m_pubParam);
+            auto it = pendingCalls_.find(cc->m_hAsyncCall);
+            if (it == pendingCalls_.end()) break; // not one of ours
+            PendingCall pc = it->second;
+            pendingCalls_.erase(it);
+
+            std::vector<uint8_t> buf(cc->m_cubParam ? cc->m_cubParam : 1);
+            bool failed = false;
+            bool ok = api_.ManualDispatch_GetAPICallResult(
+                          pipe_, cc->m_hAsyncCall, buf.data(),
+                          static_cast<int>(cc->m_cubParam), cc->m_iCallback, &failed) && !failed;
+
+            if (cc->m_iCallback == kCbLobbyCreated) {
+                uint64_t lobby = 0;
+                bool success = false;
+                if (ok && cc->m_cubParam >= sizeof(LobbyCreated_t)) {
+                    auto* r = reinterpret_cast<const LobbyCreated_t*>(buf.data());
+                    success = (r->m_eResult == kEResultOK);
+                    lobby = r->m_ulSteamIDLobby;
+                }
+                auto* ev = new SteamEvent();
+                ev->type = SteamEvent::LobbyCreated;
+                ev->reqId = pc.reqId;
+                ev->u64 = lobby;
+                ev->i32 = success ? 1 : 0;
+                postEventTo(pc.subscriberId, ev);
+                // The creator is auto-joined; publish entry here too (reqId 0 —
+                // the create promise already carried the id). enterLobby() dedups
+                // against the spontaneous LobbyEnter_t that may also arrive.
+                if (success && lobby) enterLobby(0, 0, lobby, 1 /*success*/);
+            } else if (cc->m_iCallback == kCbLobbyEnter) {
+                uint64_t lobby = 0;
+                int response = 0;
+                if (ok && cc->m_cubParam >= sizeof(LobbyEnter_t)) {
+                    auto* r = reinterpret_cast<const LobbyEnter_t*>(buf.data());
+                    lobby = r->m_ulSteamIDLobby;
+                    response = static_cast<int>(r->m_EChatRoomEnterResponse);
+                }
+                enterLobby(pc.subscriberId, pc.reqId, lobby, response);
+            }
+            break;
+        }
+        case kCbLobbyEnter:
+            // A spontaneous enter (e.g. accepting an invite) — no pending promise.
+            if (msg.m_pubParam && msg.m_cubParam >= (int)sizeof(LobbyEnter_t)) {
+                auto* p = reinterpret_cast<const LobbyEnter_t*>(msg.m_pubParam);
+                enterLobby(0, 0, p->m_ulSteamIDLobby,
+                           static_cast<int>(p->m_EChatRoomEnterResponse));
+            }
+            break;
+        case kCbLobbyDataUpdate:
+            if (msg.m_pubParam && msg.m_cubParam >= (int)sizeof(LobbyDataUpdate_t)) {
+                auto* p = reinterpret_cast<const LobbyDataUpdate_t*>(msg.m_pubParam);
+                buildAndEmitLobby(p->m_ulSteamIDLobby);
+            }
+            break;
+        case kCbLobbyChatUpdate:
+            if (msg.m_pubParam && msg.m_cubParam >= (int)sizeof(LobbyChatUpdate_t)) {
+                auto* p = reinterpret_cast<const LobbyChatUpdate_t*>(msg.m_pubParam);
+                uint64_t me = localSteamId_.load(std::memory_order_relaxed);
+                if (p->m_ulSteamIDUserChanged == me &&
+                    (p->m_rgfChatMemberStateChange & kChatMemberLeftMask)) {
+                    // I was kicked/banned/disconnected — treat as leaving.
+                    joinedLobbies_.erase(p->m_ulSteamIDLobby);
+                    emitToAll(SteamEvent::LobbyLeft, p->m_ulSteamIDLobby);
+                } else {
+                    buildAndEmitLobby(p->m_ulSteamIDLobby);
+                }
             }
             break;
         default:
@@ -425,6 +779,8 @@ void SteamService::threadMain() {
                                       sizeof(kFriendsVersions)/sizeof(*kFriendsVersions));
             iUtils_   = findInterface(api_, hUser, kUtilsVersions,
                                       sizeof(kUtilsVersions)/sizeof(*kUtilsVersions));
+            iMatchmaking_ = findInterface(api_, hUser, kMatchmakingVersions,
+                                      sizeof(kMatchmakingVersions)/sizeof(*kMatchmakingVersions));
 
             // Identity snapshot. Written before the Status::Available release
             // store, so JS-thread reads that observe Available see complete,
@@ -447,6 +803,7 @@ void SteamService::threadMain() {
                 api_.ManualDispatch_FreeLastCallback) {
                 api_.ManualDispatch_Init();
                 pipe = api_.GetHSteamPipe();
+                pipe_ = pipe; // dispatchCallback uses it for GetAPICallResult
                 manualDispatch = (pipe != 0);
             }
 

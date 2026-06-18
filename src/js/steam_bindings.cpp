@@ -25,16 +25,29 @@ struct SteamCtxState {
     JSValue onFriends = JS_UNDEFINED;
     JSValue onOverlay = JS_UNDEFINED;
     JSValue onJoinRequest = JS_UNDEFINED;
+    JSValue onLobbyEntered = JS_UNDEFINED;
+    JSValue onLobbyUpdated = JS_UNDEFINED;
+    JSValue onLobbyLeft = JS_UNDEFINED;
 
     // JS-thread-owned cache. Updated only during poll() from FriendsUpdated
     // events (ownership transferred from the service thread), read synchronously
     // by getFriends() — so the JS thread never touches Steam state concurrently.
     std::vector<steam::FriendInfo> friends;
 
+    // Same pattern for lobbies: LobbyUpdated events refresh this cache, and
+    // getLobbyMembers/getLobbyOwner/getLobbyData read it synchronously.
+    std::unordered_map<uint64_t, steam::LobbyState> lobbies;
+
     // In-flight getAvatar() promises, keyed by request id. The two stored values
     // are the promise's [resolve, reject] functions (owned; freed on settle).
     std::unordered_map<uint32_t, std::array<JSValue, 2>> pendingAvatars;
     uint32_t nextAvatarReq = 1;
+
+    // In-flight createLobby()/joinLobby() promises, keyed by request id. reqIds
+    // are unique across both (one shared counter), and each id is consumed by
+    // exactly one of onLobbyCreated/onLobbyEntered, so a single map is safe.
+    std::unordered_map<uint32_t, std::array<JSValue, 2>> pendingLobby;
+    uint32_t nextLobbyReq = 1;
 };
 
 static thread_local SteamCtxState* s_state = nullptr;
@@ -193,6 +206,230 @@ static JSValue js_steam_getAvatar(JSContext* ctx, JSValueConst, int argc, JSValu
     s->pendingAvatars[reqId] = { resolving[0], resolving[1] }; // take ownership
     s->service->requestAvatar(s->subscriber->id(), reqId, id, size);
     return promise;
+}
+
+// ---------------------------------------------------------------------------
+// Lobbies (M3)
+// ---------------------------------------------------------------------------
+static uint64_t parseSteamId(JSContext* ctx, JSValueConst v) {
+    const char* s = JS_ToCString(ctx, v);
+    uint64_t id = 0;
+    if (s) {
+        try { id = std::stoull(s); } catch (...) { id = 0; }
+        JS_FreeCString(ctx, s);
+    }
+    return id;
+}
+
+// ELobbyType: 0 private, 1 friends-only, 2 public, 3 invisible.
+static int lobbyTypeFromString(const char* s) {
+    if (!s) return 2;
+    if (!std::strcmp(s, "private")) return 0;
+    if (!std::strcmp(s, "friendsonly") || !std::strcmp(s, "friends")) return 1;
+    if (!std::strcmp(s, "invisible")) return 3;
+    return 2; // public (default)
+}
+
+// createLobby(type="public", maxMembers=8) -> Promise<lobbyId:string | null>
+static JSValue js_steam_createLobby(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    if (JS_IsException(promise)) return promise;
+
+    auto* s = getState();
+    if (!s || !s->service || !s->subscriber) {
+        JSValue n = JS_NULL;
+        JSValue r = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, &n);
+        JS_FreeValue(ctx, r);
+        JS_FreeValue(ctx, resolving[0]);
+        JS_FreeValue(ctx, resolving[1]);
+        return promise;
+    }
+
+    int type = 2;
+    if (argc > 0) {
+        const char* t = JS_ToCString(ctx, argv[0]);
+        type = lobbyTypeFromString(t);
+        if (t) JS_FreeCString(ctx, t);
+    }
+    int maxMembers = 8;
+    if (argc > 1) { int32_t m = 8; JS_ToInt32(ctx, &m, argv[1]); if (m > 0) maxMembers = m; }
+
+    uint32_t reqId = s->nextLobbyReq++;
+    s->pendingLobby[reqId] = { resolving[0], resolving[1] };
+    s->service->createLobby(s->subscriber->id(), reqId, type, maxMembers);
+    return promise;
+}
+
+// joinLobby(lobbyId) -> Promise<{ success:bool, lobbyId:string, response:int }>
+static JSValue js_steam_joinLobby(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    if (JS_IsException(promise)) return promise;
+
+    auto* s = getState();
+    uint64_t id = (argc > 0) ? parseSteamId(ctx, argv[0]) : 0;
+    if (!s || !s->service || !s->subscriber || !id) {
+        JSValue res = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, res, "success", JS_NewBool(ctx, false));
+        JS_SetPropertyStr(ctx, res, "lobbyId", JS_NewString(ctx, "0"));
+        JS_SetPropertyStr(ctx, res, "response", JS_NewInt32(ctx, 0));
+        JSValue r = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, &res);
+        JS_FreeValue(ctx, r);
+        JS_FreeValue(ctx, res);
+        JS_FreeValue(ctx, resolving[0]);
+        JS_FreeValue(ctx, resolving[1]);
+        return promise;
+    }
+
+    uint32_t reqId = s->nextLobbyReq++;
+    s->pendingLobby[reqId] = { resolving[0], resolving[1] };
+    s->service->joinLobby(s->subscriber->id(), reqId, id);
+    return promise;
+}
+
+static JSValue js_steam_leaveLobby(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s || !s->service || argc < 1) return JS_UNDEFINED;
+    uint64_t id = parseSteamId(ctx, argv[0]);
+    if (id) {
+        s->service->leaveLobby(id);
+        s->lobbies.erase(id); // drop the cache entry immediately
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_steam_setLobbyData(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s || !s->service || argc < 3) return JS_NewBool(ctx, false);
+    uint64_t id = parseSteamId(ctx, argv[0]);
+    const char* key = JS_ToCString(ctx, argv[1]);
+    const char* val = JS_ToCString(ctx, argv[2]);
+    if (id && key && val) s->service->setLobbyData(id, key, val);
+    if (key) JS_FreeCString(ctx, key);
+    if (val) JS_FreeCString(ctx, val);
+    return JS_NewBool(ctx, id != 0);
+}
+
+static JSValue js_steam_setLobbyMemberData(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s || !s->service || argc < 3) return JS_UNDEFINED;
+    uint64_t id = parseSteamId(ctx, argv[0]);
+    const char* key = JS_ToCString(ctx, argv[1]);
+    const char* val = JS_ToCString(ctx, argv[2]);
+    if (id && key && val) s->service->setLobbyMemberData(id, key, val);
+    if (key) JS_FreeCString(ctx, key);
+    if (val) JS_FreeCString(ctx, val);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_steam_setLobbyJoinable(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s || !s->service || argc < 2) return JS_UNDEFINED;
+    uint64_t id = parseSteamId(ctx, argv[0]);
+    if (id) s->service->setLobbyJoinable(id, JS_ToBool(ctx, argv[1]) != 0);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_steam_setLobbyType(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s || !s->service || argc < 2) return JS_UNDEFINED;
+    uint64_t id = parseSteamId(ctx, argv[0]);
+    const char* t = JS_ToCString(ctx, argv[1]);
+    if (id) s->service->setLobbyType(id, lobbyTypeFromString(t));
+    if (t) JS_FreeCString(ctx, t);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_steam_setLobbyMemberLimit(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s || !s->service || argc < 2) return JS_UNDEFINED;
+    uint64_t id = parseSteamId(ctx, argv[0]);
+    int32_t limit = 0; JS_ToInt32(ctx, &limit, argv[1]);
+    if (id && limit > 0) s->service->setLobbyMemberLimit(id, limit);
+    return JS_UNDEFINED;
+}
+
+// getLobbyMembers(lobbyId) -> [{ steamId:string, name:string }] (from cache)
+static JSValue js_steam_getLobbyMembers(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    JSValue arr = JS_NewArray(ctx);
+    auto* s = getState();
+    if (!s || argc < 1) return arr;
+    uint64_t id = parseSteamId(ctx, argv[0]);
+    auto it = s->lobbies.find(id);
+    if (it == s->lobbies.end()) return arr;
+    uint32_t i = 0;
+    for (const auto& m : it->second.members) {
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "steamId", JS_NewString(ctx, std::to_string(m.steamId).c_str()));
+        JS_SetPropertyStr(ctx, o, "name", JS_NewString(ctx, m.name.c_str()));
+        JS_SetPropertyUint32(ctx, arr, i++, o);
+    }
+    return arr;
+}
+
+// getLobbyOwner(lobbyId) -> steamId string ("0" if unknown)
+static JSValue js_steam_getLobbyOwner(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    uint64_t owner = 0;
+    if (s && argc >= 1) {
+        uint64_t id = parseSteamId(ctx, argv[0]);
+        auto it = s->lobbies.find(id);
+        if (it != s->lobbies.end()) owner = it->second.owner;
+    }
+    return JS_NewString(ctx, std::to_string(owner).c_str());
+}
+
+// getLobbyData(lobbyId, key) -> value string ("" if absent)
+static JSValue js_steam_getLobbyData(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s || argc < 2) return JS_NewString(ctx, "");
+    uint64_t id = parseSteamId(ctx, argv[0]);
+    const char* key = JS_ToCString(ctx, argv[1]);
+    std::string out;
+    if (key) {
+        auto it = s->lobbies.find(id);
+        if (it != s->lobbies.end()) {
+            for (const auto& [k, v] : it->second.data)
+                if (k == key) { out = v; break; }
+        }
+        JS_FreeCString(ctx, key);
+    }
+    return JS_NewString(ctx, out.c_str());
+}
+
+static JSValue js_steam_get_onlobbyentered(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* s = getState();
+    return s ? JS_DupValue(ctx, s->onLobbyEntered) : JS_UNDEFINED;
+}
+static JSValue js_steam_set_onlobbyentered(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s) return JS_UNDEFINED;
+    JS_FreeValue(ctx, s->onLobbyEntered);
+    s->onLobbyEntered = (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
+    return JS_UNDEFINED;
+}
+static JSValue js_steam_get_onlobbyupdated(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* s = getState();
+    return s ? JS_DupValue(ctx, s->onLobbyUpdated) : JS_UNDEFINED;
+}
+static JSValue js_steam_set_onlobbyupdated(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s) return JS_UNDEFINED;
+    JS_FreeValue(ctx, s->onLobbyUpdated);
+    s->onLobbyUpdated = (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
+    return JS_UNDEFINED;
+}
+static JSValue js_steam_get_onlobbyleft(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* s = getState();
+    return s ? JS_DupValue(ctx, s->onLobbyLeft) : JS_UNDEFINED;
+}
+static JSValue js_steam_set_onlobbyleft(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s) return JS_UNDEFINED;
+    JS_FreeValue(ctx, s->onLobbyLeft);
+    s->onLobbyLeft = (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
+    return JS_UNDEFINED;
 }
 
 static JSValue js_steam_get_onfriends(JSContext* ctx, JSValueConst, int, JSValueConst*) {
@@ -355,6 +592,87 @@ void SteamBindings::install(JSContext* ctx, steam::SteamService* service) {
             JS_FreeValue(ctx, resolve);
             JS_FreeValue(ctx, reject);
         };
+
+        // createLobby() result → resolve the pending promise with the lobby id
+        // (decimal string) or null on failure.
+        state->subscriber->onLobbyCreated = [ctx](uint32_t reqId, uint64_t lobbyId, bool success) {
+            auto* s = getState();
+            if (!s) return;
+            auto it = s->pendingLobby.find(reqId);
+            if (it == s->pendingLobby.end()) return;
+            JSValue resolve = it->second[0];
+            JSValue reject  = it->second[1];
+            s->pendingLobby.erase(it);
+            JSValue val = (success && lobbyId)
+                ? JS_NewString(ctx, std::to_string(lobbyId).c_str()) : JS_NULL;
+            JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &val);
+            JS_FreeValue(ctx, r);
+            JS_FreeValue(ctx, val);
+            JS_FreeValue(ctx, resolve);
+            JS_FreeValue(ctx, reject);
+        };
+        // Entered a lobby. Resolve a pending joinLobby() promise (reqId set), then
+        // always fire the onlobbyentered event.
+        state->subscriber->onLobbyEntered = [ctx](uint32_t reqId, uint64_t lobbyId, int response, bool fireEvent) {
+            auto* s = getState();
+            if (!s) return;
+            bool success = (response == 1); // k_EChatRoomEnterResponseSuccess
+            if (reqId) {
+                auto it = s->pendingLobby.find(reqId);
+                if (it != s->pendingLobby.end()) {
+                    JSValue resolve = it->second[0];
+                    JSValue reject  = it->second[1];
+                    s->pendingLobby.erase(it);
+                    JSValue res = JS_NewObject(ctx);
+                    JS_SetPropertyStr(ctx, res, "success", JS_NewBool(ctx, success));
+                    JS_SetPropertyStr(ctx, res, "lobbyId", JS_NewString(ctx, std::to_string(lobbyId).c_str()));
+                    JS_SetPropertyStr(ctx, res, "response", JS_NewInt32(ctx, response));
+                    JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &res);
+                    JS_FreeValue(ctx, r);
+                    JS_FreeValue(ctx, res);
+                    JS_FreeValue(ctx, resolve);
+                    JS_FreeValue(ctx, reject);
+                }
+            }
+            if (!fireEvent) return; // promise-only refire; entry already announced
+            if (JS_IsUndefined(s->onLobbyEntered) || JS_IsNull(s->onLobbyEntered)) return;
+            JSValue func = JS_DupValue(ctx, s->onLobbyEntered);
+            JSValue argv[2] = {
+                JS_NewString(ctx, std::to_string(lobbyId).c_str()),
+                JS_NewBool(ctx, success),
+            };
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, argv);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, argv[0]);
+            JS_FreeValue(ctx, argv[1]);
+            JS_FreeValue(ctx, func);
+        };
+        // Lobby membership/data changed — refresh the JS-thread cache, then fire
+        // onlobbyupdated so the app re-reads getLobbyMembers/Data.
+        state->subscriber->onLobbyUpdated = [ctx](const steam::LobbyState& st) {
+            auto* s = getState();
+            if (!s) return;
+            s->lobbies[st.lobbyId] = st;
+            if (JS_IsUndefined(s->onLobbyUpdated) || JS_IsNull(s->onLobbyUpdated)) return;
+            JSValue func = JS_DupValue(ctx, s->onLobbyUpdated);
+            JSValue arg = JS_NewString(ctx, std::to_string(st.lobbyId).c_str());
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, arg);
+            JS_FreeValue(ctx, func);
+        };
+        state->subscriber->onLobbyLeft = [ctx](uint64_t lobbyId) {
+            auto* s = getState();
+            if (!s) return;
+            s->lobbies.erase(lobbyId);
+            if (JS_IsUndefined(s->onLobbyLeft) || JS_IsNull(s->onLobbyLeft)) return;
+            JSValue func = JS_DupValue(ctx, s->onLobbyLeft);
+            JSValue arg = JS_NewString(ctx, std::to_string(lobbyId).c_str());
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, arg);
+            JS_FreeValue(ctx, func);
+        };
     }
 
     // Build bro.steam namespace.
@@ -415,6 +733,51 @@ void SteamBindings::install(JSContext* ctx, steam::SteamService* service) {
         JS_PROP_CONFIGURABLE);
     JS_FreeAtom(ctx, aJoin);
 
+    // Lobbies (M3): lifecycle, data, membership reads.
+    JS_SetPropertyStr(ctx, steamObj, "createLobby",
+        JS_NewCFunction(ctx, js_steam_createLobby, "createLobby", 2));
+    JS_SetPropertyStr(ctx, steamObj, "joinLobby",
+        JS_NewCFunction(ctx, js_steam_joinLobby, "joinLobby", 1));
+    JS_SetPropertyStr(ctx, steamObj, "leaveLobby",
+        JS_NewCFunction(ctx, js_steam_leaveLobby, "leaveLobby", 1));
+    JS_SetPropertyStr(ctx, steamObj, "setLobbyData",
+        JS_NewCFunction(ctx, js_steam_setLobbyData, "setLobbyData", 3));
+    JS_SetPropertyStr(ctx, steamObj, "setLobbyMemberData",
+        JS_NewCFunction(ctx, js_steam_setLobbyMemberData, "setLobbyMemberData", 3));
+    JS_SetPropertyStr(ctx, steamObj, "setLobbyJoinable",
+        JS_NewCFunction(ctx, js_steam_setLobbyJoinable, "setLobbyJoinable", 2));
+    JS_SetPropertyStr(ctx, steamObj, "setLobbyType",
+        JS_NewCFunction(ctx, js_steam_setLobbyType, "setLobbyType", 2));
+    JS_SetPropertyStr(ctx, steamObj, "setLobbyMemberLimit",
+        JS_NewCFunction(ctx, js_steam_setLobbyMemberLimit, "setLobbyMemberLimit", 2));
+    JS_SetPropertyStr(ctx, steamObj, "getLobbyMembers",
+        JS_NewCFunction(ctx, js_steam_getLobbyMembers, "getLobbyMembers", 1));
+    JS_SetPropertyStr(ctx, steamObj, "getLobbyOwner",
+        JS_NewCFunction(ctx, js_steam_getLobbyOwner, "getLobbyOwner", 1));
+    JS_SetPropertyStr(ctx, steamObj, "getLobbyData",
+        JS_NewCFunction(ctx, js_steam_getLobbyData, "getLobbyData", 2));
+
+    JSAtom aLobbyEnter = JS_NewAtom(ctx, "onlobbyentered");
+    JS_DefinePropertyGetSet(ctx, steamObj, aLobbyEnter,
+        JS_NewCFunction(ctx, js_steam_get_onlobbyentered, "get onlobbyentered", 0),
+        JS_NewCFunction(ctx, js_steam_set_onlobbyentered, "set onlobbyentered", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aLobbyEnter);
+
+    JSAtom aLobbyUpd = JS_NewAtom(ctx, "onlobbyupdated");
+    JS_DefinePropertyGetSet(ctx, steamObj, aLobbyUpd,
+        JS_NewCFunction(ctx, js_steam_get_onlobbyupdated, "get onlobbyupdated", 0),
+        JS_NewCFunction(ctx, js_steam_set_onlobbyupdated, "set onlobbyupdated", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aLobbyUpd);
+
+    JSAtom aLobbyLeft = JS_NewAtom(ctx, "onlobbyleft");
+    JS_DefinePropertyGetSet(ctx, steamObj, aLobbyLeft,
+        JS_NewCFunction(ctx, js_steam_get_onlobbyleft, "get onlobbyleft", 0),
+        JS_NewCFunction(ctx, js_steam_set_onlobbyleft, "set onlobbyleft", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aLobbyLeft);
+
     JS_SetPropertyStr(ctx, broObj, "steam", steamObj);
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
@@ -430,8 +793,15 @@ void SteamBindings::cleanup(JSContext* ctx) {
         JS_FreeValue(ctx, s->onFriends);
         JS_FreeValue(ctx, s->onOverlay);
         JS_FreeValue(ctx, s->onJoinRequest);
-        // Drop any unresolved getAvatar() promises (context is going away).
+        JS_FreeValue(ctx, s->onLobbyEntered);
+        JS_FreeValue(ctx, s->onLobbyUpdated);
+        JS_FreeValue(ctx, s->onLobbyLeft);
+        // Drop any unresolved getAvatar()/lobby promises (context going away).
         for (auto& [reqId, fns] : s->pendingAvatars) {
+            JS_FreeValue(ctx, fns[0]);
+            JS_FreeValue(ctx, fns[1]);
+        }
+        for (auto& [reqId, fns] : s->pendingLobby) {
             JS_FreeValue(ctx, fns[0]);
             JS_FreeValue(ctx, fns[1]);
         }

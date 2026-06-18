@@ -58,6 +58,12 @@ struct SteamFlatApi {
     void (*ManualDispatch_RunFrame)(HSteamPipe) = nullptr;
     bool (*ManualDispatch_GetNextCallback)(HSteamPipe, CallbackMsg_t*) = nullptr;
     void (*ManualDispatch_FreeLastCallback)(HSteamPipe) = nullptr;
+    // Retrieve the result of an async SteamAPICall_t. When GetNextCallback hands
+    // back a SteamAPICallCompleted_t (id 703), this pulls the actual result struct
+    // (LobbyCreated_t, LobbyEnter_t, LobbyMatchList_t, …) for that call handle.
+    bool (*ManualDispatch_GetAPICallResult)(HSteamPipe, uint64_t hSteamAPICall,
+                                            void* pCallback, int cubCallback,
+                                            int iCallbackExpected, bool* pbFailed) = nullptr;
 
     // --- method wrappers (interface pointer passed as the first "self" arg) ---
     uint64_t    (*User_GetSteamID)(void* iSteamUser) = nullptr;
@@ -84,6 +90,34 @@ struct SteamFlatApi {
     int  (*Friends_GetLargeFriendAvatar)(void* iSteamFriends, uint64_t steamIDFriend) = nullptr;
     bool (*Utils_GetImageSize)(void* iSteamUtils, int iImage, uint32_t* w, uint32_t* h) = nullptr;
     bool (*Utils_GetImageRGBA)(void* iSteamUtils, int iImage, uint8_t* dest, int destBufferSize) = nullptr;
+
+    // --- matchmaking / lobbies (M3). CSteamID lobby/user ids pass by value as
+    // uint64. CreateLobby/JoinLobby/RequestLobbyList are async — they return a
+    // SteamAPICall_t whose result arrives via SteamAPICallCompleted_t. ---
+    uint64_t    (*Matchmaking_CreateLobby)(void* iMM, int eLobbyType, int cMaxMembers) = nullptr;
+    uint64_t    (*Matchmaking_JoinLobby)(void* iMM, uint64_t steamIDLobby) = nullptr;
+    void        (*Matchmaking_LeaveLobby)(void* iMM, uint64_t steamIDLobby) = nullptr;
+    bool        (*Matchmaking_SetLobbyData)(void* iMM, uint64_t steamIDLobby, const char* key, const char* value) = nullptr;
+    const char* (*Matchmaking_GetLobbyData)(void* iMM, uint64_t steamIDLobby, const char* key) = nullptr;
+    int         (*Matchmaking_GetLobbyDataCount)(void* iMM, uint64_t steamIDLobby) = nullptr;
+    bool        (*Matchmaking_GetLobbyDataByIndex)(void* iMM, uint64_t steamIDLobby, int iLobbyData,
+                                                   char* key, int keyBufSize, char* value, int valueBufSize) = nullptr;
+    int         (*Matchmaking_GetNumLobbyMembers)(void* iMM, uint64_t steamIDLobby) = nullptr;
+    uint64_t    (*Matchmaking_GetLobbyMemberByIndex)(void* iMM, uint64_t steamIDLobby, int iMember) = nullptr;
+    uint64_t    (*Matchmaking_GetLobbyOwner)(void* iMM, uint64_t steamIDLobby) = nullptr;
+    bool        (*Matchmaking_SetLobbyMemberData)(void* iMM, uint64_t steamIDLobby, const char* key, const char* value) = nullptr;
+    const char* (*Matchmaking_GetLobbyMemberData)(void* iMM, uint64_t steamIDLobby, uint64_t steamIDUser, const char* key) = nullptr;
+    int         (*Matchmaking_GetLobbyMemberLimit)(void* iMM, uint64_t steamIDLobby) = nullptr;
+    bool        (*Matchmaking_SetLobbyMemberLimit)(void* iMM, uint64_t steamIDLobby, int cMaxMembers) = nullptr;
+    bool        (*Matchmaking_SetLobbyType)(void* iMM, uint64_t steamIDLobby, int eLobbyType) = nullptr;
+    bool        (*Matchmaking_SetLobbyJoinable)(void* iMM, uint64_t steamIDLobby, bool bJoinable) = nullptr;
+    // Discovery + invites (M3b).
+    bool        (*Matchmaking_InviteUserToLobby)(void* iMM, uint64_t steamIDLobby, uint64_t steamIDInvitee) = nullptr;
+    uint64_t    (*Matchmaking_RequestLobbyList)(void* iMM) = nullptr;
+    uint64_t    (*Matchmaking_GetLobbyByIndex)(void* iMM, int iLobby) = nullptr;
+    void        (*Matchmaking_AddRequestLobbyListStringFilter)(void* iMM, const char* key, const char* value, int eComparison) = nullptr;
+    void        (*Matchmaking_AddRequestLobbyListNumericalFilter)(void* iMM, const char* key, int value, int eComparison) = nullptr;
+    void        (*Matchmaking_AddRequestLobbyListResultCountFilter)(void* iMM, int cMaxResults) = nullptr;
 
     bool loaded() const { return handle != nullptr; }
 };
