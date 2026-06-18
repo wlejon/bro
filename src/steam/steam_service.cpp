@@ -484,38 +484,13 @@ void SteamService::handleCommand(SteamCommand& cmd) {
                 api_.Friends_ActivateGameOverlayInviteDialog(iFriends_, cmd.u64);
             break;
         case SteamCommand::RequestAvatar: {
-            auto* ad = new AvatarData();
-            ad->reqId = cmd.reqId;
-
-            int handle = 0;
-            if (iFriends_) {
-                if (cmd.i32 <= 0 && api_.Friends_GetSmallFriendAvatar)
-                    handle = api_.Friends_GetSmallFriendAvatar(iFriends_, cmd.u64);
-                else if (cmd.i32 == 1 && api_.Friends_GetMediumFriendAvatar)
-                    handle = api_.Friends_GetMediumFriendAvatar(iFriends_, cmd.u64);
-                else if (api_.Friends_GetLargeFriendAvatar)
-                    handle = api_.Friends_GetLargeFriendAvatar(iFriends_, cmd.u64);
-            }
-            // handle 0 = none, -1 = still loading; either way return empty and let
-            // the app re-request after the avatar-loaded PersonaStateChange.
-            if (handle > 0 && iUtils_ && api_.Utils_GetImageSize && api_.Utils_GetImageRGBA) {
-                uint32_t w = 0, h = 0;
-                if (api_.Utils_GetImageSize(iUtils_, handle, &w, &h) && w > 0 && h > 0) {
-                    ad->rgba.resize(static_cast<size_t>(w) * h * 4);
-                    if (api_.Utils_GetImageRGBA(iUtils_, handle, ad->rgba.data(),
-                                                static_cast<int>(ad->rgba.size()))) {
-                        ad->w = static_cast<int>(w);
-                        ad->h = static_cast<int>(h);
-                    } else {
-                        ad->rgba.clear();
-                    }
-                }
-            }
-
-            auto* ev = new SteamEvent();
-            ev->type = SteamEvent::AvatarData_;
-            ev->avatar = ad;
-            postEventTo(cmd.subscriberId, ev);
+            // Calling Get*FriendAvatar nudges Steam to download the image if it's
+            // not cached. If it's not ready yet, pend the request and deliver when
+            // the avatar-loaded PersonaStateChange arrives — so the app's
+            // getAvatar() promise resolves once, when the pixels are actually
+            // available, instead of resolving null and forcing it to poll.
+            if (!emitAvatarIfReady(cmd.subscriberId, cmd.reqId, cmd.u64, cmd.i32))
+                pendingAvatars_[cmd.u64].push_back({ cmd.subscriberId, cmd.reqId, cmd.i32 });
             break;
         }
         case SteamCommand::CreateLobby: {
@@ -697,6 +672,64 @@ void SteamService::emitFriendsTo(uint32_t subscriberId) {
     postEventTo(subscriberId, ev);
 }
 
+bool SteamService::emitAvatarIfReady(uint32_t subscriberId, uint32_t reqId,
+                                     uint64_t steamId, int size) {
+    int handle = 0;
+    if (iFriends_) {
+        if (size <= 0 && api_.Friends_GetSmallFriendAvatar)
+            handle = api_.Friends_GetSmallFriendAvatar(iFriends_, steamId);
+        else if (size == 1 && api_.Friends_GetMediumFriendAvatar)
+            handle = api_.Friends_GetMediumFriendAvatar(iFriends_, steamId);
+        else if (api_.Friends_GetLargeFriendAvatar)
+            handle = api_.Friends_GetLargeFriendAvatar(iFriends_, steamId);
+    }
+    // -1 == Steam is still downloading the image. Not resolvable yet — tell the
+    // caller to pend and retry when the avatar-loaded PersonaStateChange fires.
+    if (handle < 0) return false;
+
+    auto* ad = new AvatarData();
+    ad->reqId = reqId;
+    // handle > 0: a real image handle. Read its pixels; if the bytes aren't
+    // materialized yet (GetImageSize/RGBA fails transiently), treat as not-ready
+    // and retry rather than resolving a premature null.
+    if (handle > 0) {
+        if (!(iUtils_ && api_.Utils_GetImageSize && api_.Utils_GetImageRGBA)) {
+            delete ad; return false; // utils missing — can't read; keep pending
+        }
+        uint32_t w = 0, h = 0;
+        if (!(api_.Utils_GetImageSize(iUtils_, handle, &w, &h) && w > 0 && h > 0)) {
+            delete ad; return false; // size not ready yet
+        }
+        ad->rgba.resize(static_cast<size_t>(w) * h * 4);
+        if (!api_.Utils_GetImageRGBA(iUtils_, handle, ad->rgba.data(),
+                                     static_cast<int>(ad->rgba.size()))) {
+            delete ad; return false; // pixels not ready yet
+        }
+        ad->w = static_cast<int>(w);
+        ad->h = static_cast<int>(h);
+    }
+    // handle == 0: the user has no avatar set — deliver an empty AvatarData so the
+    // app's promise resolves null (a settled answer, not a stuck request).
+
+    auto* ev = new SteamEvent();
+    ev->type = SteamEvent::AvatarData_;
+    ev->avatar = ad;
+    postEventTo(subscriberId, ev);
+    return true;
+}
+
+void SteamService::retryPendingAvatars(uint64_t steamId) {
+    auto it = pendingAvatars_.find(steamId);
+    if (it == pendingAvatars_.end()) return;
+    std::vector<PendingAvatar> stillLoading;
+    for (const auto& r : it->second) {
+        if (!emitAvatarIfReady(r.subscriberId, r.reqId, steamId, r.size))
+            stillLoading.push_back(r);
+    }
+    if (stillLoading.empty()) pendingAvatars_.erase(it);
+    else it->second = std::move(stillLoading);
+}
+
 void SteamService::emitToAll(SteamEvent::Type type, uint64_t u64, const std::string& str) {
     for (auto& [sid, sub] : subscribers_) {
         auto* ev = new SteamEvent();
@@ -852,6 +885,12 @@ void SteamService::dispatchCallback(const CallbackMsg_t& msg) {
             // diff in buildAndEmitFriends() suppresses no-op emits, so this is
             // cheap even though PersonaStateChange fires frequently.
             buildAndEmitFriends();
+            // This is also the signal that a downloading avatar is now ready, so
+            // satisfy any avatar request we had to pend for this user.
+            if (msg.m_pubParam && msg.m_cubParam >= (int)sizeof(PersonaStateChange_t)) {
+                auto* p = reinterpret_cast<const PersonaStateChange_t*>(msg.m_pubParam);
+                retryPendingAvatars(p->m_ulSteamID);
+            }
             break;
         case kCbGameOverlayActivated:
             if (msg.m_pubParam && msg.m_cubParam >= (int)sizeof(GameOverlayActivated_t)) {

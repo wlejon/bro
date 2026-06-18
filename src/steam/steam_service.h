@@ -336,6 +336,13 @@ private:
     void handleCommand(SteamCommand& cmd);        // service thread only
     void buildAndEmitFriends();                   // service thread only
     void emitFriendsTo(uint32_t subscriberId);    // service thread only
+    // Try to satisfy one avatar request now. Posts an AvatarData_ event and
+    // returns true when resolved (pixels, or empty == "user has no avatar");
+    // returns false when Steam is still downloading the image, so the caller
+    // should pend the request and retry on the next PersonaStateChange.
+    bool emitAvatarIfReady(uint32_t subscriberId, uint32_t reqId,
+                           uint64_t steamId, int size);   // service thread only
+    void retryPendingAvatars(uint64_t steamId);   // service thread only
     LobbyState snapshotLobby(uint64_t lobbyId, bool includeMembers); // service thread only
     void buildAndEmitLobby(uint64_t lobbyId);     // service thread only
     void emitPairToAll(SteamEvent::Type type, uint64_t u64, uint64_t u64b); // service thread only
@@ -372,6 +379,13 @@ private:
     struct PendingCall { uint32_t subscriberId; uint32_t reqId; int expectedCb; };
     std::unordered_map<uint64_t, PendingCall> pendingCalls_;
     std::unordered_set<uint64_t> joinedLobbies_; // lobbies I'm currently in (dedup)
+
+    // Avatar requests Steam couldn't satisfy immediately (image still loading,
+    // handle == -1). Keyed by friend steamId; each is retried when a
+    // PersonaStateChange for that user signals the avatar is ready. Service
+    // thread only. (Calling Get*FriendAvatar already nudged the download.)
+    struct PendingAvatar { uint32_t subscriberId; uint32_t reqId; int size; };
+    std::unordered_map<uint64_t, std::vector<PendingAvatar>> pendingAvatars_;
 
     // --- Lock-free MPSC command ingress (intrusive atomic stack) ---
     std::atomic<SteamCommand*> cmdHead_{nullptr};

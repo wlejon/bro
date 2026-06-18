@@ -187,7 +187,9 @@ static JSValue js_steam_activateInviteDialog(JSContext* ctx, JSValueConst, int a
 }
 
 // getAvatar(steamId, size="medium") -> Promise<{width,height,data:Uint8ClampedArray}|null>
-// Resolves null when the avatar isn't loaded yet (re-request after onfriends).
+// Resolves with the pixels once they're ready: if Steam is still downloading the
+// image, the service holds the request and delivers when it lands (no app-side
+// retry needed). Resolves null only when the user genuinely has no avatar set.
 static JSValue js_steam_getAvatar(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     JSValue resolving[2];
     JSValue promise = JS_NewPromiseCapability(ctx, resolving);
