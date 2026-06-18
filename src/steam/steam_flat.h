@@ -43,6 +43,19 @@ struct SteamFlatApi {
     const char* (*Friends_GetPersonaName)(void* iSteamFriends) = nullptr;
     uint32_t    (*Utils_GetAppID)(void* iSteamUtils) = nullptr;
 
+    // --- friends (M2): list, personas, rich presence, overlay ---
+    // CSteamID is passed by value as a uint64 in the flat ABI.
+    int         (*Friends_GetFriendCount)(void* iSteamFriends, int iFriendFlags) = nullptr;
+    uint64_t    (*Friends_GetFriendByIndex)(void* iSteamFriends, int iFriend, int iFriendFlags) = nullptr;
+    const char* (*Friends_GetFriendPersonaName)(void* iSteamFriends, uint64_t steamIDFriend) = nullptr;
+    int         (*Friends_GetFriendPersonaState)(void* iSteamFriends, uint64_t steamIDFriend) = nullptr;
+    int         (*Friends_GetFriendRelationship)(void* iSteamFriends, uint64_t steamIDFriend) = nullptr;
+    bool        (*Friends_SetRichPresence)(void* iSteamFriends, const char* key, const char* value) = nullptr;
+    void        (*Friends_ClearRichPresence)(void* iSteamFriends) = nullptr;
+    const char* (*Friends_GetFriendRichPresence)(void* iSteamFriends, uint64_t steamIDFriend, const char* key) = nullptr;
+    void        (*Friends_ActivateGameOverlay)(void* iSteamFriends, const char* dialog) = nullptr;
+    void        (*Friends_ActivateGameOverlayToUser)(void* iSteamFriends, const char* dialog, uint64_t steamID) = nullptr;
+
     bool loaded() const { return handle != nullptr; }
 };
 

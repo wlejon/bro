@@ -1,11 +1,14 @@
 #pragma once
 
+#include "steam/steam_flat.h"
+
 #include <atomic>
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 
 // SteamService owns the Steamworks API on a dedicated thread and marshals
 // to/from JS contexts lock-free — a direct mirror of bro::net::NetService.
@@ -54,17 +57,42 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// A friend, as snapshotted on the service thread (M2). Ownership of a snapshot
+// vector transfers service-thread → subscriber-thread via a FriendsUpdated
+// event, so the JS thread never reads Steam state concurrently (no locks).
+// ---------------------------------------------------------------------------
+struct FriendInfo {
+    uint64_t steamId       = 0;
+    std::string name;
+    int      personaState  = 0; // EPersonaState (0 offline … 7 invisible)
+    int      relationship  = 0; // EFriendRelationship (3 == friend)
+
+    bool operator==(const FriendInfo& o) const {
+        return steamId == o.steamId && name == o.name &&
+               personaState == o.personaState && relationship == o.relationship;
+    }
+    bool operator!=(const FriendInfo& o) const { return !(*this == o); }
+};
+
+// ---------------------------------------------------------------------------
 // Command (subscriber thread → service thread). Intrusive node for the
 // lock-free MPSC atomic stack.
 // ---------------------------------------------------------------------------
 struct SteamCommand {
     enum Type : uint8_t {
-        Register,    // new subscriber joined (subscriberPtr set)
-        Unregister,  // subscriber leaving (subscriberPtr set)
+        Register,            // new subscriber joined (subscriberPtr set)
+        Unregister,          // subscriber leaving (subscriberPtr set)
+        SetRichPresence,     // strA=key, strB=value
+        ClearRichPresence,   // (no args)
+        ActivateOverlay,     // strA=dialog ("friends", "settings", ...)
+        ActivateOverlayToUser, // strA=dialog ("steamid", "chat", ...), u64=target
     };
     Type type;
     uint32_t subscriberId = 0;
     class SteamSubscriber* subscriberPtr = nullptr; // Register/Unregister
+    std::string strA;                               // RichPresence/Overlay args
+    std::string strB;
+    uint64_t u64 = 0;                               // overlay target steamId
     SteamCommand* next = nullptr;                   // MPSC stack link
 };
 
@@ -73,10 +101,12 @@ struct SteamCommand {
 // ---------------------------------------------------------------------------
 struct SteamEvent {
     enum Type : uint8_t {
-        Pulse,   // RunCallbacks heartbeat — proves the service pump is alive
+        Pulse,          // RunCallbacks heartbeat — proves the service pump is alive
+        FriendsUpdated, // friends snapshot changed; `friends` owned by this event
     };
     Type type;
     uint64_t u64 = 0;
+    std::vector<FriendInfo>* friends = nullptr; // FriendsUpdated only; poll() deletes
 };
 
 class SteamService;
@@ -95,8 +125,9 @@ public:
     void poll();
 
     // Callbacks — bindings set these. Fire on the subscriber's thread during
-    // poll(). More land here as the friends/lobby/voice/UGC layers come online.
+    // poll(). More land here as the lobby/voice/UGC layers come online.
     std::function<void(uint64_t tick)> onPulse;
+    std::function<void(const std::vector<FriendInfo>&)> onFriends;
 
 private:
     friend class SteamService;
@@ -145,6 +176,13 @@ public:
     uint32_t appId() const { return appId_.load(std::memory_order_acquire); }
     const std::string& personaName() const { return personaName_; }
 
+    // --- Friends actions (M2). Thread-safe: each enqueues a command that the
+    // service thread runs against the Steam API. No-ops when unavailable. ---
+    void setRichPresence(const std::string& key, const std::string& value);
+    void clearRichPresence();
+    void activateOverlay(const std::string& dialog);
+    void activateOverlayToUser(const std::string& dialog, uint64_t steamId);
+
     /// Allocate a subscriber and register it. Non-owning pointer; release with
     /// destroySubscriber(). Safe to call from any thread.
     SteamSubscriber* createSubscriber();
@@ -159,10 +197,20 @@ private:
     void threadMain();
     void postCommand(SteamCommand* cmd);
     void postEventTo(uint32_t subscriberId, SteamEvent* ev);
-    void handleCommand(SteamCommand& cmd); // service thread only
+    void handleCommand(SteamCommand& cmd);        // service thread only
+    void buildAndEmitFriends();                   // service thread only
+    void emitFriendsTo(uint32_t subscriberId);    // service thread only
 
     // --- Service-thread-only state ---
     std::unordered_map<uint32_t, SteamSubscriber*> subscribers_; // id → subscriber
+
+    // Steam API + resolved interface pointers. Written once in threadMain()
+    // before the loop, then read only on the service thread — no sharing.
+    SteamFlatApi api_;
+    void* iUser_    = nullptr;
+    void* iFriends_ = nullptr;
+    void* iUtils_   = nullptr;
+    std::vector<FriendInfo> lastFriends_; // authoritative snapshot for diffing
 
     // --- Lock-free MPSC command ingress (intrusive atomic stack) ---
     std::atomic<SteamCommand*> cmdHead_{nullptr};

@@ -64,6 +64,18 @@ bool loadSteamFlat(SteamFlatApi& api) {
     resolve(h, "SteamAPI_ISteamFriends_GetPersonaName",  api.Friends_GetPersonaName);
     resolve(h, "SteamAPI_ISteamUtils_GetAppID",          api.Utils_GetAppID);
 
+    // Friends (M2) — optional; absence degrades the feature, not the lifecycle.
+    resolve(h, "SteamAPI_ISteamFriends_GetFriendCount",            api.Friends_GetFriendCount);
+    resolve(h, "SteamAPI_ISteamFriends_GetFriendByIndex",         api.Friends_GetFriendByIndex);
+    resolve(h, "SteamAPI_ISteamFriends_GetFriendPersonaName",     api.Friends_GetFriendPersonaName);
+    resolve(h, "SteamAPI_ISteamFriends_GetFriendPersonaState",    api.Friends_GetFriendPersonaState);
+    resolve(h, "SteamAPI_ISteamFriends_GetFriendRelationship",    api.Friends_GetFriendRelationship);
+    resolve(h, "SteamAPI_ISteamFriends_SetRichPresence",          api.Friends_SetRichPresence);
+    resolve(h, "SteamAPI_ISteamFriends_ClearRichPresence",        api.Friends_ClearRichPresence);
+    resolve(h, "SteamAPI_ISteamFriends_GetFriendRichPresence",    api.Friends_GetFriendRichPresence);
+    resolve(h, "SteamAPI_ISteamFriends_ActivateGameOverlay",      api.Friends_ActivateGameOverlay);
+    resolve(h, "SteamAPI_ISteamFriends_ActivateGameOverlayToUser", api.Friends_ActivateGameOverlayToUser);
+
     // The init + pump symbols are the floor — without them the library is
     // unusable. (Either Init or InitFlat is enough.)
     if ((!api.Init && !api.InitFlat) || !api.Shutdown || !api.RunCallbacks ||

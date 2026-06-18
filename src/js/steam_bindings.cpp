@@ -5,6 +5,7 @@
 #include <qjsbind/qjsbind.h>
 
 #include <string>
+#include <vector>
 
 namespace bro::js {
 
@@ -18,6 +19,12 @@ struct SteamCtxState {
     JSContext* ctx = nullptr;
 
     JSValue onPulse = JS_UNDEFINED;
+    JSValue onFriends = JS_UNDEFINED;
+
+    // JS-thread-owned cache. Updated only during poll() from FriendsUpdated
+    // events (ownership transferred from the service thread), read synchronously
+    // by getFriends() — so the JS thread never touches Steam state concurrently.
+    std::vector<steam::FriendInfo> friends;
 };
 
 static thread_local SteamCtxState* s_state = nullptr;
@@ -57,6 +64,98 @@ static JSValue js_steam_get_appId(JSContext* ctx, JSValueConst, int, JSValueCons
     auto* s = getState();
     uint32_t appId = (s && s->service && s->service->available()) ? s->service->appId() : 0;
     return JS_NewUint32(ctx, appId);
+}
+
+// ---------------------------------------------------------------------------
+// Friends (M2)
+// ---------------------------------------------------------------------------
+static const char* personaStateStr(int s) {
+    switch (s) {
+        case 0: return "offline";
+        case 1: return "online";
+        case 2: return "busy";
+        case 3: return "away";
+        case 4: return "snooze";
+        case 5: return "looking-to-trade";
+        case 6: return "looking-to-play";
+        case 7: return "invisible";
+        default: return "unknown";
+    }
+}
+
+static JSValue friendToObject(JSContext* ctx, const steam::FriendInfo& f) {
+    JSValue o = JS_NewObject(ctx);
+    // SteamID64 as a decimal string — preserves the full uint64 in JS.
+    JS_SetPropertyStr(ctx, o, "steamId", JS_NewString(ctx, std::to_string(f.steamId).c_str()));
+    JS_SetPropertyStr(ctx, o, "name", JS_NewString(ctx, f.name.c_str()));
+    JS_SetPropertyStr(ctx, o, "state", JS_NewString(ctx, personaStateStr(f.personaState)));
+    JS_SetPropertyStr(ctx, o, "stateCode", JS_NewInt32(ctx, f.personaState));
+    JS_SetPropertyStr(ctx, o, "online", JS_NewBool(ctx, f.personaState != 0));
+    JS_SetPropertyStr(ctx, o, "relationship", JS_NewInt32(ctx, f.relationship));
+    return o;
+}
+
+// getFriends() → array of the cached friends (synchronous; from the last poll).
+static JSValue js_steam_getFriends(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* s = getState();
+    JSValue arr = JS_NewArray(ctx);
+    if (!s) return arr;
+    uint32_t i = 0;
+    for (const auto& f : s->friends)
+        JS_SetPropertyUint32(ctx, arr, i++, friendToObject(ctx, f));
+    return arr;
+}
+
+static JSValue js_steam_setRichPresence(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s || !s->service || argc < 2) return JS_NewBool(ctx, false);
+    const char* key = JS_ToCString(ctx, argv[0]);
+    const char* val = JS_ToCString(ctx, argv[1]);
+    if (key && val) s->service->setRichPresence(key, val);
+    if (key) JS_FreeCString(ctx, key);
+    if (val) JS_FreeCString(ctx, val);
+    return JS_NewBool(ctx, true);
+}
+
+static JSValue js_steam_clearRichPresence(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* s = getState();
+    if (s && s->service) s->service->clearRichPresence();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_steam_activateOverlay(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s || !s->service) return JS_UNDEFINED;
+    const char* dialog = (argc > 0) ? JS_ToCString(ctx, argv[0]) : nullptr;
+    s->service->activateOverlay(dialog ? dialog : "");
+    if (dialog) JS_FreeCString(ctx, dialog);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_steam_activateOverlayToUser(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s || !s->service || argc < 2) return JS_UNDEFINED;
+    const char* dialog = JS_ToCString(ctx, argv[0]);
+    const char* idStr = JS_ToCString(ctx, argv[1]);
+    uint64_t id = 0;
+    if (idStr) { try { id = std::stoull(idStr); } catch (...) { id = 0; } }
+    if (dialog && id) s->service->activateOverlayToUser(dialog, id);
+    if (dialog) JS_FreeCString(ctx, dialog);
+    if (idStr) JS_FreeCString(ctx, idStr);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_steam_get_onfriends(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* s = getState();
+    return s ? JS_DupValue(ctx, s->onFriends) : JS_UNDEFINED;
+}
+
+static JSValue js_steam_set_onfriends(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s) return JS_UNDEFINED;
+    JS_FreeValue(ctx, s->onFriends);
+    s->onFriends = (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
+    return JS_UNDEFINED;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,6 +209,18 @@ void SteamBindings::install(JSContext* ctx, steam::SteamService* service) {
             JS_FreeValue(ctx, arg);
             JS_FreeValue(ctx, func);
         };
+        // Snapshot ownership stays on the service side; we copy into the JS-thread
+        // cache, then notify. getFriends() reads the cache synchronously.
+        state->subscriber->onFriends = [ctx](const std::vector<steam::FriendInfo>& list) {
+            auto* s = getState();
+            if (!s) return;
+            s->friends = list;
+            if (JS_IsUndefined(s->onFriends) || JS_IsNull(s->onFriends)) return;
+            JSValue func = JS_DupValue(ctx, s->onFriends);
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 0, nullptr);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, func);
+        };
     }
 
     // Build bro.steam namespace.
@@ -135,6 +246,25 @@ void SteamBindings::install(JSContext* ctx, steam::SteamService* service) {
         JS_PROP_CONFIGURABLE);
     JS_FreeAtom(ctx, aPulse);
 
+    // Friends (M2): list query, rich presence, overlay.
+    JS_SetPropertyStr(ctx, steamObj, "getFriends",
+        JS_NewCFunction(ctx, js_steam_getFriends, "getFriends", 0));
+    JS_SetPropertyStr(ctx, steamObj, "setRichPresence",
+        JS_NewCFunction(ctx, js_steam_setRichPresence, "setRichPresence", 2));
+    JS_SetPropertyStr(ctx, steamObj, "clearRichPresence",
+        JS_NewCFunction(ctx, js_steam_clearRichPresence, "clearRichPresence", 0));
+    JS_SetPropertyStr(ctx, steamObj, "activateOverlay",
+        JS_NewCFunction(ctx, js_steam_activateOverlay, "activateOverlay", 1));
+    JS_SetPropertyStr(ctx, steamObj, "activateOverlayToUser",
+        JS_NewCFunction(ctx, js_steam_activateOverlayToUser, "activateOverlayToUser", 2));
+
+    JSAtom aFriends = JS_NewAtom(ctx, "onfriends");
+    JS_DefinePropertyGetSet(ctx, steamObj, aFriends,
+        JS_NewCFunction(ctx, js_steam_get_onfriends, "get onfriends", 0),
+        JS_NewCFunction(ctx, js_steam_set_onfriends, "set onfriends", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aFriends);
+
     JS_SetPropertyStr(ctx, broObj, "steam", steamObj);
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
@@ -145,7 +275,10 @@ void SteamBindings::cleanup(JSContext* ctx) {
     if (!s) return;
     s_state = nullptr;
 
-    if (ctx) JS_FreeValue(ctx, s->onPulse);
+    if (ctx) {
+        JS_FreeValue(ctx, s->onPulse);
+        JS_FreeValue(ctx, s->onFriends);
+    }
 
     if (s->service && s->subscriber) {
         s->service->destroySubscriber(s->subscriber);
