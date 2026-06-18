@@ -34,10 +34,15 @@ third_party/skia/src/
 third_party/libvulkan-1.a
 third_party/vulkan-1.def
 
-# Steamworks SDK — proprietary, non-redistributable. Supplied out of band for
-# BRO_WITH_STEAM=ON builds; the redistributable ships with the product only.
-# The MIT repo stays clean (handoff steam_lab §3.1 / §8).
-third_party/steamworks/
+# Steam redistributable — loaded at runtime by bro.steam (the flat C API). It
+# ships WITH the product, never in the repo. (bro needs no Steamworks SDK to
+# build — see src/steam/steam_flat.h.)
+steam_api64.dll
+**/steam_api64.dll
+libsteam_api.so
+**/libsteam_api.so
+libsteam_api.dylib
+**/libsteam_api.dylib
 # Dev Steam app id (480 = Spacewar) dropped next to the executable — never ship.
 steam_appid.txt
 **/steam_appid.txt

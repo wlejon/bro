@@ -7,19 +7,18 @@
 #include <thread>
 #include <unordered_map>
 
-// SteamService owns the Steamworks C API on a dedicated thread and marshals
+// SteamService owns the Steamworks API on a dedicated thread and marshals
 // to/from JS contexts lock-free — a direct mirror of bro::net::NetService.
 //
-// This header deliberately includes NO Steamworks SDK headers. The proprietary
-// `steam/` tree (a superset of the GameNetworkingSockets `steam/` tree bro
-// already vendors) is included only inside steam_service.cpp, behind
-// BRO_WITH_STEAM, so it can never collide with GNS's headers for the rest of
-// the build. Consumers (engine, bindings) see a pure-std interface.
-//
-// When BRO_WITH_STEAM is OFF (the default) this compiles to an inert service:
-// no thread, no SDK, available() == false. The JS surface (bro.steam) is always
-// present and reports { available: false, reason } — mirroring bro.gpu's
-// always-present runtime probe.
+// bro depends on NO Steamworks SDK at build time. The service talks to the
+// Steam redistributable (steam_api64.dll / libsteam_api.{so,dylib}) through the
+// stable *flat C API*, resolved at runtime (see steam_flat.h). So there are no
+// proprietary headers or import libs in the build, and the binding is always
+// real — it just probes at runtime, exactly like bro.gpu / bro.tensor:
+//   - redistributable present + Steam client running  -> available() == true
+//   - library absent, or SteamAPI init fails           -> available() == false
+// The JS surface (bro.steam) is always present and reports { available, reason }
+// either way, so apps load identically with or without Steam.
 
 namespace bro::steam {
 
@@ -127,10 +126,10 @@ public:
     /// atomics so JS-thread reads never share a std::string with the service
     /// thread (no mutex). Identity fields below are published-before-Available.
     enum class Status : int {
-        Initializing = 0, // thread spinning up, SteamAPI_Init() in flight
-        Available    = 1, // SteamAPI_Init() succeeded; identity valid
-        NoSupport    = 2, // built without BRO_WITH_STEAM
-        InitFailed   = 3, // SteamAPI_Init() failed (client not running / not logged in)
+        Initializing    = 0, // thread spinning up, loading + init in flight
+        Available       = 1, // SteamAPI init succeeded; identity valid
+        LibraryNotFound = 2, // steam_api64.dll / libsteam_api.* not loadable
+        InitFailed      = 3, // SteamAPI init failed (client not running / not logged in)
     };
 
     bool available() const {
