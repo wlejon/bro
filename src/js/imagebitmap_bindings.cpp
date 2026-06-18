@@ -187,6 +187,74 @@ static JSValue js_createImageBitmap(JSContext* ctx, JSValueConst /*this_val*/,
 }
 
 // ---------------------------------------------------------------------------
+// new ImageData(width, height)  |  new ImageData(Uint8ClampedArray data, width [, height])
+//
+// The standard Web constructor. bro's canvas (putImageData) and createImageBitmap
+// consume the duck-typed { width, height, data } shape, but the global ImageData
+// constructor itself was missing — so `new ImageData(pixels, w, h)`, the
+// idiomatic way to wrap raw RGBA (e.g. bro.steam.getAvatar pixels), threw
+// ReferenceError. This produces that same shape; with a typed array it shares
+// the buffer (web semantics), and with dimensions only it allocates zeroed RGBA.
+// ---------------------------------------------------------------------------
+static JSValue js_imageData_ctor(JSContext* ctx, JSValueConst /*new_target*/,
+                                 int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "ImageData requires arguments");
+
+    // Overload select: is arg0 a typed array (data-first) or a number (w,h)?
+    size_t off = 0, blen = 0;
+    JSValue ab0 = JS_GetTypedArrayBuffer(ctx, argv[0], &off, &blen, nullptr);
+    const bool dataFirst = !JS_IsException(ab0);
+    if (!dataFirst) JS_FreeValue(ctx, JS_GetException(ctx)); // clear: arg0 not a TypedArray
+    else            JS_FreeValue(ctx, ab0);
+
+    JSValue dataArr = JS_UNDEFINED;
+    int width = 0, height = 0;
+
+    if (dataFirst) {
+        if (argc < 2) return JS_ThrowTypeError(ctx, "ImageData(data, width[, height]) requires a width");
+        int32_t w = 0; JS_ToInt32(ctx, &w, argv[1]);
+        if (w <= 0) return JS_ThrowRangeError(ctx, "ImageData width must be positive");
+        if (blen % 4 != 0) return JS_ThrowRangeError(ctx, "ImageData data length must be a multiple of 4");
+        size_t pixels = blen / 4;
+        if (pixels % static_cast<size_t>(w) != 0)
+            return JS_ThrowRangeError(ctx, "ImageData data length is not a multiple of 4*width");
+        int h = static_cast<int>(pixels / static_cast<size_t>(w));
+        if (argc >= 3) {
+            int32_t hh = 0; JS_ToInt32(ctx, &hh, argv[2]);
+            if (hh > 0) {
+                if (static_cast<size_t>(w) * hh * 4 != blen)
+                    return JS_ThrowRangeError(ctx, "ImageData data length does not match width*height*4");
+                h = hh;
+            }
+        }
+        width = w; height = h;
+        dataArr = JS_DupValue(ctx, argv[0]); // share the same Uint8ClampedArray
+    } else {
+        int32_t w = 0, h = 0;
+        JS_ToInt32(ctx, &w, argv[0]);
+        if (argc >= 2) JS_ToInt32(ctx, &h, argv[1]);
+        if (w <= 0 || h <= 0)
+            return JS_ThrowRangeError(ctx, "ImageData(width, height) requires positive dimensions");
+        width = w; height = h;
+        size_t sz = static_cast<size_t>(w) * h * 4;
+        std::vector<uint8_t> zeros(sz, 0);
+        JSValue zbuf = JS_NewArrayBufferCopy(ctx, zeros.data(), sz);
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue u8cCtor = JS_GetPropertyStr(ctx, global, "Uint8ClampedArray");
+        dataArr = JS_CallConstructor(ctx, u8cCtor, 1, &zbuf);
+        JS_FreeValue(ctx, u8cCtor);
+        JS_FreeValue(ctx, global);
+        JS_FreeValue(ctx, zbuf);
+    }
+
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "width",  JS_NewInt32(ctx, width));
+    JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, height));
+    JS_SetPropertyStr(ctx, obj, "data",   dataArr);
+    return obj;
+}
+
+// ---------------------------------------------------------------------------
 // ImageBitmap.prototype.close() — release the backing image eagerly.
 // ---------------------------------------------------------------------------
 static JSValue js_imagebitmap_close(JSContext* ctx, JSValueConst this_val,
@@ -211,6 +279,8 @@ void ImageBitmapBindings::install(JSContext* ctx) {
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "createImageBitmap",
         JS_NewCFunction(ctx, js_createImageBitmap, "createImageBitmap", 1));
+    JS_SetPropertyStr(ctx, global, "ImageData",
+        JS_NewCFunction2(ctx, js_imageData_ctor, "ImageData", 2, JS_CFUNC_constructor, 0));
     JS_FreeValue(ctx, global);
 }
 
