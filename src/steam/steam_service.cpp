@@ -298,6 +298,13 @@ void SteamService::activateOverlayToUser(const std::string& dialog, uint64_t ste
     postCommand(c);
 }
 
+void SteamService::activateInviteDialog(uint64_t lobbyId) {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::ActivateInviteDialog;
+    c->u64 = lobbyId;
+    postCommand(c);
+}
+
 void SteamService::requestAvatar(uint32_t subscriberId, uint32_t reqId, uint64_t steamId, int size) {
     auto* c = new SteamCommand();
     c->type = SteamCommand::RequestAvatar;
@@ -467,6 +474,10 @@ void SteamService::handleCommand(SteamCommand& cmd) {
         case SteamCommand::ActivateOverlayToUser:
             if (iFriends_ && api_.Friends_ActivateGameOverlayToUser)
                 api_.Friends_ActivateGameOverlayToUser(iFriends_, cmd.strA.c_str(), cmd.u64);
+            break;
+        case SteamCommand::ActivateInviteDialog:
+            if (iFriends_ && api_.Friends_ActivateGameOverlayInviteDialog)
+                api_.Friends_ActivateGameOverlayInviteDialog(iFriends_, cmd.u64);
             break;
         case SteamCommand::RequestAvatar: {
             auto* ad = new AvatarData();

@@ -175,6 +175,17 @@ static JSValue js_steam_activateOverlayToUser(JSContext* ctx, JSValueConst, int 
     return JS_UNDEFINED;
 }
 
+// activateInviteDialog(lobbyId) — opens the Steam overlay's invite-to-lobby panel.
+static JSValue js_steam_activateInviteDialog(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s || !s->service || argc < 1) return JS_UNDEFINED;
+    const char* idStr = JS_ToCString(ctx, argv[0]);
+    uint64_t id = 0;
+    if (idStr) { try { id = std::stoull(idStr); } catch (...) { id = 0; } JS_FreeCString(ctx, idStr); }
+    if (id) s->service->activateInviteDialog(id);
+    return JS_UNDEFINED;
+}
+
 // getAvatar(steamId, size="medium") -> Promise<{width,height,data:Uint8ClampedArray}|null>
 // Resolves null when the avatar isn't loaded yet (re-request after onfriends).
 static JSValue js_steam_getAvatar(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -1043,6 +1054,8 @@ void SteamBindings::install(JSContext* ctx, steam::SteamService* service) {
         JS_NewCFunction(ctx, js_steam_activateOverlay, "activateOverlay", 1));
     JS_SetPropertyStr(ctx, steamObj, "activateOverlayToUser",
         JS_NewCFunction(ctx, js_steam_activateOverlayToUser, "activateOverlayToUser", 2));
+    JS_SetPropertyStr(ctx, steamObj, "activateInviteDialog",
+        JS_NewCFunction(ctx, js_steam_activateInviteDialog, "activateInviteDialog", 1));
 
     JSAtom aFriends = JS_NewAtom(ctx, "onfriends");
     JS_DefinePropertyGetSet(ctx, steamObj, aFriends,

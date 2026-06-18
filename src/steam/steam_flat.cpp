@@ -90,6 +90,7 @@ bool loadSteamFlat(SteamFlatApi& api) {
     resolve(h, "SteamAPI_ISteamFriends_GetFriendRichPresence",    api.Friends_GetFriendRichPresence);
     resolve(h, "SteamAPI_ISteamFriends_ActivateGameOverlay",      api.Friends_ActivateGameOverlay);
     resolve(h, "SteamAPI_ISteamFriends_ActivateGameOverlayToUser", api.Friends_ActivateGameOverlayToUser);
+    resolve(h, "SteamAPI_ISteamFriends_ActivateGameOverlayInviteDialog", api.Friends_ActivateGameOverlayInviteDialog);
 
     resolve(h, "SteamAPI_ISteamFriends_GetSmallFriendAvatar",     api.Friends_GetSmallFriendAvatar);
     resolve(h, "SteamAPI_ISteamFriends_GetMediumFriendAvatar",    api.Friends_GetMediumFriendAvatar);

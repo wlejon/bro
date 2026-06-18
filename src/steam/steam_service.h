@@ -139,6 +139,7 @@ struct SteamCommand {
         SetLobbyMemberLimit, // u64=lobbyId, i32=maxMembers
         RequestLobbyList,    // filters[], reqId, subscriberId
         InviteToLobby,       // u64=lobbyId, u64b=inviteeSteamId
+        ActivateInviteDialog,// u64=lobbyId — opens the overlay invite panel
         // --- voice (M4) ---
         StartVoice,          // (no args)
         StopVoice,           // (no args)
@@ -286,6 +287,7 @@ public:
     void clearRichPresence();
     void activateOverlay(const std::string& dialog);
     void activateOverlayToUser(const std::string& dialog, uint64_t steamId);
+    void activateInviteDialog(uint64_t lobbyId); // overlay "invite to lobby" panel
 
     /// Request a friend's avatar (size 0 small/1 medium/2 large). The result
     /// (RGBA pixels, or empty if not loaded) is delivered to `subscriberId` as an

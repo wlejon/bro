@@ -100,6 +100,8 @@ struct SteamFlatApi {
     const char* (*Friends_GetFriendRichPresence)(void* iSteamFriends, uint64_t steamIDFriend, const char* key) = nullptr;
     void        (*Friends_ActivateGameOverlay)(void* iSteamFriends, const char* dialog) = nullptr;
     void        (*Friends_ActivateGameOverlayToUser)(void* iSteamFriends, const char* dialog, uint64_t steamID) = nullptr;
+    // Opens the overlay's "invite friends to this lobby" panel (the M4 invite flow).
+    void        (*Friends_ActivateGameOverlayInviteDialog)(void* iSteamFriends, uint64_t steamIDLobby) = nullptr;
 
     // Avatars: friends return an int image handle (0 none, -1 loading); the
     // pixels are fetched from ISteamUtils by that handle as RGBA.
