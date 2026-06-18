@@ -63,12 +63,14 @@
 #include "js/mic_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/net_bindings.h"
+#include "js/steam_bindings.h"
 #include "js/server_bindings.h"
 #include "js/headless_bindings.h"
 
 #include "physics/physics_world.h"
 #include "audio_inference/audio_inference.h"
 #include "net/net_service.h"
+#include "steam/steam_service.h"
 #include "scene/scene_graph.h"
 #include "api/api.h"
 #include "runtime/runtime.h"
@@ -267,6 +269,14 @@ Engine::Engine(const EngineConfig& config)
     // thread; bindings hold a per-context subscriber that polls each frame.
     netService_ = std::make_unique<net::NetService>();
     js::NetBindings::install(jsRuntime_->getContext(), netService_.get());
+
+    // Steam service + bindings (all modes). Always-present probe like bro.gpu:
+    // in a stub build (BRO_WITH_STEAM=OFF) the service is inert and
+    // bro.steam.available is false. When enabled, SteamService owns the
+    // Steamworks API on its own thread; bindings hold a per-context subscriber
+    // that polls each frame.
+    steamService_ = std::make_unique<steam::SteamService>();
+    js::SteamBindings::install(jsRuntime_->getContext(), steamService_.get());
 
     // bro.server.* (all modes) — in windowed mode this lets the process host
     // an in-process server script (e.g. the launcher running apps/fps/server.js).

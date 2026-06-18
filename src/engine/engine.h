@@ -40,6 +40,7 @@ namespace bro::webgl { class WebGL2RenderingContext; }
 namespace broaudio { class Engine; }
 namespace bro::physics { class PhysicsWorld; }
 namespace bro::net { class NetService; }
+namespace bro::steam { class SteamService; }
 namespace bro::scene { class SceneGraph; class HtmlNode; }
 namespace bro::canvas { class CanvasScene; class CanvasRasterThread; }
 
@@ -678,6 +679,7 @@ private:
     std::unique_ptr<AudioInference> audioInference_;
     std::unique_ptr<physics::PhysicsWorld> physicsWorld_;
     std::unique_ptr<net::NetService> netService_;
+    std::unique_ptr<steam::SteamService> steamService_;
     struct SceneGraphEntry {
         std::unique_ptr<scene::SceneGraph> graph;
         dom::Element* element = nullptr;  // non-owning

@@ -41,6 +41,7 @@
 #include "physics/physics_world.h"
 #include "audio_inference/audio_inference.h"
 #include "net/net_service.h"
+#include "steam/steam_service.h"
 #include "webgl/webgl2_context.h"
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"

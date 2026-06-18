@@ -13,6 +13,7 @@
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
 #include "js/net_bindings.h"
+#include "js/steam_bindings.h"
 #include "js/worker.h"
 #include "js/wake_bindings.h"
 #include "js/gesture_bindings.h"
@@ -125,6 +126,10 @@ void Engine::run() {
 
             if (netService_) {
                 js::NetBindings::poll(jsRuntime_->getContext());
+                jsRuntime_->executePendingJobs();
+            }
+            if (steamService_) {
+                js::SteamBindings::poll(jsRuntime_->getContext());
                 jsRuntime_->executePendingJobs();
             }
 
@@ -433,6 +438,10 @@ void Engine::run() {
         jsRuntime_->executePendingJobs();
         if (netService_) {
             js::NetBindings::poll(jsRuntime_->getContext());
+            jsRuntime_->executePendingJobs();
+        }
+        if (steamService_) {
+            js::SteamBindings::poll(jsRuntime_->getContext());
             jsRuntime_->executePendingJobs();
         }
 
