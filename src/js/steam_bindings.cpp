@@ -20,6 +20,8 @@ struct SteamCtxState {
 
     JSValue onPulse = JS_UNDEFINED;
     JSValue onFriends = JS_UNDEFINED;
+    JSValue onOverlay = JS_UNDEFINED;
+    JSValue onJoinRequest = JS_UNDEFINED;
 
     // JS-thread-owned cache. Updated only during poll() from FriendsUpdated
     // events (ownership transferred from the service thread), read synchronously
@@ -158,6 +160,32 @@ static JSValue js_steam_set_onfriends(JSContext* ctx, JSValueConst, int argc, JS
     return JS_UNDEFINED;
 }
 
+static JSValue js_steam_get_onoverlay(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* s = getState();
+    return s ? JS_DupValue(ctx, s->onOverlay) : JS_UNDEFINED;
+}
+
+static JSValue js_steam_set_onoverlay(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s) return JS_UNDEFINED;
+    JS_FreeValue(ctx, s->onOverlay);
+    s->onOverlay = (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
+    return JS_UNDEFINED;
+}
+
+static JSValue js_steam_get_onjoinrequest(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* s = getState();
+    return s ? JS_DupValue(ctx, s->onJoinRequest) : JS_UNDEFINED;
+}
+
+static JSValue js_steam_set_onjoinrequest(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s) return JS_UNDEFINED;
+    JS_FreeValue(ctx, s->onJoinRequest);
+    s->onJoinRequest = (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
+    return JS_UNDEFINED;
+}
+
 // ---------------------------------------------------------------------------
 // onpulse callback accessor (heartbeat from the RunCallbacks pump — M1).
 // ---------------------------------------------------------------------------
@@ -221,6 +249,30 @@ void SteamBindings::install(JSContext* ctx, steam::SteamService* service) {
             JS_FreeValue(ctx, ret);
             JS_FreeValue(ctx, func);
         };
+        state->subscriber->onOverlay = [ctx](bool active) {
+            auto* s = getState();
+            if (!s || JS_IsUndefined(s->onOverlay) || JS_IsNull(s->onOverlay)) return;
+            JSValue func = JS_DupValue(ctx, s->onOverlay);
+            JSValue arg = JS_NewBool(ctx, active);
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, arg);
+            JS_FreeValue(ctx, func);
+        };
+        state->subscriber->onJoinRequest = [ctx](uint64_t friendId, const std::string& connect) {
+            auto* s = getState();
+            if (!s || JS_IsUndefined(s->onJoinRequest) || JS_IsNull(s->onJoinRequest)) return;
+            JSValue func = JS_DupValue(ctx, s->onJoinRequest);
+            JSValue argv[2] = {
+                JS_NewString(ctx, std::to_string(friendId).c_str()),
+                JS_NewString(ctx, connect.c_str()),
+            };
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, argv);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, argv[0]);
+            JS_FreeValue(ctx, argv[1]);
+            JS_FreeValue(ctx, func);
+        };
     }
 
     // Build bro.steam namespace.
@@ -265,6 +317,20 @@ void SteamBindings::install(JSContext* ctx, steam::SteamService* service) {
         JS_PROP_CONFIGURABLE);
     JS_FreeAtom(ctx, aFriends);
 
+    JSAtom aOverlay = JS_NewAtom(ctx, "onoverlay");
+    JS_DefinePropertyGetSet(ctx, steamObj, aOverlay,
+        JS_NewCFunction(ctx, js_steam_get_onoverlay, "get onoverlay", 0),
+        JS_NewCFunction(ctx, js_steam_set_onoverlay, "set onoverlay", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aOverlay);
+
+    JSAtom aJoin = JS_NewAtom(ctx, "onjoinrequest");
+    JS_DefinePropertyGetSet(ctx, steamObj, aJoin,
+        JS_NewCFunction(ctx, js_steam_get_onjoinrequest, "get onjoinrequest", 0),
+        JS_NewCFunction(ctx, js_steam_set_onjoinrequest, "set onjoinrequest", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aJoin);
+
     JS_SetPropertyStr(ctx, broObj, "steam", steamObj);
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
@@ -278,6 +344,8 @@ void SteamBindings::cleanup(JSContext* ctx) {
     if (ctx) {
         JS_FreeValue(ctx, s->onPulse);
         JS_FreeValue(ctx, s->onFriends);
+        JS_FreeValue(ctx, s->onOverlay);
+        JS_FreeValue(ctx, s->onJoinRequest);
     }
 
     if (s->service && s->subscriber) {

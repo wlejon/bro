@@ -101,11 +101,15 @@ struct SteamCommand {
 // ---------------------------------------------------------------------------
 struct SteamEvent {
     enum Type : uint8_t {
-        Pulse,          // RunCallbacks heartbeat — proves the service pump is alive
-        FriendsUpdated, // friends snapshot changed; `friends` owned by this event
+        Pulse,           // RunCallbacks heartbeat — proves the service pump is alive
+        FriendsUpdated,  // friends snapshot changed; `friends` owned by this event
+        OverlayActivated,// Steam overlay opened/closed; u64 = active (1/0)
+        JoinRequested,   // friend invited us via overlay/rich-presence;
+                         //   u64 = friend steamId, str = the connect string
     };
     Type type;
     uint64_t u64 = 0;
+    std::string str;                            // JoinRequested connect string
     std::vector<FriendInfo>* friends = nullptr; // FriendsUpdated only; poll() deletes
 };
 
@@ -128,6 +132,8 @@ public:
     // poll(). More land here as the lobby/voice/UGC layers come online.
     std::function<void(uint64_t tick)> onPulse;
     std::function<void(const std::vector<FriendInfo>&)> onFriends;
+    std::function<void(bool active)> onOverlay;
+    std::function<void(uint64_t friendSteamId, const std::string& connect)> onJoinRequest;
 
 private:
     friend class SteamService;
@@ -200,6 +206,9 @@ private:
     void handleCommand(SteamCommand& cmd);        // service thread only
     void buildAndEmitFriends();                   // service thread only
     void emitFriendsTo(uint32_t subscriberId);    // service thread only
+    void dispatchCallback(const struct CallbackMsg_t& msg); // service thread only
+    void emitToAll(SteamEvent::Type type, uint64_t u64,
+                   const std::string& str = {});  // service thread only
 
     // --- Service-thread-only state ---
     std::unordered_map<uint32_t, SteamSubscriber*> subscribers_; // id → subscriber

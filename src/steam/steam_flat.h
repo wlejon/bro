@@ -22,6 +22,18 @@
 namespace bro::steam {
 
 using HSteamUser = int32_t;
+using HSteamPipe = int32_t;
+
+// One queued Steam callback, delivered by the ManualDispatch API. This is the
+// flat-API way to receive callbacks (PersonaStateChange, overlay, join requests,
+// lobby events, …) without the C++ CCallback/vtable machinery. Layout must match
+// Steam's CallbackMsg_t exactly: int32, int32, ptr (8-aligned), int32 → 24 bytes.
+struct CallbackMsg_t {
+    HSteamUser m_hSteamUser;
+    int32_t    m_iCallback;   // callback id (e.g. PersonaStateChange_t == 304)
+    uint8_t*   m_pubParam;    // pointer to the callback's param struct
+    int32_t    m_cubParam;    // size of that struct
+};
 
 // Resolved flat-API entry points. A null pointer means the symbol was absent in
 // the loaded library (older/newer redistributable) — callers must null-check.
@@ -36,7 +48,16 @@ struct SteamFlatApi {
     void (*Shutdown)() = nullptr;
     void (*RunCallbacks)() = nullptr;
     HSteamUser (*GetHSteamUser)() = nullptr;
+    HSteamPipe (*GetHSteamPipe)() = nullptr;
     void* (*FindOrCreateUserInterface)(HSteamUser, const char* version) = nullptr;
+
+    // --- ManualDispatch: pull queued callbacks ourselves (replaces RunCallbacks
+    // when present). Init() switches the client into manual-dispatch mode; each
+    // pump calls RunFrame then drains GetNextCallback/FreeLastCallback. ---
+    void (*ManualDispatch_Init)() = nullptr;
+    void (*ManualDispatch_RunFrame)(HSteamPipe) = nullptr;
+    bool (*ManualDispatch_GetNextCallback)(HSteamPipe, CallbackMsg_t*) = nullptr;
+    void (*ManualDispatch_FreeLastCallback)(HSteamPipe) = nullptr;
 
     // --- method wrappers (interface pointer passed as the first "self" arg) ---
     uint64_t    (*User_GetSteamID)(void* iSteamUser) = nullptr;

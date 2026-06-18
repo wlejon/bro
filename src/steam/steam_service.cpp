@@ -31,6 +31,29 @@ constexpr int kFriendFlagImmediate = 0x04;
 // Rebuild the friends snapshot at ~2 Hz (every 50 * 10 ms pump iterations).
 constexpr uint64_t kFriendsRebuildEvery = 50;
 
+// Steam callback ids (k_iSteamFriendsCallbacks == 300). Stable across SDKs.
+constexpr int kCbPersonaStateChange          = 300 + 4;  // 304
+constexpr int kCbGameOverlayActivated        = 300 + 31; // 331
+constexpr int kCbGameRichPresenceJoinRequest = 300 + 37; // 337
+
+// Param structs for the callbacks above — layouts match Steam's headers exactly.
+#pragma pack(push, 8)
+struct PersonaStateChange_t {
+    uint64_t m_ulSteamID;
+    int      m_nChangeFlags;
+};
+struct GameOverlayActivated_t {
+    uint8_t  m_bActive;
+    uint8_t  m_bUserInitiated;
+    uint32_t m_nAppID;
+    uint32_t m_dwOverlayPID;
+};
+struct GameRichPresenceJoinRequested_t {
+    uint64_t m_steamIDFriend;
+    char     m_rgchConnect[256];
+};
+#pragma pack(pop)
+
 void* findInterface(const SteamFlatApi& api, HSteamUser user,
                     const char* const* versions, size_t n) {
     for (size_t i = 0; i < n; ++i) {
@@ -56,6 +79,12 @@ void SteamSubscriber::poll() {
                     if (onFriends) onFriends(*ev->friends);
                     delete ev->friends; // ownership transferred to us via the event
                 }
+                break;
+            case SteamEvent::OverlayActivated:
+                if (onOverlay) onOverlay(ev->u64 != 0);
+                break;
+            case SteamEvent::JoinRequested:
+                if (onJoinRequest) onJoinRequest(ev->u64, ev->str);
                 break;
         }
         delete ev;
@@ -246,6 +275,45 @@ void SteamService::emitFriendsTo(uint32_t subscriberId) {
     postEventTo(subscriberId, ev);
 }
 
+void SteamService::emitToAll(SteamEvent::Type type, uint64_t u64, const std::string& str) {
+    for (auto& [sid, sub] : subscribers_) {
+        auto* ev = new SteamEvent();
+        ev->type = type;
+        ev->u64 = u64;
+        ev->str = str;
+        postEventTo(sid, ev);
+    }
+}
+
+// Translate a raw Steam callback (pulled via ManualDispatch) into our events.
+// Service thread only. Unknown callbacks are ignored — they're already freed by
+// the caller's FreeLastCallback.
+void SteamService::dispatchCallback(const CallbackMsg_t& msg) {
+    switch (msg.m_iCallback) {
+        case kCbPersonaStateChange:
+            // A friend's name/state/avatar changed — refresh the snapshot. The
+            // diff in buildAndEmitFriends() suppresses no-op emits, so this is
+            // cheap even though PersonaStateChange fires frequently.
+            buildAndEmitFriends();
+            break;
+        case kCbGameOverlayActivated:
+            if (msg.m_pubParam && msg.m_cubParam >= (int)sizeof(GameOverlayActivated_t)) {
+                auto* p = reinterpret_cast<const GameOverlayActivated_t*>(msg.m_pubParam);
+                emitToAll(SteamEvent::OverlayActivated, p->m_bActive ? 1 : 0);
+            }
+            break;
+        case kCbGameRichPresenceJoinRequest:
+            if (msg.m_pubParam && msg.m_cubParam >= (int)sizeof(GameRichPresenceJoinRequested_t)) {
+                auto* p = reinterpret_cast<const GameRichPresenceJoinRequested_t*>(msg.m_pubParam);
+                // m_rgchConnect is NUL-terminated by Steam.
+                emitToAll(SteamEvent::JoinRequested, p->m_steamIDFriend, p->m_rgchConnect);
+            }
+            break;
+        default:
+            break;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Drain the MPSC stack and reverse LIFO → FIFO for ordered processing.
 // ---------------------------------------------------------------------------
@@ -272,6 +340,8 @@ static SteamCommand* drainAndReverse(std::atomic<SteamCommand*>& head) {
 // ---------------------------------------------------------------------------
 void SteamService::threadMain() {
     bool steamUp = false;
+    bool manualDispatch = false;
+    HSteamPipe pipe = 0;
 
     if (!loadSteamFlat(api_)) {
         status_.store(Status::LibraryNotFound, std::memory_order_release);
@@ -315,12 +385,25 @@ void SteamService::threadMain() {
             if (iUtils_ && api_.Utils_GetAppID)
                 appId_.store(api_.Utils_GetAppID(iUtils_), std::memory_order_relaxed);
 
+            // Switch to ManualDispatch so we can pull callbacks ourselves on
+            // this thread (PersonaStateChange, overlay, join requests, and —
+            // later — lobby/voice). Falls back to RunCallbacks if the symbols
+            // aren't present (older redistributable).
+            if (api_.ManualDispatch_Init && api_.GetHSteamPipe &&
+                api_.ManualDispatch_RunFrame && api_.ManualDispatch_GetNextCallback &&
+                api_.ManualDispatch_FreeLastCallback) {
+                api_.ManualDispatch_Init();
+                pipe = api_.GetHSteamPipe();
+                manualDispatch = (pipe != 0);
+            }
+
             status_.store(Status::Available, std::memory_order_release);
             steamUp = true;
-            LOG_INFO("[steam] SteamService started (steamId=%llu persona='%s' appId=%u)",
+            LOG_INFO("[steam] SteamService started (steamId=%llu persona='%s' appId=%u dispatch=%s)",
                      static_cast<unsigned long long>(localSteamId_.load(std::memory_order_relaxed)),
                      personaName_.c_str(),
-                     appId_.load(std::memory_order_relaxed));
+                     appId_.load(std::memory_order_relaxed),
+                     manualDispatch ? "manual" : "auto");
         }
     }
 
@@ -336,9 +419,19 @@ void SteamService::threadMain() {
         }
 
         if (steamUp) {
-            // 2. Pump Steam callbacks — fires registered handlers (none yet
-            //    beyond lifecycle; lobby/voice land here via ManualDispatch).
-            api_.RunCallbacks();
+            // 2. Pump Steam callbacks. ManualDispatch lets us translate each
+            //    callback into our own events on this thread; otherwise the
+            //    classic auto path still keeps the client serviced.
+            if (manualDispatch) {
+                api_.ManualDispatch_RunFrame(pipe);
+                CallbackMsg_t msg;
+                while (api_.ManualDispatch_GetNextCallback(pipe, &msg)) {
+                    dispatchCallback(msg);
+                    api_.ManualDispatch_FreeLastCallback(pipe);
+                }
+            } else {
+                api_.RunCallbacks();
+            }
 
             ++iter;
 

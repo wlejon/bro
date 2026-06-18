@@ -59,7 +59,13 @@ bool loadSteamFlat(SteamFlatApi& api) {
     resolve(h, "SteamAPI_Shutdown",                      api.Shutdown);
     resolve(h, "SteamAPI_RunCallbacks",                  api.RunCallbacks);
     resolve(h, "SteamAPI_GetHSteamUser",                 api.GetHSteamUser);
+    resolve(h, "SteamAPI_GetHSteamPipe",                 api.GetHSteamPipe);
     resolve(h, "SteamInternal_FindOrCreateUserInterface", api.FindOrCreateUserInterface);
+
+    resolve(h, "SteamAPI_ManualDispatch_Init",             api.ManualDispatch_Init);
+    resolve(h, "SteamAPI_ManualDispatch_RunFrame",         api.ManualDispatch_RunFrame);
+    resolve(h, "SteamAPI_ManualDispatch_GetNextCallback",  api.ManualDispatch_GetNextCallback);
+    resolve(h, "SteamAPI_ManualDispatch_FreeLastCallback", api.ManualDispatch_FreeLastCallback);
     resolve(h, "SteamAPI_ISteamUser_GetSteamID",         api.User_GetSteamID);
     resolve(h, "SteamAPI_ISteamFriends_GetPersonaName",  api.Friends_GetPersonaName);
     resolve(h, "SteamAPI_ISteamUtils_GetAppID",          api.Utils_GetAppID);
