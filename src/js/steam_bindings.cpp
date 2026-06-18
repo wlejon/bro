@@ -30,6 +30,7 @@ struct SteamCtxState {
     JSValue onLobbyLeft = JS_UNDEFINED;
     JSValue onLobbyInvite = JS_UNDEFINED;
     JSValue onLobbyJoinRequest = JS_UNDEFINED;
+    JSValue onVoiceCaptured = JS_UNDEFINED;
 
     // JS-thread-owned cache. Updated only during poll() from FriendsUpdated
     // events (ownership transferred from the service thread), read synchronously
@@ -50,6 +51,10 @@ struct SteamCtxState {
     // exactly one of onLobbyCreated/onLobbyEntered, so a single map is safe.
     std::unordered_map<uint32_t, std::array<JSValue, 2>> pendingLobby;
     uint32_t nextLobbyReq = 1;
+
+    // In-flight decodeVoice() promises, keyed by request id.
+    std::unordered_map<uint32_t, std::array<JSValue, 2>> pendingVoice;
+    uint32_t nextVoiceReq = 1;
 };
 
 static thread_local SteamCtxState* s_state = nullptr;
@@ -599,6 +604,79 @@ static JSValue js_steam_set_onlobbyjoinrequest(JSContext* ctx, JSValueConst, int
     return JS_UNDEFINED;
 }
 
+// ---------------------------------------------------------------------------
+// Voice (M4)
+// ---------------------------------------------------------------------------
+static JSValue js_steam_startVoiceRecording(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* s = getState();
+    if (s && s->service) s->service->startVoiceRecording();
+    return JS_UNDEFINED;
+}
+static JSValue js_steam_stopVoiceRecording(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* s = getState();
+    if (s && s->service) s->service->stopVoiceRecording();
+    return JS_UNDEFINED;
+}
+static JSValue js_steam_get_isVoiceRecording(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* s = getState();
+    return JS_NewBool(ctx, s && s->service && s->service->voiceRecording());
+}
+static JSValue js_steam_get_voiceSampleRate(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* s = getState();
+    return JS_NewUint32(ctx, (s && s->service) ? s->service->voiceSampleRate() : 0);
+}
+
+// decodeVoice(compressed, desiredSampleRate=0) ->
+//   Promise<{ pcm:Float32Array, sampleRate:int }>  (empty pcm if no/garbage data)
+static JSValue js_steam_decodeVoice(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    if (JS_IsException(promise)) return promise;
+
+    auto settleEmpty = [&]() {
+        JSValue res = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, res, "pcm", qjsbind::make_float32_array(ctx, nullptr, 0));
+        JS_SetPropertyStr(ctx, res, "sampleRate", JS_NewInt32(ctx, 0));
+        JSValue r = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, &res);
+        JS_FreeValue(ctx, r);
+        JS_FreeValue(ctx, res);
+        JS_FreeValue(ctx, resolving[0]);
+        JS_FreeValue(ctx, resolving[1]);
+    };
+
+    auto* s = getState();
+    if (!s || !s->service || !s->subscriber || argc < 1) { settleEmpty(); return promise; }
+
+    // Extract compressed bytes from a typed array / ArrayBuffer.
+    size_t byteOff = 0, viewLen = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &viewLen, nullptr);
+    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); settleEmpty(); return promise; }
+    size_t abufLen = 0;
+    uint8_t* base = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+    if (!base || viewLen == 0) { JS_FreeValue(ctx, abuf); settleEmpty(); return promise; }
+
+    int rate = 0;
+    if (argc > 1) { int32_t r = 0; JS_ToInt32(ctx, &r, argv[1]); if (r > 0) rate = r; }
+
+    uint32_t reqId = s->nextVoiceReq++;
+    s->pendingVoice[reqId] = { resolving[0], resolving[1] };
+    s->service->decodeVoice(s->subscriber->id(), reqId, base + byteOff, viewLen, rate);
+    JS_FreeValue(ctx, abuf);
+    return promise;
+}
+
+static JSValue js_steam_get_onvoicecaptured(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* s = getState();
+    return s ? JS_DupValue(ctx, s->onVoiceCaptured) : JS_UNDEFINED;
+}
+static JSValue js_steam_set_onvoicecaptured(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState();
+    if (!s) return JS_UNDEFINED;
+    JS_FreeValue(ctx, s->onVoiceCaptured);
+    s->onVoiceCaptured = (argc > 0) ? JS_DupValue(ctx, argv[0]) : JS_UNDEFINED;
+    return JS_UNDEFINED;
+}
+
 static JSValue js_steam_get_onfriends(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     auto* s = getState();
     return s ? JS_DupValue(ctx, s->onFriends) : JS_UNDEFINED;
@@ -888,6 +966,45 @@ void SteamBindings::install(JSContext* ctx, steam::SteamService* service) {
             JS_FreeValue(ctx, argv[1]);
             JS_FreeValue(ctx, func);
         };
+        // Local compressed voice frame → onvoicecaptured(Uint8Array). The app
+        // forwards these bytes to peers (e.g. over bro.net).
+        state->subscriber->onVoiceCaptured = [ctx](const uint8_t* data, size_t len) {
+            auto* s = getState();
+            if (!s || JS_IsUndefined(s->onVoiceCaptured) || JS_IsNull(s->onVoiceCaptured)) return;
+            JSValue func = JS_DupValue(ctx, s->onVoiceCaptured);
+            JSValue abuf = JS_NewArrayBufferCopy(ctx, data, len);
+            JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
+            JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_UINT8);
+            JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arr);
+            JS_FreeValue(ctx, ret);
+            JS_FreeValue(ctx, arr);
+            JS_FreeValue(ctx, abuf);
+            JS_FreeValue(ctx, func);
+        };
+        // decodeVoice() result → resolve the pending promise with normalized PCM.
+        state->subscriber->onVoiceDecoded = [ctx](uint32_t reqId, int sampleRate,
+                                                  const uint8_t* pcm, size_t len) {
+            auto* s = getState();
+            if (!s) return;
+            auto it = s->pendingVoice.find(reqId);
+            if (it == s->pendingVoice.end()) return;
+            JSValue resolve = it->second[0];
+            JSValue reject  = it->second[1];
+            s->pendingVoice.erase(it);
+            // Steam PCM is signed 16-bit; hand JS a Float32Array in [-1,1].
+            size_t n = len / sizeof(int16_t);
+            std::vector<float> f(n);
+            const int16_t* src = reinterpret_cast<const int16_t*>(pcm);
+            for (size_t i = 0; i < n; ++i) f[i] = src[i] / 32768.0f;
+            JSValue res = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, res, "pcm", qjsbind::make_float32_array(ctx, f.data(), f.size()));
+            JS_SetPropertyStr(ctx, res, "sampleRate", JS_NewInt32(ctx, sampleRate));
+            JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &res);
+            JS_FreeValue(ctx, r);
+            JS_FreeValue(ctx, res);
+            JS_FreeValue(ctx, resolve);
+            JS_FreeValue(ctx, reject);
+        };
     }
 
     // Build bro.steam namespace.
@@ -1011,6 +1128,23 @@ void SteamBindings::install(JSContext* ctx, steam::SteamService* service) {
         JS_PROP_CONFIGURABLE);
     JS_FreeAtom(ctx, aLobbyJoinReq);
 
+    // Voice (M4): capture toggle, decode, metering.
+    JS_SetPropertyStr(ctx, steamObj, "startVoiceRecording",
+        JS_NewCFunction(ctx, js_steam_startVoiceRecording, "startVoiceRecording", 0));
+    JS_SetPropertyStr(ctx, steamObj, "stopVoiceRecording",
+        JS_NewCFunction(ctx, js_steam_stopVoiceRecording, "stopVoiceRecording", 0));
+    JS_SetPropertyStr(ctx, steamObj, "decodeVoice",
+        JS_NewCFunction(ctx, js_steam_decodeVoice, "decodeVoice", 2));
+    defineGetter(ctx, steamObj, "isVoiceRecording", js_steam_get_isVoiceRecording);
+    defineGetter(ctx, steamObj, "voiceSampleRate", js_steam_get_voiceSampleRate);
+
+    JSAtom aVoiceCap = JS_NewAtom(ctx, "onvoicecaptured");
+    JS_DefinePropertyGetSet(ctx, steamObj, aVoiceCap,
+        JS_NewCFunction(ctx, js_steam_get_onvoicecaptured, "get onvoicecaptured", 0),
+        JS_NewCFunction(ctx, js_steam_set_onvoicecaptured, "set onvoicecaptured", 1),
+        JS_PROP_CONFIGURABLE);
+    JS_FreeAtom(ctx, aVoiceCap);
+
     JS_SetPropertyStr(ctx, broObj, "steam", steamObj);
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
@@ -1031,12 +1165,17 @@ void SteamBindings::cleanup(JSContext* ctx) {
         JS_FreeValue(ctx, s->onLobbyLeft);
         JS_FreeValue(ctx, s->onLobbyInvite);
         JS_FreeValue(ctx, s->onLobbyJoinRequest);
-        // Drop any unresolved getAvatar()/lobby promises (context going away).
+        JS_FreeValue(ctx, s->onVoiceCaptured);
+        // Drop any unresolved getAvatar()/lobby/voice promises (context going away).
         for (auto& [reqId, fns] : s->pendingAvatars) {
             JS_FreeValue(ctx, fns[0]);
             JS_FreeValue(ctx, fns[1]);
         }
         for (auto& [reqId, fns] : s->pendingLobby) {
+            JS_FreeValue(ctx, fns[0]);
+            JS_FreeValue(ctx, fns[1]);
+        }
+        for (auto& [reqId, fns] : s->pendingVoice) {
             JS_FreeValue(ctx, fns[0]);
             JS_FreeValue(ctx, fns[1]);
         }

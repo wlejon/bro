@@ -71,6 +71,14 @@ bool loadSteamFlat(SteamFlatApi& api) {
     resolve(h, "SteamAPI_ISteamFriends_GetPersonaName",  api.Friends_GetPersonaName);
     resolve(h, "SteamAPI_ISteamUtils_GetAppID",          api.Utils_GetAppID);
 
+    // Voice (M4) — optional; absence degrades the feature, not the lifecycle.
+    resolve(h, "SteamAPI_ISteamUser_StartVoiceRecording",       api.User_StartVoiceRecording);
+    resolve(h, "SteamAPI_ISteamUser_StopVoiceRecording",        api.User_StopVoiceRecording);
+    resolve(h, "SteamAPI_ISteamUser_GetAvailableVoice",         api.User_GetAvailableVoice);
+    resolve(h, "SteamAPI_ISteamUser_GetVoice",                  api.User_GetVoice);
+    resolve(h, "SteamAPI_ISteamUser_DecompressVoice",           api.User_DecompressVoice);
+    resolve(h, "SteamAPI_ISteamUser_GetVoiceOptimalSampleRate", api.User_GetVoiceOptimalSampleRate);
+
     // Friends (M2) — optional; absence degrades the feature, not the lifecycle.
     resolve(h, "SteamAPI_ISteamFriends_GetFriendCount",            api.Friends_GetFriendCount);
     resolve(h, "SteamAPI_ISteamFriends_GetFriendByIndex",         api.Friends_GetFriendByIndex);

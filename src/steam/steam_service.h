@@ -139,6 +139,10 @@ struct SteamCommand {
         SetLobbyMemberLimit, // u64=lobbyId, i32=maxMembers
         RequestLobbyList,    // filters[], reqId, subscriberId
         InviteToLobby,       // u64=lobbyId, u64b=inviteeSteamId
+        // --- voice (M4) ---
+        StartVoice,          // (no args)
+        StopVoice,           // (no args)
+        DecodeVoice,         // bytes=compressed, i32=desiredSampleRate(0=optimal), reqId, subscriberId
     };
     Type type;
     uint32_t subscriberId = 0;
@@ -148,9 +152,10 @@ struct SteamCommand {
     uint64_t u64 = 0;                               // overlay/avatar/lobby target id
     uint64_t u64b = 0;                              // InviteToLobby invitee steamId
     uint32_t reqId = 0;                             // async-call correlation id
-    int32_t  i32 = 0;                               // avatar size / lobby type / limit / flag
+    int32_t  i32 = 0;                               // avatar size / lobby type / limit / flag / rate
     int32_t  i32b = 0;                              // CreateLobby maxMembers
     std::vector<LobbyListFilter> filters;           // RequestLobbyList
+    std::vector<uint8_t> bytes;                     // DecodeVoice compressed payload
     SteamCommand* next = nullptr;                   // MPSC stack link
 };
 
@@ -173,17 +178,21 @@ struct SteamEvent {
         LobbyList,       // requestLobbyList() result; reqId, `lobbyList` owned by this event
         LobbyInvite,     // a friend invited us to a lobby; u64=friendId, u64b=lobbyId
         LobbyJoinRequested, // accepted an invite/overlay join; u64=lobbyId, u64b=friendId
+        // --- voice (M4) ---
+        VoiceCaptured,   // local compressed voice frame; `blob` owned by this event
+        VoiceDecoded,    // decodeVoice() result; reqId, i32=sampleRate, `blob`=int16 PCM (owned)
     };
     Type type;
     uint64_t u64 = 0;
     uint64_t u64b = 0;                          // secondary id (invite friend/lobby)
-    int32_t  i32 = 0;                           // success / enter-response
+    int32_t  i32 = 0;                           // success / enter-response / voice sample rate
     uint32_t reqId = 0;                         // async-call correlation id
     std::string str;                            // JoinRequested connect string
     std::vector<FriendInfo>* friends = nullptr; // FriendsUpdated only; poll() deletes
     AvatarData* avatar = nullptr;               // AvatarData_ only; poll() deletes
     LobbyState* lobby = nullptr;                // LobbyUpdated only; poll() deletes
     std::vector<LobbyState>* lobbyList = nullptr; // LobbyList only; poll() deletes
+    std::vector<uint8_t>* blob = nullptr;       // Voice* only; poll() deletes
 };
 
 class SteamService;
@@ -219,6 +228,10 @@ public:
     std::function<void(uint32_t reqId, const std::vector<LobbyState>&)> onLobbyList;
     std::function<void(uint64_t friendSteamId, uint64_t lobbyId)> onLobbyInvite;
     std::function<void(uint64_t lobbyId, uint64_t friendSteamId)> onLobbyJoinRequested;
+    // Voice (M4). onVoiceCaptured carries compressed local frames (send these to
+    // peers); onVoiceDecoded carries int16 PCM for a decodeVoice() request.
+    std::function<void(const uint8_t* compressed, size_t len)> onVoiceCaptured;
+    std::function<void(uint32_t reqId, int sampleRate, const uint8_t* pcm, size_t len)> onVoiceDecoded;
 
 private:
     friend class SteamService;
@@ -293,6 +306,17 @@ public:
                           std::vector<LobbyListFilter> filters);
     void inviteUserToLobby(uint64_t lobbyId, uint64_t inviteeSteamId);
 
+    // --- Voice (M4). Capture is local; decode runs DecompressVoice on received
+    // compressed bytes. The optimal sample rate is published once at startup. ---
+    void startVoiceRecording();
+    void stopVoiceRecording();
+    bool voiceRecording() const { return voiceRecording_.load(std::memory_order_acquire); }
+    uint32_t voiceSampleRate() const { return voiceSampleRate_.load(std::memory_order_acquire); }
+    /// Decode received compressed voice (desiredSampleRate 0 = optimal). The PCM
+    /// (int16) is delivered to `subscriberId` as a VoiceDecoded event tagged reqId.
+    void decodeVoice(uint32_t subscriberId, uint32_t reqId,
+                     const uint8_t* compressed, size_t len, int desiredSampleRate);
+
     /// Allocate a subscriber and register it. Non-owning pointer; release with
     /// destroySubscriber(). Safe to call from any thread.
     SteamSubscriber* createSubscriber();
@@ -313,6 +337,7 @@ private:
     LobbyState snapshotLobby(uint64_t lobbyId, bool includeMembers); // service thread only
     void buildAndEmitLobby(uint64_t lobbyId);     // service thread only
     void emitPairToAll(SteamEvent::Type type, uint64_t u64, uint64_t u64b); // service thread only
+    void pumpVoiceCapture();                      // service thread only
     // Mark a lobby entered (idempotent): on the first entry it snapshots the
     // lobby and broadcasts onlobbyentered; a duplicate physical enter only
     // resolves a still-pending promise (reqId) without re-broadcasting.
@@ -337,6 +362,7 @@ private:
     void* iMatchmaking_ = nullptr;
     std::vector<FriendInfo> lastFriends_; // authoritative snapshot for diffing
     HSteamPipe pipe_ = 0;                 // for ManualDispatch_GetAPICallResult
+    std::vector<uint8_t> voiceBuf_;       // reused capture buffer (service thread)
 
     // In-flight async SteamAPICall_t handles → the request that issued them, so
     // a SteamAPICallCompleted_t can be routed back to the right promise. Service
@@ -352,6 +378,8 @@ private:
     std::atomic<Status>   status_{Status::Initializing};
     std::atomic<uint64_t> localSteamId_{0};
     std::atomic<uint32_t> appId_{0};
+    std::atomic<bool>     voiceRecording_{false};
+    std::atomic<uint32_t> voiceSampleRate_{0}; // optimal rate, published at startup
     std::string           personaName_; // see note above — no concurrent access after publish
 
     std::thread thread_;

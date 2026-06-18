@@ -70,6 +70,24 @@ struct SteamFlatApi {
     const char* (*Friends_GetPersonaName)(void* iSteamFriends) = nullptr;
     uint32_t    (*Utils_GetAppID)(void* iSteamUtils) = nullptr;
 
+    // --- voice (M4): ISteamUser capture + codec. EVoiceResult is an int
+    // (0 == OK, 3 == NoData). GetVoice/GetAvailableVoice keep Steam's deprecated
+    // trailing params in the flat ABI, so we pass them through as false/null/0. ---
+    void     (*User_StartVoiceRecording)(void* iUser) = nullptr;
+    void     (*User_StopVoiceRecording)(void* iUser) = nullptr;
+    int      (*User_GetAvailableVoice)(void* iUser, uint32_t* pcbCompressed,
+                                       uint32_t* pcbUncompressed_Deprecated,
+                                       uint32_t nUncompressedDesiredRate_Deprecated) = nullptr;
+    int      (*User_GetVoice)(void* iUser, bool bWantCompressed, void* pDest, uint32_t cbDest,
+                              uint32_t* nBytesWritten, bool bWantUncompressed_Deprecated,
+                              void* pUncompressedDest_Deprecated, uint32_t cbUncompressedDest_Deprecated,
+                              uint32_t* nUncompressedWritten_Deprecated,
+                              uint32_t nUncompressedDesiredRate_Deprecated) = nullptr;
+    int      (*User_DecompressVoice)(void* iUser, const void* pCompressed, uint32_t cbCompressed,
+                                     void* pDest, uint32_t cbDest, uint32_t* nBytesWritten,
+                                     uint32_t nDesiredSampleRate) = nullptr;
+    uint32_t (*User_GetVoiceOptimalSampleRate)(void* iUser) = nullptr;
+
     // --- friends (M2): list, personas, rich presence, overlay ---
     // CSteamID is passed by value as a uint64 in the flat ABI.
     int         (*Friends_GetFriendCount)(void* iSteamFriends, int iFriendFlags) = nullptr;

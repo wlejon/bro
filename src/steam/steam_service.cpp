@@ -56,6 +56,13 @@ constexpr uint32_t kChatMemberLeftMask = 0x0002 /*Left*/ | 0x0004 /*Disconnected
                                          0x0008 /*Kicked*/ | 0x0010 /*Banned*/;
 constexpr int kEResultOK = 1;
 
+// EVoiceResult: 0 OK, 1 NotInitialized, 2 NotRecording, 3 NoData, 4 BufferTooSmall,
+// 5 DataCorrupted, 6 Restricted.
+constexpr int kEVoiceResultOK          = 0;
+constexpr int kEVoiceResultBufferSmall = 4;
+constexpr uint32_t kVoiceFallbackRate  = 24000; // if GetVoiceOptimalSampleRate absent
+constexpr uint32_t kVoiceDecodeChunk   = 22050 * 2 * 4; // generous PCM scratch (≈4 s @ 22 kHz int16)
+
 // Param structs for the callbacks above — layouts match Steam's headers exactly.
 #pragma pack(push, 8)
 struct PersonaStateChange_t {
@@ -179,6 +186,19 @@ void SteamSubscriber::poll() {
                 break;
             case SteamEvent::LobbyJoinRequested:
                 if (onLobbyJoinRequested) onLobbyJoinRequested(ev->u64, ev->u64b);
+                break;
+            case SteamEvent::VoiceCaptured:
+                if (ev->blob) {
+                    if (onVoiceCaptured) onVoiceCaptured(ev->blob->data(), ev->blob->size());
+                    delete ev->blob; // ownership transferred via the event
+                }
+                break;
+            case SteamEvent::VoiceDecoded:
+                if (ev->blob) {
+                    if (onVoiceDecoded)
+                        onVoiceDecoded(ev->reqId, ev->i32, ev->blob->data(), ev->blob->size());
+                    delete ev->blob; // ownership transferred via the event
+                }
                 break;
         }
         delete ev;
@@ -374,6 +394,29 @@ void SteamService::inviteUserToLobby(uint64_t lobbyId, uint64_t inviteeSteamId) 
     postCommand(c);
 }
 
+void SteamService::startVoiceRecording() {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::StartVoice;
+    postCommand(c);
+}
+
+void SteamService::stopVoiceRecording() {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::StopVoice;
+    postCommand(c);
+}
+
+void SteamService::decodeVoice(uint32_t subscriberId, uint32_t reqId,
+                               const uint8_t* compressed, size_t len, int desiredSampleRate) {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::DecodeVoice;
+    c->subscriberId = subscriberId;
+    c->reqId = reqId;
+    c->i32 = desiredSampleRate;
+    c->bytes.assign(compressed, compressed + len);
+    postCommand(c);
+}
+
 // ---------------------------------------------------------------------------
 // Lock-free MPSC push — CAS the node onto the stack head.
 // ---------------------------------------------------------------------------
@@ -561,6 +604,44 @@ void SteamService::handleCommand(SteamCommand& cmd) {
             if (iMatchmaking_ && api_.Matchmaking_InviteUserToLobby)
                 api_.Matchmaking_InviteUserToLobby(iMatchmaking_, cmd.u64, cmd.u64b);
             break;
+        case SteamCommand::StartVoice:
+            if (iUser_ && api_.User_StartVoiceRecording) {
+                api_.User_StartVoiceRecording(iUser_);
+                voiceRecording_.store(true, std::memory_order_release);
+            }
+            break;
+        case SteamCommand::StopVoice:
+            if (iUser_ && api_.User_StopVoiceRecording)
+                api_.User_StopVoiceRecording(iUser_);
+            voiceRecording_.store(false, std::memory_order_release);
+            break;
+        case SteamCommand::DecodeVoice: {
+            auto* pcm = new std::vector<uint8_t>();
+            uint32_t rate = cmd.i32 > 0 ? static_cast<uint32_t>(cmd.i32)
+                                        : voiceSampleRate_.load(std::memory_order_relaxed);
+            if (rate == 0) rate = kVoiceFallbackRate;
+            if (iUser_ && api_.User_DecompressVoice && !cmd.bytes.empty()) {
+                // Decode into a scratch buffer; grow + retry once on BufferTooSmall.
+                uint32_t cap = kVoiceDecodeChunk;
+                for (int attempt = 0; attempt < 2; ++attempt) {
+                    pcm->resize(cap);
+                    uint32_t written = 0;
+                    int vr = api_.User_DecompressVoice(iUser_, cmd.bytes.data(),
+                                                       static_cast<uint32_t>(cmd.bytes.size()),
+                                                       pcm->data(), cap, &written, rate);
+                    if (vr == kEVoiceResultOK) { pcm->resize(written); break; }
+                    if (vr == kEVoiceResultBufferSmall) { cap *= 2; continue; }
+                    pcm->clear(); break; // NoData / corrupted / restricted
+                }
+            }
+            auto* ev = new SteamEvent();
+            ev->type = SteamEvent::VoiceDecoded;
+            ev->reqId = cmd.reqId;
+            ev->i32 = static_cast<int>(rate);
+            ev->blob = pcm;
+            postEventTo(cmd.subscriberId, ev);
+            break;
+        }
     }
 }
 
@@ -672,6 +753,30 @@ void SteamService::emitPairToAll(SteamEvent::Type type, uint64_t u64, uint64_t u
         ev->type = type;
         ev->u64 = u64;
         ev->u64b = u64b;
+        postEventTo(sid, ev);
+    }
+}
+
+// While recording, drain any available compressed voice and ship it to every
+// subscriber as a VoiceCaptured event (the app forwards these to peers). Steam's
+// VAD means this is silent when no one's speaking. Service thread only.
+void SteamService::pumpVoiceCapture() {
+    if (!iUser_ || !api_.User_GetAvailableVoice || !api_.User_GetVoice) return;
+    uint32_t cbCompressed = 0;
+    int avail = api_.User_GetAvailableVoice(iUser_, &cbCompressed, nullptr, 0);
+    if (avail != kEVoiceResultOK || cbCompressed == 0) return;
+
+    if (voiceBuf_.size() < cbCompressed) voiceBuf_.resize(cbCompressed);
+    uint32_t written = 0;
+    int vr = api_.User_GetVoice(iUser_, /*bWantCompressed=*/true, voiceBuf_.data(),
+                                static_cast<uint32_t>(voiceBuf_.size()), &written,
+                                /*deprecated tail:*/ false, nullptr, 0, nullptr, 0);
+    if (vr != kEVoiceResultOK || written == 0) return;
+
+    for (auto& [sid, sub] : subscribers_) {
+        auto* ev = new SteamEvent();
+        ev->type = SteamEvent::VoiceCaptured;
+        ev->blob = new std::vector<uint8_t>(voiceBuf_.begin(), voiceBuf_.begin() + written);
         postEventTo(sid, ev);
     }
 }
@@ -926,6 +1031,9 @@ void SteamService::threadMain() {
             }
             if (iUtils_ && api_.Utils_GetAppID)
                 appId_.store(api_.Utils_GetAppID(iUtils_), std::memory_order_relaxed);
+            if (iUser_ && api_.User_GetVoiceOptimalSampleRate)
+                voiceSampleRate_.store(api_.User_GetVoiceOptimalSampleRate(iUser_),
+                                       std::memory_order_relaxed);
 
             // Switch to ManualDispatch so we can pull callbacks ourselves on
             // this thread (PersonaStateChange, overlay, join requests, and —
@@ -978,11 +1086,15 @@ void SteamService::threadMain() {
 
             ++iter;
 
-            // 3. Friends snapshot (~2 Hz). Emits only on a diff, so a steady
+            // 3. Voice capture (every pump while recording — Steam's VAD keeps
+            //    this quiet when no one is speaking).
+            if (voiceRecording_.load(std::memory_order_relaxed)) pumpVoiceCapture();
+
+            // 4. Friends snapshot (~2 Hz). Emits only on a diff, so a steady
             //    list produces no events.
             if (iter % kFriendsRebuildEvery == 0) buildAndEmitFriends();
 
-            // 4. Heartbeat: ~1 Hz pulse to every subscriber so the lab can
+            // 5. Heartbeat: ~1 Hz pulse to every subscriber so the lab can
             //    confirm the pump is alive (M1).
             if (iter % 100 == 0) {
                 for (auto& [sid, sub] : subscribers_) {
