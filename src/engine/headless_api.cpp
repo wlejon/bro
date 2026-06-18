@@ -275,6 +275,15 @@ void Engine::advanceTime(double ms) {
             jsRuntime_->executePendingJobs();
         }
 
+        // Poll Steam too (parity with net) so virtual-time advanceTime/sleep
+        // drains friends/lobby/avatar/voice events, not just flush(). The pulse
+        // heartbeat is still real-time (it's the service thread's cadence), but
+        // async results posted by the service show up under advanceTime now.
+        if (steamService_) {
+            js::SteamBindings::poll(jsRuntime_->getContext());
+            jsRuntime_->executePendingJobs();
+        }
+
         if (activeWebGL) activeWebGL->unbindCanvasFBO();
 
         // Step physics deterministically against virtual time, synchronously
