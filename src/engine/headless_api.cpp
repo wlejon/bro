@@ -17,6 +17,7 @@
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
 #include "js/worker.h"
+#include "js/steam_bindings.h"
 #include "js/wake_bindings.h"
 #include "js/gesture_bindings.h"
 #include "js/kws_bindings.h"
@@ -57,6 +58,14 @@ namespace bro::engine {
 
 void Engine::flush() {
     jsRuntime_->executePendingJobs();
+    // Drain Steam events into JS callbacks (onpulse and, later, friends/lobby/
+    // voice). The windowed/headless main loop polls in Engine::run(), but a
+    // one-shot headless script never enters run() — so flush() pumps it too,
+    // letting headless steam-lab tests observe async Steam events deterministically.
+    if (steamService_) {
+        js::SteamBindings::poll(jsRuntime_->getContext());
+        jsRuntime_->executePendingJobs();
+    }
     // Pump HTMLMediaElement events from the main thread. In headless there
     // is no raster thread, but we keep the call path consistent with the
     // windowed engine so ElVideo::draw() never touches JS.
