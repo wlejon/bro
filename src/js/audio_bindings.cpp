@@ -1277,6 +1277,42 @@ static JSValue js_audioctx_playClip(JSContext* ctx, JSValueConst this_val, int a
     return JS_NewInt32(ctx, d->engine->playClip(clipId, gain, loop));
 }
 
+// createStream(channels=1, ringFrames=0) -> playbackId for a live PCM source.
+// Feed it with pushStreamSamples; spatialize with setPlaybackSpatial*; works with
+// every setPlayback* method. Use for voice chat / network audio: a continuous
+// stream plays click-free without per-frame clip churn.
+static JSValue js_audioctx_createStream(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
+    if (!d) return JS_NewInt32(ctx, -1);
+    int channels = 1;
+    if (argc >= 1) JS_ToInt32(ctx, &channels, argv[0]);
+    int ringFrames = 0;
+    if (argc >= 2) JS_ToInt32(ctx, &ringFrames, argv[1]);
+    return JS_NewInt32(ctx, d->engine->createStream(channels, ringFrames));
+}
+
+// pushStreamSamples(streamId, Float32Array) -> frames written. Samples must be
+// interleaved at the engine sample rate (resample on the producer side, e.g.
+// decode voice directly at ctx.sampleRate). Single-producer.
+static JSValue js_audioctx_pushStreamSamples(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
+    if (!d || argc < 2) return JS_NewInt32(ctx, 0);
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    size_t len = 0;
+    uint8_t* raw = getTypedArrayPtr(ctx, argv[1], len);
+    if (!raw) return JS_ThrowTypeError(ctx, "Expected Float32Array samples");
+    int numSamples = static_cast<int>(len / sizeof(float));
+    return JS_NewInt32(ctx, d->engine->pushStreamSamples(id, reinterpret_cast<float*>(raw), numSamples));
+}
+
+static JSValue js_audioctx_closeStream(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
+    if (!d || argc < 1) return JS_UNDEFINED;
+    int id; JS_ToInt32(ctx, &id, argv[0]);
+    d->engine->closeStream(id);
+    return JS_UNDEFINED;
+}
+
 // --- getUserMedia (standalone, no class) ---
 
 static JSValue js_getUserMedia(JSContext* ctx, JSValueConst this_val,
@@ -2741,6 +2777,10 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 [](AudioCtxData* d, int id) -> int { return d->engine->getClipChannels(id); })
             .method_raw("getClipWaveform", js_audioctx_getClipWaveform, 2)
             .method_raw("playClip", js_audioctx_playClip, 4)
+            // Streaming PCM source (live voice / network audio)
+            .method_raw("createStream", js_audioctx_createStream, 2)
+            .method_raw("pushStreamSamples", js_audioctx_pushStreamSamples, 2)
+            .method_raw("closeStream", js_audioctx_closeStream, 1)
             .method("stopPlayback",
                 [](AudioCtxData* d, int id) { d->engine->stopPlayback(id); })
             .method("setPlaybackGain",

@@ -593,6 +593,47 @@ class AudioContext {
   /** @param {number} playbackId @returns {number} normalized position in the clip/region, [0,1) — multiply by the clip duration for seconds */ getPlaybackPosition(playbackId) {}
 
 
+  // --- Streaming PCM Source (live voice / network audio) --------------------
+
+  /**
+   * Create a streaming PCM source — a persistent, spatializable playback fed
+   * sample data frame-by-frame instead of from a fixed clip. The returned id is
+   * an ordinary playbackId: drive it with every setPlayback* / setPlaybackSpatial*
+   * method (gain, pan, bus, sends, 3D position). The audio thread reads a ring
+   * the producer appends to, so a continuous stream plays click-free without the
+   * per-frame clip churn of createClip+playClip. This is the sink for Steam Voice
+   * / network voice chat: one stream per remote speaker, positioned in space.
+   *
+   *   const s = ctx.createStream(1);                 // mono voice source
+   *   ctx.setPlaybackSpatialEnabled(s, true);
+   *   ctx.setPlaybackSpatialPosition(s, x, y, z);    // where the speaker is
+   *   bro.steam.onvoicecaptured = bytes => peer.send(bytes);
+   *   // on the receiving side, per packet:
+   *   const { pcm } = await bro.steam.decodeVoice(bytes, ctx.sampleRate);
+   *   ctx.pushStreamSamples(s, pcm);
+   *
+   * @param {number} [channels=1] - 1 mono, 2 stereo (interleaved)
+   * @param {number} [ringFrames=0] - ring capacity in frames; 0 = ~2s at engine rate
+   * @returns {number} streamId (a playbackId), or -1 on bad args
+   */
+  createStream(channels, ringFrames) {}
+
+  /**
+   * Append interleaved PCM to a streaming source. Samples MUST be at the engine
+   * sample rate (resample on the producer side — e.g. decode voice directly at
+   * ctx.sampleRate). Single-producer: push from one thread. On underrun the
+   * source plays silence; on overrun (producer far ahead of playback) the oldest
+   * audio is dropped to bound latency.
+   * @param {number} streamId
+   * @param {Float32Array} samples - interleaved, engine-rate
+   * @returns {number} frames written
+   */
+  pushStreamSamples(streamId, samples) {}
+
+  /** Stop and remove a streaming source. @param {number} streamId */
+  closeStream(streamId) {}
+
+
   // --- Offline Processing ---------------------------------------------------
 
   /**
