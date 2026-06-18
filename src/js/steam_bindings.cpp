@@ -4,7 +4,10 @@
 
 #include <qjsbind/qjsbind.h>
 
+#include <array>
+#include <cstring>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace bro::js {
@@ -27,6 +30,11 @@ struct SteamCtxState {
     // events (ownership transferred from the service thread), read synchronously
     // by getFriends() — so the JS thread never touches Steam state concurrently.
     std::vector<steam::FriendInfo> friends;
+
+    // In-flight getAvatar() promises, keyed by request id. The two stored values
+    // are the promise's [resolve, reject] functions (owned; freed on settle).
+    std::unordered_map<uint32_t, std::array<JSValue, 2>> pendingAvatars;
+    uint32_t nextAvatarReq = 1;
 };
 
 static thread_local SteamCtxState* s_state = nullptr;
@@ -145,6 +153,46 @@ static JSValue js_steam_activateOverlayToUser(JSContext* ctx, JSValueConst, int 
     if (dialog) JS_FreeCString(ctx, dialog);
     if (idStr) JS_FreeCString(ctx, idStr);
     return JS_UNDEFINED;
+}
+
+// getAvatar(steamId, size="medium") -> Promise<{width,height,data:Uint8ClampedArray}|null>
+// Resolves null when the avatar isn't loaded yet (re-request after onfriends).
+static JSValue js_steam_getAvatar(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    if (JS_IsException(promise)) return promise;
+
+    auto settleNull = [&]() {
+        JSValue n = JS_NULL;
+        JSValue r = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, &n);
+        JS_FreeValue(ctx, r);
+        JS_FreeValue(ctx, resolving[0]);
+        JS_FreeValue(ctx, resolving[1]);
+    };
+
+    auto* s = getState();
+    if (!s || !s->service || !s->subscriber || argc < 1) { settleNull(); return promise; }
+
+    const char* idStr = JS_ToCString(ctx, argv[0]);
+    uint64_t id = 0;
+    if (idStr) { try { id = std::stoull(idStr); } catch (...) { id = 0; } JS_FreeCString(ctx, idStr); }
+    if (!id) { settleNull(); return promise; }
+
+    int size = 1; // medium
+    if (argc > 1) {
+        const char* sz = JS_ToCString(ctx, argv[1]);
+        if (sz) {
+            if (!std::strcmp(sz, "small")) size = 0;
+            else if (!std::strcmp(sz, "large")) size = 2;
+            else size = 1;
+            JS_FreeCString(ctx, sz);
+        }
+    }
+
+    uint32_t reqId = s->nextAvatarReq++;
+    s->pendingAvatars[reqId] = { resolving[0], resolving[1] }; // take ownership
+    s->service->requestAvatar(s->subscriber->id(), reqId, id, size);
+    return promise;
 }
 
 static JSValue js_steam_get_onfriends(JSContext* ctx, JSValueConst, int, JSValueConst*) {
@@ -273,6 +321,40 @@ void SteamBindings::install(JSContext* ctx, steam::SteamService* service) {
             JS_FreeValue(ctx, argv[1]);
             JS_FreeValue(ctx, func);
         };
+        state->subscriber->onAvatar = [ctx](uint32_t reqId, int w, int h,
+                                            const uint8_t* rgba, size_t len) {
+            auto* s = getState();
+            if (!s) return;
+            auto it = s->pendingAvatars.find(reqId);
+            if (it == s->pendingAvatars.end()) return;
+            JSValue resolve = it->second[0];
+            JSValue reject  = it->second[1];
+            s->pendingAvatars.erase(it);
+
+            JSValue result;
+            if (w > 0 && h > 0 && len > 0) {
+                result = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, result, "width", JS_NewInt32(ctx, w));
+                JS_SetPropertyStr(ctx, result, "height", JS_NewInt32(ctx, h));
+                // RGBA as a Uint8ClampedArray, so it drops straight into
+                // `new ImageData(data, w, h)` / createImageBitmap.
+                JSValue abuf = JS_NewArrayBufferCopy(ctx, rgba, len);
+                JSValue global = JS_GetGlobalObject(ctx);
+                JSValue ctor = JS_GetPropertyStr(ctx, global, "Uint8ClampedArray");
+                JSValue arr = JS_CallConstructor(ctx, ctor, 1, &abuf);
+                JS_SetPropertyStr(ctx, result, "data", arr);
+                JS_FreeValue(ctx, ctor);
+                JS_FreeValue(ctx, global);
+                JS_FreeValue(ctx, abuf);
+            } else {
+                result = JS_NULL;
+            }
+            JSValue r = JS_Call(ctx, resolve, JS_UNDEFINED, 1, &result);
+            JS_FreeValue(ctx, r);
+            JS_FreeValue(ctx, result);
+            JS_FreeValue(ctx, resolve);
+            JS_FreeValue(ctx, reject);
+        };
     }
 
     // Build bro.steam namespace.
@@ -301,6 +383,8 @@ void SteamBindings::install(JSContext* ctx, steam::SteamService* service) {
     // Friends (M2): list query, rich presence, overlay.
     JS_SetPropertyStr(ctx, steamObj, "getFriends",
         JS_NewCFunction(ctx, js_steam_getFriends, "getFriends", 0));
+    JS_SetPropertyStr(ctx, steamObj, "getAvatar",
+        JS_NewCFunction(ctx, js_steam_getAvatar, "getAvatar", 2));
     JS_SetPropertyStr(ctx, steamObj, "setRichPresence",
         JS_NewCFunction(ctx, js_steam_setRichPresence, "setRichPresence", 2));
     JS_SetPropertyStr(ctx, steamObj, "clearRichPresence",
@@ -346,6 +430,11 @@ void SteamBindings::cleanup(JSContext* ctx) {
         JS_FreeValue(ctx, s->onFriends);
         JS_FreeValue(ctx, s->onOverlay);
         JS_FreeValue(ctx, s->onJoinRequest);
+        // Drop any unresolved getAvatar() promises (context is going away).
+        for (auto& [reqId, fns] : s->pendingAvatars) {
+            JS_FreeValue(ctx, fns[0]);
+            JS_FreeValue(ctx, fns[1]);
+        }
     }
 
     if (s->service && s->subscriber) {

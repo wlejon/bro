@@ -86,6 +86,14 @@ void SteamSubscriber::poll() {
             case SteamEvent::JoinRequested:
                 if (onJoinRequest) onJoinRequest(ev->u64, ev->str);
                 break;
+            case SteamEvent::AvatarData_:
+                if (ev->avatar) {
+                    if (onAvatar)
+                        onAvatar(ev->avatar->reqId, ev->avatar->w, ev->avatar->h,
+                                 ev->avatar->rgba.data(), ev->avatar->rgba.size());
+                    delete ev->avatar; // ownership transferred via the event
+                }
+                break;
         }
         delete ev;
     }
@@ -184,6 +192,16 @@ void SteamService::activateOverlayToUser(const std::string& dialog, uint64_t ste
     postCommand(c);
 }
 
+void SteamService::requestAvatar(uint32_t subscriberId, uint32_t reqId, uint64_t steamId, int size) {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::RequestAvatar;
+    c->subscriberId = subscriberId;
+    c->reqId = reqId;
+    c->u64 = steamId;
+    c->i32 = size;
+    postCommand(c);
+}
+
 // ---------------------------------------------------------------------------
 // Lock-free MPSC push — CAS the node onto the stack head.
 // ---------------------------------------------------------------------------
@@ -235,6 +253,41 @@ void SteamService::handleCommand(SteamCommand& cmd) {
             if (iFriends_ && api_.Friends_ActivateGameOverlayToUser)
                 api_.Friends_ActivateGameOverlayToUser(iFriends_, cmd.strA.c_str(), cmd.u64);
             break;
+        case SteamCommand::RequestAvatar: {
+            auto* ad = new AvatarData();
+            ad->reqId = cmd.reqId;
+
+            int handle = 0;
+            if (iFriends_) {
+                if (cmd.i32 <= 0 && api_.Friends_GetSmallFriendAvatar)
+                    handle = api_.Friends_GetSmallFriendAvatar(iFriends_, cmd.u64);
+                else if (cmd.i32 == 1 && api_.Friends_GetMediumFriendAvatar)
+                    handle = api_.Friends_GetMediumFriendAvatar(iFriends_, cmd.u64);
+                else if (api_.Friends_GetLargeFriendAvatar)
+                    handle = api_.Friends_GetLargeFriendAvatar(iFriends_, cmd.u64);
+            }
+            // handle 0 = none, -1 = still loading; either way return empty and let
+            // the app re-request after the avatar-loaded PersonaStateChange.
+            if (handle > 0 && iUtils_ && api_.Utils_GetImageSize && api_.Utils_GetImageRGBA) {
+                uint32_t w = 0, h = 0;
+                if (api_.Utils_GetImageSize(iUtils_, handle, &w, &h) && w > 0 && h > 0) {
+                    ad->rgba.resize(static_cast<size_t>(w) * h * 4);
+                    if (api_.Utils_GetImageRGBA(iUtils_, handle, ad->rgba.data(),
+                                                static_cast<int>(ad->rgba.size()))) {
+                        ad->w = static_cast<int>(w);
+                        ad->h = static_cast<int>(h);
+                    } else {
+                        ad->rgba.clear();
+                    }
+                }
+            }
+
+            auto* ev = new SteamEvent();
+            ev->type = SteamEvent::AvatarData_;
+            ev->avatar = ad;
+            postEventTo(cmd.subscriberId, ev);
+            break;
+        }
     }
 }
 

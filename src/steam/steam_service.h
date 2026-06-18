@@ -74,6 +74,15 @@ struct FriendInfo {
     bool operator!=(const FriendInfo& o) const { return !(*this == o); }
 };
 
+// Decoded avatar pixels (RGBA), returned to a getAvatar() request. Empty rgba
+// (w==h==0) means "no avatar / not loaded yet" — re-request after onfriends.
+struct AvatarData {
+    uint32_t reqId = 0;
+    int      w = 0;
+    int      h = 0;
+    std::vector<uint8_t> rgba;
+};
+
 // ---------------------------------------------------------------------------
 // Command (subscriber thread → service thread). Intrusive node for the
 // lock-free MPSC atomic stack.
@@ -86,13 +95,16 @@ struct SteamCommand {
         ClearRichPresence,   // (no args)
         ActivateOverlay,     // strA=dialog ("friends", "settings", ...)
         ActivateOverlayToUser, // strA=dialog ("steamid", "chat", ...), u64=target
+        RequestAvatar,       // u64=friend steamId, i32=size (0/1/2), reqId, subscriberId
     };
     Type type;
     uint32_t subscriberId = 0;
     class SteamSubscriber* subscriberPtr = nullptr; // Register/Unregister
     std::string strA;                               // RichPresence/Overlay args
     std::string strB;
-    uint64_t u64 = 0;                               // overlay target steamId
+    uint64_t u64 = 0;                               // overlay/avatar target steamId
+    uint32_t reqId = 0;                             // RequestAvatar correlation id
+    int32_t  i32 = 0;                               // RequestAvatar size (0 small/1 med/2 large)
     SteamCommand* next = nullptr;                   // MPSC stack link
 };
 
@@ -106,11 +118,13 @@ struct SteamEvent {
         OverlayActivated,// Steam overlay opened/closed; u64 = active (1/0)
         JoinRequested,   // friend invited us via overlay/rich-presence;
                          //   u64 = friend steamId, str = the connect string
+        AvatarData_,     // getAvatar() result; `avatar` owned by this event
     };
     Type type;
     uint64_t u64 = 0;
     std::string str;                            // JoinRequested connect string
     std::vector<FriendInfo>* friends = nullptr; // FriendsUpdated only; poll() deletes
+    AvatarData* avatar = nullptr;               // AvatarData_ only; poll() deletes
 };
 
 class SteamService;
@@ -134,6 +148,7 @@ public:
     std::function<void(const std::vector<FriendInfo>&)> onFriends;
     std::function<void(bool active)> onOverlay;
     std::function<void(uint64_t friendSteamId, const std::string& connect)> onJoinRequest;
+    std::function<void(uint32_t reqId, int w, int h, const uint8_t* rgba, size_t len)> onAvatar;
 
 private:
     friend class SteamService;
@@ -188,6 +203,11 @@ public:
     void clearRichPresence();
     void activateOverlay(const std::string& dialog);
     void activateOverlayToUser(const std::string& dialog, uint64_t steamId);
+
+    /// Request a friend's avatar (size 0 small/1 medium/2 large). The result
+    /// (RGBA pixels, or empty if not loaded) is delivered to `subscriberId` as an
+    /// AvatarData_ event tagged with `reqId`.
+    void requestAvatar(uint32_t subscriberId, uint32_t reqId, uint64_t steamId, int size);
 
     /// Allocate a subscriber and register it. Non-owning pointer; release with
     /// destroySubscriber(). Safe to call from any thread.

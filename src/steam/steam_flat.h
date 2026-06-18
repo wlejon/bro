@@ -77,6 +77,14 @@ struct SteamFlatApi {
     void        (*Friends_ActivateGameOverlay)(void* iSteamFriends, const char* dialog) = nullptr;
     void        (*Friends_ActivateGameOverlayToUser)(void* iSteamFriends, const char* dialog, uint64_t steamID) = nullptr;
 
+    // Avatars: friends return an int image handle (0 none, -1 loading); the
+    // pixels are fetched from ISteamUtils by that handle as RGBA.
+    int  (*Friends_GetSmallFriendAvatar)(void* iSteamFriends, uint64_t steamIDFriend) = nullptr;
+    int  (*Friends_GetMediumFriendAvatar)(void* iSteamFriends, uint64_t steamIDFriend) = nullptr;
+    int  (*Friends_GetLargeFriendAvatar)(void* iSteamFriends, uint64_t steamIDFriend) = nullptr;
+    bool (*Utils_GetImageSize)(void* iSteamUtils, int iImage, uint32_t* w, uint32_t* h) = nullptr;
+    bool (*Utils_GetImageRGBA)(void* iSteamUtils, int iImage, uint8_t* dest, int destBufferSize) = nullptr;
+
     bool loaded() const { return handle != nullptr; }
 };
 

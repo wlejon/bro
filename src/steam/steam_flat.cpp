@@ -82,6 +82,12 @@ bool loadSteamFlat(SteamFlatApi& api) {
     resolve(h, "SteamAPI_ISteamFriends_ActivateGameOverlay",      api.Friends_ActivateGameOverlay);
     resolve(h, "SteamAPI_ISteamFriends_ActivateGameOverlayToUser", api.Friends_ActivateGameOverlayToUser);
 
+    resolve(h, "SteamAPI_ISteamFriends_GetSmallFriendAvatar",     api.Friends_GetSmallFriendAvatar);
+    resolve(h, "SteamAPI_ISteamFriends_GetMediumFriendAvatar",    api.Friends_GetMediumFriendAvatar);
+    resolve(h, "SteamAPI_ISteamFriends_GetLargeFriendAvatar",     api.Friends_GetLargeFriendAvatar);
+    resolve(h, "SteamAPI_ISteamUtils_GetImageSize",               api.Utils_GetImageSize);
+    resolve(h, "SteamAPI_ISteamUtils_GetImageRGBA",               api.Utils_GetImageRGBA);
+
     // The init + pump symbols are the floor — without them the library is
     // unusable. (Either Init or InitFlat is enough.)
     if ((!api.Init && !api.InitFlat) || !api.Shutdown || !api.RunCallbacks ||
