@@ -118,6 +118,7 @@ struct SteamFlatApi {
     void        (*Matchmaking_AddRequestLobbyListStringFilter)(void* iMM, const char* key, const char* value, int eComparison) = nullptr;
     void        (*Matchmaking_AddRequestLobbyListNumericalFilter)(void* iMM, const char* key, int value, int eComparison) = nullptr;
     void        (*Matchmaking_AddRequestLobbyListResultCountFilter)(void* iMM, int cMaxResults) = nullptr;
+    void        (*Matchmaking_AddRequestLobbyListDistanceFilter)(void* iMM, int eLobbyDistanceFilter) = nullptr;
 
     bool loaded() const { return handle != nullptr; }
 };

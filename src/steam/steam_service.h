@@ -99,8 +99,20 @@ struct LobbyState {
     uint64_t    lobbyId     = 0;
     uint64_t    owner       = 0;
     int         memberLimit = 0;
-    std::vector<LobbyMember> members;
+    int         memberCount = 0; // GetNumLobbyMembers (valid even when `members` is empty)
+    std::vector<LobbyMember> members; // identities — only populated for joined lobbies
     std::vector<std::pair<std::string, std::string>> data; // lobby data key/value
+};
+
+// One filter for requestLobbyList(). Built JS-side and applied on the service
+// thread immediately before RequestLobbyList (the filters are interface state).
+struct LobbyListFilter {
+    enum Kind : uint8_t { String, Numeric, ResultCount, Distance };
+    Kind        kind = String;
+    std::string key;
+    std::string sval;
+    int         ival = 0;
+    int         comparison = 0; // ELobbyComparison (0 == equal)
 };
 
 // ---------------------------------------------------------------------------
@@ -125,6 +137,8 @@ struct SteamCommand {
         SetLobbyJoinable,    // u64=lobbyId, i32=joinable(0/1)
         SetLobbyType,        // u64=lobbyId, i32=ELobbyType
         SetLobbyMemberLimit, // u64=lobbyId, i32=maxMembers
+        RequestLobbyList,    // filters[], reqId, subscriberId
+        InviteToLobby,       // u64=lobbyId, u64b=inviteeSteamId
     };
     Type type;
     uint32_t subscriberId = 0;
@@ -132,9 +146,11 @@ struct SteamCommand {
     std::string strA;                               // RichPresence/Overlay/Lobby key
     std::string strB;                               // value
     uint64_t u64 = 0;                               // overlay/avatar/lobby target id
+    uint64_t u64b = 0;                              // InviteToLobby invitee steamId
     uint32_t reqId = 0;                             // async-call correlation id
     int32_t  i32 = 0;                               // avatar size / lobby type / limit / flag
     int32_t  i32b = 0;                              // CreateLobby maxMembers
+    std::vector<LobbyListFilter> filters;           // RequestLobbyList
     SteamCommand* next = nullptr;                   // MPSC stack link
 };
 
@@ -154,16 +170,20 @@ struct SteamEvent {
         LobbyEntered,    // entered a lobby; reqId(0 if spontaneous), u64=lobbyId, i32=response
         LobbyUpdated,    // lobby membership/data changed; `lobby` owned by this event
         LobbyLeft,       // left / removed from a lobby; u64=lobbyId
+        LobbyList,       // requestLobbyList() result; reqId, `lobbyList` owned by this event
+        LobbyInvite,     // a friend invited us to a lobby; u64=friendId, u64b=lobbyId
+        LobbyJoinRequested, // accepted an invite/overlay join; u64=lobbyId, u64b=friendId
     };
     Type type;
     uint64_t u64 = 0;
-    uint64_t u64b = 0;                          // secondary id (reserved)
+    uint64_t u64b = 0;                          // secondary id (invite friend/lobby)
     int32_t  i32 = 0;                           // success / enter-response
     uint32_t reqId = 0;                         // async-call correlation id
     std::string str;                            // JoinRequested connect string
     std::vector<FriendInfo>* friends = nullptr; // FriendsUpdated only; poll() deletes
     AvatarData* avatar = nullptr;               // AvatarData_ only; poll() deletes
     LobbyState* lobby = nullptr;                // LobbyUpdated only; poll() deletes
+    std::vector<LobbyState>* lobbyList = nullptr; // LobbyList only; poll() deletes
 };
 
 class SteamService;
@@ -196,6 +216,9 @@ public:
     std::function<void(uint32_t reqId, uint64_t lobbyId, int response, bool fireEvent)> onLobbyEntered;
     std::function<void(const LobbyState&)> onLobbyUpdated;
     std::function<void(uint64_t lobbyId)>  onLobbyLeft;
+    std::function<void(uint32_t reqId, const std::vector<LobbyState>&)> onLobbyList;
+    std::function<void(uint64_t friendSteamId, uint64_t lobbyId)> onLobbyInvite;
+    std::function<void(uint64_t lobbyId, uint64_t friendSteamId)> onLobbyJoinRequested;
 
 private:
     friend class SteamService;
@@ -266,6 +289,9 @@ public:
     void setLobbyJoinable(uint64_t lobbyId, bool joinable);
     void setLobbyType(uint64_t lobbyId, int lobbyType);
     void setLobbyMemberLimit(uint64_t lobbyId, int maxMembers);
+    void requestLobbyList(uint32_t subscriberId, uint32_t reqId,
+                          std::vector<LobbyListFilter> filters);
+    void inviteUserToLobby(uint64_t lobbyId, uint64_t inviteeSteamId);
 
     /// Allocate a subscriber and register it. Non-owning pointer; release with
     /// destroySubscriber(). Safe to call from any thread.
@@ -284,7 +310,9 @@ private:
     void handleCommand(SteamCommand& cmd);        // service thread only
     void buildAndEmitFriends();                   // service thread only
     void emitFriendsTo(uint32_t subscriberId);    // service thread only
+    LobbyState snapshotLobby(uint64_t lobbyId, bool includeMembers); // service thread only
     void buildAndEmitLobby(uint64_t lobbyId);     // service thread only
+    void emitPairToAll(SteamEvent::Type type, uint64_t u64, uint64_t u64b); // service thread only
     // Mark a lobby entered (idempotent): on the first entry it snapshots the
     // lobby and broadcasts onlobbyentered; a duplicate physical enter only
     // resolves a still-pending promise (reqId) without re-broadcasting.

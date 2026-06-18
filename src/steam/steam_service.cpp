@@ -42,10 +42,13 @@ constexpr int kCbGameRichPresenceJoinRequest = 300 + 37; // 337
 
 // Matchmaking callback ids (k_iSteamMatchmakingCallbacks == 500) + the async
 // call-result completion id (k_iSteamUtilsCallbacks + 3 == 703).
+constexpr int kCbLobbyInvite        = 500 + 3;  // 503
+constexpr int kCbLobbyEnter         = 500 + 4;  // 504 (also JoinLobby call result)
 constexpr int kCbLobbyDataUpdate    = 500 + 5;  // 505
 constexpr int kCbLobbyChatUpdate    = 500 + 6;  // 506
-constexpr int kCbLobbyEnter         = 500 + 4;  // 504 (also JoinLobby call result)
+constexpr int kCbLobbyMatchList     = 500 + 10; // 510 (RequestLobbyList call result)
 constexpr int kCbLobbyCreated       = 500 + 13; // 513 (CreateLobby call result)
+constexpr int kCbGameLobbyJoinRequested = 500 + 33; // 533
 constexpr int kCbSteamAPICallCompleted = 700 + 3; // 703
 
 // EChatMemberStateChange bits that mean "this member is gone".
@@ -95,6 +98,18 @@ struct LobbyChatUpdate_t {
     uint64_t m_ulSteamIDUserChanged;
     uint64_t m_ulSteamIDMakingChange;
     uint32_t m_rgfChatMemberStateChange; // EChatMemberStateChange bitfield
+};
+struct LobbyMatchList_t {
+    uint32_t m_nLobbiesMatching;
+};
+struct LobbyInvite_t {
+    uint64_t m_ulSteamIDUser;  // friend who invited us
+    uint64_t m_ulSteamIDLobby;
+    uint64_t m_ulGameID;
+};
+struct GameLobbyJoinRequested_t {
+    uint64_t m_steamIDLobby;
+    uint64_t m_steamIDFriend;
 };
 #pragma pack(pop)
 
@@ -152,6 +167,18 @@ void SteamSubscriber::poll() {
                 break;
             case SteamEvent::LobbyLeft:
                 if (onLobbyLeft) onLobbyLeft(ev->u64);
+                break;
+            case SteamEvent::LobbyList:
+                if (ev->lobbyList) {
+                    if (onLobbyList) onLobbyList(ev->reqId, *ev->lobbyList);
+                    delete ev->lobbyList; // ownership transferred via the event
+                }
+                break;
+            case SteamEvent::LobbyInvite:
+                if (onLobbyInvite) onLobbyInvite(ev->u64, ev->u64b);
+                break;
+            case SteamEvent::LobbyJoinRequested:
+                if (onLobbyJoinRequested) onLobbyJoinRequested(ev->u64, ev->u64b);
                 break;
         }
         delete ev;
@@ -329,6 +356,24 @@ void SteamService::setLobbyMemberLimit(uint64_t lobbyId, int maxMembers) {
     postCommand(c);
 }
 
+void SteamService::requestLobbyList(uint32_t subscriberId, uint32_t reqId,
+                                    std::vector<LobbyListFilter> filters) {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::RequestLobbyList;
+    c->subscriberId = subscriberId;
+    c->reqId = reqId;
+    c->filters = std::move(filters);
+    postCommand(c);
+}
+
+void SteamService::inviteUserToLobby(uint64_t lobbyId, uint64_t inviteeSteamId) {
+    auto* c = new SteamCommand();
+    c->type = SteamCommand::InviteToLobby;
+    c->u64 = lobbyId;
+    c->u64b = inviteeSteamId;
+    postCommand(c);
+}
+
 // ---------------------------------------------------------------------------
 // Lock-free MPSC push — CAS the node onto the stack head.
 // ---------------------------------------------------------------------------
@@ -473,6 +518,49 @@ void SteamService::handleCommand(SteamCommand& cmd) {
             if (iMatchmaking_ && api_.Matchmaking_SetLobbyMemberLimit)
                 api_.Matchmaking_SetLobbyMemberLimit(iMatchmaking_, cmd.u64, cmd.i32);
             break;
+        case SteamCommand::RequestLobbyList: {
+            uint64_t call = 0;
+            if (iMatchmaking_ && api_.Matchmaking_RequestLobbyList) {
+                // Filters are interface state — apply them right before the call.
+                for (const auto& f : cmd.filters) {
+                    switch (f.kind) {
+                        case LobbyListFilter::String:
+                            if (api_.Matchmaking_AddRequestLobbyListStringFilter)
+                                api_.Matchmaking_AddRequestLobbyListStringFilter(
+                                    iMatchmaking_, f.key.c_str(), f.sval.c_str(), f.comparison);
+                            break;
+                        case LobbyListFilter::Numeric:
+                            if (api_.Matchmaking_AddRequestLobbyListNumericalFilter)
+                                api_.Matchmaking_AddRequestLobbyListNumericalFilter(
+                                    iMatchmaking_, f.key.c_str(), f.ival, f.comparison);
+                            break;
+                        case LobbyListFilter::ResultCount:
+                            if (api_.Matchmaking_AddRequestLobbyListResultCountFilter)
+                                api_.Matchmaking_AddRequestLobbyListResultCountFilter(iMatchmaking_, f.ival);
+                            break;
+                        case LobbyListFilter::Distance:
+                            if (api_.Matchmaking_AddRequestLobbyListDistanceFilter)
+                                api_.Matchmaking_AddRequestLobbyListDistanceFilter(iMatchmaking_, f.ival);
+                            break;
+                    }
+                }
+                call = api_.Matchmaking_RequestLobbyList(iMatchmaking_);
+            }
+            if (call) {
+                pendingCalls_[call] = { cmd.subscriberId, cmd.reqId, kCbLobbyMatchList };
+            } else {
+                auto* ev = new SteamEvent();
+                ev->type = SteamEvent::LobbyList;
+                ev->reqId = cmd.reqId;
+                ev->lobbyList = new std::vector<LobbyState>(); // empty result
+                postEventTo(cmd.subscriberId, ev);
+            }
+            break;
+        }
+        case SteamCommand::InviteToLobby:
+            if (iMatchmaking_ && api_.Matchmaking_InviteUserToLobby)
+                api_.Matchmaking_InviteUserToLobby(iMatchmaking_, cmd.u64, cmd.u64b);
+            break;
     }
 }
 
@@ -523,32 +611,32 @@ void SteamService::emitToAll(SteamEvent::Type type, uint64_t u64, const std::str
     }
 }
 
-// Snapshot a lobby's membership + data from the Steam API and ship it to every
-// subscriber as a LobbyUpdated event (each gets its own copy). The JS thread
-// keeps this as a cache and serves getLobbyMembers/Owner/Data from it. Service
-// thread only.
-void SteamService::buildAndEmitLobby(uint64_t lobbyId) {
-    if (!iMatchmaking_) return;
-
+// Snapshot a lobby's owner/limit/count/data — and, when includeMembers (only
+// possible for lobbies we've joined), the member identities. Service thread only.
+LobbyState SteamService::snapshotLobby(uint64_t lobbyId, bool includeMembers) {
     LobbyState st;
     st.lobbyId = lobbyId;
+    if (!iMatchmaking_) return st;
+
     if (api_.Matchmaking_GetLobbyOwner)
         st.owner = api_.Matchmaking_GetLobbyOwner(iMatchmaking_, lobbyId);
     if (api_.Matchmaking_GetLobbyMemberLimit)
         st.memberLimit = api_.Matchmaking_GetLobbyMemberLimit(iMatchmaking_, lobbyId);
+    if (api_.Matchmaking_GetNumLobbyMembers)
+        st.memberCount = api_.Matchmaking_GetNumLobbyMembers(iMatchmaking_, lobbyId);
 
-    int n = api_.Matchmaking_GetNumLobbyMembers
-                ? api_.Matchmaking_GetNumLobbyMembers(iMatchmaking_, lobbyId) : 0;
-    if (n > 0) st.members.reserve(static_cast<size_t>(n));
-    for (int i = 0; i < n; ++i) {
-        LobbyMember m;
-        if (api_.Matchmaking_GetLobbyMemberByIndex)
-            m.steamId = api_.Matchmaking_GetLobbyMemberByIndex(iMatchmaking_, lobbyId, i);
-        if (m.steamId && iFriends_ && api_.Friends_GetFriendPersonaName) {
-            const char* nm = api_.Friends_GetFriendPersonaName(iFriends_, m.steamId);
-            m.name = nm ? nm : "";
+    if (includeMembers && st.memberCount > 0) {
+        st.members.reserve(static_cast<size_t>(st.memberCount));
+        for (int i = 0; i < st.memberCount; ++i) {
+            LobbyMember m;
+            if (api_.Matchmaking_GetLobbyMemberByIndex)
+                m.steamId = api_.Matchmaking_GetLobbyMemberByIndex(iMatchmaking_, lobbyId, i);
+            if (m.steamId && iFriends_ && api_.Friends_GetFriendPersonaName) {
+                const char* nm = api_.Friends_GetFriendPersonaName(iFriends_, m.steamId);
+                m.name = nm ? nm : "";
+            }
+            st.members.push_back(std::move(m));
         }
-        st.members.push_back(std::move(m));
     }
 
     int dc = api_.Matchmaking_GetLobbyDataCount
@@ -561,11 +649,29 @@ void SteamService::buildAndEmitLobby(uint64_t lobbyId) {
                                                  key, sizeof(key), val, sizeof(val)))
             st.data.emplace_back(key, val);
     }
+    return st;
+}
 
+// Snapshot a joined lobby and ship it to every subscriber as a LobbyUpdated
+// event (each gets its own copy). The JS thread keeps this as a cache and
+// serves getLobbyMembers/Owner/Data from it. Service thread only.
+void SteamService::buildAndEmitLobby(uint64_t lobbyId) {
+    if (!iMatchmaking_) return;
+    LobbyState st = snapshotLobby(lobbyId, /*includeMembers=*/true);
     for (auto& [sid, sub] : subscribers_) {
         auto* ev = new SteamEvent();
         ev->type = SteamEvent::LobbyUpdated;
         ev->lobby = new LobbyState(st); // per-subscriber copy
+        postEventTo(sid, ev);
+    }
+}
+
+void SteamService::emitPairToAll(SteamEvent::Type type, uint64_t u64, uint64_t u64b) {
+    for (auto& [sid, sub] : subscribers_) {
+        auto* ev = new SteamEvent();
+        ev->type = type;
+        ev->u64 = u64;
+        ev->u64b = u64b;
         postEventTo(sid, ev);
     }
 }
@@ -685,6 +791,21 @@ void SteamService::dispatchCallback(const CallbackMsg_t& msg) {
                     response = static_cast<int>(r->m_EChatRoomEnterResponse);
                 }
                 enterLobby(pc.subscriberId, pc.reqId, lobby, response);
+            } else if (cc->m_iCallback == kCbLobbyMatchList) {
+                uint32_t count = 0;
+                if (ok && cc->m_cubParam >= sizeof(LobbyMatchList_t))
+                    count = reinterpret_cast<const LobbyMatchList_t*>(buf.data())->m_nLobbiesMatching;
+                auto* list = new std::vector<LobbyState>();
+                list->reserve(count);
+                for (uint32_t i = 0; i < count && api_.Matchmaking_GetLobbyByIndex; ++i) {
+                    uint64_t id = api_.Matchmaking_GetLobbyByIndex(iMatchmaking_, static_cast<int>(i));
+                    if (id) list->push_back(snapshotLobby(id, /*includeMembers=*/false));
+                }
+                auto* ev = new SteamEvent();
+                ev->type = SteamEvent::LobbyList;
+                ev->reqId = pc.reqId;
+                ev->lobbyList = list;
+                postEventTo(pc.subscriberId, ev);
             }
             break;
         }
@@ -714,6 +835,18 @@ void SteamService::dispatchCallback(const CallbackMsg_t& msg) {
                 } else {
                     buildAndEmitLobby(p->m_ulSteamIDLobby);
                 }
+            }
+            break;
+        case kCbLobbyInvite:
+            if (msg.m_pubParam && msg.m_cubParam >= (int)sizeof(LobbyInvite_t)) {
+                auto* p = reinterpret_cast<const LobbyInvite_t*>(msg.m_pubParam);
+                emitPairToAll(SteamEvent::LobbyInvite, p->m_ulSteamIDUser, p->m_ulSteamIDLobby);
+            }
+            break;
+        case kCbGameLobbyJoinRequested:
+            if (msg.m_pubParam && msg.m_cubParam >= (int)sizeof(GameLobbyJoinRequested_t)) {
+                auto* p = reinterpret_cast<const GameLobbyJoinRequested_t*>(msg.m_pubParam);
+                emitPairToAll(SteamEvent::LobbyJoinRequested, p->m_steamIDLobby, p->m_steamIDFriend);
             }
             break;
         default:

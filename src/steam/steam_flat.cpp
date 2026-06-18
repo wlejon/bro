@@ -112,6 +112,7 @@ bool loadSteamFlat(SteamFlatApi& api) {
     resolve(h, "SteamAPI_ISteamMatchmaking_AddRequestLobbyListStringFilter", api.Matchmaking_AddRequestLobbyListStringFilter);
     resolve(h, "SteamAPI_ISteamMatchmaking_AddRequestLobbyListNumericalFilter", api.Matchmaking_AddRequestLobbyListNumericalFilter);
     resolve(h, "SteamAPI_ISteamMatchmaking_AddRequestLobbyListResultCountFilter", api.Matchmaking_AddRequestLobbyListResultCountFilter);
+    resolve(h, "SteamAPI_ISteamMatchmaking_AddRequestLobbyListDistanceFilter", api.Matchmaking_AddRequestLobbyListDistanceFilter);
 
     // The init + pump symbols are the floor — without them the library is
     // unusable. (Either Init or InitFlat is enough.)
