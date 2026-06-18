@@ -18,15 +18,19 @@ SteamService* SteamService::s_instance = nullptr;
 // early methods may appear to work while a later one jumps off the vtable and
 // crashes. (Observed: requesting "SteamFriends018" against the SDK 1.57 DLL made
 // GetFriendCount segfault while GetPersonaName still returned the right name.)
-// So the version MATCHING the shipped redistributable must come first; these
-// lists lead with SDK 1.57's versions (our reference redistributable).
+// So the version MATCHING the shipped redistributable must come first. Our
+// reference redistributable is now the OFFICIAL SDK 1.64 steam_api64.dll
+// (sdk/redistributable_bin/win64), so these lists lead with 1.64's versions;
+// 1.57's versions follow as fallbacks for an older bundled DLL. Between 1.57 and
+// 1.64 only ISteamFriends bumped (017 -> 018); User/Utils/Matchmaking are
+// unchanged.
 namespace {
 const char* kUserVersions[]    = { "SteamUser023", "SteamUser022", "SteamUser021", "SteamUser020" };
-const char* kFriendsVersions[] = { "SteamFriends017", "SteamFriends018", "SteamFriends015" };
+const char* kFriendsVersions[] = { "SteamFriends018", "SteamFriends017", "SteamFriends015" };
 const char* kUtilsVersions[]   = { "SteamUtils010", "SteamUtils009" };
-// ISteamMatchmaking has been version 009 since ~SDK 1.36 and is 009 in our
-// reference redistributable (SDK 1.57). Lead with the matching version (see the
-// vtable hazard note above); 008 is the only realistic older fallback.
+// ISteamMatchmaking has been version 009 since ~SDK 1.36 and is still 009 in the
+// 1.64 reference redistributable. Lead with the matching version (see the vtable
+// hazard note above); 008 is the only realistic older fallback.
 const char* kMatchmakingVersions[] = { "SteamMatchMaking009", "SteamMatchMaking008" };
 
 // k_EFriendFlagImmediate — "regular" friends (the people on your friends list).
