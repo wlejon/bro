@@ -1,6 +1,6 @@
 /**
- * bro.lm — Language-model text generation (Qwen3, Mistral 3.1, Qwen3.5) +
- *          NLLB-200 machine translation
+ * bro.lm — Language-model text generation (Qwen3, Mistral 3.1, Gemma-2,
+ *          Qwen3.5) + NLLB-200 machine translation
  *
  * Backed by brolm (tokenizers + transformer text models) on top of brotensor.
  * Defaults to CUDA; pass { device: 'cpu' } to force the CPU backend.
@@ -13,6 +13,11 @@
  *     { model, tokenizer } pair, and the model speaks the same LMModel API
  *     (generate / generateStream / async bro.lm.generate / cache control);
  *     model.family distinguishes 'qwen3' from 'mistral3'. See the Mistral
+ *     section at the bottom.
+ *   - Gemma-2 (loadGemma2): HF checkpoint dir (config.json + tokenizer.json +
+ *     *.safetensors shards) — google/gemma-2-2b, added to brolm as Sana's text
+ *     encoder. Same { model, tokenizer } pair and LMModel API (family
+ *     'gemma2'); the base PT tokenizer has no chat template. See the Gemma-2
  *     section at the bottom.
  *   - Qwen3.5 (loadQwen35): safetensors checkpoint dir driven by brolm's VLM
  *     driver (hybrid full/linear-attention decoder, M-RoPE). The driver owns
@@ -224,6 +229,53 @@ const mIds = mis.model.generate(mis.tokenizer.encode(mPrompt, /*addSpecial=*/fal
     sampling: { temperature: 0 },
 });
 console.log(mis.tokenizer.decode(mIds));
+
+
+// ── Gemma-2 ───────────────────────────────────────────────────────────────────
+
+/**
+ * Load Gemma-2 (google/gemma-2-2b family) from a HuggingFace checkpoint
+ * directory: config.json + tokenizer.json + one or more *.safetensors shards.
+ * Gemma-2 was added to brolm as Sana's text encoder (its last_hidden_state
+ * conditions the Sana DiT — see bro.diffusion.loadModel for Sana txt2img), but
+ * it is a full causal LM and is bound here as one.
+ *
+ * Unlike loadMistral, the tokenizer travels with the checkpoint (tokenizer.json
+ * in the same dir), so there is no separate tokenizerPath. Like loadQwen35 this
+ * is a directory load, but it returns the shared LMModel + a GemmaTokenizer
+ * handle (the model does NOT own tokenization).
+ *
+ * @param {string} modelDir            - HF gemma-2-2b dir (config.json,
+ *                                       tokenizer.json, *.safetensors shards).
+ * @param {Object} [opts]
+ * @param {string} [opts.device='cuda']
+ * @param {function} [opts.onReady]    - async load: onReady({model, tokenizer}).
+ * @param {function} [opts.onError]
+ * @returns {{ model: LMModel, tokenizer: GemmaTokenizer }}
+ *
+ * GemmaTokenizer (SentencePiece-BPE, byte-fallback):
+ * @property {number} eosId, bosId, padId, unkId, vocabCount
+ * @method encode(text, addBos=true) → Int32Array
+ *         Prepends <bos> by default (no <eos>), matching GemmaTokenizer. Pass
+ *         false to suppress the leading <bos>.
+ * @method decode(ids) → string
+ *         There is NO applyChatTemplate — gemma-2-2b ships as a base PT model.
+ *         For an -it checkpoint build the turn framing in JS (the added tokens
+ *         are matched verbatim):
+ *           '<start_of_turn>user\n' + text +
+ *           '<end_of_turn>\n<start_of_turn>model\n'
+ *
+ * The returned model is the same LMModel class as loadQwen's (family 'gemma2')
+ * — generate, generateStream, and async bro.lm.generate all work.
+ */
+const gem = bro.lm.loadGemma2('../brolm/weights/gemma-2-2b');
+const gIds = gem.model.generate(
+    gem.tokenizer.encode('The capital of France is'), {
+        maxNewTokens: 16,
+        eosId: gem.tokenizer.eosId,
+        sampling: { temperature: 0 },
+    });
+console.log(gem.tokenizer.decode(gIds));
 
 
 // ── Qwen3.5 ───────────────────────────────────────────────────────────────────

@@ -3,12 +3,17 @@
 // =============================================================================
 //
 // Diffusion-model text-to-image inference, backed by the brodiffusion sibling
-// library. Two model families are supported:
+// library. Three model families are supported:
 //   - Stable Diffusion 1.5 — CLIP text encoder + U-Net + VAE, DDIM/LCM
 //     schedulers, LoRA, INT8 quantization.
 //   - Flux — CLIP (pooled) + T5-XXL text encoders + Flux DiT denoiser + VAE,
 //     flow-match scheduler.
-// loadModel() takes a diffusers model directory and auto-detects the family;
+//   - Sana (NVIDIA) — Gemma-2 text encoder + Linear DiT denoiser + DC-AE
+//     f32c32 autoencoder (32x latent, vs 8x for SD/Flux), flow-match scheduler.
+//     Sana-Sprint is the few-step guidance-distilled variant (SCM scheduler).
+//     Sana txt2img runs through the same generate()/prime() path; img2img,
+//     inpaint, ControlNet, and LoRA are not wired for Sana.
+// loadModel() takes a model directory and auto-detects the family;
 // createPipeline() builds the SD1.5 stack explicitly.
 //
 // The native Pipeline owns the multi-GB model weights. JavaScript never holds
@@ -58,18 +63,29 @@ const diffusion = {
    *   - Stable Diffusion → CLIP tokenizer + U-Net + VAE
    *   - Flux             → CLIP (pooled) + T5-XXL tokenizers/encoders +
    *                        Flux DiT + VAE, flow-match scheduler
+   *   - Sana             → Gemma-2 tokenizer/encoder + Linear DiT + DC-AE
+   *                        decoder, flow-match (or SCM for Sana-Sprint). The
+   *                        Gemma-2 text encoder is loaded internally — no
+   *                        bro.lm.loadGemma2 needed for Sana txt2img.
    *
    * Every weight and tokenizer is loaded by this call, so the returned
    * Pipeline needs no loadWeights() — call generate()/prime() directly. This
-   * is the only way to run a Flux model. Blocking and slow (multi-GB read);
-   * run it in a Worker. Check pipeline.config().modelClass for the family.
+   * is the only way to run a Flux or Sana model. Blocking and slow (multi-GB
+   * read); run it in a Worker. Check pipeline.config().modelClass for the
+   * family ('StableDiffusion' | 'Flux' | 'Sana').
    *
-   * @param {string} modelDir - diffusers model directory root
+   * @param {string} modelDir - model directory root
    * @returns {Pipeline}
    *
    * @example
    *   const pipe = bro.diffusion.loadModel('/path/to/flux-schnell');
    *   const img  = pipe.generate('a fox in autumn leaves', { steps: 4 });
+   *
+   * @example
+   *   // Sana: width/height must be multiples of 32 (DC-AE downsamples 32x).
+   *   const sana = bro.diffusion.loadModel('../brodiffusion/weights/sana-600m');
+   *   const img  = sana.generate('a red panda in a tree',
+   *                              { width: 512, height: 512, steps: 20 });
    */
   loadModel(modelDir) {},
 
@@ -225,9 +241,10 @@ class Pipeline {
 
   /**
    * Read-only snapshot of the resolved pipeline configuration. `modelClass`
-   * is 'StableDiffusion' or 'Flux'; `scheduler` is 'ddim', 'lcm', or
-   * 'flowmatch'. `timeCondProjDim`, `quantizeWeights`, and `numXAttnBlocks`
-   * describe the SD1.5 U-Net and read 0/false for a Flux model.
+   * is 'StableDiffusion', 'Flux', or 'Sana'; `scheduler` is 'ddim', 'lcm',
+   * 'flowmatch', or 'scm' (Sana-Sprint). `timeCondProjDim`, `quantizeWeights`,
+   * and `numXAttnBlocks` describe the SD1.5 U-Net and read 0/false for a Flux
+   * or Sana model.
    * `numControlNets` is the current registered ControlNet count and
    * `hasControlNet` is true iff that count is > 0.
    * @returns {{modelClass:string, scheduler:string, timeCondProjDim:number,

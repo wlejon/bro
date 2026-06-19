@@ -40,6 +40,9 @@
 #include <brolm/mistral3_config.h>
 #include <brolm/mistral3_text.h>
 #include <brolm/mistral_tokenizer.h>
+#include <brolm/gemma2.h>
+#include <brolm/gemma2_config.h>
+#include <brolm/gemma_tokenizer.h>
 #include <brolm/qwen35_vl.h>
 #include <brolm/nllb.h>
 #include <brolm/clip.h>
@@ -57,10 +60,12 @@
 #include <include/core/SkImage.h>
 #include <include/core/SkImageInfo.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <exception>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <random>
@@ -125,6 +130,26 @@ struct MistralDecoder final : LMDecoder {
     }
 };
 
+// Gemma-2 2B (google/gemma-2-2b family). The same pre-norm GQA / RoPE causal
+// decoder as Qwen3 / Mistral, so it fronts the shared LMModel JS class too.
+// Added to brolm as Sana's text encoder (its last_hidden_state conditions the
+// Sana DiT), but it is a full causal LM and is bound as one here.
+struct GemmaDecoder final : LMDecoder {
+    brolm::gemma::Gemma2Model m;
+    explicit GemmaDecoder(const brolm::gemma::Gemma2Config& cfg) : m(cfg) {}
+    const char* family()    const override { return "gemma2"; }
+    int  vocabSize()  const override { return m.config().vocab_size; }
+    int  hiddenSize() const override { return m.config().hidden_size; }
+    int  numLayers()  const override { return m.config().num_hidden_layers; }
+    int  maxSeqLen()  const override { return m.config().max_position_embeddings; }
+    int  cacheLen()   const override { return m.cache_len(); }
+    void allocateCache(int n) override { m.allocate_cache(n); }
+    void resetCache() override { m.reset_cache(); }
+    void forward(const int32_t* ids, int L, brotensor::Tensor& out) override {
+        m.forward(ids, L, out);
+    }
+};
+
 struct LMModelWrapper {
     std::unique_ptr<LMDecoder> model;
     bool weights_loaded = false;
@@ -142,6 +167,10 @@ struct LMTokenizerWrapper {
 
 struct MistralTokenizerWrapper {
     std::unique_ptr<brolm::mistral::Tokenizer> tok;
+};
+
+struct GemmaTokenizerWrapper {
+    std::unique_ptr<brolm::gemma::Tokenizer> tok;
 };
 
 // Qwen3.5 stays behind brolm's VLM driver (it owns the tokenizer, the M-RoPE
@@ -665,6 +694,66 @@ static void registerMistralTokenizerClass(JSContext* ctx) {
         .method_raw("encode",            js_mtok_encode,            2)
         .method_raw("decode",            js_mtok_decode,            1)
         .method_raw("applyChatTemplate", js_mtok_applyChatTemplate, 2);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GemmaTokenizer methods — SentencePiece-BPE (HF tokenizer.json), byte-fallback
+// ═══════════════════════════════════════════════════════════════════════════
+//
+// Gemma's fast tokenizer has no chat template baked in, so there is no
+// applyChatTemplate here (gemma-2-2b ships as a base PT model; build the
+// <start_of_turn>user … <end_of_turn>\n<start_of_turn>model\n framing in JS if
+// targeting an -it checkpoint — the added tokens are matched verbatim).
+
+static GemmaTokenizerWrapper* gtokSelf(JSContext* ctx, JSValueConst this_val) {
+    return qjsbind::unwrap<GemmaTokenizerWrapper>(ctx, this_val);
+}
+
+// encode(text, addBos=true) -> Int32Array
+//   Gemma prepends <bos> by default (add_eos stays false, matching
+//   GemmaTokenizer). Pass false to suppress the leading <bos> (e.g. when
+//   concatenating encoded segments).
+static JSValue js_gtok_encode(JSContext* ctx, JSValueConst this_val,
+                              int argc, JSValueConst* argv) {
+    auto* w = gtokSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "encode: not a GemmaTokenizer");
+    std::string text;
+    if (argc < 1 || !argStr(ctx, argv[0], text))
+        return JS_ThrowTypeError(ctx, "encode(text, addBos?): text required");
+    const bool addBos = (argc < 2) ? true : (JS_ToBool(ctx, argv[1]) == 1);
+    try {
+        auto ids = w->tok->encode(text, addBos, /*add_eos=*/false);
+        return qjsbind::make_int32_array(ctx, ids);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "encode: %s", e.what());
+    }
+}
+
+// decode(ids) -> string. Accepts Int32Array or number[].
+static JSValue js_gtok_decode(JSContext* ctx, JSValueConst this_val,
+                              int argc, JSValueConst* argv) {
+    auto* w = gtokSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "decode: not a GemmaTokenizer");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "decode(ids): ids required");
+    auto ids = readIdArray(ctx, argv[0]);
+    try {
+        return JS_NewString(ctx, w->tok->decode(ids).c_str());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "decode: %s", e.what());
+    }
+}
+
+static void registerGemmaTokenizerClass(JSContext* ctx) {
+    qjsbind::Class<GemmaTokenizerWrapper>(ctx, "GemmaTokenizer",
+                                          qjsbind::NoGlobal)
+        .get("eosId",      [](GemmaTokenizerWrapper* w) { return w->tok->eos_id(); })
+        .get("bosId",      [](GemmaTokenizerWrapper* w) { return w->tok->bos_id(); })
+        .get("padId",      [](GemmaTokenizerWrapper* w) { return w->tok->pad_id(); })
+        .get("unkId",      [](GemmaTokenizerWrapper* w) { return w->tok->unk_id(); })
+        .get("vocabCount", [](GemmaTokenizerWrapper* w) { return (int)w->tok->vocab_count(); })
+        .method_raw("encode", js_gtok_encode, 2)
+        .method_raw("decode", js_gtok_decode, 1);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1327,6 +1416,156 @@ static JSValue js_loadMistral(JSContext* ctx, JSValueConst,
                 qjsbind::wrap<LMModelWrapper>(c, ls->mw.release()));
             JS_SetPropertyStr(c, out, "tokenizer",
                 qjsbind::wrap<MistralTokenizerWrapper>(c, ls->tw.release()));
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
+// Build the Gemma-2 model + tokenizer from a HuggingFace checkpoint directory
+// (config.json + tokenizer.json + one or more *.safetensors shards). Heavy +
+// blocking (file IO + GPU upload); shared by the sync and async loadGemma2
+// paths. Throws on error.
+static void buildGemma2(const std::string& dir, brotensor::Device dev,
+                        std::unique_ptr<LMModelWrapper>& mw_out,
+                        std::unique_ptr<GemmaTokenizerWrapper>& tw_out) {
+    namespace fs = std::filesystem;
+    auto cfg = brolm::gemma::Gemma2Config::from_safetensors_dir(dir);
+
+    // Collect *.safetensors shards, sorted for a deterministic load order.
+    std::vector<std::string> shard_paths;
+    for (const auto& entry : fs::directory_iterator(dir)) {
+        if (entry.path().extension() == ".safetensors")
+            shard_paths.push_back(entry.path().string());
+    }
+    if (shard_paths.empty())
+        throw std::runtime_error("no *.safetensors shards in " + dir);
+    std::sort(shard_paths.begin(), shard_paths.end());
+
+    std::vector<brotensor::safetensors::File> files;
+    files.reserve(shard_paths.size());
+    for (const auto& sp : shard_paths)
+        files.push_back(brotensor::safetensors::File::open(sp));
+    std::vector<const brotensor::safetensors::File*> shard_ptrs;
+    shard_ptrs.reserve(files.size());
+    for (const auto& f : files) shard_ptrs.push_back(&f);
+
+    auto mw = std::make_unique<LMModelWrapper>();
+    mw->device = dev;
+    {
+        brotensor::DeviceScope scope(dev);
+        auto dec = std::make_unique<GemmaDecoder>(cfg);
+        dec->m.load_weights(shard_ptrs);  // prefix "" — HF "model.<...>" names
+        mw->model = std::move(dec);
+    }
+    mw->weights_loaded = true;
+
+    const fs::path tok_json = fs::path(dir) / "tokenizer.json";
+    if (!fs::exists(tok_json))
+        throw std::runtime_error("tokenizer.json not found in " + dir);
+    auto tw = std::make_unique<GemmaTokenizerWrapper>();
+    tw->tok = std::make_unique<brolm::gemma::Tokenizer>(
+        brolm::gemma::Tokenizer::load(tok_json.string()));
+
+    std::fprintf(stderr, "[INFO] [lm] Gemma-2 loaded on %s (%zu shard(s))\n",
+                 deviceName(dev), shard_paths.size());
+    mw_out = std::move(mw);
+    tw_out = std::move(tw);
+}
+
+struct Gemma2LoadState {
+    std::string                            dir;
+    brotensor::Device                      dev = brotensor::Device::CPU;
+    std::unique_ptr<LMModelWrapper>        mw;
+    std::unique_ptr<GemmaTokenizerWrapper> tw;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.lm.loadGemma2(modelDir, opts?) -> { model, tokenizer }  (sync)
+//                                    -> AsyncHandle           (async, if opts.onReady)
+//   modelDir: an HF gemma-2-2b checkpoint dir (config.json + tokenizer.json +
+//   *.safetensors shards). The returned model is the shared LMModel class
+//   (model.family === "gemma2"); generate via model.generate / generateStream
+//   or the async bro.lm.generate, same as Qwen / Mistral.
+//   opts.device / opts.onReady / opts.onError: as loadQwen.
+static JSValue js_loadGemma2(JSContext* ctx, JSValueConst,
+                             int argc, JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx,
+            "loadGemma2(modelDir, opts?): path string required");
+
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    if (haveOpts) {
+        std::string err;
+        if (!parseDeviceOpt(ctx, argv[1], dev, err))
+            return JS_ThrowTypeError(ctx, "loadGemma2: %s", err.c_str());
+    }
+
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<LMModelWrapper>        mw;
+            std::unique_ptr<GemmaTokenizerWrapper> tw;
+            buildGemma2(dir, dev, mw, tw);
+            JSValue out = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, out, "model",
+                qjsbind::wrap<LMModelWrapper>(ctx, mw.release()));
+            JS_SetPropertyStr(ctx, out, "tokenizer",
+                qjsbind::wrap<GemmaTokenizerWrapper>(ctx, tw.release()));
+            return out;
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadGemma2: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<Gemma2LoadState>();
+    ls->dir      = dir;
+    ls->dev      = dev;
+    ls->hasReady = true;
+    ls->onReady  = JS_DupValue(ctx, onReady);
+    ls->hasError = JS_IsFunction(ctx, onError);
+    ls->onError  = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildGemma2(ls->dir, ls->dev, ls->mw, ls->tw);
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->mw) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadGemma2 failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = JS_NewObject(c);
+            JS_SetPropertyStr(c, out, "model",
+                qjsbind::wrap<LMModelWrapper>(c, ls->mw.release()));
+            JS_SetPropertyStr(c, out, "tokenizer",
+                qjsbind::wrap<GemmaTokenizerWrapper>(c, ls->tw.release()));
             JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
             if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
             JS_FreeValue(c, r);
@@ -2383,6 +2622,7 @@ static void registerNllbClass(JSContext* ctx) {
 void installLmBindings(JSContext* ctx) {
     registerTokenizerClass(ctx);
     registerMistralTokenizerClass(ctx);
+    registerGemmaTokenizerClass(ctx);
     registerModelClass(ctx);
     registerQwen35Class(ctx);
     registerNllbClass(ctx);
@@ -2404,6 +2644,8 @@ void installLmBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadQwen, "loadQwen", 2));
     JS_SetPropertyStr(ctx, lm, "loadMistral",
         JS_NewCFunction(ctx, js_loadMistral, "loadMistral", 2));
+    JS_SetPropertyStr(ctx, lm, "loadGemma2",
+        JS_NewCFunction(ctx, js_loadGemma2, "loadGemma2", 2));
     JS_SetPropertyStr(ctx, lm, "loadQwen35",
         JS_NewCFunction(ctx, js_loadQwen35, "loadQwen35", 2));
     JS_SetPropertyStr(ctx, lm, "loadNllb",

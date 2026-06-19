@@ -26,6 +26,7 @@
 #include <brodiffusion/scheduler.h>
 #include <brodiffusion/lcm_scheduler.h>
 #include <brodiffusion/flow_match_scheduler.h>
+#include <brodiffusion/scm_scheduler.h>
 #include <brodiffusion/model_config.h>
 #include <brolm/tokenizer.h>
 #include <brodiffusion/unet.h>
@@ -553,12 +554,16 @@ static JSValue js_pipeline_config(JSContext* ctx, JSValueConst this_val,
     const bdp::PipelineConfig& cfg = w->pipeline->config();
     const bool lcm  = std::holds_alternative<bdsch::LCMConfig>(cfg.scheduler);
     const bool flow = std::holds_alternative<bdsch::FlowMatchConfig>(cfg.scheduler);
-    const char* schedName = lcm ? "lcm" : (flow ? "flowmatch" : "ddim");
-    const bool flux = cfg.model_class == brodiffusion::ModelClass::Flux;
+    const bool scm  = std::holds_alternative<bdsch::SCMConfig>(cfg.scheduler);
+    const char* schedName = scm ? "scm" : lcm ? "lcm"
+                                              : (flow ? "flowmatch" : "ddim");
+    const char* modelClassName =
+        cfg.model_class == brodiffusion::ModelClass::Flux ? "Flux" :
+        cfg.model_class == brodiffusion::ModelClass::Sana ? "Sana" :
+                                                            "StableDiffusion";
 
     JSValue o = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, o, "modelClass",
-                      JS_NewString(ctx, flux ? "Flux" : "StableDiffusion"));
+    JS_SetPropertyStr(ctx, o, "modelClass", JS_NewString(ctx, modelClassName));
     JS_SetPropertyStr(ctx, o, "scheduler", JS_NewString(ctx, schedName));
     JS_SetPropertyStr(ctx, o, "timeCondProjDim",
                       JS_NewInt32(ctx, cfg.unet.time_cond_proj_dim));
@@ -743,8 +748,10 @@ static JSValue js_state_decode(JSContext* ctx, JSValueConst this_val,
                              getBool(ctx, argv[0], "includeFp32");
     try {
         std::vector<float> img = pipe->decode(sw->state);
-        return makeImageResult(ctx, img, sw->state.H_lat * 8,
-                               sw->state.W_lat * 8, includeFp32);
+        // KL-VAE upsamples 8x (SD / Flux); Sana's DC-AE upsamples 32x.
+        const int scale = pipe->vae_scale_factor();
+        return makeImageResult(ctx, img, sw->state.H_lat * scale,
+                               sw->state.W_lat * scale, includeFp32);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "decode: %s", e.what());
     }
