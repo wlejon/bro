@@ -504,6 +504,104 @@ static JSValue js_pipeline_clearControlNets(JSContext* ctx, JSValueConst this_va
     return JS_UNDEFINED;
 }
 
+// loadControlDictionary(path) — load a conditioning-space control dictionary
+// (a BCD1 file of named direction axes built offline). Replaces any loaded
+// axes and resets weights. The axes steer generate()/prime() once weighted via
+// setControl(). The dictionary's dim must match the model's text encoder (Gemma
+// 2304 for Sana); a mismatch throws at the next generate()/prime().
+static JSValue js_pipeline_loadControlDictionary(JSContext* ctx, JSValueConst this_val,
+                                                 int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "loadControlDictionary: not a Pipeline");
+    std::string path;
+    if (argc < 1 || !argStr(ctx, argv[0], path))
+        return JS_ThrowTypeError(ctx, "loadControlDictionary(path): path string required");
+    try {
+        w->pipeline->cond_control().load(path);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "loadControlDictionary: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+// setControl(name, alpha) or setControl({name: alpha, ...}) — set per-axis
+// control weights (natural units; the applied vector is alpha * scale * dir).
+// Unknown axis names throw. Weights persist until changed or clearControl().
+static JSValue js_pipeline_setControl(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "setControl: not a Pipeline");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "setControl(name, alpha) or setControl(map) required");
+
+    // Form 1: (string name, number alpha).
+    std::string name;
+    if (argStr(ctx, argv[0], name)) {
+        double alpha = 0.0;
+        if (argc < 2 || JS_ToFloat64(ctx, &alpha, argv[1]) != 0)
+            return JS_ThrowTypeError(ctx, "setControl(name, alpha): numeric alpha required");
+        try {
+            w->pipeline->cond_control().set(name, (float)alpha);
+        } catch (const std::exception& e) {
+            return JS_ThrowTypeError(ctx, "setControl: %s", e.what());
+        }
+        return JS_UNDEFINED;
+    }
+
+    // Form 2: ({name: alpha, ...}) object map.
+    if (!JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "setControl: expected a name string or an object map");
+    JSPropertyEnum* tab = nullptr;
+    uint32_t len = 0;
+    if (JS_GetOwnPropertyNames(ctx, &tab, &len, argv[0],
+                               JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) != 0)
+        return JS_ThrowInternalError(ctx, "setControl: cannot enumerate map");
+    std::string err;
+    for (uint32_t i = 0; i < len; ++i) {
+        JSValue key = JS_AtomToString(ctx, tab[i].atom);
+        const char* kc = JS_ToCString(ctx, key);
+        JSValue val = JS_GetProperty(ctx, argv[0], tab[i].atom);
+        double alpha = 0.0;
+        if (kc && JS_ToFloat64(ctx, &alpha, val) == 0) {
+            try {
+                w->pipeline->cond_control().set(kc, (float)alpha);
+            } catch (const std::exception& e) {
+                if (err.empty()) err = e.what();
+            }
+        }
+        if (kc) JS_FreeCString(ctx, kc);
+        JS_FreeValue(ctx, val);
+        JS_FreeValue(ctx, key);
+        JS_FreeAtom(ctx, tab[i].atom);
+    }
+    js_free(ctx, tab);
+    if (!err.empty()) return JS_ThrowTypeError(ctx, "setControl: %s", err.c_str());
+    return JS_UNDEFINED;
+}
+
+// clearControl() — reset every control-axis weight to zero (no injection). The
+// loaded dictionary is kept; only the weights are cleared.
+static JSValue js_pipeline_clearControl(JSContext* ctx, JSValueConst this_val,
+                                        int, JSValueConst*) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "clearControl: not a Pipeline");
+    w->pipeline->cond_control().clear();
+    return JS_UNDEFINED;
+}
+
+// controlAxes() -> [name, ...] — the names of the loaded dictionary's axes
+// (empty array if none loaded). For introspection / building UI.
+static JSValue js_pipeline_controlAxes(JSContext* ctx, JSValueConst this_val,
+                                       int, JSValueConst*) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "controlAxes: not a Pipeline");
+    const auto& names = w->pipeline->cond_control().names();
+    JSValue arr = JS_NewArray(ctx);
+    for (uint32_t i = 0; i < names.size(); ++i)
+        JS_SetPropertyUint32(ctx, arr, i, JS_NewString(ctx, names[i].c_str()));
+    return arr;
+}
+
 // generate(prompt, opts) -> { width, height, data } — one-shot txt2img.
 // Blocking; intended for a worker thread. The main thread should drive the
 // step-wise prime()/stepOnce()/decode() API instead.
@@ -619,7 +717,11 @@ static void registerPipelineClass(JSContext* ctx) {
         .method_raw("generate",           js_pipeline_generate,           2)
         .method_raw("prime",              js_pipeline_prime,              2)
         .method_raw("numXAttnBlocks",     js_pipeline_numXAttnBlocks,     0)
-        .method_raw("config",             js_pipeline_config,             0);
+        .method_raw("config",             js_pipeline_config,             0)
+        .method_raw("loadControlDictionary", js_pipeline_loadControlDictionary, 1)
+        .method_raw("setControl",         js_pipeline_setControl,         2)
+        .method_raw("clearControl",       js_pipeline_clearControl,       0)
+        .method_raw("controlAxes",        js_pipeline_controlAxes,        0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
