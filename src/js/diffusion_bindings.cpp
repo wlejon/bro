@@ -194,6 +194,13 @@ static std::vector<float> downloadTensorFloats(const brotensor::Tensor& t) {
             out[i] = brotensor::fp16_bits_to_fp32(bits[i]);
         return out;
     }
+    if (t.dtype == brotensor::Dtype::BF16) {
+        std::vector<std::uint16_t> bits = t.to_host_vector_bf16();
+        std::vector<float> out(bits.size());
+        for (std::size_t i = 0; i < bits.size(); ++i)
+            out[i] = brotensor::bf16_bits_to_fp32(bits[i]);
+        return out;
+    }
     return t.to_host_vector();
 }
 
@@ -632,6 +639,77 @@ static JSValue js_pipeline_controlAxes(JSContext* ctx, JSValueConst this_val,
     return arr;
 }
 
+// encodeConditioning(prompt) -> { rows, cols, data: Float32Array }
+//   Encode `prompt` into the model's text-conditioning sequence — the (L, hidden)
+//   embeddings the denoiser cross-attends to (row 0 = BOS). Downloaded to host
+//   FP32. The primitive for building control directions in the encoder's own
+//   space, e.g. a diff-of-means axis from two phrase sets: mean the content rows
+//   (skip row 0) of each phrase, difference the set means, normalize.
+static JSValue js_pipeline_encodeConditioning(JSContext* ctx, JSValueConst this_val,
+                                              int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "encodeConditioning: not a Pipeline");
+    if (!w->weights_loaded)
+        return JS_ThrowInternalError(ctx, "encodeConditioning: call loadWeights() first");
+    std::string prompt;
+    if (argc < 1 || !argStr(ctx, argv[0], prompt))
+        return JS_ThrowTypeError(ctx, "encodeConditioning(prompt): prompt string required");
+    try {
+        brotensor::Tensor emb = w->pipeline->encode_conditioning(prompt);
+        std::vector<float> host = downloadTensorFloats(emb);
+        JSValue out = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, out, "rows", JS_NewInt32(ctx, emb.rows));
+        JS_SetPropertyStr(ctx, out, "cols", JS_NewInt32(ctx, emb.cols));
+        JS_SetPropertyStr(ctx, out, "data", qjsbind::make_float32_array(ctx, host));
+        return out;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "encodeConditioning: %s", e.what());
+    }
+}
+
+// setControlVector(name, dir, alpha, scale=1) — register/replace a runtime axis
+//   from an explicit direction (a Float32Array of width = encoder hidden dim)
+//   and set its weight. `dir` is taken as-is (caller normalizes / MASSIVE-zeros
+//   per the recipe). Coexists with loaded dictionary axes; the injected vector
+//   is alpha * scale * dir. Unknown-length dir throws at the next generate().
+static JSValue js_pipeline_setControlVector(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "setControlVector: not a Pipeline");
+    std::string name;
+    if (argc < 1 || !argStr(ctx, argv[0], name))
+        return JS_ThrowTypeError(ctx, "setControlVector(name, dir, alpha, scale?): name required");
+    std::size_t count = 0;
+    const float* dir = getFloatArray(ctx, (argc >= 2) ? argv[1] : JS_UNDEFINED, count);
+    if (!dir || count == 0)
+        return JS_ThrowTypeError(ctx, "setControlVector: dir must be a non-empty Float32Array");
+    double alpha = 0.0;
+    if (argc < 3 || JS_ToFloat64(ctx, &alpha, argv[2]) != 0)
+        return JS_ThrowTypeError(ctx, "setControlVector: numeric alpha required");
+    double scale = 1.0;
+    if (argc >= 4 && JS_IsNumber(argv[3])) JS_ToFloat64(ctx, &scale, argv[3]);
+    try {
+        std::vector<float> v(dir, dir + count);
+        w->pipeline->cond_control().set_vector(name, (float)alpha, v, (float)scale);
+    } catch (const std::exception& e) {
+        return JS_ThrowTypeError(ctx, "setControlVector: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+// removeControl(name) — remove a single axis (runtime or dictionary). No-op if
+// unknown. Lets the lab drop a built search axis without reloading.
+static JSValue js_pipeline_removeControl(JSContext* ctx, JSValueConst this_val,
+                                         int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "removeControl: not a Pipeline");
+    std::string name;
+    if (argc < 1 || !argStr(ctx, argv[0], name))
+        return JS_ThrowTypeError(ctx, "removeControl(name): name string required");
+    w->pipeline->cond_control().remove(name);
+    return JS_UNDEFINED;
+}
+
 // generate(prompt, opts) -> { width, height, data } — one-shot txt2img.
 // Blocking; intended for a worker thread. The main thread should drive the
 // step-wise prime()/stepOnce()/decode() API instead.
@@ -751,7 +829,10 @@ static void registerPipelineClass(JSContext* ctx) {
         .method_raw("loadControlDictionary", js_pipeline_loadControlDictionary, 1)
         .method_raw("setControl",         js_pipeline_setControl,         2)
         .method_raw("clearControl",       js_pipeline_clearControl,       0)
-        .method_raw("controlAxes",        js_pipeline_controlAxes,        0);
+        .method_raw("controlAxes",        js_pipeline_controlAxes,        0)
+        .method_raw("encodeConditioning", js_pipeline_encodeConditioning, 1)
+        .method_raw("setControlVector",   js_pipeline_setControlVector,   4)
+        .method_raw("removeControl",      js_pipeline_removeControl,      1);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
