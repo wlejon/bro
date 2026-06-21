@@ -1,4 +1,5 @@
 #include "layout/el_textarea.h"
+#include "layout/draw_traversal.h"
 #include "dom/element.h"
 #include "render/renderer.h"
 #include "util/platform.h"
@@ -282,8 +283,21 @@ void ElTextarea::draw(render::Renderer* renderer,
     renderer_->save();
     renderer_->setClip(x, y, w, h);
 
+    // Honor the element's computed `color` for the value text (so app themes
+    // with light text on dark fields read correctly) and the caret. Fall back
+    // to black only when no color is set. The placeholder is always a muted
+    // gray regardless of the theme color.
+    bromath::Color textColor = cfromColor8({0, 0, 0, 255});
+    if (elem_) {
+        auto& style = elem_->computedStyle();
+        auto cIt = style.find("color");
+        if (cIt != style.end() && !cIt->second.empty()) {
+            bromath::Color parsed;
+            if (DrawTraversal::tryParseColor(cIt->second, parsed)) textColor = parsed;
+        }
+    }
     bromath::Color color = isPlaceholder ? cfromColor8({128, 128, 128, 180})
-                                        : cfromColor8({0, 0, 0, 255});
+                                        : textColor;
 
     float baseX = x;
     float baseY = y - scrollY_;
@@ -311,7 +325,7 @@ void ElTextarea::draw(render::Renderer* renderer,
 
         float cursorTop = baseY + cursorLine * lineHeight;
         float cursorBottom = cursorTop + lineHeight;
-        renderer_->drawLine(cursorX, cursorTop, cursorX, cursorBottom, cfromColor8({0, 0, 0, 255}), 1.0f);
+        renderer_->drawLine(cursorX, cursorTop, cursorX, cursorBottom, textColor, 1.0f);
     }
 
     renderer_->restore();

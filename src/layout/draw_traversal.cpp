@@ -1040,9 +1040,16 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     // ::before pseudo content (drawn before children)
     if (visible) drawPseudo(elem, "before", childOffsetX, childOffsetY);
 
-    // Draw composed children (shadow DOM + slot replacement)
-    for (auto* child : elem->composedChildNodes())
-        drawNode(child, childOffsetX, childOffsetY);
+    // Draw composed children (shadow DOM + slot replacement).
+    // A <textarea> renders its value through ElTextarea (below); its DOM text
+    // children are the *source* of that value, not separate flow content.
+    // Painting them here too double-draws the text — once in the element's
+    // computed color via this walk, once again by the control — which reads
+    // as the placeholder/value "ghosting" behind the real text.
+    if (!elem->textareaControl()) {
+        for (auto* child : elem->composedChildNodes())
+            drawNode(child, childOffsetX, childOffsetY);
+    }
 
     // ::after pseudo content (drawn after children)
     if (visible) drawPseudo(elem, "after", childOffsetX, childOffsetY);
