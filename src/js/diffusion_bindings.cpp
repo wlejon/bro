@@ -17,6 +17,7 @@
 
 #include "js/diffusion_bindings.h"
 #include "util/interrupt.h"
+#include "util/asset_mounts.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -101,6 +102,35 @@ static bool argStr(JSContext* ctx, JSValueConst v, std::string& out) {
     out = s;
     JS_FreeCString(ctx, s);
     return true;
+}
+
+// ── app-relative path resolution ───────────────────────────────────────────
+// Set per app load by the engine (and inherited by workers). Lets apps point at
+// model dirs, weight files, LoRAs and control dictionaries with `/app/...` and
+// app-relative paths instead of brittle absolute machine paths. Mirrors the
+// rules in image_bindings / scene_bindings: Windows drive paths and absolute
+// paths pass through; leading-slash paths consult engine mounts (`/app`, `/lib`,
+// …); everything else is relative to the app directory.
+// thread_local because the same binding is installed on the main thread and on
+// each worker thread (a worker owns its own Pipeline and resolves its own
+// paths). Per-thread state keeps the contexts independent and avoids any
+// cross-thread race on these globals — no lock needed.
+static thread_local std::string s_basePath;
+static thread_local const util::AssetMounts* s_mounts = nullptr;
+
+static std::string resolveAppPath(const std::string& src) {
+    if (src.size() >= 2 && src[1] == ':') return src;          // C:\... drive
+    if (!src.empty() && (src[0] == '/' || src[0] == '\\')) {
+        if (s_mounts) {
+            std::string m = s_mounts->resolve(src);
+            if (!m.empty()) return m;
+        }
+        return src;
+    }
+    if (s_basePath.empty()) return src;
+    std::string path = s_basePath;
+    if (path.back() != '/' && path.back() != '\\') path += '/';
+    return path + src;
 }
 
 static void getInt(JSContext* ctx, JSValueConst obj, const char* key, int& dst) {
@@ -353,7 +383,7 @@ static JSValue js_loadModel(JSContext* ctx, JSValueConst, int argc,
         // from_model_dir() returns by value; Pipeline is move-only, so the
         // temporary moves into the heap-allocated wrapper slot.
         w->pipeline = std::make_unique<bdp::Pipeline>(
-            bdp::Pipeline::from_model_dir(dir));
+            bdp::Pipeline::from_model_dir(resolveAppPath(dir)));
         w->weights_loaded = true;
         return qjsbind::wrap<PipelineWrapper>(ctx, w.release());
     } catch (const std::exception& e) {
@@ -387,19 +417,19 @@ static JSValue js_pipeline_loadWeights(JSContext* ctx, JSValueConst this_val,
             if (!argStr(ctx, argv[1], p1) || !argStr(ctx, argv[2], p2))
                 return JS_ThrowTypeError(ctx,
                     "loadWeights(textPath, unetPath, vaePath): all three must be strings");
-            bds::File tf = bds::File::open(p0);
-            bds::File uf = bds::File::open(p1);
-            bds::File vf = bds::File::open(p2);
+            bds::File tf = bds::File::open(resolveAppPath(p0));
+            bds::File uf = bds::File::open(resolveAppPath(p1));
+            bds::File vf = bds::File::open(resolveAppPath(p2));
             w->pipeline->load_weights(tf, uf, vf);
         } else if (argc == 2 && JS_IsObject(argv[1])) {
             std::string tp, up, vp;
             getStr(ctx, argv[1], "textPrefix", tp);
             getStr(ctx, argv[1], "unetPrefix", up);
             getStr(ctx, argv[1], "vaePrefix",  vp);
-            bds::File f = bds::File::open(p0);
+            bds::File f = bds::File::open(resolveAppPath(p0));
             w->pipeline->load_weights(f, tp, up, vp);
         } else {
-            bds::File f = bds::File::open(p0);
+            bds::File f = bds::File::open(resolveAppPath(p0));
             w->pipeline->load_weights(f);
         }
         w->weights_loaded = true;
@@ -425,7 +455,7 @@ static JSValue js_pipeline_applyLora(JSContext* ctx, JSValueConst this_val,
     if (argc >= 2 && JS_IsNumber(argv[1])) JS_ToFloat64(ctx, &scale, argv[1]);
 
     try {
-        bds::File f = bds::File::open(path);
+        bds::File f = bds::File::open(resolveAppPath(path));
         w->pipeline->apply_lora(f, (float)scale);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "applyLora: %s", e.what());
@@ -454,7 +484,7 @@ static JSValue js_pipeline_addControlNet(JSContext* ctx, JSValueConst this_val,
             "addControlNet(path, cfg?): path string required");
 
     try {
-        bds::File f = bds::File::open(path);
+        bds::File f = bds::File::open(resolveAppPath(path));
         int idx;
         if (argc >= 2 && JS_IsObject(argv[1])) {
             brodiffusion::controlnet::ControlNetConfig cfg;
@@ -517,7 +547,7 @@ static JSValue js_pipeline_loadControlDictionary(JSContext* ctx, JSValueConst th
     if (argc < 1 || !argStr(ctx, argv[0], path))
         return JS_ThrowTypeError(ctx, "loadControlDictionary(path): path string required");
     try {
-        w->pipeline->cond_control().load(path);
+        w->pipeline->cond_control().load(resolveAppPath(path));
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "loadControlDictionary: %s", e.what());
     }
@@ -941,6 +971,12 @@ void installDiffusionBindings(JSContext* ctx) {
 void cleanupDiffusionBindings(JSContext* /*ctx*/) {
     // No-op: qjsbind owns the class finalizers; bro.diffusion is reached from
     // globalThis and swept by runtime teardown.
+}
+
+void setDiffusionAppContext(const std::string& basePath,
+                            const util::AssetMounts* mounts) {
+    s_basePath = basePath;
+    s_mounts = mounts;
 }
 
 } // namespace bro::js

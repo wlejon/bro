@@ -249,6 +249,7 @@ void Worker::threadFunc()
     // sibling). Same binding as the main context; this worker owns its own
     // Pipeline. ---
     installDiffusionBindings(ctx);
+    setDiffusionAppContext(basePath_, mounts_);
 
     // --- 3b''''. Install bro.lm (Qwen3 LLM inference, brolm sibling).
     // Same binding as the main context; this worker owns its own model. ---
