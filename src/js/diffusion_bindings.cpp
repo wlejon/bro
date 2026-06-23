@@ -764,9 +764,10 @@ static JSValue js_pipeline_config(JSContext* ctx, JSValueConst this_val,
     const char* schedName = scm ? "scm" : lcm ? "lcm"
                                               : (flow ? "flowmatch" : "ddim");
     const char* modelClassName =
-        cfg.model_class == brodiffusion::ModelClass::Flux ? "Flux" :
-        cfg.model_class == brodiffusion::ModelClass::Sana ? "Sana" :
-                                                            "StableDiffusion";
+        cfg.model_class == brodiffusion::ModelClass::Flux   ? "Flux" :
+        cfg.model_class == brodiffusion::ModelClass::Sana   ? "Sana" :
+        cfg.model_class == brodiffusion::ModelClass::PixArt ? "PixArt" :
+                                                              "StableDiffusion";
 
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "modelClass", JS_NewString(ctx, modelClassName));
