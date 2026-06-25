@@ -816,6 +816,68 @@ static JSValue js_pipeline_prime(JSContext* ctx, JSValueConst this_val,
     }
 }
 
+// setIdentityAnchor(prompt, opts?) -> image — capture a reference identity from
+// one full Sana generation, then arm the reference-attention seam. The returned
+// image IS the anchor (e.g. a neutral portrait). Subsequent generate()/prime()
+// calls inject the anchor's appearance (scaled by setIdentityWeight) while each
+// prompt still sets pose / expression. Match opts (steps, size, seed) to the
+// later generations for tight alignment. Sana only (throws otherwise).
+static JSValue js_pipeline_setIdentityAnchor(JSContext* ctx, JSValueConst this_val,
+                                             int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "setIdentityAnchor: not a Pipeline");
+    if (!w->weights_loaded)
+        return JS_ThrowInternalError(ctx, "setIdentityAnchor: call loadWeights() first");
+    std::string prompt;
+    if (argc < 1 || !argStr(ctx, argv[0], prompt))
+        return JS_ThrowTypeError(ctx, "setIdentityAnchor(prompt, opts?): prompt string required");
+    JSValueConst optsv = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    bdp::GenerateOptions opts = parseGenerateOptions(ctx, optsv);
+    const bool includeFp32 = JS_IsObject(optsv) && getBool(ctx, optsv, "includeFp32");
+    opts.should_cancel = bro::util::interrupted;
+    try {
+        std::vector<float> img = w->pipeline->capture_identity_anchor(prompt, opts);
+        return makeImageResult(ctx, img, opts.height, opts.width, includeFp32);
+    } catch (const bdp::GenerateCancelled&) {
+        JSValue out = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, out, "cancelled", JS_TRUE);
+        return out;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "setIdentityAnchor: %s", e.what());
+    }
+}
+
+// setIdentityWeight(weight) — injection strength for the armed identity anchor.
+// 0 disables (even with an anchor set); ~1 holds identity faithfully; higher
+// over-anchors. Takes effect on the next generate()/prime(). Sana only.
+static JSValue js_pipeline_setIdentityWeight(JSContext* ctx, JSValueConst this_val,
+                                             int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "setIdentityWeight: not a Pipeline");
+    double wt = 0.0;
+    if (argc < 1 || JS_ToFloat64(ctx, &wt, argv[0]) != 0)
+        return JS_ThrowTypeError(ctx, "setIdentityWeight(weight): numeric weight required");
+    w->pipeline->set_identity_weight((float)wt);
+    return JS_UNDEFINED;
+}
+
+// hasIdentityAnchor() -> bool — whether an anchor has been captured + armed.
+static JSValue js_pipeline_hasIdentityAnchor(JSContext* ctx, JSValueConst this_val,
+                                             int, JSValueConst*) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "hasIdentityAnchor: not a Pipeline");
+    return JS_NewBool(ctx, w->pipeline->has_identity_anchor());
+}
+
+// clearIdentityAnchor() — drop the cached anchor and zero the weight.
+static JSValue js_pipeline_clearIdentityAnchor(JSContext* ctx, JSValueConst this_val,
+                                               int, JSValueConst*) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "clearIdentityAnchor: not a Pipeline");
+    w->pipeline->clear_identity_anchor();
+    return JS_UNDEFINED;
+}
+
 static void registerPipelineClass(JSContext* ctx) {
     qjsbind::Class<PipelineWrapper>(ctx, "DiffusionPipeline", qjsbind::NoGlobal)
         .method_raw("loadWeights",        js_pipeline_loadWeights,        3)
@@ -833,7 +895,11 @@ static void registerPipelineClass(JSContext* ctx) {
         .method_raw("controlAxes",        js_pipeline_controlAxes,        0)
         .method_raw("encodeConditioning", js_pipeline_encodeConditioning, 1)
         .method_raw("setControlVector",   js_pipeline_setControlVector,   4)
-        .method_raw("removeControl",      js_pipeline_removeControl,      1);
+        .method_raw("removeControl",      js_pipeline_removeControl,      1)
+        .method_raw("setIdentityAnchor",  js_pipeline_setIdentityAnchor,  2)
+        .method_raw("setIdentityWeight",  js_pipeline_setIdentityWeight,  1)
+        .method_raw("hasIdentityAnchor",  js_pipeline_hasIdentityAnchor,  0)
+        .method_raw("clearIdentityAnchor", js_pipeline_clearIdentityAnchor, 0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

@@ -262,6 +262,50 @@ class Pipeline {
    *            hasControlNet:boolean}}
    */
   config() {}
+
+  /**
+   * Capture a reference identity and arm Sana's training-free reference-
+   * attention seam. Runs ONE full generation of `prompt` (returned as the
+   * anchor image, e.g. a neutral portrait) while recording the DiT's per-step
+   * linear-attention summaries. Every subsequent generate()/prime() then adds
+   * those summaries back — scaled by setIdentityWeight() — so the subject stays
+   * the same person while the prompt and control axes drive pose/expression.
+   *
+   * Sana only (throws on other model classes). The summaries are token-count
+   * independent, so the anchor and later generations may differ in size; match
+   * `steps` for tight alignment (a shorter later run reuses the anchor's final
+   * step). Sharing `seed` with the target tightens identity coherence.
+   *
+   * @param {string} prompt - the face/subject to hold (e.g. a neutral portrait)
+   * @param {object} [opts] - GenerateOptions; use the same steps/seed as later runs
+   * @returns {ImageResult} the anchor image — or { cancelled: true }
+   *
+   * @example
+   *   const neutral = pipe.setIdentityAnchor('a portrait of a woman, neutral', { steps: 8, seed: 1 });
+   *   pipe.setIdentityWeight(1.0);
+   *   pipe.setControl('smile', 3.0);           // push emotion to the extreme…
+   *   const held = pipe.generate('a portrait of a woman', { steps: 8, seed: 1 }); // …face holds
+   */
+  setIdentityAnchor(prompt, opts) {}
+
+  /**
+   * Injection strength for the armed identity anchor. 0 (default) disables
+   * injection even with an anchor set — a true no-op; ~1 holds identity
+   * faithfully; higher over-anchors (identity locked, the edit damped). Takes
+   * effect on the next generate()/prime(). Sana only.
+   * @param {number} weight
+   */
+  setIdentityWeight(weight) {}
+
+  /**
+   * @returns {boolean} whether an identity anchor has been captured + armed.
+   */
+  hasIdentityAnchor() {}
+
+  /**
+   * Drop the cached anchor and zero the weight (frees the summary cache).
+   */
+  clearIdentityAnchor() {}
 }
 
 
