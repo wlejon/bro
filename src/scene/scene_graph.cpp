@@ -295,9 +295,12 @@ void main() {
     vec3 baseColor;
     float baseAlpha;
     if (uUseTexture == 1) {
+        // Texture composes with the per-vertex tint (vColor is forced to white
+        // when the mesh has no vertex colors, so this is a no-op there). Lets a
+        // textured mesh still carry per-vertex shading — e.g. tile AO.
         vec4 tex = texture(uBaseColorTex, vUV);
-        baseColor = tex.rgb * uColor.rgb;
-        baseAlpha = tex.a   * uColor.a;
+        baseColor = tex.rgb * uColor.rgb * vColor.rgb;
+        baseAlpha = tex.a   * uColor.a   * vColor.a;
     } else if (uUseVertexColor == 1) {
         baseColor = vColor.rgb;
         baseAlpha = vColor.a;
@@ -4136,8 +4139,9 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
     glUniform1f(uNearClip_, mesh->nearClipDist());
     if (uWindMask_ >= 0) glUniform1f(uWindMask_, mesh->windMask());
 
-    // Bind baseColor texture if present. Texture wins over vertex-color when
-    // both are set — matches glTF PBR "baseColorTexture * baseColorFactor".
+    // Bind baseColor texture if present. Texture composes with the baseColor
+    // factor and per-vertex tint — matches glTF "baseColorTexture *
+    // baseColorFactor", with vertex color folded in for tile/terrain shading.
     bool bindTex = mesh->hasBaseColorTexture();
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, bindTex ? mesh->baseColorTextureId() : fallback2D_);

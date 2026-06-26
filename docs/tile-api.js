@@ -16,10 +16,15 @@
 // quad at its elevation height, plus vertical CLIFF quads on any edge where the
 // neighbour sits lower — or is empty / off the map, dropping to `baseLevel`.
 // Top-face corners are darkened by an ambient-occlusion term from taller
-// neighbours, so steps and valleys read with contact shading. Per-cell colour
-// comes from `palette` indexed by the ground-layer tile id. (Tileset-atlas
-// texturing, autotiling, multi-layer compositing, animation, object layers and
-// ray→cell picking build on this foundation.)
+// neighbours, so steps and valleys read with contact shading.
+//
+// Surface appearance is one of two modes:
+//   • Palette   — `palette` gives an RGBA per ground-tile id (flat colour).
+//   • Atlas     — `atlas` (a tileset image) maps each ground-tile id to an
+//                 atlas cell on the top faces, with a `cliffCell` on the sides.
+//                 The AO term rides in per-vertex shading, so steps still read.
+// (Autotiling, multi-layer compositing, animation, object layers and ray→cell
+// picking build on this foundation.)
 
 class SceneGraph {
   /**
@@ -42,6 +47,16 @@ class SceneGraph {
    *   world.fillElevation(4, 4, 11, 11, 3);     // raised 3 levels
    *   world.rebuild();                          // remesh dirty chunks
    *
+   * @example
+   *   // Tileset-atlas texturing: a 4-wide atlas; tile id N samples cell N.
+   *   const world = scene.createTileWorld({
+   *     width: 32, height: 32, heightStep: 0.5,
+   *     atlas: 'tiles.png',          // app-relative image path
+   *     atlasColumns: 4, atlasRows: 4,
+   *     cliffCell: 2,                // dirt-side cell for all cliffs
+   *     atlasInset: 0.5,             // half-texel inset, fights cell bleeding
+   *   });
+   *
    * @param {Object} opts
    * @param {number} [opts.width=16]  - grid size in cells (X)
    * @param {number} [opts.height=16] - grid size in cells (Z)
@@ -55,7 +70,24 @@ class SceneGraph {
    * @param {number} [opts.aoStrength=0.45]- corner ambient occlusion, 0..1
    * @param {number[]} [opts.origin=[0,0,0]] - world position of the grid origin
    * @param {Float32Array|number[]} [opts.palette] - RGBA per ground-tile id
-   *        (4 floats each); index 0 is empty. Absent → flat grey.
+   *        (4 floats each); index 0 is empty. Absent → flat grey. Ignored when
+   *        an atlas is set.
+   *
+   * Tileset atlas (optional — replaces palette colour with a texture):
+   * @param {string} [opts.atlas] - app-relative path to a tileset image. The
+   *        atlas is a regular grid of cells (see atlasColumns/atlasRows).
+   * @param {Uint8Array} [opts.atlasPixels] - raw RGBA8 alternative to `atlas`;
+   *        requires `atlasWidth` + `atlasHeight`.
+   * @param {number} [opts.atlasWidth] - atlas pixel width (with atlasPixels)
+   * @param {number} [opts.atlasHeight] - atlas pixel height (with atlasPixels)
+   * @param {number} [opts.atlasColumns=1] - atlas cells per row
+   * @param {number} [opts.atlasRows=1] - atlas cell rows
+   * @param {number[]} [opts.tileAtlas] - ground tile id → atlas cell index.
+   *        Absent → cell index equals the tile id (id 1 draws cell 1).
+   * @param {number} [opts.cliffCell=-1] - atlas cell for vertical cliff faces;
+   *        -1 reuses each column's top cell.
+   * @param {number} [opts.atlasInset=0] - UV inset per cell edge in texels, to
+   *        fight bilinear/mip bleeding between neighbouring cells.
    * @returns {TileWorld}
    */
   createTileWorld(opts) {}

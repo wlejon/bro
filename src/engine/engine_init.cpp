@@ -580,6 +580,7 @@ Engine::Engine(const EngineConfig& config)
     js::ImageBitmapBindings::install(jsRuntime_->getContext());
     js::VideoBindings::install(jsRuntime_->getContext(), manifest_.basePath);
     js::SceneBindings::setAppContext(manifest_.basePath, &assetMounts_);
+    js::TileBindings::setAppContext(manifest_.basePath, &assetMounts_);
     js::setDiffusionAppContext(manifest_.basePath, &assetMounts_);
     // screenshotCanvas works on both GPU-backed (windowed) and raster
     // (headless) Skia surfaces, so it's installed in both modes — apps can

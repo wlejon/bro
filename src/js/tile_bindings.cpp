@@ -4,6 +4,8 @@
 
 #include "scene/tile_world.h"
 #include "scene/scene_graph.h"
+#include "util/asset_mounts.h"
+#include "broimage/decode.h"
 
 #include <memory>
 #include <string>
@@ -11,6 +13,28 @@
 #include <vector>
 
 namespace bro::js {
+
+// -------------------------------------------------------------------------
+// App-relative path resolution for atlas images (mirrors scene_bindings).
+// -------------------------------------------------------------------------
+
+static std::string s_basePath;
+static const util::AssetMounts* s_mounts = nullptr;
+
+static std::string resolveAppPath(const std::string& src) {
+    if (src.size() >= 2 && src[1] == ':') return src;       // Windows C:\...
+    if (!src.empty() && (src[0] == '/' || src[0] == '\\')) {
+        if (s_mounts) {
+            std::string m = s_mounts->resolve(src);
+            if (!m.empty()) return m;
+        }
+        return src;
+    }
+    if (s_basePath.empty()) return src;
+    std::string path = s_basePath;
+    if (path.back() != '/' && path.back() != '\\') path += '/';
+    return path + src;
+}
 
 // -------------------------------------------------------------------------
 // Helpers (local copies — same pattern as terrain_bindings.cpp)
@@ -140,6 +164,64 @@ static scene::TileWorldConfig parseTileConfig(JSContext* ctx, JSValueConst opts)
     readFloatArray(ctx, pal, cfg.palette);
     JS_FreeValue(ctx, pal);
 
+    // ---- tileset atlas --------------------------------------------------
+    cfg.atlasColumns = jsGetInt(ctx, opts, "atlasColumns", cfg.atlasColumns);
+    cfg.atlasRows    = jsGetInt(ctx, opts, "atlasRows", cfg.atlasRows);
+    cfg.cliffCell    = jsGetInt(ctx, opts, "cliffCell", cfg.cliffCell);
+    cfg.atlasInset   = (float)jsGetProp(ctx, opts, "atlasInset", cfg.atlasInset);
+
+    // `atlas` is a path to an image decoded here; or supply raw `atlasPixels`
+    // (Uint8Array RGBA) plus `atlasWidth`/`atlasHeight`.
+    JSValue atlas = JS_GetPropertyStr(ctx, opts, "atlas");
+    if (JS_IsString(atlas)) {
+        const char* s = JS_ToCString(ctx, atlas);
+        if (s) {
+            broimage::Image img;
+            std::string err;
+            if (broimage::decode_file(resolveAppPath(s), img, &err) &&
+                img.width > 0 && img.height > 0) {
+                cfg.atlasWidth  = img.width;
+                cfg.atlasHeight = img.height;
+                cfg.atlasPixels = std::move(img.pixels);
+            }
+            JS_FreeCString(ctx, s);
+        }
+    } else {
+        JSValue px = JS_GetPropertyStr(ctx, opts, "atlasPixels");
+        if (!JS_IsUndefined(px) && !JS_IsNull(px)) {
+            size_t offset = 0, byteLen = 0, bpe = 0;
+            JSValue abuf = JS_GetTypedArrayBuffer(ctx, px, &offset, &byteLen, &bpe);
+            if (!JS_IsException(abuf)) {
+                size_t abufLen = 0;
+                uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+                if (raw && byteLen > 0) {
+                    cfg.atlasWidth  = jsGetInt(ctx, opts, "atlasWidth", 0);
+                    cfg.atlasHeight = jsGetInt(ctx, opts, "atlasHeight", 0);
+                    cfg.atlasPixels.assign(raw + offset, raw + offset + byteLen);
+                }
+            }
+            JS_FreeValue(ctx, abuf);
+        }
+        JS_FreeValue(ctx, px);
+    }
+    JS_FreeValue(ctx, atlas);
+
+    // tileAtlas: ground tile id -> atlas cell index.
+    JSValue ta = JS_GetPropertyStr(ctx, opts, "tileAtlas");
+    if (JS_IsArray(ta)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, ta, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        cfg.tileAtlas.resize(len);
+        for (int32_t i = 0; i < len; ++i) {
+            JSValue el = JS_GetPropertyUint32(ctx, ta, i);
+            int32_t c = 0; JS_ToInt32(ctx, &c, el);
+            cfg.tileAtlas[i] = c;
+            JS_FreeValue(ctx, el);
+        }
+    }
+    JS_FreeValue(ctx, ta);
+
     return cfg;
 }
 
@@ -249,6 +331,12 @@ void TileBindings::install(JSContext* ctx) {
         .get("chunkCount",    [](TWld* self) -> int { return self->world ? self->world->chunkCount()    : 0; })
         .get("vertexCount",   [](TWld* self) -> int { return self->world ? self->world->totalVertices() : 0; })
         .get("triangleCount", [](TWld* self) -> int { return self->world ? self->world->totalTriangles(): 0; });
+}
+
+void TileBindings::setAppContext(const std::string& basePath,
+                                 const util::AssetMounts* mounts) {
+    s_basePath = basePath;
+    s_mounts = mounts;
 }
 
 void TileBindings::cleanup(JSContext*) {

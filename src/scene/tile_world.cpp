@@ -21,7 +21,8 @@ static void addQuad(bromesh::MeshData& m,
                     const Vec3& a, const Vec3& b, const Vec3& c, const Vec3& d,
                     const Vec3& n,
                     const float ca[4], const float cb[4],
-                    const float cc[4], const float cd[4]) {
+                    const float cc[4], const float cd[4],
+                    const float* uvs /* 8 floats (per-corner u,v) or nullptr */) {
     // Geometric normal of triangle (a,b,c); flip emission order if it opposes n.
     Vec3 e0{b.x - a.x, b.y - a.y, b.z - a.z};
     Vec3 e1{c.x - a.x, c.y - a.y, c.z - a.z};
@@ -44,6 +45,10 @@ static void addQuad(bromesh::MeshData& m,
         m.colors.push_back(cs[i][1]);
         m.colors.push_back(cs[i][2]);
         m.colors.push_back(cs[i][3]);
+        if (uvs) {
+            m.uvs.push_back(uvs[i * 2 + 0]);
+            m.uvs.push_back(uvs[i * 2 + 1]);
+        }
     }
     if (!flip) {
         m.indices.insert(m.indices.end(),
@@ -69,6 +74,22 @@ bool TileWorld::solid(int x, int y) const {
 
 float TileWorld::topY(int x, int y) const {
     return static_cast<float>(grid_->elevation({x, y})) * config_.heightStep;
+}
+
+void TileWorld::atlasCellRect(int cell, float& u0, float& u1,
+                              float& v0, float& v1) const {
+    int cols = std::max(1, config_.atlasColumns);
+    int rows = std::max(1, config_.atlasRows);
+    if (cell < 0) cell = 0;
+    int col = cell % cols;
+    int row = (cell / cols) % rows;
+    float du = 1.0f / static_cast<float>(cols);
+    float dv = 1.0f / static_cast<float>(rows);
+    // Inset by atlasInset texels on each side to fight cell-to-cell bleeding.
+    float iu = (config_.atlasWidth  > 0) ? config_.atlasInset / config_.atlasWidth  : 0.0f;
+    float iv = (config_.atlasHeight > 0) ? config_.atlasInset / config_.atlasHeight : 0.0f;
+    u0 = col * du + iu;  u1 = (col + 1) * du - iu;
+    v0 = row * dv + iv;  v1 = (row + 1) * dv - iv;
 }
 
 void TileWorld::configure(const TileWorldConfig& cfg) {
@@ -214,8 +235,12 @@ void TileWorld::buildChunkMesh(int ccx, int ccy) {
     const float oz = static_cast<float>(y0) * cs;
 
     const float skirtY = static_cast<float>(config_.baseLevel) * config_.heightStep;
+    const bool atlas = hasAtlas();
 
     auto paletteColor = [&](uint16_t id, float out[3]) {
+        // With an atlas the texture carries hue, so the surface is white and AO
+        // shading rides on the per-vertex colour.
+        if (atlas) { out[0] = out[1] = out[2] = 1.0f; return; }
         int n = static_cast<int>(config_.palette.size() / 4);
         if (id < n) {
             out[0] = config_.palette[id * 4 + 0];
@@ -232,11 +257,26 @@ void TileWorld::buildChunkMesh(int ccx, int ccy) {
         for (int x = x0; x < x1; ++x) {
             if (!solid(x, y)) continue;
 
+            const uint16_t groundId = grid_->tile(0, {x, y});
             const int elev = grid_->elevation({x, y});
             const float hy = static_cast<float>(elev) * config_.heightStep;
 
             float base[3];
-            paletteColor(grid_->tile(0, {x, y}), base);
+            paletteColor(groundId, base);
+
+            // Atlas UVs for this cell's top face and its cliff faces.
+            float tu0 = 0, tu1 = 1, tv0 = 0, tv1 = 1;   // top cell rect
+            float cu0 = 0, cu1 = 1, cv0 = 0, cv1 = 1;   // cliff cell rect
+            if (atlas) {
+                atlasCellRect(atlasCellFor(groundId), tu0, tu1, tv0, tv1);
+                int cliff = (config_.cliffCell >= 0) ? config_.cliffCell
+                                                     : atlasCellFor(groundId);
+                atlasCellRect(cliff, cu0, cu1, cv0, cv1);
+            }
+            // Top-face corner UVs (order matches the addQuad corners below:
+            // a=(x0,z0), b=(x0,z1), c=(x1,z1), d=(x1,z0)).
+            const float topUV[8] = {tu0, tv0, tu0, tv1, tu1, tv1, tu1, tv0};
+            const float* topUVp = atlas ? topUV : nullptr;
 
             // Local-space cell rectangle corners on the XZ plane.
             const float lx0 = static_cast<float>(x) * cs - ox;
@@ -269,11 +309,16 @@ void TileWorld::buildChunkMesh(int ccx, int ccy) {
 
             addQuad(mesh,
                     {lx0, hy, lz0}, {lx0, hy, lz1}, {lx1, hy, lz1}, {lx1, hy, lz0},
-                    {0, 1, 0}, c00, c01, c11, c10);
+                    {0, 1, 0}, c00, c01, c11, c10, topUVp);
 
             // --- cliff faces on edges that drop to a lower neighbour / skirt ---
             const float sideShade = 0.72f;
             float side[4] = {base[0]*sideShade, base[1]*sideShade, base[2]*sideShade, 1.0f};
+
+            // Cliff corner UVs (each cliff is wound bottom,top,top,bottom going
+            // left→right, so one rect mapping serves all four edges).
+            const float cliffUV[8] = {cu0, cv1, cu0, cv0, cu1, cv0, cu1, cv1};
+            const float* cliffUVp = atlas ? cliffUV : nullptr;
 
             auto neighbourTopY = [&](int nx, int ny) -> float {
                 return solid(nx, ny) ? topY(nx, ny) : skirtY;
@@ -282,19 +327,19 @@ void TileWorld::buildChunkMesh(int ccx, int ccy) {
             // East (+X) edge at lx1, spanning lz0..lz1, faces +X.
             if (float ny = neighbourTopY(x + 1, y); ny < hy)
                 addQuad(mesh, {lx1, ny, lz0}, {lx1, hy, lz0}, {lx1, hy, lz1}, {lx1, ny, lz1},
-                        {1, 0, 0}, side, side, side, side);
+                        {1, 0, 0}, side, side, side, side, cliffUVp);
             // West (-X) edge at lx0, faces -X.
             if (float ny = neighbourTopY(x - 1, y); ny < hy)
                 addQuad(mesh, {lx0, ny, lz0}, {lx0, hy, lz0}, {lx0, hy, lz1}, {lx0, ny, lz1},
-                        {-1, 0, 0}, side, side, side, side);
+                        {-1, 0, 0}, side, side, side, side, cliffUVp);
             // South (+Z) edge at lz1, faces +Z.
             if (float ny = neighbourTopY(x, y + 1); ny < hy)
                 addQuad(mesh, {lx0, ny, lz1}, {lx0, hy, lz1}, {lx1, hy, lz1}, {lx1, ny, lz1},
-                        {0, 0, 1}, side, side, side, side);
+                        {0, 0, 1}, side, side, side, side, cliffUVp);
             // North (-Z) edge at lz0, faces -Z.
             if (float ny = neighbourTopY(x, y - 1); ny < hy)
                 addQuad(mesh, {lx0, ny, lz0}, {lx0, hy, lz0}, {lx1, hy, lz0}, {lx1, ny, lz0},
-                        {0, 0, -1}, side, side, side, side);
+                        {0, 0, -1}, side, side, side, side, cliffUVp);
         }
     }
 
@@ -310,6 +355,9 @@ void TileWorld::buildChunkMesh(int ccx, int ccy) {
         chunk.node->setColor(1, 1, 1, 1);
         chunk.node->setRoughness(0.92f);
         chunk.node->setMetallic(0.0f);
+        if (atlas)
+            chunk.node->setBaseColorTexture(config_.atlasWidth, config_.atlasHeight,
+                                            config_.atlasPixels.data());
     }
     chunk.node->setMesh(std::move(mesh));
     chunk.node->setPosition(ox, 0.0f, oz);

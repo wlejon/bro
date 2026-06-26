@@ -13,9 +13,10 @@
 // its elevation height, plus vertical CLIFF quads on any edge where the
 // neighbour sits lower (or is empty / off-map down to a skirt floor). Top-face
 // corners are darkened by an ambient-occlusion term from higher neighbours, so
-// valleys and steps read with contact shading. Per-cell colour comes from a
-// caller-supplied palette indexed by the ground-layer tile id; tileset-atlas
-// texturing layers on top of this in a later step.
+// valleys and steps read with contact shading. Surface appearance is either a
+// caller-supplied palette indexed by the ground-layer tile id, or — when a
+// tileset atlas is configured — per-cell atlas UVs on the top faces (and a
+// cliff cell on the sides), with the palette/AO folded into per-vertex shading.
 //
 // Edits mark the touched chunk (and its border neighbours) dirty; rebuildDirty()
 // remeshes only those — the same lifecycle TerrainManager uses.
@@ -55,8 +56,28 @@ struct TileWorldConfig {
     bromath::Vec3 origin = {0, 0, 0};
 
     // RGBA per ground-tile id (4 floats each); index 0 = empty (unused for
-    // colour). Empty palette -> flat grey.
+    // colour). Empty palette -> flat grey. Ignored when an atlas is set.
     std::vector<float> palette;
+
+    // ---- tileset atlas (optional) ---------------------------------------
+    // When atlasPixels is non-empty, top faces sample the atlas cell selected
+    // by their ground tile id, cliff faces sample `cliffCell`, and per-vertex
+    // colour carries only AO shading (the texture provides hue). The atlas is a
+    // regular grid of `atlasColumns` x `atlasRows` cells; cell index counts
+    // left-to-right, top-to-bottom. Without an atlas, palette colour is used.
+    std::vector<uint8_t> atlasPixels;  // RGBA8, tightly packed, top-left origin
+    int atlasWidth   = 0;
+    int atlasHeight  = 0;
+    int atlasColumns = 1;
+    int atlasRows    = 1;
+    // Ground tile id -> atlas cell index. Empty => cell index == tile id (so
+    // id 1 draws cell 1; cell 0 is unused since id 0 is empty).
+    std::vector<int> tileAtlas;
+    // Atlas cell for vertical cliff faces. -1 => reuse each column's top cell.
+    int cliffCell = -1;
+    // UV inset per cell edge, in atlas texels, to fight bilinear/mip bleeding
+    // between neighbouring cells. 0 = none.
+    float atlasInset = 0.0f;
 };
 
 // -------------------------------------------------------------------------
@@ -124,6 +145,18 @@ private:
     int  chunkIdx(int ccx, int ccy) const { return ccy * chunksX_ + ccx; }
     bool solid(int x, int y) const;        // in-bounds + non-empty ground tile
     float topY(int x, int y) const;        // world Y of a cell's top surface
+
+    bool hasAtlas() const {
+        return !config_.atlasPixels.empty() &&
+               config_.atlasWidth > 0 && config_.atlasHeight > 0;
+    }
+    // Atlas cell index for a ground tile id (tileAtlas override or id itself).
+    int atlasCellFor(uint16_t id) const {
+        if (id < config_.tileAtlas.size()) return config_.tileAtlas[id];
+        return static_cast<int>(id);
+    }
+    // UV rect (u0,u1,v0,v1) of an atlas cell, inset by config_.atlasInset texels.
+    void atlasCellRect(int cell, float& u0, float& u1, float& v0, float& v1) const;
 
     SceneGraph& graph_;
     TileWorldConfig config_;
