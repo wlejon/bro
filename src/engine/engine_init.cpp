@@ -62,6 +62,7 @@
 #include "js/sense_bindings.h"
 #include "js/mic_bindings.h"
 #include "js/terrain_bindings.h"
+#include "js/tile_bindings.h"
 #include "js/net_bindings.h"
 #include "js/steam_bindings.h"
 #include "js/server_bindings.h"
@@ -264,6 +265,9 @@ Engine::Engine(const EngineConfig& config)
 
     // Terrain bindings (infinite voxel terrain system — all modes)
     js::TerrainBindings::install(jsRuntime_->getContext());
+
+    // Tile-world bindings (scene.createTileWorld — chunked tile grid meshing)
+    js::TileBindings::install(jsRuntime_->getContext());
 
     // Network service + bindings (all modes). NetService owns GNS on its own
     // thread; bindings hold a per-context subscriber that polls each frame.

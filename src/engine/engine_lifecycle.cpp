@@ -20,6 +20,7 @@
 #include "js/rigging_bindings.h"
 #include "js/ai_bindings.h"
 #include "js/terrain_bindings.h"
+#include "js/tile_bindings.h"
 #include "js/custom_elements.h"
 #include "js/wake_bindings.h"
 #include "js/gesture_bindings.h"
@@ -97,6 +98,7 @@ Engine::~Engine() {
     // call SceneGraph::destroyNode(), which crashes if the graph is already gone.
     if (jsRuntime_) {
         js::TerrainBindings::cleanup(jsRuntime_->getContext());
+        js::TileBindings::cleanup(jsRuntime_->getContext());
     }
 
     // Destroy scene graphs before canvas scenes (they hold canvas pointers)
@@ -178,6 +180,7 @@ Engine::~Engine() {
         js::NetBindings::cleanup(ctx);
         js::PhysicsBindings::cleanup(ctx);
         js::TerrainBindings::cleanup(ctx);
+        js::TileBindings::cleanup(ctx);
         js::MeshBindings::cleanup(ctx);
         js::RiggingBindings::cleanup(ctx);
         js::AIBindings::cleanup(ctx);

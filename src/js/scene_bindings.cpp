@@ -2,6 +2,7 @@
 #include "js/ai_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/terrain_bindings.h"
+#include "js/tile_bindings.h"
 #include "js/dom_bindings.h"
 #include "js/physics_bindings.h"
 #include "scene/scene_graph.h"
@@ -2565,6 +2566,21 @@ static JSValue js_sg_createTerrain(JSContext* ctx, JSValueConst this_val, int ar
     return result;
 }
 
+// createTileWorld(opts) → TileWorld
+static JSValue js_sg_createTileWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_NULL;
+    JSValueConst opts = (argc >= 1 && JS_IsObject(argv[0])) ? argv[0] : JS_UNDEFINED;
+    JSValue tmpOpts = JS_UNDEFINED;
+    if (JS_IsUndefined(opts)) {
+        tmpOpts = JS_NewObject(ctx);
+        opts = tmpOpts;
+    }
+    JSValue result = createTileWorldJS(ctx, g, opts);
+    JS_FreeValue(ctx, tmpOpts);
+    return result;
+}
+
 // ---------------------------------------------------------------------------
 // Install / Cleanup
 // ---------------------------------------------------------------------------
@@ -3281,6 +3297,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setWind", js_sg_setWind, 1)
         .method_raw("setShadowQuality", js_sg_setShadowQuality, 1)
         .method_raw("createTerrain", js_sg_createTerrain, 1)
+        .method_raw("createTileWorld", js_sg_createTileWorld, 1)
         .method_raw("findById", js_sg_findById, 1)
         .method_raw("findByName", js_sg_findByName, 1)
         .method_raw("destroyNode", js_sg_destroyNode, 1)
