@@ -113,6 +113,19 @@ struct TileWorldConfig {
         float alphaCutoff = 0.0f;        // >0 => atlas-alpha cut-out
     };
     std::vector<OverlayStyle> overlays;
+
+    // ---- animated tiles (optional; require an atlas) --------------------
+    // A tile id can cycle through a sequence of atlas cells over time (flowing
+    // water, swaying crops, torch flicker). The app drives it via
+    // TileWorld::advance(dtMs); only chunks containing animated tiles remesh,
+    // and only when the frame actually changes. Autotile rules take precedence
+    // over animation for the same id+layer.
+    struct TileAnimation {
+        uint16_t id = 0;                 // tile id this animation applies to
+        float    fps = 4.0f;             // frames per second
+        std::vector<int> frames;         // atlas cell per frame
+    };
+    std::vector<TileAnimation> animations;
 };
 
 // -------------------------------------------------------------------------
@@ -164,6 +177,12 @@ public:
     void setOrigin(float x, float y, float z);
     SceneNode* rootNode() const { return root_; }
 
+    // ---- animation ------------------------------------------------------
+    // Advance animated tiles by `dtMs` milliseconds. Remeshes only the chunks
+    // that contain animated tiles, and only when a frame index changed. Returns
+    // true if anything was remeshed (so the caller can skip a redundant flush).
+    bool advance(double dtMs);
+
     // ---- rebuild / teardown --------------------------------------------
     void rebuildDirty();   // remesh only dirty chunks
     void rebuildAll();     // remesh every chunk
@@ -196,10 +215,21 @@ private:
         return !config_.atlasPixels.empty() &&
                config_.atlasWidth > 0 && config_.atlasHeight > 0;
     }
-    // Atlas cell index for a tile id (tileAtlas override or id itself).
+    // Atlas cell index for a tile id: the current animation frame if the id is
+    // animated, else the tileAtlas override, else the id itself.
     int atlasCellFor(uint16_t id) const {
+        if (id < animOf_.size() && animOf_[id] >= 0) {
+            const auto& a = config_.animations[animOf_[id]];
+            if (!a.frames.empty()) {
+                int f = animFrame_[animOf_[id]] % static_cast<int>(a.frames.size());
+                return a.frames[f];
+            }
+        }
         if (id < config_.tileAtlas.size()) return config_.tileAtlas[id];
         return static_cast<int>(id);
+    }
+    bool cellIsAnimated(uint16_t id) const {
+        return id < animOf_.size() && animOf_[id] >= 0;
     }
     // Atlas cell for a cell on `layer`: an autotile rule's neighbour-selected
     // variant if (id,layer) has one, else the flat per-id cell.
@@ -211,6 +241,12 @@ private:
     TileWorldConfig config_;
     std::unique_ptr<tile::TileGrid> grid_;
     std::vector<uint32_t> tint_;   // per-cell RGBA8, row-major; 0xFFFFFFFF = none
+
+    // Animation state
+    std::vector<int>  animOf_;        // tile id -> animation index, or -1
+    std::vector<int>  animFrame_;     // current frame per animation
+    std::vector<char> chunkAnimated_; // per-chunk: contains an animated tile
+    double animClock_ = 0.0;          // accumulated ms
 
     SceneNode* root_ = nullptr;
     int chunksX_ = 0;

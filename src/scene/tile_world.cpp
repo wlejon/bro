@@ -151,8 +151,19 @@ void TileWorld::configure(const TileWorldConfig& cfg) {
     chunksX_ = (config_.width  + config_.chunkSize - 1) / config_.chunkSize;
     chunksY_ = (config_.height + config_.chunkSize - 1) / config_.chunkSize;
     chunks_.assign(static_cast<size_t>(chunksX_) * chunksY_, Chunk{});
+    chunkAnimated_.assign(chunks_.size(), 0);
 
     tint_.assign(static_cast<size_t>(config_.width) * config_.height, 0xFFFFFFFFu);
+
+    // Build the tile-id -> animation index map and reset frame state.
+    animClock_ = 0.0;
+    animFrame_.assign(config_.animations.size(), 0);
+    animOf_.clear();
+    for (size_t i = 0; i < config_.animations.size(); ++i) {
+        uint16_t id = config_.animations[i].id;
+        if (id >= animOf_.size()) animOf_.resize(id + 1, -1);
+        animOf_[id] = static_cast<int>(i);
+    }
 
     root_ = graph_.createNode("tileworld");
     graph_.root()->addChild(root_);
@@ -173,6 +184,10 @@ void TileWorld::clear() {
     }
     grid_.reset();
     tint_.clear();
+    chunkAnimated_.clear();
+    animOf_.clear();
+    animFrame_.clear();
+    animClock_ = 0.0;
     chunksX_ = chunksY_ = 0;
 }
 
@@ -299,7 +314,8 @@ void TileWorld::setOrigin(float x, float y, float z) {
 // ---- meshing ------------------------------------------------------------
 
 void TileWorld::buildChunkMesh(int ccx, int ccy) {
-    Chunk& chunk = chunks_[chunkIdx(ccx, ccy)];
+    const int idx = chunkIdx(ccx, ccy);
+    Chunk& chunk = chunks_[idx];
     chunk.dirty = false;
 
     buildGroundMesh(ccx, ccy, chunk);
@@ -313,6 +329,40 @@ void TileWorld::buildChunkMesh(int ccx, int ccy) {
     }
     for (int L = 1; L <= overlayLayers; ++L)
         buildOverlayMesh(ccx, ccy, chunk, L);
+
+    // Note whether this chunk holds any animated tile, so advance() only
+    // remeshes the chunks that actually animate.
+    chunkAnimated_[idx] = 0;
+    if (grid_ && !config_.animations.empty()) {
+        const int cz = config_.chunkSize;
+        const int x0 = ccx * cz, x1 = std::min(x0 + cz, config_.width);
+        const int y0 = ccy * cz, y1 = std::min(y0 + cz, config_.height);
+        const int layers = grid_->layerCount();
+        for (int y = y0; y < y1 && !chunkAnimated_[idx]; ++y)
+            for (int x = x0; x < x1 && !chunkAnimated_[idx]; ++x)
+                for (int L = 0; L < layers; ++L)
+                    if (cellIsAnimated(grid_->tile(L, {x, y}))) { chunkAnimated_[idx] = 1; break; }
+    }
+}
+
+bool TileWorld::advance(double dtMs) {
+    if (config_.animations.empty()) return false;
+    animClock_ += dtMs;
+    bool changed = false;
+    for (size_t i = 0; i < config_.animations.size(); ++i) {
+        const auto& a = config_.animations[i];
+        int n = static_cast<int>(a.frames.size());
+        if (n <= 0 || a.fps <= 0.0f) continue;
+        int nf = static_cast<int>(animClock_ * (a.fps / 1000.0)) % n;
+        if (nf < 0) nf += n;
+        if (nf != animFrame_[i]) { animFrame_[i] = nf; changed = true; }
+    }
+    if (!changed) return false;
+    for (int idx = 0; idx < static_cast<int>(chunks_.size()); ++idx) {
+        if (idx < static_cast<int>(chunkAnimated_.size()) && chunkAnimated_[idx])
+            buildChunkMesh(idx % chunksX_, idx / chunksX_);
+    }
+    return true;
 }
 
 void TileWorld::buildGroundMesh(int ccx, int ccy, Chunk& chunk) {

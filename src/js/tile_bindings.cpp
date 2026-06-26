@@ -294,6 +294,38 @@ static scene::TileWorldConfig parseTileConfig(JSContext* ctx, JSValueConst opts)
     }
     JS_FreeValue(ctx, ovs);
 
+    // animations: [{ id, fps?, frames:[atlas cells] }, ...]
+    JSValue anims = JS_GetPropertyStr(ctx, opts, "animations");
+    if (JS_IsArray(anims)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, anims, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (int32_t i = 0; i < len; ++i) {
+            JSValue e = JS_GetPropertyUint32(ctx, anims, i);
+            if (!JS_IsObject(e)) { JS_FreeValue(ctx, e); continue; }
+            scene::TileWorldConfig::TileAnimation an;
+            an.id  = (uint16_t)jsGetInt(ctx, e, "id", 0);
+            an.fps = (float)jsGetProp(ctx, e, "fps", 4.0);
+            JSValue fr = JS_GetPropertyStr(ctx, e, "frames");
+            if (JS_IsArray(fr)) {
+                JSValue fl = JS_GetPropertyStr(ctx, fr, "length");
+                int32_t flen = 0; JS_ToInt32(ctx, &flen, fl);
+                JS_FreeValue(ctx, fl);
+                an.frames.resize(flen);
+                for (int32_t k = 0; k < flen; ++k) {
+                    JSValue el = JS_GetPropertyUint32(ctx, fr, k);
+                    int32_t cv = 0; JS_ToInt32(ctx, &cv, el);
+                    an.frames[k] = cv;
+                    JS_FreeValue(ctx, el);
+                }
+            }
+            JS_FreeValue(ctx, fr);
+            cfg.animations.push_back(std::move(an));
+            JS_FreeValue(ctx, e);
+        }
+    }
+    JS_FreeValue(ctx, anims);
+
     return cfg;
 }
 
@@ -416,6 +448,9 @@ void TileBindings::install(JSContext* ctx) {
         .method_raw("worldToCell", js_tile_worldToCell, 2)
         .method("setOrigin", [](TWld* self, double x, double y, double z) {
             if (self->world) self->world->setOrigin((float)x, (float)y, (float)z);
+        })
+        .method("advance", [](TWld* self, double dtMs) -> bool {
+            return self->world ? self->world->advance(dtMs) : false;
         })
         .method("rebuild", [](TWld* self) {
             if (self->world) self->world->rebuildDirty();

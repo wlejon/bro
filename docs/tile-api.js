@@ -116,6 +116,15 @@ class SceneGraph {
    *        translucent (engine "over" blend)
    * @param {number}   [opts.overlays[].alphaCutoff=0] - >0 cuts decal shapes
    *        from the atlas alpha channel
+   *
+   * Animated tiles (optional; require an atlas). A tile id cycles through a
+   * sequence of atlas cells over time — flowing water, swaying crops, torch
+   * flicker. Drive it from your frame loop with world.advance(dtMs); only
+   * chunks holding animated tiles remesh, and only when the frame changes.
+   * @param {Object[]} [opts.animations] - array of animations:
+   * @param {number}   opts.animations[].id     - tile id to animate
+   * @param {number}   [opts.animations[].fps=4] - frames per second
+   * @param {number[]} opts.animations[].frames - atlas cell per frame
    * @returns {TileWorld}
    */
   createTileWorld(opts) {}
@@ -170,6 +179,13 @@ class TileWorld {
 
   /** Move the whole map's root node to a world position. */
   setOrigin(x, y, z) {}
+
+  /**
+   * Advance animated tiles by `dtMs` milliseconds (call from your frame loop).
+   * Remeshes only the chunks that contain animated tiles, and only when a frame
+   * index actually changed. Returns true if anything was remeshed.
+   */
+  advance(dtMs) {}
 
   /** Remesh only the chunks touched since the last rebuild. */
   rebuild() {}
