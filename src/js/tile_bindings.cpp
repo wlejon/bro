@@ -4,6 +4,7 @@
 
 #include "scene/tile_world.h"
 #include "scene/scene_graph.h"
+#include "js/mesh_bindings.h"
 #include "util/asset_mounts.h"
 #include "broimage/decode.h"
 
@@ -87,6 +88,23 @@ static void readFloatArray(JSContext* ctx, JSValueConst v, std::vector<float>& o
             JS_FreeValue(ctx, el);
         }
     }
+}
+
+// Read an [r,g,b,a] (or [r,g,b]) array property into out[4] (a defaults to 1).
+static void readColor4(JSContext* ctx, JSValueConst obj, const char* prop, float out[4]) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
+    if (JS_IsArray(v)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, v, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (int i = 0; i < 4 && i < len; ++i) {
+            JSValue el = JS_GetPropertyUint32(ctx, v, i);
+            double d = (i == 3) ? 1.0 : 0.0; JS_ToFloat64(ctx, &d, el);
+            out[i] = (float)d;
+            JS_FreeValue(ctx, el);
+        }
+    }
+    JS_FreeValue(ctx, v);
 }
 
 // -------------------------------------------------------------------------
@@ -333,6 +351,74 @@ static scene::TileWorldConfig parseTileConfig(JSContext* ctx, JSValueConst opts)
 // Methods needing raw argc/argv (optional args / object returns)
 // -------------------------------------------------------------------------
 
+// addObjectKind(mesh, style?) -> kind index. `mesh` is a bro.mesh object.
+static JSValue js_tile_addObjectKind(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 1) return JS_NewInt32(ctx, -1);
+    bromesh::MeshData* md = MeshBindings::getMeshData(ctx, argv[0]);
+    if (!md) return JS_ThrowTypeError(ctx, "addObjectKind: first argument must be a mesh");
+
+    scene::TileWorld::ObjectStyle style;
+    if (argc > 1 && JS_IsObject(argv[1])) {
+        JSValueConst s = argv[1];
+        readColor4(ctx, s, "color", style.color);
+        style.roughness   = (float)jsGetProp(ctx, s, "roughness", style.roughness);
+        style.metallic    = (float)jsGetProp(ctx, s, "metallic", style.metallic);
+        style.doubleSided = jsGetInt(ctx, s, "doubleSided", 0) != 0;
+        style.alphaCutoff = (float)jsGetProp(ctx, s, "alphaCutoff", style.alphaCutoff);
+        style.castsShadow = jsGetInt(ctx, s, "castsShadow", 1) != 0;
+        style.atlasCols   = jsGetInt(ctx, s, "atlasColumns", 1);
+        style.atlasRows   = jsGetInt(ctx, s, "atlasRows", 1);
+
+        // texture: a path (decoded) or raw texturePixels + width/height
+        JSValue tex = JS_GetPropertyStr(ctx, s, "texture");
+        if (JS_IsString(tex)) {
+            const char* p = JS_ToCString(ctx, tex);
+            if (p) {
+                broimage::Image img; std::string err;
+                if (broimage::decode_file(resolveAppPath(p), img, &err) &&
+                    img.width > 0 && img.height > 0) {
+                    style.texWidth = img.width; style.texHeight = img.height;
+                    style.texPixels = std::move(img.pixels);
+                }
+                JS_FreeCString(ctx, p);
+            }
+        }
+        JS_FreeValue(ctx, tex);
+    }
+
+    int kind = w->world->addObjectKind(bromesh::MeshData(*md), style);
+    return JS_NewInt32(ctx, kind);
+}
+
+// addObject(kind, x, y, opts?) -> instance index
+static JSValue js_tile_addObject(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 3) return JS_NewInt32(ctx, -1);
+    scene::TileWorld::ObjectPlacement p;
+    if (argc > 3 && JS_IsObject(argv[3])) {
+        JSValueConst o = argv[3];
+        p.yaw     = (float)jsGetProp(ctx, o, "yaw", 0.0);
+        p.scale   = (float)jsGetProp(ctx, o, "scale", 1.0);
+        p.yOffset = (float)jsGetProp(ctx, o, "yOffset", 0.0);
+        p.offsetX = (float)jsGetProp(ctx, o, "offsetX", 0.0);
+        p.offsetZ = (float)jsGetProp(ctx, o, "offsetZ", 0.0);
+        p.variant = jsGetInt(ctx, o, "variant", 0);
+        readColor4(ctx, o, "color", p.color);
+    }
+    int idx = w->world->addObject(argInt(ctx, argv[0]), argInt(ctx, argv[1]),
+                                  argInt(ctx, argv[2]), p);
+    return JS_NewInt32(ctx, idx);
+}
+
+static JSValue js_tile_clearObjects(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world) return JS_UNDEFINED;
+    int kind = (argc > 0) ? argInt(ctx, argv[0]) : -1;
+    w->world->clearObjects(kind);
+    return JS_UNDEFINED;
+}
+
 static JSValue js_tile_setTile(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
     if (!w || !w->world || argc < 3) return JS_UNDEFINED;
@@ -451,6 +537,15 @@ void TileBindings::install(JSContext* ctx) {
         })
         .method("advance", [](TWld* self, double dtMs) -> bool {
             return self->world ? self->world->advance(dtMs) : false;
+        })
+        .method_raw("addObjectKind", js_tile_addObjectKind, 2)
+        .method_raw("addObject", js_tile_addObject, 4)
+        .method_raw("clearObjects", js_tile_clearObjects, 1)
+        .method("objectCount", [](TWld* self, int kind) -> int {
+            return self->world ? self->world->objectCount(kind) : 0;
+        })
+        .method("rebuildObjects", [](TWld* self) {
+            if (self->world) self->world->rebuildObjects();
         })
         .method("rebuild", [](TWld* self) {
             if (self->world) self->world->rebuildDirty();

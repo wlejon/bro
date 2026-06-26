@@ -25,6 +25,7 @@
 #include "tile/coord.h"
 
 #include <bromath/vec.h>
+#include <bromesh/mesh_data.h>
 
 #include <cstdint>
 #include <memory>
@@ -36,6 +37,7 @@ namespace bro::scene {
 class SceneGraph;
 class SceneNode;
 class MeshNode;
+class InstancedMeshNode;
 
 // -------------------------------------------------------------------------
 // Configuration
@@ -183,6 +185,51 @@ public:
     // true if anything was remeshed (so the caller can skip a redundant flush).
     bool advance(double dtMs);
 
+    // ---- objects / entities --------------------------------------------
+    // Real 3D props placed on cells, GPU-instanced: one shared mesh per "kind"
+    // drawn across all its placements in a single draw call. Each kind owns an
+    // InstancedMeshNode under the world root; placements anchor to a cell's
+    // top-surface centre. Author with addObject(), then rebuild().
+    struct ObjectStyle {
+        float color[4]   = {1, 1, 1, 1};
+        float roughness  = 0.8f;
+        float metallic   = 0.0f;
+        bool  doubleSided = false;   // for leaf-card / billboard props
+        float alphaCutoff = 0.0f;    // >0 cuts cut-out textures
+        bool  castsShadow = true;
+        int   atlasCols = 1;         // texture atlas grid (variant selects a cell)
+        int   atlasRows = 1;
+        // Optional baseColor texture (RGBA8). Empty -> untextured.
+        std::vector<uint8_t> texPixels;
+        int   texWidth = 0;
+        int   texHeight = 0;
+    };
+    struct ObjectPlacement {
+        float yaw     = 0.0f;        // radians about Y
+        float scale   = 1.0f;        // uniform
+        float yOffset = 0.0f;        // lift above the cell top
+        float offsetX = 0.0f;        // sub-cell offset in cell units (-0.5..0.5)
+        float offsetZ = 0.0f;
+        int   variant = 0;           // atlas cell when the kind has an atlas
+        float color[4] = {1, 1, 1, 1};  // per-instance tint (a = opacity, or
+                                         // variant index when atlasCols/Rows>1)
+    };
+
+    // Register a prop kind from a mesh + material; returns its kind index (-1 on
+    // failure). The mesh is moved in.
+    int  addObjectKind(bromesh::MeshData&& mesh, const ObjectStyle& style);
+    int  objectKindCount() const { return static_cast<int>(objectKinds_.size()); }
+
+    // Place an instance of `kind` on cell (x, y). Returns the instance index
+    // within that kind, or -1 on a bad kind/cell. Marks the kind for rebuild.
+    int  addObject(int kind, int x, int y, const ObjectPlacement& p);
+    // Remove all placements of `kind` (or every kind when kind < 0).
+    void clearObjects(int kind = -1);
+    int  objectCount(int kind) const;
+
+    // Flush object-kind instance buffers changed since the last rebuild.
+    void rebuildObjects();
+
     // ---- rebuild / teardown --------------------------------------------
     void rebuildDirty();   // remesh only dirty chunks
     void rebuildAll();     // remesh every chunk
@@ -247,6 +294,16 @@ private:
     std::vector<int>  animFrame_;     // current frame per animation
     std::vector<char> chunkAnimated_; // per-chunk: contains an animated tile
     double animClock_ = 0.0;          // accumulated ms
+
+    // Object kinds (GPU-instanced props). One InstancedMeshNode per kind.
+    struct ObjectKind {
+        InstancedMeshNode* node = nullptr;
+        std::vector<ObjectPlacement> placements;  // parallel to cell coords
+        std::vector<int> cellX, cellY;            // cell per placement
+        bool dirty = false;
+    };
+    std::vector<ObjectKind> objectKinds_;
+    void rebuildObjectKind(ObjectKind& k);
 
     SceneNode* root_ = nullptr;
     int chunksX_ = 0;

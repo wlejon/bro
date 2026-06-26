@@ -187,6 +187,56 @@ class TileWorld {
    */
   advance(dtMs) {}
 
+  // --- Objects / entities ----------------------------------------------------
+  // Real 3D props placed on cells, GPU-instanced: one shared mesh per "kind"
+  // drawn across all its placements in a single draw call, anchored to each
+  // cell's top-surface centre. Author with addObject(), then rebuild().
+
+  /**
+   * Register a prop kind from a mesh + material. Returns the kind index (-1 on
+   * failure). `mesh` is a bro.mesh object (e.g. Mesh.cone(...)).
+   * @param {Mesh} mesh
+   * @param {Object} [style]
+   * @param {number[]} [style.color=[1,1,1,1]] - base colour (RGBA)
+   * @param {number} [style.roughness=0.8]
+   * @param {number} [style.metallic=0]
+   * @param {boolean} [style.doubleSided=false] - for leaf-card / billboard props
+   * @param {number} [style.alphaCutoff=0] - >0 cuts cut-out textures
+   * @param {boolean} [style.castsShadow=true]
+   * @param {number} [style.atlasColumns=1] - texture atlas grid (variant picks a cell)
+   * @param {number} [style.atlasRows=1]
+   * @param {string} [style.texture] - app-relative baseColor texture path
+   * @returns {number} kind index
+   */
+  addObjectKind(mesh, style) {}
+
+  /**
+   * Place an instance of `kind` on cell (x, y). Returns the instance index, or
+   * -1 on a bad kind/cell. Mark for rebuild; flushed by rebuild().
+   * @param {number} kind
+   * @param {number} x
+   * @param {number} y
+   * @param {Object} [opts]
+   * @param {number} [opts.yaw=0] - rotation about Y (radians)
+   * @param {number} [opts.scale=1] - uniform scale
+   * @param {number} [opts.yOffset=0] - lift above the cell top
+   * @param {number} [opts.offsetX=0] - sub-cell offset in cell units (-0.5..0.5)
+   * @param {number} [opts.offsetZ=0]
+   * @param {number} [opts.variant=0] - atlas cell when the kind has an atlas
+   * @param {number[]} [opts.color=[1,1,1,1]] - per-instance tint
+   * @returns {number} instance index
+   */
+  addObject(kind, x, y, opts) {}
+
+  /** Remove all placements of `kind` (or every kind when kind is omitted/<0). */
+  clearObjects(kind) {}
+
+  /** Number of placed instances of `kind`. */
+  objectCount(kind) {}
+
+  /** Flush object-kind instance buffers changed since the last rebuild. */
+  rebuildObjects() {}
+
   /** Remesh only the chunks touched since the last rebuild. */
   rebuild() {}
 
