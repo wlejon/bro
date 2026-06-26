@@ -233,6 +233,7 @@ static scene::TileWorldConfig parseTileConfig(JSContext* ctx, JSValueConst opts)
             if (!JS_IsObject(e)) { JS_FreeValue(ctx, e); continue; }
             scene::TileWorldConfig::AutotileRule rule;
             rule.id = (uint16_t)jsGetInt(ctx, e, "id", 0);
+            rule.layer = jsGetInt(ctx, e, "layer", 0);
 
             JSValue mode = JS_GetPropertyStr(ctx, e, "mode");
             if (JS_IsString(mode)) {
@@ -275,6 +276,24 @@ static scene::TileWorldConfig parseTileConfig(JSContext* ctx, JSValueConst opts)
     }
     JS_FreeValue(ctx, autos);
 
+    // overlays: per-layer style, aligned to `layers` (index 0 = ground, ignored)
+    JSValue ovs = JS_GetPropertyStr(ctx, opts, "overlays");
+    if (JS_IsArray(ovs)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, ovs, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        cfg.overlays.resize(len);
+        for (int32_t i = 0; i < len; ++i) {
+            JSValue e = JS_GetPropertyUint32(ctx, ovs, i);
+            if (JS_IsObject(e)) {
+                cfg.overlays[i].opacity     = (float)jsGetProp(ctx, e, "opacity", 1.0);
+                cfg.overlays[i].alphaCutoff = (float)jsGetProp(ctx, e, "alphaCutoff", 0.0);
+            }
+            JS_FreeValue(ctx, e);
+        }
+    }
+    JS_FreeValue(ctx, ovs);
+
     return cfg;
 }
 
@@ -305,6 +324,33 @@ static JSValue js_tile_fillTile(JSContext* ctx, JSValueConst this_val, int argc,
     w->world->fillTile(argInt(ctx, argv[0]), argInt(ctx, argv[1]),
                        argInt(ctx, argv[2]), argInt(ctx, argv[3]),
                        (uint16_t)argInt(ctx, argv[4]), layer);
+    return JS_UNDEFINED;
+}
+
+static double argFloat(JSContext* ctx, JSValueConst v, double def = 0.0) {
+    double d = def;
+    if (!JS_IsUndefined(v)) JS_ToFloat64(ctx, &d, v);
+    return d;
+}
+
+static JSValue js_tile_setTint(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 5) return JS_UNDEFINED;
+    double a = (argc > 5) ? argFloat(ctx, argv[5], 1.0) : 1.0;
+    w->world->setTint(argInt(ctx, argv[0]), argInt(ctx, argv[1]),
+                      (float)argFloat(ctx, argv[2]), (float)argFloat(ctx, argv[3]),
+                      (float)argFloat(ctx, argv[4]), (float)a);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_tile_fillTint(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 7) return JS_UNDEFINED;
+    double a = (argc > 7) ? argFloat(ctx, argv[7], 1.0) : 1.0;
+    w->world->fillTint(argInt(ctx, argv[0]), argInt(ctx, argv[1]),
+                       argInt(ctx, argv[2]), argInt(ctx, argv[3]),
+                       (float)argFloat(ctx, argv[4]), (float)argFloat(ctx, argv[5]),
+                       (float)argFloat(ctx, argv[6]), (float)a);
     return JS_UNDEFINED;
 }
 
@@ -359,6 +405,8 @@ void TileBindings::install(JSContext* ctx) {
         .method("fillElevation", [](TWld* self, int x0, int y0, int x1, int y1, int level) {
             if (self->world) self->world->fillElevation(x0, y0, x1, y1, level);
         })
+        .method_raw("setTint", js_tile_setTint, 6)
+        .method_raw("fillTint", js_tile_fillTint, 8)
         .method("setFlag", [](TWld* self, int x, int y, double bit, bool on) {
             if (self->world) self->world->setFlag(x, y, (uint32_t)bit, on);
         })

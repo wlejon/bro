@@ -78,19 +78,19 @@ float TileWorld::topY(int x, int y) const {
     return static_cast<float>(grid_->elevation({x, y})) * config_.heightStep;
 }
 
-int TileWorld::atlasTopCell(int x, int y, uint16_t groundId) const {
-    // Find an autotile rule for this ground id (rule lists are tiny).
+int TileWorld::atlasLayerCell(int x, int y, int layer, uint16_t id) const {
+    // Find an autotile rule for this (id, layer) — rule lists are tiny.
     const TileWorldConfig::AutotileRule* rule = nullptr;
     for (const auto& r : config_.autotiles) {
-        if (r.id == groundId) { rule = &r; break; }
+        if (r.id == id && r.layer == layer) { rule = &r; break; }
     }
     if (!rule || rule->cells.empty())
-        return atlasCellFor(groundId);
+        return atlasCellFor(id);
 
     using namespace tile;
     FamilyFn fam = (rule->family == TileWorldConfig::AutotileFamily::NonEmpty)
-                       ? familyNonEmpty(0)
-                       : familyTile(0, groundId);
+                       ? familyNonEmpty(layer)
+                       : familyTile(layer, id);
     Cell c{x, y};
     int variant = 0;
     switch (rule->mode) {
@@ -106,7 +106,19 @@ int TileWorld::atlasTopCell(int x, int y, uint16_t groundId) const {
     }
     if (variant >= 0 && variant < static_cast<int>(rule->cells.size()))
         return rule->cells[variant];
-    return atlasCellFor(groundId);
+    return atlasCellFor(id);
+}
+
+void TileWorld::cellTint(int x, int y, float out[4]) const {
+    out[0] = out[1] = out[2] = out[3] = 1.0f;
+    if (x < 0 || y < 0 || x >= config_.width || y >= config_.height) return;
+    size_t idx = static_cast<size_t>(y) * config_.width + x;
+    if (idx >= tint_.size()) return;
+    uint32_t t = tint_[idx];
+    out[0] = ((t >> 24) & 0xFF) / 255.0f;
+    out[1] = ((t >> 16) & 0xFF) / 255.0f;
+    out[2] = ((t >> 8)  & 0xFF) / 255.0f;
+    out[3] = ( t        & 0xFF) / 255.0f;
 }
 
 void TileWorld::atlasCellRect(int cell, float& u0, float& u1,
@@ -140,6 +152,8 @@ void TileWorld::configure(const TileWorldConfig& cfg) {
     chunksY_ = (config_.height + config_.chunkSize - 1) / config_.chunkSize;
     chunks_.assign(static_cast<size_t>(chunksX_) * chunksY_, Chunk{});
 
+    tint_.assign(static_cast<size_t>(config_.width) * config_.height, 0xFFFFFFFFu);
+
     root_ = graph_.createNode("tileworld");
     graph_.root()->addChild(root_);
     root_->setPosition(config_.origin);
@@ -149,8 +163,8 @@ void TileWorld::configure(const TileWorldConfig& cfg) {
 
 void TileWorld::clear() {
     for (auto& c : chunks_) {
-        if (c.node) graph_.destroyNode(c.node);
-        c.node = nullptr;
+        if (c.ground) graph_.destroyNode(c.ground);
+        for (auto* ov : c.overlays) if (ov) graph_.destroyNode(ov);
     }
     chunks_.clear();
     if (root_) {
@@ -158,6 +172,7 @@ void TileWorld::clear() {
         root_ = nullptr;
     }
     grid_.reset();
+    tint_.clear();
     chunksX_ = chunksY_ = 0;
 }
 
@@ -221,6 +236,35 @@ void TileWorld::fillElevation(int x0, int y0, int x1, int y1, int level) {
         }
 }
 
+static uint32_t packRGBA(float r, float g, float b, float a) {
+    auto u8 = [](float v) -> uint32_t {
+        int n = static_cast<int>(v * 255.0f + 0.5f);
+        return static_cast<uint32_t>(n < 0 ? 0 : (n > 255 ? 255 : n));
+    };
+    return (u8(r) << 24) | (u8(g) << 16) | (u8(b) << 8) | u8(a);
+}
+
+void TileWorld::setTint(int x, int y, float r, float g, float b, float a) {
+    if (x < 0 || y < 0 || x >= config_.width || y >= config_.height) return;
+    size_t idx = static_cast<size_t>(y) * config_.width + x;
+    if (idx >= tint_.size()) return;
+    tint_[idx] = packRGBA(r, g, b, a);
+    markCellDirty(x, y);
+}
+
+void TileWorld::fillTint(int x0, int y0, int x1, int y1,
+                         float r, float g, float b, float a) {
+    uint32_t packed = packRGBA(r, g, b, a);
+    int lo_x = std::min(x0, x1), hi_x = std::max(x0, x1);
+    int lo_y = std::min(y0, y1), hi_y = std::max(y0, y1);
+    for (int y = lo_y; y <= hi_y; ++y)
+        for (int x = lo_x; x <= hi_x; ++x) {
+            if (x < 0 || y < 0 || x >= config_.width || y >= config_.height) continue;
+            tint_[static_cast<size_t>(y) * config_.width + x] = packed;
+            markCellDirty(x, y);
+        }
+}
+
 // ---- query --------------------------------------------------------------
 
 uint16_t TileWorld::tile(int x, int y, int layer) const {
@@ -258,6 +302,20 @@ void TileWorld::buildChunkMesh(int ccx, int ccy) {
     Chunk& chunk = chunks_[chunkIdx(ccx, ccy)];
     chunk.dirty = false;
 
+    buildGroundMesh(ccx, ccy, chunk);
+
+    // Overlay layers (>= 1) render as decal meshes above the ground. Resize the
+    // per-chunk overlay slot list to match the layer count.
+    const int overlayLayers = grid_ ? std::max(0, grid_->layerCount() - 1) : 0;
+    if (static_cast<int>(chunk.overlays.size()) != overlayLayers) {
+        for (auto* ov : chunk.overlays) if (ov) graph_.destroyNode(ov);
+        chunk.overlays.assign(overlayLayers, nullptr);
+    }
+    for (int L = 1; L <= overlayLayers; ++L)
+        buildOverlayMesh(ccx, ccy, chunk, L);
+}
+
+void TileWorld::buildGroundMesh(int ccx, int ccy, Chunk& chunk) {
     const float cs = config_.cellSize;
     const int   cz = config_.chunkSize;
     const int   x0 = ccx * cz, x1 = std::min(x0 + cz, config_.width);
@@ -301,11 +359,16 @@ void TileWorld::buildChunkMesh(int ccx, int ccy) {
             float tu0 = 0, tu1 = 1, tv0 = 0, tv1 = 1;   // top cell rect
             float cu0 = 0, cu1 = 1, cv0 = 0, cv1 = 1;   // cliff cell rect
             if (atlas) {
-                atlasCellRect(atlasTopCell(x, y, groundId), tu0, tu1, tv0, tv1);
+                atlasCellRect(atlasLayerCell(x, y, 0, groundId), tu0, tu1, tv0, tv1);
                 int cliff = (config_.cliffCell >= 0) ? config_.cliffCell
                                                      : atlasCellFor(groundId);
                 atlasCellRect(cliff, cu0, cu1, cv0, cv1);
             }
+
+            // Per-cell RGB tint multiplies the ground colour (alpha unused on
+            // the opaque ground layer).
+            float tint[4]; cellTint(x, y, tint);
+            base[0] *= tint[0]; base[1] *= tint[1]; base[2] *= tint[2];
             // Top-face corner UVs (order matches the addQuad corners below:
             // a=(x0,z0), b=(x0,z1), c=(x1,z1), d=(x1,z0)).
             const float topUV[8] = {tu0, tv0, tu0, tv1, tu1, tv1, tu1, tv0};
@@ -378,22 +441,96 @@ void TileWorld::buildChunkMesh(int ccx, int ccy) {
 
     if (mesh.empty()) {
         // Nothing solid in this chunk — drop any stale node.
-        if (chunk.node) { graph_.destroyNode(chunk.node); chunk.node = nullptr; }
+        if (chunk.ground) { graph_.destroyNode(chunk.ground); chunk.ground = nullptr; }
         return;
     }
 
-    if (!chunk.node) {
-        chunk.node = graph_.createMesh("tile-chunk");
-        root_->addChild(chunk.node);
-        chunk.node->setColor(1, 1, 1, 1);
-        chunk.node->setRoughness(0.92f);
-        chunk.node->setMetallic(0.0f);
+    if (!chunk.ground) {
+        chunk.ground = graph_.createMesh("tile-chunk");
+        root_->addChild(chunk.ground);
+        chunk.ground->setColor(1, 1, 1, 1);
+        chunk.ground->setRoughness(0.92f);
+        chunk.ground->setMetallic(0.0f);
         if (atlas)
-            chunk.node->setBaseColorTexture(config_.atlasWidth, config_.atlasHeight,
-                                            config_.atlasPixels.data());
+            chunk.ground->setBaseColorTexture(config_.atlasWidth, config_.atlasHeight,
+                                              config_.atlasPixels.data());
     }
-    chunk.node->setMesh(std::move(mesh));
-    chunk.node->setPosition(ox, 0.0f, oz);
+    chunk.ground->setMesh(std::move(mesh));
+    chunk.ground->setPosition(ox, 0.0f, oz);
+}
+
+// Build the decal mesh for one overlay layer of a chunk. Each cell with a
+// non-empty tile on `layer` emits a single up-facing quad floating just above
+// the ground top face, atlas-textured by the layer tile id (autotile-aware),
+// tinted per cell. The whole layer carries its style's opacity + alphaCutoff.
+void TileWorld::buildOverlayMesh(int ccx, int ccy, Chunk& chunk, int layer) {
+    MeshNode*& node = chunk.overlays[layer - 1];
+
+    const bool atlas = hasAtlas();
+    if (!atlas) {                    // overlays are atlas-only
+        if (node) { graph_.destroyNode(node); node = nullptr; }
+        return;
+    }
+
+    const float cs = config_.cellSize;
+    const int   cz = config_.chunkSize;
+    const int   x0 = ccx * cz, x1 = std::min(x0 + cz, config_.width);
+    const int   y0 = ccy * cz, y1 = std::min(y0 + cz, config_.height);
+    const float ox = static_cast<float>(x0) * cs;
+    const float oz = static_cast<float>(y0) * cs;
+
+    // Small per-layer lift above the ground top so decals don't z-fight; the
+    // depth bias below makes it robust regardless of scale.
+    const float lift = 0.012f * cs * static_cast<float>(layer);
+
+    bromesh::MeshData mesh;
+    for (int y = y0; y < y1; ++y) {
+        for (int x = x0; x < x1; ++x) {
+            if (!solid(x, y)) continue;            // overlays ride on solid ground
+            const uint16_t id = grid_->tile(layer, {x, y});
+            if (id == 0) continue;
+
+            const float hy = topY(x, y) + lift;
+            const float lx0 = static_cast<float>(x) * cs - ox;
+            const float lx1 = lx0 + cs;
+            const float lz0 = static_cast<float>(y) * cs - oz;
+            const float lz1 = lz0 + cs;
+
+            float u0, u1, v0, v1;
+            atlasCellRect(atlasLayerCell(x, y, layer, id), u0, u1, v0, v1);
+            const float uv[8] = {u0, v0, u0, v1, u1, v1, u1, v0};
+
+            float t[4]; cellTint(x, y, t);
+            float col[4] = {t[0], t[1], t[2], t[3]};
+            addQuad(mesh,
+                    {lx0, hy, lz0}, {lx0, hy, lz1}, {lx1, hy, lz1}, {lx1, hy, lz0},
+                    {0, 1, 0}, col, col, col, col, uv);
+        }
+    }
+
+    if (mesh.empty()) {
+        if (node) { graph_.destroyNode(node); node = nullptr; }
+        return;
+    }
+
+    TileWorldConfig::OverlayStyle style;
+    if (layer < static_cast<int>(config_.overlays.size()))
+        style = config_.overlays[layer];
+
+    if (!node) {
+        node = graph_.createMesh("tile-overlay");
+        root_->addChild(node);
+        node->setRoughness(0.95f);
+        node->setMetallic(0.0f);
+        node->setDepthBias(-1.0f, -static_cast<float>(layer) - 1.0f);
+        node->setCastsShadow(false);
+        node->setBaseColorTexture(config_.atlasWidth, config_.atlasHeight,
+                                  config_.atlasPixels.data());
+    }
+    node->setColor(1, 1, 1, style.opacity);
+    node->setAlphaCutoff(style.alphaCutoff);
+    node->setMesh(std::move(mesh));
+    node->setPosition(ox, 0.0f, oz);
 }
 
 void TileWorld::rebuildDirty() {
@@ -413,21 +550,27 @@ void TileWorld::rebuildAll() {
 
 int TileWorld::chunkCount() const {
     int n = 0;
-    for (auto& c : chunks_) if (c.node) ++n;
+    for (auto& c : chunks_) if (c.ground) ++n;
     return n;
 }
 
 int TileWorld::totalVertices() const {
     int n = 0;
-    for (auto& c : chunks_)
-        if (c.node) n += static_cast<int>(c.node->mesh().vertexCount());
+    for (auto& c : chunks_) {
+        if (c.ground) n += static_cast<int>(c.ground->mesh().vertexCount());
+        for (auto* ov : c.overlays)
+            if (ov) n += static_cast<int>(ov->mesh().vertexCount());
+    }
     return n;
 }
 
 int TileWorld::totalTriangles() const {
     int n = 0;
-    for (auto& c : chunks_)
-        if (c.node) n += static_cast<int>(c.node->mesh().triangleCount());
+    for (auto& c : chunks_) {
+        if (c.ground) n += static_cast<int>(c.ground->mesh().triangleCount());
+        for (auto* ov : c.overlays)
+            if (ov) n += static_cast<int>(ov->mesh().triangleCount());
+    }
     return n;
 }
 

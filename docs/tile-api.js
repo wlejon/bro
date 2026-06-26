@@ -99,10 +99,23 @@ class SceneGraph {
    * @param {string}   opts.autotiles[].mode - "edge" (4-bit edge mask → 16
    *        variants, E,N,W,S = bits 0..3), "blob47" (8-neighbour blob → 47
    *        variants), or "wang" (4-bit corner mask → 16, NE,SE,SW,NW = bits 0..3)
+   * @param {number}   [opts.autotiles[].layer=0] - layer the rule + family run
+   *        on (use the overlay layer index for autotiled decals)
    * @param {string}   [opts.autotiles[].family="id"] - which neighbours "join":
-   *        "id" (same tile id) or "nonEmpty" (any non-empty ground cell)
+   *        "id" (same tile id) or "nonEmpty" (any non-empty cell on that layer)
    * @param {number[]} opts.autotiles[].cells - variant index → atlas cell index
    *        (length 16 for edge/wang, 47 for blob47)
+   *
+   * Multi-layer overlays (optional; require an atlas). Name more than one layer
+   * (`layers`) and tiles placed on layers >= 1 render as atlas-textured DECAL
+   * quads floating just above each cell's ground top face, drawn bottom-up by
+   * layer index — roads, crops, decals over the base tile. `overlays` styles
+   * them, aligned to `layers` (index 0 = ground, ignored):
+   * @param {Object[]} [opts.overlays] - per-layer style array
+   * @param {number}   [opts.overlays[].opacity=1] - <1 makes the whole layer
+   *        translucent (engine "over" blend)
+   * @param {number}   [opts.overlays[].alphaCutoff=0] - >0 cuts decal shapes
+   *        from the atlas alpha channel
    * @returns {TileWorld}
    */
   createTileWorld(opts) {}
@@ -125,6 +138,16 @@ class TileWorld {
 
   /** Fill an inclusive rectangle of elevation levels. */
   fillElevation(x0, y0, x1, y1, level) {}
+
+  /**
+   * Set a per-cell RGB(A) tint (0..1), multiplied into the cell's ground and
+   * overlay colour. Default white = no tint. Alpha is stored but only bites
+   * with a layer's alphaCutoff; for translucency use an overlay layer opacity.
+   */
+  setTint(x, y, r, g, b, a = 1) {}
+
+  /** Fill an inclusive rectangle with a per-cell tint. */
+  fillTint(x0, y0, x1, y1, r, g, b, a = 1) {}
 
   // --- Query -----------------------------------------------------------------
 

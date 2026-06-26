@@ -92,12 +92,27 @@ struct TileWorldConfig {
     };
     enum class AutotileFamily : uint8_t { SameId, NonEmpty };
     struct AutotileRule {
-        uint16_t id = 0;                 // ground tile id this rule applies to
+        uint16_t id = 0;                 // tile id this rule applies to
+        int      layer = 0;              // which layer the rule + family run on
         AutotileMode mode = AutotileMode::Blob47;
         AutotileFamily family = AutotileFamily::SameId;
         std::vector<int> cells;          // variant index -> atlas cell index
     };
     std::vector<AutotileRule> autotiles;
+
+    // ---- overlay layers (optional; require an atlas) --------------------
+    // Layers above the ground (index >= 1) render as atlas-textured DECAL quads
+    // floating just above each cell's ground top face, drawn bottom-up by layer
+    // index. A cell contributes a quad on layer L only where tile(L) != 0, so
+    // overlays composite roads / crops / decals over the base tile. Each overlay
+    // layer has its own style: `opacity` < 1 makes the whole layer translucent
+    // (engine "over" blend); `alphaCutoff` > 0 cuts decal shapes from the atlas
+    // alpha. Indexed by layer; entry 0 (ground) is ignored.
+    struct OverlayStyle {
+        float opacity     = 1.0f;        // <1 => translucent layer
+        float alphaCutoff = 0.0f;        // >0 => atlas-alpha cut-out
+    };
+    std::vector<OverlayStyle> overlays;
 };
 
 // -------------------------------------------------------------------------
@@ -129,6 +144,13 @@ public:
     void fillTile(int x0, int y0, int x1, int y1, uint16_t id, int layer = 0);
     void fillElevation(int x0, int y0, int x1, int y1, int level);
 
+    // Per-cell RGB tint (0..1), multiplied into the cell's ground + overlay
+    // colour. Default white (no tint). Alpha is stored but only meaningful with
+    // a layer alphaCutoff. Marks the cell's chunk dirty.
+    void setTint(int x, int y, float r, float g, float b, float a = 1.0f);
+    void fillTint(int x0, int y0, int x1, int y1,
+                  float r, float g, float b, float a = 1.0f);
+
     // ---- query ----------------------------------------------------------
     uint16_t tile(int x, int y, int layer = 0) const;
     int      elevation(int x, int y) const;
@@ -156,34 +178,39 @@ public:
 
 private:
     struct Chunk {
-        MeshNode* node = nullptr;   // owned by SceneGraph (nullptr until first mesh)
+        MeshNode* ground = nullptr;          // ground top + cliffs (nullptr until meshed)
+        std::vector<MeshNode*> overlays;     // one decal mesh per overlay layer (>=1)
         bool dirty = false;
     };
 
     void buildChunkMesh(int ccx, int ccy);
+    void buildGroundMesh(int ccx, int ccy, Chunk& chunk);
+    void buildOverlayMesh(int ccx, int ccy, Chunk& chunk, int layer);
     void markCellDirty(int x, int y);
     int  chunkIdx(int ccx, int ccy) const { return ccy * chunksX_ + ccx; }
     bool solid(int x, int y) const;        // in-bounds + non-empty ground tile
     float topY(int x, int y) const;        // world Y of a cell's top surface
+    void cellTint(int x, int y, float out[4]) const;  // per-cell RGBA, white default
 
     bool hasAtlas() const {
         return !config_.atlasPixels.empty() &&
                config_.atlasWidth > 0 && config_.atlasHeight > 0;
     }
-    // Atlas cell index for a ground tile id (tileAtlas override or id itself).
+    // Atlas cell index for a tile id (tileAtlas override or id itself).
     int atlasCellFor(uint16_t id) const {
         if (id < config_.tileAtlas.size()) return config_.tileAtlas[id];
         return static_cast<int>(id);
     }
-    // Atlas cell for a cell's TOP face: an autotile rule's neighbour-selected
-    // variant if `groundId` has one, else the flat per-id cell.
-    int atlasTopCell(int x, int y, uint16_t groundId) const;
+    // Atlas cell for a cell on `layer`: an autotile rule's neighbour-selected
+    // variant if (id,layer) has one, else the flat per-id cell.
+    int atlasLayerCell(int x, int y, int layer, uint16_t id) const;
     // UV rect (u0,u1,v0,v1) of an atlas cell, inset by config_.atlasInset texels.
     void atlasCellRect(int cell, float& u0, float& u1, float& v0, float& v1) const;
 
     SceneGraph& graph_;
     TileWorldConfig config_;
     std::unique_ptr<tile::TileGrid> grid_;
+    std::vector<uint32_t> tint_;   // per-cell RGBA8, row-major; 0xFFFFFFFF = none
 
     SceneNode* root_ = nullptr;
     int chunksX_ = 0;
