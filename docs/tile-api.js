@@ -88,6 +88,21 @@ class SceneGraph {
    *        -1 reuses each column's top cell.
    * @param {number} [opts.atlasInset=0] - UV inset per cell edge in texels, to
    *        fight bilinear/mip bleeding between neighbouring cells.
+   *
+   * Autotiling (optional; requires an atlas). Each rule turns a field of one
+   * tile id into bordered/edge art: a cell's TOP-face atlas cell is chosen from
+   * a neighbour bitmask via the `cells` variant table instead of the flat per-id
+   * cell. Cliff faces are unaffected. Edits restyle the 3x3 neighbourhood, so
+   * borders update as you paint.
+   * @param {Object[]} [opts.autotiles] - array of rules:
+   * @param {number}   opts.autotiles[].id   - ground tile id the rule applies to
+   * @param {string}   opts.autotiles[].mode - "edge" (4-bit edge mask → 16
+   *        variants, E,N,W,S = bits 0..3), "blob47" (8-neighbour blob → 47
+   *        variants), or "wang" (4-bit corner mask → 16, NE,SE,SW,NW = bits 0..3)
+   * @param {string}   [opts.autotiles[].family="id"] - which neighbours "join":
+   *        "id" (same tile id) or "nonEmpty" (any non-empty ground cell)
+   * @param {number[]} opts.autotiles[].cells - variant index → atlas cell index
+   *        (length 16 for edge/wang, 47 for blob47)
    * @returns {TileWorld}
    */
   createTileWorld(opts) {}

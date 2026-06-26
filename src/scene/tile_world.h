@@ -78,6 +78,26 @@ struct TileWorldConfig {
     // UV inset per cell edge, in atlas texels, to fight bilinear/mip bleeding
     // between neighbouring cells. 0 = none.
     float atlasInset = 0.0f;
+
+    // ---- autotiling (optional; requires an atlas) -----------------------
+    // An autotile rule turns "a field of the same tile id" into bordered/edge
+    // art: a cell's top-face atlas cell is chosen from a neighbour bitmask via
+    // a variant table, instead of the flat per-id cell. Each rule applies to one
+    // ground tile id. Family = which neighbours "join" (same id, or any
+    // non-empty). Cliff faces are unaffected.
+    enum class AutotileMode : uint8_t {
+        Edge,    // 4-bit edge mask -> 16 variants (E,N,W,S = bits 0..3)
+        Blob47,  // 8-neighbour blob reduced to the canonical 47 variants
+        Wang,    // 4-bit corner mask -> 16 variants (NE,SE,SW,NW = bits 0..3)
+    };
+    enum class AutotileFamily : uint8_t { SameId, NonEmpty };
+    struct AutotileRule {
+        uint16_t id = 0;                 // ground tile id this rule applies to
+        AutotileMode mode = AutotileMode::Blob47;
+        AutotileFamily family = AutotileFamily::SameId;
+        std::vector<int> cells;          // variant index -> atlas cell index
+    };
+    std::vector<AutotileRule> autotiles;
 };
 
 // -------------------------------------------------------------------------
@@ -155,6 +175,9 @@ private:
         if (id < config_.tileAtlas.size()) return config_.tileAtlas[id];
         return static_cast<int>(id);
     }
+    // Atlas cell for a cell's TOP face: an autotile rule's neighbour-selected
+    // variant if `groundId` has one, else the flat per-id cell.
+    int atlasTopCell(int x, int y, uint16_t groundId) const;
     // UV rect (u0,u1,v0,v1) of an atlas cell, inset by config_.atlasInset texels.
     void atlasCellRect(int cell, float& u0, float& u1, float& v0, float& v1) const;
 

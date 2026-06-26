@@ -4,6 +4,8 @@
 #include "scene/mesh_node.h"
 #include "scene/scene_node.h"
 
+#include "tile/autotile.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -74,6 +76,37 @@ bool TileWorld::solid(int x, int y) const {
 
 float TileWorld::topY(int x, int y) const {
     return static_cast<float>(grid_->elevation({x, y})) * config_.heightStep;
+}
+
+int TileWorld::atlasTopCell(int x, int y, uint16_t groundId) const {
+    // Find an autotile rule for this ground id (rule lists are tiny).
+    const TileWorldConfig::AutotileRule* rule = nullptr;
+    for (const auto& r : config_.autotiles) {
+        if (r.id == groundId) { rule = &r; break; }
+    }
+    if (!rule || rule->cells.empty())
+        return atlasCellFor(groundId);
+
+    using namespace tile;
+    FamilyFn fam = (rule->family == TileWorldConfig::AutotileFamily::NonEmpty)
+                       ? familyNonEmpty(0)
+                       : familyTile(0, groundId);
+    Cell c{x, y};
+    int variant = 0;
+    switch (rule->mode) {
+        case TileWorldConfig::AutotileMode::Edge:
+            variant = edgeMask(*grid_, c, fam);
+            break;
+        case TileWorldConfig::AutotileMode::Blob47:
+            variant = blob47(blobMask(*grid_, c, fam));
+            break;
+        case TileWorldConfig::AutotileMode::Wang:
+            variant = wangCorners(*grid_, c, fam);
+            break;
+    }
+    if (variant >= 0 && variant < static_cast<int>(rule->cells.size()))
+        return rule->cells[variant];
+    return atlasCellFor(groundId);
 }
 
 void TileWorld::atlasCellRect(int cell, float& u0, float& u1,
@@ -268,7 +301,7 @@ void TileWorld::buildChunkMesh(int ccx, int ccy) {
             float tu0 = 0, tu1 = 1, tv0 = 0, tv1 = 1;   // top cell rect
             float cu0 = 0, cu1 = 1, cv0 = 0, cv1 = 1;   // cliff cell rect
             if (atlas) {
-                atlasCellRect(atlasCellFor(groundId), tu0, tu1, tv0, tv1);
+                atlasCellRect(atlasTopCell(x, y, groundId), tu0, tu1, tv0, tv1);
                 int cliff = (config_.cliffCell >= 0) ? config_.cliffCell
                                                      : atlasCellFor(groundId);
                 atlasCellRect(cliff, cu0, cu1, cv0, cv1);

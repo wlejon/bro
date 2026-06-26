@@ -222,6 +222,59 @@ static scene::TileWorldConfig parseTileConfig(JSContext* ctx, JSValueConst opts)
     }
     JS_FreeValue(ctx, ta);
 
+    // autotiles: [{ id, mode, family?, cells:[variant->cell] }, ...]
+    JSValue autos = JS_GetPropertyStr(ctx, opts, "autotiles");
+    if (JS_IsArray(autos)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, autos, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (int32_t i = 0; i < len; ++i) {
+            JSValue e = JS_GetPropertyUint32(ctx, autos, i);
+            if (!JS_IsObject(e)) { JS_FreeValue(ctx, e); continue; }
+            scene::TileWorldConfig::AutotileRule rule;
+            rule.id = (uint16_t)jsGetInt(ctx, e, "id", 0);
+
+            JSValue mode = JS_GetPropertyStr(ctx, e, "mode");
+            if (JS_IsString(mode)) {
+                const char* s = JS_ToCString(ctx, mode);
+                std::string m = s ? s : "";
+                if (m == "edge")  rule.mode = scene::TileWorldConfig::AutotileMode::Edge;
+                else if (m == "wang") rule.mode = scene::TileWorldConfig::AutotileMode::Wang;
+                else rule.mode = scene::TileWorldConfig::AutotileMode::Blob47;
+                if (s) JS_FreeCString(ctx, s);
+            }
+            JS_FreeValue(ctx, mode);
+
+            JSValue famv = JS_GetPropertyStr(ctx, e, "family");
+            if (JS_IsString(famv)) {
+                const char* s = JS_ToCString(ctx, famv);
+                if (s && std::string(s) == "nonEmpty")
+                    rule.family = scene::TileWorldConfig::AutotileFamily::NonEmpty;
+                if (s) JS_FreeCString(ctx, s);
+            }
+            JS_FreeValue(ctx, famv);
+
+            JSValue cells = JS_GetPropertyStr(ctx, e, "cells");
+            if (JS_IsArray(cells)) {
+                JSValue cl = JS_GetPropertyStr(ctx, cells, "length");
+                int32_t clen = 0; JS_ToInt32(ctx, &clen, cl);
+                JS_FreeValue(ctx, cl);
+                rule.cells.resize(clen);
+                for (int32_t k = 0; k < clen; ++k) {
+                    JSValue el = JS_GetPropertyUint32(ctx, cells, k);
+                    int32_t cv = 0; JS_ToInt32(ctx, &cv, el);
+                    rule.cells[k] = cv;
+                    JS_FreeValue(ctx, el);
+                }
+            }
+            JS_FreeValue(ctx, cells);
+
+            cfg.autotiles.push_back(std::move(rule));
+            JS_FreeValue(ctx, e);
+        }
+    }
+    JS_FreeValue(ctx, autos);
+
     return cfg;
 }
 
