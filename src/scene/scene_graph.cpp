@@ -4000,19 +4000,35 @@ bool SceneGraph::unprojectLocal(float localX, float localY,
     if (canvasWidth_ <= 0 || canvasHeight_ <= 0) return false;
     const auto& P = projectionMatrix_;
     const auto& V = viewMatrix_;
-    float m11 = P.at(1, 1);
-    if (!std::isfinite(m11) || m11 <= 0.0f) return false;
-    float tanHalfFov = 1.0f / m11;
     // View rows (camera basis in world space).
     // Row 0 = right, row 1 = up, row 2 = -forward (camera looks along -Z).
     Vec3 right  (V.at(0, 0), V.at(0, 1), V.at(0, 2));
     Vec3 up     (V.at(1, 0), V.at(1, 1), V.at(1, 2));
     Vec3 forward(-V.at(2, 0), -V.at(2, 1), -V.at(2, 2));
 
-    float aspect = static_cast<float>(canvasWidth_) / static_cast<float>(canvasHeight_);
     float nx = (2.0f * localX / static_cast<float>(canvasWidth_)) - 1.0f;
     float ny = 1.0f - (2.0f * localY / static_cast<float>(canvasHeight_));
 
+    if (!cameraIsPerspective_) {
+        // Orthographic: rays are PARALLEL. The direction is constant (the camera
+        // forward); it's the ray ORIGIN that slides across the image plane by the
+        // half-extents baked into the projection matrix (P00 = 1/halfWidth,
+        // P11 = 1/halfHeight, aspect already folded into halfWidth). The old
+        // perspective math — fixed eye, fanned-out direction — gave wrong rays for
+        // every off-centre pixel under an ortho camera, breaking click picking.
+        float p00 = P.at(0, 0), p11 = P.at(1, 1);
+        if (!std::isfinite(p00) || !std::isfinite(p11) || p00 == 0.0f || p11 == 0.0f) return false;
+        float halfW = 1.0f / p00;
+        float halfH = 1.0f / p11;
+        outDir    = bromath::vnorm(forward);
+        outOrigin = cameraEye_ + right * (nx * halfW) + up * (ny * halfH);
+        return true;
+    }
+
+    float m11 = P.at(1, 1);
+    if (!std::isfinite(m11) || m11 <= 0.0f) return false;
+    float tanHalfFov = 1.0f / m11;
+    float aspect = static_cast<float>(canvasWidth_) / static_cast<float>(canvasHeight_);
     Vec3 dir = forward
              + right * (nx * aspect * tanHalfFov)
              + up    * (ny * tanHalfFov);
