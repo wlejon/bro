@@ -175,6 +175,71 @@ class TileWorld {
    */
   worldToCell(worldX, worldZ) {}
 
+  // --- Picking / collision / navigation -------------------------------------
+
+  /**
+   * Cast a world-space ray against the tile surface — the per-cell top faces
+   * AND the cliff sides between them — front-to-back with elevation occlusion
+   * (a near plateau hides the ground behind it). Analytic grid traversal; no
+   * BVH, so it works the instant the grid is authored, before any mesh build.
+   *
+   * Pair it with scene.unprojectLocal(screenX, screenY) for click picking:
+   *
+   *     const r = scene.unprojectLocal(mouseX, mouseY);   // { origin, dir }
+   *     const hit = world.raycastCell(r.origin, r.dir);
+   *     if (hit) paintAt(hit.x, hit.y);
+   *
+   * @param {number[]} origin   [x, y, z] world-space ray origin
+   * @param {number[]} dir      [x, y, z] ray direction (need not be normalized)
+   * @param {number} [maxDist]  max world distance to search (default 1e6)
+   * @returns {{cell:number[], x:number, y:number, point:number[],
+   *            distance:number, side:boolean} | null}
+   *          `cell`/`x`/`y` is the hit cell, `point` the world hit position,
+   *          `side` true when a cliff face was struck (not a flat top). null on
+   *          a miss.
+   */
+  raycastCell(origin, dir, maxDist) {}
+
+  /**
+   * World Y of the top surface of the cell under a world XZ position — the
+   * ground height an agent stands at. Returns a number, or null when that XZ is
+   * off the grid or over an empty (hole) cell.
+   */
+  sampleHeight(worldX, worldZ) {}
+
+  /**
+   * Whether cell (x, y) is walkable: it carries ground (non-empty tile on layer
+   * 0) and none of `blockMask`'s flag bits are set on it. blockMask 0 (default)
+   * => every solid cell is walkable. This is the predicate the nav-grid export
+   * uses per cell.
+   */
+  isWalkable(x, y, blockMask) {}
+
+  /**
+   * Build a fresh bro.ai.game nav grid sized to this world (bounds = the grid's
+   * world extent, cellSize = the tile cellSize, so cells map 1:1) with every
+   * non-walkable cell stamped as a blocked obstacle. Returns the AINavGrid, so
+   * steering agents and findPath() route over the tiles immediately:
+   *
+   *     const nav = world.toNavGrid({ blockMask: WATER });
+   *     const path = nav.findPath(ax, az, bx, bz);   // routes around water
+   *
+   * @param {Object} [opts]
+   * @param {number} [opts.blockMask=0]  flag bits that mark a cell impassable
+   * @param {number} [opts.padding=0]    extra clearance around blocked cells
+   * @returns {AINavGrid}
+   */
+  toNavGrid(opts) {}
+
+  /**
+   * Stamp this world's non-walkable cells into an EXISTING bro.ai.game nav grid
+   * (additive — leaves its other obstacles intact). Returns the number of cells
+   * blocked. Use when the nav grid spans more than just the tiles.
+   * @param {AINavGrid} navGrid
+   * @param {Object} [opts] { blockMask=0, padding=0 }
+   */
+  syncNavGrid(navGrid, opts) {}
+
   // --- Placement / rebuild / teardown ---------------------------------------
 
   /** Move the whole map's root node to a world position. */

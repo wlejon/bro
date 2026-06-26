@@ -175,6 +175,33 @@ public:
     // top-down projection). Returns false if outside the grid.
     bool worldToCell(float wx, float wz, int& outX, int& outY) const;
 
+    // ---- picking / collision -------------------------------------------
+    // Result of a ray->cell pick. `side` is true when the ray struck a cliff
+    // face rather than a cell's flat top surface.
+    struct CellRayHit {
+        bool  hit = false;
+        int   x = 0, y = 0;
+        float point[3] = {0, 0, 0};   // world-space hit position
+        float distance = 0.0f;
+        bool  side = false;
+    };
+    // Cast a world-space ray against the tile surface — the per-cell top faces
+    // and the cliff sides between them — front-to-back with elevation
+    // occlusion (a near plateau hides the ground behind it). Returns the first
+    // solid cell hit (analytic grid DDA; no BVH, no mesh dependency).
+    CellRayHit raycastCell(const bromath::Vec3& origin, const bromath::Vec3& dir,
+                           float maxDist = 1.0e6f) const;
+
+    // World Y of the top surface of the cell under a world XZ position — the
+    // ground height an agent stands at. Returns false off-grid or over an
+    // empty (hole) cell.
+    bool sampleHeight(float wx, float wz, float& outY) const;
+
+    // A cell is walkable when it carries ground (non-empty tile on layer 0) and
+    // none of `blockMask`'s flag bits are set on it. blockMask 0 => every solid
+    // cell is walkable. Feeds nav-grid export.
+    bool isWalkable(int x, int y, uint32_t blockMask = 0) const;
+
     // ---- placement ------------------------------------------------------
     void setOrigin(float x, float y, float z);
     SceneNode* rootNode() const { return root_; }

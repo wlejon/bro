@@ -5,8 +5,12 @@
 #include "scene/tile_world.h"
 #include "scene/scene_graph.h"
 #include "js/mesh_bindings.h"
+#include "js/ai_bindings.h"
 #include "util/asset_mounts.h"
 #include "broimage/decode.h"
+
+#include <brogameagent/nav_grid.h>
+#include <brogameagent/types.h>
 
 #include <memory>
 #include <string>
@@ -486,6 +490,125 @@ static JSValue js_tile_worldToCell(JSContext* ctx, JSValueConst this_val, int ar
     return out;
 }
 
+// ---- picking / collision / nav-grid sync --------------------------------
+
+static bool readVec3Arg(JSContext* ctx, JSValueConst v, bromath::Vec3& out) {
+    if (!JS_IsObject(v)) return false;
+    JSValue jx = JS_GetPropertyUint32(ctx, v, 0);
+    JSValue jy = JS_GetPropertyUint32(ctx, v, 1);
+    JSValue jz = JS_GetPropertyUint32(ctx, v, 2);
+    double x = 0, y = 0, z = 0;
+    JS_ToFloat64(ctx, &x, jx); JS_ToFloat64(ctx, &y, jy); JS_ToFloat64(ctx, &z, jz);
+    JS_FreeValue(ctx, jx); JS_FreeValue(ctx, jy); JS_FreeValue(ctx, jz);
+    out = {(float)x, (float)y, (float)z};
+    return true;
+}
+
+// raycastCell(origin, dir, maxDist?) -> { cell:[x,y], x, y, point:[x,y,z],
+//                                         distance, side } | null
+static JSValue js_tile_raycastCell(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 2) return JS_NULL;
+    bromath::Vec3 o, d;
+    if (!readVec3Arg(ctx, argv[0], o) || !readVec3Arg(ctx, argv[1], d)) return JS_NULL;
+    float maxDist = (argc > 2 && !JS_IsUndefined(argv[2]))
+                        ? (float)argFloat(ctx, argv[2], 1.0e6) : 1.0e6f;
+    auto hit = w->world->raycastCell(o, d, maxDist);
+    if (!hit.hit) return JS_NULL;
+
+    JSValue out = JS_NewObject(ctx);
+    JSValue cell = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, cell, 0, JS_NewInt32(ctx, hit.x));
+    JS_SetPropertyUint32(ctx, cell, 1, JS_NewInt32(ctx, hit.y));
+    JS_SetPropertyStr(ctx, out, "cell", cell);
+    JS_SetPropertyStr(ctx, out, "x", JS_NewInt32(ctx, hit.x));
+    JS_SetPropertyStr(ctx, out, "y", JS_NewInt32(ctx, hit.y));
+    JSValue pt = JS_NewArray(ctx);
+    JS_SetPropertyUint32(ctx, pt, 0, JS_NewFloat64(ctx, hit.point[0]));
+    JS_SetPropertyUint32(ctx, pt, 1, JS_NewFloat64(ctx, hit.point[1]));
+    JS_SetPropertyUint32(ctx, pt, 2, JS_NewFloat64(ctx, hit.point[2]));
+    JS_SetPropertyStr(ctx, out, "point", pt);
+    JS_SetPropertyStr(ctx, out, "distance", JS_NewFloat64(ctx, hit.distance));
+    JS_SetPropertyStr(ctx, out, "side", JS_NewBool(ctx, hit.side));
+    return out;
+}
+
+// sampleHeight(wx, wz) -> top-surface world Y | null
+static JSValue js_tile_sampleHeight(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 2) return JS_NULL;
+    double wx = 0, wz = 0;
+    JS_ToFloat64(ctx, &wx, argv[0]);
+    JS_ToFloat64(ctx, &wz, argv[1]);
+    float y = 0;
+    if (!w->world->sampleHeight((float)wx, (float)wz, y)) return JS_NULL;
+    return JS_NewFloat64(ctx, y);
+}
+
+// isWalkable(x, y, blockMask?) -> bool
+static JSValue js_tile_isWalkable(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 2) return JS_FALSE;
+    uint32_t mask = (argc > 2) ? (uint32_t)(int64_t)argFloat(ctx, argv[2], 0) : 0u;
+    return JS_NewBool(ctx, w->world->isWalkable(argInt(ctx, argv[0]), argInt(ctx, argv[1]), mask));
+}
+
+// Stamp every non-walkable cell of `world` into nav grid `ng` as a one-cell
+// AABB obstacle. Returns the number of cells blocked.
+static int stampNavGrid(scene::TileWorld* world, brogameagent::NavGrid* ng,
+                        uint32_t blockMask, float padding) {
+    const auto& cfg = world->config();
+    const float cs = cfg.cellSize;
+    const float ox = cfg.origin.x, oz = cfg.origin.z;
+    int blocked = 0;
+    for (int y = 0; y < cfg.height; ++y) {
+        for (int x = 0; x < cfg.width; ++x) {
+            if (world->isWalkable(x, y, blockMask)) continue;
+            brogameagent::AABB box;
+            box.cx = ox + (x + 0.5f) * cs;
+            box.cz = oz + (y + 0.5f) * cs;
+            box.hw = cs * 0.49f;       // stays within the one cell, no bleed
+            box.hd = cs * 0.49f;
+            ng->addObstacle(box, padding);
+            ++blocked;
+        }
+    }
+    return blocked;
+}
+
+// syncNavGrid(navGrid, { blockMask?, padding? }) -> blocked-cell count
+static JSValue js_tile_syncNavGrid(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 1) return JS_NewInt32(ctx, 0);
+    brogameagent::NavGrid* ng = navGridFromJS(ctx, argv[0]);
+    if (!ng) return JS_ThrowTypeError(ctx, "syncNavGrid: first argument must be a nav grid");
+    uint32_t mask = 0; float padding = 0;
+    if (argc > 1 && JS_IsObject(argv[1])) {
+        mask = (uint32_t)(int64_t)jsGetProp(ctx, argv[1], "blockMask", 0);
+        padding = (float)jsGetProp(ctx, argv[1], "padding", 0);
+    }
+    return JS_NewInt32(ctx, stampNavGrid(w->world.get(), ng, mask, padding));
+}
+
+// toNavGrid({ blockMask?, padding? }) -> a fresh AINavGrid sized to the world
+static JSValue js_tile_toNavGrid(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world) return JS_NULL;
+    const auto& cfg = w->world->config();
+    uint32_t mask = 0; float padding = 0;
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        mask = (uint32_t)(int64_t)jsGetProp(ctx, argv[0], "blockMask", 0);
+        padding = (float)jsGetProp(ctx, argv[0], "padding", 0);
+    }
+    const float cs = cfg.cellSize;
+    const float minX = cfg.origin.x, minZ = cfg.origin.z;
+    const float maxX = minX + cfg.width * cs, maxZ = minZ + cfg.height * cs;
+    JSValue gridVal = createNavGridJS(ctx, minX, minZ, maxX, maxZ, cs);
+    if (brogameagent::NavGrid* ng = navGridFromJS(ctx, gridVal))
+        stampNavGrid(w->world.get(), ng, mask, padding);
+    return gridVal;
+}
+
 static JSValue js_tile_configure(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
     if (!w || !w->world || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
@@ -532,6 +655,11 @@ void TileBindings::install(JSContext* ctx) {
             return self->world ? self->world->hasFlag(x, y, (uint32_t)bit) : false;
         })
         .method_raw("worldToCell", js_tile_worldToCell, 2)
+        .method_raw("raycastCell", js_tile_raycastCell, 3)
+        .method_raw("sampleHeight", js_tile_sampleHeight, 2)
+        .method_raw("isWalkable", js_tile_isWalkable, 3)
+        .method_raw("syncNavGrid", js_tile_syncNavGrid, 2)
+        .method_raw("toNavGrid", js_tile_toNavGrid, 1)
         .method("setOrigin", [](TWld* self, double x, double y, double z) {
             if (self->world) self->world->setOrigin((float)x, (float)y, (float)z);
         })

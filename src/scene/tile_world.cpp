@@ -310,6 +310,123 @@ bool TileWorld::worldToCell(float wx, float wz, int& outX, int& outY) const {
     return true;
 }
 
+bool TileWorld::sampleHeight(float wx, float wz, float& outY) const {
+    int x = 0, y = 0;
+    if (!worldToCell(wx, wz, x, y) || !solid(x, y)) return false;
+    outY = config_.origin.y + topY(x, y);
+    return true;
+}
+
+bool TileWorld::isWalkable(int x, int y, uint32_t blockMask) const {
+    if (!solid(x, y)) return false;
+    if (blockMask && grid_->hasFlag({x, y}, blockMask)) return false;
+    return true;
+}
+
+TileWorld::CellRayHit TileWorld::raycastCell(const bromath::Vec3& origin,
+                                             const bromath::Vec3& dir,
+                                             float maxDist) const {
+    CellRayHit out;
+    if (!grid_) return out;
+
+    const double cs = config_.cellSize;
+    if (cs <= 0.0) return out;
+
+    // Normalise direction so the ray parameter t is in world units.
+    double dx = dir.x, dy = dir.y, dz = dir.z;
+    const double dlen = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (dlen < 1e-12) return out;
+    dx /= dlen; dy /= dlen; dz /= dlen;
+
+    // Work in grid-local space (the root node carries config_.origin), so the
+    // grid spans local XZ [0 .. W*cs] x [0 .. H*cs] with cell (x,y) at top
+    // height elevation*heightStep.
+    const double ox = origin.x - config_.origin.x;
+    const double oy = origin.y - config_.origin.y;
+    const double oz = origin.z - config_.origin.z;
+
+    const int W = config_.width, H = config_.height;
+    const double eps = 1e-6;
+
+    // Clip the ray to the grid's XZ bounding box so a distant camera still
+    // resolves into the grid in a bounded number of DDA steps.
+    double tBox0 = 0.0, tBox1 = maxDist;
+    auto slab = [&](double o_, double d_, double lo, double hi) -> bool {
+        if (std::fabs(d_) < 1e-12) return o_ >= lo && o_ <= hi;
+        double ta = (lo - o_) / d_, tb = (hi - o_) / d_;
+        if (ta > tb) std::swap(ta, tb);
+        tBox0 = std::max(tBox0, ta);
+        tBox1 = std::min(tBox1, tb);
+        return tBox1 >= tBox0;
+    };
+    if (!slab(ox, dx, 0.0, W * cs)) return out;
+    if (!slab(oz, dz, 0.0, H * cs)) return out;
+    if (tBox0 > tBox1) return out;
+
+    double tEnter = std::max(0.0, tBox0);
+    // Entry point, nudged a touch inward so we start inside the box.
+    double ex = ox + dx * (tEnter + eps);
+    double ez = oz + dz * (tEnter + eps);
+    int ix = static_cast<int>(std::floor(ex / cs));
+    int iz = static_cast<int>(std::floor(ez / cs));
+    ix = std::min(std::max(ix, 0), W - 1);
+    iz = std::min(std::max(iz, 0), H - 1);
+
+    const int stepX = dx > 0 ? 1 : (dx < 0 ? -1 : 0);
+    const int stepZ = dz > 0 ? 1 : (dz < 0 ? -1 : 0);
+
+    auto axis = [&](int i, int step, double o_, double d_,
+                    double& tMax, double& tDelta) {
+        if (step == 0) { tMax = 1e300; tDelta = 1e300; return; }
+        double next = static_cast<double>(i + (step > 0 ? 1 : 0)) * cs;
+        tMax   = (next - o_) / d_;
+        tDelta = cs / std::fabs(d_);
+    };
+    double tMaxX, tDeltaX, tMaxZ, tDeltaZ;
+    axis(ix, stepX, ox, dx, tMaxX, tDeltaX);
+    axis(iz, stepZ, oz, dz, tMaxZ, tDeltaZ);
+
+    const int cap = (W + H) * 2 + 16;
+    for (int iter = 0; iter < cap; ++iter) {
+        const double tExit = std::min(tMaxX, tMaxZ);
+
+        if (ix >= 0 && iz >= 0 && ix < W && iz < H && solid(ix, iz)) {
+            const double top =
+                static_cast<double>(grid_->elevation({ix, iz})) * config_.heightStep;
+            const double yEnter = oy + dy * tEnter;
+            if (dy < 0.0 && yEnter <= top + eps && tEnter <= maxDist) {
+                // The descending ray entered this column already at/below the
+                // top surface — it struck the cliff face (or grazes the edge).
+                const double th = std::max(tEnter, 0.0);
+                out.hit = true; out.x = ix; out.y = iz; out.side = true;
+                out.distance = static_cast<float>(th);
+                out.point[0] = static_cast<float>(origin.x + dx * th);
+                out.point[1] = static_cast<float>(origin.y + dy * th);
+                out.point[2] = static_cast<float>(origin.z + dz * th);
+                return out;
+            }
+            if (std::fabs(dy) > 1e-12) {
+                const double th = (top - oy) / dy;
+                if (th >= tEnter - eps && th <= tExit + eps &&
+                    th >= 0.0 && th <= maxDist) {
+                    out.hit = true; out.x = ix; out.y = iz; out.side = false;
+                    out.distance = static_cast<float>(th);
+                    out.point[0] = static_cast<float>(origin.x + dx * th);
+                    out.point[1] = static_cast<float>(origin.y + dy * th);
+                    out.point[2] = static_cast<float>(origin.z + dz * th);
+                    return out;
+                }
+            }
+        }
+
+        if (tExit > std::min<double>(maxDist, tBox1)) break;
+        if (stepX == 0 && stepZ == 0) break;   // vertical ray, single cell
+        if (tMaxX < tMaxZ) { ix += stepX; tEnter = tMaxX; tMaxX += tDeltaX; }
+        else               { iz += stepZ; tEnter = tMaxZ; tMaxZ += tDeltaZ; }
+    }
+    return out;
+}
+
 void TileWorld::setOrigin(float x, float y, float z) {
     config_.origin = {x, y, z};
     if (root_) root_->setPosition(config_.origin);

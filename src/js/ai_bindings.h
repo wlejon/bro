@@ -111,6 +111,13 @@ extractRolloutClassic(JSContext* ctx, JSValueConst v);
 /// if the value isn't a NavGrid wrapper.
 brogameagent::NavGrid* navGridFromJS(JSContext* ctx, JSValueConst v);
 
+/// Construct a wrapped AINavGrid (a bro.ai.game NavGrid JS value) covering the
+/// given world-space XZ bounds at `cellSize`. Lets other bindings (e.g.
+/// TileWorld::syncNavGrid / toNavGrid) hand back a ready-to-use nav grid that
+/// shares the AINavGrid prototype. Caller owns the returned JSValue.
+JSValue createNavGridJS(JSContext* ctx, float minX, float minZ,
+                        float maxX, float maxZ, float cellSize);
+
 /// Unwrap a wrapped Neural/Gumbel prior as a shared_ptr<IPrior>. Returns empty
 /// shared_ptr if the value isn't a bound prior wrapper.
 std::shared_ptr<brogameagent::mcts::IPrior>

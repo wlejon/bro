@@ -3068,6 +3068,14 @@ brogameagent::NavGrid* navGridFromJS(JSContext* ctx, JSValueConst val) {
     return d && d->grid ? d->grid.get() : nullptr;
 }
 
+JSValue createNavGridJS(JSContext* ctx, float minX, float minZ,
+                        float maxX, float maxZ, float cellSize) {
+    auto* data = new NavGridData{
+        std::make_unique<brogameagent::NavGrid>(minX, minZ, maxX, maxZ, cellSize)
+    };
+    return qjsbind::wrap<NavGridData>(ctx, data);
+}
+
 JSValue findAgentJSRef(JSContext* ctx, JSValueConst worldJsRef, brogameagent::Agent* agent) {
     if (!agent || JS_IsUndefined(worldJsRef) || JS_IsNull(worldJsRef)) return JS_NULL;
     JSValue agents = JS_GetPropertyStr(ctx, worldJsRef, "__agents");
