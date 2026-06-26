@@ -59,7 +59,7 @@ See [broworkshop](https://github.com/wlejon/broworkshop) for example application
 
 | Reach for | to |
 |---|---|
-| `bro.scene` | 3D scene graph — meshes, terrain, sprites, particles, tilemaps, PBR lighting |
+| `bro.scene` | 3D scene graph — meshes, terrain, sprites, particles, PBR lighting |
 | `Physics` / physics nodes | Jolt rigid bodies, contact events, constraints, raycasts |
 | `AudioContext` (broaudio) | real-time audio — synthesis, effects, spatial, MIDI |
 | `bro.mesh` · `bro.ai.game` · `bro.net` | mesh generation + CSG · navmesh + A* pathfinding · game networking (GNS) |

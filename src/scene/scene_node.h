@@ -79,7 +79,7 @@ public:
     virtual void onTick(float /*dtSec*/) {}
 
     // --- Type tag for downcasting ---
-    enum class Type : uint8_t { Base, Shape, Sprite, Physics, Mesh, Html, Light, Particles, Tilemap, InstancedMesh, GaussianSplat };
+    enum class Type : uint8_t { Base, Shape, Sprite, Physics, Mesh, Html, Light, Particles, InstancedMesh, GaussianSplat };
     virtual Type type() const { return Type::Base; }
 
     // --- World anchor + billboard (Shape/Sprite/Html) ---

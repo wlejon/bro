@@ -453,8 +453,8 @@ void Worker::threadFunc()
     // Break the worker-specific reference cycles before the runtime
     // destructor's gc_obj_list assertion fires. `self` is the global
     // pointing at itself (self-loop refcount); `onmessage` is the user's
-    // JS closure which captures script-scope locals (e.g. agent / sim /
-    // tilemap → C++-bound qjsbind classes), keeping their finalizers
+    // JS closure which captures script-scope locals (e.g. agent / sim
+    // → C++-bound qjsbind classes), keeping their finalizers
     // unreachable. Deleting both lets the global drop its strong refs to
     // them so the cascade reaches everything reachable only through
     // those handles. Plain GC alone can't break the self-loop because

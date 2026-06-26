@@ -10,7 +10,6 @@
 #include "scene/html_node.h"
 #include "scene/light_node.h"
 #include "scene/particle_node.h"
-#include "scene/tilemap_node.h"
 #include "scene/agent_binding.h"
 #include "scene/ai_world_ticker.h"
 
@@ -49,7 +48,6 @@ public:
     HtmlNode* createHtml(const std::string& name = "");
     LightNode* createLight(const std::string& name = "");
     ParticleNode* createParticles(const std::string& name = "");
-    TilemapNode* createTilemap(const std::string& name = "");
 
     /// Destroy a node and remove it from the tree. Also destroys children.
     void destroyNode(SceneNode* node);

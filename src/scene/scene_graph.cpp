@@ -1400,13 +1400,6 @@ ParticleNode* SceneGraph::createParticles(const std::string& name) {
     return ptr;
 }
 
-TilemapNode* SceneGraph::createTilemap(const std::string& name) {
-    auto node = std::make_unique<TilemapNode>(name);
-    auto* ptr = node.get();
-    nodes_[ptr->id()] = std::move(node);
-    return ptr;
-}
-
 void SceneGraph::tickAnimations(float dtSec) {
     if (dtSec <= 0.0f) return;
     // Iterate the node table directly (independent of tree visibility, so

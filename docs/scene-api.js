@@ -202,53 +202,6 @@ class SceneGraph {
   createParticles(opts) {}
 
   /**
-   * Create a 2D tilemap node. Stores N layers of `columns x rows` tile
-   * indices and renders each layer in order via batched drawImage calls.
-   * Tile value 0 = empty (skipped). Tile values 1..N index the tileset
-   * grid (row-major, 1-based).
-   *
-   * @example
-   *   // Single dense layer
-   *   const map = scene.createTilemap({
-   *     tileWidth: 32, tileHeight: 32,
-   *     columns: 40, rows: 30,
-   *     tileset: { src: 'assets/tiles.png', tileWidth: 32, tileHeight: 32, columns: 8 },
-   *     data: new Uint16Array(40 * 30)   // 0 = empty
-   *   });
-   *   map.setTile(5, 10, 7);                 // place tile 7 at (col=5,row=10)
-   *   map.getTile(5, 10);                    // -> 7
-   *   const hit = map.tileAtWorld(160, 320); // -> { col, row } | null
-   *
-   *   // Multiple named layers (rendered in order)
-   *   scene.createTilemap({
-   *     tileWidth: 16, tileHeight: 16, columns: 64, rows: 64,
-   *     tileset: { src: 'assets/tiles.png', tileWidth: 16, tileHeight: 16, columns: 16 },
-   *     layers: [
-   *       { name: 'ground', data: groundData },
-   *       { name: 'decals', data: decalData }
-   *     ]
-   *   });
-   *
-   * @param {Object} opts
-   * @param {string} [opts.name]
-   * @param {number} opts.tileWidth - per-tile output width (node-local pixels)
-   * @param {number} opts.tileHeight
-   * @param {number} opts.columns
-   * @param {number} opts.rows
-   * @param {number} [opts.x]
-   * @param {number} [opts.y]
-   * @param {Object} opts.tileset
-   * @param {string} opts.tileset.src - tileset image path
-   * @param {number} [opts.tileset.tileWidth] - per-cell width in image pixels
-   * @param {number} [opts.tileset.tileHeight]
-   * @param {number} [opts.tileset.columns] - 0 = auto from image width
-   * @param {Uint16Array|number[]} [opts.data] - single-layer dense data
-   * @param {Array<{name:string,data:(Uint16Array|number[])}>} [opts.layers] - multi-layer (overrides `data`)
-   * @returns {SceneNode}
-   */
-  createTilemap(opts) {}
-
-  /**
    * Create an HTML-rasterizing scene node and add it to the root.
    *
    * The node owns a detached dom::Document with a root <div> that JS can
@@ -911,24 +864,6 @@ class SceneNode {
    */
   configure(opts) {}
 
-
-  // --- TilemapNode ----------------------------------------------------------
-
-  /**
-   * Set a tile by (col, row). 0 = empty. Out-of-bounds is silently
-   * ignored. `layer` may be an index or a string layer name; defaults
-   * to 0.
-   */
-  setTile(col, row, tileIndex, layer) {}
-
-  /** Returns the tile index at (col, row) — 0 if empty or out-of-bounds. */
-  getTile(col, row, layer) {}
-
-  /**
-   * Map world coordinates to grid cell. Honors the tilemap's transform.
-   * @returns {{col:number,row:number}|null}
-   */
-  tileAtWorld(worldX, worldY) {}
 
   /**
    * Replace the mesh on a MeshNode in place (keeps transform, color, etc).

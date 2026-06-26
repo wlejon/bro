@@ -15,7 +15,6 @@
 #include "scene/html_node.h"
 #include "scene/light_node.h"
 #include "scene/particle_node.h"
-#include "scene/tilemap_node.h"
 #include "dom/element.h"
 #include "physics/physics_world.h"
 #include "canvas/canvas_scene.h"
@@ -477,7 +476,7 @@ static JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int arg
 
 // Forward declarations — parseAnimSpec and getGraph are defined further down
 // (alongside the SceneGraph wrapper / sprite createSprite handler), but the
-// sprite/particle/tilemap helpers below need them. The sprite-sheet related
+// sprite/particle helpers below need them. The sprite-sheet related
 // types referenced are also forward-declared above via scene_node.h.
 struct GraphWrapper;
 static inline scene::SceneGraph* getGraph(JSContext* ctx, JSValueConst val);
@@ -761,174 +760,6 @@ static JSValue js_particles_configure(JSContext* ctx, JSValueConst this_val, int
         applyParticleOpts(ctx, argv[0], static_cast<scene::ParticleNode*>(w->node));
     }
     return JS_DupValue(ctx, this_val);
-}
-
-// ---------------------------------------------------------------------------
-// Tilemap node
-// ---------------------------------------------------------------------------
-
-static bool readUint16Array(JSContext* ctx, JSValueConst v, std::vector<uint16_t>& out) {
-    if (!JS_IsObject(v)) return false;
-    size_t off = 0, byteLen = 0, bpe = 0;
-    JSValue ab = JS_GetTypedArrayBuffer(ctx, v, &off, &byteLen, &bpe);
-    if (JS_IsException(ab)) { JS_FreeValue(ctx, ab); return false; }
-    size_t abufLen = 0;
-    uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, ab);
-    JS_FreeValue(ctx, ab);
-    if (!raw) {
-        // Fall back to plain Array of numbers.
-        if (!JS_IsArray(v)) return false;
-        JSValue lenVal = JS_GetPropertyStr(ctx, v, "length");
-        int32_t len = 0;
-        JS_ToInt32(ctx, &len, lenVal);
-        JS_FreeValue(ctx, lenVal);
-        out.resize(len);
-        for (int32_t i = 0; i < len; ++i) {
-            JSValue elem = JS_GetPropertyUint32(ctx, v, i);
-            int32_t n = 0; JS_ToInt32(ctx, &n, elem);
-            out[i] = (uint16_t)n;
-            JS_FreeValue(ctx, elem);
-        }
-        return true;
-    }
-    // Treat as Uint16Array (bpe should be 2).
-    if (bpe == 2) {
-        const uint16_t* data = reinterpret_cast<const uint16_t*>(raw + off);
-        size_t count = byteLen / sizeof(uint16_t);
-        out.assign(data, data + count);
-        return true;
-    }
-    if (bpe == 4) {
-        const uint32_t* data = reinterpret_cast<const uint32_t*>(raw + off);
-        size_t count = byteLen / sizeof(uint32_t);
-        out.resize(count);
-        for (size_t i = 0; i < count; ++i) out[i] = (uint16_t)data[i];
-        return true;
-    }
-    if (bpe == 1) {
-        size_t count = byteLen;
-        out.resize(count);
-        for (size_t i = 0; i < count; ++i) out[i] = raw[off + i];
-        return true;
-    }
-    return false;
-}
-
-// createTilemap({tileWidth, tileHeight, columns, rows, tileset:{src, tileWidth, tileHeight, columns}, data|layers})
-static JSValue js_sg_createTilemap(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(ctx, this_val);
-    if (!g) return JS_UNDEFINED;
-    auto* node = g->createTilemap();
-    g->root()->addChild(node);
-    if (argc > 0 && JS_IsObject(argv[0])) {
-        JSValueConst opts = argv[0];
-
-        JSValue nameVal = JS_GetPropertyStr(ctx, opts, "name");
-        if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
-        JS_FreeValue(ctx, nameVal);
-
-        int tw = (int)jsGetProp(ctx, opts, "tileWidth", 32);
-        int th = (int)jsGetProp(ctx, opts, "tileHeight", 32);
-        node->setTileSize(tw, th);
-
-        int cols = (int)jsGetProp(ctx, opts, "columns", 0);
-        int rows = (int)jsGetProp(ctx, opts, "rows", 0);
-        node->setMapSize(cols, rows);
-
-        JSValue xVal = JS_GetPropertyStr(ctx, opts, "x");
-        JSValue yVal = JS_GetPropertyStr(ctx, opts, "y");
-        if (!JS_IsUndefined(xVal) || !JS_IsUndefined(yVal))
-            node->setPosition((float)jsNum(ctx, xVal), (float)jsNum(ctx, yVal));
-        JS_FreeValue(ctx, xVal); JS_FreeValue(ctx, yVal);
-
-        // tileset
-        JSValue tsVal = JS_GetPropertyStr(ctx, opts, "tileset");
-        if (JS_IsObject(tsVal)) {
-            std::string src = jsGetStr(ctx, tsVal, "src", "");
-            int sw = (int)jsGetProp(ctx, tsVal, "tileWidth", tw);
-            int sh = (int)jsGetProp(ctx, tsVal, "tileHeight", th);
-            int sc = (int)jsGetProp(ctx, tsVal, "columns", 0);
-            node->setTileset(src, sw, sh, sc);
-        }
-        JS_FreeValue(ctx, tsVal);
-
-        // layers (multi) or data (single layer)
-        JSValue layersVal = JS_GetPropertyStr(ctx, opts, "layers");
-        if (JS_IsArray(layersVal)) {
-            JSValue lenVal = JS_GetPropertyStr(ctx, layersVal, "length");
-            int32_t len = 0; JS_ToInt32(ctx, &len, lenVal);
-            JS_FreeValue(ctx, lenVal);
-            for (int32_t i = 0; i < len; ++i) {
-                JSValue lo = JS_GetPropertyUint32(ctx, layersVal, i);
-                std::string lname = jsGetStr(ctx, lo, "name", "");
-                if (lname.empty()) lname = "layer" + std::to_string(i);
-                int idx = node->addLayer(lname);
-                JSValue dv = JS_GetPropertyStr(ctx, lo, "data");
-                std::vector<uint16_t> buf;
-                if (readUint16Array(ctx, dv, buf)) {
-                    node->setLayerData(idx, buf.data(), buf.size());
-                }
-                JS_FreeValue(ctx, dv);
-                JS_FreeValue(ctx, lo);
-            }
-        } else {
-            JSValue dataVal = JS_GetPropertyStr(ctx, opts, "data");
-            if (!JS_IsUndefined(dataVal)) {
-                int idx = node->addLayer("default");
-                std::vector<uint16_t> buf;
-                if (readUint16Array(ctx, dataVal, buf)) {
-                    node->setLayerData(idx, buf.data(), buf.size());
-                }
-            }
-            JS_FreeValue(ctx, dataVal);
-        }
-        JS_FreeValue(ctx, layersVal);
-    }
-    return wrapNode(ctx, node, g);
-}
-
-static int resolveLayerArg(JSContext* ctx, JSValueConst v, scene::TilemapNode* tm) {
-    if (JS_IsUndefined(v) || JS_IsNull(v)) return 0;
-    if (JS_IsString(v)) return tm->layerIndex(jsStr(ctx, v));
-    int32_t n = 0; JS_ToInt32(ctx, &n, v);
-    return n;
-}
-
-static JSValue js_tilemap_setTile(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Tilemap || argc < 3) return JS_UNDEFINED;
-    auto* tm = static_cast<scene::TilemapNode*>(w->node);
-    int32_t col = 0, row = 0; int32_t tile = 0;
-    JS_ToInt32(ctx, &col, argv[0]);
-    JS_ToInt32(ctx, &row, argv[1]);
-    JS_ToInt32(ctx, &tile, argv[2]);
-    int layer = (argc > 3) ? resolveLayerArg(ctx, argv[3], tm) : 0;
-    tm->setTile(col, row, (uint16_t)tile, layer);
-    return JS_UNDEFINED;
-}
-
-static JSValue js_tilemap_getTile(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Tilemap || argc < 2) return JS_NewInt32(ctx, 0);
-    auto* tm = static_cast<scene::TilemapNode*>(w->node);
-    int32_t col = 0, row = 0;
-    JS_ToInt32(ctx, &col, argv[0]);
-    JS_ToInt32(ctx, &row, argv[1]);
-    int layer = (argc > 2) ? resolveLayerArg(ctx, argv[2], tm) : 0;
-    return JS_NewInt32(ctx, tm->getTile(col, row, layer));
-}
-
-static JSValue js_tilemap_tileAtWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Tilemap || argc < 2) return JS_NULL;
-    auto* tm = static_cast<scene::TilemapNode*>(w->node);
-    int col = 0, row = 0;
-    if (!tm->tileAtWorld((float)jsNum(ctx, argv[0]), (float)jsNum(ctx, argv[1]), col, row))
-        return JS_NULL;
-    JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "col", JS_NewInt32(ctx, col));
-    JS_SetPropertyStr(ctx, obj, "row", JS_NewInt32(ctx, row));
-    return obj;
 }
 
 // ---------------------------------------------------------------------------
@@ -3413,11 +3244,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("addAnimation", js_sprite_addAnimation, 2)
         .method_raw("burst", js_particles_burst, 1)
         .method_raw("clear", js_particles_clear, 0)
-        .method_raw("configure", js_particles_configure, 1)
-        // Tilemap
-        .method_raw("setTile", js_tilemap_setTile, 4)
-        .method_raw("getTile", js_tilemap_getTile, 3)
-        .method_raw("tileAtWorld", js_tilemap_tileAtWorld, 2);
+        .method_raw("configure", js_particles_configure, 1);
 
     // --- SceneGraph class ---
     qjsbind::Class<GraphWrapper>(ctx, "SceneGraph")
@@ -3449,7 +3276,6 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("createHtmlNode", js_sg_createHtml, 1)
         .method_raw("createLight", js_sg_createLight, 1)
         .method_raw("createParticles", js_sg_createParticles, 1)
-        .method_raw("createTilemap", js_sg_createTilemap, 1)
         .method_raw("setToneMap", js_sg_setToneMap, 1)
         .method_raw("setAmbient", js_sg_setAmbient, 1)
         .method_raw("setWind", js_sg_setWind, 1)
