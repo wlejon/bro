@@ -160,7 +160,7 @@ Annotated `.js` files in [docs/](docs/) — load them in your editor for JSDoc o
 
 `audio-api.js`, `mesh-api.js`, `flora-api.js`, `math-api.js`, `scene-api.js`, `lighting-api.js`, `physics-api.js`, `terrain-api.js`, `ai-game-api.js`, `gpu-api.js`, `tensor-api.js`, `lm-api.js`, `diffusion-api.js`, `tts-api.js`, `stt-api.js`, `wake-api.js`, `mic-api.js`, `vision-api.js`, `net-api.js`, `noise-api.js`, `worker-api.js`, `image-api.js`, `imagebitmap-api.js`, `video-api.js`, `dialogs-api.js`, `menu-api.js`, `gizmo-api.js`, `crosshair-api.js`, `brokit-api.js`.
 
-Plus [settings.md](docs/settings.md) (settings + action binding) and [inspect.md](docs/inspect.md) (DOM inspector, very useful in headless).
+Plus [settings.md](docs/settings.md) (settings + action binding), [inspect.md](docs/inspect.md) (DOM inspector, very useful in headless), and [system-panels.md](docs/system-panels.md) (authoring/overriding engine-level UI panels — menu bar, preferences modal, splash, inspector).
 
 ## Warning
 

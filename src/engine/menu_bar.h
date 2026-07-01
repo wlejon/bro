@@ -35,7 +35,9 @@ public:
     // bro-headless additionally suppresses the bar regardless of this flag
     // so screenshots match a no-menu viewport.
     bool visible = false;
-    // Height in CSS pixels. Must match #menu-bar height in system/menu.html.
+    // Height in CSS pixels. Also drives Engine::contentInsets(). Read by
+    // system/menu.html via __bro.menu.getHeight() to size #menu-bar — not
+    // hardcoded there.
     int height = 28;
     std::vector<Item> roots;
 

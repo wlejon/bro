@@ -200,6 +200,8 @@ The engine ships a standard Preferences dialog reachable via **Edit → Preferen
 
 Default panels are `Graphics`, `Audio`, and `Input`, covering the keys in the tables above. Apps extend the dialog by dropping HTML files into `<app-dir>/system/settings/`. The engine scans that directory at startup and the nav auto-populates tabs from whatever it finds — no registration step.
 
+See [system-panels.md](system-panels.md) for the full system-panel authoring surface (the `__bro` bridge, panel lifecycle hooks, `<script src>` support). The rest of this section covers just the settings-specific piece: getting a new tab's content region positioned correctly.
+
 ### Adding an app panel
 
 Create `<app-dir>/system/settings/gameplay.html`:
@@ -230,23 +232,13 @@ h1 { margin: 0 0 20px 0; font-size: 16px; color: #e0e0e0; }
     </div>
 </div>
 
+<script src="../lib/panel-runtime.js"></script>
 <script>
 (function() {
-    // Card layout constants — match system/nav.html so the panel lines up
-    // with the modal's content region.
-    var CARD_W = 720, CARD_H = 520, SIDEBAR_W = 180, HEADER_H = 44;
     var panel = document.getElementById('panel');
-    function positionPanel() {
-        var vp = __bro.getViewport();
-        var cl = Math.max(0, Math.floor((vp.width - CARD_W) / 2));
-        var ct = Math.max(0, Math.floor((vp.height - CARD_H) / 2));
-        panel.style.setProperty('left', (cl + SIDEBAR_W) + 'px');
-        panel.style.setProperty('top', (ct + HEADER_H) + 'px');
-        panel.style.setProperty('width', (CARD_W - SIDEBAR_W) + 'px');
-        panel.style.setProperty('height', (CARD_H - HEADER_H) + 'px');
-    }
-    positionPanel();
-    window.__onResize = positionPanel;
+    PanelLayout.onResize(function() {
+        PanelLayout.positionContent(panel);
+    });
 
     var sel = document.getElementById('difficulty');
     sel.value = bro.settings.get('game.difficulty') || 'normal';
@@ -259,7 +251,7 @@ h1 { margin: 0 0 20px 0; font-size: 16px; color: #e0e0e0; }
 </html>
 ```
 
-The tab label comes from the `<title>` element; the file's stem (`gameplay`) becomes the panel id. Use `bro.settings.set(...)` for any key — custom app keys are persisted to `.bro_settings.json` alongside engine keys and survive restarts.
+The tab label comes from the `<title>` element; the file's stem (`gameplay`) becomes the panel id. Use `bro.settings.set(...)` for any key — custom app keys are persisted to `.bro_settings.json` alongside engine keys and survive restarts. `PanelLayout` (`system/lib/panel-runtime.js`) is what keeps this tab's content region aligned with the modal shell — see [system-panels.md](system-panels.md#panellayout--shared-modal-geometry).
 
 ## bro.json integration
 

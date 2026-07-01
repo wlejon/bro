@@ -257,8 +257,8 @@ html, body {
             stageOp = 1 - Math.max(0, Math.min(1, (dms - BG_FADE_DELAY_MS) / BG_FADE_MS));
 
             if (dms >= DISMISS_MS) {
-                if (typeof __bro !== 'undefined' && __bro.dismissSplash) {
-                    __bro.dismissSplash();
+                if (typeof __bro !== 'undefined' && __bro.splash && __bro.splash.dismiss) {
+                    __bro.splash.dismiss();
                 }
                 return;
             }

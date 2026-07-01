@@ -125,7 +125,7 @@ html, body {
     }
 
     function applyLayout() {
-        var info = __bro.getInspectorLayout();
+        var info = __bro.inspector.getLayout();
         if (!info.visible) {
             panel.style.display = 'none';
             return;
@@ -165,8 +165,8 @@ html, body {
     }
 
     function render() {
-        rootNode = __bro.getAppDOMTree();
-        var sel = __bro.inspectorGetSelected();
+        rootNode = __bro.inspector.getAppTree();
+        var sel = __bro.inspector.getSelected();
         selectedId = sel ? sel.id : -1;
 
         // Auto-expand every ancestor of the current selection — only when the
@@ -249,25 +249,25 @@ html, body {
             return;
         }
         selectedId = id;
-        __bro.inspectorSelect(id);
+        __bro.inspector.select(id);
         render();
     }
 
     btnPick.addEventListener('click', function() {
-        var info = __bro.getInspectorLayout();
-        __bro.inspectorSetPickerMode(!info.pickerMode);
+        var info = __bro.inspector.getLayout();
+        __bro.inspector.setPickerMode(!info.pickerMode);
         applyLayout();
     });
     btnDockR.addEventListener('click', function() {
-        __bro.inspectorSetDock('right');
+        __bro.inspector.setDock('right');
         applyLayout();
     });
     btnDockB.addEventListener('click', function() {
-        __bro.inspectorSetDock('bottom');
+        __bro.inspector.setDock('bottom');
         applyLayout();
     });
     btnClose.addEventListener('click', function() {
-        __bro.toggleInspector();
+        __bro.inspector.toggle();
     });
 
     window.__onResize = function() { applyLayout(); render(); };

@@ -2,6 +2,8 @@
 
 When `bro` is launched with no app argument and no `bro.json`/`index.html` next to the executable, it falls through to the built-in **project manager** at `system/projects/`. This is the default home screen for plain bro releases.
 
+`system/projects/` has its own `bro.json`, so it's a self-contained app, not a [system panel](system-panels.md) — the panel scanner skips any `system/<dir>/` that contains one.
+
 ## What it does
 
 - Lists projects from a per-user registry, sorted by last opened.

@@ -328,30 +328,64 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
                 return js::CanvasBindings::wrapContext2D(fctx, ptr);
             });
 
-        // Extract and execute inline scripts
+        // Extract and execute scripts, external (src=) and inline, in document
+        // order. Each panel has its own JSContext (not the Runtime's shared
+        // module context), so only classic scripts are supported here —
+        // type="module" is skipped with a warning rather than misevaluated.
         {
-            std::regex scriptRe(R"(<script[^>]*>([\s\S]*?)</script>)",
+            std::regex scriptRe(R"(<script([^>]*)>([\s\S]*?)</script>)",
+                                std::regex_constants::icase);
+            std::regex srcRe(R"(src\s*=\s*["']([^"']+)["'])",
+                             std::regex_constants::icase);
+            std::regex moduleRe(R"(type\s*=\s*["']module["'])",
                                 std::regex_constants::icase);
             auto begin = std::sregex_iterator(html.begin(), html.end(), scriptRe);
             auto end = std::sregex_iterator();
             for (auto it = begin; it != end; ++it) {
-                std::string code = (*it)[1].str();
-                if (!code.empty()) {
-                    std::string filename = "<system/" + liveDoc.name + ">";
-                    JSValue result = JS_Eval(liveDoc.jsCtx, code.c_str(), code.size(),
-                                             filename.c_str(), JS_EVAL_TYPE_GLOBAL);
-                    if (JS_IsException(result)) {
-                        JSValue ex = JS_GetException(liveDoc.jsCtx);
-                        const char* str = JS_ToCString(liveDoc.jsCtx, ex);
-                        if (str) {
-                            LOG_ERROR("System panel JS error in '%s': %s",
-                                      liveDoc.name.c_str(), str);
-                            JS_FreeCString(liveDoc.jsCtx, str);
-                        }
-                        JS_FreeValue(liveDoc.jsCtx, ex);
-                    }
-                    JS_FreeValue(liveDoc.jsCtx, result);
+                std::string attrs = (*it)[1].str();
+                std::string body = (*it)[2].str();
+                if (std::regex_search(attrs, moduleRe)) {
+                    LOG_WARN("System panel '%s': <script type=module> not supported, skipping",
+                             liveDoc.name.c_str());
+                    continue;
                 }
+
+                std::string code;
+                std::string filename;
+                std::smatch srcMatch;
+                if (std::regex_search(attrs, srcMatch, srcRe)) {
+                    // Resolve relative to dirPath (the directory actually being
+                    // scanned — global "system/..." or an app's "system/..."
+                    // override), so the same relative src works either way.
+                    std::string resolved = AppLoader::resolvePath(dirPath, srcMatch[1].str(),
+                                                                   &assetMounts_);
+                    code = AppLoader::loadFile(resolved);
+                    filename = resolved;
+                    if (code.empty()) {
+                        LOG_ERROR("System panel '%s': failed to load script '%s'",
+                                  liveDoc.name.c_str(), resolved.c_str());
+                        continue;
+                    }
+                } else if (!body.empty()) {
+                    code = body;
+                    filename = "<system/" + liveDoc.name + ">";
+                } else {
+                    continue;
+                }
+
+                JSValue result = JS_Eval(liveDoc.jsCtx, code.c_str(), code.size(),
+                                         filename.c_str(), JS_EVAL_TYPE_GLOBAL);
+                if (JS_IsException(result)) {
+                    JSValue ex = JS_GetException(liveDoc.jsCtx);
+                    const char* str = JS_ToCString(liveDoc.jsCtx, ex);
+                    if (str) {
+                        LOG_ERROR("System panel JS error in '%s': %s",
+                                  liveDoc.name.c_str(), str);
+                        JS_FreeCString(liveDoc.jsCtx, str);
+                    }
+                    JS_FreeValue(liveDoc.jsCtx, ex);
+                }
+                JS_FreeValue(liveDoc.jsCtx, result);
             }
         }
 
@@ -401,8 +435,64 @@ void Engine::installBroObject(SystemDocument& doc) {
     JSValue ptrVal = JS_NewInt64(ctx, static_cast<int64_t>(
         reinterpret_cast<intptr_t>(this)));
 
-    // __bro.showPanel(name)
-    JS_SetPropertyStr(ctx, bro, "showPanel",
+    // ── __bro.menu — menu.html's read-only render feed + click dispatch.
+    // Distinct from the app-facing bro.menu.* tree-mutation API (installed
+    // on the app's own JSContext, not here): menu.html only renders and
+    // reports clicks, it doesn't own the tree.
+    JSValue menuObj = JS_NewObject(ctx);
+
+    // __bro.menu.getTree() — returns the menu tree as a parsed JS array.
+    JS_SetPropertyStr(ctx, menuObj, "getTree",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (!self) return JS_NewArray(cx);
+            std::string json = self->menuBar().toJSON();
+            return JS_ParseJSON(cx, json.c_str(), json.size(), "<menu>");
+        }, 0, 0, 1, &ptrVal));
+
+    // __bro.menu.click(id) — dispatch menu action.
+    JS_SetPropertyStr(ctx, menuObj, "click",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            if (!self || argc < 1) return JS_UNDEFINED;
+            const char* id = JS_ToCString(cx, argv[0]);
+            if (!id) return JS_UNDEFINED;
+            self->triggerMenuAction(id);
+            JS_FreeCString(cx, id);
+            return JS_UNDEFINED;
+        }, 1, 0, 1, &ptrVal));
+
+    // __bro.menu.getHeight() — the authoritative menu-bar height (also drives
+    // Engine::contentInsets()), so menu.html can size #menu-bar from it
+    // instead of keeping its own hardcoded copy in CSS.
+    JS_SetPropertyStr(ctx, menuObj, "getHeight",
+        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
+                                    int argc, JSValue* argv, int magic,
+                                    JSValue* fdata) -> JSValue {
+            int64_t p = 0;
+            JS_ToInt64(cx, &p, fdata[0]);
+            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+            return JS_NewInt32(cx, self ? self->menuBar().height : 28);
+        }, 0, 0, 1, &ptrVal));
+
+    JS_SetPropertyStr(ctx, bro, "menu", menuObj);
+
+    // ── __bro.settingsUI — preferences-modal chrome (nav.html + the shared
+    // panel-runtime layout helper). Distinct from bro.settings.* (the actual
+    // settings values API, also available here since SettingsBindings is
+    // installed on every panel context).
+    JSValue settingsUIObj = JS_NewObject(ctx);
+
+    // __bro.settingsUI.show(name)
+    JS_SetPropertyStr(ctx, settingsUIObj, "show",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -417,8 +507,9 @@ void Engine::installBroObject(SystemDocument& doc) {
             return JS_UNDEFINED;
         }, 1, 0, 1, &ptrVal));
 
-    // __bro.getPanels()
-    JS_SetPropertyStr(ctx, bro, "getPanels",
+    // __bro.settingsUI.getAllPanels() — every panel with a tab label,
+    // regardless of group. Used by nav.html.
+    JS_SetPropertyStr(ctx, settingsUIObj, "getAllPanels",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -441,8 +532,8 @@ void Engine::installBroObject(SystemDocument& doc) {
             return arr;
         }, 0, 0, 1, &ptrVal));
 
-    // __bro.getActivePanel()
-    JS_SetPropertyStr(ctx, bro, "getActivePanel",
+    // __bro.settingsUI.getActivePanel()
+    JS_SetPropertyStr(ctx, settingsUIObj, "getActivePanel",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -453,37 +544,8 @@ void Engine::installBroObject(SystemDocument& doc) {
             return JS_NewString(cx, self->systemActivePanel_.c_str());
         }, 0, 0, 1, &ptrVal));
 
-    // __bro.getMenu() — returns the menu tree as a parsed JS array.
-    JS_SetPropertyStr(ctx, bro, "getMenu",
-        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
-                                    int argc, JSValue* argv, int magic,
-                                    JSValue* fdata) -> JSValue {
-            int64_t p = 0;
-            JS_ToInt64(cx, &p, fdata[0]);
-            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
-            if (!self) return JS_NewArray(cx);
-            std::string json = self->menuBar().toJSON();
-            return JS_ParseJSON(cx, json.c_str(), json.size(), "<menu>");
-        }, 0, 0, 1, &ptrVal));
-
-    // __bro.menuClick(id) — dispatch menu action.
-    JS_SetPropertyStr(ctx, bro, "menuClick",
-        JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
-                                    int argc, JSValue* argv, int magic,
-                                    JSValue* fdata) -> JSValue {
-            int64_t p = 0;
-            JS_ToInt64(cx, &p, fdata[0]);
-            auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
-            if (!self || argc < 1) return JS_UNDEFINED;
-            const char* id = JS_ToCString(cx, argv[0]);
-            if (!id) return JS_UNDEFINED;
-            self->triggerMenuAction(id);
-            JS_FreeCString(cx, id);
-            return JS_UNDEFINED;
-        }, 1, 0, 1, &ptrVal));
-
-    // __bro.toggleSettings() — open/close settings overlay.
-    JS_SetPropertyStr(ctx, bro, "toggleSettings",
+    // __bro.settingsUI.toggle() — open/close settings overlay.
+    JS_SetPropertyStr(ctx, settingsUIObj, "toggle",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -494,8 +556,8 @@ void Engine::installBroObject(SystemDocument& doc) {
             return JS_UNDEFINED;
         }, 0, 0, 1, &ptrVal));
 
-    // __bro.isSettingsVisible()
-    JS_SetPropertyStr(ctx, bro, "isSettingsVisible",
+    // __bro.settingsUI.isVisible()
+    JS_SetPropertyStr(ctx, settingsUIObj, "isVisible",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -505,10 +567,11 @@ void Engine::installBroObject(SystemDocument& doc) {
             return JS_NewBool(cx, self && self->isSystemVisible());
         }, 0, 0, 1, &ptrVal));
 
-    // __bro.getSettingsPanels() — enumerate settings panels as [{name, label}].
-    // Used by the preferences nav to build tabs dynamically; apps add a panel
-    // by dropping HTML at apps/<name>/system/settings/<panel>.html.
-    JS_SetPropertyStr(ctx, bro, "getSettingsPanels",
+    // __bro.settingsUI.getSettingsPanels() — enumerate settings-group panels
+    // as [{name, label}]. Used by the preferences nav to build tabs
+    // dynamically; apps add a panel by dropping HTML at
+    // apps/<name>/system/settings/<panel>.html.
+    JS_SetPropertyStr(ctx, settingsUIObj, "getSettingsPanels",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -528,8 +591,9 @@ void Engine::installBroObject(SystemDocument& doc) {
             return arr;
         }, 0, 0, 1, &ptrVal));
 
-    // __bro.getViewport() — current viewport metrics for panels to size with.
-    JS_SetPropertyStr(ctx, bro, "getViewport",
+    // __bro.settingsUI.getViewport() — current viewport metrics for panels
+    // to size with (also consumed by the shared panel-runtime.js helper).
+    JS_SetPropertyStr(ctx, settingsUIObj, "getViewport",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -544,9 +608,15 @@ void Engine::installBroObject(SystemDocument& doc) {
             return o;
         }, 0, 0, 1, &ptrVal));
 
-    // __bro.dismissSplash() — called by system/splash.html after its swirl-away
-    // animation finishes. Hides the splash panel so the app canvas is revealed.
-    JS_SetPropertyStr(ctx, bro, "dismissSplash",
+    JS_SetPropertyStr(ctx, bro, "settingsUI", settingsUIObj);
+
+    // ── __bro.splash — splash.html's dismiss callback.
+    JSValue splashObj = JS_NewObject(ctx);
+
+    // __bro.splash.dismiss() — called by system/splash.html after its
+    // swirl-away animation finishes. Hides the splash panel so the app
+    // canvas is revealed.
+    JS_SetPropertyStr(ctx, splashObj, "dismiss",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -560,13 +630,15 @@ void Engine::installBroObject(SystemDocument& doc) {
             return JS_UNDEFINED;
         }, 0, 0, 1, &ptrVal));
 
-    // ── Inspector API ───────────────────────────────────────────────────
-    // Used by system/inspector.html to read/write inspector state and to
-    // walk the app document tree.
+    JS_SetPropertyStr(ctx, bro, "splash", splashObj);
 
-    // __bro.getInspectorLayout() — { visible, dock, width, height,
+    // ── __bro.inspector — used by system/inspector.html to read/write
+    // inspector state and to walk the app document tree.
+    JSValue inspectorObj = JS_NewObject(ctx);
+
+    // __bro.inspector.getLayout() — { visible, dock, width, height,
     //     viewportWidth, viewportHeight, menuTop }.
-    JS_SetPropertyStr(ctx, bro, "getInspectorLayout",
+    JS_SetPropertyStr(ctx, inspectorObj, "getLayout",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -588,9 +660,9 @@ void Engine::installBroObject(SystemDocument& doc) {
             return o;
         }, 0, 0, 1, &ptrVal));
 
-    // __bro.getAppDOMTree(maxDepth?) — full tree from documentElement, or
-    // up to maxDepth levels deep. Resets the per-fetch nodeId map.
-    JS_SetPropertyStr(ctx, bro, "getAppDOMTree",
+    // __bro.inspector.getAppTree(maxDepth?) — full tree from documentElement,
+    // or up to maxDepth levels deep. Resets the per-fetch nodeId map.
+    JS_SetPropertyStr(ctx, inspectorObj, "getAppTree",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -604,8 +676,8 @@ void Engine::installBroObject(SystemDocument& doc) {
             return self->inspectorBuildTreeJS(cx, maxDepth);
         }, 1, 0, 1, &ptrVal));
 
-    // __bro.getAppDOMChildren(nodeId) — one level of children.
-    JS_SetPropertyStr(ctx, bro, "getAppDOMChildren",
+    // __bro.inspector.getAppChildren(nodeId) — one level of children.
+    JS_SetPropertyStr(ctx, inspectorObj, "getAppChildren",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -618,8 +690,8 @@ void Engine::installBroObject(SystemDocument& doc) {
             return self->inspectorChildrenJS(cx, id);
         }, 1, 0, 1, &ptrVal));
 
-    // __bro.inspectorSelect(nodeId)
-    JS_SetPropertyStr(ctx, bro, "inspectorSelect",
+    // __bro.inspector.select(nodeId)
+    JS_SetPropertyStr(ctx, inspectorObj, "select",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -633,8 +705,8 @@ void Engine::installBroObject(SystemDocument& doc) {
             return JS_UNDEFINED;
         }, 1, 0, 1, &ptrVal));
 
-    // __bro.inspectorSetDock("right"|"bottom")
-    JS_SetPropertyStr(ctx, bro, "inspectorSetDock",
+    // __bro.inspector.setDock("right"|"bottom")
+    JS_SetPropertyStr(ctx, inspectorObj, "setDock",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -650,8 +722,8 @@ void Engine::installBroObject(SystemDocument& doc) {
             return JS_UNDEFINED;
         }, 1, 0, 1, &ptrVal));
 
-    // __bro.inspectorSetSize(px)
-    JS_SetPropertyStr(ctx, bro, "inspectorSetSize",
+    // __bro.inspector.setSize(px)
+    JS_SetPropertyStr(ctx, inspectorObj, "setSize",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -665,8 +737,8 @@ void Engine::installBroObject(SystemDocument& doc) {
             return JS_UNDEFINED;
         }, 1, 0, 1, &ptrVal));
 
-    // __bro.inspectorSetPickerMode(bool)
-    JS_SetPropertyStr(ctx, bro, "inspectorSetPickerMode",
+    // __bro.inspector.setPickerMode(bool)
+    JS_SetPropertyStr(ctx, inspectorObj, "setPickerMode",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -678,9 +750,9 @@ void Engine::installBroObject(SystemDocument& doc) {
             return JS_UNDEFINED;
         }, 1, 0, 1, &ptrVal));
 
-    // __bro.inspectorGetSelected() — { id, tag } | null. The id is from the
-    // most recent getAppDOMTree() / getAppDOMChildren() fetch.
-    JS_SetPropertyStr(ctx, bro, "inspectorGetSelected",
+    // __bro.inspector.getSelected() — { id, tag } | null. The id is from the
+    // most recent getAppTree() / getAppChildren() fetch.
+    JS_SetPropertyStr(ctx, inspectorObj, "getSelected",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -691,8 +763,8 @@ void Engine::installBroObject(SystemDocument& doc) {
             return self->inspectorSelectedJS(cx);
         }, 0, 0, 1, &ptrVal));
 
-    // __bro.toggleInspector() — same effect as the View → Inspector menu.
-    JS_SetPropertyStr(ctx, bro, "toggleInspector",
+    // __bro.inspector.toggle() — same effect as the View → Inspector menu.
+    JS_SetPropertyStr(ctx, inspectorObj, "toggle",
         JS_NewCFunctionData(ctx, [](JSContext* cx, JSValue thisVal,
                                     int argc, JSValue* argv, int magic,
                                     JSValue* fdata) -> JSValue {
@@ -702,6 +774,8 @@ void Engine::installBroObject(SystemDocument& doc) {
             if (self) self->toggleInspector();
             return JS_UNDEFINED;
         }, 0, 0, 1, &ptrVal));
+
+    JS_SetPropertyStr(ctx, bro, "inspector", inspectorObj);
 
     JS_SetPropertyStr(ctx, global, "__bro", bro);
     doc.broPerfObj = JS_DupValue(ctx, perf);
@@ -877,7 +951,7 @@ void Engine::showSystemPanel(const std::string& name) {
 
 void Engine::tickSystemPanels(double nowMs) {
     // Splash lifecycle: after a minimum display time, tell the splash panel
-    // to play its swirl-away animation. The panel's JS calls __bro.dismissSplash()
+    // to play its swirl-away animation. The panel's JS calls __bro.splash.dismiss()
     // when the animation finishes. A hard fallback force-hides the splash if
     // something goes wrong so a broken splash never wedges the app.
     if (splashVisible_) {

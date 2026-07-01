@@ -23,7 +23,8 @@ html, body {
     top: 0;
     left: 0;
     width: 100%;
-    height: 28px;
+    /* height set from __bro.menu.getHeight() at render time — must match
+       MenuBar::height, which also drives Engine::contentInsets(). */
     background: rgba(20, 20, 20, 240);
     border-bottom: 1px solid #333;
     user-select: none;
@@ -46,7 +47,7 @@ html, body {
 
 .dropdown {
     position: absolute;
-    top: 28px;
+    /* top set inline, alongside #menu-bar's height, from getHeight(). */
     left: 0;
     background: rgba(28, 28, 28, 245);
     border: 1px solid #3a3a3a;
@@ -97,6 +98,7 @@ html, body {
     var openRootId = null;
     var tree = [];
     var rootGeom = {};
+    var barHeight = __bro.menu.getHeight();
 
     function escapeHtml(s) {
         return String(s)
@@ -110,7 +112,7 @@ html, body {
     }
 
     function render() {
-        tree = __bro.getMenu() || [];
+        tree = __bro.menu.getTree() || [];
         rootGeom = {};
         var leftPx = 0;
         var rootsHtml = '';
@@ -133,7 +135,7 @@ html, body {
             if (openRoot && openRoot.children && openRoot.children.length) {
                 var geom = rootGeom[openRootId];
                 var ddLeft = geom ? geom.leftPx : 0;
-                ddHtml = '<div class="dropdown" style="left:' + ddLeft + 'px">';
+                ddHtml = '<div class="dropdown" style="left:' + ddLeft + 'px;top:' + barHeight + 'px">';
                 for (var j = 0; j < openRoot.children.length; j++) {
                     var child = openRoot.children[j];
                     if (child.hidden) continue;
@@ -152,7 +154,7 @@ html, body {
             }
         }
 
-        root.innerHTML = '<div id="menu-bar">' + rootsHtml + '</div>' + ddHtml;
+        root.innerHTML = '<div id="menu-bar" style="height:' + barHeight + 'px">' + rootsHtml + '</div>' + ddHtml;
 
         // Wire handlers.
         var rootDivs = root.getElementsByClassName('root');
@@ -186,7 +188,7 @@ html, body {
         var id = this.getAttribute('data-id');
         openRootId = null;
         render();
-        __bro.menuClick(id);
+        __bro.menu.click(id);
     }
 
     window.__onMenuChanged = function() {

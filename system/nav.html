@@ -106,31 +106,16 @@ html, body {
     <div id="sidebar"></div>
 </div>
 
+<script src="lib/panel-runtime.js"></script>
 <script>
 (function() {
-    // --- Layout constants (mirrored by each settings panel) ---
-    var CARD_W = 720, CARD_H = 520, SIDEBAR_W = 180, HEADER_H = 44;
-
     var card = document.getElementById('card');
     var sidebar = document.getElementById('sidebar');
     var closeBtn = document.getElementById('close');
     var backdrop = document.getElementById('backdrop');
 
-    function positionCard() {
-        var vp = __bro.getViewport();
-        backdrop.style.setProperty('width', vp.width + 'px');
-        backdrop.style.setProperty('height', vp.height + 'px');
-
-        var left = Math.max(0, Math.floor((vp.width - CARD_W) / 2));
-        var top = Math.max(0, Math.floor((vp.height - CARD_H) / 2));
-        card.style.setProperty('left', left + 'px');
-        card.style.setProperty('top', top + 'px');
-        card.style.setProperty('width', CARD_W + 'px');
-        card.style.setProperty('height', CARD_H + 'px');
-    }
-
     function buildTabs() {
-        var panels = __bro.getSettingsPanels();
+        var panels = __bro.settingsUI.getSettingsPanels();
         sidebar.innerHTML = '';
         for (var i = 0; i < panels.length; i++) {
             var t = document.createElement('div');
@@ -139,7 +124,7 @@ html, body {
             t.setAttribute('data-panel', panels[i].name);
             (function(name) {
                 t.addEventListener('click', function() {
-                    __bro.showPanel(name);
+                    __bro.settingsUI.show(name);
                     refreshActive();
                 });
             })(panels[i].name);
@@ -149,7 +134,7 @@ html, body {
     }
 
     function refreshActive() {
-        var active = __bro.getActivePanel();
+        var active = __bro.settingsUI.getActivePanel();
         var tabs = sidebar.children;
         for (var i = 0; i < tabs.length; i++) {
             var p = tabs[i].getAttribute('data-panel');
@@ -158,22 +143,23 @@ html, body {
     }
 
     closeBtn.addEventListener('click', function() {
-        __bro.toggleSettings();
+        __bro.settingsUI.toggle();
     });
 
     // Click on backdrop (but not the card) dismisses the modal.
     backdrop.addEventListener('click', function() {
-        __bro.toggleSettings();
+        __bro.settingsUI.toggle();
     });
 
-    positionCard();
     // Panels may not all be loaded yet — engine fires __onPanelsReady after
     // every system panel is registered. Build tabs there. (Also build now in
     // case a panel we care about loaded before us; harmless if empty.)
     buildTabs();
     window.__onPanelsReady = buildTabs;
 
-    window.__onResize = positionCard;
+    PanelLayout.onResize(function() {
+        PanelLayout.positionCard(card, backdrop);
+    });
 })();
 </script>
 </body>
