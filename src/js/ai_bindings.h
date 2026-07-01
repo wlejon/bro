@@ -9,7 +9,10 @@ namespace brogameagent {
     class World;
     class NavGrid;
     namespace nn { class SingleHeroNet; class PolicyValueNet; class SingleHeroNetTX; class WeightsHandle; }
-    namespace mcts { class Mcts; class IPrior; class IEvaluator; class ITeamEvaluator; class IRolloutPolicy; }
+    namespace mcts {
+        class Mcts; class IPrior; class IEvaluator; class ITeamEvaluator; class IRolloutPolicy;
+        struct MctsConfig; struct CombatAction;
+    }
 }
 
 namespace brotensor { struct Tensor; }
@@ -126,5 +129,19 @@ extractPriorShared(JSContext* ctx, JSValueConst v);
 /// Unwrap a wrapped NeuralEvaluator as a shared_ptr<IEvaluator>. Empty if not.
 std::shared_ptr<brogameagent::mcts::IEvaluator>
 extractHeroEvaluatorShared(JSContext* ctx, JSValueConst v);
+
+/// Parse the common MctsConfig fields (iterations, budgetMs, rolloutHorizon,
+/// simDt, actionRepeat, uctC, seed, tacticWindowDecisions, pwAlpha, priorC,
+/// optionMaxWindows, useLeafValue) off a flat JS options object. Shared by
+/// every MCTS-variant creator and by the root-parallel bindings.
+brogameagent::mcts::MctsConfig parseMctsConfig(JSContext* ctx, JSValueConst opts);
+
+/// Build a plain {moveDir, attackSlot, abilitySlot} JS object from a
+/// CombatAction. Shared by every MCTS-variant creator and by the
+/// root-parallel bindings.
+JSValue makeCombatAction(JSContext* ctx, const brogameagent::mcts::CombatAction& a);
+
+// ── Root-parallel search (implemented in ai_parallel_bindings.cpp) ──
+void installParallelBindings(JSContext* ctx, JSValue gameObj);
 
 } // namespace bro::js

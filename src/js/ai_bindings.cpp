@@ -469,7 +469,7 @@ static JSValue js_createReplayReader(JSContext* ctx, JSValueConst, int, JSValueC
 
 // ─── MCTS shared parse/marshal helpers ─────────────────────────────────────
 
-static brogameagent::mcts::MctsConfig parseMctsConfig(JSContext* ctx, JSValueConst opts) {
+brogameagent::mcts::MctsConfig parseMctsConfig(JSContext* ctx, JSValueConst opts) {
     brogameagent::mcts::MctsConfig c{};
     c.iterations              = getInt32Prop(ctx, opts, "iterations", c.iterations);
     c.budget_ms               = getInt32Prop(ctx, opts, "budgetMs", c.budget_ms);
@@ -549,7 +549,7 @@ static JSValue buildWorldView(JSContext* ctx, const brogameagent::World& world) 
 // Forward decls — defined later in the file, referenced by the JS-callback
 // wrappers below (parsing/emitting CombatAction objects to/from JS).
 static brogameagent::mcts::CombatAction parseCombatAction(JSContext* ctx, JSValueConst obj);
-static JSValue makeCombatAction(JSContext* ctx, const brogameagent::mcts::CombatAction& a);
+JSValue makeCombatAction(JSContext* ctx, const brogameagent::mcts::CombatAction& a);
 static std::vector<brogameagent::mcts::CombatAction>
 parseCombatActionArray(JSContext* ctx, JSValueConst arr);
 
@@ -1000,7 +1000,7 @@ static brogameagent::mcts::CombatAction parseCombatAction(JSContext* ctx, JSValu
     return a;
 }
 
-static JSValue makeCombatAction(JSContext* ctx, const brogameagent::mcts::CombatAction& a) {
+JSValue makeCombatAction(JSContext* ctx, const brogameagent::mcts::CombatAction& a) {
     JSValue obj = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, obj, "moveDir",     JS_NewInt32(ctx, (int)a.move_dir));
     JS_SetPropertyStr(ctx, obj, "attackSlot",  JS_NewInt32(ctx, (int)a.attack_slot));
@@ -2940,6 +2940,9 @@ void AIBindings::install(JSContext* ctx) {
 
     // Env-agnostic GenericMcts (bro.ai.game.createGenericMcts)
     installGenericMctsBindings(ctx, gameObj);
+
+    // Root-parallel search (bro.ai.game.rootParallelSearch[Decoupled])
+    installParallelBindings(ctx, gameObj);
 
     // Grid-world / platformer kit (bro.ai.game.grid.*)
     installGridBindings(ctx, gameObj);

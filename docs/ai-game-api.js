@@ -452,6 +452,32 @@ console.log(planner.committedTactic.kind);          // "FocusLowestHp", etc.
 console.log(planner.windowsUntilReplan);
 console.log(planner.lastStats.fineStats.iterations);
 
+// Root-parallel: N native threads, each with its own Mcts over its own
+// World, joined and merged into one action. Caller must hand in an array of
+// pre-built Worlds already seeded to the SAME game state — this does not
+// clone `world` for you (a World doesn't own its Agents, so cloning would be
+// unsafe to do implicitly). Blocking call: all worker threads are fully
+// joined before it returns, so QuickJS never observes concurrency and there
+// is no JS-side locking to worry about. Because of that same threading,
+// `evaluator`/`rolloutPolicy` MUST be a string preset or a native/neural
+// wrapper (e.g. bro.ai.game.learn.createNeuralEvaluator(...)) — a plain JS
+// function is rejected with a TypeError, since N native threads calling
+// back into QuickJS concurrently would be unsafe.
+const parallelWorlds = [world1, world2, world3, world4]; // same state, N clones
+const { action: pAction, stats: pStats } = bro.ai.game.rootParallelSearch({
+    worlds: parallelWorlds, heroId: hero.id,
+    iterations: 200, rolloutHorizon: 12, actionRepeat: 4, seed: 0xDEAD,
+    evaluator: "hpDelta", rolloutPolicy: "aggressive", opponentPolicy: "aggressive",
+});
+console.log(pStats); // { numThreads, totalIterations, elapsedMs, mergedBestVisits }
+
+// Decoupled root-parallel: same threading contract, no opponentPolicy (both
+// sides searched simultaneously, like createDecoupledMcts).
+const { hero: pHero, opp: pOpp } = bro.ai.game.rootParallelSearchDecoupled({
+    worlds: parallelWorlds, heroId: hero.id, oppId: opp.id,
+    iterations: 200, evaluator: "hpDelta", rolloutPolicy: "aggressive",
+});
+
 // Helpers for custom planners / UI debug:
 const legalA = bro.ai.game.legalActions(hero, world);     // [CombatAction, ...]
 const legalT = bro.ai.game.legalTactics(world, heroes);   // [Tactic, ...]
