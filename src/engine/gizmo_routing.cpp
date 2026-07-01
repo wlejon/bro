@@ -8,6 +8,7 @@
 #include "engine/gizmo.h"
 #include "scene/scene_graph.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 
 namespace bro::engine {
 
@@ -15,26 +16,18 @@ using scene::SceneGraph;
 using bromath::Vec3;
 using bromath::Quat;
 
-// Accumulate absolute top-left of `el` by walking layoutParent chain and
-// subtracting scrollTop at each step. Mirrors the logic used elsewhere to
-// position canvas scenes (engine.cpp:485-503).
+// Absolute (transform-correct) content-box rect of `el`. Shares the same
+// ancestor-transform-aware math as getBoundingClientRect() — see
+// dom::absoluteContentBox().
 static bool elementAbsoluteBox(dom::Element* el,
                                float& outX, float& outY,
                                float& outW, float& outH) {
     if (!el) return false;
-    auto& box = el->layoutBox();
-    float x = box.contentRect.x;
-    float y = box.contentRect.y;
-    for (auto* lp = el->layoutParent(); lp; lp = lp->layoutParent()) {
-        auto& pb = lp->layoutBox();
-        x += pb.contentRect.x;
-        y += pb.contentRect.y;
-        y -= lp->scrollTopValue();
-    }
-    outX = x;
-    outY = y;
-    outW = box.contentRect.width;
-    outH = box.contentRect.height;
+    dom::AbsoluteRect r = dom::absoluteContentBox(el);
+    outX = r.x;
+    outY = r.y;
+    outW = r.width;
+    outH = r.height;
     return outW > 0 && outH > 0;
 }
 

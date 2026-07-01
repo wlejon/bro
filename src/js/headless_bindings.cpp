@@ -2,6 +2,7 @@
 #include "engine/engine.h"
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
 #include "dom/document.h"
@@ -67,22 +68,16 @@ static JSValue js_screenshot(JSContext* ctx, JSValueConst, int argc, JSValueCons
         }
         JS_FreeCString(ctx, selector);
 
-        // Compute absolute position by walking up the layout parent chain.
-        // Uses layoutParent() to correctly traverse shadow DOM boundaries
-        // (slotted elements have a layout parent that differs from DOM parent).
-        auto& box = el->layoutBox();
-        float ax = box.contentRect.x - box.padding.left - box.border.left;
-        float ay = box.contentRect.y - box.padding.top - box.border.top;
-        for (auto* lp = el->layoutParent(); lp; lp = lp->layoutParent()) {
-            auto& pb = lp->layoutBox();
-            ax += pb.contentRect.x;
-            ay += pb.contentRect.y;
-        }
+        // Compute absolute (transform- and scroll-correct) border-box position,
+        // matching getBoundingClientRect() — see dom::absoluteBorderBox(). Also
+        // correctly traverses shadow DOM boundaries via layoutParent().
+        bro::dom::AbsoluteRect r = bro::dom::absoluteBorderBox(el);
         // Add menu bar inset so the crop matches getBoundingClientRect-based
         // viewport coords (mouse helpers do the same compensation).
-        ay += static_cast<float>(engine->contentTop());
-        int w = static_cast<int>(box.fullWidth());
-        int h = static_cast<int>(box.fullHeight());
+        float ax = r.x;
+        float ay = r.y + static_cast<float>(engine->contentTop());
+        int w = static_cast<int>(r.width);
+        int h = static_cast<int>(r.height);
         ok = engine->screenshot(path, static_cast<int>(ax), static_cast<int>(ay), w, h);
     } else {
         ok = engine->screenshot(path);

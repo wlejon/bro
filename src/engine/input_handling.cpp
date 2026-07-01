@@ -19,6 +19,7 @@
 #include "js/event_dispatch.h"
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "dom/event.h"
 #include "dom/range.h"
 #include "dom/selection.h"
@@ -2051,17 +2052,9 @@ scene::SceneGraph* Engine::sceneGraphForElement(const dom::Element* el) const {
 
 bool Engine::elementAbsoluteOrigin(dom::Element* el, float& outX, float& outY) const {
     if (!el) return false;
-    auto& box = el->layoutBox();
-    float ax = box.contentRect.x;
-    float ay = box.contentRect.y;
-    for (auto* lp = el->layoutParent(); lp; lp = lp->layoutParent()) {
-        auto& pb = lp->layoutBox();
-        ax += pb.contentRect.x;
-        ay += pb.contentRect.y;
-        ay -= lp->scrollTopValue();
-    }
-    outX = ax;
-    outY = ay;
+    dom::AbsolutePoint p = dom::absoluteContentOrigin(el);
+    outX = p.x;
+    outY = p.y;
     return true;
 }
 

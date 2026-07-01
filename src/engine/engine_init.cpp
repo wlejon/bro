@@ -3,6 +3,7 @@
 #include "engine/layout_pipeline.h"
 #include "engine/inspector_highlight.h"
 #include "engine/key_mapping.h"
+#include "dom/element_geometry.h"
 #include "layout/box.h"
 #include "layout/layout_node_adapter.h"
 #include "engine/overflow.h"
@@ -621,17 +622,8 @@ Engine::Engine(const EngineConfig& config)
                                 ox = oy = ow = oh = 0;
                                 return;
                             }
-                            auto& box = elem->layoutBox();
-                            ox = box.contentRect.x;
-                            oy = box.contentRect.y;
-                            for (auto* lp = elem->layoutParent(); lp; lp = lp->layoutParent()) {
-                                auto& pb = lp->layoutBox();
-                                ox += pb.contentRect.x;
-                                oy += pb.contentRect.y;
-                                oy -= lp->scrollTopValue();
-                            }
-                            ow = box.contentRect.width;
-                            oh = box.contentRect.height;
+                            dom::AbsoluteRect r = dom::absoluteContentBox(elem);
+                            ox = r.x; oy = r.y; ow = r.width; oh = r.height;
                         }, el);
                         scene->setDetachedCallback([](void* ud) -> bool {
                             // Walk up to check if connected to the document
@@ -673,17 +665,8 @@ Engine::Engine(const EngineConfig& config)
                                 ox = oy = ow = oh = 0;
                                 return;
                             }
-                            auto& box = elem->layoutBox();
-                            ox = box.contentRect.x;
-                            oy = box.contentRect.y;
-                            for (auto* lp = elem->layoutParent(); lp; lp = lp->layoutParent()) {
-                                auto& pb = lp->layoutBox();
-                                ox += pb.contentRect.x;
-                                oy += pb.contentRect.y;
-                                oy -= lp->scrollTopValue();
-                            }
-                            ow = box.contentRect.width;
-                            oh = box.contentRect.height;
+                            dom::AbsoluteRect r = dom::absoluteContentBox(elem);
+                            ox = r.x; oy = r.y; ow = r.width; oh = r.height;
                         }, el);
                         canvasScene->setDetachedCallback([](void* ud) -> bool {
                             auto* n = static_cast<dom::Element*>(ud);
@@ -745,17 +728,8 @@ Engine::Engine(const EngineConfig& config)
                             ox = oy = ow = oh = 0;
                             return;
                         }
-                        auto& box = elem->layoutBox();
-                        ox = box.contentRect.x;
-                        oy = box.contentRect.y;
-                        for (auto* lp = elem->layoutParent(); lp; lp = lp->layoutParent()) {
-                            auto& pb = lp->layoutBox();
-                            ox += pb.contentRect.x;
-                            oy += pb.contentRect.y;
-                            oy -= lp->scrollTopValue();
-                        }
-                        ow = box.contentRect.width;
-                        oh = box.contentRect.height;
+                        dom::AbsoluteRect r = dom::absoluteContentBox(elem);
+                        ox = r.x; oy = r.y; ow = r.width; oh = r.height;
                     }, el);
                     canvasScene->setDetachedCallback([](void* ud) -> bool {
                         auto* n = static_cast<dom::Element*>(ud);

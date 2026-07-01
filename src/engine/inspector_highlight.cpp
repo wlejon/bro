@@ -1,5 +1,6 @@
 #include "engine/inspector_highlight.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "render/renderer.h"
 #include <algorithm>
 #include <cmath>
@@ -72,23 +73,16 @@ void drawInspectorHighlight(render::Renderer* renderer, dom::Element* el,
     const auto& box = el->layoutBox();
     if (box.contentRect.width <= 0 && box.contentRect.height <= 0) return;
 
-    // Accumulate ancestor offsets up to the document root. Each layout parent
-    // contributes its content-rect origin minus its scrollTop.
-    float ox = 0, oy = 0;
-    for (auto* p = el->layoutParent(); p; p = p->layoutParent()) {
-        const auto& pb = p->layoutBox();
-        ox += pb.contentRect.x;
-        oy += pb.contentRect.y;
-        oy -= p->scrollTopValue();
-    }
+    // Absolute (pre-inset) content-box origin, correctly accounting for any
+    // CSS transform (e.g. translateX/Y) on el or its ancestors — plain
+    // layoutBox() coordinates are pre-transform, since transform is applied
+    // only at paint time in draw_traversal.cpp.
+    dom::AbsolutePoint origin = dom::absoluteContentOrigin(el);
+
     // Translate into the same coordinate system the app draw pass uses:
     // (insetLeft, insetTop) translation, minus the document scroll.
-    ox += static_cast<float>(insetLeft);
-    oy += static_cast<float>(insetTop) - scrollY;
-
-    // Box rects (in the accumulated screen space).
-    float cx = ox + box.contentRect.x;
-    float cy = oy + box.contentRect.y;
+    float cx = origin.x + static_cast<float>(insetLeft);
+    float cy = origin.y + static_cast<float>(insetTop) - scrollY;
     float cw = box.contentRect.width;
     float ch = box.contentRect.height;
 

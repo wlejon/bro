@@ -5,6 +5,7 @@
 
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "dom/event.h"
 #include "engine/color_picker_overlay.h"
 #include "engine/dropdown_overlay.h"
@@ -401,17 +402,9 @@ void focusNewControl(
 
 void applyMouseOffset(dom::MouseEvent& evt, dom::Element* target) {
     if (!target) return;
-    auto& box = target->layoutBox();
-    float absX = box.contentRect.x;
-    float absY = box.contentRect.y;
-    for (auto* lp = target->layoutParent(); lp; lp = lp->layoutParent()) {
-        auto& pb = lp->layoutBox();
-        absX += pb.contentRect.x;
-        absY += pb.contentRect.y;
-        absY -= lp->scrollTopValue();
-    }
-    evt.setOffsetX(evt.clientX() - static_cast<double>(absX));
-    evt.setOffsetY(evt.clientY() - static_cast<double>(absY));
+    dom::AbsolutePoint origin = dom::absoluteContentOrigin(target);
+    evt.setOffsetX(evt.clientX() - static_cast<double>(origin.x));
+    evt.setOffsetY(evt.clientY() - static_cast<double>(origin.y));
 }
 
 bool dispatchDocMousePress(

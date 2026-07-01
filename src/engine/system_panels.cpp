@@ -22,6 +22,7 @@
 #include "layout/skia_text_metrics.h"
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "dom/event.h"
 #include "js/runtime.h"
 #include "js/timers.h"
@@ -300,17 +301,8 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
                         [](void* ud, float& ox, float& oy, float& ow, float& oh) {
                             auto* elem = static_cast<dom::Element*>(ud);
                             if (!elem->parentNode()) { ox = oy = ow = oh = 0; return; }
-                            auto& box = elem->layoutBox();
-                            ox = box.contentRect.x;
-                            oy = box.contentRect.y;
-                            for (auto* lp = elem->layoutParent(); lp; lp = lp->layoutParent()) {
-                                auto& pb = lp->layoutBox();
-                                ox += pb.contentRect.x;
-                                oy += pb.contentRect.y;
-                                oy -= lp->scrollTopValue();
-                            }
-                            ow = box.contentRect.width;
-                            oh = box.contentRect.height;
+                            dom::AbsoluteRect r = dom::absoluteContentBox(elem);
+                            ox = r.x; oy = r.y; ow = r.width; oh = r.height;
                         }, el);
                     scene->setDetachedCallback([](void* ud) -> bool {
                         auto* n = static_cast<dom::Element*>(ud);
