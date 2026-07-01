@@ -113,19 +113,43 @@ struct TeamOptionData {
     std::shared_ptr<brogameagent::mcts::TeamOption> option;
 };
 
+// optionJsRefs holds JS_DupValue'd copies of the *original* AIOption/
+// AITeamOption wrapper values passed into `options: [...]`, marked directly
+// in gc_mark (see below). This is deliberately NOT done by re-walking into
+// the shared JsOption/JsTeamOption's own gc_mark (as this file used to via
+// track_jcb) — a JS-authored option's canInitiate/step/shouldTerminate
+// JSValues are JS_DupValue'd exactly once, in JsOption's constructor, but
+// the underlying std::shared_ptr<Option> is legitimately reachable from
+// MULTIPLE independent JS-visible objects at once (the original `opt`
+// returned by createOption(), *and* every OptionMcts/Commander it's passed
+// into). Having each of those independently call into JsOption::gc_mark()
+// during QuickJS's cycle-GC decref pass double(or N-)counts a reference
+// that was only ever dup'd once, underflowing ref_count and tripping
+// "Assertion failed: p->ref_count > 0" the moment GC runs (reproducible
+// from ai-arena: create an Option, pass it into createOptionMcts while
+// *also* keeping the original handle alive, then advanceTime()). Marking
+// the retained wrapper JSValue itself sidesteps this: QuickJS's own
+// ref-counting on that JSValue already correctly reflects "N live owners",
+// so each owner's mark call is one real edge, not an overcount.
 struct OptionMctsData {
     brogameagent::mcts::OptionMcts mcts;
     // Retain shared_ptrs so JS-authored options live as long as the engine
     // even if the JS wrapper is collected. set_options() on the C++ engine
     // stores the same shared_ptrs but this is a defence-in-depth anchor.
     std::vector<std::shared_ptr<brogameagent::mcts::Option>> options;
+    std::vector<JSValue> optionJsRefs;
     std::vector<std::shared_ptr<JsCallbackHolder>> jcb;
+    JSContext* ctx = nullptr;
+    ~OptionMctsData() { for (auto& v : optionJsRefs) JS_FreeValue(ctx, v); }
 };
 
 struct TeamOptionMctsData {
     brogameagent::mcts::TeamOptionMcts mcts;
     std::vector<std::shared_ptr<brogameagent::mcts::TeamOption>> options;
+    std::vector<JSValue> optionJsRefs;
     std::vector<std::shared_ptr<JsCallbackHolder>> jcb;
+    JSContext* ctx = nullptr;
+    ~TeamOptionMctsData() { for (auto& v : optionJsRefs) JS_FreeValue(ctx, v); }
 };
 
 struct CommanderData {
@@ -134,7 +158,10 @@ struct CommanderData {
     // internal role list — defence-in-depth against option lifetime bugs
     // when JS-authored options hold JSValue refs.
     std::vector<std::shared_ptr<brogameagent::mcts::Option>> option_refs;
+    std::vector<JSValue> optionJsRefs;
     std::vector<std::shared_ptr<JsCallbackHolder>> jcb;
+    JSContext* ctx = nullptr;
+    ~CommanderData() { for (auto& v : optionJsRefs) JS_FreeValue(ctx, v); }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1326,9 +1353,13 @@ static JSValue js_createTeamOption(JSContext* ctx, JSValueConst, int argc, JSVal
 }
 
 // Parse opts.options as an array of OptionData / TeamOptionData wrappers.
+// When jsRefsOut is given, also appends a JS_DupValue'd copy of each
+// original wrapper value (the caller owns freeing these) — see the comment
+// above OptionMctsData for why marking these, rather than re-walking into
+// the shared Option's own gc_mark, is required for correct ref-counting.
 template <typename TData, typename TOption>
 static std::vector<std::shared_ptr<TOption>>
-parseOptionArray(JSContext* ctx, JSValueConst opts) {
+parseOptionArray(JSContext* ctx, JSValueConst opts, std::vector<JSValue>* jsRefsOut = nullptr) {
     std::vector<std::shared_ptr<TOption>> out;
     JSValue arr = JS_GetPropertyStr(ctx, opts, "options");
     if (JS_IsArray(arr)) {
@@ -1339,7 +1370,10 @@ parseOptionArray(JSContext* ctx, JSValueConst opts) {
         for (int32_t i = 0; i < len; i++) {
             JSValue v = JS_GetPropertyUint32(ctx, arr, i);
             auto* od = qjsbind::unwrap<TData>(ctx, v);
-            if (od && od->option) out.push_back(od->option);
+            if (od && od->option) {
+                out.push_back(od->option);
+                if (jsRefsOut) jsRefsOut->push_back(JS_DupValue(ctx, v));
+            }
             JS_FreeValue(ctx, v);
         }
     }
@@ -1352,14 +1386,15 @@ parseOptionArray(JSContext* ctx, JSValueConst opts) {
 // `optionMaxWindows`. Evaluator is hero-scoped.
 static JSValue js_createOptionMcts(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* data = new OptionMctsData();
+    data->ctx = ctx;
     if (argc >= 1 && JS_IsObject(argv[0])) {
         JSValue opts = argv[0];
         data->mcts.set_config(parseMctsConfig(ctx, opts));
         if (auto op = parseOpponentPolicy(ctx, opts)) data->mcts.set_opponent_policy(std::move(op));
         if (auto ev = track_jcb(data->jcb, parseHeroEvaluator(ctx, opts)))
             data->mcts.set_evaluator(std::move(ev));
-        data->options = parseOptionArray<OptionData, brogameagent::mcts::Option>(ctx, opts);
-        for (auto& sp : data->options) track_jcb(data->jcb, sp);
+        data->options = parseOptionArray<OptionData, brogameagent::mcts::Option>(
+            ctx, opts, &data->optionJsRefs);
         if (!data->options.empty()) {
             auto copy = data->options;
             data->mcts.set_options(std::move(copy));
@@ -1372,14 +1407,15 @@ static JSValue js_createOptionMcts(JSContext* ctx, JSValueConst, int argc, JSVal
 // Team-scoped evaluator.
 static JSValue js_createTeamOptionMcts(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* data = new TeamOptionMctsData();
+    data->ctx = ctx;
     if (argc >= 1 && JS_IsObject(argv[0])) {
         JSValue opts = argv[0];
         data->mcts.set_config(parseMctsConfig(ctx, opts));
         if (auto op = parseOpponentPolicy(ctx, opts)) data->mcts.set_opponent_policy(std::move(op));
         if (auto ev = track_jcb(data->jcb, parseTeamEvaluator(ctx, opts)))
             data->mcts.set_evaluator(std::move(ev));
-        data->options = parseOptionArray<TeamOptionData, brogameagent::mcts::TeamOption>(ctx, opts);
-        for (auto& sp : data->options) track_jcb(data->jcb, sp);
+        data->options = parseOptionArray<TeamOptionData, brogameagent::mcts::TeamOption>(
+            ctx, opts, &data->optionJsRefs);
         if (!data->options.empty()) {
             auto copy = data->options;
             data->mcts.set_options(std::move(copy));
@@ -1398,6 +1434,7 @@ static JSValue js_createTeamOptionMcts(JSContext* ctx, JSValueConst, int argc, J
 // })
 static JSValue js_createCommander(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     auto* data = new CommanderData();
+    data->ctx = ctx;
     if (argc < 1 || !JS_IsObject(argv[0])) {
         return qjsbind::wrap<CommanderData>(ctx, data);
     }
@@ -1425,12 +1462,10 @@ static JSValue js_createCommander(JSContext* ctx, JSValueConst, int argc, JSValu
             JSValue r = JS_GetPropertyUint32(ctx, rolesArr, i);
             if (JS_IsObject(r)) {
                 std::string name = readStringProp(ctx, r, "name");
-                auto opts_vec = parseOptionArray<OptionData, brogameagent::mcts::Option>(ctx, r);
+                auto opts_vec = parseOptionArray<OptionData, brogameagent::mcts::Option>(
+                    ctx, r, &data->optionJsRefs);
                 auto role_eval = track_jcb(data->jcb, parseHeroEvaluator(ctx, r));
-                for (auto& sp : opts_vec) {
-                    data->option_refs.push_back(sp);
-                    track_jcb(data->jcb, sp);
-                }
+                for (auto& sp : opts_vec) data->option_refs.push_back(sp);
                 data->commander.add_role(std::move(name), std::move(opts_vec),
                                           std::move(role_eval));
             }
@@ -2667,6 +2702,7 @@ void AIBindings::install(JSContext* ctx) {
         qjsbind::Class<OptionMctsData>(ctx, "AIOptionMcts", qjsbind::NoGlobal)
             .gc_mark([](OptionMctsData* d, JSRuntime* rt, JS_MarkFunc* mark) {
                 mark_jcb(d, rt, mark);
+                for (const auto& v : d->optionJsRefs) JS_MarkValue(rt, v, mark);
             })
             .method_raw("search",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
@@ -2726,6 +2762,7 @@ void AIBindings::install(JSContext* ctx) {
         qjsbind::Class<TeamOptionMctsData>(ctx, "AITeamOptionMcts", qjsbind::NoGlobal)
             .gc_mark([](TeamOptionMctsData* d, JSRuntime* rt, JS_MarkFunc* mark) {
                 mark_jcb(d, rt, mark);
+                for (const auto& v : d->optionJsRefs) JS_MarkValue(rt, v, mark);
             })
             .method_raw("search",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
@@ -2785,6 +2822,7 @@ void AIBindings::install(JSContext* ctx) {
         qjsbind::Class<CommanderData>(ctx, "AICommander", qjsbind::NoGlobal)
             .gc_mark([](CommanderData* d, JSRuntime* rt, JS_MarkFunc* mark) {
                 mark_jcb(d, rt, mark);
+                for (const auto& v : d->optionJsRefs) JS_MarkValue(rt, v, mark);
             })
             .method_raw("decide",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
