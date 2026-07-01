@@ -262,6 +262,16 @@ const s5 = bro.ai.game.steer.evade(
 //
 // A `self` proxy is built fresh each think tick. It only exposes methods
 // whose capability is present on the binding — towers won't have .moveTo.
+//
+// Custom capabilities (registerCapability, below) have no dedicated
+// self.<name>() accessor of their own — invoke them with:
+//   self.useCapability(name, arg0?, arg1?)
+// exposed whenever the binding's capabilities list contains at least one
+// registerCapability'd id. arg0/arg1 land in the capability's Action as
+// i0/i1 (same slots self.attack/self.cast use for target/slot ids) but
+// aren't visible to gate/start/advance below — read them via a JS-side
+// closure handoff instead, same as self.attack/self.cast's targets aren't
+// passed to the *native* capability callbacks either.
 
 
 /**
