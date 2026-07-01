@@ -387,6 +387,10 @@ bool InstancedMeshNode::computeWorldInstanceBounds(float outMin[3], float outMax
     outMax[0] = outMax[1] = outMax[2] = -1e30f;
     const float lx0 = bounds_.min.x, ly0 = bounds_.min.y, lz0 = bounds_.min.z;
     const float lx1 = bounds_.max.x, ly1 = bounds_.max.y, lz1 = bounds_.max.z;
+    // Instance rows are node-local (relative to this node); fold in the
+    // node's own parent-chain transform so this matches what actually
+    // renders (renderInstancedMeshNode applies the same worldMatrix()).
+    const bromath::Mat4& nodeWorld = worldMatrix();
     for (size_t i = 0; i < instanceCount_; ++i) {
         const float* o = instanceData_.data() + i * 16;
         // Row-major 4x3: o[0..3] = row0 (m00 m01 m02 tx), etc.
@@ -396,15 +400,16 @@ bool InstancedMeshNode::computeWorldInstanceBounds(float outMin[3], float outMax
                 (c & 2) ? ly1 : ly0,
                 (c & 4) ? lz1 : lz0,
             };
-            float wx = o[ 0] * lp[0] + o[ 1] * lp[1] + o[ 2] * lp[2] + o[ 3];
-            float wy = o[ 4] * lp[0] + o[ 5] * lp[1] + o[ 6] * lp[2] + o[ 7];
-            float wz = o[ 8] * lp[0] + o[ 9] * lp[1] + o[10] * lp[2] + o[11];
-            if (wx < outMin[0]) outMin[0] = wx;
-            if (wy < outMin[1]) outMin[1] = wy;
-            if (wz < outMin[2]) outMin[2] = wz;
-            if (wx > outMax[0]) outMax[0] = wx;
-            if (wy > outMax[1]) outMax[1] = wy;
-            if (wz > outMax[2]) outMax[2] = wz;
+            float nx = o[ 0] * lp[0] + o[ 1] * lp[1] + o[ 2] * lp[2] + o[ 3];
+            float ny = o[ 4] * lp[0] + o[ 5] * lp[1] + o[ 6] * lp[2] + o[ 7];
+            float nz = o[ 8] * lp[0] + o[ 9] * lp[1] + o[10] * lp[2] + o[11];
+            bromath::Vec3 wp = bromath::mtransformPoint(nodeWorld, bromath::Vec3{nx, ny, nz});
+            if (wp.x < outMin[0]) outMin[0] = wp.x;
+            if (wp.y < outMin[1]) outMin[1] = wp.y;
+            if (wp.z < outMin[2]) outMin[2] = wp.z;
+            if (wp.x > outMax[0]) outMax[0] = wp.x;
+            if (wp.y > outMax[1]) outMax[1] = wp.y;
+            if (wp.z > outMax[2]) outMax[2] = wp.z;
             any = true;
         }
     }

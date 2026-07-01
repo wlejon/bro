@@ -580,6 +580,7 @@ private:
     GLint uInstIBLRotation_ = -1;
     GLint uInstIBLPrefilterMaxLOD_ = -1;
     GLint uInstCameraEye_ = -1;
+    GLint uInstModel_ = -1;
     GLint uInstAtlasGrid_ = -1;
     GLint uInstAlphaCutoff_ = -1;
 
@@ -694,6 +695,7 @@ private:
     GLint  shadowUMVP_ = -1;
     GLuint shadowInstancedProgram_ = 0;
     GLint  shadowInstULightVP_ = -1;
+    GLint  shadowInstUModel_ = -1;
     GLuint shadowAtlasFBO_ = 0;
     GLuint shadowAtlasTex_ = 0;
     int    shadowAtlasAllocated_ = 0;  // current tex side; 0 if none

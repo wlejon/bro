@@ -538,6 +538,7 @@ layout(location = 11) in vec4 aInstColor;
 
 uniform mat4 uVP;          // projection * view (no translation; camera-relative)
 uniform vec3 uCameraEye;   // world-space eye, subtracted from instance translation
+uniform mat4 uInstModel;   // node's parent-chain world transform (e.g. TileWorld origin)
 uniform int  uUseVertexColor;
 
 out vec3 vWorldPos;
@@ -557,12 +558,16 @@ void main() {
         vec3(aInstRow0.z, aInstRow1.z, aInstRow2.z)
     );
     vec3 trans = vec3(aInstRow0.w, aInstRow1.w, aInstRow2.w);
-    vec3 worldPos = R * aPos + trans;
+    // Instance rows are node-local (relative to this InstancedMeshNode); apply
+    // its parent-chain world transform (e.g. TileWorld's origin) before the
+    // camera-relative offset, exactly as renderMeshNode does via uModel.
+    vec3 worldPos = (uInstModel * vec4(R * aPos + trans, 1.0)).xyz;
     vec3 camRel = worldPos - uCameraEye;
+    mat3 normalMat = mat3(uInstModel) * R;
 
     vWorldPos = camRel;
-    vNormal = R * aNormal;
-    vTangentW   = R * aTangent.xyz;
+    vNormal = normalMat * aNormal;
+    vTangentW   = normalMat * aTangent.xyz;
     vBitangentW = cross(vNormal, vTangentW) * aTangent.w;
     vUV = aUV;
     vColor = (uUseVertexColor == 1) ? aColor : vec4(1.0);
@@ -1172,6 +1177,7 @@ layout(location = 8)  in vec4 aInstRow0;
 layout(location = 9)  in vec4 aInstRow1;
 layout(location = 10) in vec4 aInstRow2;
 uniform mat4 uLightVP;
+uniform mat4 uModel;   // node's parent-chain world transform (e.g. TileWorld origin)
 void main() {
     mat3 R = mat3(
         vec3(aInstRow0.x, aInstRow1.x, aInstRow2.x),
@@ -1179,7 +1185,7 @@ void main() {
         vec3(aInstRow0.z, aInstRow1.z, aInstRow2.z)
     );
     vec3 trans = vec3(aInstRow0.w, aInstRow1.w, aInstRow2.w);
-    vec3 worldPos = R * aPos + trans;
+    vec3 worldPos = (uModel * vec4(R * aPos + trans, 1.0)).xyz;
     gl_Position = uLightVP * vec4(worldPos, 1.0);
 }
 )";
@@ -1761,6 +1767,7 @@ void SceneGraph::ensureInstancedMeshPipeline() {
     auto getU = [&](const char* n) { return glGetUniformLocation(meshInstancedProgram_, n); };
     uInstVP_              = getU("uVP");
     uInstCameraEye_       = getU("uCameraEye");
+    uInstModel_           = getU("uInstModel");
     uInstColor_           = getU("uColor");
     uInstEmissive_        = getU("uEmissive");
     uInstEmissiveColor_   = getU("uEmissiveColor");
@@ -3208,6 +3215,7 @@ void SceneGraph::ensureShadowInstancedPipeline() {
     glDeleteShader(vs); glDeleteShader(fs);
     if (shadowInstancedProgram_) {
         shadowInstULightVP_ = glGetUniformLocation(shadowInstancedProgram_, "uLightVP");
+        shadowInstUModel_   = glGetUniformLocation(shadowInstancedProgram_, "uModel");
     }
 }
 
@@ -3668,6 +3676,7 @@ void SceneGraph::renderShadowPass() {
             glUseProgram(shadowInstancedProgram_);
             glUniformMatrix4fv(shadowInstULightVP_, 1, GL_FALSE, lightVP.data);
             for (auto* m : shadowInstancedCasters_) {
+                glUniformMatrix4fv(shadowInstUModel_, 1, GL_FALSE, m->worldMatrix().data);
                 m->drawRawInstancedDepth();
             }
             glUseProgram(shadowProgram_);
@@ -3808,10 +3817,13 @@ void SceneGraph::render() {
             }
 
             // --- Instanced mesh pass ----------------------------------------
-            // Same camera/lighting state as the regular pass, but the model
-            // matrix lives in per-instance attributes (no uModel uniform), so
-            // there's a dedicated program. Walks the same node tree filtered
-            // by InstancedMesh type.
+            // Same camera/lighting state as the regular pass. Per-instance
+            // attributes carry the node-local transform; renderInstancedMeshNode
+            // additionally uploads the node's own worldMatrix() (uInstModel) so
+            // instances parented under a transformed node (e.g. TileWorld's
+            // origin) land in the right place, same as uModel does for
+            // renderMeshNode. Walks the same node tree filtered by InstancedMesh
+            // type.
             if (hasInstancedMeshNodes) {
                 ensureInstancedMeshPipeline();
                 if (meshInstancedProgram_) {
@@ -4239,6 +4251,7 @@ void SceneGraph::renderMeshNode(MeshNode* mesh) {
 }
 
 void SceneGraph::renderInstancedMeshNode(InstancedMeshNode* mesh) {
+    glUniformMatrix4fv(uInstModel_, 1, GL_FALSE, mesh->worldMatrix().data);
     glUniform4fv(uInstColor_, 1, mesh->color());
     glUniform1f(uInstEmissive_, mesh->emissive());
     glUniform3fv(uInstEmissiveColor_, 1, mesh->emissiveColor());
