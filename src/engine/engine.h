@@ -156,6 +156,19 @@ public:
     explicit Engine(const EngineConfig& config);
     ~Engine();
 
+    /// Joins and destroys the net/Steam background service threads without
+    /// touching the JS runtime, document, or GPU state — the rest of
+    /// ~Engine() is intentionally skipped in headless mode (see
+    /// src/headless/main.cpp) because tearing down QuickJS there has hit a
+    /// GC-leak assertion, and abandoning worker threads outright via _exit()
+    /// has been implicated in OS-level thread-rundown bugchecks (unrelated
+    /// to that QuickJS issue). netService_/steamService_ have no ordering
+    /// dependency on jsRuntime_/audioEngine_ teardown (their destructors are
+    /// a plain thread join), so this is safe to call standalone right before
+    /// an abrupt process exit to shrink the number of live threads at that
+    /// moment. Safe to call multiple times or skip; a no-op after the first.
+    void stopBackgroundServices();
+
     /// Run the main event / render loop. Returns when the window is closed.
     /// In headless mode, performs initial layout and returns immediately.
     void run();

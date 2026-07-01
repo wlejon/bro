@@ -452,8 +452,16 @@ int main(int argc, char* argv[]) {
             runRepl(ctx, rt, engine);
         }
 
-        // Intentionally leak to avoid QuickJS GC assertion on shutdown.
-        // The OS reclaims all memory on process exit.
+        // Join the net/Steam background threads (safe standalone — no
+        // ordering dependency on the JS runtime; see Engine::stopBackground
+        // Services). Shrinks the number of threads still alive at the
+        // abrupt _exit() below, which OS-level thread-rundown bugchecks
+        // have been observed to be sensitive to.
+        engine->stopBackgroundServices();
+
+        // Intentionally leak the rest (JS runtime, audio engine, GPU state)
+        // to avoid a QuickJS GC assertion on shutdown. The OS reclaims all
+        // memory on process exit.
     } catch (const std::exception& e) {
         LOG_ERROR("Fatal: %s", e.what());
         exitCode = 1;

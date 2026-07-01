@@ -59,6 +59,11 @@
 #include <algorithm>
 
 namespace bro::engine {
+void Engine::stopBackgroundServices() {
+    netService_.reset();
+    steamService_.reset();
+}
+
 Engine::~Engine() {
     // Teardown is beginning: flip the process-wide interrupt flag (without the
     // repeated-Ctrl+C hard-exit escalation) so every in-flight model op aborts
