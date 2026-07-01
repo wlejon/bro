@@ -146,6 +146,12 @@ public:
     void configure(const TileWorldConfig& cfg);
     const TileWorldConfig& config() const { return config_; }
 
+    // Replace the grid with a pre-populated one (e.g. from tile::deserialize),
+    // sync config_'s dimensions/topology/layers to match, and remesh every
+    // chunk. Rendering config (cellSize, atlas, autotiles, overlays,
+    // animations, ...) is preserved from the current configuration.
+    void loadGrid(tile::TileGrid&& newGrid);
+
     // Direct access to the underlying pure grid (region/autotile/pathfind run
     // off this). Mutating it directly will not mark chunks dirty — prefer the
     // authoring setters below, or call rebuildAll() afterwards.
@@ -275,6 +281,11 @@ private:
         std::vector<MeshNode*> overlays;     // one decal mesh per overlay layer (>=1)
         bool dirty = false;
     };
+
+    // Shared tail of configure()/loadGrid(): (re)build chunk/tint/animation
+    // storage and the root node from the current config_ + grid_, then
+    // remesh everything. Assumes grid_ is already installed.
+    void initFromGrid();
 
     void buildChunkMesh(int ccx, int ccy);
     void buildGroundMesh(int ccx, int ccy, Chunk& chunk);

@@ -311,6 +311,24 @@ class TileWorld {
   /** Reconfigure from scratch — rebuilds the grid and all chunks. */
   configure(opts) {}
 
+  /**
+   * Serialize the grid (tiles/elevation/flags — not rendering config like
+   * palette/atlas/autotiles) to a versioned binary blob. Round-trips exactly
+   * with load(): save() -> load(bytes) restores the same grid contents.
+   * @returns {Uint8Array}
+   */
+  save() {}
+
+  /**
+   * Replace the grid from bytes produced by save(). Dimensions/topology/layers
+   * are taken from the saved data (may differ from the current config);
+   * rendering config (cellSize, atlas, autotiles, overlays, animations, ...)
+   * is preserved. Remeshes every chunk on success.
+   * @param {Uint8Array} bytes
+   * @returns {boolean} false if `bytes` is corrupt or an unrecognized format
+   */
+  load(bytes) {}
+
   /** Destroy all nodes and release the grid. */
   destroy() {}
 

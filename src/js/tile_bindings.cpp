@@ -8,6 +8,7 @@
 #include "js/ai_bindings.h"
 #include "util/asset_mounts.h"
 #include "broimage/decode.h"
+#include "tile/serialize.h"
 
 #include <brogameagent/nav_grid.h>
 #include <brogameagent/types.h>
@@ -609,6 +610,39 @@ static JSValue js_tile_toNavGrid(JSContext* ctx, JSValueConst this_val, int argc
     return gridVal;
 }
 
+// save() -> Uint8Array (bro::tile's versioned grid format; see tile/serialize.h)
+static JSValue js_tile_save(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || !w->world->grid()) return JS_NULL;
+    std::vector<uint8_t> bytes = tile::serialize(*w->world->grid());
+    JSValue abuf = JS_NewArrayBufferCopy(ctx, bytes.data(), bytes.size());
+    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
+    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_UINT8);
+    JS_FreeValue(ctx, abuf);
+    return arr;
+}
+
+// load(bytes: Uint8Array) -> boolean (false on corrupt/unrecognized data)
+static JSValue js_tile_load(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 1) return JS_NewBool(ctx, false);
+
+    std::vector<uint8_t> bytes;
+    size_t offset = 0, byteLen = 0, bpe = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &offset, &byteLen, &bpe);
+    if (!JS_IsException(abuf)) {
+        size_t abufLen = 0;
+        uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+        if (raw && byteLen > 0) bytes.assign(raw + offset, raw + offset + byteLen);
+    }
+    JS_FreeValue(ctx, abuf);
+
+    auto grid = tile::deserialize(bytes);
+    if (!grid) return JS_NewBool(ctx, false);
+    w->world->loadGrid(std::move(*grid));
+    return JS_NewBool(ctx, true);
+}
+
 static JSValue js_tile_configure(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
     if (!w || !w->world || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
@@ -682,6 +716,8 @@ void TileBindings::install(JSContext* ctx) {
             if (self->world) self->world->rebuildAll();
         })
         .method_raw("configure", js_tile_configure, 1)
+        .method_raw("save", js_tile_save, 0)
+        .method_raw("load", js_tile_load, 1)
         .method("destroy", [](TWld* self) {
             if (self->world) { self->world->clear(); self->world.reset(); }
         })

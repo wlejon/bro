@@ -148,7 +148,22 @@ void TileWorld::configure(const TileWorldConfig& cfg) {
 
     grid_ = std::make_unique<tile::TileGrid>(config_.width, config_.height,
                                              config_.topology, config_.layers);
+    initFromGrid();
+}
 
+void TileWorld::loadGrid(tile::TileGrid&& newGrid) {
+    clear();
+    config_.width     = newGrid.width();
+    config_.height    = newGrid.height();
+    config_.topology  = newGrid.topology();
+    config_.layers    = newGrid.layerNames();
+    config_.chunkSize = std::max(1, config_.chunkSize);
+
+    grid_ = std::make_unique<tile::TileGrid>(std::move(newGrid));
+    initFromGrid();
+}
+
+void TileWorld::initFromGrid() {
     chunksX_ = (config_.width  + config_.chunkSize - 1) / config_.chunkSize;
     chunksY_ = (config_.height + config_.chunkSize - 1) / config_.chunkSize;
     chunks_.assign(static_cast<size_t>(chunksX_) * chunksY_, Chunk{});
