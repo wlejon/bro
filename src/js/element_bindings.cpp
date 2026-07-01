@@ -12,6 +12,7 @@
 #include "layout/el_video.h"
 #include "canvas/canvas_scene.h"
 #include "css/transform.h"
+#include "dom/element_geometry.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -2688,186 +2689,22 @@ static JSValue js_element_scrollIntoView(JSContext* /*ctx*/, JSValueConst /*this
 static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst this_val,
                                                  int /*argc*/, JSValueConst* /*argv*/) {
     auto* el = getElement(this_val);
-    auto& box = getLayoutBox(el);
 
-    // display:none elements have no box at all — match Chromium and return
-    // {0,0,0,0} rather than inheriting the parent's accumulated position.
-    if (el) {
-        auto& cs = el->computedStyle();
-        auto dIt = cs.find("display");
-        if (dIt != cs.end() && dIt->second == "none") {
-            JSValue rect0 = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, rect0, "x",      JS_NewFloat64(ctx, 0));
-            JS_SetPropertyStr(ctx, rect0, "y",      JS_NewFloat64(ctx, 0));
-            JS_SetPropertyStr(ctx, rect0, "width",  JS_NewFloat64(ctx, 0));
-            JS_SetPropertyStr(ctx, rect0, "height", JS_NewFloat64(ctx, 0));
-            JS_SetPropertyStr(ctx, rect0, "top",    JS_NewFloat64(ctx, 0));
-            JS_SetPropertyStr(ctx, rect0, "left",   JS_NewFloat64(ctx, 0));
-            JS_SetPropertyStr(ctx, rect0, "bottom", JS_NewFloat64(ctx, 0));
-            JS_SetPropertyStr(ctx, rect0, "right",  JS_NewFloat64(ctx, 0));
-            return rect0;
-        }
-    }
-
-    // Accumulate absolute position by walking up the layout parent chain.
-    // Layout positions are parent-relative (content area origin), where the
-    // parent is determined by the composed tree (including shadow DOM wrappers
-    // that contain <slot> elements). We must walk this composed/layout parent
-    // chain rather than the DOM parent chain to correctly account for shadow
-    // DOM wrapper elements like .screen-content, .body, .tab-content.
-    //
-    // While walking, also collect each ancestor's absolute border-box rect so
-    // we can apply CSS transforms (per CSSOM, getBoundingClientRect() returns
-    // the rect after all transforms in the ancestor chain are applied).
-    struct Frame {
-        bro::dom::Element* el;
-        float bx, by, bw, bh; // absolute border-box top-left + size
-    };
-    std::vector<Frame> chain; // leaf-first: chain[0] = self
-
-    // Walk up collecting raw layout-box info, then convert to absolute coords.
-    struct Raw {
-        bro::dom::Element* el;
-        float cx, cy;        // contentRect origin in parent's content-area coords
-        float padL, padT, borL, borT;
-        float fullW, fullH;
-        float scrollY;       // scrollTop this element applies to its children
-    };
-    std::vector<Raw> raws;
-    for (auto* lp = el; lp; lp = lp->layoutParent()) {
-        auto& lb = lp->layoutBox();
-        raws.push_back({lp, lb.contentRect.x, lb.contentRect.y,
-                        lb.padding.left, lb.padding.top,
-                        lb.border.left, lb.border.top,
-                        lb.fullWidth(), lb.fullHeight(),
-                        lp->scrollTopValue()});
-    }
-    // Accumulate root-down: parent's content-area origin in absolute coords is
-    // (accX, accY); element border-box = (accX + cx - padL - borL, ...).
-    chain.resize(raws.size());
-    {
-        float accX = 0.0f, accY = 0.0f;
-        for (int i = (int)raws.size() - 1; i >= 0; --i) {
-            const Raw& r = raws[i];
-            float bx = accX + r.cx - r.padL - r.borL;
-            float by = accY + r.cy - r.padT - r.borT;
-            chain[i] = {r.el, bx, by, r.fullW, r.fullH};
-            accX += r.cx;
-            accY += r.cy - r.scrollY;
-        }
-    }
-
-    // Apply transforms inside-out: combined = T_root * T_parent * ... * T_self.
-    // For each element with a transform, the matrix acts about its own border
-    // box in absolute coords: full = T(bx+ox, by+oy) * M * T(-(bx+ox), -(by+oy)).
-    // Compose by multiplying each ancestor's full transform on the LEFT (since
-    // ancestor transforms apply to the already-transformed descendant point).
-    // Compose ancestor transforms as a 4x4 (covers 3D + perspective). For the
-    // common all-2D case the result reduces to a 2D affine and we still take
-    // a fast path below.
-    htmlayout::css::Matrix3D combined; // identity 4x4
-    bool hasAnyTransform = false;
-    for (int i = (int)chain.size() - 1; i >= 0; --i) {
-        const Frame& f = chain[i];
-        if (!f.el) continue;
-        auto& cs = f.el->computedStyle();
-
-        // Ancestor perspective on this element's parent.
-        float persp = 0.0f;
-        const htmlayout::css::ComputedStyle* perspStyle = nullptr;
-        float pbx = 0, pby = 0, pbw = 0, pbh = 0;
-        if (auto* parent = f.el->layoutParent()) {
-            auto& pcs = parent->computedStyle();
-            auto pit = pcs.find("perspective");
-            if (pit != pcs.end()) persp = htmlayout::css::parsePerspective(pit->second);
-            if (persp > 0) {
-                perspStyle = &pcs;
-                // Find parent's frame in the chain to get its bx/by/bw/bh.
-                for (int j = i + 1; j < (int)chain.size(); ++j) {
-                    if (chain[j].el == parent) {
-                        pbx = chain[j].bx; pby = chain[j].by;
-                        pbw = chain[j].bw; pbh = chain[j].bh;
-                        break;
-                    }
-                }
-            }
-        }
-
-        auto trIt = cs.find("transform");
-        bool hasT = (trIt != cs.end() && !trIt->second.empty()
-                     && trIt->second != "none");
-        if (!hasT && persp <= 0) continue;
-
-        htmlayout::css::Matrix3D mat;
-        if (hasT) mat = htmlayout::css::parseTransform3D(trIt->second, f.bw, f.bh);
-        if (mat.isIdentity() && persp <= 0) continue;
-
-        float ox = f.bw * 0.5f, oy = f.bh * 0.5f, oz = 0.0f;
-        auto toIt = cs.find("transform-origin");
-        std::string_view originVal = (toIt != cs.end())
-            ? std::string_view(toIt->second) : std::string_view();
-        htmlayout::css::parseTransformOrigin3D(originVal, f.bw, f.bh, ox, oy, oz);
-
-        htmlayout::css::Matrix3D toOrigin;
-        toOrigin.m[12] = f.bx + ox; toOrigin.m[13] = f.by + oy; toOrigin.m[14] = oz;
-        htmlayout::css::Matrix3D fromOrigin;
-        fromOrigin.m[12] = -(f.bx + ox); fromOrigin.m[13] = -(f.by + oy); fromOrigin.m[14] = -oz;
-        htmlayout::css::Matrix3D full = toOrigin * mat * fromOrigin;
-
-        if (persp > 0 && perspStyle) {
-            float pox = pbw * 0.5f, poy = pbh * 0.5f;
-            auto poIt = perspStyle->find("perspective-origin");
-            std::string_view poVal = (poIt != perspStyle->end())
-                ? std::string_view(poIt->second) : std::string_view();
-            htmlayout::css::parseTransformOrigin(poVal, pbw, pbh, pox, poy);
-            float ax = pbx + pox, ay = pby + poy;
-            htmlayout::css::Matrix3D persp_m = htmlayout::css::makePerspectiveMatrix(persp);
-            htmlayout::css::Matrix3D toPO;     toPO.m[12] = ax; toPO.m[13] = ay;
-            htmlayout::css::Matrix3D fromPO;   fromPO.m[12] = -ax; fromPO.m[13] = -ay;
-            htmlayout::css::Matrix3D P = toPO * persp_m * fromPO;
-            full = P * full;
-        }
-
-        combined = combined * full;
-        hasAnyTransform = true;
-    }
-
-    float bx = chain[0].bx, by = chain[0].by;
-    float bw = chain[0].bw, bh = chain[0].bh;
+    // display:none elements have no box at all, and a null element has no
+    // ancestor chain to walk — bro::dom::absoluteBorderBox() returns
+    // {0,0,0,0} for both, matching Chromium rather than inheriting the
+    // parent's accumulated position.
+    bro::dom::AbsoluteRect r = bro::dom::absoluteBorderBox(el);
 
     JSValue rect = JS_NewObject(ctx);
-    float outX, outY, outW, outH;
-    if (hasAnyTransform) {
-        // Project 4 corners of border box through the 4x4 (homogeneous divide
-        // when perspective is present), take 2D AABB.
-        auto apply = [&](float px, float py, float& rx, float& ry) {
-            combined.project2D(px, py, 0.0f, rx, ry);
-        };
-        float cx[4], cy[4];
-        apply(bx,      by,      cx[0], cy[0]);
-        apply(bx + bw, by,      cx[1], cy[1]);
-        apply(bx + bw, by + bh, cx[2], cy[2]);
-        apply(bx,      by + bh, cx[3], cy[3]);
-        float minX = cx[0], maxX = cx[0], minY = cy[0], maxY = cy[0];
-        for (int i = 1; i < 4; ++i) {
-            if (cx[i] < minX) minX = cx[i];
-            if (cx[i] > maxX) maxX = cx[i];
-            if (cy[i] < minY) minY = cy[i];
-            if (cy[i] > maxY) maxY = cy[i];
-        }
-        outX = minX; outY = minY;
-        outW = maxX - minX; outH = maxY - minY;
-    } else {
-        outX = bx; outY = by; outW = bw; outH = bh;
-    }
-    JS_SetPropertyStr(ctx, rect, "x",      JS_NewFloat64(ctx, outX));
-    JS_SetPropertyStr(ctx, rect, "y",      JS_NewFloat64(ctx, outY));
-    JS_SetPropertyStr(ctx, rect, "width",  JS_NewFloat64(ctx, outW));
-    JS_SetPropertyStr(ctx, rect, "height", JS_NewFloat64(ctx, outH));
-    JS_SetPropertyStr(ctx, rect, "top",    JS_NewFloat64(ctx, outY));
-    JS_SetPropertyStr(ctx, rect, "left",   JS_NewFloat64(ctx, outX));
-    JS_SetPropertyStr(ctx, rect, "bottom", JS_NewFloat64(ctx, outY + outH));
-    JS_SetPropertyStr(ctx, rect, "right",  JS_NewFloat64(ctx, outX + outW));
+    JS_SetPropertyStr(ctx, rect, "x",      JS_NewFloat64(ctx, r.x));
+    JS_SetPropertyStr(ctx, rect, "y",      JS_NewFloat64(ctx, r.y));
+    JS_SetPropertyStr(ctx, rect, "width",  JS_NewFloat64(ctx, r.width));
+    JS_SetPropertyStr(ctx, rect, "height", JS_NewFloat64(ctx, r.height));
+    JS_SetPropertyStr(ctx, rect, "top",    JS_NewFloat64(ctx, r.y));
+    JS_SetPropertyStr(ctx, rect, "left",   JS_NewFloat64(ctx, r.x));
+    JS_SetPropertyStr(ctx, rect, "bottom", JS_NewFloat64(ctx, r.y + r.height));
+    JS_SetPropertyStr(ctx, rect, "right",  JS_NewFloat64(ctx, r.x + r.width));
     return rect;
 }
 
