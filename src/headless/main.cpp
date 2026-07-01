@@ -422,35 +422,40 @@ int main(int argc, char* argv[]) {
         auto* ctx = rt->getContext();
         bro::js::installHeadlessBindings(ctx, engine);
 
+        bool ok = true;
         if (!inlineExprs.empty()) {
-            // -e mode: concatenate and eval
+            // -e mode: concatenate and eval. When a script path also follows
+            // (documented by fast_eval.js/headless_eval.js's own usage
+            // comments as a way to set override globals before the script
+            // runs — e.g. `-e "EVAL_MATCHES=30;" fast_eval.js`), only print
+            // the final value when there's no script to follow; otherwise
+            // this is just setting up globals for it.
             std::ostringstream oss;
             for (size_t i = 0; i < inlineExprs.size(); ++i) {
                 if (i > 0) oss << ";\n";
                 oss << inlineExprs[i];
             }
-            if (!evalCode(ctx, rt, oss.str(), "<inline>", true))
-                exitCode = 1;
-        } else if (!scriptPath.empty()) {
+            ok = evalCode(ctx, rt, oss.str(), "<inline>", scriptPath.empty());
+        }
+        if (ok && !scriptPath.empty()) {
             // Script file mode
             std::ifstream ifs(scriptPath);
             if (!ifs.is_open()) {
                 fprintf(stderr, "Error: cannot open script: %s\n", scriptPath.c_str());
-                exitCode = 1;
+                ok = false;
             } else {
                 std::ostringstream oss;
                 oss << ifs.rdbuf();
                 std::string src = oss.str();
-                bool ok = looksLikeModule(src)
-                              ? evalModuleFile(ctx, rt, src, scriptPath.c_str())
-                              : evalCode(ctx, rt, src, scriptPath.c_str());
-                if (!ok)
-                    exitCode = 1;
+                ok = looksLikeModule(src)
+                         ? evalModuleFile(ctx, rt, src, scriptPath.c_str())
+                         : evalCode(ctx, rt, src, scriptPath.c_str());
             }
-        } else {
+        } else if (inlineExprs.empty() && scriptPath.empty()) {
             // Interactive REPL
             runRepl(ctx, rt, engine);
         }
+        if (!ok) exitCode = 1;
 
         // Join the net/Steam background threads (safe standalone — no
         // ordering dependency on the JS runtime; see Engine::stopBackground
