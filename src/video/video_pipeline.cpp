@@ -78,9 +78,11 @@ bool VideoPipeline::decodePacket(const MediaPacket& pkt) {
         }
         return got;
     }
-    // Audio packets are dropped here; calling code pulls them via
-    // audioDecoder() + a separate demux pump when the audio pipeline
-    // lands. This isolates the video-first integration.
+    // Audio packets are dropped here — audio playback is driven by a
+    // separate demuxer instance (see ElVideo::openAudioTrack), which
+    // predecodes the whole audio track into one clip up front rather than
+    // pumping packets in lockstep with video. audioDecoder() is exposed
+    // for callers that want to decode Opus packets themselves.
     return false;
 }
 
@@ -108,7 +110,7 @@ bool VideoPipeline::advanceTo(TimeNs nowNs) {
         }
 
         if (pkt.trackId != videoTrackId_) {
-            // Non-video packets not handled in this first integration.
+            // Audio packets on this source are ignored — see decodePacket().
             continue;
         }
 

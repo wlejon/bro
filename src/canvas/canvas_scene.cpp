@@ -817,8 +817,9 @@ float CanvasScene::lineDashOffset() const { return state_.lineDashOffset; }
 
 void CanvasScene::applyShadow(SkPaint& paint) const {
     if (shadowA_ > 0 && (shadowBlur_ > 0 || shadowOffsetX_ != 0 || shadowOffsetY_ != 0)) {
-        // Skia doesn't have a direct shadow — we'd need a separate draw pass.
-        // For now, apply a blur mask filter as an approximation when blur > 0.
+        // Skia has no direct shadow API; approximate with a blur mask filter
+        // when blur > 0. Shadow offset is not applied — a faithful shadow
+        // would need a separate offset draw pass.
         if (shadowBlur_ > 0) {
             paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, shadowBlur_ / 2.0f));
         }

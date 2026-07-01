@@ -16,8 +16,8 @@
 // ("SteamUser023") track SDK releases, so loadSteamFlat() probes a descending
 // list of known versions.
 //
-// Scope today: lifecycle + identity (M1). Friends / matchmaking / voice / UGC
-// add more flat-function pointers to SteamFlatApi as those layers come online.
+// Covers lifecycle + identity, friends, matchmaking/lobbies, and voice
+// flat-function pointers; a UGC layer would extend SteamFlatApi the same way.
 
 namespace bro::steam {
 
@@ -70,7 +70,7 @@ struct SteamFlatApi {
     const char* (*Friends_GetPersonaName)(void* iSteamFriends) = nullptr;
     uint32_t    (*Utils_GetAppID)(void* iSteamUtils) = nullptr;
 
-    // --- voice (M4): ISteamUser capture + codec. EVoiceResult is an int
+    // --- voice: ISteamUser capture + codec. EVoiceResult is an int
     // (0 == OK, 3 == NoData). GetVoice/GetAvailableVoice keep Steam's deprecated
     // trailing params in the flat ABI, so we pass them through as false/null/0. ---
     void     (*User_StartVoiceRecording)(void* iUser) = nullptr;
@@ -88,7 +88,7 @@ struct SteamFlatApi {
                                      uint32_t nDesiredSampleRate) = nullptr;
     uint32_t (*User_GetVoiceOptimalSampleRate)(void* iUser) = nullptr;
 
-    // --- friends (M2): list, personas, rich presence, overlay ---
+    // --- friends: list, personas, rich presence, overlay ---
     // CSteamID is passed by value as a uint64 in the flat ABI.
     int         (*Friends_GetFriendCount)(void* iSteamFriends, int iFriendFlags) = nullptr;
     uint64_t    (*Friends_GetFriendByIndex)(void* iSteamFriends, int iFriend, int iFriendFlags) = nullptr;
@@ -100,7 +100,7 @@ struct SteamFlatApi {
     const char* (*Friends_GetFriendRichPresence)(void* iSteamFriends, uint64_t steamIDFriend, const char* key) = nullptr;
     void        (*Friends_ActivateGameOverlay)(void* iSteamFriends, const char* dialog) = nullptr;
     void        (*Friends_ActivateGameOverlayToUser)(void* iSteamFriends, const char* dialog, uint64_t steamID) = nullptr;
-    // Opens the overlay's "invite friends to this lobby" panel (the M4 invite flow).
+    // Opens the overlay's "invite friends to this lobby" panel (the invite flow).
     void        (*Friends_ActivateGameOverlayInviteDialog)(void* iSteamFriends, uint64_t steamIDLobby) = nullptr;
 
     // Avatars: friends return an int image handle (0 none, -1 loading); the
@@ -111,7 +111,7 @@ struct SteamFlatApi {
     bool (*Utils_GetImageSize)(void* iSteamUtils, int iImage, uint32_t* w, uint32_t* h) = nullptr;
     bool (*Utils_GetImageRGBA)(void* iSteamUtils, int iImage, uint8_t* dest, int destBufferSize) = nullptr;
 
-    // --- matchmaking / lobbies (M3). CSteamID lobby/user ids pass by value as
+    // --- matchmaking / lobbies. CSteamID lobby/user ids pass by value as
     // uint64. CreateLobby/JoinLobby/RequestLobbyList are async — they return a
     // SteamAPICall_t whose result arrives via SteamAPICallCompleted_t. ---
     uint64_t    (*Matchmaking_CreateLobby)(void* iMM, int eLobbyType, int cMaxMembers) = nullptr;
@@ -131,7 +131,7 @@ struct SteamFlatApi {
     bool        (*Matchmaking_SetLobbyMemberLimit)(void* iMM, uint64_t steamIDLobby, int cMaxMembers) = nullptr;
     bool        (*Matchmaking_SetLobbyType)(void* iMM, uint64_t steamIDLobby, int eLobbyType) = nullptr;
     bool        (*Matchmaking_SetLobbyJoinable)(void* iMM, uint64_t steamIDLobby, bool bJoinable) = nullptr;
-    // Discovery + invites (M3b).
+    // Discovery + invites.
     bool        (*Matchmaking_InviteUserToLobby)(void* iMM, uint64_t steamIDLobby, uint64_t steamIDInvitee) = nullptr;
     uint64_t    (*Matchmaking_RequestLobbyList)(void* iMM) = nullptr;
     uint64_t    (*Matchmaking_GetLobbyByIndex)(void* iMM, int iLobby) = nullptr;

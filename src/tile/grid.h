@@ -82,8 +82,8 @@ public:
 
     // ---- raw access (serialize / meshing) -------------------------------
     // Contiguous row-major data for a layer / the elevation / the flag planes.
-    // Lengths are all cellCount(). Exposed const for serialize + the future
-    // renderer; mutate through the typed setters above.
+    // Lengths are all cellCount(). Exposed const for serialize + the renderer;
+    // mutate through the typed setters above.
     const std::vector<uint16_t>& layerData(int layer) const { return layers_[layer]; }
     const std::vector<int16_t>& elevationData() const { return elevation_; }
     const std::vector<uint32_t>& flagData() const { return flags_; }

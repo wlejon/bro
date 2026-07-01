@@ -363,7 +363,8 @@ bool getZIndex(const htmlayout::css::ComputedStyle& s, int& outZ) {
 
 // Returns true if this element creates a new stacking context.
 // CSS 2.1 + commonly-implemented CSS3 triggers, restricted to what parity
-// tests exercise. v1 punts on: will-change, contain:layout/paint, container-type.
+// tests exercise. Does not yet trigger on: will-change, contain:layout/paint,
+// container-type.
 bool createsStackingContext(dom::Element* elem, bool isRoot) {
     if (isRoot) return true; // root element always creates SC
     auto& s = elem->computedStyle();
@@ -1827,8 +1828,8 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
                 }
                 return;
             }
-            // Solid (and unknown-style fallback) — for collapsed-mode parity
-            // dashed/dotted are rare; fall back to solid for now.
+            // Solid (and unknown-style fallback). Collapsed-border mode does
+            // not render dashed/dotted stripes; they paint as solid.
             renderer_->fillRect(sx, sy, sw, sh, c);
         };
 
@@ -2546,10 +2547,6 @@ static std::string urlDecode(const std::string& s) {
 
 // Decode standard base64 (RFC 4648). Tolerates whitespace and missing padding.
 static std::vector<uint8_t> base64Decode(const std::string& s) {
-    static const int8_t T[256] = {
-        // initialized below
-        -1
-    };
     static int8_t table[256];
     static bool init = false;
     if (!init) {
@@ -2558,7 +2555,6 @@ static std::vector<uint8_t> base64Decode(const std::string& s) {
         for (int i = 0; i < 64; ++i) table[(unsigned char)alpha[i]] = (int8_t)i;
         init = true;
     }
-    (void)T;
     std::vector<uint8_t> out;
     out.reserve(s.size() * 3 / 4);
     uint32_t buf = 0;

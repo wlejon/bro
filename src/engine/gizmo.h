@@ -27,7 +27,6 @@ enum class GizmoAxis : uint8_t {
     X      = 1,
     Y      = 2,
     Z      = 3,
-    // Phase-5 additions (declared now to keep the enum stable):
     XY     = 4,
     YZ     = 5,
     XZ     = 6,
@@ -67,14 +66,13 @@ struct GizmoConfig {
 };
 
 /// Engine-owned gizmo manager. Renders translate / rotate / scale handles
-/// inside the scene's 3D pipeline (after the billboard pass) and — in later
-/// phases — runs picking and drag interaction against them.
+/// inside the scene's 3D pipeline (after the billboard pass) and runs
+/// picking and drag interaction against them.
 ///
-/// Phase 1 scope (this commit):
-///   * Translate arrow meshes only.
+///   * Translate / rotate / scale handle meshes, built lazily per mode.
 ///   * Configured position + visibility from JS; screen-stable sizing driven
 ///     from the scene camera each frame.
-///   * No picking, no drag, no rotate/scale. Those arrive in later phases.
+///   * Picking, hover, and drag interaction against the active mode's handles.
 class GizmoManager {
 public:
     GizmoManager();
@@ -96,7 +94,7 @@ public:
     GizmoSpace space() const { return config_.space; }
 
     /// World-space pivot (attach point). Apps call this whenever the target's
-    /// origin changes — or pass a target object in later phases.
+    /// origin changes, or drive it each frame via the CB_Position callback.
     void setPosition(float x, float y, float z);
     const bromath::Vec3& position() const { return position_; }
 

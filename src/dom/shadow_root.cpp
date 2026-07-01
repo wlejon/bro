@@ -263,7 +263,8 @@ std::vector<ShadowRoot::CSSRule> ShadowRoot::parsedRules() const {
 // Supports: .class, #id, tag, tag.class, .class1.class2
 static bool matchesCSSSelector(const Element* elem, const std::string& selector) {
     if (selector.empty()) return false;
-    // We only match the last part of descendant selectors for now
+    // Only the last compound of a descendant selector is matched; ancestor
+    // combinators are not evaluated.
     std::string sel = selector;
     auto spacePos = sel.rfind(' ');
     if (spacePos != std::string::npos) sel = sel.substr(spacePos + 1);
@@ -295,7 +296,8 @@ std::string ShadowRoot::hostStyles() const {
                 result += "; ";
             result += rule.properties;
         }
-        // :host(.foo) — would need to check host's classes, skip for now
+        // :host(.foo) is not supported here: matching it would require
+        // checking the host element's classes/attributes against the argument.
     }
     return result;
 }

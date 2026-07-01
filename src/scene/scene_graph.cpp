@@ -132,7 +132,7 @@ uniform vec3 uFogColor;
 uniform float uAlphaCutoff;     // 0 = no cutoff, >0 discards baseAlpha < cutoff
 uniform float uNearClip;
 
-uniform vec3 uAmbient;         // flat ambient (placeholder for IBL)
+uniform vec3 uAmbient;         // flat ambient fallback used when IBL is disabled
 uniform int uUnlit;            // 1 = skip lighting, output baseColor + emissive
 uniform int uTwoSided;         // 1 = backface culling disabled at the host
 uniform float uSubsurface;     // 0..1; >0 enables wrap-light leaf translucency

@@ -52,9 +52,8 @@ void GizmoManager::setHovered(GizmoAxis axis) {
     if (hovered_ == axis) return;
     hovered_ = axis;
 
-    // Swap the visual for the hovered handle's mesh node. Phase-7 polish —
-    // deliberately simple: the mesh node's color becomes the hover color
-    // while every other handle reverts to its base axis color.
+    // Swap the visual for the hovered handle's mesh node: it becomes the
+    // hover color while every other handle reverts to its base axis color.
     auto apply = [&](MeshNode* n, const float (&base)[4], GizmoAxis axisId) {
         if (!n) return;
         if (hovered_ == axisId || (isDragging() && dragAxis_ == axisId)) {
@@ -451,8 +450,7 @@ std::vector<MeshNode*> GizmoManager::meshesForRender(scene::SceneGraph* graph) {
     Vec3 axX, axY, axZ;
     resolveAxes(axX, axY, axZ);
 
-    // Convert axis vector to quaternion that rotates +X onto it. For the
-    // world basis this reproduces the original phase-1 axis rotations.
+    // Convert axis vector to quaternion that rotates +X onto it.
     auto rotateFromXTo = [](const Vec3& target) -> Quat {
         Vec3 from(1, 0, 0);
         Vec3 t = vnorm_(target);

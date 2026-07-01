@@ -8,9 +8,9 @@ namespace bro::video {
 // `dst` must have capacity for width*height*4 bytes. Uses BT.601 limited
 // range — the default for VP8/VP9 when no color metadata is present.
 //
-// Temporary CPU path. A GPU shader that samples the three planes directly
-// is the long-term home; doing it here first keeps the surface area tight
-// and gives us something to diff against once the shader lands.
+// CPU conversion path; a GPU shader sampling the three planes directly
+// would be faster for large frames but this keeps the surface area small
+// and gives a reference to validate any future shader against.
 void i420ToRgba(const uint8_t* y, const uint8_t* u, const uint8_t* v,
                 int strideY, int strideU, int strideV,
                 int width, int height,

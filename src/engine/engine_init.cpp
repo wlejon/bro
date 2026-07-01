@@ -485,8 +485,8 @@ Engine::Engine(const EngineConfig& config)
         menuBar_.dirty = true;
     }
 
-    // Engine gizmo (bro.gizmo.*) — translate arrows for now; rotate + scale
-    // handles + mouse-driven interaction land in later phases.
+    // Engine gizmo (bro.gizmo.*) — translate/rotate/scale handles with
+    // mouse-driven picking and drag interaction.
     gizmo_ = std::make_unique<GizmoManager>();
     js::GizmoBindings::install(jsRuntime_->getContext(), this);
 

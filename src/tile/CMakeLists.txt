@@ -1,8 +1,8 @@
 # bro_tile — pure tile-grid core (no rendering, no scene, no JS).
 #
 # Dependency-free C++20 so it stays trivially promotable to a standalone
-# sibling library later. The scene-side tile renderer (a future TileWorld
-# node) will link this; for now only the unit-test exe consumes it.
+# sibling library later. The scene-side TileWorld node (src/scene) links this
+# for its grid/query core, alongside the unit-test exe below.
 
 add_library(bro_tile STATIC
     coord.cpp

@@ -166,7 +166,7 @@ public:
                         float nearZ, float farZ,
                         const bromath::Vec3& eye, const bromath::Vec3& target, const bromath::Vec3& up = {0, 1, 0});
 
-    /// Direct matrix access (for Phase 4 MeshNode rendering).
+    /// Direct matrix access (for MeshNode rendering).
     const bromath::Mat4& viewMatrix() const { return viewMatrix_; }
     const bromath::Mat4& projectionMatrix() const { return projectionMatrix_; }
 
@@ -216,8 +216,9 @@ public:
     ToneMap toneMap() const { return toneMap_; }
     float exposure() const { return exposure_; }
 
-    /// Ambient fill added to every fragment after per-light contributions
-    /// (a placeholder until IBL lands). RGB in linear 0-1.
+    /// Ambient fill added to every fragment after per-light contributions.
+    /// Used as the flat fallback when IBL is disabled (IBL replaces it with
+    /// split-sum env lighting when enabled). RGB in linear 0-1.
     void setAmbient(float r, float g, float b) {
         ambientColor_[0] = r; ambientColor_[1] = g; ambientColor_[2] = b;
     }

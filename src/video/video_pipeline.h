@@ -15,12 +15,10 @@ namespace bro::video {
 // clock. Glues them into something a UI element can drive with a single
 // call per rendered frame.
 //
-// The first iteration runs synchronously on the caller's thread — every
-// advanceTo(now) demuxes and decodes until we catch up. This is correct
-// for short files and keeps the surface area small while the DOM/layout
-// plumbing is wired up. A follow-up moves demux+decode onto its own
-// thread and switches the handoff to the SpscRing primitive already in
-// place.
+// Runs synchronously on the caller's thread — every advanceTo(now) demuxes
+// and decodes until we catch up. Fine for short files; a large file would
+// benefit from moving demux+decode onto its own thread using the SpscRing
+// primitive (already available) to hand frames back.
 class VideoPipeline {
 public:
     VideoPipeline();

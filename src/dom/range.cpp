@@ -399,10 +399,6 @@ std::vector<Node*> contentsInRange(Range& range) {
         Node* parent = n->parentNode();
         if (parent) {
             int idx = indexOf(parent, n);
-            int afterStart = comparePositions(parent, idx,
-                                              startC, startOff == 0 ? startOff :
-                                              (startC->nodeType() == NodeType::Text ? startOff : startOff));
-            (void)afterStart;
             bool afterS = comparePositions(parent, idx, startC, startOff) >= 0;
             bool beforeE = comparePositions(parent, idx + 1, endC, endOff) <= 0;
             if (afterS && beforeE) {

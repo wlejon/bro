@@ -59,7 +59,7 @@ private:
 };
 
 // ---------------------------------------------------------------------------
-// A friend, as snapshotted on the service thread (M2). Ownership of a snapshot
+// A friend, as snapshotted on the service thread. Ownership of a snapshot
 // vector transfers service-thread → subscriber-thread via a FriendsUpdated
 // event, so the JS thread never reads Steam state concurrently (no locks).
 // ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ struct AvatarData {
 };
 
 // ---------------------------------------------------------------------------
-// Lobby snapshot (M3). Built on the service thread whenever a lobby I'm in
+// Lobby snapshot. Built on the service thread whenever a lobby I'm in
 // changes, then handed to subscribers via a LobbyUpdated event — the JS thread
 // keeps a cache and reads getLobbyMembers/getLobbyOwner/getLobbyData from it
 // synchronously, never touching the Steam API itself (mirrors FriendInfo).
@@ -128,7 +128,7 @@ struct SteamCommand {
         ActivateOverlay,     // strA=dialog ("friends", "settings", ...)
         ActivateOverlayToUser, // strA=dialog ("steamid", "chat", ...), u64=target
         RequestAvatar,       // u64=friend steamId, i32=size (0/1/2), reqId, subscriberId
-        // --- lobbies (M3) ---
+        // --- lobbies ---
         CreateLobby,         // i32=ELobbyType, i32b=maxMembers, reqId, subscriberId
         JoinLobby,           // u64=lobbyId, reqId, subscriberId
         LeaveLobby,          // u64=lobbyId
@@ -140,7 +140,7 @@ struct SteamCommand {
         RequestLobbyList,    // filters[], reqId, subscriberId
         InviteToLobby,       // u64=lobbyId, u64b=inviteeSteamId
         ActivateInviteDialog,// u64=lobbyId — opens the overlay invite panel
-        // --- voice (M4) ---
+        // --- voice ---
         StartVoice,          // (no args)
         StopVoice,           // (no args)
         DecodeVoice,         // bytes=compressed, i32=desiredSampleRate(0=optimal), reqId, subscriberId
@@ -171,7 +171,7 @@ struct SteamEvent {
         JoinRequested,   // friend invited us via overlay/rich-presence;
                          //   u64 = friend steamId, str = the connect string
         AvatarData_,     // getAvatar() result; `avatar` owned by this event
-        // --- lobbies (M3) ---
+        // --- lobbies ---
         LobbyCreated,    // createLobby() result; reqId, u64=lobbyId, i32=success(1/0)
         LobbyEntered,    // entered a lobby; reqId(0 if spontaneous), u64=lobbyId, i32=response
         LobbyUpdated,    // lobby membership/data changed; `lobby` owned by this event
@@ -179,7 +179,7 @@ struct SteamEvent {
         LobbyList,       // requestLobbyList() result; reqId, `lobbyList` owned by this event
         LobbyInvite,     // a friend invited us to a lobby; u64=friendId, u64b=lobbyId
         LobbyJoinRequested, // accepted an invite/overlay join; u64=lobbyId, u64b=friendId
-        // --- voice (M4) ---
+        // --- voice ---
         VoiceCaptured,   // local compressed voice frame; `blob` owned by this event
         VoiceDecoded,    // decodeVoice() result; reqId, i32=sampleRate, `blob`=int16 PCM (owned)
     };
@@ -212,13 +212,13 @@ public:
     void poll();
 
     // Callbacks — bindings set these. Fire on the subscriber's thread during
-    // poll(). More land here as the lobby/voice/UGC layers come online.
+    // poll(). A UGC layer would add more here.
     std::function<void(uint64_t tick)> onPulse;
     std::function<void(const std::vector<FriendInfo>&)> onFriends;
     std::function<void(bool active)> onOverlay;
     std::function<void(uint64_t friendSteamId, const std::string& connect)> onJoinRequest;
     std::function<void(uint32_t reqId, int w, int h, const uint8_t* rgba, size_t len)> onAvatar;
-    // Lobbies (M3). onLobbyCreated/onLobbyEntered carry reqId==0 for events not
+    // Lobbies. onLobbyCreated/onLobbyEntered carry reqId==0 for events not
     // tied to a pending promise (e.g. entering via an accepted invite).
     std::function<void(uint32_t reqId, uint64_t lobbyId, bool success)> onLobbyCreated;
     // fireEvent=false means "settle a late-arriving promise only, don't refire
@@ -229,7 +229,7 @@ public:
     std::function<void(uint32_t reqId, const std::vector<LobbyState>&)> onLobbyList;
     std::function<void(uint64_t friendSteamId, uint64_t lobbyId)> onLobbyInvite;
     std::function<void(uint64_t lobbyId, uint64_t friendSteamId)> onLobbyJoinRequested;
-    // Voice (M4). onVoiceCaptured carries compressed local frames (send these to
+    // Voice. onVoiceCaptured carries compressed local frames (send these to
     // peers); onVoiceDecoded carries int16 PCM for a decodeVoice() request.
     std::function<void(const uint8_t* compressed, size_t len)> onVoiceCaptured;
     std::function<void(uint32_t reqId, int sampleRate, const uint8_t* pcm, size_t len)> onVoiceDecoded;
@@ -281,7 +281,7 @@ public:
     uint32_t appId() const { return appId_.load(std::memory_order_acquire); }
     const std::string& personaName() const { return personaName_; }
 
-    // --- Friends actions (M2). Thread-safe: each enqueues a command that the
+    // --- Friends actions. Thread-safe: each enqueues a command that the
     // service thread runs against the Steam API. No-ops when unavailable. ---
     void setRichPresence(const std::string& key, const std::string& value);
     void clearRichPresence();
@@ -294,7 +294,7 @@ public:
     /// AvatarData_ event tagged with `reqId`.
     void requestAvatar(uint32_t subscriberId, uint32_t reqId, uint64_t steamId, int size);
 
-    // --- Lobby actions (M3). Async ops (create/join) deliver their result to
+    // --- Lobby actions. Async ops (create/join) deliver their result to
     // `subscriberId` as a LobbyCreated/LobbyEntered event tagged with `reqId`. ---
     void createLobby(uint32_t subscriberId, uint32_t reqId, int lobbyType, int maxMembers);
     void joinLobby(uint32_t subscriberId, uint32_t reqId, uint64_t lobbyId);
@@ -308,7 +308,7 @@ public:
                           std::vector<LobbyListFilter> filters);
     void inviteUserToLobby(uint64_t lobbyId, uint64_t inviteeSteamId);
 
-    // --- Voice (M4). Capture is local; decode runs DecompressVoice on received
+    // --- Voice. Capture is local; decode runs DecompressVoice on received
     // compressed bytes. The optimal sample rate is published once at startup. ---
     void startVoiceRecording();
     void stopVoiceRecording();

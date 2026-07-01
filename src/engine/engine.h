@@ -276,8 +276,8 @@ public:
     CrosshairConfig& crosshair() { return crosshair_; }
     const CrosshairConfig& crosshair() const { return crosshair_; }
 
-    /// Engine-level 3D gizmo (translate arrows in phase 1; rotate + scale
-    /// handles arrive in later phases). Driven from JS via bro.gizmo.*.
+    /// Engine-level 3D gizmo (translate / rotate / scale handles). Driven
+    /// from JS via bro.gizmo.*.
     GizmoManager& gizmo() { return *gizmo_; }
     const GizmoManager& gizmo() const { return *gizmo_; }
 

@@ -83,7 +83,7 @@ struct GameRichPresenceJoinRequested_t {
     uint64_t m_steamIDFriend;
     char     m_rgchConnect[256];
 };
-// --- matchmaking (M3). Layouts match Steam's isteammatchmaking.h exactly. ---
+// --- matchmaking. Layouts match Steam's isteammatchmaking.h exactly. ---
 struct SteamAPICallCompleted_t {
     uint64_t m_hAsyncCall;
     int      m_iCallback;
@@ -906,7 +906,7 @@ void SteamService::dispatchCallback(const CallbackMsg_t& msg) {
             }
             break;
 
-        // --- lobbies (M3) ---
+        // --- lobbies ---
         case kCbSteamAPICallCompleted: {
             // The result of an async SteamAPICall_t (CreateLobby / JoinLobby) is
             // ready. Pull it and route it back to the request that issued it.
@@ -1030,8 +1030,8 @@ static SteamCommand* drainAndReverse(std::atomic<SteamCommand*>& head) {
 
 // ---------------------------------------------------------------------------
 // Service thread main — loads the Steam redistributable, owns SteamAPI init,
-// the RunCallbacks pump, and (as the surface grows) every callback handler. ALL
-// SteamAPI calls happen on this thread.
+// the RunCallbacks pump, and every callback handler. ALL SteamAPI calls happen
+// on this thread.
 //
 // The command loop runs whether or not Steam is available, so subscriber
 // register/unregister is always handled correctly — when Steam is down the loop
@@ -1090,9 +1090,9 @@ void SteamService::threadMain() {
                                        std::memory_order_relaxed);
 
             // Switch to ManualDispatch so we can pull callbacks ourselves on
-            // this thread (PersonaStateChange, overlay, join requests, and —
-            // later — lobby/voice). Falls back to RunCallbacks if the symbols
-            // aren't present (older redistributable).
+            // this thread (PersonaStateChange, overlay, join requests, lobby
+            // events). Falls back to RunCallbacks if the symbols aren't
+            // present (older redistributable).
             if (api_.ManualDispatch_Init && api_.GetHSteamPipe &&
                 api_.ManualDispatch_RunFrame && api_.ManualDispatch_GetNextCallback &&
                 api_.ManualDispatch_FreeLastCallback) {
@@ -1148,8 +1148,8 @@ void SteamService::threadMain() {
             //    list produces no events.
             if (iter % kFriendsRebuildEvery == 0) buildAndEmitFriends();
 
-            // 5. Heartbeat: ~1 Hz pulse to every subscriber so the lab can
-            //    confirm the pump is alive (M1).
+            // 5. Heartbeat: ~1 Hz pulse to every subscriber so callers can
+            //    confirm the pump is alive.
             if (iter % 100 == 0) {
                 for (auto& [sid, sub] : subscribers_) {
                     auto* ev = new SteamEvent();
