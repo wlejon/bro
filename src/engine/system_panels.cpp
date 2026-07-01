@@ -790,6 +790,16 @@ void Engine::triggerMenuAction(const std::string& id) {
     if (id == "__system.preferences") { toggleSystemSettings(); return; }
     if (id == "__system.quit") { running_ = false; return; }
     if (id == "__system.inspector") { toggleInspector(); return; }
+    if (id == "__system.togglePerf") {
+        toggleSystemPerf();
+        // Debug → Perf HUD item shows a checkmark when the overlay is open.
+        if (auto* item = menuBar_.find("__system.togglePerf")) {
+            item->checked = systemPerfVisible_;
+            menuBar_.dirty = true;
+            onMenuChanged();
+        }
+        return;
+    }
     menuBar_.triggerHandler(id);
 }
 

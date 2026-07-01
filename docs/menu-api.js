@@ -10,6 +10,8 @@
  * Actions prefixed with "__system." are engine-handled:
  *   __system.quit         — close the app (sets running=false)
  *   __system.preferences  — open the settings overlay (Graphics/Audio/Input)
+ *   __system.inspector    — toggle the DOM inspector panel; item is auto-checked when open
+ *   __system.togglePerf   — toggle the perf HUD overlay (same as F8); item is auto-checked when open
  *
  * All other action IDs dispatch to handlers registered via bro.menu.on(id, fn).
  * The ESC key is no longer reserved by the engine — apps are free to use it.
