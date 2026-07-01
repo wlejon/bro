@@ -57,6 +57,20 @@ static std::string exeDir() {
     return ".";
 }
 
+// Resolve a possibly-relative path to absolute, matching windowed bro's
+// main.cpp (src/main.cpp) so BRO_APP_DIR/BRO_PROJECT_ROOT mean the same
+// thing regardless of which executable set them.
+static std::string absolutize(const std::string& p) {
+    if (p.empty()) return p;
+#ifdef _WIN32
+    char abs[MAX_PATH];
+    return _fullpath(abs, p.c_str(), MAX_PATH) ? std::string(abs) : p;
+#else
+    char abs[PATH_MAX];
+    return realpath(p.c_str(), abs) ? std::string(abs) : p;
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -374,6 +388,24 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
+
+        // Expose the resolved app directory and project root to JS
+        // (process.env.BRO_APP_DIR, BRO_PROJECT_ROOT), matching windowed
+        // bro's main.cpp — apps use this to locate their own directory on
+        // disk for real filesystem writes (e.g. ai-arena's replay recorder),
+        // since a raw relative path resolves against this process's actual
+        // working directory, not the app directory.
+        config.appDir = absolutize(config.appDir);
+        if (!config.projectRoot.empty()) config.projectRoot = absolutize(config.projectRoot);
+#ifdef _WIN32
+        _putenv_s("BRO_APP_DIR", config.appDir.c_str());
+        _putenv_s("BRO_PROJECT_ROOT", config.projectRoot.c_str());
+#else
+        setenv("BRO_APP_DIR", config.appDir.c_str(), 1);
+        if (!config.projectRoot.empty()) setenv("BRO_PROJECT_ROOT", config.projectRoot.c_str(), 1);
+        else unsetenv("BRO_PROJECT_ROOT");
+#endif
+
         config.displayMode = bro::engine::DisplayMode::Headless;
         config.realAudio = realAudio;
         config.graphics.width = width;
