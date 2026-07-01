@@ -18,6 +18,7 @@ using bro::engine::parseConfig;
 #ifdef _WIN32
 #include <windows.h>
 #include <io.h>
+#include <crtdbg.h>
 #define isatty _isatty
 #define fileno _fileno
 #else
@@ -243,6 +244,23 @@ static void runRepl(JSContext* ctx, bro::js::Runtime* rt,
 // ---------------------------------------------------------------------------
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    // Suppress the WER "bro-headless.exe has stopped working" dialog that
+    // Windows shows after an unhandled crash/abort() — headless is driven
+    // by scripts/CI that need the process to just die with a nonzero exit,
+    // not block on a click.
+    SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
+#ifdef _DEBUG
+    // Debug CRT's assert() otherwise ALSO pops its own blocking "Debug
+    // Error!" Abort/Retry/Ignore dialog before the abort() above even
+    // fires. Route it to stderr instead so the assertion text still shows
+    // up in the log, just without the modal.
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+#endif
+#endif
     bro::util::installSignalHandler();
 
     bool showHelp = false;
