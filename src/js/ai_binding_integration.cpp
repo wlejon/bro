@@ -171,6 +171,30 @@ static JSValue self_hold(JSContext* ctx, JSValueConst this_val, int argc, JSValu
     return JS_UNDEFINED;
 }
 
+// Generic invocation for JS-registered capabilities (registerCapability).
+// Unlike the 5 built-ins above, custom capabilities have no per-name
+// accessor — nothing else sets AgentBinding::pending().capId to one of
+// them, so a registered {gate,start,advance} spec was previously
+// unreachable from any thinkHook_-driven agent (confirmed: gate/start
+// never fire even when attached and gate() would return true). Looks the
+// capability up by the same name passed to registerCapability.
+static JSValue self_useCapability(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    auto* b = bindingFromHandle(ctx, this_val);
+    if (!b) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    std::string name = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    auto it = registry().byName.find(name);
+    if (it == registry().byName.end()) return JS_UNDEFINED;
+    auto& a = b->pending();
+    a = brogameagent::Action{};
+    a.capId = it->second->id;
+    if (argc >= 2) { int32_t v = -1; JS_ToInt32(ctx, &v, argv[1]); a.i0 = v; }
+    if (argc >= 3) { int32_t v = -1; JS_ToInt32(ctx, &v, argv[2]); a.i1 = v; }
+    return JS_UNDEFINED;
+}
+
 // Read-only getters on self.
 static JSValue self_get_hp(JSContext* ctx, JSValueConst this_val) {
     auto* b = bindingFromHandle(ctx, this_val);
@@ -296,6 +320,10 @@ static JSValue buildSelfProxy(JSContext* ctx, scene::AgentBinding* b,
     if (caps.has(brogameagent::kCapBasicAttack)) addMethod("attack",   self_attack,   1);
     if (caps.has(brogameagent::kCapCastAbility)) addMethod("cast",     self_cast,     2);
     if (caps.has(brogameagent::kCapFlee))        addMethod("flee",     self_flee,     2);
+
+    for (const auto& kv : registry().byId) {
+        if (caps.has(kv.first)) { addMethod("useCapability", self_useCapability, 1); break; }
+    }
 
     return obj;
 }
