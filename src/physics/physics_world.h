@@ -380,9 +380,9 @@ private:
 
     float timeStep_ = 1.0f / 60.0f;
 
-    // Contact events double-buffer: physics thread writes to back_, main drains front_.
+    // Holds the events drained from ListenerImpl's lock-free buffer for the
+    // last completed step, until drainContactEvents() hands them to the caller.
     std::vector<ContactEvent> contactsFront_;
-    std::vector<ContactEvent> contactsBack_;
 
     bool initialized_ = false;
 };

@@ -42,7 +42,7 @@ public:
         const int64_t pts = pkt.pts;
         const auto err = vpx_codec_decode(&ctx_, pkt.data->data(),
                                           static_cast<unsigned int>(pkt.data->size()),
-                                          reinterpret_cast<void*>(static_cast<intptr_t>(pts ? 1 : 1)),
+                                          nullptr,
                                           0);
         if (err != VPX_CODEC_OK) {
             needsKey_ = true;

@@ -35,7 +35,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <mutex>
 
 JPH_SUPPRESS_WARNINGS
 
@@ -90,36 +89,41 @@ struct PhysicsWorld::Layers {
 //    bodies themselves. This keeps the event queue O(events) not O(pairs*frames).
 
 struct PhysicsWorld::ListenerImpl : public ContactListener {
+    explicit ListenerImpl(size_t capacity) : buffer(capacity) {}
+
     void OnContactAdded(const Body& b1, const Body& b2,
                         const ContactManifold&, ContactSettings&) override {
-        std::lock_guard lock(mutex);
-        ContactEvent e;
-        e.type = ContactEvent::Added;
-        e.body1 = b1.GetID();
-        e.body2 = b2.GetID();
-        e.isSensor = b1.IsSensor() || b2.IsSensor();
-        events.push_back(e);
+        push(ContactEvent::Added, b1.GetID(), b2.GetID(), b1.IsSensor() || b2.IsSensor());
     }
 
     void OnContactRemoved(const SubShapeIDPair& pair) override {
-        std::lock_guard lock(mutex);
-        ContactEvent e;
-        e.type = ContactEvent::Removed;
-        e.body1 = pair.GetBody1ID();
-        e.body2 = pair.GetBody2ID();
-        e.isSensor = false;  // can't tell here without body lookup; leave false
-        events.push_back(e);
+        // can't tell isSensor here without a body lookup; leave false
+        push(ContactEvent::Removed, pair.GetBody1ID(), pair.GetBody2ID(), false);
     }
 
+    // drain() is only called after physicsSystem_.Update() has returned (all
+    // Jolt job threads synced back), so there are no concurrent writers left
+    // to race against here — safe to read/reset buffer/writeIdx directly.
     std::vector<ContactEvent> drain() {
-        std::lock_guard lock(mutex);
-        std::vector<ContactEvent> out;
-        out.swap(events);
+        size_t n = std::min(writeIdx.load(std::memory_order_relaxed), buffer.size());
+        std::vector<ContactEvent> out(buffer.begin(), buffer.begin() + n);
+        writeIdx.store(0, std::memory_order_relaxed);
         return out;
     }
 
-    std::mutex mutex;
-    std::vector<ContactEvent> events;
+    // Lock-free MPSC append: Jolt's job system invokes OnContact* concurrently
+    // from multiple worker threads during Update(), so each caller claims a
+    // disjoint slot via fetch_add rather than taking a lock. A slot beyond
+    // capacity is dropped rather than risk an OOB write — capacity is sized
+    // against maxBodies in PhysicsWorld::init().
+    void push(ContactEvent::Type type, BodyID b1, BodyID b2, bool sensor) {
+        size_t idx = writeIdx.fetch_add(1, std::memory_order_relaxed);
+        if (idx >= buffer.size()) return;
+        buffer[idx] = ContactEvent{type, b1, b2, sensor};
+    }
+
+    std::vector<ContactEvent> buffer;
+    std::atomic<size_t> writeIdx{0};
 };
 
 // --- Jolt global init (once) ---
@@ -176,8 +180,10 @@ bool PhysicsWorld::init(int maxBodies) {
 
     physicsSystem_.SetGravity(Vec3(0, -9.81f, 0));
 
-    // Install per-world contact listener
-    listener_ = std::make_unique<ListenerImpl>();
+    // Install per-world contact listener. Buffer capacity is sized generously
+    // against maxBodies; see ListenerImpl::push for the overflow behavior.
+    size_t contactCapacity = std::clamp<size_t>(static_cast<size_t>(maxBodies) * 4, 1024, 65536);
+    listener_ = std::make_unique<ListenerImpl>(contactCapacity);
     physicsSystem_.SetContactListener(listener_.get());
 
     initialized_ = true;

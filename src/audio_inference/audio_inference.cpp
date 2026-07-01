@@ -1,5 +1,7 @@
 #include "audio_inference/audio_inference.h"
 
+#include "util/log.h"
+
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
@@ -68,7 +70,7 @@ void AudioInference::pushCommand(Command* c) {
     if (t - h >= kCmdCap) {
         // Ring full — only possible if dozens of add/remove queued without a
         // single pump. Drop rather than block; never expected in practice.
-        std::fprintf(stderr, "[ERROR] [audioinfer] command queue full, dropping\n");
+        LOG_ERROR("[audioinfer] command queue full, dropping");
         delete c;
         return;
     }
@@ -149,9 +151,9 @@ void AudioInference::pumpTasks() {
         try {
             task.process(scratch_.data(), n);
         } catch (const std::exception& e) {
-            std::fprintf(stderr, "[ERROR] [audioinfer] task process: %s\n", e.what());
+            LOG_ERROR("[audioinfer] task process: %s", e.what());
         } catch (...) {
-            std::fprintf(stderr, "[ERROR] [audioinfer] task process: unknown\n");
+            LOG_ERROR("[audioinfer] task process: unknown");
         }
     }
 }
