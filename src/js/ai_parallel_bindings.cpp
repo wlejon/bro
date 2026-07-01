@@ -72,6 +72,41 @@ std::vector<brogameagent::World*> parseWorldsArray(JSContext* ctx, JSValueConst 
     return out;
 }
 
+// World::registerAbility({fn: ...}) (the only way an app author registers
+// abilities from JS — see ai_bindings.cpp's registerAbility binding) wraps
+// the JS closure in a std::function that calls JS_Call directly, with no
+// thread affinity check. World::resolveAbility invokes that fn on every
+// ability cast, including ones mcts::apply performs internally while
+// expanding/rolling out search tree nodes — which for root_parallel_search
+// happens on N worker threads concurrently. QuickJS is single-threaded;
+// concurrent JS_Call from multiple OS threads corrupts its heap (observed:
+// an intermittent "Assertion failed: p->ref_count == 0" abort a few
+// seconds into a real match, once two worker threads' timing overlapped).
+// Detect this before spawning any threads and fail with a clear exception
+// instead of undefined behavior — mirrors the evaluator/rolloutPolicy
+// JS-function rejection above, extended to cover ability handlers, which
+// callers don't pass explicitly but which are reachable from any World.
+bool worldHasJsBackedAbility(const brogameagent::World& world) {
+    for (const brogameagent::Agent* agent : world.agents()) {
+        if (!agent) continue;
+        const auto& slots = agent->unit().abilitySlot;
+        for (int i = 0; i < brogameagent::Unit::MAX_ABILITIES; i++) {
+            int abilityId = slots[i];
+            if (abilityId < 0) continue;
+            const brogameagent::AbilitySpec* spec = world.abilitySpec(abilityId);
+            if (spec && spec->fn) return true;
+        }
+    }
+    return false;
+}
+
+bool anyWorldHasJsBackedAbility(const std::vector<brogameagent::World*>& worlds) {
+    for (const brogameagent::World* w : worlds) {
+        if (w && worldHasJsBackedAbility(*w)) return true;
+    }
+    return false;
+}
+
 // Native-only hero evaluator: a string preset, or a shared/classic native
 // wrapper (e.g. a NeuralEvaluator, or a classic-evaluator object). Returns
 // nullptr with a pending JS exception if the JS side handed a plain
@@ -153,6 +188,12 @@ JSValue js_rootParallelSearch(JSContext* ctx, JSValueConst, int argc, JSValueCon
         return JS_ThrowTypeError(ctx, "rootParallelSearch: opts.worlds must contain only AIWorld values");
     if (worlds.empty())
         return JS_ThrowTypeError(ctx, "rootParallelSearch: opts.worlds must be a non-empty array");
+    if (anyWorldHasJsBackedAbility(worlds))
+        return JS_ThrowTypeError(ctx,
+            "rootParallelSearch: opts.worlds contains an ability registered with a JS `fn` "
+            "handler — worker threads would call back into QuickJS concurrently and corrupt "
+            "it. Register search-clone worlds' abilities as native-only (no `fn`), or don't "
+            "use rootParallelSearch with worlds carrying JS-authored abilities.");
 
     int heroId = getInt(ctx, opts, "heroId", -1);
     if (heroId < 0)
@@ -191,6 +232,12 @@ JSValue js_rootParallelSearchDecoupled(JSContext* ctx, JSValueConst, int argc, J
         return JS_ThrowTypeError(ctx, "rootParallelSearchDecoupled: opts.worlds must contain only AIWorld values");
     if (worlds.empty())
         return JS_ThrowTypeError(ctx, "rootParallelSearchDecoupled: opts.worlds must be a non-empty array");
+    if (anyWorldHasJsBackedAbility(worlds))
+        return JS_ThrowTypeError(ctx,
+            "rootParallelSearchDecoupled: opts.worlds contains an ability registered with a "
+            "JS `fn` handler — worker threads would call back into QuickJS concurrently and "
+            "corrupt it. Register search-clone worlds' abilities as native-only (no `fn`), or "
+            "don't use rootParallelSearchDecoupled with worlds carrying JS-authored abilities.");
 
     int heroId = getInt(ctx, opts, "heroId", -1);
     int oppId  = getInt(ctx, opts, "oppId", -1);
