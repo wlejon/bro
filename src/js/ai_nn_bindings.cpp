@@ -508,6 +508,22 @@ static void registerClasses(JSContext* ctx) {
                     d->net->backward((float)dValue, *dl);
                     return JS_UNDEFINED;
                 })
+            // Batched forward — B observation rows in one call (one GPU
+            // dispatch instead of B), for interleaving multiple searches'
+            // leaf evaluations within a single JS tick. x: (B, inDim),
+            // logits/values pre-sized by the caller (resized to fit if not).
+            .method("forwardBatched",
+                [](PolicyValueNetData* d, JSContext* ctx, JSValueConst x,
+                   JSValueConst logits, JSValueConst values) -> JSValue {
+                    if (!d->net) return JS_ThrowInternalError(ctx, "net not initialized");
+                    auto* xt = tensorFromJS(ctx, x);
+                    auto* lt = tensorFromJS(ctx, logits);
+                    auto* vt = tensorFromJS(ctx, values);
+                    if (!xt || !lt || !vt)
+                        return JS_ThrowTypeError(ctx, "PolicyValueNet.forwardBatched(x,logits,values) expects Tensors");
+                    d->net->forward_batched(*xt, *lt, *vt);
+                    return JS_UNDEFINED;
+                })
             .method("zeroGrad", [](PolicyValueNetData* d) { if (d->net) d->net->zero_grad(); })
             .method("sgdStep",  [](PolicyValueNetData* d, double lr, double m) { if (d->net) d->net->sgd_step((float)lr, (float)m); })
             // Device migration. Pass "gpu" or "cpu" (case-insensitive). Throws
@@ -601,6 +617,19 @@ static void registerClasses(JSContext* ctx) {
                     auto* dl = tensorFromJS(ctx, dLogits);
                     if (!dl) return JS_ThrowTypeError(ctx, "SingleHeroNetTX.backward(dValue,dLogits)");
                     d->net->backward((float)dValue, *dl);
+                    return JS_UNDEFINED;
+                })
+            // Batched forward — see AIPolicyValueNet.forwardBatched.
+            .method("forwardBatched",
+                [](SingleHeroNetTXData* d, JSContext* ctx, JSValueConst x,
+                   JSValueConst logits, JSValueConst values) -> JSValue {
+                    if (!d->net) return JS_ThrowInternalError(ctx, "net not initialized");
+                    auto* xt = tensorFromJS(ctx, x);
+                    auto* lt = tensorFromJS(ctx, logits);
+                    auto* vt = tensorFromJS(ctx, values);
+                    if (!xt || !lt || !vt)
+                        return JS_ThrowTypeError(ctx, "SingleHeroNetTX.forwardBatched(x,logits,values) expects Tensors");
+                    d->net->forward_batched(*xt, *lt, *vt);
                     return JS_UNDEFINED;
                 })
             .method("zeroGrad", [](SingleHeroNetTXData* d) { if (d->net) d->net->zero_grad(); })

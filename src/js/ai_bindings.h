@@ -13,6 +13,7 @@ namespace brogameagent {
         class Mcts; class IPrior; class IEvaluator; class ITeamEvaluator; class IRolloutPolicy;
         struct MctsConfig; struct CombatAction;
     }
+    namespace learn { class IInferenceBackend; }
 }
 
 namespace brotensor { struct Tensor; }
@@ -143,5 +144,13 @@ JSValue makeCombatAction(JSContext* ctx, const brogameagent::mcts::CombatAction&
 
 // ── Root-parallel search (implemented in ai_parallel_bindings.cpp) ──
 void installParallelBindings(JSContext* ctx, JSValue gameObj);
+
+/// Unwrap a wrapped DirectBackend/ServerBackend (ai_learn_bindings.cpp) into
+/// the underlying brogameagent::learn::IInferenceBackend*. Returns nullptr
+/// if the value isn't a bound backend wrapper. Used by ai_generic_mcts_
+/// bindings.cpp's `backend` option to install a native prior/value fast
+/// path (no JS-callback round trip per MCTS node).
+brogameagent::learn::IInferenceBackend*
+inferenceBackendFromJS(JSContext* ctx, JSValueConst v);
 
 } // namespace bro::js

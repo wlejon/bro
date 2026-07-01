@@ -13,8 +13,10 @@
 
 #include <qjsbind/qjsbind.h>
 #include <brogameagent/generic_mcts.h>
+#include <brogameagent/learn/inference_backend.h>
 
 #include <any>
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -109,6 +111,11 @@ struct GenericMctsData {
     JSValue prior_fn   = JS_UNDEFINED;
     JSValue value_fn   = JS_UNDEFINED;
 
+    // Native backend fast-path (opts.backend) — keeps the backend's JS
+    // wrapper alive; prior_fn/value_fn above stay JS_UNDEFINED in this mode
+    // unless the caller also passed an explicit priorFn/valueFn (which wins).
+    JSValue backend_ref = JS_UNDEFINED;
+
     int num_actions = 0;
 
     GenericMctsData() = default;
@@ -124,6 +131,7 @@ struct GenericMctsData {
         JS_FreeValue(ctx, observe_fn);
         JS_FreeValue(ctx, prior_fn);
         JS_FreeValue(ctx, value_fn);
+        JS_FreeValue(ctx, backend_ref);
     }
 };
 
@@ -214,6 +222,38 @@ static void rewirePrior(GenericMctsData* d) {
     } else {
         d->m->set_prior_fn(nullptr);
     }
+}
+
+// Native prior/value fns over an IInferenceBackend — mirrors the reference
+// wiring in brogameagent's tests/gpu/test_mcts_server.cpp (masked softmax
+// over legal actions + raw value), but runs entirely in C++: no per-node
+// JS-callback round trip for the prior/value evaluation itself (the env's
+// observe_fn is still JS, since the env is JS-authored).
+static mcts::GenericPriorFn makeNativePriorFn(brogameagent::learn::IInferenceBackend* backend) {
+    return [backend](const std::vector<float>& obs,
+                     const std::vector<int>& legal) -> std::vector<float> {
+        const auto r = backend->evaluate(obs);
+        const int A = backend->num_actions();
+        std::vector<float> probs((size_t)A, 0.0f);
+        std::vector<uint8_t> mask((size_t)A, 0);
+        for (int a : legal) if (a >= 0 && a < A) mask[a] = 1;
+        float m = -1e30f;
+        for (int a = 0; a < A; ++a) if (mask[a] && r.logits[a] > m) m = r.logits[a];
+        float s = 0.0f;
+        for (int a = 0; a < A; ++a) {
+            if (!mask[a]) { probs[a] = 0.0f; continue; }
+            probs[a] = std::exp(r.logits[a] - m);
+            s += probs[a];
+        }
+        if (s > 0.0f) for (int a = 0; a < A; ++a) probs[a] /= s;
+        return probs;
+    };
+}
+
+static mcts::GenericValueFn makeNativeValueFn(brogameagent::learn::IInferenceBackend* backend) {
+    return [backend](const std::vector<float>& obs) -> float {
+        return backend->evaluate(obs).value;
+    };
 }
 
 static void rewireValue(GenericMctsData* d) {
@@ -343,6 +383,30 @@ static JSValue js_createGenericMcts(JSContext* ctx, JSValueConst,
         rewireValue(d);
     }
 
+    // Optional native backend (DirectBackend/ServerBackend, see
+    // ai_learn_bindings.cpp) — a GPU-accelerated prior/value fast path that
+    // skips the JS-callback round trip per MCTS node. Only fills in whichever
+    // of prior_fn/value_fn wasn't already given as an explicit JS function
+    // above (an explicit priorFn/valueFn always wins over `backend`).
+    {
+        JSValue bv = JS_GetPropertyStr(ctx, opts, "backend");
+        if (!JS_IsUndefined(bv) && !JS_IsNull(bv)) {
+            auto* backend = inferenceBackendFromJS(ctx, bv);
+            if (!backend) {
+                JS_FreeValue(ctx, bv);
+                delete d;
+                return JS_ThrowTypeError(ctx,
+                    "createGenericMcts: opts.backend must be a DirectBackend/ServerBackend "
+                    "(bro.ai.game.learn.createDirectBackend/createServerBackend)");
+            }
+            d->backend_ref = bv;  // ownership: keep the wrapper alive for the lambdas' raw pointer
+            if (!JS_IsFunction(ctx, d->prior_fn)) d->m->set_prior_fn(makeNativePriorFn(backend));
+            if (!JS_IsFunction(ctx, d->value_fn)) d->m->set_value_fn(makeNativeValueFn(backend));
+        } else {
+            JS_FreeValue(ctx, bv);
+        }
+    }
+
     return qjsbind::wrap<GenericMctsData>(ctx, d);
 }
 
@@ -365,6 +429,7 @@ void installGenericMctsBindings(JSContext* ctx, JSValue gameObj) {
             JS_MarkValue(rt, d->observe_fn,  mark);
             JS_MarkValue(rt, d->prior_fn,    mark);
             JS_MarkValue(rt, d->value_fn,    mark);
+            JS_MarkValue(rt, d->backend_ref, mark);
         })
         .get("numActions", [](GenericMctsData* d) -> int { return d ? d->num_actions : 0; })
         .method_raw("search",

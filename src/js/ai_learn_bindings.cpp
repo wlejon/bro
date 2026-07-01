@@ -15,12 +15,16 @@
 #include <brogameagent/learn/trainer.h>
 #include <brogameagent/learn/generic_replay_buffer.h>
 #include <brogameagent/learn/generic_trainer.h>
+#include <brogameagent/learn/inference_server.h>
+#include <brogameagent/learn/inference_backend.h>
 #include <brogameagent/nn/net.h>
 #include <brogameagent/nn/policy_value_net.h>
+#include <brogameagent/nn/net_tx.h>
 #include <brotensor/runtime.h>
 
 #include <cctype>
 #include <cstring>
+#include <future>
 #include <memory>
 #include <random>
 #include <string>
@@ -73,6 +77,28 @@ struct GenericExItTrainerData {
     std::shared_ptr<learn::GenericReplayBuffer>     bufRef;
 };
 
+// Batched GPU inference — only useful under concurrent C++ callers (e.g. one
+// day: a root-parallel GenericMcts sharing one server). A single-threaded JS
+// caller always gets batch-of-1 through this; net.forwardBatched (see
+// ai_nn_bindings.cpp) is the actual single-threaded-JS win.
+struct InferenceServerData {
+    std::unique_ptr<learn::BatchedInferenceServer> server;
+    std::shared_ptr<learn::BatchedNet>             netRef;  // keep the net alive
+};
+
+// IInferenceBackend wrappers — the real GenericMcts integration point (see
+// ai_generic_mcts_bindings.cpp's `backend` option), NOT a drop-in for the
+// hero-Mcts evaluator/prior config slot (that's combat-shaped IEvaluator/
+// IPrior; a backend produces raw policy logits + value over a flat action
+// space one layer down, at GenericMcts::set_prior_fn/set_value_fn).
+struct DirectBackendData {
+    std::unique_ptr<learn::IInferenceBackend> backend;
+};
+
+struct ServerBackendData {
+    std::unique_ptr<learn::IInferenceBackend> backend;
+};
+
 // ─── Helpers ───────────────────────────────────────────────────────────────
 static double getDouble(JSContext* ctx, JSValueConst obj, const char* k, double def) {
     JSValue v = JS_GetPropertyStr(ctx, obj, k);
@@ -87,6 +113,16 @@ static int32_t getInt(JSContext* ctx, JSValueConst obj, const char* k, int32_t d
     if (JS_IsNumber(v)) JS_ToInt32(ctx, &out, v);
     JS_FreeValue(ctx, v);
     return out;
+}
+
+// Accept either PolicyValueNet or SingleHeroNetTX — both implement
+// learn::BatchedNet; SingleHeroNet does not (it isn't batched-inference
+// capable, hence not accepted here). Returns an empty shared_ptr if `v`
+// is neither.
+static std::shared_ptr<learn::BatchedNet> batchedNetSharedFromJS(JSContext* ctx, JSValueConst v) {
+    if (auto pvn = nnPolicyValueNetSharedFromJS(ctx, v))  return pvn;   // implicit upcast
+    if (auto tx  = nnSingleHeroNetTXSharedFromJS(ctx, v)) return tx;
+    return nullptr;
 }
 
 using qjsbind::make_float32_array;
@@ -110,6 +146,21 @@ static bool copyFloatProp(JSContext* ctx, JSValueConst obj, const char* key,
     int copy = have < count ? have : count;
     std::memcpy(dst, raw + byteOff, (size_t)copy * sizeof(float));
     return copy == count;
+}
+
+// Pull a raw float* from a Float32Array or ArrayBuffer; returns nullptr on
+// mismatch. `outCount` is the number of floats (not bytes).
+static float* getFloatArrayPtr(JSContext* ctx, JSValueConst arr, size_t& outCount) {
+    if (JS_IsUndefined(arr) || JS_IsNull(arr)) { outCount = 0; return nullptr; }
+    size_t byteOff = 0, viewLen = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, arr, &byteOff, &viewLen, nullptr);
+    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); outCount = 0; return nullptr; }
+    size_t abufLen = 0;
+    uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+    JS_FreeValue(ctx, abuf);
+    if (!ptr) { outCount = 0; return nullptr; }
+    outCount = viewLen / sizeof(float);
+    return reinterpret_cast<float*>(ptr + byteOff);
 }
 
 // ─── Situation <-> JS object marshalling ──────────────────────────────────
@@ -286,6 +337,76 @@ static void registerClasses(JSContext* ctx) {
                     return JS_UNDEFINED;
                 }, 1)
             .method("setScale", [](GumbelNoisePriorData* d, double s) { if (d->pr) d->pr->set_scale((float)s); });
+    }
+
+    // ── BatchedInferenceServer ──────────────────────────────────────────────
+    // Batching only helps under concurrent C++ callers — a single-threaded
+    // JS caller always submits one row at a time (batch-of-1). Bound mainly
+    // for completeness/forward-compat with future concurrent callers (e.g. a
+    // root-parallel GenericMcts sharing one server); prefer net.forwardBatched
+    // for batching multiple observations gathered within one JS tick.
+    {
+        qjsbind::Class<InferenceServerData>(ctx, "AIInferenceServer", qjsbind::NoGlobal)
+            .get("batchesRun", [](InferenceServerData* d) -> int { return d->server ? d->server->batches_run() : 0; })
+            .method_raw("evaluate",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<InferenceServerData>(ctx, this_val);
+                    if (!d || !d->server || argc < 1) return JS_ThrowTypeError(ctx, "evaluate(obsF32)");
+                    size_t n = 0;
+                    float* obsPtr = getFloatArrayPtr(ctx, argv[0], n);
+                    if (!obsPtr) return JS_ThrowTypeError(ctx, "evaluate: obs must be a Float32Array");
+                    std::vector<float> obs(obsPtr, obsPtr + n);
+                    learn::BatchedInferenceServer::EvalResult r;
+                    try { r = d->server->evaluate(obs); }
+                    catch (const std::exception& e) { return JS_ThrowInternalError(ctx, "%s", e.what()); }
+                    JSValue o = JS_NewObject(ctx);
+                    JS_SetPropertyStr(ctx, o, "logits", make_float32_array(ctx, r.logits.data(), r.logits.size()));
+                    JS_SetPropertyStr(ctx, o, "value", JS_NewFloat64(ctx, r.value));
+                    return o;
+                }, 1)
+            .method_raw("evaluateBatch",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<InferenceServerData>(ctx, this_val);
+                    if (!d || !d->server || argc < 1 || !JS_IsArray(argv[0]))
+                        return JS_ThrowTypeError(ctx, "evaluateBatch(obsArray)");
+                    JSValue lenVal = JS_GetPropertyStr(ctx, argv[0], "length");
+                    int32_t len = 0; JS_ToInt32(ctx, &len, lenVal);
+                    JS_FreeValue(ctx, lenVal);
+                    // Fan out via evaluate_async so concurrent rows can coalesce into
+                    // one batch on the server's worker thread, then wait on each future.
+                    std::vector<std::future<learn::BatchedInferenceServer::EvalResult>> futures;
+                    futures.reserve((size_t)len);
+                    for (int32_t i = 0; i < len; i++) {
+                        JSValue rowV = JS_GetPropertyUint32(ctx, argv[0], (uint32_t)i);
+                        size_t n = 0;
+                        float* obsPtr = getFloatArrayPtr(ctx, rowV, n);
+                        JS_FreeValue(ctx, rowV);
+                        std::vector<float> obs(obsPtr, obsPtr + n);
+                        futures.push_back(d->server->evaluate_async(obs));
+                    }
+                    JSValue arr = JS_NewArray(ctx);
+                    for (size_t i = 0; i < futures.size(); i++) {
+                        learn::BatchedInferenceServer::EvalResult r;
+                        try { r = futures[i].get(); }
+                        catch (const std::exception& e) { return JS_ThrowInternalError(ctx, "%s", e.what()); }
+                        JSValue o = JS_NewObject(ctx);
+                        JS_SetPropertyStr(ctx, o, "logits", make_float32_array(ctx, r.logits.data(), r.logits.size()));
+                        JS_SetPropertyStr(ctx, o, "value", JS_NewFloat64(ctx, r.value));
+                        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
+                    }
+                    return arr;
+                }, 1)
+            .method("shutdown", [](InferenceServerData* d) { d->server.reset(); });
+    }
+
+    // ── DirectBackend / ServerBackend ───────────────────────────────────────
+    {
+        qjsbind::Class<DirectBackendData>(ctx, "AIDirectBackend", qjsbind::NoGlobal)
+            .get("numActions", [](DirectBackendData* d) -> int { return d->backend ? d->backend->num_actions() : 0; })
+            .get("inDim",      [](DirectBackendData* d) -> int { return d->backend ? d->backend->in_dim() : 0; });
+        qjsbind::Class<ServerBackendData>(ctx, "AIServerBackend", qjsbind::NoGlobal)
+            .get("numActions", [](ServerBackendData* d) -> int { return d->backend ? d->backend->num_actions() : 0; })
+            .get("inDim",      [](ServerBackendData* d) -> int { return d->backend ? d->backend->in_dim() : 0; });
     }
 
     // ── ExItTrainer ────────────────────────────────────────────────────────
@@ -601,6 +722,51 @@ static JSValue js_createGenericExItTrainer(JSContext* ctx, JSValueConst, int, JS
     return qjsbind::wrap<GenericExItTrainerData>(ctx, d);
 }
 
+static JSValue js_createInferenceServer(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "createInferenceServer(net, config?)");
+    auto net = batchedNetSharedFromJS(ctx, argv[0]);
+    if (!net)
+        return JS_ThrowTypeError(ctx,
+            "createInferenceServer: net must be a PolicyValueNet or SingleHeroNetTX (a BatchedNet) "
+            "— SingleHeroNet is not batched-inference capable");
+    learn::BatchedInferenceServer::Config cfg{};
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        cfg.max_batch_size  = getInt(ctx, argv[1], "maxBatchSize",  cfg.max_batch_size);
+        cfg.max_wait_micros = getInt(ctx, argv[1], "maxWaitMicros", cfg.max_wait_micros);
+    }
+    auto* d = new InferenceServerData();
+    d->netRef = net;
+    d->server = std::make_unique<learn::BatchedInferenceServer>(net.get(), cfg);
+    JSValue obj = qjsbind::wrap<InferenceServerData>(ctx, d);
+    JS_SetPropertyStr(ctx, obj, "__net", JS_DupValue(ctx, argv[0]));
+    return obj;
+}
+
+static JSValue js_createDirectBackend(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "createDirectBackend(net)");
+    auto net = batchedNetSharedFromJS(ctx, argv[0]);
+    if (!net) return JS_ThrowTypeError(ctx, "createDirectBackend: net must be a PolicyValueNet or SingleHeroNetTX");
+    auto* d = new DirectBackendData();
+    d->backend = std::make_unique<learn::DirectBatchedNetBackend>(net.get());
+    JSValue obj = qjsbind::wrap<DirectBackendData>(ctx, d);
+    JS_SetPropertyStr(ctx, obj, "__net", JS_DupValue(ctx, argv[0]));
+    return obj;
+}
+
+static JSValue js_createServerBackend(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "createServerBackend(server, net)");
+    auto* sd = qjsbind::unwrap<InferenceServerData>(ctx, argv[0]);
+    if (!sd || !sd->server) return JS_ThrowTypeError(ctx, "createServerBackend: expected an InferenceServer");
+    auto net = batchedNetSharedFromJS(ctx, argv[1]);
+    if (!net) return JS_ThrowTypeError(ctx, "createServerBackend: net must be a PolicyValueNet or SingleHeroNetTX");
+    auto* d = new ServerBackendData();
+    d->backend = std::make_unique<learn::ServerBackend>(sd->server.get(), net.get());
+    JSValue obj = qjsbind::wrap<ServerBackendData>(ctx, d);
+    JS_SetPropertyStr(ctx, obj, "__server", JS_DupValue(ctx, argv[0]));
+    JS_SetPropertyStr(ctx, obj, "__net", JS_DupValue(ctx, argv[1]));
+    return obj;
+}
+
 // ─── Free functions ────────────────────────────────────────────────────────
 
 static JSValue js_targetsFromMcts(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -678,8 +844,20 @@ void installLearnBindings(JSContext* ctx, JSValue gameObj) {
         JS_NewCFunction(ctx, js_makeSituation, "makeSituation", 3));
     JS_SetPropertyStr(ctx, learnObj, "gumbelImprovedPolicy",
         JS_NewCFunction(ctx, js_gumbelImprovedPolicy, "gumbelImprovedPolicy", 1));
+    JS_SetPropertyStr(ctx, learnObj, "createInferenceServer",
+        JS_NewCFunction(ctx, js_createInferenceServer, "createInferenceServer", 2));
+    JS_SetPropertyStr(ctx, learnObj, "createDirectBackend",
+        JS_NewCFunction(ctx, js_createDirectBackend, "createDirectBackend", 1));
+    JS_SetPropertyStr(ctx, learnObj, "createServerBackend",
+        JS_NewCFunction(ctx, js_createServerBackend, "createServerBackend", 2));
 
     JS_SetPropertyStr(ctx, gameObj, "learn", learnObj);
+}
+
+brogameagent::learn::IInferenceBackend* inferenceBackendFromJS(JSContext* ctx, JSValueConst v) {
+    if (auto* d = qjsbind::unwrap<DirectBackendData>(ctx, v)) return d->backend.get();
+    if (auto* d = qjsbind::unwrap<ServerBackendData>(ctx, v)) return d->backend.get();
+    return nullptr;
 }
 
 } // namespace bro::js

@@ -41,6 +41,32 @@ function allFinite(arr, name) {
     assert(typeof v === 'number' && Number.isFinite(v), 'value scalar finite, got ' + v);
     assert(v >= -1.0 && v <= 1.0, 'value in [-1,1], got ' + v);
     allFinite(logits.toArray(), 'logits');
+
+    // forwardBatched: B rows in one call must match B independent single-row
+    // forward() calls (within float tolerance).
+    const B = 3;
+    const xB = nn.createTensor(B, inDim);
+    const rowsIn = [];
+    for (let r = 0; r < B; r++) {
+        const row = new Float32Array(inDim).fill(0.1 * (r + 1));
+        rowsIn.push(row);
+        for (let c = 0; c < inDim; c++) xB.set(r, c, row[c]);
+    }
+    const logitsB = nn.createTensor(B, numActions);
+    const valuesB = nn.createTensor(B, 1);
+    net.forwardBatched(xB, logitsB, valuesB);
+    for (let r = 0; r < B; r++) {
+        const xr = nn.createTensor(inDim, 1);
+        xr.fromArray(rowsIn[r]);
+        const lr = nn.createTensor(numActions, 1);
+        const vr = net.forward(xr, lr);
+        assert(Math.abs(valuesB.get(r, 0) - vr) < 1e-3,
+            'forwardBatched value row ' + r + ' matches single forward: ' + valuesB.get(r, 0) + ' vs ' + vr);
+        for (let c = 0; c < numActions; c++) {
+            assert(Math.abs(logitsB.get(r, c) - lr.get(c, 0)) < 1e-3,
+                'forwardBatched logits row ' + r + ' col ' + c + ' matches single forward');
+        }
+    }
 }
 
 // FactoredPolicyHead.

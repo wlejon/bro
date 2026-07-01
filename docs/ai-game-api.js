@@ -839,6 +839,17 @@ pvnet.backward(dValuePV, dLogitsTensor);
 pvnet.zeroGrad(); pvnet.sgdStep(lr, momentum);
 const pvBlob = pvnet.save();   pvnet.load(pvBlob);
 
+// forwardBatched(x, logits, values) — B rows in one call (one dispatch
+// instead of B), for interleaving multiple searches' leaf evaluations
+// gathered within a single JS tick. x is (B, inDim); logits/values are
+// pre-sized by the caller as (B, numActions) / (B, 1). Same shape on
+// SingleHeroNetTX below — SingleHeroNet does NOT have this method (it
+// doesn't implement the underlying BatchedNet interface).
+const xB = bro.ai.game.nn.createTensor(8, pvnet.inDim);
+const logitsB = bro.ai.game.nn.createTensor(8, pvnet.numActions);
+const valuesB = bro.ai.game.nn.createTensor(8, 1);
+pvnet.forwardBatched(xB, logitsB, valuesB);
+
 /** SingleHeroNet — encoder → trunk → {value, policy}. */
 const net = bro.ai.game.nn.createSingleHeroNet({
   enc: { hidden: 32, embedDim: 32 },
@@ -980,6 +991,56 @@ gtrainer.setConfig({
 const gstep   = gtrainer.step();        // {lossValue, lossPolicy, lossTotal, samples}
 const gstepN  = gtrainer.stepN(100);
 gtrainer.totalSteps; gtrainer.totalPublishes;
+
+
+// ─── Batched GPU inference (BatchedInferenceServer / IInferenceBackend) ────
+//
+// Batching only pays off under CONCURRENT callers — a single-threaded JS
+// caller always submits one observation at a time (batch-of-1 through the
+// server). For batching multiple observations gathered within a single JS
+// tick, use net.forwardBatched(x, logits, values) above instead — that's
+// the actual single-threaded-JS win. These bindings exist for completeness
+// and forward-compat with future concurrent callers (e.g. a root-parallel
+// GenericMcts sharing one server), and to power the GenericMcts `backend`
+// fast path below.
+//
+// net must be a PolicyValueNet or SingleHeroNetTX (both implement the
+// underlying BatchedNet interface) — SingleHeroNet does not, and is
+// rejected with a TypeError.
+
+const server = bro.ai.game.learn.createInferenceServer(pvnet, {
+    maxBatchSize: 64,       // default 64
+    maxWaitMicros: 500,     // default 500 — how long to wait for a batch to fill
+});
+const r1 = server.evaluate(obsF32);              // blocking: { logits: Float32Array, value }
+const rows = server.evaluateBatch([obsF32, obsF32Other]);  // [{ logits, value }, ...]
+server.batchesRun;      // int
+server.shutdown();      // stop the server's worker thread
+
+// Direct (no server/threading — evaluates net inline, same process/thread)
+// or server-backed IInferenceBackend, for plugging into GenericMcts's
+// `backend` option (see below):
+const directBackend = bro.ai.game.learn.createDirectBackend(pvnet);
+const serverBackend = bro.ai.game.learn.createServerBackend(server, pvnet);
+directBackend.numActions; directBackend.inDim;
+
+// GenericMcts native `backend` option — masked-softmax prior + value
+// evaluated entirely in C++, no per-node JS-callback round trip (the env's
+// snapshot/restore/step/legalActions/observe callbacks are still JS, since
+// the env itself is JS-authored; only the prior/value leaf evaluation moves
+// native). An explicit priorFn/valueFn always wins over `backend` if both
+// are given.
+//
+// IMPORTANT: this is NOT a drop-in for the hero-Mcts `evaluator`/`prior`
+// config slot on createMcts/createDecoupledMcts/createTeamMcts/etc — those
+// take combat-shaped IEvaluator/IPrior. A backend plugs in one layer down,
+// at GenericMcts's own prior_fn/value_fn (this section), over a flat
+// action space matching net.numActions.
+const gm = bro.ai.game.createGenericMcts({
+    env: myGenericEnv,
+    backend: directBackend,   // or serverBackend
+    iterations: 400,
+});
 
 
 // =============================================================================
