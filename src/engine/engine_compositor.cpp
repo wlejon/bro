@@ -53,64 +53,6 @@ void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
     canvasScenes_.push_back(std::move(scene));
 }
 
-void Engine::compositeCanvasScenes(int w, int h) {
-    compositeCanvasScenes(gl_.get(), w, h, 0);
-}
-
-void Engine::compositeCanvasScenes(render::GLContext* gl, int w, int h, GLuint targetFBO) {
-    if (!gl || canvasScenes_.empty()) return;
-
-    glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
-    glViewport(0, 0, w, h);
-
-    glUseProgram(gl->textureProgram());
-    float viewport[2] = {(float)w, (float)h};
-    glUniform2fv(gl->textureViewportLoc(), 1, viewport);
-    glUniform1i(gl->textureSamplerLoc(), 0);
-
-    glDisable(GL_DEPTH_TEST);
-    glDisable(GL_SCISSOR_TEST);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-
-    for (auto& cs : canvasScenes_) {
-        GLuint tex = cs->texture();
-        if (!tex) continue;
-
-        float cx, cy, cw, ch;
-        cs->getScreenRect(cx, cy, cw, ch);
-        // Raster surface is top-down: V=0 at top, V=1 at bottom.
-        render::TextureVertex quad[6] = {
-            {cx,      cy,      0, 0}, {cx+cw, cy,      1, 0}, {cx+cw, cy+ch, 1, 1},
-            {cx,      cy,      0, 0}, {cx+cw, cy+ch, 1, 1}, {cx,      cy+ch, 0, 1},
-        };
-
-        GLuint vbo = 0;
-        glGenBuffers(1, &vbo);
-        glBindBuffer(GL_ARRAY_BUFFER, vbo);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STREAM_DRAW);
-
-        GLuint vao = 0;
-        glGenVertexArrays(1, &vao);
-        glBindVertexArray(vao);
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex), (void*)0);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(render::TextureVertex),
-                              (void*)offsetof(render::TextureVertex, u));
-
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, tex);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
-
-        glDeleteVertexArrays(1, &vao);
-        glDeleteBuffers(1, &vbo);
-    }
-
-    glBindVertexArray(0);
-    glBindTexture(GL_TEXTURE_2D, 0);
-}
-
 void Engine::drawTexturedQuad(GLuint tex, float x, float y, float w, float h) {
     if (!tex || !gl_) return;
 

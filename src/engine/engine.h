@@ -426,8 +426,6 @@ private:
                                     dom::Element* relatedTarget = nullptr);
     void advanceFocus(bool reverse);
     void addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene);
-    void compositeCanvasScenes(int w, int h);
-    void compositeCanvasScenes(render::GLContext* gl, int w, int h, GLuint targetFBO);
     void drawTexturedQuad(GLuint tex, float x, float y, float w, float h);
     void compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO = 0);
 
