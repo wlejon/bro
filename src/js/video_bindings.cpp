@@ -165,6 +165,16 @@ JSValue js_videoEncoder_addCanvasFrame(JSContext* ctx, JSValueConst this_val,
 
     auto* el = bro::js::getElement(argv[0]);
     if (!el) return JS_ThrowTypeError(ctx, "addCanvasFrame: argument is not an element");
+    // A canvas hosting a 3D scene graph or WebGL context also carries an
+    // auxiliary CanvasScene for ShapeNode/SpriteNode overlay compositing
+    // (see draw_traversal.cpp), so canvasScene() can be non-null even when
+    // it isn't the layer the app actually draws to — silently encoding it
+    // would capture a blank/stale overlay instead of the real content.
+    if (el->sceneGraph() || el->webglContext()) {
+        return JS_ThrowTypeError(ctx,
+            "addCanvasFrame: canvas has an active 3D scene or WebGL context, not a plain "
+            "2D canvas — use addViewportFrame() to capture composited scene/WebGL content");
+    }
     auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
     if (!cs) return JS_ThrowTypeError(ctx, "addCanvasFrame: element has no 2D canvas");
 
@@ -383,6 +393,14 @@ JSValue js_gifEncoder_addCanvasFrame(JSContext* ctx, JSValueConst this_val,
 
     auto* el = bro::js::getElement(argv[0]);
     if (!el) return JS_ThrowTypeError(ctx, "addCanvasFrame: argument is not an element");
+    // See js_videoEncoder_addCanvasFrame: canvasScene() can be non-null even
+    // for a 3D scene/WebGL canvas (auxiliary ShapeNode/SpriteNode overlay
+    // layer), so it must not be used as a proxy for "this is a 2D canvas".
+    if (el->sceneGraph() || el->webglContext()) {
+        return JS_ThrowTypeError(ctx,
+            "addCanvasFrame: canvas has an active 3D scene or WebGL context, not a plain "
+            "2D canvas — capture scene/WebGL content via VideoEncoder.addViewportFrame() instead");
+    }
     auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
     if (!cs) return JS_ThrowTypeError(ctx, "addCanvasFrame: element has no 2D canvas");
 

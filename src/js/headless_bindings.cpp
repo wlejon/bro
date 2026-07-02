@@ -107,6 +107,17 @@ static JSValue js_screenshotCanvas(JSContext* ctx, JSValueConst, int argc, JSVal
 
     auto* el = engine->querySelector(selector);
     if (!el) { cleanup(); return JS_ThrowTypeError(ctx, "screenshotCanvas: element not found: %s", selector); }
+    // A canvas hosting a 3D scene graph or WebGL context also carries an
+    // auxiliary CanvasScene for ShapeNode/SpriteNode overlay compositing, so
+    // canvasScene() alone can't distinguish "plain 2D canvas" from "scene/
+    // WebGL canvas with an unused 2D overlay" — check explicitly so this
+    // doesn't silently capture a blank overlay layer instead of throwing.
+    if (el->sceneGraph() || el->webglContext()) {
+        cleanup();
+        return JS_ThrowTypeError(ctx,
+            "screenshotCanvas: element has an active 3D scene or WebGL context, not a plain "
+            "2D canvas: %s — use screenshot(path, selector) instead", selector);
+    }
     auto* cs = static_cast<canvas::CanvasScene*>(el->canvasScene());
     if (!cs) { cleanup(); return JS_ThrowTypeError(ctx, "screenshotCanvas: element has no 2D canvas: %s", selector); }
 
