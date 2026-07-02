@@ -15,6 +15,7 @@
 #include "js/async_job.h"
 #include "js/model_gate.h"
 
+#include <api/api.h>  // brokit::api::resolveAssetPath
 #include <qjsbind/qjsbind.h>
 
 #include <brosoundml/kokoro.h>
@@ -1385,6 +1386,11 @@ static JSValue js_loadKokoro(JSContext* ctx, JSValueConst,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadKokoro(modelDir, opts?): path required");
+    // Resolve the same way fs.existsSync() does (app-relative base paths),
+    // not against the raw OS process cwd — callers commonly probe candidate
+    // dirs with fs.existsSync() first, which would otherwise silently
+    // disagree with what this native loader actually opens.
+    dir = brokit::api::resolveAssetPath(ctx, dir);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();
