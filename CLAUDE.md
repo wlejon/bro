@@ -53,9 +53,9 @@ On macOS, `tests/run_tests.sh` uses `mapfile` and needs bash 4+ (`brew install b
 
 ## Architecture
 
-Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleration. ~103K LOC of C++20.
+Bro is a lightweight app runtime: HTML/CSS/JS apps rendered with GPU acceleration. ~125K LOC of C++20 (the JS binding layer in `src/js/` is over half of it).
 
-**Stack:** QuickJS (JS engine) + qjsbind (C++/JS bindings) + brokit (web/system APIs) + htmlayout (HTML parsing + CSS + layout) + broaudio (audio engine) + bromesh (mesh generation/manipulation) + Jolt (physics) + Skia (raster rendering) + SDL3 (windowing + GPU display)
+**Stack:** QuickJS (JS engine) + qjsbind (C++/JS bindings) + brokit (web/system APIs) + htmlayout (HTML parsing + CSS + layout) + broaudio (audio engine) + bromesh (mesh generation/manipulation) + Jolt (physics) + Skia (rasterization — Ganesh-GL on GPU, CPU raster headless) + SDL3 (windowing, OpenGL contexts, input). All GPU work is OpenGL 3.3 core via glad on SDL_GL contexts — there is no SDL_GPU/D3D12/Metal path.
 
 **Two executables, one Engine:**
 - `bro` — windowed app runner (DisplayMode::Windowed)
@@ -80,17 +80,20 @@ dom  (Document/Element/TextNode tree, events, style proxy)
   ↑
 canvas  (Canvas 2D API)    webgl  (WebGL 2.0 context)    scene  (3D scene graph, meshes, terrain, sprites)    physics  (Jolt physics world)
   ↑
-js  (QuickJS + qjsbind bindings: DOM, canvas, WebGL, audio, mesh, physics, scene)
+js  (QuickJS + qjsbind bindings: DOM, canvas, WebGL, audio, mesh, physics, scene, ML)
   ↑
 engine  (orchestrates all subsystems, main loop)
 ```
 
+The graph is aspirational at the js↔engine edge: a dozen `src/js/*_bindings` files take an `Engine*` (crosshair, gizmo, menu, headless, DOM's `setEngine`), so js and engine are in practice a cycle, wired up in `engine_init.cpp`. scene/canvas stay clean via callbacks and never name dom or engine types.
+
 ### Key design patterns
 
 - **Single DOM:** HTML is parsed with gumbo into a `bro::dom` tree. CSS is resolved by `htmlayout::css::Cascade`, layout by `htmlayout::layout::layoutTree()`, and rendering by `DrawTraversal` which walks the tree and issues Skia draw calls.
-- **GPU rendering:** `GPUContext` owns the `SDL_GPUDevice`, shader pipelines (color + texture), and manages the D3D12 render passes. `SkiaRenderer` rasterizes HTML/CSS to a Skia surface, uploads to a `SDL_GPUTexture` via transfer buffers, and composites as a fullscreen textured quad. Canvas 2D commands are batched into vertex buffers and drawn via the color pipeline.
-- **Renderer abstraction:** `bro::render::Renderer` is a pure virtual interface for 2D rasterization. `SkiaRenderer` (GPU-accelerated, windowed) and `RasterRenderer` (CPU Skia with real fonts, headless) both implement it. Both use Skia with platform-native font backends (DirectWrite on Windows, FreeType/fontconfig on Linux) for accurate text metrics.
-- **Event flow:** SDL event → `EventLoop` → `Engine::handleMouse*/Key*()` → hit test via `htmlayout::layout::hitTest()` → create `MouseEvent`/`KeyboardEvent` → `dispatchEvent()` with manual bubbling → JS listeners. Key events also dispatch `"action"` events if the key is bound to a named action via `bro.settings`.
+- **GPU rendering:** three GL contexts in one share group, on three threads. The **main context** composites the frame, runs WebGL and 3D scene-graph rendering. A **UI raster context** (raster thread) owns its own Skia Ganesh-GL `GrDirectContext` and replays the frame's recorded draw commands into a pool of FBO-backed layer surfaces. A single shared **canvas raster context** (canvas worker thread) rasterizes all `CanvasScene` surfaces serially (one-context-per-canvas crashed on Windows/NVIDIA — see `canvas_scene.h`). Handoff between threads is GLsync fences + the lock-free `FrameWorker` CAS state machine (`render/frame_worker.h`); there are **no mutexes anywhere in src/** — thread safety is atomics, snapshots, and phase discipline. The main thread records HTML paint into a `CommandBuffer` via `RecordingRenderer`; the raster thread replays it and never reads the DOM. The compositor (`engine_compositor.cpp`) then draws a DOM-ordered list of textured quads: HTML layer segments interleaved with canvas/WebGL/scene textures at `LayerBreak` points emitted by `DrawTraversal`.
+- **Canvas 2D:** JS calls record Skia-typed `CanvasCmd`s into a `CanvasScene`; the canvas worker replays them onto a per-canvas SkSurface (Ganesh GPU windowed, CPU raster + `glTexSubImage2D` upload otherwise), and the resulting GL texture composites as a layer quad. It is Skia command replay, not vertex batching.
+- **Renderer abstraction:** `bro::render::Renderer` is a pure virtual interface for 2D rasterization (CSS-shaped: rrects, gradients, CSS filters, text). `SkiaRenderer` (Ganesh-GL or CPU-with-upload), `RasterRenderer` (pure CPU Skia — headless `--no-gpu`, and the layout thread's text metrics), and `RecordingRenderer` (records to `CommandBuffer` for cross-thread replay) implement it. All use Skia with platform-native font backends (DirectWrite on Windows, FreeType/fontconfig on Linux) for accurate text metrics. 3D scene, WebGL, and compositing bypass `Renderer` entirely.
+- **Event flow:** SDL event → `EventLoop` → `Engine::handleMouse*/Key*()` → hit test via `htmlayout::layout::hitTest()` → create `MouseEvent`/`KeyboardEvent` → `js::dispatchDomEvent()` (`src/js/event_dispatch.cpp`) — a full three-phase DOM dispatch: window capture → ancestor capture → target → bubble → window bubble, with shadow-boundary retargeting and `composedPath()`. Key events also dispatch `"action"` events if the key is bound to a named action via `bro.settings`.
 - **Dirty tracking:** DOM mutations call `document_->markDirty()`. Main loop only re-layouts when `isDirty()` is true.
 - **Settings system:** Three-layer priority (engine defaults < app overrides < user overrides). `Settings` class in `engine/settings.h` manages resolution, persistence (`.bro_settings.json`), and runtime change callbacks. JS API exposed as `bro.settings.*`. See `docs/settings.md`.
 - **Virtual time in headless:** `advanceTime(ms)` manually ticks timers without real delays, enabling deterministic testing.
@@ -114,8 +117,8 @@ Headless mode is driven by JavaScript — the same language apps are written in.
 | broflora | `broflora` | Ecosystem simulation (Makowski et al. "Synthetic Silviculture"): plants, foliage, blooms (standalone or submodule) |
 | brotensor | `brotensor` | Tensor + ops — one unified `brotensor::Tensor` (runtime `Device` tag), device-neutral ops behind a flat `brotensor::` namespace. Owns the full **training** surface, not just inference: forward + backward ops (e.g. flash-attention backward), losses, and optimizers — the model siblings above run inference, but brotensor itself trains models in C++ (e.g. `wake_train.cpp`). CPU backend always built; CUDA + Metal additive/opt-in. Hard dependency of brogameagent (owns the Tensor type + CPU ops); loaded transitively |
 | brogameagent | `brogameagent` | Game AI: navmesh, pathfinding, steering, perception (standalone or submodule) |
-| brolm | `brolm` | Language/text-model inference: BPE + Unigram tokenizers, transformer text encoders (CLIP, T5), CLIP vision encoder + scorer. The text frontend brodiffusion consumes. Depends on bromath + brotensor (standalone or submodule) |
-| brodiffusion | `brodiffusion` | Diffusion-model text-to-image inference: U-Net + VAE, DDIM/LCM schedulers, LoRA, INT8. Text encoders come from brolm. CPU FP32 by default; CUDA/Metal additive. Depends on bromath + brotensor + brolm (standalone or submodule) |
+| brolm | `brolm` | Language/text-model inference: BPE + Unigram tokenizers, transformer text encoders (CLIP, T5), CLIP vision encoder + scorer. The text frontend brodiffusion consumes. Depends on bromath + brotensor + broimage (standalone or submodule) |
+| brodiffusion | `brodiffusion` | Diffusion-model text-to-image inference: U-Net + VAE, DDIM/LCM schedulers, LoRA, INT8. Text encoders come from brolm. CPU FP32 by default; CUDA/Metal additive. Depends on bromath + brotensor + brolm + broimage (standalone or submodule) |
 | broimage | `broimage::broimage` | Image decode/encode (stb) + composable kernels (reduce/map/combine/lookup/stencil/resample/gradient), geometric (resize/crop/letterbox/flip/rotate), alpha-correct ops, color/HSV/sRGB, normalization with CLIP/ImageNet/SAM presets, NHWC↔NCHW preproc. Backs the **CPU** `bro.image` JS kernels (via brokit) and host-side preprocessing in brolm/brodiffusion. CPU-only + brotensor (CUDA/Metal) compute for GPU tensors; it has **no WebGL** — the `bro.image.gpu.*` WebGL2 renderer is a bro-side module (`src/js/js/image_gpu.js`), not broimage. Depends on bromath + brotensor (standalone or submodule) |
 | brosoundml | `brosoundml` | Audio-ML model inference (TTS / STT / neural codec) composed from brotensor's FP32 audio op family (FFT/STFT, 1D conv, vocoder/codec activations, resampling, AR sampling). Depends on brotensor (standalone or submodule) |
 | brovisionml | `brovisionml::brovisionml` | Vision-model inference: SAM segmentation, Depth-Anything-V2 depth, DSINE surface normals, BiRefNet background removal (Swin-L + ASPP-deformable), and the ControlNet conditioning annotators (HED, lineart, MLSD, OpenPose, SegFormer). image→X tasks, no tokenizer. Composes brotensor ops + broimage preprocessing; ships its own DSINE CUDA kernels. Depends on bromath + brotensor + broimage (standalone or submodule) |
