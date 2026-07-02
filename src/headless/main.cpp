@@ -2,6 +2,7 @@
 #include "engine/config_loader.h"
 
 using bro::engine::parseConfig;
+using bro::engine::findAncestorProjectRoot;
 #include "js/headless_bindings.h"
 #include "js/runtime.h"
 #include "util/interrupt.h"
@@ -404,6 +405,14 @@ int main(int argc, char* argv[]) {
                 if (const char* env = std::getenv("BRO_PROJECT_ROOT")) {
                     if (*env) config.projectRoot = env;
                 }
+            }
+
+            // Still nothing: same fallback as windowed bro's main.cpp — walk
+            // up looking for an ancestor project manifest so /lib, /system,
+            // /std, /app mounts still resolve when an app is launched
+            // standalone by passing its own directory directly.
+            if (config.projectRoot.empty() && !config.appDir.empty()) {
+                config.projectRoot = findAncestorProjectRoot(config.appDir);
             }
         }
 

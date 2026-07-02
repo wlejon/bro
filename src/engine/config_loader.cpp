@@ -1,4 +1,5 @@
 #include "engine/config_loader.h"
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 
@@ -126,6 +127,30 @@ bool parseConfig(const std::string& path, EngineConfig& config,
     if (dblClickDist > 0) config.input.doubleClickDistancePx = dblClickDist;
 
     return true;
+}
+
+std::string findAncestorProjectRoot(const std::string& appDir)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::path dir = fs::absolute(appDir, ec);
+    if (ec) return {};
+
+    for (int depth = 0; depth < 8; ++depth) {
+        fs::path parent = dir.parent_path();
+        if (parent.empty() || parent == dir) break;
+
+        std::string candidateJson = (parent / "bro.json").string();
+        if (std::ifstream probe(candidateJson); probe.is_open()) {
+            EngineConfig scratch;
+            bool isProject = false;
+            if (parseConfig(candidateJson, scratch, &isProject) && isProject) {
+                return parent.string();
+            }
+        }
+        dir = parent;
+    }
+    return {};
 }
 
 } // namespace bro::engine

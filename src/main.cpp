@@ -115,6 +115,7 @@ static bool fileExists(const std::string& path) {
 }
 
 using bro::engine::parseConfig;
+using bro::engine::findAncestorProjectRoot;
 
 static void printUsage() {
     fprintf(stderr,
@@ -302,6 +303,14 @@ int main(int argc, char* argv[]) {
         if (const char* env = std::getenv("BRO_PROJECT_ROOT")) {
             if (*env) config.projectRoot = env;
         }
+    }
+
+    // Still nothing: the app was launched by passing its own directory
+    // directly (this file's own documented usage) and its bro.json carries
+    // no project keys itself. Walk up looking for an ancestor project
+    // manifest so /lib, /system, /std, /app mounts still resolve standalone.
+    if (config.projectRoot.empty() && !config.appDir.empty()) {
+        config.projectRoot = findAncestorProjectRoot(config.appDir);
     }
 
     // When launching via a project bro.json, the app's own bro.json also

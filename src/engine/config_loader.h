@@ -19,4 +19,15 @@ bool parseConfig(const std::string& path,
                  EngineConfig& config,
                  bool* outIsProjectManifest = nullptr);
 
+/// Walk upward from `appDir` looking for the nearest ancestor directory whose
+/// own bro.json is a project manifest (has default_app/lib/system keys).
+/// Returns that ancestor's path, or "" if none is found within a few levels.
+///
+/// Covers launching an app by passing its own directory directly (e.g.
+/// `bro-headless ../broworkshop/games/fps`) when that app's own bro.json
+/// carries no project keys itself and BRO_PROJECT_ROOT isn't preset — without
+/// this, apps that import shared `/lib/*` modules only work when spawned by
+/// a parent bro process that already resolved the project root.
+std::string findAncestorProjectRoot(const std::string& appDir);
+
 } // namespace bro::engine
