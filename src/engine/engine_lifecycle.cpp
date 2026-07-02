@@ -51,6 +51,7 @@
 #include "layout/draw_traversal.h"
 #include "engine/gizmo.h"
 #include <broaudio/engine.h>
+#include <brotensor/runtime.h>
 #include "util/interrupt.h"
 #include "util/log.h"
 
@@ -75,6 +76,21 @@ Engine::~Engine() {
     // Windowed close and Ctrl+C already set the flag before we get here;
     // this covers headless script-end and error-path teardown.
     util::beginShutdown();
+
+    // Join brotensor's CPU worker threads now, deterministically, while the
+    // rest of the process is still in a normal running state. Left to its
+    // own Meyers-singleton destructor, this would only happen during the
+    // process's static-destruction phase — by which point RtlExitUserProcess
+    // has already suspended every other thread. A worker suspended mid-op
+    // while holding some global lock (e.g. the Debug CRT's iterator-checking
+    // mutex, taken by any std::vector destructor — including unrelated
+    // thread_local scratch buffers like brogameagent's NavGrid::findPath)
+    // can then deadlock the main thread's own exit-time TLS destructors
+    // waiting on that same lock forever, which Windows eventually resolves
+    // by force-killing the process. Reproduced via cdb: select ai-arena's
+    // ExIt Net agent (its first MCTS search is what spins up the pool),
+    // click Reset once, let the process exit normally.
+    brotensor::shutdown();
 
     // Release screenshot pool surfaces while the main GL context is still
     // current. Safe to skip if the pool is empty (windowed mode never uses it).
