@@ -460,7 +460,17 @@ static void registerClasses(JSContext* ctx) {
                     JS_FreeValue(ctx, abuf);
                     if (!raw) return JS_ThrowTypeError(ctx, "bad buffer");
                     std::vector<uint8_t> blob(raw + byteOff, raw + byteOff + viewLen);
-                    d->net->load(blob);
+                    // SingleHeroNet::load throws std::runtime_error on a
+                    // malformed blob (magic/version/size mismatch) — qjsbind
+                    // has no exception handling of its own at the JS
+                    // boundary, so an uncaught throw here would unwind into
+                    // the QuickJS C dispatch loop and terminate the process.
+                    // Catch and surface it as a normal, catchable JS error.
+                    try {
+                        d->net->load(blob);
+                    } catch (const std::exception& e) {
+                        return JS_ThrowTypeError(ctx, "SingleHeroNet.load: %s", e.what());
+                    }
                     return JS_UNDEFINED;
                 }, 1);
     }
