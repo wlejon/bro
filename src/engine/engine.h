@@ -8,6 +8,7 @@
 #include "engine/menu_bar.h"
 #include "engine/overlay.h"
 #include "engine/replaced_elements.h"
+#include "dom/node_handle.h"
 #include "engine/scrollbar.h"
 #include "engine/settings.h"
 #include "engine/ui_layer.h"
@@ -205,7 +206,7 @@ public:
     // exitPointerLock() is called. Fires "pointerlockchange" on documentElement.
     bool requestPointerLock(dom::Element* target);
     void exitPointerLock();
-    dom::Element* pointerLockElement() const { return lockedElement_; }
+    dom::Element* pointerLockElement() const { return lockedElement_.get(); }
 
     // --- Document lifecycle ---
     // Tracks the HTML document.readyState. Progresses "loading" (during script
@@ -383,17 +384,6 @@ private:
     InputConfig inputConfig_;
 
     dom::Element* hitTest(float x, float y);
-
-    // Null out any cached app-document Element* the input layer holds across
-    // frames (hover/drag/click targets) whose node was just freed. A DOM
-    // mutation — e.g. a render that rebuilds the nodes under the cursor — frees
-    // those elements via drainPendingFrees(), leaving these raw pointers
-    // dangling; the next mouse event would dispatch into freed memory. Uses
-    // Document::isNodeLive (a pointer-value check, safe on a dangling pointer),
-    // the same guard CanvasScene uses for its backing-Element pointer. Called
-    // right after drainPendingFrees(). Scene-HtmlNode and system-panel mirrors
-    // belong to other documents and are intentionally not scrubbed here.
-    void reapDeadInputPointers();
 
     // Find the scene graph whose canvas element is under (x, y) in screen
     // coords. Returns nullptr if none. Writes canvas-local coords (top-left
@@ -713,7 +703,7 @@ private:
     bool systemDirty_ = true;
     bool systemMouseConsumed_ = false;
     std::string systemActivePanel_;
-    dom::Element* systemHoverTarget_ = nullptr;
+    dom::ElementHandle systemHoverTarget_;
     SystemDocument* systemHoverDoc_ = nullptr;
 
     // Headless-specific
@@ -737,16 +727,16 @@ private:
     bool mediaEventsArmed_ = false;
 
     // Hover tracking for mouseenter/mouseleave/mouseover/mouseout
-    dom::Element* hoveredElement_ = nullptr;
+    dom::ElementHandle hoveredElement_;
 
     // World-space HtmlNode hover + press tracking. When a click lands on a
     // canvas with a SceneGraph, the engine ray-casts into the scene's
     // HtmlNode billboards and routes mouse events into the detached
     // document. These mirror hoveredElement_ but for the inner doc.
-    scene::HtmlNode* hoveredHtmlNode_ = nullptr;
-    dom::Element*    hoveredHtmlElement_ = nullptr;
-    scene::HtmlNode* htmlNodeMouseDownNode_ = nullptr;
-    dom::Element*    htmlNodeMouseDownElement_ = nullptr;
+    scene::HtmlNode*   hoveredHtmlNode_ = nullptr;
+    dom::ElementHandle hoveredHtmlElement_;
+    scene::HtmlNode*   htmlNodeMouseDownNode_ = nullptr;
+    dom::ElementHandle htmlNodeMouseDownElement_;
 
     // Mouse tracking for mousemove movement deltas
     float lastMouseX_ = 0.0f;
@@ -755,7 +745,7 @@ private:
     // Pointer lock: while set, hit-testing/hover is frozen and mousemove events
     // are routed to lockedElement_ with clientX/Y pinned to lockedMouse{X,Y}_.
     // Only movementX/Y (SDL xrel/yrel) reflect the actual motion.
-    dom::Element* lockedElement_ = nullptr;
+    dom::ElementHandle lockedElement_;
     float lockedMouseX_ = 0.0f;
     float lockedMouseY_ = 0.0f;
 
@@ -774,7 +764,7 @@ private:
     // (the static endpoint of a drag); selectionDragging_ means subsequent
     // mousemove events should extend the focus to follow the cursor.
     bool selectionDragging_ = false;
-    dom::TextNode* selectionAnchorNode_ = nullptr;
+    dom::TextNodeHandle selectionAnchorNode_;
     int selectionAnchorOffset_ = 0;
     // Press position in document space, used to gate selection extension until
     // the pointer has moved far enough that the user intends a drag (rather
@@ -797,8 +787,8 @@ private:
     Scrollbar viewportScrollbar_;
     Scrollbar elementScrollbar_;
     bool draggingViewportScrollbar_ = false;
-    dom::Element* scrollbarDragTarget_ = nullptr;
-    dom::Element* scrollbarHoveredElement_ = nullptr;
+    dom::ElementHandle scrollbarDragTarget_;
+    dom::ElementHandle scrollbarHoveredElement_;
     /// When non-null, scrollbarDragTarget_ belongs to this system panel
     /// document rather than the app document, and the drag-update code
     /// dispatches scroll events through the panel's JS context. Cleared

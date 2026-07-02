@@ -1227,7 +1227,7 @@ bool Engine::systemHandleMouseDown(float x, float y, int button) {
         if (!hitElem) continue;
         if (elementScrollbar_.thumbHitTest(x, y, em)) {
             elementScrollbar_.beginDrag(y, em);
-            scrollbarDragTarget_ = hitElem;
+            scrollbarDragTarget_.assign(doc.document.get(), hitElem);
             scrollbarDragSystemDoc_ = &doc;
         } else {
             // Click on track — page scroll to the clicked position.
@@ -1344,12 +1344,13 @@ bool Engine::systemHandleMouseMove(float x, float y) {
         }
     }
 
-    if (newTarget != systemHoverTarget_) {
-        if (systemHoverTarget_ && systemHoverDoc_) {
+    dom::Element* prevSysHover = systemHoverTarget_.get();
+    if (newTarget != prevSysHover) {
+        if (prevSysHover && systemHoverDoc_) {
             dom::MouseEvent leaveEvt("mouseleave");
             leaveEvt.setClientX(static_cast<double>(x));
             leaveEvt.setClientY(static_cast<double>(y));
-            js::dispatchDomEvent(systemHoverDoc_->jsCtx, systemHoverTarget_, leaveEvt);
+            js::dispatchDomEvent(systemHoverDoc_->jsCtx, prevSysHover, leaveEvt);
         }
         if (newTarget && newDoc) {
             dom::MouseEvent enterEvt("mouseenter");
@@ -1357,7 +1358,7 @@ bool Engine::systemHandleMouseMove(float x, float y) {
             enterEvt.setClientY(static_cast<double>(y));
             js::dispatchDomEvent(newDoc->jsCtx, newTarget, enterEvt);
         }
-        systemHoverTarget_ = newTarget;
+        systemHoverTarget_.assign(newDoc ? newDoc->document.get() : nullptr, newTarget);
         systemHoverDoc_ = newDoc;
         systemDirty_ = true;
     }

@@ -100,7 +100,7 @@ void Engine::flush() {
         if (document_->isStructureDirty()) {
             ensureReplacedElements(document_->documentElement());
         }
-        layout::ElementRefAdapter::setHoveredElement(hoveredElement_);
+        layout::ElementRefAdapter::setHoveredElement(hoveredElement_.get());
         document_->resolveStyles();
         // performLayout() rebuilds the persistent layout tree when
         // structureDirty_ is set and clears the flag itself.

@@ -69,6 +69,18 @@ public:
     // to decide whether its raw backing-Element pointer is safe to touch.
     bool isNodeLive(const Node* n) const;
 
+    // Generation-checked resolve backing NodeHandle: returns `ptr` iff its
+    // memory is still alive in this document (owned or pending free) AND the
+    // node at that address still carries nodeId `id`. Safe on dangling
+    // pointers (pointer-value lookup before any dereference), and immune to
+    // address reuse because node ids are never recycled.
+    Node* resolveNode(const Node* ptr, uint32_t id) const;
+
+    // True if `doc` points at a live Document. Documents register/unregister
+    // in ctor/dtor (main thread only), letting NodeHandle survive its whole
+    // document being destroyed (e.g. a closed system panel).
+    static bool isLiveDocument(const Document* doc);
+
     // Queries
     Element* getElementById(const std::string& id);
     Element* querySelector(const std::string& selector);

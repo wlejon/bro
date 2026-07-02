@@ -414,8 +414,8 @@ bool dispatchDocMousePress(
     dom::MouseEvent& evt,
     float focusX, float focusY) {
 
-    if (!ctx.document) { state.mouseDownTarget = nullptr; return false; }
-    if (!target) { state.mouseDownTarget = nullptr; return false; }
+    if (!ctx.document) { state.mouseDownTarget.reset(); return false; }
+    if (!target) { state.mouseDownTarget.reset(); return false; }
 
     auto* prevActive = ctx.document->activeElement();
 
@@ -425,7 +425,7 @@ bool dispatchDocMousePress(
     auto disp = unfocusPreviousControl(ctx, prevActive);
     if (disp == ClickDisposition::Consumed) {
         js::dispatchDomEvent(ctx.jsCtx, target, evt);
-        state.mouseDownTarget = target;
+        state.mouseDownTarget.assign(ctx.document, target);
         if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
         return true;
     }
@@ -438,7 +438,7 @@ bool dispatchDocMousePress(
     focusNewControl(ctx, target, focusX, focusY);
 
     js::dispatchDomEvent(ctx.jsCtx, target, evt);
-    state.mouseDownTarget = target;
+    state.mouseDownTarget.assign(ctx.document, target);
     if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
     return false;
 }
@@ -480,10 +480,10 @@ void dispatchDocMouseRelease(
 
     // Click fires only when mouseup lands on the same element as mousedown —
     // and never on a disabled form control (which has no activation behavior).
-    bool sameTarget = (target && target == state.mouseDownTarget);
+    bool sameTarget = (target && target == state.mouseDownTarget.get());
     if (sameTarget && !isInDisabledControl(target)) {
         // Rolling double-click detection.
-        if (state.lastClickTarget == target &&
+        if (state.lastClickTarget.get() == target &&
             (nowMs - state.lastClickTimeMs) < dblThresholdMs &&
             std::fabs(clientX - state.lastClickX) < dblDistPx &&
             std::fabs(clientY - state.lastClickY) < dblDistPx) {
@@ -494,7 +494,7 @@ void dispatchDocMouseRelease(
         state.lastClickTimeMs = nowMs;
         state.lastClickX = clientX;
         state.lastClickY = clientY;
-        state.lastClickTarget = target;
+        state.lastClickTarget.assign(ctx.document, target);
 
         auto populate = [&](dom::MouseEvent& e) {
             e.setClientX(clientX); e.setClientY(clientY);
@@ -606,7 +606,7 @@ void dispatchDocMouseRelease(
         }
     }
 
-    state.mouseDownTarget = nullptr;
+    state.mouseDownTarget.reset();
     if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
 }
 

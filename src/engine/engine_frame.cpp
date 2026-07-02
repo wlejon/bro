@@ -286,10 +286,9 @@ void Engine::run() {
         // refreshed the tree.
         if (document_ && !document_->isStructureDirty()) {
             document_->drainPendingFrees();
-            // The drain just destroyed nodes the input layer may still cache as
-            // raw pointers (hover/drag/click targets). Null any that died before
-            // the next mouse event dispatches into freed memory.
-            reapDeadInputPointers();
+            // Input-layer references to freed nodes need no scrubbing here:
+            // hover/drag/click targets are dom::NodeHandles that resolve to
+            // null once their node is destroyed.
         }
 
         // Pump HTMLMediaElement events on every <video> — must happen on the
@@ -526,7 +525,7 @@ void Engine::run() {
             ls.insetRight      = contentRight();
             ls.insetBottom     = contentBottom();
             ls.animationsActive = animActive;
-            ls.hoveredElement  = hoveredElement_;
+            ls.hoveredElement  = hoveredElement_.get();
             layoutPipeline_->signalLayout(ls);
             layoutSignaled = true;
         }

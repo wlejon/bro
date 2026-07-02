@@ -12,13 +12,29 @@
 
 namespace bro::dom {
 
-Document::Document() = default;
+// Live-document registry backing NodeHandle. Documents are created and
+// destroyed on the main thread only (app doc, system panels, HtmlNode inner
+// docs); the layout/raster threads never construct or destroy one, so a plain
+// set needs no synchronization.
+static std::unordered_set<const Document*>& liveDocuments() {
+    static std::unordered_set<const Document*> s;
+    return s;
+}
+
+bool Document::isLiveDocument(const Document* doc) {
+    return doc && liveDocuments().count(doc) != 0;
+}
+
+Document::Document() {
+    liveDocuments().insert(this);
+}
 
 // Selection owns a Range whose destructor calls back into unregisterRange().
 // Members destroy in reverse declaration order, so if we defaulted this the
 // liveRanges_ set would already be gone by the time ~Selection ran. Tear
 // selection_ down first, then clear any JS-owned Ranges that outlived us.
 Document::~Document() {
+    liveDocuments().erase(this);
     selection_.reset();
     auto ranges = std::move(liveRanges_);
     for (auto* r : ranges) {
@@ -506,6 +522,20 @@ bool Document::isNodeLive(const Node* n) const {
     Node* key = const_cast<Node*>(n);
     return ownedNodes_.find(key) != ownedNodes_.end() ||
            pendingSet_.find(key) != pendingSet_.end();
+}
+
+Node* Document::resolveNode(const Node* ptr, uint32_t id) const {
+    if (!ptr) return nullptr;
+    Node* key = const_cast<Node*>(ptr);
+    // Pointer-value lookup first — never dereference `ptr` until it is proven
+    // to be a node this document keeps alive. The id check then closes the
+    // ABA hole isNodeLive alone has: if the allocator reused the address for
+    // a *new* node, its nodeId (globally monotonic, never recycled) differs
+    // and the stale handle resolves to null instead of the impostor.
+    if (ownedNodes_.find(key) == ownedNodes_.end() &&
+        pendingSet_.find(key) == pendingSet_.end())
+        return nullptr;
+    return key->nodeId() == id ? key : nullptr;
 }
 
 // ---------------------------------------------------------------------------

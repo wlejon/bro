@@ -468,7 +468,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
         if (hitElem) {
             if (elementScrollbar_.thumbHitTest(x, y, em)) {
                 elementScrollbar_.beginDrag(y, em);
-                scrollbarDragTarget_ = hitElem;
+                scrollbarDragTarget_.assign(document_.get(), hitElem);
             } else {
                 // Click on track — page scroll
                 float viewH = hitElem->layoutBox().contentRect.height;
@@ -506,7 +506,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
         if (target && pickHtmlNodeUnderMouse(target, docX, docY,
                                               hnHit, hnEl, hnPxX, hnPxY)) {
             htmlNodeMouseDownNode_ = hnHit;
-            htmlNodeMouseDownElement_ = hnEl;
+            htmlNodeMouseDownElement_.assign(hnHit->document(), hnEl);
             dispatchHtmlNodeMouseEvent("mousedown", hnEl, hnPxX, hnPxY,
                                         button, pressedButtons_, mod,
                                         x - lastMouseX_, y - lastMouseY_,
@@ -514,7 +514,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
             return;
         }
         htmlNodeMouseDownNode_ = nullptr;
-        htmlNodeMouseDownElement_ = nullptr;
+        htmlNodeMouseDownElement_.reset();
 
         ControlContext cctx{document_.get(), jsRuntime_->getContext(),
                            renderer_.get(), window_.get(), &uiDirty_,
@@ -575,7 +575,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
                         selectionDragging_ = false;
                     } else {
                         sel->collapse(hit.textNode, hit.srcOffset);
-                        selectionAnchorNode_ = hit.textNode;
+                        selectionAnchorNode_.assign(document_.get(), hit.textNode);
                         selectionAnchorOffset_ = hit.srcOffset;
                         selectionDragging_ = true;
                         selectionPressX_ = docX;
@@ -587,7 +587,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
                     // Click outside any text: clear selection.
                     sel->removeAllRanges();
                     selectionDragging_ = false;
-                    selectionAnchorNode_ = nullptr;
+                    selectionAnchorNode_.reset();
                     uiDirty_ = true;
                 }
             }
@@ -622,7 +622,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
     }
     if (elementScrollbar_.isDragging()) {
         elementScrollbar_.endDrag();
-        scrollbarDragTarget_ = nullptr;
+        scrollbarDragTarget_.reset();
         if (scrollbarDragSystemDoc_) {
             systemDirty_ = true;
             scrollbarDragSystemDoc_ = nullptr;
@@ -681,23 +681,24 @@ void Engine::handleMouseUp(float x, float y, int button) {
         bool hnReleaseHit = (target && pickHtmlNodeUnderMouse(target, docX, docY,
                                                                 hnHit, hnEl, hnPxX, hnPxY));
         if (htmlNodeMouseDownNode_) {
+            dom::Element* downEl = htmlNodeMouseDownElement_.get();
             if (hnReleaseHit && hnHit == htmlNodeMouseDownNode_) {
                 dispatchHtmlNodeMouseEvent("mouseup", hnEl, hnPxX, hnPxY,
                                             button, pressedButtons_, mod,
                                             movX, movY, /*bubbles=*/true);
-                if (button == 0 && hnEl == htmlNodeMouseDownElement_) {
+                if (button == 0 && hnEl == downEl) {
                     dispatchHtmlNodeMouseEvent("click", hnEl, hnPxX, hnPxY,
                                                 button, pressedButtons_, mod,
                                                 movX, movY, /*bubbles=*/true);
                 }
             } else {
-                dispatchHtmlNodeMouseEvent("mouseup", htmlNodeMouseDownElement_,
+                dispatchHtmlNodeMouseEvent("mouseup", downEl,
                                             hnPxX, hnPxY,
                                             button, pressedButtons_, mod,
                                             movX, movY, /*bubbles=*/true);
             }
             htmlNodeMouseDownNode_ = nullptr;
-            htmlNodeMouseDownElement_ = nullptr;
+            htmlNodeMouseDownElement_.reset();
             return;
         }
 
@@ -721,20 +722,22 @@ void Engine::handleMouseUp(float x, float y, int button) {
 }
 
 void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
-    // If the locked element was removed from the DOM, release the lock.
-    if (lockedElement_ && !lockedElement_->isAlive()) exitPointerLock();
+    // If the locked element was freed, release the lock. The handle resolves
+    // to null once the node is destroyed, replacing the old isAlive() magic-
+    // number canary (which had to read possibly-freed memory to answer).
+    if (lockedElement_.held() && !lockedElement_.get()) exitPointerLock();
 
     // Pointer lock: OS cursor is pinned by SDL's relative mouse mode. SDL still
     // accumulates a virtual x/y in motion events, but we ignore it — clientX/Y
     // stays frozen at the lock position and movementX/Y carries the delta.
-    if (lockedElement_) {
+    if (dom::Element* locked = lockedElement_.get()) {
         if (document_) {
             int mod = safeGetModState(window_.get());
             dom::MouseEvent moveEvt("mousemove", true, true);
             populateMouseEvent(moveEvt, lockedMouseX_, lockedMouseY_, -1,
                                pressedButtons_, xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
-            applyMouseOffset(moveEvt, lockedElement_);
-            dispatchEvent(lockedElement_, moveEvt);
+            applyMouseOffset(moveEvt, locked);
+            dispatchEvent(locked, moveEvt);
             if (jsRuntime_) jsRuntime_->executePendingJobs();
         }
         return;
@@ -790,7 +793,8 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     // Mouse-driven text selection: while dragging, extend the selection's
     // focus to follow the pointer. The anchor is whatever was captured on
     // mousedown (selectionAnchor*).
-    if (selectionDragging_ && document_ && textMetrics_ && selectionAnchorNode_) {
+    dom::TextNode* selAnchor = selectionAnchorNode_.get();
+    if (selectionDragging_ && document_ && textMetrics_ && selAnchor) {
         // Require the pointer to travel past a small threshold before we begin
         // extending the selection. Without this, sub-pixel jitter during a
         // plain click registers as a drag and snaps the focus to whatever
@@ -814,21 +818,21 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         // selectionAnchorNode_ was captured on mousedown and can be freed
         // by app code mid-drag (e.g. HUD rebuilds) even if the hit is fresh.
         if (hit.textNode && document_->ownsNode(hit.textNode) &&
-            document_->ownsNode(selectionAnchorNode_)) {
+            document_->ownsNode(selAnchor)) {
             auto* sel = document_->selection();
             // Compute direction: if focus is before anchor, backward. Use
             // comparePoint against a range collapsed at the anchor — probing
             // with setEnd doesn't work because Range::normalize clamps
             // reversed endpoints instead of swapping them.
             dom::Range probe;
-            probe.setStart(selectionAnchorNode_, selectionAnchorOffset_);
+            probe.setStart(selAnchor, selectionAnchorOffset_);
             bool backward = probe.comparePoint(hit.textNode, hit.srcOffset) < 0;
             if (backward) {
                 sel->setRange(hit.textNode, hit.srcOffset,
-                              selectionAnchorNode_, selectionAnchorOffset_,
+                              selAnchor, selectionAnchorOffset_,
                               dom::Selection::Backward);
             } else {
-                sel->setRange(selectionAnchorNode_, selectionAnchorOffset_,
+                sel->setRange(selAnchor, selectionAnchorOffset_,
                               hit.textNode, hit.srcOffset,
                               dom::Selection::Forward);
             }
@@ -858,7 +862,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     // the app doc or a system panel; only the dirty-bit bookkeeping and
     // scroll event dispatch differ.
     if (elementScrollbar_.isDragging() && scrollbarDragTarget_) {
-        auto* elem = scrollbarDragTarget_;
+        auto* elem = scrollbarDragTarget_.get();
         float viewH = elem->layoutBox().contentRect.height;
         float maxST = maxScrollTop(elem);
         float contentH = viewH + maxST;
@@ -905,13 +909,13 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         dom::Element* hitElem = findElementScrollbarHit(
             document_->documentElement(), x, y,
             0.0f, -scrollY_, elementScrollbar_, em);
-        dom::Element* prevHovered = scrollbarHoveredElement_;
+        dom::Element* prevHovered = scrollbarHoveredElement_.get();
         if (hitElem && elementScrollbar_.thumbHitTest(x, y, em)) {
-            scrollbarHoveredElement_ = hitElem;
+            scrollbarHoveredElement_.assign(document_.get(), hitElem);
         } else {
-            scrollbarHoveredElement_ = nullptr;
+            scrollbarHoveredElement_.reset();
         }
-        if (prevHovered != scrollbarHoveredElement_) uiDirty_ = true;
+        if (prevHovered != scrollbarHoveredElement_.get()) uiDirty_ = true;
     }
 
     // Range slider dragging
@@ -945,27 +949,28 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         dom::Element* target = hitTest(docX, docY);
 
         // Dispatch mouseover/mouseout when element changes (bubbling versions)
-        if (target != hoveredElement_) {
+        dom::Element* prevHover = hoveredElement_.get();
+        if (target != prevHover) {
             int mod = safeGetModState(window_.get());
 
             // mouseout on previous element (bubbles)
-            if (hoveredElement_) {
+            if (prevHover) {
                 dom::MouseEvent outEvt("mouseout", true, true);
                 populateMouseEvent(outEvt, x, y, -1, pressedButtons_,
                                   xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
                 outEvt.setRelatedTarget(target);
-                applyMouseOffset(outEvt, hoveredElement_);
-                dispatchEvent(hoveredElement_, outEvt);
+                applyMouseOffset(outEvt, prevHover);
+                dispatchEvent(prevHover, outEvt);
             }
 
             // mouseleave on previous element (doesn't bubble)
-            if (hoveredElement_) {
+            if (prevHover) {
                 dom::MouseEvent leaveEvt("mouseleave", false, false);
                 populateMouseEvent(leaveEvt, x, y, -1, pressedButtons_,
                                   xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
                 leaveEvt.setRelatedTarget(target);
-                applyMouseOffset(leaveEvt, hoveredElement_);
-                dispatchEvent(hoveredElement_, leaveEvt);
+                applyMouseOffset(leaveEvt, prevHover);
+                dispatchEvent(prevHover, leaveEvt);
             }
 
             // mouseover on new element (bubbles)
@@ -973,7 +978,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                 dom::MouseEvent overEvt("mouseover", true, true);
                 populateMouseEvent(overEvt, x, y, -1, pressedButtons_,
                                   xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
-                overEvt.setRelatedTarget(hoveredElement_);
+                overEvt.setRelatedTarget(prevHover);
                 applyMouseOffset(overEvt, target);
                 dispatchEvent(target, overEvt);
             }
@@ -983,15 +988,16 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                 dom::MouseEvent enterEvt("mouseenter", false, false);
                 populateMouseEvent(enterEvt, x, y, -1, pressedButtons_,
                                   xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
-                enterEvt.setRelatedTarget(hoveredElement_);
+                enterEvt.setRelatedTarget(prevHover);
                 applyMouseOffset(enterEvt, target);
                 dispatchEvent(target, enterEvt);
             }
 
-            // Mark old and new hovered elements dirty for :hover style re-resolve
-            if (hoveredElement_) hoveredElement_->markDirty();
+            // Mark old and new hovered elements dirty for :hover style re-resolve.
+            // The JS dispatched above can free either element; re-resolve.
+            if (auto* ph = hoveredElement_.get()) ph->markDirty();
             if (target) target->markDirty();
-            hoveredElement_ = target;
+            hoveredElement_.assign(document_.get(), target);
             uiDirty_ = true;
         }
 
@@ -1004,31 +1010,32 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         float hnPxX = 0.0f, hnPxY = 0.0f;
         bool hnHit = (target && pickHtmlNodeUnderMouse(target, docX, docY,
                                                         hnNode, hnEl, hnPxX, hnPxY));
-        if (hnEl != hoveredHtmlElement_) {
+        dom::Element* prevHnEl = hoveredHtmlElement_.get();
+        if (hnEl != prevHnEl) {
             int mod = safeGetModState(window_.get());
-            if (hoveredHtmlElement_) {
-                dispatchHtmlNodeMouseEvent("mouseout", hoveredHtmlElement_,
+            if (prevHnEl) {
+                dispatchHtmlNodeMouseEvent("mouseout", prevHnEl,
                                             hnPxX, hnPxY, -1, pressedButtons_,
                                             mod, xrel, yrel, /*bubbles=*/true,
                                             hnEl);
-                dispatchHtmlNodeMouseEvent("mouseleave", hoveredHtmlElement_,
+                dispatchHtmlNodeMouseEvent("mouseleave", prevHnEl,
                                             hnPxX, hnPxY, -1, pressedButtons_,
                                             mod, xrel, yrel, /*bubbles=*/false,
                                             hnEl);
-                hoveredHtmlElement_->markDirty();
+                if (auto* ph = hoveredHtmlElement_.get()) ph->markDirty();
             }
             if (hnEl) {
                 dispatchHtmlNodeMouseEvent("mouseover", hnEl,
                                             hnPxX, hnPxY, -1, pressedButtons_,
                                             mod, xrel, yrel, /*bubbles=*/true,
-                                            hoveredHtmlElement_);
+                                            prevHnEl);
                 dispatchHtmlNodeMouseEvent("mouseenter", hnEl,
                                             hnPxX, hnPxY, -1, pressedButtons_,
                                             mod, xrel, yrel, /*bubbles=*/false,
-                                            hoveredHtmlElement_);
+                                            prevHnEl);
                 hnEl->markDirty();
             }
-            hoveredHtmlElement_ = hnEl;
+            hoveredHtmlElement_.assign(hnNode ? hnNode->document() : nullptr, hnEl);
             hoveredHtmlNode_ = hnNode;
             uiDirty_ = true;
         }
@@ -1061,10 +1068,12 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
 // ---------------------------------------------------------------------------
 
 bool Engine::requestPointerLock(dom::Element* target) {
-    if (!target || !target->isAlive()) return false;
-    if (lockedElement_ == target) return true;
+    // Pointer lock routes through the app document; validate the JS-supplied
+    // pointer against it (soundly — no freed-memory magic-number probe).
+    if (!target || !document_ || !document_->isNodeLive(target)) return false;
+    if (lockedElement_.get() == target) return true;
 
-    lockedElement_ = target;
+    lockedElement_.assign(document_.get(), target);
     lockedMouseX_ = lastMouseX_;
     lockedMouseY_ = lastMouseY_;
 
@@ -1112,8 +1121,10 @@ void Engine::setFullscreenState(bool fullscreen) {
 }
 
 void Engine::exitPointerLock() {
-    if (!lockedElement_) return;
-    lockedElement_ = nullptr;
+    // held(), not get(): the lock must release (and relative mouse mode end)
+    // even when the locked element has already been freed.
+    if (!lockedElement_.held()) return;
+    lockedElement_.reset();
 
     if (window_) {
         // Warp back to the pre-lock cursor position before releasing

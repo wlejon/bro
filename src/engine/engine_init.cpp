@@ -815,7 +815,7 @@ Engine::Engine(const EngineConfig& config)
     loadCustomFonts();
     if (document_) {
         ensureReplacedElements(document_->documentElement());
-        layout::ElementRefAdapter::setHoveredElement(hoveredElement_);
+        layout::ElementRefAdapter::setHoveredElement(hoveredElement_.get());
         double now = (displayMode_ == DisplayMode::Headless)
                          ? virtualTime_
                          : util::currentTimeMs();

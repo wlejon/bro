@@ -324,7 +324,7 @@ void Engine::handleResize(int w, int h) {
     int cw = contentWidth();
     int ch = contentHeight();
     if (document_) {
-        layout::ElementRefAdapter::setHoveredElement(hoveredElement_);
+        layout::ElementRefAdapter::setHoveredElement(hoveredElement_.get());
         document_->resolveStyles();
         document_->performLayout(static_cast<float>(cw), static_cast<float>(ch), *textMetrics_);
         if (document_->documentElement()) {
