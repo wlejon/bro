@@ -838,10 +838,17 @@ bool TerrainManager::setVoxel(float wx, float wy, float wz, uint8_t material) {
     int gridH = config_.chunkSizeZ + 1;
     if (lx < 0 || lx >= gridW || lz < 0 || lz >= gridH) return false;
 
-    auto& hmap = it->second.heightmap;
+    ChunkEntry& entry = it->second;
     float delta = (material == 0) ? -1.0f : 1.0f;
-    hmap[lz * gridW + lx] += delta;
-    it->second.dirty_ = true;
+    entry.heightmap[lz * gridW + lx] += delta;
+
+    // buildChunkMesh() builds exclusively from heightmapPadded (every mesh
+    // mode reads it, never heightmap), so the edit must land there too,
+    // offset by the 1-cell border shared with neighbouring chunks.
+    int paddedW = gridW + 2;
+    entry.heightmapPadded[(lz + 1) * paddedW + (lx + 1)] += delta;
+
+    entry.dirty_ = true;
     return true;
 }
 
