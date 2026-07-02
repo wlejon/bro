@@ -47,6 +47,12 @@ JSValue findAgentJSRef(JSContext* ctx, JSValueConst worldJsRef, brogameagent::Ag
 /// Called from AIBindings::install once the gameObj exists.
 void installRegisterCapability(JSContext* ctx, JSValue gameObj);
 
+/// Free the JS gate/start/advance callbacks held by the process-global
+/// capability registry and clear it. Called from AIBindings::cleanup during
+/// engine teardown — the registry natively holds JSValue refs, which would
+/// otherwise still be live at JS_FreeRuntime and trip its leak assert.
+void clearRegisteredCapabilities(JSContext* ctx);
+
 /// JS method bodies: node.attachAgent / node.detachAgent /
 /// graph.attachAIWorld / graph.detachAIWorld. Exposed for the scene bindings
 /// to register on NodeWrapper / GraphWrapper classes.

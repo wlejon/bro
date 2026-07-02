@@ -2070,11 +2070,32 @@ void AIBindings::install(JSContext* ctx) {
                     s.range    = (float)getDoubleProp(ctx, spec, "range", 0);
 
                     // JS callback fn(caster, world, targetId)
+                    //
+                    // Deliberately holds NO owned JSValue refs in the C++
+                    // lambda. An earlier version captured JS_DupValue'd refs
+                    // to both the callback and this_val; the World (owned by
+                    // this wrapper) storing a strong ref back to its own
+                    // wrapper is a cycle the GC cannot see, so no AIWorld
+                    // with a JS ability could ever be collected — every
+                    // match reset leaked a World, and JS_FreeRuntime's
+                    // leak assert aborted windowed Debug on exit. Instead
+                    // the callback is parked in a __abilityFns table ON the
+                    // wrapper (GC-visible, like __agents), and the lambda
+                    // captures this_val raw: the lambda can only run while
+                    // the World is alive, and the World is owned by the
+                    // wrapper, so this_val is valid whenever it fires.
                     JSValue fnVal = JS_GetPropertyStr(ctx, spec, "fn");
                     if (JS_IsFunction(ctx, fnVal)) {
-                        JSValue fnRef = JS_DupValue(ctx, fnVal);
-                        JSValue worldRef = JS_DupValue(ctx, this_val);
-                        s.fn = [ctx, fnRef, worldRef, this_val](
+                        JSValue tbl = JS_GetPropertyStr(ctx, this_val, "__abilityFns");
+                        if (!JS_IsObject(tbl)) {
+                            JS_FreeValue(ctx, tbl);
+                            tbl = JS_NewObject(ctx);
+                            JS_SetPropertyStr(ctx, this_val, "__abilityFns", JS_DupValue(ctx, tbl));
+                        }
+                        const std::string fnKey = std::to_string(abilityId);
+                        JS_SetPropertyStr(ctx, tbl, fnKey.c_str(), JS_DupValue(ctx, fnVal));
+                        JS_FreeValue(ctx, tbl);
+                        s.fn = [ctx, this_val, fnKey](
                                    brogameagent::Agent& caster,
                                    brogameagent::World& /*world*/,
                                    int targetId) {
@@ -2096,9 +2117,13 @@ void AIBindings::install(JSContext* ctx) {
                             }
                             JS_FreeValue(ctx, agents);
 
-                            JSValue args[3] = { casterVal, worldRef, JS_NewInt32(ctx, targetId) };
+                            JSValue tbl2 = JS_GetPropertyStr(ctx, this_val, "__abilityFns");
+                            JSValue fnRef = JS_GetPropertyStr(ctx, tbl2, fnKey.c_str());
+                            JS_FreeValue(ctx, tbl2);
+                            JSValue args[3] = { casterVal, this_val, JS_NewInt32(ctx, targetId) };
                             JSValue ret = JS_Call(ctx, fnRef, JS_UNDEFINED, 3, args);
                             JS_FreeValue(ctx, ret);
+                            JS_FreeValue(ctx, fnRef);
                             JS_FreeValue(ctx, casterVal);
                             JS_FreeValue(ctx, args[2]);
                         };
@@ -3083,9 +3108,13 @@ void AIBindings::install(JSContext* ctx) {
     JS_FreeValue(ctx, global);
 }
 
-void AIBindings::cleanup(JSContext*) {
-    // No persistent JSValue/atom storage in this binding — qjsbind finalizers
-    // handle wrappers and the engine-level globalThis sweep drops bro.ai.
+void AIBindings::cleanup(JSContext* ctx) {
+    // The one piece of persistent native JSValue storage in this binding
+    // family: the registerCapability registry (ai_binding_integration.cpp)
+    // holds dup'd gate/start/advance callbacks for the process lifetime.
+    // Free them before the runtime goes down; everything else is handled by
+    // qjsbind finalizers and the engine-level globalThis sweep.
+    clearRegisteredCapabilities(ctx);
 }
 
 // ─── Cross-module helpers ──────────────────────────────────────────────────

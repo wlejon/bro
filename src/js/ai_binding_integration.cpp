@@ -61,8 +61,10 @@ struct JsCapSpec {
     JSValue advanceFn = JS_UNDEFINED;
 };
 
-// Global registry: name → spec. Specs own the (dup'd) JSValue callbacks for
-// the lifetime of the process; registered JS caps are effectively permanent.
+// Global registry: name → spec. Specs own the (dup'd) JSValue callbacks until
+// clearRegisteredCapabilities() frees them at engine teardown (AIBindings::
+// cleanup) — they are native-held refs the GC cannot see, so leaving them
+// registered would trip JS_FreeRuntime's leaked-object assert.
 struct JsCapRegistry {
     JSContext* ctx = nullptr;
     int nextId = brogameagent::kJsCapFirst;
@@ -688,6 +690,21 @@ JSValue graphDetachAIWorld(JSContext* ctx, JSValueConst this_val, int argc, JSVa
 void installRegisterCapability(JSContext* ctx, JSValue gameObj) {
     JS_SetPropertyStr(ctx, gameObj, "registerCapability",
         JS_NewCFunction(ctx, js_registerCapability, "registerCapability", 2));
+}
+
+void clearRegisteredCapabilities(JSContext* ctx) {
+    auto& reg = registry();
+    if (reg.ctx != ctx) return;  // registered against a different context (or never)
+    for (auto& [id, spec] : reg.byId) {
+        // Specs may outlive the registry via the shared_ptr each JsCapability
+        // holds, so null the values rather than leaving freed JSValues behind.
+        JS_FreeValue(ctx, spec->gateFn);    spec->gateFn    = JS_UNDEFINED;
+        JS_FreeValue(ctx, spec->startFn);   spec->startFn   = JS_UNDEFINED;
+        JS_FreeValue(ctx, spec->advanceFn); spec->advanceFn = JS_UNDEFINED;
+    }
+    reg.byName.clear();
+    reg.byId.clear();
+    reg.ctx = nullptr;
 }
 
 } // namespace bro::js
