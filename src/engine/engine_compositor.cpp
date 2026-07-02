@@ -290,7 +290,7 @@ void Engine::recordSystemPanelLayers(render::CommandBuffer& outBuffer,
         // captures the current panel into a UILayer and starts a new surface.
         if (!first) {
             recordingRenderer_->recordLayerBreak(
-                render::Cmd_LayerBreak::HtmlSurface, nullptr, 0, 0, 0, 0, 0);
+                render::Cmd_LayerBreak::HtmlSurface, 0, 0, 0, 0, 0, 0);
         }
         first = false;
 
