@@ -1,6 +1,7 @@
 add_library(bro_scene STATIC
     scene_node.cpp
     scene_graph.cpp
+    scene_renderer.cpp
     shape_node.cpp
     sprite_node.cpp
     physics_node.cpp

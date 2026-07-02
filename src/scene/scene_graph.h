@@ -12,6 +12,7 @@
 #include "scene/particle_node.h"
 #include "scene/agent_binding.h"
 #include "scene/ai_world_ticker.h"
+#include "scene/scene_renderer.h"
 
 #include <glad/gl.h>
 
@@ -28,6 +29,8 @@ namespace brogameagent { class World; }
 namespace bro::scene {
 
 /// Per-canvas scene graph. Owns all nodes and manages update/render traversal.
+/// GL rendering (pipelines, FBOs, shadows, IBL, post stack) lives in the
+/// SceneRenderer this graph owns; the render-config API below forwards to it.
 class SceneGraph {
 public:
     SceneGraph();
@@ -113,10 +116,10 @@ public:
     void render();
 
     /// Get the color texture of the 3D FBO (for compositing). 0 if no 3D content.
-    GLuint meshFBOTexture() const { return meshColorTex_; }
+    GLuint meshFBOTexture() const { return renderer_.meshFBOTexture(); }
 
     /// Returns true if any MeshNodes were rendered this frame.
-    bool hasMeshContent() const { return hasMeshContent_; }
+    bool hasMeshContent() const { return renderer_.hasMeshContent(); }
 
     /// Read RGBA8 pixels from the post-tonemap LDR FBO. Used by offscreen
     /// capture (artstation defineScene): renders 3D content with alpha=0 in
@@ -126,7 +129,9 @@ public:
     /// Returns empty vector if the tonemap FBO hasn't been populated yet
     /// (e.g. no render() with 3D content has run). Must be called on the GL
     /// thread.
-    std::vector<uint8_t> readTonemapPixelsRGBA(int& outW, int& outH);
+    std::vector<uint8_t> readTonemapPixelsRGBA(int& outW, int& outH) {
+        return renderer_.readTonemapPixelsRGBA(outW, outH);
+    }
 
     /// Callback invoked after render() with the current mesh FBO texture (or 0).
     /// Used to push the texture ID to the DOM element for compositing.
@@ -196,32 +201,31 @@ public:
     bool pickHtmlNode(float canvasLocalX, float canvasLocalY,
                       HtmlNodePick& out) const;
 
+    // --- Render settings (forwarded to the SceneRenderer) ---
+
     /// Set distance fog parameters. start/end in world units, color is RGB [0,1].
     void setFog(float start, float end, float r, float g, float b) {
-        fogStart_ = start; fogEnd_ = end;
-        fogColor_[0] = r; fogColor_[1] = g; fogColor_[2] = b;
+        renderer_.setFog(start, end, r, g, b);
     }
 
     /// Tone mapping mode applied when composing the HDR mesh FBO to the
     /// caller-facing LDR texture. ACES matches modern filmic defaults;
     /// Reinhard is a cheaper fallback; Linear is raw clamp to 0-1.
-    enum class ToneMap : uint8_t { Linear, Reinhard, ACES };
+    using ToneMap = SceneRenderer::ToneMap;
 
     /// Configure tonemap + exposure. Exposure is a pre-tonemap multiplier
     /// (1.0 = neutral, 2.0 = +1 stop). `gamma` is the post-tonemap output
     /// gamma; pass 1.0 to leave linear output (default 2.2 for sRGB).
     void setToneMap(ToneMap mode, float exposure = 1.0f, float gamma = 2.2f) {
-        toneMap_ = mode; exposure_ = exposure; gamma_ = gamma;
+        renderer_.setToneMap(mode, exposure, gamma);
     }
-    ToneMap toneMap() const { return toneMap_; }
-    float exposure() const { return exposure_; }
+    ToneMap toneMap() const { return renderer_.toneMap(); }
+    float exposure() const { return renderer_.exposure(); }
 
     /// Ambient fill added to every fragment after per-light contributions.
     /// Used as the flat fallback when IBL is disabled (IBL replaces it with
     /// split-sum env lighting when enabled). RGB in linear 0-1.
-    void setAmbient(float r, float g, float b) {
-        ambientColor_[0] = r; ambientColor_[1] = g; ambientColor_[2] = b;
-    }
+    void setAmbient(float r, float g, float b) { renderer_.setAmbient(r, g, b); }
 
     /// Screen-space tilt-shift depth-of-field, applied after tonemap on the
     /// LDR result. A horizontal band stays sharp; the scene blurs toward the
@@ -237,15 +241,10 @@ public:
     void setTiltShift(bool enabled, float focusCenter, float focusWidth,
                       float feather, float strength, float saturation,
                       float contrast) {
-        tiltEnabled_     = enabled;
-        tiltFocusCenter_ = focusCenter;
-        tiltFocusWidth_  = focusWidth;
-        tiltFeather_     = feather;
-        tiltStrength_    = strength;
-        tiltSaturation_  = saturation;
-        tiltContrast_    = contrast;
+        renderer_.setTiltShift(enabled, focusCenter, focusWidth, feather,
+                               strength, saturation, contrast);
     }
-    bool tiltShiftEnabled() const { return tiltEnabled_; }
+    bool tiltShiftEnabled() const { return renderer_.tiltShiftEnabled(); }
 
     /// HDR bloom: bright areas (luminance above `threshold`) bleed a soft glow,
     /// added back in HDR before tonemap so highlights bloom filmically. Off by
@@ -255,27 +254,22 @@ public:
     ///   intensity — additive scale of the blurred bloom in HDR.
     ///   strength  — blur radius multiplier (texels at half-res).
     void setBloom(bool enabled, float threshold, float intensity, float strength) {
-        bloomEnabled_   = enabled;
-        bloomThreshold_ = threshold;
-        bloomIntensity_ = intensity;
-        bloomStrength_  = strength;
+        renderer_.setBloom(enabled, threshold, intensity, strength);
     }
-    bool bloomEnabled() const { return bloomEnabled_; }
+    bool bloomEnabled() const { return renderer_.bloomEnabled(); }
 
     /// Wind sway parameters consumed by the mesh vertex shader. Per-vertex
     /// `windBend` (vertex color R, 0..1) modulates the global displacement
     /// `windDir * sin(windTime*windFreq + dot(pos.xz, k)) * strength * bend`.
     void setWind(float dirX, float dirY, float dirZ,
                  float strength, float frequency) {
-        windDir_[0] = dirX; windDir_[1] = dirY; windDir_[2] = dirZ;
-        windStrength_ = strength;
-        windFreq_ = frequency;
+        renderer_.setWind(dirX, dirY, dirZ, strength, frequency);
     }
     /// Advance the wind clock by `dt` seconds. Engine drives this with the
     /// frame's virtual delta so offline renders stay deterministic.
-    void advanceWindTime(float dt) { windTime_ += dt; }
-    void resetWindTime() { windTime_ = 0.0f; }
-    float windTime() const { return windTime_; }
+    void advanceWindTime(float dt) { renderer_.advanceWindTime(dt); }
+    void resetWindTime() { renderer_.resetWindTime(); }
+    float windTime() const { return renderer_.windTime(); }
 
     // --- Shadow mapping ---
 
@@ -283,19 +277,17 @@ public:
     /// the square depth texture (e.g. 4096). `pcfTaps` is 1 (single sample)
     /// or 3 (3x3 PCF, default). Defaults are sane — call only to tune.
     void setShadowQuality(int atlasSize, int pcfTaps) {
-        shadowAtlasSize_ = atlasSize > 0 ? atlasSize : 8192;
-        shadowPCFTaps_ = (pcfTaps == 1) ? 1 : 3;
-        shadowAtlasDirty_ = true;
+        renderer_.setShadowQuality(atlasSize, pcfTaps);
     }
-    int shadowAtlasSize() const { return shadowAtlasSize_; }
-    int shadowPCFTaps() const { return shadowPCFTaps_; }
+    int shadowAtlasSize() const { return renderer_.shadowAtlasSize(); }
+    int shadowPCFTaps() const { return renderer_.shadowPCFTaps(); }
 
     /// Editor affordance: when true, every LightNode renders a small
     /// kind-specific marker billboard at its world position (visible in
     /// the 3D FBO, depth-tested against geometry). Also makes lights
     /// pickable via `raycast()`: hits return the LightNode as `hit.node`.
-    void setShowLightIcons(bool on) { showLightIcons_ = on; }
-    bool showLightIcons() const { return showLightIcons_; }
+    void setShowLightIcons(bool on) { renderer_.setShowLightIcons(on); }
+    bool showLightIcons() const { return renderer_.showLightIcons(); }
 
     // --- IBL environment ---
 
@@ -305,20 +297,22 @@ public:
     /// success; on failure the previous environment is kept. Pass an empty
     /// path to clear. Must be called on the GL thread (JS bindings already
     /// satisfy this).
-    bool loadEnvironment(const std::string& hdrPath);
-    void clearEnvironment();
-    bool hasEnvironment() const { return envCubemap_ != 0; }
-    const std::string& environmentPath() const { return envPath_; }
+    bool loadEnvironment(const std::string& hdrPath) {
+        return renderer_.loadEnvironment(hdrPath);
+    }
+    void clearEnvironment() { renderer_.clearEnvironment(); }
+    bool hasEnvironment() const { return renderer_.hasEnvironment(); }
+    const std::string& environmentPath() const { return renderer_.environmentPath(); }
 
     /// Multiplier applied to all IBL contributions (skybox + irradiance +
     /// prefilter). 1.0 = neutral. Tune independently of sun intensity.
-    void  setEnvironmentIntensity(float i) { envIntensity_ = (i < 0.0f) ? 0.0f : i; }
-    float environmentIntensity() const { return envIntensity_; }
+    void  setEnvironmentIntensity(float i) { renderer_.setEnvironmentIntensity(i); }
+    float environmentIntensity() const { return renderer_.environmentIntensity(); }
 
     /// Y-axis rotation of the environment in radians. Useful for aligning
     /// the visible sun in the HDR with the engine's directional sun light.
-    void  setEnvironmentRotation(float r) { envRotation_ = r; }
-    float environmentRotation() const { return envRotation_; }
+    void  setEnvironmentRotation(float r) { renderer_.setEnvironmentRotation(r); }
+    float environmentRotation() const { return renderer_.environmentRotation(); }
 
     // --- Legacy 2D camera (sets ortho projection + top-down view) ---
     void setCameraPosition(float x, float y);
@@ -337,110 +331,11 @@ public:
     bool hasPendingHtmlWork() const;
 
 private:
-    void renderNode(SceneNode* node);
-    void renderMeshNode(MeshNode* mesh);
-    void renderInstancedMeshNode(InstancedMeshNode* mesh);
-    void ensureInstancedMeshPipeline();
-    void renderGaussianSplatNodes();
-    void renderBillboardNode(SceneNode* node);
+    // The renderer walks nodes/camera state directly through its graph
+    // back-reference; it is the only class with private access.
+    friend class SceneRenderer;
+
     void collectDestroyList(SceneNode* node, std::vector<uint32_t>& ids);
-
-    // --- Mesh GL pipeline (lazy init) ---
-    void ensureMeshPipeline();
-    void ensureMeshFBO();
-    void destroyMeshFBO();
-
-    // --- Billboard GL pipeline (lazy init) ---
-    void ensureBillboardPipeline();
-
-    // --- Tonemap pipeline (lazy init) ---
-    void ensureTonemapPipeline();
-    void ensureTonemapFBO();
-    void destroyTonemapFBO();
-    void runTonemapPass();
-
-    // --- Tilt-shift DOF post pass (lazy init) ---
-    void ensureTiltShiftPipeline();
-    void ensureTiltShiftFBOs();
-    void destroyTiltShiftFBOs();
-    void runTiltShiftPass();
-    // Texture the compositor / readback should consume this frame: the
-    // tilt-shift output when the pass ran, else the raw tonemap output.
-    GLuint finalColorTex() const {
-        return (tiltActive_ && postColorTex_) ? postColorTex_ : tonemapColorTex_;
-    }
-
-    // --- Bloom pre-pass (HDR, runs before tonemap) ---
-    void ensureBloomPipeline();
-    void ensureBloomFBOs();
-    void destroyBloomFBOs();
-    // Bright-pass + blur into bloomTex_[0]; returns true if a glow is ready.
-    bool runBloomPrePass();
-
-    // --- Light collection (rebuilt per frame) ---
-    void collectLights(std::vector<LightNode*>& out) const;
-
-    // Bundle of uniform locations the lighting/shadow/IBL upload pokes at.
-    // One instance is filled in for the regular mesh program and another for
-    // the instanced mesh program, so uploadLights can target either.
-    struct MeshProgramLocs {
-        GLint lightCount = -1;
-        GLint lightType = -1;
-        GLint lightPos = -1;
-        GLint lightDir = -1;
-        GLint lightColor = -1;
-        GLint lightIntensity = -1;
-        GLint lightRange = -1;
-        GLint lightSpotCos = -1;
-        GLint lightShadowSlot = -1;
-        GLint lightShadowSlotCount = -1;
-        GLint lightCascadeSplit = -1;
-        GLint shadowAtlas = -1;
-        GLint shadowMatrix = -1;
-        GLint shadowAtlasRect = -1;
-        GLint shadowBias = -1;
-        GLint shadowAtlasTexel = -1;
-        GLint shadowPCFTaps = -1;
-        GLint iblEnabled = -1;
-        GLint iblIrradiance = -1;
-        GLint iblPrefilter = -1;
-        GLint iblBRDF = -1;
-        GLint iblIntensity = -1;
-        GLint iblRotation = -1;
-        GLint iblPrefilterMaxLOD = -1;
-    };
-    MeshProgramLocs meshLocs_;
-    MeshProgramLocs meshInstLocs_;
-    void uploadLights(const std::vector<LightNode*>& lights,
-                      const MeshProgramLocs& locs);
-
-    // --- Shadow pipeline (lazy init) ---
-    // Atlas-tiled shadow maps: a single big depth texture sub-divided into N
-    // square tiles. Each shadow-casting light gets one or more tiles (1 for
-    // directional/spot, 6 for point cube faces, N for CSM cascades). All
-    // mesh fragments sample from one sampler2DShadow keyed by per-light slot.
-    void ensureShadowPipeline();
-    void ensureShadowInstancedPipeline();
-    void ensureShadowAtlas();
-    void destroyShadowAtlas();
-
-    // Decide which lights cast shadows this frame, allocate atlas tiles, and
-    // compute world->shadow-clip matrices. Run after collectLights() and the
-    // camera has been set. Populates the shadow* per-frame arrays.
-    void prepareShadows(const std::vector<LightNode*>& lights);
-
-    // Render every shadow-casting mesh into each allocated atlas tile using
-    // the depth-only shadow program. Leaves shadowAtlasFBO_ unbound on exit.
-    void renderShadowPass();
-
-    // Compute the world-space AABB enclosing all shadow-casting meshes.
-    // Used to fit directional shadow frustums; returns empty BBox if none.
-    struct WorldAABB { float min[3]; float max[3]; bool empty; };
-    WorldAABB computeShadowCasterBounds() const;
-
-    // Render a ringed-disc billboard for one light. Used by the editor-
-    // affordance pass gated on showLightIcons_.
-    void renderLightIcon(LightNode* light);
 
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;
@@ -478,357 +373,14 @@ private:
     // Canvas size for FBO
     int canvasWidth_ = 0, canvasHeight_ = 0;
 
-    // Mesh rendering GL resources (shared across all MeshNodes)
-    GLuint meshProgram_ = 0;
-    GLint uMVP_ = -1;
-    GLint uModel_ = -1;
-    GLint uColor_ = -1;
-    GLint uLightDir_ = -1;
-    GLint uCameraPos_ = -1;
-    GLint uEmissive_ = -1;
-    GLint uUseVertexColor_ = -1;
-    GLint uUseTexture_ = -1;
-    GLint uBaseColorTex_ = -1;
-    GLint uHasTangent_ = -1;
-    GLint uHasNormalMap_ = -1;
-    GLint uHasMRMap_ = -1;
-    GLint uHasAOMap_ = -1;
-    GLint uHasEmissiveMap_ = -1;
-    GLint uNormalMap_ = -1;
-    GLint uMRMap_ = -1;
-    GLint uAOMap_ = -1;
-    GLint uEmissiveMap_ = -1;
-    GLint uReceivesShadow_ = -1;
-    GLint uFogStart_ = -1;
-    GLint uFogEnd_ = -1;
-    GLint uFogColor_ = -1;
-    GLint uAlphaCutoff_ = -1;
-    GLint uNearClip_ = -1;
-    GLint uMetallic_ = -1;
-    GLint uRoughness_ = -1;
-    GLint uEmissiveColor_ = -1;
-    GLint uAmbient_ = -1;
-    GLint uUnlit_ = -1;
-    GLint uTwoSided_ = -1;
-    GLint uSubsurface_ = -1;
-    GLint uWindDir_ = -1;
-    GLint uWindStrength_ = -1;
-    GLint uWindTime_ = -1;
-    GLint uWindFreq_ = -1;
-    GLint uWindMask_ = -1;
-    GLint uLightCount_ = -1;
-    GLint uLightType_ = -1;
-    GLint uLightPos_ = -1;
-    GLint uLightDirArr_ = -1;
-    GLint uLightColor_ = -1;
-    GLint uLightIntensity_ = -1;
-    GLint uLightRange_ = -1;
-    GLint uLightSpotCos_ = -1;
-
-    // Instanced mesh program (vertex shader reads model matrix from per-instance
-    // attributes; fragment shader is shared with the regular mesh program). Only
-    // a small subset of uniforms differ — uVPInst_ replaces the per-mesh uMVP_
-    // and uModel_ since the model matrix lives in the vertex stream.
-    GLuint meshInstancedProgram_ = 0;
-    GLint uInstVP_ = -1;
-    GLint uInstColor_ = -1;
-    GLint uInstEmissive_ = -1;
-    GLint uInstEmissiveColor_ = -1;
-    GLint uInstMetallic_ = -1;
-    GLint uInstRoughness_ = -1;
-    GLint uInstUseVertexColor_ = -1;
-    GLint uInstUseTexture_ = -1;
-    GLint uInstBaseColorTex_ = -1;
-    GLint uInstHasTangent_ = -1;
-    GLint uInstHasNormalMap_ = -1;
-    GLint uInstHasMRMap_ = -1;
-    GLint uInstHasAOMap_ = -1;
-    GLint uInstHasEmissiveMap_ = -1;
-    GLint uInstNormalMap_ = -1;
-    GLint uInstMRMap_ = -1;
-    GLint uInstAOMap_ = -1;
-    GLint uInstEmissiveMap_ = -1;
-    GLint uInstReceivesShadow_ = -1;
-    GLint uInstFogStart_ = -1;
-    GLint uInstFogEnd_ = -1;
-    GLint uInstFogColor_ = -1;
-    GLint uInstNearClip_ = -1;
-    GLint uInstAmbient_ = -1;
-    GLint uInstUnlit_ = -1;
-    GLint uInstLightCount_ = -1;
-    GLint uInstLightType_ = -1;
-    GLint uInstLightPos_ = -1;
-    GLint uInstLightDirArr_ = -1;
-    GLint uInstLightColor_ = -1;
-    GLint uInstLightIntensity_ = -1;
-    GLint uInstLightRange_ = -1;
-    GLint uInstLightSpotCos_ = -1;
-    GLint uInstLightShadowSlot_ = -1;
-    GLint uInstLightShadowSlotCount_ = -1;
-    GLint uInstLightCascadeSplit_ = -1;
-    GLint uInstShadowAtlas_ = -1;
-    GLint uInstShadowMatrix_ = -1;
-    GLint uInstShadowAtlasRect_ = -1;
-    GLint uInstShadowBiasArr_ = -1;
-    GLint uInstShadowAtlasTexel_ = -1;
-    GLint uInstShadowPCFTaps_ = -1;
-    GLint uInstIBLEnabled_ = -1;
-    GLint uInstIBLIrradiance_ = -1;
-    GLint uInstIBLPrefilter_ = -1;
-    GLint uInstIBLBRDF_ = -1;
-    GLint uInstIBLIntensity_ = -1;
-    GLint uInstIBLRotation_ = -1;
-    GLint uInstIBLPrefilterMaxLOD_ = -1;
-    GLint uInstCameraEye_ = -1;
-    GLint uInstModel_ = -1;
-    GLint uInstAtlasGrid_ = -1;
-    GLint uInstAlphaCutoff_ = -1;
-
-    // Mesh FBO
-    GLuint meshFBO_ = 0;
-    GLuint meshColorTex_ = 0;
-    GLuint meshDepthRBO_ = 0;
-    int meshFBOWidth_ = 0, meshFBOHeight_ = 0;
-
-    bool hasMeshContent_ = false;
     FBOTextureCallback fboTexCb_;
     GizmoProvider gizmoProvider_;
 
-    // Distance fog
-    float fogStart_ = 0.0f;
-    float fogEnd_ = 0.0f;
-    float fogColor_[3] = {0.0f, 0.0f, 0.0f};
-
-    // Tonemap + exposure
-    ToneMap toneMap_ = ToneMap::ACES;
-    float exposure_ = 1.0f;
-    float gamma_ = 2.2f;
-    float ambientColor_[3] = {0.03f, 0.03f, 0.03f};
-
-    // Wind sway (vertex shader displacement)
-    float windDir_[3] = {1.0f, 0.0f, 0.0f};
-    float windStrength_ = 0.0f;
-    float windFreq_ = 1.5f;
-    float windTime_ = 0.0f;
-
-    // Editor affordance: render a marker icon per LightNode and include
-    // them in raycast results.
-    bool showLightIcons_ = false;
-
-    // Tonemap FBO (LDR output, consumed by the compositor)
-    GLuint tonemapFBO_ = 0;
-    GLuint tonemapColorTex_ = 0;
-    int tonemapFBOWidth_ = 0, tonemapFBOHeight_ = 0;
-
-    // Tonemap program
-    GLuint tonemapProgram_ = 0;
-    GLuint tonemapVAO_ = 0;
-    GLuint tonemapVBO_ = 0;
-    GLint tmUTex_ = -1;
-    GLint tmUExposure_ = -1;
-    GLint tmUGamma_ = -1;
-    GLint tmUMode_ = -1;
-    GLint tmUBloomTex_ = -1;
-    GLint tmUBloomIntensity_ = -1;
-
-    // --- Tilt-shift DOF post pass ---
-    // Params (see setTiltShift). Disabled by default so the pass is a no-op
-    // and the compositor reads tonemapColorTex_ unchanged.
-    bool  tiltEnabled_     = false;
-    float tiltFocusCenter_ = 0.5f;
-    float tiltFocusWidth_  = 0.12f;
-    float tiltFeather_     = 0.25f;
-    float tiltStrength_    = 2.0f;
-    float tiltSaturation_  = 1.0f;
-    float tiltContrast_    = 1.0f;
-    // Set true by runTiltShiftPass when it produced postColorTex_ this frame;
-    // finalColorTex() keys off it. Cleared when the pass is skipped.
-    bool  tiltActive_      = false;
-
-    // Separable-blur ping-pong (half-res) + full-res composite target.
-    GLuint blurFBO_[2]   = {0, 0};
-    GLuint blurTex_[2]   = {0, 0};
-    int    blurWidth_    = 0, blurHeight_ = 0;
-    GLuint postFBO_      = 0;
-    GLuint postColorTex_ = 0;
-    int    postWidth_    = 0, postHeight_ = 0;
-
-    GLuint blurProgram_  = 0;
-    GLint  blUTex_       = -1;
-    GLint  blUDir_       = -1;   // texel step * radius (vec2)
-    GLuint tiltProgram_  = 0;
-    GLint  tsUSharp_     = -1;
-    GLint  tsUBlur_      = -1;
-    GLint  tsUFocusCenter_ = -1;
-    GLint  tsUFocusWidth_  = -1;
-    GLint  tsUFeather_     = -1;
-    GLint  tsUSaturation_  = -1;
-    GLint  tsUContrast_    = -1;
-
-    // --- HDR bloom pre-pass ---
-    bool  bloomEnabled_   = false;
-    float bloomThreshold_ = 1.0f;
-    float bloomIntensity_ = 0.0f;
-    float bloomStrength_  = 2.0f;
-    bool  bloomActive_    = false;   // bloom ready in bloomTex_[0] this frame
-
-    // Half-res HDR (RGBA16F) bright-pass + ping-pong blur.
-    GLuint bloomFBO_[2] = {0, 0};
-    GLuint bloomTex_[2] = {0, 0};
-    int    bloomWidth_  = 0, bloomHeight_ = 0;
-
-    GLuint bloomBrightProgram_ = 0;
-    GLint  bbpUTex_       = -1;
-    GLint  bbpUThreshold_ = -1;
-
-    // --- Shadow pipeline state ---
-    // Hard cap: 16 atlas tiles. A typical scene budget is 1 directional
-    // (1-4 cascades) + a few spots/points; overflow lights silently render
-    // unshadowed.
-    static constexpr int kMaxShadowTiles = 16;
-
-    int shadowAtlasSize_ = 8192;
-    int shadowPCFTaps_ = 3;       // 1 or 3 (3x3 PCF)
-    bool shadowAtlasDirty_ = true;
-
-    GLuint shadowProgram_ = 0;
-    GLint  shadowUMVP_ = -1;
-    GLuint shadowInstancedProgram_ = 0;
-    GLint  shadowInstULightVP_ = -1;
-    GLint  shadowInstUModel_ = -1;
-    GLuint shadowAtlasFBO_ = 0;
-    GLuint shadowAtlasTex_ = 0;
-    int    shadowAtlasAllocated_ = 0;  // current tex side; 0 if none
-
-    // Per-frame shadow data, populated by prepareShadows(). Indexed by slot.
-    int   shadowTileCount_ = 0;
-    float shadowMatrixCamRel_[kMaxShadowTiles][16] = {};
-    float shadowAtlasRect_[kMaxShadowTiles][4]     = {};   // origin.xy, size.xy in [0,1]
-    float shadowBias_[kMaxShadowTiles][2]          = {};   // const, normal-bias world units
-
-    // Per-light shadow slot (-1 if unshadowed). Indexed by light index.
-    int lightShadowSlot_[32] = {};
-    // For directional CSM: 1..4 cascades, each occupies a contiguous slot.
-    int   lightShadowSlotCount_[32] = {};
-    // Cascade FAR distances in view space; .x = cascade 0 far, etc. The
-    // last cascade's far is implicitly +inf (any fragment further than
-    // .z still samples the last cascade).
-    float lightCascadeSplit_[32][4] = {};
-
-    // For prepareShadows: matrices to render into the atlas (one per tile).
-    // World-space (no camera-relative bake) — used by the shadow caster pass.
-    float shadowRenderMatrix_[kMaxShadowTiles][16] = {};
-    // Which light owns each tile, for routing the caster draws.
-    LightNode* shadowTileLight_[kMaxShadowTiles] = {};
-
-    // Cache per-frame shadow caster list; rebuilt at top of prepareShadows.
-    std::vector<MeshNode*> shadowCasters_;
-    std::vector<InstancedMeshNode*> shadowInstancedCasters_;
-
-    // Mesh shader uniform locations for shadow data.
-    GLint uShadowAtlas_ = -1;
-    GLint uShadowMatrix_ = -1;
-    GLint uShadowAtlasRect_ = -1;
-    GLint uShadowBiasArr_ = -1;
-    GLint uLightShadowSlot_ = -1;
-    GLint uLightShadowSlotCount_ = -1;
-    GLint uLightCascadeSplit_ = -1;
-    GLint uShadowAtlasTexel_ = -1;
-    GLint uShadowPCFTaps_ = -1;
-
-    // 1×1 fallback textures bound to sampler units when the real textures
-    // aren't available. Prevents GL_INVALID_OPERATION on strict core-profile
-    // drivers (macOS GL 4.1) when IBL/shadows aren't active: unbound samplers
-    // alias unit 0 and cross sampler types (sampler2D / samplerCube /
-    // sampler2DShadow) which the spec forbids at draw time.
-    GLuint fallback2D_ = 0;       // white RGBA8 2D
-    GLuint fallbackCube_ = 0;     // white RGBA8 cube
-    GLuint fallbackShadow_ = 0;   // depth24 2D with COMPARE_REF_TO_TEXTURE
-    void ensureFallbackTextures();
-
-    // IBL uniforms in the mesh program
-    GLint uIBLEnabled_ = -1;
-    GLint uIBLIrradiance_ = -1;
-    GLint uIBLPrefilter_ = -1;
-    GLint uIBLBRDF_ = -1;
-    GLint uIBLIntensity_ = -1;
-    GLint uIBLRotation_ = -1;
-    GLint uIBLPrefilterMaxLOD_ = -1;
-
-    // --- IBL environment ---
-    void ensureEnvConvertPipeline();
-    bool runEquirectToCubemap(GLuint equirectTex, GLuint cubemap, int faceSize);
-    void ensureSkyboxPipeline();
-    void renderSkyboxPass();
-    void ensureIrradiancePipeline();
-    bool runIrradianceConvolution();
-    void ensurePrefilterPipeline();
-    bool runPrefilterConvolution();
-    void ensureBRDFLUT();           // 2D RG16F LUT, baked once on first need
-
-    GLuint envCubemap_ = 0;          // 512² RGBA16F cube, 6 faces, mipmapped
-    int    envCubemapSize_ = 0;
-    GLuint envIrradianceCube_ = 0;   // 32² RGBA16F cube, cosine-convolved diffuse
-    int    envIrradianceSize_ = 32;
-    GLuint envPrefilterCube_ = 0;    // 256² RGBA16F cube, GGX-prefilter per mip
-    int    envPrefilterSize_ = 256;
-    int    envPrefilterMips_ = 6;    // mip 0..5 → roughness 0.0, 0.2, 0.4, 0.6, 0.8, 1.0
-    GLuint brdfLUT_ = 0;             // 512² RG16F, env-independent (Karis split-sum)
-    int    brdfLUTSize_ = 512;
-    std::string envPath_;
-    float  envIntensity_ = 1.0f;
-    float  envRotation_ = 0.0f;
-
-    // Equirect→cubemap converter (lazy init)
-    GLuint envConvertProgram_ = 0;
-    GLuint envConvertVAO_ = 0;
-    GLuint envConvertVBO_ = 0;
-    GLuint envConvertFBO_ = 0;
-    GLint  envCvUFace_ = -1;
-    GLint  envCvUEquirect_ = -1;
-
-    // Irradiance convolver (lazy init, reuses envConvert FBO/VAO)
-    GLuint irrConvProgram_ = 0;
-    GLint  irrCvUEnv_ = -1;
-    GLint  irrCvUFace_ = -1;
-
-    // GGX prefilter (lazy init, reuses envConvert FBO/VAO)
-    GLuint prefilterProgram_ = 0;
-    GLint  pfUEnv_ = -1;
-    GLint  pfUFace_ = -1;
-    GLint  pfURoughness_ = -1;
-    GLint  pfUEnvSize_ = -1;
-
-    // BRDF LUT bake (lazy init, reuses envConvert FBO/VAO)
-    GLuint brdfLUTProgram_ = 0;
-
-    // Skybox draw pipeline (lazy init)
-    GLuint skyboxProgram_ = 0;
-    GLuint skyboxVAO_ = 0;
-    GLuint skyboxVBO_ = 0;
-    GLint  skyUViewToWorld_ = -1;
-    GLint  skyUTanHalfFovY_ = -1;
-    GLint  skyUAspect_ = -1;
-    GLint  skyUEnv_ = -1;
-    GLint  skyUIntensity_ = -1;
-    GLint  skyURotation_ = -1;
-
-    // --- Billboard pipeline (lazy init) ---
-    GLuint bbProgram_ = 0;
-    GLuint bbVAO_ = 0;
-    GLuint bbVBO_ = 0;
-    GLint bbUVP_ = -1;
-    GLint bbUAnchorRel_ = -1;
-    GLint bbURight_ = -1;
-    GLint bbUUp_ = -1;
-    GLint bbUHalfSize_ = -1;
-    GLint bbUShapeMode_ = -1;
-    GLint bbUColor_ = -1;
-    GLint bbUStroke_ = -1;
-    GLint bbUStrokeWidth_ = -1;
-    GLint bbUTex_ = -1;
-    GLint bbUUvMin_ = -1;
-    GLint bbUUvMax_ = -1;
+    // GL rendering: pipelines, FBOs, shadows, IBL, post stack. The renderer
+    // never touches graph state in its destructor, so member order is not
+    // load-bearing; it lives last simply to keep the hot node/camera state
+    // at stable offsets.
+    SceneRenderer renderer_{*this};
 };
 
 } // namespace bro::scene
