@@ -292,8 +292,13 @@ static JSValue js_wheel(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     double dx = 0;
     if (argc >= 4) JS_ToFloat64(ctx, &dx, argv[3]);
 
+    // wheel()'s dx/dy are documented (and JS-caller-facing) as the resulting
+    // WheelEvent's deltaX/deltaY, i.e. already DOM convention. handleWheel()
+    // expects raw SDL-convention deltas (as real SDL wheel events carry) and
+    // negates them once to produce the DOM-facing event — so negate here
+    // first to cancel that out and hand callers what they actually asked for.
     engine->handleWheel(static_cast<float>(x), toScreenY(engine, y),
-                        static_cast<float>(dx), static_cast<float>(dy));
+                        static_cast<float>(-dx), static_cast<float>(-dy));
     engine->flush();
     return JS_UNDEFINED;
 }
