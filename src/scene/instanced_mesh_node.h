@@ -156,6 +156,16 @@ public:
 
     bool hasVertexColors() const { return hasVertexColors_; }
 
+    /// Whether the per-vertex color stream tints albedo. See
+    /// MeshNode::setVertexColorTint — forcing it off keeps a color buffer
+    /// as the wind-bend channel only, so instanced foliage sways without
+    /// the bend gradient washing its material colour.
+    void setVertexColorTint(bool b) { vertexColorTint_ = b ? 1 : 0; }
+    bool vertexColorTintEnabled() const {
+        return (vertexColorTint_ < 0) ? hasVertexColors_
+                                      : (vertexColorTint_ != 0 && hasVertexColors_);
+    }
+
     /// Bind VAO and issue glDrawElementsInstanced. Used by the forward pass
     /// after the caller has already bound the appropriate program and uploaded
     /// material/camera uniforms. Returns true if anything drew.
@@ -205,6 +215,8 @@ private:
 
     // Material
     bool hasVertexColors_ = false;
+    // Albedo vertex-color tint: -1 auto, 0 forced off, 1 forced on.
+    int  vertexColorTint_ = -1;
     float color_[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     float emissive_ = 0.0f;
     float emissiveColor_[3] = {1.0f, 1.0f, 1.0f};

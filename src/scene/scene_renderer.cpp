@@ -3461,7 +3461,7 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh) {
     if (uTwoSided_ >= 0)   glUniform1i(uTwoSided_, mesh->twoSided() ? 1 : 0);
     if (uSubsurface_ >= 0) glUniform1f(uSubsurface_, mesh->subsurface());
     if (uAlphaCutoff_ >= 0) glUniform1f(uAlphaCutoff_, mesh->alphaCutoff());
-    glUniform1i(uUseVertexColor_, mesh->hasVertexColors() ? 1 : 0);
+    glUniform1i(uUseVertexColor_, mesh->vertexColorTintEnabled() ? 1 : 0);
     glUniform1f(uNearClip_, mesh->nearClipDist());
     if (uWindMask_ >= 0) glUniform1f(uWindMask_, mesh->windMask());
 
@@ -3556,7 +3556,7 @@ void SceneRenderer::renderInstancedMeshNode(InstancedMeshNode* mesh) {
     glUniform1f(uInstMetallic_, mesh->metallic());
     glUniform1f(uInstRoughness_, mesh->roughness());
     if (uInstUnlit_ >= 0) glUniform1i(uInstUnlit_, mesh->unlit() ? 1 : 0);
-    glUniform1i(uInstUseVertexColor_, mesh->hasVertexColors() ? 1 : 0);
+    glUniform1i(uInstUseVertexColor_, mesh->vertexColorTintEnabled() ? 1 : 0);
     glUniform1f(uInstNearClip_, mesh->nearClipDist());
 
     bool bindTex = mesh->hasBaseColorTexture();

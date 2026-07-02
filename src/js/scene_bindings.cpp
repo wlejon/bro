@@ -1327,6 +1327,15 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         }
         JS_FreeValue(ctx, acVal);
 
+        // Whether the per-vertex color stream tints albedo. Default (unset)
+        // auto-tints iff a color buffer is present. Pass false to keep a
+        // color buffer solely as the wind-bend channel (vertex color R) —
+        // foliage sways yet keeps its material/textured colour instead of
+        // being washed by the bend gradient, so no stripVertexColors hack.
+        JSValue vctVal = JS_GetPropertyStr(ctx, opts, "vertexColorTint");
+        if (!JS_IsUndefined(vctVal)) node->setVertexColorTint(JS_ToBool(ctx, vctVal) == 1);
+        JS_FreeValue(ctx, vctVal);
+
         // Draw mode — 'lines' switches to GL_LINES (indices = endpoint pairs)
         // and flips the node to unlit + non-shadow-casting. Default 'triangles'.
         // Set before castsShadow/unlit so explicit overrides win.
@@ -1687,6 +1696,10 @@ static JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
         JSValue acV = JS_GetPropertyStr(ctx, opts, "alphaCutoff");
         if (!JS_IsUndefined(acV)) node->setAlphaCutoff((float)jsNum(ctx, acV));
         JS_FreeValue(ctx, acV);
+
+        JSValue vctV = JS_GetPropertyStr(ctx, opts, "vertexColorTint");
+        if (!JS_IsUndefined(vctV)) node->setVertexColorTint(JS_ToBool(ctx, vctV) == 1);
+        JS_FreeValue(ctx, vctV);
 
         JSValue dsV = JS_GetPropertyStr(ctx, opts, "doubleSided");
         if (!JS_IsUndefined(dsV)) node->setDoubleSided(JS_ToBool(ctx, dsV) == 1);

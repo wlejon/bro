@@ -68,6 +68,19 @@ public:
     /// Whether the current mesh has per-vertex colors (set after uploadToGPU).
     bool hasVertexColors() const { return hasVertexColors_; }
 
+    /// Whether the per-vertex color stream tints the albedo. Tri-state:
+    /// -1 (default) auto — tint iff the mesh has a color buffer, the
+    /// historical behavior. 0/1 explicitly force it off/on. Forcing it off
+    /// lets a mesh carry a color buffer purely for the wind-bend channel
+    /// (vertex color R, read independently by the wind VS) without the
+    /// remaining channels washing the albedo — so foliage sways from wind
+    /// yet keeps its flat/material/textured colour instead of tinting red.
+    void setVertexColorTint(bool b) { vertexColorTint_ = b ? 1 : 0; }
+    bool vertexColorTintEnabled() const {
+        return (vertexColorTint_ < 0) ? hasVertexColors_
+                                      : (vertexColorTint_ != 0 && hasVertexColors_);
+    }
+
     /// Upload an RGBA8 baseColor texture (tightly packed, top-left origin).
     /// Pass width=0 / height=0 / data=nullptr to clear. Takes a copy; the
     /// caller's buffer can be freed immediately after.
@@ -236,6 +249,9 @@ private:
 
     // Material
     bool hasVertexColors_ = false;
+    // Albedo vertex-color tint: -1 auto (tint iff color buffer present),
+    // 0 forced off, 1 forced on. See setVertexColorTint.
+    int  vertexColorTint_ = -1;
     float color_[4] = {1.0f, 1.0f, 1.0f, 1.0f};
     float emissive_ = 0.0f;
     float emissiveColor_[3] = {1.0f, 1.0f, 1.0f};
