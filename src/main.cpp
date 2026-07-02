@@ -19,6 +19,7 @@
 #include <share.h>
 #include <sys/stat.h>
 #include <process.h>
+#include <crtdbg.h>
 #else
 #include <unistd.h>
 #include <climits>
@@ -147,6 +148,21 @@ static void printUsage() {
 
 int main(int argc, char* argv[]) {
     redirectLogToFile();
+
+#if defined(_WIN32) && defined(_DEBUG)
+    // Route the Debug CRT's assert()/error report dialogs ("Debug Error!
+    // abort() has been called", Abort/Retry/Ignore) to stderr — which
+    // redirectLogToFile just pointed at bro.log — instead of a modal box.
+    // bro.exe is a GUI-subsystem app, so without this a Debug assertion
+    // blocks invisible behind the game window instead of exiting. Unlike
+    // bro-headless we deliberately do NOT call SetErrorMode(SEM_NOGPFAULT-
+    // ERRORBOX): that would bypass WER and lose the %LOCALAPPDATA%\
+    // CrashDumps minidumps used for post-mortem debugging.
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _CrtSetReportMode(_CRT_ERROR, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ERROR, _CRTDBG_FILE_STDERR);
+#endif
 
     if (argc >= 2 && (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)) {
         printUsage();

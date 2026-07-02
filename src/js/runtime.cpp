@@ -491,6 +491,12 @@ Runtime::Runtime()
 
 #ifndef NDEBUG
     JS_SetDumpFlags(rt_, JS_DUMP_LEAKS | JS_DUMP_ATOM_LEAKS);
+    // The leak dumps print to stdout with plain printf inside JS_FreeRuntime,
+    // immediately before its `assert(list_empty(&rt->gc_obj_list))`. When
+    // stdout is a pipe it is fully buffered, and the assert's abort() exits
+    // without flushing — the dump that names the leaked objects is exactly
+    // the output that gets lost. Unbuffered stdout in Debug keeps it.
+    setvbuf(stdout, nullptr, _IONBF, 0);
 #endif
 
     ctx_ = JS_NewContext(rt_);
