@@ -302,21 +302,44 @@ void Timers::install(JSContext* ctx, Timers* instance)
         .function("requestAnimationFrame", js_requestAnimationFrame, 1)
         .function("cancelAnimationFrame", js_cancelAnimationFrame, 1);
 
-    // Install performance.now() on the EXISTING performance object (brokit
-    // creates it with mark/measure/getEntries*, and we just need to override
-    // .now to return engine-tracked time — real in windowed, virtual in
-    // headless). Using Namespace here would replace the whole object and
-    // clobber brokit's User Timing additions.
+    // Install performance.now() so it returns engine-tracked time (real in
+    // windowed, virtual in headless). QuickJS's own built-in `performance`
+    // (JS_AddPerformance in quickjs.c) defines `.now` with JS_PROP_ENUMERABLE
+    // only — no JS_PROP_WRITABLE/CONFIGURABLE — so it can never be overwritten
+    // in place; a plain JS_SetPropertyStr against it silently no-ops (sloppy-
+    // mode [[Set]] against a non-writable property just returns false). The
+    // outer `performance` property on globalThis IS writable+configurable
+    // (brokit/QuickJS both define it that way), so instead of mutating the
+    // existing object we build a fresh one — copying over any extra
+    // properties brokit's polyfill already added (mark/measure/getEntries*/
+    // timeOrigin) — and replace globalThis.performance wholesale.
     JSValue global = JS_GetGlobalObject(ctx);
-    JSValue perf = JS_GetPropertyStr(ctx, global, "performance");
-    if (JS_IsUndefined(perf) || JS_IsNull(perf)) {
-        JS_FreeValue(ctx, perf);
-        perf = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, global, "performance", JS_DupValue(ctx, perf));
+    JSValue oldPerf = JS_GetPropertyStr(ctx, global, "performance");
+    JSValue newPerf = JS_NewObject(ctx);
+
+    if (!JS_IsUndefined(oldPerf) && !JS_IsNull(oldPerf)) {
+        JSPropertyEnum* props = nullptr;
+        uint32_t count = 0;
+        if (JS_GetOwnPropertyNames(ctx, &props, &count, oldPerf,
+                                   JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+            for (uint32_t i = 0; i < count; i++) {
+                JSAtom atom = props[i].atom;
+                const char* name = JS_AtomToCString(ctx, atom);
+                if (name && strcmp(name, "now") != 0) {
+                    JSValue v = JS_GetProperty(ctx, oldPerf, atom);
+                    JS_SetPropertyStr(ctx, newPerf, name, v);
+                }
+                if (name) JS_FreeCString(ctx, name);
+                JS_FreeAtom(ctx, atom);
+            }
+            js_free(ctx, props);
+        }
     }
-    JS_SetPropertyStr(ctx, perf, "now",
+    JS_FreeValue(ctx, oldPerf);
+
+    JS_SetPropertyStr(ctx, newPerf, "now",
         JS_NewCFunction(ctx, js_performanceNow, "now", 0));
-    JS_FreeValue(ctx, perf);
+    JS_SetPropertyStr(ctx, global, "performance", newPerf);
     JS_FreeValue(ctx, global);
 }
 
