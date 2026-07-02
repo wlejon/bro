@@ -479,6 +479,32 @@ static JSValue js_tile_worldToCell(JSContext* ctx, JSValueConst this_val, int ar
     return out;
 }
 
+// cellCenterWorldXZ(x, y) -> {x, z} | null — topology-aware world-space cell center.
+static JSValue js_tile_cellCenterWorldXZ(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || argc < 2) return JS_NULL;
+    float px = 0, pz = 0;
+    w->world->cellCenterWorldXZ(argInt(ctx, argv[0]), argInt(ctx, argv[1]), px, pz);
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "x", JS_NewFloat64(ctx, px));
+    JS_SetPropertyStr(ctx, out, "z", JS_NewFloat64(ctx, pz));
+    return out;
+}
+
+// worldBounds() -> {minX, minZ, maxX, maxZ} | null — topology-aware grid extent.
+static JSValue js_tile_worldBounds(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world) return JS_NULL;
+    float minX = 0, minZ = 0, maxX = 0, maxZ = 0;
+    w->world->worldBounds(minX, minZ, maxX, maxZ);
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "minX", JS_NewFloat64(ctx, minX));
+    JS_SetPropertyStr(ctx, out, "minZ", JS_NewFloat64(ctx, minZ));
+    JS_SetPropertyStr(ctx, out, "maxX", JS_NewFloat64(ctx, maxX));
+    JS_SetPropertyStr(ctx, out, "maxZ", JS_NewFloat64(ctx, maxZ));
+    return out;
+}
+
 // ---- picking / collision / nav-grid sync --------------------------------
 
 static bool readVec3Arg(JSContext* ctx, JSValueConst v, bromath::Vec3& out) {
@@ -548,14 +574,12 @@ static int stampNavGrid(scene::TileWorld* world, brogameagent::NavGrid* ng,
                         uint32_t blockMask, float padding) {
     const auto& cfg = world->config();
     const float cs = cfg.cellSize;
-    const float ox = cfg.origin.x, oz = cfg.origin.z;
     int blocked = 0;
     for (int y = 0; y < cfg.height; ++y) {
         for (int x = 0; x < cfg.width; ++x) {
             if (world->isWalkable(x, y, blockMask)) continue;
             brogameagent::AABB box;
-            box.cx = ox + (x + 0.5f) * cs;
-            box.cz = oz + (y + 0.5f) * cs;
+            world->cellCenterWorldXZ(x, y, box.cx, box.cz);
             box.hw = cs * 0.49f;       // stays within the one cell, no bleed
             box.hd = cs * 0.49f;
             ng->addObstacle(box, padding);
@@ -590,8 +614,8 @@ static JSValue js_tile_toNavGrid(JSContext* ctx, JSValueConst this_val, int argc
         padding = (float)qjsbind::get_prop_number(ctx, argv[0], "padding", 0);
     }
     const float cs = cfg.cellSize;
-    const float minX = cfg.origin.x, minZ = cfg.origin.z;
-    const float maxX = minX + cfg.width * cs, maxZ = minZ + cfg.height * cs;
+    float minX = 0, minZ = 0, maxX = 0, maxZ = 0;
+    w->world->worldBounds(minX, minZ, maxX, maxZ);
     JSValue gridVal = createNavGridJS(ctx, minX, minZ, maxX, maxZ, cs);
     if (brogameagent::NavGrid* ng = navGridFromJS(ctx, gridVal))
         stampNavGrid(w->world.get(), ng, mask, padding);
@@ -677,6 +701,8 @@ void TileBindings::install(JSContext* ctx) {
             return self->world ? self->world->hasFlag(x, y, (uint32_t)bit) : false;
         })
         .method_raw("worldToCell", js_tile_worldToCell, 2)
+        .method_raw("cellCenterWorldXZ", js_tile_cellCenterWorldXZ, 2)
+        .method_raw("worldBounds", js_tile_worldBounds, 0)
         .method_raw("raycastCell", js_tile_raycastCell, 3)
         .method_raw("sampleHeight", js_tile_sampleHeight, 2)
         .method_raw("isWalkable", js_tile_isWalkable, 3)

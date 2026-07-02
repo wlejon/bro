@@ -4,9 +4,9 @@
 //
 // A TileWorld renders a `bro::tile` grid as chunked, flat-topped tile geometry
 // inside the 3D scene. It is the scene-side bridge over the pure tile core:
-// authoring/query happen on a square (hex planned) grid of cells, each carrying
-// a tile id per named layer, a signed elevation level, and a 32-bit flag mask;
-// the world meshes that grid into chunk MeshNodes parented under one root node.
+// authoring/query happen on a square or hex grid of cells, each carrying a tile
+// id per named layer, a signed elevation level, and a 32-bit flag mask; the
+// world meshes that grid into chunk MeshNodes parented under one root node.
 //
 // Because tiles are real 3D geometry, "2D top-down", "isometric", and "3D" are
 // just camera choices (see scene.setCamera — orthographic + tilt gives iso) over
@@ -60,10 +60,12 @@ class SceneGraph {
    * @param {Object} opts
    * @param {number} [opts.width=16]  - grid size in cells (X)
    * @param {number} [opts.height=16] - grid size in cells (Z)
-   * @param {string} [opts.topology="square"] - "square" or "hex" (hex WIP)
+   * @param {string} [opts.topology="square"] - "square" or "hex". Hex cells are
+   *        pointy-top regular hexagons (flat left/right sides, points top/bottom).
    * @param {string[]} [opts.layers=["ground"]] - named tile layers; layer 0 is
    *                                               the ground/solidity layer
-   * @param {number} [opts.cellSize=1.0]   - world units per cell along X/Z
+   * @param {number} [opts.cellSize=1.0]   - world units per cell along X/Z.
+   *        In hex mode this is the hexagon's edge length (== its circumradius).
    * @param {number} [opts.heightStep=0.5] - world units per elevation level (Y)
    * @param {number} [opts.chunkSize=16]   - cells per chunk edge (remesh granularity)
    * @param {number} [opts.baseLevel=0]    - elevation the map-edge / hole skirt drops to
@@ -175,6 +177,21 @@ class TileWorld {
    */
   worldToCell(worldX, worldZ) {}
 
+  /**
+   * World-space XZ center of cell (x, y) — topology-aware (square cell center
+   * or hex pointy-top pixel center). Returns { x, z }. Useful for camera
+   * framing, minimaps, and object anchoring without reimplementing the hex
+   * pixel-center formula in JS.
+   */
+  cellCenterWorldXZ(x, y) {}
+
+  /**
+   * Axis-aligned XZ bounding box of the whole grid in world space, topology-
+   * aware (a hex grid's extent isn't a clean width*cellSize box — this sweeps
+   * the actual border-cell corners). Returns { minX, minZ, maxX, maxZ }.
+   */
+  worldBounds() {}
+
   // --- Picking / collision / navigation -------------------------------------
 
   /**
@@ -197,6 +214,11 @@ class TileWorld {
    *          `cell`/`x`/`y` is the hit cell, `point` the world hit position,
    *          `side` true when a cliff face was struck (not a flat top). null on
    *          a miss.
+   *
+   * Hex worlds use a marching+bisection approximation instead of square's exact
+   * analytic DDA (hex neighbour steps aren't axis-aligned, so there's no clean
+   * equivalent) — precision is bounded but more than sufficient for interactive
+   * picking.
    */
   raycastCell(origin, dir, maxDist) {}
 

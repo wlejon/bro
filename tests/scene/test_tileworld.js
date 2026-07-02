@@ -56,6 +56,15 @@ if (!scene) {
     assert(cell !== null && cell.x === 3 && cell.y === 3, 'worldToCell maps world->cell');
     assert(world.worldToCell(-10, -10) === null, 'worldToCell out of bounds -> null');
 
+    // cellCenterWorldXZ / worldBounds (square).
+    const center33 = world.cellCenterWorldXZ(3, 3);
+    assert(Math.abs(center33.x - 3.5) < 1e-4 && Math.abs(center33.z - 3.5) < 1e-4,
+        'cellCenterWorldXZ matches square cell center');
+    const sqBounds = world.worldBounds();
+    assert(Math.abs(sqBounds.minX) < 1e-4 && Math.abs(sqBounds.minZ) < 1e-4 &&
+        Math.abs(sqBounds.maxX - 8) < 1e-4 && Math.abs(sqBounds.maxZ - 8) < 1e-4,
+        'worldBounds matches square grid extent');
+
     // raycastCell: straight down onto a known-solid, flat (elevation 0) cell.
     const hit = world.raycastCell([3.5, 10, 3.5], [0, -1, 0], 100);
     assert(hit !== null, 'raycastCell hits a solid cell from above');
@@ -144,6 +153,88 @@ if (!scene) {
     assert(typeof advanced === 'boolean', 'advance returns boolean');
 
     atlasWorld.destroy();
+
+    // ---- hex-topology world ------------------------------------------------
+    const hexWorld = scene.createTileWorld({
+        width: 6, height: 6,
+        topology: 'hex',
+        cellSize: 1.0, heightStep: 0.5, chunkSize: 4,
+        palette: new Float32Array([
+            0, 0, 0, 0,
+            0.3, 0.6, 0.3, 1,
+        ]),
+    });
+    assert(hexWorld !== null, 'hex createTileWorld succeeds');
+    assert(hexWorld.width === 6 && hexWorld.height === 6, 'hex world reflects dimensions');
+
+    hexWorld.fillTile(0, 0, 5, 5, 1, 0);
+    hexWorld.rebuild();
+    const flatVerts = hexWorld.vertexCount;
+    const flatTris = hexWorld.triangleCount;
+    assert(flatVerts > 0, 'hex world produces geometry (flat field)');
+    assert(flatTris > 0, 'hex world produces triangles (flat field)');
+
+    // Raising one cell should add cliff geometry (more verts/tris than a flat field).
+    hexWorld.setElevation(2, 2, 2);
+    hexWorld.rebuild();
+    assert(hexWorld.vertexCount > flatVerts, 'raising a cell adds cliff vertices');
+    assert(hexWorld.triangleCount > flatTris, 'raising a cell adds cliff triangles');
+
+    // raycastCell straight down onto known cell centers, for cells whose world
+    // center is computable via the JS-visible axial formula (mirrors
+    // TileWorld::cellCenterLocal's hex branch).
+    const R = 1.0;
+    const sqrt3 = Math.sqrt(3);
+    function hexCenter(x, y) {
+        const q = x - (y - (y & 1)) / 2;
+        const r = y;
+        return { px: R * sqrt3 * (q + r * 0.5), pz: R * 1.5 * r };
+    }
+    for (const [hx, hy] of [[0, 0], [3, 2], [5, 5], [1, 4]]) {
+        const c = hexCenter(hx, hy);
+        const hHit = hexWorld.raycastCell([c.px, 10, c.pz], [0, -1, 0], 100);
+        assert(hHit !== null, `hex raycastCell hits cell (${hx},${hy})`);
+        assert(hHit.x === hx && hHit.y === hy, `hex raycastCell resolves cell (${hx},${hy}), got (${hHit && hHit.x},${hHit && hHit.y})`);
+
+        // cellCenterWorldXZ should agree with the JS-side axial formula.
+        const cc = hexWorld.cellCenterWorldXZ(hx, hy);
+        assert(Math.abs(cc.x - c.px) < 1e-3 && Math.abs(cc.z - c.pz) < 1e-3,
+            `hex cellCenterWorldXZ matches axial formula for (${hx},${hy})`);
+    }
+
+    // worldBounds (hex): sweeps actual hex corners, so it should extend past
+    // every tested cell center by at least the hex circumradius R on each side.
+    const hexBounds = hexWorld.worldBounds();
+    assert(hexBounds.minX < 0 - 1e-3 && hexBounds.minZ < 0 - 1e-3,
+        'hex worldBounds min extends past cell (0,0) center for the hex corners');
+    const farCenter = hexCenter(5, 5);
+    assert(hexBounds.maxX > farCenter.px && hexBounds.maxZ > farCenter.pz,
+        'hex worldBounds max extends past the farthest cell center');
+
+    // Cliff hit: a ray descending just past the raised cell's edge should strike
+    // its cliff face, not the flat neighbour top.
+    const raised = hexCenter(2, 2);
+    const cliffHit = hexWorld.raycastCell([raised.px + 0.85, 10, raised.pz], [0, -1, 0], 100);
+    assert(cliffHit !== null, 'hex raycastCell hits near a cliff edge');
+
+    // Object placement on a hex world (smoke test the hex branch of rebuildObjectKind).
+    const hexCone = Mesh.cone(0.2, 0.4, 6, 1, true);
+    const hexKind = hexWorld.addObjectKind(hexCone, { color: [0.6, 0.4, 0.2, 1] });
+    hexWorld.addObject(hexKind, 1, 1, {});
+    assert(hexWorld.objectCount(hexKind) === 1, 'hex world addObject/objectCount round-trip');
+    hexWorld.rebuildObjects();
+
+    // Nav-grid interop (worldBounds + cellCenterWorldXZ). NavGrid.isWalkable takes
+    // WORLD-space coordinates, so query at the hex cells' actual pixel centers.
+    hexWorld.setFlag(2, 2, 1, true);
+    assert(hexWorld.isWalkable(2, 2, 1) === false, 'hex isWalkable respects blockMask');
+    const hexNav = hexWorld.toNavGrid({ blockMask: 1 });
+    assert(hexNav !== null, 'hex toNavGrid returns a nav grid');
+    assert(hexNav.isWalkable(raised.px, raised.pz) === false, 'hex nav grid reflects blocked cell');
+    const openCenter = hexCenter(0, 0);
+    assert(hexNav.isWalkable(openCenter.px, openCenter.pz) === true, 'hex nav grid reflects open cell');
+
+    hexWorld.destroy();
 }
 
 document.body.removeChild(canvas);

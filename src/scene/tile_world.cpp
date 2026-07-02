@@ -8,7 +8,9 @@
 #include "tile/autotile.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
 
 namespace bro::scene {
 
@@ -62,6 +64,81 @@ static void addQuad(bromesh::MeshData& m,
     }
 }
 
+// Triangle fan from pts[0] across a convex, planar polygon (`count` >= 3), winding
+// auto-fixed against `n` the same way addQuad does (checked once on the first
+// triangle and reused, since a planar convex fan's winding is uniform).
+static void addFan(bromesh::MeshData& m, const Vec3* pts, const float* const* cols,
+                   const float* uvs /* 2*count floats or nullptr */, int count,
+                   const Vec3& n) {
+    Vec3 e0{pts[1].x - pts[0].x, pts[1].y - pts[0].y, pts[1].z - pts[0].z};
+    Vec3 e1{pts[2].x - pts[0].x, pts[2].y - pts[0].y, pts[2].z - pts[0].z};
+    Vec3 gn{e0.y * e1.z - e0.z * e1.y,
+            e0.z * e1.x - e0.x * e1.z,
+            e0.x * e1.y - e0.y * e1.x};
+    bool flip = (gn.x * n.x + gn.y * n.y + gn.z * n.z) < 0.0f;
+
+    uint32_t base = static_cast<uint32_t>(m.positions.size() / 3);
+    for (int i = 0; i < count; ++i) {
+        m.positions.push_back(pts[i].x);
+        m.positions.push_back(pts[i].y);
+        m.positions.push_back(pts[i].z);
+        m.normals.push_back(n.x);
+        m.normals.push_back(n.y);
+        m.normals.push_back(n.z);
+        m.colors.push_back(cols[i][0]);
+        m.colors.push_back(cols[i][1]);
+        m.colors.push_back(cols[i][2]);
+        m.colors.push_back(cols[i][3]);
+        if (uvs) {
+            m.uvs.push_back(uvs[i * 2 + 0]);
+            m.uvs.push_back(uvs[i * 2 + 1]);
+        }
+    }
+    for (int i = 1; i + 1 < count; ++i) {
+        if (!flip)
+            m.indices.insert(m.indices.end(), {base, base + i, base + static_cast<uint32_t>(i + 1)});
+        else
+            m.indices.insert(m.indices.end(), {base, base + static_cast<uint32_t>(i + 1), base + i});
+    }
+}
+
+// -------------------------------------------------------------------------
+// Hex geometry — pointy-top regular hexagons, cellSize == circumradius/edge
+// length R. Corner i sits between canonical hex neighbour directions i-1 and i
+// (see coord.h / coord.cpp kHexAxial), at angle (30 - 60*i) degrees:
+//   corner[i] = R * (cos(30-60i deg), sin(30-60i deg))
+// Direction unit vectors (independent of R) follow the same angle convention,
+// used for cliff-face outward normals.
+// -------------------------------------------------------------------------
+
+namespace {
+struct Vec2 { float x, z; };
+
+constexpr float kDeg2Rad = 3.14159265358979323846f / 180.0f;
+
+// Computed at namespace-init time (not constexpr — std::cos/sin aren't constexpr
+// pre-C++23 in this toolchain); cheap, done once.
+const std::array<Vec2, 6> kHexCorner = [] {
+    std::array<Vec2, 6> c{};
+    for (int i = 0; i < 6; ++i) {
+        float a = (30.0f - 60.0f * static_cast<float>(i)) * kDeg2Rad;
+        c[i] = {std::cos(a), std::sin(a)};
+    }
+    return c;
+}();
+
+const std::array<Vec2, 6> kHexDir = [] {
+    std::array<Vec2, 6> d{};
+    for (int i = 0; i < 6; ++i) {
+        float a = (-60.0f * static_cast<float>(i)) * kDeg2Rad;
+        d[i] = {std::cos(a), std::sin(a)};
+    }
+    return d;
+}();
+
+constexpr float kHexSqrt3 = 1.7320508075688772f;
+}  // namespace
+
 // -------------------------------------------------------------------------
 // TileWorld
 // -------------------------------------------------------------------------
@@ -77,6 +154,70 @@ bool TileWorld::solid(int x, int y) const {
 
 float TileWorld::topY(int x, int y) const {
     return static_cast<float>(grid_->elevation({x, y})) * config_.heightStep;
+}
+
+void TileWorld::cellCenterLocal(int x, int y, float& px, float& pz) const {
+    const float R = config_.cellSize;
+    if (grid_ && grid_->topology() == tile::Topology::Hex) {
+        tile::Hex h = tile::toHex({x, y});
+        px = R * kHexSqrt3 * (static_cast<float>(h.q) + static_cast<float>(h.r) * 0.5f);
+        pz = R * 1.5f * static_cast<float>(h.r);
+        return;
+    }
+    px = (static_cast<float>(x) + 0.5f) * R;
+    pz = (static_cast<float>(y) + 0.5f) * R;
+}
+
+tile::Cell TileWorld::pixelToHexCell(float lx, float lz) const {
+    const float R = (config_.cellSize > 1e-8f) ? config_.cellSize : 1.0f;
+    // Inverse of px = R*sqrt3*(q+r/2), pz = R*1.5*r.
+    double r = static_cast<double>(lz) / (1.5 * R);
+    double q = static_cast<double>(lx) / (kHexSqrt3 * R) - r * 0.5;
+    // Cube-round to the nearest valid hex (q+r+s == 0 in cube space).
+    double x = q, z = r, y = -x - z;
+    double rx = std::round(x), ry = std::round(y), rz = std::round(z);
+    double dx = std::fabs(rx - x), dy = std::fabs(ry - y), dz = std::fabs(rz - z);
+    if (dx > dy && dx > dz) rx = -ry - rz;
+    else if (dy > dz)       ry = -rx - rz;
+    else                    rz = -rx - ry;
+    return tile::fromHex(tile::Hex{static_cast<int>(rx), static_cast<int>(rz)});
+}
+
+void TileWorld::cellCenterWorldXZ(int x, int y, float& outX, float& outZ) const {
+    float px = 0, pz = 0;
+    cellCenterLocal(x, y, px, pz);
+    outX = config_.origin.x + px;
+    outZ = config_.origin.z + pz;
+}
+
+void TileWorld::worldBounds(float& minX, float& minZ, float& maxX, float& maxZ) const {
+    const float R = config_.cellSize;
+    if (!grid_ || grid_->topology() != tile::Topology::Hex) {
+        minX = config_.origin.x;
+        minZ = config_.origin.z;
+        maxX = config_.origin.x + static_cast<float>(config_.width) * R;
+        maxZ = config_.origin.z + static_cast<float>(config_.height) * R;
+        return;
+    }
+    // Hex: sweep every border cell's actual hex corners (cheap — border only) so the
+    // box isn't clipped by cell centers alone.
+    minX = minZ = std::numeric_limits<float>::infinity();
+    maxX = maxZ = -std::numeric_limits<float>::infinity();
+    const int W = config_.width, H = config_.height;
+    auto sweep = [&](int x, int y) {
+        float cx = 0, cz = 0;
+        cellCenterLocal(x, y, cx, cz);
+        for (int i = 0; i < 6; ++i) {
+            float px = cx + R * kHexCorner[i].x;
+            float pz = cz + R * kHexCorner[i].z;
+            minX = std::min(minX, px); maxX = std::max(maxX, px);
+            minZ = std::min(minZ, pz); maxZ = std::max(maxZ, pz);
+        }
+    };
+    for (int x = 0; x < W; ++x) { sweep(x, 0); sweep(x, H - 1); }
+    for (int y = 0; y < H; ++y) { sweep(0, y); sweep(W - 1, y); }
+    minX += config_.origin.x; maxX += config_.origin.x;
+    minZ += config_.origin.z; maxZ += config_.origin.z;
 }
 
 int TileWorld::atlasLayerCell(int x, int y, int layer, uint16_t id) const {
@@ -316,12 +457,18 @@ bool TileWorld::hasFlag(int x, int y, uint32_t bit) const {
 
 bool TileWorld::worldToCell(float wx, float wz, int& outX, int& outY) const {
     if (!grid_) return false;
-    float lx = (wx - config_.origin.x) / config_.cellSize;
-    float lz = (wz - config_.origin.z) / config_.cellSize;
-    int x = static_cast<int>(std::floor(lx));
-    int y = static_cast<int>(std::floor(lz));
-    if (!grid_->inBounds({x, y})) return false;
-    outX = x; outY = y;
+    float lx = wx - config_.origin.x;
+    float lz = wz - config_.origin.z;
+
+    tile::Cell c;
+    if (grid_->topology() == tile::Topology::Hex) {
+        c = pixelToHexCell(lx, lz);
+    } else {
+        c = tile::Cell{static_cast<int>(std::floor(lx / config_.cellSize)),
+                       static_cast<int>(std::floor(lz / config_.cellSize))};
+    }
+    if (!grid_->inBounds(c)) return false;
+    outX = c.x; outY = c.y;
     return true;
 }
 
@@ -374,6 +521,101 @@ TileWorld::CellRayHit TileWorld::raycastCell(const bromath::Vec3& origin,
         tBox1 = std::min(tBox1, tb);
         return tBox1 >= tBox0;
     };
+
+    // Hex has no clean analytic DDA (neighbour steps aren't axis-aligned), so this
+    // path marches in small steps and bisects at cell-boundary crossings to localize
+    // them — precision is bounded by dt below (refined ~2^14x by the bisection),
+    // not exact like square's slab DDA. Good enough for interactive picking.
+    if (grid_->topology() == tile::Topology::Hex) {
+        if (W <= 0 || H <= 0) return out;
+
+        double minX = std::numeric_limits<double>::infinity(), maxX = -minX;
+        double minZ = minX, maxZ = -minX;
+        auto sweepHex = [&](int x, int y) {
+            float ccx = 0, ccz = 0;
+            cellCenterLocal(x, y, ccx, ccz);
+            for (int i = 0; i < 6; ++i) {
+                double px = ccx + cs * kHexCorner[i].x;
+                double pz = ccz + cs * kHexCorner[i].z;
+                minX = std::min(minX, px); maxX = std::max(maxX, px);
+                minZ = std::min(minZ, pz); maxZ = std::max(maxZ, pz);
+            }
+        };
+        for (int x = 0; x < W; ++x) { sweepHex(x, 0); sweepHex(x, H - 1); }
+        for (int y = 0; y < H; ++y) { sweepHex(0, y); sweepHex(W - 1, y); }
+
+        if (!slab(ox, dx, minX, maxX)) return out;
+        if (!slab(oz, dz, minZ, maxZ)) return out;
+        if (tBox0 > tBox1) return out;
+
+        const double tEnd = std::min<double>(maxDist, tBox1);
+        double t = std::max(0.0, tBox0);
+        if (t > tEnd) return out;
+        const double dt = cs / 8.0;
+
+        auto cellAt = [&](double tt) {
+            return pixelToHexCell(static_cast<float>(ox + dx * tt),
+                                  static_cast<float>(oz + dz * tt));
+        };
+
+        tile::Cell cur = cellAt(t + eps);
+        const int cap = static_cast<int>((tEnd - t) / std::max(dt, 1e-9)) + 64;
+
+        for (int iter = 0; iter < cap && t <= tEnd + eps; ++iter) {
+            // Find this cell's exit time by marching forward until the cell changes,
+            // then bisecting the last step to localize the crossing precisely.
+            double probe = t;
+            tile::Cell nextCell = cur;
+            while (probe < tEnd) {
+                double p2 = std::min(probe + dt, tEnd);
+                tile::Cell c2 = cellAt(p2);
+                if (c2 != cur) {
+                    double lo = probe, hi = p2;
+                    for (int b = 0; b < 14; ++b) {
+                        double mid = (lo + hi) * 0.5;
+                        if (cellAt(mid) == cur) lo = mid; else hi = mid;
+                    }
+                    probe = lo;
+                    nextCell = c2;
+                    break;
+                }
+                probe = p2;
+                if (probe >= tEnd) { nextCell = cur; break; }
+            }
+            const double tExit = probe;
+
+            if (grid_->inBounds(cur) && solid(cur.x, cur.y)) {
+                const double top = static_cast<double>(grid_->elevation(cur)) * config_.heightStep;
+                const double yEnter = oy + dy * t;
+                if (dy < 0.0 && yEnter <= top + eps && t <= maxDist) {
+                    const double th = std::max(t, 0.0);
+                    out.hit = true; out.x = cur.x; out.y = cur.y; out.side = true;
+                    out.distance = static_cast<float>(th);
+                    out.point[0] = static_cast<float>(origin.x + dx * th);
+                    out.point[1] = static_cast<float>(origin.y + dy * th);
+                    out.point[2] = static_cast<float>(origin.z + dz * th);
+                    return out;
+                }
+                if (std::fabs(dy) > 1e-12) {
+                    const double th = (top - oy) / dy;
+                    if (th >= t - eps && th <= tExit + eps && th >= 0.0 && th <= maxDist) {
+                        out.hit = true; out.x = cur.x; out.y = cur.y; out.side = false;
+                        out.distance = static_cast<float>(th);
+                        out.point[0] = static_cast<float>(origin.x + dx * th);
+                        out.point[1] = static_cast<float>(origin.y + dy * th);
+                        out.point[2] = static_cast<float>(origin.z + dz * th);
+                        return out;
+                    }
+                }
+            }
+
+            if (tExit >= tEnd - eps || nextCell == cur) break;
+            t = tExit;
+            cur = nextCell;
+        }
+        return out;
+    }
+
     if (!slab(ox, dx, 0.0, W * cs)) return out;
     if (!slab(oz, dz, 0.0, H * cs)) return out;
     if (tBox0 > tBox1) return out;
@@ -506,10 +748,15 @@ void TileWorld::buildGroundMesh(int ccx, int ccy, Chunk& chunk) {
     const int   cz = config_.chunkSize;
     const int   x0 = ccx * cz, x1 = std::min(x0 + cz, config_.width);
     const int   y0 = ccy * cz, y1 = std::min(y0 + cz, config_.height);
+    const bool  hex = grid_ && grid_->topology() == tile::Topology::Hex;
 
     // Chunk-local origin so baked coords stay small; the node carries the offset.
-    const float ox = static_cast<float>(x0) * cs;
-    const float oz = static_cast<float>(y0) * cs;
+    // Hex has no clean "corner" reference the way square does, so use the first
+    // cell's own pixel center — any fixed reference works since cellCenterLocal is
+    // affine and everything below subtracts the same (ox, oz).
+    float ox = static_cast<float>(x0) * cs;
+    float oz = static_cast<float>(y0) * cs;
+    if (hex) cellCenterLocal(x0, y0, ox, oz);
 
     const float skirtY = static_cast<float>(config_.baseLevel) * config_.heightStep;
     const bool atlas = hasAtlas();
@@ -530,6 +777,79 @@ void TileWorld::buildGroundMesh(int ccx, int ccy, Chunk& chunk) {
 
     bromesh::MeshData mesh;
 
+    if (hex) {
+        for (int y = y0; y < y1; ++y) {
+            for (int x = x0; x < x1; ++x) {
+                if (!solid(x, y)) continue;
+
+                const uint16_t groundId = grid_->tile(0, {x, y});
+                const int elev = grid_->elevation({x, y});
+                const float hy = static_cast<float>(elev) * config_.heightStep;
+
+                float base[3];
+                paletteColor(groundId, base);
+
+                float tu0 = 0, tu1 = 1, tv0 = 0, tv1 = 1;
+                float cu0 = 0, cu1 = 1, cv0 = 0, cv1 = 1;
+                if (atlas) {
+                    atlasCellRect(atlasLayerCell(x, y, 0, groundId), tu0, tu1, tv0, tv1);
+                    int cliff = (config_.cliffCell >= 0) ? config_.cliffCell
+                                                         : atlasCellFor(groundId);
+                    atlasCellRect(cliff, cu0, cu1, cv0, cv1);
+                }
+
+                float tint[4]; cellTint(x, y, tint);
+                base[0] *= tint[0]; base[1] *= tint[1]; base[2] *= tint[2];
+
+                float cx = 0, cz = 0;
+                cellCenterLocal(x, y, cx, cz);
+                cx -= ox; cz -= oz;
+
+                Vec3 corner[6];
+                for (int i = 0; i < 6; ++i)
+                    corner[i] = Vec3{cx + cs * kHexCorner[i].x, hy, cz + cs * kHexCorner[i].z};
+
+                // Each hex vertex touches exactly 3 cells: this one + the two
+                // neighbours bracketing that corner (canonical direction i-1 and i).
+                tile::Neighbors nb = tile::neighbors(tile::Topology::Hex, {x, y});
+                auto higher = [&](int dir) {
+                    tile::Cell c = nb[dir];
+                    return solid(c.x, c.y) && grid_->elevation(c) > elev;
+                };
+                float col[6][4];
+                float uv[12];
+                for (int i = 0; i < 6; ++i) {
+                    int occ = (higher((i + 5) % 6) ? 1 : 0) + (higher(i) ? 1 : 0);
+                    float s = 1.0f - config_.aoStrength * (static_cast<float>(occ) / 2.0f);
+                    col[i][0] = base[0] * s; col[i][1] = base[1] * s;
+                    col[i][2] = base[2] * s; col[i][3] = 1.0f;
+                    if (atlas) {
+                        // Inscribe the hex in its atlas cell's square rect.
+                        uv[i * 2 + 0] = tu0 + (tu1 - tu0) * (kHexCorner[i].x / 0.8660254f + 1.0f) * 0.5f;
+                        uv[i * 2 + 1] = tv0 + (tv1 - tv0) * (kHexCorner[i].z + 1.0f) * 0.5f;
+                    }
+                }
+                const float* colp[6] = {col[0], col[1], col[2], col[3], col[4], col[5]};
+                addFan(mesh, corner, colp, atlas ? uv : nullptr, 6, {0, 1, 0});
+
+                const float sideShade = 0.72f;
+                float side[4] = {base[0] * sideShade, base[1] * sideShade, base[2] * sideShade, 1.0f};
+                const float cliffUV[8] = {cu0, cv1, cu0, cv0, cu1, cv0, cu1, cv1};
+                const float* cliffUVp = atlas ? cliffUV : nullptr;
+
+                for (int i = 0; i < 6; ++i) {
+                    tile::Cell nc = nb[i];
+                    float ny = solid(nc.x, nc.y) ? topY(nc.x, nc.y) : skirtY;
+                    if (ny >= hy) continue;
+                    const Vec3& a = corner[i];
+                    const Vec3& b = corner[(i + 1) % 6];
+                    Vec3 nrm{kHexDir[i].x, 0.0f, kHexDir[i].z};
+                    addQuad(mesh, {a.x, ny, a.z}, {a.x, hy, a.z}, {b.x, hy, b.z}, {b.x, ny, b.z},
+                            nrm, side, side, side, side, cliffUVp);
+                }
+            }
+        }
+    } else {
     for (int y = y0; y < y1; ++y) {
         for (int x = x0; x < x1; ++x) {
             if (!solid(x, y)) continue;
@@ -624,6 +944,7 @@ void TileWorld::buildGroundMesh(int ccx, int ccy, Chunk& chunk) {
                         {0, 0, -1}, side, side, side, side, cliffUVp);
         }
     }
+    }
 
     if (mesh.empty()) {
         // Nothing solid in this chunk — drop any stale node.
@@ -662,8 +983,10 @@ void TileWorld::buildOverlayMesh(int ccx, int ccy, Chunk& chunk, int layer) {
     const int   cz = config_.chunkSize;
     const int   x0 = ccx * cz, x1 = std::min(x0 + cz, config_.width);
     const int   y0 = ccy * cz, y1 = std::min(y0 + cz, config_.height);
-    const float ox = static_cast<float>(x0) * cs;
-    const float oz = static_cast<float>(y0) * cs;
+    const bool  hex = grid_->topology() == tile::Topology::Hex;
+    float ox = static_cast<float>(x0) * cs;
+    float oz = static_cast<float>(y0) * cs;
+    if (hex) cellCenterLocal(x0, y0, ox, oz);
 
     // Small per-layer lift above the ground top so decals don't z-fight; the
     // depth bias below makes it robust regardless of scale.
@@ -677,17 +1000,35 @@ void TileWorld::buildOverlayMesh(int ccx, int ccy, Chunk& chunk, int layer) {
             if (id == 0) continue;
 
             const float hy = topY(x, y) + lift;
+
+            float u0, u1, v0, v1;
+            atlasCellRect(atlasLayerCell(x, y, layer, id), u0, u1, v0, v1);
+
+            float t[4]; cellTint(x, y, t);
+            float col[4] = {t[0], t[1], t[2], t[3]};
+
+            if (hex) {
+                float cx = 0, cz2 = 0;
+                cellCenterLocal(x, y, cx, cz2);
+                cx -= ox; cz2 -= oz;
+                Vec3 corner[6];
+                float uv[12];
+                const float* colp[6];
+                for (int i = 0; i < 6; ++i) {
+                    corner[i] = Vec3{cx + cs * kHexCorner[i].x, hy, cz2 + cs * kHexCorner[i].z};
+                    uv[i * 2 + 0] = u0 + (u1 - u0) * (kHexCorner[i].x / 0.8660254f + 1.0f) * 0.5f;
+                    uv[i * 2 + 1] = v0 + (v1 - v0) * (kHexCorner[i].z + 1.0f) * 0.5f;
+                    colp[i] = col;
+                }
+                addFan(mesh, corner, colp, uv, 6, {0, 1, 0});
+                continue;
+            }
+
             const float lx0 = static_cast<float>(x) * cs - ox;
             const float lx1 = lx0 + cs;
             const float lz0 = static_cast<float>(y) * cs - oz;
             const float lz1 = lz0 + cs;
-
-            float u0, u1, v0, v1;
-            atlasCellRect(atlasLayerCell(x, y, layer, id), u0, u1, v0, v1);
             const float uv[8] = {u0, v0, u0, v1, u1, v1, u1, v0};
-
-            float t[4]; cellTint(x, y, t);
-            float col[4] = {t[0], t[1], t[2], t[3]};
             addQuad(mesh,
                     {lx0, hy, lz0}, {lx0, hy, lz1}, {lx1, hy, lz1}, {lx1, hy, lz0},
                     {0, 1, 0}, col, col, col, col, uv);
@@ -794,8 +1135,10 @@ void TileWorld::rebuildObjectKind(ObjectKind& k) {
         const int x = k.cellX[i], y = k.cellY[i];
 
         // Cell-centre anchor in root-local space (root carries the origin).
-        const float px = (static_cast<float>(x) + 0.5f + p.offsetX) * cs;
-        const float pz = (static_cast<float>(y) + 0.5f + p.offsetZ) * cs;
+        float px = 0, pz = 0;
+        cellCenterLocal(x, y, px, pz);
+        px += p.offsetX * cs;
+        pz += p.offsetZ * cs;
         const float py = topY(x, y) + p.yOffset;
 
         const float s = p.scale;

@@ -181,6 +181,14 @@ public:
     // top-down projection). Returns false if outside the grid.
     bool worldToCell(float wx, float wz, int& outX, int& outY) const;
 
+    // World-space XZ center of a cell (topology-aware: square cell center or hex
+    // pointy-top pixel center). Used for object anchoring and nav-grid stamping.
+    void cellCenterWorldXZ(int x, int y, float& outX, float& outZ) const;
+
+    // Axis-aligned XZ bounding box of the whole grid in world space (topology-aware —
+    // hex's bounds aren't a clean width*cellSize box). Used to size nav-grid export.
+    void worldBounds(float& minX, float& minZ, float& maxX, float& maxZ) const;
+
     // ---- picking / collision -------------------------------------------
     // Result of a ray->cell pick. `side` is true when the ray struck a cliff
     // face rather than a cell's flat top surface.
@@ -295,6 +303,13 @@ private:
     bool solid(int x, int y) const;        // in-bounds + non-empty ground tile
     float topY(int x, int y) const;        // world Y of a cell's top surface
     void cellTint(int x, int y, float out[4]) const;  // per-cell RGBA, white default
+
+    // Grid-local (no origin) XZ center of a cell; square cell-center or hex
+    // pointy-top pixel center depending on grid_->topology().
+    void cellCenterLocal(int x, int y, float& px, float& pz) const;
+    // Inverse of the hex branch of cellCenterLocal: nearest hex cell to a
+    // grid-local XZ point (may be out of grid bounds — caller checks).
+    tile::Cell pixelToHexCell(float lx, float lz) const;
 
     bool hasAtlas() const {
         return !config_.atlasPixels.empty() &&
