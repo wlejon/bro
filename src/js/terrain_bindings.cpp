@@ -13,22 +13,6 @@
 namespace bro::js {
 
 // -------------------------------------------------------------------------
-// Helpers (local copies — same pattern as scene_bindings.cpp)
-// -------------------------------------------------------------------------
-
-static double jsGetProp(JSContext* ctx, JSValueConst obj, const char* prop, double def = 0.0) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    double r = def;
-    if (!JS_IsUndefined(v)) JS_ToFloat64(ctx, &r, v);
-    JS_FreeValue(ctx, v);
-    return r;
-}
-
-static int jsGetInt(JSContext* ctx, JSValueConst obj, const char* prop, int def = 0) {
-    return static_cast<int>(jsGetProp(ctx, obj, prop, def));
-}
-
-// -------------------------------------------------------------------------
 // TerrainWrapper — opaque data attached to JS terrain objects
 // -------------------------------------------------------------------------
 
@@ -67,25 +51,25 @@ static scene::TerrainConfig parseConfig(JSContext* ctx, JSValueConst opts) {
     }
     JS_FreeValue(ctx, cs);
 
-    cfg.cellSize = (float)jsGetProp(ctx, opts, "cellSize", cfg.cellSize);
-    cfg.loadRadius = jsGetInt(ctx, opts, "loadRadius", cfg.loadRadius);
-    cfg.unloadRadius = jsGetInt(ctx, opts, "unloadRadius", cfg.unloadRadius);
-    cfg.maxLoadsPerUpdate = jsGetInt(ctx, opts, "maxLoadsPerUpdate", cfg.maxLoadsPerUpdate);
-    cfg.seed = jsGetInt(ctx, opts, "seed", cfg.seed);
-    cfg.baseHeight = jsGetInt(ctx, opts, "baseHeight", cfg.baseHeight);
-    cfg.heightAmplitude = jsGetInt(ctx, opts, "heightAmplitude", cfg.heightAmplitude);
-    cfg.seaLevel = jsGetInt(ctx, opts, "seaLevel", cfg.seaLevel);
-    cfg.meshMode = jsGetInt(ctx, opts, "meshMode", cfg.meshMode);
-    cfg.terraceStep = (float)jsGetProp(ctx, opts, "terraceStep", cfg.terraceStep);
-    cfg.continentFrequency = (float)jsGetProp(ctx, opts, "continentFrequency", cfg.continentFrequency);
-    cfg.continentMin = (float)jsGetProp(ctx, opts, "continentMin", cfg.continentMin);
-    cfg.continentMax = (float)jsGetProp(ctx, opts, "continentMax", cfg.continentMax);
-    cfg.mountainFrequency = (float)jsGetProp(ctx, opts, "mountainFrequency", cfg.mountainFrequency);
-    cfg.mountainAmplitude = (float)jsGetProp(ctx, opts, "mountainAmplitude", cfg.mountainAmplitude);
-    cfg.mountainOctaves = jsGetInt(ctx, opts, "mountainOctaves", cfg.mountainOctaves);
-    cfg.lodLevelCount = jsGetInt(ctx, opts, "lodLevels", cfg.lodLevelCount);
-    cfg.lodScaleFactor = jsGetInt(ctx, opts, "lodScaleFactor", cfg.lodScaleFactor);
-    cfg.planetRadius = (float)jsGetProp(ctx, opts, "planetRadius", cfg.planetRadius);
+    cfg.cellSize = (float)qjsbind::get_prop_number(ctx, opts, "cellSize", cfg.cellSize);
+    cfg.loadRadius = qjsbind::get_prop_int(ctx, opts, "loadRadius", cfg.loadRadius);
+    cfg.unloadRadius = qjsbind::get_prop_int(ctx, opts, "unloadRadius", cfg.unloadRadius);
+    cfg.maxLoadsPerUpdate = qjsbind::get_prop_int(ctx, opts, "maxLoadsPerUpdate", cfg.maxLoadsPerUpdate);
+    cfg.seed = qjsbind::get_prop_int(ctx, opts, "seed", cfg.seed);
+    cfg.baseHeight = qjsbind::get_prop_int(ctx, opts, "baseHeight", cfg.baseHeight);
+    cfg.heightAmplitude = qjsbind::get_prop_int(ctx, opts, "heightAmplitude", cfg.heightAmplitude);
+    cfg.seaLevel = qjsbind::get_prop_int(ctx, opts, "seaLevel", cfg.seaLevel);
+    cfg.meshMode = qjsbind::get_prop_int(ctx, opts, "meshMode", cfg.meshMode);
+    cfg.terraceStep = (float)qjsbind::get_prop_number(ctx, opts, "terraceStep", cfg.terraceStep);
+    cfg.continentFrequency = (float)qjsbind::get_prop_number(ctx, opts, "continentFrequency", cfg.continentFrequency);
+    cfg.continentMin = (float)qjsbind::get_prop_number(ctx, opts, "continentMin", cfg.continentMin);
+    cfg.continentMax = (float)qjsbind::get_prop_number(ctx, opts, "continentMax", cfg.continentMax);
+    cfg.mountainFrequency = (float)qjsbind::get_prop_number(ctx, opts, "mountainFrequency", cfg.mountainFrequency);
+    cfg.mountainAmplitude = (float)qjsbind::get_prop_number(ctx, opts, "mountainAmplitude", cfg.mountainAmplitude);
+    cfg.mountainOctaves = qjsbind::get_prop_int(ctx, opts, "mountainOctaves", cfg.mountainOctaves);
+    cfg.lodLevelCount = qjsbind::get_prop_int(ctx, opts, "lodLevels", cfg.lodLevelCount);
+    cfg.lodScaleFactor = qjsbind::get_prop_int(ctx, opts, "lodScaleFactor", cfg.lodScaleFactor);
+    cfg.planetRadius = (float)qjsbind::get_prop_number(ctx, opts, "planetRadius", cfg.planetRadius);
 
     // origin: [x, y, z] — world-space position of this terrain
     JSValue orig = JS_GetPropertyStr(ctx, opts, "origin");
@@ -103,10 +87,10 @@ static scene::TerrainConfig parseConfig(JSContext* ctx, JSValueConst opts) {
     // noise: { frequency, octaves, gain, lacunarity }
     JSValue noise = JS_GetPropertyStr(ctx, opts, "noise");
     if (JS_IsObject(noise)) {
-        cfg.noiseFrequency = (float)jsGetProp(ctx, noise, "frequency", cfg.noiseFrequency);
-        cfg.noiseOctaves = jsGetInt(ctx, noise, "octaves", cfg.noiseOctaves);
-        cfg.noiseGain = (float)jsGetProp(ctx, noise, "gain", cfg.noiseGain);
-        cfg.noiseLacunarity = (float)jsGetProp(ctx, noise, "lacunarity", cfg.noiseLacunarity);
+        cfg.noiseFrequency = (float)qjsbind::get_prop_number(ctx, noise, "frequency", cfg.noiseFrequency);
+        cfg.noiseOctaves = qjsbind::get_prop_int(ctx, noise, "octaves", cfg.noiseOctaves);
+        cfg.noiseGain = (float)qjsbind::get_prop_number(ctx, noise, "gain", cfg.noiseGain);
+        cfg.noiseLacunarity = (float)qjsbind::get_prop_number(ctx, noise, "lacunarity", cfg.noiseLacunarity);
     }
     JS_FreeValue(ctx, noise);
 

@@ -20,6 +20,8 @@
 #include "js/stt_bindings.h"
 #include "util/interrupt.h"
 #include "js/async_job.h"
+#include "js/model_gate.h"
+#include "js/marshal.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -63,8 +65,7 @@ struct WhisperWrapper {
     // background thread; rejects a second concurrent op (the decoder + KV cache
     // are single-owner). Cleared on the JS thread when the job's done() fires.
     // shared_ptr so sessions share this exact gate with the model.
-    std::shared_ptr<std::atomic<bool>> busy =
-        std::make_shared<std::atomic<bool>>(false);
+    ModelGate busy;
 };
 
 // A Whisper decode session over shared weights: its own KV-cache, one per stream.
@@ -72,7 +73,7 @@ struct WhisperWrapper {
 // dropped while a session lives) and the move-only brosoundml::WhisperSession.
 struct WhisperSessionWrapper {
     std::shared_ptr<brosoundml::Whisper> model;
-    std::shared_ptr<std::atomic<bool>>   busy;   // shared with the model + siblings
+    ModelGate busy;   // shared with the model + siblings
     brotensor::Device                    device = brotensor::Device::CPU;
     brosoundml::WhisperSession           session;
 };
@@ -86,8 +87,7 @@ struct ParakeetWrapper {
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
     // Same single-owner discipline as Whisper: one async transcribe in flight.
     // shared_ptr so sessions share this exact gate with the model.
-    std::shared_ptr<std::atomic<bool>> busy =
-        std::make_shared<std::atomic<bool>>(false);
+    ModelGate busy;
 };
 
 // A Parakeet decode session over shared weights: its own TDT prediction-net
@@ -97,7 +97,7 @@ struct ParakeetWrapper {
 // correctness is identical, only parallelism is given up.
 struct ParakeetSessionWrapper {
     std::shared_ptr<brosoundml::Parakeet> model;
-    std::shared_ptr<std::atomic<bool>>    busy;
+    ModelGate busy;
     brotensor::Device                     device = brotensor::Device::CPU;
     brosoundml::ParakeetSession           session;
 };
@@ -117,15 +117,14 @@ struct QwenAsrWrapper {
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
     // Same single-owner discipline as Whisper: one async transcribe in flight.
     // shared_ptr so sessions share this exact gate with the model.
-    std::shared_ptr<std::atomic<bool>> busy =
-        std::make_shared<std::atomic<bool>>(false);
+    ModelGate busy;
 };
 
 // A Qwen3-ASR decode session over shared weights: its own decoder KV-cache, one
 // per stream. CONCURRENT tier in brosoundml, serialized here on the shared gate.
 struct QwenAsrSessionWrapper {
     std::shared_ptr<brosoundml::QwenAsr> model;
-    std::shared_ptr<std::atomic<bool>>   busy;
+    ModelGate busy;
     brotensor::Device                    device = brotensor::Device::CPU;
     brosoundml::QwenAsrSession           session;
 };
@@ -227,120 +226,6 @@ static bool parseDeviceOpt(JSContext* ctx, JSValueConst opts,
     return false;
 }
 
-// Read a Float32Array's element pointer + count. Returns nullptr if not a
-// Float32Array view.
-static const float* getFloatArray(JSContext* ctx, JSValueConst v,
-                                  size_t& count) {
-    count = 0;
-    if (!JS_IsObject(v)) return nullptr;
-    size_t byteOff = 0, viewLen = 0, bpe = 0;
-    JSValue abuf = JS_GetTypedArrayBuffer(ctx, v, &byteOff, &viewLen, &bpe);
-    if (JS_IsException(abuf)) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        return nullptr;
-    }
-    size_t abufLen = 0;
-    std::uint8_t* p = JS_GetArrayBuffer(ctx, &abufLen, abuf);
-    JS_FreeValue(ctx, abuf);
-    if (!p || bpe != sizeof(float)) return nullptr;
-    count = viewLen / sizeof(float);
-    return reinterpret_cast<const float*>(p + byteOff);
-}
-
-static const int32_t* getInt32Array(JSContext* ctx, JSValueConst v,
-                                    size_t& count) {
-    count = 0;
-    if (!JS_IsObject(v)) return nullptr;
-    size_t byteOff = 0, viewLen = 0, bpe = 0;
-    JSValue abuf = JS_GetTypedArrayBuffer(ctx, v, &byteOff, &viewLen, &bpe);
-    if (JS_IsException(abuf)) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        return nullptr;
-    }
-    size_t abufLen = 0;
-    std::uint8_t* p = JS_GetArrayBuffer(ctx, &abufLen, abuf);
-    JS_FreeValue(ctx, abuf);
-    if (!p || bpe != sizeof(int32_t)) return nullptr;
-    count = viewLen / sizeof(int32_t);
-    return reinterpret_cast<const int32_t*>(p + byteOff);
-}
-
-static std::vector<int32_t> readIdArray(JSContext* ctx, JSValueConst v) {
-    std::vector<int32_t> out;
-    size_t cnt = 0;
-    if (const int32_t* p = getInt32Array(ctx, v, cnt)) {
-        out.assign(p, p + cnt);
-        return out;
-    }
-    if (JS_IsArray(v)) {
-        std::uint32_t n = 0;
-        JSValue lv = JS_GetPropertyStr(ctx, v, "length");
-        JS_ToUint32(ctx, &n, lv);
-        JS_FreeValue(ctx, lv);
-        out.reserve(n);
-        for (std::uint32_t i = 0; i < n; ++i) {
-            JSValue e = JS_GetPropertyUint32(ctx, v, i);
-            int32_t t = 0;
-            JS_ToInt32(ctx, &t, e);
-            out.push_back(t);
-            JS_FreeValue(ctx, e);
-        }
-    }
-    return out;
-}
-
-// Read a JS audio object — either { samples: Float32Array, sampleRate }, a
-// raw Float32Array (assumed 16 kHz), or { samples: number[], sampleRate } —
-// into a brosoundml::AudioBuffer.
-static bool readAudioBuffer(JSContext* ctx, JSValueConst v,
-                            brosoundml::AudioBuffer& out,
-                            std::string& err) {
-    out.sample_rate = 16000;
-    // Bare Float32Array path.
-    size_t cnt = 0;
-    if (const float* p = getFloatArray(ctx, v, cnt)) {
-        out.samples.assign(p, p + cnt);
-        return true;
-    }
-    if (!JS_IsObject(v)) {
-        err = "audio must be a Float32Array or { samples, sampleRate } object";
-        return false;
-    }
-    JSValue sr = JS_GetPropertyStr(ctx, v, "sampleRate");
-    if (JS_IsNumber(sr)) {
-        int32_t t = out.sample_rate;
-        JS_ToInt32(ctx, &t, sr);
-        out.sample_rate = t;
-    }
-    JS_FreeValue(ctx, sr);
-
-    JSValue s = JS_GetPropertyStr(ctx, v, "samples");
-    bool ok = false;
-    size_t fc = 0;
-    if (const float* p = getFloatArray(ctx, s, fc)) {
-        out.samples.assign(p, p + fc);
-        ok = true;
-    } else if (JS_IsArray(s)) {
-        std::uint32_t n = 0;
-        JSValue lv = JS_GetPropertyStr(ctx, s, "length");
-        JS_ToUint32(ctx, &n, lv);
-        JS_FreeValue(ctx, lv);
-        out.samples.resize(n);
-        for (std::uint32_t i = 0; i < n; ++i) {
-            JSValue e = JS_GetPropertyUint32(ctx, s, i);
-            double t = 0.0;
-            JS_ToFloat64(ctx, &t, e);
-            out.samples[i] = (float)t;
-            JS_FreeValue(ctx, e);
-        }
-        ok = true;
-    } else {
-        err = "audio.samples must be a Float32Array or number[]";
-    }
-    JS_FreeValue(ctx, s);
-    return ok;
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // WhisperTokenizer methods
 // ═══════════════════════════════════════════════════════════════════════════
@@ -373,7 +258,7 @@ static JSValue js_wtok_decode(JSContext* ctx, JSValueConst this_val,
     if (!w) return JS_ThrowTypeError(ctx, "decode: not a WhisperTokenizer");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "decode(ids): ids required");
-    auto ids = readIdArray(ctx, argv[0]);
+    auto ids = qjsbind::read_int32_array(ctx, argv[0]);
     const bool skipSpecial = (argc >= 2) && (JS_ToBool(ctx, argv[1]) == 1);
     try {
         return JS_NewString(ctx, w->tok->decode(ids, skipSpecial).c_str());
@@ -472,7 +357,7 @@ static JSValue js_ptok_decode(JSContext* ctx, JSValueConst this_val,
     if (!w) return JS_ThrowTypeError(ctx, "decode: not a ParakeetTokenizer");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "decode(ids): ids required");
-    auto ids = readIdArray(ctx, argv[0]);
+    auto ids = qjsbind::read_int32_array(ctx, argv[0]);
     try {
         return JS_NewString(ctx, w->tok->decode(ids).c_str());
     } catch (const std::exception& e) {
@@ -524,7 +409,7 @@ static JSValue js_whisper_transcribe(JSContext* ctx, JSValueConst this_val,
     if (!readAudioBuffer(ctx, argv[0], audio, err))
         return JS_ThrowTypeError(ctx, "transcribe: %s", err.c_str());
 
-    std::vector<int32_t> prompt = readIdArray(ctx, argv[1]);
+    std::vector<int32_t> prompt = qjsbind::read_int32_array(ctx, argv[1]);
     if (prompt.empty())
         return JS_ThrowTypeError(ctx,
             "transcribe: promptIds must be a non-empty Int32Array or number[] "
@@ -699,7 +584,7 @@ static JSValue js_qwenasr_transcribe(JSContext* ctx, JSValueConst this_val,
         getInt(ctx, argv[1], "maxNewTokens", opts.max_new_tokens);
         JSValue cv = JS_GetPropertyStr(ctx, argv[1], "contextIds");
         if (!JS_IsUndefined(cv) && !JS_IsNull(cv))
-            opts.context_ids = readIdArray(ctx, cv);
+            opts.context_ids = qjsbind::read_int32_array(ctx, cv);
         JS_FreeValue(ctx, cv);
         onToken = JS_GetPropertyStr(ctx, argv[1], "onToken");
     }
@@ -794,7 +679,7 @@ static JSValue js_qwenasrstream_feed(JSContext* ctx, JSValueConst this_val,
     auto* w = qwenAsrStreamSelf(ctx, this_val);
     if (!w) return JS_ThrowTypeError(ctx, "feed: not a QwenAsrStream");
     size_t cnt = 0;
-    const float* p = (argc >= 1) ? getFloatArray(ctx, argv[0], cnt) : nullptr;
+    const float* p = (argc >= 1) ? qjsbind::read_float32_view(ctx, argv[0], cnt) : nullptr;
     if (!p)
         return JS_ThrowTypeError(ctx, "feed(samples): Float32Array required");
     try {
@@ -1569,15 +1454,14 @@ static JSValue js_stt_transcribe_qwenasr(JSContext* ctx, QwenAsrWrapper* w,
         getInt(ctx, argv[2], "maxNewTokens", job->maxNew);
         JSValue cv = JS_GetPropertyStr(ctx, argv[2], "contextIds");
         if (!JS_IsUndefined(cv) && !JS_IsNull(cv))
-            job->contextIds = readIdArray(ctx, cv);
+            job->contextIds = qjsbind::read_int32_array(ctx, cv);
         JS_FreeValue(ctx, cv);
         onDone  = JS_GetPropertyStr(ctx, argv[2], "onDone");
         onToken = JS_GetPropertyStr(ctx, argv[2], "onToken");
     }
 
     // Claim the model for this transcription (single-owner; one in flight).
-    bool expected = false;
-    if (!w->busy->compare_exchange_strong(expected, true)) {
+    if (!w->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         JS_FreeValue(ctx, onToken);
         return JS_ThrowInternalError(ctx,
@@ -1636,7 +1520,7 @@ static JSValue js_stt_transcribe_qwenasr(JSContext* ctx, QwenAsrWrapper* w,
         // and joined; the result's host data is already on `job`, so a new op
         // claiming the model can't disturb what onDone reads here. (Matches the
         // TTS bindings, which release before onDone for the same reason.)
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue arr  = qjsbind::make_int32_array(c, job->token_ids);
             JSValue info = JS_NewObject(c);
@@ -1677,8 +1561,7 @@ static JSValue js_stt_transcribe_parakeet(JSContext* ctx, ParakeetWrapper* w,
     }
 
     // Claim the model for this transcription (single-owner; one in flight).
-    bool expected = false;
-    if (!w->busy->compare_exchange_strong(expected, true)) {
+    if (!w->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         JS_FreeValue(ctx, onToken);
         return JS_ThrowInternalError(ctx,
@@ -1735,7 +1618,7 @@ static JSValue js_stt_transcribe_parakeet(JSContext* ctx, ParakeetWrapper* w,
         // queue) succeeds instead of tripping the in-flight guard. The work thread
         // has finished and joined; the result's host data is already on `job`, so
         // a new op claiming the model can't disturb what onDone reads here.
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue res  = makeParakeetResult(c, job->token_ids, job->token_frames);
             JSValue info = JS_NewObject(c);
@@ -1784,7 +1667,7 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
     if (!readAudioBuffer(ctx, argv[1], job->audio, err))
         return JS_ThrowTypeError(ctx, "transcribe: %s", err.c_str());
 
-    job->prompt = readIdArray(ctx, argv[2]);
+    job->prompt = qjsbind::read_int32_array(ctx, argv[2]);
     if (job->prompt.empty())
         return JS_ThrowTypeError(ctx,
             "transcribe: promptIds must be a non-empty Int32Array or number[] "
@@ -1799,8 +1682,7 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
     }
 
     // Claim the model for this transcription (single-owner; one in flight).
-    bool expected = false;
-    if (!w->busy->compare_exchange_strong(expected, true)) {
+    if (!w->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         JS_FreeValue(ctx, onToken);
         return JS_ThrowInternalError(ctx,
@@ -1872,7 +1754,7 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
         // queue) succeeds instead of tripping the in-flight guard. The work thread
         // has finished and joined; the result's host data is already on `job`, so
         // a new op claiming the model can't disturb what onDone reads here.
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue arr  = qjsbind::make_int32_array(c, job->token_ids);
             JSValue info = JS_NewObject(c);
@@ -1949,7 +1831,7 @@ static JSValue js_whisper_session_transcribe(JSContext* ctx, JSValueConst this_v
     if (!readAudioBuffer(ctx, argv[0], job->audio, err))
         return JS_ThrowTypeError(ctx, "transcribe: %s", err.c_str());
 
-    job->prompt = readIdArray(ctx, argv[1]);
+    job->prompt = qjsbind::read_int32_array(ctx, argv[1]);
     if (job->prompt.empty())
         return JS_ThrowTypeError(ctx,
             "transcribe: promptIds must be a non-empty Int32Array or number[] "
@@ -1963,8 +1845,7 @@ static JSValue js_whisper_session_transcribe(JSContext* ctx, JSValueConst this_v
         onToken = JS_GetPropertyStr(ctx, argv[2], "onToken");
     }
 
-    bool expected = false;
-    if (!sw->busy->compare_exchange_strong(expected, true)) {
+    if (!sw->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         JS_FreeValue(ctx, onToken);
         return JS_ThrowInternalError(ctx,
@@ -2022,7 +1903,7 @@ static JSValue js_whisper_session_transcribe(JSContext* ctx, JSValueConst this_v
         // queue) succeeds instead of tripping the in-flight guard. The work thread
         // has finished and joined; the result's host data is already on `job`, so
         // a new op claiming the model can't disturb what onDone reads here.
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue arr  = qjsbind::make_int32_array(c, job->token_ids);
             JSValue info = JS_NewObject(c);
@@ -2049,7 +1930,7 @@ static JSValue js_whisper_session_reset(JSContext* ctx, JSValueConst this_val,
                                         int, JSValueConst*) {
     auto* sw = whisperSessionSelf(ctx, this_val);
     if (!sw) return JS_ThrowTypeError(ctx, "reset: not a WhisperSession");
-    if (sw->busy->load(std::memory_order_acquire))
+    if (sw->busy.isBusy())
         return JS_ThrowInternalError(ctx, "reset: a transcribe is in flight on this model");
     try {
         brotensor::DeviceScope scope(sw->device);
@@ -2111,8 +1992,7 @@ static JSValue js_parakeet_session_transcribe(JSContext* ctx, JSValueConst this_
         onToken = JS_GetPropertyStr(ctx, argv[1], "onToken");
     }
 
-    bool expected = false;
-    if (!sw->busy->compare_exchange_strong(expected, true)) {
+    if (!sw->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         JS_FreeValue(ctx, onToken);
         return JS_ThrowInternalError(ctx,
@@ -2170,7 +2050,7 @@ static JSValue js_parakeet_session_transcribe(JSContext* ctx, JSValueConst this_
         // queue) succeeds instead of tripping the in-flight guard. The work thread
         // has finished and joined; the result's host data is already on `job`, so
         // a new op claiming the model can't disturb what onDone reads here.
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue res  = makeParakeetResult(c, job->token_ids, job->token_frames);
             JSValue info = JS_NewObject(c);
@@ -2196,7 +2076,7 @@ static JSValue js_parakeet_session_reset(JSContext* ctx, JSValueConst this_val,
                                          int, JSValueConst*) {
     auto* sw = parakeetSessionSelf(ctx, this_val);
     if (!sw) return JS_ThrowTypeError(ctx, "reset: not a ParakeetSession");
-    if (sw->busy->load(std::memory_order_acquire))
+    if (sw->busy.isBusy())
         return JS_ThrowInternalError(ctx, "reset: a transcribe is in flight on this model");
     try {
         brotensor::DeviceScope scope(sw->device);
@@ -2256,14 +2136,13 @@ static JSValue js_qwenasr_session_transcribe(JSContext* ctx, JSValueConst this_v
         getInt(ctx, argv[1], "maxNewTokens", job->maxNew);
         JSValue cv = JS_GetPropertyStr(ctx, argv[1], "contextIds");
         if (!JS_IsUndefined(cv) && !JS_IsNull(cv))
-            job->contextIds = readIdArray(ctx, cv);
+            job->contextIds = qjsbind::read_int32_array(ctx, cv);
         JS_FreeValue(ctx, cv);
         onDone  = JS_GetPropertyStr(ctx, argv[1], "onDone");
         onToken = JS_GetPropertyStr(ctx, argv[1], "onToken");
     }
 
-    bool expected = false;
-    if (!sw->busy->compare_exchange_strong(expected, true)) {
+    if (!sw->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         JS_FreeValue(ctx, onToken);
         return JS_ThrowInternalError(ctx,
@@ -2323,7 +2202,7 @@ static JSValue js_qwenasr_session_transcribe(JSContext* ctx, JSValueConst this_v
         // and joined; the result's host data is already on `job`, so a new op
         // claiming the model can't disturb what onDone reads here. (Matches the
         // TTS bindings, which release before onDone for the same reason.)
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue arr  = qjsbind::make_int32_array(c, job->token_ids);
             JSValue info = JS_NewObject(c);
@@ -2349,7 +2228,7 @@ static JSValue js_qwenasr_session_reset(JSContext* ctx, JSValueConst this_val,
                                         int, JSValueConst*) {
     auto* sw = qwenAsrSessionSelf(ctx, this_val);
     if (!sw) return JS_ThrowTypeError(ctx, "reset: not a QwenAsrSession");
-    if (sw->busy->load(std::memory_order_acquire))
+    if (sw->busy.isBusy())
         return JS_ThrowInternalError(ctx, "reset: a transcribe is in flight on this model");
     try {
         brotensor::DeviceScope scope(sw->device);

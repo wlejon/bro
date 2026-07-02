@@ -93,33 +93,6 @@ int32_t PhysicsBindings::tagForBodyId(JPH::BodyID id) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-static double jsGetNum(JSContext* ctx, JSValueConst obj, const char* prop, double def = 0.0) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    double r = def;
-    if (!JS_IsUndefined(v) && !JS_IsNull(v)) JS_ToFloat64(ctx, &r, v);
-    JS_FreeValue(ctx, v);
-    return r;
-}
-
-static bool jsGetBool(JSContext* ctx, JSValueConst obj, const char* prop, bool def = false) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    bool r = def;
-    if (!JS_IsUndefined(v) && !JS_IsNull(v)) r = JS_ToBool(ctx, v);
-    JS_FreeValue(ctx, v);
-    return r;
-}
-
-static std::string jsGetString(JSContext* ctx, JSValueConst obj, const char* prop) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    std::string out;
-    if (JS_IsString(v)) {
-        const char* s = JS_ToCString(ctx, v);
-        if (s) { out = s; JS_FreeCString(ctx, s); }
-    }
-    JS_FreeValue(ctx, v);
-    return out;
-}
-
 static uint64_t jsGetU64(JSContext* ctx, JSValueConst obj, const char* prop, uint64_t def = 0) {
     JSValue v = JS_GetPropertyStr(ctx, obj, prop);
     uint64_t r = def;
@@ -137,18 +110,18 @@ static uint64_t jsGetU64(JSContext* ctx, JSValueConst obj, const char* prop, uin
 static JPH::Vec3 readVec3(JSContext* ctx, JSValueConst obj, JPH::Vec3 def = JPH::Vec3::sZero()) {
     if (!JS_IsObject(obj)) return def;
     return JPH::Vec3(
-        (float)jsGetNum(ctx, obj, "x", def.GetX()),
-        (float)jsGetNum(ctx, obj, "y", def.GetY()),
-        (float)jsGetNum(ctx, obj, "z", def.GetZ()));
+        (float)qjsbind::get_prop_number(ctx, obj, "x", def.GetX()),
+        (float)qjsbind::get_prop_number(ctx, obj, "y", def.GetY()),
+        (float)qjsbind::get_prop_number(ctx, obj, "z", def.GetZ()));
 }
 
 static JPH::Quat readQuat(JSContext* ctx, JSValueConst obj) {
     if (!JS_IsObject(obj)) return JPH::Quat::sIdentity();
     return JPH::Quat(
-        (float)jsGetNum(ctx, obj, "x", 0),
-        (float)jsGetNum(ctx, obj, "y", 0),
-        (float)jsGetNum(ctx, obj, "z", 0),
-        (float)jsGetNum(ctx, obj, "w", 1)).Normalized();
+        (float)qjsbind::get_prop_number(ctx, obj, "x", 0),
+        (float)qjsbind::get_prop_number(ctx, obj, "y", 0),
+        (float)qjsbind::get_prop_number(ctx, obj, "z", 0),
+        (float)qjsbind::get_prop_number(ctx, obj, "w", 1)).Normalized();
 }
 
 static bool readFloatArray(JSContext* ctx, JSValueConst v, std::vector<float>& out) {
@@ -224,7 +197,7 @@ static bool readU32Array(JSContext* ctx, JSValueConst v, std::vector<uint32_t>& 
 static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
                             physics::PhysicsWorld* world,
                             physics::BodyOptions& out, std::string& err) {
-    std::string shape = jsGetString(ctx, opts, "shape");
+    std::string shape = qjsbind::get_prop_string(ctx, opts, "shape");
     if (shape.empty()) { err = "shape is required"; return false; }
 
     if      (shape == "box")        out.shape = physics::BodyOptions::ShapeBox;
@@ -257,23 +230,23 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
     out.halfExtents = readVec3(ctx, he, JPH::Vec3(0.5f, 0.5f, 0.5f));
     JS_FreeValue(ctx, he);
 
-    out.radius = (float)jsGetNum(ctx, opts, "radius", 0.5);
-    out.halfHeight = (float)jsGetNum(ctx, opts, "halfHeight", 0.5);
+    out.radius = (float)qjsbind::get_prop_number(ctx, opts, "radius", 0.5);
+    out.halfHeight = (float)qjsbind::get_prop_number(ctx, opts, "halfHeight", 0.5);
 
-    out.isStatic = jsGetBool(ctx, opts, "static", false);
-    out.isSensor = jsGetBool(ctx, opts, "sensor", false);
-    out.ccd = jsGetBool(ctx, opts, "ccd", false);
-    out.friction = (float)jsGetNum(ctx, opts, "friction", 0.5);
-    out.restitution = (float)jsGetNum(ctx, opts, "restitution", 0.3);
-    out.density = (float)jsGetNum(ctx, opts, "density", 1000.0);
-    out.gravityFactor = (float)jsGetNum(ctx, opts, "gravityFactor", 1.0);
-    out.linearDamping = (float)jsGetNum(ctx, opts, "linearDamping", 0.05);
-    out.angularDamping = (float)jsGetNum(ctx, opts, "angularDamping", 0.05);
-    out.maxLinearVelocity = (float)jsGetNum(ctx, opts, "maxLinearVelocity", 500.0);
-    out.maxAngularVelocity = (float)jsGetNum(ctx, opts, "maxAngularVelocity", 0.25 * 3.14159265 * 60.0);
+    out.isStatic = qjsbind::get_prop_bool(ctx, opts, "static", false);
+    out.isSensor = qjsbind::get_prop_bool(ctx, opts, "sensor", false);
+    out.ccd = qjsbind::get_prop_bool(ctx, opts, "ccd", false);
+    out.friction = (float)qjsbind::get_prop_number(ctx, opts, "friction", 0.5);
+    out.restitution = (float)qjsbind::get_prop_number(ctx, opts, "restitution", 0.3);
+    out.density = (float)qjsbind::get_prop_number(ctx, opts, "density", 1000.0);
+    out.gravityFactor = (float)qjsbind::get_prop_number(ctx, opts, "gravityFactor", 1.0);
+    out.linearDamping = (float)qjsbind::get_prop_number(ctx, opts, "linearDamping", 0.05);
+    out.angularDamping = (float)qjsbind::get_prop_number(ctx, opts, "angularDamping", 0.05);
+    out.maxLinearVelocity = (float)qjsbind::get_prop_number(ctx, opts, "maxLinearVelocity", 500.0);
+    out.maxAngularVelocity = (float)qjsbind::get_prop_number(ctx, opts, "maxAngularVelocity", 0.25 * 3.14159265 * 60.0);
     out.userData = jsGetU64(ctx, opts, "userData", 0);
 
-    std::string dofs = jsGetString(ctx, opts, "dofs");
+    std::string dofs = qjsbind::get_prop_string(ctx, opts, "dofs");
     if (dofs == "2d" || dofs == "plane2d" || dofs == "Plane2D") {
         out.dofs = JPH::EAllowedDOFs::Plane2D;
     } else if (dofs == "all" || dofs.empty()) {
@@ -347,9 +320,9 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
         }
         for (size_t i = 0; i + 1 < pts.size(); i += 2)
             out.chainPoints.push_back(JPH::Float2(pts[i], pts[i+1]));
-        out.chainDepth = (float)jsGetNum(ctx, opts, "depth", 20.0);
-        out.chainClosed = jsGetBool(ctx, opts, "closed", false);
-        out.chainFlipNormal = jsGetBool(ctx, opts, "flipNormal", false);
+        out.chainDepth = (float)qjsbind::get_prop_number(ctx, opts, "depth", 20.0);
+        out.chainClosed = qjsbind::get_prop_bool(ctx, opts, "closed", false);
+        out.chainFlipNormal = qjsbind::get_prop_bool(ctx, opts, "flipNormal", false);
         out.isStatic = true;
     }
 
@@ -541,7 +514,7 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
 
     physics::ConstraintOptions cs;
 
-    std::string type = jsGetString(ctx, o, "type");
+    std::string type = qjsbind::get_prop_string(ctx, o, "type");
     if (type == "distance") cs.type = physics::ConstraintOptions::Distance;
     else if (type == "point") cs.type = physics::ConstraintOptions::Point;
     else if (type == "hinge") cs.type = physics::ConstraintOptions::Hinge;
@@ -576,8 +549,8 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
     JSValue ax = JS_GetPropertyStr(ctx, o, "axis");
     cs.axis = readVec3(ctx, ax, JPH::Vec3(0, 1, 0)); JS_FreeValue(ctx, ax);
 
-    cs.minDistance = (float)jsGetNum(ctx, o, "minDistance", -1.0);
-    cs.maxDistance = (float)jsGetNum(ctx, o, "maxDistance", -1.0);
+    cs.minDistance = (float)qjsbind::get_prop_number(ctx, o, "minDistance", -1.0);
+    cs.maxDistance = (float)qjsbind::get_prop_number(ctx, o, "maxDistance", -1.0);
 
     JSValue lmin = JS_GetPropertyStr(ctx, o, "limitMin");
     JSValue lmax = JS_GetPropertyStr(ctx, o, "limitMax");
@@ -589,8 +562,8 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
     }
     JS_FreeValue(ctx, lmin); JS_FreeValue(ctx, lmax);
 
-    cs.breakingImpulse = (float)jsGetNum(ctx, o, "breakingImpulse", 0.0);
-    cs.collideConnected = jsGetBool(ctx, o, "collideConnected", false);
+    cs.breakingImpulse = (float)qjsbind::get_prop_number(ctx, o, "breakingImpulse", 0.0);
+    cs.collideConnected = qjsbind::get_prop_bool(ctx, o, "collideConnected", false);
 
     if (cs.type == physics::ConstraintOptions::Wheel) {
         JSValue sa = JS_GetPropertyStr(ctx, o, "suspensionAxis");
@@ -599,8 +572,8 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
         JSValue ha = JS_GetPropertyStr(ctx, o, "hingeAxis");
         cs.wheelHingeAxis = readVec3(ctx, ha, JPH::Vec3(0, 0, 1));
         JS_FreeValue(ctx, ha);
-        cs.wheelHertz = (float)jsGetNum(ctx, o, "hertz", 2.0);
-        cs.wheelDampingRatio = (float)jsGetNum(ctx, o, "dampingRatio", 0.7);
+        cs.wheelHertz = (float)qjsbind::get_prop_number(ctx, o, "hertz", 2.0);
+        cs.wheelDampingRatio = (float)qjsbind::get_prop_number(ctx, o, "dampingRatio", 0.7);
         JSValue lo = JS_GetPropertyStr(ctx, o, "lowerTranslation");
         JSValue hi = JS_GetPropertyStr(ctx, o, "upperTranslation");
         if (!JS_IsUndefined(lo) && !JS_IsUndefined(hi)) {
@@ -611,23 +584,23 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
             cs.wheelHasTranslationLimits = true;
         }
         JS_FreeValue(ctx, lo); JS_FreeValue(ctx, hi);
-        cs.wheelEnableMotor = jsGetBool(ctx, o, "enableMotor", false);
-        cs.wheelMotorSpeed = (float)jsGetNum(ctx, o, "motorSpeed", 0.0);
-        cs.wheelMaxMotorTorque = (float)jsGetNum(ctx, o, "maxMotorTorque", 0.0);
+        cs.wheelEnableMotor = qjsbind::get_prop_bool(ctx, o, "enableMotor", false);
+        cs.wheelMotorSpeed = (float)qjsbind::get_prop_number(ctx, o, "motorSpeed", 0.0);
+        cs.wheelMaxMotorTorque = (float)qjsbind::get_prop_number(ctx, o, "maxMotorTorque", 0.0);
     }
 
     if (cs.type == physics::ConstraintOptions::Cone) {
-        cs.coneHalfAngle = (float)jsGetNum(ctx, o, "halfConeAngle", 0.0);
+        cs.coneHalfAngle = (float)qjsbind::get_prop_number(ctx, o, "halfConeAngle", 0.0);
     }
 
     if (cs.type == physics::ConstraintOptions::SwingTwist) {
         JSValue pa = JS_GetPropertyStr(ctx, o, "planeAxis");
         cs.planeAxis = readVec3(ctx, pa, JPH::Vec3(0, 1, 0)); JS_FreeValue(ctx, pa);
-        cs.normalHalfConeAngle = (float)jsGetNum(ctx, o, "normalHalfConeAngle", 0.0);
-        cs.planeHalfConeAngle = (float)jsGetNum(ctx, o, "planeHalfConeAngle", 0.0);
-        cs.twistMinAngle = (float)jsGetNum(ctx, o, "twistMinAngle", 0.0);
-        cs.twistMaxAngle = (float)jsGetNum(ctx, o, "twistMaxAngle", 0.0);
-        cs.maxFrictionTorque = (float)jsGetNum(ctx, o, "maxFrictionTorque", 0.0);
+        cs.normalHalfConeAngle = (float)qjsbind::get_prop_number(ctx, o, "normalHalfConeAngle", 0.0);
+        cs.planeHalfConeAngle = (float)qjsbind::get_prop_number(ctx, o, "planeHalfConeAngle", 0.0);
+        cs.twistMinAngle = (float)qjsbind::get_prop_number(ctx, o, "twistMinAngle", 0.0);
+        cs.twistMaxAngle = (float)qjsbind::get_prop_number(ctx, o, "twistMaxAngle", 0.0);
+        cs.maxFrictionTorque = (float)qjsbind::get_prop_number(ctx, o, "maxFrictionTorque", 0.0);
     }
 
     if (cs.type == physics::ConstraintOptions::Pulley) {
@@ -639,9 +612,9 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
         cs.bodyPoint2 = readVec3(ctx, bp2); JS_FreeValue(ctx, bp2);
         JSValue fp2 = JS_GetPropertyStr(ctx, o, "fixedPoint2");
         cs.fixedPoint2 = readVec3(ctx, fp2); JS_FreeValue(ctx, fp2);
-        cs.ratio = (float)jsGetNum(ctx, o, "ratio", 1.0);
-        cs.minLength = (float)jsGetNum(ctx, o, "minLength", 0.0);
-        cs.maxLength = (float)jsGetNum(ctx, o, "maxLength", -1.0);
+        cs.ratio = (float)qjsbind::get_prop_number(ctx, o, "ratio", 1.0);
+        cs.minLength = (float)qjsbind::get_prop_number(ctx, o, "minLength", 0.0);
+        cs.maxLength = (float)qjsbind::get_prop_number(ctx, o, "maxLength", -1.0);
     }
 
     if (cs.type == physics::ConstraintOptions::Gear ||
@@ -650,9 +623,9 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
         cs.hingeAxis1 = readVec3(ctx, ha1, JPH::Vec3(1, 0, 0)); JS_FreeValue(ctx, ha1);
         JSValue ha2 = JS_GetPropertyStr(ctx, o, cs.type == physics::ConstraintOptions::Gear ? "hingeAxis2" : "sliderAxis");
         cs.hingeAxis2 = readVec3(ctx, ha2, JPH::Vec3(1, 0, 0)); JS_FreeValue(ctx, ha2);
-        cs.ratio = (float)jsGetNum(ctx, o, "ratio", 1.0);
-        cs.dependentConstraint1 = (uint32_t)jsGetNum(ctx, o, "constraint1", 0.0);
-        cs.dependentConstraint2 = (uint32_t)jsGetNum(ctx, o, "constraint2", 0.0);
+        cs.ratio = (float)qjsbind::get_prop_number(ctx, o, "ratio", 1.0);
+        cs.dependentConstraint1 = (uint32_t)qjsbind::get_prop_number(ctx, o, "constraint1", 0.0);
+        cs.dependentConstraint2 = (uint32_t)qjsbind::get_prop_number(ctx, o, "constraint2", 0.0);
         if (!cs.dependentConstraint1 || !cs.dependentConstraint2) {
             const char* m = cs.type == physics::ConstraintOptions::Gear
                 ? "gear requires constraint1/constraint2 (two hinge constraint handles)"
@@ -1409,7 +1382,7 @@ static JSValue js_physics_createWorldHandle(JSContext* ctx, JSValueConst, int ar
     int maxBodies = 1024;
     JPH::Vec3 gravity(0, -9.81f, 0);
     if (argc >= 1 && JS_IsObject(argv[0])) {
-        double mb = jsGetNum(ctx, argv[0], "maxBodies", 1024);
+        double mb = qjsbind::get_prop_number(ctx, argv[0], "maxBodies", 1024);
         maxBodies = (int)mb;
         JSValue gv = JS_GetPropertyStr(ctx, argv[0], "gravity");
         if (JS_IsObject(gv)) gravity = readVec3(ctx, gv, gravity);

@@ -28,6 +28,8 @@
 #include "js/diar_bindings.h"
 #include "util/interrupt.h"
 #include "js/async_job.h"
+#include "js/model_gate.h"
+#include "js/marshal.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -63,8 +65,7 @@ struct SortformerWrapper {
     // Set while an async bro.diar.diarize() runs on a background thread; the
     // synchronous diarize()/session.feed() reject if it is set. shared_ptr so
     // sessions share this exact gate with the model.
-    std::shared_ptr<std::atomic<bool>> busy =
-        std::make_shared<std::atomic<bool>>(false);
+    ModelGate busy;
 };
 
 // A Sortformer streaming session over shared weights: its own Arrival-Order
@@ -73,7 +74,7 @@ struct SortformerWrapper {
 // move-only brosoundml::SortformerSession.
 struct SortformerSessionWrapper {
     std::shared_ptr<brosoundml::Sortformer> model;
-    std::shared_ptr<std::atomic<bool>>      busy;   // shared with the model
+    ModelGate busy;   // shared with the model
     brotensor::Device                       device = brotensor::Device::CPU;
     brosoundml::SortformerSession           session;
 };
@@ -136,70 +137,6 @@ static bool parseDeviceOpt(JSContext* ctx, JSValueConst opts,
     return false;
 }
 
-// Read a Float32Array's element pointer + count. Returns nullptr if not a
-// Float32Array view.
-static const float* getFloatArray(JSContext* ctx, JSValueConst v, size_t& count) {
-    count = 0;
-    if (!JS_IsObject(v)) return nullptr;
-    size_t byteOff = 0, viewLen = 0, bpe = 0;
-    JSValue abuf = JS_GetTypedArrayBuffer(ctx, v, &byteOff, &viewLen, &bpe);
-    if (JS_IsException(abuf)) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        return nullptr;
-    }
-    size_t abufLen = 0;
-    std::uint8_t* p = JS_GetArrayBuffer(ctx, &abufLen, abuf);
-    JS_FreeValue(ctx, abuf);
-    if (!p || bpe != sizeof(float)) return nullptr;
-    count = viewLen / sizeof(float);
-    return reinterpret_cast<const float*>(p + byteOff);
-}
-
-// Read a JS audio object — either { samples: Float32Array, sampleRate }, a raw
-// Float32Array (assumed 16 kHz), or { samples: number[], sampleRate } — into a
-// brosoundml::AudioBuffer.
-static bool readAudioBuffer(JSContext* ctx, JSValueConst v,
-                            brosoundml::AudioBuffer& out, std::string& err) {
-    out.sample_rate = 16000;
-    size_t cnt = 0;
-    if (const float* p = getFloatArray(ctx, v, cnt)) {     // bare Float32Array
-        out.samples.assign(p, p + cnt);
-        return true;
-    }
-    if (!JS_IsObject(v)) {
-        err = "audio must be a Float32Array or { samples, sampleRate } object";
-        return false;
-    }
-    JSValue sr = JS_GetPropertyStr(ctx, v, "sampleRate");
-    if (JS_IsNumber(sr)) { int32_t t = out.sample_rate; JS_ToInt32(ctx, &t, sr); out.sample_rate = t; }
-    JS_FreeValue(ctx, sr);
-
-    JSValue s = JS_GetPropertyStr(ctx, v, "samples");
-    bool ok = false;
-    size_t fc = 0;
-    if (const float* p = getFloatArray(ctx, s, fc)) {
-        out.samples.assign(p, p + fc);
-        ok = true;
-    } else if (JS_IsArray(s)) {
-        std::uint32_t n = 0;
-        JSValue lv = JS_GetPropertyStr(ctx, s, "length");
-        JS_ToUint32(ctx, &n, lv);
-        JS_FreeValue(ctx, lv);
-        out.samples.resize(n);
-        for (std::uint32_t i = 0; i < n; ++i) {
-            JSValue e = JS_GetPropertyUint32(ctx, s, i);
-            double t = 0.0;
-            JS_ToFloat64(ctx, &t, e);
-            out.samples[i] = (float)t;
-            JS_FreeValue(ctx, e);
-        }
-        ok = true;
-    } else {
-        err = "audio.samples must be a Float32Array or number[]";
-    }
-    JS_FreeValue(ctx, s);
-    return ok;
-}
 
 // Build the JS result object from a Diarization: { numFrames, numSpeakers,
 // frameSeconds, probs: Float32Array }.
@@ -268,7 +205,7 @@ static JSValue js_sortformer_diarize(JSContext* ctx, JSValueConst this_val,
     if (!w) return JS_ThrowTypeError(ctx, "diarize: not a Sortformer");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "diarize(audio): audio required");
-    if (w->busy->load(std::memory_order_acquire))
+    if (w->busy.isBusy())
         return JS_ThrowInternalError(ctx,
             "diarize: an operation is already in flight on this model");
 
@@ -450,8 +387,7 @@ static JSValue js_diar_diarize(JSContext* ctx, JSValueConst,
 
     // Claim the model (single-owner; one op in flight across the model + its
     // sessions).
-    bool expected = false;
-    if (!w->busy->compare_exchange_strong(expected, true)) {
+    if (!w->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
             "diarize: an operation is already in flight on this model");
@@ -473,7 +409,7 @@ static JSValue js_diar_diarize(JSContext* ctx, JSValueConst,
         // Release the single-owner lock BEFORE invoking onDone so a callback that
         // synchronously starts the next op on this model succeeds instead of
         // tripping the in-flight guard (matches the stt/tts bindings).
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue res = (error.empty() && !cancelled)
                               ? makeDiarization(c, job->result)
@@ -545,7 +481,7 @@ static JSValue js_session_feed(JSContext* ctx, JSValueConst this_val,
     if (!sw) return JS_ThrowTypeError(ctx, "feed: not a SortformerSession");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "feed(audio, isLast?): audio required");
-    if (sw->busy->load(std::memory_order_acquire))
+    if (sw->busy.isBusy())
         return JS_ThrowInternalError(ctx,
             "feed: an operation is already in flight on this model");
 
@@ -569,7 +505,7 @@ static JSValue js_session_reset(JSContext* ctx, JSValueConst this_val,
                                 int, JSValueConst*) {
     auto* sw = sessionSelf(ctx, this_val);
     if (!sw) return JS_ThrowTypeError(ctx, "reset: not a SortformerSession");
-    if (sw->busy->load(std::memory_order_acquire))
+    if (sw->busy.isBusy())
         return JS_ThrowInternalError(ctx, "reset: an operation is in flight on this model");
     try {
         brotensor::DeviceScope scope(sw->device);
@@ -602,8 +538,7 @@ static void registerSortformerSessionClass(JSContext* ctx) {
 struct ClusterDiarizerWrapper {
     std::shared_ptr<brosoundml::ClusterDiarizer> model;
     brotensor::Device device = brotensor::Device::CPU;
-    std::shared_ptr<std::atomic<bool>> busy =
-        std::make_shared<std::atomic<bool>>(false);
+    ModelGate busy;
 };
 
 static ClusterDiarizerWrapper* clusterSelf(JSContext* ctx, JSValueConst v) {
@@ -620,7 +555,7 @@ static JSValue js_cluster_diarize_method(JSContext* ctx, JSValueConst this_val,
     if (!w) return JS_ThrowTypeError(ctx, "diarize: not a ClusterDiarizer");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "diarize(audio, opts?): audio required");
-    if (w->busy->load(std::memory_order_acquire))
+    if (w->busy.isBusy())
         return JS_ThrowInternalError(ctx,
             "diarize: an operation is already in flight on this model");
 
@@ -772,8 +707,7 @@ static JSValue js_diar_clusterDiarize(JSContext* ctx, JSValueConst,
     if (argc >= 3 && JS_IsObject(argv[2]))
         onDone = JS_GetPropertyStr(ctx, argv[2], "onDone");
 
-    bool expected = false;
-    if (!w->busy->compare_exchange_strong(expected, true)) {
+    if (!w->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
             "clusterDiarize: an operation is already in flight on this model");
@@ -790,7 +724,7 @@ static JSValue js_diar_clusterDiarize(JSContext* ctx, JSValueConst,
         job->result = mw->model->diarize(job->audio, job->cfg);
     };
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue res = (error.empty() && !cancelled)
                               ? makeDiarization(c, job->result) : JS_NULL;

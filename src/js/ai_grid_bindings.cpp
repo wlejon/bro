@@ -56,46 +56,6 @@ struct JsValueHolder {
     ~JsValueHolder() { if (ctx) JS_FreeValue(ctx, v); }
 };
 
-// ─── Typed array marshalling ───────────────────────────────────────────────
-//
-// Hot paths: ObsWindow tile/layer samplers can return plain JS arrays like
-// [1, 0], not Float32Arrays. We must avoid calling JS_GetTypedArrayBuffer on
-// non-typed-array values: that path constructs and throws a TypeError every
-// call, and even when caught and freed it churns the heap with Error objects
-// and stack frames. Check JS_IsArray first; fall through to the typed-array
-// path only when it isn't a plain array. Any leftover exception (the value
-// is neither a plain array nor a typed array) is captured-and-freed properly
-// — `JS_GetException(ctx)` returns a strong ref the caller owns.
-std::vector<float> readFloat32Array(JSContext* ctx, JSValueConst val) {
-    std::vector<float> out;
-    if (JS_IsUndefined(val) || JS_IsNull(val)) return out;
-    if (JS_IsArray(val)) {
-        JSValue lv = JS_GetPropertyStr(ctx, val, "length");
-        uint32_t n = 0; JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
-        out.reserve(n);
-        for (uint32_t i = 0; i < n; ++i) {
-            JSValue e = JS_GetPropertyUint32(ctx, val, i);
-            double d = 0; JS_ToFloat64(ctx, &d, e);
-            JS_FreeValue(ctx, e);
-            out.push_back(static_cast<float>(d));
-        }
-        return out;
-    }
-    size_t off = 0, len = 0;
-    JSValue ab = JS_GetTypedArrayBuffer(ctx, val, &off, &len, nullptr);
-    if (JS_IsException(ab)) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        return out;
-    }
-    size_t ab_len = 0;
-    uint8_t* raw = JS_GetArrayBuffer(ctx, &ab_len, ab);
-    JS_FreeValue(ctx, ab);
-    if (!raw) return out;
-    size_t n = len / sizeof(float);
-    out.resize(n);
-    if (n) std::memcpy(out.data(), raw + off, n * sizeof(float));
-    return out;
-}
 
 std::vector<int> readIntArray(JSContext* ctx, JSValueConst val) {
     std::vector<int> out;
@@ -212,10 +172,10 @@ static JSValue js_createObsWindow(JSContext* ctx, JSValueConst, int argc, JSValu
         spec.tile_channels = getInt(ctx, tileV, "channels", spec.tile_channels);
         // tile.normalize / tile.oob
         JSValue normV = JS_GetPropertyStr(ctx, tileV, "normalize");
-        spec.tile_normalize = readFloat32Array(ctx, normV);
+        spec.tile_normalize = qjsbind::read_float32_array(ctx, normV);
         JS_FreeValue(ctx, normV);
         JSValue oobV = JS_GetPropertyStr(ctx, tileV, "oob");
-        spec.oob_tile = readFloat32Array(ctx, oobV);
+        spec.oob_tile = qjsbind::read_float32_array(ctx, oobV);
         JS_FreeValue(ctx, oobV);
 
         JSValue sf = JS_GetPropertyStr(ctx, tileV, "sample");
@@ -246,7 +206,7 @@ static JSValue js_createObsWindow(JSContext* ctx, JSValueConst, int argc, JSValu
                 return true;
             }
             // Array / typed array
-            auto vec = readFloat32Array(ctx, r);
+            auto vec = qjsbind::read_float32_array(ctx, r);
             JS_FreeValue(ctx, r);
             int n = std::min<int>(TC, static_cast<int>(vec.size()));
             for (int i = 0; i < n; ++i) out[i] = vec[static_cast<size_t>(i)];
@@ -272,7 +232,7 @@ static JSValue js_createObsWindow(JSContext* ctx, JSValueConst, int argc, JSValu
             if (!JS_IsUndefined(ow)) L.overwrite = JS_ToBool(ctx, ow) > 0;
             JS_FreeValue(ctx, ow);
             JSValue normV = JS_GetPropertyStr(ctx, lo, "normalize");
-            L.normalize = readFloat32Array(ctx, normV);
+            L.normalize = qjsbind::read_float32_array(ctx, normV);
             JS_FreeValue(ctx, normV);
 
             JSValue ev = JS_GetPropertyStr(ctx, lo, "enumerate");
@@ -306,7 +266,7 @@ static JSValue js_createObsWindow(JSContext* ctx, JSValueConst, int argc, JSValu
                 c.col = getInt(ctx, r, "col", 0);
                 c.row = getInt(ctx, r, "row", 0);
                 JSValue vals = JS_GetPropertyStr(ctx, r, "values");
-                if (!JS_IsUndefined(vals) && !JS_IsNull(vals)) c.values = readFloat32Array(ctx, vals);
+                if (!JS_IsUndefined(vals) && !JS_IsNull(vals)) c.values = qjsbind::read_float32_array(ctx, vals);
                 else {
                     // Single 'value' field shortcut.
                     double v = getDouble(ctx, r, "value", 1.0);
@@ -461,7 +421,7 @@ static mcts_ns::GenericEnv buildEnvFromJs(JsEnvCallbacks* cb) {
     env.observe_fn = [cb, ctx]() -> std::vector<float> {
         JSValue r = JS_Call(ctx, cb->observe_fn, cb->env_obj, 0, nullptr);
         if (JS_IsException(r)) { JS_FreeValue(ctx, JS_GetException(ctx)); return {}; }
-        auto out = readFloat32Array(ctx, r);
+        auto out = qjsbind::read_float32_array(ctx, r);
         JS_FreeValue(ctx, r);
         return out;
     };
@@ -481,11 +441,11 @@ static learn::GenericSituation situationFromJs(JSContext* ctx, JSValueConst v) {
     learn::GenericSituation s;
     if (!JS_IsObject(v)) return s;
     JSValue obs = JS_GetPropertyStr(ctx, v, "obs");
-    s.obs = readFloat32Array(ctx, obs); JS_FreeValue(ctx, obs);
+    s.obs = qjsbind::read_float32_array(ctx, obs); JS_FreeValue(ctx, obs);
     JSValue pt = JS_GetPropertyStr(ctx, v, "policyTarget");
-    s.policy_target = readFloat32Array(ctx, pt); JS_FreeValue(ctx, pt);
+    s.policy_target = qjsbind::read_float32_array(ctx, pt); JS_FreeValue(ctx, pt);
     JSValue am = JS_GetPropertyStr(ctx, v, "actionMask");
-    s.action_mask = readFloat32Array(ctx, am); JS_FreeValue(ctx, am);
+    s.action_mask = qjsbind::read_float32_array(ctx, am); JS_FreeValue(ctx, am);
     s.value_target = static_cast<float>(getDouble(ctx, v, "valueTarget", 0.0));
     return s;
 }
@@ -797,7 +757,7 @@ void installGridBindings(JSContext* ctx, JSValue gameObj) {
                 JS_ToInt32(ctx, &ec, argv[0]);
                 JS_ToInt32(ctx, &er, argv[1]);
                 std::vector<float> self;
-                if (argc >= 3) self = readFloat32Array(ctx, argv[2]);
+                if (argc >= 3) self = qjsbind::read_float32_array(ctx, argv[2]);
                 std::vector<float> out(static_cast<size_t>(d->win->out_dim()), 0.0f);
                 d->win->build(ec, er, self.empty() ? nullptr : self.data(), self.size(), out.data());
                 return make_float32_array(ctx, out);
@@ -817,7 +777,7 @@ void installGridBindings(JSContext* ctx, JSValue gameObj) {
             [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                 auto* d = qjsbind::unwrap<FrameStackData>(ctx, this_val);
                 if (!d || !d->fs || argc < 1) return JS_UNDEFINED;
-                auto v = readFloat32Array(ctx, argv[0]);
+                auto v = qjsbind::read_float32_array(ctx, argv[0]);
                 if (static_cast<int>(v.size()) < d->fs->inner_dim()) v.resize(static_cast<size_t>(d->fs->inner_dim()), 0.0f);
                 d->fs->push(v.data());
                 return JS_UNDEFINED;
@@ -866,7 +826,7 @@ void installGridBindings(JSContext* ctx, JSValue gameObj) {
                 if (!d || !d->tape || argc < 2) return make_float32_array(ctx, {});
                 const char* sigC = JS_ToCString(ctx, argv[0]);
                 std::string sig = sigC ? sigC : ""; if (sigC) JS_FreeCString(ctx, sigC);
-                auto prior = readFloat32Array(ctx, argv[1]);
+                auto prior = qjsbind::read_float32_array(ctx, argv[1]);
                 d->tape->apply_priors(sig, prior.data(), static_cast<int>(prior.size()));
                 return make_float32_array(ctx, prior);
             }, 2)

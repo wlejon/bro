@@ -168,21 +168,6 @@ static void getSeed(JSContext* ctx, JSValueConst obj, const char* key,
     JS_FreeValue(ctx, v);
 }
 
-// Read a Float32Array's element pointer + count. Returns nullptr if `v` is
-// not a Float32Array. The pointer is valid only for the current call.
-static const float* getFloatArray(JSContext* ctx, JSValueConst v, size_t& count) {
-    count = 0;
-    if (!JS_IsObject(v)) return nullptr;
-    size_t byteOff = 0, viewLen = 0, bytesPerEl = 0;
-    JSValue abuf = JS_GetTypedArrayBuffer(ctx, v, &byteOff, &viewLen, &bytesPerEl);
-    if (JS_IsException(abuf)) { JS_FreeValue(ctx, JS_GetException(ctx)); return nullptr; }
-    size_t abufLen = 0;
-    std::uint8_t* p = JS_GetArrayBuffer(ctx, &abufLen, abuf);
-    JS_FreeValue(ctx, abuf);
-    if (!p || bytesPerEl != sizeof(float)) return nullptr;
-    count = viewLen / sizeof(float);
-    return reinterpret_cast<const float*>(p + byteOff);
-}
 
 // Download a brotensor::Tensor to host FP32, converting FP16 bits as needed.
 // brodiffusion tensors carry the compute dtype — FP16 on a GPU backend.
@@ -242,7 +227,7 @@ static bdp::GenerateOptions parseGenerateOptions(JSContext* ctx, JSValueConst v)
         JSValue nv = JS_GetPropertyStr(ctx, v, "initNoise");
         if (!JS_IsUndefined(nv) && !JS_IsNull(nv)) {
             std::size_t cnt = 0;
-            const float* fp = getFloatArray(ctx, nv, cnt);
+            const float* fp = qjsbind::read_float32_view(ctx, nv, cnt);
             if (fp && cnt > 0) o.init_noise.assign(fp, fp + cnt);
         }
         JS_FreeValue(ctx, nv);
@@ -680,7 +665,7 @@ static JSValue js_pipeline_setControlVector(JSContext* ctx, JSValueConst this_va
     if (argc < 1 || !argStr(ctx, argv[0], name))
         return JS_ThrowTypeError(ctx, "setControlVector(name, dir, alpha, scale?): name required");
     std::size_t count = 0;
-    const float* dir = getFloatArray(ctx, (argc >= 2) ? argv[1] : JS_UNDEFINED, count);
+    const float* dir = qjsbind::read_float32_view(ctx, (argc >= 2) ? argv[1] : JS_UNDEFINED, count);
     if (!dir || count == 0)
         return JS_ThrowTypeError(ctx, "setControlVector: dir must be a non-empty Float32Array");
     double alpha = 0.0;
@@ -967,7 +952,7 @@ static JSValue js_state_stepOnce(JSContext* ctx, JSValueConst this_val,
                 getInt(ctx, e, "Lk", Lk);
                 JSValue dv = JS_GetPropertyStr(ctx, e, "data");
                 std::size_t cnt = 0;
-                const float* fp = getFloatArray(ctx, dv, cnt);
+                const float* fp = qjsbind::read_float32_view(ctx, dv, cnt);
                 const bool ok = fp && Lq > 0 && Lk > 0 &&
                                 cnt == (std::size_t)Lq * (std::size_t)Lk;
                 if (!ok) {

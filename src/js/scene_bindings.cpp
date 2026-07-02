@@ -74,34 +74,10 @@ static double jsNum(JSContext* ctx, JSValueConst val) {
     return v;
 }
 
-static double jsGetProp(JSContext* ctx, JSValueConst obj, const char* prop, double def = 0.0) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    double r = def;
-    if (!JS_IsUndefined(v)) JS_ToFloat64(ctx, &r, v);
-    JS_FreeValue(ctx, v);
-    return r;
-}
-
-static bool jsGetBool(JSContext* ctx, JSValueConst obj, const char* prop, bool def = false) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    bool r = def;
-    if (!JS_IsUndefined(v)) r = JS_ToBool(ctx, v);
-    JS_FreeValue(ctx, v);
-    return r;
-}
-
 static std::string jsStr(JSContext* ctx, JSValueConst val) {
     const char* s = JS_ToCString(ctx, val);
     std::string r = s ? s : "";
     if (s) JS_FreeCString(ctx, s);
-    return r;
-}
-
-static std::string jsGetStr(JSContext* ctx, JSValueConst obj, const char* prop, const char* def = "") {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    std::string r = def;
-    if (JS_IsString(v)) r = jsStr(ctx, v);
-    JS_FreeValue(ctx, v);
     return r;
 }
 
@@ -209,10 +185,10 @@ static bromath::Color parseColorProp(JSContext* ctx, JSValueConst obj, const cha
     if (JS_IsString(v)) {
         parseColor(jsStr(ctx, v), p.r, p.g, p.b, p.a);
     } else if (JS_IsObject(v)) {
-        p.r = (uint8_t)jsGetProp(ctx, v, "r", 255);
-        p.g = (uint8_t)jsGetProp(ctx, v, "g", 255);
-        p.b = (uint8_t)jsGetProp(ctx, v, "b", 255);
-        p.a = (uint8_t)jsGetProp(ctx, v, "a", 255);
+        p.r = (uint8_t)qjsbind::get_prop_number(ctx, v, "r", 255);
+        p.g = (uint8_t)qjsbind::get_prop_number(ctx, v, "g", 255);
+        p.b = (uint8_t)qjsbind::get_prop_number(ctx, v, "b", 255);
+        p.a = (uint8_t)qjsbind::get_prop_number(ctx, v, "a", 255);
     }
     JS_FreeValue(ctx, v);
     return bromath::cfromColor8(p);
@@ -380,8 +356,8 @@ static JSValue js_node_setBaseColorTexture(JSContext* ctx, JSValueConst this_val
     if (!JS_IsObject(argv[0]))
         return JS_ThrowTypeError(ctx, "setBaseColorTexture: expected { width, height, data } or null");
 
-    int w_ = (int)jsGetProp(ctx, argv[0], "width",  0);
-    int h_ = (int)jsGetProp(ctx, argv[0], "height", 0);
+    int w_ = (int)qjsbind::get_prop_number(ctx, argv[0], "width",  0);
+    int h_ = (int)qjsbind::get_prop_number(ctx, argv[0], "height", 0);
     JSValue dataVal = JS_GetPropertyStr(ctx, argv[0], "data");
     size_t off = 0, len = 0;
     JSValue ab = JS_GetTypedArrayBuffer(ctx, dataVal, &off, &len, nullptr);
@@ -413,7 +389,7 @@ static JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int arg
 
     bool transfer = false;
     if (argc >= 2 && JS_IsObject(argv[1])) {
-        transfer = jsGetBool(ctx, argv[1], "transfer", false);
+        transfer = qjsbind::get_prop_bool(ctx, argv[1], "transfer", false);
     }
 
     // Path 1: argument is a Mesh object directly.
@@ -431,7 +407,7 @@ static JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int arg
 
     // Path 2: options object with `mesh:`/`data:` (Mesh) or raw typed arrays.
     if (!gotData && JS_IsObject(argv[0])) {
-        bool transferOpt = jsGetBool(ctx, argv[0], "transfer", false);
+        bool transferOpt = qjsbind::get_prop_bool(ctx, argv[0], "transfer", false);
 
         auto tryKey = [&](const char* key) -> bool {
             JSValue v = JS_GetPropertyStr(ctx, argv[0], key);
@@ -590,8 +566,8 @@ static void parseRange(JSContext* ctx, JSValueConst opts, const char* key,
         double n = 0; JS_ToFloat64(ctx, &n, v);
         outMin = outMax = (float)n;
     } else if (JS_IsObject(v)) {
-        outMin = (float)jsGetProp(ctx, v, "min", outMin);
-        outMax = (float)jsGetProp(ctx, v, "max", outMax);
+        outMin = (float)qjsbind::get_prop_number(ctx, v, "min", outMin);
+        outMax = (float)qjsbind::get_prop_number(ctx, v, "max", outMax);
     }
     JS_FreeValue(ctx, v);
 }
@@ -635,10 +611,10 @@ static void applyParticleOpts(JSContext* ctx, JSValueConst opts, scene::Particle
     JSValue velVal = JS_GetPropertyStr(ctx, opts, "velocity");
     if (JS_IsObject(velVal)) {
         node->setVelocity(
-            (float)jsGetProp(ctx, velVal, "angle", -90),
-            (float)jsGetProp(ctx, velVal, "angleSpread", 360),
-            (float)jsGetProp(ctx, velVal, "speed", 100),
-            (float)jsGetProp(ctx, velVal, "speedSpread", 0));
+            (float)qjsbind::get_prop_number(ctx, velVal, "angle", -90),
+            (float)qjsbind::get_prop_number(ctx, velVal, "angleSpread", 360),
+            (float)qjsbind::get_prop_number(ctx, velVal, "speed", 100),
+            (float)qjsbind::get_prop_number(ctx, velVal, "speedSpread", 0));
     }
     JS_FreeValue(ctx, velVal);
 
@@ -652,8 +628,8 @@ static void applyParticleOpts(JSContext* ctx, JSValueConst opts, scene::Particle
             JS_FreeValue(ctx, gx); JS_FreeValue(ctx, gy);
         } else {
             node->setGravity(
-                (float)jsGetProp(ctx, gravVal, "x", 0),
-                (float)jsGetProp(ctx, gravVal, "y", 0));
+                (float)qjsbind::get_prop_number(ctx, gravVal, "x", 0),
+                (float)qjsbind::get_prop_number(ctx, gravVal, "y", 0));
         }
     }
     JS_FreeValue(ctx, gravVal);
@@ -662,8 +638,8 @@ static void applyParticleOpts(JSContext* ctx, JSValueConst opts, scene::Particle
     JSValue sizeVal = JS_GetPropertyStr(ctx, opts, "size");
     if (JS_IsObject(sizeVal)) {
         node->setSize(
-            (float)jsGetProp(ctx, sizeVal, "start", 6),
-            (float)jsGetProp(ctx, sizeVal, "end", 0));
+            (float)qjsbind::get_prop_number(ctx, sizeVal, "start", 6),
+            (float)qjsbind::get_prop_number(ctx, sizeVal, "end", 0));
     } else if (JS_IsNumber(sizeVal)) {
         float v = (float)jsNum(ctx, sizeVal);
         node->setSize(v, v);
@@ -690,9 +666,9 @@ static void applyParticleOpts(JSContext* ctx, JSValueConst opts, scene::Particle
     JSValue rotVal = JS_GetPropertyStr(ctx, opts, "rotation");
     if (JS_IsObject(rotVal)) {
         node->setRotation(
-            (float)jsGetProp(ctx, rotVal, "start", 0),
-            (float)jsGetProp(ctx, rotVal, "spinSpeed", 0),
-            (float)jsGetProp(ctx, rotVal, "spinSpread", 0));
+            (float)qjsbind::get_prop_number(ctx, rotVal, "start", 0),
+            (float)qjsbind::get_prop_number(ctx, rotVal, "spinSpeed", 0),
+            (float)qjsbind::get_prop_number(ctx, rotVal, "spinSpread", 0));
     }
     JS_FreeValue(ctx, rotVal);
 
@@ -802,7 +778,7 @@ static JSValue js_sg_createShape(JSContext* ctx, JSValueConst this_val, int argc
         JSValueConst opts = argv[0];
 
         // Shape type
-        std::string shapeStr = jsGetStr(ctx, opts, "shape", "rect");
+        std::string shapeStr = qjsbind::get_prop_string(ctx, opts, "shape", "rect");
         if (shapeStr == "rect")        node->setShape(scene::ShapeNode::Shape::Rect);
         else if (shapeStr == "roundrect") node->setShape(scene::ShapeNode::Shape::RoundRect);
         else if (shapeStr == "circle")  node->setShape(scene::ShapeNode::Shape::Circle);
@@ -932,19 +908,19 @@ static void applySpriteSheet(JSContext* ctx, JSValueConst opts, scene::SpriteNod
         for (int32_t i = 0; i < len; ++i) {
             JSValue f = JS_GetPropertyUint32(ctx, framesVal, i);
             scene::SpriteNode::Frame fr{};
-            fr.x = (float)jsGetProp(ctx, f, "x", 0);
-            fr.y = (float)jsGetProp(ctx, f, "y", 0);
-            fr.w = (float)jsGetProp(ctx, f, "w", 0);
-            fr.h = (float)jsGetProp(ctx, f, "h", 0);
+            fr.x = (float)qjsbind::get_prop_number(ctx, f, "x", 0);
+            fr.y = (float)qjsbind::get_prop_number(ctx, f, "y", 0);
+            fr.w = (float)qjsbind::get_prop_number(ctx, f, "w", 0);
+            fr.h = (float)qjsbind::get_prop_number(ctx, f, "h", 0);
             frames.push_back(fr);
             JS_FreeValue(ctx, f);
         }
         node->setSheetFrames(std::move(frames));
     } else {
-        int fw = (int)jsGetProp(ctx, sheetVal, "frameWidth", 0);
-        int fh = (int)jsGetProp(ctx, sheetVal, "frameHeight", 0);
-        int cols = (int)jsGetProp(ctx, sheetVal, "columns", 0);
-        int rows = (int)jsGetProp(ctx, sheetVal, "rows", 0);
+        int fw = (int)qjsbind::get_prop_number(ctx, sheetVal, "frameWidth", 0);
+        int fh = (int)qjsbind::get_prop_number(ctx, sheetVal, "frameHeight", 0);
+        int cols = (int)qjsbind::get_prop_number(ctx, sheetVal, "columns", 0);
+        int rows = (int)qjsbind::get_prop_number(ctx, sheetVal, "rows", 0);
         node->setSheetGrid(fw, fh, cols, rows);
     }
     JS_FreeValue(ctx, framesVal);
@@ -1224,9 +1200,9 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         JS_FreeValue(ctx, nameVal);
 
         // Position
-        double x = jsGetProp(ctx, opts, "x", 0);
-        double y = jsGetProp(ctx, opts, "y", 0);
-        double z = jsGetProp(ctx, opts, "z", 0);
+        double x = qjsbind::get_prop_number(ctx, opts, "x", 0);
+        double y = qjsbind::get_prop_number(ctx, opts, "y", 0);
+        double z = qjsbind::get_prop_number(ctx, opts, "z", 0);
         node->setPosition((float)x, (float)y, (float)z);
 
         // Scale (uniform or per-axis)
@@ -1280,7 +1256,7 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         JS_FreeValue(ctx, colorVal);
 
         // Emissive intensity (scalar multiplier against emissiveColor)
-        double emissive = jsGetProp(ctx, opts, "emissive", 0.0);
+        double emissive = qjsbind::get_prop_number(ctx, opts, "emissive", 0.0);
         node->setEmissive((float)emissive);
 
         // Emissive color (defaults to baseColor if unspecified — mimics
@@ -1415,7 +1391,7 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         bromesh::MeshData meshData;
         bool hasRawData = false;
 
-        bool transfer = jsGetBool(ctx, opts, "transfer", false);
+        bool transfer = qjsbind::get_prop_bool(ctx, opts, "transfer", false);
 
         auto tryKey = [&](const char* key) -> bool {
             JSValue v = JS_GetPropertyStr(ctx, opts, key);
@@ -1457,40 +1433,40 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         }
 
         if (!hasRawData) {
-            std::string meshType = jsGetStr(ctx, opts, "mesh", "box");
+            std::string meshType = qjsbind::get_prop_string(ctx, opts, "mesh", "box");
 
             if (meshType == "box") {
-                double hw = jsGetProp(ctx, opts, "halfW", 0.5);
-                double hh = jsGetProp(ctx, opts, "halfH", 0.5);
-                double hd = jsGetProp(ctx, opts, "halfD", 0.5);
+                double hw = qjsbind::get_prop_number(ctx, opts, "halfW", 0.5);
+                double hh = qjsbind::get_prop_number(ctx, opts, "halfH", 0.5);
+                double hd = qjsbind::get_prop_number(ctx, opts, "halfD", 0.5);
                 meshData = bromesh::box((float)hw, (float)hh, (float)hd);
             } else if (meshType == "sphere") {
-                double radius = jsGetProp(ctx, opts, "radius", 0.5);
-                int segments = (int)jsGetProp(ctx, opts, "segments", 16);
-                int rings = (int)jsGetProp(ctx, opts, "rings", 12);
+                double radius = qjsbind::get_prop_number(ctx, opts, "radius", 0.5);
+                int segments = (int)qjsbind::get_prop_number(ctx, opts, "segments", 16);
+                int rings = (int)qjsbind::get_prop_number(ctx, opts, "rings", 12);
                 meshData = bromesh::sphere((float)radius, segments, rings);
             } else if (meshType == "cylinder") {
-                double radius = jsGetProp(ctx, opts, "radius", 0.5);
-                double halfH = jsGetProp(ctx, opts, "halfHeight", 0.5);
-                int segments = (int)jsGetProp(ctx, opts, "segments", 16);
+                double radius = qjsbind::get_prop_number(ctx, opts, "radius", 0.5);
+                double halfH = qjsbind::get_prop_number(ctx, opts, "halfHeight", 0.5);
+                int segments = (int)qjsbind::get_prop_number(ctx, opts, "segments", 16);
                 meshData = bromesh::cylinder((float)radius, (float)halfH, segments);
             } else if (meshType == "capsule") {
-                double radius = jsGetProp(ctx, opts, "radius", 0.5);
-                double halfH = jsGetProp(ctx, opts, "halfHeight", 0.5);
-                int segments = (int)jsGetProp(ctx, opts, "segments", 16);
-                int rings = (int)jsGetProp(ctx, opts, "rings", 8);
+                double radius = qjsbind::get_prop_number(ctx, opts, "radius", 0.5);
+                double halfH = qjsbind::get_prop_number(ctx, opts, "halfHeight", 0.5);
+                int segments = (int)qjsbind::get_prop_number(ctx, opts, "segments", 16);
+                int rings = (int)qjsbind::get_prop_number(ctx, opts, "rings", 8);
                 meshData = bromesh::capsule((float)radius, (float)halfH, segments, rings);
             } else if (meshType == "plane") {
-                double hw = jsGetProp(ctx, opts, "halfW", 5.0);
-                double hd = jsGetProp(ctx, opts, "halfD", 5.0);
-                int sx = (int)jsGetProp(ctx, opts, "subdivX", 1);
-                int sz = (int)jsGetProp(ctx, opts, "subdivZ", 1);
+                double hw = qjsbind::get_prop_number(ctx, opts, "halfW", 5.0);
+                double hd = qjsbind::get_prop_number(ctx, opts, "halfD", 5.0);
+                int sx = (int)qjsbind::get_prop_number(ctx, opts, "subdivX", 1);
+                int sz = (int)qjsbind::get_prop_number(ctx, opts, "subdivZ", 1);
                 meshData = bromesh::plane((float)hw, (float)hd, sx, sz);
             } else if (meshType == "torus") {
-                double major = jsGetProp(ctx, opts, "majorRadius", 1.0);
-                double minor = jsGetProp(ctx, opts, "minorRadius", 0.3);
-                int majSeg = (int)jsGetProp(ctx, opts, "majorSegments", 24);
-                int minSeg = (int)jsGetProp(ctx, opts, "minorSegments", 12);
+                double major = qjsbind::get_prop_number(ctx, opts, "majorRadius", 1.0);
+                double minor = qjsbind::get_prop_number(ctx, opts, "minorRadius", 0.3);
+                int majSeg = (int)qjsbind::get_prop_number(ctx, opts, "majorSegments", 24);
+                int minSeg = (int)qjsbind::get_prop_number(ctx, opts, "minorSegments", 12);
                 meshData = bromesh::torus((float)major, (float)minor, majSeg, minSeg);
             }
         }
@@ -1505,8 +1481,8 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         auto applyTex = [&](const char* key, void (scene::MeshNode::*setter)(int, int, const uint8_t*)) {
             JSValue tex = JS_GetPropertyStr(ctx, argv[0], key);
             if (JS_IsObject(tex)) {
-                int w = (int)jsGetProp(ctx, tex, "width",  0);
-                int h = (int)jsGetProp(ctx, tex, "height", 0);
+                int w = (int)qjsbind::get_prop_number(ctx, tex, "width",  0);
+                int h = (int)qjsbind::get_prop_number(ctx, tex, "height", 0);
                 JSValue dataVal = JS_GetPropertyStr(ctx, tex, "data");
                 size_t bytes = 0;
                 size_t off = 0, len = 0;
@@ -1597,7 +1573,7 @@ static JSValue js_sg_createGaussianSplat(JSContext* ctx, JSValueConst this_val,
             readF32("rotations", cloud.rotations);
             readF32("opacities", cloud.opacities);
             readF32("sh",        cloud.sh);
-            cloud.shDegree = (int)jsGetProp(ctx, cloudVal, "shDegree", 0);
+            cloud.shDegree = (int)qjsbind::get_prop_number(ctx, cloudVal, "shDegree", 0);
             if (cloud.empty()) {
                 LOG_WARN("createGaussianSplat: opts.cloud has no positions");
             } else {
@@ -1608,9 +1584,9 @@ static JSValue js_sg_createGaussianSplat(JSContext* ctx, JSValueConst this_val,
         }
         JS_FreeValue(ctx, cloudVal);
 
-        double x = jsGetProp(ctx, opts, "x", 0);
-        double y = jsGetProp(ctx, opts, "y", 0);
-        double z = jsGetProp(ctx, opts, "z", 0);
+        double x = qjsbind::get_prop_number(ctx, opts, "x", 0);
+        double y = qjsbind::get_prop_number(ctx, opts, "y", 0);
+        double z = qjsbind::get_prop_number(ctx, opts, "z", 0);
         node->setPosition((float)x, (float)y, (float)z);
 
         JSValue scaleVal = JS_GetPropertyStr(ctx, opts, "scale");
@@ -1648,9 +1624,9 @@ static JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
         if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
         JS_FreeValue(ctx, nameVal);
 
-        double x = jsGetProp(ctx, opts, "x", 0);
-        double y = jsGetProp(ctx, opts, "y", 0);
-        double z = jsGetProp(ctx, opts, "z", 0);
+        double x = qjsbind::get_prop_number(ctx, opts, "x", 0);
+        double y = qjsbind::get_prop_number(ctx, opts, "y", 0);
+        double z = qjsbind::get_prop_number(ctx, opts, "z", 0);
         node->setPosition((float)x, (float)y, (float)z);
 
         // Color
@@ -1675,7 +1651,7 @@ static JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
         }
         JS_FreeValue(ctx, colorVal);
 
-        double emissive = jsGetProp(ctx, opts, "emissive", 0.0);
+        double emissive = qjsbind::get_prop_number(ctx, opts, "emissive", 0.0);
         node->setEmissive((float)emissive);
 
         JSValue emColVal = JS_GetPropertyStr(ctx, opts, "emissiveColor");
@@ -1724,7 +1700,7 @@ static JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
         JS_FreeValue(ctx, rsVal);
 
         // Mesh source — accept a Mesh handle from MeshBindings.
-        bool transfer = jsGetBool(ctx, opts, "transfer", false);
+        bool transfer = qjsbind::get_prop_bool(ctx, opts, "transfer", false);
         JSValue meshVal = JS_GetPropertyStr(ctx, opts, "mesh");
         if (!JS_IsUndefined(meshVal) && MeshBindings::getMeshData(ctx, meshVal)) {
             if (transfer) {
@@ -1750,8 +1726,8 @@ static JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
         auto applyTex = [&](const char* key, void (scene::InstancedMeshNode::*setter)(int, int, const uint8_t*)) {
             JSValue tex = JS_GetPropertyStr(ctx, opts, key);
             if (JS_IsObject(tex)) {
-                int w = (int)jsGetProp(ctx, tex, "width",  0);
-                int h = (int)jsGetProp(ctx, tex, "height", 0);
+                int w = (int)qjsbind::get_prop_number(ctx, tex, "width",  0);
+                int h = (int)qjsbind::get_prop_number(ctx, tex, "height", 0);
                 JSValue dataVal = JS_GetPropertyStr(ctx, tex, "data");
                 size_t bytes = 0, off = 0, len = 0;
                 JSValue ab = JS_GetTypedArrayBuffer(ctx, dataVal, &off, &len, nullptr);
@@ -2155,10 +2131,10 @@ static JSValue js_sg_setCamera(JSContext* ctx, JSValueConst this_val, int argc, 
     if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
 
     JSValueConst opts = argv[0];
-    double fov = jsGetProp(ctx, opts, "fov", 60.0) * 3.14159265 / 180.0;
-    double nearZ = jsGetProp(ctx, opts, "near", 0.1);
-    double farZ = jsGetProp(ctx, opts, "far", 1000.0);
-    double aspect = jsGetProp(ctx, opts, "aspect", 0.0);
+    double fov = qjsbind::get_prop_number(ctx, opts, "fov", 60.0) * 3.14159265 / 180.0;
+    double nearZ = qjsbind::get_prop_number(ctx, opts, "near", 0.1);
+    double farZ = qjsbind::get_prop_number(ctx, opts, "far", 1000.0);
+    double aspect = qjsbind::get_prop_number(ctx, opts, "aspect", 0.0);
 
     // Aspect omitted → derive from current canvas and flag the projection
     // to auto-follow on future canvas resizes (setCanvasSize rebuilds it).
@@ -2182,9 +2158,9 @@ static JSValue js_sg_setCamera(JSContext* ctx, JSValueConst this_val, int argc, 
         bromath::Vec3 target = jsGetVec3(ctx, opts, "target", 0, 0, 0);
         bromath::Vec3 up = jsGetVec3(ctx, opts, "up", 0, 1, 0);
 
-        std::string mode = jsGetStr(ctx, opts, "mode", "perspective");
+        std::string mode = qjsbind::get_prop_string(ctx, opts, "mode", "perspective");
         if (mode == "orthographic" || mode == "ortho") {
-            double size = jsGetProp(ctx, opts, "size", 10.0);
+            double size = qjsbind::get_prop_number(ctx, opts, "size", 10.0);
             float halfW = (float)(size * aspect * 0.5);
             float halfH = (float)(size * 0.5);
             g->setCameraOrtho(-halfW, halfW, -halfH, halfH,
@@ -2214,7 +2190,7 @@ static JSValue js_sg_createLight(JSContext* ctx, JSValueConst this_val, int argc
         if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
         JS_FreeValue(ctx, nameVal);
 
-        std::string kindStr = jsGetStr(ctx, opts, "type", "directional");
+        std::string kindStr = qjsbind::get_prop_string(ctx, opts, "type", "directional");
         if      (kindStr == "point")       node->setKind(scene::LightNode::Kind::Point);
         else if (kindStr == "spot")        node->setKind(scene::LightNode::Kind::Spot);
         else                               node->setKind(scene::LightNode::Kind::Directional);
@@ -2298,12 +2274,12 @@ static JSValue js_sg_setToneMap(JSContext* ctx, JSValueConst this_val, int argc,
     auto* g = getGraph(ctx, this_val);
     if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
     JSValueConst opts = argv[0];
-    std::string modeStr = jsGetStr(ctx, opts, "mode", "aces");
+    std::string modeStr = qjsbind::get_prop_string(ctx, opts, "mode", "aces");
     scene::SceneGraph::ToneMap mode = scene::SceneGraph::ToneMap::ACES;
     if (modeStr == "linear")        mode = scene::SceneGraph::ToneMap::Linear;
     else if (modeStr == "reinhard") mode = scene::SceneGraph::ToneMap::Reinhard;
-    double exposure = jsGetProp(ctx, opts, "exposure", 1.0);
-    double gamma    = jsGetProp(ctx, opts, "gamma", 2.2);
+    double exposure = qjsbind::get_prop_number(ctx, opts, "exposure", 1.0);
+    double gamma    = qjsbind::get_prop_number(ctx, opts, "gamma", 2.2);
     g->setToneMap(mode, (float)exposure, (float)gamma);
     return JS_UNDEFINED;
 }
@@ -2338,8 +2314,8 @@ static JSValue js_sg_setWind(JSContext* ctx, JSValueConst this_val,
     auto* g = getGraph(ctx, this_val);
     if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
     bromath::Vec3 d = jsGetVec3(ctx, argv[0], "direction", 1.0f, 0.0f, 0.0f);
-    double strength  = jsGetProp(ctx, argv[0], "strength",  0.0);
-    double frequency = jsGetProp(ctx, argv[0], "frequency", 1.5);
+    double strength  = qjsbind::get_prop_number(ctx, argv[0], "strength",  0.0);
+    double frequency = qjsbind::get_prop_number(ctx, argv[0], "frequency", 1.5);
     g->setWind(d.x, d.y, d.z, (float)strength, (float)frequency);
     return JS_UNDEFINED;
 }
@@ -2349,8 +2325,8 @@ static JSValue js_sg_setShadowQuality(JSContext* ctx, JSValueConst this_val,
                                        int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
     if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
-    int atlasSize = (int)jsGetProp(ctx, argv[0], "atlasSize", 4096.0);
-    int pcfTaps   = (int)jsGetProp(ctx, argv[0], "pcfTaps",   3.0);
+    int atlasSize = (int)qjsbind::get_prop_number(ctx, argv[0], "atlasSize", 4096.0);
+    int pcfTaps   = (int)qjsbind::get_prop_number(ctx, argv[0], "pcfTaps",   3.0);
     g->setShadowQuality(atlasSize, pcfTaps);
     return JS_UNDEFINED;
 }
@@ -2406,8 +2382,8 @@ static JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSV
     if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
 
     JSValueConst opts = argv[0];
-    double start = jsGetProp(ctx, opts, "start", 0.0);
-    double end = jsGetProp(ctx, opts, "end", 0.0);
+    double start = qjsbind::get_prop_number(ctx, opts, "start", 0.0);
+    double end = qjsbind::get_prop_number(ctx, opts, "end", 0.0);
     bromath::Vec3 color = jsGetVec3(ctx, opts, "color", 0.0f, 0.0f, 0.0f);
     g->setFog((float)start, (float)end, color.x, color.y, color.z);
     return JS_UNDEFINED;
@@ -2426,12 +2402,12 @@ static JSValue js_sg_setTiltShift(JSContext* ctx, JSValueConst this_val, int arg
     if (!JS_IsUndefined(ev)) enabled = JS_ToBool(ctx, ev);
     JS_FreeValue(ctx, ev);
 
-    double focusCenter = jsGetProp(ctx, opts, "focusCenter", 0.5);
-    double focusWidth  = jsGetProp(ctx, opts, "focusWidth",  0.12);
-    double feather     = jsGetProp(ctx, opts, "feather",     0.25);
-    double strength    = jsGetProp(ctx, opts, "strength",    2.0);
-    double saturation  = jsGetProp(ctx, opts, "saturation",  1.0);
-    double contrast    = jsGetProp(ctx, opts, "contrast",    1.0);
+    double focusCenter = qjsbind::get_prop_number(ctx, opts, "focusCenter", 0.5);
+    double focusWidth  = qjsbind::get_prop_number(ctx, opts, "focusWidth",  0.12);
+    double feather     = qjsbind::get_prop_number(ctx, opts, "feather",     0.25);
+    double strength    = qjsbind::get_prop_number(ctx, opts, "strength",    2.0);
+    double saturation  = qjsbind::get_prop_number(ctx, opts, "saturation",  1.0);
+    double contrast    = qjsbind::get_prop_number(ctx, opts, "contrast",    1.0);
     g->setTiltShift(enabled, (float)focusCenter, (float)focusWidth,
                     (float)feather, (float)strength, (float)saturation,
                     (float)contrast);
@@ -2449,9 +2425,9 @@ static JSValue js_sg_setBloom(JSContext* ctx, JSValueConst this_val, int argc, J
     if (!JS_IsUndefined(ev)) enabled = JS_ToBool(ctx, ev);
     JS_FreeValue(ctx, ev);
 
-    double threshold = jsGetProp(ctx, opts, "threshold", 1.0);
-    double intensity = jsGetProp(ctx, opts, "intensity", 0.6);
-    double strength  = jsGetProp(ctx, opts, "strength",  2.0);
+    double threshold = qjsbind::get_prop_number(ctx, opts, "threshold", 1.0);
+    double intensity = qjsbind::get_prop_number(ctx, opts, "intensity", 0.6);
+    double strength  = qjsbind::get_prop_number(ctx, opts, "strength",  2.0);
     g->setBloom(enabled, (float)threshold, (float)intensity, (float)strength);
     return JS_UNDEFINED;
 }
@@ -3020,7 +2996,10 @@ void SceneBindings::install(JSContext* ctx) {
                 if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
                     auto c = static_cast<scene::ShapeNode*>(w->node)->fillColor();
                     char buf[32];
-                    std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", c.r, c.g, c.b, c.a / 255.0f);
+                    std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)",
+                                  static_cast<int>(c.r * 255.0f + 0.5f),
+                                  static_cast<int>(c.g * 255.0f + 0.5f),
+                                  static_cast<int>(c.b * 255.0f + 0.5f), c.a);
                     return JS_NewString(ctx, buf);
                 }
                 return JS_UNDEFINED;
@@ -3037,7 +3016,10 @@ void SceneBindings::install(JSContext* ctx) {
                 if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
                     auto c = static_cast<scene::ShapeNode*>(w->node)->strokeColor();
                     char buf[32];
-                    std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)", c.r, c.g, c.b, c.a / 255.0f);
+                    std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)",
+                                  static_cast<int>(c.r * 255.0f + 0.5f),
+                                  static_cast<int>(c.g * 255.0f + 0.5f),
+                                  static_cast<int>(c.b * 255.0f + 0.5f), c.a);
                     return JS_NewString(ctx, buf);
                 }
                 return JS_UNDEFINED;

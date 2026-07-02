@@ -13,6 +13,7 @@
 #include "js/tts_bindings.h"
 #include "util/interrupt.h"
 #include "js/async_job.h"
+#include "js/model_gate.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -70,8 +71,7 @@ struct KokoroWrapper {
     // background thread; rejects a second concurrent op (the model is
     // single-owner). Cleared on the JS thread when the job's done() fires.
     // shared_ptr so sessions share this exact gate with the model.
-    std::shared_ptr<std::atomic<bool>> busy =
-        std::make_shared<std::atomic<bool>>(false);
+    ModelGate busy;
 };
 
 struct VoiceWrapper {
@@ -85,8 +85,7 @@ struct QwenTtsWrapper {
     std::shared_ptr<brosoundml::QwenTts> qwen;
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
     // shared_ptr so sessions share this exact gate with the model.
-    std::shared_ptr<std::atomic<bool>> busy =
-        std::make_shared<std::atomic<bool>>(false);
+    ModelGate busy;
 };
 
 // Supertonic-3 — flow-matching multilingual TTS (Supertone). Text-driven
@@ -96,8 +95,7 @@ struct QwenTtsWrapper {
 struct SupertonicWrapper {
     std::shared_ptr<brosoundml::Supertonic> model;
     brotensor::Device device = brotensor::Device::CPU;  // captured at load
-    std::shared_ptr<std::atomic<bool>> busy =
-        std::make_shared<std::atomic<bool>>(false);
+    ModelGate busy;
 };
 
 // An opaque Supertonic voice preset (the two style matrices), returned by
@@ -112,7 +110,7 @@ struct SupertonicVoiceWrapper {
 // model by shared_ptr<const Kokoro> internally; we add the shared busy gate +
 // device so session.synthesize() serializes with every other op on the model.
 struct KokoroSessionWrapper {
-    std::shared_ptr<std::atomic<bool>> busy;    // shared with the model + siblings
+    ModelGate busy;    // shared with the model + siblings
     brotensor::Device                  device = brotensor::Device::CPU;
     std::unique_ptr<brosoundml::KokoroSession> session;  // move-only; ctor needs model+voice
 };
@@ -121,7 +119,7 @@ struct KokoroSessionWrapper {
 // shared weights. SERIALIZED tier — gated on the shared busy flag.
 struct QwenTtsSessionWrapper {
     std::shared_ptr<brosoundml::QwenTts> model;
-    std::shared_ptr<std::atomic<bool>>   busy;
+    ModelGate busy;
     brotensor::Device                    device = brotensor::Device::CPU;
     brosoundml::QwenTtsSession           session;
 };
@@ -1790,22 +1788,6 @@ static JSValue js_supertonic_loadVoiceStyle(JSContext* ctx, JSValueConst this_va
     }
 }
 
-// Read a float-array argument: a Float32Array (fast path) or a plain number[].
-static std::vector<float> readFloatArg(JSContext* ctx, JSValueConst v) {
-    std::vector<float> data = qjsbind::read_float32_array(ctx, v);
-    if (data.empty() && JS_IsArray(v)) {              // accept a plain number[]
-        std::uint32_t n = 0;
-        JSValue lv = JS_GetPropertyStr(ctx, v, "length");
-        JS_ToUint32(ctx, &n, lv); JS_FreeValue(ctx, lv);
-        data.reserve(n);
-        for (std::uint32_t i = 0; i < n; ++i) {
-            JSValue e = JS_GetPropertyUint32(ctx, v, i);
-            double d = 0; JS_ToFloat64(ctx, &d, e); JS_FreeValue(ctx, e);
-            data.push_back(static_cast<float>(d));
-        }
-    }
-    return data;
-}
 
 // supertonic.createVoice(ttl, dp, name?) -> SupertonicVoice
 //   Author a voice from raw style matrices instead of a file: ttl is 50*256
@@ -1819,8 +1801,8 @@ static JSValue js_supertonic_createVoice(JSContext* ctx, JSValueConst this_val,
     if (!w) return JS_ThrowTypeError(ctx, "createVoice: not a Supertonic");
     if (argc < 2)
         return JS_ThrowTypeError(ctx, "createVoice(ttl, dp, name?): ttl and dp required");
-    std::vector<float> ttl = readFloatArg(ctx, argv[0]);
-    std::vector<float> dp  = readFloatArg(ctx, argv[1]);
+    std::vector<float> ttl = qjsbind::read_float32_array(ctx, argv[0]);
+    std::vector<float> dp  = qjsbind::read_float32_array(ctx, argv[1]);
     if (ttl.size() != 50u * 256u)
         return JS_ThrowTypeError(ctx, "createVoice: ttl must have 50*256 = 12800 floats");
     if (dp.size() != 8u * 16u)
@@ -1985,8 +1967,7 @@ static JSValue js_supertonic_synthesize_async(JSContext* ctx, int argc,
     }
 
     // Claim the model for this synthesis (single-owner; one in flight).
-    bool expected = false;
-    if (!w->busy->compare_exchange_strong(expected, true)) {
+    if (!w->busy.tryClaim()) {
         JS_FreeValue(ctx, voiceVal);
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
@@ -2022,7 +2003,7 @@ static JSValue js_supertonic_synthesize_async(JSContext* ctx, int argc,
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
         // Release the model BEFORE invoking onDone so the callback may start the
         // next synth on this same model without tripping the in-flight guard.
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -2131,8 +2112,7 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
     }
 
     // Claim the model for this synthesis (single-owner; one in flight).
-    bool expected = false;
-    if (!w->busy->compare_exchange_strong(expected, true)) {
+    if (!w->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
             "synthesize: an operation is already in flight on this model");
@@ -2168,7 +2148,7 @@ static JSValue js_qwen_synthesize_async(JSContext* ctx, int argc,
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
         // Release the model BEFORE invoking onDone so the callback may start the
         // next synth on this same model without tripping the in-flight guard.
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -2261,8 +2241,7 @@ static JSValue js_qwen_synthesize_stream(JSContext* ctx, int argc,
     job->chunkSlots.resize(4098);
 
     // Claim the model for this synthesis (single-owner; one in flight).
-    bool expected = false;
-    if (!w->busy->compare_exchange_strong(expected, true)) {
+    if (!w->busy.tryClaim()) {
         JS_FreeValue(ctx, onChunk);
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
@@ -2321,7 +2300,7 @@ static JSValue js_qwen_synthesize_stream(JSContext* ctx, int argc,
     };
 
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -2444,8 +2423,7 @@ static JSValue js_kokoro_synthesize_stream(JSContext* ctx, int argc,
     job->durSlots.resize(job->chunks.size());
 
     // Claim the model for this synthesis (single-owner; one in flight).
-    bool expected = false;
-    if (!w->busy->compare_exchange_strong(expected, true)) {
+    if (!w->busy.tryClaim()) {
         JS_FreeValue(ctx, onChunk);
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
@@ -2508,7 +2486,7 @@ static JSValue js_kokoro_synthesize_stream(JSContext* ctx, int argc,
     };
 
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -2595,8 +2573,7 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
     }
 
     // Claim the model for this synthesis (single-owner; one in flight).
-    bool expected = false;
-    if (!w->busy->compare_exchange_strong(expected, true)) {
+    if (!w->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
             "synthesize: an operation is already in flight on this model");
@@ -2639,7 +2616,7 @@ static JSValue js_tts_synthesize(JSContext* ctx, JSValueConst,
         // guard (e.g. kokoro-lab's fast audio pass immediately chaining a trace
         // pass). The result's host data is already copied off `job`, so a new
         // op claiming the model can't disturb what onDone is reading here.
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -2733,8 +2710,7 @@ static JSValue js_kokoro_decodeFrom_async(JSContext* ctx, int argc,
     }
 
     // Claim the model for this decode (single-owner; one in flight).
-    bool expected = false;
-    if (!w->busy->compare_exchange_strong(expected, true)) {
+    if (!w->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
             "decodeFrom: an operation is already in flight on this model");
@@ -2767,7 +2743,7 @@ static JSValue js_kokoro_decodeFrom_async(JSContext* ctx, int argc,
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
         // Release the model BEFORE onDone so the callback can immediately launch
         // the next decode of the latest edit without tripping the in-flight guard.
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -2876,8 +2852,7 @@ static JSValue js_kokoro_session_synthesize(JSContext* ctx, JSValueConst this_va
         onDone = JS_GetPropertyStr(ctx, argv[1], "onDone");
     }
 
-    bool expected = false;
-    if (!sw->busy->compare_exchange_strong(expected, true)) {
+    if (!sw->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
             "synthesize: an operation is already in flight on this model "
@@ -2907,7 +2882,7 @@ static JSValue js_kokoro_session_synthesize(JSContext* ctx, JSValueConst this_va
     };
 
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -2945,7 +2920,7 @@ static JSValue js_kokoro_session_setVoice(JSContext* ctx, JSValueConst this_val,
     auto* vw = (argc >= 1) ? qjsbind::unwrap<VoiceWrapper>(ctx, argv[0]) : nullptr;
     if (!vw)
         return JS_ThrowTypeError(ctx, "setVoice(voice): voice must be a Voice");
-    if (sw->busy->load(std::memory_order_acquire))
+    if (sw->busy.isBusy())
         return JS_ThrowInternalError(ctx, "setVoice: a synthesis is in flight on this model");
     sw->session->set_voice(vw->voice);
     return JS_UNDEFINED;
@@ -3010,8 +2985,7 @@ static JSValue js_qwen_session_synthesize(JSContext* ctx, JSValueConst this_val,
         onDone = JS_GetPropertyStr(ctx, argv[1], "onDone");
     }
 
-    bool expected = false;
-    if (!sw->busy->compare_exchange_strong(expected, true)) {
+    if (!sw->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
             "synthesize: an operation is already in flight on this model "
@@ -3044,7 +3018,7 @@ static JSValue js_qwen_session_synthesize(JSContext* ctx, JSValueConst this_val,
     };
 
     auto done = [job, mw](JSContext* c, bool cancelled, const std::string& error) {
-        mw->busy->store(false, std::memory_order_release);
+        mw->busy.release();
         if (job->hasOnDone) {
             JSValue result = JS_NewObject(c);
             JS_SetPropertyStr(c, result, "samples",
@@ -3076,7 +3050,7 @@ static JSValue js_qwen_session_reset(JSContext* ctx, JSValueConst this_val,
                                      int, JSValueConst*) {
     auto* sw = qwenSessionSelf(ctx, this_val);
     if (!sw) return JS_ThrowTypeError(ctx, "reset: not a QwenTtsSession");
-    if (sw->busy->load(std::memory_order_acquire))
+    if (sw->busy.isBusy())
         return JS_ThrowInternalError(ctx, "reset: a synthesis is in flight on this model");
     try {
         brotensor::DeviceScope scope(sw->device);

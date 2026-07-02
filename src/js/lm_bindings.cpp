@@ -30,6 +30,7 @@
 #include "js/lm_bindings.h"
 #include "util/interrupt.h"
 #include "js/async_job.h"
+#include "js/model_gate.h"
 #include "js/imagebitmap_bindings.h"
 
 #include <qjsbind/qjsbind.h>
@@ -158,7 +159,7 @@ struct LMModelWrapper {
     // Set while an async bro.lm.generate() runs on this model's background
     // thread; rejects a second concurrent generation (the model + KV cache are
     // single-owner). Cleared on the JS thread when the job's done() fires.
-    std::atomic<bool> generating{false};
+    ModelGate generating;
 };
 
 struct LMTokenizerWrapper {
@@ -179,7 +180,7 @@ struct Qwen35Wrapper {
     std::unique_ptr<brolm::qwen35::VLM> vlm;
     int maxSeqLen = 4096;
     brotensor::Device device = brotensor::Device::CPU;
-    std::atomic<bool> generating{false};
+    ModelGate generating;
 };
 
 // CLIP ViT-L/14 cross-modal scorer. Owns the tokenizer, text tower, image
@@ -304,49 +305,6 @@ static bool parseDeviceOpt(JSContext* ctx, JSValueConst opts,
     return false;
 }
 
-static const int32_t* getInt32Array(JSContext* ctx, JSValueConst v,
-                                    size_t& count) {
-    count = 0;
-    if (!JS_IsObject(v)) return nullptr;
-    size_t byteOff = 0, viewLen = 0, bpe = 0;
-    JSValue abuf = JS_GetTypedArrayBuffer(ctx, v, &byteOff, &viewLen, &bpe);
-    if (JS_IsException(abuf)) {
-        JS_FreeValue(ctx, JS_GetException(ctx));
-        return nullptr;
-    }
-    size_t abufLen = 0;
-    std::uint8_t* p = JS_GetArrayBuffer(ctx, &abufLen, abuf);
-    JS_FreeValue(ctx, abuf);
-    if (!p || bpe != sizeof(std::int32_t)) return nullptr;
-    count = viewLen / sizeof(std::int32_t);
-    return reinterpret_cast<const std::int32_t*>(p + byteOff);
-}
-
-// Accept either an Int32Array or a plain number[] of token ids. Returns an
-// empty vector for anything else.
-static std::vector<int32_t> readIdArray(JSContext* ctx, JSValueConst v) {
-    std::vector<int32_t> out;
-    size_t cnt = 0;
-    if (const int32_t* p = getInt32Array(ctx, v, cnt)) {
-        out.assign(p, p + cnt);
-        return out;
-    }
-    if (JS_IsArray(v)) {
-        std::uint32_t n = 0;
-        JSValue lv = JS_GetPropertyStr(ctx, v, "length");
-        JS_ToUint32(ctx, &n, lv);
-        JS_FreeValue(ctx, lv);
-        out.reserve(n);
-        for (std::uint32_t i = 0; i < n; ++i) {
-            JSValue e = JS_GetPropertyUint32(ctx, v, i);
-            int32_t t = 0;
-            JS_ToInt32(ctx, &t, e);
-            out.push_back(t);
-            JS_FreeValue(ctx, e);
-        }
-    }
-    return out;
-}
 
 // Read `val` (an ImageBitmap or an ImageData-shaped { data, width, height }
 // with RGBA Uint8/Uint8Clamped pixels) into a contiguous RGBA8 buffer. Mirrors
@@ -551,7 +509,7 @@ static JSValue js_tok_decode(JSContext* ctx, JSValueConst this_val,
     if (!w) return JS_ThrowTypeError(ctx, "decode: not an LMTokenizer");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "decode(ids): ids required");
-    auto ids = readIdArray(ctx, argv[0]);
+    auto ids = qjsbind::read_int32_array(ctx, argv[0]);
     try {
         return JS_NewString(ctx, w->tok->decode(ids).c_str());
     } catch (const std::exception& e) {
@@ -641,7 +599,7 @@ static JSValue js_mtok_decode(JSContext* ctx, JSValueConst this_val,
     if (!w) return JS_ThrowTypeError(ctx, "decode: not a MistralTokenizer");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "decode(ids): ids required");
-    auto ids = readIdArray(ctx, argv[0]);
+    auto ids = qjsbind::read_int32_array(ctx, argv[0]);
     try {
         return JS_NewString(ctx, w->tok->decode(ids).c_str());
     } catch (const std::exception& e) {
@@ -736,7 +694,7 @@ static JSValue js_gtok_decode(JSContext* ctx, JSValueConst this_val,
     if (!w) return JS_ThrowTypeError(ctx, "decode: not a GemmaTokenizer");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "decode(ids): ids required");
-    auto ids = readIdArray(ctx, argv[0]);
+    auto ids = qjsbind::read_int32_array(ctx, argv[0]);
     try {
         return JS_NewString(ctx, w->tok->decode(ids).c_str());
     } catch (const std::exception& e) {
@@ -868,7 +826,7 @@ static JSValue js_model_generate(JSContext* ctx, JSValueConst this_val,
         return JS_ThrowTypeError(ctx,
             "generate(promptIds, opts?): promptIds required");
 
-    std::vector<int32_t> prompt = readIdArray(ctx, argv[0]);
+    std::vector<int32_t> prompt = qjsbind::read_int32_array(ctx, argv[0]);
     if (prompt.empty())
         return JS_ThrowTypeError(ctx,
             "generate: promptIds must be a non-empty Int32Array or number[]");
@@ -908,7 +866,7 @@ static JSValue js_model_generateStream(JSContext* ctx, JSValueConst this_val,
         return JS_ThrowTypeError(ctx,
             "generateStream(promptIds, opts?, onToken): promptIds required");
 
-    std::vector<int32_t> prompt = readIdArray(ctx, argv[0]);
+    std::vector<int32_t> prompt = qjsbind::read_int32_array(ctx, argv[0]);
     if (prompt.empty())
         return JS_ThrowTypeError(ctx,
             "generateStream: promptIds must be a non-empty Int32Array or number[]");
@@ -1019,7 +977,7 @@ static JSValue js_q35_decode(JSContext* ctx, JSValueConst this_val,
     if (!w) return JS_ThrowTypeError(ctx, "decode: not a Qwen35Model");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "decode(ids): ids required");
-    auto ids = readIdArray(ctx, argv[0]);
+    auto ids = qjsbind::read_int32_array(ctx, argv[0]);
     try {
         return JS_NewString(ctx, w->vlm->tokenizer().decode(ids).c_str());
     } catch (const std::exception& e) {
@@ -1749,8 +1707,7 @@ static JSValue js_lm_generate_qwen35(JSContext* ctx, Qwen35Wrapper* w,
         return JS_ThrowTypeError(ctx, "generate: opts.maxNewTokens must be > 0");
     }
 
-    bool expected = false;
-    if (!w->generating.compare_exchange_strong(expected, true)) {
+    if (!w->generating.tryClaim()) {
         JS_FreeValue(ctx, onToken);
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
@@ -1809,7 +1766,7 @@ static JSValue js_lm_generate_qwen35(JSContext* ctx, Qwen35Wrapper* w,
         // the in-flight guard. The work thread has finished and joined; this job's
         // output lives on `st`, so a new op claiming the model can't disturb what
         // onDone reads here. (Matches the STT/TTS bindings.)
-        mw->generating.store(false, std::memory_order_release);
+        mw->generating.release();
         const size_t n = st->produced.load(std::memory_order_acquire);
         if (st->hasOnDone) {
             JSValue arr  = qjsbind::make_int32_array(c, st->ids.data(), n);
@@ -1848,7 +1805,7 @@ static JSValue js_lm_generate(JSContext* ctx, JSValueConst,
     if (!w->weights_loaded)
         return JS_ThrowInternalError(ctx, "generate: weights not loaded");
 
-    std::vector<int32_t> prompt = readIdArray(ctx, argv[1]);
+    std::vector<int32_t> prompt = qjsbind::read_int32_array(ctx, argv[1]);
     if (prompt.empty())
         return JS_ThrowTypeError(ctx,
             "generate: promptIds must be a non-empty Int32Array or number[]");
@@ -1871,8 +1828,7 @@ static JSValue js_lm_generate(JSContext* ctx, JSValueConst,
     }
 
     // Claim the model for this generation (single-owner; one in flight).
-    bool expected = false;
-    if (!w->generating.compare_exchange_strong(expected, true)) {
+    if (!w->generating.tryClaim()) {
         JS_FreeValue(ctx, onToken);
         JS_FreeValue(ctx, onDone);
         return JS_ThrowInternalError(ctx,
@@ -1943,7 +1899,7 @@ static JSValue js_lm_generate(JSContext* ctx, JSValueConst,
         // the in-flight guard. The work thread has finished and joined; this job's
         // output lives on `st`, so a new op claiming the model can't disturb what
         // onDone reads here. (Matches the STT/TTS bindings.)
-        mw->generating.store(false, std::memory_order_release);
+        mw->generating.release();
         const size_t n = st->produced.load(std::memory_order_acquire);
         if (st->hasOnDone) {
             JSValue arr  = qjsbind::make_int32_array(c, st->ids.data(), n);

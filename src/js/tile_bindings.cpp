@@ -43,20 +43,8 @@ static std::string resolveAppPath(const std::string& src) {
 }
 
 // -------------------------------------------------------------------------
-// Helpers (local copies — same pattern as terrain_bindings.cpp)
+// Helpers
 // -------------------------------------------------------------------------
-
-static double jsGetProp(JSContext* ctx, JSValueConst obj, const char* prop, double def = 0.0) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    double r = def;
-    if (!JS_IsUndefined(v)) JS_ToFloat64(ctx, &r, v);
-    JS_FreeValue(ctx, v);
-    return r;
-}
-
-static int jsGetInt(JSContext* ctx, JSValueConst obj, const char* prop, int def = 0) {
-    return static_cast<int>(jsGetProp(ctx, obj, prop, def));
-}
 
 static int argInt(JSContext* ctx, JSValueConst v, int def = 0) {
     int32_t n = def;
@@ -139,13 +127,13 @@ static scene::TileWorldConfig parseTileConfig(JSContext* ctx, JSValueConst opts)
     scene::TileWorldConfig cfg;
     if (!JS_IsObject(opts)) return cfg;
 
-    cfg.width      = jsGetInt(ctx, opts, "width", cfg.width);
-    cfg.height     = jsGetInt(ctx, opts, "height", cfg.height);
-    cfg.cellSize   = (float)jsGetProp(ctx, opts, "cellSize", cfg.cellSize);
-    cfg.heightStep = (float)jsGetProp(ctx, opts, "heightStep", cfg.heightStep);
-    cfg.chunkSize  = jsGetInt(ctx, opts, "chunkSize", cfg.chunkSize);
-    cfg.baseLevel  = jsGetInt(ctx, opts, "baseLevel", cfg.baseLevel);
-    cfg.aoStrength = (float)jsGetProp(ctx, opts, "aoStrength", cfg.aoStrength);
+    cfg.width      = qjsbind::get_prop_int(ctx, opts, "width", cfg.width);
+    cfg.height     = qjsbind::get_prop_int(ctx, opts, "height", cfg.height);
+    cfg.cellSize   = (float)qjsbind::get_prop_number(ctx, opts, "cellSize", cfg.cellSize);
+    cfg.heightStep = (float)qjsbind::get_prop_number(ctx, opts, "heightStep", cfg.heightStep);
+    cfg.chunkSize  = qjsbind::get_prop_int(ctx, opts, "chunkSize", cfg.chunkSize);
+    cfg.baseLevel  = qjsbind::get_prop_int(ctx, opts, "baseLevel", cfg.baseLevel);
+    cfg.aoStrength = (float)qjsbind::get_prop_number(ctx, opts, "aoStrength", cfg.aoStrength);
 
     JSValue topo = JS_GetPropertyStr(ctx, opts, "topology");
     if (JS_IsString(topo)) {
@@ -188,10 +176,10 @@ static scene::TileWorldConfig parseTileConfig(JSContext* ctx, JSValueConst opts)
     JS_FreeValue(ctx, pal);
 
     // ---- tileset atlas --------------------------------------------------
-    cfg.atlasColumns = jsGetInt(ctx, opts, "atlasColumns", cfg.atlasColumns);
-    cfg.atlasRows    = jsGetInt(ctx, opts, "atlasRows", cfg.atlasRows);
-    cfg.cliffCell    = jsGetInt(ctx, opts, "cliffCell", cfg.cliffCell);
-    cfg.atlasInset   = (float)jsGetProp(ctx, opts, "atlasInset", cfg.atlasInset);
+    cfg.atlasColumns = qjsbind::get_prop_int(ctx, opts, "atlasColumns", cfg.atlasColumns);
+    cfg.atlasRows    = qjsbind::get_prop_int(ctx, opts, "atlasRows", cfg.atlasRows);
+    cfg.cliffCell    = qjsbind::get_prop_int(ctx, opts, "cliffCell", cfg.cliffCell);
+    cfg.atlasInset   = (float)qjsbind::get_prop_number(ctx, opts, "atlasInset", cfg.atlasInset);
 
     // `atlas` is a path to an image decoded here; or supply raw `atlasPixels`
     // (Uint8Array RGBA) plus `atlasWidth`/`atlasHeight`.
@@ -218,8 +206,8 @@ static scene::TileWorldConfig parseTileConfig(JSContext* ctx, JSValueConst opts)
                 size_t abufLen = 0;
                 uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
                 if (raw && byteLen > 0) {
-                    cfg.atlasWidth  = jsGetInt(ctx, opts, "atlasWidth", 0);
-                    cfg.atlasHeight = jsGetInt(ctx, opts, "atlasHeight", 0);
+                    cfg.atlasWidth  = qjsbind::get_prop_int(ctx, opts, "atlasWidth", 0);
+                    cfg.atlasHeight = qjsbind::get_prop_int(ctx, opts, "atlasHeight", 0);
                     cfg.atlasPixels.assign(raw + offset, raw + offset + byteLen);
                 }
             }
@@ -255,8 +243,8 @@ static scene::TileWorldConfig parseTileConfig(JSContext* ctx, JSValueConst opts)
             JSValue e = JS_GetPropertyUint32(ctx, autos, i);
             if (!JS_IsObject(e)) { JS_FreeValue(ctx, e); continue; }
             scene::TileWorldConfig::AutotileRule rule;
-            rule.id = (uint16_t)jsGetInt(ctx, e, "id", 0);
-            rule.layer = jsGetInt(ctx, e, "layer", 0);
+            rule.id = (uint16_t)qjsbind::get_prop_int(ctx, e, "id", 0);
+            rule.layer = qjsbind::get_prop_int(ctx, e, "layer", 0);
 
             JSValue mode = JS_GetPropertyStr(ctx, e, "mode");
             if (JS_IsString(mode)) {
@@ -309,8 +297,8 @@ static scene::TileWorldConfig parseTileConfig(JSContext* ctx, JSValueConst opts)
         for (int32_t i = 0; i < len; ++i) {
             JSValue e = JS_GetPropertyUint32(ctx, ovs, i);
             if (JS_IsObject(e)) {
-                cfg.overlays[i].opacity     = (float)jsGetProp(ctx, e, "opacity", 1.0);
-                cfg.overlays[i].alphaCutoff = (float)jsGetProp(ctx, e, "alphaCutoff", 0.0);
+                cfg.overlays[i].opacity     = (float)qjsbind::get_prop_number(ctx, e, "opacity", 1.0);
+                cfg.overlays[i].alphaCutoff = (float)qjsbind::get_prop_number(ctx, e, "alphaCutoff", 0.0);
             }
             JS_FreeValue(ctx, e);
         }
@@ -327,8 +315,8 @@ static scene::TileWorldConfig parseTileConfig(JSContext* ctx, JSValueConst opts)
             JSValue e = JS_GetPropertyUint32(ctx, anims, i);
             if (!JS_IsObject(e)) { JS_FreeValue(ctx, e); continue; }
             scene::TileWorldConfig::TileAnimation an;
-            an.id  = (uint16_t)jsGetInt(ctx, e, "id", 0);
-            an.fps = (float)jsGetProp(ctx, e, "fps", 4.0);
+            an.id  = (uint16_t)qjsbind::get_prop_int(ctx, e, "id", 0);
+            an.fps = (float)qjsbind::get_prop_number(ctx, e, "fps", 4.0);
             JSValue fr = JS_GetPropertyStr(ctx, e, "frames");
             if (JS_IsArray(fr)) {
                 JSValue fl = JS_GetPropertyStr(ctx, fr, "length");
@@ -367,13 +355,13 @@ static JSValue js_tile_addObjectKind(JSContext* ctx, JSValueConst this_val, int 
     if (argc > 1 && JS_IsObject(argv[1])) {
         JSValueConst s = argv[1];
         readColor4(ctx, s, "color", style.color);
-        style.roughness   = (float)jsGetProp(ctx, s, "roughness", style.roughness);
-        style.metallic    = (float)jsGetProp(ctx, s, "metallic", style.metallic);
-        style.doubleSided = jsGetInt(ctx, s, "doubleSided", 0) != 0;
-        style.alphaCutoff = (float)jsGetProp(ctx, s, "alphaCutoff", style.alphaCutoff);
-        style.castsShadow = jsGetInt(ctx, s, "castsShadow", 1) != 0;
-        style.atlasCols   = jsGetInt(ctx, s, "atlasColumns", 1);
-        style.atlasRows   = jsGetInt(ctx, s, "atlasRows", 1);
+        style.roughness   = (float)qjsbind::get_prop_number(ctx, s, "roughness", style.roughness);
+        style.metallic    = (float)qjsbind::get_prop_number(ctx, s, "metallic", style.metallic);
+        style.doubleSided = qjsbind::get_prop_int(ctx, s, "doubleSided", 0) != 0;
+        style.alphaCutoff = (float)qjsbind::get_prop_number(ctx, s, "alphaCutoff", style.alphaCutoff);
+        style.castsShadow = qjsbind::get_prop_int(ctx, s, "castsShadow", 1) != 0;
+        style.atlasCols   = qjsbind::get_prop_int(ctx, s, "atlasColumns", 1);
+        style.atlasRows   = qjsbind::get_prop_int(ctx, s, "atlasRows", 1);
 
         // texture: a path (decoded) or raw texturePixels + width/height
         JSValue tex = JS_GetPropertyStr(ctx, s, "texture");
@@ -403,12 +391,12 @@ static JSValue js_tile_addObject(JSContext* ctx, JSValueConst this_val, int argc
     scene::TileWorld::ObjectPlacement p;
     if (argc > 3 && JS_IsObject(argv[3])) {
         JSValueConst o = argv[3];
-        p.yaw     = (float)jsGetProp(ctx, o, "yaw", 0.0);
-        p.scale   = (float)jsGetProp(ctx, o, "scale", 1.0);
-        p.yOffset = (float)jsGetProp(ctx, o, "yOffset", 0.0);
-        p.offsetX = (float)jsGetProp(ctx, o, "offsetX", 0.0);
-        p.offsetZ = (float)jsGetProp(ctx, o, "offsetZ", 0.0);
-        p.variant = jsGetInt(ctx, o, "variant", 0);
+        p.yaw     = (float)qjsbind::get_prop_number(ctx, o, "yaw", 0.0);
+        p.scale   = (float)qjsbind::get_prop_number(ctx, o, "scale", 1.0);
+        p.yOffset = (float)qjsbind::get_prop_number(ctx, o, "yOffset", 0.0);
+        p.offsetX = (float)qjsbind::get_prop_number(ctx, o, "offsetX", 0.0);
+        p.offsetZ = (float)qjsbind::get_prop_number(ctx, o, "offsetZ", 0.0);
+        p.variant = qjsbind::get_prop_int(ctx, o, "variant", 0);
         readColor4(ctx, o, "color", p.color);
     }
     int idx = w->world->addObject(argInt(ctx, argv[0]), argInt(ctx, argv[1]),
@@ -585,8 +573,8 @@ static JSValue js_tile_syncNavGrid(JSContext* ctx, JSValueConst this_val, int ar
     if (!ng) return JS_ThrowTypeError(ctx, "syncNavGrid: first argument must be a nav grid");
     uint32_t mask = 0; float padding = 0;
     if (argc > 1 && JS_IsObject(argv[1])) {
-        mask = (uint32_t)(int64_t)jsGetProp(ctx, argv[1], "blockMask", 0);
-        padding = (float)jsGetProp(ctx, argv[1], "padding", 0);
+        mask = (uint32_t)(int64_t)qjsbind::get_prop_number(ctx, argv[1], "blockMask", 0);
+        padding = (float)qjsbind::get_prop_number(ctx, argv[1], "padding", 0);
     }
     return JS_NewInt32(ctx, stampNavGrid(w->world.get(), ng, mask, padding));
 }
@@ -598,8 +586,8 @@ static JSValue js_tile_toNavGrid(JSContext* ctx, JSValueConst this_val, int argc
     const auto& cfg = w->world->config();
     uint32_t mask = 0; float padding = 0;
     if (argc > 0 && JS_IsObject(argv[0])) {
-        mask = (uint32_t)(int64_t)jsGetProp(ctx, argv[0], "blockMask", 0);
-        padding = (float)jsGetProp(ctx, argv[0], "padding", 0);
+        mask = (uint32_t)(int64_t)qjsbind::get_prop_number(ctx, argv[0], "blockMask", 0);
+        padding = (float)qjsbind::get_prop_number(ctx, argv[0], "padding", 0);
     }
     const float cs = cfg.cellSize;
     const float minX = cfg.origin.x, minZ = cfg.origin.z;
