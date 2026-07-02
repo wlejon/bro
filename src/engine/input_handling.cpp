@@ -740,6 +740,15 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             dispatchEvent(locked, moveEvt);
             if (jsRuntime_) jsRuntime_->executePendingJobs();
         }
+        // Real SDL relative-mouse-mode input ignores lastMouseX_/Y_ entirely
+        // (xrel/yrel come straight from the OS). Headless's mouseMove(x, y)
+        // has no real device delta, so it self-computes xrel/yrel as
+        // (x - lastMouseX_) — that self-computation must keep tracking the
+        // caller's last absolute position even while locked, or every
+        // simulated move after lock-engage measures its delta against the
+        // stale pre-lock position instead of the previous call.
+        lastMouseX_ = x;
+        lastMouseY_ = y;
         return;
     }
 
