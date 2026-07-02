@@ -21,7 +21,7 @@ namespace bro::render {
 // internally, so no replayer-side font cache is needed.
 class CommandReplayer {
 public:
-    using LayerBreakHandler = std::function<void(int kind, void* canvasScene,
+    using LayerBreakHandler = std::function<void(int kind, uint64_t canvasSceneId,
                                                   unsigned int directTexture,
                                                   float x, float y, float w, float h,
                                                   float clipX, float clipY,

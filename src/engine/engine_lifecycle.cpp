@@ -152,6 +152,7 @@ Engine::~Engine() {
     }
     canvasScenesDetached_.clear();
     canvasScenes_.clear();
+    canvasSceneRegistry_.clear();
     canvasRasterThread_.reset();
 
     // WebGL contexts (unique_ptr destruction handles cleanup)

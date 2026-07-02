@@ -68,6 +68,13 @@ public:
     CanvasScene(const CanvasScene&) = delete;
     CanvasScene& operator=(const CanvasScene&) = delete;
 
+    /// Process-unique, never-recycled id. Composited UILayers and recorded
+    /// Cmd_LayerBreak commands name this scene by id and resolve it through
+    /// the engine's registry at use time, so a layer recorded before the
+    /// scene was destroyed resolves to null instead of dangling — no
+    /// pointer-scrubbing pass over the layer buffers required.
+    uint64_t sceneId() const { return sceneId_; }
+
     // --- Layout / lifecycle callbacks (unchanged) ---
 
     using LayoutCallback = void(*)(void* userdata, float& outX, float& outY, float& outW, float& outH);
@@ -400,6 +407,12 @@ private:
     void applyShadow(SkPaint& paint) const;
     float adjustTextX(float x, float textWidth) const;
     float adjustTextY(float y) const;
+
+    static uint64_t nextSceneId() {
+        static std::atomic<uint64_t> counter{0};
+        return ++counter;
+    }
+    uint64_t sceneId_ = nextSceneId();
 
     render::Renderer* renderer_;
     render::GLContext* gl_ = nullptr;

@@ -75,8 +75,10 @@ struct Cmd_EndFrame   {};
 // Emitted by DrawTraversal's layer-break callback. The replayer flushes the
 // current Skia surface into a UILayer, pushes a Canvas/WebGL UILayer, and
 // allocates a fresh Skia surface for subsequent HTML commands.
-// `canvasScene` is an opaque pointer (canvas::CanvasScene*) that survives the
-// emit→replay window — CanvasScenes are owned by the engine across frames.
+// `canvasSceneId` names the scene (CanvasScene::sceneId()) instead of
+// pointing at it: replay copies the id into the UILayer and the compositor
+// resolves it through the engine's scene registry at use time, so a layer
+// that outlives the scene resolves to null instead of dangling.
 struct Cmd_LayerBreak {
     enum LayerKind {
         Canvas2D,        // flush surface + push HTML layer + push Canvas2D layer + new surface
@@ -84,7 +86,7 @@ struct Cmd_LayerBreak {
         HtmlSurface,     // flush surface + push HTML layer + new surface (panel boundary)
     };
     int kind;                    // LayerKind
-    void* canvasScene;           // canvas::CanvasScene* when kind==Canvas2D
+    uint64_t canvasSceneId;      // CanvasScene::sceneId() when kind==Canvas2D, else 0
     unsigned int directTexture;  // GL texture id when kind==WebGL
     float x, y, w, h;            // ignored for HtmlSurface
     // Active overflow/scroll clip at the layer-break point, in the same
@@ -96,6 +98,10 @@ struct Cmd_LayerBreak {
 
 // System-panel canvas: composite the canvas scene's snapshot onto the current
 // surface (no layer split). Replayer: scene->flushStaged(), snapshot, drawImage.
+// Keeps a raw pointer (unlike Cmd_LayerBreak) because replay dereferences the
+// scene on the raster thread; safety comes from deferred destruction — scenes
+// are only freed at frame top with the raster worker idle, and a detached
+// scene is skipped at record time so it never enters a fresh buffer.
 struct Cmd_BlitCanvasInline {
     void* canvasScene;           // canvas::CanvasScene*
     float x, y, w, h;

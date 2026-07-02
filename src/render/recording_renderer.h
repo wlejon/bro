@@ -127,7 +127,7 @@ public:
     // Layer break — emitted by DrawTraversal's layer-break callback when it
     // crosses a canvas/WebGL boundary. Not on the Renderer interface; the
     // engine wires the callback to call this directly.
-    void recordLayerBreak(int kind, void* canvasScene, unsigned int directTexture,
+    void recordLayerBreak(int kind, uint64_t canvasSceneId, unsigned int directTexture,
                           float x, float y, float w, float h,
                           float clipX = 0, float clipY = 0,
                           float clipW = -1, float clipH = -1);

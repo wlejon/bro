@@ -6,8 +6,6 @@
 
 #include "render/command_buffer.h"
 
-namespace bro::canvas { class CanvasScene; }
-
 namespace bro::engine {
 
 /// One entry in the per-frame composite list. Built by the raster thread
@@ -15,14 +13,16 @@ namespace bro::engine {
 /// boundaries. Consumed by the main thread when it composites.
 ///
 /// HTML layers point at a GPU-backed Skia surface allocated from one of the
-/// raster thread's pools. Canvas layers point at a CanvasScene whose own
-/// per-canvas thread produced the texture (the scene is queried for its
-/// current texture id at composite time).
+/// raster thread's pools. Canvas layers name a CanvasScene by its never-
+/// recycled sceneId; the main thread resolves the id through the engine's
+/// scene registry at composite/signal time, so a layer recorded before the
+/// scene was destroyed resolves to null instead of dangling (no scrub pass
+/// over stale layer buffers needed).
 struct UILayer {
     enum Type { HTML, Canvas };
     Type type;
     GLuint texture = 0;
-    canvas::CanvasScene* canvasScene = nullptr;
+    uint64_t canvasSceneId = 0;
     float cx = 0, cy = 0, cw = 0, ch = 0;
     // Overflow/scroll clip for Canvas layers, in top-left pixel space. The
     // canvas quad is composited outside the Skia clip stack, so the compositor

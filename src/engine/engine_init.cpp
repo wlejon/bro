@@ -744,6 +744,7 @@ Engine::Engine(const EngineConfig& config)
                 auto* csPtr = canvasScene.get();
                 if (el) el->setCanvasScene(csPtr, &canvas::CanvasScene::onBackingElementDestroyed);
                 canvasScene->init(nullptr);
+                canvasSceneRegistry_[canvasScene->sceneId()] = csPtr;
                 canvasScenes_.push_back(std::move(canvasScene));
                 if (type == "scene") {
                     int cw = viewportWidth_, ch = viewportHeight_;

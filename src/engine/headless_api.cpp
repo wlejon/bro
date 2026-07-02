@@ -186,6 +186,7 @@ void Engine::flush() {
     // Prune detached canvas scenes (elements removed from DOM)
     for (auto& cs : canvasScenes_) {
         cs->rasterize(gl_.get());  // triggers detached check
+        if (cs->isDetached()) canvasSceneRegistry_.erase(cs->sceneId());
     }
     canvasScenes_.erase(
         std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),

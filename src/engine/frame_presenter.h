@@ -78,52 +78,12 @@ public:
     bool isRasterIdle() const { return worker_.isIdle(); }
     bool isRasterBusyOrRequested() const { return worker_.isBusyOrRequested(); }
 
-    /// Drop every reference to a CanvasScene that is about to be destroyed from
-    /// the front (composable) buffer, so compositeLayers can't dereference a
-    /// freed scene. A canvas layer recorded in an earlier frame still names the
-    /// scene by raw pointer; if the scene's element is detached and the engine
-    /// erases the scene this frame, the live front-buffer view would dangle.
-    ///
-    /// Only the front buffer needs scrubbing: the worker writes exclusively to
-    /// the back buffer, and a stale back buffer is always rewritten by the
-    /// worker (which skips detached scenes at record time) before it can be
-    /// flipped to front. So the front buffer is the only buffer composite ever
-    /// reads, and scrubbing it here races nothing on the worker thread.
-    void forgetCanvasScene(const canvas::CanvasScene* scene) {
-        int f = front_.load(std::memory_order_acquire);
-        auto scrub = [scene](std::vector<UILayer>& layers) {
-            for (auto& l : layers) {
-                if (l.canvasScene == scene) {
-                    l.canvasScene = nullptr;
-                    l.texture = 0;
-                }
-            }
-        };
-        scrub(buffers_[f].appLayers);
-        scrub(buffers_[f].systemLayers);
-    }
-
-    /// Drop every reference to a CanvasScene from BOTH layer buffers. Unlike
-    /// forgetCanvasScene (front only), this also scrubs the back buffer, which
-    /// the raster worker writes — so the caller MUST guarantee the worker is
-    /// idle (e.g. at frame top after consumeIfReady). Used by the deferred
-    /// canvas-scene free: a scene recorded into the back buffer this frame
-    /// becomes the front buffer next frame, so its raw pointer can outlive a
-    /// front-only scrub. We clear both buffers before the scene is destroyed.
-    void forgetCanvasSceneAllBuffers(const canvas::CanvasScene* scene) {
-        auto scrub = [scene](std::vector<UILayer>& layers) {
-            for (auto& l : layers) {
-                if (l.canvasScene == scene) {
-                    l.canvasScene = nullptr;
-                    l.texture = 0;
-                }
-            }
-        };
-        for (auto& buf : buffers_) {
-            scrub(buf.appLayers);
-            scrub(buf.systemLayers);
-        }
-    }
+    // Layers name CanvasScenes by sceneId (resolved through the engine's
+    // registry at use time), so there is no scrub-the-buffers path here: a
+    // stale layer in either buffer simply resolves to null once the scene is
+    // unregistered. The old forgetCanvasScene/forgetCanvasSceneAllBuffers
+    // pointer-hunting — with its front-vs-back-buffer timing reasoning — is
+    // gone with it.
 
     // ---- worker (raster) thread ----
 

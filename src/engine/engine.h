@@ -614,13 +614,23 @@ private:
     AppManifest manifest_;
     util::AssetMounts assetMounts_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;
-    // Detached scenes awaiting destruction. A scene whose element was removed is
-    // moved here (out of canvasScenes_) rather than freed immediately, because
-    // the raster worker may have recorded its raw pointer into the back buffer
-    // this frame — which becomes the front buffer next frame. They are scrubbed
-    // from both layer buffers and destroyed at frame top, once the worker is
-    // idle. See the drain in Engine::run().
+    // Detached scenes awaiting destruction. A scene whose element was removed
+    // is moved here (out of canvasScenes_) and unregistered from
+    // canvasSceneRegistry_ — from that moment every UILayer or command that
+    // still names it by sceneId resolves to null. Actual destruction is still
+    // deferred to frame top with the raster worker idle, because inline-blit
+    // commands replayed on the raster thread hold the raw pointer. See the
+    // drain in Engine::run().
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenesDetached_;
+    // Main-thread-only resolver for UILayer::canvasSceneId /
+    // Cmd_LayerBreak::canvasSceneId. Insert on scene adoption, erase on
+    // detach. The raster thread never touches this map — it only copies ids.
+    std::unordered_map<uint64_t, canvas::CanvasScene*> canvasSceneRegistry_;
+    canvas::CanvasScene* canvasSceneById(uint64_t id) const {
+        if (!id) return nullptr;
+        auto it = canvasSceneRegistry_.find(id);
+        return it == canvasSceneRegistry_.end() ? nullptr : it->second;
+    }
     // Shared canvas-raster worker (windowed): one persistent GL context + thread
     // that rasterizes every threaded CanvasScene. Created once at run() start so
     // canvas churn never creates/destroys GL contexts on the hot path.

@@ -49,6 +49,7 @@ void Engine::addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene) {
             }
         }
     }
+    if (scene) canvasSceneRegistry_[scene->sceneId()] = scene.get();
     canvasScenes_.push_back(std::move(scene));
 }
 
@@ -154,7 +155,7 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
             int kind = scene ? render::Cmd_LayerBreak::Canvas2D
                              : render::Cmd_LayerBreak::WebGL;
             recordingRenderer_->recordLayerBreak(
-                kind, scene, directTexture, x, y, w, h,
+                kind, scene ? scene->sceneId() : 0, directTexture, x, y, w, h,
                 clipX, clipY, clipW, clipH);
         });
 
@@ -225,7 +226,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
 
     render::CommandReplayer replayer(renderer);
     replayer.setLayerBreakHandler(
-        [&](int kind, void* scenePtr, unsigned int directTexture,
+        [&](int kind, uint64_t sceneId, unsigned int directTexture,
             float x, float y, float w, float h,
             float clipX, float clipY, float clipW, float clipH) {
             int prevIdx = htmlLayerIdx;
@@ -243,7 +244,7 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
 
             UILayer canvasLayer;
             canvasLayer.type = UILayer::Canvas;
-            canvasLayer.canvasScene = static_cast<canvas::CanvasScene*>(scenePtr);
+            canvasLayer.canvasSceneId = sceneId;
             canvasLayer.texture = directTexture;
             canvasLayer.cx = x; canvasLayer.cy = y;
             canvasLayer.cw = w; canvasLayer.ch = h;
@@ -332,7 +333,7 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
 
     render::CommandReplayer replayer(renderer);
     replayer.setLayerBreakHandler(
-        [&](int kind, void* /*scene*/, unsigned int /*tex*/,
+        [&](int kind, uint64_t /*sceneId*/, unsigned int /*tex*/,
             float, float, float, float, float, float, float, float) {
             if (kind != render::Cmd_LayerBreak::HtmlSurface) return;
             // Capture current panel into a UILayer, advance to next surface.
@@ -421,10 +422,14 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFB
                 glDrawArrays(GL_TRIANGLES, 0, 6);
             }
         } else {
-            // Canvas/WebGL layer — get texture from canvas scene or direct texture
+            // Canvas/WebGL layer — get texture from canvas scene or direct
+            // texture. A canvasSceneId that no longer resolves (scene detached
+            // since this layer was recorded) draws nothing this frame.
             GLuint tex = 0;
-            if (layer.canvasScene) {
-                tex = layer.canvasScene->texture();
+            bool isCanvas = layer.canvasSceneId != 0;
+            if (isCanvas) {
+                if (auto* cs = canvasSceneById(layer.canvasSceneId))
+                    tex = cs->texture();
             } else {
                 tex = layer.texture;  // WebGL direct texture
             }
@@ -433,8 +438,8 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFB
                 float cw = layer.cw, ch = layer.ch;
 
                 // WebGL textures are bottom-up (origin at lower-left) so flip V coords
-                float v0 = layer.canvasScene ? 0.0f : 1.0f;
-                float v1 = layer.canvasScene ? 1.0f : 0.0f;
+                float v0 = isCanvas ? 0.0f : 1.0f;
+                float v1 = isCanvas ? 1.0f : 0.0f;
 
                 // Canvas/WebGL layers composite outside the Skia clip stack, so
                 // re-apply any ancestor overflow/scroll clip as a GL scissor.

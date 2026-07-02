@@ -125,7 +125,7 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
 
             } else if constexpr (std::is_same_v<T, Cmd_LayerBreak>) {
                 if (onLayerBreak_) {
-                    onLayerBreak_(c.kind, c.canvasScene, c.directTexture,
+                    onLayerBreak_(c.kind, c.canvasSceneId, c.directTexture,
                                   c.x, c.y, c.w, c.h,
                                   c.clipX, c.clipY, c.clipW, c.clipH);
                 }

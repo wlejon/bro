@@ -359,12 +359,12 @@ void RecordingRenderer::endFrame() {
     buffer_->append(Cmd_EndFrame{});
 }
 
-void RecordingRenderer::recordLayerBreak(int kind, void* canvasScene,
+void RecordingRenderer::recordLayerBreak(int kind, uint64_t canvasSceneId,
                                          unsigned int directTexture,
                                          float x, float y, float w, float h,
                                          float clipX, float clipY,
                                          float clipW, float clipH) {
-    buffer_->append(Cmd_LayerBreak{kind, canvasScene, directTexture, x, y, w, h,
+    buffer_->append(Cmd_LayerBreak{kind, canvasSceneId, directTexture, x, y, w, h,
                                    clipX, clipY, clipW, clipH});
 }
 

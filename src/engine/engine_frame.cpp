@@ -305,15 +305,14 @@ void Engine::run() {
         framePresenter_->consumeIfReady();
         auto layers = framePresenter_->currentLayers();
 
-        // 0c. Drain detached canvas scenes deferred from a previous frame. This
-        //     is the only point where the raster worker is guaranteed idle and
-        //     both layer buffers are stable, so it is safe to scrub a scene's
-        //     raw pointer from both buffers before destroying it. If the worker
-        //     is still busy this frame the scenes simply wait — they stay alive,
-        //     and the per-scene liveness guard keeps prepareAndSignal safe.
+        // 0c. Drain detached canvas scenes deferred from a previous frame.
+        //     Layers/commands name scenes by sceneId and these were
+        //     unregistered at detach, so no buffer scrubbing is needed — but
+        //     destruction still waits for the raster worker to go idle:
+        //     inline-blit commands replayed on the worker hold raw pointers.
+        //     If the worker is still busy this frame the scenes simply wait.
         if (!canvasScenesDetached_.empty() && framePresenter_->isRasterIdle()) {
             for (auto& cs : canvasScenesDetached_) {
-                framePresenter_->forgetCanvasSceneAllBuffers(cs.get());
                 // Release GPU resources on the worker that owns them before the
                 // unique_ptr dtor runs on this (main) thread.
                 if (cs->isThreaded() && canvasRasterThread_)
@@ -631,18 +630,20 @@ void Engine::run() {
             }
         }
 
-        // 5b. Signal canvas threads using the now-stable layer view.
+        // 5b. Signal canvas threads using the now-stable layer view. Stale
+        //     sceneIds (scene detached after the layer was recorded) resolve
+        //     to null and are skipped.
         for (auto& layer : layers.appLayers) {
-            if (layer.type == UILayer::Canvas && layer.canvasScene) {
-                layer.canvasScene->prepareAndSignal();
-            }
+            if (layer.type != UILayer::Canvas) continue;
+            if (auto* cs = canvasSceneById(layer.canvasSceneId))
+                cs->prepareAndSignal();
         }
 
         // 5b2. Wait for canvas-thread fences before compositing the same view.
         for (auto& layer : layers.appLayers) {
-            if (layer.type == UILayer::Canvas && layer.canvasScene) {
-                layer.canvasScene->consumeFence();
-            }
+            if (layer.type != UILayer::Canvas) continue;
+            if (auto* cs = canvasSceneById(layer.canvasSceneId))
+                cs->consumeFence();
         }
         accumRasterMs_ += util::currentTimeMs() - tRaster;
 
@@ -662,15 +663,8 @@ void Engine::run() {
             cs->setViewportScroll(scrollY_);
             cs->checkDetached();
         }
-        // Before destroying any detached scene, drop references to it from the
-        // composable layer view (`layers`, captured this frame from the front
-        // buffer). That view was recorded in an earlier frame, when the scene
-        // was still attached, so it still names the scene by raw pointer — and
-        // compositeLayers below would dereference the freed scene without this.
         for (auto& cs : canvasScenes_) {
             if (!cs->isDetached()) continue;
-            if (framePresenter_)
-                framePresenter_->forgetCanvasScene(cs.get());
             // This scene is being reclaimed. If its backing Element is still
             // alive (orphaned from the DOM but not yet freed), sever the
             // Element's back-pointer so its eventual ~Element doesn't invoke
@@ -680,14 +674,14 @@ void Engine::run() {
             if (auto* el = static_cast<dom::Element*>(cs->backingElement()))
                 el->setCanvasScene(nullptr);
         }
-        // Move detached scenes out of the active list, but do NOT destroy them
-        // here: the raster worker may have recorded a scene's raw pointer into
-        // the back buffer this very frame, and that buffer becomes the front
-        // buffer next frame. Destroying now would leave prepareAndSignal /
-        // compositeLayers dereferencing a freed scene. They are scrubbed from
-        // both buffers and freed at frame top once the worker is idle.
+        // Move detached scenes out of the active list and unregister their
+        // sceneIds — from here on, any layer in either buffer that still names
+        // one resolves to null at composite/signal time. Destruction is still
+        // deferred to frame top with the raster worker idle (inline-blit
+        // commands replayed on the worker hold raw pointers).
         for (auto it = canvasScenes_.begin(); it != canvasScenes_.end(); ) {
             if ((*it)->isDetached()) {
+                canvasSceneRegistry_.erase((*it)->sceneId());
                 canvasScenesDetached_.push_back(std::move(*it));
                 it = canvasScenes_.erase(it);
             } else {
