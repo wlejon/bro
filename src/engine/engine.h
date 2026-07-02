@@ -768,6 +768,14 @@ private:
     // Mouse button state for buttons bitmask
     int pressedButtons_ = 0;
 
+    // Modifier keys currently held via simulated handleKeyDown()/handleKeyUp()
+    // calls (SDL_KMOD_* bits). safeGetModState() only sees the OS's real
+    // physical keyboard state, which headless input simulation never touches —
+    // this mask lets simulated keyDown(shift)+click() combinations (e.g.
+    // shift-click) produce a MouseEvent with the correct shiftKey/ctrlKey/etc.
+    // See safeGetModState() in input_handling.cpp.
+    int heldModifierMask_ = 0;
+
     // Mouse-driven text selection. `selectionAnchor*` is pinned on mousedown
     // (the static endpoint of a drag); selectionDragging_ means subsequent
     // mousemove events should extend the focus to follow the cursor.

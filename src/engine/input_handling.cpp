@@ -210,8 +210,27 @@ static void dispatchActionEvent(JSContext* ctx, Settings* settings,
 // headless mode no SDL video subsystem is initialized, so the call would
 // dereference an internal NULL pointer and crash.  Return 0 (no modifiers)
 // when there is no window.
-static int safeGetModState(platform::Window* window) {
-    return window ? static_cast<int>(SDL_GetModState()) : 0;
+//
+// `heldModifierMask` ORs in modifiers held via simulated handleKeyDown()
+// calls (see Engine::heldModifierMask_) — SDL_GetModState() only reflects
+// the OS's real physical keyboard, which headless input simulation never
+// touches, so without this a simulated keyDown(shift) + click() (e.g. a
+// shift-click) would never see shiftKey on the resulting MouseEvent.
+static int safeGetModState(platform::Window* window, int heldModifierMask) {
+    return (window ? static_cast<int>(SDL_GetModState()) : 0) | heldModifierMask;
+}
+
+// Maps a modifier keycode to its SDL_KMOD_* bit (both left/right variants
+// fold onto the same bit, matching SDL_GetModState()'s own behavior). Returns
+// 0 for non-modifier keys.
+static int modifierBitForKeycode(int keycode) {
+    switch (keycode) {
+        case SDLK_LSHIFT: case SDLK_RSHIFT: return SDL_KMOD_SHIFT;
+        case SDLK_LCTRL:  case SDLK_RCTRL:  return SDL_KMOD_CTRL;
+        case SDLK_LALT:   case SDLK_RALT:   return SDL_KMOD_ALT;
+        case SDLK_LGUI:   case SDLK_RGUI:   return SDL_KMOD_GUI;
+        default: return 0;
+    }
 }
 
 // Safe wrappers for SDL text input — no-ops when there is no window.
@@ -382,6 +401,19 @@ void Engine::handleMouseDown(float x, float y, int button) {
     float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
     uiDirty_ = true;
 
+    // Keep the cursor-position bookkeeping current regardless of which branch
+    // below consumes the event (several return early). Real SDL relative-mouse
+    // input doesn't need this (movementX/Y come straight from the OS), but
+    // headless's mouseMove(x, y) self-computes its delta as (x - lastMouseX_)
+    // — only handleMouseMove used to maintain that pair, so any mousedown/up
+    // with no intervening real mousemove left it stale (sometimes as far back
+    // as (0, 0)), and the next simulated drag's first step jumped from that
+    // stale baseline instead of the actual last cursor position. Capture the
+    // pre-update position for this event's own movementX/Y below.
+    const float prevMouseX = lastMouseX_, prevMouseY = lastMouseY_;
+    lastMouseX_ = x;
+    lastMouseY_ = y;
+
     // Convert SDL button id to DOM convention up front so every downstream
     // event sees the standard 0=left/1=middle/2=right indexing.
     button = sdlToDomButton(button);
@@ -488,9 +520,9 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
     if (document_) {
         dom::MouseEvent evt("mousedown");
-        int mod = safeGetModState(window_.get());
+        int mod = safeGetModState(window_.get(), heldModifierMask_);
         populateMouseEvent(evt, x, y, button, pressedButtons_,
-                          x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
+                          x - prevMouseX, y - prevMouseY, scrollY_, mod, static_cast<float>(contentTop()));
 
         dom::Element* target = hitTest(docX, docY);
         if (target) applyMouseOffset(evt, target);
@@ -509,7 +541,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
             htmlNodeMouseDownElement_.assign(hnHit->document(), hnEl);
             dispatchHtmlNodeMouseEvent("mousedown", hnEl, hnPxX, hnPxY,
                                         button, pressedButtons_, mod,
-                                        x - lastMouseX_, y - lastMouseY_,
+                                        x - prevMouseX, y - prevMouseY,
                                         /*bubbles=*/true);
             return;
         }
@@ -600,6 +632,14 @@ void Engine::handleMouseUp(float x, float y, int button) {
     float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
     uiDirty_ = true;
 
+    // See the matching comment in handleMouseDown: keep this pair current so
+    // headless's self-computed mouseMove delta always measures from the real
+    // last cursor position, not a stale one left over from before a click.
+    // Capture the pre-update position for this event's own movementX/Y below.
+    const float prevMouseX = lastMouseX_, prevMouseY = lastMouseY_;
+    lastMouseX_ = x;
+    lastMouseY_ = y;
+
     // Match handleMouseDown: SDL -> DOM button index.
     button = sdlToDomButton(button);
 
@@ -664,10 +704,10 @@ void Engine::handleMouseUp(float x, float y, int button) {
 
     if (document_) {
         dom::Element* target = hitTest(docX, docY);
-        int mod = safeGetModState(window_.get());
+        int mod = safeGetModState(window_.get(), heldModifierMask_);
         float ct = static_cast<float>(contentTop());
-        float movX = x - lastMouseX_;
-        float movY = y - lastMouseY_;
+        float movX = x - prevMouseX;
+        float movY = y - prevMouseY;
         float clientY = y - ct;
         float pageY = clientY + scrollY_;
 
@@ -732,7 +772,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     // stays frozen at the lock position and movementX/Y carries the delta.
     if (dom::Element* locked = lockedElement_.get()) {
         if (document_) {
-            int mod = safeGetModState(window_.get());
+            int mod = safeGetModState(window_.get(), heldModifierMask_);
             dom::MouseEvent moveEvt("mousemove", true, true);
             populateMouseEvent(moveEvt, lockedMouseX_, lockedMouseY_, -1,
                                pressedButtons_, xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
@@ -960,7 +1000,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         // Dispatch mouseover/mouseout when element changes (bubbling versions)
         dom::Element* prevHover = hoveredElement_.get();
         if (target != prevHover) {
-            int mod = safeGetModState(window_.get());
+            int mod = safeGetModState(window_.get(), heldModifierMask_);
 
             // mouseout on previous element (bubbles)
             if (prevHover) {
@@ -1021,7 +1061,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                                                         hnNode, hnEl, hnPxX, hnPxY));
         dom::Element* prevHnEl = hoveredHtmlElement_.get();
         if (hnEl != prevHnEl) {
-            int mod = safeGetModState(window_.get());
+            int mod = safeGetModState(window_.get(), heldModifierMask_);
             if (prevHnEl) {
                 dispatchHtmlNodeMouseEvent("mouseout", prevHnEl,
                                             hnPxX, hnPxY, -1, pressedButtons_,
@@ -1052,12 +1092,12 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         // Always dispatch mousemove. Route into the inner HtmlNode if the
         // pointer is currently over one — otherwise normal DOM target.
         if (hnHit) {
-            int mod = safeGetModState(window_.get());
+            int mod = safeGetModState(window_.get(), heldModifierMask_);
             dispatchHtmlNodeMouseEvent("mousemove", hnEl, hnPxX, hnPxY,
                                         -1, pressedButtons_, mod,
                                         xrel, yrel, /*bubbles=*/true);
         } else if (target) {
-            int mod = safeGetModState(window_.get());
+            int mod = safeGetModState(window_.get(), heldModifierMask_);
             dom::MouseEvent moveEvt("mousemove", true, true);
             populateMouseEvent(moveEvt, x, y, -1, pressedButtons_,
                               xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
@@ -1194,6 +1234,8 @@ void Engine::applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r) 
 }
 
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
+    heldModifierMask_ |= modifierBitForKeycode(keycode);
+
     if (overlayMgr_.handleKeyDown(keycode, mod)) {
         uiDirty_ = true;
         return;
@@ -1581,6 +1623,8 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 }
 
 void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
+    heldModifierMask_ &= ~modifierBitForKeycode(keycode);
+
     if (systemSettingsVisible_) {
         systemHandleKeyUp(keycode, scancode, mod, repeat);
         return;
@@ -1792,7 +1836,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
     // Dispatch wheel event to JS
     if (target) {
         dom::WheelEvent wheelEvt("wheel", true, true);
-        int mod = safeGetModState(window_.get());
+        int mod = safeGetModState(window_.get(), heldModifierMask_);
         populateMouseEvent(wheelEvt, x, y, -1, pressedButtons_,
                           x - lastMouseX_, y - lastMouseY_, scrollY_, mod, static_cast<float>(contentTop()));
         // DOM convention: positive deltaY = scroll toward bottom of content.
