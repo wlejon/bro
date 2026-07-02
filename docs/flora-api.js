@@ -207,7 +207,13 @@ world.emitSegments;
  * gradient (~1 in sun, →0 deep in a closed canopy) — use it (not light01)
  * to carve foliage/bloom density by actual shade.
  *
- * @returns {Array<{mass:number, age01:number, vigor01:number, light01:number, lightExposure01:number, senescence01:number, isTerminal:boolean}>}
+ * `twigGrade01` is 1 on shoots at leaf thickness, falling to 0 on branches
+ * thicker than ~6x the species leaf diameter — the "off the trunk/scaffold"
+ * component baked into `mass`. Multiply it into any custom density recipe
+ * that ignores `mass` (e.g. one built from `lightExposure01`), or leaves
+ * will scatter onto structural branches as readily as onto twigs.
+ *
+ * @returns {Array<{mass:number, age01:number, vigor01:number, light01:number, lightExposure01:number, senescence01:number, isTerminal:boolean, twigGrade01:number}>}
  */
 world.emitFoliage;
 

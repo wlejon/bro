@@ -406,6 +406,7 @@ static void installWorldClass(JSContext* ctx) {
             JS_SetPropertyStr(ctx, o, "lightExposure01", JS_NewFloat64(ctx, s.lightExposure01));
             JS_SetPropertyStr(ctx, o, "senescence01", JS_NewFloat64(ctx, s.senescence01));
             JS_SetPropertyStr(ctx, o, "isTerminal",   JS_NewBool(ctx, s.isTerminal));
+            JS_SetPropertyStr(ctx, o, "twigGrade01", JS_NewFloat64(ctx, s.twigGrade01));
             JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
         }
         return arr;
@@ -473,6 +474,7 @@ static void installWorldClass(JSContext* ctx) {
             JS_SetPropertyStr(ctx, o, "lightExposure01", JS_NewFloat64(ctx, s.lightExposure01));
             JS_SetPropertyStr(ctx, o, "senescence01", JS_NewFloat64(ctx, s.senescence01));
             JS_SetPropertyStr(ctx, o, "isTerminal",   JS_NewBool(ctx, s.isTerminal));
+            JS_SetPropertyStr(ctx, o, "twigGrade01", JS_NewFloat64(ctx, s.twigGrade01));
             JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
         }
         return arr;
