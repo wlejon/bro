@@ -1,6 +1,7 @@
 #include "engine/app_loader.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <regex>
@@ -24,26 +25,40 @@ std::string AppLoader::resolvePath(const std::string& base,
 {
     if (path.empty()) return base;
 
-    // Drive-letter absolute (Windows) — pass through.
-    if (path.size() >= 2 && path[1] == ':') return path;
-
-    // `/`-prefixed: try engine mounts first; otherwise treat as filesystem
-    // absolute. Mounts take precedence so `/lib/foo.js` resolves through
-    // the mount table even when `/lib` exists on disk.
-    if (path[0] == '/' || path[0] == '\\') {
-        if (mounts) {
-            std::string m = mounts->resolve(path);
-            if (!m.empty()) return m;
+    std::string result;
+    bool driveAbsolute = path.size() >= 2 && path[1] == ':';
+    if (driveAbsolute) {
+        // Drive-letter absolute (Windows) — pass through.
+        result = path;
+    } else if (path[0] == '/' || path[0] == '\\') {
+        // `/`-prefixed: try engine mounts first; otherwise treat as filesystem
+        // absolute. Mounts take precedence so `/lib/foo.js` resolves through
+        // the mount table even when `/lib` exists on disk.
+        std::string m = mounts ? mounts->resolve(path) : std::string();
+        result = m.empty() ? path : m;
+    } else {
+        // Bare relative — append to base.
+        result = base;
+        if (!result.empty() && result.back() != '/' && result.back() != '\\') {
+            result += '/';
         }
-        return path;
+        result += path;
     }
 
-    // Bare relative — append to base.
-    std::string result = base;
-    if (!result.empty() && result.back() != '/' && result.back() != '\\') {
-        result += '/';
+    // Canonicalize lexically, matching js::module_normalize (runtime.cpp)'s
+    // treatment of the same "/"-prefixed specifiers. Without this, a
+    // `<script type="module" src="/app/app.js">` tag and an `import ... from
+    // "/app/app.js"` statement resolve to different-looking strings (this
+    // function leaves mount-resolved paths with forward slashes, while
+    // lexically_normal() rewrites them to the platform separator on
+    // Windows), so QuickJS's specifier-keyed module cache treats the same
+    // file as two distinct modules and re-executes it — silently doubling
+    // any module-level singleton state.
+    if (result.find('/') != std::string::npos || result.find('\\') != std::string::npos) {
+        std::error_code ec;
+        std::string normalized = std::filesystem::path(result).lexically_normal().string();
+        if (!normalized.empty()) result = normalized;
     }
-    result += path;
     return result;
 }
 
