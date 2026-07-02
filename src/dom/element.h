@@ -227,6 +227,11 @@ private:
     std::string tag_;
     std::unordered_map<std::string, std::string> attributes_;
     StyleProxy style_;
+    // "style" is never stored in attributes_ (its value lives in style_), so
+    // presence has to be tracked separately: a style attribute set to an
+    // empty/all-removed declaration block still exists (getAttribute returns
+    // "", not null) until removeAttribute("style") is called.
+    bool hasStyleAttr_ = false;
     std::unordered_map<std::string, std::vector<uint64_t>> listeners_;
     Document* document_ = nullptr;
     ShadowRoot* shadowRoot_ = nullptr;

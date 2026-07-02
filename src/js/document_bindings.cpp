@@ -78,6 +78,10 @@ static JSValue js_document_importNode(JSContext* ctx,
         for (auto& [name, val] : srcEl->attributes()) {
             clone->setAttribute(name, val);
         }
+        // "style" lives in StyleProxy, not attributes_ (see Element::setAttribute).
+        if (srcEl->hasAttribute("style")) {
+            clone->setAttribute("style", srcEl->style().cssText());
+        }
 
         if (deep) {
             JSValue srcWrapper = DomBindings::wrapElement(ctx, srcEl);

@@ -289,21 +289,10 @@ void Document::resolveStylesRecursive(Element* elem,
     if (needsResolve) {
         auto* adapter = layout::ElementRefAdapter::getOrCreate(elem);
 
-        // Build inline style string from style attribute + StyleProxy.
-        // StyleProxy (JS-set values) comes LAST so it overrides the HTML attribute
-        // (later declarations of equal specificity win in CSS).
-        std::string inlineStyle;
-        auto attrIt = elem->attributes().find("style");
-        if (attrIt != elem->attributes().end()) {
-            inlineStyle = attrIt->second;
-        }
-        const auto& proxyStyle = elem->style().cssText();
-        if (!proxyStyle.empty()) {
-            if (!inlineStyle.empty()) inlineStyle += "; ";
-            inlineStyle += proxyStyle;
-        }
-
-        auto computed = cascade_.resolve(*adapter, inlineStyle, parentStyle);
+        // Inline style: StyleProxy is the sole source (Element::setAttribute
+        // routes "style" attribute writes into it too, see element.cpp), so
+        // there's only one declaration block to resolve, not two to merge.
+        auto computed = cascade_.resolve(*adapter, elem->style().cssText(), parentStyle);
 
         // Resolve font-size to absolute px so all consumers get a usable value.
         // em/% are relative to the parent's (already-resolved) font-size.

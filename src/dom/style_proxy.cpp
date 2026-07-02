@@ -75,6 +75,7 @@ const std::string& StyleProxy::cssText() const {
 }
 
 void StyleProxy::setCssText(const std::string& text) {
+    std::string oldDisplay = getProperty("display");
     properties_.clear();
     invalidateCssText();
 
@@ -109,7 +110,11 @@ void StyleProxy::setCssText(const std::string& text) {
     }
 
     if (owner_) {
-        owner_->markDirty();
+        if (getProperty("display") != oldDisplay) {
+            owner_->markStructureDirty();
+        } else {
+            owner_->markDirty();
+        }
     }
 }
 

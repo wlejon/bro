@@ -39,7 +39,9 @@ public:
 
     bool hasAttribute(std::string_view name) const override {
         if (!elem_) return false;
-        return elem_->attributes().count(std::string{name}) > 0;
+        // Element::hasAttribute special-cases "style" (lives in StyleProxy,
+        // not attributes_) — go through it rather than checking the map directly.
+        return elem_->hasAttribute(std::string{name});
     }
 
     ElementRef* parent() const override {

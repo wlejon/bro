@@ -127,6 +127,7 @@ void Element::setClassName(const std::string& val) {
 }
 
 const std::string& Element::getAttribute(const std::string& name) const {
+    if (name == "style") return style_.cssText();
     auto it = attributes_.find(name);
     if (it != attributes_.end()) {
         return it->second;
@@ -136,10 +137,28 @@ const std::string& Element::getAttribute(const std::string& name) const {
 }
 
 bool Element::hasAttribute(const std::string& name) const {
+    // True if the attribute was explicitly set (even to an now-empty
+    // declaration block) or if .style has live properties set directly
+    // (which implicitly creates the attribute in real DOM too).
+    if (name == "style") return hasStyleAttr_ || !style_.empty();
     return attributes_.find(name) != attributes_.end();
 }
 
 void Element::setAttribute(const std::string& name, const std::string& val) {
+    if (name == "style") {
+        // The "style" attribute and the .style CSSOM object (StyleProxy) are
+        // the same underlying declaration block in real DOM — route through
+        // StyleProxy instead of stashing a second, independent copy in
+        // attributes_. Two copies naively concatenated for cascade
+        // resolution (the old approach) can't express "a property was
+        // removed via .style" — the attribute's original text for that
+        // property would linger forever. setCssText() replaces the whole
+        // block, matching setAttribute('style', ...) semantics.
+        style_.setCssText(val);
+        hasStyleAttr_ = true;
+        return;
+    }
+
     auto existing = attributes_.find(name);
     if (existing != attributes_.end() && existing->second == val) return;
 
@@ -153,6 +172,11 @@ void Element::setAttribute(const std::string& name, const std::string& val) {
 }
 
 void Element::removeAttribute(const std::string& name) {
+    if (name == "style") {
+        style_.setCssText("");
+        hasStyleAttr_ = false;
+        return;
+    }
     if (name == "id" && document_) {
         std::string oldId = getAttribute("id");
         if (!oldId.empty()) document_->unregisterElementId(oldId);
@@ -344,8 +368,10 @@ std::string Element::outerHTML() const {
         const std::string& attrName = (attrIt != kSvgAttrCaseMap.end()) ? attrIt->second : key;
         oss << " " << attrName << "=\"" << htmlEscapeAttr(val) << "\"";
     }
-    if (attributes_.find("style") == attributes_.end()) {
-        std::string css = style_.cssText();
+    // "style" is never stored in attributes_ (see setAttribute) — StyleProxy
+    // is the sole source, so always serialize from it directly.
+    {
+        const std::string& css = style_.cssText();
         if (!css.empty()) {
             oss << " style=\"" << css << "\"";
         }

@@ -1895,9 +1895,6 @@ static JSValue js_element_setAttribute(JSContext* ctx, JSValueConst this_val,
     std::string newVal = jsToStdString(ctx, argv[1]);
     std::string oldVal = el->getAttribute(name);
     el->setAttribute(name, newVal);
-    // Setting the style attribute must sync into the inline style proxy
-    if (name == "style")
-        el->style().setCssText(newVal);
     // VIDEO src change: trigger load through the controller if attached.
     // If the control isn't present yet, ensureReplacedElements picks the
     // src attribute up when it runs, so the value-stored-on-attribute
@@ -2105,6 +2102,10 @@ static JSValue js_element_cloneNode(JSContext* ctx, JSValueConst this_val,
     for (auto& [name, val] : el->attributes()) {
         if (name == "id") continue;
         clone->setAttribute(name, val);
+    }
+    // "style" lives in StyleProxy, not attributes_ (see Element::setAttribute).
+    if (el->hasAttribute("style")) {
+        clone->setAttribute("style", el->style().cssText());
     }
 
     if (deep) {
@@ -2864,6 +2865,11 @@ static JSValue js_element_get_outerHTML(JSContext* ctx, JSValueConst this_val) {
     for (auto& [name, val] : el->attributes()) {
         result += " " + name + "=\"" + val + "\"";
     }
+    // "style" is never stored in attributes_ (Element::setAttribute routes
+    // it into StyleProxy instead) — append it separately.
+    if (el->hasAttribute("style")) {
+        result += " style=\"" + el->style().cssText() + "\"";
+    }
     result += ">";
     result += el->innerHTML();
     result += "</" + tag + ">";
@@ -3239,6 +3245,10 @@ static JSValue js_element_getAttributeNames(JSContext* ctx, JSValueConst this_va
     uint32_t idx = 0;
     for (auto& [name, val] : el->attributes()) {
         JS_SetPropertyUint32(ctx, arr, idx++, JS_NewString(ctx, name.c_str()));
+    }
+    // "style" lives in StyleProxy, not attributes_ (see Element::setAttribute).
+    if (el->hasAttribute("style")) {
+        JS_SetPropertyUint32(ctx, arr, idx++, JS_NewString(ctx, "style"));
     }
     return arr;
 }
