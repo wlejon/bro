@@ -1,6 +1,7 @@
 #include "layout/el_input.h"
 #include "layout/draw_traversal.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "render/renderer.h"
 #include "util/platform.h"
 
@@ -327,7 +328,14 @@ void ElInput::draw(render::Renderer* renderer,
 
     if (w <= 0 || h <= 0) return;
 
-    lastDrawPos_ = {x, y, w, h};
+    // lastDrawPos_ feeds mouse-drag math in Engine::handleMouseMove, which
+    // compares against real screen-space cursor coordinates — so it needs
+    // the ancestor-transform-projected rect (same fix as canvas/webgl/scene
+    // layers in DrawTraversal), not the raw pre-transform layout position,
+    // or a range slider under a zoomed/panned ancestor drags at the wrong
+    // screen-to-value ratio entirely.
+    auto screenRect = dom::absoluteContentBox(elem_);
+    lastDrawPos_ = {screenRect.x, screenRect.y, screenRect.width, screenRect.height};
 
     auto t = inputType(nullptr);
     if (t == InputType::Hidden) return;
