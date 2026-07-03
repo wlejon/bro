@@ -626,6 +626,32 @@ static JSValue js_element_get_value(JSContext* ctx, JSValueConst this_val)
             return JS_NewString(ctx, opts[idx].value.c_str());
         return JS_NewString(ctx, "");
     }
+    if (el->tagName() == "SELECT" || el->tagName() == "select") {
+        // No ElSelect yet (no layout pass has touched this element) —
+        // read straight off the DOM instead of falling through to the
+        // generic getAttribute("value") below, which is always empty for
+        // a <select> (only its <option> children carry a value). Mirrors
+        // js_element_set_value's DOM-attribute fallback so get/set stay
+        // consistent before first layout — e.g. a headless script that
+        // creates a <select>, sets .value, and reads it back without an
+        // intervening flush()/layout.
+        bro::dom::Element* first = nullptr;
+        for (auto* child : el->children()) {
+            if (child->tagName() != "OPTION" && child->tagName() != "option") continue;
+            if (!first) first = child;
+            if (child->hasAttribute("selected")) {
+                std::string ov = child->getAttribute("value");
+                if (ov.empty()) ov = child->textContent();
+                return JS_NewString(ctx, ov.c_str());
+            }
+        }
+        if (first) {
+            std::string ov = first->getAttribute("value");
+            if (ov.empty()) ov = first->textContent();
+            return JS_NewString(ctx, ov.c_str());
+        }
+        return JS_NewString(ctx, "");
+    }
     // <textarea>: the live value lives in the "value" attribute once any
     // edit has happened; before that, fall back to textContent (initial
     // content from HTML, e.g. `<textarea>foo</textarea>`).
