@@ -165,7 +165,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/brokit-api.js` | brokit runtime — Node modules (fs, path, os, child_process) + web globals (fetch, crypto, WebSocket, streams, storage, etc.) |
 | `docs/physics-api.js` | `Physics` — Jolt rigid bodies, shapes, raycasts, contact events (paired with PhysicsNode) |
 | `docs/terrain-api.js` | `scene.createTerrain` — voxel terrain: noise config, chunk streaming, voxel edits, raycast |
-| `docs/tile-api.js` | `scene.createTileWorld` — chunked tile-grid meshing (`bro::tile` core): per-cell tile layers + elevation + flags, flat-top + auto-cliff geometry, corner AO, palette colour, authoring/query. Square-first; hex planned |
+| `docs/tile-api.js` | `scene.createTileWorld` — chunked tile-grid meshing (`bro::tile` core): per-cell tile layers + elevation + flags, flat-top + auto-cliff geometry, corner AO, palette colour, authoring/query. Square and hex topology |
 | `docs/dialogs-api.js` | `showOpenFileDialog` / `showOpenFolderDialog` / `showSaveFileDialog` — SDL3-backed native dialogs |
 | `docs/menu-api.js` | `bro.menu` — native menu bar (set/addItem/updateItem, item event) |
 | `docs/gizmo-api.js` | `bro.gizmo` — 3D transform handles (translate/rotate/scale) for scene editing |
