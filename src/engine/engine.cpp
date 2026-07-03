@@ -5,6 +5,7 @@
 #include "layout/layout_node_adapter.h"
 #include "engine/overflow.h"
 #include "engine/replaced_elements.h"
+#include "dom/element_geometry.h"
 
 #include <filesystem>
 #include <fstream>
@@ -195,6 +196,17 @@ void Engine::pumpVideoEvents() {
 // Is this node inside a subtree marked contenteditable? Walks up the DOM
 // to find the nearest ancestor element with a contenteditable attribute.
 // Treats contenteditable="false" as explicitly *not* editable (matches spec).
+// The nearest Element ancestor (or the node itself if already an Element) —
+// used to look up the CSS transform chain that applies to a Range endpoint,
+// since htmlayout's selection/caret geometry (below) is transform-unaware.
+static bro::dom::Element* nearestElementAncestor(bro::dom::Node* node) {
+    for (bro::dom::Node* n = node; n; n = n->parentNode()) {
+        if (n->nodeType() == bro::dom::NodeType::Element)
+            return static_cast<bro::dom::Element*>(n);
+    }
+    return nullptr;
+}
+
 static bool inContenteditableHost(bro::dom::Node* node) {
     for (bro::dom::Node* n = node; n; n = n->parentNode()) {
         if (n->nodeType() != bro::dom::NodeType::Element) continue;
@@ -252,9 +264,20 @@ void Engine::updateSelectionSnapshot() {
                                                range->endContainer(),
                                                range->endOffset(),
                                                *textMetrics_);
+        // getSelectionRects returns transform-unaware document-space rects
+        // (htmlayout has no notion of CSS transform). Project through the
+        // ancestor chain of the selection's start — the common-case approx.
+        // (a selection normally stays within one transformed subtree, e.g.
+        // one panned/zoomed node-forge card) — or the highlight renders at
+        // its raw pre-transform position while the selected text itself
+        // paints correctly transformed, same symptom as the dropdown/
+        // slider/canvas-layer bugs already fixed this session.
+        auto* ctxEl = nearestElementAncestor(range->startContainer());
         selectionSnapshot_.rects.reserve(rects.size());
         for (const auto& r : rects) {
-            selectionSnapshot_.rects.push_back({r.x, r.y, r.width, r.height});
+            auto pr = ctxEl ? dom::projectRectThroughAncestors(ctxEl, r.x, r.y, r.width, r.height)
+                             : dom::AbsoluteRect{r.x, r.y, r.width, r.height};
+            selectionSnapshot_.rects.push_back({pr.x, pr.y, pr.width, pr.height});
         }
         return;
     }
@@ -269,10 +292,14 @@ void Engine::updateSelectionSnapshot() {
     float cx = 0, cy = 0, ch = 0;
     if (!layout::getCaretRect(document_.get(), tn, range->startOffset(),
                               *textMetrics_, cx, cy, ch)) return;
+    // Same transform-unaware-geometry caveat as the selection rects above.
+    auto* ctxEl = nearestElementAncestor(tn);
+    auto pr = ctxEl ? dom::projectRectThroughAncestors(ctxEl, cx, cy, 0.0f, ch)
+                     : dom::AbsoluteRect{cx, cy, 0.0f, ch};
     selectionSnapshot_.hasCaret = true;
-    selectionSnapshot_.caretX = cx;
-    selectionSnapshot_.caretY = cy;
-    selectionSnapshot_.caretHeight = ch;
+    selectionSnapshot_.caretX = pr.x;
+    selectionSnapshot_.caretY = pr.y;
+    selectionSnapshot_.caretHeight = pr.height;
 }
 
 void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY) {

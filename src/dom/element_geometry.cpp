@@ -188,4 +188,9 @@ AbsoluteRect absoluteContentBox(const Element* el) {
     return projectAABB(frame, frame.ox, frame.oy, box.contentRect.width, box.contentRect.height);
 }
 
+AbsoluteRect projectRectThroughAncestors(const Element* el, float x, float y, float w, float h) {
+    if (!el) return {x, y, w, h};
+    return projectAABB(computeAbsoluteFrame(el), x, y, w, h);
+}
+
 } // namespace bro::dom

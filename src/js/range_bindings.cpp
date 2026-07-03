@@ -2,6 +2,8 @@
 #include "dom/range.h"
 #include "dom/selection.h"
 #include "dom/document.h"
+#include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "layout/selection_geometry.h"
 #include "layout/skia_text_metrics.h"
 #include "engine/engine.h"
@@ -22,6 +24,17 @@ using Selection = bro::dom::Selection;
 // unwrap helper — accepts either owned (qjsbind::wrap) or unowned wrappers.
 static Range* getRange(JSValueConst val) {
     return static_cast<Range*>(JS_GetOpaque(val, js_range_class_id));
+}
+
+// The nearest Element ancestor (or the node itself if already an Element) —
+// used to look up the CSS transform chain applying to a Range endpoint,
+// since getSelectionRects()'s geometry (below) is transform-unaware.
+static bro::dom::Element* nearestElementAncestor(Node* node) {
+    for (Node* n = node; n; n = n->parentNode()) {
+        if (n->nodeType() == bro::dom::NodeType::Element)
+            return static_cast<bro::dom::Element*>(n);
+    }
+    return nullptr;
 }
 
 // `newRange(doc)` creates a new Range, registered with `doc` for live
@@ -277,11 +290,19 @@ static JSValue js_range_getClientRects(JSContext* ctx, JSValueConst this_val,
         doc, r->startContainer(), r->startOffset(),
         r->endContainer(), r->endOffset(), *metrics);
 
+    // getSelectionRects() is transform-unaware — project through the
+    // ancestor chain of the range's start (the common-case approximation:
+    // a range normally stays within one transformed subtree).
+    auto* ctxEl = nearestElementAncestor(r->startContainer());
+
     JSValue arr = JS_NewArray(ctx);
     uint32_t i = 0;
     for (const auto& rect : rects) {
+        auto pr = ctxEl
+            ? bro::dom::projectRectThroughAncestors(ctxEl, rect.x, rect.y, rect.width, rect.height)
+            : bro::dom::AbsoluteRect{rect.x, rect.y, rect.width, rect.height};
         JS_SetPropertyUint32(ctx, arr, i++,
-            makeDomRect(ctx, rect.x, rect.y + offY, rect.width, rect.height));
+            makeDomRect(ctx, pr.x, pr.y + offY, pr.width, pr.height));
     }
     JS_SetPropertyStr(ctx, arr, "length", JS_NewInt32(ctx, static_cast<int>(i)));
     return arr;
@@ -302,15 +323,23 @@ static JSValue js_range_getBoundingClientRect(JSContext* ctx, JSValueConst this_
         r->endContainer(), r->endOffset(), *metrics);
     if (rects.empty()) return makeDomRect(ctx, 0, 0, 0, 0);
 
-    float left   = rects.front().x;
-    float top    = rects.front().y;
-    float right  = rects.front().x + rects.front().width;
-    float bottom = rects.front().y + rects.front().height;
+    // See getClientRects() above — project each rect before taking the AABB.
+    auto* ctxEl = nearestElementAncestor(r->startContainer());
+    auto proj = [&](const htmlayout::layout::Rect& rect) {
+        return ctxEl
+            ? bro::dom::projectRectThroughAncestors(ctxEl, rect.x, rect.y, rect.width, rect.height)
+            : bro::dom::AbsoluteRect{rect.x, rect.y, rect.width, rect.height};
+    };
+
+    auto first = proj(rects.front());
+    float left = first.x, top = first.y;
+    float right = first.x + first.width, bottom = first.y + first.height;
     for (const auto& rect : rects) {
-        left   = std::min(left,   rect.x);
-        top    = std::min(top,    rect.y);
-        right  = std::max(right,  rect.x + rect.width);
-        bottom = std::max(bottom, rect.y + rect.height);
+        auto pr = proj(rect);
+        left   = std::min(left,   pr.x);
+        top    = std::min(top,    pr.y);
+        right  = std::max(right,  pr.x + pr.width);
+        bottom = std::max(bottom, pr.y + pr.height);
     }
     return makeDomRect(ctx, left, top + offY, right - left, bottom - top);
 }

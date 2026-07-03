@@ -57,4 +57,13 @@ AbsoluteRect absoluteBorderBox(const Element* el);
 /// border-box.
 AbsoluteRect absoluteContentBox(const Element* el);
 
+/// Projects a rect already expressed in the same accumulated document-space
+/// coordinate system as computeAbsoluteFrame(el)'s ox/oy — e.g. htmlayout's
+/// transform-unaware selection-highlight/caret geometry, which walks the
+/// layout tree summing content-box offsets exactly like computeAbsoluteFrame
+/// does, but has no notion of CSS `transform` — through `el`'s composed
+/// ancestor transform chain. Identity (returns the input rect unchanged)
+/// when no ancestor has a transform.
+AbsoluteRect projectRectThroughAncestors(const Element* el, float x, float y, float w, float h);
+
 } // namespace bro::dom
