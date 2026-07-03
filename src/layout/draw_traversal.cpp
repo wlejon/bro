@@ -8,6 +8,7 @@
 #include "webgl/webgl2_context.h"
 #include "css/transform.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
 #include "util/log.h"
@@ -986,6 +987,16 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     float lbCX = 0, lbCY = 0, lbCW = -1, lbCH = -1;
     bool haveLBClip = currentClipRect(lbCX, lbCY, lbCW, lbCH);
     if (!haveLBClip) { lbCW = -1; lbCH = -1; }
+    // Canvas/WebGL/scene content isn't drawn through renderer_ (it's a
+    // separately-composited GL texture quad), so it doesn't pick up the CTM
+    // concat above — project through the element's own ancestor-transform
+    // chain explicitly, the same math getBoundingClientRect() uses, so a
+    // zoomed/panned ancestor (CSS transform: translate/scale) positions the
+    // quad correctly instead of leaving it at its untransformed layout rect.
+    if ((elem->sceneGraph() || elem->canvasScene() || elem->webglContext()) && visible) {
+        auto lbRect = dom::absoluteContentBox(elem);
+        x = lbRect.x; y = lbRect.y; w = lbRect.width; h = lbRect.height;
+    }
     if (elem->sceneGraph() && visible) {
         // 3D mesh FBO layer (texture ID stored on element by scene graph render)
         unsigned int fboTex = elem->sceneGraphFBOTexture();
