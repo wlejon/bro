@@ -1,6 +1,7 @@
 #include "layout/el_select.h"
 #include "layout/draw_traversal.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
 #include "render/renderer.h"
@@ -109,13 +110,12 @@ void ElSelect::draw(render::Renderer* renderer,
 
     // Store the border-box position for dropdown placement and hit testing.
     // This matches getBoundingClientRect and ensures the dropdown aligns with
-    // the visible element bounds (including padding/border).
-    lastDrawPos_ = {
-        x - box.padding.left - box.border.left,
-        y - box.padding.top - box.border.top,
-        box.fullWidth(),
-        box.fullHeight()
-    };
+    // the visible element bounds (including padding/border). Must go through
+    // the ancestor-transform-projected rect (same fix as canvas/webgl/scene
+    // layers and the range-slider), or a select under a zoomed/panned
+    // ancestor opens its dropdown at the raw pre-transform layout position.
+    auto screenRect = dom::absoluteBorderBox(elem_);
+    lastDrawPos_ = {screenRect.x, screenRect.y, screenRect.width, screenRect.height};
 
     render::FontRef fontRef = getFontRef();
     auto lm = render::LineMetrics::from(renderer_->measureText("M", fontRef));
