@@ -33,6 +33,7 @@
 #include <brodiffusion/unet.h>
 #include <brodiffusion/version.h>
 
+#include <brotensor/ops/elementwise.h>
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
 
@@ -356,7 +357,7 @@ static JSValue js_createPipeline(JSContext* ctx, JSValueConst, int argc,
     }
 }
 
-// bro.diffusion.loadModel(modelDir) -> Pipeline
+// bro.diffusion.loadModel(modelDir, opts?) -> Pipeline
 //   Load a complete diffusers model directory — `model_index.json` plus one
 //   component subdir each (text_encoder/, unet/ or transformer/, vae/,
 //   tokenizer/, scheduler/, ...). The model family is auto-detected from
@@ -364,18 +365,27 @@ static JSValue js_createPipeline(JSContext* ctx, JSValueConst, int argc,
 //   Flux directory builds CLIP (pooled) + the T5-XXL encoder + the Flux DiT.
 //   Every weight and tokenizer is loaded here — the returned Pipeline is fully
 //   ready, so call generate()/prime() directly (no loadWeights()/createPipeline).
+//   opts.quantizeWeights — INT8 weight-only (W8A16) for every quantizable
+//   component the loaded family has (Flux transformer + T5-XXL; Krea 2's DiT
+//   *and* its Qwen3-VL-4B text/vision encoder — both, so a checkpoint whose
+//   FP16 total doesn't fit a single GPU's VRAM still loads whole). GPU-only,
+//   ignored (with a warning) on the CPU backend. See
+//   brodiffusion::Pipeline::ModelDirOptions.
 static JSValue js_loadModel(JSContext* ctx, JSValueConst, int argc,
                             JSValueConst* argv) {
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
-        return JS_ThrowTypeError(ctx, "loadModel(modelDir): path string required");
+        return JS_ThrowTypeError(ctx, "loadModel(modelDir, opts?): path string required");
+    JSValueConst optsv = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+    bdp::Pipeline::ModelDirOptions dirOpts;
+    if (JS_IsObject(optsv)) dirOpts.quantize = getBool(ctx, optsv, "quantizeWeights");
     try {
         brotensor::init();
         auto w = std::make_unique<PipelineWrapper>();
         // from_model_dir() returns by value; Pipeline is move-only, so the
         // temporary moves into the heap-allocated wrapper slot.
         w->pipeline = std::make_unique<bdp::Pipeline>(
-            bdp::Pipeline::from_model_dir(resolveAppPath(dir)));
+            bdp::Pipeline::from_model_dir(resolveAppPath(dir), dirOpts));
         w->weights_loaded = true;
         return qjsbind::wrap<PipelineWrapper>(ctx, w.release());
     } catch (const std::exception& e) {
@@ -864,6 +874,294 @@ static JSValue js_pipeline_clearIdentityAnchor(JSContext* ctx, JSValueConst this
     return JS_UNDEFINED;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Krea 2 research-hook bindings — AdaLN/gate dials, raw-taps conditioning,
+// image-as-prompt. Every one below is Krea2-only; the native Pipeline methods
+// they wrap already throw a clear error for any other model_class, so no
+// separate guard is added here (mirrors how encodeConditioning etc. rely on
+// the native side's own checks).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// { rows, cols, data: Float32Array } -> brotensor::Tensor (host FP32 upload;
+// Krea2's native setters/encoders cast to their own compute dtype on ingest).
+static bool tensorFromJs(JSContext* ctx, JSValueConst v, brotensor::Tensor& out) {
+    if (!JS_IsObject(v)) return false;
+    int rows = 0, cols = 0;
+    getInt(ctx, v, "rows", rows);
+    getInt(ctx, v, "cols", cols);
+    JSValue dv = JS_GetPropertyStr(ctx, v, "data");
+    std::size_t cnt = 0;
+    const float* fp = qjsbind::read_float32_view(ctx, dv, cnt);
+    JS_FreeValue(ctx, dv);
+    if (!fp || rows <= 0 || cols <= 0 || cnt != (std::size_t)rows * (std::size_t)cols)
+        return false;
+    out = brotensor::Tensor::from_host(fp, rows, cols);
+    return true;
+}
+
+// brotensor::Tensor -> { rows, cols, data: Float32Array } (host download).
+static JSValue tensorToJs(JSContext* ctx, const brotensor::Tensor& t) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "rows", JS_NewInt32(ctx, t.rows));
+    JS_SetPropertyStr(ctx, o, "cols", JS_NewInt32(ctx, t.cols));
+    JS_SetPropertyStr(ctx, o, "data", qjsbind::make_float32_array(ctx, downloadTensorFloats(t)));
+    return o;
+}
+
+// krea2::TextConditioning -> { embeds: {rows,cols,data}, mask: {rows,cols,data} }
+static JSValue taxConditioningToJs(JSContext* ctx,
+                                   const brodiffusion::krea2::TextConditioning& tc) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "embeds", tensorToJs(ctx, tc.prompt_embeds));
+    JS_SetPropertyStr(ctx, o, "mask",   tensorToJs(ctx, tc.prompt_embeds_mask));
+    return o;
+}
+
+// krea2SetModDelta(delta: {rows,cols,data} | null, blockLo, blockHi) — delta
+// is (1, 6*krea2HiddenSize()); null/undefined clears.
+static JSValue js_pipeline_krea2SetModDelta(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "krea2SetModDelta: not a Pipeline");
+    brotensor::Tensor delta;
+    if (argc >= 1 && JS_IsObject(argv[0]) && !JS_IsNull(argv[0])) {
+        if (!tensorFromJs(ctx, argv[0], delta))
+            return JS_ThrowTypeError(ctx, "krea2SetModDelta: delta must be {rows,cols,data}");
+    }
+    int32_t lo = 0, hi = 0;
+    if (argc < 3 || JS_ToInt32(ctx, &lo, argv[1]) != 0 || JS_ToInt32(ctx, &hi, argv[2]) != 0)
+        return JS_ThrowTypeError(ctx, "krea2SetModDelta(delta, blockLo, blockHi): integer range required");
+    try {
+        w->pipeline->krea_set_mod_delta(delta, lo, hi);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "krea2SetModDelta: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+// krea2TimeMod(timestep) -> { temb: {rows,cols,data}, mod: {rows,cols,data} }
+static JSValue js_pipeline_krea2TimeMod(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "krea2TimeMod: not a Pipeline");
+    double t = 0.0;
+    if (argc < 1 || JS_ToFloat64(ctx, &t, argv[0]) != 0)
+        return JS_ThrowTypeError(ctx, "krea2TimeMod(timestep): numeric timestep required");
+    try {
+        brotensor::Tensor temb, mod;
+        w->pipeline->krea_time_mod((float)t, temb, mod);
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "temb", tensorToJs(ctx, temb));
+        JS_SetPropertyStr(ctx, o, "mod",  tensorToJs(ctx, mod));
+        return o;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "krea2TimeMod: %s", e.what());
+    }
+}
+
+// krea2SetGateScale(txtScale, imgScale, blockLo, blockHi)
+static JSValue js_pipeline_krea2SetGateScale(JSContext* ctx, JSValueConst this_val,
+                                             int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "krea2SetGateScale: not a Pipeline");
+    double txt = 1.0, img = 1.0;
+    int32_t lo = 0, hi = 0;
+    if (argc < 4 || JS_ToFloat64(ctx, &txt, argv[0]) != 0 ||
+        JS_ToFloat64(ctx, &img, argv[1]) != 0 ||
+        JS_ToInt32(ctx, &lo, argv[2]) != 0 || JS_ToInt32(ctx, &hi, argv[3]) != 0) {
+        return JS_ThrowTypeError(ctx,
+            "krea2SetGateScale(txtScale, imgScale, blockLo, blockHi): numeric args required");
+    }
+    try {
+        w->pipeline->krea_set_gate_scale((float)txt, (float)img, lo, hi);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "krea2SetGateScale: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+// krea2SetGateMask(mask: {rows,cols,data} | null, blockLo, blockHi) — mask
+// holds (text_seq + img_len) values; null/undefined clears.
+static JSValue js_pipeline_krea2SetGateMask(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "krea2SetGateMask: not a Pipeline");
+    brotensor::Tensor mask;
+    if (argc >= 1 && JS_IsObject(argv[0]) && !JS_IsNull(argv[0])) {
+        if (!tensorFromJs(ctx, argv[0], mask))
+            return JS_ThrowTypeError(ctx, "krea2SetGateMask: mask must be {rows,cols,data}");
+    }
+    int32_t lo = 0, hi = 0;
+    if (argc < 3 || JS_ToInt32(ctx, &lo, argv[1]) != 0 || JS_ToInt32(ctx, &hi, argv[2]) != 0)
+        return JS_ThrowTypeError(ctx, "krea2SetGateMask(mask, blockLo, blockHi): integer range required");
+    try {
+        w->pipeline->krea_set_gate_mask(mask, lo, hi);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "krea2SetGateMask: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+// krea2CaptureGates(enable)
+static JSValue js_pipeline_krea2CaptureGates(JSContext* ctx, JSValueConst this_val,
+                                             int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "krea2CaptureGates: not a Pipeline");
+    const bool enable = argc >= 1 && JS_ToBool(ctx, argv[0]);
+    try {
+        w->pipeline->krea_capture_gates(enable);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "krea2CaptureGates: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+// krea2Gates() -> { rows, cols, data } — rows = krea2NumLayers(), cols =
+// text_seq + img_len (inferred from the flat buffer length).
+static JSValue js_pipeline_krea2Gates(JSContext* ctx, JSValueConst this_val,
+                                      int, JSValueConst*) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "krea2Gates: not a Pipeline");
+    try {
+        std::vector<float> flat = w->pipeline->krea_gates();
+        const int rows = w->pipeline->krea_num_layers();
+        const int cols = rows > 0 ? (int)(flat.size() / (std::size_t)rows) : 0;
+        JSValue o = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, o, "rows", JS_NewInt32(ctx, rows));
+        JS_SetPropertyStr(ctx, o, "cols", JS_NewInt32(ctx, cols));
+        JS_SetPropertyStr(ctx, o, "data", qjsbind::make_float32_array(ctx, flat));
+        return o;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "krea2Gates: %s", e.what());
+    }
+}
+
+// krea2HiddenSize() -> number (6144)
+static JSValue js_pipeline_krea2HiddenSize(JSContext* ctx, JSValueConst this_val,
+                                           int, JSValueConst*) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "krea2HiddenSize: not a Pipeline");
+    try {
+        return JS_NewInt32(ctx, w->pipeline->krea_hidden_size());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "krea2HiddenSize: %s", e.what());
+    }
+}
+
+// krea2NumLayers() -> number (28)
+static JSValue js_pipeline_krea2NumLayers(JSContext* ctx, JSValueConst this_val,
+                                          int, JSValueConst*) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "krea2NumLayers: not a Pipeline");
+    try {
+        return JS_NewInt32(ctx, w->pipeline->krea_num_layers());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "krea2NumLayers: %s", e.what());
+    }
+}
+
+// krea2EncodePromptTaps(prompt) -> { embeds, mask } — raw per-layer Qwen3-VL
+// taps, pre-fusion (token-major/layer-minor). Edit rows, then feed to
+// krea2EncodeText()/krea2PrimeFromTaps().
+static JSValue js_pipeline_krea2EncodePromptTaps(JSContext* ctx, JSValueConst this_val,
+                                                 int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "krea2EncodePromptTaps: not a Pipeline");
+    if (!w->weights_loaded)
+        return JS_ThrowInternalError(ctx, "krea2EncodePromptTaps: call loadWeights() first");
+    std::string prompt;
+    if (argc < 1 || !argStr(ctx, argv[0], prompt))
+        return JS_ThrowTypeError(ctx, "krea2EncodePromptTaps(prompt): prompt string required");
+    try {
+        return taxConditioningToJs(ctx, w->pipeline->krea_encode_prompt_taps(prompt));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "krea2EncodePromptTaps: %s", e.what());
+    }
+}
+
+// krea2EncodeText(embeds, mask) -> {rows,cols,data} — fuse raw taps into the
+// (n_valid, krea2HiddenSize()) conditioning the DiT cross-attends to. This is
+// the same space cond_control axes (setControl/setControlVector) apply in.
+static JSValue js_pipeline_krea2EncodeText(JSContext* ctx, JSValueConst this_val,
+                                           int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "krea2EncodeText: not a Pipeline");
+    brotensor::Tensor embeds, mask;
+    if (argc < 2 || !tensorFromJs(ctx, argv[0], embeds) || !tensorFromJs(ctx, argv[1], mask))
+        return JS_ThrowTypeError(ctx, "krea2EncodeText(embeds, mask): {rows,cols,data} tensors required");
+    try {
+        return tensorToJs(ctx, w->pipeline->krea_encode_text(embeds, mask));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "krea2EncodeText: %s", e.what());
+    }
+}
+
+// krea2EncodeImagePrompt(pixels: Float32Array, H, W) -> { embeds, mask } — the
+// same raw-taps shape krea2EncodePromptTaps() produces for text, from an image
+// through Krea 2's own Qwen3-VL vision tower. `pixels` is FP32 CHW, [0,1]
+// range, length 3*H*W.
+static JSValue js_pipeline_krea2EncodeImagePrompt(JSContext* ctx, JSValueConst this_val,
+                                                  int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "krea2EncodeImagePrompt: not a Pipeline");
+    if (!w->weights_loaded)
+        return JS_ThrowInternalError(ctx, "krea2EncodeImagePrompt: call loadWeights() first");
+    int32_t H = 0, W = 0;
+    std::size_t cnt = 0;
+    const float* px = (argc >= 1) ? qjsbind::read_float32_view(ctx, argv[0], cnt) : nullptr;
+    if (!px || argc < 3 || JS_ToInt32(ctx, &H, argv[1]) != 0 || JS_ToInt32(ctx, &W, argv[2]) != 0 ||
+        H <= 0 || W <= 0 || cnt != (std::size_t)3 * (std::size_t)H * (std::size_t)W) {
+        return JS_ThrowTypeError(ctx,
+            "krea2EncodeImagePrompt(pixels, H, W): pixels must be a Float32Array of length 3*H*W");
+    }
+    try {
+        return taxConditioningToJs(ctx, w->pipeline->krea_encode_image_prompt(px, H, W));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "krea2EncodeImagePrompt: %s", e.what());
+    }
+}
+
+// krea2PrimeFromTaps(embeds, mask, opts?, uncondEmbeds?, uncondMask?) -> PipelineState
+// Prime a step-wise generation from caller-supplied raw taps (as returned /
+// edited from krea2EncodePromptTaps()/krea2EncodeImagePrompt()) instead of a
+// plain prompt string. uncondEmbeds/uncondMask are optional {rows,cols,data}
+// pairs; omit both to fall back to encoding opts.negativePrompt normally.
+static JSValue js_pipeline_krea2PrimeFromTaps(JSContext* ctx, JSValueConst this_val,
+                                              int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "krea2PrimeFromTaps: not a Pipeline");
+    if (!w->weights_loaded)
+        return JS_ThrowInternalError(ctx, "krea2PrimeFromTaps: call loadWeights() first");
+
+    brotensor::Tensor embeds, mask;
+    if (argc < 2 || !tensorFromJs(ctx, argv[0], embeds) || !tensorFromJs(ctx, argv[1], mask))
+        return JS_ThrowTypeError(ctx, "krea2PrimeFromTaps(embeds, mask, opts?, uncondEmbeds?, uncondMask?): "
+                                       "{rows,cols,data} tensors required");
+    JSValueConst optsv = (argc >= 3) ? argv[2] : JS_UNDEFINED;
+    bdp::GenerateOptions opts = parseGenerateOptions(ctx, optsv);
+
+    brotensor::Tensor uembeds, umask;
+    bool haveUncond = false;
+    if (argc >= 5 && JS_IsObject(argv[3]) && JS_IsObject(argv[4])) {
+        if (!tensorFromJs(ctx, argv[3], uembeds) || !tensorFromJs(ctx, argv[4], umask))
+            return JS_ThrowTypeError(ctx, "krea2PrimeFromTaps: uncondEmbeds/uncondMask must be {rows,cols,data}");
+        haveUncond = true;
+    }
+
+    try {
+        auto sw = std::make_unique<PipelineStateWrapper>();
+        sw->state = w->pipeline->krea_prime_from_taps(
+            embeds, mask, haveUncond ? &uembeds : nullptr, haveUncond ? &umask : nullptr, opts);
+        sw->opts  = opts;
+        JSValue js = qjsbind::wrap<PipelineStateWrapper>(ctx, sw.release());
+        JS_DefinePropertyValueStr(ctx, js, "__pipeline",
+                                  JS_DupValue(ctx, this_val), 0);
+        return js;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "krea2PrimeFromTaps: %s", e.what());
+    }
+}
+
 static void registerPipelineClass(JSContext* ctx) {
     qjsbind::Class<PipelineWrapper>(ctx, "DiffusionPipeline", qjsbind::NoGlobal)
         .method_raw("loadWeights",        js_pipeline_loadWeights,        3)
@@ -885,7 +1183,19 @@ static void registerPipelineClass(JSContext* ctx) {
         .method_raw("setIdentityAnchor",  js_pipeline_setIdentityAnchor,  2)
         .method_raw("setIdentityWeight",  js_pipeline_setIdentityWeight,  1)
         .method_raw("hasIdentityAnchor",  js_pipeline_hasIdentityAnchor,  0)
-        .method_raw("clearIdentityAnchor", js_pipeline_clearIdentityAnchor, 0);
+        .method_raw("clearIdentityAnchor", js_pipeline_clearIdentityAnchor, 0)
+        .method_raw("krea2SetModDelta",       js_pipeline_krea2SetModDelta,       3)
+        .method_raw("krea2TimeMod",           js_pipeline_krea2TimeMod,           1)
+        .method_raw("krea2SetGateScale",      js_pipeline_krea2SetGateScale,      4)
+        .method_raw("krea2SetGateMask",       js_pipeline_krea2SetGateMask,       3)
+        .method_raw("krea2CaptureGates",      js_pipeline_krea2CaptureGates,      1)
+        .method_raw("krea2Gates",             js_pipeline_krea2Gates,             0)
+        .method_raw("krea2HiddenSize",        js_pipeline_krea2HiddenSize,        0)
+        .method_raw("krea2NumLayers",         js_pipeline_krea2NumLayers,         0)
+        .method_raw("krea2EncodePromptTaps",  js_pipeline_krea2EncodePromptTaps,  1)
+        .method_raw("krea2EncodeText",        js_pipeline_krea2EncodeText,        2)
+        .method_raw("krea2EncodeImagePrompt", js_pipeline_krea2EncodeImagePrompt, 3)
+        .method_raw("krea2PrimeFromTaps",     js_pipeline_krea2PrimeFromTaps,     5);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1036,6 +1346,57 @@ static JSValue js_state_latent(JSContext* ctx, JSValueConst this_val,
     }
 }
 
+// setLatent(Float32Array) — overwrite the working latent in place (host FP32,
+// length must equal the current latent's element count; cast to the state's
+// working dtype if needed). For spatial paint compositing: blend two states'
+// latents host-side each step, then push the blend back into one state before
+// its next stepOnce()/decode().
+static JSValue js_state_setLatent(JSContext* ctx, JSValueConst this_val,
+                                  int argc, JSValueConst* argv) {
+    auto* sw = qjsbind::unwrap<PipelineStateWrapper>(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "setLatent: not a PipelineState");
+    std::size_t cnt = 0;
+    const float* fp = (argc >= 1) ? qjsbind::read_float32_view(ctx, argv[0], cnt) : nullptr;
+    const std::size_t expect = (std::size_t)sw->state.latent.rows * (std::size_t)sw->state.latent.cols;
+    if (!fp || cnt != expect) {
+        return JS_ThrowTypeError(ctx,
+            "setLatent(data): Float32Array length must equal the current latent's element count (%zu)",
+            expect);
+    }
+    try {
+        const brotensor::Dtype dt = sw->state.latent.dtype;
+        brotensor::Tensor host = brotensor::Tensor::from_host(
+            fp, sw->state.latent.rows, sw->state.latent.cols);
+        if (dt == brotensor::Dtype::FP32) {
+            sw->state.latent = host;
+        } else {
+            brotensor::Tensor casted;
+            brotensor::cast(host, casted, dt);
+            sw->state.latent = casted;
+        }
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "setLatent: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+// krea2StepTimestep() -> number — the active scheduler's timestep for this
+// state's current step_index (0..1000 scale), the same value step_once() will
+// feed the denoiser next. Krea 2 only. For building a krea2TimeMod() query or
+// mod-delta ahead of the upcoming step_once().
+static JSValue js_state_krea2StepTimestep(JSContext* ctx, JSValueConst this_val,
+                                          int, JSValueConst*) {
+    auto* sw = qjsbind::unwrap<PipelineStateWrapper>(ctx, this_val);
+    if (!sw) return JS_ThrowTypeError(ctx, "krea2StepTimestep: not a PipelineState");
+    bdp::Pipeline* pipe = pipelineOfState(ctx, this_val);
+    if (!pipe) return JS_ThrowInternalError(ctx, "krea2StepTimestep: pipeline handle lost");
+    try {
+        return JS_NewFloat64(ctx, (double)pipe->krea_step_timestep(sw->state));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "krea2StepTimestep: %s", e.what());
+    }
+}
+
 // clone() -> PipelineState — deep-copy the state (one latent clone). The
 // owning Pipeline handle is carried forward so the clone stays valid.
 static JSValue js_state_clone(JSContext* ctx, JSValueConst this_val,
@@ -1068,6 +1429,8 @@ static void registerPipelineStateClass(JSContext* ctx) {
         .method_raw("stepOnce", js_state_stepOnce, 1)
         .method_raw("decode",   js_state_decode,   1)
         .method_raw("latent",   js_state_latent,   0)
+        .method_raw("setLatent", js_state_setLatent, 1)
+        .method_raw("krea2StepTimestep", js_state_krea2StepTimestep, 0)
         .method_raw("clone",    js_state_clone,    0);
 }
 
@@ -1095,7 +1458,7 @@ void installDiffusionBindings(JSContext* ctx) {
     JS_SetPropertyStr(ctx, diff, "createPipeline",
                       JS_NewCFunction(ctx, js_createPipeline, "createPipeline", 1));
     JS_SetPropertyStr(ctx, diff, "loadModel",
-                      JS_NewCFunction(ctx, js_loadModel, "loadModel", 1));
+                      JS_NewCFunction(ctx, js_loadModel, "loadModel", 2));
     JS_SetPropertyStr(ctx, broObj, "diffusion", diff);
 
     JS_FreeValue(ctx, broObj);
