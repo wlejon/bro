@@ -63,10 +63,11 @@ endforeach()
 
 project(bro VERSION 0.1.0 LANGUAGES C CXX)
 
-# Enable Objective-C++ at top level when brogameagent's Metal backend is on,
-# since enable_language() inside add_subdirectory doesn't reliably populate
-# the CMAKE_OBJCXX_* variables for downstream targets.
-if(APPLE AND BROGAMEAGENT_WITH_METAL)
+# Enable Objective-C++ at top level on Apple, since enable_language() inside
+# a nested add_subdirectory (Metal backends, broaudio's CoreAudio loopback,
+# libremidi's CoreMIDI backend, ...) doesn't reliably populate the
+# CMAKE_OBJCXX_* variables for other targets in the same configure.
+if(APPLE)
     enable_language(OBJCXX)
 endif()
 
