@@ -35,6 +35,8 @@
 
 #include <qjsbind/qjsbind.h>
 
+#include <api/api.h>  // brokit::api::resolveAssetPath
+
 #include <brolm/qwen.h>
 #include <brolm/qwen_generate.h>
 #include <brolm/qwen_tokenizer.h>
@@ -45,6 +47,7 @@
 #include <brolm/gemma2_config.h>
 #include <brolm/gemma_tokenizer.h>
 #include <brolm/qwen35_vl.h>
+#include <brolm/qwen3vl_vl.h>
 #include <brolm/nllb.h>
 #include <brolm/clip.h>
 #include <brolm/clip_image.h>
@@ -178,6 +181,18 @@ struct GemmaTokenizerWrapper {
 // position streams, and the hybrid per-layer cache).
 struct Qwen35Wrapper {
     std::unique_ptr<brolm::qwen35::VLM> vlm;
+    int maxSeqLen = 4096;
+    brotensor::Device device = brotensor::Device::CPU;
+    ModelGate generating;
+};
+
+// Qwen3-VL — the dense-decoder vision-language sibling of Qwen3.5's VLM
+// driver (plain GQA + full-rotary M-RoPE text backbone, DeepStack vision
+// injection instead of Qwen3.5's linear-attention hybrid). Same VLM-owns-
+// everything shape as Qwen35Wrapper: tokenizer, vision tower, text model,
+// and per-layer KV cache all live behind brolm::qwen3vl::VLM.
+struct Qwen3VLWrapper {
+    std::unique_ptr<brolm::qwen3vl::VLM> vlm;
     int maxSeqLen = 4096;
     brotensor::Device device = brotensor::Device::CPU;
     ModelGate generating;
@@ -1076,6 +1091,138 @@ static void registerQwen35Class(JSContext* ctx) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Qwen3VLModel methods — text+vision generation through brolm's qwen3vl::VLM
+// driver. Same shape as Qwen35Model above; see its comments for the shared
+// generate()/opts.images contract (VlmImage / readVlmImages are dtype-generic).
+// ═══════════════════════════════════════════════════════════════════════════
+
+static Qwen3VLWrapper* qvlSelf(JSContext* ctx, JSValueConst this_val) {
+    return qjsbind::unwrap<Qwen3VLWrapper>(ctx, this_val);
+}
+
+// encode(text, addSpecial=false) -> Int32Array  (driver-owned Qwen BPE)
+static JSValue js_qvl_encode(JSContext* ctx, JSValueConst this_val,
+                             int argc, JSValueConst* argv) {
+    auto* w = qvlSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "encode: not a Qwen3VLModel");
+    std::string text;
+    if (argc < 1 || !argStr(ctx, argv[0], text))
+        return JS_ThrowTypeError(ctx, "encode(text, addSpecial?): text required");
+    const bool addSpecial = (argc >= 2) && (JS_ToBool(ctx, argv[1]) == 1);
+    try {
+        auto ids = w->vlm->tokenizer().encode(text, addSpecial);
+        return qjsbind::make_int32_array(ctx, ids);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "encode: %s", e.what());
+    }
+}
+
+// decode(ids) -> string
+static JSValue js_qvl_decode(JSContext* ctx, JSValueConst this_val,
+                             int argc, JSValueConst* argv) {
+    auto* w = qvlSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "decode: not a Qwen3VLModel");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "decode(ids): ids required");
+    auto ids = qjsbind::read_int32_array(ctx, argv[0]);
+    try {
+        return JS_NewString(ctx, w->vlm->tokenizer().decode(ids).c_str());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "decode: %s", e.what());
+    }
+}
+
+// generate(prompt, opts?) -> Int32Array  (newly generated ids only)
+//   prompt: STRING — the VLM driver owns tokenization (and image splicing).
+//   Wrap chat turns in ChatML yourself:
+//     <|im_start|>user\n{...}<|im_end|>\n<|im_start|>assistant\n
+//   Generation stops on <|im_end|> / <|endoftext|> or the budget.
+//   opts.maxNewTokens / opts.sampling.{temperature, topK, topP, seed}
+//   opts.images: an ImageBitmap/ImageData or an array of them — vision input.
+//     The prompt must already contain one
+//       <|vision_start|><|image_pad|><|vision_end|>
+//     placeholder per image, in the position each image should appear; images
+//     are consumed in order.
+//   opts.onToken(id): per generated token, synchronous on this thread;
+//   return false to stop early.
+static JSValue js_qvl_generate(JSContext* ctx, JSValueConst this_val,
+                               int argc, JSValueConst* argv) {
+    auto* w = qvlSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "generate: not a Qwen3VLModel");
+    std::string prompt;
+    if (argc < 1 || !argStr(ctx, argv[0], prompt))
+        return JS_ThrowTypeError(ctx, "generate(prompt, opts?): prompt string required");
+
+    brolm::qwen::GenerateOptions opts;
+    JSValue onToken = JS_UNDEFINED;
+    std::vector<VlmImage> images;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        opts = parseGenerateOptions(ctx, argv[1]);
+        onToken = JS_GetPropertyStr(ctx, argv[1], "onToken");
+        std::string imgErr;
+        if (!readVlmImages(ctx, argv[1], images, imgErr)) {
+            JS_FreeValue(ctx, onToken);
+            return JS_ThrowTypeError(ctx, "generate: %s", imgErr.c_str());
+        }
+    }
+    const bool hasCb = JS_IsFunction(ctx, onToken);
+
+    // The per-token hook doubles as the interrupt poll: stop on Ctrl+C /
+    // window close / engine teardown even when the caller passed no onToken.
+    brolm::qwen3vl::VLM::TokenCallback hook;
+    bool cbThrew = false;
+    if (hasCb) {
+        hook = [ctx, onToken, &cbThrew](int id) -> bool {
+            if (bro::util::interrupted()) return false;
+            JSValue a = JS_NewInt32(ctx, id);
+            JSValue r = JS_Call(ctx, onToken, JS_UNDEFINED, 1, &a);
+            JS_FreeValue(ctx, a);
+            if (JS_IsException(r)) { cbThrew = true; return false; }
+            const bool keepGoing = JS_ToBool(ctx, r) != 0 || JS_IsUndefined(r);
+            JS_FreeValue(ctx, r);
+            return keepGoing;
+        };
+    } else {
+        hook = [](int) -> bool { return !bro::util::interrupted(); };
+    }
+
+    JSValue result;
+    try {
+        brotensor::DeviceScope scope(w->device);
+        w->vlm->set_generation(opts.max_new_tokens, opts.sampling.temperature,
+                               opts.sampling.top_k, opts.sampling.top_p,
+                               opts.sampling.seed);
+        std::vector<brolm::qwen3vl::ImageInput> inputs;
+        inputs.reserve(images.size());
+        for (auto& im : images)
+            inputs.push_back(brolm::qwen3vl::ImageInput{ im.chw.data(), im.H, im.W });
+        auto ids = w->vlm->generate_tokens(prompt, inputs, hook);
+        result = cbThrew ? JS_EXCEPTION
+                         : qjsbind::make_int32_array(
+                               ctx, std::vector<int32_t>(ids.begin(), ids.end()));
+    } catch (const std::exception& e) {
+        result = JS_ThrowInternalError(ctx, "generate: %s", e.what());
+    }
+    JS_FreeValue(ctx, onToken);
+    return result;
+}
+
+static void registerQwen3VLClass(JSContext* ctx) {
+    qjsbind::Class<Qwen3VLWrapper>(ctx, "Qwen3VLModel", qjsbind::NoGlobal)
+        .get("family",      [](Qwen3VLWrapper*)    { return std::string("qwen3vl"); })
+        .get("vocabSize",   [](Qwen3VLWrapper* w)  { return w->vlm->config().text.vocab_size; })
+        .get("hiddenSize",  [](Qwen3VLWrapper* w)  { return w->vlm->config().text.hidden_size; })
+        .get("numLayers",   [](Qwen3VLWrapper* w)  { return w->vlm->config().text.num_hidden_layers; })
+        .get("maxSeqLen",   [](Qwen3VLWrapper* w)  { return w->maxSeqLen; })
+        .get("eosId",       [](Qwen3VLWrapper* w)  { return w->vlm->tokenizer().eos_id(); })
+        .get("imEndId",     [](Qwen3VLWrapper* w)  { return w->vlm->tokenizer().im_end_id(); })
+        .get("endoftextId", [](Qwen3VLWrapper* w)  { return w->vlm->tokenizer().endoftext_id(); })
+        .method_raw("encode",   js_qvl_encode,   2)
+        .method_raw("decode",   js_qvl_decode,   1)
+        .method_raw("generate", js_qvl_generate, 2);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // bro.lm free functions
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1150,6 +1297,7 @@ static JSValue js_loadQwen(JSContext* ctx, JSValueConst,
     std::string path;
     if (argc < 1 || !argStr(ctx, argv[0], path))
         return JS_ThrowTypeError(ctx, "loadQwen(ggufPath, opts?): path string required");
+    path = brokit::api::resolveAssetPath(ctx, path);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();
@@ -1241,6 +1389,8 @@ static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
         !getStr(ctx, argv[0], "mergesPath", merges))
         return JS_ThrowTypeError(ctx,
             "loadTokenizer: opts.vocabPath and opts.mergesPath required");
+    vocab  = brokit::api::resolveAssetPath(ctx, vocab);
+    merges = brokit::api::resolveAssetPath(ctx, merges);
     try {
         auto tw = std::make_unique<LMTokenizerWrapper>();
         tw->tok = std::make_unique<brolm::qwen::Tokenizer>(
@@ -1304,6 +1454,7 @@ static JSValue js_loadMistral(JSContext* ctx, JSValueConst,
     if (argc < 1 || !argStr(ctx, argv[0], path))
         return JS_ThrowTypeError(ctx,
             "loadMistral(ggufPath, opts): path string required");
+    path = brokit::api::resolveAssetPath(ctx, path);
     if (argc < 2 || !JS_IsObject(argv[1]))
         return JS_ThrowTypeError(ctx,
             "loadMistral: opts object with tokenizerPath required");
@@ -1311,6 +1462,7 @@ static JSValue js_loadMistral(JSContext* ctx, JSValueConst,
     if (!getStr(ctx, argv[1], "tokenizerPath", tokPath))
         return JS_ThrowTypeError(ctx,
             "loadMistral: opts.tokenizerPath (tekken.json) required");
+    tokPath = brokit::api::resolveAssetPath(ctx, tokPath);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();
@@ -1459,6 +1611,7 @@ static JSValue js_loadGemma2(JSContext* ctx, JSValueConst,
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx,
             "loadGemma2(modelDir, opts?): path string required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();
@@ -1578,6 +1731,7 @@ static JSValue js_loadQwen35(JSContext* ctx, JSValueConst,
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx,
             "loadQwen35(checkpointDir, opts?): path string required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();
@@ -1649,9 +1803,126 @@ static JSValue js_loadQwen35(JSContext* ctx, JSValueConst,
     return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
 }
 
+// Build the Qwen3-VL driver from a safetensors checkpoint directory. Heavy +
+// blocking; shared by the sync and async loadQwen3VL paths. Throws on error.
+static void buildQwen3VL(const std::string& dir, int maxSeqLen,
+                         brotensor::Device dev,
+                         std::unique_ptr<Qwen3VLWrapper>& w_out) {
+    auto w = std::make_unique<Qwen3VLWrapper>();
+    w->device    = dev;
+    w->maxSeqLen = maxSeqLen;
+    brolm::qwen3vl::VLMConfig vcfg;
+    vcfg.max_seq_len = maxSeqLen;
+    {
+        brotensor::DeviceScope scope(dev);
+        w->vlm = std::make_unique<brolm::qwen3vl::VLM>(vcfg);
+        w->vlm->load_from_directory(dir);
+    }
+    std::fprintf(stderr, "[INFO] [lm] Qwen3-VL loaded on %s\n", deviceName(dev));
+    w_out = std::move(w);
+}
+
+struct Qwen3VLLoadState {
+    std::string                     dir;
+    int                             maxSeqLen = 4096;
+    brotensor::Device               dev = brotensor::Device::CPU;
+    std::unique_ptr<Qwen3VLWrapper> w;
+    JSValue onReady = JS_UNDEFINED;
+    JSValue onError = JS_UNDEFINED;
+    bool    hasReady = false, hasError = false;
+};
+
+// bro.lm.loadQwen3VL(checkpointDir, opts?) -> Qwen3VLModel  (sync)
+//                                          -> AsyncHandle    (async, if opts.onReady)
+//   checkpointDir: HF Qwen3-VL layout — config.json, vocab.json + merges.txt,
+//   an optional preprocessor_config.json, model*.safetensors shard(s) (e.g.
+//   Qwen3-VL-4B-Instruct). The driver owns the tokenizer, so no separate
+//   tokenizer handle: the model exposes encode()/decode() and generate()
+//   takes a string prompt (see Qwen3VLModel.generate for opts.images).
+//   opts.maxSeqLen: KV/state capacity per generate call (default 4096).
+//   opts.device / opts.onReady / opts.onError: as loadQwen.
+static JSValue js_loadQwen3VL(JSContext* ctx, JSValueConst,
+                              int argc, JSValueConst* argv) {
+    std::string dir;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx,
+            "loadQwen3VL(checkpointDir, opts?): path string required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
+
+    brotensor::init();
+    brotensor::Device dev = autoDevice();
+    int maxSeqLen = 4096;
+    if (argc >= 2) {
+        std::string err;
+        if (!parseDeviceOpt(ctx, argv[1], dev, err))
+            return JS_ThrowTypeError(ctx, "loadQwen3VL: %s", err.c_str());
+        if (JS_IsObject(argv[1])) getInt(ctx, argv[1], "maxSeqLen", maxSeqLen);
+    }
+    if (maxSeqLen <= 0)
+        return JS_ThrowTypeError(ctx, "loadQwen3VL: opts.maxSeqLen must be > 0");
+
+    const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
+    JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
+                               : JS_UNDEFINED;
+    JSValue onError = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onError")
+                               : JS_UNDEFINED;
+    const bool async = JS_IsFunction(ctx, onReady);
+
+    // ── Sync path ──
+    if (!async) {
+        JS_FreeValue(ctx, onReady);
+        JS_FreeValue(ctx, onError);
+        try {
+            std::unique_ptr<Qwen3VLWrapper> w;
+            buildQwen3VL(dir, maxSeqLen, dev, w);
+            return qjsbind::wrap<Qwen3VLWrapper>(ctx, w.release());
+        } catch (const std::exception& e) {
+            return JS_ThrowInternalError(ctx, "loadQwen3VL: %s", e.what());
+        }
+    }
+
+    // ── Async path ──
+    auto ls = std::make_shared<Qwen3VLLoadState>();
+    ls->dir       = dir;
+    ls->maxSeqLen = maxSeqLen;
+    ls->dev       = dev;
+    ls->hasReady  = true;
+    ls->onReady   = JS_DupValue(ctx, onReady);
+    ls->hasError  = JS_IsFunction(ctx, onError);
+    ls->onError   = ls->hasError ? JS_DupValue(ctx, onError) : JS_UNDEFINED;
+    JS_FreeValue(ctx, onReady);
+    JS_FreeValue(ctx, onError);
+
+    auto work = [ls](const std::atomic<bool>&) {
+        buildQwen3VL(ls->dir, ls->maxSeqLen, ls->dev, ls->w);
+    };
+    auto done = [ls](JSContext* c, bool /*cancelled*/, const std::string& error) {
+        if (!error.empty() || !ls->w) {
+            if (ls->hasError) {
+                JSValue e = JS_NewString(c, error.empty() ? "loadQwen3VL failed"
+                                                          : error.c_str());
+                JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
+                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                JS_FreeValue(c, e);
+            }
+        } else {
+            JSValue out = qjsbind::wrap<Qwen3VLWrapper>(c, ls->w.release());
+            JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, out);
+        }
+        if (ls->hasReady) JS_FreeValue(c, ls->onReady);
+        if (ls->hasError) JS_FreeValue(c, ls->onError);
+    };
+    return launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Async streaming generation — bro.lm.generate(model, promptIds, opts)
 //                              bro.lm.generate(qwen35, promptText, opts)
+//                              bro.lm.generate(qwen3vl, promptText, opts)
 // ═══════════════════════════════════════════════════════════════════════════
 //
 // Runs the same prefill + decode loop as generateStream(), but on a background
@@ -1789,19 +2060,125 @@ static JSValue js_lm_generate_qwen35(JSContext* ctx, Qwen35Wrapper* w,
     return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
 }
 
+// bro.lm.generate(qwen3vl, promptText, opts) — async Qwen3-VL generation on a
+// background thread. Same contract as js_lm_generate_qwen35 above (string
+// prompt, opts.images, onToken/onDone via the AsyncHandle).
+static JSValue js_lm_generate_qwen3vl(JSContext* ctx, Qwen3VLWrapper* w,
+                                      int argc, JSValueConst* argv) {
+    std::string prompt;
+    if (!argStr(ctx, argv[1], prompt))
+        return JS_ThrowTypeError(ctx,
+            "generate(qwen3vl, prompt, opts): prompt must be a string for a "
+            "Qwen3VLModel (the driver owns tokenization)");
+
+    brolm::qwen::GenerateOptions opts;
+    JSValue onToken = JS_UNDEFINED, onDone = JS_UNDEFINED;
+    std::vector<VlmImage> images;
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        opts = parseGenerateOptions(ctx, argv[2]);
+        onToken = JS_GetPropertyStr(ctx, argv[2], "onToken");
+        onDone  = JS_GetPropertyStr(ctx, argv[2], "onDone");
+        std::string imgErr;
+        if (!readVlmImages(ctx, argv[2], images, imgErr)) {
+            JS_FreeValue(ctx, onToken);
+            JS_FreeValue(ctx, onDone);
+            return JS_ThrowTypeError(ctx, "generate: %s", imgErr.c_str());
+        }
+    }
+    if (opts.max_new_tokens <= 0) {
+        JS_FreeValue(ctx, onToken);
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowTypeError(ctx, "generate: opts.maxNewTokens must be > 0");
+    }
+
+    if (!w->generating.tryClaim()) {
+        JS_FreeValue(ctx, onToken);
+        JS_FreeValue(ctx, onDone);
+        return JS_ThrowInternalError(ctx,
+            "generate: a generation is already in flight on this model");
+    }
+
+    auto st = std::make_shared<LmStream>();
+    st->hasOnToken = JS_IsFunction(ctx, onToken);
+    st->hasOnDone  = JS_IsFunction(ctx, onDone);
+    st->onToken    = st->hasOnToken ? JS_DupValue(ctx, onToken) : JS_UNDEFINED;
+    st->onDone     = st->hasOnDone  ? JS_DupValue(ctx, onDone)  : JS_UNDEFINED;
+    st->modelRef   = JS_DupValue(ctx, argv[0]);  // keep the model alive
+    st->ids.reserve(static_cast<size_t>(opts.max_new_tokens));
+    JS_FreeValue(ctx, onToken);
+    JS_FreeValue(ctx, onDone);
+
+    Qwen3VLWrapper* mw = w;
+
+    auto work = [st, mw, prompt = std::move(prompt), opts, imgs = std::move(images)]
+                (const std::atomic<bool>& cancel) {
+        brotensor::DeviceScope scope(mw->device);
+        mw->vlm->set_generation(opts.max_new_tokens, opts.sampling.temperature,
+                                opts.sampling.top_k, opts.sampling.top_p,
+                                opts.sampling.seed);
+        std::vector<brolm::qwen3vl::ImageInput> inputs;
+        inputs.reserve(imgs.size());
+        for (auto& im : imgs)
+            inputs.push_back(brolm::qwen3vl::ImageInput{ im.chw.data(), im.H, im.W });
+        mw->vlm->generate_tokens(prompt, inputs, [st, &cancel](int id) -> bool {
+            st->ids.push_back(static_cast<int32_t>(id));
+            st->produced.store(st->ids.size(), std::memory_order_release);
+            return !cancel.load(std::memory_order_acquire)
+                && !bro::util::interrupted();
+        });
+    };
+
+    auto poll = [st](JSContext* c) {
+        if (!st->hasOnToken) return;
+        const size_t n = st->produced.load(std::memory_order_acquire);
+        while (st->drained < n) {
+            JSValue arg = JS_NewInt32(c, st->ids[st->drained++]);
+            JSValue r = JS_Call(c, st->onToken, JS_UNDEFINED, 1, &arg);
+            JS_FreeValue(c, arg);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+        }
+    };
+
+    auto done = [st, mw](JSContext* c, bool cancelled, const std::string& error) {
+        mw->generating.release();
+        const size_t n = st->produced.load(std::memory_order_acquire);
+        if (st->hasOnDone) {
+            JSValue arr  = qjsbind::make_int32_array(c, st->ids.data(), n);
+            JSValue info = JS_NewObject(c);
+            JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
+            if (!error.empty())
+                JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            JSValue args[2] = { arr, info };
+            JSValue r = JS_Call(c, st->onDone, JS_UNDEFINED, 2, args);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, arr);
+            JS_FreeValue(c, info);
+        }
+        if (st->hasOnToken) JS_FreeValue(c, st->onToken);
+        if (st->hasOnDone)  JS_FreeValue(c, st->onDone);
+        JS_FreeValue(c, st->modelRef);
+    };
+
+    return launchAsyncJob(ctx, std::move(work), std::move(poll), std::move(done));
+}
+
 static JSValue js_lm_generate(JSContext* ctx, JSValueConst,
                               int argc, JSValueConst* argv) {
     if (argc < 2)
         return JS_ThrowTypeError(ctx,
             "generate(model, promptIds, opts): model and promptIds required");
 
-    // Qwen3.5 path — string prompt through the VLM driver.
+    // Qwen3.5 / Qwen3-VL path — string prompt through the VLM driver.
     if (auto* q = qjsbind::unwrap<Qwen35Wrapper>(ctx, argv[0]))
         return js_lm_generate_qwen35(ctx, q, argc, argv);
+    if (auto* q = qjsbind::unwrap<Qwen3VLWrapper>(ctx, argv[0]))
+        return js_lm_generate_qwen3vl(ctx, q, argc, argv);
 
     auto* w = qjsbind::unwrap<LMModelWrapper>(ctx, argv[0]);
     if (!w) return JS_ThrowTypeError(ctx,
-        "generate: arg 0 must be an LMModel or Qwen35Model");
+        "generate: arg 0 must be an LMModel, Qwen35Model, or Qwen3VLModel");
     if (!w->weights_loaded)
         return JS_ThrowInternalError(ctx, "generate: weights not loaded");
 
@@ -2074,13 +2451,19 @@ static JSValue js_loadClip(JSContext* ctx, JSValueConst,
         !getStr(ctx, argv[0], "mergesPath", merges))
         return JS_ThrowTypeError(ctx,
             "loadClip: opts.vocabPath and opts.mergesPath required");
+    vocab  = brokit::api::resolveAssetPath(ctx, vocab);
+    merges = brokit::api::resolveAssetPath(ctx, merges);
 
     std::string weights;
-    getStr(ctx, argv[0], "weightsPath", weights);
+    if (getStr(ctx, argv[0], "weightsPath", weights))
+        weights = brokit::api::resolveAssetPath(ctx, weights);
     std::string textPath = weights, imagePath = weights, projPath = weights;
-    getStr(ctx, argv[0], "textPath",       textPath);
-    getStr(ctx, argv[0], "imagePath",      imagePath);
-    getStr(ctx, argv[0], "projectionPath", projPath);
+    if (getStr(ctx, argv[0], "textPath", textPath))
+        textPath = brokit::api::resolveAssetPath(ctx, textPath);
+    if (getStr(ctx, argv[0], "imagePath", imagePath))
+        imagePath = brokit::api::resolveAssetPath(ctx, imagePath);
+    if (getStr(ctx, argv[0], "projectionPath", projPath))
+        projPath = brokit::api::resolveAssetPath(ctx, projPath);
     if (textPath.empty() || imagePath.empty() || projPath.empty())
         return JS_ThrowTypeError(ctx,
             "loadClip: opts.weightsPath (single file) or "
@@ -2217,10 +2600,13 @@ static JSValue js_loadT5(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
     if (!getStr(ctx, argv[0], "tokenizerPath", tokPath))
         return JS_ThrowTypeError(ctx,
             "loadT5: opts.tokenizerPath (tokenizer.json) required");
+    tokPath = brokit::api::resolveAssetPath(ctx, tokPath);
 
     std::string gguf, weights;
-    getStr(ctx, argv[0], "ggufPath",    gguf);
-    getStr(ctx, argv[0], "weightsPath", weights);
+    if (getStr(ctx, argv[0], "ggufPath", gguf))
+        gguf = brokit::api::resolveAssetPath(ctx, gguf);
+    if (getStr(ctx, argv[0], "weightsPath", weights))
+        weights = brokit::api::resolveAssetPath(ctx, weights);
 
     std::vector<std::string> shards;
     {
@@ -2233,7 +2619,8 @@ static JSValue js_loadT5(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
             for (std::uint32_t i = 0; i < n; ++i) {
                 JSValue e = JS_GetPropertyUint32(ctx, sv, i);
                 std::string s;
-                if (argStr(ctx, e, s)) shards.push_back(std::move(s));
+                if (argStr(ctx, e, s))
+                    shards.push_back(brokit::api::resolveAssetPath(ctx, s));
                 JS_FreeValue(ctx, e);
             }
         }
@@ -2356,6 +2743,7 @@ static JSValue js_loadNllb(JSContext* ctx, JSValueConst,
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx,
             "loadNllb(checkpointDir, opts?): path string required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();
@@ -2581,6 +2969,7 @@ void installLmBindings(JSContext* ctx) {
     registerGemmaTokenizerClass(ctx);
     registerModelClass(ctx);
     registerQwen35Class(ctx);
+    registerQwen3VLClass(ctx);
     registerNllbClass(ctx);
     registerClipClass(ctx);
     registerT5Class(ctx);
@@ -2604,6 +2993,8 @@ void installLmBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, js_loadGemma2, "loadGemma2", 2));
     JS_SetPropertyStr(ctx, lm, "loadQwen35",
         JS_NewCFunction(ctx, js_loadQwen35, "loadQwen35", 2));
+    JS_SetPropertyStr(ctx, lm, "loadQwen3VL",
+        JS_NewCFunction(ctx, js_loadQwen3VL, "loadQwen3VL", 2));
     JS_SetPropertyStr(ctx, lm, "loadNllb",
         JS_NewCFunction(ctx, js_loadNllb, "loadNllb", 2));
     JS_SetPropertyStr(ctx, lm, "loadTokenizer",

@@ -3,7 +3,7 @@
 // =============================================================================
 //
 // Diffusion-model text-to-image inference, backed by the brodiffusion sibling
-// library. Four model families are supported:
+// library. Five model families are supported:
 //   - Stable Diffusion 1.5 — CLIP text encoder + U-Net + VAE, DDIM/LCM
 //     schedulers, LoRA, INT8 quantization.
 //   - Flux — CLIP (pooled) + T5-XXL text encoders + Flux DiT denoiser + VAE,
@@ -19,6 +19,10 @@
 //     t5-xxl/. txt2img runs through the same generate()/prime() path; img2img,
 //     inpaint, ControlNet, LoRA, and the conditioning-control seam are not
 //     wired for PixArt.
+//   - Krea 2 — Qwen3-VL-4B text encoder (single-stream flow DiT, 3-shard
+//     transformer/) + Qwen-Image VAE decoder. txt2img runs through the same
+//     generate()/prime() path; img2img, inpaint, ControlNet, LoRA, and the
+//     conditioning-control seam are not wired for Krea 2.
 // loadModel() takes a model directory and auto-detects the family;
 // createPipeline() builds the SD1.5 stack explicitly.
 //
@@ -76,12 +80,16 @@ const diffusion = {
    *   - PixArt           → T5-XXL tokenizer/encoder + PixArt DiT + SDXL KL-VAE.
    *                        The T5-XXL encoder resolves from $BRODIFFUSION_T5_DIR,
    *                        a bundled text_encoder/, or a sibling t5-xxl/.
+   *   - Krea2            → Qwen3-VL-4B tokenizer/encoder (loaded from
+   *                        tokenizer/ + text_encoder/, internally — no
+   *                        bro.lm.loadQwen3VL needed) + single-stream flow DiT
+   *                        + Qwen-Image VAE decoder.
    *
    * Every weight and tokenizer is loaded by this call, so the returned
    * Pipeline needs no loadWeights() — call generate()/prime() directly. This
-   * is the only way to run a Flux, Sana, or PixArt model. Blocking and slow
-   * (multi-GB read); run it in a Worker. Check pipeline.config().modelClass for
-   * the family ('StableDiffusion' | 'Flux' | 'Sana' | 'PixArt').
+   * is the only way to run a Flux, Sana, PixArt, or Krea2 model. Blocking and
+   * slow (multi-GB read); run it in a Worker. Check pipeline.config().modelClass
+   * for the family ('StableDiffusion' | 'Flux' | 'Sana' | 'PixArt' | 'Krea2').
    *
    * @param {string} modelDir - model directory root
    * @returns {Pipeline}
@@ -250,10 +258,10 @@ class Pipeline {
 
   /**
    * Read-only snapshot of the resolved pipeline configuration. `modelClass`
-   * is 'StableDiffusion', 'Flux', 'Sana', or 'PixArt'; `scheduler` is 'ddim',
-   * 'lcm', 'flowmatch', or 'scm' (Sana-Sprint). `timeCondProjDim`,
+   * is 'StableDiffusion', 'Flux', 'Sana', 'PixArt', or 'Krea2'; `scheduler` is
+   * 'ddim', 'lcm', 'flowmatch', or 'scm' (Sana-Sprint). `timeCondProjDim`,
    * `quantizeWeights`, and `numXAttnBlocks` describe the SD1.5 U-Net and read
-   * 0/false for a Flux, Sana, or PixArt model.
+   * 0/false for a Flux, Sana, PixArt, or Krea2 model.
    * `numControlNets` is the current registered ControlNet count and
    * `hasControlNet` is true iff that count is > 0.
    * @returns {{modelClass:string, scheduler:string, timeCondProjDim:number,

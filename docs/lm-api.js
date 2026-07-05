@@ -1,6 +1,6 @@
 /**
  * bro.lm — Language-model text generation (Qwen3, Mistral 3.1, Gemma-2,
- *          Qwen3.5) + NLLB-200 machine translation
+ *          Qwen3.5, Qwen3-VL) + NLLB-200 machine translation
  *
  * Backed by brolm (tokenizers + transformer text models) on top of brotensor.
  * Defaults to CUDA; pass { device: 'cpu' } to force the CPU backend.
@@ -24,6 +24,12 @@
  *     tokenization, so generate() takes a STRING prompt and the model exposes
  *     encode()/decode() itself — no separate tokenizer handle. See the
  *     Qwen3.5 section at the bottom.
+ *   - Qwen3-VL (loadQwen3VL): safetensors checkpoint dir driven by brolm's VLM
+ *     driver — a dense (plain GQA, full-rotary M-RoPE) decoder plus a vision
+ *     tower with DeepStack feature injection, the vision-language sibling of
+ *     Qwen3.5. Same VLM-owns-tokenization shape as Qwen3.5: generate() takes
+ *     a STRING prompt and opts.images for vision input. See the Qwen3-VL
+ *     section at the bottom.
  *
  * A loadQwen/loadMistral load returns two objects: a `model` (the transformer
  * + KV cache) and a `tokenizer` (BPE encode/decode + chat templating). They
@@ -176,7 +182,7 @@ model.generateStream(promptIds, {
  * produced; opts.onDone(ids, info) fires once with the full Int32Array and
  * info = { cancelled, error? }. handle.cancel() stops the decode within one
  * token (barge-in). Works for Qwen3 and Mistral models (promptIds) and for
- * Qwen3.5 (pass the STRING prompt instead of promptIds).
+ * Qwen3.5 / Qwen3-VL (pass the STRING prompt instead of promptIds).
  *
  * Throws if a generation is already in flight on this model (single-owner).
  */
@@ -332,6 +338,70 @@ const visIds = q35.generate(
     'Describe this image.<|im_end|>\n<|im_start|>assistant\n',
     { maxNewTokens: 64, images: visBmp, sampling: { temperature: 0 } });
 console.log(q35.decode(visIds));
+
+
+// ── Qwen3-VL ──────────────────────────────────────────────────────────────────
+
+/**
+ * Load a Qwen3-VL checkpoint directory (HF layout: config.json, vocab.json +
+ * merges.txt, an optional preprocessor_config.json, model*.safetensors
+ * shard(s) — e.g. Qwen3-VL-4B-Instruct). Driven by brolm's qwen3vl::VLM
+ * driver, which owns the tokenizer, the vision tower (DeepStack feature
+ * injection into the first few decoder layers), and the M-RoPE/KV cache
+ * plumbing.
+ *
+ * Unlike Qwen3.5's hybrid full/linear-attention decoder, Qwen3-VL's text
+ * backbone is a plain dense Qwen3 decoder (standard GQA full attention every
+ * layer, full-rotary M-RoPE) — otherwise the JS surface is identical:
+ * generate() takes a STRING prompt and the model exposes encode()/decode()
+ * itself, no separate tokenizer handle.
+ *
+ * @param {string} checkpointDir
+ * @param {Object} [opts]
+ * @param {number} [opts.maxSeqLen=4096] - KV/state capacity per generate call.
+ * @param {string} [opts.device='cuda']
+ * @param {function} [opts.onReady]      - async load: onReady(model).
+ * @param {function} [opts.onError]
+ * @returns {Qwen3VLModel}
+ *
+ * Qwen3VLModel:
+ * @property {string} family       - 'qwen3vl'.
+ * @property {number} vocabSize, hiddenSize, numLayers, maxSeqLen
+ * @property {number} eosId, imEndId, endoftextId
+ * @method encode(text, addSpecial?) → Int32Array
+ * @method decode(ids) → string
+ * @method generate(prompt, opts) → Int32Array
+ *         prompt is a STRING — the driver tokenizes. Wrap chat turns in
+ *         ChatML yourself:
+ *           '<|im_start|>user\n' + text + '<|im_end|>\n<|im_start|>assistant\n'
+ *         Generation stops on <|im_end|> / <|endoftext|> or maxNewTokens.
+ *         opts: { maxNewTokens, sampling: {temperature, topK, topP, seed},
+ *                 images, onToken(id) → return false to stop early }
+ *
+ *         VISION INPUT — opts.images is an ImageBitmap / ImageData
+ *         ({data,width,height}, RGBA) or an array of them. The prompt must
+ *         already contain one placeholder triple per image, in the position the
+ *         image should appear:
+ *           <|vision_start|><|image_pad|><|vision_end|>
+ *         Images are consumed in order. Supported on the async
+ *         bro.lm.generate(qvl, prompt, { images, onToken, onDone }) too.
+ *
+ * Async: bro.lm.generate(qvl, promptString, opts) — same streaming/cancel
+ * contract as the LMModel form (opts.images supported there too).
+ */
+const qvl = bro.lm.loadQwen3VL('../brolm/weights/Qwen3-VL-4B-Instruct');
+const idsVl = qvl.generate(
+    '<|im_start|>user\nOne-word answer: capital of France?<|im_end|>\n<|im_start|>assistant\n',
+    { maxNewTokens: 16, sampling: { temperature: 0 } });
+console.log(qvl.decode(idsVl));
+
+// Vision: caption an image (the prompt carries the image placeholder triple).
+const qvlBmp = await createImageBitmap(someImageData);
+const qvlVisIds = qvl.generate(
+    '<|im_start|>user\n<|vision_start|><|image_pad|><|vision_end|>' +
+    'Describe this image.<|im_end|>\n<|im_start|>assistant\n',
+    { maxNewTokens: 64, images: qvlBmp, sampling: { temperature: 0 } });
+console.log(qvl.decode(qvlVisIds));
 
 
 // ── NLLB-200 — encoder-decoder machine translation ──────────────────────────────

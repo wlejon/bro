@@ -42,6 +42,47 @@ bro.gpu.backend;
  */
 bro.gpu.devices;
 
+/**
+ * Device-wide free/total VRAM in bytes for `device` (e.g. cudaMemGetInfo).
+ * Lets a loader print a real budget line instead of guessing from nvidia-smi,
+ * or gate a large model load on available headroom. Returns `null` when the
+ * backend isn't registered or can't report — always `null` for 'cpu'.
+ *
+ * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu'
+ * @returns {?{freeBytes: number, totalBytes: number}}
+ *
+ * @example
+ *   const mem = bro.gpu.memoryInfo();
+ *   if (mem && mem.freeBytes < 4e9) {
+ *     status('Less than 4 GB VRAM free — model may not fit.', 'warn');
+ *   }
+ */
+bro.gpu.memoryInfo(device) {}
+
+/**
+ * Return the backend allocator's cached-but-unused memory to the driver,
+ * keeping at most `keepBytes` cached. Synchronizes the device first so
+ * stream-ordered frees are actually reclaimable.
+ *
+ * Call this between pipeline phases with very different scratch shapes (e.g.
+ * switching from a diffusion U-Net to a VAE decode, or between successive
+ * model loads): cached blocks count against device residency, and on Windows
+ * (WDDM) sustained near-full commit makes the OS silently demote large
+ * resident allocations to shared memory — turning what should be a VRAM
+ * weight read into PCIe traffic. Returns `false` when the backend isn't
+ * registered or has no trimmable allocator — always `false` for 'cpu'.
+ *
+ * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu'
+ * @param {number} [keepBytes=0] - bytes to keep cached
+ * @returns {boolean}
+ *
+ * @example
+ *   const unet = bro.diffusion.loadModel(unetDir);
+ *   // ... run denoise steps ...
+ *   bro.gpu.trim(); // release U-Net scratch before the VAE decode allocates
+ */
+bro.gpu.trim(device, keepBytes) {}
+
 // --- Typical use: warn before loading a large model on CPU -------------------
 
 if (!bro.gpu.available) {

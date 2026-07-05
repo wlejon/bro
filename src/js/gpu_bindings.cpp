@@ -14,6 +14,8 @@
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
 
+#include <cstring>
+
 namespace bro::js {
 
 static const char* deviceName(brotensor::Device d) {
@@ -23,6 +25,22 @@ static const char* deviceName(brotensor::Device d) {
         case brotensor::Device::CPU:   return "cpu";
     }
     return "cpu";
+}
+
+// Parses argv[argIdx] as one of 'cuda'/'metal'/'cpu'; falls back to
+// default_device() when the arg is missing or not a string.
+static brotensor::Device parseDeviceArg(JSContext* ctx, int argc, JSValueConst* argv,
+                                        int argIdx) {
+    if (argc <= argIdx || !JS_IsString(argv[argIdx])) return brotensor::default_device();
+    const char* s = JS_ToCString(ctx, argv[argIdx]);
+    brotensor::Device d = brotensor::default_device();
+    if (s) {
+        if (std::strcmp(s, "cuda") == 0)  d = brotensor::Device::CUDA;
+        else if (std::strcmp(s, "metal") == 0) d = brotensor::Device::Metal;
+        else if (std::strcmp(s, "cpu") == 0)   d = brotensor::Device::CPU;
+        JS_FreeCString(ctx, s);
+    }
+    return d;
 }
 
 static JSValue js_gpu_get_available(JSContext* ctx, JSValueConst, int, JSValueConst*) {
@@ -43,6 +61,38 @@ static JSValue js_gpu_get_devices(JSContext* ctx, JSValueConst, int, JSValueCons
         JS_SetPropertyUint32(ctx, arr, i++, JS_NewString(ctx, deviceName(d)));
     }
     return arr;
+}
+
+// memoryInfo(device?) -> {freeBytes, totalBytes} | null. device is
+// 'cuda'/'metal'/'cpu', defaulting to the current default device. Returns
+// null when the backend isn't registered or can't report (always null on CPU).
+static JSValue js_gpu_memoryInfo(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    brotensor::init();
+    brotensor::Device d = parseDeviceArg(ctx, argc, argv, 0);
+    std::size_t freeBytes = 0, totalBytes = 0;
+    if (!brotensor::device_mem_info(d, freeBytes, totalBytes)) return JS_NULL;
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "freeBytes", JS_NewInt64(ctx, static_cast<int64_t>(freeBytes)));
+    JS_SetPropertyStr(ctx, o, "totalBytes", JS_NewInt64(ctx, static_cast<int64_t>(totalBytes)));
+    return o;
+}
+
+// trim(device?, keepBytes=0) -> boolean. Returns the backend allocator's
+// cached-but-unused memory to the driver, keeping at most keepBytes cached.
+// Use between pipeline phases with very different scratch shapes — cached
+// blocks count against device residency, and on Windows (WDDM) sustained
+// near-full commit silently demotes large resident allocations to shared
+// memory, turning weight reads into PCIe traffic. False when the backend
+// isn't registered or has no trimmable allocator (always false on CPU).
+static JSValue js_gpu_trim(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    brotensor::init();
+    brotensor::Device d = parseDeviceArg(ctx, argc, argv, 0);
+    std::size_t keepBytes = 0;
+    if (argc >= 2 && JS_IsNumber(argv[1])) {
+        int64_t v = 0; JS_ToInt64(ctx, &v, argv[1]);
+        if (v > 0) keepBytes = static_cast<std::size_t>(v);
+    }
+    return JS_NewBool(ctx, brotensor::device_mem_trim(d, keepBytes));
 }
 
 static void defineGetter(JSContext* ctx, JSValue obj, const char* name,
@@ -68,6 +118,10 @@ void installGpuBindings(JSContext* ctx) {
     defineGetter(ctx, gpuObj, "available", js_gpu_get_available);
     defineGetter(ctx, gpuObj, "backend",   js_gpu_get_backend);
     defineGetter(ctx, gpuObj, "devices",   js_gpu_get_devices);
+    JS_SetPropertyStr(ctx, gpuObj, "memoryInfo",
+                      JS_NewCFunction(ctx, js_gpu_memoryInfo, "memoryInfo", 1));
+    JS_SetPropertyStr(ctx, gpuObj, "trim",
+                      JS_NewCFunction(ctx, js_gpu_trim, "trim", 2));
     JS_SetPropertyStr(ctx, broObj, "gpu", gpuObj);
 
     JS_FreeValue(ctx, broObj);

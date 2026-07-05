@@ -573,9 +573,21 @@ class AudioContext {
    * @param {number} clipId
    * @param {number} [gain=1.0]
    * @param {boolean} [loop=false]
+   * @param {number} [when] - sample-accurate start time in engine seconds
+   *   (from ctx.currentTime). When given, the clip is scheduled on the audio
+   *   clock instead of starting immediately, so back-to-back calls (e.g.
+   *   streaming fixed-size chunks) join gaplessly with no main-thread
+   *   setTimeout jitter or clock drift. A `when` at/before now plays
+   *   immediately, same as the 3-arg form. This is playClipAt() — same
+   *   underlying method, just called with a 4th argument.
    * @returns {number} playbackId - handle for controlling this playback instance
+   *
+   * @example
+   *   const t0 = ctx.currentTime;
+   *   ctx.playClip(clipA, 1.0, false, t0);
+   *   ctx.playClip(clipB, 1.0, false, t0 + clipADuration); // gapless join
    */
-  playClip(clipId, gain, loop) {}
+  playClip(clipId, gain, loop, when) {}
 
   /** @param {number} playbackId */ stopPlayback(playbackId) {}
   /** @param {number} playbackId @param {number} gain */ setPlaybackGain(playbackId, gain) {}

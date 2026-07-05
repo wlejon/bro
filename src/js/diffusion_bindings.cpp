@@ -752,6 +752,7 @@ static JSValue js_pipeline_config(JSContext* ctx, JSValueConst this_val,
         cfg.model_class == brodiffusion::ModelClass::Flux   ? "Flux" :
         cfg.model_class == brodiffusion::ModelClass::Sana   ? "Sana" :
         cfg.model_class == brodiffusion::ModelClass::PixArt ? "PixArt" :
+        cfg.model_class == brodiffusion::ModelClass::Krea2  ? "Krea2" :
                                                               "StableDiffusion";
 
     JSValue o = JS_NewObject(ctx);

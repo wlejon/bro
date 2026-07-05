@@ -426,10 +426,15 @@ static JSValue js_flashAttentionQWithKvCachedForward(JSContext* ctx, JSValueCons
     return JS_UNDEFINED;
 }
 
-// flashAttentionDecode(Q, K_cache, V_cache, validLen, numHeads, O)
+// flashAttentionDecode(Q, K_cache, V_cache, validLen, numHeads, O,
+//                      numKvHeads?, attnSoftcap?, window?)
+// numKvHeads defaults to numHeads (plain MHA); pass a smaller value for GQA
+// (numKvHeads must divide numHeads). attnSoftcap > 0 applies Gemma-2 tanh
+// logit soft-capping; window > 0 applies sliding-window causal masking.
+// Both default to 0 (disabled) — bit-identical to the pre-GQA behaviour.
 static JSValue js_flashAttentionDecode(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 6) return JS_ThrowTypeError(ctx,
-        "flashAttentionDecode(Q,K_cache,V_cache,validLen,numHeads,O)");
+        "flashAttentionDecode(Q,K_cache,V_cache,validLen,numHeads,O,numKvHeads?,attnSoftcap?,window?)");
     ENSURE_INIT();
     GT(Q,  0, "flashAttentionDecode");
     GT(Kc, 1, "flashAttentionDecode");
@@ -438,7 +443,44 @@ static JSValue js_flashAttentionDecode(JSContext* ctx, JSValueConst, int argc, J
     JS_ToInt32(ctx, &validLen, argv[3]);
     JS_ToInt32(ctx, &numHeads, argv[4]);
     GT(O, 5, "flashAttentionDecode");
-    nngpu::flash_attention_decode(*Q, *Kc, *Vc, validLen, numHeads, *O);
+    int32_t numKvHeads = numHeads;
+    if (argc >= 7 && JS_IsNumber(argv[6])) JS_ToInt32(ctx, &numKvHeads, argv[6]);
+    double attnSoftcap = 0.0;
+    if (argc >= 8 && JS_IsNumber(argv[7])) JS_ToFloat64(ctx, &attnSoftcap, argv[7]);
+    int32_t window = 0;
+    if (argc >= 9 && JS_IsNumber(argv[8])) JS_ToInt32(ctx, &window, argv[8]);
+    nngpu::flash_attention_decode(*Q, *Kc, *Vc, validLen, numHeads, numKvHeads, *O,
+                                 static_cast<float>(attnSoftcap), window);
+    return JS_UNDEFINED;
+}
+
+// flashAttentionDecodeMasked(Q, K_cache, V_cache, dMask, numHeads, O,
+//                            numKvHeads?, attnSoftcap?, window?)
+// The CUDA-graph-capturable twin of flashAttentionDecode: K_cache/V_cache are
+// always read at full (L_max, ·) shape, and validity comes from dMask (a
+// device-resident FP32 GpuTensor, length L_max, 1 valid / 0 invalid) instead
+// of a validLen scalar — so the launch shape never changes across replays.
+// Q must be a single query row (L_q == 1).
+static JSValue js_flashAttentionDecodeMasked(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 6) return JS_ThrowTypeError(ctx,
+        "flashAttentionDecodeMasked(Q,K_cache,V_cache,dMask,numHeads,O,numKvHeads?,attnSoftcap?,window?)");
+    ENSURE_INIT();
+    GT(Q,  0, "flashAttentionDecodeMasked");
+    GT(Kc, 1, "flashAttentionDecodeMasked");
+    GT(Vc, 2, "flashAttentionDecodeMasked");
+    const float* dMask = nullptr; JSValue err = JS_UNDEFINED;
+    if (!resolveDeviceMask(ctx, argv[3], dMask, err)) return err;
+    if (!dMask) return JS_ThrowTypeError(ctx, "flashAttentionDecodeMasked: dMask must not be null");
+    int32_t numHeads = 1; JS_ToInt32(ctx, &numHeads, argv[4]);
+    GT(O, 5, "flashAttentionDecodeMasked");
+    int32_t numKvHeads = numHeads;
+    if (argc >= 7 && JS_IsNumber(argv[6])) JS_ToInt32(ctx, &numKvHeads, argv[6]);
+    double attnSoftcap = 0.0;
+    if (argc >= 8 && JS_IsNumber(argv[7])) JS_ToFloat64(ctx, &attnSoftcap, argv[7]);
+    int32_t window = 0;
+    if (argc >= 9 && JS_IsNumber(argv[8])) JS_ToInt32(ctx, &window, argv[8]);
+    nngpu::flash_attention_decode_masked(*Q, *Kc, *Vc, dMask, numHeads, numKvHeads, *O,
+                                        static_cast<float>(attnSoftcap), window);
     return JS_UNDEFINED;
 }
 
@@ -731,6 +773,7 @@ void installTensorAttentionOps(JSContext* ctx, JSValue gpuObj) {
     JS_SetPropertyStr(ctx, gpuObj, "flashAttentionProjectKv",          JS_NewCFunction(ctx, js_flashAttentionProjectKv,          "flashAttentionProjectKv",           7));
     JS_SetPropertyStr(ctx, gpuObj, "flashAttentionQWithKvCachedForward", JS_NewCFunction(ctx, js_flashAttentionQWithKvCachedForward, "flashAttentionQWithKvCachedForward", 11));
     JS_SetPropertyStr(ctx, gpuObj, "flashAttentionDecode",             JS_NewCFunction(ctx, js_flashAttentionDecode,             "flashAttentionDecode",              6));
+    JS_SetPropertyStr(ctx, gpuObj, "flashAttentionDecodeMasked",       JS_NewCFunction(ctx, js_flashAttentionDecodeMasked,       "flashAttentionDecodeMasked",        6));
 
     // KV cache
     JS_SetPropertyStr(ctx, gpuObj, "kvCacheAppend",                    JS_NewCFunction(ctx, js_kvCacheAppend,                    "kvCacheAppend",                     5));

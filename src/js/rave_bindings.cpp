@@ -14,6 +14,8 @@
 
 #include <qjsbind/qjsbind.h>
 
+#include <api/api.h>  // brokit::api::resolveAssetPath
+
 #include <brosoundml/rave.h>
 #include <brosoundml/audio.h>
 
@@ -259,6 +261,7 @@ static JSValue js_loadRave(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadRave(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();

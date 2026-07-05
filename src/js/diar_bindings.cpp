@@ -33,6 +33,8 @@
 
 #include <qjsbind/qjsbind.h>
 
+#include <api/api.h>  // brokit::api::resolveAssetPath
+
 #include <brosoundml/sortformer.h>
 #include <brosoundml/cluster_diarizer.h>
 #include <brosoundml/audio.h>
@@ -287,6 +289,7 @@ static JSValue js_loadSortformer(JSContext* ctx, JSValueConst,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadSortformer(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();
@@ -613,6 +616,8 @@ static JSValue js_loadClusterDiarizer(JSContext* ctx, JSValueConst,
     if (argc < 2 || !argStr(ctx, argv[0], sortformerDir) || !argStr(ctx, argv[1], encoderDir))
         return JS_ThrowTypeError(ctx,
             "loadClusterDiarizer(sortformerDir, speakerEncoderDir, opts?): two paths required");
+    sortformerDir = brokit::api::resolveAssetPath(ctx, sortformerDir);
+    encoderDir    = brokit::api::resolveAssetPath(ctx, encoderDir);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();

@@ -24,6 +24,8 @@
 
 #include <qjsbind/qjsbind.h>
 
+#include <api/api.h>  // brokit::api::resolveAssetPath
+
 #include <brovisionml/depth_anything.h>
 #include <brovisionml/sam.h>
 #include <brovisionml/sam_amg.h>
@@ -640,6 +642,7 @@ static JSValue js_loadDepth(JSContext* ctx, JSValueConst, int argc,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadDepth(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();
@@ -1047,6 +1050,7 @@ static JSValue js_loadSam(JSContext* ctx, JSValueConst, int argc,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadSam(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();
@@ -1229,6 +1233,7 @@ static JSValue js_loadNormal(JSContext* ctx, JSValueConst, int argc,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadNormal(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
     JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     brotensor::Device dev; JSValue thrown;
     if (!resolveDevice(ctx, "loadNormal", opts, dev, thrown)) return thrown;
@@ -1316,6 +1321,7 @@ static JSValue js_loadHed(JSContext* ctx, JSValueConst, int argc,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadHed(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
     JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     brotensor::Device dev; JSValue thrown;
     if (!resolveDevice(ctx, "loadHed", opts, dev, thrown)) return thrown;
@@ -1404,6 +1410,7 @@ static JSValue js_loadLineart(JSContext* ctx, JSValueConst, int argc,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadLineart(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
     JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     brotensor::Device dev; JSValue thrown;
     if (!resolveDevice(ctx, "loadLineart", opts, dev, thrown)) return thrown;
@@ -1526,6 +1533,7 @@ static JSValue js_loadMlsd(JSContext* ctx, JSValueConst, int argc,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadMlsd(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
     JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     brotensor::Device dev; JSValue thrown;
     if (!resolveDevice(ctx, "loadMlsd", opts, dev, thrown)) return thrown;
@@ -1630,6 +1638,7 @@ static JSValue js_loadOpenpose(JSContext* ctx, JSValueConst, int argc,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadOpenpose(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
     JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     brotensor::Device dev; JSValue thrown;
     if (!resolveDevice(ctx, "loadOpenpose", opts, dev, thrown)) return thrown;
@@ -1715,6 +1724,7 @@ static JSValue js_loadSegformer(JSContext* ctx, JSValueConst, int argc,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadSegformer(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
     JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     brotensor::Device dev; JSValue thrown;
     if (!resolveDevice(ctx, "loadSegformer", opts, dev, thrown)) return thrown;
@@ -1827,6 +1837,7 @@ static JSValue js_loadBirefnet(JSContext* ctx, JSValueConst, int argc,
     if (argc < 1 || !argStr(ctx, argv[0], path))
         return JS_ThrowTypeError(ctx,
             "loadBirefnet(safetensorsPath, opts?): path required");
+    path = brokit::api::resolveAssetPath(ctx, path);
     JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     brotensor::Device dev; JSValue thrown;
     if (!resolveDevice(ctx, "loadBirefnet", opts, dev, thrown)) return thrown;
@@ -2193,6 +2204,7 @@ static JSValue js_loadStyleGAN3(JSContext* ctx, JSValueConst, int argc,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadStyleGAN3(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
     JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     brotensor::Device dev; JSValue thrown;
     if (!resolveDevice(ctx, "loadStyleGAN3", opts, dev, thrown)) return thrown;
@@ -2349,6 +2361,7 @@ static JSValue js_loadDinov2(JSContext* ctx, JSValueConst, int argc,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadDinov2(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
     JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     brotensor::Device dev; JSValue thrown;
     if (!resolveDevice(ctx, "loadDinov2", opts, dev, thrown)) return thrown;
@@ -2479,6 +2492,7 @@ static JSValue js_loadDinov3(JSContext* ctx, JSValueConst, int argc,
     std::string path;
     if (argc < 1 || !argStr(ctx, argv[0], path))
         return JS_ThrowTypeError(ctx, "loadDinov3(modelPath, opts?): path required");
+    path = brokit::api::resolveAssetPath(ctx, path);
     JSValue opts = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     brotensor::Device dev; JSValue thrown;
     if (!resolveDevice(ctx, "loadDinov3", opts, dev, thrown)) return thrown;

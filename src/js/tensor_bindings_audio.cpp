@@ -740,6 +740,38 @@ static JSValue js_sampleLogits(JSContext* ctx, JSValueConst, int argc, JSValueCo
 #endif // BROTENSOR_HAS_CUDA
 }
 
+// Graph-capturable twin of sampleLogits: same draw (byte-identical for the
+// same effective base counter), but capture-safe — counter/scratch/indices
+// are all caller-owned pre-sized GpuTensors touched only on-device, so a
+// whole autoregressive decode step can be recorded into a CUDA graph and
+// replayed with a single launch (no host-side counter read/write, no
+// mid-capture allocation). Unlike sampleLogits, this has a real CUDA kernel.
+//
+// sampleLogitsInto(logits, temperature, topK, topP, key, counter, scratch, indices)
+//   counter: (>=1,) INT32 GpuTensor — counter[0] is the base offset; advanced
+//            in place by N (the row count) each call.
+//   scratch: FP32 GpuTensor, >= 3*N*V elements, reused across steps.
+//   indices: (N,1) INT32 GpuTensor, pre-sized by the caller; written in place.
+static JSValue js_sampleLogitsInto(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 8) return JS_ThrowTypeError(ctx,
+        "sampleLogitsInto(logits,temperature,topK,topP,key,counter,scratch,indices)");
+    ENSURE_INIT();
+    GT(logits, 0, "sampleLogitsInto");
+    double temperature = 1.0, topP = 1.0;
+    int32_t topK = 0;
+    int64_t key = 0;
+    JS_ToFloat64(ctx, &temperature, argv[1]);
+    JS_ToInt32(ctx, &topK, argv[2]);
+    JS_ToFloat64(ctx, &topP, argv[3]);
+    JS_ToInt64(ctx, &key, argv[4]);
+    GT(counter, 5, "sampleLogitsInto");
+    GT(scratch, 6, "sampleLogitsInto");
+    GT(indices, 7, "sampleLogitsInto");
+    nngpu::sample_logits_into(*logits, (float)temperature, topK, (float)topP,
+                              (uint64_t)key, *counter, *scratch, *indices);
+    return JS_UNDEFINED;
+}
+
 #undef GT
 #undef ENSURE_INIT
 
@@ -807,6 +839,7 @@ void installTensorAudioOps(JSContext* ctx, JSValue gpuObj) {
 
     // Autoregressive logit sampling
     JS_SetPropertyStr(ctx, gpuObj, "sampleLogits", JS_NewCFunction(ctx, js_sampleLogits, "sampleLogits", 7));
+    JS_SetPropertyStr(ctx, gpuObj, "sampleLogitsInto", JS_NewCFunction(ctx, js_sampleLogitsInto, "sampleLogitsInto", 8));
 }
 
 } // namespace bro::js

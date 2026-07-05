@@ -25,6 +25,8 @@
 
 #include <qjsbind/qjsbind.h>
 
+#include <api/api.h>  // brokit::api::resolveAssetPath
+
 #include <brosoundml/whisper.h>
 #include <brosoundml/parakeet.h>
 #include <brosoundml/qwen_asr.h>
@@ -792,6 +794,9 @@ static JSValue js_loadWhisper(JSContext* ctx, JSValueConst,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadWhisper(modelDir, opts?): path required");
+    // Resolve the same way fs.existsSync() does (app-relative base paths),
+    // not against the raw OS process cwd.
+    dir = brokit::api::resolveAssetPath(ctx, dir);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();
@@ -892,11 +897,14 @@ static JSValue js_loadTokenizer(JSContext* ctx, JSValueConst,
         !getStr(ctx, argv[0], "mergesPath", merges))
         return JS_ThrowTypeError(ctx,
             "loadTokenizer: opts.vocabPath and opts.mergesPath required");
+    vocab  = brokit::api::resolveAssetPath(ctx, vocab);
+    merges = brokit::api::resolveAssetPath(ctx, merges);
 
     // Optional: an upstream openai/whisper added_tokens.json carrying the
     // "<|...|>" specials. Absent for the converted (merged) layout.
     std::string addedTokens;
-    getStr(ctx, argv[0], "addedTokensPath", addedTokens);
+    if (getStr(ctx, argv[0], "addedTokensPath", addedTokens))
+        addedTokens = brokit::api::resolveAssetPath(ctx, addedTokens);
 
     JSValue onReady = JS_GetPropertyStr(ctx, argv[0], "onReady");
     JSValue onError = JS_GetPropertyStr(ctx, argv[0], "onError");
@@ -991,6 +999,7 @@ static JSValue js_loadParakeet(JSContext* ctx, JSValueConst,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadParakeet(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();
@@ -1086,6 +1095,7 @@ static JSValue js_loadParakeetTokenizer(JSContext* ctx, JSValueConst,
     if (argc < 1 || !argStr(ctx, argv[0], path))
         return JS_ThrowTypeError(ctx,
             "loadParakeetTokenizer(tokenizerJsonPath, opts?): path required");
+    path = brokit::api::resolveAssetPath(ctx, path);
 
     const bool haveOpts = (argc >= 2) && JS_IsObject(argv[1]);
     JSValue onReady = haveOpts ? JS_GetPropertyStr(ctx, argv[1], "onReady")
@@ -1184,6 +1194,7 @@ static JSValue js_loadQwenAsr(JSContext* ctx, JSValueConst,
     std::string dir;
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx, "loadQwenAsr(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();
@@ -1292,6 +1303,7 @@ static JSValue js_loadQwenAsrStream(JSContext* ctx, JSValueConst,
     if (argc < 1 || !argStr(ctx, argv[0], dir))
         return JS_ThrowTypeError(ctx,
             "loadQwenAsrStream(modelDir, opts?): path required");
+    dir = brokit::api::resolveAssetPath(ctx, dir);
 
     brotensor::init();
     brotensor::Device dev = autoDevice();

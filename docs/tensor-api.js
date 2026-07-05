@@ -523,8 +523,41 @@ gpu.flashAttentionQWithKvCachedForward(X, K, V,
  *   p_q = validLen - L_q + i
  * attends to cache positions [0, p_q]. Typical L_q == 1 for token-by-token
  * decoding.
+ *
+ * numKvHeads defaults to numHeads (plain MHA); pass a smaller value for GQA
+ * (numKvHeads must divide numHeads — query head h reads KV head
+ * h/(numHeads/numKvHeads)). attnSoftcap > 0 applies Gemma-2 tanh logit
+ * soft-capping (raw score s -> attnSoftcap * tanh(s/attnSoftcap), before the
+ * causal/window mask); 0 (default) disables it. window > 0 applies
+ * sliding-window causal masking — query at absolute position p attends key j
+ * only when j <= p AND j > p-window; <= 0 (default) is unbounded causal.
+ * Both default to bit-identical pre-GQA behaviour.
+ *
+ * @param {number} [numKvHeads=numHeads]
+ * @param {number} [attnSoftcap=0]
+ * @param {number} [window=0]
  */
-gpu.flashAttentionDecode(Q, K_cache, V_cache, validLen, numHeads, O);
+gpu.flashAttentionDecode(Q, K_cache, V_cache, validLen, numHeads, O,
+                         numKvHeads, attnSoftcap, window);
+
+/**
+ * The CUDA-graph-capturable twin of flashAttentionDecode. K_cache/V_cache
+ * are always read at their full (L_max, ·) shape — the launch shape never
+ * changes as generation advances — and validity comes from `dMask` (a
+ * device-resident FP32 GpuTensor, length L_max, 1 valid / 0 invalid, updated
+ * by the caller between graph replays) instead of a validLen scalar. Q must
+ * be a single query row (L_q == 1). With
+ * mask = [1]*validLen + [0]*(L_max-validLen) the result is bit-identical to
+ * flashAttentionDecode(Q, K, V, validLen, ...) at L_q == 1. Same
+ * numKvHeads/attnSoftcap/window extensions as flashAttentionDecode.
+ *
+ * @param {GpuTensor} dMask - device-resident FP32 key mask, length L_max
+ * @param {number} [numKvHeads=numHeads]
+ * @param {number} [attnSoftcap=0]
+ * @param {number} [window=0]
+ */
+gpu.flashAttentionDecodeMasked(Q, K_cache, V_cache, dMask, numHeads, O,
+                               numKvHeads, attnSoftcap, window);
 
 /**
  * Append L_new freshly-projected K/V rows into rows [curLen, curLen+L_new)
@@ -1170,6 +1203,22 @@ gpu.roundForward(x, y);     gpu.roundBackward(dY, dX);   // round-half-to-even
  *   indices: (N, 1) — output, one drawn token id per row.
  */
 gpu.sampleLogits(logits, temperature, topK, topP, key, counter, indices);
+
+/**
+ * Graph-capturable twin of sampleLogits — byte-identical draw for the same
+ * effective base counter, but every RNG-state and output buffer is a caller-
+ * owned pre-sized GpuTensor touched only on-device, so a whole autoregressive
+ * decode step can be recorded into a CUDA graph and replayed with a single
+ * launch (no host-side counter read/write, no mid-capture allocation). Unlike
+ * sampleLogits, this has a real CUDA kernel (CPU/CUDA bit-exact).
+ *   logits:  (N, V) FP32
+ *   counter: (>=1,) INT32 — counter[0] is the base offset; advanced in place
+ *            by N each call (fresh draws every replay, no host involvement).
+ *   scratch: FP32, >= 3*N*V elements, sized once and reused across steps.
+ *   indices: (N, 1) INT32, pre-sized by the caller; written in place, never
+ *            resized.
+ */
+gpu.sampleLogitsInto(logits, temperature, topK, topP, key, counter, scratch, indices);
 
 
 // =============================================================================
