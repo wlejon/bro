@@ -156,31 +156,42 @@ ParsedFont parseCSSFont(const std::string& font) {
     pf.weight = 400;
     pf.italic = false;
 
-    std::istringstream iss(font);
-    std::string token;
-    std::vector<std::string> tokens;
-    while (iss >> token) tokens.push_back(token);
+    size_t pos = 0, n = font.size();
+    while (pos < n) {
+        while (pos < n && std::isspace(static_cast<unsigned char>(font[pos]))) pos++;
+        size_t start = pos;
+        while (pos < n && !std::isspace(static_cast<unsigned char>(font[pos]))) pos++;
+        if (start == pos) break;
+        std::string t = font.substr(start, pos - start);
 
-    for (size_t i = 0; i < tokens.size(); i++) {
-        auto& t = tokens[i];
         if (t == "bold") { pf.weight = 700; continue; }
         if (t == "italic") { pf.italic = true; continue; }
         if (t == "normal") continue;
 
-        // Check for size (e.g., "16px", "20pt")
+        // Numeric font-weight keyword (100..900), no unit suffix.
+        bool allDigits = !t.empty();
+        for (char c : t) if (!std::isdigit(static_cast<unsigned char>(c))) { allDigits = false; break; }
+        if (allDigits) {
+            int w = std::atoi(t.c_str());
+            if (w >= 100 && w <= 900) { pf.weight = w; continue; }
+        }
+
+        // Size token (e.g., "16px", "20pt"): digits/decimal point followed
+        // by a non-digit unit suffix.
         bool isSize = false;
         for (size_t j = 0; j < t.size(); j++) {
             if (std::isdigit(static_cast<unsigned char>(t[j])) || t[j] == '.') {
                 isSize = true;
             } else if (isSize) {
                 pf.size = std::strtof(t.c_str(), nullptr);
-                // Remaining tokens are the family
-                if (i + 1 < tokens.size()) {
-                    pf.family.clear();
-                    for (size_t k = i + 1; k < tokens.size(); k++) {
-                        if (!pf.family.empty()) pf.family += ' ';
-                        pf.family += tokens[k];
-                    }
+                // Everything after this token is the family list, taken
+                // verbatim — commas and internal spaces (e.g. "Segoe UI")
+                // must survive for comma-separated fallback resolution.
+                std::string rest = pos < n ? font.substr(pos) : std::string();
+                size_t a = rest.find_first_not_of(" \t\n\r");
+                if (a != std::string::npos) {
+                    size_t b = rest.find_last_not_of(" \t\n\r");
+                    pf.family = rest.substr(a, b - a + 1);
                 }
                 return pf;
             }

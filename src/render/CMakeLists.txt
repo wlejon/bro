@@ -4,6 +4,7 @@ add_library(bro_render STATIC
     gl_context.cpp
     raster_renderer.cpp
     font_fallback.cpp
+    font_family.cpp
     filter_chain.cpp
     recording_renderer.cpp
     command_replayer.cpp

@@ -1,5 +1,6 @@
 #include "render/raster_renderer.h"
 #include "render/filter_chain.h"
+#include "render/font_family.h"
 #include "svg/svg_renderer.h"
 
 #include <include/core/SkBitmap.h>
@@ -315,53 +316,8 @@ const RasterRenderer::FontEntry* RasterRenderer::getOrCreateFont(FontRef ref) {
     SkFontStyle style(ref.weight, SkFontStyle::kNormal_Width,
                       ref.italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
     SkFontMgr* mgrRaw = ensureFontMgr();
-    sk_sp<SkFontMgr> mgr(sk_ref_sp(mgrRaw));
 
-    // Map CSS generic family names to real font names (must match SkiaRenderer)
-    auto resolveGeneric = [](const std::string& name) -> const char* {
-#ifdef _WIN32
-        if (name == "sans-serif")  return "Arial";
-        if (name == "serif")       return "Times New Roman";
-        if (name == "monospace")   return "Consolas";
-        if (name == "cursive")     return "Comic Sans MS";
-        if (name == "fantasy")     return "Impact";
-        if (name == "system-ui")   return "Segoe UI";
-#elif defined(__APPLE__)
-        if (name == "sans-serif")  return "Arial";
-        if (name == "serif")       return "Times New Roman";
-        if (name == "monospace")   return "Menlo";
-        if (name == "cursive")     return "Apple Chancery";
-        if (name == "fantasy")     return "Papyrus";
-        if (name == "system-ui")   return "Helvetica Neue";
-#else
-        if (name == "sans-serif")  return "Liberation Sans";
-        if (name == "serif")       return "Liberation Serif";
-        if (name == "monospace")   return "Liberation Mono";
-        if (name == "cursive")     return "DejaVu Sans";
-        if (name == "fantasy")     return "DejaVu Sans";
-        if (name == "system-ui")   return "Liberation Sans";
-#endif
-        return nullptr;
-    };
-
-    // CSS font-family is comma-separated — try each name in order.
-    sk_sp<SkTypeface> typeface;
-    std::istringstream stream{std::string(ref.family)};
-    std::string name;
-    while (std::getline(stream, name, ',')) {
-        while (!name.empty() && (name.front() == ' ' || name.front() == '\'' || name.front() == '"')) name.erase(name.begin());
-        while (!name.empty() && (name.back() == ' ' || name.back() == '\'' || name.back() == '"')) name.pop_back();
-        if (name.empty()) continue;
-        // Try CSS generic name first
-        const char* resolved = resolveGeneric(name);
-        if (resolved) {
-            typeface = mgr->matchFamilyStyle(resolved, style);
-            if (typeface) break;
-        }
-        typeface = mgr->matchFamilyStyle(name.c_str(), style);
-        if (typeface) break;
-    }
-    if (!typeface) typeface = mgr->matchFamilyStyle(nullptr, SkFontStyle());
+    sk_sp<SkTypeface> typeface = bro::render::resolveFontFamilyList(ref.family, style, mgrRaw);
     auto sk_font = std::make_unique<SkFont>(typeface, ref.size);
     sk_font->setEdging(SkFont::Edging::kAntiAlias);
     auto [ins, _] = fonts_.emplace(std::move(key),

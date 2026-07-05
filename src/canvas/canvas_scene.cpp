@@ -1,4 +1,5 @@
 #include "canvas/canvas_scene.h"
+#include "render/font_family.h"
 #include "render/gl_context.h"
 #include "render/skia_backend.h"
 #include "util/log.h"
@@ -717,44 +718,16 @@ void CanvasScene::applyFont() {
     auto mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
 #endif
 
-    // Resolve CSS generic family names to platform font names
-    auto resolveGeneric = [](const std::string& name) -> const char* {
-#ifdef _WIN32
-        if (name == "sans-serif")  return "Arial";
-        if (name == "serif")       return "Times New Roman";
-        if (name == "monospace")   return "Consolas";
-        if (name == "cursive")     return "Comic Sans MS";
-        if (name == "fantasy")     return "Impact";
-        if (name == "system-ui")   return "Segoe UI";
-#elif defined(__APPLE__)
-        if (name == "sans-serif")  return "Helvetica";
-        if (name == "serif")       return "Times";
-        if (name == "monospace")   return "Menlo";
-        if (name == "cursive")     return "Apple Chancery";
-        if (name == "fantasy")     return "Papyrus";
-        if (name == "system-ui")   return "-apple-system";
-#else
-        if (name == "sans-serif")  return "Liberation Sans";
-        if (name == "serif")       return "Liberation Serif";
-        if (name == "monospace")   return "Liberation Mono";
-        if (name == "cursive")     return "DejaVu Sans";
-        if (name == "fantasy")     return "DejaVu Sans";
-        if (name == "system-ui")   return "Liberation Sans";
-#endif
-        return nullptr;
-    };
-
-    const char* resolved = resolveGeneric(pf.family);
-    const char* familyName = resolved ? resolved : pf.family.c_str();
-
     SkFontStyle style(
         pf.weight,
         SkFontStyle::kNormal_Width,
         pf.italic ? SkFontStyle::kItalic_Slant : SkFontStyle::kUpright_Slant);
 
-    sk_sp<SkTypeface> tf = mgr->matchFamilyStyle(familyName, style);
-    if (!tf && resolved) tf = mgr->matchFamilyStyle(pf.family.c_str(), style);
-    if (!tf) tf = mgr->matchFamilyStyle(nullptr, style);
+    // font-family is a comma-separated fallback list (e.g. "system-ui,
+    // -apple-system, Segoe UI, sans-serif") — resolve it the same way every
+    // other text path does (bro::render::resolveFontFamilyList), so a
+    // multi-family list can't silently resolve to no glyphs.
+    sk_sp<SkTypeface> tf = bro::render::resolveFontFamilyList(pf.family, style, mgr.get());
 
     SkFont f(tf, pf.size);
     f.setEdging(SkFont::Edging::kSubpixelAntiAlias);
