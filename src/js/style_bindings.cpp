@@ -273,6 +273,41 @@ static std::string getComputedProperty(JSContext* ctx, bro::dom::Element* el, co
     //   - non-replaced inline elements still report "auto" since they have no
     //     CSS-meaningful width/height.
     if (prop == "width" || prop == "height") {
+        // SVG geometry presentation attributes: SVG2 makes width/height on
+        // shapes (rect, image, use, foreignObject…) real CSS geometry
+        // properties, and Chromium's getComputedStyle reports them as px
+        // lengths sourced from the attribute. bro renders SVG subtrees via
+        // SkSVGDOM — the children have no layout boxes — so resolve straight
+        // from the attribute for any element inside an <svg>.
+        {
+            bool insideSvg = false;
+            for (auto* p = el->parentElement(); p; p = p->parentElement()) {
+                const std::string& t = p->tagName();
+                if (t == "svg" || t == "SVG") { insideSvg = true; break; }
+            }
+            if (insideSvg) {
+                // Author CSS beats the presentation attribute in the
+                // cascade; only fall back to the attribute when the
+                // cascade left the property at its initial value.
+                if (!value.empty() && value != "auto") return value;
+                const std::string& attr = el->getAttribute(prop);
+                if (!attr.empty()) {
+                    char* end = nullptr;
+                    double n = std::strtod(attr.c_str(), &end);
+                    if (end != attr.c_str() &&
+                        (*end == '\0' || std::string_view(end) == "px")) {
+                        char buf[32];
+                        snprintf(buf, sizeof(buf), "%.6gpx", n);
+                        return buf;
+                    }
+                    // Non-px units (%, em…): report the attribute as
+                    // specified — no SVG viewport resolution here.
+                    return attr;
+                }
+                // No geometry attribute: the property's initial value.
+                return value.empty() ? std::string("auto") : value;
+            }
+        }
         auto dIt = style.find("display");
         std::string disp = (dIt != style.end()) ? dIt->second : "inline";
         const std::string& tag = el->tagName();
