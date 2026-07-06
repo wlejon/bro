@@ -379,6 +379,13 @@ static JSValue js_loadModel(JSContext* ctx, JSValueConst, int argc,
     JSValueConst optsv = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     bdp::Pipeline::ModelDirOptions dirOpts;
     if (JS_IsObject(optsv)) dirOpts.quantize = getBool(ctx, optsv, "quantizeWeights");
+    // Cooperative cancellation: a Krea 2 load reads ~26GB on the worker thread —
+    // one long synchronous native call the QuickJS interrupt can't break. Poll
+    // the process-wide interrupt (set by Ctrl+C / window close / engine teardown)
+    // so closing the app mid-load abandons the read promptly instead of blocking
+    // the worker-join until every byte finishes. from_model_dir throws
+    // LoadCancelled; report it as a plain cancel signal (no pixels/pipeline).
+    dirOpts.should_cancel = bro::util::interrupted;
     try {
         brotensor::init();
         auto w = std::make_unique<PipelineWrapper>();
@@ -388,6 +395,10 @@ static JSValue js_loadModel(JSContext* ctx, JSValueConst, int argc,
             bdp::Pipeline::from_model_dir(resolveAppPath(dir), dirOpts));
         w->weights_loaded = true;
         return qjsbind::wrap<PipelineWrapper>(ctx, w.release());
+    } catch (const brodiffusion::LoadCancelled&) {
+        JSValue out = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, out, "cancelled", JS_TRUE);
+        return out;
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "loadModel: %s", e.what());
     }
