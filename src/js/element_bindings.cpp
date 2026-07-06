@@ -13,6 +13,7 @@
 #include "canvas/canvas_scene.h"
 #include "css/transform.h"
 #include "dom/element_geometry.h"
+#include "layout/svg_geometry.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -2729,7 +2730,14 @@ static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst thi
     // ancestor chain to walk — bro::dom::absoluteBorderBox() returns
     // {0,0,0,0} for both, matching Chromium rather than inheriting the
     // parent's accumulated position.
-    bro::dom::AbsoluteRect r = bro::dom::absoluteBorderBox(el);
+    //
+    // Elements inside an <svg> subtree have no layout boxes (the svg is a
+    // replaced element); their rect is computed from the SVG geometry
+    // itself — shape fill bounds through the transform/viewBox chain, or
+    // all-zeros for non-rendered elements (defs, gradients, stops, ...).
+    bro::dom::AbsoluteRect r;
+    if (!bro::layout::svgChildBoundingClientRect(el, r))
+        r = bro::dom::absoluteBorderBox(el);
 
     JSValue rect = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, rect, "x",      JS_NewFloat64(ctx, r.x));

@@ -294,6 +294,31 @@ void Document::resolveStylesRecursive(Element* elem,
         // there's only one declaration block to resolve, not two to merge.
         auto computed = cascade_.resolve(*adapter, elem->style().cssText(), parentStyle);
 
+        // <svg> width/height attributes are presentational hints: they map to
+        // the CSS width/height properties below author-stylesheet priority
+        // (SVG 2). When the cascade produced no value, the attribute applies
+        // directly — this is what makes `svg { width: 100% }` plus
+        // height="180" lay out 180px tall in browsers, rather than deriving
+        // the height from an intrinsic aspect ratio.
+        {
+            const std::string& tag = elem->tagName();
+            if (tag == "svg" || tag == "SVG") {
+                for (const char* prop : {"width", "height"}) {
+                    if (computed.find(prop) != computed.end()) continue;
+                    const std::string& v = elem->getAttribute(prop);
+                    if (v.empty() || v == "auto") continue;
+                    char* end = nullptr;
+                    float num = std::strtof(v.c_str(), &end);
+                    if (end == v.c_str() || num < 0) continue;
+                    std::string rest(end);
+                    if (rest.empty())
+                        computed[prop] = v + "px";
+                    else if (rest == "px" || rest == "%")
+                        computed[prop] = v;
+                }
+            }
+        }
+
         // Resolve font-size to absolute px so all consumers get a usable value.
         // em/% are relative to the parent's (already-resolved) font-size.
         auto fsIt = computed.find("font-size");
