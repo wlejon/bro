@@ -103,6 +103,8 @@ input {
 }
 
 input[type="checkbox"], input[type="radio"] {
+    width: 13px;
+    height: 13px;
     padding: 0;
     border: none;
     background-color: transparent;
