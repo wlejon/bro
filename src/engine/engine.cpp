@@ -225,9 +225,12 @@ float Engine::docContentOffsetY() const {
 
 Engine::ContentInsets Engine::contentInsets() const {
     ContentInsets c;
-    const bool menuShown = menuBar_.visible
-                        && displayMode_ != DisplayMode::Headless;
-    c.top = menuShown ? menuBar_.height : 0;
+    // Headless is deliberately NOT special-cased: the menu bar is opt-in
+    // (bro.menu.show()), so an app that shows one gets the same reserved
+    // inset in every display mode. Suppressing it headless made headless
+    // rendering diverge from windowed and hid inset-dependent compositing
+    // bugs from the entire headless test surface.
+    c.top = menuBar_.visible ? menuBar_.height : 0;
     if (inspector_.visible) {
         if (inspector_.dock == InspectorDock::Right) {
             c.right = inspector_.width;

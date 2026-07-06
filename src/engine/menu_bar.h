@@ -32,8 +32,10 @@ public:
 
     // Hidden by default — apps that want a menu bar (tools, editors, the
     // built-in project manager) opt in with bro.menu.show() at startup.
-    // bro-headless additionally suppresses the bar regardless of this flag
-    // so screenshots match a no-menu viewport.
+    // The flag is honored identically in every display mode, including
+    // bro-headless: a shown menu reserves its contentTop() inset and
+    // renders in screenshots, so headless testing exercises the same
+    // viewport geometry as the windowed app.
     bool visible = false;
     // Height in CSS pixels. Also drives Engine::contentInsets(). Read by
     // system/menu.html via __bro.menu.getHeight() to size #menu-bar — not

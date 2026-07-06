@@ -899,17 +899,14 @@ bool Engine::isSystemDocVisible(const SystemDocument& doc) const {
     if (doc.group == "perf") return systemPerfVisible_;
     if (doc.group == "nav") return systemSettingsVisible_;
     if (doc.group == "settings") return systemSettingsVisible_ && doc.active;
-    if (doc.group == "menu") return menuBar_.visible
-        && displayMode_ != DisplayMode::Headless;
+    if (doc.group == "menu") return menuBar_.visible;
     if (doc.group == "inspector") return inspector_.visible;
     if (doc.group == "splash") return splashVisible_;
     return false;
 }
 
 bool Engine::isSystemVisible() const {
-    const bool menuShown = menuBar_.visible
-                        && displayMode_ != DisplayMode::Headless;
-    return systemPerfVisible_ || systemSettingsVisible_ || menuShown
+    return systemPerfVisible_ || systemSettingsVisible_ || menuBar_.visible
         || inspector_.visible || splashVisible_;
 }
 

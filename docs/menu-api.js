@@ -4,8 +4,9 @@
  * A horizontal menu bar rendered by the engine's system panel
  * (system/menu.html). Hidden by default — tooling apps that want a
  * menu (project manager, editors, IDE-like tools) call bro.menu.show()
- * at startup. bro-headless suppresses the bar regardless of state so
- * screenshots match a clean no-menu viewport.
+ * at startup. The bar behaves identically in bro-headless: showing it
+ * reserves the same top inset and it appears in screenshots, so headless
+ * runs exercise the exact viewport geometry the windowed app gets.
  *
  * Actions prefixed with "__system." are engine-handled:
  *   __system.quit         — close the app (sets running=false)
