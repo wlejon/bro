@@ -24,6 +24,7 @@ struct TextMetrics {
     float ascent = 0.0f;   // distance from baseline to top (positive value)
     float descent = 0.0f;  // distance from baseline to bottom (positive value)
     float leading = 0.0f;  // recommended extra line gap (SkFontMetrics::fLeading)
+    float xHeight = 0.0f;  // height of lowercase 'x' (SkFontMetrics::fXHeight); 0 if unknown
 };
 
 // Derived font line metrics for text layout and vertical centering.

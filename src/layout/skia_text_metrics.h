@@ -32,9 +32,36 @@ public:
         // the renderer pulls these straight from SkFontMetrics, no glyph
         // shaping needed.
         auto tm = renderer_->measureText("", makeRef(fontFamily, fontSize, fontWeight));
-        // CSS line-height: normal = ascent + descent + leading (Chromium parity).
-        float h = std::round(tm.ascent + tm.descent + tm.leading);
+        // CSS line-height: normal = ascent + descent + leading, with each
+        // component rounded to an integer independently — Blink rounds
+        // SkFontMetrics fAscent/fDescent/fLeading per component in
+        // SimpleFontData::PlatformInit, so 16px Arial is 14 + 3 + 1 = 18,
+        // not round(14.48 + 3.39 + 0.52) (which happens to agree) — the
+        // per-component form is exact for all sizes.
+        float h = std::round(tm.ascent) + std::round(tm.descent) + std::round(tm.leading);
         return h > 0 ? h : fontSize * 1.2f;
+    }
+
+    float ascent(std::string_view fontFamily,
+                 float fontSize,
+                 std::string_view fontWeight) override {
+        auto tm = renderer_->measureText("", makeRef(fontFamily, fontSize, fontWeight));
+        // Blink rounds the font ascent to an integer (SkScalarRoundToScalar
+        // on -fAscent); baselines land on integral offsets from the line top.
+        float a = std::round(tm.ascent);
+        // Fall back to the interface default's 80% heuristic if the backend
+        // gave nothing usable.
+        if (a <= 0) return 0.8f * lineHeight(fontFamily, fontSize, fontWeight);
+        return a;
+    }
+
+    float xHeight(std::string_view fontFamily,
+                  float fontSize,
+                  std::string_view fontWeight) override {
+        auto tm = renderer_->measureText("", makeRef(fontFamily, fontSize, fontWeight));
+        // Real x-height from SkFontMetrics (unrounded, matching Blink).
+        // Fonts that don't report one fall back to the CSS 0.5em ratio.
+        return tm.xHeight > 0 ? tm.xHeight : 0.5f * fontSize;
     }
 
 private:

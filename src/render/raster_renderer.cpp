@@ -282,7 +282,7 @@ TextMetrics RasterRenderer::measureText(std::string_view text, FontRef font) {
     const SkFont& primary = *fe.font;
     SkFontMetrics fm;
     primary.getMetrics(&fm);
-    if (text.empty()) return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent, fm.fLeading };
+    if (text.empty()) return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent, fm.fLeading, fm.fXHeight };
     auto runs = splitTextForFallback(text, primary, ensureFontMgr(),
                                       fe.style, fallbackCache_);
     float width = 0.0f;
@@ -293,7 +293,7 @@ TextMetrics RasterRenderer::measureText(std::string_view text, FontRef font) {
         width += run.font.measureText(data, run.length, SkTextEncoding::kUTF8, &b);
         if (b.height() > maxH) maxH = b.height();
     }
-    return { width, maxH, -fm.fAscent, fm.fDescent, fm.fLeading };
+    return { width, maxH, -fm.fAscent, fm.fDescent, fm.fLeading, fm.fXHeight };
 }
 
 SkFontMgr* RasterRenderer::ensureFontMgr() {

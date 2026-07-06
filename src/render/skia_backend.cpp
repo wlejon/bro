@@ -245,7 +245,7 @@ TextMetrics SkiaRenderer::measureText(std::string_view text, FontRef font) {
     SkFontMetrics fm;
     primary.getMetrics(&fm);
     if (text.empty()) {
-        return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent, fm.fLeading };
+        return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent, fm.fLeading, fm.fXHeight };
     }
     auto runs = splitTextForFallback(text, primary, ensureFontMgr(),
                                       fe.style, fallbackCache_);
@@ -257,7 +257,7 @@ TextMetrics SkiaRenderer::measureText(std::string_view text, FontRef font) {
         width += run.font.measureText(data, run.length, SkTextEncoding::kUTF8, &bounds);
         if (bounds.height() > maxH) maxH = bounds.height();
     }
-    return { width, maxH, -fm.fAscent, fm.fDescent, fm.fLeading };
+    return { width, maxH, -fm.fAscent, fm.fDescent, fm.fLeading, fm.fXHeight };
 }
 
 SkFontMgr* SkiaRenderer::ensureFontMgr() {
