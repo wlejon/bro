@@ -25,10 +25,15 @@ public:
 
     void initSelectedIndex();
 
+    // docOffsetX/Y: the draw pass's document→screen translation (see
+    // DrawTraversal::rootOffsetX_) — applied to the absoluteBorderBox()
+    // projection so lastDrawPos() is true screen space, the contract the
+    // engine's overlay anchoring and mouse handling rely on.
     void draw(render::Renderer* renderer,
               const htmlayout::layout::LayoutBox& box,
               const htmlayout::css::ComputedStyle& style,
-              float offsetX, float offsetY);
+              float offsetX, float offsetY,
+              float docOffsetX = 0, float docOffsetY = 0);
 
     int selectedIndex() const { return selectedIndex_; }
     void setSelectedIndex(int idx) { selectedIndex_ = idx; }

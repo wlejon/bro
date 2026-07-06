@@ -441,6 +441,10 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     viewportW_ = viewportW;
     viewportH_ = viewportH;
     viewportTop_ = viewportTop;
+    // The root offset args double as the document→surface translation for
+    // this pass (engine passes (0, contentTop - scrollY) for the app doc).
+    rootOffsetX_ = scrollX;
+    rootOffsetY_ = scrollY;
 
     // skipSet_ is rebuilt per draw() — buildStackingContextTree inserts every
     // element that's an SC root or positioned-non-SC for the *current* frame.
@@ -993,9 +997,17 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     // chain explicitly, the same math getBoundingClientRect() uses, so a
     // zoomed/panned ancestor (CSS transform: translate/scale) positions the
     // quad correctly instead of leaving it at its untransformed layout rect.
+    // absoluteContentBox() is document-space; add the pass's root offset so
+    // the quad lands in the same surface space the HTML painted at. Without
+    // it, every canvas/WebGL/scene layer composites contentTop() px above
+    // its element whenever a menu bar reserves a top inset (and ignores
+    // document scroll).
     if ((elem->sceneGraph() || elem->canvasScene() || elem->webglContext()) && visible) {
         auto lbRect = dom::absoluteContentBox(elem);
-        x = lbRect.x; y = lbRect.y; w = lbRect.width; h = lbRect.height;
+        x = lbRect.x + rootOffsetX_;
+        y = lbRect.y + rootOffsetY_;
+        w = lbRect.width;
+        h = lbRect.height;
     }
     if (elem->sceneGraph() && visible) {
         // 3D mesh FBO layer (texture ID stored on element by scene graph render)
@@ -1070,7 +1082,8 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     if (visible) {
         auto* inputCtrl = elem->inputControl();
         if (inputCtrl) {
-            inputCtrl->draw(renderer_, box, style, offsetX, offsetY);
+            inputCtrl->draw(renderer_, box, style, offsetX, offsetY,
+                            rootOffsetX_, rootOffsetY_);
         }
         auto* textareaCtrl = elem->textareaControl();
         if (textareaCtrl) {
@@ -1078,7 +1091,8 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         }
         auto* selectCtrl = elem->selectControl();
         if (selectCtrl) {
-            selectCtrl->draw(renderer_, box, style, offsetX, offsetY);
+            selectCtrl->draw(renderer_, box, style, offsetX, offsetY,
+                             rootOffsetX_, rootOffsetY_);
         }
         auto* videoCtrl = elem->videoControl();
         if (videoCtrl) {

@@ -95,7 +95,8 @@ void ElSelect::getContentSize(float& w, float& h) {
 void ElSelect::draw(render::Renderer* renderer,
                     const htmlayout::layout::LayoutBox& box,
                     const htmlayout::css::ComputedStyle& /*style*/,
-                    float offsetX, float offsetY) {
+                    float offsetX, float offsetY,
+                    float docOffsetX, float docOffsetY) {
     if (!renderer || !elem_) return;
 
     // Use the caller's renderer (raster thread has its own)
@@ -114,8 +115,11 @@ void ElSelect::draw(render::Renderer* renderer,
     // the ancestor-transform-projected rect (same fix as canvas/webgl/scene
     // layers and the range-slider), or a select under a zoomed/panned
     // ancestor opens its dropdown at the raw pre-transform layout position.
+    // absoluteBorderBox() is document-space; the caller's doc→screen offset
+    // (menu-bar inset − document scroll) makes this true screen space.
     auto screenRect = dom::absoluteBorderBox(elem_);
-    lastDrawPos_ = {screenRect.x, screenRect.y, screenRect.width, screenRect.height};
+    lastDrawPos_ = {screenRect.x + docOffsetX, screenRect.y + docOffsetY,
+                    screenRect.width, screenRect.height};
 
     render::FontRef fontRef = getFontRef();
     auto lm = render::LineMetrics::from(renderer_->measureText("M", fontRef));

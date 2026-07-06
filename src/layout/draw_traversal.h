@@ -173,6 +173,16 @@ private:
     int viewportH_ = 0;
     int viewportTop_ = 0;
 
+    // Root draw offset of the current draw() pass — the translation from
+    // document space to the output surface (the app doc draws at
+    // (0, contentTop - scrollY); system panel docs at (0, 0)). Geometry
+    // computed via dom::absolute*Box() is document-space and must add this
+    // to land in screen space (layer-break quads, control screen anchors).
+    // Pure translation, so it composes with the ancestor-transform
+    // projection: screen = project_doc(rect) + rootOffset.
+    float rootOffsetX_ = 0;
+    float rootOffsetY_ = 0;
+
     std::unordered_map<std::string, CachedImage> imageCache_;
     LayerBreakCallback layerBreakCb_;
 

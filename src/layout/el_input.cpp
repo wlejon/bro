@@ -312,7 +312,8 @@ render::FontRef ElInput::getFontRef() const {
 void ElInput::draw(render::Renderer* renderer,
                    const htmlayout::layout::LayoutBox& box,
                    const htmlayout::css::ComputedStyle& /*style*/,
-                   float offsetX, float offsetY) {
+                   float offsetX, float offsetY,
+                   float docOffsetX, float docOffsetY) {
     if (!renderer || !elem_) return;
 
     // Use the caller's renderer (may differ from construction renderer,
@@ -333,9 +334,12 @@ void ElInput::draw(render::Renderer* renderer,
     // the ancestor-transform-projected rect (same fix as canvas/webgl/scene
     // layers in DrawTraversal), not the raw pre-transform layout position,
     // or a range slider under a zoomed/panned ancestor drags at the wrong
-    // screen-to-value ratio entirely.
+    // screen-to-value ratio entirely. absoluteContentBox() is document-space;
+    // the caller's doc→screen offset (menu-bar inset − document scroll)
+    // makes this true screen space.
     auto screenRect = dom::absoluteContentBox(elem_);
-    lastDrawPos_ = {screenRect.x, screenRect.y, screenRect.width, screenRect.height};
+    lastDrawPos_ = {screenRect.x + docOffsetX, screenRect.y + docOffsetY,
+                    screenRect.width, screenRect.height};
 
     auto t = inputType(nullptr);
     if (t == InputType::Hidden) return;

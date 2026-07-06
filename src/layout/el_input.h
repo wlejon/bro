@@ -26,11 +26,16 @@ public:
     bool isTextType(dom::Element* elem) const;
     bool isButtonType(dom::Element* elem) const;
 
-    // Draw the input control at its layout position
+    // Draw the input control at its layout position. docOffsetX/Y: the draw
+    // pass's document→screen translation (see DrawTraversal::rootOffsetX_) —
+    // applied to the absoluteContentBox() projection so lastDrawPos() is
+    // true screen space (range-drag math and the color-picker anchor compare
+    // it against raw mouse coordinates).
     void draw(render::Renderer* renderer,
               const htmlayout::layout::LayoutBox& box,
               const htmlayout::css::ComputedStyle& style,
-              float offsetX, float offsetY);
+              float offsetX, float offsetY,
+              float docOffsetX = 0, float docOffsetY = 0);
 
     // Focus/cursor state
     int cursorPos() const { return cursorPos_; }
