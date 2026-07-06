@@ -635,19 +635,24 @@ static JSValue js_element_get_value(JSContext* ctx, JSValueConst this_val)
         // consistent before first layout — e.g. a headless script that
         // creates a <select>, sets .value, and reads it back without an
         // intervening flush()/layout.
+        // Spec: an option's value falls back to its text only when the value
+        // attribute is ABSENT — an explicit value="" stays "" (placeholder
+        // options depend on it).
+        auto optionValue = [](bro::dom::Element* o) {
+            return o->hasAttribute("value") ? o->getAttribute("value")
+                                            : o->textContent();
+        };
         bro::dom::Element* first = nullptr;
         for (auto* child : el->children()) {
             if (child->tagName() != "OPTION" && child->tagName() != "option") continue;
             if (!first) first = child;
             if (child->hasAttribute("selected")) {
-                std::string ov = child->getAttribute("value");
-                if (ov.empty()) ov = child->textContent();
+                std::string ov = optionValue(child);
                 return JS_NewString(ctx, ov.c_str());
             }
         }
         if (first) {
-            std::string ov = first->getAttribute("value");
-            if (ov.empty()) ov = first->textContent();
+            std::string ov = optionValue(first);
             return JS_NewString(ctx, ov.c_str());
         }
         return JS_NewString(ctx, "");
@@ -685,8 +690,11 @@ static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
         int matchIdx = -1, idx = 0;
         for (auto* child : el->children()) {
             if (child->tagName() != "OPTION" && child->tagName() != "option") continue;
-            std::string ov = child->getAttribute("value");
-            if (ov.empty()) ov = child->textContent();
+            // Value-attribute-absent → text fallback; explicit value="" stays
+            // "" (matches the getter and ElSelect::getOptions()).
+            std::string ov = child->hasAttribute("value")
+                                 ? child->getAttribute("value")
+                                 : child->textContent();
             if (matchIdx < 0 && ov == s) {
                 matchIdx = idx;
                 child->setAttribute("selected", "");

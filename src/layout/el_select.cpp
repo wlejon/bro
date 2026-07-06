@@ -36,7 +36,10 @@ std::vector<ElSelect::Option> ElSelect::getOptions() const {
             text.pop_back();
         opt.text = text;
 
-        if (opt.value.empty()) opt.value = opt.text;
+        // Spec: an option's value is its text only when there is NO value
+        // attribute. An explicit value="" stays "" — placeholder options
+        // (<option value="">pick one…</option>) rely on select.value === ''.
+        if (!child->hasAttribute("value")) opt.value = opt.text;
         opts.push_back(std::move(opt));
     }
     return opts;
