@@ -660,6 +660,29 @@ static JSValue js_pipeline_controlAxes(JSContext* ctx, JSValueConst this_val,
     return arr;
 }
 
+// controlVector(name) -> { dir: Float32Array, scale } — the stored direction
+// and baked scale of a loaded-dictionary or runtime axis. Introspection for
+// explaining axes to the user (e.g. cosine-decompose a freshly minted axis
+// against the dictionary's named directions). Throws on unknown name.
+static JSValue js_pipeline_controlVector(JSContext* ctx, JSValueConst this_val,
+                                         int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "controlVector: not a Pipeline");
+    std::string name;
+    if (argc < 1 || !argStr(ctx, argv[0], name))
+        return JS_ThrowTypeError(ctx, "controlVector(name): name string required");
+    try {
+        std::vector<float> dir = w->pipeline->cond_control().direction(name);
+        float scale = w->pipeline->cond_control().axis_scale(name);
+        JSValue out = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, out, "dir", qjsbind::make_float32_array(ctx, dir));
+        JS_SetPropertyStr(ctx, out, "scale", JS_NewFloat64(ctx, scale));
+        return out;
+    } catch (const std::exception& e) {
+        return JS_ThrowTypeError(ctx, "controlVector: %s", e.what());
+    }
+}
+
 // encodeConditioning(prompt) -> { rows, cols, data: Float32Array }
 //   Encode `prompt` into the model's text-conditioning sequence — the (L, hidden)
 //   embeddings the denoiser cross-attends to (row 0 = BOS). Downloaded to host
@@ -1204,6 +1227,7 @@ static void registerPipelineClass(JSContext* ctx) {
         .method_raw("clearControl",       js_pipeline_clearControl,       0)
         .method_raw("dispose",            js_pipeline_dispose,            0)
         .method_raw("controlAxes",        js_pipeline_controlAxes,        0)
+        .method_raw("controlVector",      js_pipeline_controlVector,      1)
         .method_raw("encodeConditioning", js_pipeline_encodeConditioning, 1)
         .method_raw("setControlVector",   js_pipeline_setControlVector,   4)
         .method_raw("removeControl",      js_pipeline_removeControl,      1)

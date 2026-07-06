@@ -271,6 +271,56 @@ class Pipeline {
    */
   config() {}
 
+  // ── conditioning-space control axes (the sana-research seam) ──────────────
+  // A dictionary of named unit directions in the text encoder's embedding
+  // space, injected additively into the positive conditioning at prime()/
+  // generate() time. See brodiffusion/cond_control.h for the file format.
+
+  /**
+   * Load a BCD1 control dictionary, replacing loaded axes and zeroing weights.
+   * @param {string} path
+   */
+  loadControlDictionary(path) {}
+
+  /**
+   * @returns {string[]} names of every registered axis (dictionary + runtime).
+   */
+  controlAxes() {}
+
+  /**
+   * The stored direction + baked scale of one axis — introspection for
+   * explaining axes (e.g. cosine-decompose a freshly minted axis against the
+   * dictionary's named directions). Throws on unknown name.
+   * @param {string} name
+   * @returns {{dir: Float32Array, scale: number}}
+   */
+  controlVector(name) {}
+
+  /**
+   * Set one axis weight (natural units), or several at once from a map.
+   * Applied to every generation until changed / clearControl().
+   * @param {string|Object<string,number>} nameOrMap
+   * @param {number} [alpha]
+   */
+  setControl(nameOrMap, alpha) {}
+
+  /**
+   * Register (or replace) a runtime axis from an explicit direction and set
+   * its weight. `dir` is taken as-is (caller normalizes); the injected vector
+   * is alpha * scale * dir. Coexists with dictionary axes.
+   * @param {string} name
+   * @param {Float32Array} dir
+   * @param {number} alpha
+   * @param {number} [scale=1]
+   */
+  setControlVector(name, dir, alpha, scale) {}
+
+  /** Remove one axis (runtime or dictionary) by name; no-op if unknown. */
+  removeControl(name) {}
+
+  /** Zero every axis weight (keeps the dictionary loaded). */
+  clearControl() {}
+
   /**
    * Capture a reference identity and arm Sana's training-free reference-
    * attention seam. Runs ONE full generation of `prompt` (returned as the
