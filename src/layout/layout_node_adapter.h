@@ -70,6 +70,15 @@ public:
         return {};
     }
 
+    // HTML attribute lookup for layout-affecting presentational attributes
+    // (colspan/rowspan/span on table parts). getAttribute returns a reference
+    // into the element's attribute map (or a static empty string), so the
+    // view outlives the call as the interface requires.
+    std::string_view attribute(std::string_view name) const override {
+        if (!elem_) return {};
+        return elem_->getAttribute(std::string(name));
+    }
+
     LayoutNode* parent() const override { return parent_; }
 
     std::span<LayoutNode* const> children() const override {
