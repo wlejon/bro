@@ -67,21 +67,24 @@ void DropdownOverlay::draw(render::Renderer* r) {
     float padX = 6.0f;
     float padY = 4.0f;
 
-    r->fillRect(dropX, dropY, dropW, dropH, {255, 255, 255, 255});
-    r->drawRect(dropX, dropY, dropW, dropH, {118, 118, 118, 255});
+    // Renderer colors are linear-float bromath::Color — 8-bit values must go
+    // through cfromColor8 or anything > 1 saturates (the gray border rendered
+    // white and the selection blue rendered cyan).
+    r->fillRect(dropX, dropY, dropW, dropH, bromath::cfromColor8({255, 255, 255, 255}));
+    r->drawRect(dropX, dropY, dropW, dropH, bromath::cfromColor8({118, 118, 118, 255}));
 
     for (int i = 0; i < static_cast<int>(options_.size()); ++i) {
         float itemY = dropY + 1.0f + i * lineH_;
         if (i == highlightedIndex_) {
             r->fillRect(dropX + 1, itemY, dropW - 2, lineH_,
-                        {0, 120, 215, 255});
+                        bromath::cfromColor8({0, 120, 215, 255}));
             r->drawText(options_[i].text, dropX + padX,
                         itemY + padY + ascent_, font,
-                        {255, 255, 255, 255});
+                        bromath::cfromColor8({255, 255, 255, 255}));
         } else {
             r->drawText(options_[i].text, dropX + padX,
                         itemY + padY + ascent_, font,
-                        {0, 0, 0, 255});
+                        bromath::cfromColor8({0, 0, 0, 255}));
         }
     }
 }
