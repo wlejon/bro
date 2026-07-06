@@ -39,6 +39,17 @@ public:
     /// (getImage returns nullptr afterward). Used by the postMessage serializer
     /// to transfer a bitmap across threads with no pixel copy.
     static sk_sp<SkImage> takeImage(JSValueConst val);
+
+    /// Build a web-standard ImageData object: { width, height, data } with
+    /// its prototype set to globalThis.ImageData.prototype, so
+    /// `x instanceof ImageData` is true. `dataArr` (a Uint8ClampedArray) is
+    /// consumed. Every producer of ImageData-shaped values (the ImageData
+    /// constructor, ctx.getImageData, ctx.createImageData) must go through
+    /// this — a plain JS_NewObject shape duck-types fine but fails
+    /// instanceof, and a bare C-function constructor with no prototype made
+    /// `instanceof ImageData` THROW (TypeError) rather than return false.
+    static JSValue makeImageData(JSContext* ctx, int width, int height,
+                                 JSValue dataArr);
 };
 
 } // namespace bro::js

@@ -232,10 +232,6 @@ static JSValue js_getImageData(JSContext* ctx, JSValueConst this_val,
 
     auto pixels = sc->getImageData(x, y, wi, h);
 
-    JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, wi));
-    JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, h));
-
     JSValue abuf = JS_NewArrayBufferCopy(ctx, pixels.data(), pixels.size());
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue u8cCtor = JS_GetPropertyStr(ctx, global, "Uint8ClampedArray");
@@ -243,9 +239,9 @@ static JSValue js_getImageData(JSContext* ctx, JSValueConst this_val,
     JS_FreeValue(ctx, u8cCtor);
     JS_FreeValue(ctx, global);
     JS_FreeValue(ctx, abuf);
-    JS_SetPropertyStr(ctx, obj, "data", dataArr);
 
-    return obj;
+    // Real ImageData instance (instanceof-true), not a duck-typed object.
+    return ImageBitmapBindings::makeImageData(ctx, wi, h, dataArr);
 }
 
 static JSValue js_putImageData(JSContext* ctx, JSValueConst this_val,
@@ -296,10 +292,6 @@ static JSValue js_createImageData(JSContext* ctx, JSValueConst this_val,
     int w = (int)wd, h = (int)hd;
     if (w <= 0 || h <= 0) return JS_UNDEFINED;
 
-    JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, w));
-    JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, h));
-
     size_t sz = (size_t)w * h * 4;
     std::vector<uint8_t> zeros(sz, 0);
     JSValue abuf = JS_NewArrayBufferCopy(ctx, zeros.data(), sz);
@@ -309,8 +301,9 @@ static JSValue js_createImageData(JSContext* ctx, JSValueConst this_val,
     JS_FreeValue(ctx, u8cCtor);
     JS_FreeValue(ctx, global);
     JS_FreeValue(ctx, abuf);
-    JS_SetPropertyStr(ctx, obj, "data", dataArr);
-    return obj;
+
+    // Real ImageData instance (instanceof-true), not a duck-typed object.
+    return ImageBitmapBindings::makeImageData(ctx, w, h, dataArr);
 }
 
 static JSValue js_setLineDash(JSContext* ctx, JSValueConst this_val,

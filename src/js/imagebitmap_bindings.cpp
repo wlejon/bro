@@ -247,7 +247,27 @@ static JSValue js_imageData_ctor(JSContext* ctx, JSValueConst /*new_target*/,
         JS_FreeValue(ctx, zbuf);
     }
 
-    JSValue obj = JS_NewObject(ctx);
+    return ImageBitmapBindings::makeImageData(ctx, width, height, dataArr);
+}
+
+JSValue ImageBitmapBindings::makeImageData(JSContext* ctx, int width, int height,
+                                           JSValue dataArr) {
+    // Resolve the shared prototype off the global constructor so every
+    // producer yields true `instanceof ImageData` objects. Falls back to a
+    // plain object if the constructor isn't installed (defensive — install()
+    // runs before any producer in both main and worker contexts).
+    JSValue obj = JS_UNDEFINED;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue ctor = JS_GetPropertyStr(ctx, global, "ImageData");
+    if (JS_IsObject(ctor)) {
+        JSValue proto = JS_GetPropertyStr(ctx, ctor, "prototype");
+        if (JS_IsObject(proto)) obj = JS_NewObjectProto(ctx, proto);
+        JS_FreeValue(ctx, proto);
+    }
+    JS_FreeValue(ctx, ctor);
+    JS_FreeValue(ctx, global);
+    if (!JS_IsObject(obj)) obj = JS_NewObject(ctx);
+
     JS_SetPropertyStr(ctx, obj, "width",  JS_NewInt32(ctx, width));
     JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, height));
     JS_SetPropertyStr(ctx, obj, "data",   dataArr);
@@ -279,8 +299,20 @@ void ImageBitmapBindings::install(JSContext* ctx) {
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "createImageBitmap",
         JS_NewCFunction(ctx, js_createImageBitmap, "createImageBitmap", 1));
-    JS_SetPropertyStr(ctx, global, "ImageData",
-        JS_NewCFunction2(ctx, js_imageData_ctor, "ImageData", 2, JS_CFUNC_constructor, 0));
+    // ImageData needs a real prototype object paired with the constructor
+    // (JS_SetConstructor wires ctor.prototype ↔ proto.constructor). A bare
+    // C-function constructor has no "prototype" property at all, which makes
+    // `x instanceof ImageData` throw TypeError instead of answering — that
+    // took out any app using the standard CanvasImageSource type switch.
+    // makeImageData() stamps this prototype on every produced instance.
+    {
+        JSValue idCtor = JS_NewCFunction2(ctx, js_imageData_ctor, "ImageData", 2,
+                                          JS_CFUNC_constructor, 0);
+        JSValue idProto = JS_NewObject(ctx);
+        JS_SetConstructor(ctx, idCtor, idProto);
+        JS_FreeValue(ctx, idProto);
+        JS_SetPropertyStr(ctx, global, "ImageData", idCtor);
+    }
     JS_FreeValue(ctx, global);
 }
 
