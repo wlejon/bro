@@ -109,6 +109,15 @@ void Engine::flush() {
                                  static_cast<float>(contentHeight()), *textMetrics_);
         document_->clearDirty();
 
+        // Keep the scrollable extent in sync with the fresh layout, same as
+        // the windowed loop does after every layout drain. Without this,
+        // headless documentHeight_ froze at its boot value, so viewport
+        // wheel scrolling clamped to a stale (usually ~0) maxScroll and the
+        // viewport scrollbar drew against boot-time geometry.
+        if (auto* rootEl = document_->documentElement()) {
+            documentHeight_ = rootEl->layoutBox().marginBox().height;
+        }
+
         // Notify ResizeObserver / IntersectionObserver after layout
         if (jsRuntime_) {
             JSValue r = JS_Eval(jsRuntime_->getContext(), js_observer_check,
@@ -213,6 +222,13 @@ void Engine::advanceTime(double ms) {
         // (queueMicrotask, Promise.resolve().then) would run AFTER a 0-delay
         // setTimeout, violating the HTML microtask-checkpoint ordering.
         jsRuntime_->executePendingJobs();
+
+        // Apply pending viewport wheel scroll, same as the windowed frame
+        // loop (engine_frame.cpp). Without this, headless wheel() over the
+        // viewport parked pixels in wheelResidualY_ forever and the document
+        // never scrolled — a windowed/headless divergence of exactly the
+        // kind that hid the menu-inset layer bug.
+        drainWheelSmoothing(static_cast<float>(step) / 1000.0f);
 
         timers_->tick(virtualTime_);
 
