@@ -77,6 +77,18 @@ static JSValue js_gpu_memoryInfo(JSContext* ctx, JSValueConst, int argc, JSValue
     return o;
 }
 
+// deviceName(device?) -> string | null. The card's human-readable name
+// (cudaDeviceProp.name, e.g. "NVIDIA GeForce RTX 4090"), for `device`
+// ('cuda'/'metal'/'cpu', defaulting to the current default device). Null when
+// the backend isn't registered or can't report (always null on CPU).
+static JSValue js_gpu_deviceName(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    brotensor::init();
+    brotensor::Device d = parseDeviceArg(ctx, argc, argv, 0);
+    std::string name = brotensor::device_product_name(d);
+    if (name.empty()) return JS_NULL;
+    return JS_NewString(ctx, name.c_str());
+}
+
 // trim(device?, keepBytes=0) -> boolean. Returns the backend allocator's
 // cached-but-unused memory to the driver, keeping at most keepBytes cached.
 // Use between pipeline phases with very different scratch shapes — cached
@@ -120,6 +132,8 @@ void installGpuBindings(JSContext* ctx) {
     defineGetter(ctx, gpuObj, "devices",   js_gpu_get_devices);
     JS_SetPropertyStr(ctx, gpuObj, "memoryInfo",
                       JS_NewCFunction(ctx, js_gpu_memoryInfo, "memoryInfo", 1));
+    JS_SetPropertyStr(ctx, gpuObj, "deviceName",
+                      JS_NewCFunction(ctx, js_gpu_deviceName, "deviceName", 1));
     JS_SetPropertyStr(ctx, gpuObj, "trim",
                       JS_NewCFunction(ctx, js_gpu_trim, "trim", 2));
     JS_SetPropertyStr(ctx, broObj, "gpu", gpuObj);

@@ -60,6 +60,22 @@ bro.gpu.devices;
 bro.gpu.memoryInfo(device) {}
 
 /**
+ * The card's human-readable name (e.g. `cudaDeviceProp.name`,
+ * "NVIDIA GeForce RTX 4090") for `device`. Returns `null` when the backend
+ * isn't registered or can't report — always `null` for 'cpu'. Pair with
+ * `memoryInfo()` to label a VRAM budget line with the actual card.
+ *
+ * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu'
+ * @returns {?string}
+ *
+ * @example
+ *   const card = bro.gpu.deviceName() || bro.gpu.backend.toUpperCase();
+ *   const mem = bro.gpu.memoryInfo();
+ *   status(card + ' · ' + (mem.totalBytes / 1e9).toFixed(1) + ' GB');
+ */
+bro.gpu.deviceName(device) {}
+
+/**
  * Return the backend allocator's cached-but-unused memory to the driver,
  * keeping at most `keepBytes` cached. Synchronizes the device first so
  * stream-ordered frees are actually reclaimable.
