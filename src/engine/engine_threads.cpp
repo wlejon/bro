@@ -18,6 +18,7 @@
 #include <glad/gl.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
 
+#include <algorithm>
 #include <bit>
 
 namespace bro::engine {
@@ -120,9 +121,13 @@ void Engine::rasterThreadFunc() {
         rasterRenderer->grContext()->resetContext();
         rasterRenderer->beginFrame(snap.vpWidth, snap.vpHeight);
 
+        // App layer surfaces are content-sized (viewport minus engine
+        // insets); the main thread's compositor places them at (0, insetTop).
+        int contentW = std::max(1, snap.vpWidth - snap.insetRight);
+        int contentH = std::max(1, snap.vpHeight - snap.insetTop - snap.insetBottom);
         replayAppLayers(rasterRenderer.get(), backBuf.appCommands,
                         htmlSurfacePool_, htmlSurfacePoolW_, htmlSurfacePoolH_,
-                        snap.vpWidth, snap.vpHeight,
+                        contentW, contentH,
                         backBuf.appLayers);
 
         replaySystemPanelLayers(rasterRenderer.get(), backBuf.systemCommands,

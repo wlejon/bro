@@ -27,10 +27,11 @@ public:
     bool isButtonType(dom::Element* elem) const;
 
     // Draw the input control at its layout position. docOffsetX/Y: the draw
-    // pass's document→screen translation (see DrawTraversal::rootOffsetX_) —
-    // applied to the absoluteContentBox() projection so lastDrawPos() is
-    // true screen space (range-drag math and the color-picker anchor compare
-    // it against raw mouse coordinates).
+    // pass's document→surface translation (see DrawTraversal::rootOffsetX_) —
+    // applied to the absoluteContentBox() projection so lastDrawPos() lands
+    // in the pass's surface space: app *content space* for the app document
+    // (the engine translates mouse input into it once at the input boundary),
+    // window space for system panels.
     void draw(render::Renderer* renderer,
               const htmlayout::layout::LayoutBox& box,
               const htmlayout::css::ComputedStyle& style,

@@ -317,7 +317,9 @@ void Engine::handleResize(int w, int h) {
     viewportHeight_ = h;
     uiDirty_ = true;
     hasRenderedOnce_ = false;
-    drawTraversal_->setViewport(contentWidth(), contentHeight(), contentTop());
+    // The app document draws in content space (origin 0,0; the compositor
+    // applies the engine inset when placing the layers), so viewportTop is 0.
+    drawTraversal_->setViewport(contentWidth(), contentHeight(), 0);
     // WebGL canvases resize based on element layout, not viewport — handled per-frame
     {
         resizeSystemPanels(w, h);

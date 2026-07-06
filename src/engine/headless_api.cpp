@@ -45,6 +45,7 @@
 #include <include/core/SkSurface.h>
 
 #include <glad/gl.h>
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -419,16 +420,20 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
 
     // 5. Record commands on this (main) thread, then replay against the live
     //    Skia renderer — same record/replay split the windowed raster thread
-    //    uses, just both halves on one thread.
+    //    uses, just both halves on one thread. App layer surfaces are
+    //    content-sized; compositeLayers places them at (0, insetTop).
     std::vector<UILayer> appLayers, systemLayers;
     render::CommandBuffer appCmds, sysCmds;
+    int insetTop = contentTop();
+    int cw = std::max(1, w - contentRight());
+    int ch = std::max(1, h - insetTop - contentBottom());
     skia->beginFrame(w, h);
     recordAppLayers(appCmds, w, h,
-                    contentTop(), contentRight(), contentBottom(), scrollY_);
+                    insetTop, contentRight(), contentBottom(), scrollY_);
     recordSystemPanelLayers(sysCmds, w, h);
     replayAppLayers(skia, appCmds,
                     screenshotHtmlPool_, screenshotHtmlPoolW_, screenshotHtmlPoolH_,
-                    w, h, appLayers);
+                    cw, ch, appLayers);
     replaySystemPanelLayers(skia, sysCmds,
                             screenshotSystemPool_, screenshotSystemPoolW_,
                             screenshotSystemPoolH_,
@@ -447,7 +452,8 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     glClear(GL_COLOR_BUFFER_BIT);
 
     // 7. App layers → crosshair → system layers (matches windowed pipeline).
-    compositeLayers(appLayers, compositeFBO);
+    //    App layers place at (0, insetTop) with content dims.
+    compositeLayers(appLayers, compositeFBO, insetTop, cw, ch);
     drawCrosshairGL();
     compositeLayers(systemLayers, compositeFBO);
 
@@ -500,7 +506,14 @@ bool Engine::screenshot(const std::string& path) {
     renderer_->beginFrame(viewportWidth_, viewportHeight_);
     renderer_->clear({0, 0, 0, 255});
 
-    // Composite canvas scenes (behind HTML) — Skia surface blit
+    // The app document (and everything anchored to it) draws in content
+    // space, same as the GPU layer path; the single window-space translation
+    // by the engine-reserved inset happens here, around the whole block.
+    renderer_->save();
+    renderer_->translate(0.0f, static_cast<float>(contentTop()));
+
+    // Composite canvas scenes (behind HTML) — Skia surface blit.
+    // getScreenRect() is content space (layout − document scroll).
     for (auto& cs : canvasScenes_) {
         float cx, cy, cw, ch;
         cs->getScreenRect(cx, cy, cw, ch);
@@ -517,16 +530,19 @@ bool Engine::screenshot(const std::string& path) {
         }
     }
 
-    // Render HTML/CSS overlay on top
+    // Render HTML/CSS overlay on top (content space: root offset is just the
+    // document scroll, so lastDrawPos_ / layer coordinates match every mode).
     drawTraversal_->draw(document_->documentElement(),
-                         0, static_cast<float>(contentTop()),
-                         contentWidth(), contentHeight(), contentTop());
+                         0, -scrollY_,
+                         contentWidth(), contentHeight(), /*viewportTop=*/0);
 
     // Selection highlight on top of HTML text.
     updateSelectionSnapshot();
-    drawSelectionHighlight(renderer_.get(), static_cast<float>(contentTop()));
+    drawSelectionHighlight(renderer_.get(), -scrollY_);
 
-    // Draw crosshair on the Skia surface
+    renderer_->restore();
+
+    // Draw crosshair on the Skia surface (window space)
     drawCrosshairSkia(renderer_->getCanvas());
 
     // System panels on top of the app content and crosshair
@@ -562,7 +578,11 @@ std::vector<uint8_t> Engine::capturePixels() {
     renderer_->beginFrame(viewportWidth_, viewportHeight_);
     renderer_->clear({0, 0, 0, 255});
 
-    // Composite canvas scenes — Skia surface blit
+    // Content-space block, translated once by the inset — see screenshot().
+    renderer_->save();
+    renderer_->translate(0.0f, static_cast<float>(contentTop()));
+
+    // Composite canvas scenes — Skia surface blit (content space)
     for (auto& cs : canvasScenes_) {
         float cx, cy, cw, ch;
         cs->getScreenRect(cx, cy, cw, ch);
@@ -580,12 +600,15 @@ std::vector<uint8_t> Engine::capturePixels() {
     }
 
     drawTraversal_->draw(document_->documentElement(),
-                         0, static_cast<float>(contentTop()),
-                         contentWidth(), contentHeight(), contentTop());
+                         0, -scrollY_,
+                         contentWidth(), contentHeight(), /*viewportTop=*/0);
 
+    // App-context overlays anchor in content space (lastDrawPos_).
     overlayMgr_.drawIfContext(OverlayContext::App, renderer_.get());
 
-    // Draw crosshair on the Skia surface
+    renderer_->restore();
+
+    // Draw crosshair on the Skia surface (window space)
     drawCrosshairSkia(renderer_->getCanvas());
 
     if (isSystemVisible()) {

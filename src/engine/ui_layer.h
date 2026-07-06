@@ -44,6 +44,17 @@ struct LayerBuffer {
     render::CommandBuffer  systemCommands;
     std::vector<UILayer>   appLayers;
     std::vector<UILayer>   systemLayers;
+
+    // Composite-time placement for the app layer set. App layers are
+    // content-sized and recorded in content space; the compositor draws them
+    // at (0, appInsetTop) with appContentW × appContentH. Written by the main
+    // thread at record time (alongside appCommands) so a claimed frame always
+    // composites with the insets it was recorded under — even if the live
+    // insets have changed since (menu shown/hidden mid-flight). System layers
+    // are always full-viewport at (0, 0) and need no placement here.
+    int appInsetTop = 0;
+    int appContentW = 0;
+    int appContentH = 0;
 };
 
 } // namespace bro::engine

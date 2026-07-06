@@ -518,7 +518,9 @@ Engine::Engine(const EngineConfig& config)
 
     // Set the base path so relative paths work.
     drawTraversal_->setBasePath(manifest_.basePath);
-    drawTraversal_->setViewport(contentWidth(), contentHeight(), contentTop());
+    // App document draws in content space (viewportTop 0); the compositor
+    // places its layers at (0, contentTop()).
+    drawTraversal_->setViewport(contentWidth(), contentHeight(), 0);
 
     // Load user stylesheets separately from UA defaults.
     // UA defaults use UserAgent origin (lowest priority) so any author

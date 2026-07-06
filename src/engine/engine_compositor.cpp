@@ -101,14 +101,19 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
                 clipX, clipY, clipW, clipH);
         });
 
+    // Everything below records in *content space*: the app layer surfaces are
+    // content-sized (contentW × contentH) and origin-based; the engine-reserved
+    // inset is applied exactly once, by the compositor, which places these
+    // layers at (0, insetTop). The traversal root offset is therefore just the
+    // document scroll, and lastDrawPos_ / overlay anchors / layer-break quads
+    // all land in content space automatically.
     if (document_ && document_->documentElement()) {
         drawTraversal_->setBasePath(document_->basePath());
         drawTraversal_->draw(document_->documentElement(),
-                             0, static_cast<float>(insetTop) - scrollY,
-                             contentW, contentH, insetTop);
+                             0, -scrollY,
+                             contentW, contentH, /*viewportTop=*/0);
 
-        drawSelectionHighlight(recordingRenderer_.get(),
-                               static_cast<float>(insetTop) - scrollY);
+        drawSelectionHighlight(recordingRenderer_.get(), -scrollY);
 
         if (inspector_.visible) {
             dom::Element* highlight = inspector_.pickerMode && inspector_.pickerHover
@@ -116,7 +121,7 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
                 : inspector_.selected;
             if (highlight) {
                 drawInspectorHighlight(recordingRenderer_.get(), highlight, scrollY,
-                                       /*insetLeft=*/0, insetTop,
+                                       /*insetLeft=*/0, /*insetTop=*/0,
                                        contentW, contentH);
             }
         }
@@ -125,17 +130,16 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     overlayMgr_.drawIfContext(OverlayContext::App, recordingRenderer_.get());
 
     if (document_) {
-        float ct = static_cast<float>(insetTop);
         float vh = static_cast<float>(contentH);
         auto& vs = viewportScrollbar_.style();
         auto m = viewportScrollbar_.layout(
             static_cast<float>(contentW) - vs.width - vs.margin,
-            ct, vh, documentHeight_, vh, scrollY);
+            0.0f, vh, documentHeight_, vh, scrollY);
         viewportScrollbar_.draw(recordingRenderer_.get(), m);
 
         drawElementScrollbars(recordingRenderer_.get(),
                               document_->documentElement(),
-                              0.0f, static_cast<float>(insetTop) - scrollY);
+                              0.0f, -scrollY);
     }
 
     drawTraversal_->setLayerBreakCallback(nullptr);
@@ -146,21 +150,24 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
                              const render::CommandBuffer& buffer,
                              std::vector<render::SkiaRenderer::GPUSurface>& pool,
                              int& poolW, int& poolH,
-                             int vpW, int vpH,
+                             int surfW, int surfH,
                              std::vector<UILayer>& outLayers) {
     if (!renderer || !renderer->grContext()) return;
 
-    if (poolW != vpW || poolH != vpH) {
+    // surfW/surfH are the *content* dimensions (viewport minus engine-reserved
+    // insets) — app layer surfaces are content-sized. The pool compare below
+    // must use these dims so a menu show/hide (contentH change) reallocates.
+    if (poolW != surfW || poolH != surfH) {
         for (auto& ps : pool) renderer->destroyGPUSurface(ps);
         pool.clear();
-        poolW = vpW;
-        poolH = vpH;
+        poolW = surfW;
+        poolH = surfH;
     }
     if (pool.empty()) {
-        pool.push_back(renderer->createGPUSurface(vpW, vpH));
+        pool.push_back(renderer->createGPUSurface(surfW, surfH));
     }
     for (auto& ps : pool) {
-        renderer->rewrapGPUSurface(ps, vpW, vpH);
+        renderer->rewrapGPUSurface(ps, surfW, surfH);
     }
 
     int htmlLayerIdx = 0;
@@ -174,8 +181,8 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
             int prevIdx = htmlLayerIdx;
             htmlLayerIdx++;
             while (htmlLayerIdx >= static_cast<int>(pool.size())) {
-                pool.push_back(renderer->createGPUSurface(vpW, vpH));
-                renderer->rewrapGPUSurface(pool.back(), vpW, vpH);
+                pool.push_back(renderer->createGPUSurface(surfW, surfH));
+                renderer->rewrapGPUSurface(pool.back(), surfW, surfH);
             }
             renderer->switchSurface(pool[htmlLayerIdx].surface);
 
@@ -319,12 +326,24 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
     renderer->switchSurface(origSurface);
 }
 
-void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO) {
+void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO,
+                             int offsetY, int layerW, int layerH) {
     if (!gl_) return;
     if (layers.empty()) return;
 
     float vw = static_cast<float>(viewportWidth_);
     float vh = static_cast<float>(viewportHeight_);
+
+    // Placement of this layer set. App layers are content-sized and recorded
+    // in content space: their HTML quads composite at (0, offsetY) with
+    // content dimensions (full texture UV), and canvas/WebGL/scene quads +
+    // scissor clips (recorded in content space) get offsetY added here — the
+    // single place the engine-reserved top inset enters the composite.
+    // System-panel layer sets keep full-viewport placement at (0, 0)
+    // (offsetY = 0, layerW/H < 0).
+    float lw = layerW >= 0 ? static_cast<float>(layerW) : vw;
+    float lh = layerH >= 0 ? static_cast<float>(layerH) : vh;
+    float oy = static_cast<float>(offsetY);
 
     glBindFramebuffer(GL_FRAMEBUFFER, targetFBO);
     glViewport(0, 0, viewportWidth_, viewportHeight_);
@@ -356,8 +375,8 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFB
         if (layer.type == UILayer::HTML) {
             if (layer.texture) {
                 render::TextureVertex quad[6] = {
-                    {0,  0,  0, 0}, {vw, 0,  1, 0}, {vw, vh, 1, 1},
-                    {0,  0,  0, 0}, {vw, vh, 1, 1}, {0,  vh, 0, 1},
+                    {0,  oy,    0, 0}, {lw, oy,    1, 0}, {lw, oy+lh, 1, 1},
+                    {0,  oy,    0, 0}, {lw, oy+lh, 1, 1}, {0,  oy+lh, 0, 1},
                 };
                 glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
                 glBindTexture(GL_TEXTURE_2D, layer.texture);
@@ -376,7 +395,7 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFB
                 tex = layer.texture;  // WebGL direct texture
             }
             if (tex) {
-                float cx = layer.cx, cy = layer.cy;
+                float cx = layer.cx, cy = layer.cy + oy;
                 float cw = layer.cw, ch = layer.ch;
 
                 // WebGL textures are bottom-up (origin at lower-left) so flip V coords
@@ -385,14 +404,17 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFB
 
                 // Canvas/WebGL layers composite outside the Skia clip stack, so
                 // re-apply any ancestor overflow/scroll clip as a GL scissor.
-                // Clip space is top-left pixels; scissor is bottom-left window
-                // coords, so flip Y. clipW < 0 ⇒ unclipped.
+                // Clip space is the layer set's recorded space (content space
+                // for app layers — add oy, like the quad); scissor is
+                // bottom-left window coords, so flip Y against the full
+                // viewport height. clipW < 0 ⇒ unclipped.
                 bool scissored = false;
                 if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
+                    float clipY = layer.clipY + oy;
                     int sx = static_cast<int>(std::floor(layer.clipX));
                     int sw = static_cast<int>(std::ceil(layer.clipX + layer.clipW)) - sx;
-                    int syTop = static_cast<int>(std::floor(layer.clipY));
-                    int sh = static_cast<int>(std::ceil(layer.clipY + layer.clipH)) - syTop;
+                    int syTop = static_cast<int>(std::floor(clipY));
+                    int sh = static_cast<int>(std::ceil(clipY + layer.clipH)) - syTop;
                     int sy = viewportHeight_ - (syTop + sh);
                     glEnable(GL_SCISSOR_TEST);
                     glScissor(sx, sy, std::max(0, sw), std::max(0, sh));

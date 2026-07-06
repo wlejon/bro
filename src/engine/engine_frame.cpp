@@ -620,6 +620,13 @@ void Engine::run() {
                                 rsnap.vpWidth, rsnap.vpHeight,
                                 rsnap.insetTop, rsnap.insetRight, rsnap.insetBottom,
                                 rsnap.scrollY);
+                // App layers are content-sized and content-space; stash the
+                // composite placement with the frame so compositeLayers below
+                // uses the insets this recording was made under.
+                backBuf.appInsetTop = rsnap.insetTop;
+                backBuf.appContentW = rsnap.vpWidth - rsnap.insetRight;
+                backBuf.appContentH = rsnap.vpHeight - rsnap.insetTop
+                                      - rsnap.insetBottom;
                 recordSystemPanelLayers(backBuf.systemCommands,
                                         rsnap.vpWidth, rsnap.vpHeight);
 
@@ -697,8 +704,12 @@ void Engine::run() {
 
         // 5f. Composite app UI layers in DOM order. HTML layers (cached
         //     textures from the raster thread) interleaved with canvas layers
-        //     (freshly rasterized on canvas threads).
-        compositeLayers(layers.appLayers);
+        //     (freshly rasterized on canvas threads). App layers are
+        //     content-sized/content-space; place them at (0, insetTop) with
+        //     the content dims recorded alongside this frame.
+        compositeLayers(layers.appLayers, 0,
+                        layers.appInsetTop, layers.appContentW,
+                        layers.appContentH);
 
         // 5g. Tick + draw crosshair overlay (full frame rate, after app content)
         crosshair_.tick(static_cast<float>(totalFrameMs_ * 0.001));

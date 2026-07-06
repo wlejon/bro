@@ -36,10 +36,15 @@ public:
     /// Stable view of the current front layer set. Returned by both
     /// currentLayers() and consumeIfReady(); the references stay valid for
     /// the rest of the frame as long as no further consumeIfReady() runs.
+    /// The app placement fields (see LayerBuffer) ride along so the
+    /// compositor places app layers with the insets they were recorded under.
     struct LayerView {
         int frontIdx;
         std::vector<UILayer>& appLayers;
         std::vector<UILayer>& systemLayers;
+        int appInsetTop;
+        int appContentW;
+        int appContentH;
     };
 
     // ---- main thread ----
@@ -137,7 +142,10 @@ public:
 
 private:
     LayerView makeView(int idx) {
-        return LayerView{idx, buffers_[idx].appLayers, buffers_[idx].systemLayers};
+        return LayerView{idx, buffers_[idx].appLayers, buffers_[idx].systemLayers,
+                         buffers_[idx].appInsetTop,
+                         buffers_[idx].appContentW,
+                         buffers_[idx].appContentH};
     }
 
     LayerBuffer buffers_[2];

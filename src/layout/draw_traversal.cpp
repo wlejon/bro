@@ -442,7 +442,10 @@ void DrawTraversal::draw(dom::Element* root, float scrollX, float scrollY,
     viewportH_ = viewportH;
     viewportTop_ = viewportTop;
     // The root offset args double as the document→surface translation for
-    // this pass (engine passes (0, contentTop - scrollY) for the app doc).
+    // this pass. The app document draws into content-sized layer surfaces in
+    // content space, so the engine passes (0, −scrollY); system panels pass
+    // (0, 0) in window space. The engine-reserved inset never enters here —
+    // the compositor applies it once when placing app layers.
     rootOffsetX_ = scrollX;
     rootOffsetY_ = scrollY;
 
@@ -998,10 +1001,10 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     // zoomed/panned ancestor (CSS transform: translate/scale) positions the
     // quad correctly instead of leaving it at its untransformed layout rect.
     // absoluteContentBox() is document-space; add the pass's root offset so
-    // the quad lands in the same surface space the HTML painted at. Without
-    // it, every canvas/WebGL/scene layer composites contentTop() px above
-    // its element whenever a menu bar reserves a top inset (and ignores
-    // document scroll).
+    // the quad lands in the same surface space the HTML painted at (content
+    // space for the app document — the compositor shifts HTML surface and
+    // quad together by the engine inset, so they can never drift apart).
+    // Without the root offset, the quad would ignore document scroll.
     if ((elem->sceneGraph() || elem->canvasScene() || elem->webglContext()) && visible) {
         auto lbRect = dom::absoluteContentBox(elem);
         x = lbRect.x + rootOffsetX_;

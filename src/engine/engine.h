@@ -397,6 +397,12 @@ private:
 
     void dispatchEvent(dom::Element* target, dom::Event& event);
     void pumpVideoEvents();
+    /// Translate a window-space mouse y into the active overlay's coordinate
+    /// space. App-context overlays (dropdown, color picker) anchor in app
+    /// content space — window minus the engine-reserved top inset; System
+    /// overlays keep raw window coords. This is the single input-side
+    /// boundary where the inset is folded for overlays.
+    float overlayMouseY(float y) const;
     void applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r);
     void dispatchInputEvent(dom::Element* el, const std::string& data = "",
                             const std::string& inputType = "");
@@ -427,7 +433,13 @@ private:
     void advanceFocus(bool reverse);
     void addCanvasScene(std::unique_ptr<canvas::CanvasScene> scene);
     void drawTexturedQuad(GLuint tex, float x, float y, float w, float h);
-    void compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO = 0);
+    /// Composite a layer set into `targetFBO`. `offsetY`/`layerW`/`layerH`
+    /// place the set: app layers are content-sized and recorded in content
+    /// space, so they composite at (0, insetTop) with content dimensions —
+    /// the single boundary where the engine-reserved inset enters the frame.
+    /// System-panel layer sets pass the defaults (full viewport at (0, 0)).
+    void compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO = 0,
+                         int offsetY = 0, int layerW = -1, int layerH = -1);
 
     /// Walk the app document and emit draw commands into `outBuffer`.
     /// Run on the main thread after layout. The buffer is then handed to the
@@ -441,12 +453,14 @@ private:
 
     /// Replay the previously-recorded app command buffer against `renderer`,
     /// producing UILayers as a side-effect of layer-break commands. Run on
-    /// the raster thread (windowed) or main thread (headless).
+    /// the raster thread (windowed) or main thread (headless). surfW/surfH
+    /// are the app *content* dimensions (viewport minus engine insets) —
+    /// app layer surfaces are content-sized; the compositor places them.
     void replayAppLayers(render::SkiaRenderer* renderer,
                          const render::CommandBuffer& buffer,
                          std::vector<render::SkiaRenderer::GPUSurface>& pool,
                          int& poolW, int& poolH,
-                         int vpW, int vpH,
+                         int surfW, int surfH,
                          std::vector<UILayer>& outLayers);
 
     /// Walk the visible system-panel documents and emit draw commands.
@@ -545,10 +559,10 @@ private:
     /// touching the DOM.
     void updateSelectionSnapshot();
     /// Draw the document's Selection highlight (semi-transparent rectangles
-    /// behind the selected text runs). `docOffsetY` is the vertical offset
-    /// applied to the app content by the main draw pass — typically
-    /// (insetTop - scrollY). Reads selectionSnapshot_, so safe on the raster
-    /// thread. No-op when the selection is empty.
+    /// behind the selected text runs). `docOffsetY` is the pass's
+    /// document→surface translation — (−scrollY) for the app document, which
+    /// draws in content space. Reads selectionSnapshot_, so safe on the
+    /// raster thread. No-op when the selection is empty.
     void drawSelectionHighlight(render::Renderer* renderer, float docOffsetY);
     /// Route a keydown/keyup to visible system panels (settings modal, etc.)
     /// so its JS can capture keys. Returns true if the modal is active, in

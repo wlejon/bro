@@ -329,14 +329,15 @@ void ElInput::draw(render::Renderer* renderer,
 
     if (w <= 0 || h <= 0) return;
 
-    // lastDrawPos_ feeds mouse-drag math in Engine::handleMouseMove, which
-    // compares against real screen-space cursor coordinates — so it needs
+    // lastDrawPos_ feeds mouse-drag math in Engine::handleMouseMove and the
+    // overlay anchors in focusNewControl, which compare against cursor
+    // coordinates translated into this pass's surface space — so it needs
     // the ancestor-transform-projected rect (same fix as canvas/webgl/scene
     // layers in DrawTraversal), not the raw pre-transform layout position,
     // or a range slider under a zoomed/panned ancestor drags at the wrong
     // screen-to-value ratio entirely. absoluteContentBox() is document-space;
-    // the caller's doc→screen offset (menu-bar inset − document scroll)
-    // makes this true screen space.
+    // the caller's doc→surface offset (just −scroll for the app document)
+    // lands this in app content space (window space for system panels).
     auto screenRect = dom::absoluteContentBox(elem_);
     lastDrawPos_ = {screenRect.x + docOffsetX, screenRect.y + docOffsetY,
                     screenRect.width, screenRect.height};

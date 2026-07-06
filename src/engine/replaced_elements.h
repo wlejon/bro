@@ -44,7 +44,11 @@ struct ControlContext {
     bool* dirtyFlag;            // points to uiDirty_ or renderDirty_
     OverlayManager* overlays = nullptr;   // engine-wide overlay manager
     OverlayContext overlayContext = OverlayContext::App; // which pass draws overlays
-    int viewportW = 0;         // for overlay anchoring (keep popups on-screen)
+    // Extent of the document's draw space, for overlay anchoring (keep popups
+    // on-screen). This is the space lastDrawPos_ is recorded in: the app
+    // content area (viewport minus engine insets) for the app document,
+    // the full window for system panels.
+    int viewportW = 0;
     int viewportH = 0;
 };
 
@@ -83,6 +87,9 @@ void applyMouseOffset(dom::MouseEvent& evt, dom::Element* target);
 /// → mousedown). Updates state.mouseDownTarget. Returns true if the press was
 /// consumed by unfocusPreviousControl and callers should stop further work.
 /// Caller populates `evt`'s coordinates/button fields before calling.
+/// `focusX`/`focusY` must be in the document's control-draw space — the same
+/// space as lastDrawPos_ (app content space for the app doc, window space for
+/// system panels) — since focusNewControl compares them against it.
 bool dispatchDocMousePress(
     const ControlContext& ctx,
     MouseDispatchState& state,

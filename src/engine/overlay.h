@@ -16,13 +16,18 @@ enum class OverlayContext {
 
 /// Base class for an engine-level overlay (dropdown, color picker, etc.).
 ///
-/// Overlays are screen-space widgets that sit on top of the DOM tree and
-/// own hit-testing for their bounds. The OverlayManager dispatches input
-/// events to the active overlay before the DOM sees them, so hover/click
-/// can never leak through to elements underneath.
+/// Overlays sit on top of the DOM tree and own hit-testing for their
+/// bounds. The OverlayManager dispatches input events to the active overlay
+/// before the DOM sees them, so hover/click can never leak through to
+/// elements underneath.
 ///
-/// Coordinates are all in screen space — overlays do not scroll with
-/// document content.
+/// Coordinate space follows the overlay's OverlayContext: App overlays live
+/// in app *content space* (the content-sized layer surface the app raster
+/// pass records into — window space minus the engine-reserved inset), which
+/// is what control anchors (lastDrawPos_) provide. System overlays live in
+/// raw window space. The engine translates window-space mouse input once at
+/// the input boundary (Engine::overlayMouseY) before dispatching here.
+/// Overlays do not scroll with document content in either space.
 class Overlay {
 public:
     virtual ~Overlay() = default;
@@ -38,7 +43,8 @@ public:
     virtual void draw(render::Renderer* r) = 0;
 
     // --- Input ---
-    // All coords are screen space. Returning true consumes the event.
+    // Coords are in the overlay's context space (see class comment).
+    // Returning true consumes the event.
 
     virtual bool onMouseDown(float x, float y, int button);
     virtual bool onMouseMove(float x, float y);

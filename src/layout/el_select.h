@@ -25,10 +25,12 @@ public:
 
     void initSelectedIndex();
 
-    // docOffsetX/Y: the draw pass's document→screen translation (see
+    // docOffsetX/Y: the draw pass's document→surface translation (see
     // DrawTraversal::rootOffsetX_) — applied to the absoluteBorderBox()
-    // projection so lastDrawPos() is true screen space, the contract the
-    // engine's overlay anchoring and mouse handling rely on.
+    // projection so lastDrawPos() lands in the pass's surface space: app
+    // *content space* for the app document (the dropdown overlay anchors
+    // there and the engine translates mouse input into it once at the input
+    // boundary), window space for system panels.
     void draw(render::Renderer* renderer,
               const htmlayout::layout::LayoutBox& box,
               const htmlayout::css::ComputedStyle& style,

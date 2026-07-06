@@ -393,11 +393,28 @@ void Engine::dispatchScrollEvent(dom::Element* el) {
 // Mouse events
 // ---------------------------------------------------------------------------
 
+float Engine::overlayMouseY(float y) const {
+    const Overlay* active = overlayMgr_.active();
+    if (active && active->context() == OverlayContext::App) {
+        return y - static_cast<float>(contentTop());
+    }
+    return y;
+}
+
 void Engine::handleMouseDown(float x, float y, int button) {
-    // x, y = raw mouse position (screen space).
-    // docX, docY = document space (for hit testing into the scrolled document).
-    // IMPORTANT: overlay positions (lastDrawPos, color picker, select dropdown)
-    // are in screen space — always use x/y when comparing, never docX/docY.
+    // x, y = raw mouse position (window space).
+    // Coordinate spaces, and the single boundary between them:
+    //   window space  — raw SDL input; system panels and System-context
+    //                   overlays live here.
+    //   content space — window minus the engine-reserved inset
+    //                   (y − contentTop()). The app layer surfaces, control
+    //                   anchors (lastDrawPos_), and App-context overlays all
+    //                   live here; the compositor adds the inset back exactly
+    //                   once when placing app layers.
+    //   document space — content plus scroll (for hit testing into the
+    //                   scrolled document).
+    // Translate once, at the boundary a consumer lives behind: overlayMouseY()
+    // for the overlay manager, docX/docY for DOM hit tests. Never mix spaces.
     float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
     uiDirty_ = true;
 
@@ -420,8 +437,9 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
     // Overlay manager sees every input event before the DOM so hover/click
     // can't leak through to elements underneath. (Same pattern in the other
-    // handleMouse*/handleKey*/handleTextInput methods.)
-    if (overlayMgr_.handleMouseDown(x, y, button)) {
+    // handleMouse*/handleKey*/handleTextInput methods.) App-context overlays
+    // are anchored in content space — overlayMouseY() translates once here.
+    if (overlayMgr_.handleMouseDown(x, overlayMouseY(y), button)) {
         pressedButtons_ |= domButtonMask(button);
         uiDirty_ = true;
         return;
@@ -491,22 +509,25 @@ void Engine::handleMouseDown(float x, float y, int button) {
         }
     }
 
-    // Check element scrollbars
+    // Check element scrollbars. The app doc's scrollbar geometry (element
+    // boxes offset by (0, -scrollY)) is content space, so fold the window→
+    // content inset into the mouse y once here.
     if (document_ && document_->documentElement()) {
+        float cy = y - static_cast<float>(contentTop());
         ScrollbarMetrics em;
         dom::Element* hitElem = findElementScrollbarHit(
-            document_->documentElement(), x, y,
+            document_->documentElement(), x, cy,
             0.0f, -scrollY_, elementScrollbar_, em);
         if (hitElem) {
-            if (elementScrollbar_.thumbHitTest(x, y, em)) {
-                elementScrollbar_.beginDrag(y, em);
+            if (elementScrollbar_.thumbHitTest(x, cy, em)) {
+                elementScrollbar_.beginDrag(cy, em);
                 scrollbarDragTarget_.assign(document_.get(), hitElem);
             } else {
                 // Click on track — page scroll
                 float viewH = hitElem->layoutBox().contentRect.height;
                 float maxST = maxScrollTop(hitElem);
                 float contentH = viewH + maxST;
-                float newScroll = elementScrollbar_.scrollToPosition(y,
+                float newScroll = elementScrollbar_.scrollToPosition(cy,
                     contentH, viewH, em);
                 float prev = hitElem->scrollTopValue();
                 float clamped = std::clamp(newScroll, 0.0f, maxST);
@@ -548,11 +569,15 @@ void Engine::handleMouseDown(float x, float y, int button) {
         htmlNodeMouseDownNode_ = nullptr;
         htmlNodeMouseDownElement_.reset();
 
+        // App controls anchor and open overlays in content space, so the
+        // ControlContext viewport is the content area and the focus point is
+        // content-space (matches lastDrawPos_ comparisons in focusNewControl).
         ControlContext cctx{document_.get(), jsRuntime_->getContext(),
                            renderer_.get(), window_.get(), &uiDirty_,
                            &overlayMgr_, OverlayContext::App,
-                           viewportWidth_, viewportHeight_};
-        dispatchDocMousePress(cctx, appMouseState_, target, evt, x, docY);
+                           contentWidth(), contentHeight()};
+        dispatchDocMousePress(cctx, appMouseState_, target, evt,
+                              x, y - static_cast<float>(contentTop()));
         jsRuntime_->executePendingJobs();
 
         // Mouse-driven text selection. Left button only; bail out if the
@@ -628,7 +653,8 @@ void Engine::handleMouseDown(float x, float y, int button) {
 }
 
 void Engine::handleMouseUp(float x, float y, int button) {
-    // x, y = screen space. docX, docY = document space (see handleMouseDown).
+    // x, y = window space. docX, docY = document space (see the coordinate-
+    // space note in handleMouseDown).
     float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
     uiDirty_ = true;
 
@@ -646,7 +672,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
     // Update button bitmask (DOM convention)
     pressedButtons_ &= ~domButtonMask(button);
 
-    if (overlayMgr_.handleMouseUp(x, y, button)) {
+    if (overlayMgr_.handleMouseUp(x, overlayMouseY(y), button)) {
         uiDirty_ = true;
         return;
     }
@@ -750,7 +776,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
         ControlContext cctx{document_.get(), jsRuntime_->getContext(),
                            renderer_.get(), window_.get(), &uiDirty_,
                            &overlayMgr_, OverlayContext::App,
-                           viewportWidth_, viewportHeight_};
+                           contentWidth(), contentHeight()};
         dispatchDocMouseRelease(cctx, appMouseState_, target, upEvt,
                                 x, clientY, button, pressedButtons_, mod,
                                 movX, movY, x, pageY,
@@ -792,14 +818,15 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         return;
     }
 
-    // x, y = screen space. docX, docY = document space (see handleMouseDown).
+    // x, y = window space. docX, docY = document space (see the coordinate-
+    // space note in handleMouseDown).
     float docX = x, docY = y - static_cast<float>(contentTop()) + scrollY_;
 
     // Overlay manager sees mousemove first. While an overlay is active,
     // DOM hover is suppressed entirely — otherwise hovering elements under
     // the dropdown/picker would trigger :hover styles and JS handlers.
     bool overlayActive = overlayMgr_.hasActive();
-    if (overlayActive && overlayMgr_.handleMouseMove(x, y)) {
+    if (overlayActive && overlayMgr_.handleMouseMove(x, overlayMouseY(y))) {
         uiDirty_ = true;
     }
 
@@ -920,7 +947,13 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         float bh = lbox.fullHeight();
         auto m = elementScrollbar_.layout(0, 0, bh, contentH, viewH,
             elem->scrollTopValue());
-        float newScroll = elementScrollbar_.updateDrag(y, contentH, viewH, m);
+        // beginDrag captured the mouse in the space the target's scrollbar
+        // geometry lives in — content space for the app doc, window space
+        // for system panels. Feed updateDrag the same space so the drag
+        // delta stays exact.
+        float dragY = scrollbarDragSystemDoc_
+            ? y : y - static_cast<float>(contentTop());
+        float newScroll = elementScrollbar_.updateDrag(dragY, contentH, viewH, m);
         float prev = elem->scrollTopValue();
         float clamped = std::clamp(newScroll, 0.0f, maxST);
         elem->setScrollTopValue(clamped);
@@ -952,14 +985,16 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         if (wasHovered != viewportScrollbar_.isHovered()) uiDirty_ = true;
     }
 
-    // Element scrollbar hover (per-element tracking)
+    // Element scrollbar hover (per-element tracking). Content-space geometry —
+    // fold the inset into the mouse y once (same as the mousedown hit test).
     if (document_ && document_->documentElement()) {
+        float cyEl = y - static_cast<float>(contentTop());
         ScrollbarMetrics em;
         dom::Element* hitElem = findElementScrollbarHit(
-            document_->documentElement(), x, y,
+            document_->documentElement(), x, cyEl,
             0.0f, -scrollY_, elementScrollbar_, em);
         dom::Element* prevHovered = scrollbarHoveredElement_.get();
-        if (hitElem && elementScrollbar_.thumbHitTest(x, y, em)) {
+        if (hitElem && elementScrollbar_.thumbHitTest(x, cyEl, em)) {
             scrollbarHoveredElement_.assign(document_.get(), hitElem);
         } else {
             scrollbarHoveredElement_.reset();
@@ -972,6 +1007,9 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         auto* activeEl = document_->activeElement();
         auto* rangeInput = getElInput(activeEl);
         if (rangeInput && rangeInput->isDragging()) {
+            // lastDrawPos_ is content space. Only x/w are compared here, and
+            // content x == window x (the engine reserves no left inset), so
+            // the raw mouse x is already in the right space.
             auto dp = rangeInput->lastDrawPos();
             float thumbR = layout::ElInput::rangeThumbRadius(dp.h);
             float trackStart = dp.x + thumbR;
@@ -1805,7 +1843,7 @@ void Engine::advanceFocus(bool reverse) {
 void Engine::handleWheel(float x, float y, float dx, float dy) {
     if (!document_) return;
 
-    if (overlayMgr_.handleWheel(x, y, dx, dy)) {
+    if (overlayMgr_.handleWheel(x, overlayMouseY(y), dx, dy)) {
         uiDirty_ = true;
         return;
     }

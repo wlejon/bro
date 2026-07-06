@@ -28,9 +28,10 @@ dom::Element* composedParent(dom::Element* el);
 
 /// Walk the composed tree from `root` to find the deepest overflow element
 /// whose scrollbar area contains (x, y). Returns nullptr if none.
-/// `offsetX/offsetY` map layout box coordinates to screen coordinates at
-/// `root` (e.g. the app doc passes -scrollY_ to account for viewport
-/// scrolling; system panel docs pass 0 since panels live in screen space).
+/// `offsetX/offsetY` map layout box coordinates to the document's draw space
+/// at `root` — the app doc passes -scrollY_ (content space, matching its
+/// content-sized layer surfaces; callers fold the engine inset out of the
+/// mouse y before comparing); system panel docs pass 0 (window space).
 /// On a hit, `outMetrics` receives the scrollbar layout so the caller can
 /// run thumbHitTest / beginDrag / scrollToPosition against the same rect.
 dom::Element* findElementScrollbarHit(

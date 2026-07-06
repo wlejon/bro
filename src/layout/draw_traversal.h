@@ -87,8 +87,10 @@ public:
     explicit DrawTraversal(render::Renderer* renderer);
 
     // Draw the full document tree. `viewportTop` is the Y position in the
-    // output surface where the content area begins (0 for apps without a
-    // reserved top inset).
+    // output surface where the content area begins. The app document draws
+    // into content-sized surfaces in content space, so the engine always
+    // passes 0 — engine-reserved insets are applied by the compositor when
+    // placing the layers, never inside the traversal.
     void draw(dom::Element* root, float scrollX, float scrollY,
               int viewportW, int viewportH, int viewportTop = 0);
 
@@ -118,8 +120,8 @@ public:
     void setLayerBreakCallback(LayerBreakCallback cb) { layerBreakCb_ = std::move(cb); }
 
     // Viewport. `top` is the Y position in the output surface where the
-    // content area begins — used for the html/body background paint rect so
-    // engine-reserved insets (e.g. menu bar) aren't painted over.
+    // content area begins — used for the html/body background paint rect.
+    // 0 for the app document (content-space surfaces) and system panels.
     void setViewport(int w, int h, int top = 0) {
         viewportW_ = w; viewportH_ = h; viewportTop_ = top;
     }
@@ -174,12 +176,12 @@ private:
     int viewportTop_ = 0;
 
     // Root draw offset of the current draw() pass — the translation from
-    // document space to the output surface (the app doc draws at
-    // (0, contentTop - scrollY); system panel docs at (0, 0)). Geometry
-    // computed via dom::absolute*Box() is document-space and must add this
-    // to land in screen space (layer-break quads, control screen anchors).
+    // document space to the output surface (the app doc draws in content
+    // space at (0, −scrollY); system panel docs at (0, 0) in window space).
+    // Geometry computed via dom::absolute*Box() is document-space and must
+    // add this to land in surface space (layer-break quads, control anchors).
     // Pure translation, so it composes with the ancestor-transform
-    // projection: screen = project_doc(rect) + rootOffset.
+    // projection: surface = project_doc(rect) + rootOffset.
     float rootOffsetX_ = 0;
     float rootOffsetY_ = 0;
 
