@@ -632,6 +632,21 @@ static JSValue js_pipeline_clearControl(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+// dispose() — deterministically free the underlying pipeline (and its GPU
+// weights) NOW, instead of waiting for the JS wrapper to be garbage-collected.
+// A caller that reloads a large model into a memory-tight device (e.g. swapping
+// Krea 2 checkpoints on a 24GB card) must release the old model's VRAM before
+// building the new one, or the two coexist and OOM. Idempotent; after this the
+// wrapper is inert — the caller is expected to drop its reference.
+static JSValue js_pipeline_dispose(JSContext* ctx, JSValueConst this_val,
+                                   int, JSValueConst*) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "dispose: not a Pipeline");
+    w->pipeline.reset();
+    w->weights_loaded = false;
+    return JS_UNDEFINED;
+}
+
 // controlAxes() -> [name, ...] — the names of the loaded dictionary's axes
 // (empty array if none loaded). For introspection / building UI.
 static JSValue js_pipeline_controlAxes(JSContext* ctx, JSValueConst this_val,
@@ -1187,6 +1202,7 @@ static void registerPipelineClass(JSContext* ctx) {
         .method_raw("loadControlDictionary", js_pipeline_loadControlDictionary, 1)
         .method_raw("setControl",         js_pipeline_setControl,         2)
         .method_raw("clearControl",       js_pipeline_clearControl,       0)
+        .method_raw("dispose",            js_pipeline_dispose,            0)
         .method_raw("controlAxes",        js_pipeline_controlAxes,        0)
         .method_raw("encodeConditioning", js_pipeline_encodeConditioning, 1)
         .method_raw("setControlVector",   js_pipeline_setControlVector,   4)
