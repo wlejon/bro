@@ -1,12 +1,11 @@
 # Build options — modular `--with` / `--without` builds
 
-Status: **implemented.** bro is split into a small always-buildable core plus
-optional feature groups, so a first build is trivial and extra capabilities can
-be added later without a from-scratch rebuild. This document is the reference for
-the profiles, the `BRO_WITH_*` flag tiers, and how a module is compiled in or
-stubbed. For the day-to-day quickstart, see [BUILDING.md](../BUILDING.md).
-
-All three profiles (`minimal` / `app` / `full`) build, link, and run today.
+bro is split into a small always-buildable core plus optional feature groups, so
+a first build is trivial and extra capabilities can be added later without a
+from-scratch rebuild. All three profiles (`minimal` / `app` / `full`) build,
+link, and run. This document is the reference for the profiles, the `BRO_WITH_*`
+flag tiers, and how a module is compiled in or stubbed. For the day-to-day
+quickstart, see [BUILDING.md](../BUILDING.md).
 
 ## Goals
 
