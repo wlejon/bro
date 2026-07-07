@@ -131,8 +131,12 @@ sk_sp<SkImageFilter> BuildSkImageFilterChain(std::span<const CssFilterParams> fi
                 break;
             }
             case CssFilterParams::DropShadow: {
-                SkColor skc = SkColorSetARGB(f.shadowColor.a, f.shadowColor.r,
-                                             f.shadowColor.g, f.shadowColor.b);
+                // shadowColor is a linear-RGB float Color; encode to 8-bit sRGB
+                // (gamma on RGB, linear alpha) before packing into an SkColor.
+                // Passing the raw floats made alpha 0.9 truncate to 0 — an
+                // invisible shadow.
+                bromath::Color8 c8 = bromath::ctoColor8(f.shadowColor);
+                SkColor skc = SkColorSetARGB(c8.a, c8.r, c8.g, c8.b);
                 result = SkImageFilters::DropShadow(f.dx, f.dy,
                                                     f.blur / 2.0f, f.blur / 2.0f,
                                                     skc, std::move(result));

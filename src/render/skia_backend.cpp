@@ -693,8 +693,13 @@ void SkiaRenderer::saveLayerWithFilter(std::span<const CssFilterParams> filters,
                                        float x, float y, float w, float h) {
     if (!canvas_) return;
     SkPaint paint;
-    paint.setImageFilter(BuildSkImageFilterChain(filters));
+    auto imgFilter = BuildSkImageFilterChain(filters);
+    paint.setImageFilter(imgFilter);
+    // Expand the layer bounds to the filter's output extent so effects that
+    // paint outside the element box — a drop-shadow offset, a blur's spread —
+    // aren't clipped away. computeFastBounds accounts for offset + blur.
     SkRect bounds = SkRect::MakeXYWH(x, y, w, h);
+    if (imgFilter) bounds = imgFilter->computeFastBounds(bounds);
     canvas_->saveLayer(SkCanvas::SaveLayerRec(&bounds, &paint));
 }
 

@@ -514,8 +514,12 @@ void RasterRenderer::saveLayerWithFilter(std::span<const CssFilterParams> filter
                                          float x, float y, float w, float h) {
     if (!canvas_) return;
     SkPaint paint;
-    paint.setImageFilter(BuildSkImageFilterChain(filters));
+    auto imgFilter = BuildSkImageFilterChain(filters);
+    paint.setImageFilter(imgFilter);
+    // Expand bounds to the filter's output extent (drop-shadow offset, blur
+    // spread) so those pixels aren't clipped. See SkiaRenderer for details.
     SkRect bounds = SkRect::MakeXYWH(x, y, w, h);
+    if (imgFilter) bounds = imgFilter->computeFastBounds(bounds);
     canvas_->saveLayer(SkCanvas::SaveLayerRec(&bounds, &paint));
 }
 void RasterRenderer::saveLayerWithBlend(BlendMode mode) {

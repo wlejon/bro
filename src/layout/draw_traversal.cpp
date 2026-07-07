@@ -219,7 +219,16 @@ static std::vector<render::CssFilterParams> parseCSSFilter(const std::string& va
             f.blur = readFloat();
             bromath::Color sc = cfromColor8({0, 0, 0, 255});
             size_t colorStart = pos;
-            while (pos < val.size() && val[pos] != ')') ++pos;
+            // Scan to the drop-shadow's closing paren, tracking depth so a
+            // functional color — rgba()/hsl()/color() — isn't truncated at its
+            // own inner ')'.
+            int pdepth = 0;
+            while (pos < val.size()) {
+                char c = val[pos];
+                if (c == '(') ++pdepth;
+                else if (c == ')') { if (pdepth == 0) break; --pdepth; }
+                ++pos;
+            }
             std::string colorStr = val.substr(colorStart, pos - colorStart);
             size_t ca = colorStr.find_first_not_of(" \t");
             if (ca != std::string::npos) {
