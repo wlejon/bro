@@ -1,4 +1,9 @@
+// VideoEncoder + GifEncoder JS bindings (WebM/VP9 + GIF89a encode). Compiled
+// only when BRO_WITH_VIDEO is on (pulls libvpx/webm/Opus via vcpkg); the OFF
+// build's VideoBindings::install is a no-op in feature_stubs.cpp (the encoder
+// classes are simply absent — advanced apps feature-detect `typeof VideoEncoder`).
 #include "js/video_bindings.h"
+#if BRO_WITH_VIDEO
 
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
@@ -486,3 +491,5 @@ void VideoBindings::install(JSContext* ctx, const std::string& /*basePath*/) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_VIDEO

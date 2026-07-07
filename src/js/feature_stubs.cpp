@@ -1,4 +1,5 @@
-// Feature stubs for the AI-tower subsystems.
+// Feature stubs for the optional subsystems (AI tower + Tier-1 renderer/
+// service features).
 //
 // Each block below is compiled only when its BRO_WITH_* flag is OFF, and
 // defines the same install entry point that the (now empty) wrapped
@@ -32,6 +33,12 @@
 #include "js/gesture_bindings.h"
 #include "js/listen_bindings.h"
 #include "js/triposplat_bindings.h"
+
+// Tier-1 binding headers (install-fn declarations + forward decls only — all
+// stub-safe: no sibling headers pulled in).
+#include "js/flora_bindings.h"
+#include "js/net_bindings.h"
+#include "js/video_bindings.h"
 
 // Forward decls for the audio-taking soundml install signatures. (listen_host's
 // entry points are guarded directly in the engine — they use the fat
@@ -98,6 +105,35 @@ void installGestureBindings(JSContext* ctx, broaudio::Engine*, engine::AudioInfe
 void installListenBindings(JSContext* ctx) {
     installUnavailableNamespace(ctx, "listen", "BRO_WITH_SOUNDML");
 }
+#endif
+
+// ── FLORA (bro.flora) ────────────────────────────────────────────────────────
+#if !BRO_WITH_FLORA
+void FloraBindings::install(JSContext* ctx) {
+    installUnavailableNamespace(ctx, "flora", "BRO_WITH_FLORA");
+}
+#endif
+
+// ── NET (bro.net) ────────────────────────────────────────────────────────────
+// install() installs the unavailable bro.net namespace; poll/cleanup are
+// no-ops so the engine main loop and worker plumbing (worker.cpp holds a
+// null NetService*) link without guarding every call site. The service pointer
+// is always null in this build, so poll/cleanup are never reached at runtime.
+#if !BRO_WITH_NET
+void NetBindings::install(JSContext* ctx, net::NetService* /*service*/) {
+    installUnavailableNamespace(ctx, "net", "BRO_WITH_NET");
+}
+void NetBindings::poll(JSContext* /*ctx*/) {}
+void NetBindings::cleanup(JSContext* /*ctx*/) {}
+#endif
+
+// ── VIDEO (VideoEncoder / GifEncoder) ────────────────────────────────────────
+// No bro.video namespace to stub — these are global encoder classes. With video
+// off they're simply not installed; advanced apps feature-detect via
+// `typeof VideoEncoder !== 'undefined'`. (<video> playback degrades separately
+// to an inert black box in el_video.cpp.)
+#if !BRO_WITH_VIDEO
+void VideoBindings::install(JSContext* /*ctx*/, const std::string& /*basePath*/) {}
 #endif
 
 // ── TRIPOSPLAT ───────────────────────────────────────────────────────────────

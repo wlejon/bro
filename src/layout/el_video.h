@@ -75,7 +75,7 @@ public:
     int videoWidth() const { return intrinsicWidth_; }
     int videoHeight() const { return intrinsicHeight_; }
 
-    bro::video::VideoPipeline* pipeline() const { return pipeline_.get(); }
+    bro::video::VideoPipeline* pipeline() const { return pipeline_; }
 
     // Dispatch any pending HTMLMediaElement events on the element's JS
     // listeners. MUST be called on the main thread — uses the JSContext
@@ -86,7 +86,12 @@ public:
 private:
     render::Renderer* renderer_;
     dom::Element* elem_ = nullptr;
-    std::unique_ptr<bro::video::VideoPipeline> pipeline_;
+    // Owning raw pointer (not unique_ptr) so ElVideo's destructor does not
+    // need VideoPipeline complete — that would force the vcpkg-backed video/*
+    // headers into core layout. new/delete happen only inside #if BRO_WITH_VIDEO
+    // in el_video.cpp; in a video-less build this stays null and the inert stub
+    // impl never touches it.
+    bro::video::VideoPipeline* pipeline_ = nullptr;
 
     int intrinsicWidth_ = 300;
     int intrinsicHeight_ = 150;

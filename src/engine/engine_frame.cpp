@@ -23,7 +23,9 @@
 #include "layout/box.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
+#if BRO_WITH_NET
 #include "net/net_service.h"
+#endif
 #include "physics/physics_world.h"
 #include "audio_inference/audio_inference.h"
 #include "platform/event_loop.h"
@@ -122,10 +124,6 @@ void Engine::run() {
             js::tickAsync(jsRuntime_->getContext());
             jsRuntime_->executePendingJobs();
 
-            if (netService_) {
-                js::NetBindings::poll(jsRuntime_->getContext());
-                jsRuntime_->executePendingJobs();
-            }
             if (steamService_) {
                 js::SteamBindings::poll(jsRuntime_->getContext());
                 jsRuntime_->executePendingJobs();
@@ -430,10 +428,6 @@ void Engine::run() {
         for (auto& pump : framePumps_) pump();
         js::tickAsync(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
-        if (netService_) {
-            js::NetBindings::poll(jsRuntime_->getContext());
-            jsRuntime_->executePendingJobs();
-        }
         if (steamService_) {
             js::SteamBindings::poll(jsRuntime_->getContext());
             jsRuntime_->executePendingJobs();

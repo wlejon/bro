@@ -1,4 +1,9 @@
+// broflora ecosystem-simulation bindings (bro.flora.*). Compiled only when
+// BRO_WITH_FLORA is on; the OFF build's FloraBindings::install lives in
+// feature_stubs.cpp (installs an unavailable bro.flora namespace).
 #include "js/flora_bindings.h"
+#if BRO_WITH_FLORA
+
 #include "js/mesh_bindings.h"
 
 #include <qjsbind/qjsbind.h>
@@ -641,3 +646,5 @@ void FloraBindings::install(JSContext* ctx) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_FLORA

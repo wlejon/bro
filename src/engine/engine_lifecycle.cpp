@@ -43,7 +43,9 @@
 #include "scene/scene_graph.h"
 #include "physics/physics_world.h"
 #include "audio_inference/audio_inference.h"
+#if BRO_WITH_NET
 #include "net/net_service.h"
+#endif
 #include "steam/steam_service.h"
 #include "webgl/webgl2_context.h"
 #include "platform/event_loop.h"
@@ -65,7 +67,9 @@
 
 namespace bro::engine {
 void Engine::stopBackgroundServices() {
+#if BRO_WITH_NET
     netService_.reset();
+#endif
     steamService_.reset();
 }
 

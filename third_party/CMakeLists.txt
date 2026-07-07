@@ -145,13 +145,15 @@ endif()
 # --- broflora (ecosystem simulation: Makowski et al. "Synthetic Silviculture") ---
 # Prefer the standalone repo at ../broflora for local development.
 # Falls back to the git submodule at third_party/broflora.
-set(BROFLORA_DIR "${CMAKE_SOURCE_DIR}/../broflora" CACHE PATH "Path to standalone broflora repo")
-if(EXISTS "${BROFLORA_DIR}/CMakeLists.txt")
-    message(STATUS "broflora: using standalone repo at ${BROFLORA_DIR}")
-    add_subdirectory("${BROFLORA_DIR}" "${CMAKE_BINARY_DIR}/broflora" EXCLUDE_FROM_ALL)
-else()
-    message(STATUS "broflora: using submodule at third_party/broflora")
-    add_subdirectory(broflora EXCLUDE_FROM_ALL)
+if(BRO_WITH_FLORA)
+    set(BROFLORA_DIR "${CMAKE_SOURCE_DIR}/../broflora" CACHE PATH "Path to standalone broflora repo")
+    if(EXISTS "${BROFLORA_DIR}/CMakeLists.txt")
+        message(STATUS "broflora: using standalone repo at ${BROFLORA_DIR}")
+        add_subdirectory("${BROFLORA_DIR}" "${CMAKE_BINARY_DIR}/broflora" EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "broflora: using submodule at third_party/broflora")
+        add_subdirectory(broflora EXCLUDE_FROM_ALL)
+    endif()
 endif()
 
 # --- brogameagent (game AI: navmesh, pathfinding, steering, behavior trees) ---
@@ -250,7 +252,11 @@ set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(jolt/Build EXCLUDE_FROM_ALL)
 
 # --- GameNetworkingSockets (via vcpkg) ---
-find_package(GameNetworkingSockets CONFIG REQUIRED)
+# Gated: this is one of only two vcpkg dependencies, so a minimal (net-off)
+# build needs no vcpkg for it.
+if(BRO_WITH_NET)
+    find_package(GameNetworkingSockets CONFIG REQUIRED)
+endif()
 
 # --- Skia (pre-built, optional) ---
 include(skia/skia.cmake)

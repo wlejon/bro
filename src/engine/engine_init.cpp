@@ -73,7 +73,9 @@
 
 #include "physics/physics_world.h"
 #include "audio_inference/audio_inference.h"
+#if BRO_WITH_NET
 #include "net/net_service.h"
+#endif
 #include "steam/steam_service.h"
 #include "scene/scene_graph.h"
 #include "api/api.h"
@@ -273,9 +275,20 @@ Engine::Engine(const EngineConfig& config)
     js::TileBindings::install(jsRuntime_->getContext());
 
     // Network service + bindings (all modes). NetService owns GNS on its own
-    // thread; bindings hold a per-context subscriber that polls each frame.
+    // thread; bindings hold a per-context subscriber that polls each frame,
+    // delivered via a frame pump so no `if (netService_)` sits in the hot loop.
+    // With BRO_WITH_NET off, the stub install() publishes an unavailable
+    // bro.net namespace and no pump is registered.
+#if BRO_WITH_NET
     netService_ = std::make_unique<net::NetService>();
     js::NetBindings::install(jsRuntime_->getContext(), netService_.get());
+    framePumps_.push_back([this] {
+        js::NetBindings::poll(jsRuntime_->getContext());
+        jsRuntime_->executePendingJobs();
+    });
+#else
+    js::NetBindings::install(jsRuntime_->getContext(), nullptr);
+#endif
 
     // Steam service + bindings (all modes). Always-present probe like bro.gpu:
     // in a stub build (BRO_WITH_STEAM=OFF) the service is inert and
@@ -310,8 +323,13 @@ Engine::Engine(const EngineConfig& config)
         }
 
         // Worker bindings
+#if BRO_WITH_NET
         js::installWorkerBindings(jsRuntime_->getContext(), config.appDir,
                                   netService_.get(), &assetMounts_);
+#else
+        js::installWorkerBindings(jsRuntime_->getContext(), config.appDir,
+                                  nullptr, &assetMounts_);
+#endif
 
         LOG_INFO("Server mode initialized (no rendering, no DOM, no audio)");
         return;
@@ -799,8 +817,13 @@ Engine::Engine(const EngineConfig& config)
     }
 
     // 9d. Install Worker bindings
+#if BRO_WITH_NET
     js::installWorkerBindings(jsRuntime_->getContext(), manifest_.basePath,
                               netService_.get(), &assetMounts_);
+#else
+    js::installWorkerBindings(jsRuntime_->getContext(), manifest_.basePath,
+                              nullptr, &assetMounts_);
+#endif
 
     // 10. Load and execute scripts (external + inline, in document order).
     //     `type="module"` scripts go through evalModule so `import`/`export`

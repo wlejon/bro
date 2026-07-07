@@ -713,7 +713,9 @@ private:
     // needs no synchronisation.
     std::vector<std::function<void()>> framePumps_;
     std::unique_ptr<physics::PhysicsWorld> physicsWorld_;
+#if BRO_WITH_NET
     std::unique_ptr<net::NetService> netService_;
+#endif
     std::unique_ptr<steam::SteamService> steamService_;
     struct SceneGraphEntry {
         std::unique_ptr<scene::SceneGraph> graph;

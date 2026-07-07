@@ -1,16 +1,19 @@
 #include "layout/el_video.h"
 
+#include "render/renderer.h"
+
+#include <cmath>
+
+#if BRO_WITH_VIDEO
+
 #include "broaudio/engine.h"
 #include "broaudio/dsp/resampler.h"
 #include "dom/element.h"
 #include "dom/event.h"
 #include "js/event_dispatch.h"
-#include "render/renderer.h"
 #include "video/audio_decoder.h"
 #include "video/video_pipeline.h"
 #include "video/webm_demuxer.h"
-
-#include <cmath>
 
 namespace bro::layout {
 
@@ -22,13 +25,13 @@ static constexpr double kTimeUpdateIntervalSec = 0.25;
 
 
 ElVideo::ElVideo(render::Renderer* renderer) : renderer_(renderer) {}
-ElVideo::~ElVideo() = default;
+ElVideo::~ElVideo() { delete pipeline_; }
 
 bool ElVideo::load(const std::string& path) {
-    auto p = std::make_unique<bro::video::VideoPipeline>();
+    auto* p = new bro::video::VideoPipeline();
     const std::string resolved = elem_ ? elem_->resolveUrl(path) : path;
-    if (!p->open(resolved)) return false;
-    pipeline_ = std::move(p);
+    if (!p->open(resolved)) { delete p; return false; }
+    pipeline_ = p;
     currentSrc_ = resolved;
     intrinsicWidth_ = pipeline_->frameWidth() > 0 ? pipeline_->frameWidth() : intrinsicWidth_;
     intrinsicHeight_ = pipeline_->frameHeight() > 0 ? pipeline_->frameHeight() : intrinsicHeight_;
@@ -356,3 +359,62 @@ void ElVideo::pumpEvents() {
 }
 
 } // namespace bro::layout
+
+#else  // !BRO_WITH_VIDEO
+
+// ── Inert stub — video-less build (no libvpx/webm/Opus, no vcpkg). <video>
+// elements still exist and their HTMLMediaElement JS surface stays callable
+// (element_bindings.cpp is core), but nothing decodes: the element paints a
+// black content box and all media state reads as empty/paused. pipeline_ is
+// always null and no video/* headers are pulled in.
+namespace bro::layout {
+
+using bromath::cfromColor8;
+
+ElVideo::ElVideo(render::Renderer* renderer) : renderer_(renderer) {}
+ElVideo::~ElVideo() = default;  // pipeline_ is always null in this build
+
+bool   ElVideo::load(const std::string&) { return false; }
+void   ElVideo::openAudioTrack(const std::string&) {}
+void   ElVideo::startAudioPlayback(double) {}
+void   ElVideo::stopAudioPlayback() {}
+void   ElVideo::play() {}
+void   ElVideo::pause() {}
+bool   ElVideo::isPlaying() const { return false; }
+void   ElVideo::seekTo(double) {}
+double ElVideo::currentTime() const { return 0.0; }
+double ElVideo::duration() const { return 0.0; }
+bool   ElVideo::isReady() const { return false; }
+bool   ElVideo::isEnded() const { return false; }
+void   ElVideo::applyAudioVolume() {}
+
+void ElVideo::setVolume(double v) {
+    if (v < 0.0) v = 0.0;
+    if (v > 1.0) v = 1.0;
+    volume_ = v;  // keep IDL getter coherent even with no audio track
+}
+void ElVideo::setMuted(bool m) { muted_ = m; }
+void ElVideo::setPlaybackRate(double r) {
+    if (r <= 0.0) r = 1.0;
+    playbackRate_ = r;
+}
+
+void ElVideo::getContentSize(float& w, float& h) {
+    w = static_cast<float>(intrinsicWidth_);
+    h = static_cast<float>(intrinsicHeight_);
+}
+
+void ElVideo::draw(render::Renderer* renderer, dom::Element* elem,
+                   const htmlayout::layout::LayoutBox& box,
+                   float offsetX, float offsetY) {
+    if (!renderer || !elem) return;
+    renderer->fillRect(box.contentRect.x + offsetX, box.contentRect.y + offsetY,
+                       box.contentRect.width, box.contentRect.height,
+                       cfromColor8({0, 0, 0, 255}));
+}
+
+void ElVideo::pumpEvents() {}
+
+} // namespace bro::layout
+
+#endif  // BRO_WITH_VIDEO

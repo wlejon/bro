@@ -1,4 +1,10 @@
+// bro.net.* game-networking bindings (GameNetworkingSockets). Compiled only
+// when BRO_WITH_NET is on; the OFF build's NetBindings::install/poll/cleanup
+// live in feature_stubs.cpp (install → unavailable bro.net namespace, the rest
+// no-ops).
 #include "js/net_bindings.h"
+#if BRO_WITH_NET
+
 #include "net/net_service.h"
 #include "util/log.h"
 
@@ -386,3 +392,5 @@ void NetBindings::poll(JSContext* ctx) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_NET

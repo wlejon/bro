@@ -105,7 +105,21 @@ target_include_directories(bro_js PRIVATE ${GEN_DIR})
 # brolm is linked explicitly (not just transitively via brodiffusion):
 # diffusion_bindings.cpp uses brolm::clip for diffusion text encoding, and
 # lm_bindings.cpp exposes brolm::qwen as bro.lm.
-target_link_libraries(bro_js PUBLIC qjs qjsbind brokit bro_dom bro_util bro_canvas bro_physics bro_audio_inference bro_scene bro_net bro_steam broaudio bro_webgl SDL3::SDL3 bromesh broflora brogameagent bro_video broimage::broimage)
+target_link_libraries(bro_js PUBLIC qjs qjsbind brokit bro_dom bro_util bro_canvas bro_physics bro_audio_inference bro_scene bro_steam broaudio bro_webgl SDL3::SDL3 bromesh brogameagent broimage::broimage)
+
+# Tier-1 renderer/service sibling links, gated per feature. The matching
+# *_bindings.cpp bodies are wrapped in `#if BRO_WITH_X` and their off-state
+# installXBindings stubs live in feature_stubs.cpp; the siblings themselves are
+# add_subdirectory'd conditionally in third_party/CMakeLists.txt.
+if(BRO_WITH_FLORA)
+    target_link_libraries(bro_js PUBLIC broflora)
+endif()
+if(BRO_WITH_NET)
+    target_link_libraries(bro_js PUBLIC bro_net)
+endif()
+if(BRO_WITH_VIDEO)
+    target_link_libraries(bro_js PUBLIC bro_video)
+endif()
 
 # AI-tower sibling links, gated per feature. The matching *_bindings.cpp are
 # wrapped in `#if BRO_WITH_X` and their stubs live in feature_stubs.cpp; the

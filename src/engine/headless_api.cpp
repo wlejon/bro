@@ -24,7 +24,9 @@
 #include "js/mic_bindings.h"
 #include "js/async_job.h"
 #include "js/net_bindings.h"
+#if BRO_WITH_NET
 #include "net/net_service.h"
+#endif
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/event.h"
@@ -285,11 +287,8 @@ void Engine::advanceTime(double ms) {
         // advances with virtual time.
         tickSystemPanels(virtualTime_);
 
-        // Poll network (drain subscriber's event queue, fire JS callbacks)
-        if (netService_) {
-            js::NetBindings::poll(jsRuntime_->getContext());
-            jsRuntime_->executePendingJobs();
-        }
+        // Network polling is delivered via a frame pump (registered in
+        // engine_init when BRO_WITH_NET is on) — see the framePumps_ loop above.
 
         // Poll Steam too (parity with net) so virtual-time advanceTime/sleep
         // drains friends/lobby/avatar/voice events, not just flush(). The pulse

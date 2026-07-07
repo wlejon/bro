@@ -47,7 +47,9 @@
 #include "js/server_bindings.h"
 
 #include "physics/physics_world.h"
+#if BRO_WITH_NET
 #include "net/net_service.h"
+#endif
 #include "scene/scene_graph.h"
 #include "api/api.h"
 #include "runtime/runtime.h"

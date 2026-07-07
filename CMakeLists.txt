@@ -112,9 +112,10 @@ endif()
 set(BRO_PROFILE "app" CACHE STRING "Feature profile: minimal | app | full")
 set_property(CACHE BRO_PROFILE PROPERTY STRINGS minimal app full)
 
-# Per-profile defaults.  minimal = 2D/canvas/WebGL only.  app = full renderer
-# (3D + physics + audio + core game-AI) but no AI tower / net / video.  full =
-# everything (the CUDA sub-lever stays opt-in even here).
+# Per-profile defaults.  minimal = 2D/canvas/WebGL + audio (broaudio is
+# self-contained and <audio>/Web Audio is core HTML, so it stays in every
+# profile).  app = full renderer (3D + physics + core game-AI) + net/video/
+# steam.  full = everything (the CUDA sub-lever stays opt-in even here).
 if(BRO_PROFILE STREQUAL "minimal")
     set(_d_render OFF)
     set(_d_ai     OFF)
@@ -129,10 +130,17 @@ else()  # full
     set(_d_svc    ON)
 endif()
 
+# Audio is on in *every* profile, including minimal: broaudio + audio_inference
+# are brotensor/vcpkg-free and self-contained, and <audio>/Web Audio is a core
+# part of HTML. The flag stays (so a niche audio-less build is still possible),
+# but it defaults ON regardless of profile. Video is deliberately NOT symmetric:
+# <video> decode needs libvpx (vcpkg), so it lives in the service tier.
+set(_d_audio ON)
+
 # Tier 1 — renderer feature groups (all brotensor-free, all vcpkg-free).
 option(BRO_WITH_3D       "3D scene graph (bromesh, terrain, tile, gizmo)"     ${_d_render})
 option(BRO_WITH_PHYSICS  "Jolt rigid-body physics"                           ${_d_render})
-option(BRO_WITH_AUDIO    "broaudio engine + audio inference"                 ${_d_render})
+option(BRO_WITH_AUDIO    "broaudio engine + audio inference"                 ${_d_audio})
 option(BRO_WITH_GAMEAI   "brogameagent core (navmesh/pathfinding/MCTS)"      ${_d_render})
 option(BRO_WITH_FLORA    "broflora ecosystem simulation"                     ${_d_render})
 # Services (each pulls a vcpkg dependency).
@@ -171,6 +179,13 @@ _bro_require(BRO_WITH_VISION       BRO_WITH_TENSOR)
 _bro_require(BRO_WITH_GAMEAI_NN    BRO_WITH_GAMEAI)
 _bro_require(BRO_WITH_GAMEAI_NN    BRO_WITH_TENSOR)
 _bro_require(BRO_WITH_FLORA        BRO_WITH_3D)
+# The 3D scene graph embeds physics + game-AI by value: scene_graph.h includes
+# physics_node.h / agent_binding.h / ai_world_ticker.h and bro_scene hard-links
+# bro_physics + brogameagent. So enabling 3D forces both on (rather than
+# threading #if guards through the whole scene graph). Runs after FLORA→3D so
+# the FLORA→3D→{PHYSICS,GAMEAI} chain fully resolves in one pass.
+_bro_require(BRO_WITH_3D           BRO_WITH_PHYSICS)
+_bro_require(BRO_WITH_3D           BRO_WITH_GAMEAI)
 
 # Forward feature choices into the sibling repos (must happen before
 # third_party/ is added — brotensor's backend is fixed at first add_subdirectory,
@@ -213,5 +228,21 @@ function(bro_apply_feature_defs target)
 endfunction()
 
 add_subdirectory(third_party)
+
+# Stamp the feature flags GLOBALLY on every bro src target (third_party is
+# already added above, so the siblings are unaffected). bro_apply_feature_defs
+# still stamps the specific targets that carry gated .cpp bodies, but headers
+# like engine.h use `#if BRO_WITH_X` to include/exclude *members* — which
+# changes a class's layout. Every TU that includes such a header must see the
+# same flag value or the layouts disagree (an ODR/ABI mismatch). A global
+# definition guarantees that for all bro sources, not just the three stamped
+# libs.
+foreach(_f IN LISTS BRO_FEATURE_FLAGS)
+    if(BRO_WITH_${_f})
+        add_compile_definitions(BRO_WITH_${_f}=1)
+    else()
+        add_compile_definitions(BRO_WITH_${_f}=0)
+    endif()
+endforeach()
 
 add_subdirectory(src)
