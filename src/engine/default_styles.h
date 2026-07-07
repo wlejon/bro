@@ -143,7 +143,6 @@ input[type="checkbox"] {
     padding: 0;
     border: none;
     background-color: transparent;
-    vertical-align: middle;
     margin: 3px 3px 3px 4px;
 }
 
@@ -154,7 +153,6 @@ input[type="radio"] {
     padding: 0;
     border: none;
     background-color: transparent;
-    vertical-align: middle;
     margin: 3px 3px 0px 5px;
 }
 
