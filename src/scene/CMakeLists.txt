@@ -50,6 +50,13 @@ add_library(bro_scene STATIC
     scene_node.cpp
     scene_graph.cpp
     scene_renderer.cpp
+    scene_renderer_mesh.cpp
+    scene_renderer_instanced.cpp
+    scene_renderer_lighting.cpp
+    scene_renderer_shadow.cpp
+    scene_renderer_postfx.cpp
+    scene_renderer_environment.cpp
+    scene_renderer_overlays.cpp
     shape_node.cpp
     sprite_node.cpp
     physics_node.cpp
