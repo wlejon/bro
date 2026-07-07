@@ -1,3 +1,51 @@
+## ── Embed GLSL shaders as C++ headers at build time ──────────────────────────
+## Mirrors the pattern in src/js/CMakeLists.txt. Each shaders/<file>.glsl becomes
+## generated/<file>.h holding `static const char <VAR>[]` (a null-terminated byte
+## array — dodges MSVC's ~16KB single-literal limit that mesh.frag exceeds).
+set(EMBED_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/embed_js.cmake")
+set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${GEN_DIR}")
+
+function(embed_shader SHADER_FILE VAR_NAME)
+    set(INPUT  "${CMAKE_CURRENT_SOURCE_DIR}/shaders/${SHADER_FILE}")
+    set(OUTPUT "${GEN_DIR}/${SHADER_FILE}.h")
+    add_custom_command(
+        OUTPUT  "${OUTPUT}"
+        COMMAND ${CMAKE_COMMAND}
+                -DINPUT="${INPUT}"
+                -DOUTPUT="${OUTPUT}"
+                -DVAR_NAME="${VAR_NAME}"
+                -P "${EMBED_SCRIPT}"
+        DEPENDS "${INPUT}" "${EMBED_SCRIPT}"
+        COMMENT "Embedding shaders/${SHADER_FILE} -> ${SHADER_FILE}.h"
+    )
+    list(APPEND GENERATED_HEADERS "${OUTPUT}")
+    set(GENERATED_HEADERS "${GENERATED_HEADERS}" PARENT_SCOPE)
+endfunction()
+
+embed_shader(mesh.vert             kMeshVertSrc)
+embed_shader(mesh.frag             kMeshFragSrc)
+embed_shader(mesh_instanced.vert   kMeshInstancedVertSrc)
+embed_shader(tonemap.vert          kTonemapVertSrc)
+embed_shader(tonemap.frag          kTonemapFragSrc)
+embed_shader(post.vert             kPostVertSrc)
+embed_shader(blur.frag             kBlurFragSrc)
+embed_shader(tilt_composite.frag   kTiltCompositeFragSrc)
+embed_shader(bloom_bright.frag     kBloomBrightFragSrc)
+embed_shader(env_convert.vert      kEnvConvertVertSrc)
+embed_shader(env_convert.frag      kEnvConvertFragSrc)
+embed_shader(irradiance.frag       kIrradianceFragSrc)
+embed_shader(prefilter.frag        kPrefilterFragSrc)
+embed_shader(brdf_lut.frag         kBRDFLUTFragSrc)
+embed_shader(skybox.vert           kSkyboxVertSrc)
+embed_shader(skybox.frag           kSkyboxFragSrc)
+embed_shader(shadow.vert           kShadowVertSrc)
+embed_shader(shadow.frag           kShadowFragSrc)
+embed_shader(shadow_instanced.vert kShadowInstancedVertSrc)
+embed_shader(billboard.vert        kBillboardVertSrc)
+embed_shader(billboard.frag        kBillboardFragSrc)
+
+## ── Library ──────────────────────────────────────────────────────────────────
 add_library(bro_scene STATIC
     scene_node.cpp
     scene_graph.cpp
@@ -15,9 +63,11 @@ add_library(bro_scene STATIC
     tile_world.cpp
     agent_binding.cpp
     ai_world_ticker.cpp
+    ${GENERATED_HEADERS}
 )
 
 target_include_directories(bro_scene PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(bro_scene PRIVATE ${GEN_DIR})
 # bro_scene is only built when BRO_WITH_3D is on, and 3D forces PHYSICS + GAMEAI
 # on (see the _bro_require chain in the top-level CMakeLists), so bro_physics +
 # brogameagent are always present here.

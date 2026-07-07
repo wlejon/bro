@@ -1,14 +1,16 @@
-# embed_js.cmake — Convert a .js file into a C++ header with the content as a raw string.
+# embed_js.cmake — Embed any text file into a C++ header as a null-terminated
+# byte array. Generic despite the name: driven by INPUT / OUTPUT / VAR_NAME and
+# used for JS polyfills (src/js, src/engine) and GLSL shaders (src/scene). The
+# brokit sibling also resolves this file via ${CMAKE_SOURCE_DIR} when built in
+# tree, so keep the filename stable.
 #
 # Usage (from add_custom_command):
-#   cmake -DINPUT=abort.js -DOUTPUT=abort.js.h -DVAR_NAME=js_abort -P embed_js.cmake
+#   cmake -DINPUT=mesh.vert -DOUTPUT=mesh.vert.h -DVAR_NAME=kMeshVertSrc -P embed_js.cmake
 #
 # Produces a header like:
-#   // Auto-generated from abort.js — do not edit.
+#   // Auto-generated from mesh.vert — do not edit.
 #   #pragma once
-#   static const char js_abort[] = R"__JS__(
-#   ...file contents...
-#   )__JS__";
+#   static const char kMeshVertSrc[] = { 0x0a, ..., 0x00 };
 
 file(READ "${INPUT}" JS_HEX HEX)
 get_filename_component(INPUT_NAME "${INPUT}" NAME)
