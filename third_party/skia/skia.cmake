@@ -1,14 +1,14 @@
 # Skia - imported pre-built static library (required)
 #
-# On Windows the Release library is auto-downloaded from the repo's GitHub
-# releases when it isn't already present (see BRO_FETCH_SKIA below); headers
-# come from the skia submodule. To build it yourself instead (any platform, or
-# a Debug lib), populate third_party/skia/lib/{Debug,Release}/:
+# On Windows and Linux, both the Skia headers/source and the Release library are
+# auto-downloaded from the repo's GitHub releases when absent (see BRO_FETCH_SKIA
+# below) — all pinned to one Skia commit so they always match. To build it
+# yourself instead (macOS, a Windows Debug lib, or a different Skia version),
+# run third_party/skia/build_skia_{linux,mac}.sh, or populate
+# third_party/skia/lib/{Debug,Release}/ and third_party/skia/src/ by hand:
 #   cd third_party/skia/src && python3 tools/git-sync-deps
 #   bin/gn gen out/Release --args='...'  (see CLAUDE.md)
 #   ninja -C out/Release skia
-#   bin/gn gen out/Debug --args='...'
-#   ninja -C out/Debug skia
 
 if(WIN32)
     set(_skia_ext "skia.lib")
@@ -19,41 +19,85 @@ endif()
 set(_skia_release "${CMAKE_CURRENT_LIST_DIR}/lib/Release/${_skia_ext}")
 set(_skia_debug   "${CMAKE_CURRENT_LIST_DIR}/lib/Debug/${_skia_ext}")
 
-# Auto-fetch the prebuilt Release lib if it isn't already present. Headers still
-# come from the skia submodule (see the INTERFACE include below); this only
-# grabs the compiled ~37 MB library so contributors don't have to build Skia.
-# Only Windows x64 Release is hosted today — other platforms/configs fall
-# through to the manual-placement path below, unchanged. BSD-3-Clause permits
-# redistributing the binary. Set -DBRO_FETCH_SKIA=OFF to disable.
-option(BRO_FETCH_SKIA "Download a prebuilt Skia library when none is present" ON)
-set(BRO_SKIA_RELEASE_TAG "skia-prebuilt-v1"
+# Auto-fetch the prebuilt Skia headers/source and the Release library when they
+# aren't already present. Everything is pinned to one Skia commit and served
+# from a single GitHub release, so a fetched lib always matches fetched headers.
+# The source bundle is the subset bro compiles/includes (include/, src/, the
+# svg/skshaper/skresources modules, and expat), not the whole Skia tree.
+# Non-fatal: a failed download / hash mismatch falls through to the manual
+# instructions below. macOS + Windows Debug are not hosted. BSD-3-Clause permits
+# redistribution. Set -DBRO_FETCH_SKIA=OFF to disable.
+option(BRO_FETCH_SKIA "Download prebuilt Skia (headers + lib) when absent" ON)
+set(BRO_SKIA_RELEASE_TAG "skia-prebuilt-m147"
     CACHE STRING "GitHub release (wlejon/bro) holding the prebuilt Skia binaries")
+set(_skia_base "https://github.com/wlejon/bro/releases/download/${BRO_SKIA_RELEASE_TAG}")
 
-if(BRO_FETCH_SKIA AND WIN32 AND NOT EXISTS "${_skia_release}" AND NOT EXISTS "${_skia_debug}")
-    set(_skia_asset "skia-windows-x64-Release.lib")
-    set(_skia_sha   "33ab92eb5b8ffac77508945503149cf973d74dddf1049ccdfbf3cbb2d578ba38")
-    set(_skia_url   "https://github.com/wlejon/bro/releases/download/${BRO_SKIA_RELEASE_TAG}/${_skia_asset}")
-    message(STATUS "Skia: no local library found; downloading prebuilt ${_skia_asset} (~37 MB)...")
-    file(MAKE_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/lib/Release")
-    file(DOWNLOAD "${_skia_url}" "${_skia_release}.download"
-         SHOW_PROGRESS TLS_VERIFY ON STATUS _skia_dl)
-    list(GET _skia_dl 0 _skia_dl_code)
-    if(_skia_dl_code EQUAL 0)
-        file(SHA256 "${_skia_release}.download" _skia_got)
-        if(_skia_got STREQUAL _skia_sha)
-            file(RENAME "${_skia_release}.download" "${_skia_release}")
-            message(STATUS "Skia: prebuilt library ready (Release; used for all configs)")
-        else()
-            file(REMOVE "${_skia_release}.download")
-            message(WARNING "Skia: SHA-256 mismatch on download (got ${_skia_got}); "
-                            "ignoring it — place the library manually instead.")
-        endif()
-    else()
-        list(GET _skia_dl 1 _skia_dl_msg)
-        file(REMOVE "${_skia_release}.download")
-        message(WARNING "Skia: download failed (${_skia_dl_msg}); "
-                        "place the library manually per the instructions below.")
+# Download _url -> _dest, verifying SHA-256 _sha. Sets ${_okvar} in the caller.
+function(_bro_skia_download _url _dest _sha _okvar)
+    file(DOWNLOAD "${_url}" "${_dest}.part" SHOW_PROGRESS TLS_VERIFY ON STATUS _st)
+    list(GET _st 0 _code)
+    if(NOT _code EQUAL 0)
+        list(GET _st 1 _msg)
+        file(REMOVE "${_dest}.part")
+        message(WARNING "Skia: download failed for ${_url} (${_msg})")
+        set(${_okvar} FALSE PARENT_SCOPE)
+        return()
     endif()
+    file(SHA256 "${_dest}.part" _got)
+    if(NOT _got STREQUAL _sha)
+        file(REMOVE "${_dest}.part")
+        message(WARNING "Skia: SHA-256 mismatch for ${_url} (got ${_got})")
+        set(${_okvar} FALSE PARENT_SCOPE)
+        return()
+    endif()
+    file(RENAME "${_dest}.part" "${_dest}")
+    set(${_okvar} TRUE PARENT_SCOPE)
+endfunction()
+
+if(BRO_FETCH_SKIA)
+    # (1) Headers + source bundle (platform-independent).
+    if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/src/include/core/SkCanvas.h")
+        set(_skia_bundle "${CMAKE_CURRENT_LIST_DIR}/skia-src.tar.gz")
+        message(STATUS "Skia: fetching source bundle (headers + svg/expat sources, ~6 MB)...")
+        _bro_skia_download("${_skia_base}/skia-src-m147.tar.gz" "${_skia_bundle}"
+            "ce6125dc0818ec3a07c48331cdeb827556ce8a608521cbd384846b00069cab8e" _skia_src_ok)
+        if(_skia_src_ok)
+            file(MAKE_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src")
+            file(ARCHIVE_EXTRACT INPUT "${_skia_bundle}"
+                 DESTINATION "${CMAKE_CURRENT_LIST_DIR}/src")
+            file(REMOVE "${_skia_bundle}")
+            message(STATUS "Skia: source bundle extracted to src/")
+        endif()
+    endif()
+
+    # (2) Platform Release library.
+    if(NOT EXISTS "${_skia_release}" AND NOT EXISTS "${_skia_debug}")
+        set(_skia_lib_asset "")
+        if(WIN32)
+            set(_skia_lib_asset "skia-windows-x64-Release.lib")
+            set(_skia_lib_sha "e4e561366ac923218406c9f9a027ed23401b44f7c40b041a9fab5fddb4e46823")
+        elseif(UNIX AND NOT APPLE)
+            set(_skia_lib_asset "skia-linux-x64-Release.a")
+            set(_skia_lib_sha "adb014b9eb366266d205b293258d9a9628f73b9ea7156da2053e65e3f3363f55")
+        endif()
+        if(_skia_lib_asset)
+            message(STATUS "Skia: fetching prebuilt ${_skia_lib_asset}...")
+            file(MAKE_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/lib/Release")
+            _bro_skia_download("${_skia_base}/${_skia_lib_asset}" "${_skia_release}"
+                "${_skia_lib_sha}" _skia_lib_ok)
+            if(_skia_lib_ok)
+                message(STATUS "Skia: prebuilt library ready (Release; used for all configs)")
+            endif()
+        endif()
+    endif()
+endif()
+
+# Headers must be present (fetched above or supplied by hand) before we can build.
+if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/src/include/core/SkCanvas.h")
+    message(FATAL_ERROR
+        "Skia headers not found at third_party/skia/src/.\n"
+        "Enable BRO_FETCH_SKIA (default), or run third_party/skia/build_skia_*.sh, "
+        "or clone Skia into third_party/skia/src and run tools/git-sync-deps.")
 endif()
 
 # Require at least one configuration
