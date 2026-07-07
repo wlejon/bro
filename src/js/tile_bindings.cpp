@@ -1,4 +1,5 @@
 #include "js/tile_bindings.h"
+#if BRO_WITH_3D  // modular-build feature gate
 
 #include <qjsbind/qjsbind.h>
 
@@ -755,3 +756,5 @@ void TileBindings::cleanup(JSContext*) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_3D

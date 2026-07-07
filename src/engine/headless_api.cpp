@@ -2,7 +2,9 @@
 // These are Engine member function implementations, not a separate class.
 
 #include "engine/engine.h"
+#if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
+#endif
 #include "audio_inference/audio_inference.h"
 
 #include "observer_check.js.h"
@@ -34,7 +36,9 @@
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
 #include "canvas/canvas_scene.h"
+#if BRO_WITH_3D
 #include "scene/scene_graph.h"
+#endif
 #include "webgl/webgl2_context.h"
 
 #include <broaudio/engine.h>
@@ -153,6 +157,7 @@ void Engine::flush() {
     // creates a scene canvas + populates it + immediately reads pixels would
     // see an unallocated FBO because render() short-circuits when canvas
     // size is zero.
+#if BRO_WITH_3D
     if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
         for (auto& sg : sceneGraphs_) {
             if (sg.graph) sg.graph->materializeHtmlNodes(skia);
@@ -183,6 +188,7 @@ void Engine::flush() {
                 return n->tagName() != "html" && n->tagName() != "HTML";
             }),
         sceneGraphs_.end());
+#endif  // BRO_WITH_3D
 
     // Prune detached WebGL contexts (canvas elements removed from DOM).
     webglEntries_.erase(
@@ -303,6 +309,7 @@ void Engine::advanceTime(double ms) {
 
         // Step physics deterministically against virtual time, synchronously
         // on the main thread (headless does not start the physics worker thread).
+#if BRO_WITH_PHYSICS
         if (physicsWorld_) {
             double stepMs = physicsWorld_->timeStep() * 1000.0;
             physicsAccumMs_ += step;
@@ -312,9 +319,11 @@ void Engine::advanceTime(double ms) {
                 physicsWorld_->stepInline();
             }
         }
+#endif
 
         // Step AI bindings once per advanceTime step (deterministic, uses the
         // headless virtual-time step as dt).
+#if BRO_WITH_3D
         {
             float aiDt = static_cast<float>(step * 0.001);
             for (auto& sg : sceneGraphs_) {
@@ -339,6 +348,7 @@ void Engine::advanceTime(double ms) {
         for (auto& sg : sceneGraphs_) {
             sg.graph->render();
         }
+#endif  // BRO_WITH_3D
 
         flush();
 
@@ -409,12 +419,14 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
 
     // 2. Materialize HtmlNodes + render scene graphs (windowed path runs both
     //    on the main thread before signaling raster).
+#if BRO_WITH_3D
     for (auto& sg : sceneGraphs_) {
         if (sg.graph) sg.graph->materializeHtmlNodes(skia);
     }
     for (auto& sg : sceneGraphs_) {
         if (sg.graph) sg.graph->render();
     }
+#endif  // BRO_WITH_3D
 
     // 3. Rasterize canvas scenes into their per-canvas FBOs; prune detached.
     for (auto& cs : canvasScenes_) {

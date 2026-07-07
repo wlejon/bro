@@ -1,4 +1,5 @@
 #include "js/rigging_bindings.h"
+#if BRO_WITH_3D  // modular-build feature gate
 #include "js/mesh_bindings.h"
 
 #include <qjsbind/qjsbind.h>
@@ -1424,3 +1425,5 @@ JSValue RiggingBindings::wrapAnimation(JSContext* ctx, bromesh::Animation&& a) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_3D

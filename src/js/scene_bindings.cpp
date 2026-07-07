@@ -1,4 +1,5 @@
 #include "js/scene_bindings.h"
+#if BRO_WITH_3D  // modular-build feature gate
 #include "js/ai_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/terrain_bindings.h"
@@ -3333,3 +3334,5 @@ void SceneBindings::cleanup(JSContext* ctx) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_3D

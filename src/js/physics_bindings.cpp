@@ -1,3 +1,10 @@
+// Jolt rigid-body physics bindings (the global `Physics` class + PhysicsNode
+// support). Compiled only when BRO_WITH_PHYSICS is on — the header pulls Jolt,
+// so the guard precedes every include. With physics off there is no `Physics`
+// class (advanced apps feature-detect `typeof Physics`); nothing else installs
+// it, and 3D (which embeds physics) is forced off too.
+#if BRO_WITH_PHYSICS
+
 #include "js/physics_bindings.h"
 #include "js/runtime.h"
 #include "physics/physics_world.h"
@@ -1488,3 +1495,5 @@ void PhysicsBindings::cleanup(JSContext* ctx) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_PHYSICS

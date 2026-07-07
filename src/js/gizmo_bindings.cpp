@@ -1,4 +1,5 @@
 #include "js/gizmo_bindings.h"
+#if BRO_WITH_3D  // modular-build feature gate
 #include "engine/engine.h"
 #include "engine/gizmo.h"
 #include "scene/scene_graph.h"
@@ -304,3 +305,5 @@ void GizmoBindings::install(JSContext* ctx, engine::Engine* engine) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_3D

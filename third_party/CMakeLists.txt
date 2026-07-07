@@ -133,13 +133,18 @@ endif()
 # --- bromesh (mesh generation + manipulation library) ---
 # Prefer the standalone repo at ../bromesh for local development.
 # Falls back to the git submodule at third_party/bromesh.
-set(BROMESH_DIR "${CMAKE_SOURCE_DIR}/../bromesh" CACHE PATH "Path to standalone bromesh repo")
-if(EXISTS "${BROMESH_DIR}/CMakeLists.txt")
-    message(STATUS "bromesh: using standalone repo at ${BROMESH_DIR}")
-    add_subdirectory("${BROMESH_DIR}" "${CMAKE_BINARY_DIR}/bromesh" EXCLUDE_FROM_ALL)
-else()
-    message(STATUS "bromesh: using submodule at third_party/bromesh")
-    add_subdirectory(bromesh EXCLUDE_FROM_ALL)
+# Gated on BRO_WITH_3D: bromesh backs the 3D scene graph (mesh/terrain/tile
+# nodes) and the Mesh JS bindings, all of which are 3D-only. broflora forces
+# 3D on, so its transitive bromesh dependency is always satisfied.
+if(BRO_WITH_3D)
+    set(BROMESH_DIR "${CMAKE_SOURCE_DIR}/../bromesh" CACHE PATH "Path to standalone bromesh repo")
+    if(EXISTS "${BROMESH_DIR}/CMakeLists.txt")
+        message(STATUS "bromesh: using standalone repo at ${BROMESH_DIR}")
+        add_subdirectory("${BROMESH_DIR}" "${CMAKE_BINARY_DIR}/bromesh" EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "bromesh: using submodule at third_party/bromesh")
+        add_subdirectory(bromesh EXCLUDE_FROM_ALL)
+    endif()
 endif()
 
 # --- broflora (ecosystem simulation: Makowski et al. "Synthetic Silviculture") ---
@@ -159,13 +164,18 @@ endif()
 # --- brogameagent (game AI: navmesh, pathfinding, steering, behavior trees) ---
 # Prefer the standalone repo at ../brogameagent for local development.
 # Falls back to the git submodule at third_party/brogameagent.
-set(BROGAMEAGENT_DIR "${CMAKE_SOURCE_DIR}/../brogameagent" CACHE PATH "Path to standalone brogameagent repo")
-if(EXISTS "${BROGAMEAGENT_DIR}/CMakeLists.txt")
-    message(STATUS "brogameagent: using standalone repo at ${BROGAMEAGENT_DIR}")
-    add_subdirectory("${BROGAMEAGENT_DIR}" "${CMAKE_BINARY_DIR}/brogameagent" EXCLUDE_FROM_ALL)
-else()
-    message(STATUS "brogameagent: using submodule at third_party/brogameagent")
-    add_subdirectory(brogameagent EXCLUDE_FROM_ALL)
+# Gated on BRO_WITH_GAMEAI: brogameagent backs the bro.ai.game bindings and is
+# embedded by value in the 3D scene graph (agent binding / world ticker), so 3D
+# forces GAMEAI on and its transitive dependency is always satisfied.
+if(BRO_WITH_GAMEAI)
+    set(BROGAMEAGENT_DIR "${CMAKE_SOURCE_DIR}/../brogameagent" CACHE PATH "Path to standalone brogameagent repo")
+    if(EXISTS "${BROGAMEAGENT_DIR}/CMakeLists.txt")
+        message(STATUS "brogameagent: using standalone repo at ${BROGAMEAGENT_DIR}")
+        add_subdirectory("${BROGAMEAGENT_DIR}" "${CMAKE_BINARY_DIR}/brogameagent" EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "brogameagent: using submodule at third_party/brogameagent")
+        add_subdirectory(brogameagent EXCLUDE_FROM_ALL)
+    endif()
 endif()
 
 # --- brolm ---
@@ -236,6 +246,7 @@ if(BRO_WITH_VISION)
 endif()
 
 # --- Jolt Physics ---
+if(BRO_WITH_PHYSICS)
 set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE BOOL "" FORCE)  # match bro's /MD runtime
 set(OVERRIDE_CXX_FLAGS OFF CACHE BOOL "" FORCE)          # don't clobber bro's flags
 set(ENABLE_ALL_WARNINGS OFF CACHE BOOL "" FORCE)          # avoid -Werror on Jolt internals
@@ -250,6 +261,7 @@ set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
 set(JPH_USE_MTL OFF CACHE BOOL "" FORCE)
 set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
 add_subdirectory(jolt/Build EXCLUDE_FROM_ALL)
+endif()  # BRO_WITH_PHYSICS
 
 # --- GameNetworkingSockets (via vcpkg) ---
 # Gated: this is one of only two vcpkg dependencies, so a minimal (net-off)

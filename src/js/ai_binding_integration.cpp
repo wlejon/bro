@@ -14,6 +14,7 @@
 // module.
 
 #include "js/ai_bindings.h"
+#if BRO_WITH_GAMEAI  // modular-build feature gate
 #include "js/scene_bindings.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
@@ -708,3 +709,5 @@ void clearRegisteredCapabilities(JSContext* ctx) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_GAMEAI

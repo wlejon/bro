@@ -10,6 +10,7 @@
 // Installed onto bro.ai.game by installGenericMctsBindings().
 
 #include "js/ai_bindings.h"
+#if BRO_WITH_GAMEAI  // modular-build feature gate
 
 #include <qjsbind/qjsbind.h>
 #include <brogameagent/generic_mcts.h>
@@ -511,3 +512,5 @@ void installGenericMctsBindings(JSContext* ctx, JSValue gameObj) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_GAMEAI

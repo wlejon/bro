@@ -34,7 +34,9 @@
 #include "js/video_bindings.h"
 #include "js/headless_bindings.h"
 #include "js/worker.h"
+#if BRO_WITH_PHYSICS
 #include "js/physics_bindings.h"
+#endif
 #include "js/scene_bindings.h"
 #include "js/crosshair_bindings.h"
 #include "js/menu_bindings.h"
@@ -46,11 +48,15 @@
 #include "js/net_bindings.h"
 #include "js/server_bindings.h"
 
+#if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
+#endif
 #if BRO_WITH_NET
 #include "net/net_service.h"
 #endif
+#if BRO_WITH_3D
 #include "scene/scene_graph.h"
+#endif
 #include "api/api.h"
 #include "runtime/runtime.h"
 #include <broaudio/engine.h>

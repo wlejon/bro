@@ -3,7 +3,9 @@
 #include "engine/app_loader.h"
 #include "util/asset_mounts.h"
 #include "engine/css_transitions.h"
-#include "engine/gizmo.h"
+#if BRO_WITH_3D
+#include "engine/gizmo.h"  // GizmoManager (3D-only; pulls scene::MeshNode)
+#endif
 #include "engine/inspector_state.h"
 #include "engine/menu_bar.h"
 #include "engine/overlay.h"
@@ -293,9 +295,11 @@ public:
     const CrosshairConfig& crosshair() const { return crosshair_; }
 
     /// Engine-level 3D gizmo (translate / rotate / scale handles). Driven
-    /// from JS via bro.gizmo.*.
+    /// from JS via bro.gizmo.*. 3D-only.
+#if BRO_WITH_3D
     GizmoManager& gizmo() { return *gizmo_; }
     const GizmoManager& gizmo() const { return *gizmo_; }
+#endif
 
     /// Standard app menu bar (rendered by system/menu.html, driven via bro.menu.*).
     MenuBar& menuBar() { return menuBar_; }
@@ -699,7 +703,9 @@ private:
     // pointer to a fresh id when the panel re-fetches.
     std::unordered_map<int, dom::Element*> inspectorNodeMap_;
     int inspectorNextId_ = 0;
+#if BRO_WITH_3D
     std::unique_ptr<GizmoManager> gizmo_;
+#endif
     OverlayManager overlayMgr_;
     std::unique_ptr<Settings> settings_;
     std::unique_ptr<broaudio::Engine> audioEngine_;
@@ -712,16 +718,20 @@ private:
     // once during init and only iterated on the main thread thereafter, so it
     // needs no synchronisation.
     std::vector<std::function<void()>> framePumps_;
+#if BRO_WITH_PHYSICS
     std::unique_ptr<physics::PhysicsWorld> physicsWorld_;
+#endif
 #if BRO_WITH_NET
     std::unique_ptr<net::NetService> netService_;
 #endif
     std::unique_ptr<steam::SteamService> steamService_;
+#if BRO_WITH_3D
     struct SceneGraphEntry {
         std::unique_ptr<scene::SceneGraph> graph;
         dom::Element* element = nullptr;  // non-owning
     };
     std::vector<SceneGraphEntry> sceneGraphs_;
+#endif
     double physicsAccumMs_ = 0.0;
     double lastPhysicsTimeMs_ = 0.0;
     double lastFrameTimeMs_ = 0.0; // wall-clock time of previous frame's start (for syncAgents dt)

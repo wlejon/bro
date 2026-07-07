@@ -1,4 +1,5 @@
 #include "js/ai_bindings.h"
+#if BRO_WITH_GAMEAI  // modular-build feature gate
 #include "util/log.h"
 
 #include <qjsbind/qjsbind.h>
@@ -3173,3 +3174,5 @@ JSValue findAgentJSRef(JSContext* ctx, JSValueConst worldJsRef, brogameagent::Ag
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_GAMEAI

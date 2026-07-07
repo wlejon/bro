@@ -36,7 +36,9 @@
 #include "js/imagebitmap_bindings.h"
 #include "js/video_bindings.h"
 #include "js/worker.h"
+#if BRO_WITH_PHYSICS
 #include "js/physics_bindings.h"
+#endif
 #include "js/scene_bindings.h"
 #include "js/crosshair_bindings.h"
 #include "js/menu_bindings.h"
@@ -71,13 +73,17 @@
 #include "js/server_bindings.h"
 #include "js/headless_bindings.h"
 
+#if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
+#endif
 #include "audio_inference/audio_inference.h"
 #if BRO_WITH_NET
 #include "net/net_service.h"
 #endif
 #include "steam/steam_service.h"
+#if BRO_WITH_3D
 #include "scene/scene_graph.h"
+#endif
 #include "api/api.h"
 #include "runtime/runtime.h"
 #include <broaudio/engine.h>
@@ -197,15 +203,21 @@ Engine::Engine(const EngineConfig& config)
     // In headless mode this is virtual time; in windowed/server mode, real time.
     timers_->tick(displayMode_ == DisplayMode::Headless ? virtualTime_ : util::currentTimeMs());
 
-    // Physics engine + bindings (all modes)
+    // Physics engine + bindings (all modes). With BRO_WITH_PHYSICS off there is
+    // no physics world and the `Physics` JS class is simply absent (advanced
+    // apps feature-detect `typeof Physics`).
+#if BRO_WITH_PHYSICS
     physicsWorld_ = std::make_unique<physics::PhysicsWorld>();
     physicsWorld_->init();
     if (displayMode_ != DisplayMode::Headless)
         physicsWorld_->startThread();
     js::PhysicsBindings::install(jsRuntime_->getContext(), physicsWorld_.get());
+#endif
 
-    // Mesh bindings (standalone Mesh class wrapping bromesh — all modes)
+    // Mesh + rigging bindings (Mesh class wrapping bromesh — 3D-only).
+#if BRO_WITH_3D
     js::MeshBindings::install(jsRuntime_->getContext());
+#endif
 
     // Flora bindings (broflora ecosystem sim — bro.flora.* — all modes)
     js::FloraBindings::install(jsRuntime_->getContext());
@@ -213,10 +225,13 @@ Engine::Engine(const EngineConfig& config)
     // Math bindings (bro.math.* — SpatialHash3D and future bromath types)
     js::MathBindings::install(jsRuntime_->getContext());
 
-    // Rigging bindings (SkinData, VoxelChunk; later: Skeleton/Pose/Animation/IK/Rig)
+    // Rigging bindings (SkinData, VoxelChunk; later: Skeleton/Pose/Animation/IK/Rig) — 3D-only.
+#if BRO_WITH_3D
     js::RiggingBindings::install(jsRuntime_->getContext());
+#endif
 
-    // AI bindings (game agent: navgrid, pathfinding, steering — all modes)
+    // AI bindings (game agent: navgrid, pathfinding, steering). When BRO_WITH_GAMEAI
+    // is off, install() is the feature-stub that installs an unavailable bro.ai.
     js::AIBindings::install(jsRuntime_->getContext());
 
     // bro.gpu (runtime backend probe via brotensor). Always present — reports
@@ -268,11 +283,11 @@ Engine::Engine(const EngineConfig& config)
     // emits a Gaussian cloud for the scene GaussianSplatNode. GPU by default.
     js::installTriposplatBindings(jsRuntime_->getContext());
 
-    // Terrain bindings (infinite voxel terrain system — all modes)
+    // Terrain + tile-world bindings (voxel terrain / chunked tile grid) — 3D-only.
+#if BRO_WITH_3D
     js::TerrainBindings::install(jsRuntime_->getContext());
-
-    // Tile-world bindings (scene.createTileWorld — chunked tile grid meshing)
     js::TileBindings::install(jsRuntime_->getContext());
+#endif
 
     // Network service + bindings (all modes). NetService owns GNS on its own
     // thread; bindings hold a per-context subscriber that polls each frame,
@@ -490,8 +505,10 @@ Engine::Engine(const EngineConfig& config)
         }
     });
 
-    // Scene graph bindings (windowed/headless only — needs renderer)
+    // Scene graph bindings (3D-only; needs renderer)
+#if BRO_WITH_3D
     js::SceneBindings::install(jsRuntime_->getContext());
+#endif
 
     // Crosshair bindings (bro.crosshair.*)
     js::CrosshairBindings::install(jsRuntime_->getContext(), this);
@@ -524,9 +541,11 @@ Engine::Engine(const EngineConfig& config)
     }
 
     // Engine gizmo (bro.gizmo.*) — translate/rotate/scale handles with
-    // mouse-driven picking and drag interaction.
+    // mouse-driven picking and drag interaction. 3D-only.
+#if BRO_WITH_3D
     gizmo_ = std::make_unique<GizmoManager>();
     js::GizmoBindings::install(jsRuntime_->getContext(), this);
+#endif
 
     // 5. Layout helpers. drawTraversal_ writes through a RecordingRenderer
     //    (wraps renderer_ for measurement + font handle issuance) so the paint
@@ -619,8 +638,10 @@ Engine::Engine(const EngineConfig& config)
     js::ImageBindings::install(jsRuntime_->getContext(), manifest_.basePath, &assetMounts_);
     js::ImageBitmapBindings::install(jsRuntime_->getContext());
     js::VideoBindings::install(jsRuntime_->getContext(), manifest_.basePath);
+#if BRO_WITH_3D
     js::SceneBindings::setAppContext(manifest_.basePath, &assetMounts_);
     js::TileBindings::setAppContext(manifest_.basePath, &assetMounts_);
+#endif
 #if BRO_WITH_DIFFUSION
     js::setDiffusionAppContext(manifest_.basePath, &assetMounts_);
 #endif
@@ -696,6 +717,7 @@ Engine::Engine(const EngineConfig& config)
                     webglEntries_.push_back({std::move(ctx2), el});
                     return js::WebGL2Bindings::wrapContext(ctx, webglCtx);
                 }
+#if BRO_WITH_3D
                 if (type == "scene") {
                     // Create a 2D canvas for the scene graph to render into
                     auto canvasScene = std::make_unique<canvas::CanvasScene>(renderer_.get());
@@ -749,6 +771,7 @@ Engine::Engine(const EngineConfig& config)
                     sceneGraphs_.push_back({std::move(graph), el});
                     return js::SceneBindings::wrapSceneGraph(ctx, graphPtr);
                 }
+#endif  // BRO_WITH_3D
                 return JS_NULL;
             });
     } else {
@@ -787,6 +810,7 @@ Engine::Engine(const EngineConfig& config)
                 canvasScene->init(nullptr);
                 canvasSceneRegistry_[canvasScene->sceneId()] = csPtr;
                 canvasScenes_.push_back(std::move(canvasScene));
+#if BRO_WITH_3D
                 if (type == "scene") {
                     int cw = viewportWidth_, ch = viewportHeight_;
                     if (el) {
@@ -812,6 +836,7 @@ Engine::Engine(const EngineConfig& config)
                     sceneGraphs_.push_back({std::move(graph), el});
                     return js::SceneBindings::wrapSceneGraph(ctx, graphPtr);
                 }
+#endif  // BRO_WITH_3D
                 return js::CanvasBindings::wrapContext2D(ctx, csPtr);
             });
     }

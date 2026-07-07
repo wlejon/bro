@@ -8,8 +8,10 @@
 #include "engine/replaced_elements.h"
 #include "engine/settings.h"
 
+#if BRO_WITH_3D
 #include "scene/scene_graph.h"
 #include "scene/html_node.h"
+#endif
 #include "layout/layout_node_adapter.h"
 #include "layout/box.h"
 
@@ -477,10 +479,12 @@ void Engine::handleMouseDown(float x, float y, int button) {
 
     // Engine-level 3D gizmo — sits between modal UI and DOM. Consumes only
     // when a handle is hit; otherwise falls through to DOM / canvas.
+#if BRO_WITH_3D
     if (gizmoHandleMouseDown(docX, docY, button)) {
         pressedButtons_ |= domButtonMask(button);
         return;
     }
+#endif
 
     // Update button bitmask (DOM convention: 1=left, 2=right, 4=middle, ...)
     pressedButtons_ |= domButtonMask(button);
@@ -553,6 +557,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
         // billboards. A hit consumes the event — the canvas itself does
         // not see mousedown in that case (parallels how a regular DOM
         // child element captures clicks before its parent).
+#if BRO_WITH_3D
         scene::HtmlNode* hnHit = nullptr;
         dom::Element* hnEl = nullptr;
         float hnPxX = 0.0f, hnPxY = 0.0f;
@@ -568,6 +573,7 @@ void Engine::handleMouseDown(float x, float y, int button) {
         }
         htmlNodeMouseDownNode_ = nullptr;
         htmlNodeMouseDownElement_.reset();
+#endif  // BRO_WITH_3D
 
         // App controls anchor and open overlays in content space, so the
         // ControlContext viewport is the content area and the focus point is
@@ -706,9 +712,11 @@ void Engine::handleMouseUp(float x, float y, int button) {
     }
 
     // Gizmo consumes mouseUp only when the drag was active.
+#if BRO_WITH_3D
     if (gizmoHandleMouseUp(docX, docY, button)) {
         return;
     }
+#endif
 
     // Stop range slider dragging
     if (document_) {
@@ -741,6 +749,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
         // landed on a HtmlNode and the release ray-casts to the same node,
         // dispatch mouseup + click; otherwise dispatch mouseup only on the
         // press target so handlers see a balanced down/up pair.
+#if BRO_WITH_3D
         scene::HtmlNode* hnHit = nullptr;
         dom::Element* hnEl = nullptr;
         float hnPxX = 0.0f, hnPxY = 0.0f;
@@ -767,6 +776,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
             htmlNodeMouseDownElement_.reset();
             return;
         }
+#endif  // BRO_WITH_3D
 
         dom::MouseEvent upEvt("mouseup");
         populateMouseEvent(upEvt, x, y, button, pressedButtons_,
@@ -860,11 +870,13 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
 
     // Gizmo mousemove — drives hover state always; consumes only while
     // actively dragging (returns true in that case).
+#if BRO_WITH_3D
     if (gizmoHandleMouseMove(docX, docY)) {
         lastMouseX_ = x;
         lastMouseY_ = y;
         return;
     }
+#endif
 
     // Mouse-driven text selection: while dragging, extend the selection's
     // focus to follow the pointer. The anchor is whatever was captured on
@@ -1092,6 +1104,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         // with hoveredElement_ — the canvas remains the outer-doc hover
         // target while the inner HtmlNode element gets enter/leave/over/
         // out/move events for its own hover state and listeners.
+#if BRO_WITH_3D
         scene::HtmlNode* hnNode = nullptr;
         dom::Element* hnEl = nullptr;
         float hnPxX = 0.0f, hnPxY = 0.0f;
@@ -1126,15 +1139,19 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             hoveredHtmlNode_ = hnNode;
             uiDirty_ = true;
         }
+#endif  // BRO_WITH_3D
 
         // Always dispatch mousemove. Route into the inner HtmlNode if the
         // pointer is currently over one — otherwise normal DOM target.
+#if BRO_WITH_3D
         if (hnHit) {
             int mod = safeGetModState(window_.get(), heldModifierMask_);
             dispatchHtmlNodeMouseEvent("mousemove", hnEl, hnPxX, hnPxY,
                                         -1, pressedButtons_, mod,
                                         xrel, yrel, /*bubbles=*/true);
-        } else if (target) {
+        } else
+#endif
+        if (target) {
             int mod = safeGetModState(window_.get(), heldModifierMask_);
             dom::MouseEvent moveEvt("mousemove", true, true);
             populateMouseEvent(moveEvt, x, y, -1, pressedButtons_,
@@ -2144,6 +2161,7 @@ std::string Engine::simulateCut() {
 // World-space HtmlNode mouse routing
 // ---------------------------------------------------------------------------
 
+#if BRO_WITH_3D
 scene::SceneGraph* Engine::sceneGraphForElement(const dom::Element* el) const {
     if (!el) return nullptr;
     for (auto& sg : sceneGraphs_) {
@@ -2151,6 +2169,7 @@ scene::SceneGraph* Engine::sceneGraphForElement(const dom::Element* el) const {
     }
     return nullptr;
 }
+#endif  // BRO_WITH_3D
 
 bool Engine::elementAbsoluteOrigin(dom::Element* el, float& outX, float& outY) const {
     if (!el) return false;
@@ -2160,6 +2179,7 @@ bool Engine::elementAbsoluteOrigin(dom::Element* el, float& outX, float& outY) c
     return true;
 }
 
+#if BRO_WITH_3D
 bool Engine::pickHtmlNodeUnderMouse(dom::Element* canvasEl, float docX, float docY,
                                     scene::HtmlNode*& outNode, dom::Element*& outEl,
                                     float& outLocalPxX, float& outLocalPxY) {
@@ -2227,5 +2247,6 @@ void Engine::dispatchHtmlNodeMouseEvent(const std::string& type,
     dispatchEvent(target, evt);
     if (jsRuntime_) jsRuntime_->executePendingJobs();
 }
+#endif  // BRO_WITH_3D
 
 } // namespace bro::engine

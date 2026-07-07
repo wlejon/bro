@@ -4,6 +4,7 @@
 // createInfoSetMcts(), createInfoSetTeamMcts(), patchSnapshotWithParticles().
 
 #include "js/ai_bindings.h"
+#if BRO_WITH_GAMEAI  // modular-build feature gate
 
 #include <qjsbind/qjsbind.h>
 #include <brogameagent/brogameagent.h>
@@ -550,3 +551,5 @@ void installBeliefBindings(JSContext* ctx, JSValue gameObj) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_GAMEAI

@@ -26,7 +26,9 @@
 #if BRO_WITH_NET
 #include "net/net_service.h"
 #endif
+#if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
+#endif
 #include "audio_inference/audio_inference.h"
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
@@ -34,7 +36,9 @@
 #include "render/skia_backend.h"
 
 #include <broaudio/engine.h>
+#if BRO_WITH_3D
 #include "scene/scene_graph.h"
+#endif
 #include "webgl/webgl2_context.h"
 #include "util/interrupt.h"
 #include "util/log.h"
@@ -130,6 +134,7 @@ void Engine::run() {
             }
 
             // Step physics (fixed timestep accumulator)
+#if BRO_WITH_PHYSICS
             if (physicsWorld_ && physicsWorld_->isIdle()) {
                 physicsWorld_->consumeStep();
                 double stepMs = physicsWorld_->timeStep() * 1000.0;
@@ -142,6 +147,7 @@ void Engine::run() {
                     physicsWorld_->signalStep();
                 }
             }
+#endif
 
             // Periodic GC
             double now = util::currentTimeMs();
@@ -325,9 +331,11 @@ void Engine::run() {
         }
 
         // 1b. Consume physics step from previous frame.
+#if BRO_WITH_PHYSICS
         if (physicsWorld_) {
             physicsWorld_->consumeStep();
         }
+#endif
 
         // 1c. Prune detached scene graphs / WebGL contexts (elements removed
         //     from DOM). Without this, webglEntries_[0] below can refer to a
@@ -339,17 +347,21 @@ void Engine::run() {
             while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
             return n->tagName() != "html" && n->tagName() != "HTML";
         };
+#if BRO_WITH_3D
         sceneGraphs_.erase(
             std::remove_if(sceneGraphs_.begin(), sceneGraphs_.end(),
                 [&](auto& sg) { return isDetached(sg.element); }),
             sceneGraphs_.end());
+#endif
         webglEntries_.erase(
             std::remove_if(webglEntries_.begin(), webglEntries_.end(),
                 [&](auto& e) { return isDetached(e.element); }),
             webglEntries_.end());
 
         // Sync scene graph physics (body transforms → node transforms).
+#if BRO_WITH_3D
         for (auto& sg : sceneGraphs_) sg.graph->syncPhysics();
+#endif
 
         // 1d. Sync scene graph AI bindings (world.tick, per-agent think).
         {
@@ -360,10 +372,12 @@ void Engine::run() {
             if (frameDt < 0.0f) frameDt = 0.0f;
             if (frameDt > 0.1f) frameDt = 0.1f;
             lastFrameTimeMs_ = nowMs;
+#if BRO_WITH_3D
             for (auto& sg : sceneGraphs_) {
                 sg.graph->syncAgents(frameDt);
                 sg.graph->tickAnimations(frameDt);
             }
+#endif
             drainWheelSmoothing(frameDt);
         }
 
@@ -439,6 +453,7 @@ void Engine::run() {
         //      + GL upload). Runs here — not on the raster thread — so JS
         //      mutations to each HtmlNode's detached Document stay on the
         //      same thread that reads it during style resolution + layout.
+#if BRO_WITH_3D
         if (auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
             for (auto& sg : sceneGraphs_) {
                 if (sg.graph) sg.graph->materializeHtmlNodes(skia);
@@ -459,6 +474,7 @@ void Engine::run() {
             }
             sg.graph->render();
         }
+#endif  // BRO_WITH_3D
 
         double tJs = util::currentTimeMs();
         accumJsMs_      += tJs - t0;
@@ -472,6 +488,7 @@ void Engine::run() {
         }
 
         // 3e. Signal physics thread at fixed rate (not every frame).
+#if BRO_WITH_PHYSICS
         if (physicsWorld_ && physicsWorld_->isIdle()) {
             double stepMs = physicsWorld_->timeStep() * 1000.0;
             double nowPhys = util::currentTimeMs();
@@ -484,6 +501,7 @@ void Engine::run() {
                 physicsWorld_->signalStep();
             }
         }
+#endif
 
         // 4. Signal layout thread when DOM is dirty. Layout is awaited just
         //    below (step 5a) so the raster signal at 5a2 sees a fully resolved
@@ -498,9 +516,11 @@ void Engine::run() {
         // doesn't otherwise see; force a pass when any is dirty so imperative
         // JS edits via node.root actually re-rasterize.
         bool sceneHtmlDirty = false;
+#if BRO_WITH_3D
         for (auto& sg : sceneGraphs_) {
             if (sg.graph && sg.graph->hasPendingHtmlWork()) { sceneHtmlDirty = true; break; }
         }
+#endif
 
         if (layoutIdle && framePresenter_->isRasterIdle() && document_ &&
             (document_->isDirty() || animActive || sceneHtmlDirty || !hasRenderedOnce_)) {
@@ -759,7 +779,9 @@ void Engine::run() {
     // their callbacks on this (the owning) thread before the runtime is torn down.
     if (jsRuntime_) js::shutdownAsyncJobs(jsRuntime_->getContext());
 
+#if BRO_WITH_PHYSICS
     if (physicsWorld_) physicsWorld_->shutdown();
+#endif
 
     if (layoutPipeline_) layoutPipeline_->postShutdown();
     if (layoutThread_.joinable()) layoutThread_.join();

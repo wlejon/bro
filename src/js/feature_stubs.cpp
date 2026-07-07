@@ -39,6 +39,7 @@
 #include "js/flora_bindings.h"
 #include "js/net_bindings.h"
 #include "js/video_bindings.h"
+#include "js/mesh_bindings.h"
 
 // Forward decls for the audio-taking soundml install signatures. (listen_host's
 // entry points are guarded directly in the engine — they use the fat
@@ -134,6 +135,29 @@ void NetBindings::cleanup(JSContext* /*ctx*/) {}
 // to an inert black box in el_video.cpp.)
 #if !BRO_WITH_VIDEO
 void VideoBindings::install(JSContext* /*ctx*/, const std::string& /*basePath*/) {}
+#endif
+
+// ── GAMEAI (bro.ai — game-agent core: navgrid/pathfinding/steering/MCTS) ─────
+// install() installs the unavailable bro.ai namespace so apps feature-detect
+// (`bro.ai.available === false`); cleanup is a no-op. The real definitions live
+// in ai_bindings.cpp (guarded by BRO_WITH_GAMEAI). ai_bindings.h is stub-safe
+// (forward-decls brogameagent types only). 3D forces GAMEAI on, so when this
+// stub is active the whole scene graph is compiled out too.
+#if !BRO_WITH_GAMEAI
+void AIBindings::install(JSContext* ctx) {
+    installUnavailableNamespace(ctx, "ai", "BRO_WITH_GAMEAI");
+}
+void AIBindings::cleanup(JSContext* /*ctx*/) {}
+#endif
+
+// ── MESH (global Mesh class — 3D-only) ───────────────────────────────────────
+// worker.cpp installs the Mesh class into every worker context unconditionally;
+// with 3D off there is no bromesh, so install/cleanup are no-ops (the Mesh class
+// is simply absent). The data accessors (classId/getMeshData/wrapMeshData/…) are
+// only called from 3D code paths, which are compiled out, so they need no stub.
+#if !BRO_WITH_3D
+void MeshBindings::install(JSContext* /*ctx*/) {}
+void MeshBindings::cleanup(JSContext* /*ctx*/) {}
 #endif
 
 // ── TRIPOSPLAT ───────────────────────────────────────────────────────────────

@@ -1,7 +1,9 @@
 #include "js/message_serializer.h"
+#if BRO_WITH_3D  // Mesh transfer needs bromesh (3D-only)
 #include "js/mesh_bindings.h"
-#include "js/imagebitmap_bindings.h"
 #include <bromesh/mesh_data.h>
+#endif
+#include "js/imagebitmap_bindings.h"
 #include "util/log.h"
 #include <include/core/SkImage.h>
 #include <cstring>
@@ -35,10 +37,12 @@ enum Tag : uint8_t {
     kTransferImageBitmap = 0x0E,  // index into transferredObjects (ImageBitmap)
 };
 
+#if BRO_WITH_3D
 // Deleter for MeshData* stored in TransferredObject (type=kMesh).
 static void deleteMeshData(void* p) {
     delete static_cast<bromesh::MeshData*>(p);
 }
+#endif  // BRO_WITH_3D
 
 // Deleter for SkImage* stored in TransferredObject (type=kImageBitmap).
 // The slot owns exactly one ref; releasing it drops that ref.
@@ -178,6 +182,7 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
     // the underlying MeshData lives in a unique_ptr inside the MeshWrapper, and
     // we move it across threads by pointer (no byte copy). The source Mesh is
     // left neutered after transfer.
+#if BRO_WITH_3D
     {
         JSClassID meshClassId = MeshBindings::classId();
         if (meshClassId != 0 && JS_GetOpaque(val, meshClassId) != nullptr) {
@@ -205,6 +210,7 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
             return false;
         }
     }
+#endif  // BRO_WITH_3D
 
     // ImageBitmap — an immutable raster SkImage. Listed in the transfer list:
     // moved zero-copy, source neutered. Not listed: structured-cloned — but the
@@ -378,7 +384,11 @@ bool serializeMessage(JSContext* ctx, JSValue value, JSValue transferList, Messa
     // Collect transfer list. Allowed entries: ArrayBuffer (data copy today)
     // or Mesh (true zero-copy transfer of the underlying bromesh::MeshData).
     std::vector<JSValue> transfers;
+#if BRO_WITH_3D
     JSClassID meshClassId = MeshBindings::classId();
+#else
+    JSClassID meshClassId = 0;  // no Mesh transfer without 3D
+#endif
     JSClassID ibClassId   = ImageBitmapBindings::classId();
     if (!JS_IsUndefined(transferList) && JS_IsArray(transferList)) {
         JSValue lenVal = JS_GetPropertyStr(ctx, transferList, "length");
@@ -488,6 +498,7 @@ static JSValue readValue(JSContext* ctx, Reader& r, Message& msg)
         // Create ArrayBuffer owning a copy of the transferred data
         return JS_NewArrayBufferCopy(ctx, buf.data(), buf.size());
     }
+#if BRO_WITH_3D
     case kTransferMesh: {
         if (!r.ok(4)) return JS_ThrowTypeError(ctx, "postMessage: truncated mesh transfer index");
         uint32_t idx = r.u32();
@@ -501,6 +512,7 @@ static JSValue readValue(JSContext* ctx, Reader& r, Message& msg)
         auto* raw = static_cast<bromesh::MeshData*>(obj.release());
         return MeshBindings::wrapMeshData(ctx, std::unique_ptr<bromesh::MeshData>(raw));
     }
+#endif  // BRO_WITH_3D
     case kTransferImageBitmap: {
         if (!r.ok(4)) return JS_ThrowTypeError(ctx, "postMessage: truncated imagebitmap transfer index");
         uint32_t idx = r.u32();

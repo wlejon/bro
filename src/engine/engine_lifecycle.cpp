@@ -13,7 +13,9 @@
 #include "js/webgl2_bindings.h"
 #include "js/scene_bindings.h"
 #include "js/worker.h"
+#if BRO_WITH_PHYSICS
 #include "js/physics_bindings.h"
+#endif
 #include "js/server_bindings.h"
 #include "js/net_bindings.h"
 #include "js/mesh_bindings.h"
@@ -40,8 +42,12 @@
 #include "layout/skia_text_metrics.h"
 #include "render/skia_backend.h"
 #include "render/recording_renderer.h"
+#if BRO_WITH_3D
 #include "scene/scene_graph.h"
+#endif
+#if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
+#endif
 #include "audio_inference/audio_inference.h"
 #if BRO_WITH_NET
 #include "net/net_service.h"
@@ -53,7 +59,9 @@
 #include "render/renderer.h"
 #include "render/gl_context.h"
 #include "layout/draw_traversal.h"
+#if BRO_WITH_3D
 #include "engine/gizmo.h"
+#endif
 #include <broaudio/engine.h>
 #if BRO_WITH_TENSOR
 #include <brotensor/runtime.h>
@@ -127,6 +135,7 @@ Engine::~Engine() {
 
     // Clear terrain managers before destroying scene graphs — their destructors
     // call SceneGraph::destroyNode(), which crashes if the graph is already gone.
+#if BRO_WITH_3D
     if (jsRuntime_) {
         js::TerrainBindings::cleanup(jsRuntime_->getContext());
         js::TileBindings::cleanup(jsRuntime_->getContext());
@@ -134,6 +143,7 @@ Engine::~Engine() {
 
     // Destroy scene graphs before canvas scenes (they hold canvas pointers)
     sceneGraphs_.clear();
+#endif
 
     // Release threaded scenes' GPU resources on the shared worker and stop it
     // before destroying the scenes (the frame loop's shutdown normally did this
@@ -216,13 +226,19 @@ Engine::~Engine() {
         js::cleanupWorkerBindings(ctx);
         js::ServerBindings::cleanup(ctx);
         js::NetBindings::cleanup(ctx);
+#if BRO_WITH_PHYSICS
         js::PhysicsBindings::cleanup(ctx);
+#endif
+#if BRO_WITH_3D
         js::TerrainBindings::cleanup(ctx);
         js::TileBindings::cleanup(ctx);
         js::MeshBindings::cleanup(ctx);
         js::RiggingBindings::cleanup(ctx);
-        js::AIBindings::cleanup(ctx);
+#endif
+        js::AIBindings::cleanup(ctx);  // no-op stub when GAMEAI off
+#if BRO_WITH_3D
         js::SceneBindings::cleanup(ctx);
+#endif
         js::AudioBindings::cleanup(ctx);
         js::StorageBindings::cleanup(ctx);
         if (gl_) {
@@ -308,18 +324,22 @@ Engine::~Engine() {
     // destructor body in default member-destruction order, so its dtor
     // would otherwise see a dead JSContext (and the runtime would abort
     // with a leak-detected assertion before reaching that point).
+#if BRO_WITH_3D
     if (gizmo_) gizmo_->clearCallbacks();
     // Tear down scene graphs before the JS runtime — AgentBinding owns
     // JsThinkHook which holds JS_DupValue'd refs to world/agent JS objects.
     // If the runtime dies first, those JS_FreeValue calls run on a dead
     // context, refs never release, and JS_FreeRuntime asserts on leaks.
     sceneGraphs_.clear();
+#endif
     // Destroy JS runtime BEFORE document — JS_FreeRuntime() runs GC finalizers
     // that dereference Element pointers, so elements must still be alive.
     // Audio engine must also outlive JS runtime because VoiceAllocator/MidiInput
     // destructors reference it (removeVoice, close).
     jsRuntime_.reset();
+#if BRO_WITH_PHYSICS
     physicsWorld_.reset();
+#endif
     // Worker already joined above (during binding cleanup); this just frees it.
     audioInference_.reset();
     audioEngine_.reset();

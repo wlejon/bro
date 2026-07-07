@@ -1,4 +1,5 @@
 #include "js/mesh_bindings.h"
+#if BRO_WITH_3D  // modular-build feature gate
 #include "js/rigging_bindings.h"
 
 #include <qjsbind/qjsbind.h>
@@ -2969,3 +2970,5 @@ JSClassID MeshBindings::classId() {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_3D

@@ -46,17 +46,26 @@ add_library(bro_engine STATIC
     overlay.cpp
     dropdown_overlay.cpp
     color_picker_overlay.cpp
-    gizmo.cpp
-    gizmo_routing.cpp
     menu_bar.cpp
     inspector_highlight.cpp
     ${GENERATED_HEADERS}
 )
+# gizmo.cpp / gizmo_routing.cpp are 3D-only (scene::MeshNode + bromesh); compile
+# them only when BRO_WITH_3D. Their engine call sites are #if-guarded too.
+if(BRO_WITH_3D)
+    target_sources(bro_engine PRIVATE gizmo.cpp gizmo_routing.cpp)
+endif()
 target_include_directories(bro_engine PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_include_directories(bro_engine PRIVATE ${GEN_DIR})
-target_link_libraries(bro_engine PUBLIC bro_platform bro_render bro_js bro_dom bro_layout bro_canvas bro_webgl bro_physics bro_audio_inference bro_scene bro_steam broaudio bro_util glad)
+target_link_libraries(bro_engine PUBLIC bro_platform bro_render bro_js bro_dom bro_layout bro_canvas bro_webgl bro_audio_inference bro_steam broaudio bro_util glad)
 if(BRO_WITH_NET)
     target_link_libraries(bro_engine PUBLIC bro_net)
+endif()
+if(BRO_WITH_PHYSICS)
+    target_link_libraries(bro_engine PUBLIC bro_physics)
+endif()
+if(BRO_WITH_3D)
+    target_link_libraries(bro_engine PUBLIC bro_scene)
 endif()
 
 # Stamp BRO_WITH_* compile definitions so engine_init.cpp can #if on features

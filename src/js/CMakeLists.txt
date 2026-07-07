@@ -105,7 +105,17 @@ target_include_directories(bro_js PRIVATE ${GEN_DIR})
 # brolm is linked explicitly (not just transitively via brodiffusion):
 # diffusion_bindings.cpp uses brolm::clip for diffusion text encoding, and
 # lm_bindings.cpp exposes brolm::qwen as bro.lm.
-target_link_libraries(bro_js PUBLIC qjs qjsbind brokit bro_dom bro_util bro_canvas bro_physics bro_audio_inference bro_scene bro_steam broaudio bro_webgl SDL3::SDL3 bromesh brogameagent broimage::broimage)
+target_link_libraries(bro_js PUBLIC qjs qjsbind brokit bro_dom bro_util bro_canvas bro_audio_inference bro_steam broaudio bro_webgl SDL3::SDL3 broimage::broimage)
+# bro_scene + bromesh back the 3D scene graph / Mesh bindings (3D-only);
+# brogameagent backs the bro.ai.game bindings (GAMEAI-only). Their *_bindings.cpp
+# bodies are wrapped in the matching #if and their off-state stubs live in
+# feature_stubs.cpp; the siblings are add_subdirectory'd conditionally too.
+if(BRO_WITH_3D)
+    target_link_libraries(bro_js PUBLIC bro_scene bromesh)
+endif()
+if(BRO_WITH_GAMEAI)
+    target_link_libraries(bro_js PUBLIC brogameagent)
+endif()
 
 # Tier-1 renderer/service sibling links, gated per feature. The matching
 # *_bindings.cpp bodies are wrapped in `#if BRO_WITH_X` and their off-state
@@ -119,6 +129,9 @@ if(BRO_WITH_NET)
 endif()
 if(BRO_WITH_VIDEO)
     target_link_libraries(bro_js PUBLIC bro_video)
+endif()
+if(BRO_WITH_PHYSICS)
+    target_link_libraries(bro_js PUBLIC bro_physics)
 endif()
 
 # AI-tower sibling links, gated per feature. The matching *_bindings.cpp are

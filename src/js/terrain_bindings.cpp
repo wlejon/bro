@@ -1,4 +1,5 @@
 #include "js/terrain_bindings.h"
+#if BRO_WITH_3D  // modular-build feature gate
 
 #include <qjsbind/qjsbind.h>
 
@@ -296,3 +297,5 @@ void TerrainBindings::cleanup(JSContext*) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_3D
