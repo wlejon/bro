@@ -5,6 +5,7 @@ cmake-build-*/
 *.bgar
 .devlog
 /*.png
+/.claude
 
 /node_modules/
 .shots
