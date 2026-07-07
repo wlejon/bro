@@ -13,7 +13,10 @@ html {
     background-color: #fff;
     color: #000;
     font-family: Arial, Helvetica, sans-serif;
-    font-size: 16px;
+    /* medium, not 16px: the keyword resolves to 13px inside generic
+       monospace (Chromium quirk) and 16px everywhere else; a fixed px
+       value here would kill that re-resolution chain. */
+    font-size: medium;
     line-height: normal;
 }
 

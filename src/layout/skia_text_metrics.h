@@ -42,6 +42,17 @@ public:
         return h > 0 ? h : fontSize * 1.2f;
     }
 
+    float naturalHeight(std::string_view fontFamily,
+                        float fontSize,
+                        std::string_view fontWeight) override {
+        auto tm = renderer_->measureText("", makeRef(fontFamily, fontSize, fontWeight));
+        // Text-run rect height is the font box without line gap: Blink
+        // reports round(ascent) + round(descent) (17 for 16px Arial, where
+        // line-height: normal is 18 with the gap).
+        float h = std::round(tm.ascent) + std::round(tm.descent);
+        return h > 0 ? h : lineHeight(fontFamily, fontSize, fontWeight);
+    }
+
     float ascent(std::string_view fontFamily,
                  float fontSize,
                  std::string_view fontWeight) override {
