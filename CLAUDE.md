@@ -47,7 +47,7 @@ bro-headless --no-gpu ../broworkshop/demos/example
 
 Submodules must be initialized: `git submodule update --init`
 
-Skia is a pre-built dependency. On Linux, run `third_party/skia/build_skia_linux.sh`; on macOS, run `third_party/skia/build_skia_mac.sh` (uses CoreText, freetype/fontconfig off). On Windows, build Skia separately and place `skia.lib` in `third_party/skia/lib/{Debug,Release}/`.
+Skia is a pre-built dependency. On Windows the Release `skia.lib` is auto-downloaded from the repo's GitHub releases at configure time (headers come from the skia submodule); no manual step needed (`-DBRO_FETCH_SKIA=OFF` disables it). To build it by hand instead — required on Linux/macOS, or for a Windows Debug lib — run `third_party/skia/build_skia_linux.sh` (Linux) or `third_party/skia/build_skia_mac.sh` (macOS, uses CoreText, freetype/fontconfig off), or build manually and place the lib in `third_party/skia/lib/{Debug,Release}/`.
 
 On macOS, `tests/run_tests.sh` uses `mapfile` and needs bash 4+ (`brew install bash` → `/opt/homebrew/bin/bash tests/run_tests.sh`); the system `/bin/bash` is 3.2.
 
