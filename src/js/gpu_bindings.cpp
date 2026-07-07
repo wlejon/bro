@@ -15,6 +15,7 @@
 #include <brotensor/tensor.h>
 
 #include <cstring>
+#include <string>
 
 namespace bro::js {
 
