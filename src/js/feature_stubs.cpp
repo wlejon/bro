@@ -61,7 +61,6 @@ void installGpuBindings(JSContext* ctx) {
 void installLmBindings(JSContext* ctx) {
     installUnavailableNamespace(ctx, "lm", "BRO_WITH_LM");
 }
-void cleanupLmBindings(JSContext* /*ctx*/) {}
 #endif
 
 // ── DIFFUSION ────────────────────────────────────────────────────────────────
@@ -69,9 +68,6 @@ void cleanupLmBindings(JSContext* /*ctx*/) {}
 void installDiffusionBindings(JSContext* ctx) {
     installUnavailableNamespace(ctx, "diffusion", "BRO_WITH_DIFFUSION");
 }
-void setDiffusionAppContext(const std::string& /*basePath*/,
-                            const util::AssetMounts* /*mounts*/) {}
-void cleanupDiffusionBindings(JSContext* /*ctx*/) {}
 #endif
 
 // ── VISION ───────────────────────────────────────────────────────────────────
@@ -102,19 +98,6 @@ void installGestureBindings(JSContext* ctx, broaudio::Engine*, engine::AudioInfe
 void installListenBindings(JSContext* ctx) {
     installUnavailableNamespace(ctx, "listen", "BRO_WITH_SOUNDML");
 }
-// Per-frame and teardown hooks the engine loop calls unconditionally; no-ops
-// when the soundml subsystems aren't built.
-void tickWake(JSContext* /*ctx*/) {}
-void tickKws(JSContext* /*ctx*/) {}
-void tickGesture(JSContext* /*ctx*/) {}
-void cleanupWakeBindings(JSContext* /*ctx*/) {}
-void cleanupKwsBindings(JSContext* /*ctx*/) {}
-void cleanupSenseBindings(JSContext* /*ctx*/) {}
-void cleanupGestureBindings(JSContext* /*ctx*/) {}
-void cleanupSttBindings(JSContext* /*ctx*/) {}
-void cleanupTtsBindings(JSContext* /*ctx*/) {}
-void cleanupDiarBindings(JSContext* /*ctx*/) {}
-void cleanupRaveBindings(JSContext* /*ctx*/) {}
 #endif
 
 // ── TRIPOSPLAT ───────────────────────────────────────────────────────────────

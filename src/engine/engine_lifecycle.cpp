@@ -184,6 +184,7 @@ Engine::~Engine() {
         // lets it keep launching CUDA work into a brotensor context that's being
         // torn down by static destructors — which has produced kernel-level
         // driver faults on exit.
+#if BRO_WITH_SOUNDML
         js::cleanupWakeBindings(ctx);
         js::cleanupKwsBindings(ctx);
         js::cleanupSenseBindings(ctx);
@@ -191,7 +192,6 @@ Engine::~Engine() {
         // Both listen-host members are detached now (their cleanups above ran
         // Set*(nullptr), which tears down the shared tap + task on the last
         // detach); this just drops the host's subsystem pointers.
-#if BRO_WITH_SOUNDML
         js::shutdownListenHost();
 #endif
         js::cleanupMicBindings(ctx);
@@ -200,11 +200,15 @@ Engine::~Engine() {
         // command, destroys the model (its CUDA frees run on the worker thread),
         // and exits before audio + brotensor teardown below.
         if (audioInference_) audioInference_->shutdown();
+#if BRO_WITH_SOUNDML
         js::cleanupSttBindings(ctx);
-        js::cleanupLmBindings(ctx);
         js::cleanupTtsBindings(ctx);
         js::cleanupDiarBindings(ctx);
         js::cleanupRaveBindings(ctx);
+#endif
+#if BRO_WITH_LM
+        js::cleanupLmBindings(ctx);
+#endif
         js::cleanupWorkerBindings(ctx);
         js::ServerBindings::cleanup(ctx);
         js::NetBindings::cleanup(ctx);

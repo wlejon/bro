@@ -276,10 +276,8 @@ void Engine::advanceTime(double ms) {
         // worker thread — the parity convention, cf. physicsWorld_->stepInline)
         // so wake fires are produced deterministically before we deliver them.
         if (audioInference_) audioInference_->stepInline();
-        bro::js::tickWake(jsRuntime_->getContext());
-        bro::js::tickKws(jsRuntime_->getContext());
-        bro::js::tickGesture(jsRuntime_->getContext());
-        bro::js::tickMic(jsRuntime_->getContext());
+        // Deliver audio results (registered pumps: wake/kws/gesture, mic).
+        for (auto& pump : framePumps_) pump();
         bro::js::tickAsync(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
 

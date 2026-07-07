@@ -249,7 +249,9 @@ void Worker::threadFunc()
     // sibling). Same binding as the main context; this worker owns its own
     // Pipeline. ---
     installDiffusionBindings(ctx);
+#if BRO_WITH_DIFFUSION
     setDiffusionAppContext(basePath_, mounts_);
+#endif
 
     // --- 3b''''. Install bro.lm (Qwen3 LLM inference, brolm sibling).
     // Same binding as the main context; this worker owns its own model. ---
@@ -446,7 +448,9 @@ void Worker::threadFunc()
     }
     AIBindings::cleanup(ctx);
     MeshBindings::cleanup(ctx);
+#if BRO_WITH_DIFFUSION
     cleanupDiffusionBindings(ctx);
+#endif
     s_wcd = nullptr;
     JS_SetContextOpaque(ctx, nullptr);
 

@@ -18,10 +18,12 @@
 #include <atomic>
 #include <bit>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <vector>
 #include <glad/gl.h>
 #include <include/core/SkSurface.h>
 #include <include/gpu/ganesh/GrDirectContext.h>
@@ -702,6 +704,14 @@ private:
     std::unique_ptr<Settings> settings_;
     std::unique_ptr<broaudio::Engine> audioEngine_;
     std::unique_ptr<AudioInference> audioInference_;
+
+    // Per-frame main-thread service hooks. An optional subsystem registers its
+    // result-delivery pump here at install time (inside its BRO_WITH_* guard);
+    // the frame loop iterates them once per tick. A subsystem compiled out never
+    // registers — so there is no dead call and no stub in the hot path. Written
+    // once during init and only iterated on the main thread thereafter, so it
+    // needs no synchronisation.
+    std::vector<std::function<void()>> framePumps_;
     std::unique_ptr<physics::PhysicsWorld> physicsWorld_;
     std::unique_ptr<net::NetService> netService_;
     std::unique_ptr<steam::SteamService> steamService_;

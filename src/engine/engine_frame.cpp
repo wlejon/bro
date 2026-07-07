@@ -114,13 +114,11 @@ void Engine::run() {
 
             jsRuntime_->executePendingJobs();
             js::tickWorkers(jsRuntime_->getContext());
-            // Deliver any results (wake fires) the self-paced audio-inference
-            // worker published since last frame on this (main) thread. The worker
-            // drains the mic rings on its own clock — it is not pumped from here.
-            js::tickWake(jsRuntime_->getContext());
-            js::tickKws(jsRuntime_->getContext());
-            js::tickGesture(jsRuntime_->getContext());
-            js::tickMic(jsRuntime_->getContext());
+            // Deliver any results (wake/kws/gesture fires, mic chunks) the audio
+            // subsystems published since last frame on this (main) thread. Each
+            // pump is registered at install time only when its subsystem is built
+            // — the worker drains the mic rings on its own clock, not from here.
+            for (auto& pump : framePumps_) pump();
             js::tickAsync(jsRuntime_->getContext());
             jsRuntime_->executePendingJobs();
 
@@ -425,13 +423,11 @@ void Engine::run() {
         // 3b. Run pending JS jobs (promises, etc.)
         jsRuntime_->executePendingJobs();
         js::tickWorkers(jsRuntime_->getContext());
-        // Deliver any results (wake fires) the self-paced audio-inference worker
-        // published since last frame on this (main) thread. The worker drains the
-        // mic rings on its own clock — it is not pumped from here.
-        js::tickWake(jsRuntime_->getContext());
-        js::tickKws(jsRuntime_->getContext());
-        js::tickGesture(jsRuntime_->getContext());
-        js::tickMic(jsRuntime_->getContext());
+        // Deliver any results (wake/kws/gesture fires, mic chunks) the audio
+        // subsystems published since last frame on this (main) thread. Each pump
+        // is registered at install time only when its subsystem is built — the
+        // worker drains the mic rings on its own clock, not from here.
+        for (auto& pump : framePumps_) pump();
         js::tickAsync(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
         if (netService_) {

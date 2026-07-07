@@ -412,10 +412,25 @@ Engine::Engine(const EngineConfig& config)
     js::installGestureBindings(jsRuntime_->getContext(), audioEngine_.get(),
                                audioInference_.get());
 
+#if BRO_WITH_SOUNDML
+    // Deliver wake/kws/gesture fires the self-paced audio-inference worker (or,
+    // headless, the inline pump) published since last frame. Registered only
+    // when the soundml models are built, so the frame loop carries no stubbed
+    // hook when they aren't.
+    framePumps_.push_back([this] {
+        JSContext* c = jsRuntime_->getContext();
+        js::tickWake(c);
+        js::tickKws(c);
+        js::tickGesture(c);
+    });
+#endif
+
     // bro.mic (general live-mic chunk consumer — the worked example of
     // broaudio's chunkFrames feature). Same shape as wake: a mic tap on the
     // audio thread, drained on the main thread. Inert until bro.mic.start().
     js::installMicBindings(jsRuntime_->getContext(), audioEngine_.get());
+    // bro.mic chunk delivery — audio tier, independent of the AI models above.
+    framePumps_.push_back([this] { js::tickMic(jsRuntime_->getContext()); });
 
     // Apply initial audio settings from persisted user overrides
     {
@@ -588,7 +603,9 @@ Engine::Engine(const EngineConfig& config)
     js::VideoBindings::install(jsRuntime_->getContext(), manifest_.basePath);
     js::SceneBindings::setAppContext(manifest_.basePath, &assetMounts_);
     js::TileBindings::setAppContext(manifest_.basePath, &assetMounts_);
+#if BRO_WITH_DIFFUSION
     js::setDiffusionAppContext(manifest_.basePath, &assetMounts_);
+#endif
     // screenshotCanvas works on both GPU-backed (windowed) and raster
     // (headless) Skia surfaces, so it's installed in both modes — apps can
     // use it for in-app capture / save flows without a headless drive.
