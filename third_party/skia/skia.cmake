@@ -1,9 +1,10 @@
 # Skia - imported pre-built static library (required)
 #
-# On Windows and Linux, both the Skia headers/source and the Release library are
-# auto-downloaded from the repo's GitHub releases when absent (see BRO_FETCH_SKIA
-# below) — all pinned to one Skia commit so they always match. To build it
-# yourself instead (macOS, a Windows Debug lib, or a different Skia version),
+# On Windows, Linux, and Apple Silicon (arm64) macOS, both the Skia headers/source
+# and the Release library are auto-downloaded from the repo's GitHub releases when
+# absent (see BRO_FETCH_SKIA below) — all pinned to one Skia commit so they always
+# match. To build it yourself instead (Intel macOS, a Windows Debug lib, or a
+# different Skia version),
 # run third_party/skia/build_skia_{linux,mac}.sh, or populate
 # third_party/skia/lib/{Debug,Release}/ and third_party/skia/src/ by hand:
 #   cd third_party/skia/src && python3 tools/git-sync-deps
@@ -25,8 +26,8 @@ set(_skia_debug   "${CMAKE_CURRENT_LIST_DIR}/lib/Debug/${_skia_ext}")
 # The source bundle is the subset bro compiles/includes (include/, src/, the
 # svg/skshaper/skresources modules, and expat), not the whole Skia tree.
 # Non-fatal: a failed download / hash mismatch falls through to the manual
-# instructions below. macOS + Windows Debug are not hosted. BSD-3-Clause permits
-# redistribution. Set -DBRO_FETCH_SKIA=OFF to disable.
+# instructions below. Windows Debug and Intel (x86_64) macOS are not hosted.
+# BSD-3-Clause permits redistribution. Set -DBRO_FETCH_SKIA=OFF to disable.
 option(BRO_FETCH_SKIA "Download prebuilt Skia (headers + lib) when absent" ON)
 set(BRO_SKIA_RELEASE_TAG "skia-prebuilt-m147"
     CACHE STRING "GitHub release (wlejon/bro) holding the prebuilt Skia binaries")
@@ -76,6 +77,11 @@ if(BRO_FETCH_SKIA)
         if(WIN32)
             set(_skia_lib_asset "skia-windows-x64-Release.lib")
             set(_skia_lib_sha "e4e561366ac923218406c9f9a027ed23401b44f7c40b041a9fab5fddb4e46823")
+        elseif(APPLE AND CMAKE_SYSTEM_PROCESSOR STREQUAL "arm64")
+            # Only Apple Silicon (arm64) is hosted; Intel Macs fall through to
+            # build_skia_mac.sh rather than fetch an unlinkable arm64 lib.
+            set(_skia_lib_asset "skia-macos-arm64-Release.a")
+            set(_skia_lib_sha "42fc7231974cc0011f09e343cadb31935be5019669125ee261fea7fbe947481d")
         elseif(UNIX AND NOT APPLE)
             set(_skia_lib_asset "skia-linux-x64-Release.a")
             set(_skia_lib_sha "adb014b9eb366266d205b293258d9a9628f73b9ea7156da2053e65e3f3363f55")

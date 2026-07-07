@@ -102,6 +102,20 @@ build_config() {
     local dest="$SCRIPT_DIR/lib/$config"
     mkdir -p "$dest"
     cp "out/$config/libskia.a" "$dest/"
+
+    # We must force is_official_build=false above (for the bundled-libwebp
+    # include wiring), which is the non-official path that embeds full debug
+    # symbols — ballooning the Release archive to ~500 MB. The Linux/Windows
+    # Release libs are official builds and ship lean (~20-40 MB). Strip the
+    # debug symbols from the Release archive to match (keeps all global/external
+    # symbols needed for linking; ~500 MB -> ~20 MB). Debug keeps its symbols.
+    # Use the system tools explicitly so a non-Apple strip/ranlib on PATH
+    # (Homebrew/conda) can't corrupt the Mach-O archive.
+    if [ "$config" != "Debug" ]; then
+        echo "=== Stripping debug symbols from Release libskia.a ==="
+        /usr/bin/strip -S "$dest/libskia.a"
+        /usr/bin/ranlib "$dest/libskia.a"
+    fi
     echo "=== Installed libskia.a to $dest ==="
 }
 
