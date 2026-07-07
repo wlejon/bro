@@ -14,9 +14,11 @@ sk_sp<SkImageFilter> BuildSkImageFilterChain(std::span<const CssFilterParams> fi
     for (const auto& f : filters) {
         switch (f.kind) {
             case CssFilterParams::Blur: {
-                // CSS blur(radius) → Skia Gaussian sigma = radius / 2 (the same
-                // convention used by box-shadow / drop-shadow / mask blur).
-                float sigma = f.a / 2.0f;
+                // CSS filter blur(radius): the radius IS the Gaussian
+                // stdDeviation (Filter Effects §blur), so sigma = radius.
+                // (This differs from box-shadow / drop-shadow, whose blur
+                // radius maps to stdDeviation = radius / 2 — see DropShadow.)
+                float sigma = f.a;
                 result = SkImageFilters::Blur(sigma, sigma, std::move(result));
                 break;
             }

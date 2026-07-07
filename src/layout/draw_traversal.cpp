@@ -1363,6 +1363,7 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
         auto positions= getLayerProp("background-position", "0% 0%");
         auto sizes    = getLayerProp("background-size", "auto");
         auto repeats  = getLayerProp("background-repeat", "repeat");
+        auto blends   = getLayerProp("background-blend-mode", "normal");
 
         // Paint layers from last to first (CSS: first listed is on top).
         for (size_t li = images.size(); li-- > 0; ) {
@@ -1371,6 +1372,14 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
             const std::string layerPosition = li < positions.size() ? positions[li] : positions.back();
             const std::string layerSize     = li < sizes.size()     ? sizes[li]     : sizes.back();
             const std::string layerRepeat   = li < repeats.size()   ? repeats[li]   : repeats.back();
+
+            // background-blend-mode: composite this layer against the layers
+            // (and background color) already painted beneath it. A non-normal
+            // mode wraps the layer's paint in a blended group.
+            render::BlendMode layerBlend = parseBlendMode(
+                li < blends.size() ? blends[li] : blends.back());
+            bool layerBlended = (layerBlend != render::BlendMode::Normal);
+            if (layerBlended) renderer_->saveLayerWithBlend(layerBlend);
 
         if (val.substr(0, 4) == "url(") {
             // Extract URL
@@ -1893,6 +1902,7 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                 }
             }
         }
+        if (layerBlended) renderer_->restore();
         } // for layer
     }
 
