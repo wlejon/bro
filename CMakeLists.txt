@@ -104,9 +104,12 @@ endif()
 # seed the per-feature defaults; individual -DBRO_WITH_* flags always override.
 # See docs/build-options.md for the full rationale and the tier layout.
 #
-# NOTE: the default profile is "full" while the split is being rolled out, so
-# every intermediate commit builds exactly as before. It will move to "app".
-set(BRO_PROFILE "full" CACHE STRING "Feature profile: minimal | app | full")
+# The default is "app": full renderer (3D + physics + audio + core game-AI) plus
+# net/video/steam, but no AI tower (no brotensor/CUDA). "full" adds the AI tower;
+# "minimal" is the 2D/canvas/WebGL floor. NOTE: minimal's renderer/service gates
+# are not yet wired into the engine hot path (audio/3D are still hooked in the
+# frame loop), so a minimal build does not link yet — that refactor is pending.
+set(BRO_PROFILE "app" CACHE STRING "Feature profile: minimal | app | full")
 set_property(CACHE BRO_PROFILE PROPERTY STRINGS minimal app full)
 
 # Per-profile defaults.  minimal = 2D/canvas/WebGL only.  app = full renderer
