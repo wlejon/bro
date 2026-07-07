@@ -63,6 +63,11 @@ public:
                      bromath::Color fill, bromath::Color stroke, float strokeWidth) override;
     void drawPolyline(std::span<const PointF> points,
                       bromath::Color stroke, float strokeWidth) override;
+    void drawSvgPath(std::string_view d, PathFillRule rule,
+                     const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                     const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                     const StrokeStyle& strokeStyle, std::span<const float> dash) override;
+    void clipSvgPath(std::string_view d, PathFillRule rule) override;
 
     void drawBoxShadow(float x, float y, float w, float h,
                        float rx, float ry,

@@ -220,6 +220,39 @@ void RecordingRenderer::drawPolyline(std::span<const PointF> points,
     buffer_->append(cmd);
 }
 
+void RecordingRenderer::drawSvgPath(std::string_view d, PathFillRule rule,
+                                    const GradientPaint& fill, std::span<const ColorStop> fillStops,
+                                    const GradientPaint& stroke, std::span<const ColorStop> strokeStops,
+                                    const StrokeStyle& strokeStyle, std::span<const float> dash) {
+    if (!buffer_) {
+        measureRenderer_->drawSvgPath(d, rule, fill, fillStops, stroke, strokeStops, strokeStyle, dash);
+        return;
+    }
+    Cmd_DrawSvgPath cmd{};
+    auto [poff, plen] = buffer_->pushString(d);
+    cmd.pathOffset = poff; cmd.pathLen = plen;
+    auto [foff, fcnt] = buffer_->pushSpan(fillStops);
+    cmd.fillStopsOffset = foff; cmd.fillStopsLen = fcnt;
+    auto [soff, scnt] = buffer_->pushSpan(strokeStops);
+    cmd.strokeStopsOffset = soff; cmd.strokeStopsLen = scnt;
+    auto [doff, dcnt] = buffer_->pushSpan(dash);
+    cmd.dashArrOffset = doff; cmd.dashArrLen = dcnt;
+    cmd.fill = fill; cmd.stroke = stroke; cmd.strokeStyle = strokeStyle; cmd.rule = rule;
+    buffer_->append(cmd);
+}
+
+void RecordingRenderer::clipSvgPath(std::string_view d, PathFillRule rule) {
+    if (!buffer_) {
+        measureRenderer_->clipSvgPath(d, rule);
+        return;
+    }
+    Cmd_ClipSvgPath cmd{};
+    auto [poff, plen] = buffer_->pushString(d);
+    cmd.pathOffset = poff; cmd.pathLen = plen;
+    cmd.rule = rule;
+    buffer_->append(cmd);
+}
+
 void RecordingRenderer::drawBoxShadow(float x, float y, float w, float h,
                                       float rx, float ry,
                                       float offsetX, float offsetY,

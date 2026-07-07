@@ -102,6 +102,13 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
             } else if constexpr (std::is_same_v<T, Cmd_DrawPolyline>) {
                 dst_->drawPolyline(buffer.spanAt<PointF>(c.pointsOffset, c.pointsLen),
                                    c.stroke, c.strokeWidth);
+            } else if constexpr (std::is_same_v<T, Cmd_DrawSvgPath>) {
+                dst_->drawSvgPath(buffer.stringAt(c.pathOffset, c.pathLen), c.rule,
+                                  c.fill, buffer.spanAt<ColorStop>(c.fillStopsOffset, c.fillStopsLen),
+                                  c.stroke, buffer.spanAt<ColorStop>(c.strokeStopsOffset, c.strokeStopsLen),
+                                  c.strokeStyle, buffer.spanAt<float>(c.dashArrOffset, c.dashArrLen));
+            } else if constexpr (std::is_same_v<T, Cmd_ClipSvgPath>) {
+                dst_->clipSvgPath(buffer.stringAt(c.pathOffset, c.pathLen), c.rule);
 
             } else if constexpr (std::is_same_v<T, Cmd_Save>) {
                 dst_->save();

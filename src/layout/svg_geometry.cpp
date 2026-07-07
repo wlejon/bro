@@ -1,4 +1,5 @@
 #include "layout/svg_geometry.h"
+#include "layout/svg_common.h"
 #include "dom/element.h"
 
 #include <include/core/SkMatrix.h>
@@ -16,144 +17,18 @@
 
 namespace bro::layout {
 
+// Shared SVG parsing helpers (transform/viewBox/attr/shape) live in svg_common.
+using svgcommon::lower;
+using svgcommon::attrOf;
+using svgcommon::attrFloat;
+using svgcommon::parseNumberList;
+using svgcommon::isNonRendered;
+using svgcommon::parseTransformList;
+using svgcommon::viewportMatrix;
+using svgcommon::ownTransform;
+using svgcommon::findById;
+
 namespace {
-
-std::string lower(std::string_view s) {
-    std::string out(s);
-    std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-    return out;
-}
-
-// gumbo lowercases attribute names at parse time, but JS setAttribute stores
-// the name verbatim — try the exact spelling first, then the lowercased one.
-const std::string& attrOf(const dom::Element* el, const char* name) {
-    const std::string& v = el->getAttribute(name);
-    if (!v.empty()) return v;
-    return el->getAttribute(lower(name));
-}
-
-float attrFloat(const dom::Element* el, const char* name, float fallback = 0.0f) {
-    const std::string& v = attrOf(el, name);
-    if (v.empty()) return fallback;
-    char* end = nullptr;
-    float f = std::strtof(v.c_str(), &end);
-    return end == v.c_str() ? fallback : f;
-}
-
-// Whitespace/comma separated float list (viewBox, polygon points).
-std::vector<float> parseNumberList(const std::string& s) {
-    std::vector<float> out;
-    const char* p = s.c_str();
-    while (*p) {
-        while (*p && (std::isspace(static_cast<unsigned char>(*p)) || *p == ',')) ++p;
-        if (!*p) break;
-        char* end = nullptr;
-        float f = std::strtof(p, &end);
-        if (end == p) break;
-        out.push_back(f);
-        p = end;
-    }
-    return out;
-}
-
-// Elements that never render and therefore report an all-zero client rect
-// (as do all their descendants). Filter primitives are matched by prefix.
-bool isNonRendered(const std::string& tag) {
-    static const char* kTags[] = {
-        "defs", "symbol", "clippath", "mask", "marker", "pattern",
-        "lineargradient", "radialgradient", "stop", "filter",
-        "metadata", "title", "desc", "style", "script", "view",
-    };
-    for (const char* t : kTags)
-        if (tag == t) return true;
-    return tag.rfind("fe", 0) == 0; // feGaussianBlur, feOffset, ...
-}
-
-// SVG `transform` attribute list → matrix. Operations compose left-to-right:
-// transform="A B" maps a point as A*(B*p).
-SkMatrix parseTransformList(const std::string& s) {
-    SkMatrix total = SkMatrix::I();
-    const char* p = s.c_str();
-    while (*p) {
-        while (*p && !std::isalpha(static_cast<unsigned char>(*p))) ++p;
-        if (!*p) break;
-        const char* nameStart = p;
-        while (*p && std::isalpha(static_cast<unsigned char>(*p))) ++p;
-        std::string name = lower(std::string_view(nameStart, static_cast<size_t>(p - nameStart)));
-        while (*p && *p != '(') ++p;
-        if (!*p) break;
-        ++p; // past '('
-        const char* argStart = p;
-        while (*p && *p != ')') ++p;
-        std::vector<float> a = parseNumberList(std::string(argStart, static_cast<size_t>(p - argStart)));
-        if (*p) ++p; // past ')'
-
-        SkMatrix m = SkMatrix::I();
-        if (name == "translate" && !a.empty()) {
-            m = SkMatrix::Translate(a[0], a.size() > 1 ? a[1] : 0.0f);
-        } else if (name == "scale" && !a.empty()) {
-            m = SkMatrix::Scale(a[0], a.size() > 1 ? a[1] : a[0]);
-        } else if (name == "rotate" && !a.empty()) {
-            if (a.size() >= 3) m = SkMatrix::RotateDeg(a[0], {a[1], a[2]});
-            else               m = SkMatrix::RotateDeg(a[0]);
-        } else if (name == "skewx" && !a.empty()) {
-            m.setSkewX(std::tan(a[0] * 3.14159265358979323846f / 180.0f));
-        } else if (name == "skewy" && !a.empty()) {
-            m.setSkewY(std::tan(a[0] * 3.14159265358979323846f / 180.0f));
-        } else if (name == "matrix" && a.size() >= 6) {
-            m = SkMatrix::MakeAll(a[0], a[2], a[4],
-                                  a[1], a[3], a[5],
-                                  0, 0, 1);
-        }
-        total.preConcat(m);
-    }
-    return total;
-}
-
-// viewBox + preserveAspectRatio → viewport transform (user units → CSS px
-// within the viewport). Identity when there is no usable viewBox.
-SkMatrix viewportMatrix(float vpW, float vpH,
-                        const std::string& viewBox, const std::string& par) {
-    if (viewBox.empty() || vpW <= 0 || vpH <= 0) return SkMatrix::I();
-    std::vector<float> vb = parseNumberList(viewBox);
-    if (vb.size() < 4 || vb[2] <= 0 || vb[3] <= 0) return SkMatrix::I();
-
-    std::string align = "xmidymid";
-    bool slice = false;
-    {
-        std::vector<std::string> toks;
-        const char* p = par.c_str();
-        while (*p) {
-            while (*p && std::isspace(static_cast<unsigned char>(*p))) ++p;
-            const char* start = p;
-            while (*p && !std::isspace(static_cast<unsigned char>(*p))) ++p;
-            if (p != start) toks.push_back(lower(std::string_view(start, static_cast<size_t>(p - start))));
-        }
-        size_t i = 0;
-        if (i < toks.size() && toks[i] == "defer") ++i;
-        if (i < toks.size()) { align = toks[i]; ++i; }
-        if (i < toks.size() && toks[i] == "slice") slice = true;
-    }
-
-    float sx = vpW / vb[2], sy = vpH / vb[3];
-    float ax = 0.5f, ay = 0.5f;
-    if (align != "none") {
-        float s = slice ? std::max(sx, sy) : std::min(sx, sy);
-        sx = sy = s;
-        if (align.size() >= 8) {
-            if (align.compare(0, 4, "xmin") == 0) ax = 0.0f;
-            else if (align.compare(0, 4, "xmax") == 0) ax = 1.0f;
-            if (align.compare(4, 4, "ymin") == 0) ay = 0.0f;
-            else if (align.compare(4, 4, "ymax") == 0) ay = 1.0f;
-        }
-    }
-    float tx = (vpW - vb[2] * sx) * (align == "none" ? 0.0f : ax) - vb[0] * sx;
-    float ty = (vpH - vb[3] * sy) * (align == "none" ? 0.0f : ay) - vb[1] * sy;
-    return SkMatrix::MakeAll(sx, 0, tx,
-                             0, sy, ty,
-                             0, 0, 1);
-}
 
 // Min/max join that keeps degenerate (zero-width/height) geometry such as
 // horizontal/vertical lines — SkRect::join discards "empty" rects, which
@@ -168,29 +43,6 @@ struct FillBounds {
     }
     void joinRect(const SkRect& rc) { join(rc.fLeft, rc.fTop, rc.fRight, rc.fBottom); }
 };
-
-// The element's own transform contribution when mapping child geometry into
-// its parent's user space: the `transform` attribute, plus x/y translation
-// and the nested viewport transform for inner <svg> elements.
-SkMatrix ownTransform(const dom::Element* el, const std::string& tag) {
-    SkMatrix m = parseTransformList(attrOf(el, "transform"));
-    if (tag == "svg") {
-        m.preConcat(SkMatrix::Translate(attrFloat(el, "x"), attrFloat(el, "y")));
-        float w = attrFloat(el, "width", -1.0f);
-        float h = attrFloat(el, "height", -1.0f);
-        if (w > 0 && h > 0)
-            m.preConcat(viewportMatrix(w, h, attrOf(el, "viewBox"),
-                                       attrOf(el, "preserveAspectRatio")));
-    }
-    return m;
-}
-
-const dom::Element* findById(const dom::Element* root, const std::string& id) {
-    if (attrOf(root, "id") == id) return root;
-    for (const dom::Element* c : root->children())
-        if (const dom::Element* hit = findById(c, id)) return hit;
-    return nullptr;
-}
 
 // Fill (object) bounding box of `el` in its own user space — geometry only,
 // no stroke, and NOT including el's own `transform` attribute (the caller

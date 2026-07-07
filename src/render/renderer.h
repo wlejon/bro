@@ -134,6 +134,40 @@ enum class BlendMode {
     Luminosity,
 };
 
+// SVG paint server — a resolved fill or stroke paint in USER (local) space, as
+// produced by the SVG paint traversal. Gradient stops are passed as a separate
+// span<ColorStop> so this stays a trivially-copyable POD (it is stored inline in
+// recorded draw commands). Gradient geometry is already resolved to user space;
+// `transform` carries the SVG gradientTransform (CSS matrix a,b,c,d,e,f).
+struct GradientPaint {
+    enum class Kind : uint8_t { None, Solid, Linear, Radial };
+    enum class Spread : uint8_t { Pad, Reflect, Repeat };
+    Kind   kind = Kind::Solid;
+    Spread spread = Spread::Pad;
+    bromath::Color color{0, 0, 0, 1};          // Solid
+    float  p0[2] = {0, 0};                      // Linear: start point
+    float  p1[2] = {0, 0};                      // Linear: end point
+    float  center[2] = {0, 0};                  // Radial: circle center
+    float  radius = 0.0f;                        // Radial: circle radius
+    float  focal[2] = {0, 0};                    // Radial: focal point
+    bool   hasFocal = false;                     // focal != center
+    float  transform[6] = {1, 0, 0, 1, 0, 0};    // gradientTransform (a,b,c,d,e,f)
+};
+
+// SVG stroke styling. The dash array is passed as a separate span<float> (even
+// length ≥ 2, or empty for a solid stroke).
+struct StrokeStyle {
+    enum class Cap : uint8_t { Butt, Round, Square };
+    enum class Join : uint8_t { Miter, Round, Bevel };
+    float width = 1.0f;
+    float miterLimit = 4.0f;
+    float dashOffset = 0.0f;
+    Cap   cap = Cap::Butt;
+    Join  join = Join::Miter;
+};
+
+enum class PathFillRule : uint8_t { NonZero, EvenOdd };
+
 class Renderer {
 public:
     virtual ~Renderer() = default;
@@ -236,6 +270,30 @@ public:
                              bromath::Color fill, bromath::Color stroke, float strokeWidth) = 0;
     virtual void drawPolyline(std::span<const PointF> points,
                               bromath::Color stroke, float strokeWidth) = 0;
+
+    // Fill and/or stroke an SVG path with full paint-server + stroke styling.
+    // `d` is SVG path data in the current user space (the CTM carries the
+    // viewBox and element transforms). Fill and stroke may each be solid or a
+    // gradient (kind == None skips that pass). `fillStops`/`strokeStops` supply
+    // the gradient stops; `dash` is the stroke dash array (even length, empty =
+    // solid). This is the primitive the native SVG traversal emits.
+    // Default fallback draws solid colors only (loses gradients/dash/fill-rule)
+    // so backends can adopt incrementally.
+    virtual void drawSvgPath(std::string_view d, PathFillRule /*rule*/,
+                             const GradientPaint& fill, std::span<const ColorStop> /*fillStops*/,
+                             const GradientPaint& stroke, std::span<const ColorStop> /*strokeStops*/,
+                             const StrokeStyle& strokeStyle, std::span<const float> /*dash*/) {
+        bromath::Color f = (fill.kind == GradientPaint::Kind::Solid)
+                               ? fill.color : bromath::Color{0, 0, 0, 0};
+        bromath::Color s = (stroke.kind == GradientPaint::Kind::Solid)
+                               ? stroke.color : bromath::Color{0, 0, 0, 0};
+        drawPath(d, f, s, strokeStyle.width);
+    }
+
+    // Intersect the clip with an arbitrary SVG path (for SVG clipPath). Caller
+    // must save/restore. Default is a no-op (no clipping) so backends can adopt
+    // incrementally — used from Increment 2 onward.
+    virtual void clipSvgPath(std::string_view /*d*/, PathFillRule /*rule*/) {}
 
     // Box shadow: draw a shadow behind a rect (or rounded rect if rx > 0)
     virtual void drawBoxShadow(float x, float y, float w, float h,

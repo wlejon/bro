@@ -49,6 +49,19 @@ struct Cmd_DrawEllipse     { float cx, cy, rx, ry; bromath::Color fill; bromath:
 struct Cmd_DrawPath        { uint32_t pathOffset, pathLen; bromath::Color fill; bromath::Color stroke; float strokeWidth; }; // arena: char[] (svg path)
 struct Cmd_DrawPolygon     { uint32_t pointsOffset, pointsLen; bromath::Color fill; bromath::Color stroke; float strokeWidth; }; // arena: PointF[]
 struct Cmd_DrawPolyline    { uint32_t pointsOffset, pointsLen; bromath::Color stroke; float strokeWidth; }; // arena: PointF[]
+// SVG path with paint-server fill/stroke + full stroke styling. Path 'd',
+// gradient stop lists, and the dash array all live in the arena.
+struct Cmd_DrawSvgPath {
+    uint32_t pathOffset, pathLen;               // arena: char[] (svg path 'd')
+    uint32_t fillStopsOffset, fillStopsLen;     // arena: ColorStop[]
+    uint32_t strokeStopsOffset, strokeStopsLen; // arena: ColorStop[]
+    uint32_t dashArrOffset, dashArrLen;         // arena: float[]
+    GradientPaint fill;
+    GradientPaint stroke;
+    StrokeStyle strokeStyle;
+    PathFillRule rule;
+};
+struct Cmd_ClipSvgPath { uint32_t pathOffset, pathLen; PathFillRule rule; }; // arena: char[]
 
 struct Cmd_Save              {};
 struct Cmd_Restore           {};
@@ -127,6 +140,8 @@ using DrawCommand = std::variant<
     Cmd_DrawPath,
     Cmd_DrawPolygon,
     Cmd_DrawPolyline,
+    Cmd_DrawSvgPath,
+    Cmd_ClipSvgPath,
     Cmd_Save,
     Cmd_Restore,
     Cmd_SaveLayerAlpha,

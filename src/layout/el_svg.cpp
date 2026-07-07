@@ -1,4 +1,5 @@
 #include "layout/el_svg.h"
+#include "layout/svg_paint.h"
 #include "dom/element.h"
 #include "render/renderer.h"
 
@@ -84,9 +85,19 @@ void ElSvg::draw(render::Renderer* renderer,
     float h = box.contentRect.height;
     if (w <= 0 || h <= 0) return;
 
-    // Serialize at record time — DrawTraversal records into a CommandBuffer
-    // that the raster thread replays without DOM access. The recording
-    // renderer copies the markup bytes into its arena.
+    // Native path: walk the live DOM subtree and emit Renderer primitives with
+    // the cascaded SVG paint (respecting document CSS, currentColor, gradients,
+    // stroke styling). This runs at record time on the main thread; the emitted
+    // commands replay DOM-free.
+    if (svgSubtreeNativelySupported(elem)) {
+        paintSvgSubtree(renderer, elem, x, y, w, h);
+        return;
+    }
+
+    // Fallback for features the native traversal doesn't handle yet (text,
+    // filters, masks, patterns, markers, raster images): serialize the subtree
+    // and let Skia's SkSVGDOM render it. The recording renderer copies the
+    // markup bytes into its arena so replay stays DOM-free.
     std::string markup = elem->outerHTML();
     if (markup.empty()) return;
     renderer->drawSvgMarkup(markup.data(), markup.size(), x, y, w, h);
