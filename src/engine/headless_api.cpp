@@ -359,9 +359,6 @@ void Engine::advanceTime(double ms) {
                 audioEngine_->renderBlock(audioFrames);
         }
 
-        // Tick crosshair spread system
-        crosshair_.tick(static_cast<float>(step * 0.001));
-
         // Periodic GC + orphan sweep (every ~1s of virtual time)
         if (virtualTime_ - lastGCMs_ >= kGCIntervalMs) {
             js::DomBindings::sweepOrphanedWrappers(jsRuntime_->getContext());
@@ -476,10 +473,9 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    // 7. App layers → crosshair → system layers (matches windowed pipeline).
+    // 7. App layers → system layers (matches windowed pipeline).
     //    App layers place at (0, insetTop) with content dims.
     compositeLayers(appLayers, compositeFBO, insetTop, cw, ch);
-    drawCrosshairGL();
     compositeLayers(systemLayers, compositeFBO);
 
     // 8. Readback.
@@ -567,10 +563,7 @@ bool Engine::screenshot(const std::string& path) {
 
     renderer_->restore();
 
-    // Draw crosshair on the Skia surface (window space)
-    drawCrosshairSkia(renderer_->getCanvas());
-
-    // System panels on top of the app content and crosshair
+    // System panels on top of the app content
     if (isSystemVisible()) {
         tickSystemPanels(virtualTime_);
         layoutSystemPanels(*textMetrics_);
@@ -632,9 +625,6 @@ std::vector<uint8_t> Engine::capturePixels() {
     overlayMgr_.drawIfContext(OverlayContext::App, renderer_.get());
 
     renderer_->restore();
-
-    // Draw crosshair on the Skia surface (window space)
-    drawCrosshairSkia(renderer_->getCanvas());
 
     if (isSystemVisible()) {
         tickSystemPanels(virtualTime_);

@@ -36,9 +36,8 @@ struct UILayer {
 /// fence. The two sides operate on the same slot in sequence, ordered by
 /// the FrameWorker state machine.
 ///
-/// App layers composite first (with the engine crosshair drawn between app
-/// and system), then system layers on top so menu bar / preferences / splash
-/// sit above app content + crosshair.
+/// App layers composite first, then system layers on top so menu bar /
+/// preferences / splash sit above app content.
 struct LayerBuffer {
     render::CommandBuffer  appCommands;
     render::CommandBuffer  systemCommands;

@@ -40,7 +40,6 @@
 #include "js/physics_bindings.h"
 #endif
 #include "js/scene_bindings.h"
-#include "js/crosshair_bindings.h"
 #include "js/menu_bindings.h"
 #include "js/gizmo_bindings.h"
 #include "js/mesh_bindings.h"
@@ -509,9 +508,6 @@ Engine::Engine(const EngineConfig& config)
 #if BRO_WITH_3D
     js::SceneBindings::install(jsRuntime_->getContext());
 #endif
-
-    // Crosshair bindings (bro.crosshair.*)
-    js::CrosshairBindings::install(jsRuntime_->getContext(), this);
 
     // Menu bar bindings (bro.menu.*) + default menu tree.
     js::MenuBindings::install(jsRuntime_->getContext(), this);

@@ -721,12 +721,8 @@ void Engine::run() {
                         layers.appInsetTop, layers.appContentW,
                         layers.appContentH);
 
-        // 5g. Tick + draw crosshair overlay (full frame rate, after app content)
-        crosshair_.tick(static_cast<float>(totalFrameMs_ * 0.001));
-        drawCrosshairGL();
-
-        // 5h. Composite system panel layers (menu bar / preferences / splash)
-        //     on top of crosshair.
+        // 5g. Composite system panel layers (menu bar / preferences / splash)
+        //     on top of app content.
         compositeLayers(layers.systemLayers);
 
         // Restore WebGL shadow state so apps with internal caches (three.js)

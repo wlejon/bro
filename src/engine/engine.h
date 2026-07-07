@@ -84,38 +84,6 @@ struct InputConfig {
     uint32_t overlayToggleKey = 0x40000041u; // SDLK_F8; 0 = disabled
 };
 
-/// Crosshair configuration — rendered directly in the GL/Skia pipeline.
-struct CrosshairConfig {
-    // --- Visual ---
-    bool visible = false;
-    enum Style : uint8_t { Cross, Dot, Circle, CrossDot } style = Cross;
-    float size = 20.0f;           // arm length from center
-    float thickness = 2.0f;       // line width in pixels
-    float dotSize = 2.0f;         // center dot radius
-    float outlineThickness = 1.0f;
-    bool outline = true;          // dark outline for visibility on any background
-    uint8_t r = 0, g = 255, b = 0, a = 204;   // color
-    uint8_t outR = 0, outG = 0, outB = 0, outA = 180; // outline color
-
-    // --- Spread system ---
-    float spread = 4.0f;         // base spread (idle gap in pixels)
-    float moveSpread = 0.0f;     // added to spread when moving
-    float fireBloom = 0.0f;      // spread kick per shot
-    float adsSpread = -1.0f;     // spread when ADS (-1 = no ADS override)
-    float bloomDecay = 40.0f;    // bloom recovery (pixels/sec)
-    float lerpSpeed = 10.0f;     // spread interpolation speed (higher = faster)
-
-    // --- State (engine-managed, readable by app) ---
-    bool moving = false;
-    bool aiming = false;
-    float currentBloom = 0.0f;   // current fire bloom (decays over time)
-    float currentSpread = 4.0f;  // interpolated spread (used as gap when drawing)
-    float manualSpread = -1.0f;  // if >= 0, overrides spread system
-
-    /// Advance spread interpolation and bloom decay.
-    void tick(float dtSec);
-};
-
 struct EngineConfig {
     std::string appDir;
     std::string title;   // window title override (empty = use <title> from HTML)
@@ -289,10 +257,6 @@ public:
 
     /// Simulate a click on the given element.
     void dispatchClickOn(dom::Element* target);
-
-    /// Crosshair configuration (read/write from JS bindings).
-    CrosshairConfig& crosshair() { return crosshair_; }
-    const CrosshairConfig& crosshair() const { return crosshair_; }
 
     /// Engine-level 3D gizmo (translate / rotate / scale handles). Driven
     /// from JS via bro.gizmo.*. 3D-only.
@@ -484,8 +448,6 @@ private:
                                  int& poolW, int& poolH,
                                  int vpW, int vpH,
                                  std::vector<UILayer>& outLayers);
-    void drawCrosshairGL();                  // windowed/headless GPU path
-    void drawCrosshairSkia(SkCanvas* canvas); // headless CPU path
     void ensureReplacedElements(dom::Element* elem);
 
     // --- System panel management (implementation in system_panels.cpp) ---
@@ -695,7 +657,6 @@ private:
     std::vector<render::SkiaRenderer::GPUSurface> screenshotSystemPool_;
     int screenshotSystemPoolW_ = 0, screenshotSystemPoolH_ = 0;
 
-    CrosshairConfig crosshair_;
     MenuBar menuBar_;
     InspectorState inspector_;
     // Per-tree-fetch element ↔ id map. Rebuilt every getAppDOMTree() so ids

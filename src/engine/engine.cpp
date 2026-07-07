@@ -38,7 +38,6 @@
 #include "js/physics_bindings.h"
 #endif
 #include "js/scene_bindings.h"
-#include "js/crosshair_bindings.h"
 #include "js/menu_bindings.h"
 #include "js/gizmo_bindings.h"
 #include "js/mesh_bindings.h"
