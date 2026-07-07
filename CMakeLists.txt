@@ -99,18 +99,115 @@ else()
     add_compile_options(-funsigned-char)
 endif()
 
-# Forward GPU options to brotensor's cache vars before third_party/ is added.
-# brotensor's backend is fixed at the first add_subdirectory() — and broimage
-# (added before brokit) pulls brotensor in earlier than brogameagent does.
-# Without this forwarding, brogameagent's later force-set would have no effect
-# because brotensor's target is already configured CPU-only.
-if(BROGAMEAGENT_WITH_CUDA)
-    set(BROTENSOR_WITH_CUDA  ON  CACHE BOOL "" FORCE)
-    set(BROTENSOR_WITH_METAL OFF CACHE BOOL "" FORCE)
-elseif(BROGAMEAGENT_WITH_METAL)
-    set(BROTENSOR_WITH_CUDA  OFF CACHE BOOL "" FORCE)
-    set(BROTENSOR_WITH_METAL ON  CACHE BOOL "" FORCE)
+# ─── Modular build: profiles + feature flags ────────────────────────────────
+# A minimal build needs no vcpkg, no CUDA toolkit, and no brotensor. Profiles
+# seed the per-feature defaults; individual -DBRO_WITH_* flags always override.
+# See docs/build-options.md for the full rationale and the tier layout.
+#
+# NOTE: the default profile is "full" while the split is being rolled out, so
+# every intermediate commit builds exactly as before. It will move to "app".
+set(BRO_PROFILE "full" CACHE STRING "Feature profile: minimal | app | full")
+set_property(CACHE BRO_PROFILE PROPERTY STRINGS minimal app full)
+
+# Per-profile defaults.  minimal = 2D/canvas/WebGL only.  app = full renderer
+# (3D + physics + audio + core game-AI) but no AI tower / net / video.  full =
+# everything (the CUDA sub-lever stays opt-in even here).
+if(BRO_PROFILE STREQUAL "minimal")
+    set(_d_render OFF)
+    set(_d_ai     OFF)
+    set(_d_svc    OFF)
+elseif(BRO_PROFILE STREQUAL "app")
+    set(_d_render ON)
+    set(_d_ai     OFF)
+    set(_d_svc    ON)   # net + video + steam: a proper web/app runtime by default
+else()  # full
+    set(_d_render ON)
+    set(_d_ai     ON)
+    set(_d_svc    ON)
 endif()
+
+# Tier 1 — renderer feature groups (all brotensor-free, all vcpkg-free).
+option(BRO_WITH_3D       "3D scene graph (bromesh, terrain, tile, gizmo)"     ${_d_render})
+option(BRO_WITH_PHYSICS  "Jolt rigid-body physics"                           ${_d_render})
+option(BRO_WITH_AUDIO    "broaudio engine + audio inference"                 ${_d_render})
+option(BRO_WITH_GAMEAI   "brogameagent core (navmesh/pathfinding/MCTS)"      ${_d_render})
+option(BRO_WITH_FLORA    "broflora ecosystem simulation"                     ${_d_render})
+# Services (each pulls a vcpkg dependency).
+option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
+option(BRO_WITH_VIDEO    "Video + GIF encode/decode (libvpx/webm / vcpkg)"   ${_d_svc})
+option(BRO_WITH_STEAM    "Steam integration (runtime-loaded redistributable)" ${_d_svc})
+# Tier 2 — the AI tower (brotensor is the base).
+option(BRO_WITH_TENSOR       "brotensor tensor ops (ML backbone)"            ${_d_ai})
+option(BRO_WITH_TENSOR_CUDA  "brotensor CUDA backend (needs CUDA toolkit)"   OFF)
+option(BRO_WITH_TENSOR_METAL "brotensor Metal backend (macOS)"              OFF)
+option(BRO_WITH_LM           "Language models (brolm)"                       ${_d_ai})
+option(BRO_WITH_DIFFUSION    "Diffusion models (brodiffusion)"               ${_d_ai})
+option(BRO_WITH_VISION       "Vision models (brovisionml)"                   ${_d_ai})
+option(BRO_WITH_SOUNDML      "Audio ML: stt/tts/diar/wake/kws (brosoundml)"  ${_d_ai})
+option(BRO_WITH_TRIPOSPLAT   "Image -> 3D gaussian-splat pipeline"           ${_d_ai})
+option(BRO_WITH_GAMEAI_NN    "brogameagent neural/learning layer"            ${_d_ai})
+
+# Auto-enable prerequisites (a feature forces on what it needs). Ordered
+# top-down through the dependency DAG so a single pass resolves everything.
+function(_bro_require flag dep)
+    if(${flag} AND NOT ${dep})
+        message(STATUS "bro: ${flag}=ON forces ${dep}=ON")
+        set(${dep} ON CACHE BOOL "" FORCE)
+    endif()
+endfunction()
+_bro_require(BRO_WITH_TENSOR_CUDA  BRO_WITH_TENSOR)
+_bro_require(BRO_WITH_TENSOR_METAL BRO_WITH_TENSOR)
+_bro_require(BRO_WITH_TRIPOSPLAT   BRO_WITH_VISION)
+_bro_require(BRO_WITH_TRIPOSPLAT   BRO_WITH_DIFFUSION)
+_bro_require(BRO_WITH_TRIPOSPLAT   BRO_WITH_3D)
+_bro_require(BRO_WITH_DIFFUSION    BRO_WITH_LM)
+_bro_require(BRO_WITH_SOUNDML      BRO_WITH_LM)
+_bro_require(BRO_WITH_SOUNDML      BRO_WITH_AUDIO)
+_bro_require(BRO_WITH_LM           BRO_WITH_TENSOR)
+_bro_require(BRO_WITH_VISION       BRO_WITH_TENSOR)
+_bro_require(BRO_WITH_GAMEAI_NN    BRO_WITH_GAMEAI)
+_bro_require(BRO_WITH_GAMEAI_NN    BRO_WITH_TENSOR)
+_bro_require(BRO_WITH_FLORA        BRO_WITH_3D)
+
+# Forward feature choices into the sibling repos (must happen before
+# third_party/ is added — brotensor's backend is fixed at first add_subdirectory,
+# and broimage/brogameagent decide their brotensor dependency from these).
+if(BRO_WITH_TENSOR)
+    set(BROIMAGE_WITH_TENSOR ON  CACHE BOOL "" FORCE)
+else()
+    set(BROIMAGE_WITH_TENSOR OFF CACHE BOOL "" FORCE)
+endif()
+if(BRO_WITH_GAMEAI_NN)
+    set(BROGAMEAGENT_WITH_NN ON  CACHE BOOL "" FORCE)
+else()
+    set(BROGAMEAGENT_WITH_NN OFF CACHE BOOL "" FORCE)
+endif()
+if(BRO_WITH_TENSOR_CUDA)
+    set(BROTENSOR_WITH_CUDA    ON  CACHE BOOL "" FORCE)
+    set(BROTENSOR_WITH_METAL   OFF CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_CUDA ON  CACHE BOOL "" FORCE)
+elseif(BRO_WITH_TENSOR_METAL)
+    set(BROTENSOR_WITH_CUDA    OFF CACHE BOOL "" FORCE)
+    set(BROTENSOR_WITH_METAL   ON  CACHE BOOL "" FORCE)
+    set(BROGAMEAGENT_WITH_METAL ON CACHE BOOL "" FORCE)
+endif()
+
+# Stamp every feature flag as a 0/1 compile definition so C++ can `#if` on it.
+# Applied to the targets that carry feature-gated code (bro_js, bro_engine,
+# bro_scene). See src/js/*_bindings.cpp for the #if BRO_WITH_X convention.
+set(BRO_FEATURE_FLAGS
+    3D PHYSICS AUDIO GAMEAI FLORA
+    NET VIDEO STEAM
+    TENSOR TENSOR_CUDA TENSOR_METAL LM DIFFUSION VISION SOUNDML TRIPOSPLAT GAMEAI_NN)
+function(bro_apply_feature_defs target)
+    foreach(_f IN LISTS BRO_FEATURE_FLAGS)
+        if(BRO_WITH_${_f})
+            target_compile_definitions(${target} PUBLIC BRO_WITH_${_f}=1)
+        else()
+            target_compile_definitions(${target} PUBLIC BRO_WITH_${_f}=0)
+        endif()
+    endforeach()
+endfunction()
 
 add_subdirectory(third_party)
 

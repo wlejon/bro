@@ -105,5 +105,9 @@ target_include_directories(bro_js PRIVATE ${GEN_DIR})
 # diffusion_bindings.cpp uses brolm::clip for diffusion text encoding, and
 # lm_bindings.cpp exposes brolm::qwen as bro.lm.
 target_link_libraries(bro_js PUBLIC qjs qjsbind brokit bro_dom bro_util bro_canvas bro_physics bro_audio_inference bro_scene bro_net bro_steam broaudio bro_webgl SDL3::SDL3 bromesh broflora brogameagent bro_video brolm brodiffusion brosoundml::brosoundml broimage::broimage brovisionml::brovisionml)
+
+# Stamp BRO_WITH_* as compile definitions for the #if guards in the bindings
+# (feature gating is added cluster-by-cluster; see docs/build-options.md).
+bro_apply_feature_defs(bro_js)
 # QuickJS headers
 target_include_directories(bro_js PRIVATE ${CMAKE_SOURCE_DIR}/third_party/quickjs)
