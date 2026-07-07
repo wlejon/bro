@@ -3,6 +3,7 @@
 #include "dom/element_geometry.h"
 
 namespace bro::dom { class Element; }
+namespace bro::render { class Renderer; }
 
 namespace bro::layout {
 
@@ -26,6 +27,10 @@ namespace bro::layout {
 /// (possibly with zeros); false if `el` is not an SVG child (including the
 /// <svg> root element itself), in which case the normal layout-box path
 /// applies.
-bool svgChildBoundingClientRect(const dom::Element* el, dom::AbsoluteRect& out);
+///
+/// `renderer` (optional) supplies font measurement for <text>/<tspan> bounds;
+/// when null those elements report no geometry (all-zeros).
+bool svgChildBoundingClientRect(const dom::Element* el, dom::AbsoluteRect& out,
+                                render::Renderer* renderer = nullptr);
 
 } // namespace bro::layout

@@ -1,5 +1,6 @@
 #include "layout/svg_geometry.h"
 #include "layout/svg_common.h"
+#include "layout/svg_text.h"
 #include "dom/element.h"
 
 #include <include/core/SkMatrix.h>
@@ -50,11 +51,18 @@ struct FillBounds {
 // element has no geometry (empty container, unresolved <use>, <text> without
 // metrics, non-rendered element).
 bool localFillBounds(const dom::Element* el, const dom::Element* idScope,
-                     FillBounds& out, int depth) {
+                     SvgTextMeasurer* meas, FillBounds& out, int depth) {
     if (depth > 24) return false;
     std::string tag = lower(el->tagName());
     if (isNonRendered(tag)) return false;
 
+    if (tag == "text" || tag == "tspan") {
+        if (!meas) return false;   // no font backend → no measurable box
+        SkRect tb;
+        if (!svgTextElementBounds(el, *meas, tb)) return false;
+        out.joinRect(tb);
+        return true;
+    }
     if (tag == "rect" || tag == "image") {
         float w = attrFloat(el, "width"), h = attrFloat(el, "height");
         if (w < 0 || h < 0) return false;
@@ -107,7 +115,7 @@ bool localFillBounds(const dom::Element* el, const dom::Element* idScope,
         const dom::Element* target = findById(idScope, href.substr(1));
         if (!target || target == el) return false;
         FillBounds tb;
-        if (!localFillBounds(target, idScope, tb, depth + 1)) return false;
+        if (!localFillBounds(target, idScope, meas, tb, depth + 1)) return false;
         // The referenced element is rendered as if cloned under <use>: its
         // own transform applies, then the use's x/y translation.
         SkMatrix m = ownTransform(target, lower(target->tagName()));
@@ -125,7 +133,7 @@ bool localFillBounds(const dom::Element* el, const dom::Element* idScope,
             auto it = cs.find("display");
             if (it != cs.end() && it->second == "none") continue;
             FillBounds cb;
-            if (!localFillBounds(child, idScope, cb, depth + 1)) continue;
+            if (!localFillBounds(child, idScope, meas, cb, depth + 1)) continue;
             SkRect mapped = ownTransform(child, ctag)
                                 .mapRect(SkRect::MakeLTRB(cb.l, cb.t, cb.r, cb.b));
             out.joinRect(mapped);
@@ -133,13 +141,14 @@ bool localFillBounds(const dom::Element* el, const dom::Element* idScope,
         }
         return any;
     }
-    // <text>/<tspan> would need font metrics; unknown elements have no box.
+    // Unknown elements have no box.
     return false;
 }
 
 } // namespace
 
-bool svgChildBoundingClientRect(const dom::Element* el, dom::AbsoluteRect& out) {
+bool svgChildBoundingClientRect(const dom::Element* el, dom::AbsoluteRect& out,
+                                render::Renderer* renderer) {
     if (!el) return false;
 
     // Outermost <svg> ancestor: the CSS-laid-out replaced element whose
@@ -165,8 +174,9 @@ bool svgChildBoundingClientRect(const dom::Element* el, dom::AbsoluteRect& out) 
         if (it != cs.end() && it->second == "none") return true;
     }
 
+    RendererTextMeasurer meas(renderer);
     FillBounds fb;
-    if (!localFillBounds(el, svgRoot, fb, 0)) return true; // no geometry → zeros
+    if (!localFillBounds(el, svgRoot, &meas, fb, 0)) return true; // no geometry → zeros
 
     // CTM: viewport(viewBox) ∘ ancestor transforms ∘ el's own transform.
     auto& box = svgRoot->layoutBox();

@@ -2735,8 +2735,13 @@ static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst thi
     // replaced element); their rect is computed from the SVG geometry
     // itself — shape fill bounds through the transform/viewBox chain, or
     // all-zeros for non-rendered elements (defs, gradients, stops, ...).
+    // SVG <text>/<tspan> bounds need font measurement; hand the binding the
+    // engine's renderer (the same backend used to paint the text).
+    bro::render::Renderer* rr = nullptr;
+    if (auto it = s_ctx_engines.find(ctx); it != s_ctx_engines.end() && it->second)
+        rr = static_cast<bro::engine::Engine*>(it->second)->renderer();
     bro::dom::AbsoluteRect r;
-    if (!bro::layout::svgChildBoundingClientRect(el, r))
+    if (!bro::layout::svgChildBoundingClientRect(el, r, rr))
         r = bro::dom::absoluteBorderBox(el);
 
     JSValue rect = JS_NewObject(ctx);

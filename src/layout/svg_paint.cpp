@@ -1,5 +1,6 @@
 #include "layout/svg_paint.h"
 #include "layout/svg_common.h"
+#include "layout/svg_text.h"
 #include "layout/draw_traversal.h"   // DrawTraversal::tryParseColor
 #include "dom/element.h"
 #include "render/renderer.h"
@@ -360,6 +361,27 @@ void paintShape(render::Renderer* r, const dom::Element* el,
     r->drawSvgPath(d, rule, fill.paint, fill.stops, stroke.paint, stroke.stops, ss, dash);
 }
 
+// Paint a <text> subtree. The shared pen-walk (svg_text) positions every run;
+// here we resolve each run's solid fill and emit drawText at its baseline.
+void paintText(render::Renderer* r, const dom::Element* textEl,
+               const dom::Element* svgRoot) {
+    RendererTextMeasurer meas(r);
+    std::vector<SvgTextRun> runs = layoutSvgText(textEl, meas);
+    SkRect noBox = SkRect::MakeEmpty();
+    for (const auto& run : runs) {
+        if (run.text.empty() || isHidden(run.styleEl)) continue;
+        bromath::Color cur{0, 0, 0, 1};
+        resolveColor(styleOr(run.styleEl, "color", "black"),
+                     bromath::Color{0, 0, 0, 1}, cur);
+        PaintResult fill = resolvePaint(styleOr(run.styleEl, "fill", "black"),
+                                        styleFloat(run.styleEl, "fill-opacity", 1.0f),
+                                        svgRoot, noBox, cur);
+        if (fill.paint.kind != GradientPaint::Kind::Solid) continue;  // none / gradient (gated out)
+        render::FontRef fref{run.font.family, run.font.size, run.font.weight, run.font.italic};
+        r->drawText(run.text, run.x, run.baseline, fref, fill.paint.color);
+    }
+}
+
 void paintNode(render::Renderer* r, const dom::Element* el, const dom::Element* svgRoot) {
     std::string tag = lower(el->tagName());
     if (isNonRendered(tag)) return;
@@ -383,6 +405,8 @@ void paintNode(render::Renderer* r, const dom::Element* el, const dom::Element* 
 
     if (tag == "g" || tag == "a" || tag == "svg" || tag == "switch") {
         for (const dom::Element* c : el->children()) paintNode(r, c, svgRoot);
+    } else if (tag == "text") {
+        paintText(r, el, svgRoot);   // walks its own tspans; do not recurse
     } else if (tag == "use") {
         std::string href = attrOf(el, "href");
         if (href.empty()) href = attrOf(el, "xlink:href");
@@ -408,10 +432,19 @@ void paintNode(render::Renderer* r, const dom::Element* el, const dom::Element* 
 bool nodeSupported(const dom::Element* el) {
     std::string tag = lower(el->tagName());
     static const char* kUnsupported[] = {
-        "text", "tspan", "textpath", "tref", "foreignobject", "image",
+        "textpath", "tref", "foreignobject", "image",
         "symbol", "marker", "mask", "pattern", "filter",
     };
     for (const char* u : kUnsupported) if (tag == u) return false;
+
+    // Native text paints solid/currentColor fills only. A gradient/pattern fill
+    // or any stroke on text falls back to SkSVGDOM (which handles those).
+    if (tag == "text" || tag == "tspan") {
+        std::string fill = styleOr(el, "fill", "black");
+        if (fill.rfind("url(", 0) == 0) return false;
+        std::string stroke = styleOr(el, "stroke", "none");
+        if (!stroke.empty() && stroke != "none") return false;
+    }
 
     const auto& cs = el->computedStyle();
     for (const char* p : {"filter", "mask", "marker-start", "marker-mid", "marker-end"}) {

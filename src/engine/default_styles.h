@@ -291,6 +291,12 @@ svg {
     overflow: hidden;
 }
 
+/* Chromium computes SVG <text> as a block-level box (getComputedStyle reports
+   display:block); <tspan> stays inline. Match so computed-style parity holds. */
+text {
+    display: block;
+}
+
 )CSS";
 
 } // namespace bro::engine
