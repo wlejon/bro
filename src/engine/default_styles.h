@@ -297,6 +297,11 @@ text {
     display: block;
 }
 
+/* SVG <marker> viewports clip their content by default (UA sheet). */
+marker {
+    overflow: hidden;
+}
+
 )CSS";
 
 } // namespace bro::engine

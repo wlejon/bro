@@ -382,6 +382,205 @@ void paintText(render::Renderer* r, const dom::Element* textEl,
     }
 }
 
+// Forward declaration: marker content is painted through the same traversal.
+void paintNode(render::Renderer* r, const dom::Element* el, const dom::Element* svgRoot);
+
+// ---- SVG markers -------------------------------------------------------------
+
+// Extract the id from a `url(#id)` reference (quotes/whitespace tolerant); "".
+std::string parseUrlRef(const std::string& v) {
+    if (v.rfind("url(", 0) != 0) return {};
+    auto close = v.find(')');
+    std::string ref = v.substr(4, close == std::string::npos ? std::string::npos : close - 4);
+    ref.erase(std::remove(ref.begin(), ref.end(), '"'), ref.end());
+    ref.erase(std::remove(ref.begin(), ref.end(), '\''), ref.end());
+    if (size_t h = ref.find('#'); h != std::string::npos) ref = ref.substr(h + 1);
+    size_t a = ref.find_first_not_of(" \t");
+    if (a == std::string::npos) return {};
+    return ref.substr(a, ref.find_last_not_of(" \t") - a + 1);
+}
+
+SkVector unitVec(SkVector v) {
+    float len = v.length();
+    return len < 1e-4f ? SkVector{0, 0} : SkVector{v.fX / len, v.fY / len};
+}
+
+// First of up to three candidate directions with non-degenerate length.
+SkVector nonzeroDir(SkVector a, SkVector b, SkVector c) {
+    if (a.length() > 1e-4f) return a;
+    if (b.length() > 1e-4f) return b;
+    return c;
+}
+
+// A marker vertex: position plus incoming/outgoing unit tangents (either may be
+// zero at path ends). Markers sit at every path command endpoint.
+struct MarkerPt {
+    SkPoint p{0, 0};
+    SkVector in{0, 0};
+    SkVector out{0, 0};
+};
+
+std::vector<MarkerPt> markerVertices(const std::string& d) {
+    std::vector<MarkerPt> out;
+    SkPath path;
+    if (!SkParsePath::FromSVGString(d.c_str(), &path)) return out;
+    SkPath::Iter it(path, false);
+    SkPoint pts[4];
+    MarkerPt cur;
+    bool have = false;
+    SkPoint subStart{0, 0};
+    auto flush = [&]() { if (have) { out.push_back(cur); have = false; } };
+    for (SkPath::Verb v = it.next(pts); v != SkPath::kDone_Verb; v = it.next(pts)) {
+        switch (v) {
+        case SkPath::kMove_Verb:
+            flush();
+            cur = MarkerPt{}; cur.p = pts[0]; have = true; subStart = pts[0];
+            break;
+        case SkPath::kLine_Verb: {
+            SkVector d0 = unitVec(pts[1] - pts[0]);
+            cur.out = d0; flush();
+            cur = MarkerPt{}; cur.p = pts[1]; cur.in = d0; have = true;
+            break;
+        }
+        case SkPath::kQuad_Verb:
+        case SkPath::kConic_Verb: {
+            SkVector s = unitVec(nonzeroDir(pts[1] - pts[0], pts[2] - pts[0], pts[2] - pts[0]));
+            SkVector e = unitVec(nonzeroDir(pts[2] - pts[1], pts[2] - pts[0], pts[2] - pts[0]));
+            cur.out = s; flush();
+            cur = MarkerPt{}; cur.p = pts[2]; cur.in = e; have = true;
+            break;
+        }
+        case SkPath::kCubic_Verb: {
+            SkVector s = unitVec(nonzeroDir(pts[1] - pts[0], pts[2] - pts[0], pts[3] - pts[0]));
+            SkVector e = unitVec(nonzeroDir(pts[3] - pts[2], pts[3] - pts[1], pts[3] - pts[0]));
+            cur.out = s; flush();
+            cur = MarkerPt{}; cur.p = pts[3]; cur.in = e; have = true;
+            break;
+        }
+        case SkPath::kClose_Verb: {
+            SkVector d0 = unitVec(subStart - cur.p);
+            cur.out = d0; flush();
+            cur = MarkerPt{}; cur.p = subStart; cur.in = d0; have = true;
+            break;
+        }
+        default: break;
+        }
+    }
+    flush();
+    return out;
+}
+
+// orient angle (auto handled by caller): number with optional deg/grad/rad/turn.
+float parseAngleDeg(const std::string& s) {
+    if (s.empty()) return 0.0f;
+    char* end = nullptr;
+    float f = std::strtof(s.c_str(), &end);
+    if (end == s.c_str()) return 0.0f;
+    std::string u(end);
+    if (size_t a = u.find_first_not_of(" \t"); a != std::string::npos) u = u.substr(a);
+    if (u.rfind("grad", 0) == 0) return f * 0.9f;
+    if (u.rfind("rad", 0) == 0)  return f * 57.29577951f;
+    if (u.rfind("turn", 0) == 0) return f * 360.0f;
+    return f; // deg (default) or unitless
+}
+
+// role: 0=start, 1=mid, 2=end. Returns the auto-orient angle in degrees.
+float autoAngleDeg(const MarkerPt& m, int role) {
+    SkVector dir{0, 0};
+    if (role == 0)      dir = m.out.length() > 0 ? m.out : m.in;
+    else if (role == 2) dir = m.in.length() > 0 ? m.in : m.out;
+    else {  // mid: bisector of incoming/outgoing
+        if (m.in.length() == 0)       dir = m.out;
+        else if (m.out.length() == 0) dir = m.in;
+        else {
+            dir = unitVec(SkVector{m.in.fX + m.out.fX, m.in.fY + m.out.fY});
+            if (dir.length() == 0) dir = m.out;  // exact reversal → keep travel dir
+        }
+    }
+    if (dir.length() == 0) return 0.0f;
+    return std::atan2(dir.fY, dir.fX) * 57.29577951f;
+}
+
+std::string trimStr(const std::string& s) {
+    size_t a = s.find_first_not_of(" \t\n\r");
+    if (a == std::string::npos) return {};
+    return s.substr(a, s.find_last_not_of(" \t\n\r") - a + 1);
+}
+
+// Resolve marker-start/-mid/-end (or the `marker` shorthand attribute) → element.
+const dom::Element* resolveMarkerRef(const dom::Element* el, const dom::Element* svgRoot,
+                                     const char* prop) {
+    std::string v = styleOr(el, prop, "none");
+    if (v == "none" || v.empty()) v = attrOf(el, "marker");  // shorthand fallback
+    std::string ref = parseUrlRef(trimStr(v));
+    if (ref.empty()) return nullptr;
+    const dom::Element* m = findById(svgRoot, ref);
+    return (m && lower(m->tagName()) == "marker") ? m : nullptr;
+}
+
+// Paint one marker instance at vertex v (role selects start/mid/end semantics).
+void paintMarker(render::Renderer* r, const dom::Element* mk, const dom::Element* svgRoot,
+                 const MarkerPt& v, int role, float strokeW) {
+    float mw = attrFloat(mk, "markerWidth", 3.0f);
+    float mh = attrFloat(mk, "markerHeight", 3.0f);
+    if (mw <= 0 || mh <= 0) return;
+
+    std::string orient = trimStr(attrOf(mk, "orient"));
+    float angleDeg;
+    if (orient == "auto" || orient == "auto-start-reverse") {
+        angleDeg = autoAngleDeg(v, role);
+        if (role == 0 && orient == "auto-start-reverse") angleDeg += 180.0f;
+    } else {
+        angleDeg = parseAngleDeg(orient);
+    }
+
+    // viewBox → marker viewport (markerWidth × markerHeight); identity when absent
+    // (refX/refY then in marker units directly).
+    SkMatrix content = viewportMatrix(mw, mh, attrOf(mk, "viewBox"),
+                                      attrOf(mk, "preserveAspectRatio"));
+    SkPoint refVp = content.mapPoint({attrFloat(mk, "refX", 0.0f),
+                                      attrFloat(mk, "refY", 0.0f)});
+
+    std::string units = attrOf(mk, "markerUnits");
+    bool strokeUnits = units.empty() || units == "strokeWidth";
+
+    // Place the marker viewport at the vertex: translate → rotate → (strokeWidth
+    // scale) → align refX/refY onto the vertex.
+    SkMatrix place = SkMatrix::Translate(v.p.fX, v.p.fY);
+    place.preRotate(angleDeg);
+    if (strokeUnits) place.preScale(strokeW, strokeW);
+    place.preTranslate(-refVp.fX, -refVp.fY);
+
+    r->save();
+    applyMatrix(r, place);
+    // overflow:hidden (UA default) clips content to the marker viewport rect,
+    // which lives in this pre-content space.
+    std::string ov = styleOr(mk, "overflow", "hidden");
+    if (ov != "visible" && ov != "auto") r->setClip(0, 0, mw, mh);
+    applyMatrix(r, content);
+    for (const dom::Element* c : mk->children()) paintNode(r, c, svgRoot);
+    r->restore();
+}
+
+// Draw markers at every vertex of a path/line/polyline/polygon.
+void paintMarkers(render::Renderer* r, const dom::Element* el, const dom::Element* svgRoot,
+                  const std::string& d) {
+    const dom::Element* mStart = resolveMarkerRef(el, svgRoot, "marker-start");
+    const dom::Element* mMid   = resolveMarkerRef(el, svgRoot, "marker-mid");
+    const dom::Element* mEnd   = resolveMarkerRef(el, svgRoot, "marker-end");
+    if (!mStart && !mMid && !mEnd) return;
+
+    std::vector<MarkerPt> verts = markerVertices(d);
+    if (verts.empty()) return;
+    float strokeW = styleFloat(el, "stroke-width", 1.0f);
+
+    for (size_t i = 0; i < verts.size(); ++i) {
+        int role = (i == 0) ? 0 : (i + 1 == verts.size()) ? 2 : 1;
+        const dom::Element* mk = role == 0 ? mStart : role == 2 ? mEnd : mMid;
+        if (mk) paintMarker(r, mk, svgRoot, verts[i], role, strokeW);
+    }
+}
+
 void paintNode(render::Renderer* r, const dom::Element* el, const dom::Element* svgRoot) {
     std::string tag = lower(el->tagName());
     if (isNonRendered(tag)) return;
@@ -422,7 +621,11 @@ void paintNode(render::Renderer* r, const dom::Element* el, const dom::Element* 
         }
     } else {
         std::string d = shapeToPathData(el);
-        if (!d.empty()) paintShape(r, el, svgRoot, d);
+        if (!d.empty()) {
+            paintShape(r, el, svgRoot, d);
+            if (tag == "path" || tag == "line" || tag == "polyline" || tag == "polygon")
+                paintMarkers(r, el, svgRoot, d);
+        }
     }
 
     if (layer) r->restore();
@@ -433,7 +636,7 @@ bool nodeSupported(const dom::Element* el) {
     std::string tag = lower(el->tagName());
     static const char* kUnsupported[] = {
         "textpath", "tref", "foreignobject", "image",
-        "symbol", "marker", "mask", "pattern", "filter",
+        "symbol", "mask", "pattern", "filter",
     };
     for (const char* u : kUnsupported) if (tag == u) return false;
 
@@ -447,10 +650,28 @@ bool nodeSupported(const dom::Element* el) {
     }
 
     const auto& cs = el->computedStyle();
-    for (const char* p : {"filter", "mask", "marker-start", "marker-mid", "marker-end"}) {
+    for (const char* p : {"filter", "mask"}) {
         auto it = cs.find(p);
         if (it != cs.end() && !it->second.empty() && it->second != "none") return false;
     }
+
+    // Markers render natively only on path/line/polyline/polygon. Longhand
+    // marker-* is inherited, so a value on a <g> is fine (it flows to descendant
+    // shapes); only fall back when a marker actually lands on a shape we don't
+    // draw markers for (rect/circle/ellipse/text). The `marker` shorthand is
+    // honored only directly on a supported shape, so a shorthand attribute
+    // anywhere else falls back.
+    bool isMarkerShape = (tag == "path" || tag == "line" ||
+                          tag == "polyline" || tag == "polygon");
+    if (!attrOf(el, "marker").empty() && !isMarkerShape) return false;
+    if (tag == "rect" || tag == "circle" || tag == "ellipse" ||
+        tag == "text" || tag == "tspan") {
+        for (const char* p : {"marker-start", "marker-mid", "marker-end"}) {
+            auto it = cs.find(p);
+            if (it != cs.end() && !it->second.empty() && it->second != "none") return false;
+        }
+    }
+
     for (const dom::Element* c : el->children())
         if (!nodeSupported(c)) return false;
     return true;
