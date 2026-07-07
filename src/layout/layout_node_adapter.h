@@ -281,7 +281,7 @@ private:
     // sync without requiring a structural rebuild.
     LayoutNode* ensurePseudo(const std::string& which) const {
         if (!elem_) return nullptr;
-        bool want = !elem_->pseudoContent(which).empty();
+        bool want = elem_->hasPseudo(which);
         auto& slot = (which == "before") ? pseudoBeforeAdapter_ : pseudoAfterAdapter_;
         if (want && !slot) {
             slot = makePseudo(elem_, which);

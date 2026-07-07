@@ -91,6 +91,12 @@ mark { background-color: yellow; }
 span, a, abbr, cite, q { display: inline; }
 br { display: inline; }
 
+/* Inline quotations: the UA wraps <q> content in locale quote marks via
+   generated content, honouring the (inherited) `quotes` property and the
+   current quote-nesting depth. */
+q::before { content: open-quote; }
+q::after  { content: close-quote; }
+
 /* ---------- Form controls ---------- */
 
 button, input[type="button"], input[type="submit"], input[type="reset"] {

@@ -2488,10 +2488,53 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
 void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
                                 float offsetX, float offsetY) {
     if (!host) return;
-    const std::string& content = host->pseudoContent(which);
-    if (content.empty()) return;
+    if (!host->hasPseudo(which)) return;
     auto& style = host->pseudoStyle(which);
     auto& pbox = host->pseudoBox(which);
+
+    // Paint the pseudo box's background and border first — a generated-content
+    // box renders like any element, and a `content: ""` box can still carry a
+    // visible background/border (e.g. a coloured block spacer or a badge dot).
+    {
+        float bx = offsetX + pbox.contentRect.x - pbox.padding.left - pbox.border.left;
+        float by = offsetY + pbox.contentRect.y - pbox.padding.top - pbox.border.top;
+        float bw = pbox.fullWidth();
+        float bh = pbox.fullHeight();
+        if (bw > 0.0f && bh > 0.0f) {
+            render::Radii radii = getRadii(style, bw, bh);
+            bool rounded = !radii.isZero();
+            auto bgIt = style.find("background-color");
+            if (bgIt != style.end() && !bgIt->second.empty()) {
+                bromath::Color bc;
+                if (tryParseColor(bgIt->second, bc) && bc.a > 0) {
+                    if (rounded) renderer_->fillRoundRectRadii(bx, by, bw, bh, radii, bc);
+                    else         renderer_->fillRect(bx, by, bw, bh, bc);
+                }
+            }
+            // Uniform solid borders, painted per side as rectangles (dashed /
+            // dotted / rounded-corner borders on pseudos are uncommon and fall
+            // back to solid — sufficient for generated badges and rules).
+            const char* wp[4] = {"border-top-width","border-right-width","border-bottom-width","border-left-width"};
+            const char* sp[4] = {"border-top-style","border-right-style","border-bottom-style","border-left-style"};
+            const char* cp[4] = {"border-top-color","border-right-color","border-bottom-color","border-left-color"};
+            float bt[4];
+            for (int i = 0; i < 4; ++i) {
+                auto stIt = style.find(sp[i]);
+                std::string st = (stIt == style.end()) ? "none" : stIt->second;
+                bt[i] = (st == "none" || st == "hidden") ? 0.0f : styleLengthPx(style, wp[i]);
+            }
+            auto sideColor = [&](int i) {
+                bromath::Color c = cfromColor8({0, 0, 0, 255});
+                auto it = style.find(cp[i]);
+                if (it != style.end() && !it->second.empty()) tryParseColor(it->second, c);
+                return c;
+            };
+            if (bt[0] > 0) renderer_->fillRect(bx, by, bw, bt[0], sideColor(0));                    // top
+            if (bt[2] > 0) renderer_->fillRect(bx, by + bh - bt[2], bw, bt[2], sideColor(2));       // bottom
+            if (bt[3] > 0) renderer_->fillRect(bx, by, bt[3], bh, sideColor(3));                    // left
+            if (bt[1] > 0) renderer_->fillRect(bx + bw - bt[1], by, bt[1], bh, sideColor(1));       // right
+        }
+    }
 
     // Font from pseudo style — pseudo styles inherit from the host but may
     // override font-* / color, so we cannot reuse the host's font handle.

@@ -120,6 +120,15 @@ public:
         if (which == "after")  return pseudoAfterContent_;
         return empty;
     }
+    // Whether a ::before/::after pseudo-element exists at all. A pseudo with
+    // `content: ""` (empty string) still generates a box that participates in
+    // layout (e.g. clearfix, block spacers), so box generation is gated on
+    // this flag rather than on the content text being non-empty.
+    bool hasPseudo(const std::string& which) const {
+        if (which == "before") return pseudoBeforeActive_;
+        if (which == "after")  return pseudoAfterActive_;
+        return false;
+    }
     const htmlayout::css::ComputedStyle& pseudoStyle(const std::string& which) const {
         static const htmlayout::css::ComputedStyle empty;
         if (which == "before") return pseudoBeforeStyle_;
@@ -144,9 +153,11 @@ public:
         if (which == "before") {
             pseudoBeforeContent_ = std::move(content);
             pseudoBeforeStyle_ = std::move(style);
+            pseudoBeforeActive_ = true;
         } else if (which == "after") {
             pseudoAfterContent_ = std::move(content);
             pseudoAfterStyle_ = std::move(style);
+            pseudoAfterActive_ = true;
         }
     }
     void clearPseudos() {
@@ -154,6 +165,8 @@ public:
         pseudoAfterContent_.clear();
         pseudoBeforeStyle_.clear();
         pseudoAfterStyle_.clear();
+        pseudoBeforeActive_ = false;
+        pseudoAfterActive_ = false;
     }
 
     // Shadow DOM
@@ -251,6 +264,8 @@ private:
     htmlayout::css::ComputedStyle pseudoAfterStyle_;
     htmlayout::layout::LayoutBox pseudoBeforeBox_;
     htmlayout::layout::LayoutBox pseudoAfterBox_;
+    bool pseudoBeforeActive_ = false;
+    bool pseudoAfterActive_ = false;
 
     // Replaced element controllers
     std::unique_ptr<layout::ElInput> inputControl_;

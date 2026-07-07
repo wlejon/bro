@@ -194,6 +194,19 @@ private:
     void collectElements(Node* node, std::vector<Element*>& out);
     void resolveStylesRecursive(Element* elem, const htmlayout::css::ComputedStyle* parentStyle, bool force = false);
 
+    // Generated content (::before / ::after) pass. Runs after style resolution
+    // in full document order, threading CSS counter scopes and quote-nesting
+    // depth so counter()/counters()/open-quote resolve correctly. Populates
+    // each element's pseudo content/style via Element::setPseudo.
+public:
+    struct GenContentState;
+private:
+    void resolveGeneratedContent();
+    void resolveGeneratedContentRecursive(Element* elem, int depth, GenContentState& st);
+    void applyPseudo(Element* elem, const char* which, int depth, GenContentState& st);
+    static void applyCounterOps(Element* elem, const htmlayout::css::ComputedStyle& style,
+                                int depth, GenContentState& st);
+
     template<typename T, typename... Args>
     T* allocateNode(Args&&... args) {
         auto ptr = std::make_unique<T>(std::forward<Args>(args)...);

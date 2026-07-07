@@ -9,6 +9,8 @@
 #include <gumbo.h>
 #include <sstream>
 #include <functional>
+#include <algorithm>
+#include <cstdlib>
 
 namespace bro::dom {
 
@@ -278,6 +280,7 @@ void Document::resolveStyles() {
     if (!documentElement_) return;
     layout::ElementRefAdapter::clearCache();
     resolveStylesRecursive(documentElement_, nullptr);
+    resolveGeneratedContent();
     layout::ElementRefAdapter::clearCache();
 }
 
@@ -392,24 +395,10 @@ void Document::resolveStylesRecursive(Element* elem,
             animationManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
         }
 
-        // ::before / ::after generated content. Resolve the pseudo style and
-        // stash it on the element if `content` is a non-empty string literal
-        // (parser keeps surrounding double-quotes; strip them here).
-        elem->clearPseudos();
-        for (const char* which : {"before", "after"}) {
-            auto pseudoStyle = cascade_.resolvePseudo(*adapter, which, elem->computedStyle());
-            auto cIt = pseudoStyle.find("content");
-            if (cIt == pseudoStyle.end()) continue;
-            const std::string& raw = cIt->second;
-            if (raw.empty() || raw == "normal" || raw == "none") continue;
-            std::string contentStr = raw;
-            if (contentStr.size() >= 2 &&
-                contentStr.front() == '"' && contentStr.back() == '"') {
-                contentStr = contentStr.substr(1, contentStr.size() - 2);
-            }
-            if (contentStr.empty()) continue;
-            elem->setPseudo(which, std::move(contentStr), std::move(pseudoStyle));
-        }
+        // ::before / ::after generated content is resolved in a separate,
+        // document-order pass (resolveGeneratedContent) after all styles are
+        // known, because counter()/counters()/open-quote depend on stateful
+        // counter scopes and quote-nesting that only make sense in tree order.
 
         elem->clearDirty();
     }
@@ -431,6 +420,284 @@ void Document::resolveStylesRecursive(Element* elem,
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Generated content (::before / ::after): counters, counters(), attr(), quotes
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// A live CSS counter instance. `depth` is the tree depth of the element whose
+// counter-reset created it; scope closes when traversal returns to a shallower
+// or equal depth on a following element (see resolveGeneratedContentRecursive).
+struct CounterEntry { long value = 0; int depth = 0; };
+
+// Split a `counter-reset` / `counter-increment` value into (name, number)
+// pairs. Numbers are optional (default `dflt`): "item" -> {item, dflt};
+// "a 3 b" -> {a,3},{b,dflt-for-b? no: b gets dflt}. A number binds to the
+// preceding name.
+std::vector<std::pair<std::string,long>> parseCounterOps(const std::string& v, long dflt) {
+    std::vector<std::pair<std::string,long>> out;
+    std::istringstream ss(v);
+    std::string tok;
+    while (ss >> tok) {
+        // Is tok a (possibly signed) integer?
+        char* end = nullptr;
+        long n = std::strtol(tok.c_str(), &end, 10);
+        if (end != tok.c_str() && *end == '\0') {
+            if (!out.empty()) out.back().second = n;   // number for preceding name
+        } else if (tok != "none") {
+            out.push_back({tok, dflt});
+        }
+    }
+    return out;
+}
+
+// Parse the `quotes` property into open/close pairs. Empty or auto/none ->
+// the English default (curly double then single). Value form:
+//   "open1" "close1" "open2" "close2" ...
+std::vector<std::pair<std::string,std::string>> parseQuotes(const std::string& v) {
+    std::vector<std::string> strs;
+    size_t i = 0;
+    while (i < v.size()) {
+        char c = v[i];
+        if (c == '"' || c == '\'') {
+            size_t j = i + 1;
+            std::string s;
+            while (j < v.size() && v[j] != c) { s += v[j]; ++j; }
+            strs.push_back(s);
+            i = (j < v.size()) ? j + 1 : j;
+        } else {
+            ++i;
+        }
+    }
+    std::vector<std::pair<std::string,std::string>> pairs;
+    for (size_t k = 0; k + 1 < strs.size(); k += 2) pairs.push_back({strs[k], strs[k+1]});
+    if (pairs.empty()) {
+        // English default: U+201C/U+201D, then U+2018/U+2019 (UTF-8 bytes).
+        pairs.push_back({"\xE2\x80\x9C", "\xE2\x80\x9D"});
+        pairs.push_back({"\xE2\x80\x98", "\xE2\x80\x99"});
+    }
+    return pairs;
+}
+
+} // namespace
+
+struct Document::GenContentState {
+    std::unordered_map<std::string, std::vector<CounterEntry>> counters;
+    int quoteDepth = 0;
+
+    // Pop every counter instance created deeper than `depth` — those scopes
+    // closed once traversal returned to this level.
+    void popDeeperThan(int depth) {
+        for (auto& [name, stack] : counters) {
+            while (!stack.empty() && stack.back().depth > depth) stack.pop_back();
+        }
+    }
+    long counterValue(const std::string& name) const {
+        auto it = counters.find(name);
+        if (it == counters.end() || it->second.empty()) return 0;
+        return it->second.back().value;
+    }
+    std::string countersValue(const std::string& name, const std::string& sep) const {
+        auto it = counters.find(name);
+        if (it == counters.end() || it->second.empty()) return "";
+        std::string out;
+        for (size_t i = 0; i < it->second.size(); ++i) {
+            if (i) out += sep;
+            out += std::to_string(it->second[i].value);
+        }
+        return out;
+    }
+    void reset(const std::string& name, long value, int depth) {
+        auto& stack = counters[name];
+        while (!stack.empty() && stack.back().depth >= depth) stack.pop_back();
+        stack.push_back({value, depth});
+    }
+    void increment(const std::string& name, long value, int depth) {
+        auto& stack = counters[name];
+        if (stack.empty()) stack.push_back({0, depth});
+        stack.back().value += value;
+    }
+};
+
+void Document::resolveGeneratedContent() {
+    if (!documentElement_) return;
+    GenContentState st;
+    resolveGeneratedContentRecursive(documentElement_, 0, st);
+}
+
+// Apply an element's counter-reset then counter-increment declarations at the
+// given depth. Shared by real elements and pseudo-elements.
+void Document::applyCounterOps(Element* elem, const htmlayout::css::ComputedStyle& style,
+                               int depth, Document::GenContentState& st) {
+    auto rit = style.find("counter-reset");
+    if (rit != style.end() && rit->second != "none" && !rit->second.empty()) {
+        for (auto& [name, val] : parseCounterOps(rit->second, 0))
+            st.reset(name, val, depth);
+    }
+    auto iit = style.find("counter-increment");
+    if (iit != style.end() && iit->second != "none" && !iit->second.empty()) {
+        for (auto& [name, val] : parseCounterOps(iit->second, 1))
+            st.increment(name, val, depth);
+    }
+    (void)elem;
+}
+
+void Document::resolveGeneratedContentRecursive(Element* elem, int depth, GenContentState& st) {
+    // Close counter scopes from any preceding cousin subtree deeper than us.
+    st.popDeeperThan(depth);
+
+    const auto& style = elem->computedStyle();
+    auto dispIt = style.find("display");
+    bool isNone = (dispIt != style.end() && dispIt->second == "none");
+
+    // The element's own counter operations (reset before increment).
+    if (!isNone) applyCounterOps(elem, style, depth, st);
+
+    // Reset any stale pseudo state; applyPseudo re-arms it when content exists.
+    elem->clearPseudos();
+
+    // ::before is the element's first child — resolve it (and its counter ops)
+    // after the element's own increment so counter() sees the post-increment
+    // value, matching the "first child" model.
+    if (!isNone) applyPseudo(elem, "before", depth + 1, st);
+
+    // Recurse into real children in document order.
+    if (!isNone) {
+        for (auto* child : elem->childNodes()) {
+            if (child->nodeType() == NodeType::Element)
+                resolveGeneratedContentRecursive(static_cast<Element*>(child), depth + 1, st);
+        }
+        if (elem->hasShadow()) {
+            auto* sr = elem->shadowRoot();
+            for (auto* child : sr->childNodes()) {
+                if (child->nodeType() == NodeType::Element)
+                    resolveGeneratedContentRecursive(static_cast<Element*>(child), depth + 1, st);
+            }
+        }
+    }
+
+    // ::after is the last child — resolve after children so it sees their
+    // counter state (and the correct close-quote nesting depth).
+    if (!isNone) applyPseudo(elem, "after", depth + 1, st);
+}
+
+void Document::applyPseudo(Element* elem, const char* which, int depth, GenContentState& st) {
+    auto* adapter = layout::ElementRefAdapter::getOrCreate(elem);
+    auto pseudoStyle = cascade_.resolvePseudo(*adapter, which, elem->computedStyle());
+    auto cIt = pseudoStyle.find("content");
+    if (cIt == pseudoStyle.end()) return;
+    const std::string& raw = cIt->second;
+    if (raw.empty() || raw == "normal" || raw == "none") return;
+
+    // A pseudo-element can itself carry counter-reset / counter-increment; it
+    // acts as a child of its originating element, so apply at depth.
+    applyCounterOps(elem, pseudoStyle, depth, st);
+
+    // Quotes come from the pseudo's (inherited) `quotes` property.
+    auto qIt = pseudoStyle.find("quotes");
+    std::string quotesVal = (qIt != pseudoStyle.end()) ? qIt->second : std::string();
+    if (quotesVal == "auto" || quotesVal == "none") quotesVal.clear();
+    auto quotePairs = parseQuotes(quotesVal);
+
+    // Tokenize the content value into: quoted strings, counter()/counters(),
+    // attr(), and the quote keywords. Whitespace between components is a token
+    // separator and contributes no text (only string literals do).
+    std::string out;
+    size_t i = 0;
+    const size_t n = raw.size();
+    auto quoteIndex = [&](int d) -> size_t {
+        if (d < 0) d = 0;
+        return std::min<size_t>(static_cast<size_t>(d), quotePairs.size() - 1);
+    };
+    while (i < n) {
+        char c = raw[i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f') { ++i; continue; }
+        if (c == '"' || c == '\'') {
+            size_t j = i + 1;
+            while (j < n && raw[j] != c) {
+                if (raw[j] == '\\' && j + 1 < n) { out += raw[j+1]; j += 2; }
+                else { out += raw[j]; ++j; }
+            }
+            i = (j < n) ? j + 1 : j;
+            continue;
+        }
+        // Read an identifier / function token up to a delimiter.
+        size_t j = i;
+        while (j < n && raw[j] != ' ' && raw[j] != '\t' && raw[j] != '\n' &&
+               raw[j] != '\r' && raw[j] != '\f' && raw[j] != '(') ++j;
+        std::string tok = raw.substr(i, j - i);
+        if (j < n && raw[j] == '(') {
+            // Function: capture the parenthesized argument text.
+            size_t k = j + 1;
+            int depthP = 1;
+            std::string args;
+            while (k < n && depthP > 0) {
+                if (raw[k] == '(') { ++depthP; args += raw[k]; }
+                else if (raw[k] == ')') { --depthP; if (depthP > 0) args += raw[k]; }
+                else args += raw[k];
+                ++k;
+            }
+            i = k;
+            if (tok == "attr") {
+                std::string an = args;
+                // trim
+                size_t a = an.find_first_not_of(" \t");
+                size_t b = an.find_last_not_of(" \t");
+                if (a != std::string::npos) an = an.substr(a, b - a + 1);
+                out += elem->getAttribute(an);
+            } else if (tok == "counter") {
+                // counter( name [, style] ) — style ignored (decimal).
+                std::string name = args;
+                auto comma = name.find(',');
+                if (comma != std::string::npos) name = name.substr(0, comma);
+                size_t a = name.find_first_not_of(" \t");
+                size_t b = name.find_last_not_of(" \t");
+                if (a != std::string::npos) name = name.substr(a, b - a + 1);
+                out += std::to_string(st.counterValue(name));
+            } else if (tok == "counters") {
+                // counters( name, sep [, style] )
+                std::string name, sep;
+                auto comma = args.find(',');
+                if (comma != std::string::npos) {
+                    name = args.substr(0, comma);
+                    std::string rest = args.substr(comma + 1);
+                    // sep is the first quoted string in rest.
+                    size_t q = rest.find_first_of("\"'");
+                    if (q != std::string::npos) {
+                        char qc = rest[q];
+                        size_t e = rest.find(qc, q + 1);
+                        if (e != std::string::npos) sep = rest.substr(q + 1, e - q - 1);
+                    }
+                } else {
+                    name = args;
+                }
+                size_t a = name.find_first_not_of(" \t");
+                size_t b = name.find_last_not_of(" \t");
+                if (a != std::string::npos) name = name.substr(a, b - a + 1);
+                out += st.countersValue(name, sep);
+            }
+            // url(...) and other functions contribute no text.
+            continue;
+        }
+        i = j;
+        if (tok == "open-quote") {
+            out += quotePairs[quoteIndex(st.quoteDepth)].first;
+            ++st.quoteDepth;
+        } else if (tok == "close-quote") {
+            if (st.quoteDepth > 0) --st.quoteDepth;
+            out += quotePairs[quoteIndex(st.quoteDepth)].second;
+        } else if (tok == "no-open-quote") {
+            ++st.quoteDepth;
+        } else if (tok == "no-close-quote") {
+            if (st.quoteDepth > 0) --st.quoteDepth;
+        }
+        // Bare idents (e.g. `normal`) contribute nothing.
+    }
+
+    elem->setPseudo(which, std::move(out), std::move(pseudoStyle));
 }
 
 // ---------------------------------------------------------------------------
