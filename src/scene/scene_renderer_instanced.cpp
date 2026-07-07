@@ -78,31 +78,7 @@ void SceneRenderer::ensureInstancedMeshPipeline() {
     if (meshInstancedProgram_) return;
 
     std::string fragSrc = makeMeshInstancedFragSrc();
-    GLuint vs = compileShader(GL_VERTEX_SHADER,   kMeshInstancedVertSrc);
-    GLuint fs = compileShader(GL_FRAGMENT_SHADER, fragSrc.c_str());
-    if (!vs || !fs) {
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
-        return;
-    }
-
-    meshInstancedProgram_ = glCreateProgram();
-    glAttachShader(meshInstancedProgram_, vs);
-    glAttachShader(meshInstancedProgram_, fs);
-    glLinkProgram(meshInstancedProgram_);
-
-    GLint ok = 0;
-    glGetProgramiv(meshInstancedProgram_, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[512];
-        glGetProgramInfoLog(meshInstancedProgram_, sizeof(log), nullptr, log);
-        LOG_ERROR("Instanced mesh program link error: %s", log);
-        glDeleteProgram(meshInstancedProgram_);
-        meshInstancedProgram_ = 0;
-    }
-
-    glDeleteShader(vs);
-    glDeleteShader(fs);
+    meshInstancedProgram_ = linkProgram(kMeshInstancedVertSrc, fragSrc.c_str(), "Instanced mesh program");
 
     if (!meshInstancedProgram_) return;
 

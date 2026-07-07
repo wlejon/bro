@@ -35,30 +35,7 @@ using bromath::Mat4;
 void SceneRenderer::ensureEnvConvertPipeline() {
     if (envConvertProgram_) return;
 
-    GLuint vs = compileShader(GL_VERTEX_SHADER,   kEnvConvertVertSrc);
-    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kEnvConvertFragSrc);
-    if (!vs || !fs) {
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
-        return;
-    }
-    envConvertProgram_ = glCreateProgram();
-    glAttachShader(envConvertProgram_, vs);
-    glAttachShader(envConvertProgram_, fs);
-    glLinkProgram(envConvertProgram_);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-
-    GLint ok = 0;
-    glGetProgramiv(envConvertProgram_, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[512];
-        glGetProgramInfoLog(envConvertProgram_, sizeof(log), nullptr, log);
-        LOG_ERROR("Env convert program link error: %s", log);
-        glDeleteProgram(envConvertProgram_);
-        envConvertProgram_ = 0;
-        return;
-    }
+    envConvertProgram_ = linkProgram(kEnvConvertVertSrc, kEnvConvertFragSrc, "Env convert program");
     envCvUFace_     = glGetUniformLocation(envConvertProgram_, "uFace");
     envCvUEquirect_ = glGetUniformLocation(envConvertProgram_, "uEquirect");
 
@@ -228,29 +205,7 @@ void SceneRenderer::ensureBRDFLUT() {
     ensureEnvConvertPipeline();   // shared NDC quad + FBO
 
     if (!brdfLUTProgram_) {
-        GLuint vs = compileShader(GL_VERTEX_SHADER,   kEnvConvertVertSrc);
-        GLuint fs = compileShader(GL_FRAGMENT_SHADER, kBRDFLUTFragSrc);
-        if (!vs || !fs) {
-            if (vs) glDeleteShader(vs);
-            if (fs) glDeleteShader(fs);
-            return;
-        }
-        brdfLUTProgram_ = glCreateProgram();
-        glAttachShader(brdfLUTProgram_, vs);
-        glAttachShader(brdfLUTProgram_, fs);
-        glLinkProgram(brdfLUTProgram_);
-        glDeleteShader(vs);
-        glDeleteShader(fs);
-        GLint ok = 0;
-        glGetProgramiv(brdfLUTProgram_, GL_LINK_STATUS, &ok);
-        if (!ok) {
-            char log[512];
-            glGetProgramInfoLog(brdfLUTProgram_, sizeof(log), nullptr, log);
-            LOG_ERROR("BRDF LUT program link error: %s", log);
-            glDeleteProgram(brdfLUTProgram_);
-            brdfLUTProgram_ = 0;
-            return;
-        }
+        brdfLUTProgram_ = linkProgram(kEnvConvertVertSrc, kBRDFLUTFragSrc, "BRDF LUT program");
     }
 
     glGenTextures(1, &brdfLUT_);
@@ -297,30 +252,7 @@ void SceneRenderer::ensureBRDFLUT() {
 
 void SceneRenderer::ensureIrradiancePipeline() {
     if (irrConvProgram_) return;
-    GLuint vs = compileShader(GL_VERTEX_SHADER,   kEnvConvertVertSrc);  // shared NDC quad VS
-    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kIrradianceFragSrc);
-    if (!vs || !fs) {
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
-        return;
-    }
-    irrConvProgram_ = glCreateProgram();
-    glAttachShader(irrConvProgram_, vs);
-    glAttachShader(irrConvProgram_, fs);
-    glLinkProgram(irrConvProgram_);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-
-    GLint ok = 0;
-    glGetProgramiv(irrConvProgram_, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[512];
-        glGetProgramInfoLog(irrConvProgram_, sizeof(log), nullptr, log);
-        LOG_ERROR("Irradiance program link error: %s", log);
-        glDeleteProgram(irrConvProgram_);
-        irrConvProgram_ = 0;
-        return;
-    }
+    irrConvProgram_ = linkProgram(kEnvConvertVertSrc, kIrradianceFragSrc, "Irradiance program");
     irrCvUEnv_  = glGetUniformLocation(irrConvProgram_, "uEnv");
     irrCvUFace_ = glGetUniformLocation(irrConvProgram_, "uFace");
 }
@@ -389,30 +321,7 @@ bool SceneRenderer::runIrradianceConvolution() {
 void SceneRenderer::ensureSkyboxPipeline() {
     if (skyboxProgram_) return;
 
-    GLuint vs = compileShader(GL_VERTEX_SHADER,   kSkyboxVertSrc);
-    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kSkyboxFragSrc);
-    if (!vs || !fs) {
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
-        return;
-    }
-    skyboxProgram_ = glCreateProgram();
-    glAttachShader(skyboxProgram_, vs);
-    glAttachShader(skyboxProgram_, fs);
-    glLinkProgram(skyboxProgram_);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-
-    GLint ok = 0;
-    glGetProgramiv(skyboxProgram_, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[512];
-        glGetProgramInfoLog(skyboxProgram_, sizeof(log), nullptr, log);
-        LOG_ERROR("Skybox program link error: %s", log);
-        glDeleteProgram(skyboxProgram_);
-        skyboxProgram_ = 0;
-        return;
-    }
+    skyboxProgram_ = linkProgram(kSkyboxVertSrc, kSkyboxFragSrc, "Skybox program");
     skyUViewToWorld_ = glGetUniformLocation(skyboxProgram_, "uViewToWorld");
     skyUTanHalfFovY_ = glGetUniformLocation(skyboxProgram_, "uTanHalfFovY");
     skyUAspect_      = glGetUniformLocation(skyboxProgram_, "uAspect");
@@ -482,30 +391,7 @@ void SceneRenderer::renderSkyboxPass() {
 
 void SceneRenderer::ensurePrefilterPipeline() {
     if (prefilterProgram_) return;
-    GLuint vs = compileShader(GL_VERTEX_SHADER,   kEnvConvertVertSrc);
-    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kPrefilterFragSrc);
-    if (!vs || !fs) {
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
-        return;
-    }
-    prefilterProgram_ = glCreateProgram();
-    glAttachShader(prefilterProgram_, vs);
-    glAttachShader(prefilterProgram_, fs);
-    glLinkProgram(prefilterProgram_);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-
-    GLint ok = 0;
-    glGetProgramiv(prefilterProgram_, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[512];
-        glGetProgramInfoLog(prefilterProgram_, sizeof(log), nullptr, log);
-        LOG_ERROR("Prefilter program link error: %s", log);
-        glDeleteProgram(prefilterProgram_);
-        prefilterProgram_ = 0;
-        return;
-    }
+    prefilterProgram_ = linkProgram(kEnvConvertVertSrc, kPrefilterFragSrc, "Prefilter program");
     pfUEnv_       = glGetUniformLocation(prefilterProgram_, "uEnv");
     pfUFace_      = glGetUniformLocation(prefilterProgram_, "uFace");
     pfURoughness_ = glGetUniformLocation(prefilterProgram_, "uRoughness");

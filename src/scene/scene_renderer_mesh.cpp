@@ -24,31 +24,7 @@ using bromath::Mat4;
 void SceneRenderer::ensureMeshPipeline() {
     if (meshProgram_) return;
 
-    GLuint vs = compileShader(GL_VERTEX_SHADER, kMeshVertSrc);
-    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kMeshFragSrc);
-    if (!vs || !fs) {
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
-        return;
-    }
-
-    meshProgram_ = glCreateProgram();
-    glAttachShader(meshProgram_, vs);
-    glAttachShader(meshProgram_, fs);
-    glLinkProgram(meshProgram_);
-
-    GLint ok = 0;
-    glGetProgramiv(meshProgram_, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[512];
-        glGetProgramInfoLog(meshProgram_, sizeof(log), nullptr, log);
-        LOG_ERROR("Mesh program link error: %s", log);
-        glDeleteProgram(meshProgram_);
-        meshProgram_ = 0;
-    }
-
-    glDeleteShader(vs);
-    glDeleteShader(fs);
+    meshProgram_ = linkProgram(kMeshVertSrc, kMeshFragSrc, "Mesh program");
 
     if (meshProgram_) {
         uMVP_ = glGetUniformLocation(meshProgram_, "uMVP");

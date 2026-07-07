@@ -28,26 +28,7 @@ using bromath::Mat4;
 
 void SceneRenderer::ensureShadowPipeline() {
     if (shadowProgram_) return;
-    GLuint vs = compileShader(GL_VERTEX_SHADER,   kShadowVertSrc);
-    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kShadowFragSrc);
-    if (!vs || !fs) {
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
-        return;
-    }
-    shadowProgram_ = glCreateProgram();
-    glAttachShader(shadowProgram_, vs);
-    glAttachShader(shadowProgram_, fs);
-    glLinkProgram(shadowProgram_);
-    GLint ok = 0;
-    glGetProgramiv(shadowProgram_, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[512]; glGetProgramInfoLog(shadowProgram_, sizeof(log), nullptr, log);
-        LOG_ERROR("Shadow program link error: %s", log);
-        glDeleteProgram(shadowProgram_);
-        shadowProgram_ = 0;
-    }
-    glDeleteShader(vs); glDeleteShader(fs);
+    shadowProgram_ = linkProgram(kShadowVertSrc, kShadowFragSrc, "Shadow program");
     if (shadowProgram_) {
         shadowUMVP_ = glGetUniformLocation(shadowProgram_, "uMVP");
     }
@@ -55,26 +36,7 @@ void SceneRenderer::ensureShadowPipeline() {
 
 void SceneRenderer::ensureShadowInstancedPipeline() {
     if (shadowInstancedProgram_) return;
-    GLuint vs = compileShader(GL_VERTEX_SHADER,   kShadowInstancedVertSrc);
-    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kShadowFragSrc);
-    if (!vs || !fs) {
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
-        return;
-    }
-    shadowInstancedProgram_ = glCreateProgram();
-    glAttachShader(shadowInstancedProgram_, vs);
-    glAttachShader(shadowInstancedProgram_, fs);
-    glLinkProgram(shadowInstancedProgram_);
-    GLint ok = 0;
-    glGetProgramiv(shadowInstancedProgram_, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[512]; glGetProgramInfoLog(shadowInstancedProgram_, sizeof(log), nullptr, log);
-        LOG_ERROR("Instanced shadow program link error: %s", log);
-        glDeleteProgram(shadowInstancedProgram_);
-        shadowInstancedProgram_ = 0;
-    }
-    glDeleteShader(vs); glDeleteShader(fs);
+    shadowInstancedProgram_ = linkProgram(kShadowInstancedVertSrc, kShadowFragSrc, "Instanced shadow program");
     if (shadowInstancedProgram_) {
         shadowInstULightVP_ = glGetUniformLocation(shadowInstancedProgram_, "uLightVP");
         shadowInstUModel_   = glGetUniformLocation(shadowInstancedProgram_, "uModel");

@@ -32,30 +32,7 @@ using bromath::Mat4;
 void SceneRenderer::ensureTonemapPipeline() {
     if (tonemapProgram_) return;
 
-    GLuint vs = compileShader(GL_VERTEX_SHADER,   kTonemapVertSrc);
-    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kTonemapFragSrc);
-    if (!vs || !fs) {
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
-        return;
-    }
-    tonemapProgram_ = glCreateProgram();
-    glAttachShader(tonemapProgram_, vs);
-    glAttachShader(tonemapProgram_, fs);
-    glLinkProgram(tonemapProgram_);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-
-    GLint ok = 0;
-    glGetProgramiv(tonemapProgram_, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[512];
-        glGetProgramInfoLog(tonemapProgram_, sizeof(log), nullptr, log);
-        LOG_ERROR("Tonemap program link error: %s", log);
-        glDeleteProgram(tonemapProgram_);
-        tonemapProgram_ = 0;
-        return;
-    }
+    tonemapProgram_ = linkProgram(kTonemapVertSrc, kTonemapFragSrc, "Tonemap program");
 
     tmUTex_      = glGetUniformLocation(tonemapProgram_, "uTex");
     tmUExposure_ = glGetUniformLocation(tonemapProgram_, "uExposure");
@@ -204,28 +181,11 @@ void SceneRenderer::ensureBloomPipeline() {
     ensureTiltShiftPipeline();   // shares the separable-blur program + quad VAO
     if (bloomBrightProgram_) return;
 
-    GLuint vs = compileShader(GL_VERTEX_SHADER,   kPostVertSrc);
-    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kBloomBrightFragSrc);
-    if (vs && fs) {
-        bloomBrightProgram_ = glCreateProgram();
-        glAttachShader(bloomBrightProgram_, vs);
-        glAttachShader(bloomBrightProgram_, fs);
-        glLinkProgram(bloomBrightProgram_);
-        GLint ok = 0;
-        glGetProgramiv(bloomBrightProgram_, GL_LINK_STATUS, &ok);
-        if (!ok) {
-            char log[512];
-            glGetProgramInfoLog(bloomBrightProgram_, sizeof(log), nullptr, log);
-            LOG_ERROR("Bloom bright-pass link error: %s", log);
-            glDeleteProgram(bloomBrightProgram_);
-            bloomBrightProgram_ = 0;
-        } else {
-            bbpUTex_       = glGetUniformLocation(bloomBrightProgram_, "uTex");
-            bbpUThreshold_ = glGetUniformLocation(bloomBrightProgram_, "uThreshold");
-        }
+    bloomBrightProgram_ = linkProgram(kPostVertSrc, kBloomBrightFragSrc, "Bloom bright-pass");
+    if (bloomBrightProgram_) {
+        bbpUTex_       = glGetUniformLocation(bloomBrightProgram_, "uTex");
+        bbpUThreshold_ = glGetUniformLocation(bloomBrightProgram_, "uThreshold");
     }
-    if (vs) glDeleteShader(vs);
-    if (fs) glDeleteShader(fs);
 }
 
 void SceneRenderer::ensureBloomFBOs() {
@@ -321,58 +281,24 @@ void SceneRenderer::ensureTiltShiftPipeline() {
     if (blurProgram_ && tiltProgram_) return;
 
     if (!blurProgram_) {
-        GLuint vs = compileShader(GL_VERTEX_SHADER,   kPostVertSrc);
-        GLuint fs = compileShader(GL_FRAGMENT_SHADER, kBlurFragSrc);
-        if (vs && fs) {
-            blurProgram_ = glCreateProgram();
-            glAttachShader(blurProgram_, vs);
-            glAttachShader(blurProgram_, fs);
-            glLinkProgram(blurProgram_);
-            GLint ok = 0;
-            glGetProgramiv(blurProgram_, GL_LINK_STATUS, &ok);
-            if (!ok) {
-                char log[512];
-                glGetProgramInfoLog(blurProgram_, sizeof(log), nullptr, log);
-                LOG_ERROR("Blur program link error: %s", log);
-                glDeleteProgram(blurProgram_);
-                blurProgram_ = 0;
-            } else {
-                blUTex_ = glGetUniformLocation(blurProgram_, "uTex");
-                blUDir_ = glGetUniformLocation(blurProgram_, "uDir");
-            }
+        blurProgram_ = linkProgram(kPostVertSrc, kBlurFragSrc, "Blur program");
+        if (blurProgram_) {
+            blUTex_ = glGetUniformLocation(blurProgram_, "uTex");
+            blUDir_ = glGetUniformLocation(blurProgram_, "uDir");
         }
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
     }
 
     if (!tiltProgram_) {
-        GLuint vs = compileShader(GL_VERTEX_SHADER,   kPostVertSrc);
-        GLuint fs = compileShader(GL_FRAGMENT_SHADER, kTiltCompositeFragSrc);
-        if (vs && fs) {
-            tiltProgram_ = glCreateProgram();
-            glAttachShader(tiltProgram_, vs);
-            glAttachShader(tiltProgram_, fs);
-            glLinkProgram(tiltProgram_);
-            GLint ok = 0;
-            glGetProgramiv(tiltProgram_, GL_LINK_STATUS, &ok);
-            if (!ok) {
-                char log[512];
-                glGetProgramInfoLog(tiltProgram_, sizeof(log), nullptr, log);
-                LOG_ERROR("Tilt-shift program link error: %s", log);
-                glDeleteProgram(tiltProgram_);
-                tiltProgram_ = 0;
-            } else {
-                tsUSharp_       = glGetUniformLocation(tiltProgram_, "uSharp");
-                tsUBlur_        = glGetUniformLocation(tiltProgram_, "uBlur");
-                tsUFocusCenter_ = glGetUniformLocation(tiltProgram_, "uFocusCenter");
-                tsUFocusWidth_  = glGetUniformLocation(tiltProgram_, "uFocusWidth");
-                tsUFeather_     = glGetUniformLocation(tiltProgram_, "uFeather");
-                tsUSaturation_  = glGetUniformLocation(tiltProgram_, "uSaturation");
-                tsUContrast_    = glGetUniformLocation(tiltProgram_, "uContrast");
-            }
+        tiltProgram_ = linkProgram(kPostVertSrc, kTiltCompositeFragSrc, "Tilt-shift program");
+        if (tiltProgram_) {
+            tsUSharp_       = glGetUniformLocation(tiltProgram_, "uSharp");
+            tsUBlur_        = glGetUniformLocation(tiltProgram_, "uBlur");
+            tsUFocusCenter_ = glGetUniformLocation(tiltProgram_, "uFocusCenter");
+            tsUFocusWidth_  = glGetUniformLocation(tiltProgram_, "uFocusWidth");
+            tsUFeather_     = glGetUniformLocation(tiltProgram_, "uFeather");
+            tsUSaturation_  = glGetUniformLocation(tiltProgram_, "uSaturation");
+            tsUContrast_    = glGetUniformLocation(tiltProgram_, "uContrast");
         }
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
     }
 }
 

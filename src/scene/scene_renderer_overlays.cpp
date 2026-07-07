@@ -24,30 +24,7 @@ using bromath::Mat4;
 void SceneRenderer::ensureBillboardPipeline() {
     if (bbProgram_) return;
 
-    GLuint vs = compileShader(GL_VERTEX_SHADER,   kBillboardVertSrc);
-    GLuint fs = compileShader(GL_FRAGMENT_SHADER, kBillboardFragSrc);
-    if (!vs || !fs) {
-        if (vs) glDeleteShader(vs);
-        if (fs) glDeleteShader(fs);
-        return;
-    }
-    bbProgram_ = glCreateProgram();
-    glAttachShader(bbProgram_, vs);
-    glAttachShader(bbProgram_, fs);
-    glLinkProgram(bbProgram_);
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-
-    GLint ok = 0;
-    glGetProgramiv(bbProgram_, GL_LINK_STATUS, &ok);
-    if (!ok) {
-        char log[512];
-        glGetProgramInfoLog(bbProgram_, sizeof(log), nullptr, log);
-        LOG_ERROR("Billboard program link error: %s", log);
-        glDeleteProgram(bbProgram_);
-        bbProgram_ = 0;
-        return;
-    }
+    bbProgram_ = linkProgram(kBillboardVertSrc, kBillboardFragSrc, "Billboard program");
 
     bbUVP_         = glGetUniformLocation(bbProgram_, "uVP");
     bbUAnchorRel_  = glGetUniformLocation(bbProgram_, "uAnchorRel");
