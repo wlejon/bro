@@ -5,6 +5,11 @@
 #include "render/renderer.h"
 
 #include <include/core/SkMatrix.h>
+#include <include/core/SkPath.h>
+#include <include/core/SkPathBuilder.h>
+#include <include/core/SkRect.h>
+#include <include/core/SkString.h>
+#include <include/utils/SkParsePath.h>
 
 #include <algorithm>
 #include <cctype>
@@ -241,6 +246,84 @@ PaintResult resolvePaint(const std::string& value, float opacity,
     return res;
 }
 
+bool isGroupTag(const std::string& tag) {
+    return tag == "g" || tag == "a" || tag == "svg" || tag == "switch";
+}
+
+// Bounds of an element's drawn geometry in its OWN local frame (i.e. excluding
+// the element's own transform) — the coordinate space objectBoundingBox units
+// resolve against. Groups union their children under each child's transform.
+SkRect localBounds(const dom::Element* el, const dom::Element* svgRoot, int depth) {
+    if (depth > 16) return SkRect::MakeEmpty();
+    std::string tag = lower(el->tagName());
+    if (isNonRendered(tag)) return SkRect::MakeEmpty();
+    if (isGroupTag(tag)) {
+        SkRect r = SkRect::MakeEmpty();
+        for (const dom::Element* c : el->children()) {
+            std::string ctag = lower(c->tagName());
+            if (isNonRendered(ctag)) continue;
+            SkRect cb = localBounds(c, svgRoot, depth + 1);
+            if (cb.isEmpty()) continue;
+            ownTransform(c, ctag).mapRect(&cb);
+            r.join(cb);
+        }
+        return r;
+    }
+    if (tag == "use") return SkRect::MakeEmpty();
+    SkRect b = SkRect::MakeEmpty();
+    pathBounds(shapeToPathData(el), b);
+    return b;
+}
+
+// Resolve a computed clip-path into a composed path 'd' in the clipped
+// element's local frame. Returns false when there is no (resolvable) clip.
+bool resolveClip(const dom::Element* el, const dom::Element* svgRoot,
+                 std::string& outD, PathFillRule& outRule) {
+    std::string cp = styleOr(el, "clip-path", "none");
+    if (cp.empty() || cp == "none" || cp.rfind("url(", 0) != 0) return false;
+
+    auto close = cp.find(')');
+    std::string ref = cp.substr(4, close == std::string::npos ? std::string::npos : close - 4);
+    ref.erase(std::remove(ref.begin(), ref.end(), '"'), ref.end());
+    ref.erase(std::remove(ref.begin(), ref.end(), '\''), ref.end());
+    if (size_t h = ref.find('#'); h != std::string::npos) ref = ref.substr(h + 1);
+    if (size_t ra = ref.find_first_not_of(" \t"); ra != std::string::npos)
+        ref = ref.substr(ra, ref.find_last_not_of(" \t") - ra + 1);
+    const dom::Element* clipEl = ref.empty() ? nullptr : findById(svgRoot, ref);
+    if (!clipEl || lower(clipEl->tagName()) != "clippath") return false;
+
+    SkMatrix base = parseTransformList(attrOf(clipEl, "transform"));
+    std::string units = attrOf(clipEl, "clipPathUnits");
+    if (units == "objectBoundingBox") {
+        SkRect bb = localBounds(el, svgRoot, 0);
+        if (bb.isEmpty()) return false;
+        base.preConcat(SkMatrix::MakeAll(bb.width(), 0, bb.fLeft,
+                                         0, bb.height(), bb.fTop, 0, 0, 1));
+    }
+
+    SkPathBuilder builder;
+    int shapeCount = 0;
+    bool lastEvenOdd = false;
+    for (const dom::Element* c : clipEl->children()) {
+        std::string d = shapeToPathData(c);   // ignores <use>/<text>/non-shapes
+        if (d.empty()) continue;
+        auto p = SkParsePath::FromSVGString(d.c_str());
+        if (!p) continue;
+        SkMatrix m = base;
+        m.preConcat(parseTransformList(attrOf(c, "transform")));
+        builder.addPath(p->makeTransform(m));
+        lastEvenOdd = styleOr(c, "clip-rule", "nonzero") == "evenodd";
+        ++shapeCount;
+    }
+    SkPath combined = builder.detach();
+    if (combined.isEmpty()) return false;
+    // A single child may carry clip-rule:evenodd; a union of several is nonzero.
+    outRule = (shapeCount == 1 && lastEvenOdd) ? PathFillRule::EvenOdd
+                                               : PathFillRule::NonZero;
+    outD = std::string(SkParsePath::ToSVGString(combined).c_str());
+    return !outD.empty();
+}
+
 bool isHidden(const dom::Element* el) {
     const auto& cs = el->computedStyle();
     auto it = cs.find("visibility");
@@ -288,6 +371,14 @@ void paintNode(render::Renderer* r, const dom::Element* el, const dom::Element* 
 
     r->save();
     applyMatrix(r, ownTransform(el, tag));
+
+    // clip-path (url(#clipPath)) — the clip is composed in this element's local
+    // frame, so it must be applied after the element's own transform and stay
+    // in effect (bounded by the outer save) while the element is drawn.
+    std::string clipD;
+    PathFillRule clipRule = PathFillRule::NonZero;
+    if (resolveClip(el, svgRoot, clipD, clipRule)) r->clipSvgPath(clipD, clipRule);
+
     if (layer) r->saveLayerAlpha(toByte(op));
 
     if (tag == "g" || tag == "a" || tag == "svg" || tag == "switch") {
@@ -323,7 +414,7 @@ bool nodeSupported(const dom::Element* el) {
     for (const char* u : kUnsupported) if (tag == u) return false;
 
     const auto& cs = el->computedStyle();
-    for (const char* p : {"filter", "mask", "clip-path", "marker-start", "marker-mid", "marker-end"}) {
+    for (const char* p : {"filter", "mask", "marker-start", "marker-mid", "marker-end"}) {
         auto it = cs.find(p);
         if (it != cs.end() && !it->second.empty() && it->second != "none") return false;
     }
