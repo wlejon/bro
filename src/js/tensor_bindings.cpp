@@ -1,3 +1,4 @@
+#if BRO_WITH_TENSOR
 // JS bindings for brotensor — CUDA or Metal GPU tensor + ops.
 //
 // Installed onto bro.tensor.* by installTensorBindings(). The op surface is
@@ -1140,3 +1141,5 @@ brotensor::Tensor* gpuTensorFromJS(JSContext*, JSValueConst) {
 } // namespace bro::js
 
 #endif // BROTENSOR_HAS_GPU
+
+#endif  // BRO_WITH_TENSOR

@@ -1,3 +1,4 @@
+#if BRO_WITH_TENSOR
 // JS bindings — INT8 weight-only quantisation helpers and W8A16 ops.
 // See tensor_bindings.cpp for the architectural overview.
 
@@ -453,3 +454,5 @@ void installTensorInt8Ops(JSContext*, JSValue) {}
 } // namespace bro::js
 
 #endif // BROTENSOR_HAS_GPU
+
+#endif  // BRO_WITH_TENSOR

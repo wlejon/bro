@@ -1,3 +1,4 @@
+#if BRO_WITH_TENSOR
 // JS bindings — self/cross attention, flash-attention family, kv-cache,
 // resblock. See tensor_bindings.cpp for the architectural overview.
 
@@ -793,3 +794,5 @@ void installTensorAttentionOps(JSContext*, JSValue) {}
 } // namespace bro::js
 
 #endif // BROTENSOR_HAS_GPU
+
+#endif  // BRO_WITH_TENSOR

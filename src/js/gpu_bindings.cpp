@@ -1,3 +1,4 @@
+#if BRO_WITH_TENSOR
 // Installed onto bro.gpu by installGpuBindings(). A thin, always-present
 // runtime probe over brotensor's registered backends — see gpu_bindings.h for
 // the rationale (it exists even in CPU-only builds, where bro.tensor stubs out).
@@ -144,3 +145,5 @@ void installGpuBindings(JSContext* ctx) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_TENSOR

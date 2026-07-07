@@ -1,3 +1,4 @@
+#if BRO_WITH_LM
 // JS bindings for brolm — language-model inference.
 //
 // Installed onto bro.lm.* by installLmBindings(). The decoder models
@@ -3017,3 +3018,5 @@ void cleanupLmBindings(JSContext* /*ctx*/) {
 }
 
 }  // namespace bro::js
+
+#endif  // BRO_WITH_LM

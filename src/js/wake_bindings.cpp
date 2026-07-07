@@ -1,3 +1,4 @@
+#if BRO_WITH_SOUNDML
 // JS bindings for brosoundml::WakeWord — streaming wake-word detection,
 // dual-homed across N independent audio streams.
 //
@@ -680,3 +681,5 @@ void cleanupWakeBindings(JSContext* /*ctx*/) {
 }
 
 }  // namespace bro::js
+
+#endif  // BRO_WITH_SOUNDML

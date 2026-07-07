@@ -2989,11 +2989,12 @@ void AIBindings::install(JSContext* ctx) {
     // Capabilities (JS-authored capability registration)
     installRegisterCapability(ctx, gameObj);
 
-    // NN subsystem: bro.ai.game.nn
+    // NN + Learn subsystems: bro.ai.game.nn / bro.ai.game.learn. These are the
+    // brotensor-backed neural layer; only present when it was built in.
+#if BRO_WITH_GAMEAI_NN
     installNNBindings(ctx, gameObj);
-
-    // Learn subsystem: bro.ai.game.learn
     installLearnBindings(ctx, gameObj);
+#endif
 
     // Belief / observability / InfoSetMcts
     installBeliefBindings(ctx, gameObj);

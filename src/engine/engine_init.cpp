@@ -59,7 +59,9 @@
 #include "js/gesture_bindings.h"
 #include "js/kws_bindings.h"
 #include "js/listen_bindings.h"
-#include "js/listen_host.h"
+#if BRO_WITH_SOUNDML
+#include "js/listen_host.h"  // fat header (pulls brosoundml/brotensor)
+#endif
 #include "js/sense_bindings.h"
 #include "js/mic_bindings.h"
 #include "js/terrain_bindings.h"
@@ -381,7 +383,9 @@ Engine::Engine(const EngineConfig& config)
     // bro.sense's hub join as members — one PCEN feature pass, one PhonemeNet
     // forward, N listeners. (bro.wake stays on its own AGC'd tap above until
     // retrained AGC-free.) Inert until a member attaches.
+#if BRO_WITH_SOUNDML
     js::installListenHost(audioEngine_.get(), audioInference_.get());
+#endif
 
     // bro.listen — the shared stream's own JS surface (opt-in raw-audio
     // retention for replay/scrub by frame range). Inert until bro.listen.retain.

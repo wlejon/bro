@@ -1,3 +1,4 @@
+#if BRO_WITH_TENSOR
 // JS bindings — diffusion sampler steps and sinusoidal timestep embedding.
 // See tensor_bindings.cpp for the architectural overview.
 
@@ -93,3 +94,5 @@ void installTensorDiffusionOps(JSContext*, JSValue) {}
 } // namespace bro::js
 
 #endif // BROTENSOR_HAS_GPU
+
+#endif  // BRO_WITH_TENSOR

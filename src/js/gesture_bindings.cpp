@@ -1,3 +1,4 @@
+#if BRO_WITH_SOUNDML
 // JS bindings for brosoundml::GestureSpotter — open-vocabulary non-speech
 // gesture matching (rhythm / tone), dual-homed per audio stream.
 //
@@ -543,3 +544,5 @@ void cleanupGestureBindings(JSContext* /*ctx*/) {
 }
 
 }  // namespace bro::js
+
+#endif  // BRO_WITH_SOUNDML

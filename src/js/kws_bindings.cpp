@@ -1,3 +1,4 @@
+#if BRO_WITH_SOUNDML
 // JS bindings for brosoundml::PhonemeSpotter — open-vocabulary streaming
 // keyword spotting, dual-homed across N independent audio streams.
 //
@@ -1153,3 +1154,5 @@ void cleanupKwsBindings(JSContext* /*ctx*/) {
 }
 
 }  // namespace bro::js
+
+#endif  // BRO_WITH_SOUNDML

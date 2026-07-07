@@ -1,3 +1,4 @@
+#if BRO_WITH_SOUNDML
 // The engine's shared listening front-ends — see listen_host.h for the design.
 
 #include "js/listen_host.h"
@@ -550,3 +551,5 @@ ListenRetentionInfo listenHostRetentionInfo() {
 }
 
 }  // namespace bro::js
+
+#endif  // BRO_WITH_SOUNDML

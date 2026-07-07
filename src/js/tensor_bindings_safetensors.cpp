@@ -1,3 +1,4 @@
+#if BRO_WITH_TENSOR
 // JS bindings — safetensors load / save, on bro.tensor.
 //
 //   bro.tensor.openSafetensors(path) -> handle
@@ -272,3 +273,5 @@ void installTensorSafetensorsOps(JSContext*, JSValue) {}
 } // namespace bro::js
 
 #endif // BROTENSOR_HAS_GPU
+
+#endif  // BRO_WITH_TENSOR

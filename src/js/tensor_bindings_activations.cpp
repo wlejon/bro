@@ -1,3 +1,4 @@
+#if BRO_WITH_TENSOR
 // JS bindings — activations, norms, matmul, rope. See tensor_bindings.cpp
 // for the architectural overview.
 
@@ -393,3 +394,5 @@ void installTensorActivationOps(JSContext*, JSValue) {}
 } // namespace bro::js
 
 #endif // BROTENSOR_HAS_GPU
+
+#endif  // BRO_WITH_TENSOR

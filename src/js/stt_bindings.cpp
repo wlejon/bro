@@ -1,3 +1,4 @@
+#if BRO_WITH_SOUNDML
 // JS bindings for brosoundml speech-to-text inference — Whisper, Parakeet,
 // and Qwen3-ASR.
 //
@@ -2307,3 +2308,5 @@ void installSttBindings(JSContext* ctx) {
 void cleanupSttBindings(JSContext* /*ctx*/) {}
 
 }  // namespace bro::js
+
+#endif  // BRO_WITH_SOUNDML

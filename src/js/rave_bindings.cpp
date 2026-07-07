@@ -1,3 +1,4 @@
+#if BRO_WITH_SOUNDML
 // JS bindings for brosoundml::Rave — RAVE neural audio autoencoder inference.
 //
 // Installed onto bro.rave.* by installRaveBindings(). A converted RAVE v2 model
@@ -352,3 +353,5 @@ void installRaveBindings(JSContext* ctx) {
 void cleanupRaveBindings(JSContext* /*ctx*/) {}
 
 }  // namespace bro::js
+
+#endif  // BRO_WITH_SOUNDML

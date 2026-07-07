@@ -1,3 +1,4 @@
+#if BRO_WITH_VISION
 // JS bindings for brovisionml — vision-model inference (bro.vision.*).
 //
 // Installed onto bro.vision.* by installVisionBindings(). Each model from
@@ -2588,3 +2589,5 @@ void installVisionBindings(JSContext* ctx) {
 void cleanupVisionBindings(JSContext* /*ctx*/) {}
 
 }  // namespace bro::js
+
+#endif  // BRO_WITH_VISION

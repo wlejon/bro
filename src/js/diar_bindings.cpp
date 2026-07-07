@@ -1,3 +1,4 @@
+#if BRO_WITH_SOUNDML
 // JS bindings for brosoundml speaker diarization — streaming Sortformer.
 //
 // Installed onto bro.diar.* by installDiarBindings(). The model
@@ -787,3 +788,5 @@ void installDiarBindings(JSContext* ctx) {
 void cleanupDiarBindings(JSContext* /*ctx*/) {}
 
 }  // namespace bro::js
+
+#endif  // BRO_WITH_SOUNDML

@@ -1,3 +1,4 @@
+#if BRO_WITH_TENSOR
 // JS bindings — brosoundml audio ops: spectral / FFT core, STFT / iSTFT, the
 // 1D convolution family, vocoder + codec activations, codec quantization, 1D
 // resampling, log/exp/round elementwise, and the autoregressive logit sampler.
@@ -852,3 +853,5 @@ void installTensorAudioOps(JSContext*, JSValue) {}
 } // namespace bro::js
 
 #endif // BROTENSOR_HAS_GPU
+
+#endif  // BRO_WITH_TENSOR

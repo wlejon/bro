@@ -1,3 +1,4 @@
+#if BRO_WITH_SOUNDML
 // JS bindings for brosoundml::SensorHub — the tier-0 acoustic sensor bus,
 // dual-homed per audio stream.
 //
@@ -459,3 +460,5 @@ void cleanupSenseBindings(JSContext* /*ctx*/) {
 }
 
 }  // namespace bro::js
+
+#endif  // BRO_WITH_SOUNDML

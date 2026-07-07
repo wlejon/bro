@@ -10,6 +10,7 @@
 #include <quickjs.h>
 
 #include <cstring>
+#include <string>
 
 namespace bro::js {
 
@@ -21,6 +22,26 @@ inline void installFeatureStub(JSContext* ctx, const char* js) {
         JS_FreeValue(ctx, JS_GetException(ctx));
     }
     JS_FreeValue(ctx, r);
+}
+
+// Install `bro.<name>` as an unavailable-feature stub: an object reporting
+// `available === false`, wrapped in a Proxy so any *other* property resolves
+// to a function that throws "bro.<name> ... compiled without <flag>". Lets
+// apps feature-detect (`bro.<name>.available`) and get a clear error if they
+// call into a subsystem this build was compiled without.
+inline void installUnavailableNamespace(JSContext* ctx, const char* name, const char* flag) {
+    std::string js;
+    js.reserve(320);
+    js += "(function(){var b=(globalThis.bro=globalThis.bro||{});b['";
+    js += name;
+    js += "']=new Proxy({available:false},{get:function(t,p){"
+          "if(p in t)return t[p];"
+          "return function(){throw new Error('bro.";
+    js += name;
+    js += " is unavailable: this build was compiled without ";
+    js += flag;
+    js += "');};}});})();";
+    installFeatureStub(ctx, js.c_str());
 }
 
 } // namespace bro::js

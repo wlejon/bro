@@ -1,3 +1,4 @@
+#if BRO_WITH_TENSOR
 // JS bindings — conv2d (forward + per-input/weight/bias backward), 2x
 // up/downsample (forward + backward), and NCHW↔sequence transpose. See
 // tensor_bindings.cpp for the architectural overview.
@@ -708,3 +709,5 @@ void installTensorConvOps(JSContext*, JSValue) {}
 } // namespace bro::js
 
 #endif // BROTENSOR_HAS_GPU
+
+#endif  // BRO_WITH_TENSOR

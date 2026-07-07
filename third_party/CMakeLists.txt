@@ -171,13 +171,15 @@ endif()
 # Falls back to the git submodule at third_party/brolm.
 # MUST be added before brodiffusion (which depends on brolm). Guards
 # bromath/brotensor with if(NOT TARGET ...) so it reuses the already-added targets.
-set(BROLM_DIR "${CMAKE_SOURCE_DIR}/../brolm" CACHE PATH "Path to standalone brolm repo")
-if(EXISTS "${BROLM_DIR}/CMakeLists.txt")
-    message(STATUS "brolm: using standalone repo at ${BROLM_DIR}")
-    add_subdirectory("${BROLM_DIR}" "${CMAKE_BINARY_DIR}/brolm" EXCLUDE_FROM_ALL)
-else()
-    message(STATUS "brolm: using submodule at third_party/brolm")
-    add_subdirectory(brolm EXCLUDE_FROM_ALL)
+if(BRO_WITH_LM)
+    set(BROLM_DIR "${CMAKE_SOURCE_DIR}/../brolm" CACHE PATH "Path to standalone brolm repo")
+    if(EXISTS "${BROLM_DIR}/CMakeLists.txt")
+        message(STATUS "brolm: using standalone repo at ${BROLM_DIR}")
+        add_subdirectory("${BROLM_DIR}" "${CMAKE_BINARY_DIR}/brolm" EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "brolm: using submodule at third_party/brolm")
+        add_subdirectory(brolm EXCLUDE_FROM_ALL)
+    endif()
 endif()
 
 # --- brosoundml ---
@@ -186,13 +188,15 @@ endif()
 # MUST be added after brolm: a brosoundml tokenizer target links a brolm
 # tokenizer target. Guards bromath/brotensor with if(NOT TARGET ...) so it
 # reuses the already-added targets.
-set(BROSOUNDML_DIR "${CMAKE_SOURCE_DIR}/../brosoundml" CACHE PATH "Path to standalone brosoundml repo")
-if(EXISTS "${BROSOUNDML_DIR}/CMakeLists.txt")
-    message(STATUS "brosoundml: using standalone repo at ${BROSOUNDML_DIR}")
-    add_subdirectory("${BROSOUNDML_DIR}" "${CMAKE_BINARY_DIR}/brosoundml" EXCLUDE_FROM_ALL)
-else()
-    message(STATUS "brosoundml: using submodule at third_party/brosoundml")
-    add_subdirectory(brosoundml EXCLUDE_FROM_ALL)
+if(BRO_WITH_SOUNDML)
+    set(BROSOUNDML_DIR "${CMAKE_SOURCE_DIR}/../brosoundml" CACHE PATH "Path to standalone brosoundml repo")
+    if(EXISTS "${BROSOUNDML_DIR}/CMakeLists.txt")
+        message(STATUS "brosoundml: using standalone repo at ${BROSOUNDML_DIR}")
+        add_subdirectory("${BROSOUNDML_DIR}" "${CMAKE_BINARY_DIR}/brosoundml" EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "brosoundml: using submodule at third_party/brosoundml")
+        add_subdirectory(brosoundml EXCLUDE_FROM_ALL)
+    endif()
 endif()
 
 # --- brodiffusion ---
@@ -201,13 +205,15 @@ endif()
 # MUST be added after brolm (which it depends on). Guards bromath/brotensor
 # with if(NOT TARGET ...) so it reuses those targets and reads the GPU cache
 # vars instead of re-adding or defaulting them.
-set(BRODIFFUSION_DIR "${CMAKE_SOURCE_DIR}/../brodiffusion" CACHE PATH "Path to standalone brodiffusion repo")
-if(EXISTS "${BRODIFFUSION_DIR}/CMakeLists.txt")
-    message(STATUS "brodiffusion: using standalone repo at ${BRODIFFUSION_DIR}")
-    add_subdirectory("${BRODIFFUSION_DIR}" "${CMAKE_BINARY_DIR}/brodiffusion" EXCLUDE_FROM_ALL)
-else()
-    message(STATUS "brodiffusion: using submodule at third_party/brodiffusion")
-    add_subdirectory(brodiffusion EXCLUDE_FROM_ALL)
+if(BRO_WITH_DIFFUSION)
+    set(BRODIFFUSION_DIR "${CMAKE_SOURCE_DIR}/../brodiffusion" CACHE PATH "Path to standalone brodiffusion repo")
+    if(EXISTS "${BRODIFFUSION_DIR}/CMakeLists.txt")
+        message(STATUS "brodiffusion: using standalone repo at ${BRODIFFUSION_DIR}")
+        add_subdirectory("${BRODIFFUSION_DIR}" "${CMAKE_BINARY_DIR}/brodiffusion" EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "brodiffusion: using submodule at third_party/brodiffusion")
+        add_subdirectory(brodiffusion EXCLUDE_FROM_ALL)
+    endif()
 endif()
 
 # --- brovisionml ---
@@ -216,13 +222,15 @@ endif()
 # Depends on bromath + brotensor + broimage; all three are already targets by
 # this point. Guards all three with if(NOT TARGET ...) so it reuses those
 # targets and reads the GPU cache vars.
-set(BROVISIONML_DIR "${CMAKE_SOURCE_DIR}/../brovisionml" CACHE PATH "Path to standalone brovisionml repo")
-if(EXISTS "${BROVISIONML_DIR}/CMakeLists.txt")
-    message(STATUS "brovisionml: using standalone repo at ${BROVISIONML_DIR}")
-    add_subdirectory("${BROVISIONML_DIR}" "${CMAKE_BINARY_DIR}/brovisionml" EXCLUDE_FROM_ALL)
-else()
-    message(STATUS "brovisionml: using submodule at third_party/brovisionml")
-    add_subdirectory(brovisionml EXCLUDE_FROM_ALL)
+if(BRO_WITH_VISION)
+    set(BROVISIONML_DIR "${CMAKE_SOURCE_DIR}/../brovisionml" CACHE PATH "Path to standalone brovisionml repo")
+    if(EXISTS "${BROVISIONML_DIR}/CMakeLists.txt")
+        message(STATUS "brovisionml: using standalone repo at ${BROVISIONML_DIR}")
+        add_subdirectory("${BROVISIONML_DIR}" "${CMAKE_BINARY_DIR}/brovisionml" EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "brovisionml: using submodule at third_party/brovisionml")
+        add_subdirectory(brovisionml EXCLUDE_FROM_ALL)
+    endif()
 endif()
 
 # --- Jolt Physics ---

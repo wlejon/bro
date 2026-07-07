@@ -1,3 +1,4 @@
+#if BRO_WITH_GAMEAI_NN
 // JS bindings for brogameagent::nn — the neural network subsystem.
 //
 // Installed onto bro.ai.game.nn. Provides:
@@ -1221,3 +1222,5 @@ std::shared_ptr<nn::SingleHeroNetTX> nnSingleHeroNetTXSharedFromJS(JSContext* ct
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_GAMEAI_NN

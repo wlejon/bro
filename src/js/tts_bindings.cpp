@@ -1,3 +1,4 @@
+#if BRO_WITH_SOUNDML
 // JS bindings for brosoundml::Kokoro — text-to-speech inference.
 //
 // Installed onto bro.tts.* by installTtsBindings(). The Kokoro pipeline
@@ -3136,3 +3137,5 @@ void cleanupTtsBindings(JSContext* /*ctx*/) {
 }
 
 }  // namespace bro::js
+
+#endif  // BRO_WITH_SOUNDML

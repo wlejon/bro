@@ -25,7 +25,9 @@
 #include "js/wake_bindings.h"
 #include "js/gesture_bindings.h"
 #include "js/kws_bindings.h"
-#include "js/listen_host.h"
+#if BRO_WITH_SOUNDML
+#include "js/listen_host.h"  // fat header (pulls brosoundml/brotensor)
+#endif
 #include "js/sense_bindings.h"
 #include "js/mic_bindings.h"
 #include "js/stt_bindings.h"
@@ -51,7 +53,9 @@
 #include "layout/draw_traversal.h"
 #include "engine/gizmo.h"
 #include <broaudio/engine.h>
+#if BRO_WITH_TENSOR
 #include <brotensor/runtime.h>
+#endif
 #include "util/interrupt.h"
 #include "util/log.h"
 
@@ -90,7 +94,9 @@ Engine::~Engine() {
     // by force-killing the process. Reproduced via cdb: select ai-arena's
     // ExIt Net agent (its first MCTS search is what spins up the pool),
     // click Reset once, let the process exit normally.
+#if BRO_WITH_TENSOR
     brotensor::shutdown();
+#endif
 
     // Release screenshot pool surfaces while the main GL context is still
     // current. Safe to skip if the pool is empty (windowed mode never uses it).
@@ -185,7 +191,9 @@ Engine::~Engine() {
         // Both listen-host members are detached now (their cleanups above ran
         // Set*(nullptr), which tears down the shared tap + task on the last
         // detach); this just drops the host's subsystem pointers.
+#if BRO_WITH_SOUNDML
         js::shutdownListenHost();
+#endif
         js::cleanupMicBindings(ctx);
         // Join the audio-inference worker now: the tap is detached (no more ring
         // writes) and the wake task unregistered, so the worker drains its final

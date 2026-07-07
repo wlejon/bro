@@ -1,3 +1,4 @@
+#if BRO_WITH_TRIPOSPLAT
 // JS bindings for TripoSplat — single-image -> 3D Gaussian Splat (bro.triposplat).
 // See triposplat_bindings.h for the composition rationale.
 //
@@ -629,3 +630,5 @@ void installTriposplatBindings(JSContext* ctx) {
 }
 
 }  // namespace bro::js
+
+#endif  // BRO_WITH_TRIPOSPLAT

@@ -1,3 +1,4 @@
+#if BRO_WITH_GAMEAI_NN
 // JS bindings for brogameagent::learn — neural adapters, replay buffer,
 // search-trace target extraction, Gumbel noise, and the ExIt trainer.
 //
@@ -861,3 +862,5 @@ brogameagent::learn::IInferenceBackend* inferenceBackendFromJS(JSContext* ctx, J
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_GAMEAI_NN

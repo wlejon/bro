@@ -1,3 +1,4 @@
+#if BRO_WITH_DIFFUSION
 // JS bindings for brodiffusion — diffusion-model text-to-image inference.
 //
 // Installed onto bro.diffusion.* by installDiffusionBindings(). The native
@@ -1528,3 +1529,5 @@ void setDiffusionAppContext(const std::string& basePath,
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_DIFFUSION

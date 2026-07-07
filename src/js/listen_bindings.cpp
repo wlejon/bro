@@ -1,3 +1,4 @@
+#if BRO_WITH_SOUNDML
 // bro.listen — JS surface over the shared listen host's stream retention.
 // Thin wrapper over the listenHost* retention API (listen_host.h); all state and
 // threading live there. See docs/listen-api.js.
@@ -362,3 +363,5 @@ void installListenBindings(JSContext* ctx) {
 }
 
 }  // namespace bro::js
+
+#endif  // BRO_WITH_SOUNDML

@@ -97,6 +97,7 @@ add_library(bro_js STATIC
     headless_bindings.cpp
     message_serializer.cpp
     worker.cpp
+    feature_stubs.cpp
     ${GENERATED_HEADERS}
 )
 target_include_directories(bro_js PUBLIC ${CMAKE_SOURCE_DIR}/src)
@@ -104,7 +105,25 @@ target_include_directories(bro_js PRIVATE ${GEN_DIR})
 # brolm is linked explicitly (not just transitively via brodiffusion):
 # diffusion_bindings.cpp uses brolm::clip for diffusion text encoding, and
 # lm_bindings.cpp exposes brolm::qwen as bro.lm.
-target_link_libraries(bro_js PUBLIC qjs qjsbind brokit bro_dom bro_util bro_canvas bro_physics bro_audio_inference bro_scene bro_net bro_steam broaudio bro_webgl SDL3::SDL3 bromesh broflora brogameagent bro_video brolm brodiffusion brosoundml::brosoundml broimage::broimage brovisionml::brovisionml)
+target_link_libraries(bro_js PUBLIC qjs qjsbind brokit bro_dom bro_util bro_canvas bro_physics bro_audio_inference bro_scene bro_net bro_steam broaudio bro_webgl SDL3::SDL3 bromesh broflora brogameagent bro_video broimage::broimage)
+
+# AI-tower sibling links, gated per feature. The matching *_bindings.cpp are
+# wrapped in `#if BRO_WITH_X` and their stubs live in feature_stubs.cpp; the
+# siblings themselves are add_subdirectory'd conditionally in
+# third_party/CMakeLists.txt. brotensor is pulled transitively (via broimage
+# when BRO_WITH_TENSOR, or via these siblings) and needs no explicit link here.
+if(BRO_WITH_LM)
+    target_link_libraries(bro_js PUBLIC brolm)
+endif()
+if(BRO_WITH_DIFFUSION)
+    target_link_libraries(bro_js PUBLIC brodiffusion)
+endif()
+if(BRO_WITH_SOUNDML)
+    target_link_libraries(bro_js PUBLIC brosoundml::brosoundml)
+endif()
+if(BRO_WITH_VISION)
+    target_link_libraries(bro_js PUBLIC brovisionml::brovisionml)
+endif()
 
 # Stamp BRO_WITH_* as compile definitions for the #if guards in the bindings
 # (feature gating is added cluster-by-cluster; see docs/build-options.md).
