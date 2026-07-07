@@ -26,6 +26,13 @@ head, title, meta, link, style, script, noscript {
     display: none;
 }
 
+/* ---------- Directionality ---------- */
+/* The HTML `dir` attribute is a presentational hint for the `direction`
+   property (HTML §15.3.3). A nested dir="ltr"/"rtl" overrides the inherited
+   direction, which is how ltr islands inside an rtl block resolve. */
+[dir="ltr"] { direction: ltr; }
+[dir="rtl"] { direction: rtl; }
+
 /* ---------- Block-level elements ---------- */
 
 body, div, p, pre, section, article, nav, aside, header, footer, main,
