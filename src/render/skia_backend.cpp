@@ -464,7 +464,12 @@ void SkiaRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
     paint.setColor(toSkColor(color));
     if (blur > 0)
         paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
+    // Knock the border box out (see drawBoxShadow) so the shadow stays outside
+    // the element and doesn't show through a transparent background.
+    canvas_->save();
+    canvas_->clipRRect(makeRRect(x, y, w, h, r), SkClipOp::kDifference, true);
     canvas_->drawRRect(makeRRect(sx, sy, sw, sh, sr), paint);
+    canvas_->restore();
 }
 
 void SkiaRenderer::drawCircle(float cx, float cy, float r,
@@ -635,10 +640,21 @@ void SkiaRenderer::drawBoxShadow(float x, float y, float w, float h,
         paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
     }
 
+    // Knock the border box out of the shadow: CSS paints an outer box-shadow
+    // only outside the border box, so it never shows through a transparent
+    // element background.
+    canvas_->save();
+    SkRect borderBox = SkRect::MakeXYWH(x, y, w, h);
+    if (rx > 0 || ry > 0)
+        canvas_->clipRRect(SkRRect::MakeRectXY(borderBox, rx, ry), SkClipOp::kDifference, true);
+    else
+        canvas_->clipRect(borderBox, SkClipOp::kDifference, true);
+
     if (rx > 0 || ry > 0)
         canvas_->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(sx, sy, sw, sh), rx, ry), paint);
     else
         canvas_->drawRect(SkRect::MakeXYWH(sx, sy, sw, sh), paint);
+    canvas_->restore();
 }
 
 void SkiaRenderer::save() {

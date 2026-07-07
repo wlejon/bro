@@ -203,7 +203,11 @@ void RasterRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
     paint.setColor(toSkColor(color));
     if (blur > 0)
         paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
+    // Knock the border box out (see SkiaRenderer::drawBoxShadow).
+    canvas_->save();
+    canvas_->clipRRect(makeRRectRaster(x, y, w, h, r), SkClipOp::kDifference, true);
     canvas_->drawRRect(makeRRectRaster(sx, sy, sw, sh, sr), paint);
+    canvas_->restore();
 }
 
 void RasterRenderer::drawText(std::string_view text, float x, float y, FontRef font, Color c) {
@@ -493,10 +497,19 @@ void RasterRenderer::drawBoxShadow(float x, float y, float w, float h,
     paint.setColor(toSkColor(color));
     if (blur > 0)
         paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
+    // Knock the border box out so the outer shadow stays outside the element
+    // (see SkiaRenderer::drawBoxShadow).
+    canvas_->save();
+    SkRect borderBox = SkRect::MakeXYWH(x, y, w, h);
+    if (rx > 0 || ry > 0)
+        canvas_->clipRRect(SkRRect::MakeRectXY(borderBox, rx, ry), SkClipOp::kDifference, true);
+    else
+        canvas_->clipRect(borderBox, SkClipOp::kDifference, true);
     if (rx > 0 || ry > 0)
         canvas_->drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(sx2, sy2, sw, sh), rx, ry), paint);
     else
         canvas_->drawRect(SkRect::MakeXYWH(sx2, sy2, sw, sh), paint);
+    canvas_->restore();
 }
 
 void RasterRenderer::save() { if (canvas_) canvas_->save(); }
