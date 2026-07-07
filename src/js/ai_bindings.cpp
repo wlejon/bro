@@ -3008,8 +3008,11 @@ void AIBindings::install(JSContext* ctx) {
     // Root-parallel search (bro.ai.game.rootParallelSearch[Decoupled])
     installParallelBindings(ctx, gameObj);
 
-    // Grid-world / platformer kit (bro.ai.game.grid.*)
+    // Grid-world / platformer kit (bro.ai.game.grid.*) — neural training kit,
+    // built only with the game-AI neural layer.
+#if BRO_WITH_GAMEAI_NN
     installGridBindings(ctx, gameObj);
+#endif
 
     // ── Steering sub-namespace: bro.ai.game.steer ──────────────────────
     JSValue steerObj = JS_NewObject(ctx);

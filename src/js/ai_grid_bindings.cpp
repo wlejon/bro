@@ -2,6 +2,12 @@
 // training kit. Installs onto bro.ai.game.grid via installGridBindings().
 //
 // Surface mirrors docs/ai-game-api.js bro.ai.game.grid.* section.
+//
+// This is a NEURAL training kit: grid/harness.h embeds a learn::GenericTrainer,
+// which pulls brotensor. So the whole binding is gated on BRO_WITH_GAMEAI_NN,
+// exactly like ai_nn_bindings / ai_learn_bindings — off that flag it compiles to
+// nothing and installGridBindings is never called (see ai_bindings.cpp).
+#if BRO_WITH_GAMEAI_NN
 
 #include "js/ai_bindings.h"
 
@@ -1117,3 +1123,5 @@ void installGridBindings(JSContext* ctx, JSValue gameObj) {
 }
 
 } // namespace bro::js
+
+#endif  // BRO_WITH_GAMEAI_NN
