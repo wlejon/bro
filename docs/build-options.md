@@ -68,13 +68,19 @@ pathfinding) still ships.
 | Profile | What it is | Needs vcpkg? | Needs CUDA? |
 |---|---|---|---|
 | `minimal` | HTML/CSS/JS + Canvas2D + WebGL. 2D renderer only. | no | no |
-| **`app`** (default) | Full renderer: + 3D scene graph, physics, audio, core game-AI. No AI tower / net / video. | no | no |
+| **`app`** (default) | Full renderer (3D scene graph, physics, audio, core game-AI) + net/video/steam. No AI tower. | yes | no |
 | `full` | Everything except the CUDA sub-lever (still opt-in). | yes | no (opt-in) |
 
+> **Status:** `app` and `full` build today. `minimal`'s renderer/service gates
+> (3D/physics/audio/gameai/flora/net/video) are **not yet wired into the engine
+> hot path** — audio and the 3D scene are still hooked directly in the frame
+> loop and compositor, so a `minimal` build currently does not link. Making it
+> real is a hot-path refactor (move those subsystems behind install/tick seams
+> the way the AI tower already is), tracked separately.
+
 ```bash
-cmake -B build                                 # app profile (default)
-cmake -B build -DBRO_PROFILE=minimal           # tightest floor, fastest first build
-cmake -B build -DBRO_PROFILE=full              # everything (pulls vcpkg)
+cmake -B build                                 # app profile (default) — needs vcpkg for net/video
+cmake -B build -DBRO_PROFILE=full              # everything (adds the AI tower)
 cmake -B build -DBRO_PROFILE=app -DBRO_WITH_LM=ON   # app + language models (adds brolm+brotensor)
 ```
 
@@ -100,9 +106,9 @@ HTML/CSS/JS + Canvas2D + WebGL runtime with working screenshots.
 | `BRO_WITH_AUDIO` | broaudio + audio_inference | off | on | on | self-contained, no vcpkg |
 | `BRO_WITH_GAMEAI` | brogameagent **core** (nav/path/steer/MCTS) | off | on | on | brotensor-free |
 | `BRO_WITH_FLORA` | broflora | off | on | on | needs `3D` (bromesh) |
-| `BRO_WITH_NET` | GameNetworkingSockets | off | off | on | **needs vcpkg** |
-| `BRO_WITH_VIDEO` | libvpx/webm/Opus | off | off | on | **needs vcpkg** |
-| `BRO_WITH_STEAM` | — (runtime dlopen) | off | off | on | already implemented; the template |
+| `BRO_WITH_NET` | GameNetworkingSockets | off | on | on | **needs vcpkg**; a runtime without JS network access would be surprising |
+| `BRO_WITH_VIDEO` | libvpx/webm/Opus | off | on | on | **needs vcpkg**; `<video>` should work out of the box |
+| `BRO_WITH_STEAM` | — (runtime dlopen) | off | on | on | already implemented; the stub template |
 
 ### Tier 2 — the AI tower (brotensor is the base)
 
