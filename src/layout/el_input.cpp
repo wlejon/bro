@@ -259,34 +259,48 @@ void ElInput::getContentSize(float& w, float& h, float maxWidth) {
     if (t == InputType::Range) { w = 160; h = 20; return; }
     if (t == InputType::Color) { w = 44; h = 24; return; }
     if (isButtonType(nullptr)) {
-        // Button-type inputs render the `value` attribute as their label.
-        // Measure the label so the box is large enough — otherwise padding
-        // + borders swamp the 80px default and the text gets clipped.
+        // Button-type inputs (submit/reset/button) shrink to fit their label
+        // just like <button> — content width = label text width, content
+        // height = one line. The UA button box model (padding 1px 6px,
+        // 2px border, border-box) then wraps it, matching Chromium exactly.
         float labelW = 0.f;
+        float lineH = 16.0f;
         if (elem_ && renderer_) {
+            auto fr = getFontRef();
             std::string val = elem_->getAttribute("value");
-            if (!val.empty()) {
-                auto tm = renderer_->measureText(val, getFontRef());
-                labelW = tm.width;
-            }
+            if (!val.empty()) labelW = renderer_->measureText(val, fr).width;
+            auto lm = render::LineMetrics::from(renderer_->measureText("M", fr));
+            if (lm.lineHeight() > 0) lineH = lm.lineHeight();
         }
-        w = std::max(80.0f, std::ceil(labelW));
-        h = 20;
+        w = labelW;
+        h = lineH;
         return;
     }
-    w = (maxWidth > 0 && maxWidth < 200) ? maxWidth : 173;
-    // Text-input intrinsic height tracks `font-size` so the box grows with
-    // the chosen font — a fixed 20px clipped any text larger than ~14px to
-    // an unreadable sliver. Fall back to 16 only if we have no renderer to
-    // measure against.
-    h = 16.0f;
-    if (renderer_) {
-        // Use full line height (ascent + descent) — `tm.height` alone is the
-        // tight glyph box of "M" and clips descenders like j/g/p/y.
-        auto lm = render::LineMetrics::from(renderer_->measureText("M", getFontRef()));
-        float lh = lm.lineHeight();
-        if (lh > 0) h = lh;
+
+    // Text-like inputs: width derives from the `size` attribute (default 20)
+    // times the font's average lowercase advance, plus a fixed decoration
+    // allowance — matching Chromium's default text-field metrics (size=20 at
+    // 16px sans → 195px content; at 13.333px → 169px). Height is one line.
+    int sizeAttr = 20;
+    {
+        std::string s = getAttr("size");
+        if (!s.empty()) { int v = atoi(s.c_str()); if (v > 0) sizeAttr = v; }
     }
+    float avgChar = 8.0f;
+    float lineH = 16.0f;
+    if (renderer_) {
+        auto fr = getFontRef();
+        float alpha = renderer_->measureText("abcdefghijklmnopqrstuvwxyz", fr).width;
+        if (alpha > 0) avgChar = alpha / 26.0f;
+        auto lm = render::LineMetrics::from(renderer_->measureText("M", fr));
+        float lh = lm.lineHeight();
+        if (lh > 0) lineH = lh;
+    }
+    w = std::round(sizeAttr * avgChar + 38.4f);
+    // Don't overflow a narrow containing box (preserves the prior clamp for
+    // inputs placed in tight columns).
+    if (maxWidth > 0 && maxWidth < 200 && maxWidth < w) w = maxWidth;
+    h = lineH;
 }
 
 render::FontRef ElInput::getFontRef() const {

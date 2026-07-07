@@ -6,6 +6,7 @@
 
 #include <SDL3/SDL_keycode.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace bro::layout {
@@ -201,11 +202,21 @@ void ElTextarea::getContentSize(float& w, float& h) {
         h = 40;
         return;
     }
-    auto tm = renderer_->measureText("M", getFontRef());
-    float charW = tm.width;
-    float lineH = tm.height;
-    w = charW * cols();
-    h = lineH * rows();
+    render::FontRef fr = getFontRef();
+    // Column advance: grid-fit the measured glyph advance to whole pixels the
+    // way the browser hints its default monospace font, so `cols` lands on the
+    // same integer column width Chromium uses. Reserve a vertical-scrollbar
+    // gutter (~15px) inside the content box, as browsers do for a textarea.
+    float charW = renderer_->measureText("0", fr).width;
+    float colW = std::round(charW);
+    // Rows height uses the browser's "normal" line box. Blink (and htmlayout's
+    // metrics adapter) rounds the font ascent, descent and leading to integers
+    // *independently* before summing — round(ascent)+round(descent)+round(gap)
+    // — so a rows="N" textarea is exactly N of those line boxes tall.
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fr));
+    float lineH = std::round(lm.ascent) + std::round(lm.descent) + std::round(lm.leading);
+    w = cols() * colW + 15.0f;
+    h = rows() * lineH;
 }
 
 static std::vector<std::string> splitLines(const std::string& text) {

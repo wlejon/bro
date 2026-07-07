@@ -120,18 +120,42 @@ input, textarea, select {
     font-size: 13.333px;
 }
 
-input {
-    width: 169px;
+/* Text-like inputs derive their width from the `size` attribute (default 20)
+   against the resolved font — computed in ElInput::getContentSize, not a
+   fixed px value, so the box grows with `font-size` the way browsers do. */
+
+textarea {
+    box-sizing: content-box;
+    padding: 2px;
+    border: 1px solid #767676;
 }
 
-input[type="checkbox"], input[type="radio"] {
+select {
+    box-sizing: border-box;
+    padding: 0;
+    border: 1px solid #767676;
+}
+
+input[type="checkbox"] {
+    box-sizing: border-box;
     width: 13px;
     height: 13px;
     padding: 0;
     border: none;
     background-color: transparent;
     vertical-align: middle;
-    margin-right: 3px;
+    margin: 3px 3px 3px 4px;
+}
+
+input[type="radio"] {
+    box-sizing: border-box;
+    width: 13px;
+    height: 13px;
+    padding: 0;
+    border: none;
+    background-color: transparent;
+    vertical-align: middle;
+    margin: 3px 3px 0px 5px;
 }
 
 input[type="range"] {
@@ -151,8 +175,47 @@ input[type="hidden"] {
     display: none;
 }
 
+/* Options live in the select's popup, never in document flow: keep them
+   display:none so getBoundingClientRect reports an empty rect (as browsers do
+   for a closed select's options) instead of projecting them onto the select's
+   content origin. The padding matches the browser's option box for parity of
+   the computed style. */
 option {
     display: none;
+    padding: 0 2px 1px 2px;
+}
+
+/* ---------- fieldset / legend ---------- */
+
+fieldset {
+    margin-left: 2px;
+    margin-right: 2px;
+    padding: 0.35em 0.75em 0.625em;
+    border: 2px groove #767676;
+}
+
+legend {
+    display: block;
+    padding-left: 2px;
+    padding-right: 2px;
+}
+
+/* ---------- progress / meter ---------- */
+
+progress {
+    display: inline-block;
+    box-sizing: border-box;
+    width: 160px;
+    height: 16px;
+    vertical-align: -0.2em;
+}
+
+meter {
+    display: inline-block;
+    box-sizing: border-box;
+    width: 80px;
+    height: 16px;
+    vertical-align: -0.2em;
 }
 
 template {

@@ -302,6 +302,23 @@ private:
         // not by CSS layout. Don't descend into SVG children.
         if (elem->svgControl()) return;
 
+        // <select> and <textarea> are widget-replaced: their children
+        // (<option>s, the initial text) belong to the control, not the
+        // document flow. The control reads them directly from the DOM
+        // (ElSelect::getOptions / ElTextarea::readCurrentValue), so they
+        // must not become layout boxes — otherwise a grid/flex/block that
+        // doesn't short-circuit replaced elements would lay the options out
+        // as visible blocks. Their computed style still resolves (matching
+        // the browser's `option { display: block }`), but they stay 0×0.
+        // Match on tag, not the ElSelect/ElTextarea control pointer: the
+        // control is attached lazily (replaced_elements.cpp) and may still be
+        // null on the layout pass that first builds this subtree.
+        {
+            std::string_view tag = elem->tagName();
+            if (tag == "select" || tag == "SELECT" ||
+                tag == "textarea" || tag == "TEXTAREA") return;
+        }
+
         // If element has shadow DOM, use composed children (top-level slot replacement)
         std::vector<dom::Node*> childNodes;
         dom::ShadowRoot* sr = nullptr;

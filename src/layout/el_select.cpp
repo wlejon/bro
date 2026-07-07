@@ -7,6 +7,7 @@
 #include "render/renderer.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace bro::layout {
@@ -84,15 +85,19 @@ void ElSelect::getContentSize(float& w, float& h) {
     auto lm = render::LineMetrics::from(renderer_->measureText("M", fontRef));
 
     auto opts = getOptions();
-    float maxW = 50.0f;
+    float maxW = 0.0f;
     for (auto& opt : opts) {
         if (!opt.text.empty()) {
             auto tm = renderer_->measureText(opt.text, fontRef);
             maxW = std::max(maxW, tm.width);
         }
     }
-    w = maxW + 20; // extra space for dropdown arrow
-    h = lm.lineHeight();
+    w = maxW + 20; // widest option label + dropdown-arrow area
+    // Closed-select content height: one "normal" line box (per-component
+    // rounded ascent+descent+leading, as Blink/htmlayout compute it) plus the
+    // 1px the browser reserves for the control's inner frame — border-box then
+    // adds the 1px border each side → 21px at 16px sans, matching Chromium.
+    h = std::round(lm.ascent) + std::round(lm.descent) + std::round(lm.leading) + 1.0f;
 }
 
 void ElSelect::draw(render::Renderer* renderer,
