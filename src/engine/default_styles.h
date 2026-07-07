@@ -52,8 +52,21 @@ h6 { font-size: 0.67em; margin-top: 2.33em; margin-bottom: 2.33em; }
 
 p { margin-top: 1em; margin-bottom: 1em; }
 
+blockquote { margin: 1em 40px; }
+figure { margin: 1em 40px; }
+dl { margin-top: 1em; margin-bottom: 1em; }
+dd { margin-left: 40px; }
+address { font-style: italic; }
+
 ul, ol { display: block; padding-left: 40px; margin-top: 1em; margin-bottom: 1em; }
 li { display: list-item; }
+ul { list-style-type: disc; }
+ol { list-style-type: decimal; }
+/* Nested lists: no vertical margins, and ul markers cycle disc → circle →
+   square by nesting depth (matches the HTML rendering spec / Chromium). */
+ul ul, ul ol, ol ul, ol ol { margin-top: 0; margin-bottom: 0; }
+ul ul, ol ul { list-style-type: circle; }
+ul ul ul, ul ol ul, ol ul ul, ol ol ul { list-style-type: square; }
 
 table { display: table; border-collapse: separate; border-spacing: 2px; box-sizing: border-box; }
 thead { display: table-header-group; }
@@ -146,8 +159,14 @@ template {
    the click handler in replaced_elements.cpp), and CSS does the rest. */
 
 details > summary {
-    display: block;
+    display: list-item;
+    list-style-type: disclosure-closed;
+    list-style-position: inside;
     cursor: pointer;
+}
+
+details[open] > summary {
+    list-style-type: disclosure-open;
 }
 
 details:not([open]) > *:not(summary) {
@@ -163,11 +182,19 @@ a {
 
 /* ---------- Horizontal rule ---------- */
 
+/* HTML rendering spec: hr is a block with inset 1px borders whose color
+   derives from `color: gray`, centered by auto inline margins when a width
+   is set. */
 hr {
-    border: none;
-    border-top: 1px solid #ccc;
+    display: block;
+    overflow: hidden;
     margin-top: 0.5em;
     margin-bottom: 0.5em;
+    margin-left: auto;
+    margin-right: auto;
+    border-style: inset;
+    border-width: 1px;
+    color: gray;
 }
 
 /* ---------- Code / preformatted ---------- */

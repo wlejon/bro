@@ -906,40 +906,121 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             }
         }
 
-        // Draw list marker (bullet/number for <li> elements)
-        std::string tagLower = elem->tagName();
-        for (auto& c : tagLower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        if (tagLower == "li") {
+        // Draw list marker for display:list-item boxes (<li>, <summary>…).
+        // Outside markers hang left of the content box, aligned to the first
+        // line's baseline. Inside markers (incl. summary's disclosure
+        // triangle) are inline content the layout doesn't reserve space for
+        // yet, so they are not painted (painting over the text would be
+        // worse than omitting them).
+        {
+            auto dispIt = style.find("display");
             auto lstIt = style.find("list-style-type");
             std::string listType = (lstIt != style.end()) ? lstIt->second : "disc";
-            if (listType != "none") {
-                float markerX = bx - 20.0f;
-                float markerY = by + bh / 2.0f;
+            auto lspIt = style.find("list-style-position");
+            bool outside = (lspIt == style.end() || lspIt->second != "inside");
+            if (dispIt != style.end() && dispIt->second == "list-item" &&
+                listType != "none" && listType != "disclosure-open" &&
+                listType != "disclosure-closed" && outside) {
                 bromath::Color mc = cfromColor8({0, 0, 0, 255});
                 auto mcIt = style.find("color");
                 if (mcIt != style.end()) tryParseColor(mcIt->second, mc);
 
-                if (listType == "disc") {
-                    renderer_->drawCircle(markerX, markerY, 3.0f, mc, mc, 0);
-                } else if (listType == "circle") {
-                    bromath::Color none = cfromColor8({0, 0, 0, 0});
-                    renderer_->drawCircle(markerX, markerY, 3.0f, none, mc, 1.0f);
-                } else if (listType == "square") {
-                    renderer_->fillRect(markerX - 3, markerY - 3, 6, 6, mc);
-                } else if (listType == "decimal" || listType == "decimal-leading-zero") {
-                    // Count position among siblings
+                render::FontRef font = getFontRef(elem);
+                // First-line baseline: content top + font ascent (half-leading
+                // at UA line heights is sub-pixel; close enough for markers).
+                auto am = renderer_->measureText("0", font);
+                float baselineY = by + am.ascent;
+                float gap = 7.0f;   // Blink's marker padding
+
+                if (listType == "disc" || listType == "circle" ||
+                    listType == "square") {
+                    // Bullet centered on roughly half the x-height above the
+                    // baseline.
+                    float r = 3.0f;
+                    float cy = baselineY - am.ascent * 0.30f;
+                    float cx = bx - gap - r;
+                    if (listType == "disc") {
+                        renderer_->drawCircle(cx, cy, r, mc, mc, 0);
+                    } else if (listType == "circle") {
+                        bromath::Color none = cfromColor8({0, 0, 0, 0});
+                        renderer_->drawCircle(cx, cy, r, none, mc, 1.0f);
+                    } else {
+                        renderer_->fillRect(cx - r, cy - r, 2 * r, 2 * r, mc);
+                    }
+                } else {
+                    // Ordinal marker: position among list-item siblings,
+                    // honoring <ol start> and <li value>.
+                    auto isListItem = [](dom::Node* n) {
+                        if (n->nodeType() != dom::NodeType::Element) return false;
+                        auto* e = static_cast<dom::Element*>(n);
+                        auto& st = e->computedStyle();
+                        auto dIt = st.find("display");
+                        return dIt != st.end() && dIt->second == "list-item";
+                    };
                     int idx = 1;
                     auto* parent = elem->parentNode();
-                    if (parent) {
+                    if (parent && parent->nodeType() == dom::NodeType::Element) {
+                        auto* pe = static_cast<dom::Element*>(parent);
+                        const std::string& startAttr = pe->getAttribute("start");
+                        if (!startAttr.empty()) idx = std::atoi(startAttr.c_str());
                         for (auto* sib : parent->childNodes()) {
+                            if (!isListItem(sib)) continue;
+                            auto* se = static_cast<dom::Element*>(sib);
+                            const std::string& valAttr = se->getAttribute("value");
+                            if (!valAttr.empty()) idx = std::atoi(valAttr.c_str());
                             if (sib == elem) break;
-                            if (sib->nodeType() == dom::NodeType::Element) ++idx;
+                            ++idx;
                         }
                     }
-                    std::string num = std::to_string(idx) + ".";
-                    render::FontRef font = getFontRef(elem);
-                    auto tm = renderer_->measureText(num, font);
-                    renderer_->drawText(num, markerX - tm.width, markerY + tm.ascent / 2, font, mc);
+
+                    auto toAlpha = [](int n) {
+                        std::string s;
+                        while (n > 0) {
+                            int rem = (n - 1) % 26;
+                            s.insert(s.begin(), static_cast<char>('a' + rem));
+                            n = (n - 1) / 26;
+                        }
+                        return s.empty() ? std::string("a") : s;
+                    };
+                    auto toRoman = [](int n) {
+                        if (n <= 0 || n >= 4000) return std::to_string(n);
+                        static const int vals[] = {1000, 900, 500, 400, 100, 90,
+                                                   50, 40, 10, 9, 5, 4, 1};
+                        static const char* syms[] = {"m", "cm", "d", "cd", "c",
+                                                     "xc", "l", "xl", "x", "ix",
+                                                     "v", "iv", "i"};
+                        std::string s;
+                        for (int i = 0; i < 13; ++i)
+                            while (n >= vals[i]) { s += syms[i]; n -= vals[i]; }
+                        return s;
+                    };
+                    auto toUpper = [](std::string s) {
+                        for (auto& ch : s)
+                            ch = static_cast<char>(std::toupper(
+                                static_cast<unsigned char>(ch)));
+                        return s;
+                    };
+
+                    std::string text;
+                    if (listType == "decimal") {
+                        text = std::to_string(idx);
+                    } else if (listType == "decimal-leading-zero") {
+                        text = (idx >= 0 && idx < 10 ? "0" : "") + std::to_string(idx);
+                    } else if (listType == "lower-alpha" || listType == "lower-latin") {
+                        text = toAlpha(idx);
+                    } else if (listType == "upper-alpha" || listType == "upper-latin") {
+                        text = toUpper(toAlpha(idx));
+                    } else if (listType == "lower-roman") {
+                        text = toRoman(idx);
+                    } else if (listType == "upper-roman") {
+                        text = toUpper(toRoman(idx));
+                    } else {
+                        text = std::to_string(idx);
+                    }
+                    text += ".";
+                    auto tm = renderer_->measureText(text, font);
+                    renderer_->drawText(text, bx - gap - tm.width, baselineY,
+                                        font, mc);
                 }
             }
         }
@@ -1897,7 +1978,15 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
     auto getBorderColor = [&](const char* prop) -> bromath::Color {
         bromath::Color c = cfromColor8({0, 0, 0, 255});
         auto it = style.find(prop);
-        if (it != style.end()) tryParseColor(it->second, c);
+        // border-*-color initial value is currentcolor: resolve against the
+        // element's color (e.g. the UA hr rule tints its border via color).
+        if (it == style.end() || it->second == "currentcolor" ||
+            it->second == "currentColor") {
+            auto cIt = style.find("color");
+            if (cIt != style.end()) tryParseColor(cIt->second, c);
+            return c;
+        }
+        tryParseColor(it->second, c);
         return c;
     };
     auto isBorderVisible = [&](const char* styleProp) -> bool {

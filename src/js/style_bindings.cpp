@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <sstream>
 #include <cstdio>
+#include <cctype>
 
 namespace bro::js {
 
@@ -372,6 +373,24 @@ static std::string getComputedProperty(JSContext* ctx, bro::dom::Element* el, co
             else if (prop == "margin-right")   v = box.margin.right;
             else if (prop == "margin-bottom")  v = box.margin.bottom;
             else if (prop == "margin-left")    v = box.margin.left;
+            char buf[32];
+            snprintf(buf, sizeof(buf), "%.6gpx", v);
+            return buf;
+        }
+        // Absolutize font-relative and absolute-unit lengths (em, rem, pt…)
+        // to px: the computed value of a margin/padding <length> is always
+        // absolute (Chromium reports e.g. `margin: 1em` as "16px").
+        bool endsPx = value.size() > 2 &&
+            value.compare(value.size() - 2, 2, "px") == 0;
+        bool hasAlphaUnit = !value.empty() &&
+            std::isalpha(static_cast<unsigned char>(value.back()));
+        if (hasAlphaUnit && !endsPx) {
+            std::string fs;
+            auto fsIt = style.find("font-size");
+            if (fsIt != style.end()) fs = fsIt->second;
+            float fontSize = htmlayout::layout::resolveLength(fs, 16.0f, 16.0f);
+            if (fontSize <= 0) fontSize = 16.0f;
+            float v = htmlayout::layout::resolveLength(value, 0.0f, fontSize);
             char buf[32];
             snprintf(buf, sizeof(buf), "%.6gpx", v);
             return buf;
