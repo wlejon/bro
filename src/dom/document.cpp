@@ -352,11 +352,15 @@ void Document::resolveStylesRecursive(Element* elem,
                     }
                     resolved = num * parentFs / 100.0f;
                 } else if (unit == "rem") {
-                    resolved = num * 16.0f;
+                    resolved = num * rootFontSize_;
                 } else if (unit == "pt") {
                     resolved = num * 96.0f / 72.0f;
                 }
                 fsIt->second = std::to_string(resolved);
+                // The document element (<html>) defines the rem reference for
+                // every descendant. It is resolved first (parentStyle==nullptr),
+                // so capture its px font-size before children consume rem.
+                if (!parentStyle) rootFontSize_ = resolved;
                 // Clean up trailing zeros for readability (e.g. "32.000000" -> "32")
                 auto& s = fsIt->second;
                 if (s.find('.') != std::string::npos) {

@@ -231,6 +231,11 @@ private:
     engine::AnimationManager* animationManager_ = nullptr;
     double transitionTime_ = 0;
 
+    // Root element (<html>) resolved font-size in px, captured while resolving
+    // the document element's style so rem units in getComputedStyle track the
+    // root rather than a hardcoded 16px. Updated each resolveStyles() pass.
+    float rootFontSize_ = 16.0f;
+
     // Elements that need scroll-to-bottom after next layout
     std::unordered_set<Element*> scrollToBottomElements_;
 
