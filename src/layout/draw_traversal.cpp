@@ -1495,9 +1495,17 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                 }
                 if (!cur.empty()) parts.push_back(cur);
 
-                // Parse direction/angle for linear-gradient, or shape/extent/
-                // position prefix for radial-gradient.
-                float angleDeg = 180; // default: to bottom
+                // Gradient kind. `repeating-*` variants contain the base name
+                // as a substring, so the base flags stay valid for them.
+                bool isRadial = (val.find("radial-gradient") != std::string::npos);
+                bool isConic  = (val.find("conic-gradient")  != std::string::npos);
+                bool isRepeating = (val.find("repeating-") != std::string::npos);
+
+                // Parse direction/angle for linear-gradient, shape/extent/
+                // position prefix for radial-gradient, or "from <angle>" for
+                // conic-gradient.
+                float angleDeg = 180;    // linear default: to bottom
+                float conicFromDeg = 0;  // conic default: 0deg (12 o'clock)
                 size_t colorStart = 0;
 
                 // Radial-gradient defaults: ellipse, farthest-corner, center.
@@ -1506,7 +1514,6 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                                  RAD_CLOSEST_CORNER,  RAD_CLOSEST_SIDE };
                 RadExtent radExtent = RAD_FARTHEST_CORNER;
                 float radCxFrac = 0.5f, radCyFrac = 0.5f; // fraction of (w, h)
-                bool isRadial = (val.find("radial-gradient") != std::string::npos);
 
                 if (isRadial && !parts.empty()) {
                     std::string first = parts[0];
@@ -1562,7 +1569,7 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                     }
                 }
 
-                if (val.find("linear-gradient") != std::string::npos && !parts.empty()) {
+                if (!isRadial && !isConic && !parts.empty()) {
                     std::string first = parts[0];
                     // Trim
                     while (!first.empty() && first.front() == ' ') first.erase(first.begin());
@@ -1587,6 +1594,43 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                     }
                 }
 
+                // conic-gradient "from <angle> [at <pos>]" prefix. Only the
+                // starting angle is honored; the conic center stays the box
+                // center.
+                if (isConic && !parts.empty()) {
+                    std::string first = parts[0];
+                    while (!first.empty() && first.front() == ' ') first.erase(first.begin());
+                    while (!first.empty() && first.back() == ' ') first.pop_back();
+                    auto fromPos = first.find("from ");
+                    if (fromPos == 0 || first.find("at ") == 0) {
+                        if (fromPos != std::string::npos) {
+                            std::string a = first.substr(fromPos + 5);
+                            while (!a.empty() && a.front() == ' ') a.erase(a.begin());
+                            char* end = nullptr;
+                            float av = std::strtof(a.c_str(), &end);
+                            if (end != a.c_str()) {
+                                std::string unit(end);
+                                if (unit == "rad")  av *= 180.0f / 3.14159265f;
+                                else if (unit == "grad") av *= 0.9f;
+                                else if (unit == "turn") av *= 360.0f;
+                                conicFromDeg = av;
+                            }
+                        }
+                        colorStart = 1;
+                    }
+                }
+
+                // Reference length for resolving <length> stop positions to a
+                // fraction of the gradient line. Linear: |W·sin|+|H·cos| (same
+                // metric the draw below uses). Conic uses angle units instead,
+                // so length positions there fall back to auto.
+                float refLen = 1.0f;
+                if (!isConic) {
+                    float rad0 = angleDeg * 3.14159265f / 180.0f;
+                    refLen = std::abs(w * std::sin(rad0)) + std::abs(h * std::cos(rad0));
+                    if (refLen < 1.0f) refLen = 1.0f;
+                }
+
                 // Parse color stops. Each part is "<color> [<pos1>] [<pos2>]".
                 // The CSS double-position form (e.g. "#hex 0 40%") is shorthand
                 // for two stops of the same color, producing a hard band. We
@@ -1594,23 +1638,39 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                 // color may itself contain spaces inside rgb()/hsl()), then emit
                 // one stop per position found.
                 //
-                // A position token is a number with an optional % suffix; "%"
-                // resolves to a fraction. Bare 0 → 0. Other units (px/deg) can't
-                // be resolved to a fraction here, so those stops fall back to an
-                // evenly-spaced auto offset (offset < 0).
-                auto parsePosToken = [](const std::string& t, float& outFrac) -> bool {
+                // A position token resolves to a fraction of the gradient:
+                //   %                → v/100
+                //   <length> (px)    → v/refLen (linear/radial)
+                //   <angle> (deg/…)  → v/360    (conic)
+                //   bare 0           → 0
+                // Anything else (em, unresolvable) is stripped anyway and the
+                // stop falls back to an evenly-spaced auto offset — the key is
+                // that the position token never leaks into the color string.
+                auto parsePosToken = [&](const std::string& t, float& outFrac) -> bool {
                     if (t.empty()) return false;
                     char* end = nullptr;
                     float v = std::strtof(t.c_str(), &end);
                     if (end == t.c_str()) return false;
                     std::string unit(end);
                     if (unit == "%") { outFrac = v / 100.0f; return true; }
-                    if (unit.empty()) {
-                        // Bare number: only 0 maps cleanly to a fraction.
-                        if (v == 0.0f) { outFrac = 0.0f; return true; }
-                        return false;  // bare non-zero (px-less length / deg) → auto
+                    if (isConic) {
+                        if (unit == "deg")  { outFrac = v / 360.0f; return true; }
+                        if (unit == "grad") { outFrac = v / 400.0f; return true; }
+                        if (unit == "rad")  { outFrac = v / 6.28318530718f; return true; }
+                        if (unit == "turn") { outFrac = v; return true; }
+                    } else {
+                        if (unit == "px") { outFrac = v / refLen; return true; }
                     }
-                    return false;  // px / deg / other → auto
+                    if (unit.empty() && v == 0.0f) { outFrac = 0.0f; return true; }
+                    return false;  // unresolvable length/angle → auto
+                };
+                // A trailing token that begins like a number is a position
+                // token and must be peeled off the color regardless of whether
+                // we can resolve it to a fraction.
+                auto looksLikePos = [](const std::string& t) -> bool {
+                    if (t.empty()) return false;
+                    char c = t[0];
+                    return (c >= '0' && c <= '9') || c == '+' || c == '-' || c == '.';
                 };
 
                 std::vector<render::ColorStop> stops;
@@ -1624,15 +1684,14 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                     std::vector<float> positions;
                     for (int n = 0; n < 2; ++n) {
                         size_t sp = part.find_last_of(' ');
-                        std::string tail = (sp == std::string::npos) ? part : part.substr(sp + 1);
+                        if (sp == std::string::npos) break;
+                        std::string tail = part.substr(sp + 1);
+                        if (!looksLikePos(tail)) break;
                         float frac;
-                        if (sp != std::string::npos && parsePosToken(tail, frac)) {
-                            positions.insert(positions.begin(), frac);
-                            part.erase(sp);
-                            while (!part.empty() && part.back() == ' ') part.pop_back();
-                        } else {
-                            break;
-                        }
+                        bool ok = parsePosToken(tail, frac);
+                        part.erase(sp);
+                        while (!part.empty() && part.back() == ' ') part.pop_back();
+                        if (ok) positions.insert(positions.begin(), frac);
                     }
 
                     bromath::Color sc = cfromColor8({0, 0, 0, 255});
@@ -1645,6 +1704,42 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                         stops.push_back({offset, sc});
                     } else {
                         for (float p : positions) stops.push_back({p, sc});
+                    }
+                }
+
+                // CSS: stop offsets are non-decreasing; clamp each up to the max
+                // seen so far (Skia also requires sorted positions).
+                {
+                    float maxSoFar = 0.0f;
+                    bool firstStop = true;
+                    for (auto& s : stops) {
+                        if (firstStop) { maxSoFar = s.offset; firstStop = false; }
+                        else if (s.offset < maxSoFar) s.offset = maxSoFar;
+                        else maxSoFar = s.offset;
+                    }
+                }
+
+                // repeating-*-gradient: tile the resolved stop pattern across
+                // [0,1]. The renderer uses a clamp tile mode, so we materialize
+                // the repetition as explicit stops here.
+                if (isRepeating && stops.size() >= 2) {
+                    float firstOff = stops.front().offset;
+                    float period = stops.back().offset - firstOff;
+                    if (period > 1e-4f && (firstOff > 1e-4f || period < 0.999f)) {
+                        std::vector<render::ColorStop> tiled;
+                        for (float base = firstOff;
+                             base < 1.0f + period && tiled.size() < 8192;
+                             base += period) {
+                            bool done = false;
+                            for (const auto& s : stops) {
+                                float off = base + (s.offset - firstOff);
+                                if (off < -1e-4f) continue;
+                                if (off >= 1.0f) { tiled.push_back({1.0f, s.color}); done = true; break; }
+                                tiled.push_back({off, s.color});
+                            }
+                            if (done) break;
+                        }
+                        if (tiled.size() >= 2) stops.swap(tiled);
                     }
                 }
 
@@ -1791,7 +1886,7 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
                             gx + rcx, gy + rcy, rx, ry, stops);
                     } else if (val.find("conic-gradient") != std::string::npos) {
                         renderer_->fillConicGradient(gx, gy, gw, gh,
-                            gx + gw/2, gy + gh/2, 0, stops);
+                            gx + gw/2, gy + gh/2, conicFromDeg, stops);
                     }
                     } // per-cell loop
                     if (needClip) renderer_->restore();

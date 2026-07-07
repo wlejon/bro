@@ -860,11 +860,15 @@ void SkiaRenderer::fillConicGradient(float x, float y, float w, float h,
                                      float cx, float cy, float angleDeg,
                                      std::span<const ColorStop> stops) {
     if (!canvas_ || stops.empty()) return;
-    // Skia sweep: 0° = 3 o'clock. CSS conic: 0° = 12 o'clock.
-    // CSS angle is clockwise from top, so offset by (angleDeg - 90).
-    float startAngle = angleDeg - 90.0f;
-    auto shader = SkShaders::SweepGradient({cx, cy}, startAngle, startAngle + 360.0f,
-        SkGradient(buildGradColors(stops), kCSSGradInterp));
+    // Skia sweep: 0° = 3 o'clock, pos 0..1 maps across [startAngle, endAngle],
+    // and pixel angles are measured in [0, 360). CSS conic: 0° = 12 o'clock,
+    // clockwise. Rotating the sweep by moving startAngle negative would push
+    // the [270, 360) arc outside the range (clamped to the last color), so
+    // instead keep the full [0, 360] range and rotate the pattern with a local
+    // matrix: -90° aligns pos 0 with 12 o'clock, plus the CSS "from" angle.
+    SkMatrix lm = SkMatrix::RotateDeg(angleDeg - 90.0f, {cx, cy});
+    auto shader = SkShaders::SweepGradient({cx, cy}, 0.0f, 360.0f,
+        SkGradient(buildGradColors(stops), kCSSGradInterp), &lm);
     SkPaint paint;
     paint.setShader(shader);
     paint.setStyle(SkPaint::kFill_Style);

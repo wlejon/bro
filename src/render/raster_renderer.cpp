@@ -615,9 +615,11 @@ void RasterRenderer::fillConicGradient(float x, float y, float w, float h,
                                         float cx, float cy, float angleDeg,
                                         std::span<const ColorStop> stops) {
     if (!canvas_ || stops.empty()) return;
-    float startAngle = angleDeg - 90.0f;
-    auto shader = SkShaders::SweepGradient({cx, cy}, startAngle, startAngle + 360.0f,
-        SkGradient(buildGradColors(stops), kCSSGradInterp));
+    // See SkiaRenderer::fillConicGradient: full [0,360] sweep + a -90° (plus
+    // CSS "from" angle) local-matrix rotation so the 270..360 arc isn't clamped.
+    SkMatrix lm = SkMatrix::RotateDeg(angleDeg - 90.0f, {cx, cy});
+    auto shader = SkShaders::SweepGradient({cx, cy}, 0.0f, 360.0f,
+        SkGradient(buildGradColors(stops), kCSSGradInterp), &lm);
     SkPaint paint;
     paint.setShader(shader);
     paint.setStyle(SkPaint::kFill_Style);
