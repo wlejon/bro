@@ -106,9 +106,9 @@ endif()
 #
 # The default is "app": full renderer (3D + physics + audio + core game-AI) plus
 # net/video/steam, but no AI tower (no brotensor/CUDA). "full" adds the AI tower;
-# "minimal" is the 2D/canvas/WebGL floor. NOTE: minimal's renderer/service gates
-# are not yet wired into the engine hot path (audio/3D are still hooked in the
-# frame loop), so a minimal build does not link yet — that refactor is pending.
+# "minimal" is the 2D/canvas/WebGL + audio floor — it links, runs, and renders
+# with no vcpkg, no Jolt/bromesh/brogameagent, and no AI tower (the renderer and
+# service subsystems are gated behind their BRO_WITH_* flags at the engine seam).
 set(BRO_PROFILE "app" CACHE STRING "Feature profile: minimal | app | full")
 set_property(CACHE BRO_PROFILE PROPERTY STRINGS minimal app full)
 

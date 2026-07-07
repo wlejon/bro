@@ -1,6 +1,6 @@
 # Bro
 
-Build desktop apps and games in **HTML/CSS/JS** — with 3D, physics, audio, and on-device AI wired into the same JavaScript, in one native process. QuickJS, a custom layout engine, Skia, and SDL_GPU underneath. Windows, Mac, and Linux.
+Build desktop apps and games in **HTML/CSS/JS** — with 3D, physics, audio, and on-device AI wired into the same JavaScript, in one native process. QuickJS, a custom layout engine, Skia, and OpenGL under SDL underneath. Windows, Mac, and Linux.
 
 ** this is pre-release, pre-alpha **
 
@@ -98,7 +98,7 @@ The left-hand `bro.*` names are the whole surface — each has an annotated JSDo
 - **broimage** — Image decode/encode (stb) plus composable kernels (reduce/map/combine/lookup/stencil/resample/gradient), geometric ops, alpha-correct compositing, color/HSV/sRGB, normalization presets, and NHWC↔NCHW preproc. Backs `bro.image` and host-side preprocessing in brolm/brodiffusion. See [broimage](https://github.com/wlejon/broimage).
 - **Jolt Physics** — Rigid body physics with contact listeners, integrated into the scene graph.
 - **Skia** — 2D rasterization (text, paths, images, gradients). HTML/CSS is rasterized to a texture via Skia's Ganesh GL backend, with a CPU raster fallback for `--no-gpu` headless runs.
-- **SDL3** — Windowing, input events, and GPU display compositing via SDL_GPU (D3D12 on Windows). The Skia-rasterized UI texture and the 3D scene layer are composited together through SDL_GPU pipelines.
+- **SDL3** — Windowing, input events, and OpenGL contexts. All GPU work is OpenGL 3.3 Core (via glad) on SDL_GL contexts — there is no SDL_GPU/D3D12/Metal path. The Skia-rasterized UI texture (Ganesh-GL) and the 3D scene layer are composited together as textured quads in the main GL context.
 
 Also uses **GameNetworkingSockets** (Valve's GNS, via vcpkg), **glad** (OpenGL 3.3 Core loader), and **FastNoise2** (via brokit).
 

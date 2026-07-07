@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **Naked `bro` opens the built-in project manager** at `system/projects/` (the no-args fallback in `src/main.cpp`). New projects are seeded from `system/skeletons/<name>/`. Registry persists at the OS user-data dir (`%APPDATA%/bro/projects.json` etc.). See [docs/projects.md](docs/projects.md). System-panel scanning (`src/engine/system_panels.cpp`) skips any `system/<dir>/` containing a `bro.json` so these self-contained apps aren't double-loaded as overlay panels.
 
+**Modular build.** `-DBRO_PROFILE=<minimal|app|full>` selects how much is compiled in; individual `-DBRO_WITH_*` flags override it. Default is **`app`** (full renderer — 3D/physics/audio/core game-AI — plus net/video/steam; needs vcpkg for net/video, no AI tower). `minimal` is the 2D/canvas/WebGL + audio floor and builds with **no vcpkg** and no AI tower. `full` adds the AI tower (CUDA stays opt-in via `-DBRO_WITH_TENSOR_CUDA=ON`). A compiled-out feature installs a `{ available: false }` JS stub. See [BUILDING.md](BUILDING.md) and [docs/build-options.md](docs/build-options.md).
+
 **Windows** uses the Visual Studio multi-config generator — one build dir, pick the config at build time:
 ```bash
 cmake -B build                                 # configure (do not use MinGW)
