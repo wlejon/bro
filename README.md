@@ -1,6 +1,6 @@
 # Bro
 
-Build desktop apps and games in **HTML/CSS/JS** — with 3D, physics, audio, and on-device AI wired into the same JavaScript, in one native process. QuickJS, a custom layout engine, Skia, and OpenGL under SDL underneath. Windows, Mac, and Linux.
+Build desktop apps and games in **HTML/CSS/JS** — with 3D, physics, audio, and on-device AI wired into the javascript, in one native process. QuickJS, a custom layout engine, Skia, and OpenGL. Windows, Mac, and Linux.
 
 ** this is pre-release, pre-alpha **
 
@@ -10,9 +10,9 @@ Two familiar yardsticks, plus one that doesn't have a name yet:
 
 - **Rendering parity with Chromium** (HTML/CSS) — the app layer should look right.
 - **Feature parity with Godot's engine** (no editor) — 3D, physics, audio, the game runtime.
-- **On-device generation and perception as a native engine subsystem** — every modality the engine renders, it can also generate and understand, locally and in real time. There isn't an existing engine to point at for this one.
+- **On-device generation and perception as a native engine subsystem** — every modality the engine renders, it can also generate and understand, locally. 
 
-It's not there yet on any of the three, but that's the goal.
+It's not there yet, but that's the goal.
 
 ## Broworkshop
 
@@ -134,8 +134,6 @@ bro-headless ../broworkshop/demos/example test.js                           # sc
 bro-headless ../broworkshop/demos/example -e "document.querySelector('#btn').click()"
 bro-headless --no-gpu ../broworkshop/demos/example                          # CPU-only (CI)
 ```
-
-On Linux without a display server, use `--no-gpu`. 
 
 Headless globals: `screenshot(path)`, `advanceTime(ms)`, `flush()`, `sleep(ms)`, `assert(cond, msg?)`.
 
