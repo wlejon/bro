@@ -367,6 +367,13 @@ private:
     bool gizmoHandleMouseUp(float x, float y, int button);
 
     void dispatchEvent(dom::Element* target, dom::Event& event);
+    // Synthesize a DOM pointer event (pointerdown / pointerup / pointermove)
+    // from the mouse event `src`, dispatched to `target`. bro has no native
+    // pointer device; per the web platform a mouse drives a primary pointer,
+    // and the pointer event fires just before its mouse analog. Call this
+    // immediately before the corresponding mouse dispatch.
+    void dispatchPointerAlias(const char* type, dom::Element* target,
+                              const dom::MouseEvent& src);
     void pumpVideoEvents();
     /// Translate a window-space mouse y into the active overlay's coordinate
     /// space. App-context overlays (dropdown, color picker) anchor in app

@@ -162,6 +162,26 @@ void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
     js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
 }
 
+void Engine::dispatchPointerAlias(const char* type, dom::Element* target,
+                                  const dom::MouseEvent& src) {
+    if (!target || !jsRuntime_) return;
+    // Clone the already-populated mouse event under the pointer type. Handlers
+    // read the shared MouseEvent fields; populateJsEvent() adds pointerId etc.
+    // when the type begins with "pointer". Pointer events bubble and cancel
+    // like their mouse analogs.
+    dom::MouseEvent pe(type, /*bubbles=*/true, /*cancelable=*/true);
+    pe.setIsTrusted(true);
+    pe.setClientX(src.clientX());     pe.setClientY(src.clientY());
+    pe.setScreenX(src.screenX());     pe.setScreenY(src.screenY());
+    pe.setPageX(src.pageX());         pe.setPageY(src.pageY());
+    pe.setOffsetX(src.offsetX());     pe.setOffsetY(src.offsetY());
+    pe.setMovementX(src.movementX()); pe.setMovementY(src.movementY());
+    pe.setButton(src.button());       pe.setButtons(src.buttons());
+    pe.setCtrlKey(src.ctrlKey());     pe.setShiftKey(src.shiftKey());
+    pe.setAltKey(src.altKey());       pe.setMetaKey(src.metaKey());
+    js::dispatchDomEvent(jsRuntime_->getContext(), target, pe);
+}
+
 // Walk the document + shadow trees and pump any pending HTMLMediaElement
 // events (loadedmetadata, timeupdate, ended) on each ElVideo. Called from
 // the main thread because QuickJS is not thread-safe; ElVideo::draw() runs

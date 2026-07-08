@@ -585,6 +585,8 @@ void Engine::handleMouseDown(float x, float y, int button) {
                            renderer_.get(), window_.get(), &uiDirty_,
                            &overlayMgr_, OverlayContext::App,
                            contentWidth(), contentHeight()};
+        // pointerdown fires just before mousedown (web platform order).
+        dispatchPointerAlias("pointerdown", target, evt);
         dispatchDocMousePress(cctx, appMouseState_, target, evt,
                               x, y - static_cast<float>(contentTop()));
         jsRuntime_->executePendingJobs();
@@ -798,6 +800,8 @@ void Engine::handleMouseUp(float x, float y, int button) {
                            renderer_.get(), window_.get(), &uiDirty_,
                            &overlayMgr_, OverlayContext::App,
                            contentWidth(), contentHeight()};
+        // pointerup fires just before mouseup (web platform order).
+        dispatchPointerAlias("pointerup", target, upEvt);
         dispatchDocMouseRelease(cctx, appMouseState_, target, upEvt,
                                 x, clientY, button, pressedButtons_, mod,
                                 movX, movY, x, pageY,
@@ -824,6 +828,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             populateMouseEvent(moveEvt, lockedMouseX_, lockedMouseY_, -1,
                                pressedButtons_, xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
             applyMouseOffset(moveEvt, locked);
+            dispatchPointerAlias("pointermove", locked, moveEvt);
             dispatchEvent(locked, moveEvt);
             if (jsRuntime_) jsRuntime_->executePendingJobs();
         }
@@ -1179,6 +1184,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             populateMouseEvent(moveEvt, x, y, -1, pressedButtons_,
                               xrel, yrel, scrollY_, mod, static_cast<float>(contentTop()));
             applyMouseOffset(moveEvt, target);
+            dispatchPointerAlias("pointermove", target, moveEvt);
             dispatchEvent(target, moveEvt);
         }
 
@@ -2275,6 +2281,14 @@ void Engine::dispatchHtmlNodeMouseEvent(const std::string& type,
     // origin matches the raster surface origin.
     evt.setOffsetX(static_cast<double>(localPxX));
     evt.setOffsetY(static_cast<double>(localPxY));
+
+    // Pointer parity: fire the matching pointer event just before the mouse one
+    // so listeners inside HtmlNode documents see pointerdown/up/move too.
+    const char* pointerType = (type == "mousedown") ? "pointerdown"
+                            : (type == "mouseup")   ? "pointerup"
+                            : (type == "mousemove") ? "pointermove"
+                            : nullptr;
+    if (pointerType) dispatchPointerAlias(pointerType, target, evt);
 
     dispatchEvent(target, evt);
     if (jsRuntime_) jsRuntime_->executePendingJobs();

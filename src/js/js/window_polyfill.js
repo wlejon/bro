@@ -30,14 +30,21 @@
         var type = event.type || (typeof event === 'string' ? event : '');
         var arr = listeners[type];
         if (!arr) return true;
-        var toRemove = [];
-        for (var i = 0; i < arr.length; i++) {
+        // Snapshot: a handler may add/remove listeners (incl. itself) mid-dispatch.
+        // Iterate the snapshot, but skip any entry already removed from the live
+        // array, and remove `once` entries by identity — never by stale index.
+        var snapshot = arr.slice();
+        for (var i = 0; i < snapshot.length; i++) {
+            var entry = snapshot[i];
+            if (arr.indexOf(entry) === -1) continue;
             try {
-                arr[i].fn(event);
-                if (arr[i].once) toRemove.push(i);
+                entry.fn(event);
+                if (entry.once) {
+                    var idx = arr.indexOf(entry);
+                    if (idx !== -1) arr.splice(idx, 1);
+                }
             } catch(e) { console.error('Event handler error:', e); }
         }
-        for (var j = toRemove.length - 1; j >= 0; j--) arr.splice(toRemove[j], 1);
         return !(event && event.defaultPrevented);
     };
     // When `capture` is undefined, fires all listeners regardless of flag —
@@ -49,16 +56,22 @@
         if (!arr) return;
         var filterByCapture = (capture !== undefined);
         var isCap = !!capture;
-        var toRemove = [];
-        for (var i = 0; i < arr.length; i++) {
-            if (filterByCapture && arr[i].capture !== isCap) continue;
+        // Snapshot so a handler removing a listener (commonly itself, e.g. a
+        // one-shot pointerup that ends a drag) can't corrupt the iteration.
+        var snapshot = arr.slice();
+        for (var i = 0; i < snapshot.length; i++) {
+            var entry = snapshot[i];
+            if (filterByCapture && entry.capture !== isCap) continue;
+            if (arr.indexOf(entry) === -1) continue;
             try {
-                arr[i].fn(event);
-                if (arr[i].once) toRemove.push(i);
+                entry.fn(event);
+                if (entry.once) {
+                    var idx = arr.indexOf(entry);
+                    if (idx !== -1) arr.splice(idx, 1);
+                }
                 if (event && event._immediateStopped) break;
             } catch(e) { console.error('Event handler error:', e); }
         }
-        for (var j = toRemove.length - 1; j >= 0; j--) arr.splice(toRemove[j], 1);
     };
 
     // --- SPA history + location compat ---

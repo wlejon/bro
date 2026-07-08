@@ -184,6 +184,25 @@ static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& ev
             JS_SetPropertyStr(ctx, jsEvent, "relatedTarget", JS_NULL);
         }
 
+        // PointerEvent properties. bro has no native pointer device — pointer
+        // events are synthesized from mouse input (Engine::dispatchPointerAlias),
+        // so every pointer event is the primary "mouse" pointer. Handlers are
+        // duck-typed on MouseEvent fields (clientX/button/…), already set above;
+        // these add the pointer-only fields so e.pointerId etc. are defined.
+        if (event.type().rfind("pointer", 0) == 0) {
+            JS_SetPropertyStr(ctx, jsEvent, "pointerId", JS_NewInt32(ctx, 1));
+            JS_SetPropertyStr(ctx, jsEvent, "pointerType", JS_NewString(ctx, "mouse"));
+            JS_SetPropertyStr(ctx, jsEvent, "isPrimary", JS_NewBool(ctx, true));
+            JS_SetPropertyStr(ctx, jsEvent, "width", JS_NewFloat64(ctx, 1));
+            JS_SetPropertyStr(ctx, jsEvent, "height", JS_NewFloat64(ctx, 1));
+            JS_SetPropertyStr(ctx, jsEvent, "pressure",
+                              JS_NewFloat64(ctx, mouseEvt->buttons() != 0 ? 0.5 : 0.0));
+            JS_SetPropertyStr(ctx, jsEvent, "tangentialPressure", JS_NewFloat64(ctx, 0));
+            JS_SetPropertyStr(ctx, jsEvent, "tiltX", JS_NewFloat64(ctx, 0));
+            JS_SetPropertyStr(ctx, jsEvent, "tiltY", JS_NewFloat64(ctx, 0));
+            JS_SetPropertyStr(ctx, jsEvent, "twist", JS_NewFloat64(ctx, 0));
+        }
+
         // WheelEvent properties
         auto* wheelEvt = dynamic_cast<bro::dom::WheelEvent*>(&event);
         if (wheelEvt) {
