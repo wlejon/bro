@@ -287,7 +287,20 @@ void Document::resolveStyles() {
 void Document::resolveStylesRecursive(Element* elem,
                                        const htmlayout::css::ComputedStyle* parentStyle,
                                        bool force) {
-    bool needsResolve = force || elem->isDirty() || elem->computedStyle().empty();
+    // An element with an active CSS animation or transition must re-resolve
+    // its style every frame so applyOverrides() below re-runs and advances the
+    // interpolated value — even when nothing marked it dirty. This is
+    // deliberately decoupled from markDirty(): a compositor-promoted animation
+    // (transform/opacity only) advances its style here without dirtying the
+    // document, so the cached base is never re-recorded on its account. Without
+    // this, applyOverrides only ran on the frame the animation was registered
+    // and every animation froze on its first applied value.
+    bool animatingSelf =
+        (animationManager_ && animationManager_->hasActive(elem)) ||
+        (transitionManager_ && transitionManager_->hasActive(elem));
+
+    bool needsResolve = force || elem->isDirty() ||
+                        elem->computedStyle().empty() || animatingSelf;
 
     if (needsResolve) {
         auto* adapter = layout::ElementRefAdapter::getOrCreate(elem);

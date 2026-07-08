@@ -135,6 +135,16 @@ public:
         return animationsActive_.load(std::memory_order_relaxed);
     }
 
+    /// Whether any compositor-promotable (transform/opacity-only) animation is
+    /// advancing. When true and the document is otherwise clean, the main
+    /// thread re-records only the promoted layers and reuses the cached base.
+    void setPromotedActive(bool active) {
+        promotedActive_.store(active, std::memory_order_relaxed);
+    }
+    bool promotedActive() const {
+        return promotedActive_.load(std::memory_order_relaxed);
+    }
+
     // ---- lifecycle ----
 
     void postShutdown() {
@@ -150,6 +160,7 @@ private:
     std::atomic<int> insetRight_{0};
     std::atomic<int> insetBottom_{0};
     std::atomic<bool> animationsActive_{false};
+    std::atomic<bool> promotedActive_{false};
     std::atomic<dom::Element*> hoveredElement_{nullptr};
 };
 

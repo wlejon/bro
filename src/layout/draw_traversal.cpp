@@ -3314,8 +3314,33 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
     return rootSC;
 }
 
-void DrawTraversal::paintStackingContext(StackingContext* sc) {
+void DrawTraversal::paintStackingContext(StackingContext* sc, bool withinPromoted) {
     if (!sc || !sc->root) return;
+
+    // Paint-mode filter. In the default PaintMode::All (or with no promoted set
+    // registered) none of this runs and the remainder is the original single-pass
+    // walk, byte-for-byte. Promoted elements are always SC roots, so the only
+    // subtree that can be a promoted target is one reached through here.
+    if (paintMode_ != PaintMode::All && promotedElements_) {
+        bool isPromoted = promotedElements_->count(sc->root) != 0;
+        if (paintMode_ == PaintMode::BaseSkipPromoted && isPromoted) {
+            // Skip this SC and its ENTIRE subtree (like the canvas early-return),
+            // leaving a transparent hole; keep painting siblings / other SCs.
+            return;
+        }
+        if (paintMode_ == PaintMode::PromotedOnly && isPromoted) {
+            // Entered a promoted SC root: paint everything from here down (its
+            // own transform/opacity wrappers included, so the promoted subtree
+            // renders with its current animated transform baked in).
+            withinPromoted = true;
+        }
+    }
+    // PromotedOnly, not yet inside a promoted subtree: suppress THIS SC's own
+    // painting (wrappers, box/background/borders/text, positioned-non-SC
+    // content) but still recurse into child/positioned SCs to reach deeper
+    // promoted roots. In All / BaseSkipPromoted this is always false.
+    const bool suppressSelf =
+        (paintMode_ == PaintMode::PromotedOnly && promotedElements_ && !withinPromoted);
 
     // The SC root's transform/opacity/filter must wrap ALL of its descendants'
     // painting — not just step 1 (the in-flow walk). Positioned descendants
@@ -3340,6 +3365,12 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
     // filter) so the blended group includes all of the SC's painting, and tear
     // it down last.
     bool wrappedBlend = false;
+    bool wrappedTransform = false;
+    bool wrappedOpacity = false;
+    bool wrappedFilter = false;
+    // suppressSelf (PromotedOnly, above a promoted root) skips every wrapper +
+    // the SC's own content paint; recursion into children still happens below.
+    if (!suppressSelf) {
     {
         auto mbIt = rootStyle.find("mix-blend-mode");
         if (mbIt != rootStyle.end() && !mbIt->second.empty() && mbIt->second != "normal") {
@@ -3351,7 +3382,6 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
         }
     }
 
-    bool wrappedTransform = false;
     {
         auto trIt = rootStyle.find("transform");
         bool hasT = (trIt != rootStyle.end() && !trIt->second.empty()
@@ -3401,7 +3431,6 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
             }
         }
     }
-    bool wrappedOpacity = false;
     {
         auto opIt = rootStyle.find("opacity");
         if (opIt != rootStyle.end()) {
@@ -3413,7 +3442,6 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
             }
         }
     }
-    bool wrappedFilter = false;
     {
         auto fIt = rootStyle.find("filter");
         if (fIt != rootStyle.end() && !fIt->second.empty() && fIt->second != "none") {
@@ -3425,6 +3453,7 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
             }
         }
     }
+    } // if (!suppressSelf)
     bool didWrap = wrappedBlend || wrappedTransform || wrappedOpacity || wrappedFilter;
     if (didWrap) scRootSkipWrap_.insert(sc->root);
 
@@ -3432,7 +3461,10 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
     // non-positioned non-SC descendants — via the normal walker. The walker
     // consults skipSet_ to avoid descending into SC roots and positioned
     // non-SC descendants (they paint separately below).
-    drawElementContent(sc->root, sc->offsetX, sc->offsetY);
+    // In PromotedOnly above a promoted root this is suppressed (recursion into
+    // children below still runs to reach deeper promoted subtrees).
+    if (!suppressSelf)
+        drawElementContent(sc->root, sc->offsetX, sc->offsetY);
 
     // Step 2: child SCs with z-index < 0, sorted by zIndex then tree order.
     std::vector<StackingContext*> negSCs, autoSCs, posSCs;
@@ -3463,7 +3495,7 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
     };
     for (auto* c : negSCs) {
         pushClips(c->ancestorClips);
-        paintStackingContext(c);
+        paintStackingContext(c, withinPromoted);
         popClips(c->ancestorClips);
     }
 
@@ -3479,17 +3511,23 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
         std::function<void()> paint;
     };
     std::vector<Step6Item> step6;
-    for (auto& pe : sc->positionedNonSC) {
-        step6.push_back({pe.tieBreaker, [this, &pe, &pushClips, &popClips]() {
-            pushClips(pe.ancestorClips);
-            drawElementContent(pe.elem, pe.offsetX, pe.offsetY);
-            popClips(pe.ancestorClips);
-        }});
+    // positioned-non-SC entries are never promoted (promoted elements are SC
+    // roots), so PromotedOnly above a promoted root suppresses them; any nested
+    // promoted SC inside such an entry's subtree is a child SC of THIS sc and is
+    // reached via the autoSCs/posSCs recursion below regardless.
+    if (!suppressSelf) {
+        for (auto& pe : sc->positionedNonSC) {
+            step6.push_back({pe.tieBreaker, [this, &pe, &pushClips, &popClips]() {
+                pushClips(pe.ancestorClips);
+                drawElementContent(pe.elem, pe.offsetX, pe.offsetY);
+                popClips(pe.ancestorClips);
+            }});
+        }
     }
     for (auto* c : autoSCs) {
-        step6.push_back({c->treeOrder, [this, c, &pushClips, &popClips]() {
+        step6.push_back({c->treeOrder, [this, c, withinPromoted, &pushClips, &popClips]() {
             pushClips(c->ancestorClips);
-            paintStackingContext(c);
+            paintStackingContext(c, withinPromoted);
             popClips(c->ancestorClips);
         }});
     }
@@ -3505,7 +3543,7 @@ void DrawTraversal::paintStackingContext(StackingContext* sc) {
     });
     for (auto* c : posSCs) {
         pushClips(c->ancestorClips);
-        paintStackingContext(c);
+        paintStackingContext(c, withinPromoted);
         popClips(c->ancestorClips);
     }
 

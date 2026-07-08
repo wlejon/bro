@@ -528,8 +528,15 @@ void Engine::run() {
         }
 #endif
 
+        // Was the document dirtied by a real base change (DOM/style/hover/…)?
+        // Promoted transform/opacity animations no longer markDirty (the layout
+        // tick routes them to promotedElements_ instead), so this is false on a
+        // promoted-only frame — which is exactly what lets the base cache be
+        // reused there. Captured before layout clears the flag.
+        bool baseWasDirty = document_ && document_->isDirty();
+
         if (layoutIdle && framePresenter_->isRasterIdle() && document_ &&
-            (document_->isDirty() || animActive || sceneHtmlDirty || !hasRenderedOnce_)) {
+            (baseWasDirty || animActive || sceneHtmlDirty || !hasRenderedOnce_)) {
             if (document_->isStructureDirty()) {
                 ensureReplacedElements(document_->documentElement());
             }
@@ -612,7 +619,17 @@ void Engine::run() {
                 // Flush microtasks from event handlers (may have queued DOM mutations).
                 jsRuntime_->executePendingJobs();
 
-                uiDirty_ = true;
+                // Re-record the base only when something base-affecting changed.
+                // A promoted-only frame (just a transform/opacity animation
+                // advancing) leaves the cached base untouched; its promoted
+                // layer is re-recorded separately in step 5a2. A change in the
+                // promoted set (an element starting/finishing its animation)
+                // moves the base's skip-holes, so it also forces a base rebuild.
+                bool promotedSetChanged = (promotedElements_ != basePromotedSet_);
+                if (baseWasDirty || promotedSetChanged || !baseValid_) {
+                    uiDirty_ = true;       // a frame must be recorded
+                    appBaseDirty_ = true;  // and the cached base rebuilt
+                }
             }
         }
 
@@ -623,7 +640,12 @@ void Engine::run() {
         //      Composite + swap below run in parallel with the worker.
         if (framePresenter_->isRasterIdle()) {
             bool uiThrottled = (now - lastUIRenderMs_ < uiFrameIntervalMs_);
-            if ((uiDirty_ || !hasRenderedOnce_) && !uiThrottled) {
+            bool promotedActive = layoutPipeline_->promotedActive();
+            // Record a frame whenever anything needs a redraw: app base
+            // (uiDirty_, via document/input), a promoted animation advancing, or
+            // system panels / overlays (also uiDirty_). Whether the *base* is
+            // rebuilt within is a separate, narrower decision below.
+            if ((uiDirty_ || !hasRenderedOnce_ || promotedActive) && !uiThrottled) {
                 stageSystemPanelCanvases();
                 updateSelectionSnapshot();
 
@@ -632,10 +654,56 @@ void Engine::run() {
                 // makes these writes visible before the worker's read.
                 auto& backBuf = framePresenter_->backBuffer();
                 auto rsnap = buildRasterSnapshot();
-                recordAppLayers(backBuf.appCommands,
-                                rsnap.vpWidth, rsnap.vpHeight,
-                                rsnap.insetTop, rsnap.insetRight, rsnap.insetBottom,
-                                rsnap.scrollY);
+
+                // promotedElements_ was published by the layout pass claimed
+                // above; the barrier makes it visible here. Non-empty ⇒ split
+                // the record into a cached base (holes) + an on-top promoted
+                // layer; empty ⇒ the classic single full-pass record.
+                const std::unordered_set<dom::Element*>* pset =
+                    promotedElements_.empty() ? nullptr : &promotedElements_;
+
+                // Rebuild the cached base ONLY on a genuine app-base change.
+                // appBaseDirty_ (set in the claim above) covers document/style/
+                // hover/promoted-set changes; scroll + insets are baked into the
+                // recorded commands so a change in either also invalidates it.
+                // Crucially this excludes the broad uiDirty_ — a splash/menu/
+                // overlay animation re-records only the cheap system/promoted
+                // layers, never the full DOM base.
+                bool scrollOrInsetChanged =
+                    rsnap.scrollY != baseScrollY_ ||
+                    rsnap.insetTop != baseInsetTop_ ||
+                    rsnap.insetRight != baseInsetRight_ ||
+                    rsnap.insetBottom != baseInsetBottom_;
+                bool baseNeedsRecord = appBaseDirty_ || scrollOrInsetChanged ||
+                                       !baseValid_ || !hasRenderedOnce_;
+
+                if (baseNeedsRecord) {
+                    // Rebuild + cache the base (skipping promoted subtrees when
+                    // pset != null; a full pass when null). Reused verbatim on
+                    // promoted-only frames.
+                    recordAppLayers(baseCommands_,
+                                    rsnap.vpWidth, rsnap.vpHeight,
+                                    rsnap.insetTop, rsnap.insetRight, rsnap.insetBottom,
+                                    rsnap.scrollY, pset, /*promotedOnly=*/false);
+                    basePromotedSet_ = promotedElements_;
+                    baseScrollY_ = rsnap.scrollY;
+                    baseInsetTop_ = rsnap.insetTop;
+                    baseInsetRight_ = rsnap.insetRight;
+                    baseInsetBottom_ = rsnap.insetBottom;
+                    baseValid_ = true;
+                    appBaseDirty_ = false;
+                }
+                // Re-record the (small) promoted layer every frame so its
+                // transform is current; clear it when nothing is promoted.
+                if (pset) {
+                    recordAppLayers(backBuf.promotedCommands,
+                                    rsnap.vpWidth, rsnap.vpHeight,
+                                    rsnap.insetTop, rsnap.insetRight, rsnap.insetBottom,
+                                    rsnap.scrollY, pset, /*promotedOnly=*/true);
+                } else {
+                    backBuf.promotedCommands.clear();
+                }
+
                 // App layers are content-sized and content-space; stash the
                 // composite placement with the frame so compositeLayers below
                 // uses the insets this recording was made under.

@@ -53,6 +53,21 @@ void Engine::layoutThreadFunc() {
             auto& kfs = document_->cascade().keyframes();
             animationManager_.setKeyframes(&kfs);
             document_->setAnimationManager(&animationManager_);
+            // A layout-affecting change pending before this pass (DOM mutation,
+            // hover restyle, structure change) forces a full layout. A frame
+            // whose only change is a promoted (transform/opacity) animation
+            // advancing does NOT: those are paint-only, so we still re-resolve
+            // styles (to pick up the new transform) but skip the full 4k-element
+            // layoutTree() pass that otherwise caps fps. A viewport/inset resize
+            // is picked up by the content-dimension compare below.
+            int contentW = snap.vpWidth - snap.insetRight;
+            int contentH = snap.vpHeight - snap.insetTop - snap.insetBottom;
+            bool layoutAffecting = document_->isDirty() ||
+                                   document_->isStructureDirty() ||
+                                   !document_->layoutRoot() ||
+                                   contentW != lastLayoutContentW_ ||
+                                   contentH != lastLayoutContentH_;
+
             // resolveStyles() must run BEFORE tick(): animations and transitions
             // are *registered* inside the cascade (onStyleChange), so a tick
             // that runs first wouldn't see the entry an event-driven frame just
@@ -63,13 +78,43 @@ void Engine::layoutThreadFunc() {
             // is prevented by the previousName memo in AnimationManager.
             document_->resolveStyles();
             bool animActive = transitionManager_.tick(now) | animationManager_.tick(now);
+
+            // Route this tick's active animations. An element whose active
+            // animations/transitions are confined to transform/opacity becomes
+            // a compositor layer: it does NOT mark the document dirty (so the
+            // expensive base record is skipped), only re-composited with its
+            // fresh transform. Anything else marks the element dirty so the
+            // base re-records exactly as before. The ticks deferred markDirty
+            // to here so this decision — which needs both managers — is made in
+            // one place, after both have advanced.
+            promotedElements_.clear();
+            auto routePromotion = [&](dom::Element* e) {
+                if (isTransformOpacityOnly(e, animationManager_, transitionManager_))
+                    promotedElements_.insert(e);
+                else {
+                    // A non-promoted animation (width/left/color/…) can change
+                    // layout, so it dirties the element and forces the pass.
+                    e->markDirty();
+                    layoutAffecting = true;
+                }
+            };
+            for (auto* e : transitionManager_.activeThisTick()) routePromotion(e);
+            for (auto* e : animationManager_.activeThisTick())  routePromotion(e);
+
             layoutPipeline_->setAnimationsActive(animActive);
-            // performLayout() rebuilds the persistent layout tree when
+            layoutPipeline_->setPromotedActive(!promotedElements_.empty());
+
+            // Skip the full layoutTree() pass on a promoted-only frame — the
+            // layout is identical to last frame, only paint-time transforms
+            // changed. performLayout() rebuilds the persistent layout tree when
             // structureDirty_ is set and clears the flag itself.
-            document_->performLayout(
-                static_cast<float>(snap.vpWidth - snap.insetRight),
-                static_cast<float>(snap.vpHeight - snap.insetTop - snap.insetBottom),
-                layoutTextMetrics);
+            if (layoutAffecting) {
+                document_->performLayout(static_cast<float>(contentW),
+                                         static_cast<float>(contentH),
+                                         layoutTextMetrics);
+                lastLayoutContentW_ = contentW;
+                lastLayoutContentH_ = contentH;
+            }
             document_->clearDirty();
         }
 
@@ -131,11 +176,17 @@ void Engine::rasterThreadFunc() {
         // insets); the main thread's compositor places them at (0, insetTop).
         int contentW = std::max(1, snap.vpWidth - snap.insetRight);
         int contentH = std::max(1, snap.vpHeight - snap.insetTop - snap.insetBottom);
-        replayAppLayers(rasterRenderer.get(), backBuf.appCommands,
+        // Base commands come from the engine's single cross-frame cache
+        // (rebuilt by main only on a real base change, always while we're idle);
+        // the promoted subtree commands are this slot's fresh per-frame buffer,
+        // replayed on top. Both reads are ordered after main's writes by the
+        // FrameWorker request handshake.
+        replayAppLayers(rasterRenderer.get(), baseCommands_,
                         htmlSurfacePool_[back], htmlSurfacePoolW_[back],
                         htmlSurfacePoolH_[back],
                         contentW, contentH,
-                        backBuf.appLayers);
+                        backBuf.appLayers,
+                        &backBuf.promotedCommands);
 
         replaySystemPanelLayers(rasterRenderer.get(), backBuf.systemCommands,
                                 systemSurfacePool_[back], systemSurfacePoolW_[back],

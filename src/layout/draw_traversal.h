@@ -128,6 +128,22 @@ public:
 
     render::Renderer* renderer() { return renderer_; }
 
+    // Paint-mode filter (used by the compositor to record the static UI and the
+    // promoted / compositor-layer elements into SEPARATE command buffers via two
+    // passes over the SAME stacking-context walk, so geometry is identical).
+    //   All              : paint everything (default — no promoted logic runs).
+    //   BaseSkipPromoted : paint everything EXCEPT promoted SC subtrees (leaving
+    //                      transparent holes where they'd be).
+    //   PromotedOnly     : paint ONLY promoted SC subtrees, at their correct
+    //                      absolute position with their current transform baked in.
+    // BaseSkipPromoted ∪ PromotedOnly reproduces All exactly (each SC painted in
+    // exactly one pass). Promoted elements are always stacking-context roots.
+    enum class PaintMode { All, BaseSkipPromoted, PromotedOnly };
+    void setPaintMode(PaintMode m) { paintMode_ = m; }
+    void setPromotedElements(const std::unordered_set<dom::Element*>* set) {
+        promotedElements_ = set;
+    }
+
 private:
     void drawNode(dom::Node* node, float offsetX, float offsetY);
     void drawElementContent(dom::Element* elem, float offsetX, float offsetY);
@@ -143,7 +159,10 @@ private:
     // paintStackingContext does the seven-step paint order recursively.
     std::unique_ptr<StackingContext> buildStackingContextTree(
         dom::Element* root, float scrollX, float scrollY);
-    void paintStackingContext(StackingContext* sc);
+    // withinPromoted tracks (PromotedOnly mode only) whether the recursion is
+    // already inside a promoted SC subtree; false at the top. Ignored in All /
+    // BaseSkipPromoted modes.
+    void paintStackingContext(StackingContext* sc, bool withinPromoted = false);
 
     // While drawElementContent walks children, it consults skipSet_ to avoid
     // descending into elements that will be painted separately by the SC walker
@@ -156,6 +175,13 @@ private:
     // only step-1 in-flow content) inherit them. drawElementContent skips
     // re-applying them for these roots.
     std::unordered_set<dom::Element*> scRootSkipWrap_;
+
+    // Paint-mode filter state. In the default (All + null set) neither is
+    // consulted and paintStackingContext takes exactly the original single-pass
+    // path. The engine sets these before each draw() and they persist across
+    // draw() calls (draw() does not reset them).
+    PaintMode paintMode_ = PaintMode::All;
+    const std::unordered_set<dom::Element*>* promotedElements_ = nullptr;
 
 public:
     // Color parsing helper (public for shared use by element controls)

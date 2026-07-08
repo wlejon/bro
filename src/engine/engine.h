@@ -417,22 +417,33 @@ private:
     /// raster thread to replay against its Skia renderer. Layer-break and
     /// inline-canvas commands sit inline in the buffer; the replayer's
     /// handlers manage GPU surface pools at replay time.
+    // promotedSet != nullptr enables compositor-layer splitting: with
+    // promotedOnly=false the base is recorded skipping promoted subtrees
+    // (holes); with promotedOnly=true ONLY the promoted subtrees are recorded
+    // (for the separate on-top layer). promotedSet==nullptr is the default
+    // full single-pass record (headless + any non-promoted path), unchanged.
     void recordAppLayers(render::CommandBuffer& outBuffer,
                          int vpW, int vpH,
                          int insetTop, int insetRight, int insetBottom,
-                         float scrollY);
+                         float scrollY,
+                         const std::unordered_set<dom::Element*>* promotedSet = nullptr,
+                         bool promotedOnly = false);
 
     /// Replay the previously-recorded app command buffer against `renderer`,
     /// producing UILayers as a side-effect of layer-break commands. Run on
     /// the raster thread (windowed) or main thread (headless). surfW/surfH
     /// are the app *content* dimensions (viewport minus engine insets) —
     /// app layer surfaces are content-sized; the compositor places them.
+    // promotedBuffer != nullptr (and non-empty) is replayed after the base into
+    // one extra pool surface and appended as the topmost HTML UILayer — the
+    // compositor-promoted layer that sits above the cached base.
     void replayAppLayers(render::SkiaRenderer* renderer,
                          const render::CommandBuffer& buffer,
                          std::vector<render::SkiaRenderer::GPUSurface>& pool,
                          int& poolW, int& poolH,
                          int surfW, int surfH,
-                         std::vector<UILayer>& outLayers);
+                         std::vector<UILayer>& outLayers,
+                         const render::CommandBuffer* promotedBuffer = nullptr);
 
     /// Walk the visible system-panel documents and emit draw commands.
     /// One bundle of commands per visible panel, separated by Cmd_LayerBreak
@@ -556,6 +567,44 @@ private:
     std::unique_ptr<dom::Document> document_;
     TransitionManager transitionManager_;
     AnimationManager animationManager_;
+
+    // Elements the layout-thread tick promoted to compositor layers this frame
+    // (active transform/opacity-only animation/transition). Written by
+    // layoutThreadFunc, read by the main thread's record pass after the layout
+    // barrier (waitClaimDone) establishes happens-before. Drives which subtrees
+    // the base record skips and re-records separately as promoted layers.
+    std::unordered_set<dom::Element*> promotedElements_;
+
+    // Cached base app command buffer — the static UI minus promoted subtrees
+    // (DrawTraversal PaintMode::BaseSkipPromoted). Rebuilt only on a real base
+    // change (DOM/style/hover/scroll/resize, or the promoted set changing);
+    // reused verbatim across promoted-only animation frames so those frames pay
+    // no main-thread record cost. Written by the main thread inside the
+    // isRasterIdle-gated record block, read by the raster thread after
+    // signalRender — same happens-before the old per-slot appCommands had.
+    render::CommandBuffer baseCommands_;
+    // The promoted set baseCommands_ was recorded against; when the live
+    // promotedElements_ differs, the base's skip-holes are stale and it must be
+    // rebuilt. baseValid_ is false until the first base record.
+    std::unordered_set<dom::Element*> basePromotedSet_;
+    bool baseValid_ = false;
+    // Narrow "app base content changed" signal — set only on a genuine app
+    // change (document dirty, promoted-set change), NOT on the broad uiDirty_
+    // (which also fires for splash/menu/overlay animation and stats refresh).
+    // Gating the base re-record on this is what keeps a lone spinner from
+    // re-recording the whole 4k-element DOM every frame.
+    bool appBaseDirty_ = false;
+    // Scroll + insets the cached base was recorded under; a change invalidates
+    // the cache (both are baked into the recorded commands).
+    float baseScrollY_ = 0.0f;
+    int baseInsetTop_ = -1, baseInsetRight_ = -1, baseInsetBottom_ = -1;
+
+    // Content dimensions the layout tree was last laid out at (layout-thread
+    // owned). A promoted-only frame skips the full layoutTree() pass since
+    // transform/opacity are paint-only — but a viewport/inset resize still must
+    // re-lay-out even when the DOM is otherwise clean, so we compare against
+    // these. -1 forces the first pass.
+    int lastLayoutContentW_ = -1, lastLayoutContentH_ = -1;
 
     // Loaded custom font data for registering on layout thread's renderer
     struct LoadedFont {

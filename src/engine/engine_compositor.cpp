@@ -79,11 +79,25 @@ void Engine::drawTexturedQuad(GLuint tex, float x, float y, float w, float h) {
 void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
                              int vpW, int vpH,
                              int insetTop, int insetRight, int insetBottom,
-                             float scrollY) {
+                             float scrollY,
+                             const std::unordered_set<dom::Element*>* promotedSet,
+                             bool promotedOnly) {
     if (!recordingRenderer_ || !drawTraversal_) return;
 
     int contentW = vpW - insetRight;
     int contentH = vpH - insetTop - insetBottom;
+
+    // Compositor-layer paint mode. promotedSet==nullptr → the default single
+    // pass (All). Base pass skips promoted subtrees (leaving holes the on-top
+    // promoted layer fills); promoted pass paints ONLY those subtrees. Reset to
+    // All at the end so system-panel recording and any other caller is
+    // unaffected.
+    using PaintMode = layout::DrawTraversal::PaintMode;
+    drawTraversal_->setPromotedElements(promotedSet);
+    drawTraversal_->setPaintMode(
+        !promotedSet ? PaintMode::All
+                     : (promotedOnly ? PaintMode::PromotedOnly
+                                     : PaintMode::BaseSkipPromoted));
 
     outBuffer.clear();
     recordingRenderer_->setBuffer(&outBuffer);
@@ -113,37 +127,47 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
                              0, -scrollY,
                              contentW, contentH, /*viewportTop=*/0);
 
-        drawSelectionHighlight(recordingRenderer_.get(), -scrollY);
+        // Selection / inspector / overlay / scrollbars are base-only chrome —
+        // they belong to the cached base, never the on-top promoted layer.
+        if (!promotedOnly) {
+            drawSelectionHighlight(recordingRenderer_.get(), -scrollY);
 
-        if (inspector_.visible) {
-            dom::Element* highlight = inspector_.pickerMode && inspector_.pickerHover
-                ? inspector_.pickerHover
-                : inspector_.selected;
-            if (highlight) {
-                drawInspectorHighlight(recordingRenderer_.get(), highlight, scrollY,
-                                       /*insetLeft=*/0, /*insetTop=*/0,
-                                       contentW, contentH);
+            if (inspector_.visible) {
+                dom::Element* highlight = inspector_.pickerMode && inspector_.pickerHover
+                    ? inspector_.pickerHover
+                    : inspector_.selected;
+                if (highlight) {
+                    drawInspectorHighlight(recordingRenderer_.get(), highlight, scrollY,
+                                           /*insetLeft=*/0, /*insetTop=*/0,
+                                           contentW, contentH);
+                }
             }
         }
     }
 
-    overlayMgr_.drawIfContext(OverlayContext::App, recordingRenderer_.get());
+    if (!promotedOnly) {
+        overlayMgr_.drawIfContext(OverlayContext::App, recordingRenderer_.get());
 
-    if (document_) {
-        float vh = static_cast<float>(contentH);
-        auto& vs = viewportScrollbar_.style();
-        auto m = viewportScrollbar_.layout(
-            static_cast<float>(contentW) - vs.width - vs.margin,
-            0.0f, vh, documentHeight_, vh, scrollY);
-        viewportScrollbar_.draw(recordingRenderer_.get(), m);
+        if (document_) {
+            float vh = static_cast<float>(contentH);
+            auto& vs = viewportScrollbar_.style();
+            auto m = viewportScrollbar_.layout(
+                static_cast<float>(contentW) - vs.width - vs.margin,
+                0.0f, vh, documentHeight_, vh, scrollY);
+            viewportScrollbar_.draw(recordingRenderer_.get(), m);
 
-        drawElementScrollbars(recordingRenderer_.get(),
-                              document_->documentElement(),
-                              0.0f, -scrollY);
+            drawElementScrollbars(recordingRenderer_.get(),
+                                  document_->documentElement(),
+                                  0.0f, -scrollY);
+        }
     }
 
     drawTraversal_->setLayerBreakCallback(nullptr);
     recordingRenderer_->setBuffer(nullptr);
+    // Restore default paint mode so subsequent recorders (system panels, the
+    // next full pass) aren't affected.
+    drawTraversal_->setPaintMode(PaintMode::All);
+    drawTraversal_->setPromotedElements(nullptr);
 }
 
 void Engine::replayAppLayers(render::SkiaRenderer* renderer,
@@ -151,7 +175,8 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
                              std::vector<render::SkiaRenderer::GPUSurface>& pool,
                              int& poolW, int& poolH,
                              int surfW, int surfH,
-                             std::vector<UILayer>& outLayers) {
+                             std::vector<UILayer>& outLayers,
+                             const render::CommandBuffer* promotedBuffer) {
     if (!renderer || !renderer->grContext()) return;
 
     // surfW/surfH are the *content* dimensions (viewport minus engine-reserved
@@ -212,8 +237,37 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
     lastHtml.texture = pool[htmlLayerIdx].texture;
     outLayers.push_back(std::move(lastHtml));
 
+    // Compositor-promoted layer: replay the promoted subtrees into one extra
+    // pool surface and append it as the topmost HTML layer, filling the holes
+    // the base pass left. Painted in content space at absolute offsets (same
+    // walk as the base), so a full-surface quad lines up 1:1.
+    int lastIdx = htmlLayerIdx;
+    if (promotedBuffer && promotedBuffer->commandCount() > 0) {
+        int promotedIdx = htmlLayerIdx + 1;
+        while (promotedIdx >= static_cast<int>(pool.size())) {
+            pool.push_back(renderer->createGPUSurface(surfW, surfH));
+            renderer->rewrapGPUSurface(pool.back(), surfW, surfH);
+        }
+        renderer->switchSurface(pool[promotedIdx].surface);
+        render::CommandReplayer promotedReplayer(renderer);
+        // A canvas/WebGL element inside a promoted subtree would emit a break;
+        // capability-1 promoted layers are plain CSS subtrees, so swallow any
+        // break (no-op) rather than risk a null-handler call. Refined later.
+        promotedReplayer.setLayerBreakHandler(
+            [](int, uint64_t, unsigned int, float, float, float, float,
+               float, float, float, float) {});
+        promotedReplayer.replay(*promotedBuffer);
+        renderer->switchSurface(origSurface);
+
+        UILayer promotedLayer;
+        promotedLayer.type = UILayer::HTML;
+        promotedLayer.texture = pool[promotedIdx].texture;
+        outLayers.push_back(std::move(promotedLayer));
+        lastIdx = promotedIdx;
+    }
+
     // Flush each pool surface's deferred Ganesh ops.
-    for (int i = 0; i <= htmlLayerIdx; ++i) {
+    for (int i = 0; i <= lastIdx; ++i) {
         if (pool[i].surface && renderer->grContext()) {
             renderer->grContext()->flush(pool[i].surface.get());
         }

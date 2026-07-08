@@ -496,6 +496,7 @@ void TransitionManager::onStyleChange(dom::Element* elem,
 bool TransitionManager::tick(double currentTime) {
     bool anyActive = false;
     bool anyCompleted = false;
+    activeThisTick_.clear();
 
     for (auto it = elements_.begin(); it != elements_.end(); ) {
         auto& et = it->second;
@@ -532,7 +533,11 @@ bool TransitionManager::tick(double currentTime) {
             }
             it = elements_.erase(it);
         } else {
-            elem->markDirty();
+            // Don't markDirty here: the layout-thread coordinator decides
+            // whether this element is a compositor-promotable layer (no base
+            // re-record) or a base change. Still count as active so the layout
+            // loop keeps ticking the animation forward.
+            activeThisTick_.push_back(elem);
             anyActive = true;
             ++it;
         }
@@ -565,6 +570,21 @@ void TransitionManager::applyOverrides(dom::Element* elem,
 
 void TransitionManager::removeElement(dom::Element* elem) {
     elements_.erase(elem);
+}
+
+bool TransitionManager::hasActive(dom::Element* elem) const {
+    auto it = elements_.find(elem);
+    return it != elements_.end() && !it->second.active.empty();
+}
+
+bool TransitionManager::activeAnimatesOnly(dom::Element* elem,
+                                           const std::set<std::string>& allowed) const {
+    auto it = elements_.find(elem);
+    if (it == elements_.end() || it->second.active.empty()) return false;
+    for (auto& tr : it->second.active) {
+        if (allowed.find(tr.property) == allowed.end()) return false;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -718,6 +738,7 @@ void AnimationManager::onStyleChange(dom::Element* elem,
 bool AnimationManager::tick(double currentTime) {
     bool anyActive = false;
     bool anyCompleted = false;
+    activeThisTick_.clear();
 
     for (auto it = elements_.begin(); it != elements_.end(); ) {
         auto& ea = it->second;
@@ -783,7 +804,9 @@ bool AnimationManager::tick(double currentTime) {
             // would restart forever.
             ++it;
         } else {
-            elem->markDirty();
+            // See TransitionManager::tick: defer the promote-vs-base-dirty
+            // decision to the layout-thread coordinator; just record activity.
+            activeThisTick_.push_back(elem);
             anyActive = true;
             ++it;
         }
@@ -940,6 +963,45 @@ void AnimationManager::applyOverrides(dom::Element* elem,
 
 void AnimationManager::removeElement(dom::Element* elem) {
     elements_.erase(elem);
+}
+
+bool AnimationManager::hasActive(dom::Element* elem) const {
+    auto it = elements_.find(elem);
+    return it != elements_.end() && !it->second.active.empty();
+}
+
+bool AnimationManager::activeAnimatesOnly(dom::Element* elem,
+                                          const std::set<std::string>& allowed) const {
+    auto it = elements_.find(elem);
+    if (it == elements_.end() || it->second.active.empty()) return false;
+
+    // Build the union of animated property longhands across all active
+    // animations, resolved via the keyframe blocks — same as applyOverrides.
+    std::unordered_set<std::string> animated;
+    for (auto& anim : it->second.active) {
+        auto* kf = findKeyframes(anim.name);
+        if (!kf) continue;
+        for (auto& stop : kf->stops) {
+            for (auto& d : stop.declarations) animated.insert(d.property);
+        }
+    }
+    if (animated.empty()) return false;
+    for (auto& prop : animated) {
+        if (allowed.find(prop) == allowed.end()) return false;
+    }
+    return true;
+}
+
+bool isTransformOpacityOnly(dom::Element* elem,
+                            const AnimationManager& anim,
+                            const TransitionManager& trans) {
+    const std::set<std::string> allowed{"transform", "opacity"};
+    bool A = anim.hasActive(elem);
+    bool T = trans.hasActive(elem);
+    if (!A && !T) return false;
+    if (A && !anim.activeAnimatesOnly(elem, allowed)) return false;
+    if (T && !trans.activeAnimatesOnly(elem, allowed)) return false;
+    return true;
 }
 
 } // namespace bro::engine

@@ -4,6 +4,7 @@
 #include <css/cascade.h>
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -73,6 +74,20 @@ public:
     // Check if any transitions are running.
     bool hasActiveTransitions() const { return !elements_.empty(); }
 
+    // Read-only compositor-hint accessors.
+    // hasActive: element is present with at least one active transition.
+    bool hasActive(dom::Element* elem) const;
+    // activeAnimatesOnly: element has at least one active transition AND every
+    // active Transition::property is in `allowed`. False if none are active.
+    bool activeAnimatesOnly(dom::Element* elem,
+                            const std::set<std::string>& allowed) const;
+
+    // Elements with ≥1 active transition after the most recent tick(). tick()
+    // collects these instead of marking them dirty itself, so the layout-thread
+    // coordinator can decide per element whether it's a compositor-promotable
+    // (transform/opacity-only) layer or a base change that must re-record.
+    const std::vector<dom::Element*>& activeThisTick() const { return activeThisTick_; }
+
     // Interpolate between two CSS values at progress t ∈ [0,1].
     static std::string interpolate(const std::string& from, const std::string& to,
                                    float t, const std::string& property);
@@ -85,6 +100,7 @@ public:
 private:
     std::vector<PendingCSSEvent> pendingEvents_;
     std::unordered_map<dom::Element*, ElementTransitions> elements_;
+    std::vector<dom::Element*> activeThisTick_;
 };
 
 // ---------------------------------------------------------------------------
@@ -136,6 +152,20 @@ public:
     void removeElement(dom::Element* elem);
     bool hasActiveAnimations() const { return !elements_.empty(); }
 
+    // Read-only compositor-hint accessors.
+    // hasActive: element is present with at least one active animation.
+    bool hasActive(dom::Element* elem) const;
+    // activeAnimatesOnly: element has at least one active animation AND the
+    // union of all animated property longhands across its active animations
+    // (resolved via the keyframe blocks, same as applyOverrides) is a non-empty
+    // subset of `allowed`. False if it has no active animations.
+    bool activeAnimatesOnly(dom::Element* elem,
+                            const std::set<std::string>& allowed) const;
+
+    // Elements with ≥1 active animation after the most recent tick(). See the
+    // matching TransitionManager::activeThisTick() note.
+    const std::vector<dom::Element*>& activeThisTick() const { return activeThisTick_; }
+
     // Take all pending events (call from main thread after layout completes).
     std::vector<PendingCSSEvent> takePendingEvents() {
         return std::move(pendingEvents_);
@@ -145,8 +175,17 @@ private:
     std::vector<PendingCSSEvent> pendingEvents_;
     const std::vector<htmlayout::css::KeyframeBlock>* keyframes_ = nullptr;
     std::unordered_map<dom::Element*, ElementAnimations> elements_;
+    std::vector<dom::Element*> activeThisTick_;
 
     const htmlayout::css::KeyframeBlock* findKeyframes(const std::string& name) const;
 };
+
+// True iff the element has active CSS animations and/or transitions and they are
+// ALL confined to transform/opacity — the properties a compositor layer can
+// animate without re-rasterizing surrounding content. Requires at least one of
+// the two managers to report an active animation/transition on the element.
+bool isTransformOpacityOnly(dom::Element* elem,
+                            const AnimationManager& anim,
+                            const TransitionManager& trans);
 
 } // namespace bro::engine

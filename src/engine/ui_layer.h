@@ -39,8 +39,16 @@ struct UILayer {
 /// App layers composite first, then system layers on top so menu bar /
 /// preferences / splash sit above app content.
 struct LayerBuffer {
-    render::CommandBuffer  appCommands;
+    // Base app commands live in the engine's single cross-frame cache
+    // (Engine::baseCommands_), not here — a per-slot copy can't survive the
+    // front/back ping-pong (the back slot is two frames stale). This slot only
+    // carries the per-frame-fresh promoted + system commands and the output
+    // layer lists.
     render::CommandBuffer  systemCommands;
+    // Promoted (compositor-layer) subtree commands, recorded fresh every frame
+    // even when the cached base is reused. Replayed after the base into one
+    // extra surface and composited on top. Empty when nothing is promoted.
+    render::CommandBuffer  promotedCommands;
     std::vector<UILayer>   appLayers;
     std::vector<UILayer>   systemLayers;
 
