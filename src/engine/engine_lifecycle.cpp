@@ -302,12 +302,14 @@ Engine::~Engine() {
     // 3. GL cleanup (windowed only)
     {
         auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
-        if (skia) {
-            for (auto& ps : htmlSurfacePool_) skia->destroyGPUSurface(ps);
-            for (auto& ps : systemSurfacePool_) skia->destroyGPUSurface(ps);
+        for (int i = 0; i < 2; ++i) {
+            if (skia) {
+                for (auto& ps : htmlSurfacePool_[i]) skia->destroyGPUSurface(ps);
+                for (auto& ps : systemSurfacePool_[i]) skia->destroyGPUSurface(ps);
+            }
+            htmlSurfacePool_[i].clear();
+            systemSurfacePool_[i].clear();
         }
-        htmlSurfacePool_.clear();
-        systemSurfacePool_.clear();
     }
     if (uiQuadVBO_) { glDeleteBuffers(1, &uiQuadVBO_); uiQuadVBO_ = 0; }
     if (uiQuadVAO_) { glDeleteVertexArrays(1, &uiQuadVAO_); uiQuadVAO_ = 0; }

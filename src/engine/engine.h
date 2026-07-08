@@ -639,16 +639,25 @@ private:
     std::thread       layoutThread_;
     SDL_GLContext     rasterGLContext_ = nullptr;
 
-    // Pool of reusable GPU-backed Skia surfaces for HTML layers.
-    // Owned by the raster thread — FBOs are per-context but textures
-    // are shared across GL contexts for compositing on the main thread.
-    std::vector<render::SkiaRenderer::GPUSurface> htmlSurfacePool_;
-    int htmlSurfacePoolW_ = 0, htmlSurfacePoolH_ = 0;
-    // Parallel pool, one entry per visible system panel per frame. Separate
+    // Double-buffered pools of reusable GPU-backed Skia surfaces for HTML
+    // layers — one pool per frame-buffer index (matching FramePresenter's
+    // front_/back). The raster thread draws into the *back* pool while the
+    // main-thread compositor samples the *front* pool. A single shared pool
+    // aliased the in-flight raster frame's textures with the frame being
+    // composited: the compositor sampled surfaces the raster thread was
+    // concurrently clearing+redrawing (switchSurface clears to transparent),
+    // so every dirty frame flashed the whole HTML layer → heavy flicker, and
+    // animations looked frozen because no clean frame was ever sampled. The
+    // consumeIfReady() fence only becomes correct once the pools don't alias.
+    // Owned by the raster thread — FBOs are per-context but textures are
+    // shared across GL contexts for compositing on the main thread.
+    std::vector<render::SkiaRenderer::GPUSurface> htmlSurfacePool_[2];
+    int htmlSurfacePoolW_[2] = {0, 0}, htmlSurfacePoolH_[2] = {0, 0};
+    // Parallel pools, one entry per visible system panel per frame. Separate
     // from htmlSurfacePool_ so app layer-break sizing can't invalidate panel
-    // surfaces mid-frame.
-    std::vector<render::SkiaRenderer::GPUSurface> systemSurfacePool_;
-    int systemSurfacePoolW_ = 0, systemSurfacePoolH_ = 0;
+    // surfaces mid-frame; double-buffered for the same reason as above.
+    std::vector<render::SkiaRenderer::GPUSurface> systemSurfacePool_[2];
+    int systemSurfacePoolW_[2] = {0, 0}, systemSurfacePoolH_[2] = {0, 0};
 
     // Headless screenshot path uses the main thread's renderer + GL context,
     // but needs its own surface pool so it doesn't fight the raster thread's

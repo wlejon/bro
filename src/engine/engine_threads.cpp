@@ -114,6 +114,12 @@ void Engine::rasterThreadFunc() {
 
         // Same slot the main thread wrote command buffers into (1 - front_).
         // The state machine guarantees main's writes happened-before this read.
+        // The back index also selects which surface-pool copy we draw into, so
+        // the compositor (reading the front pool) never samples surfaces we are
+        // clearing+redrawing here. front_ is stable for the whole request — main
+        // only flips it in consumeIfReady, which runs after we publish — so the
+        // two 1-front_ reads (here and in backBuffer()) always agree.
+        int back = framePresenter_->backIndex();
         auto& backBuf = framePresenter_->backBuffer();
         backBuf.appLayers.clear();
         backBuf.systemLayers.clear();
@@ -126,13 +132,14 @@ void Engine::rasterThreadFunc() {
         int contentW = std::max(1, snap.vpWidth - snap.insetRight);
         int contentH = std::max(1, snap.vpHeight - snap.insetTop - snap.insetBottom);
         replayAppLayers(rasterRenderer.get(), backBuf.appCommands,
-                        htmlSurfacePool_, htmlSurfacePoolW_, htmlSurfacePoolH_,
+                        htmlSurfacePool_[back], htmlSurfacePoolW_[back],
+                        htmlSurfacePoolH_[back],
                         contentW, contentH,
                         backBuf.appLayers);
 
         replaySystemPanelLayers(rasterRenderer.get(), backBuf.systemCommands,
-                                systemSurfacePool_, systemSurfacePoolW_,
-                                systemSurfacePoolH_,
+                                systemSurfacePool_[back], systemSurfacePoolW_[back],
+                                systemSurfacePoolH_[back],
                                 snap.vpWidth, snap.vpHeight,
                                 backBuf.systemLayers);
 
@@ -146,11 +153,13 @@ void Engine::rasterThreadFunc() {
         framePresenter_->publishResult(fence);
     }
 
-    // Cleanup
-    for (auto& ps : htmlSurfacePool_)   rasterRenderer->destroyGPUSurface(ps);
-    htmlSurfacePool_.clear();
-    for (auto& ps : systemSurfacePool_) rasterRenderer->destroyGPUSurface(ps);
-    systemSurfacePool_.clear();
+    // Cleanup — both double-buffered pool copies.
+    for (int i = 0; i < 2; ++i) {
+        for (auto& ps : htmlSurfacePool_[i])   rasterRenderer->destroyGPUSurface(ps);
+        htmlSurfacePool_[i].clear();
+        for (auto& ps : systemSurfacePool_[i]) rasterRenderer->destroyGPUSurface(ps);
+        systemSurfacePool_[i].clear();
+    }
     rasterRenderer.reset();
     SDL_GL_MakeCurrent(window_->getSDLWindow(), nullptr);
     LOG_INFO("Raster thread stopped");
