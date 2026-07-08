@@ -1092,12 +1092,18 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                 dispatchEvent(target, enterEvt);
             }
 
-            // Mark old and new hovered elements dirty for :hover style re-resolve.
+            // Mark old and new hovered elements dirty for :hover style
+            // re-resolve — but only when the page actually has :hover rules.
+            // With none, a hover-target change cannot alter any computed style,
+            // so dirtying + a full base re-record on every mouse move is pure
+            // waste (a 4.4k-element grid with no :hover cost ~16 ms/frame).
             // The JS dispatched above can free either element; re-resolve.
-            if (auto* ph = hoveredElement_.get()) ph->markDirty();
-            if (target) target->markDirty();
+            if (document_ && document_->cascade().usesHoverPseudo()) {
+                if (auto* ph = hoveredElement_.get()) ph->markDirty();
+                if (target) target->markDirty();
+                uiDirty_ = true;
+            }
             hoveredElement_.assign(document_.get(), target);
-            uiDirty_ = true;
         }
 
         // World-space HtmlNode hover + move routing. Tracked in parallel
