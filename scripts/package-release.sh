@@ -35,8 +35,11 @@ fi
 # is locked to whatever CMAKE_BUILD_TYPE was set at configure time. Catch the
 # common Linux/macOS mistake of pointing this script at a Debug build dir.
 if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
-    CACHED_TYPE="$(grep -E '^CMAKE_BUILD_TYPE:STRING=' "$BUILD_DIR/CMakeCache.txt" | cut -d= -f2)"
-    CACHED_GEN="$(grep -E '^CMAKE_GENERATOR:INTERNAL=' "$BUILD_DIR/CMakeCache.txt" | cut -d= -f2)"
+    # `|| true`: a Visual Studio multi-config cache has no CMAKE_BUILD_TYPE, so
+    # this grep legitimately matches nothing — without the guard, `set -e` kills
+    # the whole script on the empty command substitution.
+    CACHED_TYPE="$(grep -E '^CMAKE_BUILD_TYPE:STRING=' "$BUILD_DIR/CMakeCache.txt" | cut -d= -f2 || true)"
+    CACHED_GEN="$(grep -E '^CMAKE_GENERATOR:INTERNAL=' "$BUILD_DIR/CMakeCache.txt" | cut -d= -f2 || true)"
     if [[ "$CACHED_GEN" != "Visual Studio"* ]] && [[ -n "$CACHED_TYPE" ]] && [[ "$CACHED_TYPE" != "Release" ]] && [[ "$CACHED_TYPE" != "RelWithDebInfo" ]] && [[ "$CACHED_TYPE" != "MinSizeRel" ]]; then
         echo "ERROR: $BUILD_DIR is configured as $CACHED_TYPE, not Release." >&2
         echo "  Configure a separate Release build dir:" >&2
@@ -53,7 +56,7 @@ fi
 # the binaries it's packaging are .exe + .dll under build/<config>/.
 PLATFORM=""
 if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
-    CACHED_GEN="$(grep -E '^CMAKE_GENERATOR:INTERNAL=' "$BUILD_DIR/CMakeCache.txt" | cut -d= -f2)"
+    CACHED_GEN="$(grep -E '^CMAKE_GENERATOR:INTERNAL=' "$BUILD_DIR/CMakeCache.txt" | cut -d= -f2 || true)"
     if [[ "$CACHED_GEN" == "Visual Studio"* ]]; then
         PLATFORM="win" ; EXE=".exe" ; LIB_GLOB="*.dll"
     fi
