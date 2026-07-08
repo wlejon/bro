@@ -276,6 +276,21 @@ void Document::buildTreeFromGumbo(::GumboNode* node, Element* parentElem) {
 // Style resolution
 // ---------------------------------------------------------------------------
 
+void Document::setActiveElement(Element* el) {
+    if (focusedElement_ == el) return;
+    // A focus change adds/removes :focus (and :focus-within on ancestors)
+    // styling and toggles the native input/textarea caret, all of which live
+    // in the cached HTML base. Dirty the outgoing and incoming elements so
+    // their styles re-resolve and the base is re-recorded; without this the
+    // retained-base cache re-presents the stale frame and the focus change
+    // doesn't paint until some unrelated restyle (e.g. a :hover) forces a
+    // rebuild. markDirty() propagates to the document, so this also drives the
+    // relayout the :focus rules may need.
+    if (focusedElement_) focusedElement_->markDirty();
+    if (el) el->markDirty();
+    focusedElement_ = el;
+}
+
 void Document::resolveStyles() {
     if (!documentElement_) return;
     layout::ElementRefAdapter::clearCache();

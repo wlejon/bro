@@ -594,6 +594,18 @@ private:
     // Gating the base re-record on this is what keeps a lone spinner from
     // re-recording the whole 4k-element DOM every frame.
     bool appBaseDirty_ = false;
+    // Force the cached HTML base to be re-recorded next frame *without* a full
+    // relayout. For interaction state that feeds the base record but changes
+    // neither computed styles nor box geometry: text selection / caret,
+    // element scroll offset (applied at draw time, not layout time), and the
+    // base-only chrome recorded in engine_compositor (dropdown overlays,
+    // inspector highlight, scrollbars). Before the base was cached these
+    // repainted for free — every uiDirty_ frame did a full re-record — so a
+    // handler only had to set uiDirty_. Now the record reuses the cache unless
+    // appBaseDirty_ says otherwise, so those handlers must call this. Focus
+    // changes go through Document::markDirty() instead: they can alter :focus
+    // styling, so they want the restyle + relayout, not just a re-record.
+    void markAppBaseDirty() { appBaseDirty_ = true; uiDirty_ = true; }
     // Scroll + insets the cached base was recorded under; a change invalidates
     // the cache (both are baked into the recorded commands).
     float baseScrollY_ = 0.0f;

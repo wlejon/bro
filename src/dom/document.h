@@ -92,7 +92,7 @@ public:
 
     // Focus tracking
     Element* activeElement() const { return focusedElement_ ? focusedElement_ : body_; }
-    void setActiveElement(Element* el) { focusedElement_ = el; }
+    void setActiveElement(Element* el);
 
     // Title
     std::string title() const;

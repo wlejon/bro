@@ -443,7 +443,8 @@ void Engine::handleMouseDown(float x, float y, int button) {
     // are anchored in content space — overlayMouseY() translates once here.
     if (overlayMgr_.handleMouseDown(x, overlayMouseY(y), button)) {
         pressedButtons_ |= domButtonMask(button);
-        uiDirty_ = true;
+        // App-context overlays (dropdown popups) are base-only chrome.
+        markAppBaseDirty();
         return;
     }
 
@@ -538,7 +539,9 @@ void Engine::handleMouseDown(float x, float y, int button) {
                 hitElem->setScrollTopValue(clamped);
                 if (clamped != prev) dispatchScrollEvent(hitElem);
             }
-            uiDirty_ = true;
+            // Element scroll offset is applied at draw time, so a re-record
+            // (not a relayout) reflects the new position.
+            markAppBaseDirty();
             return; // consumed
         }
     }
@@ -585,6 +588,12 @@ void Engine::handleMouseDown(float x, float y, int button) {
         dispatchDocMousePress(cctx, appMouseState_, target, evt,
                               x, y - static_cast<float>(contentTop()));
         jsRuntime_->executePendingJobs();
+        // A control press can reposition the native caret or toggle control
+        // visual state without changing the DOM (e.g. clicking to move the
+        // caret inside an already-focused input, where setActiveElement's
+        // same-element early-out skips markDirty). That chrome lives in the
+        // cached base, so force a re-record.
+        markAppBaseDirty();
 
         // Mouse-driven text selection. Left button only; bail out if the
         // click landed on a text-editing control (input/textarea manage
@@ -645,13 +654,15 @@ void Engine::handleMouseDown(float x, float y, int button) {
                         selectionPressY_ = docY;
                         selectionPastThreshold_ = false;
                     }
-                    uiDirty_ = true;
+                    // Selection highlight + caret are base-only chrome; force a
+                    // re-record (no relayout) so the new selection paints.
+                    markAppBaseDirty();
                 } else {
                     // Click outside any text: clear selection.
                     sel->removeAllRanges();
                     selectionDragging_ = false;
                     selectionAnchorNode_.reset();
-                    uiDirty_ = true;
+                    markAppBaseDirty();
                 }
             }
         }
@@ -679,7 +690,7 @@ void Engine::handleMouseUp(float x, float y, int button) {
     pressedButtons_ &= ~domButtonMask(button);
 
     if (overlayMgr_.handleMouseUp(x, overlayMouseY(y), button)) {
-        uiDirty_ = true;
+        markAppBaseDirty();
         return;
     }
 
@@ -837,7 +848,8 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     // the dropdown/picker would trigger :hover styles and JS handlers.
     bool overlayActive = overlayMgr_.hasActive();
     if (overlayActive && overlayMgr_.handleMouseMove(x, overlayMouseY(y))) {
-        uiDirty_ = true;
+        // Dropdown option highlight follows the pointer; it's base-only chrome.
+        markAppBaseDirty();
     }
 
     // Forward to system overlay first. When the pointer is inside a visible
@@ -861,7 +873,8 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         dom::Element* hit = hitTest(docX, docY);
         if (hit != inspector_.pickerHover) {
             inspector_.pickerHover = hit;
-            uiDirty_ = true;
+            // Inspector box-model highlight is base-only chrome.
+            markAppBaseDirty();
         }
         lastMouseX_ = x;
         lastMouseY_ = y;
@@ -924,7 +937,8 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                               hit.textNode, hit.srcOffset,
                               dom::Selection::Forward);
             }
-            uiDirty_ = true;
+            // Re-record the base-only selection chrome (no relayout needed).
+            markAppBaseDirty();
         }
     }
 
@@ -976,6 +990,8 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                 systemDirty_ = true;
             } else {
                 dispatchScrollEvent(elem);
+                // App element scroll: re-record the base to show the new offset.
+                markAppBaseDirty();
             }
         }
         uiDirty_ = true;
@@ -1924,7 +1940,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         float scroll = textarea->scrollY() - pxV;
         scroll = std::max(scroll, 0.0f);
         textarea->setScrollY(scroll);
-        uiDirty_ = true;
+        markAppBaseDirty();
         return;
     }
 
@@ -1934,7 +1950,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         float scroll = hoverTa->scrollY() - pxV;
         scroll = std::max(scroll, 0.0f);
         hoverTa->setScrollY(scroll);
-        uiDirty_ = true;
+        markAppBaseDirty();
         return;
     }
 
@@ -1952,7 +1968,7 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
                 if (newScroll != prevScroll) {
                     dispatchScrollEvent(el);
                 }
-                uiDirty_ = true;
+                markAppBaseDirty();
                 return;
             }
             // overflow:hidden means this element isn't scrollable, but wheel
