@@ -579,6 +579,21 @@ const htmlayout::css::KeyframeBlock* AnimationManager::findKeyframes(const std::
     return nullptr;
 }
 
+// Per CSS Animations §4: setting display:none on an element (or any ancestor)
+// terminates the animations running on it and its descendants. We don't tear
+// the Animation down (it resumes if the element is shown again), but a hidden
+// animation must stop reporting itself active — otherwise a single infinite
+// animation on a hidden element (a load spinner in a display:none overlay, say)
+// pins the whole document on the re-layout + re-raster path every frame.
+static bool inDisplayNoneSubtree(dom::Element* elem) {
+    for (dom::Element* e = elem; e; e = e->parentElement()) {
+        const auto& cs = e->computedStyle();
+        auto it = cs.find("display");
+        if (it != cs.end() && it->second == "none") return true;
+    }
+    return false;
+}
+
 void AnimationManager::onStyleChange(dom::Element* elem,
                                      const htmlayout::css::ComputedStyle& newStyle,
                                      double currentTime) {
@@ -707,6 +722,12 @@ bool AnimationManager::tick(double currentTime) {
     for (auto it = elements_.begin(); it != elements_.end(); ) {
         auto& ea = it->second;
         dom::Element* elem = it->first;
+
+        // A hidden (display:none) element's animations don't run: keep the
+        // entry so they resume if it's shown again, but don't tick, mark dirty,
+        // or report active. This is what stops an infinite animation on a
+        // hidden element from re-rasterizing the whole UI every frame.
+        if (!ea.active.empty() && inDisplayNoneSubtree(elem)) { ++it; continue; }
 
         for (auto& a : ea.active) {
             double elapsed = currentTime - a.startTime - a.delay;
