@@ -117,6 +117,7 @@ void Settings::applyAppOverrides(const GraphicsConfig& gfx, const InputConfig& i
     defaults_.graphics.vsync = gfx.vsync;
     defaults_.graphics.resizable = gfx.resizable;
     defaults_.graphics.maxFrameIntervalMs = gfx.maxFrameIntervalMs;
+    defaults_.graphics.maxFps = gfx.maxFps;
 
     InputSettings inpDef;
     if (inp.scrollSpeed != inpDef.scrollSpeed) {
@@ -242,6 +243,10 @@ std::string Settings::getString(const std::string& key) const {
     if (key == "graphics.fullscreen") return g.fullscreen ? "true" : "false";
     if (key == "graphics.vsync") return g.vsync ? "true" : "false";
     if (key == "graphics.resizable") return g.resizable ? "true" : "false";
+    if (key == "graphics.maxFps") {
+        char buf[64]; snprintf(buf, sizeof(buf), "%g", g.maxFps);
+        return buf;
+    }
     if (key == "graphics.maxFrameIntervalMs") {
         char buf[64]; snprintf(buf, sizeof(buf), "%g", g.maxFrameIntervalMs);
         return buf;
@@ -437,6 +442,7 @@ void Settings::resolveGraphics() {
     if (userPresence_.count("graphics.vsync")) r.vsync = userOverrides_.graphics.vsync;
     if (userPresence_.count("graphics.resizable")) r.resizable = userOverrides_.graphics.resizable;
     if (userPresence_.count("graphics.maxFrameIntervalMs")) r.maxFrameIntervalMs = userOverrides_.graphics.maxFrameIntervalMs;
+    if (userPresence_.count("graphics.maxFps")) r.maxFps = userOverrides_.graphics.maxFps;
 }
 
 void Settings::resolveAudio() {
@@ -530,6 +536,7 @@ void Settings::applyToLayer(SettingsData& data, std::set<std::string>& presence,
     if (key == "graphics.vsync") { data.graphics.vsync = (value == "true"); return; }
     if (key == "graphics.resizable") { data.graphics.resizable = (value == "true"); return; }
     if (key == "graphics.maxFrameIntervalMs") { data.graphics.maxFrameIntervalMs = std::stod(value); return; }
+    if (key == "graphics.maxFps") { data.graphics.maxFps = std::stod(value); return; }
 
     // Audio
     if (key == "audio.masterVolume") { data.audio.masterVolume = std::stof(value); return; }

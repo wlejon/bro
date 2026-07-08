@@ -115,7 +115,10 @@ bool parseConfig(const std::string& path, EngineConfig& config,
     if (splash >= 0) config.showSplash = (splash == 1);
 
     float maxFps = getFloat("maxFps", 0);
-    if (maxFps > 0) config.graphics.maxFrameIntervalMs = 1000.0 / maxFps;
+    if (maxFps > 0) {
+        config.graphics.maxFps = maxFps;              // present-rate cap
+        config.graphics.maxFrameIntervalMs = 1000.0 / maxFps;  // + raster throttle
+    }
 
     float scrollSpeed = getFloat("scrollSpeed", 0);
     if (scrollSpeed > 0) config.input.scrollSpeed = scrollSpeed;

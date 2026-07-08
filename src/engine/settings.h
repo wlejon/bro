@@ -25,6 +25,7 @@ struct GraphicsSettings {
     bool vsync = true;
     bool resizable = true;
     double maxFrameIntervalMs = 8.0;
+    double maxFps = 0.0;  // present-rate cap independent of vsync (0 = uncapped)
 };
 
 struct AudioSettings {

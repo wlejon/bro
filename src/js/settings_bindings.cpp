@@ -72,7 +72,8 @@ static JSValue settingsValueToJS(JSContext* ctx, const std::string& key,
         key.find("Speed") != std::string::npos ||
         key.find("Threshold") != std::string::npos ||
         key.find("Distance") != std::string::npos ||
-        key.find("Interval") != std::string::npos) {
+        key.find("Interval") != std::string::npos ||
+        key.find("maxFps") != std::string::npos) {
         try { return JS_NewFloat64(ctx, std::stod(value)); }
         catch (...) { return JS_NewString(ctx, value.c_str()); }
     }
@@ -114,6 +115,7 @@ static JSValue js_settings_getAll(JSContext* ctx, JSValueConst, int argc, JSValu
         JS_SetPropertyStr(ctx, obj, "vsync", JS_NewBool(ctx, g.vsync));
         JS_SetPropertyStr(ctx, obj, "resizable", JS_NewBool(ctx, g.resizable));
         JS_SetPropertyStr(ctx, obj, "maxFrameIntervalMs", JS_NewFloat64(ctx, g.maxFrameIntervalMs));
+        JS_SetPropertyStr(ctx, obj, "maxFps", JS_NewFloat64(ctx, g.maxFps));
     };
 
     auto addAudio = [&](JSValue obj) {
@@ -395,6 +397,7 @@ static JSValue js_settings_getDefaults(JSContext* ctx, JSValueConst, int argc, J
         JS_SetPropertyStr(ctx, obj, "vsync", JS_NewBool(ctx, g.vsync));
         JS_SetPropertyStr(ctx, obj, "resizable", JS_NewBool(ctx, g.resizable));
         JS_SetPropertyStr(ctx, obj, "maxFrameIntervalMs", JS_NewFloat64(ctx, g.maxFrameIntervalMs));
+        JS_SetPropertyStr(ctx, obj, "maxFps", JS_NewFloat64(ctx, g.maxFps));
     };
 
     if (category == "graphics") {

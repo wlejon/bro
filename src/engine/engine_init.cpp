@@ -172,6 +172,7 @@ Engine::Engine(const EngineConfig& config)
     viewportWidth_ = gfx.width;
     viewportHeight_ = gfx.height;
     uiFrameIntervalMs_ = gfx.maxFrameIntervalMs;
+    frameCapIntervalMs_ = gfx.maxFps > 0.0 ? 1000.0 / gfx.maxFps : 0.0;
     inputConfig_.scrollSpeed = inp.scrollSpeed;
     inputConfig_.doubleClickThresholdMs = inp.doubleClickThresholdMs;
     inputConfig_.doubleClickDistancePx = inp.doubleClickDistancePx;
@@ -489,6 +490,8 @@ Engine::Engine(const EngineConfig& config)
                 window_->setResizable(gfx.resizable);
             if (key == "maxFrameIntervalMs" || key == "*")
                 uiFrameIntervalMs_ = gfx.maxFrameIntervalMs;
+            if (key == "maxFps" || key == "*")
+                frameCapIntervalMs_ = gfx.maxFps > 0.0 ? 1000.0 / gfx.maxFps : 0.0;
         }
         if (category == "audio" || category == "*") {
             auto& audio = settings_->audio();

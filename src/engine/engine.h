@@ -74,6 +74,7 @@ struct GraphicsConfig {
     bool resizable = true;    // whether the window can be resized
     bool vsync = true;        // true = adaptive or standard vsync; false = uncapped
     double maxFrameIntervalMs = 8.0;  // layout/raster throttle (0 = uncapped)
+    double maxFps = 0.0;      // present-rate cap independent of vsync (0 = uncapped)
 };
 
 /// Input behavior settings configurable per app.
@@ -811,6 +812,16 @@ private:
     // UI render throttle — layout+rasterize at most every N ms (from config)
     double uiFrameIntervalMs_ = 8.0;
     double lastUIRenderMs_ = 0.0;
+
+    // Present-rate cap (graphics.maxFps) — the main loop sleeps so a frame never
+    // completes faster than this, independent of vsync. 0 = uncapped (vsync
+    // governs). This is the app-settable "cap other than vsync".
+    double frameCapIntervalMs_ = 0.0;
+    // Whether the window currently has input focus. Windows stops pacing
+    // wglSwapBuffers for unfocused windows, so the loop would free-run and
+    // judder; while unfocused we clamp the present rate to kUnfocusedFps.
+    bool windowFocused_ = true;
+    static constexpr double kUnfocusedFps = 30.0;
 
     // QuickJS cycle-collector GC — run periodically to free cyclic garbage
     static constexpr double kGCIntervalMs = 1000.0;

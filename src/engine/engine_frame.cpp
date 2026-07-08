@@ -184,8 +184,14 @@ void Engine::run() {
     eventLoop_->onDropText   = [this](const std::string& t, float x, float y) { handleDropText(t, x, y); };
     // SDL drops relative mouse mode on focus loss on some platforms — keep our
     // engine-side lock state in sync so apps see a pointerlockchange.
-    eventLoop_->onFocusLost   = [this]() { exitPointerLock(); setPageVisibility(false); };
-    eventLoop_->onFocusGained = [this]() { setPageVisibility(true); };
+    eventLoop_->onFocusLost   = [this]() { windowFocused_ = false; exitPointerLock(); setPageVisibility(false); };
+    eventLoop_->onFocusGained = [this]() { windowFocused_ = true; setPageVisibility(true); };
+
+    // Seed focus from the window's actual state — an app can launch unfocused
+    // (e.g. spawned behind another window), and SDL won't emit a FOCUS_LOST for
+    // a window that was never focused, so the event handlers alone can miss it.
+    windowFocused_ =
+        (SDL_GetWindowFlags(window_->getSDLWindow()) & SDL_WINDOW_INPUT_FOCUS) != 0;
 
     // Initial style + layout already ran in the Engine constructor (step 10a,
     // before DOMContentLoaded/load were dispatched, so apps can measure
@@ -735,6 +741,28 @@ void Engine::run() {
         // Swap buffers (may block on vsync — not counted as GPU work).
         // Raster thread runs in parallel here (signaled at step 5a2 above).
         gl_->swapBuffers();
+
+        // 5h. Present-rate cap. vsync is our only pacing on a focused window,
+        //     but Windows stops pacing wglSwapBuffers once the window loses
+        //     focus — the loop then free-runs and starves the raster/layout
+        //     workers, so the wall-clock-sampled CSS animations judder. Sleep
+        //     to hold a minimum frame interval regardless of vsync: the app's
+        //     graphics.maxFps cap, floored to kUnfocusedFps while unfocused.
+        //     The more restrictive (larger interval) wins. Done before frame
+        //     timing below so the perf HUD reports the true present cadence.
+        {
+            double capMs = frameCapIntervalMs_;  // 0 = app left it uncapped
+            if (!windowFocused_)
+                capMs = std::max(capMs, 1000.0 / kUnfocusedFps);
+            if (capMs > 0.0) {
+                double elapsed = util::currentTimeMs() - frameStart;
+                double sleepMs = capMs - elapsed;
+                if (sleepMs > 0.5) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(
+                        static_cast<int64_t>(sleepMs * 1000.0)));
+                }
+            }
+        }
 
         // 6. Frame time tracking.
         totalFrameMs_ = util::currentTimeMs() - frameStart;
