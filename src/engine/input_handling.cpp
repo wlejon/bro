@@ -1306,7 +1306,13 @@ void Engine::applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r) 
         safeStopTextInput(window_.get());
     }
     if (r.handled) {
-        uiDirty_ = true;
+        // The control's caret/selection and (for value edits) its text are
+        // base-only chrome drawn from the control's state at record time. A
+        // caret move (arrow keys, Home/End) changes no DOM, so without forcing
+        // a base re-record the retained cache re-presents the old caret until
+        // an unrelated restyle. (Value edits also markDirty via setAttribute,
+        // making this a harmless superset for them.)
+        markAppBaseDirty();
     }
 }
 
@@ -1670,7 +1676,11 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             }
 
             if (handled) {
-                uiDirty_ = true;
+                // Caret/selection moves (arrows, Home/End, Ctrl+A) change no
+                // DOM but move base-only selection chrome; force a re-record.
+                // DOM-mutating branches above (Backspace/Delete/Enter) already
+                // markDirty via their edits, so this is a harmless superset.
+                markAppBaseDirty();
                 auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
                 if (focusN && focusN->parentNode()) {
                     auto* parentEl = focusN->nodeType() == dom::NodeType::Element
