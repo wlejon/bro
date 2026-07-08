@@ -834,27 +834,88 @@ void AnimationManager::applyOverrides(dom::Element* elem,
         // Apply easing
         localProgress = ccubicEase(anim.easing, localProgress);
 
-        // Find bracketing keyframe stops
+        // Find bracketing keyframe stops. When the @keyframes omits a 0% or
+        // 100% stop, CSS synthesizes an implicit endpoint from the element's
+        // *base* (un-animated) value — that is what makes a one-sided rule like
+        //   @keyframes spin { to { transform: rotate(360deg); } }
+        // actually interpolate rotate(0deg)→rotate(360deg) and spin. Without it,
+        // front()==back() collapses the segment and the value stays constant.
         float t = std::clamp(localProgress, 0.0f, 1.0f);
-        const htmlayout::css::KeyframeStop* before = &kf->stops.front();
-        const htmlayout::css::KeyframeStop* after = &kf->stops.back();
+        const auto& stops = kf->stops;
 
-        for (size_t i = 0; i < kf->stops.size() - 1; ++i) {
-            if (t >= kf->stops[i].offset && t <= kf->stops[i + 1].offset) {
-                before = &kf->stops[i];
-                after = &kf->stops[i + 1];
-                break;
+        // Union of properties this animation touches (for implicit endpoints).
+        std::unordered_set<std::string> animProps;
+        for (auto& stop : stops)
+            for (auto& d : stop.declarations) animProps.insert(d.property);
+
+        // Base (un-animated) value for a property, shaped to the opposite
+        // endpoint so transform identities match (rotate→rotate(0deg), etc.).
+        auto baseValueFor = [&](const std::string& prop,
+                                const std::string& ref) -> std::string {
+            auto sIt = style.find(prop);
+            if (sIt != style.end() && !sIt->second.empty() && sIt->second != "none")
+                return sIt->second;
+            std::string iv = initialValueForProperty(prop, ref);
+            return iv.empty() ? ref : iv;
+        };
+
+        const htmlayout::css::KeyframeStop* beforeStop = nullptr;
+        const htmlayout::css::KeyframeStop* afterStop = nullptr;
+        float beforeOffset = 0.0f, afterOffset = 1.0f;
+        bool beforeImplicit = false, afterImplicit = false;
+
+        if (t <= stops.front().offset) {
+            if (stops.front().offset <= 0.0001f) {
+                beforeStop = afterStop = &stops.front();
+                beforeOffset = afterOffset = stops.front().offset;
+            } else {
+                // No 0% stop: implicit-from (base) → first real stop.
+                beforeImplicit = true;
+                afterStop = &stops.front();
+                afterOffset = stops.front().offset;
+            }
+        } else if (t >= stops.back().offset) {
+            if (stops.back().offset >= 0.9999f) {
+                beforeStop = afterStop = &stops.back();
+                beforeOffset = afterOffset = stops.back().offset;
+            } else {
+                // No 100% stop: last real stop → implicit-to (base).
+                beforeStop = &stops.back();
+                beforeOffset = stops.back().offset;
+                afterImplicit = true;
+            }
+        } else {
+            for (size_t i = 0; i + 1 < stops.size(); ++i) {
+                if (t >= stops[i].offset && t <= stops[i + 1].offset) {
+                    beforeStop = &stops[i];     beforeOffset = stops[i].offset;
+                    afterStop  = &stops[i + 1]; afterOffset  = stops[i + 1].offset;
+                    break;
+                }
             }
         }
 
-        // Interpolate between stops
-        float segmentRange = after->offset - before->offset;
-        float segmentT = segmentRange > 0 ? (t - before->offset) / segmentRange : 0;
+        float segmentRange = afterOffset - beforeOffset;
+        float segmentT = segmentRange > 0 ? (t - beforeOffset) / segmentRange : 0.0f;
 
-        // Build property maps for the two stops
+        // Build property maps for the two endpoints, filling implicit endpoints
+        // from the element's base value.
         std::unordered_map<std::string, std::string> beforeProps, afterProps;
-        for (auto& d : before->declarations) beforeProps[d.property] = d.value;
-        for (auto& d : after->declarations) afterProps[d.property] = d.value;
+        if (beforeStop)
+            for (auto& d : beforeStop->declarations) beforeProps[d.property] = d.value;
+        if (afterStop)
+            for (auto& d : afterStop->declarations) afterProps[d.property] = d.value;
+        if (beforeImplicit)
+            for (auto& p : animProps) {
+                auto aIt = afterProps.find(p);
+                beforeProps[p] = baseValueFor(p, aIt != afterProps.end()
+                                                     ? aIt->second : std::string());
+            }
+        if (afterImplicit)
+            for (auto& p : animProps) {
+                auto bIt = beforeProps.find(p);
+                afterProps[p] = baseValueFor(p, bIt != beforeProps.end()
+                                                    ? bIt->second : std::string());
+            }
 
         // Interpolate each property present in either stop
         std::unordered_set<std::string> allProps;
