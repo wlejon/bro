@@ -5,11 +5,35 @@
 
 #include <cstring>
 
+#include <SDL3/SDL_clipboard.h>
+#include <SDL3/SDL_stdinc.h> // SDL_free
+
 extern "C" {
 #include "quickjs.h"
 }
 
 namespace bro::js {
+
+// navigator.clipboard backing — SDL is the only system-clipboard path bro links.
+// These are the synchronous primitives; installWindowBindings wraps them in the
+// Promise-returning writeText/readText the web Clipboard API exposes.
+static JSValue js_clipboard_write(JSContext* ctx, JSValueConst /*this_val*/,
+                                  int argc, JSValueConst* argv)
+{
+    const char* text = argc > 0 ? JS_ToCString(ctx, argv[0]) : nullptr;
+    bool ok = SDL_SetClipboardText(text ? text : "");
+    if (text) JS_FreeCString(ctx, text);
+    return JS_NewBool(ctx, ok);
+}
+
+static JSValue js_clipboard_read(JSContext* ctx, JSValueConst /*this_val*/,
+                                 int /*argc*/, JSValueConst* /*argv*/)
+{
+    char* text = SDL_GetClipboardText(); // never NULL — "" on empty/failure
+    JSValue s = JS_NewString(ctx, text ? text : "");
+    if (text) SDL_free(text);
+    return s;
+}
 
 void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight)
 {
@@ -39,7 +63,26 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
     JS_SetPropertyStr(ctx, nav, "userAgent", JS_NewString(ctx, "Bro/1.0"));
     JS_SetPropertyStr(ctx, nav, "platform", JS_NewString(ctx, "Win32"));
     JS_SetPropertyStr(ctx, nav, "language", JS_NewString(ctx, "en-US"));
+
+    // navigator.clipboard — the system clipboard over SDL. The native helpers are
+    // synchronous; the JS wrapper below presents them as the Promise-returning
+    // writeText/readText apps expect from the web Clipboard API.
+    JSValue clip = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, clip, "__write",
+                      JS_NewCFunction(ctx, js_clipboard_write, "writeText", 1));
+    JS_SetPropertyStr(ctx, clip, "__read",
+                      JS_NewCFunction(ctx, js_clipboard_read, "readText", 0));
+    JS_SetPropertyStr(ctx, nav, "clipboard", clip);
     JS_FreeValue(ctx, nav);
+
+    static const char kClipboardJs[] =
+        "(function(){var c=navigator.clipboard;"
+        "c.writeText=function(t){return c.__write(String(t==null?'':t))"
+        "?Promise.resolve():Promise.reject(new Error('clipboard write failed'));};"
+        "c.readText=function(){return Promise.resolve(c.__read());};})();";
+    JSValue clipR = JS_Eval(ctx, kClipboardJs, strlen(kClipboardJs),
+                            "<clipboard-bindings>", JS_EVAL_TYPE_GLOBAL);
+    JS_FreeValue(ctx, clipR);
 
     // location (initial values — polyfill adds methods)
     JSValue loc = JS_NewObject(ctx);
