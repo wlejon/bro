@@ -139,6 +139,17 @@ public:
             h = ha.empty() ? 150.0f : std::strtof(ha.c_str(), nullptr);
             return true;
         }
+        // <iframe> is a replaced element hosting a sub-document. Its box is set
+        // by CSS width/height (or the width/height attrs), falling back to the
+        // HTML default 300x150. Its own children are not laid out by the host
+        // tree (see buildChildren) — the sub-document renders into this box.
+        if (elem_->tagName() == "iframe" || elem_->tagName() == "IFRAME") {
+            std::string wa = elem_->getAttribute("width");
+            std::string ha = elem_->getAttribute("height");
+            w = wa.empty() ? 300.0f : std::strtof(wa.c_str(), nullptr);
+            h = ha.empty() ? 150.0f : std::strtof(ha.c_str(), nullptr);
+            return true;
+        }
         // <img> is a replaced element. Resolve intrinsic dimensions from:
         //   1. width/height HTML attributes (presentational hints)
         //   2. SVG data URL: parse <svg width=... height=...> from the src
@@ -317,6 +328,9 @@ private:
             std::string_view tag = elem->tagName();
             if (tag == "select" || tag == "SELECT" ||
                 tag == "textarea" || tag == "TEXTAREA") return;
+            // <iframe> hosts an isolated sub-document rendered into its box; its
+            // markup children (fallback content) are not laid out by the host.
+            if (tag == "iframe" || tag == "IFRAME") return;
         }
 
         // If element has shadow DOM, use composed children (top-level slot replacement)
