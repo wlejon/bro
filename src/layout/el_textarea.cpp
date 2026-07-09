@@ -65,6 +65,83 @@ render::FontRef ElTextarea::getFontRef() const {
 }
 
 // ---------------------------------------------------------------------------
+// Soft wrapping
+// ---------------------------------------------------------------------------
+//
+// A textarea soft-wraps like `white-space: pre-wrap` (wrap="soft"): explicit
+// '\n's are hard breaks, and any logical line wider than the content box is
+// wrapped at word boundaries (a single word longer than the box is broken
+// between characters). Both rendering and cursor navigation run off the same
+// visual-line list so the caret, scrolling, and up/down agree with what's drawn.
+
+namespace {
+struct VisLine { size_t start; size_t end; };  // byte range [start,end); end excludes any '\n'
+}
+
+// Break `text` into visual lines wrapped to `maxWidth`. maxWidth <= 0 disables
+// wrapping (hard newlines only). Uses `r`/`fr` to measure — must be a live renderer.
+static std::vector<VisLine> buildVisualLines(const std::string& text, float maxWidth,
+                                             const render::FontRef& fr, render::Renderer* r) {
+    std::vector<VisLine> out;
+    auto measure = [&](size_t a, size_t b) -> float {
+        if (b <= a || !r) return 0.0f;
+        return r->measureText(text.substr(a, b - a), fr).width;
+    };
+    const size_t n = text.size();
+    size_t lineStart = 0;
+    for (size_t p = 0; p <= n; ++p) {
+        if (p != n && text[p] != '\n') continue;
+        // Logical line [lineStart, p).
+        if (maxWidth <= 0 || measure(lineStart, p) <= maxWidth) {
+            out.push_back({lineStart, p});
+        } else {
+            size_t segStart = lineStart;
+            size_t i = lineStart;
+            while (i < p) {
+                size_t wordStart = i;
+                while (wordStart < p && text[wordStart] == ' ') ++wordStart;
+                size_t wordEnd = wordStart;
+                while (wordEnd < p && text[wordEnd] != ' ') ++wordEnd;
+                if (wordEnd == wordStart) { i = p; break; }  // trailing spaces
+                if (measure(segStart, wordEnd) > maxWidth && wordStart > segStart) {
+                    out.push_back({segStart, i});  // i = start of the spaces before this word
+                    segStart = wordStart;
+                    i = wordStart;
+                    continue;
+                }
+                if (measure(segStart, wordEnd) > maxWidth && segStart == wordStart) {
+                    // Single word wider than the whole line — hard-break between chars.
+                    size_t j = wordStart + 1;
+                    while (j < wordEnd && measure(segStart, j + 1) <= maxWidth) ++j;
+                    out.push_back({segStart, j});
+                    segStart = j;
+                    i = j;
+                    continue;
+                }
+                i = wordEnd;
+            }
+            out.push_back({segStart, p});
+        }
+        lineStart = p + 1;
+    }
+    if (out.empty()) out.push_back({0, 0});
+    return out;
+}
+
+// Visual line the caret sits on. Last matching line wins, which naturally puts
+// the caret at the START of the next line on a soft-wrap boundary (both lines
+// touch at that offset) while keeping it at the END of the line before a hard
+// '\n' (the next line starts one byte later, so it doesn't match).
+static int caretVisualLine(const std::vector<VisLine>& vls, int pos) {
+    int idx = 0;
+    for (int k = 0; k < static_cast<int>(vls.size()); ++k) {
+        if (pos >= static_cast<int>(vls[k].start) && pos <= static_cast<int>(vls[k].end)) idx = k;
+        else if (pos < static_cast<int>(vls[k].start)) break;
+    }
+    return idx;
+}
+
+// ---------------------------------------------------------------------------
 // Key handling
 // ---------------------------------------------------------------------------
 
@@ -131,41 +208,56 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
     } else if (keycode == SDLK_RIGHT) {
         if (pos < static_cast<int>(val.size())) setCursorPos(pos + 1);
         r.handled = true;
-    } else if (keycode == SDLK_UP) {
-        int line, col;
-        cursorLineCol(val, pos, line, col);
-        if (line > 0) {
-            int prev = lineStart(val, line - 1);
-            setCursorPos(prev + std::min(col, lineLength(val, prev)));
-        }
-        r.handled = true;
-    } else if (keycode == SDLK_DOWN) {
-        int line, col;
-        cursorLineCol(val, pos, line, col);
-        // Find next line
-        int nextStart = -1;
-        int curLine = 0;
-        for (int i = 0; i < static_cast<int>(val.size()); ++i) {
-            if (val[i] == '\n') {
-                if (curLine == line) { nextStart = i + 1; break; }
-                ++curLine;
+    } else if (keycode == SDLK_UP || keycode == SDLK_DOWN) {
+        // Move by VISUAL line so wrapped rows behave like the browser. Fall back
+        // to hard-newline lines if the box hasn't been drawn yet (no wrap width).
+        if (wrapWidth_ > 0 && renderer_) {
+            auto vls = buildVisualLines(val, wrapWidth_, getFontRef(), renderer_);
+            int li = caretVisualLine(vls, pos);
+            int col = pos - static_cast<int>(vls[li].start);
+            int target = li + (keycode == SDLK_UP ? -1 : 1);
+            if (target >= 0 && target < static_cast<int>(vls.size())) {
+                int len = static_cast<int>(vls[target].end - vls[target].start);
+                setCursorPos(static_cast<int>(vls[target].start) + std::min(col, len));
             }
-        }
-        if (nextStart >= 0) {
-            setCursorPos(nextStart + std::min(col, lineLength(val, nextStart)));
+        } else {
+            int line, col;
+            cursorLineCol(val, pos, line, col);
+            if (keycode == SDLK_UP) {
+                if (line > 0) {
+                    int prev = lineStart(val, line - 1);
+                    setCursorPos(prev + std::min(col, lineLength(val, prev)));
+                }
+            } else {
+                int nextStart = -1, curLine = 0;
+                for (int i = 0; i < static_cast<int>(val.size()); ++i) {
+                    if (val[i] == '\n') { if (curLine == line) { nextStart = i + 1; break; } ++curLine; }
+                }
+                if (nextStart >= 0) setCursorPos(nextStart + std::min(col, lineLength(val, nextStart)));
+            }
         }
         r.handled = true;
     } else if (keycode == SDLK_HOME) {
-        // Start of current line
-        int ls = pos;
-        while (ls > 0 && val[ls - 1] != '\n') --ls;
-        setCursorPos(ls);
+        // Start of the current VISUAL line.
+        if (wrapWidth_ > 0 && renderer_) {
+            auto vls = buildVisualLines(val, wrapWidth_, getFontRef(), renderer_);
+            setCursorPos(static_cast<int>(vls[caretVisualLine(vls, pos)].start));
+        } else {
+            int ls = pos;
+            while (ls > 0 && val[ls - 1] != '\n') --ls;
+            setCursorPos(ls);
+        }
         r.handled = true;
     } else if (keycode == SDLK_END) {
-        // End of current line
-        int le = pos;
-        while (le < static_cast<int>(val.size()) && val[le] != '\n') ++le;
-        setCursorPos(le);
+        // End of the current VISUAL line.
+        if (wrapWidth_ > 0 && renderer_) {
+            auto vls = buildVisualLines(val, wrapWidth_, getFontRef(), renderer_);
+            setCursorPos(static_cast<int>(vls[caretVisualLine(vls, pos)].end));
+        } else {
+            int le = pos;
+            while (le < static_cast<int>(val.size()) && val[le] != '\n') ++le;
+            setCursorPos(le);
+        }
         r.handled = true;
     } else if (keycode == SDLK_ESCAPE) {
         setFocused(false);
@@ -219,32 +311,6 @@ void ElTextarea::getContentSize(float& w, float& h) {
     h = rows() * lineH;
 }
 
-static std::vector<std::string> splitLines(const std::string& text) {
-    std::vector<std::string> lines;
-    size_t start = 0;
-    while (start <= text.size()) {
-        size_t nl = text.find('\n', start);
-        if (nl == std::string::npos) {
-            lines.push_back(text.substr(start));
-            break;
-        }
-        lines.push_back(text.substr(start, nl - start));
-        start = nl + 1;
-        if (start == text.size()) lines.push_back("");
-    }
-    if (lines.empty()) lines.push_back("");
-    return lines;
-}
-
-static std::pair<int, int> posToLineCol(const std::string& text, int pos) {
-    int line = 0, col = 0;
-    for (int i = 0; i < pos && i < static_cast<int>(text.size()); ++i) {
-        if (text[i] == '\n') { ++line; col = 0; }
-        else { ++col; }
-    }
-    return {line, col};
-}
-
 void ElTextarea::draw(render::Renderer* renderer,
                       const htmlayout::layout::LayoutBox& box,
                       const htmlayout::css::ComputedStyle& /*style*/,
@@ -279,15 +345,20 @@ void ElTextarea::draw(render::Renderer* renderer,
 
     float contentH = h;
 
-    auto lines = splitLines(text);
+    // Soft-wrap to the content width, and remember that width so cursor
+    // navigation (up/down/home/end) wraps against exactly what this frame drew.
+    wrapWidth_ = w;
+    auto vls = buildVisualLines(text, w, fontRef, renderer_);
+    auto lineStr = [&](const VisLine& v) { return text.substr(v.start, v.end - v.start); };
 
     if (focused_) {
-        auto [cursorLine, cursorCol] = posToLineCol(text, std::clamp(cursorPos_, 0, static_cast<int>(text.size())));
+        int cpos = std::clamp(cursorPos_, 0, static_cast<int>(text.size()));
+        int cursorLine = caretVisualLine(vls, cpos);
         float cursorY = cursorLine * lineHeight;
         if (cursorY < scrollY_) scrollY_ = cursorY;
         else if (cursorY + lineHeight > scrollY_ + contentH)
             scrollY_ = cursorY + lineHeight - contentH;
-        float maxScroll = std::max(0.0f, static_cast<float>(lines.size()) * lineHeight - contentH);
+        float maxScroll = std::max(0.0f, static_cast<float>(vls.size()) * lineHeight - contentH);
         scrollY_ = std::clamp(scrollY_, 0.0f, maxScroll);
     }
 
@@ -313,24 +384,23 @@ void ElTextarea::draw(render::Renderer* renderer,
     float baseX = x;
     float baseY = y - scrollY_;
 
-    for (int i = 0; i < static_cast<int>(lines.size()); ++i) {
+    for (int i = 0; i < static_cast<int>(vls.size()); ++i) {
         float lineY = baseY + i * lineHeight;
         if (lineY + lineHeight < y) continue;
         if (lineY > y + h) break;
-        if (!lines[i].empty()) {
-            renderer_->drawText(lines[i], baseX, lineY + lm.ascent, fontRef, color);
+        if (vls[i].end > vls[i].start) {
+            renderer_->drawText(lineStr(vls[i]), baseX, lineY + lm.ascent, fontRef, color);
         }
     }
 
     if (focused_) {
-        std::string valStr = val;
-        int cpos = std::clamp(cursorPos_, 0, static_cast<int>(valStr.size()));
-        auto [cursorLine, cursorCol] = posToLineCol(valStr, cpos);
+        int cpos = std::clamp(cursorPos_, 0, static_cast<int>(val.size()));
+        int cursorLine = caretVisualLine(vls, cpos);
 
         float cursorX = baseX;
-        if (cursorCol > 0 && cursorLine < static_cast<int>(lines.size())) {
-            std::string beforeCursor = lines[cursorLine].substr(0, cursorCol);
-            auto ctm = renderer_->measureText(beforeCursor, fontRef);
+        if (cpos > static_cast<int>(vls[cursorLine].start)) {
+            auto ctm = renderer_->measureText(
+                text.substr(vls[cursorLine].start, cpos - vls[cursorLine].start), fontRef);
             cursorX += ctm.width;
         }
 

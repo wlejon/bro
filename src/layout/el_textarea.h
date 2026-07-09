@@ -49,6 +49,10 @@ private:
     int cursorPos_ = 0;
     bool focused_ = false;
     float scrollY_ = 0.0f;
+    // Content width the text last soft-wrapped against (set in draw()). Cursor
+    // navigation (up/down/home/end) needs the same wrap width the frame drew
+    // with; 0 means "not drawn yet" — nav falls back to hard-newline lines.
+    float wrapWidth_ = 0.0f;
 };
 
 } // namespace bro::layout
