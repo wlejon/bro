@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "engine/frame_presenter.h"
 #include "engine/inspector_highlight.h"
 #include "engine/overflow.h"
 
@@ -27,6 +28,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <thread>
 #include <utility>
 
 namespace bro::engine {
@@ -401,6 +403,15 @@ void Engine::recordIframeLayers() {
     for (auto& d : iframeDocs_) {
         d->cmdBuffer.clear();
         if (!d->document || !d->document->documentElement()) continue;
+        // Refresh the box from the host <iframe> element's current layout, so a
+        // resized preview re-lays-out (and re-rasterizes) at the new size instead
+        // of stretching a stale-size texture. The element was laid out by the
+        // host pass earlier this frame; contentRect is current here.
+        if (d->element) {
+            auto& lb = d->element->layoutBox();
+            if (lb.contentRect.width  > 0) d->boxW = static_cast<int>(lb.contentRect.width);
+            if (lb.contentRect.height > 0) d->boxH = static_cast<int>(lb.contentRect.height);
+        }
         // Style + lay the sub-document out at its box (mirrors layoutSystemPanels):
         // JS may have mutated its DOM since the last frame, and the text runs the
         // draw consumes are produced here.
@@ -478,6 +489,111 @@ void Engine::replayIframeLayers(render::SkiaRenderer* renderer) {
         d->fboTexture = d->surface.texture;
     }
     if (haveOrig) renderer->switchSurface(origSurface);
+}
+
+// Authoritative, synchronous capture of an <iframe> sub-document's pixels for
+// iframe.capture() (the maker-agent's "look"). Rather than sampling whatever the
+// async raster thread last produced into fboTexture — which lags a reload() by a
+// frame or two, so the first look after a write returns the OLD view — this
+// brings the sub-doc fully current on the calling (main) thread: quiesce the
+// raster worker, apply any queued reload(), re-record at the element's CURRENT
+// box, and render with the main-thread Skia renderer into a throwaway surface.
+// Result: look()==reload()+capture() returns the just-written app on the FIRST
+// call, and a resized preview is captured at its new size — no rAF timing games.
+std::vector<uint8_t> Engine::captureIframe(dom::Element* el, int& outW, int& outH) {
+    outW = 0;
+    outH = 0;
+    if (!el || !gl_) return {};
+
+    auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
+    if (!skia || !skia->grContext() || !recordingRenderer_ || !drawTraversal_) {
+        // No main-thread GPU Skia (e.g. --no-gpu CPU renderer): fall back to the
+        // last raster-produced texture, if any.
+        IframeDoc* d = iframeDocForElement(el);
+        if (!d || d->fboTexture == 0 || d->surfW <= 0 || d->surfH <= 0) return {};
+        GLuint fbo = 0;
+        glGenFramebuffers(1, &fbo);
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, d->fboTexture, 0);
+        std::vector<uint8_t> px(static_cast<size_t>(d->surfW) * d->surfH * 4);
+        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+            glReadPixels(0, 0, d->surfW, d->surfH, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+        else
+            px.clear();
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glDeleteFramebuffers(1, &fbo);
+        if (px.empty()) return {};
+        outW = d->surfW;
+        outH = d->surfH;
+        return px;
+    }
+
+    // Wait until the raster worker is neither Requested nor Busy, so it is not
+    // mid-replay reading iframeDocs_ / cmdBuffer while we mutate them below. We
+    // deliberately do NOT claim a ResultReady fence — that belongs to the frame
+    // loop's consumeIfReady(); a finished-but-unclaimed worker has already
+    // stopped touching our state, which is all we need.
+    if (framePresenter_)
+        while (framePresenter_->isRasterBusyOrRequested())
+            std::this_thread::yield();
+
+    processPendingIframeReloads();
+    recordIframeLayers();
+
+    IframeDoc* d = iframeDocForElement(el);
+    if (!d || d->cmdBuffer.commandCount() == 0) return {};
+    int w = std::max(1, d->boxW), h = std::max(1, d->boxH);
+
+    auto* grCtx = skia->grContext();
+    grCtx->resetContext();
+    render::SkiaRenderer::GPUSurface surf = skia->createGPUSurface(w, h);
+    if (!surf.surface) { grCtx->resetContext(); return {}; }
+    auto prev = skia->switchSurface(surf.surface);
+    if (auto* c = skia->getCanvas()) c->clear(SK_ColorTRANSPARENT);
+
+    render::CommandReplayer replayer(skia);
+    replayer.setBlitCanvasInlineHandler(
+        [&](void* scenePtr, float x, float y, float ww, float hh) {
+            auto* scene = static_cast<canvas::CanvasScene*>(scenePtr);
+            if (!scene || ww <= 0 || hh <= 0) return;
+            scene->setGrContext(grCtx);
+            scene->flushStaged();
+            auto* src = scene->surface();
+            if (!src) return;
+            auto img = src->makeImageSnapshot();
+            if (!img) return;
+            auto* c = skia->getCanvas();
+            if (!c) return;
+            grCtx->resetContext();  // canvas ensureSurface did raw GL; resync
+            c->drawImageRect(img, SkRect::MakeXYWH(x, y, ww, hh),
+                             SkSamplingOptions(SkFilterMode::kLinear));
+            scene->clearDirty();
+        });
+    replayer.replay(d->cmdBuffer);
+    grCtx->flush(surf.surface.get());
+
+    std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4);
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, surf.texture, 0);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
+        pixels.clear();
+    else
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &fbo);
+
+    skia->switchSurface(prev);
+    skia->destroyGPUSurface(surf);
+    grCtx->resetContext();
+
+    if (pixels.empty()) return {};
+    outW = w;
+    outH = h;
+    return pixels;
 }
 
 void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO,
