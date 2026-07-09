@@ -30,6 +30,11 @@ public:
     /// Fire all pending requestAnimationFrame callbacks. Called once per frame.
     void fireAnimationFrames(double timestampMs);
 
+    /// True if any requestAnimationFrame callbacks are queued for the next
+    /// frame (i.e. this context is animating). Iframe sub-documents use this to
+    /// keep the host UI dirty so an animating preview keeps getting recorded.
+    bool hasPendingAnimationFrames() const { return !rafPending_.empty(); }
+
     /// Cancel all pending timers and rAF callbacks (called on teardown).
     void clearAll(JSContext* ctx);
 

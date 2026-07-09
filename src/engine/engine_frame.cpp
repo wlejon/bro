@@ -409,8 +409,12 @@ void Engine::run() {
 
         // 2c. Tick system panel timers
         tickSystemPanels(now);
-        // Tick iframe sub-document timers + requestAnimationFrame.
-        tickIframes(now);
+        // Tick iframe sub-document timers + requestAnimationFrame. Fold any
+        // sub-doc activity (reload, DOM change, animation) into uiDirty_ like
+        // systemDirty_ below — it's the only route iframe rendering has to the
+        // raster thread; without it the preview never records (blank / null
+        // capture).
+        if (tickIframes(now)) uiDirty_ = true;
         // System panels (splash animation, menu, perf, settings) share the
         // raster thread, signaled via uiDirty_. Their own DOM edits never
         // touch the app document, so propagate systemDirty_ so the raster

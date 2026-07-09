@@ -579,7 +579,11 @@ private:
     void createIframeDoc(dom::Element* el, const std::string& srcAttr);
     void teardownIframeDoc(IframeDoc* doc);
     void destroyAllIframes();
-    void tickIframes(double nowMs);
+    // Tick each iframe sub-document's timers + rAF. Returns true if any sub-doc
+    // needs (re)recording this frame — freshly reloaded, DOM-mutated, or
+    // animating — so the caller can fold that into uiDirty_ (iframe activity has
+    // no other route to the raster thread).
+    bool tickIframes(double nowMs);
     IframeDoc* iframeDocById(uint64_t id);
     IframeDoc* iframeDocForElement(const dom::Element* el);
     // Record each iframe sub-document's paint into its own command buffer (main

@@ -281,15 +281,30 @@ void Engine::reloadIframe(dom::Element* el) {
     if (!src.empty()) createIframeDoc(el, src);
 }
 
-// Advance each iframe sub-document's timers + requestAnimationFrame callbacks.
-void Engine::tickIframes(double nowMs) {
-    if (iframeDocs_.empty()) return;
+// Advance each iframe sub-document's timers + requestAnimationFrame callbacks,
+// and report whether any sub-document needs (re)recording this frame. Iframe
+// activity has no other path to uiDirty_ (the host document may be idle while a
+// preview animates or was just reloaded), so surface it here — otherwise the
+// compositor never records the sub-doc and its fboTexture stays 0, giving a
+// blank preview and a null iframe.capture().
+bool Engine::tickIframes(double nowMs) {
+    if (iframeDocs_.empty()) return false;
+    bool active = false;
     for (auto& d : iframeDocs_) {
-        if (!d->timers) continue;
-        d->timers->tick(nowMs);
-        d->timers->fireAnimationFrames(nowMs);
+        if (d->timers) {
+            d->timers->tick(nowMs);
+            d->timers->fireAnimationFrames(nowMs);
+        }
+        // Never recorded / just reloaded (buffer is cleared+refilled per record,
+        // so 0 means no record has landed yet for this sub-doc).
+        if (d->cmdBuffer.commandCount() == 0) active = true;
+        // DOM changed since the last resolveStyles.
+        else if (d->document && d->document->isDirty()) active = true;
+        // Animating: a rAF callback rescheduled itself for the next frame.
+        else if (d->timers && d->timers->hasPendingAnimationFrames()) active = true;
     }
     jsRuntime_->executePendingJobs();
+    return active;
 }
 
 // Tear down one iframe sub-document. Destroy order mirrors destroySystemPanels:
