@@ -1141,6 +1141,14 @@ SkiaRenderer::GPUSurface SkiaRenderer::createGPUSurface(int width, int height) {
         kRGBA_8888_SkColorType,
         SkColorSpace::MakeSRGB(), nullptr);
 
+    // The raw GL above (texture + FBO gen/bind) mutated GL state behind Ganesh's
+    // back. When createGPUSurface runs mid-frame (e.g. an iframe or system-panel
+    // surface allocated after the main HTML pass), Ganesh's cached GL state is
+    // now stale — solid fills survive it, but glyph-atlas texture sampling reads
+    // the wrong bindings and text silently paints nothing. Resync so any draw
+    // into the new surface (text included) is correct regardless of when we ran.
+    grContext_->resetContext();
+
     return result;
 }
 
