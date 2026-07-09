@@ -172,6 +172,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/menu-api.js` | `bro.menu` — native menu bar (set/addItem/updateItem, item event) |
 | `docs/gizmo-api.js` | `bro.gizmo` — 3D transform handles (translate/rotate/scale) for scene editing |
 | `docs/video-api.js` | `VideoEncoder` (WebM/VP9 software) + `GifEncoder` (GIF89a, median-cut palette) — RGBA in, file out |
+| `docs/iframe-api.js` | `<iframe src=dir>` — embedded isolated sub-document (own JS realm/DOM/timers/canvas), rendered at the element box; `src` get/set, `reload()`, `load` event, mouse input routed into the sub-doc |
 
 Other docs: `docs/headless.md` (headless mode), `docs/settings.md` (settings system, including action binding/rebinding), `docs/inspect.md` (DOM inspector that's very useful in headless), `docs/system-panels.md` (system panels: the `__bro` bridge, panel authoring, `PanelLayout`), `docs/multi-repo-workflow.md` (sibling library development), `docs/coverage.md` (OpenCppCoverage line-coverage reports, Windows-only — `pwsh scripts/coverage.ps1` in any repo).
 
