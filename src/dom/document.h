@@ -103,8 +103,11 @@ public:
     bool isDirty() const { return dirty_; }
     void clearDirty() { dirty_ = false; }
 
-    // Structure dirty — DOM nodes added/removed, render tree needs rebuild
-    void markStructureDirty() { structureDirty_ = true; dirty_ = true; }
+    // Structure dirty — DOM nodes added/removed, render tree needs rebuild.
+    // Also arms a style-element reconcile: a subtree that just changed may have
+    // brought in (or repopulated) a <style>, so resolveStyles re-scans for any
+    // whose CSS isn't in the cascade yet.
+    void markStructureDirty() { structureDirty_ = true; dirty_ = true; styleElsDirty_ = true; }
     bool isStructureDirty() const { return structureDirty_; }
     void clearStructureDirty() { structureDirty_ = false; }
 
@@ -193,6 +196,11 @@ private:
     void buildTreeFromGumbo(::GumboNode* node, Element* parentElem);
     void collectElements(Node* node, std::vector<Element*>& out);
     void resolveStylesRecursive(Element* elem, const htmlayout::css::ComputedStyle* parentStyle, bool force = false);
+    // Add the CSS of any connected <style> element whose rules aren't in the
+    // cascade yet (a runtime document.head.appendChild(styleEl)). Incremental —
+    // it never clears the cascade, so UA / linked / shadow-scoped sheets and
+    // @keyframes/@font-face survive. Runs from resolveStyles when armed.
+    void reconcileStyleElements();
 
     // Generated content (::before / ::after) pass. Runs after style resolution
     // in full document order, threading CSS counter scopes and quote-nesting
@@ -221,6 +229,7 @@ private:
     Element* focusedElement_ = nullptr;
     bool dirty_ = false;
     bool structureDirty_ = false;
+    bool styleElsDirty_ = false;  // a <style> may need adding to the cascade
     std::string basePath_;
     std::unordered_map<std::string, Element*> idMap_;
     std::unordered_map<Node*, std::unique_ptr<Node>> ownedNodes_;

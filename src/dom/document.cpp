@@ -197,10 +197,14 @@ void Document::parse(const std::string& html, const std::string& authorCss,
                 std::string css = elem->textContent();
                 if (!css.empty()) {
                     cascade_.addStylesheet(htmlayout::css::parse(css));
+                    elem->setStyleSheetAdded(true);
                 }
             }
         }
     }
+    // The parse pass above added every <style> present in the source, so no
+    // reconcile is owed until the DOM next changes.
+    styleElsDirty_ = false;
 
     gumbo_destroy_output(&kGumboDefaultOptions, output);
     dirty_ = false;
@@ -293,10 +297,31 @@ void Document::setActiveElement(Element* el) {
 
 void Document::resolveStyles() {
     if (!documentElement_) return;
+    if (styleElsDirty_) reconcileStyleElements();
     layout::ElementRefAdapter::clearCache();
     resolveStylesRecursive(documentElement_, nullptr);
     resolveGeneratedContent();
     layout::ElementRefAdapter::clearCache();
+}
+
+// A <style> inserted at runtime (createElement("style") + head.appendChild, the
+// CSS-in-JS pattern) never went through parse(), so its rules aren't in the
+// cascade. Scan the connected tree for any <style> not yet added and add it.
+// Incremental (no cascade clear) to preserve UA / linked / shadow-scoped sheets
+// and @keyframes/@font-face. A <style> whose text is still empty is left for a
+// later pass (its content may be assigned after insertion).
+void Document::reconcileStyleElements() {
+    styleElsDirty_ = false;
+    if (!documentElement_) return;
+    std::vector<Element*> all;
+    collectElements(root_, all);
+    for (auto* e : all) {
+        if (e->tagName() != "STYLE" || e->styleSheetAdded()) continue;
+        std::string css = e->textContent();
+        if (css.empty()) continue;
+        cascade_.addStylesheet(htmlayout::css::parse(css));
+        e->setStyleSheetAdded(true);
+    }
 }
 
 void Document::resolveStylesRecursive(Element* elem,
@@ -1106,6 +1131,9 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
             std::string css = elem->textContent();
             if (!css.empty()) {
                 cascade_.addStylesheet(htmlayout::css::parse(css));
+                // Mark added so the post-mutation reconcile (armed by the
+                // markStructureDirty below) doesn't add these rules a second time.
+                elem->setStyleSheetAdded(true);
             }
         }
         std::string elemId = elem->id();

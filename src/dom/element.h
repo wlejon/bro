@@ -191,6 +191,13 @@ public:
     bool needsScrollToBottom() const { return scrollToBottom_; }
     void setScrollToBottom(bool v);
 
+    // For a <style> element: whether its CSS has been added to the document
+    // cascade yet. Lets the document add a dynamically-inserted <style>'s rules
+    // exactly once. The flag lives on the element so it can't outlive it (no
+    // stale pointers) and survives detach/re-attach (rules aren't re-added).
+    bool styleSheetAdded() const { return styleSheetAdded_; }
+    void setStyleSheetAdded(bool v) { styleSheetAdded_ = v; }
+
     // Replaced element controls
     layout::ElInput* inputControl() const { return inputControl_.get(); }
     layout::ElTextarea* textareaControl() const { return textareaControl_.get(); }
@@ -256,6 +263,7 @@ private:
     ShadowRoot* shadowRoot_ = nullptr;
     bool dirty_ = false;
     bool scrollToBottom_ = false;
+    bool styleSheetAdded_ = false;
     float scrollTop_ = 0.0f;
     uint32_t magic_ = 0xB00E;
 
