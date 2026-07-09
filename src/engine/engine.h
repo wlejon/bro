@@ -203,6 +203,11 @@ public:
     /// Access the renderer.
     render::Renderer* renderer() const { return renderer_.get(); }
 
+    /// Reload an <iframe> element's sub-document from its current src attribute
+    /// (tear down + rebuild). Public: driven from JS by iframe.reload() and by
+    /// assigning iframe.src. Fires a "load" event on completion.
+    void reloadIframe(dom::Element* el);
+
     /// Access the JS runtime.
     js::Runtime* jsRuntime() const { return jsRuntime_.get(); }
 

@@ -900,6 +900,24 @@ static JSValue js_element_video_set_src(JSContext* ctx, JSValueConst this_val,
     if (auto* v = el->videoControl()) {
         if (!s.empty()) v->load(s);
     }
+    // <iframe src=...>: assigning src (re)loads the embedded sub-document.
+    if (el->tagName() == "IFRAME" || el->tagName() == "iframe") {
+        auto it = s_ctx_engines.find(ctx);
+        if (it != s_ctx_engines.end() && it->second)
+            static_cast<bro::engine::Engine*>(it->second)->reloadIframe(el);
+    }
+    return JS_UNDEFINED;
+}
+
+// iframe.reload() — rebuild the embedded sub-document from its current src.
+static JSValue js_element_iframe_reload(JSContext* ctx, JSValueConst this_val,
+                                        int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    if (el->tagName() != "IFRAME" && el->tagName() != "iframe") return JS_UNDEFINED;
+    auto it = s_ctx_engines.find(ctx);
+    if (it != s_ctx_engines.end() && it->second)
+        static_cast<bro::engine::Engine*>(it->second)->reloadIframe(el);
     return JS_UNDEFINED;
 }
 
@@ -3584,6 +3602,8 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("pause", 0, js_element_video_pause),
     JS_CFUNC_DEF("load",  0, js_element_video_load),
     JS_CFUNC_DEF("canPlayType", 1, js_element_video_canPlayType),
+    // Iframe control
+    JS_CFUNC_DEF("reload", 0, js_element_iframe_reload),
     // Form control properties
     JS_CGETSET_DEF("value",       js_element_get_value,       js_element_set_value),
     JS_CGETSET_DEF("checked",     js_element_get_checked,     js_element_set_checked),

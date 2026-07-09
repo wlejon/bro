@@ -18,8 +18,10 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/node.h"
+#include "dom/event.h"
 #include "dom/element_geometry.h"
 #include "js/runtime.h"
+#include "js/event_dispatch.h"
 #include "js/timers.h"
 #include "js/dom_bindings.h"
 #include "js/canvas_bindings.h"
@@ -219,6 +221,29 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
     LOG_INFO("iframe: loaded sub-document '%s' (%dx%d, id=%llu)",
              appDir.c_str(), dp->boxW, dp->boxH,
              static_cast<unsigned long long>(dp->id));
+
+    // Fire a non-bubbling "load" event on the host-side <iframe> element once the
+    // sub-document is parsed, scripted, and laid out — the signal host code waits
+    // on before it looks at or drives the embedded app. Dispatched on the host
+    // document's context (the element lives in the host realm).
+    dom::Event loadEvent("load", /*bubbles=*/false, /*cancelable=*/false);
+    js::dispatchDomEvent(jsRuntime_->getContext(), el, loadEvent);
+}
+
+// Reload an <iframe>'s sub-document from its current src attribute: tear the old
+// sub-document down and build a fresh one. This is the create→look→refine hook —
+// host code rewrites the embedded app's files, then reload() to re-render them.
+void Engine::reloadIframe(dom::Element* el) {
+    if (!el) return;
+    for (auto it = iframeDocs_.begin(); it != iframeDocs_.end(); ++it) {
+        if ((*it)->element == el) {
+            teardownIframeDoc(it->get());
+            iframeDocs_.erase(it);
+            break;
+        }
+    }
+    std::string src = el->getAttribute("src");
+    if (!src.empty()) createIframeDoc(el, src);
 }
 
 // Advance each iframe sub-document's timers + requestAnimationFrame callbacks.
