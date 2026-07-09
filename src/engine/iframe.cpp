@@ -265,20 +265,66 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
     js::dispatchDomEvent(jsRuntime_->getContext(), el, loadEvent);
 }
 
-// Reload an <iframe>'s sub-document from its current src attribute: tear the old
-// sub-document down and build a fresh one. This is the create→look→refine hook —
-// host code rewrites the embedded app's files, then reload() to re-render them.
+// Request an <iframe>'s sub-document be reloaded from its current src. This is
+// the create→look→refine hook — host code rewrites the embedded app's files,
+// then reload() to re-render them. Called from JS (iframe.reload() / src=), so
+// it only QUEUES: tearing the sub-document down here would free JS/DOM/canvas
+// state the raster thread may be mid-replay on (replayIframeLayers), a
+// use-after-free. processPendingIframeReloads() does the real work at the
+// raster-idle point in the frame loop.
 void Engine::reloadIframe(dom::Element* el) {
     if (!el) return;
-    for (auto it = iframeDocs_.begin(); it != iframeDocs_.end(); ++it) {
-        if ((*it)->element == el) {
-            teardownIframeDoc(it->get());
-            iframeDocs_.erase(it);
-            break;
+    if (std::find(pendingIframeReloads_.begin(), pendingIframeReloads_.end(), el)
+        == pendingIframeReloads_.end())
+        pendingIframeReloads_.push_back(el);
+    // Ensure a frame runs and reaches the isRasterIdle block that drains the
+    // queue (the host document may otherwise be idle).
+    uiDirty_ = true;
+}
+
+// Drain queued iframe reloads: tear each sub-document down and rebuild it from
+// src. MUST run only at the raster-idle point in the frame loop (next to
+// recordIframeLayers) — it mutates iframeDocs_ and frees sub-doc state.
+void Engine::processPendingIframeReloads() {
+    if (pendingIframeReloads_.empty()) return;
+    std::vector<dom::Element*> reloads;
+    reloads.swap(pendingIframeReloads_);
+    for (dom::Element* el : reloads) {
+        if (!el) continue;
+        std::string src = el->getAttribute("src");
+        // Salvage the existing GPU surface across the reload: it is owned by the
+        // raster renderer's GL context, so recreating it would leak the old one
+        // (and destroying it here would be the wrong context). Hand it to the
+        // rebuilt sub-doc; replayIframeLayers resizes it if the box changed, and
+        // keeping its fboTexture means the preview shows the old frame until the
+        // new one paints instead of flashing blank.
+        render::SkiaRenderer::GPUSurface salvaged;
+        int salvagedW = 0, salvagedH = 0;
+        unsigned int salvagedTex = 0;
+        bool haveSalvage = false;
+        for (auto it = iframeDocs_.begin(); it != iframeDocs_.end(); ++it) {
+            if ((*it)->element == el) {
+                salvaged = std::move((*it)->surface);
+                salvagedW = (*it)->surfW;
+                salvagedH = (*it)->surfH;
+                salvagedTex = (*it)->fboTexture;
+                haveSalvage = true;
+                teardownIframeDoc(it->get());
+                iframeDocs_.erase(it);
+                break;
+            }
+        }
+        if (src.empty()) continue;  // no src: nothing to rebuild
+        createIframeDoc(el, src);
+        if (haveSalvage) {
+            if (IframeDoc* nd = iframeDocForElement(el)) {
+                nd->surface = std::move(salvaged);
+                nd->surfW = salvagedW;
+                nd->surfH = salvagedH;
+                nd->fboTexture = salvagedTex;
+            }
         }
     }
-    std::string src = el->getAttribute("src");
-    if (!src.empty()) createIframeDoc(el, src);
 }
 
 // Advance each iframe sub-document's timers + requestAnimationFrame callbacks,

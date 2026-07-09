@@ -203,9 +203,12 @@ public:
     /// Access the renderer.
     render::Renderer* renderer() const { return renderer_.get(); }
 
-    /// Reload an <iframe> element's sub-document from its current src attribute
-    /// (tear down + rebuild). Public: driven from JS by iframe.reload() and by
-    /// assigning iframe.src. Fires a "load" event on completion.
+    /// Request an <iframe> element's sub-document be reloaded from its current
+    /// src attribute (tear down + rebuild). Public: driven from JS by
+    /// iframe.reload() and by assigning iframe.src. The actual teardown/rebuild
+    /// is DEFERRED to the raster-idle point in the frame loop (see
+    /// processPendingIframeReloads) — doing it synchronously here would free a
+    /// sub-doc the raster thread may be mid-replay on. Fires "load" on rebuild.
     void reloadIframe(dom::Element* el);
 
     /// Read back the pixels an <iframe> sub-document last rendered into its GPU
@@ -590,6 +593,11 @@ private:
     // thread), then replay each into a box-sized GPU surface → fboTexture
     // (raster thread). The app compositor draws those textures via UILayer::
     // Iframe breaks emitted while recording the app document.
+    // Process queued iframe.reload() requests: tear each sub-doc down and
+    // rebuild it from src. MUST be called only at the raster-idle point in the
+    // frame loop (alongside recordIframeLayers), never from JS — it mutates
+    // iframeDocs_ and frees sub-doc state the raster thread replays.
+    void processPendingIframeReloads();
     void recordIframeLayers();
     void replayIframeLayers(render::SkiaRenderer* renderer);
     // Route a host mouse event that landed on an <iframe> element into its
@@ -857,6 +865,12 @@ private:
     // referenced from dom::Element::iframeDoc()).
     std::vector<std::unique_ptr<IframeDoc>> iframeDocs_;
     uint64_t nextIframeId_ = 1;
+    // <iframe> elements whose sub-document JS requested a reload this frame.
+    // reloadIframe() only queues here; the actual teardown+rebuild (which frees
+    // a sub-doc's JS/DOM/canvas scenes the raster thread may still be replaying)
+    // runs in processPendingIframeReloads() at the raster-idle point in the
+    // frame loop — never on the JS thread mid-render. Non-owning element ptrs.
+    std::vector<dom::Element*> pendingIframeReloads_;
     bool systemPerfVisible_ = false;
     bool systemSettingsVisible_ = false;
     bool splashVisible_ = false;

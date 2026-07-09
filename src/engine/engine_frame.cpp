@@ -719,12 +719,16 @@ void Engine::run() {
                                       - rsnap.insetBottom;
                 recordSystemPanelLayers(backBuf.systemCommands,
                                         rsnap.vpWidth, rsnap.vpHeight);
-                // Record each iframe sub-document into its own per-doc command
-                // buffer (main thread). The raster thread replays them into box-
-                // sized surfaces; the app compositor draws those textures at the
-                // UILayer::Iframe breaks recorded in the app pass above. Safe to
-                // touch the per-doc buffers here: this whole record block only
-                // runs when the raster thread is idle (isRasterIdle above).
+                // Drain queued iframe.reload() requests here, where the raster
+                // thread is idle — tearing a sub-doc down while it is being
+                // replayed would be a use-after-free. Then record each iframe
+                // sub-document into its own per-doc command buffer (main thread).
+                // The raster thread replays them into box-sized surfaces; the app
+                // compositor draws those textures at the UILayer::Iframe breaks
+                // recorded in the app pass above. Safe to touch the per-doc
+                // buffers here: this whole record block only runs when the raster
+                // thread is idle (isRasterIdle above).
+                processPendingIframeReloads();
                 recordIframeLayers();
 
                 framePresenter_->signalRender(rsnap);
