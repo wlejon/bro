@@ -194,6 +194,11 @@ void Engine::rasterThreadFunc() {
                                 snap.vpWidth, snap.vpHeight,
                                 backBuf.systemLayers);
 
+        // Replay each iframe sub-document into its box-sized surface (raster
+        // thread) → IframeDoc::fboTexture, which the compositor samples for the
+        // UILayer::Iframe quads recorded during the app pass.
+        replayIframeLayers(rasterRenderer.get());
+
         rasterRenderer->endFrame();
 
         // GL fence — guarantees all GPU commands are visible before the main
