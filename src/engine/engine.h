@@ -512,6 +512,7 @@ private:
         std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes;
         std::unique_ptr<dom::Document> document;
         MouseDispatchState mouseState;    // per-doc click/dblclick tracking
+        dom::Element* hoveredElement = nullptr; // sub-doc :hover target (non-owning)
         int boxW = 0, boxH = 0;           // last content-box size laid out
         // Render target: the sub-document paints into cmdBuffer (main thread),
         // which is replayed into `surface` (raster thread) → fboTexture, which
@@ -577,6 +578,18 @@ private:
     // Iframe breaks emitted while recording the app document.
     void recordIframeLayers();
     void replayIframeLayers(render::SkiaRenderer* renderer);
+    // Route a host mouse event that landed on an <iframe> element into its
+    // sub-document: translate document-space coords to the sub-doc's own content
+    // space, hit-test the sub-doc, and dispatch through the shared per-doc mouse
+    // helpers against the iframe's isolated document/JS/mouseState. Return true
+    // when the point lies inside the iframe box (event consumed).
+    dom::Element* iframeHitTest(IframeDoc* dp, float localX, float localY);
+    bool iframeHandleMouseDown(dom::Element* frameEl, float docX, float docY,
+                               int button, float movementX, float movementY, int mod);
+    bool iframeHandleMouseUp(dom::Element* frameEl, float docX, float docY,
+                             int button, float movementX, float movementY, int mod);
+    bool iframeHandleMouseMove(dom::Element* frameEl, float docX, float docY,
+                               float movementX, float movementY, int mod);
     bool systemHandleMouseMove(float x, float y);
     /// Wheel scrolling on a system panel's overflow element. Returns true if
     /// some element was scrolled; caller should skip app-level wheel handling.

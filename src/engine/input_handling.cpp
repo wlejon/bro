@@ -13,6 +13,7 @@
 #include "scene/html_node.h"
 #endif
 #include "layout/layout_node_adapter.h"
+#include "layout/element_ref_adapter.h"
 #include "layout/box.h"
 
 #include "platform/sdl_window.h"
@@ -403,6 +404,99 @@ float Engine::overlayMouseY(float y) const {
     return y;
 }
 
+// ---------------------------------------------------------------------------
+// Iframe input routing — a host mouse event over an <iframe> element is
+// translated into the sub-document's own content space and dispatched through
+// the same per-doc helpers the app and system panels use, against the iframe's
+// isolated document/JS context/mouse state. Mirrors systemHandleMouse*.
+// ---------------------------------------------------------------------------
+
+dom::Element* Engine::iframeHitTest(IframeDoc* dp, float lx, float ly) {
+    if (!dp || !dp->document) return nullptr;
+    auto* root = dp->document->layoutRoot();
+    if (!root) return nullptr;
+    auto* node = htmlayout::layout::hitTest(root, lx, ly);
+    auto* hit = layout::LayoutNodeAdapter::elementFor(node);
+    if (!hit || hit == dp->document->documentElement()) return nullptr;
+    return hit;
+}
+
+bool Engine::iframeHandleMouseDown(dom::Element* frameEl, float docX, float docY,
+                                   int button, float movementX, float movementY, int mod) {
+    if (!frameEl || !frameEl->iframeDoc()) return false;
+    auto* dp = static_cast<IframeDoc*>(frameEl->iframeDoc());
+    if (!dp->document || !dp->jsCtx) return false;
+    dom::AbsoluteRect box = dom::absoluteContentBox(frameEl);
+    float lx = docX - box.x, ly = docY - box.y;
+    dom::Element* sub = iframeHitTest(dp, lx, ly);
+    if (sub) {
+        dom::MouseEvent evt("mousedown");
+        populateMouseEvent(evt, lx, ly, button, pressedButtons_, movementX, movementY,
+                           0.0f, mod, 0.0f);
+        applyMouseOffset(evt, sub);
+        ControlContext cctx{dp->document.get(), dp->jsCtx, renderer_.get(), window_.get(),
+                            &uiDirty_, &overlayMgr_, OverlayContext::App, dp->boxW, dp->boxH};
+        dispatchDocMousePress(cctx, dp->mouseState, sub, evt, lx, ly);
+        if (jsRuntime_) jsRuntime_->executePendingJobs();
+    }
+    return true;  // the point is inside the iframe box — consume it
+}
+
+bool Engine::iframeHandleMouseUp(dom::Element* frameEl, float docX, float docY,
+                                 int button, float movementX, float movementY, int mod) {
+    if (!frameEl || !frameEl->iframeDoc()) return false;
+    auto* dp = static_cast<IframeDoc*>(frameEl->iframeDoc());
+    if (!dp->document || !dp->jsCtx) return false;
+    dom::AbsoluteRect box = dom::absoluteContentBox(frameEl);
+    float lx = docX - box.x, ly = docY - box.y;
+    dom::Element* sub = iframeHitTest(dp, lx, ly);
+    if (sub) {
+        dom::MouseEvent upEvt("mouseup");
+        populateMouseEvent(upEvt, lx, ly, button, pressedButtons_, movementX, movementY,
+                           0.0f, mod, 0.0f);
+        applyMouseOffset(upEvt, sub);
+        ControlContext cctx{dp->document.get(), dp->jsCtx, renderer_.get(), window_.get(),
+                            &uiDirty_, &overlayMgr_, OverlayContext::App, dp->boxW, dp->boxH};
+        dispatchDocMouseRelease(cctx, dp->mouseState, sub, upEvt,
+                                lx, ly, button, pressedButtons_, mod,
+                                movementX, movementY, lx, ly,
+                                util::currentTimeMs(),
+                                inputConfig_.doubleClickThresholdMs,
+                                inputConfig_.doubleClickDistancePx);
+        if (jsRuntime_) jsRuntime_->executePendingJobs();
+    }
+    return true;
+}
+
+bool Engine::iframeHandleMouseMove(dom::Element* frameEl, float docX, float docY,
+                                   float movementX, float movementY, int mod) {
+    if (!frameEl || !frameEl->iframeDoc()) return false;
+    auto* dp = static_cast<IframeDoc*>(frameEl->iframeDoc());
+    if (!dp->document || !dp->jsCtx) return false;
+    dom::AbsoluteRect box = dom::absoluteContentBox(frameEl);
+    float lx = docX - box.x, ly = docY - box.y;
+    dom::Element* sub = iframeHitTest(dp, lx, ly);
+
+    // :hover restyle — mark the old and new targets dirty so the sub-doc's next
+    // resolveStyles re-resolves the pseudo-class change. recordIframeLayers points
+    // ElementRefAdapter at dp->hoveredElement before resolving the sub-doc.
+    if (sub != dp->hoveredElement) {
+        if (dp->hoveredElement) dp->hoveredElement->markDirty();
+        if (sub) sub->markDirty();
+        dp->hoveredElement = sub;
+        uiDirty_ = true;
+    }
+    if (sub) {
+        dom::MouseEvent moveEvt("mousemove");
+        populateMouseEvent(moveEvt, lx, ly, 0, pressedButtons_, movementX, movementY,
+                           0.0f, mod, 0.0f);
+        applyMouseOffset(moveEvt, sub);
+        js::dispatchDomEvent(dp->jsCtx, sub, moveEvt);
+        if (jsRuntime_) jsRuntime_->executePendingJobs();
+    }
+    return true;
+}
+
 void Engine::handleMouseDown(float x, float y, int button) {
     // x, y = raw mouse position (window space).
     // Coordinate spaces, and the single boundary between them:
@@ -553,6 +647,14 @@ void Engine::handleMouseDown(float x, float y, int button) {
                           x - prevMouseX, y - prevMouseY, scrollY_, mod, static_cast<float>(contentTop()));
 
         dom::Element* target = hitTest(docX, docY);
+        // A press on an <iframe> is routed into its sub-document, not treated as
+        // a click on the frame element itself.
+        if (target && target->iframeDoc() &&
+            iframeHandleMouseDown(target, docX, docY, button,
+                                  x - prevMouseX, y - prevMouseY, mod)) {
+            markAppBaseDirty();
+            return;
+        }
         if (target) applyMouseOffset(evt, target);
 
         // World-space HtmlNode hit test: if the click landed on a canvas
@@ -757,6 +859,13 @@ void Engine::handleMouseUp(float x, float y, int button) {
         float movY = y - prevMouseY;
         float clientY = y - ct;
         float pageY = clientY + scrollY_;
+
+        // Release over an <iframe> routes into its sub-document (mouseup + click).
+        if (target && target->iframeDoc() &&
+            iframeHandleMouseUp(target, docX, docY, button, movX, movY, mod)) {
+            markAppBaseDirty();
+            return;
+        }
 
         // Mirror the mousedown HtmlNode routing on release: if the press
         // landed on a HtmlNode and the release ray-casts to the same node,
@@ -1068,9 +1177,27 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     if (document_ && !overlayActive) {
         dom::Element* target = hitTest(docX, docY);
 
+        // Over an <iframe>: route the move into its sub-document (sub-doc :hover
+        // + mousemove). Host-side hover bookkeeping below still runs so the frame
+        // element gets enter/leave and the sub-doc hover is cleared on exit.
+        if (target && target->iframeDoc()) {
+            iframeHandleMouseMove(target, docX, docY, xrel, yrel,
+                                  safeGetModState(window_.get(), heldModifierMask_));
+        }
+
         // Dispatch mouseover/mouseout when element changes (bubbling versions)
         dom::Element* prevHover = hoveredElement_.get();
         if (target != prevHover) {
+            // Leaving an <iframe>: drop the sub-document's :hover so it doesn't
+            // stay stuck highlighted after the pointer exits the frame.
+            if (prevHover && prevHover->iframeDoc()) {
+                auto* pdp = static_cast<IframeDoc*>(prevHover->iframeDoc());
+                if (pdp->hoveredElement) {
+                    pdp->hoveredElement->markDirty();
+                    pdp->hoveredElement = nullptr;
+                    uiDirty_ = true;
+                }
+            }
             int mod = safeGetModState(window_.get(), heldModifierMask_);
 
             // mouseout on previous element (bubbles)

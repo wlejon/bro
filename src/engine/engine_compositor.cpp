@@ -7,6 +7,7 @@
 #include "dom/element.h"
 #include "layout/box.h"
 #include "layout/draw_traversal.h"
+#include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
 #include "platform/sdl_window.h"
 #include "render/command_buffer.h"
@@ -403,6 +404,11 @@ void Engine::recordIframeLayers() {
         // Style + lay the sub-document out at its box (mirrors layoutSystemPanels):
         // JS may have mutated its DOM since the last frame, and the text runs the
         // draw consumes are produced here.
+        // Point the style adapter's hover/active state at THIS sub-document's
+        // targets before resolving it (the thread-local was last set for the
+        // host doc). :hover in the sub-doc resolves against its own hovered
+        // element; restored to the host's on the next host resolveStyles.
+        layout::ElementRefAdapter::setHoveredElement(d->hoveredElement);
         d->document->resolveStyles();
         d->document->performLayout(static_cast<float>(d->boxW),
                                    static_cast<float>(d->boxH), *textMetrics_);
