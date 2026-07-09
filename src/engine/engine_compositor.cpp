@@ -406,6 +406,13 @@ void Engine::recordIframeLayers() {
         d->document->resolveStyles();
         d->document->performLayout(static_cast<float>(d->boxW),
                                    static_cast<float>(d->boxH), *textMetrics_);
+        // Hand this frame's <canvas> draw calls (recorded into each scene's
+        // command list by JS on the main thread) to the scene's staged buffer,
+        // so the raster-side inline blit (replayIframeLayers) can replay them.
+        // Mirrors stageSystemPanelCanvases for panels.
+        for (auto& scene : d->canvasScenes) {
+            if (scene) scene->stageCommandsForRaster();
+        }
         recordingRenderer_->setBuffer(&d->cmdBuffer);
         drawTraversal_->setLayerBreakCallback(
             [this](canvas::CanvasScene* scene, unsigned int, float x, float y,
@@ -455,6 +462,7 @@ void Engine::replayIframeLayers(render::SkiaRenderer* renderer) {
                 if (!img) return;
                 auto* c = renderer->getCanvas();
                 if (!c) return;
+                if (grCtx) grCtx->resetContext(); // canvas ensureSurface did raw GL; resync before sampling
                 SkRect dst = SkRect::MakeXYWH(x, y, w, h);
                 c->drawImageRect(img, dst, SkSamplingOptions(SkFilterMode::kLinear));
                 scene->clearDirty();
