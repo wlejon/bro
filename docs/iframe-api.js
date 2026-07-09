@@ -67,6 +67,36 @@ frame.reload();
 
 
 // -----------------------------------------------------------------------------
+// frame.capture()  — read back the rendered pixels ("look")
+// -----------------------------------------------------------------------------
+//
+// Returns an ImageData ({ width, height, data:Uint8ClampedArray }, top-down
+// RGBA) of exactly what the sub-document last rendered into its box — the same
+// frame the user sees. This is the host's "look": generate an app, point an
+// iframe at it, let a frame render, then read what it produced and hand it to
+// an encoder or a vision model.
+//
+// Returns null if the sub-document hasn't rendered yet, so capture AFTER the
+// 'load' event AND after a frame has been drawn (in a windowed app the render
+// loop is continuous; in headless, call screenshot()/flush() to force a frame,
+// or capture from within a requestAnimationFrame callback).
+//
+// The readback is a direct GL read of the sub-document's own GPU surface on the
+// host thread — no copy back through JS of the whole DOM, and no cross-context
+// stall.
+
+frame.addEventListener('load', () => {
+    requestAnimationFrame(() => {
+        const shot = frame.capture();            // ImageData or null
+        if (shot) {
+            const jpeg = bro.image.encodeJpeg(shot);   // → bytes for a vision model
+            // ...send jpeg to the model, critique, rewrite files, frame.reload()
+        }
+    });
+});
+
+
+// -----------------------------------------------------------------------------
 // 'load' event
 // -----------------------------------------------------------------------------
 //

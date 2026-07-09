@@ -32,6 +32,7 @@
 #include "js/storage_bindings.h"
 #include "canvas/canvas_scene.h"
 #include "api/api.h"
+#include <glad/gl.h>
 #include <algorithm>
 #include <filesystem>
 
@@ -60,6 +61,40 @@ Engine::IframeDoc* Engine::iframeDocById(uint64_t id) {
     for (auto& d : iframeDocs_)
         if (d->id == id) return d.get();
     return nullptr;
+}
+
+std::vector<uint8_t> Engine::captureIframe(dom::Element* el, int& outW, int& outH) {
+    outW = 0;
+    outH = 0;
+    if (!el || !gl_) return {};
+    IframeDoc* d = iframeDocForElement(el);
+    if (!d || d->fboTexture == 0 || d->surfW <= 0 || d->surfH <= 0) return {};
+
+    int w = d->surfW, h = d->surfH;
+    // The sub-doc's fboTexture lives in the shared GL context group (the
+    // compositor samples it every frame from this same main thread), so we can
+    // wrap it in a throwaway FBO here and read it straight back — no cross-
+    // context / raster-thread round trip. The surface is a top-down Skia GPU
+    // surface (V=0 at top), so glReadPixels yields rows top→bottom already.
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                           GL_TEXTURE_2D, d->fboTexture, 0);
+
+    std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    else
+        pixels.clear();
+
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    glDeleteFramebuffers(1, &fbo);
+
+    if (pixels.empty()) return {};
+    outW = w;
+    outH = h;
+    return pixels;
 }
 
 // Reconcile iframeDocs_ with the <iframe> elements currently in the app document.

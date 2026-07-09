@@ -208,6 +208,16 @@ public:
     /// assigning iframe.src. Fires a "load" event on completion.
     void reloadIframe(dom::Element* el);
 
+    /// Read back the pixels an <iframe> sub-document last rendered into its GPU
+    /// surface. Returns tightly-packed top-down RGBA8 (row 0 = top), sized to the
+    /// sub-doc's content box (outW×outH); empty if `el` isn't an iframe, has no
+    /// sub-document, or hasn't been rendered yet (fboTexture == 0). Runs on the
+    /// main thread against the shared GL context group — the same texture the
+    /// compositor samples each frame — so no cross-context readback is needed.
+    /// This is the host's "look": point an iframe at a generated app, let a frame
+    /// render, and read what the user sees. Callable in windowed and headless.
+    std::vector<uint8_t> captureIframe(dom::Element* el, int& outW, int& outH);
+
     /// Access the JS runtime.
     js::Runtime* jsRuntime() const { return jsRuntime_.get(); }
 

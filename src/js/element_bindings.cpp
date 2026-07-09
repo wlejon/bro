@@ -11,6 +11,7 @@
 #include "layout/el_textarea.h"
 #include "layout/el_video.h"
 #include "canvas/canvas_scene.h"
+#include "js/imagebitmap_bindings.h"
 #include "css/transform.h"
 #include "dom/element_geometry.h"
 #include "layout/svg_geometry.h"
@@ -919,6 +920,35 @@ static JSValue js_element_iframe_reload(JSContext* ctx, JSValueConst this_val,
     if (it != s_ctx_engines.end() && it->second)
         static_cast<bro::engine::Engine*>(it->second)->reloadIframe(el);
     return JS_UNDEFINED;
+}
+
+// iframe.capture() — read back the pixels the embedded sub-document last
+// rendered as an ImageData ({width, height, data:Uint8ClampedArray}, top-down
+// RGBA). This is the host's "look": the same frame the user sees, handed to
+// script for encoding/vision. Returns null if the iframe hasn't rendered yet
+// (call after the 'load' event and a rendered frame).
+static JSValue js_element_iframe_capture(JSContext* ctx, JSValueConst this_val,
+                                         int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NULL;
+    if (el->tagName() != "IFRAME" && el->tagName() != "iframe") return JS_NULL;
+    auto it = s_ctx_engines.find(ctx);
+    if (it == s_ctx_engines.end() || !it->second) return JS_NULL;
+
+    int w = 0, h = 0;
+    auto pixels = static_cast<bro::engine::Engine*>(it->second)
+                      ->captureIframe(el, w, h);
+    if (pixels.empty() || w <= 0 || h <= 0) return JS_NULL;
+
+    JSValue abuf = JS_NewArrayBufferCopy(ctx, pixels.data(), pixels.size());
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue u8cCtor = JS_GetPropertyStr(ctx, global, "Uint8ClampedArray");
+    JSValue dataArr = JS_CallConstructor(ctx, u8cCtor, 1, &abuf);
+    JS_FreeValue(ctx, u8cCtor);
+    JS_FreeValue(ctx, global);
+    JS_FreeValue(ctx, abuf);
+
+    return ImageBitmapBindings::makeImageData(ctx, w, h, dataArr);
 }
 
 static JSValue js_element_video_get_autoplay(JSContext* ctx, JSValueConst this_val) {
@@ -3604,6 +3634,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("canPlayType", 1, js_element_video_canPlayType),
     // Iframe control
     JS_CFUNC_DEF("reload", 0, js_element_iframe_reload),
+    JS_CFUNC_DEF("capture", 0, js_element_iframe_capture),
     // Form control properties
     JS_CGETSET_DEF("value",       js_element_get_value,       js_element_set_value),
     JS_CGETSET_DEF("checked",     js_element_get_checked,     js_element_set_checked),
