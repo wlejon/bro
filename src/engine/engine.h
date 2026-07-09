@@ -508,7 +508,13 @@ private:
         std::unique_ptr<dom::Document> document;
         MouseDispatchState mouseState;    // per-doc click/dblclick tracking
         int boxW = 0, boxH = 0;           // last content-box size laid out
-        unsigned int fboTexture = 0;      // rendered sub-document texture (set in render path)
+        // Render target: the sub-document paints into cmdBuffer (main thread),
+        // which is replayed into `surface` (raster thread) → fboTexture, which
+        // the app compositor draws at the <iframe> element's box.
+        render::CommandBuffer cmdBuffer;
+        render::SkiaRenderer::GPUSurface surface;
+        int surfW = 0, surfH = 0;
+        unsigned int fboTexture = 0;
     };
 
     void initSystemPanels();
@@ -560,6 +566,12 @@ private:
     void tickIframes(double nowMs);
     IframeDoc* iframeDocById(uint64_t id);
     IframeDoc* iframeDocForElement(const dom::Element* el);
+    // Record each iframe sub-document's paint into its own command buffer (main
+    // thread), then replay each into a box-sized GPU surface → fboTexture
+    // (raster thread). The app compositor draws those textures via UILayer::
+    // Iframe breaks emitted while recording the app document.
+    void recordIframeLayers();
+    void replayIframeLayers(render::SkiaRenderer* renderer);
     bool systemHandleMouseMove(float x, float y);
     /// Wheel scrolling on a system panel's overflow element. Returns true if
     /// some element was scrolled; caller should skip app-level wheel handling.

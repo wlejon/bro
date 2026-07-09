@@ -1095,7 +1095,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     // space for the app document — the compositor shifts HTML surface and
     // quad together by the engine inset, so they can never drift apart).
     // Without the root offset, the quad would ignore document scroll.
-    if ((elem->sceneGraph() || elem->canvasScene() || elem->webglContext()) && visible) {
+    if ((elem->sceneGraph() || elem->canvasScene() || elem->webglContext() || elem->iframeDoc()) && visible) {
         auto lbRect = dom::absoluteContentBox(elem);
         x = lbRect.x + rootOffsetX_;
         y = lbRect.y + rootOffsetY_;
@@ -1137,6 +1137,20 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         if (layerBreakCb_) {
             layerBreakCb_(nullptr, webglCtx->colorTexture(), x, y, w, h,
                           lbCX, lbCY, lbCW, lbCH);
+        }
+        if (needsClip) { renderer_->restore(); popClipRect(); }
+        if (hasClipPath) renderer_->restore();
+        if (hasFilter) renderer_->restore();
+        if (hasOpacity) renderer_->restore();
+        if (hasTransform) renderer_->restore();
+        return;
+    }
+    if (elem->iframeDoc() && visible) {
+        // The sub-document renders to its own texture (engine iframe pass); the
+        // engine records a break carrying the IframeDoc id and composites that
+        // texture at this element's content box.
+        if (iframeLayerBreakCb_) {
+            iframeLayerBreakCb_(elem->iframeDoc(), x, y, w, h, lbCX, lbCY, lbCW, lbCH);
         }
         if (needsClip) { renderer_->restore(); popClipRect(); }
         if (hasClipPath) renderer_->restore();

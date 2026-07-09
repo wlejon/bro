@@ -119,6 +119,16 @@ public:
                                                    float clipW, float clipH)>;
     void setLayerBreakCallback(LayerBreakCallback cb) { layerBreakCb_ = std::move(cb); }
 
+    // Emitted when the traversal reaches an <iframe> hosting a sub-document.
+    // `iframeDoc` is the engine's opaque IframeDoc* (Element::iframeDoc()); the
+    // engine records a break carrying its id and composites the sub-document's
+    // rendered texture at (x,y,w,h), re-applying (clipX..clipH) as a GL scissor.
+    using IframeLayerBreakCallback = std::function<void(void* iframeDoc,
+                                                        float x, float y, float w, float h,
+                                                        float clipX, float clipY,
+                                                        float clipW, float clipH)>;
+    void setIframeLayerBreakCallback(IframeLayerBreakCallback cb) { iframeLayerBreakCb_ = std::move(cb); }
+
     // Viewport. `top` is the Y position in the output surface where the
     // content area begins — used for the html/body background paint rect.
     // 0 for the app document (content-space surfaces) and system panels.
@@ -213,6 +223,7 @@ private:
 
     std::unordered_map<std::string, CachedImage> imageCache_;
     LayerBreakCallback layerBreakCb_;
+    IframeLayerBreakCallback iframeLayerBreakCb_;
 
     // Running stack of axis-aligned overflow/scroll clip rects (each already
     // intersected with the one below it, so the top is the effective clip).

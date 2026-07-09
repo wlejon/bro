@@ -19,9 +19,12 @@ namespace bro::engine {
 /// scene was destroyed resolves to null instead of dangling (no scrub pass
 /// over stale layer buffers needed).
 struct UILayer {
-    enum Type { HTML, Canvas };
+    enum Type { HTML, Canvas, Iframe };
     Type type;
     GLuint texture = 0;
+    // CanvasScene id when type==Canvas; IframeDoc id when type==Iframe. Both are
+    // resolved through an engine registry at composite time so a layer that
+    // outlives its scene/sub-document draws nothing rather than dangling.
     uint64_t canvasSceneId = 0;
     float cx = 0, cy = 0, cw = 0, ch = 0;
     // Overflow/scroll clip for Canvas layers, in top-left pixel space. The

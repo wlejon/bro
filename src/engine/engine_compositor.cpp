@@ -114,6 +114,16 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
                 kind, scene ? scene->sceneId() : 0, directTexture, x, y, w, h,
                 clipX, clipY, clipW, clipH);
         });
+    // <iframe> sub-documents: record a break carrying the IframeDoc id. Its
+    // texture is produced by replayIframeLayers and resolved at composite time.
+    drawTraversal_->setIframeLayerBreakCallback(
+        [this](void* idoc, float x, float y, float w, float h,
+               float clipX, float clipY, float clipW, float clipH) {
+            auto* d = static_cast<IframeDoc*>(idoc);
+            recordingRenderer_->recordLayerBreak(
+                render::Cmd_LayerBreak::IframeDoc, d ? d->id : 0, 0, x, y, w, h,
+                clipX, clipY, clipW, clipH);
+        });
 
     // Everything below records in *content space*: the app layer surfaces are
     // content-sized (contentW × contentH) and origin-based; the engine-reserved
@@ -163,6 +173,7 @@ void Engine::recordAppLayers(render::CommandBuffer& outBuffer,
     }
 
     drawTraversal_->setLayerBreakCallback(nullptr);
+    drawTraversal_->setIframeLayerBreakCallback(nullptr);
     recordingRenderer_->setBuffer(nullptr);
     // Restore default paint mode so subsequent recorders (system panels, the
     // next full pass) aren't affected.
@@ -216,16 +227,16 @@ void Engine::replayAppLayers(render::SkiaRenderer* renderer,
             htmlLayer.texture = pool[prevIdx].texture;
             outLayers.push_back(std::move(htmlLayer));
 
-            UILayer canvasLayer;
-            canvasLayer.type = UILayer::Canvas;
-            canvasLayer.canvasSceneId = sceneId;
-            canvasLayer.texture = directTexture;
-            canvasLayer.cx = x; canvasLayer.cy = y;
-            canvasLayer.cw = w; canvasLayer.ch = h;
-            canvasLayer.clipX = clipX; canvasLayer.clipY = clipY;
-            canvasLayer.clipW = clipW; canvasLayer.clipH = clipH;
-            outLayers.push_back(std::move(canvasLayer));
-            (void)kind;
+            UILayer quadLayer;
+            quadLayer.type = (kind == render::Cmd_LayerBreak::IframeDoc)
+                                 ? UILayer::Iframe : UILayer::Canvas;
+            quadLayer.canvasSceneId = sceneId;    // CanvasScene id or IframeDoc id
+            quadLayer.texture = directTexture;     // WebGL direct texture (0 otherwise)
+            quadLayer.cx = x; quadLayer.cy = y;
+            quadLayer.cw = w; quadLayer.ch = h;
+            quadLayer.clipX = clipX; quadLayer.clipY = clipY;
+            quadLayer.clipW = clipW; quadLayer.clipH = clipH;
+            outLayers.push_back(std::move(quadLayer));
         });
 
     replayer.replay(buffer);
@@ -380,6 +391,81 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
     renderer->switchSurface(origSurface);
 }
 
+// Main thread: record each iframe sub-document's paint into its own command
+// buffer. Its own <canvas>es blit inline into the iframe surface (they are not
+// app-level canvas layers). Called after recordAppLayers so the app's layer-
+// break callbacks are already cleared and won't fire on the sub-doc traversal.
+void Engine::recordIframeLayers() {
+    if (iframeDocs_.empty() || !recordingRenderer_ || !drawTraversal_) return;
+    for (auto& d : iframeDocs_) {
+        d->cmdBuffer.clear();
+        if (!d->document || !d->document->documentElement()) continue;
+        // Style + lay the sub-document out at its box (mirrors layoutSystemPanels):
+        // JS may have mutated its DOM since the last frame, and the text runs the
+        // draw consumes are produced here.
+        d->document->resolveStyles();
+        d->document->performLayout(static_cast<float>(d->boxW),
+                                   static_cast<float>(d->boxH), *textMetrics_);
+        recordingRenderer_->setBuffer(&d->cmdBuffer);
+        drawTraversal_->setLayerBreakCallback(
+            [this](canvas::CanvasScene* scene, unsigned int, float x, float y,
+                   float w, float h, float, float, float, float) {
+                if (scene) recordingRenderer_->recordBlitCanvasInline(scene, x, y, w, h);
+            });
+        drawTraversal_->setBasePath(d->document->basePath());
+        drawTraversal_->draw(d->document->documentElement(), 0, 0,
+                             static_cast<float>(d->boxW),
+                             static_cast<float>(d->boxH), /*viewportTop=*/0);
+        drawTraversal_->setLayerBreakCallback(nullptr);
+        recordingRenderer_->setBuffer(nullptr);
+    }
+}
+
+// Raster thread: replay each iframe sub-document's command buffer into a box-
+// sized GPU surface, and stash the resulting texture on the IframeDoc for the
+// app compositor to draw at the <iframe> element's box.
+void Engine::replayIframeLayers(render::SkiaRenderer* renderer) {
+    if (!renderer || !renderer->grContext() || iframeDocs_.empty()) return;
+    auto* grCtx = renderer->grContext();
+    sk_sp<SkSurface> origSurface;
+    bool haveOrig = false;
+    for (auto& d : iframeDocs_) {
+        if (d->cmdBuffer.commandCount() == 0) { d->fboTexture = 0; continue; }
+        int bw = std::max(1, d->boxW), bh = std::max(1, d->boxH);
+        if (!d->surface.surface || d->surfW != bw || d->surfH != bh) {
+            if (d->surface.surface) renderer->destroyGPUSurface(d->surface);
+            d->surface = renderer->createGPUSurface(bw, bh);
+            d->surfW = bw; d->surfH = bh;
+        }
+        renderer->rewrapGPUSurface(d->surface, bw, bh);
+        auto prev = renderer->switchSurface(d->surface.surface);
+        if (!haveOrig) { origSurface = prev; haveOrig = true; }
+        if (auto* c = renderer->getCanvas()) c->clear(SK_ColorTRANSPARENT);
+
+        render::CommandReplayer replayer(renderer);
+        replayer.setBlitCanvasInlineHandler(
+            [&](void* scenePtr, float x, float y, float w, float h) {
+                auto* scene = static_cast<canvas::CanvasScene*>(scenePtr);
+                if (!scene || w <= 0 || h <= 0) return;
+                if (grCtx) scene->setGrContext(grCtx);
+                scene->flushStaged();
+                auto* src = scene->surface();
+                if (!src) return;
+                auto img = src->makeImageSnapshot();
+                if (!img) return;
+                auto* c = renderer->getCanvas();
+                if (!c) return;
+                SkRect dst = SkRect::MakeXYWH(x, y, w, h);
+                c->drawImageRect(img, dst, SkSamplingOptions(SkFilterMode::kLinear));
+                scene->clearDirty();
+            });
+        replayer.replay(d->cmdBuffer);
+        if (grCtx) grCtx->flush(d->surface.surface.get());
+        d->fboTexture = d->surface.texture;
+    }
+    if (haveOrig) renderer->switchSurface(origSurface);
+}
+
 void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO,
                              int offsetY, int layerW, int layerH) {
     if (!gl_) return;
@@ -435,6 +521,37 @@ void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFB
                 glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
                 glBindTexture(GL_TEXTURE_2D, layer.texture);
                 glDrawArrays(GL_TRIANGLES, 0, 6);
+            }
+        } else if (layer.type == UILayer::Iframe) {
+            // Iframe sub-document layer — texture resolved through the iframe
+            // registry (null if the sub-document was torn down since recording).
+            // The sub-doc renders into a top-down Skia GPU surface, so V is
+            // oriented like a Canvas2D layer (0 at top).
+            GLuint tex = 0;
+            if (auto* d = iframeDocById(layer.canvasSceneId)) tex = d->fboTexture;
+            if (tex) {
+                float cx = layer.cx, cy = layer.cy + oy;
+                float cw = layer.cw, ch = layer.ch;
+                bool scissored = false;
+                if (layer.clipW >= 0.0f && layer.clipH >= 0.0f) {
+                    float clipY = layer.clipY + oy;
+                    int sx = static_cast<int>(std::floor(layer.clipX));
+                    int sw = static_cast<int>(std::ceil(layer.clipX + layer.clipW)) - sx;
+                    int syTop = static_cast<int>(std::floor(clipY));
+                    int sh = static_cast<int>(std::ceil(clipY + layer.clipH)) - syTop;
+                    int sy = viewportHeight_ - (syTop + sh);
+                    glEnable(GL_SCISSOR_TEST);
+                    glScissor(sx, sy, std::max(0, sw), std::max(0, sh));
+                    scissored = true;
+                }
+                render::TextureVertex quad[6] = {
+                    {cx,    cy,    0, 0}, {cx+cw, cy,    1, 0}, {cx+cw, cy+ch, 1, 1},
+                    {cx,    cy,    0, 0}, {cx+cw, cy+ch, 1, 1}, {cx,    cy+ch, 0, 1},
+                };
+                glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
+                glBindTexture(GL_TEXTURE_2D, tex);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+                if (scissored) glDisable(GL_SCISSOR_TEST);
             }
         } else {
             // Canvas/WebGL layer — get texture from canvas scene or direct

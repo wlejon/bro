@@ -453,6 +453,7 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     recordAppLayers(appCmds, w, h,
                     insetTop, contentRight(), contentBottom(), scrollY_);
     recordSystemPanelLayers(sysCmds, w, h);
+    recordIframeLayers();
     replayAppLayers(skia, appCmds,
                     screenshotHtmlPool_, screenshotHtmlPoolW_, screenshotHtmlPoolH_,
                     cw, ch, appLayers);
@@ -460,6 +461,7 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
                             screenshotSystemPool_, screenshotSystemPoolW_,
                             screenshotSystemPoolH_,
                             w, h, systemLayers);
+    replayIframeLayers(skia);
     skia->endFrame();
 
     // 6. Compositing FBO target.

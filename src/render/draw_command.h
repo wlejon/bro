@@ -97,9 +97,10 @@ struct Cmd_LayerBreak {
         Canvas2D,        // flush surface + push HTML layer + push Canvas2D layer + new surface
         WebGL,           // flush surface + push HTML layer + push WebGL layer + new surface
         HtmlSurface,     // flush surface + push HTML layer + new surface (panel boundary)
+        IframeDoc,       // flush surface + push HTML layer + push iframe-document layer + new surface
     };
     int kind;                    // LayerKind
-    uint64_t canvasSceneId;      // CanvasScene::sceneId() when kind==Canvas2D, else 0
+    uint64_t canvasSceneId;      // CanvasScene::sceneId() when kind==Canvas2D; IframeDoc id when kind==IframeDoc; else 0
     unsigned int directTexture;  // GL texture id when kind==WebGL
     float x, y, w, h;            // ignored for HtmlSurface
     // Active overflow/scroll clip at the layer-break point, in the same
