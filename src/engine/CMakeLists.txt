@@ -41,6 +41,7 @@ add_library(bro_engine STATIC
     config_loader.cpp
     replaced_elements.cpp
     system_panels.cpp
+    iframe.cpp
     settings.cpp
     overlay.cpp
     dropdown_overlay.cpp

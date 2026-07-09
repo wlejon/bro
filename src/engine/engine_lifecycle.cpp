@@ -177,6 +177,7 @@ Engine::~Engine() {
 
     // WebGL contexts (unique_ptr destruction handles cleanup)
     webglEntries_.clear();
+    destroyAllIframes();
     destroySystemPanels();
 
     // 0. Clear ElementRefAdapter cache (holds raw pointers to elements)

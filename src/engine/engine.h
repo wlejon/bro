@@ -491,6 +491,26 @@ private:
         MouseDispatchState mouseState;  // per-doc click/dblclick tracking
     };
 
+    // An isolated sub-document hosted by an <iframe> element in the app document.
+    // Owns its own JS realm, DOM tree, timers, canvas scenes, and input state —
+    // structurally identical to a SystemDocument, but bound to a DOM element and
+    // laid out at that element's content box instead of an engine overlay slot.
+    struct IframeDoc {
+        dom::Element* element = nullptr;  // the <iframe> in the app document (non-owning)
+        uint64_t id = 0;                  // registry id for compositor texture resolve
+        std::string src;                  // resolved src currently loaded (change detection)
+        JSContext* jsCtx = nullptr;
+        std::unique_ptr<js::Timers> timers;
+        // canvasScenes MUST precede `document`: Elements (owned by document) fire
+        // CanvasScene::onElementFinalized on destroy, which needs the scenes alive.
+        // Member destruction is reverse-declaration order, so this destructs last.
+        std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes;
+        std::unique_ptr<dom::Document> document;
+        MouseDispatchState mouseState;    // per-doc click/dblclick tracking
+        int boxW = 0, boxH = 0;           // last content-box size laid out
+        unsigned int fboTexture = 0;      // rendered sub-document texture (set in render path)
+    };
+
     void initSystemPanels();
     void loadCustomFonts();
     void destroySystemPanels();
@@ -528,6 +548,18 @@ private:
     dom::Element* systemHitTest(SystemDocument& doc, float x, float y);
     bool systemHandleMouseDown(float x, float y, int button);
     bool systemHandleMouseUp(float x, float y, int button);
+
+    // ── Iframe sub-documents (src/engine/iframe.cpp) ────────────────────────
+    // Reconcile iframeDocs_ with the <iframe> elements in the app document:
+    // create sub-docs for new src'd iframes, tear down removed ones, reload on
+    // src change. Called after app load and after DOM mutations.
+    void syncIframes();
+    void createIframeDoc(dom::Element* el, const std::string& srcAttr);
+    void teardownIframeDoc(IframeDoc* doc);
+    void destroyAllIframes();
+    void tickIframes(double nowMs);
+    IframeDoc* iframeDocById(uint64_t id);
+    IframeDoc* iframeDocForElement(const dom::Element* el);
     bool systemHandleMouseMove(float x, float y);
     /// Wheel scrolling on a system panel's overflow element. Returns true if
     /// some element was scrolled; caller should skip app-level wheel handling.
@@ -776,6 +808,11 @@ private:
     double lastFrameTimeMs_ = 0.0; // wall-clock time of previous frame's start (for syncAgents dt)
     // System panels (settings, perf, nav)
     std::vector<SystemDocument> systemDocs_;
+    // Iframe sub-documents, keyed by their <iframe> element. unique_ptr so the
+    // IframeDoc address is stable (captured by canvas getContext factories and
+    // referenced from dom::Element::iframeDoc()).
+    std::vector<std::unique_ptr<IframeDoc>> iframeDocs_;
+    uint64_t nextIframeId_ = 1;
     bool systemPerfVisible_ = false;
     bool systemSettingsVisible_ = false;
     bool splashVisible_ = false;

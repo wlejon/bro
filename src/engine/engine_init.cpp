@@ -900,6 +900,9 @@ Engine::Engine(const EngineConfig& config)
             auto& box = document_->documentElement()->layoutBox();
             documentHeight_ = box.marginBox().height;
         }
+        // Instantiate sub-documents for any <iframe src> now that they're laid
+        // out (createIframeDoc reads each iframe's content box).
+        syncIframes();
     }
 
     // 10b. Dispatch DOMContentLoaded on document

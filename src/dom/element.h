@@ -223,6 +223,12 @@ public:
     void setSceneGraph(void* graph) { sceneGraph_ = graph; }
     void* sceneGraph() const { return sceneGraph_; }
 
+    // Iframe sub-document (opaque pointer — set by engine, read by the draw
+    // traversal and input routing). Points at the engine's IframeDoc hosting
+    // this <iframe>'s isolated sub-document. Null for a plain element.
+    void setIframeDoc(void* d) { iframeDoc_ = d; }
+    void* iframeDoc() const { return iframeDoc_; }
+
     // Scene graph mesh FBO texture (set by scene graph render, read by draw traversal)
     void setSceneGraphFBOTexture(unsigned int tex) { sceneGraphFBOTex_ = tex; }
     unsigned int sceneGraphFBOTexture() const { return sceneGraphFBOTex_; }
@@ -278,6 +284,7 @@ private:
     void (*canvasSceneOnDestroy_)(void*) = nullptr;
     void* webglContext_ = nullptr;
     void* sceneGraph_ = nullptr;
+    void* iframeDoc_ = nullptr;
     unsigned int sceneGraphFBOTex_ = 0;
 };
 

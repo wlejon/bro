@@ -409,6 +409,8 @@ void Engine::run() {
 
         // 2c. Tick system panel timers
         tickSystemPanels(now);
+        // Tick iframe sub-document timers + requestAnimationFrame.
+        tickIframes(now);
         // System panels (splash animation, menu, perf, settings) share the
         // raster thread, signaled via uiDirty_. Their own DOM edits never
         // touch the app document, so propagate systemDirty_ so the raster
