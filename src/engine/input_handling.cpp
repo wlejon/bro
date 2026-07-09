@@ -1970,26 +1970,45 @@ void Engine::handleWheel(float x, float y, float dx, float dy) {
         return;
     }
 
-    // Check if target or an ancestor is a scrollable overflow element
+    // Check if target or an ancestor is a scrollable overflow element.
+    // Walk up the composed tree and, matching browser scroll chaining, let the
+    // wheel fall through to the next scrollable ancestor whenever the current
+    // element can't move in the wheel's direction — either because its content
+    // fits (no scrollbar) or because it's already pinned at that edge. Without
+    // this a nested overflow box (a fits-content region like an expanded
+    // reasoning fold, or a list scrolled to its limit) would swallow the wheel
+    // and the outer scroller never moved — scrolling felt "stuck" over those
+    // regions while the gutter, sitting directly over the outer scroller,
+    // worked fine.
     {
         auto* el = target;
         while (el) {
             std::string ov = getOverflowY(el->computedStyle());
             if (overflowScrollable(ov)) {
                 float maxST = maxScrollTop(el);
-                if (maxST <= 0) break; // content fits, no scrolling needed
-                float prevScroll = el->scrollTopValue();
-                float newScroll = std::clamp(prevScroll - pxV, 0.0f, maxST);
-                el->setScrollTopValue(newScroll);
-                if (newScroll != prevScroll) {
-                    dispatchScrollEvent(el);
+                if (maxST > 0.0f) {
+                    float prevScroll = el->scrollTopValue();
+                    // pxV > 0 scrolls toward the top (scrollTop decreases);
+                    // pxV < 0 scrolls toward the bottom (scrollTop increases).
+                    // Only consume the wheel if there is room to move that way,
+                    // otherwise chain to a scrollable ancestor.
+                    const bool canScroll = (pxV > 0.0f) ? (prevScroll > 0.5f)
+                                                        : (prevScroll < maxST - 0.5f);
+                    if (canScroll) {
+                        float newScroll = std::clamp(prevScroll - pxV, 0.0f, maxST);
+                        el->setScrollTopValue(newScroll);
+                        if (newScroll != prevScroll) {
+                            dispatchScrollEvent(el);
+                        }
+                        markAppBaseDirty();
+                        return;
+                    }
+                    // Pinned at this edge — fall through to an ancestor.
                 }
-                markAppBaseDirty();
-                return;
+                // maxST <= 0: content fits, this box isn't scrollable at all.
             }
-            // overflow:hidden means this element isn't scrollable, but wheel
-            // events should still propagate to scrollable ancestors (matches
-            // browser behavior). Just skip and keep walking up.
+            // overflow:hidden, non-scrollable, or at-edge: keep walking up so
+            // the wheel reaches a scrollable ancestor (matches browser behavior).
             el = composedParent(el);
         }
     }
