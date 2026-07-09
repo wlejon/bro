@@ -2,6 +2,7 @@
 // These are Engine member function implementations, not a separate class.
 
 #include "engine/engine.h"
+#include "engine/overflow.h"
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
 #endif
@@ -122,6 +123,19 @@ void Engine::flush() {
         // viewport scrollbar drew against boot-time geometry.
         if (auto* rootEl = document_->documentElement()) {
             documentHeight_ = rootEl->layoutBox().marginBox().height;
+        }
+
+        // Apply any deferred scroll-to-bottom now that layout is fresh (mirrors
+        // the windowed loop). A JS `el.scrollTop = el.scrollHeight` issued in the
+        // same turn as an append registered the element here because the append
+        // wasn't laid out yet; snap it to the true bottom now.
+        if (!document_->scrollToBottomElements().empty()) {
+            auto pending = document_->scrollToBottomElements();
+            for (auto* elem : pending) {
+                if (overflowClips(getOverflowY(elem->computedStyle())))
+                    elem->setScrollTopValue(maxScrollTop(elem));
+                elem->setScrollToBottom(false);
+            }
         }
 
         // Notify ResizeObserver / IntersectionObserver after layout

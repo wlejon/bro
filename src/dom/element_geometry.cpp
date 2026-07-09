@@ -34,11 +34,20 @@ AbsoluteFrame computeAbsoluteFrame(const Element* el) {
     std::vector<Raw> raws;
     for (const Element* lp = el; lp; lp = lp->layoutParent()) {
         auto& lb = lp->layoutBox();
+        // Clamp the scroll offset to the current layout's scrollable extent, the
+        // same clamp the draw traversal applies when painting HTML. scrollTop_
+        // can outrun the max after content shrinks (e.g. a fold collapses) with
+        // no scroll interaction to re-clamp it; using the raw value here would
+        // shift separately-composited canvas/WebGL/iframe quads by more scroll
+        // than the HTML flow moved, leaving them stuck out of place until the
+        // next scroll. Clamping keeps quad geometry consistent with the paint.
+        float maxST = std::max(0.0f, lb.naturalHeight - lb.contentRect.height);
+        float st = std::clamp(lp->scrollTopValue(), 0.0f, maxST);
         raws.push_back({lp, lb.contentRect.x, lb.contentRect.y,
                         lb.padding.left, lb.padding.top,
                         lb.border.left, lb.border.top,
                         lb.fullWidth(), lb.fullHeight(),
-                        lp->scrollTopValue()});
+                        st});
     }
 
     // Accumulate root-down: parent's content-area origin in absolute coords is

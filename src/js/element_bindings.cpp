@@ -2718,7 +2718,27 @@ static JSValue js_element_set_scrollTop(JSContext* ctx, JSValueConst this_val, J
     float clamped = std::clamp(static_cast<float>(v), 0.0f, maxScroll);
     float prev = el->scrollTopValue();
     el->setScrollTopValue(clamped);
-    if (el->document()) el->document()->markDirty();
+    // Layout is async: when JS appends content and then does the classic
+    // `el.scrollTop = el.scrollHeight` in the SAME turn, the just-appended nodes
+    // aren't laid out yet, so both scrollHeight and maxScroll above are STALE and
+    // the clamp lands short of the real bottom — the container never follows the
+    // new content until a second scroll (a log/transcript that "stops updating").
+    // If the request is at or beyond the current (stale) max and a layout is
+    // still pending, defer to the post-layout scroll-to-bottom pass so it snaps
+    // to the true bottom once the append is laid out. A definite mid-position
+    // (v < maxScroll) cancels any such pending intent.
+    if (el->document()) {
+        // "Wants the end" = a positive request at or beyond the current max. That
+        // excludes scrollTop = 0 (scroll to top), which must never be read as a
+        // scroll-to-bottom even when the element isn't scrollable yet (max == 0).
+        bool wantsEnd = static_cast<float>(v) > 0.0f &&
+                        static_cast<float>(v) >= maxScroll;
+        if (wantsEnd && el->document()->isDirty())
+            el->setScrollToBottom(true);   // defer to the true bottom post-layout
+        else
+            el->setScrollToBottom(false);  // explicit position: cancel any pending jump
+        el->document()->markDirty();
+    }
     if (static_cast<float>(v) != prev) {
         bro::dom::Event evt("scroll", false, false);
         evt.setIsTrusted(true);
