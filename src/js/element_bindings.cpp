@@ -1200,6 +1200,35 @@ static JSValue js_element_set_selected(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+// Recursively gather a <select>'s <option> descendants in document order,
+// descending into <optgroup> per the HTMLOptionsCollection contract.
+static void collectSelectOptions(bro::dom::Element* el,
+                                 std::vector<bro::dom::Element*>& out)
+{
+    for (auto* child : el->children()) {
+        const std::string& tag = child->tagName();
+        if (tag == "OPTION" || tag == "option") {
+            out.push_back(child);
+        } else if (tag == "OPTGROUP" || tag == "optgroup") {
+            collectSelectOptions(child, out);
+        }
+    }
+}
+
+// HTMLSelectElement.options — the list of <option> elements. Returned as a
+// NodeList-shaped collection (indexed + length + iterable), which is all the
+// HTMLOptionsCollection surface app code relies on (Array.from, [i], .length).
+static JSValue js_element_get_options(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewArray(ctx);
+    const std::string& tag = el->tagName();
+    if (tag != "SELECT" && tag != "select") return JS_UNDEFINED;
+    std::vector<bro::dom::Element*> opts;
+    collectSelectOptions(el, opts);
+    return wrapNodeList(ctx, opts);
+}
+
 static JSValue js_element_get_selectedIndex(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
@@ -3660,6 +3689,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("checked",     js_element_get_checked,     js_element_set_checked),
     JS_CGETSET_DEF("selected",      js_element_get_selected,      js_element_set_selected),
     JS_CGETSET_DEF("selectedIndex", js_element_get_selectedIndex, js_element_set_selectedIndex),
+    JS_CGETSET_DEF("options",       js_element_get_options,       nullptr),
     JS_CGETSET_DEF("type",        js_element_get_type,        js_element_set_type),
     JS_CGETSET_DEF("disabled",    js_element_get_disabled,    js_element_set_disabled),
     JS_CGETSET_DEF("placeholder", js_element_get_placeholder, js_element_set_placeholder),
