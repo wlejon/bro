@@ -305,6 +305,7 @@ void DomBindings::sweepOrphanedWrappers(JSContext* ctx) {
     JS_GetOwnPropertyNames(ctx, &props, &len, elemMap,
                            JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY);
 
+    int dangling = 0;
     for (uint32_t i = 0; i < len; i++) {
         JSValue val = JS_GetProperty(ctx, elemMap, props[i].atom);
         auto* el = static_cast<bro::dom::Element*>(
@@ -318,7 +319,7 @@ void DomBindings::sweepOrphanedWrappers(JSContext* ctx) {
         // page is unmapped (the sweepOrphanedWrappers crash). Drop the stale
         // entry without ever touching the pointer.
         if (el && ctxDoc && !ctxDoc->ownsNode(el)) {
-            LOG_WARN("sweepOrphanedWrappers: dropped DANGLING wrapper (unowned Element*)");
+            ++dangling;
             JS_SetOpaque(val, nullptr);
             JS_DeleteProperty(ctx, elemMap, props[i].atom, 0);
             JS_FreeValue(ctx, val);
@@ -335,6 +336,12 @@ void DomBindings::sweepOrphanedWrappers(JSContext* ctx) {
         }
         JS_FreeValue(ctx, val);
     }
+
+    // Any dangling entry means an eager-clear path was missed — should be zero
+    // now that wrapElement() refuses to cache unowned nodes. Surface it once (not
+    // per entry) if it ever recurs, so a new leak path is visible without spam.
+    if (dangling > 0)
+        LOG_WARN("sweepOrphanedWrappers: dropped %d dangling wrapper(s)", dangling);
 
     JS_FreePropertyEnum(ctx, props, len);
     JS_FreeValue(ctx, elemMap);
