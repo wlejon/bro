@@ -453,8 +453,10 @@ static JSValue js_pipeline_loadWeights(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-// applyLora(path, scale=1.0) — merge a LoRA into the loaded weights. Must be
-// called after loadWeights(); stackable.
+// applyLora(path, scale=1.0) — apply a LoRA to the loaded weights. SD1.5
+// merges the deltas; Krea 2 attaches the file as a runtime-adapter group
+// (rescalable via setLoraScale, removable via clearLoras). Must be called
+// after loadWeights() / loadModel(); stackable.
 static JSValue js_pipeline_applyLora(JSContext* ctx, JSValueConst this_val,
                                      int argc, JSValueConst* argv) {
     auto* w = pipelineSelf(ctx, this_val);
@@ -475,6 +477,51 @@ static JSValue js_pipeline_applyLora(JSContext* ctx, JSValueConst this_val,
         return JS_ThrowInternalError(ctx, "applyLora: %s", e.what());
     }
     return JS_UNDEFINED;
+}
+
+// setLoraScale(index, scale) — change a runtime LoRA group's user multiplier
+// (0 disables it). `index` is the applyLora() call order, 0-based. Krea 2
+// only: SD1.5 LoRAs are merged irreversibly.
+static JSValue js_pipeline_setLoraScale(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "setLoraScale: not a Pipeline");
+    int32_t index = 0;
+    double scale = 1.0;
+    if (argc < 2 || JS_ToInt32(ctx, &index, argv[0]) ||
+        JS_ToFloat64(ctx, &scale, argv[1]))
+        return JS_ThrowTypeError(ctx, "setLoraScale(index, scale) required");
+    try {
+        w->pipeline->set_lora_scale(index, (float)scale);
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "setLoraScale: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+// clearLoras() — drop every runtime LoRA group. Krea 2 only.
+static JSValue js_pipeline_clearLoras(JSContext* ctx, JSValueConst this_val,
+                                      int /*argc*/, JSValueConst* /*argv*/) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "clearLoras: not a Pipeline");
+    try {
+        w->pipeline->clear_loras();
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "clearLoras: %s", e.what());
+    }
+    return JS_UNDEFINED;
+}
+
+// numLoras() -> number — count of attached runtime LoRA groups. Krea 2 only.
+static JSValue js_pipeline_numLoras(JSContext* ctx, JSValueConst this_val,
+                                    int /*argc*/, JSValueConst* /*argv*/) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "numLoras: not a Pipeline");
+    try {
+        return JS_NewInt32(ctx, w->pipeline->num_loras());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "numLoras: %s", e.what());
+    }
 }
 
 // addControlNet(path) -> number
@@ -1247,7 +1294,10 @@ static void registerPipelineClass(JSContext* ctx) {
         .method_raw("krea2EncodePromptTaps",  js_pipeline_krea2EncodePromptTaps,  1)
         .method_raw("krea2EncodeText",        js_pipeline_krea2EncodeText,        2)
         .method_raw("krea2EncodeImagePrompt", js_pipeline_krea2EncodeImagePrompt, 3)
-        .method_raw("krea2PrimeFromTaps",     js_pipeline_krea2PrimeFromTaps,     5);
+        .method_raw("krea2PrimeFromTaps",     js_pipeline_krea2PrimeFromTaps,     5)
+        .method_raw("setLoraScale",           js_pipeline_setLoraScale,           2)
+        .method_raw("clearLoras",             js_pipeline_clearLoras,             0)
+        .method_raw("numLoras",               js_pipeline_numLoras,               0);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

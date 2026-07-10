@@ -21,8 +21,9 @@
 //     wired for PixArt.
 //   - Krea 2 — Qwen3-VL-4B text encoder (single-stream flow DiT, 3-shard
 //     transformer/) + Qwen-Image VAE decoder. txt2img runs through the same
-//     generate()/prime() path; img2img, inpaint, ControlNet, LoRA, and the
-//     conditioning-control seam are not wired for Krea 2.
+//     generate()/prime() path. LoRA is supported as runtime adapters
+//     (applyLora / setLoraScale / clearLoras — live rescale, INT8-safe);
+//     img2img, inpaint, and ControlNet are not wired for Krea 2.
 // loadModel() takes a model directory and auto-detects the family;
 // createPipeline() builds the SD1.5 stack explicitly.
 //
@@ -168,16 +169,52 @@ class Pipeline {
   loadWeights(/* ...paths */) {}
 
   /**
-   * Merge a LoRA file's deltas into the loaded weights. Call after
-   * loadWeights() and before generate()/prime(). Stackable — call repeatedly
-   * to layer multiple LoRAs. Both kohya-ss/A1111 and diffusers/PEFT key
-   * conventions are auto-detected.
+   * Apply a LoRA file. Two behaviours by model family:
+   *
+   *   - SD1.5: the deltas are MERGED into the loaded weights (irreversible).
+   *   - Krea 2: the file is attached as a RUNTIME-ADAPTER group — the base
+   *     weights (possibly INT8-quantized) are untouched and each adapted
+   *     linear adds scale * (x @ downT) @ upT per forward. Groups are indexed
+   *     in applyLora() call order; rescale live with setLoraScale(index,
+   *     scale) (0 disables) and remove them all with clearLoras(). No reload
+   *     needed for any of it.
+   *
+   * Call after loadWeights() / loadModel() and before generate()/prime().
+   * Stackable — call repeatedly to layer multiple LoRAs. Key conventions are
+   * auto-detected: kohya-ss/A1111 and diffusers/PEFT for SD1.5; diffusers
+   * `transformer.`, ComfyUI `diffusion_model.`, bare, and kohya-mangled
+   * `lora_unet_transformer_blocks_*` spellings for Krea 2.
    *
    * @param {string} path    - LoRA .safetensors file
    * @param {number} [scale] - multiplier on the per-LoRA alpha/rank factor
    *                           (default 1.0; may be negative to subtract)
+   *
+   * @example
+   *   // Krea 2: attach, A/B the strength live, then drop it.
+   *   pipe.applyLora('/loras/pencil-sketch.safetensors', 1.0);
+   *   let img = pipe.generate(prompt, opts);      // with the LoRA
+   *   pipe.setLoraScale(0, 0.0);
+   *   img = pipe.generate(prompt, opts);          // base model again
+   *   pipe.setLoraScale(0, 0.7);                  // softer
+   *   pipe.clearLoras();                          // gone entirely
    */
   applyLora(path, scale) {}
+
+  /**
+   * Change a runtime LoRA group's user multiplier (0 disables it; negative
+   * subtracts). `index` is the applyLora() call order, 0-based. Krea 2 only —
+   * SD1.5 LoRAs are merged irreversibly and throw here.
+   *
+   * @param {number} index - LoRA group index (applyLora call order)
+   * @param {number} scale - new multiplier on the per-LoRA alpha/rank factor
+   */
+  setLoraScale(index, scale) {}
+
+  /** Drop every runtime LoRA group (frees their factors). Krea 2 only. */
+  clearLoras() {}
+
+  /** @returns {number} count of attached runtime LoRA groups. Krea 2 only. */
+  numLoras() {}
 
   /**
    * Register a ControlNet safetensors file. SD1.5 only — throws on Flux. Call
