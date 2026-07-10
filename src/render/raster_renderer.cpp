@@ -213,6 +213,8 @@ void RasterRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
 
 void RasterRenderer::drawText(std::string_view text, float x, float y, FontRef font, Color c) {
     if (!canvas_ || text.empty()) return;
+    std::string utf8Scratch;
+    text = ensureValidUtf8(text, utf8Scratch);
     const FontEntry* fePtr = getOrCreateFont(font);
     if (!fePtr) return;
     SkPaint paint;
@@ -234,6 +236,8 @@ void RasterRenderer::drawTextEx(std::string_view text, float x, float y,
                                 FontRef font, Color c,
                                 float letterSpacing, float blur) {
     if (!canvas_ || text.empty()) return;
+    std::string utf8Scratch;
+    text = ensureValidUtf8(text, utf8Scratch);
     const FontEntry* fePtr = getOrCreateFont(font);
     if (!fePtr) return;
 
@@ -288,6 +292,8 @@ TextMetrics RasterRenderer::measureText(std::string_view text, FontRef font) {
     SkFontMetrics fm;
     primary.getMetrics(&fm);
     if (text.empty()) return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent, fm.fLeading, fm.fXHeight };
+    std::string utf8Scratch;
+    text = ensureValidUtf8(text, utf8Scratch);
     auto runs = splitTextForFallback(text, primary, ensureFontMgr(),
                                       fe.style, fallbackCache_);
     float width = 0.0f;

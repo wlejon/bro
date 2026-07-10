@@ -30,7 +30,63 @@ int32_t nextUtf8(std::string_view s, std::size_t& i) {
     return cp;
 }
 
+// Byte length of the well-formed UTF-8 sequence starting at `s[i]`, or 0 if
+// the bytes there are not well-formed (truncated, overlong, surrogate,
+// > U+10FFFF, stray continuation). Follows RFC 3629 / the Unicode table of
+// valid byte ranges — strictly narrower than Skia's validator, so any
+// sequence accepted here is safe to hand to SkFont/SkCanvas text calls.
+std::size_t wellFormedUtf8SeqLen(std::string_view s, std::size_t i) {
+    const auto b = [&](std::size_t k) -> unsigned {
+        return static_cast<unsigned char>(s[i + k]);
+    };
+    const unsigned b0 = b(0);
+    if (b0 < 0x80) return 1;
+    const auto cont = [&](std::size_t k, unsigned lo = 0x80, unsigned hi = 0xBF) {
+        return i + k < s.size() && b(k) >= lo && b(k) <= hi;
+    };
+    if (b0 >= 0xC2 && b0 <= 0xDF)
+        return cont(1) ? 2 : 0;
+    if (b0 == 0xE0)
+        return cont(1, 0xA0) && cont(2) ? 3 : 0;             // no overlongs
+    if ((b0 >= 0xE1 && b0 <= 0xEC) || b0 == 0xEE || b0 == 0xEF)
+        return cont(1) && cont(2) ? 3 : 0;
+    if (b0 == 0xED)
+        return cont(1, 0x80, 0x9F) && cont(2) ? 3 : 0;       // no surrogates
+    if (b0 == 0xF0)
+        return cont(1, 0x90) && cont(2) && cont(3) ? 4 : 0;  // no overlongs
+    if (b0 >= 0xF1 && b0 <= 0xF3)
+        return cont(1) && cont(2) && cont(3) ? 4 : 0;
+    if (b0 == 0xF4)
+        return cont(1, 0x80, 0x8F) && cont(2) && cont(3) ? 4 : 0; // <= U+10FFFF
+    return 0; // 0x80..0xC1, 0xF5..0xFF: never a lead byte
+}
+
 } // namespace
+
+std::string_view ensureValidUtf8(std::string_view text, std::string& scratch) {
+    std::size_t i = 0;
+    while (i < text.size()) {
+        std::size_t n = wellFormedUtf8SeqLen(text, i);
+        if (n == 0) break;
+        i += n;
+    }
+    if (i == text.size()) return text;  // common case: already valid
+
+    scratch.clear();
+    scratch.reserve(text.size() + 2);
+    scratch.append(text, 0, i);
+    while (i < text.size()) {
+        std::size_t n = wellFormedUtf8SeqLen(text, i);
+        if (n == 0) {
+            scratch.append("\xEF\xBF\xBD");  // U+FFFD, one per offending byte
+            ++i;
+        } else {
+            scratch.append(text, i, n);
+            i += n;
+        }
+    }
+    return scratch;
+}
 
 // -----------------------------------------------------------------------------
 // FontFallbackCache

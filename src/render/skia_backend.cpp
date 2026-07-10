@@ -161,6 +161,8 @@ void SkiaRenderer::fillRect(float x, float y, float w, float h, Color color) {
 
 void SkiaRenderer::drawText(std::string_view text, float x, float y, FontRef font, Color color) {
     if (!canvas_ || text.empty()) return;
+    std::string utf8Scratch;
+    text = ensureValidUtf8(text, utf8Scratch);
     const FontEntry* fePtr = getOrCreateFont(font);
     if (!fePtr) return;
 
@@ -188,6 +190,8 @@ void SkiaRenderer::drawTextEx(std::string_view text, float x, float y,
                               FontRef font, Color color,
                               float letterSpacing, float blur) {
     if (!canvas_ || text.empty()) return;
+    std::string utf8Scratch;
+    text = ensureValidUtf8(text, utf8Scratch);
     const FontEntry* fePtr = getOrCreateFont(font);
     if (!fePtr) return;
 
@@ -248,6 +252,8 @@ TextMetrics SkiaRenderer::measureText(std::string_view text, FontRef font) {
     if (text.empty()) {
         return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent, fm.fLeading, fm.fXHeight };
     }
+    std::string utf8Scratch;
+    text = ensureValidUtf8(text, utf8Scratch);
     auto runs = splitTextForFallback(text, primary, ensureFontMgr(),
                                       fe.style, fallbackCache_);
     float width = 0.0f;

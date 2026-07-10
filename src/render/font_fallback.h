@@ -17,6 +17,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
@@ -81,5 +82,17 @@ std::vector<TextRun> splitTextForFallback(std::string_view utf8,
                                            SkFontMgr*       fontMgr,
                                            SkFontStyle      primaryStyle,
                                            FontFallbackCache& cache);
+
+/// Guarantee `text` is valid UTF-8 before it reaches any SkFont/SkCanvas text
+/// call. Skia's text APIs are release-fatal on invalid input (SkFont::countText
+/// returns -1 and AutoSTArray(-1) aborts the process), so every renderer text
+/// entry point must pass its input through this first.
+///
+/// Valid input is returned as-is (no copy). Invalid input — truncated or
+/// overlong sequences, stray continuation bytes, surrogate encodings (WTF-8
+/// lone surrogates from JS strings), codepoints above U+10FFFF — is copied
+/// into `scratch` with each offending sequence replaced by U+FFFD, and a view
+/// of `scratch` is returned. `scratch` must outlive the returned view.
+std::string_view ensureValidUtf8(std::string_view text, std::string& scratch);
 
 } // namespace bro::render

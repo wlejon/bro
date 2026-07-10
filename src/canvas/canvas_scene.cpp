@@ -1,4 +1,5 @@
 #include "canvas/canvas_scene.h"
+#include "render/font_fallback.h"
 #include "render/font_family.h"
 #include "render/gl_context.h"
 #include "render/skia_backend.h"
@@ -858,13 +859,15 @@ void CanvasScene::clearRect(float x, float y, float w, float h) {
 
 void CanvasScene::fillText(const std::string& text, float x, float y) {
     if (text.empty()) return;
-    float tw = font_.measureText(text.data(), text.size(), SkTextEncoding::kUTF8);
+    std::string utf8Scratch;
+    std::string_view t = render::ensureValidUtf8(text, utf8Scratch);
+    float tw = font_.measureText(t.data(), t.size(), SkTextEncoding::kUTF8);
     CanvasCmd cmd;
     cmd.type = CanvasCmd::kFillText;
     cmd.paint = makeFillPaint();
     cmd.p[0] = adjustTextX(x, tw);
     cmd.p[1] = adjustTextY(y);
-    cmd.text = text;
+    cmd.text = std::string(t);
     cmd.font = font_;
     commands_.push_back(std::move(cmd));
     dirty_ = true;
@@ -874,13 +877,15 @@ void CanvasScene::fillText(const std::string& text, float x, float y) {
 
 void CanvasScene::strokeText(const std::string& text, float x, float y) {
     if (text.empty()) return;
-    float tw = font_.measureText(text.data(), text.size(), SkTextEncoding::kUTF8);
+    std::string utf8Scratch;
+    std::string_view t = render::ensureValidUtf8(text, utf8Scratch);
+    float tw = font_.measureText(t.data(), t.size(), SkTextEncoding::kUTF8);
     CanvasCmd cmd;
     cmd.type = CanvasCmd::kStrokeText;
     cmd.paint = makeStrokePaint();
     cmd.p[0] = adjustTextX(x, tw);
     cmd.p[1] = adjustTextY(y);
-    cmd.text = text;
+    cmd.text = std::string(t);
     cmd.font = font_;
     commands_.push_back(std::move(cmd));
     dirty_ = true;
@@ -891,7 +896,9 @@ void CanvasScene::strokeText(const std::string& text, float x, float y) {
 render::TextMetrics CanvasScene::measureText(const std::string& text) {
     SkFontMetrics fm;
     font_.getMetrics(&fm);
-    float w = font_.measureText(text.data(), text.size(), SkTextEncoding::kUTF8);
+    std::string utf8Scratch;
+    std::string_view t = render::ensureValidUtf8(text, utf8Scratch);
+    float w = font_.measureText(t.data(), t.size(), SkTextEncoding::kUTF8);
     return { w, -fm.fAscent + fm.fDescent, -fm.fAscent, fm.fDescent };
 }
 
