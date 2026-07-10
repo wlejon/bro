@@ -833,6 +833,15 @@ void Document::freeNode(Node* node) {
         // engine's own cached pointers but not this document-owned one.)
         if (elem == focusedElement_) focusedElement_ = nullptr;
     }
+    // Let the JS layer drop this node's wrapper (raw Element* + elem-map entry)
+    // while the memory is still valid. Children were handled by the recursion
+    // above. Without this, wrappers created for nodes freed via paths that
+    // don't call invalidateWrapper (innerHTML/textContent replacement, range
+    // extraction, the orphan-fragment sweep) outlive drainPendingFrees() and
+    // dangle — a later property access or sweepOrphanedWrappers() then reads
+    // the freed Element and faults.
+    if (nodeFreedCb_) nodeFreedCb_(this, node);
+
     // Move the owning unique_ptr into pendingFrees_ rather than destroying
     // it now. The raster thread may still hold a raw pointer from an
     // in-flight traversal; delaying destruction until both threads are

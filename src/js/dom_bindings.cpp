@@ -132,6 +132,34 @@ static void fireSelectionChangeOnDocument(bro::dom::Document* doc) {
     dispatchDomEvent(ctx, target, event);
 }
 
+// Drop a doomed node's JS wrapper. Fired from Document::freeNode() (see the
+// NodeFreedCallback hook) for every node in a freed subtree, while its memory
+// is still valid. Nulls the wrapper's opaque Element* so any lingering JS
+// reference resolves to null instead of dereferencing freed memory, and
+// removes the __bro_elem_map entry so the orphan sweep never sees it.
+static void fireNodeFreed(bro::dom::Document* doc, bro::dom::Node* node) {
+    if (!node || node->nodeType() != bro::dom::NodeType::Element) return;
+    auto it = s_doc_to_ctx.find(doc);
+    if (it == s_doc_to_ctx.end() || !it->second) return;
+    JSContext* ctx = it->second;
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
+    if (!JS_IsUndefined(elemMap) && !JS_IsNull(elemMap)) {
+        std::string key = std::to_string(node->nodeId());
+        JSValue wrapper = JS_GetPropertyStr(ctx, elemMap, key.c_str());
+        if (!JS_IsUndefined(wrapper) && !JS_IsNull(wrapper)) {
+            JS_SetOpaque(wrapper, nullptr);
+            JS_FreeValue(ctx, wrapper);
+        }
+        JSAtom atom = JS_NewAtom(ctx, key.c_str());
+        JS_DeleteProperty(ctx, elemMap, atom, 0);
+        JS_FreeAtom(ctx, atom);
+    }
+    JS_FreeValue(ctx, elemMap);
+    JS_FreeValue(ctx, global);
+}
+
 void DomBindings::install(JSContext* ctx, void* document_ptr)
 {
     JSRuntime* rt = JS_GetRuntime(ctx);
@@ -151,6 +179,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     if (doc) {
         s_doc_to_ctx[doc] = ctx;
         doc->setSelectionChangeCallback(&fireSelectionChangeOnDocument);
+        doc->setNodeFreedCallback(&fireNodeFreed);
     }
 
     // ----- Stash Document pointer for orphan management (per-context) -----

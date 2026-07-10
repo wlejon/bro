@@ -192,6 +192,14 @@ public:
     void setSelectionChangeCallback(SelectionChangeCallback cb) { selectionChangeCb_ = cb; }
     void fireSelectionChange();
 
+    // Fired from freeNode() for every node being queued for destruction (the
+    // whole freed subtree, deepest first). Lets the JS layer drop the wrapper's
+    // raw Element* and its __bro_elem_map entry the instant the node is doomed —
+    // before drainPendingFrees() actually deletes the memory — so no dangling
+    // wrapper survives to be dereferenced by a later access or orphan sweep.
+    using NodeFreedCallback = void(*)(Document*, Node*);
+    void setNodeFreedCallback(NodeFreedCallback cb) { nodeFreedCb_ = cb; }
+
 private:
     void buildTreeFromGumbo(::GumboNode* node, Element* parentElem);
     void collectElements(Node* node, std::vector<Element*>& out);
@@ -265,6 +273,7 @@ private:
     std::unique_ptr<Selection> selection_;
     std::unordered_set<Range*> liveRanges_;
     SelectionChangeCallback selectionChangeCb_ = nullptr;
+    NodeFreedCallback nodeFreedCb_ = nullptr;
 };
 
 } // namespace bro::dom
