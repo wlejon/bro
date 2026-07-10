@@ -53,20 +53,8 @@ void Engine::layoutThreadFunc() {
             auto& kfs = document_->cascade().keyframes();
             animationManager_.setKeyframes(&kfs);
             document_->setAnimationManager(&animationManager_);
-            // A layout-affecting change pending before this pass (DOM mutation,
-            // hover restyle, structure change) forces a full layout. A frame
-            // whose only change is a promoted (transform/opacity) animation
-            // advancing does NOT: those are paint-only, so we still re-resolve
-            // styles (to pick up the new transform) but skip the full 4k-element
-            // layoutTree() pass that otherwise caps fps. A viewport/inset resize
-            // is picked up by the content-dimension compare below.
             int contentW = snap.vpWidth - snap.insetRight;
             int contentH = snap.vpHeight - snap.insetTop - snap.insetBottom;
-            bool layoutAffecting = document_->isDirty() ||
-                                   document_->isStructureDirty() ||
-                                   !document_->layoutRoot() ||
-                                   contentW != lastLayoutContentW_ ||
-                                   contentH != lastLayoutContentH_;
 
             // resolveStyles() must run BEFORE tick(): animations and transitions
             // are *registered* inside the cascade (onStyleChange), so a tick
@@ -77,6 +65,21 @@ void Engine::layoutThreadFunc() {
             // stuck at scale(0), tiles invisible). Re-trigger after completion
             // is prevented by the previousName memo in AnimationManager.
             document_->resolveStyles();
+
+            // Decided AFTER resolveStyles so it sees layoutDirty_ promotions:
+            // a paint-only (hover) frame whose re-resolve turned up a real
+            // geometry change is promoted inside resolveStyles and lands here as
+            // isLayoutDirty(). A frame whose only change is a promoted
+            // (transform/opacity) animation, or a hover that touched only
+            // paint properties, leaves layoutDirty_ false and skips the full
+            // 4k-element layoutTree() pass that otherwise caps fps. A
+            // viewport/inset resize is picked up by the content-dimension compare.
+            bool layoutAffecting = document_->isLayoutDirty() ||
+                                   document_->isStructureDirty() ||
+                                   !document_->layoutRoot() ||
+                                   contentW != lastLayoutContentW_ ||
+                                   contentH != lastLayoutContentH_;
+
             bool animActive = transitionManager_.tick(now) | animationManager_.tick(now);
 
             // Route this tick's active animations. An element whose active

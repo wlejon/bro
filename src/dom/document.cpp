@@ -11,6 +11,7 @@
 #include <functional>
 #include <algorithm>
 #include <cstdlib>
+#include <unordered_set>
 
 namespace bro::dom {
 
@@ -324,6 +325,68 @@ void Document::reconcileStyleElements() {
     }
 }
 
+namespace {
+
+// Properties whose value affects only how a box is painted, never its size or
+// position or that of anything around it. A restyle (e.g. a :hover rule) that
+// touches ONLY these can re-record without re-running layout. Anything not on
+// this list is treated as layout-affecting — the conservative default, so a new
+// or unrecognised property forces a layout rather than risking a stale one.
+bool isPaintOnlyProp(const std::string& p) {
+    static const std::unordered_set<std::string> kPaintOnly = {
+        "color", "background", "background-color", "background-image",
+        "background-position", "background-position-x", "background-position-y",
+        "background-size", "background-repeat", "background-origin",
+        "background-clip", "background-attachment", "background-blend-mode",
+        "mix-blend-mode", "isolation",
+        "border-color", "border-top-color", "border-right-color",
+        "border-bottom-color", "border-left-color",
+        "outline", "outline-color", "outline-style", "outline-width",
+        "outline-offset",
+        "box-shadow", "text-shadow",
+        "border-radius", "border-top-left-radius", "border-top-right-radius",
+        "border-bottom-left-radius", "border-bottom-right-radius",
+        "opacity", "transform", "transform-origin", "transform-style",
+        "translate", "rotate", "scale",
+        "perspective", "perspective-origin", "backface-visibility",
+        "transition", "transition-property", "transition-duration",
+        "transition-timing-function", "transition-delay",
+        "animation", "animation-name", "animation-duration",
+        "animation-timing-function", "animation-delay",
+        "animation-iteration-count", "animation-direction",
+        "animation-fill-mode", "animation-play-state",
+        "cursor", "text-decoration", "text-decoration-color",
+        "text-decoration-line", "text-decoration-style",
+        "text-decoration-thickness", "text-underline-offset",
+        "filter", "backdrop-filter", "visibility", "pointer-events",
+        "z-index", "user-select", "-webkit-user-select",
+        "caret-color", "accent-color", "fill", "stroke", "stroke-width",
+        "clip-path", "mask", "will-change", "-webkit-text-fill-color",
+        "text-emphasis-color", "scrollbar-color", "color-scheme",
+        "object-position", "image-rendering",
+    };
+    return kPaintOnly.count(p) > 0;
+}
+
+// True if any layout-affecting property differs between the old (a) and new (b)
+// computed style. Paint-only properties are ignored, so a :hover that changes
+// only background/color returns false and the frame can skip layout.
+bool layoutAffectingChanged(const htmlayout::css::ComputedStyle& a,
+                            const htmlayout::css::ComputedStyle& b) {
+    for (const auto& [k, v] : b) {
+        if (isPaintOnlyProp(k)) continue;
+        auto it = a.find(k);
+        if (it == a.end() || it->second != v) return true;   // added or changed
+    }
+    for (const auto& [k, v] : a) {
+        if (isPaintOnlyProp(k)) continue;
+        if (b.find(k) == b.end()) return true;                // removed
+    }
+    return false;
+}
+
+} // namespace
+
 void Document::resolveStylesRecursive(Element* elem,
                                        const htmlayout::css::ComputedStyle* parentStyle,
                                        bool force) {
@@ -434,6 +497,17 @@ void Document::resolveStylesRecursive(Element* elem,
         // CSS animations: detect animation-name and start animations
         if (animationManager_) {
             animationManager_->onStyleChange(elem, computed, transitionTime_);
+        }
+
+        // Paint-only fast path: if the document was only paint-dirtied (a hover
+        // restyle) we can skip the full layoutTree() pass — UNLESS this
+        // re-resolve actually changed a geometry-affecting property. Diff old vs
+        // new here and promote to a real layout when it did. Skipped once layout
+        // is already known-needed (a markDirty/structure change), so ordinary
+        // frames pay nothing; only paint-only frames run the diff, and only for
+        // the handful of elements that re-resolved.
+        if (!layoutDirty_ && layoutAffectingChanged(elem->computedStyle(), computed)) {
+            layoutDirty_ = true;
         }
 
         elem->setComputedStyle(std::move(computed));

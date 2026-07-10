@@ -62,6 +62,12 @@ static bool inEditableHost(bro::dom::Node* node) {
 // subtrees instead of dirtying the whole tree. Either side may be null (first
 // hover / leaving the document), in which case that chain has no shared
 // ancestor and the whole path to the root legitimately changes.
+//
+// markPaintDirty (not markDirty): a :hover restyle is almost always paint-only
+// (background/color), so it must not force the full O(N) layoutTree() pass on
+// every mouse move. resolveStyles() diffs each re-resolved element and promotes
+// to a real layout only if a :hover rule actually changed geometry, so a
+// `:hover { padding }` still lays out correctly.
 static void markHoverChainDirty(bro::dom::Element* prev, bro::dom::Element* target) {
     auto isAncestorOrSelf = [](bro::dom::Element* a, bro::dom::Element* d) {
         for (auto* e = d; e; e = e->parentElement())
@@ -69,9 +75,9 @@ static void markHoverChainDirty(bro::dom::Element* prev, bro::dom::Element* targ
         return false;
     };
     for (auto* e = target; e && !isAncestorOrSelf(e, prev); e = e->parentElement())
-        e->markDirty();
+        e->markPaintDirty();
     for (auto* e = prev; e && !isAncestorOrSelf(e, target); e = e->parentElement())
-        e->markDirty();
+        e->markPaintDirty();
 }
 
 // Walk from `el` up to the root checking computed `user-select`. Returns true

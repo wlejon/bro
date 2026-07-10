@@ -110,10 +110,15 @@ void Engine::flush() {
         }
         layout::ElementRefAdapter::setHoveredElement(hoveredElement_.get());
         document_->resolveStyles();
-        // performLayout() rebuilds the persistent layout tree when
-        // structureDirty_ is set and clears the flag itself.
-        document_->performLayout(static_cast<float>(viewportWidth_),
-                                 static_cast<float>(contentHeight()), *textMetrics_);
+        // Skip the full layoutTree() pass when only a paint-only change (a hover
+        // restyle) is pending and resolveStyles() found no geometry change —
+        // mirrors the windowed layout thread. performLayout() rebuilds the
+        // persistent layout tree when structureDirty_ is set and clears the flag.
+        if (document_->isLayoutDirty() || document_->isStructureDirty() ||
+            !document_->layoutRoot()) {
+            document_->performLayout(static_cast<float>(viewportWidth_),
+                                     static_cast<float>(contentHeight()), *textMetrics_);
+        }
         document_->clearDirty();
 
         // Keep the scrollable extent in sync with the fresh layout, same as

@@ -98,16 +98,31 @@ public:
     std::string title() const;
     void setTitle(const std::string& title);
 
-    // Dirty tracking
-    void markDirty() { dirty_ = true; }
+    // Dirty tracking. Two levels:
+    //  - dirty_       : the frame needs a re-record (paint). Set by everything.
+    //  - layoutDirty_ : the frame also needs a full layoutTree() pass. Set by
+    //                   markDirty() (the conservative default — any change might
+    //                   move geometry) and markStructureDirty(), but NOT by
+    //                   markPaintDirty(). The hover restyle uses markPaintDirty
+    //                   because :hover rules are almost always paint-only
+    //                   (background/color); if a :hover rule DOES change a
+    //                   layout-affecting property, resolveStyles() detects it via
+    //                   the computed-style diff and calls promoteLayoutDirty(),
+    //                   so geometry stays correct. This is what keeps hover (and
+    //                   any paint-only restyle) off the O(N) re-layout that
+    //                   otherwise runs on every mouse move.
+    void markDirty() { dirty_ = true; layoutDirty_ = true; }
+    void markPaintDirty() { dirty_ = true; }
+    void promoteLayoutDirty() { layoutDirty_ = true; }
     bool isDirty() const { return dirty_; }
-    void clearDirty() { dirty_ = false; }
+    bool isLayoutDirty() const { return layoutDirty_; }
+    void clearDirty() { dirty_ = false; layoutDirty_ = false; }
 
     // Structure dirty — DOM nodes added/removed, render tree needs rebuild.
     // Also arms a style-element reconcile: a subtree that just changed may have
     // brought in (or repopulated) a <style>, so resolveStyles re-scans for any
     // whose CSS isn't in the cascade yet.
-    void markStructureDirty() { structureDirty_ = true; dirty_ = true; styleElsDirty_ = true; }
+    void markStructureDirty() { structureDirty_ = true; dirty_ = true; layoutDirty_ = true; styleElsDirty_ = true; }
     bool isStructureDirty() const { return structureDirty_; }
     void clearStructureDirty() { structureDirty_ = false; }
 
@@ -236,6 +251,7 @@ private:
     Element* body_ = nullptr;
     Element* focusedElement_ = nullptr;
     bool dirty_ = false;
+    bool layoutDirty_ = false;
     bool structureDirty_ = false;
     bool styleElsDirty_ = false;  // a <style> may need adding to the cascade
     std::string basePath_;

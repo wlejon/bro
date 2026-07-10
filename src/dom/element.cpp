@@ -654,6 +654,16 @@ void Element::markDirty() {
     }
 }
 
+void Element::markPaintDirty() {
+    // Element still re-resolves (dirty_), but the document is only paint-dirtied
+    // so the layout thread can skip the full layoutTree() pass unless the
+    // re-resolve turns up an actual geometry change (promoteLayoutDirty).
+    dirty_ = true;
+    if (document_) {
+        document_->markPaintDirty();
+    }
+}
+
 void Element::markStructureDirty() {
     dirty_ = true;
     if (document_) {

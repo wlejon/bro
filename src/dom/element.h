@@ -88,6 +88,9 @@ public:
 
     // Dirty tracking
     void markDirty();
+    // Like markDirty(), but only requests a re-record (paint), not a full
+    // re-layout — used by the hover restyle. See Document::markPaintDirty.
+    void markPaintDirty();
     void markStructureDirty();
     bool isDirty() const { return dirty_; }
     void clearDirty() { dirty_ = false; }
