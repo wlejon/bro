@@ -188,14 +188,16 @@ class Pipeline {
    * @param {string} path    - LoRA .safetensors file
    * @param {number} [scale] - multiplier on the per-LoRA alpha/rank factor
    *                           (default 1.0; may be negative to subtract)
+   * @returns {number|undefined} the runtime-adapter group index (Krea 2 —
+   *          pass to setLoraScale), or undefined when merged (SD1.5)
    *
    * @example
    *   // Krea 2: attach, A/B the strength live, then drop it.
-   *   pipe.applyLora('/loras/pencil-sketch.safetensors', 1.0);
+   *   const g = pipe.applyLora('/loras/pencil-sketch.safetensors', 1.0);
    *   let img = pipe.generate(prompt, opts);      // with the LoRA
-   *   pipe.setLoraScale(0, 0.0);
+   *   pipe.setLoraScale(g, 0.0);
    *   img = pipe.generate(prompt, opts);          // base model again
-   *   pipe.setLoraScale(0, 0.7);                  // softer
+   *   pipe.setLoraScale(g, 0.7);                  // softer
    *   pipe.clearLoras();                          // gone entirely
    */
   applyLora(path, scale) {}

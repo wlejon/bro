@@ -454,9 +454,10 @@ static JSValue js_pipeline_loadWeights(JSContext* ctx, JSValueConst this_val,
 }
 
 // applyLora(path, scale=1.0) — apply a LoRA to the loaded weights. SD1.5
-// merges the deltas; Krea 2 attaches the file as a runtime-adapter group
-// (rescalable via setLoraScale, removable via clearLoras). Must be called
-// after loadWeights() / loadModel(); stackable.
+// merges the deltas (returns undefined); Krea 2 attaches the file as a
+// runtime-adapter group and returns its index (pass to setLoraScale;
+// removable via clearLoras). Must be called after loadWeights() /
+// loadModel(); stackable.
 static JSValue js_pipeline_applyLora(JSContext* ctx, JSValueConst this_val,
                                      int argc, JSValueConst* argv) {
     auto* w = pipelineSelf(ctx, this_val);
@@ -472,7 +473,8 @@ static JSValue js_pipeline_applyLora(JSContext* ctx, JSValueConst this_val,
 
     try {
         bds::File f = bds::File::open(resolveAppPath(path));
-        w->pipeline->apply_lora(f, (float)scale);
+        const int group = w->pipeline->apply_lora(f, (float)scale);
+        if (group >= 0) return JS_NewInt32(ctx, group);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "applyLora: %s", e.what());
     }
