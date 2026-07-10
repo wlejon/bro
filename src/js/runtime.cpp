@@ -481,7 +481,12 @@ Runtime::Runtime()
         return;
     }
 
-    JS_SetMemoryLimit(rt_, 256 * 1024 * 1024);
+    // 4 GB: high enough that apps shuttling ML tensors over the JS boundary
+    // (a single Krea 2 raw-taps buffer is a 63 MB Float32Array; workers cache
+    // several) never hit it, low enough to still catch a runaway allocation
+    // loop. The old 256 MB cap OOM'd the krea2-lab worker on its second
+    // expression field.
+    JS_SetMemoryLimit(rt_, 4ull * 1024 * 1024 * 1024);
     JS_SetMaxStackSize(rt_, 8 * 1024 * 1024);
 
     bro::util::installJsInterruptHandler(rt_);
