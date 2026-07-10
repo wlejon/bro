@@ -4,6 +4,7 @@
 #include "js/event_dispatch.h"
 #include "dom/document.h"
 #include "dom/event.h"
+#include "util/log.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -85,7 +86,18 @@ JSValue DomBindings::wrapElement(JSContext* ctx, void* element_ptr)
 
     upgradeCustomElementPrototype(ctx, obj, elem->tagName());
 
-    JS_SetPropertyStr(ctx, elemMap, key.c_str(), JS_DupValue(ctx, obj));
+    // Do not resurrect a doomed element into the map. If the document no longer
+    // owns this node it was already freed (or is queued in pendingFrees_) — a
+    // node removed mid-event-dispatch, then re-wrapped as the dispatch unwinds
+    // the propagation path (target/currentTarget of the very handler that
+    // removed it). Caching it here re-adds a dangling __bro_elem_map entry that
+    // outlives the node and faults the next sweepOrphanedWrappers(). The caller
+    // still gets a usable (transient) wrapper for the tail of this dispatch; it
+    // just isn't persisted. ownsNode() is a pointer-hash lookup, never a deref.
+    auto* ctxDoc = getDocumentForCtx(ctx);
+    if (!ctxDoc || ctxDoc->ownsNode(elem)) {
+        JS_SetPropertyStr(ctx, elemMap, key.c_str(), JS_DupValue(ctx, obj));
+    }
 
     JS_FreeValue(ctx, elemMap);
     JS_FreeValue(ctx, global);
@@ -282,6 +294,12 @@ void DomBindings::sweepOrphanedWrappers(JSContext* ctx) {
         return;
     }
 
+    // Every wrapper in this context's map backs a node owned by this context's
+    // document. ownsNode() is a pointer-keyed hash lookup — it never
+    // dereferences the pointer — so it is the one safe question we can ask about
+    // a raw Element* that might already be freed.
+    bro::dom::Document* ctxDoc = getDocumentForCtx(ctx);
+
     JSPropertyEnum* props = nullptr;
     uint32_t len = 0;
     JS_GetOwnPropertyNames(ctx, &props, &len, elemMap,
@@ -291,6 +309,22 @@ void DomBindings::sweepOrphanedWrappers(JSContext* ctx) {
         JSValue val = JS_GetProperty(ctx, elemMap, props[i].atom);
         auto* el = static_cast<bro::dom::Element*>(
             JS_GetOpaque(val, js_element_class_id));
+
+        // Backstop for any free path that didn't eagerly clear its wrapper
+        // (the eager path is fireNodeFreed / invalidateWrapper). If the document
+        // no longer owns this node, the raw Element* dangles — it was freed, or
+        // is queued in pendingFrees_ awaiting destruction. Dereferencing it,
+        // even for isAlive()'s magic_ probe, is a use-after-free the instant the
+        // page is unmapped (the sweepOrphanedWrappers crash). Drop the stale
+        // entry without ever touching the pointer.
+        if (el && ctxDoc && !ctxDoc->ownsNode(el)) {
+            LOG_WARN("sweepOrphanedWrappers: dropped DANGLING wrapper (unowned Element*)");
+            JS_SetOpaque(val, nullptr);
+            JS_DeleteProperty(ctx, elemMap, props[i].atom, 0);
+            JS_FreeValue(ctx, val);
+            continue;
+        }
+
         if (el && el->isAlive() && !el->parentNode() &&
             el->childNodes().empty() &&
             el->tagName() == "#DOCUMENT-FRAGMENT") {
