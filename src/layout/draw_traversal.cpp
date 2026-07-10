@@ -704,6 +704,41 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     // transform); skip re-applying them here in that case.
     bool skipWrap = scRootSkipWrap_.count(elem) > 0;
 
+    // Off-screen culling. When an ancestor clips its overflow (a scroll
+    // container), any in-flow descendant whose border box lies entirely outside
+    // that clip paints nothing, so skip recording it and its whole subtree. This
+    // is what keeps the base re-record O(visible) instead of O(total DOM): a long
+    // list (e.g. a 300-row model picker) re-records on every hover/scroll frame,
+    // and without this every row is recorded even when only ~15 are on screen —
+    // the source of hover/scroll lag on big lists.
+    //
+    // Kept conservative to never drop visible paint:
+    //   * only inside an active clip (clipRectStack_ non-empty) — the clip
+    //     guarantees in-flow descendants can't paint beyond it;
+    //   * only in-flow, untransformed boxes. absolute/fixed can escape the clip,
+    //     sticky is repositioned at paint time, and a transform can map the box
+    //     back on screen — layoutBox already bakes in relative/sticky offsets;
+    //   * overscan the clip by a slack margin so a just-off-screen element's
+    //     box-shadow/outline spilling toward the viewport still records.
+    if (!clipRectStack_.empty() && !skipWrap) {
+        const ClipBox& clip = clipRectStack_.back();
+        constexpr float kCullSlack = 256.0f;  // covers typical shadow/outline spill
+        bool outside = by + bh < clip.y - kCullSlack ||
+                       by      > clip.y + clip.h + kCullSlack ||
+                       bx + bw < clip.x - kCullSlack ||
+                       bx      > clip.x + clip.w + kCullSlack;
+        if (outside) {
+            auto posIt = style.find("position");
+            bool inFlow = posIt == style.end() ||
+                          posIt->second == "static" ||
+                          posIt->second == "relative";
+            auto trIt = style.find("transform");
+            bool noTransform = trIt == style.end() || trIt->second.empty() ||
+                               trIt->second == "none";
+            if (inFlow && noTransform) return;
+        }
+    }
+
     bool hasTransform = false;
     if (!skipWrap) {
         auto trIt = style.find("transform");
