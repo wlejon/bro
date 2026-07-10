@@ -113,7 +113,18 @@ public:
         return count;
     }
 
-    bool isHovered() const override { return elem_ && elem_ == hoveredElement_; }
+    bool isHovered() const override {
+        // :hover matches the element directly under the pointer AND all of its
+        // ancestors (CSS Selectors L4). Walk up from the hovered element and
+        // match if elem_ is anywhere on that chain — otherwise hovering a
+        // child (e.g. a row's text span) would fail to :hover the parent row.
+        if (!elem_ || !hoveredElement_) return false;
+        for (auto* node = static_cast<dom::Node*>(hoveredElement_); node;
+             node = node->parentNode()) {
+            if (node == elem_) return true;
+        }
+        return false;
+    }
     bool isFocused() const override {
         return elem_ && elem_->document() && elem_ == elem_->document()->activeElement();
     }

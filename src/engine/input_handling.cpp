@@ -52,6 +52,28 @@ static bool inEditableHost(bro::dom::Node* node) {
     return false;
 }
 
+// The hovered element changed from `prev` to `target`. Per CSS Selectors L4,
+// :hover matches the element under the pointer AND every ancestor, so the
+// pseudo flips on each element along the path from the old/new target up to
+// their lowest common ancestor (the LCA and everything above it contain a
+// hovered descendant both before and after, so their :hover is unchanged).
+// Mark exactly those elements dirty so they re-resolve — walking each chain up
+// to but excluding the LCA keeps a hover move bounded to the two changed
+// subtrees instead of dirtying the whole tree. Either side may be null (first
+// hover / leaving the document), in which case that chain has no shared
+// ancestor and the whole path to the root legitimately changes.
+static void markHoverChainDirty(bro::dom::Element* prev, bro::dom::Element* target) {
+    auto isAncestorOrSelf = [](bro::dom::Element* a, bro::dom::Element* d) {
+        for (auto* e = d; e; e = e->parentElement())
+            if (e == a) return true;
+        return false;
+    };
+    for (auto* e = target; e && !isAncestorOrSelf(e, prev); e = e->parentElement())
+        e->markDirty();
+    for (auto* e = prev; e && !isAncestorOrSelf(e, target); e = e->parentElement())
+        e->markDirty();
+}
+
 // Walk from `el` up to the root checking computed `user-select`. Returns true
 // if any ancestor (or el itself) has `user-select: none`, in which case the
 // engine should not initiate a text-selection drag for clicks landing on this
@@ -1240,15 +1262,18 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                 dispatchEvent(target, enterEvt);
             }
 
-            // Mark old and new hovered elements dirty for :hover style
+            // Mark the elements whose :hover state flipped dirty for style
             // re-resolve — but only when the page actually has :hover rules.
             // With none, a hover-target change cannot alter any computed style,
             // so dirtying + a full base re-record on every mouse move is pure
             // waste (a 4.4k-element grid with no :hover cost ~16 ms/frame).
-            // The JS dispatched above can free either element; re-resolve.
+            // :hover applies up the ancestor chain, not just the leaf, so dirty
+            // the whole changed path (see markHoverChainDirty) — otherwise
+            // moving onto a child (a row's text span) leaves the parent row's
+            // cached style stale and it fails to highlight. The JS dispatched
+            // above can free the old target; re-fetch it through the handle.
             if (document_ && document_->cascade().usesHoverPseudo()) {
-                if (auto* ph = hoveredElement_.get()) ph->markDirty();
-                if (target) target->markDirty();
+                markHoverChainDirty(hoveredElement_.get(), target);
                 uiDirty_ = true;
             }
             hoveredElement_.assign(document_.get(), target);
