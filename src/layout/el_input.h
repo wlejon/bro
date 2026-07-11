@@ -94,6 +94,8 @@ private:
 
     std::string getAttr(const std::string& name) const;
     render::FontRef getFontRef() const;
+    bool darkScheme_() const;
+    bromath::Color accentColor_() const;
 
     render::Renderer* renderer_;
     dom::Element* elem_ = nullptr;

@@ -459,25 +459,61 @@ void ElInput::drawText_(float x, float y, float w, float h) {
     renderer_->restore();
 }
 
+// color-scheme, per CSS Color Adjustment: an element whose computed
+// color-scheme includes "dark" gets dark-rendered UA control chrome.
+// htmlayout registers the property as inherited, so `body { color-scheme:
+// dark }` is enough to theme every form control in an app.
+bool ElInput::darkScheme_() const {
+    if (!elem_) return false;
+    auto& style = elem_->computedStyle();
+    auto it = style.find("color-scheme");
+    return it != style.end() && it->second.find("dark") != std::string::npos;
+}
+
+// CSS accent-color for the "accent parts" of a control: the checked
+// checkbox/radio fill and the range fill + thumb. Windows-blue when unset.
+Color ElInput::accentColor_() const {
+    Color accent = cfromColor8({0, 120, 215, 255});
+    if (elem_) {
+        auto& style = elem_->computedStyle();
+        auto it = style.find("accent-color");
+        if (it != style.end() && !it->second.empty() && it->second != "auto") {
+            accent = DrawTraversal::parseColor(it->second);
+        }
+    }
+    return accent;
+}
+
 void ElInput::drawCheckbox_(float x, float y, float w, float h) {
     float sz = std::min(w, h);
     float bx = x + (w - sz) / 2;
     float by = y + (h - sz) / 2;
 
-    renderer_->fillRect(bx, by, sz, sz, cfromColor8({255, 255, 255, 255}));
-    renderer_->drawRect(bx, by, sz, sz, cfromColor8({118, 118, 118, 255}));
+    bool dark = darkScheme_();
+    bool checked = elem_ && elem_->hasAttribute("checked");
+    Color accent = accentColor_();
+    Color box = dark ? cfromColor8({43, 47, 56, 255}) : cfromColor8({255, 255, 255, 255});
+    Color border = dark ? cfromColor8({110, 118, 130, 255}) : cfromColor8({118, 118, 118, 255});
+
+    // Checked box fills with the accent (Chromium's accent-color behavior);
+    // the mark contrasts against that fill, not the scheme.
+    renderer_->fillRect(bx, by, sz, sz, checked ? accent : box);
+    if (!checked) renderer_->drawRect(bx, by, sz, sz, border);
 
     if (focused_) {
-        renderer_->drawRect(bx - 1, by - 1, sz + 2, sz + 2, cfromColor8({0, 120, 215, 255}));
+        Color ring = {accent.r, accent.g, accent.b, 128.0f / 255.0f};
+        renderer_->drawRect(bx - 1, by - 1, sz + 2, sz + 2, ring);
     }
 
-    if (elem_ && elem_->hasAttribute("checked")) {
+    if (checked) {
+        Color mark = (accent.r + accent.g + accent.b > 1.5f)
+            ? cfromColor8({20, 20, 20, 255}) : cfromColor8({255, 255, 255, 255});
         float pad = sz * 0.2f;
         float x1 = bx + pad, y1 = by + sz * 0.5f;
         float x2 = bx + sz * 0.4f, y2 = by + sz - pad;
         float x3 = bx + sz - pad, y3 = by + pad;
-        renderer_->drawLine(x1, y1, x2, y2, cfromColor8({0, 0, 0, 255}), 2.0f);
-        renderer_->drawLine(x2, y2, x3, y3, cfromColor8({0, 0, 0, 255}), 2.0f);
+        renderer_->drawLine(x1, y1, x2, y2, mark, 2.0f);
+        renderer_->drawLine(x2, y2, x3, y3, mark, 2.0f);
     }
 }
 
@@ -486,12 +522,19 @@ void ElInput::drawRadio_(float x, float y, float w, float h) {
     float r = sz / 2;
     float cx = x + w / 2, cy = y + h / 2;
 
-    renderer_->drawCircle(cx, cy, r, cfromColor8({255, 255, 255, 255}), cfromColor8({118, 118, 118, 255}), 1.0f);
+    bool dark = darkScheme_();
+    bool checked = elem_ && elem_->hasAttribute("checked");
+    Color accent = accentColor_();
+    Color box = dark ? cfromColor8({43, 47, 56, 255}) : cfromColor8({255, 255, 255, 255});
+    Color border = dark ? cfromColor8({110, 118, 130, 255}) : cfromColor8({118, 118, 118, 255});
+
+    renderer_->drawCircle(cx, cy, r, box, checked ? accent : border, checked ? 2.0f : 1.0f);
     if (focused_) {
-        renderer_->drawCircle(cx, cy, r + 1, cfromColor8({0, 0, 0, 0}), cfromColor8({0, 120, 215, 255}), 1.0f);
+        Color ring = {accent.r, accent.g, accent.b, 128.0f / 255.0f};
+        renderer_->drawCircle(cx, cy, r + 1, cfromColor8({0, 0, 0, 0}), ring, 1.0f);
     }
-    if (elem_ && elem_->hasAttribute("checked")) {
-        renderer_->drawCircle(cx, cy, r * 0.45f, cfromColor8({0, 0, 0, 255}), cfromColor8({0, 0, 0, 0}), 0.0f);
+    if (checked) {
+        renderer_->drawCircle(cx, cy, r * 0.45f, accent, cfromColor8({0, 0, 0, 0}), 0.0f);
     }
 }
 
@@ -514,14 +557,7 @@ void ElInput::drawRange_(float x, float y, float w, float h) {
 
     // Accent color — honor CSS accent-color for the filled track and thumb,
     // falling back to Windows-blue when unset.
-    bromath::Color accent = cfromColor8({0, 120, 215, 255});
-    if (elem_) {
-        auto& style = elem_->computedStyle();
-        auto it = style.find("accent-color");
-        if (it != style.end() && !it->second.empty() && it->second != "auto") {
-            accent = DrawTraversal::parseColor(it->second);
-        }
-    }
+    Color accent = accentColor_();
     // Darken the accent ~18% in linear space (was uint8 *0.82 — equivalent
     // multiplicative scale, now correctly applied in linear-light).
     bromath::Color accentDark = {
@@ -529,21 +565,38 @@ void ElInput::drawRange_(float x, float y, float w, float h) {
     };
     bromath::Color focusRing = {accent.r, accent.g, accent.b, 128.0f/255.0f};
 
+    bool dark = darkScheme_();
+    Color trackBg = dark ? cfromColor8({52, 58, 68, 255}) : cfromColor8({200, 200, 200, 255});
     renderer_->fillRoundRect(x + trackPad, trackY, w - trackPad * 2, trackH,
-                            2, 2, cfromColor8({200, 200, 200, 255}));
+                            2, 2, trackBg);
 
     float mn = rangeMin(), mx = rangeMax();
     float val = rangeValue();
+    float span = w - trackPad * 2;
     float pct = (mx > mn) ? (val - mn) / (mx - mn) : 0.0f;
     pct = std::clamp(pct, 0.0f, 1.0f);
-    float thumbX = x + trackPad + pct * (w - trackPad * 2);
+    float thumbX = x + trackPad + pct * span;
     float thumbY = y + h / 2;
 
-    renderer_->fillRoundRect(x + trackPad, trackY, thumbX - x - trackPad, trackH,
-                            2, 2, accent);
+    // Fill origin: a signed range (min < 0 < max) is a bipolar control — its
+    // resting point is 0, not the left edge, so the accent fill grows from the
+    // zero position toward the thumb in either direction. A slider at 0 shows
+    // no fill at all, which is exactly the "this control is neutral" signal.
+    // One-signed ranges keep the usual fill-from-min.
+    float fillFrom = x + trackPad;
+    if (mn < 0.0f && mx > 0.0f) {
+        float zeroPct = (0.0f - mn) / (mx - mn);
+        fillFrom = x + trackPad + zeroPct * span;
+        // A faint zero tick so the resting point stays visible while dragging.
+        Color tick = dark ? cfromColor8({110, 118, 130, 255}) : cfromColor8({140, 140, 140, 255});
+        renderer_->fillRect(fillFrom - 0.5f, trackY - 2, 1, trackH + 4, tick);
+    }
+    float fx0 = std::min(fillFrom, thumbX), fx1 = std::max(fillFrom, thumbX);
+    if (fx1 > fx0) renderer_->fillRoundRect(fx0, trackY, fx1 - fx0, trackH, 2, 2, accent);
 
     bromath::Color thumbFill = dragging_ ? accentDark : accent;
-    renderer_->drawCircle(thumbX, thumbY, thumbR, thumbFill, cfromColor8({255, 255, 255, 255}), 1.5f);
+    Color thumbRim = dark ? cfromColor8({16, 18, 24, 255}) : cfromColor8({255, 255, 255, 255});
+    renderer_->drawCircle(thumbX, thumbY, thumbR, thumbFill, thumbRim, 1.5f);
 
     if (focused_) {
         renderer_->drawCircle(thumbX, thumbY, thumbR + 2, cfromColor8({0, 0, 0, 0}), focusRing, 1.5f);
