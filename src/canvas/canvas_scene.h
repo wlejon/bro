@@ -2,9 +2,10 @@
 
 #include "canvas/canvas2d.h"
 #include "render/renderer.h"
-#include "render/frame_worker.h"
 
 #include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -547,20 +548,34 @@ public:
     void releaseScene(CanvasScene* scene);
 
 private:
-    void threadFunc(SDL_Window* win);
-
     enum class JobKind { Render, Release };
+
+    void threadFunc(SDL_Window* win);
+    // Main thread: publish one job, wake the worker, block until it completes
+    // (including the worker's GPU-fence wait). No-op after shutdown.
+    void submitJob(CanvasScene* scene, int w, int h, JobKind kind);
+
     std::thread thread_;
     SDL_GLContext glCtx_ = nullptr;
     sk_sp<GrDirectContext> grContext_;
-    render::FrameWorker worker_;
-    std::atomic<bool> ready_{false};
     bool started_ = false;
-    // Job published before postRequest; read by the worker under the
-    // FrameWorker state acquire.
+
+    // Synchronous cross-thread call: render()/releaseScene() are RPCs onto the
+    // GL-owning worker — the caller always blocks start-to-finish, so a plain
+    // mutex+condvar job slot is the whole protocol. The worker never touches a
+    // scene outside a submitJob window, which is what makes raw CanvasScene*
+    // safe here.
+    std::mutex m_;
+    std::condition_variable cv_;
+    bool ready_ = false;       // worker has MakeCurrent'd its context
+    bool hasJob_ = false;
+    bool shutdown_ = false;    // set by stop(), or by the worker on init failure
     CanvasScene* job_ = nullptr;
     int jobW_ = 0, jobH_ = 0;
     JobKind jobKind_ = JobKind::Render;
+    // Fence from the completed job; the submitting caller glWaitSyncs it on
+    // the main context (GPU-side ordering, no CPU stall) and deletes it.
+    GLsync doneFence_ = nullptr;
 };
 
 } // namespace bro::canvas

@@ -231,17 +231,24 @@ void CanvasRasterThread::start(SDL_GLContext glCtx, SDL_Window* win) {
     if (started_ || !glCtx || !win) return;
     glCtx_ = glCtx;
     started_ = true;
-    ready_.store(false, std::memory_order_relaxed);
+    ready_ = false;
+    shutdown_ = false;
+    hasJob_ = false;
     thread_ = std::thread(&CanvasRasterThread::threadFunc, this, win);
     // Block until the worker has MakeCurrent'd its context — the Windows/NVIDIA
     // "no concurrent wgl*Context against the same HDC" serialization. Created
     // once here, while quiescent, so it never overlaps the raster thread.
-    ready_.wait(false, std::memory_order_acquire);
+    std::unique_lock<std::mutex> lk(m_);
+    cv_.wait(lk, [this] { return ready_; });
 }
 
 void CanvasRasterThread::stop() {
     if (!started_) return;
-    worker_.postShutdown();
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        shutdown_ = true;
+    }
+    cv_.notify_all();
     if (thread_.joinable()) thread_.join();
     if (glCtx_) {
         SDL_GL_DestroyContext(glCtx_);
@@ -252,48 +259,85 @@ void CanvasRasterThread::stop() {
 
 void CanvasRasterThread::render(CanvasScene* scene, int w, int h) {
     if (!started_ || !scene) return;
-    worker_.waitUntilIdle();             // ensure free (claims any prior fence)
-    job_ = scene; jobW_ = w; jobH_ = h; jobKind_ = JobKind::Render;
-    worker_.postRequest();
-    worker_.waitUntilIdle();             // wait for completion + claim the fence
+    submitJob(scene, w, h, JobKind::Render);
 }
 
 void CanvasRasterThread::releaseScene(CanvasScene* scene) {
     if (!started_ || !scene) return;
-    worker_.waitUntilIdle();
-    job_ = scene; jobKind_ = JobKind::Release;
-    worker_.postRequest();
-    worker_.waitUntilIdle();
+    submitJob(scene, 0, 0, JobKind::Release);
+}
+
+void CanvasRasterThread::submitJob(CanvasScene* scene, int w, int h, JobKind kind) {
+    GLsync fence = nullptr;
+    {
+        std::unique_lock<std::mutex> lk(m_);
+        if (shutdown_) return;
+        job_ = scene; jobW_ = w; jobH_ = h; jobKind_ = kind;
+        hasJob_ = true;
+        cv_.notify_all();
+        cv_.wait(lk, [this] { return !hasJob_ || shutdown_; });
+        fence = doneFence_;
+        doneFence_ = nullptr;
+    }
+    // GPU-side ordering: subsequent main-context commands (texture sampling)
+    // wait on the worker's fence without stalling the CPU.
+    if (fence) {
+        glWaitSync(fence, 0, GL_TIMEOUT_IGNORED);
+        glDeleteSync(fence);
+    }
 }
 
 void CanvasRasterThread::threadFunc(SDL_Window* win) {
     SDL_GL_MakeCurrent(win, glCtx_);
     // Signal the main thread that MakeCurrent is done before any further GL.
-    ready_.store(true, std::memory_order_release);
-    ready_.notify_one();
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        ready_ = true;
+    }
+    cv_.notify_all();
 
     grContext_ = render::SkiaRenderer::createGrContext();
     if (!grContext_) {
         LOG_ERROR("Canvas raster thread: failed to create GrDirectContext");
+        // Refuse future jobs instead of leaving submitJob callers blocked.
+        std::lock_guard<std::mutex> lk(m_);
+        shutdown_ = true;
+        cv_.notify_all();
         return;
     }
     LOG_INFO("Canvas raster thread started");
 
-    while (worker_.waitForRequest()) {
-        worker_.markBusy();
+    std::unique_lock<std::mutex> lk(m_);
+    while (true) {
+        cv_.wait(lk, [this] { return hasJob_ || shutdown_; });
+        if (shutdown_) break;
         CanvasScene* s = job_;
+        const int w = jobW_, h = jobH_;
+        const JobKind kind = jobKind_;
+        lk.unlock();
+
         if (s) {
-            if (jobKind_ == JobKind::Render)
-                s->renderOnWorker(grContext_.get(), jobW_, jobH_);
+            if (kind == JobKind::Render)
+                s->renderOnWorker(grContext_.get(), w, h);
             else
                 s->releaseGpuResources();
         }
-        // GL fence — guarantees GPU commands complete before the main thread
-        // samples the texture. FrameWorker handles publish + shutdown race.
+        // GL fence — the submitting caller glWaitSyncs it on the main context
+        // so texture sampling is ordered after our GPU work. glFlush pushes
+        // the fence to the GPU (required before another context waits on it).
         GLsync fence = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
         glFlush();
-        worker_.publishResult(fence);
+
+        lk.lock();
+        doneFence_ = fence;
+        hasJob_ = false;
+        cv_.notify_all();
     }
+    if (doneFence_) {                     // unclaimed fence at shutdown
+        glDeleteSync(doneFence_);
+        doneFence_ = nullptr;
+    }
+    lk.unlock();
 
     grContext_->flushAndSubmit();
     grContext_.reset();
