@@ -164,7 +164,28 @@ void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
 
 void Engine::dispatchPointerAlias(const char* type, dom::Element* target,
                                   const dom::MouseEvent& src) {
-    if (!target || !jsRuntime_) return;
+    if (!jsRuntime_) return;
+    // Pointer capture: pointermove/pointerup/pointercancel retarget to the
+    // captured element — the web's drag idiom, so the element that captured
+    // on pointerdown keeps seeing the gesture wherever the cursor goes.
+    // pointerdown never retargets (capture is taken during it, not before),
+    // and cross-document targets (3D HtmlNode inner docs) are left alone —
+    // their events carry panel-local coordinates, not app-document ones.
+    const bool isDown = std::strcmp(type, "pointerdown") == 0;
+    dom::Element* captured = isDown ? nullptr : pointerCaptureElement_.get();
+    if (captured && target && captured->document() != target->document()) {
+        captured = nullptr;
+    }
+    // Self-heal: a buttons-free pointermove while captured means the release
+    // never reached us (e.g. swallowed by a native dialog) — end the capture
+    // rather than dragging forever.
+    if (captured && !isDown && src.buttons() == 0 &&
+        std::strcmp(type, "pointermove") == 0) {
+        releasePointerCapture(captured);
+        captured = nullptr;
+    }
+    if (captured) target = captured;
+    if (!target) return;
     // Clone the already-populated mouse event under the pointer type. Handlers
     // read the shared MouseEvent fields; populateJsEvent() adds pointerId etc.
     // when the type begins with "pointer". Pointer events bubble and cancel
@@ -179,7 +200,43 @@ void Engine::dispatchPointerAlias(const char* type, dom::Element* target,
     pe.setButton(src.button());       pe.setButtons(src.buttons());
     pe.setCtrlKey(src.ctrlKey());     pe.setShiftKey(src.shiftKey());
     pe.setAltKey(src.altKey());       pe.setMetaKey(src.metaKey());
+    // offsetX/Y in `src` are relative to the hit target — recompute against
+    // the element actually receiving the event.
+    if (captured) applyMouseOffset(pe, captured);
     js::dispatchDomEvent(jsRuntime_->getContext(), target, pe);
+    // Implicit release (spec): the pointerup/pointercancel that ends the
+    // gesture also ends the capture.
+    if (!isDown && pointerCaptureElement_.held() &&
+        (std::strcmp(type, "pointerup") == 0 ||
+         std::strcmp(type, "pointercancel") == 0)) {
+        releasePointerCapture(pointerCaptureElement_.get());
+    }
+}
+
+bool Engine::setPointerCapture(dom::Element* target) {
+    // Validate the JS-supplied element against the app document (same
+    // soundness policy as requestPointerLock).
+    if (!target || !document_ || !document_->isNodeLive(target)) return false;
+    if (pointerCaptureElement_.get() == target) return true;
+    pointerCaptureElement_.assign(document_.get(), target);
+    dom::Event evt("gotpointercapture", /*bubbles=*/true, /*cancelable=*/false);
+    evt.setIsTrusted(true);
+    dispatchEvent(target, evt);
+    return true;
+}
+
+void Engine::releasePointerCapture(dom::Element* target) {
+    if (!pointerCaptureElement_.held()) return;
+    dom::Element* cur = pointerCaptureElement_.get();
+    // Only the holder may release; a stale (freed) holder always releases.
+    if (cur && target != cur) return;
+    pointerCaptureElement_.reset();
+    if (cur) {
+        dom::Event evt("lostpointercapture", /*bubbles=*/true,
+                       /*cancelable=*/false);
+        evt.setIsTrusted(true);
+        dispatchEvent(cur, evt);
+    }
 }
 
 // Walk the document + shadow trees and pump any pending HTMLMediaElement

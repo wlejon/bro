@@ -3603,6 +3603,38 @@ static JSValue js_element_requestPointerLock(JSContext* ctx, JSValueConst this_v
     return JS_UNDEFINED;
 }
 
+// Pointer capture — setPointerCapture(pointerId) / releasePointerCapture(
+// pointerId) / hasPointerCapture(pointerId). bro synthesizes a single mouse
+// pointer (pointerId 1), so the id argument is accepted and ignored; while
+// captured, pointermove/up/cancel route to this element and the capture
+// auto-releases after pointerup (see Engine::setPointerCapture).
+static JSValue js_element_setPointerCapture(JSContext* ctx, JSValueConst this_val,
+                                            int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    auto it = s_ctx_engines.find(ctx);
+    if (!el || it == s_ctx_engines.end() || !it->second) return JS_UNDEFINED;
+    static_cast<bro::engine::Engine*>(it->second)->setPointerCapture(el);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_releasePointerCapture(JSContext* ctx, JSValueConst this_val,
+                                                int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    auto it = s_ctx_engines.find(ctx);
+    if (!el || it == s_ctx_engines.end() || !it->second) return JS_UNDEFINED;
+    static_cast<bro::engine::Engine*>(it->second)->releasePointerCapture(el);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_hasPointerCapture(JSContext* ctx, JSValueConst this_val,
+                                            int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    auto it = s_ctx_engines.find(ctx);
+    if (!el || it == s_ctx_engines.end() || !it->second) return JS_FALSE;
+    return JS_NewBool(ctx, static_cast<bro::engine::Engine*>(it->second)
+                               ->hasPointerCapture(el));
+}
+
 // ===========================================================================
 // Element prototype function list
 // ===========================================================================
@@ -3772,6 +3804,9 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("assignedNodes",             0, js_element_assignedNodes),
     JS_CFUNC_DEF("assignedElements",          0, js_element_assignedElements),
     JS_CFUNC_DEF("requestPointerLock",        0, js_element_requestPointerLock),
+    JS_CFUNC_DEF("setPointerCapture",         1, js_element_setPointerCapture),
+    JS_CFUNC_DEF("releasePointerCapture",     1, js_element_releasePointerCapture),
+    JS_CFUNC_DEF("hasPointerCapture",         1, js_element_hasPointerCapture),
 };
 
 // ===========================================================================

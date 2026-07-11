@@ -181,6 +181,20 @@ public:
     void exitPointerLock();
     dom::Element* pointerLockElement() const { return lockedElement_.get(); }
 
+    // --- Pointer capture (Element.setPointerCapture) ---
+    // While captured, pointermove/pointerup/pointercancel dispatch to the
+    // captured element regardless of the cursor's hit target (offsetX/Y
+    // recomputed against it), and the capture auto-releases after pointerup —
+    // the web's drag idiom, so a drag whose release lands off-element still
+    // reaches the element that started it. Mouse events keep normal hit-test
+    // targeting. bro synthesizes one mouse pointer (pointerId 1), so there is
+    // no per-pointer table. Fires gotpointercapture / lostpointercapture.
+    bool setPointerCapture(dom::Element* target);
+    void releasePointerCapture(dom::Element* target);
+    bool hasPointerCapture(const dom::Element* target) const {
+        return target != nullptr && pointerCaptureElement_.get() == target;
+    }
+
     // --- Document lifecycle ---
     // Tracks the HTML document.readyState. Progresses "loading" (during script
     // execution) -> "interactive" (just before DOMContentLoaded) -> "complete"
@@ -926,6 +940,12 @@ private:
     dom::ElementHandle lockedElement_;
     float lockedMouseX_ = 0.0f;
     float lockedMouseY_ = 0.0f;
+
+    // Pointer capture: while held, pointer events (not mouse events) route to
+    // this element. Cleared by pointerup/pointercancel, an explicit
+    // releasePointerCapture(), or a buttons-free pointermove (self-heal when
+    // the release was never delivered).
+    dom::ElementHandle pointerCaptureElement_;
 
     // HTML document.readyState. Starts "loading" while user scripts execute,
     // advances to "interactive"/"complete" as DOMContentLoaded/load dispatch.
