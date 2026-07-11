@@ -2897,9 +2897,10 @@ static JSValue js_element_click(JSContext* ctx, JSValueConst this_val,
     dom::MouseEvent event("click");
     dispatchDomEvent(ctx, el, event);
 
-    // Button default action: submitting or resetting the owning form.
-    // Mirrors the hit-tested click path in replaced_elements.cpp so scripted
-    // clicks via element.click() exercise the same behavior.
+    // Default actions — button form submit/reset and checkbox/radio
+    // activation (toggle + change/input events). Mirrors the hit-tested
+    // click path in replaced_elements.cpp so scripted clicks via
+    // element.click() exercise the same behavior.
     if (!event.defaultPrevented()) {
         const auto& tag = el->tagName();
         const bool isButton = (tag == "BUTTON" || tag == "button");
@@ -2933,6 +2934,28 @@ static JSValue js_element_click(JSContext* ctx, JSValueConst this_val,
                     }
                 }
             }
+        } else if (isInput && (inputType == "checkbox" || inputType == "radio")) {
+            if (inputType == "checkbox") {
+                if (el->hasAttribute("checked")) el->removeAttribute("checked");
+                else el->setAttribute("checked", "");
+            } else {
+                // Radio: checking one unchecks the rest of its name group.
+                const std::string nameStr = el->getAttribute("name");
+                if (!nameStr.empty() && el->document() && el->document()->body()) {
+                    auto radios =
+                        el->document()->body()->querySelectorAll("input[type=\"radio\"]");
+                    for (auto* other : radios) {
+                        if (other != el && other->getAttribute("name") == nameStr)
+                            other->removeAttribute("checked");
+                    }
+                }
+                el->setAttribute("checked", "");
+            }
+            dom::Event changeEvt("change");
+            dispatchDomEvent(ctx, el, changeEvt);
+            dom::InputEvent inputEvt("input");
+            inputEvt.setIsTrusted(true);
+            dispatchDomEvent(ctx, el, inputEvt);
         }
     }
     return JS_UNDEFINED;
