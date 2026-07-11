@@ -3,8 +3,12 @@
 #include "steam/steam_flat.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <functional>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -157,7 +161,6 @@ struct SteamCommand {
     int32_t  i32b = 0;                              // CreateLobby maxMembers
     std::vector<LobbyListFilter> filters;           // RequestLobbyList
     std::vector<uint8_t> bytes;                     // DecodeVoice compressed payload
-    SteamCommand* next = nullptr;                   // MPSC stack link
 };
 
 // ---------------------------------------------------------------------------
@@ -387,8 +390,15 @@ private:
     struct PendingAvatar { uint32_t subscriberId; uint32_t reqId; int size; };
     std::unordered_map<uint64_t, std::vector<PendingAvatar>> pendingAvatars_;
 
-    // --- Lock-free MPSC command ingress (intrusive atomic stack) ---
-    std::atomic<SteamCommand*> cmdHead_{nullptr};
+    // --- Command ingress + lifecycle (guarded by m_). Producers (any thread)
+    // lock, push, notify; the service thread swaps the queue out under the
+    // lock and processes outside it. The condvar also paces the loop: 10ms
+    // ticks while the Steam pump is live, indefinite block when Steam is
+    // unavailable (commands and shutdown wake it). ---
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::deque<std::unique_ptr<SteamCommand>> cmdQueue_;
+    bool running_ = false;
 
     // --- Published state (atomics + publish-before-Available strings) ---
     std::atomic<Status>   status_{Status::Initializing};
@@ -399,7 +409,6 @@ private:
     std::string           personaName_; // see note above — no concurrent access after publish
 
     std::thread thread_;
-    std::atomic<bool> running_{false};
     std::atomic<uint32_t> nextSubscriberId_{1};
 
     static SteamService* s_instance;

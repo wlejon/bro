@@ -219,22 +219,24 @@ SteamService::SteamService() {
     }
     s_instance = this;
     status_.store(Status::Initializing, std::memory_order_release);
-    running_.store(true, std::memory_order_release);
+    running_ = true;
     thread_ = std::thread(&SteamService::threadMain, this);
 }
 
 SteamService::~SteamService() {
-    running_.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        running_ = false;
+    }
+    cv_.notify_one();
     if (thread_.joinable()) thread_.join();
 
     // Free any command nodes that arrived after the thread drained/exited. Do
     // NOT delete subscriberPtr here — the thread's shutdown already freed the
     // subscribers it owned (double-free risk otherwise).
-    SteamCommand* head = cmdHead_.exchange(nullptr, std::memory_order_acquire);
-    while (head) {
-        SteamCommand* next = head->next;
-        delete head;
-        head = next;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        cmdQueue_.clear();
     }
 
     if (s_instance == this) s_instance = nullptr;
@@ -428,17 +430,12 @@ void SteamService::decodeVoice(uint32_t subscriberId, uint32_t reqId,
     postCommand(c);
 }
 
-// ---------------------------------------------------------------------------
-// Lock-free MPSC push — CAS the node onto the stack head.
-// ---------------------------------------------------------------------------
 void SteamService::postCommand(SteamCommand* cmd) {
-    SteamCommand* old = cmdHead_.load(std::memory_order_relaxed);
-    do {
-        cmd->next = old;
-    } while (!cmdHead_.compare_exchange_weak(
-        old, cmd,
-        std::memory_order_release,
-        std::memory_order_relaxed));
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        cmdQueue_.emplace_back(cmd);
+    }
+    cv_.notify_one();
 }
 
 void SteamService::postEventTo(uint32_t subscriberId, SteamEvent* ev) {
@@ -1014,21 +1011,6 @@ void SteamService::dispatchCallback(const CallbackMsg_t& msg) {
 }
 
 // ---------------------------------------------------------------------------
-// Drain the MPSC stack and reverse LIFO → FIFO for ordered processing.
-// ---------------------------------------------------------------------------
-static SteamCommand* drainAndReverse(std::atomic<SteamCommand*>& head) {
-    SteamCommand* lifo = head.exchange(nullptr, std::memory_order_acquire);
-    SteamCommand* fifo = nullptr;
-    while (lifo) {
-        SteamCommand* next = lifo->next;
-        lifo->next = fifo;
-        fifo = lifo;
-        lifo = next;
-    }
-    return fifo;
-}
-
-// ---------------------------------------------------------------------------
 // Service thread main — loads the Steam redistributable, owns SteamAPI init,
 // the RunCallbacks pump, and every callback handler. ALL SteamAPI calls happen
 // on this thread.
@@ -1113,15 +1095,30 @@ void SteamService::threadMain() {
     }
 
     uint64_t iter = 0;
-    while (running_.load(std::memory_order_acquire)) {
-        // 1. Drain and process commands (FIFO) — always, Steam up or not.
-        SteamCommand* cmd = drainAndReverse(cmdHead_);
-        while (cmd) {
-            SteamCommand* next = cmd->next;
-            handleCommand(*cmd);
-            delete cmd;
-            cmd = next;
+    std::deque<std::unique_ptr<SteamCommand>> batch;
+    while (true) {
+        // 1. Take pending commands (FIFO) and process them outside the lock;
+        //    pace the loop. With Steam up we tick at 10ms so the callback pump
+        //    stays serviced; with Steam absent/failed we block until a command
+        //    arrives — register/unregister still works, with zero idle wakeups.
+        {
+            std::unique_lock<std::mutex> lk(m_);
+            if (running_ && cmdQueue_.empty()) {
+                if (steamUp) {
+                    cv_.wait_for(lk, std::chrono::milliseconds(10), [this] {
+                        return !cmdQueue_.empty() || !running_;
+                    });
+                } else {
+                    cv_.wait(lk, [this] {
+                        return !cmdQueue_.empty() || !running_;
+                    });
+                }
+            }
+            if (!running_ && cmdQueue_.empty()) break;
+            batch.swap(cmdQueue_);
         }
+        for (auto& cmd : batch) handleCommand(*cmd);
+        batch.clear();
 
         if (steamUp) {
             // 2. Pump Steam callbacks. ManualDispatch lets us translate each
@@ -1159,21 +1156,10 @@ void SteamService::threadMain() {
                 }
             }
         }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-
-    // Drain late commands (e.g. Unregister posted between the last loop and the
-    // running_=false observation) so subscribers don't leak.
-    {
-        SteamCommand* cmd = drainAndReverse(cmdHead_);
-        while (cmd) {
-            SteamCommand* next = cmd->next;
-            handleCommand(*cmd);
-            delete cmd;
-            cmd = next;
-        }
-    }
+    // Late commands (e.g. Unregister posted around the running_=false
+    // observation) were drained by the loop's exit condition above, so
+    // subscribers don't leak.
 
     for (auto& [sid, sub] : subscribers_) delete sub;
     subscribers_.clear();
