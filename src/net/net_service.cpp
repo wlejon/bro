@@ -107,22 +107,24 @@ NetService::NetService() {
         LOG_ERROR("[net] NetService: second instance created — there can be only one.");
     }
     s_instance = this;
-    running_.store(true, std::memory_order_release);
+    running_ = true;
     thread_ = std::thread(&NetService::threadMain, this);
 }
 
 NetService::~NetService() {
-    running_.store(false, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        running_ = false;
+    }
+    cv_.notify_one();
     if (thread_.joinable()) thread_.join();
 
     // Any stragglers pushed after the thread drained and exited: just free
     // the command nodes. The thread's shutdown already handled subscriber
     // ownership, so we must NOT delete subscriberPtr here (double-free risk).
-    NetCommand* head = cmdHead_.exchange(nullptr, std::memory_order_acquire);
-    while (head) {
-        NetCommand* next = head->next;
-        delete head;
-        head = next;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        cmdQueue_.clear();
     }
 
     if (s_instance == this) s_instance = nullptr;
@@ -149,6 +151,11 @@ void NetService::destroySubscriber(NetSubscriber* sub) {
 }
 
 bool NetService::getConnectionStats(uint32_t conn, ConnectionStats& out) const {
+    // Hold m_ across the GNS call: the service thread nulls sockets_ and runs
+    // GameNetworkingSockets_Kill() under the same lock, so this can never
+    // observe a torn pointer or race the library teardown. GNS itself is
+    // thread-safe against the service thread's pump.
+    std::lock_guard<std::mutex> lk(m_);
     if (!sockets_) return false;
     SteamNetConnectionRealTimeStatus_t status;
     if (sockets_->GetConnectionRealTimeStatus(conn, &status, 0, nullptr) != k_EResultOK)
@@ -160,17 +167,12 @@ bool NetService::getConnectionStats(uint32_t conn, ConnectionStats& out) const {
     return true;
 }
 
-// ---------------------------------------------------------------------------
-// Lock-free MPSC push — CAS the node onto the stack head.
-// ---------------------------------------------------------------------------
 void NetService::postCommand(NetCommand* cmd) {
-    NetCommand* old = cmdHead_.load(std::memory_order_relaxed);
-    do {
-        cmd->next = old;
-    } while (!cmdHead_.compare_exchange_weak(
-        old, cmd,
-        std::memory_order_release,
-        std::memory_order_relaxed));
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        cmdQueue_.emplace_back(cmd);
+    }
+    cv_.notify_one();
 }
 
 void NetService::postEventTo(uint32_t subscriberId, NetEvent* ev) {
@@ -405,21 +407,6 @@ void NetService::handleCommand(NetCommand& cmd) {
 }
 
 // ---------------------------------------------------------------------------
-// Drain the MPSC stack and reverse LIFO → FIFO for ordered processing.
-// ---------------------------------------------------------------------------
-static NetCommand* drainAndReverse(std::atomic<NetCommand*>& head) {
-    NetCommand* lifo = head.exchange(nullptr, std::memory_order_acquire);
-    NetCommand* fifo = nullptr;
-    while (lifo) {
-        NetCommand* next = lifo->next;
-        lifo->next = fifo;
-        fifo = lifo;
-        lifo = next;
-    }
-    return fifo;
-}
-
-// ---------------------------------------------------------------------------
 // Service thread main
 // ---------------------------------------------------------------------------
 void NetService::threadMain() {
@@ -428,7 +415,10 @@ void NetService::threadMain() {
         LOG_ERROR("[net] GameNetworkingSockets_Init failed: %s", errMsg);
         return;
     }
-    sockets_ = SteamNetworkingSockets();
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        sockets_ = SteamNetworkingSockets();
+    }
     if (!sockets_) {
         LOG_ERROR("[net] Failed to get ISteamNetworkingSockets interface");
         GameNetworkingSockets_Kill();
@@ -449,15 +439,33 @@ void NetService::threadMain() {
 
     LOG_INFO("[net] NetService started");
 
-    while (running_.load(std::memory_order_acquire)) {
-        // 1. Drain and process commands (FIFO).
-        NetCommand* cmd = drainAndReverse(cmdHead_);
-        while (cmd) {
-            NetCommand* next = cmd->next;
-            handleCommand(*cmd);
-            delete cmd;
-            cmd = next;
+    std::deque<std::unique_ptr<NetCommand>> batch;
+    while (true) {
+        // 1. Take pending commands (FIFO) and process them outside the lock;
+        //    pace the loop. With live sockets we tick at 1ms so the GNS pump
+        //    stays responsive; fully idle we block until a command arrives —
+        //    zero wakeups for apps that never touch networking.
+        {
+            std::unique_lock<std::mutex> lk(m_);
+            const bool active = !connectionOwner_.empty() ||
+                                !subscriberListen_.empty() ||
+                                !subscriberPollGroup_.empty();
+            if (running_ && cmdQueue_.empty()) {
+                if (active) {
+                    cv_.wait_for(lk, std::chrono::milliseconds(1), [this] {
+                        return !cmdQueue_.empty() || !running_;
+                    });
+                } else {
+                    cv_.wait(lk, [this] {
+                        return !cmdQueue_.empty() || !running_;
+                    });
+                }
+            }
+            if (!running_ && cmdQueue_.empty()) break;
+            batch.swap(cmdQueue_);
         }
+        for (auto& cmd : batch) handleCommand(*cmd);
+        batch.clear();
 
         // 2. Run GNS callbacks (fires onStatus for state changes).
         sockets_->RunCallbacks();
@@ -477,22 +485,6 @@ void NetService::threadMain() {
                 m->Release();
             }
         }
-
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-    }
-
-    // Drain any commands that arrived between our last loop iteration and
-    // the running_=false observation — so late Unregister commands get
-    // processed instead of leaking subscribers (or causing double-free
-    // during destructor cleanup).
-    {
-        NetCommand* cmd = drainAndReverse(cmdHead_);
-        while (cmd) {
-            NetCommand* next = cmd->next;
-            handleCommand(*cmd);
-            delete cmd;
-            cmd = next;
-        }
     }
 
     // Shutdown: close all resources and free remaining subscribers.
@@ -506,8 +498,13 @@ void NetService::threadMain() {
     subscriberPollGroup_.clear();
     subscribers_.clear();
 
-    sockets_ = nullptr;
-    GameNetworkingSockets_Kill();
+    // Null the pointer and kill GNS under the lock so a getConnectionStats
+    // in flight on another thread either completes first or sees nullptr.
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        sockets_ = nullptr;
+        GameNetworkingSockets_Kill();
+    }
     LOG_INFO("[net] NetService stopped");
 }
 

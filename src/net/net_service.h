@@ -1,9 +1,12 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -62,10 +65,6 @@ struct NetCommand {
     std::string address;
     std::vector<uint8_t> data;
     class NetSubscriber* subscriberPtr = nullptr; // Register/Unregister
-
-    // Intrusive pointer for the MPSC atomic stack. Accessed only by the
-    // producer (before push) and the consumer (after drain/reverse).
-    NetCommand* next = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -208,15 +207,20 @@ private:
     std::unordered_map<uint32_t, HSteamListenSocket> subscriberListen_;
     std::unordered_map<uint32_t, HSteamNetPollGroup> subscriberPollGroup_;
 
-    // --- Lock-free MPSC command ingress (intrusive atomic stack) ---
+    // --- Command ingress + lifecycle (guarded by m_) ---
     //
-    // Producers push nodes onto the stack via CAS; the service thread
-    // atomically exchanges the whole head with nullptr to drain, then
-    // reverses the list to get FIFO order before processing.
-    std::atomic<NetCommand*> cmdHead_{nullptr};
+    // Producers (any thread) lock, push, notify. The service thread swaps the
+    // queue out under the lock and processes outside it. m_ also guards
+    // sockets_ for OUTSIDE readers (getConnectionStats from any thread) —
+    // including across shutdown, where GameNetworkingSockets_Kill() runs
+    // under the lock so an in-flight stats call can never race it. The
+    // service thread itself is the only writer and reads sockets_ freely.
+    mutable std::mutex m_;
+    std::condition_variable cv_;
+    std::deque<std::unique_ptr<NetCommand>> cmdQueue_;
+    bool running_ = false;
 
     std::thread thread_;
-    std::atomic<bool> running_{false};
     std::atomic<uint32_t> nextSubscriberId_{1};
 
     // One service per process; the GNS C callback routes through this.
