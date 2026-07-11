@@ -114,11 +114,40 @@ bool localFillBounds(const dom::Element* el, const dom::Element* idScope,
         if (href.size() < 2 || href[0] != '#') return false;
         const dom::Element* target = findById(idScope, href.substr(1));
         if (!target || target == el) return false;
+        std::string ttag = lower(target->tagName());
+        if (ttag == "symbol" || ttag == "svg") {
+            // A referenced symbol/svg becomes a nested viewport at the
+            // use's x/y, sized by the use's width/height and mapped through
+            // the symbol's viewBox. (isNonRendered would reject the symbol
+            // in the plain path below — it only renders when used.)
+            FillBounds cb;
+            bool any = false;
+            for (const dom::Element* child : target->children()) {
+                std::string ctag = lower(child->tagName());
+                if (isNonRendered(ctag)) continue;
+                FillBounds c1;
+                if (!localFillBounds(child, idScope, meas, c1, depth + 1)) continue;
+                SkRect mapped = ownTransform(child, ctag)
+                                    .mapRect(SkRect::MakeLTRB(c1.l, c1.t, c1.r, c1.b));
+                cb.joinRect(mapped);
+                any = true;
+            }
+            if (!any) return false;
+            float uw = attrFloat(el, "width", -1.0f);
+            float uh = attrFloat(el, "height", -1.0f);
+            const std::string& vb = attrOf(target, "viewBox");
+            SkMatrix m = SkMatrix::I();
+            if (uw > 0 && uh > 0 && !vb.empty())
+                m = viewportMatrix(uw, uh, vb, attrOf(target, "preserveAspectRatio"));
+            m.postTranslate(attrFloat(el, "x"), attrFloat(el, "y"));
+            out.joinRect(m.mapRect(SkRect::MakeLTRB(cb.l, cb.t, cb.r, cb.b)));
+            return true;
+        }
         FillBounds tb;
         if (!localFillBounds(target, idScope, meas, tb, depth + 1)) return false;
         // The referenced element is rendered as if cloned under <use>: its
         // own transform applies, then the use's x/y translation.
-        SkMatrix m = ownTransform(target, lower(target->tagName()));
+        SkMatrix m = ownTransform(target, ttag);
         m.postTranslate(attrFloat(el, "x"), attrFloat(el, "y"));
         SkRect mapped = m.mapRect(SkRect::MakeLTRB(tb.l, tb.t, tb.r, tb.b));
         out.joinRect(mapped);
