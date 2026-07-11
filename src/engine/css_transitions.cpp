@@ -620,6 +620,7 @@ void AnimationManager::onStyleChange(dom::Element* elem,
     // Check for animation declarations — try longhands first, then shorthand
     std::string animName;
     std::string durStr, timingStr, delayStr, iterStr, directionStr, fillModeStr;
+    std::string playStateStr;
 
     auto anIt = newStyle.find("animation-name");
     if (anIt != newStyle.end() && anIt->second != "none" && !anIt->second.empty()) {
@@ -637,6 +638,8 @@ void AnimationManager::onStyleChange(dom::Element* elem,
         if (it != newStyle.end()) directionStr = it->second;
         it = newStyle.find("animation-fill-mode");
         if (it != newStyle.end()) fillModeStr = it->second;
+        it = newStyle.find("animation-play-state");
+        if (it != newStyle.end()) playStateStr = it->second;
     } else {
         // Try shorthand: animation: name duration timing delay iteration direction fill
         auto aIt = newStyle.find("animation");
@@ -675,6 +678,8 @@ void AnimationManager::onStyleChange(dom::Element* elem,
                 directionStr = tok;
             } else if (tok == "none" || tok == "forwards" || tok == "backwards" || tok == "both") {
                 fillModeStr = tok;
+            } else if (tok == "paused" || tok == "running") {
+                playStateStr = tok;
             } else {
                 animName = tok;
             }
@@ -684,6 +689,8 @@ void AnimationManager::onStyleChange(dom::Element* elem,
 
     auto& ea = elements_[elem];
 
+    const bool wantPaused = (playStateStr == "paused");
+
     // Per CSS Animations §4.2: an animation only (re)starts when
     // animation-name *changes*. Once it has run to completion, the
     // animation does not re-trigger just because animation-name is
@@ -692,7 +699,21 @@ void AnimationManager::onStyleChange(dom::Element* elem,
     // post-completion re-cascade of an unchanged animation-name would
     // register a fresh Animation, locking the element into an infinite
     // loop of restarting animations.
-    if (ea.previousName == animName) return;
+    if (ea.previousName == animName) {
+        // animation-play-state CAN change without the name changing —
+        // pause freezes the clock, resume shifts startTime by the pause span.
+        for (auto& a : ea.active) {
+            if (a.name != animName) continue;
+            if (wantPaused && !a.paused) {
+                a.paused = true;
+                a.pausedAt = currentTime;
+            } else if (!wantPaused && a.paused) {
+                a.startTime += currentTime - a.pausedAt;
+                a.paused = false;
+            }
+        }
+        return;
+    }
     ea.previousName = animName;
 
     // Belt-and-braces: if the same name is somehow already in the
@@ -729,8 +750,15 @@ void AnimationManager::onStyleChange(dom::Element* elem,
 
     std::string fillMode = fillModeStr.empty() ? "none" : fillModeStr;
 
-    ea.active.push_back({animName, dur, delay, easing, iterCount,
-                         alternate, reverse, fillMode, currentTime, 0});
+    Animation anim{animName, dur, delay, easing, iterCount,
+                   alternate, reverse, fillMode, currentTime, 0};
+    if (wantPaused) {
+        // Born paused: the clock freezes at the start instant. A negative
+        // delay still pins a deterministic mid-animation frame.
+        anim.paused = true;
+        anim.pausedAt = currentTime;
+    }
+    ea.active.push_back(std::move(anim));
 
     pendingEvents_.push_back({elem, "animationstart", animName, 0.0});
 }
@@ -751,7 +779,7 @@ bool AnimationManager::tick(double currentTime) {
         if (!ea.active.empty() && inDisplayNoneSubtree(elem)) { ++it; continue; }
 
         for (auto& a : ea.active) {
-            double elapsed = currentTime - a.startTime - a.delay;
+            double elapsed = a.effectiveTime(currentTime) - a.startTime - a.delay;
             if (elapsed < 0) continue;
 
             // Check for iteration events
@@ -782,7 +810,7 @@ bool AnimationManager::tick(double currentTime) {
             std::remove_if(ea.active.begin(), ea.active.end(),
                 [currentTime](const Animation& a) {
                     if (a.iterationCount < 0) return false; // infinite
-                    double elapsed = currentTime - a.startTime - a.delay;
+                    double elapsed = a.effectiveTime(currentTime) - a.startTime - a.delay;
                     return elapsed >= a.duration * a.iterationCount;
                 }),
             ea.active.end());
@@ -806,8 +834,16 @@ bool AnimationManager::tick(double currentTime) {
         } else {
             // See TransitionManager::tick: defer the promote-vs-base-dirty
             // decision to the layout-thread coordinator; just record activity.
-            activeThisTick_.push_back(elem);
-            anyActive = true;
+            // Paused animations hold a static frame (applied during style
+            // resolution) — they must not drive per-frame re-render.
+            bool anyRunning = false;
+            for (auto& a : ea.active) {
+                if (!a.paused) { anyRunning = true; break; }
+            }
+            if (anyRunning) {
+                activeThisTick_.push_back(elem);
+                anyActive = true;
+            }
             ++it;
         }
     }
@@ -825,7 +861,7 @@ void AnimationManager::applyOverrides(dom::Element* elem,
         auto* kf = findKeyframes(anim.name);
         if (!kf || kf->stops.empty()) continue;
 
-        double elapsed = currentTime - anim.startTime - anim.delay;
+        double elapsed = anim.effectiveTime(currentTime) - anim.startTime - anim.delay;
         if (elapsed < 0) {
             // In delay period — apply backwards fill if applicable
             if (anim.fillMode != "backwards" && anim.fillMode != "both") continue;

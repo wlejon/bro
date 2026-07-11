@@ -119,6 +119,15 @@ struct Animation {
     std::string fillMode;       // none, forwards, backwards, both
     double startTime;           // ms (engine time)
     int completedIterations = 0;
+    // animation-play-state: while paused, the clock freezes at pausedAt;
+    // resuming shifts startTime forward by the paused span.
+    bool paused = false;
+    double pausedAt = 0;        // ms (engine time), valid while paused
+
+    // The clock used for progress: frozen at pausedAt while paused.
+    double effectiveTime(double currentTime) const {
+        return paused ? pausedAt : currentTime;
+    }
 };
 
 struct ElementAnimations {
