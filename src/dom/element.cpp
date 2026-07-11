@@ -382,6 +382,122 @@ std::string Element::outerHTML() const {
     return oss.str();
 }
 
+// ---------------------------------------------------------------------------
+// SVG serialization for the SkSVGDOM fallback renderer.
+//
+// Two Skia-specific transforms on top of plain outerHTML:
+//  - Skia's SVG module only parses `xlink:href` (SkSVGUse/SkSVGGradient etc.),
+//    so SVG2-style plain `href` attributes are renamed on the way out.
+//  - Skia has no <symbol> node. A <use> whose target is a <symbol> is
+//    expanded inline into the <svg> viewport the SVG spec defines for that
+//    instantiation (x/y/width/height from the use, viewBox/preserveAspectRatio
+//    from the symbol, children cloned). Bare <symbol> elements serialize to
+//    nothing — they are invisible unless instantiated.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+bool svgTagReferencesHref(const std::string& lowerTag) {
+    return lowerTag == "use" || lowerTag == "lineargradient" ||
+           lowerTag == "radialgradient" || lowerTag == "pattern" ||
+           lowerTag == "image" || lowerTag == "textpath" ||
+           lowerTag == "mpath" || lowerTag == "feimage" || lowerTag == "filter";
+}
+
+std::string svgLowerTag(const Element* el) {
+    std::string t = el->tagName();
+    for (auto& c : t) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return t;
+}
+
+const Element* findSvgElementById(const Element* root, const std::string& id) {
+    if (root->getAttribute("id") == id) return root;
+    for (const auto* child : root->children()) {
+        if (const Element* found = findSvgElementById(child, id)) return found;
+    }
+    return nullptr;
+}
+
+const Element* resolveSvgHrefTarget(const Element* el, const Element* svgRoot) {
+    std::string href = el->getAttribute("href");
+    if (href.empty()) href = el->getAttribute("xlink:href");
+    if (href.size() < 2 || href[0] != '#') return nullptr;
+    return findSvgElementById(svgRoot, href.substr(1));
+}
+
+void serializeSvgAttrs(std::ostringstream& oss, const Element* el, bool renameHref) {
+    for (const auto& [key, val] : el->attributes()) {
+        auto attrIt = kSvgAttrCaseMap.find(key);
+        std::string attrName = (attrIt != kSvgAttrCaseMap.end()) ? attrIt->second : key;
+        if (renameHref && attrName == "href") attrName = "xlink:href";
+        oss << " " << attrName << "=\"" << htmlEscapeAttr(val) << "\"";
+    }
+    const std::string& css = el->style().cssText();
+    if (!css.empty()) oss << " style=\"" << css << "\"";
+}
+
+void serializeSvgNode(std::ostringstream& oss, const Element* el,
+                      const Element* svgRoot, int depth) {
+    if (depth > 16) return; // use/symbol reference cycle guard
+    std::string lowerTag = svgLowerTag(el);
+
+    // Invisible unless instantiated via <use>; Skia would drop it anyway.
+    if (lowerTag == "symbol") return;
+
+    if (lowerTag == "use") {
+        const Element* target = resolveSvgHrefTarget(el, svgRoot);
+        if (target && target != el && svgLowerTag(target) == "symbol") {
+            // Instantiate the symbol as the <svg> viewport the spec defines.
+            oss << "<svg";
+            for (const char* a : {"x", "y", "width", "height", "transform"}) {
+                const std::string& v = el->getAttribute(a);
+                if (!v.empty()) oss << " " << a << "=\"" << htmlEscapeAttr(v) << "\"";
+            }
+            for (const char* a : {"viewBox", "preserveAspectRatio"}) {
+                // gumbo case-adjusts these per the HTML5 SVG attribute table,
+                // so camelCase is the stored spelling; try lowercase too for
+                // attributes set through other paths.
+                std::string v = target->getAttribute(a);
+                if (v.empty()) {
+                    std::string lower = a;
+                    for (auto& c : lower) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                    v = target->getAttribute(lower);
+                }
+                if (!v.empty()) oss << " " << a << "=\"" << htmlEscapeAttr(v) << "\"";
+            }
+            oss << ">";
+            for (const auto* child : target->children()) {
+                serializeSvgNode(oss, child, svgRoot, depth + 1);
+            }
+            oss << "</svg>";
+            return;
+        }
+        // Plain <use>: serialize with the href spelling Skia understands.
+    }
+
+    std::string serializedTag = svgCorrectTagName(el->tagName());
+    oss << "<" << serializedTag;
+    serializeSvgAttrs(oss, el, svgTagReferencesHref(lowerTag));
+    oss << ">";
+    for (const auto& child : el->childNodes()) {
+        if (child->nodeType() == NodeType::Text) {
+            oss << static_cast<const TextNode*>(child)->data();
+        } else if (child->nodeType() == NodeType::Element) {
+            serializeSvgNode(oss, static_cast<const Element*>(child), svgRoot, depth + 1);
+        }
+    }
+    oss << "</" << serializedTag << ">";
+}
+
+} // namespace
+
+std::string serializeSvgForRenderer(const Element* svgRoot) {
+    if (!svgRoot) return {};
+    std::ostringstream oss;
+    serializeSvgNode(oss, svgRoot, svgRoot, 0);
+    return oss.str();
+}
+
 void Element::setInnerHTML(const std::string& html) {
     if (document_) {
         document_->parseInnerHTML(this, html);

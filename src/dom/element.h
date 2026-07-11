@@ -308,4 +308,10 @@ void Element::forEachComposedChild(Fn&& fn) const {
     }
 }
 
+// Serialize an <svg> subtree for the SkSVGDOM fallback renderer: renames
+// `href` to `xlink:href` on referencing elements (Skia parses only the xlink
+// form) and expands <use> of a <symbol> into an inline <svg> viewport (Skia
+// has no symbol node). See element.cpp for details.
+std::string serializeSvgForRenderer(const Element* svgRoot);
+
 } // namespace bro::dom

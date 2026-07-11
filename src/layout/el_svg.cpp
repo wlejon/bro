@@ -97,8 +97,9 @@ void ElSvg::draw(render::Renderer* renderer,
     // Fallback for features the native traversal doesn't handle yet (text,
     // filters, masks, patterns, markers, raster images): serialize the subtree
     // and let Skia's SkSVGDOM render it. The recording renderer copies the
-    // markup bytes into its arena so replay stays DOM-free.
-    std::string markup = elem->outerHTML();
+    // markup bytes into its arena so replay stays DOM-free. The serializer is
+    // Skia-shaped: href→xlink:href, <use>-of-<symbol> expanded inline.
+    std::string markup = dom::serializeSvgForRenderer(elem);
     if (markup.empty()) return;
     renderer->drawSvgMarkup(markup.data(), markup.size(), x, y, w, h);
 }
