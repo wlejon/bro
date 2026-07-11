@@ -1,7 +1,7 @@
 #pragma once
 
 #include "video/media_packet.h"
-#include <atomic>
+#include <mutex>
 
 namespace bro::video {
 
@@ -11,8 +11,10 @@ namespace bro::video {
 // present the same interface so the rest of the pipeline doesn't care.
 //
 // Thread-safety: `nowNs()` is called from the render thread; `setPlaying()`
-// and `seekTo()` are called from the control thread. All mutations go
-// through atomics — no locks per project convention.
+// and `seekTo()` are called from the control thread. Implementations guard
+// their state with a lock — the fields form one multi-field snapshot
+// (anchor and rate must be read together or a rate change is observed
+// half-applied), and every access is at most once per frame.
 class MediaClock {
 public:
     virtual ~MediaClock() = default;
@@ -40,21 +42,22 @@ class FileClock final : public MediaClock {
 public:
     TimeNs nowNs() const override;
     void setPlaying(bool playing) override;
-    bool isPlaying() const override { return playing_.load(std::memory_order_acquire); }
+    bool isPlaying() const override;
     void seekTo(TimeNs pts) override;
     void setRate(double rate) override;
     double rate() const override;
 
 private:
-    std::atomic<bool> playing_{false};
+    TimeNs nowNsLocked() const;  // caller holds m_
+
+    mutable std::mutex m_;
+    bool playing_ = false;
     // Anchor: the host time at which stream-ts 0 was "now". When paused,
     // we freeze the computed stream position into anchorPausedNs_.
     // Stream position when playing is (hostNow - anchorHost) * rate.
-    std::atomic<int64_t> anchorHostNs_{0};
-    std::atomic<int64_t> anchorPausedNs_{0};
-    // Stored as micros so we can use atomic<int64_t> without a double atomic.
-    // 1.0x = 1'000'000.
-    std::atomic<int64_t> rateMicros_{1'000'000};
+    int64_t anchorHostNs_ = 0;
+    int64_t anchorPausedNs_ = 0;
+    double rate_ = 1.0;
 };
 
 } // namespace bro::video
