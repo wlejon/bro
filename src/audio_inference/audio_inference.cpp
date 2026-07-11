@@ -49,14 +49,8 @@ AudioInference::AudioInference() = default;
 
 AudioInference::~AudioInference() {
     shutdown();
-    // Free any commands that were queued but never drained (e.g. a removeTask
-    // after the worker already exited). After join() nobody else touches these.
-    std::size_t h = cmdHead_.load(std::memory_order_relaxed);
-    const std::size_t t = cmdTail_.load(std::memory_order_relaxed);
-    for (; h != t; ++h) {
-        delete cmdSlots_[h & (kCmdCap - 1)];
-        cmdSlots_[h & (kCmdCap - 1)] = nullptr;
-    }
+    // Commands queued but never drained (e.g. pushed after the worker exited)
+    // are destroyed with cmdQueue_ here, on the main thread.
 }
 
 void AudioInference::startThread() {
@@ -64,25 +58,15 @@ void AudioInference::startThread() {
     thread_ = std::thread([this]() { workerFunc(); });
 }
 
-void AudioInference::pushCommand(Command* c) {
-    const std::size_t t = cmdTail_.load(std::memory_order_relaxed);
-    const std::size_t h = cmdHead_.load(std::memory_order_acquire);
-    if (t - h >= kCmdCap) {
-        // Ring full — only possible if dozens of add/remove queued without a
-        // single pump. Drop rather than block; never expected in practice.
-        LOG_ERROR("[audioinfer] command queue full, dropping");
-        delete c;
-        return;
-    }
-    cmdSlots_[t & (kCmdCap - 1)] = c;
-    cmdTail_.store(t + 1, std::memory_order_release);
-}
-
 AudioInference::TaskId AudioInference::addTask(std::shared_ptr<PcmRing> ring,
                                                ProcessFn process) {
     const TaskId id = nextId_.fetch_add(1, std::memory_order_relaxed);
-    auto* c = new Command{Command::Add, id, std::move(ring), std::move(process)};
-    pushCommand(c);
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        cmdQueue_.push_back(Command{Command::Add, id, std::move(ring), std::move(process)});
+        ++cmdsPushed_;
+    }
+    cv_.notify_all();
     // Not threaded (headless): apply immediately on the calling thread so the
     // task list is current for the next stepInline and stale models are not
     // pinned in the command queue across stop()/listen() cycles.
@@ -92,7 +76,13 @@ AudioInference::TaskId AudioInference::addTask(std::shared_ptr<PcmRing> ring,
 
 void AudioInference::removeTask(TaskId id) {
     if (id == kInvalidTask) return;
-    pushCommand(new Command{Command::Remove, id, nullptr, ProcessFn{}});
+    std::uint64_t target = 0;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        cmdQueue_.push_back(Command{Command::Remove, id, nullptr, ProcessFn{}});
+        target = ++cmdsPushed_;
+    }
+    cv_.notify_all();
     if (!thread_.joinable()) { drainCommands(); return; }
 
     // Threaded: BLOCK until the worker has applied this command. removeTask is a
@@ -107,40 +97,43 @@ void AudioInference::removeTask(TaskId id) {
     // what this barrier provides, upholding the single-producer discipline the
     // bindings assume.
     //
-    // drainCommands() runs at the TOP of the worker loop, before each
-    // pumpTasks(). So once cmdHead_ reaches the tail we just published, the
-    // command has been applied (the task erased) AND the pump that may still
-    // have been running the removed task's closure — sequenced before that
-    // drain — has completed. (A pump that starts after the drain no longer sees
-    // the task.) The state_ guard avoids spinning forever should the worker have
-    // exited; removeTask and shutdown() are both main-thread, so they never race.
-    // Short sleeps, not a yield spin: the worker only drains every
-    // kDrainInterval (5 ms), so a tight yield loop would burn a core for the
-    // whole wait. Removal latency is irrelevant (user-action cadence).
-    const std::size_t target = cmdTail_.load(std::memory_order_relaxed);
-    while (cmdHead_.load(std::memory_order_acquire) < target &&
-           state_.load(std::memory_order_acquire) != kShutdown) {
-        std::this_thread::sleep_for(std::chrono::microseconds(500));
-    }
+    // Commands apply in FIFO order at the top of each worker iteration, before
+    // pumpTasks(). So once cmdsApplied_ reaches our push count, the task has
+    // been erased AND any pump that was still running the removed task's
+    // closure — sequenced before that drain — has completed. The shutdown_
+    // check avoids waiting forever should the worker have exited; removeTask
+    // and shutdown() are both main-thread, so they never race.
+    std::unique_lock<std::mutex> lk(m_);
+    cv_.wait(lk, [this, target] {
+        return cmdsApplied_ >= target || shutdown_;
+    });
 }
 
 void AudioInference::drainCommands() {
-    std::size_t h = cmdHead_.load(std::memory_order_relaxed);
-    const std::size_t t = cmdTail_.load(std::memory_order_acquire);
-    for (; h != t; ++h) {
-        Command* c = cmdSlots_[h & (kCmdCap - 1)];
-        cmdSlots_[h & (kCmdCap - 1)] = nullptr;
-        if (c->type == Command::Add) {
-            tasks_.push_back(Task{c->id, std::move(c->ring), std::move(c->process)});
+    // Take the batch under the lock; apply it outside — a Remove drops the
+    // task's model reference, and that destructor (CUDA frees included) must
+    // not run under m_.
+    std::deque<Command> batch;
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        if (cmdQueue_.empty()) return;
+        batch.swap(cmdQueue_);
+    }
+    for (auto& c : batch) {
+        if (c.type == Command::Add) {
+            tasks_.push_back(Task{c.id, std::move(c.ring), std::move(c.process)});
         } else {
             tasks_.erase(
                 std::remove_if(tasks_.begin(), tasks_.end(),
-                               [&](const Task& tk) { return tk.id == c->id; }),
+                               [&](const Task& tk) { return tk.id == c.id; }),
                 tasks_.end());
         }
-        delete c;
     }
-    cmdHead_.store(h, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lk(m_);
+        cmdsApplied_ += batch.size();
+    }
+    cv_.notify_all();   // wake removeTask barrier waiters
 }
 
 void AudioInference::pumpTasks() {
@@ -173,10 +166,18 @@ void AudioInference::workerFunc() {
     // (pumpTasks early-outs), so idle cost is negligible.
     using namespace std::chrono;
     constexpr auto kDrainInterval = milliseconds(5);
-    while (state_.load(std::memory_order_acquire) != kShutdown) {
+    while (true) {
         drainCommands();
         pumpTasks();
-        std::this_thread::sleep_for(kDrainInterval);
+        std::unique_lock<std::mutex> lk(m_);
+        if (shutdown_) break;
+        // Timed wait, not a sleep: audio arrival still can't signal us (the
+        // RT thread never takes a lock), but a pushed command or shutdown
+        // wakes us immediately instead of waiting out the interval.
+        cv_.wait_for(lk, kDrainInterval, [this] {
+            return shutdown_ || !cmdQueue_.empty();
+        });
+        if (shutdown_) break;
     }
 
     // Shutting down: apply any final commands, then destroy the tasks HERE so
@@ -193,9 +194,11 @@ void AudioInference::stepInline() {
 
 void AudioInference::shutdown() {
     if (thread_.joinable()) {
-        // The worker self-paces, so it isn't parked on the atomic — it observes
-        // kShutdown on its next drain tick (within one interval) and exits.
-        state_.store(kShutdown, std::memory_order_release);
+        {
+            std::lock_guard<std::mutex> lk(m_);
+            shutdown_ = true;
+        }
+        cv_.notify_all();
         thread_.join();
         return;
     }

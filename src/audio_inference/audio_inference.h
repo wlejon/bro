@@ -1,10 +1,13 @@
 #pragma once
 
 #include <atomic>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -92,8 +95,8 @@ public:
     // Register a tenant. The subsystem drains `ring` each pump and calls
     // `process(drained, n)` on the inference thread. The shared_ptr keeps the
     // ring alive for an in-flight pump even after removeTask(). Returns a handle
-    // for removeTask(); never returns kInvalidTask. Thread-safe (lock-free
-    // command queue to the worker, which is the sole owner of the task list).
+    // for removeTask(); never returns kInvalidTask. Thread-safe (locked command
+    // queue to the worker, which is the sole owner of the task list).
     TaskId addTask(std::shared_ptr<PcmRing> ring, ProcessFn process);
 
     // Unregister a tenant. The worker destroys the task (dropping its model ref)
@@ -126,9 +129,11 @@ private:
         ProcessFn                process;
     };
 
-    // Command queue (main thread -> worker). Mutations to the task list happen
-    // ONLY on the worker (single-owner), applied from these commands — so no
-    // mutex is needed to guard tasks_ against the worker's iteration.
+    // Command queue (main thread -> worker). Mutations to the task list still
+    // happen ONLY on the worker (single-owner), applied from these commands —
+    // the mutex guards just the queue, the counters, and the shutdown flag,
+    // never tasks_ or a running pump. The audio thread stays lock-free (it
+    // only ever writes a PcmRing).
     struct Command {
         enum Type { Add, Remove } type = Add;
         TaskId                    id   = kInvalidTask;
@@ -136,20 +141,17 @@ private:
         ProcessFn                 process;    // Add only
     };
 
-    void pushCommand(Command* c);
-
-    // The worker self-paces (see workerFunc), so state_ is just a run/stop flag
-    // the main thread flips in shutdown(). There is no kPump/kBusy handshake —
-    // nothing signals the worker to drain; it drains on its own clock and reads
-    // this only to know when to exit.
-    enum State : std::uint32_t { kRunning = 0, kShutdown = 1 };
-    std::atomic<std::uint32_t> state_{kRunning};
-
-    // Lock-free SPSC command ring of owning Command* (cf. js/message_queue.h).
-    static constexpr std::size_t kCmdCap = 64;  // power of two; commands are rare
-    Command*                        cmdSlots_[kCmdCap]{};
-    alignas(64) std::atomic<std::size_t> cmdHead_{0};  // consumer (worker)
-    alignas(64) std::atomic<std::size_t> cmdTail_{0};  // producer (main)
+    // Guarded by m_. cmdsPushed_/cmdsApplied_ implement the removeTask
+    // barrier: a waiter records the count at push and blocks on cv_ until
+    // the worker's applied count catches up (commands apply in FIFO order).
+    // The worker's pacing wait also sits on cv_, so a pushed command wakes
+    // it immediately instead of waiting out the drain interval.
+    std::mutex                 m_;
+    std::condition_variable    cv_;
+    std::deque<Command>        cmdQueue_;
+    std::uint64_t              cmdsPushed_  = 0;
+    std::uint64_t              cmdsApplied_ = 0;
+    bool                       shutdown_    = false;
 
     std::vector<Task>          tasks_;     // worker-owned
     std::vector<float>         scratch_;   // worker/inline drain buffer
