@@ -133,18 +133,23 @@ void Engine::run() {
                 jsRuntime_->executePendingJobs();
             }
 
-            // Step physics (fixed timestep accumulator)
+            // Step physics (fixed timestep accumulator). Consume must run
+            // unconditionally — it is the only Done→Idle transition, so gating
+            // it on isIdle() would wedge the sim after the first step.
 #if BRO_WITH_PHYSICS
-            if (physicsWorld_ && physicsWorld_->isIdle()) {
+            if (physicsWorld_) {
                 physicsWorld_->consumeStep();
-                double stepMs = physicsWorld_->timeStep() * 1000.0;
-                double nowPhys = util::currentTimeMs();
-                if (lastPhysicsTimeMs_ == 0.0) lastPhysicsTimeMs_ = nowPhys;
-                physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_);
-                lastPhysicsTimeMs_ = nowPhys;
-                if (physicsAccumMs_ >= stepMs) {
-                    physicsAccumMs_ -= stepMs;
-                    physicsWorld_->signalStep();
+                if (physicsWorld_->isIdle()) {
+                    double stepMs = physicsWorld_->timeStep() * 1000.0;
+                    double nowPhys = util::currentTimeMs();
+                    if (lastPhysicsTimeMs_ == 0.0) lastPhysicsTimeMs_ = nowPhys;
+                    physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_);
+                    lastPhysicsTimeMs_ = nowPhys;
+                    if (physicsAccumMs_ >= stepMs) {
+                        physicsAccumMs_ -= stepMs;
+                        if (physicsAccumMs_ > stepMs * 3) physicsAccumMs_ = 0;
+                        physicsWorld_->signalStep();
+                    }
                 }
             }
 #endif
