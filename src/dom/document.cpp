@@ -111,6 +111,35 @@ void Document::fireSelectionChange() {
 }
 
 // ---------------------------------------------------------------------------
+// CSS cascade plumbing
+// ---------------------------------------------------------------------------
+
+void Document::addSheetToCascade(htmlayout::css::Stylesheet sheet, void* scope,
+                                 htmlayout::css::Origin origin) {
+    cascade_.addStylesheet(sheet, scope,
+                           hasMediaContext_ ? &mediaContext_ : nullptr, origin);
+    retainedSheets_.push_back({std::move(sheet), scope, origin});
+}
+
+void Document::setMediaViewport(float w, float h) {
+    if (hasMediaContext_ && mediaContext_.viewportWidth == w &&
+        mediaContext_.viewportHeight == h) {
+        return;
+    }
+    hasMediaContext_ = true;
+    mediaContext_.viewportWidth = w;
+    mediaContext_.viewportHeight = h;
+    if (retainedSheets_.empty()) return;
+    // Viewport changed after sheets were added: re-evaluate every @media
+    // block by rebuilding the cascade from the retained parsed sheets.
+    cascade_.clear();
+    for (auto& rs : retainedSheets_) {
+        cascade_.addStylesheet(rs.sheet, rs.scope, &mediaContext_, rs.origin);
+    }
+    markDirty();
+}
+
+// ---------------------------------------------------------------------------
 // Parsing with gumbo
 // ---------------------------------------------------------------------------
 
@@ -139,16 +168,17 @@ void Document::parse(const std::string& html, const std::string& authorCss,
     pendingSet_.clear();
     ownedNodes_.clear();
     cascade_.clear();
+    retainedSheets_.clear();
 
     // Add UA default styles (lowest priority — author styles always win)
     if (!uaCss.empty()) {
-        cascade_.addStylesheet(htmlayout::css::parse(uaCss), nullptr, nullptr,
-                               htmlayout::css::Origin::UserAgent);
+        addSheetToCascade(htmlayout::css::parse(uaCss), nullptr,
+                          htmlayout::css::Origin::UserAgent);
     }
 
     // Add author CSS (app stylesheets)
     if (!authorCss.empty()) {
-        cascade_.addStylesheet(htmlayout::css::parse(authorCss));
+        addSheetToCascade(htmlayout::css::parse(authorCss));
     }
 
     // Parse HTML with gumbo
@@ -197,7 +227,7 @@ void Document::parse(const std::string& html, const std::string& authorCss,
             if (elem->tagName() == "STYLE") {
                 std::string css = elem->textContent();
                 if (!css.empty()) {
-                    cascade_.addStylesheet(htmlayout::css::parse(css));
+                    addSheetToCascade(htmlayout::css::parse(css));
                     elem->setStyleSheetAdded(true);
                 }
             }
@@ -320,7 +350,7 @@ void Document::reconcileStyleElements() {
         if (e->tagName() != "STYLE" || e->styleSheetAdded()) continue;
         std::string css = e->textContent();
         if (css.empty()) continue;
-        cascade_.addStylesheet(htmlayout::css::parse(css));
+        addSheetToCascade(htmlayout::css::parse(css));
         e->setStyleSheetAdded(true);
     }
 }
@@ -839,6 +869,10 @@ void Document::performLayout(float viewportWidth, htmlayout::layout::TextMetrics
     }
     htmlayout::layout::layoutTree(layoutRoot_.get(), viewportWidth, metrics);
     layoutRoot_->syncBoxToElement();
+    settleContainerQueries([&] {
+        htmlayout::layout::layoutTree(layoutRoot_.get(), viewportWidth, metrics);
+        layoutRoot_->syncBoxToElement();
+    });
 }
 
 void Document::performLayout(float viewportWidth, float viewportHeight, htmlayout::layout::TextMetrics& metrics) {
@@ -850,6 +884,28 @@ void Document::performLayout(float viewportWidth, float viewportHeight, htmlayou
     htmlayout::layout::Viewport vp{viewportWidth, viewportHeight};
     htmlayout::layout::layoutTree(layoutRoot_.get(), vp, metrics);
     layoutRoot_->syncBoxToElement();
+    settleContainerQueries([&] {
+        htmlayout::layout::layoutTree(layoutRoot_.get(), vp, metrics);
+        layoutRoot_->syncBoxToElement();
+    });
+}
+
+// @container rules match against the container's laid-out size, but styles
+// resolve before layout — so the first pass evaluates them against stale (or
+// zero) sizes. After layout, re-resolve styles once and re-run layout so
+// container-dependent styles see the real container boxes. Single settle pass:
+// pathological container cycles don't loop.
+void Document::settleContainerQueries(const std::function<void()>& relayout) {
+    if (!cascade_.usesContainerQueries() || inContainerSettle_) return;
+    inContainerSettle_ = true;
+    // Forced re-resolve: the elements aren't dirty (they were just resolved),
+    // but @container matching depends on the layout boxes that only now exist.
+    layout::ElementRefAdapter::clearCache();
+    resolveStylesRecursive(documentElement_, nullptr, /*force=*/true);
+    resolveGeneratedContent();
+    layout::ElementRefAdapter::clearCache();
+    relayout();
+    inContainerSettle_ = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1213,7 +1269,7 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
         if (elem->tagName() == "STYLE") {
             std::string css = elem->textContent();
             if (!css.empty()) {
-                cascade_.addStylesheet(htmlayout::css::parse(css));
+                addSheetToCascade(htmlayout::css::parse(css));
                 // Mark added so the post-mutation reconcile (armed by the
                 // markStructureDirty below) doesn't add these rules a second time.
                 elem->setStyleSheetAdded(true);
@@ -1232,7 +1288,7 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
 
 void Document::addShadowStylesheet(ShadowRoot* sr, const std::string& css) {
     if (!sr || css.empty()) return;
-    cascade_.addStylesheet(htmlayout::css::parse(css), static_cast<void*>(sr));
+    addSheetToCascade(htmlayout::css::parse(css), static_cast<void*>(sr));
 }
 
 } // namespace bro::dom

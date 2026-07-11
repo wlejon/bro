@@ -183,6 +183,11 @@ public:
     void setBasePath(const std::string& path) { basePath_ = path; }
     const std::string& basePath() const { return basePath_; }
 
+    // Viewport for @media evaluation. Call before parse() so stylesheets are
+    // filtered against the real viewport; calling again later (window resize)
+    // re-evaluates every retained sheet against the new size.
+    void setMediaViewport(float w, float h);
+
     // ---------- Selection + live Range registry --------------------------
     // The Document owns a single Selection (window.getSelection()) and keeps
     // a set of live Range objects so it can update their endpoints when the
@@ -271,6 +276,26 @@ private:
 
     // CSS cascade
     htmlayout::css::Cascade cascade_;
+
+    // @media evaluation context + retained parsed sheets so a viewport change
+    // can re-evaluate every sheet (cascade rebuild) without re-reading sources.
+    htmlayout::css::MediaContext mediaContext_;
+    bool hasMediaContext_ = false;
+    struct RetainedSheet {
+        htmlayout::css::Stylesheet sheet;
+        void* scope = nullptr;
+        htmlayout::css::Origin origin = htmlayout::css::Origin::Author;
+    };
+    std::vector<RetainedSheet> retainedSheets_;
+    // Single funnel for cascade_.addStylesheet — applies the media context
+    // and retains the sheet for later re-evaluation.
+    void addSheetToCascade(htmlayout::css::Stylesheet sheet, void* scope = nullptr,
+                           htmlayout::css::Origin origin = htmlayout::css::Origin::Author);
+
+    // One-shot restyle+relayout after layout when @container rules exist
+    // (container sizes are only known post-layout). See performLayout().
+    void settleContainerQueries(const std::function<void()>& relayout);
+    bool inContainerSettle_ = false;
 
     // CSS transitions and animations (optional, set by Engine)
     engine::TransitionManager* transitionManager_ = nullptr;

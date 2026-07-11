@@ -366,6 +366,8 @@ void Engine::handleResize(int w, int h) {
     int cw = contentWidth();
     int ch = contentHeight();
     if (document_) {
+        // Re-evaluate @media blocks against the new viewport before restyling.
+        document_->setMediaViewport(static_cast<float>(cw), static_cast<float>(ch));
         layout::ElementRefAdapter::setHoveredElement(hoveredElement_.get());
         document_->resolveStyles();
         document_->performLayout(static_cast<float>(cw), static_cast<float>(ch), *textMetrics_);

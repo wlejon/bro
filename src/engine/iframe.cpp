@@ -132,6 +132,9 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
     html = dom::Document::extractTemplates(html, templates);
     dp->document = std::make_unique<dom::Document>();
     dp->document->setBasePath(manifest.basePath);
+    // Sub-document media queries evaluate against the iframe's content box.
+    dp->document->setMediaViewport(static_cast<float>(dp->boxW),
+                                   static_cast<float>(dp->boxH));
     dp->document->parse(html, authorStyles, kDefaultStyles);
     if (!templates.empty()) dp->document->injectTemplates(templates);
 

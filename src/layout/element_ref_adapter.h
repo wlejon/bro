@@ -69,6 +69,14 @@ public:
         return std::span<ElementRef* const>{childrenView_.data(), childrenView_.size()};
     }
 
+    bool hasTextChildren() const override {
+        if (!elem_) return false;
+        for (auto* node : elem_->childNodes()) {
+            if (node->nodeType() == dom::NodeType::Text) return true;
+        }
+        return false;
+    }
+
     int childIndex() const override {
         if (!elem_ || !elem_->parentNode()) return 0;
         auto& siblings = elem_->parentNode()->childNodes();
@@ -151,6 +159,31 @@ public:
         return false;
     }
     bool isFocusVisible() const override { return isFocused(); }
+
+    // Container queries — type/name come from the element's computed style,
+    // sizes from its last layout box. Style resolution runs before layout, so
+    // the consumer must re-resolve styles once after layout when container
+    // queries are in use (the sizes here are one layout pass behind).
+    std::string_view containerType() const override {
+        if (!elem_) return "none";
+        const auto& cs = elem_->computedStyle();
+        auto it = cs.find("container-type");
+        if (it == cs.end() || it->second.empty()) return "none";
+        return it->second;
+    }
+    std::string_view containerName() const override {
+        if (!elem_) return "";
+        const auto& cs = elem_->computedStyle();
+        auto it = cs.find("container-name");
+        if (it == cs.end() || it->second == "none") return "";
+        return it->second;
+    }
+    float containerInlineSize() const override {
+        return elem_ ? elem_->layoutBox().contentRect.width : 0.0f;
+    }
+    float containerBlockSize() const override {
+        return elem_ ? elem_->layoutBox().contentRect.height : 0.0f;
+    }
 
     bool isChecked() const override {
         if (!elem_) return false;

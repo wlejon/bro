@@ -595,6 +595,22 @@ Engine::Engine(const EngineConfig& config)
     // 8. Parse HTML and build bro::dom tree
     document_ = std::make_unique<dom::Document>();
     document_->setBasePath(manifest_.basePath);
+    // @media queries evaluate against the content-space viewport; set it
+    // before parse() so stylesheets are filtered on first add.
+    document_->setMediaViewport(static_cast<float>(contentWidth()),
+                                static_cast<float>(contentHeight()));
+    // @import resolution: read the referenced CSS relative to the app root
+    // (same path rules as every other app asset).
+    document_->cascade().setImportResolver([this](const std::string& url) {
+        std::string path = AppLoader::resolvePath(document_->basePath(), url,
+                                                  &assetMounts_);
+        std::string css = AppLoader::loadFile(path);
+        if (css.empty()) {
+            LOG_WARN("@import: failed to load '%s' (resolved to '%s')",
+                     url.c_str(), path.c_str());
+        }
+        return css;
+    });
     document_->parse(html, authorStyles, kDefaultStyles);
 
     // 8a. Inject extracted templates back into the DOM tree

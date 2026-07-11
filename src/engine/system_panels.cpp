@@ -235,6 +235,8 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
 
         // Parse HTML — UA defaults at UserAgent origin, inline styles at Author
         doc.document = std::make_unique<dom::Document>();
+        doc.document->setMediaViewport(static_cast<float>(viewportWidth_),
+                                       static_cast<float>(viewportHeight_));
         doc.document->parse(html, authorStyles, kDefaultStyles);
 
         // Create a dedicated JSContext on the shared runtime
@@ -1145,6 +1147,8 @@ void Engine::resizeSystemPanels(int w, int h) {
     systemDirty_ = true;
     for (auto& doc : systemDocs_) {
         if (doc.document) {
+            doc.document->setMediaViewport(static_cast<float>(w),
+                                           static_cast<float>(h));
             doc.document->resolveStyles();
             doc.document->performLayout(static_cast<float>(w),
                                         static_cast<float>(h),
