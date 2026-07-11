@@ -180,6 +180,20 @@ input[type="hidden"] {
     display: none;
 }
 
+/* Disabled controls dim their text (Chromium's light-mode UA value); only
+   text-entry fields also wash out their background — checkbox/radio/range/
+   color/button-likes keep their own backgrounds. */
+input:disabled, textarea:disabled {
+    color: rgb(84, 84, 84);
+    cursor: default;
+}
+input:disabled:not([type="checkbox"], [type="radio"], [type="range"],
+                   [type="color"], [type="button"], [type="submit"],
+                   [type="reset"]),
+textarea:disabled {
+    background-color: rgba(239, 239, 239, 0.3);
+}
+
 /* Options live in the select's popup, never in document flow: keep them
    display:none so getBoundingClientRect reports an empty rect (as browsers do
    for a closed select's options) instead of projecting them onto the select's
