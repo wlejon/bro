@@ -291,6 +291,17 @@ static std::string getComputedProperty(JSContext* ctx, bro::dom::Element* el, co
                 // cascade; only fall back to the attribute when the
                 // cascade left the property at its initial value.
                 if (!value.empty() && value != "auto") return value;
+                // width/height are geometry properties only on the shapes
+                // SVG2 lists (rect, image, use, foreignObject, nested svg).
+                // On pattern/mask/filter/gradient/… the attribute is plain
+                // data, and Chromium reports the CSS initial value.
+                std::string lt = el->tagName();
+                for (auto& c : lt) c = static_cast<char>(std::tolower(
+                    static_cast<unsigned char>(c)));
+                if (lt != "rect" && lt != "image" && lt != "use" &&
+                    lt != "foreignobject" && lt != "svg") {
+                    return value.empty() ? std::string("auto") : value;
+                }
                 const std::string& attr = el->getAttribute(prop);
                 if (!attr.empty()) {
                     char* end = nullptr;
@@ -324,9 +335,9 @@ static std::string getComputedProperty(JSContext* ctx, bro::dom::Element* el, co
         if (disp == "inline" && !isReplaced) {
             return "auto";
         }
-        // display:none — Chrome returns the specified value, not the laid-out
-        // (zero) used value.
-        if (disp == "none") {
+        // display:none / display:contents — no box is generated, so Chrome
+        // returns the specified value, not a laid-out (zero) used value.
+        if (disp == "none" || disp == "contents") {
             return value.empty() ? std::string("auto") : value;
         }
         auto& box = el->layoutBox();
@@ -362,7 +373,10 @@ static std::string getComputedProperty(JSContext* ctx, bro::dom::Element* el, co
         prop == "margin-bottom" || prop == "margin-left") {
         bool isPct = !value.empty() && value.back() == '%';
         bool isAuto = value == "auto";
-        if (isPct || isAuto) {
+        // calc() computes to a resolved px length too (Chromium reports
+        // e.g. `margin-left: calc(10px - 30px)` as "-20px").
+        bool isCalc = value.rfind("calc(", 0) == 0;
+        if (isPct || isAuto || isCalc) {
             auto& box = el->layoutBox();
             float v = 0;
             if (prop == "padding-top")    v = box.padding.top;

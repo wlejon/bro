@@ -181,7 +181,9 @@ AbsoluteRect absoluteBorderBox(const Element* el) {
     if (!el) return {};
     auto& cs = el->computedStyle();
     auto dIt = cs.find("display");
-    if (dIt != cs.end() && dIt->second == "none") return {};
+    // none and contents generate no box: empty rect (CSSOM; Chromium agrees).
+    if (dIt != cs.end() && (dIt->second == "none" || dIt->second == "contents"))
+        return {};
 
     AbsoluteFrame frame = computeAbsoluteFrame(el);
     auto& box = el->layoutBox();
