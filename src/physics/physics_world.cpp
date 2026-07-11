@@ -34,6 +34,7 @@
 #include "util/log.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 
 JPH_SUPPRESS_WARNINGS
@@ -254,42 +255,51 @@ void PhysicsWorld::startThread() {
 }
 
 void PhysicsWorld::physicsThreadFunc() {
+    std::unique_lock<std::mutex> lk(shared_.m);
     while (true) {
-        shared_.state.wait(kPhysicsIdle, std::memory_order_acquire);
+        shared_.cv.wait(lk, [this] {
+            return shared_.shutdownRequested || shared_.state == kPhysicsStep;
+        });
+        if (shared_.shutdownRequested) return;
 
-        uint32_t s = shared_.state.load(std::memory_order_acquire);
-        if (s == kPhysicsShutdown) return;
-        if (s != kPhysicsStep) continue;
-
-        shared_.state.store(kPhysicsBusy, std::memory_order_release);
+        shared_.state = kPhysicsBusy;
+        lk.unlock();
 
         physicsSystem_.Update(timeStep_, 1, tempAllocator_.get(), jobSystem_.get());
 
-        shared_.state.store(kPhysicsDone, std::memory_order_release);
-        shared_.state.notify_one();
+        lk.lock();
+        shared_.state = kPhysicsDone;
     }
 }
 
 void PhysicsWorld::signalStep() {
-    shared_.state.store(kPhysicsStep, std::memory_order_release);
-    shared_.state.notify_one();
+    {
+        std::lock_guard<std::mutex> lk(shared_.m);
+        shared_.state = kPhysicsStep;
+    }
+    shared_.cv.notify_one();
 }
 
 bool PhysicsWorld::consumeStep() {
-    if (shared_.state.load(std::memory_order_acquire) != kPhysicsDone)
-        return false;
-
+    {
+        std::lock_guard<std::mutex> lk(shared_.m);
+        if (shared_.state != kPhysicsDone)
+            return false;
+    }
+    // Done ⇒ the physics thread is parked in its wait; the world is ours.
     if (listener_) {
         contactsFront_ = listener_->drain();
     }
     checkBrokenConstraints();
 
-    shared_.state.store(kPhysicsIdle, std::memory_order_release);
+    std::lock_guard<std::mutex> lk(shared_.m);
+    shared_.state = kPhysicsIdle;
     return true;
 }
 
 bool PhysicsWorld::isIdle() const {
-    return shared_.state.load(std::memory_order_acquire) == kPhysicsIdle;
+    std::lock_guard<std::mutex> lk(shared_.m);
+    return shared_.state == kPhysicsIdle;
 }
 
 void PhysicsWorld::stepInline() {
@@ -303,8 +313,11 @@ void PhysicsWorld::stepInline() {
 
 void PhysicsWorld::shutdown() {
     if (physicsThread_.joinable()) {
-        shared_.state.store(kPhysicsShutdown, std::memory_order_release);
-        shared_.state.notify_one();
+        {
+            std::lock_guard<std::mutex> lk(shared_.m);
+            shared_.shutdownRequested = true;
+        }
+        shared_.cv.notify_one();
         physicsThread_.join();
     }
 

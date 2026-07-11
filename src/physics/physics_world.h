@@ -1,9 +1,10 @@
 #pragma once
 
-#include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -20,13 +21,14 @@
 
 namespace bro::physics {
 
-/// Physics thread state machine (atomics, same pattern as raster/layout threads).
+/// Physics thread phase. Ownership of the Jolt world follows the phase:
+/// Idle means the main thread (JS) may freely access bodies; Step/Busy/Done
+/// mean the physics thread owns it. Guarded by Shared::m (see below).
 enum PhysicsState : uint32_t {
-    kPhysicsIdle     = 0,  // Physics thread waiting — JS can freely access bodies
-    kPhysicsStep     = 1,  // Main thread: begin simulation step
-    kPhysicsBusy     = 2,  // Physics thread running Update()
-    kPhysicsDone     = 3,  // Physics thread: step complete
-    kPhysicsShutdown = 4,  // Main thread: terminate physics thread
+    kPhysicsIdle = 0,  // Physics thread waiting — JS can freely access bodies
+    kPhysicsStep = 1,  // Main thread: begin simulation step
+    kPhysicsBusy = 2,  // Physics thread running Update()
+    kPhysicsDone = 3,  // Physics thread: step complete
 };
 
 /// Contact event recorded during a physics step (thread-safe collection).
@@ -371,9 +373,17 @@ private:
     // (consumeStep) or inline (stepInline) — single-owner, no locking.
     void checkBrokenConstraints();
 
-    // Thread state
+    // Thread handshake. The mutex guards only the phase word and the shutdown
+    // flag — Jolt's Update() always runs outside it, and body access needs no
+    // lock because the phase grants exclusive ownership. shutdownRequested is
+    // separate from the phase so a Busy→Done transition can never erase a
+    // shutdown request, and the worker's wait predicate can block in both
+    // resting phases (Idle and Done) instead of spinning through one of them.
     struct Shared {
-        std::atomic<uint32_t> state{kPhysicsIdle};
+        mutable std::mutex m;
+        std::condition_variable cv;
+        uint32_t state = kPhysicsIdle;
+        bool shutdownRequested = false;
     };
     Shared shared_;
     std::thread physicsThread_;
