@@ -1689,10 +1689,32 @@ void DrawTraversal::drawBackground(dom::Element* elem, float x, float y, float w
 
                 // Reference length for resolving <length> stop positions to a
                 // fraction of the gradient line. Linear: |W·sin|+|H·cos| (same
-                // metric the draw below uses). Conic uses angle units instead,
-                // so length positions there fall back to auto.
+                // metric the draw below uses). Radial: the end radius (extent
+                // rule applied to the box), matching the ray the stops live
+                // on — using anything else skews px-positioned stops (visible
+                // as wrong ring spacing in repeating-radial-gradient). Conic
+                // uses angle units instead, so length positions there fall
+                // back to auto.
                 float refLen = 1.0f;
-                if (!isConic) {
+                if (isRadial) {
+                    float rcx = radCxFrac * w, rcy = radCyFrac * h;
+                    float csX = std::min(rcx, w - rcx), csY = std::min(rcy, h - rcy);
+                    float fsX = std::max(rcx, w - rcx), fsY = std::max(rcy, h - rcy);
+                    switch (radExtent) {
+                        case RAD_CLOSEST_SIDE:
+                            refLen = radialIsCircle ? std::min(csX, csY) : csX; break;
+                        case RAD_CLOSEST_CORNER:
+                            refLen = radialIsCircle ? std::sqrt(csX*csX + csY*csY)
+                                                    : csX * std::sqrt(2.0f); break;
+                        case RAD_FARTHEST_SIDE:
+                            refLen = radialIsCircle ? std::max(fsX, fsY) : fsX; break;
+                        case RAD_FARTHEST_CORNER:
+                        default:
+                            refLen = radialIsCircle ? std::sqrt(fsX*fsX + fsY*fsY)
+                                                    : fsX * std::sqrt(2.0f); break;
+                    }
+                    if (refLen < 1.0f) refLen = 1.0f;
+                } else if (!isConic) {
                     float rad0 = angleDeg * 3.14159265f / 180.0f;
                     refLen = std::abs(w * std::sin(rad0)) + std::abs(h * std::cos(rad0));
                     if (refLen < 1.0f) refLen = 1.0f;
