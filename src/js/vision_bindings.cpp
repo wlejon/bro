@@ -1769,6 +1769,7 @@ static JSValue js_birefnet_remove(JSContext* ctx, JSValueConst this_val,
                                   int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<VisionBirefnetWrapper>(ctx, this_val);
     if (!w) return JS_ThrowTypeError(ctx, "removeBackground: not a BackgroundRemover");
+    if (!w->net) return JS_ThrowInternalError(ctx, "removeBackground: disposed");
     if (argc < 1)
         return JS_ThrowTypeError(ctx,
             "removeBackground(image, opts?): image required");
@@ -1817,6 +1818,21 @@ static JSValue js_birefnet_remove(JSContext* ctx, JSValueConst this_val,
     return r;
 }
 
+// dispose() — deterministically free the model's weights. They are GPU-
+// resident and invisible to QuickJS's heap accounting, so a caller done with
+// the model (e.g. between krea2-lab breeding runs, where every spare GPU byte
+// matters) must not wait for the GC finalizer. The handle is dead afterwards;
+// load again for a fresh one.
+static JSValue js_birefnet_dispose(JSContext* ctx, JSValueConst this_val,
+                                   int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<VisionBirefnetWrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "dispose: not a BackgroundRemover");
+    if (w->busy.load())
+        return JS_ThrowInternalError(ctx, "dispose: an operation is in flight");
+    w->net.reset();
+    return JS_UNDEFINED;
+}
+
 static void registerBirefnetClass(JSContext* ctx) {
     qjsbind::Class<VisionBirefnetWrapper>(ctx, "BackgroundRemover",
                                           qjsbind::NoGlobal)
@@ -1824,7 +1840,8 @@ static void registerBirefnetClass(JSContext* ctx) {
             return std::string(deviceName(w->device));
         })
         .get("modelSize", [](VisionBirefnetWrapper* w) { return w->modelSize; })
-        .method_raw("removeBackground", js_birefnet_remove, 2);
+        .method_raw("removeBackground", js_birefnet_remove, 2)
+        .method_raw("dispose", js_birefnet_dispose, 0);
 }
 
 // bro.vision.loadBirefnet(safetensorsPath, opts?) — the same Swin-L BiRefNet
@@ -2418,6 +2435,7 @@ static JSValue js_dinov3_encode(JSContext* ctx, JSValueConst this_val,
                                 int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<VisionDinov3Wrapper>(ctx, this_val);
     if (!w) return JS_ThrowTypeError(ctx, "encode: not a Dinov3Backbone");
+    if (!w->net) return JS_ThrowInternalError(ctx, "encode: disposed");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "encode(image, opts?): image required");
 
@@ -2465,22 +2483,35 @@ static JSValue js_dinov3_encode(JSContext* ctx, JSValueConst this_val,
     return r;
 }
 
+// dispose() — deterministically free the backbone's weights (same rationale
+// as BackgroundRemover.dispose: ~1.3 GB of GPU memory the GC cannot see).
+static JSValue js_dinov3_dispose(JSContext* ctx, JSValueConst this_val,
+                                 int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<VisionDinov3Wrapper>(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "dispose: not a Dinov3Backbone");
+    if (w->busy.load())
+        return JS_ThrowInternalError(ctx, "dispose: an operation is in flight");
+    w->net.reset();
+    return JS_UNDEFINED;
+}
+
 static void registerDinov3Class(JSContext* ctx) {
     qjsbind::Class<VisionDinov3Wrapper>(ctx, "Dinov3Backbone", qjsbind::NoGlobal)
         .get("device", [](VisionDinov3Wrapper* w) {
             return std::string(deviceName(w->device));
         })
         .get("patchSize", [](VisionDinov3Wrapper* w) {
-            return w->net->config().patch_size;
+            return w->net ? w->net->config().patch_size : 0;
         })
         .get("embedDim", [](VisionDinov3Wrapper* w) {
-            return w->net->config().embed_dim;
+            return w->net ? w->net->config().embed_dim : 0;
         })
         .get("numRegisterTokens", [](VisionDinov3Wrapper* w) {
-            return w->net->config().num_register_tokens;
+            return w->net ? w->net->config().num_register_tokens : 0;
         })
         .get("defaultSize", [](VisionDinov3Wrapper* w) { return w->size; })
-        .method_raw("encode", js_dinov3_encode, 2);
+        .method_raw("encode", js_dinov3_encode, 2)
+        .method_raw("dispose", js_dinov3_dispose, 0);
 }
 
 // bro.vision.loadDinov3(modelPath, opts?) → Dinov3Backbone | AsyncHandle

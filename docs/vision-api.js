@@ -378,9 +378,16 @@ bro.vision.loadDinov3(modelPath, opts);
  *             patchH: number, patchW: number, numPrefixTokens: number }}
  *   `features` is the (tokens*dim) map; tokens = numPrefixTokens + patchH*patchW.
  * Properties: `device`, `patchSize`, `embedDim`, `numRegisterTokens`, `defaultSize`.
+ *
+ * Dinov3Backbone.dispose() / BackgroundRemover.dispose() — deterministically
+ * free the model's weights (~1.3 GB / ~1.7 GB GPU). GPU memory is invisible
+ * to the JS GC, so a caller done with a model must not wait for the
+ * finalizer — dispose, then `bro.gpu.trim()` to hand the cached blocks back
+ * to the driver. The handle is dead afterwards; load again for a fresh one.
  */
 const d3 = bro.vision.loadDinov3('weights/triposplat/clip_vision/dino_v3_vit_h.safetensors');
 const f3 = d3.encode(photo, { size: 224 });   // f3.features = (tokens*dim) patch features
+d3.dispose();                                 // done with it — free the 1.3 GB now
 
 
 // ── Pipe an annotator into bro.diffusion ─────────────────────────────────────
