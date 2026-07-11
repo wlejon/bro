@@ -2,7 +2,9 @@
 
 #include "js/message_queue.h"
 #include <atomic>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -57,9 +59,10 @@ public:
     /// Check if the worker thread is still alive.
     bool isAlive() const { return alive_.load(std::memory_order_acquire); }
 
-    /// Tick rate in Hz — drives the worker's idle sleep and rate-limits
-    /// the loop iteration. Exposed through bro.server.tickrate inside the
-    /// worker script. Safe to read/write across threads.
+    /// Tick rate in Hz — caps how fast the event loop iterates while it has
+    /// pollable work or due timers (idle it blocks outright). Exposed through
+    /// bro.server.tickrate inside the worker script. Safe to read/write
+    /// across threads.
     void setTickRate(double hz);
     double tickRate() const { return tickRate_.load(std::memory_order_relaxed); }
 
@@ -75,10 +78,14 @@ public:
     bool pushToMain(Message* msg) { return fromWorker_.push(msg); }
 
     /// Request the worker to stop (called from worker thread via self.close()).
-    void requestClose() { terminated_.store(true, std::memory_order_release); }
+    void requestClose() {
+        terminated_.store(true, std::memory_order_release);
+        wake();
+    }
 
 private:
     void threadFunc();
+    void wake();
 
     std::string scriptPath_;
     std::string basePath_;
@@ -90,14 +97,24 @@ private:
     MessageQueue toWorker_;    // main → worker
     MessageQueue fromWorker_;  // worker → main
 
-    // Wakeup signal: main thread increments + notifies to wake the worker.
-    std::atomic<uint32_t> wakeup_{0};
+    // Wake signal for the worker's event loop. postMessage / terminate /
+    // setTickRate bump wakeSeq_ under wakeM_ and notify; the loop blocks
+    // here when it has nothing scheduled (no due timers, no in-flight
+    // pollables) instead of waking at the tick rate to poll empty queues.
+    std::mutex wakeM_;
+    std::condition_variable wakeCv_;
+    uint64_t wakeSeq_ = 0;  // guarded by wakeM_
+
+    // terminated_ stays atomic: it is read by the QuickJS interrupt handler
+    // in the middle of JS execution, where taking a lock is unwelcome.
     std::atomic<bool> terminated_{false};
     std::atomic<bool> alive_{false};
 
-    // Event loop rate limit. Default 1000 Hz matches the legacy 1ms idle
-    // sleep, so existing compute-heavy workers (no tickrate set) are not
-    // slowed down.
+    // Event loop pacing cap. The loop never iterates faster than this;
+    // beyond that it is deadline-driven (timers) or signal-driven
+    // (messages), so the rate only throttles in-flight pollable work
+    // (fetch/ws/net/async jobs) and back-to-back due timers. Default
+    // 1000 Hz matches the legacy 1ms tick.
     std::atomic<double> tickRate_{1000.0};
     // Worker-thread-only: set at the top of threadFunc, read by uptimeSec().
     std::atomic<double> startTimeMs_{0.0};

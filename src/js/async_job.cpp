@@ -107,6 +107,10 @@ void tickAsync(JSContext* ctx) {
     }
 }
 
+bool hasAsyncJobs() {
+    return !g_jobs.empty();
+}
+
 void shutdownAsyncJobs(JSContext* ctx) {
     for (auto& job : g_jobs) {
         job->cancel.store(true, std::memory_order_release);

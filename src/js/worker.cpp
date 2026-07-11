@@ -25,7 +25,9 @@
 
 #include <api/api.h>  // brokit::api
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <thread>
 #include <unordered_map>
@@ -57,11 +59,21 @@ Worker::~Worker()
     terminate();
 }
 
+void Worker::wake()
+{
+    {
+        std::lock_guard<std::mutex> lk(wakeM_);
+        ++wakeSeq_;
+    }
+    wakeCv_.notify_one();
+}
+
 void Worker::setTickRate(double hz)
 {
     if (hz < 1.0) hz = 1.0;
     if (hz > 1000.0) hz = 1000.0;
     tickRate_.store(hz, std::memory_order_relaxed);
+    wake();  // re-evaluate a wait that used the old rate
 }
 
 double Worker::uptimeSec() const
@@ -80,8 +92,7 @@ void Worker::start()
 void Worker::terminate()
 {
     terminated_.store(true, std::memory_order_release);
-    wakeup_.fetch_add(1, std::memory_order_release);
-    wakeup_.notify_one();
+    wake();
 
     // threadFunc clears alive_ before returning, so alive_ can be false while
     // the thread handle is still joinable — always join based on the handle.
@@ -106,8 +117,7 @@ bool Worker::postMessage(JSContext* mainCtx, JSValue value, JSValue transferList
         return false;
     }
     // Wake the worker thread
-    wakeup_.fetch_add(1, std::memory_order_release);
-    wakeup_.notify_one();
+    wake();
     return true;
 }
 
@@ -182,6 +192,34 @@ static JSValue js_worker_self_close(JSContext* /*ctx*/, JSValueConst /*this_val*
     if (s_wcd && s_wcd->worker)
         s_wcd->worker->requestClose();
     return JS_UNDEFINED;
+}
+
+/// True if any brokit pollable on this context could produce work without a
+/// main-thread message: in-flight fetches or stream readers awaiting data,
+/// connecting/open/closing websockets, open fs watchers. These have no
+/// completion signal the event loop could wait on, so while any holds the
+/// loop keeps polling at tick cadence instead of blocking.
+static bool brokitHasPending(JSContext* ctx)
+{
+    static const char* kProbes[] = {
+        "__brokit_fetch_has_pending",
+        "__brokit_ws_has_pending",
+        "__brokit_fs_watch_has_pending",
+    };
+    JSValue g = JS_GetGlobalObject(ctx);
+    bool pending = false;
+    for (const char* name : kProbes) {
+        JSValue fn = JS_GetPropertyStr(ctx, g, name);
+        if (JS_IsFunction(ctx, fn)) {
+            JSValue r = JS_Call(ctx, fn, JS_UNDEFINED, 0, nullptr);
+            pending = JS_ToBool(ctx, r) > 0;
+            JS_FreeValue(ctx, r);
+        }
+        JS_FreeValue(ctx, fn);
+        if (pending) break;
+    }
+    JS_FreeValue(ctx, g);
+    return pending;
 }
 
 void Worker::threadFunc()
@@ -341,8 +379,16 @@ void Worker::threadFunc()
         if (bro::util::interrupted())
             break;
 
+        // Snapshot the wake counter BEFORE draining, so a message (or
+        // terminate) that lands anywhere in this iteration makes the wait
+        // at the bottom return immediately instead of being lost.
+        uint64_t seqStart;
+        {
+            std::lock_guard<std::mutex> lk(wakeM_);
+            seqStart = wakeSeq_;
+        }
+
         double tickStart = util::currentTimeMs();
-        double intervalMs = 1000.0 / tickRate_.load(std::memory_order_relaxed);
 
         // Process incoming messages (main → worker)
         while (Message* msg = toWorker_.pop()) {
@@ -423,17 +469,38 @@ void Worker::threadFunc()
         tickAsync(ctx);
         runtime->executePendingJobs();
 
-        // Rate-limit to the configured tick rate. At the default 1000 Hz
-        // this sleeps ~1ms when idle (matching legacy behavior); at 60 Hz
-        // it yields ~16ms, dramatically reducing CPU for server workers.
-        // When the iteration itself takes longer than the interval (heavy
-        // compute, message burst), sleepMs <= 0 and the loop spins on —
-        // same as bro-server's server-mode loop.
-        double elapsed = util::currentTimeMs() - tickStart;
-        double sleepMs = intervalMs - elapsed;
-        if (sleepMs > 0.5) {
-            std::this_thread::sleep_for(
-                std::chrono::microseconds(static_cast<int64_t>(sleepMs * 1000.0)));
+        // ─── Wait ───
+        // Everything that can produce work without a main-thread message is
+        // one of two kinds:
+        //   • pollables — in-flight fetch / live websockets / fs watchers /
+        //     net subscriber with live or pending connections / async
+        //     inference jobs. No completion signal exists to wait on, so
+        //     keep polling at the configured tick rate (legacy pacing).
+        //   • timers — the next deadline is known exactly; sleep until it,
+        //     floored to the tick interval so setTimeout(0) chains stay
+        //     paced at the tick rate as before.
+        // With neither, block until postMessage / terminate / setTickRate
+        // wakes us — zero wakeups while idle.
+        bool pollable = hasAsyncJobs() || brokitHasPending(ctx);
+        if (!pollable && netService_) pollable = NetBindings::hasActivity(ctx);
+
+        double now2 = util::currentTimeMs();
+        double paceMs = 1000.0 / tickRate_.load(std::memory_order_relaxed)
+                        - (now2 - tickStart);
+        double waitMs = pollable
+            ? paceMs
+            : std::max(timers->nextDeadlineMs() - now2, paceMs);  // +inf if idle
+
+        if (std::isfinite(waitMs) && waitMs <= 0.5)
+            continue;  // running behind — spin on, same as before
+
+        std::unique_lock<std::mutex> lk(wakeM_);
+        auto woken = [&] { return wakeSeq_ != seqStart; };
+        if (std::isfinite(waitMs)) {
+            wakeCv_.wait_for(
+                lk, std::chrono::duration<double, std::milli>(waitMs), woken);
+        } else {
+            wakeCv_.wait(lk, woken);
         }
     }
 
@@ -649,9 +716,11 @@ void tickWorkers(JSContext* ctx)
     auto it = s_workerState.find(ctx);
     if (it == s_workerState.end()) return;
 
+    // Drain dead workers too: a message posted right before self.close()
+    // must still be delivered (the queue outlives the thread; terminate()
+    // clears it, so this is a no-op for terminated workers).
     for (Worker* w : it->second.workers) {
-        if (w->isAlive())
-            w->drainMessages(ctx);
+        w->drainMessages(ctx);
     }
 }
 

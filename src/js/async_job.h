@@ -58,6 +58,11 @@ JSValue launchAsyncJob(JSContext* ctx, AsyncWorkFn work, AsyncPollFn poll,
 // worker loop). Cheap no-op when no jobs are in flight.
 void tickAsync(JSContext* ctx);
 
+// True if any job launched from the calling thread's context is still in
+// flight (the registry is thread-local, hence per-context). Worker event
+// loops keep polling at tick cadence while this holds instead of blocking.
+bool hasAsyncJobs();
+
 // Cancel and join every in-flight job, then run their done() so dup'd callbacks
 // are freed. Call at context teardown on the owning thread, before the runtime
 // is destroyed.

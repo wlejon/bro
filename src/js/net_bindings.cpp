@@ -36,6 +36,11 @@ struct NetCtxState {
     bool hosting = false;
     bool hostPending = false;
 
+    // Outgoing connect() calls whose outcome (Connected, or a failure event)
+    // has not arrived yet. Keeps hasActivity() true across the handshake so
+    // a worker's event loop doesn't block before the result can be polled.
+    int connectsPending = 0;
+
     // Connections we've seen a Connected event for — tracked here since the
     // service thread no longer maintains a per-ctx connection list we can
     // query. Used by bro.net.connections() and bro.net.isHosting().
@@ -90,6 +95,7 @@ static JSValue js_net_connect(JSContext* ctx, JSValueConst, int argc, JSValueCon
     if (argc < 1) return JS_ThrowTypeError(ctx, "connect() requires an address string");
 
     std::string addr = jsToString(ctx, argv[0]);
+    s->connectsPending++;
     s->subscriber->connect(addr);
     return JS_TRUE;
 }
@@ -274,12 +280,16 @@ void NetBindings::install(JSContext* ctx, net::NetService* service) {
         s->hostPending = false;
         s->hosting = success;
     };
-    state->subscriber->onConnectResult = [](bool) {
-        // Initiation ack only — app listens for onConnect for the actual link.
+    state->subscriber->onConnectResult = [ctx](bool success) {
+        // Initiation ack only — app listens for onConnect for the actual
+        // link. A failed initiation is the end of that connect attempt.
+        auto* s = getState(ctx);
+        if (s && !success && s->connectsPending > 0) s->connectsPending--;
     };
     state->subscriber->onConnect = [ctx](uint32_t conn) {
         auto* s = getState(ctx);
         if (!s) return;
+        if (s->connectsPending > 0) s->connectsPending--;
         s->connections[conn] = true;
         if (!JS_IsUndefined(s->onConnect) && !JS_IsNull(s->onConnect)) {
             JSValue func = JS_DupValue(ctx, s->onConnect);
@@ -293,7 +303,11 @@ void NetBindings::install(JSContext* ctx, net::NetService* service) {
     state->subscriber->onDisconnect = [ctx](uint32_t conn, int reason) {
         auto* s = getState(ctx);
         if (!s) return;
-        s->connections.erase(conn);
+        if (s->connections.erase(conn) == 0 && s->connectsPending > 0) {
+            // A conn we never saw Connected — an outgoing connect that
+            // failed after initiation.
+            s->connectsPending--;
+        }
         if (!JS_IsUndefined(s->onDisconnect) && !JS_IsNull(s->onDisconnect)) {
             JSValue func = JS_DupValue(ctx, s->onDisconnect);
             JSValue args[2] = {
@@ -389,6 +403,13 @@ void NetBindings::poll(JSContext* ctx) {
     auto* s = getState(ctx);
     if (!s || !s->subscriber) return;
     s->subscriber->poll();
+}
+
+bool NetBindings::hasActivity(JSContext* ctx) {
+    auto* s = getState(ctx);
+    if (!s || !s->subscriber) return false;
+    return s->hosting || s->hostPending || s->connectsPending > 0 ||
+           !s->connections.empty() || s->subscriber->hasQueuedEvents();
 }
 
 } // namespace bro::js

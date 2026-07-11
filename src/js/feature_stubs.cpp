@@ -125,6 +125,7 @@ void NetBindings::install(JSContext* ctx, net::NetService* /*service*/) {
     installUnavailableNamespace(ctx, "net", "BRO_WITH_NET");
 }
 void NetBindings::poll(JSContext* /*ctx*/) {}
+bool NetBindings::hasActivity(JSContext* /*ctx*/) { return false; }
 void NetBindings::cleanup(JSContext* /*ctx*/) {}
 #endif
 

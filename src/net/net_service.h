@@ -100,6 +100,11 @@ public:
         tail_.store(next, std::memory_order_release);
         return true;
     }
+    /// Reliable only from the consumer thread (the sole head_ writer).
+    bool empty() const {
+        return head_.load(std::memory_order_acquire) ==
+               tail_.load(std::memory_order_acquire);
+    }
     T* pop() {
         size_t head = head_.load(std::memory_order_relaxed);
         if (head == tail_.load(std::memory_order_acquire)) return nullptr;
@@ -136,6 +141,10 @@ public:
 
     /// Drain event queue and fire callbacks. Call once per frame.
     void poll();
+
+    /// True if events are queued for the next poll(). Call from the
+    /// subscriber's own thread (the queue consumer).
+    bool hasQueuedEvents() const { return !events_.empty(); }
 
     /// Real-time connection stats. Uses the GNS interface directly — safe
     /// because ISteamNetworkingSockets is documented thread-safe for reads.

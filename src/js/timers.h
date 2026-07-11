@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <limits>
 #include <map>
 #include <vector>
 
@@ -29,6 +31,16 @@ public:
 
     /// Fire all pending requestAnimationFrame callbacks. Called once per frame.
     void fireAnimationFrames(double timestampMs);
+
+    /// Earliest scheduled timer fire time in ms (same clock as tick()), or
+    /// +infinity when no timers are pending. rAF entries are frame-driven,
+    /// not deadline-driven, and are excluded. Worker event loops use this to
+    /// sleep exactly until the next timer instead of polling.
+    double nextDeadlineMs() const {
+        double d = std::numeric_limits<double>::infinity();
+        for (const auto& [id, t] : timers_) d = std::min(d, t.nextFireTime);
+        return d;
+    }
 
     /// True if any requestAnimationFrame callbacks are queued for the next
     /// frame (i.e. this context is animating). Iframe sub-documents use this to
