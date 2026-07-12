@@ -955,12 +955,71 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             }
         }
 
+        // Column rules for multicol containers: one rule centered in each
+        // column gap, spanning the content height. Geometry mirrors the
+        // layout's column computation (block.cpp multicol path) so rules land
+        // exactly between the laid-out columns. All rule styles render solid.
+        {
+            auto ccIt = style.find("column-count");
+            auto cwIt = style.find("column-width");
+            bool hasCount = ccIt != style.end() && !ccIt->second.empty() &&
+                            ccIt->second != "auto";
+            bool hasWidth = cwIt != style.end() && !cwIt->second.empty() &&
+                            cwIt->second != "auto";
+            auto crsIt = style.find("column-rule-style");
+            if ((hasCount || hasWidth) && crsIt != style.end() &&
+                crsIt->second != "none" && crsIt->second != "hidden" &&
+                w > 0 && h > 0) {
+                float rw = 3.0f;  // medium
+                auto crwIt = style.find("column-rule-width");
+                if (crwIt != style.end()) {
+                    const std::string& v = crwIt->second;
+                    if (v == "thin") rw = 1.0f;
+                    else if (v == "medium") rw = 3.0f;
+                    else if (v == "thick") rw = 5.0f;
+                    else rw = parseLengthPx(v);
+                }
+                if (rw > 0) {
+                    // column-rule-color defaults to currentColor.
+                    bromath::Color rc = cfromColor8({0, 0, 0, 255});
+                    auto crcIt = style.find("column-rule-color");
+                    if (crcIt == style.end()) crcIt = style.find("color");
+                    if (crcIt != style.end()) tryParseColor(crcIt->second, rc);
+
+                    float gap = 0.0f;
+                    auto cgIt = style.find("column-gap");
+                    if (cgIt != style.end() && !cgIt->second.empty() &&
+                        cgIt->second != "normal") {
+                        gap = parseLengthPx(cgIt->second, w);
+                    }
+                    int count = 1;
+                    if (hasCount) {
+                        count = std::max(1, std::atoi(ccIt->second.c_str()));
+                    } else {
+                        float colW = parseLengthPx(cwIt->second, w);
+                        if (colW > 0) {
+                            count = std::max(1, static_cast<int>(
+                                (w + gap) / (colW + gap)));
+                        }
+                    }
+                    float colW = (w - gap * (count - 1)) / count;
+                    if (colW < 0) colW = 0;
+                    for (int i = 1; i < count; ++i) {
+                        float gapLeft = x + colW * i + gap * (i - 1);
+                        float rx = gapLeft + gap * 0.5f - rw * 0.5f;
+                        renderer_->fillRect(rx, y, rw, h, rc);
+                    }
+                }
+            }
+        }
+
         // Draw list marker for display:list-item boxes (<li>, <summary>…).
         // Outside markers hang left of the content box, aligned to the first
-        // line's baseline. Inside markers (incl. summary's disclosure
-        // triangle) are inline content the layout doesn't reserve space for
-        // yet, so they are not painted (painting over the text would be
-        // worse than omitting them).
+        // line's baseline. Inside markers are inline content at the start of
+        // the first line: layout reserves their inline size (htmlayout's
+        // insideMarkerInlineSize — Blink geometry: symbol box + 1em margin
+        // for symbolic bullets, text + one space for ordinals) and the
+        // painter fills the reserved box here.
         {
             auto dispIt = style.find("display");
             auto lstIt = style.find("list-style-type");
@@ -969,7 +1028,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             bool outside = (lspIt == style.end() || lspIt->second != "inside");
             if (dispIt != style.end() && dispIt->second == "list-item" &&
                 listType != "none" && listType != "disclosure-open" &&
-                listType != "disclosure-closed" && outside) {
+                listType != "disclosure-closed") {
                 bromath::Color mc = cfromColor8({0, 0, 0, 255});
                 auto mcIt = style.find("color");
                 if (mcIt != style.end()) tryParseColor(mcIt->second, mc);
@@ -984,10 +1043,12 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                 if (listType == "disc" || listType == "circle" ||
                     listType == "square") {
                     // Bullet centered on roughly half the x-height above the
-                    // baseline.
+                    // baseline. Outside: right edge gap px left of the content
+                    // box. Inside: at the content-box left, within the space
+                    // layout reserved.
                     float r = 3.0f;
                     float cy = baselineY - am.ascent * 0.30f;
-                    float cx = bx - gap - r;
+                    float cx = outside ? (bx - gap - r) : (bx + r);
                     if (listType == "disc") {
                         renderer_->drawCircle(cx, cy, r, mc, mc, 0);
                     } else if (listType == "circle") {
@@ -1068,8 +1129,8 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                     }
                     text += ".";
                     auto tm = renderer_->measureText(text, font);
-                    renderer_->drawText(text, bx - gap - tm.width, baselineY,
-                                        font, mc);
+                    float tx = outside ? (bx - gap - tm.width) : bx;
+                    renderer_->drawText(text, tx, baselineY, font, mc);
                 }
             }
         }
@@ -1218,7 +1279,24 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     // computed color via this walk, once again by the control — which reads
     // as the placeholder/value "ghosting" behind the real text.
     if (!elem->textareaControl()) {
-        for (auto* child : elem->composedChildNodes())
+        // CSS2.1 Appendix E: non-positioned floats paint above the
+        // backgrounds/borders of in-flow block-level siblings. Defer floated
+        // children to a second pass so a later sibling's background can't
+        // cover a float that precedes it in the DOM.
+        std::vector<dom::Node*> floatedChildren;
+        for (auto* child : elem->composedChildNodes()) {
+            if (child && child->nodeType() == dom::NodeType::Element) {
+                auto& cs = static_cast<dom::Element*>(child)->computedStyle();
+                auto fIt = cs.find("float");
+                if (fIt != cs.end() && fIt->second != "none" &&
+                    !fIt->second.empty()) {
+                    floatedChildren.push_back(child);
+                    continue;
+                }
+            }
+            drawNode(child, childOffsetX, childOffsetY);
+        }
+        for (auto* child : floatedChildren)
             drawNode(child, childOffsetX, childOffsetY);
     }
 
