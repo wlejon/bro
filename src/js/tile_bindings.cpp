@@ -10,6 +10,9 @@
 #include "util/asset_mounts.h"
 #include "broimage/decode.h"
 #include "tile/serialize.h"
+#include "tile/pathfind.h"
+#include "tile/region.h"
+#include "tile/coord.h"
 
 #include <brogameagent/nav_grid.h>
 #include <brogameagent/types.h>
@@ -623,6 +626,247 @@ static JSValue js_tile_toNavGrid(JSContext* ctx, JSValueConst this_val, int argc
     return gridVal;
 }
 
+// ---- grid search / regions / coordinate math -----------------------------
+//
+// These bind the pure bro::tile cell-grid layers (pathfind.h / region.h /
+// coord.h): deterministic integer queries for game logic — movement ranges,
+// creep pathing, blast propagation, zoning. Predicates are declarative
+// (blockMask / per-tile-id costs), not JS callbacks, so searches stay native
+// speed.
+
+// Shared passability: cell carries ground (non-empty tile on layer 0) and none
+// of blockMask's flag bits — identical semantics to isWalkable()/toNavGrid().
+static tile::PassFn makePassFn(uint32_t blockMask) {
+    return [blockMask](const tile::TileGrid& g, tile::Cell c) {
+        return g.tile(0, c) != 0 && (g.flags(c) & blockMask) == 0;
+    };
+}
+
+// Optional per-tile-id step cost: entering a cell costs costs[groundTileId],
+// clamped to >= 1; ids beyond the array cost 1. Empty array -> uniform.
+static tile::CostFn makeCostFn(std::vector<float> costs) {
+    if (costs.empty()) return nullptr;
+    return [costs = std::move(costs)](const tile::TileGrid& g, tile::Cell,
+                                      tile::Cell to) -> float {
+        uint16_t id = g.tile(0, to);
+        float c = (id < costs.size()) ? costs[id] : 1.0f;
+        return c < 1.0f ? 1.0f : c;
+    };
+}
+
+static tile::Conn parseConn(JSContext* ctx, JSValueConst v, tile::Conn def = tile::Conn::Edge) {
+    tile::Conn conn = def;
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        if (s && std::string(s) == "vertex") conn = tile::Conn::Vertex;
+        if (s) JS_FreeCString(ctx, s);
+    }
+    return conn;
+}
+
+// Search options object: { blockMask?, costs?, conn? }
+struct SearchOpts {
+    uint32_t blockMask = 0;
+    std::vector<float> costs;
+    tile::Conn conn = tile::Conn::Edge;
+};
+
+static SearchOpts parseSearchOpts(JSContext* ctx, JSValueConst v) {
+    SearchOpts o;
+    if (!JS_IsObject(v)) return o;
+    o.blockMask = (uint32_t)(int64_t)qjsbind::get_prop_number(ctx, v, "blockMask", 0);
+    JSValue costs = JS_GetPropertyStr(ctx, v, "costs");
+    readFloatArray(ctx, costs, o.costs);
+    JS_FreeValue(ctx, costs);
+    JSValue conn = JS_GetPropertyStr(ctx, v, "conn");
+    o.conn = parseConn(ctx, conn);
+    JS_FreeValue(ctx, conn);
+    return o;
+}
+
+static JSValue makeCellObj(JSContext* ctx, tile::Cell c) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "x", JS_NewInt32(ctx, c.x));
+    JS_SetPropertyStr(ctx, o, "y", JS_NewInt32(ctx, c.y));
+    return o;
+}
+
+static JSValue makeCellArray(JSContext* ctx, const std::vector<tile::Cell>& cells) {
+    JSValue arr = JS_NewArray(ctx);
+    for (uint32_t i = 0; i < cells.size(); ++i)
+        JS_SetPropertyUint32(ctx, arr, i, makeCellObj(ctx, cells[i]));
+    return arr;
+}
+
+// Read one cell from {x,y} or [x,y].
+static bool readCellArg(JSContext* ctx, JSValueConst v, tile::Cell& out) {
+    if (!JS_IsObject(v)) return false;
+    if (JS_IsArray(v)) {
+        JSValue jx = JS_GetPropertyUint32(ctx, v, 0);
+        JSValue jy = JS_GetPropertyUint32(ctx, v, 1);
+        out.x = argInt(ctx, jx); out.y = argInt(ctx, jy);
+        JS_FreeValue(ctx, jx); JS_FreeValue(ctx, jy);
+        return true;
+    }
+    JSValue jx = JS_GetPropertyStr(ctx, v, "x");
+    JSValue jy = JS_GetPropertyStr(ctx, v, "y");
+    bool ok = !JS_IsUndefined(jx) && !JS_IsUndefined(jy);
+    if (ok) { out.x = argInt(ctx, jx); out.y = argInt(ctx, jy); }
+    JS_FreeValue(ctx, jx); JS_FreeValue(ctx, jy);
+    return ok;
+}
+
+// findPath(x0, y0, x1, y1, { blockMask?, costs?, conn? }?) -> [{x,y}, ...]
+// A* over walkable cells, endpoints inclusive; [] when unreachable.
+static JSValue js_tile_findPath(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || !w->world->grid() || argc < 4) return JS_NewArray(ctx);
+    SearchOpts o = parseSearchOpts(ctx, argc > 4 ? argv[4] : JS_UNDEFINED);
+    auto path = tile::aStar(*w->world->grid(),
+                            {argInt(ctx, argv[0]), argInt(ctx, argv[1])},
+                            {argInt(ctx, argv[2]), argInt(ctx, argv[3])},
+                            makePassFn(o.blockMask), makeCostFn(std::move(o.costs)),
+                            o.conn);
+    return makeCellArray(ctx, path);
+}
+
+// distanceField(sources, { blockMask?, conn? }?) -> Int32Array (w*h, row-major;
+// -1 = unreachable/impassable). sources: array of {x,y} or [x,y].
+static JSValue js_tile_distanceField(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || !w->world->grid() || argc < 1) return JS_NULL;
+
+    std::vector<tile::Cell> sources;
+    if (JS_IsArray(argv[0])) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, argv[0], "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (int32_t i = 0; i < len; ++i) {
+            JSValue el = JS_GetPropertyUint32(ctx, argv[0], i);
+            tile::Cell c;
+            if (readCellArg(ctx, el, c)) sources.push_back(c);
+            JS_FreeValue(ctx, el);
+        }
+    } else {
+        tile::Cell c;
+        if (readCellArg(ctx, argv[0], c)) sources.push_back(c);
+    }
+    if (sources.empty()) return JS_NULL;
+
+    SearchOpts o = parseSearchOpts(ctx, argc > 1 ? argv[1] : JS_UNDEFINED);
+    std::vector<int> field = tile::distanceField(*w->world->grid(), sources,
+                                                 makePassFn(o.blockMask), o.conn);
+
+    JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(field.data()),
+                                         field.size() * sizeof(int));
+    JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
+    JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_INT32);
+    JS_FreeValue(ctx, abuf);
+    return arr;
+}
+
+// Region match options: { layer?, id?, flag?, conn? }. Priority: flag -> id ->
+// same-tile-as-seed (floodFill) / non-empty (components).
+static tile::MatchFn makeMatchFn(JSContext* ctx, JSValueConst v, const tile::TileGrid& g,
+                                 const tile::Cell* seed, int& layerOut, tile::Conn& connOut) {
+    int layer = 0;
+    double flag = 0, id = -1;
+    if (JS_IsObject(v)) {
+        layer = qjsbind::get_prop_int(ctx, v, "layer", 0);
+        flag  = qjsbind::get_prop_number(ctx, v, "flag", 0);
+        id    = qjsbind::get_prop_number(ctx, v, "id", -1);
+        JSValue conn = JS_GetPropertyStr(ctx, v, "conn");
+        connOut = parseConn(ctx, conn);
+        JS_FreeValue(ctx, conn);
+    }
+    layerOut = layer;
+    if (flag > 0) return tile::matchFlag((uint32_t)(int64_t)flag);
+    if (id >= 0) return tile::matchTile(layer, (uint16_t)id);
+    if (seed)    return tile::matchTile(layer, g.tile(layer, *seed));
+    // components() default: any non-empty cell on the layer
+    return [layer](const tile::TileGrid& gg, tile::Cell c) { return gg.tile(layer, c) != 0; };
+}
+
+// floodFill(x, y, { layer?, id?, flag?, conn? }?) -> [{x,y}, ...]
+// Default match: cells with the same tile id as the seed on `layer`.
+static JSValue js_tile_floodFill(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || !w->world->grid() || argc < 2) return JS_NewArray(ctx);
+    const tile::TileGrid& g = *w->world->grid();
+    tile::Cell seed{argInt(ctx, argv[0]), argInt(ctx, argv[1])};
+    int layer = 0; tile::Conn conn = tile::Conn::Edge;
+    tile::MatchFn match = makeMatchFn(ctx, argc > 2 ? argv[2] : JS_UNDEFINED, g,
+                                      &seed, layer, conn);
+    return makeCellArray(ctx, tile::floodFill(g, seed, match, conn));
+}
+
+// components({ layer?, id?, flag?, conn? }?) -> [[{x,y},...], ...]
+// Default match: any non-empty cell on `layer`.
+static JSValue js_tile_components(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || !w->world->grid()) return JS_NewArray(ctx);
+    const tile::TileGrid& g = *w->world->grid();
+    int layer = 0; tile::Conn conn = tile::Conn::Edge;
+    tile::MatchFn match = makeMatchFn(ctx, argc > 0 ? argv[0] : JS_UNDEFINED, g,
+                                      nullptr, layer, conn);
+    auto comps = tile::components(g, match, conn);
+    JSValue arr = JS_NewArray(ctx);
+    for (uint32_t i = 0; i < comps.size(); ++i)
+        JS_SetPropertyUint32(ctx, arr, i, makeCellArray(ctx, comps[i]));
+    return arr;
+}
+
+// Keep only in-bounds cells (coord.h math is unbounded; games want real cells).
+static void filterInBounds(const tile::TileGrid& g, std::vector<tile::Cell>& cells) {
+    std::erase_if(cells, [&g](tile::Cell c) { return !g.inBounds(c); });
+}
+
+// cellDistance(x0, y0, x1, y1, conn?) -> topology grid distance
+static JSValue js_tile_cellDistance(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || !w->world->grid() || argc < 4) return JS_NewInt32(ctx, -1);
+    tile::Conn conn = parseConn(ctx, argc > 4 ? argv[4] : JS_UNDEFINED);
+    return JS_NewInt32(ctx, tile::distance(w->world->grid()->topology(),
+                                           {argInt(ctx, argv[0]), argInt(ctx, argv[1])},
+                                           {argInt(ctx, argv[2]), argInt(ctx, argv[3])},
+                                           conn));
+}
+
+// cellRing(x, y, radius, conn?) -> [{x,y}, ...] at exactly `radius` (in-bounds only)
+static JSValue js_tile_cellRing(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || !w->world->grid() || argc < 3) return JS_NewArray(ctx);
+    const tile::TileGrid& g = *w->world->grid();
+    tile::Conn conn = parseConn(ctx, argc > 3 ? argv[3] : JS_UNDEFINED);
+    auto cells = tile::ring(g.topology(), {argInt(ctx, argv[0]), argInt(ctx, argv[1])},
+                            argInt(ctx, argv[2]), conn);
+    filterInBounds(g, cells);
+    return makeCellArray(ctx, cells);
+}
+
+// cellsInRange(x, y, radius, conn?) -> [{x,y}, ...] within `radius` (in-bounds only)
+static JSValue js_tile_cellsInRange(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || !w->world->grid() || argc < 3) return JS_NewArray(ctx);
+    const tile::TileGrid& g = *w->world->grid();
+    tile::Conn conn = parseConn(ctx, argc > 3 ? argv[3] : JS_UNDEFINED);
+    auto cells = tile::range(g.topology(), {argInt(ctx, argv[0]), argInt(ctx, argv[1])},
+                             argInt(ctx, argv[2]), conn);
+    filterInBounds(g, cells);
+    return makeCellArray(ctx, cells);
+}
+
+// cellLine(x0, y0, x1, y1) -> [{x,y}, ...] connected line a->b (in-bounds only)
+static JSValue js_tile_cellLine(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || !w->world->grid() || argc < 4) return JS_NewArray(ctx);
+    const tile::TileGrid& g = *w->world->grid();
+    auto cells = tile::line(g.topology(), {argInt(ctx, argv[0]), argInt(ctx, argv[1])},
+                            {argInt(ctx, argv[2]), argInt(ctx, argv[3])});
+    filterInBounds(g, cells);
+    return makeCellArray(ctx, cells);
+}
+
 // save() -> Uint8Array (bro::tile's versioned grid format; see tile/serialize.h)
 static JSValue js_tile_save(JSContext* ctx, JSValueConst this_val, int /*argc*/, JSValueConst* /*argv*/) {
     auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
@@ -709,6 +953,14 @@ void TileBindings::install(JSContext* ctx) {
         .method_raw("isWalkable", js_tile_isWalkable, 3)
         .method_raw("syncNavGrid", js_tile_syncNavGrid, 2)
         .method_raw("toNavGrid", js_tile_toNavGrid, 1)
+        .method_raw("findPath", js_tile_findPath, 5)
+        .method_raw("distanceField", js_tile_distanceField, 2)
+        .method_raw("floodFill", js_tile_floodFill, 3)
+        .method_raw("components", js_tile_components, 1)
+        .method_raw("cellDistance", js_tile_cellDistance, 5)
+        .method_raw("cellRing", js_tile_cellRing, 4)
+        .method_raw("cellsInRange", js_tile_cellsInRange, 4)
+        .method_raw("cellLine", js_tile_cellLine, 4)
         .method("setOrigin", [](TWld* self, double x, double y, double z) {
             if (self->world) self->world->setOrigin((float)x, (float)y, (float)z);
         })

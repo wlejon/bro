@@ -262,6 +262,77 @@ class TileWorld {
    */
   syncNavGrid(navGrid, opts) {}
 
+  // --- Grid search / regions / coordinate math ------------------------------
+  // Deterministic integer queries over the cell grid (the bro::tile pathfind /
+  // region / coord layers). Distinct from toNavGrid(): that feeds continuous-
+  // space steering agents; these are the turn-based / game-logic primitives —
+  // movement ranges, creep pathing, blast propagation, zoning. Passability is
+  // everywhere the isWalkable() predicate: non-empty ground tile and none of
+  // `blockMask`'s flag bits set. Options common to the search calls:
+  //   blockMask — flag bits that make a cell impassable (default 0)
+  //   costs     — per-ground-tile-id step cost array (entering a cell costs
+  //               costs[tileId], clamped >= 1; missing ids cost 1). Terrain
+  //               movement costs for findPath.
+  //   conn      — "edge" (default; 4-way on square) or "vertex" (8-way with
+  //               diagonals). Hex is always 6-way and ignores conn.
+
+  /**
+   * A* shortest path from (x0,y0) to (x1,y1), endpoints inclusive. Returns an
+   * array of {x, y} cells, or [] when no path exists / the goal is impassable.
+   * The start may be impassable (you can path OUT of a blocked cell).
+   *
+   *     const path = world.findPath(ux, uy, tx, ty,
+   *         { blockMask: WATER, costs: [0, 1, 2, 4] });  // forest 2, hills 4
+   */
+  findPath(x0, y0, x1, y1, opts) {}
+
+  /**
+   * Multi-source BFS distance field. `sources` is one {x,y} (or [x,y]) or an
+   * array of them. Returns an Int32Array of length width*height (row-major:
+   * index = y*width + x) holding the step distance to the nearest source, or
+   * -1 for unreachable/impassable cells. Uniform step cost.
+   * Movement ranges (field[i] <= moveRange), tower-defense creep flow (walk
+   * downhill), influence maps.
+   */
+  distanceField(sources, opts) {}
+
+  /**
+   * All cells connected to seed (x, y) through cells matching the rule, BFS
+   * order. Default rule: same tile id as the seed on `layer`. Options:
+   * { layer=0, id (match this tile id instead), flag (match cells with ALL
+   * these flag bits), conn }. Returns [{x,y}, ...]; [] if the seed doesn't match.
+   */
+  floodFill(x, y, opts) {}
+
+  /**
+   * Every maximal connected component of matching cells, scan order. Default
+   * rule: any non-empty cell on `layer`; { id } or { flag } narrow it as in
+   * floodFill. Returns [ [{x,y},...], ... ] — "how many separate districts".
+   */
+  components(opts) {}
+
+  /**
+   * Topology grid distance between two cells: Manhattan (edge) / Chebyshev
+   * (vertex) on square, cube metric on hex. `conn` is an optional "vertex".
+   */
+  cellDistance(x0, y0, x1, y1, conn) {}
+
+  /** Cells at EXACTLY `radius` from (x, y) — the hollow ring, in-bounds only. */
+  cellRing(x, y, radius, conn) {}
+
+  /**
+   * Cells within `radius` of (x, y) inclusive — the filled disk (diamond/box/
+   * hex per topology+conn), in-bounds only. Attack and movement ranges.
+   */
+  cellsInRange(x, y, radius, conn) {}
+
+  /**
+   * A connected cell line from (x0,y0) to (x1,y1) inclusive (Bresenham
+   * supercover on square — no diagonal gaps; cube-lerp on hex), in-bounds
+   * only. Line-of-sight and projectile traces.
+   */
+  cellLine(x0, y0, x1, y1) {}
+
   // --- Placement / rebuild / teardown ---------------------------------------
 
   /** Move the whole map's root node to a world position. */

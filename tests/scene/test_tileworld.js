@@ -234,6 +234,83 @@ if (!scene) {
     const openCenter = hexCenter(0, 0);
     assert(hexNav.isWalkable(openCenter.px, openCenter.pz) === true, 'hex nav grid reflects open cell');
 
+    // ---- grid search / regions / coordinate math ---------------------------
+    // A fresh 8x8 square world: ground everywhere, a wall of flagged cells at
+    // x==4 with a gap at y==6, and a dirt (id 2) patch for region queries.
+    const WALL = 4;
+    const sw = scene.createTileWorld({ width: 8, height: 8, chunkSize: 4 });
+    sw.fillTile(0, 0, 7, 7, 1);
+    for (let y = 0; y < 8; y++) if (y !== 6) sw.setFlag(4, y, WALL, true);
+    sw.fillTile(1, 1, 2, 2, 2);            // 2x2 dirt region
+
+    // findPath routes through the gap.
+    const path = sw.findPath(0, 0, 7, 0, { blockMask: WALL });
+    assert(path.length > 0, 'findPath finds a route');
+    assert(path[0].x === 0 && path[0].y === 0, 'findPath starts at start');
+    assert(path[path.length - 1].x === 7 && path[path.length - 1].y === 0, 'findPath ends at goal');
+    assert(path.some((c) => c.x === 4 && c.y === 6), 'findPath threads the wall gap');
+    assert(path.length >= 15, 'findPath detours around the wall');
+
+    // Blocking the gap makes the goal unreachable.
+    sw.setFlag(4, 6, WALL, true);
+    assert(sw.findPath(0, 0, 7, 0, { blockMask: WALL }).length === 0,
+        'findPath returns [] when sealed off');
+    sw.setFlag(4, 6, WALL, false);
+
+    // Terrain costs: dirt (id 2) cost 10 pushes the path around the patch.
+    const costly = sw.findPath(0, 0, 3, 3, { blockMask: WALL, costs: [0, 1, 10] });
+    assert(costly.length > 0, 'findPath with costs finds a route');
+    assert(!costly.some((c) => sw.getTile(c.x, c.y) === 2),
+        'findPath avoids expensive terrain');
+
+    // distanceField: -1 behind the wall side is reachable only via the gap.
+    const field = sw.distanceField([{ x: 0, y: 0 }], { blockMask: WALL });
+    assert(field instanceof Int32Array && field.length === 64, 'distanceField shape');
+    assert(field[0] === 0, 'distanceField source is 0');
+    assert(field[6 * 8 + 4] > 0, 'distanceField reaches the gap');
+    assert(field[0 * 8 + 7] === field[6 * 8 + 4] + 1 + 6 + 3 || field[0 * 8 + 7] > 10,
+        'distanceField far side routes through the gap');
+    assert(field[3 * 8 + 4] === -1, 'distanceField wall cells are -1');
+
+    // floodFill: the dirt patch is one 4-cell region.
+    const dirt = sw.floodFill(1, 1);
+    assert(dirt.length === 4, 'floodFill same-tile default finds the dirt patch');
+    const flagged = sw.floodFill(4, 0, { flag: WALL });
+    assert(flagged.length === 6, 'floodFill flag match walks the wall segment');
+
+    // components: dirt forms exactly one component; grass one (all connected).
+    const dirtComps = sw.components({ id: 2 });
+    assert(dirtComps.length === 1 && dirtComps[0].length === 4, 'components finds one dirt region');
+
+    // Coordinate math.
+    assert(sw.cellDistance(0, 0, 3, 4) === 7, 'cellDistance Manhattan');
+    assert(sw.cellDistance(0, 0, 3, 4, 'vertex') === 4, 'cellDistance Chebyshev');
+    assert(sw.cellRing(3, 3, 1).length === 4, 'cellRing edge radius 1 -> 4 cells');
+    assert(sw.cellRing(3, 3, 1, 'vertex').length === 8, 'cellRing vertex radius 1 -> 8 cells');
+    assert(sw.cellRing(0, 0, 1).length === 2, 'cellRing clips out-of-bounds');
+    assert(sw.cellsInRange(3, 3, 1).length === 5, 'cellsInRange radius 1 -> 5 cells');
+    const lineCells = sw.cellLine(0, 0, 3, 2);
+    assert(lineCells.length >= 4, 'cellLine spans the segment');
+    assert(lineCells[0].x === 0 && lineCells[0].y === 0, 'cellLine starts at a');
+    assert(lineCells[lineCells.length - 1].x === 3 && lineCells[lineCells.length - 1].y === 2,
+        'cellLine ends at b');
+    sw.destroy();
+
+    // Hex variants: 6-way connectivity and cube-metric distance.
+    const hw = scene.createTileWorld({ width: 8, height: 8, topology: 'hex', chunkSize: 4 });
+    hw.fillTile(0, 0, 7, 7, 1);
+    assert(hw.cellRing(3, 3, 1).length === 6, 'hex cellRing radius 1 -> 6 cells');
+    assert(hw.cellsInRange(3, 3, 1).length === 7, 'hex cellsInRange radius 1 -> 7 cells');
+    assert(hw.cellDistance(3, 3, 3, 3) === 0, 'hex cellDistance identity');
+    const hexPath = hw.findPath(0, 0, 7, 7);
+    assert(hexPath.length > 0, 'hex findPath finds a route');
+    assert(hexPath.length - 1 === hw.cellDistance(0, 0, 7, 7),
+        'hex findPath length matches hex distance on open ground');
+    const hexField = hw.distanceField({ x: 0, y: 0 });
+    assert(hexField[7 * 8 + 7] === hw.cellDistance(0, 0, 7, 7),
+        'hex distanceField matches hex distance');
+    hw.destroy();
+
     hexWorld.destroy();
 }
 
