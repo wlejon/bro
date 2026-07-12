@@ -681,6 +681,11 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     auto dispIt = style.find("display");
     if (dispIt != style.end() && dispIt->second == "none") return;
 
+    // Flow-collapsed content (closed <details> body — UA -x-flow-collapse):
+    // laid out with real geometry but never painted, whole subtree.
+    auto fcIt = style.find("-x-flow-collapse");
+    if (fcIt != style.end() && fcIt->second == "collapse") return;
+
     // Check visibility:hidden (still occupies space but not drawn)
     bool visible = true;
     auto visIt = style.find("visibility");
@@ -3281,6 +3286,12 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         // display:none → don't paint, don't descend
         auto dispIt = style.find("display");
         if (dispIt != style.end() && dispIt->second == "none") return;
+
+        // Flow-collapsed content (closed <details> body) never paints —
+        // don't descend either, so positioned/SC descendants can't leak
+        // into the stacking-context buckets.
+        auto fcIt = style.find("-x-flow-collapse");
+        if (fcIt != style.end() && fcIt->second == "collapse") return;
 
         // Compute child offset using the same logic as drawElementContent
         auto& box = elem->layoutBox();

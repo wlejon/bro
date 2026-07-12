@@ -2792,6 +2792,10 @@ static void collectInnerText(const bro::dom::Element* el, std::string& out) {
             auto dIt = style.find("display");
             std::string display = (dIt != style.end()) ? dIt->second : "inline";
             if (display == "none") continue;
+            // Flow-collapsed content (closed <details> body) is not rendered,
+            // so it doesn't contribute to innerText (matching Chromium).
+            auto fcIt = style.find("-x-flow-collapse");
+            if (fcIt != style.end() && fcIt->second == "collapse") continue;
             bool isBlock = (display == "block" || display == "list-item" || display == "table");
             if (isBlock && !out.empty() && out.back() != '\n')
                 out += '\n';
@@ -2956,6 +2960,31 @@ static JSValue js_element_click(JSContext* ctx, JSValueConst this_val,
             dom::InputEvent inputEvt("input");
             inputEvt.setIsTrusted(true);
             dispatchDomEvent(ctx, el, inputEvt);
+        } else {
+            // <summary> activation: toggle [open] on the parent <details>.
+            // Walk up from the clicked element so a click on content inside
+            // the summary counts too; only the first <summary> child is the
+            // disclosure handle (HTML spec). Mirrors replaced_elements.cpp.
+            for (auto* s = el; s; s = s->parentElement()) {
+                const auto& stag = s->tagName();
+                if (stag != "SUMMARY" && stag != "summary") continue;
+                auto* parent = s->parentElement();
+                if (!parent) break;
+                const auto& ptag = parent->tagName();
+                if (ptag != "DETAILS" && ptag != "details") break;
+                dom::Element* firstSummary = nullptr;
+                for (auto* c : parent->children()) {
+                    const auto& ct = c->tagName();
+                    if (ct == "SUMMARY" || ct == "summary") { firstSummary = c; break; }
+                }
+                if (firstSummary != s) break;
+                if (parent->hasAttribute("open")) parent->removeAttribute("open");
+                else parent->setAttribute("open", "");
+                dom::Event toggleEvt("toggle", false, false);
+                toggleEvt.setIsTrusted(true);
+                dispatchDomEvent(ctx, parent, toggleEvt);
+                break;
+            }
         }
     }
     return JS_UNDEFINED;

@@ -242,9 +242,12 @@ template {
 }
 
 /* ---------- <details> / <summary> ---------- */
-/* When the <details> element is not open, hide everything except its
-   <summary>. Clicking the <summary> toggles the [open] attribute (see
-   the click handler in replaced_elements.cpp), and CSS does the rest. */
+/* When the <details> element is not open, everything except its <summary>
+   flow-collapses: still laid out (geometry queries return real boxes, the
+   way Chromium's content-visibility:hidden ::details-content behaves) but
+   contributing no height, never painted and never hit. Clicking the
+   <summary> toggles the [open] attribute (see the click handler in
+   replaced_elements.cpp), and CSS does the rest. */
 
 details > summary {
     display: list-item;
@@ -258,7 +261,7 @@ details[open] > summary {
 }
 
 details:not([open]) > *:not(summary) {
-    display: none;
+    -x-flow-collapse: collapse;
 }
 
 /* ---------- Links ---------- */
