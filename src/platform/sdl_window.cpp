@@ -18,6 +18,13 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
         throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
     }
 
+    // Deliver the click that activates an unfocused window. SDL defaults this
+    // off on every platform (Windows/X11/Wayland all gate on the same hint), so
+    // without it the first click after alt-tabbing back in is swallowed to raise
+    // the window and the user has to click a second time to actually hit
+    // anything. Browsers and native apps pass that click through; so do we.
+    SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
+
     // Request OpenGL 3.3 Core context
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);

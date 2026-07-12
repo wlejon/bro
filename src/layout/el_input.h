@@ -55,6 +55,16 @@ public:
     bool isFocused() const { return focused_; }
     void setFocused(bool f) { focused_ = f; }
 
+    // Caret index (byte offset into the value) for a point given in the same
+    // space as lastDrawPos() — the draw pass's surface space, which is what the
+    // engine hands to focusNewControl. A click past the end of the text lands
+    // at the end. Text types only; other types return the current caret.
+    //
+    // Resolves the control's box live rather than reusing lastDrawPos_, so a
+    // click that arrives before the first frame (or after a relayout that
+    // hasn't repainted yet) still lands on the right character.
+    int caretIndexFromPoint(float px, float py);
+
     // Owning element (set during attachment)
     void setElement(dom::Element* el) { elem_ = el; }
     dom::Element* element() const { return elem_; }
@@ -78,6 +88,9 @@ public:
     static float rangeThumbRadius(float h);
     static float rangeTrackHeight(float h);
 
+    // Width of the spin buttons a number input draws over its right edge.
+    static constexpr float kSpinButtonWidth = 16.0f;
+
     // Key/text input handling — returns result for engine to dispatch events
     KeyHandleResult handleKeyDown(dom::Element* el, int keycode, int mod);
     KeyHandleResult handleTextInput(dom::Element* el, const std::string& text);
@@ -86,6 +99,15 @@ public:
     void getContentSize(float& w, float& h, float maxWidth);
 
 private:
+    // The text actually painted for the value — the value itself, except for
+    // password types, which render one '*' per byte. Hit-testing and caret
+    // placement must measure what was drawn, not the underlying value.
+    std::string displayText_() const;
+    // Content width available to the text: the box, less the number spinner.
+    float textWidth_(float w) const;
+    // The control's content box in the draw pass's surface space, computed now.
+    DrawPos contentBox_() const;
+
     void drawText_(float x, float y, float w, float h);
     void drawCheckbox_(float x, float y, float w, float h);
     void drawRadio_(float x, float y, float w, float h);
@@ -102,9 +124,18 @@ private:
     int cursorPos_ = 0;
     int selStart_ = 0;
     int selEnd_ = 0;
+    // Horizontal scroll of the text under the (fixed) content box, in px. Set
+    // in draw() to keep the caret inside the box once the value outgrows it;
+    // caretIndexFromPoint adds it back to undo the shift.
+    float scrollX_ = 0.0f;
     bool focused_ = false;
     bool dragging_ = false;
     mutable DrawPos lastDrawPos_ = {0, 0, 0, 0};
+    // The draw pass's document→surface translation, captured in draw(). Zero
+    // before the first frame, which is also the correct answer then (nothing
+    // has scrolled yet), so contentBox_() works from the very first click.
+    float docOffsetX_ = 0.0f;
+    float docOffsetY_ = 0.0f;
 };
 
 } // namespace bro::layout

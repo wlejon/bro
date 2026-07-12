@@ -1,6 +1,8 @@
 #include "layout/el_textarea.h"
+#include "layout/control_text_hit.h"
 #include "layout/draw_traversal.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "render/renderer.h"
 #include "util/platform.h"
 
@@ -311,10 +313,48 @@ void ElTextarea::getContentSize(float& w, float& h) {
     h = rows() * lineH;
 }
 
+ElTextarea::DrawPos ElTextarea::contentBox() const {
+    if (!elem_) return {0, 0, 0, 0};
+    // Ancestor-transform-projected, same as ElInput — a textarea under a zoomed
+    // or panned ancestor must hit-test where it visibly is.
+    auto r = dom::absoluteContentBox(elem_);
+    return {r.x + docOffsetX_, r.y + docOffsetY_, r.width, r.height};
+}
+
+// Caret for a click. The draw pass lays the visual lines out from the content
+// box's top-left, shifted up by scrollY_, so the inverse is: which row does y
+// fall in, then which offset within that row's text run does x fall on.
+int ElTextarea::caretIndexFromPoint(float px, float py) {
+    if (!renderer_ || !elem_) return cursorPos_;
+
+    std::string val = readCurrentValue(elem_);
+    if (val.empty()) return 0;
+
+    render::FontRef fr = getFontRef();
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fr));
+    float lineHeight = lm.lineHeight();
+    if (lineHeight <= 0.0f) return cursorPos_;
+
+    DrawPos box = contentBox();
+
+    // Wrap against exactly what the frame drew. Before the first paint there is
+    // no recorded wrap width — the content width is what draw() will use.
+    float wrapW = wrapWidth_ > 0.0f ? wrapWidth_ : box.w;
+    auto vls = buildVisualLines(val, wrapW, fr, renderer_);
+
+    float relY = (py - box.y) + scrollY_;
+    int line = static_cast<int>(std::floor(relY / lineHeight));
+    line = std::clamp(line, 0, static_cast<int>(vls.size()) - 1);
+
+    float relX = px - box.x;
+    return caretOffsetForX(val, vls[line].start, vls[line].end, relX, fr, renderer_);
+}
+
 void ElTextarea::draw(render::Renderer* renderer,
                       const htmlayout::layout::LayoutBox& box,
                       const htmlayout::css::ComputedStyle& /*style*/,
-                      float offsetX, float offsetY) {
+                      float offsetX, float offsetY,
+                      float docOffsetX, float docOffsetY) {
     if (!renderer || !elem_) return;
 
     // Use the caller's renderer (raster thread has its own)
@@ -326,6 +366,11 @@ void ElTextarea::draw(render::Renderer* renderer,
     float h = box.contentRect.height;
 
     if (w <= 0 || h <= 0) return;
+
+    // Remember this pass's doc→surface translation so contentBox() can put the
+    // control back in the space the engine's mouse coordinates arrive in.
+    docOffsetX_ = docOffsetX;
+    docOffsetY_ = docOffsetY;
 
     std::string val = readCurrentValue(elem_);
     std::string placeholder = getAttr("placeholder");

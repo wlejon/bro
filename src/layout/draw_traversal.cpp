@@ -1338,7 +1338,8 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         }
         auto* textareaCtrl = elem->textareaControl();
         if (textareaCtrl) {
-            textareaCtrl->draw(renderer_, box, style, offsetX, offsetY);
+            textareaCtrl->draw(renderer_, box, style, offsetX, offsetY,
+                               rootOffsetX_, rootOffsetY_);
         }
         auto* selectCtrl = elem->selectControl();
         if (selectCtrl) {

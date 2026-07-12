@@ -1,4 +1,5 @@
 #include "layout/el_input.h"
+#include "layout/control_text_hit.h"
 #include "layout/draw_traversal.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
@@ -352,9 +353,9 @@ void ElInput::draw(render::Renderer* renderer,
     // screen-to-value ratio entirely. absoluteContentBox() is document-space;
     // the caller's doc→surface offset (just −scroll for the app document)
     // lands this in app content space (window space for system panels).
-    auto screenRect = dom::absoluteContentBox(elem_);
-    lastDrawPos_ = {screenRect.x + docOffsetX, screenRect.y + docOffsetY,
-                    screenRect.width, screenRect.height};
+    docOffsetX_ = docOffsetX;
+    docOffsetY_ = docOffsetY;
+    lastDrawPos_ = contentBox_();
 
     auto t = inputType(nullptr);
     if (t == InputType::Hidden) return;
@@ -368,6 +369,47 @@ void ElInput::draw(render::Renderer* renderer,
     }
 }
 
+std::string ElInput::displayText_() const {
+    std::string val = getAttr("value");
+    if (inputType(nullptr) == InputType::Password) {
+        return std::string(val.size(), '*');
+    }
+    return val;
+}
+
+float ElInput::textWidth_(float w) const {
+    if (inputType(nullptr) == InputType::Number) {
+        return std::max(0.0f, w - kSpinButtonWidth);
+    }
+    return w;
+}
+
+ElInput::DrawPos ElInput::contentBox_() const {
+    if (!elem_) return {0, 0, 0, 0};
+    auto r = dom::absoluteContentBox(elem_);
+    return {r.x + docOffsetX_, r.y + docOffsetY_, r.width, r.height};
+}
+
+int ElInput::caretIndexFromPoint(float px, float /*py*/) {
+    if (!renderer_ || !isTextType(nullptr)) return cursorPos_;
+
+    std::string disp = displayText_();
+    // Text is drawn from the content-box left edge, shifted left by scrollX_.
+    float rel = (px - contentBox_().x) + scrollX_;
+    int idx = caretOffsetForX(disp, 0, disp.size(), rel, getFontRef(), renderer_);
+
+    if (inputType(nullptr) == InputType::Password) {
+        // The mask is one '*' per value *byte*, so a display index is already a
+        // value byte index — but it can land inside a multi-byte character.
+        // Snap back to that character's first byte.
+        std::string val = getAttr("value");
+        int len = static_cast<int>(val.size());
+        idx = std::clamp(idx, 0, len);
+        while (idx > 0 && idx < len && !isUtf8Boundary(val, static_cast<size_t>(idx))) --idx;
+    }
+    return idx;
+}
+
 void ElInput::drawText_(float x, float y, float w, float h) {
     std::string val = getAttr("value");
     std::string placeholder = getAttr("placeholder");
@@ -375,11 +417,7 @@ void ElInput::drawText_(float x, float y, float w, float h) {
     bool isPlaceholder = false;
 
     if (!val.empty()) {
-        if (inputType(nullptr) == InputType::Password) {
-            text = std::string(val.size(), '*');
-        } else {
-            text = val;
-        }
+        text = displayText_();
     } else if (!focused_ && !placeholder.empty()) {
         text = placeholder;
         isPlaceholder = true;
@@ -388,10 +426,40 @@ void ElInput::drawText_(float x, float y, float w, float h) {
     render::FontRef fontRef = getFontRef();
     auto lm = render::LineMetrics::from(renderer_->measureText("M", fontRef));
     float textY = lm.baselineY(y, h);
-    float drawX = x;
+
+    // Distance from the text's left edge to the caret. Both password and plain
+    // text draw one display glyph per value byte-run, so a byte prefix of `val`
+    // is a glyph prefix of `text` — measuring `text` works for both (measuring
+    // `val` under a password would place the caret against the wrong glyphs).
+    const int cpos = std::clamp(cursorPos_, 0, static_cast<int>(val.size()));
+    float caretOffset = 0.0f;
+    if (!isPlaceholder && cpos > 0 && cpos <= static_cast<int>(text.size())) {
+        caretOffset = renderer_->measureText(
+            std::string_view(text).substr(0, static_cast<size_t>(cpos)), fontRef).width;
+    }
+
+    // Scroll the text under the fixed box so the caret stays visible once the
+    // value is wider than the content area — otherwise typing past the right
+    // edge clips the caret away and you lose your place. Only a focused field
+    // scrolls; an unfocused one always shows its text from the start.
+    const float availW = textWidth_(w);
+    if (!focused_ || isPlaceholder) {
+        scrollX_ = 0.0f;
+    } else {
+        float fullW = text.empty() ? 0.0f
+                                   : renderer_->measureText(text, fontRef).width;
+        // Leave a pixel for the caret itself so it isn't half-clipped at the edge.
+        if (caretOffset - scrollX_ < 0.0f) {
+            scrollX_ = caretOffset;
+        } else if (caretOffset - scrollX_ > availW - 1.0f) {
+            scrollX_ = caretOffset - availW + 1.0f;
+        }
+        scrollX_ = std::clamp(scrollX_, 0.0f, std::max(0.0f, fullW - availW + 1.0f));
+    }
+    float drawX = x - scrollX_;
 
     renderer_->save();
-    renderer_->setClip(x, y, w, h);
+    renderer_->setClip(x, y, availW, h);
 
     if (!text.empty()) {
         // Use the element's computed color for text (respects app themes)
@@ -424,20 +492,17 @@ void ElInput::drawText_(float x, float y, float w, float h) {
                 }
             }
         }
-        int cpos = std::clamp(cursorPos_, 0, static_cast<int>(val.size()));
-        std::string beforeCursor = val.substr(0, cpos);
-        float cursorX = drawX;
-        if (!beforeCursor.empty()) {
-            auto ctm = renderer_->measureText(beforeCursor, fontRef);
-            cursorX += ctm.width;
-        }
+        float cursorX = drawX + caretOffset;
         float cursorTop = textY - lm.ascent;
         float cursorBottom = cursorTop + lm.lineHeight();
         renderer_->drawLine(cursorX, cursorTop, cursorX, cursorBottom, cursorColor, 1.0f);
     }
 
+    // The spin buttons sit outside the text's clip — they own the right edge.
+    renderer_->restore();
+
     if (inputType(nullptr) == InputType::Number) {
-        float btnW = 16.0f;
+        float btnW = kSpinButtonWidth;
         float bx = x + w - btnW;
         renderer_->drawLine(bx, y, bx, y + h, cfromColor8({180, 180, 180, 255}), 1.0f);
         renderer_->drawLine(bx, y + h / 2, bx + btnW, y + h / 2, cfromColor8({180, 180, 180, 255}), 1.0f);
@@ -455,8 +520,6 @@ void ElInput::drawText_(float x, float y, float w, float h) {
         renderer_->drawPolygon(std::span<const render::PointF>(downPts, 3),
                               cfromColor8({80, 80, 80, 255}), cfromColor8({0, 0, 0, 0}), 0.0f);
     }
-
-    renderer_->restore();
 }
 
 // color-scheme, per CSS Color Adjustment: an element whose computed

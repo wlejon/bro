@@ -297,11 +297,12 @@ void focusNewControl(
             *ctx.dirtyFlag = true;
         } else if (newInput->isTextType(target)) {
             // Number spin button click
+            bool onSpinButton = false;
             if (newInput->inputType(target) == layout::ElInput::InputType::Number) {
                 auto dp = newInput->lastDrawPos();
-                float btnW = 16.0f;
-                float bx = dp.x + dp.w - btnW;
+                float bx = dp.x + dp.w - layout::ElInput::kSpinButtonWidth;
                 if (x >= bx && x <= dp.x + dp.w) {
+                    onSpinButton = true;
                     std::string val = target->getAttribute("value");
                     float v = val.empty() ? 0 : static_cast<float>(atof(val.c_str()));
                     float step = newInput->rangeStep();
@@ -318,8 +319,12 @@ void focusNewControl(
                     dispatchInputEvent(ctx, target);
                 }
             }
-            std::string valStr = target->getAttribute("value");
-            newInput->setCursorPos(static_cast<int>(valStr.size()));
+            // Place the caret where the click landed. A press on the spin
+            // buttons isn't a caret press — it just steps the value, and the
+            // caret stays at the end of the number it wrote.
+            if (!onSpinButton) {
+                newInput->setCursorPos(newInput->caretIndexFromPoint(x, y));
+            }
             safeStartTextInput(ctx.window);
             *ctx.dirtyFlag = true;
         } else {
@@ -329,8 +334,7 @@ void focusNewControl(
         }
     } else if (newTextarea) {
         newTextarea->setFocused(true);
-        std::string taValStr = target->getAttribute("value");
-        newTextarea->setCursorPos(static_cast<int>(taValStr.size()));
+        newTextarea->setCursorPos(newTextarea->caretIndexFromPoint(x, y));
         safeStartTextInput(ctx.window);
         *ctx.dirtyFlag = true;
     } else if (newSelect) {
