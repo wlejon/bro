@@ -115,6 +115,7 @@ button, input[type="button"], input[type="submit"], input[type="reset"] {
     background-color: #f0f0f0;
     color: #000;
     font-size: 13.333px;
+    text-align: center;
     cursor: pointer;
 }
 
@@ -197,8 +198,11 @@ textarea:disabled {
 /* Options live in the select's popup, never in document flow: keep them
    display:none so getBoundingClientRect reports an empty rect (as browsers do
    for a closed select's options) instead of projecting them onto the select's
-   content origin. The padding matches the browser's option box for parity of
-   the computed style. */
+   content origin. Chromium computes display:block for them (a known, accepted
+   computed-style delta) — display:block here would report the select-origin
+   projection and 0px used sizes, which is worse than the display mismatch.
+   The padding matches the browser's option box for parity of the computed
+   style. */
 option {
     display: none;
     padding: 0 2px 1px 2px;
@@ -210,7 +214,8 @@ fieldset {
     margin-left: 2px;
     margin-right: 2px;
     padding: 0.35em 0.75em 0.625em;
-    border: 2px groove #767676;
+    /* ThreedFace — matches Chromium's UA sheet (2px groove ThreedFace). */
+    border: 2px groove #f0f0f0;
 }
 
 legend {

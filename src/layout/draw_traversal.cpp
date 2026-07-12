@@ -919,7 +919,10 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             drawBackground(elem, 0, static_cast<float>(viewportTop_),
                            static_cast<float>(viewportW_), static_cast<float>(viewportH_));
         } else {
-            drawBackground(elem, bx, by, bw, bh);
+            // A fieldset's background starts at its painted border-box top
+            // (the legend's vertical center), not the layout box top.
+            float fsShift = fieldsetTopShift(elem, bx, by);
+            drawBackground(elem, bx, by + fsShift, bw, bh - fsShift);
         }
 
         // Inset shadows after background (so they're visible on top of it).
@@ -2161,6 +2164,32 @@ static float styleLengthPx(const htmlayout::css::ComputedStyle& cs, const char* 
     return v;
 }
 
+float DrawTraversal::fieldsetTopShift(dom::Element* elem, float x, float y,
+                                      float* gapX0, float* gapX1) {
+    std::string tag = elem->tagName();
+    if (tag != "fieldset" && tag != "FIELDSET") return 0.0f;
+    for (auto* child : elem->composedChildNodes()) {
+        if (!child || child->nodeType() != dom::NodeType::Element) continue;
+        auto* le = static_cast<dom::Element*>(child);
+        std::string t = le->tagName();
+        if (t != "legend" && t != "LEGEND") continue;
+        auto& cs = le->computedStyle();
+        auto dIt = cs.find("display");
+        if (dIt != cs.end() && dIt->second == "none") break;
+        auto& box = elem->layoutBox();
+        auto& lb = le->layoutBox();
+        float contentX = x + box.border.left + box.padding.left;
+        float contentY = y + box.border.top + box.padding.top;
+        float lx = contentX + lb.contentRect.x - lb.padding.left - lb.border.left;
+        float ly = contentY + lb.contentRect.y - lb.padding.top - lb.border.top;
+        float centerY = ly + lb.fullHeight() * 0.5f;
+        if (gapX0) *gapX0 = lx;
+        if (gapX1) *gapX1 = lx + lb.fullWidth();
+        return std::max(0.0f, (centerY - box.border.top * 0.5f) - y);
+    }
+    return 0.0f;
+}
+
 void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, float h) {
     auto& box = elem->layoutBox();
     auto& style = elem->computedStyle();
@@ -2266,6 +2295,21 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
     }
     // --- end border-collapse painting ---------------------------------------
 
+    // <fieldset>: the painted border box starts at the legend's vertical
+    // center and the top border skips the legend's horizontal extent.
+    fieldsetGapActive_ = false;
+    {
+        float gx0 = 0, gx1 = 0;
+        float shift = fieldsetTopShift(elem, x, y, &gx0, &gx1);
+        if (shift > 0 || gx1 > gx0) {
+            y += shift;
+            h -= shift;
+            fieldsetGapX0_ = gx0;
+            fieldsetGapX1_ = gx1;
+            fieldsetGapActive_ = true;
+        }
+    }
+
     auto getBorderColor = [&](const char* prop) -> bromath::Color {
         bromath::Color c = cfromColor8({0, 0, 0, 255});
         auto it = style.find(prop);
@@ -2330,7 +2374,8 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
 
     if (!anyVisible) return;
 
-    if (rounded && allSameColor && allSameWidth && allFourVisible && !anyNonSolid) {
+    if (rounded && allSameColor && allSameWidth && allFourVisible && !anyNonSolid &&
+        !fieldsetGapActive_) {
         // Draw a single rounded rect outline. Inset by half the (averaged)
         // border width so the centerline of the stroke lies on the border box
         // edge, matching CSS border placement.
@@ -2361,7 +2406,8 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
     // color and the corners split along the diagonal — matching CSS. (The
     // all-same-color rounded fast path above already returned; this handles the
     // per-side-colored ring, e.g. a CSS loading spinner.)
-    if (rounded && allSameWidth && allFourVisible && !anyNonSolid) {
+    if (rounded && allSameWidth && allFourVisible && !anyNonSolid &&
+        !fieldsetGapActive_) {
         float avgWidth = firstWidth;
         float half = avgWidth / 2;
         render::Radii inner = radii;
@@ -2395,7 +2441,8 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
     // emit axis-aligned rects to match prior antialiasing exactly. Trapezoid
     // edges along the corner diagonals would otherwise produce subtle AA
     // seams across the table/box-grid corpus.
-    if (!rounded && allSameColor && allSameWidth && allFourVisible && !anyNonSolid) {
+    if (!rounded && allSameColor && allSameWidth && allFourVisible && !anyNonSolid &&
+        !fieldsetGapActive_) {
         if (T > 0) renderer_->fillRect(x, y, w, T, firstColor);
         if (B > 0) renderer_->fillRect(x, y + h - B, w, B, firstColor);
         if (L > 0) renderer_->fillRect(x, y + T, L, h - T - B, firstColor);
@@ -2428,12 +2475,6 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
         if (w0 <= 0 || !isBorderVisible(styleProp)) return;
         auto c = getBorderColor(colorProp);
         std::string st = getBorderStyle(styleProp);
-        if (st == "solid" || st.empty()) {
-            render::PointF pts[4] = {p0, p1, p2, p3};
-            renderer_->drawPolygon(std::span<const render::PointF>(pts, 4),
-                                   c, cfromColor8({0, 0, 0, 0}), 0.0f);
-            return;
-        }
 
         // Axis-aligned stamp rect for this side (outer extent).
         float sx, sy, sw, sh;
@@ -2442,6 +2483,68 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
         else if (sideIndex == 2) { sx = x;          sy = y + h - w0; sw = w;  sh = w0; }
         else if (sideIndex == 3) { sx = x;          sy = y;          sw = w0; sh = h;  }
         else                     { sx = x + w - w0; sy = y;          sw = w0; sh = h;  }
+
+        // Fill helper that skips the fieldset legend gap on the top side.
+        auto stampRect = [&](float rx, float ry, float rw, float rh,
+                             bromath::Color cc) {
+            if (sideIndex == 0 && fieldsetGapActive_) {
+                float gx0 = std::max(rx, fieldsetGapX0_);
+                float gx1 = std::min(rx + rw, fieldsetGapX1_);
+                if (gx1 > gx0) {
+                    if (gx0 > rx) renderer_->fillRect(rx, ry, gx0 - rx, rh, cc);
+                    if (rx + rw > gx1)
+                        renderer_->fillRect(gx1, ry, rx + rw - gx1, rh, cc);
+                    return;
+                }
+            }
+            renderer_->fillRect(rx, ry, rw, rh, cc);
+        };
+
+        if (st == "solid" || st.empty()) {
+            if (sideIndex == 0 && fieldsetGapActive_) {
+                stampRect(sx, sy, sw, sh, c);
+                return;
+            }
+            render::PointF pts[4] = {p0, p1, p2, p3};
+            renderer_->drawPolygon(std::span<const render::PointF>(pts, 4),
+                                   c, cfromColor8({0, 0, 0, 0}), 0.0f);
+            return;
+        }
+
+        // 3D shaded styles. WebKit/Blink shading: the "dark" variant scales
+        // the sRGB-encoded channels by ~2/3 (Color values here are linear, so
+        // encode/scale/decode). inset: top/left dark, bottom/right base;
+        // outset is the inverse. groove carves (outer half inset-shaded,
+        // inner half outset-shaded); ridge embosses (the inverse).
+        if (st == "groove" || st == "ridge" || st == "inset" || st == "outset") {
+            auto darken = [](bromath::Color cc) {
+                cc.r = bromath::csrgbToLinear(bromath::clinearToSrgb(cc.r) * 2.0f / 3.0f);
+                cc.g = bromath::csrgbToLinear(bromath::clinearToSrgb(cc.g) * 2.0f / 3.0f);
+                cc.b = bromath::csrgbToLinear(bromath::clinearToSrgb(cc.b) * 2.0f / 3.0f);
+                return cc;
+            };
+            bool topLeft = (sideIndex == 0 || sideIndex == 3);
+            if (st == "inset" || st == "outset") {
+                bool dark = (topLeft == (st == "inset"));
+                stampRect(sx, sy, sw, sh, dark ? darken(c) : c);
+                return;
+            }
+            bool outerDark = (topLeft == (st == "groove"));
+            bromath::Color oc = outerDark ? darken(c) : c;
+            bromath::Color ic = outerDark ? c : darken(c);
+            float t = w0 * 0.5f;
+            switch (sideIndex) {
+            case 0: stampRect(sx, sy, sw, t, oc);
+                    stampRect(sx, sy + t, sw, sh - t, ic); break;
+            case 2: stampRect(sx, sy + sh - t, sw, t, oc);
+                    stampRect(sx, sy, sw, sh - t, ic); break;
+            case 3: stampRect(sx, sy, t, sh, oc);
+                    stampRect(sx + t, sy, sw - t, sh, ic); break;
+            default: stampRect(sx + sw - t, sy, t, sh, oc);
+                     stampRect(sx, sy, sw - t, sh, ic); break;
+            }
+            return;
+        }
 
         if (st == "double") {
             // Two strokes each ~floor(width/3), separated by a gap.
@@ -2500,6 +2603,7 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
     // Left: outer BL, outer TL, inner TL, inner BL
     drawSide("border-left-color", "border-left-style", 3, L,
              {ox0, oy1}, {ox0, oy0}, {ix0, iy0}, {ix0, iy1});
+    fieldsetGapActive_ = false;
 }
 
 // Apply text-transform to a string

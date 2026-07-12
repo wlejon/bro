@@ -159,6 +159,14 @@ private:
     void drawElementContent(dom::Element* elem, float offsetX, float offsetY);
     void drawBackground(dom::Element* elem, float x, float y, float w, float h);
     void drawBorders(dom::Element* elem, float x, float y, float w, float h);
+    // <fieldset> paints its block-start border and background from the
+    // vertical center of its <legend>, which straddles the border (HTML
+    // rendering spec). Returns the downward shift of the painted top edge
+    // (0 for anything that isn't a fieldset with an in-flow legend) and,
+    // when gapX0/gapX1 are given, the legend's horizontal extent where the
+    // top border is skipped.
+    float fieldsetTopShift(dom::Element* elem, float x, float y,
+                           float* gapX0 = nullptr, float* gapX1 = nullptr);
     void drawText(dom::Node* textNode, dom::Element* parent, float offsetX, float offsetY);
     void drawPseudo(dom::Element* host, const std::string& which,
                     float offsetX, float offsetY);
@@ -210,6 +218,13 @@ private:
     int viewportW_ = 0;
     int viewportH_ = 0;
     int viewportTop_ = 0;
+
+    // Legend gap for the fieldset border being painted by drawBorders: the
+    // top border skips [fieldsetGapX0_, fieldsetGapX1_]. Only set while
+    // drawBorders runs on a fieldset with an in-flow legend.
+    bool fieldsetGapActive_ = false;
+    float fieldsetGapX0_ = 0;
+    float fieldsetGapX1_ = 0;
 
     // Root draw offset of the current draw() pass — the translation from
     // document space to the output surface (the app doc draws in content
