@@ -37,6 +37,12 @@ public:
     static void install(JSContext* ctx, const std::string& basePath,
                         const util::AssetMounts* mounts = nullptr);
 
+    /// Register only the bro.image function suite (decode/encode, geometric,
+    /// color, preproc, ...) onto the brokit-built bro.image — no Image
+    /// element class. For worker contexts, which have no DOM; relative path
+    /// resolution reuses the base path set by the main-thread install().
+    static void installKernels(JSContext* ctx);
+
     /// Try to extract ImagePixels from a JS value that is an Image object.
     /// Returns true if the value is a loaded Image with pixel data.
     static bool getImagePixels(JSValue val, ImagePixels& out);

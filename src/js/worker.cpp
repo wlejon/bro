@@ -13,6 +13,7 @@
 #include "js/imagebitmap_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/flora_bindings.h"
+#include "js/image_bindings.h"
 #include "js/math_bindings.h"
 #include "js/message_serializer.h"
 #include "js/net_bindings.h"
@@ -270,6 +271,12 @@ void Worker::threadFunc()
 
     // --- 3b'. Install bro.math.* (SpatialHash3D, plus future bromath types) ---
     MathBindings::install(ctx);
+
+    // --- 3b'ᵇ. Augment the brokit-built bro.image with the full broimage
+    // function suite (decode/encode files, geometric, color, preproc) — the
+    // same augmentation the main context gets, minus the Image element class
+    // (no DOM here). ---
+    ImageBindings::installKernels(ctx);
 
     // --- 3b''. Install bro.flora.* (broflora ecosystem sim) ---
     FloraBindings::install(ctx);

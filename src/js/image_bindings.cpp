@@ -1393,6 +1393,10 @@ void ImageBindings::install(JSContext* ctx, const std::string& basePath,
     registerImageKernels(ctx);
 }
 
+void ImageBindings::installKernels(JSContext* ctx) {
+    registerImageKernels(ctx);
+}
+
 JSValue ImageBindings::createImage(JSContext* ctx) {
     auto* img = new ID();
     img->ctx = ctx;
