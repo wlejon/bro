@@ -846,6 +846,24 @@ static JSValue js_pipeline_numXAttnBlocks(JSContext* ctx, JSValueConst this_val,
     return JS_NewInt32(ctx, xattnBlocks(w));
 }
 
+// sigmas() -> Float32Array — the flow-match sigma schedule of the most recent
+// prime()/generate(): length numSteps+1 with a trailing 0. Empty array for
+// non-flow-match schedulers or before any schedule is set. With consecutive
+// latent() snapshots x_i, x_{i+1} this recovers the velocity
+// v = (x_{i+1}-x_i)/(sigmas[i+1]-sigmas[i]) and the x0 preview
+// x0 = x_i - sigmas[i]*v without an extra model forward.
+static JSValue js_pipeline_sigmas(JSContext* ctx, JSValueConst this_val,
+                                  int, JSValueConst*) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "sigmas: not a Pipeline");
+    try {
+        return qjsbind::make_float32_array(ctx,
+                   w->pipeline->schedule_sigmas());
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "sigmas: %s", e.what());
+    }
+}
+
 // config() -> object — read-only snapshot of the resolved PipelineConfig.
 static JSValue js_pipeline_config(JSContext* ctx, JSValueConst this_val,
                                   int, JSValueConst*) {
@@ -1271,6 +1289,7 @@ static void registerPipelineClass(JSContext* ctx) {
         .method_raw("generate",           js_pipeline_generate,           2)
         .method_raw("prime",              js_pipeline_prime,              2)
         .method_raw("numXAttnBlocks",     js_pipeline_numXAttnBlocks,     0)
+        .method_raw("sigmas",             js_pipeline_sigmas,             0)
         .method_raw("config",             js_pipeline_config,             0)
         .method_raw("loadControlDictionary", js_pipeline_loadControlDictionary, 1)
         .method_raw("setControl",         js_pipeline_setControl,         2)

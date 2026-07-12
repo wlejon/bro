@@ -296,6 +296,32 @@ class Pipeline {
   numXAttnBlocks() {}
 
   /**
+   * The flow-match sigma schedule of the most recent prime()/generate():
+   * a Float32Array of length numSteps + 1 with a trailing 0.0 — sigmas()[i]
+   * is the noise level entering step i. Empty for non-flow-match schedulers
+   * (DDIM/LCM/SCM) or before any schedule has been set.
+   *
+   * Because the flow-match Euler step is exact, two consecutive latent()
+   * snapshots recover the model's velocity and the free x̂0 preview without
+   * an extra forward:
+   *
+   *   const s  = pipe.sigmas();
+   *   const x0 = st.latent();                       // x_i  (before the step)
+   *   st.stepOnce();
+   *   const x1 = st.latent();                       // x_{i+1}
+   *   const k  = s[i] / (s[i + 1] - s[i]);
+   *   const p  = x0.map((v, j) => v - k * (x1[j] - v));   // x̂0 preview
+   *   const peek = st.clone(); peek.setLatent(p);
+   *   const img = peek.decode();                    // what the final image
+   *                                                 // is already committed to
+   *
+   * This is the engine seam behind preview-pruned candidate search (score
+   * many init noises after ONE step each, keep the promising ones).
+   * @returns {Float32Array}
+   */
+  sigmas() {}
+
+  /**
    * Read-only snapshot of the resolved pipeline configuration. `modelClass`
    * is 'StableDiffusion', 'Flux', 'Sana', 'PixArt', or 'Krea2'; `scheduler` is
    * 'ddim', 'lcm', 'flowmatch', or 'scm' (Sana-Sprint). `timeCondProjDim`,
