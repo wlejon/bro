@@ -1027,8 +1027,7 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
             auto lspIt = style.find("list-style-position");
             bool outside = (lspIt == style.end() || lspIt->second != "inside");
             if (dispIt != style.end() && dispIt->second == "list-item" &&
-                listType != "none" && listType != "disclosure-open" &&
-                listType != "disclosure-closed") {
+                listType != "none") {
                 bromath::Color mc = cfromColor8({0, 0, 0, 255});
                 auto mcIt = style.find("color");
                 if (mcIt != style.end()) tryParseColor(mcIt->second, mc);
@@ -1040,7 +1039,31 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
                 float baselineY = by + am.ascent;
                 float gap = 7.0f;   // Blink's marker padding
 
-                if (listType == "disc" || listType == "circle" ||
+                if (listType == "disclosure-open" ||
+                    listType == "disclosure-closed") {
+                    // <summary> disclosure triangle. Blink: symbol box is
+                    // 0.66em (DisclosureSymbolSize) with a 0.4em end margin;
+                    // closed points right, open points down.
+                    float fs = 16.0f;
+                    auto fsIt = style.find("font-size");
+                    if (fsIt != style.end()) {
+                        float v = parseLengthPx(fsIt->second);
+                        if (v > 0) fs = v;
+                    }
+                    float s = 0.66f * fs;
+                    float x0 = outside ? (bx - 0.4f * fs - s) : bx;
+                    float top = baselineY - am.ascent * 0.35f - s * 0.5f;
+                    bromath::Color none = cfromColor8({0, 0, 0, 0});
+                    if (listType == "disclosure-closed") {
+                        render::PointF pts[3] = {
+                            {x0, top}, {x0 + s, top + s * 0.5f}, {x0, top + s}};
+                        renderer_->drawPolygon(pts, mc, none, 0);
+                    } else {
+                        render::PointF pts[3] = {
+                            {x0, top}, {x0 + s, top}, {x0 + s * 0.5f, top + s}};
+                        renderer_->drawPolygon(pts, mc, none, 0);
+                    }
+                } else if (listType == "disc" || listType == "circle" ||
                     listType == "square") {
                     // Bullet centered on roughly half the x-height above the
                     // baseline. Outside: right edge gap px left of the content
