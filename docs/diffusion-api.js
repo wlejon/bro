@@ -108,6 +108,41 @@ const diffusion = {
   loadModel(modelDir) {},
 
   /**
+   * Expand an init-noise tensor to an integer-factor larger resolution while
+   * preserving the identity/composition it encodes. The source is NCHW raw
+   * N(0,1) — e.g. `state.latent()` right after prime() (sigma_0 is 1.0 for
+   * flow-match, so the latent IS the init noise). The result is exactly
+   * i.i.d. N(0,1) whose k×k block means are tied to the source, so the
+   * low-frequency structure — which decides the character in the first
+   * step or two — carries over. A SEED cannot do this: the same seed at a
+   * different latent shape is an unrelated noise field.
+   *
+   * Feed the result back via `opts.initNoise` at the larger size.
+   *
+   * @param {Float32Array} src - NCHW noise, length channels*height*width
+   * @param {object} opts
+   * @param {number} opts.channels - latent channels (16 for Krea 2 / Flux)
+   * @param {number} opts.height   - source latent height (image height / 8)
+   * @param {number} opts.width    - source latent width  (image width / 8)
+   * @param {number} opts.factor   - integer spatial expansion factor (>= 1)
+   * @param {number} [opts.seed]   - Philox key for the fine-level complement;
+   *        deterministic per (src, seed)
+   * @returns {Float32Array} length channels * height*factor * width*factor
+   *
+   * @example
+   *   // Find a character at 512², render it at 1024².
+   *   const st = pipe.prime(prompt, { seed, width: 512, height: 512,
+   *                                   steps: 8, guidanceScale: 1.0 });
+   *   const noise = st.latent();                    // 16×64×64 init noise
+   *   while (!st.done) st.stepOnce();               // ... judge st.decode()
+   *   const big = bro.diffusion.expandNoise(noise,
+   *       { channels: 16, height: 64, width: 64, factor: 2, seed });
+   *   const img = pipe.generate(prompt, { initNoise: big,
+   *       width: 1024, height: 1024, steps: 8, guidanceScale: 1.0 });
+   */
+  expandNoise(src, opts) {},
+
+  /**
    * Create a Stable Diffusion 1.5 inference Pipeline. Loads the CLIP
    * tokenizer and builds the model graph (no weights yet — call
    * pipeline.loadWeights()). For Flux, use loadModel() instead.

@@ -1558,6 +1558,52 @@ static void registerPipelineStateClass(JSContext* ctx) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// expandNoise — transport an identity's init noise to a larger resolution
+// ═══════════════════════════════════════════════════════════════════════════
+
+// expandNoise(src, {channels, height, width, factor, seed?}) -> Float32Array
+// src is NCHW raw N(0,1) (e.g. state.latent() at prime time, sigma_0 = 1);
+// result is (height*factor)×(width*factor) noise whose k×k block means are
+// tied to src — exactly i.i.d. N(0,1), identity-preserving under expansion.
+// Feed it back through prime/generate opts.initNoise at the larger size.
+static JSValue js_expandNoise(JSContext* ctx, JSValueConst,
+                              int argc, JSValueConst* argv) {
+    if (argc < 2 || !JS_IsObject(argv[1]))
+        return JS_ThrowTypeError(ctx,
+            "expandNoise(src, {channels, height, width, factor, seed?})");
+    std::size_t cnt = 0;
+    const float* src = qjsbind::read_float32_view(ctx, argv[0], cnt);
+    if (!src || cnt == 0)
+        return JS_ThrowTypeError(ctx, "expandNoise: src must be a Float32Array");
+
+    auto readNum = [&](const char* key) -> double {
+        JSValue v = JS_GetPropertyStr(ctx, argv[1], key);
+        double d = 0;
+        if (JS_IsNumber(v)) JS_ToFloat64(ctx, &d, v);
+        JS_FreeValue(ctx, v);
+        return d;
+    };
+    const double c = readNum("channels"), h = readNum("height"),
+                 w = readNum("width"), k = readNum("factor"),
+                 seed = readNum("seed");
+    if (c < 1 || h < 1 || w < 1 || k < 1)
+        return JS_ThrowTypeError(ctx,
+            "expandNoise: channels/height/width/factor must be >= 1");
+    if (static_cast<std::size_t>(c * h * w) != cnt)
+        return JS_ThrowTypeError(ctx,
+            "expandNoise: src length %zu != channels*height*width", cnt);
+    try {
+        return qjsbind::make_float32_array(ctx,
+            bdp::expand_init_noise(src, static_cast<int>(c),
+                                   static_cast<int>(h), static_cast<int>(w),
+                                   static_cast<int>(k),
+                                   static_cast<std::uint64_t>(seed)));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "expandNoise: %s", e.what());
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Install
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1582,6 +1628,8 @@ void installDiffusionBindings(JSContext* ctx) {
                       JS_NewCFunction(ctx, js_createPipeline, "createPipeline", 1));
     JS_SetPropertyStr(ctx, diff, "loadModel",
                       JS_NewCFunction(ctx, js_loadModel, "loadModel", 2));
+    JS_SetPropertyStr(ctx, diff, "expandNoise",
+                      JS_NewCFunction(ctx, js_expandNoise, "expandNoise", 2));
     JS_SetPropertyStr(ctx, broObj, "diffusion", diff);
 
     JS_FreeValue(ctx, broObj);
