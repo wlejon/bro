@@ -82,10 +82,11 @@ void RecordingRenderer::drawText(std::string_view text, float x, float y,
 
 void RecordingRenderer::drawTextEx(std::string_view text, float x, float y,
                                    FontRef font, Color color,
-                                   float letterSpacing, float blur) {
+                                   float letterSpacing, float blur,
+                                   float wordSpacing) {
     if (!buffer_) {
         measureRenderer_->drawTextEx(text, x, y, font, color,
-                                     letterSpacing, blur);
+                                     letterSpacing, blur, wordSpacing);
         return;
     }
     Cmd_DrawText cmd{};
@@ -103,6 +104,7 @@ void RecordingRenderer::drawTextEx(std::string_view text, float x, float y,
     cmd.x = x; cmd.y = y;
     cmd.color = color;
     cmd.letterSpacing = letterSpacing;
+    cmd.wordSpacing = wordSpacing;
     cmd.blur = blur;
     buffer_->append(cmd);
 }

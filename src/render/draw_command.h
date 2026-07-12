@@ -36,6 +36,7 @@ struct Cmd_DrawText {
     int   fontWeight;
     bool  fontItalic;
     float letterSpacing;              // 0 -> plain drawText path
+    float wordSpacing;                // extra advance per space char; 0 if none
     float blur;                       // text-shadow halo; 0 if none
     bromath::Color color;
 };

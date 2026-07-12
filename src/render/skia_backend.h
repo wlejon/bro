@@ -63,7 +63,8 @@ public:
     void drawText(std::string_view text, float x, float y, FontRef font, bromath::Color color) override;
     void drawTextEx(std::string_view text, float x, float y,
                     FontRef font, bromath::Color color,
-                    float letterSpacing, float blur) override;
+                    float letterSpacing, float blur,
+                    float wordSpacing = 0.0f) override;
     TextMetrics measureText(std::string_view text, FontRef font) override;
 
     void drawLine(float x1, float y1, float x2, float y2, bromath::Color color, float thickness) override;

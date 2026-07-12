@@ -215,13 +215,16 @@ public:
     virtual TextMetrics measureText(std::string_view text, FontRef font) = 0;
 
     // Extended text draw: letter-spacing applies a per-character advance on
-    // top of the natural glyph advance (matching CSS letter-spacing). When
-    // blur > 0 the glyphs are blurred — used to render text-shadow halos.
-    // Default forwards to plain drawText so backends can adopt incrementally.
+    // top of the natural glyph advance (matching CSS letter-spacing);
+    // word-spacing widens each space character's advance (CSS word-spacing).
+    // When blur > 0 the glyphs are blurred — used to render text-shadow
+    // halos. Default forwards to plain drawText so backends can adopt
+    // incrementally.
     virtual void drawTextEx(std::string_view text, float x, float y,
                             FontRef font, bromath::Color color,
-                            float letterSpacing, float blur) {
-        (void)letterSpacing; (void)blur;
+                            float letterSpacing, float blur,
+                            float wordSpacing = 0.0f) {
+        (void)letterSpacing; (void)blur; (void)wordSpacing;
         drawText(text, x, y, font, color);
     }
 

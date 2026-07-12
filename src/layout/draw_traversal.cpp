@@ -2733,27 +2733,31 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
     // it in the text-run widths (text.cpp), so the painter must add the same
     // per-glyph advance or the visible glyphs end up flush-left in their box.
     float letterSpacing = 0.0f;
+    float wordSpacing = 0.0f;
     {
-        auto lsIt = style.find("letter-spacing");
-        if (lsIt != style.end() && !lsIt->second.empty() &&
-            lsIt->second != "normal") {
-            float fs = 16.0f;
-            auto fsIt = style.find("font-size");
-            if (fsIt != style.end()) {
-                char* end = nullptr;
-                float v = std::strtof(fsIt->second.c_str(), &end);
-                if (end != fsIt->second.c_str() && v > 0) fs = v;
-            }
-            const std::string& v = lsIt->second;
+        float fs = 16.0f;
+        auto fsIt = style.find("font-size");
+        if (fsIt != style.end()) {
+            char* end = nullptr;
+            float v = std::strtof(fsIt->second.c_str(), &end);
+            if (end != fsIt->second.c_str() && v > 0) fs = v;
+        }
+        auto resolveSpacing = [&](const char* prop) -> float {
+            auto it = style.find(prop);
+            if (it == style.end() || it->second.empty() ||
+                it->second == "normal")
+                return 0.0f;
+            const std::string& v = it->second;
             char* end = nullptr;
             float n = std::strtof(v.c_str(), &end);
-            if (end != v.c_str()) {
-                std::string unit(end);
-                if (unit == "em") letterSpacing = n * fs;
-                else if (unit == "rem") letterSpacing = n * 16.0f;
-                else letterSpacing = n; // px / unitless
-            }
-        }
+            if (end == v.c_str()) return 0.0f;
+            std::string unit(end);
+            if (unit == "em") return n * fs;
+            if (unit == "rem") return n * 16.0f;
+            return n; // px / unitless
+        };
+        letterSpacing = resolveSpacing("letter-spacing");
+        wordSpacing = resolveSpacing("word-spacing");
     }
 
     // Parse text-decoration
@@ -2806,13 +2810,14 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
         if (hasShadow) {
             renderer_->drawTextEx(line, lx + shadow.dx, ly + shadow.dy,
                                   fontRef, shadow.color,
-                                  letterSpacing, shadow.blur);
+                                  letterSpacing, shadow.blur, wordSpacing);
         }
 
-        // Draw the text. Letter-spacing is applied here so visible glyph
-        // advances match the widths the layout assumed.
-        if (letterSpacing != 0.0f) {
-            renderer_->drawTextEx(line, lx, ly, fontRef, color, letterSpacing, 0.0f);
+        // Draw the text. Letter/word-spacing are applied here so visible
+        // glyph advances match the widths the layout assumed.
+        if (letterSpacing != 0.0f || wordSpacing != 0.0f) {
+            renderer_->drawTextEx(line, lx, ly, fontRef, color, letterSpacing,
+                                  0.0f, wordSpacing);
         } else {
             renderer_->drawText(line, lx, ly, fontRef, color);
         }
@@ -2982,20 +2987,24 @@ void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
     // Resolve letter-spacing for the pseudo's own style (pseudos inherit it
     // by default but the rule may override).
     float letterSpacing = 0.0f;
+    float wordSpacing = 0.0f;
     {
-        auto lsIt = style.find("letter-spacing");
-        if (lsIt != style.end() && !lsIt->second.empty() &&
-            lsIt->second != "normal") {
-            const std::string& v = lsIt->second;
+        auto resolveSpacing = [&](const char* prop) -> float {
+            auto it = style.find(prop);
+            if (it == style.end() || it->second.empty() ||
+                it->second == "normal")
+                return 0.0f;
+            const std::string& v = it->second;
             char* end = nullptr;
             float n = std::strtof(v.c_str(), &end);
-            if (end != v.c_str()) {
-                std::string unit(end);
-                if (unit == "em") letterSpacing = n * size;
-                else if (unit == "rem") letterSpacing = n * 16.0f;
-                else letterSpacing = n;
-            }
-        }
+            if (end == v.c_str()) return 0.0f;
+            std::string unit(end);
+            if (unit == "em") return n * size;
+            if (unit == "rem") return n * 16.0f;
+            return n;
+        };
+        letterSpacing = resolveSpacing("letter-spacing");
+        wordSpacing = resolveSpacing("word-spacing");
     }
 
     // Use placed runs lifted onto pseudoBox by the layout adapter.
@@ -3011,10 +3020,11 @@ void DrawTraversal::drawPseudo(dom::Element* host, const std::string& which,
         if (hasShadow) {
             renderer_->drawTextEx(run.text, lx + shadow.dx, ly + shadow.dy,
                                   fontRef, shadow.color,
-                                  letterSpacing, shadow.blur);
+                                  letterSpacing, shadow.blur, wordSpacing);
         }
-        if (letterSpacing != 0.0f) {
-            renderer_->drawTextEx(run.text, lx, ly, fontRef, color, letterSpacing, 0.0f);
+        if (letterSpacing != 0.0f || wordSpacing != 0.0f) {
+            renderer_->drawTextEx(run.text, lx, ly, fontRef, color,
+                                  letterSpacing, 0.0f, wordSpacing);
         } else {
             renderer_->drawText(run.text, lx, ly, fontRef, color);
         }

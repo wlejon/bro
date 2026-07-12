@@ -234,7 +234,8 @@ void RasterRenderer::drawText(std::string_view text, float x, float y, FontRef f
 
 void RasterRenderer::drawTextEx(std::string_view text, float x, float y,
                                 FontRef font, Color c,
-                                float letterSpacing, float blur) {
+                                float letterSpacing, float blur,
+                                float wordSpacing) {
     if (!canvas_ || text.empty()) return;
     std::string utf8Scratch;
     text = ensureValidUtf8(text, utf8Scratch);
@@ -256,7 +257,7 @@ void RasterRenderer::drawTextEx(std::string_view text, float x, float y,
         const auto& run = runs[r];
         const char* data = text.data() + run.start;
         bool isLastRun = (r + 1 == runs.size());
-        if (letterSpacing == 0.0f) {
+        if (letterSpacing == 0.0f && wordSpacing == 0.0f) {
             canvas_->drawSimpleText(data, run.length, SkTextEncoding::kUTF8,
                                     cursor, y, run.font, paint);
             cursor += run.font.measureText(data, run.length, SkTextEncoding::kUTF8);
@@ -276,6 +277,9 @@ void RasterRenderer::drawTextEx(std::string_view text, float x, float y,
                 canvas_->drawSimpleText(data + i, n, SkTextEncoding::kUTF8,
                                         cursor, y, run.font, paint);
                 cursor += run.font.measureText(data + i, n, SkTextEncoding::kUTF8);
+                // word-spacing widens the space's own advance (CSS
+                // word-spacing applies to each word-separator character).
+                if (n == 1 && data[i] == ' ') cursor += wordSpacing;
                 bool isLastCodepoint = (i + n >= run.length);
                 if (!(isLastCodepoint && isLastRun)) cursor += letterSpacing;
                 i += n;

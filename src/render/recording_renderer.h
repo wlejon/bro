@@ -64,7 +64,8 @@ public:
     TextMetrics measureText(std::string_view text, FontRef font) override;
     void drawTextEx(std::string_view text, float x, float y,
                     FontRef font, bromath::Color color,
-                    float letterSpacing, float blur) override;
+                    float letterSpacing, float blur,
+                    float wordSpacing = 0.0f) override;
 
     bool registerCustomFont(const std::string& family,
                             const void* data, size_t len,
