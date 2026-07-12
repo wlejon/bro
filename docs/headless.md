@@ -241,6 +241,35 @@ Time does not advance automatically in headless mode. Use `advanceTime(ms)` to a
 
 Virtual time starts from the wall clock at engine initialization. The timer subsystem is seeded with this time at startup so that `setTimeout`/`setInterval` registered during script execution fire correctly relative to `advanceTime()` calls.
 
+### Waiting in scripts: pump, don't await
+
+A script file with a top-level `await` is evaluated as an ES module, and while
+its evaluation promise is pending the runner drains **microtasks only** — no
+timers, no frame pumps. Anything delivered per-frame (`setTimeout`,
+`bro.net` callbacks, worker messages, Steam events) can never fire during a
+bare top-level `await`, so `await new Promise(r => setTimeout(r, ...))` hangs
+forever. Wait with a synchronous pump loop instead:
+
+```js
+// advanceTime() drains the event queues and fires callbacks;
+// wallSleep() gives real threads (network, child process, mic) wall-clock
+// time to produce work. Neither alone is enough.
+function pumpUntil(desc, fn, iters) {
+    for (let i = 0; i < iters; i++) {
+        advanceTime(16);
+        wallSleep(16);
+        if (fn()) return;
+    }
+    throw new Error('timeout waiting for ' + desc);
+}
+```
+
+A long-lived headless server (e.g. a `bro.net.host` process) should end with
+`for (;;) { advanceTime(16); wallSleep(16); }` and exit via `process.exit()`
+from a callback. Promises resolved directly by async C++ APIs (model loaders,
+inference calls) are the exception: those settle through the microtask queue,
+so plain `await` works for them.
+
 ## Notes
 
 - `[INFO]` and `[console.log]` lines go to stderr; REPL output and `-e` print results go to stdout. Separate them with `2>/dev/null`.

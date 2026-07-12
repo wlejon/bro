@@ -6,6 +6,7 @@
 #if BRO_WITH_NET
 
 #include "net/net_service.h"
+#include "js/runtime.h"
 #include "util/log.h"
 
 #include <qjsbind/qjsbind.h>
@@ -295,7 +296,8 @@ void NetBindings::install(JSContext* ctx, net::NetService* service) {
             JSValue func = JS_DupValue(ctx, s->onConnect);
             JSValue arg = JS_NewUint32(ctx, conn);
             JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 1, &arg);
-            JS_FreeValue(ctx, ret);
+            if (JS_IsException(ret)) Runtime::checkException(ctx, ret);
+            else JS_FreeValue(ctx, ret);
             JS_FreeValue(ctx, arg);
             JS_FreeValue(ctx, func);
         }
@@ -315,7 +317,8 @@ void NetBindings::install(JSContext* ctx, net::NetService* service) {
                 JS_NewInt32(ctx, reason),
             };
             JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, args);
-            JS_FreeValue(ctx, ret);
+            if (JS_IsException(ret)) Runtime::checkException(ctx, ret);
+            else JS_FreeValue(ctx, ret);
             JS_FreeValue(ctx, args[0]);
             JS_FreeValue(ctx, args[1]);
             JS_FreeValue(ctx, func);
@@ -332,7 +335,8 @@ void NetBindings::install(JSContext* ctx, net::NetService* service) {
             ab
         };
         JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, args);
-        JS_FreeValue(ctx, ret);
+        if (JS_IsException(ret)) Runtime::checkException(ctx, ret);
+        else JS_FreeValue(ctx, ret);
         JS_FreeValue(ctx, args[0]);
         JS_FreeValue(ctx, args[1]);
         JS_FreeValue(ctx, func);
