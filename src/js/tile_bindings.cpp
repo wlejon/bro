@@ -469,6 +469,21 @@ static JSValue js_tile_fillTint(JSContext* ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+// getTint(x, y) -> {r,g,b,a} — the stored (8-bit-quantized) tint of a cell.
+// White {1,1,1,1} for untinted or out-of-bounds cells.
+static JSValue js_tile_getTint(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    uint32_t packed = 0xFFFFFFFFu;
+    if (w && w->world && argc >= 2)
+        packed = w->world->tintAt(argInt(ctx, argv[0]), argInt(ctx, argv[1]));
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "r", JS_NewFloat64(ctx, ((packed >> 24) & 0xFF) / 255.0));
+    JS_SetPropertyStr(ctx, o, "g", JS_NewFloat64(ctx, ((packed >> 16) & 0xFF) / 255.0));
+    JS_SetPropertyStr(ctx, o, "b", JS_NewFloat64(ctx, ((packed >>  8) & 0xFF) / 255.0));
+    JS_SetPropertyStr(ctx, o, "a", JS_NewFloat64(ctx, ( packed        & 0xFF) / 255.0));
+    return o;
+}
+
 static JSValue js_tile_worldToCell(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
     if (!w || !w->world || argc < 2) return JS_NULL;
@@ -730,8 +745,10 @@ static JSValue js_tile_findPath(JSContext* ctx, JSValueConst this_val, int argc,
     return makeCellArray(ctx, path);
 }
 
-// distanceField(sources, { blockMask?, conn? }?) -> Int32Array (w*h, row-major;
-// -1 = unreachable/impassable). sources: array of {x,y} or [x,y].
+// distanceField(sources, { blockMask?, costs?, conn? }?) -> w*h row-major field;
+// -1 = unreachable/impassable. sources: array of {x,y} or [x,y]. Uniform steps
+// return an Int32Array (BFS); passing `costs` (per-tile-id step cost, as in
+// findPath) switches to weighted Dijkstra and returns a Float32Array.
 static JSValue js_tile_distanceField(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
     if (!w || !w->world || !w->world->grid() || argc < 1) return JS_NULL;
@@ -754,6 +771,19 @@ static JSValue js_tile_distanceField(JSContext* ctx, JSValueConst this_val, int 
     if (sources.empty()) return JS_NULL;
 
     SearchOpts o = parseSearchOpts(ctx, argc > 1 ? argv[1] : JS_UNDEFINED);
+
+    if (!o.costs.empty()) {
+        std::vector<float> field = tile::distanceFieldWeighted(
+            *w->world->grid(), sources, makePassFn(o.blockMask),
+            makeCostFn(std::move(o.costs)), o.conn);
+        JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(field.data()),
+                                             field.size() * sizeof(float));
+        JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };
+        JSValue arr = JS_NewTypedArray(ctx, 1, args, JS_TYPED_ARRAY_FLOAT32);
+        JS_FreeValue(ctx, abuf);
+        return arr;
+    }
+
     std::vector<int> field = tile::distanceField(*w->world->grid(), sources,
                                                  makePassFn(o.blockMask), o.conn);
 
@@ -830,6 +860,21 @@ static JSValue js_tile_cellDistance(JSContext* ctx, JSValueConst this_val, int a
                                            {argInt(ctx, argv[0]), argInt(ctx, argv[1])},
                                            {argInt(ctx, argv[2]), argInt(ctx, argv[3])},
                                            conn));
+}
+
+// cellNeighbors(x, y, conn?) -> [{x,y}, ...] adjacent cells in canonical
+// direction order (coord.h), in-bounds only. Topology-aware: square edge 4 /
+// vertex 8, hex 6 — so apps don't hand-roll odd-r offset tables.
+static JSValue js_tile_cellNeighbors(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
+    if (!w || !w->world || !w->world->grid() || argc < 2) return JS_NewArray(ctx);
+    const tile::TileGrid& g = *w->world->grid();
+    tile::Conn conn = parseConn(ctx, argc > 2 ? argv[2] : JS_UNDEFINED);
+    tile::Neighbors nb = tile::neighbors(g.topology(),
+                                         {argInt(ctx, argv[0]), argInt(ctx, argv[1])}, conn);
+    std::vector<tile::Cell> cells(nb.begin(), nb.end());
+    filterInBounds(g, cells);
+    return makeCellArray(ctx, cells);
 }
 
 // cellRing(x, y, radius, conn?) -> [{x,y}, ...] at exactly `radius` (in-bounds only)
@@ -939,6 +984,7 @@ void TileBindings::install(JSContext* ctx) {
         })
         .method_raw("setTint", js_tile_setTint, 6)
         .method_raw("fillTint", js_tile_fillTint, 8)
+        .method_raw("getTint", js_tile_getTint, 2)
         .method("setFlag", [](TWld* self, int x, int y, double bit, bool on) {
             if (self->world) self->world->setFlag(x, y, (uint32_t)bit, on);
         })
@@ -958,6 +1004,7 @@ void TileBindings::install(JSContext* ctx) {
         .method_raw("floodFill", js_tile_floodFill, 3)
         .method_raw("components", js_tile_components, 1)
         .method_raw("cellDistance", js_tile_cellDistance, 5)
+        .method_raw("cellNeighbors", js_tile_cellNeighbors, 3)
         .method_raw("cellRing", js_tile_cellRing, 4)
         .method_raw("cellsInRange", js_tile_cellsInRange, 4)
         .method_raw("cellLine", js_tile_cellLine, 4)

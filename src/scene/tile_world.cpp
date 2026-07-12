@@ -293,6 +293,20 @@ void TileWorld::configure(const TileWorldConfig& cfg) {
 }
 
 void TileWorld::loadGrid(tile::TileGrid&& newGrid) {
+    // Registered object kinds are rendering config (like the atlas/palette) and
+    // survive a load: detach their nodes so clear() doesn't destroy them, drop
+    // the placements (cell coords are meaningless against the new grid), and
+    // re-attach under the fresh root afterwards. Kind ids stay valid.
+    std::vector<ObjectKind> kinds = std::move(objectKinds_);
+    objectKinds_.clear();
+    for (auto& k : kinds) {
+        if (k.node) k.node->removeFromParent();
+        k.placements.clear();
+        k.cellX.clear();
+        k.cellY.clear();
+        k.dirty = true;
+    }
+
     clear();
     config_.width     = newGrid.width();
     config_.height    = newGrid.height();
@@ -301,7 +315,11 @@ void TileWorld::loadGrid(tile::TileGrid&& newGrid) {
     config_.chunkSize = std::max(1, config_.chunkSize);
 
     grid_ = std::make_unique<tile::TileGrid>(std::move(newGrid));
+    objectKinds_ = std::move(kinds);
     initFromGrid();
+    for (auto& k : objectKinds_)
+        if (k.node) root_->addChild(k.node);
+    rebuildObjects();
 }
 
 void TileWorld::initFromGrid() {
@@ -440,6 +458,12 @@ void TileWorld::fillTint(int x0, int y0, int x1, int y1,
         }
 }
 
+uint32_t TileWorld::tintAt(int x, int y) const {
+    if (x < 0 || y < 0 || x >= config_.width || y >= config_.height) return 0xFFFFFFFFu;
+    size_t idx = static_cast<size_t>(y) * config_.width + x;
+    return idx < tint_.size() ? tint_[idx] : 0xFFFFFFFFu;
+}
+
 // ---- query --------------------------------------------------------------
 
 uint16_t TileWorld::tile(int x, int y, int layer) const {
@@ -481,7 +505,9 @@ bool TileWorld::sampleHeight(float wx, float wz, float& outY) const {
 
 bool TileWorld::isWalkable(int x, int y, uint32_t blockMask) const {
     if (!solid(x, y)) return false;
-    if (blockMask && grid_->hasFlag({x, y}, blockMask)) return false;
+    // ANY-bit block: a cell is blocked if it shares any bit with blockMask
+    // (same contract as findPath/distanceField's blockMask and passUnlessFlag).
+    if ((grid_->flags({x, y}) & blockMask) != 0) return false;
     return true;
 }
 

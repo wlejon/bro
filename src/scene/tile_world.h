@@ -171,6 +171,9 @@ public:
     void setTint(int x, int y, float r, float g, float b, float a = 1.0f);
     void fillTint(int x0, int y0, int x1, int y1,
                   float r, float g, float b, float a = 1.0f);
+    // Stored tint of a cell, packed RGBA8 (as quantized by setTint — 8 bits per
+    // channel, inputs clamped to 0..1). 0xFFFFFFFF (white) for OOB / untinted.
+    uint32_t tintAt(int x, int y) const;
 
     // ---- query ----------------------------------------------------------
     uint16_t tile(int x, int y, int layer = 0) const;

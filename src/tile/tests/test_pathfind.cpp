@@ -70,6 +70,39 @@ void run_pathfind_tests() {
         CHECK_EQ(field[g.index(Cell{ 2, 0 })], -1); // still walled
     }
 
+    section("pathfind.distanceFieldWeighted");
+    {
+        // 5x5, tile id 2 ("mud") costs 5 to enter; a mud column at x=2.
+        TileGrid g(5, 5, Topology::Square, { "ground" });
+        g.fill(0, 1);
+        for (int y = 0; y < 5; ++y) g.setTile(0, Cell{ 2, y }, 2);
+        CostFn cost = [](const TileGrid& gg, Cell, Cell to) -> float {
+            return gg.tile(0, to) == 2 ? 5.0f : 1.0f;
+        };
+        auto field = distanceFieldWeighted(g, { Cell{ 0, 0 } }, alwaysPass, cost, Conn::Edge);
+        CHECK_EQ(static_cast<int>(field.size()), 25);
+        CHECK_EQ(field[g.index(Cell{ 0, 0 })], 0.0f);
+        CHECK_EQ(field[g.index(Cell{ 1, 0 })], 1.0f);
+        CHECK_EQ(field[g.index(Cell{ 2, 0 })], 6.0f);  // 2 grass + mud entry
+        CHECK_EQ(field[g.index(Cell{ 3, 0 })], 7.0f);  // mud column must be crossed once
+        CHECK_EQ(field[g.index(Cell{ 4, 4 })], 12.0f); // 7 grass steps + one mud crossing
+
+        // Null cost == uniform BFS (float flavour).
+        auto uni = distanceFieldWeighted(g, { Cell{ 0, 0 } }, alwaysPass, nullptr, Conn::Edge);
+        auto bfs = distanceField(g, { Cell{ 0, 0 } }, alwaysPass, Conn::Edge);
+        bool agree = true;
+        for (size_t i = 0; i < uni.size(); ++i)
+            if (static_cast<int>(uni[i]) != bfs[i]) agree = false;
+        CHECK(agree);
+
+        // Impassable source still seeds 0 and spreads (matches distanceField).
+        TileGrid gb(5, 5, Topology::Square, { "ground" });
+        gb.setFlag(Cell{ 2, 2 }, BLOCK, true);
+        auto bf = distanceFieldWeighted(gb, { Cell{ 2, 2 } }, pass, nullptr, Conn::Edge);
+        CHECK_EQ(bf[gb.index(Cell{ 2, 2 })], 0.0f);
+        CHECK_EQ(bf[gb.index(Cell{ 3, 2 })], 1.0f);
+    }
+
     section("pathfind.aStar.straight");
     {
         TileGrid g(5, 5, Topology::Square, { "ground" });

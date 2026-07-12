@@ -73,7 +73,10 @@ class SceneGraph {
    * @param {number[]} [opts.origin=[0,0,0]] - world position of the grid origin
    * @param {Float32Array|number[]} [opts.palette] - RGBA per ground-tile id
    *        (4 floats each); index 0 is empty. Absent → flat grey. Ignored when
-   *        an atlas is set.
+   *        an atlas is set. Colours pass through the PBR lighting + ACES
+   *        tonemap, so fully saturated values (e.g. pure 1,0,0) wash out
+   *        under a strong directional light — author palettes a step darker /
+   *        desaturated from the colour you want on screen.
    *
    * Tileset atlas (optional — replaces palette colour with a texture):
    * @param {string} [opts.atlas] - app-relative path to a tileset image. The
@@ -108,6 +111,15 @@ class SceneGraph {
    * @param {number[]} opts.autotiles[].cells - variant index → atlas cell index
    *        (length 16 for edge/wang, 47 for blob47)
    *
+   * blob47 variant ordering (for authoring the 47-entry `cells` table): the
+   * 8-neighbour mask is E=1, NE=2, N=4, NW=8, W=16, SW=32, S=64, SE=128; a
+   * corner bit only counts when BOTH adjacent edge bits are set (NE needs
+   * N+E, etc.), which normalizes the 256 raw masks to 47 distinct ones; the
+   * variant index is the rank of the normalized mask in ascending numeric
+   * order (variant 0 = mask 0 = isolated, variant 46 = mask 255 = fully
+   * surrounded). Atlas orientation: a tile's top edge in the atlas image
+   * faces grid north (-y).
+   *
    * Multi-layer overlays (optional; require an atlas). Name more than one layer
    * (`layers`) and tiles placed on layers >= 1 render as atlas-textured DECAL
    * quads floating just above each cell's ground top face, drawn bottom-up by
@@ -123,6 +135,9 @@ class SceneGraph {
    * sequence of atlas cells over time — flowing water, swaying crops, torch
    * flicker. Drive it from your frame loop with world.advance(dtMs); only
    * chunks holding animated tiles remesh, and only when the frame changes.
+   * NOTE: animations are keyed by tile id across ALL layers — the same id on
+   * the ground layer and an overlay layer animates in both places. Use
+   * globally unique ids for tiles that animate.
    * @param {Object[]} [opts.animations] - array of animations:
    * @param {number}   opts.animations[].id     - tile id to animate
    * @param {number}   [opts.animations[].fps=4] - frames per second
@@ -154,11 +169,21 @@ class TileWorld {
    * Set a per-cell RGB(A) tint (0..1), multiplied into the cell's ground and
    * overlay colour. Default white = no tint. Alpha is stored but only bites
    * with a layer's alphaCutoff; for translucency use an overlay layer opacity.
+   * Values are stored quantized to 8 bits per channel and clamped to 0..1 —
+   * don't rely on float-exact round-trips or >1 "overbright" tints.
    */
   setTint(x, y, r, g, b, a = 1) {}
 
   /** Fill an inclusive rectangle with a per-cell tint. */
   fillTint(x0, y0, x1, y1, r, g, b, a = 1) {}
+
+  /**
+   * The stored tint of cell (x, y) as { r, g, b, a } in 0..1 (the 8-bit-
+   * quantized values setTint stored). White {1,1,1,1} for untinted or
+   * out-of-bounds cells. Lets tint compositors diff against actual state
+   * instead of shadowing it in JS.
+   */
+  getTint(x, y) {}
 
   // --- Query -----------------------------------------------------------------
 
@@ -168,7 +193,11 @@ class TileWorld {
   /** Elevation level at (x, y). 0 if out of bounds. */
   getElevation(x, y) {}
 
-  /** Whether all bits of `bit` are set in the flags at (x, y). */
+  /**
+   * Whether ALL bits of `bit` are set in the flags at (x, y). Note this is
+   * stricter than the blockMask used by isWalkable/findPath/distanceField,
+   * which blocks on ANY shared bit.
+   */
   hasFlag(x, y, bit) {}
 
   /**
@@ -231,9 +260,10 @@ class TileWorld {
 
   /**
    * Whether cell (x, y) is walkable: it carries ground (non-empty tile on layer
-   * 0) and none of `blockMask`'s flag bits are set on it. blockMask 0 (default)
-   * => every solid cell is walkable. This is the predicate the nav-grid export
-   * uses per cell.
+   * 0) and none of `blockMask`'s flag bits are set on it — ANY shared bit
+   * blocks, so a multi-bit mask means "blocked by any of these" (identical to
+   * findPath/distanceField's blockMask). blockMask 0 (default) => every solid
+   * cell is walkable. This is the predicate the nav-grid export uses per cell.
    */
   isWalkable(x, y, blockMask) {}
 
@@ -287,10 +317,15 @@ class TileWorld {
   findPath(x0, y0, x1, y1, opts) {}
 
   /**
-   * Multi-source BFS distance field. `sources` is one {x,y} (or [x,y]) or an
-   * array of them. Returns an Int32Array of length width*height (row-major:
-   * index = y*width + x) holding the step distance to the nearest source, or
-   * -1 for unreachable/impassable cells. Uniform step cost.
+   * Multi-source distance field. `sources` is one {x,y} (or [x,y]) or an
+   * array of them. Returns a field of length width*height (row-major:
+   * index = y*width + x) holding the distance to the nearest source, or
+   * -1 for unreachable/impassable cells. Without `costs` it's a uniform-step
+   * BFS returning an Int32Array; with `costs` (per-tile-id step cost, as in
+   * findPath) it's a weighted Dijkstra returning a Float32Array.
+   * Sources need not be passable themselves — a source on a blocked cell
+   * seeds distance 0 and spreads through its passable neighbours (matches
+   * findPath's "you can path OUT of a blocked cell").
    * Movement ranges (field[i] <= moveRange), tower-defense creep flow (walk
    * downhill), influence maps.
    */
@@ -316,6 +351,13 @@ class TileWorld {
    * (vertex) on square, cube metric on hex. `conn` is an optional "vertex".
    */
   cellDistance(x0, y0, x1, y1, conn) {}
+
+  /**
+   * The cells adjacent to (x, y) in canonical direction order, in-bounds only.
+   * Topology-aware: 4 on square edge, 8 on square vertex, 6 on hex — so apps
+   * never hand-roll odd-r hex offset tables.
+   */
+  cellNeighbors(x, y, conn) {}
 
   /** Cells at EXACTLY `radius` from (x, y) — the hollow ring, in-bounds only. */
   cellRing(x, y, radius, conn) {}
@@ -377,8 +419,13 @@ class TileWorld {
    * @param {Object} [opts]
    * @param {number} [opts.yaw=0] - rotation about Y (radians)
    * @param {number} [opts.scale=1] - uniform scale
-   * @param {number} [opts.yOffset=0] - lift above the cell top
-   * @param {number} [opts.offsetX=0] - sub-cell offset in cell units (-0.5..0.5)
+   * @param {number} [opts.yOffset=0] - lift above the cell top. The anchor Y
+   *        is the ANCHOR cell's top surface; a mover crossing cells of
+   *        different elevation should re-anchor (or lerp yOffset) per frame.
+   * @param {number} [opts.offsetX=0] - sub-cell offset in cell units. -0.5..0.5
+   *        keeps the prop over its own cell; values beyond that are NOT
+   *        clamped (useful for smooth movers straddling cells, but the Y
+   *        anchor stays the anchor cell's).
    * @param {number} [opts.offsetZ=0]
    * @param {number} [opts.variant=0] - atlas cell when the kind has an atlas
    * @param {number[]} [opts.color=[1,1,1,1]] - per-instance tint
@@ -416,7 +463,11 @@ class TileWorld {
    * Replace the grid from bytes produced by save(). Dimensions/topology/layers
    * are taken from the saved data (may differ from the current config);
    * rendering config (cellSize, atlas, autotiles, overlays, animations, ...)
-   * is preserved. Remeshes every chunk on success.
+   * is preserved. Registered object KINDS survive too (kind indices stay
+   * valid), but their instance placements are cleared — cell coordinates are
+   * meaningless against the new grid — so re-place with addObject() after a
+   * load. configure(), by contrast, is a full reset and destroys kinds.
+   * Remeshes every chunk on success.
    * @param {Uint8Array} bytes
    * @returns {boolean} false if `bytes` is corrupt or an unrecognized format
    */

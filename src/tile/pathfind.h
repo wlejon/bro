@@ -31,10 +31,20 @@ using CostFn = std::function<float(const TileGrid&, Cell from, Cell to)>;
 // Multi-source BFS. Returns a row-major field (length g.cellCount()): the step
 // distance from each cell to the NEAREST source through passable cells, or -1
 // for unreachable / impassable / OOB cells. Sources need not be passable
-// themselves (a source on an impassable cell still seeds distance 0). Uniform
-// step count — for weighted fields use repeated aStar or extend as needed.
+// themselves (a source on an impassable cell still seeds distance 0 and its
+// passable neighbours expand from it). Uniform step count — for weighted
+// fields use distanceFieldWeighted().
 std::vector<int> distanceField(const TileGrid& g, const std::vector<Cell>& sources,
                                const PassFn& pass, Conn conn = Conn::Edge);
+
+// Weighted multi-source field (Dijkstra): cheapest path cost from each cell to
+// the nearest source, where entering a cell costs `cost` (>= 1 per step, same
+// contract as aStar). -1 for unreachable / impassable / OOB. A null cost is
+// uniform (equivalent to distanceField, but float). Source-passability rule
+// matches distanceField.
+std::vector<float> distanceFieldWeighted(const TileGrid& g, const std::vector<Cell>& sources,
+                                         const PassFn& pass, const CostFn& cost = nullptr,
+                                         Conn conn = Conn::Edge);
 
 // A* shortest path from `start` to `goal` inclusive of both endpoints. Returns
 // an empty vector if no path exists, if either endpoint is OOB, or if `goal`

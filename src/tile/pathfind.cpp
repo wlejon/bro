@@ -45,6 +45,56 @@ std::vector<int> distanceField(const TileGrid& g, const std::vector<Cell>& sourc
     return dist;
 }
 
+std::vector<float> distanceFieldWeighted(const TileGrid& g, const std::vector<Cell>& sources,
+                                         const PassFn& pass, const CostFn& cost, Conn conn) {
+    const int n = g.cellCount();
+    std::vector<float> dist(static_cast<size_t>(n), -1.0f);
+    if (n <= 0) return dist;
+    const Topology topo = g.topology();
+
+    // Min-heap Dijkstra; tie-break by lower row-major index for determinism.
+    struct Node {
+        float d;
+        int index;
+    };
+    struct Cmp {
+        bool operator()(const Node& a, const Node& b) const {
+            if (a.d != b.d) return a.d > b.d;
+            return a.index > b.index;
+        }
+    };
+    std::priority_queue<Node, std::vector<Node>, Cmp> open;
+
+    for (const Cell& s : sources) {
+        if (!g.inBounds(s)) continue;
+        size_t i = g.index(s);
+        if (dist[i] != 0.0f) {
+            dist[i] = 0.0f;
+            open.push(Node{ 0.0f, static_cast<int>(i) });
+        }
+    }
+
+    while (!open.empty()) {
+        Node cur = open.top(); open.pop();
+        int ci = cur.index;
+        if (cur.d > dist[ci]) continue; // stale entry
+        Cell c = g.cellOf(static_cast<size_t>(ci));
+        Neighbors nb = neighbors(topo, c, conn);
+        for (const Cell& nbc : nb) {
+            if (!g.inBounds(nbc)) continue;
+            if (!pass(g, nbc)) continue;
+            size_t i = g.index(nbc);
+            float step = cost ? cost(g, c, nbc) : 1.0f;
+            float nd = cur.d + step;
+            if (dist[i] < 0.0f || nd < dist[i]) {
+                dist[i] = nd;
+                open.push(Node{ nd, static_cast<int>(i) });
+            }
+        }
+    }
+    return dist;
+}
+
 std::vector<Cell> aStar(const TileGrid& g, Cell start, Cell goal, const PassFn& pass,
                         const CostFn& cost, Conn conn) {
     std::vector<Cell> path;

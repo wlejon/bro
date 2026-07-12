@@ -309,9 +309,76 @@ if (!scene) {
     const hexField = hw.distanceField({ x: 0, y: 0 });
     assert(hexField[7 * 8 + 7] === hw.cellDistance(0, 0, 7, 7),
         'hex distanceField matches hex distance');
+    assert(hw.cellNeighbors(3, 3).length === 6, 'hex cellNeighbors -> 6 cells');
     hw.destroy();
 
+    // ---- bugfix-pass regressions -------------------------------------------
+    const bw = scene.createTileWorld({ width: 8, height: 8, chunkSize: 4 });
+    bw.fillTile(0, 0, 7, 7, 1);
+    bw.fillTile(1, 1, 2, 2, 2);            // dirt patch, ids as above
+
+    // isWalkable blockMask is ANY-bit, matching findPath/distanceField: a cell
+    // flagged 4 must be blocked by mask 7 even though (flags & 7) != 7.
+    bw.setFlag(5, 5, 4, true);
+    assert(bw.isWalkable(5, 5, 7) === false, 'isWalkable multi-bit mask blocks on ANY shared bit');
+    assert(bw.isWalkable(5, 5, 2) === true, 'isWalkable mask with no shared bit stays walkable');
+    assert(bw.isWalkable(5, 5, 4) === false, 'isWalkable exact bit blocks');
+    bw.setFlag(5, 5, 4, false);
+
+    // Weighted distanceField: costs switch to Dijkstra + Float32Array.
+    const wf = bw.distanceField({ x: 0, y: 0 }, { costs: [0, 1, 10] });
+    assert(wf instanceof Float32Array && wf.length === 64, 'weighted distanceField is Float32Array');
+    assert(wf[0] === 0, 'weighted field source is 0');
+    assert(wf[0 * 8 + 1] === 1, 'weighted field grass step costs 1');
+    assert(wf[1 * 8 + 1] === 11, 'weighted field pays the dirt entry cost');
+    assert(wf[2 * 8 + 2] === 15, 'weighted field routes around the dirt patch');
+    const uf = bw.distanceField({ x: 0, y: 0 });
+    assert(wf[2 * 8 + 2] > uf[2 * 8 + 2], 'weighted field exceeds uniform BFS over costly terrain');
+
+    // A source on an impassable cell seeds 0 and spreads to its neighbours.
+    bw.setFlag(3, 3, 4, true);
+    const bf = bw.distanceField({ x: 3, y: 3 }, { blockMask: 4 });
+    assert(bf[3 * 8 + 3] === 0, 'blocked source seeds distance 0');
+    assert(bf[3 * 8 + 4] === 1, 'blocked source spreads to passable neighbours');
+    bw.setFlag(3, 3, 4, false);
+
+    // getTint round-trips the 8-bit-quantized values; clamps beyond 0..1.
+    bw.setTint(2, 2, 0.5, 0.25, 1.0, 1.0);
+    const t = bw.getTint(2, 2);
+    assert(Math.abs(t.r - 0.5) < 0.003 && Math.abs(t.g - 0.25) < 0.003 &&
+           t.b === 1 && t.a === 1, 'getTint returns the quantized stored tint');
+    bw.setTint(2, 3, 2.0, -1.0, 0.5);
+    const tc = bw.getTint(2, 3);
+    assert(tc.r === 1 && tc.g === 0, 'setTint clamps channels to 0..1');
+    const tu = bw.getTint(6, 6);
+    assert(tu.r === 1 && tu.g === 1 && tu.b === 1 && tu.a === 1, 'untinted cell reads white');
+    const to = bw.getTint(-3, 99);
+    assert(to.r === 1 && to.g === 1 && to.b === 1 && to.a === 1, 'OOB getTint reads white');
+
+    // cellNeighbors: topology + conn aware, in-bounds only, canonical order.
+    assert(bw.cellNeighbors(3, 3).length === 4, 'square edge cellNeighbors -> 4');
+    assert(bw.cellNeighbors(3, 3, 'vertex').length === 8, 'square vertex cellNeighbors -> 8');
+    assert(bw.cellNeighbors(0, 0).length === 2, 'corner cellNeighbors clips to in-bounds');
+
+    // load() preserves registered object kinds (instances cleared, ids valid).
+    const bwCone = Mesh.cone(0.2, 0.4, 6, 1, true);
+    const bwKind = bw.addObjectKind(bwCone, { color: [1, 1, 1, 1] });
+    assert(bwKind >= 0, 'addObjectKind registers');
+    bw.addObject(bwKind, 1, 1, {});
+    assert(bw.objectCount(bwKind) === 1, 'instance placed before save');
+    const bwBytes = bw.save();
+    bw.setTile(0, 0, 2);
+    assert(bw.load(bwBytes) === true, 'load round-trips');
+    assert(bw.getTile(0, 0) === 1, 'load restored the grid');
+    assert(bw.objectCount(bwKind) === 0, 'load cleared instance placements');
+    const rePlaced = bw.addObject(bwKind, 1, 1, {});
+    assert(rePlaced >= 0, 'kind id survives load — addObject works without re-registering');
+    assert(bw.objectCount(bwKind) === 1, 'instance re-placed after load');
+    bw.rebuildObjects();
+    bw.destroy();
+
     hexWorld.destroy();
+    console.log('tileworld: all assertions passed');
 }
 
 document.body.removeChild(canvas);
