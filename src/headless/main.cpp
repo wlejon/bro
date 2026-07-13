@@ -484,16 +484,19 @@ int main(int argc, char* argv[]) {
         }
         if (!ok) exitCode = 1;
 
-        // Join the net/Steam background threads (safe standalone — no
-        // ordering dependency on the JS runtime; see Engine::stopBackground
-        // Services). Shrinks the number of threads still alive at the
-        // abrupt _exit() below, which OS-level thread-rundown bugchecks
-        // have been observed to be sensitive to.
-        engine->stopBackgroundServices();
-
-        // Intentionally leak the rest (JS runtime, audio engine, GPU state)
-        // to avoid a QuickJS GC assertion on shutdown. The OS reclaims all
-        // memory on process exit.
+        // Real teardown. This used to be an intentional leak ("to avoid a
+        // QuickJS GC assertion on shutdown") plus a bare stopBackgroundServices()
+        // call — but that call destroyed NetService before ~Engine()'s binding
+        // cleanup dereferenced it, and the _exit() below hid the resulting
+        // fault. The leak also meant ~Engine() was exercised by nothing except
+        // a human closing the windowed app, so teardown bugs (and leaks the GC
+        // assertion would have caught) accumulated unseen. Every test now exits
+        // through here.
+        //
+        // _exit() below still skips the process's STATIC destruction phase,
+        // which is a separate matter — see ~Engine()'s brotensor::shutdown()
+        // comment for why that phase is hazardous.
+        delete engine;
     } catch (const std::exception& e) {
         LOG_ERROR("Fatal: %s", e.what());
         exitCode = 1;

@@ -989,6 +989,26 @@ void Document::drainPendingFrees() {
     pendingSet_.clear();
 }
 
+void Document::forEachLiveElement(const std::function<void(Element*)>& fn) {
+    if (!fn) return;
+
+    for (auto& [n, _] : ownedNodes_) {
+        if (n && n->nodeType() == NodeType::Element)
+            fn(static_cast<Element*>(n));
+    }
+
+    // pendingFrees_ holds detached subtree roots whose memory is still alive.
+    // Their descendants are owned by the root (not necessarily still listed in
+    // ownedNodes_), so walk each subtree explicitly.
+    std::function<void(Node*)> walk = [&](Node* n) {
+        if (!n) return;
+        if (n->nodeType() == NodeType::Element)
+            fn(static_cast<Element*>(n));
+        for (Node* child : n->childNodes()) walk(child);
+    };
+    for (auto& root : pendingFrees_) walk(root.get());
+}
+
 bool Document::ownsNode(const Node* n) const {
     if (!n) return false;
     return ownedNodes_.find(const_cast<Node*>(n)) != ownedNodes_.end();

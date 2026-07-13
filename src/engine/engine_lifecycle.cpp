@@ -13,6 +13,7 @@
 #include "js/webgl2_bindings.h"
 #include "js/scene_bindings.h"
 #include "js/worker.h"
+#include "js/async_job.h"
 #if BRO_WITH_PHYSICS
 #include "js/physics_bindings.h"
 #endif
@@ -81,17 +82,68 @@ void Engine::stopBackgroundServices() {
     steamService_.reset();
 }
 
-Engine::~Engine() {
+void Engine::shutdown() {
+    if (shutdownDone_) return;
+    shutdownDone_ = true;
+
     // Teardown is beginning: flip the process-wide interrupt flag (without the
     // repeated-Ctrl+C hard-exit escalation) so every in-flight model op aborts
-    // at its next cooperative-cancel poll. The worker joins below would
-    // otherwise block on long synchronous native inference calls — the JS
-    // interrupt can't break a native call — leaving the app unresponsive,
-    // and a user force-close then kills threads mid-CUDA-dispatch (see
-    // util/interrupt.h: that has bugchecked the machine via nvlddmkm).
-    // Windowed close and Ctrl+C already set the flag before we get here;
-    // this covers headless script-end and error-path teardown.
+    // at its next cooperative-cancel poll. The joins below would otherwise
+    // block on long synchronous native inference calls — the JS interrupt
+    // can't break a native call — leaving the app unresponsive, and a user
+    // force-close then kills threads mid-CUDA-dispatch (see util/interrupt.h:
+    // that has bugchecked the machine via nvlddmkm). Windowed close and Ctrl+C
+    // already set the flag before we get here; this covers headless
+    // script-end and error-path teardown.
     util::beginShutdown();
+
+    // Cancel + join any in-flight async inference jobs (bro.lm/stt/tts) and
+    // free their callbacks on this (the owning) thread. Must precede the
+    // runtime teardown, and must happen through here rather than ~AsyncJob:
+    // that dtor joins the worker WITHOUT cancelling it first, so an in-flight
+    // generate would block teardown until the model finished on its own.
+    if (jsRuntime_) js::shutdownAsyncJobs(jsRuntime_->getContext());
+
+#if BRO_WITH_PHYSICS
+    if (physicsWorld_) physicsWorld_->shutdown();
+#endif
+
+    if (layoutPipeline_) layoutPipeline_->postShutdown();
+    if (layoutThread_.joinable()) layoutThread_.join();
+
+    if (framePresenter_) framePresenter_->postShutdown();
+    if (rasterThread_.joinable()) rasterThread_.join();
+
+    if (rasterGLContext_) {
+        SDL_GL_DestroyContext(rasterGLContext_);
+        rasterGLContext_ = nullptr;
+    }
+
+    // Release every threaded scene's GPU resources on the shared worker (where
+    // they live), then stop the worker, before GL context cleanup.
+    if (canvasRasterThread_ && canvasRasterThread_->started()) {
+        for (auto& cs : canvasScenes_) {
+            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
+        }
+        for (auto& cs : canvasScenesDetached_) {
+            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
+        }
+        canvasRasterThread_->stop();
+    }
+    // NB: the scenes themselves are deliberately NOT destroyed here — only
+    // their GPU resources are released. ~Engine() must first sever the
+    // Element->CanvasScene back-links (the Elements are still alive), or
+    // ~Element's onBackingElementDestroyed hook fires against a freed scene.
+
+    // No-op if run() never added it (headless/server never reach that code).
+    removeModalEventWatch();
+}
+
+Engine::~Engine() {
+    // Quiesce the worker threads and GPU contexts. run() already called this on
+    // the windowed path; it is a no-op then. Headless and Server early-return
+    // out of run() before its shutdown, so for them this IS the shutdown.
+    shutdown();
 
     // Join brotensor's CPU worker threads now, deterministically, while the
     // rest of the process is still in a normal running state. Left to its
@@ -119,17 +171,6 @@ Engine::~Engine() {
         screenshotSystemPool_.clear();
     }
 
-    // Ensure layout thread is stopped (safety — normally joined in run())
-    if (layoutPipeline_) layoutPipeline_->postShutdown();
-    if (layoutThread_.joinable()) layoutThread_.join();
-    // Ensure raster thread is stopped (safety — normally joined in run())
-    if (framePresenter_) framePresenter_->postShutdown();
-    if (rasterThread_.joinable()) rasterThread_.join();
-    if (rasterGLContext_) {
-        SDL_GL_DestroyContext(rasterGLContext_);
-        rasterGLContext_ = nullptr;
-    }
-
     // Release menu handler JS references before the runtime tears down.
     menuBar_.releaseHandlers();
 
@@ -145,30 +186,26 @@ Engine::~Engine() {
     sceneGraphs_.clear();
 #endif
 
-    // Release threaded scenes' GPU resources on the shared worker and stop it
-    // before destroying the scenes (the frame loop's shutdown normally did this
-    // already; this is a no-op then, and a safety net for early-teardown paths).
-    if (canvasRasterThread_ && canvasRasterThread_->started()) {
-        for (auto& cs : canvasScenes_) {
-            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
-        }
-        for (auto& cs : canvasScenesDetached_) {
-            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
-        }
-        canvasRasterThread_->stop();
-    }
-    // Sever Element->scene back-links before destroying the scenes. The
-    // Document (and its Elements) outlives this point — it is reset far below —
-    // so its ~Element would otherwise invoke the on-destroy hook
-    // (onBackingElementDestroyed) against a freed scene. The backing Elements
-    // are still alive here, so this is safe to touch.
-    for (auto& cs : canvasScenes_) {
-        if (cs) if (auto* el = static_cast<dom::Element*>(cs->backingElement()))
-            el->setCanvasScene(nullptr);
-    }
-    for (auto& cs : canvasScenesDetached_) {
-        if (cs) if (auto* el = static_cast<dom::Element*>(cs->backingElement()))
-            el->setCanvasScene(nullptr);
+    // shutdown() already released the threaded scenes' GPU resources on the
+    // canvas worker and stopped it; the scenes themselves are still alive.
+    //
+    // Sever every Element->CanvasScene back-pointer before destroying the
+    // scenes. The Document (and its Elements) outlives this point — it is reset
+    // far below — so a surviving back-pointer means ~Element invokes its
+    // on-destroy hook (CanvasScene::onBackingElementDestroyed) against freed
+    // memory.
+    //
+    // This walks the DOCUMENT, not the scene list, because the two sides are
+    // not reliably 1:1: an Element can still name a scene that the scene no
+    // longer names back (churn through create/remove reuses Element addresses,
+    // and a scene whose Element was finalized nulls its own userdata). Severing
+    // from the scene side alone left exactly those Elements dangling, and
+    // tests/canvas/test_canvas_detach_churn.js faulted here roughly half the
+    // time. Elements queued for deferred free are still live memory that
+    // ~Document will destroy, so forEachLiveElement covers them too.
+    if (document_) {
+        document_->forEachLiveElement(
+            [](dom::Element* el) { el->setCanvasScene(nullptr); });
     }
     canvasScenesDetached_.clear();
     canvasScenes_.clear();
@@ -227,6 +264,15 @@ Engine::~Engine() {
         js::cleanupWorkerBindings(ctx);
         js::ServerBindings::cleanup(ctx);
         js::NetBindings::cleanup(ctx);
+
+        // Now — and not before — the net/Steam service threads can go. Their
+        // bindings above hold raw service pointers and call back into them
+        // (NetBindings::cleanup -> service->destroySubscriber()), so stopping
+        // the services any earlier is a use-after-free. It faults or hangs on
+        // a freed condvar depending on timing, which is exactly what headless
+        // did for months: it called stopBackgroundServices() before ~Engine(),
+        // and the _exit() below hid the wreckage.
+        stopBackgroundServices();
 #if BRO_WITH_PHYSICS
         js::PhysicsBindings::cleanup(ctx);
 #endif
@@ -290,7 +336,6 @@ Engine::~Engine() {
             }
         }
         JS_FreeValue(ctx, global);
-
         js::DomBindings::cleanup(ctx);
         jsRuntime_->executePendingJobs();
         JS_RunGC(jsRuntime_->getRuntime());

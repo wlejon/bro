@@ -56,6 +56,17 @@ public:
     // other thread is reading the DOM (layout + raster both idle).
     void drainPendingFrees();
 
+    // Visit every Element whose memory is still alive in this document — both
+    // owned nodes and nodes queued in pendingFrees_ (with their subtrees).
+    //
+    // Engine teardown uses this to sever Element->CanvasScene back-pointers
+    // before destroying the scenes. Severing from the scene side instead
+    // (scene->backingElement()) is NOT sufficient: the link is not reliably
+    // 1:1 — an Element can hold a scene that the scene no longer names — so
+    // that approach leaves stale pointers which ~Element then dereferences.
+    // May visit an Element more than once; callers must be idempotent.
+    void forEachLiveElement(const std::function<void(Element*)>& fn);
+
     // True if `n` is still a node owned by this document (i.e. present in
     // ownedNodes_ and not queued for deferred free). Use this to validate
     // raw Node* pointers held across frames — e.g. Range endpoints, cached

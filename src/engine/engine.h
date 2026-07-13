@@ -130,18 +130,36 @@ public:
     explicit Engine(const EngineConfig& config);
     ~Engine();
 
-    /// Joins and destroys the net/Steam background service threads without
-    /// touching the JS runtime, document, or GPU state — the rest of
-    /// ~Engine() is intentionally skipped in headless mode (see
-    /// src/headless/main.cpp) because tearing down QuickJS there has hit a
-    /// GC-leak assertion, and abandoning worker threads outright via _exit()
-    /// has been implicated in OS-level thread-rundown bugchecks (unrelated
-    /// to that QuickJS issue). netService_/steamService_ have no ordering
-    /// dependency on jsRuntime_/audioEngine_ teardown (their destructors are
-    /// a plain thread join), so this is safe to call standalone right before
-    /// an abrupt process exit to shrink the number of live threads at that
-    /// moment. Safe to call multiple times or skip; a no-op after the first.
+    /// Joins and destroys the net/Steam background service threads.
+    ///
+    /// NOT safe to call standalone before teardown: the JS bindings hold raw
+    /// service pointers (NetBindings' per-context state keeps a NetService*
+    /// and calls destroySubscriber() on it from NetBindings::cleanup), so the
+    /// services must OUTLIVE the binding cleanup. Destroying them first is a
+    /// use-after-free that faults or hangs on a freed condvar depending on
+    /// timing. ~Engine() calls this at the one correct point — immediately
+    /// after the binding cleanup block, while the JS runtime is still alive.
+    /// Idempotent; a no-op after the first call.
     void stopBackgroundServices();
+
+    /// Quiesce every worker thread and GPU context the engine owns, without
+    /// destroying anything the JS runtime or DOM still points at. Idempotent.
+    ///
+    /// This exists because the shutdown sequence used to live at the bottom of
+    /// run() — which early-returns for Headless and Server, so two of the three
+    /// display modes never ran it. Notably js::shutdownAsyncJobs(), whose
+    /// absence let ~AsyncJob join a model thread that was never cancelled.
+    /// run() calls this on the way out; ~Engine() calls it first thing, so the
+    /// sequence is identical no matter how the engine is torn down.
+    void shutdown();
+
+private:
+    /// Drops the modal-move/resize event watch. Lives in engine_frame.cpp with
+    /// the watcher itself (SDL_Event is a union — it can't be forward-declared
+    /// here, and this header deliberately stays free of the SDL headers).
+    void removeModalEventWatch();
+
+public:
 
     /// Run the main event / render loop. Returns when the window is closed.
     /// In headless mode, performs initial layout and returns immediately.
@@ -753,6 +771,7 @@ private:
     SelectionSnapshot selectionSnapshot_;
 
     bool running_ = false;
+    bool shutdownDone_ = false;  // shutdown() guard — run() and ~Engine() both call it
     int viewportWidth_;
     int viewportHeight_;
 

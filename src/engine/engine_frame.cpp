@@ -897,38 +897,13 @@ void Engine::run() {
     }
 
     // --- Shutdown ---
-    // Cancel + join any in-flight async inference jobs (bro.lm/stt/tts) and free
-    // their callbacks on this (the owning) thread before the runtime is torn down.
-    if (jsRuntime_) js::shutdownAsyncJobs(jsRuntime_->getContext());
+    // Quiesce worker threads and GPU contexts. ~Engine() calls this too (it is
+    // idempotent), which is what gives Headless and Server — both of which
+    // early-return above, never reaching this line — the same sequence.
+    shutdown();
+}
 
-#if BRO_WITH_PHYSICS
-    if (physicsWorld_) physicsWorld_->shutdown();
-#endif
-
-    if (layoutPipeline_) layoutPipeline_->postShutdown();
-    if (layoutThread_.joinable()) layoutThread_.join();
-
-    if (framePresenter_) framePresenter_->postShutdown();
-    if (rasterThread_.joinable()) rasterThread_.join();
-
-    if (rasterGLContext_) {
-        SDL_GL_DestroyContext(rasterGLContext_);
-        rasterGLContext_ = nullptr;
-    }
-
-    // Release every threaded scene's GPU resources on the shared worker (where
-    // they live), then stop the worker, before GL context cleanup.
-    if (canvasRasterThread_ && canvasRasterThread_->started()) {
-        for (auto& cs : canvasScenes_) {
-            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
-        }
-        for (auto& cs : canvasScenesDetached_) {
-            if (cs && cs->isThreaded()) canvasRasterThread_->releaseScene(cs.get());
-        }
-        canvasRasterThread_->stop();
-    }
-    canvasScenesDetached_.clear();
-
+void Engine::removeModalEventWatch() {
     SDL_RemoveEventWatch(modalEventWatcher, this);
 }
 
