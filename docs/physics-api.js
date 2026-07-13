@@ -483,10 +483,10 @@ if (hit) console.log('nearest', hit.bodyId, hit.fraction);
  *     swamps the queue. If you need persistent presence, track which pairs
  *     you've seen "added" and not yet "removed" yourself.
  *
- * On removed events, `sensor` is reported as false (Jolt's removal
- * callback is called from the broadphase and does not have direct access
- * to body flags); use the `body1`/`body2` tags to look up sensor state if
- * you need it.
+ * `sensor` is reported on removed events as well as added ones, so a trigger
+ * gives you a clean enter/leave pair. (Jolt's removal callback fires from the
+ * broadphase with only body IDs — and possibly for a body that has just been
+ * destroyed — so the engine keeps its own per-body sensor bit to label these.)
  *
  * @returns {Array<{
  *   type: "added" | "removed",

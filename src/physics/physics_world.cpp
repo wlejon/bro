@@ -90,7 +90,8 @@ struct PhysicsWorld::Layers {
 //    bodies themselves. This keeps the event queue O(events) not O(pairs*frames).
 
 struct PhysicsWorld::ListenerImpl : public ContactListener {
-    explicit ListenerImpl(size_t capacity) : buffer(capacity) {}
+    ListenerImpl(size_t capacity, size_t maxBodies)
+        : buffer(capacity), sensorFlags(maxBodies, 0) {}
 
     void OnContactAdded(const Body& b1, const Body& b2,
                         const ContactManifold&, ContactSettings&) override {
@@ -98,8 +99,32 @@ struct PhysicsWorld::ListenerImpl : public ContactListener {
     }
 
     void OnContactRemoved(const SubShapeIDPair& pair) override {
-        // can't tell isSensor here without a body lookup; leave false
-        push(ContactEvent::Removed, pair.GetBody1ID(), pair.GetBody2ID(), false);
+        // Jolt hands us only BodyIDs here, and the pair may be separating
+        // *because* a body was just destroyed — so there is nothing safe to
+        // look up. This used to report isSensor=false unconditionally, which
+        // meant every sensor *exit* arrived mislabelled: an app could see a
+        // trigger entered but never cleanly see it left. We keep our own
+        // sensor bit per body index instead, written at create time.
+        push(ContactEvent::Removed, pair.GetBody1ID(), pair.GetBody2ID(),
+             isSensorId(pair.GetBody1ID()) || isSensorId(pair.GetBody2ID()));
+    }
+
+    // Read concurrently from Jolt's job threads during Update(); only ever
+    // written from the main thread between steps (body creation), so no
+    // synchronization is needed — the table is immutable for the duration of a
+    // step. Indexed by BodyID index, which Jolt bounds by maxBodies.
+    bool isSensorId(BodyID id) const {
+        const uint32_t idx = id.GetIndex();
+        return idx < sensorFlags.size() && sensorFlags[idx] != 0;
+    }
+
+    // Set at body creation. Deliberately NOT cleared on destruction: a body's
+    // removal is exactly what produces the final OnContactRemoved for it, and
+    // that event must still be able to see what the body was. The slot is
+    // overwritten when Jolt reuses the index for a new body.
+    void setSensorId(BodyID id, bool sensor) {
+        const uint32_t idx = id.GetIndex();
+        if (idx < sensorFlags.size()) sensorFlags[idx] = sensor ? 1 : 0;
     }
 
     // drain() is only called after physicsSystem_.Update() has returned (all
@@ -125,6 +150,7 @@ struct PhysicsWorld::ListenerImpl : public ContactListener {
 
     std::vector<ContactEvent> buffer;
     std::atomic<size_t> writeIdx{0};
+    std::vector<uint8_t> sensorFlags; // by BodyID index; see isSensorId/setSensorId
 };
 
 // --- Jolt global init (once) ---
@@ -184,7 +210,7 @@ bool PhysicsWorld::init(int maxBodies) {
     // Install per-world contact listener. Buffer capacity is sized generously
     // against maxBodies; see ListenerImpl::push for the overflow behavior.
     size_t contactCapacity = std::clamp<size_t>(static_cast<size_t>(maxBodies) * 4, 1024, 65536);
-    listener_ = std::make_unique<ListenerImpl>(contactCapacity);
+    listener_ = std::make_unique<ListenerImpl>(contactCapacity, static_cast<size_t>(maxBodies));
     physicsSystem_.SetContactListener(listener_.get());
 
     initialized_ = true;
@@ -498,8 +524,14 @@ BodyID PhysicsWorld::createBody(const BodyOptions& opts) {
     }
 
     BodyInterface& bi = physicsSystem_.GetBodyInterface();
-    return bi.CreateAndAddBody(settings,
+    BodyID id = bi.CreateAndAddBody(settings,
         isStatic ? EActivation::DontActivate : EActivation::Activate);
+
+    // Remember whether this body is a sensor. OnContactRemoved gets only a
+    // BodyID — possibly of a body that no longer exists — so this table is the
+    // only way it can label a sensor *exit* correctly.
+    if (listener_ && !id.IsInvalid()) listener_->setSensorId(id, opts.isSensor);
+    return id;
 }
 
 BodyID PhysicsWorld::createBox(RVec3 position, Quat rotation,
