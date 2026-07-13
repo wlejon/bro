@@ -632,24 +632,29 @@ private:
     void processPendingIframeReloads();
     void recordIframeLayers();
     void replayIframeLayers(render::SkiaRenderer* renderer);
-    /// Hand an iframe's GPU surface to the raster thread to be destroyed.
+    /// Hand an orphaned iframe GPU surface to whoever owns its GL context, to be
+    /// destroyed there.
     ///
-    /// An IframeDoc's surface is created on the RASTER thread's GrDirectContext
-    /// (replayIframeLayers) and so can only be destroyed there: the FBO is a GL
-    /// container object, which — unlike the texture — is NOT shared across the
-    /// context share group, and the sk_sp<SkSurface> holds a ref to that
-    /// context. Releasing either from the main thread silently leaks the FBO and
-    /// touches Ganesh from the wrong thread. Main-thread code that drops a
-    /// surface (a reload whose rebuild failed) must route it through here
-    /// instead. Push only at the raster-idle point in the frame loop — the same
-    /// invariant processPendingIframeReloads() already runs under, and what
-    /// makes the unlocked handoff safe (the FramePresenter request/publish
-    /// handshake orders these writes against the drain).
+    /// An IframeDoc's surface is created by whichever renderer replays the
+    /// sub-doc: the RASTER thread's windowed, the MAIN one headless (there is no
+    /// raster thread there, so screenshot() replays inline). It can only be
+    /// destroyed on that same context — the FBO is a GL container object, which
+    /// unlike the texture is NOT shared across the context share group, and the
+    /// sk_sp<SkSurface> holds a ref to that context. Deleting the FBO from the
+    /// wrong thread is not an error, just a silent no-op that leaks it.
+    ///
+    /// So main-thread code that drops a surface (a reload whose rebuild failed)
+    /// must route it through here rather than letting it destruct. Push only at
+    /// the raster-idle point in the frame loop — the same invariant
+    /// processPendingIframeReloads() already runs under, and what makes the
+    /// unlocked handoff safe (the FramePresenter request/publish handshake
+    /// orders these writes against the drain).
     void queueIframeSurfaceFree(render::SkiaRenderer::GPUSurface&& surf);
-    /// Raster thread: destroy every surface queued above, on the context that
-    /// created them. Called at the top of each frame and once more as the thread
-    /// exits (which is what releases the surfaces still live at shutdown —
-    /// ~Engine() runs after this thread has joined and its context is gone).
+    /// Destroy every surface queued above, using the renderer that owns them.
+    /// Called from replayIframeLayers() — whichever renderer replays the
+    /// sub-docs is by construction the one that created their surfaces — and
+    /// again from the raster thread's exit cleanup and ~Engine(), which are the
+    /// last points the windowed and headless contexts respectively still exist.
     void drainIframeSurfaceFrees(render::SkiaRenderer* renderer);
     // Route a host mouse event that landed on an <iframe> element into its
     // sub-document: translate document-space coords to the sub-doc's own content
@@ -928,6 +933,20 @@ private:
     // see queueIframeSurfaceFree(). Unlocked: pushes happen only at the
     // raster-idle point, drains only on the raster thread.
     std::vector<render::SkiaRenderer::GPUSurface> iframeSurfaceFrees_;
+    // An <iframe> may have been added to or removed from the app document since
+    // the last syncIframes(). Set where the main thread observes structureDirty_
+    // (before the layout pass clears it) and consumed at the raster-idle point,
+    // which is the only place sub-docs may be created or destroyed. Without it
+    // syncIframes() would have to re-walk the whole DOM every frame.
+    bool iframeSyncNeeded_ = false;
+    // <iframe> elements whose src failed to load, and the src that failed.
+    // syncIframes() runs on every DOM structure change and builds a sub-doc for
+    // any src'd iframe that hasn't got one — so without this, one bad src re-hits
+    // the filesystem and re-logs its error on every mutation. An explicit
+    // reload()/src= clears the entry (that's a request to retry); so does the
+    // element leaving the tree, which also keeps reused Element* addresses from
+    // colliding with a stale record.
+    std::unordered_map<dom::Element*, std::string> iframeLoadFailed_;
     bool systemPerfVisible_ = false;
     bool systemSettingsVisible_ = false;
     bool splashVisible_ = false;

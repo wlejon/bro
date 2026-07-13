@@ -550,6 +550,11 @@ void Engine::run() {
             (baseWasDirty || animActive || sceneHtmlDirty || !hasRenderedOnce_)) {
             if (document_->isStructureDirty()) {
                 ensureReplacedElements(document_->documentElement());
+                // The mutation may have added or removed an <iframe>. Only note
+                // it here — the layout pass below clears structureDirty_, and
+                // sub-docs may only be created/destroyed at the raster-idle
+                // point (see the consume site next to recordIframeLayers).
+                iframeSyncNeeded_ = true;
             }
             LayoutPipeline::Snapshot ls;
             ls.vpWidth         = viewportWidth_;
@@ -741,7 +746,23 @@ void Engine::run() {
                 // recorded in the app pass above. Safe to touch the per-doc
                 // buffers here: this whole record block only runs when the raster
                 // thread is idle (isRasterIdle above).
+                // Reloads FIRST, then the add/remove sync. A JS `el.src = "app"`
+                // on a fresh <iframe> does both — the src setter queues a reload
+                // and the appendChild dirties the structure — so whichever of
+                // these builds the sub-doc, the other must find it already there
+                // and skip. Sync-first built it, then the reload tore it straight
+                // back down and rebuilt it: two sub-documents, two load events.
                 processPendingIframeReloads();
+                // Instantiate sub-docs for <iframe>s JS just added, and tear down
+                // those whose element left the tree. Same raster-idle reasoning as
+                // the reload drain. The new element's layout may not have landed
+                // yet, which is harmless: createIframeDoc falls back to 300x150 and
+                // recordIframeLayers re-reads the real content box (and re-lays the
+                // sub-doc out at it) on the very next record.
+                if (iframeSyncNeeded_) {
+                    syncIframes();
+                    iframeSyncNeeded_ = false;
+                }
                 recordIframeLayers();
 
                 framePresenter_->signalRender(rsnap);

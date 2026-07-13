@@ -449,7 +449,15 @@ void Engine::recordIframeLayers() {
 // sized GPU surface, and stash the resulting texture on the IframeDoc for the
 // app compositor to draw at the <iframe> element's box.
 void Engine::replayIframeLayers(render::SkiaRenderer* renderer) {
-    if (!renderer || !renderer->grContext() || iframeDocs_.empty()) return;
+    if (!renderer || !renderer->grContext()) return;
+    // Whoever replays the sub-docs OWNS their surfaces — the raster thread
+    // windowed, the main thread headless (screenshot() replays inline, there
+    // being no raster thread). So this is exactly the right place to destroy the
+    // ones orphaned since the last replay: `renderer` is, by construction, the
+    // context that created them. Ahead of the empty check, or churn that removed
+    // the last iframe would leave its surface queued forever.
+    drainIframeSurfaceFrees(renderer);
+    if (iframeDocs_.empty()) return;
     auto* grCtx = renderer->grContext();
     sk_sp<SkSurface> origSurface;
     bool haveOrig = false;

@@ -169,6 +169,20 @@ Engine::~Engine() {
         screenshotHtmlPool_.clear();
         for (auto& ps : screenshotSystemPool_) skia->destroyGPUSurface(ps);
         screenshotSystemPool_.clear();
+
+        // Iframe sub-doc surfaces, for the HEADLESS half of the story: there is
+        // no raster thread, so screenshot() replays the sub-docs with THIS (the
+        // main) renderer — the surfaces belong to this context and must be
+        // released here, before destroyAllIframes() below drops the IframeDocs.
+        // Windowed builds them on the raster thread's context instead, and that
+        // thread already emptied them on its way out, so this is a no-op there.
+        for (auto& d : iframeDocs_) {
+            if (!d) continue;
+            skia->destroyGPUSurface(d->surface);
+            d->surfW = d->surfH = 0;
+            d->fboTexture = 0;
+        }
+        drainIframeSurfaceFrees(skia);
     }
 
     // Release menu handler JS references before the runtime tears down.

@@ -77,17 +77,40 @@ void Engine::syncIframes() {
     for (auto it = iframeDocs_.begin(); it != iframeDocs_.end();) {
         bool present = false;
         for (auto* f : frames) if (f == (*it)->element) { present = true; break; }
-        if (!present) { teardownIframeDoc(it->get()); it = iframeDocs_.erase(it); }
+        if (!present) {
+            // Hand the GPU surface to its owning context before the IframeDoc
+            // (and with it the surface) is destroyed on this thread — see
+            // queueIframeSurfaceFree. Erasing it here would leak the FBO.
+            queueIframeSurfaceFree(std::move((*it)->surface));
+            teardownIframeDoc(it->get());
+            it = iframeDocs_.erase(it);
+        }
         else ++it;
     }
 
-    // Create sub-docs for new src'd iframes. (Reload-on-src-change is handled by
-    // the JS handle in a later step.)
+    // Forget load failures for elements that are gone. Also what keeps stale
+    // Element* keys from accumulating as the DOM churns (addresses get reused).
+    for (auto it = iframeLoadFailed_.begin(); it != iframeLoadFailed_.end();) {
+        bool present = false;
+        for (auto* f : frames) if (f == it->first) { present = true; break; }
+        if (!present) it = iframeLoadFailed_.erase(it);
+        else ++it;
+    }
+
+    // Create sub-docs for new src'd iframes.
     for (auto* f : frames) {
         std::string src = f->getAttribute("src");
         if (src.empty()) continue;
         if (iframeDocForElement(f)) continue;
+        // Don't re-attempt a src that already failed. syncIframes runs on every
+        // DOM structure change, so without this a single bad src re-hits the
+        // filesystem and re-logs the error on every mutation, forever. An
+        // explicit reload() or src= clears the record and does retry.
+        auto failed = iframeLoadFailed_.find(f);
+        if (failed != iframeLoadFailed_.end() && failed->second == src) continue;
         createIframeDoc(f, src);
+        if (iframeDocForElement(f)) iframeLoadFailed_.erase(f);
+        else iframeLoadFailed_[f] = src;
     }
 }
 
@@ -275,6 +298,9 @@ void Engine::processPendingIframeReloads() {
     for (dom::Element* el : reloads) {
         if (!el) continue;
         std::string src = el->getAttribute("src");
+        // An explicit reload()/src= is a request to retry, so drop any record of
+        // a previous failure for this element.
+        iframeLoadFailed_.erase(el);
         // Salvage the existing GPU surface across the reload: it is owned by the
         // raster renderer's GL context, so recreating it would leak the old one
         // (and destroying it here would be the wrong context). Hand it to the
@@ -297,7 +323,12 @@ void Engine::processPendingIframeReloads() {
                 break;
             }
         }
-        if (!src.empty()) createIframeDoc(el, src);
+        if (!src.empty()) {
+            createIframeDoc(el, src);
+            // Record a failed rebuild so syncIframes doesn't immediately retry it
+            // on the next DOM mutation.
+            if (!iframeDocForElement(el)) iframeLoadFailed_[el] = src;
+        }
         if (!haveSalvage) continue;
         // Hand the surface to the rebuilt sub-doc — or, if there is no rebuilt
         // sub-doc (empty src, or createIframeDoc bailed on a missing/broken
@@ -361,11 +392,13 @@ bool Engine::tickIframes(double nowMs) {
 // canvasScenes) → JSContext. canvasScenes (a member, declared before `document`)
 // destruct when the owning IframeDoc unique_ptr is finally erased.
 //
-// Deliberately does NOT touch doc->surface: it belongs to the raster thread's GL
-// context and cannot be destroyed from here (queueIframeSurfaceFree explains
-// why). Both callers already account for it — processPendingIframeReloads moves
-// the surface out first, and destroyAllIframes runs from ~Engine() after the
-// raster thread emptied every IframeDoc's surface on its way out.
+// Deliberately does NOT touch doc->surface: it belongs to whichever GL context
+// replayed the sub-doc, which is not necessarily this thread's (see
+// queueIframeSurfaceFree). Both callers already account for it —
+// processPendingIframeReloads moves the surface out first, and destroyAllIframes
+// runs from ~Engine() after the surfaces have been released on their owning
+// context (the raster thread's exit cleanup windowed; ~Engine() itself, via the
+// main renderer, headless).
 void Engine::teardownIframeDoc(IframeDoc* doc) {
     if (!doc) return;
     if (doc->element) doc->element->setIframeDoc(nullptr);

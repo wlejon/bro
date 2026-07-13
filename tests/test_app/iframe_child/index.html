@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  body { margin: 0; background: #2244aa; color: #ffcc00; font-family: sans-serif; }
+  #box { width: 40px; height: 40px; background: #ffcc00; }
+</style></head>
+<body>
+  <div id="label">child</div>
+  <div id="box"></div>
+  <canvas id="c" width="60" height="40"></canvas>
+  <script>
+    // Sub-doc state a host test can observe through iframe teardown/reload, plus
+    // a timer + rAF so the host can prove headless virtual time reaches an
+    // iframe's own Timers (it did not until tickIframes() was wired into
+    // advanceTime — the sub-doc's clock was frozen).
+    window.__ticks = 0;
+    window.__timerFired = false;
+    setTimeout(() => { window.__timerFired = true; }, 50);
+    function raf() { window.__ticks++; requestAnimationFrame(raf); }
+    requestAnimationFrame(raf);
+
+    const ctx = document.querySelector('#c').getContext('2d');
+    ctx.fillStyle = '#ffcc00';
+    ctx.fillRect(0, 0, 60, 40);
+    document.querySelector('#label').textContent = 'child ready';
+  </script>
+</body>
+</html>

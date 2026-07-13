@@ -104,8 +104,13 @@ void Engine::flush() {
         }
     }
 
+    // Latched before the layout pass below clears it: the iframe sync after this
+    // block needs to know an element was added or removed, but must run AFTER
+    // layout so createIframeDoc sees a real content box.
+    bool structureChanged = false;
     if (document_ && document_->isDirty()) {
-        if (document_->isStructureDirty()) {
+        structureChanged = document_->isStructureDirty();
+        if (structureChanged) {
             ensureReplacedElements(document_->documentElement());
         }
         layout::ElementRefAdapter::setHoveredElement(hoveredElement_.get());
@@ -149,7 +154,21 @@ void Engine::flush() {
                                 strlen(js_observer_check), "<observer-check>", JS_EVAL_TYPE_GLOBAL);
             JS_FreeValue(jsRuntime_->getContext(), r);
         }
+
     }
+
+    // The headless counterpart of the iframe block in the windowed frame loop,
+    // in the same order and for the same reason: a JS `el.src = "app"` on a fresh
+    // <iframe> queues a reload AND dirties the structure, so whichever of these
+    // builds the sub-doc, the other must find it already there and skip.
+    //
+    // Windowed drains reloads in the frame loop and captureIframe() drains them
+    // too, but a headless script that reloads and then screenshots (rather than
+    // capturing) would otherwise never see the new sub-document. Layout has run
+    // by here, so createIframeDoc sees each element's real content box, and with
+    // no raster thread there is nothing to quiesce first.
+    processPendingIframeReloads();
+    if (structureChanged) syncIframes();
 
     // Drain CSS transition/animation events and dispatch to JS.
     {
@@ -311,6 +330,12 @@ void Engine::advanceTime(double ms) {
         // Tick system panels so splash lifecycle (min-display + dismiss)
         // advances with virtual time.
         tickSystemPanels(virtualTime_);
+
+        // Same for <iframe> sub-documents: each owns its own Timers, so without
+        // this an embedded app's setTimeout/setInterval/rAF never fire under
+        // headless virtual time — the windowed loop ticks them every frame
+        // (engine_frame.cpp), headless ticked nothing.
+        tickIframes(virtualTime_);
 
         // Network polling is delivered via a frame pump (registered in
         // engine_init when BRO_WITH_NET is on) — see the framePumps_ loop above.

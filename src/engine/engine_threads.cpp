@@ -172,11 +172,6 @@ void Engine::rasterThreadFunc() {
         backBuf.appLayers.clear();
         backBuf.systemLayers.clear();
 
-        // Destroy any iframe surface the main thread orphaned (a reload whose
-        // rebuild failed) — it belongs to THIS context. Before resetContext(),
-        // so the raw glDelete* below don't leave Ganesh's cached GL state stale.
-        drainIframeSurfaceFrees(rasterRenderer.get());
-
         rasterRenderer->grContext()->resetContext();
         rasterRenderer->beginFrame(snap.vpWidth, snap.vpHeight);
 
