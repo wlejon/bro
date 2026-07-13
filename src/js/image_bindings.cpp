@@ -1,6 +1,7 @@
 #include "js/image_bindings.h"
 #include "js/imagebitmap_bindings.h"
 #include "js/dom_bindings_internal.h"
+#include "js/runtime.h"
 #include "canvas/canvas_scene.h"
 
 #include <include/core/SkImage.h>
@@ -37,8 +38,20 @@ struct ImageData {
     std::string src;
     std::vector<uint8_t> pixels; // RGBA
     bool complete = false;
-    JSValue onload = JS_UNDEFINED; // stored callback
+    JSValue onload = JS_UNDEFINED;  // stored callback
+    JSValue onerror = JS_UNDEFINED; // stored callback
     JSContext* ctx = nullptr;
+
+    // The stored handlers hold strong refs. Release them on finalize, and mark
+    // them for the cycle GC (see .gc_mark below) — `img.onload = () => img.foo`
+    // is a wrapper -> callback -> wrapper cycle that would otherwise never be
+    // collected.
+    ~ImageData() {
+        if (ctx) {
+            JS_FreeValue(ctx, onload);
+            JS_FreeValue(ctx, onerror);
+        }
+    }
 };
 
 using ID = ImageData;
@@ -73,33 +86,56 @@ static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val,
     img->src = s;
     JS_FreeCString(ctx, s);
 
-    // Resolve path and decode via broimage (stb-backed; same RGBA-forced output
-    // and 1x1 white fallback the JS contract expects).
+    // Resolve path and decode via broimage (stb-backed, RGBA-forced). Decode is
+    // synchronous, so load/error fires before the setter returns.
     std::string path = resolvePath(img->src);
     broimage::Image decoded;
     std::string err;
     const bool ok = broimage::decode_file(path, decoded, &err);
-    img->width = decoded.width;
-    img->height = decoded.height;
-    img->pixels = std::move(decoded.pixels);
-    img->complete = true;
+
+    // A failed decode is a *broken image*, not a 1x1 white one. broimage hands
+    // back a white fallback pixel on failure; adopting it would make a missing
+    // asset indistinguishable from a real image and silently paint white. Per
+    // the HTML spec a broken image has zero natural dimensions and no pixels,
+    // so drawImage/texImage2D of it no-ops (getImagePixels tests pixels.empty)
+    // and createImageBitmap rejects.
     if (ok) {
+        img->width  = decoded.width;
+        img->height = decoded.height;
+        img->pixels = std::move(decoded.pixels);
         LOG_INFO("Image loaded: %s (%dx%d)", img->src.c_str(), img->width, img->height);
     } else {
+        img->width  = 0;
+        img->height = 0;
+        img->pixels.clear();
         LOG_WARN("Image load failed: %s (%s)", path.c_str(), err.c_str());
     }
+    img->complete = true; // the fetch settled, success or not
 
-    // Fire onload callback if set
-    if (JS_IsFunction(ctx, img->onload)) {
-        JSValue func = JS_DupValue(ctx, img->onload);
-        JSValue ret = JS_Call(ctx, func, this_val, 0, nullptr);
+    // Fire load/error — exactly one, never both. Route through the error funnel
+    // so a throwing handler is reported and cleared rather than left pending on
+    // the context for an unrelated call to trip over.
+    JSValue handler = ok ? img->onload : img->onerror;
+    if (JS_IsFunction(ctx, handler)) {
+        JSValue func = JS_DupValue(ctx, handler);
+        JSValue ret = Runtime::callJs(ctx, func, this_val, 0, nullptr,
+            ErrorOrigin::listener(std::string(ok ? "load" : "error") +
+                                  " on Image " + img->src));
         JS_FreeValue(ctx, ret);
         JS_FreeValue(ctx, func);
     }
     return JS_UNDEFINED;
 }
 
-// onload setter — manages JSValue ref counting
+// Pick the slot an event type maps to. Image carries one handler per type
+// rather than a listener list (see addEventListener below).
+static JSValue* slotForType(ID* img, const char* type) {
+    if (std::string(type) == "load")  return &img->onload;
+    if (std::string(type) == "error") return &img->onerror;
+    return nullptr;
+}
+
+// onload / onerror setters — manage JSValue ref counting
 static JSValue js_image_set_onload(JSContext* ctx, JSValueConst this_val,
                                     int /*argc*/, JSValueConst* argv) {
     auto* img = qjsbind::unwrap<ID>(ctx, this_val);
@@ -111,16 +147,28 @@ static JSValue js_image_set_onload(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-// addEventListener — dispatch "load" via onload
+static JSValue js_image_set_onerror(JSContext* ctx, JSValueConst this_val,
+                                     int /*argc*/, JSValueConst* argv) {
+    auto* img = qjsbind::unwrap<ID>(ctx, this_val);
+    if (!img) return JS_UNDEFINED;
+    if (!JS_IsUndefined(img->onerror)) {
+        JS_FreeValue(ctx, img->onerror);
+    }
+    img->onerror = JS_DupValue(ctx, argv[0]);
+    return JS_UNDEFINED;
+}
+
+// addEventListener — "load"/"error" alias onto the onload/onerror slots. Only
+// one listener per type is retained (a second add replaces the first).
 static JSValue js_image_addEventListener(JSContext* ctx, JSValueConst this_val,
                                           int argc, JSValueConst* argv) {
     auto* img = qjsbind::unwrap<ID>(ctx, this_val);
     if (!img || argc < 2) return JS_UNDEFINED;
     const char* type = JS_ToCString(ctx, argv[0]);
     if (!type) return JS_UNDEFINED;
-    if (std::string(type) == "load") {
-        if (!JS_IsUndefined(img->onload)) JS_FreeValue(ctx, img->onload);
-        img->onload = JS_DupValue(ctx, argv[1]);
+    if (JSValue* slot = slotForType(img, type)) {
+        if (!JS_IsUndefined(*slot)) JS_FreeValue(ctx, *slot);
+        *slot = JS_DupValue(ctx, argv[1]);
     }
     JS_FreeCString(ctx, type);
     return JS_UNDEFINED;
@@ -133,10 +181,10 @@ static JSValue js_image_removeEventListener(JSContext* ctx, JSValueConst this_va
     if (!img || argc < 2) return JS_UNDEFINED;
     const char* type = JS_ToCString(ctx, argv[0]);
     if (!type) return JS_UNDEFINED;
-    if (std::string(type) == "load") {
-        if (!JS_IsUndefined(img->onload)) {
-            JS_FreeValue(ctx, img->onload);
-            img->onload = JS_UNDEFINED;
+    if (JSValue* slot = slotForType(img, type)) {
+        if (!JS_IsUndefined(*slot)) {
+            JS_FreeValue(ctx, *slot);
+            *slot = JS_UNDEFINED;
         }
     }
     JS_FreeCString(ctx, type);
@@ -1343,7 +1391,11 @@ void ImageBindings::install(JSContext* ctx, const std::string& basePath,
             return JS_DupValue(ctx, self->onload);
         })
         .method_raw("addEventListener", js_image_addEventListener, 2)
-        .method_raw("removeEventListener", js_image_removeEventListener, 2);
+        .method_raw("removeEventListener", js_image_removeEventListener, 2)
+        .gc_mark([](ID* img, JSRuntime* rt, JS_MarkFunc* mark) {
+            JS_MarkValue(rt, img->onload, mark);
+            JS_MarkValue(rt, img->onerror, mark);
+        });
 
     // Manually set up src and onload as read-write properties with raw setters.
     // We need to override the read-only getters set above with proper get+set pairs.
@@ -1373,6 +1425,20 @@ void ImageBindings::install(JSContext* ctx, const std::string& basePath,
                 return JS_DupValue(ctx, img->onload);
             }, "onload", 0),
             JS_NewCFunction(ctx, js_image_set_onload, "onload", 1),
+            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, atom);
+    }
+
+    // onerror property: fires when the decode fails (missing/corrupt asset)
+    {
+        JSAtom atom = JS_NewAtom(ctx, "onerror");
+        JS_DefinePropertyGetSet(ctx, proto, atom,
+            JS_NewCFunction(ctx, [](JSContext* ctx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+                auto* img = qjsbind::unwrap<ID>(ctx, this_val);
+                if (!img) return JS_UNDEFINED;
+                return JS_DupValue(ctx, img->onerror);
+            }, "onerror", 0),
+            JS_NewCFunction(ctx, js_image_set_onerror, "onerror", 1),
             JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
         JS_FreeAtom(ctx, atom);
     }

@@ -119,15 +119,35 @@ document.body.removeChild(srcCanvas);
 // =========================================================================
 // createImageBitmap from an Image (HTMLImageElement)
 // =========================================================================
-// stb_image loading is synchronous and falls back to a 1x1 white pixel for a
-// missing path (see tests/dom/test_image.js) — enough to exercise the source
-// path without needing a real asset on disk.
+// screenshot() gives us a real PNG on disk without checking a binary asset
+// into the tree. Image decoding is synchronous (stb_image), so the image is
+// complete before createImageBitmap sees it.
+const os = require('os');
+const path = require('path');
+const shotPath = path.join(os.tmpdir(), 'bro_test_bitmap_src_' + Date.now() + '.png');
+screenshot(shotPath);
+
 const img = new Image();
-img.src = '/nonexistent-imagebitmap-source.png';
-assert(img.complete === true, 'Image loads synchronously (fallback pixel)');
+img.src = shotPath;
+assert(img.complete === true, 'Image loads synchronously');
+assert(img.naturalWidth > 0, 'screenshot decoded into the Image');
 const fromImage = await createImageBitmap(img);
 assert(fromImage.width === img.width && fromImage.height === img.height,
        'bitmap-from-Image matches natural size');
+
+// A broken image is not a valid CanvasImageSource — it has no pixels, so
+// createImageBitmap must reject rather than hand back a 1x1 white bitmap.
+const brokenImg = new Image();
+brokenImg.src = '/nonexistent-imagebitmap-source.png';
+assert(brokenImg.complete === true, 'broken image still settles');
+assert(brokenImg.naturalWidth === 0, 'broken image has no natural size');
+let brokenRejected = false;
+try {
+    await createImageBitmap(brokenImg);
+} catch (e) {
+    brokenRejected = true;
+}
+assert(brokenRejected === true, 'createImageBitmap rejects a broken image');
 
 // =========================================================================
 // Malformed source rejects the promise
