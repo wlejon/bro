@@ -200,13 +200,22 @@ struct MidiInputData {
     JSContext* ctx;
     JSValue pitchBendCallback = JS_UNDEFINED;
     JSValue rawCallback = JS_UNDEFINED;
+    // One slot per CC number. The broaudio callback for a CC borrows the ref
+    // stored here rather than taking its own — every ref this struct owns must
+    // be reachable from a field, or it can neither be freed nor GC-marked.
+    // A default member initializer, not a constructor: the struct is created
+    // with aggregate init below, and a user-declared ctor would break that.
+    std::vector<JSValue> ccCallbacks = std::vector<JSValue>(128, JS_UNDEFINED);
 
     ~MidiInputData() {
+        // Close first: the broaudio callbacks below capture `this` and read the
+        // JSValues we are about to free, so they must stop firing before we do.
         if (midi) midi->close();
         if (ctx) {
             JSRuntime* rt = JS_GetRuntime(ctx);
-            if (!JS_IsUndefined(pitchBendCallback)) JS_FreeValueRT(rt, pitchBendCallback);
-            if (!JS_IsUndefined(rawCallback))       JS_FreeValueRT(rt, rawCallback);
+            JS_FreeValueRT(rt, pitchBendCallback);
+            JS_FreeValueRT(rt, rawCallback);
+            for (JSValue& v : ccCallbacks) JS_FreeValueRT(rt, v);
         }
     }
 };
@@ -588,16 +597,17 @@ static JSValue js_midi_onControlChange(JSContext* ctx, JSValueConst this_val, in
     if (!d || argc < 2) return JS_UNDEFINED;
     int cc; JS_ToInt32(ctx, &cc, argv[0]);
     if (cc < 0 || cc > 127) return JS_UNDEFINED;
-    JSValue cbRef = JS_DupValue(ctx, argv[1]);
+    JS_FreeValue(ctx, d->ccCallbacks[cc]);          // replace any prior handler
+    d->ccCallbacks[cc] = JS_DupValue(ctx, argv[1]);
     JSContext* jsCtx = ctx;
     d->midi->onControlChange(static_cast<uint8_t>(cc),
-        [jsCtx, cbRef](uint8_t channel, uint8_t ccNum, uint8_t value) {
+        [jsCtx, d, cc](uint8_t channel, uint8_t ccNum, uint8_t value) {
             JSValue args[3] = {
                 JS_NewInt32(jsCtx, channel),
                 JS_NewInt32(jsCtx, ccNum),
                 JS_NewInt32(jsCtx, value)
             };
-            JSValue ret = JS_Call(jsCtx, cbRef, JS_UNDEFINED, 3, args);
+            JSValue ret = JS_Call(jsCtx, d->ccCallbacks[cc], JS_UNDEFINED, 3, args);
             for (int i = 0; i < 3; i++) JS_FreeValue(jsCtx, args[i]);
             JS_FreeValue(jsCtx, ret);
         });
@@ -607,13 +617,12 @@ static JSValue js_midi_onControlChange(JSContext* ctx, JSValueConst this_val, in
 static JSValue js_midi_onPitchBend(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = qjsbind::unwrap<MidiInputData>(ctx, this_val);
     if (!d || argc < 1) return JS_UNDEFINED;
-    if (!JS_IsUndefined(d->pitchBendCallback)) JS_FreeValue(ctx, d->pitchBendCallback);
+    JS_FreeValue(ctx, d->pitchBendCallback);
     d->pitchBendCallback = JS_DupValue(ctx, argv[0]);
-    JSValue cbRef = JS_DupValue(ctx, argv[0]);
     JSContext* jsCtx = ctx;
-    d->midi->onPitchBend([jsCtx, cbRef](uint8_t channel, int16_t value) {
+    d->midi->onPitchBend([jsCtx, d](uint8_t channel, int16_t value) {
         JSValue args[2] = { JS_NewInt32(jsCtx, channel), JS_NewInt32(jsCtx, value) };
-        JSValue ret = JS_Call(jsCtx, cbRef, JS_UNDEFINED, 2, args);
+        JSValue ret = JS_Call(jsCtx, d->pitchBendCallback, JS_UNDEFINED, 2, args);
         JS_FreeValue(jsCtx, args[0]); JS_FreeValue(jsCtx, args[1]);
         JS_FreeValue(jsCtx, ret);
     });
@@ -637,11 +646,10 @@ static const char* midiEventTypeName(broaudio::MidiEvent::Type t) {
 static JSValue js_midi_onRawEvent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* d = qjsbind::unwrap<MidiInputData>(ctx, this_val);
     if (!d || argc < 1) return JS_UNDEFINED;
-    if (!JS_IsUndefined(d->rawCallback)) JS_FreeValue(ctx, d->rawCallback);
+    JS_FreeValue(ctx, d->rawCallback);
     d->rawCallback = JS_DupValue(ctx, argv[0]);
-    JSValue cbRef = JS_DupValue(ctx, argv[0]);
     JSContext* jsCtx = ctx;
-    d->midi->onRawEvent([jsCtx, cbRef](const broaudio::MidiEvent& ev) {
+    d->midi->onRawEvent([jsCtx, d](const broaudio::MidiEvent& ev) {
         JSValue obj = JS_NewObject(jsCtx);
         JS_SetPropertyStr(jsCtx, obj, "type", JS_NewString(jsCtx, midiEventTypeName(ev.type)));
         JS_SetPropertyStr(jsCtx, obj, "channel", JS_NewInt32(jsCtx, ev.channel));
@@ -649,7 +657,7 @@ static JSValue js_midi_onRawEvent(JSContext* ctx, JSValueConst this_val, int arg
         JS_SetPropertyStr(jsCtx, obj, "data2", JS_NewInt32(jsCtx, ev.data2));
         JS_SetPropertyStr(jsCtx, obj, "pitchBend", JS_NewInt32(jsCtx, ev.pitchBend));
         JS_SetPropertyStr(jsCtx, obj, "timestamp", JS_NewFloat64(jsCtx, ev.timestamp));
-        JSValue ret = JS_Call(jsCtx, cbRef, JS_UNDEFINED, 1, &obj);
+        JSValue ret = JS_Call(jsCtx, d->rawCallback, JS_UNDEFINED, 1, &obj);
         JS_FreeValue(jsCtx, obj);
         JS_FreeValue(jsCtx, ret);
     });
@@ -2254,6 +2262,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
             .gc_mark([](MidiInputData* d, JSRuntime* rt, JS_MarkFunc* mark) {
                 JS_MarkValue(rt, d->pitchBendCallback, mark);
                 JS_MarkValue(rt, d->rawCallback, mark);
+                for (JSValue& v : d->ccCallbacks) JS_MarkValue(rt, v, mark);
             })
             .method_raw("availablePorts", js_midi_availablePorts, 0)
             .method("open",
