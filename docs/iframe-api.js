@@ -41,6 +41,27 @@ const frame = document.querySelector('#stage');
 
 
 // -----------------------------------------------------------------------------
+// Created from script
+// -----------------------------------------------------------------------------
+//
+// An <iframe> does not have to come from the app's initial HTML — create one and
+// append it, and its sub-document is built on the next frame (in headless, on the
+// next flush()). Removing the element tears the sub-document down: JS realm, DOM,
+// timers, canvas scenes, and GPU surface.
+//
+//   const f = document.createElement('iframe');
+//   f.addEventListener('load', () => console.log('embedded app is up'));
+//   f.src = './project/';
+//   document.body.appendChild(f);
+//   ...
+//   f.remove();                       // sub-document destroyed
+//
+// A src that names neither a directory nor a file is an error: the iframe stays
+// empty (capture() returns null) and the failure is logged once. It is NOT
+// retried on every DOM change — assign src again, or call reload(), to retry.
+
+
+// -----------------------------------------------------------------------------
 // frame.src  — get / set
 // -----------------------------------------------------------------------------
 //
