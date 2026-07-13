@@ -127,6 +127,44 @@ using TWld = TileWrapper;
 // Parse TileWorldConfig from JS options
 // -------------------------------------------------------------------------
 
+// Grid dimensions come straight from JS, and the grid is allocated eagerly on
+// the calling thread — so `createTileWorld({width: 1e9, height: 1e9})` would
+// walk off and try to reserve ~1e18 cells, wedging or killing the process with
+// no diagnosable error. Reject the impossible sizes up front with a message
+// that names the number, instead of dying in the allocator.
+//
+// The cap is a sanity bound, not a tuned limit: 16M cells is already ~200 MB of
+// planes and orders of magnitude past any real map (shipping games use 64-512
+// per side). Anything beyond it is a bug in the caller, not an ambitious level.
+static constexpr int64_t kMaxTileCells = 16 * 1024 * 1024;
+static constexpr int     kMaxTileDim   = 65536;
+
+static bool validateTileConfig(JSContext* ctx, const scene::TileWorldConfig& cfg) {
+    if (cfg.width < 1 || cfg.height < 1) {
+        JS_ThrowRangeError(ctx, "TileWorld: width and height must be >= 1 (got %dx%d)",
+                           cfg.width, cfg.height);
+        return false;
+    }
+    if (cfg.width > kMaxTileDim || cfg.height > kMaxTileDim) {
+        JS_ThrowRangeError(ctx, "TileWorld: width/height must be <= %d (got %dx%d)",
+                           kMaxTileDim, cfg.width, cfg.height);
+        return false;
+    }
+    const int64_t cells = static_cast<int64_t>(cfg.width) * static_cast<int64_t>(cfg.height);
+    if (cells > kMaxTileCells) {
+        JS_ThrowRangeError(ctx,
+            "TileWorld: %dx%d is %lld cells, over the %lld-cell limit",
+            cfg.width, cfg.height,
+            static_cast<long long>(cells), static_cast<long long>(kMaxTileCells));
+        return false;
+    }
+    if (cfg.chunkSize < 1) {
+        JS_ThrowRangeError(ctx, "TileWorld: chunkSize must be >= 1 (got %d)", cfg.chunkSize);
+        return false;
+    }
+    return true;
+}
+
 static scene::TileWorldConfig parseTileConfig(JSContext* ctx, JSValueConst opts) {
     scene::TileWorldConfig cfg;
     if (!JS_IsObject(opts)) return cfg;
@@ -948,7 +986,9 @@ static JSValue js_tile_load(JSContext* ctx, JSValueConst this_val, int argc, JSV
 static JSValue js_tile_configure(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<TWld>(ctx, this_val);
     if (!w || !w->world || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
-    w->world->configure(parseTileConfig(ctx, argv[0]));
+    scene::TileWorldConfig cfg = parseTileConfig(ctx, argv[0]);
+    if (!validateTileConfig(ctx, cfg)) return JS_EXCEPTION;
+    w->world->configure(std::move(cfg));
     return JS_UNDEFINED;
 }
 
@@ -958,8 +998,10 @@ static JSValue js_tile_configure(JSContext* ctx, JSValueConst this_val, int argc
 
 JSValue createTileWorldJS(JSContext* ctx, scene::SceneGraph* graph, JSValueConst opts) {
     if (!graph) return JS_ThrowTypeError(ctx, "createTileWorld: no scene graph");
+    scene::TileWorldConfig cfg = parseTileConfig(ctx, opts);
+    if (!validateTileConfig(ctx, cfg)) return JS_EXCEPTION; // before we allocate the grid
     auto world = std::make_unique<scene::TileWorld>(*graph);
-    world->configure(parseTileConfig(ctx, opts));
+    world->configure(std::move(cfg));
     return qjsbind::wrap<TWld>(ctx, new TWld(std::move(world)));
 }
 

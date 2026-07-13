@@ -378,6 +378,33 @@ if (!scene) {
     bw.destroy();
 
     hexWorld.destroy();
+
+    // -------------------------------------------------------------------------
+    // Absurd dimensions are rejected, not attempted. The grid is allocated
+    // eagerly on this thread, so a typo'd size used to try to reserve billions
+    // of cells and wedge (or kill) the process with nothing to diagnose.
+    // -------------------------------------------------------------------------
+    function rejects(opts, what) {
+        let threw = false;
+        try {
+            const w = scene.createTileWorld(opts);
+            if (w) w.destroy();
+        } catch (e) {
+            threw = true;
+        }
+        assert(threw === true, 'createTileWorld rejects ' + what);
+    }
+    rejects({ width: 1e9, height: 1e9, cellSize: 1 }, 'a billion cells per side');
+    rejects({ width: 100000, height: 100000, cellSize: 1 }, 'a 1e10-cell grid');
+    rejects({ width: 0, height: 16, cellSize: 1 }, 'zero width');
+    rejects({ width: -8, height: 16, cellSize: 1 }, 'negative width');
+    rejects({ width: 16, height: 16, chunkSize: 0, cellSize: 1 }, 'zero chunkSize');
+
+    // A normal-sized world still works after all that.
+    const sane = scene.createTileWorld({ width: 32, height: 32, cellSize: 1 });
+    assert(sane.width === 32, 'sane world still constructs');
+    sane.destroy();
+
     console.log('tileworld: all assertions passed');
 }
 
