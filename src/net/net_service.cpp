@@ -179,9 +179,34 @@ void NetService::postEventTo(uint32_t subscriberId, NetEvent* ev) {
     // Service-thread only. subscribers_ is owned by this thread.
     auto it = subscribers_.find(subscriberId);
     if (it == subscribers_.end()) { delete ev; return; }
-    if (!it->second->events_.push(ev)) {
-        LOG_WARN("[net] Event queue full for subscriber %u — dropping event", subscriberId);
-        delete ev;
+    NetSubscriber* sub = it->second;
+
+    // Spill rather than drop. Once anything is spilled, everything spills until
+    // the backlog clears — otherwise a later event could overtake an earlier
+    // one and the app would see a disconnect before its connect.
+    if (!sub->overflow_.empty() || !sub->events_.push(ev)) {
+        sub->overflow_.push_back(ev);
+
+        // Incoming messages are throttled against ring space, so a backlog that
+        // keeps growing means the subscriber has stopped calling poll() (a
+        // wedged JS context). Say so — loudly enough to notice, rarely enough
+        // not to drown the log: once per power-of-two.
+        const size_t n = sub->overflow_.size();
+        if (n >= 1024 && (n & (n - 1)) == 0) {
+            LOG_WARN("[net] subscriber %u is not polling — %zu events queued",
+                     subscriberId, n);
+        }
+    }
+}
+
+// Re-push spilled events, in order, as the consumer frees ring slots. Called at
+// the top of each service iteration, before any new events are produced.
+void NetService::flushOverflow() {
+    for (auto& [sid, sub] : subscribers_) {
+        while (!sub->overflow_.empty()) {
+            if (!sub->events_.push(sub->overflow_.front())) break; // still full
+            sub->overflow_.pop_front();
+        }
     }
 }
 
@@ -467,13 +492,42 @@ void NetService::threadMain() {
         for (auto& cmd : batch) handleCommand(*cmd);
         batch.clear();
 
+        // 1b. Re-push anything that spilled while the consumer was behind, so
+        //     the backlog drains before we produce anything new.
+        flushOverflow();
+
         // 2. Run GNS callbacks (fires onStatus for state changes).
         sockets_->RunCallbacks();
 
         // 3. Drain incoming messages for each subscriber's poll group.
+        //
+        // Only pull what the subscriber's event ring can actually hold. Pulling
+        // a message out of GNS and then dropping it because the ring is full
+        // destroys it for good — a silent loss the sender still counts as
+        // delivered. Left in GNS instead, it simply waits, and GNS applies its
+        // own flow control back to the sender if the backlog persists. That
+        // turns "silently lose the packet" into "slow the sender down", which
+        // is what a reliable channel is supposed to do.
+        //
+        // Headroom keeps the tail of the ring free for control events
+        // (connect/disconnect/status). Those come from RunCallbacks above, not
+        // from here, and a lost disconnect desyncs the app's connection table
+        // permanently — far worse than a late message.
+        constexpr size_t kControlHeadroom = 64;
         for (auto& [sid, pg] : subscriberPollGroup_) {
+            auto subIt = subscribers_.find(sid);
+            if (subIt == subscribers_.end()) continue;
+            // Backlog still spilled (flushOverflow above couldn't place it all):
+            // the ring is saturated, so anything pulled now would only spill too.
+            if (!subIt->second->overflow_.empty()) continue;
+
+            const size_t space = subIt->second->events_.space();
+            if (space <= kControlHeadroom) continue; // JS hasn't drained; let GNS hold them
+            const size_t budget = space - kControlHeadroom;
+
             SteamNetworkingMessage_t* msgs[64];
-            int n = sockets_->ReceiveMessagesOnPollGroup(pg, msgs, 64);
+            const int want = static_cast<int>(budget < 64 ? budget : 64);
+            int n = sockets_->ReceiveMessagesOnPollGroup(pg, msgs, want);
             for (int i = 0; i < n; ++i) {
                 auto* m = msgs[i];
                 auto* ev = new NetEvent{};

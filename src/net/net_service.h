@@ -105,6 +105,15 @@ public:
         return head_.load(std::memory_order_acquire) ==
                tail_.load(std::memory_order_acquire);
     }
+    /// Slots the producer may still push into. Call from the producer thread
+    /// (the sole tail_ writer). Conservative: the consumer only ever frees
+    /// more, so a stale head_ under-reports space and never over-reports it.
+    /// Lets the producer apply backpressure instead of pushing and dropping.
+    size_t space() const {
+        size_t tail = tail_.load(std::memory_order_relaxed);
+        size_t head = head_.load(std::memory_order_acquire);
+        return (head + Capacity - tail - 1) & (Capacity - 1);
+    }
     T* pop() {
         size_t head = head_.load(std::memory_order_relaxed);
         if (head == tail_.load(std::memory_order_acquire)) return nullptr;
@@ -162,9 +171,26 @@ private:
     friend class NetService;
     NetSubscriber(NetService* service, uint32_t id);
 
+    // Events are heap nodes owned by the queue. Anything still undrained when
+    // the subscriber goes away (JS context torn down mid-session) is ours to
+    // free — nothing else holds a pointer to it.
+    ~NetSubscriber() {
+        events_.clear(); // deletes undrained ring entries
+        for (NetEvent* ev : overflow_) delete ev;
+    }
+
     NetService* service_;
     uint32_t id_;
     Spsc<NetEvent> events_;
+
+    // Producer-side spillover, touched only by the service thread (so it needs
+    // no lock — it is not shared state). Events land here when the ring is
+    // momentarily full and are re-pushed, in order, on the next service
+    // iteration. Incoming messages are already throttled against ring space,
+    // so in practice only a burst of control events (a mass disconnect) can
+    // land here. Dropping one of those would permanently desync the app's
+    // connection table, so we hold it rather than destroy it.
+    std::deque<NetEvent*> overflow_;
 };
 
 // ---------------------------------------------------------------------------
@@ -202,6 +228,7 @@ private:
     void threadMain();
     void postCommand(NetCommand* cmd);
     void postEventTo(uint32_t subscriberId, NetEvent* ev);
+    void flushOverflow();
 
     // Called from the service thread only.
     void handleCommand(NetCommand& cmd);
