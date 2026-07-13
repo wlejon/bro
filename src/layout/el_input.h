@@ -1,6 +1,7 @@
 #pragma once
 
 #include "layout/box.h"
+#include "layout/control_text.h"
 #include "layout/key_handle_result.h"
 #include "css/cascade.h"
 #include "render/renderer.h"
@@ -38,20 +39,28 @@ public:
               float offsetX, float offsetY,
               float docOffsetX = 0, float docOffsetY = 0);
 
-    // Focus/cursor state
-    int cursorPos() const { return cursorPos_; }
-    void setCursorPos(int pos) { cursorPos_ = pos; selStart_ = selEnd_ = pos; }
+    // Focus/cursor state. The cursor is the moving end of the selection, so
+    // setting it collapses any selection onto that point.
+    int cursorPos() const { return sel_.caret; }
+    void setCursorPos(int pos) { sel_.collapseTo(pos); }
 
     // Selection range (HTMLInputElement.selectionStart / selectionEnd).
-    // Collapsed = both equal cursorPos_. Direction is informational only.
-    int selectionStart() const { return selStart_; }
-    int selectionEnd() const { return selEnd_; }
-    void setSelectionRange(int start, int end) {
-        if (start < 0) start = 0;
-        if (end < start) end = start;
-        selStart_ = start; selEnd_ = end;
-        cursorPos_ = end;
-    }
+    int selectionStart() const { return sel_.start(); }
+    int selectionEnd() const { return sel_.end(); }
+    bool hasSelection() const { return !sel_.collapsed(); }
+    // Offsets are bytes. A caller naming one inside a multi-byte character (JS
+    // counts UTF-16 units, so `value.length` routinely does) is snapped onto a
+    // character boundary: a range grows outward to whole characters, a caret
+    // settles on the boundary at or before it.
+    void setSelectionRange(int start, int end);
+    void selectAll();
+    // The selected substring of the value — what a copy/cut takes.
+    std::string selectedText() const;
+    // Remove the selected range from the value and collapse the caret there.
+    // False (and no write) when nothing is selected — a cut with a collapsed
+    // caret must not eat a character.
+    bool cutSelection(dom::Element* el);
+
     bool isFocused() const { return focused_; }
     void setFocused(bool f) { focused_ = f; }
 
@@ -64,6 +73,13 @@ public:
     // click that arrives before the first frame (or after a relayout that
     // hasn't repainted yet) still lands on the right character.
     int caretIndexFromPoint(float px, float py);
+
+    // Mouse selection. A press collapses the caret at the point and pins the
+    // anchor there (`extend` = false); dragging, or a shift-click, moves only
+    // the caret end (`extend` = true), leaving the anchor where the press put it.
+    void caretToPoint(float px, float py, bool extend);
+    // Double-click: take the word under the point. Triple-click: selectAll().
+    void selectWordAtPoint(float px, float py);
 
     // Owning element (set during attachment)
     void setElement(dom::Element* el) { elem_ = el; }
@@ -119,11 +135,13 @@ private:
     bool darkScheme_() const;
     bromath::Color accentColor_() const;
 
+    // Delete the selected range from `val` in place and collapse the caret to
+    // where it was. No-op (returns false) when the selection is collapsed.
+    bool deleteSelection_(std::string& val, std::string& removed);
+
     render::Renderer* renderer_;
     dom::Element* elem_ = nullptr;
-    int cursorPos_ = 0;
-    int selStart_ = 0;
-    int selEnd_ = 0;
+    TextRange sel_;
     // Horizontal scroll of the text under the (fixed) content box, in px. Set
     // in draw() to keep the caret inside the box once the value outgrows it;
     // caretIndexFromPoint adds it back to undo the shift.

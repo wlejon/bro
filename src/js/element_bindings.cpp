@@ -1457,8 +1457,7 @@ static JSValue js_element_get_selectionStart(JSContext* ctx, JSValueConst this_v
     auto* el = getElement(this_val);
     if (!el) return JS_NULL;
     if (auto* inp = el->inputControl()) return JS_NewInt32(ctx, inp->selectionStart());
-    // Textarea: use its cursorPos as a collapsed selection for now.
-    if (auto* ta = el->textareaControl()) return JS_NewInt32(ctx, ta->cursorPos());
+    if (auto* ta = el->textareaControl()) return JS_NewInt32(ctx, ta->selectionStart());
     return JS_NULL;
 }
 static JSValue js_element_set_selectionStart(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
@@ -1467,6 +1466,8 @@ static JSValue js_element_set_selectionStart(JSContext* ctx, JSValueConst this_v
     int32_t n = 0; JS_ToInt32(ctx, &n, v);
     if (auto* inp = el->inputControl()) {
         inp->setSelectionRange(n, inp->selectionEnd() < n ? n : inp->selectionEnd());
+    } else if (auto* ta = el->textareaControl()) {
+        ta->setSelectionRange(n, ta->selectionEnd() < n ? n : ta->selectionEnd());
     }
     return JS_UNDEFINED;
 }
@@ -1474,7 +1475,7 @@ static JSValue js_element_get_selectionEnd(JSContext* ctx, JSValueConst this_val
     auto* el = getElement(this_val);
     if (!el) return JS_NULL;
     if (auto* inp = el->inputControl()) return JS_NewInt32(ctx, inp->selectionEnd());
-    if (auto* ta = el->textareaControl()) return JS_NewInt32(ctx, ta->cursorPos());
+    if (auto* ta = el->textareaControl()) return JS_NewInt32(ctx, ta->selectionEnd());
     return JS_NULL;
 }
 static JSValue js_element_set_selectionEnd(JSContext* ctx, JSValueConst this_val, JSValueConst v) {
@@ -1483,6 +1484,8 @@ static JSValue js_element_set_selectionEnd(JSContext* ctx, JSValueConst this_val
     int32_t n = 0; JS_ToInt32(ctx, &n, v);
     if (auto* inp = el->inputControl()) {
         inp->setSelectionRange(inp->selectionStart(), n);
+    } else if (auto* ta = el->textareaControl()) {
+        ta->setSelectionRange(ta->selectionStart(), n);
     }
     return JS_UNDEFINED;
 }
@@ -1494,16 +1497,15 @@ static JSValue js_element_setSelectionRange(JSContext* ctx, JSValueConst this_va
     JS_ToInt32(ctx, &start, argv[0]);
     JS_ToInt32(ctx, &end, argv[1]);
     if (auto* inp = el->inputControl()) inp->setSelectionRange(start, end);
-    else if (auto* ta = el->textareaControl()) ta->setCursorPos(end);
+    else if (auto* ta = el->textareaControl()) ta->setSelectionRange(start, end);
     return JS_UNDEFINED;
 }
 static JSValue js_element_select(JSContext* ctx, JSValueConst this_val,
                                  int /*argc*/, JSValueConst* /*argv*/) {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    const std::string& v = el->getAttribute("value");
-    int len = static_cast<int>(v.size());
-    if (auto* inp = el->inputControl()) inp->setSelectionRange(0, len);
+    if (auto* inp = el->inputControl()) inp->selectAll();
+    else if (auto* ta = el->textareaControl()) ta->selectAll();
     return JS_UNDEFINED;
 }
 

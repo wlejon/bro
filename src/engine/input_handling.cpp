@@ -251,6 +251,10 @@ static int safeGetModState(platform::Window* window, int heldModifierMask) {
     return (window ? static_cast<int>(SDL_GetModState()) : 0) | heldModifierMask;
 }
 
+int Engine::currentModState() const {
+    return safeGetModState(window_.get(), heldModifierMask_);
+}
+
 // Maps a modifier keycode to its SDL_KMOD_* bit (both left/right variants
 // fold onto the same bit, matching SDL_GetModState()'s own behavior). Returns
 // 0 for non-modifier keys.
@@ -275,6 +279,15 @@ static void safeStopTextInput(platform::Window* window) {
 // Returns true if the element is a focusable text-editing control (input or textarea)
 static bool isTextEditable(dom::Element* el) {
     return getElInput(el) || getElTextarea(el);
+}
+
+// A control that owns a text caret and selection: a <textarea>, or an <input>
+// of a text-ish type. Excludes checkbox/radio/range/color/button inputs, where
+// a press means something else entirely and a drag is not a text drag.
+static bool isCaretControl(dom::Element* el) {
+    if (getElTextarea(el)) return true;
+    if (auto* in = getElInput(el)) return in->isTextType(el);
+    return false;
 }
 
 // Build a KeyboardEvent with all modifier fields set.
@@ -715,10 +728,32 @@ void Engine::handleMouseDown(float x, float y, int button) {
                            renderer_.get(), window_.get(), &uiDirty_,
                            &overlayMgr_, OverlayContext::App,
                            contentWidth(), contentHeight()};
+
+        // What this press means for a text control's selection: place the caret
+        // (single), take a word (double), take everything (triple), or extend
+        // the existing selection from its anchor (shift). A left press on a text
+        // control also arms drag-selection; the control keeps the anchor.
+        const float focusX = x, focusY = y - static_cast<float>(contentTop());
+        PressIntent intent;
+        // Content space, the space the release path records its streak in — a
+        // window-space y here would read contentTop() px off every press and
+        // never match, so no press would ever count as a double.
+        intent.ordinal = pressOrdinal(appMouseState_, target, focusX, focusY,
+                                      util::currentTimeMs(),
+                                      inputConfig_.doubleClickThresholdMs,
+                                      inputConfig_.doubleClickDistancePx);
+        intent.extend = (mod & SDL_KMOD_SHIFT) != 0;
+
+        controlDragElement_.reset();
+        if (button == 0 && isCaretControl(target)) {
+            controlDragElement_.assign(document_.get(), target);
+            controlDragIsPanel_ = false;
+        }
+
         // pointerdown fires just before mousedown (web platform order).
         dispatchPointerAlias("pointerdown", target, evt);
         dispatchDocMousePress(cctx, appMouseState_, target, evt,
-                              x, y - static_cast<float>(contentTop()));
+                              focusX, focusY, intent);
         jsRuntime_->executePendingJobs();
         // A control press can reposition the native caret or toggle control
         // visual state without changing the DOM (e.g. clicking to move the
@@ -751,7 +786,10 @@ void Engine::handleMouseDown(float x, float y, int button) {
                 // subtrees; binding a Range to one guarantees a dangling
                 // endpoint the instant that subtree is freed.
                 if (hit.textNode && document_->ownsNode(hit.textNode)) {
-                    int detail = appMouseState_.clickCount;
+                    // The ordinal of *this* press. clickCount only advances on
+                    // release, so reading it directly here lags by one and made
+                    // double-click word-select fire on the third press.
+                    int detail = intent.ordinal;
                     if (detail >= 3) {
                         // Triple-click: select the entire text node.
                         sel->setRange(hit.textNode, 0,
@@ -875,8 +913,10 @@ void Engine::handleMouseUp(float x, float y, int button) {
 
     if (button == 0) {
         // Terminate any in-progress selection drag regardless of where the
-        // pointer released — next mousedown starts fresh.
+        // pointer released — next mousedown starts fresh. This covers both the
+        // document's Selection and a drag inside a text control.
         selectionDragging_ = false;
+        controlDragElement_.reset();
     }
 
     if (document_) {
@@ -992,6 +1032,32 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
     if (overlayActive && overlayMgr_.handleMouseMove(x, overlayMouseY(y))) {
         // Dropdown option highlight follows the pointer; it's base-only chrome.
         markAppBaseDirty();
+    }
+
+    // Drag-selection inside a text control: extend the control's own selection
+    // to the pointer. The control kept the anchor from the press, so this only
+    // has to move the caret end. Coordinates go in the control's draw space —
+    // content space for the app document, window space for a system panel.
+    //
+    // This runs before the system-panel forward below: a press in a panel's text
+    // field keeps the pointer inside that panel, and systemHandleMouseMove
+    // consumes every move it hits, so a drag routed through it would never reach
+    // the control. A drag holds the pointer the way a scrollbar drag does.
+    if (auto* dragEl = controlDragElement_.get()) {
+        float cx = x;
+        float cy = controlDragIsPanel_ ? y : y - static_cast<float>(contentTop());
+        if (auto* input = getElInput(dragEl)) {
+            input->caretToPoint(cx, cy, /*extend=*/true);
+        } else if (auto* ta = getElTextarea(dragEl)) {
+            ta->caretToPoint(cx, cy, /*extend=*/true);
+        }
+        // Selection chrome lives in the cached base layer and no DOM changed,
+        // so a re-record (not a relayout) is what makes the new range paint.
+        if (controlDragIsPanel_) systemDirty_ = true;
+        else markAppBaseDirty();
+        lastMouseX_ = x;
+        lastMouseY_ = y;
+        return;
     }
 
     // Forward to system overlay first. When the pointer is inside a visible
@@ -1629,17 +1695,18 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                 }
             }
         } else {
-            // Copy or Cut: first try the focused input/textarea; if none has
-            // a value, fall back to the document's Selection so users can
-            // copy text they highlighted with click+drag outside form fields.
+            // Copy or Cut: first try the focused input/textarea, which copies
+            // its *selected* text (a collapsed caret copies nothing, as in a
+            // browser). Otherwise fall back to the document's Selection so
+            // users can copy text they highlighted outside form fields.
             std::string text;
             bool fromFormField = false;
             if (activeEl) {
                 if (auto* input = getElInput(activeEl); input && input->isFocused()) {
-                    text = activeEl->getAttribute("value");
+                    text = input->selectedText();
                     fromFormField = true;
                 } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
-                    text = activeEl->getAttribute("value");
+                    text = textarea->selectedText();
                     fromFormField = true;
                 }
             }
@@ -1658,20 +1725,23 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             if (!clipEvt.defaultPrevented() && !text.empty()) {
                 SDL_SetClipboardText(text.c_str());
 
-                // Cut: clear the field (form field case)
+                // Cut: remove the selected range from the field (the whole value
+                // only if the whole value was selected).
                 if (keycode == SDLK_X && fromFormField && activeEl) {
-                    activeEl->setAttribute("value", "");
-                    if (auto* input = getElInput(activeEl))
-                        input->setCursorPos(0);
-                    else if (auto* textarea = getElTextarea(activeEl))
-                        textarea->setCursorPos(0);
-
-                    dom::InputEvent inputEvt("input", true, false);
-                    inputEvt.setInputType("deleteByCut");
-                    inputEvt.setIsTrusted(true);
-                    dispatchEvent(activeEl, inputEvt);
-                    if (activeEl->document()) activeEl->document()->markDirty();
-                    uiDirty_ = true;
+                    bool cut = false;
+                    if (auto* input = getElInput(activeEl)) {
+                        cut = input->cutSelection(activeEl);
+                    } else if (auto* textarea = getElTextarea(activeEl)) {
+                        cut = textarea->cutSelection(activeEl);
+                    }
+                    if (cut) {
+                        dom::InputEvent inputEvt("input", true, false);
+                        inputEvt.setInputType("deleteByCut");
+                        inputEvt.setIsTrusted(true);
+                        dispatchEvent(activeEl, inputEvt);
+                        if (activeEl->document()) activeEl->document()->markDirty();
+                        uiDirty_ = true;
+                    }
                 } else if (keycode == SDLK_X && !fromFormField) {
                     // Cut from a DOM Selection inside contenteditable.
                     auto* sel = document_->selection();
@@ -2317,12 +2387,14 @@ std::string Engine::simulateCopy() {
     auto* activeEl = document_->activeElement();
     dom::Element* target = activeEl ? activeEl : document_->body();
 
+    // A focused field copies its *selected* text — a collapsed caret copies
+    // nothing, as in a browser. Mirrors the Ctrl+C path in handleKeyDown.
     std::string text;
     if (activeEl) {
         if (auto* input = getElInput(activeEl); input && input->isFocused()) {
-            text = activeEl->getAttribute("value");
+            text = input->selectedText();
         } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
-            text = activeEl->getAttribute("value");
+            text = textarea->selectedText();
         }
     }
 
@@ -2340,12 +2412,13 @@ std::string Engine::simulateCut() {
     auto* activeEl = document_->activeElement();
     dom::Element* target = activeEl ? activeEl : document_->body();
 
+    // Cuts the selected range only — see simulateCopy. Mirrors Ctrl+X.
     std::string text;
     if (activeEl) {
         if (auto* input = getElInput(activeEl); input && input->isFocused()) {
-            text = activeEl->getAttribute("value");
+            text = input->selectedText();
         } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
-            text = activeEl->getAttribute("value");
+            text = textarea->selectedText();
         }
     }
 
@@ -2355,18 +2428,20 @@ std::string Engine::simulateCut() {
     dispatchEvent(target, clipEvt);
 
     if (!clipEvt.defaultPrevented() && !text.empty() && activeEl) {
-        activeEl->setAttribute("value", "");
-        if (auto* input = getElInput(activeEl))
-            input->setCursorPos(0);
-        else if (auto* textarea = getElTextarea(activeEl))
-            textarea->setCursorPos(0);
-
-        dom::InputEvent inputEvt("input", true, false);
-        inputEvt.setInputType("deleteByCut");
-        inputEvt.setIsTrusted(true);
-        dispatchEvent(activeEl, inputEvt);
-        if (activeEl->document()) activeEl->document()->markDirty();
-        uiDirty_ = true;
+        bool cut = false;
+        if (auto* input = getElInput(activeEl)) {
+            cut = input->cutSelection(activeEl);
+        } else if (auto* textarea = getElTextarea(activeEl)) {
+            cut = textarea->cutSelection(activeEl);
+        }
+        if (cut) {
+            dom::InputEvent inputEvt("input", true, false);
+            inputEvt.setInputType("deleteByCut");
+            inputEvt.setIsTrusted(true);
+            dispatchEvent(activeEl, inputEvt);
+            if (activeEl->document()) activeEl->document()->markDirty();
+            uiDirty_ = true;
+        }
     }
 
     return text;

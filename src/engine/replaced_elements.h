@@ -82,6 +82,25 @@ struct MouseDispatchState {
 /// edge (DOM spec). Walks up the layout tree adjusting for scroll.
 void applyMouseOffset(dom::MouseEvent& evt, dom::Element* target);
 
+/// How a press should seed a text control's selection.
+struct PressIntent {
+    /// Ordinal of the press about to be dispatched: 1 = single, 2 = the second
+    /// press of a double-click, 3 = triple. state.clickCount only advances on
+    /// *release*, so a press has to work out for itself whether it continues
+    /// the previous click's streak — reading clickCount directly at press time
+    /// is always one behind.
+    int ordinal = 1;
+    /// Shift held: extend the existing selection from its anchor instead of
+    /// collapsing the caret at the click.
+    bool extend = false;
+};
+
+/// The ordinal of the press about to be dispatched, from the rolling
+/// double-click state (same streak test dispatchDocMouseRelease applies).
+int pressOrdinal(const MouseDispatchState& state, dom::Element* target,
+                 float clientX, float clientY, double nowMs,
+                 double dblThresholdMs, float dblDistPx);
+
 /// Dispatch mousedown to `target` with full focus-transition semantics
 /// (unfocusPreviousControl → setActiveElement + focus events → focusNewControl
 /// → mousedown). Updates state.mouseDownTarget. Returns true if the press was
@@ -95,7 +114,8 @@ bool dispatchDocMousePress(
     MouseDispatchState& state,
     dom::Element* target,
     dom::MouseEvent& evt,
-    float focusX, float focusY);
+    float focusX, float focusY,
+    PressIntent intent = {});
 
 /// Dispatch mouseup to `target` and, if it matches state.mouseDownTarget,
 /// follow up with click / dblclick / contextmenu per DOM semantics. Clears
@@ -122,11 +142,15 @@ ClickDisposition unfocusPreviousControl(
     dom::Element* prevActive);
 
 /// Activate a newly-clicked replaced element (toggle select dropdown,
-/// focus input/textarea, handle checkbox/radio/range/color/number).
+/// focus input/textarea, handle checkbox/radio/range/color/number). For text
+/// controls `intent` decides what the press does to the selection: place the
+/// caret, extend from the anchor (shift), take a word (double), or take all
+/// (triple).
 void focusNewControl(
     const ControlContext& ctx,
     dom::Element* target,
-    float x, float y);
+    float x, float y,
+    PressIntent intent = {});
 
 // ---------------------------------------------------------------------------
 // Inline helpers

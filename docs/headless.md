@@ -61,8 +61,8 @@ Mouse coordinates are **viewport-relative**, matching `getBoundingClientRect()` 
 | `keyUp(keycode [, scancode, mod])` | Simulate a key release |
 | `textInput(text)` | Simulate text input (for typing into focused input/textarea) |
 | `paste(text)` | Simulate paste on focused element with the given text (dispatches paste event, inserts into input/textarea) |
-| `copy()` | Simulate copy on focused element (dispatches copy event, returns copied text) |
-| `cut()` | Simulate cut on focused element (dispatches cut event, clears field, returns cut text) |
+| `copy()` | Simulate copy on focused element (dispatches copy event, returns the selected text — a collapsed caret copies nothing) |
+| `cut()` | Simulate cut on focused element (dispatches cut event, removes the selected range, returns the cut text) |
 | `dropFiles(x, y, paths)` | Simulate file drop at coordinates. `paths` is an array of file path strings. Dispatches dragenter → dragover → drop. |
 | `dropText(x, y, text)` | Simulate text drop at coordinates. Dispatches dragenter → dragover → drop with text data. |
 | `resize(w, h)` | Resize the virtual viewport |

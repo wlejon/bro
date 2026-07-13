@@ -966,6 +966,10 @@ private:
     // See safeGetModState() in input_handling.cpp.
     int heldModifierMask_ = 0;
 
+    /// Current modifier bits: the OS keyboard, plus any modifier held down via
+    /// simulated key events (headless). See safeGetModState in input_handling.
+    int currentModState() const;
+
     // Mouse-driven text selection. `selectionAnchor*` is pinned on mousedown
     // (the static endpoint of a drag); selectionDragging_ means subsequent
     // mousemove events should extend the focus to follow the cursor.
@@ -978,6 +982,15 @@ private:
     float selectionPressX_ = 0.0f;
     float selectionPressY_ = 0.0f;
     bool  selectionPastThreshold_ = false;
+
+    // Drag-selection inside a text control (<input> / <textarea>). Those manage
+    // their own selection rather than the document's, so the engine only tracks
+    // which control the press landed in — the control itself holds the anchor.
+    // A panel's controls draw in window space and the app document's in content
+    // space, so the space the drag point must be given in depends on which
+    // document the control belongs to.
+    dom::ElementHandle controlDragElement_;
+    bool controlDragIsPanel_ = false;
 
     // Viewport scrolling
     float scrollY_ = 0.0f;

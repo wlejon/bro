@@ -1,5 +1,5 @@
 #include "layout/el_textarea.h"
-#include "layout/control_text_hit.h"
+#include "layout/control_text.h"
 #include "layout/draw_traversal.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
@@ -175,40 +175,67 @@ static int lineLength(const std::string& val, int start) {
 KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod) {
     KeyHandleResult r;
     std::string val = readCurrentValue(el);
-    int pos = std::clamp(cursorPos_, 0, static_cast<int>(val.size()));
+    const int len = static_cast<int>(val.size());
+    sel_.clampTo(len);
+    const int pos = sel_.caret;
+    const bool shift = (mod & SDL_KMOD_SHIFT) != 0;
+
+    // Shift moves the caret end only, leaving the anchor pinned — that is what
+    // grows a selection. Without shift the caret and anchor move together.
+    auto moveCaret = [&](int to) {
+        if (shift) sel_.caret = to;
+        else sel_.collapseTo(to);
+    };
 
     if (keycode == SDLK_BACKSPACE) {
-        if (pos > 0) {
-            r.inputData = val.substr(pos - 1, 1);
-            val.erase(pos - 1, 1);
-            setCursorPos(pos - 1);
+        if (deleteSelection_(val, r.inputData)) {
+            el->setAttribute("value", val);
+            r.dispatchInput = true;
+            r.inputType = "deleteContentBackward";
+        } else if (pos > 0) {
+            int prev = utf8Prev(val, pos);
+            r.inputData = val.substr(prev, pos - prev);
+            val.erase(prev, pos - prev);
+            setCursorPos(prev);
             el->setAttribute("value", val);
             r.dispatchInput = true;
             r.inputType = "deleteContentBackward";
         }
         r.handled = true;
     } else if (keycode == SDLK_DELETE) {
-        if (pos < static_cast<int>(val.size())) {
-            r.inputData = val.substr(pos, 1);
-            val.erase(pos, 1);
+        if (deleteSelection_(val, r.inputData)) {
+            el->setAttribute("value", val);
+            r.dispatchInput = true;
+            r.inputType = "deleteContentForward";
+        } else if (pos < len) {
+            int next = utf8Next(val, pos);
+            r.inputData = val.substr(pos, next - pos);
+            val.erase(pos, next - pos);
             el->setAttribute("value", val);
             r.dispatchInput = true;
             r.inputType = "deleteContentForward";
         }
         r.handled = true;
     } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
-        val.insert(pos, 1, '\n');
-        setCursorPos(pos + 1);
+        std::string discarded;
+        deleteSelection_(val, discarded);   // Enter replaces a selection
+        int at = sel_.caret;
+        val.insert(at, 1, '\n');
+        setCursorPos(at + 1);
         el->setAttribute("value", val);
         r.handled = true;
         r.dispatchInput = true;
         r.inputData = "\n";
         r.inputType = "insertLineBreak";
     } else if (keycode == SDLK_LEFT) {
-        if (pos > 0) setCursorPos(pos - 1);
+        // An unshifted arrow against a selection collapses to that edge rather
+        // than stepping — the selection itself was the movement.
+        if (!shift && hasSelection()) setCursorPos(sel_.start());
+        else moveCaret(utf8Prev(val, pos));
         r.handled = true;
     } else if (keycode == SDLK_RIGHT) {
-        if (pos < static_cast<int>(val.size())) setCursorPos(pos + 1);
+        if (!shift && hasSelection()) setCursorPos(sel_.end());
+        else moveCaret(utf8Next(val, pos));
         r.handled = true;
     } else if (keycode == SDLK_UP || keycode == SDLK_DOWN) {
         // Move by VISUAL line so wrapped rows behave like the browser. Fall back
@@ -219,8 +246,8 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
             int col = pos - static_cast<int>(vls[li].start);
             int target = li + (keycode == SDLK_UP ? -1 : 1);
             if (target >= 0 && target < static_cast<int>(vls.size())) {
-                int len = static_cast<int>(vls[target].end - vls[target].start);
-                setCursorPos(static_cast<int>(vls[target].start) + std::min(col, len));
+                int tlen = static_cast<int>(vls[target].end - vls[target].start);
+                moveCaret(static_cast<int>(vls[target].start) + std::min(col, tlen));
             }
         } else {
             int line, col;
@@ -228,14 +255,14 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
             if (keycode == SDLK_UP) {
                 if (line > 0) {
                     int prev = lineStart(val, line - 1);
-                    setCursorPos(prev + std::min(col, lineLength(val, prev)));
+                    moveCaret(prev + std::min(col, lineLength(val, prev)));
                 }
             } else {
                 int nextStart = -1, curLine = 0;
                 for (int i = 0; i < static_cast<int>(val.size()); ++i) {
                     if (val[i] == '\n') { if (curLine == line) { nextStart = i + 1; break; } ++curLine; }
                 }
-                if (nextStart >= 0) setCursorPos(nextStart + std::min(col, lineLength(val, nextStart)));
+                if (nextStart >= 0) moveCaret(nextStart + std::min(col, lineLength(val, nextStart)));
             }
         }
         r.handled = true;
@@ -243,22 +270,22 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
         // Start of the current VISUAL line.
         if (wrapWidth_ > 0 && renderer_) {
             auto vls = buildVisualLines(val, wrapWidth_, getFontRef(), renderer_);
-            setCursorPos(static_cast<int>(vls[caretVisualLine(vls, pos)].start));
+            moveCaret(static_cast<int>(vls[caretVisualLine(vls, pos)].start));
         } else {
             int ls = pos;
             while (ls > 0 && val[ls - 1] != '\n') --ls;
-            setCursorPos(ls);
+            moveCaret(ls);
         }
         r.handled = true;
     } else if (keycode == SDLK_END) {
         // End of the current VISUAL line.
         if (wrapWidth_ > 0 && renderer_) {
             auto vls = buildVisualLines(val, wrapWidth_, getFontRef(), renderer_);
-            setCursorPos(static_cast<int>(vls[caretVisualLine(vls, pos)].end));
+            moveCaret(static_cast<int>(vls[caretVisualLine(vls, pos)].end));
         } else {
             int le = pos;
             while (le < static_cast<int>(val.size()) && val[le] != '\n') ++le;
-            setCursorPos(le);
+            moveCaret(le);
         }
         r.handled = true;
     } else if (keycode == SDLK_ESCAPE) {
@@ -266,7 +293,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
         r.handled = true;
         r.unfocus = true;
     } else if (util::hasPrimaryMod(mod) && keycode == SDLK_A) {
-        setCursorPos(static_cast<int>(val.size()));
+        selectAll();
         r.handled = true;
     }
 
@@ -278,7 +305,13 @@ KeyHandleResult ElTextarea::handleTextInput(dom::Element* el, const std::string&
     if (!focused_) return r;
 
     std::string val = readCurrentValue(el);
-    int pos = std::clamp(cursorPos_, 0, static_cast<int>(val.size()));
+    sel_.clampTo(static_cast<int>(val.size()));
+
+    // Typing over a selection replaces it.
+    std::string discarded;
+    deleteSelection_(val, discarded);
+
+    int pos = sel_.caret;
     val.insert(pos, text);
     setCursorPos(pos + static_cast<int>(text.size()));
     el->setAttribute("value", val);
@@ -313,6 +346,18 @@ void ElTextarea::getContentSize(float& w, float& h) {
     h = rows() * lineH;
 }
 
+bromath::Color ElTextarea::accentColor_() const {
+    bromath::Color accent = cfromColor8({0, 120, 215, 255});
+    if (elem_) {
+        auto& style = elem_->computedStyle();
+        auto it = style.find("accent-color");
+        if (it != style.end() && !it->second.empty() && it->second != "auto") {
+            accent = DrawTraversal::parseColor(it->second);
+        }
+    }
+    return accent;
+}
+
 ElTextarea::DrawPos ElTextarea::contentBox() const {
     if (!elem_) return {0, 0, 0, 0};
     // Ancestor-transform-projected, same as ElInput — a textarea under a zoomed
@@ -325,7 +370,7 @@ ElTextarea::DrawPos ElTextarea::contentBox() const {
 // box's top-left, shifted up by scrollY_, so the inverse is: which row does y
 // fall in, then which offset within that row's text run does x fall on.
 int ElTextarea::caretIndexFromPoint(float px, float py) {
-    if (!renderer_ || !elem_) return cursorPos_;
+    if (!renderer_ || !elem_) return sel_.caret;
 
     std::string val = readCurrentValue(elem_);
     if (val.empty()) return 0;
@@ -333,7 +378,7 @@ int ElTextarea::caretIndexFromPoint(float px, float py) {
     render::FontRef fr = getFontRef();
     auto lm = render::LineMetrics::from(renderer_->measureText("M", fr));
     float lineHeight = lm.lineHeight();
-    if (lineHeight <= 0.0f) return cursorPos_;
+    if (lineHeight <= 0.0f) return sel_.caret;
 
     DrawPos box = contentBox();
 
@@ -348,6 +393,67 @@ int ElTextarea::caretIndexFromPoint(float px, float py) {
 
     float relX = px - box.x;
     return caretOffsetForX(val, vls[line].start, vls[line].end, relX, fr, renderer_);
+}
+
+void ElTextarea::caretToPoint(float px, float py, bool extend) {
+    int idx = caretIndexFromPoint(px, py);
+    if (extend) sel_.caret = idx;   // anchor stays pinned where the drag began
+    else sel_.collapseTo(idx);
+}
+
+void ElTextarea::selectWordAtPoint(float px, float py) {
+    std::string val = readCurrentValue(elem_);
+    int lo = 0, hi = 0;
+    wordBoundsAt(val, caretIndexFromPoint(px, py), lo, hi);
+    sel_.set(lo, hi);
+}
+
+void ElTextarea::setSelectionRange(int start, int end) {
+    const std::string val = readCurrentValue(elem_);
+    const int len = static_cast<int>(val.size());
+    start = std::clamp(start, 0, len);
+    end = std::clamp(end, 0, len);
+    if (end <= start) {
+        sel_.collapseTo(utf8SnapBack(val, start));
+    } else {
+        sel_.set(utf8SnapBack(val, start), utf8SnapFwd(val, end));
+    }
+}
+
+void ElTextarea::selectAll() {
+    sel_.set(0, static_cast<int>(readCurrentValue(elem_).size()));
+}
+
+std::string ElTextarea::selectedText() const {
+    if (sel_.collapsed()) return "";
+    std::string val = readCurrentValue(elem_);
+    int len = static_cast<int>(val.size());
+    int s = std::clamp(sel_.start(), 0, len);
+    int e = std::clamp(sel_.end(), 0, len);
+    return val.substr(s, e - s);
+}
+
+bool ElTextarea::cutSelection(dom::Element* el) {
+    if (!el || sel_.collapsed()) return false;
+    std::string val = readCurrentValue(el);
+    sel_.clampTo(static_cast<int>(val.size()));
+    std::string removed;
+    if (!deleteSelection_(val, removed)) return false;
+    el->setAttribute("value", val);
+    return true;
+}
+
+bool ElTextarea::deleteSelection_(std::string& val, std::string& removed) {
+    if (sel_.collapsed()) return false;
+    int len = static_cast<int>(val.size());
+    // Erase whole characters — see ElInput::deleteSelection_.
+    int s = utf8SnapBack(val, std::clamp(sel_.start(), 0, len));
+    int e = utf8SnapFwd(val, std::clamp(sel_.end(), 0, len));
+    if (s == e) return false;
+    removed = val.substr(s, e - s);
+    val.erase(s, e - s);
+    sel_.collapseTo(s);
+    return true;
 }
 
 void ElTextarea::draw(render::Renderer* renderer,
@@ -397,7 +503,7 @@ void ElTextarea::draw(render::Renderer* renderer,
     auto lineStr = [&](const VisLine& v) { return text.substr(v.start, v.end - v.start); };
 
     if (focused_) {
-        int cpos = std::clamp(cursorPos_, 0, static_cast<int>(text.size()));
+        int cpos = std::clamp(sel_.caret, 0, static_cast<int>(text.size()));
         int cursorLine = caretVisualLine(vls, cpos);
         float cursorY = cursorLine * lineHeight;
         if (cursorY < scrollY_) scrollY_ = cursorY;
@@ -429,6 +535,37 @@ void ElTextarea::draw(render::Renderer* renderer,
     float baseX = x;
     float baseY = y - scrollY_;
 
+    // Selection wash, behind the text. A selection spanning rows paints one band
+    // per visual line: the intersection of the selected range with that line.
+    // Rows fully inside the range extend a little past their last glyph to show
+    // the swallowed newline, as browsers do.
+    if (focused_ && !isPlaceholder && hasSelection()) {
+        const int selS = std::clamp(sel_.start(), 0, static_cast<int>(text.size()));
+        const int selE = std::clamp(sel_.end(), 0, static_cast<int>(text.size()));
+        const bromath::Color wash = selectionFill(accentColor_());
+        const float breakW = renderer_->measureText(" ", fontRef).width;
+        for (int i = 0; i < static_cast<int>(vls.size()); ++i) {
+            float lineY = baseY + i * lineHeight;
+            if (lineY + lineHeight < y) continue;
+            if (lineY > y + h) break;
+
+            int ls = static_cast<int>(vls[i].start);
+            int le = static_cast<int>(vls[i].end);
+            int a = std::max(selS, ls);
+            int b = std::min(selE, le);
+            if (a > b) continue;                    // line outside the selection
+            if (a == b && !(selS <= ls && selE > le)) continue;  // nothing on this row
+
+            float ax = baseX + runWidthTo(text, vls[i].start, static_cast<size_t>(a),
+                                          fontRef, renderer_);
+            float bx = baseX + runWidthTo(text, vls[i].start, static_cast<size_t>(b),
+                                          fontRef, renderer_);
+            // The line break itself is selected: carry the band past the text.
+            if (selE > le) bx += breakW;
+            if (bx > ax) renderer_->fillRect(ax, lineY, bx - ax, lineHeight, wash);
+        }
+    }
+
     for (int i = 0; i < static_cast<int>(vls.size()); ++i) {
         float lineY = baseY + i * lineHeight;
         if (lineY + lineHeight < y) continue;
@@ -439,15 +576,11 @@ void ElTextarea::draw(render::Renderer* renderer,
     }
 
     if (focused_) {
-        int cpos = std::clamp(cursorPos_, 0, static_cast<int>(val.size()));
+        int cpos = std::clamp(sel_.caret, 0, static_cast<int>(val.size()));
         int cursorLine = caretVisualLine(vls, cpos);
 
-        float cursorX = baseX;
-        if (cpos > static_cast<int>(vls[cursorLine].start)) {
-            auto ctm = renderer_->measureText(
-                text.substr(vls[cursorLine].start, cpos - vls[cursorLine].start), fontRef);
-            cursorX += ctm.width;
-        }
+        float cursorX = baseX + runWidthTo(text, vls[cursorLine].start,
+                                           static_cast<size_t>(cpos), fontRef, renderer_);
 
         float cursorTop = baseY + cursorLine * lineHeight;
         float cursorBottom = cursorTop + lineHeight;

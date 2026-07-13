@@ -1269,7 +1269,24 @@ bool Engine::systemHandleMouseDown(float x, float y, int button) {
             evt.setIsTrusted(true);
             applyMouseOffset(evt, target);
 
-            dispatchDocMousePress(cctx, doc.mouseState, target, evt, x, y);
+            // Panel text fields select like the app's: caret / word / all by
+            // click ordinal, shift to extend, and a left press arms a drag.
+            PressIntent intent;
+            intent.ordinal = pressOrdinal(doc.mouseState, target, x, y,
+                                          util::currentTimeMs(),
+                                          inputConfig_.doubleClickThresholdMs,
+                                          inputConfig_.doubleClickDistancePx);
+            intent.extend = (currentModState() & SDL_KMOD_SHIFT) != 0;
+
+            controlDragElement_.reset();
+            if (button == 0 &&
+                (getElTextarea(target) ||
+                 (getElInput(target) && getElInput(target)->isTextType(target)))) {
+                controlDragElement_.assign(doc.document.get(), target);
+                controlDragIsPanel_ = true;
+            }
+
+            dispatchDocMousePress(cctx, doc.mouseState, target, evt, x, y, intent);
             return true;
         }
     }

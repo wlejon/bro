@@ -182,10 +182,22 @@ ClickDisposition unfocusPreviousControl(
 // Focus new control
 // ---------------------------------------------------------------------------
 
+int pressOrdinal(const MouseDispatchState& state, dom::Element* target,
+                 float clientX, float clientY, double nowMs,
+                 double dblThresholdMs, float dblDistPx) {
+    const bool continuesStreak =
+        target && state.lastClickTarget.get() == target &&
+        (nowMs - state.lastClickTimeMs) < dblThresholdMs &&
+        std::fabs(clientX - state.lastClickX) < dblDistPx &&
+        std::fabs(clientY - state.lastClickY) < dblDistPx;
+    return continuesStreak ? state.clickCount + 1 : 1;
+}
+
 void focusNewControl(
     const ControlContext& ctx,
     dom::Element* target,
-    float x, float y)
+    float x, float y,
+    PressIntent intent)
 {
     auto* newInput = getElInput(target);
     auto* newTextarea = getElTextarea(target);
@@ -319,11 +331,13 @@ void focusNewControl(
                     dispatchInputEvent(ctx, target);
                 }
             }
-            // Place the caret where the click landed. A press on the spin
-            // buttons isn't a caret press — it just steps the value, and the
-            // caret stays at the end of the number it wrote.
+            // Seed the selection from the click. A press on the spin buttons
+            // isn't a caret press — it just steps the value, and the caret
+            // stays at the end of the number it wrote.
             if (!onSpinButton) {
-                newInput->setCursorPos(newInput->caretIndexFromPoint(x, y));
+                if (intent.ordinal >= 3)      newInput->selectAll();
+                else if (intent.ordinal == 2) newInput->selectWordAtPoint(x, y);
+                else                          newInput->caretToPoint(x, y, intent.extend);
             }
             safeStartTextInput(ctx.window);
             *ctx.dirtyFlag = true;
@@ -334,7 +348,9 @@ void focusNewControl(
         }
     } else if (newTextarea) {
         newTextarea->setFocused(true);
-        newTextarea->setCursorPos(newTextarea->caretIndexFromPoint(x, y));
+        if (intent.ordinal >= 3)      newTextarea->selectAll();
+        else if (intent.ordinal == 2) newTextarea->selectWordAtPoint(x, y);
+        else                          newTextarea->caretToPoint(x, y, intent.extend);
         safeStartTextInput(ctx.window);
         *ctx.dirtyFlag = true;
     } else if (newSelect) {
@@ -416,7 +432,8 @@ bool dispatchDocMousePress(
     MouseDispatchState& state,
     dom::Element* target,
     dom::MouseEvent& evt,
-    float focusX, float focusY) {
+    float focusX, float focusY,
+    PressIntent intent) {
 
     if (!ctx.document) { state.mouseDownTarget.reset(); return false; }
     if (!target) { state.mouseDownTarget.reset(); return false; }
@@ -439,7 +456,7 @@ bool dispatchDocMousePress(
         dispatchFocusEvents(ctx, prevActive, target);
     }
 
-    focusNewControl(ctx, target, focusX, focusY);
+    focusNewControl(ctx, target, focusX, focusY, intent);
 
     js::dispatchDomEvent(ctx.jsCtx, target, evt);
     state.mouseDownTarget.assign(ctx.document, target);
