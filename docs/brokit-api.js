@@ -11,6 +11,19 @@
 //     const os = require('os');           // or require('node:os')
 //     const cp = require('child_process'); // or require('node:child_process')
 //
+//   Your own files — require() also loads JS and JSON off disk, so an app's JS
+//   can be split across files instead of living in one script:
+//     const { photoFeats } = require('./photo_feats.js');  // .js optional
+//     const config = require('./config.json');             // parsed
+//     const shared = require('../lib/shared');             // ../ and absolute too
+//
+//   Relative paths resolve against the directory of the file that CALLS require
+//   (as in Node), so a module can require its own siblings wherever it is loaded
+//   from. A module is evaluated once and cached by resolved path: two requires of
+//   the same file share one instance, so module-level state is real state. Both
+//   `module.exports = {...}` and `exports.foo = ...` work, and the module sees
+//   __filename / __dirname.
+//
 //   Web-compatible globals — available on globalThis, matching browser APIs:
 //     fetch, URL, URLSearchParams, crypto, WebSocket, EventSource,
 //     TextEncoder, TextDecoder, ReadableStream, WritableStream,
