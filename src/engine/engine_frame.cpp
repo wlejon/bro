@@ -570,13 +570,21 @@ void Engine::run() {
 
         double tRaster = util::currentTimeMs();
 
-        // 5a. Wait for the layout thread and consume results. Layout was
-        //     signaled in step 4 and ran in parallel with the JS phase
-        //     wrap-up + scene/canvas updates above. We must complete layout
-        //     and any post-layout JS *before* signaling raster so the worker
-        //     reads a fully resolved tree. (Trade-off: layout no longer
-        //     overlaps with composite + swap; raster does. Raster is the
-        //     heavier of the two and benefits more from the vsync window.)
+        // 5a. Wait for the layout thread and consume results.
+        //
+        //     Layout is on its own thread but is NOT, today, overlapped with
+        //     anything: step 4 signals it only after the JS phase and the
+        //     scene/canvas updates have already finished, and we block on it
+        //     here a few lines later. In wall-clock terms it is sequential —
+        //     the thread buys thread-affinity for the layout data, not
+        //     concurrency. Don't read the handoff as a parallelism win.
+        //
+        //     It has to stay this way as long as raster is signaled from the
+        //     resolved tree: layout and any post-layout JS must complete
+        //     *before* 5a2 so the raster worker reads a fully resolved tree.
+        //     (Trade-off: layout does not overlap composite + swap; raster
+        //     does. Raster is the heavier of the two and benefits more from
+        //     the vsync window.)
         if (layoutSignaled) {
             if (layoutPipeline_->waitClaimDone()) {
                 if (document_ && document_->documentElement()) {

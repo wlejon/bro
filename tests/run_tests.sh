@@ -3,8 +3,10 @@
 # Usage: ./tests/run_tests.sh [filter]
 #   filter: optional substring to match test file paths (e.g. "dom" or "click")
 #
-# Discovers all tests/*/test_*.js files, runs each via bro-headless --no-gpu,
-# and reports pass/fail with a summary.
+# Discovers all tests/*/test_*.js files, runs each via bro-headless, and reports
+# pass/fail with a summary. Runs on the GPU path (headless's default) so the
+# tests exercise the same renderer, WebGL, and layer compositing that ship —
+# CPU-only raster is a different code path and would leave those untested.
 
 set -uo pipefail
 

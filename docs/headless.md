@@ -139,7 +139,7 @@ screenshot('loaded.png');
 
 ## Integration tests
 
-The `tests/` directory contains integration tests that exercise the engine via `bro-headless --no-gpu`. Run them with:
+The `tests/` directory contains integration tests that exercise the engine via `bro-headless` on its default GPU path — the same renderer, WebGL, and layer compositing the shipping runtime uses. (`--no-gpu` selects the CPU raster fallback, which is a different code path; running the suite there would leave the real one untested.) Run them with:
 
 ```bash
 bash tests/run_tests.sh          # run all tests

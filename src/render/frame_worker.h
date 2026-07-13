@@ -74,10 +74,16 @@ public:
     /// Block until the worker is Idle. Used at shutdown / before destructive
     /// operations (e.g. resizing pools) where we need a quiescent worker.
     /// Drops a published result on the way through.
+    ///
+    /// Shutdown counts as quiescent and returns. It is terminal — nothing ever
+    /// moves the state out of it — so waiting for Idle from there would block
+    /// forever. Either side may postShutdown() at any time, including while
+    /// this call is parked on the wait below, so the check has to be inside the
+    /// loop, not just at the top.
     void waitUntilIdle() {
         for (;;) {
             uint32_t s = state_.load(std::memory_order_acquire);
-            if (s == Idle) return;
+            if (s == Idle || s == Shutdown) return;
             if (s == ResultReady) {
                 tryClaimResult();
                 return;
