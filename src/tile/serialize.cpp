@@ -161,7 +161,23 @@ std::optional<TileGrid> deserialize(const std::vector<uint8_t>& bytes) {
         names.push_back(std::move(name));
     }
 
-    const size_t cellCount = static_cast<size_t>(width) * static_cast<size_t>(height);
+    // Validate the payload BEFORE allocating the grid. width/height are
+    // attacker-controlled int32s: a 20-byte blob claiming 2^31 x 2^31 would
+    // otherwise size the planes off the header alone and blow up on alloc
+    // (breaking the "never throws" contract). Every cell costs a fixed number
+    // of payload bytes, so the remaining byte count bounds the legal cell
+    // count exactly. Divide rather than multiply so the check cannot overflow.
+    const uint64_t bytesPerCell = 2ull * layerCount + // layer planes (uint16)
+                                  2ull +              // elevation    (int16)
+                                  4ull;               // flags        (uint32)
+    const uint64_t cells = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+    const size_t remaining = bytes.size() - off;
+    if (cells > remaining / bytesPerCell)
+        return std::nullopt; // truncated: fewer payload bytes than cells claimed
+    if (cells * bytesPerCell != remaining)
+        return std::nullopt; // oversized: trailing garbage
+
+    const size_t cellCount = static_cast<size_t>(cells);
     const Topology topo = static_cast<Topology>(topoByte);
 
     TileGrid grid(width, height, topo, names);

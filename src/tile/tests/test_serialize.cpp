@@ -127,6 +127,29 @@ void run_serialize_tests() {
         std::vector<uint8_t> trailing = good;
         trailing.push_back(0xAA);
         CHECK(!deserialize(trailing).has_value());
+
+        // Hostile header: enormous dimensions with no payload behind them.
+        // The grid must be sized from the *payload*, not from the header's
+        // claim — otherwise this reserves ~2^62 cells and dies on alloc,
+        // breaking the documented "never throws" contract. Rejecting cheaply
+        // (and quickly) is the whole point.
+        auto withDims = [&](int32_t w, int32_t h) {
+            std::vector<uint8_t> b = good;
+            for (int i = 0; i < 4; ++i) {
+                b[8 + i]  = static_cast<uint8_t>((static_cast<uint32_t>(w) >> (8 * i)) & 0xFF);
+                b[12 + i] = static_cast<uint8_t>((static_cast<uint32_t>(h) >> (8 * i)) & 0xFF);
+            }
+            return b;
+        };
+        CHECK(!deserialize(withDims(0x7FFFFFFF, 0x7FFFFFFF)).has_value()); // would overflow
+        CHECK(!deserialize(withDims(0x40000000, 4)).has_value());          // huge but not overflowing
+        CHECK(!deserialize(withDims(1 << 20, 1 << 20)).has_value());       // ~1e12 cells
+        CHECK(!deserialize(withDims(4, 4)).has_value());                   // plausible, still != payload
+
+        // Dimensions must be positive.
+        CHECK(!deserialize(withDims(0, 3)).has_value());
+        CHECK(!deserialize(withDims(-1, 3)).has_value());
+        CHECK(!deserialize(withDims(4, -3)).has_value());
     }
 
     // -- Minimal 1x1 single-layer ---------------------------------------------

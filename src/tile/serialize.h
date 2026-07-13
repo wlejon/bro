@@ -33,7 +33,11 @@ namespace bro::tile {
 std::vector<uint8_t> serialize(const TileGrid& g);
 
 // Parse a buffer produced by serialize(). Returns nullopt on bad magic,
-// unknown version, or truncated/oversized data. Never throws.
+// unknown version, or truncated/oversized data.
+//
+// Never throws, including on hostile input: the grid is sized from the actual
+// payload length, not from the header's width/height claim, so a short blob
+// declaring 2^31 x 2^31 cells is rejected rather than attempted.
 std::optional<TileGrid> deserialize(const std::vector<uint8_t>& bytes);
 
 } // namespace bro::tile
