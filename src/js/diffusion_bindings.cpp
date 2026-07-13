@@ -597,11 +597,15 @@ static JSValue js_pipeline_clearControlNets(JSContext* ctx, JSValueConst this_va
     return JS_UNDEFINED;
 }
 
-// loadControlDictionary(path) — load a conditioning-space control dictionary
-// (a BCD1 file of named direction axes built offline). Replaces any loaded
-// axes and resets weights. The axes steer generate()/prime() once weighted via
-// setControl(). The dictionary's dim must match the model's text encoder (Gemma
-// 2304 for Sana); a mismatch throws at the next generate()/prime().
+// loadControlDictionary(path, { merge = false }) — load a conditioning-space
+// control dictionary (a BCD1 file of named direction axes built offline). By
+// default this replaces any loaded axes and resets weights; with { merge: true }
+// the file's axes are ADDED to those already loaded (a same-named axis is
+// overwritten), so banks of different provenance — a word-derived bank, an
+// SAE-discovered one — can be stacked without concatenating them offline.
+// The axes steer generate()/prime() once weighted via setControl(). The
+// dictionary's dim must match the model's text encoder (Gemma 2304 for Sana);
+// a mismatch throws at the next generate()/prime().
 static JSValue js_pipeline_loadControlDictionary(JSContext* ctx, JSValueConst this_val,
                                                  int argc, JSValueConst* argv) {
     auto* w = pipelineSelf(ctx, this_val);
@@ -609,8 +613,14 @@ static JSValue js_pipeline_loadControlDictionary(JSContext* ctx, JSValueConst th
     std::string path;
     if (argc < 1 || !argStr(ctx, argv[0], path))
         return JS_ThrowTypeError(ctx, "loadControlDictionary(path): path string required");
+    bool merge = false;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        JSValue m = JS_GetPropertyStr(ctx, argv[1], "merge");
+        if (!JS_IsUndefined(m)) merge = JS_ToBool(ctx, m);
+        JS_FreeValue(ctx, m);
+    }
     try {
-        w->pipeline->cond_control().load(resolveAppPath(path));
+        w->pipeline->cond_control().load(resolveAppPath(path), merge);
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "loadControlDictionary: %s", e.what());
     }

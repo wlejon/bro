@@ -378,9 +378,21 @@ class Pipeline {
 
   /**
    * Load a BCD1 control dictionary, replacing loaded axes and zeroing weights.
+   *
+   * With `{merge: true}` the file's axes are ADDED to those already loaded
+   * instead (a same-named axis is overwritten, its weight reset). Banks come
+   * from different discoveries — a word-derived one, an SAE-discovered one —
+   * and stacking them needs no offline concatenation. A merged file must agree
+   * on the encoder dim with what is already loaded, or it throws.
+   *
+   *   pipeline.loadControlDictionary('assets/axes_turbo.bcd1');
+   *   pipeline.loadControlDictionary('assets/axes_sae_deck.bcd1', { merge: true });
+   *   pipeline.setControl({ 'color.temperature': 0.8, 'sae.4571': -3 });
+   *
    * @param {string} path
+   * @param {{merge?: boolean}} [opts]
    */
-  loadControlDictionary(path) {}
+  loadControlDictionary(path, opts) {}
 
   /**
    * @returns {string[]} names of every registered axis (dictionary + runtime).
