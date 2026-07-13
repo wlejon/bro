@@ -682,6 +682,43 @@ static JSValue js_pipeline_clearControl(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+// setControlBudget(alpha) — cap how much a STACK of axes may inject, in the
+// same alpha units the weights use. Individual sliders are bounded but their
+// sum is not, and past a model-dependent length the injection, not the prompt,
+// is what gets rendered. Over budget, every active axis is scaled by one common
+// factor at apply() time (the mix survives, the overdrive doesn't). 0 = off.
+static JSValue js_pipeline_setControlBudget(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "setControlBudget: not a Pipeline");
+    double alpha = 0.0;
+    if (argc < 1 || JS_ToFloat64(ctx, &alpha, argv[0]) != 0)
+        return JS_ThrowTypeError(ctx, "setControlBudget(alpha): numeric alpha required");
+    w->pipeline->cond_control().set_budget((float)alpha);
+    return JS_UNDEFINED;
+}
+
+// controlNorm() -> {norm, budget, clamped, scale} — the current stack's length
+// in alpha units, what it is allowed to spend, and whether apply() will hold it
+// back. The numbers a stack meter is drawn from; no render needed.
+static JSValue js_pipeline_controlNorm(JSContext* ctx, JSValueConst this_val,
+                                       int, JSValueConst*) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "controlNorm: not a Pipeline");
+    const auto& cc = w->pipeline->cond_control();
+    const float norm = cc.active_norm();
+    const float budget = cc.budget();
+    const bool clamped = budget > 0.0f && norm > budget;
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "norm", JS_NewFloat64(ctx, norm));
+    JS_SetPropertyStr(ctx, o, "budget", JS_NewFloat64(ctx, budget));
+    JS_SetPropertyStr(ctx, o, "clamped", JS_NewBool(ctx, clamped));
+    // The factor apply() will multiply every active axis by (1.0 when in budget).
+    JS_SetPropertyStr(ctx, o, "scale",
+                      JS_NewFloat64(ctx, clamped ? budget / norm : 1.0));
+    return o;
+}
+
 // dispose() — deterministically free the underlying pipeline (and its GPU
 // weights) NOW, instead of waiting for the JS wrapper to be garbage-collected.
 // A caller that reloads a large model into a memory-tight device (e.g. swapping
@@ -1294,6 +1331,8 @@ static void registerPipelineClass(JSContext* ctx) {
         .method_raw("loadControlDictionary", js_pipeline_loadControlDictionary, 1)
         .method_raw("setControl",         js_pipeline_setControl,         2)
         .method_raw("clearControl",       js_pipeline_clearControl,       0)
+        .method_raw("setControlBudget",   js_pipeline_setControlBudget,   1)
+        .method_raw("controlNorm",        js_pipeline_controlNorm,        0)
         .method_raw("dispose",            js_pipeline_dispose,            0)
         .method_raw("controlAxes",        js_pipeline_controlAxes,        0)
         .method_raw("controlVector",      js_pipeline_controlVector,      1)

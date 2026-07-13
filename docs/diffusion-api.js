@@ -418,6 +418,28 @@ class Pipeline {
   /** Remove one axis (runtime or dictionary) by name; no-op if unknown. */
   removeControl(name) {}
 
+  /**
+   * Cap how hard a STACK of axes may push, in the same alpha units the weights
+   * use. Each axis is added to every token row, so what the denoiser sees is
+   * the SUM: ten axes at +2 push harder than one at +10, and past a length of
+   * roughly the conditioning's own token norm the injection — not the prompt —
+   * is what gets rendered (on Krea 2 a ten-axis deck past ~12 alpha turns any
+   * scene into dramatic crowds). Over budget, every active axis is scaled by
+   * ONE common factor, so the dialled-in mix is kept and only the overdrive is
+   * shed. 0 (the default) leaves the stack uncapped.
+   * @param {number} alpha
+   */
+  setControlBudget(alpha) {}
+
+  /**
+   * The current stack's length in alpha units, its budget, and whether the next
+   * generation will hold it back — what a UI draws a stack meter from.
+   * `scale` is the factor every active axis will be multiplied by (1 when in
+   * budget).
+   * @returns {{norm: number, budget: number, clamped: boolean, scale: number}}
+   */
+  controlNorm() {}
+
   /** Zero every axis weight (keeps the dictionary loaded). */
   clearControl() {}
 
