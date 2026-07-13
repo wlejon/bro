@@ -482,15 +482,17 @@ const tr = nllb.translate('The quick brown fox jumps over the lazy dog.',
  * @property {number} projectionDim - shared cross-modal embedding dim (768).
  * @method encodeText(text|text[]) → Float32Array | Float32Array[]
  *         Projected, L2-normalised text feature(s) in the shared space.
+ * @method encodeImage(image) → Float32Array
+ *         Projected, L2-normalised image feature (ImageBitmap / ImageData) in
+ *         that same space — dot it against an encodeText() vector and you have
+ *         the cosine. Use it when the embedding itself is the object of
+ *         interest: difference two renders to measure what a control changed,
+ *         or cluster / PCA a corpus of images.
  * @method score(text|text[], image) → number | number[]
  *         Cosine similarity in [-1, 1] between `image` (ImageBitmap / ImageData)
  *         and each prompt. Passing a text[] scores the one image against every
  *         candidate — the zero-shot-classification call (take the argmax).
- *
- * NOTE: the scorer exposes the projected TEXT feature and a fused
- * score(image)-vs-cached-prompt, but not a standalone projected IMAGE feature,
- * so there is no encodeImage()/score(textEmb, imageEmb) — the brolm CLIPScorer
- * surface has no public accessor for the projected image embedding.
+ *         Convenience: dot(encodeImage(image), encodeText(text)).
  */
 const clip = bro.lm.loadClip({
     vocabPath:   '../clip-vit-large-patch14/vocab.json',
@@ -505,6 +507,12 @@ const best   = labels[scores.indexOf(Math.max(...scores))];
 console.log('best match:', best, scores);
 // Text embeddings (e.g. to cache / cluster prompts).
 const emb = clip.encodeText('a photo of an astronaut riding a horse');
+// Image embeddings — what changed between two renders, measured perceptually.
+const before = clip.encodeImage(await createImageBitmap(renderA));
+const after  = clip.encodeImage(await createImageBitmap(renderB));
+let moved = 0;
+for (let i = 0; i < before.length; i++) moved += (after[i] - before[i]) ** 2;
+console.log('perceptual displacement:', Math.sqrt(moved));
 
 
 // ── T5 — encoder-only text encoder (T5-XXL, Flux's second text encoder) ──────────

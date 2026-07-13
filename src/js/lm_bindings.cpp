@@ -2310,15 +2310,14 @@ static JSValue js_lm_generate(JSContext* ctx, JSValueConst,
 // single text↔image scorer. The construction path mirrors brodiffusion's reuse
 // of these same brolm entry points.
 //
-// The scorer exposes the projected, L2-normalised TEXT feature (text_feature())
-// and a fused image score(image) against the cached prompt — it does NOT expose
-// a standalone projected IMAGE feature. So the headline op is the cross-modal
-// score (the zero-shot-classification primitive: score one image against many
-// candidate texts). encodeText() returns the projected text embedding;
-// score(text|text[], image) returns the cosine(s). A standalone encodeImage()
-// returning a comparable embedding (and a score(textEmb, imageEmb) over two
-// embeddings) would need a brolm accessor for the projected image feature that
-// the public CLIPScorer surface does not have today.
+// Both towers project into one shared space, so both sides are exposed as
+// embeddings: encodeText(text) and encodeImage(image) return comparable
+// L2-normalised vectors (length projectionDim) whose dot product IS the cosine.
+// score(text|text[], image) is the fused convenience call — the
+// zero-shot-classification primitive (score one image against many candidate
+// texts, take the argmax). Reach for encodeImage when the image embedding is
+// the object of interest rather than one similarity: differencing two renders
+// to measure what a control changed, clustering, PCA.
 
 static ClipWrapper* clipSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<ClipWrapper>(ctx, this_val);
@@ -2365,6 +2364,33 @@ static JSValue js_clip_encodeText(JSContext* ctx, JSValueConst this_val,
         return qjsbind::make_float32_array(ctx, w->scorer->text_feature());
     } catch (const std::exception& e) {
         return JS_ThrowInternalError(ctx, "encodeText: %s", e.what());
+    }
+}
+
+// encodeImage(image) -> Float32Array
+//   The projected, L2-normalised image feature in the shared cross-modal space
+//   (length = projectionDim). `image` is an ImageBitmap or { data, width,
+//   height } (RGBA). Dot it against an encodeText() vector for the cosine, or
+//   difference two of them to measure what changed between two renders.
+static JSValue js_clip_encodeImage(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    auto* w = clipSelf(ctx, this_val);
+    if (!w) return JS_ThrowTypeError(ctx, "encodeImage: not a ClipModel");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "encodeImage(image): image required");
+
+    std::vector<std::uint8_t> rgba;
+    int iw = 0, ih = 0;
+    std::string err;
+    if (!readImageArg(ctx, argv[0], rgba, iw, ih, err))
+        return JS_ThrowTypeError(ctx, "encodeImage: %s", err.c_str());
+    std::vector<float> img = rgbaToNchwSigned(rgba, iw, ih);
+
+    try {
+        brotensor::DeviceScope scope(w->device);
+        return qjsbind::make_float32_array(ctx, w->scorer->encode_image(img, ih, iw));
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "encodeImage: %s", e.what());
     }
 }
 
@@ -2425,8 +2451,9 @@ static void registerClipClass(JSContext* ctx) {
     qjsbind::Class<ClipWrapper>(ctx, "ClipModel", qjsbind::NoGlobal)
         .get("projectionDim", [](ClipWrapper* w) {
             return w->scorer->config().projection_dim; })
-        .method_raw("encodeText", js_clip_encodeText, 1)
-        .method_raw("score",      js_clip_score,      2);
+        .method_raw("encodeText",  js_clip_encodeText,  1)
+        .method_raw("encodeImage", js_clip_encodeImage, 1)
+        .method_raw("score",       js_clip_score,       2);
 }
 
 // bro.lm.loadClip(opts) -> ClipModel
