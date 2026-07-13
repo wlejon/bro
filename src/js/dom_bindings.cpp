@@ -235,39 +235,21 @@ void DomBindings::setEngine(JSContext* ctx, void* engine) {
 }
 
 void DomBindings::cleanup(JSContext* ctx) {
-    // Drop the __bro_listeners property from every live element wrapper held
-    // in globalThis.__bro_elem_map. Each addEventListener() interns the
-    // "__bro_listeners" atom and stores it on a wrapper's hidden shape; if
-    // those wrappers survive shutdown, the atom is leaked. Walk the map and
-    // delete the property explicitly so the atom is released, then drop the
-    // map itself.
+    // Drop globalThis.__bro_elem_map, the element→wrapper cache. It is a strong
+    // ref to every wrapper ever handed to script, so it has to go before the
+    // runtime tears down or the wrappers (and the listener callbacks they hold)
+    // are still reachable at JS_FreeRuntime.
+    //
+    // This used to also delete each wrapper's "__bro_listeners" property, on the
+    // theory that the property key was what kept that atom interned at shutdown.
+    // It wasn't, and the sweep never moved the leak count: the extra ref came
+    // from an unbalanced JS_DupAtom in addEventListener (JS_SetProperty does not
+    // take the atom, unlike the value). With that fixed the wrappers release the
+    // atom themselves when they are collected, and the sweep is unnecessary.
     JSValue global = JS_GetGlobalObject(ctx);
-    JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
-    if (!JS_IsUndefined(elemMap) && !JS_IsNull(elemMap) && !JS_IsException(elemMap)) {
-        JSAtom listenersAtom = JS_NewAtom(ctx, "__bro_listeners");
-
-        JSPropertyEnum* props = nullptr;
-        uint32_t len = 0;
-        if (JS_GetOwnPropertyNames(ctx, &props, &len, elemMap,
-                                   JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
-            for (uint32_t i = 0; i < len; i++) {
-                JSValue val = JS_GetProperty(ctx, elemMap, props[i].atom);
-                if (JS_IsObject(val)) {
-                    JS_DeleteProperty(ctx, val, listenersAtom, 0);
-                }
-                JS_FreeValue(ctx, val);
-                JS_DeleteProperty(ctx, elemMap, props[i].atom, 0);
-            }
-            JS_FreePropertyEnum(ctx, props, len);
-        }
-
-        JS_FreeAtom(ctx, listenersAtom);
-
-        JSAtom mapAtom = JS_NewAtom(ctx, "__bro_elem_map");
-        JS_DeleteProperty(ctx, global, mapAtom, 0);
-        JS_FreeAtom(ctx, mapAtom);
-    }
-    JS_FreeValue(ctx, elemMap);
+    JSAtom mapAtom = JS_NewAtom(ctx, "__bro_elem_map");
+    JS_DeleteProperty(ctx, global, mapAtom, 0);
+    JS_FreeAtom(ctx, mapAtom);
     JS_FreeValue(ctx, global);
 
     // Drop Document→JSContext mapping for any document that used this context.

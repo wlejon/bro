@@ -2300,7 +2300,12 @@ static JSValue js_element_addEventListener(JSContext* ctx,
     JSValue arr = JS_GetProperty(ctx, this_val, key);
     if (JS_IsUndefined(arr) || JS_IsException(arr)) {
         arr = JS_NewArray(ctx);
-        JS_SetProperty(ctx, this_val, JS_DupAtom(ctx, key), JS_DupValue(ctx, arr));
+        // NB: JS_SetProperty does NOT take ownership of the atom — cf.
+        // JS_SetPropertyStr, which interns one and frees it right back. Duping
+        // `key` into it leaked a ref, once per element the first time it got a
+        // listener, which is what kept "__bro_listeners" in the runtime's atom
+        // table at shutdown. It DOES take the value ref, hence the JS_DupValue.
+        JS_SetProperty(ctx, this_val, key, JS_DupValue(ctx, arr));
     }
 
     JSValue entry = JS_NewObject(ctx);
