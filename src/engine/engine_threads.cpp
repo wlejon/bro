@@ -172,6 +172,11 @@ void Engine::rasterThreadFunc() {
         backBuf.appLayers.clear();
         backBuf.systemLayers.clear();
 
+        // Destroy any iframe surface the main thread orphaned (a reload whose
+        // rebuild failed) — it belongs to THIS context. Before resetContext(),
+        // so the raw glDelete* below don't leave Ganesh's cached GL state stale.
+        drainIframeSurfaceFrees(rasterRenderer.get());
+
         rasterRenderer->grContext()->resetContext();
         rasterRenderer->beginFrame(snap.vpWidth, snap.vpHeight);
 
@@ -219,6 +224,21 @@ void Engine::rasterThreadFunc() {
         for (auto& ps : systemSurfacePool_[i]) rasterRenderer->destroyGPUSurface(ps);
         systemSurfacePool_[i].clear();
     }
+    // Iframe sub-document surfaces live on this context too (replayIframeLayers
+    // created them), so this is the LAST point they can be released: ~Engine()
+    // destroys the IframeDocs on the main thread, after this thread has joined
+    // and rasterGLContext_ is gone — dropping the sk_sp and the FBO with no
+    // context to free them against. Reading iframeDocs_ here is race-free: the
+    // main thread is blocked in rasterThread_.join() (the same reason the pools
+    // above are safe to touch).
+    for (auto& d : iframeDocs_) {
+        if (!d) continue;
+        rasterRenderer->destroyGPUSurface(d->surface);
+        d->surfW = d->surfH = 0;
+        d->fboTexture = 0;
+    }
+    drainIframeSurfaceFrees(rasterRenderer.get());
+
     rasterRenderer.reset();
     SDL_GL_MakeCurrent(window_->getSDLWindow(), nullptr);
     LOG_INFO("Raster thread stopped");

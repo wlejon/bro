@@ -632,6 +632,25 @@ private:
     void processPendingIframeReloads();
     void recordIframeLayers();
     void replayIframeLayers(render::SkiaRenderer* renderer);
+    /// Hand an iframe's GPU surface to the raster thread to be destroyed.
+    ///
+    /// An IframeDoc's surface is created on the RASTER thread's GrDirectContext
+    /// (replayIframeLayers) and so can only be destroyed there: the FBO is a GL
+    /// container object, which — unlike the texture — is NOT shared across the
+    /// context share group, and the sk_sp<SkSurface> holds a ref to that
+    /// context. Releasing either from the main thread silently leaks the FBO and
+    /// touches Ganesh from the wrong thread. Main-thread code that drops a
+    /// surface (a reload whose rebuild failed) must route it through here
+    /// instead. Push only at the raster-idle point in the frame loop — the same
+    /// invariant processPendingIframeReloads() already runs under, and what
+    /// makes the unlocked handoff safe (the FramePresenter request/publish
+    /// handshake orders these writes against the drain).
+    void queueIframeSurfaceFree(render::SkiaRenderer::GPUSurface&& surf);
+    /// Raster thread: destroy every surface queued above, on the context that
+    /// created them. Called at the top of each frame and once more as the thread
+    /// exits (which is what releases the surfaces still live at shutdown —
+    /// ~Engine() runs after this thread has joined and its context is gone).
+    void drainIframeSurfaceFrees(render::SkiaRenderer* renderer);
     // Route a host mouse event that landed on an <iframe> element into its
     // sub-document: translate document-space coords to the sub-doc's own content
     // space, hit-test the sub-doc, and dispatch through the shared per-doc mouse
@@ -904,6 +923,11 @@ private:
     // runs in processPendingIframeReloads() at the raster-idle point in the
     // frame loop — never on the JS thread mid-render. Non-owning element ptrs.
     std::vector<dom::Element*> pendingIframeReloads_;
+    // Iframe GPU surfaces orphaned on the main thread (a reload whose rebuild
+    // failed), awaiting destruction on the raster thread that created them —
+    // see queueIframeSurfaceFree(). Unlocked: pushes happen only at the
+    // raster-idle point, drains only on the raster thread.
+    std::vector<render::SkiaRenderer::GPUSurface> iframeSurfaceFrees_;
     bool systemPerfVisible_ = false;
     bool systemSettingsVisible_ = false;
     bool splashVisible_ = false;

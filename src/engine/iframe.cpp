@@ -99,8 +99,19 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
     // exactly like a top-level `bro <dir>`. If src points at a file, use its dir.
     std::error_code ec;
     std::string appDir = resolved;
-    if (!fs::is_directory(resolved, ec))
+    if (!fs::is_directory(resolved, ec)) {
+        // The parent_path() fallback is ONLY for a src that names a file
+        // ("child/index.html"). A src that doesn't exist must fail here: falling
+        // back to its parent turns a typo like src="no-such-app" into the host
+        // app's own directory, silently embedding the host document inside
+        // itself instead of reporting the bad src.
+        if (!fs::is_regular_file(resolved, ec)) {
+            LOG_ERROR("iframe: src '%s' does not exist (resolved to '%s')",
+                      srcAttr.c_str(), resolved.c_str());
+            return;
+        }
         appDir = fs::path(resolved).parent_path().string();
+    }
 
     AppManifest manifest = AppLoader::loadApp(appDir, &assetMounts_);
     std::string html = AppLoader::loadFile(manifest.htmlPath);
@@ -286,17 +297,37 @@ void Engine::processPendingIframeReloads() {
                 break;
             }
         }
-        if (src.empty()) continue;  // no src: nothing to rebuild
-        createIframeDoc(el, src);
-        if (haveSalvage) {
-            if (IframeDoc* nd = iframeDocForElement(el)) {
-                nd->surface = std::move(salvaged);
-                nd->surfW = salvagedW;
-                nd->surfH = salvagedH;
-                nd->fboTexture = salvagedTex;
-            }
+        if (!src.empty()) createIframeDoc(el, src);
+        if (!haveSalvage) continue;
+        // Hand the surface to the rebuilt sub-doc — or, if there is no rebuilt
+        // sub-doc (empty src, or createIframeDoc bailed on a missing/broken
+        // app), give it back to the raster thread to destroy. Dropping it here
+        // would leak the FBO and release Ganesh off-thread.
+        if (IframeDoc* nd = src.empty() ? nullptr : iframeDocForElement(el)) {
+            nd->surface = std::move(salvaged);
+            nd->surfW = salvagedW;
+            nd->surfH = salvagedH;
+            nd->fboTexture = salvagedTex;
+        } else {
+            queueIframeSurfaceFree(std::move(salvaged));
         }
     }
+}
+
+// Main thread, raster-idle only. See the header for why an iframe surface can
+// only be destroyed on the raster thread.
+void Engine::queueIframeSurfaceFree(render::SkiaRenderer::GPUSurface&& surf) {
+    if (!surf.surface && !surf.fbo && !surf.texture) return;
+    iframeSurfaceFrees_.push_back(std::move(surf));
+}
+
+// Raster thread.
+void Engine::drainIframeSurfaceFrees(render::SkiaRenderer* renderer) {
+    if (iframeSurfaceFrees_.empty()) return;
+    if (renderer) {
+        for (auto& s : iframeSurfaceFrees_) renderer->destroyGPUSurface(s);
+    }
+    iframeSurfaceFrees_.clear();
 }
 
 // Advance each iframe sub-document's timers + requestAnimationFrame callbacks,
@@ -329,6 +360,12 @@ bool Engine::tickIframes(double nowMs) {
 // timers → DOM bindings → document (fires Element finalizers into the still-live
 // canvasScenes) → JSContext. canvasScenes (a member, declared before `document`)
 // destruct when the owning IframeDoc unique_ptr is finally erased.
+//
+// Deliberately does NOT touch doc->surface: it belongs to the raster thread's GL
+// context and cannot be destroyed from here (queueIframeSurfaceFree explains
+// why). Both callers already account for it — processPendingIframeReloads moves
+// the surface out first, and destroyAllIframes runs from ~Engine() after the
+// raster thread emptied every IframeDoc's surface on its way out.
 void Engine::teardownIframeDoc(IframeDoc* doc) {
     if (!doc) return;
     if (doc->element) doc->element->setIframeDoc(nullptr);
