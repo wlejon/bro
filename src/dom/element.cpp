@@ -167,8 +167,32 @@ void Element::setAttribute(const std::string& name, const std::string& val) {
         if (!oldId.empty()) document_->unregisterElementId(oldId);
         if (!val.empty()) document_->registerElementId(val, this);
     }
+
+    // "class" and "id" feed the selector match and nothing else, so — like an
+    // inline-style write — they are style *inputs*: whether geometry moves is
+    // only knowable once the cascade re-runs, and resolveStyles() promotes to a
+    // layout then. A class toggle that swaps a colour must not reflow the
+    // element's subtree. Every other attribute can change content or intrinsic
+    // size without any computed-style diff to detect it (img@src, input@value,
+    // td@colspan), so those keep the unconditional layout mark.
+    if (name == "class") {
+        // And a class only re-matches this element's DESCENDANTS if some rule
+        // names it in an ancestor position (`.dark .btn`). The common toggle —
+        // `row.classList.toggle('on')`, styled by `.row.on` — cannot, so it
+        // restyles one element instead of the subtree under it.
+        const std::string oldClass =
+            existing != attributes_.end() ? existing->second : std::string{};
+        attributes_[name] = val;
+        if (document_ && !document_->classChangeAffectsDescendants(oldClass, val))
+            markStyleDirty();
+        else
+            markPaintDirty();
+        return;
+    }
+
     attributes_[name] = val;
-    markDirty();
+    if (name == "id") markPaintDirty();
+    else markDirty();
 }
 
 void Element::removeAttribute(const std::string& name) {
@@ -182,7 +206,8 @@ void Element::removeAttribute(const std::string& name) {
         if (!oldId.empty()) document_->unregisterElementId(oldId);
     }
     attributes_.erase(name);
-    markDirty();
+    if (name == "class" || name == "id") markPaintDirty();  // see setAttribute
+    else markDirty();
 }
 
 std::string Element::textContent() const {
@@ -776,6 +801,7 @@ void Element::setScrollToBottom(bool v) {
 void Element::markDirty() {
     dirty_ = true;
     layoutDirty_ = true;
+    selectorDirty_ = true;
     if (document_) {
         // Attributed: the document knows *which* element changed, so the layout
         // pass can recompute this element's chain and reuse the rest of the
@@ -790,6 +816,17 @@ void Element::markPaintDirty() {
     // so the layout thread can skip the full layoutTree() pass unless the
     // re-resolve turns up an actual geometry change (promoteLayoutDirty).
     dirty_ = true;
+    selectorDirty_ = true;   // :hover / class / id — descendant rules may re-match
+    if (document_) {
+        document_->markPaintDirty();
+    }
+}
+
+void Element::markStyleDirty() {
+    // Inline style is not a selector input, so selectorDirty_ stays put: no
+    // descendant's rule set can change because of this write, and only the
+    // inherited values this element hands down can reach them.
+    dirty_ = true;
     if (document_) {
         document_->markPaintDirty();
     }
@@ -797,7 +834,12 @@ void Element::markPaintDirty() {
 
 void Element::markStructureDirty() {
     dirty_ = true;
+    // The child list is a selector input: inserting an <li> changes which
+    // sibling matches :last-child, and :nth-child renumbers from the insertion
+    // point on. So the subtree re-matches, exactly as a class change does.
+    selectorDirty_ = true;
     if (document_) {
+        // Sets fullLayout_, so the whole tree relayouts — no layout mark needed.
         document_->markStructureDirty();
     }
 }

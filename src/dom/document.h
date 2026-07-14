@@ -132,6 +132,16 @@ public:
     void markDirty() { dirty_ = true; layoutDirty_ = true; fullLayout_ = true; }
     void markElementDirty() { dirty_ = true; layoutDirty_ = true; }
     void markPaintDirty() { dirty_ = true; }
+    // An inline style wrote a bare `inherit`. We do not know here whether the
+    // property inherits, so take the safe branch and stop scoping restyles.
+    void noteForcedInherit() { forcedInherit_ = true; }
+
+    // Did this class change touch a class that some selector names in an
+    // ancestor position — i.e. can it re-match this element's descendants?
+    // Only the classes that were actually added or removed are asked; a rewrite
+    // of the same set changes nothing.
+    bool classChangeAffectsDescendants(const std::string& oldCls,
+                                       const std::string& newCls) const;
     void promoteLayoutDirty() { layoutDirty_ = true; }
     bool isDirty() const { return dirty_; }
     bool isLayoutDirty() const { return layoutDirty_; }
@@ -249,7 +259,8 @@ private:
 
     void buildTreeFromGumbo(::GumboNode* node, Element* parentElem);
     void collectElements(Node* node, std::vector<Element*>& out);
-    void resolveStylesRecursive(Element* elem, const htmlayout::css::ComputedStyle* parentStyle, bool force = false);
+    void resolveStylesRecursive(Element* elem, const htmlayout::css::ComputedStyle* parentStyle,
+                                bool force = false, bool selectorForce = false);
     // Add the CSS of any connected <style> element whose rules aren't in the
     // cascade yet (a runtime document.head.appendChild(styleEl)). Incremental â€”
     // it never clears the cascade, so UA / linked / shadow-scoped sheets and
@@ -302,7 +313,11 @@ private:
     bool layoutDirty_ = false;
     bool structureDirty_ = false;
     bool styleElsDirty_ = false;  // a <style> may need adding to the cascade
-    bool fullLayout_ = true;      // relayout the whole tree, not just what changed
+    bool fullLayout_ = true;
+    // The cascade (or an inline write) forced `inherit` on a non-inherited
+    // property somewhere, so resolveStylesRecursive cannot scope a restyle by
+    // diffing inherited values alone. Sticky once seen. See noteForcedInherit().
+    bool forcedInherit_ = false;      // relayout the whole tree, not just what changed
     std::string basePath_;
     std::unordered_map<std::string, Element*> idMap_;
     std::unordered_map<Node*, std::unique_ptr<Node>> ownedNodes_;

@@ -326,6 +326,32 @@ void Document::setActiveElement(Element* el) {
     focusedElement_ = el;
 }
 
+namespace {
+// Split a class attribute into its whitespace-separated tokens.
+std::vector<std::string> classTokens(const std::string& s) {
+    std::vector<std::string> out;
+    std::istringstream iss(s);
+    std::string t;
+    while (iss >> t) out.push_back(t);
+    return out;
+}
+}  // namespace
+
+bool Document::classChangeAffectsDescendants(const std::string& oldCls,
+                                             const std::string& newCls) const {
+    auto before = classTokens(oldCls);
+    auto after  = classTokens(newCls);
+    auto changedOne = [&](const std::vector<std::string>& a,
+                          const std::vector<std::string>& b) {
+        for (const auto& t : a) {
+            if (std::find(b.begin(), b.end(), t) != b.end()) continue;  // unchanged
+            if (cascade_.classAffectsDescendants(t)) return true;
+        }
+        return false;
+    };
+    return changedOne(before, after) || changedOne(after, before);
+}
+
 void Document::resolveStyles() {
     if (!documentElement_) return;
     // A new stylesheet can restyle anything, and the elements it now matches
@@ -334,9 +360,16 @@ void Document::resolveStyles() {
     // document.head.appendChild(styleEl) would only reach elements that some
     // unrelated change happened to dirty later.
     bool sheetAdded = styleElsDirty_ && reconcileStyleElements();
+    // Sticky: once a sheet declares `border: inherit` (or any other forced
+    // inherit of a non-inherited property), the scoped restyle below can no
+    // longer prove a clean subtree, for this document, for good.
+    if (cascade_.usesForcedInherit()) forcedInherit_ = true;
     layout::ElementRefAdapter::clearCache();
     restyled_.clear();
-    resolveStylesRecursive(documentElement_, nullptr, /*force=*/sheetAdded);
+    // A new sheet can change what matches anywhere, so it is a selector-level
+    // invalidation, not just a re-resolve of the values already matched.
+    resolveStylesRecursive(documentElement_, nullptr, /*force=*/sheetAdded,
+                           /*selectorForce=*/sheetAdded);
     resolveGeneratedContent();
     restyled_.clear();
     layout::ElementRefAdapter::clearCache();
@@ -408,6 +441,51 @@ bool isPaintOnlyProp(const std::string& p) {
     return kPaintOnly.count(p) > 0;
 }
 
+// CSS properties that inherit. The only channel through which a change to one
+// element's computed style can reach a descendant that did not itself change:
+// if none of these moved, no descendant's style can differ, and the subtree
+// keeps the values it already has. Custom properties (--*) inherit too and are
+// handled by prefix below, not listed here.
+bool isInheritedProp(const std::string& p) {
+    static const std::unordered_set<std::string> kInherited = {
+        "color", "cursor", "direction", "visibility", "pointer-events",
+        "font", "font-family", "font-size", "font-style", "font-variant",
+        "font-weight", "font-stretch", "font-feature-settings",
+        "font-variant-numeric", "-webkit-font-smoothing",
+        "letter-spacing", "line-height", "word-spacing", "text-align",
+        "text-align-last", "text-indent", "text-justify", "text-shadow",
+        "text-transform", "text-rendering", "-webkit-text-fill-color",
+        "text-emphasis-color", "text-orientation", "writing-mode",
+        "white-space", "word-break", "word-wrap", "overflow-wrap", "hyphens",
+        "tab-size", "quotes", "orphans", "widows",
+        "list-style", "list-style-image", "list-style-position",
+        "list-style-type",
+        "border-collapse", "border-spacing", "empty-cells", "caption-side",
+        "caret-color", "accent-color", "color-scheme", "scrollbar-color",
+        "user-select", "-webkit-user-select", "image-rendering",
+        "fill", "stroke", "stroke-width", "text-anchor", "paint-order",
+    };
+    if (p.size() >= 2 && p[0] == '-' && p[1] == '-') return true;  // custom property
+    return kInherited.count(p) > 0;
+}
+
+// True if any inherited property differs between the old (a) and new (b)
+// computed style — i.e. whether re-resolving this element can have changed any
+// descendant's style.
+bool inheritedChanged(const htmlayout::css::ComputedStyle& a,
+                      const htmlayout::css::ComputedStyle& b) {
+    for (const auto& [k, v] : b) {
+        if (!isInheritedProp(k)) continue;
+        auto it = a.find(k);
+        if (it == a.end() || it->second != v) return true;   // added or changed
+    }
+    for (const auto& [k, v] : a) {
+        if (!isInheritedProp(k)) continue;
+        if (b.find(k) == b.end()) return true;                // removed
+    }
+    return false;
+}
+
 // True if any layout-affecting property differs between the old (a) and new (b)
 // computed style. Paint-only properties are ignored, so a :hover that changes
 // only background/color returns false and the frame can skip layout.
@@ -429,7 +507,18 @@ bool layoutAffectingChanged(const htmlayout::css::ComputedStyle& a,
 
 void Document::resolveStylesRecursive(Element* elem,
                                        const htmlayout::css::ComputedStyle* parentStyle,
-                                       bool force) {
+                                       bool force,
+                                       bool selectorForce) {
+    // Did a selector input change on this element (class/id/attribute/:hover),
+    // or on an ancestor? Either way every rule in this subtree may now match
+    // differently, so the subtree has to re-resolve and `selDirty` carries that
+    // all the way down — `.dark .btn` can match a grandchild.
+    //
+    // An inline-style write sets neither: it cannot change what matches, only
+    // what this element hands down. Then `inheritedChanged` below decides, and a
+    // paint-only write like `container.style.opacity = x` re-resolves exactly one
+    // element instead of its entire subtree.
+    const bool selDirty = selectorForce | elem->takeSelectorDirty();
     // An element with an active CSS animation or transition must re-resolve
     // its style every frame so applyOverrides() below re-runs and advances the
     // interpolated value — even when nothing marked it dirty. This is
@@ -442,8 +531,12 @@ void Document::resolveStylesRecursive(Element* elem,
         (animationManager_ && animationManager_->hasActive(elem)) ||
         (transitionManager_ && transitionManager_->hasActive(elem));
 
-    bool needsResolve = force || elem->isDirty() ||
+    bool needsResolve = force || selDirty || elem->isDirty() ||
                         elem->computedStyle().empty() || animatingSelf;
+
+    // Set below from the style diff: can this element's re-resolve have changed
+    // anything a descendant sees? Only through an inherited value.
+    bool passedDownChanged = false;
 
     if (needsResolve) {
         auto* adapter = layout::ElementRefAdapter::getOrCreate(elem);
@@ -551,6 +644,11 @@ void Document::resolveStylesRecursive(Element* elem,
             elem->markLayoutDirty();
         }
 
+        // Nothing inherited moved ⇒ no descendant's computed style can differ,
+        // so the recursion below stops here unless a descendant is dirty on its
+        // own account.
+        passedDownChanged = inheritedChanged(elem->computedStyle(), computed);
+
         elem->setComputedStyle(std::move(computed));
 
         // CSS transitions: apply interpolated overrides after setting style
@@ -574,11 +672,23 @@ void Document::resolveStylesRecursive(Element* elem,
         elem->clearDirty();
     }
 
-    // Recurse into children. If this element was re-resolved, force children
-    // to re-resolve too (inherited styles or selector context may have changed).
+    // Recurse into children. They must re-resolve when a selector input changed
+    // at or above this element (their rule set may differ) or when an inherited
+    // value this element hands down actually changed. Otherwise they keep the
+    // style they have — a child that is dirty on its own account still resolves,
+    // the recursion always walks the tree.
+    //
+    // Unless the page forces `inherit` on a property that does not normally
+    // inherit (`border: inherit`): that ties a descendant's value to a parent
+    // property the inherited-value diff above never looks at, so give up the
+    // scoping and re-resolve the subtree the way we always did.
+    const bool childForce =
+        needsResolve && (selDirty || passedDownChanged || forcedInherit_);
+
     for (auto* child : elem->childNodes()) {
         if (child->nodeType() == NodeType::Element) {
-            resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle(), needsResolve);
+            resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle(),
+                                   childForce, selDirty);
         }
     }
 
@@ -587,7 +697,8 @@ void Document::resolveStylesRecursive(Element* elem,
         auto* sr = elem->shadowRoot();
         for (auto* child : sr->childNodes()) {
             if (child->nodeType() == NodeType::Element) {
-                resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle(), needsResolve);
+                resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle(),
+                                       childForce, selDirty);
             }
         }
     }
@@ -1020,7 +1131,8 @@ void Document::settleContainerQueries(const std::function<void()>& relayout) {
     // Forced re-resolve: the elements aren't dirty (they were just resolved),
     // but @container matching depends on the layout boxes that only now exist.
     layout::ElementRefAdapter::clearCache();
-    resolveStylesRecursive(documentElement_, nullptr, /*force=*/true);
+    resolveStylesRecursive(documentElement_, nullptr, /*force=*/true,
+                           /*selectorForce=*/true);
     resolveGeneratedContent();
     layout::ElementRefAdapter::clearCache();
     relayout();

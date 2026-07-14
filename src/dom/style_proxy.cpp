@@ -1,5 +1,7 @@
 #include "dom/style_proxy.h"
 #include "dom/element.h"
+#include "dom/document.h"
+#include "css/properties.h"
 #include <algorithm>
 #include <sstream>
 #include <cctype>
@@ -19,6 +21,19 @@ std::string StyleProxy::getProperty(const std::string& name) const {
     return {};
 }
 
+// `inherit` on a property that does not normally inherit defeats the scoped
+// restyle (see Document::noteForcedInherit). Expand shorthands before deciding:
+// `font: inherit` is only inherited longhands, `background: inherit` is not.
+void StyleProxy::noteIfForcedInherit(const std::string& name) {
+    if (!owner_ || !owner_->document()) return;
+    for (auto& e : htmlayout::css::expandShorthand(name, "inherit")) {
+        if (!htmlayout::css::isInherited(e.property)) {
+            owner_->document()->noteForcedInherit();
+            return;
+        }
+    }
+}
+
 void StyleProxy::setProperty(const std::string& name, const std::string& value) {
     // CSSOM: setting a property to the empty string removes it (so the cascade
     // falls back to author stylesheets). This is what `el.style.display = ''`
@@ -34,11 +49,23 @@ void StyleProxy::setProperty(const std::string& name, const std::string& value) 
     bool displayChanged = (name == "display");
     properties_[name] = value;
     invalidateCssText();
+    // `el.style.border = 'inherit'` ties this element to a parent property that
+    // does not inherit, which is the one thing the scoped restyle cannot see.
+    // (`font: inherit` does not count — every longhand it expands to inherits.)
+    if (value == "inherit") noteIfForcedInherit(name);
     if (owner_) {
         if (displayChanged) {
             owner_->markStructureDirty();
         } else {
-            owner_->markDirty();
+            // Paint-dirty, not layout-dirty: an inline-style write is a change
+            // to a style *input*, and the cascade has not run yet, so we cannot
+            // know here whether geometry moved. resolveStyles() diffs the new
+            // computed style against the old one and promotes to a real layout
+            // only when a layout-affecting property actually changed â€” so
+            // `style.opacity = x` repaints, while `style.width = x` reflows.
+            // markDirty() would pre-declare the reflow and relayout this
+            // element's whole subtree on every paint-only write.
+            owner_->markStyleDirty();
         }
     }
 }
@@ -51,7 +78,7 @@ void StyleProxy::removeProperty(const std::string& name) {
             if (displayChanged) {
                 owner_->markStructureDirty();
             } else {
-                owner_->markDirty();
+                owner_->markStyleDirty();  // see setProperty
             }
         }
     }
@@ -106,6 +133,7 @@ void StyleProxy::setCssText(const std::string& text) {
 
         if (!key.empty() && !val.empty()) {
             properties_[key] = val;
+            if (val == "inherit") noteIfForcedInherit(key);   // see setProperty
         }
     }
 
@@ -113,7 +141,7 @@ void StyleProxy::setCssText(const std::string& text) {
         if (getProperty("display") != oldDisplay) {
             owner_->markStructureDirty();
         } else {
-            owner_->markDirty();
+            owner_->markStyleDirty();  // see setProperty
         }
     }
 }

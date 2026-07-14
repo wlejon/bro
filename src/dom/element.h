@@ -91,6 +91,12 @@ public:
     // Like markDirty(), but only requests a re-record (paint), not a full
     // re-layout — used by the hover restyle. See Document::markPaintDirty.
     void markPaintDirty();
+    // An inline-style write. Paint-dirty like markPaintDirty(), but it does NOT
+    // set selectorDirty_: inline style is not a selector input, so no descendant
+    // can start or stop matching a rule because of it. Descendants are re-resolved
+    // only if this element's *inherited* values actually changed — which is what
+    // keeps `container.style.opacity = x` off the whole subtree's restyle bill.
+    void markStyleDirty();
     void markStructureDirty();
     bool isDirty() const { return dirty_; }
     void clearDirty() { dirty_ = false; }
@@ -103,6 +109,13 @@ public:
     // a hover that only repainted a background sets dirty_ and not this.
     void markLayoutDirty() { layoutDirty_ = true; }
     bool takeLayoutDirty() { bool d = layoutDirty_; layoutDirty_ = false; return d; }
+
+    // A selector *input* on this element changed — class, id, an attribute, or
+    // its :hover state — so rules matching anywhere in its subtree (`.dark .btn`)
+    // may now match differently and the whole subtree has to re-resolve. An
+    // inline-style write sets dirty_ without this, and then only descendants that
+    // inherit a changed value re-resolve. True initially: nothing is resolved yet.
+    bool takeSelectorDirty() { bool d = selectorDirty_; selectorDirty_ = false; return d; }
 
     // Owner document
     void setDocument(Document* doc) { document_ = doc; }
@@ -282,6 +295,7 @@ private:
     ShadowRoot* shadowRoot_ = nullptr;
     bool dirty_ = false;
     bool layoutDirty_ = false;
+    bool selectorDirty_ = true;
     bool scrollToBottom_ = false;
     bool styleSheetAdded_ = false;
     float scrollTop_ = 0.0f;

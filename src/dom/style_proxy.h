@@ -25,6 +25,7 @@ public:
     static std::string kebabToCamel(const std::string& kebab);
 
 private:
+    void noteIfForcedInherit(const std::string& name);
     void invalidateCssText() { cssTextDirty_ = true; }
 
     std::unordered_map<std::string, std::string> properties_;
