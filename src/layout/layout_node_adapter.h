@@ -230,6 +230,18 @@ public:
                tag == "video" || tag == "VIDEO" || tag == "svg" || tag == "SVG";
     }
 
+    // Carry the DOM's per-element layout invalidation into the layout tree:
+    // every element that recorded a geometry change this frame dirties its own
+    // layout node and, via markDirty(), the ancestor chain above it — the only
+    // nodes htmlayout then recomputes. Walking the tree (rather than holding
+    // Element→node back-pointers) keeps the two structures decoupled: a node
+    // freed from the DOM can never leave a dangling mark behind.
+    void markDirtyFromElements() {
+        if (elem_ && elem_->takeLayoutDirty())
+            htmlayout::layout::markDirty(this);
+        for (auto& child : children_) child->markDirtyFromElements();
+    }
+
     // Write layout results back to the DOM element/text node
     void syncBoxToElement() {
         if (pseudoHost_ && !pseudoIsText_) {

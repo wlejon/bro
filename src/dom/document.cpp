@@ -539,15 +539,16 @@ void Document::resolveStylesRecursive(Element* elem,
             animationManager_->onStyleChange(elem, computed, transitionTime_);
         }
 
-        // Paint-only fast path: if the document was only paint-dirtied (a hover
-        // restyle) we can skip the full layoutTree() pass — UNLESS this
-        // re-resolve actually changed a geometry-affecting property. Diff old vs
-        // new here and promote to a real layout when it did. Skipped once layout
-        // is already known-needed (a markDirty/structure change), so ordinary
-        // frames pay nothing; only paint-only frames run the diff, and only for
-        // the handful of elements that re-resolved.
-        if (!layoutDirty_ && layoutAffectingChanged(elem->computedStyle(), computed)) {
+        // Did this re-resolve move any geometry? A hover that only repainted a
+        // background didn't, and skips layout entirely; a change to width or
+        // font-size did, and dirties this element's layout node (and, through
+        // it, the ancestors that have to reflow around it) so the incremental
+        // pass recomputes that chain and reuses every other subtree. Skipped
+        // when the whole tree is already queued for relayout — the diff would
+        // tell us nothing and every element would pay for it.
+        if (!fullLayout_ && layoutAffectingChanged(elem->computedStyle(), computed)) {
             layoutDirty_ = true;
+            elem->markLayoutDirty();
         }
 
         elem->setComputedStyle(std::move(computed));
@@ -826,6 +827,7 @@ void Document::applyPseudo(Element* elem, const char* which, int depth, GenConte
         if (!elem->hasPseudo(which)) return;
         elem->clearPseudo(which);
         layoutDirty_ = true;
+        elem->markLayoutDirty();
     };
 
     // Cheapest possible miss: a sheet with no ::after rule shouldn't cost an
@@ -957,6 +959,7 @@ void Document::applyPseudo(Element* elem, const char* which, int depth, GenConte
     if (!elem->hasPseudo(which) || elem->pseudoContent(which) != out ||
         layoutAffectingChanged(elem->pseudoStyle(which), pseudoStyle)) {
         layoutDirty_ = true;
+        elem->markLayoutDirty();
     }
 
     elem->setPseudo(which, std::move(out), std::move(pseudoStyle));
@@ -966,18 +969,24 @@ void Document::applyPseudo(Element* elem, const char* which, int depth, GenConte
 // Layout
 // ---------------------------------------------------------------------------
 
-void Document::performLayout(float viewportWidth, htmlayout::layout::TextMetrics& metrics) {
-    if (!documentElement_) return;
-    if (!layoutRoot_ || structureDirty_) {
-        layoutRoot_ = layout::LayoutNodeAdapter::buildTree(documentElement_);
-        structureDirty_ = false;
+// Push this frame's invalidation into the layout tree. Elements that recorded a
+// geometry change dirty their own layout node and every ancestor above it, so
+// layoutTree() recomputes that chain and hands back the cached geometry of every
+// subtree it doesn't reach. A change nobody could pin on an element — a fresh
+// tree, a new stylesheet, a bare Document::markDirty() — dirties the whole tree
+// instead, which is the unconditional pass bro used to run every frame.
+//
+// The element walk runs either way: it is what clears the per-element flags.
+void Document::applyLayoutInvalidation() {
+    if (fullLayout_) {
+        htmlayout::layout::markSubtreeDirty(layoutRoot_.get());
+        fullLayout_ = false;
     }
-    htmlayout::layout::layoutTree(layoutRoot_.get(), viewportWidth, metrics);
-    layoutRoot_->syncBoxToElement();
-    settleContainerQueries([&] {
-        htmlayout::layout::layoutTree(layoutRoot_.get(), viewportWidth, metrics);
-        layoutRoot_->syncBoxToElement();
-    });
+    layoutRoot_->markDirtyFromElements();
+}
+
+void Document::performLayout(float viewportWidth, htmlayout::layout::TextMetrics& metrics) {
+    performLayout(viewportWidth, 0.0f, metrics);
 }
 
 void Document::performLayout(float viewportWidth, float viewportHeight, htmlayout::layout::TextMetrics& metrics) {
@@ -985,11 +994,16 @@ void Document::performLayout(float viewportWidth, float viewportHeight, htmlayou
     if (!layoutRoot_ || structureDirty_) {
         layoutRoot_ = layout::LayoutNodeAdapter::buildTree(documentElement_);
         structureDirty_ = false;
+        fullLayout_ = true;   // a fresh tree has no cached geometry to reuse
     }
+    applyLayoutInvalidation();
     htmlayout::layout::Viewport vp{viewportWidth, viewportHeight};
     htmlayout::layout::layoutTree(layoutRoot_.get(), vp, metrics);
     layoutRoot_->syncBoxToElement();
     settleContainerQueries([&] {
+        // The re-resolve inside settleContainerQueries marks whatever the
+        // container query actually changed; nothing else has to relayout.
+        applyLayoutInvalidation();
         htmlayout::layout::layoutTree(layoutRoot_.get(), vp, metrics);
         layoutRoot_->syncBoxToElement();
     });

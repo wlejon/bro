@@ -85,7 +85,13 @@ void Engine::flush() {
         document_->setAnimationManager(&animationManager_);
         bool animActive = transitionManager_.tick(virtualTime_) | animationManager_.tick(virtualTime_);
         if (animActive) {
-            document_->markDirty();
+            // Paint-dirty, not layout-dirty: an active animation re-resolves its
+            // element's style every frame regardless (resolveStylesRecursive's
+            // animatingSelf), and the style diff there promotes to a layout only
+            // when the animation actually moves geometry. A transform-only
+            // spinner would otherwise drag the whole document through
+            // layoutTree() on every frame it turns.
+            document_->markPaintDirty();
         }
     }
     // Re-layout any dirty system panel docs so subsequent hit-tests see the

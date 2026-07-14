@@ -268,7 +268,9 @@ void Engine::pumpVideoEvents() {
     // is advancing so ElVideo::draw() keeps calling pipeline_->advance() and
     // presenting new frames.
     if (anyPlaying) {
-        document_->markDirty();
+        // Paint-dirty: a playing video changes pixels, never geometry, so it
+        // must not drag the document through a layout pass on every frame.
+        document_->markPaintDirty();
         // markDirty alone isn't enough in the windowed main loop: if the
         // layout thread is already idle, nothing sets uiDirty_ so the
         // raster signal path is skipped. Set uiDirty_ directly so the

@@ -200,10 +200,20 @@ std::string Element::textContent() const {
 }
 
 void Element::setTextContent(const std::string& text) {
-    // Skip if text unchanged
     if (children_.size() == 1 && children_[0]->nodeType() == NodeType::Text) {
         auto* existing = static_cast<TextNode*>(children_[0]);
         if (existing->data() == text) return;
+        // Rewriting the lone text child in place leaves the tree shape alone, so
+        // the layout tree stays valid (its adapter reads the TextNode live) and
+        // this is a plain layout invalidation rather than a structural rebuild —
+        // the difference between relaying out one element and relaying out the
+        // document. Emptying the element still takes the slow path: layout drops
+        // empty text nodes, so the tree really does change shape.
+        if (!text.empty()) {
+            existing->setData(text);
+            markDirty();
+            return;
+        }
     }
 
     // Free old children
@@ -765,8 +775,13 @@ void Element::setScrollToBottom(bool v) {
 
 void Element::markDirty() {
     dirty_ = true;
+    layoutDirty_ = true;
     if (document_) {
-        document_->markDirty();
+        // Attributed: the document knows *which* element changed, so the layout
+        // pass can recompute this element's chain and reuse the rest of the
+        // tree. Document::markDirty() — the same call without an element — has
+        // to relayout everything instead.
+        document_->markElementDirty();
     }
 }
 

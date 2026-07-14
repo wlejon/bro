@@ -122,7 +122,15 @@ public:
     //                   so geometry stays correct. This is what keeps hover (and
     //                   any paint-only restyle) off the O(N) re-layout that
     //                   otherwise runs on every mouse move.
-    void markDirty() { dirty_ = true; layoutDirty_ = true; }
+    //
+    // Layout is incremental (htmlayout::layout::layoutTree reuses the geometry
+    // of any subtree that didn't change), so the pass also needs to know *what*
+    // changed. Element::markDirty() records that on the element and calls
+    // markElementDirty() here; Document::markDirty() is the unattributed
+    // version — the caller can't name an element, so the whole tree is
+    // relaid-out. Prefer the element form wherever there is an element.
+    void markDirty() { dirty_ = true; layoutDirty_ = true; fullLayout_ = true; }
+    void markElementDirty() { dirty_ = true; layoutDirty_ = true; }
     void markPaintDirty() { dirty_ = true; }
     void promoteLayoutDirty() { layoutDirty_ = true; }
     bool isDirty() const { return dirty_; }
@@ -133,7 +141,7 @@ public:
     // Also arms a style-element reconcile: a subtree that just changed may have
     // brought in (or repopulated) a <style>, so resolveStyles re-scans for any
     // whose CSS isn't in the cascade yet.
-    void markStructureDirty() { structureDirty_ = true; dirty_ = true; layoutDirty_ = true; styleElsDirty_ = true; }
+    void markStructureDirty() { structureDirty_ = true; dirty_ = true; layoutDirty_ = true; styleElsDirty_ = true; fullLayout_ = true; }
     bool isStructureDirty() const { return structureDirty_; }
     void clearStructureDirty() { structureDirty_ = false; }
 
@@ -232,6 +240,13 @@ public:
     void setNodeFreedCallback(NodeFreedCallback cb) { nodeFreedCb_ = cb; }
 
 private:
+    // Push this frame's invalidation into the layout tree, right before layout
+    // runs. Elements the document could attribute a change to dirty just their
+    // own layout node and the ancestor chain above it. An unattributed change
+    // (a new stylesheet, a rebuilt tree, a plain Document::markDirty) dirties
+    // everything — the whole-document pass bro used to run unconditionally.
+    void applyLayoutInvalidation();
+
     void buildTreeFromGumbo(::GumboNode* node, Element* parentElem);
     void collectElements(Node* node, std::vector<Element*>& out);
     void resolveStylesRecursive(Element* elem, const htmlayout::css::ComputedStyle* parentStyle, bool force = false);
@@ -287,6 +302,7 @@ private:
     bool layoutDirty_ = false;
     bool structureDirty_ = false;
     bool styleElsDirty_ = false;  // a <style> may need adding to the cascade
+    bool fullLayout_ = true;      // relayout the whole tree, not just what changed
     std::string basePath_;
     std::unordered_map<std::string, Element*> idMap_;
     std::unordered_map<Node*, std::unique_ptr<Node>> ownedNodes_;

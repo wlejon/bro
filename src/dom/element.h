@@ -95,6 +95,15 @@ public:
     bool isDirty() const { return dirty_; }
     void clearDirty() { dirty_ = false; }
 
+    // This element's own geometry may have changed — its style diff turned up a
+    // layout-affecting property, an attribute or its text was rewritten. Read
+    // (and cleared) once per pass by the layout tree, which dirties this
+    // element's layout node and the ancestor chain above it so layout
+    // recomputes that chain and reuses everything else. Separate from dirty_:
+    // a hover that only repainted a background sets dirty_ and not this.
+    void markLayoutDirty() { layoutDirty_ = true; }
+    bool takeLayoutDirty() { bool d = layoutDirty_; layoutDirty_ = false; return d; }
+
     // Owner document
     void setDocument(Document* doc) { document_ = doc; }
     Document* document() const { return document_; }
@@ -272,6 +281,7 @@ private:
     Document* document_ = nullptr;
     ShadowRoot* shadowRoot_ = nullptr;
     bool dirty_ = false;
+    bool layoutDirty_ = false;
     bool scrollToBottom_ = false;
     bool styleSheetAdded_ = false;
     float scrollTop_ = 0.0f;
