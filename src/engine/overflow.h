@@ -1,9 +1,11 @@
 #pragma once
 
-#include <string>
-#include <unordered_map>
+// ComputedStyle is a map alias, so it cannot be forward-declared — and spelling
+// the alias out here by hand silently duplicates htmlayout's definition, which
+// then has to be kept in step with it by luck (it wasn't: the map is keyed
+// heterogeneously now, and this copy was not).
+#include "css/cascade.h"
 
-namespace htmlayout::css { using ComputedStyle = std::unordered_map<std::string, std::string>; }
 namespace bro::dom { class Element; }
 namespace bro::engine { struct ScrollbarMetrics; class Scrollbar; }
 
