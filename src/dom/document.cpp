@@ -512,7 +512,8 @@ bool layoutAffectingChanged(const htmlayout::css::ComputedStyle& a,
 void Document::resolveStylesRecursive(Element* elem,
                                        const htmlayout::css::ComputedStyle* parentStyle,
                                        bool force,
-                                       bool selectorForce) {
+                                       bool selectorForce,
+                                       bool hoverForce) {
     // Did a selector input change on this element (class/id/attribute/:hover),
     // or on an ancestor? Either way every rule in this subtree may now match
     // differently, so the subtree has to re-resolve and `selDirty` carries that
@@ -523,6 +524,21 @@ void Document::resolveStylesRecursive(Element* elem,
     // paint-only write like `container.style.opacity = x` re-resolves exactly one
     // element instead of its entire subtree.
     const bool selDirty = selectorForce | elem->takeSelectorDirty();
+
+    // A :hover flipped at or under this element's scope (set on the hovered
+    // chains' common ancestor, so siblings are covered too). Unlike selDirty
+    // this does NOT re-resolve the subtree: the only selector input that moved
+    // is :hover, so an element can only re-match if some rule names :hover
+    // outside its subject compound AND names this element as that subject
+    // (`.row:hover .label` — hoverCanAffect). Everything else in the subtree
+    // keeps the style it has, which is what keeps a mouse move off the bill of
+    // whatever container it happens to be over.
+    const bool hoverDirty = hoverForce | elem->takeHoverScopeDirty();
+    const bool hoverResolve =
+        hoverDirty && !selDirty &&
+        cascade_.hoverCanAffect(elem->tagName(), elem->getAttribute("id"),
+                                elem->getAttribute("class"));
+
     // An element with an active CSS animation or transition must re-resolve
     // its style every frame so applyOverrides() below re-runs and advances the
     // interpolated value — even when nothing marked it dirty. This is
@@ -535,7 +551,7 @@ void Document::resolveStylesRecursive(Element* elem,
         (animationManager_ && animationManager_->hasActive(elem)) ||
         (transitionManager_ && transitionManager_->hasActive(elem));
 
-    bool needsResolve = force || selDirty || elem->isDirty() ||
+    bool needsResolve = force || selDirty || hoverResolve || elem->isDirty() ||
                         elem->computedStyle().empty() || animatingSelf;
 
     // Set below from the style diff: can this element's re-resolve have changed
@@ -689,11 +705,15 @@ void Document::resolveStylesRecursive(Element* elem,
     // scoping and re-resolve the subtree the way we always did.
     const bool childForce =
         needsResolve && (selDirty || passedDownChanged || forcedInherit_);
+    // The hover scope carries all the way down: `.row:hover .cell .label` names
+    // a subject several levels below the element whose :hover flipped, and the
+    // levels in between re-match nothing themselves.
+    const bool childHoverForce = hoverDirty;
 
     for (auto* child : elem->childNodes()) {
         if (child->nodeType() == NodeType::Element) {
             resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle(),
-                                   childForce, selDirty);
+                                   childForce, selDirty, childHoverForce);
         }
     }
 
@@ -703,7 +723,7 @@ void Document::resolveStylesRecursive(Element* elem,
         for (auto* child : sr->childNodes()) {
             if (child->nodeType() == NodeType::Element) {
                 resolveStylesRecursive(static_cast<Element*>(child), &elem->computedStyle(),
-                                       childForce, selDirty);
+                                       childForce, selDirty, childHoverForce);
             }
         }
     }

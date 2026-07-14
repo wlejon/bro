@@ -118,12 +118,21 @@ public:
     void markLayoutDirty() { layoutDirty_ = true; }
     bool takeLayoutDirty() { bool d = layoutDirty_; layoutDirty_ = false; return d; }
 
-    // A selector *input* on this element changed — class, id, an attribute, or
-    // its :hover state — so rules matching anywhere in its subtree (`.dark .btn`)
-    // may now match differently and the whole subtree has to re-resolve. An
-    // inline-style write sets dirty_ without this, and then only descendants that
-    // inherit a changed value re-resolve. True initially: nothing is resolved yet.
+    // A selector *input* on this element changed — class, id or an attribute —
+    // so rules matching anywhere in its subtree (`.dark .btn`) may now match
+    // differently and the whole subtree has to re-resolve. An inline-style write
+    // sets dirty_ without this, and then only descendants that inherit a changed
+    // value re-resolve. True initially: nothing is resolved yet.
     bool takeSelectorDirty() { bool d = selectorDirty_; selectorDirty_ = false; return d; }
+
+    // A :hover flipped somewhere at or under this element. Like selectorDirty_
+    // it means "rules may match differently below me", but the *only* input that
+    // moved is :hover — so instead of re-resolving the subtree, each descendant
+    // is asked whether a hover-descendant rule could name it (Cascade::
+    // hoverCanAffect). Set on the hovered chain's common ancestor, because a
+    // rule can reach a sibling (`.tab:hover + .panel`) as easily as a child.
+    void markHoverScopeDirty();
+    bool takeHoverScopeDirty() { bool d = hoverScopeDirty_; hoverScopeDirty_ = false; return d; }
 
     // Owner document
     void setDocument(Document* doc) { document_ = doc; }
@@ -304,6 +313,7 @@ private:
     bool dirty_ = false;
     bool layoutDirty_ = false;
     bool selectorDirty_ = true;
+    bool hoverScopeDirty_ = false;
     bool structureDirty_ = false;
     bool scrollToBottom_ = false;
     bool styleSheetAdded_ = false;

@@ -820,7 +820,17 @@ void Element::markPaintDirty() {
     // so the layout thread can skip the full layoutTree() pass unless the
     // re-resolve turns up an actual geometry change (promoteLayoutDirty).
     dirty_ = true;
-    selectorDirty_ = true;   // :hover / class / id — descendant rules may re-match
+    selectorDirty_ = true;   // class / id — descendant rules may re-match
+    if (document_) {
+        document_->markPaintDirty();
+    }
+}
+
+void Element::markHoverScopeDirty() {
+    // Not dirty_ itself: the pointer entering a descendant does not change this
+    // element's own :hover (it was hovered before and after). It only opens the
+    // subtree to the scoped hover re-match — see takeHoverScopeDirty.
+    hoverScopeDirty_ = true;
     if (document_) {
         document_->markPaintDirty();
     }

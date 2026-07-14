@@ -63,21 +63,52 @@ static bool inEditableHost(bro::dom::Node* node) {
 // hover / leaving the document), in which case that chain has no shared
 // ancestor and the whole path to the root legitimately changes.
 //
-// markPaintDirty (not markDirty): a :hover restyle is almost always paint-only
+// markStyleDirty (not markDirty): a :hover restyle is almost always paint-only
 // (background/color), so it must not force the full O(N) layoutTree() pass on
 // every mouse move. resolveStyles() diffs each re-resolved element and promotes
 // to a real layout only if a :hover rule actually changed geometry, so a
 // `:hover { padding }` still lays out correctly.
-static void markHoverChainDirty(bro::dom::Element* prev, bro::dom::Element* target) {
+//
+// And not markPaintDirty either, which would ALSO set selectorDirty_ and re-
+// resolve every element under each chain element — landing the pointer on a
+// container then costs a restyle of its whole subtree (a rail of 700 elements,
+// every mouse move). The rules that can re-match around a hover flip are only
+// those naming :hover outside their subject compound (`.row:hover .label`), so
+// each flipped element instead gets a hover *scope* mark: resolveStyles walks
+// its subtree and re-resolves only the elements such a rule could actually name
+// (Cascade::hoverCanAffect). Everything else keeps the style it has.
+//
+// A rule whose :hover reaches its subject through a sibling combinator
+// (`.tab:hover + .panel`) names an element OUTSIDE the flipped element's
+// subtree, so a sheet that has one widens each scope to the parent. The chain
+// elements' parents are chain elements themselves, so in practice that is just
+// the common ancestor.
+static void markHoverChainDirty(const htmlayout::css::Cascade& cascade,
+                                bro::dom::Element* prev, bro::dom::Element* target) {
+    const bool siblingScope = cascade.hoverAffectsSiblings();
     auto isAncestorOrSelf = [](bro::dom::Element* a, bro::dom::Element* d) {
         for (auto* e = d; e; e = e->parentElement())
             if (e == a) return true;
         return false;
     };
-    for (auto* e = target; e && !isAncestorOrSelf(e, prev); e = e->parentElement())
-        e->markPaintDirty();
-    for (auto* e = prev; e && !isAncestorOrSelf(e, target); e = e->parentElement())
-        e->markPaintDirty();
+    // Its own :hover flipped: re-resolve it. And if some rule pairs a :hover on
+    // an element like it with a subject elsewhere, open the scope that finds
+    // that subject — for anything else (the container the pointer crossed, the
+    // gap between two rows) the flip changes nothing but the element itself.
+    auto flipped = [&](bro::dom::Element* e) {
+        e->markStyleDirty();
+        if (!cascade.hoverInvalidatesDescendants(e->tagName(), e->getAttribute("id"),
+                                                 e->getAttribute("class")))
+            return;
+        e->markHoverScopeDirty();
+        if (siblingScope && e->parentElement())
+            e->parentElement()->markHoverScopeDirty();
+    };
+    bro::dom::Element* lca = nullptr;
+    for (auto* e = target; e; e = e->parentElement())
+        if (isAncestorOrSelf(e, prev)) { lca = e; break; }
+    for (auto* e = target; e && e != lca; e = e->parentElement()) flipped(e);
+    for (auto* e = prev; e && e != lca; e = e->parentElement()) flipped(e);
 }
 
 // Walk from `el` up to the root checking computed `user-select`. Returns true
@@ -1345,7 +1376,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             // cached style stale and it fails to highlight. The JS dispatched
             // above can free the old target; re-fetch it through the handle.
             if (document_ && document_->cascade().usesHoverPseudo()) {
-                markHoverChainDirty(hoveredElement_.get(), target);
+                markHoverChainDirty(document_->cascade(), hoveredElement_.get(), target);
                 uiDirty_ = true;
             }
             hoveredElement_.assign(document_.get(), target);

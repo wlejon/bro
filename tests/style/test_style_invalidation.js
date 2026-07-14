@@ -119,4 +119,74 @@ app2.style.setProperty('background-color', 'rgb(8,8,8)');
 flush();
 assert(bg() === 'rgb(8,8,8)', 'background-color:inherit follows parent: ' + bg());
 
+// ── :hover is scoped by what a hover rule can actually name ────────────────
+// The pointer moving re-resolves the elements whose :hover flipped, and then
+// only the elements some rule pairs with a :hover ancestor or sibling. Each
+// shape below is a way that scoping can be wrong: too narrow and the style
+// silently never updates, too wide and every mouse move restyles whatever
+// container the pointer happens to be inside.
+const hs = document.createElement('style');
+hs.textContent = `
+  #hv-list { padding: 30px; }
+  #hv-list .row:hover { color: rgb(13,13,13); }
+  #hv-list .row:hover .label { color: rgb(10,10,10); }
+  #hv-list .row:hover b { color: rgb(11,11,11); }
+  #hv-tabs .tab:hover + .panel { color: rgb(12,12,12); }
+`;
+document.head.appendChild(hs);
+
+let fill = '';
+for (let i = 0; i < 100; i++) fill += '<span class="label">f</span>';
+root.innerHTML = `
+  <div id="hv-list">
+    <div class="row" id="hv-r1"><span class="label" id="hv-l1">a</span><b id="hv-b1">B</b></div>
+    <div class="row" id="hv-r2"><span class="label" id="hv-l2">c</span></div>
+    <div id="hv-fill">${fill}</div>
+  </div>
+  <div id="hv-tabs">
+    <div class="tab" id="hv-t1">t</div>
+    <div class="panel" id="hv-p1">p</div>
+  </div>`;
+flush();
+
+const list = document.getElementById('hv-list');
+const away = () => { mouseMove(2, 2); flush(); };
+const hover = (id) => {
+  const b = document.getElementById(id).getBoundingClientRect();
+  mouseMove(b.left + b.width / 2, b.top + b.height / 2);
+  flush();
+};
+away();
+
+// Descendant of the hovered element, keyed by class and by tag.
+hover('hv-r1');
+assert(color('hv-r1') === 'rgb(13,13,13)', 'hovered row itself: ' + color('hv-r1'));
+assert(color('hv-l1') === 'rgb(10,10,10)', '.row:hover .label: ' + color('hv-l1'));
+assert(color('hv-b1') === 'rgb(11,11,11)', '.row:hover b: ' + color('hv-b1'));
+// The other row is untouched — its :hover never flipped.
+assert(color('hv-l2') !== 'rgb(10,10,10)', 'sibling row label unaffected');
+
+away();
+assert(color('hv-l1') !== 'rgb(10,10,10)', 'label reverts on unhover: ' + color('hv-l1'));
+
+// Sibling: the subject is OUTSIDE the hovered element's subtree, so the scope
+// has to reach up to the parent to find it.
+hover('hv-t1');
+assert(color('hv-p1') === 'rgb(12,12,12)', '.tab:hover + .panel: ' + color('hv-p1'));
+away();
+assert(color('hv-p1') !== 'rgb(12,12,12)', 'panel reverts on unhover: ' + color('hv-p1'));
+
+// And the scope: hovering the list's padding flips :hover on #hv-list, which no
+// rule names on the :hover side — so none of the 100 labels under it re-resolve.
+// (Hovering it used to re-match its whole subtree, which is what made dragging
+// across a big panel cost a full-document restyle.)
+const lb = list.getBoundingClientRect();
+away();
+perf.reset();
+mouseMove(lb.left + 4, lb.top + 4);
+flush();
+const styled = perf.stats().elementsStyled;
+assert(styled < 12, 'hovering a container no hover rule names stays O(chain): ' +
+                    styled + ' elements re-resolved');
+
 root.innerHTML = '';

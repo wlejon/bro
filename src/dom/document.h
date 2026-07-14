@@ -315,7 +315,8 @@ private:
     void buildTreeFromGumbo(::GumboNode* node, Element* parentElem);
     void collectElements(Node* node, std::vector<Element*>& out);
     void resolveStylesRecursive(Element* elem, const htmlayout::css::ComputedStyle* parentStyle,
-                                bool force = false, bool selectorForce = false);
+                                bool force = false, bool selectorForce = false,
+                                bool hoverForce = false);
     // Add the CSS of any connected <style> element whose rules aren't in the
     // cascade yet (a runtime document.head.appendChild(styleEl)). Incremental —
     // it never clears the cascade, so UA / linked / shadow-scoped sheets and
