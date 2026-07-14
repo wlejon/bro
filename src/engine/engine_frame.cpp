@@ -590,8 +590,19 @@ void Engine::run() {
         //     (Trade-off: layout does not overlap composite + swap; raster
         //     does. Raster is the heavier of the two and benefits more from
         //     the vsync window.)
+        //
+        //     Because the wait is sequential, the layout thread's whole cost —
+        //     style resolution included — lands here, inside the raster phase's
+        //     clock. Bill it to Layout instead and subtract it from Raster
+        //     below: a HUD that reports "Layout 0.01 ms, Raster 25 ms" while a
+        //     style pass eats the frame sends you hunting through the
+        //     rasterizer for a bug that is in the cascade.
+        double layoutWaitMs = 0.0;
         if (layoutSignaled) {
-            if (layoutPipeline_->waitClaimDone()) {
+            double tWait = util::currentTimeMs();
+            bool layoutClaimed = layoutPipeline_->waitClaimDone();
+            layoutWaitMs = util::currentTimeMs() - tWait;
+            if (layoutClaimed) {
                 if (document_ && document_->documentElement()) {
                     auto& box = document_->documentElement()->layoutBox();
                     documentHeight_ = box.marginBox().height;
@@ -787,7 +798,10 @@ void Engine::run() {
             if (auto* cs = canvasSceneById(layer.canvasSceneId))
                 cs->consumeFence();
         }
-        accumRasterMs_ += util::currentTimeMs() - tRaster;
+        // Record + signal + canvas fences. The layout-thread wait ran inside
+        // this span but belongs to Layout (see step 5a), so take it back out.
+        accumRasterMs_ += (util::currentTimeMs() - tRaster) - layoutWaitMs;
+        accumLayoutMs_ += layoutWaitMs;
 
         double tGpu = util::currentTimeMs();
 
