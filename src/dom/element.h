@@ -156,10 +156,19 @@ public:
     // Generated content for ::before / ::after. The cascade resolves these
     // in Document::resolveStyles when CSS rules target the pseudo-element.
     // `which` is "before" or "after". Empty content string means no pseudo.
+    //
+    // The backing storage (two ComputedStyle maps + two LayoutBoxes + two
+    // content strings) is heavy and idle on the vast majority of elements — a
+    // ::before/::after is rare — so it lives behind a lazily-allocated
+    // PseudoData pointer instead of inline. An element with no pseudo pays one
+    // null pointer; the block is allocated on first setPseudo() and freed when
+    // both pseudos are cleared. Accessors return references to shared static
+    // empties when the block is absent, matching the old inline behaviour.
     const std::string& pseudoContent(const std::string& which) const {
         static const std::string empty;
-        if (which == "before") return pseudoBeforeContent_;
-        if (which == "after")  return pseudoAfterContent_;
+        if (!pseudo_) return empty;
+        if (which == "before") return pseudo_->beforeContent;
+        if (which == "after")  return pseudo_->afterContent;
         return empty;
     }
     // Whether a ::before/::after pseudo-element exists at all. A pseudo with
@@ -167,39 +176,44 @@ public:
     // layout (e.g. clearfix, block spacers), so box generation is gated on
     // this flag rather than on the content text being non-empty.
     bool hasPseudo(const std::string& which) const {
-        if (which == "before") return pseudoBeforeActive_;
-        if (which == "after")  return pseudoAfterActive_;
+        if (!pseudo_) return false;
+        if (which == "before") return pseudo_->beforeActive;
+        if (which == "after")  return pseudo_->afterActive;
         return false;
     }
     const htmlayout::css::ComputedStyle& pseudoStyle(const std::string& which) const {
         static const htmlayout::css::ComputedStyle empty;
-        if (which == "before") return pseudoBeforeStyle_;
-        if (which == "after")  return pseudoAfterStyle_;
+        if (!pseudo_) return empty;
+        if (which == "before") return pseudo_->beforeStyle;
+        if (which == "after")  return pseudo_->afterStyle;
         return empty;
     }
     const htmlayout::layout::LayoutBox& pseudoBox(const std::string& which) const {
         static const htmlayout::layout::LayoutBox empty;
-        if (which == "before") return pseudoBeforeBox_;
-        if (which == "after")  return pseudoAfterBox_;
+        if (!pseudo_) return empty;
+        if (which == "before") return pseudo_->beforeBox;
+        if (which == "after")  return pseudo_->afterBox;
         return empty;
     }
     htmlayout::layout::LayoutBox& pseudoBoxMut(const std::string& which) {
         static htmlayout::layout::LayoutBox empty;
-        if (which == "before") return pseudoBeforeBox_;
-        if (which == "after")  return pseudoAfterBox_;
-        return empty;
+        if (which != "before" && which != "after") return empty;
+        ensurePseudo();
+        return (which == "before") ? pseudo_->beforeBox : pseudo_->afterBox;
     }
     void setPseudo(const std::string& which,
                    std::string content,
                    htmlayout::css::ComputedStyle style) {
+        if (which != "before" && which != "after") return;
+        ensurePseudo();
         if (which == "before") {
-            pseudoBeforeContent_ = std::move(content);
-            pseudoBeforeStyle_ = std::move(style);
-            pseudoBeforeActive_ = true;
-        } else if (which == "after") {
-            pseudoAfterContent_ = std::move(content);
-            pseudoAfterStyle_ = std::move(style);
-            pseudoAfterActive_ = true;
+            pseudo_->beforeContent = std::move(content);
+            pseudo_->beforeStyle = std::move(style);
+            pseudo_->beforeActive = true;
+        } else {
+            pseudo_->afterContent = std::move(content);
+            pseudo_->afterStyle = std::move(style);
+            pseudo_->afterActive = true;
         }
     }
     void clearPseudos() {
@@ -207,15 +221,20 @@ public:
         clearPseudo("after");
     }
     void clearPseudo(const std::string& which) {
+        if (!pseudo_) return;
         if (which == "before") {
-            pseudoBeforeContent_.clear();
-            pseudoBeforeStyle_.clear();
-            pseudoBeforeActive_ = false;
+            pseudo_->beforeContent.clear();
+            pseudo_->beforeStyle.clear();
+            pseudo_->beforeActive = false;
         } else if (which == "after") {
-            pseudoAfterContent_.clear();
-            pseudoAfterStyle_.clear();
-            pseudoAfterActive_ = false;
+            pseudo_->afterContent.clear();
+            pseudo_->afterStyle.clear();
+            pseudo_->afterActive = false;
         }
+        // Release the block once neither pseudo is live, so a transient pseudo
+        // does not leave the heap footprint attached to the element forever.
+        if (!pseudo_->beforeActive && !pseudo_->afterActive)
+            pseudo_.reset();
     }
 
     // Shadow DOM
@@ -324,15 +343,20 @@ private:
     htmlayout::css::ComputedStyle computedStyle_;
     htmlayout::layout::LayoutBox layoutBox_;
 
-    // ::before / ::after generated content (empty = no pseudo)
-    std::string pseudoBeforeContent_;
-    std::string pseudoAfterContent_;
-    htmlayout::css::ComputedStyle pseudoBeforeStyle_;
-    htmlayout::css::ComputedStyle pseudoAfterStyle_;
-    htmlayout::layout::LayoutBox pseudoBeforeBox_;
-    htmlayout::layout::LayoutBox pseudoAfterBox_;
-    bool pseudoBeforeActive_ = false;
-    bool pseudoAfterActive_ = false;
+    // ::before / ::after generated content, lazily allocated (see accessors).
+    // Null until an element actually has a pseudo-element resolved.
+    struct PseudoData {
+        std::string beforeContent;
+        std::string afterContent;
+        htmlayout::css::ComputedStyle beforeStyle;
+        htmlayout::css::ComputedStyle afterStyle;
+        htmlayout::layout::LayoutBox beforeBox;
+        htmlayout::layout::LayoutBox afterBox;
+        bool beforeActive = false;
+        bool afterActive = false;
+    };
+    std::unique_ptr<PseudoData> pseudo_;
+    void ensurePseudo() { if (!pseudo_) pseudo_ = std::make_unique<PseudoData>(); }
 
     // Replaced element controllers
     std::unique_ptr<layout::ElInput> inputControl_;
