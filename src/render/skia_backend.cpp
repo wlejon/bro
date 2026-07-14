@@ -713,6 +713,7 @@ bool SkiaRenderer::registerCustomFont(const std::string& family,
     }
     if (!typeface) return false;
     customFonts_.push_back({family, weight, italic, typeface});
+    noteFontRegistered();
     return true;
 }
 

@@ -4,8 +4,10 @@
 #include "render/renderer.h"
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <cmath>
 #include <cstdlib>
+#include <cstdint>
 
 namespace bro::layout {
 
@@ -21,7 +23,7 @@ public:
                        std::string_view fontFamily,
                        float fontSize,
                        std::string_view fontWeight) override {
-        auto tm = renderer_->measureText(std::string{text}, makeRef(fontFamily, fontSize, fontWeight));
+        auto tm = measure(text, fontFamily, fontSize, fontWeight);
         return tm.width;
     }
 
@@ -31,7 +33,7 @@ public:
         // Empty-text measureText returns just the font's vertical metrics —
         // the renderer pulls these straight from SkFontMetrics, no glyph
         // shaping needed.
-        auto tm = renderer_->measureText("", makeRef(fontFamily, fontSize, fontWeight));
+        auto tm = measure("", fontFamily, fontSize, fontWeight);
         // CSS line-height: normal = ascent + descent + leading, with each
         // component rounded to an integer independently — Blink rounds
         // SkFontMetrics fAscent/fDescent/fLeading per component in
@@ -45,7 +47,7 @@ public:
     float naturalHeight(std::string_view fontFamily,
                         float fontSize,
                         std::string_view fontWeight) override {
-        auto tm = renderer_->measureText("", makeRef(fontFamily, fontSize, fontWeight));
+        auto tm = measure("", fontFamily, fontSize, fontWeight);
         // Text-run rect height is the font box without line gap: Blink
         // reports round(ascent) + round(descent) (17 for 16px Arial, where
         // line-height: normal is 18 with the gap).
@@ -56,7 +58,7 @@ public:
     float ascent(std::string_view fontFamily,
                  float fontSize,
                  std::string_view fontWeight) override {
-        auto tm = renderer_->measureText("", makeRef(fontFamily, fontSize, fontWeight));
+        auto tm = measure("", fontFamily, fontSize, fontWeight);
         // Blink rounds the font ascent to an integer (SkScalarRoundToScalar
         // on -fAscent); baselines land on integral offsets from the line top.
         float a = std::round(tm.ascent);
@@ -69,13 +71,73 @@ public:
     float xHeight(std::string_view fontFamily,
                   float fontSize,
                   std::string_view fontWeight) override {
-        auto tm = renderer_->measureText("", makeRef(fontFamily, fontSize, fontWeight));
+        auto tm = measure("", fontFamily, fontSize, fontWeight);
         // Real x-height from SkFontMetrics (unrounded, matching Blink).
         // Fonts that don't report one fall back to the CSS 0.5em ratio.
         return tm.xHeight > 0 ? tm.xHeight : 0.5f * fontSize;
     }
 
 private:
+    // The one place every metric this class serves reaches the renderer — so the
+    // one place worth caching.
+    //
+    // Layout asks the same question over and over: the width of the same word in
+    // the same font on every pass, the width of " " for every inter-word gap, the
+    // vertical metrics of a font (an empty-string measure) for every line box it
+    // builds. Shaping is a few microseconds a call and one pass over a busy
+    // document makes tens of thousands of them, which is most of what a slow
+    // layout pass is actually made of — measured on a 4k-element app, a single
+    // relayout spent 15 of its 16ms here.
+    //
+    // Keyed on the exact inputs the interface takes, so a hit is exact, not an
+    // approximation. Dropped whole when a custom font arrives, since the same
+    // family can resolve to a different face across that.
+    render::TextMetrics measure(std::string_view text, std::string_view family,
+                                float size, std::string_view weight) {
+        measureCalls++;
+        render::FontRef ref = makeRef(family, size, weight);
+        if (renderer_->fontGeneration() != fontGeneration_) {
+            cache_.clear();
+            fontGeneration_ = renderer_->fontGeneration();
+        }
+        Key key{std::string{text}, std::string{ref.family}, ref.size, ref.weight};
+        if (auto it = cache_.find(key); it != cache_.end()) return it->second;
+
+        render::TextMetrics tm = renderer_->measureText(text, ref);
+        // A document that measures unboundedly many distinct strings (a running
+        // log, a text field being typed into) must not grow this forever. Start
+        // over rather than evict: the next pass re-measures only what it still
+        // needs, and LRU bookkeeping on every hit would cost more than the
+        // occasional refill.
+        if (cache_.size() >= kMaxEntries) cache_.clear();
+        cache_.emplace(std::move(key), tm);
+        return tm;
+    }
+
+    struct Key {
+        std::string text;
+        std::string family;
+        float size;
+        int weight;
+        bool operator==(const Key& o) const {
+            return size == o.size && weight == o.weight &&
+                   text == o.text && family == o.family;
+        }
+    };
+    struct KeyHash {
+        size_t operator()(const Key& k) const {
+            size_t h = std::hash<std::string_view>{}(k.text);
+            auto mix = [&h](size_t v) { h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2); };
+            mix(std::hash<std::string_view>{}(k.family));
+            mix(std::hash<float>{}(k.size));
+            mix(static_cast<size_t>(k.weight));
+            return h;
+        }
+    };
+    static constexpr size_t kMaxEntries = 1 << 16;
+    std::unordered_map<Key, render::TextMetrics, KeyHash> cache_;
+    uint64_t fontGeneration_ = 0;
+
     render::FontRef makeRef(std::string_view family, float size,
                             std::string_view weight) {
         int w = 400;

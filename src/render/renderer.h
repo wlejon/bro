@@ -235,6 +235,12 @@ public:
                                     const void* data, size_t len,
                                     int weight, bool italic) { return false; }
 
+    // Bumped whenever a custom font is registered. The same FontRef can resolve
+    // to a different face across that event, so anything holding on to a
+    // measurement taken from this renderer keys on the generation and throws the
+    // measurement away when it moves. See layout::SkiaTextMetrics.
+    uint64_t fontGeneration() const { return fontGeneration_; }
+
     virtual void drawLine(float x1, float y1, float x2, float y2, bromath::Color color, float thickness) = 0;
 
     // Draw an encoded image (PNG/JPEG/etc) into the rect (x, y, w, h).
@@ -368,6 +374,12 @@ public:
     /// Capture the surface as RGBA pixels (w x h x 4). Returns empty on failure.
     virtual std::vector<uint8_t> capturePixels() { return {}; }
 
+protected:
+    // Implementations call this from registerCustomFont() on success.
+    void noteFontRegistered() { ++fontGeneration_; }
+
+private:
+    uint64_t fontGeneration_ = 0;
 };
 
 } // namespace bro::render
