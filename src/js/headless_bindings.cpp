@@ -959,6 +959,10 @@ static JSValue js_perf_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     num("nodesReused", static_cast<double>(p.nodesReused));
     num("measureCalls", static_cast<double>(p.measureCalls));
     num("styleLookups", static_cast<double>(p.styleLookups));
+    num("reuseFailDirty", static_cast<double>(p.reuseFailDirty));
+    num("reuseFailAvailW", static_cast<double>(p.reuseFailAvailW));
+    num("reuseFailAvailH", static_cast<double>(p.reuseFailAvailH));
+    num("reuseFailOverride", static_cast<double>(p.reuseFailOverride));
     return o;
 }
 

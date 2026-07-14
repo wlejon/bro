@@ -109,6 +109,10 @@ DOM update actually pays for, and the two a screenshot can't show you.
 | `nodesReused` | layout nodes handed back from cache untouched |
 | `measureCalls` | text measurements (shaping) requested |
 | `styleLookups` | string-keyed style map lookups inside `layoutTree()` |
+| `reuseFailDirty` | nodes re-laid because they (or a descendant) really changed |
+| `reuseFailAvailW` | nodes re-laid because their available width differed from cache |
+| `reuseFailAvailH` | nodes re-laid because their available height differed from cache |
+| `reuseFailOverride` | nodes re-laid because their flex width override differed |
 | `treeRebuilds` | layout subtrees rebuilt from the DOM |
 
 **The counts matter more than the milliseconds.** Layout and style are both
@@ -119,7 +123,11 @@ thousands of nodes has an *invalidation* bug — something marked more dirty tha
 it had to — and no amount of making layout faster will fix it. Likewise a large
 `measureCalls` says the cost is text shaping, not boxes, and `styleLookups`
 far out of proportion to `nodeVisits` says some pass is re-deriving style
-across whole subtrees instead of touching only what changed.
+across whole subtrees instead of touching only what changed. When
+`nodesLaidOut` is high, the `reuseFail*` counters say why: `reuseFailDirty`
+is real invalidation (look upstream at what got marked), while the other
+three mean clean subtrees are being offered different layout inputs than
+they were cached under — a cache-defeat inside layout itself.
 
 ```js
 // What does one slider drag event cost?

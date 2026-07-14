@@ -218,6 +218,12 @@ public:
         uint64_t nodesReused = 0;
         uint64_t measureCalls = 0;
         uint64_t styleLookups = 0; // styleVal() map lookups inside layoutTree()
+        // Why nodes were relaid rather than reused, by first failing condition:
+        // real dirt vs. a changed layout input cascading down a clean subtree.
+        uint64_t reuseFailDirty = 0;
+        uint64_t reuseFailAvailW = 0;
+        uint64_t reuseFailAvailH = 0;
+        uint64_t reuseFailOverride = 0;
         double totalMs() const { return styleMs + buildMs + invalidateMs + layoutMs + syncMs; }
     };
     const Perf& perf() const { return perf_; }

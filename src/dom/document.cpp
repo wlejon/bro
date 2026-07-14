@@ -1145,6 +1145,10 @@ void Document::performLayout(float viewportWidth, float viewportHeight, htmlayou
     perf_.layoutHitMs += ls.hitBoundsMs;
     perf_.measureCalls += metrics.measureCalls - measures0;
     perf_.styleLookups += ls.styleLookups;
+    perf_.reuseFailDirty += ls.reuseFailDirty;
+    perf_.reuseFailAvailW += ls.reuseFailAvailW;
+    perf_.reuseFailAvailH += ls.reuseFailAvailH;
+    perf_.reuseFailOverride += ls.reuseFailOverride;
 
     settleContainerQueries([&] {
         // The re-resolve inside settleContainerQueries marks whatever the
