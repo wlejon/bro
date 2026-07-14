@@ -239,12 +239,18 @@ private:
     // cascade yet (a runtime document.head.appendChild(styleEl)). Incremental —
     // it never clears the cascade, so UA / linked / shadow-scoped sheets and
     // @keyframes/@font-face survive. Runs from resolveStyles when armed.
-    void reconcileStyleElements();
+    // Returns true if a sheet was actually added, which forces a full re-resolve
+    // (the new rules can match elements nothing has marked dirty).
+    bool reconcileStyleElements();
 
-    // Generated content (::before / ::after) pass. Runs after style resolution
-    // in full document order, threading CSS counter scopes and quote-nesting
-    // depth so counter()/counters()/open-quote resolve correctly. Populates
-    // each element's pseudo content/style via Element::setPseudo.
+    // Generated content (::before / ::after) pass. Runs after style resolution.
+    // Two modes, chosen by what the stylesheet actually uses:
+    //   * counter()/counters()/quotes — a full document-order walk, threading
+    //     counter scopes and quote-nesting depth so they resolve correctly.
+    //   * anything else — only the elements re-resolved this pass (see
+    //     restyled_), because a pseudo-element then depends solely on its
+    //     originating element.
+    // Populates each element's pseudo content/style via Element::setPseudo.
 public:
     struct GenContentState;
 private:
@@ -253,6 +259,17 @@ private:
     void applyPseudo(Element* elem, const char* which, int depth, GenContentState& st);
     static void applyCounterOps(Element* elem, const htmlayout::css::ComputedStyle& style,
                                 int depth, GenContentState& st);
+
+    // Elements whose style was re-resolved by the current resolveStyles() pass.
+    // Rebuilt every pass; never read outside one, so the pointers can't dangle.
+    std::vector<Element*> restyled_;
+
+    // Sticky: some element in this document generates content whose value comes
+    // from a counter scope or the quote-nesting depth. Set when such a value is
+    // actually resolved (not merely present in a stylesheet — the UA sheet's
+    // q::before would make that true everywhere), and never cleared, since the
+    // element that tripped it may still be around.
+    bool statefulGenContent_ = false;
 
     template<typename T, typename... Args>
     T* allocateNode(Args&&... args) {

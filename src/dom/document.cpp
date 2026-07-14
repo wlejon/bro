@@ -328,10 +328,17 @@ void Document::setActiveElement(Element* el) {
 
 void Document::resolveStyles() {
     if (!documentElement_) return;
-    if (styleElsDirty_) reconcileStyleElements();
+    // A new stylesheet can restyle anything, and the elements it now matches
+    // were never marked dirty (nobody touched them — the *rules* changed). So a
+    // sheet arriving forces a full re-resolve; otherwise a runtime
+    // document.head.appendChild(styleEl) would only reach elements that some
+    // unrelated change happened to dirty later.
+    bool sheetAdded = styleElsDirty_ && reconcileStyleElements();
     layout::ElementRefAdapter::clearCache();
-    resolveStylesRecursive(documentElement_, nullptr);
+    restyled_.clear();
+    resolveStylesRecursive(documentElement_, nullptr, /*force=*/sheetAdded);
     resolveGeneratedContent();
+    restyled_.clear();
     layout::ElementRefAdapter::clearCache();
 }
 
@@ -341,18 +348,21 @@ void Document::resolveStyles() {
 // Incremental (no cascade clear) to preserve UA / linked / shadow-scoped sheets
 // and @keyframes/@font-face. A <style> whose text is still empty is left for a
 // later pass (its content may be assigned after insertion).
-void Document::reconcileStyleElements() {
+bool Document::reconcileStyleElements() {
     styleElsDirty_ = false;
-    if (!documentElement_) return;
+    if (!documentElement_) return false;
     std::vector<Element*> all;
     collectElements(root_, all);
+    bool added = false;
     for (auto* e : all) {
         if (e->tagName() != "STYLE" || e->styleSheetAdded()) continue;
         std::string css = e->textContent();
         if (css.empty()) continue;
         addSheetToCascade(htmlayout::css::parse(css));
         e->setStyleSheetAdded(true);
+        added = true;
     }
+    return added;
 }
 
 namespace {
@@ -552,10 +562,13 @@ void Document::resolveStylesRecursive(Element* elem,
             animationManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
         }
 
-        // ::before / ::after generated content is resolved in a separate,
-        // document-order pass (resolveGeneratedContent) after all styles are
-        // known, because counter()/counters()/open-quote depend on stateful
-        // counter scopes and quote-nesting that only make sense in tree order.
+        // ::before / ::after generated content is resolved in a separate pass
+        // (resolveGeneratedContent) once all styles are known — counter() and
+        // the quote keywords depend on scopes and nesting that only make sense
+        // in tree order. Note this element for that pass: its pseudo-elements
+        // are the only ones that can have changed, since a pseudo's rules are
+        // matched against its originating element and inherit from its style.
+        restyled_.push_back(elem);
 
         elem->clearDirty();
     }
@@ -672,17 +685,75 @@ struct Document::GenContentState {
         while (!stack.empty() && stack.back().depth >= depth) stack.pop_back();
         stack.push_back({value, depth});
     }
-    void increment(const std::string& name, long value, int depth) {
+    void increment(const std::string& name, long value, int) {
         auto& stack = counters[name];
-        if (stack.empty()) stack.push_back({0, depth});
+        // Incrementing a counter that no counter-reset created acts as though it
+        // had been reset to 0 on the ROOT element (CSS 2.1 §12.4.3) — so the
+        // implicit instance belongs to the root scope, at depth 0. Creating it at
+        // the incrementing element's depth instead would scope it to that
+        // element: `li::before { counter-increment: item }` increments at the
+        // pseudo's depth (one deeper than the <li>), and popDeeperThan would drop
+        // it the moment traversal reached the next <li> — restarting every marker
+        // at 1.
+        if (stack.empty()) stack.push_back({0, 0});
         stack.back().value += value;
     }
 };
 
 void Document::resolveGeneratedContent() {
     if (!documentElement_) return;
-    GenContentState st;
-    resolveGeneratedContentRecursive(documentElement_, 0, st);
+
+    // No ::before/::after rule anywhere ⇒ no element can carry generated
+    // content, and none ever did, so there is nothing to resolve or clear.
+    if (!cascade_.hasPseudoElementRules("before") &&
+        !cascade_.hasPseudoElementRules("after")) {
+        return;
+    }
+
+    // counter()/counters()/quotes read state that accumulates across the whole
+    // document in tree order, so they leave us no choice but to walk all of it.
+    if (statefulGenContent_) {
+        GenContentState st;
+        resolveGeneratedContentRecursive(documentElement_, 0, st);
+        return;
+    }
+
+    // Otherwise a pseudo-element is a pure function of its originating element:
+    // its rules are matched against that element, and it inherits from that
+    // element's computed style. So only an element whose style was re-resolved
+    // this pass can have different generated content — every other element
+    // keeps the pseudo it already has.
+    //
+    // This is the same assumption resolveStylesRecursive already makes for real
+    // elements (it re-resolves only dirty elements and their forced subtrees),
+    // so the two passes now agree on what "could have changed" means. Walking
+    // the whole document here instead cost ~3.5 ms per hover on a 391-row list:
+    // an O(document) price paid on every pointer move, for generated content
+    // that most pages don't have at all.
+    //
+    // The very first pass re-resolves every element, so a document that does
+    // use counters or quotes is guaranteed to trip the flag below on its way
+    // through — and then re-runs in document order, which is what makes this
+    // safe to decide from the elements we happen to be visiting.
+    GenContentState st;   // counter state goes unread on this path
+    for (auto* elem : restyled_) {
+        const auto& style = elem->computedStyle();
+        auto dispIt = style.find("display");
+        if (dispIt != style.end() && dispIt->second == "none") {
+            elem->clearPseudos();
+            continue;
+        }
+        applyPseudo(elem, "before", 0, st);
+        applyPseudo(elem, "after", 0, st);
+    }
+
+    // A stateful value turned up while we were resolving locally, so the values
+    // just written may have the wrong counter/quote state. Redo the pass the
+    // slow, correct way — and, the flag being sticky, every pass after it.
+    if (statefulGenContent_) {
+        GenContentState full;
+        resolveGeneratedContentRecursive(documentElement_, 0, full);
+    }
 }
 
 // Apply an element's counter-reset then counter-increment declarations at the
@@ -713,8 +784,11 @@ void Document::resolveGeneratedContentRecursive(Element* elem, int depth, GenCon
     // The element's own counter operations (reset before increment).
     if (!isNone) applyCounterOps(elem, style, depth, st);
 
-    // Reset any stale pseudo state; applyPseudo re-arms it when content exists.
-    elem->clearPseudos();
+    // display:none paints nothing, pseudo-elements included. Otherwise leave the
+    // existing pseudo state alone — applyPseudo diffs against it to decide
+    // whether the box moved, so clearing it up front would make every pseudo
+    // look brand new and promote a layout on every restyle.
+    if (isNone) elem->clearPseudos();
 
     // ::before is the element's first child — resolve it (and its counter ops)
     // after the element's own increment so counter() sees the post-increment
@@ -742,12 +816,35 @@ void Document::resolveGeneratedContentRecursive(Element* elem, int depth, GenCon
 }
 
 void Document::applyPseudo(Element* elem, const char* which, int depth, GenContentState& st) {
+    // A pseudo-element that stops matching has to be torn back down, so this
+    // owns both directions. The layout tree syncs its synthetic pseudo box in
+    // ensurePseudo() during layout, which means an appearing or disappearing
+    // pseudo is a GEOMETRY change: without the promotions below, a
+    // `:hover::before { content: "..." }` would restyle paint-only, skip layout
+    // entirely, and never actually show up (or, once shown, never go away).
+    auto dropPseudo = [&] {
+        if (!elem->hasPseudo(which)) return;
+        elem->clearPseudo(which);
+        layoutDirty_ = true;
+    };
+
+    // Cheapest possible miss: a sheet with no ::after rule shouldn't cost an
+    // adapter allocation per element just to be told nothing matched.
+    if (!cascade_.hasPseudoElementRules(which)) { dropPseudo(); return; }
     auto* adapter = layout::ElementRefAdapter::getOrCreate(elem);
     auto pseudoStyle = cascade_.resolvePseudo(*adapter, which, elem->computedStyle());
     auto cIt = pseudoStyle.find("content");
-    if (cIt == pseudoStyle.end()) return;
+    if (cIt == pseudoStyle.end()) { dropPseudo(); return; }
     const std::string& raw = cIt->second;
-    if (raw.empty() || raw == "normal" || raw == "none") return;
+    if (raw.empty() || raw == "normal" || raw == "none") { dropPseudo(); return; }
+
+    // This element really does generate counter/quote content, so the document
+    // needs the stateful document-order pass from here on (see
+    // resolveGeneratedContent). Latched on the RESOLVED value, not on the
+    // stylesheet: the UA sheet's `q::before { content: open-quote }` means every
+    // document has such a rule, but only one with an actual <q> in it pays.
+    if (!statefulGenContent_ && htmlayout::css::Cascade::contentIsStateful(raw))
+        statefulGenContent_ = true;
 
     // A pseudo-element can itself carry counter-reset / counter-increment; it
     // acts as a child of its originating element, so apply at depth.
@@ -852,6 +949,14 @@ void Document::applyPseudo(Element* elem, const char* which, int depth, GenConte
             if (st.quoteDepth > 0) --st.quoteDepth;
         }
         // Bare idents (e.g. `normal`) contribute nothing.
+    }
+
+    // Same paint-only test the real elements get: a pseudo whose text changed —
+    // or appeared — has moved geometry and needs a layout; one that only changed
+    // colour has not, and stays on the cheap paint-only path.
+    if (!elem->hasPseudo(which) || elem->pseudoContent(which) != out ||
+        layoutAffectingChanged(elem->pseudoStyle(which), pseudoStyle)) {
+        layoutDirty_ = true;
     }
 
     elem->setPseudo(which, std::move(out), std::move(pseudoStyle));

@@ -164,12 +164,19 @@ public:
         }
     }
     void clearPseudos() {
-        pseudoBeforeContent_.clear();
-        pseudoAfterContent_.clear();
-        pseudoBeforeStyle_.clear();
-        pseudoAfterStyle_.clear();
-        pseudoBeforeActive_ = false;
-        pseudoAfterActive_ = false;
+        clearPseudo("before");
+        clearPseudo("after");
+    }
+    void clearPseudo(const std::string& which) {
+        if (which == "before") {
+            pseudoBeforeContent_.clear();
+            pseudoBeforeStyle_.clear();
+            pseudoBeforeActive_ = false;
+        } else if (which == "after") {
+            pseudoAfterContent_.clear();
+            pseudoAfterStyle_.clear();
+            pseudoAfterActive_ = false;
+        }
     }
 
     // Shadow DOM
