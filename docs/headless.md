@@ -108,6 +108,7 @@ DOM update actually pays for, and the two a screenshot can't show you.
 | `nodesLaidOut` | layout nodes that ran a formatting context |
 | `nodesReused` | layout nodes handed back from cache untouched |
 | `measureCalls` | text measurements (shaping) requested |
+| `styleLookups` | string-keyed style map lookups inside `layoutTree()` |
 | `treeRebuilds` | layout subtrees rebuilt from the DOM |
 
 **The counts matter more than the milliseconds.** Layout and style are both
@@ -116,7 +117,9 @@ not to the size of the document. `nodesLaidOut` is what tells you whether that
 actually happened. A change to one element that comes back having laid out
 thousands of nodes has an *invalidation* bug — something marked more dirty than
 it had to — and no amount of making layout faster will fix it. Likewise a large
-`measureCalls` says the cost is text shaping, not boxes.
+`measureCalls` says the cost is text shaping, not boxes, and `styleLookups`
+far out of proportion to `nodeVisits` says some pass is re-deriving style
+across whole subtrees instead of touching only what changed.
 
 ```js
 // What does one slider drag event cost?

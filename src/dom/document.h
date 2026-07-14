@@ -217,6 +217,7 @@ public:
         uint64_t nodeVisits = 0;
         uint64_t nodesReused = 0;
         uint64_t measureCalls = 0;
+        uint64_t styleLookups = 0; // styleVal() map lookups inside layoutTree()
         double totalMs() const { return styleMs + buildMs + invalidateMs + layoutMs + syncMs; }
     };
     const Perf& perf() const { return perf_; }

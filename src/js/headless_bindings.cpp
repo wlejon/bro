@@ -958,6 +958,7 @@ static JSValue js_perf_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     num("nodeVisits", static_cast<double>(p.nodeVisits));
     num("nodesReused", static_cast<double>(p.nodesReused));
     num("measureCalls", static_cast<double>(p.measureCalls));
+    num("styleLookups", static_cast<double>(p.styleLookups));
     return o;
 }
 
