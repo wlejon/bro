@@ -82,6 +82,63 @@ The `bro.settings` API is available in headless mode for reading and writing per
 | `computedStyle(selector [, property])` | Return a specific computed style value (string), or all styles as a JS object. |
 | `elements(selector)` | Return a summary of all matching elements with sizes and positions. |
 
+### Performance
+
+`perf` measures what a change costs the style and layout passes — the two that a
+DOM update actually pays for, and the two a screenshot can't show you.
+
+| Function | Description |
+|----------|-------------|
+| `perf.now()` | Real wall-clock milliseconds. **Use this, not `performance.now()`** — that one rides virtual time (see below) and reports 0ms for work that took a second. |
+| `perf.reset()` | Zero the counters. |
+| `perf.stats()` | The counters since the last reset. |
+
+`perf.stats()` returns, accumulated over every style/layout pass since the reset:
+
+| Field | Meaning |
+|-------|---------|
+| `styleMs` | `resolveStyles()` — selector matching + the computed-style diff |
+| `buildMs` | rebuilding the whole layout tree from the DOM |
+| `invalidateMs` | carrying element dirt into the layout tree, including per-element subtree rebuilds |
+| `layoutMs` | `layoutTree()` itself |
+| `syncMs` | writing the resulting boxes back onto elements |
+| `totalMs` | the sum of the above |
+| `passes` | how many layout passes ran |
+| `elementsStyled` | elements whose computed style was re-resolved |
+| `nodesLaidOut` | layout nodes that ran a formatting context |
+| `nodesReused` | layout nodes handed back from cache untouched |
+| `measureCalls` | text measurements (shaping) requested |
+| `treeRebuilds` | layout subtrees rebuilt from the DOM |
+
+**The counts matter more than the milliseconds.** Layout and style are both
+incremental: a change is supposed to cost time proportional to what it changed,
+not to the size of the document. `nodesLaidOut` is what tells you whether that
+actually happened. A change to one element that comes back having laid out
+thousands of nodes has an *invalidation* bug — something marked more dirty than
+it had to — and no amount of making layout faster will fix it. Likewise a large
+`measureCalls` says the cost is text shaping, not boxes.
+
+```js
+// What does one slider drag event cost?
+const slider = document.querySelector('#gain');
+perf.reset();
+const t0 = perf.now();
+for (let i = 0; i < 20; i++) {
+  slider.value = String(i / 20);
+  slider.dispatchEvent(new Event('input'));
+  flush();                       // run the style + layout passes
+}
+const wall = (perf.now() - t0) / 20;
+const p = perf.stats();
+console.log(`${wall.toFixed(1)}ms/event, ${p.nodesLaidOut / 20} nodes laid out, ` +
+            `${p.nodesReused / 20} reused`);
+// 0.9ms/event, 54 nodes laid out, 1 reused   <- good: it only touched what changed
+// 138ms/event, 3440 nodes laid out, 0 reused <- bad: it relaid out the document
+```
+
+Note `flush()` is what runs the passes, so a benchmark must call it inside the
+loop; mutating the DOM ten times and flushing once measures one pass, not ten.
+
 ## Examples
 
 ### Interactive REPL

@@ -230,16 +230,35 @@ public:
                tag == "video" || tag == "VIDEO" || tag == "svg" || tag == "SVG";
     }
 
-    // Carry the DOM's per-element layout invalidation into the layout tree:
-    // every element that recorded a geometry change this frame dirties its own
-    // layout node and, via markDirty(), the ancestor chain above it — the only
-    // nodes htmlayout then recomputes. Walking the tree (rather than holding
-    // Element→node back-pointers) keeps the two structures decoupled: a node
-    // freed from the DOM can never leave a dangling mark behind.
-    void markDirtyFromElements() {
+    // Carry the DOM's per-element invalidation into the layout tree. Two kinds:
+    //
+    //  - geometry: the element's box may have moved. markDirty() flags the node
+    //    and the ancestor chain above it — the only nodes htmlayout recomputes.
+    //  - structure: the element's child list changed, so its layout children no
+    //    longer mirror the DOM. Rebuild that one node's children and dirty it.
+    //    Every subtree the change didn't touch keeps its cached geometry, which
+    //    is the whole difference between an appendChild costing O(changed) and
+    //    costing O(document) — a document with a few thousand elements pays
+    //    ~150ms for the latter, every time, which is what an app doing a small
+    //    DOM update per input event feels as lag.
+    //
+    // Walking the tree (rather than holding Element→node back-pointers) keeps
+    // the two structures decoupled: a node freed from the DOM can never leave a
+    // dangling mark behind.
+    //
+    // Returns how many subtrees it rebuilt, for the perf counters.
+    uint64_t markDirtyFromElements() {
+        uint64_t rebuilds = 0;
+        if (elem_ && elem_->takeStructureDirty()) {
+            children_.clear();
+            buildChildren(this, elem_);   // clears the flag on everything it builds
+            htmlayout::layout::markDirty(this);
+            rebuilds++;
+        }
         if (elem_ && elem_->takeLayoutDirty())
             htmlayout::layout::markDirty(this);
-        for (auto& child : children_) child->markDirtyFromElements();
+        for (auto& child : children_) rebuilds += child->markDirtyFromElements();
+        return rebuilds;
     }
 
     // Write layout results back to the DOM element/text node
@@ -321,6 +340,14 @@ private:
     }
 
     static void buildChildren(LayoutNodeAdapter* parent, dom::Element* elem) {
+        // Building an element's layout children straight from the DOM is exactly
+        // what a pending structural mark is asking for, so consume it here. This
+        // is what keeps an innerHTML of N nodes from rebuilding N nested
+        // subtrees: the parser marks every element it gives children to, and
+        // without this each of those marks would trigger its own rebuild of a
+        // subtree that was just built.
+        elem->takeStructureDirty();
+
         // SVG is a replaced element — its content is rendered by SkSVGDOM,
         // not by CSS layout. Don't descend into SVG children.
         if (elem->svgControl()) return;
@@ -404,14 +431,17 @@ private:
         }
     }
 
+    // Slot-distributed (or slot-fallback) children. Same rules as buildChildren:
+    // the tree's *shape* is a function of the DOM alone, never of computed style.
+    // A `display: none` child gets a layout node like any other — layoutNode()
+    // zero-sizes it and skips its subtree — so that flipping it back to `block`
+    // is a style change and nothing more. Dropping it here instead would make
+    // the shape style-dependent, which means every display toggle anywhere would
+    // have to throw the layout tree away to stay correct.
     static void addNodeToParent(LayoutNodeAdapter* parent, dom::Node* node,
                                  dom::Element* contextElem) {
         if (node->nodeType() == dom::NodeType::Element) {
             auto* elem = static_cast<dom::Element*>(node);
-            auto& style = elem->computedStyle();
-            auto it = style.find("display");
-            if (it != style.end() && it->second == "none") return;
-
             auto child = std::make_unique<LayoutNodeAdapter>(elem);
             child->parent_ = parent;
             buildChildren(child.get(), elem);

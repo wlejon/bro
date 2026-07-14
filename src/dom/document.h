@@ -137,7 +137,7 @@ public:
     void noteForcedInherit() { forcedInherit_ = true; }
 
     // Did this class change touch a class that some selector names in an
-    // ancestor position � i.e. can it re-match this element's descendants?
+    // ancestor position — i.e. can it re-match this element's descendants?
     // Only the classes that were actually added or removed are asked; a rewrite
     // of the same set changes nothing.
     bool classChangeAffectsDescendants(const std::string& oldCls,
@@ -147,11 +147,29 @@ public:
     bool isLayoutDirty() const { return layoutDirty_; }
     void clearDirty() { dirty_ = false; layoutDirty_ = false; }
 
-    // Structure dirty — DOM nodes added/removed, render tree needs rebuild.
+    // Structure dirty — DOM nodes were added or removed somewhere this frame.
+    // Consumers read isStructureDirty() to re-scan for things that follow the
+    // DOM's shape (replaced-element controls, iframe documents).
+    //
     // Also arms a style-element reconcile: a subtree that just changed may have
     // brought in (or repopulated) a <style>, so resolveStyles re-scans for any
     // whose CSS isn't in the cascade yet.
-    void markStructureDirty() { structureDirty_ = true; dirty_ = true; layoutDirty_ = true; styleElsDirty_ = true; fullLayout_ = true; }
+    //
+    // This is the element-attributed form: Element::markStructureDirty() has
+    // already recorded *which* element's children moved, so the layout tree
+    // rebuilds that node's children and keeps every other subtree's geometry.
+    void markElementStructureDirty() {
+        structureDirty_ = true; dirty_ = true; layoutDirty_ = true; styleElsDirty_ = true;
+    }
+    // ...and this is the unattributed form, for a change no element can be
+    // pinned to: a reparse, a fresh documentElement. Throw the layout tree away
+    // and rebuild it whole. Prefer the element form wherever there is an element
+    // — on a few-thousand-element document this one costs ~150ms.
+    void markStructureDirty() {
+        markElementStructureDirty();
+        rebuildLayoutTree_ = true;
+        fullLayout_ = true;
+    }
     bool isStructureDirty() const { return structureDirty_; }
     void clearStructureDirty() { structureDirty_ = false; }
 
@@ -173,6 +191,36 @@ public:
     // Perform layout on the tree using htmlayout
     void performLayout(float viewportWidth, htmlayout::layout::TextMetrics& metrics);
     void performLayout(float viewportWidth, float viewportHeight, htmlayout::layout::TextMetrics& metrics);
+
+    // What the style + layout passes have cost since the last reset. Accumulates
+    // across passes so a caller can bracket a whole scenario (a drag, a frame, a
+    // hundred flushes) and read one total. Surfaced by headless `perf.stats()`.
+    //
+    // The counts matter more than the milliseconds. `nodesLaidOut` against
+    // `nodesReused` says whether the incremental layout is working at all, and
+    // `measureCalls` says whether the cost is text shaping — a pass that changes
+    // one element and lays out four thousand nodes has an invalidation bug, not
+    // a speed problem, and only the counts show that.
+    struct Perf {
+        double styleMs = 0;        // resolveStyles(): cascade + computed-style diff
+        double buildMs = 0;        // rebuilding the whole layout tree from the DOM
+        double invalidateMs = 0;   // carrying element dirt in, incl. per-element rebuilds
+        double layoutMs = 0;       // htmlayout::layout::layoutTree(), which is:
+        double layoutTreeMs = 0;   //   in-flow layout (the incremental part)
+        double layoutAbsMs = 0;    //   positioning absolute/fixed boxes
+        double layoutHitMs = 0;    //   caching per-node subtree hit bounds
+        double syncMs = 0;         // writing boxes back onto elements
+        uint64_t passes = 0;       // performLayout() calls
+        uint64_t treeRebuilds = 0; // layout subtrees rebuilt from the DOM
+        uint64_t elementsStyled = 0;
+        uint64_t nodesLaidOut = 0;
+        uint64_t nodeVisits = 0;
+        uint64_t nodesReused = 0;
+        uint64_t measureCalls = 0;
+        double totalMs() const { return styleMs + buildMs + invalidateMs + layoutMs + syncMs; }
+    };
+    const Perf& perf() const { return perf_; }
+    void resetPerf() { perf_ = {}; }
 
     // Persistent layout-node tree. Rebuilt when structureDirty_ is set (DOM
     // mutations, shadow/slot changes, display toggles); reused across layouts
@@ -312,12 +360,14 @@ private:
     bool dirty_ = false;
     bool layoutDirty_ = false;
     bool structureDirty_ = false;
+    bool rebuildLayoutTree_ = false;
     bool styleElsDirty_ = false;  // a <style> may need adding to the cascade
     bool fullLayout_ = true;
     // The cascade (or an inline write) forced `inherit` on a non-inherited
     // property somewhere, so resolveStylesRecursive cannot scope a restyle by
     // diffing inherited values alone. Sticky once seen. See noteForcedInherit().
     bool forcedInherit_ = false;      // relayout the whole tree, not just what changed
+    Perf perf_;
     std::string basePath_;
     std::unordered_map<std::string, Element*> idMap_;
     std::unordered_map<Node*, std::unique_ptr<Node>> ownedNodes_;

@@ -916,6 +916,52 @@ static JSValue js_overlayPanels(JSContext* ctx, JSValueConst, int, JSValueConst*
 }
 
 // ---------------------------------------------------------------------------
+// perf — where the style and layout time of a change actually goes
+// ---------------------------------------------------------------------------
+
+// Real wall clock. performance.now() rides headless *virtual* time (advanceTime
+// drives it), so a benchmark built on it silently measures nothing at all — it
+// reports 0ms for work that took a second. This is the clock to time with.
+static JSValue js_perf_now(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto t = std::chrono::steady_clock::now().time_since_epoch();
+    return JS_NewFloat64(ctx, std::chrono::duration<double, std::milli>(t).count());
+}
+
+static JSValue js_perf_reset(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* engine = getEngine(ctx);
+    if (!engine || !engine->document()) return JS_ThrowInternalError(ctx, "No document");
+    engine->document()->resetPerf();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_perf_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* engine = getEngine(ctx);
+    if (!engine || !engine->document()) return JS_ThrowInternalError(ctx, "No document");
+    const auto& p = engine->document()->perf();
+    JSValue o = JS_NewObject(ctx);
+    auto num = [&](const char* k, double v) {
+        JS_SetPropertyStr(ctx, o, k, JS_NewFloat64(ctx, v));
+    };
+    num("styleMs", p.styleMs);
+    num("buildMs", p.buildMs);
+    num("invalidateMs", p.invalidateMs);
+    num("layoutMs", p.layoutMs);
+    num("layoutTreeMs", p.layoutTreeMs);
+    num("layoutAbsMs", p.layoutAbsMs);
+    num("layoutHitMs", p.layoutHitMs);
+    num("syncMs", p.syncMs);
+    num("totalMs", p.totalMs());
+    num("passes", static_cast<double>(p.passes));
+    num("treeRebuilds", static_cast<double>(p.treeRebuilds));
+    num("elementsStyled", static_cast<double>(p.elementsStyled));
+    num("nodesLaidOut", static_cast<double>(p.nodesLaidOut));
+    num("nodeVisits", static_cast<double>(p.nodeVisits));
+    num("nodesReused", static_cast<double>(p.nodesReused));
+    num("measureCalls", static_cast<double>(p.measureCalls));
+    return o;
+}
+
+// ---------------------------------------------------------------------------
 // Install
 // ---------------------------------------------------------------------------
 
@@ -930,6 +976,15 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
     // The canvas-snapshot binding is also installed by Engine in both modes;
     // re-installing is harmless (same engine pointer, same function).
     installCanvasSnapshotBinding(ctx, engine);
+
+    // perf.{now,reset,stats}: the numbers behind a slow frame. See docs/headless.md.
+    JSValue perf = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, perf, "now",   JS_NewCFunction(ctx, js_perf_now, "now", 0));
+    JS_SetPropertyStr(ctx, perf, "reset", JS_NewCFunction(ctx, js_perf_reset, "reset", 0));
+    JS_SetPropertyStr(ctx, perf, "stats", JS_NewCFunction(ctx, js_perf_stats, "stats", 0));
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "perf", perf);
+    JS_FreeValue(ctx, global);
 
     qjsbind::Global(ctx)
         // Core

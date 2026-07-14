@@ -573,9 +573,13 @@ void Element::setOuterHTML(const std::string& html) {
         document_->unregisterElementId(id());
     }
 
-    // Remove this element from parent
+    // Remove this element from parent. Mark the parent, not this element: its
+    // child list is the one that changed, and this element is about to leave the
+    // tree — a mark left on it would never be read.
+    Element* parentEl = parentElement();
     parent_->removeChild(this);
-    markStructureDirty();
+    if (parentEl) parentEl->markStructureDirty();
+    else document_->markStructureDirty();
 
     // Free the temporary container
     document_->freeNode(tempContainer);
@@ -832,16 +836,41 @@ void Element::markStyleDirty() {
     }
 }
 
+// Layout does not descend into every element. A <select>/<textarea>/<iframe>
+// owns its children (the control reads them straight from the DOM), and an <svg>
+// subtree is rendered by SkSVGDOM — none of them have layout nodes, so a
+// structural mark left on one would never be consumed and the change would
+// silently never reach the screen. The element layout stops at does have a node,
+// and re-laying it out is what re-measures the control, so redirect there.
+static bool layoutOwnsChildren(const Element* e) {
+    std::string_view tag = e->tagName();
+    return tag != "SELECT" && tag != "TEXTAREA" && tag != "IFRAME" && tag != "SVG";
+}
+
 void Element::markStructureDirty() {
-    dirty_ = true;
+    Element* target = this;
+    // A <slot> is replaced by the nodes assigned to it, so it has no layout node
+    // of its own. Its parent's children are what get rebuilt.
+    if (tagName() == "SLOT") {
+        if (Element* p = parentElement()) target = p;
+        else if (ShadowRoot* sr = containingShadowRoot()) target = sr->host();
+    }
+    if (!target) {
+        // Nowhere to pin it — fall back to rebuilding the whole tree, which is
+        // slow but always right.
+        if (document_) document_->markStructureDirty();
+        return;
+    }
+    for (Element* p = target->parentElement(); p; p = p->parentElement())
+        if (!layoutOwnsChildren(p)) target = p;
+
+    target->dirty_ = true;
+    target->structureDirty_ = true;
     // The child list is a selector input: inserting an <li> changes which
     // sibling matches :last-child, and :nth-child renumbers from the insertion
     // point on. So the subtree re-matches, exactly as a class change does.
-    selectorDirty_ = true;
-    if (document_) {
-        // Sets fullLayout_, so the whole tree relayouts — no layout mark needed.
-        document_->markStructureDirty();
-    }
+    target->selectorDirty_ = true;
+    if (document_) document_->markElementStructureDirty();
 }
 
 ShadowRoot* Element::containingShadowRoot() const {

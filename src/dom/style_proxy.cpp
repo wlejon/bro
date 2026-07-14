@@ -46,41 +46,34 @@ void StyleProxy::setProperty(const std::string& name, const std::string& value) 
     // Skip if value unchanged — avoids expensive style sync + layout
     auto it = properties_.find(name);
     if (it != properties_.end() && it->second == value) return;
-    bool displayChanged = (name == "display");
     properties_[name] = value;
     invalidateCssText();
     // `el.style.border = 'inherit'` ties this element to a parent property that
     // does not inherit, which is the one thing the scoped restyle cannot see.
-    // (`font: inherit` does not count � every longhand it expands to inherits.)
+    // (`font: inherit` does not count — every longhand it expands to inherits.)
     if (value == "inherit") noteIfForcedInherit(name);
     if (owner_) {
-        if (displayChanged) {
-            owner_->markStructureDirty();
-        } else {
-            // Paint-dirty, not layout-dirty: an inline-style write is a change
-            // to a style *input*, and the cascade has not run yet, so we cannot
-            // know here whether geometry moved. resolveStyles() diffs the new
-            // computed style against the old one and promotes to a real layout
-            // only when a layout-affecting property actually changed — so
-            // `style.opacity = x` repaints, while `style.width = x` reflows.
-            // markDirty() would pre-declare the reflow and relayout this
-            // element's whole subtree on every paint-only write.
-            owner_->markStyleDirty();
-        }
+        // Paint-dirty, not layout-dirty: an inline-style write is a change to a
+        // style *input*, and the cascade has not run yet, so we cannot know here
+        // whether geometry moved. resolveStyles() diffs the new computed style
+        // against the old one and promotes to a real layout only when a
+        // layout-affecting property actually changed — so `style.opacity = x`
+        // repaints, while `style.width = x` reflows. markDirty() would
+        // pre-declare the reflow and relayout this element's whole subtree on
+        // every paint-only write.
+        //
+        // `display` needs nothing special either: the layout tree's shape is a
+        // function of the DOM alone (a display:none element still gets a layout
+        // node, which layout zero-sizes), so a display change is a style change
+        // like any other and the diff promotes it.
+        owner_->markStyleDirty();
     }
 }
 
 void StyleProxy::removeProperty(const std::string& name) {
     if (properties_.erase(name) > 0) {
         invalidateCssText();
-        bool displayChanged = (name == "display");
-        if (owner_) {
-            if (displayChanged) {
-                owner_->markStructureDirty();
-            } else {
-                owner_->markStyleDirty();  // see setProperty
-            }
-        }
+        if (owner_) owner_->markStyleDirty();   // see setProperty
     }
 }
 
@@ -102,7 +95,6 @@ const std::string& StyleProxy::cssText() const {
 }
 
 void StyleProxy::setCssText(const std::string& text) {
-    std::string oldDisplay = getProperty("display");
     properties_.clear();
     invalidateCssText();
 
@@ -137,13 +129,7 @@ void StyleProxy::setCssText(const std::string& text) {
         }
     }
 
-    if (owner_) {
-        if (getProperty("display") != oldDisplay) {
-            owner_->markStructureDirty();
-        } else {
-            owner_->markStyleDirty();  // see setProperty
-        }
-    }
+    if (owner_) owner_->markStyleDirty();   // see setProperty
 }
 
 std::string StyleProxy::camelToKebab(const std::string& camel) {

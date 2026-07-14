@@ -97,9 +97,17 @@ public:
     // only if this element's *inherited* values actually changed — which is what
     // keeps `container.style.opacity = x` off the whole subtree's restyle bill.
     void markStyleDirty();
+    // This element's child list changed. Its layout node's children get rebuilt
+    // from the DOM on the next pass; the rest of the tree keeps its geometry.
     void markStructureDirty();
     bool isDirty() const { return dirty_; }
     void clearDirty() { dirty_ = false; }
+
+    // Read (and cleared) once per pass by the layout tree, which rebuilds this
+    // element's layout children from the DOM. Also cleared by the tree builder
+    // itself: a subtree it just built from the DOM cannot also be pending a
+    // rebuild from the DOM.
+    bool takeStructureDirty() { bool d = structureDirty_; structureDirty_ = false; return d; }
 
     // This element's own geometry may have changed — its style diff turned up a
     // layout-affecting property, an attribute or its text was rewritten. Read
@@ -296,6 +304,7 @@ private:
     bool dirty_ = false;
     bool layoutDirty_ = false;
     bool selectorDirty_ = true;
+    bool structureDirty_ = false;
     bool scrollToBottom_ = false;
     bool styleSheetAdded_ = false;
     float scrollTop_ = 0.0f;

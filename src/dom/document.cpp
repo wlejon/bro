@@ -11,6 +11,7 @@
 #include <functional>
 #include <algorithm>
 #include <cstdlib>
+#include <chrono>
 #include <unordered_set>
 
 namespace bro::dom {
@@ -354,6 +355,7 @@ bool Document::classChangeAffectsDescendants(const std::string& oldCls,
 
 void Document::resolveStyles() {
     if (!documentElement_) return;
+    auto styleT0 = std::chrono::steady_clock::now();
     // A new stylesheet can restyle anything, and the elements it now matches
     // were never marked dirty (nobody touched them — the *rules* changed). So a
     // sheet arriving forces a full re-resolve; otherwise a runtime
@@ -373,6 +375,8 @@ void Document::resolveStyles() {
     resolveGeneratedContent();
     restyled_.clear();
     layout::ElementRefAdapter::clearCache();
+    perf_.styleMs += std::chrono::duration<double, std::milli>(
+                         std::chrono::steady_clock::now() - styleT0).count();
 }
 
 // A <style> inserted at runtime (createElement("style") + head.appendChild, the
@@ -539,6 +543,7 @@ void Document::resolveStylesRecursive(Element* elem,
     bool passedDownChanged = false;
 
     if (needsResolve) {
+        perf_.elementsStyled++;
         auto* adapter = layout::ElementRefAdapter::getOrCreate(elem);
 
         // Inline style: StyleProxy is the sole source (Element::setAttribute
@@ -1087,13 +1092,14 @@ void Document::applyPseudo(Element* elem, const char* which, int depth, GenConte
 // tree, a new stylesheet, a bare Document::markDirty() — dirties the whole tree
 // instead, which is the unconditional pass bro used to run every frame.
 //
-// The element walk runs either way: it is what clears the per-element flags.
+// The element walk runs either way: it is what clears the per-element flags, and
+// what rebuilds the layout children of any element whose child list moved.
 void Document::applyLayoutInvalidation() {
     if (fullLayout_) {
         htmlayout::layout::markSubtreeDirty(layoutRoot_.get());
         fullLayout_ = false;
     }
-    layoutRoot_->markDirtyFromElements();
+    perf_.treeRebuilds += layoutRoot_->markDirtyFromElements();
 }
 
 void Document::performLayout(float viewportWidth, htmlayout::layout::TextMetrics& metrics) {
@@ -1102,15 +1108,43 @@ void Document::performLayout(float viewportWidth, htmlayout::layout::TextMetrics
 
 void Document::performLayout(float viewportWidth, float viewportHeight, htmlayout::layout::TextMetrics& metrics) {
     if (!documentElement_) return;
-    if (!layoutRoot_ || structureDirty_) {
+    using clk = std::chrono::steady_clock;
+    const auto ms = [](clk::time_point a, clk::time_point b) {
+        return std::chrono::duration<double, std::milli>(b - a).count();
+    };
+    const uint64_t measures0 = metrics.measureCalls;
+    perf_.passes++;
+
+    auto t0 = clk::now();
+    if (!layoutRoot_ || rebuildLayoutTree_) {
         layoutRoot_ = layout::LayoutNodeAdapter::buildTree(documentElement_);
-        structureDirty_ = false;
+        rebuildLayoutTree_ = false;
+        perf_.treeRebuilds++;
         fullLayout_ = true;   // a fresh tree has no cached geometry to reuse
     }
+    auto t1 = clk::now();
     applyLayoutInvalidation();
+    structureDirty_ = false;
+    auto t2 = clk::now();
     htmlayout::layout::Viewport vp{viewportWidth, viewportHeight};
     htmlayout::layout::layoutTree(layoutRoot_.get(), vp, metrics);
+    auto t3 = clk::now();
     layoutRoot_->syncBoxToElement();
+    auto t4 = clk::now();
+
+    perf_.buildMs += ms(t0, t1);
+    perf_.invalidateMs += ms(t1, t2);
+    perf_.layoutMs += ms(t2, t3);
+    perf_.syncMs += ms(t3, t4);
+    const auto& ls = htmlayout::layout::lastLayoutStats();
+    perf_.nodesLaidOut += ls.laidOut;
+    perf_.nodeVisits += ls.visits;
+    perf_.nodesReused += ls.reused;
+    perf_.layoutTreeMs += ls.treeMs;
+    perf_.layoutAbsMs += ls.absoluteMs;
+    perf_.layoutHitMs += ls.hitBoundsMs;
+    perf_.measureCalls += metrics.measureCalls - measures0;
+
     settleContainerQueries([&] {
         // The re-resolve inside settleContainerQueries marks whatever the
         // container query actually changed; nothing else has to relayout.
@@ -1465,7 +1499,7 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
     }
 
     if (html.empty()) {
-        markStructureDirty();
+        parent->markStructureDirty();
         return;
     }
 
@@ -1473,7 +1507,7 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
     std::string wrapper = "<html><body><div>" + html + "</div></body></html>";
     GumboOutput* output = gumbo_parse(wrapper.c_str());
     if (!output) {
-        markStructureDirty();
+        parent->markStructureDirty();
         return;
     }
 
@@ -1530,7 +1564,11 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
         if (!elemId.empty()) idMap_[elemId] = elem;
     }
 
-    markStructureDirty();
+    // Only this element's children moved, so only its layout children have to be
+    // rebuilt. The document-wide mark would throw away the cached geometry of
+    // every subtree in the document — and `host.innerHTML = ...` on one small
+    // container is the single most common DOM update an app makes.
+    parent->markStructureDirty();
 }
 
 // ---------------------------------------------------------------------------

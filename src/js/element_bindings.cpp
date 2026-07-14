@@ -2053,6 +2053,19 @@ static JSValue js_element_hasAttribute(JSContext* ctx, JSValueConst this_val,
 
 // ---- DOM manipulation methods ---------------------------------------------
 
+// A DOM mutation belongs to the element whose child list moved. Attributing it
+// lets the layout tree rebuild just that node's children from the DOM and hand
+// back every other subtree's cached geometry — the document-wide mark throws the
+// whole tree away, which on a few-thousand-element document is ~150ms of layout
+// for one appended chip. Falls back to the document-wide form only when there is
+// no element to pin the change on.
+static void markChildListChanged(bro::dom::Document* doc, bro::dom::Node* parent) {
+    if (parent && parent->nodeType() == bro::dom::NodeType::Element)
+        static_cast<bro::dom::Element*>(parent)->markStructureDirty();
+    else if (doc)
+        doc->markStructureDirty();
+}
+
 static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                                       int argc, JSValueConst* argv)
 {
@@ -2069,8 +2082,7 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
             uint32_t addedIdx = 0;
             for (auto* kid : kids) {
                 el->appendChild(kid);
-                if (doc && kid->nodeType() == bro::dom::NodeType::Element)
-                    doc->markStructureDirty();
+                markChildListChanged(doc, el);
                 JS_SetPropertyUint32(ctx, addedArr, addedIdx++, wrapAnyNode(ctx, kid));
             }
             for (auto* kid : kids) {
@@ -2085,9 +2097,7 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
             JS_FreeValue(ctx, addedArr);
         } else {
             el->appendChild(child);
-            if (doc && child->nodeType() == bro::dom::NodeType::Element) {
-                doc->markStructureDirty();
-            }
+            markChildListChanged(doc, el);
             if (child->nodeType() == bro::dom::NodeType::Element) {
                 JSValue w = DomBindings::wrapElement(ctx, child);
                 fireConnectedCallback(ctx, w);
@@ -2121,8 +2131,8 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
             JS_FreeValue(ctx, w);
             if (doc && !childElem->id().empty())
                 doc->unregisterElementId(childElem->id());
-            if (doc) doc->markStructureDirty();
         }
+        markChildListChanged(doc, el);
         el->removeChild(child);
         notifyMutationObservers(ctx, this_val, "childList",
             nullptr, nullptr, JS_NULL, removedArr);
@@ -2144,9 +2154,9 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
     if (newChild) {
         el->insertBefore(newChild, refChild);
         auto* doc = getDocumentForCtx(ctx);
-        if (doc && newChild->nodeType() == bro::dom::NodeType::Element) {
+        markChildListChanged(doc, el);
+        if (newChild->nodeType() == bro::dom::NodeType::Element) {
             auto* newElem = static_cast<bro::dom::Element*>(newChild);
-            doc->markStructureDirty();
             JSValue w = DomBindings::wrapElement(ctx, newElem);
             fireConnectedCallback(ctx, w);
             JS_FreeValue(ctx, w);
@@ -2178,7 +2188,7 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
             JS_FreeValue(ctx, w);
         }
         el->insertBefore(newChild, oldChild);
-        if (doc) doc->markStructureDirty();
+        markChildListChanged(doc, el);
         if (oldChild->nodeType() == bro::dom::NodeType::Element) {
             auto* oldElem = static_cast<bro::dom::Element*>(oldChild);
             if (doc && !oldElem->id().empty())
@@ -2255,7 +2265,7 @@ static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
         auto* doc = getDocumentForCtx(ctx);
         if (doc && !el->id().empty())
             doc->unregisterElementId(el->id());
-        if (doc) doc->markStructureDirty();
+        markChildListChanged(doc, parent);
         invalidateWrapper(ctx, el);
         parent->removeChild(el);
         if (doc) doc->freeNode(el);
@@ -3205,8 +3215,7 @@ static JSValue js_element_append(JSContext* ctx, JSValueConst this_val,
         auto* node = nodeOrTextFromArg(ctx, argv[i]);
         if (!node) continue;
         el->appendChild(node);
-        if (doc && node->nodeType() == bro::dom::NodeType::Element)
-            doc->markStructureDirty();
+        markChildListChanged(doc, el);
         fireConnectedIfElement(ctx, node);
     }
     return JS_UNDEFINED;
@@ -3222,8 +3231,7 @@ static JSValue js_element_prepend(JSContext* ctx, JSValueConst this_val,
         auto* node = nodeOrTextFromArg(ctx, argv[i]);
         if (!node) continue;
         el->insertBefore(node, ref);
-        if (doc && node->nodeType() == bro::dom::NodeType::Element)
-            doc->markStructureDirty();
+        markChildListChanged(doc, el);
         fireConnectedIfElement(ctx, node);
     }
     return JS_UNDEFINED;
@@ -3240,8 +3248,7 @@ static JSValue js_element_before(JSContext* ctx, JSValueConst this_val,
         auto* node = nodeOrTextFromArg(ctx, argv[i]);
         if (!node) continue;
         parent->insertBefore(node, el);
-        if (doc && node->nodeType() == bro::dom::NodeType::Element)
-            doc->markStructureDirty();
+        markChildListChanged(doc, parent);
         fireConnectedIfElement(ctx, node);
     }
     return JS_UNDEFINED;
@@ -3267,8 +3274,7 @@ static JSValue js_element_after(JSContext* ctx, JSValueConst this_val,
         auto* node = nodeOrTextFromArg(ctx, argv[i]);
         if (!node) continue;
         parent->insertBefore(node, ref);
-        if (doc && node->nodeType() == bro::dom::NodeType::Element)
-            doc->markStructureDirty();
+        markChildListChanged(doc, parent);
         fireConnectedIfElement(ctx, node);
     }
     return JS_UNDEFINED;
@@ -3287,15 +3293,14 @@ static JSValue js_element_replaceWith(JSContext* ctx, JSValueConst this_val,
         auto* node = nodeOrTextFromArg(ctx, argv[i]);
         if (!node) continue;
         parent->insertBefore(node, el);
-        if (doc && node->nodeType() == bro::dom::NodeType::Element)
-            doc->markStructureDirty();
+        markChildListChanged(doc, parent);
         fireConnectedIfElement(ctx, node);
     }
 
     // Remove the old element
     if (doc && !el->id().empty())
         doc->unregisterElementId(el->id());
-    if (doc) doc->markStructureDirty();
+    markChildListChanged(doc, parent);
     JSValue w = DomBindings::wrapElement(ctx, el);
     fireDisconnectedCallback(ctx, w);
     JS_FreeValue(ctx, w);
@@ -3334,8 +3339,7 @@ static JSValue js_element_replaceChildren(JSContext* ctx, JSValueConst this_val,
         auto* node = nodeOrTextFromArg(ctx, argv[i]);
         if (!node) continue;
         el->appendChild(node);
-        if (doc && node->nodeType() == bro::dom::NodeType::Element)
-            doc->markStructureDirty();
+        markChildListChanged(doc, el);
         fireConnectedIfElement(ctx, node);
     }
     return JS_UNDEFINED;
@@ -3372,8 +3376,7 @@ static JSValue js_element_insertAdjacentElement(JSContext* ctx, JSValueConst thi
             parent->insertBefore(newEl, ref);
         }
     }
-    if (doc && newEl->nodeType() == bro::dom::NodeType::Element)
-        doc->markStructureDirty();
+    markChildListChanged(doc, newEl->parentNode());
     fireConnectedIfElement(ctx, newEl);
     return argc >= 2 ? JS_DupValue(ctx, argv[1]) : JS_NULL;
 }
