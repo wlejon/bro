@@ -29,7 +29,7 @@ jobs:
       matrix:
         include:
           - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   test: true }
-          - { name: windows, os: windows-2022, triplet: x64-windows, test: false }
+          - { name: windows, os: windows-2022, triplet: x64-windows-static-md, test: false }
           - { name: macos,   os: macos-14,     triplet: arm64-osx,   test: false }
     steps:
       - name: Rewrite SSH submodule URLs to HTTPS
@@ -54,7 +54,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build xvfb libgl1-mesa-dri \
+            ninja-build nasm xvfb libgl1-mesa-dri \
             libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
             libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev \
@@ -80,6 +80,7 @@ jobs:
           export VCPKG_ROOT="$VCPKG_INSTALLATION_ROOT"
           cmake -B build \
             -DBRO_PROFILE=app \
+            -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache

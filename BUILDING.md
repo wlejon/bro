@@ -82,7 +82,9 @@ cmake -B build -DBRO_PROFILE=minimal -DBRO_WITH_3D=ON # minimal + just the 3D sc
 - **CMake** 3.24+ and **Ninja** (`-G Ninja`, or install `ninja-build`)
 - System packages (needed by all profiles — Skia links them):
   `build-essential cmake ninja-build libfreetype-dev libfontconfig-dev libgl-dev libjpeg-dev libpng-dev libwebp-dev`
-- **vcpkg** — only for `app`/`full` (networking + video).
+- **vcpkg** — only for `app`/`full` (networking + video). The video dep
+  (libvpx) assembles with **`nasm`** — `sudo apt-get install nasm` (vcpkg
+  auto-acquires it on Windows/macOS, but refuses to on Linux).
 
 **macOS (12+, arm64 or x86_64):**
 - **Xcode Command Line Tools** (`xcode-select --install`) — Apple clang 17+
