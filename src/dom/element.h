@@ -2,6 +2,7 @@
 #include "dom/node.h"
 #include "dom/shadow_root.h"
 #include "dom/style_proxy.h"
+#include "dom/string_flat_map.h"
 #include "css/cascade.h"
 #include "layout/box.h"
 #include <string>
@@ -43,7 +44,7 @@ public:
     bool hasAttribute(const std::string& name) const;
     void setAttribute(const std::string& name, const std::string& val);
     void removeAttribute(const std::string& name);
-    const std::unordered_map<std::string, std::string>& attributes() const { return attributes_; }
+    const StringFlatMap& attributes() const { return attributes_; }
 
     // Content
     std::string textContent() const;
@@ -329,7 +330,7 @@ public:
 
 private:
     std::string tag_;
-    std::unordered_map<std::string, std::string> attributes_;
+    StringFlatMap attributes_;
     StyleProxy style_;
     // "style" is never stored in attributes_ (its value lives in style_), so
     // presence has to be tracked separately: a style attribute set to an
