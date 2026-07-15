@@ -54,9 +54,18 @@ fi
 # uname so this works whether you run it from git-bash, WSL, or Cygwin against
 # the same Windows build. WSL bash on Windows reports `uname -s = Linux` but
 # the binaries it's packaging are .exe + .dll under build/<config>/.
+# MULTICONFIG: whether the generator lays binaries out under a per-config
+# subdir ($BUILD_DIR/Release/) or directly in $BUILD_DIR. That's a property of
+# the GENERATOR (Visual Studio / Xcode = multi-config), NOT the platform — a
+# Windows build can be either VS (multi) or Ninja (single). Keying off platform
+# broke Windows+Ninja, which links to build/bro.exe, not build/Release/bro.exe.
 PLATFORM=""
+MULTICONFIG=0
 if [[ -f "$BUILD_DIR/CMakeCache.txt" ]]; then
     CACHED_GEN="$(grep -E '^CMAKE_GENERATOR:INTERNAL=' "$BUILD_DIR/CMakeCache.txt" | cut -d= -f2 || true)"
+    case "$CACHED_GEN" in
+        "Visual Studio"*|Xcode) MULTICONFIG=1 ;;
+    esac
     if [[ "$CACHED_GEN" == "Visual Studio"* ]]; then
         PLATFORM="win" ; EXE=".exe" ; LIB_GLOB="*.dll"
     fi
@@ -76,12 +85,12 @@ case "$(uname -m)" in
     *)                  ARCH="$(uname -m)" ;;
 esac
 
-# All targets share a unified output directory:
-#   Windows (multi-config): $BUILD_DIR/$CONFIG/<target>.exe
-#   Linux/macOS (Ninja):    $BUILD_DIR/<target>
+# Output location depends on the generator, not the platform:
+#   multi-config (Visual Studio / Xcode): $BUILD_DIR/$CONFIG/<target>.exe
+#   single-config (Ninja / Makefiles):    $BUILD_DIR/<target>
 bin_path() {
     local target="$1"
-    if [[ "$PLATFORM" == "win" ]]; then
+    if [[ "$MULTICONFIG" == "1" ]]; then
         echo "$BUILD_DIR/$CONFIG/$target$EXE"
     else
         echo "$BUILD_DIR/$target$EXE"
