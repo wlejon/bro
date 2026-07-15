@@ -91,6 +91,21 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
         throw std::runtime_error("Failed to load OpenGL functions via glad");
     }
 
+    // A driver with no real GL support (headless server, a CI runner with only
+    // software GDI GL 1.1) can hand back a context below what we requested:
+    // SDL_GL_CreateContext succeeds and glad loads the 1.x entry points fine, so
+    // neither check above fires — then the first 3.3-core call (VAOs, etc.) hits
+    // a null function pointer and segfaults. Reject it here with a clear message
+    // instead. Callers that can fall back to CPU raster (headless) catch this.
+    int glMajor = GLAD_VERSION_MAJOR(version);
+    int glMinor = GLAD_VERSION_MINOR(version);
+    if (glMajor < 3 || (glMajor == 3 && glMinor < 3)) {
+        throw std::runtime_error(
+            "OpenGL 3.3 core required, but this system provides only OpenGL " +
+            std::to_string(glMajor) + "." + std::to_string(glMinor) +
+            " (update the GPU driver, or run bro-headless with --no-gpu for CPU rendering)");
+    }
+
     LOG_INFO("Created window \"%s\" (%ux%u) with OpenGL %d.%d",
              title.c_str(), width, height,
              GLAD_VERSION_MAJOR(version), GLAD_VERSION_MINOR(version));

@@ -358,25 +358,42 @@ Engine::Engine(const EngineConfig& config)
     if (hasGL) {
         // Create window (hidden for headless, visible for windowed)
         bool hidden = (displayMode_ == DisplayMode::Headless);
-        window_ = std::make_unique<platform::Window>("Bro",
-            static_cast<uint32_t>(gfx.width),
-            static_cast<uint32_t>(gfx.height), hidden,
-            gfx.resizable, gfx.vsync);
+        try {
+            window_ = std::make_unique<platform::Window>("Bro",
+                static_cast<uint32_t>(gfx.width),
+                static_cast<uint32_t>(gfx.height), hidden,
+                gfx.resizable, gfx.vsync);
 
-        // Taskbar / Alt-Tab icon. Shipped with system/ alongside the binary
-        // (scripts/package-release.sh copies the whole system/ tree). Skip in
-        // headless where the window is hidden anyway.
-        if (!hidden) {
-            window_->setIcon("system/icon.png");
-        }
+            // Taskbar / Alt-Tab icon. Shipped with system/ alongside the binary
+            // (scripts/package-release.sh copies the whole system/ tree). Skip in
+            // headless where the window is hidden anyway.
+            if (!hidden) {
+                window_->setIcon("system/icon.png");
+            }
 
-        // GL context (shader programs + helpers)
-        gl_ = std::make_unique<render::GLContext>(*window_);
+            // GL context (shader programs + helpers)
+            gl_ = std::make_unique<render::GLContext>(*window_);
 
-        // Renderer (Skia raster + OpenGL display)
-        renderer_ = render::createRenderer(gl_.get());
-        if (!renderer_) {
-            throw std::runtime_error("Failed to create renderer");
+            // Renderer (Skia raster + OpenGL display)
+            renderer_ = render::createRenderer(gl_.get());
+            if (!renderer_) {
+                throw std::runtime_error("Failed to create renderer");
+            }
+        } catch (const std::exception& e) {
+            // A headless run on a box with no usable OpenGL (no driver, only
+            // software GL 1.1) can't get a GPU context. Rather than abort, fall
+            // back to the CPU raster path — the identical state --no-gpu produces
+            // (no window_/gl_, RasterRenderer; the rest of the engine keys off
+            // gl_ being null). Windowed mode has no meaningful fallback, so let
+            // it propagate.
+            if (displayMode_ == DisplayMode::Headless) {
+                LOG_WARN("GPU init failed (%s); falling back to CPU raster rendering", e.what());
+                gl_.reset();
+                window_.reset();
+                renderer_ = std::make_unique<render::RasterRenderer>();
+            } else {
+                throw;
+            }
         }
     } else {
         // No GPU: CPU-only Skia renderer, no window/GL
