@@ -40,7 +40,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             ninja-build \
             libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
-            libxi-dev libxfixes-dev libxss-dev libwayland-dev libxkbcommon-dev \
+            libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
             libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev
 
       - name: Initialize CodeQL
