@@ -1,3 +1,10 @@
+# Import the vcpkg GameNetworkingSockets package so the
+# GameNetworkingSockets::GameNetworkingSockets_s target below actually exists.
+# (Mirrors how src/video/CMakeLists.txt find_package()s its vcpkg deps — without
+# this, a clean configure fails with "target not found"; it only appeared to work
+# from stale build trees where the target had been imported by an earlier run.)
+find_package(GameNetworkingSockets CONFIG REQUIRED)
+
 add_library(bro_net STATIC
     net_service.cpp
 )

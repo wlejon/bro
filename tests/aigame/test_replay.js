@@ -1,6 +1,9 @@
 // Replay buffer + recorder/reader round trip.
 
 const G = bro.ai.game;
+if (!G.learn || G.learn.available === false) {
+    console.log('test_replay: gameai-nn not built (app profile), skipping');
+} else {
 
 // --- learn.createReplayBuffer ---
 {
@@ -73,3 +76,4 @@ const G = bro.ai.game;
 }
 
 console.log('test_replay: OK');
+}

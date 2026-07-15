@@ -1,6 +1,9 @@
 // CPU NN primitives: PolicyValueNet, FactoredPolicyHead, DeepSetsEncoder, WeightsHandle.
 
 const nn = bro.ai.game.nn;
+if (!nn || nn.available === false) {
+    console.log('test_nn_cpu: gameai-nn not built (app profile), skipping');
+} else {
 
 function allFinite(arr, name) {
     for (let i = 0; i < arr.length; i++) {
@@ -125,3 +128,4 @@ function allFinite(arr, name) {
 }
 
 console.log('test_nn_cpu: OK');
+}

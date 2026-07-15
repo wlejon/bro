@@ -3,6 +3,9 @@
 
 const G = bro.ai.game;
 const nn = G.nn;
+if (!nn || nn.available === false) {
+    console.log('test_inference_server: gameai-nn not built (app profile), skipping');
+} else {
 
 const inDim = 4, numActions = 2;
 const net = nn.createPolicyValueNet({ inDim, hidden: [8], valueHidden: 8, numActions, seed: 0xC0DEn });
@@ -83,3 +86,4 @@ function isEvalResult(r) {
 }
 
 console.log('test_inference_server: OK');
+}

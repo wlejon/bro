@@ -1,6 +1,9 @@
 // grid.* helpers: ObsWindow, FrameStack, FailureTape, BestCrop, PotentialShaper, StallDetector.
 
 const grid = bro.ai.game.grid;
+if (!grid || grid.available === false) {
+    console.log('test_grid: gameai-nn not built (app profile), skipping');
+} else {
 
 // --- ObsWindow ---
 {
@@ -105,3 +108,4 @@ const grid = bro.ai.game.grid;
 }
 
 console.log('test_grid: OK');
+}

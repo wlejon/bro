@@ -2995,6 +2995,18 @@ void AIBindings::install(JSContext* ctx) {
 #if BRO_WITH_GAMEAI_NN
     installNNBindings(ctx, gameObj);
     installLearnBindings(ctx, gameObj);
+#else
+    // Compiled out (e.g. the app profile): install { available: false } stubs so
+    // apps and tests feature-detect instead of dereferencing undefined. Matches
+    // the modular-build stub contract used across the bro.* namespaces.
+    {
+        JSValue nnStub = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, nnStub, "available", JS_NewBool(ctx, false));
+        JS_SetPropertyStr(ctx, gameObj, "nn", nnStub);
+        JSValue learnStub = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, learnStub, "available", JS_NewBool(ctx, false));
+        JS_SetPropertyStr(ctx, gameObj, "learn", learnStub);
+    }
 #endif
 
     // Belief / observability / InfoSetMcts
@@ -3013,6 +3025,12 @@ void AIBindings::install(JSContext* ctx) {
     // built only with the game-AI neural layer.
 #if BRO_WITH_GAMEAI_NN
     installGridBindings(ctx, gameObj);
+#else
+    {
+        JSValue gridStub = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, gridStub, "available", JS_NewBool(ctx, false));
+        JS_SetPropertyStr(ctx, gameObj, "grid", gridStub);
+    }
 #endif
 
     // ── Steering sub-namespace: bro.ai.game.steer ──────────────────────
