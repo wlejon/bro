@@ -122,7 +122,10 @@ jobs:
           # broad set (major cubins + newest PTX) for a widely-runnable binary.
           CUDA_ARGS=""
           if [ "${{ matrix.cuda }}" = "true" ]; then
-            CUDA_ARGS="-DCMAKE_CUDA_ARCHITECTURES=all-major"
+            # sccache caches nvcc too — route the CUDA compiler through it as
+            # well, or the brotensor kernels (the heaviest TUs) recompile from
+            # scratch every night while the C/C++ objects hit the cache.
+            CUDA_ARGS="-DCMAKE_CUDA_ARCHITECTURES=all-major -DCMAKE_CUDA_COMPILER_LAUNCHER=sccache"
           fi
           cmake -B build \
             -DBRO_PROFILE=full \
