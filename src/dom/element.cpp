@@ -648,9 +648,26 @@ std::vector<Node*> Element::composedChildNodes() const {
 // Selector matching (powered by htmlayout)
 // ---------------------------------------------------------------------------
 
+// Parsing a selector string into the compiled Selector list is not free — a
+// tokenize + parse per call — and querySelector/matches/closest are hammered in
+// tight loops with the same handful of literal selectors. Cache the compiled
+// result keyed by the source text. The parsed Selectors are pure value data
+// (no element pointers), so the cache is valid for the process; it is bounded so
+// a program generating unique selectors can't grow it without limit.
+static const std::vector<htmlayout::css::Selector>&
+cachedParseSelectorList(const std::string& selector) {
+    static thread_local std::unordered_map<std::string,
+                                            std::vector<htmlayout::css::Selector>> cache;
+    auto it = cache.find(selector);
+    if (it != cache.end()) return it->second;
+    if (cache.size() >= 1024) cache.clear();   // bound for dynamically-built selectors
+    auto res = cache.emplace(selector, htmlayout::css::parseSelectorList(selector));
+    return res.first->second;
+}
+
 std::vector<Element*> Element::querySelectorAll(const std::string& selector) {
     std::vector<Element*> result;
-    auto selectors = htmlayout::css::parseSelectorList(selector);
+    const auto& selectors = cachedParseSelectorList(selector);
 
     std::function<void(Element*)> search = [&](Element* elem) {
         for (auto* child : elem->children()) {
@@ -670,7 +687,7 @@ std::vector<Element*> Element::querySelectorAll(const std::string& selector) {
 }
 
 Element* Element::querySelector(const std::string& selector) {
-    auto selectors = htmlayout::css::parseSelectorList(selector);
+    const auto& selectors = cachedParseSelectorList(selector);
 
     std::function<Element*(Element*)> search = [&](Element* elem) -> Element* {
         for (auto* child : elem->children()) {
@@ -692,7 +709,7 @@ Element* Element::querySelector(const std::string& selector) {
 }
 
 bool Element::matches(const std::string& selector) const {
-    auto selectors = htmlayout::css::parseSelectorList(selector);
+    const auto& selectors = cachedParseSelectorList(selector);
     auto* adapter = layout::ElementRefAdapter::getOrCreate(const_cast<Element*>(this));
     bool matched = false;
     for (auto& sel : selectors) {
@@ -751,15 +768,24 @@ bool Element::matchesSimple(const std::string& selector) const {
     if (!reqId.empty() && getAttribute("id") != reqId) return false;
 
     if (!reqClasses.empty()) {
-        std::string cls = getAttribute("class");
-        for (auto& rc : reqClasses) {
-            bool found = false;
-            std::istringstream iss(cls);
-            std::string tok;
-            while (iss >> tok) {
-                if (tok == rc) { found = true; break; }
+        const std::string& cls = getAttribute("class");   // no copy
+        auto isSpace = [](char c) {
+            return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+        };
+        // True if `want` appears as a whitespace-delimited token in `cls`.
+        auto hasClass = [&](const std::string& want) {
+            size_t i = 0, n = cls.size();
+            while (i < n) {
+                while (i < n && isSpace(cls[i])) ++i;
+                size_t start = i;
+                while (i < n && !isSpace(cls[i])) ++i;
+                if (i - start == want.size() && cls.compare(start, i - start, want) == 0)
+                    return true;
             }
-            if (!found) return false;
+            return false;
+        };
+        for (auto& rc : reqClasses) {
+            if (!hasClass(rc)) return false;
         }
     }
     return true;
