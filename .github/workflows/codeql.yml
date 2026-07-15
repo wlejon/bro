@@ -60,7 +60,9 @@ jobs:
       - name: Build (minimal profile)
         run: |
           cmake -B build -DBRO_PROFILE=minimal -DCMAKE_BUILD_TYPE=Debug
-          cmake --build build --parallel
+          # Bounded jobs: a bare --parallel passes unlimited -j to make and OOM-kills
+          # the runner (exit 143). CodeQL's per-compile tracer adds overhead, so 3.
+          cmake --build build --parallel 3
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3

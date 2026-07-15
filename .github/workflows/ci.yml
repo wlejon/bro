@@ -85,7 +85,9 @@ jobs:
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        # Bounded jobs: a bare --parallel passes unlimited -j to make and OOM-kills
+        # the runner (exit 143). app profile has no AI tower, so 4 is safe on 16 GB.
+        run: cmake --build build --config Release --parallel 4
 
       - name: Test (headless, GPU path under Xvfb)
         if: matrix.test

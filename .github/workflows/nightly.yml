@@ -37,9 +37,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: linux,   os: ubuntu-24.04, cuda: true,  triplet: x64-linux }
-          - { name: windows, os: windows-2022, cuda: true,  triplet: x64-windows }
-          - { name: macos,   os: macos-14,     cuda: false, triplet: arm64-osx }
+          # jobs: bounded -j so a heavy full-profile TU set doesn't OOM the runner.
+          # macOS-14 has ~7 GB, so 3; the 16 GB Linux/Windows runners take 4.
+          - { name: linux,   os: ubuntu-24.04, cuda: true,  triplet: x64-linux,   jobs: 4 }
+          - { name: windows, os: windows-2022, cuda: true,  triplet: x64-windows, jobs: 4 }
+          - { name: macos,   os: macos-14,     cuda: false, triplet: arm64-osx,   jobs: 3 }
     steps:
       # The AI-tower + flora submodules use git@github.com: URLs. Rewrite them
       # to HTTPS *before* checkout so the default GITHUB_TOKEN can fetch them
@@ -120,7 +122,7 @@ jobs:
             $CUDA_ARGS
 
       - name: Build
-        run: cmake --build build --config Release --parallel
+        run: cmake --build build --config Release --parallel ${{ matrix.jobs }}
 
       # Prove the shipped binary launches on this runner and reports its backend.
       # Windows is multi-config (build/Release/), Linux/macOS single-config (build/).
