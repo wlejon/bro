@@ -40,7 +40,7 @@ jobs:
           # jobs: bounded -j so a heavy full-profile TU set doesn't OOM the runner.
           # macOS-14 has ~7 GB, so 3; the 16 GB Linux/Windows runners take 4.
           - { name: linux,   os: ubuntu-24.04, cuda: true,  triplet: x64-linux,   jobs: 4 }
-          - { name: windows, os: windows-2022, cuda: true,  triplet: x64-windows-static-md, jobs: 4 }
+          - { name: windows, os: windows-2022, cuda: true,  triplet: x64-windows, jobs: 4 }
           - { name: macos,   os: macos-14,     cuda: false, triplet: arm64-osx,   jobs: 3 }
     steps:
       # The AI-tower + flora submodules use git@github.com: URLs. Rewrite them
@@ -50,14 +50,14 @@ jobs:
       - name: Rewrite SSH submodule URLs to HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 0        # tags needed for package-release.sh's version fallback
 
       # Expose the Actions cache endpoint to vcpkg's x-gha binary source.
       - name: Enable vcpkg GHA binary cache
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
@@ -157,7 +157,7 @@ jobs:
             zip -qr "../${d}.zip" "$d"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bro-${{ matrix.name }}
           path: bro-nightly-*.zip
@@ -171,8 +171,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4      # for the commit sha the release targets
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7      # for the commit sha the release targets
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
           merge-multiple: true
