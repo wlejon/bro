@@ -71,7 +71,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build nasm \
+            ninja-build nasm xvfb libgl1-mesa-dri \
             libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
             libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev \
@@ -143,7 +143,22 @@ jobs:
           if [ -x build/Release/bro-headless.exe ]; then BH=build/Release/bro-headless.exe;
           elif [ -x build/bro-headless ]; then BH=build/bro-headless;
           else echo "bro-headless not found" >&2; exit 1; fi
-          "$BH" -e "console.log('backend=' + bro.gpu.backend + ' available=' + bro.gpu.available)"
+          # bro-headless requires an app directory; use the bundled "blank"
+          # skeleton (self-contained, no external repo). The probe throws — and
+          # so fails the job — if bro.gpu is missing, otherwise prints the ML
+          # backend. bro.gpu is the brotensor compute backend (cuda/metal/cpu),
+          # independent of the render path; on a GPU-less runner it honestly
+          # reports cpu, which is a pass (the point is the full build launches).
+          APP=system/skeletons/blank
+          PROBE="if(!bro.gpu||!bro.gpu.backend)throw new Error('bro.gpu backend missing');console.log('backend='+bro.gpu.backend+' available='+bro.gpu.available)"
+          # GPU-headless renders through a hidden GL context — same code that
+          # ships. Linux needs a virtual display + software GL (xvfb + mesa-dri),
+          # matching the CI job; Windows/macOS runners provide GL directly.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run -a "$BH" "$APP" -e "$PROBE"
+          else
+            "$BH" "$APP" -e "$PROBE"
+          fi
 
       - name: Package
         shell: bash
