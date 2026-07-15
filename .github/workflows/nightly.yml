@@ -118,6 +118,16 @@ jobs:
             --triplet ${{ matrix.triplet }} \
             gamenetworkingsockets libvpx libwebm opus
 
+      # Put cl.exe / the MSVC toolset on PATH so the Windows build can use the
+      # Ninja generator (below) instead of Visual Studio. The VS generator
+      # ignores CMAKE_*_COMPILER_LAUNCHER, so with it sccache saw zero compiles;
+      # Ninja honors the launcher. Also gives nvcc its cl host compiler.
+      - name: MSVC dev environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Configure
         shell: bash
         run: |
@@ -133,24 +143,36 @@ jobs:
             # scratch every night while the C/C++ objects hit the cache.
             CUDA_ARGS="-DCMAKE_CUDA_ARCHITECTURES=all-major -DCMAKE_CUDA_COMPILER_LAUNCHER=sccache"
           fi
+          GEN_ARGS=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Ninja (with the MSVC env set above) so the sccache compiler launcher
+            # is actually honored — the default Visual Studio generator ignores
+            # it. Single-config, so CMAKE_BUILD_TYPE drives it. Embedded debug
+            # info (/Z7) instead of a separate PDB (/Zi) is what lets sccache
+            # cache MSVC objects at all.
+            GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
+          fi
           cmake -B build \
             -DBRO_PROFILE=full \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            $CUDA_ARGS
+            $CUDA_ARGS \
+            $GEN_ARGS
 
       - name: Build
         run: cmake --build build --config Release --parallel ${{ matrix.jobs }}
 
       # Prove the shipped binary launches on this runner and reports its backend.
-      # Windows is multi-config (build/Release/), Linux/macOS single-config (build/).
+      # Single-config generators put the exe directly in build/ (Windows now uses
+      # Ninja too); keep the multi-config build/Release/ probe as a fallback.
       - name: Smoke test (launch + backend probe)
         shell: bash
         run: |
-          if [ -x build/Release/bro-headless.exe ]; then BH=build/Release/bro-headless.exe;
+          if [ -x build/bro-headless.exe ]; then BH=build/bro-headless.exe;
           elif [ -x build/bro-headless ]; then BH=build/bro-headless;
+          elif [ -x build/Release/bro-headless.exe ]; then BH=build/Release/bro-headless.exe;
           else echo "bro-headless not found" >&2; exit 1; fi
           # bro-headless requires an app directory; use the bundled "blank"
           # skeleton (self-contained, no external repo). The probe throws — and
@@ -160,18 +182,14 @@ jobs:
           # reports cpu, which is a pass (the point is the full build launches).
           APP=system/skeletons/blank
           PROBE="if(!bro.gpu||!bro.gpu.backend)throw new Error('bro.gpu backend missing');console.log('backend='+bro.gpu.backend+' available='+bro.gpu.available)"
-          # GPU-headless renders through a hidden GL context — the same code
-          # that ships. Linux gets a virtual display + software GL (xvfb +
-          # mesa-dri), matching the CI job; macOS runners provide GL directly.
-          # The windows-2022 runner has no OpenGL 3.3 (only GDI software GL 1.1),
-          # so a GL-core context request aborts engine init before JS runs — use
-          # CPU raster there. This only affects the CI smoke probe: the shipped
-          # Windows binary still defaults to GPU on real hardware, and the ML
-          # backend that bro.gpu reports is independent of the render path.
+          # GPU-headless renders through a hidden GL context — the same code that
+          # ships. Linux gets a virtual display + software GL (xvfb + mesa-dri),
+          # matching the CI job; macOS provides GL directly. The windows-2022
+          # runner has no OpenGL 3.3, but the engine now detects that and falls
+          # back to CPU raster (instead of crashing), so the probe runs uniformly
+          # everywhere and this exercises that fallback path.
           if [ "$RUNNER_OS" = "Linux" ]; then
             xvfb-run -a "$BH" "$APP" -e "$PROBE"
-          elif [ "$RUNNER_OS" = "Windows" ]; then
-            "$BH" --no-gpu "$APP" -e "$PROBE"
           else
             "$BH" "$APP" -e "$PROBE"
           fi
