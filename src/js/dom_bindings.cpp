@@ -60,6 +60,15 @@ JSValue DomBindings::wrapElement(JSContext* ctx, void* element_ptr)
 
     auto* elem = static_cast<bro::dom::Element*>(element_ptr);
 
+    // Fast path: the element already knows its wrapper. The map keeps a strong
+    // ref to every cached wrapper, so a non-null pointer is always a live object
+    // (the finalizer / detach paths null it otherwise). This skips the global
+    // fetch + "__bro_elem_map" atom intern + itoa + hash lookup below, which is
+    // the bulk of the per-crossing cost on DOM-heavy code.
+    if (void* w = elem->jsWrapper()) {
+        return JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, w));
+    }
+
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
     if (JS_IsUndefined(elemMap)) {
@@ -70,6 +79,10 @@ JSValue DomBindings::wrapElement(JSContext* ctx, void* element_ptr)
     std::string key = std::to_string(elem->nodeId());
     JSValue existing = JS_GetPropertyStr(ctx, elemMap, key.c_str());
     if (!JS_IsUndefined(existing) && !JS_IsNull(existing)) {
+        // Seed the pointer cache from a map entry another path created (custom
+        // element upgrade, event dispatch), so the next crossing takes the fast
+        // path above.
+        elem->setJsWrapper(JS_VALUE_GET_PTR(existing));
         JS_FreeValue(ctx, elemMap);
         JS_FreeValue(ctx, global);
         return existing;
@@ -97,6 +110,10 @@ JSValue DomBindings::wrapElement(JSContext* ctx, void* element_ptr)
     auto* ctxDoc = getDocumentForCtx(ctx);
     if (!ctxDoc || ctxDoc->ownsNode(elem)) {
         JS_SetPropertyStr(ctx, elemMap, key.c_str(), JS_DupValue(ctx, obj));
+        // Cache the wrapper on the element only when it is also rooted in the
+        // map — a transient wrapper for a doomed node must not be cached, or the
+        // raw pointer would outlive it.
+        elem->setJsWrapper(JS_VALUE_GET_PTR(obj));
     }
 
     JS_FreeValue(ctx, elemMap);
@@ -151,6 +168,9 @@ static void fireSelectionChangeOnDocument(bro::dom::Document* doc) {
 // removes the __bro_elem_map entry so the orphan sweep never sees it.
 static void fireNodeFreed(bro::dom::Document* doc, bro::dom::Node* node) {
     if (!node || node->nodeType() != bro::dom::NodeType::Element) return;
+    // Drop the element's cached wrapper pointer before the node is destroyed so
+    // no fast-path wrap can hand back a wrapper that's about to be invalidated.
+    static_cast<bro::dom::Element*>(node)->setJsWrapper(nullptr);
     auto it = s_doc_to_ctx.find(doc);
     if (it == s_doc_to_ctx.end() || !it->second) return;
     JSContext* ctx = it->second;

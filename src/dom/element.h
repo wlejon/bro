@@ -314,6 +314,16 @@ public:
     const std::string& customValidity() const { return customValidity_; }
     void setCustomValidity(const std::string& m) { customValidity_ = m; }
 
+    // Cached JS wrapper (opaque JSObject*, set by the binding layer). The DOM
+    // holds a plain pointer with no ownership: the binding's element→wrapper map
+    // keeps a strong reference to every cached wrapper, so a non-null value here
+    // always points at a live wrapper. The wrapper's finalizer nulls this the
+    // instant it is collected, and the detach/free paths clear it eagerly, so it
+    // never dangles. Lets wrapElement() skip the per-crossing global lookup +
+    // itoa + two hash lookups that dominated DOM traversal from JS.
+    void* jsWrapper() const { return jsWrapper_; }
+    void setJsWrapper(void* w) { jsWrapper_ = w; }
+
     // Debug: detect use-after-free
     bool isAlive() const { return magic_ == 0xB00E; }
 
@@ -370,6 +380,7 @@ private:
     void* webglContext_ = nullptr;
     void* sceneGraph_ = nullptr;
     void* iframeDoc_ = nullptr;
+    void* jsWrapper_ = nullptr;
     unsigned int sceneGraphFBOTex_ = 0;
 };
 

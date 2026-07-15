@@ -57,6 +57,13 @@ static void js_element_finalizer(JSRuntime* rt, JSValue val)
 
     if (s_shutting_down) return;
 
+    // Backstop for the wrapper pointer cache: whatever removed this wrapper from
+    // the element map, the object is now being collected, so make sure the
+    // element no longer points at it. Guards the fast path in wrapElement()
+    // against a freed wrapper even if an eager-clear site was missed.
+    if (el->isAlive() && el->jsWrapper() == JS_VALUE_GET_PTR(val))
+        el->setJsWrapper(nullptr);
+
     // Free any cached canvas context for this element
     auto ccIt = s_canvas_contexts.find(el);
     if (ccIt != s_canvas_contexts.end()) {
@@ -98,6 +105,11 @@ bro::dom::Element* getElement(JSValueConst val)
 
 void invalidateWrapper(JSContext* ctx, bro::dom::Element* elem) {
     if (!elem) return;
+
+    // The map entry (and the strong ref it holds) is about to go, and the
+    // wrapper's opaque is nulled below — so drop the element's fast-path pointer
+    // to it first, or a later wrap would return the now-inert wrapper.
+    elem->setJsWrapper(nullptr);
 
     for (auto& child : elem->childNodes()) {
         if (child->nodeType() == bro::dom::NodeType::Element)
