@@ -36,7 +36,7 @@ jobs:
       # No submodules: the siblings live in third_party/ and are analysed in
       # their own repositories. Leaving them unchecked-out means there is
       # nothing beneath third_party/ for the extractor to see.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3

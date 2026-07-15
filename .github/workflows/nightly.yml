@@ -50,7 +50,7 @@ jobs:
       - name: Rewrite SSH submodule URLs to HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           submodules: recursive
           fetch-depth: 0        # tags needed for package-release.sh's version fallback
@@ -171,7 +171,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4      # for the commit sha the release targets
+      - uses: actions/checkout@v7      # for the commit sha the release targets
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
