@@ -4,6 +4,11 @@
 
 #include <qjsbind/qjsbind.h>
 
+#include <api/api.h>  // brokit::api::resolveAssetPath — keep native mesh file
+                      // I/O consistent with fs.* path resolution
+
+#include <filesystem>
+
 #include <bromath/vec.h>
 #include <bromath/quat.h>
 #include <bromath/mat.h>
@@ -1499,6 +1504,24 @@ static bool readSplatCloud(JSContext* ctx, JSValueConst obj,
 // Install
 // ---------------------------------------------------------------------------
 
+// Resolve a native-write path the way brokit's fs.* would create it, using only
+// brokit's public read-mode resolver: a relative save path is anchored under its
+// parent directory as brokit sees it — an earlier fs.mkdirSync() created that dir
+// under the app's basePath, not the process CWD — so native mesh saves land in
+// the same place fs.* operates. Without this, mesh.saveGLTF() wrote relative to
+// the OS CWD while fs.mkdirSync() created the dir under the app dir, so a save
+// silently failed whenever the CWD copy of the dir didn't exist (fresh checkout).
+// (brokit's create-mode resolver would be marginally cleaner but lives behind a
+// static helper; keeping this bro-side avoids a brokit/submodule change.)
+static std::string resolveMeshWritePath(JSContext* ctx, const std::string& path) {
+    namespace fs = std::filesystem;
+    fs::path p(path);
+    if (p.is_absolute() || !p.has_parent_path())
+        return brokit::api::resolveAssetPath(ctx, path);
+    std::string dir = brokit::api::resolveAssetPath(ctx, p.parent_path().generic_string());
+    return (fs::path(dir) / p.filename()).generic_string();
+}
+
 void MeshBindings::install(JSContext* ctx) {
     qjsbind::Class<MW>(ctx, "Mesh")
 
@@ -1836,6 +1859,7 @@ void MeshBindings::install(JSContext* ctx) {
     // ── Save I/O ────────────────────────────────────────────────────────
     .method("saveGLTF", [](MW* w, JSContext* ctx, std::string path, std::optional<JSValue> opts) -> JSValue {
         if (!w->data) return JS_FALSE;
+        path = resolveMeshWritePath(ctx, path);
         if (!opts || !JS_IsObject(*opts)) {
             return JS_NewBool(ctx, bromesh::saveGLTF(*w->data, path));
         }
@@ -1871,9 +1895,9 @@ void MeshBindings::install(JSContext* ctx) {
         bool ok = bromesh::saveGLTF(*w->data, skinPtr, skelPtr, anims, path);
         return JS_NewBool(ctx, ok);
     })
-    .method("saveOBJ",  [](MW* w, std::string path) { return w->data ? bromesh::saveOBJ(*w->data, path) : false; })
-    .method("savePLY",  [](MW* w, std::string path) { return w->data ? bromesh::savePLY(*w->data, path) : false; })
-    .method("saveSTL",  [](MW* w, std::string path) { return w->data ? bromesh::saveSTL(*w->data, path) : false; })
+    .method("saveOBJ",  [](MW* w, JSContext* ctx, std::string path) { return w->data ? bromesh::saveOBJ(*w->data, resolveMeshWritePath(ctx, path)) : false; })
+    .method("savePLY",  [](MW* w, JSContext* ctx, std::string path) { return w->data ? bromesh::savePLY(*w->data, resolveMeshWritePath(ctx, path)) : false; })
+    .method("saveSTL",  [](MW* w, JSContext* ctx, std::string path) { return w->data ? bromesh::saveSTL(*w->data, resolveMeshWritePath(ctx, path)) : false; })
 
     // ── Remesh / repair / weld / crease ────────────────────────────────
     .method("remeshIsotropic", [](MW* w, std::optional<double> edgeLen, std::optional<int> iter) {
@@ -2315,6 +2339,7 @@ void MeshBindings::install(JSContext* ctx) {
 
     // ── Static: I/O (load) ──────────────────────────────────────────────
     .static_method("loadGLTF", [](JSContext* ctx, std::string path) -> JSValue {
+        path = brokit::api::resolveAssetPath(ctx, path);
         auto scene = bromesh::loadGLTF(path);
         JSValue obj = JS_NewObject(ctx);
 
@@ -2406,9 +2431,10 @@ void MeshBindings::install(JSContext* ctx) {
         return obj;
     })
     .static_method("loadOBJ", [](JSContext* ctx, std::string path) -> JSValue {
-        return wrapMesh(ctx, bromesh::loadOBJ(path));
+        return wrapMesh(ctx, bromesh::loadOBJ(brokit::api::resolveAssetPath(ctx, path)));
     })
     .static_method("loadFBX", [](JSContext* ctx, std::string path) -> JSValue {
+        path = brokit::api::resolveAssetPath(ctx, path);
         auto meshes = bromesh::loadFBX(path);
         JSValue arr = JS_NewArray(ctx);
         for (size_t i = 0; i < meshes.size(); i++)
@@ -2416,12 +2442,13 @@ void MeshBindings::install(JSContext* ctx) {
         return arr;
     })
     .static_method("loadPLY", [](JSContext* ctx, std::string path) -> JSValue {
-        return wrapMesh(ctx, bromesh::loadPLY(path));
+        return wrapMesh(ctx, bromesh::loadPLY(brokit::api::resolveAssetPath(ctx, path)));
     })
     .static_method("loadSTL", [](JSContext* ctx, std::string path) -> JSValue {
-        return wrapMesh(ctx, bromesh::loadSTL(path));
+        return wrapMesh(ctx, bromesh::loadSTL(brokit::api::resolveAssetPath(ctx, path)));
     })
     .static_method("loadVOX", [](JSContext* ctx, std::string path) -> JSValue {
+        path = brokit::api::resolveAssetPath(ctx, path);
         auto vox = bromesh::loadVOX(path);
         JSValue obj = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, obj, "sizeX", JS_NewInt32(ctx, vox.sizeX));
