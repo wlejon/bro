@@ -1,0 +1,192 @@
+name: Nightly
+
+# Builds the full profile (renderer + net/video/steam + AI tower) for
+# Linux / Windows / macOS-arm64 every night and publishes the binaries to a
+# single rolling "nightly" pre-release. The tag is re-pointed each run, so
+# downloaders always find one "latest nightly" and it never shadows a hand-cut
+# vX.Y.Z release.
+#
+# Friendliness: the CUDA siblings link cudart_static, so one binary launches on
+# any machine — it uses an NVIDIA GPU when the driver is present and falls back
+# to CPU otherwise. macOS uses Metal (always present). Nothing extra to install.
+
+on:
+  schedule:
+    - cron: "0 7 * * *"   # 07:00 UTC daily
+  workflow_dispatch:       # manual "Run workflow" button
+
+# One nightly at a time; a newer trigger cancels an in-flight run.
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: write          # publish/replace the rolling release
+
+env:
+  # vcpkg (gamenetworkingsockets/protobuf/openssl for net; libvpx/libwebm/opus
+  # for video) is expensive to build the first time; cache the binaries in the
+  # GitHub Actions cache so later nights are near-instant.
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux,   os: ubuntu-24.04, cuda: true,  triplet: x64-linux }
+          - { name: windows, os: windows-2022, cuda: true,  triplet: x64-windows }
+          - { name: macos,   os: macos-14,     cuda: false, triplet: arm64-osx }
+    steps:
+      # The AI-tower + flora submodules use git@github.com: URLs. Rewrite them
+      # to HTTPS *before* checkout so the default GITHUB_TOKEN can fetch them
+      # (every sibling repo is public). Must run before actions/checkout syncs
+      # submodule URLs into .git/config.
+      - name: Rewrite SSH submodule URLs to HTTPS
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0        # tags needed for package-release.sh's version fallback
+
+      # Expose the Actions cache endpoint to vcpkg's x-gha binary source.
+      - name: Enable vcpkg GHA binary cache
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      # SDL3 is built from third_party/SDL; on Linux it needs the X11/Wayland/GL
+      # and audio dev headers to configure. Ninja is the single-config generator
+      # used on Linux/macOS.
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build \
+            libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxi-dev libxfixes-dev libxss-dev libwayland-dev libxkbcommon-dev \
+            libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev
+
+      - name: Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: Install CUDA Toolkit
+        if: matrix.cuda
+        uses: Jimver/cuda-toolkit@v0.2.35
+        with:
+          cuda: "12.6.2"
+          method: network
+          use-github-cache: true
+
+      - name: sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      # vcpkg is preinstalled on GitHub runners; install the classic-mode
+      # packages bro's net/video services find_package(). protobuf/openssl/abseil
+      # come in transitively via gamenetworkingsockets.
+      - name: Install vcpkg packages
+        shell: bash
+        run: |
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install \
+            --triplet ${{ matrix.triplet }} \
+            gamenetworkingsockets libvpx libwebm opus
+
+      - name: Configure
+        shell: bash
+        run: |
+          # bro's CMake resolves vcpkg from $VCPKG_ROOT; point it at the runner's
+          # preinstalled vcpkg (default env vars aren't in the ${{ env }} context).
+          export VCPKG_ROOT="$VCPKG_INSTALLATION_ROOT"
+          # native GPU-arch detection can't run on a GPU-less runner, so target a
+          # broad set (major cubins + newest PTX) for a widely-runnable binary.
+          CUDA_ARGS=""
+          if [ "${{ matrix.cuda }}" = "true" ]; then
+            CUDA_ARGS="-DCMAKE_CUDA_ARCHITECTURES=all-major"
+          fi
+          cmake -B build \
+            -DBRO_PROFILE=full \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            $CUDA_ARGS
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      # Prove the shipped binary launches on this runner and reports its backend.
+      # Windows is multi-config (build/Release/), Linux/macOS single-config (build/).
+      - name: Smoke test (launch + backend probe)
+        shell: bash
+        run: |
+          if [ -x build/Release/bro-headless.exe ]; then BH=build/Release/bro-headless.exe;
+          elif [ -x build/bro-headless ]; then BH=build/bro-headless;
+          else echo "bro-headless not found" >&2; exit 1; fi
+          "$BH" -e "console.log('backend=' + bro.gpu.backend + ' available=' + bro.gpu.available)"
+
+      - name: Package
+        shell: bash
+        run: |
+          VERSION="nightly-$(date -u +%Y%m%d)-$(git rev-parse --short HEAD)"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            scripts/package-release.sh --version "$VERSION" --build-dir build --config Release
+          else
+            scripts/package-release.sh --version "$VERSION" --build-dir build
+          fi
+
+      - name: Zip
+        shell: bash
+        run: |
+          cd dist
+          d=$(ls -d bro-${VERSION}-* | head -1)
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "../${d}.zip" "$d" >/dev/null
+          else
+            zip -qr "../${d}.zip" "$d"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bro-${{ matrix.name }}
+          path: bro-nightly-*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish rolling nightly
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4      # for the commit sha the release targets
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # Re-point the single "nightly" tag/release at this run's commit and
+      # replace its assets. Deleting first (with --cleanup-tag) is the reliable
+      # way to move the tag; recreate as a prerelease so it never outranks vX.Y.Z.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+          NOTES="Automated nightly build from \`${GITHUB_SHA::7}\` on $(date -u +%Y-%m-%d).
+
+          Single self-contained binary per platform — uses your NVIDIA GPU when present, falls back to CPU otherwise (macOS uses Metal). This is a pre-release; for stable builds see the tagged releases."
+          gh release create nightly \
+            --target "$GITHUB_SHA" \
+            --title "Nightly ($(date -u +%Y-%m-%d))" \
+            --notes "$NOTES" \
+            --prerelease \
+            artifacts/*.zip

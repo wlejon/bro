@@ -1,0 +1,10 @@
+version: 2
+updates:
+  # Keep the GitHub Actions used by the workflows current. Submodules are
+  # intentionally omitted — the sibling pointers are bumped by hand.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"

@@ -1,0 +1,92 @@
+name: CI
+
+# Build check for the default (app) profile on every push/PR: the full renderer
+# + net/video/steam, no AI tower/CUDA so it stays fast. This is the signal
+# behind the "CI" badge. The heavier full+CUDA build runs in nightly.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   test: true }
+          - { name: windows, os: windows-2022, triplet: x64-windows, test: false }
+          - { name: macos,   os: macos-14,     triplet: arm64-osx,   test: false }
+    steps:
+      - name: Rewrite SSH submodule URLs to HTTPS
+        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Enable vcpkg GHA binary cache
+        uses: actions/github-script@v7
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      # SDL3 builds from third_party/SDL. Linux also gets xvfb + mesa so the
+      # headless test suite can run its GPU (GL) path against llvmpipe software
+      # rendering — the same code that ships, not the --no-gpu raster fallback.
+      - name: Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build xvfb libgl1-mesa-dri \
+            libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxi-dev libxfixes-dev libxss-dev libwayland-dev libxkbcommon-dev \
+            libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev
+
+      - name: Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      - name: sccache
+        uses: mozilla-actions/sccache-action@v0.0.10
+
+      - name: Install vcpkg packages
+        shell: bash
+        run: |
+          "$VCPKG_INSTALLATION_ROOT/vcpkg" install \
+            --triplet ${{ matrix.triplet }} \
+            gamenetworkingsockets libvpx libwebm opus
+
+      - name: Configure
+        shell: bash
+        run: |
+          export VCPKG_ROOT="$VCPKG_INSTALLATION_ROOT"
+          cmake -B build \
+            -DBRO_PROFILE=app \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER_LAUNCHER=sccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Test (headless, GPU path under Xvfb)
+        if: matrix.test
+        shell: bash
+        run: xvfb-run -a ./tests/run_tests.sh
