@@ -1,10 +1,16 @@
 name: CodeQL
 
-# Static analysis for bro's own C++. Builds the minimal profile: it needs no
-# vcpkg and no CUDA, so the trace is fast and reliable, while still covering the
-# engine core, DOM/layout/render/canvas/WebGL, and the large src/js binding
-# layer. third_party/ (the submodule siblings) is filtered out of the results —
-# each sibling repo runs its own CodeQL and owns its Security tab.
+# Static analysis for bro's OWN C++ (engine core, DOM/layout/render/canvas/WebGL,
+# and the large src/js binding layer). The vendored siblings under third_party/
+# each run their own CodeQL and own their Security tab, so they're excluded here.
+#
+# Build-mode: none (build-free extraction). This is deliberate: for a *built*
+# C/C++ analysis, CodeQL extracts whatever the compiler touches and path filters
+# have no effect — and bro can't be built without compiling the submodules it
+# links (qjsbind, brokit, htmlayout, gumbo, …), so a traced build would always
+# drag third_party/ into the results. Build-free extraction is the one mode where
+# paths-ignore is honored for C/C++; it also needs no vcpkg/CUDA/X11 toolchain.
+# Submodules aren't checked out, so there is nothing under third_party/ to scan.
 
 on:
   push:
@@ -27,42 +33,21 @@ jobs:
       contents: read
       actions: read
     steps:
-      - name: Rewrite SSH submodule URLs to HTTPS
-        run: git config --global url."https://github.com/".insteadOf "git@github.com:"
-
+      # No submodules: the siblings live in third_party/ and are analysed in
+      # their own repositories. Leaving them unchecked-out means there is
+      # nothing beneath third_party/ for the extractor to see.
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            ninja-build \
-            libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
-            libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
-            libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev \
-            libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: c-cpp
-          build-mode: manual
-          # Keep the analysis scoped to bro's own sources; the vendored siblings
-          # are analysed in their own repositories.
+          build-mode: none
+          # Belt-and-suspenders with the missing submodule checkout above:
+          # paths-ignore IS honored in build-mode none (unlike a traced build).
           config: |
             paths-ignore:
               - third_party
-
-      # -O0 keeps the extracted IR close to the source so alert dataflow paths
-      # point at code a human can act on.
-      - name: Build (minimal profile)
-        run: |
-          cmake -B build -DBRO_PROFILE=minimal -DCMAKE_BUILD_TYPE=Debug
-          # Bounded jobs: a bare --parallel passes unlimited -j to make and OOM-kills
-          # the runner (exit 143). CodeQL's per-compile tracer adds overhead, so 3.
-          cmake --build build --parallel 3
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
