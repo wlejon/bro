@@ -61,7 +61,7 @@ if(BRO_FETCH_SKIA)
         set(_skia_bundle "${CMAKE_CURRENT_LIST_DIR}/skia-src.tar.gz")
         message(STATUS "Skia: fetching source bundle (headers + svg/expat sources, ~6 MB)...")
         _bro_skia_download("${_skia_base}/skia-src-m147.tar.gz" "${_skia_bundle}"
-            "ce6125dc0818ec3a07c48331cdeb827556ce8a608521cbd384846b00069cab8e" _skia_src_ok)
+            "03f647114ad04cf7ba0a576fccaabe47e0991f0d8c09f80e74e95a87353e9036" _skia_src_ok)
         if(_skia_src_ok)
             file(MAKE_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src")
             file(ARCHIVE_EXTRACT INPUT "${_skia_bundle}"
