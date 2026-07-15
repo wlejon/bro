@@ -54,6 +54,29 @@ if(NOT TARGET bromath)
     endif()
 endif()
 
+# --- brotensor (tensor + ops — the AI-tower base) ---
+# bro is the FIRST loader of brotensor so that every sibling's own
+# `if(NOT TARGET brotensor)` guard (broimage, brogameagent, brolm, brodiffusion,
+# brovisionml, brosoundml) trips and none of them run their own resolution. Each
+# sibling's fallback assumes it is the standalone CMake root — when nested here
+# it resolves `../brotensor` / `third_party/brotensor` against bro's root or its
+# own dir and misses the submodule (this is why the full-profile nightly failed
+# to configure). Loading it once here, with bro's correct paths, sidesteps all
+# of that. Prefer the standalone repo at ../brotensor for local development;
+# fall back to the git submodule. Gated on BRO_WITH_TENSOR; the backend cache
+# vars (BROTENSOR_WITH_CUDA/METAL) are forwarded in the top-level CMakeLists.txt
+# before this file is added, so the backend is fixed at this first load.
+if(BRO_WITH_TENSOR AND NOT TARGET brotensor)
+    set(BROTENSOR_DIR "${CMAKE_SOURCE_DIR}/../brotensor" CACHE PATH "Path to standalone brotensor repo")
+    if(EXISTS "${BROTENSOR_DIR}/CMakeLists.txt")
+        message(STATUS "brotensor: using standalone repo at ${BROTENSOR_DIR}")
+        add_subdirectory("${BROTENSOR_DIR}" "${CMAKE_BINARY_DIR}/brotensor" EXCLUDE_FROM_ALL)
+    else()
+        message(STATUS "brotensor: using submodule at third_party/brotensor")
+        add_subdirectory(brotensor EXCLUDE_FROM_ALL)
+    endif()
+endif()
+
 # --- broimage (image decode/encode + composable kernels) ---
 # Single home for image work that used to be duplicated across the stack.
 # Depends on bromath (header-only, added above) and brotensor (CPU + optional

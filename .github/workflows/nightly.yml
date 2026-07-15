@@ -88,6 +88,16 @@ jobs:
           cuda: "12.6.2"
           method: network
           use-github-cache: true
+          # Linux only: install just the build sub-packages, not the full "cuda"
+          # meta-package. The meta pulls in nvidia-driver-*-open, whose DKMS
+          # post-install fails on a driverless GitHub runner (dpkg exit 10) and
+          # reds the whole job. The AI tower links CUDA::cudart_static and
+          # compiles its own kernels (no cuBLAS/cuRAND/cuFFT), so nvcc + the
+          # cudart dev package (static lib + headers) is all it needs; naming
+          # sub-packages excludes the driver. Windows has no DKMS driver step and
+          # its full install already works, so leave it on the default ('[]' =
+          # full) there.
+          sub-packages: ${{ runner.os == 'Linux' && '["nvcc", "cudart-dev"]' || '[]' }}
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.10
