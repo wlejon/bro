@@ -126,6 +126,23 @@ for bin in "$BRO_EXE" "$BRO_HEADLESS_EXE" "$BRO_SERVER_EXE"; do
 done
 shopt -u nullglob
 
+# --- Strip debug symbols from our own executables (Linux/macOS) ------------
+# Release ELF/Mach-O keep full symbol tables, and with the whole AI tower +
+# Skia statically linked in that roughly doubles the binaries (Linux was ~108 MB
+# vs Windows' 38 MB, where the PDB already stays out of the zip). Strip only our
+# three executables, not the third-party shared libs. macOS uses -x (drop local
+# symbols, keep external) so dylib/codesigning stays intact.
+if [[ "$PLATFORM" != "win" ]]; then
+    STRIP_FLAGS=()
+    [[ "$PLATFORM" == "macos" ]] && STRIP_FLAGS=(-x)
+    for t in bro bro-headless bro-server; do
+        if [[ -f "$OUT_DIR/$t" ]]; then
+            strip "${STRIP_FLAGS[@]}" "$OUT_DIR/$t" 2>/dev/null \
+                || echo "warning: strip failed for $t, shipping unstripped" >&2
+        fi
+    done
+fi
+
 # --- README + LICENSE -----------------------------------------------------
 # Double-clicking bro with no app argument falls through to the built-in
 # project manager at system/projects/, so no root bro.json is needed.
