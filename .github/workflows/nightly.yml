@@ -28,6 +28,12 @@ env:
   # for video) is expensive to build the first time; cache the binaries in the
   # GitHub Actions cache so later nights are near-instant.
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  # Persist the sccache object cache in the GitHub Actions cache across runs.
+  # Without this sccache silently falls back to per-runner LOCAL DISK, which is
+  # wiped between runs — so every night recompiled from scratch (0 hits, all
+  # writes thrown away). This is the one switch that makes nightly-to-nightly
+  # caching actually work. The sccache-action exports the cache service token.
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   build:
@@ -154,11 +160,18 @@ jobs:
           # reports cpu, which is a pass (the point is the full build launches).
           APP=system/skeletons/blank
           PROBE="if(!bro.gpu||!bro.gpu.backend)throw new Error('bro.gpu backend missing');console.log('backend='+bro.gpu.backend+' available='+bro.gpu.available)"
-          # GPU-headless renders through a hidden GL context — same code that
-          # ships. Linux needs a virtual display + software GL (xvfb + mesa-dri),
-          # matching the CI job; Windows/macOS runners provide GL directly.
+          # GPU-headless renders through a hidden GL context — the same code
+          # that ships. Linux gets a virtual display + software GL (xvfb +
+          # mesa-dri), matching the CI job; macOS runners provide GL directly.
+          # The windows-2022 runner has no OpenGL 3.3 (only GDI software GL 1.1),
+          # so a GL-core context request aborts engine init before JS runs — use
+          # CPU raster there. This only affects the CI smoke probe: the shipped
+          # Windows binary still defaults to GPU on real hardware, and the ML
+          # backend that bro.gpu reports is independent of the render path.
           if [ "$RUNNER_OS" = "Linux" ]; then
             xvfb-run -a "$BH" "$APP" -e "$PROBE"
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            "$BH" --no-gpu "$APP" -e "$PROBE"
           else
             "$BH" "$APP" -e "$PROBE"
           fi
