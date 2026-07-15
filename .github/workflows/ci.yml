@@ -57,7 +57,8 @@ jobs:
             ninja-build xvfb libgl1-mesa-dri \
             libgl1-mesa-dev libx11-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxfixes-dev libxss-dev libxtst-dev libwayland-dev libxkbcommon-dev \
-            libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev
+            libegl1-mesa-dev libasound2-dev libpulse-dev libudev-dev \
+            libfreetype-dev libfontconfig1-dev libpng-dev libjpeg-dev libwebp-dev
 
       - name: Ninja (macOS)
         if: runner.os == 'macOS'
