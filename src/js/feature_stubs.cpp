@@ -33,6 +33,7 @@
 #include "js/gesture_bindings.h"
 #include "js/listen_bindings.h"
 #include "js/triposplat_bindings.h"
+#include "js/motion_bindings.h"
 
 // Tier-1 binding headers (install-fn declarations + forward decls only — all
 // stub-safe: no sibling headers pulled in).
@@ -165,6 +166,14 @@ void MeshBindings::cleanup(JSContext* /*ctx*/) {}
 #if !BRO_WITH_TRIPOSPLAT
 void installTriposplatBindings(JSContext* ctx) {
     installUnavailableNamespace(ctx, "triposplat", "BRO_WITH_TRIPOSPLAT");
+}
+#endif
+
+// ── MOTION (ARDY text-to-motion — needs both the denoiser (DIFFUSION) and the
+//    LLM2Vec text encoder (LM)) ─────────────────────────────────────────────
+#if !(BRO_WITH_DIFFUSION && BRO_WITH_LM)
+void installMotionBindings(JSContext* ctx) {
+    installUnavailableNamespace(ctx, "motion", "BRO_WITH_DIFFUSION+BRO_WITH_LM");
 }
 #endif
 

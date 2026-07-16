@@ -9,6 +9,7 @@
 #include "js/tts_bindings.h"
 #include "js/diar_bindings.h"
 #include "js/triposplat_bindings.h"
+#include "js/motion_bindings.h"
 #include "js/vision_bindings.h"
 #include "js/imagebitmap_bindings.h"
 #include "js/mesh_bindings.h"
@@ -322,6 +323,11 @@ void Worker::threadFunc()
     // composed over brovisionml + brodiffusion). Runs the heavy pipeline; a
     // worker is the idiomatic place to keep the UI responsive. ---
     installTriposplatBindings(ctx);
+
+    // --- Install bro.motion (ARDY text-to-motion, composed over brolm +
+    // brodiffusion::ardy). Heavy (8B text encoder + generate); a worker keeps
+    // the UI responsive. ---
+    installMotionBindings(ctx);
 
     // --- 3b'''''''. Install createImageBitmap / ImageBitmap. Workers that
     // produce frames (e.g. the diffusion worker) build bitmaps here and

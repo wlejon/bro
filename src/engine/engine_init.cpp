@@ -55,6 +55,7 @@
 #include "js/diar_bindings.h"
 #include "js/rave_bindings.h"
 #include "js/triposplat_bindings.h"
+#include "js/motion_bindings.h"
 #include "js/vision_bindings.h"
 #include "js/wake_bindings.h"
 #include "js/gesture_bindings.h"
@@ -282,6 +283,11 @@ Engine::Engine(const EngineConfig& config)
     // DINOv3 (brovisionml) + Flux.2 VAE / flow DiT / octree decoder (brodiffusion);
     // emits a Gaussian cloud for the scene GaussianSplatNode. GPU by default.
     js::installTriposplatBindings(jsRuntime_->getContext());
+
+    // bro.motion (ARDY text-to-motion). Composition layer over the LLM2Vec text
+    // encoder (brolm) + the motion denoiser / FSQ decoder / AR rollout / G1 FK
+    // (brodiffusion::ardy); emits per-frame G1 joint positions. GPU by default.
+    js::installMotionBindings(jsRuntime_->getContext());
 
     // Terrain + tile-world bindings (voxel terrain / chunked tile grid) — 3D-only.
 #if BRO_WITH_3D

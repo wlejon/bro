@@ -80,6 +80,7 @@ add_library(bro_js STATIC
     rave_bindings.cpp
     vision_bindings.cpp
     triposplat_bindings.cpp
+    motion_bindings.cpp
     wake_bindings.cpp
     listen_host.cpp
     listen_bindings.cpp
