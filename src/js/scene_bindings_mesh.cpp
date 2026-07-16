@@ -18,6 +18,7 @@
 #include <qjsbind/qjsbind.h>
 
 #include <bromesh/primitives/primitives.h>
+#include <bromesh/manipulation/normals.h>
 
 #include <cstring>
 #include <memory>
@@ -287,8 +288,10 @@ JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int argc, JSVa
     bool gotData = false;
 
     bool transfer = false;
+    bool recomputeNormals = false;
     if (argc >= 2 && JS_IsObject(argv[1])) {
         transfer = qjsbind::get_prop_bool(ctx, argv[1], "transfer", false);
+        recomputeNormals = qjsbind::get_prop_bool(ctx, argv[1], "recomputeNormals", false);
     }
 
     // Path 1: argument is a Mesh object directly.
@@ -307,6 +310,7 @@ JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int argc, JSVa
     // Path 2: options object with `mesh:`/`data:` (Mesh) or raw typed arrays.
     if (!gotData && JS_IsObject(argv[0])) {
         bool transferOpt = qjsbind::get_prop_bool(ctx, argv[0], "transfer", false);
+        recomputeNormals |= qjsbind::get_prop_bool(ctx, argv[0], "recomputeNormals", false);
 
         auto tryKey = [&](const char* key) -> bool {
             JSValue v = JS_GetPropertyStr(ctx, argv[0], key);
@@ -345,6 +349,11 @@ JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int argc, JSVa
 
     if (!gotData)
         return JS_ThrowTypeError(ctx, "updateMesh: argument must be a Mesh or {positions,indices}");
+
+    // Deforming geometry (e.g. a soft body streaming vertices() in per frame)
+    // needs fresh smooth normals or the lit mesh goes black/faceted.
+    if (recomputeNormals && !meshData.positions.empty() && !meshData.indices.empty())
+        bromesh::computeNormals(meshData);
 
     meshNode->setMesh(std::move(meshData));
     return JS_DupValue(ctx, this_val);
@@ -648,6 +657,9 @@ static void applyMeshNodeOptions(JSContext* ctx, scene::MeshNode* node,
                 if (jsReadFloatArray(ctx, opts, "colors", colors)) {
                     meshData.colors = std::move(colors);
                 }
+                if (meshData.normals.empty() &&
+                    qjsbind::get_prop_bool(ctx, opts, "recomputeNormals", false))
+                    bromesh::computeNormals(meshData);
                 hasRawData = true;
             }
         }

@@ -42,6 +42,8 @@
 #include <Jolt/Physics/Ragdoll/Ragdoll.h>
 #include <Jolt/Skeleton/Skeleton.h>
 #include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
+#include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
+#include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
 
 #include "util/log.h"
 
@@ -383,6 +385,10 @@ void PhysicsWorld::shutdown() {
             if (r.ragdoll) r.ragdoll->RemoveFromPhysicsSystem();
         ragdolls_.clear();
 
+        // Soft-body registry entries don't own their bodies — the generic
+        // sweep below destroys them; this only drops the settings Refs.
+        softBodies_.clear();
+
         BodyInterface& bi = physicsSystem_.GetBodyInterface();
         BodyIDVector bodyIDs;
         physicsSystem_.GetBodies(bodyIDs);
@@ -672,6 +678,15 @@ void PhysicsWorld::destroyBody(BodyID id) {
         }
     }
 
+    // A soft body? Evict its registry entry (metadata only — the body itself
+    // is destroyed by the generic path below like any other body).
+    for (auto it = softBodies_.begin(); it != softBodies_.end(); ++it) {
+        if (it->second.body == id) {
+            softBodies_.erase(it);
+            break;
+        }
+    }
+
     removeConstraintsReferencing(id);
 
     BodyInterface& bi = physicsSystem_.GetBodyInterface();
@@ -715,11 +730,42 @@ void PhysicsWorld::setAngularVelocity(BodyID id, Vec3 vel) {
     physicsSystem_.GetBodyInterface().SetAngularVelocity(id, vel);
 }
 
+// Soft bodies ignore the body-level velocity — the XPBD solver integrates
+// per-vertex velocities — so AddForce/AddImpulse on the body would be a
+// no-op. Spread a uniform velocity change over the non-pinned vertices
+// instead (dv = impulse / total vertex mass) so the soft body's body id
+// composes with the generic impulse API like every other body.
+static bool softBodyAddImpulse(PhysicsSystem& system, BodyID id, Vec3 impulse) {
+    bool soft = false;
+    {
+        BodyLockWrite lock(system.GetBodyLockInterface(), id);
+        if (lock.Succeeded() && lock.GetBody().IsSoftBody()) {
+            soft = true;
+            auto* mp = static_cast<SoftBodyMotionProperties*>(
+                lock.GetBody().GetMotionProperties());
+            float totalMass = 0.0f;
+            for (const auto& v : mp->GetVertices())
+                if (v.mInvMass > 0.0f) totalMass += 1.0f / v.mInvMass;
+            if (totalMass > 0.0f) {
+                Vec3 dv = impulse / totalMass;
+                for (auto& v : mp->GetVertices())
+                    if (v.mInvMass > 0.0f) v.mVelocity += dv;
+            }
+        }
+    }
+    if (soft) system.GetBodyInterface().ActivateBody(id);
+    return soft;
+}
+
 void PhysicsWorld::addForce(BodyID id, Vec3 force) {
+    // Jolt applies AddForce over the next step only; mirror that for soft
+    // bodies as a one-step impulse.
+    if (softBodyAddImpulse(physicsSystem_, id, force * timeStep_)) return;
     physicsSystem_.GetBodyInterface().AddForce(id, force);
 }
 
 void PhysicsWorld::addImpulse(BodyID id, Vec3 impulse) {
+    if (softBodyAddImpulse(physicsSystem_, id, impulse)) return;
     physicsSystem_.GetBodyInterface().AddImpulse(id, impulse);
 }
 
@@ -752,6 +798,9 @@ void PhysicsWorld::destroyAll(const std::function<void(JPH::BodyID)>& onBodyDest
         r.ragdoll->RemoveFromPhysicsSystem();
     }
     ragdolls_.clear();
+
+    // Soft-body registry: metadata only, the generic sweep destroys the bodies.
+    softBodies_.clear();
 
     BodyInterface& bi = physicsSystem_.GetBodyInterface();
     BodyIDVector bodyIDs;
@@ -1934,6 +1983,265 @@ bool PhysicsWorld::isRagdollActive(uint32_t handle) const {
     auto it = ragdolls_.find(handle);
     if (it == ragdolls_.end()) return false;
     return it->second.ragdoll->IsActive();
+}
+
+// --- Soft bodies ---
+//
+// Jolt soft bodies are ordinary bodies whose SoftBodyMotionProperties hold
+// the XPBD vertex state; they step inside PhysicsSystem::Update like any
+// dynamic body, so no per-step bookkeeping is needed here. The registry
+// entry pins the SoftBodySharedSettings Ref and remembers the even mass
+// split for unpinning.
+
+// Build a cloth grid: gridX*gridZ vertices in the local XZ plane (Y up),
+// centered on the origin. Vertex (x,z) lives at index z*gridX + x; faces
+// wind CCW seen from +Y so the rendered front faces (and the rest normals a
+// render mesh derives from them) point up.
+static Ref<SoftBodySharedSettings> buildClothSettings(const SoftBodyOptions& o,
+                                                      float invMass) {
+    const int gx = std::max(2, o.gridX);
+    const int gz = std::max(2, o.gridZ);
+    const float sp = o.spacing > 0.0f ? o.spacing : 0.1f;
+    const float halfX = 0.5f * (gx - 1) * sp;
+    const float halfZ = 0.5f * (gz - 1) * sp;
+
+    Ref<SoftBodySharedSettings> s = new SoftBodySharedSettings();
+    s->mVertices.reserve((size_t)gx * gz);
+    for (int z = 0; z < gz; z++)
+        for (int x = 0; x < gx; x++)
+            s->mVertices.push_back(SoftBodySharedSettings::Vertex(
+                Float3(x * sp - halfX, 0.0f, z * sp - halfZ),
+                Float3(0, 0, 0), invMass));
+
+    for (int z = 0; z + 1 < gz; z++) {
+        for (int x = 0; x + 1 < gx; x++) {
+            uint32_t v00 = (uint32_t)(z * gx + x);
+            uint32_t v10 = v00 + 1;
+            uint32_t v01 = v00 + gx;
+            uint32_t v11 = v01 + 1;
+            s->AddFace(SoftBodySharedSettings::Face(v00, v01, v11));
+            s->AddFace(SoftBodySharedSettings::Face(v00, v11, v10));
+        }
+    }
+    return s;
+}
+
+// Build settings for an arbitrary triangle mesh. Degenerate and out-of-range
+// triangles are skipped. With pressure the enclosed volume must be positive
+// (CCW-outward winding); a negative signed rest volume flips all faces.
+static Ref<SoftBodySharedSettings> buildMeshSettings(const SoftBodyOptions& o,
+                                                     float invMass) {
+    if (o.vertices.size() < 3 || o.indices.size() < 3) return nullptr;
+    const uint32_t n = (uint32_t)o.vertices.size();
+
+    Ref<SoftBodySharedSettings> s = new SoftBodySharedSettings();
+    s->mVertices.reserve(n);
+    for (const Vec3& v : o.vertices)
+        s->mVertices.push_back(SoftBodySharedSettings::Vertex(
+            Float3(v.GetX(), v.GetY(), v.GetZ()), Float3(0, 0, 0), invMass));
+
+    for (size_t i = 0; i + 2 < o.indices.size(); i += 3) {
+        uint32_t a = o.indices[i], b = o.indices[i + 1], c = o.indices[i + 2];
+        if (a >= n || b >= n || c >= n) continue;
+        SoftBodySharedSettings::Face f(a, b, c);
+        if (f.IsDegenerate()) continue;
+        s->AddFace(f);
+    }
+    if (s->mFaces.empty()) return nullptr;
+
+    if (o.pressure > 0.0f) {
+        // Signed rest volume (same sum ApplyPressure uses). Inside-out
+        // meshes would deflate instead of inflate — flip them.
+        float sixVolume = 0.0f;
+        for (const auto& f : s->mFaces) {
+            Vec3 x1(s->mVertices[f.mVertex[0]].mPosition);
+            Vec3 x2(s->mVertices[f.mVertex[1]].mPosition);
+            Vec3 x3(s->mVertices[f.mVertex[2]].mPosition);
+            sixVolume += x1.Cross(x2).Dot(x3);
+        }
+        if (sixVolume < 0.0f)
+            for (auto& f : s->mFaces) std::swap(f.mVertex[1], f.mVertex[2]);
+    }
+    return s;
+}
+
+uint32_t PhysicsWorld::createSoftBody(const SoftBodyOptions& opts) {
+    if (!initialized_) return 0;
+
+    // Even mass split. Pinned vertices are zeroed after the split so a few
+    // pins don't change the felt weight of the rest of the body.
+    size_t nVerts = opts.kind == SoftBodyOptions::Cloth
+        ? (size_t)std::max(2, opts.gridX) * std::max(2, opts.gridZ)
+        : opts.vertices.size();
+    if (nVerts < 3 && opts.kind == SoftBodyOptions::Mesh) return 0;
+    const float mass = opts.mass > 0.0f ? opts.mass : 1.0f;
+    const float invMass = (float)nVerts / mass;
+
+    Ref<SoftBodySharedSettings> settings = opts.kind == SoftBodyOptions::Cloth
+        ? buildClothSettings(opts, invMass)
+        : buildMeshSettings(opts, invMass);
+    if (!settings) return 0;
+
+    for (uint32_t idx : opts.pinned)
+        if (idx < settings->mVertices.size())
+            settings->mVertices[idx].mInvMass = 0.0f;
+
+    // Derive edge (+ shear for quads) and optional bend constraints from the
+    // faces. Compliance is XPBD's inverse stiffness: 0 = rigid spring.
+    SoftBodySharedSettings::VertexAttributes attr;
+    attr.mCompliance = std::max(0.0f, opts.compliance);
+    attr.mShearCompliance = opts.shearCompliance >= 0.0f ? opts.shearCompliance
+                                                         : attr.mCompliance;
+    const bool bend = opts.bendCompliance >= 0.0f;
+    attr.mBendCompliance = bend ? opts.bendCompliance : FLT_MAX;
+    settings->CreateConstraints(&attr, 1,
+        bend ? SoftBodySharedSettings::EBendType::Distance
+             : SoftBodySharedSettings::EBendType::None);
+    settings->Optimize();  // required: builds the parallel update groups
+
+    int layer = opts.layer;
+    if (layer < 0 || layer >= numLayers_) layer = 1;
+
+    SoftBodyCreationSettings scs(settings, opts.position,
+                                 opts.rotation.Normalized(),
+                                 static_cast<ObjectLayer>(layer));
+    scs.mNumIterations = (uint32)std::max(1, opts.numIterations);
+    scs.mFriction = opts.friction;
+    scs.mRestitution = opts.restitution;
+    scs.mPressure = opts.kind == SoftBodyOptions::Mesh ? std::max(0.0f, opts.pressure) : 0.0f;
+    scs.mLinearDamping = opts.linearDamping;
+    scs.mGravityFactor = opts.gravityFactor;
+    scs.mMaxLinearVelocity = opts.maxLinearVelocity;
+    scs.mVertexRadius = std::max(0.0f, opts.vertexRadius);
+    scs.mUpdatePosition = opts.updatePosition;
+    scs.mFacesDoubleSided = opts.doubleSided;
+    scs.mAllowSleeping = opts.allowSleeping;
+
+    BodyInterface& bi = physicsSystem_.GetBodyInterface();
+    BodyID id = bi.CreateAndAddSoftBody(scs, EActivation::Activate);
+    if (id.IsInvalid()) return 0;
+    if (listener_) listener_->setSensorId(id, false);
+
+    SoftBodyEntry entry;
+    entry.settings = settings;
+    entry.body = id;
+    entry.defaultInvMass = invMass;
+
+    uint32_t handle = nextSoftBodyHandle_++;
+    softBodies_[handle] = std::move(entry);
+    return handle;
+}
+
+void PhysicsWorld::destroySoftBody(uint32_t handle) {
+    auto it = softBodies_.find(handle);
+    if (it == softBodies_.end()) return;
+    BodyID id = it->second.body;
+    softBodies_.erase(it);
+    destroyBody(id);  // entry already gone, so this is the generic path
+}
+
+BodyID PhysicsWorld::softBodyBody(uint32_t handle) const {
+    auto it = softBodies_.find(handle);
+    return it == softBodies_.end() ? BodyID() : it->second.body;
+}
+
+int PhysicsWorld::softBodyVertexCount(uint32_t handle) const {
+    auto it = softBodies_.find(handle);
+    if (it == softBodies_.end()) return -1;
+    return (int)it->second.settings->mVertices.size();
+}
+
+bool PhysicsWorld::getSoftBodyVertices(uint32_t handle,
+                                       std::vector<float>& outXyz) const {
+    auto it = softBodies_.find(handle);
+    if (it == softBodies_.end()) return false;
+    BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), it->second.body);
+    if (!lock.Succeeded() || !lock.GetBody().IsSoftBody()) return false;
+    const Body& body = lock.GetBody();
+    const auto* mp =
+        static_cast<const SoftBodyMotionProperties*>(body.GetMotionProperties());
+    RMat44 com = body.GetCenterOfMassTransform();
+    const auto& verts = mp->GetVertices();
+    outXyz.resize(verts.size() * 3);
+    for (size_t i = 0; i < verts.size(); i++) {
+        RVec3 wp = com * verts[i].mPosition;  // vertices are COM-relative
+        outXyz[i * 3 + 0] = (float)wp.GetX();
+        outXyz[i * 3 + 1] = (float)wp.GetY();
+        outXyz[i * 3 + 2] = (float)wp.GetZ();
+    }
+    return true;
+}
+
+bool PhysicsWorld::softBodyTopology(uint32_t handle, std::vector<float>& outXyz,
+                                    std::vector<uint32_t>& outIndices) const {
+    auto it = softBodies_.find(handle);
+    if (it == softBodies_.end()) return false;
+    const SoftBodySharedSettings* s = it->second.settings.GetPtr();
+    outXyz.resize(s->mVertices.size() * 3);
+    for (size_t i = 0; i < s->mVertices.size(); i++) {
+        const Float3& p = s->mVertices[i].mPosition;
+        outXyz[i * 3 + 0] = p.x;
+        outXyz[i * 3 + 1] = p.y;
+        outXyz[i * 3 + 2] = p.z;
+    }
+    outIndices.resize(s->mFaces.size() * 3);
+    for (size_t i = 0; i < s->mFaces.size(); i++) {
+        outIndices[i * 3 + 0] = s->mFaces[i].mVertex[0];
+        outIndices[i * 3 + 1] = s->mFaces[i].mVertex[1];
+        outIndices[i * 3 + 2] = s->mFaces[i].mVertex[2];
+    }
+    return true;
+}
+
+bool PhysicsWorld::setSoftBodyVertexPosition(uint32_t handle, int index,
+                                             RVec3 pos) {
+    auto it = softBodies_.find(handle);
+    if (it == softBodies_.end()) return false;
+    {
+        BodyLockWrite lock(physicsSystem_.GetBodyLockInterface(), it->second.body);
+        if (!lock.Succeeded() || !lock.GetBody().IsSoftBody()) return false;
+        Body& body = lock.GetBody();
+        auto* mp = static_cast<SoftBodyMotionProperties*>(body.GetMotionProperties());
+        if (index < 0 || index >= (int)mp->GetVertices().size()) return false;
+        auto& v = mp->GetVertex((uint)index);
+        v.mPosition = Vec3(body.GetCenterOfMassTransform().Inversed() * pos);
+        v.mVelocity = Vec3::sZero();
+    }
+    physicsSystem_.GetBodyInterface().ActivateBody(it->second.body);
+    return true;
+}
+
+bool PhysicsWorld::setSoftBodyVertexVelocity(uint32_t handle, int index,
+                                             Vec3 vel) {
+    auto it = softBodies_.find(handle);
+    if (it == softBodies_.end()) return false;
+    {
+        BodyLockWrite lock(physicsSystem_.GetBodyLockInterface(), it->second.body);
+        if (!lock.Succeeded() || !lock.GetBody().IsSoftBody()) return false;
+        auto* mp = static_cast<SoftBodyMotionProperties*>(
+            lock.GetBody().GetMotionProperties());
+        if (index < 0 || index >= (int)mp->GetVertices().size()) return false;
+        mp->GetVertex((uint)index).mVelocity = vel;  // COM rotation is identity
+    }
+    physicsSystem_.GetBodyInterface().ActivateBody(it->second.body);
+    return true;
+}
+
+bool PhysicsWorld::pinSoftBodyVertex(uint32_t handle, int index, bool pinned) {
+    auto it = softBodies_.find(handle);
+    if (it == softBodies_.end()) return false;
+    {
+        BodyLockWrite lock(physicsSystem_.GetBodyLockInterface(), it->second.body);
+        if (!lock.Succeeded() || !lock.GetBody().IsSoftBody()) return false;
+        auto* mp = static_cast<SoftBodyMotionProperties*>(
+            lock.GetBody().GetMotionProperties());
+        if (index < 0 || index >= (int)mp->GetVertices().size()) return false;
+        auto& v = mp->GetVertex((uint)index);
+        v.mInvMass = pinned ? 0.0f : it->second.defaultInvMass;
+        if (pinned) v.mVelocity = Vec3::sZero();
+    }
+    physicsSystem_.GetBodyInterface().ActivateBody(it->second.body);
+    return true;
 }
 
 // --- Raycasts, shape casts & overlap queries ---

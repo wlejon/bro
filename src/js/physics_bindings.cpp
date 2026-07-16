@@ -15,6 +15,7 @@
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <qjsbind/qjsbind.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -36,18 +37,21 @@ namespace bro::js {
 struct JsCharacter;
 struct JsVehicle;
 struct JsRagdoll;
+struct JsSoftBody;
 
 struct JsWorld {
     physics::PhysicsWorld* world = nullptr;
     bool ownsWorld = false;  // true → delete `world` in destructor
 
-    // Sandbox characters/vehicles/ragdolls that still reference this world.
-    // GC teardown order is arbitrary, so ~JsWorld must sever their
-    // back-pointers before the handle finalizers run (see
-    // characterClassFinalizer / vehicleClassFinalizer / ragdollClassFinalizer).
+    // Sandbox characters/vehicles/ragdolls/soft bodies that still reference
+    // this world. GC teardown order is arbitrary, so ~JsWorld must sever
+    // their back-pointers before the handle finalizers run (see
+    // characterClassFinalizer / vehicleClassFinalizer / ragdollClassFinalizer
+    // / softBodyClassFinalizer).
     std::unordered_set<JsCharacter*> liveCharacters;
     std::unordered_set<JsVehicle*> liveVehicles;
     std::unordered_set<JsRagdoll*> liveRagdolls;
+    std::unordered_set<JsSoftBody*> liveSoftBodies;
 
     std::unordered_map<uint32_t, int32_t> bodyTags;     // BodyID idx+seq → tag
     std::unordered_map<int32_t, uint32_t> tagToBody;    // tag → BodyID idx+seq
@@ -1047,10 +1051,21 @@ struct JsRagdoll {
     JSValue worldRef = JS_UNDEFINED;   // strong ref to a sandbox world handle
 };
 
+// And for soft bodies (class machinery lives after the ragdoll section).
+// The soft body IS a regular body in the owning world; bodyTag is its
+// ordinary body tag, so every body/query API works on it.
+struct JsSoftBody {
+    JsWorld* world = nullptr;          // sandbox only; default world uses s_defaultWorld
+    uint32_t handle = 0;               // 0 after destroy()
+    int32_t bodyTag = -1;              // the soft body's regular body tag
+    int gridX = 0, gridZ = 0;          // cloth grids; 0 for mesh soft bodies
+    JSValue worldRef = JS_UNDEFINED;   // strong ref to a sandbox world handle
+};
+
 // GC teardown may finalize the world handle before its characters/vehicles/
-// ragdolls; sever the back-pointers first so their finalizers never touch a
-// deleted JsWorld (PhysicsWorld::shutdown destroys the underlying objects
-// itself).
+// ragdolls/soft bodies; sever the back-pointers first so their finalizers
+// never touch a deleted JsWorld (PhysicsWorld::shutdown destroys the
+// underlying objects itself).
 JsWorld::~JsWorld() {
     for (JsCharacter* c : liveCharacters) {
         c->world = nullptr;
@@ -1063,6 +1078,10 @@ JsWorld::~JsWorld() {
     for (JsRagdoll* r : liveRagdolls) {
         r->world = nullptr;
         r->handle = 0;
+    }
+    for (JsSoftBody* s : liveSoftBodies) {
+        s->world = nullptr;
+        s->handle = 0;
     }
     if (ownsWorld && world) {
         world->shutdown();
@@ -2126,6 +2145,302 @@ static const JSCFunctionListEntry s_ragdollProtoFuncs[] = {
 };
 
 // ---------------------------------------------------------------------------
+// Soft bodies (Physics.createSoftBody / handle.createSoftBody). Same lifetime
+// pattern as PhysicsCharacter/PhysicsVehicle/PhysicsRagdoll: sandbox handles
+// pin their world handle object via worldRef (marked in softBodyClassGcMark,
+// severed by ~JsWorld for arbitrary finalizer order); default-world handles
+// route through s_defaultWorld. The soft body itself is a regular body —
+// `body` is an ordinary body tag.
+// ---------------------------------------------------------------------------
+
+static JSClassID s_softBodyClassId = 0;
+
+static JsWorld* softBodyWorld(JsSoftBody* s) {
+    return JS_IsUndefined(s->worldRef) ? s_defaultWorld : s->world;
+}
+
+static void softBodyClassFinalizer(JSRuntime* rt, JSValue val) {
+    JsSoftBody* s = (JsSoftBody*)JS_GetOpaque(val, s_softBodyClassId);
+    if (!s) return;
+    JsWorld* w = softBodyWorld(s);
+    if (w && w->world && s->handle) {
+        w->world->destroySoftBody(s->handle);
+        w->unregisterBody(s->bodyTag);
+    }
+    if (s->world) s->world->liveSoftBodies.erase(s);
+    JS_FreeValueRT(rt, s->worldRef);
+    delete s;
+}
+
+// worldRef lives in opaque data, invisible to the GC — without this mark hook
+// the teardown cycle collector counts it as an external root and leaks the
+// world handle (QuickJS Debug asserts on gc_obj_list).
+static void softBodyClassGcMark(JSRuntime* rt, JSValueConst val, JS_MarkFunc* mark_func) {
+    JsSoftBody* s = (JsSoftBody*)JS_GetOpaque(val, s_softBodyClassId);
+    if (s) JS_MarkValue(rt, s->worldRef, mark_func);
+}
+
+static JSClassDef s_softBodyClassDef = {
+    "PhysicsSoftBody",
+    softBodyClassFinalizer,  // finalizer
+    softBodyClassGcMark,     // gc_mark
+    nullptr,                 // call
+    nullptr,                 // exotic
+};
+
+static JsSoftBody* softBodyFromThis(JSContext* ctx, JSValueConst thisVal) {
+    return (JsSoftBody*)JS_GetOpaque2(ctx, thisVal, s_softBodyClassId);
+}
+
+static JSValue makeUint32Array(JSContext* ctx, const uint32_t* data, size_t count) {
+    JSValue ab = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(data),
+                                       count * sizeof(uint32_t));
+    if (JS_IsException(ab)) return JS_EXCEPTION;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue ctor = JS_GetPropertyStr(ctx, global, "Uint32Array");
+    JSValue result = JS_CallConstructor(ctx, ctor, 1, &ab);
+    JS_FreeValue(ctx, ctor);
+    JS_FreeValue(ctx, global);
+    JS_FreeValue(ctx, ab);
+    return result;
+}
+
+// Parse SoftBodyOptions. Exactly one of `cloth` / `mesh` selects the
+// creation path; common tuning knobs sit at the top level.
+static bool readSoftBodyOptions(JSContext* ctx, JSValueConst optsVal,
+                                physics::SoftBodyOptions& o, std::string& err) {
+    if (!JS_IsObject(optsVal)) { err = "opts must be an object"; return false; }
+
+    JSValue clothV = JS_GetPropertyStr(ctx, optsVal, "cloth");
+    JSValue meshV = JS_GetPropertyStr(ctx, optsVal, "mesh");
+    const bool hasCloth = JS_IsObject(clothV);
+    const bool hasMesh = JS_IsObject(meshV);
+
+    // Pinned vertices: an array of vertex indices, or the string 'corners'
+    // (cloth only — all four grid corners).
+    bool pinCorners = false;
+    auto readPinned = [&](JSValueConst holder) {
+        JSValue pv = JS_GetPropertyStr(ctx, holder, "pinned");
+        if (JS_IsString(pv)) {
+            const char* str = JS_ToCString(ctx, pv);
+            if (str) {
+                if (std::string(str) == "corners") pinCorners = true;
+                JS_FreeCString(ctx, str);
+            }
+        } else if (!JS_IsUndefined(pv) && !JS_IsNull(pv)) {
+            readU32Array(ctx, pv, o.pinned);
+        }
+        JS_FreeValue(ctx, pv);
+    };
+
+    if (hasCloth && !hasMesh) {
+        o.kind = physics::SoftBodyOptions::Cloth;
+        o.gridX = (int)qjsbind::get_prop_number(ctx, clothV, "gridX", 10);
+        o.gridZ = (int)qjsbind::get_prop_number(ctx, clothV, "gridZ", 10);
+        o.spacing = (float)qjsbind::get_prop_number(ctx, clothV, "spacing", 0.1);
+        o.mass = (float)qjsbind::get_prop_number(ctx, clothV, "mass", 1.0);
+        if (o.gridX < 2 || o.gridZ < 2) { err = "cloth.gridX/gridZ must be >= 2"; }
+        readPinned(clothV);
+        if (pinCorners) {
+            uint32_t gx = (uint32_t)o.gridX, gz = (uint32_t)o.gridZ;
+            o.pinned.insert(o.pinned.end(),
+                            { 0u, gx - 1, (gz - 1) * gx, gz * gx - 1 });
+        }
+    } else if (hasMesh && !hasCloth) {
+        o.kind = physics::SoftBodyOptions::Mesh;
+        std::vector<float> verts;
+        JSValue vv = JS_GetPropertyStr(ctx, meshV, "vertices");
+        readFloatArray(ctx, vv, verts);
+        JS_FreeValue(ctx, vv);
+        JSValue iv = JS_GetPropertyStr(ctx, meshV, "indices");
+        readU32Array(ctx, iv, o.indices);
+        JS_FreeValue(ctx, iv);
+        o.vertices.reserve(verts.size() / 3);
+        for (size_t i = 0; i + 2 < verts.size(); i += 3)
+            o.vertices.emplace_back(verts[i], verts[i + 1], verts[i + 2]);
+        o.mass = (float)qjsbind::get_prop_number(ctx, meshV, "mass", 1.0);
+        o.pressure = (float)qjsbind::get_prop_number(ctx, meshV, "pressure", 0.0);
+        readPinned(meshV);
+        if (o.vertices.size() < 3 || o.indices.size() < 3)
+            err = "mesh.vertices (xyz triples) and mesh.indices (triangle list) are required";
+    } else {
+        err = "createSoftBody requires exactly one of cloth: {...} or mesh: {...}";
+    }
+    JS_FreeValue(ctx, clothV);
+    JS_FreeValue(ctx, meshV);
+    if (!err.empty()) return false;
+
+    o.compliance = (float)qjsbind::get_prop_number(ctx, optsVal, "compliance", 0.0);
+    o.shearCompliance = (float)qjsbind::get_prop_number(ctx, optsVal, "shearCompliance", -1.0);
+    o.bendCompliance = (float)qjsbind::get_prop_number(ctx, optsVal, "bendCompliance", -1.0);
+    o.numIterations = (int)qjsbind::get_prop_number(ctx, optsVal, "numIterations", 5);
+    o.friction = (float)qjsbind::get_prop_number(ctx, optsVal, "friction", 0.2);
+    o.restitution = (float)qjsbind::get_prop_number(ctx, optsVal, "restitution", 0.0);
+    o.linearDamping = (float)qjsbind::get_prop_number(ctx, optsVal, "linearDamping", 0.1);
+    o.gravityFactor = (float)qjsbind::get_prop_number(ctx, optsVal, "gravityFactor", 1.0);
+    o.vertexRadius = (float)qjsbind::get_prop_number(ctx, optsVal, "vertexRadius", 0.0);
+    o.updatePosition = qjsbind::get_prop_bool(ctx, optsVal, "updatePosition", true);
+    o.doubleSided = qjsbind::get_prop_bool(ctx, optsVal, "doubleSided", true);
+    o.allowSleeping = qjsbind::get_prop_bool(ctx, optsVal, "allowSleeping", true);
+
+    JSValue posV = JS_GetPropertyStr(ctx, optsVal, "position");
+    if (JS_IsObject(posV)) o.position = readVec3(ctx, posV);
+    JS_FreeValue(ctx, posV);
+    JSValue rotV = JS_GetPropertyStr(ctx, optsVal, "rotation");
+    if (JS_IsObject(rotV)) o.rotation = readQuat(ctx, rotV);
+    JS_FreeValue(ctx, rotV);
+    return true;
+}
+
+// `worldVal` is the sandbox world handle object, or JS_UNDEFINED for the
+// default world.
+static JSValue worldCreateSoftBody(JSContext* ctx, JsWorld* w, JSValueConst worldVal,
+                                   JSValueConst optsVal) {
+    if (!w || !w->world) return JS_ThrowInternalError(ctx, "World not available");
+
+    physics::SoftBodyOptions opts;
+
+    JSValue layerVal = JS_GetPropertyStr(ctx, optsVal, "layer");
+    if (JS_IsString(layerVal)) {
+        const char* s = JS_ToCString(ctx, layerVal);
+        if (s) { opts.layer = w->world->layerIndex(s); JS_FreeCString(ctx, s); }
+    } else if (JS_IsNumber(layerVal)) {
+        int32_t i = -1; JS_ToInt32(ctx, &i, layerVal); opts.layer = i;
+    }
+    JS_FreeValue(ctx, layerVal);
+
+    std::string err;
+    if (!readSoftBodyOptions(ctx, optsVal, opts, err))
+        return JS_ThrowTypeError(ctx, "createSoftBody: %s", err.c_str());
+
+    uint32_t handle = w->world->createSoftBody(opts);
+    if (!handle) return JS_ThrowInternalError(ctx, "Failed to create soft body");
+
+    JSValue obj = JS_NewObjectClass(ctx, s_softBodyClassId);
+    if (JS_IsException(obj)) {
+        w->world->destroySoftBody(handle);
+        return obj;
+    }
+    auto* js = new JsSoftBody();
+    js->handle = handle;
+    js->bodyTag = w->registerBody(w->world->softBodyBody(handle));
+    if (opts.kind == physics::SoftBodyOptions::Cloth) {
+        js->gridX = std::max(2, opts.gridX);
+        js->gridZ = std::max(2, opts.gridZ);
+    }
+    if (!JS_IsUndefined(worldVal)) {
+        js->world = w;
+        js->worldRef = JS_DupValue(ctx, worldVal);
+        w->liveSoftBodies.insert(js);
+    }
+    JS_SetOpaque(obj, js);
+    return obj;
+}
+
+static JSValue jssb_vertices(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsSoftBody* s = softBodyFromThis(ctx, thisVal);
+    if (!s) return JS_EXCEPTION;
+    JsWorld* w = softBodyWorld(s);
+    if (!w || !w->world || !s->handle) return JS_NULL;
+    std::vector<float> flat;
+    if (!w->world->getSoftBodyVertices(s->handle, flat)) return JS_NULL;
+    return makeFloat32Array(ctx, flat.data(), flat.size());
+}
+
+// topology() → { positions: Float32Array (rest LOCAL positions), indices:
+// Uint32Array (triangle list), gridX, gridZ (cloth; 0 for mesh bodies) }.
+// The vertex order matches vertices() one-to-one — build the render mesh
+// from this once and stream vertices() into it per frame.
+static JSValue jssb_topology(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsSoftBody* s = softBodyFromThis(ctx, thisVal);
+    if (!s) return JS_EXCEPTION;
+    JsWorld* w = softBodyWorld(s);
+    if (!w || !w->world || !s->handle) return JS_NULL;
+    std::vector<float> pos;
+    std::vector<uint32_t> idx;
+    if (!w->world->softBodyTopology(s->handle, pos, idx)) return JS_NULL;
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "positions", makeFloat32Array(ctx, pos.data(), pos.size()));
+    JS_SetPropertyStr(ctx, obj, "indices", makeUint32Array(ctx, idx.data(), idx.size()));
+    JS_SetPropertyStr(ctx, obj, "gridX", JS_NewInt32(ctx, s->gridX));
+    JS_SetPropertyStr(ctx, obj, "gridZ", JS_NewInt32(ctx, s->gridZ));
+    return obj;
+}
+
+static JSValue jssb_setVertex(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsSoftBody* s = softBodyFromThis(ctx, thisVal);
+    if (!s) return JS_EXCEPTION;
+    JsWorld* w = softBodyWorld(s);
+    if (!w || !w->world || !s->handle || argc < 4) return JS_FALSE;
+    int32_t i; double x, y, z;
+    JS_ToInt32(ctx, &i, argv[0]);
+    JS_ToFloat64(ctx, &x, argv[1]); JS_ToFloat64(ctx, &y, argv[2]); JS_ToFloat64(ctx, &z, argv[3]);
+    return JS_NewBool(ctx, w->world->setSoftBodyVertexPosition(
+        s->handle, i, JPH::RVec3((float)x, (float)y, (float)z)));
+}
+
+static JSValue jssb_setVertexVelocity(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsSoftBody* s = softBodyFromThis(ctx, thisVal);
+    if (!s) return JS_EXCEPTION;
+    JsWorld* w = softBodyWorld(s);
+    if (!w || !w->world || !s->handle || argc < 4) return JS_FALSE;
+    int32_t i; double x, y, z;
+    JS_ToInt32(ctx, &i, argv[0]);
+    JS_ToFloat64(ctx, &x, argv[1]); JS_ToFloat64(ctx, &y, argv[2]); JS_ToFloat64(ctx, &z, argv[3]);
+    return JS_NewBool(ctx, w->world->setSoftBodyVertexVelocity(
+        s->handle, i, JPH::Vec3((float)x, (float)y, (float)z)));
+}
+
+static JSValue jssb_pin(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsSoftBody* s = softBodyFromThis(ctx, thisVal);
+    if (!s) return JS_EXCEPTION;
+    JsWorld* w = softBodyWorld(s);
+    if (!w || !w->world || !s->handle || argc < 1) return JS_FALSE;
+    int32_t i; JS_ToInt32(ctx, &i, argv[0]);
+    bool pinned = argc < 2 || JS_ToBool(ctx, argv[1]) != 0;
+    return JS_NewBool(ctx, w->world->pinSoftBodyVertex(s->handle, i, pinned));
+}
+
+static JSValue jssb_destroy(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsSoftBody* s = softBodyFromThis(ctx, thisVal);
+    if (!s) return JS_EXCEPTION;
+    JsWorld* w = softBodyWorld(s);
+    if (w && w->world && s->handle) {
+        w->world->destroySoftBody(s->handle);
+        w->unregisterBody(s->bodyTag);
+    }
+    s->handle = 0;
+    s->bodyTag = -1;
+    return JS_UNDEFINED;
+}
+
+static JSValue jssb_getVertexCount(JSContext* ctx, JSValueConst thisVal) {
+    JsSoftBody* s = softBodyFromThis(ctx, thisVal);
+    if (!s) return JS_EXCEPTION;
+    JsWorld* w = softBodyWorld(s);
+    if (!w || !w->world || !s->handle) return JS_NewInt32(ctx, 0);
+    int n = w->world->softBodyVertexCount(s->handle);
+    return JS_NewInt32(ctx, n < 0 ? 0 : n);
+}
+
+static JSValue jssb_getBody(JSContext* ctx, JSValueConst thisVal) {
+    JsSoftBody* s = softBodyFromThis(ctx, thisVal);
+    if (!s) return JS_EXCEPTION;
+    return JS_NewInt32(ctx, s->handle ? s->bodyTag : -1);
+}
+
+static const JSCFunctionListEntry s_softBodyProtoFuncs[] = {
+    JS_CFUNC_DEF("vertices", 0, jssb_vertices),
+    JS_CFUNC_DEF("topology", 0, jssb_topology),
+    JS_CFUNC_DEF("setVertex", 4, jssb_setVertex),
+    JS_CFUNC_DEF("setVertexVelocity", 4, jssb_setVertexVelocity),
+    JS_CFUNC_DEF("pin", 2, jssb_pin),
+    JS_CFUNC_DEF("destroy", 0, jssb_destroy),
+    JS_CGETSET_DEF("vertexCount", jssb_getVertexCount, nullptr),
+    JS_CGETSET_DEF("body", jssb_getBody, nullptr),
+};
+
+// ---------------------------------------------------------------------------
 // Default-world Physics.* functions (route to s_defaultWorld)
 // ---------------------------------------------------------------------------
 
@@ -2474,6 +2789,13 @@ static JSValue js_physics_createRagdoll(JSContext* ctx, JSValueConst, int argc, 
     return worldCreateRagdoll(ctx, s_defaultWorld, JS_UNDEFINED, argv[0]);
 }
 
+static JSValue js_physics_createSoftBody(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "Physics.createSoftBody(opts) requires an object");
+    return worldCreateSoftBody(ctx, s_defaultWorld, JS_UNDEFINED, argv[0]);
+}
+
 static JSValue js_physics_createConstraint(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     DEFW_GUARD();
     if (argc < 1) return JS_ThrowTypeError(ctx, "Physics.createConstraint(opts) requires an object");
@@ -2798,6 +3120,14 @@ static JSValue jsw_createRagdoll(JSContext* ctx, JSValueConst thisVal, int argc,
     return worldCreateRagdoll(ctx, w, thisVal, argv[0]);
 }
 
+static JSValue jsw_createSoftBody(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w) return JS_EXCEPTION;
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "createSoftBody(opts) requires an object");
+    return worldCreateSoftBody(ctx, w, thisVal, argv[0]);
+}
+
 static JSValue jsw_setConstraintMotor(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
     JsWorld* w = worldFromThis(ctx, thisVal);
     if (!w || !w->world || argc < 2) return JS_FALSE;
@@ -2962,6 +3292,7 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("createCharacter", 1, jsw_createCharacter),
     JS_CFUNC_DEF("createVehicle", 1, jsw_createVehicle),
     JS_CFUNC_DEF("createRagdoll", 1, jsw_createRagdoll),
+    JS_CFUNC_DEF("createSoftBody", 1, jsw_createSoftBody),
     JS_CFUNC_DEF("createConstraint", 1, jsw_createConstraint),
     JS_CFUNC_DEF("setConstraintMotor", 2, jsw_setConstraintMotor),
     JS_CFUNC_DEF("destroyConstraint", 1, jsw_destroyConstraint),
@@ -3061,6 +3392,18 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
                                sizeof(s_ragdollProtoFuncs)/sizeof(s_ragdollProtoFuncs[0]));
     JS_SetClassProto(ctx, s_ragdollClassId, ragProto);
 
+    // Register soft-body handle class.
+    if (s_softBodyClassId == 0) {
+        JS_NewClassID(rt, &s_softBodyClassId);
+    }
+    if (!JS_IsRegisteredClass(rt, s_softBodyClassId)) {
+        JS_NewClass(rt, s_softBodyClassId, &s_softBodyClassDef);
+    }
+    JSValue softProto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, softProto, s_softBodyProtoFuncs,
+                               sizeof(s_softBodyProtoFuncs)/sizeof(s_softBodyProtoFuncs[0]));
+    JS_SetClassProto(ctx, s_softBodyClassId, softProto);
+
     qjsbind::Namespace(ctx, "Physics")
         .function("createWorld", js_physics_createWorld, 1)
         .function("createWorldHandle", js_physics_createWorldHandle, 1)
@@ -3098,6 +3441,7 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("createCharacter", js_physics_createCharacter, 1)
         .function("createVehicle", js_physics_createVehicle, 1)
         .function("createRagdoll", js_physics_createRagdoll, 1)
+        .function("createSoftBody", js_physics_createSoftBody, 1)
         .function("createConstraint", js_physics_createConstraint, 1)
         .function("destroyConstraint", js_physics_destroyConstraint, 1)
         .function("setConstraintEnabled", js_physics_setConstraintEnabled, 2)

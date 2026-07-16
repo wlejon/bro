@@ -1275,3 +1275,146 @@ rd.destroy();            // remove bodies + joints; handle is dead after.
 //   // rd.stopDrive() to go limp again. driveToPoseKinematic(target, dt) is
 //   // the hard-tracking variant (call every step — parts remain real bodies
 //   // that push whatever is in the way).
+
+// -----------------------------------------------------------------------------
+// Soft bodies (Physics.createSoftBody)
+// -----------------------------------------------------------------------------
+//
+// A Jolt SoftBody (XPBD): a particle cloud held together by edge / shear /
+// bend constraints, colliding with the rest of the world — the SoftBody3D
+// analog. Two creation paths:
+//
+//   cloth: a gridX*gridZ vertex grid in the LOCAL XZ plane (Y up), centered
+//     on the local origin. Vertex (x, z) lives at index z*gridX + x, so the
+//     corners are 0, gridX-1, (gridZ-1)*gridX and gridX*gridZ-1. Faces wind
+//     counter-clockwise seen from +Y (rest normals point up).
+//   mesh: an arbitrary triangle mesh. With pressure > 0 it should be CLOSED
+//     with outward (CCW-from-outside) winding — the enclosed gas volume is
+//     what inflates it (an inside-out mesh is flipped automatically). A
+//     pressurized ball is mesh + pressure; no extra constraints needed.
+//
+// The soft body IS a regular body in its world: `sb.body` is an ordinary
+// body tag, so raycasts hit it and report that tag, contact events name it,
+// Physics.addImpulse / addForce on the tag move the whole body (spread over
+// the vertices), and Physics.destroyBody(sb.body) destroys it. Per-vertex
+// control (setVertex / setVertexVelocity / pin) is the grab surface.
+
+/**
+ * Create a soft body. Exactly one of `cloth` / `mesh` selects the path;
+ * everything else is shared tuning.
+ *
+ * @param {Object} opts
+ * @param {Object} [opts.cloth]           - cloth grid:
+ * @param {number} [opts.cloth.gridX=10]  - vertices along local X (>= 2)
+ * @param {number} [opts.cloth.gridZ=10]  - vertices along local Z (>= 2)
+ * @param {number} [opts.cloth.spacing=0.1] - rest edge length (m)
+ * @param {number} [opts.cloth.mass=1]    - TOTAL mass (kg), split evenly
+ * @param {number[]|string} [opts.cloth.pinned] - vertex indices frozen in
+ *                                          place (invMass 0), or 'corners'
+ *                                          for all four grid corners
+ * @param {Object} [opts.mesh]            - arbitrary mesh:
+ * @param {Float32Array|number[]} opts.mesh.vertices - local xyz triples
+ * @param {Uint32Array|number[]}  opts.mesh.indices  - triangle list
+ * @param {number} [opts.mesh.mass=1]     - TOTAL mass (kg), split evenly
+ * @param {number} [opts.mesh.pressure=0] - n*R*T gas coefficient; > 0 keeps
+ *                                          a closed mesh inflated (try
+ *                                          ~1000-5000 for a beach ball)
+ * @param {number[]} [opts.mesh.pinned]   - vertex indices frozen in place
+ *
+ * @param {number}  [opts.compliance=0]      - edge stretch compliance
+ *                                             (1/stiffness; 0 = rigid edges,
+ *                                             larger = stretchier — 1e-4 is
+ *                                             already noticeably soft)
+ * @param {number}  [opts.shearCompliance]   - cloth shear edges; default =
+ *                                             compliance
+ * @param {number}  [opts.bendCompliance]    - OMIT for no bend constraints
+ *                                             (crumply cloth); >= 0 adds
+ *                                             distance-bend constraints
+ *                                             (0 = stiff sheet)
+ * @param {number}  [opts.numIterations=5]   - XPBD solver iterations
+ * @param {number}  [opts.friction=0.2]
+ * @param {number}  [opts.restitution=0]
+ * @param {number}  [opts.linearDamping=0.1] - corner-pinned "hammocks" swing
+ *                                             forever at low damping
+ * @param {number}  [opts.gravityFactor=1]
+ * @param {number}  [opts.vertexRadius=0]    - particle radius; a small value
+ *                                             (~0.01) keeps the surface off
+ *                                             other bodies (fights z-fights)
+ * @param {boolean} [opts.updatePosition=true] - body position follows the
+ *                                             vertices (false for something
+ *                                             welded to the static world)
+ * @param {boolean} [opts.doubleSided=true]  - queries (raycast etc.) hit the
+ *                                             faces from both sides
+ * @param {boolean} [opts.allowSleeping=true]
+ * @param {string|number} [opts.layer=1]     - object layer
+ * @param {{x,y,z}}   [opts.position]        - world placement of the local origin
+ * @param {{x,y,z,w}} [opts.rotation]        - baked into the vertices (the
+ *                                             body itself keeps identity
+ *                                             rotation — Jolt simulates soft
+ *                                             bodies more accurately that way)
+ * @returns {PhysicsSoftBody}
+ */
+const sb = Physics.createSoftBody({
+    cloth: { gridX: 20, gridZ: 20, spacing: 0.1, mass: 1, pinned: 'corners' },
+    position: { x: 0, y: 2, z: 0 },
+});
+
+sb.vertexCount;          // number of particles
+sb.body;                 // the soft body's regular body TAG (-1 after destroy)
+sb.vertices();           // Float32Array vertexCount*3 — WORLD-space positions,
+                         // one snapshot per call (stream this into a mesh)
+sb.topology();           // { positions, indices, gridX, gridZ } — the REST
+                         // shape: local positions (Float32Array), triangle
+                         // list (Uint32Array), and the cloth grid (0/0 for
+                         // mesh bodies). Vertex order matches vertices()
+                         // one-to-one and is stable for the body's lifetime.
+
+sb.setVertex(i, x, y, z);         // teleport one vertex (world space, zeroes
+                                  // its velocity) — grab interactions. Fast
+                                  // drags prefer setVertexVelocity (a placed
+                                  // vertex can tunnel).
+sb.setVertexVelocity(i, x, y, z); // set one vertex's velocity (world space)
+sb.pin(i, pinned = true);         // freeze / release a vertex at runtime
+sb.destroy();                     // remove the body; handle is dead after.
+                                  // (Physics.destroyBody(sb.body) is the same
+                                  // teardown through the generic body API.)
+
+// A pressurized ball that bounces:
+//   const ball = Physics.createSoftBody({
+//       mesh: { vertices, indices, pressure: 2000, mass: 2 },  // closed mesh
+//       position: { x: 0, y: 3, z: 0 }, restitution: 0.6,
+//   });
+//   Physics.addImpulse(ball.body, 20, 0, 0);   // regular body API — it rolls
+
+// Sandbox worlds have the same API; the soft body steps inside w.step(dt):
+//   const w = Physics.createWorldHandle({ maxBodies: 64 });
+//   const cloth = w.createSoftBody({ cloth: { gridX: 8, gridZ: 8 } });
+//   w.step(1/60);
+
+// -----------------------------------------------------------------------------
+// Soft body ↔ scene mesh recipe (SoftBody3D rendering flow)
+// -----------------------------------------------------------------------------
+//
+// topology() is the render-mesh blueprint (same vertex order as vertices());
+// build a MeshNode from it once, keep the node at IDENTITY transform (the
+// soft body streams WORLD-space positions), and per frame push vertices()
+// through updateMesh with recomputeNormals so the deforming surface stays
+// lit. Verified end-to-end in tests/physics/test_softbody.js.
+//
+//   const sb = Physics.createSoftBody({
+//       cloth: { gridX: 16, gridZ: 16, spacing: 0.1, pinned: 'corners' },
+//       position: { x: 0, y: 2, z: 0 },
+//   });
+//   const topo = sb.topology();
+//   const node = scene.createMesh({
+//       positions: sb.vertices(), indices: topo.indices,
+//       recomputeNormals: true,               // no normals in the stream —
+//       color: 'crimson', roughness: 0.9,     // derive smooth ones
+//   });
+//   // per frame:
+//   node.updateMesh({ positions: sb.vertices(), indices: topo.indices },
+//                   { recomputeNormals: true });
+//
+// A cloth seen from both sides wants `twoSided: true` on createMesh (the
+// mesh pass backface-culls otherwise). For a pressurized ball pass the SAME
+// vertices/indices you gave the physics mesh — vertex order is preserved.

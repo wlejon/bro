@@ -412,6 +412,9 @@ class SceneGraph {
    * @param {Float32Array} [opts.positions] - raw vertex positions (xyz, stride 3)
    * @param {Float32Array} [opts.normals] - raw vertex normals (xyz, stride 3)
    * @param {Uint32Array} [opts.indices] - raw triangle indices
+   * @param {boolean} [opts.recomputeNormals=false] - raw-data path only:
+   *   derive smooth normals from positions+indices when no normals are given
+   *   (same flag as updateMesh — see the soft-body recipe in physics-api.js)
    * @returns {SceneNode}
    */
   createMesh(opts) {}
@@ -1168,9 +1171,18 @@ class SceneNode {
    * Replace the mesh on a MeshNode in place (keeps transform, color, etc).
    * Accepts the same `data`/`mesh`/`positions+indices` forms as createMesh.
    * No-op on non-mesh nodes.
+   *
+   * `recomputeNormals: true` (in either argument) derives smooth vertex
+   * normals from positions+indices after the swap — the tool for geometry
+   * that DEFORMS per frame (a physics soft body streaming `sb.vertices()`
+   * in, procedural water, ...) where stale or missing normals render black
+   * or faceted. createMesh's raw positions+indices path accepts the same
+   * flag. See the soft-body scene-sync recipe in docs/physics-api.js.
+   *
    * @param {Object|Mesh} meshOrOpts
+   * @param {Object} [opts] - { transfer, recomputeNormals }
    */
-  updateMesh(meshOrOpts) {}
+  updateMesh(meshOrOpts, opts) {}
 
   /**
    * Replace or clear the baseColor texture of a MeshNode at runtime. The

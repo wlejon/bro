@@ -16,6 +16,7 @@
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <Jolt/Physics/Body/MotionQuality.h>
+#include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 
@@ -341,6 +342,52 @@ struct RagdollOptions {
 struct RagdollPartState {
     JPH::RVec3 position;
     JPH::Quat rotation;
+};
+
+/// Soft-body creation options (Jolt SoftBody: XPBD cloth / pressurized
+/// volumes). Two creation paths:
+///  - Cloth: a gridX*gridZ vertex grid in the local XZ plane (Y up), centered
+///    on the local origin. Vertex (x,z) is at index z*gridX + x; faces wind
+///    counter-clockwise viewed from +Y. Edge/shear/bend constraints are
+///    derived from the faces (Jolt CreateConstraints).
+///  - Mesh: an arbitrary triangle mesh (vertices + indices). With
+///    pressure > 0 the mesh should be CLOSED with outward (CCW-from-outside)
+///    winding — the enclosed volume is what the pressure inflates. If the
+///    signed rest volume comes out negative the winding is flipped
+///    automatically.
+struct SoftBodyOptions {
+    enum Kind { Cloth, Mesh };
+    Kind kind = Cloth;
+
+    // Cloth
+    int gridX = 10;                 // vertices along local X (>= 2)
+    int gridZ = 10;                 // vertices along local Z (>= 2)
+    float spacing = 0.1f;           // rest distance between grid neighbors (m)
+
+    // Mesh
+    std::vector<JPH::Vec3> vertices;   // local-space vertex positions
+    std::vector<uint32_t> indices;     // triangle list (multiple of 3)
+
+    // Common
+    float mass = 1.0f;              // total mass (kg), spread evenly over vertices
+    std::vector<uint32_t> pinned;   // vertex indices frozen in place (invMass 0)
+    float pressure = 0.0f;          // n*R*T gas coefficient; > 0 inflates a closed mesh
+    float compliance = 0.0f;        // edge constraint compliance (1/stiffness; 0 = rigid)
+    float shearCompliance = -1.0f;  // cloth shear edges; < 0 = same as compliance
+    float bendCompliance = -1.0f;   // bend constraints; < 0 = no bend constraints
+    int numIterations = 5;          // XPBD solver iterations
+    float friction = 0.2f;
+    float restitution = 0.0f;
+    float linearDamping = 0.1f;
+    float gravityFactor = 1.0f;
+    float maxLinearVelocity = 500.0f;
+    float vertexRadius = 0.0f;      // particle radius (pushes verts off surfaces)
+    bool updatePosition = true;     // body position follows the vertices
+    bool doubleSided = true;        // faces hit by queries from both sides
+    bool allowSleeping = true;
+    int layer = -1;                 // -1 = moving (1)
+    JPH::RVec3 position{0, 0, 0};
+    JPH::Quat rotation = JPH::Quat::sIdentity();
 };
 
 /// Per-axis configuration for a SixDOF constraint. Axis order follows Jolt's
@@ -705,6 +752,45 @@ public:
     /// True when any part body is awake.
     bool isRagdollActive(uint32_t handle) const;
 
+    // --- Soft bodies (call only when idle) ---
+    //
+    // Jolt soft bodies are REGULAR bodies (SoftBodyCreationSettings →
+    // CreateAndAddSoftBody) whose motion properties hold the vertex state.
+    // The body id composes with every body/query API — raycasts hit it,
+    // impulses move it, contact events report it. The registry keeps the
+    // shared-settings Ref + metadata under a handle; destroying the body
+    // (destroyBody/destroyAll/shutdown) evicts the registry entry.
+
+    /// Returns a non-zero handle on success, 0 on failure (bad grid/mesh,
+    /// out of bodies).
+    uint32_t createSoftBody(const SoftBodyOptions& opts);
+    void destroySoftBody(uint32_t handle);
+
+    /// The soft body's BodyID (invalid for an unknown handle).
+    JPH::BodyID softBodyBody(uint32_t handle) const;
+    /// Number of vertices, or -1 for an unknown handle.
+    int softBodyVertexCount(uint32_t handle) const;
+
+    /// Snapshot every vertex position in WORLD space, packed xyz. False for
+    /// an unknown handle.
+    bool getSoftBodyVertices(uint32_t handle, std::vector<float>& outXyz) const;
+
+    /// Rest-pose topology: local-space vertex positions (xyz triples, the
+    /// creation-time rest shape) + face indices (triangle list). Stable for
+    /// the body's lifetime — the render-mesh blueprint for scene sync.
+    bool softBodyTopology(uint32_t handle, std::vector<float>& outXyz,
+                          std::vector<uint32_t>& outIndices) const;
+
+    /// Move one vertex to a world-space position (grab interactions). Resets
+    /// the vertex velocity and wakes the body. Note Jolt's caveat: directly
+    /// placed vertices can tunnel — prefer velocities for fast drags.
+    bool setSoftBodyVertexPosition(uint32_t handle, int index, JPH::RVec3 pos);
+    /// Set one vertex's velocity (world space) and wake the body.
+    bool setSoftBodyVertexVelocity(uint32_t handle, int index, JPH::Vec3 vel);
+    /// Freeze / release one vertex (invMass 0 ↔ the even mass split).
+    /// Pinning zeroes the vertex velocity; both directions wake the body.
+    bool pinSoftBodyVertex(uint32_t handle, int index, bool pinned);
+
     // --- Queries (call only when idle) ---
 
     /// Cast a ray (narrow phase: exact shape geometry, real hit positions and
@@ -855,6 +941,18 @@ private:
     // Remove + erase every registry constraint referencing `id` (shared by
     // destroyBody and removeRagdollFromSystem).
     void removeConstraintsReferencing(JPH::BodyID id);
+
+    // Soft-body registry. The BODY is owned by the body manager like any
+    // other body (the generic sweeps destroy it); the entry only pins the
+    // shared settings Ref + metadata, so eviction (destroyBody/destroyAll/
+    // shutdown) is pure bookkeeping with no ordering constraint.
+    struct SoftBodyEntry {
+        JPH::Ref<JPH::SoftBodySharedSettings> settings;
+        JPH::BodyID body;
+        float defaultInvMass = 1.0f;  // per-vertex invMass for unpinning
+    };
+    std::unordered_map<uint32_t, SoftBodyEntry> softBodies_;
+    uint32_t nextSoftBodyHandle_ = 1;
 
     // Constraints that broke (exceeded breaking impulse) since the last drain.
     std::vector<uint32_t> brokenConstraints_;
