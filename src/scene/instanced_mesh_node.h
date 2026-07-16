@@ -194,6 +194,13 @@ private:
     size_t instanceCount_ = 0;
     bool instancesDirty_ = false;
 
+    // Node-space union of instance-transformed mesh bounds, rebuilt lazily by
+    // computeWorldInstanceBounds when the mesh or instances change. Cached
+    // because frustum culling queries the bounds every frame and the rebuild
+    // is O(instances).
+    mutable bromath::AABB3 instanceBoundsCache_;
+    mutable bool instanceBoundsDirty_ = true;
+
     // GL resources
     GLuint vao_ = 0;
     GLuint vbo_ = 0;       // mesh vertex buffer

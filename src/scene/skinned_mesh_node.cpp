@@ -64,6 +64,19 @@ bool SkinnedMeshNode::setSkin(const bromesh::SkinData& skin) {
     return true;
 }
 
+bromath::AABB3 SkinnedMeshNode::posedLocalBounds() const {
+    const bromath::AABB3& bind = localBounds();
+    if (boneCount_ <= 0 || palette_.size() < (size_t)boneCount_ * 16)
+        return bind;
+    bromath::AABB3 out = bromath::aempty3();
+    for (int b = 0; b < boneCount_; ++b) {
+        bromath::Mat4 m;
+        std::memcpy(m.data, &palette_[(size_t)b * 16], sizeof(float) * 16);
+        out = bromath::amerge(out, bromath::atransform(bind, m));
+    }
+    return out;
+}
+
 int SkinnedMeshNode::setSkinningMatrices(const float* mats, size_t count) {
     if (!mats || boneCount_ == 0) return 0;
     size_t n = count < (size_t)boneCount_ ? count : (size_t)boneCount_;

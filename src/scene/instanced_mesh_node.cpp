@@ -26,6 +26,7 @@ void InstancedMeshNode::setMesh(const bromesh::MeshData& mesh) {
     ensureTangents(mesh_);
     meshDirty_ = true;
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
+    instanceBoundsDirty_ = true;
 }
 
 void InstancedMeshNode::setMesh(bromesh::MeshData&& mesh) {
@@ -33,12 +34,14 @@ void InstancedMeshNode::setMesh(bromesh::MeshData&& mesh) {
     ensureTangents(mesh_);
     meshDirty_ = true;
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
+    instanceBoundsDirty_ = true;
 }
 
 void InstancedMeshNode::setInstances(const float* data, size_t count) {
     instanceData_.assign(data, data + count * 16);
     instanceCount_ = count;
     instancesDirty_ = true;
+    instanceBoundsDirty_ = true;
 }
 
 void InstancedMeshNode::setInstancesFromPosQuatScale(const float* data, size_t count) {
@@ -77,12 +80,14 @@ void InstancedMeshNode::setInstancesFromPosQuatScale(const float* data, size_t c
         o[15] = (idxClamped + 0.5f) / 256.0f;
     }
     instancesDirty_ = true;
+    instanceBoundsDirty_ = true;
 }
 
 void InstancedMeshNode::updateInstance(size_t i, const float* data16) {
     if (i >= instanceCount_) return;
     std::memcpy(instanceData_.data() + i * 16, data16, sizeof(float) * 16);
     instancesDirty_ = true;
+    instanceBoundsDirty_ = true;
 }
 
 void InstancedMeshNode::releaseGL() {
@@ -382,38 +387,41 @@ bool InstancedMeshNode::drawRawInstanced() {
 
 bool InstancedMeshNode::computeWorldInstanceBounds(float outMin[3], float outMax[3]) const {
     if (mesh_.empty() || instanceCount_ == 0) return false;
-    bool any = false;
-    outMin[0] = outMin[1] = outMin[2] =  1e30f;
-    outMax[0] = outMax[1] = outMax[2] = -1e30f;
-    const float lx0 = bounds_.min.x, ly0 = bounds_.min.y, lz0 = bounds_.min.z;
-    const float lx1 = bounds_.max.x, ly1 = bounds_.max.y, lz1 = bounds_.max.z;
-    // Instance rows are node-local (relative to this node); fold in the
-    // node's own parent-chain transform so this matches what actually
-    // renders (renderInstancedMeshNode applies the same worldMatrix()).
-    const bromath::Mat4& nodeWorld = worldMatrix();
-    for (size_t i = 0; i < instanceCount_; ++i) {
-        const float* o = instanceData_.data() + i * 16;
-        // Row-major 4x3: o[0..3] = row0 (m00 m01 m02 tx), etc.
-        for (int c = 0; c < 8; ++c) {
-            float lp[3] = {
-                (c & 1) ? lx1 : lx0,
-                (c & 2) ? ly1 : ly0,
-                (c & 4) ? lz1 : lz0,
-            };
-            float nx = o[ 0] * lp[0] + o[ 1] * lp[1] + o[ 2] * lp[2] + o[ 3];
-            float ny = o[ 4] * lp[0] + o[ 5] * lp[1] + o[ 6] * lp[2] + o[ 7];
-            float nz = o[ 8] * lp[0] + o[ 9] * lp[1] + o[10] * lp[2] + o[11];
-            bromath::Vec3 wp = bromath::mtransformPoint(nodeWorld, bromath::Vec3{nx, ny, nz});
-            if (wp.x < outMin[0]) outMin[0] = wp.x;
-            if (wp.y < outMin[1]) outMin[1] = wp.y;
-            if (wp.z < outMin[2]) outMin[2] = wp.z;
-            if (wp.x > outMax[0]) outMax[0] = wp.x;
-            if (wp.y > outMax[1]) outMax[1] = wp.y;
-            if (wp.z > outMax[2]) outMax[2] = wp.z;
-            any = true;
+
+    // Node-space union of all instance-transformed mesh bounds. O(instances),
+    // so it's cached and only rebuilt when the mesh or instance buffer
+    // changes — frustum culling queries this every frame.
+    if (instanceBoundsDirty_) {
+        const float lx0 = bounds_.min.x, ly0 = bounds_.min.y, lz0 = bounds_.min.z;
+        const float lx1 = bounds_.max.x, ly1 = bounds_.max.y, lz1 = bounds_.max.z;
+        bromath::AABB3 nb = bromath::aempty3();
+        for (size_t i = 0; i < instanceCount_; ++i) {
+            const float* o = instanceData_.data() + i * 16;
+            // Row-major 4x3: o[0..3] = row0 (m00 m01 m02 tx), etc.
+            for (int c = 0; c < 8; ++c) {
+                float lp[3] = {
+                    (c & 1) ? lx1 : lx0,
+                    (c & 2) ? ly1 : ly0,
+                    (c & 4) ? lz1 : lz0,
+                };
+                nb = bromath::aexpand(nb, bromath::Vec3{
+                    o[ 0] * lp[0] + o[ 1] * lp[1] + o[ 2] * lp[2] + o[ 3],
+                    o[ 4] * lp[0] + o[ 5] * lp[1] + o[ 6] * lp[2] + o[ 7],
+                    o[ 8] * lp[0] + o[ 9] * lp[1] + o[10] * lp[2] + o[11]});
+            }
         }
+        instanceBoundsCache_ = nb;
+        instanceBoundsDirty_ = false;
     }
-    return any;
+
+    // Fold in the node's own parent-chain transform so this matches what
+    // actually renders (renderInstancedMeshNode applies the same
+    // worldMatrix()). Transforming the cached box is slightly looser than
+    // transforming every instance corner, but stays conservative.
+    bromath::AABB3 wb = bromath::atransform(instanceBoundsCache_, worldMatrix());
+    outMin[0] = wb.min.x; outMin[1] = wb.min.y; outMin[2] = wb.min.z;
+    outMax[0] = wb.max.x; outMax[1] = wb.max.y; outMax[2] = wb.max.z;
+    return true;
 }
 
 bool InstancedMeshNode::drawRawInstancedDepth() {

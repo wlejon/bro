@@ -2442,6 +2442,40 @@ static JSValue js_sg_findByName(JSContext* ctx, JSValueConst this_val, int argc,
 }
 
 // syncPhysics()
+// setFrustumCulling(on) — escape hatch for the (default-on) frustum culling
+// in the forward + shadow passes. Culling is conservative, so pixels are
+// identical either way; turn it off when bisecting a rendering regression.
+static JSValue js_sg_setFrustumCulling(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (g && argc >= 1) g->setFrustumCulling(JS_ToBool(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+
+// cullStats() — per-category drawn/culled counters from the most recent
+// rendered frame. Shadow counts are per caster x atlas tile.
+static JSValue js_sg_cullStats(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_NULL;
+    const scene::CullStats& s = g->cullStats();
+    JSValue o = JS_NewObject(ctx);
+    auto num = [&](const char* k, int v) {
+        JS_SetPropertyStr(ctx, o, k, JS_NewInt32(ctx, v));
+    };
+    num("meshDrawn", s.meshDrawn);
+    num("meshCulled", s.meshCulled);
+    num("instancedDrawn", s.instancedDrawn);
+    num("instancedCulled", s.instancedCulled);
+    num("splatDrawn", s.splatDrawn);
+    num("splatCulled", s.splatCulled);
+    num("particlesDrawn", s.particlesDrawn);
+    num("particlesCulled", s.particlesCulled);
+    num("billboardsDrawn", s.billboardsDrawn);
+    num("billboardsCulled", s.billboardsCulled);
+    num("shadowDrawn", s.shadowDrawn);
+    num("shadowCulled", s.shadowCulled);
+    return o;
+}
+
 static JSValue js_sg_syncPhysics(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* g = getGraph(ctx, this_val);
     if (g) g->syncPhysics();
@@ -4238,6 +4272,9 @@ void SceneBindings::install(JSContext* ctx) {
         .prop("showLightIcons",
             [](GraphWrapper* w) -> bool { return w && w->graph ? w->graph->showLightIcons() : false; },
             [](GraphWrapper* w, bool val) { if (w && w->graph) w->graph->setShowLightIcons(val); })
+        .prop("frustumCulling",
+            [](GraphWrapper* w) -> bool { return w && w->graph ? w->graph->frustumCulling() : true; },
+            [](GraphWrapper* w, bool val) { if (w && w->graph) w->graph->setFrustumCulling(val); })
 
         // Methods (all raw — complex arg handling)
         .method_raw("createNode", js_sg_createNode, 1)
@@ -4267,6 +4304,8 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setTiltShift", js_sg_setTiltShift, 1)
         .method_raw("setBloom", js_sg_setBloom, 1)
         .method_raw("setEnvironment", js_sg_setEnvironment, 1)
+        .method_raw("setFrustumCulling", js_sg_setFrustumCulling, 1)
+        .method_raw("cullStats", js_sg_cullStats, 0)
         .method_raw("syncPhysics", js_sg_syncPhysics, 0)
         .method_raw("raycast", js_sg_raycast, 2)
         .method_raw("unprojectLocal", js_sg_unprojectLocal, 2)

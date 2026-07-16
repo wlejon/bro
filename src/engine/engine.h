@@ -47,7 +47,7 @@ namespace broaudio { class Engine; }
 namespace bro::physics { class PhysicsWorld; }
 namespace bro::net { class NetService; }
 namespace bro::steam { class SteamService; }
-namespace bro::scene { class SceneGraph; class HtmlNode; }
+namespace bro::scene { class SceneGraph; class HtmlNode; struct CullStats; }
 namespace bro::canvas { class CanvasScene; class CanvasRasterThread; }
 
 namespace bro::platform {
@@ -339,6 +339,10 @@ public:
 #if BRO_WITH_3D
     GizmoManager& gizmo() { return *gizmo_; }
     const GizmoManager& gizmo() const { return *gizmo_; }
+
+    /// Sum of frustum-culling counters across every scene graph's most
+    /// recent render. Consumed by headless perf.stats().
+    scene::CullStats sceneCullStats() const;
 #endif
 
     /// Standard app menu bar (rendered by system/menu.html, driven via bro.menu.*).

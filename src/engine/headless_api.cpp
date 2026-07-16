@@ -732,4 +732,27 @@ void Engine::dispatchClickOn(dom::Element* target) {
     js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
 }
 
+#if BRO_WITH_3D
+scene::CullStats Engine::sceneCullStats() const {
+    scene::CullStats sum;
+    for (const auto& sg : sceneGraphs_) {
+        if (!sg.graph) continue;
+        const scene::CullStats& s = sg.graph->cullStats();
+        sum.meshDrawn        += s.meshDrawn;
+        sum.meshCulled       += s.meshCulled;
+        sum.instancedDrawn   += s.instancedDrawn;
+        sum.instancedCulled  += s.instancedCulled;
+        sum.splatDrawn       += s.splatDrawn;
+        sum.splatCulled      += s.splatCulled;
+        sum.particlesDrawn   += s.particlesDrawn;
+        sum.particlesCulled  += s.particlesCulled;
+        sum.billboardsDrawn  += s.billboardsDrawn;
+        sum.billboardsCulled += s.billboardsCulled;
+        sum.shadowDrawn      += s.shadowDrawn;
+        sum.shadowCulled     += s.shadowCulled;
+    }
+    return sum;
+}
+#endif
+
 } // namespace bro::engine

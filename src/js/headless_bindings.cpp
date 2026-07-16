@@ -2,6 +2,9 @@
 #include "engine/engine.h"
 #include "engine/gamepad.h"
 #include "canvas/canvas_scene.h"
+#if BRO_WITH_3D
+#include "scene/scene_renderer.h"  // scene::CullStats for perf.stats()
+#endif
 #include "dom/element.h"
 #include "dom/element_geometry.h"
 #include "dom/text_node.h"
@@ -1057,6 +1060,30 @@ static JSValue js_perf_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     num("reuseFailAvailW", static_cast<double>(p.reuseFailAvailW));
     num("reuseFailAvailH", static_cast<double>(p.reuseFailAvailH));
     num("reuseFailOverride", static_cast<double>(p.reuseFailOverride));
+#if BRO_WITH_3D
+    // Frustum-culling counters summed across every scene graph's most recent
+    // render (see scene::CullStats). Zeros when no 3D content rendered.
+    {
+        scene::CullStats s = engine->sceneCullStats();
+        JSValue sc = JS_NewObject(ctx);
+        auto snum = [&](const char* k, int v) {
+            JS_SetPropertyStr(ctx, sc, k, JS_NewInt32(ctx, v));
+        };
+        snum("meshDrawn", s.meshDrawn);
+        snum("meshCulled", s.meshCulled);
+        snum("instancedDrawn", s.instancedDrawn);
+        snum("instancedCulled", s.instancedCulled);
+        snum("splatDrawn", s.splatDrawn);
+        snum("splatCulled", s.splatCulled);
+        snum("particlesDrawn", s.particlesDrawn);
+        snum("particlesCulled", s.particlesCulled);
+        snum("billboardsDrawn", s.billboardsDrawn);
+        snum("billboardsCulled", s.billboardsCulled);
+        snum("shadowDrawn", s.shadowDrawn);
+        snum("shadowCulled", s.shadowCulled);
+        JS_SetPropertyStr(ctx, o, "scene", sc);
+    }
+#endif
     return o;
 }
 

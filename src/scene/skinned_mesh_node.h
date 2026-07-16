@@ -61,6 +61,15 @@ public:
     /// Number of bones in the palette (0 when no skin is set).
     int boneCount() const { return boneCount_; }
 
+    /// Conservative local-space AABB of the CURRENT pose: the union of the
+    /// bind AABB transformed by every palette matrix. Every skinned vertex is
+    /// a convex combination of per-bone images M_i * p with p inside the bind
+    /// AABB, so the union always contains the posed geometry — frustum
+    /// culling by this box can never pop an animated mesh, at the cost of
+    /// overestimating for far-reaching bones. Falls back to the bind AABB
+    /// when no palette is staged.
+    bromath::AABB3 posedLocalBounds() const;
+
     /// True when the node has a skin whose vertex count matches the current
     /// mesh — the condition for rendering through the skinned pipeline.
     /// Re-checked against the mesh on every call so updateMesh() with a

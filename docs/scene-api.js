@@ -49,6 +49,38 @@ class SceneGraph {
   get showLightIcons() {}
   set showLightIcons(on) {}
 
+  /**
+   * Frustum culling for the forward + shadow passes (default true).
+   * Nodes whose conservative world bounds are fully outside the camera
+   * frustum are skipped (meshes incl. posed skinned bounds, instanced
+   * meshes as a whole node, splats, 3D particles, billboards); shadow
+   * casters are culled per light/cascade tile against the LIGHT volume,
+   * never the camera, so off-screen casters keep shadowing the view.
+   * Culling is strictly conservative — pixels are identical either way —
+   * so turning it off is only useful for debugging/regression bisecting.
+   * Also settable via `setFrustumCulling(on)`.
+   */
+  get frustumCulling() {}
+  set frustumCulling(on) {}
+
+  /** Method form of the `frustumCulling` property. */
+  setFrustumCulling(on) {}
+
+  /**
+   * Per-category drawn/culled counters from this graph's most recent
+   * rendered frame. Shadow counts are per caster x atlas tile. The same
+   * counters, summed across all scene graphs, appear as `perf.stats().scene`
+   * in headless.
+   *
+   * @returns {{meshDrawn:number, meshCulled:number,
+   *            instancedDrawn:number, instancedCulled:number,
+   *            splatDrawn:number, splatCulled:number,
+   *            particlesDrawn:number, particlesCulled:number,
+   *            billboardsDrawn:number, billboardsCulled:number,
+   *            shadowDrawn:number, shadowCulled:number}}
+   */
+  cullStats() {}
+
 
   // --- Node Creation --------------------------------------------------------
 

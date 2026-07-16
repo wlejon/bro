@@ -504,6 +504,26 @@ void SceneRenderer::renderShadowPass() {
 
     const int tileSize = shadowAtlasSize_ / 4;  // matches gridDim in prepareShadows
 
+    // Per-tile frustum culling: casters are tested against each tile's light
+    // volume (cascade ortho box, spot cone, point cube face — all encoded by
+    // the tile's world-space lightVP, the exact matrix the rasterizer clips
+    // against). NEVER the camera frustum: an off-screen caster must still
+    // shadow on-screen geometry. Caster world bounds are cached once per
+    // frame (posed for skinned casters); a caster without valid bounds draws
+    // into every tile.
+    struct CasterBounds { bromath::AABB3 box; bool valid; };
+    std::vector<CasterBounds> staticBounds, skinnedBounds, instBounds;
+    if (cullingActive_) {
+        auto cache = [&](auto& casters, std::vector<CasterBounds>& out) {
+            out.resize(casters.size());
+            for (size_t i = 0; i < casters.size(); ++i)
+                out[i].valid = nodeWorldBounds(casters[i], out[i].box);
+        };
+        cache(shadowCasters_, staticBounds);
+        cache(shadowSkinnedCasters_, skinnedBounds);
+        cache(shadowInstancedCasters_, instBounds);
+    }
+
     for (int slot = 0; slot < shadowTileCount_; ++slot) {
         int gx = slot % 4;
         int gy = slot / 4;
@@ -517,7 +537,17 @@ void SceneRenderer::renderShadowPass() {
         Mat4 lightVP;
         std::memcpy(lightVP.data, shadowRenderMatrix_[slot], sizeof(float) * 16);
 
-        for (auto* mesh : shadowCasters_) {
+        bromath::Frustum tileFrustum;
+        if (cullingActive_) tileFrustum = bromath::ffromViewProj(lightVP);
+        auto tileCulled = [&](const std::vector<CasterBounds>& bounds, size_t i) {
+            if (!cullingActive_ || !bounds[i].valid) return false;
+            return !bromath::fintersects(tileFrustum, bounds[i].box);
+        };
+
+        for (size_t i = 0; i < shadowCasters_.size(); ++i) {
+            if (tileCulled(staticBounds, i)) { cullStats_.shadowCulled++; continue; }
+            cullStats_.shadowDrawn++;
+            MeshNode* mesh = shadowCasters_[i];
             Mat4 mvp = bromath::mmul(lightVP, mesh->worldMatrix());
             glUniformMatrix4fv(shadowUMVP_, 1, GL_FALSE, mvp.data);
             mesh->drawRaw();
@@ -527,7 +557,10 @@ void SceneRenderer::renderShadowPass() {
         // shadows deform with the mesh instead of staying in bind pose.
         if (hasSkinnedCasters && shadowSkinnedProgram_) {
             glUseProgram(shadowSkinnedProgram_);
-            for (auto* mesh : shadowSkinnedCasters_) {
+            for (size_t i = 0; i < shadowSkinnedCasters_.size(); ++i) {
+                if (tileCulled(skinnedBounds, i)) { cullStats_.shadowCulled++; continue; }
+                cullStats_.shadowDrawn++;
+                MeshNode* mesh = shadowSkinnedCasters_[i];
                 Mat4 mvp = bromath::mmul(lightVP, mesh->worldMatrix());
                 glUniformMatrix4fv(shadowSkinnedUMVP_, 1, GL_FALSE, mvp.data);
                 mesh->asSkinnedMesh()->prepareSkinnedDraw();
@@ -539,7 +572,10 @@ void SceneRenderer::renderShadowPass() {
         if (hasInstancedCasters && shadowInstancedProgram_) {
             glUseProgram(shadowInstancedProgram_);
             glUniformMatrix4fv(shadowInstULightVP_, 1, GL_FALSE, lightVP.data);
-            for (auto* m : shadowInstancedCasters_) {
+            for (size_t i = 0; i < shadowInstancedCasters_.size(); ++i) {
+                if (tileCulled(instBounds, i)) { cullStats_.shadowCulled++; continue; }
+                cullStats_.shadowDrawn++;
+                InstancedMeshNode* m = shadowInstancedCasters_[i];
                 glUniformMatrix4fv(shadowInstUModel_, 1, GL_FALSE, m->worldMatrix().data);
                 m->drawRawInstancedDepth();
             }

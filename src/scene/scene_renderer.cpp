@@ -169,8 +169,68 @@ void SceneRenderer::uploadMeshGlobals(const MeshDrawLocs& L) {
     if (L.windFreq     >= 0) glUniform1f(L.windFreq, windFreq_);
 }
 
+// Conservative world-space bounds per cullable node type. The contract is
+// strict — the box must contain everything the node can rasterize this frame,
+// so culling can never pop visible content: skinned meshes use palette-posed
+// bounds, wind sway pads by its max displacement, splats pad by the 3-sigma
+// quad extent the splat shader emits.
+bool SceneRenderer::nodeWorldBounds(SceneNode* n, bromath::AABB3& out) const {
+    switch (n->type()) {
+    case SceneNode::Type::Mesh: {
+        auto* m = static_cast<MeshNode*>(n);
+        if (m->mesh().empty()) return false;
+        bromath::AABB3 local = m->localBounds();
+        auto* sm = m->asSkinnedMesh();
+        if (sm && sm->skinReady()) local = sm->posedLocalBounds();
+        out = bromath::atransform(local, m->worldMatrix());
+        // Wind sway displaces vertices in world space by at most
+        // |windDir| * strength * windMask (per-vertex bend <= 1).
+        float pad = m->windMask() * windStrength_ *
+                    bromath::vlen(Vec3{windDir_[0], windDir_[1], windDir_[2]});
+        if (pad > 0.0f) {
+            out.min = out.min - Vec3{pad, pad, pad};
+            out.max = out.max + Vec3{pad, pad, pad};
+        }
+        return true;
+    }
+    case SceneNode::Type::InstancedMesh: {
+        auto* m = static_cast<InstancedMeshNode*>(n);
+        float lo[3], hi[3];
+        if (!m->computeWorldInstanceBounds(lo, hi)) return false;
+        out.min = {lo[0], lo[1], lo[2]};
+        out.max = {hi[0], hi[1], hi[2]};
+        return true;
+    }
+    case SceneNode::Type::GaussianSplat: {
+        auto* s = static_cast<GaussianSplatNode*>(n);
+        if (s->splatCount() == 0) return false;
+        // Splat centers/scales are consumed in world space (the shader never
+        // sees the node transform), so no worldMatrix here. Pad the center
+        // bounds by the quad extent: kSigma = 3 in the splat VS, plus half a
+        // sigma of headroom for the low-pass screen dilation.
+        float pad = 3.5f * s->maxSigma();
+        out = s->localBounds();
+        out.min = out.min - Vec3{pad, pad, pad};
+        out.max = out.max + Vec3{pad, pad, pad};
+        return true;
+    }
+    case SceneNode::Type::Particles3D:
+        return static_cast<Particles3DNode*>(n)->worldBounds(out);
+    default:
+        return false;
+    }
+}
+
+bool SceneRenderer::cameraCulled(SceneNode* n) const {
+    if (!cullingActive_) return false;
+    bromath::AABB3 wb;
+    if (!nodeWorldBounds(n, wb)) return false;
+    return !bromath::fintersects(cameraFrustum_, wb);
+}
+
 void SceneRenderer::render3D() {
     hasMeshContent_ = false;
+    cullStats_ = CullStats{};
 
     // Check for 3D content: mesh nodes OR world-anchored Shape/Sprite/Html.
     // Both render into the mesh FBO (depth-tested against each other) so
@@ -199,6 +259,17 @@ void SceneRenderer::render3D() {
 
     const bool has3D = (hasMeshNodes || hasInstancedMeshNodes || hasSplatNodes || hasParticle3DNodes || hasBillboardNodes || hasGizmo || hasLightIcons)
                        && graph_.canvasWidth_ > 0 && graph_.canvasHeight_ > 0;
+
+    // Per-frame culling state. World-space camera frustum: the passes render
+    // camera-relative (proj * viewRot * (model - eye)), which is algebraically
+    // proj * view * model, so testing world AABBs against proj*view matches
+    // what the rasterizer clips exactly. Gribb-Hartmann extraction is
+    // projection-agnostic, so ortho cameras work unchanged.
+    cullingActive_ = frustumCullingEnabled_ && has3D;
+    if (cullingActive_) {
+        cameraFrustum_ = bromath::ffromViewProj(
+            bromath::mmul(graph_.projectionMatrix_, graph_.viewMatrix_));
+    }
 
     if (has3D) {
         ensureMeshPipeline();
@@ -270,14 +341,19 @@ void SceneRenderer::render3D() {
                     if (!n->visible()) return;
                     if (n->type() == SceneNode::Type::Mesh) {
                         auto* m = static_cast<MeshNode*>(n);
-                        auto* sm = m->asSkinnedMesh();
-                        if (sm && sm->skinReady()) {
-                            (m->unlit() ? unlitSkinnedMeshes : skinnedMeshes)
-                                .push_back(m);
-                        } else if (m->unlit()) {
-                            unlitMeshes.push_back(m);
+                        if (cameraCulled(m)) {
+                            cullStats_.meshCulled++;
                         } else {
-                            renderMeshNode(m, meshDraw_);
+                            cullStats_.meshDrawn++;
+                            auto* sm = m->asSkinnedMesh();
+                            if (sm && sm->skinReady()) {
+                                (m->unlit() ? unlitSkinnedMeshes : skinnedMeshes)
+                                    .push_back(m);
+                            } else if (m->unlit()) {
+                                unlitMeshes.push_back(m);
+                            } else {
+                                renderMeshNode(m, meshDraw_);
+                            }
                         }
                     }
                     for (auto* c : n->children()) walkMesh(c);
@@ -332,7 +408,14 @@ void SceneRenderer::render3D() {
                     std::function<void(SceneNode*)> walkInst = [&](SceneNode* n) {
                         if (!n->visible()) return;
                         if (n->type() == SceneNode::Type::InstancedMesh) {
-                            renderInstancedMeshNode(static_cast<InstancedMeshNode*>(n));
+                            // Whole-node test against the world bounds of all
+                            // instances — no per-instance culling.
+                            if (cameraCulled(n)) {
+                                cullStats_.instancedCulled++;
+                            } else {
+                                cullStats_.instancedDrawn++;
+                                renderInstancedMeshNode(static_cast<InstancedMeshNode*>(n));
+                            }
                         }
                         for (auto* c : n->children()) walkInst(c);
                     };

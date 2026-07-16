@@ -2,6 +2,8 @@
 
 #include <glad/gl.h>
 
+#include <bromath/frustum.h>
+
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -14,6 +16,20 @@ class MeshNode;
 class InstancedMeshNode;
 class LightNode;
 class Particles3DNode;
+
+/// Per-frame frustum-culling counters, reset at the top of every render3D().
+/// "Drawn" counts nodes submitted to a pass (including nodes without valid
+/// bounds, which always draw); "culled" counts nodes skipped by a frustum
+/// test. Shadow counts are per caster x atlas tile (a caster drawn into two
+/// cascades and skipped in one contributes drawn+=2, culled+=1).
+struct CullStats {
+    int meshDrawn = 0,       meshCulled = 0;
+    int instancedDrawn = 0,  instancedCulled = 0;
+    int splatDrawn = 0,      splatCulled = 0;
+    int particlesDrawn = 0,  particlesCulled = 0;
+    int billboardsDrawn = 0, billboardsCulled = 0;
+    int shadowDrawn = 0,     shadowCulled = 0;
+};
 
 /// GL renderer for a SceneGraph's 3D content. Owns every GPU resource the
 /// scene pipeline uses — mesh + instanced-mesh programs, the HDR mesh FBO,
@@ -117,6 +133,14 @@ public:
     void setShowLightIcons(bool on) { showLightIcons_ = on; }
     bool showLightIcons() const { return showLightIcons_; }
 
+    /// Frustum culling for the forward + shadow passes. Default on; the
+    /// escape hatch exists for debugging and regression bisecting.
+    void setFrustumCulling(bool on) { frustumCullingEnabled_ = on; }
+    bool frustumCullingEnabled() const { return frustumCullingEnabled_; }
+
+    /// Culling counters from the most recent render3D().
+    const CullStats& cullStats() const { return cullStats_; }
+
     // --- IBL environment ---
 
     bool loadEnvironment(const std::string& hdrPath);
@@ -158,6 +182,17 @@ private:
     // Upload the per-frame globals (fog, ambient, wind) to whichever mesh
     // program is currently bound. Defined in scene_renderer.cpp.
     void uploadMeshGlobals(const MeshDrawLocs& L);
+
+    // Conservative world-space AABB for a cullable node (Mesh incl. skinned,
+    // InstancedMesh, GaussianSplat, Particles3D). Returns false when the node
+    // has no valid bounds — such nodes draw unconditionally. Defined in
+    // scene_renderer.cpp.
+    bool nodeWorldBounds(SceneNode* n, bromath::AABB3& out) const;
+
+    // Camera-frustum test for the forward walks: true when the node is
+    // provably outside the view and safe to skip. Never true while culling
+    // is disabled or when the node has no valid bounds.
+    bool cameraCulled(SceneNode* n) const;
 
     // Query the full uniform surface of a mesh program (regular or skinned —
     // both link mesh.frag, so the surface is identical) into a draw-locs +
@@ -377,6 +412,14 @@ private:
     // Editor affordance: render a marker icon per LightNode and include
     // them in raycast results.
     bool showLightIcons_ = false;
+
+    // --- Frustum culling ---
+    bool frustumCullingEnabled_ = true;
+    // Per-frame state set at the top of render3D(): world-space camera
+    // frustum (valid while cullingActive_) + drawn/culled counters.
+    bool cullingActive_ = false;
+    bromath::Frustum cameraFrustum_;
+    CullStats cullStats_;
 
     // Tonemap FBO (LDR output, consumed by the compositor)
     GLuint tonemapFBO_ = 0;

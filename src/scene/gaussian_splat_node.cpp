@@ -141,16 +141,24 @@ GaussianSplatNode::~GaussianSplatNode() { releaseGL(); }
 
 void GaussianSplatNode::setCloud(const bromesh::GaussianSplatCloud& cloud) {
     cloud_ = cloud;
-    bounds_ = cloud_.bounds();
+    refreshBounds();
     cloudDirty_ = true;
     sorted_ = false;
 }
 
 void GaussianSplatNode::setCloud(bromesh::GaussianSplatCloud&& cloud) {
     cloud_ = std::move(cloud);
-    bounds_ = cloud_.bounds();
+    refreshBounds();
     cloudDirty_ = true;
     sorted_ = false;
+}
+
+void GaussianSplatNode::refreshBounds() {
+    bounds_ = cloud_.bounds();
+    maxSigma_ = 0.0f;
+    for (float s : cloud_.scales) {
+        maxSigma_ = std::max(maxSigma_, std::fabs(s));
+    }
 }
 
 void GaussianSplatNode::releaseGL() {

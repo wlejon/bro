@@ -100,6 +100,11 @@ void SceneRenderer::renderParticles3DNodes() {
         if (node->type() != SceneNode::Type::Particles3D) continue;
         auto* p = static_cast<Particles3DNode*>(node.get());
         if (p->liveCount() <= 0) continue;
+        if (cameraCulled(p)) {
+            cullStats_.particlesCulled++;
+            continue;
+        }
+        cullStats_.particlesDrawn++;
 
         if (p->blend() == Particles3DNode::Blend::Additive) {
             // Additive color; alpha still accumulates "over"-style so the

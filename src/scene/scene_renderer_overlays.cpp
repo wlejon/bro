@@ -80,6 +80,11 @@ void SceneRenderer::renderGaussianSplatNodes() {
     for (auto& [id, node] : graph_.nodes_) {
         if (!node->visible()) continue;
         if (node->type() != SceneNode::Type::GaussianSplat) continue;
+        if (cameraCulled(node.get())) {
+            cullStats_.splatCulled++;
+            continue;
+        }
+        cullStats_.splatDrawn++;
         static_cast<GaussianSplatNode*>(node.get())->draw(
             graph_.viewMatrix_.data, graph_.projectionMatrix_.data, eye,
             meshFBOWidth_, meshFBOHeight_);
@@ -219,8 +224,21 @@ void SceneRenderer::renderBillboardNode(SceneNode* node) {
     if (!resolveBillboard(node, d)) return;
     if (d.color[3] <= 0.0f && d.shapeMode != 2) return; // invisible shape
 
-    // Anchor in camera-relative space (same precision trick as mesh path).
     const Vec3 anchor = node->worldAnchor();
+
+    // A billboard rotates to face the camera, so whatever the orientation the
+    // quad stays inside the sphere of radius |(halfW, halfH)| around its
+    // anchor — a sphere test is conservative for every billboard mode.
+    if (cullingActive_) {
+        float r = std::sqrt(d.halfW * d.halfW + d.halfH * d.halfH);
+        if (!bromath::fintersects(cameraFrustum_, bromath::Sphere{anchor, r})) {
+            cullStats_.billboardsCulled++;
+            return;
+        }
+    }
+    cullStats_.billboardsDrawn++;
+
+    // Anchor in camera-relative space (same precision trick as mesh path).
     const float ax = anchor.x - graph_.cameraEye_.x;
     const float ay = anchor.y - graph_.cameraEye_.y;
     const float az = anchor.z - graph_.cameraEye_.z;

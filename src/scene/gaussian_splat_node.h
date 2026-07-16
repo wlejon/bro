@@ -38,6 +38,12 @@ public:
     size_t splatCount() const { return cloud_.count(); }
     const bromath::AABB3& localBounds() const { return bounds_; }
 
+    /// Largest per-axis std-dev across all splats (world units — splat
+    /// centers/scales are consumed in world space by the shader). Culling
+    /// pads the center bounds by a multiple of this to cover the 3-sigma
+    /// quads the vertex shader emits.
+    float maxSigma() const { return maxSigma_; }
+
     /// Draw the cloud. Matrices are column-major 4x4 (bromath layout). `eye` is
     /// the world-space camera position; `vpW`/`vpH` the target viewport size in
     /// pixels (the mesh FBO). Called by SceneGraph during the splat pass with
@@ -52,8 +58,11 @@ private:
     void resortAndUpload(const float* view16, const float eye[3]);
     bool cameraMovedSince(const float* view16, const float eye[3]) const;
 
+    void refreshBounds();
+
     bromesh::GaussianSplatCloud cloud_;
     bromath::AABB3 bounds_{};
+    float maxSigma_ = 0.0f;
     bool cloudDirty_ = false;
 
     // GL program (lazily compiled, shared shape but per-node owned for now).

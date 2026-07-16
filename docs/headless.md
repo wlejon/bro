@@ -118,6 +118,7 @@ DOM update actually pays for, and the two a screenshot can't show you.
 | `reuseFailAvailH` | nodes re-laid because their available height differed from cache |
 | `reuseFailOverride` | nodes re-laid because their flex width override differed |
 | `treeRebuilds` | layout subtrees rebuilt from the DOM |
+| `scene` | 3D frustum-culling counters from the most recent frame, summed across all scene graphs: `{mesh,instanced,splat,particles,billboards,shadow}{Drawn,Culled}` (shadow counts are per caster × atlas tile). Per-graph numbers: `scene.cullStats()`; escape hatch: `scene.setFrustumCulling(false)`. See `docs/scene-api.js`. |
 
 **The counts matter more than the milliseconds.** Layout and style are both
 incremental: a change is supposed to cost time proportional to what it changed,

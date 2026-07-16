@@ -309,6 +309,17 @@ public:
     void setShowLightIcons(bool on) { renderer_.setShowLightIcons(on); }
     bool showLightIcons() const { return renderer_.showLightIcons(); }
 
+    // --- Frustum culling ---
+
+    /// Toggle frustum culling for the forward + shadow passes (default on).
+    /// Culling is strictly conservative — output pixels are identical either
+    /// way — so this exists for debugging and regression bisecting.
+    void setFrustumCulling(bool on) { renderer_.setFrustumCulling(on); }
+    bool frustumCulling() const { return renderer_.frustumCullingEnabled(); }
+
+    /// Per-category drawn/culled counters from the most recent render().
+    const CullStats& cullStats() const { return renderer_.cullStats(); }
+
     // --- IBL environment ---
 
     /// Load an HDR equirectangular image (.hdr) and convert it to a 512²
