@@ -143,7 +143,7 @@ static void sendOnLane(ISteamNetworkingSockets* sockets, uint32_t conn,
     msg->m_conn = conn;
     msg->m_nFlags = sendFlags(opts);
     msg->m_idxLane = static_cast<uint16_t>(opts.channel);
-    int64_t result = 0;
+    int64 result = 0;  // GNS's own int64 — int64_t is `long` on Linux, GNS wants `long long`
     sockets->SendMessages(1, &msg, &result);
     if (result == -k_EResultInvalidParam) {
         // Almost always "lane not configured" — a real bug worth hearing about
