@@ -119,6 +119,60 @@ void SceneRenderer::ensureSkinnedMeshPipeline() {
     }
 }
 
+bool SceneRenderer::compileCustomShader(const std::string& key,
+                                        const std::string& vertexChunk,
+                                        const std::string& fragmentChunk,
+                                        std::string& errOut) {
+    if (!glCreateShader) {
+        // glad not loaded — no GL context (CPU raster path). The scene
+        // canvas context is unavailable there too, so this is belt-and-
+        // braces rather than a reachable path.
+        errOut = "custom shaders require GPU rendering (no GL context)";
+        return false;
+    }
+    return ensureCustomProgram(key, vertexChunk, fragmentChunk, &errOut) != nullptr;
+}
+
+SceneRenderer::CustomProgramEntry* SceneRenderer::ensureCustomProgram(
+        const std::string& key, const std::string& vertexChunk,
+        const std::string& fragmentChunk, std::string* errOut) {
+    auto it = customPrograms_.find(key);
+    if (it != customPrograms_.end()) return &it->second;
+
+    std::string vsSrc = withUserChunk(kMeshVertSrc, vertexChunk, "CUSTOM_VERTEX");
+    std::string fsSrc = withUserChunk(kMeshFragSrc, fragmentChunk, "CUSTOM_FRAGMENT");
+    GLuint prog = linkProgramCapture(vsSrc.c_str(), fsSrc.c_str(), errOut);
+    if (!prog) return nullptr;
+
+    CustomProgramEntry& e = customPrograms_[key];
+    e.prog = prog;
+    queryMeshUniformLocs(prog, e.draw, e.locs);
+    return &e;
+}
+
+void SceneRenderer::uploadCustomUniforms(CustomProgramEntry& e,
+                                         const MeshNode* mesh) {
+    const MeshNode::CustomShaderState* st = mesh->customShader();
+    if (!st) return;
+    for (const auto& u : st->uniforms) {
+        GLint loc;
+        auto it = e.userLocs.find(u.name);
+        if (it != e.userLocs.end()) {
+            loc = it->second;
+        } else {
+            loc = glGetUniformLocation(e.prog, u.name.c_str());
+            e.userLocs.emplace(u.name, loc);
+        }
+        if (loc < 0) continue;   // not declared / optimized out — silent, like GL
+        switch (u.comps) {
+            case 1: glUniform1fv(loc, 1, u.v); break;
+            case 2: glUniform2fv(loc, 1, u.v); break;
+            case 3: glUniform3fv(loc, 1, u.v); break;
+            default: glUniform4fv(loc, 1, u.v); break;
+        }
+    }
+}
+
 void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
     // Apply any staged texture uploads/releases before reading material
     // state, so runtime texture swaps take effect this frame (the geometry
@@ -148,7 +202,13 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
     glUniform3fv(L.emissiveColor, 1, mesh->emissiveColor());
     glUniform1f(L.metallic, mesh->metallic());
     glUniform1f(L.roughness, mesh->roughness());
-    if (L.unlit >= 0) glUniform1i(L.unlit, mesh->unlit() ? 1 : 0);
+    // A custom shader forces the lit path: uUnlit would early-return in the
+    // fragment shader before the userFragment hook, so it is suppressed
+    // while a shader is set (the mesh renders lit, pre-tonemap — see the
+    // routing in render3D and docs/scene-api.js setShader).
+    if (L.unlit >= 0)
+        glUniform1i(L.unlit,
+                    (mesh->unlit() && !mesh->hasCustomShader()) ? 1 : 0);
     if (L.twoSided >= 0)   glUniform1i(L.twoSided, mesh->twoSided() ? 1 : 0);
     if (L.subsurface >= 0) glUniform1f(L.subsurface, mesh->subsurface());
     if (L.alphaCutoff >= 0) glUniform1f(L.alphaCutoff, mesh->alphaCutoff());

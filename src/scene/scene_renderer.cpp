@@ -35,6 +35,10 @@ SceneRenderer::~SceneRenderer() {
     destroySceneDepthCopy();
     destroyTonemapFBO();
     if (meshProgram_) { glDeleteProgram(meshProgram_); meshProgram_ = 0; }
+    for (auto& [key, entry] : customPrograms_) {
+        if (entry.prog) glDeleteProgram(entry.prog);
+    }
+    customPrograms_.clear();
     if (meshSkinnedProgram_) { glDeleteProgram(meshSkinnedProgram_); meshSkinnedProgram_ = 0; }
     if (meshInstancedProgram_) { glDeleteProgram(meshInstancedProgram_); meshInstancedProgram_ = 0; }
     if (bbProgram_) { glDeleteProgram(bbProgram_); bbProgram_ = 0; }
@@ -424,6 +428,7 @@ void SceneRenderer::render3D() {
             std::vector<MeshNode*> unlitMeshes;
             std::vector<MeshNode*> skinnedMeshes;
             std::vector<MeshNode*> unlitSkinnedMeshes;
+            std::vector<MeshNode*> customMeshes;
             if (hasMeshNodes && meshProgram_) {
                 glEnable(GL_CULL_FACE);
                 glCullFace(GL_BACK);
@@ -444,6 +449,11 @@ void SceneRenderer::render3D() {
                             if (sm && sm->skinReady()) {
                                 (m->unlit() ? unlitSkinnedMeshes : skinnedMeshes)
                                     .push_back(m);
+                            } else if (m->hasCustomShader()) {
+                                // Custom shader wins over unlit: the mesh
+                                // renders lit (pre-tonemap) so the fragment
+                                // hook actually runs; see renderMeshNode.
+                                customMeshes.push_back(m);
                             } else if (m->unlit()) {
                                 unlitMeshes.push_back(m);
                             } else {
@@ -466,6 +476,48 @@ void SceneRenderer::render3D() {
                             renderMeshNode(m, meshSkinnedDraw_);
                         glUseProgram(meshProgram_);
                     }
+                }
+
+                // Custom-shader sub-pass: identical state, one cached
+                // program variant per distinct chunk pair. Meshes are
+                // grouped by program key so shared programs bind once;
+                // per-mesh user uniforms upload per draw (two meshes on one
+                // program keep independent values). setShader compiles
+                // eagerly, so the cache lookup normally hits; a miss that
+                // fails to compile falls back to the default program so the
+                // mesh still renders.
+                if (!customMeshes.empty()) {
+                    std::stable_sort(customMeshes.begin(), customMeshes.end(),
+                        [](MeshNode* a, MeshNode* b) {
+                            return a->customShader()->key < b->customShader()->key;
+                        });
+                    const std::string* boundKey = nullptr;
+                    CustomProgramEntry* entry = nullptr;
+                    for (MeshNode* m : customMeshes) {
+                        const auto* st = m->customShader();
+                        if (!boundKey || *boundKey != st->key) {
+                            boundKey = &st->key;
+                            std::string err;
+                            entry = ensureCustomProgram(st->key, st->vertexChunk,
+                                                        st->fragmentChunk, &err);
+                            if (entry) {
+                                glUseProgram(entry->prog);
+                                uploadMeshGlobals(entry->draw);
+                                uploadLights(activeLights, entry->locs);
+                            } else {
+                                LOG_ERROR("Custom shader failed at draw "
+                                          "(rendering default): %s", err.c_str());
+                                glUseProgram(meshProgram_);
+                            }
+                        }
+                        if (entry) {
+                            uploadCustomUniforms(*entry, m);
+                            renderMeshNode(m, entry->draw);
+                        } else {
+                            renderMeshNode(m, meshDraw_);
+                        }
+                    }
+                    glUseProgram(meshProgram_);
                 }
 
                 glDisable(GL_CULL_FACE);

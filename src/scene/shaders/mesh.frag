@@ -208,6 +208,15 @@ float sampleShadow(int slot, vec3 posCamRel) {
     return s * (1.0 / 16.0);
 }
 
+// Custom-shader splice point. When a mesh has a user shader, the renderer
+// replaces this marker line with the user's GLSL chunk (which must define
+// `void userFragment(inout vec3 baseColor, inout vec3 normal,
+//                    inout float metallic, inout float roughness,
+//                    inout vec3 emissive, inout float alpha)`)
+// and injects `#define CUSTOM_FRAGMENT 1` after the #version line. With no
+// user chunk the marker is an inert comment and the source is unchanged.
+//__USER_CHUNK__
+
 void main() {
     if (uNearClip > 0.0 && vCamDist < uNearClip) discard;
 
@@ -256,7 +265,6 @@ void main() {
         N = normalize(TBN * nTS);
     }
     vec3 V = normalize(-vWorldPos);              // eye at origin (cam-relative)
-    float NdotV = max(dot(N, V), 1e-4);
 
     // Material params — start from scalars, optionally modulated by MR map.
     float metal = uMetallic;
@@ -266,6 +274,23 @@ void main() {
         rough *= mr.g;
         metal *= mr.b;
     }
+
+    vec3 emissive = uEmissiveColor * uEmissive;
+    if (uHasEmissiveMap == 1) {
+        emissive *= texture(uEmissiveMap, vUV).rgb;
+    }
+
+#ifdef CUSTOM_FRAGMENT
+    // Custom-shader hook: runs after every material input (base color +
+    // texture, MR map, normal map, emissive map) is gathered and before the
+    // light loop, so any of the six values can be rewritten and standard PBR
+    // lighting applies to the result. `normal` is world-space; it is
+    // renormalized (and roughness re-clamped) below.
+    userFragment(baseColor, N, metal, rough, emissive, baseAlpha);
+    N = normalize(N);
+#endif
+
+    float NdotV = max(dot(N, V), 1e-4);
     rough = clamp(rough, 0.04, 1.0);  // floor to avoid spec singularity
     vec3 F0 = mix(vec3(0.04), baseColor, metal);
 
@@ -414,10 +439,6 @@ void main() {
     }
     if (uHasAOMap == 1) {
         ambient *= texture(uAOMap, vUV).r;
-    }
-    vec3 emissive = uEmissiveColor * uEmissive;
-    if (uHasEmissiveMap == 1) {
-        emissive *= texture(uEmissiveMap, vUV).rgb;
     }
     vec3 color = Lo + ambient + emissive;
 

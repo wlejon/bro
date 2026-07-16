@@ -22,6 +22,7 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bro::js {
@@ -80,6 +81,158 @@ JSValue js_node_setBaseColorTexture(JSContext* ctx, JSValueConst this_val, int a
     }
     JS_FreeValue(ctx, dataVal);
     return JS_UNDEFINED;
+}
+
+// --- Custom shaders (static MeshNode only) ----------------------------------
+
+// Parse one user-uniform value: number → float (1 comp), Array of 1..4
+// numbers → vecN. Returns the component count, 0 on an invalid shape.
+static int parseShaderUniformValue(JSContext* ctx, JSValueConst val, float out[4]) {
+    if (JS_IsNumber(val)) {
+        out[0] = (float)jsNum(ctx, val);
+        return 1;
+    }
+    if (JS_IsArray(val)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, val, "length");
+        int32_t len = 0;
+        JS_ToInt32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        if (len < 1 || len > 4) return 0;
+        for (int32_t i = 0; i < len; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, val, (uint32_t)i);
+            out[i] = (float)jsNum(ctx, e);
+            JS_FreeValue(ctx, e);
+        }
+        return (int)len;
+    }
+    return 0;
+}
+
+// User uniforms live in a reserved `u_` namespace so they can never collide
+// with the engine's own uniforms (camelCase `uMVP`-style, no underscore).
+static bool validUserUniformName(const std::string& n) {
+    return n.size() >= 3 && n[0] == 'u' && n[1] == '_';
+}
+
+// setShader({ vertex?, fragment?, uniforms? }) — install user GLSL chunks on
+// a static MeshNode. Compiles eagerly (the JS thread owns the GL context);
+// on GLSL compile/link failure throws a SyntaxError carrying the full driver
+// log and leaves the node's previous shader (or the default pipeline)
+// untouched. See docs/scene-api.js for the hook-point contract.
+JSValue js_node_setShader(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Mesh)
+        return JS_ThrowTypeError(ctx, "setShader: not a MeshNode");
+    auto* meshNode = static_cast<scene::MeshNode*>(w->node);
+    if (meshNode->asSkinnedMesh())
+        return JS_ThrowTypeError(ctx,
+            "setShader: custom shaders are not yet supported on skinned meshes");
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx,
+            "setShader: expected { vertex?, fragment?, uniforms? }");
+
+    std::string vs, fs;
+    const std::pair<const char*, std::string*> chunkProps[] = {
+        {"vertex", &vs}, {"fragment", &fs}};
+    for (const auto& [prop, dst] : chunkProps) {
+        JSValue v = JS_GetPropertyStr(ctx, argv[0], prop);
+        bool bad = !JS_IsUndefined(v) && !JS_IsNull(v) && !JS_IsString(v);
+        if (JS_IsString(v)) *dst = jsStr(ctx, v);
+        JS_FreeValue(ctx, v);
+        if (bad)
+            return JS_ThrowTypeError(ctx, "setShader: %s must be a GLSL string", prop);
+    }
+    if (vs.empty() && fs.empty())
+        return JS_ThrowTypeError(ctx,
+            "setShader: at least one of vertex/fragment is required");
+
+    // Parse the uniforms object up-front so a malformed entry throws before
+    // anything is applied (the call is atomic: all or nothing).
+    std::vector<scene::MeshNode::CustomShaderUniform> uniforms;
+    std::string badUniform;
+    JSValue uobj = JS_GetPropertyStr(ctx, argv[0], "uniforms");
+    if (JS_IsObject(uobj)) {
+        JSPropertyEnum* props = nullptr;
+        uint32_t plen = 0;
+        if (JS_GetOwnPropertyNames(ctx, &props, &plen, uobj,
+                                   JS_GPN_STRING_MASK | JS_GPN_ENUM_ONLY) == 0) {
+            for (uint32_t i = 0; i < plen; i++) {
+                if (badUniform.empty()) {
+                    JSValue key = JS_AtomToValue(ctx, props[i].atom);
+                    std::string name = jsStr(ctx, key);
+                    JS_FreeValue(ctx, key);
+                    scene::MeshNode::CustomShaderUniform u;
+                    u.name = name;
+                    JSValue uval = JS_GetProperty(ctx, uobj, props[i].atom);
+                    u.comps = parseShaderUniformValue(ctx, uval, u.v);
+                    JS_FreeValue(ctx, uval);
+                    if (u.comps > 0 && validUserUniformName(name)) {
+                        uniforms.push_back(std::move(u));
+                    } else {
+                        badUniform = name;
+                    }
+                }
+                JS_FreeAtom(ctx, props[i].atom);
+            }
+            js_free(ctx, props);
+        }
+    }
+    JS_FreeValue(ctx, uobj);
+    if (!badUniform.empty())
+        return JS_ThrowTypeError(ctx,
+            "setShader: uniform '%s' must use the u_ prefix and be a number "
+            "or an array of 1-4 numbers", badUniform.c_str());
+
+    // Eager compile — the program lands in the renderer's cache keyed by the
+    // chunk sources, so the draw path finds it without recompiling.
+    std::string key = vs + '\x1f' + fs;
+    std::string err;
+    if (!w->graph || !w->graph->compileCustomShader(key, vs, fs, err))
+        return JS_ThrowSyntaxError(ctx, "%s",
+            err.empty() ? "setShader: no scene graph" : err.c_str());
+
+    meshNode->setCustomShader(std::move(vs), std::move(fs));
+    for (const auto& u : uniforms)
+        meshNode->setCustomShaderUniform(u.name, u.comps, u.v);
+    return JS_DupValue(ctx, this_val);
+}
+
+// setShaderUniform(name, value) — update one numeric user uniform. value is
+// a number (float) or an array of 1-4 numbers (vec2/3/4). Values live on the
+// node, so meshes sharing a program keep independent values.
+JSValue js_node_setShaderUniform(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Mesh)
+        return JS_ThrowTypeError(ctx, "setShaderUniform: not a MeshNode");
+    auto* meshNode = static_cast<scene::MeshNode*>(w->node);
+    if (!meshNode->hasCustomShader())
+        return JS_ThrowTypeError(ctx,
+            "setShaderUniform: no custom shader set (call setShader first)");
+    if (argc < 2 || !JS_IsString(argv[0]))
+        return JS_ThrowTypeError(ctx, "setShaderUniform: expected (name, value)");
+    std::string name = jsStr(ctx, argv[0]);
+    if (!validUserUniformName(name))
+        return JS_ThrowTypeError(ctx,
+            "setShaderUniform: uniform name must use the u_ prefix (got '%s')",
+            name.c_str());
+    float v[4] = {};
+    int comps = parseShaderUniformValue(ctx, argv[1], v);
+    if (comps == 0)
+        return JS_ThrowTypeError(ctx,
+            "setShaderUniform: value must be a number or an array of 1-4 numbers");
+    meshNode->setCustomShaderUniform(name, comps, v);
+    return JS_DupValue(ctx, this_val);
+}
+
+// clearShader() — drop the custom shader (and its uniform values); the mesh
+// returns to the default pipeline (including its unlit behavior, if set).
+// The cached program stays in the renderer for future reuse.
+JSValue js_node_clearShader(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Mesh)
+        return JS_ThrowTypeError(ctx, "clearShader: not a MeshNode");
+    static_cast<scene::MeshNode*>(w->node)->clearCustomShader();
+    return JS_DupValue(ctx, this_val);
 }
 
 // updateMesh(meshOrOpts[, opts])

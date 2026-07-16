@@ -1188,6 +1188,117 @@ class SceneNode {
   setBaseColorTexture(tex) {}
 
 
+  // --- Custom shaders (static MeshNode) ---------------------------------------
+  //
+  // ShaderMaterial-style hooks: user GLSL chunks spliced into the engine's
+  // mesh uber-shader, so custom code composes with everything the material
+  // system already does — textures, the 32-light PBR loop, shadows, IBL,
+  // fog, tonemap. You write GLSL 330 core function bodies, not whole
+  // shaders; the engine owns the pipeline around them.
+
+  /**
+   * Install custom shader chunks on a static MeshNode. Chunks are GLSL 330
+   * core fragments spliced into the engine mesh shader at global scope; at
+   * least one of `vertex` / `fragment` is required.
+   *
+   * The vertex chunk must define:
+   *
+   *   void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv)
+   *
+   * It runs in OBJECT space, after wind sway and before the camera
+   * transforms — displace `pos` and the world position, lighting, fog and
+   * shadows-received all track it. `normal` is the object-space normal, `uv`
+   * feeds every texture lookup downstream.
+   *
+   * The fragment chunk must define:
+   *
+   *   void userFragment(inout vec3 baseColor, inout vec3 normal,
+   *                     inout float metallic, inout float roughness,
+   *                     inout vec3 emissive, inout float alpha)
+   *
+   * It runs after ALL material inputs are gathered (base color x texture x
+   * vertex tint, MR map, normal map, AO-independent emissive) and before the
+   * light loop, so whatever you write into those six values is what standard
+   * PBR lighting shades. `normal` is world-space (renormalized after the
+   * hook). To output an exact unshaded color, zero `baseColor` and write the
+   * color into `emissive`.
+   *
+   * Both chunks may also:
+   *   - declare their own uniforms in the reserved `u_` namespace
+   *     (e.g. `uniform vec3 u_tint;`) — set values via the `uniforms` option
+   *     or setShaderUniform(). Numeric only: float / vec2 / vec3 / vec4.
+   *     Sampler/texture uniforms are NOT supported yet.
+   *   - declare custom varyings in the reserved `v_` namespace (an `out` in
+   *     the vertex chunk paired with an `in` in the fragment chunk).
+   *   - read the engine varyings: vWorldPos (camera-relative world position),
+   *     vNormal, vUV, vColor, vCamDist — and engine uniforms like uWindTime.
+   *
+   * Semantics and limits:
+   *   - Compilation happens NOW, at set time. Invalid GLSL throws a
+   *     SyntaxError carrying the full driver log; the node keeps its
+   *     previous shader (or the default pipeline) — nothing half-applies.
+   *   - Identical chunk sources across meshes share one compiled program;
+   *     uniform VALUES stay per-node. Programs are cached for the scene's
+   *     lifetime (no eviction).
+   *   - A custom shader forces the LIT pass: while one is set, the `unlit`
+   *     flag is ignored (unlit meshes normally draw post-tonemap, where the
+   *     hook's PBR inputs don't exist). clearShader() restores it.
+   *   - Shadows: the mesh still casts shadows, but the depth-only shadow
+   *     pass does NOT run userVertex — a vertex-displaced mesh casts the
+   *     undisplaced silhouette.
+   *   - Static meshes only for now: throws on skinned meshes; instanced
+   *     meshes don't have this method.
+   *
+   *   // pulse a fresnel-ish rim via a driven uniform
+   *   const node = scene.createMesh({ mesh: 'sphere', color: '#334455' });
+   *   node.setShader({
+   *     fragment: `
+   *       uniform float u_pulse;
+   *       void userFragment(inout vec3 baseColor, inout vec3 normal,
+   *                         inout float metallic, inout float roughness,
+   *                         inout vec3 emissive, inout float alpha) {
+   *         float rim = pow(1.0 - max(dot(normal, normalize(-vWorldPos)), 0.0), 3.0);
+   *         emissive += vec3(0.2, 0.8, 1.0) * rim * u_pulse;
+   *       }`,
+   *     uniforms: { u_pulse: 1.0 },
+   *   });
+   *   node.setShaderUniform('u_pulse', 0.25);   // animate per frame
+   *
+   * @param {Object} opts
+   * @param {string} [opts.vertex] - GLSL chunk defining userVertex
+   * @param {string} [opts.fragment] - GLSL chunk defining userFragment
+   * @param {Object.<string, number|number[]>} [opts.uniforms] - initial
+   *        `u_`-prefixed uniform values (number, or array of 1-4 numbers)
+   * @returns {SceneNode} this
+   * @throws {TypeError} bad argument shapes, non-`u_` uniform names, skinned mesh
+   * @throws {SyntaxError} GLSL compile/link failure (message = driver log)
+   */
+  setShader(opts) {}
+
+  /**
+   * Update one custom-shader uniform on this node. Values are plain numbers
+   * (float) or arrays of 1-4 numbers (float/vec2/vec3/vec4) and live on the
+   * node — two meshes sharing identical shader source keep independent
+   * values. Setting a name the chunk never declares is silently ignored
+   * (mirrors GL). Requires a shader installed via setShader.
+   * @param {string} name - must use the `u_` prefix
+   * @param {number|number[]} value
+   * @returns {SceneNode} this
+   */
+  setShaderUniform(name, value) {}
+
+  /**
+   * Remove the custom shader (and its uniform values); the mesh returns to
+   * the default pipeline, including its `unlit` behavior if set. The
+   * compiled program stays cached in the scene for instant re-use.
+   * @returns {SceneNode} this
+   */
+  clearShader() {}
+
+  /** True while a custom shader is installed on this MeshNode (read-only). */
+  get hasShader() {}
+
+
   // --- SkinnedMeshNode-only -------------------------------------------------
 
   /**

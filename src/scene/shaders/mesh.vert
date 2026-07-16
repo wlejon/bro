@@ -48,6 +48,13 @@ out float vCamDist;
 out vec3 vTangentW;
 out vec3 vBitangentW;
 
+// Custom-shader splice point. When a mesh has a user shader, the renderer
+// replaces this marker line with the user's GLSL chunk (which must define
+// `void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv)`)
+// and injects `#define CUSTOM_VERTEX 1` after the #version line. With no
+// user chunk the marker is an inert comment and the source is unchanged.
+//__USER_CHUNK__
+
 void main() {
     vec3 lPos     = aPos;
     vec3 lNormal  = aNormal;
@@ -82,11 +89,21 @@ void main() {
         swayedAPos += deltaObj;
         worldPos.xyz += deltaWorld;
     }
+    vec2 uv = aUV;
+#ifdef CUSTOM_VERTEX
+    // Custom-shader hook: runs on the object-space position (post-skinning,
+    // post-wind), normal, and UV before the camera transforms. worldPos is
+    // recomputed from the displaced position so lighting, fog and vCamDist
+    // track the displacement (wind's deltaObj round-trips through uModel to
+    // the same world delta, orthonormal-rotation approximation).
+    userVertex(swayedAPos, lNormal, uv);
+    worldPos = uModel * vec4(swayedAPos, 1.0);
+#endif
     vWorldPos = worldPos.xyz;
     vNormal = M3 * lNormal;
     vTangentW   = M3 * lTangent;
     vBitangentW = cross(vNormal, vTangentW) * aTangent.w;
-    vUV = aUV;
+    vUV = uv;
     vColor = (uUseVertexColor == 1) ? aColor : vec4(1.0);
     vCamDist = length(worldPos.xyz);
     gl_Position = uMVP * vec4(swayedAPos, 1.0);

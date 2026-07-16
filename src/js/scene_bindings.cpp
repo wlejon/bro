@@ -459,6 +459,13 @@ void SceneBindings::install(JSContext* ctx) {
             }
             return false;
         })
+        // True while a custom shader (mesh.setShader) is installed on this
+        // MeshNode; false on non-mesh nodes.
+        .get("hasShader", [](NodeWrapper* w) -> bool {
+            if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
+                return static_cast<scene::MeshNode*>(w->node)->hasCustomShader();
+            return false;
+        })
         .get("type", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->node) return JS_UNDEFINED;
             switch (w->node->type()) {
@@ -1168,6 +1175,9 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setAlphaCutoff", js_node_setAlphaCutoff, 1)
         .method_raw("setDoubleSided", js_node_setDoubleSided, 1)
         .method_raw("setBaseColorTexture", js_node_setBaseColorTexture, 1)
+        .method_raw("setShader", js_node_setShader, 1)
+        .method_raw("setShaderUniform", js_node_setShaderUniform, 2)
+        .method_raw("clearShader", js_node_clearShader, 0)
         .method_raw("setHtml", js_node_setHtml, 1)
         .method_raw("markHtmlDirty", js_node_markHtmlDirty, 0)
         .method_raw("savePly", js_node_savePly, 1)

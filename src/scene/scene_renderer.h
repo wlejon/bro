@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace bro::scene {
@@ -169,6 +170,20 @@ public:
     void  setEnvironmentRotation(float r) { envRotation_ = r; }
     float environmentRotation() const { return envRotation_; }
 
+    // --- Custom mesh shaders (static MeshNode only) ---
+
+    /// Eagerly compile + cache the mesh program variant for a pair of user
+    /// GLSL chunks (either may be empty). Returns true when the program
+    /// linked (or was already cached); on failure returns false with the
+    /// full driver log in errOut and caches nothing. GL thread only — the
+    /// JS thread owns the main context, so setShader can validate at set
+    /// time. `key` must be MeshNode::CustomShaderState::key for the same
+    /// chunk pair (vertex + '\x1f' + fragment).
+    bool compileCustomShader(const std::string& key,
+                             const std::string& vertexChunk,
+                             const std::string& fragmentChunk,
+                             std::string& errOut);
+
 private:
     // Per-program uniform locations for the PBR mesh pipeline (everything
     // renderMeshNode + the per-frame globals touch). One instance for the
@@ -301,6 +316,36 @@ private:
     MeshProgramLocs meshSkinnedLocs_;
     void uploadLights(const std::vector<LightNode*>& lights,
                       const MeshProgramLocs& locs);
+
+    // --- Custom-shader program cache -----------------------------------
+    // One linked mesh-program variant per distinct user chunk pair, keyed by
+    // the chunk sources (vertex + '\x1f' + fragment), so meshes with
+    // identical shaders share a program. Entries live until renderer
+    // teardown — no eviction; a scene cycling through many distinct shader
+    // sources holds them all (cheap: a GL program + two locs structs each).
+    // userLocs lazily caches glGetUniformLocation results for user uniforms
+    // (misses cache as -1 so a typo'd name is one query, not one per draw).
+    struct CustomProgramEntry {
+        GLuint prog = 0;
+        MeshDrawLocs draw;
+        MeshProgramLocs locs;
+        std::unordered_map<std::string, GLint> userLocs;
+    };
+    std::unordered_map<std::string, CustomProgramEntry> customPrograms_;
+
+    // Look up (compiling on miss) the program for a chunk pair. Returns
+    // nullptr with the driver log in errOut on compile/link failure (nothing
+    // cached — the next call retries). Pointer stays valid until teardown
+    // (unordered_map nodes are stable across rehash). Defined in
+    // scene_renderer_mesh.cpp (owns the embedded mesh shader sources).
+    CustomProgramEntry* ensureCustomProgram(const std::string& key,
+                                            const std::string& vertexChunk,
+                                            const std::string& fragmentChunk,
+                                            std::string* errOut);
+
+    // Upload a mesh's user-uniform values to the entry's program (must be
+    // bound). Defined in scene_renderer_mesh.cpp.
+    void uploadCustomUniforms(CustomProgramEntry& e, const MeshNode* mesh);
 
     // --- Shadow pipeline (lazy init) ---
     // Atlas-tiled shadow maps: a single big depth texture sub-divided into N

@@ -380,6 +380,21 @@ public:
     void  setEnvironmentRotation(float r) { renderer_.setEnvironmentRotation(r); }
     float environmentRotation() const { return renderer_.environmentRotation(); }
 
+    // --- Custom mesh shaders ---
+
+    /// Eagerly compile + cache the mesh-program variant for a pair of user
+    /// GLSL chunks (mesh.setShader validation path). True when linked (or
+    /// already cached); false with the full driver log in errOut. Must be
+    /// called on the GL thread (JS bindings already satisfy this). `key` is
+    /// MeshNode::CustomShaderState's cache key: vertex + '\x1f' + fragment.
+    bool compileCustomShader(const std::string& key,
+                             const std::string& vertexChunk,
+                             const std::string& fragmentChunk,
+                             std::string& errOut) {
+        return renderer_.compileCustomShader(key, vertexChunk, fragmentChunk,
+                                             errOut);
+    }
+
     // --- Legacy 2D camera (sets ortho projection + top-down view) ---
     void setCameraPosition(float x, float y);
     void setCameraZoom(float z);
