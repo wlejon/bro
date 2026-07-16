@@ -15,14 +15,66 @@
 //   bro.net.init();
 //   bro.net.host(27015);
 //   bro.net.onconnect = (connId) => console.log("client connected:", connId);
-//   bro.net.onmessage = (connId, data) => {
+//   bro.net.onmessage = (connId, data, channel) => {
 //     const text = new TextDecoder().decode(data);
-//     console.log("received:", text);
+//     console.log("received:", text, "on channel", channel);
 //   };
 //
 // Quick start (client):
 //   bro.net.init();
 //   bro.net.connect("127.0.0.1:27015");
+//
+// Available in every JS context: the main document AND workers. Each context
+// gets its own independent subscriber (its own connections, host socket, and
+// callbacks); a worker can host, connect, send, sendClone, and receive
+// exactly like the main thread. Clone values are always deserialized in the
+// receiving context.
+//
+// -----------------------------------------------------------------------------
+// Channels (GNS lanes)
+// -----------------------------------------------------------------------------
+//
+// Every connection has 8 channels (0..7), mapped 1:1 onto GameNetworkingSockets
+// lanes with equal priority and equal bandwidth weight. Channels eliminate
+// head-of-line blocking between unrelated streams: a large reliable transfer
+// on channel 1 does not stall chat messages on channel 2.
+//
+// Ordering guarantees:
+//   - RELIABLE messages on the SAME channel arrive in send order (this is the
+//     only strong ordering guarantee).
+//   - Messages on DIFFERENT channels may arrive in any relative order.
+//   - UNRELIABLE messages may be lost or arrive out of order even within a
+//     channel.
+//
+// Reliability x nodelay matrix ({reliable, nodelay} send options):
+//   reliable:true,  nodelay:false  (default) — ordered, retransmitted, Nagle
+//                                   batching (small sends coalesce ~a few ms).
+//   reliable:true,  nodelay:true   — ordered + retransmitted, flushed
+//                                   immediately (no Nagle batching).
+//   reliable:false, nodelay:false  — fire-and-forget, Nagle batching.
+//   reliable:false, nodelay:true   — fire-and-forget, flushed immediately, and
+//                                   DROPPED rather than buffered if the link
+//                                   can't take it right now (freshest-data-only
+//                                   semantics for high-rate state updates).
+//
+// The lane set is fixed at connection setup; `channel` outside 0..7 is clamped.
+//
+// -----------------------------------------------------------------------------
+// Wire format (bro <-> bro only, pre-1.0)
+// -----------------------------------------------------------------------------
+//
+// Every message carries a 2-byte frame header on the wire:
+//   byte 0: 0xB7 — magic/format version. Changes if the framing ever changes,
+//           so mismatched peers drop messages loudly instead of misparsing.
+//   byte 1: frame type — 0x00 raw bytes (send/broadcast), 0x01 structured
+//           clone (sendClone/broadcastClone). Room for future frame types.
+//
+// Consequence: raw payloads are NOT byte-identical on the wire to what send()
+// was given, so bro.net peers must all speak this format (any bro build with
+// this API does; non-bro peers are not supported). Messages with an
+// unrecognized header, unknown frame type, or malformed clone payload are
+// dropped with a log diagnostic — they never reach onmessage and never crash
+// the receiver, even from a hostile peer.
 //
 // =============================================================================
 
@@ -83,25 +135,60 @@ net.connect("127.0.0.1:27015");
 // --- Sending Data ------------------------------------------------------------
 
 /**
- * Send data to a specific connection.
+ * Send raw bytes to a specific connection. Delivered to the peer's onmessage
+ * as an ArrayBuffer.
  *
  * @param {number} connId - Connection handle (received via onconnect callback)
  * @param {string|ArrayBuffer|TypedArray} data - Payload to send
- * @param {boolean} [reliable=true] - Use reliable ordered delivery (true) or
- *                                     unreliable unordered (false)
+ * @param {boolean|Object} [options=true] - Legacy boolean = reliable flag, or:
+ * @param {boolean} [options.reliable=true] - Reliable ordered delivery
+ * @param {number}  [options.channel=0]    - Channel 0..7 (clamped); reliable
+ *                                           ordering holds per channel
+ * @param {boolean} [options.nodelay=false] - Flush immediately (see the
+ *                                           reliability x nodelay matrix above)
  * @returns {boolean} true if the message was queued successfully
  */
 net.send(connId, "hello world");
-net.send(connId, new Uint8Array([1, 2, 3]).buffer, false);  // unreliable
+net.send(connId, new Uint8Array([1, 2, 3]).buffer, false);            // legacy boolean
+net.send(connId, posBuf, { reliable: false, channel: 1, nodelay: true });
 
 /**
- * Broadcast data to all connected peers (host mode).
+ * Broadcast raw bytes to all connected peers (host mode).
  *
  * @param {string|ArrayBuffer|TypedArray} data - Payload to send
- * @param {boolean} [reliable=true] - Use reliable ordered delivery
+ * @param {boolean|Object} [options=true] - Same options as send()
  */
 net.broadcast("game state update");
-net.broadcast(new Float32Array([x, y, z]).buffer, false);  // unreliable
+net.broadcast(new Float32Array([x, y, z]).buffer, { reliable: false });
+
+/**
+ * Send a structured VALUE to a specific connection (structured clone over the
+ * wire). Delivered to the peer's onmessage as the decoded value, not an
+ * ArrayBuffer.
+ *
+ * Survives the trip: plain objects, arrays, strings, numbers, booleans,
+ * null/undefined, BigInt, ArrayBuffer, and TypedArrays (nested arbitrarily,
+ * up to 64 levels deep).
+ *
+ * Rejected with a TypeError: functions, symbols, Mesh, ImageBitmap (these
+ * transfer by in-process pointer and cannot cross a network — export bytes
+ * instead), and transfer lists (pass an options object, not an array).
+ *
+ * @param {number} connId - Connection handle
+ * @param {*} value - Any clonable value
+ * @param {Object} [options] - Same {reliable, channel, nodelay} as send()
+ * @returns {boolean} true if the message was queued successfully
+ */
+net.sendClone(connId, { type: "spawn", id: 7, pos: new Float32Array([x, y, z]) },
+              { channel: 2 });
+
+/**
+ * Broadcast a structured value to all connected peers (host mode).
+ *
+ * @param {*} value - Any clonable value (see sendClone)
+ * @param {Object} [options] - Same {reliable, channel, nodelay} as send()
+ */
+net.broadcastClone({ tick: 1042, entities: [{ id: 1, hp: 80 }] }, { channel: 3 });
 
 
 // --- Disconnecting -----------------------------------------------------------
@@ -167,15 +254,19 @@ net.ondisconnect = function(connId, reason) {
  * Called when a message is received from a peer.
  *
  * @param {number} connId - Connection handle of the sender
- * @param {ArrayBuffer} data - The received message payload
+ * @param {ArrayBuffer|*} data - ArrayBuffer for send()/broadcast() payloads;
+ *   the decoded value for sendClone()/broadcastClone() payloads
+ * @param {number} channel - Channel (0..7) the message arrived on
  */
-net.onmessage = function(connId, data) {
-  // Decode text messages:
-  const text = new TextDecoder().decode(data);
-
-  // Or read binary data:
-  const view = new DataView(data);
-  const x = view.getFloat32(0, true);
+net.onmessage = function(connId, data, channel) {
+  if (data instanceof ArrayBuffer) {
+    // Raw send: decode text or read binary
+    const text = new TextDecoder().decode(data);
+    const view = new DataView(data);
+  } else {
+    // sendClone: `data` is already the structured value
+    console.log("clone on channel", channel, data);
+  }
 };
 
 

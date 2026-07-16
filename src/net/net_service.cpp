@@ -37,21 +37,19 @@ void NetSubscriber::connect(const std::string& address) {
     service_->postCommand(c);
 }
 
-bool NetSubscriber::send(uint32_t conn, const void* data, uint32_t size, bool reliable) {
+bool NetSubscriber::send(uint32_t conn, std::vector<uint8_t>&& data, const SendOptions& opts) {
     auto* c = makeCmd(id_, NetCommand::Send);
     c->connection = conn;
-    c->reliable = reliable;
-    c->data.assign(static_cast<const uint8_t*>(data),
-                   static_cast<const uint8_t*>(data) + size);
+    c->send = opts;
+    c->data = std::move(data);
     service_->postCommand(c);
     return true;
 }
 
-void NetSubscriber::broadcast(const void* data, uint32_t size, bool reliable) {
+void NetSubscriber::broadcast(std::vector<uint8_t>&& data, const SendOptions& opts) {
     auto* c = makeCmd(id_, NetCommand::Broadcast);
-    c->reliable = reliable;
-    c->data.assign(static_cast<const uint8_t*>(data),
-                   static_cast<const uint8_t*>(data) + size);
+    c->send = opts;
+    c->data = std::move(data);
     service_->postCommand(c);
 }
 
@@ -85,6 +83,7 @@ void NetSubscriber::poll() {
                 if (onMessage) {
                     NetworkMessage m;
                     m.connection = ev->connection;
+                    m.channel = ev->channel;
                     m.data = std::move(ev->data);
                     onMessage(std::move(m));
                 }
@@ -101,6 +100,59 @@ bool NetSubscriber::getConnectionStats(uint32_t conn, ConnectionStats& out) cons
 // =============================================================================
 // NetService
 // =============================================================================
+
+// Configure the fixed lane set on a fresh connection (service thread only).
+// Equal priority, equal weight (both nullptr): lanes exist to eliminate
+// head-of-line blocking between unrelated streams, not to prioritize. Each
+// side configures the lanes for the direction it sends; we call this at both
+// accept (incoming) and connect (outgoing) so every connection has all
+// kNetLaneCount lanes available in both directions.
+static void configureLanes(ISteamNetworkingSockets* sockets, HSteamNetConnection conn) {
+    EResult r = sockets->ConfigureConnectionLanes(conn, kNetLaneCount, nullptr, nullptr);
+    if (r != k_EResultOK) {
+        LOG_WARN("[net] ConfigureConnectionLanes(%d) failed on conn %u (EResult %d) — "
+                 "sends on channel > 0 will be dropped",
+                 kNetLaneCount, static_cast<uint32_t>(conn), static_cast<int>(r));
+    }
+}
+
+// Map SendOptions to GNS send flags. nodelay disables Nagle batching; for
+// unreliable sends it additionally sets NoDelay ("drop instead of buffering
+// if it can't go out now") — the freshest-data-only semantics wanted for
+// high-rate unreliable state, and what k_nSteamNetworkingSend_UnreliableNoDelay
+// is for. Reliable sends never drop, so NoDelay does not apply there.
+static int sendFlags(const SendOptions& opts) {
+    int flags = opts.reliable ? k_nSteamNetworkingSend_Reliable
+                              : k_nSteamNetworkingSend_Unreliable;
+    if (opts.nodelay) {
+        flags |= k_nSteamNetworkingSend_NoNagle;
+        if (!opts.reliable) flags |= k_nSteamNetworkingSend_NoDelay;
+    }
+    return flags;
+}
+
+// Queue one message on a connection with lane routing. SendMessageToConnection
+// has no lane parameter, so lanes require the AllocateMessage + SendMessages
+// path (one copy into the GNS-owned buffer, same as SendMessageToConnection).
+static void sendOnLane(ISteamNetworkingSockets* sockets, uint32_t conn,
+                       const std::vector<uint8_t>& data, const SendOptions& opts) {
+    SteamNetworkingMessage_t* msg =
+        SteamNetworkingUtils()->AllocateMessage(static_cast<int>(data.size()));
+    if (!msg) return;
+    if (!data.empty()) std::memcpy(msg->m_pData, data.data(), data.size());
+    msg->m_conn = conn;
+    msg->m_nFlags = sendFlags(opts);
+    msg->m_idxLane = static_cast<uint16_t>(opts.channel);
+    int64_t result = 0;
+    sockets->SendMessages(1, &msg, &result);
+    if (result == -k_EResultInvalidParam) {
+        // Almost always "lane not configured" — a real bug worth hearing about
+        // (unlike transient buffer-full/not-connected results, which GNS's own
+        // flow control handles and which would spam the log).
+        LOG_WARN("[net] send on conn %u channel %d rejected (InvalidParam)",
+                 conn, opts.channel);
+    }
+}
 
 NetService::NetService() {
     if (s_instance) {
@@ -234,6 +286,7 @@ void NetService::onStatus(SteamNetConnectionStatusChangedCallback_t* info) {
                 if (pgIt != subscriberPollGroup_.end()) {
                     sockets_->SetConnectionPollGroup(conn, pgIt->second);
                 }
+                configureLanes(sockets_, conn);
                 connectionOwner_[conn] = owner;
             }
             break;
@@ -370,6 +423,7 @@ void NetService::handleCommand(NetCommand& cmd) {
                 if (pgIt == subscriberPollGroup_.end())
                     subscriberPollGroup_[cmd.subscriberId] = pg;
                 sockets_->SetConnectionPollGroup(conn, pg);
+                configureLanes(sockets_, conn);
                 connectionOwner_[conn] = cmd.subscriberId;
                 LOG_INFO("[net] Subscriber %u connecting to %s",
                          cmd.subscriberId, cmd.address.c_str());
@@ -381,26 +435,13 @@ void NetService::handleCommand(NetCommand& cmd) {
             break;
         }
         case NetCommand::Send: {
-            int flags = cmd.reliable
-                ? k_nSteamNetworkingSend_Reliable
-                : k_nSteamNetworkingSend_Unreliable;
-            sockets_->SendMessageToConnection(cmd.connection,
-                                              cmd.data.data(),
-                                              static_cast<uint32_t>(cmd.data.size()),
-                                              flags, nullptr);
+            sendOnLane(sockets_, cmd.connection, cmd.data, cmd.send);
             break;
         }
         case NetCommand::Broadcast: {
-            int flags = cmd.reliable
-                ? k_nSteamNetworkingSend_Reliable
-                : k_nSteamNetworkingSend_Unreliable;
             for (auto& [conn, owner] : connectionOwner_) {
-                if (owner == cmd.subscriberId) {
-                    sockets_->SendMessageToConnection(conn,
-                                                      cmd.data.data(),
-                                                      static_cast<uint32_t>(cmd.data.size()),
-                                                      flags, nullptr);
-                }
+                if (owner == cmd.subscriberId)
+                    sendOnLane(sockets_, conn, cmd.data, cmd.send);
             }
             break;
         }
@@ -533,6 +574,7 @@ void NetService::threadMain() {
                 auto* ev = new NetEvent{};
                 ev->type = NetEvent::Message;
                 ev->connection = static_cast<uint32_t>(m->m_conn);
+                ev->channel = static_cast<int>(m->m_idxLane);
                 ev->data.assign(static_cast<const uint8_t*>(m->m_pData),
                                 static_cast<const uint8_t*>(m->m_pData) + m->m_cbSize);
                 postEventTo(sid, ev);

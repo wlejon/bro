@@ -117,7 +117,7 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
                        const JSValue* transfers, size_t numTransfers,
                        std::vector<std::vector<uint8_t>>& transferBufs,
                        std::vector<TransferredObject>& transferObjs,
-                       int depth)
+                       int depth, bool forNetwork)
 {
     if (depth > 64) {
         JS_ThrowTypeError(ctx, "postMessage: object too deeply nested");
@@ -186,6 +186,11 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
     {
         JSClassID meshClassId = MeshBindings::classId();
         if (meshClassId != 0 && JS_GetOpaque(val, meshClassId) != nullptr) {
+            if (forNetwork) {
+                JS_ThrowTypeError(ctx, "sendClone: Mesh cannot be sent over the network "
+                                       "(it transfers by pointer; export bytes instead)");
+                return false;
+            }
             // Must be in the transfer list — otherwise structured-cloning a Mesh
             // is not supported.
             for (size_t i = 0; i < numTransfers; i++) {
@@ -219,6 +224,12 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
     {
         JSClassID ibClassId = ImageBitmapBindings::classId();
         if (ibClassId != 0 && JS_GetOpaque(val, ibClassId) != nullptr) {
+            if (forNetwork) {
+                JS_ThrowTypeError(ctx, "sendClone: ImageBitmap cannot be sent over the "
+                                       "network (it ref-shares in-process pixels; send "
+                                       "raw pixel bytes instead)");
+                return false;
+            }
             bool transfer = false;
             for (size_t i = 0; i < numTransfers; i++) {
                 if (JS_VALUE_GET_PTR(val) == JS_VALUE_GET_PTR(transfers[i])) {
@@ -333,11 +344,19 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
         w.u32(len);
         for (uint32_t i = 0; i < len; i++) {
             JSValue elem = JS_GetPropertyUint32(ctx, val, i);
-            bool ok = writeValue(ctx, elem, w, transfers, numTransfers, transferBufs, transferObjs, depth + 1);
+            bool ok = writeValue(ctx, elem, w, transfers, numTransfers, transferBufs, transferObjs, depth + 1, forNetwork);
             JS_FreeValue(ctx, elem);
             if (!ok) return false;
         }
         return true;
+    }
+
+    // Functions are objects to JS_IsObject but are not structured-clonable —
+    // without this check they'd silently serialize as {} via the plain-object
+    // branch below (real structured clone throws DataCloneError).
+    if (JS_IsFunction(ctx, val)) {
+        JS_ThrowTypeError(ctx, "postMessage: function is not cloneable");
+        return false;
     }
 
     // Plain object
@@ -363,7 +382,7 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
 
             // Value
             JSValue propVal = JS_GetProperty(ctx, val, props[i].atom);
-            ok = writeValue(ctx, propVal, w, transfers, numTransfers, transferBufs, transferObjs, depth + 1);
+            ok = writeValue(ctx, propVal, w, transfers, numTransfers, transferBufs, transferObjs, depth + 1, forNetwork);
             JS_FreeValue(ctx, propVal);
             if (!ok) break;
         }
@@ -379,8 +398,15 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
     return false;
 }
 
-bool serializeMessage(JSContext* ctx, JSValue value, JSValue transferList, Message& out)
+bool serializeMessage(JSContext* ctx, JSValue value, JSValue transferList, Message& out,
+                      bool forNetwork)
 {
+    // A network payload cannot carry transfers: transferred ArrayBuffers and
+    // pointer-transferred C++ objects only exist as in-process side tables.
+    if (forNetwork && !JS_IsUndefined(transferList) && !JS_IsNull(transferList)) {
+        JS_ThrowTypeError(ctx, "sendClone: transfer lists are not supported over the network");
+        return false;
+    }
     // Collect transfer list. Allowed entries: ArrayBuffer (data copy today)
     // or Mesh (true zero-copy transfer of the underlying bromesh::MeshData).
     std::vector<JSValue> transfers;
@@ -419,7 +445,7 @@ bool serializeMessage(JSContext* ctx, JSValue value, JSValue transferList, Messa
     Writer w(out.data);
     bool ok = writeValue(ctx, value, w,
                          transfers.data(), transfers.size(),
-                         out.transferredBuffers, out.transferredObjects, 0);
+                         out.transferredBuffers, out.transferredObjects, 0, forNetwork);
 
     for (auto& t : transfers)
         JS_FreeValue(ctx, t);
@@ -429,8 +455,15 @@ bool serializeMessage(JSContext* ctx, JSValue value, JSValue transferList, Messa
 // ---------------------------------------------------------------------------
 // Deserialize
 // ---------------------------------------------------------------------------
-static JSValue readValue(JSContext* ctx, Reader& r, Message& msg)
+static JSValue readValue(JSContext* ctx, Reader& r, Message& msg, int depth)
 {
+    // Mirror of the writer's depth>64 limit. The writer never produces deeper
+    // nesting, so anything past it is a malformed (or hostile) payload — and
+    // without this check a crafted stream of nested kArray tags would recurse
+    // the C stack to death long before any byte bound tripped.
+    if (depth > 64)
+        return JS_ThrowTypeError(ctx, "postMessage: object too deeply nested");
+
     if (!r.ok(1))
         return JS_ThrowTypeError(ctx, "postMessage: truncated data");
 
@@ -585,7 +618,7 @@ static JSValue readValue(JSContext* ctx, Reader& r, Message& msg)
         JSValue arr = JS_NewArray(ctx);
         if (JS_IsException(arr)) return arr;
         for (uint32_t i = 0; i < len; i++) {
-            JSValue elem = readValue(ctx, r, msg);
+            JSValue elem = readValue(ctx, r, msg, depth + 1);
             if (JS_IsException(elem)) {
                 JS_FreeValue(ctx, arr);
                 return elem;
@@ -608,7 +641,7 @@ static JSValue readValue(JSContext* ctx, Reader& r, Message& msg)
             std::string key(reinterpret_cast<const char*>(keyData), keyLen);
 
             // Value
-            JSValue propVal = readValue(ctx, r, msg);
+            JSValue propVal = readValue(ctx, r, msg, depth + 1);
             if (JS_IsException(propVal)) {
                 JS_FreeValue(ctx, obj);
                 return propVal;
@@ -622,10 +655,12 @@ static JSValue readValue(JSContext* ctx, Reader& r, Message& msg)
     }
 }
 
-JSValue deserializeMessage(JSContext* ctx, Message& msg)
+JSValue deserializeMessage(JSContext* ctx, Message& msg, size_t offset)
 {
-    Reader r(msg.data.data(), msg.data.size());
-    return readValue(ctx, r, msg);
+    if (offset > msg.data.size())
+        return JS_ThrowTypeError(ctx, "postMessage: truncated data");
+    Reader r(msg.data.data() + offset, msg.data.size() - offset);
+    return readValue(ctx, r, msg, 0);
 }
 
 }  // namespace bro::js

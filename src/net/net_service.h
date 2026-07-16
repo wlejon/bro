@@ -17,11 +17,30 @@
 
 namespace bro::net {
 
+/// Number of GNS lanes configured on every connection (both directions, both
+/// ends configure their own send side). Channels map 1:1 onto lanes; the JS
+/// binding clamps `channel` to [0, kNetLaneCount-1]. Fixed at connection
+/// setup because GNS forbids reducing the lane count later and reconfiguring
+/// restarts bandwidth balancing. 8 is the ceiling GNS recommends ("3 or so is
+/// fine; >8 is a lot" — lane bookkeeping is linear in lane count). All lanes
+/// share equal priority and weight: channels exist to eliminate head-of-line
+/// blocking between unrelated streams, not to prioritize one over another.
+inline constexpr int kNetLaneCount = 8;
+
 /// Received message from a remote peer.
 struct NetworkMessage {
     uint32_t connection;
     std::vector<uint8_t> data;
     int channel = 0;
+};
+
+/// Per-send options (subscriber thread → service thread, carried on the
+/// command). channel must already be clamped to [0, kNetLaneCount-1].
+struct SendOptions {
+    bool reliable = true;
+    int channel = 0;
+    bool nodelay = false;  // flush immediately (NoNagle); unreliable+nodelay
+                           // additionally drops instead of buffering (NoDelay)
 };
 
 /// Connection statistics snapshot.
@@ -61,7 +80,7 @@ struct NetCommand {
     uint16_t port = 0;
     uint32_t connection = 0;
     int reason = 0;
-    bool reliable = false;
+    SendOptions send;                             // Send/Broadcast
     std::string address;
     std::vector<uint8_t> data;
     class NetSubscriber* subscriberPtr = nullptr; // Register/Unregister
@@ -82,6 +101,7 @@ struct NetEvent {
     bool success = false;
     uint32_t connection = 0;
     int reason = 0;
+    int channel = 0;   // Message: lane the message arrived on
     std::vector<uint8_t> data;
 };
 
@@ -143,8 +163,8 @@ public:
     // Commands (non-blocking; result comes back via the corresponding event)
     void host(uint16_t port);
     void connect(const std::string& address);
-    bool send(uint32_t conn, const void* data, uint32_t size, bool reliable);
-    void broadcast(const void* data, uint32_t size, bool reliable);
+    bool send(uint32_t conn, std::vector<uint8_t>&& data, const SendOptions& opts);
+    void broadcast(std::vector<uint8_t>&& data, const SendOptions& opts);
     void disconnect(uint32_t conn, int reason = 0);
     void closeHost();
 

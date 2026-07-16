@@ -6,6 +6,7 @@
 #if BRO_WITH_NET
 
 #include "net/net_service.h"
+#include "js/message_serializer.h"
 #include "js/runtime.h"
 #include "util/log.h"
 
@@ -14,8 +15,32 @@
 #include <cstring>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace bro::js {
+
+// ---------------------------------------------------------------------------
+// Wire framing
+//
+// Every bro.net payload (both directions) starts with a 2-byte header:
+//
+//   byte 0: kWireMagic (0xB7) — magic + format version in one. If the frame
+//           layout ever changes incompatibly, this byte changes, so a peer on
+//           the old format drops the message with a loud diagnostic instead
+//           of misparsing it.
+//   byte 1: frame type — 0x00 raw bytes (send/broadcast), 0x01 structured
+//           clone (sendClone/broadcastClone). Unknown types are dropped with
+//           a diagnostic, leaving room for future frame kinds.
+//
+// This is a pre-1.0, bro↔bro wire format change: raw payloads are no longer
+// byte-identical on the wire to what send() was given (docs/net-api.js).
+// ---------------------------------------------------------------------------
+static constexpr uint8_t kWireMagic = 0xB7;
+enum WireType : uint8_t {
+    kWireRaw   = 0x00,
+    kWireClone = 0x01,
+};
+static constexpr size_t kWireHeaderSize = 2;
 
 // ---------------------------------------------------------------------------
 // Per-JSContext state
@@ -65,6 +90,82 @@ static std::string jsToString(JSContext* ctx, JSValueConst val) {
     return result;
 }
 
+// Parse the options argument shared by send/broadcast/sendClone/broadcastClone.
+// Accepts the legacy boolean (reliable) or an options object
+// { reliable?: boolean, channel?: number, nodelay?: boolean }.
+// channel is clamped to [0, kNetLaneCount-1] — the lane set is fixed at
+// connection setup, so an out-of-range channel silently rides the top lane
+// rather than failing the send. Returns false with a JS exception pending on
+// an argument that is neither boolean nor object.
+static bool parseSendOptions(JSContext* ctx, JSValueConst v, net::SendOptions& out) {
+    if (JS_IsUndefined(v) || JS_IsNull(v)) return true;
+    if (JS_IsBool(v)) {
+        out.reliable = JS_ToBool(ctx, v);
+        return true;
+    }
+    if (JS_IsArray(v)) {
+        // Someone reaching for postMessage's (value, transferList) shape.
+        JS_ThrowTypeError(ctx, "bro.net: transfer lists are not supported over "
+                               "the network; pass an options object");
+        return false;
+    }
+    if (!JS_IsObject(v)) {
+        JS_ThrowTypeError(ctx, "bro.net: options must be a boolean (reliable) or "
+                               "{reliable, channel, nodelay}");
+        return false;
+    }
+    JSValue r = JS_GetPropertyStr(ctx, v, "reliable");
+    if (!JS_IsUndefined(r)) out.reliable = JS_ToBool(ctx, r);
+    JS_FreeValue(ctx, r);
+
+    JSValue c = JS_GetPropertyStr(ctx, v, "channel");
+    if (!JS_IsUndefined(c)) {
+        int32_t ch = 0;
+        JS_ToInt32(ctx, &ch, c);
+        if (ch < 0) ch = 0;
+        if (ch >= net::kNetLaneCount) ch = net::kNetLaneCount - 1;
+        out.channel = ch;
+    }
+    JS_FreeValue(ctx, c);
+
+    JSValue n = JS_GetPropertyStr(ctx, v, "nodelay");
+    if (!JS_IsUndefined(n)) out.nodelay = JS_ToBool(ctx, n);
+    JS_FreeValue(ctx, n);
+    return true;
+}
+
+// Append the bytes of a string / ArrayBuffer / TypedArray payload to `out`.
+// Returns false with a JS exception pending for any other type.
+static bool appendPayloadBytes(JSContext* ctx, JSValueConst data, std::vector<uint8_t>& out) {
+    if (JS_IsString(data)) {
+        size_t len;
+        const char* s = JS_ToCStringLen(ctx, &len, data);
+        if (!s) return false;
+        out.insert(out.end(), reinterpret_cast<const uint8_t*>(s),
+                   reinterpret_cast<const uint8_t*>(s) + len);
+        JS_FreeCString(ctx, s);
+        return true;
+    }
+    size_t size = 0;
+    uint8_t* buf = JS_GetArrayBuffer(ctx, &size, data);
+    if (!buf) {
+        size_t offset, blen;
+        JSValue abuf = JS_GetTypedArrayBuffer(ctx, data, &offset, &blen, nullptr);
+        if (JS_IsException(abuf)) {
+            JS_ThrowTypeError(ctx, "bro.net: data must be a string, ArrayBuffer, "
+                                   "or TypedArray");
+            return false;
+        }
+        buf = JS_GetArrayBuffer(ctx, &size, abuf);
+        JS_FreeValue(ctx, abuf);
+        if (!buf) return false;  // detached — exception already pending
+        buf += offset;
+        size = blen;
+    }
+    if (size > 0) out.insert(out.end(), buf, buf + size);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // bro.net.init() → boolean
 //
@@ -108,31 +209,15 @@ static JSValue js_net_send(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     uint32_t conn = 0;
     JS_ToUint32(ctx, &conn, argv[0]);
 
-    bool reliable = true;
-    if (argc >= 3) reliable = JS_ToBool(ctx, argv[2]);
+    net::SendOptions opts;
+    if (argc >= 3 && !parseSendOptions(ctx, argv[2], opts)) return JS_EXCEPTION;
 
-    if (JS_IsString(argv[1])) {
-        std::string str = jsToString(ctx, argv[1]);
-        s->subscriber->send(conn, str.data(), static_cast<uint32_t>(str.size()), reliable);
-        return JS_TRUE;
-    }
+    std::vector<uint8_t> framed;
+    framed.push_back(kWireMagic);
+    framed.push_back(kWireRaw);
+    if (!appendPayloadBytes(ctx, argv[1], framed)) return JS_EXCEPTION;
 
-    size_t size = 0;
-    uint8_t* buf = JS_GetArrayBuffer(ctx, &size, argv[1]);
-    if (!buf) {
-        size_t offset, blen;
-        JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[1], &offset, &blen, nullptr);
-        if (!JS_IsException(abuf)) {
-            buf = JS_GetArrayBuffer(ctx, &size, abuf);
-            JS_FreeValue(ctx, abuf);
-            if (buf) { buf += offset; size = blen; }
-        } else {
-            JS_FreeValue(ctx, abuf);
-            return JS_ThrowTypeError(ctx, "send() data must be a string, ArrayBuffer, or TypedArray");
-        }
-    }
-    if (!buf) return JS_FALSE;
-    s->subscriber->send(conn, buf, static_cast<uint32_t>(size), reliable);
+    s->subscriber->send(conn, std::move(framed), opts);
     return JS_TRUE;
 }
 
@@ -140,29 +225,91 @@ static JSValue js_net_broadcast(JSContext* ctx, JSValueConst, int argc, JSValueC
     auto* s = getState(ctx);
     if (!s || argc < 1) return JS_UNDEFINED;
 
-    bool reliable = true;
-    if (argc >= 2) reliable = JS_ToBool(ctx, argv[1]);
+    net::SendOptions opts;
+    if (argc >= 2 && !parseSendOptions(ctx, argv[1], opts)) return JS_EXCEPTION;
 
-    if (JS_IsString(argv[0])) {
-        std::string str = jsToString(ctx, argv[0]);
-        s->subscriber->broadcast(str.data(), static_cast<uint32_t>(str.size()), reliable);
-        return JS_UNDEFINED;
-    }
-    size_t size = 0;
-    uint8_t* buf = JS_GetArrayBuffer(ctx, &size, argv[0]);
-    if (!buf) {
-        size_t offset, blen;
-        JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &offset, &blen, nullptr);
-        if (!JS_IsException(abuf)) {
-            buf = JS_GetArrayBuffer(ctx, &size, abuf);
-            JS_FreeValue(ctx, abuf);
-            if (buf) { buf += offset; size = blen; }
-        } else {
-            JS_FreeValue(ctx, abuf);
-        }
-    }
-    if (buf) s->subscriber->broadcast(buf, static_cast<uint32_t>(size), reliable);
+    std::vector<uint8_t> framed;
+    framed.push_back(kWireMagic);
+    framed.push_back(kWireRaw);
+    if (!appendPayloadBytes(ctx, argv[0], framed)) return JS_EXCEPTION;
+
+    s->subscriber->broadcast(std::move(framed), opts);
     return JS_UNDEFINED;
+}
+
+// Serialize `value` as a network structured clone and frame it. Shared by
+// sendClone/broadcastClone. Returns false with a JS exception pending on
+// non-clonable values (functions, Mesh, ImageBitmap, ...).
+static bool buildCloneFrame(JSContext* ctx, JSValueConst value, std::vector<uint8_t>& framed) {
+    Message msg;
+    if (!serializeMessage(ctx, value, JS_UNDEFINED, msg, /*forNetwork=*/true))
+        return false;
+    // forNetwork serialization can never emit pointer-transfer slots; if it
+    // somehow did, sending would leak dangling pointers to the peer. Guard it.
+    if (!msg.transferredBuffers.empty() || !msg.transferredObjects.empty()) {
+        JS_ThrowTypeError(ctx, "sendClone: value contains objects that cannot "
+                               "cross a network");
+        return false;
+    }
+    framed.reserve(kWireHeaderSize + msg.data.size());
+    framed.push_back(kWireMagic);
+    framed.push_back(kWireClone);
+    framed.insert(framed.end(), msg.data.begin(), msg.data.end());
+    return true;
+}
+
+static JSValue js_net_sendClone(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState(ctx);
+    if (!s) return JS_ThrowInternalError(ctx, "bro.net not initialized");
+    if (argc < 2) return JS_ThrowTypeError(ctx, "sendClone() requires (connId, value)");
+
+    uint32_t conn = 0;
+    JS_ToUint32(ctx, &conn, argv[0]);
+
+    net::SendOptions opts;
+    if (argc >= 3 && !parseSendOptions(ctx, argv[2], opts)) return JS_EXCEPTION;
+
+    std::vector<uint8_t> framed;
+    if (!buildCloneFrame(ctx, argv[1], framed)) return JS_EXCEPTION;
+
+    s->subscriber->send(conn, std::move(framed), opts);
+    return JS_TRUE;
+}
+
+static JSValue js_net_broadcastClone(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState(ctx);
+    if (!s) return JS_ThrowInternalError(ctx, "bro.net not initialized");
+    if (argc < 1) return JS_ThrowTypeError(ctx, "broadcastClone() requires a value");
+
+    net::SendOptions opts;
+    if (argc >= 2 && !parseSendOptions(ctx, argv[1], opts)) return JS_EXCEPTION;
+
+    std::vector<uint8_t> framed;
+    if (!buildCloneFrame(ctx, argv[0], framed)) return JS_EXCEPTION;
+
+    s->subscriber->broadcast(std::move(framed), opts);
+    return JS_UNDEFINED;
+}
+
+// Test hook (undocumented): send bytes verbatim, with NO wire header. This is
+// what a buggy or hostile peer looks like to the receiver, so tests use it to
+// prove the receive path drops unrecognized/malformed frames instead of
+// crashing. Not part of the public API.
+static JSValue js_net_sendUnframed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* s = getState(ctx);
+    if (!s || argc < 2) return JS_FALSE;
+
+    uint32_t conn = 0;
+    JS_ToUint32(ctx, &conn, argv[0]);
+
+    net::SendOptions opts;
+    if (argc >= 3 && !parseSendOptions(ctx, argv[2], opts)) return JS_EXCEPTION;
+
+    std::vector<uint8_t> raw;
+    if (!appendPayloadBytes(ctx, argv[1], raw)) return JS_EXCEPTION;
+
+    s->subscriber->send(conn, std::move(raw), opts);
+    return JS_TRUE;
 }
 
 static JSValue js_net_disconnect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -252,6 +399,9 @@ static const JSCFunctionListEntry js_net_funcs[] = {
     JS_CFUNC_DEF("connect", 1, js_net_connect),
     JS_CFUNC_DEF("send", 3, js_net_send),
     JS_CFUNC_DEF("broadcast", 2, js_net_broadcast),
+    JS_CFUNC_DEF("sendClone", 3, js_net_sendClone),
+    JS_CFUNC_DEF("broadcastClone", 2, js_net_broadcastClone),
+    JS_CFUNC_DEF("_sendUnframed", 3, js_net_sendUnframed),
     JS_CFUNC_DEF("disconnect", 2, js_net_disconnect),
     JS_CFUNC_DEF("close", 0, js_net_close),
     JS_CFUNC_DEF("stats", 1, js_net_stats),
@@ -328,17 +478,57 @@ void NetBindings::install(JSContext* ctx, net::NetService* service) {
         auto* s = getState(ctx);
         if (!s) return;
         if (JS_IsUndefined(s->onMessage) || JS_IsNull(s->onMessage)) return;
+
+        // Parse the wire frame. The peer is untrusted: anything that doesn't
+        // carry our magic + a known frame type is dropped with a diagnostic —
+        // never surfaced to JS, never allowed to crash.
+        if (msg.data.size() < kWireHeaderSize || msg.data[0] != kWireMagic) {
+            LOG_WARN("[net] conn %u: dropping message with unrecognized wire "
+                     "framing (%zu bytes)", msg.connection, msg.data.size());
+            return;
+        }
+        const uint8_t frameType = msg.data[1];
+
+        JSValue payload;
+        if (frameType == kWireRaw) {
+            payload = JS_NewArrayBufferCopy(ctx, msg.data.data() + kWireHeaderSize,
+                                            msg.data.size() - kWireHeaderSize);
+        } else if (frameType == kWireClone) {
+            // Deserialize in THIS context — each subscriber's onMessage runs
+            // on its own JS context's thread (main or worker), so values are
+            // materialized where they will be used.
+            Message m;
+            m.data = std::move(msg.data);
+            payload = deserializeMessage(ctx, m, kWireHeaderSize);
+            if (JS_IsException(payload)) {
+                // Malformed clone payload (truncated, hostile, or version
+                // skew). Drop with a diagnostic; the connection stays up.
+                JSValue exc = JS_GetException(ctx);
+                const char* what = JS_ToCString(ctx, exc);
+                LOG_WARN("[net] conn %u: dropping malformed clone payload: %s",
+                         msg.connection, what ? what : "(unknown)");
+                if (what) JS_FreeCString(ctx, what);
+                JS_FreeValue(ctx, exc);
+                return;
+            }
+        } else {
+            LOG_WARN("[net] conn %u: dropping message with unknown frame type "
+                     "0x%02x", msg.connection, frameType);
+            return;
+        }
+
         JSValue func = JS_DupValue(ctx, s->onMessage);
-        JSValue ab = JS_NewArrayBufferCopy(ctx, msg.data.data(), msg.data.size());
-        JSValue args[2] = {
+        JSValue args[3] = {
             JS_NewUint32(ctx, msg.connection),
-            ab
+            payload,
+            JS_NewInt32(ctx, msg.channel),
         };
-        JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 2, args);
+        JSValue ret = JS_Call(ctx, func, JS_UNDEFINED, 3, args);
         if (JS_IsException(ret)) Runtime::checkException(ctx, ret);
         else JS_FreeValue(ctx, ret);
         JS_FreeValue(ctx, args[0]);
         JS_FreeValue(ctx, args[1]);
+        JS_FreeValue(ctx, args[2]);
         JS_FreeValue(ctx, func);
     };
 
