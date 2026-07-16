@@ -198,8 +198,12 @@ JSValue mtGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
         const int F   = T_tok * fpt;
 
         // 4) forward kinematics: explicit features -> world G1 joint positions.
+        // detokenize_to_motion emits NORMALIZED features (global root straight
+        // from the hybrid + normalized decoded body); inverse unnormalizes with
+        // the motion stats before FK, matching inverse(motion, is_normalized=True).
         std::vector<double> mdbl(motion.begin(), motion.end());
-        ardy::ArdyMotionRep::Decoded dec = w->rep.inverse(mdbl.data(), F);
+        ardy::ArdyMotionRep::Decoded dec =
+            w->rep.inverse(mdbl.data(), F, /*is_normalized=*/true);
         const int J = ardy::ArdyMotionRep::kNumJoints;         // 34
 
         std::vector<float> pos(static_cast<std::size_t>(F) * J * 3);
@@ -271,6 +275,9 @@ JSValue mtLoad(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
         auto mean = loadNpyF64AsF32(ckpt + "/stats/motion/mean.npy", sdim);
         auto std_ = loadNpyF64AsF32(ckpt + "/stats/motion/std.npy",  sdim);
         w->denoiser->set_motion_stats(mean.data(), std_.data(), sdim);
+        // The motion rep unnormalizes the 414-dim explicit feature in inverse()
+        // (detokenize output is in normalized space) — same 418-entry stats.
+        w->rep.set_motion_stats(mean.data(), std_.data(), sdim);
 
         // FSQ motion decoder + post-quantization stats.
         w->fsq = std::make_unique<ardy::FsqMotionDecoder>();
