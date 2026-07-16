@@ -33,6 +33,13 @@ out vec3 vTangentW;
 out vec3 vBitangentW;
 out vec4 vInstColor;
 
+// Custom-shader splice point. When an instanced mesh has a user shader, the
+// renderer replaces this marker line with the user's GLSL chunk (which must
+// define `void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv)`)
+// and injects `#define CUSTOM_VERTEX 1` after the #version line. With no
+// user chunk the marker is an inert comment and the source is unchanged.
+//__USER_CHUNK__
+
 void main() {
     // 4x3 row-major affine. Last column of each row holds translation.
     mat3 R = mat3(
@@ -41,18 +48,27 @@ void main() {
         vec3(aInstRow0.z, aInstRow1.z, aInstRow2.z)
     );
     vec3 trans = vec3(aInstRow0.w, aInstRow1.w, aInstRow2.w);
+    vec3 lPos    = aPos;
+    vec3 lNormal = aNormal;
+    vec2 uv      = aUV;
+#ifdef CUSTOM_VERTEX
+    // Custom-shader hook: runs in mesh-local space, BEFORE the per-instance
+    // transform, so a displacement applies identically to every instance in
+    // its own local frame (the analog of "object space" on a static mesh).
+    userVertex(lPos, lNormal, uv);
+#endif
     // Instance rows are node-local (relative to this InstancedMeshNode); apply
     // its parent-chain world transform (e.g. TileWorld's origin) before the
     // camera-relative offset, exactly as renderMeshNode does via uModel.
-    vec3 worldPos = (uInstModel * vec4(R * aPos + trans, 1.0)).xyz;
+    vec3 worldPos = (uInstModel * vec4(R * lPos + trans, 1.0)).xyz;
     vec3 camRel = worldPos - uCameraEye;
     mat3 normalMat = mat3(uInstModel) * R;
 
     vWorldPos = camRel;
-    vNormal = normalMat * aNormal;
+    vNormal = normalMat * lNormal;
     vTangentW   = normalMat * aTangent.xyz;
     vBitangentW = cross(vNormal, vTangentW) * aTangent.w;
-    vUV = aUV;
+    vUV = uv;
     vColor = (uUseVertexColor == 1) ? aColor : vec4(1.0);
     vCamDist = length(camRel);
     vInstColor = aInstColor;

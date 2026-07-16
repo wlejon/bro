@@ -114,19 +114,25 @@ static bool validUserUniformName(const std::string& n) {
     return n.size() >= 3 && n[0] == 'u' && n[1] == '_';
 }
 
+// True when the node carries the custom-shader surface (MeshNode incl.
+// skinned, or InstancedMeshNode).
+static bool isShaderableNode(const NodeWrapper* w) {
+    return w && w->node &&
+           (w->node->type() == scene::SceneNode::Type::Mesh ||
+            w->node->type() == scene::SceneNode::Type::InstancedMesh);
+}
+
 // setShader({ vertex?, fragment?, uniforms? }) — install user GLSL chunks on
-// a static MeshNode. Compiles eagerly (the JS thread owns the GL context);
-// on GLSL compile/link failure throws a SyntaxError carrying the full driver
-// log and leaves the node's previous shader (or the default pipeline)
-// untouched. See docs/scene-api.js for the hook-point contract.
+// a MeshNode (static or skinned) or an InstancedMeshNode. Compiles every
+// program variant the node can render with eagerly (the JS thread owns the
+// GL context); on GLSL compile/link failure throws a SyntaxError carrying
+// the full driver log and leaves the node's previous shader (or the default
+// pipeline) untouched. See docs/scene-api.js for the hook-point contract.
 JSValue js_node_setShader(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Mesh)
-        return JS_ThrowTypeError(ctx, "setShader: not a MeshNode");
-    auto* meshNode = static_cast<scene::MeshNode*>(w->node);
-    if (meshNode->asSkinnedMesh())
+    if (!isShaderableNode(w))
         return JS_ThrowTypeError(ctx,
-            "setShader: custom shaders are not yet supported on skinned meshes");
+            "setShader: not a MeshNode or InstancedMeshNode");
     if (argc < 1 || !JS_IsObject(argv[0]))
         return JS_ThrowTypeError(ctx,
             "setShader: expected { vertex?, fragment?, uniforms? }");
@@ -148,7 +154,7 @@ JSValue js_node_setShader(JSContext* ctx, JSValueConst this_val, int argc, JSVal
 
     // Parse the uniforms object up-front so a malformed entry throws before
     // anything is applied (the call is atomic: all or nothing).
-    std::vector<scene::MeshNode::CustomShaderUniform> uniforms;
+    std::vector<scene::CustomShaderUniform> uniforms;
     std::string badUniform;
     JSValue uobj = JS_GetPropertyStr(ctx, argv[0], "uniforms");
     if (JS_IsObject(uobj)) {
@@ -161,7 +167,7 @@ JSValue js_node_setShader(JSContext* ctx, JSValueConst this_val, int argc, JSVal
                     JSValue key = JS_AtomToValue(ctx, props[i].atom);
                     std::string name = jsStr(ctx, key);
                     JS_FreeValue(ctx, key);
-                    scene::MeshNode::CustomShaderUniform u;
+                    scene::CustomShaderUniform u;
                     u.name = name;
                     JSValue uval = JS_GetProperty(ctx, uobj, props[i].atom);
                     u.comps = parseShaderUniformValue(ctx, uval, u.v);
@@ -183,13 +189,31 @@ JSValue js_node_setShader(JSContext* ctx, JSValueConst this_val, int argc, JSVal
             "setShader: uniform '%s' must use the u_ prefix and be a number "
             "or an array of 1-4 numbers", badUniform.c_str());
 
-    // Eager compile — the program lands in the renderer's cache keyed by the
-    // chunk sources, so the draw path finds it without recompiling.
+    // Eager compile of every variant this node can render with — the
+    // programs land in the renderer's cache keyed by the chunk sources, so
+    // the draw path finds them without recompiling. Skinned nodes compile
+    // Static AND Skinned (a not-ready skin degrades to the static path).
+    // Any failure throws before anything is applied.
     std::string key = vs + '\x1f' + fs;
     std::string err;
-    if (!w->graph || !w->graph->compileCustomShader(key, vs, fs, err))
-        return JS_ThrowSyntaxError(ctx, "%s",
-            err.empty() ? "setShader: no scene graph" : err.c_str());
+    if (!w->graph)
+        return JS_ThrowSyntaxError(ctx, "setShader: no scene graph");
+    using Target = scene::SceneRenderer::CustomShaderTarget;
+    if (w->node->type() == scene::SceneNode::Type::InstancedMesh) {
+        auto* instNode = static_cast<scene::InstancedMeshNode*>(w->node);
+        if (!w->graph->compileCustomShader(Target::Instanced, key, vs, fs, err))
+            return JS_ThrowSyntaxError(ctx, "%s", err.c_str());
+        instNode->setCustomShader(std::move(vs), std::move(fs));
+        for (const auto& u : uniforms)
+            instNode->setCustomShaderUniform(u.name, u.comps, u.v);
+        return JS_DupValue(ctx, this_val);
+    }
+    auto* meshNode = static_cast<scene::MeshNode*>(w->node);
+    if (!w->graph->compileCustomShader(Target::Static, key, vs, fs, err))
+        return JS_ThrowSyntaxError(ctx, "%s", err.c_str());
+    if (meshNode->asSkinnedMesh() &&
+        !w->graph->compileCustomShader(Target::Skinned, key, vs, fs, err))
+        return JS_ThrowSyntaxError(ctx, "%s", err.c_str());
 
     meshNode->setCustomShader(std::move(vs), std::move(fs));
     for (const auto& u : uniforms)
@@ -202,10 +226,14 @@ JSValue js_node_setShader(JSContext* ctx, JSValueConst this_val, int argc, JSVal
 // node, so meshes sharing a program keep independent values.
 JSValue js_node_setShaderUniform(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Mesh)
-        return JS_ThrowTypeError(ctx, "setShaderUniform: not a MeshNode");
-    auto* meshNode = static_cast<scene::MeshNode*>(w->node);
-    if (!meshNode->hasCustomShader())
+    if (!isShaderableNode(w))
+        return JS_ThrowTypeError(ctx,
+            "setShaderUniform: not a MeshNode or InstancedMeshNode");
+    const bool inst = w->node->type() == scene::SceneNode::Type::InstancedMesh;
+    const bool hasShader =
+        inst ? static_cast<scene::InstancedMeshNode*>(w->node)->hasCustomShader()
+             : static_cast<scene::MeshNode*>(w->node)->hasCustomShader();
+    if (!hasShader)
         return JS_ThrowTypeError(ctx,
             "setShaderUniform: no custom shader set (call setShader first)");
     if (argc < 2 || !JS_IsString(argv[0]))
@@ -220,7 +248,12 @@ JSValue js_node_setShaderUniform(JSContext* ctx, JSValueConst this_val, int argc
     if (comps == 0)
         return JS_ThrowTypeError(ctx,
             "setShaderUniform: value must be a number or an array of 1-4 numbers");
-    meshNode->setCustomShaderUniform(name, comps, v);
+    if (inst)
+        static_cast<scene::InstancedMeshNode*>(w->node)
+            ->setCustomShaderUniform(name, comps, v);
+    else
+        static_cast<scene::MeshNode*>(w->node)
+            ->setCustomShaderUniform(name, comps, v);
     return JS_DupValue(ctx, this_val);
 }
 
@@ -229,9 +262,13 @@ JSValue js_node_setShaderUniform(JSContext* ctx, JSValueConst this_val, int argc
 // The cached program stays in the renderer for future reuse.
 JSValue js_node_clearShader(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Mesh)
-        return JS_ThrowTypeError(ctx, "clearShader: not a MeshNode");
-    static_cast<scene::MeshNode*>(w->node)->clearCustomShader();
+    if (!isShaderableNode(w))
+        return JS_ThrowTypeError(ctx,
+            "clearShader: not a MeshNode or InstancedMeshNode");
+    if (w->node->type() == scene::SceneNode::Type::InstancedMesh)
+        static_cast<scene::InstancedMeshNode*>(w->node)->clearCustomShader();
+    else
+        static_cast<scene::MeshNode*>(w->node)->clearCustomShader();
     return JS_DupValue(ctx, this_val);
 }
 

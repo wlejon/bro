@@ -1188,27 +1188,34 @@ class SceneNode {
   setBaseColorTexture(tex) {}
 
 
-  // --- Custom shaders (static MeshNode) ---------------------------------------
+  // --- Custom shaders (MeshNode, SkinnedMeshNode, InstancedMeshNode) ----------
   //
   // ShaderMaterial-style hooks: user GLSL chunks spliced into the engine's
-  // mesh uber-shader, so custom code composes with everything the material
+  // mesh uber-shaders, so custom code composes with everything the material
   // system already does — textures, the 32-light PBR loop, shadows, IBL,
   // fog, tonemap. You write GLSL 330 core function bodies, not whole
-  // shaders; the engine owns the pipeline around them.
+  // shaders; the engine owns the pipeline around them. One chunk pair works
+  // across all three mesh flavours — the engine compiles a program variant
+  // per pipeline (static / skinned / instanced) behind the scenes.
 
   /**
-   * Install custom shader chunks on a static MeshNode. Chunks are GLSL 330
-   * core fragments spliced into the engine mesh shader at global scope; at
-   * least one of `vertex` / `fragment` is required.
+   * Install custom shader chunks on a MeshNode (static or skinned) or an
+   * InstancedMeshNode. Chunks are GLSL 330 core fragments spliced into the
+   * engine mesh shader at global scope; at least one of `vertex` /
+   * `fragment` is required.
    *
    * The vertex chunk must define:
    *
    *   void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv)
    *
-   * It runs in OBJECT space, after wind sway and before the camera
-   * transforms — displace `pos` and the world position, lighting, fog and
-   * shadows-received all track it. `normal` is the object-space normal, `uv`
-   * feeds every texture lookup downstream.
+   * It runs in OBJECT space, after skinning and wind sway and before the
+   * camera transforms — displace `pos` and the world position, lighting,
+   * fog and shadows all track it. On a skinned mesh the hook receives the
+   * POSED position/normal (displacements ride the animation); on an
+   * instanced mesh it runs in mesh-local space before the per-instance
+   * transform, so the displacement applies identically to every instance in
+   * its own frame. `normal` is the object-space normal, `uv` feeds every
+   * texture lookup downstream.
    *
    * The fragment chunk must define:
    *
@@ -1234,20 +1241,30 @@ class SceneNode {
    *     vNormal, vUV, vColor, vCamDist — and engine uniforms like uWindTime.
    *
    * Semantics and limits:
-   *   - Compilation happens NOW, at set time. Invalid GLSL throws a
-   *     SyntaxError carrying the full driver log; the node keeps its
-   *     previous shader (or the default pipeline) — nothing half-applies.
-   *   - Identical chunk sources across meshes share one compiled program;
-   *     uniform VALUES stay per-node. Programs are cached for the scene's
-   *     lifetime (no eviction).
+   *   - Compilation happens NOW, at set time — every program variant the
+   *     node can render with. Invalid GLSL throws a SyntaxError carrying
+   *     the full driver log; the node keeps its previous shader (or the
+   *     default pipeline) — nothing half-applies.
+   *   - Identical chunk sources across meshes share one compiled program
+   *     per pipeline flavour; uniform VALUES stay per-node. Programs are
+   *     cached for the scene's lifetime (no eviction).
    *   - A custom shader forces the LIT pass: while one is set, the `unlit`
    *     flag is ignored (unlit meshes normally draw post-tonemap, where the
    *     hook's PBR inputs don't exist). clearShader() restores it.
-   *   - Shadows: the mesh still casts shadows, but the depth-only shadow
-   *     pass does NOT run userVertex — a vertex-displaced mesh casts the
-   *     undisplaced silhouette.
-   *   - Static meshes only for now: throws on skinned meshes; instanced
-   *     meshes don't have this method.
+   *   - Shadows: the depth-only shadow pass runs userVertex too, so a
+   *     vertex-displaced MeshNode (static or skinned) casts the DISPLACED
+   *     silhouette; fragment-only shaders keep the shared default shadow
+   *     program. Exceptions: instanced meshes cast undisplaced shadows,
+   *     and a vertex chunk that references mesh-pass-only symbols (e.g. a
+   *     varying it declares) falls back to the undisplaced silhouette with
+   *     a warning instead of failing.
+   *   - Culling: frustum/shadow culling can't see GLSL — a displacement
+   *     that pushes geometry outside the mesh's AABB can be culled while
+   *     still visible. Set node.cullMargin to the max displacement (world
+   *     units) to pad the bounds (same contract as Godot's
+   *     extra_cull_margin). On an instanced mesh the hook displaces in
+   *     mesh-local space, so scaled instances move displacement x scale in
+   *     world units — size cullMargin for the largest instance scale.
    *
    *   // pulse a fresnel-ish rim via a driven uniform
    *   const node = scene.createMesh({ mesh: 'sphere', color: '#334455' });
@@ -1270,7 +1287,8 @@ class SceneNode {
    * @param {Object.<string, number|number[]>} [opts.uniforms] - initial
    *        `u_`-prefixed uniform values (number, or array of 1-4 numbers)
    * @returns {SceneNode} this
-   * @throws {TypeError} bad argument shapes, non-`u_` uniform names, skinned mesh
+   * @throws {TypeError} bad argument shapes, non-`u_` uniform names,
+   *         non-mesh node
    * @throws {SyntaxError} GLSL compile/link failure (message = driver log)
    */
   setShader(opts) {}
@@ -1295,8 +1313,21 @@ class SceneNode {
    */
   clearShader() {}
 
-  /** True while a custom shader is installed on this MeshNode (read-only). */
+  /**
+   * True while a custom shader is installed on this MeshNode /
+   * InstancedMeshNode (read-only).
+   */
   get hasShader() {}
+
+  /**
+   * Extra world-space padding (units) added to this node's frustum- and
+   * shadow-culling bounds. Culling can't see what a custom vertex shader
+   * does — set this to the maximum displacement so geometry pushed outside
+   * the mesh AABB isn't culled while still visible. 0 by default; Mesh and
+   * InstancedMesh nodes only (undefined elsewhere).
+   * @type {number}
+   */
+  cullMargin = 0;
 
 
   // --- SkinnedMeshNode-only -------------------------------------------------

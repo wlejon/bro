@@ -15,6 +15,7 @@
 
 #include "mesh.vert.h"
 #include "mesh.frag.h"
+#include "mesh_instanced.vert.h"
 
 namespace bro::scene {
 
@@ -119,7 +120,18 @@ void SceneRenderer::ensureSkinnedMeshPipeline() {
     }
 }
 
-bool SceneRenderer::compileCustomShader(const std::string& key,
+// Cache-key prefix per program variant, so one chunk pair maps to up to
+// three independent color programs (static / skinned / instanced).
+static const char* customTargetTag(SceneRenderer::CustomShaderTarget t) {
+    switch (t) {
+        case SceneRenderer::CustomShaderTarget::Skinned:   return "S\x1f";
+        case SceneRenderer::CustomShaderTarget::Instanced: return "I\x1f";
+        default:                                           return "M\x1f";
+    }
+}
+
+bool SceneRenderer::compileCustomShader(CustomShaderTarget target,
+                                        const std::string& key,
                                         const std::string& vertexChunk,
                                         const std::string& fragmentChunk,
                                         std::string& errOut) {
@@ -130,38 +142,82 @@ bool SceneRenderer::compileCustomShader(const std::string& key,
         errOut = "custom shaders require GPU rendering (no GL context)";
         return false;
     }
-    return ensureCustomProgram(key, vertexChunk, fragmentChunk, &errOut) != nullptr;
+    if (!ensureCustomProgram(target, key, vertexChunk, fragmentChunk, &errOut))
+        return false;
+    // Eagerly build the matching shadow variant so a displaced mesh's first
+    // shadow frame doesn't hitch on a compile — and so the fallback warning
+    // (chunk references a mesh-pass-only symbol) surfaces at set time, not
+    // mid-scene. Fragment-only shaders keep the shared default shadow
+    // program; instanced shadows always do (undisplaced silhouette).
+    if (!vertexChunk.empty() && target != CustomShaderTarget::Instanced)
+        ensureCustomShadowProgram(target == CustomShaderTarget::Skinned,
+                                  vertexChunk);
+    return true;
 }
 
 SceneRenderer::CustomProgramEntry* SceneRenderer::ensureCustomProgram(
-        const std::string& key, const std::string& vertexChunk,
-        const std::string& fragmentChunk, std::string* errOut) {
-    auto it = customPrograms_.find(key);
+        CustomShaderTarget target, const std::string& key,
+        const std::string& vertexChunk, const std::string& fragmentChunk,
+        std::string* errOut) {
+    std::string cacheKey = customTargetTag(target) + key;
+    auto it = customPrograms_.find(cacheKey);
     if (it != customPrograms_.end()) return &it->second;
 
-    std::string vsSrc = withUserChunk(kMeshVertSrc, vertexChunk, "CUSTOM_VERTEX");
-    std::string fsSrc = withUserChunk(kMeshFragSrc, fragmentChunk, "CUSTOM_FRAGMENT");
+    std::string vsSrc, fsSrc;
+    switch (target) {
+        case CustomShaderTarget::Static:
+            vsSrc = withUserChunk(kMeshVertSrc, vertexChunk, "CUSTOM_VERTEX");
+            fsSrc = withUserChunk(kMeshFragSrc, fragmentChunk, "CUSTOM_FRAGMENT");
+            break;
+        case CustomShaderTarget::Skinned: {
+            std::string skinned = withSkinnedDefine(kMeshVertSrc);
+            vsSrc = withUserChunk(skinned.c_str(), vertexChunk, "CUSTOM_VERTEX");
+            fsSrc = withUserChunk(kMeshFragSrc, fragmentChunk, "CUSTOM_FRAGMENT");
+            break;
+        }
+        case CustomShaderTarget::Instanced: {
+            std::string instFrag = makeMeshInstancedFragSrc();
+            vsSrc = withUserChunk(kMeshInstancedVertSrc, vertexChunk,
+                                  "CUSTOM_VERTEX");
+            fsSrc = withUserChunk(instFrag.c_str(), fragmentChunk,
+                                  "CUSTOM_FRAGMENT");
+            break;
+        }
+    }
     GLuint prog = linkProgramCapture(vsSrc.c_str(), fsSrc.c_str(), errOut);
     if (!prog) return nullptr;
 
-    CustomProgramEntry& e = customPrograms_[key];
+    CustomProgramEntry& e = customPrograms_[cacheKey];
     e.prog = prog;
-    queryMeshUniformLocs(prog, e.draw, e.locs);
+    if (target == CustomShaderTarget::Instanced) {
+        queryInstancedUniformLocs(prog, e.instDraw, e.locs);
+    } else {
+        queryMeshUniformLocs(prog, e.draw, e.locs);
+        if (target == CustomShaderTarget::Skinned) {
+            // Bind the palette block once, same as ensureSkinnedMeshPipeline
+            // — per-node palettes rebind the buffer, not the block.
+            GLuint bi = glGetUniformBlockIndex(prog, "BonePalette");
+            if (bi != GL_INVALID_INDEX) {
+                glUniformBlockBinding(prog, bi,
+                                      SkinnedMeshNode::kPaletteBinding);
+            }
+        }
+    }
     return &e;
 }
 
-void SceneRenderer::uploadCustomUniforms(CustomProgramEntry& e,
-                                         const MeshNode* mesh) {
-    const MeshNode::CustomShaderState* st = mesh->customShader();
+void SceneRenderer::uploadUserUniforms(
+        GLuint prog, std::unordered_map<std::string, GLint>& cache,
+        const CustomShaderState* st) {
     if (!st) return;
     for (const auto& u : st->uniforms) {
         GLint loc;
-        auto it = e.userLocs.find(u.name);
-        if (it != e.userLocs.end()) {
+        auto it = cache.find(u.name);
+        if (it != cache.end()) {
             loc = it->second;
         } else {
-            loc = glGetUniformLocation(e.prog, u.name.c_str());
-            e.userLocs.emplace(u.name, loc);
+            loc = glGetUniformLocation(prog, u.name.c_str());
+            cache.emplace(u.name, loc);
         }
         if (loc < 0) continue;   // not declared / optimized out — silent, like GL
         switch (u.comps) {
@@ -202,13 +258,9 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
     glUniform3fv(L.emissiveColor, 1, mesh->emissiveColor());
     glUniform1f(L.metallic, mesh->metallic());
     glUniform1f(L.roughness, mesh->roughness());
-    // A custom shader forces the lit path: uUnlit would early-return in the
-    // fragment shader before the userFragment hook, so it is suppressed
-    // while a shader is set (the mesh renders lit, pre-tonemap — see the
-    // routing in render3D and docs/scene-api.js setShader).
-    if (L.unlit >= 0)
-        glUniform1i(L.unlit,
-                    (mesh->unlit() && !mesh->hasCustomShader()) ? 1 : 0);
+    // A custom shader forces the lit path — see MeshNode::effectiveUnlit
+    // (the mesh renders lit, pre-tonemap; routing in render3D agrees).
+    if (L.unlit >= 0) glUniform1i(L.unlit, mesh->effectiveUnlit() ? 1 : 0);
     if (L.twoSided >= 0)   glUniform1i(L.twoSided, mesh->twoSided() ? 1 : 0);
     if (L.subsurface >= 0) glUniform1f(L.subsurface, mesh->subsurface());
     if (L.alphaCutoff >= 0) glUniform1f(L.alphaCutoff, mesh->alphaCutoff());

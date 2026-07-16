@@ -24,8 +24,10 @@ using bromath::Mat4;
 // Build the instanced fragment shader by mutating the regular kMeshFragSrc:
 // add `in vec4 vInstColor;`, an optional atlas-grid UV remap on the base
 // color sample, and multiply baseColor by the instance RGB tint. Done at
-// runtime so the two shaders cannot drift apart accidentally.
-static std::string makeMeshInstancedFragSrc() {
+// runtime so the two shaders cannot drift apart accidentally. Declared in
+// scene_renderer_internal.h — the custom-shader path (ensureCustomProgram,
+// scene_renderer_mesh.cpp) splices user fragment chunks into this source.
+std::string makeMeshInstancedFragSrc() {
     std::string s = kMeshFragSrc;
     // Add the instance-only varying + uniform alongside the existing
     // varyings. uAlphaCutoff is already declared (and applied) by the base
@@ -74,6 +76,67 @@ static std::string makeMeshInstancedFragSrc() {
     return s;
 }
 
+void SceneRenderer::queryInstancedUniformLocs(GLuint prog, InstancedDrawLocs& d,
+                                              MeshProgramLocs& l) {
+    auto U = [prog](const char* name) {
+        return glGetUniformLocation(prog, name);
+    };
+    d.vp             = U("uVP");
+    d.cameraEye      = U("uCameraEye");
+    d.instModel      = U("uInstModel");
+    d.color          = U("uColor");
+    d.emissive       = U("uEmissive");
+    d.emissiveColor  = U("uEmissiveColor");
+    d.metallic       = U("uMetallic");
+    d.roughness      = U("uRoughness");
+    d.unlit          = U("uUnlit");
+    d.useVertexColor = U("uUseVertexColor");
+    d.nearClip       = U("uNearClip");
+    d.useTexture     = U("uUseTexture");
+    d.baseColorTex   = U("uBaseColorTex");
+    d.normalMap      = U("uNormalMap");
+    d.mrMap          = U("uMRMap");
+    d.aoMap          = U("uAOMap");
+    d.emissiveMap    = U("uEmissiveMap");
+    d.hasTangent     = U("uHasTangent");
+    d.hasNormalMap   = U("uHasNormalMap");
+    d.hasMRMap       = U("uHasMRMap");
+    d.hasAOMap       = U("uHasAOMap");
+    d.hasEmissiveMap = U("uHasEmissiveMap");
+    d.receivesShadow = U("uReceivesShadow");
+    d.fogStart       = U("uFogStart");
+    d.fogEnd         = U("uFogEnd");
+    d.fogColor       = U("uFogColor");
+    d.ambient        = U("uAmbient");
+    d.atlasGrid      = U("uAtlasGrid");
+    d.alphaCutoff    = U("uAlphaCutoff");
+
+    l.lightCount           = U("uLightCount");
+    l.lightType            = U("uLightType");
+    l.lightPos             = U("uLightPos");
+    l.lightDir             = U("uLightDir");
+    l.lightColor           = U("uLightColor");
+    l.lightIntensity       = U("uLightIntensity");
+    l.lightRange           = U("uLightRange");
+    l.lightSpotCos         = U("uLightSpotCos");
+    l.lightShadowSlot      = U("uLightShadowSlot");
+    l.lightShadowSlotCount = U("uLightShadowSlotCount");
+    l.lightCascadeSplit    = U("uLightCascadeSplit");
+    l.shadowAtlas          = U("uShadowAtlas");
+    l.shadowMatrix         = U("uShadowMatrix");
+    l.shadowAtlasRect      = U("uShadowAtlasRect");
+    l.shadowBias           = U("uShadowBias");
+    l.shadowAtlasTexel     = U("uShadowAtlasTexel");
+    l.shadowPCFTaps        = U("uShadowPCFTaps");
+    l.iblEnabled           = U("uIBLEnabled");
+    l.iblIrradiance        = U("uIBLIrradiance");
+    l.iblPrefilter         = U("uIBLPrefilter");
+    l.iblBRDF              = U("uIBLBRDF");
+    l.iblIntensity         = U("uIBLIntensity");
+    l.iblRotation          = U("uIBLRotation");
+    l.iblPrefilterMaxLOD   = U("uIBLPrefilterMaxLOD");
+}
+
 void SceneRenderer::ensureInstancedMeshPipeline() {
     if (meshInstancedProgram_) return;
 
@@ -82,79 +145,28 @@ void SceneRenderer::ensureInstancedMeshPipeline() {
 
     if (!meshInstancedProgram_) return;
 
-    auto getU = [&](const char* n) { return glGetUniformLocation(meshInstancedProgram_, n); };
-    uInstVP_              = getU("uVP");
-    uInstCameraEye_       = getU("uCameraEye");
-    uInstModel_           = getU("uInstModel");
-    uInstColor_           = getU("uColor");
-    uInstEmissive_        = getU("uEmissive");
-    uInstEmissiveColor_   = getU("uEmissiveColor");
-    uInstMetallic_        = getU("uMetallic");
-    uInstRoughness_       = getU("uRoughness");
-    uInstUseVertexColor_  = getU("uUseVertexColor");
-    uInstUseTexture_      = getU("uUseTexture");
-    uInstBaseColorTex_    = getU("uBaseColorTex");
-    uInstHasTangent_      = getU("uHasTangent");
-    uInstHasNormalMap_    = getU("uHasNormalMap");
-    uInstHasMRMap_        = getU("uHasMRMap");
-    uInstHasAOMap_        = getU("uHasAOMap");
-    uInstHasEmissiveMap_  = getU("uHasEmissiveMap");
-    uInstNormalMap_       = getU("uNormalMap");
-    uInstMRMap_           = getU("uMRMap");
-    uInstAOMap_           = getU("uAOMap");
-    uInstEmissiveMap_     = getU("uEmissiveMap");
-    uInstReceivesShadow_  = getU("uReceivesShadow");
-    uInstFogStart_        = getU("uFogStart");
-    uInstFogEnd_          = getU("uFogEnd");
-    uInstFogColor_        = getU("uFogColor");
-    uInstNearClip_        = getU("uNearClip");
-    uInstAmbient_         = getU("uAmbient");
-    uInstUnlit_           = getU("uUnlit");
-    uInstAtlasGrid_       = getU("uAtlasGrid");
-    uInstAlphaCutoff_     = getU("uAlphaCutoff");
-
-    meshInstLocs_.lightCount           = getU("uLightCount");
-    meshInstLocs_.lightType            = getU("uLightType");
-    meshInstLocs_.lightPos             = getU("uLightPos");
-    meshInstLocs_.lightDir             = getU("uLightDir");
-    meshInstLocs_.lightColor           = getU("uLightColor");
-    meshInstLocs_.lightIntensity       = getU("uLightIntensity");
-    meshInstLocs_.lightRange           = getU("uLightRange");
-    meshInstLocs_.lightSpotCos         = getU("uLightSpotCos");
-    meshInstLocs_.lightShadowSlot      = getU("uLightShadowSlot");
-    meshInstLocs_.lightShadowSlotCount = getU("uLightShadowSlotCount");
-    meshInstLocs_.lightCascadeSplit    = getU("uLightCascadeSplit");
-    meshInstLocs_.shadowAtlas          = getU("uShadowAtlas");
-    meshInstLocs_.shadowMatrix         = getU("uShadowMatrix");
-    meshInstLocs_.shadowAtlasRect      = getU("uShadowAtlasRect");
-    meshInstLocs_.shadowBias           = getU("uShadowBias");
-    meshInstLocs_.shadowAtlasTexel     = getU("uShadowAtlasTexel");
-    meshInstLocs_.shadowPCFTaps        = getU("uShadowPCFTaps");
-    meshInstLocs_.iblEnabled           = getU("uIBLEnabled");
-    meshInstLocs_.iblIrradiance        = getU("uIBLIrradiance");
-    meshInstLocs_.iblPrefilter         = getU("uIBLPrefilter");
-    meshInstLocs_.iblBRDF              = getU("uIBLBRDF");
-    meshInstLocs_.iblIntensity         = getU("uIBLIntensity");
-    meshInstLocs_.iblRotation          = getU("uIBLRotation");
-    meshInstLocs_.iblPrefilterMaxLOD   = getU("uIBLPrefilterMaxLOD");
+    queryInstancedUniformLocs(meshInstancedProgram_, meshInstDraw_, meshInstLocs_);
 }
 
-void SceneRenderer::renderInstancedMeshNode(InstancedMeshNode* mesh) {
-    glUniformMatrix4fv(uInstModel_, 1, GL_FALSE, mesh->worldMatrix().data);
-    glUniform4fv(uInstColor_, 1, mesh->color());
-    glUniform1f(uInstEmissive_, mesh->emissive());
-    glUniform3fv(uInstEmissiveColor_, 1, mesh->emissiveColor());
-    glUniform1f(uInstMetallic_, mesh->metallic());
-    glUniform1f(uInstRoughness_, mesh->roughness());
-    if (uInstUnlit_ >= 0) glUniform1i(uInstUnlit_, mesh->unlit() ? 1 : 0);
-    glUniform1i(uInstUseVertexColor_, mesh->vertexColorTintEnabled() ? 1 : 0);
-    glUniform1f(uInstNearClip_, mesh->nearClipDist());
+void SceneRenderer::renderInstancedMeshNode(InstancedMeshNode* mesh,
+                                            const InstancedDrawLocs& L) {
+    glUniformMatrix4fv(L.instModel, 1, GL_FALSE, mesh->worldMatrix().data);
+    glUniform4fv(L.color, 1, mesh->color());
+    glUniform1f(L.emissive, mesh->emissive());
+    glUniform3fv(L.emissiveColor, 1, mesh->emissiveColor());
+    glUniform1f(L.metallic, mesh->metallic());
+    glUniform1f(L.roughness, mesh->roughness());
+    // Same rule as renderMeshNode: a custom shader forces the lit path
+    // (see InstancedMeshNode::effectiveUnlit).
+    if (L.unlit >= 0) glUniform1i(L.unlit, mesh->effectiveUnlit() ? 1 : 0);
+    glUniform1i(L.useVertexColor, mesh->vertexColorTintEnabled() ? 1 : 0);
+    glUniform1f(L.nearClip, mesh->nearClipDist());
 
     bool bindTex = mesh->hasBaseColorTexture();
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, bindTex ? mesh->baseColorTextureId() : fallback2D_);
-    glUniform1i(uInstBaseColorTex_, 0);
-    glUniform1i(uInstUseTexture_, bindTex ? 1 : 0);
+    glUniform1i(L.baseColorTex, 0);
+    glUniform1i(L.useTexture, bindTex ? 1 : 0);
 
     bool hasNM = mesh->hasNormalTexture();
     bool hasMR = mesh->hasMetallicRoughnessTexture();
@@ -163,31 +175,31 @@ void SceneRenderer::renderInstancedMeshNode(InstancedMeshNode* mesh) {
     if (hasNM) {
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D, mesh->normalTextureId());
-        if (uInstNormalMap_ >= 0) glUniform1i(uInstNormalMap_, 5);
+        if (L.normalMap >= 0) glUniform1i(L.normalMap, 5);
     }
     if (hasMR) {
         glActiveTexture(GL_TEXTURE6);
         glBindTexture(GL_TEXTURE_2D, mesh->metallicRoughnessTextureId());
-        if (uInstMRMap_ >= 0) glUniform1i(uInstMRMap_, 6);
+        if (L.mrMap >= 0) glUniform1i(L.mrMap, 6);
     }
     if (hasAO) {
         glActiveTexture(GL_TEXTURE7);
         glBindTexture(GL_TEXTURE_2D, mesh->occlusionTextureId());
-        if (uInstAOMap_ >= 0) glUniform1i(uInstAOMap_, 7);
+        if (L.aoMap >= 0) glUniform1i(L.aoMap, 7);
     }
     if (hasEM) {
         glActiveTexture(GL_TEXTURE8);
         glBindTexture(GL_TEXTURE_2D, mesh->emissiveTextureId());
-        if (uInstEmissiveMap_ >= 0) glUniform1i(uInstEmissiveMap_, 8);
+        if (L.emissiveMap >= 0) glUniform1i(L.emissiveMap, 8);
     }
-    if (uInstHasTangent_     >= 0) glUniform1i(uInstHasTangent_,     mesh->mesh().hasTangents() ? 1 : 0);
-    if (uInstHasNormalMap_   >= 0) glUniform1i(uInstHasNormalMap_,   hasNM ? 1 : 0);
-    if (uInstHasMRMap_       >= 0) glUniform1i(uInstHasMRMap_,       hasMR ? 1 : 0);
-    if (uInstHasAOMap_       >= 0) glUniform1i(uInstHasAOMap_,       hasAO ? 1 : 0);
-    if (uInstHasEmissiveMap_ >= 0) glUniform1i(uInstHasEmissiveMap_, hasEM ? 1 : 0);
-    if (uInstReceivesShadow_ >= 0) glUniform1i(uInstReceivesShadow_, mesh->receivesShadow() ? 1 : 0);
-    if (uInstAtlasGrid_      >= 0) glUniform2f(uInstAtlasGrid_, (float)mesh->atlasCols(), (float)mesh->atlasRows());
-    if (uInstAlphaCutoff_    >= 0) glUniform1f(uInstAlphaCutoff_, mesh->alphaCutoff());
+    if (L.hasTangent     >= 0) glUniform1i(L.hasTangent,     mesh->mesh().hasTangents() ? 1 : 0);
+    if (L.hasNormalMap   >= 0) glUniform1i(L.hasNormalMap,   hasNM ? 1 : 0);
+    if (L.hasMRMap       >= 0) glUniform1i(L.hasMRMap,       hasMR ? 1 : 0);
+    if (L.hasAOMap       >= 0) glUniform1i(L.hasAOMap,       hasAO ? 1 : 0);
+    if (L.hasEmissiveMap >= 0) glUniform1i(L.hasEmissiveMap, hasEM ? 1 : 0);
+    if (L.receivesShadow >= 0) glUniform1i(L.receivesShadow, mesh->receivesShadow() ? 1 : 0);
+    if (L.atlasGrid      >= 0) glUniform2f(L.atlasGrid, (float)mesh->atlasCols(), (float)mesh->atlasRows());
+    if (L.alphaCutoff    >= 0) glUniform1f(L.alphaCutoff, mesh->alphaCutoff());
 
     bool ds = mesh->doubleSided();
     if (ds) glDisable(GL_CULL_FACE);

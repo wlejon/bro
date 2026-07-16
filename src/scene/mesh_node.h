@@ -1,5 +1,6 @@
 #pragma once
 
+#include "scene/custom_shader.h"
 #include "scene/scene_node.h"
 #include <bromath/aabb.h>
 #include <bromesh/mesh_data.h>
@@ -165,6 +166,13 @@ public:
     void setUnlit(bool u) { unlit_ = u; }
     bool unlit() const { return unlit_; }
 
+    /// The unlit flag as the renderer applies it: a custom shader suppresses
+    /// unlit (its early-return would skip the userFragment hook, and unlit
+    /// meshes draw post-tonemap where the hook's PBR inputs don't exist).
+    /// Every pass — color routing, uUnlit upload, shadow caster gather —
+    /// keys off this so they can never disagree.
+    bool effectiveUnlit() const { return unlit_ && !customShader_; }
+
     // --- PBR material ---
     // baseColor is the existing color_[4] (RGB used as linear albedo, A as
     // mesh transparency). metallic/roughness follow the glTF convention:
@@ -237,63 +245,36 @@ public:
     void setWindMask(float m) { windMask_ = m; }
     float windMask() const { return windMask_; }
 
-    // --- Custom shader (static meshes only for now) ---
-    // User GLSL chunks spliced into the mesh uber-shader (see the
-    // //__USER_CHUNK__ markers in mesh.vert / mesh.frag). The node stores
-    // only sources + numeric uniform values — the compiled programs live in
-    // SceneRenderer's cache, keyed by `key`, so identical sources across
-    // nodes share one program. Compilation/validation happens in the
-    // renderer (SceneGraph::compileCustomShader) BEFORE this state is set,
-    // so a node with custom-shader state always maps to a linked program.
-
-    struct CustomShaderUniform {
-        std::string name;      // must carry the `u_` user-namespace prefix
-        int comps = 1;         // 1..4 → float / vec2 / vec3 / vec4
-        float v[4] = {0.0f, 0.0f, 0.0f, 0.0f};
-    };
-
-    struct CustomShaderState {
-        std::string vertexChunk;
-        std::string fragmentChunk;
-        std::string key;       // program-cache key: vertex + '\x1f' + fragment
-        std::vector<CustomShaderUniform> uniforms;
-    };
+    // --- Custom shader ---
+    // See custom_shader.h for the shared state struct (same surface exists
+    // on InstancedMeshNode). Works on static AND skinned meshes — the
+    // renderer picks the SKINNED program variant for a ready skin.
 
     /// Install user shader chunks (either may be empty, not both — callers
     /// validate). Replaces any previous shader; uniform values reset.
     void setCustomShader(std::string vertexChunk, std::string fragmentChunk) {
-        auto st = std::make_unique<CustomShaderState>();
-        st->key = vertexChunk + '\x1f' + fragmentChunk;
-        st->vertexChunk = std::move(vertexChunk);
-        st->fragmentChunk = std::move(fragmentChunk);
-        customShader_ = std::move(st);
+        customShader_ = CustomShaderState::make(std::move(vertexChunk),
+                                                std::move(fragmentChunk));
     }
     void clearCustomShader() { customShader_.reset(); }
     bool hasCustomShader() const { return customShader_ != nullptr; }
     const CustomShaderState* customShader() const { return customShader_.get(); }
 
-    /// Set (or update) a numeric user-uniform value on this node. Values are
-    /// plain floats — nothing JS-owned — and are uploaded per draw, so two
-    /// nodes sharing a program can carry different values. No-op without a
-    /// custom shader installed.
+    /// Set (or update) a numeric user-uniform value on this node. No-op
+    /// without a custom shader installed.
     void setCustomShaderUniform(const std::string& name, int comps,
                                 const float* vals) {
-        if (!customShader_) return;
-        if (comps < 1) comps = 1;
-        if (comps > 4) comps = 4;
-        for (auto& u : customShader_->uniforms) {
-            if (u.name == name) {
-                u.comps = comps;
-                for (int i = 0; i < comps; ++i) u.v[i] = vals[i];
-                return;
-            }
-        }
-        CustomShaderUniform u;
-        u.name = name;
-        u.comps = comps;
-        for (int i = 0; i < comps; ++i) u.v[i] = vals[i];
-        customShader_->uniforms.push_back(std::move(u));
+        if (customShader_) customShader_->setUniform(name, comps, vals);
     }
+
+    // --- Culling margin ---
+    // Extra world-space padding (in units) added to this node's frustum- and
+    // shadow-culling bounds. A custom vertex shader that displaces geometry
+    // beyond the mesh's AABB can otherwise be culled while still visible —
+    // set this to the maximum displacement (Godot's extra_cull_margin has
+    // the same contract). 0 by default.
+    void setCullMargin(float m) { cullMargin_ = m < 0.0f ? 0.0f : m; }
+    float cullMargin() const { return cullMargin_; }
 
     /// Upload/release any dirty staged texture slots. GL thread only. The
     /// renderer calls this before reading material texture state so runtime
@@ -391,6 +372,7 @@ private:
     // Custom shader chunks + user-uniform values (null = default pipeline).
     // Heap-allocated so the common shaderless mesh pays one pointer.
     std::unique_ptr<CustomShaderState> customShader_;
+    float cullMargin_ = 0.0f;
 };
 
 } // namespace bro::scene

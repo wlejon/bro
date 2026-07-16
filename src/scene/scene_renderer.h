@@ -17,6 +17,7 @@ class MeshNode;
 class InstancedMeshNode;
 class LightNode;
 class Particles3DNode;
+struct CustomShaderState;
 
 /// Per-frame frustum-culling counters, reset at the top of every render3D().
 /// "Drawn" counts nodes submitted to a pass (including nodes without valid
@@ -170,16 +171,29 @@ public:
     void  setEnvironmentRotation(float r) { envRotation_ = r; }
     float environmentRotation() const { return envRotation_; }
 
-    // --- Custom mesh shaders (static MeshNode only) ---
+    // --- Custom mesh shaders ---
+
+    /// Which mesh pipeline a custom-shader program variant targets. Static
+    /// and Skinned share mesh.vert/mesh.frag (SKINNED define); Instanced
+    /// splices into mesh_instanced.vert + the derived instanced fragment
+    /// source. Each target caches its own program per chunk pair.
+    enum class CustomShaderTarget : uint8_t { Static, Skinned, Instanced };
 
     /// Eagerly compile + cache the mesh program variant for a pair of user
     /// GLSL chunks (either may be empty). Returns true when the program
     /// linked (or was already cached); on failure returns false with the
     /// full driver log in errOut and caches nothing. GL thread only — the
     /// JS thread owns the main context, so setShader can validate at set
-    /// time. `key` must be MeshNode::CustomShaderState::key for the same
-    /// chunk pair (vertex + '\x1f' + fragment).
-    bool compileCustomShader(const std::string& key,
+    /// time. `key` must be CustomShaderState::key for the same chunk pair
+    /// (vertex + '\x1f' + fragment).
+    ///
+    /// A non-empty vertex chunk also eagerly compiles the matching shadow
+    /// program variant (Static/Skinned targets) so displaced meshes cast
+    /// displaced silhouettes. Shadow-variant failure is NOT an error — the
+    /// caster falls back to the shared default shadow program with a
+    /// warning (a chunk can legally reference mesh-pass-only symbols).
+    bool compileCustomShader(CustomShaderTarget target,
+                             const std::string& key,
                              const std::string& vertexChunk,
                              const std::string& fragmentChunk,
                              std::string& errOut);
@@ -201,10 +215,26 @@ private:
               fogStart = -1, fogEnd = -1, fogColor = -1, ambient = -1,
               windDir = -1, windStrength = -1, windTime = -1, windFreq = -1;
     };
+    // Per-program uniform locations for the instanced mesh pipeline
+    // (everything renderInstancedMeshNode + the per-frame globals touch).
+    // The instanced vertex shader reads the model matrix from per-instance
+    // attributes, so vp/cameraEye/instModel replace the per-mesh mvp/model.
+    struct InstancedDrawLocs {
+        GLint vp = -1, cameraEye = -1, instModel = -1, color = -1,
+              emissive = -1, emissiveColor = -1, metallic = -1,
+              roughness = -1, unlit = -1, useVertexColor = -1,
+              nearClip = -1, useTexture = -1, baseColorTex = -1,
+              normalMap = -1, mrMap = -1, aoMap = -1, emissiveMap = -1,
+              hasTangent = -1, hasNormalMap = -1, hasMRMap = -1,
+              hasAOMap = -1, hasEmissiveMap = -1, receivesShadow = -1,
+              fogStart = -1, fogEnd = -1, fogColor = -1, ambient = -1,
+              atlasGrid = -1, alphaCutoff = -1;
+    };
     struct MeshProgramLocs;  // lighting/shadow/IBL locs — defined below
 
     void renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L);
-    void renderInstancedMeshNode(InstancedMeshNode* mesh);
+    void renderInstancedMeshNode(InstancedMeshNode* mesh,
+                                 const InstancedDrawLocs& L);
     void ensureInstancedMeshPipeline();
     void renderGaussianSplatNodes();
     void renderBillboardNode(SceneNode* node);
@@ -228,6 +258,11 @@ private:
     // both link mesh.frag, so the surface is identical) into a draw-locs +
     // light-locs pair. Defined in scene_renderer_mesh.cpp.
     void queryMeshUniformLocs(GLuint prog, MeshDrawLocs& d, MeshProgramLocs& l);
+
+    // Same, for a program linking mesh_instanced.vert + the derived
+    // instanced fragment source. Defined in scene_renderer_instanced.cpp.
+    void queryInstancedUniformLocs(GLuint prog, InstancedDrawLocs& d,
+                                   MeshProgramLocs& l);
 
     // --- Mesh GL pipeline (lazy init) ---
     void ensureMeshPipeline();
@@ -318,34 +353,64 @@ private:
                       const MeshProgramLocs& locs);
 
     // --- Custom-shader program cache -----------------------------------
-    // One linked mesh-program variant per distinct user chunk pair, keyed by
-    // the chunk sources (vertex + '\x1f' + fragment), so meshes with
-    // identical shaders share a program. Entries live until renderer
-    // teardown — no eviction; a scene cycling through many distinct shader
-    // sources holds them all (cheap: a GL program + two locs structs each).
-    // userLocs lazily caches glGetUniformLocation results for user uniforms
-    // (misses cache as -1 so a typo'd name is one query, not one per draw).
+    // One linked mesh-program variant per distinct (target, chunk pair),
+    // keyed by a target tag + the chunk sources (vertex + '\x1f' +
+    // fragment), so meshes with identical shaders share a program per
+    // target. Entries live until renderer teardown — no eviction; a scene
+    // cycling through many distinct shader sources holds them all (cheap: a
+    // GL program + a few locs structs each). userLocs lazily caches
+    // glGetUniformLocation results for user uniforms (misses cache as -1 so
+    // a typo'd name is one query, not one per draw). `draw` is valid for
+    // Static/Skinned entries, `instDraw` for Instanced ones.
     struct CustomProgramEntry {
         GLuint prog = 0;
         MeshDrawLocs draw;
+        InstancedDrawLocs instDraw;
         MeshProgramLocs locs;
         std::unordered_map<std::string, GLint> userLocs;
     };
     std::unordered_map<std::string, CustomProgramEntry> customPrograms_;
 
-    // Look up (compiling on miss) the program for a chunk pair. Returns
-    // nullptr with the driver log in errOut on compile/link failure (nothing
-    // cached — the next call retries). Pointer stays valid until teardown
-    // (unordered_map nodes are stable across rehash). Defined in
+    // Look up (compiling on miss) the program for a (target, chunk pair).
+    // Returns nullptr with the driver log in errOut on compile/link failure
+    // (nothing cached — the next call retries). Pointer stays valid until
+    // teardown (unordered_map nodes are stable across rehash). Defined in
     // scene_renderer_mesh.cpp (owns the embedded mesh shader sources).
-    CustomProgramEntry* ensureCustomProgram(const std::string& key,
+    CustomProgramEntry* ensureCustomProgram(CustomShaderTarget target,
+                                            const std::string& key,
                                             const std::string& vertexChunk,
                                             const std::string& fragmentChunk,
                                             std::string* errOut);
 
-    // Upload a mesh's user-uniform values to the entry's program (must be
-    // bound). Defined in scene_renderer_mesh.cpp.
-    void uploadCustomUniforms(CustomProgramEntry& e, const MeshNode* mesh);
+    // Upload one node's user-uniform values to `prog` (must be bound),
+    // caching locations in `cache`. Defined in scene_renderer_mesh.cpp.
+    void uploadUserUniforms(GLuint prog,
+                            std::unordered_map<std::string, GLint>& cache,
+                            const CustomShaderState* st);
+
+    // --- Custom shadow-program cache ------------------------------------
+    // Depth-only shadow.vert variants with a user vertex chunk spliced in
+    // (per Static/Skinned flavour), so vertex-displaced meshes cast the
+    // displaced silhouette. Keyed by flavour tag + vertex chunk ONLY —
+    // fragment-only shaders never allocate one (they keep the shared
+    // default shadow program). Unlike the mesh cache, failures are cached
+    // (prog == 0): a chunk can legally reference mesh-pass-only symbols, in
+    // which case the caster falls back to the default shadow program with a
+    // one-time warning instead of a per-frame recompile attempt.
+    struct CustomShadowEntry {
+        GLuint prog = 0;
+        GLint mvp = -1, model = -1, windDir = -1, windStrength = -1,
+              windTime = -1, windFreq = -1, windMask = -1;
+        std::unordered_map<std::string, GLint> userLocs;
+    };
+    std::unordered_map<std::string, CustomShadowEntry> customShadowPrograms_;
+
+    // Look up (compiling on miss) the shadow variant for a vertex chunk.
+    // Returns nullptr when the variant failed to compile (cached failure —
+    // use the default shadow program). Defined in scene_renderer_shadow.cpp
+    // (owns the embedded shadow shader sources).
+    CustomShadowEntry* ensureCustomShadowProgram(bool skinned,
+                                                 const std::string& vertexChunk);
 
     // --- Shadow pipeline (lazy init) ---
     // Atlas-tiled shadow maps: a single big depth texture sub-divided into N
@@ -402,63 +467,11 @@ private:
     MeshDrawLocs meshSkinnedDraw_;
 
     // Instanced mesh program (vertex shader reads model matrix from per-instance
-    // attributes; fragment shader is shared with the regular mesh program). Only
-    // a small subset of uniforms differ — uVPInst_ replaces the per-mesh uMVP_
-    // and uModel_ since the model matrix lives in the vertex stream.
+    // attributes; fragment shader is derived from the regular mesh fragment
+    // source). meshInstDraw_ holds its uniform locations, the instanced
+    // analog of meshDraw_; light locs live in meshInstLocs_ below.
     GLuint meshInstancedProgram_ = 0;
-    GLint uInstVP_ = -1;
-    GLint uInstColor_ = -1;
-    GLint uInstEmissive_ = -1;
-    GLint uInstEmissiveColor_ = -1;
-    GLint uInstMetallic_ = -1;
-    GLint uInstRoughness_ = -1;
-    GLint uInstUseVertexColor_ = -1;
-    GLint uInstUseTexture_ = -1;
-    GLint uInstBaseColorTex_ = -1;
-    GLint uInstHasTangent_ = -1;
-    GLint uInstHasNormalMap_ = -1;
-    GLint uInstHasMRMap_ = -1;
-    GLint uInstHasAOMap_ = -1;
-    GLint uInstHasEmissiveMap_ = -1;
-    GLint uInstNormalMap_ = -1;
-    GLint uInstMRMap_ = -1;
-    GLint uInstAOMap_ = -1;
-    GLint uInstEmissiveMap_ = -1;
-    GLint uInstReceivesShadow_ = -1;
-    GLint uInstFogStart_ = -1;
-    GLint uInstFogEnd_ = -1;
-    GLint uInstFogColor_ = -1;
-    GLint uInstNearClip_ = -1;
-    GLint uInstAmbient_ = -1;
-    GLint uInstUnlit_ = -1;
-    GLint uInstLightCount_ = -1;
-    GLint uInstLightType_ = -1;
-    GLint uInstLightPos_ = -1;
-    GLint uInstLightDirArr_ = -1;
-    GLint uInstLightColor_ = -1;
-    GLint uInstLightIntensity_ = -1;
-    GLint uInstLightRange_ = -1;
-    GLint uInstLightSpotCos_ = -1;
-    GLint uInstLightShadowSlot_ = -1;
-    GLint uInstLightShadowSlotCount_ = -1;
-    GLint uInstLightCascadeSplit_ = -1;
-    GLint uInstShadowAtlas_ = -1;
-    GLint uInstShadowMatrix_ = -1;
-    GLint uInstShadowAtlasRect_ = -1;
-    GLint uInstShadowBiasArr_ = -1;
-    GLint uInstShadowAtlasTexel_ = -1;
-    GLint uInstShadowPCFTaps_ = -1;
-    GLint uInstIBLEnabled_ = -1;
-    GLint uInstIBLIrradiance_ = -1;
-    GLint uInstIBLPrefilter_ = -1;
-    GLint uInstIBLBRDF_ = -1;
-    GLint uInstIBLIntensity_ = -1;
-    GLint uInstIBLRotation_ = -1;
-    GLint uInstIBLPrefilterMaxLOD_ = -1;
-    GLint uInstCameraEye_ = -1;
-    GLint uInstModel_ = -1;
-    GLint uInstAtlasGrid_ = -1;
-    GLint uInstAlphaCutoff_ = -1;
+    InstancedDrawLocs meshInstDraw_;
 
     // Mesh FBO. The depth-stencil attachment is a texture (not an RBO) so
     // the soft-particle pass can sample scene depth; the tonemap FBO
@@ -641,8 +654,14 @@ private:
     // Cache per-frame shadow caster list; rebuilt at top of prepareShadows.
     // Skinned casters render with the SKINNED shadow program so their
     // shadows deform with the palette instead of staying in bind pose.
+    // Casters whose custom shader has a VERTEX chunk split into the custom
+    // lists (sorted by chunk source so programs bind once per group) and
+    // render with the spliced shadow variant — displaced silhouettes.
+    // Fragment-only custom shaders stay in the default lists.
     std::vector<MeshNode*> shadowCasters_;
     std::vector<MeshNode*> shadowSkinnedCasters_;
+    std::vector<MeshNode*> shadowCustomCasters_;
+    std::vector<MeshNode*> shadowSkinnedCustomCasters_;
     std::vector<InstancedMeshNode*> shadowInstancedCasters_;
 
     // 1×1 fallback textures bound to sampler units when the real textures

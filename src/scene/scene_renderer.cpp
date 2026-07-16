@@ -39,6 +39,10 @@ SceneRenderer::~SceneRenderer() {
         if (entry.prog) glDeleteProgram(entry.prog);
     }
     customPrograms_.clear();
+    for (auto& [key, entry] : customShadowPrograms_) {
+        if (entry.prog) glDeleteProgram(entry.prog);
+    }
+    customShadowPrograms_.clear();
     if (meshSkinnedProgram_) { glDeleteProgram(meshSkinnedProgram_); meshSkinnedProgram_ = 0; }
     if (meshInstancedProgram_) { glDeleteProgram(meshInstancedProgram_); meshInstancedProgram_ = 0; }
     if (bbProgram_) { glDeleteProgram(bbProgram_); bbProgram_ = 0; }
@@ -274,9 +278,12 @@ bool SceneRenderer::nodeWorldBounds(SceneNode* n, bromath::AABB3& out) const {
         if (sm && sm->skinReady()) local = sm->posedLocalBounds();
         out = bromath::atransform(local, m->worldMatrix());
         // Wind sway displaces vertices in world space by at most
-        // |windDir| * strength * windMask (per-vertex bend <= 1).
+        // |windDir| * strength * windMask (per-vertex bend <= 1). cullMargin
+        // is the user's promise about custom-vertex-shader displacement —
+        // the engine can't infer it from GLSL (see setCullMargin).
         float pad = m->windMask() * windStrength_ *
-                    bromath::vlen(Vec3{windDir_[0], windDir_[1], windDir_[2]});
+                    bromath::vlen(Vec3{windDir_[0], windDir_[1], windDir_[2]}) +
+                    m->cullMargin();
         if (pad > 0.0f) {
             out.min = out.min - Vec3{pad, pad, pad};
             out.max = out.max + Vec3{pad, pad, pad};
@@ -287,8 +294,9 @@ bool SceneRenderer::nodeWorldBounds(SceneNode* n, bromath::AABB3& out) const {
         auto* m = static_cast<InstancedMeshNode*>(n);
         float lo[3], hi[3];
         if (!m->computeWorldInstanceBounds(lo, hi)) return false;
-        out.min = {lo[0], lo[1], lo[2]};
-        out.max = {hi[0], hi[1], hi[2]};
+        const float pad = m->cullMargin();
+        out.min = {lo[0] - pad, lo[1] - pad, lo[2] - pad};
+        out.max = {hi[0] + pad, hi[1] + pad, hi[2] + pad};
         return true;
     }
     case SceneNode::Type::GaussianSplat: {
@@ -429,6 +437,7 @@ void SceneRenderer::render3D() {
             std::vector<MeshNode*> skinnedMeshes;
             std::vector<MeshNode*> unlitSkinnedMeshes;
             std::vector<MeshNode*> customMeshes;
+            std::vector<MeshNode*> customSkinnedMeshes;
             if (hasMeshNodes && meshProgram_) {
                 glEnable(GL_CULL_FACE);
                 glCullFace(GL_BACK);
@@ -446,14 +455,21 @@ void SceneRenderer::render3D() {
                         } else {
                             cullStats_.meshDrawn++;
                             auto* sm = m->asSkinnedMesh();
-                            if (sm && sm->skinReady()) {
-                                (m->unlit() ? unlitSkinnedMeshes : skinnedMeshes)
-                                    .push_back(m);
-                            } else if (m->hasCustomShader()) {
+                            if (m->hasCustomShader()) {
                                 // Custom shader wins over unlit: the mesh
                                 // renders lit (pre-tonemap) so the fragment
                                 // hook actually runs; see renderMeshNode.
-                                customMeshes.push_back(m);
+                                // Skinned meshes with a ready skin take the
+                                // SKINNED custom variant (its sub-pass binds
+                                // the palette); a not-ready skin degrades to
+                                // the static variant, same as the default
+                                // pipeline's routing.
+                                ((sm && sm->skinReady()) ? customSkinnedMeshes
+                                                         : customMeshes)
+                                    .push_back(m);
+                            } else if (sm && sm->skinReady()) {
+                                (m->unlit() ? unlitSkinnedMeshes : skinnedMeshes)
+                                    .push_back(m);
                             } else if (m->unlit()) {
                                 unlitMeshes.push_back(m);
                             } else {
@@ -478,27 +494,35 @@ void SceneRenderer::render3D() {
                     }
                 }
 
-                // Custom-shader sub-pass: identical state, one cached
-                // program variant per distinct chunk pair. Meshes are
-                // grouped by program key so shared programs bind once;
+                // Custom-shader sub-passes: identical state, one cached
+                // program variant per distinct (target, chunk pair). Meshes
+                // are grouped by program key so shared programs bind once;
                 // per-mesh user uniforms upload per draw (two meshes on one
                 // program keep independent values). setShader compiles
                 // eagerly, so the cache lookup normally hits; a miss that
                 // fails to compile falls back to the default program so the
-                // mesh still renders.
-                if (!customMeshes.empty()) {
-                    std::stable_sort(customMeshes.begin(), customMeshes.end(),
+                // mesh still renders. The skinned bucket uses the SKINNED
+                // variant (palette UBO block pre-bound at link time;
+                // renderMeshNode's prepareSkinnedDraw binds the buffer).
+                auto drawCustomMeshes = [&](std::vector<MeshNode*>& meshes,
+                                            CustomShaderTarget target,
+                                            const MeshDrawLocs& fallbackDraw,
+                                            const MeshProgramLocs& fallbackLocs,
+                                            GLuint fallbackProg) {
+                    if (meshes.empty()) return;
+                    std::stable_sort(meshes.begin(), meshes.end(),
                         [](MeshNode* a, MeshNode* b) {
                             return a->customShader()->key < b->customShader()->key;
                         });
                     const std::string* boundKey = nullptr;
                     CustomProgramEntry* entry = nullptr;
-                    for (MeshNode* m : customMeshes) {
+                    for (MeshNode* m : meshes) {
                         const auto* st = m->customShader();
                         if (!boundKey || *boundKey != st->key) {
                             boundKey = &st->key;
                             std::string err;
-                            entry = ensureCustomProgram(st->key, st->vertexChunk,
+                            entry = ensureCustomProgram(target, st->key,
+                                                        st->vertexChunk,
                                                         st->fragmentChunk, &err);
                             if (entry) {
                                 glUseProgram(entry->prog);
@@ -507,17 +531,34 @@ void SceneRenderer::render3D() {
                             } else {
                                 LOG_ERROR("Custom shader failed at draw "
                                           "(rendering default): %s", err.c_str());
-                                glUseProgram(meshProgram_);
+                                glUseProgram(fallbackProg);
+                                uploadMeshGlobals(fallbackDraw);
+                                uploadLights(activeLights, fallbackLocs);
                             }
                         }
                         if (entry) {
-                            uploadCustomUniforms(*entry, m);
+                            uploadUserUniforms(entry->prog, entry->userLocs,
+                                               m->customShader());
                             renderMeshNode(m, entry->draw);
                         } else {
-                            renderMeshNode(m, meshDraw_);
+                            renderMeshNode(m, fallbackDraw);
                         }
                     }
                     glUseProgram(meshProgram_);
+                };
+                drawCustomMeshes(customMeshes, CustomShaderTarget::Static,
+                                 meshDraw_, meshLocs_, meshProgram_);
+                if (!customSkinnedMeshes.empty()) {
+                    // Fallback for a failed skinned variant is the DEFAULT
+                    // skinned program — a static program would draw the
+                    // bind pose.
+                    ensureSkinnedMeshPipeline();
+                    if (meshSkinnedProgram_) {
+                        drawCustomMeshes(customSkinnedMeshes,
+                                         CustomShaderTarget::Skinned,
+                                         meshSkinnedDraw_, meshSkinnedLocs_,
+                                         meshSkinnedProgram_);
+                    }
                 }
 
                 glDisable(GL_CULL_FACE);
@@ -536,37 +577,90 @@ void SceneRenderer::render3D() {
                 if (meshInstancedProgram_) {
                     glEnable(GL_CULL_FACE);
                     glCullFace(GL_BACK);
-                    glUseProgram(meshInstancedProgram_);
 
                     Mat4 viewRot = graph_.viewMatrix_;
                     viewRot.at(0, 3) = 0.0f;
                     viewRot.at(1, 3) = 0.0f;
                     viewRot.at(2, 3) = 0.0f;
                     Mat4 vp = bromath::mmul(graph_.projectionMatrix_, viewRot);
-                    glUniformMatrix4fv(uInstVP_, 1, GL_FALSE, vp.data);
-                    glUniform3f(uInstCameraEye_, graph_.cameraEye_.x, graph_.cameraEye_.y, graph_.cameraEye_.z);
 
-                    glUniform1f(uInstFogStart_, fogStart_);
-                    glUniform1f(uInstFogEnd_, fogEnd_);
-                    glUniform3f(uInstFogColor_, fogColor_[0], fogColor_[1], fogColor_[2]);
-                    glUniform3f(uInstAmbient_, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
-                    uploadLights(activeLights, meshInstLocs_);
+                    // Per-program frame globals for whichever instanced
+                    // program variant is currently bound (default now,
+                    // custom variants in the sub-pass below).
+                    auto uploadInstGlobals = [&](const InstancedDrawLocs& L,
+                                                 const MeshProgramLocs& locs) {
+                        glUniformMatrix4fv(L.vp, 1, GL_FALSE, vp.data);
+                        glUniform3f(L.cameraEye, graph_.cameraEye_.x,
+                                    graph_.cameraEye_.y, graph_.cameraEye_.z);
+                        glUniform1f(L.fogStart, fogStart_);
+                        glUniform1f(L.fogEnd, fogEnd_);
+                        glUniform3f(L.fogColor, fogColor_[0], fogColor_[1], fogColor_[2]);
+                        glUniform3f(L.ambient, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
+                        uploadLights(activeLights, locs);
+                    };
+                    glUseProgram(meshInstancedProgram_);
+                    uploadInstGlobals(meshInstDraw_, meshInstLocs_);
 
+                    // Default-shader nodes draw during the walk; custom-
+                    // shader nodes are deferred and grouped by program key.
+                    std::vector<InstancedMeshNode*> customInstanced;
                     std::function<void(SceneNode*)> walkInst = [&](SceneNode* n) {
                         if (!n->visible()) return;
                         if (n->type() == SceneNode::Type::InstancedMesh) {
+                            auto* m = static_cast<InstancedMeshNode*>(n);
                             // Whole-node test against the world bounds of all
                             // instances — no per-instance culling.
-                            if (cameraCulled(n)) {
+                            if (cameraCulled(m)) {
                                 cullStats_.instancedCulled++;
                             } else {
                                 cullStats_.instancedDrawn++;
-                                renderInstancedMeshNode(static_cast<InstancedMeshNode*>(n));
+                                if (m->hasCustomShader()) {
+                                    customInstanced.push_back(m);
+                                } else {
+                                    renderInstancedMeshNode(m, meshInstDraw_);
+                                }
                             }
                         }
                         for (auto* c : n->children()) walkInst(c);
                     };
                     walkInst(graph_.root_.get());
+
+                    // Custom-shader instanced sub-pass — same grouping/
+                    // fallback contract as the mesh sub-passes above.
+                    if (!customInstanced.empty()) {
+                        std::stable_sort(customInstanced.begin(), customInstanced.end(),
+                            [](InstancedMeshNode* a, InstancedMeshNode* b) {
+                                return a->customShader()->key < b->customShader()->key;
+                            });
+                        const std::string* boundKey = nullptr;
+                        CustomProgramEntry* entry = nullptr;
+                        for (InstancedMeshNode* m : customInstanced) {
+                            const auto* st = m->customShader();
+                            if (!boundKey || *boundKey != st->key) {
+                                boundKey = &st->key;
+                                std::string err;
+                                entry = ensureCustomProgram(
+                                    CustomShaderTarget::Instanced, st->key,
+                                    st->vertexChunk, st->fragmentChunk, &err);
+                                if (entry) {
+                                    glUseProgram(entry->prog);
+                                    uploadInstGlobals(entry->instDraw, entry->locs);
+                                } else {
+                                    LOG_ERROR("Custom shader failed at draw "
+                                              "(rendering default): %s", err.c_str());
+                                    glUseProgram(meshInstancedProgram_);
+                                    uploadInstGlobals(meshInstDraw_, meshInstLocs_);
+                                }
+                            }
+                            if (entry) {
+                                uploadUserUniforms(entry->prog, entry->userLocs,
+                                                   m->customShader());
+                                renderInstancedMeshNode(m, entry->instDraw);
+                            } else {
+                                renderInstancedMeshNode(m, meshInstDraw_);
+                            }
+                        }
+                    }
 
                     glDisable(GL_CULL_FACE);
                 }

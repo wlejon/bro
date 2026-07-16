@@ -59,6 +59,47 @@ void SceneRenderer::ensureShadowSkinnedPipeline() {
     }
 }
 
+SceneRenderer::CustomShadowEntry* SceneRenderer::ensureCustomShadowProgram(
+        bool skinned, const std::string& vertexChunk) {
+    std::string cacheKey = (skinned ? "S\x1f" : "M\x1f") + vertexChunk;
+    auto it = customShadowPrograms_.find(cacheKey);
+    if (it != customShadowPrograms_.end())
+        return it->second.prog ? &it->second : nullptr;
+
+    std::string vsSrc = skinned ? withSkinnedDefine(kShadowVertSrc)
+                                : std::string(kShadowVertSrc);
+    vsSrc = withUserChunk(vsSrc.c_str(), vertexChunk, "CUSTOM_VERTEX");
+    std::string err;
+    GLuint prog = linkProgramCapture(vsSrc.c_str(), kShadowFragSrc, &err);
+
+    // Cache failures too (prog stays 0): the chunk may reference symbols
+    // that exist only in the mesh pass (e.g. a custom varying it writes) —
+    // the caster then keeps the default shadow program (undisplaced
+    // silhouette) instead of retrying the compile every frame.
+    CustomShadowEntry& e = customShadowPrograms_[cacheKey];
+    e.prog = prog;
+    if (!prog) {
+        LOG_WARN("Custom vertex chunk failed to compile against the "
+                 "shadow shader — the mesh casts its undisplaced "
+                 "silhouette: %s", err.c_str());
+        return nullptr;
+    }
+    e.mvp          = glGetUniformLocation(prog, "uMVP");
+    e.model        = glGetUniformLocation(prog, "uModel");
+    e.windDir      = glGetUniformLocation(prog, "uWindDir");
+    e.windStrength = glGetUniformLocation(prog, "uWindStrength");
+    e.windTime     = glGetUniformLocation(prog, "uWindTime");
+    e.windFreq     = glGetUniformLocation(prog, "uWindFreq");
+    e.windMask     = glGetUniformLocation(prog, "uWindMask");
+    if (skinned) {
+        GLuint bi = glGetUniformBlockIndex(prog, "BonePalette");
+        if (bi != GL_INVALID_INDEX) {
+            glUniformBlockBinding(prog, bi, SkinnedMeshNode::kPaletteBinding);
+        }
+    }
+    return &e;
+}
+
 void SceneRenderer::ensureShadowAtlas() {
     if (shadowAtlasTex_ && shadowAtlasAllocated_ == shadowAtlasSize_ && !shadowAtlasDirty_) return;
     destroyShadowAtlas();
@@ -130,8 +171,16 @@ SceneRenderer::WorldAABB SceneRenderer::computeShadowCasterBounds() const {
         if (!n || !n->visible()) return;
         if (n->type() == SceneNode::Type::Mesh) {
             auto* m = static_cast<MeshNode*>(n);
-            if (!m->unlit() && !m->mesh().empty()) {
+            // Same unlit rule as the caster gather (effectiveUnlit): a
+            // custom shader suppresses unlit, so such meshes count here too.
+            if (!m->effectiveUnlit() && !m->mesh().empty()) {
+                // cullMargin pads the fit the same way it pads culling
+                // bounds (world units) — a custom vertex shader can displace
+                // geometry along the light direction past the bind-pose
+                // AABB, and the directional depth range is fit from these
+                // bounds.
                 const auto& bb = m->localBounds();
+                const float cm = m->cullMargin();
                 const Mat4& M = m->worldMatrix();
                 for (int c = 0; c < 8; ++c) {
                     Vec3 lp{
@@ -140,12 +189,12 @@ SceneRenderer::WorldAABB SceneRenderer::computeShadowCasterBounds() const {
                         (c & 4) ? bb.max.z : bb.min.z,
                     };
                     Vec3 wp = bromath::mtransformPoint(M, lp);
-                    out.min[0] = std::min(out.min[0], wp.x);
-                    out.min[1] = std::min(out.min[1], wp.y);
-                    out.min[2] = std::min(out.min[2], wp.z);
-                    out.max[0] = std::max(out.max[0], wp.x);
-                    out.max[1] = std::max(out.max[1], wp.y);
-                    out.max[2] = std::max(out.max[2], wp.z);
+                    out.min[0] = std::min(out.min[0], wp.x - cm);
+                    out.min[1] = std::min(out.min[1], wp.y - cm);
+                    out.min[2] = std::min(out.min[2], wp.z - cm);
+                    out.max[0] = std::max(out.max[0], wp.x + cm);
+                    out.max[1] = std::max(out.max[1], wp.y + cm);
+                    out.max[2] = std::max(out.max[2], wp.z + cm);
                     out.empty = false;
                 }
             }
@@ -153,6 +202,8 @@ SceneRenderer::WorldAABB SceneRenderer::computeShadowCasterBounds() const {
             auto* m = static_cast<InstancedMeshNode*>(n);
             float wlo[3], whi[3];
             if (m->computeWorldInstanceBounds(wlo, whi)) {
+                const float cm = m->cullMargin();
+                for (int i = 0; i < 3; ++i) { wlo[i] -= cm; whi[i] += cm; }
                 expand(wlo, whi);
             }
         }
@@ -167,6 +218,8 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     shadowTileCount_ = 0;
     shadowCasters_.clear();
     shadowSkinnedCasters_.clear();
+    shadowCustomCasters_.clear();
+    shadowSkinnedCustomCasters_.clear();
     shadowInstancedCasters_.clear();
     for (int i = 0; i < 32; ++i) {
         lightShadowSlot_[i] = -1;
@@ -182,29 +235,51 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     }
     if (!anyCaster) return;
 
-    // Gather shadow-casting meshes once. Unlit meshes never cast. Skinned
-    // meshes (ready skin) go in their own list so the skinned depth shader
-    // deforms their silhouettes; frustum fitting still uses their bind-pose
-    // bounds via computeShadowCasterBounds (the directional depth range is
-    // padded by the whole-scene extent, so palette motion stays covered).
+    // Gather shadow-casting meshes once. Unlit meshes never cast (a custom
+    // shader suppresses unlit in the color pass, so custom-shader casters
+    // route on castsShadow alone). Skinned meshes (ready skin) go in their
+    // own list so the skinned depth shader deforms their silhouettes;
+    // frustum fitting still uses their bind-pose bounds via
+    // computeShadowCasterBounds (the directional depth range is padded by
+    // the whole-scene extent, so palette motion stays covered). Casters
+    // with a custom VERTEX chunk split further into the custom lists and
+    // render with the spliced shadow variant — displaced silhouettes;
+    // fragment-only shaders stay on the default depth program.
+    auto hasVertexChunk = [](const MeshNode* m) {
+        return m->hasCustomShader() && !m->customShader()->vertexChunk.empty();
+    };
     auto gather = [&](auto&& self, SceneNode* n) -> void {
         if (!n || !n->visible()) return;
         if (n->type() == SceneNode::Type::Mesh) {
             auto* m = static_cast<MeshNode*>(n);
-            if (!m->unlit() && m->castsShadow() && !m->mesh().empty()) {
+            if (!m->effectiveUnlit() && m->castsShadow() && !m->mesh().empty()) {
                 auto* sm = m->asSkinnedMesh();
-                if (sm && sm->skinReady()) shadowSkinnedCasters_.push_back(m);
-                else                       shadowCasters_.push_back(m);
+                if (sm && sm->skinReady()) {
+                    (hasVertexChunk(m) ? shadowSkinnedCustomCasters_
+                                       : shadowSkinnedCasters_).push_back(m);
+                } else {
+                    (hasVertexChunk(m) ? shadowCustomCasters_
+                                       : shadowCasters_).push_back(m);
+                }
             }
         } else if (n->type() == SceneNode::Type::InstancedMesh) {
             auto* m = static_cast<InstancedMeshNode*>(n);
-            if (!m->unlit() && m->castsShadow() && !m->mesh().empty() && m->instanceCount() > 0)
+            if (!m->effectiveUnlit() && m->castsShadow() && !m->mesh().empty() && m->instanceCount() > 0)
                 shadowInstancedCasters_.push_back(m);
         }
         for (auto* c : n->children()) self(self, c);
     };
     gather(gather, graph_.root_.get());
+    // Group the custom casters by chunk source so the per-tile loop binds
+    // each shadow variant once per group.
+    auto byChunk = [](MeshNode* a, MeshNode* b) {
+        return a->customShader()->vertexChunk < b->customShader()->vertexChunk;
+    };
+    std::stable_sort(shadowCustomCasters_.begin(), shadowCustomCasters_.end(), byChunk);
+    std::stable_sort(shadowSkinnedCustomCasters_.begin(),
+                     shadowSkinnedCustomCasters_.end(), byChunk);
     if (shadowCasters_.empty() && shadowSkinnedCasters_.empty() &&
+        shadowCustomCasters_.empty() && shadowSkinnedCustomCasters_.empty() &&
         shadowInstancedCasters_.empty()) return;
 
     // Scene bounds for fitting directional frustums. CSM uses view-frustum
@@ -475,6 +550,11 @@ void SceneRenderer::renderShadowPass() {
     if (hasInstancedCasters) ensureShadowInstancedPipeline();
     const bool hasSkinnedCasters = !shadowSkinnedCasters_.empty();
     if (hasSkinnedCasters) ensureShadowSkinnedPipeline();
+    const bool hasCustomCasters = !shadowCustomCasters_.empty();
+    const bool hasSkinnedCustomCasters = !shadowSkinnedCustomCasters_.empty();
+    // Custom casters whose shadow variant failed to compile (cached failure
+    // in ensureCustomShadowProgram) fall back to the default depth programs.
+    if (hasSkinnedCustomCasters) ensureShadowSkinnedPipeline();
 
     glBindFramebuffer(GL_FRAMEBUFFER, shadowAtlasFBO_);
     glViewport(0, 0, shadowAtlasSize_, shadowAtlasSize_);
@@ -512,7 +592,8 @@ void SceneRenderer::renderShadowPass() {
     // frame (posed for skinned casters); a caster without valid bounds draws
     // into every tile.
     struct CasterBounds { bromath::AABB3 box; bool valid; };
-    std::vector<CasterBounds> staticBounds, skinnedBounds, instBounds;
+    std::vector<CasterBounds> staticBounds, skinnedBounds, instBounds,
+                              customBounds, skinnedCustomBounds;
     if (cullingActive_) {
         auto cache = [&](auto& casters, std::vector<CasterBounds>& out) {
             out.resize(casters.size());
@@ -521,8 +602,37 @@ void SceneRenderer::renderShadowPass() {
         };
         cache(shadowCasters_, staticBounds);
         cache(shadowSkinnedCasters_, skinnedBounds);
+        cache(shadowCustomCasters_, customBounds);
+        cache(shadowSkinnedCustomCasters_, skinnedCustomBounds);
         cache(shadowInstancedCasters_, instBounds);
     }
+
+    // Resolve each custom caster's shadow-variant entry once per frame, not
+    // per tile — the cache key embeds the full chunk source, so a per-tile
+    // lookup would re-hash the whole GLSL string N-tiles times. Entry
+    // pointers stay valid (unordered_map nodes are stable); nullptr means
+    // "variant failed to compile, use the default depth program". The lists
+    // are sorted by chunk, so consecutive casters share resolutions.
+    std::vector<CustomShadowEntry*> customEntries, skinnedCustomEntries;
+    auto resolveEntries = [&](const std::vector<MeshNode*>& casters,
+                              std::vector<CustomShadowEntry*>& out,
+                              bool skinned) {
+        out.resize(casters.size());
+        const std::string* prevChunk = nullptr;
+        CustomShadowEntry* prev = nullptr;
+        for (size_t i = 0; i < casters.size(); ++i) {
+            const std::string& chunk = casters[i]->customShader()->vertexChunk;
+            if (!prevChunk || *prevChunk != chunk) {
+                prev = ensureCustomShadowProgram(skinned, chunk);
+                prevChunk = &chunk;
+            }
+            out[i] = prev;
+        }
+    };
+    if (hasCustomCasters)
+        resolveEntries(shadowCustomCasters_, customEntries, false);
+    if (hasSkinnedCustomCasters)
+        resolveEntries(shadowSkinnedCustomCasters_, skinnedCustomEntries, true);
 
     for (int slot = 0; slot < shadowTileCount_; ++slot) {
         int gx = slot % 4;
@@ -568,6 +678,75 @@ void SceneRenderer::renderShadowPass() {
             }
             glUseProgram(shadowProgram_);
         }
+
+        // Custom-vertex casters: the spliced shadow variant runs the user's
+        // userVertex hook so the DISPLACED silhouette lands in the atlas.
+        // Casters are pre-sorted by chunk source (entries resolved once
+        // before the tile loop), so each variant binds once per group; user
+        // uniforms upload per caster (displacement may be uniform-driven,
+        // and values are per-node). A variant whose compile failed (cached
+        // in ensureCustomShadowProgram, entry == nullptr) falls back to the
+        // default depth program — undisplaced, but still a shadow.
+        auto drawCustomCasters = [&](const std::vector<MeshNode*>& casters,
+                                     const std::vector<CasterBounds>& bounds,
+                                     const std::vector<CustomShadowEntry*>& entries,
+                                     bool skinned) {
+            const GLuint fallback = skinned ? shadowSkinnedProgram_
+                                            : shadowProgram_;
+            const GLint fallbackMVP = skinned ? shadowSkinnedUMVP_
+                                              : shadowUMVP_;
+            bool anyBound = false;
+            CustomShadowEntry* bound = nullptr;
+            for (size_t i = 0; i < casters.size(); ++i) {
+                if (tileCulled(bounds, i)) { cullStats_.shadowCulled++; continue; }
+                cullStats_.shadowDrawn++;
+                MeshNode* mesh = casters[i];
+                CustomShadowEntry* entry = entries[i];
+                if (!anyBound || entry != bound) {
+                    anyBound = true;
+                    bound = entry;
+                    if (entry) {
+                        glUseProgram(entry->prog);
+                        // Wind globals: the custom variant applies the same
+                        // pre-hook wind sway as mesh.vert so the hook input
+                        // matches the color pass exactly.
+                        if (entry->windDir >= 0)
+                            glUniform3fv(entry->windDir, 1, windDir_);
+                        if (entry->windStrength >= 0)
+                            glUniform1f(entry->windStrength, windStrength_);
+                        if (entry->windTime >= 0)
+                            glUniform1f(entry->windTime, windTime_);
+                        if (entry->windFreq >= 0)
+                            glUniform1f(entry->windFreq, windFreq_);
+                    } else if (fallback) {
+                        glUseProgram(fallback);
+                    }
+                }
+                if (!entry && !fallback) continue;
+                Mat4 mvp = bromath::mmul(lightVP, mesh->worldMatrix());
+                if (entry) {
+                    glUniformMatrix4fv(entry->mvp, 1, GL_FALSE, mvp.data);
+                    if (entry->model >= 0)
+                        glUniformMatrix4fv(entry->model, 1, GL_FALSE,
+                                           mesh->worldMatrix().data);
+                    if (entry->windMask >= 0)
+                        glUniform1f(entry->windMask, mesh->windMask());
+                    uploadUserUniforms(entry->prog, entry->userLocs,
+                                       mesh->customShader());
+                } else {
+                    glUniformMatrix4fv(fallbackMVP, 1, GL_FALSE, mvp.data);
+                }
+                if (skinned) mesh->asSkinnedMesh()->prepareSkinnedDraw();
+                mesh->drawRaw();
+            }
+            glUseProgram(shadowProgram_);
+        };
+        if (hasCustomCasters)
+            drawCustomCasters(shadowCustomCasters_, customBounds,
+                              customEntries, false);
+        if (hasSkinnedCustomCasters)
+            drawCustomCasters(shadowSkinnedCustomCasters_, skinnedCustomBounds,
+                              skinnedCustomEntries, true);
 
         if (hasInstancedCasters && shadowInstancedProgram_) {
             glUseProgram(shadowInstancedProgram_);

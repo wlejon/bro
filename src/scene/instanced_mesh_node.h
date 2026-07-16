@@ -1,5 +1,6 @@
 #pragma once
 
+#include "scene/custom_shader.h"
 #include "scene/scene_node.h"
 #include <bromath/aabb.h>
 #include <bromesh/mesh_data.h>
@@ -96,6 +97,10 @@ public:
     void setUnlit(bool u) { unlit_ = u; }
     bool unlit() const { return unlit_; }
 
+    /// Unlit as the renderer applies it — a custom shader suppresses unlit;
+    /// same contract as MeshNode::effectiveUnlit.
+    bool effectiveUnlit() const { return unlit_ && !customShader_; }
+
     /// Alpha-test cutoff. > 0 enables `discard` for fragments whose final
     /// alpha is below the threshold (used for leaf cards and similar
     /// cutout textures). 0 disables the test.
@@ -144,6 +149,32 @@ public:
     }
     int atlasCols() const { return atlasCols_; }
     int atlasRows() const { return atlasRows_; }
+
+    // --- Custom shader ---
+    // Same surface as MeshNode (see custom_shader.h). The renderer compiles
+    // the INSTANCED program variant — the vertex hook runs in mesh-local
+    // space, before the per-instance transform, so a displacement applies
+    // identically to every instance in its own frame. The depth-only shadow
+    // pass keeps the undisplaced silhouette for instanced meshes.
+
+    void setCustomShader(std::string vertexChunk, std::string fragmentChunk) {
+        customShader_ = CustomShaderState::make(std::move(vertexChunk),
+                                                std::move(fragmentChunk));
+    }
+    void clearCustomShader() { customShader_.reset(); }
+    bool hasCustomShader() const { return customShader_ != nullptr; }
+    const CustomShaderState* customShader() const { return customShader_.get(); }
+    void setCustomShaderUniform(const std::string& name, int comps,
+                                const float* vals) {
+        if (customShader_) customShader_->setUniform(name, comps, vals);
+    }
+
+    // --- Culling margin ---
+    // Extra world-space padding added to the whole-node culling bounds —
+    // same contract as MeshNode::setCullMargin (vertex displacement doesn't
+    // grow bounds automatically).
+    void setCullMargin(float m) { cullMargin_ = m < 0.0f ? 0.0f : m; }
+    float cullMargin() const { return cullMargin_; }
 
     /// Bind VAO and issue a depth-only instanced draw — used by the shadow
     /// caster pass. Returns true if anything drew.
@@ -242,6 +273,10 @@ private:
 
     int atlasCols_ = 1;
     int atlasRows_ = 1;
+
+    // Custom shader chunks + user-uniform values (null = default pipeline).
+    std::unique_ptr<CustomShaderState> customShader_;
+    float cullMargin_ = 0.0f;
 };
 
 } // namespace bro::scene

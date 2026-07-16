@@ -459,13 +459,38 @@ void SceneBindings::install(JSContext* ctx) {
             }
             return false;
         })
-        // True while a custom shader (mesh.setShader) is installed on this
-        // MeshNode; false on non-mesh nodes.
+        // True while a custom shader (node.setShader) is installed on this
+        // MeshNode / InstancedMeshNode; false on other node types.
         .get("hasShader", [](NodeWrapper* w) -> bool {
-            if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
+            if (!w || !w->node) return false;
+            if (w->node->type() == scene::SceneNode::Type::Mesh)
                 return static_cast<scene::MeshNode*>(w->node)->hasCustomShader();
+            if (w->node->type() == scene::SceneNode::Type::InstancedMesh)
+                return static_cast<scene::InstancedMeshNode*>(w->node)->hasCustomShader();
             return false;
         })
+        // Extra world-space padding on this node's culling bounds — the
+        // escape hatch for custom vertex shaders that displace geometry
+        // beyond the mesh AABB (culling can't see GLSL). Same contract as
+        // Godot's extra_cull_margin. Mesh / InstancedMesh only; undefined
+        // elsewhere.
+        .prop("cullMargin",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node) {
+                    if (w->node->type() == scene::SceneNode::Type::Mesh)
+                        return JS_NewFloat64(ctx, (double)static_cast<scene::MeshNode*>(w->node)->cullMargin());
+                    if (w->node->type() == scene::SceneNode::Type::InstancedMesh)
+                        return JS_NewFloat64(ctx, (double)static_cast<scene::InstancedMeshNode*>(w->node)->cullMargin());
+                }
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (!w || !w->node) return;
+                if (w->node->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node)->setCullMargin((float)val);
+                else if (w->node->type() == scene::SceneNode::Type::InstancedMesh)
+                    static_cast<scene::InstancedMeshNode*>(w->node)->setCullMargin((float)val);
+            })
         .get("type", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->node) return JS_UNDEFINED;
             switch (w->node->type()) {

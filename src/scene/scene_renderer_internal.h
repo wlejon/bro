@@ -35,6 +35,12 @@ inline std::string withSkinnedDefine(const char* src) {
     return insertAfterVersion(src ? src : "", "#define SKINNED 1\n");
 }
 
+// Build the instanced fragment shader from the regular mesh fragment source
+// (instance tint varying, atlas UV remap). Defined in
+// scene_renderer_instanced.cpp; also used by the custom-shader path to
+// splice user fragment chunks into the instanced variant.
+std::string makeMeshInstancedFragSrc();
+
 // Build a custom-shader variant of mesh.vert / mesh.frag: inject
 // `#define <defineName> 1` after the #version line (activating the
 // userVertex/userFragment call in main) and replace the `//__USER_CHUNK__`
