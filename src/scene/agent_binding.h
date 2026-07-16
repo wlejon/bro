@@ -2,11 +2,13 @@
 
 #include "brogameagent/capability.h"
 #include "brogameagent/policy.h"
+#include "brogameagent/types.h"
 
 #include <functional>
 #include <memory>
+#include <vector>
 
-namespace brogameagent { class Agent; class World; }
+namespace brogameagent { class Agent; class World; class NavMesh; }
 
 namespace bro::scene {
 
@@ -89,6 +91,33 @@ public:
     }
     bool groundFollow() const { return static_cast<bool>(groundFn_); }
 
+    /// Polygon-navmesh routing. The binding holds a non-owning pointer to a
+    /// baked brogameagent::NavMesh (kept alive externally, typically via the
+    /// JS wrapper pinned on the node). navigateTo() plans a path with
+    /// NavMesh::findPath and follows it by feeding successive XZ waypoints to
+    /// the agent's setTarget steering, so the World's ORCA avoidance pass
+    /// composes unchanged. While navigating, the binding owns the agent's
+    /// movement target (a think-hook moveTo issued the same tick is
+    /// overridden). Waypoint Y is tracked (interpolated along the current
+    /// segment) and drives the node's height when no groundFollow probe is
+    /// set — groundFollow, when set, wins.
+    void setNavMesh(const brogameagent::NavMesh* m) { navMesh_ = m; }
+    const brogameagent::NavMesh* navMesh() const { return navMesh_; }
+
+    /// Plan a path on the bound navmesh from the agent's position to
+    /// `target` and start following it. `extents` are the NavMesh snap
+    /// half-extents; `repathInterval` > 0 re-plans toward the same target
+    /// every that-many seconds (0 = plan once). Returns false (and does not
+    /// start navigating) when there is no navmesh/agent or no COMPLETE path.
+    /// Compiled without navmesh support (BROGAMEAGENT_HAS_NAVMESH unset)
+    /// this always returns false.
+    bool navigateTo(bromath::Vec3 target, bromath::Vec3 extents,
+                    float repathInterval = 0.0f);
+
+    /// Abandon the current route (agent halts via clearTarget).
+    void stopNavigation();
+    bool navigating() const { return navActive_; }
+
     /// Current in-flight action (read-only; callers may need to peek for UI).
     const brogameagent::Action& currentAction() const { return current_; }
 
@@ -123,6 +152,20 @@ private:
     GroundHeightFn groundFn_;
     float lastGroundY_ = 0.0f;
     bool  hasGround_   = false;
+
+    // Navmesh route state (see navigateTo). navY_ is the height of the
+    // route under the agent, interpolated along the active path segment.
+    void stepNavigation_(float dt);
+    const brogameagent::NavMesh* navMesh_ = nullptr;
+    std::vector<bromath::Vec3> navPath_;
+    int   navWaypoint_ = 0;
+    bool  navActive_ = false;
+    bromath::Vec3 navTarget_{};
+    bromath::Vec3 navExtents_{};
+    float repathInterval_ = 0.0f;
+    float repathAccum_ = 0.0f;
+    float navY_ = 0.0f;
+    bool  hasNavY_ = false;
 };
 
 } // namespace bro::scene

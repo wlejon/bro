@@ -2155,6 +2155,51 @@ std::vector<PhysicsWorld::StaticBodyInfo> PhysicsWorld::collectStaticBodies() co
     return out;
 }
 
+void PhysicsWorld::collectStaticTriangles(std::vector<float>& outXyz,
+                                          std::vector<uint32_t>& outIndices,
+                                          uint32_t layerMask) const {
+    BodyIDVector ids;
+    physicsSystem_.GetBodies(ids);
+    // Phase-idle contract: same as collectStaticBodies above.
+    const BodyLockInterfaceNoLock& li = physicsSystem_.GetBodyLockInterfaceNoLock();
+
+    // Jolt streams triangles in batches; 256 comfortably exceeds the
+    // cGetTrianglesMinTrianglesRequested floor (32).
+    constexpr int kBatch = 256;
+    std::vector<Float3> buf(static_cast<size_t>(kBatch) * 3);
+    Shape::GetTrianglesContext triCtx;
+
+    for (BodyID id : ids) {
+        BodyLockRead lock(li, id);
+        if (!lock.Succeeded()) continue;
+        const Body& b = lock.GetBody();
+        if (!b.IsStatic() || b.IsSensor()) continue;
+        const uint32_t layer = static_cast<uint32_t>(b.GetObjectLayer());
+        if (layer < 32 && !(layerMask & (1u << layer))) continue;
+        const Shape* shape = b.GetShape();
+        if (!shape) continue;
+
+        // World-space triangles: shape geometry is COM-relative, so the COM
+        // transform maps it into world space (rotation included).
+        shape->GetTrianglesStart(triCtx, AABox::sBiggest(),
+                                 Vec3(b.GetCenterOfMassPosition()),
+                                 b.GetRotation(), Vec3::sReplicate(1.0f));
+        for (;;) {
+            const int n = shape->GetTrianglesNext(triCtx, kBatch, buf.data(), nullptr);
+            if (n <= 0) break;
+            const uint32_t base = static_cast<uint32_t>(outXyz.size() / 3);
+            outXyz.reserve(outXyz.size() + static_cast<size_t>(n) * 9);
+            outIndices.reserve(outIndices.size() + static_cast<size_t>(n) * 3);
+            for (int i = 0; i < n * 3; i++) {
+                outXyz.push_back(buf[i].x);
+                outXyz.push_back(buf[i].y);
+                outXyz.push_back(buf[i].z);
+                outIndices.push_back(base + static_cast<uint32_t>(i));
+            }
+        }
+    }
+}
+
 // --- Contact events ---
 
 std::vector<ContactEvent> PhysicsWorld::drainContactEvents() {

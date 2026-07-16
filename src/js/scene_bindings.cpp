@@ -1208,6 +1208,8 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("savePly", js_node_savePly, 1)
         .method_raw("attachAgent", nodeAttachAgent, 3)
         .method_raw("detachAgent", nodeDetachAgent, 0)
+        .method_raw("navigateTo", nodeNavigateTo, 2)
+        .method_raw("stopNavigation", nodeStopNavigation, 0)
         // Sprite animation + Particles + skinned-mesh player control
         .method_raw("play", js_node_play, 1)
         .method_raw("stop", js_node_stop, 0)

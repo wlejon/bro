@@ -27,6 +27,9 @@
 #endif
 
 #include <brogameagent/brogameagent.h>
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+#include <brogameagent/nav_mesh.h>
+#endif
 #include <qjsbind/qjsbind.h>
 
 #include <memory>
@@ -598,6 +601,8 @@ static JSValue js_node_attachAgent(JSContext* ctx, JSValueConst this_val, int ar
     binding->setYOffset(0.0f);
     binding->setFaceMovement(true);
     binding->setGroundFollow({});  // re-attach resets any previous probe
+    binding->stopNavigation();     // ... and any in-flight navmesh route
+    binding->setNavMesh(nullptr);
 
     // Default capability set: all six built-ins (trimmed to "basic_attack +
     // hold" if caller passes an explicit list).
@@ -638,6 +643,22 @@ static JSValue js_node_attachAgent(JSContext* ctx, JSValueConst this_val, int ar
         v = JS_GetPropertyStr(ctx, opts, "avoidance");
         if (!JS_IsUndefined(v) && !JS_IsNull(v))
             applyAgentAvoidanceOpts(ctx, v, *agent);
+        JS_FreeValue(ctx, v);
+
+        // navMesh: a bro.ai.game.bakeNavMesh()/loadNavMesh() handle — enables
+        // node.navigateTo() route-following on this binding. The JS wrapper is
+        // pinned on the node so it outlives the binding's raw pointer.
+        v = JS_GetPropertyStr(ctx, opts, "navMesh");
+        if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
+            auto* nm = navMeshFromJS(ctx, v);
+            if (!nm) {
+                JS_FreeValue(ctx, v);
+                return JS_ThrowTypeError(ctx,
+                    "attachAgent: navMesh must be a bro.ai.game.bakeNavMesh()/loadNavMesh() object");
+            }
+            binding->setNavMesh(nm);
+            JS_SetPropertyStr(ctx, this_val, "__navMesh", JS_DupValue(ctx, v));
+        }
         JS_FreeValue(ctx, v);
 
         v = JS_GetPropertyStr(ctx, opts, "policy");
@@ -772,6 +793,104 @@ static JSValue js_node_detachAgent(JSContext* ctx, JSValueConst this_val, int, J
     nw->graph->detachAgentBinding(nw->node);
     JS_SetPropertyStr(ctx, this_val, "__agent", JS_UNDEFINED);
     JS_SetPropertyStr(ctx, this_val, "__groundTerrain", JS_UNDEFINED);
+    JS_SetPropertyStr(ctx, this_val, "__navMesh", JS_UNDEFINED);
+    return JS_UNDEFINED;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// JS-visible: node.navigateTo(target, opts?) / node.stopNavigation()
+//
+// Navmesh route-following on an attached agent: plans NavMesh::findPath and
+// feeds successive XZ waypoints into the agent's existing setTarget steering,
+// so the AI world's ORCA avoidance pass composes unchanged. Waypoint Y drives
+// the node's height when no groundFollow probe is set (groundFollow wins).
+//
+// target = {x,y,z} or [x,y,z]; opts = {
+//   navMesh,             // bakeNavMesh()/loadNavMesh() handle; optional if
+//                        // one was already set via attachAgent({navMesh})
+//   extents: {x,y,z},    // findPath snap half-extents (default {2,1,2})
+//   repathInterval: 0,   // seconds; > 0 re-plans toward the target
+// }
+// Returns true when a complete path was found and following started; false
+// when either endpoint fails to snap or the goal is unreachable.
+// ───────────────────────────────────────────────────────────────────────────
+
+static JSValue js_node_navigateTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+    auto* nw = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!nw || !nw->node || !nw->graph || argc < 1)
+        return JS_ThrowTypeError(ctx, "node.navigateTo(target, opts?)");
+    auto* binding = nw->graph->agentBinding(nw->node);
+    if (!binding || !binding->agent())
+        return JS_ThrowTypeError(ctx, "navigateTo: no agent attached (call node.attachAgent first)");
+
+    bromath::Vec3 target;
+    if (!JS_IsObject(argv[0])) return JS_ThrowTypeError(ctx, "navigateTo: target must be {x,y,z} or [x,y,z]");
+    {
+        // Accept both object and array forms (same shape as the NavMesh
+        // query methods).
+        JSValue vx = JS_GetPropertyStr(ctx, argv[0], "x");
+        bool isObjForm = JS_IsNumber(vx);
+        JS_FreeValue(ctx, vx);
+        if (isObjForm) {
+            target.x = (float)qjsbind::get_prop_number(ctx, argv[0], "x", 0);
+            target.y = (float)qjsbind::get_prop_number(ctx, argv[0], "y", 0);
+            target.z = (float)qjsbind::get_prop_number(ctx, argv[0], "z", 0);
+        } else {
+            double c[3] = {0, 0, 0};
+            for (uint32_t i = 0; i < 3; i++) {
+                JSValue v = JS_GetPropertyUint32(ctx, argv[0], i);
+                if (JS_IsNumber(v)) JS_ToFloat64(ctx, &c[i], v);
+                JS_FreeValue(ctx, v);
+            }
+            target = {(float)c[0], (float)c[1], (float)c[2]};
+        }
+    }
+
+    bromath::Vec3 extents = brogameagent::NavMesh::kDefaultExtents;
+    float repathInterval = 0.0f;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        JSValue mv = JS_GetPropertyStr(ctx, argv[1], "navMesh");
+        if (!JS_IsUndefined(mv) && !JS_IsNull(mv)) {
+            auto* nm = navMeshFromJS(ctx, mv);
+            if (!nm) {
+                JS_FreeValue(ctx, mv);
+                return JS_ThrowTypeError(ctx,
+                    "navigateTo: navMesh must be a bro.ai.game.bakeNavMesh()/loadNavMesh() object");
+            }
+            binding->setNavMesh(nm);
+            JS_SetPropertyStr(ctx, this_val, "__navMesh", JS_DupValue(ctx, mv));
+        }
+        JS_FreeValue(ctx, mv);
+
+        JSValue ev = JS_GetPropertyStr(ctx, argv[1], "extents");
+        if (JS_IsObject(ev)) {
+            extents.x = (float)qjsbind::get_prop_number(ctx, ev, "x", extents.x);
+            extents.y = (float)qjsbind::get_prop_number(ctx, ev, "y", extents.y);
+            extents.z = (float)qjsbind::get_prop_number(ctx, ev, "z", extents.z);
+        }
+        JS_FreeValue(ctx, ev);
+
+        repathInterval = (float)qjsbind::get_prop_number(ctx, argv[1], "repathInterval", 0.0);
+    }
+
+    if (!binding->navMesh())
+        return JS_ThrowTypeError(ctx,
+            "navigateTo: no navMesh bound (pass one in attachAgent or navigateTo opts)");
+
+    return JS_NewBool(ctx, binding->navigateTo(target, extents, repathInterval));
+#else
+    (void)this_val; (void)argc; (void)argv;
+    return JS_ThrowTypeError(ctx,
+        "node.navigateTo is unavailable: this build was compiled without "
+        "BROGAMEAGENT_WITH_NAVMESH");
+#endif
+}
+
+static JSValue js_node_stopNavigation(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* nw = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!nw || !nw->node || !nw->graph) return JS_UNDEFINED;
+    if (auto* binding = nw->graph->agentBinding(nw->node)) binding->stopNavigation();
     return JS_UNDEFINED;
 }
 
@@ -786,6 +905,12 @@ JSValue nodeAttachAgent(JSContext* ctx, JSValueConst this_val, int argc, JSValue
 }
 JSValue nodeDetachAgent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     return js_node_detachAgent(ctx, this_val, argc, argv);
+}
+JSValue nodeNavigateTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    return js_node_navigateTo(ctx, this_val, argc, argv);
+}
+JSValue nodeStopNavigation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    return js_node_stopNavigation(ctx, this_val, argc, argv);
 }
 JSValue graphAttachAIWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     return js_sg_attachAIWorld(ctx, this_val, argc, argv);

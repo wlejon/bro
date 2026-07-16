@@ -8,6 +8,7 @@ namespace brogameagent {
     class Agent;
     class World;
     class NavGrid;
+    class NavMesh;
     namespace nn { class SingleHeroNet; class PolicyValueNet; class SingleHeroNetTX; class WeightsHandle; }
     namespace mcts {
         class Mcts; class IPrior; class IEvaluator; class ITeamEvaluator; class IRolloutPolicy;
@@ -64,6 +65,8 @@ void clearRegisteredCapabilities(JSContext* ctx);
 /// to register on NodeWrapper / GraphWrapper classes.
 JSValue nodeAttachAgent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue nodeDetachAgent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue nodeNavigateTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue nodeStopNavigation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue graphAttachAIWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue graphDetachAIWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 
@@ -126,6 +129,11 @@ extractRolloutClassic(JSContext* ctx, JSValueConst v);
 /// Unwrap a NavGridData JSValue into a brogameagent::NavGrid*. Returns nullptr
 /// if the value isn't a NavGrid wrapper.
 brogameagent::NavGrid* navGridFromJS(JSContext* ctx, JSValueConst v);
+
+/// Unwrap a bakeNavMesh()/loadNavMesh() JSValue into the underlying
+/// brogameagent::NavMesh*. Returns nullptr if the value isn't a NavMesh
+/// wrapper (including builds without navmesh support).
+brogameagent::NavMesh* navMeshFromJS(JSContext* ctx, JSValueConst v);
 
 /// Construct a wrapped AINavGrid (a bro.ai.game NavGrid JS value) covering the
 /// given world-space XZ bounds at `cellSize`. Lets other bindings (e.g.

@@ -104,6 +104,207 @@ nav.addObstacle({ x: 5, z: 5, hw: 1, hd: 1 }, 0.4);
 
 
 // -----------------------------------------------------------------------------
+// NavMesh — polygon navigation mesh (Recast/Detour)
+// -----------------------------------------------------------------------------
+//
+// The 3D counterpart to NavGrid, for worlds a flat 2D grid cannot represent:
+// slopes, ramps, bridges/overpasses, multi-level interiors. Baked from
+// arbitrary triangle soup; all points are y-up world-space {x, y, z}.
+//
+// NavGrid vs NavMesh: use a NavGrid for flat single-level arenas — it is
+// instant to build, supports dynamic obstacles (addObstacle after creation),
+// and backs the avoidance wall bridge. Use a NavMesh when the level has
+// height: walkable slopes, stacked floors, or interiors — the bake voxelizes
+// real geometry, erodes by agent radius, and findPath returns 3D waypoints.
+// A baked NavMesh is static: rebake (or cache + reload) when the level
+// changes.
+//
+// Availability: requires a build configured with
+// -DBROGAMEAGENT_WITH_NAVMESH=ON (Recast/Detour from vcpkg). Feature-detect
+// with `bro.ai.game.navMeshAvailable` — when false, bakeNavMesh/loadNavMesh
+// throw.
+
+/**
+ * Bake a polygon navmesh from any mix of geometry sources. All requested
+ * sources are concatenated into one triangle soup and baked once. Baking is
+ * seconds-scale for big levels — cache the result with navMesh.save() and
+ * restore with loadNavMesh() at startup.
+ *
+ * Triangles must be wound counter-clockwise when viewed from above (+Y
+ * normals) to be considered walkable.
+ *
+ * Geometry sources (combinable):
+ * @param {Float32Array|number[]} [opts.positions] - flat xyz vertex triples
+ * @param {Uint32Array|number[]}  [opts.indices]   - triangle index list
+ *
+ * @param {Physics|PhysicsWorldHandle|boolean} [opts.fromPhysics] - collect
+ *     every static, non-sensor body's actual triangle geometry (the default
+ *     world via `Physics`/`true`, or a Physics.createWorldHandle() sandbox).
+ *     Mesh and heightfield shapes contribute their exact triangles;
+ *     primitive/convex shapes (box/sphere/capsule/hull) contribute Jolt's
+ *     coarse triangulation — a box is 12 triangles, spheres/capsules a
+ *     low-LOD tessellation. Fine for navigation, not render-accurate.
+ * @param {Array<string|number>} [opts.physicsLayers] - only collect bodies on
+ *     these collision layers (names or indices)
+ *
+ * @param {Terrain} [opts.fromTerrain] - a scene.createTerrain() handle. The
+ *     terrain's top surface is height-sampled on a regular grid (one down-
+ *     raycast per sample) over `terrainBounds` — slopes and plateaus bake
+ *     accurately; caves/overhangs are approximated by the top surface.
+ *     Chunks must be streamed in (terrain.update) before baking.
+ * @param {{minX, minZ, maxX, maxZ}} [opts.terrainBounds] - required with
+ *     fromTerrain: the XZ region to sample
+ * @param {number} [opts.terrainStep=1.0] - sample spacing (world units)
+ * @param {number} [opts.terrainRayStart=100] - probe ray start height
+ * @param {number} [opts.terrainRayLength=200] - probe ray length
+ *
+ * Bake config (Recast semantics, tuned for a ~0.5 m radius humanoid in
+ * meter-scale worlds):
+ * @param {number} [opts.cellSize=0.25]       - XZ voxel size (~agentRadius/2)
+ * @param {number} [opts.cellHeight=0.2]      - Y voxel size
+ * @param {number} [opts.agentRadius=0.5]     - walkable area eroded by this
+ * @param {number} [opts.agentHeight=2.0]     - min clearance for a span
+ * @param {number} [opts.agentMaxClimb=0.4]   - max step/ledge height
+ * @param {number} [opts.agentMaxSlopeDeg=45] - steeper triangles unwalkable
+ * @param {number} [opts.regionMinSize=8]     - min region size (cells)
+ * @param {number} [opts.regionMergeSize=20]  - merge-into-neighbor threshold
+ * @param {number} [opts.edgeMaxLen=12]       - max contour edge length
+ * @param {number} [opts.edgeMaxError=1.3]    - contour simplification (cells)
+ * @param {number} [opts.detailSampleDist=6]  - detail-mesh sampling (cells)
+ * @param {number} [opts.detailSampleMaxError=1] - detail-mesh max deviation
+ *
+ * @returns {NavMesh}
+ * @throws {Error} on bake failure, with the Recast build log in the message
+ */
+const navMesh = bro.ai.game.bakeNavMesh({
+    fromPhysics: Physics,          // level collision geometry...
+    positions: rampVerts,          // ...plus extra hand-authored soup
+    indices: rampIndices,
+    agentRadius: 0.5,
+    agentMaxClimb: 0.4,
+});
+
+/**
+ * Find a walkable path. Returns the straightened (funnel) waypoint list as a
+ * Float32Array of xyz triples — [x0,y0,z0, x1,y1,z1, ...] — including the
+ * snapped start and end points. Returns null when either endpoint fails to
+ * snap or when no COMPLETE path exists: partial paths toward unreachable
+ * goals are reported as failure, never silently truncated.
+ * Deterministic: same mesh + inputs always yield the same waypoints.
+ *
+ * @param {{x,y,z}|number[]} start
+ * @param {{x,y,z}|number[]} end
+ * @param {{x,y,z}} [extents={x:2,y:1,z:2}] - snap-box half-extents. The tight
+ *     Y is deliberate: it makes stacked-level queries resolve to the level
+ *     nearest the query point. Keep it smaller than your level spacing.
+ * @returns {Float32Array|null}
+ */
+const wp = navMesh.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 3, z: 0 });
+if (wp) for (let i = 0; i < wp.length; i += 3) walkTo(wp[i], wp[i + 1], wp[i + 2]);
+
+/**
+ * Snap an arbitrary point onto the navmesh.
+ * @param {{x,y,z}|number[]} p
+ * @param {{x,y,z}} [extents]
+ * @returns {{x,y,z}|null} null when nothing is within the search extents
+ */
+navMesh.nearestPoint({ x: 0, y: 10, z: 0 });
+
+/**
+ * Walkability raycast from start toward end ALONG the mesh surface (2D
+ * boundary test, not a physics ray): does a straight walk get there, and if
+ * not, where does it stop?
+ * @param {{x,y,z}|number[]} start - must snap onto the mesh
+ * @param {{x,y,z}|number[]} end
+ * @param {{x,y,z}} [extents]
+ * @returns {{hit: boolean, t: number, point: {x,y,z}, normal: {x,y,z}}}
+ *     hit=true when a boundary blocked the ray before `end`; t is the hit
+ *     param along [start,end] (1 when unobstructed); normal is the XZ wall
+ *     normal at the hit (zero when unobstructed).
+ */
+const ray = navMesh.raycast({ x: 0, y: 0, z: 0 }, { x: 10, y: 0, z: 0 });
+
+/**
+ * Uniform-ish random reachable point on the mesh (area-weighted polygon
+ * pick). Deterministic per seed.
+ * @param {number} seed
+ * @returns {{x,y,z}|null} null when the mesh is empty
+ */
+navMesh.randomPoint(42);
+
+/** Whether a bake/load has succeeded (read-only). */
+navMesh.valid;
+
+/**
+ * Serialize the baked mesh (raw self-validating blob).
+ * @returns {ArrayBuffer}
+ */
+const blob = navMesh.save();
+
+/**
+ * Restore a mesh previously produced by save(). Loading is a cheap memcpy —
+ * the bake is the expensive part — so the standard recipe is: bake once,
+ * cache to disk, load at startup.
+ * @param {ArrayBuffer|TypedArray} buffer
+ * @returns {NavMesh}
+ * @throws {Error} on malformed data
+ */
+const fs = require('fs');
+let cached;
+try { cached = fs.readFileSync('level.navmesh'); } catch (e) {}
+const mesh = cached
+    ? bro.ai.game.loadNavMesh(cached.buffer)
+    : (() => {
+        const m = bro.ai.game.bakeNavMesh({ fromPhysics: Physics });
+        fs.writeFileSync('level.navmesh', Buffer.from(m.save()));
+        return m;
+      })();
+
+// --- Agent routing over a navmesh ---
+//
+// node.navigateTo() drives an attached agent along NavMesh::findPath
+// waypoints using the agent's existing setTarget/followPath steering (XZ),
+// so the AI world's ORCA avoidance pass (world.setAvoidance) composes
+// unchanged — routed agents still locally avoid each other. Waypoint Y is
+// interpolated along the active segment and drives the node's height when no
+// groundFollow probe is set; groundFollow, when set, wins. While a route is
+// active the binding owns the agent's movement target (a think-hook moveTo
+// issued the same tick is overridden); the route ends on arrival or
+// stopNavigation().
+
+const world = bro.ai.game.createWorld();
+world.setAvoidance(true);
+const agent = bro.ai.game.createAgent({ x: -8, z: 0, speed: 4, avoidance: true });
+scene.attachAIWorld(world, { stepHz: 60 });
+
+const node = scene.createMesh({ mesh: 'box' });
+node.attachAgent(world, agent, {
+    navMesh,          // enables navigateTo on this node
+    yOffset: 0.5,     // clearance above the route height
+});
+
+/**
+ * Plan a path on the bound navmesh from the agent's position to `target`
+ * and start following it.
+ *
+ * @param {{x,y,z}|number[]} target
+ * @param {Object} [opts]
+ * @param {NavMesh} [opts.navMesh] - bind/replace the navmesh (optional if
+ *     one was passed to attachAgent)
+ * @param {{x,y,z}} [opts.extents] - findPath snap half-extents
+ * @param {number} [opts.repathInterval=0] - seconds; > 0 re-plans toward the
+ *     same target periodically (0 = plan once per navigateTo call)
+ * @returns {boolean} true when a complete path was found and following
+ *     started; false when an endpoint fails to snap or the goal is
+ *     unreachable (the agent does not move)
+ */
+node.navigateTo({ x: 8, y: 3, z: 0 });
+
+/** Abandon the current route (the agent halts). */
+node.stopNavigation();
+
+
+// -----------------------------------------------------------------------------
 // Agent — Pathfinding + steering combined
 // -----------------------------------------------------------------------------
 
@@ -432,6 +633,10 @@ scene.detachAIWorld();
  *                                        bound agent (see "Local avoidance"
  *                                        above); effective while the world has
  *                                        world.setAvoidance(true)
+ * @param {NavMesh} [opts.navMesh]      - bind a bakeNavMesh()/loadNavMesh()
+ *                                        handle, enabling node.navigateTo()
+ *                                        route-following (see "Agent routing
+ *                                        over a navmesh" above)
  *
  * Ground follow — agents plan in 2D (x, z); groundFollow makes the bound
  * node's Y track the ground under the agent instead of sitting at a constant

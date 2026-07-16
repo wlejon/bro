@@ -3,6 +3,9 @@
 #include "brogameagent/agent.h"
 #include "brogameagent/unit.h"
 #include "brogameagent/world.h"
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+#include "brogameagent/nav_mesh.h"
+#endif
 
 #include <cmath>
 
@@ -84,8 +87,113 @@ void AgentBinding::step(brogameagent::World* world, float dt, float nowSec) {
         }
     }
 
-    // 3) Write transform.
+    // 3) Follow the active navmesh route (owns the agent's target while
+    // active — runs after think so it wins over a same-tick moveTo).
+    stepNavigation_(dt);
+
+    // 4) Write transform.
     syncToNode();
+}
+
+bool AgentBinding::navigateTo(bromath::Vec3 target, bromath::Vec3 extents,
+                              float repathInterval) {
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+    stopNavigation();
+    if (!navMesh_ || !agent_) return false;
+    // Start height disambiguates stacked levels: prefer the tracked route/
+    // ground height, falling back to the node's current Y.
+    float startY = 0.0f;
+    if (hasNavY_)            startY = navY_;
+    else if (hasGround_)     startY = lastGroundY_;
+    else if (node_)          startY = node_->position().y;
+    bromath::Vec3 start{agent_->x(), startY, agent_->z()};
+
+    auto path = navMesh_->findPath(start, target, extents);
+    if (path.empty()) return false;
+
+    navPath_ = std::move(path);
+    navWaypoint_ = 0;
+    navActive_ = true;
+    navTarget_ = target;
+    navExtents_ = extents;
+    repathInterval_ = repathInterval;
+    repathAccum_ = 0.0f;
+    navY_ = navPath_.front().y;
+    hasNavY_ = true;
+    return true;
+#else
+    (void)target; (void)extents; (void)repathInterval;
+    return false;
+#endif
+}
+
+void AgentBinding::stopNavigation() {
+    if (navActive_ && agent_) agent_->clearTarget();
+    navActive_ = false;
+    navPath_.clear();
+    navWaypoint_ = 0;
+    repathAccum_ = 0.0f;
+}
+
+void AgentBinding::stepNavigation_(float dt) {
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+    if (!navActive_ || !agent_) return;
+    if (!agent_->unit().alive()) { stopNavigation(); return; }
+
+    // Optional periodic re-plan toward the same goal (moving obstacles are
+    // ORCA's job; this covers a moved goal snapshot or a drifted agent).
+    if (repathInterval_ > 0.0f && navMesh_) {
+        repathAccum_ += dt;
+        if (repathAccum_ >= repathInterval_) {
+            repathAccum_ = 0.0f;
+            bromath::Vec3 start{agent_->x(), navY_, agent_->z()};
+            auto p = navMesh_->findPath(start, navTarget_, navExtents_);
+            if (!p.empty()) {
+                navPath_ = std::move(p);
+                navWaypoint_ = 0;
+            }
+        }
+    }
+
+    // Advance waypoints on XZ proximity. The final waypoint uses the
+    // agent's own arrive distance so it settles rather than orbiting.
+    constexpr float kAdvanceRadius = 0.75f;
+    constexpr float kArriveRadius  = 0.5f;   // matches Agent's ARRIVE_DIST
+    while (navWaypoint_ < static_cast<int>(navPath_.size())) {
+        const auto& wp = navPath_[static_cast<size_t>(navWaypoint_)];
+        const float dx = wp.x - agent_->x();
+        const float dz = wp.z - agent_->z();
+        const bool last = navWaypoint_ == static_cast<int>(navPath_.size()) - 1;
+        const float r = last ? kArriveRadius : kAdvanceRadius;
+        if (dx * dx + dz * dz > r * r) break;
+        navY_ = wp.y;
+        navWaypoint_++;
+    }
+    if (navWaypoint_ >= static_cast<int>(navPath_.size())) {
+        navActive_ = false;
+        agent_->clearTarget();
+        return;
+    }
+
+    const auto& wp = navPath_[static_cast<size_t>(navWaypoint_)];
+    agent_->setTarget(wp.x, wp.z);  // World's ORCA pass filters this velocity
+
+    // Route height: interpolate along the current segment by projecting the
+    // agent's XZ progress, so ramps carry the node smoothly.
+    const bromath::Vec3 from = navWaypoint_ > 0
+        ? navPath_[static_cast<size_t>(navWaypoint_ - 1)] : navPath_.front();
+    const float sx = wp.x - from.x, sz = wp.z - from.z;
+    const float segLenSq = sx * sx + sz * sz;
+    if (segLenSq > 1e-6f) {
+        float t = ((agent_->x() - from.x) * sx + (agent_->z() - from.z) * sz) / segLenSq;
+        t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        navY_ = from.y + (wp.y - from.y) * t;
+    } else {
+        navY_ = wp.y;
+    }
+#else
+    (void)dt;
+#endif
 }
 
 void AgentBinding::syncToNode() {
@@ -102,6 +210,10 @@ void AgentBinding::syncToNode() {
         // yOffset is clearance above the ground while following; until the
         // first successful probe, fall back to the absolute-Y behaviour.
         if (hasGround_) y = lastGroundY_ + yOffset_;
+    } else if (hasNavY_) {
+        // No ground probe: the navmesh route height (last known when the
+        // route has finished) carries the node, with yOffset as clearance.
+        y = navY_ + yOffset_;
     }
     node_->setPosition(ax, y, az);
     if (faceMovement_) {

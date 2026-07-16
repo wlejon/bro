@@ -752,6 +752,19 @@ public:
     /// idle). Used to derive navigation obstacles from collision geometry.
     std::vector<StaticBodyInfo> collectStaticBodies() const;
 
+    /// Append the world-space triangle geometry of every static, non-sensor
+    /// body whose layer bit is in `layerMask` (call only when idle). Vertices
+    /// are appended to `outXyz` as xyz triples and `outIndices` gets matching
+    /// sequential triangle indices (offset past any existing soup), so the
+    /// output concatenates cleanly with other sources. Mesh and heightfield
+    /// shapes yield their exact triangles; primitive/convex shapes yield
+    /// Jolt's coarse triangulation (a box is 12 triangles, spheres/capsules a
+    /// low-LOD tessellation) — good enough for navmesh baking, not rendering.
+    /// Used to bake polygon navmeshes from collision geometry.
+    void collectStaticTriangles(std::vector<float>& outXyz,
+                                std::vector<uint32_t>& outIndices,
+                                uint32_t layerMask = 0xffffffffu) const;
+
     // --- Contact events ---
 
     /// Swap and return contact events from the last step. Clears the buffer.

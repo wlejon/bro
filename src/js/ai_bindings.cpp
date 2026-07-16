@@ -7,8 +7,15 @@
 #include "physics/physics_world.h"
 #endif
 
+#if BRO_WITH_3D
+#include "js/terrain_bindings.h"
+#endif
+
 #include <qjsbind/qjsbind.h>
 #include <brogameagent/brogameagent.h>
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+#include <brogameagent/nav_mesh.h>
+#endif
 
 #include <cfloat>
 #include <memory>
@@ -25,6 +32,15 @@ namespace bro::js {
 struct NavGridData {
     std::unique_ptr<brogameagent::NavGrid> grid;
 };
+
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+// Owns only C++ state (no JSValue refs), so no gc_mark is needed. Consumers
+// that keep a raw NavMesh* (AgentBinding) pin the JS wrapper on their own
+// object (`__navMesh`) to keep this alive, mirroring the NavGrid pattern.
+struct NavMeshData {
+    std::unique_ptr<brogameagent::NavMesh> mesh;
+};
+#endif
 
 struct UnitData {
     brogameagent::Agent* agentRef;  // non-owning, kept alive by AgentData via JS ref
@@ -401,6 +417,331 @@ static JSValue js_createNavGrid(JSContext* ctx, JSValueConst, int argc, JSValueC
 
     return qjsbind::wrap<NavGridData>(ctx, data);
 }
+
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+
+// ─── NavMesh helpers ───────────────────────────────────────────────────────
+
+// Parse a point from {x, y, z} or [x, y, z]. Missing components read as 0.
+static bool parseVec3Val(JSContext* ctx, JSValueConst val, bromath::Vec3& out) {
+    if (!JS_IsObject(val)) return false;
+    if (JS_IsArray(val)) {
+        double c[3] = {0, 0, 0};
+        for (uint32_t i = 0; i < 3; i++) {
+            JSValue v = JS_GetPropertyUint32(ctx, val, i);
+            if (JS_IsNumber(v)) JS_ToFloat64(ctx, &c[i], v);
+            JS_FreeValue(ctx, v);
+        }
+        out = {(float)c[0], (float)c[1], (float)c[2]};
+        return true;
+    }
+    out = {(float)getDoubleProp(ctx, val, "x", 0),
+           (float)getDoubleProp(ctx, val, "y", 0),
+           (float)getDoubleProp(ctx, val, "z", 0)};
+    return true;
+}
+
+static JSValue makeVec3(JSContext* ctx, bromath::Vec3 v) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "x", JS_NewFloat64(ctx, v.x));
+    JS_SetPropertyStr(ctx, o, "y", JS_NewFloat64(ctx, v.y));
+    JS_SetPropertyStr(ctx, o, "z", JS_NewFloat64(ctx, v.z));
+    return o;
+}
+
+// Snap extents: optional {x,y,z}/[x,y,z] arg, default NavMesh::kDefaultExtents.
+static bromath::Vec3 parseExtentsArg(JSContext* ctx, int argc, JSValueConst* argv, int idx) {
+    bromath::Vec3 e = brogameagent::NavMesh::kDefaultExtents;
+    if (argc > idx) parseVec3Val(ctx, argv[idx], e);
+    return e;
+}
+
+// Read a numeric array as floats: Float32Array (zero-copy view, copied out)
+// or a plain JS array of numbers.
+static bool readFloatsAny(JSContext* ctx, JSValueConst val, std::vector<float>& out) {
+    size_t n = 0;
+    if (const float* view = qjsbind::read_float32_view(ctx, val, n)) {
+        out.insert(out.end(), view, view + n);
+        return true;
+    }
+    if (!JS_IsArray(val)) return false;
+    JSValue lenV = JS_GetPropertyStr(ctx, val, "length");
+    uint32_t len = 0; JS_ToUint32(ctx, &len, lenV); JS_FreeValue(ctx, lenV);
+    out.reserve(out.size() + len);
+    for (uint32_t i = 0; i < len; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, val, i);
+        double d = 0; JS_ToFloat64(ctx, &d, v);
+        JS_FreeValue(ctx, v);
+        out.push_back((float)d);
+    }
+    return true;
+}
+
+// Read a numeric array as u32 indices: Uint32Array/Int32Array or plain array.
+static bool readU32Any(JSContext* ctx, JSValueConst val, std::vector<uint32_t>& out) {
+    size_t n = 0;
+    if (const uint32_t* view = qjsbind::read_typed_array_view<uint32_t>(ctx, val, n)) {
+        out.insert(out.end(), view, view + n);
+        return true;
+    }
+    if (!JS_IsArray(val)) return false;
+    JSValue lenV = JS_GetPropertyStr(ctx, val, "length");
+    uint32_t len = 0; JS_ToUint32(ctx, &len, lenV); JS_FreeValue(ctx, lenV);
+    out.reserve(out.size() + len);
+    for (uint32_t i = 0; i < len; i++) {
+        JSValue v = JS_GetPropertyUint32(ctx, val, i);
+        uint32_t d = 0; JS_ToUint32(ctx, &d, v);
+        JS_FreeValue(ctx, v);
+        out.push_back(d);
+    }
+    return true;
+}
+
+// Parse `physicsLayers` (array of layer names/indices) into a bitmask.
+// Shared shape with createNavGrid's filter.
+#if BRO_WITH_PHYSICS
+static uint32_t parsePhysicsLayerMask(JSContext* ctx, JSValueConst opts,
+                                      physics::PhysicsWorld* world) {
+    uint32_t layerMask = 0xffffffffu;
+    JSValue lv = JS_GetPropertyStr(ctx, opts, "physicsLayers");
+    if (JS_IsArray(lv)) {
+        uint32_t mask = 0;
+        JSValue lenV = JS_GetPropertyStr(ctx, lv, "length");
+        uint32_t n = 0; JS_ToUint32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
+        for (uint32_t i = 0; i < n; i++) {
+            JSValue el = JS_GetPropertyUint32(ctx, lv, i);
+            int32_t idx = -1;
+            if (JS_IsString(el)) {
+                const char* s = JS_ToCString(ctx, el);
+                if (s) { idx = world->layerIndex(s); JS_FreeCString(ctx, s); }
+            } else if (JS_IsNumber(el)) {
+                JS_ToInt32(ctx, &idx, el);
+            }
+            if (idx >= 0 && idx < 32) mask |= 1u << idx;
+            JS_FreeValue(ctx, el);
+        }
+        layerMask = mask;
+    }
+    JS_FreeValue(ctx, lv);
+    return layerMask;
+}
+#endif
+
+// bro.ai.game.bakeNavMesh(opts) — bake a polygon navmesh from any mix of:
+//   positions/indices  raw triangle soup (Float32Array xyz + Uint32Array)
+//   fromPhysics        static bodies' actual triangle geometry
+//   fromTerrain        height-sampled voxel-terrain surface
+// All requested sources are concatenated into one soup and baked once.
+static JSValue js_bakeNavMesh(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "bakeNavMesh() requires an options object");
+    JSValue opts = argv[0];
+
+    std::vector<float> xyz;
+    std::vector<uint32_t> indices;
+
+    // ── Raw soup ──
+    {
+        JSValue posV = JS_GetPropertyStr(ctx, opts, "positions");
+        JSValue idxV = JS_GetPropertyStr(ctx, opts, "indices");
+        const bool hasPos = !JS_IsUndefined(posV) && !JS_IsNull(posV);
+        const bool hasIdx = !JS_IsUndefined(idxV) && !JS_IsNull(idxV);
+        if (hasPos != hasIdx) {
+            JS_FreeValue(ctx, posV); JS_FreeValue(ctx, idxV);
+            return JS_ThrowTypeError(ctx, "bakeNavMesh: positions and indices must be passed together");
+        }
+        if (hasPos) {
+            std::vector<float> verts;
+            std::vector<uint32_t> idx;
+            bool okP = readFloatsAny(ctx, posV, verts);
+            bool okI = readU32Any(ctx, idxV, idx);
+            JS_FreeValue(ctx, posV); JS_FreeValue(ctx, idxV);
+            if (!okP || !okI || verts.size() % 3 != 0 || idx.size() % 3 != 0)
+                return JS_ThrowTypeError(ctx,
+                    "bakeNavMesh: positions must be flat xyz triples and indices a triangle list");
+            const uint32_t nVerts = (uint32_t)(verts.size() / 3);
+            for (uint32_t i : idx) {
+                if (i >= nVerts)
+                    return JS_ThrowRangeError(ctx, "bakeNavMesh: index %u out of range (%u vertices)",
+                                              i, nVerts);
+            }
+            const uint32_t base = (uint32_t)(xyz.size() / 3);
+            xyz.insert(xyz.end(), verts.begin(), verts.end());
+            indices.reserve(indices.size() + idx.size());
+            for (uint32_t i : idx) indices.push_back(base + i);
+        } else {
+            JS_FreeValue(ctx, posV); JS_FreeValue(ctx, idxV);
+        }
+    }
+
+    // ── fromPhysics: static bodies' triangle geometry ──
+    JSValue fromPhys = JS_GetPropertyStr(ctx, opts, "fromPhysics");
+    if (!JS_IsUndefined(fromPhys) && !JS_IsNull(fromPhys) &&
+        !(JS_IsBool(fromPhys) && !JS_ToBool(ctx, fromPhys))) {
+#if BRO_WITH_PHYSICS
+        auto* world = PhysicsBindings::unwrapWorld(ctx, fromPhys);
+        if (!world) {
+            JS_FreeValue(ctx, fromPhys);
+            return JS_ThrowTypeError(ctx, "bakeNavMesh: fromPhysics world not available");
+        }
+        // Phase-idle contract: bake runs on the JS thread while the physics
+        // phase is idle, so direct body access is safe (same as createNavGrid).
+        const uint32_t layerMask = parsePhysicsLayerMask(ctx, opts, world);
+        world->collectStaticTriangles(xyz, indices, layerMask);
+#else
+        JS_FreeValue(ctx, fromPhys);
+        return JS_ThrowTypeError(ctx, "bakeNavMesh: fromPhysics requires a physics-enabled build");
+#endif
+    }
+    JS_FreeValue(ctx, fromPhys);
+
+    // ── fromTerrain: height-sampled surface grid ──
+    // Voxel terrain is heightmap-backed; sampling the top surface on a grid
+    // (one down-raycast per sample) reproduces slopes and plateaus without
+    // pulling chunk render meshes. Overhangs/caves are approximated by the
+    // top surface — documented limitation. Samples with no hit become holes.
+    JSValue fromTerr = JS_GetPropertyStr(ctx, opts, "fromTerrain");
+    if (!JS_IsUndefined(fromTerr) && !JS_IsNull(fromTerr)) {
+#if BRO_WITH_3D
+        void* th = terrainHandleFromJS(ctx, fromTerr);
+        if (!th) {
+            JS_FreeValue(ctx, fromTerr);
+            return JS_ThrowTypeError(ctx,
+                "bakeNavMesh: fromTerrain must be a scene.createTerrain() object");
+        }
+        JSValue bv = JS_GetPropertyStr(ctx, opts, "terrainBounds");
+        if (!JS_IsObject(bv)) {
+            JS_FreeValue(ctx, bv);
+            JS_FreeValue(ctx, fromTerr);
+            return JS_ThrowTypeError(ctx,
+                "bakeNavMesh: fromTerrain requires terrainBounds {minX, minZ, maxX, maxZ}");
+        }
+        const float minX = (float)getDoubleProp(ctx, bv, "minX", 0);
+        const float minZ = (float)getDoubleProp(ctx, bv, "minZ", 0);
+        const float maxX = (float)getDoubleProp(ctx, bv, "maxX", 0);
+        const float maxZ = (float)getDoubleProp(ctx, bv, "maxZ", 0);
+        JS_FreeValue(ctx, bv);
+        const float step      = (float)getDoubleProp(ctx, opts, "terrainStep", 1.0);
+        const float rayStart  = (float)getDoubleProp(ctx, opts, "terrainRayStart", 100.0);
+        const float rayLength = (float)getDoubleProp(ctx, opts, "terrainRayLength", 200.0);
+        if (!(maxX > minX) || !(maxZ > minZ) || !(step > 0)) {
+            JS_FreeValue(ctx, fromTerr);
+            return JS_ThrowRangeError(ctx, "bakeNavMesh: invalid terrainBounds/terrainStep");
+        }
+        const int nx = (int)((maxX - minX) / step) + 1;
+        const int nz = (int)((maxZ - minZ) / step) + 1;
+        if ((int64_t)nx * nz > 4 * 1024 * 1024) {
+            JS_FreeValue(ctx, fromTerr);
+            return JS_ThrowRangeError(ctx, "bakeNavMesh: terrain sample grid too large (%dx%d)",
+                                      nx, nz);
+        }
+        std::vector<float> hs((size_t)nx * nz);
+        std::vector<uint8_t> valid((size_t)nx * nz, 0);
+        for (int iz = 0; iz < nz; iz++) {
+            for (int ix = 0; ix < nx; ix++) {
+                float y = 0;
+                if (terrainSampleHeight(th, minX + ix * step, minZ + iz * step,
+                                        rayStart, rayLength, y)) {
+                    hs[(size_t)iz * nx + ix] = y;
+                    valid[(size_t)iz * nx + ix] = 1;
+                }
+            }
+        }
+        const uint32_t base = (uint32_t)(xyz.size() / 3);
+        std::vector<int32_t> vidx((size_t)nx * nz, -1);
+        for (int iz = 0; iz < nz; iz++) {
+            for (int ix = 0; ix < nx; ix++) {
+                const size_t s = (size_t)iz * nx + ix;
+                if (!valid[s]) continue;
+                vidx[s] = (int32_t)(xyz.size() / 3 - base);
+                xyz.push_back(minX + ix * step);
+                xyz.push_back(hs[s]);
+                xyz.push_back(minZ + iz * step);
+            }
+        }
+        // CCW from above: (x0,z0)→(x0,z1)→(x1,z0) and (x1,z0)→(x0,z1)→(x1,z1).
+        for (int iz = 0; iz + 1 < nz; iz++) {
+            for (int ix = 0; ix + 1 < nx; ix++) {
+                const int32_t a = vidx[(size_t)iz * nx + ix];
+                const int32_t b = vidx[(size_t)(iz + 1) * nx + ix];
+                const int32_t c = vidx[(size_t)iz * nx + ix + 1];
+                const int32_t d = vidx[(size_t)(iz + 1) * nx + ix + 1];
+                if (a >= 0 && b >= 0 && c >= 0) {
+                    indices.push_back(base + a);
+                    indices.push_back(base + b);
+                    indices.push_back(base + c);
+                }
+                if (c >= 0 && b >= 0 && d >= 0) {
+                    indices.push_back(base + c);
+                    indices.push_back(base + b);
+                    indices.push_back(base + d);
+                }
+            }
+        }
+#else
+        JS_FreeValue(ctx, fromTerr);
+        return JS_ThrowTypeError(ctx, "bakeNavMesh: fromTerrain requires a 3D-enabled build");
+#endif
+    }
+    JS_FreeValue(ctx, fromTerr);
+
+    if (xyz.empty() || indices.empty())
+        return JS_ThrowTypeError(ctx,
+            "bakeNavMesh: no geometry (pass positions/indices, fromPhysics or fromTerrain)");
+
+    // ── Bake config ──
+    brogameagent::NavMeshBakeConfig cfg;
+    cfg.cellSize             = (float)getDoubleProp(ctx, opts, "cellSize", cfg.cellSize);
+    cfg.cellHeight           = (float)getDoubleProp(ctx, opts, "cellHeight", cfg.cellHeight);
+    cfg.agentRadius          = (float)getDoubleProp(ctx, opts, "agentRadius", cfg.agentRadius);
+    cfg.agentHeight          = (float)getDoubleProp(ctx, opts, "agentHeight", cfg.agentHeight);
+    cfg.agentMaxClimb        = (float)getDoubleProp(ctx, opts, "agentMaxClimb", cfg.agentMaxClimb);
+    cfg.agentMaxSlopeDeg     = (float)getDoubleProp(ctx, opts, "agentMaxSlopeDeg", cfg.agentMaxSlopeDeg);
+    cfg.regionMinSize        = (float)getDoubleProp(ctx, opts, "regionMinSize", cfg.regionMinSize);
+    cfg.regionMergeSize      = (float)getDoubleProp(ctx, opts, "regionMergeSize", cfg.regionMergeSize);
+    cfg.edgeMaxLen           = (float)getDoubleProp(ctx, opts, "edgeMaxLen", cfg.edgeMaxLen);
+    cfg.edgeMaxError         = (float)getDoubleProp(ctx, opts, "edgeMaxError", cfg.edgeMaxError);
+    cfg.detailSampleDist     = (float)getDoubleProp(ctx, opts, "detailSampleDist", cfg.detailSampleDist);
+    cfg.detailSampleMaxError = (float)getDoubleProp(ctx, opts, "detailSampleMaxError", cfg.detailSampleMaxError);
+
+    auto mesh = std::make_unique<brogameagent::NavMesh>();
+    if (!mesh->bake(xyz.data(), xyz.size() / 3, indices.data(), indices.size(), cfg)) {
+        return JS_ThrowInternalError(ctx, "bakeNavMesh: %s", mesh->lastError().c_str());
+    }
+    return qjsbind::wrap<NavMeshData>(ctx, new NavMeshData{std::move(mesh)});
+}
+
+// bro.ai.game.loadNavMesh(buffer) — restore a mesh saved with navMesh.save().
+// Accepts an ArrayBuffer or any typed-array view over one.
+static JSValue js_loadNavMesh(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "loadNavMesh(buffer)");
+    size_t size = 0;
+    uint8_t* data = JS_GetArrayBuffer(ctx, &size, argv[0]);
+    if (!data) {
+        // Not an ArrayBuffer — try a typed-array view.
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        size_t byteOff = 0, byteLen = 0;
+        JSValue ab = JS_GetTypedArrayBuffer(ctx, argv[0], &byteOff, &byteLen, nullptr);
+        if (JS_IsException(ab)) {
+            JS_FreeValue(ctx, JS_GetException(ctx));
+            return JS_ThrowTypeError(ctx, "loadNavMesh: expected an ArrayBuffer or typed array");
+        }
+        size_t abLen = 0;
+        uint8_t* raw = JS_GetArrayBuffer(ctx, &abLen, ab);
+        JS_FreeValue(ctx, ab);
+        if (!raw) return JS_ThrowTypeError(ctx, "loadNavMesh: detached buffer");
+        data = raw + byteOff;
+        size = byteLen;
+    }
+    auto mesh = std::make_unique<brogameagent::NavMesh>();
+    if (!mesh->loadFrom(data, size)) {
+        return JS_ThrowInternalError(ctx, "loadNavMesh: %s", mesh->lastError().c_str());
+    }
+    return qjsbind::wrap<NavMeshData>(ctx, new NavMeshData{std::move(mesh)});
+}
+
+#endif  // BROGAMEAGENT_HAS_NAVMESH
 
 // bro.ai.game.createAgent(opts)
 static JSValue js_createAgent(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -1709,6 +2050,85 @@ void AIBindings::install(JSContext* ctx) {
                     return JS_UNDEFINED;
                 }, 2);
     }
+
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+    // ─── NavMesh class (polygon navmesh — bakeNavMesh / loadNavMesh) ────
+    {
+        qjsbind::Class<NavMeshData>(ctx, "AINavMesh", qjsbind::NoGlobal)
+            .get("valid",
+                [](NavMeshData* d) -> bool { return d->mesh && d->mesh->valid(); })
+            // findPath(start, end, extents?) → Float32Array of xyz triples,
+            // or null when either endpoint fails to snap or no COMPLETE path
+            // exists (partial paths are failure, never truncation).
+            .method_raw("findPath",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<NavMeshData>(ctx, this_val);
+                    if (!d || !d->mesh) return JS_NULL;
+                    bromath::Vec3 a, b;
+                    if (argc < 2 || !parseVec3Val(ctx, argv[0], a) || !parseVec3Val(ctx, argv[1], b))
+                        return JS_ThrowTypeError(ctx, "findPath(start, end, extents?)");
+                    auto path = d->mesh->findPath(a, b, parseExtentsArg(ctx, argc, argv, 2));
+                    if (path.empty()) return JS_NULL;
+                    static_assert(sizeof(bromath::Vec3) == 3 * sizeof(float),
+                                  "Vec3 must be tightly packed for the flat copy");
+                    return make_float32_array(ctx, &path[0].x, path.size() * 3);
+                }, 3)
+            // nearestPoint(p, extents?) → {x,y,z} snapped onto the mesh, or
+            // null when nothing is within the search extents.
+            .method_raw("nearestPoint",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<NavMeshData>(ctx, this_val);
+                    if (!d || !d->mesh) return JS_NULL;
+                    bromath::Vec3 p;
+                    if (argc < 1 || !parseVec3Val(ctx, argv[0], p))
+                        return JS_ThrowTypeError(ctx, "nearestPoint(p, extents?)");
+                    bromath::Vec3 out;
+                    if (!d->mesh->nearestPoint(p, out, parseExtentsArg(ctx, argc, argv, 1)))
+                        return JS_NULL;
+                    return makeVec3(ctx, out);
+                }, 2)
+            // raycast(start, end, extents?) → {hit, t, point, normal} — the
+            // walkability ray along the mesh surface, not a physics ray.
+            .method_raw("raycast",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<NavMeshData>(ctx, this_val);
+                    if (!d || !d->mesh) return JS_NULL;
+                    bromath::Vec3 a, b;
+                    if (argc < 2 || !parseVec3Val(ctx, argv[0], a) || !parseVec3Val(ctx, argv[1], b))
+                        return JS_ThrowTypeError(ctx, "raycast(start, end, extents?)");
+                    auto hit = d->mesh->raycast(a, b, parseExtentsArg(ctx, argc, argv, 2));
+                    JSValue o = JS_NewObject(ctx);
+                    JS_SetPropertyStr(ctx, o, "hit", JS_NewBool(ctx, hit.hit));
+                    JS_SetPropertyStr(ctx, o, "t", JS_NewFloat64(ctx, hit.t));
+                    JS_SetPropertyStr(ctx, o, "point", makeVec3(ctx, hit.point));
+                    JS_SetPropertyStr(ctx, o, "normal", makeVec3(ctx, hit.normal));
+                    return o;
+                }, 3)
+            // randomPoint(seed) → {x,y,z} (deterministic per seed), or null
+            // when the mesh is empty.
+            .method_raw("randomPoint",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<NavMeshData>(ctx, this_val);
+                    if (!d || !d->mesh) return JS_NULL;
+                    uint32_t seed = 0;
+                    if (argc >= 1) JS_ToUint32(ctx, &seed, argv[0]);
+                    bromath::Vec3 out;
+                    if (!d->mesh->randomPoint(seed, out)) return JS_NULL;
+                    return makeVec3(ctx, out);
+                }, 1)
+            // save() → ArrayBuffer of the baked mesh (cache it to disk;
+            // loadNavMesh() restores it without the seconds-scale bake).
+            .method_raw("save",
+                [](JSContext* ctx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
+                    auto* d = qjsbind::unwrap<NavMeshData>(ctx, this_val);
+                    if (!d || !d->mesh) return JS_ThrowTypeError(ctx, "save: invalid NavMesh");
+                    std::vector<uint8_t> blob;
+                    if (!d->mesh->saveTo(blob))
+                        return JS_ThrowInternalError(ctx, "save: NavMesh is not baked");
+                    return JS_NewArrayBufferCopy(ctx, blob.data(), blob.size());
+                }, 0);
+    }
+#endif  // BROGAMEAGENT_HAS_NAVMESH
 
     // ─── Unit class (accessor proxy for Agent's Unit) ──────────────────
     {
@@ -3073,6 +3493,30 @@ void AIBindings::install(JSContext* ctx) {
     // Factory functions
     JS_SetPropertyStr(ctx, gameObj, "createNavGrid",
         JS_NewCFunction(ctx, js_createNavGrid, "createNavGrid", 1));
+
+    // Polygon navmesh (Recast/Detour via brogameagent) — present when the
+    // build was configured with -DBROGAMEAGENT_WITH_NAVMESH=ON. Otherwise the
+    // factories throw and navMeshAvailable === false so apps feature-detect.
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+    JS_SetPropertyStr(ctx, gameObj, "bakeNavMesh",
+        JS_NewCFunction(ctx, js_bakeNavMesh, "bakeNavMesh", 1));
+    JS_SetPropertyStr(ctx, gameObj, "loadNavMesh",
+        JS_NewCFunction(ctx, js_loadNavMesh, "loadNavMesh", 1));
+    JS_SetPropertyStr(ctx, gameObj, "navMeshAvailable", JS_NewBool(ctx, true));
+#else
+    {
+        JSCFunction* navStub = [](JSContext* ctx, JSValueConst, int, JSValueConst*) -> JSValue {
+            return JS_ThrowTypeError(ctx,
+                "bro.ai.game navmesh is unavailable: this build was compiled "
+                "without BROGAMEAGENT_WITH_NAVMESH");
+        };
+        JS_SetPropertyStr(ctx, gameObj, "bakeNavMesh",
+            JS_NewCFunction(ctx, navStub, "bakeNavMesh", 1));
+        JS_SetPropertyStr(ctx, gameObj, "loadNavMesh",
+            JS_NewCFunction(ctx, navStub, "loadNavMesh", 1));
+        JS_SetPropertyStr(ctx, gameObj, "navMeshAvailable", JS_NewBool(ctx, false));
+    }
+#endif
     JS_SetPropertyStr(ctx, gameObj, "createAgent",
         JS_NewCFunction(ctx, js_createAgent, "createAgent", 1));
     JS_SetPropertyStr(ctx, gameObj, "createWorld",
@@ -3308,6 +3752,16 @@ brogameagent::mcts::Mcts* mctsFromJS(JSContext* ctx, JSValueConst val) {
 brogameagent::NavGrid* navGridFromJS(JSContext* ctx, JSValueConst val) {
     auto* d = qjsbind::unwrap<NavGridData>(ctx, val);
     return d && d->grid ? d->grid.get() : nullptr;
+}
+
+brogameagent::NavMesh* navMeshFromJS(JSContext* ctx, JSValueConst val) {
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+    auto* d = qjsbind::unwrap<NavMeshData>(ctx, val);
+    return d && d->mesh ? d->mesh.get() : nullptr;
+#else
+    (void)ctx; (void)val;
+    return nullptr;
+#endif
 }
 
 JSValue createNavGridJS(JSContext* ctx, float minX, float minZ,
