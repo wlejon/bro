@@ -97,7 +97,7 @@ Physics.setLayers({
  * Create a rigid body and return its integer tag.
  *
  * @param {Object} opts
- * @param {string}  opts.shape        - "box" | "sphere" | "capsule" | "cylinder" | "convexHull" | "mesh" | "compound"
+ * @param {string}  opts.shape        - "box" | "sphere" | "capsule" | "cylinder" | "convexHull" | "mesh" | "compound" | "chain" | "heightfield"
  * @param {{x,y,z}} [opts.position]   - default {0,0,0}
  * @param {{x,y,z,w}} [opts.rotation] - quaternion, default identity
  * @param {boolean} [opts.static=false]
@@ -125,8 +125,19 @@ Physics.setLayers({
  * @param {Uint32Array|number[]}  [opts.indices]   - mesh, triangle list (multiple of 3)
  * @param {Object[]} [opts.parts]       - compound; each part has {shape, ...subShapeProps,
  *                                          localPosition: {x,y,z}, localRotation: {x,y,z,w}}
+ * @param {Float32Array|number[]} [opts.heights] - heightfield, n*n samples row-major:
+ *                                          heights[z*n + x]. FLT_MAX marks a hole.
+ * @param {number}  [opts.sampleCount]  - heightfield n (inferred from heights.length if omitted); n >= 4
+ * @param {{x,y,z}} [opts.scale]        - heightfield cell size / height scale (default {1,1,1})
+ * @param {{x,y,z}} [opts.offset]       - heightfield local offset applied before the body transform
  *
  * Notes:
+ * - "heightfield" shapes are always static. The surface in body-local space is
+ *   offset + scale * (x, heights[z*n + x], z) for integer x,z in [0, n-1] — the
+ *   grid spans scale.x*(n-1) by scale.z*(n-1) starting at the body position, NOT
+ *   centered on it; use offset (or position) to center. Much cheaper than an
+ *   equivalent static "mesh" for terrain (quantized samples + hierarchical grid,
+ *   no triangle soup).
  * - "mesh" shapes are always static (Jolt limitation). Triangle winding determines
  *   which side collides — Jolt mesh shapes are one-sided. CCW = +Y normal in
  *   right-handed Y-up.
@@ -187,6 +198,21 @@ Physics.createBody({
     depth: 4,                          // total Z thickness (for 2D-DOF bodies)
     closed: false,                     // close loop: connects last→first
     flipNormal: false,
+});
+
+// Heightfield terrain: 64x64 samples, 1m cells, heights from any source
+// (noise, image, analytic). Collides as real terrain — much cheaper than a
+// triangle mesh of the same grid.
+const n = 64;
+const heights = new Float32Array(n * n);
+for (let z = 0; z < n; z++)
+    for (let x = 0; x < n; x++)
+        heights[z * n + x] = 3 * Math.sin(x * 0.2) * Math.cos(z * 0.2);
+Physics.createBody({
+    shape: 'heightfield',
+    heights, sampleCount: n,
+    scale: { x: 1, y: 1, z: 1 },
+    position: { x: -n / 2, y: 0, z: -n / 2 },   // center the grid on the origin
 });
 
 /** Destroy a body and free its tag. Safely removes any constraints attached to it. */
@@ -465,6 +491,94 @@ if (hit) console.log('nearest', hit.bodyId, hit.fraction);
 
 
 // -----------------------------------------------------------------------------
+// Shape casts & overlap queries
+// -----------------------------------------------------------------------------
+//
+// Narrow-phase queries: unlike raycast (which tests broadphase AABBs), these
+// test exact shape geometry and return real contact points and normals.
+//
+// All three take an opts object whose shape fields read exactly like
+// createBody (shape kind + dimensions + position/rotation), restricted to
+// CONVEX shapes: "box" | "sphere" | "capsule" | "cylinder" | "convexHull".
+//
+// Shared filter fields (also on overlapPoint's trailing opts):
+//   layers:     array of layer names/indices the query can SEE. Independent
+//               of the collision matrix — a query may see layers that never
+//               collide with anything. Default: all layers.
+//   ignoreBody: one body tag to exclude (e.g. the caster itself).
+
+/**
+ * Sweep a convex shape from its transform along direction*maxDistance and
+ * return ALL hits — one per body (its earliest contact), sorted by fraction.
+ *
+ * @param {Object} opts
+ * @param {string}  opts.shape        - "box" | "sphere" | "capsule" | "cylinder" | "convexHull"
+ * @param {{x,y,z}} [opts.position]   - start transform (default origin)
+ * @param {{x,y,z,w}} [opts.rotation] - start rotation (default identity)
+ * @param {{x,y,z}} opts.direction    - cast direction (unit vector; the sweep
+ *                                       is direction*maxDistance, fraction is 0..1 along it)
+ * @param {number}  [opts.maxDistance=1000]
+ * @param {(string|number)[]} [opts.layers] - layer filter (see above)
+ * @param {number}  [opts.ignoreBody]       - body tag to exclude
+ * @returns {Array<{ bodyId:number, fraction:number, position:{x,y,z},
+ *                   normal:{x,y,z}, userData:bigint }>}
+ *          position = contact point on the hit body; normal = surface normal
+ *          on the hit body (points back toward the cast shape).
+ *          bodyId is -1 if the hit body has no JS tag (engine-owned body).
+ */
+const sweeps = Physics.castShape({
+    shape: 'sphere', radius: 0.5,
+    position: { x: 0, y: 10, z: 0 },
+    direction: { x: 0, y: -1, z: 0 },
+    maxDistance: 20,
+});
+
+/**
+ * Like castShape but returns ONLY the nearest hit (or null). Cheaper — Jolt
+ * early-outs beyond the best fraction. The go-to for "can I move there"
+ * checks, projectile sweeps, and character-controller style probes.
+ * @returns {{ bodyId, fraction, position, normal, userData } | null}
+ */
+const sweep = Physics.castShapeClosest({
+    shape: 'capsule', radius: 0.3, halfHeight: 0.6,
+    position: player.pos, direction: { x: 1, y: 0, z: 0 }, maxDistance: 2,
+    ignoreBody: player.body,
+});
+if (sweep) console.log('wall at', sweep.fraction, 'normal', sweep.normal);
+
+/**
+ * All bodies overlapping a convex shape at a transform (no sweep). One entry
+ * per body with its deepest contact.
+ *
+ * @param {Object} opts - shape + position/rotation + layers/ignoreBody as above
+ * @returns {Array<{ bodyId:number, depth:number, position:{x,y,z},
+ *                   normal:{x,y,z}, userData:bigint }>}
+ *          depth = penetration depth; position = contact point on the
+ *          overlapped body; normal = contact normal on the overlapped body
+ *          (points back toward the query shape).
+ */
+const around = Physics.overlapShape({
+    shape: 'sphere', radius: 3,
+    position: { x: 0, y: 1, z: 0 },
+    layers: ['moving'],
+});
+for (const o of around) console.log('in blast radius:', o.bodyId, o.depth);
+
+/**
+ * All bodies containing a world-space point (shapes are treated as solid).
+ * For mesh shapes this is only meaningful if the mesh is a closed manifold.
+ *
+ * @param {number} x
+ * @param {number} y
+ * @param {number} z
+ * @param {Object} [opts] - { layers, ignoreBody } filter as above
+ * @returns {Array<{ bodyId:number, userData:bigint }>}
+ */
+const under = Physics.overlapPoint(mx, my, mz);
+if (under.length) console.log('picked body', under[0].bodyId);
+
+
+// -----------------------------------------------------------------------------
 // Contact events
 // -----------------------------------------------------------------------------
 
@@ -564,6 +678,11 @@ const broke = w.getBrokenConstraints();    // handles broken since last call
 
 const hits = w.raycast(ox, oy, oz, dx, dy, dz, /*maxDist*/ 100);
 const hit  = w.raycastClosest(ox, oy, oz, dx, dy, dz, /*maxDist*/ 100); // nearest or null
+const cs   = w.castShape({ shape:'sphere', radius:0.5, position:{...},  // narrow-phase queries,
+                           direction:{x:0,y:-1,z:0}, maxDistance:20 }); // same opts as Physics.*
+const c1   = w.castShapeClosest({ ... });   // nearest or null
+const ov   = w.overlapShape({ shape:'box', halfExtents:{...}, position:{...} });
+const pts  = w.overlapPoint(x, y, z, { layers:['moving'] });
 const evs  = w.getContacts();              // independent event queue
 
 w.destroyAll();      // wipe contents but keep the world (level-restart pattern)

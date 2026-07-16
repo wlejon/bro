@@ -15,6 +15,7 @@
 #include <Jolt/Physics/Body/AllowedDOFs.h>
 #include <qjsbind/qjsbind.h>
 
+#include <cmath>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -215,6 +216,7 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
     else if (shape == "mesh")       out.shape = physics::BodyOptions::ShapeMesh;
     else if (shape == "compound")   out.shape = physics::BodyOptions::ShapeCompound;
     else if (shape == "chain")      out.shape = physics::BodyOptions::ShapeChain;
+    else if (shape == "heightfield") out.shape = physics::BodyOptions::ShapeHeightField;
     else { err = "unknown shape: " + shape; return false; }
 
     JSValue posVal = JS_GetPropertyStr(ctx, opts, "position");
@@ -330,6 +332,29 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
         out.chainDepth = (float)qjsbind::get_prop_number(ctx, opts, "depth", 20.0);
         out.chainClosed = qjsbind::get_prop_bool(ctx, opts, "closed", false);
         out.chainFlipNormal = qjsbind::get_prop_bool(ctx, opts, "flipNormal", false);
+        out.isStatic = true;
+    }
+
+    if (out.shape == physics::BodyOptions::ShapeHeightField) {
+        JSValue hv = JS_GetPropertyStr(ctx, opts, "heights");
+        std::vector<float> heights;
+        readFloatArray(ctx, hv, heights);
+        JS_FreeValue(ctx, hv);
+        uint32_t n = (uint32_t)qjsbind::get_prop_number(ctx, opts, "sampleCount", 0.0);
+        if (n == 0 && !heights.empty())
+            n = (uint32_t)std::lround(std::sqrt((double)heights.size()));
+        if (n < 4 || heights.size() != (size_t)n * n) {
+            err = "heightfield requires heights (n*n floats, row-major, n >= 4) with matching sampleCount";
+            return false;
+        }
+        out.heightSamples = std::move(heights);
+        out.heightSampleCount = n;
+        JSValue sv = JS_GetPropertyStr(ctx, opts, "scale");
+        out.heightScale = readVec3(ctx, sv, JPH::Vec3(1, 1, 1));
+        JS_FreeValue(ctx, sv);
+        JSValue ov = JS_GetPropertyStr(ctx, opts, "offset");
+        out.heightOffset = readVec3(ctx, ov);
+        JS_FreeValue(ctx, ov);
         out.isStatic = true;
     }
 
@@ -484,6 +509,152 @@ static JSValue worldRaycastClosest(JSContext* ctx, JsWorld* w, int argc, JSValue
     JS_SetPropertyStr(ctx, posObj, "z", JS_NewFloat64(ctx, hit.position.GetZ()));
     JS_SetPropertyStr(ctx, obj, "position", posObj);
     return obj;
+}
+
+// Layer/body filter shared by the narrow-phase query bindings. `layers` is an
+// array of layer names or indices selecting which object layers the query can
+// see (independent of the collision matrix); `ignoreBody` excludes one tag.
+static void readQueryFilter(JSContext* ctx, JSValueConst opts, JsWorld* w,
+                            physics::QueryFilter& out) {
+    JSValue lv = JS_GetPropertyStr(ctx, opts, "layers");
+    if (JS_IsArray(lv)) {
+        uint32_t mask = 0;
+        JSValue lenV = JS_GetPropertyStr(ctx, lv, "length");
+        uint32_t n = 0; JS_ToUint32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
+        for (uint32_t i = 0; i < n; i++) {
+            JSValue el = JS_GetPropertyUint32(ctx, lv, i);
+            int32_t idx = -1;
+            if (JS_IsString(el)) {
+                const char* s = JS_ToCString(ctx, el);
+                if (s) { idx = w->world->layerIndex(s); JS_FreeCString(ctx, s); }
+            } else if (JS_IsNumber(el)) {
+                JS_ToInt32(ctx, &idx, el);
+            }
+            if (idx >= 0 && idx < 32) mask |= 1u << idx;
+            JS_FreeValue(ctx, el);
+        }
+        out.layerMask = mask;
+    }
+    JS_FreeValue(ctx, lv);
+    int32_t ignore = (int32_t)qjsbind::get_prop_number(ctx, opts, "ignoreBody", -1.0);
+    if (ignore >= 0) out.ignoreBody = w->bodyIdForTag(ignore);
+}
+
+// Query shapes are described like createBody opts (shape kind + dimensions +
+// position/rotation) but must be convex.
+static bool readQueryShape(JSContext* ctx, JSValueConst opts, JsWorld* w,
+                           physics::BodyOptions& shape, std::string& err) {
+    if (!readBodyOptions(ctx, opts, w->world, shape, err)) return false;
+    switch (shape.shape) {
+        case physics::BodyOptions::ShapeBox:
+        case physics::BodyOptions::ShapeSphere:
+        case physics::BodyOptions::ShapeCapsule:
+        case physics::BodyOptions::ShapeCylinder:
+        case physics::BodyOptions::ShapeConvexHull:
+            return true;
+        default:
+            err = "query shape must be convex (box|sphere|capsule|cylinder|convexHull)";
+            return false;
+    }
+}
+
+static void setVec3Prop(JSContext* ctx, JSValue obj, const char* name,
+                        float x, float y, float z) {
+    JSValue v = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, v, "x", JS_NewFloat64(ctx, x));
+    JS_SetPropertyStr(ctx, v, "y", JS_NewFloat64(ctx, y));
+    JS_SetPropertyStr(ctx, v, "z", JS_NewFloat64(ctx, z));
+    JS_SetPropertyStr(ctx, obj, name, v);
+}
+
+static JSValue makeCastHitObj(JSContext* ctx, JsWorld* w, const physics::ShapeCastHit& hit) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "bodyId", JS_NewInt32(ctx, w->tagForBodyId(hit.bodyID)));
+    JS_SetPropertyStr(ctx, obj, "fraction", JS_NewFloat64(ctx, hit.fraction));
+    JS_SetPropertyStr(ctx, obj, "userData",
+        JS_NewBigUint64(ctx, hit.bodyID.IsInvalid() ? 0 : w->world->getUserData(hit.bodyID)));
+    setVec3Prop(ctx, obj, "position", hit.position.GetX(), hit.position.GetY(), hit.position.GetZ());
+    setVec3Prop(ctx, obj, "normal", hit.normal.GetX(), hit.normal.GetY(), hit.normal.GetZ());
+    return obj;
+}
+
+static JSValue worldCastShape(JSContext* ctx, JsWorld* w, JSValueConst optsVal,
+                              bool closestOnly) {
+    if (!w || !w->world) return closestOnly ? JS_NULL : JS_NewArray(ctx);
+    if (!JS_IsObject(optsVal)) return JS_ThrowTypeError(ctx, "castShape(opts) requires an object");
+
+    physics::BodyOptions shape;
+    std::string err;
+    if (!readQueryShape(ctx, optsVal, w, shape, err))
+        return JS_ThrowTypeError(ctx, "%s", err.c_str());
+    physics::QueryFilter filter;
+    readQueryFilter(ctx, optsVal, w, filter);
+
+    JSValue dv = JS_GetPropertyStr(ctx, optsVal, "direction");
+    JPH::Vec3 dir = readVec3(ctx, dv);
+    JS_FreeValue(ctx, dv);
+    if (dir == JPH::Vec3::sZero())
+        return JS_ThrowTypeError(ctx, "castShape requires a non-zero direction");
+    double maxDist = qjsbind::get_prop_number(ctx, optsVal, "maxDistance", 1000.0);
+
+    if (closestOnly) {
+        physics::ShapeCastHit hit;
+        if (!w->world->castShapeClosest(shape, dir, (float)maxDist, hit, filter))
+            return JS_NULL;
+        return makeCastHitObj(ctx, w, hit);
+    }
+    auto hits = w->world->castShape(shape, dir, (float)maxDist, filter);
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (auto& hit : hits)
+        JS_SetPropertyUint32(ctx, arr, i++, makeCastHitObj(ctx, w, hit));
+    return arr;
+}
+
+static JSValue worldOverlapShape(JSContext* ctx, JsWorld* w, JSValueConst optsVal) {
+    if (!w || !w->world) return JS_NewArray(ctx);
+    if (!JS_IsObject(optsVal)) return JS_ThrowTypeError(ctx, "overlapShape(opts) requires an object");
+
+    physics::BodyOptions shape;
+    std::string err;
+    if (!readQueryShape(ctx, optsVal, w, shape, err))
+        return JS_ThrowTypeError(ctx, "%s", err.c_str());
+    physics::QueryFilter filter;
+    readQueryFilter(ctx, optsVal, w, filter);
+
+    auto hits = w->world->overlapShape(shape, filter);
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (auto& hit : hits) {
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "bodyId", JS_NewInt32(ctx, w->tagForBodyId(hit.bodyID)));
+        JS_SetPropertyStr(ctx, obj, "depth", JS_NewFloat64(ctx, hit.depth));
+        JS_SetPropertyStr(ctx, obj, "userData",
+            JS_NewBigUint64(ctx, hit.bodyID.IsInvalid() ? 0 : w->world->getUserData(hit.bodyID)));
+        setVec3Prop(ctx, obj, "position", hit.position.GetX(), hit.position.GetY(), hit.position.GetZ());
+        setVec3Prop(ctx, obj, "normal", hit.normal.GetX(), hit.normal.GetY(), hit.normal.GetZ());
+        JS_SetPropertyUint32(ctx, arr, i++, obj);
+    }
+    return arr;
+}
+
+static JSValue worldOverlapPoint(JSContext* ctx, JsWorld* w, int argc, JSValueConst* argv) {
+    if (!w || !w->world || argc < 3) return JS_NewArray(ctx);
+    double x, y, z;
+    JS_ToFloat64(ctx, &x, argv[0]); JS_ToFloat64(ctx, &y, argv[1]); JS_ToFloat64(ctx, &z, argv[2]);
+    physics::QueryFilter filter;
+    if (argc >= 4 && JS_IsObject(argv[3])) readQueryFilter(ctx, argv[3], w, filter);
+
+    auto bodies = w->world->overlapPoint(JPH::RVec3((float)x, (float)y, (float)z), filter);
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    for (auto& id : bodies) {
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "bodyId", JS_NewInt32(ctx, w->tagForBodyId(id)));
+        JS_SetPropertyStr(ctx, obj, "userData", JS_NewBigUint64(ctx, w->world->getUserData(id)));
+        JS_SetPropertyUint32(ctx, arr, i++, obj);
+    }
+    return arr;
 }
 
 static JSValue worldGetBrokenConstraints(JSContext* ctx, JsWorld* w) {
@@ -892,6 +1063,29 @@ static JSValue js_physics_raycastClosest(JSContext* ctx, JSValueConst, int argc,
     return worldRaycastClosest(ctx, s_defaultWorld, argc, argv);
 }
 
+static JSValue js_physics_castShape(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 1) return JS_ThrowTypeError(ctx, "Physics.castShape(opts) requires an object");
+    return worldCastShape(ctx, s_defaultWorld, argv[0], /*closestOnly=*/false);
+}
+
+static JSValue js_physics_castShapeClosest(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 1) return JS_ThrowTypeError(ctx, "Physics.castShapeClosest(opts) requires an object");
+    return worldCastShape(ctx, s_defaultWorld, argv[0], /*closestOnly=*/true);
+}
+
+static JSValue js_physics_overlapShape(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 1) return JS_ThrowTypeError(ctx, "Physics.overlapShape(opts) requires an object");
+    return worldOverlapShape(ctx, s_defaultWorld, argv[0]);
+}
+
+static JSValue js_physics_overlapPoint(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (!s_defaultWorld) return JS_NewArray(ctx);
+    return worldOverlapPoint(ctx, s_defaultWorld, argc, argv);
+}
+
 static JSValue js_physics_getContacts(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     if (!s_defaultWorld) return JS_NewArray(ctx);
     return worldGetContacts(ctx, s_defaultWorld);
@@ -1192,6 +1386,30 @@ static JSValue jsw_raycastClosest(JSContext* ctx, JSValueConst thisVal, int argc
     return worldRaycastClosest(ctx, w, argc, argv);
 }
 
+static JSValue jsw_castShape(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || argc < 1) return JS_NewArray(ctx);
+    return worldCastShape(ctx, w, argv[0], /*closestOnly=*/false);
+}
+
+static JSValue jsw_castShapeClosest(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || argc < 1) return JS_NULL;
+    return worldCastShape(ctx, w, argv[0], /*closestOnly=*/true);
+}
+
+static JSValue jsw_overlapShape(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || argc < 1) return JS_NewArray(ctx);
+    return worldOverlapShape(ctx, w, argv[0]);
+}
+
+static JSValue jsw_overlapPoint(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w) return JS_NewArray(ctx);
+    return worldOverlapPoint(ctx, w, argc, argv);
+}
+
 static JSValue jsw_getContacts(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
     JsWorld* w = worldFromThis(ctx, thisVal);
     if (!w) return JS_NewArray(ctx);
@@ -1377,6 +1595,10 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("activate", 1, jsw_activate),
     JS_CFUNC_DEF("raycast", 7, jsw_raycast),
     JS_CFUNC_DEF("raycastClosest", 7, jsw_raycastClosest),
+    JS_CFUNC_DEF("castShape", 1, jsw_castShape),
+    JS_CFUNC_DEF("castShapeClosest", 1, jsw_castShapeClosest),
+    JS_CFUNC_DEF("overlapShape", 1, jsw_overlapShape),
+    JS_CFUNC_DEF("overlapPoint", 4, jsw_overlapPoint),
     JS_CFUNC_DEF("getContacts", 0, jsw_getContacts),
     JS_CFUNC_DEF("createConstraint", 1, jsw_createConstraint),
     JS_CFUNC_DEF("destroyConstraint", 1, jsw_destroyConstraint),
@@ -1465,6 +1687,10 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("moveKinematic", js_physics_moveKinematic, 5)
         .function("raycast", js_physics_raycast, 7)
         .function("raycastClosest", js_physics_raycastClosest, 7)
+        .function("castShape", js_physics_castShape, 1)
+        .function("castShapeClosest", js_physics_castShapeClosest, 1)
+        .function("overlapShape", js_physics_overlapShape, 1)
+        .function("overlapPoint", js_physics_overlapPoint, 4)
         .function("getContacts", js_physics_getContacts, 0)
         .function("setTimeStep", js_physics_setTimeStep, 1)
         .function("isActive", js_physics_isActive, 1)

@@ -10,10 +10,15 @@
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
 #include <Jolt/Physics/Collision/Shape/StaticCompoundShape.h>
+#include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/Body.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/ShapeCast.h>
+#include <Jolt/Physics/Collision/CollideShape.h>
+#include <Jolt/Physics/Collision/CollidePointResult.h>
+#include <Jolt/Physics/Collision/NarrowPhaseQuery.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayerInterfaceTable.h>
 #include <Jolt/Physics/Collision/BroadPhase/ObjectVsBroadPhaseLayerFilterTable.h>
@@ -477,6 +482,16 @@ static RefConst<Shape> buildShape(const BodyOptions& opts) {
             auto r = s.Create();
             return r.HasError() ? RefConst<Shape>() : r.Get();
         }
+        case BodyOptions::ShapeHeightField: {
+            const uint32_t n = opts.heightSampleCount;
+            // Jolt requires sampleCount / blockSize (default 2) >= 2.
+            if (n < 4 || opts.heightSamples.size() != size_t(n) * n)
+                return RefConst<Shape>();
+            HeightFieldShapeSettings s(opts.heightSamples.data(), opts.heightOffset,
+                                       opts.heightScale, n);
+            auto r = s.Create();
+            return r.HasError() ? RefConst<Shape>() : r.Get();
+        }
         case BodyOptions::ShapeCompound: {
             if (opts.compoundParts.empty()) return RefConst<Shape>();
             StaticCompoundShapeSettings s;
@@ -496,9 +511,10 @@ BodyID PhysicsWorld::createBody(const BodyOptions& opts) {
     auto shape = buildShape(opts);
     if (!shape) return BodyID();
 
-    // Mesh / chain shapes can only be static.
+    // Mesh / chain / heightfield shapes can only be static.
     bool isStatic = opts.isStatic;
-    if (opts.shape == BodyOptions::ShapeMesh || opts.shape == BodyOptions::ShapeChain) isStatic = true;
+    if (opts.shape == BodyOptions::ShapeMesh || opts.shape == BodyOptions::ShapeChain ||
+        opts.shape == BodyOptions::ShapeHeightField) isStatic = true;
 
     int layer = opts.layer;
     if (layer < 0) layer = isStatic ? 0 : 1;
@@ -1087,6 +1103,141 @@ bool PhysicsWorld::raycastClosest(RVec3 origin, Vec3 direction,
     outHit.position = origin + direction * (maxDistance * collector.mHit.mFraction);
     outHit.normal = Vec3(0, 1, 0);
     return true;
+}
+
+// --- Shape casts & overlap queries ---
+//
+// Unlike raycast() above (broadphase AABBs only), these go through the narrow
+// phase: exact geometry, real contact points/normals, and layer/body
+// filtering. Same threading contract as raycast: call only when idle.
+
+namespace {
+
+// Passes bodies whose object layer bit is set in the mask. Independent of the
+// collision matrix — queries may see layers that never collide.
+class MaskObjectLayerFilter final : public ObjectLayerFilter {
+public:
+    explicit MaskObjectLayerFilter(uint32_t mask) : mask_(mask) {}
+    bool ShouldCollide(ObjectLayer layer) const override {
+        return layer < 32 && ((mask_ >> layer) & 1u) != 0;
+    }
+private:
+    uint32_t mask_;
+};
+
+} // namespace
+
+std::vector<ShapeCastHit> PhysicsWorld::castShape(const BodyOptions& shapeOpts,
+                                                  Vec3 direction, float maxDistance,
+                                                  const QueryFilter& filter) const {
+    std::vector<ShapeCastHit> hits;
+    auto shape = buildShape(shapeOpts);
+    if (!shape || shape->GetType() != EShapeType::Convex) return hits;
+
+    RShapeCast cast = RShapeCast::sFromWorldTransform(
+        shape.GetPtr(), Vec3::sOne(),
+        RMat44::sRotationTranslation(shapeOpts.rotation, shapeOpts.position),
+        direction * maxDistance);
+    ShapeCastSettings settings;
+    MaskObjectLayerFilter layerFilter(filter.layerMask);
+    IgnoreSingleBodyFilter bodyFilter(filter.ignoreBody);
+    AllHitCollisionCollector<CastShapeCollector> collector;
+    physicsSystem_.GetNarrowPhaseQuery().CastShape(
+        cast, settings, RVec3::sZero(), collector, {}, layerFilter, bodyFilter);
+    collector.Sort();
+
+    // Mesh-family shapes report per-triangle hits; sorted ascending, the first
+    // occurrence of each body is its earliest contact — keep only that one.
+    for (auto& h : collector.mHits) {
+        bool seen = false;
+        for (auto& e : hits) {
+            if (e.bodyID == h.mBodyID2) { seen = true; break; }
+        }
+        if (seen) continue;
+        ShapeCastHit out;
+        out.bodyID = h.mBodyID2;
+        out.fraction = h.mFraction;
+        out.position = RVec3(h.mContactPointOn2);
+        out.normal = (-h.mPenetrationAxis).NormalizedOr(Vec3(0, 1, 0));
+        hits.push_back(out);
+    }
+    return hits;
+}
+
+bool PhysicsWorld::castShapeClosest(const BodyOptions& shapeOpts, Vec3 direction,
+                                    float maxDistance, ShapeCastHit& outHit,
+                                    const QueryFilter& filter) const {
+    auto shape = buildShape(shapeOpts);
+    if (!shape || shape->GetType() != EShapeType::Convex) return false;
+
+    RShapeCast cast = RShapeCast::sFromWorldTransform(
+        shape.GetPtr(), Vec3::sOne(),
+        RMat44::sRotationTranslation(shapeOpts.rotation, shapeOpts.position),
+        direction * maxDistance);
+    ShapeCastSettings settings;
+    MaskObjectLayerFilter layerFilter(filter.layerMask);
+    IgnoreSingleBodyFilter bodyFilter(filter.ignoreBody);
+    ClosestHitCollisionCollector<CastShapeCollector> collector;
+    physicsSystem_.GetNarrowPhaseQuery().CastShape(
+        cast, settings, RVec3::sZero(), collector, {}, layerFilter, bodyFilter);
+    if (!collector.HadHit()) return false;
+
+    outHit.bodyID = collector.mHit.mBodyID2;
+    outHit.fraction = collector.mHit.mFraction;
+    outHit.position = RVec3(collector.mHit.mContactPointOn2);
+    outHit.normal = (-collector.mHit.mPenetrationAxis).NormalizedOr(Vec3(0, 1, 0));
+    return true;
+}
+
+std::vector<OverlapHit> PhysicsWorld::overlapShape(const BodyOptions& shapeOpts,
+                                                   const QueryFilter& filter) const {
+    std::vector<OverlapHit> hits;
+    auto shape = buildShape(shapeOpts);
+    if (!shape || shape->GetType() != EShapeType::Convex) return hits;
+
+    // CollideShape wants the center-of-mass transform, not the body transform.
+    RMat44 com = RMat44::sRotationTranslation(shapeOpts.rotation, shapeOpts.position)
+                     .PreTranslated(shape->GetCenterOfMass());
+    CollideShapeSettings settings;
+    MaskObjectLayerFilter layerFilter(filter.layerMask);
+    IgnoreSingleBodyFilter bodyFilter(filter.ignoreBody);
+    AllHitCollisionCollector<CollideShapeCollector> collector;
+    physicsSystem_.GetNarrowPhaseQuery().CollideShape(
+        shape.GetPtr(), Vec3::sOne(), com, settings, RVec3::sZero(), collector,
+        {}, layerFilter, bodyFilter);
+
+    // One hit per body — keep the deepest contact.
+    for (auto& h : collector.mHits) {
+        OverlapHit* existing = nullptr;
+        for (auto& e : hits) {
+            if (e.bodyID == h.mBodyID2) { existing = &e; break; }
+        }
+        if (existing && existing->depth >= h.mPenetrationDepth) continue;
+        OverlapHit out;
+        out.bodyID = h.mBodyID2;
+        out.depth = h.mPenetrationDepth;
+        out.position = RVec3(h.mContactPointOn2);
+        out.normal = (-h.mPenetrationAxis).NormalizedOr(Vec3(0, 1, 0));
+        if (existing) *existing = out;
+        else hits.push_back(out);
+    }
+    return hits;
+}
+
+std::vector<BodyID> PhysicsWorld::overlapPoint(RVec3 point,
+                                               const QueryFilter& filter) const {
+    MaskObjectLayerFilter layerFilter(filter.layerMask);
+    IgnoreSingleBodyFilter bodyFilter(filter.ignoreBody);
+    AllHitCollisionCollector<CollidePointCollector> collector;
+    physicsSystem_.GetNarrowPhaseQuery().CollidePoint(
+        point, collector, {}, layerFilter, bodyFilter);
+
+    std::vector<BodyID> out;
+    for (auto& h : collector.mHits) {
+        if (std::find(out.begin(), out.end(), h.mBodyID) == out.end())
+            out.push_back(h.mBodyID);
+    }
+    return out;
 }
 
 // --- Contact events ---

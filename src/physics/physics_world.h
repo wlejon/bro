@@ -48,6 +48,30 @@ struct RayHit {
     JPH::RVec3 position;
 };
 
+/// Shape-cast hit result.
+struct ShapeCastHit {
+    JPH::BodyID bodyID;
+    float fraction;       // 0..1 along direction*maxDistance
+    JPH::Vec3 normal;     // surface normal on the hit body at the contact point
+    JPH::RVec3 position;  // contact point on the hit body (world space)
+};
+
+/// Overlap hit result.
+struct OverlapHit {
+    JPH::BodyID bodyID;
+    float depth;          // penetration depth
+    JPH::Vec3 normal;     // contact normal on the overlapped body, toward the query shape
+    JPH::RVec3 position;  // deepest contact point on the overlapped body (world space)
+};
+
+/// Filter shared by the narrow-phase spatial queries. Layer bits are
+/// independent of the collision matrix — a query may see layers that never
+/// collide with anything.
+struct QueryFilter {
+    uint32_t layerMask = 0xffffffffu;  // bit i = include bodies on layer i
+    JPH::BodyID ignoreBody;            // invalid (default) = exclude nothing
+};
+
 /// Body creation options (covers all shapes & flags).
 struct BodyOptions {
     enum Shape {
@@ -59,6 +83,7 @@ struct BodyOptions {
         ShapeMesh,        // static only
         ShapeCompound,
         ShapeChain,       // static only — 2D polyline thickened along Z
+        ShapeHeightField, // static only — square grid of n*n height samples
     };
 
     Shape shape = ShapeBox;
@@ -82,6 +107,14 @@ struct BodyOptions {
     float chainDepth = 20.0f;        // total Z thickness of the strip
     bool  chainClosed = false;       // close loop (welds last segment back to first)
     bool  chainFlipNormal = false;   // flip front-face direction
+    // HeightField (static only): n*n samples, row-major (sample (x,z) at
+    // z*n + x). Surface point = offset + scale * (x, heights[z*n + x], z),
+    // in body-local space. n must be >= 4 (Jolt: n / block size >= 2);
+    // FLT_MAX in a sample marks a hole.
+    std::vector<float> heightSamples;
+    uint32_t heightSampleCount = 0;
+    JPH::Vec3 heightOffset{0, 0, 0};
+    JPH::Vec3 heightScale{1, 1, 1};
     // Compound: sub-parts (each carries its own shape + local transform)
     std::vector<BodyOptions> compoundParts;
     JPH::Vec3 localPosition{0, 0, 0};         // used only for compound sub-parts
@@ -327,6 +360,27 @@ public:
     /// Get the closest hit along a ray, or empty if none.
     bool raycastClosest(JPH::RVec3 origin, JPH::Vec3 direction,
                         RayHit& outHit, float maxDistance = 1000.0f) const;
+
+    /// Sweep a convex shape (the shape/position/rotation fields of `shape`)
+    /// along direction*maxDistance. One hit per body (earliest contact),
+    /// sorted by fraction. Non-convex query shapes return no hits.
+    std::vector<ShapeCastHit> castShape(const BodyOptions& shape, JPH::Vec3 direction,
+                                        float maxDistance,
+                                        const QueryFilter& filter = {}) const;
+
+    /// Closest shape-cast hit only; returns false if nothing was hit.
+    bool castShapeClosest(const BodyOptions& shape, JPH::Vec3 direction,
+                          float maxDistance, ShapeCastHit& outHit,
+                          const QueryFilter& filter = {}) const;
+
+    /// All bodies overlapping a convex shape at its transform. One hit per
+    /// body — the deepest contact.
+    std::vector<OverlapHit> overlapShape(const BodyOptions& shape,
+                                         const QueryFilter& filter = {}) const;
+
+    /// All bodies containing a point (shapes are treated as solid).
+    std::vector<JPH::BodyID> overlapPoint(JPH::RVec3 point,
+                                          const QueryFilter& filter = {}) const;
 
     // --- Contact events ---
 
