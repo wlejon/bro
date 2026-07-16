@@ -34,15 +34,18 @@ namespace bro::js {
 // ---------------------------------------------------------------------------
 
 struct JsCharacter;
+struct JsVehicle;
 
 struct JsWorld {
     physics::PhysicsWorld* world = nullptr;
     bool ownsWorld = false;  // true → delete `world` in destructor
 
-    // Sandbox characters that still reference this world. GC teardown order is
-    // arbitrary, so ~JsWorld must sever their back-pointers before the
-    // character finalizers run (see characterClassFinalizer).
+    // Sandbox characters/vehicles that still reference this world. GC teardown
+    // order is arbitrary, so ~JsWorld must sever their back-pointers before
+    // the handle finalizers run (see characterClassFinalizer /
+    // vehicleClassFinalizer).
     std::unordered_set<JsCharacter*> liveCharacters;
+    std::unordered_set<JsVehicle*> liveVehicles;
 
     std::unordered_map<uint32_t, int32_t> bodyTags;     // BodyID idx+seq → tag
     std::unordered_map<int32_t, uint32_t> tagToBody;    // tag → BodyID idx+seq
@@ -1022,13 +1025,25 @@ struct JsCharacter {
     JSValue worldRef = JS_UNDEFINED;   // strong ref to a sandbox world handle
 };
 
-// GC teardown may finalize the world handle before its characters; sever the
-// back-pointers first so character finalizers never touch a deleted JsWorld
-// (PhysicsWorld::shutdown destroys the characters themselves).
+// Same shape for vehicles (class machinery lives after the character section).
+struct JsVehicle {
+    JsWorld* world = nullptr;          // sandbox only; default world uses s_defaultWorld
+    uint32_t handle = 0;               // 0 after destroy()
+    int32_t bodyTag = -1;              // chassis body tag (for .chassisBody)
+    JSValue worldRef = JS_UNDEFINED;   // strong ref to a sandbox world handle
+};
+
+// GC teardown may finalize the world handle before its characters/vehicles;
+// sever the back-pointers first so their finalizers never touch a deleted
+// JsWorld (PhysicsWorld::shutdown destroys the underlying objects itself).
 JsWorld::~JsWorld() {
     for (JsCharacter* c : liveCharacters) {
         c->world = nullptr;
         c->handle = 0;
+    }
+    for (JsVehicle* v : liveVehicles) {
+        v->world = nullptr;
+        v->handle = 0;
     }
     if (ownsWorld && world) {
         world->shutdown();
@@ -1219,6 +1234,393 @@ static JSValue worldCreateCharacter(JSContext* ctx, JsWorld* w, JSValueConst wor
     JS_SetOpaque(obj, jc);
     return obj;
 }
+
+// ---------------------------------------------------------------------------
+// Wheeled vehicles (Physics.createVehicle / handle.createVehicle). Same
+// lifetime pattern as PhysicsCharacter above: sandbox handles pin their world
+// handle object via worldRef (marked in vehicleClassGcMark, severed by
+// ~JsWorld for arbitrary finalizer order); default-world handles route
+// through s_defaultWorld.
+// ---------------------------------------------------------------------------
+
+static JSClassID s_vehicleClassId = 0;
+
+static JsWorld* vehicleWorld(JsVehicle* v) {
+    return JS_IsUndefined(v->worldRef) ? s_defaultWorld : v->world;
+}
+
+static void vehicleClassFinalizer(JSRuntime* rt, JSValue val) {
+    JsVehicle* v = (JsVehicle*)JS_GetOpaque(val, s_vehicleClassId);
+    if (!v) return;
+    JsWorld* w = vehicleWorld(v);
+    if (w && w->world && v->handle) w->world->destroyVehicle(v->handle);
+    if (v->world) v->world->liveVehicles.erase(v);
+    JS_FreeValueRT(rt, v->worldRef);
+    delete v;
+}
+
+// worldRef lives in opaque data, invisible to the GC — without this mark hook
+// the teardown cycle collector counts it as an external root and leaks the
+// world handle (QuickJS Debug asserts on gc_obj_list).
+static void vehicleClassGcMark(JSRuntime* rt, JSValueConst val, JS_MarkFunc* mark_func) {
+    JsVehicle* v = (JsVehicle*)JS_GetOpaque(val, s_vehicleClassId);
+    if (v) JS_MarkValue(rt, v->worldRef, mark_func);
+}
+
+static JSClassDef s_vehicleClassDef = {
+    "PhysicsVehicle",
+    vehicleClassFinalizer,  // finalizer
+    vehicleClassGcMark,     // gc_mark
+    nullptr,                // call
+    nullptr,                // exotic
+};
+
+static JsVehicle* vehicleFromThis(JSContext* ctx, JSValueConst thisVal) {
+    return (JsVehicle*)JS_GetOpaque2(ctx, thisVal, s_vehicleClassId);
+}
+
+// Parse one wheel entry of the `wheels` array.
+static void readVehicleWheel(JSContext* ctx, JSValueConst o,
+                             physics::VehicleWheelOptions& w) {
+    JSValue pos = JS_GetPropertyStr(ctx, o, "position");
+    w.position = readVec3(ctx, pos);
+    JS_FreeValue(ctx, pos);
+    JSValue sd = JS_GetPropertyStr(ctx, o, "suspensionDirection");
+    w.suspensionDirection = readVec3(ctx, sd, JPH::Vec3(0, -1, 0));
+    JS_FreeValue(ctx, sd);
+    w.radius = (float)qjsbind::get_prop_number(ctx, o, "radius", 0.3);
+    w.width = (float)qjsbind::get_prop_number(ctx, o, "width", 0.1);
+    w.suspensionMinLength = (float)qjsbind::get_prop_number(ctx, o, "suspensionMinLength", 0.3);
+    w.suspensionMaxLength = (float)qjsbind::get_prop_number(ctx, o, "suspensionMaxLength", 0.5);
+    w.suspensionFrequency = (float)qjsbind::get_prop_number(ctx, o, "suspensionFrequency", 1.5);
+    w.suspensionDamping = (float)qjsbind::get_prop_number(ctx, o, "suspensionDamping", 0.5);
+    w.steerable = qjsbind::get_prop_bool(ctx, o, "steerable", false);
+    w.maxSteerAngle = (float)qjsbind::get_prop_number(ctx, o, "maxSteerAngle", 70.0);
+    w.driven = qjsbind::get_prop_bool(ctx, o, "driven", false);
+    w.maxBrakeTorque = (float)qjsbind::get_prop_number(ctx, o, "maxBrakeTorque", 1500.0);
+    w.maxHandBrakeTorque = (float)qjsbind::get_prop_number(ctx, o, "maxHandBrakeTorque", 0.0);
+}
+
+// `worldVal` is the sandbox world handle object, or JS_UNDEFINED for the
+// default world.
+static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst worldVal,
+                                  JSValueConst optsVal) {
+    if (!w || !w->world) return JS_ThrowInternalError(ctx, "World not available");
+    if (!JS_IsObject(optsVal)) return JS_ThrowTypeError(ctx, "createVehicle(opts) requires an object");
+
+    physics::VehicleOptions opts;
+
+    // Chassis: an existing body tag (`body`) or inline creation opts
+    // (`chassis`, same schema as createBody, forced dynamic).
+    int32_t chassisTag = -1;
+    bool createdChassis = false;
+    JSValue bodyVal = JS_GetPropertyStr(ctx, optsVal, "body");
+    if (JS_IsNumber(bodyVal)) {
+        JS_ToInt32(ctx, &chassisTag, bodyVal);
+    }
+    JS_FreeValue(ctx, bodyVal);
+    if (chassisTag < 0) {
+        JSValue chassisVal = JS_GetPropertyStr(ctx, optsVal, "chassis");
+        if (JS_IsObject(chassisVal)) {
+            physics::BodyOptions bodyOpts;
+            std::string err;
+            if (!readBodyOptions(ctx, chassisVal, w->world, bodyOpts, err)) {
+                JS_FreeValue(ctx, chassisVal);
+                return JS_ThrowTypeError(ctx, "chassis: %s", err.c_str());
+            }
+            JS_FreeValue(ctx, chassisVal);
+            bodyOpts.isStatic = false;
+            JPH::BodyID id = w->world->createBody(bodyOpts);
+            if (id.IsInvalid())
+                return JS_ThrowInternalError(ctx, "Failed to create chassis body");
+            chassisTag = w->registerBody(id);
+            createdChassis = true;
+        } else {
+            JS_FreeValue(ctx, chassisVal);
+            return JS_ThrowTypeError(ctx, "createVehicle requires body (tag) or chassis (createBody opts)");
+        }
+    }
+    opts.body = w->bodyIdForTag(chassisTag);
+    if (opts.body.IsInvalid())
+        return JS_ThrowTypeError(ctx, "createVehicle: chassis body tag is invalid");
+
+    JSValue upVal = JS_GetPropertyStr(ctx, optsVal, "up");
+    opts.up = readVec3(ctx, upVal, JPH::Vec3(0, 1, 0));
+    JS_FreeValue(ctx, upVal);
+    JSValue fwdVal = JS_GetPropertyStr(ctx, optsVal, "forward");
+    opts.forward = readVec3(ctx, fwdVal, JPH::Vec3(0, 0, 1));
+    JS_FreeValue(ctx, fwdVal);
+    opts.maxPitchRollAngle =
+        (float)qjsbind::get_prop_number(ctx, optsVal, "maxPitchRollAngle", 180.0);
+
+    // Cleanup for the error paths below: only tear down what we created.
+    auto fail = [&](JSValue exception) {
+        if (createdChassis) {
+            w->world->destroyBody(w->bodyIdForTag(chassisTag));
+            w->unregisterBody(chassisTag);
+        }
+        return exception;
+    };
+
+    JSValue wheelsVal = JS_GetPropertyStr(ctx, optsVal, "wheels");
+    uint32_t nWheels = 0;
+    if (JS_IsArray(wheelsVal)) {
+        JSValue lenV = JS_GetPropertyStr(ctx, wheelsVal, "length");
+        JS_ToUint32(ctx, &nWheels, lenV);
+        JS_FreeValue(ctx, lenV);
+    }
+    for (uint32_t i = 0; i < nWheels; i++) {
+        JSValue wv = JS_GetPropertyUint32(ctx, wheelsVal, i);
+        physics::VehicleWheelOptions wheel;
+        if (JS_IsObject(wv)) readVehicleWheel(ctx, wv, wheel);
+        JS_FreeValue(ctx, wv);
+        opts.wheels.push_back(wheel);
+    }
+    JS_FreeValue(ctx, wheelsVal);
+    if (opts.wheels.empty())
+        return fail(JS_ThrowTypeError(ctx, "createVehicle requires a non-empty wheels array"));
+
+    JSValue engVal = JS_GetPropertyStr(ctx, optsVal, "engine");
+    if (JS_IsObject(engVal)) {
+        opts.engine.maxTorque = (float)qjsbind::get_prop_number(ctx, engVal, "maxTorque", 500.0);
+        opts.engine.minRPM = (float)qjsbind::get_prop_number(ctx, engVal, "minRPM", 1000.0);
+        opts.engine.maxRPM = (float)qjsbind::get_prop_number(ctx, engVal, "maxRPM", 6000.0);
+    }
+    JS_FreeValue(ctx, engVal);
+
+    JSValue trVal = JS_GetPropertyStr(ctx, optsVal, "transmission");
+    if (JS_IsObject(trVal)) {
+        std::string mode = qjsbind::get_prop_string(ctx, trVal, "mode");
+        opts.transmission.manual = (mode == "manual");
+        JSValue gr = JS_GetPropertyStr(ctx, trVal, "gearRatios");
+        readFloatArray(ctx, gr, opts.transmission.gearRatios);
+        JS_FreeValue(ctx, gr);
+        JSValue rgr = JS_GetPropertyStr(ctx, trVal, "reverseGearRatios");
+        readFloatArray(ctx, rgr, opts.transmission.reverseGearRatios);
+        JS_FreeValue(ctx, rgr);
+        opts.transmission.switchTime = (float)qjsbind::get_prop_number(ctx, trVal, "switchTime", 0.5);
+        opts.transmission.clutchStrength = (float)qjsbind::get_prop_number(ctx, trVal, "clutchStrength", 10.0);
+        opts.transmission.shiftUpRPM = (float)qjsbind::get_prop_number(ctx, trVal, "shiftUpRPM", 4000.0);
+        opts.transmission.shiftDownRPM = (float)qjsbind::get_prop_number(ctx, trVal, "shiftDownRPM", 2000.0);
+    }
+    JS_FreeValue(ctx, trVal);
+
+    JSValue diffsVal = JS_GetPropertyStr(ctx, optsVal, "differentials");
+    if (JS_IsArray(diffsVal)) {
+        JSValue lenV = JS_GetPropertyStr(ctx, diffsVal, "length");
+        uint32_t n = 0; JS_ToUint32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
+        for (uint32_t i = 0; i < n; i++) {
+            JSValue dv = JS_GetPropertyUint32(ctx, diffsVal, i);
+            physics::VehicleDifferentialOptions d;
+            if (JS_IsObject(dv)) {
+                d.leftWheel = (int)qjsbind::get_prop_number(ctx, dv, "leftWheel", -1.0);
+                d.rightWheel = (int)qjsbind::get_prop_number(ctx, dv, "rightWheel", -1.0);
+                d.ratio = (float)qjsbind::get_prop_number(ctx, dv, "ratio", 3.42);
+                d.leftRightSplit = (float)qjsbind::get_prop_number(ctx, dv, "leftRightSplit", 0.5);
+                d.limitedSlipRatio = (float)qjsbind::get_prop_number(ctx, dv, "limitedSlipRatio", 1.4);
+                d.engineTorqueRatio = (float)qjsbind::get_prop_number(ctx, dv, "engineTorqueRatio", 1.0);
+            }
+            JS_FreeValue(ctx, dv);
+            opts.differentials.push_back(d);
+        }
+    }
+    JS_FreeValue(ctx, diffsVal);
+    opts.differentialLimitedSlipRatio =
+        (float)qjsbind::get_prop_number(ctx, optsVal, "differentialLimitedSlipRatio", 1.4);
+
+    JSValue barsVal = JS_GetPropertyStr(ctx, optsVal, "antiRollBars");
+    if (JS_IsArray(barsVal)) {
+        JSValue lenV = JS_GetPropertyStr(ctx, barsVal, "length");
+        uint32_t n = 0; JS_ToUint32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
+        for (uint32_t i = 0; i < n; i++) {
+            JSValue bv = JS_GetPropertyUint32(ctx, barsVal, i);
+            physics::VehicleAntiRollBarOptions bar;
+            if (JS_IsObject(bv)) {
+                bar.leftWheel = (int)qjsbind::get_prop_number(ctx, bv, "leftWheel", 0.0);
+                bar.rightWheel = (int)qjsbind::get_prop_number(ctx, bv, "rightWheel", 1.0);
+                bar.stiffness = (float)qjsbind::get_prop_number(ctx, bv, "stiffness", 1000.0);
+            }
+            JS_FreeValue(ctx, bv);
+            opts.antiRollBars.push_back(bar);
+        }
+    }
+    JS_FreeValue(ctx, barsVal);
+
+    std::string tester = qjsbind::get_prop_string(ctx, optsVal, "collisionTester");
+    if (tester == "ray")         opts.tester = physics::VehicleOptions::TesterRay;
+    else if (tester == "sphere") opts.tester = physics::VehicleOptions::TesterCastSphere;
+    else if (tester == "cylinder" || tester.empty())
+        opts.tester = physics::VehicleOptions::TesterCastCylinder;
+    else
+        return fail(JS_ThrowTypeError(ctx, "collisionTester must be 'ray' | 'sphere' | 'cylinder'"));
+
+    JSValue tlVal = JS_GetPropertyStr(ctx, optsVal, "testerLayer");
+    if (JS_IsString(tlVal)) {
+        const char* s = JS_ToCString(ctx, tlVal);
+        if (s) { opts.testerLayer = w->world->layerIndex(s); JS_FreeCString(ctx, s); }
+    } else if (JS_IsNumber(tlVal)) {
+        int32_t i = -1; JS_ToInt32(ctx, &i, tlVal); opts.testerLayer = i;
+    }
+    JS_FreeValue(ctx, tlVal);
+
+    uint32_t handle = w->world->createVehicle(opts);
+    if (!handle)
+        return fail(JS_ThrowInternalError(ctx, "Failed to create vehicle"));
+
+    JSValue obj = JS_NewObjectClass(ctx, s_vehicleClassId);
+    if (JS_IsException(obj)) {
+        w->world->destroyVehicle(handle);
+        return fail(obj);
+    }
+    auto* jv = new JsVehicle();
+    jv->handle = handle;
+    jv->bodyTag = chassisTag;
+    if (!JS_IsUndefined(worldVal)) {
+        jv->world = w;
+        jv->worldRef = JS_DupValue(ctx, worldVal);
+        w->liveVehicles.insert(jv);
+    }
+    JS_SetOpaque(obj, jv);
+    return obj;
+}
+
+static JSValue jsv_setInput(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsVehicle* v = vehicleFromThis(ctx, thisVal);
+    if (!v) return JS_EXCEPTION;
+    JsWorld* w = vehicleWorld(v);
+    if (!w || !w->world || !v->handle || argc < 1 || !JS_IsObject(argv[0]))
+        return JS_UNDEFINED;
+    double fwd = qjsbind::get_prop_number(ctx, argv[0], "forward", 0.0);
+    double right = qjsbind::get_prop_number(ctx, argv[0], "right", 0.0);
+    double brake = qjsbind::get_prop_number(ctx, argv[0], "brake", 0.0);
+    double handBrake = qjsbind::get_prop_number(ctx, argv[0], "handBrake", 0.0);
+    w->world->setVehicleInput(v->handle, (float)fwd, (float)right,
+                              (float)brake, (float)handBrake);
+    return JS_UNDEFINED;
+}
+
+static JSValue jsv_setGear(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsVehicle* v = vehicleFromThis(ctx, thisVal);
+    if (!v) return JS_EXCEPTION;
+    JsWorld* w = vehicleWorld(v);
+    if (!w || !w->world || !v->handle || argc < 1) return JS_UNDEFINED;
+    int32_t gear = 0; JS_ToInt32(ctx, &gear, argv[0]);
+    double clutch = 1.0;
+    if (argc >= 2) JS_ToFloat64(ctx, &clutch, argv[1]);
+    w->world->setVehicleGear(v->handle, gear, (float)clutch);
+    return JS_UNDEFINED;
+}
+
+static JSValue jsv_wheelState(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsVehicle* v = vehicleFromThis(ctx, thisVal);
+    if (!v) return JS_EXCEPTION;
+    JsWorld* w = vehicleWorld(v);
+    if (!w || !w->world || !v->handle || argc < 1) return JS_NULL;
+    int32_t idx = -1; JS_ToInt32(ctx, &idx, argv[0]);
+    physics::VehicleWheelState st;
+    if (!w->world->getVehicleWheelState(v->handle, idx, st)) return JS_NULL;
+
+    JSValue obj = JS_NewObject(ctx);
+    setVec3Prop(ctx, obj, "position", st.position.GetX(), st.position.GetY(), st.position.GetZ());
+    JSValue rot = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, rot, "x", JS_NewFloat64(ctx, st.rotation.GetX()));
+    JS_SetPropertyStr(ctx, rot, "y", JS_NewFloat64(ctx, st.rotation.GetY()));
+    JS_SetPropertyStr(ctx, rot, "z", JS_NewFloat64(ctx, st.rotation.GetZ()));
+    JS_SetPropertyStr(ctx, rot, "w", JS_NewFloat64(ctx, st.rotation.GetW()));
+    JS_SetPropertyStr(ctx, obj, "rotation", rot);
+    JS_SetPropertyStr(ctx, obj, "suspensionLength", JS_NewFloat64(ctx, st.suspensionLength));
+    JS_SetPropertyStr(ctx, obj, "steerAngle", JS_NewFloat64(ctx, st.steerAngle));
+    JS_SetPropertyStr(ctx, obj, "rotationAngle", JS_NewFloat64(ctx, st.rotationAngle));
+    JS_SetPropertyStr(ctx, obj, "angularVelocity", JS_NewFloat64(ctx, st.angularVelocity));
+    JS_SetPropertyStr(ctx, obj, "contact", JS_NewBool(ctx, st.contact));
+    JS_SetPropertyStr(ctx, obj, "contactBody",
+        JS_NewInt32(ctx, st.contactBody.IsInvalid() ? -1 : w->tagForBodyId(st.contactBody)));
+    setVec3Prop(ctx, obj, "contactNormal",
+        st.contactNormal.GetX(), st.contactNormal.GetY(), st.contactNormal.GetZ());
+    return obj;
+}
+
+static JSValue jsv_getState(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsVehicle* v = vehicleFromThis(ctx, thisVal);
+    if (!v) return JS_EXCEPTION;
+    JsWorld* w = vehicleWorld(v);
+    if (!w || !w->world || !v->handle) return JS_NULL;
+    physics::VehicleState st;
+    if (!w->world->getVehicleState(v->handle, st)) return JS_NULL;
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "speed", JS_NewFloat64(ctx, st.speed));
+    JS_SetPropertyStr(ctx, obj, "rpm", JS_NewFloat64(ctx, st.rpm));
+    JS_SetPropertyStr(ctx, obj, "gear", JS_NewInt32(ctx, st.gear));
+    JS_SetPropertyStr(ctx, obj, "isSwitchingGear", JS_NewBool(ctx, st.isSwitchingGear));
+    return obj;
+}
+
+static JSValue jsv_getWheelCount(JSContext* ctx, JSValueConst thisVal) {
+    JsVehicle* v = vehicleFromThis(ctx, thisVal);
+    if (!v) return JS_EXCEPTION;
+    JsWorld* w = vehicleWorld(v);
+    if (!w || !w->world || !v->handle) return JS_NewInt32(ctx, 0);
+    int n = w->world->vehicleWheelCount(v->handle);
+    return JS_NewInt32(ctx, n < 0 ? 0 : n);
+}
+
+static JSValue jsv_getChassisBody(JSContext* ctx, JSValueConst thisVal) {
+    JsVehicle* v = vehicleFromThis(ctx, thisVal);
+    if (!v) return JS_EXCEPTION;
+    return JS_NewInt32(ctx, v->bodyTag);
+}
+
+static JSValue jsv_getSpeed(JSContext* ctx, JSValueConst thisVal) {
+    JsVehicle* v = vehicleFromThis(ctx, thisVal);
+    if (!v) return JS_EXCEPTION;
+    JsWorld* w = vehicleWorld(v);
+    physics::VehicleState st;
+    if (!w || !w->world || !v->handle || !w->world->getVehicleState(v->handle, st))
+        return JS_NewFloat64(ctx, 0);
+    return JS_NewFloat64(ctx, st.speed);
+}
+
+static JSValue jsv_getRpm(JSContext* ctx, JSValueConst thisVal) {
+    JsVehicle* v = vehicleFromThis(ctx, thisVal);
+    if (!v) return JS_EXCEPTION;
+    JsWorld* w = vehicleWorld(v);
+    physics::VehicleState st;
+    if (!w || !w->world || !v->handle || !w->world->getVehicleState(v->handle, st))
+        return JS_NewFloat64(ctx, 0);
+    return JS_NewFloat64(ctx, st.rpm);
+}
+
+static JSValue jsv_getGear(JSContext* ctx, JSValueConst thisVal) {
+    JsVehicle* v = vehicleFromThis(ctx, thisVal);
+    if (!v) return JS_EXCEPTION;
+    JsWorld* w = vehicleWorld(v);
+    physics::VehicleState st;
+    if (!w || !w->world || !v->handle || !w->world->getVehicleState(v->handle, st))
+        return JS_NewInt32(ctx, 0);
+    return JS_NewInt32(ctx, st.gear);
+}
+
+static JSValue jsv_destroy(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsVehicle* v = vehicleFromThis(ctx, thisVal);
+    if (!v) return JS_EXCEPTION;
+    JsWorld* w = vehicleWorld(v);
+    if (w && w->world && v->handle) w->world->destroyVehicle(v->handle);
+    v->handle = 0;
+    return JS_UNDEFINED;
+}
+
+static const JSCFunctionListEntry s_vehicleProtoFuncs[] = {
+    JS_CFUNC_DEF("setInput", 1, jsv_setInput),
+    JS_CFUNC_DEF("setGear", 2, jsv_setGear),
+    JS_CFUNC_DEF("wheelState", 1, jsv_wheelState),
+    JS_CFUNC_DEF("getState", 0, jsv_getState),
+    JS_CFUNC_DEF("destroy", 0, jsv_destroy),
+    JS_CGETSET_DEF("wheelCount", jsv_getWheelCount, nullptr),
+    JS_CGETSET_DEF("chassisBody", jsv_getChassisBody, nullptr),
+    JS_CGETSET_DEF("speed", jsv_getSpeed, nullptr),
+    JS_CGETSET_DEF("rpm", jsv_getRpm, nullptr),
+    JS_CGETSET_DEF("gear", jsv_getGear, nullptr),
+};
 
 // ---------------------------------------------------------------------------
 // Default-world Physics.* functions (route to s_defaultWorld)
@@ -1557,6 +1959,12 @@ static JSValue js_physics_createCharacter(JSContext* ctx, JSValueConst, int argc
     return worldCreateCharacter(ctx, s_defaultWorld, JS_UNDEFINED, argv[0]);
 }
 
+static JSValue js_physics_createVehicle(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 1) return JS_ThrowTypeError(ctx, "Physics.createVehicle(opts) requires an object");
+    return worldCreateVehicle(ctx, s_defaultWorld, JS_UNDEFINED, argv[0]);
+}
+
 static JSValue js_physics_createConstraint(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     DEFW_GUARD();
     if (argc < 1) return JS_ThrowTypeError(ctx, "Physics.createConstraint(opts) requires an object");
@@ -1867,6 +2275,13 @@ static JSValue jsw_createCharacter(JSContext* ctx, JSValueConst thisVal, int arg
     return worldCreateCharacter(ctx, w, thisVal, argv[0]);
 }
 
+static JSValue jsw_createVehicle(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w) return JS_EXCEPTION;
+    if (argc < 1) return JS_ThrowTypeError(ctx, "createVehicle(opts) requires an object");
+    return worldCreateVehicle(ctx, w, thisVal, argv[0]);
+}
+
 static JSValue jsw_setConstraintMotor(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
     JsWorld* w = worldFromThis(ctx, thisVal);
     if (!w || !w->world || argc < 2) return JS_FALSE;
@@ -2029,6 +2444,7 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("overlapPoint", 4, jsw_overlapPoint),
     JS_CFUNC_DEF("getContacts", 0, jsw_getContacts),
     JS_CFUNC_DEF("createCharacter", 1, jsw_createCharacter),
+    JS_CFUNC_DEF("createVehicle", 1, jsw_createVehicle),
     JS_CFUNC_DEF("createConstraint", 1, jsw_createConstraint),
     JS_CFUNC_DEF("setConstraintMotor", 2, jsw_setConstraintMotor),
     JS_CFUNC_DEF("destroyConstraint", 1, jsw_destroyConstraint),
@@ -2104,6 +2520,18 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
                                sizeof(s_characterProtoFuncs)/sizeof(s_characterProtoFuncs[0]));
     JS_SetClassProto(ctx, s_characterClassId, charProto);
 
+    // Register vehicle handle class.
+    if (s_vehicleClassId == 0) {
+        JS_NewClassID(rt, &s_vehicleClassId);
+    }
+    if (!JS_IsRegisteredClass(rt, s_vehicleClassId)) {
+        JS_NewClass(rt, s_vehicleClassId, &s_vehicleClassDef);
+    }
+    JSValue vehProto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, vehProto, s_vehicleProtoFuncs,
+                               sizeof(s_vehicleProtoFuncs)/sizeof(s_vehicleProtoFuncs[0]));
+    JS_SetClassProto(ctx, s_vehicleClassId, vehProto);
+
     qjsbind::Namespace(ctx, "Physics")
         .function("createWorld", js_physics_createWorld, 1)
         .function("createWorldHandle", js_physics_createWorldHandle, 1)
@@ -2139,6 +2567,7 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("activate", js_physics_activate, 1)
         .function("getAllTransforms", js_physics_getAllTransforms, 0)
         .function("createCharacter", js_physics_createCharacter, 1)
+        .function("createVehicle", js_physics_createVehicle, 1)
         .function("createConstraint", js_physics_createConstraint, 1)
         .function("destroyConstraint", js_physics_destroyConstraint, 1)
         .function("setConstraintEnabled", js_physics_setConstraintEnabled, 2)

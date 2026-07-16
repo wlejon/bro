@@ -37,11 +37,15 @@
 #include <Jolt/Physics/Constraints/RackAndPinionConstraint.h>
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
 #include <Jolt/Physics/Character/CharacterVirtual.h>
+#include <Jolt/Physics/Vehicle/VehicleConstraint.h>
+#include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
+#include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
 
 #include "util/log.h"
 
 #include <algorithm>
 #include <atomic>
+#include <cfloat>
 #include <cmath>
 
 JPH_SUPPRESS_WARNINGS
@@ -361,6 +365,10 @@ void PhysicsWorld::shutdown() {
     characters_.clear();
 
     if (initialized_) {
+        // Vehicles first (each is both a constraint and a step listener).
+        for (auto& [h, v] : vehicles_) removeVehicleFromSystem(v);
+        vehicles_.clear();
+
         // Remove constraints first
         for (auto& [h, c] : constraints_) {
             if (c.ref) physicsSystem_.RemoveConstraint(c.ref.GetPtr());
@@ -401,21 +409,25 @@ static RefConst<Shape> buildShape(const BodyOptions& opts) {
     switch (opts.shape) {
         case BodyOptions::ShapeBox: {
             BoxShapeSettings s(opts.halfExtents);
+            s.SetDensity(opts.density);
             auto r = s.Create();
             return r.HasError() ? RefConst<Shape>() : r.Get();
         }
         case BodyOptions::ShapeSphere: {
             SphereShapeSettings s(opts.radius);
+            s.SetDensity(opts.density);
             auto r = s.Create();
             return r.HasError() ? RefConst<Shape>() : r.Get();
         }
         case BodyOptions::ShapeCapsule: {
             CapsuleShapeSettings s(opts.halfHeight, opts.radius);
+            s.SetDensity(opts.density);
             auto r = s.Create();
             return r.HasError() ? RefConst<Shape>() : r.Get();
         }
         case BodyOptions::ShapeCylinder: {
             CylinderShapeSettings s(opts.halfHeight, opts.radius);
+            s.SetDensity(opts.density);
             auto r = s.Create();
             return r.HasError() ? RefConst<Shape>() : r.Get();
         }
@@ -425,6 +437,7 @@ static RefConst<Shape> buildShape(const BodyOptions& opts) {
             pts.reserve(opts.hullPoints.size());
             for (auto& p : opts.hullPoints) pts.push_back(p);
             ConvexHullShapeSettings s(pts);
+            s.SetDensity(opts.density);
             auto r = s.Create();
             return r.HasError() ? RefConst<Shape>() : r.Get();
         }
@@ -607,6 +620,16 @@ BodyID PhysicsWorld::createCylinder(RVec3 position, Quat rotation,
 }
 
 void PhysicsWorld::destroyBody(BodyID id) {
+    // Remove any vehicle whose chassis is this body (constraint + step listener).
+    for (auto it = vehicles_.begin(); it != vehicles_.end(); ) {
+        if (it->second.body == id) {
+            removeVehicleFromSystem(it->second);
+            it = vehicles_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     // Remove any TwoBodyConstraint that references this body; otherwise Jolt will assert.
     for (auto it = constraints_.begin(); it != constraints_.end(); ) {
         bool refsBody = false;
@@ -685,6 +708,10 @@ void PhysicsWorld::destroyAll(const std::function<void(JPH::BodyID)>& onBodyDest
     if (!initialized_) return;
 
     characters_.clear();
+
+    // Vehicles first (each is both a constraint and a step listener).
+    for (auto& [h, v] : vehicles_) removeVehicleFromSystem(v);
+    vehicles_.clear();
 
     // Constraints first (so removing bodies doesn't trip Jolt's constraint asserts).
     for (auto& [h, c] : constraints_) {
@@ -1316,6 +1343,235 @@ void PhysicsWorld::updateCharacters(float dt) {
                           physicsSystem_.GetDefaultLayerFilter(ObjectLayer(ch.layer)),
                           {}, {}, *tempAllocator_);
     }
+}
+
+// --- Wheeled vehicles ---
+//
+// A Jolt VehicleConstraint is both a Constraint and a PhysicsStepListener:
+// the constraint solves suspension/traction impulses, the step listener runs
+// the engine/transmission/wheel-collision update at the start of every
+// PhysicsSystem::Update. Both registrations are added and removed together
+// (removeVehicleFromSystem) so the listener can never dangle. Because the
+// stepping happens inside Update, vehicles need no per-step code on our side
+// and the phase-ownership contract holds by construction.
+
+uint32_t PhysicsWorld::createVehicle(const VehicleOptions& opts) {
+    if (!initialized_ || opts.wheels.empty()) return 0;
+
+    VehicleConstraintSettings settings;
+    settings.mUp = opts.up.NormalizedOr(Vec3::sAxisY());
+    settings.mForward = opts.forward.NormalizedOr(Vec3::sAxisZ());
+    settings.mMaxPitchRollAngle =
+        DegreesToRadians(std::clamp(opts.maxPitchRollAngle, 0.0f, 180.0f));
+
+    float minWidth = FLT_MAX;
+    for (const VehicleWheelOptions& w : opts.wheels) {
+        auto* ws = new WheelSettingsWV();
+        ws->mPosition = w.position;
+        ws->mSuspensionDirection = w.suspensionDirection.NormalizedOr(Vec3(0, -1, 0));
+        ws->mSteeringAxis = -ws->mSuspensionDirection;
+        ws->mRadius = w.radius;
+        ws->mWidth = w.width;
+        ws->mSuspensionMinLength = w.suspensionMinLength;
+        ws->mSuspensionMaxLength = std::max(w.suspensionMaxLength, w.suspensionMinLength);
+        ws->mSuspensionSpring.mMode = ESpringMode::FrequencyAndDamping;
+        ws->mSuspensionSpring.mFrequency = w.suspensionFrequency;
+        ws->mSuspensionSpring.mDamping = w.suspensionDamping;
+        ws->mMaxSteerAngle = w.steerable ? DegreesToRadians(w.maxSteerAngle) : 0.0f;
+        ws->mMaxBrakeTorque = w.maxBrakeTorque;
+        ws->mMaxHandBrakeTorque = w.maxHandBrakeTorque;
+        settings.mWheels.push_back(ws);
+        minWidth = std::min(minWidth, w.width);
+    }
+
+    for (const VehicleAntiRollBarOptions& ar : opts.antiRollBars) {
+        const int n = (int)opts.wheels.size();
+        if (ar.leftWheel < 0 || ar.leftWheel >= n ||
+            ar.rightWheel < 0 || ar.rightWheel >= n) return 0;
+        VehicleAntiRollBar bar;
+        bar.mLeftWheel = ar.leftWheel;
+        bar.mRightWheel = ar.rightWheel;
+        bar.mStiffness = ar.stiffness;
+        settings.mAntiRollBars.push_back(bar);
+    }
+
+    auto* controller = new WheeledVehicleControllerSettings();
+    settings.mController = controller;  // takes ownership via Ref
+    controller->mEngine.mMaxTorque = opts.engine.maxTorque;
+    controller->mEngine.mMinRPM = opts.engine.minRPM;
+    controller->mEngine.mMaxRPM = std::max(opts.engine.maxRPM, opts.engine.minRPM);
+    VehicleTransmissionSettings& tr = controller->mTransmission;
+    tr.mMode = opts.transmission.manual ? ETransmissionMode::Manual
+                                        : ETransmissionMode::Auto;
+    if (!opts.transmission.gearRatios.empty())
+        tr.mGearRatios.assign(opts.transmission.gearRatios.begin(),
+                              opts.transmission.gearRatios.end());
+    if (!opts.transmission.reverseGearRatios.empty())
+        tr.mReverseGearRatios.assign(opts.transmission.reverseGearRatios.begin(),
+                                     opts.transmission.reverseGearRatios.end());
+    tr.mSwitchTime = opts.transmission.switchTime;
+    tr.mClutchStrength = opts.transmission.clutchStrength;
+    tr.mShiftUpRPM = opts.transmission.shiftUpRPM;
+    tr.mShiftDownRPM = opts.transmission.shiftDownRPM;
+    controller->mDifferentialLimitedSlipRatio = opts.differentialLimitedSlipRatio;
+
+    // Differentials: explicit list, or auto-derived by pairing driven wheels
+    // in array order with equal torque split.
+    std::vector<VehicleDifferentialOptions> diffs = opts.differentials;
+    if (diffs.empty()) {
+        std::vector<int> driven;
+        for (int i = 0; i < (int)opts.wheels.size(); ++i)
+            if (opts.wheels[i].driven) driven.push_back(i);
+        for (size_t i = 0; i < driven.size(); i += 2) {
+            VehicleDifferentialOptions d;
+            d.leftWheel = driven[i];
+            d.rightWheel = i + 1 < driven.size() ? driven[i + 1] : -1;
+            diffs.push_back(d);
+        }
+        for (auto& d : diffs) d.engineTorqueRatio = 1.0f / (float)diffs.size();
+    }
+    for (const VehicleDifferentialOptions& d : diffs) {
+        const int n = (int)opts.wheels.size();
+        if (d.leftWheel >= n || d.rightWheel >= n) return 0;
+        VehicleDifferentialSettings ds;
+        ds.mLeftWheel = d.leftWheel;
+        ds.mRightWheel = d.rightWheel;
+        ds.mDifferentialRatio = d.ratio;
+        ds.mLeftRightSplit = d.leftRightSplit;
+        ds.mLimitedSlipRatio = d.limitedSlipRatio;
+        ds.mEngineTorqueRatio = d.engineTorqueRatio;
+        controller->mDifferentials.push_back(ds);
+    }
+
+    // The constraint constructor needs the Body itself; the phase-idle
+    // contract makes the write lock uncontended here.
+    Ref<VehicleConstraint> constraint;
+    int chassisLayer = 1;
+    {
+        BodyLockWrite lock(physicsSystem_.GetBodyLockInterface(), opts.body);
+        if (!lock.Succeeded()) return 0;
+        Body& body = lock.GetBody();
+        if (!body.IsDynamic()) return 0;
+        chassisLayer = (int)body.GetObjectLayer();
+        constraint = new VehicleConstraint(body, settings);
+    }
+
+    // Wheel-vs-ground collision tester. The object layer decides what the
+    // wheels can hit (via the normal layer-pair matrix); default is the
+    // chassis layer so wheels see exactly what the body would collide with.
+    int layer = opts.testerLayer;
+    if (layer < 0 || layer >= numLayers_) layer = chassisLayer;
+    Ref<VehicleCollisionTester> tester;
+    switch (opts.tester) {
+        case VehicleOptions::TesterRay:
+            tester = new VehicleCollisionTesterRay(ObjectLayer(layer), settings.mUp);
+            break;
+        case VehicleOptions::TesterCastSphere:
+            tester = new VehicleCollisionTesterCastSphere(
+                ObjectLayer(layer), 0.5f * minWidth, settings.mUp);
+            break;
+        case VehicleOptions::TesterCastCylinder:
+            tester = new VehicleCollisionTesterCastCylinder(ObjectLayer(layer));
+            break;
+    }
+    constraint->SetVehicleCollisionTester(tester);
+
+    physicsSystem_.AddConstraint(constraint.GetPtr());
+    physicsSystem_.AddStepListener(constraint.GetPtr());
+    physicsSystem_.GetBodyInterface().ActivateBody(opts.body);
+
+    uint32_t handle = nextVehicleHandle_++;
+    vehicles_[handle] = VehicleEntry{constraint, opts.body};
+    return handle;
+}
+
+void PhysicsWorld::removeVehicleFromSystem(VehicleEntry& e) {
+    if (!e.constraint) return;
+    physicsSystem_.RemoveStepListener(e.constraint.GetPtr());
+    physicsSystem_.RemoveConstraint(e.constraint.GetPtr());
+}
+
+void PhysicsWorld::destroyVehicle(uint32_t handle) {
+    auto it = vehicles_.find(handle);
+    if (it == vehicles_.end()) return;
+    removeVehicleFromSystem(it->second);
+    vehicles_.erase(it);
+}
+
+void PhysicsWorld::setVehicleInput(uint32_t handle, float forward, float right,
+                                   float brake, float handBrake) {
+    auto it = vehicles_.find(handle);
+    if (it == vehicles_.end()) return;
+    auto* ctrl = static_cast<WheeledVehicleController*>(it->second.constraint->GetController());
+    ctrl->SetDriverInput(std::clamp(forward, -1.0f, 1.0f),
+                         std::clamp(right, -1.0f, 1.0f),
+                         std::clamp(brake, 0.0f, 1.0f),
+                         std::clamp(handBrake, 0.0f, 1.0f));
+    // Wake the chassis so input acts on a sleeping vehicle (constraint-motor
+    // rule). Zero input doesn't wake — a parked car may sleep.
+    if (forward != 0.0f || right != 0.0f || brake != 0.0f || handBrake != 0.0f)
+        physicsSystem_.GetBodyInterface().ActivateBody(it->second.body);
+}
+
+void PhysicsWorld::setVehicleGear(uint32_t handle, int gear, float clutchFriction) {
+    auto it = vehicles_.find(handle);
+    if (it == vehicles_.end()) return;
+    auto* ctrl = static_cast<WheeledVehicleController*>(it->second.constraint->GetController());
+    ctrl->GetTransmission().Set(gear, std::clamp(clutchFriction, 0.0f, 1.0f));
+    physicsSystem_.GetBodyInterface().ActivateBody(it->second.body);
+}
+
+int PhysicsWorld::vehicleWheelCount(uint32_t handle) const {
+    auto it = vehicles_.find(handle);
+    if (it == vehicles_.end()) return -1;
+    return (int)it->second.constraint->GetWheels().size();
+}
+
+bool PhysicsWorld::getVehicleWheelState(uint32_t handle, int wheel,
+                                        VehicleWheelState& out) const {
+    auto it = vehicles_.find(handle);
+    if (it == vehicles_.end()) return false;
+    const VehicleConstraint* c = it->second.constraint.GetPtr();
+    if (wheel < 0 || wheel >= (int)c->GetWheels().size()) return false;
+    const Wheel* w = c->GetWheel((uint)wheel);
+
+    // Local transform mapping a Y-axis-aligned unit cylinder onto the wheel
+    // (Jolt sample convention: wheelRight = Y, wheelUp = X), in body space.
+    Mat44 local = c->GetWheelLocalTransform((uint)wheel, Vec3::sAxisY(), Vec3::sAxisX());
+    out.position = local.GetTranslation();
+    out.rotation = local.GetQuaternion().Normalized();
+    out.suspensionLength = w->GetSuspensionLength();
+    out.steerAngle = w->GetSteerAngle();
+    out.rotationAngle = w->GetRotationAngle();
+    out.angularVelocity = w->GetAngularVelocity();
+    out.contact = w->HasContact();
+    if (out.contact) {
+        out.contactBody = w->GetContactBodyID();
+        out.contactNormal = w->GetContactNormal();
+    } else {
+        out.contactBody = BodyID();
+        out.contactNormal = Vec3(0, 1, 0);
+    }
+    return true;
+}
+
+bool PhysicsWorld::getVehicleState(uint32_t handle, VehicleState& out) const {
+    auto it = vehicles_.find(handle);
+    if (it == vehicles_.end()) return false;
+    const VehicleConstraint* c = it->second.constraint.GetPtr();
+    const Body* body = c->GetVehicleBody();
+    Vec3 worldForward = body->GetRotation() * c->GetLocalForward();
+    out.speed = body->GetLinearVelocity().Dot(worldForward);
+    const auto* ctrl = static_cast<const WheeledVehicleController*>(c->GetController());
+    out.rpm = ctrl->GetEngine().GetCurrentRPM();
+    out.gear = ctrl->GetTransmission().GetCurrentGear();
+    out.isSwitchingGear = ctrl->GetTransmission().IsSwitchingGear();
+    return true;
+}
+
+BodyID PhysicsWorld::vehicleBody(uint32_t handle) const {
+    auto it = vehicles_.find(handle);
+    return it == vehicles_.end() ? BodyID() : it->second.body;
 }
 
 // --- Raycasts, shape casts & overlap queries ---

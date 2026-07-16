@@ -110,6 +110,9 @@ Physics.setLayers({
  * @param {number|bigint} [opts.userData=0] - 64-bit user data; survives round trips via getTransform/raycast/getUserData
  * @param {number}  [opts.friction=0.5]
  * @param {number}  [opts.restitution=0.3]
+ * @param {number}  [opts.density=1000]    - kg/m³, sets mass via shape volume
+ *                                           (convex shapes: box/sphere/capsule/
+ *                                           cylinder/convexHull and compound parts)
  * @param {number}  [opts.gravityFactor=1]
  * @param {number}  [opts.linearDamping=0.05]
  * @param {number}  [opts.angularDamping=0.05]
@@ -871,3 +874,198 @@ player.destroy();              // remove from the world; handle is dead after
 //   const npc = w.createCharacter({ position: { x: 0, y: 1, z: 0 } });
 //   npc.setVelocity(1.5, 0, 0);
 //   w.step(1/60);   // character + world advance together
+
+
+// -----------------------------------------------------------------------------
+// Wheeled vehicles (Physics.createVehicle)
+// -----------------------------------------------------------------------------
+//
+// A full Jolt vehicle simulation (VehicleConstraint + WheeledVehicleController)
+// on a dynamic chassis body: sprung suspension per wheel, engine torque curve,
+// clutch + gearbox (auto or manual), differentials with limited slip, tire
+// slip-based friction, anti-roll bars. Strictly stronger than a raycast car —
+// wheels are real collision shapes (cylinder-cast by default), the drivetrain
+// has state (RPM, gear), and brake/handbrake are torque-based.
+//
+// The vehicle steps inside the engine's fixed physics tick automatically
+// (the constraint registers as a Jolt step listener) — there is no per-frame
+// vehicle.update() call. Your loop sets driver input and reads state:
+//
+//   vehicle.setInput({ forward, right, brake, handBrake })  — persists
+//   vehicle.speed / .rpm / .gear                            — drivetrain state
+//   vehicle.wheelState(i)                                   — per-wheel render state
+//
+// Conventions: chassis-local forward defaults to +Z, up to +Y. Wheel
+// positions are in chassis-body local space; suspension extends along
+// suspensionDirection (default straight down).
+
+/**
+ * Create a wheeled vehicle on a chassis body.
+ *
+ * Pass EITHER an existing dynamic body's tag as `body`, OR inline chassis
+ * creation opts as `chassis` (same schema as createBody, forced dynamic).
+ * Give the chassis a realistic mass via `density` — a 1.8×0.8×4 m box at
+ * density 260 is ≈1500 kg; the default 1000 kg/m³ makes a very heavy car
+ * that the default 500 N·m engine will barely move.
+ *
+ * @param {Object} opts
+ * @param {number}  [opts.body]           - existing dynamic body tag (chassis)
+ * @param {Object}  [opts.chassis]        - or createBody opts for a new chassis
+ * @param {{x,y,z}} [opts.up={0,1,0}]     - chassis-local up
+ * @param {{x,y,z}} [opts.forward={0,0,1}]- chassis-local forward
+ * @param {number}  [opts.maxPitchRollAngle=180] - degrees; < 180 applies a
+ *                                          righting torque that keeps the car
+ *                                          from flipping past that angle
+ *
+ * @param {Object[]} opts.wheels          - at least one wheel:
+ * @param {{x,y,z}} opts.wheels[].position           - suspension attachment
+ *                                                     point, chassis-local
+ * @param {{x,y,z}} [opts.wheels[].suspensionDirection={0,-1,0}]
+ * @param {number}  [opts.wheels[].radius=0.3]       - m
+ * @param {number}  [opts.wheels[].width=0.1]        - m
+ * @param {number}  [opts.wheels[].suspensionMinLength=0.3] - m, max raised
+ * @param {number}  [opts.wheels[].suspensionMaxLength=0.5] - m, max droop
+ * @param {number}  [opts.wheels[].suspensionFrequency=1.5] - spring Hz
+ * @param {number}  [opts.wheels[].suspensionDamping=0.5]   - 0..1 (1 = critical)
+ * @param {boolean} [opts.wheels[].steerable=false]  - responds to `right` input
+ * @param {number}  [opts.wheels[].maxSteerAngle=70] - degrees (steerable only)
+ * @param {boolean} [opts.wheels[].driven=false]     - engine-connected
+ * @param {number}  [opts.wheels[].maxBrakeTorque=1500]     - N·m, foot brake
+ * @param {number}  [opts.wheels[].maxHandBrakeTorque=0]    - N·m; set ~4000 on
+ *                                                     the REAR wheels for a
+ *                                                     classic handbrake
+ *
+ * @param {Object}  [opts.engine]
+ * @param {number}  [opts.engine.maxTorque=500]  - N·m
+ * @param {number}  [opts.engine.minRPM=1000]
+ * @param {number}  [opts.engine.maxRPM=6000]
+ *
+ * @param {Object}  [opts.transmission]
+ * @param {string}  [opts.transmission.mode='auto']    - 'auto' | 'manual'
+ * @param {number[]} [opts.transmission.gearRatios]    - default 5-speed
+ *                                                       [2.66,1.78,1.3,1,0.74]
+ * @param {number[]} [opts.transmission.reverseGearRatios] - default [-2.90]
+ * @param {number}  [opts.transmission.switchTime=0.5] - s (auto)
+ * @param {number}  [opts.transmission.clutchStrength=10]
+ * @param {number}  [opts.transmission.shiftUpRPM=4000]   - auto
+ * @param {number}  [opts.transmission.shiftDownRPM=2000] - auto
+ *
+ * @param {Object[]} [opts.differentials] - omit to auto-derive: driven wheels
+ *                                          are paired in array order, torque
+ *                                          split equally. Explicit form:
+ * @param {number}  [opts.differentials[].leftWheel=-1]  - wheel index or -1
+ * @param {number}  [opts.differentials[].rightWheel=-1]
+ * @param {number}  [opts.differentials[].ratio=3.42]    - gearbox→wheel ratio
+ * @param {number}  [opts.differentials[].leftRightSplit=0.5] - 0=left, 1=right
+ * @param {number}  [opts.differentials[].limitedSlipRatio=1.4]
+ * @param {number}  [opts.differentials[].engineTorqueRatio=1] - sum to 1 across diffs
+ * @param {number}  [opts.differentialLimitedSlipRatio=1.4] - between differentials
+ *
+ * @param {Object[]} [opts.antiRollBars]  - stiff spring between a wheel pair:
+ *                                          {leftWheel, rightWheel, stiffness=1000}
+ *
+ * @param {string}  [opts.collisionTester='cylinder'] - wheel-vs-ground test:
+ *                                          'cylinder' (accurate wheel shape) |
+ *                                          'sphere' | 'ray' (cheapest; flat ground)
+ * @param {string|number} [opts.testerLayer] - object layer the wheels collide
+ *                                          as; default = chassis layer
+ * @returns {PhysicsVehicle}
+ */
+const car = Physics.createVehicle({
+    chassis: {
+        shape: 'box', halfExtents: { x: 0.9, y: 0.4, z: 2.0 },
+        position: { x: 0, y: 1.2, z: 0 }, density: 260,   // ≈ 1500 kg
+    },
+    wheels: [   // fronts steer, rears drive + handbrake
+        { position: { x: -0.8, y: -0.3, z:  1.3 }, radius: 0.35, width: 0.25, steerable: true },
+        { position: { x:  0.8, y: -0.3, z:  1.3 }, radius: 0.35, width: 0.25, steerable: true },
+        { position: { x: -0.8, y: -0.3, z: -1.3 }, radius: 0.35, width: 0.25, driven: true, maxHandBrakeTorque: 4000 },
+        { position: { x:  0.8, y: -0.3, z: -1.3 }, radius: 0.35, width: 0.25, driven: true, maxHandBrakeTorque: 4000 },
+    ],
+    antiRollBars: [ { leftWheel: 0, rightWheel: 1 }, { leftWheel: 2, rightWheel: 3 } ],
+});
+
+/**
+ * Driver input (persists until changed; any non-zero input wakes the car).
+ * @param {Object} input
+ * @param {number} [input.forward=0]   - -1..1. Auto transmission: sign picks
+ *                                       direction (car shifts into reverse on
+ *                                       its own); manual: 0..1 gas pedal
+ * @param {number} [input.right=0]     - -1..1 steering, 1 = right
+ * @param {number} [input.brake=0]     - 0..1 foot brake
+ * @param {number} [input.handBrake=0] - 0..1 hand brake
+ */
+car.setInput({ forward: 1, right: 0.3 });
+
+car.speed;        // signed speed along chassis forward (m/s)
+car.rpm;          // current engine RPM
+car.gear;         // -1 reverse, 0 neutral, 1+ forward
+car.wheelCount;   // number of wheels
+car.chassisBody;  // the chassis body TAG — use with Physics.* body functions,
+                  // raycast filters, and scene.createPhysicsNode
+car.getState();   // { speed, rpm, gear, isSwitchingGear } in one call
+
+/**
+ * Manual-transmission gear select (transmission.mode 'manual' only).
+ * @param {number} gear - -1 reverse, 0 neutral, 1+ forward
+ * @param {number} [clutchFriction=1] - 0 = clutch in, 1 = fully engaged
+ */
+car.setGear(1);
+
+/**
+ * Per-wheel state for rendering. Returns null for a bad index or after
+ * destroy.
+ *
+ * @param {number} i - wheel index (order = the wheels array at create)
+ * @returns {{
+ *   position: {x,y,z},        // wheel center, CHASSIS-LOCAL space
+ *   rotation: {x,y,z,w},      // chassis-local; includes steer + suspension +
+ *                             // spin. Maps a Y-axis-aligned cylinder onto the
+ *                             // wheel — exactly what a bro.mesh cylinder needs
+ *   suspensionLength: number, // m, within [suspensionMinLength, suspensionMaxLength]
+ *   steerAngle: number,       // rad, positive = left
+ *   rotationAngle: number,    // rad [0, 2π] — wheel spin
+ *   angularVelocity: number,  // rad/s, positive = driving the car forward
+ *   contact: boolean,         // touching anything?
+ *   contactBody: number,      // body tag under the wheel, -1 if none
+ *   contactNormal: {x,y,z},   // ground normal at the contact
+ * }}
+ */
+const ws = car.wheelState(0);
+
+car.destroy();    // remove the vehicle (constraint + drivetrain); the chassis
+                  // BODY survives — destroy it separately if unwanted.
+                  // Destroying the chassis body also removes the vehicle.
+
+// Rendering recipe — chassis under a PhysicsNode, wheels as chassis children
+// driven from wheelState each frame (no new engine machinery needed):
+//
+//   const chassisNode = scene.createPhysicsNode({ body: car.chassisBody });
+//   chassisNode.add(scene.createMesh({ mesh: 'box', ... }));   // body visual
+//   const wheelNodes = [];
+//   for (let i = 0; i < car.wheelCount; i++) {
+//       const n = scene.createMesh({ mesh: 'cylinder',         // Y-axis cylinder
+//                                    radius: 0.35, height: 0.25 });
+//       chassisNode.add(n);                                    // chassis-local
+//       wheelNodes.push(n);
+//   }
+//   // per frame (node transform props take arrays):
+//   for (let i = 0; i < car.wheelCount; i++) {
+//       const ws = car.wheelState(i);
+//       wheelNodes[i].position = [ws.position.x, ws.position.y, ws.position.z];
+//       wheelNodes[i].quaternion = [ws.rotation.x, ws.rotation.y,
+//                                   ws.rotation.z, ws.rotation.w];
+//   }
+//
+// Transmission notes: in 'auto' mode the gearbox shifts itself using
+// shiftUpRPM/shiftDownRPM and needs only the sign of `forward` to pick a
+// direction — hold forward: -1 from a stop and it engages reverse. In
+// 'manual' mode the gearbox stays in the gear set by setGear(); forward is
+// just the gas pedal. While isSwitchingGear is true the clutch is open and
+// no engine torque reaches the wheels.
+//
+// Sandbox worlds have the same API; the vehicle advances inside w.step(dt):
+//   const w = Physics.createWorldHandle({ maxBodies: 64 });
+//   const kart = w.createVehicle({ chassis: {...}, wheels: [...] });
+//   kart.setInput({ forward: 1 });
+//   w.step(1/60);

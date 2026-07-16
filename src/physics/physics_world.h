@@ -19,7 +19,7 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 
-namespace JPH { class CharacterVirtual; }
+namespace JPH { class CharacterVirtual; class VehicleConstraint; }
 
 namespace bro::physics {
 
@@ -174,6 +174,101 @@ struct CharacterState {
     JPH::Vec3 groundNormal;      // valid when touching ground
     JPH::Vec3 groundVelocity;    // velocity of the ground body at the contact
     JPH::BodyID groundBody;      // invalid when in air
+};
+
+/// One wheel of a wheeled vehicle (see VehicleOptions). Positions and
+/// directions are in the chassis body's local space.
+struct VehicleWheelOptions {
+    JPH::Vec3 position{0, 0, 0};             // suspension attachment point
+    JPH::Vec3 suspensionDirection{0, -1, 0}; // should point down
+    float radius = 0.3f;                     // m
+    float width = 0.1f;                      // m
+    float suspensionMinLength = 0.3f;        // m — max raised position
+    float suspensionMaxLength = 0.5f;        // m — max droop position
+    float suspensionFrequency = 1.5f;        // suspension spring frequency (Hz)
+    float suspensionDamping = 0.5f;          // 0 = undamped, 1 = critical
+    bool steerable = false;                  // responds to the `right` input
+    float maxSteerAngle = 70.0f;             // degrees (steerable only)
+    bool driven = false;                     // connected to the engine via a differential
+    float maxBrakeTorque = 1500.0f;          // N·m — foot brake
+    float maxHandBrakeTorque = 0.0f;         // N·m — hand brake (typically rear wheels only)
+};
+
+struct VehicleEngineOptions {
+    float maxTorque = 500.0f;  // N·m
+    float minRPM = 1000.0f;
+    float maxRPM = 6000.0f;
+};
+
+struct VehicleTransmissionOptions {
+    bool manual = false;                   // false = auto shifting
+    std::vector<float> gearRatios;         // empty = Jolt's 5-speed defaults
+    std::vector<float> reverseGearRatios;  // empty = Jolt default (single reverse)
+    float switchTime = 0.5f;               // s (auto mode)
+    float clutchStrength = 10.0f;
+    float shiftUpRPM = 4000.0f;            // auto mode
+    float shiftDownRPM = 2000.0f;          // auto mode
+};
+
+/// Splits engine torque across a left/right wheel pair. Wheel fields are
+/// indices into VehicleOptions::wheels; -1 = no wheel on that side.
+struct VehicleDifferentialOptions {
+    int leftWheel = -1;
+    int rightWheel = -1;
+    float ratio = 3.42f;             // rotation ratio gearbox → wheels
+    float leftRightSplit = 0.5f;     // 0 = all torque left, 1 = all right
+    float limitedSlipRatio = 1.4f;   // max/min wheel speed before torque shifts to the slower wheel
+    float engineTorqueRatio = 1.0f;  // fraction of engine torque for this differential
+};
+
+/// Stiff spring between two wheels to reduce body roll in corners.
+struct VehicleAntiRollBarOptions {
+    int leftWheel = 0;
+    int rightWheel = 1;
+    float stiffness = 1000.0f;  // N/m
+};
+
+/// Wheeled-vehicle creation options (Jolt VehicleConstraint +
+/// WheeledVehicleController). The chassis is an existing dynamic body.
+struct VehicleOptions {
+    JPH::BodyID body;                 // chassis body (dynamic)
+    JPH::Vec3 up{0, 1, 0};            // chassis-local up
+    JPH::Vec3 forward{0, 0, 1};       // chassis-local forward
+    float maxPitchRollAngle = 180.0f; // degrees; < 180 keeps the vehicle from flipping
+    std::vector<VehicleWheelOptions> wheels;
+    VehicleEngineOptions engine;
+    VehicleTransmissionOptions transmission;
+    // Empty → auto-derived: driven wheels are paired in array order into
+    // differentials with equal engineTorqueRatio.
+    std::vector<VehicleDifferentialOptions> differentials;
+    float differentialLimitedSlipRatio = 1.4f;  // limited slip between differentials
+    std::vector<VehicleAntiRollBarOptions> antiRollBars;
+    // How wheel-vs-ground collision is tested. Cylinder is the most accurate
+    // wheel shape; ray is cheapest (fine for flat ground); sphere in between.
+    enum Tester { TesterRay, TesterCastSphere, TesterCastCylinder };
+    Tester tester = TesterCastCylinder;
+    int testerLayer = -1;  // object layer the wheels collide as; -1 = chassis layer
+};
+
+/// Per-wheel state snapshot for rendering.
+struct VehicleWheelState {
+    JPH::Vec3 position;          // wheel center, chassis-body local space
+    JPH::Quat rotation;          // chassis-local; maps a Y-axis-aligned cylinder onto the wheel
+    float suspensionLength = 0;  // m, in [suspensionMinLength, suspensionMaxLength]
+    float steerAngle = 0;        // rad, positive = left
+    float rotationAngle = 0;     // rad, [0, 2π]
+    float angularVelocity = 0;   // rad/s, positive = driving forward
+    bool contact = false;        // wheel touching something
+    JPH::BodyID contactBody;     // invalid when no contact
+    JPH::Vec3 contactNormal{0, 1, 0};
+};
+
+/// Vehicle-level state snapshot.
+struct VehicleState {
+    float speed = 0;             // signed speed along the chassis forward axis (m/s)
+    float rpm = 0;               // current engine RPM
+    int gear = 0;                // -1 reverse, 0 neutral, 1+ forward
+    bool isSwitchingGear = false;
 };
 
 /// Per-axis configuration for a SixDOF constraint. Axis order follows Jolt's
@@ -457,6 +552,37 @@ public:
     /// Snapshot position/velocity/ground state. False for an unknown handle.
     bool getCharacterState(uint32_t handle, CharacterState& out) const;
 
+    // --- Wheeled vehicles (call only when idle) ---
+    //
+    // Jolt VehicleConstraint + WheeledVehicleController on an existing dynamic
+    // chassis body. The constraint registers as a PhysicsStepListener, so once
+    // added it steps inside PhysicsSystem::Update automatically — no per-step
+    // bookkeeping here, and the phase contract is satisfied by construction.
+
+    /// Returns a non-zero handle on success, 0 on failure.
+    uint32_t createVehicle(const VehicleOptions& opts);
+    void destroyVehicle(uint32_t handle);
+
+    /// Driver input (Jolt SetDriverInput shape): forward -1..1 (auto
+    /// transmission; sign is desired direction), right -1..1 (1 = steer
+    /// right), brake / handBrake 0..1. Persists until changed. Any non-zero
+    /// input wakes the chassis (same rule as constraint motors).
+    void setVehicleInput(uint32_t handle, float forward, float right,
+                         float brake, float handBrake);
+
+    /// Manual-transmission gear select (-1 reverse, 0 neutral, 1+ forward).
+    /// Only meaningful when transmission.manual is set.
+    void setVehicleGear(uint32_t handle, int gear, float clutchFriction = 1.0f);
+
+    /// Number of wheels, or -1 for an unknown handle.
+    int vehicleWheelCount(uint32_t handle) const;
+    /// Per-wheel render state. False for unknown handle / wheel index.
+    bool getVehicleWheelState(uint32_t handle, int wheel, VehicleWheelState& out) const;
+    /// Speed / RPM / gear snapshot. False for an unknown handle.
+    bool getVehicleState(uint32_t handle, VehicleState& out) const;
+    /// The chassis BodyID (invalid for an unknown handle).
+    JPH::BodyID vehicleBody(uint32_t handle) const;
+
     // --- Queries (call only when idle) ---
 
     /// Cast a ray (narrow phase: exact shape geometry, real hit positions and
@@ -563,6 +689,17 @@ private:
     // dt. Called from signalStep (main thread, before the phase flip) and
     // stepInline — never concurrently with a world step.
     void updateCharacters(float dt);
+
+    // Vehicle registry. Each VehicleConstraint is registered with the system
+    // both as a constraint and as a step listener; removeVehicleFromSystem
+    // detaches both together so the listener can never outlive the constraint.
+    struct VehicleEntry {
+        JPH::Ref<JPH::VehicleConstraint> constraint;
+        JPH::BodyID body;  // chassis
+    };
+    std::unordered_map<uint32_t, VehicleEntry> vehicles_;
+    uint32_t nextVehicleHandle_ = 1;
+    void removeVehicleFromSystem(VehicleEntry& e);
 
     // Constraints that broke (exceeded breaking impulse) since the last drain.
     std::vector<uint32_t> brokenConstraints_;
