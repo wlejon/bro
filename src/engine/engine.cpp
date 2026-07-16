@@ -93,7 +93,9 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_keycode.h>
 #include <glad/gl.h>
+#include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstdio>
 #include <stdexcept>
 #include <functional>
@@ -123,9 +125,36 @@ using bromath::cfromColor8;
 
 void Engine::tickTimersOnly()
 {
-    double now = util::currentTimeMs();
-    timers_->tick(now);
+    // Advance the bro.time scaled clock exactly like a frame top would, so
+    // timers keep obeying pause/timescale during modal blocking, and the
+    // frame loop resumes with a fresh wall reference (no post-modal jump).
+    double wallNow = util::currentTimeMs();
+    if (lastWallTickMs_ > 0.0 && wallNow > lastWallTickMs_)
+        engineNowMs_ += (wallNow - lastWallTickMs_) * effectiveTimeScale();
+    lastWallTickMs_ = wallNow;
+    timers_->tick(engineNowMs_);
     jsRuntime_->executePendingJobs();
+}
+
+// ---------------------------------------------------------------------------
+// bro.time — global pause + timescale
+// ---------------------------------------------------------------------------
+
+void Engine::setTimeScale(double scale)
+{
+    if (!std::isfinite(scale)) return;
+    timeScale_ = std::clamp(scale, 0.0, 100.0);
+}
+
+void Engine::setTimePaused(bool paused)
+{
+    if (timePaused_ == paused) return;
+    timePaused_ = paused;
+    // Suspend/resume audio output with the clock. broaudio's master pause is
+    // a transport freeze (silence out, engine clock stops), not a mute — so
+    // scheduled notes/clips resume exactly in place. Timescale is deliberately
+    // NOT forwarded: audio always renders at real rate (no pitch shift).
+    if (audioEngine_) audioEngine_->setMasterPaused(paused);
 }
 
 

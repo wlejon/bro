@@ -12,7 +12,6 @@
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
 #include "util/log.h"
-#include "util/time.h"
 
 #include <SDL3/SDL.h>
 #include <glad/gl.h>
@@ -48,7 +47,10 @@ void Engine::layoutThreadFunc() {
 
         if (document_) {
             layout::ElementRefAdapter::setHoveredElement(snap.hoveredElement);
-            double now = util::currentTimeMs();
+            // bro.time scaled timestamp captured on the main thread at signal
+            // time — NOT this thread's wall clock — so CSS transitions and
+            // animations obey global pause/timescale.
+            double now = snap.timeMs;
             document_->setTransitionManager(&transitionManager_, now);
             auto& kfs = document_->cascade().keyframes();
             animationManager_.setKeyframes(&kfs);

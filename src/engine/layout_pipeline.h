@@ -33,6 +33,12 @@ public:
         int insetBottom = 0;
         bool animationsActive = false;
         dom::Element* hoveredElement = nullptr;
+        // bro.time scaled timestamp (engineNowMs_) captured at signal time on
+        // the main thread. The layout worker ticks CSS transitions/animations
+        // with THIS — never its own wall clock — so they obey pause/timescale.
+        // Freshness: main signals then blocks on waitClaimDone the same frame,
+        // so the worker always sees the current frame's value.
+        double timeMs = 0.0;
     };
 
     // ---- main thread ----
@@ -45,6 +51,7 @@ public:
         insetBottom_.store(s.insetBottom, std::memory_order_relaxed);
         animationsActive_.store(s.animationsActive, std::memory_order_relaxed);
         hoveredElement_.store(s.hoveredElement, std::memory_order_relaxed);
+        timeMs_.store(s.timeMs, std::memory_order_relaxed);
         uint32_t expected = Idle;
         if (state_.compare_exchange_strong(expected, Requested,
                                            std::memory_order_release,
@@ -123,6 +130,7 @@ public:
         s.insetBottom = insetBottom_.load(std::memory_order_relaxed);
         s.animationsActive = animationsActive_.load(std::memory_order_relaxed);
         s.hoveredElement = hoveredElement_.load(std::memory_order_relaxed);
+        s.timeMs = timeMs_.load(std::memory_order_relaxed);
         return s;
     }
 
@@ -162,6 +170,7 @@ private:
     std::atomic<bool> animationsActive_{false};
     std::atomic<bool> promotedActive_{false};
     std::atomic<dom::Element*> hoveredElement_{nullptr};
+    std::atomic<double> timeMs_{0.0};
 };
 
 } // namespace bro::engine

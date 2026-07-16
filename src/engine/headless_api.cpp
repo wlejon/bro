@@ -78,12 +78,14 @@ void Engine::flush() {
     // is no raster thread, but we keep the call path consistent with the
     // windowed engine so ElVideo::draw() never touches JS.
     pumpVideoEvents();
-    // Tick transitions and animations, mark dirty if any are active
+    // Tick transitions and animations, mark dirty if any are active.
+    // engineNowMs_, not virtualTime_: CSS transitions/animations run on the
+    // bro.time scaled clock (identical to virtual time at scale 1).
     if (document_) {
-        document_->setTransitionManager(&transitionManager_, virtualTime_);
+        document_->setTransitionManager(&transitionManager_, engineNowMs_);
         animationManager_.setKeyframes(&document_->cascade().keyframes());
         document_->setAnimationManager(&animationManager_);
-        bool animActive = transitionManager_.tick(virtualTime_) | animationManager_.tick(virtualTime_);
+        bool animActive = transitionManager_.tick(engineNowMs_) | animationManager_.tick(engineNowMs_);
         if (animActive) {
             // Paint-dirty, not layout-dirty: an active animation re-resolves its
             // element's style every frame regardless (resolveStylesRecursive's
@@ -269,6 +271,15 @@ void Engine::advanceTime(double ms) {
         virtualTime_ += step;
         remaining -= step;
 
+        // bro.time composition: virtualTime_ is the headless wall-clock
+        // analog (system panels, splash, GC, audio, brokit pumps advance by
+        // the full step); the scaled clock advances by step * effective
+        // scale — nothing at all while paused. Only ONE scaling happens
+        // here; every scaled consumer below reads engineNowMs_/scaledStep
+        // directly, so pause/timescale can never double-apply.
+        double scaledStep = step * effectiveTimeScale();
+        engineNowMs_ += scaledStep;
+
         // Drain microtasks before firing any macrotask (timer callbacks).
         // Without this, microtasks queued by the calling synchronous script
         // (queueMicrotask, Promise.resolve().then) would run AFTER a 0-delay
@@ -282,7 +293,7 @@ void Engine::advanceTime(double ms) {
         // kind that hid the menu-inset layer bug.
         drainWheelSmoothing(static_cast<float>(step) / 1000.0f);
 
-        timers_->tick(virtualTime_);
+        timers_->tick(engineNowMs_);
 
         // Tick brokit fetch (pump pending HTTP requests)
         {
@@ -321,7 +332,9 @@ void Engine::advanceTime(double ms) {
         }
 
         if (activeWebGL) activeWebGL->bindCanvasFBO();
-        timers_->fireAnimationFrames(virtualTime_);
+        // rAF skips entirely while paused (the web's _process analog);
+        // timescale changes only the timestamp, not the firing cadence.
+        if (!timePaused_) timers_->fireAnimationFrames(engineNowMs_);
         jsRuntime_->executePendingJobs();
         js::tickWorkers(jsRuntime_->getContext());
         // Run audio-inference models inline on this thread (headless has no
@@ -340,8 +353,9 @@ void Engine::advanceTime(double ms) {
         // Same for <iframe> sub-documents: each owns its own Timers, so without
         // this an embedded app's setTimeout/setInterval/rAF never fire under
         // headless virtual time — the windowed loop ticks them every frame
-        // (engine_frame.cpp), headless ticked nothing.
-        tickIframes(virtualTime_);
+        // (engine_frame.cpp), headless ticked nothing. Iframes host app
+        // content, so they run on the scaled clock and freeze while paused.
+        if (!timePaused_) tickIframes(engineNowMs_);
 
         // Network polling is delivered via a frame pump (registered in
         // engine_init when BRO_WITH_NET is on) — see the framePumps_ loop above.
@@ -362,7 +376,9 @@ void Engine::advanceTime(double ms) {
 #if BRO_WITH_PHYSICS
         if (physicsWorld_) {
             double stepMs = physicsWorld_->timeStep() * 1000.0;
-            physicsAccumMs_ += step;
+            // Scaled sim-time input; fixed timestep preserved. Paused ⇒ the
+            // accumulator gains nothing and the body freezes in place.
+            physicsAccumMs_ += scaledStep;
             int safety = 16;
             while (physicsAccumMs_ + 0.5 >= stepMs && safety-- > 0) {
                 physicsAccumMs_ -= stepMs;
@@ -372,10 +388,10 @@ void Engine::advanceTime(double ms) {
 #endif
 
         // Step AI bindings once per advanceTime step (deterministic, uses the
-        // headless virtual-time step as dt).
+        // scaled step as dt — agents obey bro.time like everything gameplay).
 #if BRO_WITH_3D
         {
-            float aiDt = static_cast<float>(step * 0.001);
+            float aiDt = static_cast<float>(scaledStep * 0.001);
             for (auto& sg : sceneGraphs_) {
                 sg.graph->syncAgents(aiDt);
                 sg.graph->tickAnimations(aiDt);
@@ -459,7 +475,10 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
     if (activeWebGL) activeWebGL->bindCanvasFBO();
 
-    timers_->fireAnimationFrames(virtualTime_);
+    // Scaled clock + pause gate, same as the frame loop: capturing a paused
+    // app must not run its rAF game logic — the composite below re-samples
+    // the last-drawn textures, so the capture shows the frozen frame.
+    if (!timePaused_) timers_->fireAnimationFrames(engineNowMs_);
     jsRuntime_->executePendingJobs();
 
     if (activeWebGL) activeWebGL->unbindCanvasFBO();
@@ -571,7 +590,7 @@ bool Engine::screenshot(const std::string& path) {
         webgl::WebGL2RenderingContext* activeWebGL = nullptr;
         if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
         if (activeWebGL) activeWebGL->bindCanvasFBO();
-        timers_->fireAnimationFrames(virtualTime_);
+        if (!timePaused_) timers_->fireAnimationFrames(engineNowMs_);
         jsRuntime_->executePendingJobs();
         if (activeWebGL) activeWebGL->unbindCanvasFBO();
     }
@@ -640,7 +659,7 @@ std::vector<uint8_t> Engine::capturePixels() {
         webgl::WebGL2RenderingContext* activeWebGL = nullptr;
         if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
         if (activeWebGL) activeWebGL->bindCanvasFBO();
-        timers_->fireAnimationFrames(virtualTime_);
+        if (!timePaused_) timers_->fireAnimationFrames(engineNowMs_);
         jsRuntime_->executePendingJobs();
         if (activeWebGL) activeWebGL->unbindCanvasFBO();
     }

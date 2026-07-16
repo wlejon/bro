@@ -81,11 +81,15 @@ void Engine::run() {
         // Without this, virtualTime_ (set early in the constructor) lags behind
         // the wall clock by the time system panels and fonts finish loading.
         virtualTime_ = util::currentTimeMs();
+        // The bro.time scaled clock rebases with it — they advance in lockstep
+        // through advanceTime (identical at scale 1, so pre-existing tests see
+        // exactly the old timer behavior).
+        engineNowMs_ = virtualTime_;
         // Splash elapsed is measured against virtualTime_, so rebase its start
         // too — otherwise elapsed would count the constructor time and the
         // splash would auto-dismiss partway through the first advanceTime().
         if (splashVisible_) splashStartMs_ = virtualTime_;
-        timers_->tick(virtualTime_);
+        timers_->tick(engineNowMs_);
         return;
     }
 
@@ -98,7 +102,12 @@ void Engine::run() {
             double tickStart = util::currentTimeMs();
             double tickIntervalMs = 1000.0 / serverTickRate_;
 
-            timers_->tick(tickStart);
+            // Advance the bro.time scaled clock; timers run on it in every
+            // display mode (pause freezes them, timescale stretches them).
+            if (lastWallTickMs_ > 0.0 && tickStart > lastWallTickMs_)
+                engineNowMs_ += (tickStart - lastWallTickMs_) * effectiveTimeScale();
+            lastWallTickMs_ = tickStart;
+            timers_->tick(engineNowMs_);
 
             auto pumpBrokit = [&](const char* fnName) {
                 JSContext* ctx = jsRuntime_->getContext();
@@ -143,7 +152,11 @@ void Engine::run() {
                     double stepMs = physicsWorld_->timeStep() * 1000.0;
                     double nowPhys = util::currentTimeMs();
                     if (lastPhysicsTimeMs_ == 0.0) lastPhysicsTimeMs_ = nowPhys;
-                    physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_);
+                    // Wall delta scaled by bro.time — the fixed timestep is
+                    // preserved; pause/timescale change how much sim time
+                    // accumulates per wall second (Godot semantics).
+                    physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_) *
+                                       effectiveTimeScale();
                     lastPhysicsTimeMs_ = nowPhys;
                     if (physicsAccumMs_ >= stepMs) {
                         physicsAccumMs_ -= stepMs;
@@ -267,6 +280,20 @@ void Engine::run() {
         }
         double frameStart = util::currentTimeMs();
 
+        // Advance the bro.time scaled clock (pause + timescale). Everything
+        // gameplay-visible reads engineNowMs_ this frame: JS timers, rAF
+        // timestamps, performance.now, CSS transitions/animations (via the
+        // layout snapshot), the physics accumulator, scene agents/animations,
+        // and iframe sub-documents. Engine chrome (system panels, GC cadence,
+        // UI throttle, frame pacing) stays on wall time so pause never
+        // freezes the shell. Deliberately unclamped: a long stall while
+        // unpaused jumps the clock exactly like the pre-scaled-clock timers.
+        double wallFrameDtMs = 0.0;
+        if (lastWallTickMs_ > 0.0 && frameStart > lastWallTickMs_)
+            wallFrameDtMs = frameStart - lastWallTickMs_;
+        lastWallTickMs_ = frameStart;
+        engineNowMs_ += wallFrameDtMs * effectiveTimeScale();
+
         // 0. Drain any in-flight layout result so event handlers don't race
         //    layout thread reads. JS handlers can mutate the DOM.
         if (layoutPipeline_->waitForIdle()) {
@@ -380,7 +407,9 @@ void Engine::run() {
 
         // 1d. Sync scene graph AI bindings (world.tick, per-agent think).
         {
-            double nowMs = util::currentTimeMs();
+            // Scaled-clock dt — agents and scene animations obey bro.time
+            // (frozen while paused, stretched by timescale).
+            double nowMs = engineNowMs_;
             float frameDt = (lastFrameTimeMs_ > 0.0)
                 ? static_cast<float>((nowMs - lastFrameTimeMs_) / 1000.0)
                 : 1.0f / 60.0f;
@@ -393,13 +422,21 @@ void Engine::run() {
                 sg.graph->tickAnimations(frameDt);
             }
 #endif
-            drainWheelSmoothing(frameDt);
+            // Wheel smoothing is UI feel, not gameplay — wall dt, so
+            // scrolling still eases out while the game is paused.
+            float wheelDt = wallFrameDtMs > 0.0
+                ? static_cast<float>(wallFrameDtMs / 1000.0)
+                : 1.0f / 60.0f;
+            if (wheelDt > 0.1f) wheelDt = 0.1f;
+            drainWheelSmoothing(wheelDt);
         }
 
-        // 2. Tick timers + JS execution
+        // 2. Tick timers + JS execution. `now` is WALL time for engine
+        //    chrome (system panels, GC, UI throttle); the JS-visible clocks
+        //    (timers, rAF, iframes) tick with the scaled engineNowMs_.
         double now = util::currentTimeMs();
         double t0 = now;
-        timers_->tick(now);
+        timers_->tick(engineNowMs_);
 
         auto pumpBrokit = [&](const char* fnName) {
             JSContext* ctx = jsRuntime_->getContext();
@@ -422,8 +459,9 @@ void Engine::run() {
         // sub-doc activity (reload, DOM change, animation) into uiDirty_ like
         // systemDirty_ below — it's the only route iframe rendering has to the
         // raster thread; without it the preview never records (blank / null
-        // capture).
-        if (tickIframes(now)) uiDirty_ = true;
+        // capture). Iframes host app content, so they run on the scaled
+        // clock and freeze entirely while paused (their rAF included).
+        if (!timePaused_ && tickIframes(engineNowMs_)) uiDirty_ = true;
         // System panels (splash animation, menu, perf, settings) share the
         // raster thread, signaled via uiDirty_. Their own DOM edits never
         // touch the app document, so propagate systemDirty_ so the raster
@@ -448,8 +486,12 @@ void Engine::run() {
             activeWebGL->bindCanvasFBO();
         }
 
-        // 3a. Fire requestAnimationFrame callbacks
-        timers_->fireAnimationFrames(now);
+        // 3a. Fire requestAnimationFrame callbacks. rAF is the web's
+        //     per-frame gameplay hook (_process analog), so pause skips it
+        //     entirely — the engine keeps compositing, visuals just freeze.
+        //     Timescale does NOT change the firing cadence, only the
+        //     timestamp the callback receives.
+        if (!timePaused_) timers_->fireAnimationFrames(engineNowMs_);
 
         double tGlSave = util::currentTimeMs();
 
@@ -514,7 +556,10 @@ void Engine::run() {
             double stepMs = physicsWorld_->timeStep() * 1000.0;
             double nowPhys = util::currentTimeMs();
             if (lastPhysicsTimeMs_ == 0.0) lastPhysicsTimeMs_ = nowPhys;
-            physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_);
+            // Wall delta scaled by bro.time — the fixed timestep is preserved;
+            // pause/timescale change how much sim time accumulates per wall
+            // second (paused ⇒ 0 ⇒ no steps; scale 2 ⇒ double sim speed).
+            physicsAccumMs_ += (nowPhys - lastPhysicsTimeMs_) * effectiveTimeScale();
             lastPhysicsTimeMs_ = nowPhys;
             if (physicsAccumMs_ >= stepMs) {
                 physicsAccumMs_ -= stepMs;
@@ -568,6 +613,7 @@ void Engine::run() {
             ls.insetBottom     = contentBottom();
             ls.animationsActive = animActive;
             ls.hoveredElement  = hoveredElement_.get();
+            ls.timeMs          = engineNowMs_;  // CSS transitions obey bro.time
             layoutPipeline_->signalLayout(ls);
             layoutSignaled = true;
         }

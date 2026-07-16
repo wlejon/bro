@@ -171,6 +171,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/tile-api.js` | `scene.createTileWorld` — chunked tile-grid meshing (`bro::tile` core): per-cell tile layers + elevation + flags, flat-top + auto-cliff geometry, corner AO, palette colour, authoring/query. Square and hex topology |
 | `docs/dialogs-api.js` | `showOpenFileDialog` / `showOpenFolderDialog` / `showSaveFileDialog` — SDL3-backed native dialogs |
 | `docs/menu-api.js` | `bro.menu` — native menu bar (set/addItem/updateItem, item event) |
+| `docs/time-api.js` | `bro.time` — global pause + timescale (Godot time_scale/paused analog): `scale`/`paused`/`now` over one engine-owned scaled clock driving timers, rAF, performance.now, CSS transitions, physics, agents, iframes; system panels/audio-rate/Date.now stay wall-clock, pause suspends audio output |
 | `docs/gizmo-api.js` | `bro.gizmo` — 3D transform handles (translate/rotate/scale) for scene editing |
 | `docs/video-api.js` | `VideoEncoder` (WebM/VP9 software) + `GifEncoder` (GIF89a, median-cut palette) — RGBA in, file out |
 | `docs/iframe-api.js` | `<iframe src=dir>` — embedded isolated sub-document (own JS realm/DOM/timers/canvas), rendered at the element box; `src` get/set, `reload()`, `load` event, mouse input routed into the sub-doc |

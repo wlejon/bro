@@ -42,6 +42,7 @@
 #endif
 #include "js/scene_bindings.h"
 #include "js/menu_bindings.h"
+#include "js/time_bindings.h"
 #include "js/gizmo_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/flora_bindings.h"
@@ -203,7 +204,12 @@ Engine::Engine(const EngineConfig& config)
 
     // Seed the timer time base so setTimeout/setInterval use the correct clock.
     // In headless mode this is virtual time; in windowed/server mode, real time.
-    timers_->tick(displayMode_ == DisplayMode::Headless ? virtualTime_ : util::currentTimeMs());
+    // The bro.time scaled clock is seeded from the same value — timers only
+    // ever tick with engineNowMs_ from here on, so deadlines and the scaled
+    // clock can never diverge.
+    engineNowMs_ = displayMode_ == DisplayMode::Headless ? virtualTime_
+                                                         : util::currentTimeMs();
+    timers_->tick(engineNowMs_);
 
     // Physics engine + bindings (all modes). With BRO_WITH_PHYSICS off there is
     // no physics world and the `Physics` JS class is simply absent (advanced
@@ -409,6 +415,9 @@ Engine::Engine(const EngineConfig& config)
 
     if (displayMode_ == DisplayMode::Headless) {
         virtualTime_ = util::currentTimeMs();
+        // Keep the bro.time scaled clock in lockstep with virtual time (they
+        // advance together in advanceTime; at scale 1 they stay identical).
+        engineNowMs_ = virtualTime_;
     }
 
     // 4b. Audio engine + bindings
@@ -535,6 +544,10 @@ Engine::Engine(const EngineConfig& config)
 #if BRO_WITH_3D
     js::SceneBindings::install(jsRuntime_->getContext());
 #endif
+
+    // Global pause + timescale (bro.time.*) — scale/paused/now over the
+    // engine's scaled clock. Installed in all display modes.
+    js::TimeBindings::install(jsRuntime_->getContext(), this);
 
     // Menu bar bindings (bro.menu.*) + default menu tree.
     js::MenuBindings::install(jsRuntime_->getContext(), this);
@@ -931,10 +944,11 @@ Engine::Engine(const EngineConfig& config)
     if (document_) {
         ensureReplacedElements(document_->documentElement());
         layout::ElementRefAdapter::setHoveredElement(hoveredElement_.get());
-        double now = (displayMode_ == DisplayMode::Headless)
-                         ? virtualTime_
-                         : util::currentTimeMs();
-        document_->setTransitionManager(&transitionManager_, now);
+        // Transitions live on the bro.time scaled clock — registration and
+        // every later tick (layout-thread snapshot / headless flush) must use
+        // the same clock, or a load-time transition's startTime could sit
+        // ahead of the first tick and never progress.
+        document_->setTransitionManager(&transitionManager_, engineNowMs_);
         animationManager_.setKeyframes(&document_->cascade().keyframes());
         document_->setAnimationManager(&animationManager_);
         document_->resolveStyles();

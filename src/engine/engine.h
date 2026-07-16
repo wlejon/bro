@@ -405,6 +405,33 @@ public:
     /// Get virtual time (headless mode).
     double virtualTime() const { return virtualTime_; }
 
+    // --- bro.time: global pause + timescale (Godot Engine.time_scale /
+    //     SceneTree.paused analog) ---
+    // The engine owns one scaled clock, engineNowMs_, advanced at frame top
+    // by wallDt * effectiveTimeScale(). Everything gameplay-visible reads it:
+    // JS timers, rAF timestamps, performance.now, CSS transitions/animations
+    // (via the layout snapshot), the physics accumulator, scene agents and
+    // animations, and iframe sub-documents. Engine chrome (system panels,
+    // menu, perf HUD, GC cadence, UI throttle) stays on wall time so pause
+    // never freezes the shell. Audio: pause suspends output (broaudio master
+    // pause); timescale never pitch-shifts.
+
+    /// Time multiplier for the scaled clock. Clamped to [0, 100]. Default 1.
+    double timeScale() const { return timeScale_; }
+    void setTimeScale(double scale);
+
+    /// Global pause — effective scale 0, rAF callbacks skipped, audio output
+    /// suspended.
+    bool timePaused() const { return timePaused_; }
+    void setTimePaused(bool paused);
+
+    /// Current scaled engine time in ms (the clock timers/rAF/transitions
+    /// run on). Read-only from JS as bro.time.now.
+    double timeNowMs() const { return engineNowMs_; }
+
+    /// 0 while paused, else timeScale_.
+    double effectiveTimeScale() const { return timePaused_ ? 0.0 : timeScale_; }
+
     /// Server mode: request graceful shutdown.
     void requestServerStop() { serverStopRequested_ = true; }
 
@@ -943,7 +970,18 @@ private:
 #endif
     double physicsAccumMs_ = 0.0;
     double lastPhysicsTimeMs_ = 0.0;
-    double lastFrameTimeMs_ = 0.0; // wall-clock time of previous frame's start (for syncAgents dt)
+    double lastFrameTimeMs_ = 0.0; // scaled-clock time of previous frame's start (for syncAgents dt)
+
+    // --- bro.time scaled clock state ---
+    double timeScale_ = 1.0;
+    bool   timePaused_ = false;
+    // The scaled clock (ms). Seeded from the same value as the first
+    // timers_->tick() so timer deadlines and this clock never diverge;
+    // advanced once per frame (windowed/server) or per advanceTime step
+    // (headless, in lockstep with virtualTime_ at scale 1).
+    double engineNowMs_ = 0.0;
+    // Wall time of the previous scaled-clock advance (0 = not yet sampled).
+    double lastWallTickMs_ = 0.0;
     // System panels (settings, perf, nav)
     std::vector<SystemDocument> systemDocs_;
     // Iframe sub-documents, keyed by their <iframe> element. unique_ptr so the
