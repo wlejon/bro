@@ -256,10 +256,14 @@ advanceTime(1500);
 const dv3 = drape.vertices();
 assert(dv3[liftIdx * 3 + 1] < 1.2, 'released vertex fell, y=' +
        dv3[liftIdx * 3 + 1].toFixed(3));
-// setVertexVelocity: kick a resting vertex upward.
-assert(drape.setVertexVelocity(0, 0, 3, 0) === true, 'setVertexVelocity returns true');
+// setVertexVelocity: kick a resting vertex upward. Kick the settled FLAT
+// cloth, not the drape — the drape's post-tent crumple leaves its corner
+// tangled in neighbors/contacts, so how far a kick lifts it depends on
+// platform-divergent FP state (passed on Windows, failed on Linux CI).
+const fvKick = flat.vertices();
+assert(flat.setVertexVelocity(0, 0, 3, 0) === true, 'setVertexVelocity returns true');
 advanceTime(100);
-assert(drape.vertices()[1] > dv3[1] + 0.05, 'velocity kick lifted the vertex');
+assert(flat.vertices()[1] > fvKick[1] + 0.05, 'velocity kick lifted the vertex');
 
 // =========================================================================
 // Sandbox world form + destroy paths
