@@ -6,6 +6,7 @@
 #if BRO_WITH_3D
 #include "engine/gizmo.h"  // GizmoManager (3D-only; pulls scene::MeshNode)
 #endif
+#include "engine/gamepad.h"
 #include "engine/inspector_state.h"
 #include "engine/menu_bar.h"
 #include "engine/overlay.h"
@@ -182,6 +183,30 @@ public:
     void drainWheelSmoothing(float frameDtSec);
     void handleDropFile(const std::string& path, float x = -1, float y = -1);
     void handleDropText(const std::string& text, float x = -1, float y = -1);
+
+    // --- Gamepads (SDL event path; implementations in gamepad.cpp) ---
+    void handleGamepadAdded(uint32_t instanceId);
+    void handleGamepadRemoved(uint32_t instanceId);
+    void handleGamepadButton(uint32_t instanceId, int sdlButton, bool down);
+    /// `value` is normalized: sticks -1..1, triggers 0..1.
+    void handleGamepadAxis(uint32_t instanceId, int sdlAxis, float value);
+
+    // Gamepad simulation seam (headless testing — injects below the JS API and
+    // above SDL, so getGamepads(), connection events, and action dispatch all
+    // run the real path). Also callable in windowed mode.
+    int  gamepadConnectVirtual(const std::string& id);       // returns slot index, -1 on failure
+    bool gamepadDisconnectVirtual(int index);
+    bool gamepadSetVirtualButton(int index, int w3cButton, bool pressed, float value);
+    bool gamepadSetVirtualAxis(int index, int w3cAxis, float value);
+
+    /// Dual-rumble request from JS (Gamepad.vibrationActuator). Magnitudes are
+    /// 0..1. Real pads forward to SDL_RumbleGamepad; virtual pads just record.
+    bool gamepadRumble(int index, float strongMagnitude, float weakMagnitude,
+                       int durationMs);
+
+    /// All gamepad slots (connected and not) — read by the JS bindings to
+    /// build navigator.getGamepads() snapshots.
+    const std::vector<GamepadState>& gamepads() const { return gamepads_; }
 
     // Clipboard simulation (for headless testing — bypasses system clipboard)
     void simulatePaste(const std::string& text);
@@ -1019,6 +1044,15 @@ private:
 
     // Mouse button state for buttons bitmask
     int pressedButtons_ = 0;
+
+    // Gamepad slots (see engine/gamepad.h). Helpers live in gamepad.cpp.
+    std::vector<GamepadState> gamepads_;
+    GamepadState* gamepadByInstance(uint32_t instanceId);
+    GamepadState* connectedGamepadAt(int index);
+    GamepadState& allocateGamepadSlot();
+    void gamepadButtonChanged(GamepadState& gp, int w3cIndex, float value);
+    void dispatchGamepadConnectionEvent(const GamepadState& gp, bool connected);
+    void closeAllGamepads();
 
     // Modifier keys currently held via simulated handleKeyDown()/handleKeyUp()
     // calls (SDL_KMOD_* bits). safeGetModState() only sees the OS's real

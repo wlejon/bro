@@ -25,6 +25,13 @@ public:
     std::function<void(const std::string& text, float x, float y)> onDropText;
     std::function<void()> onFocusLost;
     std::function<void()> onFocusGained;
+    // Gamepad events. `instanceId` is the SDL joystick instance id; button is
+    // an SDL_GamepadButton, axis an SDL_GamepadAxis. Axis values are already
+    // normalized: sticks -1..1, triggers 0..1.
+    std::function<void(uint32_t instanceId)> onGamepadAdded;
+    std::function<void(uint32_t instanceId)> onGamepadRemoved;
+    std::function<void(uint32_t instanceId, int button, bool down)> onGamepadButton;
+    std::function<void(uint32_t instanceId, int axis, float value)> onGamepadAxis;
 
     /// Polls all pending SDL events and dispatches to callbacks.
     /// Call once per frame.

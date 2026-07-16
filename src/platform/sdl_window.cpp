@@ -18,6 +18,13 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
         throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
     }
 
+    // Gamepad support is best-effort: a headless box or stripped-down driver
+    // stack may have no controller backend, and apps must still run (they just
+    // see zero gamepads). So init it as a subsystem and only log on failure.
+    if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
+        LOG_INFO("SDL gamepad subsystem unavailable: %s", SDL_GetError());
+    }
+
     // Deliver the click that activates an unfocused window. SDL defaults this
     // off on every platform (Windows/X11/Wayland all gate on the same hint), so
     // without it the first click after alt-tabbing back in is swallowed to raise

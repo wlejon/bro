@@ -131,6 +131,28 @@ bro.settings.getActions();
 //  {action: "move_left", keys: ["a", "ArrowLeft"]}]
 ```
 
+### Gamepad bindings
+
+Gamepad buttons participate in the same binding system via `"gamepad:<name>"`
+strings, using the standard-layout button names (matching SDL's mapping-string
+fields): `south`, `east`, `west`, `north`, `leftshoulder`, `rightshoulder`,
+`lefttrigger`, `righttrigger`, `back`, `start`, `leftstick`, `rightstick`,
+`dpup`, `dpdown`, `dpleft`, `dpright`, `guide`. Keyboard and gamepad bindings
+mix freely in one action:
+
+```js
+bro.settings.defineAction("jump", [" ", "gamepad:south"]);
+bro.settings.rebindAction("jump", ["w", "gamepad:north"]);   // persisted
+
+bro.settings.getKeyAction("gamepad:south");  // null (after the rebind)
+bro.settings.getKeyAction("gamepad:north");  // "jump"
+```
+
+A bound button's press/release edges dispatch the same `"action"` events as
+keys (the analog triggers count as pressed past 0.1). `detail.key` carries the
+`"gamepad:<name>"` string and `detail.gamepad` the controller's slot index.
+See [gamepad-api.js](gamepad-api.js) for the full Gamepad API.
+
 ### Action events
 
 When a key bound to an action is pressed or released, an `"action"` event is dispatched on `document.body` with a `detail` object:

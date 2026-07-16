@@ -29,7 +29,7 @@ embed_js(image_gpu.js          js_image_gpu)
 ## ── Library ──────────────────────────────────────────────────────────────────
 
 add_library(bro_js STATIC
-    runtime.cpp timers.cpp window_bindings.cpp
+    runtime.cpp timers.cpp window_bindings.cpp gamepad_bindings.cpp
     dom_bindings.cpp node_bindings.cpp event_bindings.cpp style_bindings.cpp
     element_bindings.cpp shadowroot_bindings.cpp document_bindings.cpp
     range_bindings.cpp selection_bindings.cpp

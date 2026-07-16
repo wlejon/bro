@@ -187,6 +187,10 @@ void Engine::run() {
     eventLoop_->onWheel      = [this](float x, float y, float dx, float dy) { handleWheel(x, y, dx, dy); };
     eventLoop_->onDropFile   = [this](const std::string& p, float x, float y) { handleDropFile(p, x, y); };
     eventLoop_->onDropText   = [this](const std::string& t, float x, float y) { handleDropText(t, x, y); };
+    eventLoop_->onGamepadAdded   = [this](uint32_t id) { handleGamepadAdded(id); };
+    eventLoop_->onGamepadRemoved = [this](uint32_t id) { handleGamepadRemoved(id); };
+    eventLoop_->onGamepadButton  = [this](uint32_t id, int b, bool down) { handleGamepadButton(id, b, down); };
+    eventLoop_->onGamepadAxis    = [this](uint32_t id, int a, float v) { handleGamepadAxis(id, a, v); };
     // SDL drops relative mouse mode on focus loss on some platforms — keep our
     // engine-side lock state in sync so apps see a pointerlockchange.
     eventLoop_->onFocusLost   = [this]() { windowFocused_ = false; exitPointerLock(); setPageVisibility(false); };

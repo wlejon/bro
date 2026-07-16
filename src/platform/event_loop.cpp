@@ -88,6 +88,34 @@ void EventLoop::pollEvents() {
                 }
                 break;
 
+            case SDL_EVENT_GAMEPAD_ADDED:
+                if (onGamepadAdded) onGamepadAdded(event.gdevice.which);
+                break;
+
+            case SDL_EVENT_GAMEPAD_REMOVED:
+                if (onGamepadRemoved) onGamepadRemoved(event.gdevice.which);
+                break;
+
+            case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+            case SDL_EVENT_GAMEPAD_BUTTON_UP:
+                if (onGamepadButton) {
+                    onGamepadButton(event.gbutton.which,
+                                    static_cast<int>(event.gbutton.button),
+                                    event.gbutton.down);
+                }
+                break;
+
+            case SDL_EVENT_GAMEPAD_AXIS_MOTION:
+                if (onGamepadAxis) {
+                    // Normalize Sint16 to float: sticks -1..1 (SDL min is
+                    // -32768, so clamp), triggers land in 0..1 naturally.
+                    float v = static_cast<float>(event.gaxis.value) / 32767.0f;
+                    if (v < -1.0f) v = -1.0f;
+                    onGamepadAxis(event.gaxis.which,
+                                  static_cast<int>(event.gaxis.axis), v);
+                }
+                break;
+
             case SDL_EVENT_WINDOW_FOCUS_LOST:
                 if (onFocusLost) onFocusLost();
                 break;

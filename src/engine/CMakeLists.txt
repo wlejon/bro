@@ -33,6 +33,7 @@ add_library(bro_engine STATIC
     engine_frame.cpp
     css_transitions.cpp
     input_handling.cpp
+    gamepad.cpp
     headless_api.cpp
     key_mapping.cpp
     overflow.cpp

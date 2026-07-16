@@ -135,6 +135,9 @@ void Engine::shutdown() {
     // Element->CanvasScene back-links (the Elements are still alive), or
     // ~Element's onBackingElementDestroyed hook fires against a freed scene.
 
+    // Release SDL gamepad handles (no-op for virtual pads / none connected).
+    closeAllGamepads();
+
     // No-op if run() never added it (headless/server never reach that code).
     removeModalEventWatch();
 }

@@ -148,6 +148,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/lighting-api.js` | PBR lighting — LightNode (dir/point/spot), materials, tonemap, ambient |
 | `docs/net-api.js` | `bro.net` — game networking (host/connect/send/broadcast) via GNS |
 | `docs/crosshair-api.js` | `bro.crosshair` — engine-level crosshair overlay (cross/dot/circle/crossdot) |
+| `docs/gamepad-api.js` | Gamepad API — W3C-style `navigator.getGamepads()` snapshots (standard mapping over SDL3), `gamepadconnected`/`gamepaddisconnected` window events, dual-rumble `vibrationActuator`, `"gamepad:<button>"` bindings in `bro.settings` actions, headless virtual-pad injection |
 | `docs/wake-api.js` | `bro.wake` — streaming wake-word detection (brosoundml::WakeWord) driven by broaudio's mic tap |
 | `docs/kws-api.js` | `bro.kws` — open-vocabulary streaming keyword spotting (brosoundml::PhonemeSpotter): enroll phrases from `bro.tts.phonemize` ids or reference audio, named onSpot events off the mic tap |
 | `docs/mic-api.js` | `bro.mic` — live mic chunk consumer: fixed-size frames (chunkFrames) from broaudio's mic tap, per-chunk peak/RMS, resample + AGC |

@@ -1,5 +1,6 @@
 #include "js/headless_bindings.h"
 #include "engine/engine.h"
+#include "engine/gamepad.h"
 #include "canvas/canvas_scene.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
@@ -445,6 +446,99 @@ static JSValue js_dropText(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     engine->handleDropText(text);
     JS_FreeCString(ctx, text);
     engine->flush();
+    return JS_UNDEFINED;
+}
+
+// --- Gamepad simulation ---
+// Injects a virtual controller at the engine layer (below navigator.getGamepads
+// and above SDL), so connection events, snapshots, and bro.settings action
+// dispatch all run the real path without hardware.
+
+// gamepadConnect([id]) -> slot index
+static JSValue js_gamepadConnect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    std::string id;
+    if (argc >= 1 && JS_IsString(argv[0])) {
+        const char* s = JS_ToCString(ctx, argv[0]);
+        if (s) { id = s; JS_FreeCString(ctx, s); }
+    }
+    int index = engine->gamepadConnectVirtual(id);
+    engine->flush();
+    return JS_NewInt32(ctx, index);
+}
+
+static JSValue js_gamepadDisconnect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "gamepadDisconnect(index) requires the slot index");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    int index = 0;
+    if (JS_ToInt32(ctx, &index, argv[0])) return JS_EXCEPTION;
+    bool ok = engine->gamepadDisconnectVirtual(index);
+    engine->flush();
+    if (!ok) return JS_ThrowTypeError(ctx, "gamepadDisconnect: no virtual gamepad at index %d", index);
+    return JS_UNDEFINED;
+}
+
+// Shared: resolve a button/axis argument that may be a name string or an index.
+static int gamepadResolveIndex(JSContext* ctx, JSValueConst arg,
+                               int (*fromName)(const std::string&)) {
+    if (JS_IsString(arg)) {
+        const char* s = JS_ToCString(ctx, arg);
+        if (!s) return -1;
+        int idx = fromName(s);
+        JS_FreeCString(ctx, s);
+        return idx;
+    }
+    int idx = -1;
+    if (JS_ToInt32(ctx, &idx, arg)) return -1;
+    return idx;
+}
+
+// gamepadButton(index, button, pressed [, value]) — button by W3C index or
+// name ("south", "start", "lefttrigger", ...). value gives triggers an
+// analog level; it defaults to pressed ? 1 : 0.
+static JSValue js_gamepadButton(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "gamepadButton(index, button, pressed [, value])");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    int index = 0;
+    if (JS_ToInt32(ctx, &index, argv[0])) return JS_EXCEPTION;
+    int button = gamepadResolveIndex(ctx, argv[1], engine::gamepadButtonIndex);
+    if (button < 0 || button >= engine::kGamepadButtonCount)
+        return JS_ThrowTypeError(ctx, "gamepadButton: unknown button");
+    bool pressed = JS_ToBool(ctx, argv[2]);
+    double value = -1.0;
+    if (argc >= 4 && JS_ToFloat64(ctx, &value, argv[3])) return JS_EXCEPTION;
+
+    bool ok = engine->gamepadSetVirtualButton(index, button, pressed,
+                                              static_cast<float>(value));
+    engine->flush();
+    if (!ok) return JS_ThrowTypeError(ctx, "gamepadButton: no virtual gamepad at index %d", index);
+    return JS_UNDEFINED;
+}
+
+// gamepadAxis(index, axis, value) — axis by W3C index or name
+// ("leftx", "lefty", "rightx", "righty"); value -1..1.
+static JSValue js_gamepadAxis(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "gamepadAxis(index, axis, value)");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    int index = 0;
+    if (JS_ToInt32(ctx, &index, argv[0])) return JS_EXCEPTION;
+    int axis = gamepadResolveIndex(ctx, argv[1], engine::gamepadAxisIndex);
+    if (axis < 0 || axis >= engine::kGamepadAxisCount)
+        return JS_ThrowTypeError(ctx, "gamepadAxis: unknown axis");
+    double value = 0.0;
+    if (JS_ToFloat64(ctx, &value, argv[2])) return JS_EXCEPTION;
+
+    bool ok = engine->gamepadSetVirtualAxis(index, axis, static_cast<float>(value));
+    engine->flush();
+    if (!ok) return JS_ThrowTypeError(ctx, "gamepadAxis: no virtual gamepad at index %d", index);
     return JS_UNDEFINED;
 }
 
@@ -1016,6 +1110,11 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         // Drag & drop simulation
         .function("dropFiles", js_dropFiles, 3)
         .function("dropText", js_dropText, 3)
+        // Gamepad simulation
+        .function("gamepadConnect", js_gamepadConnect, 1)
+        .function("gamepadDisconnect", js_gamepadDisconnect, 1)
+        .function("gamepadButton", js_gamepadButton, 4)
+        .function("gamepadAxis", js_gamepadAxis, 3)
         // Viewport
         .function("resize", js_resize, 2)
         // CSS/Layout inspection

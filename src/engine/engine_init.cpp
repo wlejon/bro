@@ -30,6 +30,7 @@
 #include "js/settings_bindings.h"
 #include "js/dialog_bindings.h"
 #include "js/window_bindings.h"
+#include "js/gamepad_bindings.h"
 #include "js/custom_elements.h"
 #include "js/webgl2_bindings.h"
 #include "js/image_bindings.h"
@@ -654,6 +655,10 @@ Engine::Engine(const EngineConfig& config)
 
     // 9. Set up window/navigator/location/history BEFORE DOM bindings
     js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, contentHeight());
+
+    // 9y. navigator.getGamepads() + gamepadconnected/disconnected plumbing.
+    //     Works in windowed (SDL gamepad events) and headless (virtual pads).
+    js::installGamepadBindings(jsRuntime_->getContext(), this);
 
     // 9x. Native file dialogs (modal to our SDL window).
     //      Pass a tick callback so JS timers keep running while dialog is open.
