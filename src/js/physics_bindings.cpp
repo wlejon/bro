@@ -35,17 +35,19 @@ namespace bro::js {
 
 struct JsCharacter;
 struct JsVehicle;
+struct JsRagdoll;
 
 struct JsWorld {
     physics::PhysicsWorld* world = nullptr;
     bool ownsWorld = false;  // true → delete `world` in destructor
 
-    // Sandbox characters/vehicles that still reference this world. GC teardown
-    // order is arbitrary, so ~JsWorld must sever their back-pointers before
-    // the handle finalizers run (see characterClassFinalizer /
-    // vehicleClassFinalizer).
+    // Sandbox characters/vehicles/ragdolls that still reference this world.
+    // GC teardown order is arbitrary, so ~JsWorld must sever their
+    // back-pointers before the handle finalizers run (see
+    // characterClassFinalizer / vehicleClassFinalizer / ragdollClassFinalizer).
     std::unordered_set<JsCharacter*> liveCharacters;
     std::unordered_set<JsVehicle*> liveVehicles;
+    std::unordered_set<JsRagdoll*> liveRagdolls;
 
     std::unordered_map<uint32_t, int32_t> bodyTags;     // BodyID idx+seq → tag
     std::unordered_map<int32_t, uint32_t> tagToBody;    // tag → BodyID idx+seq
@@ -1033,9 +1035,22 @@ struct JsVehicle {
     JSValue worldRef = JS_UNDEFINED;   // strong ref to a sandbox world handle
 };
 
-// GC teardown may finalize the world handle before its characters/vehicles;
-// sever the back-pointers first so their finalizers never touch a deleted
-// JsWorld (PhysicsWorld::shutdown destroys the underlying objects itself).
+// And for ragdolls (class machinery lives after the vehicle section). Part
+// bodies are registered as regular body tags in the owning world, so every
+// body API works on them; partTags mirrors the ragdoll's part order.
+struct JsRagdoll {
+    JsWorld* world = nullptr;          // sandbox only; default world uses s_defaultWorld
+    uint32_t handle = 0;               // 0 after destroy()
+    std::vector<int32_t> partTags;     // per-part body tags
+    std::vector<int32_t> parents;      // per-part parent index (-1 = root)
+    std::vector<std::string> names;    // per-part names (partIndex lookup)
+    JSValue worldRef = JS_UNDEFINED;   // strong ref to a sandbox world handle
+};
+
+// GC teardown may finalize the world handle before its characters/vehicles/
+// ragdolls; sever the back-pointers first so their finalizers never touch a
+// deleted JsWorld (PhysicsWorld::shutdown destroys the underlying objects
+// itself).
 JsWorld::~JsWorld() {
     for (JsCharacter* c : liveCharacters) {
         c->world = nullptr;
@@ -1044,6 +1059,10 @@ JsWorld::~JsWorld() {
     for (JsVehicle* v : liveVehicles) {
         v->world = nullptr;
         v->handle = 0;
+    }
+    for (JsRagdoll* r : liveRagdolls) {
+        r->world = nullptr;
+        r->handle = 0;
     }
     if (ownsWorld && world) {
         world->shutdown();
@@ -1623,6 +1642,490 @@ static const JSCFunctionListEntry s_vehicleProtoFuncs[] = {
 };
 
 // ---------------------------------------------------------------------------
+// Ragdolls (Physics.createRagdoll / handle.createRagdoll). Same lifetime
+// pattern as PhysicsCharacter/PhysicsVehicle: sandbox handles pin their world
+// handle object via worldRef (marked in ragdollClassGcMark, severed by
+// ~JsWorld for arbitrary finalizer order); default-world handles route
+// through s_defaultWorld.
+//
+// Pose format (shared by pose()/localPose()/setPose/driveToPose*):
+// Float32Array, stride 7 per part — [px,py,pz, qx,qy,qz,qw] — in the parts
+// array order. setPose/driveToPose* additionally accept stride 16 (column-
+// major 4x4 rigid matrices, e.g. AnimationPlayer.getBoneWorldMatrix output
+// packed per part).
+// ---------------------------------------------------------------------------
+
+static JSClassID s_ragdollClassId = 0;
+
+static JsWorld* ragdollWorld(JsRagdoll* r) {
+    return JS_IsUndefined(r->worldRef) ? s_defaultWorld : r->world;
+}
+
+static void ragdollClassFinalizer(JSRuntime* rt, JSValue val) {
+    JsRagdoll* r = (JsRagdoll*)JS_GetOpaque(val, s_ragdollClassId);
+    if (!r) return;
+    JsWorld* w = ragdollWorld(r);
+    if (w && w->world && r->handle) {
+        w->world->destroyRagdoll(r->handle);
+        for (int32_t tag : r->partTags) w->unregisterBody(tag);
+    }
+    if (r->world) r->world->liveRagdolls.erase(r);
+    JS_FreeValueRT(rt, r->worldRef);
+    delete r;
+}
+
+// worldRef lives in opaque data, invisible to the GC — without this mark hook
+// the teardown cycle collector counts it as an external root and leaks the
+// world handle (QuickJS Debug asserts on gc_obj_list).
+static void ragdollClassGcMark(JSRuntime* rt, JSValueConst val, JS_MarkFunc* mark_func) {
+    JsRagdoll* r = (JsRagdoll*)JS_GetOpaque(val, s_ragdollClassId);
+    if (r) JS_MarkValue(rt, r->worldRef, mark_func);
+}
+
+static JSClassDef s_ragdollClassDef = {
+    "PhysicsRagdoll",
+    ragdollClassFinalizer,  // finalizer
+    ragdollClassGcMark,     // gc_mark
+    nullptr,                // call
+    nullptr,                // exotic
+};
+
+static JsRagdoll* ragdollFromThis(JSContext* ctx, JSValueConst thisVal) {
+    return (JsRagdoll*)JS_GetOpaque2(ctx, thisVal, s_ragdollClassId);
+}
+
+static JSValue makeFloat32Array(JSContext* ctx, const float* data, size_t count) {
+    JSValue ab = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(data),
+                                       count * sizeof(float));
+    if (JS_IsException(ab)) return JS_EXCEPTION;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue f32ctor = JS_GetPropertyStr(ctx, global, "Float32Array");
+    JSValue result = JS_CallConstructor(ctx, f32ctor, 1, &ab);
+    JS_FreeValue(ctx, f32ctor);
+    JS_FreeValue(ctx, global);
+    JS_FreeValue(ctx, ab);
+    return result;
+}
+
+// Read a pose argument into part states. Accepts partCount*7 floats
+// ([px,py,pz,qx,qy,qz,qw] per part) or partCount*16 floats (column-major 4x4
+// rigid matrices per part — scale is stripped by normalizing the axes).
+static bool readRagdollPose(JSContext* ctx, JSValueConst v, int partCount,
+                            std::vector<physics::RagdollPartState>& out) {
+    std::vector<float> flat;
+    if (!readFloatArray(ctx, v, flat)) return false;
+    out.resize(partCount);
+    if (flat.size() == (size_t)partCount * 7) {
+        for (int i = 0; i < partCount; i++) {
+            const float* p = flat.data() + i * 7;
+            out[i].position = JPH::RVec3(p[0], p[1], p[2]);
+            out[i].rotation = JPH::Quat(p[3], p[4], p[5], p[6]).Normalized();
+        }
+        return true;
+    }
+    if (flat.size() == (size_t)partCount * 16) {
+        for (int i = 0; i < partCount; i++) {
+            const float* m = flat.data() + i * 16;
+            JPH::Vec3 c0 = JPH::Vec3(m[0], m[1], m[2]).NormalizedOr(JPH::Vec3::sAxisX());
+            JPH::Vec3 c1 = JPH::Vec3(m[4], m[5], m[6]).NormalizedOr(JPH::Vec3::sAxisY());
+            JPH::Vec3 c2 = JPH::Vec3(m[8], m[9], m[10]).NormalizedOr(JPH::Vec3::sAxisZ());
+            JPH::Mat44 rot(JPH::Vec4(c0, 0), JPH::Vec4(c1, 0), JPH::Vec4(c2, 0),
+                           JPH::Vec4(0, 0, 0, 1));
+            out[i].position = JPH::RVec3(m[12], m[13], m[14]);
+            out[i].rotation = rot.GetQuaternion().Normalized();
+        }
+        return true;
+    }
+    return false;
+}
+
+// Parse one entry of the ragdoll `parts` array. `names` holds the names of
+// the previously parsed parts (for parent-by-name resolution).
+static bool readRagdollPart(JSContext* ctx, JSValueConst o,
+                            const std::vector<std::string>& names,
+                            physics::RagdollPartOptions& p, std::string& err) {
+    if (!JS_IsObject(o)) { err = "part must be an object"; return false; }
+    p.name = qjsbind::get_prop_string(ctx, o, "name");
+
+    JSValue pv = JS_GetPropertyStr(ctx, o, "parent");
+    if (JS_IsString(pv)) {
+        const char* s = JS_ToCString(ctx, pv);
+        p.parentIndex = -2;
+        if (s) {
+            for (size_t i = 0; i < names.size(); i++)
+                if (names[i] == s) { p.parentIndex = (int)i; break; }
+            if (p.parentIndex == -2) {
+                err = std::string("unknown parent part '") + s +
+                      "' (parents must appear earlier in the parts array)";
+                JS_FreeCString(ctx, s);
+                JS_FreeValue(ctx, pv);
+                return false;
+            }
+            JS_FreeCString(ctx, s);
+        }
+    } else if (JS_IsNumber(pv)) {
+        int32_t i = -1; JS_ToInt32(ctx, &i, pv);
+        p.parentIndex = i;
+    } else {
+        p.parentIndex = -1;
+    }
+    JS_FreeValue(ctx, pv);
+    if (p.parentIndex < -1 || p.parentIndex >= (int)names.size()) {
+        err = "part parent must be -1 (root) or an EARLIER part's index/name";
+        return false;
+    }
+
+    JSValue posV = JS_GetPropertyStr(ctx, o, "position");
+    p.position = readVec3(ctx, posV); JS_FreeValue(ctx, posV);
+    JSValue rotV = JS_GetPropertyStr(ctx, o, "rotation");
+    p.rotation = readQuat(ctx, rotV); JS_FreeValue(ctx, rotV);
+
+    std::string shape = qjsbind::get_prop_string(ctx, o, "shape");
+    if (shape == "capsule" || shape.empty()) p.shape = physics::RagdollPartOptions::ShapeCapsule;
+    else if (shape == "box")    p.shape = physics::RagdollPartOptions::ShapeBox;
+    else if (shape == "sphere") p.shape = physics::RagdollPartOptions::ShapeSphere;
+    else { err = "part shape must be 'capsule' | 'box' | 'sphere'"; return false; }
+
+    p.halfHeight = (float)qjsbind::get_prop_number(ctx, o, "halfHeight", 0.15);
+    p.radius = (float)qjsbind::get_prop_number(ctx, o, "radius", 0.08);
+    JSValue heV = JS_GetPropertyStr(ctx, o, "halfExtents");
+    p.halfExtents = readVec3(ctx, heV, JPH::Vec3(0.1f, 0.1f, 0.1f));
+    JS_FreeValue(ctx, heV);
+
+    p.density = (float)qjsbind::get_prop_number(ctx, o, "density", 1000.0);
+    p.mass = (float)qjsbind::get_prop_number(ctx, o, "mass", 0.0);
+    p.friction = (float)qjsbind::get_prop_number(ctx, o, "friction", 0.5);
+    p.restitution = (float)qjsbind::get_prop_number(ctx, o, "restitution", 0.0);
+
+    JSValue jv = JS_GetPropertyStr(ctx, o, "joint");
+    if (JS_IsObject(jv)) {
+        std::string jt = qjsbind::get_prop_string(ctx, jv, "type");
+        if (jt == "fixed") p.joint = physics::RagdollPartOptions::JointFixed;
+        else if (jt == "swingTwist" || jt == "swing-twist" || jt.empty())
+            p.joint = physics::RagdollPartOptions::JointSwingTwist;
+        else {
+            JS_FreeValue(ctx, jv);
+            err = "joint type must be 'swingTwist' | 'fixed'";
+            return false;
+        }
+        JSValue jp = JS_GetPropertyStr(ctx, jv, "point");
+        if (JS_IsObject(jp)) { p.hasJointPoint = true; p.jointPoint = readVec3(ctx, jp); }
+        JS_FreeValue(ctx, jp);
+        JSValue ta = JS_GetPropertyStr(ctx, jv, "twistAxis");
+        if (JS_IsObject(ta)) { p.hasTwistAxis = true; p.twistAxis = readVec3(ctx, ta, JPH::Vec3(0, 1, 0)); }
+        JS_FreeValue(ctx, ta);
+        JSValue pa = JS_GetPropertyStr(ctx, jv, "planeAxis");
+        if (JS_IsObject(pa)) { p.hasPlaneAxis = true; p.planeAxis = readVec3(ctx, pa); }
+        JS_FreeValue(ctx, pa);
+        p.normalHalfConeAngle = (float)qjsbind::get_prop_number(ctx, jv, "normalHalfConeAngle", 0.0);
+        p.planeHalfConeAngle = (float)qjsbind::get_prop_number(ctx, jv, "planeHalfConeAngle",
+                                                               p.normalHalfConeAngle);
+        p.twistMinAngle = (float)qjsbind::get_prop_number(ctx, jv, "twistMin", 0.0);
+        p.twistMaxAngle = (float)qjsbind::get_prop_number(ctx, jv, "twistMax", 0.0);
+        p.maxFrictionTorque = (float)qjsbind::get_prop_number(ctx, jv, "frictionTorque", 0.0);
+    }
+    JS_FreeValue(ctx, jv);
+    return true;
+}
+
+static void readRagdollMotor(JSContext* ctx, JSValueConst o,
+                             physics::RagdollMotorOptions& m) {
+    m.frequency = (float)qjsbind::get_prop_number(ctx, o, "frequency", m.frequency);
+    m.damping = (float)qjsbind::get_prop_number(ctx, o, "damping", m.damping);
+    m.maxTorque = (float)qjsbind::get_prop_number(ctx, o, "maxTorque", m.maxTorque);
+}
+
+// `worldVal` is the sandbox world handle object, or JS_UNDEFINED for the
+// default world.
+static JSValue worldCreateRagdoll(JSContext* ctx, JsWorld* w, JSValueConst worldVal,
+                                  JSValueConst optsVal) {
+    if (!w || !w->world) return JS_ThrowInternalError(ctx, "World not available");
+    if (!JS_IsObject(optsVal)) return JS_ThrowTypeError(ctx, "createRagdoll(opts) requires an object");
+
+    physics::RagdollOptions opts;
+
+    JSValue posV = JS_GetPropertyStr(ctx, optsVal, "position");
+    opts.position = readVec3(ctx, posV); JS_FreeValue(ctx, posV);
+    JSValue rotV = JS_GetPropertyStr(ctx, optsVal, "rotation");
+    opts.rotation = readQuat(ctx, rotV); JS_FreeValue(ctx, rotV);
+
+    JSValue layerVal = JS_GetPropertyStr(ctx, optsVal, "layer");
+    if (JS_IsString(layerVal)) {
+        const char* s = JS_ToCString(ctx, layerVal);
+        if (s) { opts.layer = w->world->layerIndex(s); JS_FreeCString(ctx, s); }
+    } else if (JS_IsNumber(layerVal)) {
+        int32_t i = -1; JS_ToInt32(ctx, &i, layerVal); opts.layer = i;
+    }
+    JS_FreeValue(ctx, layerVal);
+
+    opts.gravityFactor = (float)qjsbind::get_prop_number(ctx, optsVal, "gravityFactor", 1.0);
+    opts.linearDamping = (float)qjsbind::get_prop_number(ctx, optsVal, "linearDamping", 0.05);
+    opts.angularDamping = (float)qjsbind::get_prop_number(ctx, optsVal, "angularDamping", 0.05);
+    opts.stabilize = qjsbind::get_prop_bool(ctx, optsVal, "stabilize", true);
+    opts.activate = qjsbind::get_prop_bool(ctx, optsVal, "activate", true);
+
+    JSValue motorV = JS_GetPropertyStr(ctx, optsVal, "motor");
+    if (JS_IsObject(motorV)) readRagdollMotor(ctx, motorV, opts.motor);
+    JS_FreeValue(ctx, motorV);
+
+    JSValue partsV = JS_GetPropertyStr(ctx, optsVal, "parts");
+    uint32_t nParts = 0;
+    if (JS_IsArray(partsV)) {
+        JSValue lenV = JS_GetPropertyStr(ctx, partsV, "length");
+        JS_ToUint32(ctx, &nParts, lenV);
+        JS_FreeValue(ctx, lenV);
+    }
+    std::vector<std::string> names;
+    for (uint32_t i = 0; i < nParts; i++) {
+        JSValue pv = JS_GetPropertyUint32(ctx, partsV, i);
+        physics::RagdollPartOptions part;
+        std::string err;
+        bool ok = readRagdollPart(ctx, pv, names, part, err);
+        JS_FreeValue(ctx, pv);
+        if (!ok) {
+            JS_FreeValue(ctx, partsV);
+            return JS_ThrowTypeError(ctx, "ragdoll part %u: %s", i, err.c_str());
+        }
+        names.push_back(part.name.empty() ? ("part" + std::to_string(i)) : part.name);
+        opts.parts.push_back(std::move(part));
+    }
+    JS_FreeValue(ctx, partsV);
+    if (opts.parts.empty())
+        return JS_ThrowTypeError(ctx, "createRagdoll requires a non-empty parts array");
+
+    uint32_t handle = w->world->createRagdoll(opts);
+    if (!handle) return JS_ThrowInternalError(ctx, "Failed to create ragdoll");
+
+    JSValue obj = JS_NewObjectClass(ctx, s_ragdollClassId);
+    if (JS_IsException(obj)) {
+        w->world->destroyRagdoll(handle);
+        return obj;
+    }
+    auto* jr = new JsRagdoll();
+    jr->handle = handle;
+    jr->names = std::move(names);
+    const int n = (int)opts.parts.size();
+    jr->partTags.reserve(n);
+    jr->parents.reserve(n);
+    for (int i = 0; i < n; i++) {
+        jr->partTags.push_back(w->registerBody(w->world->ragdollPartBody(handle, i)));
+        jr->parents.push_back(opts.parts[i].parentIndex);
+    }
+    if (!JS_IsUndefined(worldVal)) {
+        jr->world = w;
+        jr->worldRef = JS_DupValue(ctx, worldVal);
+        w->liveRagdolls.insert(jr);
+    }
+    JS_SetOpaque(obj, jr);
+    return obj;
+}
+
+static JSValue jsr_pose(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    JsWorld* w = ragdollWorld(r);
+    if (!w || !w->world || !r->handle) return JS_NULL;
+    std::vector<physics::RagdollPartState> states;
+    if (!w->world->getRagdollPose(r->handle, states)) return JS_NULL;
+    std::vector<float> flat(states.size() * 7);
+    for (size_t i = 0; i < states.size(); i++) {
+        float* p = flat.data() + i * 7;
+        p[0] = states[i].position.GetX(); p[1] = states[i].position.GetY();
+        p[2] = states[i].position.GetZ();
+        p[3] = states[i].rotation.GetX(); p[4] = states[i].rotation.GetY();
+        p[5] = states[i].rotation.GetZ(); p[6] = states[i].rotation.GetW();
+    }
+    return makeFloat32Array(ctx, flat.data(), flat.size());
+}
+
+// Per-part transform relative to its PARENT part (root = world transform) —
+// drops straight into a bromesh Pose's local joint slots when the skeleton's
+// bones mirror the ragdoll's parts (see the skinning recipe in
+// docs/physics-api.js).
+static JSValue jsr_localPose(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    JsWorld* w = ragdollWorld(r);
+    if (!w || !w->world || !r->handle) return JS_NULL;
+    std::vector<physics::RagdollPartState> states;
+    if (!w->world->getRagdollPose(r->handle, states)) return JS_NULL;
+    std::vector<float> flat(states.size() * 7);
+    for (size_t i = 0; i < states.size(); i++) {
+        int parent = i < r->parents.size() ? r->parents[i] : -1;
+        JPH::RVec3 pos = states[i].position;
+        JPH::Quat rot = states[i].rotation;
+        if (parent >= 0) {
+            JPH::Quat pinv = states[parent].rotation.Conjugated();
+            pos = pinv * (states[i].position - states[parent].position);
+            rot = (pinv * rot).Normalized();
+        }
+        float* p = flat.data() + i * 7;
+        p[0] = pos.GetX(); p[1] = pos.GetY(); p[2] = pos.GetZ();
+        p[3] = rot.GetX(); p[4] = rot.GetY(); p[5] = rot.GetZ(); p[6] = rot.GetW();
+    }
+    return makeFloat32Array(ctx, flat.data(), flat.size());
+}
+
+static JSValue jsr_setPose(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    JsWorld* w = ragdollWorld(r);
+    if (!w || !w->world || !r->handle || argc < 1) return JS_FALSE;
+    int n = w->world->ragdollPartCount(r->handle);
+    std::vector<physics::RagdollPartState> states;
+    if (n <= 0 || !readRagdollPose(ctx, argv[0], n, states))
+        return JS_ThrowTypeError(ctx, "setPose expects partCount*7 ([px,py,pz,qx,qy,qz,qw] per part) or partCount*16 (mat4 per part) floats");
+    return JS_NewBool(ctx, w->world->setRagdollPose(r->handle, states));
+}
+
+static JSValue jsr_driveToPose(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    JsWorld* w = ragdollWorld(r);
+    if (!w || !w->world || !r->handle || argc < 1) return JS_FALSE;
+    int n = w->world->ragdollPartCount(r->handle);
+    std::vector<physics::RagdollPartState> states;
+    if (n <= 0 || !readRagdollPose(ctx, argv[0], n, states))
+        return JS_ThrowTypeError(ctx, "driveToPose expects partCount*7 or partCount*16 floats");
+    physics::RagdollMotorOptions motor;
+    bool hasMotor = false;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        readRagdollMotor(ctx, argv[1], motor);
+        hasMotor = true;
+    }
+    return JS_NewBool(ctx, w->world->driveRagdollToPose(r->handle, states,
+                                                        hasMotor ? &motor : nullptr));
+}
+
+static JSValue jsr_driveToPoseKinematic(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    JsWorld* w = ragdollWorld(r);
+    if (!w || !w->world || !r->handle || argc < 2) return JS_FALSE;
+    int n = w->world->ragdollPartCount(r->handle);
+    std::vector<physics::RagdollPartState> states;
+    if (n <= 0 || !readRagdollPose(ctx, argv[0], n, states))
+        return JS_ThrowTypeError(ctx, "driveToPoseKinematic expects partCount*7 or partCount*16 floats");
+    double dt = 0; JS_ToFloat64(ctx, &dt, argv[1]);
+    return JS_NewBool(ctx, w->world->driveRagdollToPoseKinematic(r->handle, states, (float)dt));
+}
+
+static JSValue jsr_stopDrive(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    JsWorld* w = ragdollWorld(r);
+    if (w && w->world && r->handle) w->world->stopRagdollDrive(r->handle);
+    return JS_UNDEFINED;
+}
+
+static JSValue jsr_addImpulse(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    JsWorld* w = ragdollWorld(r);
+    if (!w || !w->world || !r->handle || argc < 3) return JS_UNDEFINED;
+    double x, y, z;
+    JS_ToFloat64(ctx, &x, argv[0]); JS_ToFloat64(ctx, &y, argv[1]); JS_ToFloat64(ctx, &z, argv[2]);
+    w->world->addRagdollImpulse(r->handle, JPH::Vec3((float)x, (float)y, (float)z));
+    return JS_UNDEFINED;
+}
+
+static JSValue jsr_activate(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    JsWorld* w = ragdollWorld(r);
+    if (w && w->world && r->handle) w->world->activateRagdoll(r->handle);
+    return JS_UNDEFINED;
+}
+
+static JSValue jsr_deactivate(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    JsWorld* w = ragdollWorld(r);
+    if (w && w->world && r->handle) w->world->deactivateRagdoll(r->handle);
+    return JS_UNDEFINED;
+}
+
+static JSValue jsr_getIsActive(JSContext* ctx, JSValueConst thisVal) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    JsWorld* w = ragdollWorld(r);
+    if (!w || !w->world || !r->handle) return JS_FALSE;
+    return JS_NewBool(ctx, w->world->isRagdollActive(r->handle));
+}
+
+static JSValue jsr_getPartCount(JSContext* ctx, JSValueConst thisVal) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    JsWorld* w = ragdollWorld(r);
+    if (!w || !w->world || !r->handle) return JS_NewInt32(ctx, 0);
+    int n = w->world->ragdollPartCount(r->handle);
+    return JS_NewInt32(ctx, n < 0 ? 0 : n);
+}
+
+static JSValue jsr_partBody(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    if (argc < 1) return JS_NewInt32(ctx, -1);
+    int32_t i = -1; JS_ToInt32(ctx, &i, argv[0]);
+    if (!r->handle || i < 0 || i >= (int32_t)r->partTags.size()) return JS_NewInt32(ctx, -1);
+    return JS_NewInt32(ctx, r->partTags[i]);
+}
+
+static JSValue jsr_partParent(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    if (argc < 1) return JS_NewInt32(ctx, -1);
+    int32_t i = -1; JS_ToInt32(ctx, &i, argv[0]);
+    if (i < 0 || i >= (int32_t)r->parents.size()) return JS_NewInt32(ctx, -1);
+    return JS_NewInt32(ctx, r->parents[i]);
+}
+
+static JSValue jsr_partIndex(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    if (argc < 1 || !JS_IsString(argv[0])) return JS_NewInt32(ctx, -1);
+    const char* s = JS_ToCString(ctx, argv[0]);
+    int idx = -1;
+    if (s) {
+        for (size_t i = 0; i < r->names.size(); i++)
+            if (r->names[i] == s) { idx = (int)i; break; }
+        JS_FreeCString(ctx, s);
+    }
+    return JS_NewInt32(ctx, idx);
+}
+
+static JSValue jsr_destroy(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsRagdoll* r = ragdollFromThis(ctx, thisVal);
+    if (!r) return JS_EXCEPTION;
+    JsWorld* w = ragdollWorld(r);
+    if (w && w->world && r->handle) {
+        w->world->destroyRagdoll(r->handle);
+        for (int32_t tag : r->partTags) w->unregisterBody(tag);
+    }
+    r->handle = 0;
+    r->partTags.clear();
+    return JS_UNDEFINED;
+}
+
+static const JSCFunctionListEntry s_ragdollProtoFuncs[] = {
+    JS_CFUNC_DEF("pose", 0, jsr_pose),
+    JS_CFUNC_DEF("localPose", 0, jsr_localPose),
+    JS_CFUNC_DEF("setPose", 1, jsr_setPose),
+    JS_CFUNC_DEF("driveToPose", 2, jsr_driveToPose),
+    JS_CFUNC_DEF("driveToPoseKinematic", 2, jsr_driveToPoseKinematic),
+    JS_CFUNC_DEF("stopDrive", 0, jsr_stopDrive),
+    JS_CFUNC_DEF("addImpulse", 3, jsr_addImpulse),
+    JS_CFUNC_DEF("activate", 0, jsr_activate),
+    JS_CFUNC_DEF("deactivate", 0, jsr_deactivate),
+    JS_CFUNC_DEF("partBody", 1, jsr_partBody),
+    JS_CFUNC_DEF("partParent", 1, jsr_partParent),
+    JS_CFUNC_DEF("partIndex", 1, jsr_partIndex),
+    JS_CFUNC_DEF("destroy", 0, jsr_destroy),
+    JS_CGETSET_DEF("partCount", jsr_getPartCount, nullptr),
+    JS_CGETSET_DEF("isActive", jsr_getIsActive, nullptr),
+};
+
+// ---------------------------------------------------------------------------
 // Default-world Physics.* functions (route to s_defaultWorld)
 // ---------------------------------------------------------------------------
 
@@ -1965,6 +2468,12 @@ static JSValue js_physics_createVehicle(JSContext* ctx, JSValueConst, int argc, 
     return worldCreateVehicle(ctx, s_defaultWorld, JS_UNDEFINED, argv[0]);
 }
 
+static JSValue js_physics_createRagdoll(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 1) return JS_ThrowTypeError(ctx, "Physics.createRagdoll(opts) requires an object");
+    return worldCreateRagdoll(ctx, s_defaultWorld, JS_UNDEFINED, argv[0]);
+}
+
 static JSValue js_physics_createConstraint(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     DEFW_GUARD();
     if (argc < 1) return JS_ThrowTypeError(ctx, "Physics.createConstraint(opts) requires an object");
@@ -2282,6 +2791,13 @@ static JSValue jsw_createVehicle(JSContext* ctx, JSValueConst thisVal, int argc,
     return worldCreateVehicle(ctx, w, thisVal, argv[0]);
 }
 
+static JSValue jsw_createRagdoll(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w) return JS_EXCEPTION;
+    if (argc < 1) return JS_ThrowTypeError(ctx, "createRagdoll(opts) requires an object");
+    return worldCreateRagdoll(ctx, w, thisVal, argv[0]);
+}
+
 static JSValue jsw_setConstraintMotor(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
     JsWorld* w = worldFromThis(ctx, thisVal);
     if (!w || !w->world || argc < 2) return JS_FALSE;
@@ -2445,6 +2961,7 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("getContacts", 0, jsw_getContacts),
     JS_CFUNC_DEF("createCharacter", 1, jsw_createCharacter),
     JS_CFUNC_DEF("createVehicle", 1, jsw_createVehicle),
+    JS_CFUNC_DEF("createRagdoll", 1, jsw_createRagdoll),
     JS_CFUNC_DEF("createConstraint", 1, jsw_createConstraint),
     JS_CFUNC_DEF("setConstraintMotor", 2, jsw_setConstraintMotor),
     JS_CFUNC_DEF("destroyConstraint", 1, jsw_destroyConstraint),
@@ -2532,6 +3049,18 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
                                sizeof(s_vehicleProtoFuncs)/sizeof(s_vehicleProtoFuncs[0]));
     JS_SetClassProto(ctx, s_vehicleClassId, vehProto);
 
+    // Register ragdoll handle class.
+    if (s_ragdollClassId == 0) {
+        JS_NewClassID(rt, &s_ragdollClassId);
+    }
+    if (!JS_IsRegisteredClass(rt, s_ragdollClassId)) {
+        JS_NewClass(rt, s_ragdollClassId, &s_ragdollClassDef);
+    }
+    JSValue ragProto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, ragProto, s_ragdollProtoFuncs,
+                               sizeof(s_ragdollProtoFuncs)/sizeof(s_ragdollProtoFuncs[0]));
+    JS_SetClassProto(ctx, s_ragdollClassId, ragProto);
+
     qjsbind::Namespace(ctx, "Physics")
         .function("createWorld", js_physics_createWorld, 1)
         .function("createWorldHandle", js_physics_createWorldHandle, 1)
@@ -2568,6 +3097,7 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("getAllTransforms", js_physics_getAllTransforms, 0)
         .function("createCharacter", js_physics_createCharacter, 1)
         .function("createVehicle", js_physics_createVehicle, 1)
+        .function("createRagdoll", js_physics_createRagdoll, 1)
         .function("createConstraint", js_physics_createConstraint, 1)
         .function("destroyConstraint", js_physics_destroyConstraint, 1)
         .function("setConstraintEnabled", js_physics_setConstraintEnabled, 2)

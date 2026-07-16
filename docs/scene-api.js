@@ -464,6 +464,12 @@ class SceneGraph {
    * Procedural rigs work the same way: Rig.autoRig(mesh, spec, landmarks)
    * yields { skeleton, skin } which drop straight in.
    *
+   * Physics ragdolls plug into the same palette seam: Physics.createRagdoll
+   * gives a rigid-body part tree whose localPose() drops into a bromesh Pose
+   * (ragdoll → mesh), and whose driveToPose accepts getBoneWorldMatrix
+   * output (animation → ragdoll). Both recipes: docs/physics-api.js,
+   * "Ragdoll ↔ skinned mesh recipes".
+   *
    * @param {Object} opts - everything createMesh takes, plus:
    * @param {SkinData} opts.skin - (required) per-vertex bone weights/indices
    *        (Mesh.loadGLTF().skins[i], Rig.autoRig().skin, or hand-built).

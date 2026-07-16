@@ -19,7 +19,7 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 
-namespace JPH { class CharacterVirtual; class VehicleConstraint; }
+namespace JPH { class CharacterVirtual; class VehicleConstraint; class Ragdoll; class RagdollSettings; }
 
 namespace bro::physics {
 
@@ -269,6 +269,78 @@ struct VehicleState {
     float rpm = 0;               // current engine RPM
     int gear = 0;                // -1 reverse, 0 neutral, 1+ forward
     bool isSwitchingGear = false;
+};
+
+/// One rigid part of a ragdoll (see RagdollOptions). Bind transforms are in
+/// MODEL space — the ragdoll's own rest-pose frame; RagdollOptions::position/
+/// rotation place that frame in the world at creation.
+struct RagdollPartOptions {
+    std::string name;
+    /// Index of the parent part (must appear EARLIER in the parts array), or
+    /// -1 for the root. Jolt requires parents before children.
+    int parentIndex = -1;
+
+    JPH::Vec3 position{0, 0, 0};              // bind position (part center), model space
+    JPH::Quat rotation = JPH::Quat::sIdentity();  // bind rotation, model space
+
+    enum Shape { ShapeCapsule, ShapeBox, ShapeSphere };
+    Shape shape = ShapeCapsule;
+    float halfHeight = 0.15f;                 // capsule cylindrical half-height
+    float radius = 0.08f;                     // capsule/sphere radius
+    JPH::Vec3 halfExtents{0.1f, 0.1f, 0.1f};  // box
+
+    float density = 1000.0f;                  // kg/m^3 (mass derives from shape)
+    float mass = 0.0f;                        // > 0 = override mass in kg (inertia
+                                              // recomputed from the shape for this mass)
+    float friction = 0.5f;
+    float restitution = 0.0f;
+
+    /// Joint connecting this part to its parent (ignored for the root).
+    enum Joint { JointSwingTwist, JointFixed };
+    Joint joint = JointSwingTwist;
+    bool hasJointPoint = false;
+    JPH::Vec3 jointPoint{0, 0, 0};            // pivot, model space; default = part position
+    bool hasTwistAxis = false;
+    JPH::Vec3 twistAxis{0, 1, 0};             // model space; default = parent→child direction
+    bool hasPlaneAxis = false;
+    JPH::Vec3 planeAxis{0, 0, 0};             // model space; default = auto perpendicular
+    float normalHalfConeAngle = 0.0f;         // swing cone half-angle about planeAxis (rad)
+    float planeHalfConeAngle = 0.0f;          // swing cone half-angle in the plane (rad)
+    float twistMinAngle = 0.0f;               // rad, [-π, π]
+    float twistMaxAngle = 0.0f;               // rad, [-π, π]
+    float maxFrictionTorque = 0.0f;           // N·m friction when the joint is unpowered
+};
+
+/// Position-motor spring used by driveRagdollToPose (per swing-twist joint).
+struct RagdollMotorOptions {
+    float frequency = 10.0f;   // spring frequency (Hz)
+    float damping = 1.0f;      // 0 = undamped, 1 = critical
+    float maxTorque = -1.0f;   // symmetric torque limit (N·m); < 0 = unlimited
+};
+
+/// Ragdoll creation options (Jolt RagdollSettings + Ragdoll). Parts form a
+/// tree via parentIndex; each non-root part gets a swing-twist (or fixed)
+/// constraint toward its parent. Parent/child part pairs — and any parts that
+/// overlap in the bind pose — don't collide with each other (Jolt
+/// GroupFilterTable); everything else self-collides normally.
+struct RagdollOptions {
+    std::vector<RagdollPartOptions> parts;
+    JPH::RVec3 position{0, 0, 0};             // world placement of the model-space origin
+    JPH::Quat rotation = JPH::Quat::sIdentity();
+    int layer = 1;                            // object layer for all parts
+    float gravityFactor = 1.0f;
+    float linearDamping = 0.05f;
+    float angularDamping = 0.05f;
+    bool stabilize = true;                    // Jolt Stabilize(): clamp parent/child
+                                              // mass ratios + grow parent inertia
+    bool activate = true;                     // wake the bodies at creation
+    RagdollMotorOptions motor;                // drive-motor spring baked into the joints
+};
+
+/// World-space transform of one ragdoll part.
+struct RagdollPartState {
+    JPH::RVec3 position;
+    JPH::Quat rotation;
 };
 
 /// Per-axis configuration for a SixDOF constraint. Axis order follows Jolt's
@@ -583,6 +655,56 @@ public:
     /// The chassis BodyID (invalid for an unknown handle).
     JPH::BodyID vehicleBody(uint32_t handle) const;
 
+    // --- Ragdolls (call only when idle) ---
+    //
+    // Jolt Ragdoll: a tree of dynamic bodies joined by swing-twist (or fixed)
+    // constraints, teleportable/drivable as a unit. Part bodies are ordinary
+    // dynamic bodies in this world — every body API (impulses, velocities,
+    // raycast hits, contact events) works on them. Destroying a part body via
+    // destroyBody destroys the WHOLE ragdoll (bodies + constraints are a unit).
+    //
+    // Pose format: one RagdollPartState per part, world space, part order =
+    // the parts array at creation.
+
+    /// Returns a non-zero handle on success, 0 on failure (empty parts,
+    /// parent ordering violation, bad shape, out of bodies).
+    uint32_t createRagdoll(const RagdollOptions& opts);
+    void destroyRagdoll(uint32_t handle);
+
+    /// Number of parts, or -1 for an unknown handle.
+    int ragdollPartCount(uint32_t handle) const;
+    /// A part's BodyID (invalid for unknown handle / part index).
+    JPH::BodyID ragdollPartBody(uint32_t handle, int part) const;
+    /// Parent part index (-1 = root or unknown).
+    int ragdollPartParent(uint32_t handle, int part) const;
+
+    /// Snapshot every part's world transform. False for an unknown handle.
+    bool getRagdollPose(uint32_t handle, std::vector<RagdollPartState>& out) const;
+    /// Teleport all parts (no sweep, keeps velocities, does not wake).
+    bool setRagdollPose(uint32_t handle, const std::vector<RagdollPartState>& pose);
+
+    /// Power the swing-twist joints toward the given pose's per-joint relative
+    /// rotations (Jolt DriveToPoseUsingMotors semantics: position motors on
+    /// swing + twist; the ROOT is not driven — pin it kinematically if you
+    /// need root tracking). dt-independent: motors persist until stopped.
+    /// `motor` overrides the creation-time spring when non-null.
+    bool driveRagdollToPose(uint32_t handle, const std::vector<RagdollPartState>& pose,
+                            const RagdollMotorOptions* motor = nullptr);
+    /// Set body velocities so every part reaches its target transform in dt
+    /// seconds (Jolt DriveToPoseUsingKinematics — hard tracking, ignores
+    /// joint limits' softness; re-issue each step).
+    bool driveRagdollToPoseKinematic(uint32_t handle,
+                                     const std::vector<RagdollPartState>& pose, float dt);
+    /// Turn all joint drive motors off (go limp after driveRagdollToPose).
+    void stopRagdollDrive(uint32_t handle);
+
+    /// Impulse on every part body (center of mass of each).
+    void addRagdollImpulse(uint32_t handle, JPH::Vec3 impulse);
+    void activateRagdoll(uint32_t handle);
+    void deactivateRagdoll(uint32_t handle);
+    /// True when any part body is awake.
+    bool isRagdollActive(uint32_t handle) const;
+
     // --- Queries (call only when idle) ---
 
     /// Cast a ray (narrow phase: exact shape geometry, real hit positions and
@@ -700,6 +822,26 @@ private:
     std::unordered_map<uint32_t, VehicleEntry> vehicles_;
     uint32_t nextVehicleHandle_ = 1;
     void removeVehicleFromSystem(VehicleEntry& e);
+
+    // Ragdoll registry. The Ragdoll owns its bodies and constraints as a
+    // unit: RemoveFromPhysicsSystem detaches everything together, and the
+    // final Ref release (~Ragdoll) destroys the part bodies — so ragdoll
+    // bodies must never reach the generic body sweeps (destroyAll/shutdown
+    // remove ragdolls FIRST), and their constraints never live in constraints_.
+    struct RagdollEntry {
+        JPH::Ref<JPH::Ragdoll> ragdoll;
+        JPH::Ref<JPH::RagdollSettings> settings;
+        std::vector<int> parentIndex;   // per part; -1 = root
+    };
+    std::unordered_map<uint32_t, RagdollEntry> ragdolls_;
+    uint32_t nextRagdollHandle_ = 1;
+    uint32_t nextRagdollGroup_ = 1;     // unique CollisionGroup ID per ragdoll
+    // Detach a ragdoll (and any user constraints attached to its parts) from
+    // the system. The caller erases the entry, which destroys the bodies.
+    void removeRagdollFromSystem(RagdollEntry& e);
+    // Remove + erase every registry constraint referencing `id` (shared by
+    // destroyBody and removeRagdollFromSystem).
+    void removeConstraintsReferencing(JPH::BodyID id);
 
     // Constraints that broke (exceeded breaking impulse) since the last drain.
     std::vector<uint32_t> brokenConstraints_;

@@ -39,6 +39,8 @@
 #include <Jolt/Physics/Character/CharacterVirtual.h>
 #include <Jolt/Physics/Vehicle/VehicleConstraint.h>
 #include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
+#include <Jolt/Physics/Ragdoll/Ragdoll.h>
+#include <Jolt/Skeleton/Skeleton.h>
 #include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
 
 #include "util/log.h"
@@ -376,6 +378,11 @@ void PhysicsWorld::shutdown() {
         }
         constraints_.clear();
 
+        // Ragdolls before the generic sweep (~Ragdoll destroys its own bodies).
+        for (auto& [h, r] : ragdolls_)
+            if (r.ragdoll) r.ragdoll->RemoveFromPhysicsSystem();
+        ragdolls_.clear();
+
         BodyInterface& bi = physicsSystem_.GetBodyInterface();
         BodyIDVector bodyIDs;
         physicsSystem_.GetBodies(bodyIDs);
@@ -619,17 +626,7 @@ BodyID PhysicsWorld::createCylinder(RVec3 position, Quat rotation,
     return createBody(o);
 }
 
-void PhysicsWorld::destroyBody(BodyID id) {
-    // Remove any vehicle whose chassis is this body (constraint + step listener).
-    for (auto it = vehicles_.begin(); it != vehicles_.end(); ) {
-        if (it->second.body == id) {
-            removeVehicleFromSystem(it->second);
-            it = vehicles_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-
+void PhysicsWorld::removeConstraintsReferencing(BodyID id) {
     // Remove any TwoBodyConstraint that references this body; otherwise Jolt will assert.
     for (auto it = constraints_.begin(); it != constraints_.end(); ) {
         bool refsBody = false;
@@ -650,6 +647,32 @@ void PhysicsWorld::destroyBody(BodyID id) {
             ++it;
         }
     }
+}
+
+void PhysicsWorld::destroyBody(BodyID id) {
+    // A ragdoll part? The ragdoll is one unit — destroy the whole thing
+    // (removeRagdollFromSystem detaches, erasing the entry destroys ALL part
+    // bodies via ~Ragdoll, including `id`, so return without the sweep below).
+    for (auto it = ragdolls_.begin(); it != ragdolls_.end(); ++it) {
+        const auto& ids = it->second.ragdoll->GetBodyIDs();
+        if (std::find(ids.begin(), ids.end(), id) != ids.end()) {
+            removeRagdollFromSystem(it->second);
+            ragdolls_.erase(it);
+            return;
+        }
+    }
+
+    // Remove any vehicle whose chassis is this body (constraint + step listener).
+    for (auto it = vehicles_.begin(); it != vehicles_.end(); ) {
+        if (it->second.body == id) {
+            removeVehicleFromSystem(it->second);
+            it = vehicles_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
+    removeConstraintsReferencing(id);
 
     BodyInterface& bi = physicsSystem_.GetBodyInterface();
     if (bi.IsAdded(id)) {
@@ -713,12 +736,22 @@ void PhysicsWorld::destroyAll(const std::function<void(JPH::BodyID)>& onBodyDest
     for (auto& [h, v] : vehicles_) removeVehicleFromSystem(v);
     vehicles_.clear();
 
-    // Constraints first (so removing bodies doesn't trip Jolt's constraint asserts).
+    // Constraints next (so removing bodies doesn't trip Jolt's constraint asserts).
     for (auto& [h, c] : constraints_) {
         if (c.ref) physicsSystem_.RemoveConstraint(c.ref.GetPtr());
         if (c.ref2) physicsSystem_.RemoveConstraint(c.ref2.GetPtr());
     }
     constraints_.clear();
+
+    // Ragdolls before the generic body sweep — ~Ragdoll destroys its part
+    // bodies itself, and destroying them twice would corrupt the body manager.
+    for (auto& [h, r] : ragdolls_) {
+        if (!r.ragdoll) continue;
+        if (onBodyDestroyed)
+            for (const BodyID& id : r.ragdoll->GetBodyIDs()) onBodyDestroyed(id);
+        r.ragdoll->RemoveFromPhysicsSystem();
+    }
+    ragdolls_.clear();
 
     BodyInterface& bi = physicsSystem_.GetBodyInterface();
     BodyIDVector bodyIDs;
@@ -1572,6 +1605,335 @@ bool PhysicsWorld::getVehicleState(uint32_t handle, VehicleState& out) const {
 BodyID PhysicsWorld::vehicleBody(uint32_t handle) const {
     auto it = vehicles_.find(handle);
     return it == vehicles_.end() ? BodyID() : it->second.body;
+}
+
+// --- Ragdolls ---
+//
+// A Jolt Ragdoll bundles part bodies + inter-part constraints and owns their
+// lifetime: RemoveFromPhysicsSystem detaches everything as a unit and the
+// final Ref release destroys the bodies (~Ragdoll). The parts are ordinary
+// dynamic bodies while alive — all body APIs work on them — but their
+// constraints live inside the Ragdoll, never in constraints_, and the
+// destroyAll/shutdown body sweeps must run AFTER the ragdoll registry is
+// cleared so no body is destroyed twice.
+
+static RefConst<Shape> buildRagdollPartShape(const RagdollPartOptions& p) {
+    switch (p.shape) {
+        case RagdollPartOptions::ShapeCapsule: {
+            if (p.halfHeight <= 0.0f || p.radius <= 0.0f) return RefConst<Shape>();
+            CapsuleShapeSettings s(p.halfHeight, p.radius);
+            s.SetDensity(p.density);
+            auto r = s.Create();
+            return r.HasError() ? RefConst<Shape>() : r.Get();
+        }
+        case RagdollPartOptions::ShapeSphere: {
+            if (p.radius <= 0.0f) return RefConst<Shape>();
+            SphereShapeSettings s(p.radius);
+            s.SetDensity(p.density);
+            auto r = s.Create();
+            return r.HasError() ? RefConst<Shape>() : r.Get();
+        }
+        case RagdollPartOptions::ShapeBox: {
+            BoxShapeSettings s(p.halfExtents);
+            s.SetDensity(p.density);
+            auto r = s.Create();
+            return r.HasError() ? RefConst<Shape>() : r.Get();
+        }
+    }
+    return RefConst<Shape>();
+}
+
+uint32_t PhysicsWorld::createRagdoll(const RagdollOptions& opts) {
+    if (!initialized_ || opts.parts.empty()) return 0;
+    const int n = (int)opts.parts.size();
+
+    // Jolt requires parents before children in the joint array.
+    for (int i = 0; i < n; i++) {
+        int p = opts.parts[i].parentIndex;
+        if (p >= i || p < -1) return 0;
+    }
+
+    int layer = opts.layer;
+    if (layer < 0 || layer >= numLayers_) layer = 1;
+
+    const Quat worldRot = opts.rotation.Normalized();
+
+    Ref<RagdollSettings> settings = new RagdollSettings();
+    settings->mSkeleton = new Skeleton();
+    settings->mParts.resize(n);
+
+    Array<Mat44> bindModel(n);  // model-space bind matrices (overlap detection)
+
+    for (int i = 0; i < n; i++) {
+        const RagdollPartOptions& p = opts.parts[i];
+        std::string name = p.name.empty() ? ("part" + std::to_string(i)) : p.name;
+        settings->mSkeleton->AddJoint(name, p.parentIndex);
+
+        auto shape = buildRagdollPartShape(p);
+        if (!shape) return 0;
+
+        const Quat bindRot = p.rotation.Normalized();
+        bindModel[i] = Mat44::sRotationTranslation(bindRot, p.position);
+
+        RagdollSettings::Part& part = settings->mParts[i];
+        part.SetShape(shape.GetPtr());
+        part.mPosition = opts.position + worldRot * p.position;
+        part.mRotation = (worldRot * bindRot).Normalized();
+        part.mMotionType = EMotionType::Dynamic;
+        part.mObjectLayer = static_cast<ObjectLayer>(layer);
+        part.mFriction = p.friction;
+        part.mRestitution = p.restitution;
+        part.mGravityFactor = opts.gravityFactor;
+        part.mLinearDamping = opts.linearDamping;
+        part.mAngularDamping = opts.angularDamping;
+        if (p.mass > 0.0f) {
+            // Clean mass override: keep the shape's inertia distribution,
+            // scaled to the requested mass (no density hacks).
+            part.mOverrideMassProperties = EOverrideMassProperties::CalculateInertia;
+            part.mMassPropertiesOverride.mMass = p.mass;
+        }
+
+        if (p.parentIndex < 0) continue;
+        const RagdollPartOptions& parent = opts.parts[p.parentIndex];
+
+        // Joint pivot: explicit, or this part's bind position.
+        Vec3 pivotModel = p.hasJointPoint ? p.jointPoint : p.position;
+        RVec3 pivotWorld = opts.position + worldRot * pivotModel;
+
+        if (p.joint == RagdollPartOptions::JointFixed) {
+            auto* fs = new FixedConstraintSettings();
+            fs->mSpace = EConstraintSpace::WorldSpace;
+            fs->mAutoDetectPoint = true;
+            part.mToParent = fs;
+            continue;
+        }
+
+        // Twist axis: explicit, or parent→child bind direction (model space).
+        Vec3 twistModel = p.hasTwistAxis
+            ? p.twistAxis
+            : (p.position - parent.position);
+        twistModel = twistModel.NormalizedOr(Vec3::sAxisY());
+        Vec3 twistWorld = (worldRot * twistModel).Normalized();
+
+        // Plane axis: explicit (re-orthonormalized against twist), or any
+        // perpendicular — SwingTwist requires plane ⟂ twist.
+        Vec3 planeWorld;
+        if (p.hasPlaneAxis) {
+            Vec3 pw = worldRot * p.planeAxis;
+            pw -= twistWorld * pw.Dot(twistWorld);
+            planeWorld = pw.NormalizedOr(twistWorld.GetNormalizedPerpendicular());
+        } else {
+            planeWorld = twistWorld.GetNormalizedPerpendicular();
+        }
+
+        auto* ss = new SwingTwistConstraintSettings();
+        ss->mSpace = EConstraintSpace::WorldSpace;
+        ss->mPosition1 = pivotWorld;
+        ss->mPosition2 = pivotWorld;
+        ss->mTwistAxis1 = twistWorld;
+        ss->mTwistAxis2 = twistWorld;
+        ss->mPlaneAxis1 = planeWorld;
+        ss->mPlaneAxis2 = planeWorld;
+        constexpr float kPi = 3.14159265358979f;
+        ss->mNormalHalfConeAngle = std::clamp(p.normalHalfConeAngle, 0.0f, kPi);
+        ss->mPlaneHalfConeAngle = std::clamp(p.planeHalfConeAngle, 0.0f, kPi);
+        ss->mTwistMinAngle = std::clamp(p.twistMinAngle, -kPi, kPi);
+        ss->mTwistMaxAngle = std::clamp(std::max(p.twistMaxAngle, p.twistMinAngle), -kPi, kPi);
+        ss->mMaxFrictionTorque = p.maxFrictionTorque;
+        // Drive-motor springs (used when driveRagdollToPose powers the joint).
+        auto configureMotor = [&](MotorSettings& m) {
+            m.mSpringSettings.mMode = ESpringMode::FrequencyAndDamping;
+            m.mSpringSettings.mFrequency = opts.motor.frequency;
+            m.mSpringSettings.mDamping = opts.motor.damping;
+            if (opts.motor.maxTorque >= 0.0f) m.SetTorqueLimit(opts.motor.maxTorque);
+        };
+        configureMotor(ss->mSwingMotorSettings);
+        configureMotor(ss->mTwistMotorSettings);
+        part.mToParent = ss;
+    }
+
+    // Clamp parent/child mass ratios + grow parent inertia so long chains
+    // don't oscillate (Havok-style stabilization).
+    if (opts.stabilize) settings->Stabilize();
+
+    // Parent/child pairs never self-collide; the bind pose also disables any
+    // part pairs that overlap at rest (e.g. pelvis vs spine capsules).
+    settings->DisableParentChildCollisions(bindModel.data());
+    settings->CalculateBodyIndexToConstraintIndex();
+
+    Ragdoll* rag = settings->CreateRagdoll(nextRagdollGroup_++, 0, &physicsSystem_);
+    if (!rag) return 0;
+    Ref<Ragdoll> ragRef(rag);
+    rag->AddToPhysicsSystem(opts.activate ? EActivation::Activate
+                                          : EActivation::DontActivate);
+
+    RagdollEntry entry;
+    entry.ragdoll = ragRef;
+    entry.settings = settings;
+    entry.parentIndex.reserve(n);
+    for (int i = 0; i < n; i++) entry.parentIndex.push_back(opts.parts[i].parentIndex);
+
+    uint32_t handle = nextRagdollHandle_++;
+    ragdolls_[handle] = std::move(entry);
+    return handle;
+}
+
+void PhysicsWorld::removeRagdollFromSystem(RagdollEntry& e) {
+    if (!e.ragdoll) return;
+    // User constraints attached to part bodies (e.g. a grab) must go first —
+    // ~Ragdoll destroys the bodies and a live constraint would dangle.
+    for (const BodyID& id : e.ragdoll->GetBodyIDs())
+        removeConstraintsReferencing(id);
+    e.ragdoll->RemoveFromPhysicsSystem();
+}
+
+void PhysicsWorld::destroyRagdoll(uint32_t handle) {
+    auto it = ragdolls_.find(handle);
+    if (it == ragdolls_.end()) return;
+    removeRagdollFromSystem(it->second);
+    ragdolls_.erase(it);  // Ref release destroys the part bodies
+}
+
+int PhysicsWorld::ragdollPartCount(uint32_t handle) const {
+    auto it = ragdolls_.find(handle);
+    return it == ragdolls_.end() ? -1 : (int)it->second.ragdoll->GetBodyCount();
+}
+
+BodyID PhysicsWorld::ragdollPartBody(uint32_t handle, int part) const {
+    auto it = ragdolls_.find(handle);
+    if (it == ragdolls_.end()) return BodyID();
+    if (part < 0 || part >= (int)it->second.ragdoll->GetBodyCount()) return BodyID();
+    return it->second.ragdoll->GetBodyID(part);
+}
+
+int PhysicsWorld::ragdollPartParent(uint32_t handle, int part) const {
+    auto it = ragdolls_.find(handle);
+    if (it == ragdolls_.end()) return -1;
+    if (part < 0 || part >= (int)it->second.parentIndex.size()) return -1;
+    return it->second.parentIndex[part];
+}
+
+bool PhysicsWorld::getRagdollPose(uint32_t handle,
+                                  std::vector<RagdollPartState>& out) const {
+    auto it = ragdolls_.find(handle);
+    if (it == ragdolls_.end()) return false;
+    const auto& ids = it->second.ragdoll->GetBodyIDs();
+    const BodyInterface& bi = physicsSystem_.GetBodyInterface();
+    out.resize(ids.size());
+    for (size_t i = 0; i < ids.size(); i++) {
+        bi.GetPositionAndRotation(ids[i], out[i].position, out[i].rotation);
+    }
+    return true;
+}
+
+bool PhysicsWorld::setRagdollPose(uint32_t handle,
+                                  const std::vector<RagdollPartState>& pose) {
+    auto it = ragdolls_.find(handle);
+    if (it == ragdolls_.end()) return false;
+    const auto& ids = it->second.ragdoll->GetBodyIDs();
+    if (pose.size() != ids.size()) return false;
+    BodyInterface& bi = physicsSystem_.GetBodyInterface();
+    for (size_t i = 0; i < ids.size(); i++) {
+        bi.SetPositionAndRotation(ids[i], pose[i].position,
+                                  pose[i].rotation.Normalized(),
+                                  EActivation::DontActivate);
+    }
+    return true;
+}
+
+bool PhysicsWorld::driveRagdollToPose(uint32_t handle,
+                                      const std::vector<RagdollPartState>& pose,
+                                      const RagdollMotorOptions* motor) {
+    auto it = ragdolls_.find(handle);
+    if (it == ragdolls_.end()) return false;
+    RagdollEntry& e = it->second;
+    const int n = (int)e.ragdoll->GetBodyCount();
+    if ((int)pose.size() != n) return false;
+
+    // Jolt DriveToPoseUsingMotors semantics, fed from world-space part
+    // transforms: the position-motor target of each swing-twist joint is the
+    // child's rotation relative to its parent in the TARGET pose. The root is
+    // not driven (no joint) — its position stays free.
+    for (int i = 0; i < n; i++) {
+        int ci = e.settings->GetConstraintIndexForBodyIndex(i);
+        int parent = e.parentIndex[i];
+        if (ci < 0 || parent < 0) continue;
+        TwoBodyConstraint* c = e.ragdoll->GetConstraint(ci);
+        if (c->GetSubType() != EConstraintSubType::SwingTwist) continue;
+        auto* st = static_cast<SwingTwistConstraint*>(c);
+        if (motor) {
+            auto apply = [&](MotorSettings& m) {
+                m.mSpringSettings.mMode = ESpringMode::FrequencyAndDamping;
+                m.mSpringSettings.mFrequency = motor->frequency;
+                m.mSpringSettings.mDamping = motor->damping;
+                if (motor->maxTorque >= 0.0f) m.SetTorqueLimit(motor->maxTorque);
+                else m.SetTorqueLimits(-FLT_MAX, FLT_MAX);
+            };
+            apply(st->GetSwingMotorSettings());
+            apply(st->GetTwistMotorSettings());
+        }
+        Quat target =
+            (pose[parent].rotation.Conjugated() * pose[i].rotation).Normalized();
+        st->SetSwingMotorState(EMotorState::Position);
+        st->SetTwistMotorState(EMotorState::Position);
+        st->SetTargetOrientationBS(target);
+    }
+    e.ragdoll->Activate();
+    return true;
+}
+
+bool PhysicsWorld::driveRagdollToPoseKinematic(uint32_t handle,
+                                               const std::vector<RagdollPartState>& pose,
+                                               float dt) {
+    auto it = ragdolls_.find(handle);
+    if (it == ragdolls_.end() || dt <= 0.0f) return false;
+    const auto& ids = it->second.ragdoll->GetBodyIDs();
+    if (pose.size() != ids.size()) return false;
+    it->second.ragdoll->Activate();
+    BodyInterface& bi = physicsSystem_.GetBodyInterface();
+    for (size_t i = 0; i < ids.size(); i++) {
+        bi.MoveKinematic(ids[i], pose[i].position, pose[i].rotation.Normalized(), dt);
+    }
+    return true;
+}
+
+void PhysicsWorld::stopRagdollDrive(uint32_t handle) {
+    auto it = ragdolls_.find(handle);
+    if (it == ragdolls_.end()) return;
+    Ragdoll* rag = it->second.ragdoll.GetPtr();
+    for (int ci = 0; ci < (int)rag->GetConstraintCount(); ci++) {
+        TwoBodyConstraint* c = rag->GetConstraint(ci);
+        if (c->GetSubType() != EConstraintSubType::SwingTwist) continue;
+        auto* st = static_cast<SwingTwistConstraint*>(c);
+        st->SetSwingMotorState(EMotorState::Off);
+        st->SetTwistMotorState(EMotorState::Off);
+    }
+}
+
+void PhysicsWorld::addRagdollImpulse(uint32_t handle, Vec3 impulse) {
+    auto it = ragdolls_.find(handle);
+    if (it == ragdolls_.end()) return;
+    it->second.ragdoll->AddImpulse(impulse);
+}
+
+void PhysicsWorld::activateRagdoll(uint32_t handle) {
+    auto it = ragdolls_.find(handle);
+    if (it == ragdolls_.end()) return;
+    it->second.ragdoll->Activate();
+}
+
+void PhysicsWorld::deactivateRagdoll(uint32_t handle) {
+    auto it = ragdolls_.find(handle);
+    if (it == ragdolls_.end()) return;
+    BodyInterface& bi = physicsSystem_.GetBodyInterface();
+    for (const BodyID& id : it->second.ragdoll->GetBodyIDs())
+        bi.DeactivateBody(id);
+}
+
+bool PhysicsWorld::isRagdollActive(uint32_t handle) const {
+    auto it = ragdolls_.find(handle);
+    if (it == ragdolls_.end()) return false;
+    return it->second.ragdoll->IsActive();
 }
 
 // --- Raycasts, shape casts & overlap queries ---

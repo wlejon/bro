@@ -1069,3 +1069,209 @@ car.destroy();    // remove the vehicle (constraint + drivetrain); the chassis
 //   const kart = w.createVehicle({ chassis: {...}, wheels: [...] });
 //   kart.setInput({ forward: 1 });
 //   w.step(1/60);
+
+
+// -----------------------------------------------------------------------------
+// Ragdolls (Physics.createRagdoll)
+// -----------------------------------------------------------------------------
+//
+// A Jolt Ragdoll: a tree of dynamic rigid parts joined by swing-twist (or
+// fixed) constraints — the PhysicalBone3D analog. Parent/child part pairs,
+// and any parts that overlap in the bind pose, never collide with each
+// other; everything else self-collides normally, and the whole ragdoll
+// collides with the rest of the world.
+//
+// Part bodies are ORDINARY bodies in their world: partBody(i) returns a
+// regular body tag, so every body API works on them — addImpulse to shove a
+// limb, getVelocity, contact events, and raycasts report them like any other
+// body. The flip side: destroying a part body (Physics.destroyBody) destroys
+// the WHOLE ragdoll, because bodies + joints live and die as one unit.
+//
+// Pose format (used by pose()/localPose()/setPose/driveToPose*): a
+// Float32Array, 7 floats per part — [px,py,pz, qx,qy,qz,qw] — in the parts
+// array order. pose() is world space; localPose() is relative to each
+// part's parent (root = world). setPose and the two drive calls also accept
+// 16 floats per part (column-major rigid mat4s — exactly what
+// AnimationPlayer.getBoneWorldMatrix returns, packed per part).
+
+/**
+ * Create a ragdoll. Part bind transforms are MODEL space (the rest-pose
+ * frame); opts.position/rotation place that frame in the world. Parents must
+ * appear EARLIER in the parts array than their children (Jolt requirement).
+ *
+ * @param {Object} opts
+ * @param {{x,y,z}}   [opts.position]        - world placement of the model origin
+ * @param {{x,y,z,w}} [opts.rotation]        - world orientation
+ * @param {string|number} [opts.layer=1]     - object layer for all parts
+ * @param {number}  [opts.gravityFactor=1]
+ * @param {number}  [opts.linearDamping=0.05]
+ * @param {number}  [opts.angularDamping=0.05]
+ * @param {boolean} [opts.stabilize=true]    - Jolt Stabilize(): clamps
+ *                                             parent/child mass ratios and
+ *                                             grows parent inertia so long
+ *                                             chains don't oscillate
+ * @param {boolean} [opts.activate=true]     - wake the bodies at creation
+ * @param {Object}  [opts.motor]             - driveToPose motor spring:
+ *                                             { frequency=10 (Hz), damping=1,
+ *                                               maxTorque=-1 (N·m; <0 unlimited) }
+ *
+ * @param {Object[]} opts.parts              - the part tree, parents first:
+ * @param {string}  [opts.parts[].name]      - for partIndex()/parent-by-name
+ * @param {number|string} [opts.parts[].parent=-1] - EARLIER part index or
+ *                                             name; -1 = root
+ * @param {{x,y,z}}   opts.parts[].position  - bind position (part center), model space
+ * @param {{x,y,z,w}} [opts.parts[].rotation]- bind rotation, model space
+ * @param {string}  [opts.parts[].shape='capsule'] - 'capsule' | 'box' | 'sphere'.
+ *                                             Capsules are Y-axis-aligned in
+ *                                             part-local space — use rotation
+ *                                             to lay a limb along X/Z
+ * @param {number}  [opts.parts[].halfHeight=0.15] - capsule cylinder half-height
+ * @param {number}  [opts.parts[].radius=0.08]    - capsule/sphere radius
+ * @param {{x,y,z}} [opts.parts[].halfExtents]    - box half-extents
+ * @param {number}  [opts.parts[].density=1000]   - kg/m³ (mass from shape volume)
+ * @param {number}  [opts.parts[].mass=0]         - > 0 overrides the mass in kg
+ *                                             (inertia recomputed from the
+ *                                             shape for that mass)
+ * @param {number}  [opts.parts[].friction=0.5]
+ * @param {number}  [opts.parts[].restitution=0]
+ *
+ * @param {Object}  [opts.parts[].joint]     - joint to the PARENT (non-root only):
+ * @param {string}  [opts.parts[].joint.type='swingTwist'] - 'swingTwist' | 'fixed'
+ * @param {{x,y,z}} [opts.parts[].joint.point]     - pivot, model space;
+ *                                             default = this part's position
+ * @param {{x,y,z}} [opts.parts[].joint.twistAxis] - model space; default =
+ *                                             parent→child bind direction
+ * @param {{x,y,z}} [opts.parts[].joint.planeAxis] - model space, ⟂ to twist;
+ *                                             default = auto perpendicular
+ * @param {number}  [opts.parts[].joint.normalHalfConeAngle=0] - swing limit (rad)
+ * @param {number}  [opts.parts[].joint.planeHalfConeAngle]    - swing limit in
+ *                                             the plane axis direction (rad);
+ *                                             default = normalHalfConeAngle
+ *                                             (a circular cone)
+ * @param {number}  [opts.parts[].joint.twistMin=0] - rad, [-π, π]
+ * @param {number}  [opts.parts[].joint.twistMax=0] - rad, [-π, π]
+ * @param {number}  [opts.parts[].joint.frictionTorque=0] - N·m joint friction
+ *                                             when unpowered (cheap "muscle tone")
+ * @returns {PhysicsRagdoll}
+ */
+const DEG = Math.PI / 180;
+const rd = Physics.createRagdoll({
+    position: { x: 0, y: 0, z: 0 },
+    parts: [
+        { name: 'pelvis', shape: 'capsule', halfHeight: 0.10, radius: 0.12,
+          position: { x: 0, y: 1.00, z: 0 } },
+        { name: 'spine', parent: 'pelvis', shape: 'capsule', halfHeight: 0.12, radius: 0.11,
+          position: { x: 0, y: 1.35, z: 0 },
+          joint: { point: { x: 0, y: 1.15, z: 0 }, normalHalfConeAngle: 25 * DEG,
+                   twistMin: -20 * DEG, twistMax: 20 * DEG } },
+        { name: 'head', parent: 'spine', shape: 'sphere', radius: 0.11,
+          position: { x: 0, y: 1.72, z: 0 },
+          joint: { point: { x: 0, y: 1.55, z: 0 }, normalHalfConeAngle: 35 * DEG,
+                   twistMin: -45 * DEG, twistMax: 45 * DEG } },
+        // Limbs: capsules are Y-aligned, so rotate the part to lay it along X
+        // and give the shoulder an X twist axis.
+        { name: 'upperArmR', parent: 'spine', shape: 'capsule', halfHeight: 0.10, radius: 0.05,
+          position: { x: 0.36, y: 1.42, z: 0 },
+          rotation: { x: 0, y: 0, z: -Math.SQRT1_2, w: Math.SQRT1_2 },
+          joint: { point: { x: 0.24, y: 1.42, z: 0 }, twistAxis: { x: 1, y: 0, z: 0 },
+                   normalHalfConeAngle: 60 * DEG, twistMin: -30 * DEG, twistMax: 30 * DEG } },
+    ],
+});
+
+rd.partCount;            // number of parts
+rd.partIndex('head');    // name → part index (-1 unknown)
+rd.partParent(i);        // parent part index (-1 = root)
+rd.partBody(i);          // the part's regular body TAG — Physics.addImpulse,
+                         // getVelocity, raycast hits, contact events all work
+rd.isActive;             // true while any part body is awake
+
+rd.pose();               // Float32Array partCount*7, WORLD space
+rd.localPose();          // Float32Array partCount*7, relative to parent part
+                         // (root = world) — drops into a bromesh Pose
+rd.setPose(pose);        // teleport all parts (7- or 16-stride)
+rd.activate();           // wake / sleep the whole body set
+rd.deactivate();
+rd.addImpulse(x, y, z);  // impulse on every part (N·s each)
+
+/**
+ * Power the swing-twist joints toward the target pose's parent-relative
+ * rotations (Jolt DriveToPoseUsingMotors: position motors on swing + twist).
+ * Motors PERSIST until stopDrive() — call once, not per frame (re-call to
+ * change the target). The root is not driven; positions in the pose are
+ * ignored (only relative rotations matter). Great for "get up", stagger,
+ * or animation-following that stays physical.
+ *
+ * @param {Float32Array|number[]} pose - partCount*7 or partCount*16 floats
+ * @param {Object} [motor] - override the creation-time spring:
+ *                           { frequency (Hz), damping, maxTorque (N·m; <0 unlimited) }
+ * @returns {boolean}
+ */
+rd.driveToPose(targetPose, { frequency: 15, damping: 1 });
+rd.stopDrive();          // motors off → limp ragdoll again
+
+/**
+ * Hard tracking: set part velocities so every part reaches its target
+ * transform in dt seconds (Jolt DriveToPoseUsingKinematics). Positions ARE
+ * used. Re-issue every step while tracking — large jumps are clamped by the
+ * max velocity caps, so treat it as incremental pursuit, not teleport.
+ *
+ * @param {Float32Array|number[]} pose - partCount*7 or partCount*16 floats
+ * @param {number} dt - seconds to reach the target (typically the step size)
+ * @returns {boolean}
+ */
+rd.driveToPoseKinematic(targetPose, 1 / 60);
+
+rd.destroy();            // remove bodies + joints; handle is dead after.
+                         // (Destroying any part body via Physics.destroyBody
+                         // also destroys the whole ragdoll.)
+
+// Sandbox worlds have the same API; the ragdoll steps inside w.step(dt):
+//   const w = Physics.createWorldHandle({ maxBodies: 64 });
+//   const dummy = w.createRagdoll({ parts: [...] });
+//   w.step(1/60);
+
+// -----------------------------------------------------------------------------
+// Ragdoll ↔ skinned mesh recipes (Godot PhysicalBone3D flow)
+// -----------------------------------------------------------------------------
+//
+// Author the skeleton so bone i mirrors part i — same order, same parents,
+// bones AT the part bind transforms (inverseBind = inverse of the part's
+// model-space bind matrix) — and keep the skinned node's own transform at
+// identity (the ragdoll's world transforms then ARE the mesh's model space).
+// Both recipes are verified end-to-end in tests/physics/test_ragdoll.js.
+//
+// RECIPE 1 — ragdoll drives the mesh (limp / knocked out). localPose() is
+// parent-relative, exactly what the bromesh Pose's local joint slots hold:
+//
+//   const pose = skel.bindPose();                // bromesh rigging objects
+//   function syncMeshToRagdoll() {
+//       const rp = rd.localPose();               // stride 7: [t3, q4] per part
+//       const pd = pose.data;                    // stride 10: [t3, q4, s3] per bone
+//       for (let i = 0; i < rd.partCount; i++)
+//           for (let k = 0; k < 7; k++) pd[i * 10 + k] = rp[i * 7 + k];
+//       pose.data = pd;
+//       node.setSkinningMatrices(pose.computeSkinningMatrices(skel));
+//   }
+//   // per frame while the ragdoll is active:
+//   syncMeshToRagdoll();
+//
+// If the mesh has MORE bones than the ragdoll has parts (fingers, jaw...),
+// map ragdoll parts onto their bone indices and leave the rest at bind:
+// pd[boneOf[i] * 10 + k] = rp[i * 7 + k].
+//
+// RECIPE 2 — animation drives the ragdoll (powered / getting up). Sample the
+// AnimationPlayer's bone matrices (model space, column-major — accepted
+// directly as a 16-stride pose) and set them as the motor target:
+//
+//   const boneOfPart = ['pelvis', 'spine', 'head', 'upperArmR'];  // part i → bone name
+//   const target = new Float32Array(rd.partCount * 16);
+//   function driveRagdollToAnimation() {
+//       const player = node.player;              // AnimationPlayer (play() first)
+//       for (let i = 0; i < rd.partCount; i++)
+//           target.set(player.getBoneWorldMatrix(boneOfPart[i]), i * 16);
+//       rd.driveToPose(target);                  // motors chase the clip
+//   }
+//   // call when the target should change (e.g. each frame during a getup);
+//   // rd.stopDrive() to go limp again. driveToPoseKinematic(target, dt) is
+//   // the hard-tracking variant (call every step — parts remain real bodies
+//   // that push whatever is in the way).
