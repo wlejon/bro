@@ -630,6 +630,7 @@ void SceneRenderer::render3D() {
             const bool hasOverlay = !unlitMeshes.empty() ||
                                     !unlitSkinnedMeshes.empty() || hasGizmo;
             if (hasOverlay && tonemapFBO_ && meshProgram_) {
+                unlitOverlayActive_ = true;
                 glBindFramebuffer(GL_FRAMEBUFFER, tonemapFBO_);
                 glViewport(0, 0, tonemapFBOWidth_, tonemapFBOHeight_);
                 glEnable(GL_DEPTH_TEST);
@@ -686,6 +687,7 @@ void SceneRenderer::render3D() {
                 glDisable(GL_DEPTH_TEST);
                 glUseProgram(0);
                 glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                unlitOverlayActive_ = false;
             }
 
             // --- Tilt-shift DOF post pass ------------------------------------

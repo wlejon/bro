@@ -747,6 +747,41 @@ class SceneGraph {
   captureFrame(width, height) {}
 
   /**
+   * Live-linked handle to this scene's rendered output (the post-tonemap
+   * LDR texture — exactly what the canvas composites), for use as a
+   * baseColor map on a mesh in another scene:
+   *
+   *   const monitor = sceneB.createMesh({ mesh: 'plane', color: '#ffffff' });
+   *   monitor.setBaseColorTexture(sceneA.asTexture());   // B shows A, live
+   *
+   * The link resolves the source texture every frame, so it survives source
+   * canvas resizes and renderScale changes (which recreate the underlying
+   * GL texture). Lifetime: the handle never keeps the source scene alive —
+   * when the source canvas is removed from the document and its scene is
+   * destroyed, consuming meshes fall back to their plain `color`. Before
+   * the source has rendered its first 3D frame, consumers are likewise
+   * untextured.
+   *
+   * Ordering: scenes render once per frame in canvas getContext('scene')
+   * creation order. If the source scene was created before the consumer,
+   * the consumer samples this frame's output; otherwise it samples the
+   * previous frame's (one frame of latency). There is no reordering API —
+   * create the source scene first when same-frame freshness matters.
+   *
+   * A scene sampling ITSELF (a mesh in A textured with A.asTexture()) is
+   * allowed. Lit meshes produce the classic one-frame-delayed recursive
+   * "video feedback" image (the lit pass renders into the HDR target, never
+   * into the texture being sampled). Unlit meshes draw in a post-tonemap
+   * overlay pass directly into the sampled output — a GL feedback loop —
+   * so the renderer guards that one case by drawing the mesh untextured
+   * (base color) in the overlay pass.
+   *
+   * @returns {?SceneTexture} handle with a `valid` getter (true while the
+   *   source scene still exists)
+   */
+  asTexture() {}
+
+  /**
    * Cast a ray against all visible 3D mesh nodes in the scene and return the
    * closest hit, or null. Each MeshNode is tested in its local space using
    * the node's pre-built BVH; the ray is transformed by the node's TRS.
@@ -1130,6 +1165,27 @@ class SceneNode {
    * @param {Object|Mesh} meshOrOpts
    */
   updateMesh(meshOrOpts) {}
+
+  /**
+   * Replace or clear the baseColor texture of a MeshNode at runtime. The
+   * sample composes with the node's `color` factor (and vertex colors when
+   * present), matching glTF `baseColorTexture * baseColorFactor` — set
+   * `color` to white for texture pass-through. Three argument forms:
+   *
+   *   - `{ width, height, data: Uint8Array }` — RGBA8 pixel upload, same
+   *     shape as createMesh's `texture` option. The node owns a copy.
+   *   - a SceneTexture handle from another scene's `asTexture()` — installs
+   *     a LIVE link to that scene's rendered output (see asTexture() for
+   *     ordering/lifetime semantics). Non-owning: the source scene keeps
+   *     ownership of the texture.
+   *   - `null` / `undefined` — clear either form; the mesh falls back to
+   *     its plain `color` (and vertex colors if present).
+   *
+   * The two forms are mutually exclusive: setting one replaces the other.
+   *
+   * @param {?(Object|SceneTexture)} tex
+   */
+  setBaseColorTexture(tex) {}
 
 
   // --- SkinnedMeshNode-only -------------------------------------------------

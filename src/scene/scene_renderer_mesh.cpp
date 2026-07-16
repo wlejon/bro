@@ -120,6 +120,11 @@ void SceneRenderer::ensureSkinnedMeshPipeline() {
 }
 
 void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
+    // Apply any staged texture uploads/releases before reading material
+    // state, so runtime texture swaps take effect this frame (the geometry
+    // upload in drawRaw runs too late — after the bind decisions below).
+    mesh->flushPendingTextures();
+
     // Camera-relative rendering: offset model position by camera to avoid
     // float precision issues at large world coordinates (planet scale).
     Mat4 model = mesh->worldMatrix();
@@ -154,9 +159,37 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
     // Bind baseColor texture if present. Texture composes with the baseColor
     // factor and per-vertex tint — matches glTF "baseColorTexture *
     // baseColorFactor", with vertex color folded in for tile/terrain shading.
-    bool bindTex = mesh->hasBaseColorTexture();
+    // Resolution happens here, per draw: an external provider (scene-as-
+    // texture) may return a different id every frame (source FBO recreated on
+    // resize / renderScale change) or 0 (source destroyed / never rendered),
+    // in which case the mesh falls back to its untextured base color.
+    GLuint baseTex = mesh->resolvedBaseColorTextureId();
+    if (baseTex && mesh->hasExternalBaseColorTexture() &&
+        unlitOverlayActive_ && baseTex == tonemapColorTex_) {
+        // Self-sampling guard: the post-tonemap unlit overlay draws INTO
+        // tonemapFBO_, so an unlit mesh linked to its own scene's output
+        // would sample the bound draw attachment — a GL feedback loop
+        // (undefined behavior). Draw it untextured for this pass instead.
+        // Lit self-sampling meshes are fine (they draw into meshFBO_) and
+        // give the classic one-frame-delayed recursive image.
+        baseTex = 0;
+    }
+    const bool bindTex = baseTex != 0;
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, bindTex ? mesh->baseColorTextureId() : fallback2D_);
+    glBindTexture(GL_TEXTURE_2D, bindTex ? baseTex : fallback2D_);
+    if (bindTex && mesh->hasExternalBaseColorTexture()) {
+        // External textures are scene LDR outputs with no mip chain, so the
+        // owned-path default (LINEAR_MIPMAP_LINEAR, set at upload) would be
+        // mipmap-incomplete here. Texture parameters live on the texture
+        // object, shared with the source scene's own compositing — the values
+        // below are exactly what the tonemap/post FBOs set at creation
+        // (LINEAR + CLAMP_TO_EDGE), so re-asserting them never changes how
+        // the source scene itself displays.
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
     glUniform1i(L.baseColorTex, 0);
     glUniform1i(L.useTexture, bindTex ? 1 : 0);
 

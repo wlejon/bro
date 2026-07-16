@@ -25,11 +25,26 @@ SceneGraph::SceneGraph() {
 
 
 SceneGraph::~SceneGraph() {
+    // Invalidate scene-as-texture links before members die: consumers in
+    // other graphs resolve through this token at draw time, and nulling the
+    // back-pointer makes any handle read "gone" even if a copy of the
+    // shared_ptr is still held somewhere (weak_ptr expiry alone only covers
+    // handles that never upgraded to shared ownership).
+    if (outputTexSource_) outputTexSource_->graph = nullptr;
+
     root_->traverse([](SceneNode* n) {
         for (auto* c : n->children()) {
         }
     });
     nodes_.clear();
+}
+
+std::shared_ptr<SceneGraph::OutputTextureSource> SceneGraph::outputTextureSource() {
+    if (!outputTexSource_) {
+        outputTexSource_ = std::make_shared<OutputTextureSource>();
+        outputTexSource_->graph = this;
+    }
+    return outputTexSource_;
 }
 
 

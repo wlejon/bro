@@ -6,6 +6,7 @@
 #include <bromesh/analysis/bvh.h>
 #include <glad/gl.h>
 
+#include <functional>
 #include <vector>
 
 namespace bro::scene {
@@ -95,8 +96,33 @@ public:
     /// caller's buffer can be freed immediately after.
     void setBaseColorTexture(int width, int height, const uint8_t* rgba);
     void clearBaseColorTexture();
-    bool hasBaseColorTexture() const { return texture_ != 0; }
+    bool hasBaseColorTexture() const {
+        return externalBaseColorTex_ != nullptr || texture_ != 0;
+    }
     GLuint baseColorTextureId() const { return texture_; }
+
+    /// Live-linked external baseColor texture (scene-as-texture). The
+    /// provider is invoked at draw time every frame and returns the CURRENT
+    /// GL texture name to sample — or 0 when the source has nothing yet
+    /// (never rendered) or no longer exists (source scene destroyed), in
+    /// which case the mesh draws its plain base color. Per-draw resolution
+    /// is what makes the link live: FBO textures are recreated on canvas
+    /// resize / renderScale changes, and the new id is picked up on the next
+    /// frame with no re-wiring. MeshNode never owns or deletes an external
+    /// texture (releaseGL ignores it). Mutually exclusive with the owned
+    /// setBaseColorTexture(bytes) path — setting either clears the other.
+    using ExternalTextureProvider = std::function<unsigned()>;
+    void setExternalBaseColorTexture(ExternalTextureProvider provider);
+    bool hasExternalBaseColorTexture() const {
+        return externalBaseColorTex_ != nullptr;
+    }
+
+    /// Draw-time baseColor resolution: the external provider when set (may
+    /// return 0 — see above), else the owned texture (0 if none).
+    GLuint resolvedBaseColorTextureId() const {
+        return externalBaseColorTex_ ? (GLuint)externalBaseColorTex_()
+                                     : texture_;
+    }
 
     /// Tangent-space normal map (RGBA8, .xy = xy, .z ignored and reconstructed,
     /// or full .xyz sampled directly — this shader reads all three channels).
@@ -209,6 +235,12 @@ public:
     void setWindMask(float m) { windMask_ = m; }
     float windMask() const { return windMask_; }
 
+    /// Upload/release any dirty staged texture slots. GL thread only. The
+    /// renderer calls this before reading material texture state so runtime
+    /// texture swaps (setBaseColorTexture and friends) apply the same frame
+    /// they were set; drawRaw also flushes for depth-only paths.
+    void flushPendingTextures();
+
     /// Release GPU resources (call before GL context is destroyed).
     virtual void releaseGL();
 
@@ -256,6 +288,10 @@ private:
     GLuint aoTex_ = 0;
     GLuint emissiveTex_ = 0;
     GLsizei indexCount_ = 0;
+
+    // Live-linked external baseColor source (see setExternalBaseColorTexture).
+    // Never a GL name we own — releaseGL must not (and cannot) delete it.
+    ExternalTextureProvider externalBaseColorTex_;
 
     PendingTex pendingBase_;
     PendingTex pendingNormal_;

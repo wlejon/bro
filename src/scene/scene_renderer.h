@@ -447,6 +447,15 @@ private:
 
     bool hasMeshContent_ = false;
 
+    // Per-frame: true while the post-tonemap unlit overlay pass is drawing
+    // (into tonemapFBO_). renderMeshNode uses it to refuse binding an
+    // external baseColor texture that IS tonemapColorTex_ — i.e. a mesh
+    // sampling its own scene's output — since sampling the bound draw
+    // attachment is a GL feedback loop (undefined behavior). The lit mesh
+    // pass needs no guard: it draws into meshFBO_, never into the LDR
+    // output an external provider can hand out.
+    bool unlitOverlayActive_ = false;
+
     // Distance fog
     float fogStart_ = 0.0f;
     float fogEnd_ = 0.0f;

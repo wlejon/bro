@@ -218,6 +218,19 @@ static JSValue wrapNode(JSContext* ctx, scene::SceneNode* node, scene::SceneGrap
 }
 
 // ---------------------------------------------------------------------------
+// SceneTexture — live-linked handle to a scene's LDR output texture, minted
+// by sceneGraph.asTexture() and consumed by mesh.setBaseColorTexture(handle).
+// Holds only a weak_ptr to the source graph's liveness token: pure C++-side
+// lifetime — no JSValue stored, so no gc_mark hook is needed and finalizer
+// order is irrelevant. Weak by design: a handle never extends the source
+// scene's lifetime; once the source graph is destroyed the weak_ptr expires
+// and consumers resolve to 0 (the mesh falls back to its base color).
+// ---------------------------------------------------------------------------
+struct SceneTextureHandle {
+    std::weak_ptr<scene::SceneGraph::OutputTextureSource> src;
+};
+
+// ---------------------------------------------------------------------------
 // Shape / Physics helpers (cast node to subclass)
 // ---------------------------------------------------------------------------
 
@@ -348,10 +361,14 @@ static JSValue js_node_savePly(JSContext* ctx, JSValueConst this_val, int argc, 
     return JS_NewBool(ctx, 1);
 }
 
-// setBaseColorTexture(tex|null) — replace or clear the baseColor texture at
-// runtime. `tex` shape matches createMesh's `texture` option:
-// { width, height, data: Uint8Array(rgba8) }. Pass null/undefined to clear
-// so the mesh falls back to `uColor` (and vertex colors if present).
+// setBaseColorTexture(tex|sceneTexture|null) — replace or clear the baseColor
+// texture at runtime. `tex` shape matches createMesh's `texture` option:
+// { width, height, data: Uint8Array(rgba8) }. A SceneTexture handle from
+// sceneGraph.asTexture() installs a live link to that scene's LDR output
+// instead (re-resolved every frame — survives source resize / renderScale
+// changes, falls back to base color when the source scene is destroyed).
+// Pass null/undefined to clear so the mesh falls back to `uColor` (and
+// vertex colors if present).
 static JSValue js_node_setBaseColorTexture(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
     if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Mesh)
@@ -362,8 +379,20 @@ static JSValue js_node_setBaseColorTexture(JSContext* ctx, JSValueConst this_val
         meshNode->clearBaseColorTexture();
         return JS_UNDEFINED;
     }
+    // Scene-as-texture: a SceneTexture handle from sceneGraph.asTexture().
+    // The provider captures the weak liveness token by value, so the mesh's
+    // link is independent of the JS handle object's lifetime (it may be GC'd
+    // immediately) and never keeps the source SceneGraph alive.
+    if (auto* h = qjsbind::unwrap<SceneTextureHandle>(ctx, argv[0])) {
+        std::weak_ptr<scene::SceneGraph::OutputTextureSource> wk = h->src;
+        meshNode->setExternalBaseColorTexture([wk]() -> unsigned {
+            auto s = wk.lock();
+            return (s && s->graph) ? s->graph->outputColorTexture() : 0u;
+        });
+        return JS_UNDEFINED;
+    }
     if (!JS_IsObject(argv[0]))
-        return JS_ThrowTypeError(ctx, "setBaseColorTexture: expected { width, height, data } or null");
+        return JS_ThrowTypeError(ctx, "setBaseColorTexture: expected { width, height, data }, SceneTexture, or null");
 
     int w_ = (int)qjsbind::get_prop_number(ctx, argv[0], "width",  0);
     int h_ = (int)qjsbind::get_prop_number(ctx, argv[0], "height", 0);
@@ -3130,6 +3159,17 @@ static JSValue js_sg_captureFrame(JSContext* ctx, JSValueConst this_val,
     return buildImageDataFromPixels(ctx, pixels, rw, rh);
 }
 
+// asTexture() → SceneTexture — live-linked handle to this scene's LDR output
+// texture, for use as a mesh baseColor map in another scene via
+// mesh.setBaseColorTexture(handle). See the SceneTextureHandle comment for
+// lifetime semantics.
+static JSValue js_sg_asTexture(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_NULL;
+    return qjsbind::wrap<SceneTextureHandle>(
+        ctx, new SceneTextureHandle{g->outputTextureSource()});
+}
+
 static JSValue mat4ToJSArray(JSContext* ctx, const bromath::Mat4& mat) {
     JSValue arr = JS_NewArray(ctx);
     int idx = 0;
@@ -3466,6 +3506,15 @@ static JSValue js_sg_createTween(JSContext* ctx, JSValueConst this_val, int, JSV
 }
 
 void SceneBindings::install(JSContext* ctx) {
+    // --- SceneTexture handle (scene-as-texture, minted by asTexture()) ---
+    qjsbind::Class<SceneTextureHandle>(ctx, "SceneTexture")
+        // True while the source scene still exists. Turning false is exactly
+        // the moment consuming meshes fall back to their base color.
+        .get("valid", [](SceneTextureHandle* h) -> bool {
+            auto s = h ? h->src.lock() : nullptr;
+            return s && s->graph;
+        });
+
     // --- Tween class ---
     qjsbind::Class<TweenWrapper>(ctx, "Tween")
         .get("isRunning", [](TweenWrapper* w, JSContext* ctx) -> JSValue {
@@ -4357,6 +4406,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("unprojectLocal", js_sg_unprojectLocal, 2)
         .method_raw("toImageData", js_sg_toImageData, 0)
         .method_raw("captureFrame", js_sg_captureFrame, 2)
+        .method_raw("asTexture", js_sg_asTexture, 0)
         .get("viewMatrix", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->graph) return JS_NULL;
             return mat4ToJSArray(ctx, w->graph->viewMatrix());

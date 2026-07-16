@@ -153,6 +153,24 @@ public:
         return renderer_.readTonemapPixelsRGBA(outW, outH);
     }
 
+    /// Current LDR output texture of this scene's 3D pipeline — the same
+    /// texture the compositor samples (the tilt-shift output when that pass
+    /// ran, else the tonemap output). 0 until the first 3D render. The id is
+    /// NOT stable across frames: the FBO chain is recreated on canvas resize
+    /// and renderScale changes, so consumers must re-resolve every frame
+    /// (see outputTextureSource()).
+    unsigned outputColorTexture() const { return renderer_.finalColorTex(); }
+
+    /// Shared liveness token for scene-as-texture consumers (a mesh in
+    /// another scene sampling this scene's output). A consumer keeps a
+    /// weak_ptr to this token and resolves it at draw time: a failed lock()
+    /// or a null `graph` means this SceneGraph is gone and the consumer must
+    /// stop sampling (MeshNode falls back to its plain base color).
+    /// Deliberately weak so a handle can never extend the source scene's
+    /// lifetime. Created lazily on first request; invalidated in ~SceneGraph.
+    struct OutputTextureSource { SceneGraph* graph = nullptr; };
+    std::shared_ptr<OutputTextureSource> outputTextureSource();
+
     /// Callback invoked after render() with the current mesh FBO texture (or 0).
     /// Used to push the texture ID to the DOM element for compositing.
     using FBOTextureCallback = std::function<void(unsigned int texId)>;
@@ -427,6 +445,10 @@ private:
 
     FBOTextureCallback fboTexCb_;
     GizmoProvider gizmoProvider_;
+
+    // Scene-as-texture liveness token (lazily created; see
+    // outputTextureSource()). Consumers hold weak_ptrs only.
+    std::shared_ptr<OutputTextureSource> outputTexSource_;
 
     // GL rendering: pipelines, FBOs, shadows, IBL, post stack. The renderer
     // never touches graph state in its destructor, so member order is not

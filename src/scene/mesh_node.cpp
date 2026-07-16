@@ -73,9 +73,21 @@ static void stage(MeshNode::PendingTex& p, int w, int h, const uint8_t* rgba) {
 }
 
 void MeshNode::setBaseColorTexture(int width, int height, const uint8_t* rgba) {
+    externalBaseColorTex_ = nullptr;  // owned bytes win; drop the live link
     stage(pendingBase_, width, height, rgba);
 }
-void MeshNode::clearBaseColorTexture() { stage(pendingBase_, 0, 0, nullptr); }
+void MeshNode::clearBaseColorTexture() {
+    externalBaseColorTex_ = nullptr;
+    stage(pendingBase_, 0, 0, nullptr);
+}
+
+void MeshNode::setExternalBaseColorTexture(ExternalTextureProvider provider) {
+    externalBaseColorTex_ = std::move(provider);
+    // Stage a clear of the owned slot so a previously uploaded texture is
+    // deleted at the next flush — setters may run without a GL context
+    // current, so the delete cannot happen here.
+    stage(pendingBase_, 0, 0, nullptr);
+}
 
 void MeshNode::setNormalTexture(int width, int height, const uint8_t* rgba) {
     stage(pendingNormal_, width, height, rgba);
@@ -121,6 +133,14 @@ static void flushTex(MeshNode::PendingTex& p, GLuint& glTex) {
         glTex = 0;
     }
     p.dirty = false;
+}
+
+void MeshNode::flushPendingTextures() {
+    flushTex(pendingBase_,     texture_);
+    flushTex(pendingNormal_,   normalTex_);
+    flushTex(pendingMR_,       mrTex_);
+    flushTex(pendingAO_,       aoTex_);
+    flushTex(pendingEmissive_, emissiveTex_);
 }
 
 void MeshNode::uploadToGPU() {
@@ -240,11 +260,7 @@ void MeshNode::uploadToGPU() {
     glBindVertexArray(0);
     gpuDirty_ = false;
 
-    flushTex(pendingBase_,   texture_);
-    flushTex(pendingNormal_, normalTex_);
-    flushTex(pendingMR_,     mrTex_);
-    flushTex(pendingAO_,     aoTex_);
-    flushTex(pendingEmissive_, emissiveTex_);
+    flushPendingTextures();
 }
 
 void MeshNode::onRender(SceneGraph& graph) {
@@ -254,6 +270,7 @@ void MeshNode::onRender(SceneGraph& graph) {
 bool MeshNode::drawRaw() {
     if (mesh_.empty()) return false;
     if (gpuDirty_) uploadToGPU();
+    else flushPendingTextures();  // texture-only changes after geometry upload
     if (!vao_ || indexCount_ == 0) return false;
 
     glBindVertexArray(vao_);
