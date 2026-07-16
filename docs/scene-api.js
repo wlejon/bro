@@ -483,6 +483,11 @@ class SceneGraph {
    *   const node = scene.createGaussianSplat({ cloud });
    *   node.savePly("out.ply");        // round-trip it back to disk
    *
+   * The node transform applies to the whole cloud: position, rotation, and
+   * UNIFORM scale (set at creation via x/y/z/scale or later through the
+   * standard node properties) move/orient/resize the splats like any other
+   * node. Non-uniform scale is not supported for splat nodes.
+   *
    * @param {Object} [opts]
    * @param {string} [opts.path] - .ply to load (resolved app-relative / mounts)
    * @param {Object} [opts.cloud] - in-memory cloud { positions, scales,

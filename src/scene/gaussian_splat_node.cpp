@@ -16,11 +16,17 @@ namespace bro::scene {
 
 static const char* kVert = R"GLSL(#version 330 core
 layout(location = 0) in vec2 aCorner;   // quad corner in [-1,1]^2
-layout(location = 1) in vec3 aCenter;   // world-space splat center
+layout(location = 1) in vec3 aCenter;   // node-local splat center
 layout(location = 2) in vec3 aScale;    // linear std-dev along local axes
 layout(location = 3) in vec4 aQuat;     // orientation, xyzw
 layout(location = 4) in vec4 aColor;    // rgb (view-evaluated) + opacity
 
+// Node world matrix. Rigid transforms + UNIFORM scale only: mat3(uModel)
+// rotates the splat orientation/covariance and scales sigma by the uniform
+// factor. Non-uniform scale is NOT supported for splats — the CPU back-to-
+// front sort and the frustum-cull bounds both assume the transform preserves
+// distance ordering / isotropic sigma padding.
+uniform mat4 uModel;
 uniform mat4 uView;
 uniform mat4 uProj;
 uniform vec2 uFocal;     // focal length in pixels (fx, fy)
@@ -43,7 +49,7 @@ mat3 quatToMat3(vec4 q) {
 }
 
 void main() {
-    vec4 cam = uView * vec4(aCenter, 1.0);
+    vec4 cam = uView * (uModel * vec4(aCenter, 1.0));
     vec4 clip = uProj * cam;
     // Cull splats behind the camera (GL view space looks down -z).
     if (cam.z > -0.01 || clip.w <= 0.0) {
@@ -51,12 +57,13 @@ void main() {
         return;
     }
 
-    // 3D covariance Sigma = R S S^T R^T.
+    // 3D covariance in world space: Sigma = (Rm R S)(Rm R S)^T where
+    // Rm = mat3(uModel) is the node rotation * uniform scale.
     mat3 R = quatToMat3(aQuat);
     mat3 S = mat3(aScale.x, 0.0, 0.0,
                   0.0, aScale.y, 0.0,
                   0.0, 0.0, aScale.z);
-    mat3 M = R * S;
+    mat3 M = mat3(uModel) * (R * S);
     mat3 Sigma = M * transpose(M);
 
     // Jacobian of the perspective projection at the view-space center.
@@ -85,7 +92,13 @@ void main() {
     float disc = sqrt(max(0.0, mid * mid - det));
     float l1 = mid + disc;
     float l2 = mid - disc;
-    vec2 e1 = normalize(vec2(b, l1 - a));
+    // When the screen covariance is axis-aligned (b == 0) rounding can land
+    // l1 exactly on `a`, making (b, l1 - a) the zero vector — normalize()
+    // would return NaN and the splat would silently vanish. Fall back to the
+    // axis-aligned eigenvectors in that case.
+    vec2 ev = vec2(b, l1 - a);
+    vec2 e1 = dot(ev, ev) > 0.0 ? normalize(ev)
+                                : (a >= d ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
     vec2 e2 = vec2(-e1.y, e1.x);
     vec2 axisMajor = e1 * (kSigma * sqrt(l1));
     vec2 axisMinor = e2 * (kSigma * sqrt(max(0.0, l2)));
@@ -206,6 +219,7 @@ void GaussianSplatNode::ensureProgram() {
         program_ = 0;
         return;
     }
+    uModel_ = glGetUniformLocation(program_, "uModel");
     uView_ = glGetUniformLocation(program_, "uView");
     uProj_ = glGetUniformLocation(program_, "uProj");
     uFocal_ = glGetUniformLocation(program_, "uFocal");
@@ -248,8 +262,12 @@ void GaussianSplatNode::uploadGeometry() {
     cloudDirty_ = false;
 }
 
-bool GaussianSplatNode::cameraMovedSince(const float* view16, const float eye[3]) const {
+bool GaussianSplatNode::needsResort(const float* view16, const float eye[3],
+                                    const bromath::Mat4& model) const {
     if (!sorted_) return true;
+    // Node moved/rotated/scaled since the last sort — depth order and the
+    // SH view directions both depend on the world transform.
+    if (std::memcmp(lastModel_, model.data, sizeof(lastModel_)) != 0) return true;
     // View-space Z axis in world coords = third row of the rotation (col-major).
     const float fwd[3] = {view16[2], view16[6], view16[10]};
     float de = 0, df = 0;
@@ -260,15 +278,36 @@ bool GaussianSplatNode::cameraMovedSince(const float* view16, const float eye[3]
     return de > 1e-6f || df > 1e-8f;
 }
 
-void GaussianSplatNode::resortAndUpload(const float* view16, const float eye[3]) {
+void GaussianSplatNode::resortAndUpload(const float* view16, const float eye[3],
+                                        const bromath::Mat4& model) {
     const size_t n = cloud_.count();
     if (n == 0) return;
 
-    // View-space depth key (column-major view * center).z.
+    // View-space depth key of the transformed center, computed without
+    // transforming each center: (viewRow2 . (A p + t)) = ((A^T viewRow2) . p)
+    // + (viewRow2 . t). Pull the view's depth row back into node space once
+    // and keep one dot product per splat. At an identity model matrix this is
+    // exactly the old world-space key (bit-identical output).
+    const float vz[3] = {view16[2], view16[6], view16[10]};
+    float axis[3], bias;
+    for (int j = 0; j < 3; ++j) {
+        axis[j] = model.at(0, j) * vz[0] + model.at(1, j) * vz[1] + model.at(2, j) * vz[2];
+    }
+    bias = view16[14] + (vz[0] * model.at(0, 3) + vz[1] * model.at(1, 3) + vz[2] * model.at(2, 3));
+
+    // Camera position in node space, for the SH view direction. The stored SH
+    // coefficients live in cloud (node-local) space, so the view direction is
+    // evaluated there too — under a rigid + uniform-scale transform this is
+    // the world direction rotated into the cloud's frame.
+    const bromath::Mat4 invModel = bromath::minverse(model);
+    const bromath::Vec3 eyeLocalV = bromath::mtransformPoint(
+        invModel, bromath::Vec3{eye[0], eye[1], eye[2]});
+    const float eyeLocal[3] = {eyeLocalV.x, eyeLocalV.y, eyeLocalV.z};
+
     depthKey_.resize(n);
     for (size_t i = 0; i < n; ++i) {
         const float* p = &cloud_.positions[i * 3];
-        depthKey_[i] = view16[2] * p[0] + view16[6] * p[1] + view16[10] * p[2] + view16[14];
+        depthKey_[i] = axis[0] * p[0] + axis[1] * p[1] + axis[2] * p[2] + bias;
     }
 
     order_.resize(n);
@@ -290,8 +329,8 @@ void GaussianSplatNode::resortAndUpload(const float* view16, const float eye[3])
         const float* rot = &cloud_.rotations[i * 4];
         const float* sh = &cloud_.sh[i * static_cast<size_t>(stride)];
 
-        // View direction from camera to splat (unit).
-        float dx = pos[0] - eye[0], dy = pos[1] - eye[1], dz = pos[2] - eye[2];
+        // View direction from camera to splat (unit), in cloud space.
+        float dx = pos[0] - eyeLocal[0], dy = pos[1] - eyeLocal[1], dz = pos[2] - eyeLocal[2];
         float len = std::sqrt(dx * dx + dy * dy + dz * dz);
         if (len < 1e-8f) { dx = 0; dy = 0; dz = 1; } else { dx /= len; dy /= len; dz /= len; }
 
@@ -340,6 +379,7 @@ void GaussianSplatNode::resortAndUpload(const float* view16, const float eye[3])
 
     std::memcpy(lastEye_, eye, sizeof(lastEye_));
     lastFwd_[0] = view16[2]; lastFwd_[1] = view16[6]; lastFwd_[2] = view16[10];
+    std::memcpy(lastModel_, model.data, sizeof(lastModel_));
     sorted_ = true;
 }
 
@@ -349,10 +389,12 @@ bool GaussianSplatNode::draw(const float* view16, const float* proj16,
     ensureProgram();
     if (!program_) return false;
     if (cloudDirty_ || !vao_) uploadGeometry();
-    if (cameraMovedSince(view16, eye)) resortAndUpload(view16, eye);
+    const bromath::Mat4& model = worldMatrix();
+    if (needsResort(view16, eye, model)) resortAndUpload(view16, eye, model);
     if (instanceData_.empty()) return false;
 
     glUseProgram(program_);
+    glUniformMatrix4fv(uModel_, 1, GL_FALSE, model.data);
     glUniformMatrix4fv(uView_, 1, GL_FALSE, view16);
     glUniformMatrix4fv(uProj_, 1, GL_FALSE, proj16);
     // Focal length in pixels from the projection's (0,0)/(1,1) (col-major).

@@ -38,16 +38,20 @@ public:
     size_t splatCount() const { return cloud_.count(); }
     const bromath::AABB3& localBounds() const { return bounds_; }
 
-    /// Largest per-axis std-dev across all splats (world units — splat
-    /// centers/scales are consumed in world space by the shader). Culling
-    /// pads the center bounds by a multiple of this to cover the 3-sigma
-    /// quads the vertex shader emits.
+    /// Largest per-axis std-dev across all splats (node-local units — splat
+    /// centers/scales live in cloud space and are taken through the node's
+    /// world matrix by the splat pipeline). Culling pads the center bounds by
+    /// a multiple of this to cover the 3-sigma quads the vertex shader emits;
+    /// transforming the padded box by the world matrix scales the pad along
+    /// with the sigmas.
     float maxSigma() const { return maxSigma_; }
 
     /// Draw the cloud. Matrices are column-major 4x4 (bromath layout). `eye` is
     /// the world-space camera position; `vpW`/`vpH` the target viewport size in
-    /// pixels (the mesh FBO). Called by SceneGraph during the splat pass with
-    /// the splat GL state already set. Returns false if nothing was drawn.
+    /// pixels (the mesh FBO). The node's worldMatrix() is applied in the splat
+    /// pipeline (rigid transforms + uniform scale only). Called by SceneGraph
+    /// during the splat pass with the splat GL state already set. Returns false
+    /// if nothing was drawn.
     bool draw(const float* view16, const float* proj16,
               const float eye[3], int vpW, int vpH);
 
@@ -55,8 +59,10 @@ private:
     void releaseGL();
     void ensureProgram();
     void uploadGeometry();           // static per-splat attributes -> GPU order buffer
-    void resortAndUpload(const float* view16, const float eye[3]);
-    bool cameraMovedSince(const float* view16, const float eye[3]) const;
+    void resortAndUpload(const float* view16, const float eye[3],
+                         const bromath::Mat4& model);
+    bool needsResort(const float* view16, const float eye[3],
+                     const bromath::Mat4& model) const;
 
     void refreshBounds();
 
@@ -67,7 +73,7 @@ private:
 
     // GL program (lazily compiled, shared shape but per-node owned for now).
     GLuint program_ = 0;
-    GLint uView_ = -1, uProj_ = -1, uFocal_ = -1, uViewport_ = -1;
+    GLint uModel_ = -1, uView_ = -1, uProj_ = -1, uFocal_ = -1, uViewport_ = -1;
 
     // Geometry: a unit quad (4 corners) drawn instanced once per splat.
     GLuint vao_ = 0;
@@ -82,9 +88,11 @@ private:
     std::vector<uint32_t> order_;   // splat indices, back-to-front
     std::vector<float> depthKey_;   // scratch: view-space depth per splat
 
-    // Camera state at last sort, to skip re-sorting when the view is static.
+    // Camera + node-transform state at last sort, to skip re-sorting when the
+    // view and the node are static.
     float lastEye_[3] = {0, 0, 0};
     float lastFwd_[3] = {0, 0, 0};
+    float lastModel_[16] = {0};
     bool sorted_ = false;
 };
 

@@ -122,6 +122,93 @@ if (!scene) {
     empty.destroy();
 
     fs.unlinkSync(plyPath);
+
+    // =====================================================================
+    // Node transform: position / rotation / uniform scale apply to the
+    // cloud (splat centers are node-local; the pipeline applies the node's
+    // world matrix). Analytic screen positions: camera at (0,0,5) looking
+    // at the origin, fov 60, 128 px -> world (x,0,0) lands at
+    // px = 64 + (x / 5) * (64 / tan(30 deg)) = 64 + 22.17 * x.
+    // =====================================================================
+    const diffCount = (a, b, tol) => {
+        if (a.width !== b.width || a.height !== b.height) return a.width * a.height;
+        let n = 0;
+        for (let i = 0; i < a.data.length; i += 4) {
+            if (Math.abs(a.data[i]     - b.data[i])     > tol ||
+                Math.abs(a.data[i + 1] - b.data[i + 1]) > tol ||
+                Math.abs(a.data[i + 2] - b.data[i + 2]) > tol ||
+                Math.abs(a.data[i + 3] - b.data[i + 3]) > tol) n++;
+        }
+        return n;
+    };
+    const patchMaxAlpha = (img, cx, cy, r) => {
+        let m = 0;
+        for (let y = cy - r; y <= cy + r; y++) {
+            for (let x = cx - r; x <= cx + r; x++) {
+                if (x < 0 || y < 0 || x >= img.width || y >= img.height) continue;
+                m = Math.max(m, img.data[(y * img.width + x) * 4 + 3]);
+            }
+        }
+        return m;
+    };
+    const oneSplat = (x, y, z) => {
+        const positions = new Float32Array([x, y, z]);
+        const scales = new Float32Array(3).fill(0.1);
+        const rotations = new Float32Array([0, 0, 0, 1]);
+        const opacities = new Float32Array([1]);
+        const sh = new Float32Array(3).fill((1 - 0.5) / C0); // white
+        return { positions, scales, rotations, opacities, sh, shDegree: 0 };
+    };
+
+    scene.setToneMap({ mode: 'linear', exposure: 1.0, gamma: 1.0 });
+
+    // Golden: a world-space cloud at (2,0,0) with an identity node transform
+    // (the pre-fix common case, e.g. PLY-loaded clouds).
+    const baked = scene.createGaussianSplat({ cloud: oneSplat(2, 0, 0) });
+    const imgBaked = scene.captureFrame();
+    assert(patchMaxAlpha(imgBaked, 108, 64, 5) > 128,
+        'baked world-space splat renders at the analytic position (108,64)');
+    baked.destroy();
+
+    // Same cloud at the local origin, moved by the NODE transform: must land
+    // in the same place and vacate the origin.
+    const moved = scene.createGaussianSplat({ cloud: oneSplat(0, 0, 0) });
+    const imgAtOrigin = scene.captureFrame();
+    assert(patchMaxAlpha(imgAtOrigin, 64, 64, 5) > 128, 'splat visible at origin before move');
+    assert(patchMaxAlpha(imgAtOrigin, 108, 64, 5) === 0, 'target region empty before move');
+
+    moved.position = [2, 0, 0];
+    const imgMoved = scene.captureFrame();
+    assert(patchMaxAlpha(imgMoved, 108, 64, 5) > 128,
+        'node position moves the splat to the analytic position (108,64)');
+    assert(patchMaxAlpha(imgMoved, 64, 64, 5) === 0, 'splat vacated the origin');
+    const ndEquiv = diffCount(imgBaked, imgMoved, 2);
+    assert(ndEquiv === 0,
+        `node-transformed splat matches the world-space golden (diff pixels ${ndEquiv})`);
+    moved.destroy();
+
+    // Rotation: local (1.5,0,0) spun 180 deg about Z lands at world (-1.5,0,0)
+    // -> screen x mirrors 97 -> 31 (both on the y=64 row, so no dependence on
+    // capture row order).
+    const rot = scene.createGaussianSplat({ cloud: oneSplat(1.5, 0, 0) });
+    const imgPreRot = scene.captureFrame();
+    assert(patchMaxAlpha(imgPreRot, 97, 64, 5) > 128, 'splat right of center before rotation');
+    rot.rotation = Math.PI;
+    const imgRot = scene.captureFrame();
+    assert(patchMaxAlpha(imgRot, 31, 64, 5) > 128,
+        'node rotation carries the splat to the mirrored position (31,64)');
+    assert(patchMaxAlpha(imgRot, 97, 64, 5) === 0, 'splat vacated the pre-rotation position');
+    rot.destroy();
+
+    // Uniform scale: local (1,0,0) at node scale 2 lands at world (2,0,0).
+    const scaled = scene.createGaussianSplat({ cloud: oneSplat(1, 0, 0), scale: 2 });
+    const imgScaled = scene.captureFrame();
+    assert(patchMaxAlpha(imgScaled, 108, 64, 5) > 128,
+        'uniform node scale scales splat positions (1 * 2 -> 108,64)');
+    assert(patchMaxAlpha(imgScaled, 86, 64, 3) === 0,
+        'nothing left at the unscaled position (86,64)');
+    scaled.destroy();
+    flush();
 }
 
 document.body.removeChild(canvas);

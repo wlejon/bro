@@ -135,8 +135,10 @@ if (!probe.scene) {
         scn.createInstancedMesh({ mesh: boxMesh, color: 'red',
             instances: new Float32Array([...inst(-500, 0, 0), ...inst(-502, 0, 0)]) });
 
-        // Splats: centers are consumed in world space, so bake the offset
-        // into the cloud positions.
+        // Splats: cloud centers are node-local; the off-screen node is moved
+        // by its node transform, so the cull must agree with the transformed
+        // render position (the pixel-invariance check below would catch a
+        // cull/render disagreement either way).
         const mkCloud = (cx) => {
             const N = 3;
             const positions = new Float32Array([cx, 0, 0, cx + 1, 0, 0, cx - 1, 0, 0]);
@@ -149,7 +151,7 @@ if (!probe.scene) {
             return { positions, scales, rotations, opacities, sh, shDegree: 0 };
         };
         scn.createGaussianSplat({ cloud: mkCloud(0) });
-        scn.createGaussianSplat({ cloud: mkCloud(-1000) });
+        scn.createGaussianSplat({ cloud: mkCloud(0), x: -1000 });
 
         // Particles: world-space sims, burst on creation, long lifetime.
         scn.createParticles3D({ position: [0, 0, 0], rate: 0, burst: 20,

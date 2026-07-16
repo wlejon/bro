@@ -204,14 +204,16 @@ bool SceneRenderer::nodeWorldBounds(SceneNode* n, bromath::AABB3& out) const {
     case SceneNode::Type::GaussianSplat: {
         auto* s = static_cast<GaussianSplatNode*>(n);
         if (s->splatCount() == 0) return false;
-        // Splat centers/scales are consumed in world space (the shader never
-        // sees the node transform), so no worldMatrix here. Pad the center
-        // bounds by the quad extent: kSigma = 3 in the splat VS, plus half a
-        // sigma of headroom for the low-pass screen dilation.
+        // Pad the local center bounds by the quad extent — kSigma = 3 in the
+        // splat VS, plus half a sigma of headroom for the low-pass screen
+        // dilation — then take the padded box through the node's world matrix
+        // (the splat pipeline applies uModel). atransform scales the pad by
+        // the node's uniform scale, matching the shader's sigma scaling.
         float pad = 3.5f * s->maxSigma();
-        out = s->localBounds();
-        out.min = out.min - Vec3{pad, pad, pad};
-        out.max = out.max + Vec3{pad, pad, pad};
+        bromath::AABB3 local = s->localBounds();
+        local.min = local.min - Vec3{pad, pad, pad};
+        local.max = local.max + Vec3{pad, pad, pad};
+        out = bromath::atransform(local, s->worldMatrix());
         return true;
     }
     case SceneNode::Type::Particles3D:
