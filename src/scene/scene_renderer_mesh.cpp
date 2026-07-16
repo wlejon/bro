@@ -1,6 +1,7 @@
 #include "scene/scene_renderer.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer_internal.h"
+#include "scene/skinned_mesh_node.h"
 #include "canvas/canvas_scene.h"
 #include "util/log.h"
 
@@ -21,106 +22,104 @@ using bromath::Vec3;
 using bromath::Quat;
 using bromath::Mat4;
 
+// Query every uniform location the mesh draw path uses. Shared by the regular
+// and skinned mesh pipelines — both link mesh.frag against mesh.vert (the
+// skinned one with the SKINNED define), so the uniform surface is identical.
+void SceneRenderer::queryMeshUniformLocs(GLuint prog, MeshDrawLocs& d,
+                                         MeshProgramLocs& l) {
+    auto U = [prog](const char* name) {
+        return glGetUniformLocation(prog, name);
+    };
+    d.mvp            = U("uMVP");
+    d.model          = U("uModel");
+    d.color          = U("uColor");
+    d.emissive       = U("uEmissive");
+    d.emissiveColor  = U("uEmissiveColor");
+    d.metallic       = U("uMetallic");
+    d.roughness      = U("uRoughness");
+    d.unlit          = U("uUnlit");
+    d.twoSided       = U("uTwoSided");
+    d.subsurface     = U("uSubsurface");
+    d.alphaCutoff    = U("uAlphaCutoff");
+    d.useVertexColor = U("uUseVertexColor");
+    d.nearClip       = U("uNearClip");
+    d.windMask       = U("uWindMask");
+    d.useTexture     = U("uUseTexture");
+    d.baseColorTex   = U("uBaseColorTex");
+    d.normalMap      = U("uNormalMap");
+    d.mrMap          = U("uMRMap");
+    d.aoMap          = U("uAOMap");
+    d.emissiveMap    = U("uEmissiveMap");
+    d.hasTangent     = U("uHasTangent");
+    d.hasNormalMap   = U("uHasNormalMap");
+    d.hasMRMap       = U("uHasMRMap");
+    d.hasAOMap       = U("uHasAOMap");
+    d.hasEmissiveMap = U("uHasEmissiveMap");
+    d.receivesShadow = U("uReceivesShadow");
+    d.fogStart       = U("uFogStart");
+    d.fogEnd         = U("uFogEnd");
+    d.fogColor       = U("uFogColor");
+    d.ambient        = U("uAmbient");
+    d.windDir        = U("uWindDir");
+    d.windStrength   = U("uWindStrength");
+    d.windTime       = U("uWindTime");
+    d.windFreq       = U("uWindFreq");
+
+    l.lightCount           = U("uLightCount");
+    l.lightType            = U("uLightType");
+    l.lightPos             = U("uLightPos");
+    l.lightDir             = U("uLightDir");
+    l.lightColor           = U("uLightColor");
+    l.lightIntensity       = U("uLightIntensity");
+    l.lightRange           = U("uLightRange");
+    l.lightSpotCos         = U("uLightSpotCos");
+    l.lightShadowSlot      = U("uLightShadowSlot");
+    l.lightShadowSlotCount = U("uLightShadowSlotCount");
+    l.lightCascadeSplit    = U("uLightCascadeSplit");
+    l.shadowAtlas          = U("uShadowAtlas");
+    l.shadowMatrix         = U("uShadowMatrix");
+    l.shadowAtlasRect      = U("uShadowAtlasRect");
+    l.shadowBias           = U("uShadowBias");
+    l.shadowAtlasTexel     = U("uShadowAtlasTexel");
+    l.shadowPCFTaps        = U("uShadowPCFTaps");
+    l.iblEnabled           = U("uIBLEnabled");
+    l.iblIrradiance        = U("uIBLIrradiance");
+    l.iblPrefilter         = U("uIBLPrefilter");
+    l.iblBRDF              = U("uIBLBRDF");
+    l.iblIntensity         = U("uIBLIntensity");
+    l.iblRotation          = U("uIBLRotation");
+    l.iblPrefilterMaxLOD   = U("uIBLPrefilterMaxLOD");
+}
+
 void SceneRenderer::ensureMeshPipeline() {
     if (meshProgram_) return;
 
     meshProgram_ = linkProgram(kMeshVertSrc, kMeshFragSrc, "Mesh program");
+    if (!meshProgram_) return;
 
-    if (meshProgram_) {
-        uMVP_ = glGetUniformLocation(meshProgram_, "uMVP");
-        uModel_ = glGetUniformLocation(meshProgram_, "uModel");
-        uColor_ = glGetUniformLocation(meshProgram_, "uColor");
-        uEmissive_ = glGetUniformLocation(meshProgram_, "uEmissive");
-        uEmissiveColor_ = glGetUniformLocation(meshProgram_, "uEmissiveColor");
-        uMetallic_ = glGetUniformLocation(meshProgram_, "uMetallic");
-        uRoughness_ = glGetUniformLocation(meshProgram_, "uRoughness");
-        uUseVertexColor_ = glGetUniformLocation(meshProgram_, "uUseVertexColor");
-        uUseTexture_     = glGetUniformLocation(meshProgram_, "uUseTexture");
-        uBaseColorTex_   = glGetUniformLocation(meshProgram_, "uBaseColorTex");
-        uHasTangent_     = glGetUniformLocation(meshProgram_, "uHasTangent");
-        uHasNormalMap_   = glGetUniformLocation(meshProgram_, "uHasNormalMap");
-        uHasMRMap_       = glGetUniformLocation(meshProgram_, "uHasMRMap");
-        uHasAOMap_       = glGetUniformLocation(meshProgram_, "uHasAOMap");
-        uHasEmissiveMap_ = glGetUniformLocation(meshProgram_, "uHasEmissiveMap");
-        uNormalMap_      = glGetUniformLocation(meshProgram_, "uNormalMap");
-        uMRMap_          = glGetUniformLocation(meshProgram_, "uMRMap");
-        uAOMap_          = glGetUniformLocation(meshProgram_, "uAOMap");
-        uEmissiveMap_    = glGetUniformLocation(meshProgram_, "uEmissiveMap");
-        uReceivesShadow_ = glGetUniformLocation(meshProgram_, "uReceivesShadow");
-        uFogStart_ = glGetUniformLocation(meshProgram_, "uFogStart");
-        uFogEnd_ = glGetUniformLocation(meshProgram_, "uFogEnd");
-        uFogColor_ = glGetUniformLocation(meshProgram_, "uFogColor");
-        uAlphaCutoff_ = glGetUniformLocation(meshProgram_, "uAlphaCutoff");
-        uNearClip_ = glGetUniformLocation(meshProgram_, "uNearClip");
-        uAmbient_ = glGetUniformLocation(meshProgram_, "uAmbient");
-        uUnlit_   = glGetUniformLocation(meshProgram_, "uUnlit");
-        uTwoSided_   = glGetUniformLocation(meshProgram_, "uTwoSided");
-        uSubsurface_ = glGetUniformLocation(meshProgram_, "uSubsurface");
-        uWindDir_      = glGetUniformLocation(meshProgram_, "uWindDir");
-        uWindStrength_ = glGetUniformLocation(meshProgram_, "uWindStrength");
-        uWindTime_     = glGetUniformLocation(meshProgram_, "uWindTime");
-        uWindFreq_     = glGetUniformLocation(meshProgram_, "uWindFreq");
-        uWindMask_     = glGetUniformLocation(meshProgram_, "uWindMask");
-        uLightCount_ = glGetUniformLocation(meshProgram_, "uLightCount");
-        uLightType_ = glGetUniformLocation(meshProgram_, "uLightType");
-        uLightPos_ = glGetUniformLocation(meshProgram_, "uLightPos");
-        uLightDirArr_ = glGetUniformLocation(meshProgram_, "uLightDir");
-        uLightColor_ = glGetUniformLocation(meshProgram_, "uLightColor");
-        uLightIntensity_ = glGetUniformLocation(meshProgram_, "uLightIntensity");
-        uLightRange_ = glGetUniformLocation(meshProgram_, "uLightRange");
-        uLightSpotCos_ = glGetUniformLocation(meshProgram_, "uLightSpotCos");
-        uLightShadowSlot_  = glGetUniformLocation(meshProgram_, "uLightShadowSlot");
-        uLightShadowSlotCount_ = glGetUniformLocation(meshProgram_, "uLightShadowSlotCount");
-        uLightCascadeSplit_    = glGetUniformLocation(meshProgram_, "uLightCascadeSplit");
-        uShadowAtlas_      = glGetUniformLocation(meshProgram_, "uShadowAtlas");
-        uShadowMatrix_     = glGetUniformLocation(meshProgram_, "uShadowMatrix");
-        uShadowAtlasRect_  = glGetUniformLocation(meshProgram_, "uShadowAtlasRect");
-        uShadowBiasArr_    = glGetUniformLocation(meshProgram_, "uShadowBias");
-        uShadowAtlasTexel_ = glGetUniformLocation(meshProgram_, "uShadowAtlasTexel");
-        uShadowPCFTaps_    = glGetUniformLocation(meshProgram_, "uShadowPCFTaps");
+    queryMeshUniformLocs(meshProgram_, meshDraw_, meshLocs_);
+}
 
-        uIBLEnabled_         = glGetUniformLocation(meshProgram_, "uIBLEnabled");
-        uIBLIrradiance_      = glGetUniformLocation(meshProgram_, "uIBLIrradiance");
-        uIBLPrefilter_       = glGetUniformLocation(meshProgram_, "uIBLPrefilter");
-        uIBLBRDF_            = glGetUniformLocation(meshProgram_, "uIBLBRDF");
-        uIBLIntensity_       = glGetUniformLocation(meshProgram_, "uIBLIntensity");
-        uIBLRotation_        = glGetUniformLocation(meshProgram_, "uIBLRotation");
-        uIBLPrefilterMaxLOD_ = glGetUniformLocation(meshProgram_, "uIBLPrefilterMaxLOD");
+void SceneRenderer::ensureSkinnedMeshPipeline() {
+    if (meshSkinnedProgram_) return;
 
-        // Legacy — no longer declared in the shader, fine if -1.
-        uLightDir_ = -1;
-        uCameraPos_ = -1;
+    std::string vsSrc = withSkinnedDefine(kMeshVertSrc);
+    meshSkinnedProgram_ =
+        linkProgram(vsSrc.c_str(), kMeshFragSrc, "Skinned mesh program");
+    if (!meshSkinnedProgram_) return;
 
-        // Mirror into the shared MeshProgramLocs struct so uploadLights can
-        // target either program from a single code path.
-        meshLocs_.lightCount           = uLightCount_;
-        meshLocs_.lightType            = uLightType_;
-        meshLocs_.lightPos             = uLightPos_;
-        meshLocs_.lightDir             = uLightDirArr_;
-        meshLocs_.lightColor           = uLightColor_;
-        meshLocs_.lightIntensity       = uLightIntensity_;
-        meshLocs_.lightRange           = uLightRange_;
-        meshLocs_.lightSpotCos         = uLightSpotCos_;
-        meshLocs_.lightShadowSlot      = uLightShadowSlot_;
-        meshLocs_.lightShadowSlotCount = uLightShadowSlotCount_;
-        meshLocs_.lightCascadeSplit    = uLightCascadeSplit_;
-        meshLocs_.shadowAtlas          = uShadowAtlas_;
-        meshLocs_.shadowMatrix         = uShadowMatrix_;
-        meshLocs_.shadowAtlasRect      = uShadowAtlasRect_;
-        meshLocs_.shadowBias           = uShadowBiasArr_;
-        meshLocs_.shadowAtlasTexel     = uShadowAtlasTexel_;
-        meshLocs_.shadowPCFTaps        = uShadowPCFTaps_;
-        meshLocs_.iblEnabled           = uIBLEnabled_;
-        meshLocs_.iblIrradiance        = uIBLIrradiance_;
-        meshLocs_.iblPrefilter         = uIBLPrefilter_;
-        meshLocs_.iblBRDF              = uIBLBRDF_;
-        meshLocs_.iblIntensity         = uIBLIntensity_;
-        meshLocs_.iblRotation          = uIBLRotation_;
-        meshLocs_.iblPrefilterMaxLOD   = uIBLPrefilterMaxLOD_;
+    queryMeshUniformLocs(meshSkinnedProgram_, meshSkinnedDraw_, meshSkinnedLocs_);
+
+    // Bind the palette block to SkinnedMeshNode::kPaletteBinding once —
+    // per-node palettes rebind the buffer, not the block.
+    GLuint bi = glGetUniformBlockIndex(meshSkinnedProgram_, "BonePalette");
+    if (bi != GL_INVALID_INDEX) {
+        glUniformBlockBinding(meshSkinnedProgram_, bi,
+                              SkinnedMeshNode::kPaletteBinding);
     }
 }
 
-void SceneRenderer::renderMeshNode(MeshNode* mesh) {
+void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
     // Camera-relative rendering: offset model position by camera to avoid
     // float precision issues at large world coordinates (planet scale).
     Mat4 model = mesh->worldMatrix();
@@ -137,20 +136,20 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh) {
 
     Mat4 mvp = bromath::mmul(bromath::mmul(graph_.projectionMatrix_, viewRot), model);
 
-    glUniformMatrix4fv(uMVP_, 1, GL_FALSE, mvp.data);
-    glUniformMatrix4fv(uModel_, 1, GL_FALSE, model.data);
-    glUniform4fv(uColor_, 1, mesh->color());
-    glUniform1f(uEmissive_, mesh->emissive());
-    glUniform3fv(uEmissiveColor_, 1, mesh->emissiveColor());
-    glUniform1f(uMetallic_, mesh->metallic());
-    glUniform1f(uRoughness_, mesh->roughness());
-    if (uUnlit_ >= 0) glUniform1i(uUnlit_, mesh->unlit() ? 1 : 0);
-    if (uTwoSided_ >= 0)   glUniform1i(uTwoSided_, mesh->twoSided() ? 1 : 0);
-    if (uSubsurface_ >= 0) glUniform1f(uSubsurface_, mesh->subsurface());
-    if (uAlphaCutoff_ >= 0) glUniform1f(uAlphaCutoff_, mesh->alphaCutoff());
-    glUniform1i(uUseVertexColor_, mesh->vertexColorTintEnabled() ? 1 : 0);
-    glUniform1f(uNearClip_, mesh->nearClipDist());
-    if (uWindMask_ >= 0) glUniform1f(uWindMask_, mesh->windMask());
+    glUniformMatrix4fv(L.mvp, 1, GL_FALSE, mvp.data);
+    glUniformMatrix4fv(L.model, 1, GL_FALSE, model.data);
+    glUniform4fv(L.color, 1, mesh->color());
+    glUniform1f(L.emissive, mesh->emissive());
+    glUniform3fv(L.emissiveColor, 1, mesh->emissiveColor());
+    glUniform1f(L.metallic, mesh->metallic());
+    glUniform1f(L.roughness, mesh->roughness());
+    if (L.unlit >= 0) glUniform1i(L.unlit, mesh->unlit() ? 1 : 0);
+    if (L.twoSided >= 0)   glUniform1i(L.twoSided, mesh->twoSided() ? 1 : 0);
+    if (L.subsurface >= 0) glUniform1f(L.subsurface, mesh->subsurface());
+    if (L.alphaCutoff >= 0) glUniform1f(L.alphaCutoff, mesh->alphaCutoff());
+    glUniform1i(L.useVertexColor, mesh->vertexColorTintEnabled() ? 1 : 0);
+    glUniform1f(L.nearClip, mesh->nearClipDist());
+    if (L.windMask >= 0) glUniform1f(L.windMask, mesh->windMask());
 
     // Bind baseColor texture if present. Texture composes with the baseColor
     // factor and per-vertex tint — matches glTF "baseColorTexture *
@@ -158,8 +157,8 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh) {
     bool bindTex = mesh->hasBaseColorTexture();
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, bindTex ? mesh->baseColorTextureId() : fallback2D_);
-    glUniform1i(uBaseColorTex_, 0);
-    glUniform1i(uUseTexture_, bindTex ? 1 : 0);
+    glUniform1i(L.baseColorTex, 0);
+    glUniform1i(L.useTexture, bindTex ? 1 : 0);
 
     // PBR map bindings — units 5/6/7/8 avoid collision with baseColor (0),
     // shadow atlas (1), and IBL cubemaps/BRDF LUT (2/3/4).
@@ -170,29 +169,36 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh) {
     if (hasNM) {
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D, mesh->normalTextureId());
-        if (uNormalMap_ >= 0) glUniform1i(uNormalMap_, 5);
+        if (L.normalMap >= 0) glUniform1i(L.normalMap, 5);
     }
     if (hasMR) {
         glActiveTexture(GL_TEXTURE6);
         glBindTexture(GL_TEXTURE_2D, mesh->metallicRoughnessTextureId());
-        if (uMRMap_ >= 0) glUniform1i(uMRMap_, 6);
+        if (L.mrMap >= 0) glUniform1i(L.mrMap, 6);
     }
     if (hasAO) {
         glActiveTexture(GL_TEXTURE7);
         glBindTexture(GL_TEXTURE_2D, mesh->occlusionTextureId());
-        if (uAOMap_ >= 0) glUniform1i(uAOMap_, 7);
+        if (L.aoMap >= 0) glUniform1i(L.aoMap, 7);
     }
     if (hasEM) {
         glActiveTexture(GL_TEXTURE8);
         glBindTexture(GL_TEXTURE_2D, mesh->emissiveTextureId());
-        if (uEmissiveMap_ >= 0) glUniform1i(uEmissiveMap_, 8);
+        if (L.emissiveMap >= 0) glUniform1i(L.emissiveMap, 8);
     }
-    if (uHasTangent_     >= 0) glUniform1i(uHasTangent_,     mesh->mesh().hasTangents() ? 1 : 0);
-    if (uHasNormalMap_   >= 0) glUniform1i(uHasNormalMap_,   hasNM ? 1 : 0);
-    if (uHasMRMap_       >= 0) glUniform1i(uHasMRMap_,       hasMR ? 1 : 0);
-    if (uHasAOMap_       >= 0) glUniform1i(uHasAOMap_,       hasAO ? 1 : 0);
-    if (uHasEmissiveMap_ >= 0) glUniform1i(uHasEmissiveMap_, hasEM ? 1 : 0);
-    if (uReceivesShadow_ >= 0) glUniform1i(uReceivesShadow_, mesh->receivesShadow() ? 1 : 0);
+    if (L.hasTangent     >= 0) glUniform1i(L.hasTangent,     mesh->mesh().hasTangents() ? 1 : 0);
+    if (L.hasNormalMap   >= 0) glUniform1i(L.hasNormalMap,   hasNM ? 1 : 0);
+    if (L.hasMRMap       >= 0) glUniform1i(L.hasMRMap,       hasMR ? 1 : 0);
+    if (L.hasAOMap       >= 0) glUniform1i(L.hasAOMap,       hasAO ? 1 : 0);
+    if (L.hasEmissiveMap >= 0) glUniform1i(L.hasEmissiveMap, hasEM ? 1 : 0);
+    if (L.receivesShadow >= 0) glUniform1i(L.receivesShadow, mesh->receivesShadow() ? 1 : 0);
+
+    // Skinned nodes: flush palette/skin-VBO updates and bind the palette UBO
+    // before the draw. Only reached with the skinned program bound — the
+    // render walk routes skinReady() nodes here (see render3D).
+    if (SkinnedMeshNode* sm = mesh->asSkinnedMesh()) {
+        sm->prepareSkinnedDraw();
+    }
 
     // Per-mesh polygon offset (depth bias). Used by callers that need to
     // layer co-located meshes — e.g. terrain LOD shells that overlap and need

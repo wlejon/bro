@@ -1,6 +1,7 @@
 #include "scene/scene_renderer.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer_internal.h"
+#include "scene/skinned_mesh_node.h"
 #include "canvas/canvas_scene.h"
 #include "util/log.h"
 
@@ -32,6 +33,7 @@ SceneRenderer::~SceneRenderer() {
     destroyMeshFBO();
     destroyTonemapFBO();
     if (meshProgram_) { glDeleteProgram(meshProgram_); meshProgram_ = 0; }
+    if (meshSkinnedProgram_) { glDeleteProgram(meshSkinnedProgram_); meshSkinnedProgram_ = 0; }
     if (meshInstancedProgram_) { glDeleteProgram(meshInstancedProgram_); meshInstancedProgram_ = 0; }
     if (bbProgram_) { glDeleteProgram(bbProgram_); bbProgram_ = 0; }
     if (bbVBO_) { glDeleteBuffers(1, &bbVBO_); bbVBO_ = 0; }
@@ -47,6 +49,7 @@ SceneRenderer::~SceneRenderer() {
     destroyShadowAtlas();
     if (shadowProgram_) { glDeleteProgram(shadowProgram_); shadowProgram_ = 0; }
     if (shadowInstancedProgram_) { glDeleteProgram(shadowInstancedProgram_); shadowInstancedProgram_ = 0; }
+    if (shadowSkinnedProgram_) { glDeleteProgram(shadowSkinnedProgram_); shadowSkinnedProgram_ = 0; }
     clearEnvironment();
     if (envConvertProgram_) { glDeleteProgram(envConvertProgram_); envConvertProgram_ = 0; }
     if (envConvertVBO_) { glDeleteBuffers(1, &envConvertVBO_); envConvertVBO_ = 0; }
@@ -153,6 +156,17 @@ void SceneRenderer::destroyMeshFBO() {
     meshFBOHeight_ = 0;
 }
 
+void SceneRenderer::uploadMeshGlobals(const MeshDrawLocs& L) {
+    glUniform1f(L.fogStart, fogStart_);
+    glUniform1f(L.fogEnd, fogEnd_);
+    glUniform3f(L.fogColor, fogColor_[0], fogColor_[1], fogColor_[2]);
+    glUniform3f(L.ambient, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
+    if (L.windDir      >= 0) glUniform3fv(L.windDir, 1, windDir_);
+    if (L.windStrength >= 0) glUniform1f(L.windStrength, windStrength_);
+    if (L.windTime     >= 0) glUniform1f(L.windTime, windTime_);
+    if (L.windFreq     >= 0) glUniform1f(L.windFreq, windFreq_);
+}
+
 void SceneRenderer::render3D() {
     hasMeshContent_ = false;
 
@@ -232,33 +246,52 @@ void SceneRenderer::render3D() {
             // --- Mesh pass --------------------------------------------------
             // Lit meshes render to the HDR FBO (pass through tonemap). Unlit
             // meshes are deferred to a post-tonemap overlay pass so their
-            // authored colors aren't desaturated by ACES.
+            // authored colors aren't desaturated by ACES. Skinned meshes
+            // (SkinnedMeshNode with a ready skin) are collected during the
+            // same walk and drawn right after with the SKINNED program
+            // variant; a skinned node whose skin doesn't match its mesh
+            // degrades to the static path.
             std::vector<MeshNode*> unlitMeshes;
+            std::vector<MeshNode*> skinnedMeshes;
+            std::vector<MeshNode*> unlitSkinnedMeshes;
             if (hasMeshNodes && meshProgram_) {
                 glEnable(GL_CULL_FACE);
                 glCullFace(GL_BACK);
                 glUseProgram(meshProgram_);
 
-                glUniform1f(uFogStart_, fogStart_);
-                glUniform1f(uFogEnd_, fogEnd_);
-                glUniform3f(uFogColor_, fogColor_[0], fogColor_[1], fogColor_[2]);
-                glUniform3f(uAmbient_, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
-                if (uWindDir_      >= 0) glUniform3fv(uWindDir_, 1, windDir_);
-                if (uWindStrength_ >= 0) glUniform1f(uWindStrength_, windStrength_);
-                if (uWindTime_     >= 0) glUniform1f(uWindTime_, windTime_);
-                if (uWindFreq_     >= 0) glUniform1f(uWindFreq_, windFreq_);
+                uploadMeshGlobals(meshDraw_);
                 uploadLights(activeLights, meshLocs_);
 
                 std::function<void(SceneNode*)> walkMesh = [&](SceneNode* n) {
                     if (!n->visible()) return;
                     if (n->type() == SceneNode::Type::Mesh) {
                         auto* m = static_cast<MeshNode*>(n);
-                        if (m->unlit()) unlitMeshes.push_back(m);
-                        else            renderMeshNode(m);
+                        auto* sm = m->asSkinnedMesh();
+                        if (sm && sm->skinReady()) {
+                            (m->unlit() ? unlitSkinnedMeshes : skinnedMeshes)
+                                .push_back(m);
+                        } else if (m->unlit()) {
+                            unlitMeshes.push_back(m);
+                        } else {
+                            renderMeshNode(m, meshDraw_);
+                        }
                     }
                     for (auto* c : n->children()) walkMesh(c);
                 };
                 walkMesh(graph_.root_.get());
+
+                // Skinned sub-pass: identical state, skinned program.
+                if (!skinnedMeshes.empty()) {
+                    ensureSkinnedMeshPipeline();
+                    if (meshSkinnedProgram_) {
+                        glUseProgram(meshSkinnedProgram_);
+                        uploadMeshGlobals(meshSkinnedDraw_);
+                        uploadLights(activeLights, meshSkinnedLocs_);
+                        for (MeshNode* m : skinnedMeshes)
+                            renderMeshNode(m, meshSkinnedDraw_);
+                        glUseProgram(meshProgram_);
+                    }
+                }
 
                 glDisable(GL_CULL_FACE);
             }
@@ -374,7 +407,8 @@ void SceneRenderer::render3D() {
             // desaturated by ACES. Shares the mesh FBO's depth buffer so they
             // still occlude against scene geometry. Gizmo handles disable
             // depth test to stay always-on-top.
-            const bool hasOverlay = !unlitMeshes.empty() || hasGizmo;
+            const bool hasOverlay = !unlitMeshes.empty() ||
+                                    !unlitSkinnedMeshes.empty() || hasGizmo;
             if (hasOverlay && tonemapFBO_ && meshProgram_) {
                 glBindFramebuffer(GL_FRAMEBUFFER, tonemapFBO_);
                 glViewport(0, 0, tonemapFBOWidth_, tonemapFBOHeight_);
@@ -387,23 +421,40 @@ void SceneRenderer::render3D() {
                 glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
                                     GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
                 glUseProgram(meshProgram_);
-                glUniform1f(uFogStart_, 0.0f);
-                glUniform1f(uFogEnd_, 0.0f);
-                glUniform3f(uFogColor_, 0.0f, 0.0f, 0.0f);
-                glUniform3f(uAmbient_, 0.0f, 0.0f, 0.0f);
+                glUniform1f(meshDraw_.fogStart, 0.0f);
+                glUniform1f(meshDraw_.fogEnd, 0.0f);
+                glUniform3f(meshDraw_.fogColor, 0.0f, 0.0f, 0.0f);
+                glUniform3f(meshDraw_.ambient, 0.0f, 0.0f, 0.0f);
                 // uUnlit is set per-mesh by renderMeshNode; still need light
                 // uniforms uploaded (shader accesses count even if unused).
                 uploadLights(activeLights, meshLocs_);
 
                 for (MeshNode* mn : unlitMeshes) {
-                    renderMeshNode(mn);
+                    renderMeshNode(mn, meshDraw_);
+                }
+
+                // Unlit skinned meshes need the skinned program for the
+                // palette deform; same zeroed fog/ambient contract.
+                if (!unlitSkinnedMeshes.empty()) {
+                    ensureSkinnedMeshPipeline();
+                    if (meshSkinnedProgram_) {
+                        glUseProgram(meshSkinnedProgram_);
+                        glUniform1f(meshSkinnedDraw_.fogStart, 0.0f);
+                        glUniform1f(meshSkinnedDraw_.fogEnd, 0.0f);
+                        glUniform3f(meshSkinnedDraw_.fogColor, 0.0f, 0.0f, 0.0f);
+                        glUniform3f(meshSkinnedDraw_.ambient, 0.0f, 0.0f, 0.0f);
+                        uploadLights(activeLights, meshSkinnedLocs_);
+                        for (MeshNode* mn : unlitSkinnedMeshes)
+                            renderMeshNode(mn, meshSkinnedDraw_);
+                        glUseProgram(meshProgram_);
+                    }
                 }
 
                 if (hasGizmo) {
                     glDisable(GL_DEPTH_TEST);
                     for (MeshNode* mn : gizmoMeshes) {
                         if (!mn) continue;
-                        renderMeshNode(mn);
+                        renderMeshNode(mn, meshDraw_);
                     }
                     glEnable(GL_DEPTH_TEST);
                     hasMeshContent_ = true;

@@ -5,6 +5,7 @@
 #include "scene/sprite_node.h"
 #include "scene/physics_node.h"
 #include "scene/mesh_node.h"
+#include "scene/skinned_mesh_node.h"
 #include "scene/instanced_mesh_node.h"
 #include "scene/gaussian_splat_node.h"
 #include "scene/html_node.h"
@@ -46,6 +47,7 @@ public:
     SpriteNode* createSprite(const std::string& name = "");
     PhysicsNode* createPhysicsNode(const std::string& name = "");
     MeshNode* createMesh(const std::string& name = "");
+    SkinnedMeshNode* createSkinnedMesh(const std::string& name = "");
     InstancedMeshNode* createInstancedMesh(const std::string& name = "");
     GaussianSplatNode* createGaussianSplat(const std::string& name = "");
     HtmlNode* createHtml(const std::string& name = "");

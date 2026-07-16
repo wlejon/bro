@@ -1,6 +1,7 @@
 #include "scene/scene_renderer.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer_internal.h"
+#include "scene/skinned_mesh_node.h"
 #include "canvas/canvas_scene.h"
 #include "util/log.h"
 
@@ -40,6 +41,21 @@ void SceneRenderer::ensureShadowInstancedPipeline() {
     if (shadowInstancedProgram_) {
         shadowInstULightVP_ = glGetUniformLocation(shadowInstancedProgram_, "uLightVP");
         shadowInstUModel_   = glGetUniformLocation(shadowInstancedProgram_, "uModel");
+    }
+}
+
+void SceneRenderer::ensureShadowSkinnedPipeline() {
+    if (shadowSkinnedProgram_) return;
+    std::string vsSrc = withSkinnedDefine(kShadowVertSrc);
+    shadowSkinnedProgram_ =
+        linkProgram(vsSrc.c_str(), kShadowFragSrc, "Skinned shadow program");
+    if (shadowSkinnedProgram_) {
+        shadowSkinnedUMVP_ = glGetUniformLocation(shadowSkinnedProgram_, "uMVP");
+        GLuint bi = glGetUniformBlockIndex(shadowSkinnedProgram_, "BonePalette");
+        if (bi != GL_INVALID_INDEX) {
+            glUniformBlockBinding(shadowSkinnedProgram_, bi,
+                                  SkinnedMeshNode::kPaletteBinding);
+        }
     }
 }
 
@@ -150,6 +166,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     // Reset per-frame shadow state. Default every light to "no shadow".
     shadowTileCount_ = 0;
     shadowCasters_.clear();
+    shadowSkinnedCasters_.clear();
     shadowInstancedCasters_.clear();
     for (int i = 0; i < 32; ++i) {
         lightShadowSlot_[i] = -1;
@@ -165,13 +182,20 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     }
     if (!anyCaster) return;
 
-    // Gather shadow-casting meshes once. Unlit meshes never cast.
+    // Gather shadow-casting meshes once. Unlit meshes never cast. Skinned
+    // meshes (ready skin) go in their own list so the skinned depth shader
+    // deforms their silhouettes; frustum fitting still uses their bind-pose
+    // bounds via computeShadowCasterBounds (the directional depth range is
+    // padded by the whole-scene extent, so palette motion stays covered).
     auto gather = [&](auto&& self, SceneNode* n) -> void {
         if (!n || !n->visible()) return;
         if (n->type() == SceneNode::Type::Mesh) {
             auto* m = static_cast<MeshNode*>(n);
-            if (!m->unlit() && m->castsShadow() && !m->mesh().empty())
-                shadowCasters_.push_back(m);
+            if (!m->unlit() && m->castsShadow() && !m->mesh().empty()) {
+                auto* sm = m->asSkinnedMesh();
+                if (sm && sm->skinReady()) shadowSkinnedCasters_.push_back(m);
+                else                       shadowCasters_.push_back(m);
+            }
         } else if (n->type() == SceneNode::Type::InstancedMesh) {
             auto* m = static_cast<InstancedMeshNode*>(n);
             if (!m->unlit() && m->castsShadow() && !m->mesh().empty() && m->instanceCount() > 0)
@@ -180,7 +204,8 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
         for (auto* c : n->children()) self(self, c);
     };
     gather(gather, graph_.root_.get());
-    if (shadowCasters_.empty() && shadowInstancedCasters_.empty()) return;
+    if (shadowCasters_.empty() && shadowSkinnedCasters_.empty() &&
+        shadowInstancedCasters_.empty()) return;
 
     // Scene bounds for fitting directional frustums. CSM uses view-frustum
     // slices instead — added in a follow-up commit.
@@ -448,6 +473,8 @@ void SceneRenderer::renderShadowPass() {
     if (!shadowProgram_ || !shadowAtlasFBO_) return;
     const bool hasInstancedCasters = !shadowInstancedCasters_.empty();
     if (hasInstancedCasters) ensureShadowInstancedPipeline();
+    const bool hasSkinnedCasters = !shadowSkinnedCasters_.empty();
+    if (hasSkinnedCasters) ensureShadowSkinnedPipeline();
 
     glBindFramebuffer(GL_FRAMEBUFFER, shadowAtlasFBO_);
     glViewport(0, 0, shadowAtlasSize_, shadowAtlasSize_);
@@ -494,6 +521,19 @@ void SceneRenderer::renderShadowPass() {
             Mat4 mvp = bromath::mmul(lightVP, mesh->worldMatrix());
             glUniformMatrix4fv(shadowUMVP_, 1, GL_FALSE, mvp.data);
             mesh->drawRaw();
+        }
+
+        // Skinned casters: SKINNED depth shader + per-node palette UBO, so
+        // shadows deform with the mesh instead of staying in bind pose.
+        if (hasSkinnedCasters && shadowSkinnedProgram_) {
+            glUseProgram(shadowSkinnedProgram_);
+            for (auto* mesh : shadowSkinnedCasters_) {
+                Mat4 mvp = bromath::mmul(lightVP, mesh->worldMatrix());
+                glUniformMatrix4fv(shadowSkinnedUMVP_, 1, GL_FALSE, mvp.data);
+                mesh->asSkinnedMesh()->prepareSkinnedDraw();
+                mesh->drawRaw();
+            }
+            glUseProgram(shadowProgram_);
         }
 
         if (hasInstancedCasters && shadowInstancedProgram_) {

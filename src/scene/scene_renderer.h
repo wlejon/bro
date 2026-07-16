@@ -130,14 +130,42 @@ public:
     float environmentRotation() const { return envRotation_; }
 
 private:
-    void renderMeshNode(MeshNode* mesh);
+    // Per-program uniform locations for the PBR mesh pipeline (everything
+    // renderMeshNode + the per-frame globals touch). One instance for the
+    // regular mesh program and one for the skinned variant (same GLSL source,
+    // SKINNED define), so both passes share renderMeshNode.
+    struct MeshDrawLocs {
+        GLint mvp = -1, model = -1, color = -1, emissive = -1,
+              emissiveColor = -1, metallic = -1, roughness = -1, unlit = -1,
+              twoSided = -1, subsurface = -1, alphaCutoff = -1,
+              useVertexColor = -1, nearClip = -1, windMask = -1,
+              useTexture = -1, baseColorTex = -1, normalMap = -1, mrMap = -1,
+              aoMap = -1, emissiveMap = -1, hasTangent = -1,
+              hasNormalMap = -1, hasMRMap = -1, hasAOMap = -1,
+              hasEmissiveMap = -1, receivesShadow = -1,
+              fogStart = -1, fogEnd = -1, fogColor = -1, ambient = -1,
+              windDir = -1, windStrength = -1, windTime = -1, windFreq = -1;
+    };
+    struct MeshProgramLocs;  // lighting/shadow/IBL locs — defined below
+
+    void renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L);
     void renderInstancedMeshNode(InstancedMeshNode* mesh);
     void ensureInstancedMeshPipeline();
     void renderGaussianSplatNodes();
     void renderBillboardNode(SceneNode* node);
 
+    // Upload the per-frame globals (fog, ambient, wind) to whichever mesh
+    // program is currently bound. Defined in scene_renderer.cpp.
+    void uploadMeshGlobals(const MeshDrawLocs& L);
+
+    // Query the full uniform surface of a mesh program (regular or skinned —
+    // both link mesh.frag, so the surface is identical) into a draw-locs +
+    // light-locs pair. Defined in scene_renderer_mesh.cpp.
+    void queryMeshUniformLocs(GLuint prog, MeshDrawLocs& d, MeshProgramLocs& l);
+
     // --- Mesh GL pipeline (lazy init) ---
     void ensureMeshPipeline();
+    void ensureSkinnedMeshPipeline();
     void ensureMeshFBO();
     void destroyMeshFBO();
 
@@ -197,6 +225,7 @@ private:
     };
     MeshProgramLocs meshLocs_;
     MeshProgramLocs meshInstLocs_;
+    MeshProgramLocs meshSkinnedLocs_;
     void uploadLights(const std::vector<LightNode*>& lights,
                       const MeshProgramLocs& locs);
 
@@ -207,6 +236,7 @@ private:
     // mesh fragments sample from one sampler2DShadow keyed by per-light slot.
     void ensureShadowPipeline();
     void ensureShadowInstancedPipeline();
+    void ensureShadowSkinnedPipeline();
     void ensureShadowAtlas();
     void destroyShadowAtlas();
 
@@ -245,52 +275,13 @@ private:
     /// it by value); nodes/camera/canvas state are read through it.
     SceneGraph& graph_;
 
-    // Mesh rendering GL resources (shared across all MeshNodes)
+    // Mesh rendering GL resources (shared across all MeshNodes). meshDraw_
+    // holds the uniform locations for the regular program, meshSkinnedDraw_
+    // for the SKINNED-variant program used by SkinnedMeshNode.
     GLuint meshProgram_ = 0;
-    GLint uMVP_ = -1;
-    GLint uModel_ = -1;
-    GLint uColor_ = -1;
-    GLint uLightDir_ = -1;
-    GLint uCameraPos_ = -1;
-    GLint uEmissive_ = -1;
-    GLint uUseVertexColor_ = -1;
-    GLint uUseTexture_ = -1;
-    GLint uBaseColorTex_ = -1;
-    GLint uHasTangent_ = -1;
-    GLint uHasNormalMap_ = -1;
-    GLint uHasMRMap_ = -1;
-    GLint uHasAOMap_ = -1;
-    GLint uHasEmissiveMap_ = -1;
-    GLint uNormalMap_ = -1;
-    GLint uMRMap_ = -1;
-    GLint uAOMap_ = -1;
-    GLint uEmissiveMap_ = -1;
-    GLint uReceivesShadow_ = -1;
-    GLint uFogStart_ = -1;
-    GLint uFogEnd_ = -1;
-    GLint uFogColor_ = -1;
-    GLint uAlphaCutoff_ = -1;
-    GLint uNearClip_ = -1;
-    GLint uMetallic_ = -1;
-    GLint uRoughness_ = -1;
-    GLint uEmissiveColor_ = -1;
-    GLint uAmbient_ = -1;
-    GLint uUnlit_ = -1;
-    GLint uTwoSided_ = -1;
-    GLint uSubsurface_ = -1;
-    GLint uWindDir_ = -1;
-    GLint uWindStrength_ = -1;
-    GLint uWindTime_ = -1;
-    GLint uWindFreq_ = -1;
-    GLint uWindMask_ = -1;
-    GLint uLightCount_ = -1;
-    GLint uLightType_ = -1;
-    GLint uLightPos_ = -1;
-    GLint uLightDirArr_ = -1;
-    GLint uLightColor_ = -1;
-    GLint uLightIntensity_ = -1;
-    GLint uLightRange_ = -1;
-    GLint uLightSpotCos_ = -1;
+    MeshDrawLocs meshDraw_;
+    GLuint meshSkinnedProgram_ = 0;
+    MeshDrawLocs meshSkinnedDraw_;
 
     // Instanced mesh program (vertex shader reads model matrix from per-instance
     // attributes; fragment shader is shared with the regular mesh program). Only
@@ -461,6 +452,8 @@ private:
     GLuint shadowInstancedProgram_ = 0;
     GLint  shadowInstULightVP_ = -1;
     GLint  shadowInstUModel_ = -1;
+    GLuint shadowSkinnedProgram_ = 0;
+    GLint  shadowSkinnedUMVP_ = -1;
     GLuint shadowAtlasFBO_ = 0;
     GLuint shadowAtlasTex_ = 0;
     int    shadowAtlasAllocated_ = 0;  // current tex side; 0 if none
@@ -487,19 +480,11 @@ private:
     LightNode* shadowTileLight_[kMaxShadowTiles] = {};
 
     // Cache per-frame shadow caster list; rebuilt at top of prepareShadows.
+    // Skinned casters render with the SKINNED shadow program so their
+    // shadows deform with the palette instead of staying in bind pose.
     std::vector<MeshNode*> shadowCasters_;
+    std::vector<MeshNode*> shadowSkinnedCasters_;
     std::vector<InstancedMeshNode*> shadowInstancedCasters_;
-
-    // Mesh shader uniform locations for shadow data.
-    GLint uShadowAtlas_ = -1;
-    GLint uShadowMatrix_ = -1;
-    GLint uShadowAtlasRect_ = -1;
-    GLint uShadowBiasArr_ = -1;
-    GLint uLightShadowSlot_ = -1;
-    GLint uLightShadowSlotCount_ = -1;
-    GLint uLightCascadeSplit_ = -1;
-    GLint uShadowAtlasTexel_ = -1;
-    GLint uShadowPCFTaps_ = -1;
 
     // 1×1 fallback textures bound to sampler units when the real textures
     // aren't available. Prevents GL_INVALID_OPERATION on strict core-profile
@@ -509,15 +494,6 @@ private:
     GLuint fallback2D_ = 0;       // white RGBA8 2D
     GLuint fallbackCube_ = 0;     // white RGBA8 cube
     GLuint fallbackShadow_ = 0;   // depth24 2D with COMPARE_REF_TO_TEXTURE
-
-    // IBL uniforms in the mesh program
-    GLint uIBLEnabled_ = -1;
-    GLint uIBLIrradiance_ = -1;
-    GLint uIBLPrefilter_ = -1;
-    GLint uIBLBRDF_ = -1;
-    GLint uIBLIntensity_ = -1;
-    GLint uIBLRotation_ = -1;
-    GLint uIBLPrefilterMaxLOD_ = -1;
 
     // --- IBL environment state ---
     GLuint envCubemap_ = 0;          // 512² RGBA16F cube, 6 faces, mipmapped

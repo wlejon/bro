@@ -287,6 +287,58 @@ class SceneGraph {
   createMesh(opts) {}
 
   /**
+   * Create a GPU-skinned mesh node and add it to the root. Accepts the full
+   * createMesh option surface (primitives make little sense here, so you'll
+   * normally pass `data`/`mesh` with a rigged Mesh) plus the skin, and skins
+   * on the GPU: positions, normals, AND tangents deform in the vertex shader
+   * from a bone-matrix palette, so driving an animation never re-uploads the
+   * mesh. Node position/rotation/scale still compose on top, like createMesh.
+   * Skinned meshes cast deforming shadows (the shadow pass has a skinned
+   * depth-shader variant).
+   *
+   * The palette holds FINAL skinning matrices — world(bone) * inverseBind —
+   * exactly what Pose.computeSkinningMatrices returns (boneCount * 16 floats,
+   * column-major mat4). Bone cap: 256 (palette lives in a 16 KB UBO, GL 3.3's
+   * guaranteed minimum block size). Until the first setSkinningMatrices the
+   * node renders in bind pose.
+   *
+   * Complete recipe — glTF to animated node (the CPU rigging API computes
+   * poses; the GPU node consumes the palettes):
+   *
+   *   const gltf = Mesh.loadGLTF('character.glb');
+   *   const mesh = gltf.meshes[0];
+   *   const skin = gltf.skins[0];                       // SkinData
+   *   const skel = gltf.skeletons[gltf.meshSkeleton[0]]; // Skeleton
+   *   const clip = gltf.animations[0];                   // Animation
+   *
+   *   const node = scene.createSkinnedMesh({
+   *     data: mesh, skin,
+   *     color: 'white', roughness: 0.8,
+   *   });
+   *
+   *   // per frame: evaluate (and optionally Pose.blend) → palette → node
+   *   let t = 0;
+   *   function tick(dt) {
+   *     t += dt;
+   *     const pose = clip.evaluate(skel, t, { loop: true });
+   *     node.setSkinningMatrices(pose.computeSkinningMatrices(skel));
+   *   }
+   *
+   * Procedural rigs work the same way: Rig.autoRig(mesh, spec, landmarks)
+   * yields { skeleton, skin } which drop straight in.
+   *
+   * @param {Object} opts - everything createMesh takes, plus:
+   * @param {SkinData} opts.skin - (required) per-vertex bone weights/indices
+   *        (Mesh.loadGLTF().skins[i], Rig.autoRig().skin, or hand-built).
+   *        Vertex count must match the mesh exactly (throws otherwise).
+   * @param {Float32Array} [opts.skinningMatrices] - initial palette
+   *        (boneCount * 16 floats); defaults to identity = bind pose
+   * @returns {SceneNode} - .type === 'skinnedMesh'; exposes .boneCount,
+   *          .skinReady, and .setSkinningMatrices(mats)
+   */
+  createSkinnedMesh(opts) {}
+
+  /**
    * Create a 3D Gaussian Splat node and add it to the root. Renders a splat
    * cloud with EWA splatting (per-splat anisotropic Gaussians, view-dependent
    * SH color, back-to-front sorted). Supply the cloud one of two ways:
@@ -872,6 +924,33 @@ class SceneNode {
    * @param {Object|Mesh} meshOrOpts
    */
   updateMesh(meshOrOpts) {}
+
+
+  // --- SkinnedMeshNode-only -------------------------------------------------
+
+  /**
+   * Upload the bone palette for a skinned mesh node (created with
+   * createSkinnedMesh). `mats` is count * 16 floats of column-major 4x4
+   * skinning matrices — Pose.computeSkinningMatrices output drops straight
+   * in. Matrices beyond the node's boneCount are ignored; fewer than
+   * boneCount updates only the leading bones. Cheap (one memcpy + one UBO
+   * sub-upload next frame); this is the per-frame animation hot path — the
+   * mesh itself is never re-uploaded.
+   * @param {Float32Array} mats
+   * @returns {number} matrices actually staged
+   */
+  setSkinningMatrices(mats) {}
+
+  /** Bone count of the skin palette (0 on non-skinned nodes). */
+  get boneCount() {}
+
+  /**
+   * True when the skin covers the current mesh (the node renders through the
+   * skinned pipeline). Goes false if updateMesh() swaps in a mesh with a
+   * different vertex count — the node then draws statically in bind-buffer
+   * pose until the mesh matches again.
+   */
+  get skinReady() {}
 
 
   // --- MeshNode-only --------------------------------------------------------

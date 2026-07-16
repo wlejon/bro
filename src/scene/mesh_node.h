@@ -10,6 +10,8 @@
 
 namespace bro::scene {
 
+class SkinnedMeshNode;
+
 /// A renderable 3D mesh node. Holds bromesh::MeshData and owns GL resources.
 /// Renders into a shared FBO owned by SceneGraph (set up during render pass).
 class MeshNode : public SceneNode {
@@ -22,6 +24,13 @@ public:
 
     Type type() const override { return Type::Mesh; }
     void onRender(SceneGraph& graph) override;
+
+    /// Downcast hook: non-null when this node is a SkinnedMeshNode. Skinned
+    /// meshes deliberately keep Type::Mesh so every Mesh-typed walk (shadow
+    /// gather, bounds, raycast, material setters) treats them uniformly; the
+    /// renderer routes them to the skinned program via this hook instead of
+    /// a separate Type.
+    virtual SkinnedMeshNode* asSkinnedMesh() { return nullptr; }
 
     // --- Draw mode ---
 
@@ -201,7 +210,7 @@ public:
     float windMask() const { return windMask_; }
 
     /// Release GPU resources (call before GL context is destroyed).
-    void releaseGL();
+    virtual void releaseGL();
 
     /// Bind VAO and issue glDrawElements without touching material uniforms.
     /// Used by depth-only passes (shadow maps) where the caller's program is
@@ -218,9 +227,17 @@ public:
         bool dirty = false;
     };
 
-private:
-    void uploadToGPU();
+protected:
+    /// Interleave + upload the vertex/index buffers (GL thread, called from
+    /// drawRaw when gpuDirty_). Virtual so SkinnedMeshNode can append its
+    /// joint/weight attribute streams to the same VAO.
+    virtual void uploadToGPU();
 
+    // GL vertex-array handle — shared with SkinnedMeshNode's skin-attribute
+    // upload, which binds it to add attributes 5/6.
+    GLuint vao_ = 0;
+
+private:
     bromesh::MeshData mesh_;
     bool gpuDirty_ = false;
 
@@ -231,7 +248,6 @@ private:
     mutable bool bvhDirty_ = true;
 
     // GL resources
-    GLuint vao_ = 0;
     GLuint vbo_ = 0;
     GLuint ibo_ = 0;
     GLuint texture_ = 0;

@@ -68,6 +68,13 @@ MeshNode* SceneGraph::createMesh(const std::string& name) {
     return ptr;
 }
 
+SkinnedMeshNode* SceneGraph::createSkinnedMesh(const std::string& name) {
+    auto node = std::make_unique<SkinnedMeshNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
 InstancedMeshNode* SceneGraph::createInstancedMesh(const std::string& name) {
     auto node = std::make_unique<InstancedMeshNode>(name);
     auto* ptr = node.get();

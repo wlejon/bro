@@ -8,9 +8,25 @@
 
 #include <glad/gl.h>
 
+#include <string>
+
 #include "util/log.h"
 
 namespace bro::scene {
+
+// Insert `#define SKINNED 1` right after the source's #version line — GLSL
+// requires #version to stay the first directive, so a plain prepend won't do.
+// Used to build the skinned variants of mesh.vert / shadow.vert from the same
+// embedded source.
+inline std::string withSkinnedDefine(const char* src) {
+    std::string s(src ? src : "");
+    size_t v = s.find("#version");
+    if (v == std::string::npos) return "#define SKINNED 1\n" + s;
+    size_t nl = s.find('\n', v);
+    if (nl == std::string::npos) return s + "\n#define SKINNED 1\n";
+    s.insert(nl + 1, "#define SKINNED 1\n");
+    return s;
+}
 
 // Compile a single shader stage. Returns 0 (and logs) on failure.
 inline GLuint compileShader(GLenum type, const char* src) {

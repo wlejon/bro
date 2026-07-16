@@ -6,12 +6,14 @@
 #include "js/tile_bindings.h"
 #include "js/dom_bindings.h"
 #include "js/physics_bindings.h"
+#include "js/rigging_bindings.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
 #include "scene/shape_node.h"
 #include "scene/sprite_node.h"
 #include "scene/physics_node.h"
 #include "scene/mesh_node.h"
+#include "scene/skinned_mesh_node.h"
 #include "scene/instanced_mesh_node.h"
 #include "scene/gaussian_splat_node.h"
 #include "scene/html_node.h"
@@ -1185,17 +1187,13 @@ static bool jsReadUint32Array(JSContext* ctx, JSValueConst obj, const char* prop
     return true;
 }
 
-// createMesh({mesh, color, name, x, y, z, ...})
-static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
-    auto* g = getGraph(ctx, this_val);
-    if (!g) return JS_UNDEFINED;
-
-    auto* node = g->createMesh();
-    g->root()->addChild(node);
-
-    if (argc > 0 && JS_IsObject(argv[0])) {
-        JSValueConst opts = argv[0];
-
+// Apply the full createMesh option surface — name, transform, color, PBR
+// material, draw flags, mesh data, texture maps — to a MeshNode. Split out
+// so createSkinnedMesh carries the identical material API without duplicating
+// the parsing.
+static void applyMeshNodeOptions(JSContext* ctx, scene::MeshNode* node,
+                                 JSValueConst opts) {
+    {
         JSValue nameVal = JS_GetPropertyStr(ctx, opts, "name");
         if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
         JS_FreeValue(ctx, nameVal);
@@ -1487,9 +1485,9 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
     // Optional texture maps: each is { width, height, data: Uint8Array(rgba8) }.
     // Keys: texture (baseColor), normalTexture, metallicRoughnessTexture,
     //       occlusionTexture, emissiveTexture.
-    if (argc > 0 && JS_IsObject(argv[0])) {
+    {
         auto applyTex = [&](const char* key, void (scene::MeshNode::*setter)(int, int, const uint8_t*)) {
-            JSValue tex = JS_GetPropertyStr(ctx, argv[0], key);
+            JSValue tex = JS_GetPropertyStr(ctx, opts, key);
             if (JS_IsObject(tex)) {
                 int w = (int)qjsbind::get_prop_number(ctx, tex, "width",  0);
                 int h = (int)qjsbind::get_prop_number(ctx, tex, "height", 0);
@@ -1514,8 +1512,107 @@ static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc,
         applyTex("occlusionTexture",         &scene::MeshNode::setOcclusionTexture);
         applyTex("emissiveTexture",          &scene::MeshNode::setEmissiveTexture);
     }
+}
+
+// createMesh({mesh, color, name, x, y, z, ...})
+static JSValue js_sg_createMesh(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+
+    auto* node = g->createMesh();
+    g->root()->addChild(node);
+
+    if (argc > 0 && JS_IsObject(argv[0]))
+        applyMeshNodeOptions(ctx, node, argv[0]);
 
     return wrapNode(ctx, node, g);
+}
+
+// createSkinnedMesh({mesh|data, skin, skinningMatrices?, ...material opts})
+// GPU-skinned mesh node. Accepts the full createMesh option surface plus:
+//   skin              (required) SkinData — per-vertex weights/indices, e.g.
+//                     Mesh.loadGLTF().skins[i] or Rig.autoRig().skin. Must
+//                     cover exactly the mesh's vertex count.
+//   skinningMatrices  (optional) Float32Array of boneCount * 16 floats —
+//                     initial palette in computeSkinningMatrices layout
+//                     (world(bone) * inverseBind, column-major). Defaults to
+//                     identity = bind pose.
+// Drive per frame with node.setSkinningMatrices(pose.computeSkinningMatrices(skel)).
+static JSValue js_sg_createSkinnedMesh(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx,
+            "createSkinnedMesh requires an options object with mesh + skin");
+
+    auto* node = g->createSkinnedMesh();
+    g->root()->addChild(node);
+    applyMeshNodeOptions(ctx, node, argv[0]);
+
+    JSValue skinVal = JS_GetPropertyStr(ctx, argv[0], "skin");
+    bromesh::SkinData* sd = RiggingBindings::getSkinData(ctx, skinVal);
+    JS_FreeValue(ctx, skinVal);
+    if (!sd) {
+        g->destroyNode(node);
+        return JS_ThrowTypeError(ctx,
+            "createSkinnedMesh: opts.skin must be a SkinData");
+    }
+    if (!node->setSkin(*sd)) {
+        g->destroyNode(node);
+        return JS_ThrowTypeError(ctx,
+            "createSkinnedMesh: skin rejected (bone count 0 or > 256, or "
+            "weight/index streams malformed)");
+    }
+    if (!node->skinReady()) {
+        g->destroyNode(node);
+        return JS_ThrowTypeError(ctx,
+            "createSkinnedMesh: skin vertex count does not match the mesh");
+    }
+
+    std::vector<float> palette;
+    if (jsReadFloatArray(ctx, argv[0], "skinningMatrices", palette) &&
+        palette.size() >= 16) {
+        node->setSkinningMatrices(palette.data(), palette.size() / 16);
+    }
+
+    return wrapNode(ctx, node, g);
+}
+
+// setSkinningMatrices(Float32Array) — upload the bone palette for a skinned
+// mesh node. Layout matches Pose.computeSkinningMatrices output: count * 16
+// floats, column-major mat4 per bone (world(bone) * inverseBind(bone)).
+// Matrices beyond the node's boneCount are ignored. Zero mesh re-upload —
+// this is the per-frame hot path of the CPU-rig → GPU-skin pipeline.
+static JSValue js_node_setSkinningMatrices(JSContext* ctx, JSValueConst this_val,
+                                           int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Mesh)
+        return JS_ThrowTypeError(ctx, "setSkinningMatrices: not a mesh node");
+    auto* sm = static_cast<scene::MeshNode*>(w->node)->asSkinnedMesh();
+    if (!sm)
+        return JS_ThrowTypeError(ctx,
+            "setSkinningMatrices: node is not a skinned mesh (use createSkinnedMesh)");
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "setSkinningMatrices: missing matrix array");
+
+    size_t offset = 0, byteLen = 0, bpe = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, argv[0], &offset, &byteLen, &bpe);
+    if (JS_IsException(abuf)) {
+        JS_FreeValue(ctx, abuf);
+        return JS_ThrowTypeError(ctx,
+            "setSkinningMatrices: expected a Float32Array");
+    }
+    size_t abufLen = 0;
+    uint8_t* raw = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+    JS_FreeValue(ctx, abuf);
+    if (!raw || bpe != sizeof(float))
+        return JS_ThrowTypeError(ctx,
+            "setSkinningMatrices: expected a Float32Array");
+
+    const float* data = reinterpret_cast<const float*>(raw + offset);
+    int n = sm->setSkinningMatrices(data, byteLen / sizeof(float) / 16);
+    return JS_NewInt32(ctx, n);
 }
 
 // createGaussianSplat({path, x, y, z, scale, name})
@@ -2635,10 +2732,27 @@ void SceneBindings::install(JSContext* ctx) {
                 if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
                     static_cast<scene::InstancedMeshNode*>(w->node)->setDoubleSided(val);
             })
+        .get("boneCount", [](NodeWrapper* w) -> int {
+            if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh) {
+                if (auto* sm = static_cast<scene::MeshNode*>(w->node)->asSkinnedMesh())
+                    return sm->boneCount();
+            }
+            return 0;
+        })
+        .get("skinReady", [](NodeWrapper* w) -> bool {
+            if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh) {
+                if (auto* sm = static_cast<scene::MeshNode*>(w->node)->asSkinnedMesh())
+                    return sm->skinReady();
+            }
+            return false;
+        })
         .get("type", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->node) return JS_UNDEFINED;
             switch (w->node->type()) {
-                case scene::SceneNode::Type::Mesh:    return JS_NewString(ctx, "mesh");
+                case scene::SceneNode::Type::Mesh:
+                    return JS_NewString(ctx,
+                        static_cast<scene::MeshNode*>(w->node)->asSkinnedMesh()
+                            ? "skinnedMesh" : "mesh");
                 case scene::SceneNode::Type::InstancedMesh: return JS_NewString(ctx, "instancedMesh");
                 case scene::SceneNode::Type::Light:   return JS_NewString(ctx, "light");
                 case scene::SceneNode::Type::Shape:   return JS_NewString(ctx, "shape");
@@ -3237,6 +3351,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("localToWorld", js_node_localToWorld, 2)
         .method_raw("syncToPhysics", js_node_syncToPhysics, 0)
         .method_raw("updateMesh", js_node_updateMesh, 1)
+        .method_raw("setSkinningMatrices", js_node_setSkinningMatrices, 1)
         .method_raw("setInstances", js_node_setInstances, 1)
         .method_raw("setInstancesFromTransforms", js_node_setInstancesFromTransforms, 1)
         .method_raw("updateInstance", js_node_updateInstance, 2)
@@ -3283,6 +3398,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("createSprite", js_sg_createSprite, 1)
         .method_raw("createPhysicsNode", js_sg_createPhysicsNode, 1)
         .method_raw("createMesh", js_sg_createMesh, 1)
+        .method_raw("createSkinnedMesh", js_sg_createSkinnedMesh, 1)
         .method_raw("createInstancedMesh", js_sg_createInstancedMesh, 1)
         .method_raw("createGaussianSplat", js_sg_createGaussianSplat, 1)
         .method_raw("createHtmlNode", js_sg_createHtml, 1)
