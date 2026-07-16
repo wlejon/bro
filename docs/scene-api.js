@@ -202,6 +202,18 @@ class SceneGraph {
   createParticles(opts) {}
 
   /**
+   * Create a property Tween — a chainable, engine-ticked animation of node
+   * properties (position/rotation/scale/opacity/color), Godot-Tween-flavored.
+   * See the Tween class at the bottom of this file for the full surface and
+   * a complete example. The tween is owned by the scene graph and advances
+   * on the engine frame clock (headless: advanceTime()), so it costs no JS
+   * per frame; it persists after finishing (restartable with start()) until
+   * tween.destroy().
+   * @returns {Tween}
+   */
+  createTween() {}
+
+  /**
    * Create an HTML-rasterizing scene node and add it to the root.
    *
    * The node owns a detached dom::Document with a root <div> that JS can
@@ -316,7 +328,14 @@ class SceneGraph {
    *     color: 'white', roughness: 0.8,
    *   });
    *
-   *   // per frame: evaluate (and optionally Pose.blend) → palette → node
+   *   // easiest: hand the clip to the built-in animation player — the whole
+   *   // evaluate → blend → palette pipeline then runs in C++ every frame
+   *   // (see the "Skeletal animation player" section on SceneNode):
+   *   node.setSkeleton(skel);
+   *   node.addClip('run', clip);
+   *   node.play('run', { fadeTime: 0.2 });
+   *
+   *   // or drive the palette by hand per frame (procedural poses, IK, ...):
    *   let t = 0;
    *   function tick(dt) {
    *     t += dt;
@@ -872,17 +891,40 @@ class SceneNode {
    * SpriteNode: start (or resume) an animation. With no argument,
    * resumes the most recently played animation.
    * ParticleNode: resume emission.
+   * SkinnedMeshNode: start a registered clip — see the "Skeletal animation
+   * player" section below for the options.
    * @param {string} [name]
+   * @param {Object} [opts] - skinned mesh only: {loop, speed, fadeTime,
+   *        weight, mask}
    * @returns {SceneNode} this
    */
-  play(name) {}
+  play(name, opts) {}
 
   /**
    * SpriteNode: pause animation playback (current frame is held).
    * ParticleNode: stop emitting; existing particles finish naturally.
+   * SkinnedMeshNode: fade the player out to bind pose over opts.fadeTime
+   * seconds (0 = immediately) and deactivate it — after which manual
+   * setSkinningMatrices drives the palette again.
+   * @param {{fadeTime?: number}} [opts] - skinned mesh only
    * @returns {SceneNode} this
    */
-  stop() {}
+  stop(opts) {}
+
+  /**
+   * Freeze playback in place. SpriteNode: holds the current frame (alias of
+   * stop()). SkinnedMeshNode: holds the current pose; the clip clock stops
+   * but the player stays active (scrub with `animationTime`, then resume()).
+   * @returns {SceneNode} this
+   */
+  pause() {}
+
+  /**
+   * Resume paused playback (SpriteNode / SkinnedMeshNode; ParticleNode
+   * resumes emission).
+   * @returns {SceneNode} this
+   */
+  resume() {}
 
   /**
    * SpriteNode only: register or replace a named animation at runtime.
@@ -953,6 +995,119 @@ class SceneNode {
   get skinReady() {}
 
 
+  // --- Skeletal animation player (SkinnedMeshNode) ---------------------------
+  //
+  // The node owns a C++ animation player that runs the whole per-frame
+  // pipeline natively — evaluate clip(s) → blend → computeSkinningMatrices →
+  // palette — so an app that calls only play() gets animated characters with
+  // zero per-frame JS, for any number of characters. It ticks on the engine
+  // frame clock (and headless virtual time, so advanceTime() drives it
+  // deterministically in tests).
+  //
+  // Give the node its Skeleton and clips once, then control playback:
+  //
+  //   const gltf = Mesh.loadGLTF('character.glb');
+  //   const node = scene.createSkinnedMesh({ data: gltf.meshes[0],
+  //                                          skin: gltf.skins[0] });
+  //   node.setSkeleton(gltf.skeletons[gltf.meshSkeleton[0]]);
+  //   node.addClip('idle', gltf.animations[0]);
+  //   node.addClip('walk', gltf.animations[1]);
+  //   node.addClip('wave', gltf.animations[2]);
+  //
+  //   node.play('idle');                                   // loops by default
+  //   node.play('walk', { fadeTime: 0.3 });                // crossfade 0.3 s
+  //   node.play('wave', { loop: false, mask: upperBody }); // masked layer on top
+  //   node.onAnimationFinished = (name) => node.play('idle', { fadeTime: 0.2 });
+  //
+  // Model: one BASE track (full-body clip; play() crossfades from whatever
+  // was playing) plus one optional masked LAYER track blended on top (e.g.
+  // upper-body wave over a walk). Not a state machine or blend tree.
+  //
+  // Until the first play() — and again after stop() — the player is inactive
+  // and manual setSkinningMatrices keeps full control of the palette.
+
+  /**
+   * Set the Skeleton the player evaluates clips against (copied — the node
+   * keeps its own reference, safe from JS GC). Required before play().
+   * @param {Skeleton} skeleton
+   * @returns {SceneNode} this
+   */
+  setSkeleton(skeleton) {}
+
+  /**
+   * Register a clip under a name (copied). Replaces same-named clips.
+   * @param {string} name
+   * @param {Animation} animation - a rigging-API Animation (glTF or hand-built)
+   * @returns {SceneNode} this
+   */
+  addClip(name, animation) {}
+
+  /**
+   * Start a clip (see also play/stop/pause/resume above).
+   *
+   * Without `mask`, the clip takes the BASE track: with fadeTime > 0 the
+   * player crossfades from the current blended pose over that many seconds
+   * (the outgoing clip keeps advancing while it fades). With `mask`, the
+   * clip becomes the LAYER track, blended over the base only on bones whose
+   * mask entry is 1 — a one-shot layer expires on finish, a looping layer
+   * persists until stop() or a replacement.
+   *
+   * @param {string} name - a clip registered with addClip (throws otherwise)
+   * @param {Object} [opts]
+   * @param {boolean} [opts.loop=true] - false: hold the last frame and fire
+   *        onAnimationFinished once
+   * @param {number} [opts.speed=1] - playback rate (negative plays backward)
+   * @param {number} [opts.fadeTime=0] - crossfade seconds (base track only)
+   * @param {number} [opts.weight=1] - blend weight; base: vs bind pose,
+   *        layer: vs what's underneath
+   * @param {Uint8Array|number[]} [opts.mask] - per-bone 0/1, length =
+   *        skeleton bone count; non-empty selects the layer track
+   * @returns {SceneNode} this
+   */
+  // play(name, opts) — documented with the shared play() above.
+
+  /** Playback rate multiplier of the base track (get/set). */
+  get animationSpeed() {}
+  set animationSpeed(value) {}
+
+  /**
+   * Base-track clock in seconds (get/set). Setting scrubs: the pose,
+   * palette, and getBoneWorldMatrix update immediately, even while paused.
+   * Wraps into [0, duration) for looping clips, clamps for one-shots.
+   */
+  get animationTime() {}
+  set animationTime(value) {}
+
+  /** Duration in seconds of the current base clip (0 when none). */
+  get animationDuration() {}
+
+  /** Name of the current base clip ("" when none). Shared with sprites. */
+  // get currentAnimation() {}
+
+  /** True while the base clip is advancing (not paused / finished). */
+  // get isPlaying() {}
+
+  /**
+   * Fired once when a non-looping clip (base or layer) reaches its end,
+   * with the clip name. Pass null to clear. Safe to play() another clip
+   * from inside the callback.
+   *   node.onAnimationFinished = (name) => node.play('idle');
+   */
+  set onAnimationFinished(fn) {}
+
+  /**
+   * Current posed matrix of a bone in MODEL space — the skinned mesh's
+   * local space, before the node's own position/rotation/scale — as
+   * computed by Pose.computeWorldMatrices over the player's current blended
+   * pose (bind pose before the first play()). The verification seam for
+   * tests and the attachment seam for sockets/props.
+   * @param {string|number} boneNameOrIndex
+   * @returns {Float32Array|null} 16 floats, column-major, or null if the
+   *          bone doesn't exist or no skeleton is set
+   */
+  getBoneWorldMatrix(boneNameOrIndex) {}
+
+
   // --- MeshNode-only --------------------------------------------------------
 
   /**
@@ -1018,4 +1173,146 @@ class SceneNode {
 
   /** Manually sync this node's transform to its physics body. */
   syncToPhysics() {}
+}
+
+
+// =============================================================================
+// Tween — engine-ticked property animation (scene.createTween())
+// =============================================================================
+//
+// A Tween is a SEQUENCE of steps. Each `to()` appends a step; steps run one
+// after another; all properties inside one `to()` (and any steps joined with
+// `parallel()`) animate simultaneously. `call()` inserts a zero-length
+// callback step between animations. The whole sequence can loop. Property
+// writes go through the exact same setters the JS API uses, so dirty flags
+// and GPU uploads behave as if your code had set node.position itself.
+//
+// Ticked from the engine frame clock — the same clock as sprite and skeletal
+// animation — and under headless virtual time, so advanceTime() drives
+// tweens deterministically in tests. Tick overshoot carries across step
+// boundaries: timing is independent of frame rate.
+//
+//   // Slide a crate up with a bounce, flash it red, then fade it out —
+//   // looping the whole routine three times:
+//   const crate = scene.createMesh({ mesh: 'box', color: 'white' });
+//   scene.createTween()
+//     .to(crate, { position: [0, 2, 0] }, 0.6, { easing: 'bounceOut' })
+//     .to(crate, { color: [1, 0, 0], scale: 1.3 }, 0.2)   // both props together
+//     .call(() => console.log('flash!'))
+//     .to(crate, { opacity: 0 }, 0.4, { easing: 'quadIn' })
+//     .loop(3)
+//     .start();
+//
+//   // Two nodes moving at once: arm the next to() with parallel().
+//   scene.createTween()
+//     .to(nodeA, { position: [5, 0, 0] }, 1)
+//     .parallel()
+//     .to(nodeB, { position: [-5, 0, 0] }, 1)
+//     .start();
+//
+//   // Anything else is tweenable through the callback form — the tween
+//   // hands you eased progress t in [0..1] every frame:
+//   scene.createTween()
+//     .to(null, {}, 2, { easing: 'sineInOut', onUpdate: (t) => {
+//       scene.setCamera({ position: [Math.sin(t * Math.PI) * 8, 3, 8],
+//                         target: [0, 1, 0] });
+//     }})
+//     .start();
+//
+// Easing names (bromath's Penner set): 'linear', and In/Out/InOut variants
+// of 'quad', 'cubic', 'quart', 'quint', 'sine', 'expo', 'circ', 'back',
+// 'elastic', 'bounce' — e.g. 'quadInOut', 'backOut', 'elasticIn'.
+// back/elastic overshoot their endpoints mid-curve by design.
+class Tween {
+  /**
+   * Append an animation step (or join the previous step after parallel()).
+   *
+   * Animatable properties (each optional; all listed animate together):
+   *   position    [x,y,z]                       any node
+   *   rotation    number (Z radians) | [x,y,z,w] quat | {axis:[x,y,z], angle}
+   *   quaternion  [x,y,z,w] (alias of rotation's quat form)
+   *   scale       number (uniform) | [x,y,z]    any node
+   *   opacity     number 0..1                   Sprite; Mesh (color alpha)
+   *   color       [r,g,b] 0..1 | CSS string     Mesh, Light, Shape fill
+   *
+   * Rotations interpolate as quaternion slerp from the node's rotation at
+   * step start. Start values are captured when the step begins (each loop
+   * iteration re-captures), so tweens compose from wherever the node
+   * currently is. A destroyed node is skipped harmlessly.
+   *
+   * Pass `null` as the node for a callback-only step: `onUpdate(t)` receives
+   * eased progress every tick (t in [0,1]; back/elastic may overshoot) —
+   * tween cameras, lights, materials, anything. With neither props nor
+   * onUpdate, the step is a pure wait of `duration` seconds.
+   *
+   * @param {SceneNode|null} node
+   * @param {Object} props - see table above (may be {})
+   * @param {number} duration - seconds
+   * @param {Object} [opts]
+   * @param {string} [opts.easing='linear'] - easing name (throws on unknown)
+   * @param {number} [opts.delay=0] - seconds to wait inside this step before
+   *        these properties start (the step lasts delay + duration)
+   * @param {function(number)} [opts.onUpdate] - called with eased t each tick
+   * @returns {Tween} this
+   */
+  to(node, props, duration, opts) {}
+
+  /**
+   * Arm parallel merging: the NEXT to() joins the previous animation step
+   * instead of appending a new one (they start together; the step ends when
+   * the longest member ends). Chain repeatedly for more members.
+   * @returns {Tween} this
+   */
+  parallel() {}
+
+  /**
+   * Append a zero-length callback step, fired when the sequence reaches it.
+   * Safe to start/stop/destroy this or other tweens from inside.
+   * @param {function()} fn
+   * @returns {Tween} this
+   */
+  call(fn) {}
+
+  /**
+   * Run the whole sequence `n` times total (loop(2) = play twice). With no
+   * argument or Infinity, loops forever. Default is 1 (play once). Each
+   * iteration re-captures start values from the nodes' current state.
+   * @param {number} [n]
+   * @returns {Tween} this
+   */
+  loop(n) {}
+
+  /** Start (or restart from the beginning). @returns {Tween} this */
+  start() {}
+
+  /**
+   * Halt and rewind the sequence position (node properties stay wherever
+   * they are — nothing snaps back). start() plays again from the top.
+   * @returns {Tween} this
+   */
+  stop() {}
+
+  /** Freeze in place; resume() continues. @returns {Tween} this */
+  pause() {}
+  resume() {}
+
+  /** True while playing (not paused, not finished/stopped). */
+  get isRunning() {}
+  get isPaused() {}
+  /** True after the last loop iteration completed (not set by stop()). */
+  get isFinished() {}
+
+  /**
+   * Fired once when the sequence completes its final loop. Not fired by
+   * stop() or destroy(). Safe to start() again from inside.
+   *   tween.onFinished = () => console.log('done');
+   */
+  set onFinished(fn) {}
+
+  /**
+   * Free the tween. The scene graph keeps finished tweens around so they can
+   * be restarted; destroy() releases one you're done with (any later method
+   * call on it throws).
+   */
+  destroy() {}
 }

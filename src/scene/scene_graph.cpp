@@ -118,7 +118,46 @@ void SceneGraph::tickAnimations(float dtSec) {
         if (node) node->onTick(dtSec);
     }
     if (root_) root_->onTick(dtSec);
+
+    // Tweens tick after node animations. Iterate an id snapshot — tween
+    // callbacks may create or destroy tweens mid-pass — then sweep entries
+    // that marked themselves destroyed (destroyTween defers the erase so a
+    // tween can destroy itself from its own callback).
+    if (!tweens_.empty()) {
+        std::vector<uint32_t> ids;
+        ids.reserve(tweens_.size());
+        for (const auto& [id, _] : tweens_) ids.push_back(id);
+        for (uint32_t id : ids) {
+            auto it = tweens_.find(id);
+            if (it == tweens_.end() || it->second->destroyed()) continue;
+            it->second->tick(dtSec, *this);
+        }
+        for (auto it = tweens_.begin(); it != tweens_.end();) {
+            if (it->second->destroyed()) it = tweens_.erase(it);
+            else ++it;
+        }
+    }
+
     advanceWindTime(dtSec);
+}
+
+Tween* SceneGraph::createTween() {
+    uint32_t id = nextTweenId_++;
+    auto tween = std::make_unique<Tween>(id);
+    auto* ptr = tween.get();
+    tweens_[id] = std::move(tween);
+    return ptr;
+}
+
+Tween* SceneGraph::findTween(uint32_t id) const {
+    auto it = tweens_.find(id);
+    if (it == tweens_.end() || it->second->destroyed()) return nullptr;
+    return it->second.get();
+}
+
+void SceneGraph::destroyTween(uint32_t id) {
+    auto it = tweens_.find(id);
+    if (it != tweens_.end()) it->second->markDestroyed();
 }
 
 void SceneGraph::setCanvasSize(int w, int h) {

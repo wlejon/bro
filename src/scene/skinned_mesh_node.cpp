@@ -1,4 +1,5 @@
 #include "scene/skinned_mesh_node.h"
+#include "scene/animation_player.h"
 #include "util/log.h"
 
 #include <cstring>
@@ -9,6 +10,15 @@ SkinnedMeshNode::SkinnedMeshNode(const std::string& name) : MeshNode(name) {}
 
 SkinnedMeshNode::~SkinnedMeshNode() {
     releaseGL();
+}
+
+AnimationPlayer& SkinnedMeshNode::ensurePlayer() {
+    if (!player_) player_ = std::make_unique<AnimationPlayer>(*this);
+    return *player_;
+}
+
+void SkinnedMeshNode::onTick(float dtSec) {
+    if (player_) player_->tick(dtSec);
 }
 
 bool SkinnedMeshNode::setSkin(const bromesh::SkinData& skin) {

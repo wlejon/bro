@@ -14,6 +14,7 @@
 #include "scene/agent_binding.h"
 #include "scene/ai_world_ticker.h"
 #include "scene/scene_renderer.h"
+#include "scene/tween.h"
 
 #include <glad/gl.h>
 
@@ -62,6 +63,21 @@ public:
 
     /// Find a node by name (first match).
     SceneNode* findByName(const std::string& name) const;
+
+    // --- Tweens ---
+
+    /// Create a property tween (owned by this graph, ticked from
+    /// tickAnimations after node ticks). It persists until destroyTween —
+    /// finished tweens can be restarted with start().
+    Tween* createTween();
+
+    /// Resolve a tween by id. Returns nullptr for unknown or destroyed ids.
+    Tween* findTween(uint32_t id) const;
+
+    /// Destroy a tween. Deferred-safe: callable from the tween's own
+    /// callbacks (the entry is hidden immediately and erased after the
+    /// current tick pass).
+    void destroyTween(uint32_t id);
 
     // --- Physics integration ---
 
@@ -345,6 +361,10 @@ private:
     // AI integration
     std::unique_ptr<AIWorldTicker> aiTicker_;
     std::unordered_map<uint32_t, std::unique_ptr<AgentBinding>> agentBindings_;
+
+    // Tweens (ticked from tickAnimations; destroyed entries are swept there)
+    std::unordered_map<uint32_t, std::unique_ptr<Tween>> tweens_;
+    uint32_t nextTweenId_ = 1;
 
     canvas::CanvasScene* canvasScene_ = nullptr;
     physics::PhysicsWorld* physicsWorld_ = nullptr;

@@ -3,9 +3,12 @@
 #include "scene/mesh_node.h"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 namespace bro::scene {
+
+class AnimationPlayer;
 
 /// GPU-skinned mesh node. Extends MeshNode with per-vertex joint/weight
 /// attribute streams (from bromesh::SkinData) and a bone matrix palette that
@@ -76,6 +79,19 @@ public:
     /// staged. Callable every frame from the JS thread; cheap memcpy.
     int setSkinningMatrices(const float* mats, size_t count);
 
+    // --- Animation player ---
+
+    /// Lazily-created skeletal animation player (setSkeleton/addClip/play —
+    /// see AnimationPlayer). While it's active it stages the palette every
+    /// tick; before the first play() (and after stop()) manual
+    /// setSkinningMatrices keeps full control.
+    AnimationPlayer& ensurePlayer();
+    AnimationPlayer* player() const { return player_.get(); }
+
+    /// Ticks the animation player (SceneGraph::tickAnimations — windowed
+    /// frame loop and headless virtual time).
+    void onTick(float dtSec) override;
+
     // --- GL-thread hooks (renderer only) ---
 
     /// Called by the renderer right before a skinned draw: flushes a dirty
@@ -107,6 +123,8 @@ private:
 
     GLuint skinVbo_ = 0;
     GLuint paletteUbo_ = 0;
+
+    std::unique_ptr<AnimationPlayer> player_;
 };
 
 } // namespace bro::scene
