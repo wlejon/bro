@@ -35,6 +35,7 @@
 #include <Jolt/Physics/Constraints/GearConstraint.h>
 #include <Jolt/Physics/Constraints/RackAndPinionConstraint.h>
 #include <Jolt/Physics/Constraints/TwoBodyConstraint.h>
+#include <Jolt/Physics/Character/CharacterVirtual.h>
 
 #include "util/log.h"
 
@@ -304,6 +305,9 @@ void PhysicsWorld::physicsThreadFunc() {
 }
 
 void PhysicsWorld::signalStep() {
+    // Characters step on this (main) thread while we still own the world —
+    // the phase is Idle until the flip below, so the physics thread is parked.
+    updateCharacters(timeStep_);
     {
         std::lock_guard<std::mutex> lk(shared_.m);
         shared_.state = kPhysicsStep;
@@ -335,6 +339,7 @@ bool PhysicsWorld::isIdle() const {
 
 void PhysicsWorld::stepInline() {
     if (!initialized_) return;
+    updateCharacters(timeStep_);
     physicsSystem_.Update(timeStep_, 1, tempAllocator_.get(), jobSystem_.get());
     if (listener_) {
         contactsFront_ = listener_->drain();
@@ -351,6 +356,8 @@ void PhysicsWorld::shutdown() {
         shared_.cv.notify_one();
         physicsThread_.join();
     }
+
+    characters_.clear();
 
     if (initialized_) {
         // Remove constraints first
@@ -675,6 +682,8 @@ void PhysicsWorld::addTorque(BodyID id, Vec3 torque) {
 
 void PhysicsWorld::destroyAll(const std::function<void(JPH::BodyID)>& onBodyDestroyed) {
     if (!initialized_) return;
+
+    characters_.clear();
 
     // Constraints first (so removing bodies doesn't trip Jolt's constraint asserts).
     for (auto& [h, c] : constraints_) {
@@ -1065,6 +1074,113 @@ std::vector<uint32_t> PhysicsWorld::drainBrokenConstraints() {
     std::vector<uint32_t> out;
     out.swap(brokenConstraints_);
     return out;
+}
+
+// --- Character controllers ---
+
+uint32_t PhysicsWorld::createCharacter(const CharacterOptions& opts) {
+    if (!initialized_) return 0;
+    Vec3 up = opts.up.NormalizedOr(Vec3::sAxisY());
+
+    CapsuleShapeSettings capsule(opts.halfHeight, opts.radius);
+    auto shape = capsule.Create();
+    if (shape.HasError()) return 0;
+
+    Ref<CharacterVirtualSettings> settings = new CharacterVirtualSettings();
+    settings->mShape = shape.Get();
+    settings->mUp = up;
+    settings->mMass = opts.mass;
+    settings->mMaxSlopeAngle = DegreesToRadians(opts.maxSlopeAngle);
+    settings->mMaxStrength = opts.maxStrength;
+    settings->mCharacterPadding = opts.padding;
+    // Only contacts on the bottom sphere cap can support the character —
+    // without this, side contacts on the cylinder count as "ground".
+    settings->mSupportingVolume = Plane(up, -opts.radius);
+
+    CharacterEntry entry;
+    entry.character = new CharacterVirtual(settings, opts.position,
+                                           Quat::sIdentity(), 0, &physicsSystem_);
+    entry.stepUp = opts.stepUp;
+    entry.stickToFloor = opts.stickToFloor;
+    int layer = opts.layer;
+    if (layer < 0 || layer >= numLayers_) layer = numLayers_ > 1 ? 1 : 0;
+    entry.layer = layer;
+
+    uint32_t handle = nextCharacterHandle_++;
+    characters_[handle] = std::move(entry);
+    return handle;
+}
+
+void PhysicsWorld::destroyCharacter(uint32_t handle) {
+    characters_.erase(handle);
+}
+
+void PhysicsWorld::setCharacterVelocity(uint32_t handle, Vec3 v) {
+    auto it = characters_.find(handle);
+    if (it != characters_.end()) it->second.desiredVelocity = v;
+}
+
+void PhysicsWorld::setCharacterPosition(uint32_t handle, RVec3 pos) {
+    auto it = characters_.find(handle);
+    if (it != characters_.end()) it->second.character->SetPosition(pos);
+}
+
+bool PhysicsWorld::getCharacterState(uint32_t handle, CharacterState& out) const {
+    auto it = characters_.find(handle);
+    if (it == characters_.end()) return false;
+    const CharacterVirtual* c = it->second.character.GetPtr();
+    out.position = c->GetPosition();
+    out.velocity = c->GetLinearVelocity();
+    switch (c->GetGroundState()) {
+        case CharacterBase::EGroundState::OnGround:      out.ground = CharacterGround::OnGround; break;
+        case CharacterBase::EGroundState::OnSteepGround: out.ground = CharacterGround::OnSteepGround; break;
+        case CharacterBase::EGroundState::NotSupported:  out.ground = CharacterGround::NotSupported; break;
+        case CharacterBase::EGroundState::InAir:         out.ground = CharacterGround::InAir; break;
+    }
+    out.groundNormal = c->GetGroundNormal();
+    out.groundVelocity = c->GetGroundVelocity();
+    out.groundBody = c->GetGroundBodyID();
+    return true;
+}
+
+void PhysicsWorld::updateCharacters(float dt) {
+    if (characters_.empty() || dt <= 0.0f) return;
+    const Vec3 gravity = physicsSystem_.GetGravity();
+
+    for (auto& [handle, ch] : characters_) {
+        CharacterVirtual* c = ch.character.GetPtr();
+        // The ground body may have moved/changed velocity last world step.
+        c->UpdateGroundVelocity();
+
+        const Vec3 up = c->GetUp();
+        const Vec3 desired = ch.desiredVelocity;
+        const Vec3 desiredHorizontal = desired - desired.Dot(up) * up;
+        const Vec3 groundVelocity = c->GetGroundVelocity();
+        const float currentUp = c->GetLinearVelocity().Dot(up);
+
+        Vec3 newVelocity;
+        const bool movingTowardsGround = (currentUp - groundVelocity.Dot(up)) < 0.1f;
+        if (c->GetGroundState() == CharacterBase::EGroundState::OnGround && movingTowardsGround) {
+            // Supported: ride the ground (moving-platform carry) plus the
+            // app's desired velocity; a positive up component launches a jump.
+            newVelocity = groundVelocity + desired;
+        } else {
+            // Unsupported (in air / too-steep slope) or already moving away
+            // from the ground: keep vertical momentum, integrate gravity, and
+            // steer horizontally only — the desired up component is ignored so
+            // holding "jump" can't fly.
+            newVelocity = currentUp * up + gravity * dt + desiredHorizontal;
+        }
+        c->SetLinearVelocity(newVelocity);
+
+        CharacterVirtual::ExtendedUpdateSettings settings;
+        settings.mWalkStairsStepUp = up * ch.stepUp;
+        settings.mStickToFloorStepDown = -up * ch.stickToFloor;
+        c->ExtendedUpdate(dt, gravity, settings,
+                          physicsSystem_.GetDefaultBroadPhaseLayerFilter(ObjectLayer(ch.layer)),
+                          physicsSystem_.GetDefaultLayerFilter(ObjectLayer(ch.layer)),
+                          {}, {}, *tempAllocator_);
+    }
 }
 
 // --- Raycasts ---

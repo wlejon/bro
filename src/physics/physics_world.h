@@ -19,6 +19,8 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 
+namespace JPH { class CharacterVirtual; }
+
 namespace bro::physics {
 
 /// Physics thread phase. Ownership of the Jolt world follows the phase:
@@ -136,6 +138,42 @@ struct BodyOptions {
 
     int layer = -1;       // -1 = auto (static→non-moving, dynamic→moving)
     uint64_t userData = 0;
+};
+
+/// Character controller creation options (Jolt CharacterVirtual, capsule
+/// shape). `position` is the capsule center; total height = 2*(halfHeight +
+/// radius). The character is not a rigid body — it moves by collision checks
+/// and pushes dynamic bodies with up to `maxStrength` newtons.
+struct CharacterOptions {
+    JPH::RVec3 position{0, 0, 0};
+    JPH::Vec3 up{0, 1, 0};
+    float radius = 0.3f;
+    float halfHeight = 0.6f;      // cylindrical section half-height
+    float mass = 70.0f;           // kg — used when pushing dynamic bodies
+    float maxSlopeAngle = 50.0f;  // degrees; steeper ground can't support the character
+    float maxStrength = 100.0f;   // N — max push force against dynamic bodies
+    float padding = 0.02f;        // distance kept from geometry
+    float stepUp = 0.4f;          // WalkStairs step height; 0 disables
+    float stickToFloor = 0.5f;    // StickToFloor snap-down distance; 0 disables
+    int layer = 1;                // object layer used for collision filtering
+};
+
+/// Character ground classification (mirrors Jolt's CharacterBase::EGroundState).
+enum class CharacterGround {
+    OnGround = 0,   // supported, can move freely
+    OnSteepGround,  // touching ground steeper than maxSlopeAngle
+    NotSupported,   // touching something but not supported by it
+    InAir,          // touching nothing
+};
+
+/// Character state snapshot after a fixed step.
+struct CharacterState {
+    JPH::RVec3 position;
+    JPH::Vec3 velocity;          // actual velocity after the last update
+    CharacterGround ground = CharacterGround::InAir;
+    JPH::Vec3 groundNormal;      // valid when touching ground
+    JPH::Vec3 groundVelocity;    // velocity of the ground body at the contact
+    JPH::BodyID groundBody;      // invalid when in air
 };
 
 /// Constraint creation options.
@@ -351,6 +389,27 @@ public:
     /// Returns and clears any constraint-broken events accumulated since last call.
     std::vector<uint32_t> drainBrokenConstraints();
 
+    // --- Character controllers (call only when idle) ---
+    //
+    // Godot move_and_slide-style: the app sets a desired velocity; every fixed
+    // step (immediately before the world step, on the caller's thread) the
+    // character does a CharacterVirtual::ExtendedUpdate — slide along walls,
+    // walk up steps <= stepUp, snap down <= stickToFloor, push dynamic bodies,
+    // ride moving platforms. Gravity integrates automatically while
+    // unsupported; while supported the desired velocity applies directly (a
+    // positive up component launches a jump).
+
+    /// Returns a non-zero handle on success, 0 on failure.
+    uint32_t createCharacter(const CharacterOptions& opts);
+    void destroyCharacter(uint32_t handle);
+
+    /// Set the desired velocity applied each fixed step (persists until changed).
+    void setCharacterVelocity(uint32_t handle, JPH::Vec3 v);
+    /// Teleport (no sweep; keeps the current velocity).
+    void setCharacterPosition(uint32_t handle, JPH::RVec3 pos);
+    /// Snapshot position/velocity/ground state. False for an unknown handle.
+    bool getCharacterState(uint32_t handle, CharacterState& out) const;
+
     // --- Queries (call only when idle) ---
 
     /// Cast a ray. Returns hits sorted by distance.
@@ -419,6 +478,24 @@ private:
     };
     std::unordered_map<uint32_t, ConstraintEntry> constraints_;
     uint32_t nextConstraintHandle_ = 1;
+
+    // Character registry. CharacterVirtuals are not tracked by the Jolt
+    // system — updateCharacters() steps them just before each world step,
+    // always on the thread that owns the world at that moment (main thread
+    // while idle), so the registry needs no locking.
+    struct CharacterEntry {
+        JPH::Ref<JPH::CharacterVirtual> character;
+        JPH::Vec3 desiredVelocity{0, 0, 0};
+        float stepUp = 0.4f;
+        float stickToFloor = 0.5f;
+        int layer = 1;
+    };
+    std::unordered_map<uint32_t, CharacterEntry> characters_;
+    uint32_t nextCharacterHandle_ = 1;
+    // Runs each character's velocity update + ExtendedUpdate with the fixed
+    // dt. Called from signalStep (main thread, before the phase flip) and
+    // stepInline — never concurrently with a world step.
+    void updateCharacters(float dt);
 
     // Constraints that broke (exceeded breaking impulse) since the last drain.
     std::vector<uint32_t> brokenConstraints_;

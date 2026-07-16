@@ -818,6 +818,195 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
 }
 
 // ---------------------------------------------------------------------------
+// Character controller (Physics.createCharacter / handle.createCharacter).
+// The JS object wraps a PhysicsWorld character handle. For sandbox worlds it
+// holds a strong ref to the world handle object so the JsWorld outlives every
+// character created from it; for the default world it routes through
+// s_defaultWorld (nulled in cleanup), so no lifetime pin is needed.
+// ---------------------------------------------------------------------------
+
+static JSClassID s_characterClassId = 0;
+
+struct JsCharacter {
+    JsWorld* world = nullptr;          // sandbox only; default world uses s_defaultWorld
+    uint32_t handle = 0;               // 0 after destroy()
+    JSValue worldRef = JS_UNDEFINED;   // strong ref to a sandbox world handle
+};
+
+static JsWorld* characterWorld(JsCharacter* c) {
+    return JS_IsUndefined(c->worldRef) ? s_defaultWorld : c->world;
+}
+
+static void characterClassFinalizer(JSRuntime* rt, JSValue val) {
+    JsCharacter* c = (JsCharacter*)JS_GetOpaque(val, s_characterClassId);
+    if (!c) return;
+    JsWorld* w = characterWorld(c);
+    if (w && w->world && c->handle) w->world->destroyCharacter(c->handle);
+    JS_FreeValueRT(rt, c->worldRef);
+    delete c;
+}
+
+static JSClassDef s_characterClassDef = {
+    "PhysicsCharacter",
+    characterClassFinalizer,  // finalizer
+    nullptr,                  // gc_mark
+    nullptr,                  // call
+    nullptr,                  // exotic
+};
+
+static JsCharacter* characterFromThis(JSContext* ctx, JSValueConst thisVal) {
+    return (JsCharacter*)JS_GetOpaque2(ctx, thisVal, s_characterClassId);
+}
+
+static JSValue jsc_setVelocity(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsCharacter* c = characterFromThis(ctx, thisVal);
+    if (!c) return JS_EXCEPTION;
+    JsWorld* w = characterWorld(c);
+    if (!w || !w->world || !c->handle || argc < 3) return JS_UNDEFINED;
+    double x, y, z;
+    JS_ToFloat64(ctx, &x, argv[0]); JS_ToFloat64(ctx, &y, argv[1]); JS_ToFloat64(ctx, &z, argv[2]);
+    w->world->setCharacterVelocity(c->handle, JPH::Vec3((float)x, (float)y, (float)z));
+    return JS_UNDEFINED;
+}
+
+static JSValue jsc_setPosition(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsCharacter* c = characterFromThis(ctx, thisVal);
+    if (!c) return JS_EXCEPTION;
+    JsWorld* w = characterWorld(c);
+    if (!w || !w->world || !c->handle || argc < 3) return JS_UNDEFINED;
+    double x, y, z;
+    JS_ToFloat64(ctx, &x, argv[0]); JS_ToFloat64(ctx, &y, argv[1]); JS_ToFloat64(ctx, &z, argv[2]);
+    w->world->setCharacterPosition(c->handle, JPH::RVec3((float)x, (float)y, (float)z));
+    return JS_UNDEFINED;
+}
+
+static JSValue jsc_getState(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsCharacter* c = characterFromThis(ctx, thisVal);
+    if (!c) return JS_EXCEPTION;
+    JsWorld* w = characterWorld(c);
+    if (!w || !w->world || !c->handle) return JS_NULL;
+    physics::CharacterState st;
+    if (!w->world->getCharacterState(c->handle, st)) return JS_NULL;
+
+    JSValue obj = JS_NewObject(ctx);
+    setVec3Prop(ctx, obj, "position", st.position.GetX(), st.position.GetY(), st.position.GetZ());
+    setVec3Prop(ctx, obj, "velocity", st.velocity.GetX(), st.velocity.GetY(), st.velocity.GetZ());
+    const char* ground = "inAir";
+    switch (st.ground) {
+        case physics::CharacterGround::OnGround:      ground = "onGround"; break;
+        case physics::CharacterGround::OnSteepGround: ground = "onSteepGround"; break;
+        case physics::CharacterGround::NotSupported:  ground = "notSupported"; break;
+        case physics::CharacterGround::InAir:         ground = "inAir"; break;
+    }
+    JS_SetPropertyStr(ctx, obj, "groundState", JS_NewString(ctx, ground));
+    JS_SetPropertyStr(ctx, obj, "isGrounded",
+        JS_NewBool(ctx, st.ground == physics::CharacterGround::OnGround));
+    setVec3Prop(ctx, obj, "groundNormal",
+        st.groundNormal.GetX(), st.groundNormal.GetY(), st.groundNormal.GetZ());
+    setVec3Prop(ctx, obj, "groundVelocity",
+        st.groundVelocity.GetX(), st.groundVelocity.GetY(), st.groundVelocity.GetZ());
+    JS_SetPropertyStr(ctx, obj, "groundBodyId",
+        JS_NewInt32(ctx, st.groundBody.IsInvalid() ? -1 : w->tagForBodyId(st.groundBody)));
+    return obj;
+}
+
+static JSValue jsc_getPosition(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsCharacter* c = characterFromThis(ctx, thisVal);
+    if (!c) return JS_EXCEPTION;
+    JsWorld* w = characterWorld(c);
+    if (!w || !w->world || !c->handle) return JS_NULL;
+    physics::CharacterState st;
+    if (!w->world->getCharacterState(c->handle, st)) return JS_NULL;
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "x", JS_NewFloat64(ctx, st.position.GetX()));
+    JS_SetPropertyStr(ctx, obj, "y", JS_NewFloat64(ctx, st.position.GetY()));
+    JS_SetPropertyStr(ctx, obj, "z", JS_NewFloat64(ctx, st.position.GetZ()));
+    return obj;
+}
+
+static JSValue jsc_getVelocity(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsCharacter* c = characterFromThis(ctx, thisVal);
+    if (!c) return JS_EXCEPTION;
+    JsWorld* w = characterWorld(c);
+    if (!w || !w->world || !c->handle) return JS_NULL;
+    physics::CharacterState st;
+    if (!w->world->getCharacterState(c->handle, st)) return JS_NULL;
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "x", JS_NewFloat64(ctx, st.velocity.GetX()));
+    JS_SetPropertyStr(ctx, obj, "y", JS_NewFloat64(ctx, st.velocity.GetY()));
+    JS_SetPropertyStr(ctx, obj, "z", JS_NewFloat64(ctx, st.velocity.GetZ()));
+    return obj;
+}
+
+static JSValue jsc_destroy(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsCharacter* c = characterFromThis(ctx, thisVal);
+    if (!c) return JS_EXCEPTION;
+    JsWorld* w = characterWorld(c);
+    if (w && w->world && c->handle) w->world->destroyCharacter(c->handle);
+    c->handle = 0;
+    return JS_UNDEFINED;
+}
+
+static const JSCFunctionListEntry s_characterProtoFuncs[] = {
+    JS_CFUNC_DEF("setVelocity", 3, jsc_setVelocity),
+    JS_CFUNC_DEF("getVelocity", 0, jsc_getVelocity),
+    JS_CFUNC_DEF("setPosition", 3, jsc_setPosition),
+    JS_CFUNC_DEF("getPosition", 0, jsc_getPosition),
+    JS_CFUNC_DEF("getState", 0, jsc_getState),
+    JS_CFUNC_DEF("destroy", 0, jsc_destroy),
+};
+
+// `worldVal` is the sandbox world handle object, or JS_UNDEFINED for the
+// default world.
+static JSValue worldCreateCharacter(JSContext* ctx, JsWorld* w, JSValueConst worldVal,
+                                    JSValueConst optsVal) {
+    if (!w || !w->world) return JS_ThrowInternalError(ctx, "World not available");
+    if (!JS_IsObject(optsVal)) return JS_ThrowTypeError(ctx, "createCharacter(opts) requires an object");
+
+    physics::CharacterOptions opts;
+    JSValue posVal = JS_GetPropertyStr(ctx, optsVal, "position");
+    opts.position = readVec3(ctx, posVal);
+    JS_FreeValue(ctx, posVal);
+    JSValue upVal = JS_GetPropertyStr(ctx, optsVal, "up");
+    opts.up = readVec3(ctx, upVal, JPH::Vec3(0, 1, 0));
+    JS_FreeValue(ctx, upVal);
+    opts.radius = (float)qjsbind::get_prop_number(ctx, optsVal, "radius", 0.3);
+    opts.halfHeight = (float)qjsbind::get_prop_number(ctx, optsVal, "halfHeight", 0.6);
+    opts.mass = (float)qjsbind::get_prop_number(ctx, optsVal, "mass", 70.0);
+    opts.maxSlopeAngle = (float)qjsbind::get_prop_number(ctx, optsVal, "maxSlopeAngle", 50.0);
+    opts.maxStrength = (float)qjsbind::get_prop_number(ctx, optsVal, "maxStrength", 100.0);
+    opts.padding = (float)qjsbind::get_prop_number(ctx, optsVal, "padding", 0.02);
+    opts.stepUp = (float)qjsbind::get_prop_number(ctx, optsVal, "stepUp", 0.4);
+    opts.stickToFloor = (float)qjsbind::get_prop_number(ctx, optsVal, "stickToFloor", 0.5);
+
+    JSValue layerVal = JS_GetPropertyStr(ctx, optsVal, "layer");
+    if (JS_IsString(layerVal)) {
+        const char* s = JS_ToCString(ctx, layerVal);
+        if (s) { opts.layer = w->world->layerIndex(s); JS_FreeCString(ctx, s); }
+    } else if (JS_IsNumber(layerVal)) {
+        int32_t i = -1; JS_ToInt32(ctx, &i, layerVal); opts.layer = i;
+    }
+    JS_FreeValue(ctx, layerVal);
+
+    uint32_t handle = w->world->createCharacter(opts);
+    if (!handle) return JS_ThrowInternalError(ctx, "Failed to create character");
+
+    JSValue obj = JS_NewObjectClass(ctx, s_characterClassId);
+    if (JS_IsException(obj)) {
+        w->world->destroyCharacter(handle);
+        return obj;
+    }
+    auto* jc = new JsCharacter();
+    jc->handle = handle;
+    if (!JS_IsUndefined(worldVal)) {
+        jc->world = w;
+        jc->worldRef = JS_DupValue(ctx, worldVal);
+    }
+    JS_SetOpaque(obj, jc);
+    return obj;
+}
+
+// ---------------------------------------------------------------------------
 // Default-world Physics.* functions (route to s_defaultWorld)
 // ---------------------------------------------------------------------------
 
@@ -1148,6 +1337,12 @@ static JSValue js_physics_getAllTransforms(JSContext* ctx, JSValueConst, int, JS
     return result;
 }
 
+static JSValue js_physics_createCharacter(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 1) return JS_ThrowTypeError(ctx, "Physics.createCharacter(opts) requires an object");
+    return worldCreateCharacter(ctx, s_defaultWorld, JS_UNDEFINED, argv[0]);
+}
+
 static JSValue js_physics_createConstraint(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     DEFW_GUARD();
     if (argc < 1) return JS_ThrowTypeError(ctx, "Physics.createConstraint(opts) requires an object");
@@ -1445,6 +1640,13 @@ static JSValue jsw_createConstraint(JSContext* ctx, JSValueConst thisVal, int ar
     return worldCreateConstraint(ctx, w, argv[0]);
 }
 
+static JSValue jsw_createCharacter(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w) return JS_EXCEPTION;
+    if (argc < 1) return JS_ThrowTypeError(ctx, "createCharacter(opts) requires an object");
+    return worldCreateCharacter(ctx, w, thisVal, argv[0]);
+}
+
 static JSValue jsw_destroyConstraint(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
     JsWorld* w = worldFromThis(ctx, thisVal);
     if (!w || !w->world || argc < 1) return JS_UNDEFINED;
@@ -1600,6 +1802,7 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("overlapShape", 1, jsw_overlapShape),
     JS_CFUNC_DEF("overlapPoint", 4, jsw_overlapPoint),
     JS_CFUNC_DEF("getContacts", 0, jsw_getContacts),
+    JS_CFUNC_DEF("createCharacter", 1, jsw_createCharacter),
     JS_CFUNC_DEF("createConstraint", 1, jsw_createConstraint),
     JS_CFUNC_DEF("destroyConstraint", 1, jsw_destroyConstraint),
     JS_CFUNC_DEF("setConstraintBreakingImpulse", 2, jsw_setConstraintBreakingImpulse),
@@ -1662,6 +1865,18 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
                                sizeof(s_worldProtoFuncs)/sizeof(s_worldProtoFuncs[0]));
     JS_SetClassProto(ctx, s_worldClassId, proto);
 
+    // Register character handle class.
+    if (s_characterClassId == 0) {
+        JS_NewClassID(rt, &s_characterClassId);
+    }
+    if (!JS_IsRegisteredClass(rt, s_characterClassId)) {
+        JS_NewClass(rt, s_characterClassId, &s_characterClassDef);
+    }
+    JSValue charProto = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, charProto, s_characterProtoFuncs,
+                               sizeof(s_characterProtoFuncs)/sizeof(s_characterProtoFuncs[0]));
+    JS_SetClassProto(ctx, s_characterClassId, charProto);
+
     qjsbind::Namespace(ctx, "Physics")
         .function("createWorld", js_physics_createWorld, 1)
         .function("createWorldHandle", js_physics_createWorldHandle, 1)
@@ -1696,6 +1911,7 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("isActive", js_physics_isActive, 1)
         .function("activate", js_physics_activate, 1)
         .function("getAllTransforms", js_physics_getAllTransforms, 0)
+        .function("createCharacter", js_physics_createCharacter, 1)
         .function("createConstraint", js_physics_createConstraint, 1)
         .function("destroyConstraint", js_physics_destroyConstraint, 1)
         .function("setConstraintEnabled", js_physics_setConstraintEnabled, 2)

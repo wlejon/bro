@@ -699,3 +699,88 @@ w.destroy();         // tear down the world entirely; do NOT use the handle afte
 //
 // Reusing one world via destroyAll is much cheaper than creating/destroying
 // the handle every frame — the JobSystem and Jolt's allocators stay warm.
+
+
+// -----------------------------------------------------------------------------
+// Character controller (Physics.createCharacter)
+// -----------------------------------------------------------------------------
+//
+// Godot move_and_slide-style kinematic character on Jolt's CharacterVirtual.
+// The character is NOT a rigid body: it moves by collision sweeps, slides
+// along walls, walks up steps (<= stepUp), snaps down to floors (<=
+// stickToFloor), pushes dynamic bodies (up to maxStrength newtons), and rides
+// moving kinematic platforms.
+//
+// There is no per-frame move() call. The engine updates every character
+// inside its fixed-timestep physics tick, immediately before the world step
+// (headless: advanceTime drives the same tick deterministically). Your loop
+// just sets a desired velocity and reads state:
+//
+//   character.setVelocity(vx, vy, vz)   — persists until changed
+//   character.getState()                — position/velocity/ground info
+//
+// Velocity semantics per fixed step:
+//   - SUPPORTED (groundState "onGround"): the character moves at
+//     groundVelocity + desired velocity. No gravity accumulates; a positive
+//     up component is a jump launch.
+//   - UNSUPPORTED ("onSteepGround" | "notSupported" | "inAir"): gravity
+//     integrates into the vertical velocity; only the horizontal part of the
+//     desired velocity steers (holding a positive vy can't fly). Too-steep
+//     ground therefore slides the character down automatically.
+
+/**
+ * Create a character controller (capsule shape, upright).
+ *
+ * @param {Object} opts
+ * @param {{x,y,z}} [opts.position]        - capsule CENTER (not the feet);
+ *                                           total height = 2*(halfHeight+radius)
+ * @param {number}  [opts.radius=0.3]
+ * @param {number}  [opts.halfHeight=0.6]  - cylindrical section half-height
+ * @param {{x,y,z}} [opts.up={0,1,0}]      - character up axis
+ * @param {number}  [opts.mass=70]         - kg; used when pushing dynamic bodies
+ * @param {number}  [opts.maxSlopeAngle=50]- degrees; steeper ground can't support
+ * @param {number}  [opts.maxStrength=100] - N; max push force vs dynamic bodies
+ * @param {number}  [opts.padding=0.02]    - distance kept from geometry
+ * @param {number}  [opts.stepUp=0.4]      - max step height climbed while walking; 0 disables
+ * @param {number}  [opts.stickToFloor=0.5]- max snap-down distance (stairs/slopes); 0 disables
+ * @param {string|number} [opts.layer]     - collision layer (name or index),
+ *                                           default "moving"; the character
+ *                                           collides with whatever that layer
+ *                                           collides with in the matrix
+ * @returns {PhysicsCharacter}
+ */
+const player = Physics.createCharacter({
+    radius: 0.3, halfHeight: 0.6,
+    position: { x: 0, y: 1, z: 0 },
+});
+
+// Per-frame control: set desired velocity, read state.
+player.setVelocity(runX, 0, runZ);         // walk
+if (wantJump && player.getState().isGrounded)
+    player.setVelocity(runX, 6, runZ);     // jump launch (one-shot vy > 0)
+
+/**
+ * State snapshot (after the last fixed step).
+ *
+ * @returns {{
+ *   position: {x,y,z},        // capsule center
+ *   velocity: {x,y,z},        // actual velocity (post-slide/collide)
+ *   groundState: "onGround" | "onSteepGround" | "notSupported" | "inAir",
+ *   isGrounded: boolean,      // groundState === "onGround"
+ *   groundNormal: {x,y,z},    // surface normal under the character
+ *   groundVelocity: {x,y,z},  // moving-platform velocity at the contact
+ *   groundBodyId: number,     // body tag stood on, -1 if none
+ * }}
+ */
+const st = player.getState();
+
+player.getPosition();          // {x,y,z} shorthand
+player.getVelocity();          // {x,y,z} shorthand
+player.setPosition(x, y, z);   // teleport (no sweep; keeps velocity)
+player.destroy();              // remove from the world; handle is dead after
+
+// Sandbox worlds have the same API; their characters update inside w.step(dt):
+//   const w = Physics.createWorldHandle({ maxBodies: 64 });
+//   const npc = w.createCharacter({ position: { x: 0, y: 1, z: 0 } });
+//   npc.setVelocity(1.5, 0, 0);
+//   w.step(1/60);   // character + world advance together
