@@ -13,6 +13,7 @@ class SceneNode;
 class MeshNode;
 class InstancedMeshNode;
 class LightNode;
+class Particles3DNode;
 
 /// GL renderer for a SceneGraph's 3D content. Owns every GPU resource the
 /// scene pipeline uses — mesh + instanced-mesh programs, the HDR mesh FBO,
@@ -171,6 +172,12 @@ private:
 
     // --- Billboard GL pipeline (lazy init) ---
     void ensureBillboardPipeline();
+
+    // --- 3D particle pipeline (lazy init) ---
+    // One shared program + unit-quad VBO; each Particles3DNode owns its VAO
+    // and instance buffer. Defined in scene_renderer_particles.cpp.
+    void ensureParticlePipeline();
+    void renderParticles3DNodes();
 
     // --- Tonemap pipeline (lazy init) ---
     void ensureTonemapPipeline();
@@ -542,6 +549,18 @@ private:
     GLint  skyUEnv_ = -1;
     GLint  skyUIntensity_ = -1;
     GLint  skyURotation_ = -1;
+
+    // --- 3D particle pipeline (lazy init) ---
+    GLuint particleProgram_ = 0;
+    GLuint particleQuadVBO_ = 0;
+    GLint pUVP_ = -1;
+    GLint pUModel_ = -1;
+    GLint pUCameraEye_ = -1;
+    GLint pURight_ = -1;
+    GLint pUUp_ = -1;
+    GLint pUFlipGrid_ = -1;
+    GLint pUMode_ = -1;
+    GLint pUTex_ = -1;
 
     // --- Billboard pipeline (lazy init) ---
     GLuint bbProgram_ = 0;

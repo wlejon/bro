@@ -110,12 +110,37 @@ ParticleNode* SceneGraph::createParticles(const std::string& name) {
     return ptr;
 }
 
+Particles3DNode* SceneGraph::createParticles3D(const std::string& name) {
+    auto node = std::make_unique<Particles3DNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
 void SceneGraph::tickAnimations(float dtSec) {
     if (dtSec <= 0.0f) return;
-    // Iterate the node table directly (independent of tree visibility, so
-    // off-screen / parented-but-hidden particles still expire).
-    for (auto& [id, node] : nodes_) {
-        if (node) node->onTick(dtSec);
+    // Tick the node table (independent of tree visibility, so off-screen /
+    // parented-but-hidden particles still expire). Iterate an id snapshot —
+    // a Particles3D onFinished callback fired below may create or destroy
+    // nodes (including its own) mid-pass, invalidating map iterators.
+    std::vector<uint32_t> nodeIds;
+    nodeIds.reserve(nodes_.size());
+    for (const auto& [id, _] : nodes_) nodeIds.push_back(id);
+    for (uint32_t id : nodeIds) {
+        auto it = nodes_.find(id);
+        if (it == nodes_.end() || !it->second) continue;
+        SceneNode* n = it->second.get();
+        n->onTick(dtSec);
+        // One-shot particle completion fires after onTick returns so the
+        // callback can safely destroy its own node (deferred-destroy safe:
+        // `n` is never touched after the call).
+        if (n->type() == SceneNode::Type::Particles3D) {
+            auto* p = static_cast<Particles3DNode*>(n);
+            if (p->finishedPending()) {
+                auto cb = p->consumeFinishedCallback();
+                if (cb) cb();
+            }
+        }
     }
     if (root_) root_->onTick(dtSec);
 

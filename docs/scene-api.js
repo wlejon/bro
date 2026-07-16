@@ -202,6 +202,86 @@ class SceneGraph {
   createParticles(opts) {}
 
   /**
+   * Create a world-space 3D particle emitter node. CPU-simulated on the
+   * engine tick (fixed-size pool, deterministic seeded RNG) and rendered as
+   * camera-facing instanced billboard quads — one draw call per system —
+   * into the HDR 3D pass: particles depth-test against scene geometry
+   * (occluded behind walls) without writing depth, and render before
+   * tonemap, so `blend: "additive"` systems push HDR luminance and glow
+   * for free when bloom is enabled.
+   *
+   * Without a `texture`, particles are soft round points tinted by the
+   * color gradient. `blend: "normal"` sorts the system back-to-front on the
+   * CPU each frame; `"additive"` is order-independent (sparks, fire, magic).
+   *
+   * Simulation space: `space: "world"` (default) keeps particles where they
+   * were spawned, so a moving emitter leaves a trail; `space: "local"`
+   * integrates in emitter space so the whole cloud rides the node transform
+   * (torch flames on a moving character).
+   *
+   * One-shot systems: give a `duration` (and leave `loop` false) — the
+   * system emits for `duration` seconds, drains, and fires `onFinished`
+   * exactly once. The callback runs after the node tick, so it may safely
+   * destroy the emitter node itself.
+   *
+   * @example
+   *   const fire = scene.createParticles3D({
+   *     position: [0, 0.5, 0],
+   *     shape: { type: 'cone', radius: 0.15, angle: 12 },
+   *     rate: 120, maxParticles: 800, seed: 42,
+   *     lifetime: { min: 0.5, max: 1.1 },
+   *     velocity: { direction: [0, 1, 0], spread: 10, speed: 1.6, speedSpread: 0.5 },
+   *     gravity: [0, 0.6, 0],                     // hot air rises
+   *     size: { start: 0.25, end: 0.02 },
+   *     color: ['#fff2c0', '#ff8a2a', 'rgba(160,30,10,0)'],
+   *     blend: 'additive',
+   *   });
+   *   fire.burst(40);
+   *
+   *   const puff = scene.createParticles3D({
+   *     shape: 'sphere', burst: 60, rate: 0, duration: 0.1,
+   *     lifetime: 0.6, size: { start: 0.3, end: 0.6 },
+   *     onFinished: () => puff.destroy(),          // deferred-destroy safe
+   *   });
+   *
+   * @param {Object} [opts]
+   * @param {string} [opts.name]
+   * @param {number[]} [opts.position] - emitter position [x,y,z] (node transform)
+   * @param {number} [opts.maxParticles=256] - hard cap on simultaneously alive particles
+   * @param {number} [opts.seed] - RNG seed; a fixed seed + fixed dt steps reproduce exactly
+   * @param {string} [opts.texture] - image path; falls back to soft round points
+   * @param {{cols:number,rows:number,frames?:number}} [opts.sheet] - flipbook grid on the
+   *   texture, played over each particle's lifetime (frames limits to the first N cells)
+   * @param {string} [opts.blend="normal"] - "normal" (sorted alpha) | "additive" (glow)
+   * @param {string|Object} [opts.shape="point"] - emitter shape: "point" | "sphere" |
+   *   "hemisphere" | "box" | "cone", or { type, radius, angle, extents:[x,y,z] }
+   *   (radius: sphere/hemisphere/cone disc; angle: cone half-angle in degrees;
+   *   extents: box half-extents). Sphere/hemisphere launch radially.
+   * @param {string} [opts.space="world"] - "world" (trail) | "local" (rides the node)
+   * @param {number} [opts.rate=0] - emission rate (particles/sec); 0 = burst-only
+   * @param {number} [opts.burst=0] - emit N immediately on creation
+   * @param {number} [opts.duration=0] - emission window in seconds; 0 = continuous
+   * @param {boolean} [opts.loop=false] - restart the duration window each cycle
+   * @param {Function} [opts.onFinished] - one-shot completion callback (window over
+   *   AND every particle expired); fires exactly once per play()
+   * @param {boolean} [opts.autoplay=true]
+   * @param {{min:number,max:number}|number} [opts.lifetime] - seconds
+   * @param {Object} [opts.velocity]
+   * @param {number[]} [opts.velocity.direction=[0,1,0]] - launch axis (emitter-local)
+   * @param {number} [opts.velocity.spread=0] - cone full width around it (degrees)
+   * @param {number} [opts.velocity.speed=1] - world units/sec
+   * @param {number} [opts.velocity.speedSpread=0]
+   * @param {number[]|{x,y,z}} [opts.gravity] - constant world-space acceleration
+   * @param {number} [opts.drag=1.0] - per-second velocity multiplier (1 = none)
+   * @param {{start:number,end:number}|number} [opts.size] - world-unit quad size over life
+   * @param {{start:string,end:string}|string|Array} [opts.color] - start/end CSS colours,
+   *   or a gradient array of colours / {t, color} stops over normalized life
+   * @param {Object} [opts.rotation] - billboard roll: { start, spinSpeed, spinSpread } (deg)
+   * @returns {SceneNode}
+   */
+  createParticles3D(opts) {}
+
+  /**
    * Create a property Tween — a chainable, engine-ticked animation of node
    * properties (position/rotation/scale/opacity/color), Godot-Tween-flavored.
    * See the Tween class at the bottom of this file for the full surface and
@@ -935,7 +1015,10 @@ class SceneNode {
   addAnimation(name, spec) {}
 
 
-  // --- ParticleNode ---------------------------------------------------------
+  // --- ParticleNode / Particles3DNode ----------------------------------------
+
+  /** Live particle count (read-only). Alias: `liveCount`. */
+  get particleCount() {}
 
   /** Live particle count (read-only). */
   get liveCount() {}
@@ -952,11 +1035,19 @@ class SceneNode {
 
   /**
    * Reconfigure the emitter at runtime. Accepts the same option keys as
-   * createParticles (rate, lifetime, velocity, gravity, size, color,
-   * rotation, drag, blend, texture, maxParticles).
+   * createParticles / createParticles3D (rate, lifetime, velocity, gravity,
+   * size, color, rotation, drag, blend, texture, maxParticles, and for 3D:
+   * shape, space, seed, duration, loop, sheet, onFinished).
    * @param {Object} opts
    */
   configure(opts) {}
+
+  /**
+   * Particles3DNode: one-shot completion callback (write-only). Fired once
+   * per play() when the emission window is over and the last particle has
+   * expired; safe to destroy the node from inside it.
+   */
+  set onFinished(fn) {}
 
 
   /**

@@ -44,6 +44,8 @@ embed_shader(shadow.frag           kShadowFragSrc)
 embed_shader(shadow_instanced.vert kShadowInstancedVertSrc)
 embed_shader(billboard.vert        kBillboardVertSrc)
 embed_shader(billboard.frag        kBillboardFragSrc)
+embed_shader(particles3d.vert      kParticles3DVertSrc)
+embed_shader(particles3d.frag      kParticles3DFragSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 add_library(bro_scene STATIC
@@ -52,6 +54,7 @@ add_library(bro_scene STATIC
     scene_renderer.cpp
     scene_renderer_mesh.cpp
     scene_renderer_instanced.cpp
+    scene_renderer_particles.cpp
     scene_renderer_lighting.cpp
     scene_renderer_shadow.cpp
     scene_renderer_postfx.cpp
@@ -69,6 +72,7 @@ add_library(bro_scene STATIC
     html_node.cpp
     light_node.cpp
     particle_node.cpp
+    particles3d_node.cpp
     terrain_manager.cpp
     tile_world.cpp
     agent_binding.cpp

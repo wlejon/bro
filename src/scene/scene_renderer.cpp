@@ -38,6 +38,8 @@ SceneRenderer::~SceneRenderer() {
     if (bbProgram_) { glDeleteProgram(bbProgram_); bbProgram_ = 0; }
     if (bbVBO_) { glDeleteBuffers(1, &bbVBO_); bbVBO_ = 0; }
     if (bbVAO_) { glDeleteVertexArrays(1, &bbVAO_); bbVAO_ = 0; }
+    if (particleProgram_) { glDeleteProgram(particleProgram_); particleProgram_ = 0; }
+    if (particleQuadVBO_) { glDeleteBuffers(1, &particleQuadVBO_); particleQuadVBO_ = 0; }
     if (tonemapProgram_) { glDeleteProgram(tonemapProgram_); tonemapProgram_ = 0; }
     if (tonemapVBO_) { glDeleteBuffers(1, &tonemapVBO_); tonemapVBO_ = 0; }
     if (tonemapVAO_) { glDeleteVertexArrays(1, &tonemapVAO_); tonemapVAO_ = 0; }
@@ -176,6 +178,7 @@ void SceneRenderer::render3D() {
     bool hasMeshNodes = false;
     bool hasInstancedMeshNodes = false;
     bool hasSplatNodes = false;
+    bool hasParticle3DNodes = false;
     bool hasBillboardNodes = false;
     bool hasLightIcons = false;
     for (auto& [id, node] : graph_.nodes_) {
@@ -183,6 +186,7 @@ void SceneRenderer::render3D() {
         if (node->type() == SceneNode::Type::Mesh) hasMeshNodes = true;
         else if (node->type() == SceneNode::Type::InstancedMesh) hasInstancedMeshNodes = true;
         else if (node->type() == SceneNode::Type::GaussianSplat) hasSplatNodes = true;
+        else if (node->type() == SceneNode::Type::Particles3D) hasParticle3DNodes = true;
         else if (node->hasWorldAnchor())           hasBillboardNodes = true;
         else if (showLightIcons_ && node->type() == SceneNode::Type::Light) hasLightIcons = true;
     }
@@ -193,7 +197,7 @@ void SceneRenderer::render3D() {
     if (graph_.gizmoProvider_) gizmoMeshes = graph_.gizmoProvider_(&graph_);
     const bool hasGizmo = !gizmoMeshes.empty();
 
-    const bool has3D = (hasMeshNodes || hasInstancedMeshNodes || hasSplatNodes || hasBillboardNodes || hasGizmo || hasLightIcons)
+    const bool has3D = (hasMeshNodes || hasInstancedMeshNodes || hasSplatNodes || hasParticle3DNodes || hasBillboardNodes || hasGizmo || hasLightIcons)
                        && graph_.canvasWidth_ > 0 && graph_.canvasHeight_ > 0;
 
     if (has3D) {
@@ -343,6 +347,14 @@ void SceneRenderer::render3D() {
             // blended internally (see renderGaussianSplatNodes).
             if (hasSplatNodes) {
                 renderGaussianSplatNodes();
+            }
+
+            // --- 3D particle pass ------------------------------------------
+            // Depth-tested against geometry, no depth writes, blended into
+            // the HDR target pre-tonemap so additive systems bloom. One
+            // instanced draw per system.
+            if (hasParticle3DNodes) {
+                renderParticles3DNodes();
             }
 
             // --- Billboard pass --------------------------------------------

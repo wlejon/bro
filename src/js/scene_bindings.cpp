@@ -21,6 +21,7 @@
 #include "scene/html_node.h"
 #include "scene/light_node.h"
 #include "scene/particle_node.h"
+#include "scene/particles3d_node.h"
 #include "dom/element.h"
 #include "physics/physics_world.h"
 #include "canvas/canvas_scene.h"
@@ -38,6 +39,7 @@
 #include <Jolt/Jolt.h>
 #include <Jolt/Physics/Body/BodyID.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <memory>
@@ -630,6 +632,8 @@ static JSValue js_node_play(JSContext* ctx, JSValueConst this_val, int argc, JSV
         else                                  s->resume();
     } else if (w->node->type() == scene::SceneNode::Type::Particles) {
         static_cast<scene::ParticleNode*>(w->node)->play();
+    } else if (w->node->type() == scene::SceneNode::Type::Particles3D) {
+        static_cast<scene::Particles3DNode*>(w->node)->play();
     } else if (auto* sm = asSkinnedMesh(w)) {
         if (argc > 0 && JS_IsString(argv[0])) {
             auto& player = sm->ensurePlayer();
@@ -665,6 +669,8 @@ static JSValue js_node_stop(JSContext* ctx, JSValueConst this_val, int argc, JSV
         static_cast<scene::SpriteNode*>(w->node)->stop();
     } else if (w->node->type() == scene::SceneNode::Type::Particles) {
         static_cast<scene::ParticleNode*>(w->node)->stop();
+    } else if (w->node->type() == scene::SceneNode::Type::Particles3D) {
+        static_cast<scene::Particles3DNode*>(w->node)->stop();
     } else if (auto* sm = asSkinnedMesh(w)) {
         if (auto* player = sm->player()) {
             float fade = 0.0f;
@@ -859,6 +865,278 @@ static void applyParticleOpts(JSContext* ctx, JSValueConst opts, scene::Particle
     if (autoplay) node->play(); else node->stop();
 }
 
+// ---------------------------------------------------------------------------
+// 3D particle node helpers + methods
+// ---------------------------------------------------------------------------
+
+// Read a [x,y,z] array or {x,y,z} object property into a Vec3. Returns false
+// (out untouched) when the property is absent or malformed.
+static bool parseVec3Prop(JSContext* ctx, JSValueConst opts, const char* key,
+                          bromath::Vec3& out) {
+    JSValue v = JS_GetPropertyStr(ctx, opts, key);
+    bool ok = false;
+    if (JS_IsArray(v)) {
+        JSValue e0 = JS_GetPropertyUint32(ctx, v, 0);
+        JSValue e1 = JS_GetPropertyUint32(ctx, v, 1);
+        JSValue e2 = JS_GetPropertyUint32(ctx, v, 2);
+        double x = 0, y = 0, z = 0;
+        JS_ToFloat64(ctx, &x, e0);
+        JS_ToFloat64(ctx, &y, e1);
+        JS_ToFloat64(ctx, &z, e2);
+        JS_FreeValue(ctx, e0); JS_FreeValue(ctx, e1); JS_FreeValue(ctx, e2);
+        out = {(float)x, (float)y, (float)z};
+        ok = true;
+    } else if (JS_IsObject(v)) {
+        out = {(float)qjsbind::get_prop_number(ctx, v, "x", 0),
+               (float)qjsbind::get_prop_number(ctx, v, "y", 0),
+               (float)qjsbind::get_prop_number(ctx, v, "z", 0)};
+        ok = true;
+    }
+    JS_FreeValue(ctx, v);
+    return ok;
+}
+
+static void installParticles3DOnFinished(JSContext* ctx, JSValueConst fnVal,
+                                         scene::Particles3DNode* node) {
+    if (JS_IsFunction(ctx, fnVal)) {
+        auto ref = std::make_shared<JSFnRef>(ctx, JS_DupValue(ctx, fnVal));
+        node->setOnFinished([ref]() {
+            JSValue fn = JS_DupValue(ref->ctx, ref->fn);
+            JSValue r = JS_Call(ref->ctx, fn, JS_UNDEFINED, 0, nullptr);
+            if (JS_IsException(r)) Runtime::checkException(ref->ctx, r);
+            JS_FreeValue(ref->ctx, r);
+            JS_FreeValue(ref->ctx, fn);
+        });
+    } else {
+        node->setOnFinished(nullptr);
+    }
+}
+
+static scene::Particles3DNode::EmitterShape particleShapeFromString(const std::string& s) {
+    using ES = scene::Particles3DNode::EmitterShape;
+    if (s == "sphere")     return ES::Sphere;
+    if (s == "hemisphere") return ES::Hemisphere;
+    if (s == "box")        return ES::Box;
+    if (s == "cone")       return ES::Cone;
+    return ES::Point;
+}
+
+static void applyParticle3DOpts(JSContext* ctx, JSValueConst opts,
+                                scene::Particles3DNode* node) {
+    // maxParticles (must run before any burst/play — reallocates the pool)
+    JSValue mpVal = JS_GetPropertyStr(ctx, opts, "maxParticles");
+    if (JS_IsNumber(mpVal)) {
+        int32_t n = 256; JS_ToInt32(ctx, &n, mpVal);
+        node->setMaxParticles(n);
+    }
+    JS_FreeValue(ctx, mpVal);
+
+    // seed (reseed before any emission so bursts are deterministic too)
+    JSValue seedVal = JS_GetPropertyStr(ctx, opts, "seed");
+    if (JS_IsNumber(seedVal)) {
+        double s = 0; JS_ToFloat64(ctx, &s, seedVal);
+        node->setSeed(static_cast<uint64_t>(s));
+    }
+    JS_FreeValue(ctx, seedVal);
+
+    // texture (+ optional flipbook sheet {cols, rows, frames})
+    JSValue texVal = JS_GetPropertyStr(ctx, opts, "texture");
+    if (JS_IsString(texVal)) node->setTexturePath(resolveAppPath(jsStr(ctx, texVal)));
+    JS_FreeValue(ctx, texVal);
+
+    JSValue sheetVal = JS_GetPropertyStr(ctx, opts, "sheet");
+    if (JS_IsObject(sheetVal)) {
+        node->setSheet(
+            (int)qjsbind::get_prop_number(ctx, sheetVal, "cols", 1),
+            (int)qjsbind::get_prop_number(ctx, sheetVal, "rows", 1),
+            (int)qjsbind::get_prop_number(ctx, sheetVal, "frames", 0));
+    }
+    JS_FreeValue(ctx, sheetVal);
+
+    // blend
+    JSValue blendVal = JS_GetPropertyStr(ctx, opts, "blend");
+    if (JS_IsString(blendVal)) {
+        std::string s = jsStr(ctx, blendVal);
+        node->setBlend(s == "additive" ? scene::Particles3DNode::Blend::Additive
+                                       : scene::Particles3DNode::Blend::Normal);
+    }
+    JS_FreeValue(ctx, blendVal);
+
+    // emitter shape: "sphere" | {type:"cone", radius, angle, extents:[x,y,z]}
+    JSValue shapeVal = JS_GetPropertyStr(ctx, opts, "shape");
+    if (JS_IsString(shapeVal)) {
+        node->setShape(particleShapeFromString(jsStr(ctx, shapeVal)));
+    } else if (JS_IsObject(shapeVal)) {
+        node->setShape(particleShapeFromString(
+            qjsbind::get_prop_string(ctx, shapeVal, "type", "point")));
+        JSValue rVal = JS_GetPropertyStr(ctx, shapeVal, "radius");
+        if (JS_IsNumber(rVal)) node->setShapeRadius((float)jsNum(ctx, rVal));
+        JS_FreeValue(ctx, rVal);
+        JSValue aVal = JS_GetPropertyStr(ctx, shapeVal, "angle");
+        if (JS_IsNumber(aVal)) node->setConeAngle((float)jsNum(ctx, aVal));
+        JS_FreeValue(ctx, aVal);
+        bromath::Vec3 he;
+        if (parseVec3Prop(ctx, shapeVal, "extents", he)) node->setShapeExtents(he);
+    }
+    JS_FreeValue(ctx, shapeVal);
+
+    // simulation space
+    JSValue spaceVal = JS_GetPropertyStr(ctx, opts, "space");
+    if (JS_IsString(spaceVal)) {
+        node->setSpace(jsStr(ctx, spaceVal) == "local"
+                           ? scene::Particles3DNode::SimSpace::Local
+                           : scene::Particles3DNode::SimSpace::World);
+    }
+    JS_FreeValue(ctx, spaceVal);
+
+    // rate
+    JSValue rateVal = JS_GetPropertyStr(ctx, opts, "rate");
+    if (JS_IsNumber(rateVal)) node->setRate((float)jsNum(ctx, rateVal));
+    JS_FreeValue(ctx, rateVal);
+
+    // lifetime
+    {
+        float lo = 0.5f, hi = 1.0f;
+        parseRange(ctx, opts, "lifetime", lo, hi);
+        node->setLifetime(lo, hi);
+    }
+
+    // velocity: { direction:[x,y,z], spread(deg), speed, speedSpread }
+    JSValue velVal = JS_GetPropertyStr(ctx, opts, "velocity");
+    if (JS_IsObject(velVal)) {
+        bromath::Vec3 dir{0.0f, 1.0f, 0.0f};
+        parseVec3Prop(ctx, velVal, "direction", dir);
+        node->setDirection(dir,
+            (float)qjsbind::get_prop_number(ctx, velVal, "spread", 0));
+        node->setSpeed(
+            (float)qjsbind::get_prop_number(ctx, velVal, "speed", 1),
+            (float)qjsbind::get_prop_number(ctx, velVal, "speedSpread", 0));
+    }
+    JS_FreeValue(ctx, velVal);
+
+    // gravity: [x,y,z] or {x,y,z}
+    {
+        bromath::Vec3 g;
+        if (parseVec3Prop(ctx, opts, "gravity", g)) node->setGravity(g);
+    }
+
+    // size: { start, end } or number (world units)
+    JSValue sizeVal = JS_GetPropertyStr(ctx, opts, "size");
+    if (JS_IsObject(sizeVal)) {
+        node->setSize(
+            (float)qjsbind::get_prop_number(ctx, sizeVal, "start", 0.1),
+            (float)qjsbind::get_prop_number(ctx, sizeVal, "end", 0));
+    } else if (JS_IsNumber(sizeVal)) {
+        float v = (float)jsNum(ctx, sizeVal);
+        node->setSize(v, v);
+    }
+    JS_FreeValue(ctx, sizeVal);
+
+    // color: { start, end } | "css" | gradient array of "css" strings /
+    // {t, color} stops (unspecified t spreads the stops evenly over life)
+    JSValue colorVal = JS_GetPropertyStr(ctx, opts, "color");
+    if (JS_IsArray(colorVal)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, colorVal, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
+        std::vector<std::pair<float, bromath::Color>> stops;
+        for (int32_t i = 0; i < len; ++i) {
+            JSValue e = JS_GetPropertyUint32(ctx, colorVal, (uint32_t)i);
+            float t = (len > 1) ? (float)i / (float)(len - 1) : 0.0f;
+            bromath::Color c = bromath::cfromColor8({255, 255, 255, 255});
+            if (JS_IsString(e)) {
+                c = colorFromJS(ctx, e, c);
+            } else if (JS_IsObject(e)) {
+                t = (float)qjsbind::get_prop_number(ctx, e, "t", t);
+                JSValue cv = JS_GetPropertyStr(ctx, e, "color");
+                c = colorFromJS(ctx, cv, c);
+                JS_FreeValue(ctx, cv);
+            }
+            stops.emplace_back(t, c);
+            JS_FreeValue(ctx, e);
+        }
+        std::stable_sort(stops.begin(), stops.end(),
+                         [](const auto& a, const auto& b) { return a.first < b.first; });
+        node->setColorStops(std::move(stops));
+    } else if (JS_IsObject(colorVal)) {
+        JSValue cs = JS_GetPropertyStr(ctx, colorVal, "start");
+        JSValue ce = JS_GetPropertyStr(ctx, colorVal, "end");
+        bromath::Color start = colorFromJS(ctx, cs, bromath::cfromColor8({255,255,255,255}));
+        bromath::Color end   = colorFromJS(ctx, ce, bromath::Color{start.r, start.g, start.b, 0.0f});
+        node->setColors(start, end);
+        JS_FreeValue(ctx, cs); JS_FreeValue(ctx, ce);
+    } else if (JS_IsString(colorVal)) {
+        bromath::Color c = colorFromJS(ctx, colorVal, bromath::cfromColor8({255,255,255,255}));
+        bromath::Color end = c; end.a = 0.0f;
+        node->setColors(c, end);
+    }
+    JS_FreeValue(ctx, colorVal);
+
+    // rotation: { start, spinSpeed, spinSpread } (degrees)
+    JSValue rotVal = JS_GetPropertyStr(ctx, opts, "rotation");
+    if (JS_IsObject(rotVal)) {
+        node->setRotation(
+            (float)qjsbind::get_prop_number(ctx, rotVal, "start", 0),
+            (float)qjsbind::get_prop_number(ctx, rotVal, "spinSpeed", 0),
+            (float)qjsbind::get_prop_number(ctx, rotVal, "spinSpread", 0));
+    }
+    JS_FreeValue(ctx, rotVal);
+
+    // drag (per-second velocity multiplier)
+    JSValue dragVal = JS_GetPropertyStr(ctx, opts, "drag");
+    if (JS_IsNumber(dragVal)) node->setDrag((float)jsNum(ctx, dragVal));
+    JS_FreeValue(ctx, dragVal);
+
+    // duration / loop: duration>0 without loop = one-shot (fires onFinished)
+    JSValue durVal = JS_GetPropertyStr(ctx, opts, "duration");
+    JSValue loopVal = JS_GetPropertyStr(ctx, opts, "loop");
+    if (JS_IsNumber(durVal)) {
+        float dur = (float)jsNum(ctx, durVal);
+        bool loop = JS_IsUndefined(loopVal) ? false : JS_ToBool(ctx, loopVal);
+        node->setDuration(dur, loop);
+    } else if (!JS_IsUndefined(loopVal)) {
+        node->setDuration(node->duration(), JS_ToBool(ctx, loopVal));
+    }
+    JS_FreeValue(ctx, durVal);
+    JS_FreeValue(ctx, loopVal);
+
+    // onFinished
+    JSValue finVal = JS_GetPropertyStr(ctx, opts, "onFinished");
+    if (!JS_IsUndefined(finVal)) installParticles3DOnFinished(ctx, finVal, node);
+    JS_FreeValue(ctx, finVal);
+
+    // initial burst
+    JSValue burstVal = JS_GetPropertyStr(ctx, opts, "burst");
+    if (JS_IsNumber(burstVal)) {
+        int32_t n = 0; JS_ToInt32(ctx, &n, burstVal);
+        node->burst(n);
+    }
+    JS_FreeValue(ctx, burstVal);
+
+    // autoplay (default true)
+    JSValue apVal = JS_GetPropertyStr(ctx, opts, "autoplay");
+    bool autoplay = JS_IsUndefined(apVal) ? true : JS_ToBool(ctx, apVal);
+    JS_FreeValue(ctx, apVal);
+    if (!autoplay) node->stop();
+}
+
+// createParticles3D(opts?) → SceneNode (Particles3DNode)
+static JSValue js_sg_createParticles3D(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+    auto* node = g->createParticles3D();
+    g->root()->addChild(node);
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValueConst opts = argv[0];
+        JSValue nameVal = JS_GetPropertyStr(ctx, opts, "name");
+        if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
+        JS_FreeValue(ctx, nameVal);
+        bromath::Vec3 pos;
+        if (parseVec3Prop(ctx, opts, "position", pos)) node->setPosition(pos);
+        applyParticle3DOpts(ctx, opts, node);
+    }
+    return wrapNode(ctx, node, g);
+}
+
 // createParticles(opts?) → SceneNode (ParticleNode)
 static JSValue js_sg_createParticles(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
@@ -883,10 +1161,13 @@ static JSValue js_sg_createParticles(JSContext* ctx, JSValueConst this_val, int 
 
 static JSValue js_particles_burst(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Particles) return JS_UNDEFINED;
+    if (!w || !w->node) return JS_UNDEFINED;
     int32_t n = 1;
     if (argc > 0) JS_ToInt32(ctx, &n, argv[0]);
-    static_cast<scene::ParticleNode*>(w->node)->burst(n);
+    if (w->node->type() == scene::SceneNode::Type::Particles)
+        static_cast<scene::ParticleNode*>(w->node)->burst(n);
+    else if (w->node->type() == scene::SceneNode::Type::Particles3D)
+        static_cast<scene::Particles3DNode*>(w->node)->burst(n);
     return JS_DupValue(ctx, this_val);
 }
 
@@ -894,15 +1175,18 @@ static JSValue js_particles_clear(JSContext* ctx, JSValueConst this_val, int, JS
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
     if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
         static_cast<scene::ParticleNode*>(w->node)->clear();
+    else if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
+        static_cast<scene::Particles3DNode*>(w->node)->clear();
     return JS_DupValue(ctx, this_val);
 }
 
 static JSValue js_particles_configure(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Particles) return JS_UNDEFINED;
-    if (argc > 0 && JS_IsObject(argv[0])) {
+    if (!w || !w->node || argc < 1 || !JS_IsObject(argv[0])) return JS_DupValue(ctx, this_val);
+    if (w->node->type() == scene::SceneNode::Type::Particles)
         applyParticleOpts(ctx, argv[0], static_cast<scene::ParticleNode*>(w->node));
-    }
+    else if (w->node->type() == scene::SceneNode::Type::Particles3D)
+        applyParticle3DOpts(ctx, argv[0], static_cast<scene::Particles3DNode*>(w->node));
     return JS_DupValue(ctx, this_val);
 }
 
@@ -3234,6 +3518,8 @@ void SceneBindings::install(JSContext* ctx) {
                 case scene::SceneNode::Type::Physics: return JS_NewString(ctx, "physics");
                 case scene::SceneNode::Type::Html:    return JS_NewString(ctx, "html");
                 case scene::SceneNode::Type::GaussianSplat: return JS_NewString(ctx, "gaussianSplat");
+                case scene::SceneNode::Type::Particles:   return JS_NewString(ctx, "particles");
+                case scene::SceneNode::Type::Particles3D: return JS_NewString(ctx, "particles3d");
                 case scene::SceneNode::Type::Base:    return JS_NewString(ctx, "group");
                 default: break;
             }
@@ -3784,6 +4070,8 @@ void SceneBindings::install(JSContext* ctx) {
                 return static_cast<scene::SpriteNode*>(w->node)->isPlaying();
             if (w->node->type() == scene::SceneNode::Type::Particles)
                 return static_cast<scene::ParticleNode*>(w->node)->isPlaying();
+            if (w->node->type() == scene::SceneNode::Type::Particles3D)
+                return static_cast<scene::Particles3DNode*>(w->node)->isPlaying();
             if (auto* sm = asSkinnedMesh(w))
                 return sm->player() && sm->player()->isPlaying();
             return false;
@@ -3850,21 +4138,44 @@ void SceneBindings::install(JSContext* ctx) {
                     player.setOnFinished(nullptr);
                 }
             })
-        // ParticleNode: live count + emitter rate
+        // ParticleNode / Particles3DNode: live count + emitter rate.
+        // `particleCount` is the documented name; `liveCount` is kept as the
+        // original 2D alias.
         .get("liveCount", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
             if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
                 return JS_NewInt32(ctx, static_cast<scene::ParticleNode*>(w->node)->liveCount());
+            if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
+                return JS_NewInt32(ctx, static_cast<scene::Particles3DNode*>(w->node)->liveCount());
+            return JS_UNDEFINED;
+        })
+        .get("particleCount", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+            if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
+                return JS_NewInt32(ctx, static_cast<scene::ParticleNode*>(w->node)->liveCount());
+            if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
+                return JS_NewInt32(ctx, static_cast<scene::Particles3DNode*>(w->node)->liveCount());
             return JS_UNDEFINED;
         })
         .prop("rate",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
                 if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
                     return JS_NewFloat64(ctx, static_cast<scene::ParticleNode*>(w->node)->rate());
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
+                    return JS_NewFloat64(ctx, static_cast<scene::Particles3DNode*>(w->node)->rate());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
                 if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
                     static_cast<scene::ParticleNode*>(w->node)->setRate((float)val);
+                else if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
+                    static_cast<scene::Particles3DNode*>(w->node)->setRate((float)val);
+            })
+        // Particles3DNode: one-shot completion callback (see createParticles3D)
+        .prop("onFinished",
+            [](NodeWrapper*, JSContext*) -> JSValue { return JS_UNDEFINED; },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
+                    installParticles3DOnFinished(ctx, val,
+                        static_cast<scene::Particles3DNode*>(w->node));
             })
         // SpriteNode: animation-end callback. Setter installs/removes the JS
         // callback in the side registry.
@@ -3940,6 +4251,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("createHtmlNode", js_sg_createHtml, 1)
         .method_raw("createLight", js_sg_createLight, 1)
         .method_raw("createParticles", js_sg_createParticles, 1)
+        .method_raw("createParticles3D", js_sg_createParticles3D, 1)
         .method_raw("createTween", js_sg_createTween, 0)
         .method_raw("setToneMap", js_sg_setToneMap, 1)
         .method_raw("setAmbient", js_sg_setAmbient, 1)
