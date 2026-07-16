@@ -138,6 +138,21 @@ public:
     void setFrustumCulling(bool on) { frustumCullingEnabled_ = on; }
     bool frustumCullingEnabled() const { return frustumCullingEnabled_; }
 
+    /// Internal render-resolution multiplier (clamped 0.25-2.0). Every FBO
+    /// chain (mesh HDR, tonemap, bloom, tilt-shift) resizes to canvas*scale
+    /// on the next frame; the compositor samples the result at the CSS
+    /// element box, so layout, picking and camera aspect are unaffected.
+    void setRenderScale(float s) {
+        renderScale_ = s < 0.25f ? 0.25f : (s > 2.0f ? 2.0f : s);
+    }
+    float renderScale() const { return renderScale_; }
+
+    /// MSAA sample count for the HDR 3D passes. 0/1 = off; clamped to the
+    /// driver's GL_MAX_SAMPLES at allocation time (the stored value is the
+    /// request, not the clamp).
+    void setMSAA(int samples) { msaaSamples_ = samples < 2 ? 0 : samples; }
+    int msaaSamples() const { return msaaSamples_; }
+
     /// Culling counters from the most recent render3D().
     const CullStats& cullStats() const { return cullStats_; }
 
@@ -204,6 +219,22 @@ private:
     void ensureSkinnedMeshPipeline();
     void ensureMeshFBO();
     void destroyMeshFBO();
+
+    // Scaled render-target size: CSS canvas size * renderScale_, min 1.
+    // Everything that sizes an internal FBO goes through these; the canvas
+    // (CSS) size stays the contract for picking, aspect and compositing.
+    int targetWidth() const;
+    int targetHeight() const;
+
+    // --- MSAA HDR target (lazy, only while msaaSamples_ >= 2) ---
+    // Sets msaaActive_ for the frame. Defined in scene_renderer.cpp.
+    void ensureMSAAFBO();
+    void destroyMSAAFBO();
+
+    // --- Soft-particle scene-depth snapshot (lazy) ---
+    // Defined in scene_renderer_particles.cpp.
+    void ensureSceneDepthCopy();
+    void destroySceneDepthCopy();
 
     // --- Billboard GL pipeline (lazy init) ---
     void ensureBillboardPipeline();
@@ -384,11 +415,35 @@ private:
     GLint uInstAtlasGrid_ = -1;
     GLint uInstAlphaCutoff_ = -1;
 
-    // Mesh FBO
+    // Mesh FBO. The depth-stencil attachment is a texture (not an RBO) so
+    // the soft-particle pass can sample scene depth; the tonemap FBO
+    // re-attaches it for the post-tonemap unlit overlay's depth test.
     GLuint meshFBO_ = 0;
     GLuint meshColorTex_ = 0;
-    GLuint meshDepthRBO_ = 0;
+    GLuint meshDepthTex_ = 0;   // DEPTH24_STENCIL8
     int meshFBOWidth_ = 0, meshFBOHeight_ = 0;
+
+    // MSAA HDR target: multisampled renderbuffers the HDR passes render
+    // into while MSAA is on, resolved into meshColorTex_ / meshDepthTex_
+    // via glBlitFramebuffer. See render3D() for the resolve ordering.
+    GLuint msaaFBO_ = 0;
+    GLuint msaaColorRBO_ = 0;
+    GLuint msaaDepthRBO_ = 0;
+    int msaaWidth_ = 0, msaaHeight_ = 0;
+    int msaaSamplesAllocated_ = 0;
+    bool msaaActive_ = false;   // per-frame: MSAA FBO complete this frame
+
+    // Soft-particle depth snapshot: the particle pass samples this copy of
+    // the opaque scene depth — sampling a texture attached to the current
+    // draw FBO is a feedback loop in strict GL 3.3 even with depth writes
+    // off, so it can never sample meshDepthTex_ directly.
+    GLuint sceneDepthCopyFBO_ = 0;
+    GLuint sceneDepthCopyTex_ = 0;
+    int sceneDepthCopyWidth_ = 0, sceneDepthCopyHeight_ = 0;
+
+    // Render-target settings
+    float renderScale_ = 1.0f;   // internal-resolution multiplier
+    int msaaSamples_ = 0;        // requested sample count; 0/1 = off
 
     bool hasMeshContent_ = false;
 
@@ -604,6 +659,12 @@ private:
     GLint pUFlipGrid_ = -1;
     GLint pUMode_ = -1;
     GLint pUTex_ = -1;
+    // Soft-particle uniforms (scene-depth fade)
+    GLint pUSceneDepth_ = -1;
+    GLint pUViewport_ = -1;
+    GLint pUDepthRange_ = -1;
+    GLint pUPerspective_ = -1;
+    GLint pUSoftDistance_ = -1;
 
     // --- Billboard pipeline (lazy init) ---
     GLuint bbProgram_ = 0;

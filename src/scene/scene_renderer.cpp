@@ -31,6 +31,8 @@ SceneRenderer::~SceneRenderer() {
     if (fallbackCube_) { glDeleteTextures(1, &fallbackCube_); fallbackCube_ = 0; }
     if (fallbackShadow_) { glDeleteTextures(1, &fallbackShadow_); fallbackShadow_ = 0; }
     destroyMeshFBO();
+    destroyMSAAFBO();
+    destroySceneDepthCopy();
     destroyTonemapFBO();
     if (meshProgram_) { glDeleteProgram(meshProgram_); meshProgram_ = 0; }
     if (meshSkinnedProgram_) { glDeleteProgram(meshSkinnedProgram_); meshSkinnedProgram_ = 0; }
@@ -112,14 +114,26 @@ void SceneRenderer::ensureFallbackTextures() {
     glBindTexture(GL_TEXTURE_CUBE_MAP, 0);
 }
 
+int SceneRenderer::targetWidth() const {
+    const int w = static_cast<int>(graph_.canvasWidth_ * renderScale_ + 0.5f);
+    return w < 1 ? 1 : w;
+}
+
+int SceneRenderer::targetHeight() const {
+    const int h = static_cast<int>(graph_.canvasHeight_ * renderScale_ + 0.5f);
+    return h < 1 ? 1 : h;
+}
+
 void SceneRenderer::ensureMeshFBO() {
     if (graph_.canvasWidth_ <= 0 || graph_.canvasHeight_ <= 0) return;
-    if (meshFBO_ && meshFBOWidth_ == graph_.canvasWidth_ && meshFBOHeight_ == graph_.canvasHeight_) return;
+    const int tw = targetWidth();
+    const int th = targetHeight();
+    if (meshFBO_ && meshFBOWidth_ == tw && meshFBOHeight_ == th) return;
 
     destroyMeshFBO();
 
-    meshFBOWidth_ = graph_.canvasWidth_;
-    meshFBOHeight_ = graph_.canvasHeight_;
+    meshFBOWidth_ = tw;
+    meshFBOHeight_ = th;
 
     glGenFramebuffers(1, &meshFBO_);
     glBindFramebuffer(GL_FRAMEBUFFER, meshFBO_);
@@ -135,12 +149,20 @@ void SceneRenderer::ensureMeshFBO() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, meshColorTex_, 0);
 
-    // Depth renderbuffer
-    glGenRenderbuffers(1, &meshDepthRBO_);
-    glBindRenderbuffer(GL_RENDERBUFFER, meshDepthRBO_);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, meshFBOWidth_, meshFBOHeight_);
-    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
-                              GL_RENDERBUFFER, meshDepthRBO_);
+    // Depth-stencil texture (not an RBO): the soft-particle pass samples it
+    // (via the sceneDepthCopy blit) and the tonemap FBO re-attaches it for
+    // the post-tonemap unlit overlay's depth test.
+    glGenTextures(1, &meshDepthTex_);
+    glBindTexture(GL_TEXTURE_2D, meshDepthTex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, meshFBOWidth_, meshFBOHeight_, 0,
+                 GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                           GL_TEXTURE_2D, meshDepthTex_, 0);
 
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
     if (status != GL_FRAMEBUFFER_COMPLETE) {
@@ -151,11 +173,75 @@ void SceneRenderer::ensureMeshFBO() {
 }
 
 void SceneRenderer::destroyMeshFBO() {
-    if (meshDepthRBO_) { glDeleteRenderbuffers(1, &meshDepthRBO_); meshDepthRBO_ = 0; }
+    if (meshDepthTex_) { glDeleteTextures(1, &meshDepthTex_); meshDepthTex_ = 0; }
     if (meshColorTex_) { glDeleteTextures(1, &meshColorTex_); meshColorTex_ = 0; }
     if (meshFBO_) { glDeleteFramebuffers(1, &meshFBO_); meshFBO_ = 0; }
     meshFBOWidth_ = 0;
     meshFBOHeight_ = 0;
+}
+
+// Multisampled HDR target (color RGBA16F + depth-stencil renderbuffers) at
+// the mesh FBO size. Recreated when the size or sample count changes; torn
+// down when MSAA is turned off. Sets msaaActive_ for the frame — false on
+// any allocation failure so rendering falls back to the single-sampled path.
+void SceneRenderer::ensureMSAAFBO() {
+    msaaActive_ = false;
+    if (msaaSamples_ < 2 || !meshFBO_) {
+        destroyMSAAFBO();
+        return;
+    }
+
+    GLint maxSamples = 1;
+    glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
+    const int samples = msaaSamples_ > maxSamples ? static_cast<int>(maxSamples)
+                                                  : msaaSamples_;
+    if (samples < 2) {
+        destroyMSAAFBO();
+        return;
+    }
+
+    if (!msaaFBO_ || msaaWidth_ != meshFBOWidth_ || msaaHeight_ != meshFBOHeight_ ||
+        msaaSamplesAllocated_ != samples) {
+        destroyMSAAFBO();
+
+        glGenRenderbuffers(1, &msaaColorRBO_);
+        glBindRenderbuffer(GL_RENDERBUFFER, msaaColorRBO_);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_RGBA16F,
+                                         meshFBOWidth_, meshFBOHeight_);
+        glGenRenderbuffers(1, &msaaDepthRBO_);
+        glBindRenderbuffer(GL_RENDERBUFFER, msaaDepthRBO_);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8,
+                                         meshFBOWidth_, meshFBOHeight_);
+        glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+        glGenFramebuffers(1, &msaaFBO_);
+        glBindFramebuffer(GL_FRAMEBUFFER, msaaFBO_);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                                  GL_RENDERBUFFER, msaaColorRBO_);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                                  GL_RENDERBUFFER, msaaDepthRBO_);
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            LOG_ERROR("MSAA FBO incomplete (%d samples): 0x%x", samples, status);
+            destroyMSAAFBO();
+            return;
+        }
+        msaaWidth_ = meshFBOWidth_;
+        msaaHeight_ = meshFBOHeight_;
+        msaaSamplesAllocated_ = samples;
+    }
+
+    msaaActive_ = true;
+}
+
+void SceneRenderer::destroyMSAAFBO() {
+    if (msaaColorRBO_) { glDeleteRenderbuffers(1, &msaaColorRBO_); msaaColorRBO_ = 0; }
+    if (msaaDepthRBO_) { glDeleteRenderbuffers(1, &msaaDepthRBO_); msaaDepthRBO_ = 0; }
+    if (msaaFBO_) { glDeleteFramebuffers(1, &msaaFBO_); msaaFBO_ = 0; }
+    msaaWidth_ = msaaHeight_ = 0;
+    msaaSamplesAllocated_ = 0;
+    msaaActive_ = false;
 }
 
 void SceneRenderer::uploadMeshGlobals(const MeshDrawLocs& L) {
@@ -298,7 +384,14 @@ void SceneRenderer::render3D() {
         renderShadowPass();
 
         if (meshFBO_) {
-            glBindFramebuffer(GL_FRAMEBUFFER, meshFBO_);
+            // MSAA: when active, the HDR passes below render into the
+            // multisampled FBO and resolve into meshFBO_'s single-sampled
+            // textures — depth mid-frame (before the depth-sampling blended
+            // passes; see the depth-resolve comment below), color once at
+            // the end, right before the tonemap pass.
+            ensureMSAAFBO();
+            const GLuint hdrFBO = msaaActive_ ? msaaFBO_ : meshFBO_;
+            glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);
             glViewport(0, 0, meshFBOWidth_, meshFBOHeight_);
             // Reset state that Ganesh may have changed.
             glDisable(GL_SCISSOR_TEST);
@@ -427,6 +520,25 @@ void SceneRenderer::render3D() {
                 }
             }
 
+            // --- MSAA depth resolve ----------------------------------------
+            // The opaque passes above are the only depth writers, so the
+            // multisampled depth is final here. Resolving now (a) fills
+            // meshDepthTex_, which the soft-particle pass snapshots for its
+            // depth fade (a multisampled attachment can't be sampled in GL
+            // 3.3) and the post-tonemap unlit overlay depth-tests against,
+            // and (b) keeps the ordering safe: the blended passes below
+            // (splats, particles, billboards) never write depth, so this
+            // resolved copy stays valid for the rest of the frame. Color
+            // resolves separately, after all HDR passes, before tonemap.
+            if (msaaActive_) {
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, msaaFBO_);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, meshFBO_);
+                glBlitFramebuffer(0, 0, meshFBOWidth_, meshFBOHeight_,
+                                  0, 0, meshFBOWidth_, meshFBOHeight_,
+                                  GL_DEPTH_BUFFER_BIT, GL_NEAREST);
+                glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);
+            }
+
             // --- Gaussian splat pass ---------------------------------------
             // After opaque geometry so splats depth-test against it; sorted +
             // blended internally (see renderGaussianSplatNodes).
@@ -491,6 +603,17 @@ void SceneRenderer::render3D() {
 
             glUseProgram(0);
             glDisable(GL_DEPTH_TEST);
+
+            // --- MSAA color resolve ----------------------------------------
+            // Multisampled HDR -> meshColorTex_, which bloom and tonemap
+            // read. Depth was already resolved before the blended passes.
+            if (msaaActive_) {
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, msaaFBO_);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, meshFBO_);
+                glBlitFramebuffer(0, 0, meshFBOWidth_, meshFBOHeight_,
+                                  0, 0, meshFBOWidth_, meshFBOHeight_,
+                                  GL_COLOR_BUFFER_BIT, GL_NEAREST);
+            }
             glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
             // --- Tonemap pass ----------------------------------------------

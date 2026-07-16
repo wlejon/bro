@@ -285,6 +285,12 @@ class SceneGraph {
    * @param {{cols:number,rows:number,frames?:number}} [opts.sheet] - flipbook grid on the
    *   texture, played over each particle's lifetime (frames limits to the first N cells)
    * @param {string} [opts.blend="normal"] - "normal" (sorted alpha) | "additive" (glow)
+   * @param {number} [opts.softness=0] - soft-particle fade distance in world
+   *   units: fragments fade in over this depth gap to the opaque scene behind
+   *   them, removing the hard clip line where quads intersect geometry
+   *   (smoke hugging a floor, fog against walls). 0 = off. Also a live node
+   *   property (`em.softness = 0.5`). Costs one scene-depth copy per frame
+   *   while any live system requests it.
    * @param {string|Object} [opts.shape="point"] - emitter shape: "point" | "sphere" |
    *   "hemisphere" | "box" | "cone", or { type, radius, angle, extents:[x,y,z] }
    *   (radius: sphere/hemisphere/cone disc; angle: cone half-angle in degrees;
@@ -630,6 +636,36 @@ class SceneGraph {
    * @param {number}  [opts.strength=2.0]    - blur radius multiplier.
    */
   setBloom(opts) {}
+
+  /**
+   * Internal render-resolution scale for the 3D pipeline (default 1.0,
+   * clamped 0.25-2.0). Every 3D render target (HDR mesh FBO, tonemap,
+   * bloom, tilt-shift) is sized to canvas * scale; the compositor samples
+   * the result at the CSS element box, so layout, input picking and camera
+   * aspect are unaffected. Below 1.0 trades sharpness for fill-rate;
+   * above 1.0 supersamples. Note: toImageData()/captureFrame() read the
+   * internal target, so their pixel dimensions scale with this.
+   *
+   * @param {number} s - resolution multiplier (0.25-2.0)
+   */
+  setRenderScale(s) {}
+
+  /** Current render scale. Also assignable: `scene.renderScale = 0.5`. */
+  get renderScale() {}
+
+  /**
+   * MSAA for the HDR 3D passes (geometry, splats, particles, billboards).
+   * Multisampled color + depth resolve into the single-sampled targets
+   * before tonemap, so bloom/tilt-shift, the unlit overlay pass and soft
+   * particles all keep working unchanged. Combines with setRenderScale.
+   *
+   * @param {number} samples - 0 or 1 = off; 2/4/8 typical, clamped to the
+   *   driver's GL_MAX_SAMPLES
+   */
+  setMSAA(samples) {}
+
+  /** Requested MSAA sample count (0 = off). Also assignable: `scene.msaa = 4`. */
+  get msaa() {}
 
   /** Read-only view matrix as 16-element column-major array. */
   get viewMatrix() {}

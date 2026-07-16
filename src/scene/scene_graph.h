@@ -320,6 +320,23 @@ public:
     /// Per-category drawn/culled counters from the most recent render().
     const CullStats& cullStats() const { return renderer_.cullStats(); }
 
+    // --- Render-target quality ---
+
+    /// Internal render-resolution scale (clamped 0.25-2.0, default 1.0).
+    /// Multiplies the 3D render-target sizes (HDR mesh FBO + tonemap +
+    /// bloom + tilt-shift chains); the compositor samples the result at the
+    /// CSS element box, so layout, picking and camera aspect are unaffected.
+    /// <1 trades sharpness for fill-rate, >1 supersamples.
+    void  setRenderScale(float s) { renderer_.setRenderScale(s); }
+    float renderScale() const { return renderer_.renderScale(); }
+
+    /// MSAA sample count for the HDR 3D passes (0/1 = off; clamped to the
+    /// driver's GL_MAX_SAMPLES at allocation). Multisampled color + depth
+    /// resolve into the single-sampled targets before tonemap, so the post
+    /// stack, unlit overlay and soft particles are unaffected.
+    void setMSAA(int samples) { renderer_.setMSAA(samples); }
+    int  msaa() const { return renderer_.msaaSamples(); }
+
     // --- IBL environment ---
 
     /// Load an HDR equirectangular image (.hdr) and convert it to a 512²

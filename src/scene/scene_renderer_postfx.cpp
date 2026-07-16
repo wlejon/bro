@@ -57,13 +57,14 @@ void SceneRenderer::ensureTonemapPipeline() {
 
 void SceneRenderer::ensureTonemapFBO() {
     if (graph_.canvasWidth_ <= 0 || graph_.canvasHeight_ <= 0) return;
-    if (tonemapFBO_ && tonemapFBOWidth_ == graph_.canvasWidth_
-                   && tonemapFBOHeight_ == graph_.canvasHeight_) return;
+    const int tw = targetWidth();
+    const int th = targetHeight();
+    if (tonemapFBO_ && tonemapFBOWidth_ == tw && tonemapFBOHeight_ == th) return;
 
     destroyTonemapFBO();
 
-    tonemapFBOWidth_  = graph_.canvasWidth_;
-    tonemapFBOHeight_ = graph_.canvasHeight_;
+    tonemapFBOWidth_  = tw;
+    tonemapFBOHeight_ = th;
 
     glGenFramebuffers(1, &tonemapFBO_);
     glBindFramebuffer(GL_FRAMEBUFFER, tonemapFBO_);
@@ -79,11 +80,12 @@ void SceneRenderer::ensureTonemapFBO() {
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
                            tonemapColorTex_, 0);
 
-    // Reuse the mesh FBO's depth-stencil RBO so the post-tonemap unlit overlay
-    // pass can depth-test against the scene geometry that was rendered there.
-    if (meshDepthRBO_) {
-        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
-                                  GL_RENDERBUFFER, meshDepthRBO_);
+    // Reuse the mesh FBO's depth-stencil texture so the post-tonemap unlit
+    // overlay pass can depth-test against the scene geometry that was
+    // rendered there (with MSAA on, the resolved depth — see render3D).
+    if (meshDepthTex_) {
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
+                               GL_TEXTURE_2D, meshDepthTex_, 0);
     }
 
     GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
@@ -190,8 +192,8 @@ void SceneRenderer::ensureBloomPipeline() {
 
 void SceneRenderer::ensureBloomFBOs() {
     if (graph_.canvasWidth_ <= 0 || graph_.canvasHeight_ <= 0) return;
-    const int hw = std::max(1, graph_.canvasWidth_ / 2);
-    const int hh = std::max(1, graph_.canvasHeight_ / 2);
+    const int hw = std::max(1, targetWidth() / 2);
+    const int hh = std::max(1, targetHeight() / 2);
     if (bloomFBO_[0] && bloomWidth_ == hw && bloomHeight_ == hh) return;
     destroyBloomFBOs();
 
@@ -305,11 +307,13 @@ void SceneRenderer::ensureTiltShiftPipeline() {
 void SceneRenderer::ensureTiltShiftFBOs() {
     if (graph_.canvasWidth_ <= 0 || graph_.canvasHeight_ <= 0) return;
 
-    const int hw = std::max(1, graph_.canvasWidth_ / 2);
-    const int hh = std::max(1, graph_.canvasHeight_ / 2);
+    const int tw = targetWidth();
+    const int th = targetHeight();
+    const int hw = std::max(1, tw / 2);
+    const int hh = std::max(1, th / 2);
 
     if (blurFBO_[0] && blurWidth_ == hw && blurHeight_ == hh &&
-        postFBO_ && postWidth_ == graph_.canvasWidth_ && postHeight_ == graph_.canvasHeight_) {
+        postFBO_ && postWidth_ == tw && postHeight_ == th) {
         return;
     }
     destroyTiltShiftFBOs();
@@ -333,8 +337,8 @@ void SceneRenderer::ensureTiltShiftFBOs() {
     }
 
     // Full-res composite target.
-    postWidth_  = graph_.canvasWidth_;
-    postHeight_ = graph_.canvasHeight_;
+    postWidth_  = tw;
+    postHeight_ = th;
     glGenFramebuffers(1, &postFBO_);
     glBindFramebuffer(GL_FRAMEBUFFER, postFBO_);
     glGenTextures(1, &postColorTex_);

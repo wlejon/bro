@@ -61,6 +61,14 @@ public:
     void setBlend(Blend b) { blend_ = b; }
     Blend blend() const { return blend_; }
 
+    /// Soft-particle fade distance in world units: fragments fade in over
+    /// this depth gap to the opaque scene behind them, removing the hard
+    /// clip line where quads intersect geometry. 0 (default) = off; the
+    /// renderer only pays for the per-frame depth snapshot while at least
+    /// one live system requests softness.
+    void setSoftness(float d) { softness_ = d < 0.0f ? 0.0f : d; }
+    float softness() const { return softness_; }
+
     // --- Emitter shape / space ---
 
     void setShape(EmitterShape s) { shape_ = s; }
@@ -221,6 +229,7 @@ private:
     float duration_ = 0.0f;
     bool loop_ = true;
     Blend blend_ = Blend::Normal;
+    float softness_ = 0.0f;
 
     std::function<void()> onFinished_;
 

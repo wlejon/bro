@@ -1086,6 +1086,11 @@ static void applyParticle3DOpts(JSContext* ctx, JSValueConst opts,
     if (JS_IsNumber(dragVal)) node->setDrag((float)jsNum(ctx, dragVal));
     JS_FreeValue(ctx, dragVal);
 
+    // softness (world-units depth fade at geometry intersections; 0 = off)
+    JSValue softVal = JS_GetPropertyStr(ctx, opts, "softness");
+    if (JS_IsNumber(softVal)) node->setSoftness((float)jsNum(ctx, softVal));
+    JS_FreeValue(ctx, softVal);
+
     // duration / loop: duration>0 without loop = one-shot (fires onFinished)
     JSValue durVal = JS_GetPropertyStr(ctx, opts, "duration");
     JSValue loopVal = JS_GetPropertyStr(ctx, opts, "loop");
@@ -3025,6 +3030,28 @@ static JSValue js_sg_setBloom(JSContext* ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
+// setRenderScale(s) — internal render-resolution multiplier (clamped
+// 0.25-2.0). Compositing/picking stay in CSS pixels.
+static JSValue js_sg_setRenderScale(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1) return JS_UNDEFINED;
+    double s = 1.0;
+    if (JS_ToFloat64(ctx, &s, argv[0])) return JS_EXCEPTION;
+    g->setRenderScale((float)s);
+    return JS_UNDEFINED;
+}
+
+// setMSAA(samples) — multisampling for the HDR 3D passes. 0/1 = off;
+// clamped to the driver's GL_MAX_SAMPLES at allocation.
+static JSValue js_sg_setMSAA(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1) return JS_UNDEFINED;
+    int32_t n = 0;
+    if (JS_ToInt32(ctx, &n, argv[0])) return JS_EXCEPTION;
+    g->setMSAA(n);
+    return JS_UNDEFINED;
+}
+
 // unprojectLocal(x, y) → { origin:[x,y,z], dir:[x,y,z] } | null
 static JSValue js_sg_unprojectLocal(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
@@ -4203,6 +4230,17 @@ void SceneBindings::install(JSContext* ctx) {
                 else if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
                     static_cast<scene::Particles3DNode*>(w->node)->setRate((float)val);
             })
+        // Particles3DNode: soft-particle fade distance (world units, 0 = off)
+        .prop("softness",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
+                    return JS_NewFloat64(ctx, static_cast<scene::Particles3DNode*>(w->node)->softness());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
+                    static_cast<scene::Particles3DNode*>(w->node)->setSoftness((float)val);
+            })
         // Particles3DNode: one-shot completion callback (see createParticles3D)
         .prop("onFinished",
             [](NodeWrapper*, JSContext*) -> JSValue { return JS_UNDEFINED; },
@@ -4275,6 +4313,12 @@ void SceneBindings::install(JSContext* ctx) {
         .prop("frustumCulling",
             [](GraphWrapper* w) -> bool { return w && w->graph ? w->graph->frustumCulling() : true; },
             [](GraphWrapper* w, bool val) { if (w && w->graph) w->graph->setFrustumCulling(val); })
+        .prop("renderScale",
+            [](GraphWrapper* w) -> double { return w && w->graph ? w->graph->renderScale() : 1.0; },
+            [](GraphWrapper* w, double val) { if (w && w->graph) w->graph->setRenderScale((float)val); })
+        .prop("msaa",
+            [](GraphWrapper* w) -> double { return w && w->graph ? w->graph->msaa() : 0; },
+            [](GraphWrapper* w, double val) { if (w && w->graph) w->graph->setMSAA((int)val); })
 
         // Methods (all raw — complex arg handling)
         .method_raw("createNode", js_sg_createNode, 1)
@@ -4303,6 +4347,8 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setFog", js_sg_setFog, 1)
         .method_raw("setTiltShift", js_sg_setTiltShift, 1)
         .method_raw("setBloom", js_sg_setBloom, 1)
+        .method_raw("setRenderScale", js_sg_setRenderScale, 1)
+        .method_raw("setMSAA", js_sg_setMSAA, 1)
         .method_raw("setEnvironment", js_sg_setEnvironment, 1)
         .method_raw("setFrustumCulling", js_sg_setFrustumCulling, 1)
         .method_raw("cullStats", js_sg_cullStats, 0)
