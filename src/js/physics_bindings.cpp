@@ -20,6 +20,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 JPH_SUPPRESS_WARNINGS
@@ -32,9 +33,16 @@ namespace bro::js {
 // does NOT own the PhysicsWorld); sandbox worlds own their PhysicsWorld.
 // ---------------------------------------------------------------------------
 
+struct JsCharacter;
+
 struct JsWorld {
     physics::PhysicsWorld* world = nullptr;
     bool ownsWorld = false;  // true → delete `world` in destructor
+
+    // Sandbox characters that still reference this world. GC teardown order is
+    // arbitrary, so ~JsWorld must sever their back-pointers before the
+    // character finalizers run (see characterClassFinalizer).
+    std::unordered_set<JsCharacter*> liveCharacters;
 
     std::unordered_map<uint32_t, int32_t> bodyTags;     // BodyID idx+seq → tag
     std::unordered_map<int32_t, uint32_t> tagToBody;    // tag → BodyID idx+seq
@@ -73,13 +81,7 @@ struct JsWorld {
         return it != bodyTags.end() ? it->second : -1;
     }
 
-    ~JsWorld() {
-        if (ownsWorld && world) {
-            world->shutdown();
-            delete world;
-        }
-        world = nullptr;
-    }
+    ~JsWorld();  // defined after JsCharacter — severs live character back-pointers
 };
 
 // ---------------------------------------------------------------------------
@@ -843,6 +845,21 @@ struct JsCharacter {
     JSValue worldRef = JS_UNDEFINED;   // strong ref to a sandbox world handle
 };
 
+// GC teardown may finalize the world handle before its characters; sever the
+// back-pointers first so character finalizers never touch a deleted JsWorld
+// (PhysicsWorld::shutdown destroys the characters themselves).
+JsWorld::~JsWorld() {
+    for (JsCharacter* c : liveCharacters) {
+        c->world = nullptr;
+        c->handle = 0;
+    }
+    if (ownsWorld && world) {
+        world->shutdown();
+        delete world;
+    }
+    world = nullptr;
+}
+
 static JsWorld* characterWorld(JsCharacter* c) {
     return JS_IsUndefined(c->worldRef) ? s_defaultWorld : c->world;
 }
@@ -852,14 +869,23 @@ static void characterClassFinalizer(JSRuntime* rt, JSValue val) {
     if (!c) return;
     JsWorld* w = characterWorld(c);
     if (w && w->world && c->handle) w->world->destroyCharacter(c->handle);
+    if (c->world) c->world->liveCharacters.erase(c);
     JS_FreeValueRT(rt, c->worldRef);
     delete c;
+}
+
+// worldRef lives in opaque data, invisible to the GC — without this mark hook
+// the teardown cycle collector counts it as an external root and leaks the
+// world handle (QuickJS Debug asserts on gc_obj_list).
+static void characterClassGcMark(JSRuntime* rt, JSValueConst val, JS_MarkFunc* mark_func) {
+    JsCharacter* c = (JsCharacter*)JS_GetOpaque(val, s_characterClassId);
+    if (c) JS_MarkValue(rt, c->worldRef, mark_func);
 }
 
 static JSClassDef s_characterClassDef = {
     "PhysicsCharacter",
     characterClassFinalizer,  // finalizer
-    nullptr,                  // gc_mark
+    characterClassGcMark,     // gc_mark
     nullptr,                  // call
     nullptr,                  // exotic
 };
@@ -1011,6 +1037,7 @@ static JSValue worldCreateCharacter(JSContext* ctx, JsWorld* w, JSValueConst wor
     if (!JS_IsUndefined(worldVal)) {
         jc->world = w;
         jc->worldRef = JS_DupValue(ctx, worldVal);
+        w->liveCharacters.insert(jc);
     }
     JS_SetOpaque(obj, jc);
     return obj;
