@@ -92,6 +92,21 @@ public:
     void setMetaKey(bool v) { metaKey_ = v; }
     void setRelatedTarget(Element* v) { relatedTarget_ = v; }
 
+    // PointerEvent payload — MouseEvent doubles as the C++ carrier for
+    // synthesized pointer events ("pointerdown"/"pointermove"/…, see
+    // Engine::dispatchPointerAlias and the touch input path). Defaults
+    // describe the single mouse-driven pointer, so plain mouse events need
+    // no extra setup. pressure < 0 means "derive from buttons" (0.5 while
+    // any button is held, else 0), the mouse-pointer convention.
+    int pointerId() const { return pointerId_; }
+    const std::string& pointerType() const { return pointerType_; }
+    bool isPrimaryPointer() const { return isPrimaryPointer_; }
+    double pressure() const { return pressure_; }
+    void setPointerId(int v) { pointerId_ = v; }
+    void setPointerType(const std::string& v) { pointerType_ = v; }
+    void setIsPrimaryPointer(bool v) { isPrimaryPointer_ = v; }
+    void setPressure(double v) { pressure_ = v; }
+
 private:
     double clientX_ = 0.0;
     double clientY_ = 0.0;
@@ -111,6 +126,10 @@ private:
     bool altKey_ = false;
     bool metaKey_ = false;
     Element* relatedTarget_ = nullptr;
+    int pointerId_ = 1;                  // mouse pointer
+    std::string pointerType_ = "mouse";
+    bool isPrimaryPointer_ = true;
+    double pressure_ = -1.0;             // <0: derive from buttons
 };
 
 class KeyboardEvent : public Event {

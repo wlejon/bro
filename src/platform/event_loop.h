@@ -32,6 +32,14 @@ public:
     std::function<void(uint32_t instanceId)> onGamepadRemoved;
     std::function<void(uint32_t instanceId, int button, bool down)> onGamepadButton;
     std::function<void(uint32_t instanceId, int axis, float value)> onGamepadAxis;
+    // Touch (finger) events. `fingerId` is the SDL finger id — stable and
+    // unique for the lifetime of one contact. x/y arrive here already
+    // converted from SDL's normalized 0-1 range to window coordinates (the
+    // same space mouse events use), pressure is 0..1.
+    std::function<void(uint64_t fingerId, float x, float y, float pressure)> onFingerDown;
+    std::function<void(uint64_t fingerId, float x, float y, float pressure)> onFingerMove;
+    std::function<void(uint64_t fingerId, float x, float y)> onFingerUp;
+    std::function<void(uint64_t fingerId, float x, float y)> onFingerCancel;
 
     /// Polls all pending SDL events and dispatches to callbacks.
     /// Call once per frame.

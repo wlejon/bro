@@ -155,6 +155,22 @@ pad.vibrationActuator.playEffect('dual-rumble', {
 flush(); // run microtasks
 assert(effectResult === 'complete', 'playEffect resolves "complete", got ' + effectResult);
 
+// Trigger rumble (SDL_RumbleGamepadTriggers) — an advertised second effect;
+// on a virtual pad the request is recorded and resolves like dual-rumble.
+assert(Array.isArray(pad.vibrationActuator.effects) &&
+       pad.vibrationActuator.effects.indexOf('trigger-rumble') !== -1,
+       'actuator advertises the trigger-rumble effect');
+let triggerResult = null;
+pad.vibrationActuator.playEffect('trigger-rumble', {
+    duration: 100, leftTrigger: 1.0, rightTrigger: 0.25,
+}).then((r) => { triggerResult = r; });
+flush();
+assert(triggerResult === 'complete', 'trigger-rumble playEffect resolves "complete"');
+
+let badEffect = null;
+try { pad.vibrationActuator.playEffect('nope', {}); } catch (e) { badEffect = e; }
+assert(badEffect !== null, 'unknown effect type throws');
+
 let resetResult = null;
 pad.vibrationActuator.reset().then((r) => { resetResult = r; });
 flush();

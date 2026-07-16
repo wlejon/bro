@@ -6,6 +6,21 @@
 
 namespace bro::platform {
 
+// SDL delivers finger coordinates normalized to 0-1 across the window;
+// convert to window coordinates so touch flows through the same coordinate
+// space as mouse input. SDL3 mouse events report window coordinates (points,
+// not pixels), and SDL_GetWindowSize returns the same units, so this stays
+// consistent under DPI scaling.
+static void fingerWindowCoords(const SDL_TouchFingerEvent& tf,
+                               float& outX, float& outY) {
+    int w = 0, h = 0;
+    if (SDL_Window* win = SDL_GetWindowFromID(tf.windowID)) {
+        SDL_GetWindowSize(win, &w, &h);
+    }
+    outX = tf.x * static_cast<float>(w);
+    outY = tf.y * static_cast<float>(h);
+}
+
 void EventLoop::pollEvents() {
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
@@ -113,6 +128,40 @@ void EventLoop::pollEvents() {
                     if (v < -1.0f) v = -1.0f;
                     onGamepadAxis(event.gaxis.which,
                                   static_cast<int>(event.gaxis.axis), v);
+                }
+                break;
+
+            case SDL_EVENT_FINGER_DOWN:
+                if (onFingerDown) {
+                    float x, y;
+                    fingerWindowCoords(event.tfinger, x, y);
+                    onFingerDown(static_cast<uint64_t>(event.tfinger.fingerID),
+                                 x, y, event.tfinger.pressure);
+                }
+                break;
+
+            case SDL_EVENT_FINGER_MOTION:
+                if (onFingerMove) {
+                    float x, y;
+                    fingerWindowCoords(event.tfinger, x, y);
+                    onFingerMove(static_cast<uint64_t>(event.tfinger.fingerID),
+                                 x, y, event.tfinger.pressure);
+                }
+                break;
+
+            case SDL_EVENT_FINGER_UP:
+                if (onFingerUp) {
+                    float x, y;
+                    fingerWindowCoords(event.tfinger, x, y);
+                    onFingerUp(static_cast<uint64_t>(event.tfinger.fingerID), x, y);
+                }
+                break;
+
+            case SDL_EVENT_FINGER_CANCELED:
+                if (onFingerCancel) {
+                    float x, y;
+                    fingerWindowCoords(event.tfinger, x, y);
+                    onFingerCancel(static_cast<uint64_t>(event.tfinger.fingerID), x, y);
                 }
                 break;
 

@@ -60,7 +60,13 @@ navigator.getGamepads();
  *                                 triggers, 0/1 for digital buttons)
  * @property {number[]} axes     - 4 stick axes, each -1..1
  * @property {number}  timestamp - Engine wall-clock ms of the last state change
- * @property {GamepadHapticActuator} vibrationActuator - Dual-rumble control
+ * @property {GamepadHapticActuator} vibrationActuator - Rumble control.
+ *   `effects` lists ["dual-rumble", "trigger-rumble"].
+ *   playEffect("dual-rumble", {duration, strongMagnitude, weakMagnitude})
+ *   drives the body motors; playEffect("trigger-rumble", {duration,
+ *   strongMagnitude, weakMagnitude, leftTrigger, rightTrigger}) additionally
+ *   drives the per-trigger motors (Xbox-style pads; others ignore the
+ *   trigger part). reset() stops both.
  */
 
 // Typical read-in-game-loop usage:

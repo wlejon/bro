@@ -46,9 +46,12 @@ static JSValue resolvedPromise(JSContext* ctx, JSValue value) {
     return promise;
 }
 
-// playEffect(type, {duration, strongMagnitude, weakMagnitude}) -> Promise<"complete">
-// data[0] = gamepad slot index. Follows the W3C GamepadHapticActuator shape
-// ("dual-rumble" only; startDelay/leftTrigger/rightTrigger are ignored).
+// playEffect(type, {duration, strongMagnitude, weakMagnitude, leftTrigger,
+// rightTrigger}) -> Promise<"complete">
+// data[0] = gamepad slot index. Follows the W3C GamepadHapticActuator shape:
+// "dual-rumble" drives the body motors; "trigger-rumble" additionally drives
+// the per-trigger motors from leftTrigger/rightTrigger (SDL_RumbleGamepad-
+// Triggers — Xbox-style pads; others ignore it). startDelay is ignored.
 static JSValue js_playEffect(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv,
                              int, JSValue* data) {
     auto* engine = getEngine(ctx);
@@ -56,14 +59,20 @@ static JSValue js_playEffect(JSContext* ctx, JSValueConst, int argc, JSValueCons
     int32_t index = 0;
     JS_ToInt32(ctx, &index, data[0]);
 
+    bool triggerRumble = false;
     if (argc >= 1 && JS_IsString(argv[0])) {
         const char* type = JS_ToCString(ctx, argv[0]);
-        bool ok = type && std::string(type) == "dual-rumble";
+        std::string t = type ? type : "";
         if (type) JS_FreeCString(ctx, type);
-        if (!ok) return JS_ThrowTypeError(ctx, "playEffect: only \"dual-rumble\" is supported");
+        triggerRumble = (t == "trigger-rumble");
+        if (!triggerRumble && t != "dual-rumble") {
+            return JS_ThrowTypeError(ctx,
+                "playEffect: only \"dual-rumble\" and \"trigger-rumble\" are supported");
+        }
     }
 
     double duration = 0.0, strong = 0.0, weak = 0.0;
+    double leftTrigger = 0.0, rightTrigger = 0.0;
     if (argc >= 2 && JS_IsObject(argv[1])) {
         JSValue v = JS_GetPropertyStr(ctx, argv[1], "duration");
         if (JS_IsNumber(v)) JS_ToFloat64(ctx, &duration, v);
@@ -74,11 +83,23 @@ static JSValue js_playEffect(JSContext* ctx, JSValueConst, int argc, JSValueCons
         v = JS_GetPropertyStr(ctx, argv[1], "weakMagnitude");
         if (JS_IsNumber(v)) JS_ToFloat64(ctx, &weak, v);
         JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, argv[1], "leftTrigger");
+        if (JS_IsNumber(v)) JS_ToFloat64(ctx, &leftTrigger, v);
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, argv[1], "rightTrigger");
+        if (JS_IsNumber(v)) JS_ToFloat64(ctx, &rightTrigger, v);
+        JS_FreeValue(ctx, v);
     }
 
     bool ok = engine->gamepadRumble(index, static_cast<float>(strong),
                                     static_cast<float>(weak),
                                     static_cast<int>(duration));
+    if (triggerRumble) {
+        ok = engine->gamepadRumbleTriggers(index,
+                                           static_cast<float>(leftTrigger),
+                                           static_cast<float>(rightTrigger),
+                                           static_cast<int>(duration)) && ok;
+    }
     return resolvedPromise(ctx, JS_NewString(ctx, ok ? "complete" : "preempted"));
 }
 
@@ -90,6 +111,7 @@ static JSValue js_resetEffect(JSContext* ctx, JSValueConst, int, JSValueConst*,
     int32_t index = 0;
     JS_ToInt32(ctx, &index, data[0]);
     engine->gamepadRumble(index, 0.0f, 0.0f, 0);
+    engine->gamepadRumbleTriggers(index, 0.0f, 0.0f, 0);
     return resolvedPromise(ctx, JS_NewString(ctx, "complete"));
 }
 
@@ -131,6 +153,12 @@ JSValue buildGamepadSnapshot(JSContext* ctx, engine::Engine* /*engine*/,
     // carry the slot index as bound data so the snapshot stays a plain object.
     JSValue actuator = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, actuator, "type", JS_NewString(ctx, "dual-rumble"));
+    {
+        JSValue effects = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, effects, 0, JS_NewString(ctx, "dual-rumble"));
+        JS_SetPropertyUint32(ctx, effects, 1, JS_NewString(ctx, "trigger-rumble"));
+        JS_SetPropertyStr(ctx, actuator, "effects", effects);
+    }
     JSValue indexVal = JS_NewInt32(ctx, gp.index);
     JS_SetPropertyStr(ctx, actuator, "playEffect",
         JS_NewCFunctionData(ctx, js_playEffect, 2, 0, 1, &indexVal));

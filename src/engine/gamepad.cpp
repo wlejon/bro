@@ -328,6 +328,25 @@ bool Engine::gamepadRumble(int index, float strongMagnitude, float weakMagnitude
     return true;  // virtual pad: recorded above, nothing to drive
 }
 
+bool Engine::gamepadRumbleTriggers(int index, float leftMagnitude,
+                                   float rightMagnitude, int durationMs) {
+    GamepadState* gp = connectedGamepadAt(index);
+    if (!gp) return false;
+    leftMagnitude = std::clamp(leftMagnitude, 0.0f, 1.0f);
+    rightMagnitude = std::clamp(rightMagnitude, 0.0f, 1.0f);
+    durationMs = std::max(0, durationMs);
+    gp->rumbleLeftTrigger = leftMagnitude;
+    gp->rumbleRightTrigger = rightMagnitude;
+    gp->rumbleTriggerDurationMs = durationMs;
+    if (gp->handle) {
+        return SDL_RumbleGamepadTriggers(gp->handle,
+                                         static_cast<Uint16>(leftMagnitude * 0xFFFF),
+                                         static_cast<Uint16>(rightMagnitude * 0xFFFF),
+                                         static_cast<Uint32>(durationMs));
+    }
+    return true;  // virtual pad: recorded above, nothing to drive
+}
+
 // ---------------------------------------------------------------------------
 // Teardown
 // ---------------------------------------------------------------------------

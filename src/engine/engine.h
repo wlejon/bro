@@ -204,6 +204,26 @@ public:
     bool gamepadRumble(int index, float strongMagnitude, float weakMagnitude,
                        int durationMs);
 
+    /// Trigger-rumble request (vibrationActuator "trigger-rumble" effect).
+    /// Magnitudes 0..1 per trigger. Real pads forward to
+    /// SDL_RumbleGamepadTriggers; virtual pads just record.
+    bool gamepadRumbleTriggers(int index, float leftMagnitude,
+                               float rightMagnitude, int durationMs);
+
+    // --- Touch input (SDL finger events; also the headless touch* seam) ---
+    // One call per contact transition/movement. `fingerId` is any stable
+    // per-contact id (the SDL finger id on the real path, a caller-chosen id
+    // from the headless injector); x/y are window coordinates, pressure 0..1.
+    // Each contact drives W3C Pointer Events (pointerdown/move/up/cancel,
+    // pointerType "touch", unique pointerId ≥ 2) followed by Touch Events
+    // (touchstart/move/end/cancel with touches/targetTouches/changedTouches),
+    // and a primary-contact tap synthesizes the compat mouse sequence
+    // (mousedown → mouseup → click). Implementations in touch_input.cpp.
+    void handleTouchDown(uint64_t fingerId, float x, float y, float pressure = 1.0f);
+    void handleTouchMove(uint64_t fingerId, float x, float y, float pressure = 1.0f);
+    void handleTouchUp(uint64_t fingerId, float x, float y);
+    void handleTouchCancel(uint64_t fingerId, float x, float y);
+
     /// All gamepad slots (connected and not) — read by the JS bindings to
     /// build navigator.getGamepads() snapshots.
     const std::vector<GamepadState>& gamepads() const { return gamepads_; }
@@ -225,18 +245,19 @@ public:
     dom::Element* pointerLockElement() const { return lockedElement_.get(); }
 
     // --- Pointer capture (Element.setPointerCapture) ---
-    // While captured, pointermove/pointerup/pointercancel dispatch to the
-    // captured element regardless of the cursor's hit target (offsetX/Y
-    // recomputed against it), and the capture auto-releases after pointerup —
-    // the web's drag idiom, so a drag whose release lands off-element still
-    // reaches the element that started it. Mouse events keep normal hit-test
-    // targeting. bro synthesizes one mouse pointer (pointerId 1), so there is
-    // no per-pointer table. Fires gotpointercapture / lostpointercapture.
-    bool setPointerCapture(dom::Element* target);
-    void releasePointerCapture(dom::Element* target);
-    bool hasPointerCapture(const dom::Element* target) const {
-        return target != nullptr && pointerCaptureElement_.get() == target;
-    }
+    // While captured, pointermove/pointerup/pointercancel for that pointerId
+    // dispatch to the captured element regardless of the hit target (offsetX/Y
+    // recomputed against it), and the capture auto-releases after pointerup /
+    // pointercancel — the web's drag idiom, so a drag whose release lands
+    // off-element still reaches the element that started it. Mouse events keep
+    // normal hit-test targeting. Capture is per pointerId: the mouse pointer is
+    // always id kMousePointerId (1); touch contacts get unique ids ≥ 2 (see
+    // handleTouchDown), and each can be captured independently. Fires
+    // gotpointercapture / lostpointercapture.
+    static constexpr int kMousePointerId = 1;
+    bool setPointerCapture(dom::Element* target, int pointerId = kMousePointerId);
+    void releasePointerCapture(dom::Element* target, int pointerId = kMousePointerId);
+    bool hasPointerCapture(const dom::Element* target, int pointerId = kMousePointerId) const;
 
     // --- Document lifecycle ---
     // Tracks the HTML document.readyState. Progresses "loading" (during script
@@ -1070,11 +1091,55 @@ private:
     float lockedMouseX_ = 0.0f;
     float lockedMouseY_ = 0.0f;
 
-    // Pointer capture: while held, pointer events (not mouse events) route to
-    // this element. Cleared by pointerup/pointercancel, an explicit
-    // releasePointerCapture(), or a buttons-free pointermove (self-heal when
-    // the release was never delivered).
-    dom::ElementHandle pointerCaptureElement_;
+    // Pointer capture, per pointerId: while held, pointer events (not mouse
+    // events) for that id route to the captured element. Cleared by
+    // pointerup/pointercancel, an explicit releasePointerCapture(), or (mouse
+    // pointer only) a buttons-free pointermove — self-heal when the release
+    // was never delivered. Key kMousePointerId is the mouse; touch contacts
+    // use their per-contact pointerIds.
+    std::unordered_map<int, dom::ElementHandle> pointerCaptures_;
+    /// The element currently capturing `pointerId`, or null.
+    dom::Element* pointerCaptureFor(int pointerId) const;
+
+    // --- Touch contact table (implementations in touch_input.cpp) ---
+    // One live entry per finger on the surface. pointerIds are minted from
+    // nextTouchPointerId_ (monotonic, starts at 2) so they are unique per
+    // contact and never collide with the mouse's pointerId 1. The first
+    // contact of a contact set (touch on an empty table) is the primary
+    // pointer for its whole lifetime. Touch NEVER drives hover —
+    // hoveredElement_ / :hover stay mouse-only.
+    struct TouchContact {
+        uint64_t fingerId = 0;      // SDL finger id / injector-chosen id
+        int pointerId = 0;          // W3C PointerEvent.pointerId (≥ 2)
+        bool primary = false;       // first contact of the current set
+        float x = 0.0f, y = 0.0f;   // latest position (window space)
+        float downX = 0.0f, downY = 0.0f;  // position at touch-down
+        float pressure = 1.0f;
+        bool moved = false;         // travelled past the tap slop
+        bool compatSuppressed = false; // preventDefault on pointerdown/touchstart
+        // touchstart hit target — Touch Events for this contact keep firing
+        // here for its whole lifetime (W3C Touch Events targeting rule).
+        dom::ElementHandle startTarget;
+    };
+    std::vector<TouchContact> touchContacts_;
+    int nextTouchPointerId_ = 2;
+    TouchContact* touchByFinger(uint64_t fingerId);
+    /// Dispatch one pointer event for a touch contact. Routes to the contact's
+    /// captured element if any (except pointerdown), else hit-tests the
+    /// contact point. Returns true if a listener called preventDefault().
+    bool dispatchTouchPointerEvent(const char* type, const TouchContact& c,
+                                   bool cancelable);
+    /// Dispatch one W3C Touch Event (touchstart/move/end/cancel) at the
+    /// contact's start target, building JS Touch/TouchList/TouchEvent
+    /// instances via the polyfill constructors. `changed` is the contact
+    /// this event reports; the live lists come from touchContacts_.
+    /// Returns true if a listener called preventDefault().
+    bool dispatchTouchEvent(const char* type, const TouchContact& changed,
+                            bool cancelable);
+    /// Compat mouse sequence for a primary-contact tap:
+    /// mousedown → mouseup → click through the standard doc dispatch helpers
+    /// (focus semantics included), no pointer aliases.
+    void dispatchCompatMouseForTap(const TouchContact& c);
 
     // HTML document.readyState. Starts "loading" while user scripts execute,
     // advances to "interactive"/"complete" as DOMContentLoaded/load dispatch.

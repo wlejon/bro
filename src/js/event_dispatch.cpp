@@ -184,19 +184,24 @@ static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& ev
             JS_SetPropertyStr(ctx, jsEvent, "relatedTarget", JS_NULL);
         }
 
-        // PointerEvent properties. bro has no native pointer device — pointer
-        // events are synthesized from mouse input (Engine::dispatchPointerAlias),
-        // so every pointer event is the primary "mouse" pointer. Handlers are
+        // PointerEvent properties. Pointer events are synthesized from mouse
+        // input (Engine::dispatchPointerAlias — pointerId 1, "mouse") and from
+        // touch contacts (Engine::handleTouch* — per-contact ids ≥ 2, "touch");
+        // the MouseEvent carries the per-pointer payload. Handlers are
         // duck-typed on MouseEvent fields (clientX/button/…), already set above;
         // these add the pointer-only fields so e.pointerId etc. are defined.
         if (event.type().rfind("pointer", 0) == 0) {
-            JS_SetPropertyStr(ctx, jsEvent, "pointerId", JS_NewInt32(ctx, 1));
-            JS_SetPropertyStr(ctx, jsEvent, "pointerType", JS_NewString(ctx, "mouse"));
-            JS_SetPropertyStr(ctx, jsEvent, "isPrimary", JS_NewBool(ctx, true));
+            JS_SetPropertyStr(ctx, jsEvent, "pointerId",
+                              JS_NewInt32(ctx, mouseEvt->pointerId()));
+            JS_SetPropertyStr(ctx, jsEvent, "pointerType",
+                              JS_NewString(ctx, mouseEvt->pointerType().c_str()));
+            JS_SetPropertyStr(ctx, jsEvent, "isPrimary",
+                              JS_NewBool(ctx, mouseEvt->isPrimaryPointer()));
             JS_SetPropertyStr(ctx, jsEvent, "width", JS_NewFloat64(ctx, 1));
             JS_SetPropertyStr(ctx, jsEvent, "height", JS_NewFloat64(ctx, 1));
-            JS_SetPropertyStr(ctx, jsEvent, "pressure",
-                              JS_NewFloat64(ctx, mouseEvt->buttons() != 0 ? 0.5 : 0.0));
+            double pressure = mouseEvt->pressure();
+            if (pressure < 0.0) pressure = mouseEvt->buttons() != 0 ? 0.5 : 0.0;
+            JS_SetPropertyStr(ctx, jsEvent, "pressure", JS_NewFloat64(ctx, pressure));
             JS_SetPropertyStr(ctx, jsEvent, "tangentialPressure", JS_NewFloat64(ctx, 0));
             JS_SetPropertyStr(ctx, jsEvent, "tiltX", JS_NewFloat64(ctx, 0));
             JS_SetPropertyStr(ctx, jsEvent, "tiltY", JS_NewFloat64(ctx, 0));

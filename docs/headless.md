@@ -57,6 +57,10 @@ Mouse coordinates are **viewport-relative**, matching `getBoundingClientRect()` 
 | `mouseUp(x, y [, button])` | Simulate a mouse button release |
 | `mouseMove(x, y)` | Simulate mouse movement (triggers hover, mousemove events) |
 | `wheel(x, y, deltaY [, deltaX])` | Simulate a mouse wheel event (deltaY in scroll lines) |
+| `touchDown(id, x, y [, pressure])` | Simulate a finger landing. `id` is a caller-chosen contact id (reuse it for the move/up/cancel of the same finger; distinct concurrent ids are distinct fingers). Dispatches pointerdown (pointerType `"touch"`, unique pointerId ≥ 2) then touchstart. See [pointer-api.js](pointer-api.js). |
+| `touchMove(id, x, y [, pressure])` | Move a live contact. Dispatches pointermove then touchmove. Travelling past the ~10px tap slop makes the contact a drag (no compat click on lift). |
+| `touchUp(id, x, y)` | Lift a contact. Dispatches pointerup then touchend; a clean primary-finger tap then synthesizes the compat mousedown → mouseup → click. |
+| `touchCancel(id, x, y)` | Abort a contact (the OS-cancelled-gesture path). Dispatches pointercancel then touchcancel, releases any pointer capture, never synthesizes compat mouse events. |
 | `keyDown(keycode [, scancode, mod, repeat])` | Simulate a key press (SDL keycodes) |
 | `keyUp(keycode [, scancode, mod])` | Simulate a key release |
 | `textInput(text)` | Simulate text input (for typing into focused input/textarea) |

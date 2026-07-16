@@ -37,6 +37,10 @@ struct GamepadState {
     float rumbleStrong = 0.0f;
     float rumbleWeak = 0.0f;
     int rumbleDurationMs = 0;
+    // Last trigger-rumble request (vibrationActuator "trigger-rumble").
+    float rumbleLeftTrigger = 0.0f;
+    float rumbleRightTrigger = 0.0f;
+    int rumbleTriggerDurationMs = 0;
 };
 
 /// A button reads as pressed once its analog value crosses this (matters for

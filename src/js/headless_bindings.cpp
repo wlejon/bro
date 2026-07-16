@@ -307,6 +307,85 @@ static JSValue js_wheel(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     return JS_UNDEFINED;
 }
 
+// --- Touch input simulation ---
+// Drives the same Engine::handleTouch* entry points the SDL finger-event
+// path uses (the gamepad-seam pattern: inject below the JS API, above SDL),
+// so pointer events, touch events, per-pointer capture, and the compat mouse
+// sequence all run the real pipeline. `id` is a caller-chosen contact id
+// (the SDL finger-id analog) — reuse the same id for move/up/cancel of one
+// contact; distinct concurrent ids are distinct fingers. Coordinates are
+// viewport-relative like the mouse helpers.
+
+static JSValue js_touchDown(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "touchDown(id, x, y [, pressure]) requires id, x, y");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    int64_t id = 0;
+    double x, y, pressure = 1.0;
+    if (JS_ToInt64(ctx, &id, argv[0])) return JS_EXCEPTION;
+    if (JS_ToFloat64(ctx, &x, argv[1])) return JS_EXCEPTION;
+    if (JS_ToFloat64(ctx, &y, argv[2])) return JS_EXCEPTION;
+    if (argc >= 4) JS_ToFloat64(ctx, &pressure, argv[3]);
+
+    engine->handleTouchDown(static_cast<uint64_t>(id), static_cast<float>(x),
+                            toScreenY(engine, y), static_cast<float>(pressure));
+    engine->flush();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_touchMove(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "touchMove(id, x, y [, pressure]) requires id, x, y");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    int64_t id = 0;
+    double x, y, pressure = 1.0;
+    if (JS_ToInt64(ctx, &id, argv[0])) return JS_EXCEPTION;
+    if (JS_ToFloat64(ctx, &x, argv[1])) return JS_EXCEPTION;
+    if (JS_ToFloat64(ctx, &y, argv[2])) return JS_EXCEPTION;
+    if (argc >= 4) JS_ToFloat64(ctx, &pressure, argv[3]);
+
+    engine->handleTouchMove(static_cast<uint64_t>(id), static_cast<float>(x),
+                            toScreenY(engine, y), static_cast<float>(pressure));
+    engine->flush();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_touchUp(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "touchUp(id, x, y) requires id, x, y");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    int64_t id = 0;
+    double x, y;
+    if (JS_ToInt64(ctx, &id, argv[0])) return JS_EXCEPTION;
+    if (JS_ToFloat64(ctx, &x, argv[1])) return JS_EXCEPTION;
+    if (JS_ToFloat64(ctx, &y, argv[2])) return JS_EXCEPTION;
+
+    engine->handleTouchUp(static_cast<uint64_t>(id), static_cast<float>(x),
+                          toScreenY(engine, y));
+    engine->flush();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_touchCancel(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 3) return JS_ThrowTypeError(ctx, "touchCancel(id, x, y) requires id, x, y");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    int64_t id = 0;
+    double x, y;
+    if (JS_ToInt64(ctx, &id, argv[0])) return JS_EXCEPTION;
+    if (JS_ToFloat64(ctx, &x, argv[1])) return JS_EXCEPTION;
+    if (JS_ToFloat64(ctx, &y, argv[2])) return JS_EXCEPTION;
+
+    engine->handleTouchCancel(static_cast<uint64_t>(id), static_cast<float>(x),
+                              toScreenY(engine, y));
+    engine->flush();
+    return JS_UNDEFINED;
+}
+
 static JSValue js_keyDown(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_ThrowTypeError(ctx, "keyDown(keycode [, scancode, mod, repeat])");
     auto* engine = getEngine(ctx);
@@ -1126,6 +1205,11 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         .function("mouseMove", js_mouseMove, 2)
         .function("click", js_click, 3)
         .function("wheel", js_wheel, 4)
+        // Touch input simulation
+        .function("touchDown", js_touchDown, 4)
+        .function("touchMove", js_touchMove, 4)
+        .function("touchUp", js_touchUp, 3)
+        .function("touchCancel", js_touchCancel, 3)
         // Keyboard input simulation
         .function("keyDown", js_keyDown, 4)
         .function("keyUp", js_keyUp, 3)

@@ -191,6 +191,11 @@ void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
     js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
 }
 
+dom::Element* Engine::pointerCaptureFor(int pointerId) const {
+    auto it = pointerCaptures_.find(pointerId);
+    return it == pointerCaptures_.end() ? nullptr : it->second.get();
+}
+
 void Engine::dispatchPointerAlias(const char* type, dom::Element* target,
                                   const dom::MouseEvent& src) {
     if (!jsRuntime_) return;
@@ -200,8 +205,10 @@ void Engine::dispatchPointerAlias(const char* type, dom::Element* target,
     // pointerdown never retargets (capture is taken during it, not before),
     // and cross-document targets (3D HtmlNode inner docs) are left alone —
     // their events carry panel-local coordinates, not app-document ones.
+    // This is the MOUSE pointer's alias path (pointerId 1); touch contacts
+    // route through handleTouch* in touch_input.cpp with their own ids.
     const bool isDown = std::strcmp(type, "pointerdown") == 0;
-    dom::Element* captured = isDown ? nullptr : pointerCaptureElement_.get();
+    dom::Element* captured = isDown ? nullptr : pointerCaptureFor(kMousePointerId);
     if (captured && target && captured->document() != target->document()) {
         captured = nullptr;
     }
@@ -210,7 +217,7 @@ void Engine::dispatchPointerAlias(const char* type, dom::Element* target,
     // rather than dragging forever.
     if (captured && !isDown && src.buttons() == 0 &&
         std::strcmp(type, "pointermove") == 0) {
-        releasePointerCapture(captured);
+        releasePointerCapture(captured, kMousePointerId);
         captured = nullptr;
     }
     if (captured) target = captured;
@@ -229,43 +236,63 @@ void Engine::dispatchPointerAlias(const char* type, dom::Element* target,
     pe.setButton(src.button());       pe.setButtons(src.buttons());
     pe.setCtrlKey(src.ctrlKey());     pe.setShiftKey(src.shiftKey());
     pe.setAltKey(src.altKey());       pe.setMetaKey(src.metaKey());
+    // pointerId/pointerType/isPrimary keep their MouseEvent defaults (1,
+    // "mouse", primary) — exactly the mouse pointer this path synthesizes.
     // offsetX/Y in `src` are relative to the hit target — recompute against
     // the element actually receiving the event.
     if (captured) applyMouseOffset(pe, captured);
     js::dispatchDomEvent(jsRuntime_->getContext(), target, pe);
     // Implicit release (spec): the pointerup/pointercancel that ends the
     // gesture also ends the capture.
-    if (!isDown && pointerCaptureElement_.held() &&
+    auto capIt = pointerCaptures_.find(kMousePointerId);
+    if (!isDown && capIt != pointerCaptures_.end() && capIt->second.held() &&
         (std::strcmp(type, "pointerup") == 0 ||
          std::strcmp(type, "pointercancel") == 0)) {
-        releasePointerCapture(pointerCaptureElement_.get());
+        releasePointerCapture(capIt->second.get(), kMousePointerId);
     }
 }
 
-bool Engine::setPointerCapture(dom::Element* target) {
+bool Engine::setPointerCapture(dom::Element* target, int pointerId) {
     // Validate the JS-supplied element against the app document (same
     // soundness policy as requestPointerLock).
     if (!target || !document_ || !document_->isNodeLive(target)) return false;
-    if (pointerCaptureElement_.get() == target) return true;
-    pointerCaptureElement_.assign(document_.get(), target);
+    // A touch pointerId must name a live contact; the mouse pointer (id 1)
+    // is always live. Unknown ids are a silent no-op (the web throws
+    // NotFoundError; bro's binding layer stays exception-free here).
+    if (pointerId != kMousePointerId) {
+        bool live = false;
+        for (const auto& c : touchContacts_) {
+            if (c.pointerId == pointerId) { live = true; break; }
+        }
+        if (!live) return false;
+    }
+    auto& handle = pointerCaptures_[pointerId];
+    if (handle.get() == target) return true;
+    handle.assign(document_.get(), target);
     dom::Event evt("gotpointercapture", /*bubbles=*/true, /*cancelable=*/false);
     evt.setIsTrusted(true);
     dispatchEvent(target, evt);
     return true;
 }
 
-void Engine::releasePointerCapture(dom::Element* target) {
-    if (!pointerCaptureElement_.held()) return;
-    dom::Element* cur = pointerCaptureElement_.get();
+void Engine::releasePointerCapture(dom::Element* target, int pointerId) {
+    auto it = pointerCaptures_.find(pointerId);
+    if (it == pointerCaptures_.end() || !it->second.held()) return;
+    dom::Element* cur = it->second.get();
     // Only the holder may release; a stale (freed) holder always releases.
     if (cur && target != cur) return;
-    pointerCaptureElement_.reset();
+    pointerCaptures_.erase(it);
     if (cur) {
         dom::Event evt("lostpointercapture", /*bubbles=*/true,
                        /*cancelable=*/false);
         evt.setIsTrusted(true);
         dispatchEvent(cur, evt);
     }
+}
+
+bool Engine::hasPointerCapture(const dom::Element* target, int pointerId) const {
+    if (!target) return false;
+    return pointerCaptureFor(pointerId) == target;
 }
 
 // Walk the document + shadow trees and pump any pending HTMLMediaElement
