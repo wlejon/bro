@@ -147,6 +147,7 @@ API references are written as annotated `.js` files with JSDoc comments and usag
 | `docs/scene-api.js` | `bro.scene` — 3D scene graph, shapes, sprites, meshes, physics nodes |
 | `docs/lighting-api.js` | PBR lighting — LightNode (dir/point/spot), materials, tonemap, ambient |
 | `docs/net-api.js` | `bro.net` — game networking (host/connect/send/broadcast) via GNS |
+| `docs/net-sync-api.js` | `bro.net.sync` — Godot-style high-level multiplayer over bro.net: spawn/despawn replication via registered type factories, per-object authority, tick-based delta state sync + reliable keyframes + replica interpolation, named RPCs. Pure JS module (`src/js/js/net_sync.js`), host-star topology, id-keyed plain objects (not DOM/scene-coupled) |
 | `docs/crosshair-api.js` | `bro.crosshair` — engine-level crosshair overlay (cross/dot/circle/crossdot) |
 | `docs/gamepad-api.js` | Gamepad API — W3C-style `navigator.getGamepads()` snapshots (standard mapping over SDL3), `gamepadconnected`/`gamepaddisconnected` window events, dual-rumble `vibrationActuator`, `"gamepad:<button>"` bindings in `bro.settings` actions, headless virtual-pad injection |
 | `docs/wake-api.js` | `bro.wake` — streaming wake-word detection (brosoundml::WakeWord) driven by broaudio's mic tap |

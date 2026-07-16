@@ -11,6 +11,10 @@
 //   - Host: listen on a port, accept client connections
 //   - Client: connect to a remote host by address
 //
+// For game-object replication (spawn/despawn, authority, delta state sync,
+// RPC) see the high-level layer built on these primitives: `bro.net.sync`,
+// documented in docs/net-sync-api.js.
+//
 // Quick start (host):
 //   bro.net.init();
 //   bro.net.host(27015);

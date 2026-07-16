@@ -10,6 +10,8 @@
 #include "js/runtime.h"
 #include "util/log.h"
 
+#include "net_sync.js.h"  // generates `static const char js_net_sync[] = ...`
+
 #include <qjsbind/qjsbind.h>
 
 #include <cstring>
@@ -568,6 +570,22 @@ void NetBindings::install(JSContext* ctx, net::NetService* service) {
     JS_SetPropertyStr(ctx, broObj, "net", netObj);
     JS_FreeValue(ctx, broObj);
     JS_FreeValue(ctx, global);
+
+    // --- bro.net.sync — Godot-style high-level multiplayer (spawn/despawn
+    //     replication, authority, delta state sync, RPC) layered in pure JS
+    //     over the primitives just installed. Runs in every context with a
+    //     real bro.net (main + workers); the BRO_WITH_NET=OFF stub install
+    //     never evaluates it, so bro.net.sync simply doesn't exist there. ---
+    JSValue r = JS_Eval(ctx, js_net_sync, std::strlen(js_net_sync),
+                        "<bro.net.sync>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(r)) {
+        JSValue exc = JS_GetException(ctx);
+        const char* what = JS_ToCString(ctx, exc);
+        LOG_ERROR("[net] bro.net.sync install failed: %s", what ? what : "(unknown)");
+        if (what) JS_FreeCString(ctx, what);
+        JS_FreeValue(ctx, exc);
+    }
+    JS_FreeValue(ctx, r);
 }
 
 void NetBindings::cleanup(JSContext* ctx) {
