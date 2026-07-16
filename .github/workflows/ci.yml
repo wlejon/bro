@@ -72,7 +72,7 @@ jobs:
         run: |
           "$VCPKG_INSTALLATION_ROOT/vcpkg" install \
             --triplet ${{ matrix.triplet }} \
-            gamenetworkingsockets libvpx libwebm opus
+            gamenetworkingsockets libvpx libwebm opus recastnavigation
 
       - name: Configure
         shell: bash
@@ -80,6 +80,7 @@ jobs:
           export VCPKG_ROOT="$VCPKG_INSTALLATION_ROOT"
           cmake -B build \
             -DBRO_PROFILE=app \
+            -DBROGAMEAGENT_WITH_NAVMESH=ON \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \

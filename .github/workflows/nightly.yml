@@ -116,7 +116,7 @@ jobs:
         run: |
           "$VCPKG_INSTALLATION_ROOT/vcpkg" install \
             --triplet ${{ matrix.triplet }} \
-            gamenetworkingsockets libvpx libwebm opus
+            gamenetworkingsockets libvpx libwebm opus recastnavigation
 
       # Put cl.exe / the MSVC toolset on PATH so the Windows build can use the
       # Ninja generator (below) instead of Visual Studio. The VS generator
@@ -154,6 +154,7 @@ jobs:
           fi
           cmake -B build \
             -DBRO_PROFILE=full \
+            -DBROGAMEAGENT_WITH_NAVMESH=ON \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
