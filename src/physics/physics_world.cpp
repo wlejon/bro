@@ -13,6 +13,7 @@
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/Body.h>
+#include <Jolt/Physics/Body/BodyLock.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/ShapeCast.h>
@@ -1183,49 +1184,10 @@ void PhysicsWorld::updateCharacters(float dt) {
     }
 }
 
-// --- Raycasts ---
-
-std::vector<RayHit> PhysicsWorld::raycast(RVec3 origin, Vec3 direction,
-                                          float maxDistance) const {
-    RayCast ray(origin, direction * maxDistance);
-    AllHitCollisionCollector<RayCastBodyCollector> collector;
-    physicsSystem_.GetBroadPhaseQuery().CastRay(ray, collector);
-
-    std::vector<RayHit> hits;
-    for (auto& hit : collector.mHits) {
-        RayHit h;
-        h.bodyID = hit.mBodyID;
-        h.fraction = hit.mFraction;
-        h.position = origin + direction * (maxDistance * hit.mFraction);
-        h.normal = Vec3(0, 1, 0);
-        hits.push_back(h);
-    }
-
-    std::sort(hits.begin(), hits.end(),
-              [](const RayHit& a, const RayHit& b) { return a.fraction < b.fraction; });
-    return hits;
-}
-
-bool PhysicsWorld::raycastClosest(RVec3 origin, Vec3 direction,
-                                  RayHit& outHit, float maxDistance) const {
-    RayCast ray(origin, direction * maxDistance);
-    ClosestHitCollisionCollector<RayCastBodyCollector> collector;
-    physicsSystem_.GetBroadPhaseQuery().CastRay(ray, collector);
-
-    if (!collector.HadHit()) return false;
-
-    outHit.bodyID = collector.mHit.mBodyID;
-    outHit.fraction = collector.mHit.mFraction;
-    outHit.position = origin + direction * (maxDistance * collector.mHit.mFraction);
-    outHit.normal = Vec3(0, 1, 0);
-    return true;
-}
-
-// --- Shape casts & overlap queries ---
+// --- Raycasts, shape casts & overlap queries ---
 //
-// Unlike raycast() above (broadphase AABBs only), these go through the narrow
-// phase: exact geometry, real contact points/normals, and layer/body
-// filtering. Same threading contract as raycast: call only when idle.
+// All queries go through the narrow phase: exact geometry, real contact
+// points/normals, and layer/body filtering. Call only when idle.
 
 namespace {
 
@@ -1242,6 +1204,67 @@ private:
 };
 
 } // namespace
+
+// Surface normal on a body's shape at a world-space hit point. Same
+// convention as castShape: the normal on the hit body, which for a ray
+// arriving from outside points back toward the ray origin.
+static Vec3 hitSurfaceNormal(const PhysicsSystem& system, BodyID id,
+                             const SubShapeID& subShapeID, RVec3 position) {
+    BodyLockRead lock(system.GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) return Vec3(0, 1, 0);
+    return lock.GetBody().GetWorldSpaceSurfaceNormal(subShapeID, position);
+}
+
+std::vector<RayHit> PhysicsWorld::raycast(RVec3 origin, Vec3 direction,
+                                          float maxDistance,
+                                          const QueryFilter& filter) const {
+    RRayCast ray(origin, direction * maxDistance);
+    RayCastSettings settings;
+    MaskObjectLayerFilter layerFilter(filter.layerMask);
+    IgnoreSingleBodyFilter bodyFilter(filter.ignoreBody);
+    AllHitCollisionCollector<CastRayCollector> collector;
+    physicsSystem_.GetNarrowPhaseQuery().CastRay(ray, settings, collector, {},
+                                                 layerFilter, bodyFilter);
+    collector.Sort();
+
+    // Mesh-family shapes report per-triangle hits; sorted ascending, the first
+    // occurrence of each body is its earliest contact — keep only that one.
+    std::vector<RayHit> hits;
+    for (auto& hit : collector.mHits) {
+        bool seen = false;
+        for (auto& e : hits) {
+            if (e.bodyID == hit.mBodyID) { seen = true; break; }
+        }
+        if (seen) continue;
+        RayHit h;
+        h.bodyID = hit.mBodyID;
+        h.fraction = hit.mFraction;
+        h.position = ray.GetPointOnRay(hit.mFraction);
+        h.normal = hitSurfaceNormal(physicsSystem_, hit.mBodyID,
+                                    hit.mSubShapeID2, h.position);
+        hits.push_back(h);
+    }
+    return hits;
+}
+
+bool PhysicsWorld::raycastClosest(RVec3 origin, Vec3 direction,
+                                  RayHit& outHit, float maxDistance,
+                                  const QueryFilter& filter) const {
+    RRayCast ray(origin, direction * maxDistance);
+    MaskObjectLayerFilter layerFilter(filter.layerMask);
+    IgnoreSingleBodyFilter bodyFilter(filter.ignoreBody);
+    RayCastResult hit;
+    if (!physicsSystem_.GetNarrowPhaseQuery().CastRay(ray, hit, {},
+                                                      layerFilter, bodyFilter))
+        return false;
+
+    outHit.bodyID = hit.mBodyID;
+    outHit.fraction = hit.mFraction;
+    outHit.position = ray.GetPointOnRay(hit.mFraction);
+    outHit.normal = hitSurfaceNormal(physicsSystem_, hit.mBodyID,
+                                     hit.mSubShapeID2, outHit.position);
+    return true;
+}
 
 std::vector<ShapeCastHit> PhysicsWorld::castShape(const BodyOptions& shapeOpts,
                                                   Vec3 direction, float maxDistance,

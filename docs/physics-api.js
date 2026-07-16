@@ -472,30 +472,43 @@ Physics.destroyConstraint(handle);
 
 /**
  * Cast a ray against the world; returns ALL hits (sorted by distance).
+ * Narrow-phase precision: hits land on the actual shape surface (not the
+ * broadphase AABB), `position` is the exact hit point, and `normal` is the
+ * real surface normal on the hit body (pointing back toward the ray origin
+ * for a ray arriving from outside). One hit per body (earliest contact).
  *
- * @returns {Array<{ bodyId:number, fraction:number, position:{x,y,z}, userData:bigint }>}
+ * An optional trailing opts object takes the same filter fields as the shape
+ * queries below: `layers` (array of layer names/indices the ray can see) and
+ * `ignoreBody` (one body tag to exclude). It may replace maxDist or follow it.
+ *
+ * @returns {Array<{ bodyId:number, fraction:number, position:{x,y,z},
+ *                   normal:{x,y,z}, userData:bigint }>}
  *          bodyId is -1 if a hit body has no JS tag (engine-owned body).
  */
 const hits = Physics.raycast(ox, oy, oz, dx, dy, dz, /*maxDist*/ 100);
+const seen = Physics.raycast(ox, oy, oz, dx, dy, dz, 100,
+                             { layers: ['static'], ignoreBody: myBody });
 
 /**
  * Cast a ray and return ONLY the nearest hit (or null if nothing was hit).
  * Cheaper than raycast() for long-range line-of-sight / pick queries since it
- * collects a single closest hit instead of sorting an array.
+ * collects a single closest hit instead of sorting an array. Same narrow-phase
+ * precision and optional trailing filter opts as raycast().
  *
- * @returns {{ bodyId:number, fraction:number, position:{x,y,z}, userData:bigint } | null}
+ * @returns {{ bodyId:number, fraction:number, position:{x,y,z},
+ *             normal:{x,y,z}, userData:bigint } | null}
  *          bodyId is -1 if the hit body has no JS tag (engine-owned body).
  */
 const hit = Physics.raycastClosest(ox, oy, oz, dx, dy, dz, /*maxDist*/ 100);
-if (hit) console.log('nearest', hit.bodyId, hit.fraction);
+if (hit) console.log('nearest', hit.bodyId, hit.fraction, hit.normal);
 
 
 // -----------------------------------------------------------------------------
 // Shape casts & overlap queries
 // -----------------------------------------------------------------------------
 //
-// Narrow-phase queries: unlike raycast (which tests broadphase AABBs), these
-// test exact shape geometry and return real contact points and normals.
+// Narrow-phase queries: like raycast, these test exact shape geometry and
+// return real contact points and normals.
 //
 // All three take an opts object whose shape fields read exactly like
 // createBody (shape kind + dimensions + position/rotation), restricted to
@@ -676,8 +689,9 @@ w.setConstraintBreakingImpulse(c, 500);    // auto-break threshold (N·s); 0 = n
 w.getConstraintBreakingImpulse(c);
 const broke = w.getBrokenConstraints();    // handles broken since last call
 
-const hits = w.raycast(ox, oy, oz, dx, dy, dz, /*maxDist*/ 100);
-const hit  = w.raycastClosest(ox, oy, oz, dx, dy, dz, /*maxDist*/ 100); // nearest or null
+const hits = w.raycast(ox, oy, oz, dx, dy, dz, /*maxDist*/ 100);  // narrow-phase,
+const hit  = w.raycastClosest(ox, oy, oz, dx, dy, dz, 100,        // + optional filter
+                              { layers: ['moving'], ignoreBody: tag }); // nearest or null
 const cs   = w.castShape({ shape:'sphere', radius:0.5, position:{...},  // narrow-phase queries,
                            direction:{x:0,y:-1,z:0}, maxDistance:20 }); // same opts as Physics.*
 const c1   = w.castShapeClosest({ ... });   // nearest or null

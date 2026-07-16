@@ -46,8 +46,8 @@ struct ContactEvent {
 struct RayHit {
     JPH::BodyID bodyID;
     float fraction;       // 0..1 along the ray
-    JPH::Vec3 normal;
-    JPH::RVec3 position;
+    JPH::Vec3 normal;     // surface normal on the hit body at the hit point
+    JPH::RVec3 position;  // hit point on the shape surface (world space)
 };
 
 /// Shape-cast hit result.
@@ -412,13 +412,17 @@ public:
 
     // --- Queries (call only when idle) ---
 
-    /// Cast a ray. Returns hits sorted by distance.
+    /// Cast a ray (narrow phase: exact shape geometry, real hit positions and
+    /// surface normals). One hit per body (earliest contact), sorted by
+    /// fraction.
     std::vector<RayHit> raycast(JPH::RVec3 origin, JPH::Vec3 direction,
-                                float maxDistance = 1000.0f) const;
+                                float maxDistance = 1000.0f,
+                                const QueryFilter& filter = {}) const;
 
-    /// Get the closest hit along a ray, or empty if none.
+    /// Get the closest narrow-phase hit along a ray; false if nothing was hit.
     bool raycastClosest(JPH::RVec3 origin, JPH::Vec3 direction,
-                        RayHit& outHit, float maxDistance = 1000.0f) const;
+                        RayHit& outHit, float maxDistance = 1000.0f,
+                        const QueryFilter& filter = {}) const;
 
     /// Sweep a convex shape (the shape/position/rotation fields of `shape`)
     /// along direction*maxDistance. One hit per body (earliest contact),

@@ -1,6 +1,7 @@
-// Test narrow-phase physics queries — castShape (all-hits + closest),
-// overlapShape, overlapPoint, layer filtering, ignoreBody, and the
-// heightfield collision shape (create, query against, settle a body on it).
+// Test narrow-phase physics queries — raycast/raycastClosest (exact hits,
+// surface normals), castShape (all-hits + closest), overlapShape,
+// overlapPoint, layer filtering, ignoreBody, and the heightfield collision
+// shape (create, query against, settle a body on it).
 // Exercises src/js/physics_bindings.cpp + src/physics/physics_world.cpp.
 
 assert(typeof Physics === 'object', 'Physics namespace exists');
@@ -133,6 +134,57 @@ catch (e) { threw = true; }
 assert(threw, 'zero direction throws');
 
 // =========================================================================
+// raycast / raycastClosest — narrow-phase precision, normals, filters
+// =========================================================================
+// Ray down the y axis from (0,10,0): midBox top face at y=5.5, ground top at
+// y=0.5 — exact surface heights, not broadphase AABB entries.
+const rayAll = Physics.raycast(0, 10, 0, 0, -1, 0, 20);
+assert(rayAll.length === 2, 'raycast hits midBox + ground, got ' + rayAll.length);
+assert(rayAll[0].bodyId === midBox && rayAll[1].bodyId === ground, 'raycast sorted near-to-far');
+assert(Math.abs(rayAll[0].position.y - 5.5) < 1e-3,
+       'midBox hit exactly on its top face, got ' + rayAll[0].position.y);
+assert(Math.abs(rayAll[0].fraction - 0.225) < 1e-3, 'midBox fraction (10-5.5)/20');
+assert(rayAll[0].normal.y > 0.999, 'midBox normal is the real +y face normal');
+assert(Math.abs(rayAll[1].position.y - 0.5) < 1e-3, 'ground hit exactly on its top face');
+assert(rayAll[1].normal.y > 0.999, 'ground normal points up');
+assert(typeof rayAll[0].userData === 'bigint', 'ray hit carries userData');
+
+// Off-center sphere hit: the normal is the true surface normal
+// (hitPoint - center) / r, pointing back toward the ray origin.
+const probeSphere = Physics.createBody({
+    shape: 'sphere', radius: 1, position: { x: 200, y: 5, z: 0 }, static: true,
+});
+const sHit = Physics.raycastClosest(196, 5.5, 0, 1, 0, 0, 20);
+assert(sHit !== null && sHit.bodyId === probeSphere, 'ray hits probe sphere');
+// Analytic entry: x = 200 - sqrt(1 - 0.5^2) = 199.134, y stays 5.5.
+assert(Math.abs(sHit.position.x - (200 - Math.sqrt(0.75))) < 1e-3,
+       'sphere hit at the analytic entry point, got ' + sHit.position.x);
+const nx = sHit.position.x - 200, ny = sHit.position.y - 5, nz = sHit.position.z - 0;
+const nlen = Math.sqrt(nx * nx + ny * ny + nz * nz);
+assert(Math.abs(sHit.normal.x - nx / nlen) < 1e-3 &&
+       Math.abs(sHit.normal.y - ny / nlen) < 1e-3 &&
+       Math.abs(sHit.normal.z - nz / nlen) < 1e-3,
+       'sphere normal = normalize(hit - center), got ' + JSON.stringify(sHit.normal));
+assert(Math.abs(sHit.normal.y - 0.5) < 1e-3, 'off-center hit normal.y = 0.5');
+
+// Narrow phase: a ray through the sphere's AABB corner region that misses
+// the sphere itself must NOT hit (the old broadphase raycast reported these).
+const cornerMiss = Physics.raycast(199.1, 10, 0.95, 0, -1, 0, 20);
+assert(!cornerMiss.some(h => h.bodyId === probeSphere),
+       'ray through the AABB corner but off the sphere reports no hit');
+
+// Filters — same fields as the shape queries.
+const rayStatic = Physics.raycast(0, 10, 0, 0, -1, 0, 20, { layers: ['static'] });
+assert(rayStatic.length === 1 && rayStatic[0].bodyId === ground,
+       'raycast layer filter skips the ghost-layer midBox');
+const rayIgn = Physics.raycastClosest(0, 10, 0, 0, -1, 0, 20, { ignoreBody: midBox });
+assert(rayIgn !== null && rayIgn.bodyId === ground, 'raycast ignoreBody skips midBox');
+// The opts object may also be passed in place of maxDist.
+const rayOptsOnly = Physics.raycastClosest(0, 10, 0, 0, -1, 0, { layers: ['ghost'] });
+assert(rayOptsOnly !== null && rayOptsOnly.bodyId === midBox, 'opts in place of maxDist filters');
+Physics.destroyBody(probeSphere);
+
+// =========================================================================
 // overlapShape — bodies overlapping a shape at a transform
 // =========================================================================
 // Two dynamic spheres above the ground (world not stepped, they stay put).
@@ -204,9 +256,15 @@ const hf = Physics.createBody({
 });
 assert(hf > 0, 'heightfield body created');
 
-// Raycast against it (broadphase — hit presence + body identity).
+// Raycast against it (narrow phase — exact surface height + normal). The ray
+// drops onto the bowl bottom: local (32,32) -> h = 0, fraction (100-0)/200.
 const rayHits = Physics.raycast(132, 100, 132, 0, -1, 0, 200);
-assert(rayHits.some(h => h.bodyId === hf), 'raycast hits heightfield');
+const hfRay = rayHits.find(h => h.bodyId === hf);
+assert(hfRay !== undefined, 'raycast hits heightfield');
+assert(Math.abs(hfRay.position.y) < 0.05,
+       'heightfield ray hit at the analytic height 0, got ' + hfRay.position.y);
+assert(Math.abs(hfRay.fraction - 0.5) < 0.001, 'heightfield ray fraction ~0.5');
+assert(hfRay.normal.y > 0.99, 'heightfield normal near +y at the bowl bottom');
 
 // Shape-cast down onto the analytic surface. At world (116, z=132) the local
 // sample is (16, 32) → h = 0.02*256 = 5.12.
@@ -274,6 +332,18 @@ const wOv = w.overlapShape({
 });
 const wOvIds = wOv.map(h => h.bodyId).sort((a, b) => a - b);
 assert(wOvIds.length === 2, 'sandbox overlapShape finds ball + heightfield, got [' + wOvIds + ']');
+
+// Sandbox raycast: same narrow-phase precision + filter surface. Straight
+// down through the settled ball's center: top of the ball at rest.y + r,
+// normal exactly +y at that point, then the heightfield beneath.
+const wRay = w.raycast(rest.x, 10, rest.z, 0, -1, 0, 20);
+assert(wRay.length === 2, 'sandbox ray hits ball + heightfield, got ' + wRay.length);
+assert(wRay[0].bodyId === ball && wRay[1].bodyId === wHf, 'sandbox ray sorted near-to-far');
+assert(Math.abs(wRay[0].position.y - (rest.y + 0.5)) < 1e-3,
+       'sandbox ray hits the exact top of the ball');
+assert(wRay[0].normal.y > 0.999, 'ball top normal is +y');
+const wRayIgn = w.raycastClosest(rest.x, 10, rest.z, 0, -1, 0, 20, { ignoreBody: ball });
+assert(wRayIgn !== null && wRayIgn.bodyId === wHf, 'sandbox raycast ignoreBody skips the ball');
 
 w.destroy();
 

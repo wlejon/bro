@@ -451,35 +451,55 @@ static JSValue worldGetTransform(JSContext* ctx, JsWorld* w, int32_t tag) {
     return makeTransformObj(ctx, w->world, id);
 }
 
+// --- Forward decls used by the raycast bindings (defined with the shape
+// queries below) ---
+static void readQueryFilter(JSContext* ctx, JSValueConst opts, JsWorld* w,
+                            physics::QueryFilter& out);
+static void setVec3Prop(JSContext* ctx, JSValue obj, const char* name,
+                        float x, float y, float z);
+
+// raycast(ox, oy, oz, dx, dy, dz, maxDist?, opts?) — the trailing opts object
+// carries the shared query filter ({ layers, ignoreBody }); it may also be
+// passed directly in place of maxDist.
+static void readRaycastArgs(JSContext* ctx, JsWorld* w, int argc, JSValueConst* argv,
+                            double& maxDist, physics::QueryFilter& filter) {
+    maxDist = 1000.0;
+    if (argc >= 7) {
+        if (JS_IsObject(argv[6])) readQueryFilter(ctx, argv[6], w, filter);
+        else JS_ToFloat64(ctx, &maxDist, argv[6]);
+    }
+    if (argc >= 8 && JS_IsObject(argv[7])) readQueryFilter(ctx, argv[7], w, filter);
+}
+
+static JSValue makeRayHitObj(JSContext* ctx, JsWorld* w, const physics::RayHit& hit) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "bodyId", JS_NewInt32(ctx, w->tagForBodyId(hit.bodyID)));
+    JS_SetPropertyStr(ctx, obj, "fraction", JS_NewFloat64(ctx, hit.fraction));
+    JS_SetPropertyStr(ctx, obj, "userData",
+        JS_NewBigUint64(ctx, hit.bodyID.IsInvalid() ? 0 : w->world->getUserData(hit.bodyID)));
+    setVec3Prop(ctx, obj, "position", hit.position.GetX(), hit.position.GetY(), hit.position.GetZ());
+    setVec3Prop(ctx, obj, "normal", hit.normal.GetX(), hit.normal.GetY(), hit.normal.GetZ());
+    return obj;
+}
+
 static JSValue worldRaycast(JSContext* ctx, JsWorld* w, int argc, JSValueConst* argv) {
     if (!w || !w->world || argc < 6) return JS_NewArray(ctx);
     double ox, oy, oz, dx, dy, dz;
     JS_ToFloat64(ctx, &ox, argv[0]); JS_ToFloat64(ctx, &oy, argv[1]); JS_ToFloat64(ctx, &oz, argv[2]);
     JS_ToFloat64(ctx, &dx, argv[3]); JS_ToFloat64(ctx, &dy, argv[4]); JS_ToFloat64(ctx, &dz, argv[5]);
-    double maxDist = 1000.0;
-    if (argc >= 7) JS_ToFloat64(ctx, &maxDist, argv[6]);
+    double maxDist;
+    physics::QueryFilter filter;
+    readRaycastArgs(ctx, w, argc, argv, maxDist, filter);
 
     auto hits = w->world->raycast(
         JPH::RVec3((float)ox, (float)oy, (float)oz),
         JPH::Vec3((float)dx, (float)dy, (float)dz),
-        (float)maxDist);
+        (float)maxDist, filter);
 
     JSValue arr = JS_NewArray(ctx);
     uint32_t i = 0;
-    for (auto& hit : hits) {
-        JSValue obj = JS_NewObject(ctx);
-        int32_t tag = w->tagForBodyId(hit.bodyID);
-        JS_SetPropertyStr(ctx, obj, "bodyId", JS_NewInt32(ctx, tag));
-        JS_SetPropertyStr(ctx, obj, "fraction", JS_NewFloat64(ctx, hit.fraction));
-        JS_SetPropertyStr(ctx, obj, "userData",
-            JS_NewBigUint64(ctx, hit.bodyID.IsInvalid() ? 0 : w->world->getUserData(hit.bodyID)));
-        JSValue posObj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, posObj, "x", JS_NewFloat64(ctx, hit.position.GetX()));
-        JS_SetPropertyStr(ctx, posObj, "y", JS_NewFloat64(ctx, hit.position.GetY()));
-        JS_SetPropertyStr(ctx, posObj, "z", JS_NewFloat64(ctx, hit.position.GetZ()));
-        JS_SetPropertyStr(ctx, obj, "position", posObj);
-        JS_SetPropertyUint32(ctx, arr, i++, obj);
-    }
+    for (auto& hit : hits)
+        JS_SetPropertyUint32(ctx, arr, i++, makeRayHitObj(ctx, w, hit));
     return arr;
 }
 
@@ -488,27 +508,17 @@ static JSValue worldRaycastClosest(JSContext* ctx, JsWorld* w, int argc, JSValue
     double ox, oy, oz, dx, dy, dz;
     JS_ToFloat64(ctx, &ox, argv[0]); JS_ToFloat64(ctx, &oy, argv[1]); JS_ToFloat64(ctx, &oz, argv[2]);
     JS_ToFloat64(ctx, &dx, argv[3]); JS_ToFloat64(ctx, &dy, argv[4]); JS_ToFloat64(ctx, &dz, argv[5]);
-    double maxDist = 1000.0;
-    if (argc >= 7) JS_ToFloat64(ctx, &maxDist, argv[6]);
+    double maxDist;
+    physics::QueryFilter filter;
+    readRaycastArgs(ctx, w, argc, argv, maxDist, filter);
 
     physics::RayHit hit;
     bool ok = w->world->raycastClosest(
         JPH::RVec3((float)ox, (float)oy, (float)oz),
         JPH::Vec3((float)dx, (float)dy, (float)dz),
-        hit, (float)maxDist);
+        hit, (float)maxDist, filter);
     if (!ok) return JS_NULL;
-
-    JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "bodyId", JS_NewInt32(ctx, w->tagForBodyId(hit.bodyID)));
-    JS_SetPropertyStr(ctx, obj, "fraction", JS_NewFloat64(ctx, hit.fraction));
-    JS_SetPropertyStr(ctx, obj, "userData",
-        JS_NewBigUint64(ctx, hit.bodyID.IsInvalid() ? 0 : w->world->getUserData(hit.bodyID)));
-    JSValue posObj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, posObj, "x", JS_NewFloat64(ctx, hit.position.GetX()));
-    JS_SetPropertyStr(ctx, posObj, "y", JS_NewFloat64(ctx, hit.position.GetY()));
-    JS_SetPropertyStr(ctx, posObj, "z", JS_NewFloat64(ctx, hit.position.GetZ()));
-    JS_SetPropertyStr(ctx, obj, "position", posObj);
-    return obj;
+    return makeRayHitObj(ctx, w, hit);
 }
 
 // Layer/body filter shared by the narrow-phase query bindings. `layers` is an
@@ -1795,8 +1805,8 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("setUserData", 2, jsw_setUserData),
     JS_CFUNC_DEF("getUserData", 1, jsw_getUserData),
     JS_CFUNC_DEF("activate", 1, jsw_activate),
-    JS_CFUNC_DEF("raycast", 7, jsw_raycast),
-    JS_CFUNC_DEF("raycastClosest", 7, jsw_raycastClosest),
+    JS_CFUNC_DEF("raycast", 8, jsw_raycast),
+    JS_CFUNC_DEF("raycastClosest", 8, jsw_raycastClosest),
     JS_CFUNC_DEF("castShape", 1, jsw_castShape),
     JS_CFUNC_DEF("castShapeClosest", 1, jsw_castShapeClosest),
     JS_CFUNC_DEF("overlapShape", 1, jsw_overlapShape),
@@ -1900,8 +1910,8 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("setLayer", js_physics_setLayer, 2)
         .function("setKinematic", js_physics_setKinematic, 1)
         .function("moveKinematic", js_physics_moveKinematic, 5)
-        .function("raycast", js_physics_raycast, 7)
-        .function("raycastClosest", js_physics_raycastClosest, 7)
+        .function("raycast", js_physics_raycast, 8)
+        .function("raycastClosest", js_physics_raycastClosest, 8)
         .function("castShape", js_physics_castShape, 1)
         .function("castShapeClosest", js_physics_castShapeClosest, 1)
         .function("overlapShape", js_physics_overlapShape, 1)
