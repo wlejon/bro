@@ -92,7 +92,18 @@ void AgentBinding::syncToNode() {
     if (!node_ || !agent_) return;
     const float ax = agent_->x();
     const float az = agent_->z();
-    node_->setPosition(ax, yOffset_, az);
+    float y = yOffset_;
+    if (groundFn_) {
+        float gy = 0.0f;
+        if (groundFn_(ax, az, gy)) {
+            lastGroundY_ = gy;
+            hasGround_ = true;
+        }
+        // yOffset is clearance above the ground while following; until the
+        // first successful probe, fall back to the absolute-Y behaviour.
+        if (hasGround_) y = lastGroundY_ + yOffset_;
+    }
+    node_->setPosition(ax, y, az);
     if (faceMovement_) {
         // brogameagent uses FPS yaw (0 = -Z, positive = clockwise from above).
         // OpenGL rotationY is counter-clockwise from above, so negate.

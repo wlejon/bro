@@ -16,10 +16,15 @@
 #include "js/ai_bindings.h"
 #if BRO_WITH_GAMEAI  // modular-build feature gate
 #include "js/scene_bindings.h"
+#include "js/terrain_bindings.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
 #include "scene/agent_binding.h"
 #include "util/log.h"
+
+#if BRO_WITH_PHYSICS
+#include "physics/physics_world.h"
+#endif
 
 #include <brogameagent/brogameagent.h>
 #include <qjsbind/qjsbind.h>
@@ -592,6 +597,7 @@ static JSValue js_node_attachAgent(JSContext* ctx, JSValueConst this_val, int ar
     binding->setThinkHz(15.0f);
     binding->setYOffset(0.0f);
     binding->setFaceMovement(true);
+    binding->setGroundFollow({});  // re-attach resets any previous probe
 
     // Default capability set: all six built-ins (trimmed to "basic_attack +
     // hold" if caller passes an explicit list).
@@ -645,6 +651,96 @@ static JSValue js_node_attachAgent(JSContext* ctx, JSValueConst this_val, int ar
             binding->setThinkHook(std::move(hook));
         }
         JS_FreeValue(ctx, v);
+
+        // groundFollow: { mode: 'terrain'|'raycast', ... } — the node's Y
+        // tracks the ground under (x, z) and yOffset becomes a clearance
+        // above it. Installed as a native probe; runs once per frame in
+        // AgentBinding::syncToNode on the main thread.
+        v = JS_GetPropertyStr(ctx, opts, "groundFollow");
+        if (JS_IsObject(v)) {
+            std::string mode = qjsbind::get_prop_string(ctx, v, "mode");
+            float rayStart  = (float)qjsbind::get_prop_number(ctx, v, "rayStart", 100.0);
+            float rayLength = (float)qjsbind::get_prop_number(ctx, v, "rayLength", 200.0);
+
+            if (mode == "terrain") {
+                JSValue tv = JS_GetPropertyStr(ctx, v, "terrain");
+                void* th = terrainHandleFromJS(ctx, tv);
+                if (!th) {
+                    JS_FreeValue(ctx, tv);
+                    JS_FreeValue(ctx, v);
+                    return JS_ThrowTypeError(ctx,
+                        "attachAgent: groundFollow mode 'terrain' requires a scene.createTerrain() object");
+                }
+                // Pin the terrain JSValue on the node wrapper so the wrapper
+                // (and thus the probed TerrainManager) outlives the binding;
+                // terrainSampleHeight also verifies liveness per call.
+                JS_SetPropertyStr(ctx, this_val, "__groundTerrain", JS_DupValue(ctx, tv));
+                JS_FreeValue(ctx, tv);
+                binding->setGroundFollow(
+                    [th, rayStart, rayLength](float x, float z, float& outY) {
+                        return terrainSampleHeight(th, x, z, rayStart, rayLength, outY);
+                    });
+            } else if (mode == "raycast") {
+#if BRO_WITH_PHYSICS
+                auto* pw = nw->graph->physicsWorld();
+                if (!pw) {
+                    JS_FreeValue(ctx, v);
+                    return JS_ThrowTypeError(ctx,
+                        "attachAgent: groundFollow mode 'raycast' requires an active physics world");
+                }
+                physics::QueryFilter filter;
+                JSValue lv = JS_GetPropertyStr(ctx, v, "layers");
+                if (JS_IsArray(lv)) {
+                    uint32_t mask = 0;
+                    JSValue lenV = JS_GetPropertyStr(ctx, lv, "length");
+                    uint32_t n = 0; JS_ToUint32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
+                    for (uint32_t i = 0; i < n; i++) {
+                        JSValue el = JS_GetPropertyUint32(ctx, lv, i);
+                        int32_t idx = -1;
+                        if (JS_IsString(el)) {
+                            const char* s = JS_ToCString(ctx, el);
+                            if (s) { idx = pw->layerIndex(s); JS_FreeCString(ctx, s); }
+                        } else if (JS_IsNumber(el)) {
+                            JS_ToInt32(ctx, &idx, el);
+                        }
+                        if (idx >= 0 && idx < 32) mask |= 1u << idx;
+                        JS_FreeValue(ctx, el);
+                    }
+                    filter.layerMask = mask;
+                }
+                JS_FreeValue(ctx, lv);
+
+                // The graph owns the binding, so capturing it raw is safe; the
+                // world pointer is re-read per probe (detachable). The probe
+                // only runs while the physics phase is idle — syncAgents ticks
+                // after consumeStep on the main thread, but a step that
+                // overran a frame keeps ownership on the physics thread, in
+                // which case we skip and keep the last known ground height.
+                scene::SceneGraph* graph = nw->graph;
+                binding->setGroundFollow(
+                    [graph, filter, rayStart, rayLength](float x, float z, float& outY) {
+                        auto* world = graph->physicsWorld();
+                        if (!world || !world->isIdle()) return false;
+                        physics::RayHit hit;
+                        if (!world->raycastClosest(JPH::RVec3(x, rayStart, z),
+                                                   JPH::Vec3(0, -1, 0),
+                                                   hit, rayLength, filter))
+                            return false;
+                        outY = hit.position.GetY();
+                        return true;
+                    });
+#else
+                JS_FreeValue(ctx, v);
+                return JS_ThrowTypeError(ctx,
+                    "attachAgent: groundFollow mode 'raycast' requires a physics-enabled build");
+#endif
+            } else {
+                JS_FreeValue(ctx, v);
+                return JS_ThrowTypeError(ctx,
+                    "attachAgent: groundFollow.mode must be 'terrain' or 'raycast'");
+            }
+        }
+        JS_FreeValue(ctx, v);
     }
 
     // If no explicit list, give the binding all built-ins. Towers/minions can
@@ -666,6 +762,7 @@ static JSValue js_node_detachAgent(JSContext* ctx, JSValueConst this_val, int, J
     if (!nw || !nw->node || !nw->graph) return JS_UNDEFINED;
     nw->graph->detachAgentBinding(nw->node);
     JS_SetPropertyStr(ctx, this_val, "__agent", JS_UNDEFINED);
+    JS_SetPropertyStr(ctx, this_val, "__groundTerrain", JS_UNDEFINED);
     return JS_UNDEFINED;
 }
 

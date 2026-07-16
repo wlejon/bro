@@ -176,6 +176,34 @@ struct CharacterState {
     JPH::BodyID groundBody;      // invalid when in air
 };
 
+/// Per-axis configuration for a SixDOF constraint. Axis order follows Jolt's
+/// SixDOFConstraintSettings::EAxis: 0..2 = translation X/Y/Z, 3..5 = rotation
+/// X/Y/Z (all in constraint space — see ConstraintOptions::sixDofAxisX/Y).
+struct SixDofAxis {
+    enum Mode { Locked, Free, Limited };
+    Mode mode = Locked;
+    float min = 0.0f;             // Limited only. Rotation X: twist [-π, π].
+    float max = 0.0f;             // Rotation Y/Z limits are symmetric (Jolt uses max).
+    float springFrequency = 0.0f; // >0 = soft limits (translation axes only), Hz
+    float springDamping = 1.0f;   // 0 = undamped, 1 = critical
+    float maxFriction = 0.0f;     // friction force (N) / torque (N·m) when unpowered
+};
+
+/// Motor configuration for a motorized constraint (hinge, slider, sixdof —
+/// wheel handles are sixdof underneath and accept axis 5 / RotationZ).
+/// Units: hinge/rotation targets are rad/s (velocity) or rad (position);
+/// slider/translation targets are m/s or m.
+struct MotorOptions {
+    enum State { Off, Velocity, Position };
+    State state = Off;
+    int axis = -1;            // SixDOF only: 0..5 (tx,ty,tz,rx,ry,rz); ignored otherwise
+    float target = 0.0f;
+    float maxForce = -1.0f;   // symmetric force limit (N); <0 = leave unlimited/unchanged
+    float maxTorque = -1.0f;  // symmetric torque limit (N·m); <0 = leave unlimited/unchanged
+    float frequency = -1.0f;  // position-motor spring frequency (Hz); <0 = keep current (Jolt default 2)
+    float damping = -1.0f;    // position-motor spring damping; <0 = keep current (default 1)
+};
+
 /// Constraint creation options.
 struct ConstraintOptions {
     enum Type {
@@ -190,6 +218,7 @@ struct ConstraintOptions {
         Pulley,          // rope over two fixed pivots: len(b1..f1) + ratio*len(b2..f2) constrained
         Gear,            // couples the rotation of two hinge constraints by a gear ratio
         RackAndPinion,   // couples a hinge (pinion) to a slider (rack) by a ratio
+        SixDOF,          // per-axis free/limited/locked on all 6 DOFs (Godot Generic6DOF analog)
     };
     Type type = Distance;
     JPH::BodyID body1;
@@ -256,6 +285,19 @@ struct ConstraintOptions {
     // earlier createConstraint). Gear: two hinges. Rack: pinion hinge + rack slider.
     uint32_t dependentConstraint1 = 0;
     uint32_t dependentConstraint2 = 0;
+
+    // --- SixDOF (uses point1/point2 as the two anchors) ---
+    // Constraint-space frame (world-space axes; Y is re-orthonormalized
+    // against X). Translation/rotation limits apply along/about these.
+    JPH::Vec3 sixDofAxisX{1, 0, 0};
+    JPH::Vec3 sixDofAxisY{0, 1, 0};
+    bool sixDofSwingPyramid = false;   // rotation-Y/Z limit shape: cone (default) or pyramid
+    SixDofAxis sixDofAxes[6];          // tx, ty, tz, rx, ry, rz — default all Locked
+
+    // Motors applied right after creation (hinge/slider: one entry, axis
+    // ignored; sixdof: one entry per driven axis). Same semantics as
+    // setConstraintMotor().
+    std::vector<MotorOptions> motors;
 };
 
 class PhysicsWorld {
@@ -381,6 +423,11 @@ public:
     void setConstraintEnabled(uint32_t handle, bool enabled);
     /// Adjust a wheel constraint's motor at runtime (no-op for non-wheel handles).
     void setWheelMotor(uint32_t handle, bool enabled, float speed, float maxTorque);
+    /// Configure/steer a constraint motor at runtime. Works on hinge and
+    /// slider constraints (axis ignored) and sixdof/wheel constraints (per
+    /// axis 0..5). Wakes both bodies so the change takes effect immediately.
+    /// Returns false for unknown handles or unsupported constraint types.
+    bool setConstraintMotor(uint32_t handle, const MotorOptions& motor);
     /// Set/get a constraint's breaking impulse threshold (0 = never break).
     /// When the constraint's applied position impulse exceeds this in a step the
     /// constraint is auto-disabled and reported via drainBrokenConstraints().
@@ -445,6 +492,18 @@ public:
     std::vector<JPH::BodyID> overlapPoint(JPH::RVec3 point,
                                           const QueryFilter& filter = {}) const;
 
+    /// Snapshot of one static body for nav-grid baking.
+    struct StaticBodyInfo {
+        JPH::BodyID id;
+        JPH::Vec3 min, max;   // world-space AABB
+        int layer = 0;        // object layer index
+        bool isSensor = false;
+    };
+
+    /// Enumerate every static body with its world-space AABB (call only when
+    /// idle). Used to derive navigation obstacles from collision geometry.
+    std::vector<StaticBodyInfo> collectStaticBodies() const;
+
     // --- Contact events ---
 
     /// Swap and return contact events from the last step. Clears the buffer.
@@ -479,6 +538,10 @@ private:
         JPH::Ref<JPH::Constraint> ref;
         JPH::Ref<JPH::Constraint> ref2;
         float breakingImpulse = 0.0f;  // 0 = never break
+        // SixDOF position-motor rotation targets (rad, per rotation axis).
+        // Jolt stores the target as a quaternion; we keep the per-axis angles
+        // so single-axis updates can rebuild it without decomposition.
+        float sixDofRotTarget[3] = {0, 0, 0};
     };
     std::unordered_map<uint32_t, ConstraintEntry> constraints_;
     uint32_t nextConstraintHandle_ = 1;

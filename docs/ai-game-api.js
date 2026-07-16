@@ -38,6 +38,19 @@
  * @param {number} [opts.cellSize=0.5] - Grid cell size (smaller = more precise)
  * @param {Array<{x, z, hw, hd}>} [opts.obstacles] - AABB obstacles to mark as blocked
  * @param {number} [opts.padding=0] - Extra clearance around obstacles (agent radius)
+ *
+ * Physics bake — derive obstacles from collision geometry so AI and physics
+ * can never disagree. Every static, non-sensor body's world-space AABB is
+ * projected to XZ and added as an obstacle (with `padding`). Bodies whose XZ
+ * footprint covers the entire grid (ground slabs) are skipped automatically.
+ * @param {Physics|PhysicsWorldHandle|boolean} [opts.fromPhysics] - the default
+ *                                  world (`Physics` or `true`) or a sandbox
+ *                                  handle from Physics.createWorldHandle()
+ * @param {Array<string|number>} [opts.physicsLayers] - only bake bodies on
+ *                                  these collision layers (names or indices)
+ * @param {number} [opts.physicsMinY=-Infinity] - only bake bodies whose AABB
+ * @param {number} [opts.physicsMaxY=+Infinity]   intersects [minY, maxY] —
+ *                                  use to carve out the walkable slab
  * @returns {NavGrid}
  */
 const nav = bro.ai.game.createNavGrid({
@@ -48,6 +61,15 @@ const nav = bro.ai.game.createNavGrid({
         { x: 10, z: 5, hw: 1, hd: 3 },   // 2x6 box
     ],
     padding: 0.4,  // agent radius clearance
+});
+
+// Bake the level's static collision geometry instead of hand-authoring:
+const navBaked = bro.ai.game.createNavGrid({
+    minX: -20, minZ: -20, maxX: 20, maxZ: 20, cellSize: 0.5,
+    fromPhysics: Physics,          // or a Physics.createWorldHandle() sandbox
+    physicsLayers: ['static'],     // optional layer filter
+    physicsMinY: 0, physicsMaxY: 3, // optional: only the walkable slab
+    padding: 0.4,
 });
 
 /**
@@ -328,10 +350,27 @@ scene.detachAIWorld();
  * @param {string[]} [opts.capabilities] - ids of enabled caps (default: all built-ins)
  * @param {function(self, world): void} [opts.think] - imperative decision fn
  * @param {number}  [opts.thinkHz=15]
- * @param {number}  [opts.yOffset=0]    - extra Y on the node (ground clearance)
+ * @param {number}  [opts.yOffset=0]    - node Y (absolute), or clearance above
+ *                                        the ground when groundFollow is set
  * @param {boolean} [opts.faceMovement=true]
  * @param {Array<{x,z}>} [opts.laneWaypoints] - waypoints for lane_walk
  * @param {string}  [opts.policy]       - "scripted_minion" as a C++ fallback
+ *
+ * Ground follow — agents plan in 2D (x, z); groundFollow makes the bound
+ * node's Y track the ground under the agent instead of sitting at a constant
+ * height. The probe runs natively once per frame; when it has no answer
+ * (chunk not streamed in / nothing under the ray) the node keeps the last
+ * known ground height.
+ * @param {Object}  [opts.groundFollow]
+ * @param {string}  opts.groundFollow.mode - 'terrain' (sample a voxel terrain's
+ *                                  surface) or 'raycast' (physics down-raycast
+ *                                  against the default world's static geometry)
+ * @param {Terrain} [opts.groundFollow.terrain] - required for mode 'terrain':
+ *                                  a scene.createTerrain() object
+ * @param {number}  [opts.groundFollow.rayStart=100] - world Y the down-probe starts from
+ * @param {number}  [opts.groundFollow.rayLength=200] - probe length below rayStart
+ * @param {Array<string|number>} [opts.groundFollow.layers] - raycast mode: only
+ *                                  hit bodies on these collision layers
  */
 minionNode.attachAgent(world, minionAgent, {
     capabilities: ["lane_walk", "basic_attack", "hold"],
@@ -342,6 +381,20 @@ minionNode.attachAgent(world, minionAgent, {
         if (e && self.inRange(e)) return self.attack(e.unit.id);
         return self.laneWalk();
     },
+});
+
+// Walk the terrain: yOffset becomes clearance above the sampled surface.
+scoutNode.attachAgent(world, scoutAgent, {
+    yOffset: 0.5,
+    groundFollow: { mode: 'terrain', terrain: myTerrain },
+    think(self) { return self.moveTo(30, -12); },
+});
+
+// Or follow physics floors/platforms via a downward raycast.
+guardNode.attachAgent(world, guardAgent, {
+    yOffset: 1.0,
+    groundFollow: { mode: 'raycast', layers: ['static'] },
+    think(self) { return self.hold(1); },
 });
 
 /** Remove the binding; the node stops receiving AI updates. */

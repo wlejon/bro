@@ -22,6 +22,12 @@ public:
     static JPH::BodyID bodyIdForTag(int32_t tag);
     /// Map Jolt BodyID → JS body tag. Returns -1 if untracked.
     static int32_t tagForBodyId(JPH::BodyID id);
+
+    /// Resolve a JS value to a PhysicsWorld. A sandbox world-handle object
+    /// (Physics.createWorldHandle()) maps to its own world; any other value
+    /// (the Physics namespace, `true`, ...) maps to the default world.
+    /// Returns nullptr when physics is unavailable.
+    static physics::PhysicsWorld* unwrapWorld(JSContext* ctx, JSValueConst v);
 };
 
 } // namespace bro::js

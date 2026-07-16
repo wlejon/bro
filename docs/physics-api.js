@@ -315,6 +315,7 @@ Physics.moveKinematic(id, x, y, z, qx, qy, qz, qw, dt);
  * @param {Object} opts
  * @param {string} opts.type      - "distance" | "point" | "hinge" | "fixed" | "slider" | "wheel"
  *                                  | "cone" | "swingTwist" | "pulley" | "gear" | "rackAndPinion"
+ *                                  | "sixdof"
  * @param {number} opts.body1     - first body tag
  * @param {number} [opts.body2]   - second body tag (omit / pass -1 to attach to world)
  * @param {{x,y,z}} [opts.point1] - world-space anchor on body1 (also: wheel hub, cone/swingTwist pivot)
@@ -368,6 +369,27 @@ Physics.moveKinematic(id, x, y, z, qx, qy, qz, qw, dt);
  * @param {boolean} [opts.enableMotor=false]      - enable angular motor on the wheel pin
  * @param {number}  [opts.motorSpeed=0]           - target angular velocity (rad/s)
  * @param {number}  [opts.maxMotorTorque=0]       - motor torque cap (N·m)
+ *
+ * SixDOF-only fields (Godot Generic6DOFJoint3D analog — configure each of the
+ * six degrees of freedom independently):
+ * @param {{x,y,z}} [opts.axisX={1,0,0}]   - constraint-space X axis (world)
+ * @param {{x,y,z}} [opts.axisY={0,1,0}]   - constraint-space Y axis (world; re-orthonormalized)
+ * @param {string}  [opts.swingType='cone'] - rotation-Y/Z limit shape: 'cone' | 'pyramid'
+ * @param {Object}  [opts.axes]            - per-axis config, keys translationX/Y/Z +
+ *                                  rotationX/Y/Z. Each value is 'locked' (default),
+ *                                  'free', or { min, max, frequency?, damping?, friction? }:
+ *                                  min/max = limit range (m for translation; rad for
+ *                                  rotation — rotationX is the twist in [-π,π],
+ *                                  rotationY/Z limits are symmetric, Jolt uses max);
+ *                                  frequency/damping (>0 Hz) make translation limits
+ *                                  soft springs; friction = resistance (N / N·m) when
+ *                                  the axis has no motor. An object without min/max
+ *                                  means 'free' (useful for friction-only axes).
+ * @param {Object}  [opts.motors]          - per-axis motors at create, keyed like `axes`,
+ *                                  each a motor options object (see setConstraintMotor).
+ *
+ * Motors at create (hinge / slider only — sixdof uses `motors` above):
+ * @param {Object}  [opts.motor]           - motor options object (see setConstraintMotor)
  * @returns {number} handle (truthy on success)
  */
 const j = Physics.createConstraint({
@@ -440,8 +462,58 @@ const rack = Physics.createConstraint({
     constraint1: pinionHinge, constraint2: rackSlider,
 });
 
+// SixDOF: a crane arm — free vertical travel within ±2 m (soft-limited by a
+// spring), yaw free, everything else locked; the yaw axis is motorized.
+const arm = Physics.createConstraint({
+    type: 'sixdof',
+    body1: base, body2: armBody,
+    point1: {x:0, y:2, z:0}, point2: {x:0, y:2, z:0},
+    axes: {
+        translationY: { min: -2, max: 2, frequency: 4, damping: 0.8 },
+        rotationY: 'free',
+        // unlisted axes stay locked
+    },
+    motors: {
+        rotationY: { type: 'velocity', target: 1.5, maxTorque: 200 },
+    },
+});
+
+// Hinge with a create-time position motor: a door that servos to 90°.
+const door = Physics.createConstraint({
+    type: 'hinge',
+    body1: frame, body2: doorBody,
+    point1: {x:0, y:1, z:0}, point2: {x:0, y:1, z:0},
+    axis: {x:0, y:1, z:0},
+    limitMin: 0, limitMax: Math.PI / 2,
+    motor: { type: 'position', target: Math.PI / 2, maxTorque: 300, frequency: 4, damping: 1 },
+});
+
 /** Adjust a wheel constraint's motor at runtime. No-op for non-wheel handles. */
 Physics.setWheelMotor(wheel, /*enabled*/ true, /*speed*/ -8.0, /*maxTorque*/ 60);
+
+/**
+ * Configure/steer a constraint motor at runtime. Works on hinge and slider
+ * handles (single driven axis — `axis` is ignored) and on sixdof handles
+ * (pass `axis`; wheel handles are sixdof underneath, their pin is
+ * 'rotationZ'). Wakes both bodies. Returns false for unknown handles,
+ * non-motorized constraint types, or a missing/invalid sixdof axis.
+ *
+ * @param {number} handle - constraint handle from createConstraint
+ * @param {Object} motor
+ * @param {string} motor.type        - 'velocity' | 'position' | 'off'
+ * @param {number} [motor.target=0]  - rad/s | rad (rotation), m/s | m (translation)
+ * @param {string|number} [motor.axis] - sixdof only: 'translationX'..'translationZ',
+ *                                  'rotationX'..'rotationZ' (or index 0..5)
+ * @param {number} [motor.maxForce]  - symmetric force limit (N, translation axes);
+ *                                  omit to leave unchanged (default unlimited)
+ * @param {number} [motor.maxTorque] - symmetric torque limit (N·m, rotation axes)
+ * @param {number} [motor.frequency] - position-motor spring frequency (Hz, default 2)
+ * @param {number} [motor.damping]   - position-motor spring damping (default 1)
+ * @returns {boolean} true if the motor was applied
+ */
+Physics.setConstraintMotor(door, { type: 'position', target: 0.2, maxTorque: 300 });
+Physics.setConstraintMotor(arm,  { axis: 'rotationY', type: 'velocity', target: -1, maxTorque: 200 });
+Physics.setConstraintMotor(arm,  { axis: 'rotationY', type: 'off' });
 
 /**
  * Breakable constraints. Set a breaking-impulse threshold (N·s) on any handle;
@@ -684,6 +756,7 @@ w.setLayer(tag, "ghost");
 w.destroyBody(tag);
 
 const c = w.createConstraint({ type:'distance', body1:a, body2:b, ... });
+w.setConstraintMotor(c, { type:'velocity', target: 2, maxTorque: 100 }); // hinge/slider/sixdof
 w.destroyConstraint(c);
 w.setConstraintBreakingImpulse(c, 500);    // auto-break threshold (N·s); 0 = never
 w.getConstraintBreakingImpulse(c);

@@ -3,6 +3,7 @@
 #include "brogameagent/capability.h"
 #include "brogameagent/policy.h"
 
+#include <functional>
 #include <memory>
 
 namespace brogameagent { class Agent; class World; }
@@ -75,6 +76,19 @@ public:
     void  setFaceMovement(bool v) { faceMovement_ = v; }
     bool  faceMovement() const { return faceMovement_; }
 
+    /// Ground-height probe for the agent's (x, z). Returns true and writes
+    /// the ground Y on success; false = "no answer this frame" (the binding
+    /// keeps the last known ground height). Installed by the JS layer for
+    /// groundFollow (terrain height sample or physics down-raycast); the
+    /// binding stays JS/physics/terrain-neutral. While set, yOffset becomes
+    /// a clearance above the ground instead of an absolute Y.
+    using GroundHeightFn = std::function<bool(float x, float z, float& outY)>;
+    void setGroundFollow(GroundHeightFn fn) {
+        groundFn_ = std::move(fn);
+        hasGround_ = false;
+    }
+    bool groundFollow() const { return static_cast<bool>(groundFn_); }
+
     /// Current in-flight action (read-only; callers may need to peek for UI).
     const brogameagent::Action& currentAction() const { return current_; }
 
@@ -105,6 +119,10 @@ private:
     float thinkAccum_ = 0.0f;
     float yOffset_    = 0.0f;
     bool  faceMovement_ = true;
+
+    GroundHeightFn groundFn_;
+    float lastGroundY_ = 0.0f;
+    bool  hasGround_   = false;
 };
 
 } // namespace bro::scene

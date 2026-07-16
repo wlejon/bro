@@ -2,9 +2,15 @@
 #if BRO_WITH_GAMEAI  // modular-build feature gate
 #include "util/log.h"
 
+#if BRO_WITH_PHYSICS
+#include "js/physics_bindings.h"
+#include "physics/physics_world.h"
+#endif
+
 #include <qjsbind/qjsbind.h>
 #include <brogameagent/brogameagent.h>
 
+#include <cfloat>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -291,15 +297,84 @@ static JSValue js_createNavGrid(JSContext* ctx, JSValueConst, int argc, JSValueC
         std::make_unique<brogameagent::NavGrid>(minX, minZ, maxX, maxZ, cellSize)
     };
 
+    float padding = (float)getDoubleProp(ctx, opts, "padding", 0);
+
     // Process obstacles array
     JSValue obsArr = JS_GetPropertyStr(ctx, opts, "obstacles");
     if (JS_IsArray(obsArr)) {
-        float padding = (float)getDoubleProp(ctx, opts, "padding", 0);
         auto boxes = parseAABBArray(ctx, obsArr);
         for (auto& box : boxes)
             data->grid->addObstacle(box, padding);
     }
     JS_FreeValue(ctx, obsArr);
+
+    // Bake obstacles from a physics world: every static, non-sensor body's
+    // world AABB projected to XZ. `fromPhysics` is the default world (the
+    // Physics namespace or `true`) or a sandbox handle from
+    // Physics.createWorldHandle(). Phase-idle contract: createNavGrid runs
+    // on the JS thread while the physics phase is idle, so direct body
+    // access is safe (same as the query bindings).
+    JSValue fromPhys = JS_GetPropertyStr(ctx, opts, "fromPhysics");
+    if (!JS_IsUndefined(fromPhys) && !JS_IsNull(fromPhys) &&
+        !(JS_IsBool(fromPhys) && !JS_ToBool(ctx, fromPhys))) {
+#if BRO_WITH_PHYSICS
+        auto* world = PhysicsBindings::unwrapWorld(ctx, fromPhys);
+        if (!world) {
+            JS_FreeValue(ctx, fromPhys);
+            delete data;
+            return JS_ThrowTypeError(ctx, "createNavGrid: fromPhysics world not available");
+        }
+
+        // Optional filters: physicsLayers (names/indices → mask) and a Y band
+        // ([physicsMinY, physicsMaxY]) a body's AABB must intersect to count.
+        uint32_t layerMask = 0xffffffffu;
+        JSValue lv = JS_GetPropertyStr(ctx, opts, "physicsLayers");
+        if (JS_IsArray(lv)) {
+            uint32_t mask = 0;
+            JSValue lenV = JS_GetPropertyStr(ctx, lv, "length");
+            uint32_t n = 0; JS_ToUint32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
+            for (uint32_t i = 0; i < n; i++) {
+                JSValue el = JS_GetPropertyUint32(ctx, lv, i);
+                int32_t idx = -1;
+                if (JS_IsString(el)) {
+                    const char* s = JS_ToCString(ctx, el);
+                    if (s) { idx = world->layerIndex(s); JS_FreeCString(ctx, s); }
+                } else if (JS_IsNumber(el)) {
+                    JS_ToInt32(ctx, &idx, el);
+                }
+                if (idx >= 0 && idx < 32) mask |= 1u << idx;
+                JS_FreeValue(ctx, el);
+            }
+            layerMask = mask;
+        }
+        JS_FreeValue(ctx, lv);
+        float bandMinY = (float)getDoubleProp(ctx, opts, "physicsMinY", -FLT_MAX);
+        float bandMaxY = (float)getDoubleProp(ctx, opts, "physicsMaxY", FLT_MAX);
+
+        for (const auto& b : world->collectStaticBodies()) {
+            if (b.isSensor) continue;  // sensors don't block movement
+            if (b.layer >= 0 && b.layer < 32 && !(layerMask & (1u << b.layer))) continue;
+            if (b.max.GetY() < bandMinY || b.min.GetY() > bandMaxY) continue;
+            // Skip bodies whose XZ footprint covers the whole grid (a ground
+            // slab would otherwise block every cell). Narrow the grid bounds
+            // or use physicsMinY/physicsMaxY to include such geometry.
+            if (b.min.GetX() <= minX && b.max.GetX() >= maxX &&
+                b.min.GetZ() <= minZ && b.max.GetZ() >= maxZ) continue;
+            brogameagent::AABB box{
+                0.5f * (b.min.GetX() + b.max.GetX()),
+                0.5f * (b.min.GetZ() + b.max.GetZ()),
+                0.5f * (b.max.GetX() - b.min.GetX()),
+                0.5f * (b.max.GetZ() - b.min.GetZ()),
+            };
+            data->grid->addObstacle(box, padding);
+        }
+#else
+        JS_FreeValue(ctx, fromPhys);
+        delete data;
+        return JS_ThrowTypeError(ctx, "createNavGrid: fromPhysics requires a physics-enabled build");
+#endif
+    }
+    JS_FreeValue(ctx, fromPhys);
 
     return qjsbind::wrap<NavGridData>(ctx, data);
 }

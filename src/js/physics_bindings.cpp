@@ -99,6 +99,14 @@ int32_t PhysicsBindings::tagForBodyId(JPH::BodyID id) {
     return s_defaultWorld ? s_defaultWorld->tagForBodyId(id) : -1;
 }
 
+physics::PhysicsWorld* PhysicsBindings::unwrapWorld(JSContext*, JSValueConst v) {
+    if (s_worldClassId != 0 && JS_IsObject(v)) {
+        if (auto* w = (JsWorld*)JS_GetOpaque(v, s_worldClassId))
+            return w->world;
+    }
+    return s_defaultWorld ? s_defaultWorld->world : nullptr;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -698,6 +706,96 @@ static JSValue worldGetContacts(JSContext* ctx, JsWorld* w) {
     return arr;
 }
 
+// SixDOF axis names in Jolt EAxis order (tx,ty,tz,rx,ry,rz).
+static const char* kSixDofAxisNames[6] = {
+    "translationX", "translationY", "translationZ",
+    "rotationX", "rotationY", "rotationZ",
+};
+
+static int motorAxisIndex(const std::string& name) {
+    for (int i = 0; i < 6; i++)
+        if (name == kSixDofAxisNames[i]) return i;
+    if (name == "tx") return 0;
+    if (name == "ty") return 1;
+    if (name == "tz") return 2;
+    if (name == "rx") return 3;
+    if (name == "ry") return 4;
+    if (name == "rz") return 5;
+    return -1;
+}
+
+// Parse a motor options object: { type:'velocity'|'position'|'off', target,
+// maxForce?, maxTorque?, frequency?, damping?, axis? } (axis only meaningful
+// for sixdof/wheel handles).
+static bool readMotorOptions(JSContext* ctx, JSValueConst o,
+                             physics::MotorOptions& m, std::string& err) {
+    if (!JS_IsObject(o)) { err = "motor options must be an object"; return false; }
+    std::string type = qjsbind::get_prop_string(ctx, o, "type");
+    if (type == "velocity")      m.state = physics::MotorOptions::Velocity;
+    else if (type == "position") m.state = physics::MotorOptions::Position;
+    else if (type == "off" || type.empty()) m.state = physics::MotorOptions::Off;
+    else { err = "motor type must be 'velocity' | 'position' | 'off'"; return false; }
+
+    m.target    = (float)qjsbind::get_prop_number(ctx, o, "target", 0.0);
+    m.maxForce  = (float)qjsbind::get_prop_number(ctx, o, "maxForce", -1.0);
+    m.maxTorque = (float)qjsbind::get_prop_number(ctx, o, "maxTorque", -1.0);
+    m.frequency = (float)qjsbind::get_prop_number(ctx, o, "frequency", -1.0);
+    m.damping   = (float)qjsbind::get_prop_number(ctx, o, "damping", -1.0);
+
+    JSValue av = JS_GetPropertyStr(ctx, o, "axis");
+    if (JS_IsString(av)) {
+        const char* s = JS_ToCString(ctx, av);
+        int idx = s ? motorAxisIndex(s) : -1;
+        if (s) JS_FreeCString(ctx, s);
+        if (idx < 0) {
+            JS_FreeValue(ctx, av);
+            err = "motor axis must be translationX..Z / rotationX..Z";
+            return false;
+        }
+        m.axis = idx;
+    } else if (JS_IsNumber(av)) {
+        int32_t idx = -1; JS_ToInt32(ctx, &idx, av);
+        m.axis = idx;
+    }
+    JS_FreeValue(ctx, av);
+    return true;
+}
+
+// Parse a sixdof per-axis config value: 'locked' | 'free' |
+// { min, max, frequency?, damping?, friction? }. An object without min/max
+// is a free axis (useful for friction-only axes).
+static bool readSixDofAxis(JSContext* ctx, JSValueConst v,
+                           physics::SixDofAxis& a, std::string& err) {
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        std::string mode = s ? s : "";
+        if (s) JS_FreeCString(ctx, s);
+        if (mode == "locked")    a.mode = physics::SixDofAxis::Locked;
+        else if (mode == "free") a.mode = physics::SixDofAxis::Free;
+        else { err = "axis mode must be 'locked' | 'free' | {min,max,...}"; return false; }
+        return true;
+    }
+    if (JS_IsObject(v)) {
+        JSValue minV = JS_GetPropertyStr(ctx, v, "min");
+        JSValue maxV = JS_GetPropertyStr(ctx, v, "max");
+        if (JS_IsNumber(minV) && JS_IsNumber(maxV)) {
+            double lo = 0, hi = 0;
+            JS_ToFloat64(ctx, &lo, minV); JS_ToFloat64(ctx, &hi, maxV);
+            a.mode = physics::SixDofAxis::Limited;
+            a.min = (float)lo; a.max = (float)hi;
+        } else {
+            a.mode = physics::SixDofAxis::Free;
+        }
+        JS_FreeValue(ctx, minV); JS_FreeValue(ctx, maxV);
+        a.springFrequency = (float)qjsbind::get_prop_number(ctx, v, "frequency", 0.0);
+        a.springDamping   = (float)qjsbind::get_prop_number(ctx, v, "damping", 1.0);
+        a.maxFriction     = (float)qjsbind::get_prop_number(ctx, v, "friction", 0.0);
+        return true;
+    }
+    err = "axis config must be 'locked' | 'free' | {min,max,...}";
+    return false;
+}
+
 static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o) {
     if (!w || !w->world) return JS_ThrowInternalError(ctx, "World not available");
     if (!JS_IsObject(o)) return JS_ThrowTypeError(ctx, "createConstraint(opts) requires an object");
@@ -716,7 +814,8 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
     else if (type == "pulley") cs.type = physics::ConstraintOptions::Pulley;
     else if (type == "gear")   cs.type = physics::ConstraintOptions::Gear;
     else if (type == "rackAndPinion" || type == "rack-and-pinion") cs.type = physics::ConstraintOptions::RackAndPinion;
-    else return JS_ThrowTypeError(ctx, "constraint type required (distance|point|hinge|fixed|slider|wheel|cone|swingTwist|pulley|gear|rackAndPinion)");
+    else if (type == "sixdof" || type == "sixDof" || type == "6dof") cs.type = physics::ConstraintOptions::SixDOF;
+    else return JS_ThrowTypeError(ctx, "constraint type required (distance|point|hinge|fixed|slider|wheel|cone|swingTwist|pulley|gear|rackAndPinion|sixdof)");
 
     JSValue b1v = JS_GetPropertyStr(ctx, o, "body1");
     JSValue b2v = JS_GetPropertyStr(ctx, o, "body2");
@@ -824,9 +923,87 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
         }
     }
 
+    if (cs.type == physics::ConstraintOptions::SixDOF) {
+        JSValue axv = JS_GetPropertyStr(ctx, o, "axisX");
+        cs.sixDofAxisX = readVec3(ctx, axv, JPH::Vec3(1, 0, 0)); JS_FreeValue(ctx, axv);
+        JSValue ayv = JS_GetPropertyStr(ctx, o, "axisY");
+        cs.sixDofAxisY = readVec3(ctx, ayv, JPH::Vec3(0, 1, 0)); JS_FreeValue(ctx, ayv);
+        std::string swing = qjsbind::get_prop_string(ctx, o, "swingType");
+        cs.sixDofSwingPyramid = (swing == "pyramid");
+
+        JSValue axes = JS_GetPropertyStr(ctx, o, "axes");
+        if (JS_IsObject(axes)) {
+            for (int i = 0; i < 6; i++) {
+                JSValue v = JS_GetPropertyStr(ctx, axes, kSixDofAxisNames[i]);
+                if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
+                    std::string err;
+                    if (!readSixDofAxis(ctx, v, cs.sixDofAxes[i], err)) {
+                        JS_FreeValue(ctx, v);
+                        JS_FreeValue(ctx, axes);
+                        return JS_ThrowTypeError(ctx, "sixdof axes.%s: %s",
+                                                 kSixDofAxisNames[i], err.c_str());
+                    }
+                }
+                JS_FreeValue(ctx, v);
+            }
+        }
+        JS_FreeValue(ctx, axes);
+
+        // Per-axis motors at create: motors: { rotationZ: {...}, ... }
+        JSValue motors = JS_GetPropertyStr(ctx, o, "motors");
+        if (JS_IsObject(motors)) {
+            for (int i = 0; i < 6; i++) {
+                JSValue v = JS_GetPropertyStr(ctx, motors, kSixDofAxisNames[i]);
+                if (JS_IsObject(v)) {
+                    physics::MotorOptions m;
+                    std::string err;
+                    if (!readMotorOptions(ctx, v, m, err)) {
+                        JS_FreeValue(ctx, v);
+                        JS_FreeValue(ctx, motors);
+                        return JS_ThrowTypeError(ctx, "sixdof motors.%s: %s",
+                                                 kSixDofAxisNames[i], err.c_str());
+                    }
+                    m.axis = i;  // keyed axis wins over any inline "axis" field
+                    cs.motors.push_back(m);
+                }
+                JS_FreeValue(ctx, v);
+            }
+        }
+        JS_FreeValue(ctx, motors);
+    }
+
+    // Single motor at create for hinge / slider: motor: { type, target, ... }
+    if (cs.type == physics::ConstraintOptions::Hinge ||
+        cs.type == physics::ConstraintOptions::Slider) {
+        JSValue mv = JS_GetPropertyStr(ctx, o, "motor");
+        if (JS_IsObject(mv)) {
+            physics::MotorOptions m;
+            std::string err;
+            if (!readMotorOptions(ctx, mv, m, err)) {
+                JS_FreeValue(ctx, mv);
+                return JS_ThrowTypeError(ctx, "motor: %s", err.c_str());
+            }
+            cs.motors.push_back(m);
+        }
+        JS_FreeValue(ctx, mv);
+    }
+
     uint32_t handle = w->world->createConstraint(cs);
     if (!handle) return JS_ThrowInternalError(ctx, "Failed to create constraint");
     return JS_NewUint32(ctx, handle);
+}
+
+// setConstraintMotor(handle, opts) — runtime motor control shared by the
+// default world and sandbox handles.
+static JSValue worldSetConstraintMotor(JSContext* ctx, JsWorld* w,
+                                       JSValueConst hVal, JSValueConst optsVal) {
+    if (!w || !w->world) return JS_ThrowInternalError(ctx, "World not available");
+    uint32_t h = 0; JS_ToUint32(ctx, &h, hVal);
+    physics::MotorOptions m;
+    std::string err;
+    if (!readMotorOptions(ctx, optsVal, m, err))
+        return JS_ThrowTypeError(ctx, "setConstraintMotor: %s", err.c_str());
+    return JS_NewBool(ctx, w->world->setConstraintMotor(h, m));
 }
 
 // ---------------------------------------------------------------------------
@@ -1415,6 +1592,12 @@ static JSValue js_physics_setWheelMotor(JSContext* ctx, JSValueConst, int argc, 
     return JS_UNDEFINED;
 }
 
+static JSValue js_physics_setConstraintMotor(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 2) return JS_ThrowTypeError(ctx, "setConstraintMotor(handle, opts)");
+    return worldSetConstraintMotor(ctx, s_defaultWorld, argv[0], argv[1]);
+}
+
 static JSValue js_physics_setConstraintBreakingImpulse(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     DEFW_GUARD();
     if (argc < 2) return JS_ThrowTypeError(ctx, "setConstraintBreakingImpulse(handle, threshold)");
@@ -1684,6 +1867,12 @@ static JSValue jsw_createCharacter(JSContext* ctx, JSValueConst thisVal, int arg
     return worldCreateCharacter(ctx, w, thisVal, argv[0]);
 }
 
+static JSValue jsw_setConstraintMotor(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world || argc < 2) return JS_FALSE;
+    return worldSetConstraintMotor(ctx, w, argv[0], argv[1]);
+}
+
 static JSValue jsw_destroyConstraint(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
     JsWorld* w = worldFromThis(ctx, thisVal);
     if (!w || !w->world || argc < 1) return JS_UNDEFINED;
@@ -1841,6 +2030,7 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("getContacts", 0, jsw_getContacts),
     JS_CFUNC_DEF("createCharacter", 1, jsw_createCharacter),
     JS_CFUNC_DEF("createConstraint", 1, jsw_createConstraint),
+    JS_CFUNC_DEF("setConstraintMotor", 2, jsw_setConstraintMotor),
     JS_CFUNC_DEF("destroyConstraint", 1, jsw_destroyConstraint),
     JS_CFUNC_DEF("setConstraintBreakingImpulse", 2, jsw_setConstraintBreakingImpulse),
     JS_CFUNC_DEF("getConstraintBreakingImpulse", 1, jsw_getConstraintBreakingImpulse),
@@ -1953,6 +2143,7 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("destroyConstraint", js_physics_destroyConstraint, 1)
         .function("setConstraintEnabled", js_physics_setConstraintEnabled, 2)
         .function("setWheelMotor", js_physics_setWheelMotor, 4)
+        .function("setConstraintMotor", js_physics_setConstraintMotor, 2)
         .function("setConstraintBreakingImpulse", js_physics_setConstraintBreakingImpulse, 2)
         .function("getConstraintBreakingImpulse", js_physics_getConstraintBreakingImpulse, 1)
         .function("getBrokenConstraints", js_physics_getBrokenConstraints, 0);

@@ -230,6 +230,25 @@ JSValue createTerrainJS(JSContext* ctx, scene::SceneGraph* graph, JSValueConst o
 }
 
 // -------------------------------------------------------------------------
+// AI ground-follow height probe (see terrain_bindings.h)
+// -------------------------------------------------------------------------
+
+void* terrainHandleFromJS(JSContext* ctx, JSValueConst v) {
+    if (!JS_IsObject(v)) return nullptr;
+    return qjsbind::unwrap<TW>(ctx, v);
+}
+
+bool terrainSampleHeight(void* handle, float x, float z,
+                         float rayStartY, float rayLength, float& outY) {
+    auto* tw = static_cast<TW*>(handle);
+    if (!tw || !TW::allInstances().count(tw) || !tw->manager) return false;
+    auto hit = tw->manager->raycast({x, rayStartY, z}, {0.0f, -1.0f, 0.0f}, rayLength);
+    if (!hit.hit) return false;
+    outY = hit.worldPos[1];
+    return true;
+}
+
+// -------------------------------------------------------------------------
 // Install / Cleanup
 // -------------------------------------------------------------------------
 

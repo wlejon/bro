@@ -951,6 +951,42 @@ uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& opts) {
             settings = s;
             break;
         }
+        case ConstraintOptions::SixDOF: {
+            auto* s = new SixDOFConstraintSettings();
+            s->mSpace = EConstraintSpace::WorldSpace;
+            s->mPosition1 = opts.point1;
+            s->mPosition2 = opts.point2;
+            // Build an orthonormal constraint frame from the requested axes
+            // (re-derive Y so imperfectly perpendicular input still works —
+            // same treatment as the wheel composite above).
+            Vec3 axisX = opts.sixDofAxisX.NormalizedOr(Vec3::sAxisX());
+            Vec3 axisY = opts.sixDofAxisY.NormalizedOr(Vec3::sAxisY());
+            Vec3 axisZ = axisX.Cross(axisY).NormalizedOr(Vec3::sAxisZ());
+            axisY = axisZ.Cross(axisX).NormalizedOr(Vec3::sAxisY());
+            s->mAxisX1 = axisX; s->mAxisY1 = axisY;
+            s->mAxisX2 = axisX; s->mAxisY2 = axisY;
+            s->mSwingType = opts.sixDofSwingPyramid ? ESwingType::Pyramid
+                                                    : ESwingType::Cone;
+            using EAxis = SixDOFConstraintSettings::EAxis;
+            for (int i = 0; i < 6; i++) {
+                const SixDofAxis& a = opts.sixDofAxes[i];
+                auto axis = static_cast<EAxis>(i);
+                switch (a.mode) {
+                    case SixDofAxis::Locked:  s->MakeFixedAxis(axis); break;
+                    case SixDofAxis::Free:    s->MakeFreeAxis(axis);  break;
+                    case SixDofAxis::Limited: s->SetLimitedAxis(axis, a.min, a.max); break;
+                }
+                s->mMaxFriction[i] = a.maxFriction;
+                // Soft (spring) limits exist only for the translation axes.
+                if (i < EAxis::NumTranslation && a.springFrequency > 0.0f) {
+                    s->mLimitsSpringSettings[i].mMode = ESpringMode::FrequencyAndDamping;
+                    s->mLimitsSpringSettings[i].mFrequency = a.springFrequency;
+                    s->mLimitsSpringSettings[i].mDamping = a.springDamping;
+                }
+            }
+            settings = s;
+            break;
+        }
         case ConstraintOptions::Wheel:
             // handled above; unreachable here.
             return 0;
@@ -989,6 +1025,11 @@ uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& opts) {
 
     uint32_t handle = nextConstraintHandle_++;
     constraints_[handle] = ConstraintEntry{c, nullptr, opts.breakingImpulse};
+
+    // Create-time motors (hinge/slider: single entry; sixdof: one per axis).
+    for (const MotorOptions& m : opts.motors)
+        setConstraintMotor(handle, m);
+
     return handle;
 }
 
@@ -1016,6 +1057,99 @@ void PhysicsWorld::setWheelMotor(uint32_t handle, bool enabled, float speed, flo
     sd->SetMotorState(EAxis::RotationZ, enabled ? EMotorState::Velocity : EMotorState::Off);
     sd->SetTargetAngularVelocityCS(Vec3(0, 0, speed));
     sd->GetMotorSettings(EAxis::RotationZ).SetTorqueLimit(maxTorque);
+}
+
+// Apply the shared MotorSettings fields (spring for position motors, symmetric
+// force/torque limits). Negative fields mean "leave unchanged".
+static void applyMotorSettings(MotorSettings& ms, const MotorOptions& m) {
+    if (m.frequency >= 0.0f) {
+        ms.mSpringSettings.mMode = ESpringMode::FrequencyAndDamping;
+        ms.mSpringSettings.mFrequency = m.frequency;
+    }
+    if (m.damping >= 0.0f) {
+        ms.mSpringSettings.mMode = ESpringMode::FrequencyAndDamping;
+        ms.mSpringSettings.mDamping = m.damping;
+    }
+    if (m.maxForce >= 0.0f)  ms.SetForceLimit(m.maxForce);
+    if (m.maxTorque >= 0.0f) ms.SetTorqueLimit(m.maxTorque);
+}
+
+bool PhysicsWorld::setConstraintMotor(uint32_t handle, const MotorOptions& motor) {
+    auto it = constraints_.find(handle);
+    if (it == constraints_.end() || !it->second.ref) return false;
+    Constraint* c = it->second.ref.GetPtr();
+
+    EMotorState state = EMotorState::Off;
+    if (motor.state == MotorOptions::Velocity) state = EMotorState::Velocity;
+    else if (motor.state == MotorOptions::Position) state = EMotorState::Position;
+
+    bool ok = false;
+    switch (c->GetSubType()) {
+        case EConstraintSubType::Hinge: {
+            auto* h = static_cast<HingeConstraint*>(c);
+            applyMotorSettings(h->GetMotorSettings(), motor);
+            if (state == EMotorState::Velocity)      h->SetTargetAngularVelocity(motor.target);
+            else if (state == EMotorState::Position) h->SetTargetAngle(motor.target);
+            h->SetMotorState(state);
+            ok = true;
+            break;
+        }
+        case EConstraintSubType::Slider: {
+            auto* s = static_cast<SliderConstraint*>(c);
+            applyMotorSettings(s->GetMotorSettings(), motor);
+            if (state == EMotorState::Velocity)      s->SetTargetVelocity(motor.target);
+            else if (state == EMotorState::Position) s->SetTargetPosition(motor.target);
+            s->SetMotorState(state);
+            ok = true;
+            break;
+        }
+        case EConstraintSubType::SixDOF: {
+            // Covers both explicit sixdof constraints and wheel composites
+            // (whose driven axis is RotationZ = 5).
+            if (motor.axis < 0 || motor.axis > 5) return false;
+            auto* sd = static_cast<SixDOFConstraint*>(c);
+            using EAxis = SixDOFConstraintSettings::EAxis;
+            auto axis = static_cast<EAxis>(motor.axis);
+            applyMotorSettings(sd->GetMotorSettings(axis), motor);
+            if (motor.axis < 3) {
+                if (state == EMotorState::Velocity) {
+                    Vec3 v = sd->GetTargetVelocityCS();
+                    v.SetComponent(motor.axis, motor.target);
+                    sd->SetTargetVelocityCS(v);
+                } else if (state == EMotorState::Position) {
+                    Vec3 p = sd->GetTargetPositionCS();
+                    p.SetComponent(motor.axis, motor.target);
+                    sd->SetTargetPositionCS(p);
+                }
+            } else {
+                if (state == EMotorState::Velocity) {
+                    Vec3 w = sd->GetTargetAngularVelocityCS();
+                    w.SetComponent(motor.axis - 3, motor.target);
+                    sd->SetTargetAngularVelocityCS(w);
+                } else if (state == EMotorState::Position) {
+                    float* t = it->second.sixDofRotTarget;
+                    t[motor.axis - 3] = motor.target;
+                    sd->SetTargetOrientationCS(Quat::sEulerAngles(Vec3(t[0], t[1], t[2])));
+                }
+            }
+            sd->SetMotorState(axis, state);
+            ok = true;
+            break;
+        }
+        default:
+            return false;  // no motor on this constraint type
+    }
+
+    // Wake both bodies so a motor change acts on sleeping islands.
+    if (ok) {
+        auto* tb = static_cast<TwoBodyConstraint*>(c);
+        auto& bi = physicsSystem_.GetBodyInterface();
+        Body* b1 = tb->GetBody1();
+        Body* b2 = tb->GetBody2();
+        if (b1 && !b1->IsStatic()) bi.ActivateBody(b1->GetID());
+        if (b2 && !b2->IsStatic()) bi.ActivateBody(b2->GetID());
+    }
+    return ok;
 }
 
 void PhysicsWorld::setConstraintBreakingImpulse(uint32_t handle, float threshold) {
@@ -1375,6 +1509,30 @@ std::vector<BodyID> PhysicsWorld::overlapPoint(RVec3 point,
     for (auto& h : collector.mHits) {
         if (std::find(out.begin(), out.end(), h.mBodyID) == out.end())
             out.push_back(h.mBodyID);
+    }
+    return out;
+}
+
+std::vector<PhysicsWorld::StaticBodyInfo> PhysicsWorld::collectStaticBodies() const {
+    std::vector<StaticBodyInfo> out;
+    BodyIDVector ids;
+    physicsSystem_.GetBodies(ids);
+    // Phase-idle contract: the caller owns the world, so the NoLock variant
+    // is safe (matches the other main-thread readers, e.g. getAllTransforms).
+    const BodyLockInterfaceNoLock& li = physicsSystem_.GetBodyLockInterfaceNoLock();
+    for (BodyID id : ids) {
+        BodyLockRead lock(li, id);
+        if (!lock.Succeeded()) continue;
+        const Body& b = lock.GetBody();
+        if (!b.IsStatic()) continue;
+        const AABox& box = b.GetWorldSpaceBounds();
+        out.push_back(StaticBodyInfo{
+            id,
+            box.mMin,
+            box.mMax,
+            (int)b.GetObjectLayer(),
+            b.IsSensor(),
+        });
     }
     return out;
 }
