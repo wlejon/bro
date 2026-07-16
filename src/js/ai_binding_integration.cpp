@@ -631,6 +631,15 @@ static JSValue js_node_attachAgent(JSContext* ctx, JSValueConst this_val, int ar
         if (JS_IsArray(v)) parseLaneWaypoints(ctx, v, binding->capabilities());
         JS_FreeValue(ctx, v);
 
+        // avoidance: true|false|{radius?, maxSpeed?, neighborDist?,
+        // maxNeighbors?, timeHorizon?, timeHorizonObst?, enabled?} — the
+        // agent's ORCA participation, effective while the AI world's
+        // avoidance pass is on (world.setAvoidance(true)).
+        v = JS_GetPropertyStr(ctx, opts, "avoidance");
+        if (!JS_IsUndefined(v) && !JS_IsNull(v))
+            applyAgentAvoidanceOpts(ctx, v, *agent);
+        JS_FreeValue(ctx, v);
+
         v = JS_GetPropertyStr(ctx, opts, "policy");
         if (JS_IsString(v)) {
             const char* s = JS_ToCString(ctx, v);

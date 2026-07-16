@@ -41,6 +41,12 @@ brogameagent::World* worldFromJS(JSContext* ctx, JSValueConst val);
 /// ref (must JS_FreeValue). Returns JS_NULL if not found.
 JSValue findAgentJSRef(JSContext* ctx, JSValueConst worldJsRef, brogameagent::Agent* agent);
 
+/// Apply an `avoidance` opts value (bool or {enabled?, radius?, maxSpeed?,
+/// neighborDist?, maxNeighbors?, timeHorizon?, timeHorizonObst?}) onto an
+/// agent's ORCA participation config. Shared by createAgent,
+/// agent.setAvoidance and node.attachAgent's avoidance option.
+void applyAgentAvoidanceOpts(JSContext* ctx, JSValueConst val, brogameagent::Agent& agent);
+
 // ── Cross-binding integration (implemented in ai_binding_integration.cpp) ──
 
 /// Install `bro.ai.game.registerCapability` onto the given namespace object.

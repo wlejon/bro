@@ -116,6 +116,8 @@ nav.addObstacle({ x: 5, z: 5, hw: 1, hd: 1 }, 0.4);
  * @param {number} [opts.z=0] - Initial Z position
  * @param {number} [opts.speed=6] - Movement speed (units/second)
  * @param {number} [opts.radius=0.4] - Collision radius
+ * @param {boolean|Object} [opts.avoidance] - ORCA participation/tuning (see
+ *                                  "Local avoidance" below)
  * @returns {Agent}
  */
 const bot = bro.ai.game.createAgent({
@@ -172,6 +174,77 @@ bot.hasTarget;
 
 /** Whether the agent has reached its target (read-only). */
 bot.atTarget;
+
+
+// -----------------------------------------------------------------------------
+// Local avoidance (ORCA) — agents stop walking through each other
+// -----------------------------------------------------------------------------
+//
+// Optimal Reciprocal Collision Avoidance, solved natively inside
+// world.tick(). Off by default (agents keep the legacy pass-through-each-
+// other movement). When enabled, each living agent's path-following
+// steering becomes its *preferred* velocity, the ORCA solver filters it
+// against nearby agents (each side takes half the avoidance effort) and
+// static walls, and the filtered velocity drives the agent's usual
+// dynamics (maxAccel / maxTurnRate / nav-grid clamping still apply).
+// Deterministic: the same roster + obstacles + ticks replay identically.
+//
+// Scene-attached agents get this for free — attachAIWorld ticks the same
+// world, so think() callbacks issuing self.moveTo(...) produce paths that
+// flow around other agents.
+
+/**
+ * Enable/disable the avoidance pass on a world.
+ *
+ * Walls: the world's own addObstacle() AABBs are always respected while
+ * avoidance is on. Passing a navGrid additionally bases avoidance-only
+ * walls on that grid's obstacle boxes, so agents locally steer around the
+ * exact geometry A* paths around — and since createNavGrid({fromPhysics})
+ * bakes obstacles from static physics bodies, that composition makes
+ * avoidance physics-aware for free. Boxes are copied (no reference kept);
+ * call again after mutating the grid.
+ *
+ * @param {boolean|Object} opts - boolean, or:
+ * @param {boolean} [opts.enabled=true]
+ * @param {NavGrid} [opts.navGrid] - rebase avoidance walls on this grid's obstacles
+ */
+world.setAvoidance(true);
+world.setAvoidance({ navGrid: nav });   // enable + respect the grid's walls
+world.setAvoidance(false);
+
+/** Whether the avoidance pass is enabled (read-only). */
+world.avoidanceEnabled;
+
+/**
+ * Per-agent participation + tuning. Also accepted as `avoidance:` in
+ * createAgent(opts) and node.attachAgent(world, agent, opts).
+ * `false` opts the agent out: it keeps legacy (unfiltered) movement but
+ * others still steer around it at full effort — good for bosses or
+ * player-driven units that shouldn't yield.
+ *
+ * @param {boolean|Object} opts - boolean, or:
+ * @param {boolean} [opts.enabled=true]
+ * @param {number}  [opts.radius]            - avoidance disc radius (default: agent radius)
+ * @param {number}  [opts.maxSpeed]          - speed cap on the solved velocity (default: agent speed)
+ * @param {number}  [opts.neighborDist=10]   - only agents within this range are considered
+ * @param {number}  [opts.maxNeighbors=10]   - nearest-N cap on the neighbor set
+ * @param {number}  [opts.timeHorizon=2]     - seconds of mutual lookahead vs agents
+ * @param {number}  [opts.timeHorizonObst=1] - seconds of lookahead vs walls
+ */
+bot.setAvoidance({ radius: 0.5, timeHorizon: 2.5 });
+
+// Typical setup: shared nav grid + avoidance, then just set targets.
+const arena = bro.ai.game.createNavGrid({
+    minX: -20, minZ: -20, maxX: 20, maxZ: 20, cellSize: 0.5,
+    obstacles: [{ x: 0, z: 0, hw: 3, hd: 0.5 }],
+});
+const world2 = bro.ai.game.createWorld();
+world2.setAvoidance({ navGrid: arena });
+const a1 = bro.ai.game.createAgent({ navGrid: arena, x: -10, z: 0, avoidance: { radius: 0.5 } });
+const a2 = bro.ai.game.createAgent({ navGrid: arena, x: 10, z: 0 });
+world2.addAgent(a1); world2.addAgent(a2);
+a1.setTarget(10, 0); a2.setTarget(-10, 0);   // they pass, not overlap
+// world2.tick(dt) each frame — or scene.attachAIWorld(world2).
 
 
 // -----------------------------------------------------------------------------
@@ -355,6 +428,10 @@ scene.detachAIWorld();
  * @param {boolean} [opts.faceMovement=true]
  * @param {Array<{x,z}>} [opts.laneWaypoints] - waypoints for lane_walk
  * @param {string}  [opts.policy]       - "scripted_minion" as a C++ fallback
+ * @param {boolean|Object} [opts.avoidance] - ORCA participation/tuning for the
+ *                                        bound agent (see "Local avoidance"
+ *                                        above); effective while the world has
+ *                                        world.setAvoidance(true)
  *
  * Ground follow — agents plan in 2D (x, z); groundFollow makes the bound
  * node's Y track the ground under the agent instead of sitting at a constant

@@ -227,6 +227,29 @@ static std::vector<brogameagent::AABB> parseAABBArray(JSContext* ctx, JSValueCon
     return out;
 }
 
+// Apply an `avoidance` opts value onto an agent: `true`/`false` toggles
+// participation with default params; an object sets {enabled?, radius?,
+// maxSpeed?, neighborDist?, maxNeighbors?, timeHorizon?, timeHorizonObst?}
+// (radius/maxSpeed omitted or <= 0 derive from the agent). Shared by
+// createAgent, agent.setAvoidance and node.attachAgent.
+void applyAgentAvoidanceOpts(JSContext* ctx, JSValueConst val, brogameagent::Agent& agent) {
+    brogameagent::AgentAvoidance av;  // library defaults
+    if (JS_IsBool(val)) {
+        av.enabled = JS_ToBool(ctx, val);
+    } else if (JS_IsObject(val)) {
+        av.enabled         = getBoolProp(ctx, val, "enabled", true);
+        av.radius          = (float)getDoubleProp(ctx, val, "radius", -1);
+        av.maxSpeed        = (float)getDoubleProp(ctx, val, "maxSpeed", -1);
+        av.neighborDist    = (float)getDoubleProp(ctx, val, "neighborDist", av.neighborDist);
+        av.maxNeighbors    = getInt32Prop(ctx, val, "maxNeighbors", av.maxNeighbors);
+        av.timeHorizon     = (float)getDoubleProp(ctx, val, "timeHorizon", av.timeHorizon);
+        av.timeHorizonObst = (float)getDoubleProp(ctx, val, "timeHorizonObst", av.timeHorizonObst);
+    } else {
+        return;
+    }
+    agent.setAvoidance(av);
+}
+
 // Create a {yaw, pitch} JS object
 static JSValue makeAimResult(JSContext* ctx, const brogameagent::AimResult& aim) {
     JSValue obj = JS_NewObject(ctx);
@@ -410,6 +433,13 @@ static JSValue js_createAgent(JSContext* ctx, JSValueConst, int argc, JSValueCon
         if (maxAccel >= 0) h->agent.setMaxAccel((float)maxAccel);
         double maxTurnRate = getDoubleProp(ctx, opts, "maxTurnRate", -1);
         if (maxTurnRate >= 0) h->agent.setMaxTurnRate((float)maxTurnRate);
+
+        // avoidance: true|false|{...} — ORCA participation when the world's
+        // avoidance pass is on (world.setAvoidance).
+        JSValue avoidVal = JS_GetPropertyStr(ctx, opts, "avoidance");
+        if (!JS_IsUndefined(avoidVal) && !JS_IsNull(avoidVal))
+            applyAgentAvoidanceOpts(ctx, avoidVal, h->agent);
+        JS_FreeValue(ctx, avoidVal);
 
         // navGrid — pin onto the agent JS object below so the JS NavGrid
         // outlives the agent (Agent holds a raw NavGrid* pointer).
@@ -1884,6 +1914,13 @@ void AIBindings::install(JSContext* ctx) {
                     }
                     return JS_UNDEFINED;
                 }, 1)
+            .method_raw("setAvoidance",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<AgentData>(ctx, this_val);
+                    if (!d || argc < 1) return JS_UNDEFINED;
+                    applyAgentAvoidanceOpts(ctx, argv[0], d->agent);
+                    return JS_UNDEFINED;
+                }, 1)
             .get("x", [](AgentData* d) -> double { return d->agent.x(); })
             .get("z", [](AgentData* d) -> double { return d->agent.z(); })
             .get("yaw", [](AgentData* d) -> double { return d->agent.yaw(); })
@@ -1965,6 +2002,43 @@ void AIBindings::install(JSContext* ctx) {
                 }, 1)
             .method("tick",
                 [](WorldData* d, double dt) { d->world.tick((float)dt); })
+            .method_raw("setAvoidance",
+                // world.setAvoidance(true|false) or
+                // world.setAvoidance({ enabled?, navGrid? }) — enables the
+                // ORCA local-avoidance pass in tick(). Passing a navGrid
+                // rebases the world's avoidance-only walls on that grid's
+                // obstacle boxes, so agents steer around the same geometry
+                // they path around (with createNavGrid({fromPhysics}) that
+                // makes avoidance physics-aware for free). Boxes are copied;
+                // no reference to the grid is kept.
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* wd = qjsbind::unwrap<WorldData>(ctx, this_val);
+                    if (!wd || argc < 1) return JS_UNDEFINED;
+                    if (JS_IsBool(argv[0])) {
+                        wd->world.setAvoidanceEnabled(JS_ToBool(ctx, argv[0]));
+                        return JS_UNDEFINED;
+                    }
+                    if (!JS_IsObject(argv[0]))
+                        return JS_ThrowTypeError(ctx, "setAvoidance(bool | {enabled?, navGrid?})");
+                    bool enabled = getBoolProp(ctx, argv[0], "enabled", true);
+                    JSValue gv = JS_GetPropertyStr(ctx, argv[0], "navGrid");
+                    if (JS_IsObject(gv)) {
+                        auto* gd = qjsbind::unwrap<NavGridData>(ctx, gv);
+                        if (!gd || !gd->grid) {
+                            JS_FreeValue(ctx, gv);
+                            return JS_ThrowTypeError(ctx,
+                                "setAvoidance: navGrid must be a createNavGrid() object");
+                        }
+                        wd->world.clearAvoidanceObstacles();
+                        for (const auto& box : gd->grid->obstacles())
+                            wd->world.addAvoidanceObstacle(box);
+                    }
+                    JS_FreeValue(ctx, gv);
+                    wd->world.setAvoidanceEnabled(enabled);
+                    return JS_UNDEFINED;
+                }, 1)
+            .get("avoidanceEnabled",
+                [](WorldData* d) -> bool { return d->world.avoidanceEnabled(); })
             .method_raw("spawnProjectile",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                     auto* wd = qjsbind::unwrap<WorldData>(ctx, this_val);
