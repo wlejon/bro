@@ -47,6 +47,10 @@ add_library(bro_js STATIC
     video_bindings.cpp
     physics_bindings.cpp
     scene_bindings.cpp
+    scene_bindings_mesh.cpp
+    scene_bindings_anim.cpp
+    scene_bindings_fx.cpp
+    scene_bindings_view.cpp
     mesh_bindings.cpp
     flora_bindings.cpp
     math_bindings.cpp
