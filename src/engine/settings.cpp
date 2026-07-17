@@ -280,6 +280,8 @@ std::string Settings::getString(const std::string& key) const {
     }
     if (key == "input.overlayToggleKey") return std::to_string(i.overlayToggleKey);
 
+    if (key == "appearance.colorScheme") return resolved_.appearance.colorScheme;
+
     return "";
 }
 
@@ -301,6 +303,7 @@ void Settings::resetCategory(const std::string& category) {
 
     if (category == "graphics") userOverrides_.graphics = GraphicsSettings{};
     else if (category == "audio") userOverrides_.audio = AudioSettings{};
+    else if (category == "appearance") userOverrides_.appearance = AppearanceSettings{};
     else if (category == "input") {
         // Preserve action bindings when resetting input settings
         auto bindings = std::move(userOverrides_.input.actionBindings);
@@ -427,7 +430,18 @@ void Settings::resolve() {
     resolveGraphics();
     resolveAudio();
     resolveInput();
+    resolveAppearance();
     rebuildKeyToAction();
+}
+
+void Settings::resolveAppearance() {
+    auto& r = resolved_.appearance;
+    r = defaults_.appearance;
+
+    if (appPresence_.count("appearance.colorScheme"))
+        r.colorScheme = appOverrides_.appearance.colorScheme;
+    if (userPresence_.count("appearance.colorScheme"))
+        r.colorScheme = userOverrides_.appearance.colorScheme;
 }
 
 void Settings::resolveGraphics() {
@@ -549,6 +563,20 @@ void Settings::applyToLayer(SettingsData& data, std::set<std::string>& presence,
     if (key == "input.doubleClickThresholdMs") { data.input.doubleClickThresholdMs = std::stod(value); return; }
     if (key == "input.doubleClickDistancePx") { data.input.doubleClickDistancePx = std::stof(value); return; }
     if (key == "input.overlayToggleKey") { data.input.overlayToggleKey = static_cast<uint32_t>(std::stoul(value)); return; }
+
+    // Appearance
+    if (key == "appearance.colorScheme") {
+        // Constrain to the known values so a corrupt settings file can't feed
+        // an arbitrary string into @media evaluation.
+        if (value == "system" || value == "light" || value == "dark") {
+            data.appearance.colorScheme = value;
+        } else {
+            presence.erase(key);
+            LOG_WARN("appearance.colorScheme: invalid value '%s' (expected system|light|dark)",
+                     value.c_str());
+        }
+        return;
+    }
 
     // Action bindings: input.bindings.<action> = "Key1,Key2"
     const std::string bindingsPrefix = "input.bindings.";

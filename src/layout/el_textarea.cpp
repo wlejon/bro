@@ -1,6 +1,7 @@
 #include "layout/el_textarea.h"
 #include "layout/control_text.h"
 #include "layout/draw_traversal.h"
+#include "layout/pseudo_style.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
 #include "render/renderer.h"
@@ -490,7 +491,13 @@ void ElTextarea::draw(render::Renderer* renderer,
         isPlaceholder = true;
     }
 
+    // ::placeholder styling from the cascade (color/opacity/font-*). Empty
+    // when no rule targets it — the legacy gray paint applies unchanged.
+    htmlayout::css::ComputedStyle phStyle;
+    if (isPlaceholder) phStyle = resolveStyledPseudo(elem_, "placeholder");
+
     render::FontRef fontRef = getFontRef();
+    if (!phStyle.empty()) applyPseudoFont(phStyle, fontRef);
     auto lm = render::LineMetrics::from(renderer_->measureText("M", fontRef));
     float lineHeight = lm.lineHeight();
 
@@ -531,6 +538,12 @@ void ElTextarea::draw(render::Renderer* renderer,
     }
     bromath::Color color = isPlaceholder ? cfromColor8({128, 128, 128, 180})
                                         : textColor;
+    if (isPlaceholder && !phStyle.empty()) {
+        // ::placeholder color (inherits the textarea's color when the rule
+        // doesn't set one) with its opacity applied on top.
+        pseudoColor(phStyle, "color", color);
+        color.a *= pseudoOpacity(phStyle);
+    }
 
     float baseX = x;
     float baseY = y - scrollY_;
@@ -539,10 +552,17 @@ void ElTextarea::draw(render::Renderer* renderer,
     // per visual line: the intersection of the selected range with that line.
     // Rows fully inside the range extend a little past their last glyph to show
     // the swallowed newline, as browsers do.
+    htmlayout::css::ComputedStyle selStyle;
+    int selS = 0, selE = 0;
+    bool hasSel = false;
     if (focused_ && !isPlaceholder && hasSelection()) {
-        const int selS = std::clamp(sel_.start(), 0, static_cast<int>(text.size()));
-        const int selE = std::clamp(sel_.end(), 0, static_cast<int>(text.size()));
-        const bromath::Color wash = selectionFill(accentColor_());
+        hasSel = true;
+        selS = std::clamp(sel_.start(), 0, static_cast<int>(text.size()));
+        selE = std::clamp(sel_.end(), 0, static_cast<int>(text.size()));
+        // ::selection may restyle the wash (background-color) and the selected
+        // glyphs (color, repainted after the main text pass below).
+        selStyle = resolveStyledPseudo(elem_, "selection");
+        const bromath::Color wash = selectionWash(selStyle, accentColor_());
         const float breakW = renderer_->measureText(" ", fontRef).width;
         for (int i = 0; i < static_cast<int>(vls.size()); ++i) {
             float lineY = baseY + i * lineHeight;
@@ -572,6 +592,34 @@ void ElTextarea::draw(render::Renderer* renderer,
         if (lineY > y + h) break;
         if (vls[i].end > vls[i].start) {
             renderer_->drawText(lineStr(vls[i]), baseX, lineY + lm.ascent, fontRef, color);
+        }
+    }
+
+    // ::selection color: repaint each line's selected run over the wash, at
+    // the same measured offset the wash used so the glyphs land on themselves.
+    // Skipped when the resolved color matches the base text color (a rule that
+    // only sets background-color inherits the element's color), so the common
+    // case doesn't double-draw anti-aliased edges.
+    bromath::Color selColor;
+    if (hasSel && selE > selS && !selStyle.empty() &&
+        pseudoColor(selStyle, "color", selColor) &&
+        (selColor.r != color.r || selColor.g != color.g ||
+         selColor.b != color.b || selColor.a != color.a)) {
+        for (int i = 0; i < static_cast<int>(vls.size()); ++i) {
+            float lineY = baseY + i * lineHeight;
+            if (lineY + lineHeight < y) continue;
+            if (lineY > y + h) break;
+            int ls = static_cast<int>(vls[i].start);
+            int le = static_cast<int>(vls[i].end);
+            int a = std::max(selS, ls);
+            int b = std::min(selE, le);
+            if (b <= a) continue;
+            float ax = baseX + runWidthTo(text, vls[i].start, static_cast<size_t>(a),
+                                          fontRef, renderer_);
+            renderer_->drawText(
+                std::string_view(text).substr(static_cast<size_t>(a),
+                                              static_cast<size_t>(b - a)),
+                ax, lineY + lm.ascent, fontRef, selColor);
         }
     }
 

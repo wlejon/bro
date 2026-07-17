@@ -240,6 +240,7 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         doc.document = std::make_unique<dom::Document>();
         doc.document->setMediaViewport(static_cast<float>(viewportWidth_),
                                        static_cast<float>(viewportHeight_));
+        doc.document->setMediaColorScheme(effectiveColorScheme());
         doc.document->parse(html, authorStyles, kDefaultStyles);
 
         // Create a dedicated JSContext on the shared runtime

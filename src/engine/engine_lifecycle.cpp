@@ -490,4 +490,26 @@ void Engine::handleResize(int w, int h) {
         jsRuntime_->executePendingJobs();
     }
 }
+
+std::string Engine::effectiveColorScheme() const {
+    if (settings_) {
+        const std::string& pref = settings_->appearance().colorScheme;
+        if (pref == "light" || pref == "dark") return pref;
+    }
+    // "system": follow the OS theme. UNKNOWN (no video driver, or a platform
+    // without a theme concept) counts as light — the web default.
+    return SDL_GetSystemTheme() == SDL_SYSTEM_THEME_DARK ? "dark" : "light";
+}
+
+void Engine::applyColorScheme() {
+    const std::string scheme = effectiveColorScheme();
+    if (document_) document_->setMediaColorScheme(scheme);
+    for (auto& doc : iframeDocs_) {
+        if (doc && doc->document) doc->document->setMediaColorScheme(scheme);
+    }
+    for (auto& doc : systemDocs_) {
+        if (doc.document) doc.document->setMediaColorScheme(scheme);
+    }
+}
+
 } // namespace bro::engine

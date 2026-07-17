@@ -134,6 +134,16 @@ static JSValue js_settings_getAll(JSContext* ctx, JSValueConst, int argc, JSValu
         JS_SetPropertyStr(ctx, obj, "overlayToggleKey", JS_NewInt32(ctx, static_cast<int32_t>(i.overlayToggleKey)));
     };
 
+    auto addAppearance = [&](JSValue obj) {
+        auto& ap = state->settings->appearance();
+        JS_SetPropertyStr(ctx, obj, "colorScheme", JS_NewString(ctx, ap.colorScheme.c_str()));
+    };
+
+    if (category == "appearance") {
+        JSValue obj = JS_NewObject(ctx);
+        addAppearance(obj);
+        return obj;
+    }
     if (category == "graphics") {
         JSValue obj = JS_NewObject(ctx);
         addGraphics(obj);
@@ -163,6 +173,10 @@ static JSValue js_settings_getAll(JSContext* ctx, JSValueConst, int argc, JSValu
     JSValue iObj = JS_NewObject(ctx);
     addInput(iObj);
     JS_SetPropertyStr(ctx, root, "input", iObj);
+
+    JSValue apObj = JS_NewObject(ctx);
+    addAppearance(apObj);
+    JS_SetPropertyStr(ctx, root, "appearance", apObj);
 
     return root;
 }

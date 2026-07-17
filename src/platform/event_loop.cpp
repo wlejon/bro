@@ -173,6 +173,10 @@ void EventLoop::pollEvents() {
                 if (onFocusGained) onFocusGained();
                 break;
 
+            case SDL_EVENT_SYSTEM_THEME_CHANGED:
+                if (onSystemThemeChanged) onSystemThemeChanged();
+                break;
+
             default:
                 break;
         }

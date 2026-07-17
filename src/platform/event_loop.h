@@ -25,6 +25,9 @@ public:
     std::function<void(const std::string& text, float x, float y)> onDropText;
     std::function<void()> onFocusLost;
     std::function<void()> onFocusGained;
+    // OS light/dark theme flipped (SDL_EVENT_SYSTEM_THEME_CHANGED). Query the
+    // new theme via SDL_GetSystemTheme().
+    std::function<void()> onSystemThemeChanged;
     // Gamepad events. `instanceId` is the SDL joystick instance id; button is
     // an SDL_GamepadButton, axis an SDL_GamepadAxis. Axis values are already
     // normalized: sticks -1..1, triggers 0..1.

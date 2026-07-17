@@ -272,6 +272,12 @@ public:
     // re-evaluates every retained sheet against the new size.
     void setMediaViewport(float w, float h);
 
+    // Color scheme ("light" or "dark") for @media (prefers-color-scheme)
+    // evaluation. Same contract as setMediaViewport: call before parse();
+    // calling again later (OS theme flip, settings change) re-evaluates every
+    // retained sheet and marks the document dirty for restyle.
+    void setMediaColorScheme(const std::string& scheme);
+
     // ---------- Selection + live Range registry --------------------------
     // The Document owns a single Selection (window.getSelection()) and keeps
     // a set of live Range objects so it can update their endpoints when the
@@ -408,6 +414,12 @@ private:
     // and retains the sheet for later re-evaluation.
     void addSheetToCascade(htmlayout::css::Stylesheet sheet, void* scope = nullptr,
                            htmlayout::css::Origin origin = htmlayout::css::Origin::Author);
+    // Re-evaluate every retained sheet against mediaContext_ (viewport or
+    // color-scheme change) and mark the document dirty.
+    void rebuildCascadeForMediaChange();
+    // Set by rebuildCascadeForMediaChange; consumed by resolveStyles(), which
+    // treats it like a newly-added sheet (full selector-level re-resolve).
+    bool mediaRebuilt_ = false;
 
     // One-shot restyle+relayout after layout when @container rules exist
     // (container sizes are only known post-layout). See performLayout().

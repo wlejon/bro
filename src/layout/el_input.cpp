@@ -1,6 +1,7 @@
 #include "layout/el_input.h"
 #include "layout/control_text.h"
 #include "layout/draw_traversal.h"
+#include "layout/pseudo_style.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
 #include "render/renderer.h"
@@ -519,7 +520,13 @@ void ElInput::drawText_(float x, float y, float w, float h) {
         isPlaceholder = true;
     }
 
+    // ::placeholder styling from the cascade (color/opacity/font-*). Empty
+    // when no rule targets it — the legacy gray paint applies unchanged.
+    htmlayout::css::ComputedStyle phStyle;
+    if (isPlaceholder) phStyle = resolveStyledPseudo(elem_, "placeholder");
+
     render::FontRef fontRef = getFontRef();
+    if (!phStyle.empty()) applyPseudoFont(phStyle, fontRef);
     auto lm = render::LineMetrics::from(renderer_->measureText("M", fontRef));
     float textY = lm.baselineY(y, h);
 
@@ -559,15 +566,22 @@ void ElInput::drawText_(float x, float y, float w, float h) {
 
     // Selection wash, behind the text. Measured against the drawn glyphs, so a
     // password field highlights its mask rather than the raw value's widths.
+    // ::selection may restyle the wash (background-color) and the selected
+    // glyphs (color, repainted after the main text run below).
+    htmlayout::css::ComputedStyle selStyle;
+    int selS = 0, selE = 0;
+    bool hasSelBand = false;
     if (focused_ && !isPlaceholder && hasSelection() && !text.empty()) {
-        int s = std::clamp(sel_.start(), 0, static_cast<int>(text.size()));
-        int e = std::clamp(sel_.end(), 0, static_cast<int>(text.size()));
-        if (e > s) {
-            float sx = drawX + runWidthTo(text, 0, static_cast<size_t>(s), fontRef, renderer_);
-            float ex = drawX + runWidthTo(text, 0, static_cast<size_t>(e), fontRef, renderer_);
+        selS = std::clamp(sel_.start(), 0, static_cast<int>(text.size()));
+        selE = std::clamp(sel_.end(), 0, static_cast<int>(text.size()));
+        if (selE > selS) {
+            hasSelBand = true;
+            selStyle = resolveStyledPseudo(elem_, "selection");
+            float sx = drawX + runWidthTo(text, 0, static_cast<size_t>(selS), fontRef, renderer_);
+            float ex = drawX + runWidthTo(text, 0, static_cast<size_t>(selE), fontRef, renderer_);
             float top = textY - lm.ascent;
             renderer_->fillRect(sx, top, ex - sx, lm.lineHeight(),
-                                selectionFill(accentColor_()));
+                                selectionWash(selStyle, accentColor_()));
         }
     }
 
@@ -586,7 +600,32 @@ void ElInput::drawText_(float x, float y, float w, float h) {
         }
         bromath::Color color = isPlaceholder ? cfromColor8({128, 128, 128, 180})
                                             : textColor;
+        if (isPlaceholder && !phStyle.empty()) {
+            // ::placeholder color (inherits the input's color when the rule
+            // doesn't set one) with its opacity applied on top.
+            pseudoColor(phStyle, "color", color);
+            color.a *= pseudoOpacity(phStyle);
+        }
         renderer_->drawText(text, drawX, textY, fontRef, color);
+
+        // ::selection color: repaint the selected glyph run over the wash.
+        // Drawn as its own run starting at the wash's left edge — the same
+        // prefix measurement the wash used, so the glyphs land on themselves.
+        // Skipped when the resolved color matches the base text color (a rule
+        // that only sets background-color inherits the element's color), so
+        // the common case doesn't double-draw anti-aliased edges.
+        bromath::Color selColor;
+        if (hasSelBand && !selStyle.empty() &&
+            pseudoColor(selStyle, "color", selColor) &&
+            (selColor.r != color.r || selColor.g != color.g ||
+             selColor.b != color.b || selColor.a != color.a)) {
+            float sx = drawX + runWidthTo(text, 0, static_cast<size_t>(selS),
+                                          fontRef, renderer_);
+            renderer_->drawText(
+                std::string_view(text).substr(static_cast<size_t>(selS),
+                                              static_cast<size_t>(selE - selS)),
+                sx, textY, fontRef, selColor);
+        }
     }
 
     if (focused_ && isTextType(nullptr)) {

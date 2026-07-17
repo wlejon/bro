@@ -518,6 +518,11 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     int insetTop = contentTop();
     int cw = std::max(1, w - contentRight());
     int ch = std::max(1, h - insetTop - contentBottom());
+    // Snapshot the Selection geometry before recording — recordAppLayers draws
+    // the highlight from the snapshot (the windowed loop does this right
+    // before signaling raster; without it headless GPU captures never showed
+    // the document selection at all).
+    updateSelectionSnapshot();
     skia->beginFrame(w, h);
     recordAppLayers(appCmds, w, h,
                     insetTop, contentRight(), contentBottom(), scrollY_);

@@ -212,6 +212,9 @@ void Engine::run() {
     // engine-side lock state in sync so apps see a pointerlockchange.
     eventLoop_->onFocusLost   = [this]() { windowFocused_ = false; exitPointerLock(); setPageVisibility(false); };
     eventLoop_->onFocusGained = [this]() { windowFocused_ = true; setPageVisibility(true); };
+    // OS theme flip → re-evaluate @media (prefers-color-scheme) and restyle.
+    // A no-op when appearance.colorScheme forces "light"/"dark".
+    eventLoop_->onSystemThemeChanged = [this]() { applyColorScheme(); };
 
     // Seed focus from the window's actual state — an app can launch unfocused
     // (e.g. spawned behind another window), and SDL won't emit a FOCUS_LOST for

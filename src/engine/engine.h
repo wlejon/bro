@@ -169,6 +169,18 @@ public:
     /// Handle a window resize.
     void handleResize(int w, int h);
 
+    /// Effective CSS color scheme ("light" or "dark") for
+    /// `@media (prefers-color-scheme)`. Resolves the appearance.colorScheme
+    /// setting: "light"/"dark" force a scheme, "system" follows the OS theme
+    /// (SDL_GetSystemTheme; unknown → light).
+    std::string effectiveColorScheme() const;
+
+    /// Push the effective color scheme into every live document (app,
+    /// iframes, system panels). Documents whose scheme actually changed
+    /// re-evaluate their @media blocks and mark themselves dirty for restyle.
+    /// Called at init, on OS theme change, and on appearance settings change.
+    void applyColorScheme();
+
     /// Input events forwarded from the event loop.
     void handleMouseDown(float x, float y, int button);
     void handleMouseUp(float x, float y, int button);
@@ -906,6 +918,11 @@ private:
         std::vector<Rect> rects;
         bool hasCaret = false;
         float caretX = 0, caretY = 0, caretHeight = 0;
+        // Highlight fill for this selection — ::selection background-color
+        // resolved on the main thread (element-scoped at the selection start),
+        // falling back to the translucent accent default. Snapshotted so the
+        // raster thread never touches the cascade.
+        bromath::Color highlight{0.0f, 0.0f, 0.0f, 0.0f};
     };
     SelectionSnapshot selectionSnapshot_;
 

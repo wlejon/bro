@@ -3,6 +3,7 @@
 #include "engine/key_mapping.h"
 #include "layout/box.h"
 #include "layout/layout_node_adapter.h"
+#include "layout/pseudo_style.h"
 #include "engine/overflow.h"
 #include "engine/replaced_elements.h"
 #include "dom/element_geometry.h"
@@ -386,6 +387,9 @@ Engine::ContentInsets Engine::contentInsets() const {
 void Engine::updateSelectionSnapshot() {
     selectionSnapshot_.rects.clear();
     selectionSnapshot_.hasCaret = false;
+    // Default: translucent accent blue (#3377ff at 1/3 alpha), legible because
+    // the highlight paints OVER the glyphs.
+    selectionSnapshot_.highlight = bromath::cfromColor8({0x33, 0x77, 0xff, 0x55});
     if (!document_ || !textMetrics_) return;
     auto* sel = document_->selection();
     if (!sel || sel->rangeCount() == 0) return;
@@ -418,6 +422,20 @@ void Engine::updateSelectionSnapshot() {
         // paints correctly transformed, same symptom as the dropdown/
         // slider/canvas-layer bugs already fixed this session.
         auto* ctxEl = nearestElementAncestor(range->startContainer());
+        // ::selection background-color, scoped to the element at the selection
+        // start (the common case is a selection within one styled subtree).
+        // The overlay paints over the glyphs, so a fully opaque author color
+        // would hide the text it highlights — cap the alpha at 0.5.
+        if (ctxEl) {
+            auto selStyle = layout::resolveStyledPseudo(ctxEl, "selection");
+            bromath::Color bg;
+            if (!selStyle.empty() &&
+                layout::pseudoColor(selStyle, "background-color", bg) &&
+                bg.a > 0.0f) {
+                if (bg.a > 0.5f) bg.a = 0.5f;
+                selectionSnapshot_.highlight = bg;
+            }
+        }
         selectionSnapshot_.rects.reserve(rects.size());
         for (const auto& r : rects) {
             auto pr = ctxEl ? dom::projectRectThroughAncestors(ctxEl, r.x, r.y, r.width, r.height)
@@ -449,13 +467,16 @@ void Engine::updateSelectionSnapshot() {
 
 void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY) {
     if (!renderer) return;
-    // Accent with transparency — keeps underlying glyphs legible.
-    bromath::Color hl{0x33, 0x77, 0xff, 0x55};
+    // Fill resolved in updateSelectionSnapshot (::selection background-color,
+    // or the translucent accent default). NOTE: bromath::Color is float 0-1 —
+    // the old hardcoded {0x33, 0x77, 0xff, 0x55} int literals saturated every
+    // channel to 1.0 and painted the highlight as OPAQUE WHITE over the text.
     for (const auto& r : selectionSnapshot_.rects) {
-        renderer->fillRect(r.x, r.y + docOffsetY, r.w, r.h, hl);
+        renderer->fillRect(r.x, r.y + docOffsetY, r.w, r.h,
+                           selectionSnapshot_.highlight);
     }
     if (selectionSnapshot_.hasCaret) {
-        bromath::Color caretColor{0xff, 0xff, 0xff, 0xff};
+        bromath::Color caretColor{1.0f, 1.0f, 1.0f, 1.0f};
         renderer->fillRect(selectionSnapshot_.caretX,
                            selectionSnapshot_.caretY + docOffsetY,
                            1.5f, selectionSnapshot_.caretHeight, caretColor);

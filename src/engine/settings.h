@@ -35,6 +35,12 @@ struct AudioSettings {
     bool muted = false;
 };
 
+struct AppearanceSettings {
+    // Preferred color scheme for CSS `@media (prefers-color-scheme: ...)`.
+    // "system" follows the OS theme; "light"/"dark" force a scheme.
+    std::string colorScheme = "system";
+};
+
 struct ActionBinding {
     std::string action;
     std::vector<std::string> keys;
@@ -52,6 +58,7 @@ struct SettingsData {
     GraphicsSettings graphics;
     AudioSettings audio;
     InputSettings input;
+    AppearanceSettings appearance;
 };
 
 // ---------------------------------------------------------------------------
@@ -72,6 +79,7 @@ public:
     const GraphicsSettings& graphicsDefaults() const { return defaults_.graphics; }
     const AudioSettings& audio() const { return resolved_.audio; }
     const InputSettings& input() const { return resolved_.input; }
+    const AppearanceSettings& appearance() const { return resolved_.appearance; }
 
     // --- User overrides (persisted) ---
     void setUser(const std::string& key, const std::string& value);
@@ -124,6 +132,7 @@ private:
     void resolveGraphics();
     void resolveAudio();
     void resolveInput();
+    void resolveAppearance();
     void rebuildKeyToAction();
 
     // Apply a key=value into a SettingsData + mark presence

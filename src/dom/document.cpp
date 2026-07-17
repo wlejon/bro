@@ -130,13 +130,28 @@ void Document::setMediaViewport(float w, float h) {
     hasMediaContext_ = true;
     mediaContext_.viewportWidth = w;
     mediaContext_.viewportHeight = h;
+    rebuildCascadeForMediaChange();
+}
+
+void Document::setMediaColorScheme(const std::string& scheme) {
+    if (hasMediaContext_ && mediaContext_.colorScheme == scheme) return;
+    hasMediaContext_ = true;
+    mediaContext_.colorScheme = scheme;
+    rebuildCascadeForMediaChange();
+}
+
+void Document::rebuildCascadeForMediaChange() {
     if (retainedSheets_.empty()) return;
-    // Viewport changed after sheets were added: re-evaluate every @media
-    // block by rebuilding the cascade from the retained parsed sheets.
+    // The media context changed after sheets were added: re-evaluate every
+    // @media block by rebuilding the cascade from the retained parsed sheets.
     cascade_.clear();
     for (auto& rs : retainedSheets_) {
         cascade_.addStylesheet(rs.sheet, rs.scope, &mediaContext_, rs.origin);
     }
+    // The rule set changed but no element was marked dirty (nobody touched
+    // them — the @media conditions flipped). Force the next resolveStyles()
+    // to re-resolve everything, selector-level, exactly like a new sheet.
+    mediaRebuilt_ = true;
     markDirty();
 }
 
@@ -362,6 +377,10 @@ void Document::resolveStyles() {
     // document.head.appendChild(styleEl) would only reach elements that some
     // unrelated change happened to dirty later.
     bool sheetAdded = styleElsDirty_ && reconcileStyleElements();
+    // A media-context change (viewport resize, color-scheme flip) rebuilt the
+    // cascade: the rules changed under every element, same invalidation as a
+    // new sheet.
+    if (mediaRebuilt_) { sheetAdded = true; mediaRebuilt_ = false; }
     // Sticky: once a sheet declares `border: inherit` (or any other forced
     // inherit of a non-inherited property), the scoped restyle below can no
     // longer prove a clean subtree, for this document, for good.

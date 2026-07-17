@@ -1,6 +1,6 @@
 # Settings System
 
-Persistent, layered settings system for graphics, audio, and input configuration. The engine provides sensible defaults; apps can override them; users can override those. User settings persist across sessions.
+Persistent, layered settings system for graphics, audio, input, and appearance configuration. The engine provides sensible defaults; apps can override them; users can override those. User settings persist across sessions.
 
 ## JS API: `bro.settings`
 
@@ -10,7 +10,7 @@ Persistent, layered settings system for graphics, audio, and input configuration
 |----------|-------------|
 | `bro.settings.get(key)` | Get a single setting value (typed: boolean, number, or string) |
 | `bro.settings.getAll()` | Get all settings as `{graphics: {...}, audio: {...}, input: {...}}` |
-| `bro.settings.getAll(category)` | Get all settings in a category (`"graphics"`, `"audio"`, or `"input"`) |
+| `bro.settings.getAll(category)` | Get all settings in a category (`"graphics"`, `"audio"`, `"input"`, or `"appearance"`) |
 
 ```js
 bro.settings.get("graphics.vsync")         // true
@@ -94,6 +94,20 @@ let modes = bro.settings.getDisplayModes();
 | `input.doubleClickThresholdMs` | number | 500.0 | Max time between clicks for double-click (ms) |
 | `input.doubleClickDistancePx` | float | 5.0 | Max movement between clicks for double-click (px) |
 | `input.overlayToggleKey` | int | 1073741889 | SDL keycode for system overlay toggle (F8) |
+
+### Appearance (`appearance.*`)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `appearance.colorScheme` | string | `"system"` | Color scheme fed to CSS `@media (prefers-color-scheme: ...)`: `"system"` follows the OS theme (live — an OS theme flip restyles running apps), `"light"`/`"dark"` force a scheme. Applies to the app document, iframes, and system panels. Changing it at runtime re-evaluates every `@media` block and restyles immediately — which also makes it the headless-test hook for deterministic dark/light rendering. |
+
+```js
+// App prefers dark unless the user says otherwise
+bro.settings.setDefault("appearance.colorScheme", "dark");
+
+// User forces light regardless of the OS theme (persisted)
+bro.settings.set("appearance.colorScheme", "light");
+```
 
 ## Action binding system
 
