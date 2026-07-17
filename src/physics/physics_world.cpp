@@ -1949,6 +1949,15 @@ uint32_t PhysicsWorld::createVehicle(const VehicleOptions& opts) {
         }
         for (auto& d : diffs) d.engineTorqueRatio = 1.0f / (float)diffs.size();
     }
+    // Jolt's WheeledVehicleController requires at least one driven wheel: with
+    // zero differentials its clutch torque factors sum to 0, which trips a
+    // Debug assert (WheeledVehicleController.cpp sum_torque_factors == 1) and
+    // NaN-poisons the drivetrain math in Release. Reject the config cleanly.
+    if (diffs.empty()) {
+        LOG_WARN("createVehicle: no driven wheels — mark at least one wheel "
+                 "driven:true or pass explicit differentials");
+        return 0;
+    }
     for (const VehicleDifferentialOptions& d : diffs) {
         const int n = (int)opts.wheels.size();
         if (d.leftWheel >= n || d.rightWheel >= n) return 0;

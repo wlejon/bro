@@ -1108,7 +1108,11 @@ player.innerBody;
  *
  * @param {Object[]} [opts.differentials] - omit to auto-derive: driven wheels
  *                                          are paired in array order, torque
- *                                          split equally. Explicit form:
+ *                                          split equally. At least one wheel
+ *                                          must be driven (or one explicit
+ *                                          differential given) — a drivetrain
+ *                                          with no driven wheels is rejected
+ *                                          (createVehicle throws). Explicit form:
  * @param {number}  [opts.differentials[].leftWheel=-1]  - wheel index or -1
  * @param {number}  [opts.differentials[].rightWheel=-1]
  * @param {number}  [opts.differentials[].ratio=3.42]    - gearbox→wheel ratio

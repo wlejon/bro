@@ -18,13 +18,14 @@ Physics.createBody({
 });
 
 function makeCar(x, frictionScale) {
-    const wheel = (wx, wz) => ({
+    const wheel = (wx, wz, drivenWheel) => ({
         position: { x: wx, y: -0.3, z: wz },
         radius: 0.35, width: 0.25,
         suspensionMinLength: 0.2, suspensionMaxLength: 0.5,
         longitudinalFriction: frictionScale,
         lateralFriction: frictionScale,
         maxBrakeTorque: 3000,
+        driven: drivenWheel,
     });
     return Physics.createVehicle({
         chassis: {
@@ -32,8 +33,8 @@ function makeCar(x, frictionScale) {
             position: { x: x, y: 1.0, z: 0 }, density: 260,
         },
         wheels: [
-            wheel(-0.8,  1.3), wheel(0.8,  1.3),
-            wheel(-0.8, -1.3), wheel(0.8, -1.3),
+            wheel(-0.8,  1.3, false), wheel(0.8,  1.3, false),
+            wheel(-0.8, -1.3, true),  wheel(0.8, -1.3, true),
         ],
     });
 }
@@ -81,9 +82,11 @@ const curveIcy = Physics.createVehicle({
         { position: { x:  0.8, y: -0.3, z:  1.3 }, radius: 0.35, width: 0.25,
           longitudinalFrictionCurve: [0, 0, 1, 0.05], maxBrakeTorque: 3000 },
         { position: { x: -0.8, y: -0.3, z: -1.3 }, radius: 0.35, width: 0.25,
-          longitudinalFrictionCurve: [0, 0, 1, 0.05], maxBrakeTorque: 3000 },
+          longitudinalFrictionCurve: [0, 0, 1, 0.05], maxBrakeTorque: 3000,
+          driven: true },
         { position: { x:  0.8, y: -0.3, z: -1.3 }, radius: 0.35, width: 0.25,
-          longitudinalFrictionCurve: [0, 0, 1, 0.05], maxBrakeTorque: 3000 },
+          longitudinalFrictionCurve: [0, 0, 1, 0.05], maxBrakeTorque: 3000,
+          driven: true },
     ],
 });
 advanceTime(1000);
