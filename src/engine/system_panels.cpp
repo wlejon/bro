@@ -35,6 +35,9 @@
 #include "js/settings_bindings.h"
 #include "canvas/canvas_scene.h"
 #include "platform/sdl_window.h"
+#if BRO_WITH_3D
+#include "scene/scene_renderer.h"  // scene::CullStats for the perf HUD
+#endif
 
 #include <include/core/SkCanvas.h>
 #include <include/core/SkImage.h>
@@ -1017,6 +1020,12 @@ void Engine::tickSystemPanels(double nowMs) {
 void Engine::updateSystemPerf(double fps, double frameTime, double js, double layout,
                               double raster, double gpu, double draw,
                               int vpW, int vpH) {
+#if BRO_WITH_3D
+    // Scene frustum-culling counters from the most recent render, summed
+    // across every scene graph — the same numbers headless perf.stats()
+    // reports (field names match). Zeros when no 3D content rendered.
+    scene::CullStats cull = sceneCullStats();
+#endif
     for (auto& doc : systemDocs_) {
         if (JS_IsUndefined(doc.broPerfObj) || !doc.jsCtx) continue;
         JSContext* ctx = doc.jsCtx;
@@ -1028,6 +1037,28 @@ void Engine::updateSystemPerf(double fps, double frameTime, double js, double la
         JS_SetPropertyStr(ctx, doc.broPerfObj, "raster", JS_NewFloat64(ctx, raster));
         JS_SetPropertyStr(ctx, doc.broPerfObj, "gpu", JS_NewFloat64(ctx, gpu));
         JS_SetPropertyStr(ctx, doc.broPerfObj, "draw", JS_NewFloat64(ctx, draw));
+
+#if BRO_WITH_3D
+        {
+            JSValue sc = JS_NewObject(ctx);
+            auto snum = [&](const char* k, int v) {
+                JS_SetPropertyStr(ctx, sc, k, JS_NewInt32(ctx, v));
+            };
+            snum("meshDrawn",        cull.meshDrawn);
+            snum("meshCulled",       cull.meshCulled);
+            snum("instancedDrawn",   cull.instancedDrawn);
+            snum("instancedCulled",  cull.instancedCulled);
+            snum("splatDrawn",       cull.splatDrawn);
+            snum("splatCulled",      cull.splatCulled);
+            snum("particlesDrawn",   cull.particlesDrawn);
+            snum("particlesCulled",  cull.particlesCulled);
+            snum("billboardsDrawn",  cull.billboardsDrawn);
+            snum("billboardsCulled", cull.billboardsCulled);
+            snum("shadowDrawn",      cull.shadowDrawn);
+            snum("shadowCulled",     cull.shadowCulled);
+            JS_SetPropertyStr(ctx, doc.broPerfObj, "scene", sc);
+        }
+#endif
 
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue bro = JS_GetPropertyStr(ctx, global, "__bro");

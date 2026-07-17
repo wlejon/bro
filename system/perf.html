@@ -132,6 +132,19 @@ td.value {
         <span class="bar-track"><span id="bar-draw" class="bar-fill c-draw" style="width: 1px;"></span></span>
         <span id="ms-draw" class="bar-ms">0ms</span>
     </div>
+
+    <div id="scene-section" style="display: none;">
+        <div class="divider"></div>
+        <div class="chart-title">Scene (drawn / culled)</div>
+        <table>
+            <tr><td class="label">Meshes</td><td id="cull-mesh" class="value">0 / 0</td></tr>
+            <tr id="cull-instanced-row"><td class="label">Instanced</td><td id="cull-instanced" class="value">0 / 0</td></tr>
+            <tr id="cull-splat-row"><td class="label">Splats</td><td id="cull-splat" class="value">0 / 0</td></tr>
+            <tr id="cull-particles-row"><td class="label">Particles</td><td id="cull-particles" class="value">0 / 0</td></tr>
+            <tr id="cull-billboards-row"><td class="label">Billboards</td><td id="cull-billboards" class="value">0 / 0</td></tr>
+            <tr id="cull-shadow-row"><td class="label">Shadow</td><td id="cull-shadow" class="value">0 / 0</td></tr>
+        </table>
+    </div>
 </div>
 
 <script>
@@ -177,6 +190,33 @@ td.value {
             var px = Math.max(1, Math.round(pct * 1.8));
             if (bar) bar.style.setProperty('width', px + 'px');
             if (label) label.textContent = ms.toFixed(2) + 'ms';
+        }
+
+        // Scene frustum-culling counters (drawn / culled per node family).
+        // Absent on non-3D builds; the section stays hidden until any 3D
+        // content actually rendered. Sparse families (a scene with no
+        // particles) hide their row so the common case stays two lines.
+        var sceneSection = document.getElementById('scene-section');
+        var s = p.scene;
+        if (sceneSection && s) {
+            var rows = [
+                ['cull-mesh',       null,                  s.meshDrawn,       s.meshCulled],
+                ['cull-instanced',  'cull-instanced-row',  s.instancedDrawn,  s.instancedCulled],
+                ['cull-splat',      'cull-splat-row',      s.splatDrawn,      s.splatCulled],
+                ['cull-particles',  'cull-particles-row',  s.particlesDrawn,  s.particlesCulled],
+                ['cull-billboards', 'cull-billboards-row', s.billboardsDrawn, s.billboardsCulled],
+                ['cull-shadow',     'cull-shadow-row',     s.shadowDrawn,     s.shadowCulled]
+            ];
+            var any = false;
+            for (var j = 0; j < rows.length; j++) {
+                var drawn = rows[j][2] || 0, culled = rows[j][3] || 0;
+                var cell = document.getElementById(rows[j][0]);
+                if (cell) cell.textContent = drawn + ' / ' + culled;
+                var rowEl = rows[j][1] ? document.getElementById(rows[j][1]) : null;
+                if (rowEl) rowEl.style.setProperty('display', (drawn + culled) > 0 ? 'table-row' : 'none');
+                if (drawn + culled > 0) any = true;
+            }
+            sceneSection.style.setProperty('display', any ? 'block' : 'none');
         }
     }
 
