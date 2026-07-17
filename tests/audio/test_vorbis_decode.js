@@ -1,0 +1,217 @@
+// Ogg Vorbis decode end-to-end: createClipFromFile / decodeAudioData on real
+// Vorbis fixtures (embedded base64: ffmpeg/libvorbis 0.5 s sine tones at
+// amplitude 0.5 — mono 440 Hz @ 22050 Hz, stereo L=440/R=880 @ 44100 Hz),
+// playback through the mixer with recorded output, and corrupt-file errors.
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+const MONO_OGG =
+    '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' +
+    'llqMKbUWQymphVJaK6W0llqqMbVWY8SYlMw5KZljUkoprZVSWqsck5IxKKmDkEopKcVSUouVc1Iy6Kh0EEoqqcRUUmmtpNJSKaXFklJsKcVUW4u1hlJaLKnE' +
+    'VlJqMbVUW4sx14gxKRlzUjLnpJRSUiultJY5J6WDjkrmoKSSUmulpBQz5qR0DkrKIKNSUootpRJTKKW1klJspaTWWoy1ptRaLSW1VlJqsZQSW4sx1xZLTZ2U' +
+    '1koqMYZSWmsx5ppaizGUElspKcaSSmytxZpbbDmGUlosqcRWSmqx1ZZja7Hm1FKNKbWaW2y5xpRTj7X2nFqrNbVUY2ux5lhbb7XWnDsprYVSWislxZhai7HF' +
+    'WHMoJbaSUmylpBhbbLm2FmMPobRYSmqxpBJjazHmGFuOqbVaW2y5ptRirbX2HFtuPaUWa4ux5tJSjTXX3mNNORUAADDgAAAQYEIZKDRkJQAQBQAAGMMYYxAa' +
+    'pZxzTkqDlHPOScmcgxBCSplzEEJIKXNOQkotZc5BSKm1UEpKrcUWSkmptRYLAAAocAAACLBBU2JxgEJDVgIAUQAAiDFKMQahMUYp5yA0xijFGIRKKcack1Ap' +
+    'xZhzUDLHnINQSuaccxBKCSGUUkpKIYRSSkmpAACAAgcAgAAbNCUWByg0ZEUAEAUAABhjnDPOIQqdpc5SJKmj1lFrKKUaS4ydxlZ767nTGnttuTeUSo2p1o5r' +
+    'y7nV3mlNPbccCwAAO3AAADuwEAoNWQkA5AEAEMYoxZhzzhmFGHPOOecMUow555xzijHnnIMQQsWYc85BCCFzzjkIoYSSOecchBBK6JyDUEoppXTOQQihlFI6' +
+    '5yCEUkopnXMQSimllAIAgAocAAACbBTZnGAkqNCQlQBAHgAAYAxCzklprWHMOQgt1dgwxhyUlGKLnIOQUou5RsxBSCnGoDsoKbUYbPCdhJRaizkHk1KLNefe' +
+    'g0iptZqDzj3VVnPPvfecYqw1595zLwAAd8EBAOzARpHNCUaCCg1ZCQDkAQAQCCnFmHPOGaUYc8w554xSjDHmnHOKMcacc85BxRhjzjkHIWPMOecghJAx5pxz' +
+    'EELonHMOQgghdM45ByGEEDrnoIMQQgidcxBCCCGEAgCAChwAAAJsFNmcYCSo0JCVAEA4AAAAIYQQQgghhBBCCCGEEEIIIYQQQgghhBBCCCGEEEIIIYQQQggh' +
+    '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' +
+    '+amW8qY73zXZlzwnEhAaAA==';
+
+const STEREO_OGG =
+    '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' +
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' +
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' +
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' +
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' +
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' +
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAEAAAEOAAABBgIRQasiIAiBMA' +
+    'cEgSJAmSBM0DSJYFTYOmwTQBkmVB06BpME0AAAAAAAAAAAAAJE2DpkHTIIoASdOgadA0iCIAAAAAAAAAAAAAkqZB06BpEEWApGnQNGgaRBEAAAAAAAAAAAAA' +
+    'zzQhihBFmCbAM02IIkQRpgkAAAAAAAAAAAAAAAAAAAAAAAAAAAAACAAAGHAAAAgwoQwUGrIiAIgTAHA4imUBAIDjOJYFAACO41gWAABYliWKAABgWZooAgAA' +
+    'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAIAAAYcAAACDChDBQashIAiAIAcCiKZQHHsSzg' +
+    'OJYFJMmyAJYF0DyApgFEEQAIAAAocAAACLBBU2JxgEJDVgIAUQAABsWxLE0TRZKkaZoniiRJ0zxPFGma53meacLzPM80IYqiaJoQRVE0TZimaaoqME1VFQAA' +
+    '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' +
+    'Aw==';
+
+function b64bytes(b64) {
+    const bin = atob(b64);
+    const u8 = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+    return u8;
+}
+
+function rms(a, begin, end) {
+    begin = begin || 0; end = end || a.length;
+    if (end > a.length) end = a.length;
+    let s = 0;
+    for (let i = begin; i < end; i++) s += a[i] * a[i];
+    return Math.sqrt(s / Math.max(1, end - begin));
+}
+
+// Dominant frequency of a mono signal by zero-crossing count.
+function zeroCrossHz(a, sr) {
+    let c = 0;
+    for (let i = 1; i < a.length; i++)
+        if ((a[i-1] < 0 && a[i] >= 0) || (a[i-1] >= 0 && a[i] < 0)) c++;
+    return c / (2 * (a.length / sr));
+}
+
+const ctx = new AudioContext();
+const sr = ctx.sampleRate;
+const tmp = os.tmpdir();
+const monoPath = path.join(tmp, 'bro_test_vorbis_mono.ogg');
+const stereoPath = path.join(tmp, 'bro_test_vorbis_stereo.ogg');
+fs.writeFileSync(monoPath, b64bytes(MONO_OGG));
+fs.writeFileSync(stereoPath, b64bytes(STEREO_OGG));
+
+// --- decodeAudioData: memory-path decode, sample data properties -------------
+{
+    const d = ctx.decodeAudioData(b64bytes(MONO_OGG));
+    assert(d, 'decodeAudioData decodes Vorbis bytes');
+    assert(d.channels === 1, 'mono fixture has 1 channel, got ' + d.channels);
+    assert(d.sampleRate === sr, 'decodeAudioData resamples to engine rate (' + d.sampleRate + ' vs ' + sr + ')');
+    // 0.5 s of audio at the engine rate after resampling from 22050
+    assert(Math.abs(d.numFrames - sr / 2) < 2048,
+           '~0.5s of frames after resample, got ' + d.numFrames + ' expected ~' + (sr / 2));
+    const r = rms(d.samples);
+    assert(r > 0.25 && r < 0.45, '0.5-amplitude sine RMS ~0.35, got ' + r);
+    const hz = zeroCrossHz(d.samples, sr);
+    assert(Math.abs(hz - 440) < 25, 'tone survives the codec: ~440 Hz, got ' + hz);
+
+    const ds = ctx.decodeAudioData(b64bytes(STEREO_OGG));
+    assert(ds && ds.channels === 2, 'stereo fixture has 2 channels');
+    // Deinterleave and check the channels carry DIFFERENT tones (L=440, R=880)
+    const L = new Float32Array(ds.numFrames), R = new Float32Array(ds.numFrames);
+    for (let i = 0; i < ds.numFrames; i++) { L[i] = ds.samples[i*2]; R[i] = ds.samples[i*2+1]; }
+    const hzL = zeroCrossHz(L, sr), hzR = zeroCrossHz(R, sr);
+    assert(Math.abs(hzL - 440) < 30, 'left channel ~440 Hz, got ' + hzL);
+    assert(Math.abs(hzR - 880) < 60, 'right channel ~880 Hz, got ' + hzR);
+}
+
+// --- createClipFromFile: file-path decode + playback through the mixer -------
+{
+    const clipId = ctx.createClipFromFile(monoPath);
+    assert(clipId >= 0, 'createClipFromFile decodes .ogg, got ' + clipId);
+    assert(ctx.getClipChannels(clipId) === 1, 'clip is mono');
+    const n = ctx.getClipSampleCount(clipId);
+    assert(Math.abs(n - sr / 2) < 2048, 'clip has ~0.5s of frames, got ' + n);
+
+    ctx.startRecording();
+    const pb = ctx.playClip(clipId, 1.0, false);
+    assert(pb >= 0, 'playClip on a Vorbis-loaded clip');
+    sleep(400);
+    const rec = ctx.stopRecording();
+    assert(rec && rec.length > 0, 'recording captured playback');
+    const r = rms(rec, Math.floor(sr * 0.05), Math.floor(sr * 0.35));
+    assert(r > 0.05, 'Vorbis clip is audible through the mixer, rms=' + r);
+    ctx.deleteClip(clipId);
+}
+
+// --- corrupt input: clean failure, no crash ----------------------------------
+{
+    const badPath = path.join(tmp, 'bro_test_vorbis_bad.ogg');
+    fs.writeFileSync(badPath, b64bytes(MONO_OGG).slice(0, 120));  // truncated
+    const clipId = ctx.createClipFromFile(badPath);
+    assert(clipId === -1, 'truncated Vorbis file fails cleanly, got ' + clipId);
+    const d = ctx.decodeAudioData(b64bytes(MONO_OGG).slice(0, 120));
+    assert(d === null || d === undefined, 'decodeAudioData rejects truncated Vorbis');
+    fs.unlinkSync(badPath);
+}
+
+fs.unlinkSync(monoPath);
+fs.unlinkSync(stereoPath);
+console.log('vorbis decode test done');

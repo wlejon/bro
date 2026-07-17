@@ -501,21 +501,39 @@ class AudioContext {
   // --- Audio File I/O -------------------------------------------------------
 
   /**
-   * Create a clip by loading an audio file. Supports WAV, FLAC, and MP3.
-   * (Ogg Opus additionally requires a build with BROAUDIO_OPUS, which no
-   * standard bro profile enables; Ogg Vorbis is not supported.) Automatically
-   * resamples to the engine sample rate using a high-quality polyphase sinc
-   * resampler.
+   * Create a clip by loading an audio file. Supports WAV, FLAC, MP3, and
+   * Ogg Vorbis. (Ogg Opus additionally requires a build with BROAUDIO_OPUS,
+   * which no standard bro profile enables.) Automatically resamples to the
+   * engine sample rate using a high-quality polyphase sinc resampler.
+   *
+   * Decodes the WHOLE file into RAM (capped at ~200 MB decoded). For big
+   * files — long music tracks, ambience beds — use createStreamFromFile,
+   * which disk-streams with constant memory.
    * @param {string} path - file path
    * @returns {number} clipId, or -1 on failure
    */
   createClipFromFile(path) {}
 
   /**
-   * Decode an audio file from a memory buffer. Supports WAV, FLAC, and MP3,
-   * detected by header magic bytes. (Ogg Opus additionally requires a build
-   * with BROAUDIO_OPUS, which no standard bro profile enables; Ogg Vorbis is
-   * not supported.) Automatically resamples to the engine sample rate.
+   * Async createClipFromFile: decode + resample run on a background thread,
+   * so the JS/render thread never stalls on a large file. Same formats and
+   * size cap as createClipFromFile.
+   *
+   *   const clipId = await ctx.createClipFromFileAsync('music/track.mp3');
+   *   ctx.playClip(clipId);
+   *
+   * @param {string} path - file path
+   * @returns {Promise<number>} resolves with the clipId; rejects with an
+   *   Error whose message carries the actionable decode failure (corrupt
+   *   stream, unsupported codec, size cap exceeded, unreadable file)
+   */
+  createClipFromFileAsync(path) {}
+
+  /**
+   * Decode an audio file from a memory buffer. Supports WAV, FLAC, MP3, and
+   * Ogg Vorbis, detected by header magic bytes. (Ogg Opus additionally
+   * requires a build with BROAUDIO_OPUS, which no standard bro profile
+   * enables.) Automatically resamples to the engine sample rate.
    * @param {ArrayBuffer|Uint8Array} data - raw file bytes
    * @returns {?{samples: Float32Array, channels: number, sampleRate: number, numFrames: number}}
    *          decoded audio data, or null on failure
@@ -647,6 +665,54 @@ class AudioContext {
 
   /** Stop and remove a streaming source. @param {number} streamId */
   closeStream(streamId) {}
+
+
+  // --- Disk-Streamed File Playback ------------------------------------------
+
+  /**
+   * Play a large audio file WITHOUT decoding it into RAM. A worker thread
+   * decodes the file incrementally (WAV, FLAC, MP3, Ogg Vorbis), resamples to
+   * the engine rate, and feeds the same ring a live PCM stream uses; only the
+   * ring (~2 s by default) is ever resident. The returned id is an ordinary
+   * playbackId: gain, pan, bus routing, aux sends, rate, and spatialization
+   * all apply via the setPlayback* methods, and bus effects apply through the
+   * routed bus like any clip voice.
+   *
+   * Playback starts automatically once the prebuffer (~500 ms) is decoded.
+   * Looping follows setPlaybackLoop live: the worker rewinds the decoder at
+   * end-of-file, so loops are seamless (enabling loop after the stream already
+   * finished restarts it from the top). There is no seek — matching clip
+   * playback, which also has none. If the disk/scheduler stalls long enough to
+   * drain the ring, the stream plays silence and counts the gap (see
+   * getStreamStats), then resumes — it never blocks the audio thread.
+   *
+   *   const s = ctx.createStreamFromFile('music/long-track.ogg');
+   *   ctx.setPlaybackGain(s, 0.8);
+   *   ctx.setPlaybackBus(s, musicBus);
+   *   // ... poll ctx.getStreamStats(s).finished, then:
+   *   ctx.closeStream(s);
+   *
+   * @param {string} path - file path
+   * @param {{ringFrames?: number, prebufferFrames?: number, loop?: boolean,
+   *          gain?: number}} [options] - ring capacity (default ~2 s) and
+   *   prebuffer (default ~500 ms) in ENGINE-rate frames, initial loop/gain
+   * @returns {number} streamId (a playbackId); throws an Error with the
+   *   decode failure message (unreadable file, unsupported codec, >2 channels)
+   */
+  createStreamFromFile(path, options) {}
+
+  /**
+   * Ring/underrun statistics for a streaming playback (disk-streamed or live
+   * PCM). Frame counts are at the engine rate.
+   * @param {number} streamId
+   * @returns {?{decodedFrames: number, playedFrames: number,
+   *             bufferedFrames: number, underrunFrames: number,
+   *             finished: boolean}} null when the id is not an active
+   *   streaming playback. underrunFrames counts silent frames emitted while
+   *   the decoder was starved; finished is true once a disk stream hit
+   *   end-of-file (not looping) and the ring fully drained.
+   */
+  getStreamStats(streamId) {}
 
 
   // --- Offline Processing ---------------------------------------------------

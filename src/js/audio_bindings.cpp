@@ -1,4 +1,5 @@
 #include "js/audio_bindings.h"
+#include "js/async_job.h"
 #include "js/runtime.h"
 #include "util/log.h"
 
@@ -1125,6 +1126,134 @@ static JSValue js_audioctx_createClipFromFile(JSContext* ctx, JSValueConst this_
     int id = d->engine->createClipFromFile(path);
     JS_FreeCString(ctx, path);
     return JS_NewInt32(ctx, id);
+}
+
+// createClipFromFileAsync(path) -> Promise<clipId>. Decode + resample run on
+// a background thread (async-job runner); the promise resolves with the clip
+// id or rejects with an Error carrying the actionable decode message from
+// broaudio (corrupt stream, size cap, unsupported codec).
+static JSValue js_audioctx_createClipFromFileAsync(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
+    if (!d || argc < 1)
+        return JS_ThrowTypeError(ctx, "createClipFromFileAsync: file path required");
+    const char* cpath = JS_ToCString(ctx, argv[0]);
+    if (!cpath) return JS_EXCEPTION;
+    std::string pathCopy(cpath);
+    JS_FreeCString(ctx, cpath);
+
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    if (JS_IsException(promise)) return promise;
+
+    struct ClipLoadState {
+        broaudio::Engine* engine = nullptr;
+        std::string path;
+        std::string error;   // written by the work thread, read in done()
+        int clipId = -1;
+        JSValue resolve = JS_UNDEFINED;
+        JSValue reject = JS_UNDEFINED;
+    };
+    auto st = std::make_shared<ClipLoadState>();
+    st->engine  = d->engine;
+    st->path    = std::move(pathCopy);
+    st->resolve = resolving[0];
+    st->reject  = resolving[1];
+
+    auto work = [st](const std::atomic<bool>&) {
+        // createClip locks the control-plane media mutex — safe off-thread.
+        st->clipId = st->engine->createClipFromFileEx(st->path.c_str(), &st->error);
+    };
+    auto done = [st](JSContext* c, bool cancelled, const std::string& jobError) {
+        if (st->clipId >= 0 && !cancelled && jobError.empty()) {
+            JSValue v = JS_NewInt32(c, st->clipId);
+            JSValue r = JS_Call(c, st->resolve, JS_UNDEFINED, 1, &v);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, v);
+        } else {
+            std::string msg = !jobError.empty() ? jobError
+                            : !st->error.empty() ? st->error
+                            : cancelled          ? "load cancelled"
+                                                 : "failed to load audio file";
+            msg = st->path + ": " + msg;
+            JSValue err = JS_NewError(c);
+            JS_DefinePropertyValueStr(c, err, "message", JS_NewString(c, msg.c_str()),
+                                      JS_PROP_WRITABLE | JS_PROP_CONFIGURABLE);
+            JSValue r = JS_Call(c, st->reject, JS_UNDEFINED, 1, &err);
+            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
+            JS_FreeValue(c, r);
+            JS_FreeValue(c, err);
+        }
+        JS_FreeValue(c, st->resolve);
+        JS_FreeValue(c, st->reject);
+    };
+    JSValue handle = launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+    JS_FreeValue(ctx, handle);  // the promise is the JS-facing handle
+    return promise;
+}
+
+// createStreamFromFile(path, options?) -> playbackId. Disk-streamed playback:
+// the file decodes incrementally on a broaudio worker thread into a ring the
+// mixer consumes — large files never sit in RAM. Throws with the decode error
+// on failure. options: { ringFrames, prebufferFrames, loop, gain }.
+static JSValue js_audioctx_createStreamFromFile(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
+    if (!d || argc < 1)
+        return JS_ThrowTypeError(ctx, "createStreamFromFile: file path required");
+    const char* path = JS_ToCString(ctx, argv[0]);
+    if (!path) return JS_EXCEPTION;
+
+    broaudio::FileStreamOptions opts;
+    if (argc >= 2 && JS_IsObject(argv[1])) {
+        JSValue v;
+        int32_t i32 = 0;
+        double f64 = 0.0;
+        v = JS_GetPropertyStr(ctx, argv[1], "ringFrames");
+        if (!JS_IsUndefined(v) && JS_ToInt32(ctx, &i32, v) == 0) opts.ringFrames = i32;
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, argv[1], "prebufferFrames");
+        if (!JS_IsUndefined(v) && JS_ToInt32(ctx, &i32, v) == 0) opts.prebufferFrames = i32;
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, argv[1], "loop");
+        if (!JS_IsUndefined(v)) opts.loop = JS_ToBool(ctx, v) > 0;
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, argv[1], "gain");
+        if (!JS_IsUndefined(v) && JS_ToFloat64(ctx, &f64, v) == 0)
+            opts.gain = static_cast<float>(f64);
+        JS_FreeValue(ctx, v);
+    }
+
+    std::string err;
+    int id = d->engine->createStreamFromFile(path, opts, &err);
+    JS_FreeCString(ctx, path);
+    if (id < 0)
+        return JS_ThrowInternalError(ctx, "createStreamFromFile: %s",
+                                     err.empty() ? "failed to open stream" : err.c_str());
+    return JS_NewInt32(ctx, id);
+}
+
+// getStreamStats(playbackId) -> { decodedFrames, playedFrames, bufferedFrames,
+// underrunFrames, finished } or null when the id is not a streaming playback.
+static JSValue js_audioctx_getStreamStats(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
+    if (!d || argc < 1) return JS_NULL;
+    int32_t id = -1;
+    if (JS_ToInt32(ctx, &id, argv[0]) != 0) return JS_EXCEPTION;
+
+    broaudio::StreamStats s = d->engine->getStreamStats(id);
+    if (!s.valid) return JS_NULL;
+
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "decodedFrames",
+                      JS_NewFloat64(ctx, static_cast<double>(s.decodedFrames)));
+    JS_SetPropertyStr(ctx, obj, "playedFrames",
+                      JS_NewFloat64(ctx, static_cast<double>(s.playedFrames)));
+    JS_SetPropertyStr(ctx, obj, "bufferedFrames",
+                      JS_NewFloat64(ctx, static_cast<double>(s.bufferedFrames)));
+    JS_SetPropertyStr(ctx, obj, "underrunFrames",
+                      JS_NewFloat64(ctx, static_cast<double>(s.underrunFrames)));
+    JS_SetPropertyStr(ctx, obj, "finished", JS_NewBool(ctx, s.finished));
+    return obj;
 }
 
 static JSValue js_audioctx_decodeAudioData(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -2773,6 +2902,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
 
             // Audio file I/O
             .method_raw("createClipFromFile", js_audioctx_createClipFromFile, 1)
+            .method_raw("createClipFromFileAsync", js_audioctx_createClipFromFileAsync, 1)
             .method_raw("decodeAudioData", js_audioctx_decodeAudioData, 1)
             .method_raw("decodeAudioFile", js_audioctx_decodeAudioFile, 1)
             .method("exportRecordingToWav",
@@ -2799,6 +2929,9 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
             .method_raw("createStream", js_audioctx_createStream, 2)
             .method_raw("pushStreamSamples", js_audioctx_pushStreamSamples, 2)
             .method_raw("closeStream", js_audioctx_closeStream, 1)
+            // Disk-streamed file playback
+            .method_raw("createStreamFromFile", js_audioctx_createStreamFromFile, 2)
+            .method_raw("getStreamStats", js_audioctx_getStreamStats, 1)
             .method("stopPlayback",
                 [](AudioCtxData* d, int id) { d->engine->stopPlayback(id); })
             .method("setPlaybackGain",
