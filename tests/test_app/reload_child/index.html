@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html>
+<head><title>reload child</title></head>
+<body>
+<div id="label">boot</div>
+<script>
+// Counts its own runs in localStorage (the one channel that survives a
+// sub-document reload — each reload is a fresh realm + fresh DOM). The host
+// test deletes the backing .storage.json first so counts never leak across
+// suite runs. Run 1 asks for its own reload via location.reload(); run 2
+// settles. A leaked realm (script not re-run, count stuck at 1) would keep
+// reloading forever, which the host asserts against.
+var runs = parseInt(localStorage.getItem('runs') || '0', 10) + 1;
+localStorage.setItem('runs', String(runs));
+document.getElementById('label').textContent = 'run ' + runs;
+if (runs === 1) {
+    setTimeout(function () { location.reload(); }, 30);
+}
+</script>
+</body>
+</html>

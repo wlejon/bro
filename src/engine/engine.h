@@ -289,6 +289,23 @@ public:
     /// sub-doc the raster thread may be mid-replay on. Fires "load" on rebuild.
     void reloadIframe(dom::Element* el);
 
+    /// Request a full reload of the TOP-LEVEL app document: tear down the
+    /// document + its JS realm and re-parse/re-run the app in the same Engine
+    /// and window — what location.reload() does on the web. Only QUEUES
+    /// (repeat calls coalesce): the caller is JS inside the very realm being
+    /// destroyed, so the actual work is deferred to a point with no JS on the
+    /// stack — the frame-loop drain (windowed) or between the driver's
+    /// evaluation units (headless). No-op in Server mode (no document).
+    void requestAppReload();
+
+    /// Perform a queued requestAppReload(), if any. Returns true if a reload
+    /// ran (the primary JSContext has been replaced — callers holding the old
+    /// pointer must re-fetch it from jsRuntime()). MUST be called only when no
+    /// JS from the app realm is on the stack and, windowed, only when the
+    /// layout + raster workers are idle (the frame loop's drain point does
+    /// both). Public for the headless driver, which drains between scripts.
+    bool processPendingAppReload();
+
     /// Read back the pixels an <iframe> sub-document last rendered into its GPU
     /// surface. Returns tightly-packed top-down RGBA8 (row 0 = top), sized to the
     /// sub-doc's content box (outW×outH); empty if `el` isn't an iframe, has no
@@ -645,6 +662,27 @@ private:
         unsigned int fboTexture = 0;
     };
 
+    // ── App-realm lifecycle (engine_init.cpp + app_reload.cpp) ──────────────
+    // The constructor and top-level location.reload() share these. Engine-level
+    // objects (window, renderer, services, workers, audio) are created once in
+    // the constructor; everything bound to the primary JSContext or the app
+    // document goes through here so a reload can rebuild it on a fresh realm.
+    /// Install the mode-independent bindings every context gets (brokit, timers,
+    /// physics, mesh/flora/math/ai, the ML tower, net/steam/server). Called for
+    /// the app realm (via initAppRealm) and the Server-mode context.
+    void installCoreBindings(JSContext* ctx);
+    /// Build the app realm on the CURRENT primary context: all bindings, the
+    /// app document (manifest → parse → scripts → fonts → layout → iframes),
+    /// and the DOMContentLoaded/load dispatch. Windowed + Headless only.
+    void initAppRealm();
+    /// Tear down the current app realm and rebuild it via initAppRealm() on a
+    /// fresh context. The body behind processPendingAppReload().
+    void performAppReload();
+    /// (Re)build the engine's default menu tree (File/Edit/View). Used at
+    /// construction and by performAppReload() to drop app-added items whose
+    /// handlers died with the old realm.
+    void resetMenuBarDefaults();
+
     void initSystemPanels();
     void loadCustomFonts();
     void destroySystemPanels();
@@ -879,6 +917,11 @@ private:
     // Pre-compiled observer check function (avoids JS_Eval parse per frame)
     JSValue observerCheckFn_ = JS_UNDEFINED;
     AppManifest manifest_;
+    // Launch config the app realm is (re)built from: the app directory and
+    // the optional window-title override. Stored so initAppRealm() can re-run
+    // the full load on a location.reload() without the EngineConfig.
+    std::string appDir_;
+    std::string titleOverride_;
     util::AssetMounts assetMounts_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;
     // Detached scenes awaiting destruction. A scene whose element was removed
@@ -1010,6 +1053,12 @@ private:
     // referenced from dom::Element::iframeDoc()).
     std::vector<std::unique_ptr<IframeDoc>> iframeDocs_;
     uint64_t nextIframeId_ = 1;
+    // Top-level location.reload() queued and not yet performed. Set by
+    // requestAppReload() (from JS in the doomed realm), consumed by
+    // processPendingAppReload() at the frame loop's idle-workers point
+    // (windowed) or between evaluation units (headless driver). A bool, so
+    // repeat calls within one frame naturally coalesce.
+    bool pendingAppReload_ = false;
     // <iframe> elements whose sub-document JS requested a reload this frame.
     // reloadIframe() only queues here; the actual teardown+rebuild (which frees
     // a sub-doc's JS/DOM/canvas scenes the raster thread may still be replaying)

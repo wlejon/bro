@@ -97,6 +97,16 @@ public:
         return std::move(pendingEvents_);
     }
 
+    // Drop every registered transition and queued event. Used when the app
+    // document is torn down as a whole (top-level location.reload()) — the
+    // Element* keys are about to dangle and per-element removeElement() calls
+    // would need a full tree walk.
+    void clearAll() {
+        elements_.clear();
+        activeThisTick_.clear();
+        pendingEvents_.clear();
+    }
+
 private:
     std::vector<PendingCSSEvent> pendingEvents_;
     std::unordered_map<dom::Element*, ElementTransitions> elements_;
@@ -178,6 +188,16 @@ public:
     // Take all pending events (call from main thread after layout completes).
     std::vector<PendingCSSEvent> takePendingEvents() {
         return std::move(pendingEvents_);
+    }
+
+    // Whole-document teardown reset — see TransitionManager::clearAll().
+    // Also drops the keyframe-store pointer: it aims into the old document's
+    // cascade, which is freed with the document.
+    void clearAll() {
+        elements_.clear();
+        activeThisTick_.clear();
+        pendingEvents_.clear();
+        keyframes_ = nullptr;
     }
 
 private:

@@ -165,9 +165,18 @@
     history.back = function() { history.go(-1); };
     history.forward = function() { history.go(1); };
 
-    // location methods — no-ops (no real navigation)
+    // location methods. There is no real navigation, so replace/assign are
+    // no-ops — but reload() is real: the engine installs a native hook in
+    // realms that can reload (the app document reloads the whole app; an
+    // iframe sub-document reloads that iframe). The reload is DEFERRED to a
+    // safe point in the engine loop — this call returns and the current
+    // script keeps running; the realm is torn down and the app re-run fresh
+    // afterwards. Realms without the hook (system panels) keep the no-op.
     location.replace = function() {};
-    location.reload = function() {};
+    location.reload = function() {
+        if (typeof globalThis.__bro_location_reload === 'function')
+            globalThis.__bro_location_reload();
+    };
     location.assign = function() {};
     location.toString = function() { return location.href; };
 

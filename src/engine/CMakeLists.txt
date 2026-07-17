@@ -25,6 +25,7 @@ embed_js(observer_check.js  js_observer_check)
 ## ── Library ──────────────────────────────────────────────────────────────────
 
 add_library(bro_engine STATIC
+    app_reload.cpp
     engine.cpp
     engine_compositor.cpp
     engine_init.cpp

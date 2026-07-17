@@ -178,6 +178,36 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
     dp->timers = std::make_unique<js::Timers>();
     js::Timers::install(dp->jsCtx, dp->timers.get());
     js::installWindowBindings(dp->jsCtx, dp->boxW, dp->boxH);
+
+    // location.reload() inside the sub-document reloads THIS iframe — the same
+    // deferred teardown/rebuild as the host calling iframe.reload(). The hook
+    // resolves the iframe by id at call time, so a call racing the sub-doc's
+    // own destruction (already torn down, id gone) is a safe no-op.
+    {
+        JSValue global = JS_GetGlobalObject(dp->jsCtx);
+        JSValue fdata[2] = {
+            JS_NewInt64(dp->jsCtx,
+                        static_cast<int64_t>(reinterpret_cast<intptr_t>(this))),
+            JS_NewInt64(dp->jsCtx, static_cast<int64_t>(dp->id)),
+        };
+        JS_SetPropertyStr(dp->jsCtx, global, "__bro_location_reload",
+            JS_NewCFunctionData(dp->jsCtx, [](JSContext* cx, JSValue, int,
+                                              JSValue*, int, JSValue* fd) -> JSValue {
+                int64_t p = 0, id = 0;
+                JS_ToInt64(cx, &p, fd[0]);
+                JS_ToInt64(cx, &id, fd[1]);
+                auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+                if (self) {
+                    if (auto* d = self->iframeDocById(static_cast<uint64_t>(id)))
+                        self->reloadIframe(d->element);
+                }
+                return JS_UNDEFINED;
+            }, 0, 0, 2, fdata));
+        JS_FreeValue(dp->jsCtx, fdata[0]);
+        JS_FreeValue(dp->jsCtx, fdata[1]);
+        JS_FreeValue(dp->jsCtx, global);
+    }
+
     js::DomBindings::install(dp->jsCtx, dp->document.get());
     js::StorageBindings::install(dp->jsCtx, manifest.basePath + "/.storage.json");
     js::StorageBindings::installSessionStorage(dp->jsCtx);

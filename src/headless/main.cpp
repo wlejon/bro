@@ -300,6 +300,12 @@ static void runRepl(JSContext* ctx, bro::js::Runtime* rt,
         JS_FreeValue(ctx, result);
         engine->flush();
 
+        // A location.reload() this line queued swaps the primary JSContext;
+        // between lines is the REPL's no-JS-on-stack point. Re-fetch ctx so
+        // the next line evaluates in the fresh realm.
+        if (engine->processPendingAppReload())
+            ctx = rt->getContext();
+
         if (tty) fprintf(stderr, "bro> ");
     }
 }
@@ -488,13 +494,19 @@ int main(int argc, char* argv[]) {
         // working directory, not the app directory.
         config.appDir = absolutize(config.appDir);
         if (!config.projectRoot.empty()) config.projectRoot = absolutize(config.projectRoot);
+        // BRO_EXE_DIR matches windowed bro's main.cpp: scripts locate sibling
+        // executables (bro, bro-headless, bro-server) through it — e.g. a test
+        // spawning a child bro-headless.
+        std::string exeDirPath = exeDir();
 #ifdef _WIN32
         _putenv_s("BRO_APP_DIR", config.appDir.c_str());
         _putenv_s("BRO_PROJECT_ROOT", config.projectRoot.c_str());
+        _putenv_s("BRO_EXE_DIR", exeDirPath.c_str());
 #else
         setenv("BRO_APP_DIR", config.appDir.c_str(), 1);
         if (!config.projectRoot.empty()) setenv("BRO_PROJECT_ROOT", config.projectRoot.c_str(), 1);
         else unsetenv("BRO_PROJECT_ROOT");
+        setenv("BRO_EXE_DIR", exeDirPath.c_str(), 1);
 #endif
 
         config.displayMode = bro::engine::DisplayMode::Headless;
@@ -513,6 +525,20 @@ int main(int argc, char* argv[]) {
         auto* ctx = rt->getContext();
         bro::js::installHeadlessBindings(ctx, engine);
 
+        // Drain any top-level location.reload() the app queued. In headless
+        // the driving script runs INSIDE the app realm, so a reload can only
+        // be performed between evaluation units — here (a reload requested
+        // during app construction), after the -e block, after the script
+        // file, and after each REPL line. Each reload swaps the primary
+        // JSContext (initAppRealm re-installs the headless globals), so
+        // re-fetch ctx after draining. Bounded: an app that unconditionally
+        // reloads itself would otherwise never yield.
+        auto drainAppReloads = [&]() {
+            for (int i = 0; i < 8 && engine->processPendingAppReload(); ++i) {}
+            ctx = rt->getContext();
+        };
+        drainAppReloads();
+
         bool ok = true;
         if (!inlineExprs.empty()) {
             // -e mode: concatenate and eval. When a script path also follows
@@ -527,6 +553,7 @@ int main(int argc, char* argv[]) {
                 oss << inlineExprs[i];
             }
             ok = evalCode(ctx, rt, engine, oss.str(), "<inline>", scriptPath.empty());
+            drainAppReloads();
         }
         if (ok && !scriptPath.empty()) {
             // Script file mode
@@ -541,6 +568,7 @@ int main(int argc, char* argv[]) {
                 ok = looksLikeModule(src)
                          ? evalModuleFile(ctx, rt, engine, src, scriptPath.c_str())
                          : evalCode(ctx, rt, engine, src, scriptPath.c_str());
+                drainAppReloads();
             }
         } else if (inlineExprs.empty() && scriptPath.empty()) {
             // Interactive REPL

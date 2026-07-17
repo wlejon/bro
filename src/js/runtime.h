@@ -69,6 +69,14 @@ public:
     /// The caller owns the returned context and must free it with JS_FreeContext.
     JSContext* createContext();
 
+    /// Replace the primary/app context with a fresh one on the same runtime:
+    /// frees the current getContext() and creates a new, empty context that
+    /// getContext() returns from here on. The realm-swap primitive behind
+    /// top-level location.reload(). The caller must have already run every
+    /// per-context binding cleanup against the old context — this only does
+    /// the brokit fetch uninstall (mirroring ~Runtime) and the raw free.
+    JSContext* renewContext();
+
     /// Get the global object (caller must JS_FreeValue when done).
     JSValue getGlobalObject() const;
 

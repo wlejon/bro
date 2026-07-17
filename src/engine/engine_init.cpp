@@ -101,6 +101,7 @@
 #include "util/time.h"
 
 #include <glad/gl.h>
+#include <algorithm>
 #include <cstdlib>
 #include <stdexcept>
 #include <utility>
@@ -117,6 +118,8 @@ Engine::Engine(const EngineConfig& config)
     , uiFrameIntervalMs_(config.graphics.maxFrameIntervalMs) {
 
     splashEnabled_ = config.showSplash;
+    appDir_ = config.appDir;
+    titleOverride_ = config.title;
 
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
     // Project-root mounts come first; app-local overrides applied after the
@@ -183,7 +186,10 @@ Engine::Engine(const EngineConfig& config)
 
     // === Common JS runtime initialization ===
 
-    // 4. JS runtime + bindings
+    // 4. JS runtime + engine-level services. Per-context binding INSTALLS live
+    //    in installCoreBindings()/initAppRealm() so a top-level
+    //    location.reload() can re-run them against a fresh realm; only the
+    //    engine-owned objects (services, worlds, pumps) are created here, once.
     jsRuntime_ = std::make_unique<js::Runtime>();
     jsRuntime_->setModuleLoader(&assetMounts_);
 
@@ -196,11 +202,7 @@ Engine::Engine(const EngineConfig& config)
         }
     });
 
-    // Install all brokit APIs (console, timers, URL, crypto, encoding, fetch, etc.)
-    brokit::api::installAll(jsRuntime_->getContext());
-
     timers_ = std::make_unique<js::Timers>();
-    js::Timers::install(jsRuntime_->getContext(), timers_.get());
 
     // Seed the timer time base so setTimeout/setInterval use the correct clock.
     // In headless mode this is virtual time; in windowed/server mode, real time.
@@ -211,129 +213,44 @@ Engine::Engine(const EngineConfig& config)
                                                          : util::currentTimeMs();
     timers_->tick(engineNowMs_);
 
-    // Physics engine + bindings (all modes). With BRO_WITH_PHYSICS off there is
-    // no physics world and the `Physics` JS class is simply absent (advanced
-    // apps feature-detect `typeof Physics`).
+    // Physics world (all modes). With BRO_WITH_PHYSICS off there is no physics
+    // world and the `Physics` JS class is simply absent (advanced apps
+    // feature-detect `typeof Physics`).
 #if BRO_WITH_PHYSICS
     physicsWorld_ = std::make_unique<physics::PhysicsWorld>();
     physicsWorld_->init();
     if (displayMode_ != DisplayMode::Headless)
         physicsWorld_->startThread();
-    js::PhysicsBindings::install(jsRuntime_->getContext(), physicsWorld_.get());
 #endif
 
-    // Mesh + rigging bindings (Mesh class wrapping bromesh — 3D-only).
-#if BRO_WITH_3D
-    js::MeshBindings::install(jsRuntime_->getContext());
-#endif
-
-    // Flora bindings (broflora ecosystem sim — bro.flora.* — all modes)
-    js::FloraBindings::install(jsRuntime_->getContext());
-
-    // Math bindings (bro.math.* — SpatialHash3D and future bromath types)
-    js::MathBindings::install(jsRuntime_->getContext());
-
-    // Rigging bindings (SkinData, VoxelChunk; later: Skeleton/Pose/Animation/IK/Rig) — 3D-only.
-#if BRO_WITH_3D
-    js::RiggingBindings::install(jsRuntime_->getContext());
-#endif
-
-    // AI bindings (game agent: navgrid, pathfinding, steering). When BRO_WITH_GAMEAI
-    // is off, install() is the feature-stub that installs an unavailable bro.ai.
-    js::AIBindings::install(jsRuntime_->getContext());
-
-    // bro.gpu (runtime backend probe via brotensor). Always present — reports
-    // whether the ML loaders below will default to a GPU or fall back to CPU,
-    // so apps can warn before loading a large model on CPU.
-    js::installGpuBindings(jsRuntime_->getContext());
-
-    // bro.tensor (GPU tensor + ops via brotensor sibling). Real bindings when
-    // a backend is enabled at configure time; stub `{ available: false }` otherwise.
-    js::installTensorBindings(jsRuntime_->getContext());
-
-    // bro.diffusion (diffusion-model inference via brodiffusion sibling).
-    // Always real — brodiffusion's CPU backend is always built. Main thread
-    // drives the step-wise inspection API; workers install the same binding
-    // for fast full generation.
-    js::installDiffusionBindings(jsRuntime_->getContext());
-
-    // bro.lm (Qwen3 LLM inference via brolm sibling). Always real — brolm's
-    // CPU backend is always built. GGUF quant weights (Q4_K/Q6_K/Q8_0)
-    // dispatch through GPU-only fused-dequant matmuls and throw at first
-    // forward on a CPU-only build.
-    js::installLmBindings(jsRuntime_->getContext());
-
-    // bro.stt (Whisper + Parakeet STT via brosoundml + brolm siblings). GPU by
-    // default; audio must be 16 kHz mono FP32 — callers resample upstream.
-    js::installSttBindings(jsRuntime_->getContext());
-
-    // bro.tts (Kokoro-82M TTS via brosoundml sibling). CPU-only today; emits
-    // mono 24 kHz FP32. G2P is the caller's responsibility — Kokoro takes
-    // already-tokenized phoneme ids.
-    js::installTtsBindings(jsRuntime_->getContext());
-
-    // bro.diar (streaming Sortformer speaker diarization via brosoundml
-    // sibling). GPU by default; 16 kHz mono FP32 in, per-frame 4-speaker
-    // activity probabilities out. Offline diarize() + streaming sessions.
-    js::installDiarBindings(jsRuntime_->getContext());
-
-    // bro.rave (RAVE neural audio autoencoder via brosoundml sibling). GPU by
-    // default; encode/decode a waveform through a PCA-sorted latent for morphing.
-    js::installRaveBindings(jsRuntime_->getContext());
-
-    // bro.vision (vision-ML inference via brovisionml sibling). GPU by default;
-    // SAM segmentation + Depth-Anything depth (+ the ControlNet annotators).
-    // Heavy ops run on a background thread when given an onReady/onDone callback.
-    js::installVisionBindings(jsRuntime_->getContext());
-
-    // bro.triposplat (single-image -> 3D Gaussian Splat). Composition layer over
-    // DINOv3 (brovisionml) + Flux.2 VAE / flow DiT / octree decoder (brodiffusion);
-    // emits a Gaussian cloud for the scene GaussianSplatNode. GPU by default.
-    js::installTriposplatBindings(jsRuntime_->getContext());
-
-    // bro.motion (ARDY text-to-motion). Composition layer over the LLM2Vec text
-    // encoder (brolm) + the motion denoiser / FSQ decoder / AR rollout / G1 FK
-    // (brodiffusion::ardy); emits per-frame G1 joint positions. GPU by default.
-    js::installMotionBindings(jsRuntime_->getContext());
-
-    // Terrain + tile-world bindings (voxel terrain / chunked tile grid) — 3D-only.
-#if BRO_WITH_3D
-    js::TerrainBindings::install(jsRuntime_->getContext());
-    js::TileBindings::install(jsRuntime_->getContext());
-#endif
-
-    // Network service + bindings (all modes). NetService owns GNS on its own
-    // thread; bindings hold a per-context subscriber that polls each frame,
-    // delivered via a frame pump so no `if (netService_)` sits in the hot loop.
-    // With BRO_WITH_NET off, the stub install() publishes an unavailable
-    // bro.net namespace and no pump is registered.
+    // Network service (all modes). NetService owns GNS on its own thread;
+    // bindings hold a per-context subscriber that polls each frame, delivered
+    // via a frame pump so no `if (netService_)` sits in the hot loop. With
+    // BRO_WITH_NET off, the stub install() publishes an unavailable bro.net
+    // namespace and no pump is registered.
 #if BRO_WITH_NET
     netService_ = std::make_unique<net::NetService>();
-    js::NetBindings::install(jsRuntime_->getContext(), netService_.get());
     framePumps_.push_back([this] {
         js::NetBindings::poll(jsRuntime_->getContext());
         jsRuntime_->executePendingJobs();
     });
-#else
-    js::NetBindings::install(jsRuntime_->getContext(), nullptr);
 #endif
 
-    // Steam service + bindings (all modes). Always-present probe like bro.gpu:
-    // in a stub build (BRO_WITH_STEAM=OFF) the service is inert and
-    // bro.steam.available is false. When enabled, SteamService owns the
-    // Steamworks API on its own thread; bindings hold a per-context subscriber
-    // that polls each frame.
+    // Steam service (all modes). Always-present probe like bro.gpu: in a stub
+    // build (BRO_WITH_STEAM=OFF) the service is inert and bro.steam.available
+    // is false. When enabled, SteamService owns the Steamworks API on its own
+    // thread; bindings hold a per-context subscriber that polls each frame.
     steamService_ = std::make_unique<steam::SteamService>();
-    js::SteamBindings::install(jsRuntime_->getContext(), steamService_.get());
 
-    // bro.server.* (all modes) — in windowed mode this lets the process host
-    // an in-process server script (e.g. the launcher running apps/fps/server.js).
     serverStartTime_ = util::currentTimeMs();
-    js::ServerBindings::install(jsRuntime_->getContext(), this);
 
     // === Server mode: lightweight init — no rendering, DOM, or audio ===
 
     if (displayMode_ == DisplayMode::Server) {
+        // Mode-independent bindings (brokit, timers, physics, ML tower, net/
+        // steam/server). Servers never reload, so this is their only install.
+        installCoreBindings(jsRuntime_->getContext());
+
         // Storage (persisted key/value)
         std::string storagePath = config.appDir + "/.storage.json";
         js::StorageBindings::install(jsRuntime_->getContext(), storagePath);
@@ -420,14 +337,13 @@ Engine::Engine(const EngineConfig& config)
         engineNowMs_ = virtualTime_;
     }
 
-    // 4b. Audio engine + bindings
+    // 4b. Audio engine (bindings install in initAppRealm)
     audioEngine_ = std::make_unique<broaudio::Engine>();
     if (displayMode_ == DisplayMode::Windowed || config.realAudio) {
         audioEngine_->init();
     } else {
         audioEngine_->initHeadless();
     }
-    js::AudioBindings::install(jsRuntime_->getContext(), audioEngine_.get());
 
     // Audio-inference subsystem: owns the background worker thread that runs
     // audio-driven NN models (wake word today) off the audio thread and off the
@@ -437,48 +353,15 @@ Engine::Engine(const EngineConfig& config)
     if (displayMode_ != DisplayMode::Headless)
         audioInference_->startThread();
 
-    // bro.wake (brosoundml::WakeWord — streaming wake-word detection driven
-    // by broaudio's low-latency mic tap, inference run by audioInference_).
-    // Must follow audio + inference init so the binding can wire both in; the
-    // JS surface itself is inert until the app calls bro.wake.listen().
-    js::installWakeBindings(jsRuntime_->getContext(), audioEngine_.get(),
-                            audioInference_.get());
-
     // The shared listen host: ONE raw (no-AGC) mic tap + ring + inference
     // task driving a brosoundml::ListenBus that bro.kws's spotter and
     // bro.sense's hub join as members — one PCEN feature pass, one PhonemeNet
-    // forward, N listeners. (bro.wake stays on its own AGC'd tap above until
-    // retrained AGC-free.) Inert until a member attaches.
+    // forward, N listeners. (bro.wake stays on its own AGC'd tap until
+    // retrained AGC-free.) Engine-level (no JSContext), so it survives a
+    // location.reload() realm swap. Inert until a member attaches.
 #if BRO_WITH_SOUNDML
     js::installListenHost(audioEngine_.get(), audioInference_.get());
-#endif
 
-    // bro.listen — the shared stream's own JS surface (opt-in raw-audio
-    // retention for replay/scrub by frame range). Inert until bro.listen.retain.
-    js::installListenBindings(jsRuntime_->getContext());
-
-    // bro.kws (brosoundml::PhonemeSpotter — open-vocabulary streaming keyword
-    // spotting). A listen-host member; result delivery stays its own
-    // (SPSC event ring -> tickKws). Inert until the app calls bro.kws.load().
-    js::installKwsBindings(jsRuntime_->getContext(), audioEngine_.get(),
-                           audioInference_.get());
-
-    // bro.sense (brosoundml::SensorHub — the tier-0 acoustic sensor bus:
-    // model-free per-frame level/VAD, onset, and tonality sensors). A
-    // listen-host member with no result ring at all — the hub's lock-free
-    // snapshot IS the delivery, polled via bro.sense.snapshot(). Inert until
-    // bro.sense.start().
-    js::installSenseBindings(jsRuntime_->getContext(), audioEngine_.get(),
-                             audioInference_.get());
-
-    // bro.gesture (brosoundml::GestureSpotter — tier-0 non-speech gesture
-    // matching: enrolled rhythm/tone gestures over the shared SensorHub stream,
-    // for the clicks/whistles the speech model can't represent). A listen-host
-    // member with its own SPSC ring -> tickGesture. Inert until enroll/listen.
-    js::installGestureBindings(jsRuntime_->getContext(), audioEngine_.get(),
-                               audioInference_.get());
-
-#if BRO_WITH_SOUNDML
     // Deliver wake/kws/gesture fires the self-paced audio-inference worker (or,
     // headless, the inline pump) published since last frame. Registered only
     // when the soundml models are built, so the frame loop carries no stubbed
@@ -491,10 +374,6 @@ Engine::Engine(const EngineConfig& config)
     });
 #endif
 
-    // bro.mic (general live-mic chunk consumer — the worked example of
-    // broaudio's chunkFrames feature). Same shape as wake: a mic tap on the
-    // audio thread, drained on the main thread. Inert until bro.mic.start().
-    js::installMicBindings(jsRuntime_->getContext(), audioEngine_.get());
     // bro.mic chunk delivery — audio tier, independent of the AI models above.
     framePumps_.push_back([this] { js::tickMic(jsRuntime_->getContext()); });
 
@@ -540,47 +419,15 @@ Engine::Engine(const EngineConfig& config)
         }
     });
 
-    // Scene graph bindings (3D-only; needs renderer)
-#if BRO_WITH_3D
-    js::SceneBindings::install(jsRuntime_->getContext());
-#endif
-
-    // Global pause + timescale (bro.time.*) — scale/paused/now over the
-    // engine's scaled clock. Installed in all display modes.
-    js::TimeBindings::install(jsRuntime_->getContext(), this);
-
-    // Menu bar bindings (bro.menu.*) + default menu tree.
-    js::MenuBindings::install(jsRuntime_->getContext(), this);
-    {
-        MenuBar::Item file;
-        file.id = "file"; file.label = "File";
-        MenuBar::Item quit;
-        quit.id = "__system.quit"; quit.label = "Quit"; quit.accel = "Ctrl+Q";
-        file.children.push_back(std::move(quit));
-
-        MenuBar::Item edit;
-        edit.id = "edit"; edit.label = "Edit";
-        MenuBar::Item prefs;
-        prefs.id = "__system.preferences"; prefs.label = "Preferences...";
-        edit.children.push_back(std::move(prefs));
-
-        MenuBar::Item view;
-        view.id = "view"; view.label = "View";
-        MenuBar::Item insp;
-        insp.id = "__system.inspector"; insp.label = "Inspector";
-        view.children.push_back(std::move(insp));
-
-        menuBar_.roots.push_back(std::move(file));
-        menuBar_.roots.push_back(std::move(edit));
-        menuBar_.roots.push_back(std::move(view));
-        menuBar_.dirty = true;
-    }
+    // Default menu tree (File/Edit/View). App items are re-added by app JS on
+    // every realm run; bro.menu bindings install in initAppRealm.
+    resetMenuBarDefaults();
 
     // Engine gizmo (bro.gizmo.*) — translate/rotate/scale handles with
-    // mouse-driven picking and drag interaction. 3D-only.
+    // mouse-driven picking and drag interaction. 3D-only. Bindings install in
+    // initAppRealm.
 #if BRO_WITH_3D
     gizmo_ = std::make_unique<GizmoManager>();
-    js::GizmoBindings::install(jsRuntime_->getContext(), this);
 #endif
 
     // 5. Layout helpers. drawTraversal_ writes through a RecordingRenderer
@@ -592,11 +439,107 @@ Engine::Engine(const EngineConfig& config)
     drawTraversal_ = std::make_unique<layout::DrawTraversal>(recordingRenderer_.get());
     textMetrics_ = std::make_unique<layout::SkiaTextMetrics>(renderer_.get());
 
+    // 5b. Event loop (windowed). Created before the app realm so window.close()
+    //     binds during initAppRealm — and rebinds on a location.reload() realm.
+    if (displayMode_ == DisplayMode::Windowed) {
+        eventLoop_ = std::make_unique<platform::EventLoop>();
+    }
+
+    // 6-10. The app realm: every per-context binding install plus the app
+    //       document itself (manifest → parse → scripts → fonts → layout →
+    //       iframes → DOMContentLoaded/load). Top-level location.reload()
+    //       re-runs exactly this on a fresh context (see performAppReload).
+    initAppRealm();
+
+    // === Mode-specific post-init ===
+
+    // UI overlay quad VAO/VBO — used by compositeLayers (windowed main loop
+    // and headless screenshot path both go through it).
+    if (gl_) {
+        glGenVertexArrays(1, &uiQuadVAO_);
+        glGenBuffers(1, &uiQuadVBO_);
+    }
+
+    // 12. System panels (loads from system/ sibling directory)
+    //     Shares the JS runtime — each panel gets its own JSContext.
+    initSystemPanels();
+
+    // 12b. Enable the startup splash. It renders above the app canvas and
+    //      menu bar until its own JS finishes the swirl-away animation (or a
+    //      hard timeout in tickSystemPanels fires). Enabled in both windowed
+    //      and headless modes — headless uses virtual time, so `advanceTime()`
+    //      drives the splash forward just like any other timer.
+    if (displayMode_ != DisplayMode::Server && splashEnabled_) {
+        for (auto& d : systemDocs_) {
+            if (d.group == "splash") {
+                splashVisible_ = true;
+                splashStartMs_ = (displayMode_ == DisplayMode::Headless)
+                    ? virtualTime_
+                    : util::currentTimeMs();
+                break;
+            }
+        }
+    }
+
+    // Headless: flush an initial frame. Style + layout already ran above
+    // (inside initAppRealm, before the load dispatch); flush() re-layouts only
+    // if a load handler dirtied the document, then rasterizes.
+    if (displayMode_ == DisplayMode::Headless) {
+        flush();
+    }
+}
+
+// Build (or rebuild) everything bound to the primary JSContext or the app
+// document, on the CURRENT primary context. Called once from the constructor
+// and again — on a fresh context — by performAppReload() (top-level
+// location.reload()). Every engine-level object it references (renderer,
+// window, audio, services, workers, settings, gizmo, event loop) must already
+// exist. Windowed + Headless only; Server mode has its own lightweight path
+// in the constructor.
+void Engine::initAppRealm() {
+    JSContext* appCtx = jsRuntime_->getContext();
+
+    // Fresh realm ⇒ the document lifecycle starts over.
+    documentReadyState_ = "loading";
+
+    // Mode-independent core (brokit, timers, physics, mesh/flora/math/ai,
+    // the ML tower, terrain/tile, net/steam/server).
+    installCoreBindings(appCtx);
+
+    // Audio + the audio-ML surfaces (wake/listen/kws/sense/gesture/mic). The
+    // engines and the shared listen host are engine-level and already running;
+    // these bind the JS surfaces of the new realm to them.
+    js::AudioBindings::install(appCtx, audioEngine_.get());
+    js::installWakeBindings(appCtx, audioEngine_.get(), audioInference_.get());
+    js::installListenBindings(appCtx);
+    js::installKwsBindings(appCtx, audioEngine_.get(), audioInference_.get());
+    js::installSenseBindings(appCtx, audioEngine_.get(), audioInference_.get());
+    js::installGestureBindings(appCtx, audioEngine_.get(), audioInference_.get());
+    js::installMicBindings(appCtx, audioEngine_.get());
+
+    // Scene graph bindings (3D-only; needs renderer)
+#if BRO_WITH_3D
+    js::SceneBindings::install(appCtx);
+#endif
+
+    // Global pause + timescale (bro.time.*) — scale/paused/now over the
+    // engine's scaled clock.
+    js::TimeBindings::install(appCtx, this);
+
+    // Menu bar bindings (bro.menu.*). The default tree is engine-level
+    // (resetMenuBarDefaults in the constructor / performAppReload).
+    js::MenuBindings::install(appCtx, this);
+
+    // Engine gizmo (bro.gizmo.*) — 3D-only.
+#if BRO_WITH_3D
+    js::GizmoBindings::install(appCtx, this);
+#endif
+
     // 6. Load the application
-    manifest_ = AppLoader::loadApp(config.appDir, &assetMounts_);
+    manifest_ = AppLoader::loadApp(appDir_, &assetMounts_);
     std::string html = AppLoader::loadFile(manifest_.htmlPath);
     if (html.empty()) {
-        throw std::runtime_error("Failed to load index.html from " + config.appDir);
+        throw std::runtime_error("Failed to load index.html from " + appDir_);
     }
 
     // 4c. localStorage (persisted) + sessionStorage (in-memory)
@@ -656,8 +599,8 @@ Engine::Engine(const EngineConfig& config)
 
     // 8b. Set window title (windowed only)
     if (window_) {
-        if (!config.title.empty()) {
-            window_->setTitle(config.title);
+        if (!titleOverride_.empty()) {
+            window_->setTitle(titleOverride_);
         } else {
             std::string docTitle = document_->title();
             if (!docTitle.empty()) {
@@ -668,6 +611,27 @@ Engine::Engine(const EngineConfig& config)
 
     // 9. Set up window/navigator/location/history BEFORE DOM bindings
     js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, contentHeight());
+
+    // 9a0. location.reload() — the polyfill's method calls this hook when
+    //      present. Queues a full app-realm reload; deferred to a safe point
+    //      (see requestAppReload). Iframe sub-documents get their own hook in
+    //      createIframeDoc; system panels get none (reload stays a no-op).
+    {
+        JSValue global = JS_GetGlobalObject(appCtx);
+        JSValue ptrVal = JS_NewInt64(appCtx, static_cast<int64_t>(
+                                                 reinterpret_cast<intptr_t>(this)));
+        JS_SetPropertyStr(appCtx, global, "__bro_location_reload",
+            JS_NewCFunctionData(appCtx, [](JSContext* cx, JSValue, int, JSValue*,
+                                           int, JSValue* fdata) -> JSValue {
+                int64_t p = 0;
+                JS_ToInt64(cx, &p, fdata[0]);
+                auto* self = reinterpret_cast<Engine*>(static_cast<intptr_t>(p));
+                if (self) self->requestAppReload();
+                return JS_UNDEFINED;
+            }, 0, 0, 1, &ptrVal));
+        JS_FreeValue(appCtx, ptrVal);
+        JS_FreeValue(appCtx, global);
+    }
 
     // 9y. navigator.getGamepads() + gamepadconnected/disconnected plumbing.
     //     Works in windowed (SDL gamepad events) and headless (virtual pads).
@@ -906,6 +870,16 @@ Engine::Engine(const EngineConfig& config)
                               nullptr, &assetMounts_);
 #endif
 
+    // 9e. window.close() (windowed — the event loop was created before this
+    //     realm) and the headless script globals (screenshot/advanceTime/...;
+    //     the headless driver also installs these on first boot, which is
+    //     harmless — same engine pointer, same functions. Re-installing here
+    //     is what keeps them alive across a location.reload() realm swap).
+    if (eventLoop_)
+        js::installWindowClose(appCtx, eventLoop_.get());
+    if (displayMode_ == DisplayMode::Headless)
+        js::installHeadlessBindings(appCtx, this);
+
     // 10. Load and execute scripts (external + inline, in document order).
     //     `type="module"` scripts go through evalModule so `import`/`export`
     //     and the file-based module loader (mount-aware for `/lib/...`) work.
@@ -1014,54 +988,116 @@ Engine::Engine(const EngineConfig& config)
         jsRuntime_->executePendingJobs();
     }
 
-    // === Mode-specific post-init ===
-
-    if (displayMode_ == DisplayMode::Windowed) {
-        // 11. Event loop
-        eventLoop_ = std::make_unique<platform::EventLoop>();
-
-        // Install window.close() now that event loop exists
-        js::installWindowClose(jsRuntime_->getContext(), eventLoop_.get());
-    }
-
-    // UI overlay quad VAO/VBO — used by compositeLayers (windowed main loop
-    // and headless screenshot path both go through it).
-    if (gl_) {
-        glGenVertexArrays(1, &uiQuadVAO_);
-        glGenBuffers(1, &uiQuadVBO_);
-    }
-
-    // 12. System panels (loads from system/ sibling directory)
-    //     Shares the JS runtime — each panel gets its own JSContext.
-    initSystemPanels();
-
-    // 12b. Enable the startup splash. It renders above the app canvas and
-    //      menu bar until its own JS finishes the swirl-away animation (or a
-    //      hard timeout in tickSystemPanels fires). Enabled in both windowed
-    //      and headless modes — headless uses virtual time, so `advanceTime()`
-    //      drives the splash forward just like any other timer.
-    if (displayMode_ != DisplayMode::Server && splashEnabled_) {
-        for (auto& d : systemDocs_) {
-            if (d.group == "splash") {
-                splashVisible_ = true;
-                splashStartMs_ = (displayMode_ == DisplayMode::Headless)
-                    ? virtualTime_
-                    : util::currentTimeMs();
-                break;
-            }
-        }
-    }
-
-    // Headless: flush an initial frame. Style + layout already ran above
-    // (step 10a, before the load dispatch); flush() re-layouts only if a load
-    // handler dirtied the document, then rasterizes.
-    if (displayMode_ == DisplayMode::Headless) {
-        flush();
-    }
-    // User script has not run yet during construction. Arm media events so
-    // the next pump (first JS-driven flush / first main-loop tick) fires
-    // queued loadedmetadata / timeupdate.
+    // User script has not run yet during construction (and a reload's realm
+    // has just finished its scripts). Arm media events so the next pump
+    // (first JS-driven flush / first main-loop tick) fires queued
+    // loadedmetadata / timeupdate.
     mediaEventsArmed_ = true;
+}
+
+// Mode-independent per-context installs — everything a bro realm gets no
+// matter the display mode: brokit's web/system APIs, timers, physics, the
+// mesh/flora/math/rigging/game-AI families, the ML tower, terrain/tile, and
+// the net/steam/server surfaces. The engine-level services these bind to
+// (physicsWorld_, netService_, steamService_) are created once in the
+// constructor; this only wires a (possibly fresh) context to them.
+void Engine::installCoreBindings(JSContext* ctx) {
+    // Install all brokit APIs (console, timers, URL, crypto, encoding, fetch, etc.)
+    brokit::api::installAll(ctx);
+
+    js::Timers::install(ctx, timers_.get());
+
+#if BRO_WITH_PHYSICS
+    js::PhysicsBindings::install(ctx, physicsWorld_.get());
+#endif
+
+    // Mesh + rigging bindings (Mesh class wrapping bromesh — 3D-only).
+#if BRO_WITH_3D
+    js::MeshBindings::install(ctx);
+#endif
+
+    // Flora bindings (broflora ecosystem sim — bro.flora.* — all modes)
+    js::FloraBindings::install(ctx);
+
+    // Math bindings (bro.math.* — SpatialHash3D and future bromath types)
+    js::MathBindings::install(ctx);
+
+#if BRO_WITH_3D
+    js::RiggingBindings::install(ctx);
+#endif
+
+    // AI bindings (game agent: navgrid, pathfinding, steering). When BRO_WITH_GAMEAI
+    // is off, install() is the feature-stub that installs an unavailable bro.ai.
+    js::AIBindings::install(ctx);
+
+    // bro.gpu (runtime backend probe via brotensor). Always present — reports
+    // whether the ML loaders below will default to a GPU or fall back to CPU.
+    js::installGpuBindings(ctx);
+
+    // bro.tensor / bro.diffusion / bro.lm / bro.stt / bro.tts / bro.diar /
+    // bro.rave / bro.vision / bro.triposplat / bro.motion — the ML tower.
+    // Real bindings or `{ available: false }` stubs per the build profile.
+    js::installTensorBindings(ctx);
+    js::installDiffusionBindings(ctx);
+    js::installLmBindings(ctx);
+    js::installSttBindings(ctx);
+    js::installTtsBindings(ctx);
+    js::installDiarBindings(ctx);
+    js::installRaveBindings(ctx);
+    js::installVisionBindings(ctx);
+    js::installTriposplatBindings(ctx);
+    js::installMotionBindings(ctx);
+
+    // Terrain + tile-world bindings (voxel terrain / chunked tile grid) — 3D-only.
+#if BRO_WITH_3D
+    js::TerrainBindings::install(ctx);
+    js::TileBindings::install(ctx);
+#endif
+
+    // bro.net — per-context subscriber onto the engine-level NetService (the
+    // frame pump was registered once, in the constructor). Stub without NET.
+#if BRO_WITH_NET
+    js::NetBindings::install(ctx, netService_.get());
+#else
+    js::NetBindings::install(ctx, nullptr);
+#endif
+
+    // bro.steam — always-present probe; per-context subscriber when enabled.
+    js::SteamBindings::install(ctx, steamService_.get());
+
+    // bro.server.* (all modes) — in windowed mode this lets the process host
+    // an in-process server script (e.g. the launcher running apps/fps/server.js).
+    js::ServerBindings::install(ctx, this);
+}
+
+// (Re)build the engine's default menu tree. On a location.reload() the app
+// realm that added custom items is gone (its handlers were released), so the
+// bar drops back to the defaults and the fresh realm re-adds its own.
+void Engine::resetMenuBarDefaults() {
+    menuBar_.roots.clear();
+
+    MenuBar::Item file;
+    file.id = "file"; file.label = "File";
+    MenuBar::Item quit;
+    quit.id = "__system.quit"; quit.label = "Quit"; quit.accel = "Ctrl+Q";
+    file.children.push_back(std::move(quit));
+
+    MenuBar::Item edit;
+    edit.id = "edit"; edit.label = "Edit";
+    MenuBar::Item prefs;
+    prefs.id = "__system.preferences"; prefs.label = "Preferences...";
+    edit.children.push_back(std::move(prefs));
+
+    MenuBar::Item view;
+    view.id = "view"; view.label = "View";
+    MenuBar::Item insp;
+    insp.id = "__system.inspector"; insp.label = "Inspector";
+    view.children.push_back(std::move(insp));
+
+    menuBar_.roots.push_back(std::move(file));
+    menuBar_.roots.push_back(std::move(edit));
+    menuBar_.roots.push_back(std::move(view));
+    menuBar_.dirty = true;
 }
 
 void Engine::loadCustomFonts() {
@@ -1070,6 +1106,18 @@ void Engine::loadCustomFonts() {
     std::string basePath = document_->basePath();
 
     for (auto& ff : fontFaces) {
+        // A location.reload() re-runs this against the same @font-face rules;
+        // the faces are already registered on every renderer (main, layout,
+        // raster), so skip them rather than re-reading and re-registering —
+        // loadedFonts_ would otherwise grow by the full set per reload.
+        bool alreadyLoaded = std::any_of(
+            loadedFonts_.begin(), loadedFonts_.end(),
+            [&](const LoadedFont& lf) {
+                return lf.family == ff.family && lf.weight == ff.weight &&
+                       lf.italic == ff.italic;
+            });
+        if (alreadyLoaded) continue;
+
         std::string path = AppLoader::resolvePath(basePath, ff.src, &assetMounts_);
 
         // Read font file

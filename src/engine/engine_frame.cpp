@@ -322,6 +322,18 @@ void Engine::run() {
             }
         }
 
+        // 0a2. Drain a queued top-level location.reload(). This is the one
+        //      safe point windowed: no JS is on the stack (the doomed realm
+        //      requested the reload from a handler LAST frame), layout was
+        //      just waited idle above, and we additionally require the raster
+        //      worker idle — the teardown frees canvas scenes / iframe state
+        //      the worker replays. If raster is still busy this frame, the
+        //      request simply waits (uiDirty_ stays set via requestAppReload,
+        //      so the loop keeps coming back here).
+        if (pendingAppReload_ && framePresenter_->isRasterIdle()) {
+            processPendingAppReload();
+        }
+
         // Destroy DOM nodes queued for deferred free. The raster thread no
         // longer reads the DOM (it replays a CommandBuffer that holds no
         // dom::Node pointers — variable-length payloads are copied into the

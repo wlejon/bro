@@ -597,6 +597,23 @@ JSContext* Runtime::createContext()
     return JS_NewContext(rt_);
 }
 
+JSContext* Runtime::renewContext()
+{
+    if (!rt_) return nullptr;
+    if (ctx_) {
+        // Same order ~Runtime uses: brokit's fetch state is the one per-context
+        // resource the runtime owns the teardown of.
+        brokit::api::uninstallFetch(ctx_);
+        JS_FreeContext(ctx_);
+        ctx_ = nullptr;
+    }
+    // Collect cycles the freed realm left behind before the new one allocates.
+    JS_RunGC(rt_);
+    ctx_ = JS_NewContext(rt_);
+    if (!ctx_) LOG_ERROR("renewContext: failed to create QuickJS context");
+    return ctx_;
+}
+
 void Runtime::setModuleLoader(const util::AssetMounts* mounts)
 {
     // The mounts pointer is handed to QuickJS as the loader opaque and reaches

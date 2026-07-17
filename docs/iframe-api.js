@@ -86,6 +86,15 @@ const fs = require('fs');
 fs.writeFileSync('./project/index.html', newHtml);
 frame.reload();
 
+// The sub-document can also reload ITSELF: location.reload() inside the
+// embedded app queues the same deferred teardown + rebuild of its own iframe.
+// Deferred means the calling script keeps running to completion — the realm is
+// torn down at the engine's next safe point, never re-entrantly — and multiple
+// requests in one frame coalesce into a single rebuild. The host sees another
+// 'load' event, exactly as if it had called frame.reload().
+// (In the TOP-LEVEL document, location.reload() likewise tears down the app's
+// document + JS realm and re-parses/re-runs the app in the same window.)
+
 
 // -----------------------------------------------------------------------------
 // frame.capture()  — read back the rendered pixels ("look")

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head><title>boot</title></head>
+<body>
+<div id="stage">boot</div>
+<script>
+// Two-run app for the top-level location.reload() test (driven by
+// tests/engine/test_location_reload_toplevel.js via a child bro-headless).
+//
+// Realms don't survive a reload, so the run counter lives in process.env —
+// process-wide (crosses the realm swap) yet fresh for every child process.
+//
+// Run 1 plants the things that MUST NOT survive a reload — globals and a
+// repeating timer — then calls location.reload(). The call is deferred: this
+// script keeps running (proved by the marker set after the call).
+// Run 2 reports into the fresh DOM what actually survived.
+(function () {
+    if (!process.env.BRO_RELOAD_STAGE) {
+        process.env.BRO_RELOAD_STAGE = '1';
+        globalThis.__reloadCanary = true;
+        // If this interval survives into the reloaded engine, advancing time
+        // there stamps the env and verify.js fails the test.
+        setInterval(function () { process.env.BRO_RELOAD_STALE = '1'; }, 5);
+        location.reload();
+        globalThis.__afterReloadCall = true;  // deferred ⇒ still reachable
+        document.getElementById('stage').textContent = 'first run';
+    } else {
+        var leaked = (typeof globalThis.__reloadCanary !== 'undefined') ||
+                     (typeof globalThis.__afterReloadCall !== 'undefined');
+        document.title = leaked ? 'leaked-realm' : 'fresh-realm';
+        document.getElementById('stage').textContent = 'second run';
+    }
+})();
+</script>
+</body>
+</html>

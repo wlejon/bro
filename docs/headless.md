@@ -347,6 +347,34 @@ from a callback. Promises resolved directly by async C++ APIs (model loaders,
 inference calls) are the exception: those settle through the microtask queue,
 so plain `await` works for them.
 
+### location.reload() and the app realm
+
+`location.reload()` works in headless mode, but its two contexts commit at
+different points:
+
+- **Inside an `<iframe>` sub-document** it queues a rebuild of that iframe
+  (same deferred path as the host calling `frame.reload()`), and the queue is
+  drained at the engine's safe point — which `flush()` reaches. A driving
+  script can therefore observe it in-process: `advanceTime()` until the
+  sub-doc calls reload, `flush()`, and the host sees another `load` event.
+
+- **In the top-level document** it tears down the whole app document and its
+  JS realm, then re-parses and re-runs the app in the same engine. In headless
+  mode the driving script (REPL line, `-e` expression, or script file) runs
+  *inside* that realm, so the reload can never commit while the script is
+  still on the stack. It is drained **between evaluation units**: after engine
+  construction (an app that reloads itself during its first run), after each
+  `-e` expression, after a script file finishes, and between REPL lines. A
+  single script file cannot observe its own top-level reload — the realm that
+  would do the asserting is the one being replaced. To test it, let the app
+  reload itself and pass a *second* script that runs in the fresh realm, or
+  spawn a child `bro-headless` (see `tests/engine/test_location_reload_toplevel.js`).
+
+Both contexts share the web semantics: the call is deferred (the calling
+script runs to completion), multiple requests in one frame coalesce, scripts
+re-execute fresh in a new realm, and the old realm's timers and listeners do
+not survive the swap.
+
 ## Notes
 
 - `[INFO]` and `[console.log]` lines go to stderr; REPL output and `-e` print results go to stdout. Separate them with `2>/dev/null`.
