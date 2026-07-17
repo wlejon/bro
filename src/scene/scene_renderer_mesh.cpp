@@ -60,6 +60,10 @@ void SceneRenderer::queryMeshUniformLocs(GLuint prog, MeshDrawLocs& d,
     d.fogStart       = U("uFogStart");
     d.fogEnd         = U("uFogEnd");
     d.fogColor       = U("uFogColor");
+    d.fogDensity     = U("uFogDensity");
+    d.fogHeightFalloff = U("uFogHeightFalloff");
+    d.fogStartDist   = U("uFogStartDist");
+    d.fogCamY        = U("uFogCamY");
     d.ambient        = U("uAmbient");
     d.windDir        = U("uWindDir");
     d.windStrength   = U("uWindStrength");

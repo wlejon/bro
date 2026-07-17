@@ -500,7 +500,10 @@ JSValue js_sg_setEnvironment(JSContext* ctx, JSValueConst this_val,
     return ok ? JS_TRUE : JS_FALSE;
 }
 
-// setFog({start, end, color})
+// setFog({start, end, color, density, heightFalloff, startDistance})
+// Two modes sharing one color: the legacy linear start/end ramp, and
+// (when density > 0) exponential-squared height fog. Every call resets
+// both mode's parameters, so setFog({}) fully disables fog.
 JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
     if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
@@ -509,7 +512,11 @@ JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
     double start = qjsbind::get_prop_number(ctx, opts, "start", 0.0);
     double end = qjsbind::get_prop_number(ctx, opts, "end", 0.0);
     bromath::Vec3 color = jsGetVec3(ctx, opts, "color", 0.0f, 0.0f, 0.0f);
+    double density       = qjsbind::get_prop_number(ctx, opts, "density", 0.0);
+    double heightFalloff = qjsbind::get_prop_number(ctx, opts, "heightFalloff", 0.0);
+    double startDistance = qjsbind::get_prop_number(ctx, opts, "startDistance", 0.0);
     g->setFog((float)start, (float)end, color.x, color.y, color.z);
+    g->setFogExp((float)density, (float)heightFalloff, (float)startDistance);
     return JS_UNDEFINED;
 }
 

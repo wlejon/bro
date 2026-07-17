@@ -48,6 +48,14 @@ uniform int       uReceivesShadow;
 uniform float uFogStart;
 uniform float uFogEnd;
 uniform vec3 uFogColor;
+// Exponential-squared + height fog (setFog {density, heightFalloff,
+// startDistance}). uFogDensity > 0 selects this mode over the legacy
+// linear ramp above. vWorldPos is camera-relative, so world height is
+// reconstructed as vWorldPos.y + uFogCamY.
+uniform float uFogDensity;
+uniform float uFogHeightFalloff;
+uniform float uFogStartDist;
+uniform float uFogCamY;
 uniform float uAlphaCutoff;     // 0 = no cutoff, >0 discards baseAlpha < cutoff
 uniform float uNearClip;
 
@@ -208,6 +216,26 @@ float sampleShadow(int slot, vec3 posCamRel) {
     return s * (1.0 / 16.0);
 }
 
+// Fog factor in [0,1] for a fragment `camDist` from the eye at world height
+// `worldY`. Two modes: exponential-squared height fog when uFogDensity > 0
+// (density decays with height when uFogHeightFalloff > 0, no fog closer than
+// uFogStartDist), else the legacy linear start/end ramp when uFogEnd > 0.
+// Returns 0 when fog is fully off.
+float fogFactorFor(float camDist, float worldY) {
+    if (uFogDensity > 0.0) {
+        float d = max(camDist - uFogStartDist, 0.0);
+        float dens = uFogDensity;
+        if (uFogHeightFalloff > 0.0) dens *= exp(-uFogHeightFalloff * worldY);
+        float x = dens * d;
+        return 1.0 - exp(-x * x);
+    }
+    if (uFogEnd > 0.0) {
+        float f = clamp((camDist - uFogStart) / (uFogEnd - uFogStart), 0.0, 1.0);
+        return f * f;
+    }
+    return 0.0;
+}
+
 // Custom-shader splice point. When a mesh has a user shader, the renderer
 // replaces this marker line with the user's GLSL chunk (which must define
 // `void userFragment(inout vec3 baseColor, inout vec3 normal,
@@ -241,11 +269,10 @@ void main() {
 
     if (uUnlit == 1) {
         vec3 color = baseColor;
-        if (uFogEnd > 0.0) {
-            float fogFactor = clamp((vCamDist - uFogStart) / (uFogEnd - uFogStart), 0.0, 1.0);
-            fogFactor = fogFactor * fogFactor;
-            color = mix(color, uFogColor, fogFactor);
-            baseAlpha = mix(baseAlpha, 0.0, fogFactor);
+        float fogFactorU = fogFactorFor(vCamDist, vWorldPos.y + uFogCamY);
+        if (fogFactorU > 0.0) {
+            color = mix(color, uFogColor, fogFactorU);
+            baseAlpha = mix(baseAlpha, 0.0, fogFactorU);
         }
         FragColor = vec4(color, baseAlpha);
         return;
@@ -442,10 +469,10 @@ void main() {
     }
     vec3 color = Lo + ambient + emissive;
 
-    // Distance fog (applied in linear space; tonemap runs after)
-    if (uFogEnd > 0.0) {
-        float fogFactor = clamp((vCamDist - uFogStart) / (uFogEnd - uFogStart), 0.0, 1.0);
-        fogFactor = fogFactor * fogFactor;
+    // Fog (applied in linear space; tonemap runs after). Exponential-squared
+    // height fog or the legacy linear ramp — see fogFactorFor.
+    float fogFactor = fogFactorFor(vCamDist, vWorldPos.y + uFogCamY);
+    if (fogFactor > 0.0) {
         color = mix(color, uFogColor, fogFactor);
         baseAlpha = mix(baseAlpha, 0.0, fogFactor);
     }

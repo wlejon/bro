@@ -603,13 +603,30 @@ class SceneGraph {
   setAmbient(rgb) {}
 
   /**
-   * Set exponential distance fog. Fragments beyond `end` are fully fogged to
-   * `color`; closer than `start` are unaffected. Set start=end=0 to disable.
+   * Distance fog, applied per-fragment during the forward pass (in linear
+   * space, before tonemap) — opaque, translucent, instanced and custom-shader
+   * meshes are all fogged consistently; the skybox is never fogged, and fully
+   * fogged geometry also fades its alpha so it dissolves into the page
+   * background rather than plastering fog color over it.
+   *
+   * Two modes sharing one `color`:
+   *  - Linear ramp (`start`/`end`): fog factor ramps (quadratically) from 0
+   *    at `start` to 1 at `end`.
+   *  - Exponential-squared + height fog (`density` > 0, overrides the ramp):
+   *    factor = 1 - exp(-(density * d)^2) with d = camera distance past
+   *    `startDistance`. `heightFalloff` > 0 additionally scales density by
+   *    exp(-heightFalloff * worldY), so low-lying geometry sits deeper in
+   *    fog than high geometry at the same distance (ground mist).
+   *
+   * Every call resets both modes' parameters — `setFog({})` disables fog.
    *
    * @param {Object} opts
-   * @param {number} [opts.start=0] - fog start distance (world units)
-   * @param {number} [opts.end=0]   - fog end distance (world units)
+   * @param {number} [opts.start=0] - linear ramp start distance (world units)
+   * @param {number} [opts.end=0]   - linear ramp end distance (world units)
    * @param {number[]} [opts.color=[0,0,0]] - [r,g,b] in 0-1
+   * @param {number} [opts.density=0]       - exp^2 fog density (per world unit)
+   * @param {number} [opts.heightFalloff=0] - density height decay (per world unit)
+   * @param {number} [opts.startDistance=0] - fog-free distance around the camera
    */
   setFog(opts) {}
 

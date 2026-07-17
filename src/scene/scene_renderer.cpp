@@ -263,6 +263,10 @@ void SceneRenderer::uploadMeshGlobals(const MeshDrawLocs& L) {
     glUniform1f(L.fogStart, fogStart_);
     glUniform1f(L.fogEnd, fogEnd_);
     glUniform3f(L.fogColor, fogColor_[0], fogColor_[1], fogColor_[2]);
+    glUniform1f(L.fogDensity, fogDensity_);
+    glUniform1f(L.fogHeightFalloff, fogHeightFalloff_);
+    glUniform1f(L.fogStartDist, fogStartDist_);
+    glUniform1f(L.fogCamY, graph_.cameraEye_.y);
     glUniform3f(L.ambient, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
     if (L.windDir      >= 0) glUniform3fv(L.windDir, 1, windDir_);
     if (L.windStrength >= 0) glUniform1f(L.windStrength, windStrength_);
@@ -636,6 +640,10 @@ void SceneRenderer::render3D() {
                         glUniform1f(L.fogStart, fogStart_);
                         glUniform1f(L.fogEnd, fogEnd_);
                         glUniform3f(L.fogColor, fogColor_[0], fogColor_[1], fogColor_[2]);
+                        glUniform1f(L.fogDensity, fogDensity_);
+                        glUniform1f(L.fogHeightFalloff, fogHeightFalloff_);
+                        glUniform1f(L.fogStartDist, fogStartDist_);
+                        glUniform1f(L.fogCamY, graph_.cameraEye_.y);
                         glUniform3f(L.ambient, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
                         uploadLights(activeLights, locs);
                     };
@@ -782,6 +790,10 @@ void SceneRenderer::render3D() {
                     glUniform1f(d.fogEnd, fogEnd_);
                     glUniform3f(d.fogColor, fogColor_[0], fogColor_[1],
                                 fogColor_[2]);
+                    glUniform1f(d.fogDensity, fogDensity_);
+                    glUniform1f(d.fogHeightFalloff, fogHeightFalloff_);
+                    glUniform1f(d.fogStartDist, fogStartDist_);
+                    glUniform1f(d.fogCamY, graph_.cameraEye_.y);
                     glUniform3f(d.ambient, ambientColor_[0], ambientColor_[1],
                                 ambientColor_[2]);
                     uploadLights(activeLights, locs);
@@ -963,6 +975,7 @@ void SceneRenderer::render3D() {
                 glUniform1f(meshDraw_.fogStart, 0.0f);
                 glUniform1f(meshDraw_.fogEnd, 0.0f);
                 glUniform3f(meshDraw_.fogColor, 0.0f, 0.0f, 0.0f);
+                glUniform1f(meshDraw_.fogDensity, 0.0f);
                 glUniform3f(meshDraw_.ambient, 0.0f, 0.0f, 0.0f);
                 // uUnlit is set per-mesh by renderMeshNode; still need light
                 // uniforms uploaded (shader accesses count even if unused).
@@ -981,6 +994,7 @@ void SceneRenderer::render3D() {
                         glUniform1f(meshSkinnedDraw_.fogStart, 0.0f);
                         glUniform1f(meshSkinnedDraw_.fogEnd, 0.0f);
                         glUniform3f(meshSkinnedDraw_.fogColor, 0.0f, 0.0f, 0.0f);
+                        glUniform1f(meshSkinnedDraw_.fogDensity, 0.0f);
                         glUniform3f(meshSkinnedDraw_.ambient, 0.0f, 0.0f, 0.0f);
                         uploadLights(activeLights, meshSkinnedLocs_);
                         for (MeshNode* mn : unlitSkinnedMeshes)

@@ -271,6 +271,12 @@ public:
         renderer_.setFog(start, end, r, g, b);
     }
 
+    /// Exponential-squared + height fog (overrides the linear ramp while
+    /// density > 0). See SceneRenderer::setFogExp.
+    void setFogExp(float density, float heightFalloff, float startDistance) {
+        renderer_.setFogExp(density, heightFalloff, startDistance);
+    }
+
     /// Tone mapping mode applied when composing the HDR mesh FBO to the
     /// caller-facing LDR texture. ACES matches modern filmic defaults;
     /// Reinhard is a cheaper fallback; Linear is raw clamp to 0-1.

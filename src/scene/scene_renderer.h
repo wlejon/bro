@@ -82,6 +82,18 @@ public:
         fogColor_[0] = r; fogColor_[1] = g; fogColor_[2] = b;
     }
 
+    /// Exponential-squared + height fog. `density` > 0 selects this mode
+    /// over the linear start/end ramp (factor = 1 - exp(-(density*d)^2),
+    /// d = camera distance past `startDistance`). `heightFalloff` > 0
+    /// scales density by exp(-heightFalloff * worldY) per fragment, so low
+    /// geometry sits deeper in fog. Color is shared with setFog. Pass
+    /// density 0 to fall back to the linear mode (or fully off).
+    void setFogExp(float density, float heightFalloff, float startDistance) {
+        fogDensity_       = density < 0.0f ? 0.0f : density;
+        fogHeightFalloff_ = heightFalloff < 0.0f ? 0.0f : heightFalloff;
+        fogStartDist_     = startDistance < 0.0f ? 0.0f : startDistance;
+    }
+
     enum class ToneMap : uint8_t { Linear, Reinhard, ACES };
 
     void setToneMap(ToneMap mode, float exposure, float gamma) {
@@ -214,6 +226,8 @@ private:
               hasNormalMap = -1, hasMRMap = -1, hasAOMap = -1,
               hasEmissiveMap = -1, receivesShadow = -1,
               fogStart = -1, fogEnd = -1, fogColor = -1, ambient = -1,
+              fogDensity = -1, fogHeightFalloff = -1, fogStartDist = -1,
+              fogCamY = -1,
               windDir = -1, windStrength = -1, windTime = -1, windFreq = -1;
     };
     // Per-program uniform locations for the instanced mesh pipeline
@@ -229,6 +243,8 @@ private:
               hasTangent = -1, hasNormalMap = -1, hasMRMap = -1,
               hasAOMap = -1, hasEmissiveMap = -1, receivesShadow = -1,
               fogStart = -1, fogEnd = -1, fogColor = -1, ambient = -1,
+              fogDensity = -1, fogHeightFalloff = -1, fogStartDist = -1,
+              fogCamY = -1,
               atlasGrid = -1, alphaCutoff = -1;
     };
     struct MeshProgramLocs;  // lighting/shadow/IBL locs — defined below
@@ -521,10 +537,14 @@ private:
     // output an external provider can hand out.
     bool unlitOverlayActive_ = false;
 
-    // Distance fog
+    // Distance fog. Linear ramp (start/end) or, when fogDensity_ > 0,
+    // exponential-squared height fog (see setFogExp).
     float fogStart_ = 0.0f;
     float fogEnd_ = 0.0f;
     float fogColor_[3] = {0.0f, 0.0f, 0.0f};
+    float fogDensity_ = 0.0f;
+    float fogHeightFalloff_ = 0.0f;
+    float fogStartDist_ = 0.0f;
 
     // Tonemap + exposure
     ToneMap toneMap_ = ToneMap::ACES;
