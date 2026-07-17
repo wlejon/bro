@@ -370,8 +370,11 @@ void PhysicsWorld::physicsThreadFunc() {
 }
 
 void PhysicsWorld::signalStep() {
-    // Characters step on this (main) thread while we still own the world —
+    // Snapshot pre-step transforms first (characters move their inner bodies
+    // during updateCharacters, and those should interpolate too), then step
+    // characters — both on this (main) thread while we still own the world:
     // the phase is Idle until the flip below, so the physics thread is parked.
+    capturePrevTransforms();
     updateCharacters(timeStep_);
     {
         std::lock_guard<std::mutex> lk(shared_.m);
@@ -406,6 +409,7 @@ bool PhysicsWorld::isIdle() const {
 
 void PhysicsWorld::stepInline() {
     if (!initialized_) return;
+    capturePrevTransforms();
     updateCharacters(timeStep_);
     physicsSystem_.Update(timeStep_, 1, tempAllocator_.get(), jobSystem_.get());
     if (listener_) {
@@ -775,6 +779,51 @@ void PhysicsWorld::destroyBody(BodyID id,
     bi.DestroyBody(id);
 }
 
+// --- Render interpolation ---
+
+void PhysicsWorld::setInterpolation(bool enabled) {
+    interpolate_ = enabled;
+    if (!enabled) prevTransforms_.clear();
+}
+
+void PhysicsWorld::setRenderAlpha(float alpha) {
+    renderAlpha_ = std::clamp(alpha, 0.0f, 1.0f);
+}
+
+// Rebuild the pre-step snapshot from the active-body list. Bodies that are
+// asleep (or static) never enter the map, so they always render at their true
+// pose — no jitter as alpha sweeps. Called at the start of every step, on the
+// thread that owns the world (phase Idle), so the no-lock interface is safe.
+void PhysicsWorld::capturePrevTransforms() {
+    if (!interpolate_) {
+        if (!prevTransforms_.empty()) prevTransforms_.clear();
+        return;
+    }
+    prevTransforms_.clear();
+    BodyIDVector active;
+    physicsSystem_.GetActiveBodies(EBodyType::RigidBody, active);
+    const BodyInterface& bi = physicsSystem_.GetBodyInterfaceNoLock();
+    for (const BodyID& id : active) {
+        RVec3 pos;
+        Quat rot;
+        bi.GetPositionAndRotation(id, pos, rot);
+        prevTransforms_[id.GetIndexAndSequenceNumber()] = PrevTransform{pos, rot};
+    }
+}
+
+void PhysicsWorld::getRenderTransform(BodyID id, RVec3& outPos, Quat& outRot) const {
+    const BodyInterface& bi = physicsSystem_.GetBodyInterface();
+    bi.GetPositionAndRotation(id, outPos, outRot);
+    if (!interpolate_ || renderAlpha_ >= 1.0f) return;
+    auto it = prevTransforms_.find(id.GetIndexAndSequenceNumber());
+    if (it == prevTransforms_.end()) return;   // asleep / static / new — true pose
+    const PrevTransform& prev = it->second;
+    outPos = prev.pos + (outPos - prev.pos) * renderAlpha_;
+    // Jolt's SLERP takes the short arc (flips sign on negative dot); normalize
+    // the result so accumulated float error can't leak into scene rotations.
+    outRot = prev.rot.SLERP(outRot, renderAlpha_).Normalized();
+}
+
 // --- Body state ---
 
 RVec3 PhysicsWorld::getPosition(BodyID id) const {
@@ -795,10 +844,14 @@ Vec3 PhysicsWorld::getAngularVelocity(BodyID id) const {
 
 void PhysicsWorld::setPosition(BodyID id, RVec3 pos) {
     physicsSystem_.GetBodyInterface().SetPosition(id, pos, EActivation::Activate);
+    // Explicit teleport: drop the interpolation snapshot so render-side
+    // consumers snap to the new pose instead of gliding across the world.
+    prevTransforms_.erase(id.GetIndexAndSequenceNumber());
 }
 
 void PhysicsWorld::setRotation(BodyID id, Quat rot) {
     physicsSystem_.GetBodyInterface().SetRotation(id, rot, EActivation::Activate);
+    prevTransforms_.erase(id.GetIndexAndSequenceNumber());  // teleport: snap
 }
 
 void PhysicsWorld::setLinearVelocity(BodyID id, Vec3 vel) {
@@ -896,6 +949,7 @@ void PhysicsWorld::destroyAll(const std::function<void(JPH::BodyID)>& onBodyDest
     if (listener_) listener_->drain();
     contactsFront_.clear();
     contactsOverflowedFront_ = false;
+    prevTransforms_.clear();
 }
 
 void PhysicsWorld::setLayer(BodyID id, int layer) {

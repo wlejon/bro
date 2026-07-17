@@ -59,6 +59,35 @@ Physics.getGravity();
 /** Set the fixed timestep (seconds) used by the engine when stepping the world. */
 Physics.setTimeStep(dt);
 
+/**
+ * Render interpolation of body transforms (default OFF, like Godot/Unity).
+ *
+ * Physics steps at the fixed timestep while rendering is uncapped, so
+ * anything synced from a body normally snaps at the step rate. With
+ * interpolation ON, render-side consumers blend each body's previous->current
+ * step transforms by the frame's accumulator fraction (position lerp +
+ * rotation slerp), which makes motion smooth at any display rate at the cost
+ * of the visual state lagging up to one fixed step behind the simulation.
+ *
+ * What is interpolated (Godot semantics — interpolate what you SEE):
+ *   - PhysicsNode scene sync (scene.createPhysicsNode visuals)
+ *   - getTransform(id, { interpolated: true })
+ *   - getAllTransforms({ interpolated: true })
+ * Physics queries — plain getTransform/getAllTransforms, raycasts, shape
+ * casts, overlaps, contacts — always return the true stepped state.
+ *
+ * Sleeping and static bodies always render at their true pose (no jitter).
+ * Teleports via setPosition/setRotation snap — the previous-step snapshot is
+ * dropped so the body never glides across the world. moveKinematic is
+ * velocity-driven and interpolates smoothly.
+ *
+ * Default-world only (sandbox worlds are stepped manually by the caller, so
+ * there is no render clock to interpolate against).
+ */
+Physics.setInterpolation(true);
+/** @returns {boolean} */
+Physics.getInterpolation();
+
 
 // -----------------------------------------------------------------------------
 // Collision layers
@@ -235,6 +264,10 @@ Physics.destroyAll();
 // -----------------------------------------------------------------------------
 
 /**
+ * @param {number} id
+ * @param {{interpolated?: boolean}} [opts] - interpolated: true returns the
+ *  render-side (interpolated) transform when Physics.setInterpolation is on;
+ *  identical to the true state otherwise.
  * @returns {{position:{x,y,z}, rotation:{x,y,z,w}, userData: bigint}}
  *  or undefined if tag is unknown.
  */
@@ -730,6 +763,9 @@ if (events.overflow) { /* events were dropped this drain — resync triggers */ 
  * Returns a Float32Array of [tag, px, py, pz, qx, qy, qz, qw, ...] for
  * every body, packed at stride 8. Single allocation, no per-body JS
  * objects — preferred when you need to sync many transforms each frame.
+ *
+ * @param {{interpolated?: boolean}} [opts] - interpolated: true packs the
+ *  render-side (interpolated) transforms when Physics.setInterpolation is on.
  */
 const buf = Physics.getAllTransforms();
 for (let i = 0; i < buf.length; i += 8) {

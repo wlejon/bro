@@ -421,6 +421,20 @@ void Engine::run() {
 
         // Sync scene graph physics (body transforms → node transforms).
 #if BRO_WITH_3D
+#if BRO_WITH_PHYSICS
+        // Render alpha for transform interpolation: the fraction of a fixed
+        // step accumulated so far (the accumulator itself is only advanced at
+        // the step signal below, so add the wall time elapsed since then).
+        if (physicsWorld_ && physicsWorld_->interpolation()) {
+            double stepMs = physicsWorld_->timeStep() * 1000.0;
+            double pendingMs = physicsAccumMs_;
+            if (lastPhysicsTimeMs_ > 0.0)
+                pendingMs += (util::currentTimeMs() - lastPhysicsTimeMs_) *
+                             effectiveTimeScale();
+            physicsWorld_->setRenderAlpha(
+                stepMs > 0.0 ? static_cast<float>(pendingMs / stepMs) : 1.0f);
+        }
+#endif
         for (auto& sg : sceneGraphs_) sg.graph->syncPhysics();
 #endif
 

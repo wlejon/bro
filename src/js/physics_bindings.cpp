@@ -446,9 +446,16 @@ static JSValue worldDestroyAll(JSContext* ctx, JsWorld* w) {
     return JS_UNDEFINED;
 }
 
-static JSValue makeTransformObj(JSContext* ctx, physics::PhysicsWorld* world, JPH::BodyID id) {
-    auto pos = world->getPosition(id);
-    auto rot = world->getRotation(id);
+static JSValue makeTransformObj(JSContext* ctx, physics::PhysicsWorld* world, JPH::BodyID id,
+                                bool interpolated = false) {
+    JPH::RVec3 pos;
+    JPH::Quat rot;
+    if (interpolated) {
+        world->getRenderTransform(id, pos, rot);
+    } else {
+        pos = world->getPosition(id);
+        rot = world->getRotation(id);
+    }
     uint64_t udata = world->getUserData(id);
 
     JSValue result = JS_NewObject(ctx);
@@ -467,11 +474,12 @@ static JSValue makeTransformObj(JSContext* ctx, physics::PhysicsWorld* world, JP
     return result;
 }
 
-static JSValue worldGetTransform(JSContext* ctx, JsWorld* w, int32_t tag) {
+static JSValue worldGetTransform(JSContext* ctx, JsWorld* w, int32_t tag,
+                                 bool interpolated = false) {
     if (!w || !w->world) return JS_UNDEFINED;
     JPH::BodyID id = w->bodyIdForTag(tag);
     if (id.IsInvalid()) return JS_UNDEFINED;
-    return makeTransformObj(ctx, w->world, id);
+    return makeTransformObj(ctx, w->world, id, interpolated);
 }
 
 // --- Forward decls used by the raycast bindings (defined with the shape
@@ -2559,7 +2567,27 @@ static JSValue js_physics_getTransform(JSContext* ctx, JSValueConst, int argc, J
     DEFW_GUARD();
     if (argc < 1) return JS_UNDEFINED;
     int32_t tag; JS_ToInt32(ctx, &tag, argv[0]);
-    return worldGetTransform(ctx, s_defaultWorld, tag);
+    // Optional trailing opts: { interpolated: true } reads the render-side
+    // (interpolated) transform when Physics.setInterpolation is on.
+    bool interp = argc >= 2 && JS_IsObject(argv[1]) &&
+                  qjsbind::get_prop_bool(ctx, argv[1], "interpolated", false);
+    return worldGetTransform(ctx, s_defaultWorld, tag, interp);
+}
+
+// Enable/disable render interpolation of body transforms (default OFF —
+// Godot/Unity ship it off too, and physics queries always return the true
+// stepped state either way). Affects PhysicsNode scene sync and reads that
+// pass { interpolated: true }.
+static JSValue js_physics_setInterpolation(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 1) return JS_UNDEFINED;
+    s_defaultWorld->world->setInterpolation(JS_ToBool(ctx, argv[0]) != 0);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_physics_getInterpolation(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    DEFW_GUARD();
+    return JS_NewBool(ctx, s_defaultWorld->world->interpolation());
 }
 
 static JSValue js_physics_getVelocity(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -2782,10 +2810,14 @@ static JSValue js_physics_activate(JSContext* ctx, JSValueConst, int argc, JSVal
     return JS_UNDEFINED;
 }
 
-static JSValue js_physics_getAllTransforms(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+static JSValue js_physics_getAllTransforms(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (!s_defaultWorld || !s_defaultWorld->world) {
         return JS_NewArrayBufferCopy(ctx, nullptr, 0);
     }
+    // Optional opts: { interpolated: true } packs render-side (interpolated)
+    // transforms when Physics.setInterpolation is on.
+    bool interp = argc >= 1 && JS_IsObject(argv[0]) &&
+                  qjsbind::get_prop_bool(ctx, argv[0], "interpolated", false);
     size_t count = s_defaultWorld->bodyTags.size();
     size_t stride = 8;
     std::vector<float> buf(count * stride);
@@ -2799,8 +2831,14 @@ static JSValue js_physics_getAllTransforms(JSContext* ctx, JSValueConst, int, JS
         : s_defaultWorld->world->system().GetBodyInterface();
     for (auto& [key, tag] : s_defaultWorld->bodyTags) {
         JPH::BodyID id(key);
-        auto pos = bi.GetPosition(id);
-        auto rot = bi.GetRotation(id);
+        JPH::RVec3 pos;
+        JPH::Quat rot;
+        if (interp) {
+            s_defaultWorld->world->getRenderTransform(id, pos, rot);
+        } else {
+            pos = bi.GetPosition(id);
+            rot = bi.GetRotation(id);
+        }
         float* p = buf.data() + i * stride;
         p[0] = static_cast<float>(tag);
         p[1] = pos.GetX(); p[2] = pos.GetY(); p[3] = pos.GetZ();
@@ -3501,9 +3539,11 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("overlapPoint", js_physics_overlapPoint, 4)
         .function("getContacts", js_physics_getContacts, 0)
         .function("setTimeStep", js_physics_setTimeStep, 1)
+        .function("setInterpolation", js_physics_setInterpolation, 1)
+        .function("getInterpolation", js_physics_getInterpolation, 0)
         .function("isActive", js_physics_isActive, 1)
         .function("activate", js_physics_activate, 1)
-        .function("getAllTransforms", js_physics_getAllTransforms, 0)
+        .function("getAllTransforms", js_physics_getAllTransforms, 1)
         .function("createCharacter", js_physics_createCharacter, 1)
         .function("createVehicle", js_physics_createVehicle, 1)
         .function("createRagdoll", js_physics_createRagdoll, 1)

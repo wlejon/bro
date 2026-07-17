@@ -13,8 +13,12 @@ PhysicsNode::PhysicsNode(const std::string& name) : SceneNode(name) {}
 void PhysicsNode::syncFromPhysics(physics::PhysicsWorld* world) {
     if (!hasBody_ || !world) return;
 
-    auto pos = world->getPosition(bodyId_);
-    auto rot = world->getRotation(bodyId_);
+    // Render-side consumer: reads the interpolated transform when the world
+    // has interpolation enabled (Physics.setInterpolation), the true stepped
+    // transform otherwise. Physics queries are unaffected.
+    JPH::RVec3 pos;
+    JPH::Quat rot;
+    world->getRenderTransform(bodyId_, pos, rot);
 
     float sx = pos.GetX() * pixelsPerUnit_;
     float sy = pos.GetY() * pixelsPerUnit_;

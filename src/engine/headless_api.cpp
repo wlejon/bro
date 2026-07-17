@@ -384,6 +384,10 @@ void Engine::advanceTime(double ms) {
                 physicsAccumMs_ -= stepMs;
                 physicsWorld_->stepInline();
             }
+            // Render alpha for transform interpolation: the leftover fraction
+            // of a fixed step (deterministic under virtual time).
+            physicsWorld_->setRenderAlpha(
+                stepMs > 0.0 ? static_cast<float>(physicsAccumMs_ / stepMs) : 1.0f);
         }
 #endif
 

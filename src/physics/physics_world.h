@@ -553,6 +553,32 @@ public:
     void setTimeStep(float dt) { timeStep_ = dt; }
     float timeStep() const { return timeStep_; }
 
+    // --- Render interpolation (fixed-step physics vs uncapped rendering) ---
+    //
+    // When enabled, every step snapshots the pre-step transform of each active
+    // body; getRenderTransform() blends previous→current by the render alpha
+    // (the accumulator fraction the engine sets each frame). Render-side
+    // consumers (PhysicsNode scene sync, opt-in JS reads) use it; physics
+    // queries (getPosition/raycast/...) always return the true stepped state.
+    // Disabled by default — matching Godot/Unity, and existing content asserts
+    // exact post-step transforms through the render path.
+    //
+    // Sleeping bodies leave the snapshot map (no jitter); teleports via
+    // setPosition/setRotation drop the snapshot so the body snaps, not glides.
+
+    /// Enable/disable transform interpolation for render-side consumers.
+    void setInterpolation(bool enabled);
+    bool interpolation() const { return interpolate_; }
+
+    /// Fraction [0,1] of the fixed step that has accumulated since the last
+    /// step — set by the engine once per rendered frame.
+    void setRenderAlpha(float alpha);
+
+    /// Transform for RENDERING: interpolated between the previous and current
+    /// step when interpolation is on (and a snapshot exists); the true current
+    /// transform otherwise. Position lerp + quaternion slerp (normalized).
+    void getRenderTransform(JPH::BodyID id, JPH::RVec3& outPos, JPH::Quat& outRot) const;
+
     /// Destroy every body and constraint in this world. Filter callback receives
     /// each BodyID before destruction; if it returns true the caller wants
     /// further bookkeeping (e.g. tag map cleanup).
@@ -1012,6 +1038,20 @@ private:
     std::thread physicsThread_;
 
     float timeStep_ = 1.0f / 60.0f;
+
+    // Render interpolation state. prevTransforms_ is rebuilt at the START of
+    // every step from the active-body list (pre-step transforms), so a body
+    // that goes to sleep simply stops appearing and renders at its true pose.
+    // Only touched on the phase-owning thread (capture in signalStep/
+    // stepInline before the phase flip, reads while idle) — no locking.
+    struct PrevTransform {
+        JPH::RVec3 pos;
+        JPH::Quat rot;
+    };
+    bool interpolate_ = false;
+    float renderAlpha_ = 1.0f;   // 1 = render the current stepped state
+    std::unordered_map<uint64_t, PrevTransform> prevTransforms_;
+    void capturePrevTransforms();
 
     // Holds the events drained from ListenerImpl's lock-free buffer for the
     // last completed step, until drainContactEvents() hands them to the caller.
