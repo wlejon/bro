@@ -315,10 +315,51 @@ Headless mode shares the same `Engine` class as windowed mode, configured via `E
 
 - Creates a hidden SDL window (`SDL_WINDOW_HIDDEN`) for a real OpenGL 3.3 context
 - Uses `SkiaRenderer` — same GPU-accelerated Skia backend as windowed mode
-- Full WebGL2 support — Three.js, raw WebGL, and other GL frameworks work
+- WebGL2 support — Three.js, raw WebGL, and other GL frameworks work (see the support matrix below for the exact API surface)
 - Canvas 2D uses GL scene layers, composited in the screenshot pipeline
 - Screenshots replicate the windowed compositing pass: scene layers rendered to an offscreen FBO, UI overlay composited on top with premultiplied alpha, then read back via `glReadPixels`
 - Text metrics use Skia with platform-native fonts (DirectWrite on Windows, FreeType/fontconfig on Linux) — pixel-identical to windowed rendering
+
+### WebGL2 support matrix
+
+The `webgl2` context (src/webgl/ + src/js/webgl2_bindings*) maps WebGL2 onto
+raw OpenGL 3.3 core. Behavioral tests live in `tests/webgl/`.
+
+**Implemented:** context state + `getParameter`/`getError` (including
+WebGL-only pixel-store pnames and synthetic errors); buffers with all
+`bufferData`/`bufferSubData`/`getBufferSubData` signatures (element-unit
+`srcOffset`/`length`), `copyBufferSubData`, all WebGL2 binding points and
+`bindBufferBase`/`bindBufferRange`; VAOs, `vertexAttribIPointer`,
+`vertexAttribDivisor` + instanced draws, `drawRangeElements`, all three index
+types; shaders/programs with info logs, active attrib/uniform metadata,
+uniform blocks (UBO), `getFragDataLocation`, and every uniform setter shape
+(scalars, typed arrays, plain JS arrays, square + non-square matrices);
+textures 2D / 3D / 2D-array / cube map, sized internal formats,
+`texStorage2D/3D`, mipmaps, `UNPACK_ALIGNMENT`, `UNPACK_FLIP_Y_WEBGL`,
+`UNPACK_PREMULTIPLY_ALPHA_WEBGL`; framebuffers/renderbuffers including
+multisample + `blitFramebuffer` resolve, MRT via `drawBuffers` +
+`readBuffer`, `readPixels` (with destination-size validation), float
+color buffers (`EXT_color_buffer_float`).
+
+**Not implemented (absent API families):** sampler objects, sync objects
+(`fenceSync`/`clientWaitSync`), query objects, transform feedback objects,
+PBO-offset variants of `readPixels`/texture uploads, `compressedTexImage*`,
+`copyTexImage2D`/`copyTexSubImage2D`, `framebufferTextureLayer`,
+`invalidateFramebuffer`/`invalidateSubFramebuffer`, unsigned-int uniform
+setters (`uniform*ui*`), constant vertex attributes (`vertexAttrib[1-4]f*`,
+`vertexAttribI4*`), and the introspection getters `getUniform`,
+`getVertexAttrib`, `getTexParameter`, `getBufferParameter`,
+`getRenderbufferParameter`, `getFramebufferAttachmentParameter`,
+`getActiveUniformBlockParameter`/`Name`, `getUniformIndices`,
+`getInternalformatParameter`, `validateProgram`, and the `is*` object
+predicates.
+
+**Known deviations:** `texStorage2D` is emulated with mutable storage
+(`texImage2D` per level) so three.js's placeholder-then-allocate flow works —
+immutability is not enforced and `TEXTURE_IMMUTABLE_FORMAT` reports as
+mutable; `getParameter` object-binding queries (`CURRENT_PROGRAM`,
+`ARRAY_BUFFER_BINDING`, `TEXTURE_BINDING_2D`, ...) return `null` rather than
+the wrapper objects; `getShaderPrecisionFormat` returns fixed highp values.
 
 ### CPU mode (`--no-gpu`)
 
