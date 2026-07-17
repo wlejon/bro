@@ -47,7 +47,11 @@ jobs:
           # macOS-14 has ~7 GB, so 3; the 16 GB Linux/Windows runners take 4.
           - { name: linux,   os: ubuntu-24.04, cuda: true,  triplet: x64-linux,   jobs: 4 }
           - { name: windows, os: windows-2022, cuda: true,  triplet: x64-windows, jobs: 4 }
-          - { name: macos,   os: macos-14,     cuda: false, triplet: arm64-osx,   jobs: 3 }
+          # macos-15: brotensor's Metal offset path calls MPSNDArray
+          # -initWithBuffer:offset:descriptor:, which is a macOS-15-only MPS
+          # selector — the macos-14 runner's SDK doesn't declare it and the
+          # build fails to compile. macos-15 ships the SDK that has it.
+          - { name: macos,   os: macos-15,     cuda: false, triplet: arm64-osx,   jobs: 3 }
     steps:
       # The AI-tower + flora submodules use git@github.com: URLs. Rewrite them
       # to HTTPS *before* checkout so the default GITHUB_TOKEN can fetch them
@@ -157,7 +161,15 @@ jobs:
             # sccache caches nvcc too — route the CUDA compiler through it as well,
             # or the brotensor kernels (the heaviest TUs) recompile from scratch
             # every night while the C/C++ objects hit the cache.
-            GPU_ARGS="-DBRO_WITH_TENSOR_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=all-major -DCMAKE_CUDA_COMPILER_LAUNCHER=sccache"
+            # Tensor-core arches only (sm_70+). `all-major` also pulls in sm_50
+            # (Maxwell) and sm_60 (Pascal), which have no tensor cores — so
+            # <mma.h> leaves the nvcuda::wmma namespace undefined on those device
+            # passes and brotensor's WMMA kernels (fp16_matmul.cu et al., no
+            # __CUDA_ARCH__ guard) fail to compile. WMMA is Volta+; pre-Volta
+            # GPUs can't run these kernels anyway. -real cubins for the common
+            # arches + a newest-arch PTX tail for forward compatibility.
+            CUDA_ARCHS="70-real;75-real;80-real;86-real;89-real;90-real;90-virtual"
+            GPU_ARGS="-DBRO_WITH_TENSOR_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=$CUDA_ARCHS -DCMAKE_CUDA_COMPILER_LAUNCHER=sccache"
           elif [ "$RUNNER_OS" = "macOS" ]; then
             # macOS: compile the Metal backend IN (also opt-in, same reason). Metal
             # is always present on Apple hardware, so no toolkit install is needed.
