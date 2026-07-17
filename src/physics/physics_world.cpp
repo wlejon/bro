@@ -368,6 +368,10 @@ bool PhysicsWorld::init(int maxBodies, int contactCapacity) {
     listener_ = std::make_unique<ListenerImpl>(capacity, static_cast<size_t>(maxBodies));
     physicsSystem_.SetContactListener(listener_.get());
 
+    // Characters collide with each other via Jolt's brute-force checker
+    // (fine: updateCharacters is serial, and character counts are small).
+    charVsChar_ = std::make_unique<CharacterVsCharacterCollisionSimple>();
+
     initialized_ = true;
     return true;
 }
@@ -514,6 +518,7 @@ void PhysicsWorld::shutdown() {
         physicsThread_.join();
     }
 
+    if (charVsChar_) charVsChar_->mCharacters.clear();
     characters_.clear();
 
     if (initialized_) {
@@ -822,6 +827,18 @@ void PhysicsWorld::destroyBody(BodyID id,
         if (!lock.Succeeded()) return;
     }
 
+    // A character's inner body? It is owned by the CharacterVirtual
+    // (~CharacterVirtual destroys it) — destroying it here would leave the
+    // character referencing a dead body and corrupt the body manager on the
+    // second destroy. Destroy the character instead.
+    for (const auto& [h, ch] : characters_) {
+        if (ch.character && ch.character->GetInnerBodyID() == id) {
+            LOG_WARN("destroyBody: body is a character's inner body — "
+                     "destroy the character instead (no-op)");
+            return;
+        }
+    }
+
     // A ragdoll part? The ragdoll is one unit — destroy the whole thing
     // (removeRagdollFromSystem detaches, erasing the entry destroys ALL part
     // bodies via ~Ragdoll, including `id`, so return without the sweep below).
@@ -913,6 +930,11 @@ void PhysicsWorld::getRenderTransform(BodyID id, RVec3& outPos, Quat& outRot) co
     outRot = prev.rot.SLERP(outRot, renderAlpha_).Normalized();
 }
 
+bool PhysicsWorld::bodyExists(BodyID id) const {
+    BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
+    return lock.Succeeded();
+}
+
 // --- Body state ---
 
 RVec3 PhysicsWorld::getPosition(BodyID id) const {
@@ -997,6 +1019,10 @@ void PhysicsWorld::addTorque(BodyID id, Vec3 torque) {
 void PhysicsWorld::destroyAll(const std::function<void(JPH::BodyID)>& onBodyDestroyed) {
     if (!initialized_) return;
 
+    // Characters first (their Ref release destroys any inner bodies BEFORE
+    // the generic body sweep below, so nothing is destroyed twice); drop the
+    // char-vs-char registrations with them.
+    if (charVsChar_) charVsChar_->mCharacters.clear();
     characters_.clear();
 
     // Vehicles first (each is both a constraint and a step listener).
@@ -1643,6 +1669,9 @@ uint32_t PhysicsWorld::createCharacter(const CharacterOptions& opts) {
     auto shape = capsule.Create();
     if (shape.HasError()) return 0;
 
+    int layer = opts.layer;
+    if (layer < 0 || layer >= numLayers_) layer = numLayers_ > 1 ? 1 : 0;
+
     Ref<CharacterVirtualSettings> settings = new CharacterVirtualSettings();
     settings->mShape = shape.Get();
     settings->mUp = up;
@@ -1653,15 +1682,34 @@ uint32_t PhysicsWorld::createCharacter(const CharacterOptions& opts) {
     // Only contacts on the bottom sphere cap can support the character —
     // without this, side contacts on the cylinder count as "ground".
     settings->mSupportingVolume = Plane(up, -opts.radius);
+    if (opts.innerBody) {
+        // Kinematic body that shadows the character so sensors, raycasts and
+        // ordinary bodies can see it (a bare CharacterVirtual never enters
+        // the broadphase). Created/destroyed by the CharacterVirtual itself.
+        int innerLayer = opts.innerBodyLayer;
+        if (innerLayer < 0 || innerLayer >= numLayers_) innerLayer = layer;
+        settings->mInnerBodyShape = shape.Get();
+        settings->mInnerBodyLayer = static_cast<ObjectLayer>(innerLayer);
+    }
 
     CharacterEntry entry;
     entry.character = new CharacterVirtual(settings, opts.position,
                                            Quat::sIdentity(), 0, &physicsSystem_);
     entry.stepUp = opts.stepUp;
     entry.stickToFloor = opts.stickToFloor;
-    int layer = opts.layer;
-    if (layer < 0 || layer >= numLayers_) layer = numLayers_ > 1 ? 1 : 0;
     entry.layer = layer;
+
+    // Characters collide with each other (instead of ghosting through).
+    entry.character->SetCharacterVsCharacterCollision(charVsChar_.get());
+    charVsChar_->Add(entry.character.GetPtr());
+
+    // The inner body reuses a body-manager index — reset the per-index
+    // listener tables so it can't inherit a destroyed body's flags.
+    BodyID innerId = entry.character->GetInnerBodyID();
+    if (listener_ && !innerId.IsInvalid()) {
+        listener_->setSensorId(innerId, false);
+        listener_->setCombineModes(innerId, CombineMode::Default, CombineMode::Default);
+    }
 
     uint32_t handle = nextCharacterHandle_++;
     characters_[handle] = std::move(entry);
@@ -1669,7 +1717,11 @@ uint32_t PhysicsWorld::createCharacter(const CharacterOptions& opts) {
 }
 
 void PhysicsWorld::destroyCharacter(uint32_t handle) {
-    characters_.erase(handle);
+    auto it = characters_.find(handle);
+    if (it == characters_.end()) return;
+    if (charVsChar_ && it->second.character)
+        charVsChar_->Remove(it->second.character.GetPtr());
+    characters_.erase(it);   // Ref release destroys the inner body (if any)
 }
 
 void PhysicsWorld::setCharacterVelocity(uint32_t handle, Vec3 v) {
@@ -1680,6 +1732,60 @@ void PhysicsWorld::setCharacterVelocity(uint32_t handle, Vec3 v) {
 void PhysicsWorld::setCharacterPosition(uint32_t handle, RVec3 pos) {
     auto it = characters_.find(handle);
     if (it != characters_.end()) it->second.character->SetPosition(pos);
+}
+
+bool PhysicsWorld::setCharacterShape(uint32_t handle, const BodyOptions& shapeOpts) {
+    auto it = characters_.find(handle);
+    if (it == characters_.end() || !it->second.character) return false;
+    // Mesh-family shapes can't be a character volume.
+    if (shapeOpts.shape == BodyOptions::ShapeMesh ||
+        shapeOpts.shape == BodyOptions::ShapeChain ||
+        shapeOpts.shape == BodyOptions::ShapeHeightField) return false;
+    auto shape = buildShape(shapeOpts);
+    if (!shape) return false;
+
+    CharacterVirtual* c = it->second.character.GetPtr();
+    const ObjectLayer layer(static_cast<ObjectLayer>(it->second.layer));
+
+    // Feet-planted stance change: the character's position is the shape
+    // CENTER, so swapping shapes in place would sink a taller shape into the
+    // floor (making "stand up" always fail) and float a shorter one. Shift
+    // the position along `up` so the new shape's bottom lands where the old
+    // one's was, try the switch there, and restore on refusal.
+    const Vec3 up = c->GetUp();
+    auto bottomAlongUp = [&](const Shape* s) {
+        const AABox b = s->GetLocalBounds();
+        // Support point along -up: min over box corners of dot(corner, up).
+        const Vec3 corner(up.GetX() >= 0.0f ? b.mMin.GetX() : b.mMax.GetX(),
+                          up.GetY() >= 0.0f ? b.mMin.GetY() : b.mMax.GetY(),
+                          up.GetZ() >= 0.0f ? b.mMin.GetZ() : b.mMax.GetZ());
+        return corner.Dot(up);
+    };
+    const float shift = bottomAlongUp(c->GetShape()) - bottomAlongUp(shape.GetPtr());
+    const RVec3 oldPos = c->GetPosition();
+    if (shift != 0.0f) c->SetPosition(oldPos + up * shift);
+
+    // Finite max penetration ⇒ Jolt checks the new shape for room first and
+    // refuses the switch when it would start deeply penetrating (e.g.
+    // standing up under a low ceiling). 1.5*slop is Jolt's sample value.
+    const bool ok = c->SetShape(
+        shape.GetPtr(),
+        1.5f * physicsSystem_.GetPhysicsSettings().mPenetrationSlop,
+        physicsSystem_.GetDefaultBroadPhaseLayerFilter(layer),
+        physicsSystem_.GetDefaultLayerFilter(layer),
+        {}, {}, *tempAllocator_);
+    if (ok) {
+        if (!c->GetInnerBodyID().IsInvalid()) c->SetInnerBodyShape(shape.GetPtr());
+    } else if (shift != 0.0f) {
+        c->SetPosition(oldPos);   // refused — stay in the old stance, in place
+    }
+    return ok;
+}
+
+JPH::BodyID PhysicsWorld::characterInnerBody(uint32_t handle) const {
+    auto it = characters_.find(handle);
+    if (it == characters_.end() || !it->second.character) return BodyID();
+    return it->second.character->GetInnerBodyID();
 }
 
 bool PhysicsWorld::getCharacterState(uint32_t handle, CharacterState& out) const {

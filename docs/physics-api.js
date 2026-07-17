@@ -935,12 +935,27 @@ w.destroy();         // tear down the world entirely; do NOT use the handle afte
  *                                           default "moving"; the character
  *                                           collides with whatever that layer
  *                                           collides with in the matrix
+ * @param {boolean} [opts.innerBody=false] - create an inner rigid body (a
+ *                                           kinematic body that shadows the
+ *                                           character) so sensors, raycasts,
+ *                                           shape queries, CCD bodies and
+ *                                           contact events can SEE the
+ *                                           character. Without it a character
+ *                                           is invisible to all of those (it
+ *                                           never enters the broadphase). The
+ *                                           body's tag is `character.innerBody`.
+ * @param {string|number} [opts.innerBodyLayer] - inner body's collision layer;
+ *                                           default = the character's layer
  * @returns {PhysicsCharacter}
  */
 const player = Physics.createCharacter({
     radius: 0.3, halfHeight: 0.6,
     position: { x: 0, y: 1, z: 0 },
 });
+
+// Characters COLLIDE WITH EACH OTHER: every character is registered with a
+// world-level character-vs-character checker, so two characters walked into
+// each other stop and slide instead of ghosting through.
 
 // Per-frame control: set desired velocity, read state.
 player.setVelocity(runX, 0, runZ);         // walk
@@ -966,6 +981,31 @@ player.getPosition();          // {x,y,z} shorthand
 player.getVelocity();          // {x,y,z} shorthand
 player.setPosition(x, y, z);   // teleport (no sweep; keeps velocity)
 player.destroy();              // remove from the world; handle is dead after
+
+/**
+ * Crouch / stance: switch the character's shape at runtime. Takes the same
+ * descriptor syntax as createBody (non-mesh shapes only — capsule, box,
+ * sphere, cylinder, convexHull, compound). FEET-PLANTED: the position (shape
+ * center) is shifted along `up` so the new shape's bottom lands exactly where
+ * the old one's was — crouching pulls the center down, standing pushes it up.
+ *
+ * Jolt collision-checks the new shape first: returns FALSE and changes
+ * nothing when there is no room — e.g. standing up under a low ceiling. Keep
+ * polling while the crouch key is released to stand up as soon as there's
+ * clearance. Updates the inner body's shape too (if innerBody was set).
+ *
+ * @returns {boolean} true if the shape was switched
+ */
+const crouched = player.setShape({ shape: 'capsule', radius: 0.3, halfHeight: 0.1 });
+
+/**
+ * Body tag of the inner rigid body (created with innerBody: true), or -1.
+ * It's a real body: contact events report it, raycasts hit it, and
+ * Physics.getTransform works on it. It is OWNED by the character —
+ * Physics.destroyBody on it is refused (destroy the character instead).
+ * @type {number}
+ */
+player.innerBody;
 
 // Sandbox worlds have the same API; their characters update inside w.step(dt):
 //   const w = Physics.createWorldHandle({ maxBodies: 64 });

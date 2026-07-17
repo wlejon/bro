@@ -452,7 +452,10 @@ static JSValue worldDestroyBody(JSContext* ctx, JsWorld* w, int32_t tag) {
     // at a dead BodyID (a later destroy through such a tag would corrupt
     // Jolt's body manager).
     w->world->destroyBody(id, [w](JPH::BodyID bid) { w->unregisterBodyId(bid); });
-    w->unregisterBody(tag);  // stale-id case: destroyBody may bail before the callback
+    // Stale-id case: destroyBody may bail before the callback — clean the tag
+    // map. But a REFUSED destroy (a character's inner body, which only the
+    // character may destroy) leaves the body alive: keep its tag mapped.
+    if (!w->world->bodyExists(id)) w->unregisterBody(tag);
     return JS_UNDEFINED;
 }
 
@@ -1107,6 +1110,7 @@ static JSClassID s_characterClassId = 0;
 struct JsCharacter {
     JsWorld* world = nullptr;          // sandbox only; default world uses s_defaultWorld
     uint32_t handle = 0;               // 0 after destroy()
+    int32_t innerTag = -1;             // inner rigid body's tag (innerBody: true), -1 = none
     JSValue worldRef = JS_UNDEFINED;   // strong ref to a sandbox world handle
 };
 
@@ -1179,7 +1183,10 @@ static void characterClassFinalizer(JSRuntime* rt, JSValue val) {
     JsCharacter* c = (JsCharacter*)JS_GetOpaque(val, s_characterClassId);
     if (!c) return;
     JsWorld* w = characterWorld(c);
-    if (w && w->world && c->handle) w->world->destroyCharacter(c->handle);
+    if (w && w->world && c->handle) {
+        if (c->innerTag >= 0) w->unregisterBody(c->innerTag);
+        w->world->destroyCharacter(c->handle);
+    }
     if (c->world) c->world->liveCharacters.erase(c);
     JS_FreeValueRT(rt, c->worldRef);
     delete c;
@@ -1289,9 +1296,37 @@ static JSValue jsc_destroy(JSContext* ctx, JSValueConst thisVal, int, JSValueCon
     JsCharacter* c = characterFromThis(ctx, thisVal);
     if (!c) return JS_EXCEPTION;
     JsWorld* w = characterWorld(c);
-    if (w && w->world && c->handle) w->world->destroyCharacter(c->handle);
+    if (w && w->world && c->handle) {
+        if (c->innerTag >= 0) w->unregisterBody(c->innerTag);
+        w->world->destroyCharacter(c->handle);
+    }
     c->handle = 0;
+    c->innerTag = -1;
     return JS_UNDEFINED;
+}
+
+// setShape(desc) — switch the character's shape (crouch/stance). Same
+// descriptor syntax as createBody, non-mesh shapes only. Returns false when
+// there is no room for the new shape (e.g. standing up under a low ceiling).
+static JSValue jsc_setShape(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsCharacter* c = characterFromThis(ctx, thisVal);
+    if (!c) return JS_EXCEPTION;
+    JsWorld* w = characterWorld(c);
+    if (!w || !w->world || !c->handle) return JS_FALSE;
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "setShape(desc) requires a shape descriptor object");
+    physics::BodyOptions shape;
+    std::string err;
+    if (!readBodyOptions(ctx, argv[0], w->world, shape, err))
+        return JS_ThrowTypeError(ctx, "setShape: %s", err.c_str());
+    return JS_NewBool(ctx, w->world->setCharacterShape(c->handle, shape));
+}
+
+// Body tag of the inner rigid body (created with innerBody: true), -1 if none.
+static JSValue jsc_getInnerBody(JSContext* ctx, JSValueConst thisVal) {
+    JsCharacter* c = characterFromThis(ctx, thisVal);
+    if (!c) return JS_EXCEPTION;
+    return JS_NewInt32(ctx, c->innerTag);
 }
 
 static const JSCFunctionListEntry s_characterProtoFuncs[] = {
@@ -1300,6 +1335,8 @@ static const JSCFunctionListEntry s_characterProtoFuncs[] = {
     JS_CFUNC_DEF("setPosition", 3, jsc_setPosition),
     JS_CFUNC_DEF("getPosition", 0, jsc_getPosition),
     JS_CFUNC_DEF("getState", 0, jsc_getState),
+    JS_CFUNC_DEF("setShape", 1, jsc_setShape),
+    JS_CGETSET_DEF("innerBody", jsc_getInnerBody, nullptr),
     JS_CFUNC_DEF("destroy", 0, jsc_destroy),
 };
 
@@ -1325,6 +1362,7 @@ static JSValue worldCreateCharacter(JSContext* ctx, JsWorld* w, JSValueConst wor
     opts.padding = (float)qjsbind::get_prop_number(ctx, optsVal, "padding", 0.02);
     opts.stepUp = (float)qjsbind::get_prop_number(ctx, optsVal, "stepUp", 0.4);
     opts.stickToFloor = (float)qjsbind::get_prop_number(ctx, optsVal, "stickToFloor", 0.5);
+    opts.innerBody = qjsbind::get_prop_bool(ctx, optsVal, "innerBody", false);
 
     JSValue layerVal = JS_GetPropertyStr(ctx, optsVal, "layer");
     if (JS_IsString(layerVal)) {
@@ -1334,6 +1372,15 @@ static JSValue worldCreateCharacter(JSContext* ctx, JsWorld* w, JSValueConst wor
         int32_t i = -1; JS_ToInt32(ctx, &i, layerVal); opts.layer = i;
     }
     JS_FreeValue(ctx, layerVal);
+
+    JSValue innerLayerVal = JS_GetPropertyStr(ctx, optsVal, "innerBodyLayer");
+    if (JS_IsString(innerLayerVal)) {
+        const char* s = JS_ToCString(ctx, innerLayerVal);
+        if (s) { opts.innerBodyLayer = w->world->layerIndex(s); JS_FreeCString(ctx, s); }
+    } else if (JS_IsNumber(innerLayerVal)) {
+        int32_t i = -1; JS_ToInt32(ctx, &i, innerLayerVal); opts.innerBodyLayer = i;
+    }
+    JS_FreeValue(ctx, innerLayerVal);
 
     uint32_t handle = w->world->createCharacter(opts);
     if (!handle) return JS_ThrowInternalError(ctx, "Failed to create character");
@@ -1345,6 +1392,10 @@ static JSValue worldCreateCharacter(JSContext* ctx, JsWorld* w, JSValueConst wor
     }
     auto* jc = new JsCharacter();
     jc->handle = handle;
+    // Register the inner body (if any) as an ordinary body tag so contact
+    // events, raycast hits and queries can identify the character by it.
+    JPH::BodyID innerId = w->world->characterInnerBody(handle);
+    if (!innerId.IsInvalid()) jc->innerTag = w->registerBody(innerId);
     if (!JS_IsUndefined(worldVal)) {
         jc->world = w;
         jc->worldRef = JS_DupValue(ctx, worldVal);

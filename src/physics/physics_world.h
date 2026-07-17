@@ -22,7 +22,8 @@
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Core/JobSystemThreadPool.h>
 
-namespace JPH { class CharacterVirtual; class VehicleConstraint; class Ragdoll; class RagdollSettings; }
+namespace JPH { class CharacterVirtual; class CharacterVsCharacterCollisionSimple;
+                class VehicleConstraint; class Ragdoll; class RagdollSettings; }
 
 namespace bro::physics {
 
@@ -191,6 +192,12 @@ struct CharacterOptions {
     float stepUp = 0.4f;          // WalkStairs step height; 0 disables
     float stickToFloor = 0.5f;    // StickToFloor snap-down distance; 0 disables
     int layer = 1;                // object layer used for collision filtering
+    // Inner rigid body (CharacterVirtualSettings::mInnerBodyShape): a
+    // kinematic body that follows the character so sensors, raycasts, CCD and
+    // ordinary bodies can SEE it — a bare CharacterVirtual is invisible to
+    // them (it never enters the broadphase).
+    bool innerBody = false;
+    int innerBodyLayer = -1;      // -1 = same as `layer`
 };
 
 /// Character ground classification (mirrors Jolt's CharacterBase::EGroundState).
@@ -660,6 +667,11 @@ public:
     void destroyBody(JPH::BodyID id,
                      const std::function<void(JPH::BodyID)>& onBodyDestroyed = {});
 
+    /// True while `id` refers to a live body (index + sequence check). Used
+    /// by callers to distinguish a destroy that was refused (e.g. a
+    /// character's inner body) from one that happened.
+    bool bodyExists(JPH::BodyID id) const;
+
     // --- Body state (call only when idle) ---
 
     JPH::RVec3 getPosition(JPH::BodyID id) const;
@@ -751,6 +763,19 @@ public:
     void setCharacterPosition(uint32_t handle, JPH::RVec3 pos);
     /// Snapshot position/velocity/ground state. False for an unknown handle.
     bool getCharacterState(uint32_t handle, CharacterState& out) const;
+
+    /// Switch the character's shape (crouch/stance — CharacterVirtual::
+    /// SetShape). Takes the same descriptor as body creation, restricted to
+    /// non-mesh shapes. Feet-planted semantics: the position (shape center)
+    /// shifts along `up` so the new shape's bottom lands where the old one's
+    /// was. Jolt checks the new shape for collision first and the switch
+    /// FAILS (returns false, position restored) when there is no room — e.g.
+    /// standing up under a low ceiling. On success the inner body's shape
+    /// (if any) is updated too.
+    bool setCharacterShape(uint32_t handle, const BodyOptions& shapeOpts);
+
+    /// The character's inner rigid body id (invalid if none / unknown handle).
+    JPH::BodyID characterInnerBody(uint32_t handle) const;
 
     // --- Wheeled vehicles (call only when idle) ---
     //
@@ -1005,6 +1030,12 @@ private:
     // varies with the allocator, breaking cross-run determinism).
     std::map<uint32_t, CharacterEntry> characters_;
     uint32_t nextCharacterHandle_ = 1;
+    // Character-vs-character collision (Jolt CharacterVsCharacterCollisionSimple):
+    // every CharacterVirtual registers here at creation so characters collide
+    // with each other instead of ghosting through. Jolt's Simple checker is
+    // not thread-safe, which is fine — updateCharacters steps them serially
+    // on the phase-owning thread. Entries are removed on character destroy.
+    std::unique_ptr<JPH::CharacterVsCharacterCollisionSimple> charVsChar_;
     // Runs each character's velocity update + ExtendedUpdate with the fixed
     // dt. Called from signalStep (main thread, before the phase flip) and
     // stepInline — never concurrently with a world step.
