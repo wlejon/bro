@@ -69,8 +69,11 @@ const worker = new Worker('../workers/worker_basic.js');
 let got = null;
 worker.onmessage = (e) => { got = e.data; };
 worker.postMessage({ cmd: 'echo', payload: 'ping' });
-let waited = 0;
-while (got === null && waited < 5000) { advanceTime(16); waited += 16; }
+// advanceTime() delivers queued replies, wallSleep() gives the worker's real
+// thread CPU time; the budget is wall-clock so a loaded machine (e.g. the
+// parallel test runner) can't starve the worker out of a virtual-time budget.
+const workerDeadline = Date.now() + 15000;
+while (got === null && Date.now() < workerDeadline) { advanceTime(16); wallSleep(2); }
 assert(got && got.echo === 'ping', 'worker replied');
 
 // --- listeners + timers still live at exit ---

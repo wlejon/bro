@@ -19,8 +19,11 @@ w.onmessage = (e) => { got = e.data; };
 w.postMessage({ tiny, huge, neg });
 
 // Pump until the worker replies (or fail loud after a generous budget).
-let waited = 0;
-while (got === null && waited < 5000) { advanceTime(16); waited += 16; }
+// advanceTime() delivers queued replies, wallSleep() gives the worker's real
+// thread CPU time; the budget is wall-clock so a loaded machine (e.g. the
+// parallel test runner) can't starve the worker out of a virtual-time budget.
+const deadline = Date.now() + 15000;
+while (got === null && Date.now() < deadline) { advanceTime(16); wallSleep(2); }
 assert(got !== null, 'worker replied within budget');
 
 // Echo: BigInts survived the trip both ways.

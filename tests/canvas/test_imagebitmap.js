@@ -213,8 +213,11 @@ w1.postMessage({ cmd: 'dims', bitmap: transferBmp }, [transferBmp]);
 assert(transferBmp.width === 0 && transferBmp.height === 0,
        'transferred bitmap neutered on source thread');
 
-let waited = 0;
-while (workerReply === null && waited < 5000) { advanceTime(16); waited += 16; }
+// advanceTime() delivers queued replies, wallSleep() gives the worker's real
+// thread CPU time; the budget is wall-clock so a loaded machine (e.g. the
+// parallel test runner) can't starve the worker out of a virtual-time budget.
+let deadline = Date.now() + 15000;
+while (workerReply === null && Date.now() < deadline) { advanceTime(16); wallSleep(2); }
 assert(workerReply !== null, 'worker replied after receiving transferred bitmap');
 assert(workerReply.width === W && workerReply.height === H,
        'worker saw correct transferred dimensions, got ' + JSON.stringify(workerReply));
@@ -230,8 +233,8 @@ const cloneBmp = await createImageBitmap({ width: W, height: H, data: rgba });
 w2.postMessage({ cmd: 'dims', bitmap: cloneBmp }); // no transfer list
 assert(cloneBmp.width === W && cloneBmp.height === H, 'non-transferred bitmap stays live on source thread');
 
-waited = 0;
-while (workerReply2 === null && waited < 5000) { advanceTime(16); waited += 16; }
+deadline = Date.now() + 15000;
+while (workerReply2 === null && Date.now() < deadline) { advanceTime(16); wallSleep(2); }
 assert(workerReply2 !== null, 'worker replied for cloned bitmap');
 assert(workerReply2.width === W && workerReply2.height === H, 'worker saw correct cloned dimensions');
 w2.terminate();
