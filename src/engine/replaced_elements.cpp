@@ -99,6 +99,17 @@ static void safeStopTextInput(platform::Window* window) {
     if (window) SDL_StopTextInput(window->getSDLWindow());
 }
 
+// True when the element sits inside a contenteditable host (attribute set to
+// anything other than "false") — such hosts take text input too, even though
+// they are not replaced-element controls.
+static bool insideEditableHost(dom::Element* el) {
+    for (auto* e = el; e; e = e->parentElement()) {
+        if (!e->hasAttribute("contenteditable")) continue;
+        return e->getAttribute("contenteditable") != "false";
+    }
+    return false;
+}
+
 
 // ---------------------------------------------------------------------------
 // Event dispatch helpers
@@ -411,6 +422,13 @@ void focusNewControl(
         }
         safeStopTextInput(ctx.window);
         *ctx.dirtyFlag = true;
+    } else if (insideEditableHost(target)) {
+        // A contenteditable host still takes text input (raw TEXT_INPUT
+        // commits insert via the DOM Selection) — without this, clicking
+        // into one would stop SDL text input and typing would go dead in
+        // windowed mode. IME preedit rendering inside contenteditable is
+        // not wired (form controls only).
+        safeStartTextInput(ctx.window);
     } else {
         safeStopTextInput(ctx.window);
     }

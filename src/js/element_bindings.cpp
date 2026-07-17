@@ -3023,6 +3023,19 @@ static JSValue js_element_click(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+// Engine-side focus sync for programmatic .focus()/.blur(): commits any
+// in-progress IME composition, mirrors the input/textarea control focused
+// flags (so typing works after .focus(), as in a browser), and starts/stops
+// SDL text input. No-op when the ctx has no engine (iframe sub-documents) or
+// the document isn't the engine's app document.
+static void syncEngineFocus(JSContext* ctx, bro::dom::Document* doc,
+                            bro::dom::Element* oldEl, bro::dom::Element* newEl) {
+    auto it = s_ctx_engines.find(ctx);
+    if (it == s_ctx_engines.end() || !it->second) return;
+    static_cast<bro::engine::Engine*>(it->second)
+        ->handleProgrammaticFocus(doc, oldEl, newEl);
+}
+
 static JSValue js_element_focus(JSContext* ctx, JSValueConst this_val,
                                 int /*argc*/, JSValueConst* /*argv*/) {
     auto* el = getElement(this_val);
@@ -3031,6 +3044,7 @@ static JSValue js_element_focus(JSContext* ctx, JSValueConst this_val,
     if (!doc) return JS_UNDEFINED;
     auto* prev = doc->activeElement();
     if (prev == el) return JS_UNDEFINED; // already focused
+    syncEngineFocus(ctx, doc, prev, el);
     doc->setActiveElement(el);
 
     // Dispatch blur on previous, then focus on new element
@@ -3067,6 +3081,7 @@ static JSValue js_element_blur(JSContext* ctx, JSValueConst this_val,
     // activeElement() returns body when focusedElement_ is null, so check
     // the actual focused element to know if el is really focused
     if (doc->activeElement() != el) return JS_UNDEFINED;
+    syncEngineFocus(ctx, doc, el, nullptr);
     doc->setActiveElement(nullptr);
 
     // Dispatch blur/focusout on the element

@@ -226,6 +226,22 @@ private:
     bool isComposing_ = false;
 };
 
+// IME composition events (compositionstart / compositionupdate /
+// compositionend). `data` is the current preedit for updates, the text being
+// replaced for compositionstart, and the committed text ("" on cancel) for
+// compositionend.
+class CompositionEvent : public Event {
+public:
+    CompositionEvent(const std::string& type, bool bubbles = true, bool cancelable = false);
+    ~CompositionEvent() override = default;
+
+    const std::string& data() const { return data_; }
+    void setData(const std::string& v) { data_ = v; }
+
+private:
+    std::string data_;
+};
+
 class TransitionEvent : public Event {
 public:
     TransitionEvent(const std::string& type, bool bubbles = true, bool cancelable = false);

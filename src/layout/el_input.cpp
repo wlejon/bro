@@ -324,6 +324,115 @@ KeyHandleResult ElInput::insertText_(dom::Element* el, const std::string& text,
     return r;
 }
 
+// ---------------------------------------------------------------------------
+// IME composition
+// ---------------------------------------------------------------------------
+
+KeyHandleResult ElInput::compositionUpdate(dom::Element* el,
+                                           const std::string& text,
+                                           int cursorCp) {
+    KeyHandleResult r;
+    if (!focused_ || !el || !isTextType(el)) return r;
+    // Number inputs take no composition — the eventual raw TEXT_INPUT commit
+    // still runs through insertText_'s numeric filter.
+    if (inputType(el) == InputType::Number) return r;
+
+    std::string val = el->getAttribute("value");
+    sel_.clampTo(static_cast<int>(val.size()));
+
+    if (!comp_.active) {
+        // First update: snapshot for the single undo entry the commit will
+        // record, and delete any active selection (part of that same entry).
+        comp_.beforeVal = val;
+        comp_.selBefore = {sel_.anchor, sel_.caret};
+        std::string discarded;
+        deleteSelection_(val, discarded);
+        comp_.start = sel_.caret;
+        comp_.active = true;
+        // A composition never merges into a preceding typing run.
+        undo_.breakCoalescing();
+    } else {
+        val.erase(static_cast<size_t>(comp_.start),
+                  static_cast<size_t>(comp_.length));
+    }
+
+    val.insert(static_cast<size_t>(comp_.start), text);
+    comp_.length = static_cast<int>(text.size());
+    comp_.preedit = text;
+    // Caret at the IME's composition cursor within the preedit.
+    sel_.collapseTo(comp_.start + utf8ByteForCodepoint(text, cursorCp));
+    el->setAttribute("value", val);
+
+    r.handled = true;
+    r.dispatchInput = true;
+    r.inputData = text;
+    r.inputType = "insertCompositionText";
+    return r;
+}
+
+KeyHandleResult ElInput::compositionCommit(dom::Element* el,
+                                           const std::string& text) {
+    KeyHandleResult r;
+    if (!comp_.active || !el) return r;
+
+    std::string val = el->getAttribute("value");
+    // Guard against out-of-band writes that bypassed clearHistory().
+    const int len = static_cast<int>(val.size());
+    comp_.start = std::clamp(comp_.start, 0, len);
+    comp_.length = std::clamp(comp_.length, 0, len - comp_.start);
+
+    val.erase(static_cast<size_t>(comp_.start),
+              static_cast<size_t>(comp_.length));
+    val.insert(static_cast<size_t>(comp_.start), text);
+    sel_.collapseTo(comp_.start + static_cast<int>(text.size()));
+    el->setAttribute("value", val);
+
+    // ONE discrete entry: pre-composition state → committed state. record()
+    // no-ops when nothing actually changed (e.g. an empty commit over what
+    // was already there).
+    undo_.record(comp_.beforeVal, comp_.selBefore, val,
+                 {sel_.anchor, sel_.caret},
+                 TextUndoStack::Kind::Discrete, util::currentTimeMs());
+    comp_ = {};
+
+    r.handled = true;
+    r.dispatchInput = true;
+    r.inputData = text;
+    r.inputType = "insertCompositionText";
+    return r;
+}
+
+KeyHandleResult ElInput::compositionCancel(dom::Element* el) {
+    KeyHandleResult r;
+    if (!comp_.active || !el) return r;
+
+    el->setAttribute("value", comp_.beforeVal);
+    sel_.set(comp_.selBefore.anchor, comp_.selBefore.caret);
+    sel_.clampTo(static_cast<int>(comp_.beforeVal.size()));
+    comp_ = {};
+
+    r.handled = true;
+    r.dispatchInput = true;
+    r.inputData = "";
+    r.inputType = "insertCompositionText";
+    return r;
+}
+
+bool ElInput::caretRect(float& x, float& y, float& w, float& h) {
+    if (!renderer_ || !elem_ || !isTextType(nullptr)) return false;
+    DrawPos box = contentBox_();
+    if (box.w <= 0 || box.h <= 0) return false;
+    std::string disp = displayText_();
+    const int cpos = std::clamp(sel_.caret, 0, static_cast<int>(disp.size()));
+    float off = runWidthTo(disp, 0, static_cast<size_t>(cpos), getFontRef(),
+                           renderer_);
+    x = box.x + off - scrollX_;
+    y = box.y;
+    w = 1.0f;
+    h = box.h;
+    return true;
+}
+
 void ElInput::getContentSize(float& w, float& h, float maxWidth) {
     auto t = inputType(nullptr);
     if (t == InputType::Hidden) { w = 0; h = 0; return; }
@@ -715,6 +824,23 @@ void ElInput::drawText_(float x, float y, float w, float h) {
         float cursorTop = textY - lm.ascent;
         float cursorBottom = cursorTop + lm.lineHeight();
         renderer_->drawLine(cursorX, cursorTop, cursorX, cursorBottom, cursorColor, 1.0f);
+
+        // IME preedit: thin underline under the whole provisional run, just
+        // below the baseline (the caret above marks the composition cursor).
+        // Password fields underline the mask — its bytes map 1:1 to the value.
+        if (comp_.active && comp_.length > 0 && !isPlaceholder) {
+            const int n = static_cast<int>(text.size());
+            const int ps = std::clamp(comp_.start, 0, n);
+            const int pe = std::clamp(comp_.start + comp_.length, ps, n);
+            if (pe > ps) {
+                float ux0 = drawX + runWidthTo(text, 0, static_cast<size_t>(ps),
+                                               fontRef, renderer_);
+                float ux1 = drawX + runWidthTo(text, 0, static_cast<size_t>(pe),
+                                               fontRef, renderer_);
+                float uy = textY + 2.0f;
+                renderer_->drawLine(ux0, uy, ux1, uy, cursorColor, 1.0f);
+            }
+        }
     }
 
     // The spin buttons sit outside the text's clip — they own the right edge.

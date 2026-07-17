@@ -176,4 +176,22 @@ private:
     double lastEditMs_ = 0.0;
 };
 
+// IME composition (preedit) state carried by a text control while the user
+// composes. The preedit lives INSIDE the value as provisional text (browser
+// behavior: `.value` shows it and input events fire during composition),
+// replaced on every TEXT_EDITING update, finalized on commit and removed on
+// cancel. No undo entries are recorded while composing; the commit records
+// ONE discrete entry spanning pre-composition state → committed state, so a
+// single Ctrl+Z removes the whole committed run (and a cancel leaves no
+// entry at all). Offsets are byte offsets into the UTF-8 value, matching the
+// controls' selection convention.
+struct TextComposition {
+    bool active = false;
+    int start = 0;            // byte offset of the preedit in the value
+    int length = 0;           // byte length of the current preedit
+    std::string preedit;      // current preedit text (value[start, start+length))
+    std::string beforeVal;    // value at composition start (undo snapshot)
+    TextUndoStack::Sel selBefore{};  // selection at composition start
+};
+
 } // namespace bro::layout

@@ -713,6 +713,12 @@ void Engine::handleMouseDown(float x, float y, int button) {
     }
 
     if (document_) {
+        // A press moves the caret or the focus — either way an in-progress
+        // IME composition commits first (browser behavior on caret
+        // move/blur), so the preedit is finalized before the press re-seats
+        // the caret or focuses another element.
+        commitActiveComposition();
+
         dom::MouseEvent evt("mousedown");
         int mod = safeGetModState(window_.get(), heldModifierMask_);
         populateMouseEvent(evt, x, y, button, pressedButtons_,
@@ -786,6 +792,8 @@ void Engine::handleMouseDown(float x, float y, int button) {
         dispatchDocMousePress(cctx, appMouseState_, target, evt,
                               focusX, focusY, intent);
         jsRuntime_->executePendingJobs();
+        // Track the (possibly re-seated) caret for the IME candidate window.
+        updateTextInputArea();
         // A control press can reposition the native caret or toggle control
         // visual state without changing the DOM (e.g. clicking to move the
         // caret inside an already-focused input, where setActiveElement's
@@ -1537,11 +1545,12 @@ void Engine::exitPointerLock() {
 
 // Helper: update input value and dispatch "input" event for v-model
 void Engine::dispatchInputEvent(dom::Element* el, const std::string& data,
-                                const std::string& inputType) {
+                                const std::string& inputType, bool isComposing) {
     if (!el) return;
     dom::InputEvent evt("input");
     evt.setData(data);
     evt.setInputType(inputType);
+    evt.setIsComposing(isComposing);
     evt.setIsTrusted(true);
     dispatchEvent(el, evt);
     jsRuntime_->executePendingJobs();
@@ -1574,7 +1583,176 @@ void Engine::applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r) 
         // an unrelated restyle. (Value edits also markDirty via setAttribute,
         // making this a harmless superset for them.)
         markAppBaseDirty();
+        // Keep the native IME candidate window tracking the caret.
+        updateTextInputArea();
     }
+}
+
+// ---------------------------------------------------------------------------
+// IME composition
+// ---------------------------------------------------------------------------
+
+bool Engine::compositionActive() {
+    auto* el = document_ ? document_->activeElement() : nullptr;
+    if (auto* input = getElInput(el); input && input->isComposing()) return true;
+    if (auto* ta = getElTextarea(el); ta && ta->isComposing()) return true;
+    return false;
+}
+
+void Engine::dispatchCompositionEvent(dom::Element* el, const char* type,
+                                      const std::string& data) {
+    if (!el) return;
+    // compositionstart is cancelable per spec; we dispatch it as such but do
+    // not honor preventDefault (a cancel would have to abort the OS
+    // composition, which SDL has no hook for).
+    dom::CompositionEvent evt(type, true,
+                              std::strcmp(type, "compositionstart") == 0);
+    evt.setData(data);
+    evt.setIsTrusted(true);
+    dispatchEvent(el, evt);
+    if (jsRuntime_) jsRuntime_->executePendingJobs();
+}
+
+void Engine::updateTextInputArea() {
+    if (!window_ || !document_) return;
+    auto* activeEl = document_->activeElement();
+    float x = 0, y = 0, w = 0, h = 0;
+    bool have = false;
+    if (auto* input = getElInput(activeEl);
+        input && input->isFocused() && input->isTextType(activeEl)) {
+        have = input->caretRect(x, y, w, h);
+    } else if (auto* ta = getElTextarea(activeEl); ta && ta->isFocused()) {
+        have = ta->caretRect(x, y, w, h);
+    }
+    if (!have) return;
+    // Control caret rects are in app content space; SDL wants window
+    // coordinates (points), so fold the engine's top inset back in.
+    SDL_Rect rect;
+    rect.x = static_cast<int>(std::lround(x));
+    rect.y = static_cast<int>(std::lround(y + static_cast<float>(contentTop())));
+    rect.w = static_cast<int>(std::lround(std::max(1.0f, w)));
+    rect.h = static_cast<int>(std::lround(std::max(1.0f, h)));
+    SDL_SetTextInputArea(window_->getSDLWindow(), &rect, 0);
+}
+
+void Engine::handleTextEditing(const std::string& text, int start,
+                               int /*length*/) {
+    if (!document_) return;
+    // Overlays (color-picker hex field) take raw text input only — no
+    // composition rendering there; the eventual TEXT_INPUT commit still
+    // lands via handleTextInput.
+    if (overlayMgr_.hasActive()) return;
+
+    auto* activeEl = document_->activeElement();
+    auto* input = getElInput(activeEl);
+    auto* ta = getElTextarea(activeEl);
+    const bool inputOk = input && input->isFocused();
+    const bool taOk = !inputOk && ta && ta->isFocused();
+    if (!inputOk && !taOk) return;
+    const bool wasComposing = inputOk ? input->isComposing() : ta->isComposing();
+
+    if (text.empty()) {
+        // Empty editing event = the composition ended without commit.
+        if (!wasComposing) return;
+        layout::KeyHandleResult r = inputOk ? input->compositionCancel(activeEl)
+                                            : ta->compositionCancel(activeEl);
+        if (!r.handled) return;
+        // Chrome's observable cancel order: compositionupdate("") → input →
+        // compositionend("").
+        dispatchCompositionEvent(activeEl, "compositionupdate", "");
+        dispatchInputEvent(activeEl, "", "insertCompositionText", true);
+        dispatchCompositionEvent(activeEl, "compositionend", "");
+        markAppBaseDirty();
+        uiDirty_ = true;
+        updateTextInputArea();
+        return;
+    }
+
+    // compositionstart.data is the text the composition replaces — capture
+    // the selection before the first update deletes it.
+    std::string replacedSel;
+    if (!wasComposing)
+        replacedSel = inputOk ? input->selectedText() : ta->selectedText();
+
+    layout::KeyHandleResult r =
+        inputOk ? input->compositionUpdate(activeEl, text, start)
+                : ta->compositionUpdate(activeEl, text, start);
+    if (!r.handled) return;
+
+    if (!wasComposing)
+        dispatchCompositionEvent(activeEl, "compositionstart", replacedSel);
+    dispatchCompositionEvent(activeEl, "compositionupdate", text);
+    dispatchInputEvent(activeEl, text, "insertCompositionText", true);
+    markAppBaseDirty();
+    uiDirty_ = true;
+    updateTextInputArea();
+}
+
+void Engine::commitActiveComposition() {
+    if (!document_) return;
+    auto* activeEl = document_->activeElement();
+    layout::KeyHandleResult r;
+    std::string data;
+    if (auto* input = getElInput(activeEl);
+        input && input->isFocused() && input->isComposing()) {
+        data = input->compositionText();
+        r = input->compositionCommit(activeEl, data);
+    } else if (auto* ta = getElTextarea(activeEl);
+               ta && ta->isFocused() && ta->isComposing()) {
+        data = ta->compositionText();
+        r = ta->compositionCommit(activeEl, data);
+    } else {
+        return;
+    }
+    if (!r.handled) return;
+    dispatchCompositionEvent(activeEl, "compositionupdate", data);
+    dispatchInputEvent(activeEl, data, "insertCompositionText", true);
+    dispatchCompositionEvent(activeEl, "compositionend", data);
+    markAppBaseDirty();
+    uiDirty_ = true;
+    updateTextInputArea();
+}
+
+void Engine::handleProgrammaticFocus(dom::Document* doc, dom::Element* oldEl,
+                                     dom::Element* newEl) {
+    // App document only: iframe and system-panel controls never own the
+    // window's IME state.
+    if (!doc || !document_ || doc != document_.get()) return;
+
+    commitActiveComposition();
+
+    if (auto* prevInput = getElInput(oldEl)) prevInput->setFocused(false);
+    if (auto* prevTa = getElTextarea(oldEl)) prevTa->setFocused(false);
+
+    auto* newInput = getElInput(newEl);
+    auto* newTa = getElTextarea(newEl);
+    if (newInput) {
+        newInput->setFocused(true);
+        if (newInput->isTextType(newEl)) {
+            std::string v = newEl->getAttribute("value");
+            newInput->setCursorPos(static_cast<int>(v.size()));
+            safeStartTextInput(window_.get());
+        } else {
+            safeStopTextInput(window_.get());
+        }
+    } else if (newTa) {
+        newTa->setFocused(true);
+        std::string v = newEl->hasAttribute("value")
+                            ? newEl->getAttribute("value")
+                            : newEl->textContent();
+        newTa->setCursorPos(static_cast<int>(v.size()));
+        safeStartTextInput(window_.get());
+    } else if (newEl && inEditableHost(newEl)) {
+        // A contenteditable host still takes raw text input (commits insert
+        // via the DOM Selection); keep SDL text input running for it.
+        safeStartTextInput(window_.get());
+    } else {
+        safeStopTextInput(window_.get());
+    }
+
+    updateTextInputArea();
+    markAppBaseDirty();
+    uiDirty_ = true;
 }
 
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
@@ -1642,6 +1820,26 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     }
 
     if (!document_) return;
+
+    // A caret-moving or command key arriving while an IME composition is in
+    // progress commits the preedit first (the browser's blur/caret-move
+    // behavior — provisional text is never stranded). Real OS IMEs consume
+    // these keys during composition, so in practice this only fires for
+    // headless-injected or stray events. Plain character keys pass through
+    // untouched: during a real composition SDL still delivers their raw
+    // keydowns alongside the TEXT_EDITING stream.
+    {
+        const bool caretOrCommandKey =
+            util::hasPrimaryMod(mod) ||
+            keycode == SDLK_LEFT || keycode == SDLK_RIGHT ||
+            keycode == SDLK_UP || keycode == SDLK_DOWN ||
+            keycode == SDLK_HOME || keycode == SDLK_END ||
+            keycode == SDLK_PAGEUP || keycode == SDLK_PAGEDOWN ||
+            keycode == SDLK_BACKSPACE || keycode == SDLK_DELETE ||
+            keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER ||
+            keycode == SDLK_TAB || keycode == SDLK_ESCAPE;
+        if (caretOrCommandKey) commitActiveComposition();
+    }
 
     // Tab key: dispatch to JS first; only advance focus if not prevented
     if (keycode == SDLK_TAB) {
@@ -1813,6 +2011,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         applyKeyResult(activeEl, result);
         // Still dispatch keydown event for JS listeners
         auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
+        evt.setIsComposing(compositionActive());
         dispatchEvent(activeEl, evt);
         return;
     }
@@ -1964,6 +2163,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
     // Default: dispatch keydown to body
     auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
+    evt.setIsComposing(compositionActive());
     dom::Element* target = document_->body();
     if (target) {
         dispatchEvent(target, evt);
@@ -1987,6 +2187,7 @@ void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
 
     // Dispatch keyup to the focused input if any, otherwise body
     auto evt = makeKeyboardEvent("keyup", keycode, scancode, mod, repeat);
+    evt.setIsComposing(compositionActive());
 
     auto* activeEl = document_->activeElement();
     bool focusedControl = false;
@@ -2029,6 +2230,30 @@ void Engine::handleTextInput(const std::string& text) {
     auto* activeEl = document_->activeElement();
     layout::KeyHandleResult result;
 
+    // TEXT_INPUT while a composition is in progress is the IME commit:
+    // replace the preedit with the committed text (one undo entry) and close
+    // the composition with Chrome's observable order — compositionupdate →
+    // input(insertCompositionText) → compositionend.
+    {
+        layout::KeyHandleResult commit;
+        if (auto* textarea = getElTextarea(activeEl);
+            textarea && textarea->isFocused() && textarea->isComposing()) {
+            commit = textarea->compositionCommit(activeEl, text);
+        } else if (auto* input = getElInput(activeEl);
+                   input && input->isFocused() && input->isComposing()) {
+            commit = input->compositionCommit(activeEl, text);
+        }
+        if (commit.handled) {
+            dispatchCompositionEvent(activeEl, "compositionupdate", text);
+            dispatchInputEvent(activeEl, text, "insertCompositionText", true);
+            dispatchCompositionEvent(activeEl, "compositionend", text);
+            markAppBaseDirty();
+            uiDirty_ = true;
+            updateTextInputArea();
+            return;
+        }
+    }
+
     if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
         result = textarea->handleTextInput(activeEl, text);
     } else if (auto* input = getElInput(activeEl); input && input->isFocused()) {
@@ -2059,6 +2284,9 @@ void Engine::handleTextInput(const std::string& text) {
 
 void Engine::advanceFocus(bool reverse) {
     if (!document_) return;
+
+    // Tab away mid-composition commits the preedit (never strands it).
+    commitActiveComposition();
 
     // Build list of focusable elements in DOM order
     std::vector<dom::Element*> focusable;
@@ -2149,6 +2377,7 @@ void Engine::advanceFocus(bool reverse) {
         safeStopTextInput(window_.get());
     }
 
+    updateTextInputArea();
     uiDirty_ = true;
 }
 

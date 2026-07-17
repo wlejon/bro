@@ -20,6 +20,11 @@ public:
     std::function<void(int32_t keycode, int32_t scancode, uint16_t mod, bool repeat)> onKeyDown;
     std::function<void(int32_t keycode, int32_t scancode, uint16_t mod, bool repeat)> onKeyUp;
     std::function<void(const std::string& text)> onTextInput;
+    // IME composition update (SDL_EVENT_TEXT_EDITING): `text` is the current
+    // preedit ("" when the composition is cancelled/ended without commit),
+    // `start` the composition-cursor position and `length` the selected span
+    // within it, both in UTF-8 characters (SDL's units).
+    std::function<void(const std::string& text, int32_t start, int32_t length)> onTextEditing;
     std::function<void(float x, float y, float dx, float dy)> onWheel;
     std::function<void(const std::string& path, float x, float y)> onDropFile;
     std::function<void(const std::string& text, float x, float y)> onDropText;

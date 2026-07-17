@@ -55,8 +55,18 @@ public:
     }
 
     // Drop the undo/redo history. Called on programmatic `.value =` writes,
-    // which invalidate every recorded delta (browser behavior).
-    void clearHistory() { undo_.clear(); }
+    // which invalidate every recorded delta (browser behavior). Also drops
+    // any in-progress composition state — the script owns the value now.
+    void clearHistory() { undo_.clear(); comp_ = {}; }
+
+    // --- IME composition (see TextComposition in text_undo.h; semantics
+    // identical to ElInput's) ----------------------------------------------
+    bool isComposing() const { return comp_.active; }
+    const std::string& compositionText() const { return comp_.preedit; }
+    KeyHandleResult compositionUpdate(dom::Element* el, const std::string& text,
+                                      int cursorCp);
+    KeyHandleResult compositionCommit(dom::Element* el, const std::string& text);
+    KeyHandleResult compositionCancel(dom::Element* el);
 
     // Caret index (byte offset into the value) for a point in the draw pass's
     // surface space — what the engine hands to focusNewControl. Resolves
@@ -77,6 +87,11 @@ public:
 
     float scrollY() const { return scrollY_; }
     void setScrollY(float y) { scrollY_ = y; }
+
+    // Caret rectangle in the draw pass's surface space, computed live against
+    // the same soft-wrapped visual lines the frame drew — feeds
+    // SDL_SetTextInputArea so the IME candidate window tracks the caret.
+    bool caretRect(float& x, float& y, float& w, float& h);
 
     void setElement(dom::Element* el) { elem_ = el; }
     dom::Element* element() const { return elem_; }
@@ -111,6 +126,8 @@ private:
     TextRange sel_;
     // Per-element undo/redo history.
     TextUndoStack undo_;
+    // In-progress IME composition (inactive when comp_.active is false).
+    TextComposition comp_;
     bool focused_ = false;
     float scrollY_ = 0.0f;
     // Content width the text last soft-wrapped against (set in draw()). Cursor

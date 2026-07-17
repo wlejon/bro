@@ -71,8 +71,27 @@ public:
     }
 
     // Drop the undo/redo history. Called on programmatic `.value =` writes,
-    // which invalidate every recorded delta (browser behavior).
-    void clearHistory() { undo_.clear(); }
+    // which invalidate every recorded delta (browser behavior). Also drops
+    // any in-progress composition state — the script owns the value now, so
+    // the preedit's recorded position is meaningless.
+    void clearHistory() { undo_.clear(); comp_ = {}; }
+
+    // --- IME composition (see TextComposition in text_undo.h) -------------
+    bool isComposing() const { return comp_.active; }
+    const std::string& compositionText() const { return comp_.preedit; }
+    // Replace the current preedit with `text`, starting the composition on
+    // the first call (which also deletes any active selection — part of the
+    // same eventual undo entry). `cursorCp` is SDL's composition cursor in
+    // UTF-8 characters within `text` (< 0 → end); the control caret lands
+    // there so the caret renders at the composition cursor. No undo entry.
+    KeyHandleResult compositionUpdate(dom::Element* el, const std::string& text,
+                                      int cursorCp);
+    // Finalize the composition: replace the preedit with `text`, caret after
+    // it, and record ONE discrete undo entry from the pre-composition state.
+    KeyHandleResult compositionCommit(dom::Element* el, const std::string& text);
+    // Abort the composition: restore the pre-composition value and selection.
+    // Leaves no undo entry.
+    KeyHandleResult compositionCancel(dom::Element* el);
 
     // Caret index (byte offset into the value) for a point given in the same
     // space as lastDrawPos() — the draw pass's surface space, which is what the
@@ -107,6 +126,12 @@ public:
 
     struct DrawPos { float x, y, w, h; };
     DrawPos lastDrawPos() const { return lastDrawPos_; }
+
+    // Caret rectangle in the draw pass's surface space (content space for the
+    // app document), computed live — feeds SDL_SetTextInputArea so the native
+    // IME candidate window tracks the caret. False for non-text types or when
+    // the control has no box yet.
+    bool caretRect(float& x, float& y, float& w, float& h);
 
     // Chrome sizes for range inputs derived from the element's drawn height,
     // so the thumb always fits inside the element's hit box regardless of
@@ -161,6 +186,8 @@ private:
     TextRange sel_;
     // Per-element undo/redo history for the text-editing types.
     TextUndoStack undo_;
+    // In-progress IME composition (inactive when comp_.active is false).
+    TextComposition comp_;
     // Horizontal scroll of the text under the (fixed) content box, in px. Set
     // in draw() to keep the caret inside the box once the value outgrows it;
     // caretIndexFromPoint adds it back to undo the shift.

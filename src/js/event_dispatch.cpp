@@ -287,6 +287,14 @@ static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& ev
                           JS_NewBool(ctx, inputEvt->isComposing()));
     }
 
+    // CompositionEvent properties. Unlike InputEvent.data, an empty string
+    // stays "" (compositionend reports "" on cancel, not null).
+    auto* compEvt = dynamic_cast<bro::dom::CompositionEvent*>(&event);
+    if (compEvt) {
+        JS_SetPropertyStr(ctx, jsEvent, "data",
+                          JS_NewString(ctx, compEvt->data().c_str()));
+    }
+
     // SubmitEvent — carries the submit button (if any) that triggered it.
     auto* submitEvt = dynamic_cast<bro::dom::SubmitEvent*>(&event);
     if (submitEvt) {

@@ -432,6 +432,52 @@ static JSValue js_textInput(JSContext* ctx, JSValueConst, int argc, JSValueConst
     return JS_UNDEFINED;
 }
 
+// --- IME composition simulation ---
+// Injects through the same engine path as SDL_EVENT_TEXT_EDITING /
+// SDL_EVENT_TEXT_INPUT, so composition events, preedit-in-value rendering,
+// and undo behavior all run the real pipeline.
+
+static JSValue js_imeCompose(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "imeCompose(text [, cursorPos]) requires text");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    const char* text = JS_ToCString(ctx, argv[0]);
+    if (!text) return JS_EXCEPTION;
+    int cursor = -1;  // < 0 → composition cursor at the end of the preedit
+    if (argc >= 2) JS_ToInt32(ctx, &cursor, argv[1]);
+
+    engine->handleTextEditing(text, cursor, 0);
+    JS_FreeCString(ctx, text);
+    engine->flush();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_imeCommit(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "imeCommit(text) requires text");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    const char* text = JS_ToCString(ctx, argv[0]);
+    if (!text) return JS_EXCEPTION;
+
+    // A commit is a TEXT_INPUT — the same event a real IME sends.
+    engine->handleTextInput(text);
+    JS_FreeCString(ctx, text);
+    engine->flush();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_imeCancel(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    // A cancel is an empty TEXT_EDITING event.
+    engine->handleTextEditing("", 0, 0);
+    engine->flush();
+    return JS_UNDEFINED;
+}
+
 // --- Clipboard simulation ---
 
 static JSValue js_paste(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -1217,6 +1263,10 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         .function("keyDown", js_keyDown, 4)
         .function("keyUp", js_keyUp, 3)
         .function("textInput", js_textInput, 1)
+        // IME composition simulation
+        .function("imeCompose", js_imeCompose, 2)
+        .function("imeCommit", js_imeCommit, 1)
+        .function("imeCancel", js_imeCancel, 0)
         // Clipboard simulation
         .function("paste", js_paste, 1)
         .function("copy", js_copy, 0)

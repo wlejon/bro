@@ -199,6 +199,7 @@ void Engine::run() {
     eventLoop_->onKeyDown    = [this](int32_t k, int32_t s, uint16_t m, bool r) { handleKeyDown(k, s, (int)m, r); };
     eventLoop_->onKeyUp      = [this](int32_t k, int32_t s, uint16_t m, bool r) { handleKeyUp(k, s, (int)m, r); };
     eventLoop_->onTextInput  = [this](const std::string& t) { handleTextInput(t); };
+    eventLoop_->onTextEditing = [this](const std::string& t, int32_t s, int32_t l) { handleTextEditing(t, s, l); };
     eventLoop_->onWheel      = [this](float x, float y, float dx, float dy) { handleWheel(x, y, dx, dy); };
     eventLoop_->onDropFile   = [this](const std::string& p, float x, float y) { handleDropFile(p, x, y); };
     eventLoop_->onDropText   = [this](const std::string& t, float x, float y) { handleDropText(t, x, y); };

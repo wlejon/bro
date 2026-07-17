@@ -383,6 +383,115 @@ KeyHandleResult ElTextarea::insertText_(dom::Element* el, const std::string& tex
     return r;
 }
 
+// ---------------------------------------------------------------------------
+// IME composition — same contract as ElInput's (see el_input.cpp); the only
+// differences are textarea value storage (attribute-or-textContent) and the
+// absence of type filtering.
+// ---------------------------------------------------------------------------
+
+KeyHandleResult ElTextarea::compositionUpdate(dom::Element* el,
+                                              const std::string& text,
+                                              int cursorCp) {
+    KeyHandleResult r;
+    if (!focused_ || !el) return r;
+
+    std::string val = readCurrentValue(el);
+    sel_.clampTo(static_cast<int>(val.size()));
+
+    if (!comp_.active) {
+        comp_.beforeVal = val;
+        comp_.selBefore = {sel_.anchor, sel_.caret};
+        std::string discarded;
+        deleteSelection_(val, discarded);
+        comp_.start = sel_.caret;
+        comp_.active = true;
+        undo_.breakCoalescing();
+    } else {
+        val.erase(static_cast<size_t>(comp_.start),
+                  static_cast<size_t>(comp_.length));
+    }
+
+    val.insert(static_cast<size_t>(comp_.start), text);
+    comp_.length = static_cast<int>(text.size());
+    comp_.preedit = text;
+    sel_.collapseTo(comp_.start + utf8ByteForCodepoint(text, cursorCp));
+    el->setAttribute("value", val);
+
+    r.handled = true;
+    r.dispatchInput = true;
+    r.inputData = text;
+    r.inputType = "insertCompositionText";
+    return r;
+}
+
+KeyHandleResult ElTextarea::compositionCommit(dom::Element* el,
+                                              const std::string& text) {
+    KeyHandleResult r;
+    if (!comp_.active || !el) return r;
+
+    std::string val = readCurrentValue(el);
+    const int len = static_cast<int>(val.size());
+    comp_.start = std::clamp(comp_.start, 0, len);
+    comp_.length = std::clamp(comp_.length, 0, len - comp_.start);
+
+    val.erase(static_cast<size_t>(comp_.start),
+              static_cast<size_t>(comp_.length));
+    val.insert(static_cast<size_t>(comp_.start), text);
+    sel_.collapseTo(comp_.start + static_cast<int>(text.size()));
+    el->setAttribute("value", val);
+
+    undo_.record(comp_.beforeVal, comp_.selBefore, val,
+                 {sel_.anchor, sel_.caret},
+                 TextUndoStack::Kind::Discrete, util::currentTimeMs());
+    comp_ = {};
+
+    r.handled = true;
+    r.dispatchInput = true;
+    r.inputData = text;
+    r.inputType = "insertCompositionText";
+    return r;
+}
+
+KeyHandleResult ElTextarea::compositionCancel(dom::Element* el) {
+    KeyHandleResult r;
+    if (!comp_.active || !el) return r;
+
+    el->setAttribute("value", comp_.beforeVal);
+    sel_.set(comp_.selBefore.anchor, comp_.selBefore.caret);
+    sel_.clampTo(static_cast<int>(comp_.beforeVal.size()));
+    comp_ = {};
+
+    r.handled = true;
+    r.dispatchInput = true;
+    r.inputData = "";
+    r.inputType = "insertCompositionText";
+    return r;
+}
+
+bool ElTextarea::caretRect(float& x, float& y, float& w, float& h) {
+    if (!renderer_ || !elem_) return false;
+    DrawPos box = contentBox();
+    if (box.w <= 0 || box.h <= 0) return false;
+
+    std::string val = readCurrentValue(elem_);
+    render::FontRef fr = getFontRef();
+    auto lm = render::LineMetrics::from(renderer_->measureText("M", fr));
+    float lineH = lm.lineHeight();
+    if (lineH <= 0.0f) return false;
+
+    float wrapW = wrapWidth_ > 0.0f ? wrapWidth_ : box.w;
+    auto vls = buildVisualLines(val, wrapW, fr, renderer_);
+    const int cpos = std::clamp(sel_.caret, 0, static_cast<int>(val.size()));
+    const int li = caretVisualLine(vls, cpos);
+
+    x = box.x + runWidthTo(val, vls[li].start, static_cast<size_t>(cpos), fr,
+                           renderer_);
+    y = box.y + li * lineH - scrollY_;
+    w = 1.0f;
+    h = lineH;
+    return true;
+}
+
 void ElTextarea::getContentSize(float& w, float& h) {
     if (!renderer_) {
         w = 173;
@@ -702,6 +811,30 @@ void ElTextarea::draw(render::Renderer* renderer,
         float cursorTop = baseY + cursorLine * lineHeight;
         float cursorBottom = cursorTop + lineHeight;
         renderer_->drawLine(cursorX, cursorTop, cursorX, cursorBottom, textColor, 1.0f);
+
+        // IME preedit: thin underline under the provisional run, one segment
+        // per visual line it spans, just below each line's baseline.
+        if (comp_.active && comp_.length > 0 && !isPlaceholder) {
+            const int n = static_cast<int>(text.size());
+            const int ps = std::clamp(comp_.start, 0, n);
+            const int pe = std::clamp(comp_.start + comp_.length, ps, n);
+            for (int i = 0; pe > ps && i < static_cast<int>(vls.size()); ++i) {
+                float lineY = baseY + i * lineHeight;
+                if (lineY + lineHeight < y) continue;
+                if (lineY > y + h) break;
+                int a = std::max(ps, static_cast<int>(vls[i].start));
+                int b = std::min(pe, static_cast<int>(vls[i].end));
+                if (b <= a) continue;
+                float ux0 = baseX + runWidthTo(text, vls[i].start,
+                                               static_cast<size_t>(a), fontRef,
+                                               renderer_);
+                float ux1 = baseX + runWidthTo(text, vls[i].start,
+                                               static_cast<size_t>(b), fontRef,
+                                               renderer_);
+                float uy = lineY + lm.ascent + 2.0f;
+                renderer_->drawLine(ux0, uy, ux1, uy, textColor, 1.0f);
+            }
+        }
     }
 
     renderer_->restore();

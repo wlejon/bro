@@ -84,6 +84,13 @@ void EventLoop::pollEvents() {
                 }
                 break;
 
+            case SDL_EVENT_TEXT_EDITING:
+                if (onTextEditing) {
+                    onTextEditing(event.edit.text ? event.edit.text : "",
+                                  event.edit.start, event.edit.length);
+                }
+                break;
+
             case SDL_EVENT_MOUSE_WHEEL:
                 if (onWheel) {
                     onWheel(event.wheel.mouse_x, event.wheel.mouse_y,

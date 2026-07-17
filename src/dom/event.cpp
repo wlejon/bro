@@ -75,6 +75,11 @@ InputEvent::InputEvent(const std::string& type, bool bubbles, bool cancelable)
 {
 }
 
+CompositionEvent::CompositionEvent(const std::string& type, bool bubbles, bool cancelable)
+    : Event(type, bubbles, cancelable)
+{
+}
+
 TransitionEvent::TransitionEvent(const std::string& type, bool bubbles, bool cancelable)
     : Event(type, bubbles, cancelable)
 {

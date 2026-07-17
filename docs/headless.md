@@ -64,6 +64,9 @@ Mouse coordinates are **viewport-relative**, matching `getBoundingClientRect()` 
 | `keyDown(keycode [, scancode, mod, repeat])` | Simulate a key press (SDL keycodes) |
 | `keyUp(keycode [, scancode, mod])` | Simulate a key release |
 | `textInput(text)` | Simulate text input (for typing into focused input/textarea) |
+| `imeCompose(text [, cursorPos])` | Simulate an IME composition (preedit) update on the focused input/textarea — the same engine path as `SDL_EVENT_TEXT_EDITING`. The preedit shows inline in `.value` as underlined provisional text; `cursorPos` is the composition cursor in characters within `text` (default: end). Fires `compositionstart` (first call) / `compositionupdate` and `input` with `inputType: "insertCompositionText"`. |
+| `imeCommit(text)` | Commit the composition with `text` (the same path as a real IME's `SDL_EVENT_TEXT_INPUT`): replaces the preedit, fires the final `compositionupdate` → `input` → `compositionend`, and records ONE undo entry for the whole composition. Without an active composition it behaves like `textInput(text)`. |
+| `imeCancel()` | Cancel the composition (an empty editing event): removes the preedit, restores the pre-composition value/selection, fires `compositionupdate("")` → `input` → `compositionend("")`, leaves no undo entry. |
 | `paste(text)` | Simulate paste on focused element with the given text (dispatches paste event, inserts into input/textarea) |
 | `copy()` | Simulate copy on focused element (dispatches copy event, returns the selected text — a collapsed caret copies nothing) |
 | `cut()` | Simulate cut on focused element (dispatches cut event, removes the selected range, returns the cut text) |
@@ -103,6 +106,18 @@ history for user edits, matching standard editor behavior:
 
 In headless scripts, drive it with `textInput(...)`, `keyDown/keyUp` (e.g.
 `keyDown(122 /* z */, 0, 0x0040 /* LCTRL */)`), `paste(...)`, and `cut()`.
+
+### IME composition
+
+CJK (and dead-key) input composes through `imeCompose`/`imeCommit`/`imeCancel`
+(table above). Semantics match browsers: the preedit is visible in `.value`
+during composition (rendered with an underline and the composition-cursor
+caret), a commit is one discrete undo entry from the pre-composition state, a
+cancel restores it and leaves no entry, and anything that moves the caret or
+focus mid-composition (mouse press, arrow/command keys, Tab, `.blur()`)
+**commits** the current preedit rather than stranding it. Composition offsets
+follow the controls' byte-offset convention (`selectionStart`/`selectionEnd`
+are UTF-8 byte offsets).
 
 ### Settings
 

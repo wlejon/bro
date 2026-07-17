@@ -62,6 +62,16 @@ inline int utf8SnapFwd(const std::string& s, int pos) {
     return i;
 }
 
+// Byte offset of codepoint index `cp` in `s` (clamped; cp < 0 means "end").
+// SDL's TEXT_EDITING composition cursor counts UTF-8 characters, while the
+// controls store byte offsets.
+inline int utf8ByteForCodepoint(const std::string& s, int cp) {
+    if (cp < 0) return static_cast<int>(s.size());
+    int b = 0;
+    while (cp > 0 && b < static_cast<int>(s.size())) { b = utf8Next(s, b); --cp; }
+    return b;
+}
+
 // Character class for word selection. Non-ASCII bytes count as word characters
 // so a double-click on an accented or CJK word takes the whole run.
 inline bool isWordChar(unsigned char c) {

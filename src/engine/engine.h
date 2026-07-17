@@ -189,6 +189,14 @@ public:
     void handleKeyDown(int keycode, int scancode, int mod, bool repeat);
     void handleKeyUp(int keycode, int scancode, int mod, bool repeat);
     void handleTextInput(const std::string& text);
+    /// IME composition update (SDL_EVENT_TEXT_EDITING, and the headless
+    /// imeCompose/imeCancel seam). `text` is the current preedit ("" cancels
+    /// the composition), `start` the composition cursor in UTF-8 characters
+    /// within it. The focused input/textarea shows the preedit inline in its
+    /// value as provisional text (browser behavior); a TEXT_INPUT while
+    /// composing commits it. `length` (SDL's selected span) is accepted for
+    /// signature parity but the preedit renders as one underlined run.
+    void handleTextEditing(const std::string& text, int start, int length);
     void handleWheel(float x, float y, float dx, float dy);
 
     /// Eases accumulated wheel deltas (see wheelResidualY_) into scrollY_
@@ -240,6 +248,14 @@ public:
     /// All gamepad slots (connected and not) — read by the JS bindings to
     /// build navigator.getGamepads() snapshots.
     const std::vector<GamepadState>& gamepads() const { return gamepads_; }
+
+    /// Programmatic focus transfer from JS .focus()/.blur() on the app
+    /// document: commits any in-progress IME composition, mirrors the
+    /// control focused flags (so typing works after .focus(), as in a
+    /// browser), and starts/stops SDL text input to match the new focus.
+    /// No-op for documents other than the app document (iframes/panels).
+    void handleProgrammaticFocus(dom::Document* doc, dom::Element* oldEl,
+                                 dom::Element* newEl);
 
     // Clipboard simulation (for headless testing — bypasses system clipboard)
     void simulatePaste(const std::string& text);
@@ -544,7 +560,24 @@ private:
     float overlayMouseY(float y) const;
     void applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r);
     void dispatchInputEvent(dom::Element* el, const std::string& data = "",
-                            const std::string& inputType = "");
+                            const std::string& inputType = "",
+                            bool isComposing = false);
+    // --- IME composition helpers (input_handling.cpp) ---
+    /// True when the app document's focused input/textarea has a preedit.
+    bool compositionActive();
+    /// Dispatch a bubbling compositionstart/update/end event.
+    void dispatchCompositionEvent(dom::Element* el, const char* type,
+                                  const std::string& data);
+    /// Commit the in-progress preedit as final text (the browser's blur /
+    /// caret-move behavior) with the full compositionupdate → input →
+    /// compositionend sequence. No-op when nothing is composing. Called
+    /// before focus changes, mouse presses, and caret-moving keys so
+    /// provisional text is never stranded.
+    void commitActiveComposition();
+    /// Report the focused text control's caret rect to SDL
+    /// (SDL_SetTextInputArea) so the native IME candidate window tracks the
+    /// caret. No-op without a window or focused text control.
+    void updateTextInputArea();
     void dispatchFocusEvents(dom::Element* oldTarget, dom::Element* newTarget);
     void dispatchScrollEvent(dom::Element* el);
 
