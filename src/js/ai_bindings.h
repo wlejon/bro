@@ -135,6 +135,11 @@ brogameagent::NavGrid* navGridFromJS(JSContext* ctx, JSValueConst v);
 /// wrapper (including builds without navmesh support).
 brogameagent::NavMesh* navMeshFromJS(JSContext* ctx, JSValueConst v);
 
+/// Shared-ownership variant of navMeshFromJS. C++-side consumers that must
+/// outlive the JS wrapper (AgentBinding::setNavMesh) take this so a dropped
+/// JS reference can never dangle a mesh an agent is still routing on.
+std::shared_ptr<brogameagent::NavMesh> navMeshSharedFromJS(JSContext* ctx, JSValueConst v);
+
 /// Construct a wrapped AINavGrid (a bro.ai.game NavGrid JS value) covering the
 /// given world-space XZ bounds at `cellSize`. Lets other bindings (e.g.
 /// TileWorld::syncNavGrid / toNavGrid) hand back a ready-to-use nav grid that

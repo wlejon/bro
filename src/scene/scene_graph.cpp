@@ -21,6 +21,8 @@ using bromath::Quat;
 
 SceneGraph::SceneGraph() {
     root_ = std::make_unique<SceneNode>("__root__");
+    liveToken_ = std::make_shared<LivenessToken>();
+    liveToken_->graph = this;
 }
 
 
@@ -32,10 +34,11 @@ SceneGraph::~SceneGraph() {
     // handles that never upgraded to shared ownership).
     if (outputTexSource_) outputTexSource_->graph = nullptr;
 
-    root_->traverse([](SceneNode* n) {
-        for (auto* c : n->children()) {
-        }
-    });
+    // Invalidate the JS-wrapper liveness token first thing, so any wrapper
+    // call that races teardown (there is none today — same thread — but the
+    // ordering costs nothing) resolves to "graph gone" before nodes die.
+    if (liveToken_) liveToken_->graph = nullptr;
+
     nodes_.clear();
 }
 
@@ -146,6 +149,12 @@ void SceneGraph::tickAnimations(float dtSec) {
         if (it == nodes_.end() || !it->second) continue;
         SceneNode* n = it->second.get();
         n->onTick(dtSec);
+        // A callback fired from inside onTick (sprite animation-end) may
+        // have destroyed this node — or any other — so re-resolve before
+        // touching `n` again.
+        it = nodes_.find(id);
+        if (it == nodes_.end() || !it->second) continue;
+        n = it->second.get();
         // One-shot particle completion fires after onTick returns so the
         // callback can safely destroy its own node (deferred-destroy safe:
         // `n` is never touched after the call).
@@ -244,6 +253,11 @@ SceneNode* SceneGraph::findById(uint32_t id) const {
     return (it != nodes_.end()) ? it->second.get() : nullptr;
 }
 
+SceneNode* SceneGraph::resolveNode(uint32_t id) const {
+    if (root_ && root_->id() == id) return root_.get();
+    return findById(id);
+}
+
 SceneNode* SceneGraph::findByName(const std::string& name) const {
     for (auto& [id, node] : nodes_) {
         if (node->name() == name) return node.get();
@@ -311,13 +325,16 @@ void SceneGraph::syncPhysics() {
 // AI integration
 // ---------------------------------------------------------------------------
 
-void SceneGraph::attachAIWorld(brogameagent::World* world, float stepHz, int maxStepsPerFrame) {
-    if (!world) { aiTicker_.reset(); return; }
+void SceneGraph::attachAIWorld(brogameagent::World* world, float stepHz, int maxStepsPerFrame,
+                               std::shared_ptr<void> keepAlive) {
+    if (!world) { aiTicker_.reset(); aiWorldPin_.reset(); return; }
     aiTicker_ = std::make_unique<AIWorldTicker>(world, stepHz, maxStepsPerFrame);
+    aiWorldPin_ = std::move(keepAlive);
 }
 
 void SceneGraph::detachAIWorld() {
     aiTicker_.reset();
+    aiWorldPin_.reset();
 }
 
 AgentBinding* SceneGraph::attachAgentBinding(SceneNode* node) {

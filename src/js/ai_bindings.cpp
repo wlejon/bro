@@ -34,11 +34,13 @@ struct NavGridData {
 };
 
 #ifdef BROGAMEAGENT_HAS_NAVMESH
-// Owns only C++ state (no JSValue refs), so no gc_mark is needed. Consumers
-// that keep a raw NavMesh* (AgentBinding) pin the JS wrapper on their own
-// object (`__navMesh`) to keep this alive, mirroring the NavGrid pattern.
+// Owns only C++ state (no JSValue refs), so no gc_mark is needed. The mesh is
+// held by shared_ptr so C++-side consumers (AgentBinding::setNavMesh) can
+// share ownership via navMeshSharedFromJS — the mesh then outlives the JS
+// wrapper even if the app drops every JS reference while an agent is still
+// routing on it.
 struct NavMeshData {
-    std::unique_ptr<brogameagent::NavMesh> mesh;
+    std::shared_ptr<brogameagent::NavMesh> mesh;
 };
 #endif
 
@@ -3758,6 +3760,16 @@ brogameagent::NavMesh* navMeshFromJS(JSContext* ctx, JSValueConst val) {
 #ifdef BROGAMEAGENT_HAS_NAVMESH
     auto* d = qjsbind::unwrap<NavMeshData>(ctx, val);
     return d && d->mesh ? d->mesh.get() : nullptr;
+#else
+    (void)ctx; (void)val;
+    return nullptr;
+#endif
+}
+
+std::shared_ptr<brogameagent::NavMesh> navMeshSharedFromJS(JSContext* ctx, JSValueConst val) {
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+    auto* d = qjsbind::unwrap<NavMeshData>(ctx, val);
+    return d ? d->mesh : nullptr;
 #else
     (void)ctx; (void)val;
     return nullptr;

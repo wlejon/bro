@@ -99,15 +99,15 @@ static bromath::Color parseColorProp(JSContext* ctx, JSValueConst obj, const cha
 
 static scene::ShapeNode* asShape(JSContext* ctx, JSValueConst val) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, val);
-    if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape)
-        return static_cast<scene::ShapeNode*>(w->node);
+    if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Shape)
+        return static_cast<scene::ShapeNode*>(w->node());
     return nullptr;
 }
 
 static scene::PhysicsNode* asPhysics(JSContext* ctx, JSValueConst val) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, val);
-    if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics)
-        return static_cast<scene::PhysicsNode*>(w->node);
+    if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Physics)
+        return static_cast<scene::PhysicsNode*>(w->node());
     return nullptr;
 }
 
@@ -118,29 +118,32 @@ static scene::PhysicsNode* asPhysics(JSContext* ctx, JSValueConst val) {
 // add(child)
 static JSValue js_node_add(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* pw = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!pw || argc < 1) return JS_UNDEFINED;
+    scene::SceneNode* parent = pw ? pw->node() : nullptr;
+    if (!parent || argc < 1) return JS_UNDEFINED;
     auto* cw = qjsbind::unwrap<NodeWrapper>(ctx, argv[0]);
-    if (!cw) return JS_ThrowTypeError(ctx, "argument must be a SceneNode");
-    pw->node->addChild(cw->node);
+    scene::SceneNode* child = cw ? cw->node() : nullptr;
+    if (!child) return JS_ThrowTypeError(ctx, "argument must be a SceneNode");
+    parent->addChild(child);
     return JS_DupValue(ctx, this_val);
 }
 
 // remove(child)
 static JSValue js_node_remove(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* pw = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!pw || argc < 1) return JS_UNDEFINED;
+    scene::SceneNode* parent = pw ? pw->node() : nullptr;
+    if (!parent || argc < 1) return JS_UNDEFINED;
     auto* cw = qjsbind::unwrap<NodeWrapper>(ctx, argv[0]);
-    if (cw) pw->node->removeChild(cw->node);
+    scene::SceneNode* child = cw ? cw->node() : nullptr;
+    if (child) parent->removeChild(child);
     return JS_UNDEFINED;
 }
 
-// destroy()
+// destroy() — id-resolved wrappers (this one and any other wrapper of the
+// same node or its descendants) all read the node as gone afterwards.
 static JSValue js_node_destroy(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (w && w->graph) {
-        if (w->node) clearSpriteEndCallback(w->node->id());
-        w->graph->destroyNode(w->node);
-        w->node = nullptr;
+    if (w) {
+        if (auto* g = w->graph()) g->destroyNode(w->node());
     }
     return JS_UNDEFINED;
 }
@@ -148,9 +151,10 @@ static JSValue js_node_destroy(JSContext* ctx, JSValueConst this_val, int, JSVal
 // localToWorld(x, y[, z]) → {x, y, z}
 static JSValue js_node_localToWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || argc < 2) return JS_UNDEFINED;
+    scene::SceneNode* node = w ? w->node() : nullptr;
+    if (!node || argc < 2) return JS_UNDEFINED;
     float z = (argc > 2) ? (float)jsNum(ctx, argv[2]) : 0.0f;
-    auto wp = w->node->localToWorld({(float)jsNum(ctx, argv[0]), (float)jsNum(ctx, argv[1]), z});
+    auto wp = node->localToWorld({(float)jsNum(ctx, argv[0]), (float)jsNum(ctx, argv[1]), z});
     JSValue obj = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, obj, "x", JS_NewFloat64(ctx, wp.x));
     JS_SetPropertyStr(ctx, obj, "y", JS_NewFloat64(ctx, wp.y));
@@ -161,10 +165,10 @@ static JSValue js_node_localToWorld(JSContext* ctx, JSValueConst this_val, int a
 // syncToPhysics()
 static JSValue js_node_syncToPhysics(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics) {
-        auto* pn = static_cast<scene::PhysicsNode*>(w->node);
-        if (w->graph && w->graph->physicsWorld())
-            pn->syncToPhysics(w->graph->physicsWorld());
+    if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Physics) {
+        auto* pn = static_cast<scene::PhysicsNode*>(w->node());
+        if (w->graph() && w->graph()->physicsWorld())
+            pn->syncToPhysics(w->graph()->physicsWorld());
     }
     return JS_UNDEFINED;
 }
@@ -286,10 +290,7 @@ static JSValue js_sg_destroyNode(JSContext* ctx, JSValueConst this_val, int argc
     auto* g = getGraph(ctx, this_val);
     if (!g || argc < 1) return JS_UNDEFINED;
     auto* cw = qjsbind::unwrap<NodeWrapper>(ctx, argv[0]);
-    if (cw) {
-        if (cw->node) clearSpriteEndCallback(cw->node->id());
-        g->destroyNode(cw->node);
-    }
+    if (cw) g->destroyNode(cw->node());
     return JS_UNDEFINED;
 }
 
@@ -363,21 +364,21 @@ void SceneBindings::install(JSContext* ctx) {
     // --- Tween class ---
     qjsbind::Class<TweenWrapper>(ctx, "Tween")
         .get("isRunning", [](TweenWrapper* w, JSContext* ctx) -> JSValue {
-            auto* t = w->graph ? w->graph->findTween(w->id) : nullptr;
+            auto* t = w->graph() ? w->graph()->findTween(w->id) : nullptr;
             return JS_NewBool(ctx, t && t->isRunning());
         })
         .get("isPaused", [](TweenWrapper* w, JSContext* ctx) -> JSValue {
-            auto* t = w->graph ? w->graph->findTween(w->id) : nullptr;
+            auto* t = w->graph() ? w->graph()->findTween(w->id) : nullptr;
             return JS_NewBool(ctx, t && t->isPaused());
         })
         .get("isFinished", [](TweenWrapper* w, JSContext* ctx) -> JSValue {
-            auto* t = w->graph ? w->graph->findTween(w->id) : nullptr;
+            auto* t = w->graph() ? w->graph()->findTween(w->id) : nullptr;
             return JS_NewBool(ctx, t && t->isFinished());
         })
         .prop("onFinished",
             [](TweenWrapper*, JSContext*) -> JSValue { return JS_UNDEFINED; },
             [](TweenWrapper* w, JSContext* ctx, JSValue val) {
-                auto* t = w->graph ? w->graph->findTween(w->id) : nullptr;
+                auto* t = w->graph() ? w->graph()->findTween(w->id) : nullptr;
                 if (!t) return;
                 if (JS_IsFunction(ctx, val)) t->setOnFinished(makeVoidCallback(ctx, val));
                 else t->setOnFinished(nullptr);
@@ -395,66 +396,66 @@ void SceneBindings::install(JSContext* ctx) {
     // --- SceneNode class ---
     qjsbind::Class<NodeWrapper>(ctx, "SceneNode")
         // Common properties
-        .get("id", [](NodeWrapper* w) -> int { return w->node ? w->node->id() : 0; })
+        .get("id", [](NodeWrapper* w) -> int { return w->node() ? w->node()->id() : 0; })
         .prop("name",
-            [](NodeWrapper* w) -> std::string { return w->node ? w->node->name() : ""; },
-            [](NodeWrapper* w, std::string val) { if (w->node) w->node->setName(val); })
+            [](NodeWrapper* w) -> std::string { return w->node() ? w->node()->name() : ""; },
+            [](NodeWrapper* w, std::string val) { if (w->node()) w->node()->setName(val); })
         .prop("visible",
-            [](NodeWrapper* w) -> bool { return w->node ? w->node->visible() : false; },
-            [](NodeWrapper* w, bool val) { if (w->node) w->node->setVisible(val); })
+            [](NodeWrapper* w) -> bool { return w->node() ? w->node()->visible() : false; },
+            [](NodeWrapper* w, bool val) { if (w->node()) w->node()->setVisible(val); })
         .get("childCount", [](NodeWrapper* w) -> int {
-            return (w && w->node) ? (int)w->node->children().size() : 0;
+            return (w && w->node()) ? (int)w->node()->children().size() : 0;
         })
         .get("instanceCount", [](NodeWrapper* w) -> int {
-            if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
-                return (int)static_cast<scene::InstancedMeshNode*>(w->node)->instanceCount();
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::InstancedMesh)
+                return (int)static_cast<scene::InstancedMeshNode*>(w->node())->instanceCount();
             return 0;
         })
         .get("splatCount", [](NodeWrapper* w) -> int {
-            if (w && w->node && w->node->type() == scene::SceneNode::Type::GaussianSplat)
-                return (int)static_cast<scene::GaussianSplatNode*>(w->node)->splatCount();
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::GaussianSplat)
+                return (int)static_cast<scene::GaussianSplatNode*>(w->node())->splatCount();
             return 0;
         })
         .get("atlasCols", [](NodeWrapper* w) -> int {
-            if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
-                return static_cast<scene::InstancedMeshNode*>(w->node)->atlasCols();
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::InstancedMesh)
+                return static_cast<scene::InstancedMeshNode*>(w->node())->atlasCols();
             return 0;
         })
         .get("atlasRows", [](NodeWrapper* w) -> int {
-            if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
-                return static_cast<scene::InstancedMeshNode*>(w->node)->atlasRows();
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::InstancedMesh)
+                return static_cast<scene::InstancedMeshNode*>(w->node())->atlasRows();
             return 0;
         })
         .prop("alphaCutoff",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
-                    return JS_NewFloat64(ctx, (double)static_cast<scene::InstancedMeshNode*>(w->node)->alphaCutoff());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::InstancedMesh)
+                    return JS_NewFloat64(ctx, (double)static_cast<scene::InstancedMeshNode*>(w->node())->alphaCutoff());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
-                    static_cast<scene::InstancedMeshNode*>(w->node)->setAlphaCutoff((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::InstancedMesh)
+                    static_cast<scene::InstancedMeshNode*>(w->node())->setAlphaCutoff((float)val);
             })
         .prop("doubleSided",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
-                    return JS_NewBool(ctx, static_cast<scene::InstancedMeshNode*>(w->node)->doubleSided() ? 1 : 0);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::InstancedMesh)
+                    return JS_NewBool(ctx, static_cast<scene::InstancedMeshNode*>(w->node())->doubleSided() ? 1 : 0);
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, bool val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::InstancedMesh)
-                    static_cast<scene::InstancedMeshNode*>(w->node)->setDoubleSided(val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::InstancedMesh)
+                    static_cast<scene::InstancedMeshNode*>(w->node())->setDoubleSided(val);
             })
         .get("boneCount", [](NodeWrapper* w) -> int {
-            if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh) {
-                if (auto* sm = static_cast<scene::MeshNode*>(w->node)->asSkinnedMesh())
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh) {
+                if (auto* sm = static_cast<scene::MeshNode*>(w->node())->asSkinnedMesh())
                     return sm->boneCount();
             }
             return 0;
         })
         .get("skinReady", [](NodeWrapper* w) -> bool {
-            if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh) {
-                if (auto* sm = static_cast<scene::MeshNode*>(w->node)->asSkinnedMesh())
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh) {
+                if (auto* sm = static_cast<scene::MeshNode*>(w->node())->asSkinnedMesh())
                     return sm->skinReady();
             }
             return false;
@@ -462,11 +463,11 @@ void SceneBindings::install(JSContext* ctx) {
         // True while a custom shader (node.setShader) is installed on this
         // MeshNode / InstancedMeshNode; false on other node types.
         .get("hasShader", [](NodeWrapper* w) -> bool {
-            if (!w || !w->node) return false;
-            if (w->node->type() == scene::SceneNode::Type::Mesh)
-                return static_cast<scene::MeshNode*>(w->node)->hasCustomShader();
-            if (w->node->type() == scene::SceneNode::Type::InstancedMesh)
-                return static_cast<scene::InstancedMeshNode*>(w->node)->hasCustomShader();
+            if (!w || !w->node()) return false;
+            if (w->node()->type() == scene::SceneNode::Type::Mesh)
+                return static_cast<scene::MeshNode*>(w->node())->hasCustomShader();
+            if (w->node()->type() == scene::SceneNode::Type::InstancedMesh)
+                return static_cast<scene::InstancedMeshNode*>(w->node())->hasCustomShader();
             return false;
         })
         // Extra world-space padding on this node's culling bounds — the
@@ -476,27 +477,27 @@ void SceneBindings::install(JSContext* ctx) {
         // elsewhere.
         .prop("cullMargin",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node) {
-                    if (w->node->type() == scene::SceneNode::Type::Mesh)
-                        return JS_NewFloat64(ctx, (double)static_cast<scene::MeshNode*>(w->node)->cullMargin());
-                    if (w->node->type() == scene::SceneNode::Type::InstancedMesh)
-                        return JS_NewFloat64(ctx, (double)static_cast<scene::InstancedMeshNode*>(w->node)->cullMargin());
+                if (w && w->node()) {
+                    if (w->node()->type() == scene::SceneNode::Type::Mesh)
+                        return JS_NewFloat64(ctx, (double)static_cast<scene::MeshNode*>(w->node())->cullMargin());
+                    if (w->node()->type() == scene::SceneNode::Type::InstancedMesh)
+                        return JS_NewFloat64(ctx, (double)static_cast<scene::InstancedMeshNode*>(w->node())->cullMargin());
                 }
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (!w || !w->node) return;
-                if (w->node->type() == scene::SceneNode::Type::Mesh)
-                    static_cast<scene::MeshNode*>(w->node)->setCullMargin((float)val);
-                else if (w->node->type() == scene::SceneNode::Type::InstancedMesh)
-                    static_cast<scene::InstancedMeshNode*>(w->node)->setCullMargin((float)val);
+                if (!w || !w->node()) return;
+                if (w->node()->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node())->setCullMargin((float)val);
+                else if (w->node()->type() == scene::SceneNode::Type::InstancedMesh)
+                    static_cast<scene::InstancedMeshNode*>(w->node())->setCullMargin((float)val);
             })
         .get("type", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-            if (!w || !w->node) return JS_UNDEFINED;
-            switch (w->node->type()) {
+            if (!w || !w->node()) return JS_UNDEFINED;
+            switch (w->node()->type()) {
                 case scene::SceneNode::Type::Mesh:
                     return JS_NewString(ctx,
-                        static_cast<scene::MeshNode*>(w->node)->asSkinnedMesh()
+                        static_cast<scene::MeshNode*>(w->node())->asSkinnedMesh()
                             ? "skinnedMesh" : "mesh");
                 case scene::SceneNode::Type::InstancedMesh: return JS_NewString(ctx, "instancedMesh");
                 case scene::SceneNode::Type::Light:   return JS_NewString(ctx, "light");
@@ -516,8 +517,8 @@ void SceneBindings::install(JSContext* ctx) {
         // Transform
         .prop("position",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (!w || !w->node) return JS_UNDEFINED;
-                const auto& p = w->node->position();
+                if (!w || !w->node()) return JS_UNDEFINED;
+                const auto& p = w->node()->position();
                 JSValue arr = JS_NewArray(ctx);
                 JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, p.x));
                 JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, p.y));
@@ -525,7 +526,7 @@ void SceneBindings::install(JSContext* ctx) {
                 return arr;
             },
             [](NodeWrapper* w, JSContext* ctx, JSValue val) {
-                if (!w || !w->node || !JS_IsArray(val)) return;
+                if (!w || !w->node() || !JS_IsArray(val)) return;
                 JSValue e0 = JS_GetPropertyUint32(ctx, val, 0);
                 JSValue e1 = JS_GetPropertyUint32(ctx, val, 1);
                 JSValue e2 = JS_GetPropertyUint32(ctx, val, 2);
@@ -534,42 +535,42 @@ void SceneBindings::install(JSContext* ctx) {
                 JS_ToFloat64(ctx, &y, e1);
                 JS_ToFloat64(ctx, &z, e2);
                 JS_FreeValue(ctx, e0); JS_FreeValue(ctx, e1); JS_FreeValue(ctx, e2);
-                w->node->setPosition((float)x, (float)y, (float)z);
+                w->node()->setPosition((float)x, (float)y, (float)z);
             })
         .prop("x",
-            [](NodeWrapper* w) -> double { return w->node ? w->node->position().x : 0; },
-            [](NodeWrapper* w, double val) { if (w->node) w->node->setPosition((float)val, w->node->position().y, w->node->position().z); })
+            [](NodeWrapper* w) -> double { return w->node() ? w->node()->position().x : 0; },
+            [](NodeWrapper* w, double val) { if (w->node()) w->node()->setPosition((float)val, w->node()->position().y, w->node()->position().z); })
         .prop("y",
-            [](NodeWrapper* w) -> double { return w->node ? w->node->position().y : 0; },
-            [](NodeWrapper* w, double val) { if (w->node) w->node->setPosition(w->node->position().x, (float)val, w->node->position().z); })
+            [](NodeWrapper* w) -> double { return w->node() ? w->node()->position().y : 0; },
+            [](NodeWrapper* w, double val) { if (w->node()) w->node()->setPosition(w->node()->position().x, (float)val, w->node()->position().z); })
         .prop("z",
-            [](NodeWrapper* w) -> double { return w->node ? w->node->position().z : 0; },
-            [](NodeWrapper* w, double val) { if (w->node) w->node->setPosition(w->node->position().x, w->node->position().y, (float)val); })
+            [](NodeWrapper* w) -> double { return w->node() ? w->node()->position().z : 0; },
+            [](NodeWrapper* w, double val) { if (w->node()) w->node()->setPosition(w->node()->position().x, w->node()->position().y, (float)val); })
         .prop("rotation",
-            [](NodeWrapper* w) -> double { return w->node ? bromath::qtoEuler(w->node->rotation()).z : 0; },
-            [](NodeWrapper* w, double val) { if (w->node) w->node->setRotationZ((float)val); })
+            [](NodeWrapper* w) -> double { return w->node() ? bromath::qtoEuler(w->node()->rotation()).z : 0; },
+            [](NodeWrapper* w, double val) { if (w->node()) w->node()->setRotationZ((float)val); })
         .prop("rotationX",
-            [](NodeWrapper* w) -> double { return w->node ? bromath::qtoEuler(w->node->rotation()).x : 0; },
+            [](NodeWrapper* w) -> double { return w->node() ? bromath::qtoEuler(w->node()->rotation()).x : 0; },
             [](NodeWrapper* w, double val) {
-                if (w->node) {
-                    auto e = bromath::qtoEuler(w->node->rotation());
-                    w->node->setRotationEuler((float)val, e.y, e.z);
+                if (w->node()) {
+                    auto e = bromath::qtoEuler(w->node()->rotation());
+                    w->node()->setRotationEuler((float)val, e.y, e.z);
                 }
             })
         .prop("rotationY",
-            [](NodeWrapper* w) -> double { return w->node ? bromath::qtoEuler(w->node->rotation()).y : 0; },
+            [](NodeWrapper* w) -> double { return w->node() ? bromath::qtoEuler(w->node()->rotation()).y : 0; },
             [](NodeWrapper* w, double val) {
-                if (w->node) {
-                    auto e = bromath::qtoEuler(w->node->rotation());
-                    w->node->setRotationEuler(e.x, (float)val, e.z);
+                if (w->node()) {
+                    auto e = bromath::qtoEuler(w->node()->rotation());
+                    w->node()->setRotationEuler(e.x, (float)val, e.z);
                 }
             })
         .prop("rotationZ",
-            [](NodeWrapper* w) -> double { return w->node ? bromath::qtoEuler(w->node->rotation()).z : 0; },
+            [](NodeWrapper* w) -> double { return w->node() ? bromath::qtoEuler(w->node()->rotation()).z : 0; },
             [](NodeWrapper* w, double val) {
-                if (w->node) {
-                    auto e = bromath::qtoEuler(w->node->rotation());
-                    w->node->setRotationEuler(e.x, e.y, (float)val);
+                if (w->node()) {
+                    auto e = bromath::qtoEuler(w->node()->rotation());
+                    w->node()->setRotationEuler(e.x, e.y, (float)val);
                 }
             })
         // [x,y,z,w] quaternion. Unlike rotationX/Y/Z (which round-trip
@@ -578,8 +579,8 @@ void SceneBindings::install(JSContext* ctx) {
         // (e.g. port-to-port mating in the parts DSL).
         .prop("quaternion",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (!w || !w->node) return JS_UNDEFINED;
-                const auto& q = w->node->rotation();
+                if (!w || !w->node()) return JS_UNDEFINED;
+                const auto& q = w->node()->rotation();
                 JSValue arr = JS_NewArray(ctx);
                 JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, q.x));
                 JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, q.y));
@@ -588,7 +589,7 @@ void SceneBindings::install(JSContext* ctx) {
                 return arr;
             },
             [](NodeWrapper* w, JSContext* ctx, JSValue val) {
-                if (!w || !w->node) return;
+                if (!w || !w->node()) return;
                 if (!JS_IsArray(val)) return;
                 JSValue e0 = JS_GetPropertyUint32(ctx, val, 0);
                 JSValue e1 = JS_GetPropertyUint32(ctx, val, 1);
@@ -604,55 +605,55 @@ void SceneBindings::install(JSContext* ctx) {
                 JS_FreeValue(ctx, e2);
                 JS_FreeValue(ctx, e3);
                 bromath::Quat q{(float)qx, (float)qy, (float)qz, (float)qw};
-                w->node->setRotation(bromath::qnorm(q));
+                w->node()->setRotation(bromath::qnorm(q));
             })
         .prop("scaleX",
-            [](NodeWrapper* w) -> double { return w->node ? w->node->scale().x : 1; },
-            [](NodeWrapper* w, double val) { if (w->node) w->node->setScale((float)val, w->node->scale().y, w->node->scale().z); })
+            [](NodeWrapper* w) -> double { return w->node() ? w->node()->scale().x : 1; },
+            [](NodeWrapper* w, double val) { if (w->node()) w->node()->setScale((float)val, w->node()->scale().y, w->node()->scale().z); })
         .prop("scaleY",
-            [](NodeWrapper* w) -> double { return w->node ? w->node->scale().y : 1; },
-            [](NodeWrapper* w, double val) { if (w->node) w->node->setScale(w->node->scale().x, (float)val, w->node->scale().z); })
+            [](NodeWrapper* w) -> double { return w->node() ? w->node()->scale().y : 1; },
+            [](NodeWrapper* w, double val) { if (w->node()) w->node()->setScale(w->node()->scale().x, (float)val, w->node()->scale().z); })
         .prop("scaleZ",
-            [](NodeWrapper* w) -> double { return w->node ? w->node->scale().z : 1; },
-            [](NodeWrapper* w, double val) { if (w->node) w->node->setScale(w->node->scale().x, w->node->scale().y, (float)val); })
+            [](NodeWrapper* w) -> double { return w->node() ? w->node()->scale().z : 1; },
+            [](NodeWrapper* w, double val) { if (w->node()) w->node()->setScale(w->node()->scale().x, w->node()->scale().y, (float)val); })
 
         // Mesh material (PBR) — no-op on non-mesh nodes.
         .prop("metallic",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
-                    return JS_NewFloat64(ctx, static_cast<scene::MeshNode*>(w->node)->metallic());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh)
+                    return JS_NewFloat64(ctx, static_cast<scene::MeshNode*>(w->node())->metallic());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
-                    static_cast<scene::MeshNode*>(w->node)->setMetallic((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node())->setMetallic((float)val);
             })
         .prop("roughness",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
-                    return JS_NewFloat64(ctx, static_cast<scene::MeshNode*>(w->node)->roughness());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh)
+                    return JS_NewFloat64(ctx, static_cast<scene::MeshNode*>(w->node())->roughness());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
-                    static_cast<scene::MeshNode*>(w->node)->setRoughness((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node())->setRoughness((float)val);
             })
         .prop("emissive",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
-                    return JS_NewFloat64(ctx, static_cast<scene::MeshNode*>(w->node)->emissive());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh)
+                    return JS_NewFloat64(ctx, static_cast<scene::MeshNode*>(w->node())->emissive());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
-                    static_cast<scene::MeshNode*>(w->node)->setEmissive((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node())->setEmissive((float)val);
             })
 
         // LightNode properties — no-op on non-light nodes.
         .get("kind", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-            if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Light)
+            if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Light)
                 return JS_UNDEFINED;
-            switch (static_cast<scene::LightNode*>(w->node)->kind()) {
+            switch (static_cast<scene::LightNode*>(w->node())->kind()) {
                 case scene::LightNode::Kind::Directional: return JS_NewString(ctx, "directional");
                 case scene::LightNode::Kind::Point:       return JS_NewString(ctx, "point");
                 case scene::LightNode::Kind::Spot:        return JS_NewString(ctx, "spot");
@@ -661,9 +662,9 @@ void SceneBindings::install(JSContext* ctx) {
         })
         .prop("direction",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Light)
+                if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Light)
                     return JS_UNDEFINED;
-                const auto& d = static_cast<scene::LightNode*>(w->node)->direction();
+                const auto& d = static_cast<scene::LightNode*>(w->node())->direction();
                 JSValue arr = JS_NewArray(ctx);
                 JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, d.x));
                 JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, d.y));
@@ -671,7 +672,7 @@ void SceneBindings::install(JSContext* ctx) {
                 return arr;
             },
             [](NodeWrapper* w, JSContext* ctx, JSValue val) {
-                if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Light) return;
+                if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Light) return;
                 if (!JS_IsArray(val)) return;
                 double x = 0, y = -1, z = 0;
                 JSValue e0 = JS_GetPropertyUint32(ctx, val, 0);
@@ -680,7 +681,7 @@ void SceneBindings::install(JSContext* ctx) {
                 JS_ToFloat64(ctx, &x, e0);
                 JS_ToFloat64(ctx, &y, e1);
                 JS_ToFloat64(ctx, &z, e2);
-                static_cast<scene::LightNode*>(w->node)->setDirection(
+                static_cast<scene::LightNode*>(w->node())->setDirection(
                     {(float)x, (float)y, (float)z});
                 JS_FreeValue(ctx, e0);
                 JS_FreeValue(ctx, e1);
@@ -688,9 +689,9 @@ void SceneBindings::install(JSContext* ctx) {
             })
         .prop("color",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (!w || !w->node) return JS_UNDEFINED;
-                if (w->node->type() == scene::SceneNode::Type::Light) {
-                    const auto& c = static_cast<scene::LightNode*>(w->node)->color();
+                if (!w || !w->node()) return JS_UNDEFINED;
+                if (w->node()->type() == scene::SceneNode::Type::Light) {
+                    const auto& c = static_cast<scene::LightNode*>(w->node())->color();
                     JSValue arr = JS_NewArray(ctx);
                     JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, c.x));
                     JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, c.y));
@@ -700,8 +701,8 @@ void SceneBindings::install(JSContext* ctx) {
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, JSContext* ctx, JSValue val) {
-                if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Light) return;
-                auto* L = static_cast<scene::LightNode*>(w->node);
+                if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Light) return;
+                auto* L = static_cast<scene::LightNode*>(w->node());
                 if (JS_IsString(val)) {
                     uint8_t r, g, b, a;
                     if (parseColor(jsStr(ctx, val), r, g, b, a))
@@ -722,154 +723,154 @@ void SceneBindings::install(JSContext* ctx) {
             })
         .prop("intensity",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->intensity());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node())->intensity());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    static_cast<scene::LightNode*>(w->node)->setIntensity((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node())->setIntensity((float)val);
             })
         .prop("range",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->range());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node())->range());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    static_cast<scene::LightNode*>(w->node)->setRange((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node())->setRange((float)val);
             })
         .prop("innerAngle",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->innerAngle());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node())->innerAngle());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    static_cast<scene::LightNode*>(w->node)->setInnerAngle((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node())->setInnerAngle((float)val);
             })
         .prop("outerAngle",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->outerAngle());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node())->outerAngle());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    static_cast<scene::LightNode*>(w->node)->setOuterAngle((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node())->setOuterAngle((float)val);
             })
         .prop("castsShadow",
             [](NodeWrapper* w) -> bool {
-                if (!w || !w->node) return false;
-                if (w->node->type() == scene::SceneNode::Type::Light)
-                    return static_cast<scene::LightNode*>(w->node)->castsShadow();
-                if (w->node->type() == scene::SceneNode::Type::Mesh)
-                    return static_cast<scene::MeshNode*>(w->node)->castsShadow();
+                if (!w || !w->node()) return false;
+                if (w->node()->type() == scene::SceneNode::Type::Light)
+                    return static_cast<scene::LightNode*>(w->node())->castsShadow();
+                if (w->node()->type() == scene::SceneNode::Type::Mesh)
+                    return static_cast<scene::MeshNode*>(w->node())->castsShadow();
                 return false;
             },
             [](NodeWrapper* w, bool val) {
-                if (!w || !w->node) return;
-                if (w->node->type() == scene::SceneNode::Type::Light)
-                    static_cast<scene::LightNode*>(w->node)->setCastsShadow(val);
-                else if (w->node->type() == scene::SceneNode::Type::Mesh)
-                    static_cast<scene::MeshNode*>(w->node)->setCastsShadow(val);
+                if (!w || !w->node()) return;
+                if (w->node()->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node())->setCastsShadow(val);
+                else if (w->node()->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node())->setCastsShadow(val);
             })
         .prop("receivesShadow",
             [](NodeWrapper* w) -> bool {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
-                    return static_cast<scene::MeshNode*>(w->node)->receivesShadow();
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh)
+                    return static_cast<scene::MeshNode*>(w->node())->receivesShadow();
                 return false;
             },
             [](NodeWrapper* w, bool val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
-                    static_cast<scene::MeshNode*>(w->node)->setReceivesShadow(val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node())->setReceivesShadow(val);
             })
         .prop("shadowBias",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->shadowBias());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node())->shadowBias());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    static_cast<scene::LightNode*>(w->node)->setShadowBias((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node())->setShadowBias((float)val);
             })
         .prop("shadowNormalBias",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->shadowNormalBias());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node())->shadowNormalBias());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    static_cast<scene::LightNode*>(w->node)->setShadowNormalBias((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node())->setShadowNormalBias((float)val);
             })
         .prop("cascadeCount",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    return JS_NewInt32(ctx, static_cast<scene::LightNode*>(w->node)->cascadeCount());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    return JS_NewInt32(ctx, static_cast<scene::LightNode*>(w->node())->cascadeCount());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, int32_t val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    static_cast<scene::LightNode*>(w->node)->setCascadeCount(val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node())->setCascadeCount(val);
             })
         .prop("cascadeSplitLambda",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node)->cascadeSplitLambda());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node())->cascadeSplitLambda());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Light)
-                    static_cast<scene::LightNode*>(w->node)->setCascadeSplitLambda((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
+                    static_cast<scene::LightNode*>(w->node())->setCascadeSplitLambda((float)val);
             })
 
         // Shape properties (silently return undefined / no-op for non-shape nodes)
         .prop("width",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node) {
-                    if (w->node->type() == scene::SceneNode::Type::Shape)
-                        return JS_NewFloat64(ctx, static_cast<scene::ShapeNode*>(w->node)->width());
-                    if (w->node->type() == scene::SceneNode::Type::Sprite)
-                        return JS_NewFloat64(ctx, static_cast<scene::SpriteNode*>(w->node)->width());
+                if (w && w->node()) {
+                    if (w->node()->type() == scene::SceneNode::Type::Shape)
+                        return JS_NewFloat64(ctx, static_cast<scene::ShapeNode*>(w->node())->width());
+                    if (w->node()->type() == scene::SceneNode::Type::Sprite)
+                        return JS_NewFloat64(ctx, static_cast<scene::SpriteNode*>(w->node())->width());
                 }
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
-                    auto* s = static_cast<scene::ShapeNode*>(w->node);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Shape) {
+                    auto* s = static_cast<scene::ShapeNode*>(w->node());
                     s->setSize(val, s->height());
                 }
             })
         .prop("height",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape)
-                    return JS_NewFloat64(ctx, static_cast<scene::ShapeNode*>(w->node)->height());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Shape)
+                    return JS_NewFloat64(ctx, static_cast<scene::ShapeNode*>(w->node())->height());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
-                    auto* s = static_cast<scene::ShapeNode*>(w->node);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Shape) {
+                    auto* s = static_cast<scene::ShapeNode*>(w->node());
                     s->setSize(s->width(), val);
                 }
             })
         .prop("radius",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape)
-                    return JS_NewFloat64(ctx, static_cast<scene::ShapeNode*>(w->node)->radius());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Shape)
+                    return JS_NewFloat64(ctx, static_cast<scene::ShapeNode*>(w->node())->radius());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape)
-                    static_cast<scene::ShapeNode*>(w->node)->setRadius(val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Shape)
+                    static_cast<scene::ShapeNode*>(w->node())->setRadius(val);
             })
         .prop("fillColor",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
-                    auto c = static_cast<scene::ShapeNode*>(w->node)->fillColor();
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Shape) {
+                    auto c = static_cast<scene::ShapeNode*>(w->node())->fillColor();
                     char buf[32];
                     std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)",
                                   static_cast<int>(c.r * 255.0f + 0.5f),
@@ -880,16 +881,16 @@ void SceneBindings::install(JSContext* ctx) {
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, JSContext* ctx, JSValue val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Shape) {
                     uint8_t r, g, b, a;
                     if (parseColor(jsStr(ctx, val), r, g, b, a))
-                        static_cast<scene::ShapeNode*>(w->node)->setFillColor(bromath::cfromColor8({r, g, b, a}));
+                        static_cast<scene::ShapeNode*>(w->node())->setFillColor(bromath::cfromColor8({r, g, b, a}));
                 }
             })
         .prop("strokeColor",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
-                    auto c = static_cast<scene::ShapeNode*>(w->node)->strokeColor();
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Shape) {
+                    auto c = static_cast<scene::ShapeNode*>(w->node())->strokeColor();
                     char buf[32];
                     std::snprintf(buf, sizeof(buf), "rgba(%d,%d,%d,%.2f)",
                                   static_cast<int>(c.r * 255.0f + 0.5f),
@@ -900,21 +901,21 @@ void SceneBindings::install(JSContext* ctx) {
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, JSContext* ctx, JSValue val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Shape) {
                     uint8_t r, g, b, a;
                     if (parseColor(jsStr(ctx, val), r, g, b, a))
-                        static_cast<scene::ShapeNode*>(w->node)->setStrokeColor(bromath::cfromColor8({r, g, b, a}));
+                        static_cast<scene::ShapeNode*>(w->node())->setStrokeColor(bromath::cfromColor8({r, g, b, a}));
                 }
             })
         .prop("strokeWidth",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape)
-                    return JS_NewFloat64(ctx, static_cast<scene::ShapeNode*>(w->node)->strokeWidth());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Shape)
+                    return JS_NewFloat64(ctx, static_cast<scene::ShapeNode*>(w->node())->strokeWidth());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Shape) {
-                    auto* s = static_cast<scene::ShapeNode*>(w->node);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Shape) {
+                    auto* s = static_cast<scene::ShapeNode*>(w->node());
                     s->setStrokeWidth(val);
                     s->setHasStroke(true);
                 }
@@ -923,27 +924,27 @@ void SceneBindings::install(JSContext* ctx) {
         // Physics properties
         .prop("autoSync",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics)
-                    return JS_NewBool(ctx, static_cast<scene::PhysicsNode*>(w->node)->autoSync());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Physics)
+                    return JS_NewBool(ctx, static_cast<scene::PhysicsNode*>(w->node())->autoSync());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, bool val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics)
-                    static_cast<scene::PhysicsNode*>(w->node)->setAutoSync(val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Physics)
+                    static_cast<scene::PhysicsNode*>(w->node())->setAutoSync(val);
             })
         .prop("pixelsPerUnit",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics)
-                    return JS_NewFloat64(ctx, static_cast<scene::PhysicsNode*>(w->node)->pixelsPerUnit());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Physics)
+                    return JS_NewFloat64(ctx, static_cast<scene::PhysicsNode*>(w->node())->pixelsPerUnit());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics)
-                    static_cast<scene::PhysicsNode*>(w->node)->setPixelsPerUnit(val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Physics)
+                    static_cast<scene::PhysicsNode*>(w->node())->setPixelsPerUnit(val);
             })
         .get("bodyId", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-            if (w && w->node && w->node->type() == scene::SceneNode::Type::Physics) {
-                auto* p = static_cast<scene::PhysicsNode*>(w->node);
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Physics) {
+                auto* p = static_cast<scene::PhysicsNode*>(w->node());
                 if (p->hasBody())
                     return JS_NewInt32(ctx, (int32_t)p->bodyId().GetIndexAndSequenceNumber());
                 return JS_NULL;
@@ -954,9 +955,9 @@ void SceneBindings::install(JSContext* ctx) {
         // World anchor + billboard (Shape/Sprite/Html only — no-ops elsewhere)
         .prop("worldAnchor",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (!w || !w->node) return JS_UNDEFINED;
-                if (!w->node->hasWorldAnchor()) return JS_NULL;
-                const auto& a = w->node->worldAnchor();
+                if (!w || !w->node()) return JS_UNDEFINED;
+                if (!w->node()->hasWorldAnchor()) return JS_NULL;
+                const auto& a = w->node()->worldAnchor();
                 JSValue arr = JS_NewArray(ctx);
                 JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, a.x));
                 JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, a.y));
@@ -964,9 +965,9 @@ void SceneBindings::install(JSContext* ctx) {
                 return arr;
             },
             [](NodeWrapper* w, JSContext* ctx, JSValue val) {
-                if (!w || !w->node) return;
+                if (!w || !w->node()) return;
                 if (JS_IsNull(val) || JS_IsUndefined(val)) {
-                    w->node->clearWorldAnchor();
+                    w->node()->clearWorldAnchor();
                     return;
                 }
                 if (JS_IsArray(val)) {
@@ -980,23 +981,23 @@ void SceneBindings::install(JSContext* ctx) {
                     JS_FreeValue(ctx, e0);
                     JS_FreeValue(ctx, e1);
                     JS_FreeValue(ctx, e2);
-                    w->node->setWorldAnchor({(float)x, (float)y, (float)z});
+                    w->node()->setWorldAnchor({(float)x, (float)y, (float)z});
                 }
             })
         .prop("billboard",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (!w || !w->node) return JS_UNDEFINED;
+                if (!w || !w->node()) return JS_UNDEFINED;
                 return JS_NewString(ctx,
-                    w->node->billboardMode() == scene::SceneNode::BillboardMode::YLock
+                    w->node()->billboardMode() == scene::SceneNode::BillboardMode::YLock
                         ? "ylock" : "full");
             },
             [](NodeWrapper* w, JSContext* ctx, JSValue val) {
-                if (!w || !w->node) return;
+                if (!w || !w->node()) return;
                 std::string s = jsStr(ctx, val);
                 if (s == "ylock" || s == "yLock" || s == "y-lock") {
-                    w->node->setBillboardMode(scene::SceneNode::BillboardMode::YLock);
+                    w->node()->setBillboardMode(scene::SceneNode::BillboardMode::YLock);
                 } else {
-                    w->node->setBillboardMode(scene::SceneNode::BillboardMode::Full);
+                    w->node()->setBillboardMode(scene::SceneNode::BillboardMode::Full);
                 }
             })
 
@@ -1004,38 +1005,38 @@ void SceneBindings::install(JSContext* ctx) {
         // imperatively. Mutations automatically mark the DOM dirty; the raster
         // thread re-rasterizes on the next frame.
         .get("root", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-            if (!w || !w->node) return JS_UNDEFINED;
-            if (w->node->type() != scene::SceneNode::Type::Html) return JS_UNDEFINED;
-            auto* hn = static_cast<scene::HtmlNode*>(w->node);
+            if (!w || !w->node()) return JS_UNDEFINED;
+            if (w->node()->type() != scene::SceneNode::Type::Html) return JS_UNDEFINED;
+            auto* hn = static_cast<scene::HtmlNode*>(w->node());
             dom::Element* root = hn->root();
             if (!root) return JS_NULL;
             return DomBindings::wrapElement(ctx, root);
         })
 
         .get("parent", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-            if (!w || !w->node) return JS_NULL;
-            auto* p = w->node->parent();
-            return p ? wrapNode(ctx, p, w->graph) : JS_NULL;
+            if (!w || !w->node()) return JS_NULL;
+            auto* p = w->node()->parent();
+            return p ? wrapNode(ctx, p, w->graph()) : JS_NULL;
         })
         .prop("nearClipDist",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
-                    return JS_NewFloat64(ctx, static_cast<scene::MeshNode*>(w->node)->nearClipDist());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh)
+                    return JS_NewFloat64(ctx, static_cast<scene::MeshNode*>(w->node())->nearClipDist());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
-                    static_cast<scene::MeshNode*>(w->node)->setNearClipDist((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh)
+                    static_cast<scene::MeshNode*>(w->node())->setNearClipDist((float)val);
             })
 
         // Complex read-only properties
         .get("children", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-            if (!w || !w->node) return JS_NewArray(ctx);
-            const auto& kids = w->node->children();
+            if (!w || !w->node()) return JS_NewArray(ctx);
+            const auto& kids = w->node()->children();
             JSValue arr = JS_NewArray(ctx);
             uint32_t i = 0;
             for (auto* child : kids) {
-                if (child) JS_SetPropertyUint32(ctx, arr, i++, wrapNode(ctx, child, w->graph));
+                if (child) JS_SetPropertyUint32(ctx, arr, i++, wrapNode(ctx, child, w->graph()));
             }
             return arr;
         })
@@ -1043,29 +1044,29 @@ void SceneBindings::install(JSContext* ctx) {
         // SpriteNode: frame index + isPlaying + currentAnimation
         .prop("frameIndex",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Sprite)
-                    return JS_NewInt32(ctx, static_cast<scene::SpriteNode*>(w->node)->frameIndex());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Sprite)
+                    return JS_NewInt32(ctx, static_cast<scene::SpriteNode*>(w->node())->frameIndex());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, int32_t val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Sprite)
-                    static_cast<scene::SpriteNode*>(w->node)->setFrameIndex(val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Sprite)
+                    static_cast<scene::SpriteNode*>(w->node())->setFrameIndex(val);
             })
         .get("isPlaying", [](NodeWrapper* w) -> bool {
-            if (!w || !w->node) return false;
-            if (w->node->type() == scene::SceneNode::Type::Sprite)
-                return static_cast<scene::SpriteNode*>(w->node)->isPlaying();
-            if (w->node->type() == scene::SceneNode::Type::Particles)
-                return static_cast<scene::ParticleNode*>(w->node)->isPlaying();
-            if (w->node->type() == scene::SceneNode::Type::Particles3D)
-                return static_cast<scene::Particles3DNode*>(w->node)->isPlaying();
+            if (!w || !w->node()) return false;
+            if (w->node()->type() == scene::SceneNode::Type::Sprite)
+                return static_cast<scene::SpriteNode*>(w->node())->isPlaying();
+            if (w->node()->type() == scene::SceneNode::Type::Particles)
+                return static_cast<scene::ParticleNode*>(w->node())->isPlaying();
+            if (w->node()->type() == scene::SceneNode::Type::Particles3D)
+                return static_cast<scene::Particles3DNode*>(w->node())->isPlaying();
             if (auto* sm = asSkinnedMesh(w))
                 return sm->player() && sm->player()->isPlaying();
             return false;
         })
         .get("currentAnimation", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-            if (w && w->node && w->node->type() == scene::SceneNode::Type::Sprite) {
-                const auto& s = static_cast<scene::SpriteNode*>(w->node)->currentAnimation();
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Sprite) {
+                const auto& s = static_cast<scene::SpriteNode*>(w->node())->currentAnimation();
                 return JS_NewString(ctx, s.c_str());
             }
             if (auto* sm = asSkinnedMesh(w)) {
@@ -1129,59 +1130,59 @@ void SceneBindings::install(JSContext* ctx) {
         // `particleCount` is the documented name; `liveCount` is kept as the
         // original 2D alias.
         .get("liveCount", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-            if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
-                return JS_NewInt32(ctx, static_cast<scene::ParticleNode*>(w->node)->liveCount());
-            if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
-                return JS_NewInt32(ctx, static_cast<scene::Particles3DNode*>(w->node)->liveCount());
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Particles)
+                return JS_NewInt32(ctx, static_cast<scene::ParticleNode*>(w->node())->liveCount());
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Particles3D)
+                return JS_NewInt32(ctx, static_cast<scene::Particles3DNode*>(w->node())->liveCount());
             return JS_UNDEFINED;
         })
         .get("particleCount", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-            if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
-                return JS_NewInt32(ctx, static_cast<scene::ParticleNode*>(w->node)->liveCount());
-            if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
-                return JS_NewInt32(ctx, static_cast<scene::Particles3DNode*>(w->node)->liveCount());
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Particles)
+                return JS_NewInt32(ctx, static_cast<scene::ParticleNode*>(w->node())->liveCount());
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Particles3D)
+                return JS_NewInt32(ctx, static_cast<scene::Particles3DNode*>(w->node())->liveCount());
             return JS_UNDEFINED;
         })
         .prop("rate",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
-                    return JS_NewFloat64(ctx, static_cast<scene::ParticleNode*>(w->node)->rate());
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
-                    return JS_NewFloat64(ctx, static_cast<scene::Particles3DNode*>(w->node)->rate());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Particles)
+                    return JS_NewFloat64(ctx, static_cast<scene::ParticleNode*>(w->node())->rate());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Particles3D)
+                    return JS_NewFloat64(ctx, static_cast<scene::Particles3DNode*>(w->node())->rate());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
-                    static_cast<scene::ParticleNode*>(w->node)->setRate((float)val);
-                else if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
-                    static_cast<scene::Particles3DNode*>(w->node)->setRate((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Particles)
+                    static_cast<scene::ParticleNode*>(w->node())->setRate((float)val);
+                else if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Particles3D)
+                    static_cast<scene::Particles3DNode*>(w->node())->setRate((float)val);
             })
         // Particles3DNode: soft-particle fade distance (world units, 0 = off)
         .prop("softness",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
-                    return JS_NewFloat64(ctx, static_cast<scene::Particles3DNode*>(w->node)->softness());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Particles3D)
+                    return JS_NewFloat64(ctx, static_cast<scene::Particles3DNode*>(w->node())->softness());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
-                    static_cast<scene::Particles3DNode*>(w->node)->setSoftness((float)val);
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Particles3D)
+                    static_cast<scene::Particles3DNode*>(w->node())->setSoftness((float)val);
             })
         // Particles3DNode: one-shot completion callback (see createParticles3D)
         .prop("onFinished",
             [](NodeWrapper*, JSContext*) -> JSValue { return JS_UNDEFINED; },
             [](NodeWrapper* w, JSContext* ctx, JSValue val) {
-                if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Particles3D)
                     installParticles3DOnFinished(ctx, val,
-                        static_cast<scene::Particles3DNode*>(w->node));
+                        static_cast<scene::Particles3DNode*>(w->node()));
             })
         // SpriteNode: animation-end callback. Setter installs/removes the JS
         // callback in the side registry.
         .prop("onAnimationEnd",
             [](NodeWrapper*, JSContext*) -> JSValue { return JS_UNDEFINED; },
             [](NodeWrapper* w, JSContext* ctx, JSValue val) {
-                if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Sprite) return;
-                installSpriteEndCallback(static_cast<scene::SpriteNode*>(w->node), ctx, val);
+                if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Sprite) return;
+                installSpriteEndCallback(static_cast<scene::SpriteNode*>(w->node()), ctx, val);
             })
 
         // Methods (raw — complex arg handling)
@@ -1227,29 +1228,29 @@ void SceneBindings::install(JSContext* ctx) {
     qjsbind::Class<GraphWrapper>(ctx, "SceneGraph")
         // Properties
         .get("root", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
-            return (w && w->graph) ? wrapNode(ctx, w->graph->root(), w->graph) : JS_UNDEFINED;
+            return (w && w->graph()) ? wrapNode(ctx, w->graph()->root(), w->graph()) : JS_UNDEFINED;
         })
         .prop("cameraX",
-            [](GraphWrapper* w) -> double { return w && w->graph ? w->graph->cameraX() : 0; },
-            [](GraphWrapper* w, double val) { if (w && w->graph) w->graph->setCameraPosition((float)val, w->graph->cameraY()); })
+            [](GraphWrapper* w) -> double { return w && w->graph() ? w->graph()->cameraX() : 0; },
+            [](GraphWrapper* w, double val) { if (w && w->graph()) w->graph()->setCameraPosition((float)val, w->graph()->cameraY()); })
         .prop("cameraY",
-            [](GraphWrapper* w) -> double { return w && w->graph ? w->graph->cameraY() : 0; },
-            [](GraphWrapper* w, double val) { if (w && w->graph) w->graph->setCameraPosition(w->graph->cameraX(), (float)val); })
+            [](GraphWrapper* w) -> double { return w && w->graph() ? w->graph()->cameraY() : 0; },
+            [](GraphWrapper* w, double val) { if (w && w->graph()) w->graph()->setCameraPosition(w->graph()->cameraX(), (float)val); })
         .prop("cameraZoom",
-            [](GraphWrapper* w) -> double { return w && w->graph ? w->graph->cameraZoom() : 1; },
-            [](GraphWrapper* w, double val) { if (w && w->graph) w->graph->setCameraZoom((float)val); })
+            [](GraphWrapper* w) -> double { return w && w->graph() ? w->graph()->cameraZoom() : 1; },
+            [](GraphWrapper* w, double val) { if (w && w->graph()) w->graph()->setCameraZoom((float)val); })
         .prop("showLightIcons",
-            [](GraphWrapper* w) -> bool { return w && w->graph ? w->graph->showLightIcons() : false; },
-            [](GraphWrapper* w, bool val) { if (w && w->graph) w->graph->setShowLightIcons(val); })
+            [](GraphWrapper* w) -> bool { return w && w->graph() ? w->graph()->showLightIcons() : false; },
+            [](GraphWrapper* w, bool val) { if (w && w->graph()) w->graph()->setShowLightIcons(val); })
         .prop("frustumCulling",
-            [](GraphWrapper* w) -> bool { return w && w->graph ? w->graph->frustumCulling() : true; },
-            [](GraphWrapper* w, bool val) { if (w && w->graph) w->graph->setFrustumCulling(val); })
+            [](GraphWrapper* w) -> bool { return w && w->graph() ? w->graph()->frustumCulling() : true; },
+            [](GraphWrapper* w, bool val) { if (w && w->graph()) w->graph()->setFrustumCulling(val); })
         .prop("renderScale",
-            [](GraphWrapper* w) -> double { return w && w->graph ? w->graph->renderScale() : 1.0; },
-            [](GraphWrapper* w, double val) { if (w && w->graph) w->graph->setRenderScale((float)val); })
+            [](GraphWrapper* w) -> double { return w && w->graph() ? w->graph()->renderScale() : 1.0; },
+            [](GraphWrapper* w, double val) { if (w && w->graph()) w->graph()->setRenderScale((float)val); })
         .prop("msaa",
-            [](GraphWrapper* w) -> double { return w && w->graph ? w->graph->msaa() : 0; },
-            [](GraphWrapper* w, double val) { if (w && w->graph) w->graph->setMSAA((int)val); })
+            [](GraphWrapper* w) -> double { return w && w->graph() ? w->graph()->msaa() : 0; },
+            [](GraphWrapper* w, double val) { if (w && w->graph()) w->graph()->setMSAA((int)val); })
 
         // Methods (all raw — complex arg handling)
         .method_raw("createNode", js_sg_createNode, 1)
@@ -1290,23 +1291,24 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("captureFrame", js_sg_captureFrame, 2)
         .method_raw("asTexture", js_sg_asTexture, 0)
         .get("viewMatrix", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
-            if (!w || !w->graph) return JS_NULL;
-            return mat4ToJSArray(ctx, w->graph->viewMatrix());
+            if (!w || !w->graph()) return JS_NULL;
+            return mat4ToJSArray(ctx, w->graph()->viewMatrix());
         })
         .get("projectionMatrix", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
-            if (!w || !w->graph) return JS_NULL;
-            return mat4ToJSArray(ctx, w->graph->projectionMatrix());
+            if (!w || !w->graph()) return JS_NULL;
+            return mat4ToJSArray(ctx, w->graph()->projectionMatrix());
         })
         .get("cameraEye", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
-            if (!w || !w->graph) return JS_NULL;
-            return vec3ToJSArray(ctx, w->graph->cameraEye());
+            if (!w || !w->graph()) return JS_NULL;
+            return vec3ToJSArray(ctx, w->graph()->cameraEye());
         })
         .method_raw("attachAIWorld", graphAttachAIWorld, 2)
         .method_raw("detachAIWorld", graphDetachAIWorld, 0);
 }
 
 JSValue SceneBindings::wrapSceneGraph(JSContext* ctx, scene::SceneGraph* graph) {
-    return qjsbind::wrap<GraphWrapper>(ctx, new GraphWrapper{graph});
+    if (!graph) return JS_NULL;
+    return qjsbind::wrap<GraphWrapper>(ctx, new GraphWrapper{graph->livenessToken()});
 }
 
 void SceneBindings::cleanup(JSContext* ctx) {

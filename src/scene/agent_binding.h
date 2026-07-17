@@ -91,18 +91,32 @@ public:
     }
     bool groundFollow() const { return static_cast<bool>(groundFn_); }
 
-    /// Polygon-navmesh routing. The binding holds a non-owning pointer to a
-    /// baked brogameagent::NavMesh (kept alive externally, typically via the
-    /// JS wrapper pinned on the node). navigateTo() plans a path with
-    /// NavMesh::findPath and follows it by feeding successive XZ waypoints to
-    /// the agent's setTarget steering, so the World's ORCA avoidance pass
-    /// composes unchanged. While navigating, the binding owns the agent's
-    /// movement target (a think-hook moveTo issued the same tick is
-    /// overridden). Waypoint Y is tracked (interpolated along the current
-    /// segment) and drives the node's height when no groundFollow probe is
-    /// set — groundFollow, when set, wins.
-    void setNavMesh(const brogameagent::NavMesh* m) { navMesh_ = m; }
-    const brogameagent::NavMesh* navMesh() const { return navMesh_; }
+    /// Polygon-navmesh routing. The binding shares ownership of the baked
+    /// brogameagent::NavMesh with its JS wrapper (navMeshSharedFromJS), so
+    /// the mesh stays alive while an agent routes on it even if the app drops
+    /// every JS reference. navigateTo() plans a path with NavMesh::findPath
+    /// and follows it by feeding successive XZ waypoints to the agent's
+    /// setTarget steering, so the World's ORCA avoidance pass composes
+    /// unchanged. While navigating, the binding owns the agent's movement
+    /// target (a think-hook moveTo issued the same tick is overridden).
+    /// Waypoint Y is tracked (interpolated along the current segment) and
+    /// drives the node's height when no groundFollow probe is set —
+    /// groundFollow, when set, wins.
+    void setNavMesh(std::shared_ptr<const brogameagent::NavMesh> m) { navMesh_ = std::move(m); }
+    const brogameagent::NavMesh* navMesh() const { return navMesh_.get(); }
+
+    /// Opaque keep-alive tokens for externally-owned state this binding
+    /// points at raw (the agent, the AI world, a groundFollow terrain). The
+    /// JS layer pins the corresponding JS wrappers here (JSFnRef holders), so
+    /// the raw pointers can't dangle if the app drops its own references.
+    /// Released when the binding dies — detachAgent, node destroy, subtree
+    /// destroy, or graph teardown, all of which run before JS runtime
+    /// teardown (see engine_lifecycle.cpp). scene/ stays JS-neutral: the
+    /// tokens are shared_ptr<void>.
+    void clearKeepAlives() { keepAlive_.clear(); }
+    void addKeepAlive(std::shared_ptr<void> p) {
+        if (p) keepAlive_.push_back(std::move(p));
+    }
 
     /// Plan a path on the bound navmesh from the agent's position to
     /// `target` and start following it. `extents` are the NavMesh snap
@@ -153,10 +167,13 @@ private:
     float lastGroundY_ = 0.0f;
     bool  hasGround_   = false;
 
+    // Externally-owned-state keep-alive pins (see addKeepAlive).
+    std::vector<std::shared_ptr<void>> keepAlive_;
+
     // Navmesh route state (see navigateTo). navY_ is the height of the
     // route under the agent, interpolated along the active path segment.
     void stepNavigation_(float dt);
-    const brogameagent::NavMesh* navMesh_ = nullptr;
+    std::shared_ptr<const brogameagent::NavMesh> navMesh_;
     std::vector<bromath::Vec3> navPath_;
     int   navWaypoint_ = 0;
     bool  navActive_ = false;

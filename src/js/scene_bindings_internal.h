@@ -7,7 +7,28 @@
 // SceneBindings::install() live here so each unit stays cohesive. Mirrors the
 // scene_renderer_internal.h convention in src/scene/.
 //
-// Internal header — only the scene_bindings*.cpp files include this.
+// Internal header — only the scene_bindings*.cpp files and
+// ai_binding_integration.cpp (which shares the wrapper structs) include this.
+//
+// ── Wrapper liveness design ────────────────────────────────────────────────
+// The engine owns every SceneGraph (keyed to its canvas element) and destroys
+// it when the element is detached from the DOM, or at engine teardown. JS
+// wrappers can outlive that, so no wrapper stores a raw SceneGraph* or
+// SceneNode*. Instead:
+//   - GraphWrapper holds a weak_ptr to the graph's LivenessToken and
+//     re-resolves the SceneGraph* through it on every call. A dead token (or
+//     a nulled token->graph) reads as "graph gone" and the binding no-ops or
+//     throws a clean JS error.
+//   - NodeWrapper holds {weak token, node id} and resolves the node by id
+//     through SceneGraph::resolveNode() on every call. Node ids are
+//     process-monotonic and never reused, so this is also the per-node
+//     validity check: a node destroyed through ANY path (destroy() on another
+//     wrapper of the same node, ancestor subtree destroy, graph teardown)
+//     makes every wrapper of it resolve to nullptr.
+//   - TweenWrapper holds {weak token, tween id}; tweens were already
+//     id-resolved through the graph, the token adds the graph-death check.
+// Per-call cost is one weak_ptr lock plus one hash lookup — negligible next
+// to the JS call overhead itself.
 
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
@@ -87,17 +108,31 @@ inline bool parseColor(const std::string& str, uint8_t& r, uint8_t& g, uint8_t& 
 }
 
 // ---------------------------------------------------------------------------
-// SceneNode JS wrapper — wraps a SceneNode* (not owned by JS)
+// SceneNode JS wrapper — {weak liveness token, node id}; the node (never
+// owned by JS) is re-resolved through the graph on every call. See the
+// liveness design note at the top of this header.
 // ---------------------------------------------------------------------------
 
 struct NodeWrapper {
-    scene::SceneNode* node;
-    scene::SceneGraph* graph;
+    std::weak_ptr<scene::SceneGraph::LivenessToken> token;
+    uint32_t id = 0;
+
+    /// Owning graph, or nullptr once the graph has been destroyed.
+    scene::SceneGraph* graph() const {
+        auto t = token.lock();
+        return t ? t->graph : nullptr;
+    }
+    /// The node, or nullptr once the node (or its graph) has been destroyed.
+    scene::SceneNode* node() const {
+        auto t = token.lock();
+        return (t && t->graph) ? t->graph->resolveNode(id) : nullptr;
+    }
 };
 
 inline JSValue wrapNode(JSContext* ctx, scene::SceneNode* node, scene::SceneGraph* graph) {
-    auto* w = new NodeWrapper{node, graph};
-    return qjsbind::wrap<NodeWrapper>(ctx, w);
+    if (!node || !graph) return JS_NULL;
+    return qjsbind::wrap<NodeWrapper>(
+        ctx, new NodeWrapper{graph->livenessToken(), node->id()});
 }
 
 // ---------------------------------------------------------------------------
@@ -115,8 +150,14 @@ struct SceneTextureHandle {
 
 // ---------------------------------------------------------------------------
 // Shared JS-function reference: dup'd on install, freed when the last C++
-// closure holding it dies. Used by the animation player + tween callbacks
-// (the sprite registry above predates this pattern).
+// closure holding it dies. Used by the animation player, tween, sprite
+// animation-end, and particle callbacks. Also serves as a generic keep-alive
+// pin for any JSValue a C++-side consumer must hold (AgentBinding pins the
+// agent/world/terrain wrappers this way — see ai_binding_integration.cpp).
+// Native-held refs are GC roots QuickJS cannot collect, so holders must be
+// destroyed before JS runtime teardown; the engine tears scene graphs down
+// before the runtime (engine_lifecycle.cpp) which covers everything owned by
+// a graph, a node, or an agent binding.
 // ---------------------------------------------------------------------------
 struct JSFnRef {
     JSContext* ctx;
@@ -128,30 +169,42 @@ struct JSFnRef {
 };
 
 inline scene::SkinnedMeshNode* asSkinnedMesh(NodeWrapper* w) {
-    if (w && w->node && w->node->type() == scene::SceneNode::Type::Mesh)
-        return static_cast<scene::MeshNode*>(w->node)->asSkinnedMesh();
+    scene::SceneNode* n = w ? w->node() : nullptr;
+    if (n && n->type() == scene::SceneNode::Type::Mesh)
+        return static_cast<scene::MeshNode*>(n)->asSkinnedMesh();
     return nullptr;
 }
 
 // ---------------------------------------------------------------------------
-// SceneGraph wrapper
+// SceneGraph wrapper — weak liveness token only; the SceneGraph* is
+// re-resolved through it on every call (nullptr once destroyed).
 // ---------------------------------------------------------------------------
 
 struct GraphWrapper {
-    scene::SceneGraph* graph;
+    std::weak_ptr<scene::SceneGraph::LivenessToken> token;
+
+    scene::SceneGraph* graph() const {
+        auto t = token.lock();
+        return t ? t->graph : nullptr;
+    }
 };
 
 inline scene::SceneGraph* getGraph(JSContext* ctx, JSValueConst val) {
     auto* w = qjsbind::unwrap<GraphWrapper>(ctx, val);
-    return w ? w->graph : nullptr;
+    return w ? w->graph() : nullptr;
 }
 
 // Tween wrapper — the C++ Tween is owned by the SceneGraph and referenced by
-// id, so a destroyed tween (or torn-down graph) can never dangle through a
-// live JS wrapper.
+// id; the weak token adds the graph-death check so a torn-down graph can
+// never dangle through a live JS wrapper either.
 struct TweenWrapper {
-    scene::SceneGraph* graph;
-    uint32_t id;
+    std::weak_ptr<scene::SceneGraph::LivenessToken> token;
+    uint32_t id = 0;
+
+    scene::SceneGraph* graph() const {
+        auto t = token.lock();
+        return t ? t->graph : nullptr;
+    }
 };
 
 // ---------------------------------------------------------------------------
@@ -216,8 +269,10 @@ JSValue js_sg_createHtml(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 JSValue js_sg_createParticles(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_createParticles3D(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_createGaussianSplat(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
-// Sprite animation-end JS callback registry (keyed by node id).
-void clearSpriteEndCallback(uint32_t nodeId);
+// Sprite animation-end JS callback. The callback (a shared JSFnRef) is owned
+// by the SpriteNode itself, so it is released on any destruction path —
+// direct destroy, ancestor subtree destroy, graph teardown — with no side
+// registry to leak.
 void installSpriteEndCallback(scene::SpriteNode* node, JSContext* ctx, JSValue fn);
 // Particles3D one-shot completion callback.
 void installParticles3DOnFinished(JSContext* ctx, JSValueConst fnVal,

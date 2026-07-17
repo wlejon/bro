@@ -115,15 +115,15 @@ JSValue js_node_getBoneWorldMatrix(JSContext* ctx, JSValueConst this_val, int ar
 // Skinned mesh: play(clipName, {loop, speed, fadeTime, weight, mask}).
 JSValue js_node_play(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node) return JS_UNDEFINED;
-    if (w->node->type() == scene::SceneNode::Type::Sprite) {
-        auto* s = static_cast<scene::SpriteNode*>(w->node);
+    if (!w || !w->node()) return JS_UNDEFINED;
+    if (w->node()->type() == scene::SceneNode::Type::Sprite) {
+        auto* s = static_cast<scene::SpriteNode*>(w->node());
         if (argc > 0 && JS_IsString(argv[0])) s->play(jsStr(ctx, argv[0]));
         else                                  s->resume();
-    } else if (w->node->type() == scene::SceneNode::Type::Particles) {
-        static_cast<scene::ParticleNode*>(w->node)->play();
-    } else if (w->node->type() == scene::SceneNode::Type::Particles3D) {
-        static_cast<scene::Particles3DNode*>(w->node)->play();
+    } else if (w->node()->type() == scene::SceneNode::Type::Particles) {
+        static_cast<scene::ParticleNode*>(w->node())->play();
+    } else if (w->node()->type() == scene::SceneNode::Type::Particles3D) {
+        static_cast<scene::Particles3DNode*>(w->node())->play();
     } else if (auto* sm = asSkinnedMesh(w)) {
         if (argc > 0 && JS_IsString(argv[0])) {
             auto& player = sm->ensurePlayer();
@@ -154,13 +154,13 @@ JSValue js_node_play(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
 // pose and deactivates the player (manual setSkinningMatrices works again).
 JSValue js_node_stop(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node) return JS_UNDEFINED;
-    if (w->node->type() == scene::SceneNode::Type::Sprite) {
-        static_cast<scene::SpriteNode*>(w->node)->stop();
-    } else if (w->node->type() == scene::SceneNode::Type::Particles) {
-        static_cast<scene::ParticleNode*>(w->node)->stop();
-    } else if (w->node->type() == scene::SceneNode::Type::Particles3D) {
-        static_cast<scene::Particles3DNode*>(w->node)->stop();
+    if (!w || !w->node()) return JS_UNDEFINED;
+    if (w->node()->type() == scene::SceneNode::Type::Sprite) {
+        static_cast<scene::SpriteNode*>(w->node())->stop();
+    } else if (w->node()->type() == scene::SceneNode::Type::Particles) {
+        static_cast<scene::ParticleNode*>(w->node())->stop();
+    } else if (w->node()->type() == scene::SceneNode::Type::Particles3D) {
+        static_cast<scene::Particles3DNode*>(w->node())->stop();
     } else if (auto* sm = asSkinnedMesh(w)) {
         if (auto* player = sm->player()) {
             float fade = 0.0f;
@@ -176,9 +176,9 @@ JSValue js_node_stop(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
 // frame index; the skinned-mesh player holds the current pose).
 JSValue js_node_pause(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node) return JS_UNDEFINED;
-    if (w->node->type() == scene::SceneNode::Type::Sprite) {
-        static_cast<scene::SpriteNode*>(w->node)->stop();
+    if (!w || !w->node()) return JS_UNDEFINED;
+    if (w->node()->type() == scene::SceneNode::Type::Sprite) {
+        static_cast<scene::SpriteNode*>(w->node())->stop();
     } else if (auto* sm = asSkinnedMesh(w)) {
         if (auto* player = sm->player()) player->pause();
     }
@@ -187,9 +187,9 @@ JSValue js_node_pause(JSContext* ctx, JSValueConst this_val, int, JSValueConst*)
 
 JSValue js_node_resume(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node) return JS_UNDEFINED;
-    if (w->node->type() == scene::SceneNode::Type::Sprite) {
-        static_cast<scene::SpriteNode*>(w->node)->resume();
+    if (!w || !w->node()) return JS_UNDEFINED;
+    if (w->node()->type() == scene::SceneNode::Type::Sprite) {
+        static_cast<scene::SpriteNode*>(w->node())->resume();
     } else if (auto* sm = asSkinnedMesh(w)) {
         if (auto* player = sm->player()) player->resume();
     }
@@ -204,7 +204,7 @@ JSValue js_node_resume(JSContext* ctx, JSValueConst this_val, int, JSValueConst*
 
 static scene::Tween* getTween(JSContext* ctx, JSValueConst val) {
     auto* w = qjsbind::unwrap<TweenWrapper>(ctx, val);
-    return (w && w->graph) ? w->graph->findTween(w->id) : nullptr;
+    return (w && w->graph()) ? w->graph()->findTween(w->id) : nullptr;
 }
 
 // Wrap a JS function into a void() callback (tween.call / onFinished).
@@ -348,9 +348,9 @@ JSValue js_tween_to(JSContext* ctx, JSValueConst this_val, int argc, JSValueCons
     uint32_t nodeId = 0;
     if (!JS_IsNull(argv[0]) && !JS_IsUndefined(argv[0])) {
         auto* nw = qjsbind::unwrap<NodeWrapper>(ctx, argv[0]);
-        if (!nw || !nw->node)
+        if (!nw || !nw->node())
             return JS_ThrowTypeError(ctx, "to: first argument must be a SceneNode or null");
-        nodeId = nw->node->id();
+        nodeId = nw->node()->id();
     }
     if (!JS_IsObject(argv[1]))
         return JS_ThrowTypeError(ctx, "to: props must be an object");
@@ -457,7 +457,7 @@ JSValue js_tween_resume(JSContext* ctx, JSValueConst this_val, int, JSValueConst
 
 JSValue js_tween_destroy(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* w = qjsbind::unwrap<TweenWrapper>(ctx, this_val);
-    if (w && w->graph) w->graph->destroyTween(w->id);
+    if (w && w->graph()) w->graph()->destroyTween(w->id);
     return JS_UNDEFINED;
 }
 
@@ -466,7 +466,8 @@ JSValue js_sg_createTween(JSContext* ctx, JSValueConst this_val, int, JSValueCon
     auto* g = getGraph(ctx, this_val);
     if (!g) return JS_UNDEFINED;
     auto* t = g->createTween();
-    return qjsbind::wrap<TweenWrapper>(ctx, new TweenWrapper{g, t->id()});
+    return qjsbind::wrap<TweenWrapper>(ctx,
+        new TweenWrapper{g->livenessToken(), t->id()});
 }
 
 } // namespace bro::js

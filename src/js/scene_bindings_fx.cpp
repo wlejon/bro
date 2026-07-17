@@ -96,10 +96,10 @@ static void applyBillboardOpts(JSContext* ctx, JSValueConst opts, scene::SceneNo
 // setHtml(htmlString) — HtmlNode only
 JSValue js_node_setHtml(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || argc < 1) return JS_UNDEFINED;
-    if (w->node->type() != scene::SceneNode::Type::Html)
+    if (!w || !w->node() || argc < 1) return JS_UNDEFINED;
+    if (w->node()->type() != scene::SceneNode::Type::Html)
         return JS_ThrowTypeError(ctx, "setHtml: node is not an HtmlNode");
-    auto* hn = static_cast<scene::HtmlNode*>(w->node);
+    auto* hn = static_cast<scene::HtmlNode*>(w->node());
     hn->setHtml(jsStr(ctx, argv[0]));
     return JS_UNDEFINED;
 }
@@ -108,10 +108,10 @@ JSValue js_node_setHtml(JSContext* ctx, JSValueConst this_val, int argc, JSValue
 // Useful after imperative DOM mutation via node.root.
 JSValue js_node_markHtmlDirty(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node) return JS_UNDEFINED;
-    if (w->node->type() != scene::SceneNode::Type::Html)
+    if (!w || !w->node()) return JS_UNDEFINED;
+    if (w->node()->type() != scene::SceneNode::Type::Html)
         return JS_ThrowTypeError(ctx, "markHtmlDirty: node is not an HtmlNode");
-    static_cast<scene::HtmlNode*>(w->node)->markHtmlDirty();
+    static_cast<scene::HtmlNode*>(w->node())->markHtmlDirty();
     return JS_UNDEFINED;
 }
 
@@ -123,11 +123,11 @@ JSValue js_node_markHtmlDirty(JSContext* ctx, JSValueConst this_val, int, JSValu
 // success.
 JSValue js_node_savePly(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || argc < 1)
+    if (!w || !w->node() || argc < 1)
         return JS_ThrowTypeError(ctx, "savePly(path): path required");
-    if (w->node->type() != scene::SceneNode::Type::GaussianSplat)
+    if (w->node()->type() != scene::SceneNode::Type::GaussianSplat)
         return JS_ThrowTypeError(ctx, "savePly: node is not a GaussianSplat");
-    auto* sn = static_cast<scene::GaussianSplatNode*>(w->node);
+    auto* sn = static_cast<scene::GaussianSplatNode*>(w->node());
     if (sn->splatCount() == 0)
         return JS_ThrowTypeError(ctx, "savePly: splat cloud is empty");
     std::string path = resolveAppPath(jsStr(ctx, argv[0]));
@@ -140,35 +140,22 @@ JSValue js_node_savePly(JSContext* ctx, JSValueConst this_val, int argc, JSValue
 }
 
 // ---------------------------------------------------------------------------
-// Sprite animation-end JS callback registry (keyed by node id).
+// Sprite animation-end JS callback. The JSFnRef is owned by the std::function
+// stored on the SpriteNode, so the JS ref is released on every destruction
+// path — direct destroy, ancestor subtree destroy, graph teardown — with no
+// side registry to sweep. (This replaced a process-global map keyed by node
+// id that leaked its entries on subtree destroy and graph prune.)
 // ---------------------------------------------------------------------------
 
-namespace {
-struct SpriteEndCB { JSContext* ctx; JSValue fn; };
-}
-static std::unordered_map<uint32_t, SpriteEndCB>& spriteEndCallbacks() {
-    static std::unordered_map<uint32_t, SpriteEndCB> map;
-    return map;
-}
-void clearSpriteEndCallback(uint32_t nodeId) {
-    auto& m = spriteEndCallbacks();
-    auto it = m.find(nodeId);
-    if (it != m.end()) {
-        JS_FreeValue(it->second.ctx, it->second.fn);
-        m.erase(it);
-    }
-}
 void installSpriteEndCallback(scene::SpriteNode* node, JSContext* ctx, JSValue fn) {
-    uint32_t id = node->id();
-    clearSpriteEndCallback(id);
     if (JS_IsFunction(ctx, fn)) {
-        spriteEndCallbacks()[id] = { ctx, JS_DupValue(ctx, fn) };
-        node->setOnAnimationEnd([id](const std::string& name) {
-            auto& m = spriteEndCallbacks();
-            auto it = m.find(id);
-            if (it == m.end()) return;
-            JSContext* c = it->second.ctx;
-            JSValue dup = JS_DupValue(c, it->second.fn);
+        auto ref = std::make_shared<JSFnRef>(ctx, JS_DupValue(ctx, fn));
+        node->setOnAnimationEnd([ref](const std::string& name) {
+            // Copy everything needed to locals up front: the JS callback may
+            // destroy the sprite node, which destroys this std::function (and
+            // `ref` with it) while we are still executing.
+            JSContext* c = ref->ctx;
+            JSValue dup = JS_DupValue(c, ref->fn);
             JSValue arg = JS_NewString(c, name.c_str());
             JSValue ret = JS_Call(c, dup, JS_UNDEFINED, 1, &arg);
             if (JS_IsException(ret)) {
@@ -189,9 +176,9 @@ void installSpriteEndCallback(scene::SpriteNode* node, JSContext* ctx, JSValue f
 
 JSValue js_sprite_addAnimation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Sprite || argc < 2)
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Sprite || argc < 2)
         return JS_UNDEFINED;
-    auto* s = static_cast<scene::SpriteNode*>(w->node);
+    auto* s = static_cast<scene::SpriteNode*>(w->node());
     std::string name = jsStr(ctx, argv[0]);
     if (JS_IsObject(argv[1])) {
         s->addAnimation(name, parseAnimSpec(ctx, argv[1]));
@@ -647,32 +634,32 @@ JSValue js_sg_createParticles(JSContext* ctx, JSValueConst this_val, int argc, J
 
 JSValue js_particles_burst(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node) return JS_UNDEFINED;
+    if (!w || !w->node()) return JS_UNDEFINED;
     int32_t n = 1;
     if (argc > 0) JS_ToInt32(ctx, &n, argv[0]);
-    if (w->node->type() == scene::SceneNode::Type::Particles)
-        static_cast<scene::ParticleNode*>(w->node)->burst(n);
-    else if (w->node->type() == scene::SceneNode::Type::Particles3D)
-        static_cast<scene::Particles3DNode*>(w->node)->burst(n);
+    if (w->node()->type() == scene::SceneNode::Type::Particles)
+        static_cast<scene::ParticleNode*>(w->node())->burst(n);
+    else if (w->node()->type() == scene::SceneNode::Type::Particles3D)
+        static_cast<scene::Particles3DNode*>(w->node())->burst(n);
     return JS_DupValue(ctx, this_val);
 }
 
 JSValue js_particles_clear(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles)
-        static_cast<scene::ParticleNode*>(w->node)->clear();
-    else if (w && w->node && w->node->type() == scene::SceneNode::Type::Particles3D)
-        static_cast<scene::Particles3DNode*>(w->node)->clear();
+    if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Particles)
+        static_cast<scene::ParticleNode*>(w->node())->clear();
+    else if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Particles3D)
+        static_cast<scene::Particles3DNode*>(w->node())->clear();
     return JS_DupValue(ctx, this_val);
 }
 
 JSValue js_particles_configure(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || argc < 1 || !JS_IsObject(argv[0])) return JS_DupValue(ctx, this_val);
-    if (w->node->type() == scene::SceneNode::Type::Particles)
-        applyParticleOpts(ctx, argv[0], static_cast<scene::ParticleNode*>(w->node));
-    else if (w->node->type() == scene::SceneNode::Type::Particles3D)
-        applyParticle3DOpts(ctx, argv[0], static_cast<scene::Particles3DNode*>(w->node));
+    if (!w || !w->node() || argc < 1 || !JS_IsObject(argv[0])) return JS_DupValue(ctx, this_val);
+    if (w->node()->type() == scene::SceneNode::Type::Particles)
+        applyParticleOpts(ctx, argv[0], static_cast<scene::ParticleNode*>(w->node()));
+    else if (w->node()->type() == scene::SceneNode::Type::Particles3D)
+        applyParticle3DOpts(ctx, argv[0], static_cast<scene::Particles3DNode*>(w->node()));
     return JS_DupValue(ctx, this_val);
 }
 

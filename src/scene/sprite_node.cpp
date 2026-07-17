@@ -123,7 +123,14 @@ void SpriteNode::onTick(float dtSec) {
                 std::string finished = currentAnim_;
                 std::string chain = spec.next;
                 playing_ = false;
-                if (onEnd_) onEnd_(finished);
+                if (onEnd_) {
+                    // Invoke a COPY: the callback (JS) may destroy this node,
+                    // which destroys onEnd_ — a copy keeps the executing
+                    // callable (and its captured JS-function ref) alive for
+                    // the duration of the call.
+                    auto cb = onEnd_;
+                    cb(finished);
+                }
                 if (!chain.empty()) {
                     play(chain);
                 }

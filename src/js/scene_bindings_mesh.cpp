@@ -44,9 +44,9 @@ static bool jsReadUint32Array(JSContext* ctx, JSValueConst obj, const char* prop
 // vertex colors if present).
 JSValue js_node_setBaseColorTexture(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Mesh)
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Mesh)
         return JS_ThrowTypeError(ctx, "setBaseColorTexture: not a MeshNode");
-    auto* meshNode = static_cast<scene::MeshNode*>(w->node);
+    auto* meshNode = static_cast<scene::MeshNode*>(w->node());
 
     if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
         meshNode->clearBaseColorTexture();
@@ -118,9 +118,9 @@ static bool validUserUniformName(const std::string& n) {
 // True when the node carries the custom-shader surface (MeshNode incl.
 // skinned, or InstancedMeshNode).
 static bool isShaderableNode(const NodeWrapper* w) {
-    return w && w->node &&
-           (w->node->type() == scene::SceneNode::Type::Mesh ||
-            w->node->type() == scene::SceneNode::Type::InstancedMesh);
+    return w && w->node() &&
+           (w->node()->type() == scene::SceneNode::Type::Mesh ||
+            w->node()->type() == scene::SceneNode::Type::InstancedMesh);
 }
 
 // setShader({ vertex?, fragment?, uniforms? }) — install user GLSL chunks on
@@ -197,23 +197,23 @@ JSValue js_node_setShader(JSContext* ctx, JSValueConst this_val, int argc, JSVal
     // Any failure throws before anything is applied.
     std::string key = vs + '\x1f' + fs;
     std::string err;
-    if (!w->graph)
+    if (!w->graph())
         return JS_ThrowSyntaxError(ctx, "setShader: no scene graph");
     using Target = scene::SceneRenderer::CustomShaderTarget;
-    if (w->node->type() == scene::SceneNode::Type::InstancedMesh) {
-        auto* instNode = static_cast<scene::InstancedMeshNode*>(w->node);
-        if (!w->graph->compileCustomShader(Target::Instanced, key, vs, fs, err))
+    if (w->node()->type() == scene::SceneNode::Type::InstancedMesh) {
+        auto* instNode = static_cast<scene::InstancedMeshNode*>(w->node());
+        if (!w->graph()->compileCustomShader(Target::Instanced, key, vs, fs, err))
             return JS_ThrowSyntaxError(ctx, "%s", err.c_str());
         instNode->setCustomShader(std::move(vs), std::move(fs));
         for (const auto& u : uniforms)
             instNode->setCustomShaderUniform(u.name, u.comps, u.v);
         return JS_DupValue(ctx, this_val);
     }
-    auto* meshNode = static_cast<scene::MeshNode*>(w->node);
-    if (!w->graph->compileCustomShader(Target::Static, key, vs, fs, err))
+    auto* meshNode = static_cast<scene::MeshNode*>(w->node());
+    if (!w->graph()->compileCustomShader(Target::Static, key, vs, fs, err))
         return JS_ThrowSyntaxError(ctx, "%s", err.c_str());
     if (meshNode->asSkinnedMesh() &&
-        !w->graph->compileCustomShader(Target::Skinned, key, vs, fs, err))
+        !w->graph()->compileCustomShader(Target::Skinned, key, vs, fs, err))
         return JS_ThrowSyntaxError(ctx, "%s", err.c_str());
 
     meshNode->setCustomShader(std::move(vs), std::move(fs));
@@ -230,10 +230,10 @@ JSValue js_node_setShaderUniform(JSContext* ctx, JSValueConst this_val, int argc
     if (!isShaderableNode(w))
         return JS_ThrowTypeError(ctx,
             "setShaderUniform: not a MeshNode or InstancedMeshNode");
-    const bool inst = w->node->type() == scene::SceneNode::Type::InstancedMesh;
+    const bool inst = w->node()->type() == scene::SceneNode::Type::InstancedMesh;
     const bool hasShader =
-        inst ? static_cast<scene::InstancedMeshNode*>(w->node)->hasCustomShader()
-             : static_cast<scene::MeshNode*>(w->node)->hasCustomShader();
+        inst ? static_cast<scene::InstancedMeshNode*>(w->node())->hasCustomShader()
+             : static_cast<scene::MeshNode*>(w->node())->hasCustomShader();
     if (!hasShader)
         return JS_ThrowTypeError(ctx,
             "setShaderUniform: no custom shader set (call setShader first)");
@@ -250,10 +250,10 @@ JSValue js_node_setShaderUniform(JSContext* ctx, JSValueConst this_val, int argc
         return JS_ThrowTypeError(ctx,
             "setShaderUniform: value must be a number or an array of 1-4 numbers");
     if (inst)
-        static_cast<scene::InstancedMeshNode*>(w->node)
+        static_cast<scene::InstancedMeshNode*>(w->node())
             ->setCustomShaderUniform(name, comps, v);
     else
-        static_cast<scene::MeshNode*>(w->node)
+        static_cast<scene::MeshNode*>(w->node())
             ->setCustomShaderUniform(name, comps, v);
     return JS_DupValue(ctx, this_val);
 }
@@ -266,24 +266,24 @@ JSValue js_node_clearShader(JSContext* ctx, JSValueConst this_val, int, JSValueC
     if (!isShaderableNode(w))
         return JS_ThrowTypeError(ctx,
             "clearShader: not a MeshNode or InstancedMeshNode");
-    if (w->node->type() == scene::SceneNode::Type::InstancedMesh)
-        static_cast<scene::InstancedMeshNode*>(w->node)->clearCustomShader();
+    if (w->node()->type() == scene::SceneNode::Type::InstancedMesh)
+        static_cast<scene::InstancedMeshNode*>(w->node())->clearCustomShader();
     else
-        static_cast<scene::MeshNode*>(w->node)->clearCustomShader();
+        static_cast<scene::MeshNode*>(w->node())->clearCustomShader();
     return JS_DupValue(ctx, this_val);
 }
 
 // updateMesh(meshOrOpts[, opts])
 JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node)
+    if (!w || !w->node())
         return JS_ThrowTypeError(ctx, "updateMesh: invalid node");
-    if (w->node->type() != scene::SceneNode::Type::Mesh)
+    if (w->node()->type() != scene::SceneNode::Type::Mesh)
         return JS_ThrowTypeError(ctx, "updateMesh: node is not a MeshNode");
     if (argc < 1)
         return JS_ThrowTypeError(ctx, "updateMesh: missing argument");
 
-    auto* meshNode = static_cast<scene::MeshNode*>(w->node);
+    auto* meshNode = static_cast<scene::MeshNode*>(w->node());
     bromesh::MeshData meshData;
     bool gotData = false;
 
@@ -811,9 +811,9 @@ JSValue js_sg_createSkinnedMesh(JSContext* ctx, JSValueConst this_val,
 JSValue js_node_setSkinningMatrices(JSContext* ctx, JSValueConst this_val,
                                            int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::Mesh)
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Mesh)
         return JS_ThrowTypeError(ctx, "setSkinningMatrices: not a mesh node");
-    auto* sm = static_cast<scene::MeshNode*>(w->node)->asSkinnedMesh();
+    auto* sm = static_cast<scene::MeshNode*>(w->node())->asSkinnedMesh();
     if (!sm)
         return JS_ThrowTypeError(ctx,
             "setSkinningMatrices: node is not a skinned mesh (use createSkinnedMesh)");
@@ -1009,9 +1009,9 @@ JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
 JSValue js_node_setInstancedMesh(JSContext* ctx, JSValueConst this_val,
                                         int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
     if (argc < 1) return JS_UNDEFINED;
-    auto* node = static_cast<scene::InstancedMeshNode*>(w->node);
+    auto* node = static_cast<scene::InstancedMeshNode*>(w->node());
     if (MeshBindings::getMeshData(ctx, argv[0])) {
         node->setMesh(*MeshBindings::getMeshData(ctx, argv[0]));
     }
@@ -1021,7 +1021,7 @@ JSValue js_node_setInstancedMesh(JSContext* ctx, JSValueConst this_val,
 JSValue js_node_setInstances(JSContext* ctx, JSValueConst this_val,
                                     int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
     if (argc < 1) return JS_UNDEFINED;
     size_t off = 0, len = 0;
     JSValue ab = JS_GetTypedArrayBuffer(ctx, argv[0], &off, &len, nullptr);
@@ -1031,7 +1031,7 @@ JSValue js_node_setInstances(JSContext* ctx, JSValueConst this_val,
     if (base) {
         const float* data = reinterpret_cast<const float*>(base + off);
         size_t count = (len / sizeof(float)) / 16;
-        static_cast<scene::InstancedMeshNode*>(w->node)->setInstances(data, count);
+        static_cast<scene::InstancedMeshNode*>(w->node())->setInstances(data, count);
     }
     JS_FreeValue(ctx, ab);
     return JS_UNDEFINED;
@@ -1040,7 +1040,7 @@ JSValue js_node_setInstances(JSContext* ctx, JSValueConst this_val,
 JSValue js_node_setInstancesFromTransforms(JSContext* ctx, JSValueConst this_val,
                                                   int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
     if (argc < 1) return JS_UNDEFINED;
     size_t off = 0, len = 0;
     JSValue ab = JS_GetTypedArrayBuffer(ctx, argv[0], &off, &len, nullptr);
@@ -1050,7 +1050,7 @@ JSValue js_node_setInstancesFromTransforms(JSContext* ctx, JSValueConst this_val
     if (base) {
         const float* data = reinterpret_cast<const float*>(base + off);
         size_t count = (len / sizeof(float)) / 9;
-        static_cast<scene::InstancedMeshNode*>(w->node)->setInstancesFromPosQuatScale(data, count);
+        static_cast<scene::InstancedMeshNode*>(w->node())->setInstancesFromPosQuatScale(data, count);
     }
     JS_FreeValue(ctx, ab);
     return JS_UNDEFINED;
@@ -1059,7 +1059,7 @@ JSValue js_node_setInstancesFromTransforms(JSContext* ctx, JSValueConst this_val
 JSValue js_node_updateInstance(JSContext* ctx, JSValueConst this_val,
                                       int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
     if (argc < 2) return JS_UNDEFINED;
     int32_t idx = 0;
     JS_ToInt32(ctx, &idx, argv[0]);
@@ -1070,7 +1070,7 @@ JSValue js_node_updateInstance(JSContext* ctx, JSValueConst this_val,
     uint8_t* base = JS_GetArrayBuffer(ctx, &bytes, ab);
     if (base && len >= sizeof(float) * 16 && idx >= 0) {
         const float* data = reinterpret_cast<const float*>(base + off);
-        static_cast<scene::InstancedMeshNode*>(w->node)->updateInstance((size_t)idx, data);
+        static_cast<scene::InstancedMeshNode*>(w->node())->updateInstance((size_t)idx, data);
     }
     JS_FreeValue(ctx, ab);
     return JS_UNDEFINED;
@@ -1079,30 +1079,30 @@ JSValue js_node_updateInstance(JSContext* ctx, JSValueConst this_val,
 JSValue js_node_setAtlasGrid(JSContext* ctx, JSValueConst this_val,
                                     int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
     if (argc < 2) return JS_UNDEFINED;
     int32_t cols = 1, rows = 1;
     JS_ToInt32(ctx, &cols, argv[0]);
     JS_ToInt32(ctx, &rows, argv[1]);
-    static_cast<scene::InstancedMeshNode*>(w->node)->setAtlasGrid(cols, rows);
+    static_cast<scene::InstancedMeshNode*>(w->node())->setAtlasGrid(cols, rows);
     return JS_UNDEFINED;
 }
 
 JSValue js_node_setAlphaCutoff(JSContext* ctx, JSValueConst this_val,
                                       int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
     if (argc < 1) return JS_UNDEFINED;
-    static_cast<scene::InstancedMeshNode*>(w->node)->setAlphaCutoff((float)jsNum(ctx, argv[0]));
+    static_cast<scene::InstancedMeshNode*>(w->node())->setAlphaCutoff((float)jsNum(ctx, argv[0]));
     return JS_UNDEFINED;
 }
 
 JSValue js_node_setDoubleSided(JSContext* ctx, JSValueConst this_val,
                                       int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node || w->node->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::InstancedMesh) return JS_UNDEFINED;
     if (argc < 1) return JS_UNDEFINED;
-    static_cast<scene::InstancedMeshNode*>(w->node)->setDoubleSided(JS_ToBool(ctx, argv[0]) == 1);
+    static_cast<scene::InstancedMeshNode*>(w->node())->setDoubleSided(JS_ToBool(ctx, argv[0]) == 1);
     return JS_UNDEFINED;
 }
 

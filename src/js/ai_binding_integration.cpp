@@ -8,14 +8,14 @@
 // plus the per-tick `self` proxy whose methods reflect the binding's enabled
 // capabilities.
 //
-// NodeWrapper / GraphWrapper live in scene_bindings.cpp; we forward-declare
-// the shape of those structs here. Access is through thin helpers exposed via
-// headers so this file doesn't need to know qjsbind internals of the scene
-// module.
+// NodeWrapper / GraphWrapper come from scene_bindings_internal.h (shared with
+// the scene_bindings*.cpp units) so the wrapper layout and liveness scheme
+// can never drift between the two modules.
 
 #include "js/ai_bindings.h"
 #if BRO_WITH_GAMEAI  // modular-build feature gate
 #include "js/scene_bindings.h"
+#include "js/scene_bindings_internal.h"
 #include "js/terrain_bindings.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_node.h"
@@ -39,21 +39,6 @@
 #include <cmath>
 
 namespace bro::js {
-
-// ───────────────────────────────────────────────────────────────────────────
-// Forward-declared wrapper shapes (kept in sync with scene_bindings.cpp).
-// qjsbind::unwrap<T> works purely on JS class id; the struct layout here
-// just has to match.
-// ───────────────────────────────────────────────────────────────────────────
-
-struct NodeWrapper {
-    scene::SceneNode* node;
-    scene::SceneGraph* graph;
-};
-
-struct GraphWrapper {
-    scene::SceneGraph* graph;
-};
 
 // ───────────────────────────────────────────────────────────────────────────
 // JsCapability — wraps JS-authored {gate, start, advance} callbacks behind
@@ -533,7 +518,7 @@ static void parseLaneWaypoints(JSContext* ctx, JSValueConst arr,
 
 JSValue js_sg_attachAIWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<GraphWrapper>(ctx, this_val);
-    if (!w || !w->graph || argc < 1) return JS_UNDEFINED;
+    if (!w || !w->graph() || argc < 1) return JS_UNDEFINED;
     auto* world = worldFromJS(ctx, argv[0]);
     if (!world) return JS_ThrowTypeError(ctx, "attachAIWorld: expected a bro.ai.game.createWorld()");
     float stepHz = 60.0f;
@@ -546,19 +531,21 @@ JSValue js_sg_attachAIWorld(JSContext* ctx, JSValueConst this_val, int argc, JSV
         if (JS_IsNumber(v)) { int32_t d = 0; JS_ToInt32(ctx, &d, v); maxSteps = d; }
         JS_FreeValue(ctx, v);
     }
-    w->graph->attachAIWorld(world, stepHz, maxSteps);
-    // Hold the world JSValue alive on the GraphWrapper for the think loop
-    // (so __agents queries and the think's world param keep pointing at
-    // something GC-safe).
-    JS_SetPropertyStr(ctx, this_val, "__aiWorld", JS_DupValue(ctx, argv[0]));
+    // The graph holds the world's JS wrapper alive for the duration of the
+    // attachment (SceneGraph::aiWorldPin_) — a keep-alive on the graph
+    // itself, not on this GraphWrapper JS object, so the raw World* can't
+    // dangle even if the app drops every JS reference to the world (and the
+    // graph wrapper). Released on detachAIWorld / graph teardown, both of
+    // which run before JS runtime teardown.
+    w->graph()->attachAIWorld(world, stepHz, maxSteps,
+        std::make_shared<JSFnRef>(ctx, JS_DupValue(ctx, argv[0])));
     return JS_UNDEFINED;
 }
 
 JSValue js_sg_detachAIWorld(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* w = qjsbind::unwrap<GraphWrapper>(ctx, this_val);
-    if (!w || !w->graph) return JS_UNDEFINED;
-    w->graph->detachAIWorld();
-    JS_SetPropertyStr(ctx, this_val, "__aiWorld", JS_UNDEFINED);
+    if (!w || !w->graph()) return JS_UNDEFINED;
+    w->graph()->detachAIWorld();
     return JS_UNDEFINED;
 }
 
@@ -582,7 +569,7 @@ JSValue js_sg_detachAIWorld(JSContext* ctx, JSValueConst this_val, int, JSValueC
 
 static JSValue js_node_attachAgent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* nw = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!nw || !nw->node || !nw->graph || argc < 2)
+    if (!nw || !nw->node() || !nw->graph() || argc < 2)
         return JS_ThrowTypeError(ctx, "node.attachAgent(world, agent, opts)");
     auto* world = worldFromJS(ctx, argv[0]);
     if (!world)
@@ -592,7 +579,7 @@ static JSValue js_node_attachAgent(JSContext* ctx, JSValueConst this_val, int ar
         return JS_ThrowTypeError(ctx, "attachAgent: second arg must be a bro.ai.game.createAgent()");
 
     // Ensure or reuse a binding on this node.
-    auto* binding = nw->graph->attachAgentBinding(nw->node);
+    auto* binding = nw->graph()->attachAgentBinding(nw->node());
     if (!binding) return JS_ThrowInternalError(ctx, "attachAgent: failed to create binding");
     binding->setAgent(agent);
 
@@ -603,6 +590,7 @@ static JSValue js_node_attachAgent(JSContext* ctx, JSValueConst this_val, int ar
     binding->setGroundFollow({});  // re-attach resets any previous probe
     binding->stopNavigation();     // ... and any in-flight navmesh route
     binding->setNavMesh(nullptr);
+    binding->clearKeepAlives();    // ... and any previous JS-wrapper pins
 
     // Default capability set: all six built-ins (trimmed to "basic_attack +
     // hold" if caller passes an explicit list).
@@ -646,18 +634,18 @@ static JSValue js_node_attachAgent(JSContext* ctx, JSValueConst this_val, int ar
         JS_FreeValue(ctx, v);
 
         // navMesh: a bro.ai.game.bakeNavMesh()/loadNavMesh() handle — enables
-        // node.navigateTo() route-following on this binding. The JS wrapper is
-        // pinned on the node so it outlives the binding's raw pointer.
+        // node.navigateTo() route-following on this binding. The binding takes
+        // SHARED ownership of the mesh, so it stays valid even if the app
+        // drops every JS reference to it.
         v = JS_GetPropertyStr(ctx, opts, "navMesh");
         if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
-            auto* nm = navMeshFromJS(ctx, v);
+            auto nm = navMeshSharedFromJS(ctx, v);
             if (!nm) {
                 JS_FreeValue(ctx, v);
                 return JS_ThrowTypeError(ctx,
                     "attachAgent: navMesh must be a bro.ai.game.bakeNavMesh()/loadNavMesh() object");
             }
-            binding->setNavMesh(nm);
-            JS_SetPropertyStr(ctx, this_val, "__navMesh", JS_DupValue(ctx, v));
+            binding->setNavMesh(std::move(nm));
         }
         JS_FreeValue(ctx, v);
 
@@ -701,10 +689,12 @@ static JSValue js_node_attachAgent(JSContext* ctx, JSValueConst this_val, int ar
                     return JS_ThrowTypeError(ctx,
                         "attachAgent: groundFollow mode 'terrain' requires a scene.createTerrain() object");
                 }
-                // Pin the terrain JSValue on the node wrapper so the wrapper
-                // (and thus the probed TerrainManager) outlives the binding;
-                // terrainSampleHeight also verifies liveness per call.
-                JS_SetPropertyStr(ctx, this_val, "__groundTerrain", JS_DupValue(ctx, tv));
+                // Pin the terrain JSValue on the binding itself so the probed
+                // TerrainManager outlives the probe even if the app drops its
+                // own reference (terrainSampleHeight also verifies liveness
+                // per call as a second line of defence).
+                binding->addKeepAlive(
+                    std::make_shared<JSFnRef>(ctx, JS_DupValue(ctx, tv)));
                 JS_FreeValue(ctx, tv);
                 binding->setGroundFollow(
                     [th, rayStart, rayLength](float x, float z, float& outY) {
@@ -712,7 +702,7 @@ static JSValue js_node_attachAgent(JSContext* ctx, JSValueConst this_val, int ar
                     });
             } else if (mode == "raycast") {
 #if BRO_WITH_PHYSICS
-                auto* pw = nw->graph->physicsWorld();
+                auto* pw = nw->graph()->physicsWorld();
                 if (!pw) {
                     JS_FreeValue(ctx, v);
                     return JS_ThrowTypeError(ctx,
@@ -746,7 +736,7 @@ static JSValue js_node_attachAgent(JSContext* ctx, JSValueConst this_val, int ar
                 // after consumeStep on the main thread, but a step that
                 // overran a frame keeps ownership on the physics thread, in
                 // which case we skip and keep the last known ground height.
-                scene::SceneGraph* graph = nw->graph;
+                scene::SceneGraph* graph = nw->graph();
                 binding->setGroundFollow(
                     [graph, filter, rayStart, rayLength](float x, float z, float& outY) {
                         auto* world = graph->physicsWorld();
@@ -779,21 +769,23 @@ static JSValue js_node_attachAgent(JSContext* ctx, JSValueConst this_val, int ar
         addAllBuiltinCapabilities(binding->capabilities());
     }
 
-    // Hold a JSValue dup to the agent and world on the node wrapper so GC
-    // can't free the AgentData/WorldData while the binding references them.
-    JS_SetPropertyStr(ctx, this_val, "__agent", JS_DupValue(ctx, argv[1]));
-    JS_SetPropertyStr(ctx, this_val, "__aiWorld", JS_DupValue(ctx, argv[0]));
+    // Pin the agent and world JS wrappers on the binding so GC can't free
+    // the AgentData/WorldData while the binding references them raw. Pinned
+    // on the BINDING (not this node wrapper): wrapNode mints a fresh wrapper
+    // per call, so a wrapper-held pin dies with whichever transient wrapper
+    // attach happened to be called on. Released with the binding (detach,
+    // node/subtree destroy, graph teardown).
+    binding->addKeepAlive(std::make_shared<JSFnRef>(ctx, JS_DupValue(ctx, argv[1])));
+    binding->addKeepAlive(std::make_shared<JSFnRef>(ctx, JS_DupValue(ctx, argv[0])));
 
     return JS_DupValue(ctx, this_val);
 }
 
 static JSValue js_node_detachAgent(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* nw = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!nw || !nw->node || !nw->graph) return JS_UNDEFINED;
-    nw->graph->detachAgentBinding(nw->node);
-    JS_SetPropertyStr(ctx, this_val, "__agent", JS_UNDEFINED);
-    JS_SetPropertyStr(ctx, this_val, "__groundTerrain", JS_UNDEFINED);
-    JS_SetPropertyStr(ctx, this_val, "__navMesh", JS_UNDEFINED);
+    if (!nw || !nw->node() || !nw->graph()) return JS_UNDEFINED;
+    // Destroys the AgentBinding, which releases its JS-wrapper keep-alives.
+    nw->graph()->detachAgentBinding(nw->node());
     return JS_UNDEFINED;
 }
 
@@ -818,9 +810,9 @@ static JSValue js_node_detachAgent(JSContext* ctx, JSValueConst this_val, int, J
 static JSValue js_node_navigateTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
 #ifdef BROGAMEAGENT_HAS_NAVMESH
     auto* nw = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!nw || !nw->node || !nw->graph || argc < 1)
+    if (!nw || !nw->node() || !nw->graph() || argc < 1)
         return JS_ThrowTypeError(ctx, "node.navigateTo(target, opts?)");
-    auto* binding = nw->graph->agentBinding(nw->node);
+    auto* binding = nw->graph()->agentBinding(nw->node());
     if (!binding || !binding->agent())
         return JS_ThrowTypeError(ctx, "navigateTo: no agent attached (call node.attachAgent first)");
 
@@ -852,14 +844,13 @@ static JSValue js_node_navigateTo(JSContext* ctx, JSValueConst this_val, int arg
     if (argc >= 2 && JS_IsObject(argv[1])) {
         JSValue mv = JS_GetPropertyStr(ctx, argv[1], "navMesh");
         if (!JS_IsUndefined(mv) && !JS_IsNull(mv)) {
-            auto* nm = navMeshFromJS(ctx, mv);
+            auto nm = navMeshSharedFromJS(ctx, mv);
             if (!nm) {
                 JS_FreeValue(ctx, mv);
                 return JS_ThrowTypeError(ctx,
                     "navigateTo: navMesh must be a bro.ai.game.bakeNavMesh()/loadNavMesh() object");
             }
-            binding->setNavMesh(nm);
-            JS_SetPropertyStr(ctx, this_val, "__navMesh", JS_DupValue(ctx, mv));
+            binding->setNavMesh(std::move(nm));
         }
         JS_FreeValue(ctx, mv);
 
@@ -889,8 +880,8 @@ static JSValue js_node_navigateTo(JSContext* ctx, JSValueConst this_val, int arg
 
 static JSValue js_node_stopNavigation(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* nw = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!nw || !nw->node || !nw->graph) return JS_UNDEFINED;
-    if (auto* binding = nw->graph->agentBinding(nw->node)) binding->stopNavigation();
+    if (!nw || !nw->node() || !nw->graph()) return JS_UNDEFINED;
+    if (auto* binding = nw->graph()->agentBinding(nw->node())) binding->stopNavigation();
     return JS_UNDEFINED;
 }
 

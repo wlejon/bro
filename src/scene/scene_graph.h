@@ -63,6 +63,26 @@ public:
     /// Find a node by ID.
     SceneNode* findById(uint32_t id) const;
 
+    /// Resolve a node id to a live node, or nullptr once the node has been
+    /// destroyed (directly, via an ancestor subtree destroy, or graph
+    /// teardown). Unlike findById this also resolves the root node, which
+    /// lives outside the id table. SceneNode ids come from a process-wide
+    /// monotonic counter and are never reused, so a stale id can never alias
+    /// a different node — this is the liveness check JS node wrappers resolve
+    /// through on every call.
+    SceneNode* resolveNode(uint32_t id) const;
+
+    /// Shared liveness token for JS-side wrappers (SceneGraph / SceneNode /
+    /// Tween). Wrappers hold only a weak_ptr and re-resolve on every call: a
+    /// failed lock() or a null `graph` means this SceneGraph was destroyed
+    /// (canvas detached and pruned, or engine teardown) and the wrapper must
+    /// no-op instead of touching freed memory. Same pattern as
+    /// OutputTextureSource below, kept separate so texture-handle and
+    /// JS-wrapper lifetimes stay independently documented. Created in the
+    /// constructor; `graph` is nulled first thing in ~SceneGraph.
+    struct LivenessToken { SceneGraph* graph = nullptr; };
+    const std::shared_ptr<LivenessToken>& livenessToken() const { return liveToken_; }
+
     /// Find a node by name (first match).
     SceneNode* findByName(const std::string& name) const;
 
@@ -94,8 +114,13 @@ public:
 
     /// Attach a brogameagent::World driven at a fixed step by the engine loop.
     /// Caller retains ownership of the world (typically a JS-owned wrapper).
+    /// `keepAlive` is an opaque token held for the duration of the attachment
+    /// — the JS layer passes a holder that pins the world's JS wrapper so the
+    /// raw pointer can't dangle if the app drops its own reference. Released
+    /// on detachAIWorld() / ~SceneGraph (both run before JS runtime teardown).
     void attachAIWorld(brogameagent::World* world, float stepHz = 60.0f,
-                       int maxStepsPerFrame = 8);
+                       int maxStepsPerFrame = 8,
+                       std::shared_ptr<void> keepAlive = {});
     void detachAIWorld();
     AIWorldTicker* aiTicker() const { return aiTicker_.get(); }
 
@@ -427,8 +452,10 @@ private:
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;
 
-    // AI integration
+    // AI integration. aiWorldPin_ keeps the attached world's JS wrapper alive
+    // for the duration of the attachment (see attachAIWorld).
     std::unique_ptr<AIWorldTicker> aiTicker_;
+    std::shared_ptr<void> aiWorldPin_;
     std::unordered_map<uint32_t, std::unique_ptr<AgentBinding>> agentBindings_;
 
     // Tweens (ticked from tickAnimations; destroyed entries are swept there)
@@ -470,6 +497,10 @@ private:
     // Scene-as-texture liveness token (lazily created; see
     // outputTextureSource()). Consumers hold weak_ptrs only.
     std::shared_ptr<OutputTextureSource> outputTexSource_;
+
+    // JS-wrapper liveness token (created in the constructor; see
+    // livenessToken()). Wrappers hold weak_ptrs only.
+    std::shared_ptr<LivenessToken> liveToken_;
 
     // GL rendering: pipelines, FBOs, shadows, IBL, post stack. The renderer
     // never touches graph state in its destructor, so member order is not
