@@ -139,6 +139,15 @@ Physics.setLayers({
  * @param {number|bigint} [opts.userData=0] - 64-bit user data; survives round trips via getTransform/raycast/getUserData
  * @param {number}  [opts.friction=0.5]
  * @param {number}  [opts.restitution=0.3]
+ * @param {string}  [opts.frictionCombine]    - how this body's friction combines with
+ *                                              the other body's on contact: 'average' |
+ *                                              'min' | 'max' | 'multiply'. Omitted =
+ *                                              Jolt's default sqrt(f1*f2) (geometric
+ *                                              mean). If the two bodies disagree the
+ *                                              higher mode wins (average < min <
+ *                                              multiply < max).
+ * @param {string}  [opts.restitutionCombine] - same for restitution. Omitted = Jolt's
+ *                                              default max(r1, r2).
  * @param {number}  [opts.density=1000]    - kg/m³, sets mass via shape volume
  *                                           (convex shapes: box/sphere/capsule/
  *                                           cylinder/convexHull and compound parts)
@@ -745,14 +754,39 @@ if (under.length) console.log('picked body', under[0].bodyId);
  * bookkeeping you keep may be wedged. On overflow, re-derive presence with a
  * query (overlapShape / overlapPoint) instead of trusting the stream.
  *
+ * "added" events also carry a manifold snapshot:
+ *   - points:      up to 4 world-space contact points (on body2's surface)
+ *   - normal:      the contact normal — the direction body2 moves out of
+ *                  collision, i.e. it points from body1 toward body2
+ *   - penetration: penetration depth in meters; negative = speculative
+ *                  contact (bodies may not actually touch after solving)
+ * "removed" events have none of these (Jolt's removal callback carries only
+ * the body pair).
+ *
  * @returns {Array<{
  *   type: "added" | "removed",
  *   body1: number, body2: number,
  *   sensor: boolean,
+ *   points?: Array<{x,y,z}>,
+ *   normal?: {x,y,z},
+ *   penetration?: number,
  * }> & { overflow: boolean }}
  */
 const events = Physics.getContacts();
 if (events.overflow) { /* events were dropped this drain — resync triggers */ }
+
+/**
+ * Change a body's friction/restitution combine mode at runtime (same values
+ * as the frictionCombine/restitutionCombine creation options, plus 'default'
+ * to restore Jolt's built-in combine). Returns true on success.
+ *
+ * Jolt's defaults: combined friction = sqrt(f1*f2) (geometric mean),
+ * combined restitution = max(r1, r2). Precedence when the two bodies of a
+ * pair specify different modes: the higher mode wins, in the order
+ * average < min < multiply < max (Unity's rule).
+ */
+Physics.setFrictionCombine(id, 'min');
+Physics.setRestitutionCombine(id, 'max');
 
 
 // -----------------------------------------------------------------------------

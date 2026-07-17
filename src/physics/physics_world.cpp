@@ -153,11 +153,41 @@ private:
 
 struct PhysicsWorld::ListenerImpl : public ContactListener {
     ListenerImpl(size_t capacity, size_t maxBodies)
-        : buffer(capacity), sensorFlags(maxBodies, 0) {}
+        : buffer(capacity), sensorFlags(maxBodies, 0),
+          frictionModes(maxBodies, 0), restitutionModes(maxBodies, 0) {}
 
     void OnContactAdded(const Body& b1, const Body& b2,
-                        const ContactManifold&, ContactSettings&) override {
-        push(ContactEvent::Added, b1.GetID(), b2.GetID(), b1.IsSensor() || b2.IsSensor());
+                        const ContactManifold& manifold,
+                        ContactSettings& ioSettings) override {
+        applyCombine(b1, b2, ioSettings);
+
+        ContactEvent e;
+        e.type = ContactEvent::Added;
+        e.body1 = b1.GetID();
+        e.body2 = b2.GetID();
+        e.isSensor = b1.IsSensor() || b2.IsSensor();
+        // Manifold snapshot: world-space contact points (on body2's surface,
+        // capped at kMaxPoints), normal, penetration depth. Bounded copies
+        // only — this record crosses the lock-free ring.
+        uint n = std::min<uint>(manifold.mRelativeContactPointsOn2.size(),
+                                (uint)ContactEvent::kMaxPoints);
+        e.numPoints = (uint8_t)n;
+        for (uint i = 0; i < n; i++) {
+            RVec3 p = manifold.GetWorldSpaceContactPointOn2(i);
+            e.points[i] = Float3((float)p.GetX(), (float)p.GetY(), (float)p.GetZ());
+        }
+        manifold.mWorldSpaceNormal.StoreFloat3(&e.normal);
+        e.penetration = manifold.mPenetrationDepth;
+        push(e);
+    }
+
+    void OnContactPersisted(const Body& b1, const Body& b2,
+                            const ContactManifold&,
+                            ContactSettings& ioSettings) override {
+        // No event (getContacts keeps begin/end semantics), but the combined
+        // friction/restitution override must keep applying for the lifetime
+        // of the contact — Jolt re-derives ContactSettings every step.
+        applyCombine(b1, b2, ioSettings);
     }
 
     void OnContactRemoved(const SubShapeIDPair& pair) override {
@@ -167,8 +197,12 @@ struct PhysicsWorld::ListenerImpl : public ContactListener {
         // meant every sensor *exit* arrived mislabelled: an app could see a
         // trigger entered but never cleanly see it left. We keep our own
         // sensor bit per body index instead, written at create time.
-        push(ContactEvent::Removed, pair.GetBody1ID(), pair.GetBody2ID(),
-             isSensorId(pair.GetBody1ID()) || isSensorId(pair.GetBody2ID()));
+        ContactEvent e;
+        e.type = ContactEvent::Removed;
+        e.body1 = pair.GetBody1ID();
+        e.body2 = pair.GetBody2ID();
+        e.isSensor = isSensorId(pair.GetBody1ID()) || isSensorId(pair.GetBody2ID());
+        push(e);
     }
 
     // Read concurrently from Jolt's job threads during Update(); only ever
@@ -208,15 +242,65 @@ struct PhysicsWorld::ListenerImpl : public ContactListener {
     // disjoint slot via fetch_add rather than taking a lock. A slot beyond
     // capacity is dropped rather than risk an OOB write — capacity is sized
     // against maxBodies in PhysicsWorld::init().
-    void push(ContactEvent::Type type, BodyID b1, BodyID b2, bool sensor) {
+    void push(const ContactEvent& e) {
         size_t idx = writeIdx.fetch_add(1, std::memory_order_relaxed);
         if (idx >= buffer.size()) return;
-        buffer[idx] = ContactEvent{type, b1, b2, sensor};
+        buffer[idx] = e;
+    }
+
+    // --- Per-body friction/restitution combine modes ---
+    //
+    // Same threading contract as sensorFlags: written only between steps on
+    // the phase-owning thread (body creation / idle-only setters), read
+    // concurrently from Jolt's job threads during Update() — immutable for
+    // the duration of a step, so no synchronization. Indexed by BodyID index.
+
+    void setCombineModes(BodyID id, CombineMode friction, CombineMode restitution) {
+        const uint32_t idx = id.GetIndex();
+        if (idx >= frictionModes.size()) return;
+        frictionModes[idx] = (uint8_t)friction;
+        restitutionModes[idx] = (uint8_t)restitution;
+        if (friction != CombineMode::Default || restitution != CombineMode::Default)
+            anyCombineModes = true;
+    }
+
+    static float combineValue(uint8_t mode, float a, float b) {
+        switch ((CombineMode)mode) {
+            case CombineMode::Average:  return 0.5f * (a + b);
+            case CombineMode::Min:      return std::min(a, b);
+            case CombineMode::Multiply: return a * b;
+            case CombineMode::Max:      return std::max(a, b);
+            case CombineMode::Default:  break;
+        }
+        return a;
+    }
+
+    // Override Jolt's combined friction/restitution when either body carries
+    // a non-default mode. Precedence when the two disagree: the higher mode
+    // wins (average < min < multiply < max — Unity's rule). Jolt's defaults
+    // otherwise: friction sqrt(f1*f2), restitution max(r1, r2).
+    void applyCombine(const Body& b1, const Body& b2, ContactSettings& io) const {
+        if (!anyCombineModes) return;
+        const uint32_t i1 = b1.GetID().GetIndex();
+        const uint32_t i2 = b2.GetID().GetIndex();
+        const uint8_t f1 = i1 < frictionModes.size() ? frictionModes[i1] : 0;
+        const uint8_t f2 = i2 < frictionModes.size() ? frictionModes[i2] : 0;
+        const uint8_t fm = std::max(f1, f2);
+        if (fm != (uint8_t)CombineMode::Default)
+            io.mCombinedFriction = combineValue(fm, b1.GetFriction(), b2.GetFriction());
+        const uint8_t r1 = i1 < restitutionModes.size() ? restitutionModes[i1] : 0;
+        const uint8_t r2 = i2 < restitutionModes.size() ? restitutionModes[i2] : 0;
+        const uint8_t rm = std::max(r1, r2);
+        if (rm != (uint8_t)CombineMode::Default)
+            io.mCombinedRestitution = combineValue(rm, b1.GetRestitution(), b2.GetRestitution());
     }
 
     std::vector<ContactEvent> buffer;
     std::atomic<size_t> writeIdx{0};
     std::vector<uint8_t> sensorFlags; // by BodyID index; see isSensorId/setSensorId
+    std::vector<uint8_t> frictionModes;    // by BodyID index; CombineMode values
+    std::vector<uint8_t> restitutionModes; // by BodyID index; CombineMode values
+    bool anyCombineModes = false;          // fast path: no mode ever set
 };
 
 // --- Jolt global init (once) ---
@@ -644,8 +728,13 @@ BodyID PhysicsWorld::createBody(const BodyOptions& opts) {
 
     // Remember whether this body is a sensor. OnContactRemoved gets only a
     // BodyID — possibly of a body that no longer exists — so this table is the
-    // only way it can label a sensor *exit* correctly.
-    if (listener_ && !id.IsInvalid()) listener_->setSensorId(id, opts.isSensor);
+    // only way it can label a sensor *exit* correctly. Combine modes live in
+    // the same per-index tables and must be (re)written here too, or a reused
+    // body index would inherit a destroyed body's modes.
+    if (listener_ && !id.IsInvalid()) {
+        listener_->setSensorId(id, opts.isSensor);
+        listener_->setCombineModes(id, opts.frictionCombine, opts.restitutionCombine);
+    }
     return id;
 }
 
@@ -1012,6 +1101,28 @@ bool PhysicsWorld::isSensor(BodyID id) const {
     BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
     if (!lock.Succeeded()) return false;
     return lock.GetBody().IsSensor();
+}
+
+void PhysicsWorld::setFrictionCombine(BodyID id, CombineMode mode) {
+    if (!listener_) return;
+    BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) return;   // never write a dead index's slot
+    const uint32_t idx = id.GetIndex();
+    if (idx < listener_->frictionModes.size()) {
+        listener_->frictionModes[idx] = (uint8_t)mode;
+        if (mode != CombineMode::Default) listener_->anyCombineModes = true;
+    }
+}
+
+void PhysicsWorld::setRestitutionCombine(BodyID id, CombineMode mode) {
+    if (!listener_) return;
+    BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) return;
+    const uint32_t idx = id.GetIndex();
+    if (idx < listener_->restitutionModes.size()) {
+        listener_->restitutionModes[idx] = (uint8_t)mode;
+        if (mode != CombineMode::Default) listener_->anyCombineModes = true;
+    }
 }
 
 void PhysicsWorld::setUserData(BodyID id, uint64_t data) {
@@ -2018,6 +2129,16 @@ uint32_t PhysicsWorld::createRagdoll(const RagdollOptions& opts) {
     rag->AddToPhysicsSystem(opts.activate ? EActivation::Activate
                                           : EActivation::DontActivate);
 
+    // Ragdoll part bodies reuse body-manager indices; reset the per-index
+    // listener tables (sensor bit, combine modes) so a part never inherits a
+    // destroyed body's flags.
+    if (listener_) {
+        for (const BodyID& id : rag->GetBodyIDs()) {
+            listener_->setSensorId(id, false);
+            listener_->setCombineModes(id, CombineMode::Default, CombineMode::Default);
+        }
+    }
+
     RagdollEntry entry;
     entry.ragdoll = ragRef;
     entry.settings = settings;
@@ -2322,7 +2443,10 @@ uint32_t PhysicsWorld::createSoftBody(const SoftBodyOptions& opts) {
     BodyInterface& bi = physicsSystem_.GetBodyInterface();
     BodyID id = bi.CreateAndAddSoftBody(scs, EActivation::Activate);
     if (id.IsInvalid()) return 0;
-    if (listener_) listener_->setSensorId(id, false);
+    if (listener_) {
+        listener_->setSensorId(id, false);
+        listener_->setCombineModes(id, CombineMode::Default, CombineMode::Default);
+    }
 
     SoftBodyEntry entry;
     entry.settings = settings;

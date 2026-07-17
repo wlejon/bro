@@ -13,6 +13,7 @@
 
 #include <Jolt/Jolt.h>
 #include <Jolt/Math/Float2.h>
+#include <Jolt/Math/Float3.h>
 #include <Jolt/Physics/PhysicsSystem.h>
 #include <Jolt/Physics/Body/BodyID.h>
 #include <Jolt/Physics/Body/AllowedDOFs.h>
@@ -38,12 +39,40 @@ enum PhysicsState : uint32_t {
 };
 
 /// Contact event recorded during a physics step (thread-safe collection).
+/// POD and bounded-size — it crosses the lock-free per-step contact ring.
+/// Added events carry manifold data (world-space contact points capped at
+/// kMaxPoints, the contact normal, penetration depth); Removed events carry
+/// only the pair (Jolt's removal callback has no manifold).
 struct ContactEvent {
     enum Type { Added, Persisted, Removed };
-    Type type;
+    static constexpr int kMaxPoints = 4;
+
+    Type type = Added;
     JPH::BodyID body1;
     JPH::BodyID body2;
     bool isSensor = false;  // true when either body is a sensor (overlap event)
+
+    // Manifold snapshot (Added only). `normal` is Jolt's manifold normal: the
+    // world-space direction along which body2 moves out of collision (i.e. it
+    // points from body1 toward body2). `penetration` may be negative for a
+    // speculative contact. Points are on the surface of body2, world space.
+    uint8_t numPoints = 0;
+    JPH::Float3 points[kMaxPoints] = {};
+    JPH::Float3 normal{0, 0, 0};
+    float penetration = 0.0f;
+};
+
+/// Per-body friction/restitution combine mode. Default keeps Jolt's built-in
+/// combine functions: friction = sqrt(f1 * f2) (geometric mean), restitution
+/// = max(r1, r2) — see ContactConstraintManager. When either body of a pair
+/// specifies a non-default mode, the HIGHER mode of the two wins (Unity-style
+/// precedence: average < min < multiply < max).
+enum class CombineMode : uint8_t {
+    Default  = 0,
+    Average  = 1,
+    Min      = 2,
+    Multiply = 3,
+    Max      = 4,
 };
 
 /// Raycast hit result.
@@ -133,6 +162,8 @@ struct BodyOptions {
 
     float friction = 0.5f;
     float restitution = 0.3f;
+    CombineMode frictionCombine = CombineMode::Default;
+    CombineMode restitutionCombine = CombineMode::Default;
     float density = 1000.0f;
     float gravityFactor = 1.0f;
     float linearDamping = 0.05f;
@@ -671,6 +702,13 @@ public:
 
     void setUserData(JPH::BodyID id, uint64_t data);
     uint64_t getUserData(JPH::BodyID id) const;
+
+    /// Per-body friction/restitution combine mode (see CombineMode). Applied
+    /// in the contact listener by overriding ContactSettings' combined values
+    /// whenever either body of a pair has a non-default mode; the higher mode
+    /// of the two wins. Call only when idle.
+    void setFrictionCombine(JPH::BodyID id, CombineMode mode);
+    void setRestitutionCombine(JPH::BodyID id, CombineMode mode);
 
     // --- Constraints ---
 

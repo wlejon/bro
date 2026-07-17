@@ -220,6 +220,16 @@ static bool readU32Array(JSContext* ctx, JSValueConst v, std::vector<uint32_t>& 
     return true;
 }
 
+// Parse a combine-mode string ('average' | 'min' | 'max' | 'multiply').
+static bool parseCombineMode(const std::string& s, physics::CombineMode& out) {
+    if (s == "average")                    out = physics::CombineMode::Average;
+    else if (s == "min" || s == "minimum") out = physics::CombineMode::Min;
+    else if (s == "max" || s == "maximum") out = physics::CombineMode::Max;
+    else if (s == "multiply")              out = physics::CombineMode::Multiply;
+    else return false;
+    return true;
+}
+
 // Parse a BodyOptions struct from a JS opts object (against `world`).
 static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
                             physics::PhysicsWorld* world,
@@ -266,6 +276,16 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
     out.ccd = qjsbind::get_prop_bool(ctx, opts, "ccd", false);
     out.friction = (float)qjsbind::get_prop_number(ctx, opts, "friction", 0.5);
     out.restitution = (float)qjsbind::get_prop_number(ctx, opts, "restitution", 0.3);
+    std::string fc = qjsbind::get_prop_string(ctx, opts, "frictionCombine");
+    if (!fc.empty() && !parseCombineMode(fc, out.frictionCombine)) {
+        err = "frictionCombine must be 'average' | 'min' | 'max' | 'multiply'";
+        return false;
+    }
+    std::string rc = qjsbind::get_prop_string(ctx, opts, "restitutionCombine");
+    if (!rc.empty() && !parseCombineMode(rc, out.restitutionCombine)) {
+        err = "restitutionCombine must be 'average' | 'min' | 'max' | 'multiply'";
+        return false;
+    }
     out.density = (float)qjsbind::get_prop_number(ctx, opts, "density", 1000.0);
     out.gravityFactor = (float)qjsbind::get_prop_number(ctx, opts, "gravityFactor", 1.0);
     out.linearDamping = (float)qjsbind::get_prop_number(ctx, opts, "linearDamping", 0.05);
@@ -728,9 +748,50 @@ static JSValue worldGetContacts(JSContext* ctx, JsWorld* w) {
         JS_SetPropertyStr(ctx, obj, "body1", JS_NewInt32(ctx, t1));
         JS_SetPropertyStr(ctx, obj, "body2", JS_NewInt32(ctx, t2));
         JS_SetPropertyStr(ctx, obj, "sensor", JS_NewBool(ctx, e.isSensor));
+        // Manifold snapshot on "added" events: world-space contact points
+        // (max 4, on body2's surface), the contact normal (direction body2
+        // moves out of collision, i.e. from body1 toward body2), penetration
+        // depth (may be negative for a speculative contact).
+        if (e.type == physics::ContactEvent::Added) {
+            setVec3Prop(ctx, obj, "normal", e.normal.x, e.normal.y, e.normal.z);
+            JS_SetPropertyStr(ctx, obj, "penetration", JS_NewFloat64(ctx, e.penetration));
+            JSValue pts = JS_NewArray(ctx);
+            for (uint32_t k = 0; k < e.numPoints; k++) {
+                JSValue p = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, p, "x", JS_NewFloat64(ctx, e.points[k].x));
+                JS_SetPropertyStr(ctx, p, "y", JS_NewFloat64(ctx, e.points[k].y));
+                JS_SetPropertyStr(ctx, p, "z", JS_NewFloat64(ctx, e.points[k].z));
+                JS_SetPropertyUint32(ctx, pts, k, p);
+            }
+            JS_SetPropertyStr(ctx, obj, "points", pts);
+        }
         JS_SetPropertyUint32(ctx, arr, i++, obj);
     }
     return arr;
+}
+
+// setFrictionCombine(tag, mode) / setRestitutionCombine(tag, mode) — shared
+// by the default world and sandbox handles.
+static JSValue worldSetCombine(JSContext* ctx, JsWorld* w, int argc,
+                               JSValueConst* argv, bool friction) {
+    if (!w || !w->world || argc < 2) return JS_FALSE;
+    int32_t tag = -1; JS_ToInt32(ctx, &tag, argv[0]);
+    JPH::BodyID id = w->bodyIdForTag(tag);
+    if (id.IsInvalid()) return JS_FALSE;
+    physics::CombineMode mode = physics::CombineMode::Default;
+    if (JS_IsString(argv[1])) {
+        const char* s = JS_ToCString(ctx, argv[1]);
+        std::string str = s ? s : "";
+        if (s) JS_FreeCString(ctx, s);
+        if (str != "default" && !parseCombineMode(str, mode))
+            return JS_ThrowTypeError(ctx,
+                "combine mode must be 'default' | 'average' | 'min' | 'max' | 'multiply'");
+    } else if (!JS_IsNull(argv[1]) && !JS_IsUndefined(argv[1])) {
+        return JS_ThrowTypeError(ctx, "combine mode must be a string");
+    }
+    if (friction) w->world->setFrictionCombine(id, mode);
+    else          w->world->setRestitutionCombine(id, mode);
+    return JS_TRUE;
 }
 
 // SixDOF axis names in Jolt EAxis order (tx,ty,tz,rx,ry,rz).
@@ -2784,6 +2845,16 @@ static JSValue js_physics_getContacts(JSContext* ctx, JSValueConst, int, JSValue
     return worldGetContacts(ctx, s_defaultWorld);
 }
 
+static JSValue js_physics_setFrictionCombine(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    return worldSetCombine(ctx, s_defaultWorld, argc, argv, /*friction=*/true);
+}
+
+static JSValue js_physics_setRestitutionCombine(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    return worldSetCombine(ctx, s_defaultWorld, argc, argv, /*friction=*/false);
+}
+
 static JSValue js_physics_setTimeStep(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     DEFW_GUARD();
     if (argc < 1) return JS_UNDEFINED;
@@ -3159,6 +3230,16 @@ static JSValue jsw_getContacts(JSContext* ctx, JSValueConst thisVal, int, JSValu
     return worldGetContacts(ctx, w);
 }
 
+static JSValue jsw_setFrictionCombine(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    return worldSetCombine(ctx, w, argc, argv, /*friction=*/true);
+}
+
+static JSValue jsw_setRestitutionCombine(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    return worldSetCombine(ctx, w, argc, argv, /*friction=*/false);
+}
+
 static JSValue jsw_getBrokenConstraints(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
     JsWorld* w = worldFromThis(ctx, thisVal);
     if (!w) return JS_NewArray(ctx);
@@ -3389,6 +3470,8 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("overlapShape", 1, jsw_overlapShape),
     JS_CFUNC_DEF("overlapPoint", 4, jsw_overlapPoint),
     JS_CFUNC_DEF("getContacts", 0, jsw_getContacts),
+    JS_CFUNC_DEF("setFrictionCombine", 2, jsw_setFrictionCombine),
+    JS_CFUNC_DEF("setRestitutionCombine", 2, jsw_setRestitutionCombine),
     JS_CFUNC_DEF("createCharacter", 1, jsw_createCharacter),
     JS_CFUNC_DEF("createVehicle", 1, jsw_createVehicle),
     JS_CFUNC_DEF("createRagdoll", 1, jsw_createRagdoll),
@@ -3538,6 +3621,8 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("overlapShape", js_physics_overlapShape, 1)
         .function("overlapPoint", js_physics_overlapPoint, 4)
         .function("getContacts", js_physics_getContacts, 0)
+        .function("setFrictionCombine", js_physics_setFrictionCombine, 2)
+        .function("setRestitutionCombine", js_physics_setRestitutionCombine, 2)
         .function("setTimeStep", js_physics_setTimeStep, 1)
         .function("setInterpolation", js_physics_setInterpolation, 1)
         .function("getInterpolation", js_physics_getInterpolation, 0)
