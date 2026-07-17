@@ -72,6 +72,8 @@ SceneRenderer::~SceneRenderer() {
     if (ssaoNoiseTex_) { glDeleteTextures(1, &ssaoNoiseTex_); ssaoNoiseTex_ = 0; }
     destroyDoFFBOs();
     if (dofProgram_) { glDeleteProgram(dofProgram_); dofProgram_ = 0; }
+    destroyFXAAFBO();
+    if (fxaaProgram_) { glDeleteProgram(fxaaProgram_); fxaaProgram_ = 0; }
     destroyShadowAtlas();
     if (shadowProgram_) { glDeleteProgram(shadowProgram_); shadowProgram_ = 0; }
     if (shadowInstancedProgram_) { glDeleteProgram(shadowInstancedProgram_); shadowInstancedProgram_ = 0; }
@@ -1048,6 +1050,12 @@ void SceneRenderer::render3D() {
             // enabled, produces postColorTex_ for the compositor via
             // finalColorTex(). No-op (clears tiltActive_) when disabled.
             runTiltShiftPass();
+
+            // --- FXAA (always last) ------------------------------------------
+            // Anti-aliases whichever LDR texture the compositor would show
+            // (tilt output or tonemap output) into fxaaColorTex_. No-op
+            // (clears fxaaActive_) when disabled.
+            runFXAAPass();
         }
     }
 }

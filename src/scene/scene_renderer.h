@@ -67,8 +67,10 @@ public:
     bool hasMeshContent() const { return hasMeshContent_; }
 
     // Texture the compositor / readback should consume this frame: the
-    // tilt-shift output when the pass ran, else the raw tonemap output.
+    // FXAA output when that pass ran (always last), else the tilt-shift
+    // output when it ran, else the raw tonemap output.
     GLuint finalColorTex() const {
+        if (fxaaActive_ && fxaaColorTex_) return fxaaColorTex_;
         return (tiltActive_ && postColorTex_) ? postColorTex_ : tonemapColorTex_;
     }
 
@@ -168,6 +170,13 @@ public:
     void clearColorLUT();
     bool hasColorLUT() const { return lutTex_ != 0; }
     void setColorLUTAmount(float a) { lutAmount_ = a < 0.0f ? 0.0f : a; }
+
+    /// FXAA 3.11 (quality preset) on the final LDR image — always the last
+    /// pass in the post stack. Complements MSAA: MSAA resolves geometry
+    /// edges in HDR, FXAA additionally smooths shader/specular/post-pass
+    /// aliasing on the LDR result; both can be enabled together.
+    void setFXAA(bool enabled) { fxaaEnabled_ = enabled; }
+    bool fxaaEnabled() const { return fxaaEnabled_; }
 
     void setWind(float dirX, float dirY, float dirZ,
                  float strength, float frequency) {
@@ -381,6 +390,14 @@ private:
     void destroySSAOFBOs();
     // AO estimate + blur into ssaoTex_[0]; returns true when AO is ready.
     bool runSSAOPass();
+
+    // --- FXAA post pass (LDR, always last) ---
+    void ensureFXAAPipeline();
+    void ensureFXAAFBO();
+    void destroyFXAAFBO();
+    // Anti-alias the frame's final LDR texture into fxaaColorTex_ and set
+    // fxaaActive_ for finalColorTex()/readback. No-op when disabled.
+    void runFXAAPass();
 
     // --- Depth-of-field pre-pass (HDR, before bloom + tonemap) ---
     void ensureDoFPipeline();
@@ -702,6 +719,18 @@ private:
     GLint  tmULUTAmount_ = -1;
     GLint  tmULUTScale_  = -1;
     GLint  tmULUTOffset_ = -1;
+
+    // --- FXAA post pass (last) ---
+    bool  fxaaEnabled_ = false;
+    // Set by runFXAAPass when fxaaColorTex_ holds this frame's output;
+    // finalColorTex()/readback key off it. Cleared when the pass skips.
+    bool  fxaaActive_  = false;
+    GLuint fxaaFBO_      = 0;
+    GLuint fxaaColorTex_ = 0;
+    int    fxaaWidth_    = 0, fxaaHeight_ = 0;
+    GLuint fxaaProgram_  = 0;
+    GLint  fxUTex_       = -1;
+    GLint  fxUTexelSize_ = -1;
 
     // --- Tilt-shift DOF post pass ---
     // Params (see setTiltShift). Disabled by default so the pass is a no-op

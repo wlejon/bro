@@ -20,6 +20,7 @@
 #include "bloom_bright.frag.h"
 #include "ssao.frag.h"
 #include "dof_composite.frag.h"
+#include "fxaa.frag.h"
 
 namespace bro::scene {
 
@@ -111,12 +112,23 @@ void SceneRenderer::destroyTonemapFBO() {
 }
 
 std::vector<uint8_t> SceneRenderer::readTonemapPixelsRGBA(int& outW, int& outH) {
-    // Prefer the tilt-shift output when that pass ran this frame, so direct
-    // readback matches what the compositor shows.
-    const bool usePost = tiltActive_ && postFBO_;
-    const GLuint readFBO = usePost ? postFBO_ : tonemapFBO_;
-    outW = usePost ? postWidth_  : tonemapFBOWidth_;
-    outH = usePost ? postHeight_ : tonemapFBOHeight_;
+    // Read the same texture the compositor shows this frame: FXAA output
+    // when that pass ran (always last), else tilt-shift output, else the
+    // raw tonemap output. Mirrors finalColorTex().
+    GLuint readFBO;
+    if (fxaaActive_ && fxaaFBO_) {
+        readFBO = fxaaFBO_;
+        outW = fxaaWidth_;
+        outH = fxaaHeight_;
+    } else if (tiltActive_ && postFBO_) {
+        readFBO = postFBO_;
+        outW = postWidth_;
+        outH = postHeight_;
+    } else {
+        readFBO = tonemapFBO_;
+        outW = tonemapFBOWidth_;
+        outH = tonemapFBOHeight_;
+    }
     if (!readFBO || outW <= 0 || outH <= 0) {
         outW = outH = 0;
         return {};
@@ -532,6 +544,88 @@ bool SceneRenderer::runSSAOPass() {
     glUseProgram(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// FXAA post pass (LDR, always last)
+// ---------------------------------------------------------------------------
+
+void SceneRenderer::ensureFXAAPipeline() {
+    if (fxaaProgram_) return;
+    fxaaProgram_ = linkProgram(kPostVertSrc, kFXAAFragSrc, "FXAA program");
+    if (!fxaaProgram_) return;
+    fxUTex_       = glGetUniformLocation(fxaaProgram_, "uTex");
+    fxUTexelSize_ = glGetUniformLocation(fxaaProgram_, "uTexelSize");
+}
+
+void SceneRenderer::ensureFXAAFBO() {
+    if (graph_.canvasWidth_ <= 0 || graph_.canvasHeight_ <= 0) return;
+    const int tw = targetWidth();
+    const int th = targetHeight();
+    if (fxaaFBO_ && fxaaWidth_ == tw && fxaaHeight_ == th) return;
+    destroyFXAAFBO();
+
+    fxaaWidth_  = tw;
+    fxaaHeight_ = th;
+    glGenFramebuffers(1, &fxaaFBO_);
+    glBindFramebuffer(GL_FRAMEBUFFER, fxaaFBO_);
+    glGenTextures(1, &fxaaColorTex_);
+    glBindTexture(GL_TEXTURE_2D, fxaaColorTex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, tw, th, 0,
+                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           fxaaColorTex_, 0);
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        LOG_ERROR("FXAA FBO incomplete: 0x%x", status);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void SceneRenderer::destroyFXAAFBO() {
+    if (fxaaColorTex_) { glDeleteTextures(1, &fxaaColorTex_); fxaaColorTex_ = 0; }
+    if (fxaaFBO_)      { glDeleteFramebuffers(1, &fxaaFBO_); fxaaFBO_ = 0; }
+    fxaaWidth_ = fxaaHeight_ = 0;
+}
+
+void SceneRenderer::runFXAAPass() {
+    fxaaActive_ = false;
+    if (!fxaaEnabled_) return;
+
+    // Input = whatever the compositor would otherwise show (tilt output
+    // when that pass ran, else the tonemap output).
+    const GLuint srcTex = (tiltActive_ && postColorTex_) ? postColorTex_
+                                                         : tonemapColorTex_;
+    if (!srcTex) return;
+
+    ensureFXAAPipeline();
+    ensureFXAAFBO();
+    if (!fxaaProgram_ || !fxaaFBO_) return;
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, fxaaFBO_);
+    glViewport(0, 0, fxaaWidth_, fxaaHeight_);
+    glUseProgram(fxaaProgram_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, srcTex);
+    glUniform1i(fxUTex_, 0);
+    glUniform2f(fxUTexelSize_, 1.0f / static_cast<float>(fxaaWidth_),
+                1.0f / static_cast<float>(fxaaHeight_));
+
+    glBindVertexArray(tonemapVAO_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    fxaaActive_ = true;
 }
 
 // ---------------------------------------------------------------------------

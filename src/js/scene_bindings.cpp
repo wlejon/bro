@@ -1245,6 +1245,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setSSAO", js_sg_setSSAO, 1)
         .method_raw("setDepthOfField", js_sg_setDepthOfField, 1)
         .method_raw("setColorLUT", js_sg_setColorLUT, 1)
+        .method_raw("setFXAA", js_sg_setFXAA, 1)
         .method_raw("setRenderScale", js_sg_setRenderScale, 1)
         .method_raw("setMSAA", js_sg_setMSAA, 1)
         .method_raw("setEnvironment", js_sg_setEnvironment, 1)

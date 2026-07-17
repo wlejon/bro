@@ -293,6 +293,7 @@ JSValue js_sg_setBloom(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
 JSValue js_sg_setSSAO(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setDepthOfField(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setColorLUT(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_sg_setFXAA(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setRenderScale(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setMSAA(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_unprojectLocal(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);

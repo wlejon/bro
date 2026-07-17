@@ -350,6 +350,11 @@ public:
     void clearColorLUT() { renderer_.clearColorLUT(); }
     bool hasColorLUT() const { return renderer_.hasColorLUT(); }
 
+    /// FXAA on the final LDR image (always the last post pass). Complements
+    /// MSAA — see SceneRenderer::setFXAA.
+    void setFXAA(bool enabled) { renderer_.setFXAA(enabled); }
+    bool fxaaEnabled() const { return renderer_.fxaaEnabled(); }
+
     /// Wind sway parameters consumed by the mesh vertex shader. Per-vertex
     /// `windBend` (vertex color R, 0..1) modulates the global displacement
     /// `windDir * sin(windTime*windFreq + dot(pos.xz, k)) * strength * bend`.

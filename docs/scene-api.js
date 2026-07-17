@@ -717,6 +717,17 @@ class SceneGraph {
   setColorLUT(opts) {}
 
   /**
+   * FXAA 3.11 (quality preset) on the final LDR image — always the LAST
+   * pass in the post stack, after tonemap / LUT / tilt-shift. Complements
+   * MSAA rather than replacing it: MSAA resolves geometry edges in HDR,
+   * FXAA additionally smooths shader/specular/post-pass aliasing on the
+   * LDR result — both can be enabled together. Off by default.
+   *
+   * @param {boolean|Object} enabled - true/false, or {enabled}.
+   */
+  setFXAA(enabled) {}
+
+  /**
    * Internal render-resolution scale for the 3D pipeline (default 1.0,
    * clamped 0.25-2.0). Every 3D render target (HDR mesh FBO, tonemap,
    * bloom, tilt-shift) is sized to canvas * scale; the compositor samples

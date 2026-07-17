@@ -625,6 +625,23 @@ JSValue js_sg_setColorLUT(JSContext* ctx, JSValueConst this_val, int argc, JSVal
                ? JS_TRUE : JS_FALSE;
 }
 
+// setFXAA(true|false) or setFXAA({enabled}) — FXAA 3.11 on the final LDR
+// image, always the last post pass.
+JSValue js_sg_setFXAA(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1) return JS_UNDEFINED;
+    bool enabled = false;
+    if (JS_IsObject(argv[0])) {
+        JSValue ev = JS_GetPropertyStr(ctx, argv[0], "enabled");
+        if (!JS_IsUndefined(ev)) enabled = JS_ToBool(ctx, ev);
+        JS_FreeValue(ctx, ev);
+    } else {
+        enabled = JS_ToBool(ctx, argv[0]);
+    }
+    g->setFXAA(enabled);
+    return JS_UNDEFINED;
+}
+
 // setRenderScale(s) — internal render-resolution multiplier (clamped
 // 0.25-2.0). Compositing/picking stay in CSS pixels.
 JSValue js_sg_setRenderScale(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
