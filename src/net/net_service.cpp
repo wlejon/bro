@@ -131,6 +131,22 @@ static int sendFlags(const SendOptions& opts) {
     return flags;
 }
 
+// Newer GNS added a 4th `bool bDeleteFailedMessages` parameter to
+// SendMessages (older releases always freed failed messages, equivalent to
+// passing true). Detect the signature at compile time so we build against
+// both — vcpkg ships different versions per platform.
+template <typename S>
+static auto sendMessagesCompat(S* sockets, SteamNetworkingMessage_t** msg,
+                               int64* result, int)
+    -> decltype(sockets->SendMessages(1, msg, result)) {
+    sockets->SendMessages(1, msg, result);
+}
+template <typename S>
+static void sendMessagesCompat(S* sockets, SteamNetworkingMessage_t** msg,
+                               int64* result, long) {
+    sockets->SendMessages(1, msg, result, /*bDeleteFailedMessages=*/true);
+}
+
 // Queue one message on a connection with lane routing. SendMessageToConnection
 // has no lane parameter, so lanes require the AllocateMessage + SendMessages
 // path (one copy into the GNS-owned buffer, same as SendMessageToConnection).
@@ -144,7 +160,7 @@ static void sendOnLane(ISteamNetworkingSockets* sockets, uint32_t conn,
     msg->m_nFlags = sendFlags(opts);
     msg->m_idxLane = static_cast<uint16_t>(opts.channel);
     int64 result = 0;  // GNS's own int64 — int64_t is `long` on Linux, GNS wants `long long`
-    sockets->SendMessages(1, &msg, &result);
+    sendMessagesCompat(sockets, &msg, &result, 0);
     if (result == -k_EResultInvalidParam) {
         // Almost always "lane not configured" — a real bug worth hearing about
         // (unlike transient buffer-full/not-connected results, which GNS's own
