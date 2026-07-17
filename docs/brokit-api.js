@@ -27,6 +27,7 @@
 //   Web-compatible globals — available on globalThis, matching browser APIs:
 //     fetch, URL, URLSearchParams, crypto, WebSocket, EventSource,
 //     TextEncoder, TextDecoder, ReadableStream, WritableStream,
+//     CompressionStream, DecompressionStream,
 //     Blob, FormData, AbortController, EventTarget, MessageChannel,
 //     TreeWalker, NodeFilter, localStorage, sessionStorage, indexedDB,
 //     navigator, console, setTimeout, setInterval, structuredClone,
@@ -297,6 +298,23 @@ new ReadableStream({ start, pull, cancel });
 new WritableStream({ start, write, close, abort });
 // Methods: getWriter(), abort()
 // Writer: write(chunk), close(), abort(), releaseLock()
+
+// ── Compression Streams ──
+// Incremental DEFLATE codec (miniz-backed) behind the web-standard classes.
+// format: 'gzip' (RFC 1952) | 'deflate' (ZLIB-wrapped, RFC 1950) |
+//         'deflate-raw' (raw DEFLATE, RFC 1951) — anything else → TypeError.
+// Chunks written must be BufferSource (ArrayBuffer or view); other types
+// error the stream with TypeError. Output arrives as Uint8Array chunks as
+// the codec produces them (bounded ≤64 KiB — nothing buffers whole inputs).
+// Decompression errors (corrupt data, truncated stream, trailing garbage,
+// gzip crc/size mismatch) error the stream with TypeError.
+
+new CompressionStream(format);           // { readable, writable }
+new DecompressionStream(format);         // { readable, writable }
+
+// Example: gzip round-trip
+const gzipped = source.pipeThrough(new CompressionStream('gzip'));
+const restored = gzipped.pipeThrough(new DecompressionStream('gzip'));
 
 
 // -----------------------------------------------------------------------------
