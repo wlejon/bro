@@ -65,6 +65,29 @@ static JSValue js_gpu_get_devices(JSContext* ctx, JSValueConst, int, JSValueCons
     return arr;
 }
 
+// compiledBackends -> ["cpu", ...]. The tensor backends actually COMPILED INTO
+// this binary, read from brotensor's own BROTENSOR_HAS_CUDA / _METAL defines —
+// a static fact, independent of whether a matching GPU is present at runtime,
+// and independent of bro's BRO_WITH_TENSOR_* flags (a stale build cache can let
+// those two diverge; this reports what brotensor truly built). CPU is always
+// there. This is the honest "can this build EVER use a GPU" signal, unlike
+// `backend`/`available`/`devices`, which report the runtime device and all read
+// 'cpu'/empty on a GPU-less machine even for a CUDA-capable binary. The nightly
+// smoke test asserts on this so a CPU-only `full` build can't ship advertised as
+// GPU-enabled (the runner has no GPU, so the runtime probes can't catch it).
+static JSValue js_gpu_get_compiledBackends(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    JSValue arr = JS_NewArray(ctx);
+    uint32_t i = 0;
+    JS_SetPropertyUint32(ctx, arr, i++, JS_NewString(ctx, "cpu"));
+#if defined(BROTENSOR_HAS_CUDA) && BROTENSOR_HAS_CUDA
+    JS_SetPropertyUint32(ctx, arr, i++, JS_NewString(ctx, "cuda"));
+#endif
+#if defined(BROTENSOR_HAS_METAL) && BROTENSOR_HAS_METAL
+    JS_SetPropertyUint32(ctx, arr, i++, JS_NewString(ctx, "metal"));
+#endif
+    return arr;
+}
+
 // memoryInfo(device?) -> {freeBytes, totalBytes} | null. device is
 // 'cuda'/'metal'/'cpu', defaulting to the current default device. Returns
 // null when the backend isn't registered or can't report (always null on CPU).
@@ -132,6 +155,7 @@ void installGpuBindings(JSContext* ctx) {
     defineGetter(ctx, gpuObj, "available", js_gpu_get_available);
     defineGetter(ctx, gpuObj, "backend",   js_gpu_get_backend);
     defineGetter(ctx, gpuObj, "devices",   js_gpu_get_devices);
+    defineGetter(ctx, gpuObj, "compiledBackends", js_gpu_get_compiledBackends);
     JS_SetPropertyStr(ctx, gpuObj, "memoryInfo",
                       JS_NewCFunction(ctx, js_gpu_memoryInfo, "memoryInfo", 1));
     JS_SetPropertyStr(ctx, gpuObj, "deviceName",

@@ -43,6 +43,21 @@ bro.gpu.backend;
 bro.gpu.devices;
 
 /**
+ * The tensor backends COMPILED INTO this binary — a static build-time fact from
+ * the BRO_WITH_TENSOR_CUDA / _METAL flags, independent of whether a matching GPU
+ * is present. 'cpu' is always included; 'cuda'/'metal' appear when built in.
+ *
+ * This is distinct from `devices` (and `backend`/`available`): those report the
+ * runtime device and read ['cpu']/'cpu'/false on a machine with no GPU driver
+ * even for a CUDA-capable binary. `compiledBackends` answers "can this build
+ * EVER use a GPU," so it's the right signal for build/packaging checks — e.g. a
+ * CI smoke test verifying a release binary actually ships the GPU backend on a
+ * GPU-less runner, where the runtime probes can't tell.
+ * @type {string[]}
+ */
+bro.gpu.compiledBackends;
+
+/**
  * Device-wide free/total VRAM in bytes for `device` (e.g. cudaMemGetInfo).
  * Lets a loader print a real budget line instead of guessing from nvidia-smi,
  * or gate a large model load on available headroom. Returns `null` when the

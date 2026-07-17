@@ -61,7 +61,7 @@ void installGpuBindings(JSContext* ctx) {
     // proxy, so `bro.gpu.available` / `.backend` gate checks keep working.
     installFeatureStub(ctx,
         "(function(){var b=(globalThis.bro=globalThis.bro||{});"
-        "b.gpu={available:false,backend:'cpu',devices:[]};})();");
+        "b.gpu={available:false,backend:'cpu',devices:[],compiledBackends:['cpu']};})();");
 }
 #endif
 

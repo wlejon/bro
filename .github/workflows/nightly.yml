@@ -147,12 +147,21 @@ jobs:
         run: |
           # native GPU-arch detection can't run on a GPU-less runner, so target a
           # broad set (major cubins + newest PTX) for a widely-runnable binary.
-          CUDA_ARGS=""
+          GPU_ARGS=""
           if [ "${{ matrix.cuda }}" = "true" ]; then
-            # sccache caches nvcc too — route the CUDA compiler through it as
-            # well, or the brotensor kernels (the heaviest TUs) recompile from
-            # scratch every night while the C/C++ objects hit the cache.
-            CUDA_ARGS="-DCMAKE_CUDA_ARCHITECTURES=all-major -DCMAKE_CUDA_COMPILER_LAUNCHER=sccache"
+            # Compile brotensor's CUDA backend IN. BRO_WITH_TENSOR_CUDA is off even
+            # in the full profile (it's opt-in and the heaviest build cost), so
+            # without this the nightly ships a CPU-only AI tower — bro.gpu reports
+            # 'cpu' and models never touch the GPU. This is what makes the release
+            # notes' "uses your NVIDIA GPU when present" actually true.
+            # sccache caches nvcc too — route the CUDA compiler through it as well,
+            # or the brotensor kernels (the heaviest TUs) recompile from scratch
+            # every night while the C/C++ objects hit the cache.
+            GPU_ARGS="-DBRO_WITH_TENSOR_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=all-major -DCMAKE_CUDA_COMPILER_LAUNCHER=sccache"
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            # macOS: compile the Metal backend IN (also opt-in, same reason). Metal
+            # is always present on Apple hardware, so no toolkit install is needed.
+            GPU_ARGS="-DBRO_WITH_TENSOR_METAL=ON"
           fi
           GEN_ARGS=""
           if [ "$RUNNER_OS" = "Windows" ]; then
@@ -170,15 +179,16 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
             -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
-            $CUDA_ARGS \
+            $GPU_ARGS \
             $GEN_ARGS
 
       - name: Build
         run: cmake --build build --config Release --parallel ${{ matrix.jobs }}
 
-      # Prove the shipped binary launches on this runner and reports its backend.
-      # Single-config generators put the exe directly in build/ (Windows now uses
-      # Ninja too); keep the multi-config build/Release/ probe as a fallback.
+      # Prove the shipped binary launches on this runner and — critically — that
+      # the GPU tensor backend was actually COMPILED IN. Single-config generators
+      # put the exe directly in build/ (Windows now uses Ninja too); keep the
+      # multi-config build/Release/ probe as a fallback.
       - name: Smoke test (launch + backend probe)
         shell: bash
         run: |
@@ -186,14 +196,21 @@ jobs:
           elif [ -x build/bro-headless ]; then BH=build/bro-headless;
           elif [ -x build/Release/bro-headless.exe ]; then BH=build/Release/bro-headless.exe;
           else echo "bro-headless not found" >&2; exit 1; fi
+          # The GPU backend this build MUST contain: CUDA on linux/windows, Metal
+          # on macOS. The runners have no GPU, so bro.gpu.backend/available report
+          # 'cpu'/false even for a correct binary — they CANNOT catch a CPU-only
+          # build. bro.gpu.compiledBackends is the static build-time fact (read
+          # from brotensor's own BROTENSOR_HAS_* defines — what it truly compiled),
+          # so asserting the expected backend is present is what actually guards
+          # against nightly regressing to CPU-only ML.
+          if [ "${{ matrix.cuda }}" = "true" ]; then EXPECT=cuda; else EXPECT=metal; fi
           # bro-headless requires an app directory; use the bundled "blank"
-          # skeleton (self-contained, no external repo). The probe throws — and
-          # so fails the job — if bro.gpu is missing, otherwise prints the ML
-          # backend. bro.gpu is the brotensor compute backend (cuda/metal/cpu),
-          # independent of the render path; on a GPU-less runner it honestly
-          # reports cpu, which is a pass (the point is the full build launches).
+          # skeleton (self-contained, no external repo). The probe throws — failing
+          # the job — if bro.gpu is missing or the expected backend wasn't compiled
+          # in; otherwise it prints the runtime backend (honestly 'cpu' here) and
+          # the compiled-in set.
           APP=system/skeletons/blank
-          PROBE="if(!bro.gpu||!bro.gpu.backend)throw new Error('bro.gpu backend missing');console.log('backend='+bro.gpu.backend+' available='+bro.gpu.available)"
+          PROBE="if(!bro.gpu||!bro.gpu.backend)throw new Error('bro.gpu backend missing');if(!(bro.gpu.compiledBackends||[]).includes('$EXPECT'))throw new Error('GPU backend $EXPECT NOT compiled in; compiledBackends='+JSON.stringify(bro.gpu.compiledBackends));console.log('backend='+bro.gpu.backend+' available='+bro.gpu.available+' compiledBackends='+JSON.stringify(bro.gpu.compiledBackends))"
           # GPU-headless renders through a hidden GL context — the same code that
           # ships. Linux gets a virtual display + software GL (xvfb + mesa-dri),
           # matching the CI job; macOS provides GL directly. The windows-2022
