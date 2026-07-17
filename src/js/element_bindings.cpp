@@ -727,9 +727,13 @@ static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
     // textContent stays as the initial HTML content (defaultValue).
     if (el->tagName() == "TEXTAREA" || el->tagName() == "textarea") {
         el->setAttribute("value", s);
+        // A programmatic value write invalidates the control's undo history
+        // (browser behavior — Ctrl+Z can't cross a script's rewrite).
+        if (auto* ta = el->textareaControl()) ta->clearHistory();
         return JS_UNDEFINED;
     }
     el->setAttribute("value", s);
+    if (auto* inp = el->inputControl()) inp->clearHistory();
     return JS_UNDEFINED;
 }
 

@@ -77,6 +77,33 @@ Mouse coordinates are **viewport-relative**, matching `getBoundingClientRect()` 
 
 Note: `el.click()` (DOM method) dispatches a click event directly on the element without hit testing. `click(x, y)` (headless global) goes through the full engine input pipeline with hit testing, focus, and bubbling — use this when testing user interactions.
 
+### Text editing undo/redo
+
+Every `<input>` (text-like types) and `<textarea>` keeps its own undo/redo
+history for user edits, matching standard editor behavior:
+
+- **Keys**: Ctrl+Z undoes; Ctrl+Y and Ctrl+Shift+Z both redo (Cmd variants on
+  macOS). The keys act on the focused editing element only. Undo on an empty
+  stack, or redo after a fresh edit (which clears the redo tail), is a no-op.
+- **Granularity**: a run of consecutive typed characters at the caret is one
+  undo step, as is a run of backspaces or forward-deletes. A run is broken by
+  any caret/selection move (arrows, mouse, `setSelectionRange`), focus loss,
+  or a >1 s typing pause. Paste, cut, typing over a selection, Enter in a
+  textarea, and number-spinner steps are each their own step.
+- **Selection**: undo restores the text *and* the caret/selection exactly as
+  they were before the edit; redo restores the post-edit selection.
+- **Events**: undo/redo fire the normal `input` event with
+  `inputType: "historyUndo"` / `"historyRedo"`. A paste inserted through the
+  engine reports `inputType: "insertFromPaste"`.
+- **Programmatic writes clear history**: setting `.value =` from JS drops that
+  element's undo and redo stacks (browser behavior) — Ctrl+Z cannot cross a
+  script's rewrite of the field.
+- **Caps**: ~200 entries or ~1 MB of edit text per element; oldest entries
+  drop first.
+
+In headless scripts, drive it with `textInput(...)`, `keyDown/keyUp` (e.g.
+`keyDown(122 /* z */, 0, 0x0040 /* LCTRL */)`), `paste(...)`, and `cut()`.
+
 ### Settings
 
 The `bro.settings` API is available in headless mode for reading and writing persistent engine settings (graphics, audio, input, action bindings). See [settings.md](settings.md) for the full API reference.

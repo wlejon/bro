@@ -6,6 +6,7 @@
 #include "dom/element_geometry.h"
 #include "render/renderer.h"
 #include "util/platform.h"
+#include "util/time.h"
 
 #include <SDL3/SDL_keycode.h>
 #include <algorithm>
@@ -188,6 +189,32 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
         else sel_.collapseTo(to);
     };
 
+    // Undo / redo: primary+Z undoes; primary+Y or primary+shift+Z redoes.
+    // Handled before the editing branches (and returning early) so the
+    // recording chokepoint at the bottom never sees these as fresh edits.
+    // Empty-stack undo and spent redo are handled no-ops.
+    if (util::hasPrimaryMod(mod) && (keycode == SDLK_Z || keycode == SDLK_Y)) {
+        const bool isRedo = (keycode == SDLK_Y) || shift;
+        std::string v = val;
+        TextUndoStack::Sel s{sel_.anchor, sel_.caret};
+        if (isRedo ? undo_.redo(v, s) : undo_.undo(v, s)) {
+            el->setAttribute("value", v);
+            sel_.set(s.anchor, s.caret);
+            sel_.clampTo(static_cast<int>(v.size()));
+            r.dispatchInput = true;
+            r.inputType = isRedo ? "historyRedo" : "historyUndo";
+        }
+        r.handled = true;
+        return r;
+    }
+
+    // Snapshot for the history recorder at the bottom. `kind` drives
+    // coalescing: only the single-character delete paths set a mergeable kind;
+    // selection deletes and Enter (insertLineBreak) stand alone.
+    const std::string beforeVal = val;
+    const TextUndoStack::Sel selBefore{sel_.anchor, sel_.caret};
+    TextUndoStack::Kind kind = TextUndoStack::Kind::Discrete;
+
     if (keycode == SDLK_BACKSPACE) {
         if (deleteSelection_(val, r.inputData)) {
             el->setAttribute("value", val);
@@ -201,6 +228,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
             el->setAttribute("value", val);
             r.dispatchInput = true;
             r.inputType = "deleteContentBackward";
+            kind = TextUndoStack::Kind::Backspace;
         }
         r.handled = true;
     } else if (keycode == SDLK_DELETE) {
@@ -215,6 +243,7 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
             el->setAttribute("value", val);
             r.dispatchInput = true;
             r.inputType = "deleteContentForward";
+            kind = TextUndoStack::Kind::DeleteForward;
         }
         r.handled = true;
     } else if (keycode == SDLK_RETURN || keycode == SDLK_KP_ENTER) {
@@ -298,29 +327,59 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
         r.handled = true;
     }
 
+    // Single recording chokepoint for every value edit above. A handled key
+    // that changed nothing (caret moves, Ctrl+A, Escape) breaks coalescing
+    // instead — the caret is no longer where the run left it.
+    const std::string afterVal = readCurrentValue(el);
+    if (afterVal != beforeVal) {
+        undo_.record(beforeVal, selBefore, afterVal,
+                     {sel_.anchor, sel_.caret}, kind, util::currentTimeMs());
+    } else if (r.handled) {
+        undo_.breakCoalescing();
+    }
+
     return r;
 }
 
 KeyHandleResult ElTextarea::handleTextInput(dom::Element* el, const std::string& text) {
+    return insertText_(el, text, /*fromPaste=*/false);
+}
+
+KeyHandleResult ElTextarea::pasteText(dom::Element* el, const std::string& text) {
+    return insertText_(el, text, /*fromPaste=*/true);
+}
+
+KeyHandleResult ElTextarea::insertText_(dom::Element* el, const std::string& text,
+                                        bool fromPaste) {
     KeyHandleResult r;
     if (!focused_) return r;
 
     std::string val = readCurrentValue(el);
     sel_.clampTo(static_cast<int>(val.size()));
 
+    const std::string beforeVal = val;
+    const TextUndoStack::Sel selBefore{sel_.anchor, sel_.caret};
+
     // Typing over a selection replaces it.
     std::string discarded;
-    deleteSelection_(val, discarded);
+    const bool replaced = deleteSelection_(val, discarded);
 
     int pos = sel_.caret;
     val.insert(pos, text);
     setCursorPos(pos + static_cast<int>(text.size()));
     el->setAttribute("value", val);
 
+    // A plain character insertion coalesces with the run before it; a paste
+    // or a type-over-selection replace is a discrete history step.
+    undo_.record(beforeVal, selBefore, val, {sel_.anchor, sel_.caret},
+                 (fromPaste || replaced) ? TextUndoStack::Kind::Discrete
+                                         : TextUndoStack::Kind::Typing,
+                 util::currentTimeMs());
+
     r.handled = true;
     r.dispatchInput = true;
     r.inputData = text;
-    r.inputType = "insertText";
+    r.inputType = fromPaste ? "insertFromPaste" : "insertText";
     return r;
 }
 
@@ -397,12 +456,14 @@ int ElTextarea::caretIndexFromPoint(float px, float py) {
 }
 
 void ElTextarea::caretToPoint(float px, float py, bool extend) {
+    undo_.breakCoalescing();   // mouse caret/selection change ends the run
     int idx = caretIndexFromPoint(px, py);
     if (extend) sel_.caret = idx;   // anchor stays pinned where the drag began
     else sel_.collapseTo(idx);
 }
 
 void ElTextarea::selectWordAtPoint(float px, float py) {
+    undo_.breakCoalescing();
     std::string val = readCurrentValue(elem_);
     int lo = 0, hi = 0;
     wordBoundsAt(val, caretIndexFromPoint(px, py), lo, hi);
@@ -410,6 +471,7 @@ void ElTextarea::selectWordAtPoint(float px, float py) {
 }
 
 void ElTextarea::setSelectionRange(int start, int end) {
+    undo_.breakCoalescing();   // programmatic selection change ends the run
     const std::string val = readCurrentValue(elem_);
     const int len = static_cast<int>(val.size());
     start = std::clamp(start, 0, len);
@@ -422,6 +484,7 @@ void ElTextarea::setSelectionRange(int start, int end) {
 }
 
 void ElTextarea::selectAll() {
+    undo_.breakCoalescing();
     sel_.set(0, static_cast<int>(readCurrentValue(elem_).size()));
 }
 
@@ -438,9 +501,15 @@ bool ElTextarea::cutSelection(dom::Element* el) {
     if (!el || sel_.collapsed()) return false;
     std::string val = readCurrentValue(el);
     sel_.clampTo(static_cast<int>(val.size()));
+    const std::string beforeVal = val;
+    const TextUndoStack::Sel selBefore{sel_.anchor, sel_.caret};
     std::string removed;
     if (!deleteSelection_(val, removed)) return false;
     el->setAttribute("value", val);
+    // Cut is always its own history entry; undo restores the cut text AND
+    // the selection that covered it.
+    undo_.record(beforeVal, selBefore, val, {sel_.anchor, sel_.caret},
+                 TextUndoStack::Kind::Discrete, util::currentTimeMs());
     return true;
 }
 

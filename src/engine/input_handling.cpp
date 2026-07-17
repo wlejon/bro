@@ -1715,10 +1715,12 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             }
             if (!pasteEvt.defaultPrevented() && !text.empty() && activeEl) {
                 layout::KeyHandleResult r;
+                // pasteText, not handleTextInput: a paste is a discrete undo
+                // entry (and reports inputType "insertFromPaste").
                 if (auto* input = getElInput(activeEl); input && input->isFocused()) {
-                    r = input->handleTextInput(activeEl, text);
+                    r = input->pasteText(activeEl, text);
                 } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
-                    r = textarea->handleTextInput(activeEl, text);
+                    r = textarea->pasteText(activeEl, text);
                 }
                 if (r.handled) {
                     applyKeyResult(activeEl, r);
@@ -2397,13 +2399,14 @@ void Engine::simulatePaste(const std::string& text) {
     pasteEvt.setIsTrusted(true);
     dispatchEvent(target, pasteEvt);
 
-    // If not prevented, insert into focused input/textarea
+    // If not prevented, insert into focused input/textarea. pasteText, not
+    // handleTextInput: a paste is a discrete undo entry ("insertFromPaste").
     if (!pasteEvt.defaultPrevented() && !text.empty() && activeEl) {
         layout::KeyHandleResult r;
         if (auto* input = getElInput(activeEl); input && input->isFocused()) {
-            r = input->handleTextInput(activeEl, text);
+            r = input->pasteText(activeEl, text);
         } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
-            r = textarea->handleTextInput(activeEl, text);
+            r = textarea->pasteText(activeEl, text);
         }
         if (r.handled) {
             applyKeyResult(activeEl, r);

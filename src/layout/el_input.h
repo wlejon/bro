@@ -3,6 +3,7 @@
 #include "layout/box.h"
 #include "layout/control_text.h"
 #include "layout/key_handle_result.h"
+#include "layout/text_undo.h"
 #include "css/cascade.h"
 #include "render/renderer.h"
 #include <string>
@@ -62,7 +63,16 @@ public:
     bool cutSelection(dom::Element* el);
 
     bool isFocused() const { return focused_; }
-    void setFocused(bool f) { focused_ = f; }
+    // Losing focus ends any coalescing run — refocusing and typing starts a
+    // fresh undo entry, as in a browser.
+    void setFocused(bool f) {
+        if (!f && focused_) undo_.breakCoalescing();
+        focused_ = f;
+    }
+
+    // Drop the undo/redo history. Called on programmatic `.value =` writes,
+    // which invalidate every recorded delta (browser behavior).
+    void clearHistory() { undo_.clear(); }
 
     // Caret index (byte offset into the value) for a point given in the same
     // space as lastDrawPos() — the draw pass's surface space, which is what the
@@ -110,6 +120,9 @@ public:
     // Key/text input handling — returns result for engine to dispatch events
     KeyHandleResult handleKeyDown(dom::Element* el, int keycode, int mod);
     KeyHandleResult handleTextInput(dom::Element* el, const std::string& text);
+    // Paste insertion: same mutation as handleTextInput, but records a
+    // discrete (non-coalescing) history entry and reports "insertFromPaste".
+    KeyHandleResult pasteText(dom::Element* el, const std::string& text);
 
     // Content size for layout (intrinsic sizing)
     void getContentSize(float& w, float& h, float maxWidth);
@@ -139,9 +152,15 @@ private:
     // where it was. No-op (returns false) when the selection is collapsed.
     bool deleteSelection_(std::string& val, std::string& removed);
 
+    // Shared body of handleTextInput / pasteText.
+    KeyHandleResult insertText_(dom::Element* el, const std::string& text,
+                                bool fromPaste);
+
     render::Renderer* renderer_;
     dom::Element* elem_ = nullptr;
     TextRange sel_;
+    // Per-element undo/redo history for the text-editing types.
+    TextUndoStack undo_;
     // Horizontal scroll of the text under the (fixed) content box, in px. Set
     // in draw() to keep the caret inside the box once the value outgrows it;
     // caretIndexFromPoint adds it back to undo the shift.
