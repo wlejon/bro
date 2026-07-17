@@ -449,16 +449,21 @@ void emitErrorLog(JSContext* ctx, const ErrorOrigin& origin, JSValueConst except
     }
 }
 
-// QuickJS host promise rejection tracker. Called when a rejected promise is
-// about to be GC'd without ever having had .catch() attached, AND when one
-// becomes handled later (is_handled = TRUE).
-void hostPromiseRejectionTracker(JSContext* ctx, JSValueConst /*promise*/,
+// QuickJS host promise rejection tracker. QuickJS calls this the moment a
+// promise rejects with no reactions attached (is_handled = false) and again
+// if a handler shows up later (is_handled = true). Judgment is deferred to
+// the end of the microtask burst — see Runtime::flushPendingRejections().
+void hostPromiseRejectionTracker(JSContext* ctx, JSValueConst promise,
                                  JSValueConst reason, bool is_handled,
-                                 void* /*opaque*/)
+                                 void* opaque)
 {
-    if (is_handled) return;  // late .catch() — nothing to report
-    if (isInterruptException(ctx, reason)) return;
-    emitErrorLog(ctx, ErrorOrigin::promiseRejection(), reason);
+    auto* self = static_cast<Runtime*>(opaque);
+    if (!self) return;
+    if (is_handled) {
+        self->removePendingRejection(promise);
+    } else {
+        self->addPendingRejection(ctx, promise, reason);
+    }
 }
 
 } // anonymous namespace
@@ -491,8 +496,9 @@ Runtime::Runtime()
 
     bro::util::installJsInterruptHandler(rt_);
 
-    // Route unhandled promise rejections through the funnel.
-    JS_SetHostPromiseRejectionTracker(rt_, hostPromiseRejectionTracker, nullptr);
+    // Route unhandled promise rejections through the funnel (deferred to
+    // end-of-burst — the opaque is this Runtime's pending-rejection list).
+    JS_SetHostPromiseRejectionTracker(rt_, hostPromiseRejectionTracker, this);
 
 #ifndef NDEBUG
     JS_SetDumpFlags(rt_, JS_DUMP_LEAKS | JS_DUMP_ATOM_LEAKS);
@@ -515,6 +521,9 @@ Runtime::Runtime()
 
 Runtime::~Runtime()
 {
+    // Parked rejections hold context refs — release them before the runtime
+    // dies. No reporting: teardown is not the place to run JS error hooks.
+    discardPendingRejections();
     if (ctx_) {
         brokit::api::uninstallFetch(ctx_);
         JS_FreeContext(ctx_);
@@ -572,12 +581,72 @@ JSValue Runtime::getGlobalObject() const
     return JS_GetGlobalObject(ctx_);
 }
 
+void Runtime::addPendingRejection(JSContext* ctx, JSValueConst promise,
+                                  JSValueConst reason)
+{
+    PendingRejection p;
+    p.ctx = JS_DupContext(ctx);
+    p.key = JS_VALUE_GET_PTR(promise);
+    // Retaining the promise keeps its heap pointer stable (no GC + reuse
+    // between the reject and a later is_handled notification).
+    p.promise = JS_DupValue(ctx, promise);
+    p.reason = JS_DupValue(ctx, reason);
+    pendingRejections_.push_back(p);
+}
+
+void Runtime::removePendingRejection(JSValueConst promise)
+{
+    void* key = JS_VALUE_GET_PTR(promise);
+    for (auto it = pendingRejections_.begin(); it != pendingRejections_.end(); ++it) {
+        if (it->key == key) {
+            JS_FreeValue(it->ctx, it->promise);
+            JS_FreeValue(it->ctx, it->reason);
+            JS_FreeContext(it->ctx);
+            pendingRejections_.erase(it);
+            return;
+        }
+    }
+}
+
+void Runtime::flushPendingRejections()
+{
+    // Swap-and-iterate: the funnel may run window.onunhandledrejection,
+    // which can park fresh rejections; those belong to the next flush.
+    std::vector<PendingRejection> batch;
+    batch.swap(pendingRejections_);
+    for (auto& p : batch) {
+        if (!isInterruptException(p.ctx, p.reason)) {
+            emitErrorLog(p.ctx, ErrorOrigin::promiseRejection(), p.reason);
+        }
+        JS_FreeValue(p.ctx, p.promise);
+        JS_FreeValue(p.ctx, p.reason);
+        JS_FreeContext(p.ctx);
+    }
+}
+
+void Runtime::discardPendingRejections()
+{
+    for (auto& p : pendingRejections_) {
+        JS_FreeValue(p.ctx, p.promise);
+        JS_FreeValue(p.ctx, p.reason);
+        JS_FreeContext(p.ctx);
+    }
+    pendingRejections_.clear();
+}
+
 void Runtime::executePendingJobs()
 {
     JSContext* pctx = nullptr;
     for (;;) {
         int r = JS_ExecutePendingJob(rt_, &pctx);
-        if (r == 0) break;            // queue empty
+        if (r == 0) {
+            // Queue empty — the burst is over. Anything still parked was
+            // rejected and never picked up a handler: report it now. The
+            // funnel may queue new jobs (onunhandledrejection), so loop.
+            if (pendingRejections_.empty()) break;
+            flushPendingRejections();
+            continue;
+        }
         if (r < 0) {
             // A microtask threw. Pull the exception off `pctx` and route it.
             // QuickJS leaves the exception on the context that ran the job.
@@ -600,6 +669,9 @@ JSContext* Runtime::createContext()
 JSContext* Runtime::renewContext()
 {
     if (!rt_) return nullptr;
+    // Report anything the dying realm left unhandled while it can still be
+    // formatted, and drop the context refs so JS_RunGC below can collect it.
+    flushPendingRejections();
     if (ctx_) {
         // Same order ~Runtime uses: brokit's fetch state is the one per-context
         // resource the runtime owns the teardown of.

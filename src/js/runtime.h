@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <deque>
 #include <string>
+#include <vector>
 
 extern "C" {
 #include "quickjs.h"
@@ -81,6 +82,9 @@ public:
     JSValue getGlobalObject() const;
 
     /// Drain the microtask / promise job queue. Errors flow through the funnel.
+    /// After the queue empties, rejected promises that never picked up a
+    /// handler during the burst are reported (HTML-spec unhandledrejection
+    /// timing — see the pending-rejection notes below).
     void executePendingJobs();
 
     /// Install a custom ES-module loader (file-based). When `mounts` is
@@ -124,9 +128,41 @@ public:
     /// from the funnel; safe to invoke from the engine's frame loop too.
     static void flushSuppressor();
 
+    // -----------------------------------------------------------------------
+    // Pending promise rejections.
+    //
+    // QuickJS invokes the host rejection tracker the INSTANT a promise
+    // rejects with no reactions attached — which is the normal shape of
+    // `return Promise.reject(e)`: the caller's .then() lands one line later,
+    // same job. Logging at that instant produces false "unhandled rejection"
+    // errors for perfectly handled code. Instead the tracker parks the
+    // rejection here (is_handled=false) or removes it (is_handled=true, a
+    // handler attached), and executePendingJobs() reports whatever is still
+    // parked once the job queue drains — the HTML spec's timing. Entries hold
+    // a JS_DupContext ref so a realm torn down mid-burst can't dangle.
+    // Internal — called only by the host tracker.
+    // -----------------------------------------------------------------------
+    void addPendingRejection(JSContext* ctx, JSValueConst promise, JSValueConst reason);
+    void removePendingRejection(JSValueConst promise);
+
 private:
+    struct PendingRejection {
+        JSContext* ctx = nullptr; // holds a JS_DupContext reference
+        void* key = nullptr;      // promise heap pointer, for removal matching
+        JSValue promise = JS_UNDEFINED;
+        JSValue reason = JS_UNDEFINED;
+    };
+
+    /// Report every still-parked rejection through the funnel and clear the
+    /// list. Handlers the funnel runs may park new rejections; those wait for
+    /// the next flush.
+    void flushPendingRejections();
+    /// Free parked rejections without reporting (teardown path).
+    void discardPendingRejections();
+
     JSRuntime* rt_ = nullptr;
     JSContext* ctx_ = nullptr;
+    std::vector<PendingRejection> pendingRejections_;
 };
 
 } // namespace bro::js
