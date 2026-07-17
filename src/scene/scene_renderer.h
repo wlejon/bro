@@ -37,9 +37,10 @@ struct CullStats {
 /// GL renderer for a SceneGraph's 3D content. Owns every GPU resource the
 /// scene pipeline uses — mesh + instanced-mesh programs, the HDR mesh FBO,
 /// shadow atlas (incl. CSM), IBL environment (cubemap, irradiance, prefilter,
-/// BRDF LUT, skybox), billboard pipeline, and the post stack (bloom pre-pass,
-/// tonemap, tilt-shift DOF) — plus the render *settings* that configure them
-/// (fog, tonemap/exposure, ambient, wind, shadow quality, environment).
+/// BRDF LUT, skybox), billboard pipeline, and the post stack (depth-of-field,
+/// SSAO + bloom pre-passes, tonemap + 3D color LUT, tilt-shift DOF, FXAA) —
+/// plus the render *settings* that configure them (fog, tonemap/exposure,
+/// ambient, wind, shadow quality, environment).
 ///
 /// The graph owns one SceneRenderer by value and forwards its public render
 /// API here; the renderer walks nodes through its graph back-reference.
