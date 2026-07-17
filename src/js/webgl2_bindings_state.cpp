@@ -284,6 +284,17 @@ static JSValue js_drawElementsInstanced(JSContext* ctx, JSValueConst this_val, i
     return JS_UNDEFINED;
 }
 
+static JSValue js_drawRangeElements(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 6) return JS_UNDEFINED;
+    uint32_t mode, start, end, type; int count; int64_t offset;
+    JS_ToUint32(ctx, &mode, argv[0]);
+    JS_ToUint32(ctx, &start, argv[1]); JS_ToUint32(ctx, &end, argv[2]);
+    JS_ToInt32(ctx, &count, argv[3]); JS_ToUint32(ctx, &type, argv[4]);
+    JS_ToInt64(ctx, &offset, argv[5]);
+    gl->drawRangeElements(mode, start, end, count, type, (GLintptr)offset);
+    return JS_UNDEFINED;
+}
+
 // ===========================================================================
 // Exported function list
 // ===========================================================================
@@ -326,6 +337,7 @@ const JSCFunctionListEntry webgl2_state_funcs[] = {
     JS_CFUNC_DEF("drawElements", 4, js_drawElements),
     JS_CFUNC_DEF("drawArraysInstanced", 4, js_drawArraysInstanced),
     JS_CFUNC_DEF("drawElementsInstanced", 5, js_drawElementsInstanced),
+    JS_CFUNC_DEF("drawRangeElements", 6, js_drawRangeElements),
 };
 const int webgl2_state_funcs_count = sizeof(webgl2_state_funcs) / sizeof(webgl2_state_funcs[0]);
 

@@ -13,6 +13,26 @@ namespace bro::webgl {
 WebGL2RenderingContext::WebGL2RenderingContext(int width, int height)
     : width_(width), height_(height) {
     createCanvasFBO();
+
+    // WebGL semantics that desktop GL 3.3 core does not default to:
+    // gl_PointSize only takes effect with PROGRAM_POINT_SIZE enabled, and
+    // WebGL2 cube map sampling is always seamless.
+    glEnable(GL_PROGRAM_POINT_SIZE);
+    glEnable(GL_TEXTURE_CUBE_MAP_SEAMLESS);
+
+    // A fresh WebGL context presents spec-default state (blend off, depth
+    // func LESS, clear color transparent black, viewport = canvas, the canvas
+    // FBO bound as the "default framebuffer", ...) regardless of what state
+    // the engine's shared GL context happens to be in. The shadow-state
+    // members already hold those defaults; push them into GL now.
+    sFBO_ = canvasFBO_;
+    sViewport_[2] = width_;
+    sViewport_[3] = height_;
+    restoreState();
+    glScissor(0, 0, width_, height_);
+    glClearDepth(1.0);
+    glClearStencil(0);
+
     LOG_INFO("WebGL2RenderingContext created (%dx%d)", width, height);
 }
 
@@ -53,6 +73,16 @@ void WebGL2RenderingContext::createCanvasFBO() {
         LOG_ERROR("WebGL canvas FBO incomplete: 0x%x", status);
     }
 
+    // WebGL drawing buffers start as transparent black, not undefined memory.
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glStencilMask(0xFFFFFFFFu);
+    glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+    glClearDepth(1.0);
+    glClearStencil(0);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glBindTexture(GL_TEXTURE_2D, 0);
     glBindRenderbuffer(GL_RENDERBUFFER, 0);
@@ -68,8 +98,15 @@ void WebGL2RenderingContext::resize(int width, int height) {
     if (width == width_ && height == height_) return;
     width_ = width;
     height_ = height;
+    GLuint oldCanvasFBO = canvasFBO_;
     destroyCanvasFBO();
     createCanvasFBO();
+    // createCanvasFBO clobbers clear color / masks / scissor enable, and the
+    // old canvas FBO id is gone. If the app had the "default framebuffer"
+    // (null → old canvas FBO) bound, re-point shadow state at the new one,
+    // then reapply the app's shadow-tracked state.
+    if (sFBO_ == oldCanvasFBO || sFBO_ == 0) sFBO_ = canvasFBO_;
+    restoreState();
 }
 
 void WebGL2RenderingContext::bindCanvasFBO() {
@@ -157,14 +194,26 @@ void WebGL2RenderingContext::pixelStorei(GLenum pname, GLint param) {
     switch (pname) {
         case GL_UNPACK_ALIGNMENT: unpackAlignment_ = param; glPixelStorei(pname, param); break;
         case GL_PACK_ALIGNMENT:   packAlignment_ = param;   glPixelStorei(pname, param); break;
-        // WebGL-specific (not real GL enums, handled in JS bindings)
+        // WebGL-specific (not real GL enums — must not reach glPixelStorei)
         case 0x9240: unpackFlipY_ = param ? GL_TRUE : GL_FALSE; break;              // UNPACK_FLIP_Y_WEBGL
         case 0x9241: unpackPremultiplyAlpha_ = param ? GL_TRUE : GL_FALSE; break;    // UNPACK_PREMULTIPLY_ALPHA_WEBGL
+        case 0x9243: unpackColorspace_ = param; break;                               // UNPACK_COLORSPACE_CONVERSION_WEBGL
         default: glPixelStorei(pname, param); break;
     }
 }
 
-GLenum WebGL2RenderingContext::getError() { return glGetError(); }
+GLenum WebGL2RenderingContext::getError() {
+    if (syntheticError_ != GL_NO_ERROR) {
+        GLenum e = syntheticError_;
+        syntheticError_ = GL_NO_ERROR;
+        return e;
+    }
+    return glGetError();
+}
+
+void WebGL2RenderingContext::setSyntheticError(GLenum err) {
+    if (syntheticError_ == GL_NO_ERROR) syntheticError_ = err;
+}
 
 // ===========================================================================
 // Buffers
@@ -356,6 +405,10 @@ GLint WebGL2RenderingContext::getAttribLocation(WebGLProgram program, const std:
     return glGetAttribLocation(program.id, name.c_str());
 }
 
+GLint WebGL2RenderingContext::getFragDataLocation(WebGLProgram program, const std::string& name) {
+    return glGetFragDataLocation(program.id, name.c_str());
+}
+
 WebGLUniformLocation WebGL2RenderingContext::getUniformLocation(WebGLProgram program, const std::string& name) {
     GLint loc = glGetUniformLocation(program.id, name.c_str());
     return {loc, program.id};
@@ -497,9 +550,78 @@ static GLint translateInternalFormat(GLint internalformat, GLenum type) {
     }
 }
 
+// Bytes per pixel for the format/type pairs we can safely transform or
+// bounds-check. Returns 0 for unknown/packed-special combinations.
+static int bytesPerPixel(GLenum format, GLenum type) {
+    int channels = 0;
+    switch (format) {
+        case GL_RGBA: case 0x8D99 /*RGBA_INTEGER*/: channels = 4; break;
+        case GL_RGB:  case 0x8D98 /*RGB_INTEGER*/:  channels = 3; break;
+        case GL_RG:   case 0x8228 /*RG_INTEGER*/:   channels = 2; break;
+        case GL_RED:  case 0x8D94 /*RED_INTEGER*/:
+        case 0x1906 /*ALPHA*/: case 0x1909 /*LUMINANCE*/:
+        case GL_DEPTH_COMPONENT: case GL_STENCIL_INDEX: channels = 1; break;
+        case 0x190A /*LUMINANCE_ALPHA*/: channels = 2; break;
+        case GL_DEPTH_STENCIL: channels = 1; break;
+        default: return 0;
+    }
+    switch (type) {
+        case GL_UNSIGNED_BYTE: case GL_BYTE: return channels;
+        case GL_UNSIGNED_SHORT: case GL_SHORT: case GL_HALF_FLOAT: return channels * 2;
+        case GL_UNSIGNED_INT: case GL_INT: case GL_FLOAT: return channels * 4;
+        case GL_UNSIGNED_SHORT_5_6_5:
+        case GL_UNSIGNED_SHORT_4_4_4_4:
+        case GL_UNSIGNED_SHORT_5_5_5_1: return 2;
+        case GL_UNSIGNED_INT_2_10_10_10_REV:
+        case GL_UNSIGNED_INT_24_8:
+        case GL_UNSIGNED_INT_10F_11F_11F_REV:
+        case GL_UNSIGNED_INT_5_9_9_9_REV: return 4;
+        default: return 0;
+    }
+}
+
+const void* WebGL2RenderingContext::applyUnpackTransforms(
+        const void* pixels, GLsizei width, GLsizei height,
+        GLenum format, GLenum type, std::vector<uint8_t>& tmp) const {
+    if (!pixels || (!unpackFlipY_ && !unpackPremultiplyAlpha_)) return pixels;
+    int bpp = bytesPerPixel(format, type);
+    if (bpp <= 0 || width <= 0 || height <= 0) return pixels;
+
+    // Row stride as GL will read it (honouring UNPACK_ALIGNMENT).
+    size_t row = (size_t)width * bpp;
+    size_t align = unpackAlignment_ > 0 ? (size_t)unpackAlignment_ : 4;
+    size_t stride = (row + align - 1) / align * align;
+
+    tmp.resize(stride * height);
+    const uint8_t* src = static_cast<const uint8_t*>(pixels);
+    for (GLsizei y = 0; y < height; y++) {
+        const uint8_t* s = src + (size_t)y * stride;
+        uint8_t* d = tmp.data() + (unpackFlipY_ ? (size_t)(height - 1 - y) * stride
+                                                : (size_t)y * stride);
+        std::memcpy(d, s, row);
+    }
+
+    // Premultiply is only defined for 8-bit RGBA uploads here; other
+    // format/type combinations pass through unchanged.
+    if (unpackPremultiplyAlpha_ && format == GL_RGBA && type == GL_UNSIGNED_BYTE) {
+        for (GLsizei y = 0; y < height; y++) {
+            uint8_t* p = tmp.data() + (size_t)y * stride;
+            for (GLsizei x = 0; x < width; x++, p += 4) {
+                unsigned a = p[3];
+                p[0] = (uint8_t)((p[0] * a + 127) / 255);
+                p[1] = (uint8_t)((p[1] * a + 127) / 255);
+                p[2] = (uint8_t)((p[2] * a + 127) / 255);
+            }
+        }
+    }
+    return tmp.data();
+}
+
 void WebGL2RenderingContext::texImage2D(GLenum target, GLint level, GLint internalformat,
                                          GLsizei width, GLsizei height, GLint border,
                                          GLenum format, GLenum type, const void* pixels) {
+    std::vector<uint8_t> tmp;
+    pixels = applyUnpackTransforms(pixels, width, height, format, type, tmp);
     glTexImage2D(target, level, translateInternalFormat(internalformat, type),
                  width, height, border, format, type, pixels);
 }
@@ -508,6 +630,8 @@ void WebGL2RenderingContext::texSubImage2D(GLenum target, GLint level,
                                             GLint xoffset, GLint yoffset,
                                             GLsizei width, GLsizei height,
                                             GLenum format, GLenum type, const void* pixels) {
+    std::vector<uint8_t> tmp;
+    pixels = applyUnpackTransforms(pixels, width, height, format, type, tmp);
     glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
 }
 
@@ -614,6 +738,30 @@ GLenum WebGL2RenderingContext::checkFramebufferStatus(GLenum target) {
 void WebGL2RenderingContext::readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                                          GLenum format, GLenum type, void* pixels) {
     glReadPixels(x, y, width, height, format, type, pixels);
+}
+
+void WebGL2RenderingContext::readBuffer(GLenum src) {
+    glReadBuffer(src);
+}
+
+bool WebGL2RenderingContext::validateReadPixels(GLsizei width, GLsizei height,
+                                                GLenum format, GLenum type, size_t dstLen) {
+    if (width < 0 || height < 0) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return false;
+    }
+    int bpp = bytesPerPixel(format, type);
+    if (bpp <= 0) return true; // unknown combo — let GL validate/reject it
+    size_t row = (size_t)width * bpp;
+    size_t align = packAlignment_ > 0 ? (size_t)packAlignment_ : 4;
+    size_t stride = (row + align - 1) / align * align;
+    size_t required = height > 0 ? stride * (height - 1) + row : 0;
+    if (dstLen < required) {
+        // WebGL: destination buffer too small → INVALID_OPERATION, no write.
+        setSyntheticError(GL_INVALID_OPERATION);
+        return false;
+    }
+    return true;
 }
 
 void WebGL2RenderingContext::drawBuffers(GLsizei n, const GLenum* bufs) {

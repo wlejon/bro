@@ -109,6 +109,7 @@ static JSValue js_getProgramParameter(JSContext* ctx, JSValueConst this_val, int
         case 0x8B89: // GL_ACTIVE_ATTRIBUTES
         case 0x8B86: // GL_ACTIVE_UNIFORMS
         case 0x8A36: // GL_ACTIVE_UNIFORM_BLOCKS
+        case 0x8B85: // GL_ATTACHED_SHADERS
         case 0x8C83: // GL_TRANSFORM_FEEDBACK_VARYINGS
             return JS_NewInt32(ctx, gl->getProgramParameter_int(prog, pname));
         default: return JS_UNDEFINED;
@@ -131,6 +132,12 @@ static JSValue js_bindAttribLocation(JSContext* ctx, JSValueConst this_val, int 
 static JSValue js_getAttribLocation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
     GLint loc = gl->getAttribLocation(unwrapProgram(argv[0]), jsStr(ctx, argv[1]));
+    return JS_NewInt32(ctx, loc);
+}
+
+static JSValue js_getFragDataLocation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
+    GLint loc = gl->getFragDataLocation(unwrapProgram(argv[0]), jsStr(ctx, argv[1]));
     return JS_NewInt32(ctx, loc);
 }
 
@@ -249,32 +256,32 @@ static JSValue js_uniform4i(JSContext* ctx, JSValueConst this_val, int argc, JSV
 
 static JSValue js_uniform1fv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
-    const float* data = nullptr; size_t count = 0;
-    if (getFloatArray(ctx, argv[1], &data, &count))
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[1], storage, &data, &count))
         gl->uniform1fv(unwrapUniformLocation(argv[0]), (GLsizei)(count / 1), data);
     return JS_UNDEFINED;
 }
 
 static JSValue js_uniform2fv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
-    const float* data = nullptr; size_t count = 0;
-    if (getFloatArray(ctx, argv[1], &data, &count))
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[1], storage, &data, &count))
         gl->uniform2fv(unwrapUniformLocation(argv[0]), (GLsizei)(count / 2), data);
     return JS_UNDEFINED;
 }
 
 static JSValue js_uniform3fv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
-    const float* data = nullptr; size_t count = 0;
-    if (getFloatArray(ctx, argv[1], &data, &count))
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[1], storage, &data, &count))
         gl->uniform3fv(unwrapUniformLocation(argv[0]), (GLsizei)(count / 3), data);
     return JS_UNDEFINED;
 }
 
 static JSValue js_uniform4fv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
-    const float* data = nullptr; size_t count = 0;
-    if (getFloatArray(ctx, argv[1], &data, &count))
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[1], storage, &data, &count))
         gl->uniform4fv(unwrapUniformLocation(argv[0]), (GLsizei)(count / 4), data);
     return JS_UNDEFINED;
 }
@@ -285,32 +292,32 @@ static JSValue js_uniform4fv(JSContext* ctx, JSValueConst this_val, int argc, JS
 
 static JSValue js_uniform1iv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
-    const int32_t* data = nullptr; size_t count = 0;
-    if (getInt32Array(ctx, argv[1], &data, &count))
+    std::vector<int32_t> storage; const int32_t* data = nullptr; size_t count = 0;
+    if (getInt32Array(ctx, argv[1], storage, &data, &count))
         gl->uniform1iv(unwrapUniformLocation(argv[0]), (GLsizei)(count / 1), data);
     return JS_UNDEFINED;
 }
 
 static JSValue js_uniform2iv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
-    const int32_t* data = nullptr; size_t count = 0;
-    if (getInt32Array(ctx, argv[1], &data, &count))
+    std::vector<int32_t> storage; const int32_t* data = nullptr; size_t count = 0;
+    if (getInt32Array(ctx, argv[1], storage, &data, &count))
         gl->uniform2iv(unwrapUniformLocation(argv[0]), (GLsizei)(count / 2), data);
     return JS_UNDEFINED;
 }
 
 static JSValue js_uniform3iv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
-    const int32_t* data = nullptr; size_t count = 0;
-    if (getInt32Array(ctx, argv[1], &data, &count))
+    std::vector<int32_t> storage; const int32_t* data = nullptr; size_t count = 0;
+    if (getInt32Array(ctx, argv[1], storage, &data, &count))
         gl->uniform3iv(unwrapUniformLocation(argv[0]), (GLsizei)(count / 3), data);
     return JS_UNDEFINED;
 }
 
 static JSValue js_uniform4iv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
-    const int32_t* data = nullptr; size_t count = 0;
-    if (getInt32Array(ctx, argv[1], &data, &count))
+    std::vector<int32_t> storage; const int32_t* data = nullptr; size_t count = 0;
+    if (getInt32Array(ctx, argv[1], storage, &data, &count))
         gl->uniform4iv(unwrapUniformLocation(argv[0]), (GLsizei)(count / 4), data);
     return JS_UNDEFINED;
 }
@@ -322,8 +329,8 @@ static JSValue js_uniform4iv(JSContext* ctx, JSValueConst this_val, int argc, JS
 static JSValue js_uniformMatrix2fv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
     GLboolean transpose = JS_ToBool(ctx, argv[1]) ? GL_TRUE : GL_FALSE;
-    const float* data = nullptr; size_t count = 0;
-    if (getFloatArray(ctx, argv[2], &data, &count))
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[2], storage, &data, &count))
         gl->uniformMatrix2fv(unwrapUniformLocation(argv[0]), (GLsizei)(count / (2 * 2)), transpose, data);
     return JS_UNDEFINED;
 }
@@ -331,8 +338,8 @@ static JSValue js_uniformMatrix2fv(JSContext* ctx, JSValueConst this_val, int ar
 static JSValue js_uniformMatrix3fv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
     GLboolean transpose = JS_ToBool(ctx, argv[1]) ? GL_TRUE : GL_FALSE;
-    const float* data = nullptr; size_t count = 0;
-    if (getFloatArray(ctx, argv[2], &data, &count))
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[2], storage, &data, &count))
         gl->uniformMatrix3fv(unwrapUniformLocation(argv[0]), (GLsizei)(count / (3 * 3)), transpose, data);
     return JS_UNDEFINED;
 }
@@ -340,8 +347,8 @@ static JSValue js_uniformMatrix3fv(JSContext* ctx, JSValueConst this_val, int ar
 static JSValue js_uniformMatrix4fv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
     GLboolean transpose = JS_ToBool(ctx, argv[1]) ? GL_TRUE : GL_FALSE;
-    const float* data = nullptr; size_t count = 0;
-    if (getFloatArray(ctx, argv[2], &data, &count))
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[2], storage, &data, &count))
         gl->uniformMatrix4fv(unwrapUniformLocation(argv[0]), (GLsizei)(count / (4 * 4)), transpose, data);
     return JS_UNDEFINED;
 }
@@ -353,8 +360,8 @@ static JSValue js_uniformMatrix4fv(JSContext* ctx, JSValueConst this_val, int ar
 static JSValue js_uniformMatrix2x3fv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
     GLboolean transpose = JS_ToBool(ctx, argv[1]) ? GL_TRUE : GL_FALSE;
-    const float* data = nullptr; size_t count = 0;
-    if (getFloatArray(ctx, argv[2], &data, &count))
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[2], storage, &data, &count))
         gl->uniformMatrix2x3fv(unwrapUniformLocation(argv[0]), (GLsizei)(count / (2 * 3)), transpose, data);
     return JS_UNDEFINED;
 }
@@ -362,8 +369,8 @@ static JSValue js_uniformMatrix2x3fv(JSContext* ctx, JSValueConst this_val, int 
 static JSValue js_uniformMatrix3x2fv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
     GLboolean transpose = JS_ToBool(ctx, argv[1]) ? GL_TRUE : GL_FALSE;
-    const float* data = nullptr; size_t count = 0;
-    if (getFloatArray(ctx, argv[2], &data, &count))
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[2], storage, &data, &count))
         gl->uniformMatrix3x2fv(unwrapUniformLocation(argv[0]), (GLsizei)(count / (3 * 2)), transpose, data);
     return JS_UNDEFINED;
 }
@@ -371,8 +378,8 @@ static JSValue js_uniformMatrix3x2fv(JSContext* ctx, JSValueConst this_val, int 
 static JSValue js_uniformMatrix2x4fv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
     GLboolean transpose = JS_ToBool(ctx, argv[1]) ? GL_TRUE : GL_FALSE;
-    const float* data = nullptr; size_t count = 0;
-    if (getFloatArray(ctx, argv[2], &data, &count))
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[2], storage, &data, &count))
         gl->uniformMatrix2x4fv(unwrapUniformLocation(argv[0]), (GLsizei)(count / (2 * 4)), transpose, data);
     return JS_UNDEFINED;
 }
@@ -380,8 +387,8 @@ static JSValue js_uniformMatrix2x4fv(JSContext* ctx, JSValueConst this_val, int 
 static JSValue js_uniformMatrix4x2fv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
     GLboolean transpose = JS_ToBool(ctx, argv[1]) ? GL_TRUE : GL_FALSE;
-    const float* data = nullptr; size_t count = 0;
-    if (getFloatArray(ctx, argv[2], &data, &count))
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[2], storage, &data, &count))
         gl->uniformMatrix4x2fv(unwrapUniformLocation(argv[0]), (GLsizei)(count / (4 * 2)), transpose, data);
     return JS_UNDEFINED;
 }
@@ -389,8 +396,8 @@ static JSValue js_uniformMatrix4x2fv(JSContext* ctx, JSValueConst this_val, int 
 static JSValue js_uniformMatrix3x4fv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
     GLboolean transpose = JS_ToBool(ctx, argv[1]) ? GL_TRUE : GL_FALSE;
-    const float* data = nullptr; size_t count = 0;
-    if (getFloatArray(ctx, argv[2], &data, &count))
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[2], storage, &data, &count))
         gl->uniformMatrix3x4fv(unwrapUniformLocation(argv[0]), (GLsizei)(count / (3 * 4)), transpose, data);
     return JS_UNDEFINED;
 }
@@ -398,8 +405,8 @@ static JSValue js_uniformMatrix3x4fv(JSContext* ctx, JSValueConst this_val, int 
 static JSValue js_uniformMatrix4x3fv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
     GLboolean transpose = JS_ToBool(ctx, argv[1]) ? GL_TRUE : GL_FALSE;
-    const float* data = nullptr; size_t count = 0;
-    if (getFloatArray(ctx, argv[2], &data, &count))
+    std::vector<float> storage; const float* data = nullptr; size_t count = 0;
+    if (getFloatArray(ctx, argv[2], storage, &data, &count))
         gl->uniformMatrix4x3fv(unwrapUniformLocation(argv[0]), (GLsizei)(count / (4 * 3)), transpose, data);
     return JS_UNDEFINED;
 }
@@ -427,6 +434,7 @@ const JSCFunctionListEntry webgl2_shader_funcs[] = {
     JS_CFUNC_DEF("getProgramInfoLog", 1, js_getProgramInfoLog),
     JS_CFUNC_DEF("bindAttribLocation", 3, js_bindAttribLocation),
     JS_CFUNC_DEF("getAttribLocation", 2, js_getAttribLocation),
+    JS_CFUNC_DEF("getFragDataLocation", 2, js_getFragDataLocation),
     JS_CFUNC_DEF("getUniformLocation", 2, js_getUniformLocation),
     JS_CFUNC_DEF("getActiveAttrib", 2, js_getActiveAttrib),
     JS_CFUNC_DEF("getActiveUniform", 2, js_getActiveUniform),

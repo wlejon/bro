@@ -115,11 +115,10 @@ static JSValue js_texSubImage2D(JSContext* ctx, JSValueConst this_val, int argc,
         JS_ToUint32(ctx, &format, argv[4]); JS_ToUint32(ctx, &type, argv[5]);
 
         if (ImageBindings::getImagePixels(argv[6], img)) {
+            // No implicit generateMipmap here — WebGL never regenerates
+            // mipmaps as a side effect of texSubImage2D; apps own that.
             gl->texSubImage2D(target, level, xoffset, yoffset, img.width, img.height,
                               format, type, img.data);
-            if (level == 0) {
-                gl->generateMipmap(target);
-            }
         }
     } else {
         // 9-arg form

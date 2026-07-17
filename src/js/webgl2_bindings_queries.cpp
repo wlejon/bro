@@ -25,8 +25,8 @@ static JSValue js_getParameter(JSContext* ctx, JSValueConst this_val, int argc, 
 
         // Float parameters
         case 0x0B73: // GL_DEPTH_CLEAR_VALUE
-        case 0x0B11: // GL_LINE_WIDTH
-        case 0x8005: // GL_SAMPLE_COVERAGE_VALUE
+        case 0x0B21: // GL_LINE_WIDTH (0x0B11 is POINT_SIZE, not a WebGL pname)
+        case 0x80AA: // GL_SAMPLE_COVERAGE_VALUE (0x8005 is BLEND_COLOR)
         case 0x8066: // GL_POLYGON_OFFSET_FACTOR
         case 0x2A00: { // GL_POLYGON_OFFSET_UNITS
             return JS_NewFloat64(ctx, gl->getParameterFloat(pname));
@@ -42,9 +42,39 @@ static JSValue js_getParameter(JSContext* ctx, JSValueConst this_val, int argc, 
             return arr;
         }
 
+        // Int32Array[2] parameters — these write TWO ints; routing them
+        // through the single-value default path would smash the stack.
+        case 0x0D3A: { // GL_MAX_VIEWPORT_DIMS
+            GLint v[2] = {0, 0}; glGetIntegerv(pname, v);
+            JSValue arr = JS_NewArray(ctx);
+            JS_SetPropertyUint32(ctx, arr, 0, JS_NewInt32(ctx, v[0]));
+            JS_SetPropertyUint32(ctx, arr, 1, JS_NewInt32(ctx, v[1]));
+            return arr;
+        }
+
+        // Float32Array[2] parameters
+        case 0x846D: // GL_ALIASED_POINT_SIZE_RANGE
+        case 0x846E: { // GL_ALIASED_LINE_WIDTH_RANGE
+            GLfloat v[2] = {0, 0}; glGetFloatv(pname, v);
+            JSValue arr = JS_NewArray(ctx);
+            JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, v[0]));
+            JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, v[1]));
+            return arr;
+        }
+
+        // WebGL-only pixel-store state — not real GL enums; answered from
+        // the context's shadow state (the default path would raise
+        // GL_INVALID_ENUM from glGetIntegerv).
+        case 0x9240: // UNPACK_FLIP_Y_WEBGL
+            return JS_NewBool(ctx, gl->unpackFlipY());
+        case 0x9241: // UNPACK_PREMULTIPLY_ALPHA_WEBGL
+            return JS_NewBool(ctx, gl->unpackPremultiplyAlpha());
+        case 0x9243: // UNPACK_COLORSPACE_CONVERSION_WEBGL
+            return JS_NewInt32(ctx, gl->unpackColorspaceConversion());
+
         // Float32Array[4] parameters
         case 0x0C22: // GL_COLOR_CLEAR_VALUE
-        case 0x0BE0: { // GL_BLEND_COLOR
+        case 0x8005: { // GL_BLEND_COLOR (0x0BE0 is BLEND_DST, a scalar)
             GLfloat v[4]; glGetFloatv(pname, v);
             JSValue arr = JS_NewArray(ctx);
             for (int i = 0; i < 4; i++)
@@ -98,7 +128,7 @@ static JSValue js_getParameter(JSContext* ctx, JSValueConst this_val, int argc, 
         case 0x8037: // GL_POLYGON_OFFSET_FILL
         case 0x809E: // GL_SAMPLE_ALPHA_TO_COVERAGE
         case 0x80A0: // GL_SAMPLE_COVERAGE
-        case 0x8CAB: // GL_RASTERIZER_DISCARD
+        case 0x8C89: // GL_RASTERIZER_DISCARD
         case 0x0B72: // GL_DEPTH_WRITEMASK
             return JS_NewBool(ctx, gl->getParameterBool(pname));
 

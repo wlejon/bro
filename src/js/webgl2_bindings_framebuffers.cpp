@@ -65,8 +65,19 @@ static JSValue js_readPixels(JSContext* ctx, JSValueConst this_val, int argc, JS
     const uint8_t* data = nullptr;
     size_t len = 0;
     if (getBufferData(ctx, argv[6], &data, &len)) {
-        gl->readPixels(x, y, w, h, format, type, (void*)data);
+        // WebGL: a destination too small for the result is INVALID_OPERATION,
+        // never an out-of-bounds write.
+        if (gl->validateReadPixels(w, h, format, type, len)) {
+            gl->readPixels(x, y, w, h, format, type, (void*)data);
+        }
     }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_readBuffer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_UNDEFINED;
+    uint32_t src; JS_ToUint32(ctx, &src, argv[0]);
+    gl->readBuffer(src);
     return JS_UNDEFINED;
 }
 
@@ -158,6 +169,7 @@ const JSCFunctionListEntry webgl2_framebuffer_funcs[] = {
     JS_CFUNC_DEF("framebufferRenderbuffer", 4, js_framebufferRenderbuffer),
     JS_CFUNC_DEF("checkFramebufferStatus", 1, js_checkFramebufferStatus),
     JS_CFUNC_DEF("readPixels", 7, js_readPixels),
+    JS_CFUNC_DEF("readBuffer", 1, js_readBuffer),
     JS_CFUNC_DEF("drawBuffers", 1, js_drawBuffers),
     JS_CFUNC_DEF("blitFramebuffer", 10, js_blitFramebuffer),
     JS_CFUNC_DEF("createRenderbuffer", 0, js_createRenderbuffer),

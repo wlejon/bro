@@ -6,6 +6,7 @@
 #include <quickjs.h>
 #include <string>
 #include <cstring>
+#include <vector>
 
 namespace bro::js::webgl2 {
 
@@ -96,12 +97,15 @@ inline webgl::WebGLUniformLocation unwrapUniformLocation(JSValueConst val) {
 }
 
 // --- TypedArray / ArrayBuffer data extraction ---
-// Returns pointer and byte length. Returns false if not a valid buffer source.
-inline bool getBufferData(JSContext* ctx, JSValueConst val,
-                          const uint8_t** outData, size_t* outLen) {
+// Returns pointer, byte length, and element size (1 for ArrayBuffer/DataView).
+// Returns false if not a valid buffer source.
+inline bool getBufferDataEx(JSContext* ctx, JSValueConst val,
+                            const uint8_t** outData, size_t* outLen,
+                            size_t* outElemSize) {
     // Try ArrayBuffer first
     if (JS_IsArrayBuffer(val)) {
         *outData = JS_GetArrayBuffer(ctx, outLen, val);
+        *outElemSize = 1;
         return *outData != nullptr;
     }
     // Try TypedArray
@@ -114,14 +118,24 @@ inline bool getBufferData(JSContext* ctx, JSValueConst val,
         if (ptr) {
             *outData = ptr + byteOffset;
             *outLen = byteLength;
+            *outElemSize = bytesPerElement > 0 ? bytesPerElement : 1;
             return true;
         }
     }
     return false;
 }
 
-// Extract float array from TypedArray (Float32Array) or JS array
+inline bool getBufferData(JSContext* ctx, JSValueConst val,
+                          const uint8_t** outData, size_t* outLen) {
+    size_t elemSize = 0;
+    return getBufferDataEx(ctx, val, outData, outLen, &elemSize);
+}
+
+// Extract float data from a Float32Array / ArrayBuffer, or a plain JS array
+// (the WebGL uniform*fv entry points accept sequence<GLfloat> too — `storage`
+// backs the converted copy in that case).
 inline bool getFloatArray(JSContext* ctx, JSValueConst val,
+                          std::vector<float>& storage,
                           const float** outData, size_t* outCount) {
     const uint8_t* data = nullptr;
     size_t len = 0;
@@ -130,16 +144,51 @@ inline bool getFloatArray(JSContext* ctx, JSValueConst val,
         *outCount = len / sizeof(float);
         return true;
     }
+    if (JS_IsArray(val)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, val, "length");
+        uint32_t n = 0;
+        JS_ToUint32(ctx, &n, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        storage.resize(n);
+        for (uint32_t i = 0; i < n; i++) {
+            JSValue elem = JS_GetPropertyUint32(ctx, val, i);
+            double d = 0;
+            JS_ToFloat64(ctx, &d, elem);
+            JS_FreeValue(ctx, elem);
+            storage[i] = (float)d;
+        }
+        *outData = storage.data();
+        *outCount = n;
+        return true;
+    }
     return false;
 }
 
 inline bool getInt32Array(JSContext* ctx, JSValueConst val,
+                          std::vector<int32_t>& storage,
                           const int32_t** outData, size_t* outCount) {
     const uint8_t* data = nullptr;
     size_t len = 0;
     if (getBufferData(ctx, val, &data, &len)) {
         *outData = reinterpret_cast<const int32_t*>(data);
         *outCount = len / sizeof(int32_t);
+        return true;
+    }
+    if (JS_IsArray(val)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, val, "length");
+        uint32_t n = 0;
+        JS_ToUint32(ctx, &n, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        storage.resize(n);
+        for (uint32_t i = 0; i < n; i++) {
+            JSValue elem = JS_GetPropertyUint32(ctx, val, i);
+            int32_t v = 0;
+            JS_ToInt32(ctx, &v, elem);
+            JS_FreeValue(ctx, elem);
+            storage[i] = v;
+        }
+        *outData = storage.data();
+        *outCount = n;
         return true;
     }
     return false;

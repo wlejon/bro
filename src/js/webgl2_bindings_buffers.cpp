@@ -30,11 +30,23 @@ static JSValue js_bufferData(JSContext* ctx, JSValueConst this_val, int argc, JS
     JS_ToUint32(ctx, &target, argv[0]);
     JS_ToUint32(ctx, &usage, argv[2]);
 
-    // Two signatures: bufferData(target, size, usage) or bufferData(target, data, usage)
+    // Signatures: bufferData(target, size, usage), bufferData(target, data, usage),
+    // and the WebGL2 form bufferData(target, srcData, usage, srcOffset[, length])
+    // where srcOffset/length are in ELEMENT units of the source typed array.
     const uint8_t* data = nullptr;
-    size_t len = 0;
-    if (getBufferData(ctx, argv[1], &data, &len)) {
-        gl->bufferData(target, (GLsizeiptr)len, data, usage);
+    size_t len = 0, elemSize = 1;
+    if (getBufferDataEx(ctx, argv[1], &data, &len, &elemSize)) {
+        size_t elemCount = len / elemSize;
+        size_t srcOffset = 0, count = elemCount;
+        if (argc >= 4) { uint32_t so; JS_ToUint32(ctx, &so, argv[3]); srcOffset = so; }
+        if (srcOffset > elemCount) srcOffset = elemCount;
+        count = elemCount - srcOffset;
+        if (argc >= 5 && !JS_IsUndefined(argv[4])) {
+            uint32_t l; JS_ToUint32(ctx, &l, argv[4]);
+            if ((size_t)l < count) count = l;
+        }
+        gl->bufferData(target, (GLsizeiptr)(count * elemSize),
+                       data + srcOffset * elemSize, usage);
     } else {
         // Treat as size
         int64_t size; JS_ToInt64(ctx, &size, argv[1]);
@@ -50,14 +62,21 @@ static JSValue js_bufferSubData(JSContext* ctx, JSValueConst this_val, int argc,
     JS_ToInt64(ctx, &offset, argv[1]);
 
     const uint8_t* data = nullptr;
-    size_t len = 0;
-    if (getBufferData(ctx, argv[2], &data, &len)) {
-        // Optional srcOffset and length parameters (WebGL2)
+    size_t len = 0, elemSize = 1;
+    if (getBufferDataEx(ctx, argv[2], &data, &len, &elemSize)) {
+        // Optional srcOffset and length parameters (WebGL2) — both are in
+        // ELEMENT units of the source typed array, not bytes.
+        size_t elemCount = len / elemSize;
         size_t srcOffset = 0;
         if (argc >= 4) { uint32_t so; JS_ToUint32(ctx, &so, argv[3]); srcOffset = so; }
-        size_t length = len - srcOffset;
-        if (argc >= 5) { uint32_t l; JS_ToUint32(ctx, &l, argv[4]); length = l; }
-        gl->bufferSubData(target, (GLintptr)offset, (GLsizeiptr)length, data + srcOffset);
+        if (srcOffset > elemCount) srcOffset = elemCount;
+        size_t count = elemCount - srcOffset;
+        if (argc >= 5 && !JS_IsUndefined(argv[4])) {
+            uint32_t l; JS_ToUint32(ctx, &l, argv[4]);
+            if ((size_t)l < count) count = l;
+        }
+        gl->bufferSubData(target, (GLintptr)offset, (GLsizeiptr)(count * elemSize),
+                          data + srcOffset * elemSize);
     }
     return JS_UNDEFINED;
 }
@@ -77,10 +96,22 @@ static JSValue js_getBufferSubData(JSContext* ctx, JSValueConst this_val, int ar
     JS_ToUint32(ctx, &target, argv[0]); JS_ToInt64(ctx, &srcOffset, argv[1]);
 
     const uint8_t* data = nullptr;
-    size_t len = 0;
-    // argv[2] is the destination TypedArray — we write into it
-    if (getBufferData(ctx, argv[2], &data, &len)) {
-        gl->getBufferSubData(target, (GLintptr)srcOffset, (void*)data, (GLsizeiptr)len);
+    size_t len = 0, elemSize = 1;
+    // argv[2] is the destination TypedArray — we write into it. Optional
+    // dstOffset/length (WebGL2) are in ELEMENT units of the destination.
+    if (getBufferDataEx(ctx, argv[2], &data, &len, &elemSize)) {
+        size_t elemCount = len / elemSize;
+        size_t dstOffset = 0;
+        if (argc >= 4) { uint32_t o; JS_ToUint32(ctx, &o, argv[3]); dstOffset = o; }
+        if (dstOffset > elemCount) dstOffset = elemCount;
+        size_t count = elemCount - dstOffset;
+        if (argc >= 5 && !JS_IsUndefined(argv[4])) {
+            uint32_t l; JS_ToUint32(ctx, &l, argv[4]);
+            if ((size_t)l < count) count = l;
+        }
+        gl->getBufferSubData(target, (GLintptr)srcOffset,
+                             (void*)(data + dstOffset * elemSize),
+                             (GLsizeiptr)(count * elemSize));
     }
     return JS_UNDEFINED;
 }

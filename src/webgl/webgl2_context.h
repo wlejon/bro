@@ -75,6 +75,18 @@ public:
     void pixelStorei(GLenum pname, GLint param);
     GLenum getError();
 
+    /// Record a WebGL-level (synthetic) error that raw GL cannot produce,
+    /// e.g. INVALID_OPERATION for a readPixels destination that is too small.
+    /// Mirrors GL semantics: only the first pending error is kept.
+    void setSyntheticError(GLenum err);
+
+    // pixelStorei shadow state (WebGL-only pnames are not real GL enums)
+    GLboolean unpackFlipY() const { return unpackFlipY_; }
+    GLboolean unpackPremultiplyAlpha() const { return unpackPremultiplyAlpha_; }
+    GLint unpackColorspaceConversion() const { return unpackColorspace_; }
+    GLint packAlignment() const { return packAlignment_; }
+    GLint unpackAlignmentValue() const { return unpackAlignment_; }
+
     // --- Buffers ---
     WebGLBuffer createBuffer();
     void deleteBuffer(WebGLBuffer buf);
@@ -123,6 +135,7 @@ public:
     std::string getProgramInfoLog(WebGLProgram program);
     void bindAttribLocation(WebGLProgram program, GLuint index, const std::string& name);
     GLint getAttribLocation(WebGLProgram program, const std::string& name);
+    GLint getFragDataLocation(WebGLProgram program, const std::string& name);
     WebGLUniformLocation getUniformLocation(WebGLProgram program, const std::string& name);
     WebGLActiveInfo getActiveAttrib(WebGLProgram program, GLuint index);
     WebGLActiveInfo getActiveUniform(WebGLProgram program, GLuint index);
@@ -197,6 +210,11 @@ public:
     GLenum checkFramebufferStatus(GLenum target);
     void readPixels(GLint x, GLint y, GLsizei width, GLsizei height,
                     GLenum format, GLenum type, void* pixels);
+    /// WebGL-level readPixels destination validation: returns false (and
+    /// records a synthetic error) if dstLen bytes cannot hold the result.
+    bool validateReadPixels(GLsizei width, GLsizei height,
+                            GLenum format, GLenum type, size_t dstLen);
+    void readBuffer(GLenum src);
     void drawBuffers(GLsizei n, const GLenum* bufs);
     void blitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1,
                          GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1,
@@ -261,6 +279,17 @@ private:
     GLint packAlignment_ = 4;
     GLboolean unpackFlipY_ = GL_FALSE;
     GLboolean unpackPremultiplyAlpha_ = GL_FALSE;
+    GLint unpackColorspace_ = 0x9244; // BROWSER_DEFAULT_WEBGL
+
+    // First pending WebGL-level error (returned by getError before real GL errors)
+    GLenum syntheticError_ = 0; // GL_NO_ERROR
+
+    // Apply UNPACK_FLIP_Y_WEBGL / UNPACK_PREMULTIPLY_ALPHA_WEBGL to client
+    // pixel data before upload. Returns the pointer to upload (either the
+    // original pixels or tmp.data() with the transform applied).
+    const void* applyUnpackTransforms(const void* pixels, GLsizei width, GLsizei height,
+                                      GLenum format, GLenum type,
+                                      std::vector<uint8_t>& tmp) const;
 
     // --- Shadow state for cheap save/restore around compositing ---
 public:
