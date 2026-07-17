@@ -159,6 +159,12 @@ private:
     void drawElementContent(dom::Element* elem, float offsetX, float offsetY);
     void drawBackground(dom::Element* elem, float x, float y, float w, float h);
     void drawBorders(dom::Element* elem, float x, float y, float w, float h);
+    // CSS border-image (Backgrounds-3 §6): draws the nine-slice over the
+    // border area when border-image-source names a loaded raster image.
+    // Returns true when border-image took over painting (normal border
+    // painting must then be skipped); false → fall back to normal borders
+    // (source absent, `none`, failed to load, SVG, or gradient).
+    bool drawBorderImage(dom::Element* elem, float x, float y, float w, float h);
     // <fieldset> paints its block-start border and background from the
     // vertical center of its <legend>, which straddles the border (HTML
     // rendering spec). Returns the downward shift of the painted top edge
