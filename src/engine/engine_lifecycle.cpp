@@ -19,6 +19,7 @@
 #endif
 #include "js/server_bindings.h"
 #include "js/net_bindings.h"
+#include "js/steam_bindings.h"
 #include "js/mesh_bindings.h"
 #include "js/rigging_bindings.h"
 #include "js/ai_bindings.h"
@@ -281,6 +282,10 @@ Engine::~Engine() {
         js::cleanupWorkerBindings(ctx);
         js::ServerBindings::cleanup(ctx);
         js::NetBindings::cleanup(ctx);
+        // Frees the thread-local Steam state's JS refs (event handlers,
+        // pending promises) before the runtime goes, and destroys its
+        // service subscriber — same ordering performAppReload uses.
+        js::SteamBindings::cleanup(ctx);
 
         // Now — and not before — the net/Steam service threads can go. Their
         // bindings above hold raw service pointers and call back into them
