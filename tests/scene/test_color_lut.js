@@ -5,7 +5,9 @@
 // LUT strips are generated on the fly with bro.image.encodePngFile.
 
 const fs = require('fs');
-const tmpDir = 'D:/projects/bro/tests/scene/tmp_lut';
+const os = require('os');
+const path = require('path');
+const tmpDir = path.join(os.tmpdir(), 'bro_test_lut_' + Date.now());
 fs.mkdirSync(tmpDir, { recursive: true });
 
 const SIZE = 16;
