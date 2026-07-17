@@ -161,14 +161,17 @@ jobs:
             # sccache caches nvcc too — route the CUDA compiler through it as well,
             # or the brotensor kernels (the heaviest TUs) recompile from scratch
             # every night while the C/C++ objects hit the cache.
-            # Tensor-core arches only (sm_70+). `all-major` also pulls in sm_50
-            # (Maxwell) and sm_60 (Pascal), which have no tensor cores — so
-            # <mma.h> leaves the nvcuda::wmma namespace undefined on those device
-            # passes and brotensor's WMMA kernels (fp16_matmul.cu et al., no
-            # __CUDA_ARCH__ guard) fail to compile. WMMA is Volta+; pre-Volta
-            # GPUs can't run these kernels anyway. -real cubins for the common
-            # arches + a newest-arch PTX tail for forward compatibility.
-            CUDA_ARCHS="70-real;75-real;80-real;86-real;89-real;90-real;90-virtual"
+            # Ampere+ (sm_80+) only. brotensor's AI tower is built around BF16
+            # tensor cores: its WMMA kernels instantiate __nv_bfloat16
+            # wmma::fragment unconditionally (no __CUDA_ARCH__ guard), and BF16
+            # WMMA fragments only exist on sm_80+. So pre-Ampere device passes
+            # fail to compile: sm_50/sm_60 have no tensor cores at all (nvcuda
+            # namespace undefined), and sm_70/sm_75 (Volta/Turing) have FP16 WMMA
+            # but no BF16 fragment type (incomplete-type error). `all-major`
+            # includes all of those. Target Ampere and later — the arches this
+            # BF16 code can actually run on. -real cubins for the common arches +
+            # a newest-arch PTX tail for forward compatibility.
+            CUDA_ARCHS="80-real;86-real;89-real;90-real;90-virtual"
             GPU_ARGS="-DBRO_WITH_TENSOR_CUDA=ON -DCMAKE_CUDA_ARCHITECTURES=$CUDA_ARCHS -DCMAKE_CUDA_COMPILER_LAUNCHER=sccache"
           elif [ "$RUNNER_OS" = "macOS" ]; then
             # macOS: compile the Metal backend IN (also opt-in, same reason). Metal
