@@ -334,6 +334,14 @@ public:
     }
     bool ssaoEnabled() const { return renderer_.ssaoEnabled(); }
 
+    /// Depth-based depth-of-field on the HDR image before bloom + tonemap.
+    /// See SceneRenderer::setDepthOfField for parameter semantics.
+    void setDepthOfField(bool enabled, float focusDistance, float focusRange,
+                         float maxBlur) {
+        renderer_.setDepthOfField(enabled, focusDistance, focusRange, maxBlur);
+    }
+    bool depthOfFieldEnabled() const { return renderer_.depthOfFieldEnabled(); }
+
     /// Wind sway parameters consumed by the mesh vertex shader. Per-vertex
     /// `windBend` (vertex color R, 0..1) modulates the global displacement
     /// `windDir * sin(windTime*windFreq + dot(pos.xz, k)) * strength * bend`.

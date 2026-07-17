@@ -141,6 +141,20 @@ public:
     }
     bool ssaoEnabled() const { return ssaoEnabled_; }
 
+    /// Depth-based depth-of-field, applied on the HDR image before bloom +
+    /// tonemap. Geometry within focusDistance +/- focusRange (eye-space
+    /// distance) stays sharp; the circle of confusion ramps to fully
+    /// blurred by +/- 2*focusRange. `maxBlur` is the Gaussian radius in
+    /// half-res texels (blur strength of the fully-defocused image).
+    void setDepthOfField(bool enabled, float focusDistance, float focusRange,
+                         float maxBlur) {
+        dofEnabled_       = enabled;
+        dofFocusDistance_ = focusDistance > 0.0f ? focusDistance : 10.0f;
+        dofFocusRange_    = focusRange > 0.0f ? focusRange : 5.0f;
+        dofMaxBlur_       = maxBlur > 0.0f ? maxBlur : 4.0f;
+    }
+    bool depthOfFieldEnabled() const { return dofEnabled_; }
+
     void setWind(float dirX, float dirY, float dirZ,
                  float strength, float frequency) {
         windDir_[0] = dirX; windDir_[1] = dirY; windDir_[2] = dirZ;
@@ -342,8 +356,10 @@ private:
     void ensureBloomPipeline();
     void ensureBloomFBOs();
     void destroyBloomFBOs();
-    // Bright-pass + blur into bloomTex_[0]; returns true if a glow is ready.
-    bool runBloomPrePass();
+    // Bright-pass + blur of `srcTex` (the frame's HDR source — the DoF
+    // composite when that ran, else the mesh color) into bloomTex_[0];
+    // returns true if a glow is ready.
+    bool runBloomPrePass(GLuint srcTex);
 
     // --- SSAO pre-pass (half-res AO from resolved depth, before tonemap) ---
     void ensureSSAOPipeline();
@@ -351,6 +367,15 @@ private:
     void destroySSAOFBOs();
     // AO estimate + blur into ssaoTex_[0]; returns true when AO is ready.
     bool runSSAOPass();
+
+    // --- Depth-of-field pre-pass (HDR, before bloom + tonemap) ---
+    void ensureDoFPipeline();
+    void ensureDoFFBOs();
+    void destroyDoFFBOs();
+    // Half-res HDR blur + full-res CoC composite into dofColorTex_;
+    // returns true when the composite ran (tonemap + bloom then read
+    // dofColorTex_ instead of meshColorTex_).
+    bool runDoFPass();
 
     // --- Light collection (rebuilt per frame) ---
     void collectLights(std::vector<LightNode*>& out) const;
@@ -631,6 +656,29 @@ private:
     GLint  aoURadius_     = -1;
     GLint  aoUBias_       = -1;
     GLint  aoUNoiseScale_ = -1;
+
+    // --- Depth-of-field pre-pass ---
+    bool  dofEnabled_       = false;
+    float dofFocusDistance_ = 10.0f;
+    float dofFocusRange_    = 5.0f;
+    float dofMaxBlur_       = 4.0f;
+
+    // Half-res HDR blur ping-pong + full-res HDR composite target.
+    GLuint dofBlurFBO_[2] = {0, 0};
+    GLuint dofBlurTex_[2] = {0, 0};
+    int    dofBlurWidth_  = 0, dofBlurHeight_ = 0;
+    GLuint dofFBO_        = 0;
+    GLuint dofColorTex_   = 0;
+    int    dofWidth_      = 0, dofHeight_ = 0;
+
+    GLuint dofProgram_    = 0;
+    GLint  dofUSharp_     = -1;
+    GLint  dofUBlur_      = -1;
+    GLint  dofUDepth_     = -1;
+    GLint  dofUDepthRange_    = -1;
+    GLint  dofUPerspective_   = -1;
+    GLint  dofUFocusDistance_ = -1;
+    GLint  dofUFocusRange_    = -1;
 
     // --- Tilt-shift DOF post pass ---
     // Params (see setTiltShift). Disabled by default so the pass is a no-op

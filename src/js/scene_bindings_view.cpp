@@ -582,6 +582,26 @@ JSValue js_sg_setSSAO(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
     return JS_UNDEFINED;
 }
 
+// setDepthOfField({enabled, focusDistance, focusRange, maxBlur}) —
+// depth-based DoF on the HDR image before bloom + tonemap.
+JSValue js_sg_setDepthOfField(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
+
+    JSValueConst opts = argv[0];
+    bool enabled = false;
+    JSValue ev = JS_GetPropertyStr(ctx, opts, "enabled");
+    if (!JS_IsUndefined(ev)) enabled = JS_ToBool(ctx, ev);
+    JS_FreeValue(ctx, ev);
+
+    double focusDistance = qjsbind::get_prop_number(ctx, opts, "focusDistance", 10.0);
+    double focusRange    = qjsbind::get_prop_number(ctx, opts, "focusRange",    5.0);
+    double maxBlur       = qjsbind::get_prop_number(ctx, opts, "maxBlur",       4.0);
+    g->setDepthOfField(enabled, (float)focusDistance, (float)focusRange,
+                       (float)maxBlur);
+    return JS_UNDEFINED;
+}
+
 // setRenderScale(s) — internal render-resolution multiplier (clamped
 // 0.25-2.0). Compositing/picking stay in CSS pixels.
 JSValue js_sg_setRenderScale(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {

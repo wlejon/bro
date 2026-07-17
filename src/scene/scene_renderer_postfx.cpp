@@ -19,6 +19,7 @@
 #include "tilt_composite.frag.h"
 #include "bloom_bright.frag.h"
 #include "ssao.frag.h"
+#include "dof_composite.frag.h"
 
 namespace bro::scene {
 
@@ -146,9 +147,14 @@ void SceneRenderer::runTonemapPass() {
     ensureTonemapFBO();
     if (!tonemapProgram_ || !tonemapFBO_) return;
 
-    // Bright-pass + blur the HDR mesh target before resolving, so the tonemap
+    // Depth-of-field first: it rewrites the HDR image, so bloom and the
+    // tonemap draw consume its output when it ran.
+    const bool haveDoF = runDoFPass();
+    const GLuint hdrSrc = haveDoF ? dofColorTex_ : meshColorTex_;
+
+    // Bright-pass + blur the HDR source before resolving, so the tonemap
     // draw can add the glow in HDR. Leaves bloomActive_/bloomTex_ ready.
-    const bool haveBloom = runBloomPrePass();
+    const bool haveBloom = runBloomPrePass(hdrSrc);
 
     // Half-res AO from the resolved scene depth; multiplied into the lit
     // HDR image by the tonemap draw below (post-multiply — standard for a
@@ -165,11 +171,11 @@ void SceneRenderer::runTonemapPass() {
 
     glUseProgram(tonemapProgram_);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_2D, meshColorTex_);
+    glBindTexture(GL_TEXTURE_2D, hdrSrc);
     glUniform1i(tmUTex_, 0);
     // Bloom on unit 1 — bind a valid texture even when off (intensity 0).
     glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, haveBloom ? bloomTex_[0] : meshColorTex_);
+    glBindTexture(GL_TEXTURE_2D, haveBloom ? bloomTex_[0] : hdrSrc);
     glUniform1i(tmUBloomTex_, 1);
     glUniform1f(tmUBloomIntensity_, haveBloom ? bloomIntensity_ : 0.0f);
     // SSAO on unit 2 — white fallback keeps the sampler valid when off.
@@ -242,9 +248,9 @@ void SceneRenderer::destroyBloomFBOs() {
     bloomWidth_ = bloomHeight_ = 0;
 }
 
-bool SceneRenderer::runBloomPrePass() {
+bool SceneRenderer::runBloomPrePass(GLuint srcTex) {
     bloomActive_ = false;
-    if (!bloomEnabled_ || bloomIntensity_ <= 0.0f || !meshColorTex_) return false;
+    if (!bloomEnabled_ || bloomIntensity_ <= 0.0f || !srcTex) return false;
 
     ensureBloomPipeline();
     ensureBloomFBOs();
@@ -258,12 +264,12 @@ bool SceneRenderer::runBloomPrePass() {
     glBindVertexArray(tonemapVAO_);
     glActiveTexture(GL_TEXTURE0);
 
-    // Bright-pass: HDR mesh → bloomTex_[0].
+    // Bright-pass: HDR source → bloomTex_[0].
     glUseProgram(bloomBrightProgram_);
     glUniform1i(bbpUTex_, 0);
     glUniform1f(bbpUThreshold_, bloomThreshold_);
     glBindFramebuffer(GL_FRAMEBUFFER, bloomFBO_[0]);
-    glBindTexture(GL_TEXTURE_2D, meshColorTex_);
+    glBindTexture(GL_TEXTURE_2D, srcTex);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
     // Separable Gaussian (shared blur program): [0] -H-> [1] -V-> [0].
@@ -442,6 +448,147 @@ bool SceneRenderer::runSSAOPass() {
     glBindFramebuffer(GL_FRAMEBUFFER, ssaoFBO_[0]);
     glBindTexture(GL_TEXTURE_2D, ssaoTex_[1]);
     glUniform2f(blUDir_, 0.0f, 1.0f / static_cast<float>(ssaoHeight_));
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Depth-of-field pre-pass (HDR, before bloom + tonemap)
+// ---------------------------------------------------------------------------
+
+void SceneRenderer::ensureDoFPipeline() {
+    ensureTiltShiftPipeline();   // shares the separable-blur program
+    if (dofProgram_) return;
+
+    dofProgram_ = linkProgram(kPostVertSrc, kDoFCompositeFragSrc, "DoF composite");
+    if (!dofProgram_) return;
+
+    dofUSharp_         = glGetUniformLocation(dofProgram_, "uSharp");
+    dofUBlur_          = glGetUniformLocation(dofProgram_, "uBlur");
+    dofUDepth_         = glGetUniformLocation(dofProgram_, "uDepthTex");
+    dofUDepthRange_    = glGetUniformLocation(dofProgram_, "uDepthRange");
+    dofUPerspective_   = glGetUniformLocation(dofProgram_, "uPerspective");
+    dofUFocusDistance_ = glGetUniformLocation(dofProgram_, "uFocusDistance");
+    dofUFocusRange_    = glGetUniformLocation(dofProgram_, "uFocusRange");
+}
+
+void SceneRenderer::ensureDoFFBOs() {
+    if (graph_.canvasWidth_ <= 0 || graph_.canvasHeight_ <= 0) return;
+    const int tw = targetWidth();
+    const int th = targetHeight();
+    const int hw = std::max(1, tw / 2);
+    const int hh = std::max(1, th / 2);
+    if (dofFBO_ && dofWidth_ == tw && dofHeight_ == th &&
+        dofBlurFBO_[0] && dofBlurWidth_ == hw && dofBlurHeight_ == hh) {
+        return;
+    }
+    destroyDoFFBOs();
+
+    // Everything HDR (RGBA16F): DoF runs before tonemap, and the blurred
+    // image must carry >1.0 highlights through to bloom.
+    dofBlurWidth_  = hw;
+    dofBlurHeight_ = hh;
+    for (int i = 0; i < 2; ++i) {
+        glGenFramebuffers(1, &dofBlurFBO_[i]);
+        glBindFramebuffer(GL_FRAMEBUFFER, dofBlurFBO_[i]);
+        glGenTextures(1, &dofBlurTex_[i]);
+        glBindTexture(GL_TEXTURE_2D, dofBlurTex_[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, hw, hh, 0,
+                     GL_RGBA, GL_FLOAT, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, dofBlurTex_[i], 0);
+    }
+
+    dofWidth_  = tw;
+    dofHeight_ = th;
+    glGenFramebuffers(1, &dofFBO_);
+    glBindFramebuffer(GL_FRAMEBUFFER, dofFBO_);
+    glGenTextures(1, &dofColorTex_);
+    glBindTexture(GL_TEXTURE_2D, dofColorTex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16F, tw, th, 0,
+                 GL_RGBA, GL_FLOAT, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                           dofColorTex_, 0);
+
+    GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+    if (status != GL_FRAMEBUFFER_COMPLETE) {
+        LOG_ERROR("DoF FBO incomplete: 0x%x", status);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void SceneRenderer::destroyDoFFBOs() {
+    for (int i = 0; i < 2; ++i) {
+        if (dofBlurTex_[i]) { glDeleteTextures(1, &dofBlurTex_[i]); dofBlurTex_[i] = 0; }
+        if (dofBlurFBO_[i]) { glDeleteFramebuffers(1, &dofBlurFBO_[i]); dofBlurFBO_[i] = 0; }
+    }
+    if (dofColorTex_) { glDeleteTextures(1, &dofColorTex_); dofColorTex_ = 0; }
+    if (dofFBO_)      { glDeleteFramebuffers(1, &dofFBO_); dofFBO_ = 0; }
+    dofBlurWidth_ = dofBlurHeight_ = 0;
+    dofWidth_ = dofHeight_ = 0;
+}
+
+bool SceneRenderer::runDoFPass() {
+    if (!dofEnabled_ || !meshColorTex_ || !meshDepthTex_) return false;
+
+    ensureDoFPipeline();
+    ensureDoFFBOs();
+    if (!dofProgram_ || !blurProgram_ || !dofFBO_ || !dofBlurFBO_[0]) return false;
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindVertexArray(tonemapVAO_);
+
+    // --- Downsample + separable Gaussian (HDR sharp -> dofBlurTex_[1]) -----
+    const float rx = dofMaxBlur_ / static_cast<float>(dofBlurWidth_);
+    const float ry = dofMaxBlur_ / static_cast<float>(dofBlurHeight_);
+    glUseProgram(blurProgram_);
+    glUniform1i(blUTex_, 0);
+    glActiveTexture(GL_TEXTURE0);
+    glViewport(0, 0, dofBlurWidth_, dofBlurHeight_);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, dofBlurFBO_[0]);
+    glBindTexture(GL_TEXTURE_2D, meshColorTex_);
+    glUniform2f(blUDir_, rx, 0.0f);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, dofBlurFBO_[1]);
+    glBindTexture(GL_TEXTURE_2D, dofBlurTex_[0]);
+    glUniform2f(blUDir_, 0.0f, ry);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // --- CoC composite (sharp + blur + depth -> dofColorTex_) --------------
+    glUseProgram(dofProgram_);
+    glBindFramebuffer(GL_FRAMEBUFFER, dofFBO_);
+    glViewport(0, 0, dofWidth_, dofHeight_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, meshColorTex_);
+    glUniform1i(dofUSharp_, 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, dofBlurTex_[1]);
+    glUniform1i(dofUBlur_, 1);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, meshDepthTex_);
+    glUniform1i(dofUDepth_, 2);
+    glActiveTexture(GL_TEXTURE0);
+    glUniform2f(dofUDepthRange_, graph_.cameraNearZ_, graph_.cameraFarZ_);
+    glUniform1i(dofUPerspective_, graph_.cameraIsPerspective_ ? 1 : 0);
+    glUniform1f(dofUFocusDistance_, dofFocusDistance_);
+    glUniform1f(dofUFocusRange_, dofFocusRange_);
     glDrawArrays(GL_TRIANGLES, 0, 6);
 
     glBindVertexArray(0);

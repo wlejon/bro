@@ -1243,6 +1243,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setTiltShift", js_sg_setTiltShift, 1)
         .method_raw("setBloom", js_sg_setBloom, 1)
         .method_raw("setSSAO", js_sg_setSSAO, 1)
+        .method_raw("setDepthOfField", js_sg_setDepthOfField, 1)
         .method_raw("setRenderScale", js_sg_setRenderScale, 1)
         .method_raw("setMSAA", js_sg_setMSAA, 1)
         .method_raw("setEnvironment", js_sg_setEnvironment, 1)

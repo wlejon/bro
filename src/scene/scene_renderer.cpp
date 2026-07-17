@@ -68,6 +68,8 @@ SceneRenderer::~SceneRenderer() {
     destroySSAOFBOs();
     if (ssaoProgram_) { glDeleteProgram(ssaoProgram_); ssaoProgram_ = 0; }
     if (ssaoNoiseTex_) { glDeleteTextures(1, &ssaoNoiseTex_); ssaoNoiseTex_ = 0; }
+    destroyDoFFBOs();
+    if (dofProgram_) { glDeleteProgram(dofProgram_); dofProgram_ = 0; }
     destroyShadowAtlas();
     if (shadowProgram_) { glDeleteProgram(shadowProgram_); shadowProgram_ = 0; }
     if (shadowInstancedProgram_) { glDeleteProgram(shadowInstancedProgram_); shadowInstancedProgram_ = 0; }

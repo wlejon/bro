@@ -682,6 +682,23 @@ class SceneGraph {
   setSSAO(opts) {}
 
   /**
+   * Depth-based depth-of-field. Geometry within focusDistance ± focusRange
+   * (eye-space distance) stays sharp; the circle of confusion ramps to fully
+   * defocused by ± 2×focusRange. Applied on the HDR image before bloom and
+   * tonemap (defocused highlights still bloom); the defocused image is a
+   * half-res Gaussian of the frame (radius maxBlur half-res texels) that the
+   * CoC mixes toward — cheap and smooth, same cost tier as tilt-shift. For
+   * the screen-space "miniature" band DoF, see setTiltShift; both can be on.
+   *
+   * @param {Object} opts
+   * @param {boolean} [opts.enabled=false]     - toggle the pass.
+   * @param {number}  [opts.focusDistance=10]  - distance in perfect focus (world units).
+   * @param {number}  [opts.focusRange=5]      - ± span around focus that stays sharp.
+   * @param {number}  [opts.maxBlur=4]         - blur radius (half-res texels) when fully defocused.
+   */
+  setDepthOfField(opts) {}
+
+  /**
    * Internal render-resolution scale for the 3D pipeline (default 1.0,
    * clamped 0.25-2.0). Every 3D render target (HDR mesh FBO, tonemap,
    * bloom, tilt-shift) is sized to canvas * scale; the compositor samples
