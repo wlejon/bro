@@ -602,6 +602,29 @@ JSValue js_sg_setDepthOfField(JSContext* ctx, JSValueConst this_val, int argc, J
     return JS_UNDEFINED;
 }
 
+// setColorLUT({path, size, amount}) — 3D color-grading LUT from a strip
+// image, applied after tonemapping. Pass null (or {path: ""}) to clear.
+JSValue js_sg_setColorLUT(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+    if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
+        g->clearColorLUT();
+        return JS_TRUE;
+    }
+    if (!JS_IsObject(argv[0])) return JS_FALSE;
+    JSValueConst opts = argv[0];
+
+    std::string path = qjsbind::get_prop_string(ctx, opts, "path", "");
+    if (path.empty()) {
+        g->clearColorLUT();
+        return JS_TRUE;
+    }
+    int size      = (int)qjsbind::get_prop_number(ctx, opts, "size", 0.0);
+    double amount = qjsbind::get_prop_number(ctx, opts, "amount", 1.0);
+    return g->loadColorLUT(resolveAppPath(path), size, (float)amount)
+               ? JS_TRUE : JS_FALSE;
+}
+
 // setRenderScale(s) — internal render-resolution multiplier (clamped
 // 0.25-2.0). Compositing/picking stay in CSS pixels.
 JSValue js_sg_setRenderScale(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {

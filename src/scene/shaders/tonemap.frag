@@ -7,6 +7,10 @@ uniform sampler2D uBloomTex;
 uniform float uBloomIntensity;   // 0 = bloom off
 uniform sampler2D uSSAOTex;      // blurred half-res AO (R channel)
 uniform float uSSAOIntensity;    // 0 = SSAO off
+uniform sampler3D uLUTTex;       // 3D color-grading LUT
+uniform float uLUTAmount;        // 0 = LUT off, 1 = fully graded
+uniform float uLUTScale;         // (size-1)/size — texel-center mapping
+uniform float uLUTOffset;        // 0.5/size
 uniform float uExposure;
 uniform float uGamma;
 uniform int   uMode;   // 0 = linear clamp, 1 = Reinhard, 2 = ACES
@@ -38,6 +42,14 @@ void main() {
     else                 c = clamp(c, 0.0, 1.0);
     if (uGamma > 0.0 && uGamma != 1.0) {
         c = pow(c, vec3(1.0 / uGamma));
+    }
+    // 3D color-grading LUT, applied AFTER tonemapping + gamma (LUTs are
+    // authored in display space). Trilinear; the scale/offset remap [0,1]
+    // onto texel centers so black and white hit the outer LUT nodes exactly.
+    // Guarded so amount 0 leaves the frame bit-exact.
+    if (uLUTAmount > 0.0) {
+        vec3 graded = texture(uLUTTex, c * uLUTScale + uLUTOffset).rgb;
+        c = mix(c, graded, uLUTAmount);
     }
     FragColor = vec4(c, src.a);
 }

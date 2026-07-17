@@ -155,6 +155,20 @@ public:
     }
     bool depthOfFieldEnabled() const { return dofEnabled_; }
 
+    /// Load a 3D color-grading LUT from a horizontal strip image (`size`
+    /// tiles of size x size laid out left to right; tile index = blue,
+    /// tile x = red, tile y = green, all increasing top-down/left-right —
+    /// the standard neutral-strip convention, e.g. a 16^3 LUT is a 256x16
+    /// image). size 0 infers the cube side from the image height. The LUT
+    /// is applied in the tonemap pass AFTER tonemapping + gamma, sampled
+    /// trilinearly from a real 3D texture; `amount` lerps between ungraded
+    /// and graded (1 = full). Returns false (and clears nothing) on decode
+    /// or layout failure. GL thread only.
+    bool loadColorLUT(const std::string& path, int size, float amount);
+    void clearColorLUT();
+    bool hasColorLUT() const { return lutTex_ != 0; }
+    void setColorLUTAmount(float a) { lutAmount_ = a < 0.0f ? 0.0f : a; }
+
     void setWind(float dirX, float dirY, float dirZ,
                  float strength, float frequency) {
         windDir_[0] = dirX; windDir_[1] = dirY; windDir_[2] = dirZ;
@@ -680,6 +694,15 @@ private:
     GLint  dofUFocusDistance_ = -1;
     GLint  dofUFocusRange_    = -1;
 
+    // --- 3D color-grading LUT (applied in the tonemap pass, post-tonemap) ---
+    GLuint lutTex_    = 0;     // size^3 RGBA8 3D texture, trilinear
+    int    lutSize_   = 0;
+    float  lutAmount_ = 1.0f;
+    GLint  tmULUTTex_    = -1;
+    GLint  tmULUTAmount_ = -1;
+    GLint  tmULUTScale_  = -1;
+    GLint  tmULUTOffset_ = -1;
+
     // --- Tilt-shift DOF post pass ---
     // Params (see setTiltShift). Disabled by default so the pass is a no-op
     // and the compositor reads tonemapColorTex_ unchanged.
@@ -793,6 +816,7 @@ private:
     GLuint fallback2D_ = 0;       // white RGBA8 2D
     GLuint fallbackCube_ = 0;     // white RGBA8 cube
     GLuint fallbackShadow_ = 0;   // depth24 2D with COMPARE_REF_TO_TEXTURE
+    GLuint fallback3D_ = 0;       // white RGBA8 1x1x1 3D (LUT sampler when off)
 
     // --- IBL environment state ---
     GLuint envCubemap_ = 0;          // 512² RGBA16F cube, 6 faces, mipmapped

@@ -37,6 +37,8 @@ SceneRenderer::~SceneRenderer() {
     if (fallback2D_) { glDeleteTextures(1, &fallback2D_); fallback2D_ = 0; }
     if (fallbackCube_) { glDeleteTextures(1, &fallbackCube_); fallbackCube_ = 0; }
     if (fallbackShadow_) { glDeleteTextures(1, &fallbackShadow_); fallbackShadow_ = 0; }
+    if (fallback3D_) { glDeleteTextures(1, &fallback3D_); fallback3D_ = 0; }
+    clearColorLUT();
     destroyMeshFBO();
     destroyMSAAFBO();
     destroySceneDepthCopy();
@@ -88,7 +90,21 @@ SceneRenderer::~SceneRenderer() {
     if (brdfLUT_) { glDeleteTextures(1, &brdfLUT_); brdfLUT_ = 0; }}
 
 void SceneRenderer::ensureFallbackTextures() {
-    if (fallback2D_ && fallbackCube_ && fallbackShadow_) return;
+    if (fallback2D_ && fallbackCube_ && fallbackShadow_ && fallback3D_) return;
+
+    if (!fallback3D_) {
+        glGenTextures(1, &fallback3D_);
+        glBindTexture(GL_TEXTURE_3D, fallback3D_);
+        uint8_t white[4] = {255, 255, 255, 255};
+        glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, 1, 1, 1, 0, GL_RGBA,
+                     GL_UNSIGNED_BYTE, white);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_3D, 0);
+    }
 
     if (!fallback2D_) {
         glGenTextures(1, &fallback2D_);

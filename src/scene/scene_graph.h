@@ -342,6 +342,14 @@ public:
     }
     bool depthOfFieldEnabled() const { return renderer_.depthOfFieldEnabled(); }
 
+    /// 3D color-grading LUT applied after tonemapping. See
+    /// SceneRenderer::loadColorLUT for the strip-image contract.
+    bool loadColorLUT(const std::string& path, int size, float amount) {
+        return renderer_.loadColorLUT(path, size, amount);
+    }
+    void clearColorLUT() { renderer_.clearColorLUT(); }
+    bool hasColorLUT() const { return renderer_.hasColorLUT(); }
+
     /// Wind sway parameters consumed by the mesh vertex shader. Per-vertex
     /// `windBend` (vertex color R, 0..1) modulates the global displacement
     /// `windDir * sin(windTime*windFreq + dot(pos.xz, k)) * strength * bend`.

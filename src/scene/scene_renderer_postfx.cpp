@@ -44,6 +44,10 @@ void SceneRenderer::ensureTonemapPipeline() {
     tmUBloomIntensity_ = glGetUniformLocation(tonemapProgram_, "uBloomIntensity");
     tmUSSAOTex_        = glGetUniformLocation(tonemapProgram_, "uSSAOTex");
     tmUSSAOIntensity_  = glGetUniformLocation(tonemapProgram_, "uSSAOIntensity");
+    tmULUTTex_         = glGetUniformLocation(tonemapProgram_, "uLUTTex");
+    tmULUTAmount_      = glGetUniformLocation(tonemapProgram_, "uLUTAmount");
+    tmULUTScale_       = glGetUniformLocation(tonemapProgram_, "uLUTScale");
+    tmULUTOffset_      = glGetUniformLocation(tonemapProgram_, "uLUTOffset");
 
     static const float quadVerts[12] = {
         -1.0f, -1.0f,  1.0f, -1.0f,  1.0f,  1.0f,
@@ -183,6 +187,16 @@ void SceneRenderer::runTonemapPass() {
     glBindTexture(GL_TEXTURE_2D, haveSSAO ? ssaoTex_[0] : fallback2D_);
     glUniform1i(tmUSSAOTex_, 2);
     glUniform1f(tmUSSAOIntensity_, haveSSAO ? ssaoIntensity_ : 0.0f);
+    // Color LUT on unit 3 — 1x1x1 white fallback keeps the sampler3D valid
+    // (cross-type aliasing on unit 0 is illegal in strict core profiles).
+    const bool haveLUT = lutTex_ != 0 && lutAmount_ > 0.0f;
+    glActiveTexture(GL_TEXTURE3);
+    glBindTexture(GL_TEXTURE_3D, haveLUT ? lutTex_ : fallback3D_);
+    glUniform1i(tmULUTTex_, 3);
+    glUniform1f(tmULUTAmount_, haveLUT ? lutAmount_ : 0.0f);
+    const float lutN = haveLUT ? static_cast<float>(lutSize_) : 1.0f;
+    glUniform1f(tmULUTScale_, (lutN - 1.0f) / lutN);
+    glUniform1f(tmULUTOffset_, 0.5f / lutN);
     glActiveTexture(GL_TEXTURE0);
     glUniform1f(tmUExposure_, exposure_);
     glUniform1f(tmUGamma_, gamma_);
@@ -293,6 +307,70 @@ bool SceneRenderer::runBloomPrePass(GLuint srcTex) {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     bloomActive_ = true;
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// 3D color-grading LUT
+// ---------------------------------------------------------------------------
+
+bool SceneRenderer::loadColorLUT(const std::string& path, int size,
+                                 float amount) {
+    broimage::Image img;
+    if (!broimage::decode_file(path, img) || img.width <= 0 || img.height <= 0) {
+        LOG_ERROR("loadColorLUT: failed to decode '%s'", path.c_str());
+        return false;
+    }
+    int n = size;
+    if (n <= 0) n = img.height;   // infer cube side from strip height
+    if (n < 2 || img.height != n || img.width != n * n) {
+        LOG_ERROR("loadColorLUT: '%s' is %dx%d, expected a %dx%d strip "
+                  "(size^2 x size, size=%d)",
+                  path.c_str(), img.width, img.height, n * n, n, n);
+        return false;
+    }
+
+    // Repack the horizontal strip (tile index = blue, tile x = red,
+    // tile y = green, image rows top-down) into 3D-texture order:
+    // x (red) fastest, then y (green), then z (blue).
+    const int ch = img.channels;
+    std::vector<uint8_t> vox(static_cast<size_t>(n) * n * n * 4, 255);
+    for (int b = 0; b < n; ++b) {
+        for (int g = 0; g < n; ++g) {
+            for (int r = 0; r < n; ++r) {
+                const size_t src = (static_cast<size_t>(g) * img.width +
+                                    static_cast<size_t>(b) * n + r) * ch;
+                const size_t dst = ((static_cast<size_t>(b) * n + g) *
+                                    static_cast<size_t>(n) + r) * 4;
+                vox[dst + 0] = img.pixels[src + 0];
+                vox[dst + 1] = ch > 1 ? img.pixels[src + 1] : img.pixels[src];
+                vox[dst + 2] = ch > 2 ? img.pixels[src + 2] : img.pixels[src];
+            }
+        }
+    }
+
+    clearColorLUT();
+    lutSize_   = n;
+    lutAmount_ = amount < 0.0f ? 0.0f : amount;
+    glGenTextures(1, &lutTex_);
+    glBindTexture(GL_TEXTURE_3D, lutTex_);
+    GLint prevUnpack = 4;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &prevUnpack);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_RGBA8, n, n, n, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, vox.data());
+    glPixelStorei(GL_UNPACK_ALIGNMENT, prevUnpack);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_3D, 0);
+    return true;
+}
+
+void SceneRenderer::clearColorLUT() {
+    if (lutTex_) { glDeleteTextures(1, &lutTex_); lutTex_ = 0; }
+    lutSize_ = 0;
 }
 
 // ---------------------------------------------------------------------------

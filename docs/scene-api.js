@@ -699,6 +699,24 @@ class SceneGraph {
   setDepthOfField(opts) {}
 
   /**
+   * 3D color-grading LUT, applied in the tonemap pass AFTER tonemapping and
+   * gamma (LUTs are authored in display space) with trilinear sampling from
+   * a real 3D texture. The LUT is loaded from a horizontal strip image:
+   * `size` tiles of size×size laid out left to right, tile index = blue,
+   * tile x = red, tile y = green (all increasing left-right / top-down) —
+   * e.g. a 16³ LUT is a 256×16 image, the standard neutral-strip layout.
+   * A neutral strip is an exact identity. Pass `null` to clear.
+   *
+   * @param {Object|null} opts - null clears the LUT.
+   * @param {string} opts.path - strip image path (png/jpg/bmp/tga), app-relative.
+   * @param {number} [opts.size=0] - cube side; 0 infers it from the image height.
+   * @param {number} [opts.amount=1.0] - blend between ungraded (0) and graded (1).
+   * @returns {boolean} false if the image failed to decode or isn't a
+   *   size²×size strip.
+   */
+  setColorLUT(opts) {}
+
+  /**
    * Internal render-resolution scale for the 3D pipeline (default 1.0,
    * clamped 0.25-2.0). Every 3D render target (HDR mesh FBO, tonemap,
    * bloom, tilt-shift) is sized to canvas * scale; the compositor samples
