@@ -3,6 +3,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -23,6 +24,8 @@
 namespace JPH { class CharacterVirtual; class VehicleConstraint; class Ragdoll; class RagdollSettings; }
 
 namespace bro::physics {
+
+class PairGroupFilter;  // constraint collideConnected=false pair filter (physics_world.cpp)
 
 /// Physics thread phase. Ownership of the Jolt world follows the phase:
 /// Idle means the main thread (JS) may freely access bodies; Step/Busy/Done
@@ -520,7 +523,10 @@ public:
     ~PhysicsWorld();
 
     /// Initialize the physics system. Call once before use.
-    bool init(int maxBodies = 4096);
+    /// contactCapacity sizes the per-step contact-event buffer (clamped to
+    /// [16, 65536]); 0 = auto (4*maxBodies, min 1024). Overflow drops events
+    /// and is reported via drainContactEvents().
+    bool init(int maxBodies = 4096, int contactCapacity = 0);
 
     /// Start the physics thread.
     void startThread();
@@ -588,7 +594,14 @@ public:
                                float friction = 0.5f, float restitution = 0.3f);
 
     /// Remove and destroy a body. Also destroys constraints attached to it.
-    void destroyBody(JPH::BodyID id);
+    /// A stale/already-destroyed id is a safe no-op (verified before Jolt's
+    /// DestroyBody, which would corrupt the body-manager free list).
+    /// Destroying a ragdoll part destroys the WHOLE ragdoll; onBodyDestroyed
+    /// (when provided) is invoked for every body actually destroyed — one for
+    /// a plain body, all part bodies for a ragdoll — so callers can evict
+    /// their own per-body bookkeeping (e.g. the JS tag registries).
+    void destroyBody(JPH::BodyID id,
+                     const std::function<void(JPH::BodyID)>& onBodyDestroyed = {});
 
     // --- Body state (call only when idle) ---
 
@@ -606,6 +619,10 @@ public:
     void addImpulse(JPH::BodyID id, JPH::Vec3 impulse);
     void addTorque(JPH::BodyID id, JPH::Vec3 torque);
 
+    /// Switch a body between static and dynamic. Preserves the body's object
+    /// layer, except that a body made dynamic while on layer 0 (the only
+    /// layer mapped to the NON_MOVING broadphase tree) moves to the default
+    /// moving layer (1).
     void setMotionType(JPH::BodyID id, bool isStatic);
     void activate(JPH::BodyID id);
     bool isActive(JPH::BodyID id) const;
@@ -854,7 +871,11 @@ public:
     // --- Contact events ---
 
     /// Swap and return contact events from the last step. Clears the buffer.
-    std::vector<ContactEvent> drainContactEvents();
+    /// If `overflowed` is non-null it is set to true when the fixed-capacity
+    /// per-step contact buffer overflowed during any step since the last
+    /// drain — events (including sensor exits) were dropped, so cached
+    /// contact/trigger state derived from the stream may be stale.
+    std::vector<ContactEvent> drainContactEvents(bool* overflowed = nullptr);
 
     /// Access the Jolt physics system directly (advanced use).
     JPH::PhysicsSystem& system() { return physicsSystem_; }
@@ -889,9 +910,20 @@ private:
         // Jolt stores the target as a quaternion; we keep the per-axis angles
         // so single-axis updates can rebuild it without decomposition.
         float sixDofRotTarget[3] = {0, 0, 0};
+        // collideConnected=false bookkeeping: the disabled body pair in
+        // pairFilter_ (removed when the constraint goes away).
+        uint64_t pairKey = 0;
+        bool hasPair = false;
     };
     std::unordered_map<uint32_t, ConstraintEntry> constraints_;
     uint32_t nextConstraintHandle_ = 1;
+
+    // Pairwise no-collide filter backing ConstraintOptions::collideConnected
+    // (default false = constrained bodies don't collide with each other).
+    JPH::Ref<PairGroupFilter> pairFilter_;
+    // Register/unregister the constraint's body pair with pairFilter_.
+    void applyCollideConnected(const ConstraintOptions& opts, ConstraintEntry& entry);
+    void evictConstraintPair(const ConstraintEntry& entry);
 
     // Character registry. CharacterVirtuals are not tracked by the Jolt
     // system — updateCharacters() steps them just before each world step,
@@ -904,7 +936,10 @@ private:
         float stickToFloor = 0.5f;
         int layer = 1;
     };
-    std::unordered_map<uint32_t, CharacterEntry> characters_;
+    // Ordered map: updateCharacters iterates it, and character-vs-body push
+    // order must be deterministic across runs (unordered_map iteration order
+    // varies with the allocator, breaking cross-run determinism).
+    std::map<uint32_t, CharacterEntry> characters_;
     uint32_t nextCharacterHandle_ = 1;
     // Runs each character's velocity update + ExtendedUpdate with the fixed
     // dt. Called from signalStep (main thread, before the phase flip) and
@@ -981,6 +1016,10 @@ private:
     // Holds the events drained from ListenerImpl's lock-free buffer for the
     // last completed step, until drainContactEvents() hands them to the caller.
     std::vector<ContactEvent> contactsFront_;
+    // True when any step since the last drainContactEvents() overflowed the
+    // contact buffer (events were dropped). Sticky across steps so a caller
+    // polling getContacts() every few frames still sees it.
+    bool contactsOverflowedFront_ = false;
 
     bool initialized_ = false;
 };

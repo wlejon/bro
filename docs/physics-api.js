@@ -295,6 +295,16 @@ Physics.setLayer(id, "ghost");
 Physics.setKinematic(id);
 
 /**
+ * Toggle a body between static (isStatic=true) and dynamic (false). The
+ * body's collision layer is preserved, with one exception: a body going
+ * dynamic while on layer 0 — the only layer in the non-moving broadphase
+ * tree — moves to the default "moving" layer (1). A body CREATED static can
+ * never become dynamic (no motion state is allocated for it); create it
+ * dynamic and freeze it instead. Also available on sandbox world handles.
+ */
+Physics.setMotionType(id, isStatic);
+
+/**
  * Drive a kinematic body toward a target position over the next dt seconds.
  * Internally sets linear/angular velocity = (target - current) / dt so the
  * body integrates smoothly. Call once per frame with dt = your frame delta.
@@ -328,7 +338,13 @@ Physics.moveKinematic(id, x, y, z, qx, qy, qz, qw, dt);
  * @param {{x,y,z}} [opts.axis]          - hinge / slider: world-space axis; cone / swingTwist: twist axis
  * @param {number}  [opts.limitMin]      - hinge: min angle (rad); slider: min position
  * @param {number}  [opts.limitMax]      - hinge: max angle (rad); slider: max position
- * @param {boolean} [opts.collideConnected=false]
+ * @param {boolean} [opts.collideConnected=false] - whether the two constrained bodies
+ *                                  collide with EACH OTHER. Default false: the pair is
+ *                                  excluded from collision for the constraint's lifetime
+ *                                  (destroying the constraint re-enables it). Pass true
+ *                                  to keep normal collision between them. Ignored when
+ *                                  body2 is the world, or when a body already uses
+ *                                  another collision-group scheme (ragdoll parts).
  * @param {number}  [opts.breakingImpulse=0] - auto-break threshold (N·s); 0 = never break.
  *                                  When exceeded in a step the constraint is disabled and
  *                                  reported by Physics.getBrokenConstraints(). Also settable
@@ -690,13 +706,20 @@ if (under.length) console.log('picked body', under[0].bodyId);
  * broadphase with only body IDs — and possibly for a body that has just been
  * destroyed — so the engine keeps its own per-body sensor bit to label these.)
  *
+ * The returned array also carries an `overflow` property: true when the
+ * fixed-capacity per-step contact buffer overflowed since the last drain and
+ * events were DROPPED — possibly including sensor exits, so any enter/leave
+ * bookkeeping you keep may be wedged. On overflow, re-derive presence with a
+ * query (overlapShape / overlapPoint) instead of trusting the stream.
+ *
  * @returns {Array<{
  *   type: "added" | "removed",
  *   body1: number, body2: number,
  *   sensor: boolean,
- * }>}
+ * }> & { overflow: boolean }}
  */
 const events = Physics.getContacts();
+if (events.overflow) { /* events were dropped this drain — resync triggers */ }
 
 
 // -----------------------------------------------------------------------------
@@ -742,6 +765,11 @@ body.add(visual);
  * @param {Object} [opts]
  * @param {number} [opts.maxBodies=1024]
  * @param {{x,y,z}} [opts.gravity=(0,-9.81,0)]
+ * @param {number} [opts.contactBufferSize=0] - per-step contact-event buffer
+ *                 capacity, clamped to [16, 65536]; 0 = auto (4*maxBodies,
+ *                 min 1024). When a step produces more events than fit,
+ *                 the surplus is dropped and getContacts() reports
+ *                 events.overflow === true.
  * @returns {PhysicsWorldHandle}
  */
 const w = Physics.createWorldHandle({ maxBodies: 256, gravity: {x:0,y:-9.81,z:0} });
@@ -1033,8 +1061,10 @@ car.setGear(1);
  */
 const ws = car.wheelState(0);
 
-car.destroy();    // remove the vehicle (constraint + drivetrain); the chassis
-                  // BODY survives — destroy it separately if unwanted.
+car.destroy();    // remove the vehicle (constraint + drivetrain). A chassis
+                  // created inline via `chassis:` is destroyed with it; a
+                  // chassis passed as an existing `body:` tag survives —
+                  // it stays yours to manage.
                   // Destroying the chassis body also removes the vehicle.
 
 // Rendering recipe — chassis under a PhysicsNode, wheels as chassis children

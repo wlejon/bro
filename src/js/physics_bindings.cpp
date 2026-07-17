@@ -427,8 +427,12 @@ static JSValue worldDestroyBody(JSContext* ctx, JsWorld* w, int32_t tag) {
     if (!w || !w->world) return JS_UNDEFINED;
     JPH::BodyID id = w->bodyIdForTag(tag);
     if (id.IsInvalid()) return JS_UNDEFINED;
-    w->world->destroyBody(id);
-    w->unregisterBody(tag);
+    // Destroying a ragdoll part destroys the WHOLE ragdoll: the callback
+    // evicts every destroyed body's tag, so no sibling tag is left pointing
+    // at a dead BodyID (a later destroy through such a tag would corrupt
+    // Jolt's body manager).
+    w->world->destroyBody(id, [w](JPH::BodyID bid) { w->unregisterBodyId(bid); });
+    w->unregisterBody(tag);  // stale-id case: destroyBody may bail before the callback
     return JS_UNDEFINED;
 }
 
@@ -698,8 +702,14 @@ static JSValue worldGetBrokenConstraints(JSContext* ctx, JsWorld* w) {
 
 static JSValue worldGetContacts(JSContext* ctx, JsWorld* w) {
     if (!w || !w->world) return JS_NewArray(ctx);
-    auto events = w->world->drainContactEvents();
+    bool overflowed = false;
+    auto events = w->world->drainContactEvents(&overflowed);
     JSValue arr = JS_NewArray(ctx);
+    // Non-index property on the result array: true when the fixed-capacity
+    // contact buffer overflowed since the last drain — events (possibly
+    // including sensor exits) were dropped, so re-derive any cached
+    // contact/trigger state instead of trusting the stream.
+    JS_SetPropertyStr(ctx, arr, "overflow", JS_NewBool(ctx, overflowed));
     uint32_t i = 0;
     for (auto& e : events) {
         JSValue obj = JS_NewObject(ctx);
@@ -1036,6 +1046,8 @@ struct JsVehicle {
     JsWorld* world = nullptr;          // sandbox only; default world uses s_defaultWorld
     uint32_t handle = 0;               // 0 after destroy()
     int32_t bodyTag = -1;              // chassis body tag (for .chassisBody)
+    bool ownsChassis = false;          // chassis was created inline by createVehicle
+                                       // ({chassis:...}) → destroy() destroys it too
     JSValue worldRef = JS_UNDEFINED;   // strong ref to a sandbox world handle
 };
 
@@ -1287,11 +1299,28 @@ static JsWorld* vehicleWorld(JsVehicle* v) {
     return JS_IsUndefined(v->worldRef) ? s_defaultWorld : v->world;
 }
 
+// Destroy the vehicle constraint and — when createVehicle built the chassis
+// inline ({chassis: ...}) — the chassis body too; otherwise the body would
+// leak forever. An app-provided chassis (body: tag) stays the app's to
+// manage. Safe if the app already destroyed the chassis directly (stale tag
+// resolves invalid → no-op).
+static void destroyVehicleImpl(JsWorld* w, JsVehicle* v) {
+    if (!w || !w->world || !v->handle) return;
+    w->world->destroyVehicle(v->handle);
+    if (v->ownsChassis) {
+        JPH::BodyID cid = w->bodyIdForTag(v->bodyTag);
+        if (!cid.IsInvalid())
+            w->world->destroyBody(cid, [w](JPH::BodyID bid) { w->unregisterBodyId(bid); });
+        w->unregisterBody(v->bodyTag);
+        v->bodyTag = -1;
+    }
+    v->handle = 0;
+}
+
 static void vehicleClassFinalizer(JSRuntime* rt, JSValue val) {
     JsVehicle* v = (JsVehicle*)JS_GetOpaque(val, s_vehicleClassId);
     if (!v) return;
-    JsWorld* w = vehicleWorld(v);
-    if (w && w->world && v->handle) w->world->destroyVehicle(v->handle);
+    destroyVehicleImpl(vehicleWorld(v), v);
     if (v->world) v->world->liveVehicles.erase(v);
     JS_FreeValueRT(rt, v->worldRef);
     delete v;
@@ -1513,6 +1542,7 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
     auto* jv = new JsVehicle();
     jv->handle = handle;
     jv->bodyTag = chassisTag;
+    jv->ownsChassis = createdChassis;
     if (!JS_IsUndefined(worldVal)) {
         jv->world = w;
         jv->worldRef = JS_DupValue(ctx, worldVal);
@@ -1641,8 +1671,7 @@ static JSValue jsv_getGear(JSContext* ctx, JSValueConst thisVal) {
 static JSValue jsv_destroy(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
     JsVehicle* v = vehicleFromThis(ctx, thisVal);
     if (!v) return JS_EXCEPTION;
-    JsWorld* w = vehicleWorld(v);
-    if (w && w->world && v->handle) w->world->destroyVehicle(v->handle);
+    destroyVehicleImpl(vehicleWorld(v), v);
     v->handle = 0;
     return JS_UNDEFINED;
 }
@@ -2652,6 +2681,19 @@ static JSValue js_physics_setKinematic(JSContext* ctx, JSValueConst, int argc, J
     return JS_UNDEFINED;
 }
 
+// setMotionType(tag, isStatic) — toggle a body between static and dynamic.
+// Preserves the body's collision layer (a body going dynamic while on layer 0
+// moves to the default moving layer — see PhysicsWorld::setMotionType).
+static JSValue js_physics_setMotionType(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 2) return JS_UNDEFINED;
+    int32_t tag; JS_ToInt32(ctx, &tag, argv[0]);
+    JPH::BodyID id = s_defaultWorld->bodyIdForTag(tag);
+    if (id.IsInvalid()) return JS_UNDEFINED;
+    s_defaultWorld->world->setMotionType(id, JS_ToBool(ctx, argv[1]) != 0);
+    return JS_UNDEFINED;
+}
+
 static JSValue js_physics_moveKinematic(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     DEFW_GUARD();
     // (tag, x, y, z, dt) or (tag, x, y, z, qx, qy, qz, qw, dt)
@@ -2748,7 +2790,13 @@ static JSValue js_physics_getAllTransforms(JSContext* ctx, JSValueConst, int, JS
     size_t stride = 8;
     std::vector<float> buf(count * stride);
     size_t i = 0;
-    auto& bi = s_defaultWorld->world->system().GetBodyInterfaceNoLock();
+    // No-lock fast path only while the physics thread is provably parked; if
+    // a step overran the frame (consumeStep is non-blocking) fall back to the
+    // locking interface — reading body transforms during Update() without
+    // locks is a data race.
+    auto& bi = s_defaultWorld->world->isIdle()
+        ? s_defaultWorld->world->system().GetBodyInterfaceNoLock()
+        : s_defaultWorld->world->system().GetBodyInterface();
     for (auto& [key, tag] : s_defaultWorld->bodyTags) {
         JPH::BodyID id(key);
         auto pos = bi.GetPosition(id);
@@ -2952,7 +3000,10 @@ static JSValue jsw_getAllTransforms(JSContext* ctx, JSValueConst thisVal, int, J
     size_t stride = 8;
     std::vector<float> buf(count * stride);
     size_t i = 0;
-    auto& bi = w->world->system().GetBodyInterfaceNoLock();
+    // Same lock-choice rule as Physics.getAllTransforms (sandbox worlds step
+    // inline, so this is always the no-lock path in practice).
+    auto& bi = w->world->isIdle() ? w->world->system().GetBodyInterfaceNoLock()
+                                  : w->world->system().GetBodyInterface();
     for (auto& [key, tag] : w->bodyTags) {
         JPH::BodyID id(key);
         auto pos = bi.GetPosition(id);
@@ -3183,6 +3234,16 @@ static JSValue jsw_setKinematic(JSContext* ctx, JSValueConst thisVal, int argc, 
     return JS_UNDEFINED;
 }
 
+static JSValue jsw_setMotionType(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world || argc < 2) return JS_UNDEFINED;
+    int32_t tag; JS_ToInt32(ctx, &tag, argv[0]);
+    JPH::BodyID id = w->bodyIdForTag(tag);
+    if (id.IsInvalid()) return JS_UNDEFINED;
+    w->world->setMotionType(id, JS_ToBool(ctx, argv[1]) != 0);
+    return JS_UNDEFINED;
+}
+
 static JSValue jsw_moveKinematic(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
     JsWorld* w = worldFromThis(ctx, thisVal);
     if (!w || !w->world || argc < 5) return JS_UNDEFINED;
@@ -3278,6 +3339,7 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("addTorque", 4, jsw_addTorque),
     JS_CFUNC_DEF("setLayer", 2, jsw_setLayer),
     JS_CFUNC_DEF("setKinematic", 1, jsw_setKinematic),
+    JS_CFUNC_DEF("setMotionType", 2, jsw_setMotionType),
     JS_CFUNC_DEF("moveKinematic", 5, jsw_moveKinematic),
     JS_CFUNC_DEF("setUserData", 2, jsw_setUserData),
     JS_CFUNC_DEF("getUserData", 1, jsw_getUserData),
@@ -3303,17 +3365,20 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
 
 static JSValue js_physics_createWorldHandle(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     int maxBodies = 1024;
+    int contactBufferSize = 0;  // 0 = auto (4*maxBodies, min 1024)
     JPH::Vec3 gravity(0, -9.81f, 0);
     if (argc >= 1 && JS_IsObject(argv[0])) {
         double mb = qjsbind::get_prop_number(ctx, argv[0], "maxBodies", 1024);
         maxBodies = (int)mb;
+        contactBufferSize =
+            (int)qjsbind::get_prop_number(ctx, argv[0], "contactBufferSize", 0.0);
         JSValue gv = JS_GetPropertyStr(ctx, argv[0], "gravity");
         if (JS_IsObject(gv)) gravity = readVec3(ctx, gv, gravity);
         JS_FreeValue(ctx, gv);
     }
 
     auto* pw = new physics::PhysicsWorld();
-    if (!pw->init(maxBodies)) {
+    if (!pw->init(maxBodies, contactBufferSize)) {
         delete pw;
         return JS_ThrowInternalError(ctx, "Failed to init sandbox PhysicsWorld");
     }
@@ -3426,6 +3491,7 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("getUserData", js_physics_getUserData, 1)
         .function("setLayer", js_physics_setLayer, 2)
         .function("setKinematic", js_physics_setKinematic, 1)
+        .function("setMotionType", js_physics_setMotionType, 2)
         .function("moveKinematic", js_physics_moveKinematic, 5)
         .function("raycast", js_physics_raycast, 8)
         .function("raycastClosest", js_physics_raycastClosest, 8)

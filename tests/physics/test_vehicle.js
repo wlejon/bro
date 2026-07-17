@@ -220,13 +220,15 @@ assert(mcar.speed > 1, 'manual car drives in 1st, speed ' + mcar.speed);
 // Destroy mid-sim: handle destroy and chassis-body destroy both safe
 // =========================================================================
 wcar.setInput({ forward: 1 });
-wcar.destroy();                      // vehicle gone, chassis body remains
+const wcarChassis = wcar.chassisBody;
+wcar.destroy();                      // vehicle gone; carOpts creates the chassis
+                                     // inline, so destroy() takes the body too
 for (let i = 0; i < 30; i++) w.step(1 / 60);   // must not crash
 assert(wcar.wheelState(0) === null, 'wheelState null after destroy');
 assert(wcar.speed === 0, 'speed 0 after destroy');
 wcar.destroy();                      // double destroy is a no-op
-assert(w.getTransform(wcar.chassisBody) !== undefined,
-       'chassis body survives vehicle destroy');
+assert(w.getTransform(wcarChassis) === undefined,
+       'inline-created chassis destroyed with the vehicle');
 
 // Destroying the chassis body removes the vehicle (constraint + step
 // listener) without crashing the next steps.

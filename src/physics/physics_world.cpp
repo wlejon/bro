@@ -24,6 +24,8 @@
 #include <Jolt/Physics/Collision/BroadPhase/BroadPhaseLayerInterfaceTable.h>
 #include <Jolt/Physics/Collision/BroadPhase/ObjectVsBroadPhaseLayerFilterTable.h>
 #include <Jolt/Physics/Collision/ObjectLayerPairFilterTable.h>
+#include <Jolt/Physics/Collision/GroupFilter.h>
+#include <Jolt/Physics/Collision/CollisionGroup.h>
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/Constraints/PointConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
@@ -51,6 +53,7 @@
 #include <atomic>
 #include <cfloat>
 #include <cmath>
+#include <unordered_set>
 
 JPH_SUPPRESS_WARNINGS
 
@@ -93,6 +96,50 @@ struct PhysicsWorld::Layers {
             *bpLayerInterface, LayerDefs::BP_NUM_LAYERS,
             *objectFilter, PhysicsWorld::kMaxLayers);
     }
+};
+
+// --- Constraint collideConnected pair filter ---
+//
+// Backs ConstraintOptions::collideConnected = false (the default): the two
+// bodies joined by a constraint should not collide with each other. Jolt's
+// GroupFilterTable wants one group of enumerated subgroups, which doesn't fit
+// two arbitrary bodies, so this is a set of disabled body pairs instead. All
+// participating bodies share one distinctive GroupID and use their
+// index+sequence number as the SubGroupID (sequence bits make an id-reuse
+// false positive practically impossible); any pair not in the set collides
+// normally, and any group from another filter scheme (ragdoll
+// GroupFilterTables use small sequential GroupIDs) passes through untouched.
+//
+// The set is only mutated on the phase-owning thread (create/destroy
+// constraint, idle-only API) and read during Update() — same immutable-during-
+// step contract as the rest of the world, so no locking.
+class PairGroupFilter : public GroupFilter {
+public:
+    // Distinct from ragdoll groups (sequential from 1) and cInvalidGroup.
+    static constexpr CollisionGroup::GroupID kGroupID = 0xb420b0d1u;
+
+    static uint64_t pairKey(uint32_t a, uint32_t b) {
+        if (a > b) std::swap(a, b);
+        return (static_cast<uint64_t>(a) << 32) | b;
+    }
+
+    bool CanCollide(const CollisionGroup& g1, const CollisionGroup& g2) const override {
+        if (g1.GetGroupID() != kGroupID || g2.GetGroupID() != kGroupID) return true;
+        return disabled_.find(pairKey(g1.GetSubGroupID(), g2.GetSubGroupID()))
+               == disabled_.end();
+    }
+
+    // Refcounted: two constraints on the same body pair each hold the pair
+    // disabled; it re-enables only when the last one goes away.
+    void disablePair(uint64_t key) { disabled_[key]++; }
+    void enablePair(uint64_t key) {
+        auto it = disabled_.find(key);
+        if (it != disabled_.end() && --it->second <= 0) disabled_.erase(it);
+    }
+    void clear() { disabled_.clear(); }
+
+private:
+    std::unordered_map<uint64_t, int> disabled_;
 };
 
 // --- Contact listener (collects events for JS, per-world) ---
@@ -145,8 +192,12 @@ struct PhysicsWorld::ListenerImpl : public ContactListener {
     // drain() is only called after physicsSystem_.Update() has returned (all
     // Jolt job threads synced back), so there are no concurrent writers left
     // to race against here — safe to read/reset buffer/writeIdx directly.
-    std::vector<ContactEvent> drain() {
-        size_t n = std::min(writeIdx.load(std::memory_order_relaxed), buffer.size());
+    // `overflowed` (when non-null) reports whether push() dropped any event
+    // this step (writeIdx ran past capacity).
+    std::vector<ContactEvent> drain(bool* overflowed = nullptr) {
+        size_t claimed = writeIdx.load(std::memory_order_relaxed);
+        if (overflowed) *overflowed = claimed > buffer.size();
+        size_t n = std::min(claimed, buffer.size());
         std::vector<ContactEvent> out(buffer.begin(), buffer.begin() + n);
         writeIdx.store(0, std::memory_order_relaxed);
         return out;
@@ -188,7 +239,7 @@ PhysicsWorld::~PhysicsWorld() {
     shutdown();
 }
 
-bool PhysicsWorld::init(int maxBodies) {
+bool PhysicsWorld::init(int maxBodies, int contactCapacity) {
     if (initialized_) return true;
 
     ensureJoltInit();
@@ -199,6 +250,7 @@ bool PhysicsWorld::init(int maxBodies) {
         std::max(1u, std::thread::hardware_concurrency() - 2));
 
     layers_ = std::make_unique<Layers>();
+    pairFilter_ = new PairGroupFilter();
 
     // Default layer config: 2 layers ("static", "moving"), they collide with each other
     // and "moving" with itself.
@@ -222,10 +274,14 @@ bool PhysicsWorld::init(int maxBodies) {
 
     physicsSystem_.SetGravity(Vec3(0, -9.81f, 0));
 
-    // Install per-world contact listener. Buffer capacity is sized generously
-    // against maxBodies; see ListenerImpl::push for the overflow behavior.
-    size_t contactCapacity = std::clamp<size_t>(static_cast<size_t>(maxBodies) * 4, 1024, 65536);
-    listener_ = std::make_unique<ListenerImpl>(contactCapacity, static_cast<size_t>(maxBodies));
+    // Install per-world contact listener. Buffer capacity defaults to a
+    // generous multiple of maxBodies; an explicit contactCapacity overrides
+    // it (tiny values are legitimate for overflow testing / memory-lean
+    // sandboxes). See ListenerImpl::push for the overflow behavior.
+    size_t capacity = contactCapacity > 0
+        ? std::clamp<size_t>(static_cast<size_t>(contactCapacity), 16, 65536)
+        : std::clamp<size_t>(static_cast<size_t>(maxBodies) * 4, 1024, 65536);
+    listener_ = std::make_unique<ListenerImpl>(capacity, static_cast<size_t>(maxBodies));
     physicsSystem_.SetContactListener(listener_.get());
 
     initialized_ = true;
@@ -332,7 +388,9 @@ bool PhysicsWorld::consumeStep() {
     }
     // Done ⇒ the physics thread is parked in its wait; the world is ours.
     if (listener_) {
-        contactsFront_ = listener_->drain();
+        bool overflowed = false;
+        contactsFront_ = listener_->drain(&overflowed);
+        contactsOverflowedFront_ = contactsOverflowedFront_ || overflowed;
     }
     checkBrokenConstraints();
 
@@ -351,7 +409,9 @@ void PhysicsWorld::stepInline() {
     updateCharacters(timeStep_);
     physicsSystem_.Update(timeStep_, 1, tempAllocator_.get(), jobSystem_.get());
     if (listener_) {
-        contactsFront_ = listener_->drain();
+        bool overflowed = false;
+        contactsFront_ = listener_->drain(&overflowed);
+        contactsOverflowedFront_ = contactsOverflowedFront_ || overflowed;
     }
     checkBrokenConstraints();
 }
@@ -379,6 +439,7 @@ void PhysicsWorld::shutdown() {
             if (c.ref2) physicsSystem_.RemoveConstraint(c.ref2.GetPtr());
         }
         constraints_.clear();
+        if (pairFilter_) pairFilter_->clear();
 
         // Ragdolls before the generic sweep (~Ragdoll destroys its own bodies).
         for (auto& [h, r] : ragdolls_)
@@ -648,6 +709,7 @@ void PhysicsWorld::removeConstraintsReferencing(BodyID id) {
         if (refsBody) {
             physicsSystem_.RemoveConstraint(it->second.ref.GetPtr());
             if (it->second.ref2) physicsSystem_.RemoveConstraint(it->second.ref2.GetPtr());
+            evictConstraintPair(it->second);
             it = constraints_.erase(it);
         } else {
             ++it;
@@ -655,13 +717,28 @@ void PhysicsWorld::removeConstraintsReferencing(BodyID id) {
     }
 }
 
-void PhysicsWorld::destroyBody(BodyID id) {
+void PhysicsWorld::destroyBody(BodyID id,
+                               const std::function<void(BodyID)>& onBodyDestroyed) {
+    // Liveness gate: a stale id (e.g. a ragdoll sibling already destroyed as
+    // part of the unit, or a plain double-destroy) must never reach Jolt's
+    // DestroyBody — that asserts in Debug and corrupts the body-manager free
+    // list in Release. TryGetBody via the lock interface checks index bounds
+    // + sequence number, so a dead id fails cleanly here.
+    {
+        BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
+        if (!lock.Succeeded()) return;
+    }
+
     // A ragdoll part? The ragdoll is one unit — destroy the whole thing
     // (removeRagdollFromSystem detaches, erasing the entry destroys ALL part
     // bodies via ~Ragdoll, including `id`, so return without the sweep below).
     for (auto it = ragdolls_.begin(); it != ragdolls_.end(); ++it) {
         const auto& ids = it->second.ragdoll->GetBodyIDs();
         if (std::find(ids.begin(), ids.end(), id) != ids.end()) {
+            // Report every part body (not just `id`) BEFORE the entry is
+            // erased so callers can evict all their per-body bookkeeping.
+            if (onBodyDestroyed)
+                for (const BodyID& pid : ids) onBodyDestroyed(pid);
             removeRagdollFromSystem(it->second);
             ragdolls_.erase(it);
             return;
@@ -688,6 +765,8 @@ void PhysicsWorld::destroyBody(BodyID id) {
     }
 
     removeConstraintsReferencing(id);
+
+    if (onBodyDestroyed) onBodyDestroyed(id);
 
     BodyInterface& bi = physicsSystem_.GetBodyInterface();
     if (bi.IsAdded(id)) {
@@ -788,6 +867,7 @@ void PhysicsWorld::destroyAll(const std::function<void(JPH::BodyID)>& onBodyDest
         if (c.ref2) physicsSystem_.RemoveConstraint(c.ref2.GetPtr());
     }
     constraints_.clear();
+    if (pairFilter_) pairFilter_->clear();
 
     // Ragdolls before the generic body sweep — ~Ragdoll destroys its part
     // bodies itself, and destroying them twice would corrupt the body manager.
@@ -815,6 +895,7 @@ void PhysicsWorld::destroyAll(const std::function<void(JPH::BodyID)>& onBodyDest
     // Drop any pending contact events from this world.
     if (listener_) listener_->drain();
     contactsFront_.clear();
+    contactsOverflowedFront_ = false;
 }
 
 void PhysicsWorld::setLayer(BodyID id, int layer) {
@@ -840,9 +921,29 @@ void PhysicsWorld::moveKinematic(BodyID id, RVec3 targetPos, Quat targetRot, flo
 }
 
 void PhysicsWorld::setMotionType(BodyID id, bool isStatic) {
+    auto& bi = physicsSystem_.GetBodyInterface();
+    {
+        BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
+        if (!lock.Succeeded()) return;
+        // A body CREATED static has no MotionProperties and can never become
+        // dynamic (Jolt only allocates them for dynamic/kinematic-capable
+        // bodies) — guard instead of tripping Jolt's assert.
+        if (!isStatic && lock.GetBody().GetMotionPropertiesUnchecked() == nullptr)
+            return;
+    }
     EMotionType motion = isStatic ? EMotionType::Static : EMotionType::Dynamic;
-    physicsSystem_.GetBodyInterface().SetMotionType(id, motion, EActivation::Activate);
-    physicsSystem_.GetBodyInterface().SetObjectLayer(id, isStatic ? 0 : 1);
+    bi.SetMotionType(id, motion, isStatic ? EActivation::DontActivate
+                                          : EActivation::Activate);
+    // Preserve the body's object layer — a user-configured layer must survive
+    // a motion-type toggle. The one swap the broadphase mapping requires:
+    // layer 0 is the only layer mapped to the NON_MOVING broadphase tree
+    // (see Layers), so a body going dynamic while on layer 0 moves to the
+    // default moving layer. A static body on a MOVING-mapped layer is fine
+    // (mildly suboptimal broadphase placement, still correct), so the
+    // static direction never touches the layer.
+    if (!isStatic && bi.GetObjectLayer(id) == 0) {
+        bi.SetObjectLayer(id, static_cast<ObjectLayer>(numLayers_ > 1 ? 1 : 0));
+    }
 }
 
 void PhysicsWorld::activate(BodyID id) {
@@ -868,6 +969,48 @@ uint64_t PhysicsWorld::getUserData(BodyID id) const {
 }
 
 // --- Constraints ---
+
+// collideConnected = false (the default, matching the documented behavior and
+// typical engine defaults — Jolt's own default is that constrained bodies DO
+// collide): register the pair in pairFilter_ so the narrow phase skips it,
+// and stamp both bodies into the pair group. A body already carrying a
+// FOREIGN group filter (ragdoll parts use a per-ragdoll GroupFilterTable)
+// can't participate — overwriting its group would break that scheme — so the
+// pair is skipped with a warning and those two bodies keep colliding.
+void PhysicsWorld::applyCollideConnected(const ConstraintOptions& opts,
+                                         ConstraintEntry& entry) {
+    if (opts.collideConnected) return;   // pair collides — nothing to set up
+    if (opts.body1.IsInvalid() || opts.body2.IsInvalid()) return;  // world anchor
+    if (opts.body1 == opts.body2) return;
+
+    const BodyLockInterface& li = physicsSystem_.GetBodyLockInterface();
+    for (BodyID id : {opts.body1, opts.body2}) {
+        BodyLockRead lock(li, id);
+        if (!lock.Succeeded()) return;
+        const GroupFilter* f = lock.GetBody().GetCollisionGroup().GetGroupFilter();
+        if (f && f != pairFilter_.GetPtr()) {
+            LOG_WARN("createConstraint: collideConnected=false ignored — a body "
+                     "already uses another collision-group filter (e.g. a ragdoll part)");
+            return;
+        }
+    }
+    for (BodyID id : {opts.body1, opts.body2}) {
+        BodyLockWrite lock(li, id);
+        if (!lock.Succeeded()) return;
+        lock.GetBody().SetCollisionGroup(CollisionGroup(
+            pairFilter_.GetPtr(), PairGroupFilter::kGroupID,
+            id.GetIndexAndSequenceNumber()));
+    }
+    entry.pairKey = PairGroupFilter::pairKey(
+        opts.body1.GetIndexAndSequenceNumber(),
+        opts.body2.GetIndexAndSequenceNumber());
+    entry.hasPair = true;
+    pairFilter_->disablePair(entry.pairKey);
+}
+
+void PhysicsWorld::evictConstraintPair(const ConstraintEntry& entry) {
+    if (entry.hasPair && pairFilter_) pairFilter_->enablePair(entry.pairKey);
+}
 
 uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& opts) {
     auto& bi = physicsSystem_.GetBodyInterface();
@@ -937,7 +1080,9 @@ uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& opts) {
         }
 
         uint32_t handle = nextConstraintHandle_++;
-        constraints_[handle] = ConstraintEntry{c, nullptr, opts.breakingImpulse};
+        ConstraintEntry entry{c, nullptr, opts.breakingImpulse};
+        applyCollideConnected(opts, entry);
+        constraints_[handle] = std::move(entry);
         return handle;
     }
 
@@ -1133,7 +1278,9 @@ uint32_t PhysicsWorld::createConstraint(const ConstraintOptions& opts) {
     physicsSystem_.AddConstraint(c.GetPtr());
 
     uint32_t handle = nextConstraintHandle_++;
-    constraints_[handle] = ConstraintEntry{c, nullptr, opts.breakingImpulse};
+    ConstraintEntry entry{c, nullptr, opts.breakingImpulse};
+    applyCollideConnected(opts, entry);
+    constraints_[handle] = std::move(entry);
 
     // Create-time motors (hinge/slider: single entry; sixdof: one per axis).
     for (const MotorOptions& m : opts.motors)
@@ -1147,6 +1294,7 @@ void PhysicsWorld::destroyConstraint(uint32_t handle) {
     if (it == constraints_.end()) return;
     if (it->second.ref) physicsSystem_.RemoveConstraint(it->second.ref.GetPtr());
     if (it->second.ref2) physicsSystem_.RemoveConstraint(it->second.ref2.GetPtr());
+    evictConstraintPair(it->second);
     constraints_.erase(it);
 }
 
@@ -2443,9 +2591,13 @@ std::vector<PhysicsWorld::StaticBodyInfo> PhysicsWorld::collectStaticBodies() co
     std::vector<StaticBodyInfo> out;
     BodyIDVector ids;
     physicsSystem_.GetBodies(ids);
-    // Phase-idle contract: the caller owns the world, so the NoLock variant
-    // is safe (matches the other main-thread readers, e.g. getAllTransforms).
-    const BodyLockInterfaceNoLock& li = physicsSystem_.GetBodyLockInterfaceNoLock();
+    // No-lock fast path only while the world is provably idle. The frame-start
+    // consumeStep is non-blocking, so a step that overruns a frame leaves the
+    // physics thread inside Update() while JS runs — fall back to the locking
+    // interface then (Jolt supports it concurrently with Update).
+    const BodyLockInterface& li = isIdle()
+        ? static_cast<const BodyLockInterface&>(physicsSystem_.GetBodyLockInterfaceNoLock())
+        : physicsSystem_.GetBodyLockInterface();
     for (BodyID id : ids) {
         BodyLockRead lock(li, id);
         if (!lock.Succeeded()) continue;
@@ -2468,8 +2620,10 @@ void PhysicsWorld::collectStaticTriangles(std::vector<float>& outXyz,
                                           uint32_t layerMask) const {
     BodyIDVector ids;
     physicsSystem_.GetBodies(ids);
-    // Phase-idle contract: same as collectStaticBodies above.
-    const BodyLockInterfaceNoLock& li = physicsSystem_.GetBodyLockInterfaceNoLock();
+    // Same lock-choice rule as collectStaticBodies above.
+    const BodyLockInterface& li = isIdle()
+        ? static_cast<const BodyLockInterface&>(physicsSystem_.GetBodyLockInterfaceNoLock())
+        : physicsSystem_.GetBodyLockInterface();
 
     // Jolt streams triangles in batches; 256 comfortably exceeds the
     // cGetTrianglesMinTrianglesRequested floor (32).
@@ -2510,7 +2664,9 @@ void PhysicsWorld::collectStaticTriangles(std::vector<float>& outXyz,
 
 // --- Contact events ---
 
-std::vector<ContactEvent> PhysicsWorld::drainContactEvents() {
+std::vector<ContactEvent> PhysicsWorld::drainContactEvents(bool* overflowed) {
+    if (overflowed) *overflowed = contactsOverflowedFront_;
+    contactsOverflowedFront_ = false;
     std::vector<ContactEvent> out;
     out.swap(contactsFront_);
     return out;
