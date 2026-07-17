@@ -1881,6 +1881,24 @@ uint32_t PhysicsWorld::createVehicle(const VehicleOptions& opts) {
         ws->mMaxSteerAngle = w.steerable ? DegreesToRadians(w.maxSteerAngle) : 0.0f;
         ws->mMaxBrakeTorque = w.maxBrakeTorque;
         ws->mMaxHandBrakeTorque = w.maxHandBrakeTorque;
+        // Per-wheel tire friction: an explicit curve replaces Jolt's default
+        // LinearCurve; otherwise the scale multiplies the default curve's
+        // friction (Y) values.
+        auto applyFriction = [](LinearCurve& curve, float scale,
+                                const std::vector<Float2>& points) {
+            if (!points.empty()) {
+                curve.Clear();
+                curve.Reserve((uint)points.size());
+                for (const Float2& p : points) curve.AddPoint(p.x, p.y);
+                curve.Sort();
+            } else if (scale != 1.0f) {
+                for (auto& p : curve.mPoints) p.mY *= scale;
+            }
+        };
+        applyFriction(ws->mLongitudinalFriction, w.longitudinalFrictionScale,
+                      w.longitudinalFrictionCurve);
+        applyFriction(ws->mLateralFriction, w.lateralFrictionScale,
+                      w.lateralFrictionCurve);
         settings.mWheels.push_back(ws);
         minWidth = std::min(minWidth, w.width);
     }

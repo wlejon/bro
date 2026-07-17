@@ -1072,6 +1072,24 @@ player.innerBody;
  * @param {number}  [opts.wheels[].maxHandBrakeTorque=0]    - N·m; set ~4000 on
  *                                                     the REAR wheels for a
  *                                                     classic handbrake
+ * @param {number}  [opts.wheels[].longitudinalFriction=1] - per-wheel tire grip in
+ *                                                     the rolling direction: scalar
+ *                                                     multiplier on Jolt's default
+ *                                                     slip-ratio friction curve
+ *                                                     ((0,0)(0.06,1.2)(0.2,1.0)).
+ *                                                     ~0.1 = ice, 1 = tarmac,
+ *                                                     >1 = racing slicks
+ * @param {number}  [opts.wheels[].lateralFriction=1]  - same for sideways grip
+ *                                                     (slip-angle curve
+ *                                                     (0,0)(3,1.2)(20,1.0)); lower
+ *                                                     it on rear wheels for a
+ *                                                     drift setup
+ * @param {number[]} [opts.wheels[].longitudinalFrictionCurve] - full curve override,
+ *                                                     flat [slipRatio, friction, ...]
+ *                                                     pairs; replaces the default
+ *                                                     curve (scalar not applied)
+ * @param {number[]} [opts.wheels[].lateralFrictionCurve] - full override, flat
+ *                                                     [slipAngleDeg, friction, ...]
  *
  * @param {Object}  [opts.engine]
  * @param {number}  [opts.engine.maxTorque=500]  - N·m

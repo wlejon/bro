@@ -1486,6 +1486,23 @@ static void readVehicleWheel(JSContext* ctx, JSValueConst o,
     w.driven = qjsbind::get_prop_bool(ctx, o, "driven", false);
     w.maxBrakeTorque = (float)qjsbind::get_prop_number(ctx, o, "maxBrakeTorque", 1500.0);
     w.maxHandBrakeTorque = (float)qjsbind::get_prop_number(ctx, o, "maxHandBrakeTorque", 0.0);
+    // Tire friction: scalar multipliers on Jolt's default curves, or full
+    // curve overrides as flat [x0,y0, x1,y1, ...] pairs.
+    w.longitudinalFrictionScale =
+        (float)qjsbind::get_prop_number(ctx, o, "longitudinalFriction", 1.0);
+    w.lateralFrictionScale =
+        (float)qjsbind::get_prop_number(ctx, o, "lateralFriction", 1.0);
+    auto readCurve = [&](const char* prop, std::vector<JPH::Float2>& out) {
+        JSValue v = JS_GetPropertyStr(ctx, o, prop);
+        std::vector<float> flat;
+        if (readFloatArray(ctx, v, flat) && flat.size() >= 2 && (flat.size() % 2) == 0) {
+            for (size_t i = 0; i + 1 < flat.size(); i += 2)
+                out.push_back(JPH::Float2(flat[i], flat[i + 1]));
+        }
+        JS_FreeValue(ctx, v);
+    };
+    readCurve("longitudinalFrictionCurve", w.longitudinalFrictionCurve);
+    readCurve("lateralFrictionCurve", w.lateralFrictionCurve);
 }
 
 // `worldVal` is the sandbox world handle object, or JS_UNDEFINED for the

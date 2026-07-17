@@ -234,6 +234,18 @@ struct VehicleWheelOptions {
     bool driven = false;                     // connected to the engine via a differential
     float maxBrakeTorque = 1500.0f;          // N·m — foot brake
     float maxHandBrakeTorque = 0.0f;         // N·m — hand brake (typically rear wheels only)
+
+    // Tire friction. Jolt models per-wheel friction as two LinearCurves:
+    // longitudinal (Y = friction vs X = slip ratio) and lateral (Y = friction
+    // vs X = slip angle in degrees). The scale factors multiply the Y values
+    // of Jolt's default curves — (0,0)(0.06,1.2)(0.2,1.0) longitudinal,
+    // (0,0)(3,1.2)(20,1.0) lateral — the simple "ice vs tarmac" knob. A
+    // non-empty curve REPLACES the default curve entirely (scale then not
+    // applied to that curve).
+    float longitudinalFrictionScale = 1.0f;
+    float lateralFrictionScale = 1.0f;
+    std::vector<JPH::Float2> longitudinalFrictionCurve;  // (slipRatio, friction)
+    std::vector<JPH::Float2> lateralFrictionCurve;       // (slipAngleDeg, friction)
 };
 
 struct VehicleEngineOptions {
