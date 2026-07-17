@@ -69,6 +69,16 @@ cmake -B build -DBRO_PROFILE=minimal -DBRO_WITH_3D=ON # minimal + just the 3D sc
 
 ## Prerequisites
 
+Dependency versions are **pinned** by the `vcpkg.json` manifest at the repo
+root: its `builtin-baseline` locks every port (and transitives — protobuf,
+openssl, abseil, …) to one microsoft/vcpkg commit, so every machine and CI
+build identical dependencies. When the vcpkg toolchain is active, the deps
+install automatically into `<build>/vcpkg_installed` at configure time — no
+manual `vcpkg install` step. Your vcpkg clone must contain the baseline
+commit; if configure can't resolve it, `git -C <vcpkg> pull` and retry. To
+bump dependency versions, update the baseline in `vcpkg.json` **and** the
+matching `VCPKG_COMMIT` in `.github/workflows/{ci,nightly}.yml`.
+
 **Windows:**
 - **MSVC** (Visual Studio 2022+) — MinGW is not supported
 - **CMake** 3.24+

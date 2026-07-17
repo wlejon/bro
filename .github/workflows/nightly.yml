@@ -24,10 +24,10 @@ permissions:
   contents: write          # publish/replace the rolling release
 
 env:
-  # vcpkg (gamenetworkingsockets/protobuf/openssl for net; libvpx/libwebm/opus
-  # for video) is expensive to build the first time; cache the binaries in the
-  # GitHub Actions cache so later nights are near-instant.
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  # Must match vcpkg.json's builtin-baseline — the manifest pins port versions,
+  # this pins the vcpkg tool + scripts to the same commit (the runner's
+  # preinstalled vcpkg drifts with every image update).
+  VCPKG_COMMIT: 0b88aacde46a853151730fbe7d0b7ee45f4b6864
   # Persist the sccache object cache in the GitHub Actions cache across runs.
   # Without this sccache silently falls back to per-runner LOCAL DISK, which is
   # wiped between runs — so every night recompiled from scratch (0 hits, all
@@ -60,14 +60,6 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0        # tags needed for package-release.sh's version fallback
-
-      # Expose the Actions cache endpoint to vcpkg's x-gha binary source.
-      - name: Enable vcpkg GHA binary cache
-        uses: actions/github-script@v9
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
       # SDL3 is built from third_party/SDL; on Linux it needs the X11/Wayland/GL
       # and audio dev headers to configure. Ninja is the single-config generator
@@ -108,15 +100,22 @@ jobs:
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.10
 
-      # vcpkg is preinstalled on GitHub runners; install the classic-mode
-      # packages bro's net/video services find_package(). protobuf/openssl/abseil
-      # come in transitively via gamenetworkingsockets.
-      - name: Install vcpkg packages
+      # Dependencies (gamenetworkingsockets, libvpx, libwebm, opus,
+      # recastnavigation + transitives) come from vcpkg.json, pinned by its
+      # builtin-baseline; the vcpkg toolchain installs them during CMake
+      # configure. Clone vcpkg at that same commit so tool + ports + scripts
+      # are all pinned together.
+      - name: vcpkg (pinned)
         shell: bash
         run: |
-          "$VCPKG_INSTALLATION_ROOT/vcpkg" install \
-            --triplet ${{ matrix.triplet }} \
-            gamenetworkingsockets libvpx libwebm opus recastnavigation
+          git clone https://github.com/microsoft/vcpkg "$RUNNER_TEMP/vcpkg"
+          git -C "$RUNNER_TEMP/vcpkg" checkout "$VCPKG_COMMIT"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+          else
+            "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
+          fi
+          echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
 
       # Put cl.exe / the MSVC toolset on PATH so the Windows build can use the
       # Ninja generator (below) instead of Visual Studio. The VS generator
@@ -131,9 +130,6 @@ jobs:
       - name: Configure
         shell: bash
         run: |
-          # bro's CMake resolves vcpkg from $VCPKG_ROOT; point it at the runner's
-          # preinstalled vcpkg (default env vars aren't in the ${{ env }} context).
-          export VCPKG_ROOT="$VCPKG_INSTALLATION_ROOT"
           # native GPU-arch detection can't run on a GPU-less runner, so target a
           # broad set (major cubins + newest PTX) for a widely-runnable binary.
           CUDA_ARGS=""

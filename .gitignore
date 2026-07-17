@@ -1,5 +1,6 @@
 # Build
 /build*/
+/vcpkg_installed/
 out/
 cmake-build-*/
 *.bgar

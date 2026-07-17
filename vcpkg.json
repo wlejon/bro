@@ -1,0 +1,13 @@
+{
+  "$comment": "builtin-baseline pins every port (and its transitives: protobuf, openssl, abseil, ...) to the versions at that microsoft/vcpkg commit, so local and CI build identical dependencies. CI clones vcpkg at this same commit (VCPKG_COMMIT in .github/workflows) — keep the two in sync when bumping. With the vcpkg toolchain active, these install automatically into <build>/vcpkg_installed at configure time.",
+  "name": "bro",
+  "version": "0.1.0",
+  "builtin-baseline": "0b88aacde46a853151730fbe7d0b7ee45f4b6864",
+  "dependencies": [
+    "gamenetworkingsockets",
+    "libvpx",
+    "libwebm",
+    "opus",
+    "recastnavigation"
+  ]
+}
