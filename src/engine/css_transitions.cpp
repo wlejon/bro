@@ -573,10 +573,6 @@ void TransitionManager::applyOverrides(dom::Element* elem,
     }
 }
 
-void TransitionManager::removeElement(dom::Element* elem) {
-    elements_.erase(elem);
-}
-
 bool TransitionManager::hasActive(dom::Element* elem) const {
     auto it = elements_.find(elem);
     return it != elements_.end() && !it->second.active.empty();
@@ -1000,10 +996,6 @@ void AnimationManager::applyOverrides(dom::Element* elem,
             }
         }
     }
-}
-
-void AnimationManager::removeElement(dom::Element* elem) {
-    elements_.erase(elem);
 }
 
 bool AnimationManager::hasActive(dom::Element* elem) const {

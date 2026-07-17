@@ -75,9 +75,6 @@ public:
     void applyOverrides(dom::Element* elem, htmlayout::css::ComputedStyle& style,
                         double currentTime);
 
-    // Remove all transitions for a removed element.
-    void removeElement(dom::Element* elem);
-
     // Check if any transitions are running.
     bool hasActiveTransitions() const { return !elements_.empty(); }
 
@@ -106,8 +103,8 @@ public:
 
     // Drop every registered transition and queued event. Used when the app
     // document is torn down as a whole (top-level location.reload()) — the
-    // Element* keys are about to dangle and per-element removeElement() calls
-    // would need a full tree walk.
+    // Element* keys are about to dangle and per-element removal would need
+    // a full tree walk.
     void clearAll() {
         elements_.clear();
         activeThisTick_.clear();
@@ -175,7 +172,6 @@ public:
         keyframes_ = kf;
     }
 
-    void removeElement(dom::Element* elem);
     bool hasActiveAnimations() const { return !elements_.empty(); }
 
     // Read-only compositor-hint accessors.
