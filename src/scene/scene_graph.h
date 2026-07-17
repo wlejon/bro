@@ -327,6 +327,13 @@ public:
     }
     bool bloomEnabled() const { return renderer_.bloomEnabled(); }
 
+    /// Screen-space ambient occlusion, multiplied into the lit HDR image
+    /// before tonemap. See SceneRenderer::setSSAO for parameter semantics.
+    void setSSAO(bool enabled, float radius, float intensity, float bias) {
+        renderer_.setSSAO(enabled, radius, intensity, bias);
+    }
+    bool ssaoEnabled() const { return renderer_.ssaoEnabled(); }
+
     /// Wind sway parameters consumed by the mesh vertex shader. Per-vertex
     /// `windBend` (vertex color R, 0..1) modulates the global displacement
     /// `windDir * sin(windTime*windFreq + dot(pos.xz, k)) * strength * bend`.

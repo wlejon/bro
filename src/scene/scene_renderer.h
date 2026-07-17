@@ -127,6 +127,20 @@ public:
     }
     bool bloomEnabled() const { return bloomEnabled_; }
 
+    /// Screen-space ambient occlusion. Computed at half-res from the
+    /// resolved scene depth (hemisphere kernel + rotation noise, separable
+    /// blur) and multiplied into the lit HDR image in the tonemap pass.
+    /// `radius` is the world-space hemisphere radius, `intensity` scales
+    /// how dark occlusion gets (0..1+, 1 = full AO), `bias` is the depth
+    /// acceptance offset that suppresses self-occlusion acne.
+    void setSSAO(bool enabled, float radius, float intensity, float bias) {
+        ssaoEnabled_   = enabled;
+        ssaoRadius_    = radius > 0.0f ? radius : 0.5f;
+        ssaoIntensity_ = intensity < 0.0f ? 0.0f : intensity;
+        ssaoBias_      = bias;
+    }
+    bool ssaoEnabled() const { return ssaoEnabled_; }
+
     void setWind(float dirX, float dirY, float dirZ,
                  float strength, float frequency) {
         windDir_[0] = dirX; windDir_[1] = dirY; windDir_[2] = dirZ;
@@ -330,6 +344,13 @@ private:
     void destroyBloomFBOs();
     // Bright-pass + blur into bloomTex_[0]; returns true if a glow is ready.
     bool runBloomPrePass();
+
+    // --- SSAO pre-pass (half-res AO from resolved depth, before tonemap) ---
+    void ensureSSAOPipeline();
+    void ensureSSAOFBOs();
+    void destroySSAOFBOs();
+    // AO estimate + blur into ssaoTex_[0]; returns true when AO is ready.
+    bool runSSAOPass();
 
     // --- Light collection (rebuilt per frame) ---
     void collectLights(std::vector<LightNode*>& out) const;
@@ -585,6 +606,31 @@ private:
     GLint tmUMode_ = -1;
     GLint tmUBloomTex_ = -1;
     GLint tmUBloomIntensity_ = -1;
+    GLint tmUSSAOTex_ = -1;
+    GLint tmUSSAOIntensity_ = -1;
+
+    // --- SSAO pre-pass ---
+    bool  ssaoEnabled_   = false;
+    float ssaoRadius_    = 0.5f;
+    float ssaoIntensity_ = 1.0f;
+    float ssaoBias_      = 0.025f;
+
+    // Half-res R8 AO + blur ping-pong; 4x4 rotation noise (RG, repeat).
+    GLuint ssaoFBO_[2] = {0, 0};
+    GLuint ssaoTex_[2] = {0, 0};
+    int    ssaoWidth_  = 0, ssaoHeight_ = 0;
+    GLuint ssaoNoiseTex_ = 0;
+    float  ssaoKernel_[16 * 3] = {};   // hemisphere samples, built once
+
+    GLuint ssaoProgram_ = 0;
+    GLint  aoUDepth_      = -1;
+    GLint  aoUNoise_      = -1;
+    GLint  aoUProj_       = -1;
+    GLint  aoUInvProj_    = -1;
+    GLint  aoUKernel_     = -1;
+    GLint  aoURadius_     = -1;
+    GLint  aoUBias_       = -1;
+    GLint  aoUNoiseScale_ = -1;
 
     // --- Tilt-shift DOF post pass ---
     // Params (see setTiltShift). Disabled by default so the pass is a no-op

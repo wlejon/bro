@@ -563,6 +563,25 @@ JSValue js_sg_setBloom(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
     return JS_UNDEFINED;
 }
 
+// setSSAO({enabled, radius, intensity, bias}) — screen-space ambient
+// occlusion multiplied into the lit HDR image before tonemap.
+JSValue js_sg_setSSAO(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
+
+    JSValueConst opts = argv[0];
+    bool enabled = false;
+    JSValue ev = JS_GetPropertyStr(ctx, opts, "enabled");
+    if (!JS_IsUndefined(ev)) enabled = JS_ToBool(ctx, ev);
+    JS_FreeValue(ctx, ev);
+
+    double radius    = qjsbind::get_prop_number(ctx, opts, "radius",    0.5);
+    double intensity = qjsbind::get_prop_number(ctx, opts, "intensity", 1.0);
+    double bias      = qjsbind::get_prop_number(ctx, opts, "bias",      0.025);
+    g->setSSAO(enabled, (float)radius, (float)intensity, (float)bias);
+    return JS_UNDEFINED;
+}
+
 // setRenderScale(s) — internal render-resolution multiplier (clamped
 // 0.25-2.0). Compositing/picking stay in CSS pixels.
 JSValue js_sg_setRenderScale(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {

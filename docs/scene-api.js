@@ -664,6 +664,24 @@ class SceneGraph {
   setBloom(opts) {}
 
   /**
+   * Screen-space ambient occlusion (SSAO). A half-res AO buffer is computed
+   * from the scene depth (hemisphere kernel + rotation noise, then blurred)
+   * and multiplied into the lit HDR image before tonemap, darkening creases,
+   * corners and contact regions. As a post-multiply on the lit image it
+   * affects everything rendered into the 3D FBO (including emissive
+   * surfaces) — the standard approach for a forward renderer. Off by
+   * default; combines freely with MSAA, bloom, fog and renderScale.
+   *
+   * @param {Object} opts
+   * @param {boolean} [opts.enabled=false] - toggle the pass.
+   * @param {number}  [opts.radius=0.5]    - occlusion hemisphere radius (world units).
+   * @param {number}  [opts.intensity=1.0] - how dark occlusion gets (0..1+).
+   * @param {number}  [opts.bias=0.025]    - depth acceptance offset; raise to
+   *   suppress self-occlusion acne on smooth surfaces.
+   */
+  setSSAO(opts) {}
+
+  /**
    * Internal render-resolution scale for the 3D pipeline (default 1.0,
    * clamped 0.25-2.0). Every 3D render target (HDR mesh FBO, tonemap,
    * bloom, tilt-shift) is sized to canvas * scale; the compositor samples

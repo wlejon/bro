@@ -18,6 +18,7 @@
 #include "blur.frag.h"
 #include "tilt_composite.frag.h"
 #include "bloom_bright.frag.h"
+#include "ssao.frag.h"
 
 namespace bro::scene {
 
@@ -40,6 +41,8 @@ void SceneRenderer::ensureTonemapPipeline() {
     tmUMode_     = glGetUniformLocation(tonemapProgram_, "uMode");
     tmUBloomTex_       = glGetUniformLocation(tonemapProgram_, "uBloomTex");
     tmUBloomIntensity_ = glGetUniformLocation(tonemapProgram_, "uBloomIntensity");
+    tmUSSAOTex_        = glGetUniformLocation(tonemapProgram_, "uSSAOTex");
+    tmUSSAOIntensity_  = glGetUniformLocation(tonemapProgram_, "uSSAOIntensity");
 
     static const float quadVerts[12] = {
         -1.0f, -1.0f,  1.0f, -1.0f,  1.0f,  1.0f,
@@ -147,6 +150,12 @@ void SceneRenderer::runTonemapPass() {
     // draw can add the glow in HDR. Leaves bloomActive_/bloomTex_ ready.
     const bool haveBloom = runBloomPrePass();
 
+    // Half-res AO from the resolved scene depth; multiplied into the lit
+    // HDR image by the tonemap draw below (post-multiply — standard for a
+    // forward renderer).
+    const bool haveSSAO = runSSAOPass();
+    ensureFallbackTextures();
+
     glBindFramebuffer(GL_FRAMEBUFFER, tonemapFBO_);
     glViewport(0, 0, tonemapFBOWidth_, tonemapFBOHeight_);
     glDisable(GL_DEPTH_TEST);
@@ -163,6 +172,11 @@ void SceneRenderer::runTonemapPass() {
     glBindTexture(GL_TEXTURE_2D, haveBloom ? bloomTex_[0] : meshColorTex_);
     glUniform1i(tmUBloomTex_, 1);
     glUniform1f(tmUBloomIntensity_, haveBloom ? bloomIntensity_ : 0.0f);
+    // SSAO on unit 2 — white fallback keeps the sampler valid when off.
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, haveSSAO ? ssaoTex_[0] : fallback2D_);
+    glUniform1i(tmUSSAOTex_, 2);
+    glUniform1f(tmUSSAOIntensity_, haveSSAO ? ssaoIntensity_ : 0.0f);
     glActiveTexture(GL_TEXTURE0);
     glUniform1f(tmUExposure_, exposure_);
     glUniform1f(tmUGamma_, gamma_);
@@ -272,6 +286,167 @@ bool SceneRenderer::runBloomPrePass() {
     glUseProgram(0);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     bloomActive_ = true;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// SSAO pre-pass (half-res AO from resolved depth)
+// ---------------------------------------------------------------------------
+
+void SceneRenderer::ensureSSAOPipeline() {
+    ensureTiltShiftPipeline();   // shares the separable-blur program
+    if (ssaoProgram_) return;
+
+    ssaoProgram_ = linkProgram(kPostVertSrc, kSSAOFragSrc, "SSAO program");
+    if (!ssaoProgram_) return;
+
+    aoUDepth_      = glGetUniformLocation(ssaoProgram_, "uDepthTex");
+    aoUNoise_      = glGetUniformLocation(ssaoProgram_, "uNoiseTex");
+    aoUProj_       = glGetUniformLocation(ssaoProgram_, "uProj");
+    aoUInvProj_    = glGetUniformLocation(ssaoProgram_, "uInvProj");
+    aoUKernel_     = glGetUniformLocation(ssaoProgram_, "uKernel");
+    aoURadius_     = glGetUniformLocation(ssaoProgram_, "uRadius");
+    aoUBias_       = glGetUniformLocation(ssaoProgram_, "uBias");
+    aoUNoiseScale_ = glGetUniformLocation(ssaoProgram_, "uNoiseScale");
+
+    // Deterministic LCG so the kernel/noise (and therefore AO output) are
+    // identical across runs and machines.
+    uint32_t seed = 0x9e3779b9u;
+    auto frand = [&seed]() {   // [0,1)
+        seed = seed * 1664525u + 1013904223u;
+        return static_cast<float>(seed >> 8) * (1.0f / 16777216.0f);
+    };
+
+    // Hemisphere kernel: unit vectors with z >= 0 (tangent space, +z along
+    // the surface normal), pulled toward the origin so samples cluster near
+    // the fragment (scale = lerp(0.1, 1, t^2)).
+    for (int i = 0; i < 16; ++i) {
+        float x = frand() * 2.0f - 1.0f;
+        float y = frand() * 2.0f - 1.0f;
+        float z = frand();
+        float len = std::sqrt(x * x + y * y + z * z);
+        if (len < 1e-4f) { x = 0.0f; y = 0.0f; z = 1.0f; len = 1.0f; }
+        float t = static_cast<float>(i) / 16.0f;
+        float scale = (0.1f + 0.9f * t * t) * frand();
+        ssaoKernel_[i * 3 + 0] = x / len * scale;
+        ssaoKernel_[i * 3 + 1] = y / len * scale;
+        ssaoKernel_[i * 3 + 2] = z / len * scale;
+    }
+
+    // 4x4 tiling rotation noise: random unit-ish xy per texel, packed into
+    // RG8 as [0,1] (the shader expands back to [-1,1]).
+    uint8_t noise[16 * 2];
+    for (int i = 0; i < 16; ++i) {
+        noise[i * 2 + 0] = static_cast<uint8_t>(frand() * 255.0f);
+        noise[i * 2 + 1] = static_cast<uint8_t>(frand() * 255.0f);
+    }
+    glGenTextures(1, &ssaoNoiseTex_);
+    glBindTexture(GL_TEXTURE_2D, ssaoNoiseTex_);
+    GLint prevUnpack = 4;
+    glGetIntegerv(GL_UNPACK_ALIGNMENT, &prevUnpack);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG8, 4, 4, 0, GL_RG, GL_UNSIGNED_BYTE,
+                 noise);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, prevUnpack);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void SceneRenderer::ensureSSAOFBOs() {
+    if (graph_.canvasWidth_ <= 0 || graph_.canvasHeight_ <= 0) return;
+    const int hw = std::max(1, targetWidth() / 2);
+    const int hh = std::max(1, targetHeight() / 2);
+    if (ssaoFBO_[0] && ssaoWidth_ == hw && ssaoHeight_ == hh) return;
+    destroySSAOFBOs();
+
+    ssaoWidth_  = hw;
+    ssaoHeight_ = hh;
+    for (int i = 0; i < 2; ++i) {
+        glGenFramebuffers(1, &ssaoFBO_[i]);
+        glBindFramebuffer(GL_FRAMEBUFFER, ssaoFBO_[i]);
+        glGenTextures(1, &ssaoTex_[i]);
+        glBindTexture(GL_TEXTURE_2D, ssaoTex_[i]);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, hw, hh, 0,
+                     GL_RED, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+                               GL_TEXTURE_2D, ssaoTex_[i], 0);
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (status != GL_FRAMEBUFFER_COMPLETE) {
+            LOG_ERROR("SSAO FBO %d incomplete: 0x%x", i, status);
+        }
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+void SceneRenderer::destroySSAOFBOs() {
+    for (int i = 0; i < 2; ++i) {
+        if (ssaoTex_[i]) { glDeleteTextures(1, &ssaoTex_[i]); ssaoTex_[i] = 0; }
+        if (ssaoFBO_[i]) { glDeleteFramebuffers(1, &ssaoFBO_[i]); ssaoFBO_[i] = 0; }
+    }
+    ssaoWidth_ = ssaoHeight_ = 0;
+}
+
+bool SceneRenderer::runSSAOPass() {
+    if (!ssaoEnabled_ || ssaoIntensity_ <= 0.0f || !meshDepthTex_) return false;
+
+    ensureSSAOPipeline();
+    ensureSSAOFBOs();
+    if (!ssaoProgram_ || !blurProgram_ || !ssaoFBO_[0]) return false;
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glViewport(0, 0, ssaoWidth_, ssaoHeight_);
+    glBindVertexArray(tonemapVAO_);
+
+    // AO estimate: resolved depth -> ssaoTex_[0].
+    glUseProgram(ssaoProgram_);
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, meshDepthTex_);
+    glUniform1i(aoUDepth_, 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, ssaoNoiseTex_);
+    glUniform1i(aoUNoise_, 1);
+    glActiveTexture(GL_TEXTURE0);
+
+    const Mat4& proj = graph_.projectionMatrix_;
+    const Mat4 invProj = bromath::minverse(proj);
+    glUniformMatrix4fv(aoUProj_, 1, GL_FALSE, proj.data);
+    glUniformMatrix4fv(aoUInvProj_, 1, GL_FALSE, invProj.data);
+    glUniform3fv(aoUKernel_, 16, ssaoKernel_);
+    glUniform1f(aoURadius_, ssaoRadius_);
+    glUniform1f(aoUBias_, ssaoBias_);
+    glUniform2f(aoUNoiseScale_, ssaoWidth_ / 4.0f, ssaoHeight_ / 4.0f);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, ssaoFBO_[0]);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    // Separable blur (shared 9-tap Gaussian): erases the 4x4 noise pattern.
+    // [0] -H-> [1] -V-> [0].
+    glUseProgram(blurProgram_);
+    glUniform1i(blUTex_, 0);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, ssaoFBO_[1]);
+    glBindTexture(GL_TEXTURE_2D, ssaoTex_[0]);
+    glUniform2f(blUDir_, 1.0f / static_cast<float>(ssaoWidth_), 0.0f);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glBindFramebuffer(GL_FRAMEBUFFER, ssaoFBO_[0]);
+    glBindTexture(GL_TEXTURE_2D, ssaoTex_[1]);
+    glUniform2f(blUDir_, 0.0f, 1.0f / static_cast<float>(ssaoHeight_));
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+
+    glBindVertexArray(0);
+    glUseProgram(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
     return true;
 }
 

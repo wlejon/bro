@@ -5,6 +5,8 @@ in vec2 vUV;
 uniform sampler2D uTex;
 uniform sampler2D uBloomTex;
 uniform float uBloomIntensity;   // 0 = bloom off
+uniform sampler2D uSSAOTex;      // blurred half-res AO (R channel)
+uniform float uSSAOIntensity;    // 0 = SSAO off
 uniform float uExposure;
 uniform float uGamma;
 uniform int   uMode;   // 0 = linear clamp, 1 = Reinhard, 2 = ACES
@@ -22,6 +24,12 @@ vec3 aces(vec3 x) {
 
 void main() {
     vec4 src = texture(uTex, vUV);
+    // SSAO multiplies the lit HDR image (post-multiply — standard for a
+    // forward renderer with no G-buffer); bloom is added AFTER so glow
+    // isn't occluded. Guarded so intensity 0 leaves src bit-exact.
+    if (uSSAOIntensity > 0.0) {
+        src.rgb *= mix(1.0, texture(uSSAOTex, vUV).r, uSSAOIntensity);
+    }
     // Add the blurred bright-pass in HDR so highlights bloom before tonemap.
     vec3 hdr = src.rgb + texture(uBloomTex, vUV).rgb * uBloomIntensity;
     vec3 c = hdr * uExposure;
