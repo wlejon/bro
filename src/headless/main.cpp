@@ -3,17 +3,20 @@
 
 using bro::engine::parseConfig;
 using bro::engine::findAncestorProjectRoot;
+#include "js/async_job.h"
 #include "js/headless_bindings.h"
 #include "js/runtime.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #ifdef _WIN32
@@ -77,10 +80,66 @@ static std::string absolutize(const std::string& p) {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Drain until a top-level promise settles, without busy-spinning forever.
+///
+/// Microtasks alone can't always settle a top-level await: timers, async
+/// model jobs (bro.lm/tts/...), workers, and net/fetch completions are all
+/// pumped by Engine::advanceTime(), which the old bare
+/// `while (pending) executePendingJobs()` loop never called — a promise
+/// waiting on any of those spun one core at 100% forever. So once the
+/// microtask queue is drained and the promise is still pending, pump the
+/// engine one 16 ms virtual-time step per pass (identical to one frame of
+/// advanceTime), which fires due timers and delivers async-job results.
+///
+/// Deadline: "no forward progress for N seconds", not total elapsed — a
+/// multi-minute model load keeps an async job in flight the whole time and
+/// never trips it. Progress = a microtask ran or an async job is running.
+/// When neither holds, external events (net peers, workers, fetch) may still
+/// arrive, so we keep pumping on a wall-clock deadline (default 60 s,
+/// BRO_PROMISE_TIMEOUT_MS overrides) instead of failing immediately.
+/// Returns false (with an error logged) when the deadline trips.
+static bool drainPromise(JSContext* ctx, bro::js::Runtime* rt,
+                         bro::engine::Engine* engine, JSValue promise,
+                         const char* what) {
+    using clock = std::chrono::steady_clock;
+    int timeoutMs = 60000;
+    if (const char* env = std::getenv("BRO_PROMISE_TIMEOUT_MS")) {
+        int v = atoi(env);
+        if (v > 0) timeoutMs = v;
+    }
+    auto lastProgress = clock::now();
+    while (JS_PromiseState(ctx, promise) == JS_PROMISE_PENDING) {
+        bool hadJobs = JS_IsJobPending(JS_GetRuntime(ctx));
+        rt->executePendingJobs();
+        if (JS_PromiseState(ctx, promise) != JS_PROMISE_PENDING) break;
+
+        // Microtask queue drained, promise still pending: pump the engine so
+        // timers / async jobs / workers / net / fetch can resolve it.
+        engine->advanceTime(16.0);
+
+        if (hadJobs || bro::js::hasAsyncJobs()) {
+            lastProgress = clock::now();
+        } else if (clock::now() - lastProgress >
+                   std::chrono::milliseconds(timeoutMs)) {
+            LOG_ERROR("%s: top-level await did not settle within %d ms with no "
+                      "pending jobs, timers, or async work remaining — a promise "
+                      "is likely never resolved. Set BRO_PROMISE_TIMEOUT_MS to "
+                      "override the deadline.", what, timeoutMs);
+            return false;
+        } else {
+            // Nothing visibly in flight — wait for external events without
+            // burning a core.
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    return true;
+}
+
 /// Evaluate JS code. Uses async mode only when code contains 'await'.
 /// Returns true on success. If printResult is true, prints the final value
 /// to stdout (for -e mode).
 static bool evalCode(JSContext* ctx, bro::js::Runtime* rt,
+                     bro::engine::Engine* engine,
                      const std::string& code, const char* filename,
                      bool printResult = false) {
     bool useAsync = code.find("await") != std::string::npos;
@@ -95,9 +154,11 @@ static bool evalCode(JSContext* ctx, bro::js::Runtime* rt,
     }
 
     if (useAsync && JS_IsPromise(result)) {
-        // Drain microtasks until promise settles
-        while (JS_PromiseState(ctx, result) == JS_PROMISE_PENDING)
-            rt->executePendingJobs();
+        // Drain until the promise settles (deadline on no-forward-progress)
+        if (!drainPromise(ctx, rt, engine, result, filename)) {
+            JS_FreeValue(ctx, result);
+            return false;
+        }
 
         if (JS_PromiseState(ctx, result) == JS_PROMISE_REJECTED) {
             JSValue reason = JS_PromiseResult(ctx, result);
@@ -164,6 +225,7 @@ static bool looksLikeModule(const std::string& code) {
 /// and surface a rejected body (a failed assert / ReferenceError) as an error —
 /// otherwise it would be silently swallowed.
 static bool evalModuleFile(JSContext* ctx, bro::js::Runtime* rt,
+                           bro::engine::Engine* engine,
                            const std::string& code, const char* filename) {
     JSValue func = JS_Eval(ctx, code.c_str(), code.size(), filename,
                            JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);
@@ -180,8 +242,10 @@ static bool evalModuleFile(JSContext* ctx, bro::js::Runtime* rt,
     }
     bool ok = true;
     if (JS_IsPromise(result)) {
-        while (JS_PromiseState(ctx, result) == JS_PROMISE_PENDING)
-            rt->executePendingJobs();
+        if (!drainPromise(ctx, rt, engine, result, filename)) {
+            JS_FreeValue(ctx, result);
+            return false;
+        }
         if (JS_PromiseState(ctx, result) == JS_PROMISE_REJECTED) {
             JSValue reason = JS_PromiseResult(ctx, result);
             const char* msg = JS_ToCString(ctx, reason);
@@ -462,7 +526,7 @@ int main(int argc, char* argv[]) {
                 if (i > 0) oss << ";\n";
                 oss << inlineExprs[i];
             }
-            ok = evalCode(ctx, rt, oss.str(), "<inline>", scriptPath.empty());
+            ok = evalCode(ctx, rt, engine, oss.str(), "<inline>", scriptPath.empty());
         }
         if (ok && !scriptPath.empty()) {
             // Script file mode
@@ -475,8 +539,8 @@ int main(int argc, char* argv[]) {
                 oss << ifs.rdbuf();
                 std::string src = oss.str();
                 ok = looksLikeModule(src)
-                         ? evalModuleFile(ctx, rt, src, scriptPath.c_str())
-                         : evalCode(ctx, rt, src, scriptPath.c_str());
+                         ? evalModuleFile(ctx, rt, engine, src, scriptPath.c_str())
+                         : evalCode(ctx, rt, engine, src, scriptPath.c_str());
             }
         } else if (inlineExprs.empty() && scriptPath.empty()) {
             // Interactive REPL

@@ -1,8 +1,6 @@
-// Headless smoke test for bro.mic — drives broaudio's chunkFrames path with
-// synthetic audio and asserts the fixed-size framing, stats, and AGC behaviour.
-//
-// Run from the bro repo root (against the neutral launcher app):
-//   ./build/Debug/bro-headless.exe ../broworkshop tests/smoke_mic_chunks.js
+// bro.mic — drives broaudio's chunkFrames path with synthetic audio and
+// asserts the fixed-size framing, stats, and AGC behaviour. Weights-free
+// and deterministic.
 //
 // No audio device is opened (live:false); bro.mic.feed injects samples through
 // the same tap the live audio thread would, exercising resample → AGC → chunk.
@@ -12,6 +10,15 @@ function assert(cond, msg) { if (!cond) throw new Error('FAIL: ' + msg); }
 function approx(a, b, tol, msg) {
   assert(Math.abs(a - b) <= tol, `${msg} (got ${a}, want ${b} ±${tol})`);
 }
+
+// bro.mic is compile-gated; the stub sets available:false.
+if (bro.mic && bro.mic.available === false) {
+    console.log('skip: bro.mic not compiled in');
+} else {
+    runMicChunks();
+}
+
+function runMicChunks() {
 
 const ENGINE_RATE = bro.mic.engineRate();
 
@@ -146,3 +153,5 @@ function ok(name) { passed++; console.log('  ok - ' + name); }
 }
 
 console.log(`\nbro.mic: ${passed}/5 checks passed`);
+
+}  // runMicChunks

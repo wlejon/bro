@@ -1,8 +1,16 @@
 // Exercise the per-plant emit, plantInfo, setClimate, and sampleShadow
-// bindings added in this commit. Run via:
-//   bro-headless . tests/flora_bindings_smoke.js
+// bindings of bro.flora. Weights-free and fully deterministic (seeded RNG).
 //
 // Uses no scene state — a bare bro.json (or none) is fine.
+
+// bro.flora is compile-gated (BRO_WITH_FLORA); the stub sets available:false.
+if (bro.flora && bro.flora.available === false) {
+    console.log('skip: bro.flora not compiled in (BRO_WITH_FLORA off)');
+} else {
+    runFloraSmoke();
+}
+
+function runFloraSmoke() {
 
 const world = bro.flora.createWorld({
     rngSeed: 0xC0FFEE,
@@ -83,19 +91,12 @@ assert(bloomsA.length === 0 || infoA.flowering, 'blooms only when flowering');
 assert(world.emitPlantMesh(-1, 6) === null, 'emitPlantMesh negative → null');
 assert(world.emitPlantSegments(99) === null, 'emitPlantSegments OOR → null');
 
-// --- setClimate ---------------------------------------------------------
-const tBefore = infoA.rootVigor;
-world.setClimate({ annualTempBase: -10, annualPrecip: 50 });   // brutal
-for (let i = 0; i < 50; i++) world.step(0.1);
-const infoA2 = world.plantInfo(idxA);
-console.log('A vigor before=' + tBefore.toFixed(3) +
-            ' after harsh climate=' + infoA2.rootVigor.toFixed(3));
-assert(infoA2.rootVigor < tBefore, 'harsh climate reduces root vigor');
-
 // --- sampleShadow -------------------------------------------------------
 // Sample an unoccupied cell (far above the canopy) to read the fill
 // value; sample a cell among the plants to confirm self-shadowing has
 // happened. Q_G is the light passing through — lower under canopy.
+// Must run while the plants are still healthy: the harsh-climate section
+// below kills the foliage off, after which nothing casts shadow.
 const qOpen   = world.sampleShadow([-3, 7, -3]);
 const qCanopy = world.sampleShadow([0,  1,  0]);
 const qOut    = world.sampleShadow([100, 100, 100]);
@@ -106,6 +107,15 @@ console.log('Q_G open=' + qOpen + ' under-canopy=' + qCanopy + ' out=' + qOut);
 assert(qOpen !== null && qOpen > 0.95,  'open cell reads ~full sun after step');
 assert(qCanopy !== null && qCanopy < qOpen, 'canopy cell darker than open cell');
 assert(qOut === null, 'sampleShadow OOB → null');
+
+// --- setClimate ---------------------------------------------------------
+const tBefore = infoA.rootVigor;
+world.setClimate({ annualTempBase: -10, annualPrecip: 50 });   // brutal
+for (let i = 0; i < 50; i++) world.step(0.1);
+const infoA2 = world.plantInfo(idxA);
+console.log('A vigor before=' + tBefore.toFixed(3) +
+            ' after harsh climate=' + infoA2.rootVigor.toFixed(3));
+assert(infoA2.rootVigor < tBefore, 'harsh climate reduces root vigor');
 
 // --- removePlant (swap-and-pop) -----------------------------------------
 const countBefore = world.plantCount;
@@ -122,3 +132,5 @@ assert(world.removePlant(-1) === false, 'removePlant negative OOR fails');
 assert(world.removePlant(999) === false, 'removePlant positive OOR fails');
 
 console.log('flora_bindings_smoke ok');
+
+}  // runFloraSmoke

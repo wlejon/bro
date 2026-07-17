@@ -501,18 +501,21 @@ class AudioContext {
   // --- Audio File I/O -------------------------------------------------------
 
   /**
-   * Create a clip by loading an audio file. Supports WAV, FLAC, MP3, and
-   * OGG/Opus. Automatically resamples to the engine sample rate using a
-   * high-quality polyphase sinc resampler.
+   * Create a clip by loading an audio file. Supports WAV, FLAC, and MP3.
+   * (Ogg Opus additionally requires a build with BROAUDIO_OPUS, which no
+   * standard bro profile enables; Ogg Vorbis is not supported.) Automatically
+   * resamples to the engine sample rate using a high-quality polyphase sinc
+   * resampler.
    * @param {string} path - file path
    * @returns {number} clipId, or -1 on failure
    */
   createClipFromFile(path) {}
 
   /**
-   * Decode an audio file from a memory buffer. Supports WAV, FLAC, MP3, and
-   * OGG/Opus (detected by header magic bytes). Automatically resamples to the
-   * engine sample rate.
+   * Decode an audio file from a memory buffer. Supports WAV, FLAC, and MP3,
+   * detected by header magic bytes. (Ogg Opus additionally requires a build
+   * with BROAUDIO_OPUS, which no standard bro profile enables; Ogg Vorbis is
+   * not supported.) Automatically resamples to the engine sample rate.
    * @param {ArrayBuffer|Uint8Array} data - raw file bytes
    * @returns {?{samples: Float32Array, channels: number, sampleRate: number, numFrames: number}}
    *          decoded audio data, or null on failure

@@ -37,6 +37,16 @@ fi
 
 FILTER="${1:-}"
 
+# Per-test timeout so one hung test can't wedge the whole suite (or CI).
+# Override with BRO_TEST_TIMEOUT (seconds). Uses coreutils `timeout` when
+# available (git-bash and Linux have it; stock macOS may not — fall back to
+# running the test bare there).
+TEST_TIMEOUT="${BRO_TEST_TIMEOUT:-120}"
+TIMEOUT_BIN=""
+if command -v timeout >/dev/null 2>&1; then
+    TIMEOUT_BIN="timeout"
+fi
+
 # Collect test files
 mapfile -t TEST_FILES < <(find "$SCRIPT_DIR" -path "*/test_app" -prune -o -name "test_*.js" -print | sort)
 
@@ -58,13 +68,27 @@ for TEST_FILE in "${TEST_FILES[@]}"; do
         continue
     fi
 
-    # Run the test
-    if OUTPUT=$("$BRO" "$TEST_APP" "$TEST_FILE" 2>&1); then
+    # Run the test (under a per-test timeout when `timeout` exists)
+    if [[ -n "$TIMEOUT_BIN" ]]; then
+        OUTPUT=$("$TIMEOUT_BIN" -k 10 "$TEST_TIMEOUT" "$BRO" "$TEST_APP" "$TEST_FILE" 2>&1)
+        STATUS=$?
+    else
+        OUTPUT=$("$BRO" "$TEST_APP" "$TEST_FILE" 2>&1)
+        STATUS=$?
+    fi
+
+    if [[ $STATUS -eq 0 ]]; then
         echo "  PASS  $REL"
         ((PASSED++))
+    elif [[ -n "$TIMEOUT_BIN" && ($STATUS -eq 124 || $STATUS -eq 137) ]]; then
+        # 124 = timeout sent TERM, 137 = timeout escalated to KILL
+        echo "  FAIL  $REL  (TIMEOUT after ${TEST_TIMEOUT}s)"
+        echo "$OUTPUT" | tail -20 | sed 's/^/        /'
+        ((FAILED++))
+        ERRORS+=("$REL (TIMEOUT)")
     else
         echo "  FAIL  $REL"
-        # Show first 10 lines of output for diagnosis
+        # Show first 20 lines of output for diagnosis
         echo "$OUTPUT" | head -20 | sed 's/^/        /'
         ((FAILED++))
         ERRORS+=("$REL")

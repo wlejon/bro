@@ -1141,7 +1141,11 @@ static JSValue js_audioctx_decodeAudioData(JSContext* ctx, JSValueConst this_val
     if (!inputPtr || inputLen == 0) return JS_NULL;
 
     broaudio::AudioFileData data = broaudio::loadAudioFileFromMemory(inputPtr, inputLen);
-    if (!data.valid()) return JS_NULL;
+    if (!data.valid()) {
+        if (!data.error.empty())
+            LOG_ERROR("decodeAudioData: %s", data.error.c_str());
+        return JS_NULL;
+    }
 
     const float* outSamples = data.samples.data();
     int outFrames = data.numFrames;
@@ -1195,8 +1199,13 @@ static JSValue js_audioctx_decodeAudioFile(JSContext* ctx, JSValueConst this_val
     if (!path) return JS_NULL;
 
     broaudio::AudioFileData data = broaudio::loadAudioFile(path);
+    if (!data.valid()) {
+        if (!data.error.empty())
+            LOG_ERROR("decodeAudioFile: %s: %s", path, data.error.c_str());
+        JS_FreeCString(ctx, path);
+        return JS_NULL;
+    }
     JS_FreeCString(ctx, path);
-    if (!data.valid()) return JS_NULL;
 
     const float* outSamples = data.samples.data();
     int outFrames = data.numFrames;

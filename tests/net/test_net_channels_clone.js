@@ -138,6 +138,34 @@ expectTypeError(() => bro.net.sendClone(connA, { img: bmp }), 'ImageBitmap');
 expectTypeError(() => bro.net.sendClone(connA, { deep: [bmp] }), 'nested ImageBitmap');
 expectTypeError(() => bro.net.sendClone(connA, { a: 1 }, []), 'transfer-list options');
 
+// Writer-side depth limit (the reader-side mirror is covered by the nesting
+// bomb in section 7): 100 nested objects exceed the serializer's depth cap of
+// 64 and must throw a TypeError, not recurse the C stack.
+{
+    let deep = { leaf: true };
+    for (let i = 0; i < 100; i++) deep = { next: deep };
+    expectTypeError(() => bro.net.sendClone(connA, deep), 'over-deep nesting');
+}
+// Circular references are not supported: the cycle re-descends until the same
+// depth cap trips, surfacing as the depth TypeError rather than a hang/crash.
+{
+    const a = { name: 'a' };
+    a.self = a;
+    expectTypeError(() => bro.net.sendClone(connA, a), 'circular reference');
+}
+// Depth just under the limit still round-trips (regression guard for the cap
+// being lowered accidentally).
+{
+    received = [];
+    let ok = { leaf: 60 };
+    for (let i = 0; i < 60; i++) ok = { next: ok };
+    assert(bro.net.sendClone(connA, ok) === true, 'depth-60 clone accepted');
+    assert(waitFor(1, 5000), 'depth-60 clone received');
+    let cur = received[0].data, hops = 0;
+    while (cur && cur.next) { cur = cur.next; hops++; }
+    assert(hops === 60 && cur.leaf === 60, 'depth-60 clone round-trips intact (hops=' + hops + ')');
+}
+
 // --- 7. Malformed-frame robustness. _sendUnframed writes bytes verbatim with
 // no wire header — exactly what a buggy or hostile peer would put on the wire.
 // None of these may reach onmessage; none may crash; the link must stay usable.
