@@ -150,6 +150,7 @@ void AIBindings::install(JSContext* ctx) {
     installUnavailableNamespace(ctx, "ai", "BRO_WITH_GAMEAI");
 }
 void AIBindings::cleanup(JSContext* /*ctx*/) {}
+void pumpNavMeshObstacles(float /*dt*/) {}
 #endif
 
 // ── MESH (global Mesh class — 3D-only) ───────────────────────────────────────

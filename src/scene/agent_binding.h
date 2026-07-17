@@ -125,6 +125,12 @@ public:
     /// start navigating) when there is no navmesh/agent or no COMPLETE path.
     /// Compiled without navmesh support (BROGAMEAGENT_HAS_NAVMESH unset)
     /// this always returns false.
+    ///
+    /// Dynamic obstacles: the binding snapshots NavMesh::generation() at plan
+    /// time and re-plans automatically when the mesh's walkable surface
+    /// changes (an obstacle batch applied, or a re-bake) — the stored path may
+    /// now cut through an obstacle. If the goal has become unreachable the
+    /// route is abandoned (the agent halts) rather than walking a stale path.
     bool navigateTo(bromath::Vec3 target, bromath::Vec3 extents,
                     float repathInterval = 0.0f);
 
@@ -181,6 +187,7 @@ private:
     bromath::Vec3 navExtents_{};
     float repathInterval_ = 0.0f;
     float repathAccum_ = 0.0f;
+    uint32_t navGeneration_ = 0;  // mesh generation the active path was planned on
     float navY_ = 0.0f;
     bool  hasNavY_ = false;
 };

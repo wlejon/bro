@@ -140,6 +140,14 @@ brogameagent::NavMesh* navMeshFromJS(JSContext* ctx, JSValueConst v);
 /// JS reference can never dangle a mesh an agent is still routing on.
 std::shared_ptr<brogameagent::NavMesh> navMeshSharedFromJS(JSContext* ctx, JSValueConst v);
 
+/// Per-frame pump for dynamic navmesh obstacles: advances dtTileCache's
+/// incremental tile rebuilds (one touched tile per mesh per call) on every
+/// live bakeNavMesh({dynamicObstacles: true}) mesh with pending changes. The
+/// engine calls this once per frame right before scene agents sync, so a
+/// finished obstacle batch repaths agents the same frame. No-op when GAMEAI
+/// or navmesh support is compiled out, or when nothing is pending.
+void pumpNavMeshObstacles(float dt);
+
 /// Construct a wrapped AINavGrid (a bro.ai.game NavGrid JS value) covering the
 /// given world-space XZ bounds at `cellSize`. Lets other bindings (e.g.
 /// TileWorld::syncNavGrid / toNavGrid) hand back a ready-to-use nav grid that

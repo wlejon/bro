@@ -116,8 +116,10 @@ nav.addObstacle({ x: 5, z: 5, hw: 1, hd: 1 }, 0.4);
 // and backs the avoidance wall bridge. Use a NavMesh when the level has
 // height: walkable slopes, stacked floors, or interiors — the bake voxelizes
 // real geometry, erodes by agent radius, and findPath returns 3D waypoints.
-// A baked NavMesh is static: rebake (or cache + reload) when the level
-// changes.
+// A default bake is static: rebake (or cache + reload) when the level
+// changes. For doors, crates, and spawned walls, bake with
+// `dynamicObstacles: true` instead — that enables the runtime obstacle API
+// (see "Dynamic obstacles" below) with incremental tile rebuilds, no rebake.
 //
 // Availability: requires a build configured with
 // -DBROGAMEAGENT_WITH_NAVMESH=ON (Recast/Detour from vcpkg). Feature-detect
@@ -172,6 +174,19 @@ nav.addObstacle({ x: 5, z: 5, hw: 1, hd: 1 }, 0.4);
  * @param {number} [opts.edgeMaxError=1.3]    - contour simplification (cells)
  * @param {number} [opts.detailSampleDist=6]  - detail-mesh sampling (cells)
  * @param {number} [opts.detailSampleMaxError=1] - detail-mesh max deviation
+ *
+ * Dynamic obstacles (tiled bake — see the "Dynamic obstacles" section):
+ * @param {boolean} [opts.dynamicObstacles=false] - bake TILED via Detour's
+ *     dtTileCache so obstacles can be added/removed at runtime. Trade-offs vs
+ *     the default static bake: no detail mesh (waypoint Y is quantized to
+ *     cellHeight — slightly coarser on slopes), no save() serialization, and
+ *     small disconnected islands (e.g. crate tops) survive instead of being
+ *     culled by regionMinSize. Bake time is comparable; queries are the same.
+ * @param {number} [opts.tileSize=16] - tile edge length (world units),
+ *     clamped to 16..255 cells. Smaller tiles = cheaper per-obstacle rebuild
+ *     but more tiles; an obstacle may span at most 8 tile-layers, so keep
+ *     tileSize at least about half your largest obstacle's footprint.
+ * @param {number} [opts.maxObstacles=128] - obstacle slot budget
  *
  * @returns {NavMesh}
  * @throws {Error} on bake failure, with the Recast build log in the message
@@ -260,6 +275,84 @@ const mesh = cached
         return m;
       })();
 
+// --- Dynamic obstacles (doors, crates, spawned walls) ---
+//
+// Available on meshes baked with `dynamicObstacles: true`. Obstacles carve
+// the walkable surface exactly like baked-in geometry: findPath detours
+// around them (or fails when they sever the corridor — never a partial
+// path), and removing them restores the original surface.
+//
+// Update semantics: addObstacle/removeObstacle only QUEUE a change. The
+// affected tiles rebuild incrementally — one touched tile per update() call —
+// and the engine pumps update() automatically once per frame, so a change
+// takes effect over the next few frames (typically 1-2). `generation` bumps
+// once per applied batch; navigating agents (node.navigateTo) watch it and
+// repath automatically — an agent whose corridor gets blocked detours, and
+// one whose goal becomes unreachable halts instead of ghost-walking the
+// stale route. Call `while (!mesh.update()) {}` only when a change must
+// apply synchronously (e.g. right before a findPath in the same tick).
+//
+// Limits: an obstacle may span at most 8 tile-layers (size obstacles ≲
+// 2 tiles across, or raise tileSize); at most 64 add/remove requests may be
+// queued between pumps (addObstacle throws "request queue full" beyond
+// that); obstacle slots are capped by bakeNavMesh's maxObstacles.
+
+const dyn = bro.ai.game.bakeNavMesh({
+    fromPhysics: Physics,
+    dynamicObstacles: true,   // tiled dtTileCache bake
+    tileSize: 16,
+    maxObstacles: 128,
+});
+
+/**
+ * Add an obstacle. Three shapes:
+ *   {type: 'cylinder', pos, radius, height}   pos = center of the BASE
+ *   {type: 'box', min, max}                   axis-aligned box
+ *   {type: 'box', center, halfExtents, yaw?}  Y-rotated box (yaw in radians)
+ * @returns {number} handle for removeObstacle()
+ * @throws {Error} on a static (non-dynamicObstacles) mesh, a malformed
+ *     descriptor, a full request queue, or exhausted obstacle slots
+ */
+const door = dyn.addObstacle({
+    type: 'box', min: { x: 4, y: 0, z: -1 }, max: { x: 5, y: 3, z: 1 },
+});
+const crate = dyn.addObstacle({
+    type: 'cylinder', pos: { x: -3, y: 0, z: 2 }, radius: 0.8, height: 1.5,
+});
+
+/**
+ * Queue removal. Returns false for unknown/stale handles (double-remove is a
+ * clean no-op).
+ * @param {number} handle
+ * @returns {boolean}
+ */
+dyn.removeObstacle(door);
+
+/**
+ * Pump pending changes by hand: rebuilds at most one touched tile per call,
+ * returns true once fully up to date. The engine already pumps once per
+ * frame — use this only for synchronous application.
+ * @param {number} [dt=1/60] - forwarded to Detour (currently unused by it)
+ * @returns {boolean}
+ */
+while (!dyn.update()) {}          // apply everything right now
+
+/** Whether this mesh was baked with dynamicObstacles (read-only). */
+dyn.supportsObstacles;
+
+/** Active obstacles — added and not removed, including queued (read-only). */
+dyn.obstacleCount;
+
+/** True while queued changes have not been fully applied yet (read-only). */
+dyn.obstaclesPending;
+
+/**
+ * Monotonic surface version (read-only): bumps after bake/load and once per
+ * applied obstacle batch. Poll it to know when a change has landed; agent
+ * bindings use it for automatic repath.
+ */
+dyn.generation;
+
 // --- Agent routing over a navmesh ---
 //
 // node.navigateTo() drives an attached agent along NavMesh::findPath
@@ -271,6 +364,12 @@ const mesh = cached
 // active the binding owns the agent's movement target (a think-hook moveTo
 // issued the same tick is overridden); the route ends on arrival or
 // stopNavigation().
+//
+// Dynamic obstacles: the binding snapshots the mesh's `generation` at plan
+// time and re-plans automatically when the surface changes (an obstacle
+// batch applied, or a re-bake). If the goal has become unreachable the route
+// is abandoned and the agent halts — issue a fresh navigateTo() after the
+// blocking obstacle is removed.
 
 const world = bro.ai.game.createWorld();
 world.setAvoidance(true);

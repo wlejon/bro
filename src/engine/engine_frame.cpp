@@ -10,6 +10,7 @@
 #include "dom/event.h"
 #include "js/runtime.h"
 #include "js/timers.h"
+#include "js/ai_bindings.h"
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
 #include "js/net_bindings.h"
@@ -457,6 +458,11 @@ void Engine::run() {
             if (frameDt < 0.0f) frameDt = 0.0f;
             if (frameDt > 0.1f) frameDt = 0.1f;
             lastFrameTimeMs_ = nowMs;
+            // Advance dynamic navmesh-obstacle tile rebuilds before agents
+            // sync, so a batch that finishes this frame repaths them this
+            // frame. (Detour ignores dt; rebuilds progress even while
+            // bro.time is paused — pending edits shouldn't wedge on pause.)
+            js::pumpNavMeshObstacles(frameDt);
 #if BRO_WITH_3D
             for (auto& sg : sceneGraphs_) {
                 sg.graph->syncAgents(frameDt);

@@ -19,6 +19,7 @@
 
 #include <cfloat>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 #include <cstring>
@@ -499,6 +500,23 @@ static bool readU32Any(JSContext* ctx, JSValueConst val, std::vector<uint32_t>& 
     return true;
 }
 
+// ── Dynamic-obstacle pump registry ─────────────────────────────────────────
+// Every obstacle-capable mesh (bakeNavMesh({dynamicObstacles: true})) is
+// registered here; the engine calls pumpNavMeshObstacles(dt) once per frame
+// (engine_frame / headless advanceTime) right before scene agents sync, so
+// dtTileCache tile rebuilds progress without the app having to call
+// mesh.update() itself, and a finished batch repaths agents the same frame.
+// weak_ptr so the pump never extends a mesh's lifetime; expired entries are
+// pruned in place. Mutex is fine here: cold control plane, main thread only
+// contends with a worker creating a mesh.
+static std::mutex g_navMeshPumpMutex;
+static std::vector<std::weak_ptr<brogameagent::NavMesh>> g_navMeshPump;
+
+static void registerNavMeshForPump(const std::shared_ptr<brogameagent::NavMesh>& m) {
+    std::lock_guard<std::mutex> lock(g_navMeshPumpMutex);
+    g_navMeshPump.push_back(m);
+}
+
 // Parse `physicsLayers` (array of layer names/indices) into a bitmask.
 // Shared shape with createNavGrid's filter.
 #if BRO_WITH_PHYSICS
@@ -706,10 +724,23 @@ static JSValue js_bakeNavMesh(JSContext* ctx, JSValueConst, int argc, JSValueCon
     cfg.detailSampleDist     = (float)getDoubleProp(ctx, opts, "detailSampleDist", cfg.detailSampleDist);
     cfg.detailSampleMaxError = (float)getDoubleProp(ctx, opts, "detailSampleMaxError", cfg.detailSampleMaxError);
 
-    auto mesh = std::make_unique<brogameagent::NavMesh>();
+    // Dynamic obstacles: tiled dtTileCache bake with runtime addObstacle/
+    // removeObstacle/update. See the obstacle methods on the NavMesh class.
+    {
+        JSValue v = JS_GetPropertyStr(ctx, opts, "dynamicObstacles");
+        cfg.dynamicObstacles = JS_ToBool(ctx, v) == 1;
+        JS_FreeValue(ctx, v);
+    }
+    cfg.tileSize     = (float)getDoubleProp(ctx, opts, "tileSize", cfg.tileSize);
+    cfg.maxObstacles = (int)getDoubleProp(ctx, opts, "maxObstacles", cfg.maxObstacles);
+
+    auto mesh = std::make_shared<brogameagent::NavMesh>();
     if (!mesh->bake(xyz.data(), xyz.size() / 3, indices.data(), indices.size(), cfg)) {
         return JS_ThrowInternalError(ctx, "bakeNavMesh: %s", mesh->lastError().c_str());
     }
+    // Obstacle-capable meshes get their tile rebuilds pumped by the engine
+    // once per frame (pumpNavMeshObstacles).
+    if (mesh->supportsObstacles()) registerNavMeshForPump(mesh);
     return qjsbind::wrap<NavMeshData>(ctx, new NavMeshData{std::move(mesh)});
 }
 
@@ -2120,15 +2151,115 @@ void AIBindings::install(JSContext* ctx) {
                 }, 1)
             // save() → ArrayBuffer of the baked mesh (cache it to disk;
             // loadNavMesh() restores it without the seconds-scale bake).
+            // Dynamic-obstacle (tiled) meshes do not serialize.
             .method_raw("save",
                 [](JSContext* ctx, JSValueConst this_val, int, JSValueConst*) -> JSValue {
                     auto* d = qjsbind::unwrap<NavMeshData>(ctx, this_val);
                     if (!d || !d->mesh) return JS_ThrowTypeError(ctx, "save: invalid NavMesh");
                     std::vector<uint8_t> blob;
-                    if (!d->mesh->saveTo(blob))
+                    if (!d->mesh->saveTo(blob)) {
+                        if (d->mesh->supportsObstacles())
+                            return JS_ThrowTypeError(ctx,
+                                "save: dynamicObstacles meshes do not serialize");
                         return JS_ThrowInternalError(ctx, "save: NavMesh is not baked");
+                    }
                     return JS_NewArrayBufferCopy(ctx, blob.data(), blob.size());
-                }, 0);
+                }, 0)
+            // ── Dynamic obstacles (bakeNavMesh({dynamicObstacles: true})) ──
+            // True when this mesh can take runtime obstacles.
+            .get("supportsObstacles",
+                [](NavMeshData* d) -> bool { return d->mesh && d->mesh->supportsObstacles(); })
+            // Monotonic surface version: bumps after bake/load and once per
+            // applied obstacle batch. Agents repath when it moves.
+            .get("generation",
+                [](NavMeshData* d) -> double {
+                    return d->mesh ? (double)d->mesh->generation() : 0.0; })
+            // Active obstacles (added and not removed, including queued ones).
+            .get("obstacleCount",
+                [](NavMeshData* d) -> int { return d->mesh ? d->mesh->obstacleCount() : 0; })
+            // True while queued changes have not been fully applied yet.
+            .get("obstaclesPending",
+                [](NavMeshData* d) -> bool { return d->mesh && d->mesh->obstaclesPending(); })
+            // addObstacle({type:'cylinder', pos, radius, height})
+            // addObstacle({type:'box', min, max})
+            // addObstacle({type:'box', center, halfExtents, yaw?})   (Y-rotated)
+            // → numeric handle for removeObstacle(). Changes apply after the
+            // touched tiles rebuild (engine-pumped, or mesh.update()).
+            .method_raw("addObstacle",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<NavMeshData>(ctx, this_val);
+                    if (!d || !d->mesh) return JS_NULL;
+                    if (!d->mesh->supportsObstacles())
+                        return JS_ThrowTypeError(ctx,
+                            "addObstacle: bake the mesh with dynamicObstacles: true");
+                    if (argc < 1 || !JS_IsObject(argv[0]))
+                        return JS_ThrowTypeError(ctx, "addObstacle(desc)");
+                    const std::string type = qjsbind::get_prop_string(ctx, argv[0], "type");
+                    uint32_t id = 0;
+                    if (type.empty() || type == "cylinder") {
+                        JSValue pv = JS_GetPropertyStr(ctx, argv[0], "pos");
+                        bromath::Vec3 pos;
+                        const bool okPos = parseVec3Val(ctx, pv, pos);
+                        JS_FreeValue(ctx, pv);
+                        const double radius = getDoubleProp(ctx, argv[0], "radius", 0);
+                        const double height = getDoubleProp(ctx, argv[0], "height", 0);
+                        if (!okPos || !(radius > 0) || !(height > 0))
+                            return JS_ThrowTypeError(ctx,
+                                "addObstacle: cylinder needs {pos, radius > 0, height > 0} "
+                                "(pos = center of the base)");
+                        id = d->mesh->addObstacle(pos, (float)radius, (float)height);
+                    } else if (type == "box") {
+                        JSValue minV = JS_GetPropertyStr(ctx, argv[0], "min");
+                        JSValue maxV = JS_GetPropertyStr(ctx, argv[0], "max");
+                        JSValue ctrV = JS_GetPropertyStr(ctx, argv[0], "center");
+                        JSValue extV = JS_GetPropertyStr(ctx, argv[0], "halfExtents");
+                        bromath::Vec3 a, b;
+                        const bool aabb = parseVec3Val(ctx, minV, a) && parseVec3Val(ctx, maxV, b);
+                        const bool obb  = !aabb &&
+                            parseVec3Val(ctx, ctrV, a) && parseVec3Val(ctx, extV, b);
+                        JS_FreeValue(ctx, minV); JS_FreeValue(ctx, maxV);
+                        JS_FreeValue(ctx, ctrV); JS_FreeValue(ctx, extV);
+                        if (aabb) {
+                            id = d->mesh->addBoxObstacle(a, b);
+                        } else if (obb) {
+                            const double yaw = getDoubleProp(ctx, argv[0], "yaw", 0);
+                            id = d->mesh->addBoxObstacle(a, b, (float)yaw);
+                        } else {
+                            return JS_ThrowTypeError(ctx,
+                                "addObstacle: box needs {min, max} or {center, halfExtents, yaw?}");
+                        }
+                    } else {
+                        return JS_ThrowTypeError(ctx,
+                            "addObstacle: type must be 'cylinder' or 'box'");
+                    }
+                    if (id == 0)
+                        return JS_ThrowInternalError(ctx, "addObstacle: %s",
+                                                     d->mesh->lastError().c_str());
+                    return JS_NewUint32(ctx, id);
+                }, 1)
+            // removeObstacle(handle) → bool. False for unknown/stale handles
+            // (safe to double-remove). The surface restores after the touched
+            // tiles rebuild.
+            .method_raw("removeObstacle",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<NavMeshData>(ctx, this_val);
+                    if (!d || !d->mesh) return JS_FALSE;
+                    uint32_t id = 0;
+                    if (argc >= 1) JS_ToUint32(ctx, &id, argv[0]);
+                    return JS_NewBool(ctx, d->mesh->removeObstacle(id));
+                }, 1)
+            // update(dt?) → bool: pump pending obstacle changes (one touched-
+            // tile rebuild per call); true once fully up to date. The engine
+            // pumps automatically every frame — call this only for immediate,
+            // synchronous application: while (!mesh.update()) {}
+            .method_raw("update",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<NavMeshData>(ctx, this_val);
+                    if (!d || !d->mesh) return JS_TRUE;
+                    double dt = 1.0 / 60.0;
+                    if (argc >= 1 && JS_IsNumber(argv[0])) JS_ToFloat64(ctx, &dt, argv[0]);
+                    return JS_NewBool(ctx, d->mesh->update((float)dt));
+                }, 1);
     }
 #endif  // BROGAMEAGENT_HAS_NAVMESH
 
@@ -3773,6 +3904,32 @@ std::shared_ptr<brogameagent::NavMesh> navMeshSharedFromJS(JSContext* ctx, JSVal
 #else
     (void)ctx; (void)val;
     return nullptr;
+#endif
+}
+
+void pumpNavMeshObstacles(float dt) {
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+    // Snapshot the live meshes under the lock, run the (potentially tile-
+    // rebuilding) updates outside it. Expired registry entries are pruned by
+    // swap-with-back.
+    std::vector<std::shared_ptr<brogameagent::NavMesh>> live;
+    {
+        std::lock_guard<std::mutex> lock(g_navMeshPumpMutex);
+        for (size_t i = 0; i < g_navMeshPump.size();) {
+            if (auto sp = g_navMeshPump[i].lock()) {
+                live.push_back(std::move(sp));
+                i++;
+            } else {
+                g_navMeshPump[i] = std::move(g_navMeshPump.back());
+                g_navMeshPump.pop_back();
+            }
+        }
+    }
+    for (auto& m : live) {
+        if (m->obstaclesPending()) m->update(dt);
+    }
+#else
+    (void)dt;
 #endif
 }
 

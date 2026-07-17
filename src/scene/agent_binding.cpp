@@ -118,6 +118,7 @@ bool AgentBinding::navigateTo(bromath::Vec3 target, bromath::Vec3 extents,
     navExtents_ = extents;
     repathInterval_ = repathInterval;
     repathAccum_ = 0.0f;
+    navGeneration_ = navMesh_->generation();
     navY_ = navPath_.front().y;
     hasNavY_ = true;
     return true;
@@ -139,6 +140,21 @@ void AgentBinding::stepNavigation_(float dt) {
 #ifdef BROGAMEAGENT_HAS_NAVMESH
     if (!navActive_ || !agent_) return;
     if (!agent_->unit().alive()) { stopNavigation(); return; }
+
+    // Surface changed under the active path (a dynamic-obstacle batch was
+    // applied, or the mesh was re-baked): the stored waypoints may now cut
+    // through an obstacle, so re-plan toward the same goal. When the goal
+    // has become unreachable, abandon the route — halting honestly beats
+    // walking a stale path through the obstacle.
+    if (navMesh_ && navMesh_->generation() != navGeneration_) {
+        navGeneration_ = navMesh_->generation();
+        bromath::Vec3 start{agent_->x(), navY_, agent_->z()};
+        auto p = navMesh_->findPath(start, navTarget_, navExtents_);
+        if (p.empty()) { stopNavigation(); return; }
+        navPath_ = std::move(p);
+        navWaypoint_ = 0;
+        repathAccum_ = 0.0f;
+    }
 
     // Optional periodic re-plan toward the same goal (moving obstacles are
     // ORCA's job; this covers a moved goal snapshot or a drifted agent).
