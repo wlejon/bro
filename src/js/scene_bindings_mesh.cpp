@@ -425,12 +425,25 @@ static void applyMeshNodeOptions(JSContext* ctx, scene::MeshNode* node,
         double z = qjsbind::get_prop_number(ctx, opts, "z", 0);
         node->setPosition((float)x, (float)y, (float)z);
 
-        // Scale (uniform or per-axis)
+        // Scale — uniform number or per-axis [x, y, z] array (missing array
+        // entries default to 1). Non-uniform scale renders correctly: the
+        // renderer transforms normals by the model's inverse-transpose
+        // (uNormalMat), not the raw model 3x3.
         JSValue scaleVal = JS_GetPropertyStr(ctx, opts, "scale");
         if (!JS_IsUndefined(scaleVal)) {
-            double s = 1;
-            JS_ToFloat64(ctx, &s, scaleVal);
-            node->setScale((float)s, (float)s, (float)s);
+            if (JS_IsArray(scaleVal)) {
+                double s3[3] = {1, 1, 1};
+                for (uint32_t i = 0; i < 3; ++i) {
+                    JSValue e = JS_GetPropertyUint32(ctx, scaleVal, i);
+                    if (!JS_IsUndefined(e)) JS_ToFloat64(ctx, &s3[i], e);
+                    JS_FreeValue(ctx, e);
+                }
+                node->setScale((float)s3[0], (float)s3[1], (float)s3[2]);
+            } else {
+                double s = 1;
+                JS_ToFloat64(ctx, &s, scaleVal);
+                node->setScale((float)s, (float)s, (float)s);
+            }
         }
         JS_FreeValue(ctx, scaleVal);
 

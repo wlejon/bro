@@ -417,7 +417,9 @@ class SceneGraph {
    * @param {number} [opts.x=0] - position X
    * @param {number} [opts.y=0] - position Y
    * @param {number} [opts.z=0] - position Z
-   * @param {number} [opts.scale=1] - uniform scale
+   * @param {number|number[]} [opts.scale=1] - uniform scale, or per-axis
+   *   [sx, sy, sz] (missing entries default to 1; normals stay correct
+   *   under non-uniform scale)
    * @param {number} [opts.rx=0] - rotation X in degrees
    * @param {number} [opts.ry=0] - rotation Y in degrees
    * @param {number} [opts.rz=0] - rotation Z in degrees

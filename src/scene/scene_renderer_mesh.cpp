@@ -33,6 +33,7 @@ void SceneRenderer::queryMeshUniformLocs(GLuint prog, MeshDrawLocs& d,
     };
     d.mvp            = U("uMVP");
     d.model          = U("uModel");
+    d.normalMat      = U("uNormalMat");
     d.color          = U("uColor");
     d.emissive       = U("uEmissive");
     d.emissiveColor  = U("uEmissiveColor");
@@ -257,6 +258,20 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
 
     glUniformMatrix4fv(L.mvp, 1, GL_FALSE, mvp.data);
     glUniformMatrix4fv(L.model, 1, GL_FALSE, model.data);
+
+    // Normal matrix: inverse-transpose of the model's upper 3x3, so normals
+    // stay perpendicular under non-uniform scale. The camera-relative
+    // translation applied above only touches column 3 and drops out of the
+    // 3x3. minverse returns identity for a singular matrix (zero scale), so
+    // degenerate nodes fall back to untransformed normals instead of NaNs.
+    if (L.normalMat >= 0) {
+        Mat4 invT = bromath::mtranspose(bromath::minverse(model));
+        float n3[9];
+        for (int c = 0; c < 3; ++c)
+            for (int r = 0; r < 3; ++r)
+                n3[c * 3 + r] = invT.at(r, c);
+        glUniformMatrix3fv(L.normalMat, 1, GL_FALSE, n3);
+    }
     glUniform4fv(L.color, 1, mesh->color());
     glUniform1f(L.emissive, mesh->emissive());
     glUniform3fv(L.emissiveColor, 1, mesh->emissiveColor());

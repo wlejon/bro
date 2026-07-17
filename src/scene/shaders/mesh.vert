@@ -31,6 +31,11 @@ layout(std140) uniform BonePalette {
 
 uniform mat4 uMVP;
 uniform mat4 uModel;
+// Inverse-transpose of uModel's upper 3x3 — the correct normal transform
+// under non-uniform scale (mat3(uModel) would skew normals toward the
+// stretched axis). Equals mat3(uModel) up to uniform scale, so the cheap
+// path is unchanged for rigid/uniform transforms.
+uniform mat3 uNormalMat;
 uniform int uUseVertexColor;
 uniform vec3  uWindDir;
 uniform float uWindStrength;
@@ -100,8 +105,8 @@ void main() {
     worldPos = uModel * vec4(swayedAPos, 1.0);
 #endif
     vWorldPos = worldPos.xyz;
-    vNormal = M3 * lNormal;
-    vTangentW   = M3 * lTangent;
+    vNormal = uNormalMat * lNormal;
+    vTangentW   = M3 * lTangent;   // tangents lie in the surface: plain model transform
     vBitangentW = cross(vNormal, vTangentW) * aTangent.w;
     vUV = uv;
     vColor = (uUseVertexColor == 1) ? aColor : vec4(1.0);

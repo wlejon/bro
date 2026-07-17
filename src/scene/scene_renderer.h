@@ -292,7 +292,7 @@ private:
     // regular mesh program and one for the skinned variant (same GLSL source,
     // SKINNED define), so both passes share renderMeshNode.
     struct MeshDrawLocs {
-        GLint mvp = -1, model = -1, color = -1, emissive = -1,
+        GLint mvp = -1, model = -1, normalMat = -1, color = -1, emissive = -1,
               emissiveColor = -1, metallic = -1, roughness = -1, unlit = -1,
               twoSided = -1, subsurface = -1, alphaCutoff = -1,
               useVertexColor = -1, nearClip = -1, windMask = -1,
