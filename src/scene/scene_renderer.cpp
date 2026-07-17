@@ -23,7 +23,14 @@ using bromath::Mat4;
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
-SceneRenderer::SceneRenderer(SceneGraph& graph) : graph_(graph) {}
+SceneRenderer::SceneRenderer(SceneGraph& graph) : graph_(graph) {
+    // Fallback sun for scenes with no LightNode (see render3D). Configured
+    // once; render3D only reads it.
+    implicitSun_.setKind(LightNode::Kind::Directional);
+    implicitSun_.setDirection(bromath::vnorm(Vec3(-0.3f, -1.0f, -0.5f)));
+    implicitSun_.setColor(1.0f, 0.98f, 0.95f);
+    implicitSun_.setIntensity(3.0f);
+}
 
 SceneRenderer::~SceneRenderer() {
     // Destroy GL resources
@@ -381,13 +388,8 @@ void SceneRenderer::render3D() {
         // its own FBO state cleanly.
         std::vector<LightNode*> lights;
         collectLights(lights);
-        static LightNode implicitSun;
-        implicitSun.setKind(LightNode::Kind::Directional);
-        implicitSun.setDirection(bromath::vnorm(Vec3(-0.3f, -1.0f, -0.5f)));
-        implicitSun.setColor(1.0f, 0.98f, 0.95f);
-        implicitSun.setIntensity(3.0f);
         std::vector<LightNode*> fallback;
-        if (lights.empty()) { fallback.push_back(&implicitSun); }
+        if (lights.empty()) { fallback.push_back(&implicitSun_); }
         const auto& activeLights = lights.empty() ? fallback : lights;
 
         // Shadow caster pass renders into the shadow atlas (its own FBO).
@@ -438,6 +440,36 @@ void SceneRenderer::render3D() {
             std::vector<MeshNode*> unlitSkinnedMeshes;
             std::vector<MeshNode*> customMeshes;
             std::vector<MeshNode*> customSkinnedMeshes;
+
+            // Translucent (uniform alpha < 1) draws are order-dependent, and
+            // tree order is wrong whenever a nearer surface was created
+            // before a farther one. Both walks below defer them here; they
+            // draw back-to-front after ALL opaque geometry (splats already
+            // do the same internally). Sort key is whole-node view depth
+            // (bounds center along the view axis) — exact for a convex
+            // surface, the accepted approximation for instanced nodes.
+            struct TranslucentItem {
+                MeshNode* mesh;           // static/skinned/custom, or null
+                InstancedMeshNode* inst;  // instanced entry, or null
+                bool skinned;             // ready skin -> skinned variant
+                float depth;              // eye distance along the view axis
+            };
+            std::vector<TranslucentItem> translucentMeshes;
+            const Vec3 viewFwd{-graph_.viewMatrix_.at(2, 0),
+                               -graph_.viewMatrix_.at(2, 1),
+                               -graph_.viewMatrix_.at(2, 2)};
+            auto translucentDepth = [&](SceneNode* n) {
+                bromath::AABB3 wb;
+                Vec3 c;
+                if (nodeWorldBounds(n, wb)) {
+                    c = (wb.min + wb.max) * 0.5f;
+                } else {
+                    const bromath::Mat4& w = n->worldMatrix();
+                    c = Vec3{w.at(0, 3), w.at(1, 3), w.at(2, 3)};
+                }
+                return bromath::vdot(c - graph_.cameraEye_, viewFwd);
+            };
+
             if (hasMeshNodes && meshProgram_) {
                 glEnable(GL_CULL_FACE);
                 glCullFace(GL_BACK);
@@ -455,19 +487,28 @@ void SceneRenderer::render3D() {
                         } else {
                             cullStats_.meshDrawn++;
                             auto* sm = m->asSkinnedMesh();
-                            if (m->hasCustomShader()) {
-                                // Custom shader wins over unlit: the mesh
-                                // renders lit (pre-tonemap) so the fragment
-                                // hook actually runs; see renderMeshNode.
+                            const bool skinnedReady = sm && sm->skinReady();
+                            // Custom shader wins over unlit (the mesh renders
+                            // lit, pre-tonemap, so the fragment hook actually
+                            // runs — see renderMeshNode), so translucency
+                            // routes on the effective-lit surface: any lit
+                            // mesh with uniform alpha < 1 defers to the
+                            // sorted translucent pass below.
+                            if ((m->hasCustomShader() || !m->unlit()) &&
+                                m->color()[3] < 1.0f) {
+                                translucentMeshes.push_back(
+                                    {m, nullptr, skinnedReady,
+                                     translucentDepth(m)});
+                            } else if (m->hasCustomShader()) {
                                 // Skinned meshes with a ready skin take the
                                 // SKINNED custom variant (its sub-pass binds
                                 // the palette); a not-ready skin degrades to
                                 // the static variant, same as the default
                                 // pipeline's routing.
-                                ((sm && sm->skinReady()) ? customSkinnedMeshes
-                                                         : customMeshes)
+                                (skinnedReady ? customSkinnedMeshes
+                                              : customMeshes)
                                     .push_back(m);
-                            } else if (sm && sm->skinReady()) {
+                            } else if (skinnedReady) {
                                 (m->unlit() ? unlitSkinnedMeshes : skinnedMeshes)
                                     .push_back(m);
                             } else if (m->unlit()) {
@@ -614,7 +655,13 @@ void SceneRenderer::render3D() {
                                 cullStats_.instancedCulled++;
                             } else {
                                 cullStats_.instancedDrawn++;
-                                if (m->hasCustomShader()) {
+                                if (m->color()[3] < 1.0f) {
+                                    // Deferred to the sorted translucent
+                                    // pass (whole-node depth).
+                                    translucentMeshes.push_back(
+                                        {nullptr, m, false,
+                                         translucentDepth(m)});
+                                } else if (m->hasCustomShader()) {
                                     customInstanced.push_back(m);
                                 } else {
                                     renderInstancedMeshNode(m, meshInstDraw_);
@@ -673,7 +720,8 @@ void SceneRenderer::render3D() {
             // depth fade (a multisampled attachment can't be sampled in GL
             // 3.3) and the post-tonemap unlit overlay depth-tests against,
             // and (b) keeps the ordering safe: the blended passes below
-            // (splats, particles, billboards) never write depth, so this
+            // (translucent meshes, splats, particles, billboards) never
+            // write depth, so this
             // resolved copy stays valid for the rest of the frame. Color
             // resolves separately, after all HDR passes, before tonemap.
             if (msaaActive_) {
@@ -683,6 +731,130 @@ void SceneRenderer::render3D() {
                                   0, 0, meshFBOWidth_, meshFBOHeight_,
                                   GL_DEPTH_BUFFER_BIT, GL_NEAREST);
                 glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);
+            }
+
+            // --- Translucent mesh pass -------------------------------------
+            // Meshes / instanced nodes with uniform alpha < 1, deferred from
+            // the opaque walks above and drawn back-to-front by view depth so
+            // the "over" blend composes correctly from any camera side. Depth
+            // test stays on (opaque geometry still occludes); the draws never
+            // write depth (renderMeshNode / renderInstancedMeshNode drop the
+            // depth mask per translucent draw), so the resolved depth above
+            // stays valid. Program batching is sacrificed for blend order:
+            // each draw binds whatever program its node needs, re-uploading
+            // frame globals only on a program switch.
+            if (!translucentMeshes.empty()) {
+                std::stable_sort(
+                    translucentMeshes.begin(), translucentMeshes.end(),
+                    [](const TranslucentItem& x, const TranslucentItem& y) {
+                        return x.depth > y.depth;   // farthest first
+                    });
+
+                glEnable(GL_CULL_FACE);
+                glCullFace(GL_BACK);
+
+                Mat4 viewRotT = graph_.viewMatrix_;
+                viewRotT.at(0, 3) = 0.0f;
+                viewRotT.at(1, 3) = 0.0f;
+                viewRotT.at(2, 3) = 0.0f;
+                const Mat4 vpT =
+                    bromath::mmul(graph_.projectionMatrix_, viewRotT);
+
+                GLuint boundProg = 0;
+                auto bindMeshProg = [&](GLuint prog, const MeshDrawLocs& d,
+                                        const MeshProgramLocs& locs) {
+                    if (prog == boundProg) return;
+                    boundProg = prog;
+                    glUseProgram(prog);
+                    uploadMeshGlobals(d);
+                    uploadLights(activeLights, locs);
+                };
+                auto bindInstProg = [&](GLuint prog,
+                                        const InstancedDrawLocs& d,
+                                        const MeshProgramLocs& locs) {
+                    if (prog == boundProg) return;
+                    boundProg = prog;
+                    glUseProgram(prog);
+                    glUniformMatrix4fv(d.vp, 1, GL_FALSE, vpT.data);
+                    glUniform3f(d.cameraEye, graph_.cameraEye_.x,
+                                graph_.cameraEye_.y, graph_.cameraEye_.z);
+                    glUniform1f(d.fogStart, fogStart_);
+                    glUniform1f(d.fogEnd, fogEnd_);
+                    glUniform3f(d.fogColor, fogColor_[0], fogColor_[1],
+                                fogColor_[2]);
+                    glUniform3f(d.ambient, ambientColor_[0], ambientColor_[1],
+                                ambientColor_[2]);
+                    uploadLights(activeLights, locs);
+                };
+
+                for (const TranslucentItem& t : translucentMeshes) {
+                    if (t.inst) {
+                        if (!meshInstancedProgram_) continue;
+                        InstancedMeshNode* m = t.inst;
+                        CustomProgramEntry* entry = nullptr;
+                        if (m->hasCustomShader()) {
+                            const auto* st = m->customShader();
+                            std::string err;
+                            entry = ensureCustomProgram(
+                                CustomShaderTarget::Instanced, st->key,
+                                st->vertexChunk, st->fragmentChunk, &err);
+                            if (!entry) {
+                                LOG_ERROR("Custom shader failed at draw "
+                                          "(rendering default): %s",
+                                          err.c_str());
+                            }
+                        }
+                        if (entry) {
+                            bindInstProg(entry->prog, entry->instDraw,
+                                         entry->locs);
+                            uploadUserUniforms(entry->prog, entry->userLocs,
+                                               m->customShader());
+                            renderInstancedMeshNode(m, entry->instDraw);
+                        } else {
+                            bindInstProg(meshInstancedProgram_, meshInstDraw_,
+                                         meshInstLocs_);
+                            renderInstancedMeshNode(m, meshInstDraw_);
+                        }
+                    } else {
+                        MeshNode* m = t.mesh;
+                        if (t.skinned) ensureSkinnedMeshPipeline();
+                        const bool skinned = t.skinned && meshSkinnedProgram_;
+                        CustomProgramEntry* entry = nullptr;
+                        if (m->hasCustomShader()) {
+                            const auto* st = m->customShader();
+                            std::string err;
+                            entry = ensureCustomProgram(
+                                skinned ? CustomShaderTarget::Skinned
+                                        : CustomShaderTarget::Static,
+                                st->key, st->vertexChunk, st->fragmentChunk,
+                                &err);
+                            if (!entry) {
+                                LOG_ERROR("Custom shader failed at draw "
+                                          "(rendering default): %s",
+                                          err.c_str());
+                            }
+                        }
+                        if (entry) {
+                            bindMeshProg(entry->prog, entry->draw,
+                                         entry->locs);
+                            uploadUserUniforms(entry->prog, entry->userLocs,
+                                               m->customShader());
+                            renderMeshNode(m, entry->draw);
+                        } else if (skinned) {
+                            // Failed skinned custom variant degrades to the
+                            // DEFAULT skinned program — a static program
+                            // would draw the bind pose.
+                            bindMeshProg(meshSkinnedProgram_,
+                                         meshSkinnedDraw_, meshSkinnedLocs_);
+                            renderMeshNode(m, meshSkinnedDraw_);
+                        } else if (meshProgram_) {
+                            bindMeshProg(meshProgram_, meshDraw_, meshLocs_);
+                            renderMeshNode(m, meshDraw_);
+                        }
+                    }
+                }
+                glDisable(GL_CULL_FACE);
+                glUseProgram(0);
             }
 
             // --- Gaussian splat pass ---------------------------------------

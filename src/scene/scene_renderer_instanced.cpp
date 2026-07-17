@@ -7,6 +7,7 @@
 #include "broimage/decode.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -29,6 +30,15 @@ using bromath::Mat4;
 // scene_renderer_mesh.cpp) splices user fragment chunks into this source.
 std::string makeMeshInstancedFragSrc() {
     std::string s = kMeshFragSrc;
+    // A miss on any anchor below means mesh.frag was edited without updating
+    // this derivation — the injection would silently be skipped and instanced
+    // tint/atlas would silently break, so make it loud (and fatal in Debug).
+    auto anchorMissing = [](const std::string& anchor) {
+        LOG_ERROR("makeMeshInstancedFragSrc: anchor \"%s\" not found in "
+                  "mesh.frag — instanced injection skipped (mesh.frag edited "
+                  "without updating this derivation?)", anchor.c_str());
+        assert(!"makeMeshInstancedFragSrc: anchor missing in mesh.frag");
+    };
     // Add the instance-only varying + uniform alongside the existing
     // varyings. uAlphaCutoff is already declared (and applied) by the base
     // kMeshFragSrc, so re-declaring it here would be a GLSL redeclaration
@@ -38,6 +48,8 @@ std::string makeMeshInstancedFragSrc() {
     if (p != std::string::npos) {
         s.insert(p + anchor1.size(),
                  "\nin vec4 vInstColor;\nuniform vec2 uAtlasGrid;");
+    } else {
+        anchorMissing(anchor1);
     }
     // Replace the baseColor texture sample so it can pick a sub-rect of the
     // texture when uAtlasGrid > 1. Only the baseColor sampler uses atlas UV;
@@ -62,6 +74,8 @@ std::string makeMeshInstancedFragSrc() {
                   "            uvForBase = (vec2(float(cx), float(cy)) + fract(vUV)) * cellSize;\n"
                   "        }\n"
                   "        vec4 tex = texture(uBaseColorTex, uvForBase);");
+    } else {
+        anchorMissing(anchor2);
     }
     // Multiply the resolved baseColor by the instance RGB tint right after
     // the base-color/alpha resolution block. Alpha is reserved for the atlas
@@ -72,6 +86,8 @@ std::string makeMeshInstancedFragSrc() {
     if (p != std::string::npos) {
         s.insert(p + anchor3.size(),
                  "    baseColor *= vInstColor.rgb;\n");
+    } else {
+        anchorMissing(anchor3);
     }
     return s;
 }

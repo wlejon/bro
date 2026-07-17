@@ -92,11 +92,17 @@ void main() {
     float disc = sqrt(max(0.0, mid * mid - det));
     float l1 = mid + disc;
     float l2 = mid - disc;
-    // When the screen covariance is axis-aligned (b == 0) rounding can land
-    // l1 exactly on `a`, making (b, l1 - a) the zero vector — normalize()
-    // would return NaN and the splat would silently vanish. Fall back to the
+    // Eigenvector of [[a,b],[b,d]] for l1, taken from whichever row of
+    // (Sigma - l1*I) is better conditioned: row 0 gives (b, l1 - a), row 1
+    // gives (l1 - d, b). When the major axis is near the x-axis l1 ~ a and
+    // (l1 - a) suffers catastrophic cancellation — for an elongated splat
+    // with tiny-but-nonzero b the axis can rotate arbitrarily (up to an
+    // effective axis swap), so pick the row with the larger residual.
+    // When the screen covariance is isotropic (b == 0, a == d) rounding can
+    // still make the chosen row the zero vector — normalize() would return
+    // NaN and the splat would silently vanish. Fall back to the
     // axis-aligned eigenvectors in that case.
-    vec2 ev = vec2(b, l1 - a);
+    vec2 ev = abs(l1 - a) >= abs(l1 - d) ? vec2(b, l1 - a) : vec2(l1 - d, b);
     vec2 e1 = dot(ev, ev) > 0.0 ? normalize(ev)
                                 : (a >= d ? vec2(1.0, 0.0) : vec2(0.0, 1.0));
     vec2 e2 = vec2(-e1.y, e1.x);

@@ -8,6 +8,7 @@
 
 #include <glad/gl.h>
 
+#include <cassert>
 #include <cstring>
 #include <string>
 
@@ -56,6 +57,14 @@ inline std::string withUserChunk(const char* src, const std::string& chunk,
     size_t m = s.find(marker);
     if (m != std::string::npos) {
         s.replace(m, std::strlen(marker), "\n" + chunk + "\n");
+    } else {
+        // A missing marker means the shader source was edited without
+        // keeping the splice point — the user's chunk would be silently
+        // dropped. Make it loud (and fatal in Debug).
+        LOG_ERROR("withUserChunk: \"%s\" marker not found — user %s chunk "
+                  "dropped (shader source edited without the marker?)",
+                  marker, defineName);
+        assert(!"withUserChunk: __USER_CHUNK__ marker missing");
     }
     return s;
 }

@@ -75,43 +75,6 @@ std::string resolveAppPath(const std::string& src) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-static bromath::Color parseColorProp(JSContext* ctx, JSValueConst obj, const char* prop) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    bromath::Color8 p{255, 255, 255, 255};
-    if (JS_IsString(v)) {
-        parseColor(jsStr(ctx, v), p.r, p.g, p.b, p.a);
-    } else if (JS_IsObject(v)) {
-        p.r = (uint8_t)qjsbind::get_prop_number(ctx, v, "r", 255);
-        p.g = (uint8_t)qjsbind::get_prop_number(ctx, v, "g", 255);
-        p.b = (uint8_t)qjsbind::get_prop_number(ctx, v, "b", 255);
-        p.a = (uint8_t)qjsbind::get_prop_number(ctx, v, "a", 255);
-    }
-    JS_FreeValue(ctx, v);
-    return bromath::cfromColor8(p);
-}
-
-// ---------------------------------------------------------------------------
-// Shape / Physics helpers (cast node to subclass)
-// ---------------------------------------------------------------------------
-
-static scene::ShapeNode* asShape(JSContext* ctx, JSValueConst val) {
-    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, val);
-    if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Shape)
-        return static_cast<scene::ShapeNode*>(w->node());
-    return nullptr;
-}
-
-static scene::PhysicsNode* asPhysics(JSContext* ctx, JSValueConst val) {
-    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, val);
-    if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Physics)
-        return static_cast<scene::PhysicsNode*>(w->node());
-    return nullptr;
-}
-
-// ---------------------------------------------------------------------------
 // SceneNode raw methods (complex arg handling — kept as standalone functions)
 // ---------------------------------------------------------------------------
 

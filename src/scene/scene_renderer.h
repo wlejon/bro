@@ -4,6 +4,8 @@
 
 #include <bromath/frustum.h>
 
+#include "scene/light_node.h"
+
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -15,7 +17,6 @@ class SceneGraph;
 class SceneNode;
 class MeshNode;
 class InstancedMeshNode;
-class LightNode;
 class Particles3DNode;
 struct CustomShaderState;
 
@@ -316,6 +317,12 @@ private:
 
     // --- Light collection (rebuilt per frame) ---
     void collectLights(std::vector<LightNode*>& out) const;
+
+    // Implicit directional sun used when the scene declares no lights, so
+    // meshes are never pitch black. Per-renderer (configured once in the
+    // constructor, never mutated afterwards) — a shared process-global would
+    // be mutable state crossing renderer instances.
+    LightNode implicitSun_;
 
     // Bundle of uniform locations the lighting/shadow/IBL upload pokes at.
     // One instance is filled in for the regular mesh program and another for
