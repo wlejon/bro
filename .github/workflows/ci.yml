@@ -22,6 +22,10 @@ env:
   # this pins the vcpkg tool + scripts to the same commit (the runner's
   # preinstalled vcpkg drifts with every image update).
   VCPKG_COMMIT: 0b88aacde46a853151730fbe7d0b7ee45f4b6864
+  # Persist the sccache object cache in the GitHub Actions cache across runs.
+  # Without this sccache silently falls back to per-runner LOCAL DISK, which is
+  # wiped between runs — 0% hits, every object recompiled (measured 0/1220).
+  SCCACHE_GHA_ENABLED: "true"
 
 jobs:
   build:
@@ -63,6 +67,22 @@ jobs:
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.10
 
+      # Persist vcpkg's built-package archives across runs. The pinned manifest
+      # keeps package ABIs stable, so after one warm run the configure-time dep
+      # install restores zips in seconds instead of building protobuf/openssl/
+      # GNS from source (15-30 min). The key is unique per run and restore-keys
+      # pick the newest prior cache: this way a run that had to rebuild
+      # anything (e.g. a runner-image compiler bump changed ABIs) saves the new
+      # archives instead of hitting the "exact key exists, skip save" trap.
+      - name: vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/vcpkg-bincache
+          key: vcpkg-bin-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}
+          restore-keys: |
+            vcpkg-bin-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}-
+            vcpkg-bin-${{ matrix.triplet }}-
+
       # Dependencies (gamenetworkingsockets, libvpx, libwebm, opus,
       # recastnavigation + transitives) come from vcpkg.json, pinned by its
       # builtin-baseline; the vcpkg toolchain installs them during CMake
@@ -78,18 +98,37 @@ jobs:
           else
             "$RUNNER_TEMP/vcpkg/bootstrap-vcpkg.sh" -disableMetrics
           fi
+          mkdir -p "$RUNNER_TEMP/vcpkg-bincache"
           echo "VCPKG_ROOT=$RUNNER_TEMP/vcpkg" >> "$GITHUB_ENV"
+          echo "VCPKG_DEFAULT_BINARY_CACHE=$RUNNER_TEMP/vcpkg-bincache" >> "$GITHUB_ENV"
+
+      # Put cl.exe on PATH so Windows can use the Ninja generator below — the
+      # default Visual Studio generator ignores CMAKE_*_COMPILER_LAUNCHER, so
+      # sccache would see zero compiles (same setup as nightly.yml).
+      - name: MSVC dev environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
       - name: Configure
         shell: bash
         run: |
+          GEN_ARGS=""
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Ninja (with the MSVC env set above) so the sccache compiler
+            # launcher is actually honored. Embedded debug info (/Z7) instead
+            # of a separate PDB (/Zi) is what lets sccache cache MSVC objects.
+            GEN_ARGS="-G Ninja -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded"
+          fi
           cmake -B build \
             -DBRO_PROFILE=app \
             -DBROGAMEAGENT_WITH_NAVMESH=ON \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
+            -DCMAKE_CXX_COMPILER_LAUNCHER=sccache \
+            $GEN_ARGS
 
       - name: Build
         # Bounded jobs: a bare --parallel passes unlimited -j to make and OOM-kills
