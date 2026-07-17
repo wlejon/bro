@@ -252,11 +252,18 @@ public:
 
     /// Install user shader chunks (either may be empty, not both — callers
     /// validate). Replaces any previous shader; uniform values reset.
+    /// Bumps the change generation: a vertex chunk changes the shadow
+    /// silhouette, and clearing one must invalidate tiles that still hold
+    /// the displaced depth.
     void setCustomShader(std::string vertexChunk, std::string fragmentChunk) {
         customShader_ = CustomShaderState::make(std::move(vertexChunk),
                                                 std::move(fragmentChunk));
+        bumpChangeGeneration();
     }
-    void clearCustomShader() { customShader_.reset(); }
+    void clearCustomShader() {
+        customShader_.reset();
+        bumpChangeGeneration();
+    }
     bool hasCustomShader() const { return customShader_ != nullptr; }
     const CustomShaderState* customShader() const { return customShader_.get(); }
 

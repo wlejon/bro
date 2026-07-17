@@ -27,6 +27,7 @@ void InstancedMeshNode::setMesh(const bromesh::MeshData& mesh) {
     meshDirty_ = true;
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
     instanceBoundsDirty_ = true;
+    bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
 }
 
 void InstancedMeshNode::setMesh(bromesh::MeshData&& mesh) {
@@ -35,6 +36,7 @@ void InstancedMeshNode::setMesh(bromesh::MeshData&& mesh) {
     meshDirty_ = true;
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
     instanceBoundsDirty_ = true;
+    bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
 }
 
 void InstancedMeshNode::setInstances(const float* data, size_t count) {
@@ -42,6 +44,7 @@ void InstancedMeshNode::setInstances(const float* data, size_t count) {
     instanceCount_ = count;
     instancesDirty_ = true;
     instanceBoundsDirty_ = true;
+    bumpChangeGeneration();  // instance set changed — shadow tiles must re-render
 }
 
 void InstancedMeshNode::setInstancesFromPosQuatScale(const float* data, size_t count) {
@@ -81,6 +84,7 @@ void InstancedMeshNode::setInstancesFromPosQuatScale(const float* data, size_t c
     }
     instancesDirty_ = true;
     instanceBoundsDirty_ = true;
+    bumpChangeGeneration();  // instance set changed — shadow tiles must re-render
 }
 
 void InstancedMeshNode::updateInstance(size_t i, const float* data16) {
@@ -88,6 +92,7 @@ void InstancedMeshNode::updateInstance(size_t i, const float* data16) {
     std::memcpy(instanceData_.data() + i * 16, data16, sizeof(float) * 16);
     instancesDirty_ = true;
     instanceBoundsDirty_ = true;
+    bumpChangeGeneration();  // instance set changed — shadow tiles must re-render
 }
 
 void InstancedMeshNode::releaseGL() {

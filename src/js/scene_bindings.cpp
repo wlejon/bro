@@ -239,6 +239,9 @@ static JSValue js_sg_cullStats(JSContext* ctx, JSValueConst this_val, int, JSVal
     num("billboardsCulled", s.billboardsCulled);
     num("shadowDrawn", s.shadowDrawn);
     num("shadowCulled", s.shadowCulled);
+    num("shadowTilesTotal", s.shadowTilesTotal);
+    num("shadowTilesRendered", s.shadowTilesRendered);
+    num("shadowTilesCached", s.shadowTilesCached);
     return o;
 }
 
@@ -1208,6 +1211,9 @@ void SceneBindings::install(JSContext* ctx) {
         .prop("frustumCulling",
             [](GraphWrapper* w) -> bool { return w && w->graph() ? w->graph()->frustumCulling() : true; },
             [](GraphWrapper* w, bool val) { if (w && w->graph()) w->graph()->setFrustumCulling(val); })
+        .prop("shadowCache",
+            [](GraphWrapper* w) -> bool { return w && w->graph() ? w->graph()->shadowCache() : true; },
+            [](GraphWrapper* w, bool val) { if (w && w->graph()) w->graph()->setShadowCache(val); })
         .prop("renderScale",
             [](GraphWrapper* w) -> double { return w && w->graph() ? w->graph()->renderScale() : 1.0; },
             [](GraphWrapper* w, double val) { if (w && w->graph()) w->graph()->setRenderScale((float)val); })
@@ -1233,6 +1239,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setAmbient", js_sg_setAmbient, 1)
         .method_raw("setWind", js_sg_setWind, 1)
         .method_raw("setShadowQuality", js_sg_setShadowQuality, 1)
+        .method_raw("setShadowCache", js_sg_setShadowCache, 1)
         .method_raw("createTerrain", js_sg_createTerrain, 1)
         .method_raw("createTileWorld", js_sg_createTileWorld, 1)
         .method_raw("findById", js_sg_findById, 1)

@@ -105,6 +105,10 @@ void SceneRenderer::ensureShadowAtlas() {
     destroyShadowAtlas();
     shadowAtlasAllocated_ = shadowAtlasSize_;
     shadowAtlasDirty_ = false;
+    // Fresh texture = garbage texels; nothing cached survives, and the pass
+    // must start from a full clear before any per-tile reuse.
+    invalidateShadowCache();
+    shadowAtlasNeedsClear_ = true;
 
     glGenTextures(1, &shadowAtlasTex_);
     glBindTexture(GL_TEXTURE_2D, shadowAtlasTex_);
@@ -143,6 +147,7 @@ void SceneRenderer::destroyShadowAtlas() {
     if (shadowAtlasFBO_) { glDeleteFramebuffers(1, &shadowAtlasFBO_); shadowAtlasFBO_ = 0; }
     if (shadowAtlasTex_) { glDeleteTextures(1, &shadowAtlasTex_); shadowAtlasTex_ = 0; }
     shadowAtlasAllocated_ = 0;
+    invalidateShadowCache();
 }
 
 SceneRenderer::WorldAABB SceneRenderer::computeShadowCasterBounds() const {
@@ -547,40 +552,9 @@ void SceneRenderer::renderShadowPass() {
     ensureShadowAtlas();
     if (!shadowProgram_ || !shadowAtlasFBO_) return;
     const bool hasInstancedCasters = !shadowInstancedCasters_.empty();
-    if (hasInstancedCasters) ensureShadowInstancedPipeline();
     const bool hasSkinnedCasters = !shadowSkinnedCasters_.empty();
-    if (hasSkinnedCasters) ensureShadowSkinnedPipeline();
     const bool hasCustomCasters = !shadowCustomCasters_.empty();
     const bool hasSkinnedCustomCasters = !shadowSkinnedCustomCasters_.empty();
-    // Custom casters whose shadow variant failed to compile (cached failure
-    // in ensureCustomShadowProgram) fall back to the default depth programs.
-    if (hasSkinnedCustomCasters) ensureShadowSkinnedPipeline();
-
-    glBindFramebuffer(GL_FRAMEBUFFER, shadowAtlasFBO_);
-    glViewport(0, 0, shadowAtlasSize_, shadowAtlasSize_);
-    glDisable(GL_BLEND);
-    glDisable(GL_SCISSOR_TEST);
-    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-    glDepthMask(GL_TRUE);
-    glClear(GL_DEPTH_BUFFER_BIT);
-    glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
-
-    // Front-face culling reduces self-shadow acne on closed convex meshes
-    // because back-faces (relative to the light) carry the depth value used
-    // for comparison. Opens up a peter-panning risk on thin geometry — the
-    // normal-bias + constant bias compensate.
-    glEnable(GL_CULL_FACE);
-    glCullFace(GL_FRONT);
-
-    // Slope-scaled depth bias shifts stored depth values away from the light
-    // proportional to surface slope. This is the big hammer for self-shadow
-    // acne — constant/normal bias alone can't cover the full dynamic range
-    // of slopes a directional light sees across the scene.
-    glEnable(GL_POLYGON_OFFSET_FILL);
-    glPolygonOffset(2.0f, 4.0f);
-
-    glUseProgram(shadowProgram_);
 
     const int tileSize = shadowAtlasSize_ / 4;  // matches gridDim in prepareShadows
 
@@ -606,6 +580,120 @@ void SceneRenderer::renderShadowPass() {
         cache(shadowSkinnedCustomCasters_, skinnedCustomBounds);
         cache(shadowInstancedCasters_, instBounds);
     }
+
+    // Tile frustums, shared by the cache-signature build below and the
+    // per-caster cull in the draw loop.
+    Mat4 tileVP[kMaxShadowTiles];
+    bromath::Frustum tileFrustum[kMaxShadowTiles];
+    for (int slot = 0; slot < shadowTileCount_; ++slot) {
+        std::memcpy(tileVP[slot].data, shadowRenderMatrix_[slot], sizeof(float) * 16);
+        if (cullingActive_) tileFrustum[slot] = bromath::ffromViewProj(tileVP[slot]);
+    }
+
+    // --- Static shadow-tile cache decision -------------------------------
+    // A tile's depth content is a pure function of its lightVP matrix and
+    // the (geometry, world transform) of every caster overlapping its
+    // frustum — so it can be reused verbatim when neither changed. The
+    // signature is the ordered (node id, change generation) list of
+    // overlapping casters with per-list separators; conservative-correct:
+    // any membership or generation difference re-renders, and tiles touched
+    // by skinned or custom-vertex casters (pose/displacement changes with
+    // no generation signal) are permanently dynamic. Directional cascades
+    // fold camera motion into lightVP (the fit follows the camera), so they
+    // only cache while the camera is still; spot/point tiles are camera-
+    // independent and cache across any camera movement.
+    cullStats_.shadowTilesTotal += shadowTileCount_;
+    const bool fullClear = shadowAtlasNeedsClear_ || !shadowCacheEnabled_;
+    bool renderSlot[kMaxShadowTiles] = {};
+    bool anyRender = false;
+    if (!shadowCacheEnabled_) {
+        for (int slot = 0; slot < shadowTileCount_; ++slot) renderSlot[slot] = true;
+        anyRender = true;
+        cullStats_.shadowTilesRendered += shadowTileCount_;
+    } else {
+        std::vector<std::pair<uint32_t, uint64_t>> sig;
+        for (int slot = 0; slot < shadowTileCount_; ++slot) {
+            sig.clear();
+            bool dynamic = false;
+            auto addList = [&](const auto& casters,
+                               const std::vector<CasterBounds>& bounds,
+                               uint64_t listTag, bool listDynamic) {
+                sig.emplace_back(0u, listTag);  // separator — node ids start at 1
+                for (size_t i = 0; i < casters.size(); ++i) {
+                    if (cullingActive_ && bounds[i].valid &&
+                        !bromath::fintersects(tileFrustum[slot], bounds[i].box))
+                        continue;
+                    sig.emplace_back(casters[i]->id(),
+                                     casters[i]->changeGeneration());
+                    if (listDynamic) dynamic = true;
+                }
+            };
+            addList(shadowCasters_,              staticBounds,        1, false);
+            addList(shadowSkinnedCasters_,       skinnedBounds,       2, true);
+            addList(shadowCustomCasters_,        customBounds,        3, true);
+            addList(shadowSkinnedCustomCasters_, skinnedCustomBounds, 4, true);
+            addList(shadowInstancedCasters_,     instBounds,          5, false);
+
+            ShadowTileCacheEntry& e = shadowTileCache_[slot];
+            const uint32_t lightId = shadowTileLight_[slot]->id();
+            if (!fullClear && !dynamic && e.valid && e.lightId == lightId &&
+                std::memcmp(e.lightVP, shadowRenderMatrix_[slot],
+                            sizeof(e.lightVP)) == 0 &&
+                e.casters == sig) {
+                // Atlas texels already hold exactly this content; the FS
+                // sampling matrices were refreshed by prepareShadows.
+                cullStats_.shadowTilesCached++;
+                continue;
+            }
+            renderSlot[slot] = true;
+            anyRender = true;
+            cullStats_.shadowTilesRendered++;
+            // Record what the tile is about to contain. Dynamic tiles never
+            // validate — their casters mutate without a generation bump.
+            e.valid = !dynamic;
+            e.lightId = lightId;
+            std::memcpy(e.lightVP, shadowRenderMatrix_[slot], sizeof(e.lightVP));
+            e.casters = sig;
+        }
+    }
+    if (!anyRender) return;  // every tile reused — no GL work at all
+
+    if (hasInstancedCasters) ensureShadowInstancedPipeline();
+    if (hasSkinnedCasters) ensureShadowSkinnedPipeline();
+    // Custom casters whose shadow variant failed to compile (cached failure
+    // in ensureCustomShadowProgram) fall back to the default depth programs.
+    if (hasSkinnedCustomCasters) ensureShadowSkinnedPipeline();
+
+    glBindFramebuffer(GL_FRAMEBUFFER, shadowAtlasFBO_);
+    glViewport(0, 0, shadowAtlasSize_, shadowAtlasSize_);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+    glDepthMask(GL_TRUE);
+    if (fullClear) {
+        glClear(GL_DEPTH_BUFFER_BIT);
+        shadowAtlasNeedsClear_ = false;
+    }
+    // Cached path clears per tile (scissored) in the loop below, so
+    // neighbouring reused tiles keep their depth.
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LESS);
+
+    // Front-face culling reduces self-shadow acne on closed convex meshes
+    // because back-faces (relative to the light) carry the depth value used
+    // for comparison. Opens up a peter-panning risk on thin geometry — the
+    // normal-bias + constant bias compensate.
+    glEnable(GL_CULL_FACE);
+    glCullFace(GL_FRONT);
+
+    // Slope-scaled depth bias shifts stored depth values away from the light
+    // proportional to surface slope. This is the big hammer for self-shadow
+    // acne — constant/normal bias alone can't cover the full dynamic range
+    // of slopes a directional light sees across the scene.
+    glEnable(GL_POLYGON_OFFSET_FILL);
+    glPolygonOffset(2.0f, 4.0f);
+
+    glUseProgram(shadowProgram_);
 
     // Resolve each custom caster's shadow-variant entry once per frame, not
     // per tile — the cache key embeds the full chunk source, so a per-tile
@@ -635,23 +723,26 @@ void SceneRenderer::renderShadowPass() {
         resolveEntries(shadowSkinnedCustomCasters_, skinnedCustomEntries, true);
 
     for (int slot = 0; slot < shadowTileCount_; ++slot) {
+        if (!renderSlot[slot]) continue;  // tile reused from a previous frame
         int gx = slot % 4;
         int gy = slot / 4;
         glViewport(gx * tileSize, gy * tileSize, tileSize, tileSize);
-        // Scissor the clear so previous frames in other tiles aren't wiped.
-        // (The full-FBO clear above handles cold start; per-tile work would
-        // skip it once we cache static shadows. Not yet.)
+        if (!fullClear) {
+            // Scissored per-tile clear: only re-rendered tiles are wiped;
+            // cached neighbours keep their depth. Same clear value as the
+            // full clear, so the two paths are pixel-identical.
+            glEnable(GL_SCISSOR_TEST);
+            glScissor(gx * tileSize, gy * tileSize, tileSize, tileSize);
+            glClear(GL_DEPTH_BUFFER_BIT);
+        }
 
         // shadowRenderMatrix_ holds lightProj*lightView in WORLD space.
         // Per-mesh: uMVP = renderMatrix * meshWorldModel.
-        Mat4 lightVP;
-        std::memcpy(lightVP.data, shadowRenderMatrix_[slot], sizeof(float) * 16);
+        const Mat4& lightVP = tileVP[slot];
 
-        bromath::Frustum tileFrustum;
-        if (cullingActive_) tileFrustum = bromath::ffromViewProj(lightVP);
         auto tileCulled = [&](const std::vector<CasterBounds>& bounds, size_t i) {
             if (!cullingActive_ || !bounds[i].valid) return false;
-            return !bromath::fintersects(tileFrustum, bounds[i].box);
+            return !bromath::fintersects(tileFrustum[slot], bounds[i].box);
         };
 
         for (size_t i = 0; i < shadowCasters_.size(); ++i) {
@@ -762,6 +853,7 @@ void SceneRenderer::renderShadowPass() {
         }
     }
 
+    glDisable(GL_SCISSOR_TEST);
     glDisable(GL_POLYGON_OFFSET_FILL);
     glPolygonOffset(0.0f, 0.0f);
     glCullFace(GL_BACK);

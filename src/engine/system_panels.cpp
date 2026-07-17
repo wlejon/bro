@@ -1057,6 +1057,9 @@ void Engine::updateSystemPerf(double fps, double frameTime, double js, double la
             snum("billboardsCulled", cull.billboardsCulled);
             snum("shadowDrawn",      cull.shadowDrawn);
             snum("shadowCulled",     cull.shadowCulled);
+            snum("shadowTilesTotal",    cull.shadowTilesTotal);
+            snum("shadowTilesRendered", cull.shadowTilesRendered);
+            snum("shadowTilesCached",   cull.shadowTilesCached);
             JS_SetPropertyStr(ctx, doc.broPerfObj, "scene", sc);
         }
 #endif

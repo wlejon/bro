@@ -44,7 +44,21 @@ public:
 
     // --- Visibility ---
     bool visible() const { return visible_; }
-    void setVisible(bool v) { visible_ = v; }
+    void setVisible(bool v) {
+        if (v != visible_) { visible_ = v; ++changeGeneration_; }
+    }
+
+    // --- Change generation ---
+    /// Monotonic per-node mutation counter. Bumped by every transform set
+    /// (markDirty, including parent-transform propagation), visibility
+    /// toggle, and content mutation in subclasses (mesh swap, instance
+    /// updates, custom-shader install). Consumers snapshot (id, generation)
+    /// pairs and compare later: a mismatch means "this node may render
+    /// differently now" — the shadow-tile cache keys on it. Never reset.
+    uint64_t changeGeneration() const { return changeGeneration_; }
+    /// For subclasses/owners mutating renderable content outside the
+    /// transform setters (e.g. setMesh, setInstances).
+    void bumpChangeGeneration() { ++changeGeneration_; }
 
     // --- Hierarchy ---
     SceneNode* parent() const { return parent_; }
@@ -106,6 +120,7 @@ private:
     bromath::Quat rotation_;
     bromath::Vec3 scale_{1, 1, 1};
     bool visible_ = true;
+    uint64_t changeGeneration_ = 1;
 
     SceneNode* parent_ = nullptr;
     std::vector<SceneNode*> children_;

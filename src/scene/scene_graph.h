@@ -379,6 +379,14 @@ public:
     int shadowAtlasSize() const { return renderer_.shadowAtlasSize(); }
     int shadowPCFTaps() const { return renderer_.shadowPCFTaps(); }
 
+    /// Static shadow-tile cache (default on): atlas tiles whose light
+    /// projection and overlapping caster set are unchanged are reused
+    /// instead of re-rendered. Strictly conservative — pixels are identical
+    /// either way — so the toggle exists for debugging and bisecting.
+    /// See SceneRenderer::setShadowCache.
+    void setShadowCache(bool on) { renderer_.setShadowCache(on); }
+    bool shadowCache() const { return renderer_.shadowCacheEnabled(); }
+
     /// Editor affordance: when true, every LightNode renders a small
     /// kind-specific marker billboard at its world position (visible in
     /// the 3D FBO, depth-tested against geometry). Also makes lights

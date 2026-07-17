@@ -776,8 +776,11 @@ scene::CullStats Engine::sceneCullStats() const {
         sum.particlesCulled  += s.particlesCulled;
         sum.billboardsDrawn  += s.billboardsDrawn;
         sum.billboardsCulled += s.billboardsCulled;
-        sum.shadowDrawn      += s.shadowDrawn;
-        sum.shadowCulled     += s.shadowCulled;
+        sum.shadowDrawn         += s.shadowDrawn;
+        sum.shadowCulled        += s.shadowCulled;
+        sum.shadowTilesTotal    += s.shadowTilesTotal;
+        sum.shadowTilesRendered += s.shadowTilesRendered;
+        sum.shadowTilesCached   += s.shadowTilesCached;
     }
     return sum;
 }

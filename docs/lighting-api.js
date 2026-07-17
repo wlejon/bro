@@ -321,6 +321,40 @@ scene.setEnvironment(null);
 //     atlasSize: 1024 / 2048 / 4096 / 8192 (square depth texture side).
 //     pcfTaps: 1 (single sample, hard edges) or 3 (3x3 kernel, default).
 //
+// Static shadow-tile cache (default ON):
+//
+//   Atlas tiles are only re-rendered when their content could have changed.
+//   A tile is reused verbatim when the owning light's shadow projection is
+//   unchanged AND the set of shadow casters overlapping the light's frustum
+//   is unchanged (no transform/geometry/visibility change, no add/remove).
+//   Change detection is conservative-correct — any doubt re-renders — so
+//   output pixels are IDENTICAL with the cache on or off; it is pure perf.
+//
+//   What caches when:
+//     spot / point   — camera-independent: fully cached on static scenes,
+//                      regardless of camera movement. The big win.
+//     directional    — the cascade fit follows the camera, so cascades cache
+//                      only while the camera is still (menus, idle scenes,
+//                      fixed-camera games).
+//     skinned / custom-vertex-shader casters — permanently dynamic: every
+//                      tile they overlap re-renders every frame (their pose/
+//                      displacement changes without a scene-graph signal).
+//
+//   Partial invalidation: a single moving caster re-renders only the tiles
+//   whose light frustum its bounds overlap — other lights' tiles stay
+//   cached. Moving or reconfiguring a light (position, direction, range,
+//   outerAngle, cascade count) invalidates that light's tiles only.
+//
+//   scene.setShadowCache({ enabled })   // or: scene.shadowCache = bool
+//     Escape hatch for debugging/bisecting (also gives exact per-frame
+//     shadowDrawn counts, since cached tiles submit no casters).
+//
+//   Per-frame counters in scene.cullStats() / perf.stats().scene:
+//     shadowTilesTotal     — atlas tiles allocated this frame
+//     shadowTilesRendered  — tiles actually re-rendered
+//     shadowTilesCached    — tiles reused from the previous render
+//   A fully cached frame reports shadowDrawn 0 (nothing submitted).
+//
 // Example — sun + a couple of accent lamps casting shadows:
 //
 //   const sun = scene.createLight({ type:'directional', direction:[-0.4,-1,-0.2] });

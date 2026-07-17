@@ -29,6 +29,7 @@ void MeshNode::setMesh(const bromesh::MeshData& mesh) {
     gpuDirty_ = true;
     bvhDirty_ = true;
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
+    bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
 }
 
 void MeshNode::setMesh(bromesh::MeshData&& mesh) {
@@ -37,6 +38,7 @@ void MeshNode::setMesh(bromesh::MeshData&& mesh) {
     gpuDirty_ = true;
     bvhDirty_ = true;
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
+    bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
 }
 
 const bromesh::MeshBVH& MeshNode::bvh() const {
@@ -292,6 +294,7 @@ void MeshNode::setDrawMode(DrawMode m) {
         unlit_ = true;
         castsShadow_ = false;
     }
+    bumpChangeGeneration();  // primitive mode changes the rendered silhouette
 }
 
 } // namespace bro::scene

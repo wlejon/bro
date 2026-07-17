@@ -1160,6 +1160,9 @@ static JSValue js_perf_stats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
         snum("billboardsCulled", s.billboardsCulled);
         snum("shadowDrawn", s.shadowDrawn);
         snum("shadowCulled", s.shadowCulled);
+        snum("shadowTilesTotal", s.shadowTilesTotal);
+        snum("shadowTilesRendered", s.shadowTilesRendered);
+        snum("shadowTilesCached", s.shadowTilesCached);
         JS_SetPropertyStr(ctx, o, "scene", sc);
     }
 #endif

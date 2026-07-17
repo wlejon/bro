@@ -210,6 +210,10 @@ if (!probe.scene) {
                                       color: [1, 1, 1], intensity: 3 });
         sun.castsShadow = true;
         sun.cascadeCount = 1;   // one atlas tile -> exact shadowDrawn counts
+        // The static shadow-tile cache would legitimately skip re-rendering
+        // this tile on later identical frames (shadowDrawn 0) — disable it
+        // so every capture submits casters and the exact counts hold.
+        scn.setShadowCache({ enabled: false });
 
         // Caster: a slab 20 units above the ground, far outside the camera
         // frustum, straight-down sun -> its shadow covers the view center.

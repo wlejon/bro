@@ -67,8 +67,26 @@ class SceneGraph {
   setFrustumCulling(on) {}
 
   /**
+   * Static shadow-tile cache (default true). Atlas tiles whose light
+   * projection and overlapping caster set are unchanged are reused instead
+   * of re-rendered — strictly conservative, so pixels are identical either
+   * way. See the Shadows section of docs/lighting-api.js for what caches
+   * when (spot/point: camera-independent; directional cascades: only while
+   * the camera is still; skinned/custom-vertex casters: never).
+   * Also settable via `setShadowCache({enabled})`.
+   */
+  get shadowCache() {}
+  set shadowCache(on) {}
+
+  /** Method form of the `shadowCache` property. @param {{enabled:boolean}} opts */
+  setShadowCache(opts) {}
+
+  /**
    * Per-category drawn/culled counters from this graph's most recent
-   * rendered frame. Shadow counts are per caster x atlas tile. The same
+   * rendered frame. Shadow counts are per caster x atlas tile; a shadow
+   * tile reused by the shadow cache submits no casters (shadowDrawn 0 on a
+   * fully cached frame). shadowTilesTotal/Rendered/Cached break down the
+   * atlas tiles allocated this frame into re-rendered vs reused. The same
    * counters, summed across all scene graphs, appear as `perf.stats().scene`
    * in headless.
    *
@@ -77,7 +95,9 @@ class SceneGraph {
    *            splatDrawn:number, splatCulled:number,
    *            particlesDrawn:number, particlesCulled:number,
    *            billboardsDrawn:number, billboardsCulled:number,
-   *            shadowDrawn:number, shadowCulled:number}}
+   *            shadowDrawn:number, shadowCulled:number,
+   *            shadowTilesTotal:number, shadowTilesRendered:number,
+   *            shadowTilesCached:number}}
    */
   cullStats() {}
 

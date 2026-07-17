@@ -109,6 +109,13 @@ void SceneNode::traverse(const std::function<void(SceneNode*)>& fn) {
 }
 
 void SceneNode::markDirty() {
+    // Always bump the mutation counter, even when already dirty: consumers
+    // (shadow-tile cache) compare generations captured at render time, and
+    // rendering computes worldMatrix() which clears dirty_ — so the first
+    // post-render mutation always lands a bump. Propagation may stop at
+    // already-dirty children: a dirty child implies its whole subtree is
+    // dirty and none of it was captured since its last bump.
+    ++changeGeneration_;
     if (dirty_) return;
     dirty_ = true;
     for (auto* child : children_) {

@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace bro::scene {
@@ -32,6 +33,11 @@ struct CullStats {
     int particlesDrawn = 0,  particlesCulled = 0;
     int billboardsDrawn = 0, billboardsCulled = 0;
     int shadowDrawn = 0,     shadowCulled = 0;
+    // Shadow-tile cache counters: tiles allocated this frame, tiles actually
+    // re-rendered, and tiles reused from the atlas (skipped entirely). A
+    // cached tile contributes nothing to shadowDrawn/shadowCulled — no
+    // casters are submitted for it.
+    int shadowTilesTotal = 0, shadowTilesRendered = 0, shadowTilesCached = 0;
 };
 
 /// GL renderer for a SceneGraph's 3D content. Owns every GPU resource the
@@ -196,6 +202,23 @@ public:
     }
     int shadowAtlasSize() const { return shadowAtlasSize_; }
     int shadowPCFTaps() const { return shadowPCFTaps_; }
+
+    /// Static shadow-tile cache (default on). When enabled, an atlas tile is
+    /// only re-rendered when its content could have changed: the owning
+    /// light's projection moved (which for directional cascades includes any
+    /// camera motion — the cascade fit follows the camera), or the set of
+    /// casters overlapping the tile changed membership or mutated (transform,
+    /// geometry, visibility). Tiles overlapping skinned or custom-vertex
+    /// casters are permanently dynamic and re-render every frame. Strictly
+    /// conservative: pixels are identical with the cache on or off — the
+    /// escape hatch exists for debugging and regression bisecting.
+    void setShadowCache(bool on) {
+        if (on != shadowCacheEnabled_) {
+            shadowCacheEnabled_ = on;
+            invalidateShadowCache();
+        }
+    }
+    bool shadowCacheEnabled() const { return shadowCacheEnabled_; }
 
     void setShowLightIcons(bool on) { showLightIcons_ = on; }
     bool showLightIcons() const { return showLightIcons_; }
@@ -824,6 +847,34 @@ private:
     float shadowRenderMatrix_[kMaxShadowTiles][16] = {};
     // Which light owns each tile, for routing the caster draws.
     LightNode* shadowTileLight_[kMaxShadowTiles] = {};
+
+    // --- Static shadow-tile cache ---
+    // One entry per atlas tile, recording what the tile's depth content was
+    // rendered from: the owning light (by node id — ids are never reused),
+    // the exact world->clip matrix, and the ordered (node id, change
+    // generation) list of casters that overlapped the tile's frustum,
+    // interleaved with (0, listIndex) separators so a caster migrating
+    // between caster lists (e.g. custom shader cleared) never aliases an
+    // unchanged signature. renderShadowPass() skips the tile's clear + draws
+    // when the current signature is identical — any difference, or any
+    // overlapping skinned/custom-vertex caster (dynamic pose/displacement),
+    // re-renders. Entries survive frames where the tile isn't allocated
+    // (content is only overwritten by rendering, so entry <-> texel state
+    // stays in sync); atlas reallocation invalidates everything.
+    struct ShadowTileCacheEntry {
+        bool valid = false;
+        uint32_t lightId = 0;
+        float lightVP[16] = {};
+        std::vector<std::pair<uint32_t, uint64_t>> casters;
+    };
+    ShadowTileCacheEntry shadowTileCache_[kMaxShadowTiles];
+    bool shadowCacheEnabled_ = true;
+    // Freshly (re)allocated atlas texture holds garbage — force one full
+    // clear (and thus a full re-render) before any per-tile reuse.
+    bool shadowAtlasNeedsClear_ = true;
+    void invalidateShadowCache() {
+        for (auto& e : shadowTileCache_) e.valid = false;
+    }
 
     // Cache per-frame shadow caster list; rebuilt at top of prepareShadows.
     // Skinned casters render with the SKINNED shadow program so their

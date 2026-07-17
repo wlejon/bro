@@ -286,6 +286,7 @@ JSValue js_sg_setToneMap(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 JSValue js_sg_setAmbient(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setWind(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setShadowQuality(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_sg_setShadowCache(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setEnvironment(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setTiltShift(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);

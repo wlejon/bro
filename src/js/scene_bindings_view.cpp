@@ -455,6 +455,25 @@ JSValue js_sg_setShadowQuality(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+// setShadowCache({enabled}) — static shadow-tile cache escape hatch. Default
+// on; caching is strictly conservative (pixel-identical output), so this
+// exists for debugging, bisecting, and exact per-frame shadowDrawn counts.
+JSValue js_sg_setShadowCache(JSContext* ctx, JSValueConst this_val,
+                             int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1) return JS_UNDEFINED;
+    bool enabled = true;
+    if (JS_IsObject(argv[0])) {
+        JSValue v = JS_GetPropertyStr(ctx, argv[0], "enabled");
+        if (!JS_IsUndefined(v)) enabled = JS_ToBool(ctx, v);
+        JS_FreeValue(ctx, v);
+    } else {
+        enabled = JS_ToBool(ctx, argv[0]);
+    }
+    g->setShadowCache(enabled);
+    return JS_UNDEFINED;
+}
+
 // setEnvironment({hdr, intensity, rotation}) — load HDR equirectangular
 // environment map for skybox + IBL. Pass {hdr: ""} or null to clear.
 JSValue js_sg_setEnvironment(JSContext* ctx, JSValueConst this_val,
