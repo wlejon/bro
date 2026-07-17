@@ -932,6 +932,7 @@ void Engine::initAppRealm() {
         document_->setTransitionManager(&transitionManager_, engineNowMs_);
         animationManager_.setKeyframes(&document_->cascade().keyframes());
         document_->setAnimationManager(&animationManager_);
+        document_->setWebAnimationManager(&webAnimationManager_);
         document_->resolveStyles();
         document_->performLayout(static_cast<float>(viewportWidth_),
                                  static_cast<float>(contentHeight()), *textMetrics_);

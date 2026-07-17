@@ -35,6 +35,7 @@ add_library(bro_js STATIC
     element_bindings.cpp shadowroot_bindings.cpp document_bindings.cpp
     range_bindings.cpp selection_bindings.cpp
     custom_elements.cpp event_dispatch.cpp mutation_observer.cpp
+    web_animation_bindings.cpp
     canvas_bindings.cpp audio_bindings.cpp storage_bindings.cpp dialog_bindings.cpp
     webgl2_bindings.cpp
     webgl2_bindings_state.cpp

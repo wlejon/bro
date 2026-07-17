@@ -2,6 +2,7 @@
 #include "js/dom_bindings_internal.h"
 #include "js/custom_elements.h"
 #include "js/event_dispatch.h"
+#include "js/web_animation_bindings.h"
 #include "dom/document.h"
 #include "dom/event.h"
 #include "util/log.h"
@@ -205,6 +206,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     installStyleBindings(ctx);
     installRangeBindings(ctx);
     installSelectionBindings(ctx);
+    installWebAnimationBindings(ctx);
 
     // Wire Document's selectionchange callback through JS event dispatch.
     auto* doc = static_cast<bro::dom::Document*>(document_ptr);
@@ -255,6 +257,10 @@ void DomBindings::setEngine(JSContext* ctx, void* engine) {
 }
 
 void DomBindings::cleanup(JSContext* ctx) {
+    // Release the strong pins that keep running Animation wrappers alive for
+    // finish delivery — they must not survive into JS_FreeRuntime.
+    cleanupWebAnimationBindings(ctx);
+
     // Drop globalThis.__bro_elem_map, the element→wrapper cache. It is a strong
     // ref to every wrapper ever handed to script, so it has to go before the
     // runtime tears down or the wrappers (and the listener callbacks they hold)

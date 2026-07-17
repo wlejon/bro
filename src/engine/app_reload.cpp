@@ -182,6 +182,7 @@ void Engine::performAppReload() {
     layout::ElementRefAdapter::clearCache();
     transitionManager_.clearAll();
     animationManager_.clearAll();
+    webAnimationManager_.clearAll();
     // The cached base command buffer + promoted sets reference old Elements.
     promotedElements_.clear();
     basePromotedSet_.clear();

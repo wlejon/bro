@@ -19,6 +19,7 @@
 #include "js/timers.h"
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
+#include "js/web_animation_bindings.h"
 #include "js/worker.h"
 #include "js/steam_bindings.h"
 #include "js/wake_bindings.h"
@@ -85,7 +86,10 @@ void Engine::flush() {
         document_->setTransitionManager(&transitionManager_, engineNowMs_);
         animationManager_.setKeyframes(&document_->cascade().keyframes());
         document_->setAnimationManager(&animationManager_);
-        bool animActive = transitionManager_.tick(engineNowMs_) | animationManager_.tick(engineNowMs_);
+        document_->setWebAnimationManager(&webAnimationManager_);
+        bool animActive = transitionManager_.tick(engineNowMs_) |
+                          animationManager_.tick(engineNowMs_) |
+                          webAnimationManager_.tick(engineNowMs_);
         if (animActive) {
             // Paint-dirty, not layout-dirty: an active animation re-resolves its
             // element's style every frame regardless (resolveStylesRecursive's
@@ -193,6 +197,13 @@ void Engine::flush() {
             aevt.setElapsedTime(ev.elapsedTime);
             aevt.setIsTrusted(true);
             dispatchEvent(ev.element, aevt);
+        }
+        // element.animate() finishes → finished promise + onfinish.
+        if (jsRuntime_) {
+            auto fin = webAnimationManager_.takeFinishedEvents();
+            if (!fin.empty())
+                js::deliverWebAnimationFinishEvents(jsRuntime_->getContext(),
+                                                    std::move(fin));
         }
     }
 

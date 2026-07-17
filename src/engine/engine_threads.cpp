@@ -55,6 +55,7 @@ void Engine::layoutThreadFunc() {
             auto& kfs = document_->cascade().keyframes();
             animationManager_.setKeyframes(&kfs);
             document_->setAnimationManager(&animationManager_);
+            document_->setWebAnimationManager(&webAnimationManager_);
             int contentW = snap.vpWidth - snap.insetRight;
             int contentH = snap.vpHeight - snap.insetTop - snap.insetBottom;
 
@@ -82,7 +83,8 @@ void Engine::layoutThreadFunc() {
                                    contentW != lastLayoutContentW_ ||
                                    contentH != lastLayoutContentH_;
 
-            bool animActive = transitionManager_.tick(now) | animationManager_.tick(now);
+            bool animActive = transitionManager_.tick(now) | animationManager_.tick(now) |
+                              webAnimationManager_.tick(now);
 
             // Route this tick's active animations. An element whose active
             // animations/transitions are confined to transform/opacity becomes
@@ -94,7 +96,8 @@ void Engine::layoutThreadFunc() {
             // one place, after both have advanced.
             promotedElements_.clear();
             auto routePromotion = [&](dom::Element* e) {
-                if (isTransformOpacityOnly(e, animationManager_, transitionManager_))
+                if (isTransformOpacityOnly(e, animationManager_, transitionManager_,
+                                           webAnimationManager_))
                     promotedElements_.insert(e);
                 else {
                     // A non-promoted animation (width/left/color/…) can change
@@ -103,8 +106,9 @@ void Engine::layoutThreadFunc() {
                     layoutAffecting = true;
                 }
             };
-            for (auto* e : transitionManager_.activeThisTick()) routePromotion(e);
-            for (auto* e : animationManager_.activeThisTick())  routePromotion(e);
+            for (auto* e : transitionManager_.activeThisTick())   routePromotion(e);
+            for (auto* e : animationManager_.activeThisTick())    routePromotion(e);
+            for (auto* e : webAnimationManager_.activeThisTick()) routePromotion(e);
 
             layoutPipeline_->setAnimationsActive(animActive);
             layoutPipeline_->setPromotedActive(!promotedElements_.empty());

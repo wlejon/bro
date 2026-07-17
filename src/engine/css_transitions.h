@@ -19,6 +19,13 @@ namespace bro::engine {
 // parsed directly. Unknown / empty → "ease".
 bromath::CubicEase parseTimingFunction(const std::string& val);
 
+// CSS initial value for a property, shaped to match `refValue` where structure
+// matters (transform identities: "scale(1.4)" → "scale(1)"). Empty string when
+// no useful initial exists. Shared by the transition, CSS-animation, and Web
+// Animations (element.animate) interpolators for implicit endpoints.
+std::string cssInitialValueForProperty(const std::string& prop,
+                                       const std::string& refValue);
+
 // A single in-flight property transition.
 struct Transition {
     std::string property;

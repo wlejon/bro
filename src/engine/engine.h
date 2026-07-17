@@ -3,6 +3,7 @@
 #include "engine/app_loader.h"
 #include "util/asset_mounts.h"
 #include "engine/css_transitions.h"
+#include "engine/web_animations.h"
 #if BRO_WITH_3D
 #include "engine/gizmo.h"  // GizmoManager (3D-only; pulls scene::MeshNode)
 #endif
@@ -479,6 +480,10 @@ public:
     /// run on). Read-only from JS as bro.time.now.
     double timeNowMs() const { return engineNowMs_; }
 
+    /// Web Animations (element.animate) records — created/controlled by the
+    /// JS bindings, ticked/applied on the same seams as the CSS managers.
+    WebAnimationManager& webAnimationManager() { return webAnimationManager_; }
+
     /// 0 while paused, else timeScale_.
     double effectiveTimeScale() const { return timePaused_ ? 0.0 : timeScale_; }
 
@@ -841,6 +846,7 @@ private:
     std::unique_ptr<dom::Document> document_;
     TransitionManager transitionManager_;
     AnimationManager animationManager_;
+    WebAnimationManager webAnimationManager_;
 
     // Elements the layout-thread tick promoted to compositor layers this frame
     // (active transform/opacity-only animation/transition). Written by

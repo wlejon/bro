@@ -2,6 +2,7 @@
 #include "dom/range.h"
 #include "dom/selection.h"
 #include "engine/css_transitions.h"
+#include "engine/web_animations.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/layout_node_adapter.h"
 #include "css/parser.h"
@@ -597,7 +598,8 @@ void Document::resolveStylesRecursive(Element* elem,
     // and every animation froze on its first applied value.
     bool animatingSelf =
         (animationManager_ && animationManager_->hasActive(elem)) ||
-        (transitionManager_ && transitionManager_->hasActive(elem));
+        (transitionManager_ && transitionManager_->hasActive(elem)) ||
+        (webAnimationManager_ && webAnimationManager_->hasActive(elem));
 
     bool needsResolve = force || selDirty || hoverResolve || elem->isDirty() ||
                         elem->computedStyle().empty() || animatingSelf;
@@ -733,6 +735,12 @@ void Document::resolveStylesRecursive(Element* elem,
         // CSS animations: apply keyframe overrides
         if (animationManager_) {
             animationManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
+        }
+
+        // Web Animations (element.animate): script animations sit above both
+        // CSS transitions and CSS animations in composite order.
+        if (webAnimationManager_) {
+            webAnimationManager_->applyOverrides(elem, elem->computedStyleMut(), transitionTime_);
         }
 
         // ::before / ::after generated content is resolved in a separate pass

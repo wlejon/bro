@@ -33,6 +33,7 @@ add_library(bro_engine STATIC
     engine_threads.cpp
     engine_frame.cpp
     css_transitions.cpp
+    web_animations.cpp
     input_handling.cpp
     touch_input.cpp
     gamepad.cpp

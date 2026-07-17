@@ -17,7 +17,7 @@
 
 namespace bro::layout { class LayoutNodeAdapter; }
 namespace bro::render { class Renderer; }
-namespace bro::engine { class TransitionManager; class AnimationManager; }
+namespace bro::engine { class TransitionManager; class AnimationManager; class WebAnimationManager; }
 
 namespace bro::dom {
 
@@ -186,6 +186,9 @@ public:
     }
     void setAnimationManager(engine::AnimationManager* am) {
         animationManager_ = am;
+    }
+    void setWebAnimationManager(engine::WebAnimationManager* wam) {
+        webAnimationManager_ = wam;
     }
 
     // Perform layout on the tree using htmlayout
@@ -429,6 +432,7 @@ private:
     // CSS transitions and animations (optional, set by Engine)
     engine::TransitionManager* transitionManager_ = nullptr;
     engine::AnimationManager* animationManager_ = nullptr;
+    engine::WebAnimationManager* webAnimationManager_ = nullptr;
     double transitionTime_ = 0;
 
     // Root element (<html>) resolved font-size in px, captured while resolving

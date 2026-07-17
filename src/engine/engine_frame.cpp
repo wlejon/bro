@@ -13,6 +13,7 @@
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
 #include "js/net_bindings.h"
+#include "js/web_animation_bindings.h"
 #include "js/steam_bindings.h"
 #include "js/worker.h"
 #include "js/wake_bindings.h"
@@ -322,6 +323,13 @@ void Engine::run() {
                 aevt.setElapsedTime(ev.elapsedTime);
                 aevt.setIsTrusted(true);
                 dispatchEvent(ev.element, aevt);
+            }
+            // element.animate() finishes → finished promise + onfinish.
+            if (jsRuntime_) {
+                auto fin = webAnimationManager_.takeFinishedEvents();
+                if (!fin.empty())
+                    js::deliverWebAnimationFinishEvents(jsRuntime_->getContext(),
+                                                        std::move(fin));
             }
         }
 
@@ -732,6 +740,13 @@ void Engine::run() {
                     aevt.setElapsedTime(ev.elapsedTime);
                     aevt.setIsTrusted(true);
                     dispatchEvent(ev.element, aevt);
+                }
+                // element.animate() finishes → finished promise + onfinish.
+                if (jsRuntime_) {
+                    auto fin = webAnimationManager_.takeFinishedEvents();
+                    if (!fin.empty())
+                        js::deliverWebAnimationFinishEvents(
+                            jsRuntime_->getContext(), std::move(fin));
                 }
 
                 // Flush microtasks from event handlers (may have queued DOM mutations).

@@ -313,6 +313,11 @@ static std::string initialValueForProperty(const std::string& prop,
     return "";
 }
 
+std::string cssInitialValueForProperty(const std::string& prop,
+                                       const std::string& refValue) {
+    return initialValueForProperty(prop, refValue);
+}
+
 // ---------------------------------------------------------------------------
 // TransitionManager
 // ---------------------------------------------------------------------------
