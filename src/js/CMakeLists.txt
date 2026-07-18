@@ -53,6 +53,7 @@ add_library(bro_js STATIC
     scene_bindings.cpp
     scene_bindings_mesh.cpp
     scene_bindings_anim.cpp
+    scene_bindings_clip.cpp
     scene_bindings_fx.cpp
     scene_bindings_view.cpp
     mesh_bindings.cpp

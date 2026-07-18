@@ -290,6 +290,27 @@ void SceneGraph::tickAnimations(float dtSec) {
         }
     }
 
+    // Clip players tick after tweens, in creation order — the documented
+    // last-writer among the animation systems. Same snapshot + deferred
+    // sweep discipline as tweens (an event/finished callback may create or
+    // destroy players mid-pass); ids are sorted so unordered_map iteration
+    // order can't perturb the write order.
+    if (!clipPlayers_.empty()) {
+        auto& ids = clipPlayerIdScratch_;
+        ids.clear();
+        for (const auto& [id, _] : clipPlayers_) ids.push_back(id);
+        std::sort(ids.begin(), ids.end());
+        for (uint32_t id : ids) {
+            auto it = clipPlayers_.find(id);
+            if (it == clipPlayers_.end() || it->second->destroyed()) continue;
+            it->second->tick(dtSec, *this);
+        }
+        for (auto it = clipPlayers_.begin(); it != clipPlayers_.end();) {
+            if (it->second->destroyed()) it = clipPlayers_.erase(it);
+            else ++it;
+        }
+    }
+
     advanceWindTime(dtSec);
 
     // Derive the view from the active camera node AFTER animations/tweens,
@@ -311,6 +332,25 @@ Tween* SceneGraph::findTween(uint32_t id) const {
     auto it = tweens_.find(id);
     if (it == tweens_.end() || it->second->destroyed()) return nullptr;
     return it->second.get();
+}
+
+ClipPlayer* SceneGraph::createClipPlayer() {
+    uint32_t id = nextClipPlayerId_++;
+    auto player = std::make_unique<ClipPlayer>(id);
+    auto* ptr = player.get();
+    clipPlayers_[id] = std::move(player);
+    return ptr;
+}
+
+ClipPlayer* SceneGraph::findClipPlayer(uint32_t id) const {
+    auto it = clipPlayers_.find(id);
+    if (it == clipPlayers_.end() || it->second->destroyed()) return nullptr;
+    return it->second.get();
+}
+
+void SceneGraph::destroyClipPlayer(uint32_t id) {
+    auto it = clipPlayers_.find(id);
+    if (it != clipPlayers_.end()) it->second->markDestroyed();
 }
 
 void SceneGraph::destroyTween(uint32_t id) {

@@ -388,6 +388,56 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("resume", js_tween_resume, 0)
         .method_raw("destroy", js_tween_destroy, 0);
 
+    // --- AnimationPlayer class (data-driven clips; scene.createAnimationPlayer) ---
+    qjsbind::Class<ClipPlayerWrapper>(ctx, "AnimationPlayer")
+        .get("playing", [](ClipPlayerWrapper* w, JSContext* ctx) -> JSValue {
+            auto* p = w->player();
+            return JS_NewBool(ctx, p && p->playing());
+        })
+        .get("currentTime", [](ClipPlayerWrapper* w, JSContext* ctx) -> JSValue {
+            auto* p = w->player();
+            return JS_NewFloat64(ctx, p ? p->currentTime() : 0.0);
+        })
+        .get("currentClip", [](ClipPlayerWrapper* w, JSContext* ctx) -> JSValue {
+            auto* p = w->player();
+            return JS_NewString(ctx, p ? p->currentClip().c_str() : "");
+        })
+        .prop("speed",
+            [](ClipPlayerWrapper* w, JSContext* ctx) -> JSValue {
+                auto* p = w->player();
+                return JS_NewFloat64(ctx, p ? p->speed() : 1.0);
+            },
+            [](ClipPlayerWrapper* w, JSContext* ctx, JSValue val) {
+                auto* p = w->player();
+                if (!p) return;
+                double s = 0;
+                if (JS_ToFloat64(ctx, &s, val) == 0) p->setSpeed((float)s);
+            })
+        .prop("onFinished",
+            [](ClipPlayerWrapper*, JSContext*) -> JSValue { return JS_UNDEFINED; },
+            [](ClipPlayerWrapper* w, JSContext* ctx, JSValue val) {
+                auto* p = w->player();
+                if (!p) return;
+                if (JS_IsFunction(ctx, val)) p->setOnFinished(makeVoidCallback(ctx, val));
+                else p->setOnFinished(nullptr);
+            })
+        .prop("onEvent",
+            [](ClipPlayerWrapper*, JSContext*) -> JSValue { return JS_UNDEFINED; },
+            [](ClipPlayerWrapper* w, JSContext* ctx, JSValue val) {
+                auto* p = w->player();
+                if (!p) return;
+                if (JS_IsFunction(ctx, val)) p->setOnEvent(makeClipEventCallback(ctx, val));
+                else p->setOnEvent(nullptr);
+            })
+        .method_raw("addClip", js_clip_addClip, 2)
+        .method_raw("clipDef", js_clip_clipDef, 1)
+        .method_raw("play", js_clip_play, 1)
+        .method_raw("pause", js_clip_pause, 0)
+        .method_raw("resume", js_clip_resume, 0)
+        .method_raw("stop", js_clip_stop, 0)
+        .method_raw("seek", js_clip_seek, 1)
+        .method_raw("destroy", js_clip_destroy, 0);
+
     // --- SceneNode class ---
     qjsbind::Class<NodeWrapper>(ctx, "SceneNode")
         // Common properties
@@ -1527,6 +1577,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("createDecal", js_sg_createDecal, 1)
         .method_raw("createReflectionProbe", js_sg_createReflectionProbe, 1)
         .method_raw("createTween", js_sg_createTween, 0)
+        .method_raw("createAnimationPlayer", js_sg_createAnimationPlayer, 0)
         .method_raw("setToneMap", js_sg_setToneMap, 1)
         .method_raw("setAmbient", js_sg_setAmbient, 1)
         .method_raw("setWind", js_sg_setWind, 1)

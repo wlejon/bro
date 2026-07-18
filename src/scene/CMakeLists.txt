@@ -76,6 +76,7 @@ add_library(bro_scene STATIC
     skinned_mesh_node.cpp
     animation_player.cpp
     tween.cpp
+    clip_player.cpp
     instanced_mesh_node.cpp
     gaussian_splat_node.cpp
     html_node.cpp

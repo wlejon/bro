@@ -19,6 +19,7 @@
 #include "scene/ai_world_ticker.h"
 #include "scene/scene_renderer.h"
 #include "scene/tween.h"
+#include "scene/clip_player.h"
 
 #include <glad/gl.h>
 
@@ -106,6 +107,20 @@ public:
     /// callbacks (the entry is hidden immediately and erased after the
     /// current tick pass).
     void destroyTween(uint32_t id);
+
+    // --- Animation-clip players ---
+
+    /// Create a clip player (owned by this graph, ticked from tickAnimations
+    /// after node ticks and tweens, in creation order — so among same-frame
+    /// writers of one property, clip players are the last word).
+    ClipPlayer* createClipPlayer();
+
+    /// Resolve a clip player by id. nullptr for unknown or destroyed ids.
+    ClipPlayer* findClipPlayer(uint32_t id) const;
+
+    /// Destroy a clip player. Deferred-safe like destroyTween: callable from
+    /// the player's own event/finished callbacks.
+    void destroyClipPlayer(uint32_t id);
 
     // --- Physics integration ---
 
@@ -549,6 +564,13 @@ private:
     // Tweens (ticked from tickAnimations; destroyed entries are swept there)
     std::unordered_map<uint32_t, std::unique_ptr<Tween>> tweens_;
     uint32_t nextTweenId_ = 1;
+
+    // Animation-clip players (ticked after tweens; same deferred-destroy
+    // sweep). idScratch_ is reused every frame so the snapshot allocates
+    // only when the player count grows.
+    std::unordered_map<uint32_t, std::unique_ptr<ClipPlayer>> clipPlayers_;
+    uint32_t nextClipPlayerId_ = 1;
+    std::vector<uint32_t> clipPlayerIdScratch_;
 
     canvas::CanvasScene* canvasScene_ = nullptr;
     physics::PhysicsWorld* physicsWorld_ = nullptr;

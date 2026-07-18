@@ -220,7 +220,7 @@ std::function<void()> makeVoidCallback(JSContext* ctx, JSValueConst fnVal) {
 }
 
 // number → {f,f,f}, [x,y,z] → Vec3. Returns false for anything else.
-static bool readTweenVec3(JSContext* ctx, JSValueConst v, bromath::Vec3& out) {
+bool readTweenVec3(JSContext* ctx, JSValueConst v, bromath::Vec3& out) {
     if (JS_IsNumber(v)) {
         float f = (float)jsNum(ctx, v);
         out = {f, f, f};
@@ -240,7 +240,7 @@ static bool readTweenVec3(JSContext* ctx, JSValueConst v, bromath::Vec3& out) {
 }
 
 // number → Rz(angle); [x,y,z,w] → quat; {axis:[..], angle} → axis-angle.
-static bool readTweenQuat(JSContext* ctx, JSValueConst v, bromath::Quat& out) {
+bool readTweenQuat(JSContext* ctx, JSValueConst v, bromath::Quat& out) {
     if (JS_IsNumber(v)) {
         out = bromath::qfromEuler(0.0f, 0.0f, (float)jsNum(ctx, v));
         return true;
@@ -269,7 +269,7 @@ static bool readTweenQuat(JSContext* ctx, JSValueConst v, bromath::Quat& out) {
 }
 
 // [r,g,b] in 0..1 or a CSS color string.
-static bool readTweenColor(JSContext* ctx, JSValueConst v, bromath::Vec3& out) {
+bool readTweenColor(JSContext* ctx, JSValueConst v, bromath::Vec3& out) {
     if (JS_IsString(v)) {
         uint8_t r, g, b, a;
         if (!parseColor(jsStr(ctx, v), r, g, b, a)) return false;

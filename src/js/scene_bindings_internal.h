@@ -207,6 +207,22 @@ struct TweenWrapper {
     }
 };
 
+// Clip-player wrapper (scene.createAnimationPlayer()) — same id + weak-token
+// liveness scheme as TweenWrapper.
+struct ClipPlayerWrapper {
+    std::weak_ptr<scene::SceneGraph::LivenessToken> token;
+    uint32_t id = 0;
+
+    scene::SceneGraph* graph() const {
+        auto t = token.lock();
+        return t ? t->graph : nullptr;
+    }
+    scene::ClipPlayer* player() const {
+        auto* g = graph();
+        return g ? g->findClipPlayer(id) : nullptr;
+    }
+};
+
 // ---------------------------------------------------------------------------
 // Cross-unit functions. Each is defined in the translation unit noted; the
 // raw JSValue callbacks are registered on the SceneNode / SceneGraph / Tween
@@ -255,6 +271,27 @@ JSValue js_tween_destroy(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 JSValue js_sg_createTween(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 // Wrap a JS function into a void() callback (tween.call / onFinished).
 std::function<void()> makeVoidCallback(JSContext* ctx, JSValueConst fnVal);
+// Shared value readers (defined in scene_bindings_anim.cpp): number → splat /
+// [x,y,z] → Vec3; number → Rz / [x,y,z,w] / {axis,angle} → Quat; [r,g,b] or
+// CSS string → color.
+bool readTweenVec3(JSContext* ctx, JSValueConst v, bromath::Vec3& out);
+bool readTweenQuat(JSContext* ctx, JSValueConst v, bromath::Quat& out);
+bool readTweenColor(JSContext* ctx, JSValueConst v, bromath::Vec3& out);
+
+// scene_bindings_clip.cpp — data-driven animation clips
+// (scene.createAnimationPlayer()).
+JSValue js_clip_addClip(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_clip_clipDef(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_clip_play(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_clip_pause(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_clip_resume(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_clip_stop(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_clip_seek(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_clip_destroy(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_sg_createAnimationPlayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+// Wrap a JS function into the player's (name, argsJson) event callback
+// (argsJson is parsed back to a JS value before the call).
+scene::ClipPlayer::EventCallback makeClipEventCallback(JSContext* ctx, JSValueConst fnVal);
 
 // scene_bindings_fx.cpp — sprites, shapes, HTML nodes, particles, splats.
 JSValue js_node_setHtml(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
