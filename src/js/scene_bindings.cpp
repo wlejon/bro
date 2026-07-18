@@ -111,6 +111,33 @@ static JSValue js_node_destroy(JSContext* ctx, JSValueConst this_val, int, JSVal
     return JS_UNDEFINED;
 }
 
+// lookAt(x, y, z) or lookAt([x, y, z]) — orient the node so its local -Z
+// points at the world-space target (+Y stays as close to world up as
+// possible). The camera convention; also useful for turrets/spot rigs.
+static JSValue js_node_lookAt(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    scene::SceneNode* node = w ? w->node() : nullptr;
+    if (!node || argc < 1) return JS_UNDEFINED;
+    double x = 0, y = 0, z = 0;
+    if (JS_IsArray(argv[0])) {
+        JSValue e0 = JS_GetPropertyUint32(ctx, argv[0], 0);
+        JSValue e1 = JS_GetPropertyUint32(ctx, argv[0], 1);
+        JSValue e2 = JS_GetPropertyUint32(ctx, argv[0], 2);
+        JS_ToFloat64(ctx, &x, e0);
+        JS_ToFloat64(ctx, &y, e1);
+        JS_ToFloat64(ctx, &z, e2);
+        JS_FreeValue(ctx, e0); JS_FreeValue(ctx, e1); JS_FreeValue(ctx, e2);
+    } else if (argc >= 3) {
+        JS_ToFloat64(ctx, &x, argv[0]);
+        JS_ToFloat64(ctx, &y, argv[1]);
+        JS_ToFloat64(ctx, &z, argv[2]);
+    } else {
+        return JS_ThrowTypeError(ctx, "lookAt: expected (x, y, z) or ([x, y, z])");
+    }
+    node->lookAt({(float)x, (float)y, (float)z});
+    return JS_DupValue(ctx, this_val);
+}
+
 // localToWorld(x, y[, z]) → {x, y, z}
 static JSValue js_node_localToWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
@@ -458,6 +485,71 @@ void SceneBindings::install(JSContext* ctx) {
                 else if (w->node()->type() == scene::SceneNode::Type::InstancedMesh)
                     static_cast<scene::InstancedMeshNode*>(w->node())->setCullMargin((float)val);
             })
+        // Camera projection params (CameraNode only; undefined elsewhere).
+        // fov is in DEGREES to match scene.setCamera / createCamera opts.
+        .prop("fov",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Camera)
+                    return JS_NewFloat64(ctx, (double)static_cast<scene::CameraNode*>(w->node())->fovY() * 180.0 / 3.14159265);
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Camera)
+                    static_cast<scene::CameraNode*>(w->node())->setFovY((float)(val * 3.14159265 / 180.0));
+            })
+        .prop("near",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Camera)
+                    return JS_NewFloat64(ctx, (double)static_cast<scene::CameraNode*>(w->node())->nearZ());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Camera)
+                    static_cast<scene::CameraNode*>(w->node())->setNearZ((float)val);
+            })
+        .prop("far",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Camera)
+                    return JS_NewFloat64(ctx, (double)static_cast<scene::CameraNode*>(w->node())->farZ());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Camera)
+                    static_cast<scene::CameraNode*>(w->node())->setFarZ((float)val);
+            })
+        .prop("aspect",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Camera)
+                    return JS_NewFloat64(ctx, (double)static_cast<scene::CameraNode*>(w->node())->aspect());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Camera)
+                    static_cast<scene::CameraNode*>(w->node())->setAspect((float)val);
+            })
+        .prop("size",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Camera)
+                    return JS_NewFloat64(ctx, (double)static_cast<scene::CameraNode*>(w->node())->orthoHeight());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Camera)
+                    static_cast<scene::CameraNode*>(w->node())->setOrthoHeight((float)val);
+            })
+        .prop("projection",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Camera)
+                    return JS_NewString(ctx,
+                        static_cast<scene::CameraNode*>(w->node())->perspective()
+                            ? "perspective" : "orthographic");
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, std::string val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Camera)
+                    static_cast<scene::CameraNode*>(w->node())->setPerspective(
+                        !(val == "orthographic" || val == "ortho"));
+            })
         .get("type", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->node()) return JS_UNDEFINED;
             switch (w->node()->type()) {
@@ -474,6 +566,7 @@ void SceneBindings::install(JSContext* ctx) {
                 case scene::SceneNode::Type::GaussianSplat: return JS_NewString(ctx, "gaussianSplat");
                 case scene::SceneNode::Type::Particles:   return JS_NewString(ctx, "particles");
                 case scene::SceneNode::Type::Particles3D: return JS_NewString(ctx, "particles3d");
+                case scene::SceneNode::Type::Camera:  return JS_NewString(ctx, "camera");
                 case scene::SceneNode::Type::Base:    return JS_NewString(ctx, "group");
                 default: break;
             }
@@ -1156,6 +1249,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("remove", js_node_remove, 1)
         .method_raw("destroy", js_node_destroy, 0)
         .method_raw("localToWorld", js_node_localToWorld, 2)
+        .method_raw("lookAt", js_node_lookAt, 3)
         .method_raw("attachAudioEmitter", js_node_attachAudioEmitter, 2)
         .method_raw("detachAudioEmitter", js_node_detachAudioEmitter, 0)
         .method_raw("syncToPhysics", js_node_syncToPhysics, 0)
@@ -1249,6 +1343,15 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("findByName", js_sg_findByName, 1)
         .method_raw("destroyNode", js_sg_destroyNode, 1)
         .method_raw("setCamera", js_sg_setCamera, 1)
+        .method_raw("createCamera", js_sg_createCamera, 1)
+        .method_raw("setActiveCamera", js_sg_setActiveCamera, 1)
+        // Active camera node, or null while the imperative setCamera() view
+        // is in effect (or the active node was destroyed).
+        .get("activeCamera", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
+            if (!w || !w->graph()) return JS_NULL;
+            scene::CameraNode* cam = w->graph()->activeCamera();
+            return cam ? wrapNode(ctx, cam, w->graph()) : JS_NULL;
+        })
         .method_raw("setFog", js_sg_setFog, 1)
         .method_raw("setTiltShift", js_sg_setTiltShift, 1)
         .method_raw("setBloom", js_sg_setBloom, 1)

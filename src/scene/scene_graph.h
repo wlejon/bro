@@ -1,6 +1,7 @@
 #pragma once
 
 #include "scene/scene_node.h"
+#include "scene/camera_node.h"
 #include "scene/shape_node.h"
 #include "scene/sprite_node.h"
 #include "scene/physics_node.h"
@@ -56,6 +57,7 @@ public:
     LightNode* createLight(const std::string& name = "");
     ParticleNode* createParticles(const std::string& name = "");
     Particles3DNode* createParticles3D(const std::string& name = "");
+    CameraNode* createCamera(const std::string& name = "");
 
     /// Destroy a node and remove it from the tree. Also destroys children.
     void destroyNode(SceneNode* node);
@@ -233,6 +235,21 @@ public:
     void setCameraOrtho(float left, float right, float bottom, float top,
                         float nearZ, float farZ,
                         const bromath::Vec3& eye, const bromath::Vec3& target, const bromath::Vec3& up = {0, 1, 0});
+
+    // --- Camera nodes (see camera_node.h for the full contract) ---
+
+    /// Activate a camera node: while active, the view/projection are derived
+    /// from its world transform + projection params every tick (after
+    /// animations/tweens) and at the top of render(). Precedence is
+    /// last-call-wins: any imperative setCamera*() call deactivates the
+    /// node. Pass nullptr to deactivate explicitly (the last derived view
+    /// is kept until the next camera call). A camera from another graph is
+    /// ignored.
+    void setActiveCamera(CameraNode* cam);
+
+    /// The active camera node, or nullptr when the imperative view is in
+    /// effect (or the active node was destroyed).
+    CameraNode* activeCamera() const;
 
     /// Direct matrix access (for MeshNode rendering).
     const bromath::Mat4& viewMatrix() const { return viewMatrix_; }
@@ -491,6 +508,13 @@ private:
 
     void collectDestroyList(SceneNode* node, std::vector<uint32_t>& ids);
 
+    /// Derive view/projection + cached intrinsics from the active camera
+    /// node's world matrix. No-op when no camera node is active; a stale id
+    /// (node destroyed) deactivates and keeps the last derived view. Called
+    /// from tickAnimations (so the audio listener + JS see the fresh view),
+    /// setActiveCamera, and the top of render().
+    void applyActiveCamera();
+
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;
 
@@ -525,6 +549,10 @@ private:
     // because the FBO grows while the projection stays baked at the old
     // aspect. setCanvasSize() rebuilds the projection when this is true.
     bool  cameraAspectFollowsCanvas_ = false;
+
+    // Active camera node by id (0 = none; ids are never reused, so a stale
+    // id can only read as "destroyed"). See setActiveCamera/applyActiveCamera.
+    uint32_t activeCameraId_ = 0;
 
     // Legacy 2D camera state (drives the CanvasScene 2D path)
     float cameraX_ = 0, cameraY_ = 0;

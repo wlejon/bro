@@ -298,6 +298,80 @@ JSValue js_sg_setCamera(JSContext* ctx, JSValueConst this_val, int argc, JSValue
     return JS_UNDEFINED;
 }
 
+// createCamera({ name, fov, near, far, aspect, mode, size, position,
+//                quaternion, lookAt }) → CameraNode
+// The node's WORLD transform is the view (camera looks down local -Z, +Y
+// up); only projection params live on the node. See scene-api.js.
+JSValue js_sg_createCamera(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+
+    auto* node = g->createCamera();
+    g->root()->addChild(node);
+
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValueConst opts = argv[0];
+
+        JSValue nameVal = JS_GetPropertyStr(ctx, opts, "name");
+        if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
+        JS_FreeValue(ctx, nameVal);
+
+        double fov = qjsbind::get_prop_number(ctx, opts, "fov", 60.0);
+        node->setFovY((float)(fov * 3.14159265 / 180.0));
+        node->setNearZ((float)qjsbind::get_prop_number(ctx, opts, "near", 0.1));
+        node->setFarZ((float)qjsbind::get_prop_number(ctx, opts, "far", 1000.0));
+        node->setAspect((float)qjsbind::get_prop_number(ctx, opts, "aspect", 0.0));
+        node->setOrthoHeight((float)qjsbind::get_prop_number(ctx, opts, "size", 10.0));
+
+        std::string mode = qjsbind::get_prop_string(ctx, opts, "mode", "perspective");
+        node->setPerspective(!(mode == "orthographic" || mode == "ortho"));
+
+        JSValue posVal = JS_GetPropertyStr(ctx, opts, "position");
+        if (JS_IsArray(posVal)) {
+            bromath::Vec3 p = jsGetVec3(ctx, opts, "position");
+            node->setPosition(p);
+        }
+        JS_FreeValue(ctx, posVal);
+
+        bool hasQuat = false;
+        bromath::Quat quat = jsGetQuat(ctx, opts, "quaternion", hasQuat);
+        if (hasQuat) {
+            node->setRotation(bromath::qnorm(quat));
+        } else {
+            JSValue laVal = JS_GetPropertyStr(ctx, opts, "lookAt");
+            if (JS_IsArray(laVal)) {
+                node->lookAt(jsGetVec3(ctx, opts, "lookAt"));
+            }
+            JS_FreeValue(ctx, laVal);
+        }
+
+        JSValue actVal = JS_GetPropertyStr(ctx, opts, "active");
+        if (JS_ToBool(ctx, actVal) > 0) g->setActiveCamera(node);
+        JS_FreeValue(ctx, actVal);
+    }
+
+    return wrapNode(ctx, node, g);
+}
+
+// setActiveCamera(cameraNode | null) — activate a camera node (its world
+// transform drives the view every frame) or fall back to the last derived
+// view with null. Imperative setCamera() calls also deactivate (last call
+// wins).
+JSValue js_sg_setActiveCamera(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+    if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
+        g->setActiveCamera(nullptr);
+        return JS_UNDEFINED;
+    }
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, argv[0]);
+    scene::SceneNode* n = w ? w->node() : nullptr;
+    if (!n || n->type() != scene::SceneNode::Type::Camera)
+        return JS_ThrowTypeError(ctx, "setActiveCamera: argument must be a camera node (scene.createCamera) or null");
+    g->setActiveCamera(static_cast<scene::CameraNode*>(n));
+    return JS_UNDEFINED;
+}
+
 // createLight({ type, position, direction, color, intensity, range,
 //               innerAngle, outerAngle, name }) → LightNode
 JSValue js_sg_createLight(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {

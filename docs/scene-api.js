@@ -586,8 +586,78 @@ class SceneGraph {
    * @param {number[]} [opts.target=[0,0,0]] - look-at target [x, y, z]
    * @param {number[]} [opts.up=[0,1,0]] - up vector [x, y, z]
    * @param {number[]} [opts.quaternion] - [x,y,z,w] camera orientation (overrides target/up/mode)
+   *
+   * Precedence vs camera NODES (createCamera/setActiveCamera): the LAST
+   * camera call wins — calling setCamera (any variant) deactivates the
+   * active camera node and installs this imperative view; setActiveCamera
+   * overrides an imperative view. `scene.activeCamera` is null while the
+   * imperative view is in effect.
    */
   setCamera(opts) {}
+
+  /**
+   * Create a camera NODE (Godot Camera3D analog) and add it to the root.
+   * Only projection parameters live on the node — the VIEW is the node's
+   * world transform: the camera looks down its local -Z axis with local +Y
+   * up, so parent it under a vehicle/character node and it inherits that
+   * motion like any other node. Position/orient it with the normal node
+   * transform surface (position, quaternion, node.lookAt()), animate it with
+   * tweens; while active, the engine derives the view from its world matrix
+   * every tick right after animations/tweens run (and again at render), so a
+   * tweened or parented camera is smooth with zero per-frame JS.
+   *
+   * ALL camera-state consumers follow the active camera: shadow cascades
+   * (CSM near/far fitting), frustum culling, billboards, soft particles,
+   * depth of field, the skybox, unprojectLocal/picking, readTonemap
+   * readbacks (toImageData/captureFrame), and a listener bound with
+   * bindAudioListenerToCamera.
+   *
+   * Aspect follows the canvas through resizes unless `aspect` is set (> 0)
+   * — same behavior as setCamera's omitted-aspect mode.
+   *
+   * Projection params are live-editable on the node afterwards: `fov`
+   * (degrees), `near`, `far`, `aspect`, `size`, `projection`. Tween a zoom
+   * with a callback-only tween step (see Tween.to):
+   *   scene.createTween().to(null, {}, 0.5,
+   *       { onUpdate: t => { cam.fov = 60 - 30 * t; } }).start();
+   *
+   * @param {Object} [opts]
+   * @param {string} [opts.name]
+   * @param {string} [opts.mode="perspective"] - "perspective" or "orthographic"/"ortho"
+   * @param {number} [opts.fov=60] - vertical field of view in degrees (perspective)
+   * @param {number} [opts.size=10] - view height in world units (orthographic)
+   * @param {number} [opts.near=0.1] - near clipping plane
+   * @param {number} [opts.far=1000] - far clipping plane
+   * @param {number} [opts.aspect=0] - explicit aspect; <= 0 follows the canvas
+   * @param {number[]} [opts.position=[0,0,0]] - node-local position [x, y, z]
+   * @param {number[]} [opts.quaternion] - [x,y,z,w] node-local orientation
+   * @param {number[]} [opts.lookAt] - world-space target to aim at (ignored when quaternion is set)
+   * @param {boolean} [opts.active=false] - immediately setActiveCamera(this)
+   * @returns {SceneNode} CameraNode (node.type === "camera")
+   * @example
+   *   const cam = scene.createCamera({ position: [0, 2, 8], lookAt: [0, 0, 0], active: true });
+   *   const chase = scene.createCamera({ position: [0, 3, -6], lookAt: [0, 0, 20] });
+   *   vehicle.add(chase);                 // follows the vehicle
+   *   scene.setActiveCamera(chase);       // switch views
+   */
+  createCamera(opts) {}
+
+  /**
+   * Activate a camera node created with createCamera(): its world transform
+   * drives the view from now on. Pass null to deactivate (the last derived
+   * view is kept until the next camera call). Any imperative setCamera()
+   * call also deactivates — last camera call wins.
+   * @param {SceneNode|null} cameraNode
+   */
+  setActiveCamera(cameraNode) {}
+
+  /**
+   * The active camera node, or null while the imperative setCamera() view is
+   * in effect (or after the active node was destroyed). Read-only — switch
+   * with setActiveCamera().
+   * @type {SceneNode|null}
+   */
+  get activeCamera() {}
 
   /**
    * Bind the 3D audio listener to this scene's camera. While bound, the
@@ -1631,7 +1701,6 @@ class SceneNode {
   get emissive() {}
   set emissive(value) {}
 
-
   // --- LightNode-only -------------------------------------------------------
 
   /** [x,y,z] direction vector (directional/spot lights). */
@@ -1660,6 +1729,20 @@ class SceneNode {
 
 
   // --- Coordinate Conversion ------------------------------------------------
+
+  /**
+   * Orient this node so its local -Z axis points at a world-space target,
+   * keeping local +Y as close to world up as possible. The camera-node
+   * aiming convention (a camera looks down -Z); also handy for turrets and
+   * spot rigs. Writes the LOCAL rotation, compensating for ancestor
+   * rotations (exact for TRS hierarchies; ancestor non-uniform scale is
+   * ignored).
+   * @param {number|number[]} x - target X, or a full [x, y, z] array
+   * @param {number} [y]
+   * @param {number} [z]
+   * @returns {SceneNode} this
+   */
+  lookAt(x, y, z) {}
 
   /**
    * Transform a local-space point to world space.

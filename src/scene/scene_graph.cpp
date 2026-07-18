@@ -135,6 +135,75 @@ Particles3DNode* SceneGraph::createParticles3D(const std::string& name) {
     return ptr;
 }
 
+CameraNode* SceneGraph::createCamera(const std::string& name) {
+    auto node = std::make_unique<CameraNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
+void SceneGraph::setActiveCamera(CameraNode* cam) {
+    if (!cam) {
+        activeCameraId_ = 0;
+        return;
+    }
+    // Only cameras owned by this graph can drive its view.
+    if (findById(cam->id()) != cam) return;
+    activeCameraId_ = cam->id();
+    // Derive the view immediately so unproject/picking/readbacks issued
+    // before the next tick already see the new camera.
+    applyActiveCamera();
+}
+
+CameraNode* SceneGraph::activeCamera() const {
+    if (!activeCameraId_) return nullptr;
+    SceneNode* n = findById(activeCameraId_);
+    if (!n || n->type() != SceneNode::Type::Camera) return nullptr;
+    return static_cast<CameraNode*>(n);
+}
+
+void SceneGraph::applyActiveCamera() {
+    if (!activeCameraId_) return;
+    SceneNode* n = findById(activeCameraId_);
+    if (!n || n->type() != SceneNode::Type::Camera) {
+        // Active node destroyed: keep the last derived view (frozen frame
+        // beats a snap to some default) and read back as "no active camera".
+        activeCameraId_ = 0;
+        return;
+    }
+    auto* cam = static_cast<CameraNode*>(n);
+
+    // View = inverse of the camera's world transform (full 4x4 inverse, so
+    // scaled ancestors don't skew the view). Camera looks down local -Z.
+    const bromath::Mat4& M = n->worldMatrix();
+    viewMatrix_ = bromath::minverse(M);
+    cameraEye_ = {M.at(0, 3), M.at(1, 3), M.at(2, 3)};
+
+    // Aspect: explicit when pinned on the node, else follow the canvas
+    // (recomputed every apply, so resizes track automatically).
+    float aspect = cam->aspect() > 0.0f
+        ? cam->aspect()
+        : ((canvasWidth_ > 0 && canvasHeight_ > 0)
+               ? static_cast<float>(canvasWidth_) / static_cast<float>(canvasHeight_)
+               : 4.0f / 3.0f);
+
+    cameraNearZ_ = cam->nearZ();
+    cameraFarZ_ = cam->farZ();
+    cameraAspect_ = aspect;
+    if (cam->perspective()) {
+        cameraFovY_ = cam->fovY();
+        projectionMatrix_ = bromath::mperspective(cam->fovY(), aspect,
+                                                  cam->nearZ(), cam->farZ());
+        cameraIsPerspective_ = true;
+    } else {
+        const float halfH = 0.5f * cam->orthoHeight();
+        const float halfW = halfH * aspect;
+        projectionMatrix_ = bromath::mortho(-halfW, halfW, -halfH, halfH,
+                                            cam->nearZ(), cam->farZ());
+        cameraIsPerspective_ = false;
+    }
+}
+
 void SceneGraph::tickAnimations(float dtSec) {
     if (dtSec <= 0.0f) return;
     // Tick the node table (independent of tree visibility, so off-screen /
@@ -188,6 +257,12 @@ void SceneGraph::tickAnimations(float dtSec) {
     }
 
     advanceWindTime(dtSec);
+
+    // Derive the view from the active camera node AFTER animations/tweens,
+    // so a tweened/parented camera is applied on the same tick it moved and
+    // the audio listener sync (which runs right after tickAnimations) reads
+    // the fresh view. render() re-applies to catch JS mutations after tick.
+    applyActiveCamera();
 }
 
 Tween* SceneGraph::createTween() {
@@ -267,6 +342,7 @@ SceneNode* SceneGraph::findByName(const std::string& name) const {
 
 void SceneGraph::setCamera(float fovY, float aspect, float nearZ, float farZ,
                            const Vec3& eye, const Vec3& target, const Vec3& up) {
+    activeCameraId_ = 0;  // imperative view wins (last camera call wins)
     projectionMatrix_ = bromath::mperspective(fovY, aspect, nearZ, farZ);
     viewMatrix_ = bromath::mlookAt(eye, target, up);
     cameraEye_ = eye;
@@ -276,6 +352,7 @@ void SceneGraph::setCamera(float fovY, float aspect, float nearZ, float farZ,
 
 void SceneGraph::setCameraQuat(float fovY, float aspect, float nearZ, float farZ,
                                const Vec3& eye, const Quat& orientation) {
+    activeCameraId_ = 0;  // imperative view wins (last camera call wins)
     projectionMatrix_ = bromath::mperspective(fovY, aspect, nearZ, farZ);
     // View matrix = inverse camera transform. For unit quaternion, inverse = conjugate.
     Quat inv = bromath::qconjugate(orientation);
@@ -293,6 +370,7 @@ void SceneGraph::setCameraQuat(float fovY, float aspect, float nearZ, float farZ
 void SceneGraph::setCameraOrtho(float left, float right, float bottom, float top,
                                 float nearZ, float farZ,
                                 const Vec3& eye, const Vec3& target, const Vec3& up) {
+    activeCameraId_ = 0;  // imperative view wins (last camera call wins)
     projectionMatrix_ = bromath::mortho(left, right, bottom, top, nearZ, farZ);
     viewMatrix_ = bromath::mlookAt(eye, target, up);
     cameraEye_ = eye;
@@ -386,6 +464,9 @@ void SceneGraph::syncAgents(float dt) {
     }
 }
 void SceneGraph::render() {
+    // Re-derive the view from the active camera node (a JS transform write
+    // between tick and render must land this frame).
+    applyActiveCamera();
 
     // 2D render path (CanvasScene)
     if (canvasScene_) {

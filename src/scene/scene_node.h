@@ -75,6 +75,16 @@ public:
     /// Convert a point from local space to world space.
     bromath::Vec3 localToWorld(const bromath::Vec3& local) const;
 
+    /// Orient this node so its local -Z axis points from its world position
+    /// toward `worldTarget` with local +Y as close to `up` as possible — the
+    /// camera convention (CameraNode looks down -Z), also handy for spot
+    /// rigs and turrets. Writes the LOCAL rotation, compensating for
+    /// ancestor rotations by composing rotation() up the parent chain
+    /// (exact for pure TRS hierarchies; ancestor non-uniform scale is
+    /// ignored). No-op when the target coincides with the node position.
+    void lookAt(const bromath::Vec3& worldTarget,
+                const bromath::Vec3& up = {0, 1, 0});
+
     /// Traverse this node and all descendants depth-first.
     void traverse(const std::function<void(SceneNode*)>& fn);
 
@@ -93,7 +103,7 @@ public:
     virtual void onTick(float /*dtSec*/) {}
 
     // --- Type tag for downcasting ---
-    enum class Type : uint8_t { Base, Shape, Sprite, Physics, Mesh, Html, Light, Particles, InstancedMesh, GaussianSplat, Particles3D };
+    enum class Type : uint8_t { Base, Shape, Sprite, Physics, Mesh, Html, Light, Particles, InstancedMesh, GaussianSplat, Particles3D, Camera };
     virtual Type type() const { return Type::Base; }
 
     // --- World anchor + billboard (Shape/Sprite/Html) ---
