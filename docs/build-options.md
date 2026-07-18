@@ -106,6 +106,7 @@ HTML/CSS/JS + Canvas2D + WebGL runtime with working screenshots.
 | `BRO_WITH_AUDIO` | broaudio + audio_inference | off | on | on | self-contained, no vcpkg |
 | `BRO_WITH_GAMEAI` | brogameagent **core** (nav/path/steer/MCTS) | off | on | on | brotensor-free |
 | `BRO_WITH_FLORA` | broflora | off | on | on | needs `3D` (bromesh) |
+| `BRO_WITH_TEXT_SHAPING` | HarfBuzz + Skia's UAX#9 ICU bidi subset + `modules/skunicode` | **on** | on | on | no vcpkg, no Skia rebuild — compiled from the Skia source bundle. On in *every* profile so there is one text path, not two. Off = 1:1 codepoint→glyph (no ligatures, kerning or Arabic joining). Needs a source bundle carrying the shaping sources — see [third_party/skia/BUNDLE.md](../third_party/skia/BUNDLE.md) |
 | `BRO_WITH_NET` | GameNetworkingSockets | off | on | on | **needs vcpkg**; a runtime without JS network access would be surprising |
 | `BRO_WITH_VIDEO` | libvpx/webm/Opus | off | on | on | **needs vcpkg**; `<video>` should work out of the box |
 | `BRO_WITH_STEAM` | — (runtime dlopen) | off | on | on | already implemented; the stub template |
