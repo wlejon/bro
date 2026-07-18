@@ -49,6 +49,7 @@
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
 #include <Jolt/Physics/Collision/EstimateCollisionResponse.h>
+#include <Jolt/Physics/PhysicsStepListener.h>
 
 #include "util/log.h"
 
@@ -321,6 +322,24 @@ struct PhysicsWorld::ListenerImpl : public ContactListener {
     bool anyCombineModes = false;          // fast path: no mode ever set
 };
 
+// --- Area field overrides: step listener ---
+//
+// Applies the gravity part of AreaOverride INSIDE the physics step (Jolt
+// PhysicsStepListener — the same hook vehicles use). There is exactly ONE of
+// these per world, so its OnStep body is single-threaded even though Jolt may
+// run different listeners in parallel; it reads the membership/override maps
+// (immutable during a step — mutated only between steps on the phase-owning
+// thread) and writes only body velocities, which step listeners are licensed
+// to do. Damping overrides are NOT applied here — they're set/restored on the
+// bodies' MotionProperties at enter/exit (updateAreaOverlaps).
+struct PhysicsWorld::AreaStepListener final : public PhysicsStepListener {
+    explicit AreaStepListener(PhysicsWorld* w) : world(w) {}
+    PhysicsWorld* world;
+    void OnStep(const PhysicsStepListenerContext& ctx) override {
+        world->applyAreaGravity(ctx.mDeltaTime);
+    }
+};
+
 // --- Jolt global init (once) ---
 
 static bool s_joltInitialized = false;
@@ -389,6 +408,11 @@ bool PhysicsWorld::init(int maxBodies, int contactCapacity) {
     // Characters collide with each other via Jolt's brute-force checker
     // (fine: updateCharacters is serial, and character counts are small).
     charVsChar_ = std::make_unique<CharacterVsCharacterCollisionSimple>();
+
+    // Area field overrides: one step listener per world applies the gravity
+    // overrides inside every step (no-ops instantly while no areas exist).
+    areaListener_ = std::make_unique<AreaStepListener>(this);
+    physicsSystem_.AddStepListener(areaListener_.get());
 
     initialized_ = true;
     return true;
@@ -500,6 +524,7 @@ bool PhysicsWorld::consumeStep() {
         bool overflowed = false;
         contactsFront_ = listener_->drain(&overflowed);
         contactsOverflowedFront_ = contactsOverflowedFront_ || overflowed;
+        updateAreaOverlaps(contactsFront_);
     }
     checkBrokenConstraints();
 
@@ -522,6 +547,7 @@ void PhysicsWorld::stepInline() {
         bool overflowed = false;
         contactsFront_ = listener_->drain(&overflowed);
         contactsOverflowedFront_ = contactsOverflowedFront_ || overflowed;
+        updateAreaOverlaps(contactsFront_);
     }
     checkBrokenConstraints();
 }
@@ -540,6 +566,14 @@ void PhysicsWorld::shutdown() {
     characters_.clear();
 
     if (initialized_) {
+        // Area override listener + bookkeeping (all bodies are going away).
+        if (areaListener_) {
+            physicsSystem_.RemoveStepListener(areaListener_.get());
+            areaListener_.reset();
+        }
+        areas_.clear();
+        bodyAreas_.clear();
+
         // Vehicles first (each is both a constraint and a step listener).
         for (auto& [h, v] : vehicles_) removeVehicleFromSystem(v);
         vehicles_.clear();
@@ -765,6 +799,9 @@ BodyID PhysicsWorld::createBody(const BodyOptions& opts) {
         listener_->setSensorId(id, opts.isSensor);
         listener_->setCombineModes(id, opts.frictionCombine, opts.restitutionCombine);
     }
+    // Creation-time area field override (sensors only).
+    if (!id.IsInvalid() && opts.hasArea && opts.isSensor)
+        setAreaOverride(id, opts.area);
     return id;
 }
 
@@ -874,6 +911,7 @@ void PhysicsWorld::destroyBody(BodyID id,
             // erased so callers can evict all their per-body bookkeeping.
             if (onBodyDestroyed)
                 for (const BodyID& pid : ids) onBodyDestroyed(pid);
+            for (const BodyID& pid : ids) evictAreaBookkeeping(pid);
             removeRagdollFromSystem(it->second);
             ragdolls_.erase(it);
             return;
@@ -900,6 +938,7 @@ void PhysicsWorld::destroyBody(BodyID id,
     }
 
     removeConstraintsReferencing(id);
+    evictAreaBookkeeping(id);
 
     if (onBodyDestroyed) onBodyDestroyed(id);
 
@@ -1090,6 +1129,10 @@ void PhysicsWorld::destroyAll(const std::function<void(JPH::BodyID)>& onBodyDest
     contactsFront_.clear();
     contactsOverflowedFront_ = false;
     prevTransforms_.clear();
+
+    // Area bookkeeping: every body (areas and members alike) is gone.
+    areas_.clear();
+    bodyAreas_.clear();
 }
 
 void PhysicsWorld::setLayer(BodyID id, int layer) {
@@ -1214,6 +1257,13 @@ float PhysicsWorld::getMass(BodyID id) const {
 
 void PhysicsWorld::setLinearDamping(BodyID id, float damping) {
     if (damping < 0.0f) return;
+    // Inside an area damping override the live value belongs to the area —
+    // update the BASE (what gets restored on exit) instead of fighting it.
+    auto it = bodyAreas_.find(id.GetIndexAndSequenceNumber());
+    if (it != bodyAreas_.end() && it->second.linOverridden) {
+        it->second.baseLinearDamping = damping;
+        return;
+    }
     BodyLockWrite lock(physicsSystem_.GetBodyLockInterface(), id);
     if (!lock.Succeeded()) return;
     MotionProperties* mp = lock.GetBody().GetMotionPropertiesUnchecked();
@@ -1221,6 +1271,11 @@ void PhysicsWorld::setLinearDamping(BodyID id, float damping) {
 }
 
 float PhysicsWorld::getLinearDamping(BodyID id) const {
+    // The user-facing value is the BASE while an area override holds the
+    // live slot (symmetric with the setter above).
+    auto it = bodyAreas_.find(id.GetIndexAndSequenceNumber());
+    if (it != bodyAreas_.end() && it->second.linOverridden)
+        return it->second.baseLinearDamping;
     BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
     if (!lock.Succeeded()) return 0.0f;
     const MotionProperties* mp = lock.GetBody().GetMotionPropertiesUnchecked();
@@ -1229,6 +1284,11 @@ float PhysicsWorld::getLinearDamping(BodyID id) const {
 
 void PhysicsWorld::setAngularDamping(BodyID id, float damping) {
     if (damping < 0.0f) return;
+    auto it = bodyAreas_.find(id.GetIndexAndSequenceNumber());
+    if (it != bodyAreas_.end() && it->second.angOverridden) {
+        it->second.baseAngularDamping = damping;   // takes effect on area exit
+        return;
+    }
     BodyLockWrite lock(physicsSystem_.GetBodyLockInterface(), id);
     if (!lock.Succeeded()) return;
     MotionProperties* mp = lock.GetBody().GetMotionPropertiesUnchecked();
@@ -1236,6 +1296,9 @@ void PhysicsWorld::setAngularDamping(BodyID id, float damping) {
 }
 
 float PhysicsWorld::getAngularDamping(BodyID id) const {
+    auto it = bodyAreas_.find(id.GetIndexAndSequenceNumber());
+    if (it != bodyAreas_.end() && it->second.angOverridden)
+        return it->second.baseAngularDamping;
     BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
     if (!lock.Succeeded()) return 0.0f;
     const MotionProperties* mp = lock.GetBody().GetMotionPropertiesUnchecked();
@@ -1268,6 +1331,246 @@ void PhysicsWorld::setRestitution(BodyID id, float restitution) {
 
 float PhysicsWorld::getRestitution(BodyID id) const {
     return physicsSystem_.GetBodyInterface().GetRestitution(id);
+}
+
+// --- Area field overrides ---
+//
+// All functions here except applyAreaGravity run on the phase-owning thread
+// between steps (idle-only setters + the post-step overlap fold), so the
+// maps need no locking; applyAreaGravity runs INSIDE the step from the one
+// AreaStepListener and only reads them (immutable during a step).
+
+void PhysicsWorld::setAreaOverride(BodyID id, const AreaOverride& o) {
+    {
+        BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
+        if (!lock.Succeeded()) return;
+        if (!lock.GetBody().IsSensor()) {
+            LOG_WARN("setAreaOverride: body is not a sensor — ignored");
+            return;
+        }
+    }
+    const uint32_t key = id.GetIndexAndSequenceNumber();
+    areas_[key] = o;
+    // Overlap membership is tracked for every sensor, so bodies already
+    // inside pick the (new) override up immediately: re-rank their area
+    // lists and re-apply damping now; gravity follows on the next step.
+    refreshBodiesTouchingArea(key);
+}
+
+void PhysicsWorld::clearAreaOverride(BodyID id) {
+    const uint32_t key = id.GetIndexAndSequenceNumber();
+    if (areas_.erase(key) == 0) return;
+    // Membership stays (still a sensor, still overlapping) — only the
+    // fields go away: restore damping on affected bodies.
+    refreshBodiesTouchingArea(key);
+}
+
+bool PhysicsWorld::getAreaOverride(BodyID id, AreaOverride& out) const {
+    auto it = areas_.find(id.GetIndexAndSequenceNumber());
+    if (it == areas_.end()) return false;
+    out = it->second;
+    return true;
+}
+
+void PhysicsWorld::sortBodyAreas(BodyAreaState& st) {
+    std::sort(st.areas.begin(), st.areas.end(),
+              [this](const BodyAreaState::AreaRef& a, const BodyAreaState::AreaRef& b) {
+        auto ia = areas_.find(a.key);
+        auto ib = areas_.find(b.key);
+        const int pa = ia != areas_.end() ? ia->second.priority : 0;
+        const int pb = ib != areas_.end() ? ib->second.priority : 0;
+        if (pa != pb) return pa > pb;   // higher priority first
+        return a.key < b.key;           // ties: earlier-created area first
+    });
+}
+
+void PhysicsWorld::refreshBodiesTouchingArea(uint32_t areaKey) {
+    for (auto& [bodyKey, st] : bodyAreas_) {
+        bool touches = false;
+        for (const auto& r : st.areas)
+            if (r.key == areaKey) { touches = true; break; }
+        if (!touches) continue;
+        sortBodyAreas(st);
+        applyAreaDamping(BodyID(bodyKey), st);
+    }
+}
+
+void PhysicsWorld::applyAreaDamping(BodyID id, BodyAreaState& st) {
+    // Highest-priority overlapping area that specifies a channel wins
+    // (st.areas is already priority-sorted). Damping is replace-only.
+    float lin = -1.0f, ang = -1.0f;
+    for (const auto& r : st.areas) {
+        auto it = areas_.find(r.key);
+        if (it == areas_.end()) continue;   // plain sensor, no override
+        if (lin < 0.0f && it->second.linearDamping >= 0.0f)
+            lin = it->second.linearDamping;
+        if (ang < 0.0f && it->second.angularDamping >= 0.0f)
+            ang = it->second.angularDamping;
+        if (lin >= 0.0f && ang >= 0.0f) break;
+    }
+    BodyLockWrite lock(physicsSystem_.GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) return;
+    Body& b = lock.GetBody();
+    if (b.IsSoftBody()) return;
+    MotionProperties* mp = b.GetMotionPropertiesUnchecked();
+    if (!mp) return;
+    if (lin >= 0.0f) {
+        if (!st.linOverridden) {   // save the body's own damping once
+            st.baseLinearDamping = mp->GetLinearDamping();
+            st.linOverridden = true;
+        }
+        mp->SetLinearDamping(lin);
+    } else if (st.linOverridden) {
+        mp->SetLinearDamping(st.baseLinearDamping);
+        st.linOverridden = false;
+    }
+    if (ang >= 0.0f) {
+        if (!st.angOverridden) {
+            st.baseAngularDamping = mp->GetAngularDamping();
+            st.angOverridden = true;
+        }
+        mp->SetAngularDamping(ang);
+    } else if (st.angOverridden) {
+        mp->SetAngularDamping(st.baseAngularDamping);
+        st.angOverridden = false;
+    }
+}
+
+void PhysicsWorld::updateAreaOverlaps(const std::vector<ContactEvent>& events) {
+    if (!listener_) return;
+    for (const auto& e : events) {
+        if (!e.isSensor) continue;
+        if (e.type == ContactEvent::Persisted) continue;
+        // Exactly one side must be the sensor (Jolt sensors don't detect
+        // other sensors; skip defensively if both flags agree).
+        const bool s1 = listener_->isSensorId(e.body1);
+        const bool s2 = listener_->isSensorId(e.body2);
+        if (s1 == s2) continue;
+        const BodyID areaId = s1 ? e.body1 : e.body2;
+        const BodyID bodyId = s1 ? e.body2 : e.body1;
+        const uint32_t areaKey = areaId.GetIndexAndSequenceNumber();
+        const uint32_t bodyKey = bodyId.GetIndexAndSequenceNumber();
+        if (e.type == ContactEvent::Added) {
+            BodyAreaState& st = bodyAreas_[bodyKey];
+            bool found = false;
+            for (auto& r : st.areas)
+                if (r.key == areaKey) { r.refs++; found = true; break; }
+            if (!found) {
+                st.areas.push_back({areaKey, 1});
+                sortBodyAreas(st);
+                applyAreaDamping(bodyId, st);
+            }
+        } else {  // Removed
+            auto it = bodyAreas_.find(bodyKey);
+            if (it == bodyAreas_.end()) continue;
+            auto& v = it->second.areas;
+            for (size_t i = 0; i < v.size(); i++) {
+                if (v[i].key != areaKey) continue;
+                if (--v[i].refs > 0) break;
+                v.erase(v.begin() + i);
+                applyAreaDamping(bodyId, it->second);   // restores base
+                if (v.empty() && !it->second.linOverridden &&
+                    !it->second.angOverridden)
+                    bodyAreas_.erase(it);
+                break;
+            }
+        }
+    }
+}
+
+void PhysicsWorld::applyAreaGravity(float dt) {
+    if (bodyAreas_.empty() || areas_.empty()) return;
+    const Vec3 worldG = physicsSystem_.GetGravity();
+    const BodyLockInterfaceNoLock& li = physicsSystem_.GetBodyLockInterfaceNoLock();
+    for (const auto& [bodyKey, st] : bodyAreas_) {
+        Body* body = li.TryGetBody(BodyID(bodyKey));
+        if (!body || !body->IsDynamic() || !body->IsActive() || body->IsSoftBody())
+            continue;
+
+        // Walk the priority-sorted areas accumulating the effective gravity
+        // (see AreaOverride: combine adds, scale multiplies the world term,
+        // replace finalizes and stops).
+        Vec3 additive = Vec3::sZero();
+        float worldScale = 1.0f;
+        bool any = false, replaced = false;
+        Vec3 total = Vec3::sZero();
+        for (const auto& r : st.areas) {
+            auto it = areas_.find(r.key);
+            if (it == areas_.end()) continue;   // plain sensor
+            const AreaOverride& a = it->second;
+            if (a.gravityMode == AreaOverride::GravityNone) continue;
+            if (a.gravityMode == AreaOverride::GravityScale) {
+                worldScale *= a.gravityScale;
+                any = true;
+                continue;
+            }
+            Vec3 g = a.gravity;
+            if (a.pointGravity) {
+                const Body* areaBody = li.TryGetBody(BodyID(r.key));
+                if (!areaBody) continue;
+                Vec3 delta = Vec3(areaBody->GetCenterOfMassPosition() -
+                                  body->GetCenterOfMassPosition());
+                float dist = delta.Length();
+                if (dist < 1.0e-6f) {
+                    g = Vec3::sZero();
+                } else {
+                    float s = a.strength;
+                    if (a.falloffDistance > 0.0f) {
+                        float f = a.falloffDistance / dist;   // inverse-square
+                        s *= f * f;
+                    }
+                    g = delta * (s / dist);
+                }
+            }
+            any = true;
+            if (a.gravityMode == AreaOverride::GravityReplace) {
+                total = additive + g;
+                replaced = true;
+                break;
+            }
+            additive += g;   // GravityCombine
+        }
+        if (!any) continue;
+        if (!replaced) total = additive + worldG * worldScale;
+
+        // Jolt integrates worldG * gravityFactor itself this step; add only
+        // the difference so the body ends up under `total * gravityFactor`
+        // (the body's own gravityFactor scales area gravity too — gf=0
+        // floats through every field, matching Godot's gravity_scale).
+        const float gf = body->GetMotionProperties()->GetGravityFactor();
+        Vec3 dv = (total - worldG) * (gf * dt);
+        if (dv != Vec3::sZero())
+            body->SetLinearVelocityClamped(body->GetLinearVelocity() + dv);
+    }
+}
+
+void PhysicsWorld::evictAreaBookkeeping(BodyID id) {
+    const uint32_t key = id.GetIndexAndSequenceNumber();
+    // As an overlapped body: drop its state (no damping restore — the body
+    // is being destroyed).
+    bodyAreas_.erase(key);
+    // As an area: drop the override and leave every list it was in. The
+    // eventual OnContactRemoved for the dead pair is then a harmless no-op.
+    areas_.erase(key);
+    for (auto it = bodyAreas_.begin(); it != bodyAreas_.end();) {
+        auto& v = it->second.areas;
+        bool removed = false;
+        for (size_t i = 0; i < v.size(); i++) {
+            if (v[i].key == key) {
+                v.erase(v.begin() + i);
+                removed = true;
+                break;
+            }
+        }
+        if (removed) {
+            applyAreaDamping(BodyID(it->first), it->second);
+            if (v.empty() && !it->second.linOverridden && !it->second.angOverridden) {
+                it = bodyAreas_.erase(it);
+                continue;
+            }
+        }
+        ++it;
+    }
 }
 
 void PhysicsWorld::setUserData(BodyID id, uint64_t data) {

@@ -230,6 +230,51 @@ static bool parseCombineMode(const std::string& s, physics::CombineMode& out) {
     return true;
 }
 
+// Parse an AreaOverride from a JS object (the `area` creation option /
+// setAreaOverride opts). Gravity mode is inferred: an explicit `gravityMode`
+// string wins; otherwise `gravityScale` alone means scale mode, and a
+// `gravity` vector or `gravityPoint` defaults to replace.
+static bool readAreaOverride(JSContext* ctx, JSValueConst o,
+                             physics::AreaOverride& a, std::string& err) {
+    std::string mode = qjsbind::get_prop_string(ctx, o, "gravityMode");
+
+    JSValue gv = JS_GetPropertyStr(ctx, o, "gravity");
+    const bool hasVec = JS_IsObject(gv);
+    if (hasVec) a.gravity = readVec3(ctx, gv);
+    JS_FreeValue(ctx, gv);
+
+    a.pointGravity = qjsbind::get_prop_bool(ctx, o, "gravityPoint", false);
+    a.strength = (float)qjsbind::get_prop_number(ctx, o, "gravityStrength", 0.0);
+    a.falloffDistance = (float)qjsbind::get_prop_number(ctx, o, "falloffDistance", 0.0);
+
+    JSValue sv = JS_GetPropertyStr(ctx, o, "gravityScale");
+    const bool hasScale = JS_IsNumber(sv);
+    if (hasScale) {
+        double d = 1.0; JS_ToFloat64(ctx, &d, sv);
+        a.gravityScale = (float)d;
+    }
+    JS_FreeValue(ctx, sv);
+
+    a.linearDamping = (float)qjsbind::get_prop_number(ctx, o, "linearDamping", -1.0);
+    a.angularDamping = (float)qjsbind::get_prop_number(ctx, o, "angularDamping", -1.0);
+    a.priority = (int)qjsbind::get_prop_number(ctx, o, "priority", 0.0);
+
+    if (mode == "scale" || (mode.empty() && hasScale && !hasVec && !a.pointGravity)) {
+        if (!hasScale) { err = "area gravityMode 'scale' requires gravityScale"; return false; }
+        a.gravityMode = physics::AreaOverride::GravityScale;
+    } else if (mode == "combine") {
+        a.gravityMode = physics::AreaOverride::GravityCombine;
+    } else if (mode == "replace" || (mode.empty() && (hasVec || a.pointGravity))) {
+        a.gravityMode = physics::AreaOverride::GravityReplace;
+    } else if (mode.empty()) {
+        a.gravityMode = physics::AreaOverride::GravityNone;  // damping-only area
+    } else {
+        err = "area gravityMode must be 'replace' | 'combine' | 'scale'";
+        return false;
+    }
+    return true;
+}
+
 // Parse a BodyOptions struct from a JS opts object (against `world`).
 static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
                             physics::PhysicsWorld* world,
@@ -274,6 +319,21 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
     out.isStatic = qjsbind::get_prop_bool(ctx, opts, "static", false);
     out.isSensor = qjsbind::get_prop_bool(ctx, opts, "sensor", false);
     out.ccd = qjsbind::get_prop_bool(ctx, opts, "ccd", false);
+
+    JSValue areaVal = JS_GetPropertyStr(ctx, opts, "area");
+    if (JS_IsObject(areaVal)) {
+        if (!out.isSensor) {
+            JS_FreeValue(ctx, areaVal);
+            err = "area field overrides require sensor: true";
+            return false;
+        }
+        if (!readAreaOverride(ctx, areaVal, out.area, err)) {
+            JS_FreeValue(ctx, areaVal);
+            return false;
+        }
+        out.hasArea = true;
+    }
+    JS_FreeValue(ctx, areaVal);
     out.friction = (float)qjsbind::get_prop_number(ctx, opts, "friction", 0.5);
     out.restitution = (float)qjsbind::get_prop_number(ctx, opts, "restitution", 0.3);
     std::string fc = qjsbind::get_prop_string(ctx, opts, "frictionCombine");
@@ -795,6 +855,30 @@ static JSValue worldGetContacts(JSContext* ctx, JsWorld* w) {
         JS_SetPropertyUint32(ctx, arr, i++, obj);
     }
     return arr;
+}
+
+// setAreaOverride(tag, opts | null) — install/replace/clear a sensor's field
+// override. Shared by the default world and sandbox handles.
+static JSValue worldSetAreaOverride(JSContext* ctx, JsWorld* w, int argc,
+                                    JSValueConst* argv) {
+    if (!w || !w->world || argc < 1) return JS_FALSE;
+    int32_t tag = -1; JS_ToInt32(ctx, &tag, argv[0]);
+    JPH::BodyID id = w->bodyIdForTag(tag);
+    if (id.IsInvalid()) return JS_FALSE;
+    if (argc < 2 || JS_IsNull(argv[1]) || JS_IsUndefined(argv[1])) {
+        w->world->clearAreaOverride(id);
+        return JS_TRUE;
+    }
+    if (!JS_IsObject(argv[1]))
+        return JS_ThrowTypeError(ctx, "setAreaOverride(tag, opts | null)");
+    if (!w->world->isSensor(id))
+        return JS_ThrowTypeError(ctx, "setAreaOverride: body is not a sensor");
+    physics::AreaOverride a;
+    std::string err;
+    if (!readAreaOverride(ctx, argv[1], a, err))
+        return JS_ThrowTypeError(ctx, "%s", err.c_str());
+    w->world->setAreaOverride(id, a);
+    return JS_TRUE;
 }
 
 // setFrictionCombine(tag, mode) / setRestitutionCombine(tag, mode) — shared
@@ -3048,6 +3132,11 @@ static JSValue js_physics_getContacts(JSContext* ctx, JSValueConst, int, JSValue
     return worldGetContacts(ctx, s_defaultWorld);
 }
 
+static JSValue js_physics_setAreaOverride(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    return worldSetAreaOverride(ctx, s_defaultWorld, argc, argv);
+}
+
 static JSValue js_physics_setFrictionCombine(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     DEFW_GUARD();
     return worldSetCombine(ctx, s_defaultWorld, argc, argv, /*friction=*/true);
@@ -3506,6 +3595,11 @@ static JSValue jsw_getContacts(JSContext* ctx, JSValueConst thisVal, int, JSValu
     return worldGetContacts(ctx, w);
 }
 
+static JSValue jsw_setAreaOverride(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    return worldSetAreaOverride(ctx, w, argc, argv);
+}
+
 static JSValue jsw_setFrictionCombine(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
     JsWorld* w = worldFromThis(ctx, thisVal);
     return worldSetCombine(ctx, w, argc, argv, /*friction=*/true);
@@ -3755,6 +3849,7 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("setFriction", 2, jsw_setFriction),
     JS_CFUNC_DEF("setRestitution", 2, jsw_setRestitution),
     JS_CFUNC_DEF("getBodyProperties", 1, jsw_getBodyProperties),
+    JS_CFUNC_DEF("setAreaOverride", 2, jsw_setAreaOverride),
     JS_CFUNC_DEF("createCharacter", 1, jsw_createCharacter),
     JS_CFUNC_DEF("createVehicle", 1, jsw_createVehicle),
     JS_CFUNC_DEF("createRagdoll", 1, jsw_createRagdoll),
@@ -3913,6 +4008,7 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("setFriction", js_physics_setFriction, 2)
         .function("setRestitution", js_physics_setRestitution, 2)
         .function("getBodyProperties", js_physics_getBodyProperties, 1)
+        .function("setAreaOverride", js_physics_setAreaOverride, 2)
         .function("setTimeStep", js_physics_setTimeStep, 1)
         .function("setInterpolation", js_physics_setInterpolation, 1)
         .function("getInterpolation", js_physics_getInterpolation, 0)

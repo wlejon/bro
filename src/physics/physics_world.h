@@ -118,6 +118,58 @@ struct QueryFilter {
                                             // — sized for a handful of bodies)
 };
 
+/// Per-sensor field override (Godot Area3D analog). Attached to a SENSOR
+/// body, it automatically affects every dynamic body overlapping the sensor
+/// volume, applied inside the physics step:
+///
+///  - gravity: directional replace/combine, point gravity toward the sensor's
+///    center (with optional inverse-square falloff), or a world-gravity scale.
+///  - damping: linear/angular damping replaced while inside.
+///
+/// Stacking (Godot space-override subset — replace + combine + scale):
+/// overlapping areas are walked highest priority first (ties: the area whose
+/// body has the lower index+sequence — i.e. created earlier — wins the
+/// earlier slot). Per body, gravity accumulates over the walk:
+///   - Combine: adds this area's field, keep walking.
+///   - Scale:   multiplies the world-gravity term, keep walking.
+///   - Replace: final gravity = accumulated combines + this area's field;
+///              the walk STOPS (lower-priority areas and the world-gravity
+///              term are ignored).
+/// If no Replace is hit, the world term (scaled by any Scale areas) is added.
+/// The body's own gravityFactor multiplies the total, so gf=0 still floats.
+/// Damping is replace-only: the highest-priority overlapping area that
+/// specifies a damping value wins; the body's own damping is restored on
+/// exit (setLinearDamping/setAngularDamping while inside update the restored
+/// base, not the override).
+///
+/// Mechanics: overlap membership is maintained on the phase-owning thread
+/// from the sensor contact stream (between steps — no new locks); gravity is
+/// applied INSIDE the step by a PhysicsStepListener reading the membership
+/// maps, which are immutable for the duration of a step. Membership therefore
+/// takes effect on the step AFTER the overlap begins/ends (one fixed step of
+/// latency — deterministic). Caveats: contact-buffer overflow can drop
+/// enter/exit events (membership may wedge — same caveat as JS trigger
+/// bookkeeping); a body that falls asleep inside an area loses its sensor
+/// contact until it wakes (Jolt sensors track active bodies only).
+struct AreaOverride {
+    enum GravityMode : uint8_t {
+        GravityNone = 0,   // no gravity override (damping-only area)
+        GravityReplace,    // field replaces gravity; stops the priority walk
+        GravityCombine,    // field adds to gravity; walk continues
+        GravityScale,      // gravityScale multiplies the world term; walk continues
+    };
+    GravityMode gravityMode = GravityNone;
+    JPH::Vec3 gravity{0, 0, 0};    // directional field (m/s²), replace/combine
+    bool pointGravity = false;     // field points at the sensor's center of mass
+    float strength = 0.0f;         // point-gravity acceleration (m/s²)
+    float falloffDistance = 0.0f;  // > 0: inverse-square falloff — strength is
+                                   // the acceleration AT this distance; 0 = constant
+    float gravityScale = 1.0f;     // GravityScale mode: world-gravity multiplier
+    float linearDamping = -1.0f;   // >= 0 replaces body linear damping while inside
+    float angularDamping = -1.0f;  // >= 0 replaces body angular damping while inside
+    int priority = 0;              // higher wins; ties → earlier-created area
+};
+
 /// Body creation options (covers all shapes & flags).
 struct BodyOptions {
     enum Shape {
@@ -168,6 +220,9 @@ struct BodyOptions {
 
     bool isStatic = false;
     bool isSensor = false;
+    // Field override installed at creation (sensors only; see AreaOverride).
+    bool hasArea = false;
+    AreaOverride area;
     bool ccd = false;                          // Linear cast for fast bodies
     JPH::EAllowedDOFs dofs = JPH::EAllowedDOFs::All;
 
@@ -760,6 +815,16 @@ public:
     bool isActive(JPH::BodyID id) const;
     bool isSensor(JPH::BodyID id) const;
 
+    /// Install/replace the field override on a sensor body (see AreaOverride).
+    /// Takes effect immediately for bodies already overlapping the sensor —
+    /// overlap membership is tracked for every sensor, so a later
+    /// setAreaOverride sees them. No-op (warn) for non-sensor bodies.
+    void setAreaOverride(JPH::BodyID id, const AreaOverride& o);
+    /// Remove a sensor's field override (restores damping on affected bodies).
+    void clearAreaOverride(JPH::BodyID id);
+    /// Read back the override; false if the body has none.
+    bool getAreaOverride(JPH::BodyID id, AreaOverride& out) const;
+
     /// Change a body's collision layer post-creation. Triggers a broadphase
     /// notification so future queries reflect the new layer. Cost is
     /// effectively a remove+add in the broadphase for that one body; cheap.
@@ -1190,6 +1255,53 @@ private:
     };
     std::unordered_map<uint32_t, SoftBodyEntry> softBodies_;
     uint32_t nextSoftBodyHandle_ = 1;
+
+    // --- Area field overrides (see AreaOverride) ---
+    //
+    // Threading contract (the sensorFlags pattern): all maps below are
+    // mutated ONLY between steps on the phase-owning thread — overlap
+    // membership from the drained contact stream (updateAreaOverlaps), the
+    // override table from the idle-only setters. During a step they are
+    // immutable, so the step listener reads them lock-free from the physics
+    // job that runs OnStep. Membership is tracked for EVERY sensor (not just
+    // ones with overrides) so setAreaOverride can take effect on bodies
+    // already inside. Keys are BodyID index+sequence numbers.
+    struct AreaStepListener;
+    std::unique_ptr<AreaStepListener> areaListener_;
+    std::unordered_map<uint32_t, AreaOverride> areas_;  // sensor → override
+    struct BodyAreaState {
+        // Overlapping sensor keys, sorted highest priority first (ties:
+        // lower key). Sensors without an override sort as priority 0 and are
+        // skipped when fields are computed. Refcounted: Jolt reports contact
+        // add/remove per SUB-SHAPE pair, so a compound sensor can hold
+        // several concurrent contacts with one body — membership ends when
+        // the last one goes.
+        struct AreaRef { uint32_t key; int refs; };
+        std::vector<AreaRef> areas;
+        // Body's own damping, saved when an area override first replaces it
+        // (restored on exit; runtime damping setters update the base).
+        float baseLinearDamping = 0.0f;
+        float baseAngularDamping = 0.0f;
+        bool linOverridden = false;
+        bool angOverridden = false;
+    };
+    std::unordered_map<uint32_t, BodyAreaState> bodyAreas_;  // body → state
+    // Fold one step's contact events into the membership maps + damping.
+    // Called from consumeStep/stepInline, phase-owning thread.
+    void updateAreaOverlaps(const std::vector<ContactEvent>& events);
+    // Re-sort a body's area list (priority desc, key asc).
+    void sortBodyAreas(BodyAreaState& st);
+    // Re-sort + re-apply damping for every body overlapping `areaKey`
+    // (override installed/replaced/cleared while bodies are inside).
+    void refreshBodiesTouchingArea(uint32_t areaKey);
+    // Recompute + apply the body's effective damping from its area list;
+    // restores the saved base when no area overrides a channel.
+    void applyAreaDamping(JPH::BodyID id, BodyAreaState& st);
+    // Gravity deltas for all overlapped dynamic bodies; runs INSIDE the step
+    // (AreaStepListener::OnStep) with dt = the fixed step.
+    void applyAreaGravity(float dt);
+    // Body/area destruction bookkeeping (destroyBody/destroyAll).
+    void evictAreaBookkeeping(JPH::BodyID id);
 
     // Constraints that broke (exceeded breaking impulse) since the last drain.
     std::vector<uint32_t> brokenConstraints_;

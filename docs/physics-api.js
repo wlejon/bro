@@ -131,6 +131,9 @@ Physics.setLayers({
  * @param {{x,y,z,w}} [opts.rotation] - quaternion, default identity
  * @param {boolean} [opts.static=false]
  * @param {boolean} [opts.sensor=false] - sensors fire contact events but generate no response
+ * @param {Object}  [opts.area]         - field override installed on this sensor
+ *                                        (requires sensor:true) — see the
+ *                                        "Area field overrides" section
  * @param {boolean} [opts.ccd=false]    - LinearCast motion quality (for fast-moving bodies)
  * @param {string}  [opts.dofs]         - "all" (default) | "2d"
  *                                         "2d" locks Z translation and X/Y rotation (Plane2D).
@@ -808,6 +811,97 @@ Physics.setRestitutionCombine(id, 'max');
 
 
 // -----------------------------------------------------------------------------
+// Area field overrides (Godot Area3D analog)
+// -----------------------------------------------------------------------------
+//
+// A SENSOR body can carry a field override that automatically affects every
+// dynamic body overlapping its volume, applied inside the physics step — no
+// per-frame JS needed. Water, low-gravity zones, planet gravity wells, fans,
+// drag fields.
+//
+// Attach at creation via createBody({ sensor:true, area:{...} }) or at
+// runtime via setAreaOverride(tag, opts) on any sensor (bodies already
+// inside are picked up immediately); setAreaOverride(tag, null) clears it.
+//
+// Stacking (a Godot space-override subset — replace + combine + scale):
+// overlapping areas are walked highest `priority` first (ties: the
+// earlier-created area first). Per body:
+//   - gravityMode 'combine':  adds this area's field, keeps walking.
+//   - gravityMode 'scale':    multiplies the world-gravity term, keeps walking.
+//   - gravityMode 'replace':  final gravity = combines accumulated so far +
+//                             this field; the walk STOPS (lower-priority
+//                             areas and world gravity are ignored).
+// If no 'replace' is hit, world gravity (times any 'scale' factors) is added.
+// The body's own gravityFactor multiplies the total (gravityFactor 0 floats
+// through every field). Damping is replace-only: the highest-priority
+// overlapping area that specifies linearDamping/angularDamping wins; the
+// body's own damping is restored on exit. setLinearDamping/setAngularDamping
+// on a body inside an override update the restored BASE, not the live value.
+//
+// Timing + caveats (all deterministic under headless advanceTime):
+//   - Membership follows the sensor contact stream, so a field takes effect
+//     on the step AFTER the overlap begins, and lets go on the step after it
+//     ends (one fixed step of latency).
+//   - Contact-buffer overflow (getContacts().overflow) can drop enter/exit
+//     events — membership may wedge until the pair re-fires.
+//   - A body that falls asleep inside an area loses its sensor contact until
+//     it wakes (Jolt sensors track active bodies only).
+//   - Sensor-vs-sensor overlaps carry no fields; kinematic/static bodies are
+//     tracked but unaffected (fields apply to DYNAMIC bodies).
+
+/**
+ * Install/replace (opts) or clear (null) the field override on a sensor.
+ * Also on sandbox world handles. Returns true on success.
+ *
+ * @param {number} tag - a sensor body's tag
+ * @param {Object|null} opts
+ * @param {{x,y,z}} [opts.gravity]        - directional field (m/s²)
+ * @param {string}  [opts.gravityMode]    - 'replace' | 'combine' | 'scale'.
+ *                                          Default: 'replace' when gravity/
+ *                                          gravityPoint given, 'scale' when
+ *                                          only gravityScale is given.
+ * @param {boolean} [opts.gravityPoint]   - point gravity: the field points at
+ *                                          the sensor's center of mass
+ * @param {number}  [opts.gravityStrength] - point-gravity acceleration (m/s²)
+ * @param {number}  [opts.falloffDistance] - >0: inverse-square falloff;
+ *                                          gravityStrength is the acceleration
+ *                                          AT this distance. 0 = constant.
+ * @param {number}  [opts.gravityScale]   - 'scale' mode: world-gravity multiplier
+ * @param {number}  [opts.linearDamping]  - >=0 replaces body linear damping inside
+ * @param {number}  [opts.angularDamping] - >=0 replaces body angular damping inside
+ * @param {number}  [opts.priority=0]     - higher wins; ties → earlier-created
+ */
+Physics.setAreaOverride(zone, { gravityScale: 0.16, priority: 1 });  // moon room
+Physics.setAreaOverride(zone, null);                                  // clear
+
+// Water volume: weak upward gravity (buoyancy) + heavy drag while submerged.
+const water = Physics.createBody({
+    shape: 'box', halfExtents: { x: 20, y: 3, z: 20 },
+    position: { x: 0, y: -3, z: 0 }, static: true, sensor: true,
+    area: {
+        gravity: { x: 0, y: 2.0, z: 0 }, gravityMode: 'replace',
+        linearDamping: 3.0, angularDamping: 2.0,
+    },
+});
+
+// Low-gravity zone: replace with a gentle pull; bodies drift while inside.
+const lowGrav = Physics.createBody({
+    shape: 'box', halfExtents: { x: 5, y: 5, z: 5 },
+    position: { x: 30, y: 5, z: 0 }, static: true, sensor: true,
+    area: { gravity: { x: 0, y: -1.0, z: 0 } },   // gravityMode defaults to 'replace'
+});
+
+// Planet: point gravity toward the sensor's center, inverse-square falloff
+// (9.8 m/s² at 10 m). Combine mode lets it coexist with world gravity 0.
+const planet = Physics.createBody({
+    shape: 'sphere', radius: 40, position: { x: 0, y: 200, z: 0 },
+    static: true, sensor: true,
+    area: { gravityPoint: true, gravityStrength: 9.8, falloffDistance: 10,
+            gravityMode: 'combine' },
+});
+
+
+// -----------------------------------------------------------------------------
 // Runtime body properties
 // -----------------------------------------------------------------------------
 //
@@ -825,6 +919,9 @@ Physics.setMass(id, 250);
  * (v *= max(0, 1 - damping*dt) each step — Jolt's model). Creation options
  * linearDamping/angularDamping set the initial values; these change them
  * live (drag zones, powerups, underwater state...).
+ *
+ * While a body is inside an area damping override (see setAreaOverride),
+ * these set the body's BASE damping — the value restored when it exits.
  */
 Physics.setLinearDamping(id, 0.5);
 Physics.setAngularDamping(id, 0.2);
