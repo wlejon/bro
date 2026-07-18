@@ -24,7 +24,8 @@ set(_skia_debug   "${CMAKE_CURRENT_LIST_DIR}/lib/Debug/${_skia_ext}")
 # aren't already present. Everything is pinned to one Skia commit and served
 # from a single GitHub release, so a fetched lib always matches fetched headers.
 # The source bundle is the subset bro compiles/includes (include/, src/, the
-# svg/skshaper/skresources modules, and expat), not the whole Skia tree.
+# modules/ tree, expat, HarfBuzz and ICU's bidi subset), not the whole Skia
+# tree. See BUNDLE.md for what it must carry and how to rebuild it.
 # Non-fatal: a failed download / hash mismatch falls through to the manual
 # instructions below. Windows Debug and Intel (x86_64) macOS are not hosted.
 # BSD-3-Clause permits redistribution. Set -DBRO_FETCH_SKIA=OFF to disable.
@@ -59,9 +60,9 @@ if(BRO_FETCH_SKIA)
     # (1) Headers + source bundle (platform-independent).
     if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/src/include/core/SkCanvas.h")
         set(_skia_bundle "${CMAKE_CURRENT_LIST_DIR}/skia-src.tar.gz")
-        message(STATUS "Skia: fetching source bundle (headers + svg/expat sources, ~6 MB)...")
+        message(STATUS "Skia: fetching source bundle (headers + svg/expat/shaping sources, ~9 MB)...")
         _bro_skia_download("${_skia_base}/skia-src-m147.tar.gz" "${_skia_bundle}"
-            "03f647114ad04cf7ba0a576fccaabe47e0991f0d8c09f80e74e95a87353e9036" _skia_src_ok)
+            "80299aa1556a0630a5322799b4968816d8a0fa94d4d92de22805b6b4d7b5ffbc" _skia_src_ok)
         if(_skia_src_ok)
             file(MAKE_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src")
             file(ARCHIVE_EXTRACT INPUT "${_skia_bundle}"

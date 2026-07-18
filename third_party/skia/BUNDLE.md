@@ -47,26 +47,37 @@ shapers.
 
 ## Building and publishing an updated bundle
 
-Run from a **full** Skia checkout at the pinned commit — i.e. a tree that has had
-`python3 tools/git-sync-deps` run in it, so `third_party/externals/` is populated.
-`third_party/skia/src/` in a developer tree that was built with
-`build_skia_linux.sh` / `build_skia_mac.sh` already is one.
+**Build the new bundle from the previous published one, not from a full Skia
+checkout.** The published tarball is trimmed more aggressively than any short
+list of `--exclude` globs reproduces — re-deriving it from a `git-sync-deps`
+tree with the obvious excludes pulls in the whole of `modules/` (canvaskit's
+npm/go/wasm trees, skottie sources, per-module test dirs) and yields a **37 MB**
+archive instead of 9 MB. Starting from the last good bundle preserves the exact
+trim set and guarantees the parts that already build keep building.
 
 ```bash
-cd third_party/skia/src
+cd "$(mktemp -d)"
+curl -sL -o old.tar.gz \
+  https://github.com/wlejon/bro/releases/download/skia-prebuilt-m147/skia-src-m147.tar.gz
 
-tar czf ../skia-src-m147.tar.gz \
-  --exclude='*/test/*' --exclude='test-*' --exclude='*/wasm/*' \
-  --exclude='*.py' --exclude='*.rl' \
-  include \
-  src \
-  modules \
-  third_party/expat third_party/externals/expat \
-  third_party/harfbuzz/config-override.h third_party/harfbuzz/LICENSE \
-  third_party/externals/harfbuzz/src \
-  third_party/externals/icu/source/common third_party/externals/icu/LICENSE
+mkdir staging && tar xzf old.tar.gz -C staging
 
-sha256sum ../skia-src-m147.tar.gz
+SRC=/path/to/full/skia            # a tree with tools/git-sync-deps run in it
+mkdir -p staging/modules/skunicode/src staging/third_party/harfbuzz \
+         staging/third_party/externals/harfbuzz staging/third_party/externals/icu/source
+cp -r "$SRC/modules/skunicode/src/."                    staging/modules/skunicode/src/
+cp    "$SRC/third_party/harfbuzz/config-override.h" \
+      "$SRC/third_party/harfbuzz/LICENSE"               staging/third_party/harfbuzz/
+cp -r "$SRC/third_party/externals/harfbuzz/src"         staging/third_party/externals/harfbuzz/
+cp -r "$SRC/third_party/externals/icu/source/common"    staging/third_party/externals/icu/source/
+cp    "$SRC/third_party/externals/icu/LICENSE"          staging/third_party/externals/icu/
+
+find staging -type d \( -name test -o -name tests -o -name wasm \) -prune -exec rm -rf {} +
+find staging -name '*.py' -delete
+find staging -name '*.rl' -delete
+
+(cd staging && tar czf ../skia-src-m147.tar.gz include src modules third_party)
+sha256sum skia-src-m147.tar.gz
 ```
 
 Layout convention: paths inside the tarball are relative to the Skia source root
@@ -74,26 +85,38 @@ and extract straight into `third_party/skia/src/` (`skia.cmake` extracts with
 `DESTINATION third_party/skia/src`). There is no top-level directory in the
 archive.
 
-Expected size: the pre-shaping bundle is 6.16 MB; the shaping additions are
-2.95 MB compressed (7.2 MB uncompressed), for roughly **9.1 MB**.
+Sizes: pre-shaping bundle 6,159,567 B; with shaping **9,132,917 B** (~9.1 MB).
+
+### Verify before publishing
+
+Extract the archive somewhere empty and confirm every file
+`skia_modules.cmake` probes for is present, plus the three private Skia headers
+`SkShaper_harfbuzz.cpp` reaches for (`src/base/SkUTF.h`, `src/base/SkTDPQueue.h`,
+`src/core/SkLRUCache.h`) and `include/core/SkCanvas.h` (the "already fetched"
+sentinel `skia.cmake` tests). A bundle that extracts with a stray top-level
+directory will pass a naive `tar tzf | grep` but fail at configure.
 
 ### Publish and re-pin
 
-The tarball is served from the same release as the prebuilt libraries. If you
-overwrite the asset in place, keep the tag; if you cut a new tag, update
-`BRO_SKIA_RELEASE_TAG` too.
+The tarball is served from the same release as the prebuilt libraries.
+Overwriting the asset in place is fine — bro's CI is the only consumer, and it
+builds from this repo, so it re-pins in the same commit.
 
 ```bash
-gh release upload skia-prebuilt-m147 third_party/skia/skia-src-m147.tar.gz --clobber
+gh release upload skia-prebuilt-m147 skia-src-m147.tar.gz --repo wlejon/bro --clobber
 ```
 
-Then update `third_party/skia/skia.cmake`:
+Then update `third_party/skia/skia.cmake` **in the same commit as the upload** —
+the checksum is verified on download, so a published asset and an un-updated pin
+break every fresh configure until they agree:
 
-- **line 32** — `BRO_SKIA_RELEASE_TAG` default, only if you cut a new tag.
-- **line 63** — the asset filename, only if you renamed it.
-- **line 64** — the SHA-256 literal, **always**: replace it with the
-  `sha256sum` printed above.
-- **line 62** — the `~6 MB` in the progress message; say `~9 MB`.
+- `BRO_SKIA_RELEASE_TAG` default — only if you cut a new tag.
+- the asset filename in the `_bro_skia_download` call — only if you renamed it.
+- the SHA-256 literal — **always**, from the `sha256sum` above.
+- the `~9 MB` in the progress message, if the size moved materially.
+
+Finally re-download from the release URL and confirm the checksum matches what
+you pinned, so a truncated or mid-flight upload can't sit undetected.
 
 Verify from a clean state:
 
