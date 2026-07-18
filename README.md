@@ -3,7 +3,7 @@
 [![CI](https://github.com/wlejon/bro/actions/workflows/ci.yml/badge.svg)](https://github.com/wlejon/bro/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/wlejon/bro/actions/workflows/codeql.yml/badge.svg)](https://github.com/wlejon/bro/actions/workflows/codeql.yml)
 [![Nightly](https://github.com/wlejon/bro/actions/workflows/nightly.yml/badge.svg)](https://github.com/wlejon/bro/actions/workflows/nightly.yml)
-[![Download nightly](https://img.shields.io/github/v/release/wlejon/bro?include_prereleases&label=download%20nightly)](https://github.com/wlejon/bro/releases)
+[![Download nightly](https://img.shields.io/github/v/release/wlejon/bro?label=download%20nightly)](https://github.com/wlejon/bro/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 Build desktop apps and games in **HTML/CSS/JS** — with 3D, physics, audio, and on-device AI wired into the javascript, in one native process. QuickJS, a custom layout engine, Skia, and OpenGL. Windows, Mac, and Linux.

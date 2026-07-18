@@ -2,9 +2,10 @@ name: Nightly
 
 # Builds the full profile (renderer + net/video/steam + AI tower) for
 # Linux / Windows / macOS-arm64 every night and publishes the binaries to a
-# single rolling "nightly" pre-release. The tag is re-pointed each run, so
-# downloaders always find one "latest nightly" and it never shadows a hand-cut
-# vX.Y.Z release.
+# single rolling "nightly" release, marked Latest. The tag is re-pointed each
+# run, so downloaders always find one "latest nightly". If hand-cut vX.Y.Z
+# releases resume, revisit the --latest flag in Publish below — nightly claims
+# Latest unconditionally today because it is the only channel bro ships.
 #
 # Friendliness: the CUDA siblings link cudart_static, so one binary launches on
 # any machine — it uses an NVIDIA GPU when the driver is present and falls back
@@ -282,7 +283,15 @@ jobs:
 
       # Re-point the single "nightly" tag/release at this run's commit and
       # replace its assets. Deleting first (with --cleanup-tag) is the reliable
-      # way to move the tag; recreate as a prerelease so it never outranks vX.Y.Z.
+      # way to move the tag.
+      #
+      # --latest is explicit and load-bearing: nightly is the only release bro
+      # publishes right now, so it must be the one GitHub serves at
+      # /releases/latest and shows at the top of the releases page. Without it
+      # (or worse, with --prerelease, which is what this used to do) GitHub
+      # falls back to "most recent non-prerelease" and picks whatever else
+      # happens to exist — in practice the skia-prebuilt-m147 build artifact,
+      # which is infrastructure and not something to hand a user.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
@@ -290,10 +299,10 @@ jobs:
           gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
           NOTES="Automated nightly build from \`${GITHUB_SHA::7}\` on $(date -u +%Y-%m-%d).
 
-          Single self-contained binary per platform — uses your NVIDIA GPU when present, falls back to CPU otherwise (macOS uses Metal). This is a pre-release; for stable builds see the tagged releases."
+          Single self-contained binary per platform — uses your NVIDIA GPU when present, falls back to CPU otherwise (macOS uses Metal). bro is pre-alpha; nightly is the current release channel."
           gh release create nightly \
             --target "$GITHUB_SHA" \
             --title "Nightly ($(date -u +%Y-%m-%d))" \
             --notes "$NOTES" \
-            --prerelease \
+            --latest \
             artifacts/*.zip
