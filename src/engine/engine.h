@@ -170,6 +170,16 @@ public:
     /// Handle a window resize.
     void handleResize(int w, int h);
 
+    /// Handle SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED: re-read the window's
+    /// display scale and, when it actually moved, refresh devicePixelRatio in
+    /// every live realm and dispatch a window resize event so apps re-read it.
+    /// No-op outside windowed mode — headless keeps a deterministic 1.0.
+    void handleDisplayScaleChanged();
+
+    /// OS display scale exposed to JS as window.devicePixelRatio. 1.0 in
+    /// headless mode (deterministic tests) and before the window exists.
+    float displayScale() const { return displayScale_; }
+
     /// Effective CSS color scheme ("light" or "dark") for
     /// `@media (prefers-color-scheme)`. Resolves the appearance.colorScheme
     /// setting: "light"/"dark" force a scheme, "system" follows the OS theme
@@ -1009,6 +1019,10 @@ private:
     bool shutdownDone_ = false;  // shutdown() guard — run() and ~Engine() both call it
     int viewportWidth_;
     int viewportHeight_;
+    // OS display scale (window.devicePixelRatio). Read from the window at
+    // init and on SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED in windowed mode;
+    // pinned to 1.0 in headless so tests are reproducible across desktops.
+    float displayScale_ = 1.0f;
 
     // Pre-compiled observer check function (avoids JS_Eval parse per frame)
     JSValue observerCheckFn_ = JS_UNDEFINED;

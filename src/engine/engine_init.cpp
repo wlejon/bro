@@ -299,6 +299,11 @@ Engine::Engine(const EngineConfig& config)
             // headless where the window is hidden anyway.
             if (!hidden) {
                 window_->setIcon("system/icon.png");
+                // Real OS display scale → window.devicePixelRatio. Headless
+                // deliberately keeps the 1.0 default: the hidden window sits on
+                // a real display and would report its scale, making test output
+                // depend on the desktop the suite happens to run on.
+                displayScale_ = window_->getDisplayScale();
             }
 
             // GL context (shader programs + helpers)
@@ -617,7 +622,8 @@ void Engine::initAppRealm() {
     }
 
     // 9. Set up window/navigator/location/history BEFORE DOM bindings
-    js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, contentHeight());
+    js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, contentHeight(),
+                              displayScale_);
 
     // 9a0. location.reload() — the polyfill's method calls this hook when
     //      present. Queues a full app-realm reload; deferred to a safe point

@@ -35,13 +35,15 @@ static JSValue js_clipboard_read(JSContext* ctx, JSValueConst /*this_val*/,
     return s;
 }
 
-void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight)
+void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight,
+                           double devicePixelRatio)
 {
     JSValue global = JS_GetGlobalObject(ctx);
 
     // window = globalThis
     JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
-    JS_SetPropertyStr(ctx, global, "devicePixelRatio", JS_NewFloat64(ctx, 1.0));
+    JS_SetPropertyStr(ctx, global, "devicePixelRatio",
+                      JS_NewFloat64(ctx, devicePixelRatio));
     JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, viewportWidth));
     JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, viewportHeight));
     JS_SetPropertyStr(ctx, global, "outerWidth", JS_NewInt32(ctx, viewportWidth));

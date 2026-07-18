@@ -184,6 +184,10 @@ void EventLoop::pollEvents() {
                 if (onSystemThemeChanged) onSystemThemeChanged();
                 break;
 
+            case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
+                if (onDisplayScaleChanged) onDisplayScaleChanged();
+                break;
+
             default:
                 break;
         }

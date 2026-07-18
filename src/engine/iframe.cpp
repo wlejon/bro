@@ -179,7 +179,7 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
     brokit::api::installConsole(dp->jsCtx);
     dp->timers = std::make_unique<js::Timers>();
     js::Timers::install(dp->jsCtx, dp->timers.get());
-    js::installWindowBindings(dp->jsCtx, dp->boxW, dp->boxH);
+    js::installWindowBindings(dp->jsCtx, dp->boxW, dp->boxH, displayScale_);
 
     // location.reload() inside the sub-document reloads THIS iframe — the same
     // deferred teardown/rebuild as the host calling iframe.reload(). The hook

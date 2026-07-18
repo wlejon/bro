@@ -218,6 +218,9 @@ void Engine::run() {
     // OS theme flip → re-evaluate @media (prefers-color-scheme) and restyle.
     // A no-op when appearance.colorScheme forces "light"/"dark".
     eventLoop_->onSystemThemeChanged = [this]() { applyColorScheme(); };
+    // OS scaling change / moved to a display with a different scale →
+    // refresh window.devicePixelRatio and fire a window resize event.
+    eventLoop_->onDisplayScaleChanged = [this]() { handleDisplayScaleChanged(); };
 
     // Seed focus from the window's actual state — an app can launch unfocused
     // (e.g. spawned behind another window), and SDL won't emit a FOCUS_LOST for

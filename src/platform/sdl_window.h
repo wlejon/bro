@@ -60,6 +60,13 @@ public:
     /// Enumerate available fullscreen display modes.
     std::vector<DisplayModeInfo> getDisplayModes() const;
 
+    /// Current display scale for this window (2.0 on a 200% HiDPI desktop).
+    /// SDL_GetWindowDisplayScale first (per-window, tracks the display the
+    /// window actually sits on), falling back to the display's content scale;
+    /// 1.0 when neither is available. Re-query after
+    /// SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED (EventLoop::onDisplayScaleChanged).
+    float getDisplayScale() const;
+
     /// Set the window icon from a PNG file (taskbar / Alt-Tab / title bar).
     /// Silently no-ops if the file is missing or malformed — a missing icon
     /// should never stop the app from starting.

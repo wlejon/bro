@@ -75,6 +75,7 @@
 #include <SDL3/SDL.h>
 #include <glad/gl.h>
 #include <algorithm>
+#include <cmath>
 
 namespace bro::engine {
 void Engine::stopBackgroundServices() {
@@ -457,6 +458,12 @@ void Engine::handleResize(int w, int h) {
         // apps see a web-like viewport that matches their layout area).
         JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, cw));
         JS_SetPropertyStr(ctx, global, "innerHeight", JS_NewInt32(ctx, ch));
+        // Refresh devicePixelRatio too — handleDisplayScaleChanged routes
+        // through here so a display-scale change reaches apps as the same
+        // resize event browsers fire (apps re-read window.devicePixelRatio
+        // in their resize handler).
+        JS_SetPropertyStr(ctx, global, "devicePixelRatio",
+                          JS_NewFloat64(ctx, displayScale_));
 
         // Auto-size every <canvas> that didn't declare a fixed buffer size.
         // Authors opt out by setting the width/height HTML attributes; those
@@ -501,6 +508,35 @@ void Engine::handleResize(int w, int h) {
     // whose media-triggered restyle hasn't landed yet (iframes / system panels
     // on a scheme flip) defer to the frame/flush drain via the per-realm gate.
     deliverMediaQueryChangesAllRealms();
+}
+
+void Engine::handleDisplayScaleChanged() {
+    // Windowed only: headless pins devicePixelRatio to 1.0 so test output
+    // never depends on the desktop the suite runs on.
+    if (displayMode_ != DisplayMode::Windowed || !window_) return;
+    float scale = window_->getDisplayScale();
+    if (std::fabs(scale - displayScale_) < 1e-3f) return;
+    displayScale_ = scale;
+
+    // Refresh devicePixelRatio in the secondary realms directly — iframes and
+    // system panels share the app's window, so they see the same scale. The
+    // app realm is refreshed by handleResize below (which also dispatches the
+    // window resize event apps re-read the ratio from, as browsers do).
+    // htmlayout's media evaluator has no resolution/min-resolution feature,
+    // so there are no MediaQueryLists to re-evaluate for a scale change.
+    auto refreshRealm = [&](JSContext* ctx) {
+        if (!ctx) return;
+        JSValue global = JS_GetGlobalObject(ctx);
+        JS_SetPropertyStr(ctx, global, "devicePixelRatio",
+                          JS_NewFloat64(ctx, displayScale_));
+        JS_FreeValue(ctx, global);
+    };
+    for (auto& doc : iframeDocs_) {
+        if (doc) refreshRealm(doc->jsCtx);
+    }
+    for (auto& doc : systemDocs_) refreshRealm(doc.jsCtx);
+
+    handleResize(viewportWidth_, viewportHeight_);
 }
 
 std::string Engine::effectiveColorScheme() const {

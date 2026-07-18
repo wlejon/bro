@@ -203,6 +203,16 @@ std::vector<DisplayModeInfo> Window::getDisplayModes() const {
     return result;
 }
 
+float Window::getDisplayScale() const {
+    if (!m_window) return 1.0f;
+    float scale = SDL_GetWindowDisplayScale(m_window);
+    if (scale <= 0.0f) {
+        SDL_DisplayID disp = SDL_GetDisplayForWindow(m_window);
+        if (disp) scale = SDL_GetDisplayContentScale(disp);
+    }
+    return scale > 0.0f ? scale : 1.0f;
+}
+
 void Window::setIcon(const std::string& pngPath) {
     if (!m_window) return;
     broimage::Image img;

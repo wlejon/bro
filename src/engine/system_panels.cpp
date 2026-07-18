@@ -254,7 +254,8 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
         // Install window bindings: sets window = globalThis, plus the
         // addEventListener/dispatchEvent polyfill so panels can listen to
         // window-level events (keydown capture for rebind UIs, etc.).
-        js::installWindowBindings(doc.jsCtx, viewportWidth_, viewportHeight_);
+        js::installWindowBindings(doc.jsCtx, viewportWidth_, viewportHeight_,
+                                  displayScale_);
 
         // Install DOM bindings
         js::DomBindings::install(doc.jsCtx, doc.document.get());

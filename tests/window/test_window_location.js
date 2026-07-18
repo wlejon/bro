@@ -13,6 +13,10 @@ assert(window === globalThis, 'window === globalThis');
 
 assert(typeof devicePixelRatio === 'number', 'devicePixelRatio is a number');
 assert(devicePixelRatio > 0, 'devicePixelRatio is positive');
+// Headless pins the scale to 1.0 regardless of the desktop's real display
+// scale, so test output is reproducible across machines (windowed mode
+// reports the true SDL display scale instead).
+assert(devicePixelRatio === 1, 'headless devicePixelRatio is a deterministic 1.0');
 
 // ==========================================================================
 // innerWidth / innerHeight
