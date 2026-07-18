@@ -30,6 +30,7 @@ embed_js(net_sync.js           js_net_sync)
 ## ── Library ──────────────────────────────────────────────────────────────────
 
 add_library(bro_js STATIC
+    asset_path.cpp
     runtime.cpp timers.cpp window_bindings.cpp window_host_bindings.cpp gamepad_bindings.cpp
     dom_bindings.cpp node_bindings.cpp event_bindings.cpp style_bindings.cpp
     element_bindings.cpp shadowroot_bindings.cpp document_bindings.cpp

@@ -1,3 +1,4 @@
+#include "js/asset_path.h"
 #include "js/tile_bindings.h"
 #if BRO_WITH_3D  // modular-build feature gate
 
@@ -28,22 +29,11 @@ namespace bro::js {
 // App-relative path resolution for atlas images (mirrors scene_bindings).
 // -------------------------------------------------------------------------
 
-static std::string s_basePath;
-static const util::AssetMounts* s_mounts = nullptr;
 
 static std::string resolveAppPath(const std::string& src) {
-    if (src.size() >= 2 && src[1] == ':') return src;       // Windows C:\...
-    if (!src.empty() && (src[0] == '/' || src[0] == '\\')) {
-        if (s_mounts) {
-            std::string m = s_mounts->resolve(src);
-            if (!m.empty()) return m;
-        }
-        return src;
-    }
-    if (s_basePath.empty()) return src;
-    std::string path = s_basePath;
-    if (path.back() != '/' && path.back() != '\\') path += '/';
-    return path + src;
+    // Delegates to the one shared implementation (js/asset_path.h); this used
+    // to be a verbatim copy in four binding files.
+    return resolveAssetPath(src);
 }
 
 // -------------------------------------------------------------------------
@@ -1086,8 +1076,7 @@ void TileBindings::install(JSContext* ctx) {
 
 void TileBindings::setAppContext(const std::string& basePath,
                                  const util::AssetMounts* mounts) {
-    s_basePath = basePath;
-    s_mounts = mounts;
+    setAssetPathContext(basePath, mounts);
 }
 
 void TileBindings::cleanup(JSContext*) {

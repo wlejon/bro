@@ -20,6 +20,7 @@
 #include "render/recording_renderer.h"
 #include "render/skia_backend.h"
 #include "render/gl_context.h"
+#include "js/asset_path.h"
 #include "js/runtime.h"
 #include "js/timers.h"
 #include "js/dom_bindings.h"
@@ -712,6 +713,11 @@ void Engine::initAppRealm() {
     // 9b. Install custom elements (after DOM bindings — needs element class ID)
     js::installCustomElements(jsRuntime_->getContext(),
                               js::DomBindings::elementClassId(), document_.get());
+
+    // Shared path resolution for every binding that takes a file path, so the
+    // audio/image/scene/tile surfaces all accept the same spellings. Must run
+    // before any binding install that might resolve a path.
+    js::setAssetPathContext(manifest_.basePath, &assetMounts_);
 
     // 9c. Install Canvas 2D bindings + getContext factory
     js::CanvasBindings::install(jsRuntime_->getContext());

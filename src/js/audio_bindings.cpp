@@ -1,4 +1,5 @@
 #include "js/audio_bindings.h"
+#include "js/asset_path.h"
 #include "js/async_job.h"
 #include "js/runtime.h"
 #include "util/log.h"
@@ -1123,8 +1124,9 @@ static JSValue js_audioctx_createClipFromFile(JSContext* ctx, JSValueConst this_
     if (!d || argc < 1) return JS_UNDEFINED;
     const char* path = JS_ToCString(ctx, argv[0]);
     if (!path) return JS_UNDEFINED;
-    int id = d->engine->createClipFromFile(path);
+    std::string resolved = resolveAssetPath(path);
     JS_FreeCString(ctx, path);
+    int id = d->engine->createClipFromFile(resolved.c_str());
     return JS_NewInt32(ctx, id);
 }
 
@@ -1138,7 +1140,9 @@ static JSValue js_audioctx_createClipFromFileAsync(JSContext* ctx, JSValueConst 
         return JS_ThrowTypeError(ctx, "createClipFromFileAsync: file path required");
     const char* cpath = JS_ToCString(ctx, argv[0]);
     if (!cpath) return JS_EXCEPTION;
-    std::string pathCopy(cpath);
+    // Resolve on the JS thread — the decode runs on a worker that has no
+    // notion of the app directory or the mount table.
+    std::string pathCopy = resolveAssetPath(cpath);
     JS_FreeCString(ctx, cpath);
 
     JSValue resolving[2];
@@ -1202,6 +1206,8 @@ static JSValue js_audioctx_createStreamFromFile(JSContext* ctx, JSValueConst thi
         return JS_ThrowTypeError(ctx, "createStreamFromFile: file path required");
     const char* path = JS_ToCString(ctx, argv[0]);
     if (!path) return JS_EXCEPTION;
+    std::string resolvedPath = resolveAssetPath(path);
+    JS_FreeCString(ctx, path);
 
     broaudio::FileStreamOptions opts;
     if (argc >= 2 && JS_IsObject(argv[1])) {
@@ -1224,8 +1230,7 @@ static JSValue js_audioctx_createStreamFromFile(JSContext* ctx, JSValueConst thi
     }
 
     std::string err;
-    int id = d->engine->createStreamFromFile(path, opts, &err);
-    JS_FreeCString(ctx, path);
+    int id = d->engine->createStreamFromFile(resolvedPath.c_str(), opts, &err);
     if (id < 0)
         return JS_ThrowInternalError(ctx, "createStreamFromFile: %s",
                                      err.empty() ? "failed to open stream" : err.c_str());

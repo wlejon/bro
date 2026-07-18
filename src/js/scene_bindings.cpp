@@ -1,3 +1,4 @@
+#include "js/asset_path.h"
 #include "js/scene_bindings.h"
 #if BRO_WITH_3D  // modular-build feature gate
 #include "js/scene_bindings_internal.h"
@@ -52,26 +53,15 @@ JPH_SUPPRESS_WARNINGS
 namespace bro::js {
 
 // App-relative path resolution context (set per app load by the engine).
-static std::string s_basePath;
-static const util::AssetMounts* s_mounts = nullptr;
 
 // Resolve a path against the app base directory and engine mounts. Mirrors
 // the rules used by image_bindings: absolute paths and Windows drive paths
 // pass through; leading-slash paths consult mounts; everything else is taken
 // relative to the app directory.
 std::string resolveAppPath(const std::string& src) {
-    if (src.size() >= 2 && src[1] == ':') return src;
-    if (!src.empty() && (src[0] == '/' || src[0] == '\\')) {
-        if (s_mounts) {
-            std::string m = s_mounts->resolve(src);
-            if (!m.empty()) return m;
-        }
-        return src;
-    }
-    if (s_basePath.empty()) return src;
-    std::string path = s_basePath;
-    if (path.back() != '/' && path.back() != '\\') path += '/';
-    return path + src;
+    // Delegates to the one shared implementation (js/asset_path.h); this used
+    // to be a verbatim copy in four binding files.
+    return resolveAssetPath(src);
 }
 
 // ---------------------------------------------------------------------------
@@ -342,8 +332,7 @@ static JSValue js_sg_createTileWorld(JSContext* ctx, JSValueConst this_val, int 
 
 void SceneBindings::setAppContext(const std::string& basePath,
                                   const util::AssetMounts* mounts) {
-    s_basePath = basePath;
-    s_mounts = mounts;
+    setAssetPathContext(basePath, mounts);
 }
 
 void SceneBindings::install(JSContext* ctx) {
