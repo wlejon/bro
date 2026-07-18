@@ -1,7 +1,9 @@
 #pragma once
 
-#include <string>
+#include <climits>
 #include <cstdint>
+#include <memory>
+#include <string>
 #include <vector>
 
 struct SDL_Window;
@@ -52,6 +54,19 @@ enum class CursorShape {
     Count_  // sentinel — cache array size, not a real shape
 };
 
+/// One OS window. Two kinds share this class:
+///
+/// - The PRIMARY window (public constructor): owns THE OpenGL context — the
+///   main context every other context in the process shares resources with —
+///   and loads the GL function pointers. Exactly one per process. SDL library
+///   lifetime is refcounted through SdlRuntime (acquired per Window), so the
+///   primary no longer single-handedly owns SDL_Init/SDL_Quit.
+///
+/// - SECONDARY windows (createSecondary): SDL_WINDOW_OPENGL surfaces created
+///   with the same GL attribute set as the primary but NO GL context of their
+///   own (getGLContext() is null). The engine composites into them by making
+///   the primary's context current on their drawable (makeGLCurrent), so all
+///   GL objects live in the one main context.
 class Window {
 public:
     Window(const std::string& title, uint32_t width, uint32_t height,
@@ -62,10 +77,64 @@ public:
     Window(const Window&) = delete;
     Window& operator=(const Window&) = delete;
 
+    /// Options for a secondary window. `x`/`y` are desktop coordinates; both
+    /// must be set (!= kPosUnset) for an explicit position, else the window
+    /// centers on `displayId` when nonzero, else the OS places it.
+    struct SecondaryConfig {
+        static constexpr int kPosUnset = INT_MIN;
+        std::string title = "bro";
+        uint32_t width = 800;
+        uint32_t height = 600;
+        bool hidden = false;
+        bool resizable = true;
+        bool borderless = false;
+        bool alwaysOnTop = false;
+        int x = kPosUnset;
+        int y = kPosUnset;
+        uint32_t displayId = 0;
+    };
+
+    /// Create a secondary window (see class comment): SDL_WINDOW_OPENGL with
+    /// the primary's GL attribute set, no GL context, no glad load, no swap
+    /// interval touched. Returns null on failure. Main thread only. Requires
+    /// the primary window to exist (it holds the context the caller will make
+    /// current on this window's drawable).
+    static std::unique_ptr<Window> createSecondary(const SecondaryConfig& cfg);
+
     SDL_Window* getSDLWindow() const { return m_window; }
     SDL_GLContext getGLContext() const { return m_glContext; }
     uint32_t getWidth() const { return m_width; }
     uint32_t getHeight() const { return m_height; }
+
+    /// SDL window id — the key SDL events carry (event.window.windowID etc.),
+    /// used to route events to the window they happened on. 0 on failure.
+    uint32_t windowId() const;
+
+    /// True for the primary window (owns the process's main GL context).
+    bool ownsGLContext() const { return m_glContext != nullptr; }
+
+    /// Make `ctx` current against THIS window's drawable
+    /// (SDL_GL_MakeCurrent(this, ctx)). The per-window composite pass uses
+    /// this to point the primary's context at each secondary drawable in
+    /// turn. Returns false (and logs) on failure.
+    bool makeGLCurrent(SDL_GLContext ctx);
+
+    /// Re-apply this window's vsync preference (from the constructor /
+    /// setVSync) to the CURRENT GL context. The per-window composite pass
+    /// forces swap interval 0 for secondary swaps; the main swap calls this
+    /// first so it keeps the configured pacing.
+    void applySwapIntervalPreference();
+
+    /// Current client-area size in window coordinates (SDL points), queried
+    /// live from SDL — unlike getWidth()/getHeight(), which only track sizes
+    /// set through this class.
+    void getSize(int& w, int& h) const;
+
+    /// Current drawable size in physical pixels (what glViewport wants).
+    void getSizeInPixels(int& w, int& h) const;
+
+    /// Raise the window above its siblings and request input focus.
+    void raise();
 
     void setSize(uint32_t width, uint32_t height) { m_width = width; m_height = height; }
     void setTitle(const std::string& title);
@@ -160,10 +229,20 @@ public:
     void setCursor(CursorShape shape);
 
 private:
+    Window() = default;  // secondary-window factory path (createSecondary)
+
+    /// Request the process-wide GL attribute set (3.3 core, 24/8 depth/
+    /// stencil, double-buffered). Both window kinds set these before
+    /// SDL_CreateWindow so every SDL_WINDOW_OPENGL surface gets the same
+    /// pixel format — required for making the one shared context current on
+    /// any of their drawables.
+    static void setGLAttributes();
+
     SDL_Window* m_window = nullptr;
     SDL_GLContext m_glContext = nullptr;
     uint32_t m_width = 0;
     uint32_t m_height = 0;
+    bool m_vsyncPref = true;
     SDL_Cursor* m_cursors[static_cast<int>(CursorShape::Count_)] = {};
     CursorShape m_cursorShape = CursorShape::Default;
 };

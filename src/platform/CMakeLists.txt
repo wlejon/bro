@@ -1,4 +1,4 @@
-add_library(bro_platform STATIC sdl_window.cpp event_loop.cpp)
+add_library(bro_platform STATIC sdl_window.cpp sdl_runtime.cpp event_loop.cpp)
 target_include_directories(bro_platform PUBLIC ${CMAKE_SOURCE_DIR}/src)
 
 # SDL3 — use the umbrella target (resolves to shared or static automatically)

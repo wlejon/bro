@@ -1,4 +1,5 @@
 #include "platform/sdl_window.h"
+#include "platform/sdl_runtime.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
@@ -9,29 +10,11 @@
 
 namespace bro::platform {
 
-Window::Window(const std::string& title, uint32_t width, uint32_t height,
-               bool hidden, bool resizable, bool vsync, bool borderless)
-    : m_width(width), m_height(height)
-{
-    if (!SDL_Init(SDL_INIT_VIDEO)) {
-        LOG_ERROR("Failed to initialize SDL: %s", SDL_GetError());
-        throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
-    }
-
-    // Gamepad support is best-effort: a headless box or stripped-down driver
-    // stack may have no controller backend, and apps must still run (they just
-    // see zero gamepads). So init it as a subsystem and only log on failure.
-    if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
-        LOG_INFO("SDL gamepad subsystem unavailable: %s", SDL_GetError());
-    }
-
-    // Deliver the click that activates an unfocused window. SDL defaults this
-    // off on every platform (Windows/X11/Wayland all gate on the same hint), so
-    // without it the first click after alt-tabbing back in is swallowed to raise
-    // the window and the user has to click a second time to actually hit
-    // anything. Browsers and native apps pass that click through; so do we.
-    SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");
-
+// Process-wide GL attribute set. Both the primary constructor and the
+// secondary-window factory request the same attributes before creating their
+// SDL_WINDOW_OPENGL surface, so every window's pixel format is compatible
+// with the one shared main context (makeGLCurrent on any drawable).
+void Window::setGLAttributes() {
     // Request OpenGL 3.3 Core context
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
@@ -39,6 +22,19 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+}
+
+Window::Window(const std::string& title, uint32_t width, uint32_t height,
+               bool hidden, bool resizable, bool vsync, bool borderless)
+    : m_width(width), m_height(height), m_vsyncPref(vsync)
+{
+    // SDL library lifetime is refcounted across all windows (SdlRuntime);
+    // this primary window holds one reference like any other.
+    if (!SdlRuntime::acquire()) {
+        throw std::runtime_error(std::string("SDL_Init failed: ") + SDL_GetError());
+    }
+
+    setGLAttributes();
 
     SDL_WindowFlags flags = SDL_WINDOW_OPENGL;
     if (hidden) {
@@ -56,6 +52,7 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
 
     if (!m_window) {
         LOG_ERROR("Failed to create SDL window: %s", SDL_GetError());
+        SdlRuntime::release();
         throw std::runtime_error(std::string("SDL_CreateWindow failed: ") + SDL_GetError());
     }
 
@@ -88,16 +85,32 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
         }
     }
 
-    // Create OpenGL context
+    // Create OpenGL context. Primary-only: secondary windows (createSecondary)
+    // never create a context — the engine points this context at their
+    // drawables instead.
     m_glContext = SDL_GL_CreateContext(m_window);
     if (!m_glContext) {
         LOG_ERROR("Failed to create GL context: %s", SDL_GetError());
+        SDL_DestroyWindow(m_window);
+        m_window = nullptr;
+        SdlRuntime::release();
         throw std::runtime_error(std::string("SDL_GL_CreateContext failed: ") + SDL_GetError());
     }
 
-    // Load OpenGL functions via glad
+    // Load OpenGL functions via glad. On the failure paths below, tear down
+    // what this constructor built and drop the SDL refcount — the thrown
+    // exception means ~Window will never run (headless catches this and falls
+    // back to CPU raster; the balanced release keeps SdlRuntime consistent).
+    auto failCleanup = [this]() {
+        SDL_GL_DestroyContext(m_glContext);
+        m_glContext = nullptr;
+        SDL_DestroyWindow(m_window);
+        m_window = nullptr;
+        SdlRuntime::release();
+    };
     int version = gladLoadGL((GLADloadfunc)SDL_GL_GetProcAddress);
     if (!version) {
+        failCleanup();
         throw std::runtime_error("Failed to load OpenGL functions via glad");
     }
 
@@ -110,6 +123,7 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
     int glMajor = GLAD_VERSION_MAJOR(version);
     int glMinor = GLAD_VERSION_MINOR(version);
     if (glMajor < 3 || (glMajor == 3 && glMinor < 3)) {
+        failCleanup();
         throw std::runtime_error(
             "OpenGL 3.3 core required, but this system provides only OpenGL " +
             std::to_string(glMajor) + "." + std::to_string(glMinor) +
@@ -147,7 +161,99 @@ Window::~Window() {
         SDL_DestroyWindow(m_window);
         m_window = nullptr;
     }
-    SDL_Quit();
+    SdlRuntime::release();
+}
+
+std::unique_ptr<Window> Window::createSecondary(const SecondaryConfig& cfg) {
+    if (!SdlRuntime::acquire()) return nullptr;
+
+    // Same attribute set as the primary so this SDL_WINDOW_OPENGL surface's
+    // pixel format is compatible with the shared main context.
+    setGLAttributes();
+
+    SDL_WindowFlags flags = SDL_WINDOW_OPENGL;
+    if (cfg.hidden) {
+        flags |= SDL_WINDOW_HIDDEN;
+    } else if (cfg.resizable) {
+        flags |= SDL_WINDOW_RESIZABLE;
+    }
+    if (cfg.borderless) flags |= SDL_WINDOW_BORDERLESS;
+    if (cfg.alwaysOnTop) flags |= SDL_WINDOW_ALWAYS_ON_TOP;
+
+    SDL_Window* sdlWin = SDL_CreateWindow(cfg.title.c_str(),
+                                          static_cast<int>(cfg.width),
+                                          static_cast<int>(cfg.height),
+                                          flags);
+    if (!sdlWin) {
+        LOG_ERROR("Failed to create secondary window: %s", SDL_GetError());
+        SdlRuntime::release();
+        return nullptr;
+    }
+
+    // unique_ptr can't reach the private default ctor through make_unique.
+    std::unique_ptr<Window> win(new Window());
+    win->m_window = sdlWin;
+    win->m_width = cfg.width;
+    win->m_height = cfg.height;
+    win->m_vsyncPref = false;  // secondary swaps run at interval 0 by policy
+
+    // Placement: explicit position wins; else center on the requested
+    // display; else leave it to the OS. Skipped for hidden windows — where a
+    // hidden window "is" depends on the desktop the process runs on, and
+    // headless tests must stay desk-independent (same policy as the primary).
+    if (!cfg.hidden) {
+        if (cfg.x != SecondaryConfig::kPosUnset &&
+            cfg.y != SecondaryConfig::kPosUnset) {
+            SDL_SetWindowPosition(sdlWin, cfg.x, cfg.y);
+        } else if (cfg.displayId != 0) {
+            win->moveToDisplay(cfg.displayId);
+        }
+    }
+
+    return win;
+}
+
+uint32_t Window::windowId() const {
+    if (!m_window) return 0;
+    return static_cast<uint32_t>(SDL_GetWindowID(m_window));
+}
+
+bool Window::makeGLCurrent(SDL_GLContext ctx) {
+    if (!m_window) return false;
+    if (!SDL_GL_MakeCurrent(m_window, ctx)) {
+        LOG_ERROR("SDL_GL_MakeCurrent failed: %s", SDL_GetError());
+        return false;
+    }
+    return true;
+}
+
+void Window::applySwapIntervalPreference() {
+    if (m_vsyncPref) {
+        if (!SDL_GL_SetSwapInterval(-1)) {
+            SDL_GL_SetSwapInterval(1);
+        }
+    } else {
+        SDL_GL_SetSwapInterval(0);
+    }
+}
+
+void Window::getSize(int& w, int& h) const {
+    w = h = 0;
+    if (!m_window) return;
+    SDL_GetWindowSize(m_window, &w, &h);
+}
+
+void Window::getSizeInPixels(int& w, int& h) const {
+    w = h = 0;
+    if (!m_window) return;
+    SDL_GetWindowSizeInPixels(m_window, &w, &h);
+}
+
+void Window::raise() {
+    if (!m_window) return;
+    if (!SDL_RaiseWindow(m_window)) {
+        LOG_INFO("SDL_RaiseWindow failed: %s", SDL_GetError());
+    }
 }
 
 void Window::swapWindow() {
@@ -168,6 +274,7 @@ void Window::setFullscreen(bool fullscreen) {
 }
 
 void Window::setVSync(bool enabled) {
+    m_vsyncPref = enabled;
     if (enabled) {
         if (!SDL_GL_SetSwapInterval(-1)) {
             SDL_GL_SetSwapInterval(1);
