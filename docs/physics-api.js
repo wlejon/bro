@@ -611,8 +611,9 @@ Physics.destroyConstraint(handle);
  * for a ray arriving from outside). One hit per body (earliest contact).
  *
  * An optional trailing opts object takes the same filter fields as the shape
- * queries below: `layers` (array of layer names/indices the ray can see) and
- * `ignoreBody` (one body tag to exclude). It may replace maxDist or follow it.
+ * queries below: `layers` (array of layer names/indices the ray can see),
+ * `ignoreBody` (one body tag to exclude) and `ignoreBodies` (array of tags to
+ * exclude). It may replace maxDist or follow it.
  *
  * @returns {Array<{ bodyId:number, fraction:number, position:{x,y,z},
  *                   normal:{x,y,z}, userData:bigint }>}
@@ -652,6 +653,8 @@ if (hit) console.log('nearest', hit.bodyId, hit.fraction, hit.normal);
 //               of the collision matrix — a query may see layers that never
 //               collide with anything. Default: all layers.
 //   ignoreBody: one body tag to exclude (e.g. the caster itself).
+//   ignoreBodies: array of body tags to exclude (union with ignoreBody —
+//               e.g. the caster plus everything it is carrying).
 
 /**
  * Sweep a convex shape from its transform along direction*maxDistance and
@@ -666,6 +669,7 @@ if (hit) console.log('nearest', hit.bodyId, hit.fraction, hit.normal);
  * @param {number}  [opts.maxDistance=1000]
  * @param {(string|number)[]} [opts.layers] - layer filter (see above)
  * @param {number}  [opts.ignoreBody]       - body tag to exclude
+ * @param {number[]} [opts.ignoreBodies]    - body tags to exclude (union)
  * @returns {Array<{ bodyId:number, fraction:number, position:{x,y,z},
  *                   normal:{x,y,z}, userData:bigint }>}
  *          position = contact point on the hit body; normal = surface normal
@@ -717,7 +721,7 @@ for (const o of around) console.log('in blast radius:', o.bodyId, o.depth);
  * @param {number} x
  * @param {number} y
  * @param {number} z
- * @param {Object} [opts] - { layers, ignoreBody } filter as above
+ * @param {Object} [opts] - { layers, ignoreBody, ignoreBodies } filter as above
  * @returns {Array<{ bodyId:number, userData:bigint }>}
  */
 const under = Physics.overlapPoint(mx, my, mz);
@@ -760,6 +764,14 @@ if (under.length) console.log('picked body', under[0].bodyId);
  *                  collision, i.e. it points from body1 toward body2
  *   - penetration: penetration depth in meters; negative = speculative
  *                  contact (bodies may not actually touch after solving)
+ *   - impulse:     estimated collision impulse magnitude (kg·m/s), summed
+ *                  over the contact points. This is a PRE-SOLVE estimate
+ *                  (Jolt's EstimateCollisionResponse — the solver never
+ *                  reports the solved impulses): accurate for an isolated
+ *                  two-body impact, approximate when several bodies pile
+ *                  into the same island. 0 for sensor overlaps. Scales with
+ *                  impact speed and mass — the natural "how hard did we
+ *                  hit" input for impact sounds / damage / particles.
  * "removed" events have none of these (Jolt's removal callback carries only
  * the body pair).
  *
@@ -770,6 +782,7 @@ if (under.length) console.log('picked body', under[0].bodyId);
  *   points?: Array<{x,y,z}>,
  *   normal?: {x,y,z},
  *   penetration?: number,
+ *   impulse?: number,
  * }> & { overflow: boolean }}
  */
 const events = Physics.getContacts();

@@ -61,6 +61,14 @@ struct ContactEvent {
     JPH::Float3 points[kMaxPoints] = {};
     JPH::Float3 normal{0, 0, 0};
     float penetration = 0.0f;
+
+    // Estimated collision impulse magnitude (kg·m/s), Added events only.
+    // Jolt's solver doesn't expose the solved impulse, so this is Jolt's
+    // standard PRE-SOLVE estimate (EstimateCollisionResponse in the contact
+    // listener, summed over the manifold points): accurate for an isolated
+    // two-body impact, approximate when more bodies pile into the same
+    // island. 0 for sensor overlaps (no collision response).
+    float impulse = 0.0f;
 };
 
 /// Per-body friction/restitution combine mode. Default keeps Jolt's built-in
@@ -106,6 +114,8 @@ struct OverlapHit {
 struct QueryFilter {
     uint32_t layerMask = 0xffffffffu;  // bit i = include bodies on layer i
     JPH::BodyID ignoreBody;            // invalid (default) = exclude nothing
+    std::vector<JPH::BodyID> ignoreBodies;  // additional exclusions (linear scan
+                                            // — sized for a handful of bodies)
 };
 
 /// Body creation options (covers all shapes & flags).

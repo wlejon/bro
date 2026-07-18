@@ -48,6 +48,7 @@
 #include <Jolt/Physics/Vehicle/VehicleCollisionTester.h>
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
+#include <Jolt/Physics/Collision/EstimateCollisionResponse.h>
 
 #include "util/log.h"
 
@@ -180,6 +181,21 @@ struct PhysicsWorld::ListenerImpl : public ContactListener {
         }
         manifold.mWorldSpaceNormal.StoreFloat3(&e.normal);
         e.penetration = manifold.mPenetrationDepth;
+        // Estimated impulse (Jolt's standard approach — the solver never hands
+        // the solved impulses to the listener). Pre-solve estimate: exact for
+        // an isolated two-body impact, approximate in a pile-up. Summed over
+        // the manifold points into one scalar. Sensors get none (no response).
+        // Runs on Jolt's job threads; EstimateCollisionResponse only reads the
+        // two bodies it was handed, which the narrow phase already owns here.
+        if (!e.isSensor) {
+            CollisionEstimationResult est;
+            EstimateCollisionResponse(b1, b2, manifold, est,
+                                      ioSettings.mCombinedFriction,
+                                      ioSettings.mCombinedRestitution);
+            float sum = 0.0f;
+            for (const auto& im : est.mImpulses) sum += im.mContactImpulse;
+            e.impulse = sum;
+        }
         push(e);
     }
 
@@ -2933,6 +2949,22 @@ private:
     uint32_t mask_;
 };
 
+// Excludes QueryFilter::ignoreBody plus everything in ignoreBodies. Linear
+// scan — exclude lists are a handful of bodies (a character + its mount, a
+// projectile's owner), not a broadphase.
+class IgnoreBodiesFilter final : public BodyFilter {
+public:
+    explicit IgnoreBodiesFilter(const QueryFilter& f) : f_(f) {}
+    bool ShouldCollide(const BodyID& id) const override {
+        if (id == f_.ignoreBody) return false;
+        for (const BodyID& b : f_.ignoreBodies)
+            if (id == b) return false;
+        return true;
+    }
+private:
+    const QueryFilter& f_;
+};
+
 } // namespace
 
 // Surface normal on a body's shape at a world-space hit point. Same
@@ -2951,7 +2983,7 @@ std::vector<RayHit> PhysicsWorld::raycast(RVec3 origin, Vec3 direction,
     RRayCast ray(origin, direction * maxDistance);
     RayCastSettings settings;
     MaskObjectLayerFilter layerFilter(filter.layerMask);
-    IgnoreSingleBodyFilter bodyFilter(filter.ignoreBody);
+    IgnoreBodiesFilter bodyFilter(filter);
     AllHitCollisionCollector<CastRayCollector> collector;
     physicsSystem_.GetNarrowPhaseQuery().CastRay(ray, settings, collector, {},
                                                  layerFilter, bodyFilter);
@@ -2982,7 +3014,7 @@ bool PhysicsWorld::raycastClosest(RVec3 origin, Vec3 direction,
                                   const QueryFilter& filter) const {
     RRayCast ray(origin, direction * maxDistance);
     MaskObjectLayerFilter layerFilter(filter.layerMask);
-    IgnoreSingleBodyFilter bodyFilter(filter.ignoreBody);
+    IgnoreBodiesFilter bodyFilter(filter);
     RayCastResult hit;
     if (!physicsSystem_.GetNarrowPhaseQuery().CastRay(ray, hit, {},
                                                       layerFilter, bodyFilter))
@@ -3009,7 +3041,7 @@ std::vector<ShapeCastHit> PhysicsWorld::castShape(const BodyOptions& shapeOpts,
         direction * maxDistance);
     ShapeCastSettings settings;
     MaskObjectLayerFilter layerFilter(filter.layerMask);
-    IgnoreSingleBodyFilter bodyFilter(filter.ignoreBody);
+    IgnoreBodiesFilter bodyFilter(filter);
     AllHitCollisionCollector<CastShapeCollector> collector;
     physicsSystem_.GetNarrowPhaseQuery().CastShape(
         cast, settings, RVec3::sZero(), collector, {}, layerFilter, bodyFilter);
@@ -3045,7 +3077,7 @@ bool PhysicsWorld::castShapeClosest(const BodyOptions& shapeOpts, Vec3 direction
         direction * maxDistance);
     ShapeCastSettings settings;
     MaskObjectLayerFilter layerFilter(filter.layerMask);
-    IgnoreSingleBodyFilter bodyFilter(filter.ignoreBody);
+    IgnoreBodiesFilter bodyFilter(filter);
     ClosestHitCollisionCollector<CastShapeCollector> collector;
     physicsSystem_.GetNarrowPhaseQuery().CastShape(
         cast, settings, RVec3::sZero(), collector, {}, layerFilter, bodyFilter);
@@ -3069,7 +3101,7 @@ std::vector<OverlapHit> PhysicsWorld::overlapShape(const BodyOptions& shapeOpts,
                      .PreTranslated(shape->GetCenterOfMass());
     CollideShapeSettings settings;
     MaskObjectLayerFilter layerFilter(filter.layerMask);
-    IgnoreSingleBodyFilter bodyFilter(filter.ignoreBody);
+    IgnoreBodiesFilter bodyFilter(filter);
     AllHitCollisionCollector<CollideShapeCollector> collector;
     physicsSystem_.GetNarrowPhaseQuery().CollideShape(
         shape.GetPtr(), Vec3::sOne(), com, settings, RVec3::sZero(), collector,
@@ -3096,7 +3128,7 @@ std::vector<OverlapHit> PhysicsWorld::overlapShape(const BodyOptions& shapeOpts,
 std::vector<BodyID> PhysicsWorld::overlapPoint(RVec3 point,
                                                const QueryFilter& filter) const {
     MaskObjectLayerFilter layerFilter(filter.layerMask);
-    IgnoreSingleBodyFilter bodyFilter(filter.ignoreBody);
+    IgnoreBodiesFilter bodyFilter(filter);
     AllHitCollisionCollector<CollidePointCollector> collector;
     physicsSystem_.GetNarrowPhaseQuery().CollidePoint(
         point, collector, {}, layerFilter, bodyFilter);

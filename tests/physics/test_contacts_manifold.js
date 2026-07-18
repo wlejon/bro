@@ -139,3 +139,77 @@ assert(grippyDist < 2.5, 'combined friction 1.0 stops quickly, got ' + grippyDis
 assert(slickDist > 4.0, 'combined friction 0.04 keeps sliding, got ' + slickDist);
 
 Physics.destroyAll();
+
+// ===========================================================================
+// Contact impulse estimate: "added" events carry `impulse` (kg·m/s), a
+// pre-solve estimate (Jolt EstimateCollisionResponse). A body arriving
+// faster must report a proportionally larger impulse; sensor overlaps
+// report 0. Sandbox world for deterministic inline stepping.
+// ===========================================================================
+{
+    const w = Physics.createWorldHandle({ maxBodies: 32, gravity: { x: 0, y: 0, z: 0 } });
+    const floor = w.createBody({
+        shape: 'box', halfExtents: { x: 20, y: 0.5, z: 20 },
+        position: { x: 0, y: -0.5, z: 0 }, static: true,
+        restitution: 0,   // combined restitution is max(r1,r2) — keep J ≈ m*v exact
+    });
+
+    // Fire a unit-density sphere (r=0.5 → m ≈ 523.6 kg) straight down at a
+    // known speed from just above the floor; capture its contact impulse.
+    // Restitution 0 → expected impulse ≈ m * v (all normal momentum killed).
+    function impactImpulse(speed) {
+        const ball = w.createBody({
+            shape: 'sphere', radius: 0.5, position: { x: 0, y: 0.7, z: 0 },
+            restitution: 0, friction: 0,
+        });
+        w.setLinearVelocity(ball, 0, -speed, 0);
+        let imp = null;
+        for (let i = 0; i < 60 && imp === null; i++) {
+            w.step(1 / 60);
+            for (const e of w.getContacts()) {
+                if (e.type !== 'added') continue;
+                const pair = (e.body1 === ball && e.body2 === floor) ||
+                             (e.body1 === floor && e.body2 === ball);
+                if (pair) { imp = e.impulse; break; }
+            }
+        }
+        w.destroyBody(ball);
+        w.step(1 / 60); w.getContacts();   // flush the removal event
+        return imp;
+    }
+
+    const mass = 4 / 3 * Math.PI * 0.5 ** 3 * 1000;  // unit-density sphere
+    const i1 = impactImpulse(2);
+    const i2 = impactImpulse(6);
+    assert(i1 !== null && i2 !== null, 'both impacts reported an impulse');
+    assert(typeof i1 === 'number' && i1 > 0, 'impulse present and positive on added events');
+    // Speculative contact fires just BEFORE the surfaces touch, so the
+    // estimate sees the full approach speed: J ≈ m*v within a few percent.
+    assert(Math.abs(i1 - mass * 2) / (mass * 2) < 0.1,
+           'impulse ≈ m*v at 2 m/s, got ' + i1 + ' expected ~' + (mass * 2));
+    assert(Math.abs(i2 - mass * 6) / (mass * 6) < 0.1,
+           'impulse ≈ m*v at 6 m/s, got ' + i2 + ' expected ~' + (mass * 6));
+    assert(i2 > 2 * i1, 'faster impact reports a larger impulse (' + i1 + ' → ' + i2 + ')');
+
+    // Sensor overlap: impulse must be 0 (no collision response).
+    const zone = w.createBody({
+        shape: 'box', halfExtents: { x: 1, y: 1, z: 1 },
+        position: { x: 10, y: 0, z: 0 }, static: true, sensor: true,
+    });
+    const probe = w.createBody({
+        shape: 'sphere', radius: 0.3, position: { x: 10, y: 3, z: 0 },
+    });
+    w.setLinearVelocity(probe, 0, -5, 0);
+    let sensorEv = null;
+    for (let i = 0; i < 60 && sensorEv === null; i++) {
+        w.step(1 / 60);
+        for (const e of w.getContacts()) {
+            if (e.type === 'added' && e.sensor) { sensorEv = e; break; }
+        }
+    }
+    assert(sensorEv !== null, 'sensor overlap event arrived');
+    assert(sensorEv.impulse === 0, 'sensor overlap reports impulse 0, got ' + sensorEv.impulse);
+
+    w.destroy();
+    console.log('PASS contact impulse estimate');
+}

@@ -577,7 +577,8 @@ static JSValue worldRaycastClosest(JSContext* ctx, JsWorld* w, int argc, JSValue
 
 // Layer/body filter shared by the narrow-phase query bindings. `layers` is an
 // array of layer names or indices selecting which object layers the query can
-// see (independent of the collision matrix); `ignoreBody` excludes one tag.
+// see (independent of the collision matrix); `ignoreBody` excludes one tag,
+// `ignoreBodies` an array of tags (both may be given; the union is excluded).
 static void readQueryFilter(JSContext* ctx, JSValueConst opts, JsWorld* w,
                             physics::QueryFilter& out) {
     JSValue lv = JS_GetPropertyStr(ctx, opts, "layers");
@@ -602,6 +603,20 @@ static void readQueryFilter(JSContext* ctx, JSValueConst opts, JsWorld* w,
     JS_FreeValue(ctx, lv);
     int32_t ignore = (int32_t)qjsbind::get_prop_number(ctx, opts, "ignoreBody", -1.0);
     if (ignore >= 0) out.ignoreBody = w->bodyIdForTag(ignore);
+    JSValue iv = JS_GetPropertyStr(ctx, opts, "ignoreBodies");
+    if (JS_IsArray(iv)) {
+        JSValue lenV = JS_GetPropertyStr(ctx, iv, "length");
+        uint32_t n = 0; JS_ToUint32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
+        out.ignoreBodies.reserve(n);
+        for (uint32_t i = 0; i < n; i++) {
+            JSValue el = JS_GetPropertyUint32(ctx, iv, i);
+            int32_t tag = -1; JS_ToInt32(ctx, &tag, el);
+            JS_FreeValue(ctx, el);
+            JPH::BodyID id = tag >= 0 ? w->bodyIdForTag(tag) : JPH::BodyID();
+            if (!id.IsInvalid()) out.ignoreBodies.push_back(id);
+        }
+    }
+    JS_FreeValue(ctx, iv);
 }
 
 // Query shapes are described like createBody opts (shape kind + dimensions +
@@ -758,6 +773,11 @@ static JSValue worldGetContacts(JSContext* ctx, JsWorld* w) {
         if (e.type == physics::ContactEvent::Added) {
             setVec3Prop(ctx, obj, "normal", e.normal.x, e.normal.y, e.normal.z);
             JS_SetPropertyStr(ctx, obj, "penetration", JS_NewFloat64(ctx, e.penetration));
+            // Estimated collision impulse (kg·m/s) — a PRE-SOLVE estimate
+            // (Jolt EstimateCollisionResponse), summed over the manifold
+            // points. Exact for an isolated two-body impact, approximate in
+            // pile-ups. 0 for sensor overlaps.
+            JS_SetPropertyStr(ctx, obj, "impulse", JS_NewFloat64(ctx, e.impulse));
             JSValue pts = JS_NewArray(ctx);
             for (uint32_t k = 0; k < e.numPoints; k++) {
                 JSValue p = JS_NewObject(ctx);

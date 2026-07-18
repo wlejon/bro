@@ -348,6 +348,65 @@ assert(wRayIgn !== null && wRayIgn.bodyId === wHf, 'sandbox raycast ignoreBody s
 w.destroy();
 
 // =========================================================================
+// ignoreBodies — array exclude-list on every query (single form still works)
+// =========================================================================
+{
+    const wx = Physics.createWorldHandle({ maxBodies: 32, gravity: { x: 0, y: 0, z: 0 } });
+    // Three spheres stacked along the ray at y = 6, 4, 2 (r = 0.5).
+    const s1 = wx.createBody({ shape: 'sphere', radius: 0.5, position: { x: 0, y: 6, z: 0 } });
+    const s2 = wx.createBody({ shape: 'sphere', radius: 0.5, position: { x: 0, y: 4, z: 0 } });
+    const s3 = wx.createBody({ shape: 'sphere', radius: 0.5, position: { x: 0, y: 2, z: 0 } });
+
+    // Baseline: ray from above sees all three, near to far.
+    let ray = wx.raycast(0, 10, 0, 0, -1, 0, 20);
+    assert(ray.length === 3, 'baseline ray sees all three spheres');
+    assert(ray[0].bodyId === s1 && ray[2].bodyId === s3, 'baseline sorted s1..s3');
+
+    // ignoreBodies skips the first two; the single-body form still works.
+    ray = wx.raycast(0, 10, 0, 0, -1, 0, 20, { ignoreBodies: [s1, s2] });
+    assert(ray.length === 1 && ray[0].bodyId === s3, 'ignoreBodies=[s1,s2] leaves s3');
+    let closest = wx.raycastClosest(0, 10, 0, 0, -1, 0, 20, { ignoreBodies: [s1] });
+    assert(closest !== null && closest.bodyId === s2, 'raycastClosest skips ignored s1');
+
+    // ignoreBody + ignoreBodies union.
+    closest = wx.raycastClosest(0, 10, 0, 0, -1, 0, 20,
+                                { ignoreBody: s1, ignoreBodies: [s2] });
+    assert(closest !== null && closest.bodyId === s3, 'ignoreBody + ignoreBodies union');
+
+    // castShape / castShapeClosest honor the list.
+    const cast = wx.castShape({
+        shape: 'sphere', radius: 0.25, position: { x: 0, y: 10, z: 0 },
+        direction: { x: 0, y: -1, z: 0 }, maxDistance: 20,
+        ignoreBodies: [s1, s3],
+    });
+    assert(cast.length === 1 && cast[0].bodyId === s2, 'castShape ignoreBodies leaves s2');
+    const castC = wx.castShapeClosest({
+        shape: 'sphere', radius: 0.25, position: { x: 0, y: 10, z: 0 },
+        direction: { x: 0, y: -1, z: 0 }, maxDistance: 20,
+        ignoreBodies: [s1],
+    });
+    assert(castC !== null && castC.bodyId === s2, 'castShapeClosest ignoreBodies skips s1');
+
+    // overlapShape / overlapPoint honor the list.
+    const ov = wx.overlapShape({
+        shape: 'box', halfExtents: { x: 1, y: 4, z: 1 }, position: { x: 0, y: 4, z: 0 },
+        ignoreBodies: [s2],
+    });
+    const ovIds = ov.map(h => h.bodyId).sort((a, b) => a - b);
+    assert(ovIds.length === 2 && ovIds[0] === s1 && ovIds[1] === s3,
+           'overlapShape ignoreBodies drops s2, got [' + ovIds + ']');
+    const op = wx.overlapPoint(0, 4, 0, { ignoreBodies: [s2] });
+    assert(op.length === 0, 'overlapPoint ignoreBodies drops the containing body');
+
+    // Stale/invalid tags in the list are ignored harmlessly.
+    ray = wx.raycast(0, 10, 0, 0, -1, 0, 20, { ignoreBodies: [9999, -1] });
+    assert(ray.length === 3, 'invalid tags in ignoreBodies are a no-op');
+
+    wx.destroy();
+    console.log('PASS ignoreBodies exclude-lists');
+}
+
+// =========================================================================
 // Cleanup
 // =========================================================================
 Physics.destroyAll();
