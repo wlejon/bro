@@ -50,29 +50,52 @@ All input functions go through the full engine pipeline (hit testing, focus mana
 
 Mouse coordinates are **viewport-relative**, matching `getBoundingClientRect()` / `clientX` / `clientY`. The engine reserves a top inset for the menu bar (~28px); these helpers add it internally so `click(rect.x, rect.y)` Just Works without offset math.
 
+**Targeting a secondary window.** Every input helper below takes an optional
+trailing `windowId`. Omitted (or `0`) means the main window, so existing
+scripts are unaffected. Pass a `bro.window.open()` handle's `.id` to route the
+event into THAT window's document instead:
+
+```js
+const win = bro.window.open('palette', { width: 300, height: 200 });
+flush();
+click(50, 30, 0, win.id);       // clicks inside the palette window
+textInput('hi', win.id);        // types into its focused control
+wheel(250, 40, 120, 0, win.id); // scrolls its overflow box
+currentCursor(win.id);          // that window's resolved cursor
+```
+
+A secondary window has no menu-bar inset and no engine viewport scroll, so its
+coordinates are plain window coordinates (which are also its document
+coordinates) — the top-inset adjustment is skipped for them. Realms are
+isolated, so the child's side of an interaction is observed through
+`win.capture()`. An unknown or already-closed id is a silent no-op; it never
+falls back to the main window. v1 keeps pointer lock, touch, and the
+gamepad/`"action"` stream on the main window (see
+[window-api.js](window-api.js)).
+
 | Function | Description |
 |----------|-------------|
-| `click(x, y [, button])` | Simulate a mouse click at viewport coordinates (mousedown + mouseup) |
-| `mouseDown(x, y [, button])` | Simulate a mouse button press |
-| `mouseUp(x, y [, button])` | Simulate a mouse button release |
-| `mouseMove(x, y)` | Simulate mouse movement (triggers hover, mousemove events) |
-| `currentCursor()` | Resolved OS cursor shape name for the current hover target (`"default"`, `"pointer"`, `"text"`, `"move"`, `"crosshair"`, `"wait"`, `"progress"`, `"not-allowed"`, `"ew-resize"`, `"ns-resize"`, `"nesw-resize"`, `"nwse-resize"`, `"none"`). Updated by every `mouseMove()` from the hovered element's computed CSS `cursor`; in windowed mode the same shape drives the real OS cursor. |
-| `wheel(x, y, deltaY [, deltaX])` | Simulate a mouse wheel event (deltaY in scroll lines) |
+| `click(x, y [, button, windowId])` | Simulate a mouse click at viewport coordinates (mousedown + mouseup) |
+| `mouseDown(x, y [, button, windowId])` | Simulate a mouse button press |
+| `mouseUp(x, y [, button, windowId])` | Simulate a mouse button release |
+| `mouseMove(x, y [, windowId])` | Simulate mouse movement (triggers hover, mousemove events) |
+| `currentCursor([windowId])` | Resolved OS cursor shape name for that window's current hover target (`"default"`, `"pointer"`, `"text"`, `"move"`, `"crosshair"`, `"wait"`, `"progress"`, `"not-allowed"`, `"ew-resize"`, `"ns-resize"`, `"nesw-resize"`, `"nwse-resize"`, `"none"`). Updated by every `mouseMove()` from the hovered element's computed CSS `cursor`; in windowed mode the same shape drives that window's real OS cursor. Each window resolves independently — a `cursor: pointer` element in a secondary window never changes what `currentCursor()` reports for the main one. |
+| `wheel(x, y, deltaY [, deltaX, windowId])` | Simulate a mouse wheel event (deltaY in scroll lines) |
 | `touchDown(id, x, y [, pressure])` | Simulate a finger landing. `id` is a caller-chosen contact id (reuse it for the move/up/cancel of the same finger; distinct concurrent ids are distinct fingers). Dispatches pointerdown (pointerType `"touch"`, unique pointerId ≥ 2) then touchstart. See [pointer-api.js](pointer-api.js). |
 | `touchMove(id, x, y [, pressure])` | Move a live contact. Dispatches pointermove then touchmove. Travelling past the ~10px tap slop makes the contact a drag (no compat click on lift). |
 | `touchUp(id, x, y)` | Lift a contact. Dispatches pointerup then touchend; a clean primary-finger tap then synthesizes the compat mousedown → mouseup → click. |
 | `touchCancel(id, x, y)` | Abort a contact (the OS-cancelled-gesture path). Dispatches pointercancel then touchcancel, releases any pointer capture, never synthesizes compat mouse events. |
-| `keyDown(keycode [, scancode, mod, repeat])` | Simulate a key press (SDL keycodes) |
-| `keyUp(keycode [, scancode, mod])` | Simulate a key release |
-| `textInput(text)` | Simulate text input (for typing into focused input/textarea) |
-| `imeCompose(text [, cursorPos])` | Simulate an IME composition (preedit) update on the focused input/textarea, or on a contenteditable host when the DOM Selection caret sits inside one — the same engine path as `SDL_EVENT_TEXT_EDITING`. The preedit shows inline in `.value` as underlined provisional text; `cursorPos` is the composition cursor in characters within `text` (default: end). Fires `compositionstart` (first call) / `compositionupdate` and `input` with `inputType: "insertCompositionText"`. |
-| `imeCommit(text)` | Commit the composition with `text` (the same path as a real IME's `SDL_EVENT_TEXT_INPUT`): replaces the preedit, fires the final `compositionupdate` → `input` → `compositionend`, and records ONE undo entry for the whole composition. Without an active composition it behaves like `textInput(text)`. |
-| `imeCancel()` | Cancel the composition (an empty editing event): removes the preedit, restores the pre-composition value/selection, fires `compositionupdate("")` → `input` → `compositionend("")`, leaves no undo entry. |
+| `keyDown(keycode [, scancode, mod, repeat, windowId])` | Simulate a key press (SDL keycodes) |
+| `keyUp(keycode [, scancode, mod, windowId])` | Simulate a key release |
+| `textInput(text [, windowId])` | Simulate text input (for typing into focused input/textarea) |
+| `imeCompose(text [, cursorPos, windowId])` | Simulate an IME composition (preedit) update on the focused input/textarea, or on a contenteditable host when the DOM Selection caret sits inside one — the same engine path as `SDL_EVENT_TEXT_EDITING`. The preedit shows inline in `.value` as underlined provisional text; `cursorPos` is the composition cursor in characters within `text` (default: end). Fires `compositionstart` (first call) / `compositionupdate` and `input` with `inputType: "insertCompositionText"`. |
+| `imeCommit(text [, windowId])` | Commit the composition with `text` (the same path as a real IME's `SDL_EVENT_TEXT_INPUT`): replaces the preedit, fires the final `compositionupdate` → `input` → `compositionend`, and records ONE undo entry for the whole composition. Without an active composition it behaves like `textInput(text)`. |
+| `imeCancel([windowId])` | Cancel the composition (an empty editing event): removes the preedit, restores the pre-composition value/selection, fires `compositionupdate("")` → `input` → `compositionend("")`, leaves no undo entry. |
 | `paste(text)` | Simulate paste on focused element with the given text (dispatches paste event, inserts into input/textarea) |
 | `copy()` | Simulate copy on focused element (dispatches copy event, returns the selected text — a collapsed caret copies nothing) |
 | `cut()` | Simulate cut on focused element (dispatches cut event, removes the selected range, returns the cut text) |
-| `dropFiles(x, y, paths)` | Simulate file drop at coordinates. `paths` is an array of file path strings. Dispatches dragenter → dragover → drop. |
-| `dropText(x, y, text)` | Simulate text drop at coordinates. Dispatches dragenter → dragover → drop with text data. |
+| `dropFiles(x, y, paths [, windowId])` | Simulate file drop at coordinates. `paths` is an array of file path strings. Dispatches dragenter → dragover → drop. |
+| `dropText(x, y, text [, windowId])` | Simulate text drop at coordinates. Dispatches dragenter → dragover → drop with text data. |
 | `resize(w, h)` | Resize the virtual viewport |
 | `gamepadConnect([id])` | Connect a virtual gamepad; returns its slot index. Fires `gamepadconnected` on window, appears in `navigator.getGamepads()`. |
 | `gamepadDisconnect(index)` | Disconnect a virtual gamepad. Fires `gamepaddisconnected`. |

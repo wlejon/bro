@@ -218,8 +218,29 @@ static float toScreenY(engine::Engine* engine, double viewportY) {
     return static_cast<float>(viewportY) + static_cast<float>(engine->contentTop());
 }
 
+// --- Optional trailing `windowId` on every input seam ---------------------
+//
+// Omitted / 0 / undefined = the MAIN window, so every pre-multiwindow test
+// keeps working byte-for-byte. Any other value is a bro.window.open() handle
+// id (`win.id`) and routes the event into that secondary window's document
+// through Engine::host*(). Unknown ids reach a no-op in the engine.
+static uint64_t argWindowId(JSContext* ctx, int argc, JSValueConst* argv, int idx) {
+    if (argc <= idx || JS_IsUndefined(argv[idx]) || JS_IsNull(argv[idx])) return 0;
+    int64_t v = 0;
+    if (JS_ToInt64(ctx, &v, argv[idx])) return 0;
+    return v > 0 ? static_cast<uint64_t>(v) : 0;
+}
+
+// Input y for the target window. The main window reserves a top inset (menu
+// bar) that viewport-relative test coordinates must skip past; a secondary
+// window carries no engine chrome, so its window space IS its document space
+// and the coordinate passes through untouched.
+static float toWindowY(engine::Engine* engine, double y, uint64_t windowId) {
+    return windowId ? static_cast<float>(y) : toScreenY(engine, y);
+}
+
 static JSValue js_mouseDown(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 2) return JS_ThrowTypeError(ctx, "mouseDown(x, y [, button]) requires x and y");
+    if (argc < 2) return JS_ThrowTypeError(ctx, "mouseDown(x, y [, button, windowId]) requires x and y");
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
@@ -229,13 +250,16 @@ static JSValue js_mouseDown(JSContext* ctx, JSValueConst, int argc, JSValueConst
     int button = 0;
     if (argc >= 3) JS_ToInt32(ctx, &button, argv[2]);
 
-    engine->handleMouseDown(static_cast<float>(x), toScreenY(engine, y), domToSdlButton(button));
+    const uint64_t wid = argWindowId(ctx, argc, argv, 3);
+    const float fy = toWindowY(engine, y, wid);
+    if (wid) engine->hostMouseDown(wid, static_cast<float>(x), fy, domToSdlButton(button));
+    else engine->handleMouseDown(static_cast<float>(x), fy, domToSdlButton(button));
     engine->flush();
     return JS_UNDEFINED;
 }
 
 static JSValue js_mouseUp(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 2) return JS_ThrowTypeError(ctx, "mouseUp(x, y [, button]) requires x and y");
+    if (argc < 2) return JS_ThrowTypeError(ctx, "mouseUp(x, y [, button, windowId]) requires x and y");
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
@@ -245,13 +269,16 @@ static JSValue js_mouseUp(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
     int button = 0;
     if (argc >= 3) JS_ToInt32(ctx, &button, argv[2]);
 
-    engine->handleMouseUp(static_cast<float>(x), toScreenY(engine, y), domToSdlButton(button));
+    const uint64_t wid = argWindowId(ctx, argc, argv, 3);
+    const float fy = toWindowY(engine, y, wid);
+    if (wid) engine->hostMouseUp(wid, static_cast<float>(x), fy, domToSdlButton(button));
+    else engine->handleMouseUp(static_cast<float>(x), fy, domToSdlButton(button));
     engine->flush();
     return JS_UNDEFINED;
 }
 
 static JSValue js_mouseMove(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 2) return JS_ThrowTypeError(ctx, "mouseMove(x, y) requires x and y");
+    if (argc < 2) return JS_ThrowTypeError(ctx, "mouseMove(x, y [, windowId]) requires x and y");
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
@@ -259,8 +286,19 @@ static JSValue js_mouseMove(JSContext* ctx, JSValueConst, int argc, JSValueConst
     if (JS_ToFloat64(ctx, &x, argv[0])) return JS_EXCEPTION;
     if (JS_ToFloat64(ctx, &y, argv[1])) return JS_EXCEPTION;
 
-    float fx = static_cast<float>(x), fy = toScreenY(engine, y);
-    engine->handleMouseMove(fx, fy, fx - engine->getLastMouseX(), fy - engine->getLastMouseY());
+    const uint64_t wid = argWindowId(ctx, argc, argv, 2);
+    float fx = static_cast<float>(x), fy = toWindowY(engine, y, wid);
+    if (wid) {
+        // Same self-computed delta the main-window path uses: there is no real
+        // pointing device here, so movementX/Y measures from this window's own
+        // last injected position.
+        auto* h = engine->windowHostById(wid);
+        float lx = h ? h->lastMouseX : fx, ly = h ? h->lastMouseY : fy;
+        engine->hostMouseMove(wid, fx, fy, fx - lx, fy - ly);
+    } else {
+        engine->handleMouseMove(fx, fy, fx - engine->getLastMouseX(),
+                                fy - engine->getLastMouseY());
+    }
     engine->flush();
     return JS_UNDEFINED;
 }
@@ -269,14 +307,19 @@ static JSValue js_mouseMove(JSContext* ctx, JSValueConst, int argc, JSValueConst
 // target ("default", "pointer", "text", ..., "none"). Drive a mouseMove()
 // first; the engine re-resolves the hovered element's computed `cursor` on
 // every move (in headless the mapping runs without touching a real cursor).
-static JSValue js_currentCursor(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+static JSValue js_currentCursor(JSContext* ctx, JSValueConst, int argc,
+                                JSValueConst* argv) {
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
-    return JS_NewString(ctx, engine->resolvedCursor().c_str());
+    // currentCursor([windowId]) — each window resolves its own cursor from its
+    // own hover target, so a `cursor: pointer` element in a palette window
+    // never changes what the main window reports.
+    return JS_NewString(ctx,
+        engine->resolvedCursor(argWindowId(ctx, argc, argv, 0)).c_str());
 }
 
 static JSValue js_click(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 2) return JS_ThrowTypeError(ctx, "click(x, y [, button]) requires x and y");
+    if (argc < 2) return JS_ThrowTypeError(ctx, "click(x, y [, button, windowId]) requires x and y");
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
@@ -286,16 +329,22 @@ static JSValue js_click(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     int button = 0;
     if (argc >= 3) JS_ToInt32(ctx, &button, argv[2]);
 
-    float fx = static_cast<float>(x), fy = toScreenY(engine, y);
+    const uint64_t wid = argWindowId(ctx, argc, argv, 3);
+    float fx = static_cast<float>(x), fy = toWindowY(engine, y, wid);
     int sdlBtn = domToSdlButton(button);
-    engine->handleMouseDown(fx, fy, sdlBtn);
-    engine->handleMouseUp(fx, fy, sdlBtn);
+    if (wid) {
+        engine->hostMouseDown(wid, fx, fy, sdlBtn);
+        engine->hostMouseUp(wid, fx, fy, sdlBtn);
+    } else {
+        engine->handleMouseDown(fx, fy, sdlBtn);
+        engine->handleMouseUp(fx, fy, sdlBtn);
+    }
     engine->flush();
     return JS_UNDEFINED;
 }
 
 static JSValue js_wheel(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 3) return JS_ThrowTypeError(ctx, "wheel(x, y, deltaY [, deltaX]) requires x, y, deltaY");
+    if (argc < 3) return JS_ThrowTypeError(ctx, "wheel(x, y, deltaY [, deltaX, windowId]) requires x, y, deltaY");
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
@@ -311,8 +360,12 @@ static JSValue js_wheel(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     // expects raw SDL-convention deltas (as real SDL wheel events carry) and
     // negates them once to produce the DOM-facing event — so negate here
     // first to cancel that out and hand callers what they actually asked for.
-    engine->handleWheel(static_cast<float>(x), toScreenY(engine, y),
-                        static_cast<float>(-dx), static_cast<float>(-dy));
+    const uint64_t wid = argWindowId(ctx, argc, argv, 4);
+    const float fy = toWindowY(engine, y, wid);
+    if (wid) engine->hostWheel(wid, static_cast<float>(x), fy,
+                               static_cast<float>(-dx), static_cast<float>(-dy));
+    else engine->handleWheel(static_cast<float>(x), fy,
+                             static_cast<float>(-dx), static_cast<float>(-dy));
     engine->flush();
     return JS_UNDEFINED;
 }
@@ -397,7 +450,7 @@ static JSValue js_touchCancel(JSContext* ctx, JSValueConst, int argc, JSValueCon
 }
 
 static JSValue js_keyDown(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1) return JS_ThrowTypeError(ctx, "keyDown(keycode [, scancode, mod, repeat])");
+    if (argc < 1) return JS_ThrowTypeError(ctx, "keyDown(keycode [, scancode, mod, repeat, windowId])");
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
@@ -408,13 +461,15 @@ static JSValue js_keyDown(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
     if (argc >= 3) JS_ToInt32(ctx, &mod, argv[2]);
     if (argc >= 4) repeat = JS_ToBool(ctx, argv[3]);
 
-    engine->handleKeyDown(keycode, scancode, mod, repeat);
+    const uint64_t wid = argWindowId(ctx, argc, argv, 4);
+    if (wid) engine->hostKeyDown(wid, keycode, scancode, mod, repeat);
+    else engine->handleKeyDown(keycode, scancode, mod, repeat);
     engine->flush();
     return JS_UNDEFINED;
 }
 
 static JSValue js_keyUp(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1) return JS_ThrowTypeError(ctx, "keyUp(keycode [, scancode, mod])");
+    if (argc < 1) return JS_ThrowTypeError(ctx, "keyUp(keycode [, scancode, mod, windowId])");
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
@@ -423,20 +478,24 @@ static JSValue js_keyUp(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     if (argc >= 2) JS_ToInt32(ctx, &scancode, argv[1]);
     if (argc >= 3) JS_ToInt32(ctx, &mod, argv[2]);
 
-    engine->handleKeyUp(keycode, scancode, mod, false);
+    const uint64_t wid = argWindowId(ctx, argc, argv, 3);
+    if (wid) engine->hostKeyUp(wid, keycode, scancode, mod, false);
+    else engine->handleKeyUp(keycode, scancode, mod, false);
     engine->flush();
     return JS_UNDEFINED;
 }
 
 static JSValue js_textInput(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1) return JS_ThrowTypeError(ctx, "textInput(text) requires text");
+    if (argc < 1) return JS_ThrowTypeError(ctx, "textInput(text [, windowId]) requires text");
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
     const char* text = JS_ToCString(ctx, argv[0]);
     if (!text) return JS_EXCEPTION;
 
-    engine->handleTextInput(text);
+    const uint64_t wid = argWindowId(ctx, argc, argv, 1);
+    if (wid) engine->hostTextInput(wid, text);
+    else engine->handleTextInput(text);
     JS_FreeCString(ctx, text);
     engine->flush();
     return JS_UNDEFINED;
@@ -448,7 +507,7 @@ static JSValue js_textInput(JSContext* ctx, JSValueConst, int argc, JSValueConst
 // and undo behavior all run the real pipeline.
 
 static JSValue js_imeCompose(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1) return JS_ThrowTypeError(ctx, "imeCompose(text [, cursorPos]) requires text");
+    if (argc < 1) return JS_ThrowTypeError(ctx, "imeCompose(text [, cursorPos, windowId]) requires text");
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
@@ -457,14 +516,16 @@ static JSValue js_imeCompose(JSContext* ctx, JSValueConst, int argc, JSValueCons
     int cursor = -1;  // < 0 → composition cursor at the end of the preedit
     if (argc >= 2) JS_ToInt32(ctx, &cursor, argv[1]);
 
-    engine->handleTextEditing(text, cursor, 0);
+    const uint64_t wid = argWindowId(ctx, argc, argv, 2);
+    if (wid) engine->hostTextEditing(wid, text, cursor, 0);
+    else engine->handleTextEditing(text, cursor, 0);
     JS_FreeCString(ctx, text);
     engine->flush();
     return JS_UNDEFINED;
 }
 
 static JSValue js_imeCommit(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 1) return JS_ThrowTypeError(ctx, "imeCommit(text) requires text");
+    if (argc < 1) return JS_ThrowTypeError(ctx, "imeCommit(text [, windowId]) requires text");
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
@@ -472,18 +533,23 @@ static JSValue js_imeCommit(JSContext* ctx, JSValueConst, int argc, JSValueConst
     if (!text) return JS_EXCEPTION;
 
     // A commit is a TEXT_INPUT — the same event a real IME sends.
-    engine->handleTextInput(text);
+    const uint64_t wid = argWindowId(ctx, argc, argv, 1);
+    if (wid) engine->hostTextInput(wid, text);
+    else engine->handleTextInput(text);
     JS_FreeCString(ctx, text);
     engine->flush();
     return JS_UNDEFINED;
 }
 
-static JSValue js_imeCancel(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+static JSValue js_imeCancel(JSContext* ctx, JSValueConst, int argc,
+                            JSValueConst* argv) {
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
     // A cancel is an empty TEXT_EDITING event.
-    engine->handleTextEditing("", 0, 0);
+    const uint64_t wid = argWindowId(ctx, argc, argv, 0);
+    if (wid) engine->hostTextEditing(wid, "", 0, 0);
+    else engine->handleTextEditing("", 0, 0);
     engine->flush();
     return JS_UNDEFINED;
 }
@@ -525,7 +591,7 @@ static JSValue js_cut(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 // --- Drag & drop simulation ---
 
 static JSValue js_dropFiles(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 3) return JS_ThrowTypeError(ctx, "dropFiles(x, y, paths) requires x, y, and an array of paths");
+    if (argc < 3) return JS_ThrowTypeError(ctx, "dropFiles(x, y, paths [, windowId]) requires x, y, and an array of paths");
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
@@ -534,8 +600,16 @@ static JSValue js_dropFiles(JSContext* ctx, JSValueConst, int argc, JSValueConst
     if (JS_ToFloat64(ctx, &y, argv[1])) return JS_EXCEPTION;
 
     // Move mouse to drop position first
-    float fx = static_cast<float>(x), fy = toScreenY(engine, y);
-    engine->handleMouseMove(fx, fy, fx - engine->getLastMouseX(), fy - engine->getLastMouseY());
+    const uint64_t wid = argWindowId(ctx, argc, argv, 3);
+    float fx = static_cast<float>(x), fy = toWindowY(engine, y, wid);
+    if (wid) {
+        auto* h = engine->windowHostById(wid);
+        float lx = h ? h->lastMouseX : fx, ly = h ? h->lastMouseY : fy;
+        engine->hostMouseMove(wid, fx, fy, fx - lx, fy - ly);
+    } else {
+        engine->handleMouseMove(fx, fy, fx - engine->getLastMouseX(),
+                                fy - engine->getLastMouseY());
+    }
 
     // Drop each file path
     if (JS_IsArray(argv[2])) {
@@ -547,7 +621,8 @@ static JSValue js_dropFiles(JSContext* ctx, JSValueConst, int argc, JSValueConst
             JSValue item = JS_GetPropertyUint32(ctx, argv[2], static_cast<uint32_t>(i));
             const char* path = JS_ToCString(ctx, item);
             if (path) {
-                engine->handleDropFile(path);
+                if (wid) engine->hostDropFile(wid, path, fx, fy);
+                else engine->handleDropFile(path);
                 JS_FreeCString(ctx, path);
             }
             JS_FreeValue(ctx, item);
@@ -556,7 +631,8 @@ static JSValue js_dropFiles(JSContext* ctx, JSValueConst, int argc, JSValueConst
         // Single string path
         const char* path = JS_ToCString(ctx, argv[2]);
         if (path) {
-            engine->handleDropFile(path);
+            if (wid) engine->hostDropFile(wid, path, fx, fy);
+            else engine->handleDropFile(path);
             JS_FreeCString(ctx, path);
         }
     }
@@ -566,7 +642,7 @@ static JSValue js_dropFiles(JSContext* ctx, JSValueConst, int argc, JSValueConst
 }
 
 static JSValue js_dropText(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (argc < 3) return JS_ThrowTypeError(ctx, "dropText(x, y, text) requires x, y, and text");
+    if (argc < 3) return JS_ThrowTypeError(ctx, "dropText(x, y, text [, windowId]) requires x, y, and text");
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
@@ -578,10 +654,18 @@ static JSValue js_dropText(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     if (!text) return JS_EXCEPTION;
 
     // Move mouse to drop position first
-    float fx = static_cast<float>(x), fy = toScreenY(engine, y);
-    engine->handleMouseMove(fx, fy, fx - engine->getLastMouseX(), fy - engine->getLastMouseY());
-
-    engine->handleDropText(text);
+    const uint64_t wid = argWindowId(ctx, argc, argv, 3);
+    float fx = static_cast<float>(x), fy = toWindowY(engine, y, wid);
+    if (wid) {
+        auto* h = engine->windowHostById(wid);
+        float lx = h ? h->lastMouseX : fx, ly = h ? h->lastMouseY : fy;
+        engine->hostMouseMove(wid, fx, fy, fx - lx, fy - ly);
+        engine->hostDropText(wid, text, fx, fy);
+    } else {
+        engine->handleMouseMove(fx, fy, fx - engine->getLastMouseX(),
+                                fy - engine->getLastMouseY());
+        engine->handleDropText(text);
+    }
     JS_FreeCString(ctx, text);
     engine->flush();
     return JS_UNDEFINED;
@@ -1259,32 +1343,32 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         .function("wallSleep", js_wallSleep, 1)
         .function("assert", js_assert, 2)
         // Mouse input simulation
-        .function("mouseDown", js_mouseDown, 3)
-        .function("mouseUp", js_mouseUp, 3)
-        .function("mouseMove", js_mouseMove, 2)
-        .function("currentCursor", js_currentCursor, 0)
-        .function("click", js_click, 3)
-        .function("wheel", js_wheel, 4)
+        .function("mouseDown", js_mouseDown, 4)
+        .function("mouseUp", js_mouseUp, 4)
+        .function("mouseMove", js_mouseMove, 3)
+        .function("currentCursor", js_currentCursor, 1)
+        .function("click", js_click, 4)
+        .function("wheel", js_wheel, 5)
         // Touch input simulation
         .function("touchDown", js_touchDown, 4)
         .function("touchMove", js_touchMove, 4)
         .function("touchUp", js_touchUp, 3)
         .function("touchCancel", js_touchCancel, 3)
         // Keyboard input simulation
-        .function("keyDown", js_keyDown, 4)
-        .function("keyUp", js_keyUp, 3)
-        .function("textInput", js_textInput, 1)
+        .function("keyDown", js_keyDown, 5)
+        .function("keyUp", js_keyUp, 4)
+        .function("textInput", js_textInput, 2)
         // IME composition simulation
-        .function("imeCompose", js_imeCompose, 2)
-        .function("imeCommit", js_imeCommit, 1)
-        .function("imeCancel", js_imeCancel, 0)
+        .function("imeCompose", js_imeCompose, 3)
+        .function("imeCommit", js_imeCommit, 2)
+        .function("imeCancel", js_imeCancel, 1)
         // Clipboard simulation
         .function("paste", js_paste, 1)
         .function("copy", js_copy, 0)
         .function("cut", js_cut, 0)
         // Drag & drop simulation
-        .function("dropFiles", js_dropFiles, 3)
-        .function("dropText", js_dropText, 3)
+        .function("dropFiles", js_dropFiles, 4)
+        .function("dropText", js_dropText, 4)
         // Gamepad simulation
         .function("gamepadConnect", js_gamepadConnect, 1)
         .function("gamepadDisconnect", js_gamepadDisconnect, 1)
