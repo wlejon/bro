@@ -30,6 +30,12 @@ public:
     std::function<void(const std::string& text, float x, float y)> onDropText;
     std::function<void()> onFocusLost;
     std::function<void()> onFocusGained;
+    // Window state transitions (SDL_EVENT_WINDOW_MINIMIZED / MAXIMIZED /
+    // RESTORED). RESTORED fires on un-minimize AND un-maximize; query the
+    // resulting state via Window::isMinimized()/isMaximized().
+    std::function<void()> onMinimized;
+    std::function<void()> onMaximized;
+    std::function<void()> onRestored;
     // OS light/dark theme flipped (SDL_EVENT_SYSTEM_THEME_CHANGED). Query the
     // new theme via SDL_GetSystemTheme().
     std::function<void()> onSystemThemeChanged;

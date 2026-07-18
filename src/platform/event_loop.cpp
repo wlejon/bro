@@ -176,6 +176,18 @@ void EventLoop::pollEvents() {
                 if (onFocusLost) onFocusLost();
                 break;
 
+            case SDL_EVENT_WINDOW_MINIMIZED:
+                if (onMinimized) onMinimized();
+                break;
+
+            case SDL_EVENT_WINDOW_MAXIMIZED:
+                if (onMaximized) onMaximized();
+                break;
+
+            case SDL_EVENT_WINDOW_RESTORED:
+                if (onRestored) onRestored();
+                break;
+
             case SDL_EVENT_WINDOW_FOCUS_GAINED:
                 if (onFocusGained) onFocusGained();
                 break;

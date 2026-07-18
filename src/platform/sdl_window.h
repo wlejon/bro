@@ -17,6 +17,21 @@ struct DisplayModeInfo {
     float refreshRate = 0.0f;
 };
 
+/// One attached display. `x/y/width/height` are the full bounds in desktop
+/// coordinates; the `work*` fields exclude the taskbar/dock (SDL usable
+/// bounds). `refreshRate` is the desktop mode's rate, `contentScale` the OS
+/// scaling factor (2.0 on a 200% HiDPI desktop).
+struct DisplayInfo {
+    uint32_t id = 0;   // SDL display id — stable while the display is attached
+    std::string name;
+    int x = 0, y = 0, width = 0, height = 0;
+    int workX = 0, workY = 0, workWidth = 0, workHeight = 0;
+    float refreshRate = 0.0f;
+    float contentScale = 1.0f;
+    bool isPrimary = false;
+    bool isCurrent = false;  // the display this window currently sits on
+};
+
 /// System cursor shapes the engine can request (the CSS `cursor` keywords
 /// collapse onto these — see cursorShapeFromCss in input_handling.cpp).
 /// None hides the OS cursor (CSS `cursor: none`).
@@ -40,7 +55,8 @@ enum class CursorShape {
 class Window {
 public:
     Window(const std::string& title, uint32_t width, uint32_t height,
-           bool hidden = false, bool resizable = true, bool vsync = true);
+           bool hidden = false, bool resizable = true, bool vsync = true,
+           bool borderless = false);
     ~Window();
 
     Window(const Window&) = delete;
@@ -80,6 +96,49 @@ public:
 
     /// Enumerate available fullscreen display modes.
     std::vector<DisplayModeInfo> getDisplayModes() const;
+
+    // --- Window management ---
+    // All of these are safe on the hidden headless window: SDL applies the
+    // style/limit flags immediately (so the matching getters round-trip in
+    // tests) and the OS simply never shows the result.
+
+    /// Remove (true) or restore (false) the window border + title bar.
+    void setBorderless(bool borderless);
+    bool isBorderless() const;
+
+    /// Keep the window above all normal windows.
+    void setAlwaysOnTop(bool onTop);
+    bool isAlwaysOnTop() const;
+
+    /// Minimum client-area size the user can resize down to. (0,0) clears.
+    void setMinimumSize(int w, int h);
+    void getMinimumSize(int& w, int& h) const;
+
+    /// Maximum client-area size the user can resize up to. (0,0) clears.
+    void setMaximumSize(int w, int h);
+    void getMaximumSize(int& w, int& h) const;
+
+    /// Window position in desktop coordinates (top-left of the client area).
+    void setPosition(int x, int y);
+    void getPosition(int& x, int& y) const;
+
+    /// Programmatic minimize / maximize / restore. State changes arrive back
+    /// through SDL window events (EventLoop::onMinimized/onMaximized/
+    /// onRestored); query the current state with the predicates below.
+    void minimize();
+    void maximize();
+    void restore();
+    bool isMinimized() const;
+    bool isMaximized() const;
+    bool isFullscreen() const;
+
+    /// Enumerate all attached displays. `isCurrent` marks the display this
+    /// window sits on. Never empty on a machine with a working video driver.
+    std::vector<DisplayInfo> getDisplays() const;
+
+    /// Center the window on the given display (id from getDisplays), inside
+    /// its usable (work-area) bounds. Returns false for an unknown id.
+    bool moveToDisplay(uint32_t displayId);
 
     /// Current display scale for this window (2.0 on a 200% HiDPI desktop).
     /// SDL_GetWindowDisplayScale first (per-window, tracks the display the

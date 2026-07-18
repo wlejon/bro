@@ -10,7 +10,7 @@
 namespace bro::platform {
 
 Window::Window(const std::string& title, uint32_t width, uint32_t height,
-               bool hidden, bool resizable, bool vsync)
+               bool hidden, bool resizable, bool vsync, bool borderless)
     : m_width(width), m_height(height)
 {
     if (!SDL_Init(SDL_INIT_VIDEO)) {
@@ -45,6 +45,9 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
         flags |= SDL_WINDOW_HIDDEN;
     } else if (resizable) {
         flags |= SDL_WINDOW_RESIZABLE;
+    }
+    if (borderless) {
+        flags |= SDL_WINDOW_BORDERLESS;
     }
     m_window = SDL_CreateWindow(title.c_str(),
                                 static_cast<int>(width),
@@ -207,6 +210,174 @@ std::vector<DisplayModeInfo> Window::getDisplayModes() const {
         }
     }
     return result;
+}
+
+void Window::setBorderless(bool borderless) {
+    if (!m_window) return;
+    if (!SDL_SetWindowBordered(m_window, !borderless)) {
+        LOG_ERROR("Failed to set borderless: %s", SDL_GetError());
+    }
+}
+
+bool Window::isBorderless() const {
+    if (!m_window) return false;
+    return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_BORDERLESS) != 0;
+}
+
+void Window::setAlwaysOnTop(bool onTop) {
+    if (!m_window) return;
+    if (!SDL_SetWindowAlwaysOnTop(m_window, onTop)) {
+        LOG_ERROR("Failed to set always-on-top: %s", SDL_GetError());
+    }
+}
+
+bool Window::isAlwaysOnTop() const {
+    if (!m_window) return false;
+    return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_ALWAYS_ON_TOP) != 0;
+}
+
+void Window::setMinimumSize(int w, int h) {
+    if (!m_window) return;
+    if (!SDL_SetWindowMinimumSize(m_window, std::max(0, w), std::max(0, h))) {
+        LOG_ERROR("Failed to set minimum size: %s", SDL_GetError());
+    }
+}
+
+void Window::getMinimumSize(int& w, int& h) const {
+    w = h = 0;
+    if (!m_window) return;
+    SDL_GetWindowMinimumSize(m_window, &w, &h);
+}
+
+void Window::setMaximumSize(int w, int h) {
+    if (!m_window) return;
+    if (!SDL_SetWindowMaximumSize(m_window, std::max(0, w), std::max(0, h))) {
+        LOG_ERROR("Failed to set maximum size: %s", SDL_GetError());
+    }
+}
+
+void Window::getMaximumSize(int& w, int& h) const {
+    w = h = 0;
+    if (!m_window) return;
+    SDL_GetWindowMaximumSize(m_window, &w, &h);
+}
+
+void Window::setPosition(int x, int y) {
+    if (!m_window) return;
+    if (!SDL_SetWindowPosition(m_window, x, y)) {
+        LOG_ERROR("Failed to set window position: %s", SDL_GetError());
+    }
+}
+
+void Window::getPosition(int& x, int& y) const {
+    x = y = 0;
+    if (!m_window) return;
+    SDL_GetWindowPosition(m_window, &x, &y);
+}
+
+void Window::minimize() {
+    if (!m_window) return;
+    if (!SDL_MinimizeWindow(m_window)) {
+        LOG_ERROR("Failed to minimize window: %s", SDL_GetError());
+    }
+}
+
+void Window::maximize() {
+    if (!m_window) return;
+    if (!SDL_MaximizeWindow(m_window)) {
+        LOG_ERROR("Failed to maximize window: %s", SDL_GetError());
+    }
+}
+
+void Window::restore() {
+    if (!m_window) return;
+    if (!SDL_RestoreWindow(m_window)) {
+        LOG_ERROR("Failed to restore window: %s", SDL_GetError());
+    }
+}
+
+bool Window::isMinimized() const {
+    if (!m_window) return false;
+    return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_MINIMIZED) != 0;
+}
+
+bool Window::isMaximized() const {
+    if (!m_window) return false;
+    return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_MAXIMIZED) != 0;
+}
+
+bool Window::isFullscreen() const {
+    if (!m_window) return false;
+    return (SDL_GetWindowFlags(m_window) & SDL_WINDOW_FULLSCREEN) != 0;
+}
+
+std::vector<DisplayInfo> Window::getDisplays() const {
+    std::vector<DisplayInfo> result;
+
+    int count = 0;
+    SDL_DisplayID* displays = SDL_GetDisplays(&count);
+    if (!displays) return result;
+
+    SDL_DisplayID primary = SDL_GetPrimaryDisplay();
+    SDL_DisplayID current = m_window ? SDL_GetDisplayForWindow(m_window) : 0;
+
+    for (int i = 0; i < count; i++) {
+        SDL_DisplayID id = displays[i];
+        DisplayInfo info;
+        info.id = id;
+        if (const char* name = SDL_GetDisplayName(id)) info.name = name;
+
+        SDL_Rect bounds{};
+        if (SDL_GetDisplayBounds(id, &bounds)) {
+            info.x = bounds.x; info.y = bounds.y;
+            info.width = bounds.w; info.height = bounds.h;
+        }
+        // Usable bounds exclude the taskbar/dock; fall back to full bounds
+        // if the query fails (some minimal Wayland compositors).
+        SDL_Rect usable{};
+        if (SDL_GetDisplayUsableBounds(id, &usable)) {
+            info.workX = usable.x; info.workY = usable.y;
+            info.workWidth = usable.w; info.workHeight = usable.h;
+        } else {
+            info.workX = info.x; info.workY = info.y;
+            info.workWidth = info.width; info.workHeight = info.height;
+        }
+
+        if (const SDL_DisplayMode* mode = SDL_GetDesktopDisplayMode(id)) {
+            info.refreshRate = mode->refresh_rate;
+        }
+        float scale = SDL_GetDisplayContentScale(id);
+        info.contentScale = scale > 0.0f ? scale : 1.0f;
+
+        info.isPrimary = (id == primary);
+        info.isCurrent = (id == current);
+        result.push_back(std::move(info));
+    }
+    SDL_free(displays);
+    return result;
+}
+
+bool Window::moveToDisplay(uint32_t displayId) {
+    if (!m_window) return false;
+
+    // Validate the id against the attached displays — SDL_GetDisplayUsableBounds
+    // on a stale id would just error, but a clear false return lets JS callers
+    // detect a display that was unplugged since getDisplays().
+    SDL_Rect usable{};
+    if (!SDL_GetDisplayUsableBounds(static_cast<SDL_DisplayID>(displayId), &usable)) {
+        LOG_INFO("moveToDisplay(%u): %s", displayId, SDL_GetError());
+        return false;
+    }
+
+    int w = 0, h = 0;
+    SDL_GetWindowSize(m_window, &w, &h);
+    int x = usable.x + std::max(0, (usable.w - w) / 2);
+    int y = usable.y + std::max(0, (usable.h - h) / 2);
+    if (!SDL_SetWindowPosition(m_window, x, y)) {
+        LOG_ERROR("Failed to move window to display %u: %s", displayId, SDL_GetError());
+        return false;
+    }
+    return true;
 }
 
 void Window::setCursor(CursorShape shape) {
