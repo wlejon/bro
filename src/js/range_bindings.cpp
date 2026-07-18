@@ -4,6 +4,7 @@
 #include "dom/document.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
+#include "dom/text_offsets.h"
 #include "layout/selection_geometry.h"
 #include "layout/skia_text_metrics.h"
 #include "engine/engine.h"
@@ -24,6 +25,21 @@ using Selection = bro::dom::Selection;
 // unwrap helper — accepts either owned (qjsbind::wrap) or unowned wrappers.
 static Range* getRange(JSValueConst val) {
     return static_cast<Range*>(JS_GetOpaque(val, js_range_class_id));
+}
+
+// ---- Boundary-point offset domain ----------------------------------------
+// A Range stores its endpoints the way the whole engine does: for Text/Comment
+// containers, a UTF-8 BYTE offset into the character data — which is what
+// layout, caret placement and the contenteditable/IME paths read straight off
+// the C++ Range. The DOM spec's `startOffset`/`setStart` speak UTF-16 code
+// units instead, so those convert here and only here (converting deeper would
+// double-convert against the internal readers). Offsets on Element containers
+// are child indices and pass through untouched — see dom/text_offsets.h.
+static int offsetToJs(Node* container, int byteOffset) {
+    return bro::dom::nodeOffsetToUtf16(container, byteOffset);
+}
+static int offsetFromJs(Node* container, int utf16Offset) {
+    return bro::dom::nodeOffsetToBytes(container, utf16Offset);
 }
 
 // The nearest Element ancestor (or the node itself if already an Element) —
@@ -76,7 +92,7 @@ static JSValue js_range_setStart(JSContext* ctx, JSValueConst this_val,
     if (!r || argc < 2) return JS_UNDEFINED;
     auto* n = unwrapNode(ctx, argv[0]);
     int32_t off = 0; JS_ToInt32(ctx, &off, argv[1]);
-    r->setStart(n, off);
+    r->setStart(n, offsetFromJs(n, off));
     return JS_UNDEFINED;
 }
 
@@ -86,7 +102,7 @@ static JSValue js_range_setEnd(JSContext* ctx, JSValueConst this_val,
     if (!r || argc < 2) return JS_UNDEFINED;
     auto* n = unwrapNode(ctx, argv[0]);
     int32_t off = 0; JS_ToInt32(ctx, &off, argv[1]);
-    r->setEnd(n, off);
+    r->setEnd(n, offsetFromJs(n, off));
     return JS_UNDEFINED;
 }
 
@@ -153,7 +169,8 @@ static JSValue js_range_comparePoint(JSContext* ctx, JSValueConst this_val,
     auto* r = getRange(this_val);
     if (!r || argc < 2) return JS_NewInt32(ctx, 0);
     int32_t off = 0; JS_ToInt32(ctx, &off, argv[1]);
-    return JS_NewInt32(ctx, r->comparePoint(unwrapNode(ctx, argv[0]), off));
+    auto* n = unwrapNode(ctx, argv[0]);
+    return JS_NewInt32(ctx, r->comparePoint(n, offsetFromJs(n, off)));
 }
 
 static JSValue js_range_isPointInRange(JSContext* ctx, JSValueConst this_val,
@@ -161,7 +178,8 @@ static JSValue js_range_isPointInRange(JSContext* ctx, JSValueConst this_val,
     auto* r = getRange(this_val);
     if (!r || argc < 2) return JS_FALSE;
     int32_t off = 0; JS_ToInt32(ctx, &off, argv[1]);
-    return JS_NewBool(ctx, r->isPointInRange(unwrapNode(ctx, argv[0]), off));
+    auto* n = unwrapNode(ctx, argv[0]);
+    return JS_NewBool(ctx, r->isPointInRange(n, offsetFromJs(n, off)));
 }
 
 static JSValue js_range_intersectsNode(JSContext* ctx, JSValueConst this_val,
@@ -363,8 +381,12 @@ void installRangeBindings(JSContext* ctx)
         .get("endContainer", [](Range* r, JSContext* cx) -> JSValue {
             return wrapAnyNode(cx, r->endContainer());
         })
-        .get("startOffset", [](Range* r) -> int { return r->startOffset(); })
-        .get("endOffset",   [](Range* r) -> int { return r->endOffset(); })
+        .get("startOffset", [](Range* r) -> int {
+            return offsetToJs(r->startContainer(), r->startOffset());
+        })
+        .get("endOffset",   [](Range* r) -> int {
+            return offsetToJs(r->endContainer(), r->endOffset());
+        })
         .get("collapsed",   [](Range* r) -> bool { return r->collapsed(); })
         .get("commonAncestorContainer", [](Range* r, JSContext* cx) -> JSValue {
             return wrapAnyNode(cx, r->commonAncestorContainer());
