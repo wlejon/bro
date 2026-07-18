@@ -2,22 +2,16 @@
 // bro.gpu never loads weights, so the whole surface is testable here:
 // available/backend/devices shape, memoryInfo/deviceName/trim contracts, and
 // cross-property consistency. When built without BRO_WITH_TENSOR the namespace
-// is the static {available:false, backend:'cpu', devices:[]} stub (no probe
-// functions) — assert exactly that and stop.
+// is a static stub, but it is deliberately behaviorally identical to a real
+// CPU-only binding (available:false, backend:'cpu', devices:['cpu'], probe
+// methods returning null/null/false) — so one contract covers both builds.
 
 assert(typeof bro === 'object', 'bro global exists');
 assert(bro.gpu !== undefined && bro.gpu !== null, 'bro.gpu namespace exists');
 
 const KNOWN = ['cuda', 'metal', 'cpu'];
 
-if (typeof bro.gpu.memoryInfo !== 'function') {
-    // Compiled-out static stub: honest, non-throwing answers.
-    assert(bro.gpu.available === false, 'stub reports available === false');
-    assert(bro.gpu.backend === 'cpu', 'stub reports backend === cpu');
-    assert(Array.isArray(bro.gpu.devices) && bro.gpu.devices.length === 0,
-           'stub reports an empty devices list');
-    console.log('bro.gpu is the compiled-out static stub; stub contract OK');
-} else {
+{
     assert(typeof bro.gpu.available === 'boolean', 'available is a boolean');
     assert(typeof bro.gpu.backend === 'string', 'backend is a string');
     assert(KNOWN.includes(bro.gpu.backend),

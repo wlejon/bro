@@ -56,15 +56,16 @@ void installTensorBindings(JSContext* ctx) {
     installUnavailableNamespace(ctx, "tensor", "BRO_WITH_TENSOR");
 }
 void installGpuBindings(JSContext* ctx) {
-    // bro.gpu is the always-present runtime backend probe; give the honest
-    // static answer (no GPU tensor backend built) rather than a throwing
-    // proxy, so `bro.gpu.available` / `.backend` gate checks keep working.
-    // The method surface (deviceName/memoryInfo/trim) must exist too — apps
-    // call these unconditionally (see system/skeletons/ai) — mirroring the real
-    // binding's CPU-path answers: no card name, no mem info, nothing to trim.
+    // bro.gpu is the always-present runtime backend probe. With no GPU tensor
+    // backend built, make the stub behaviorally identical to a real CPU-only
+    // binding rather than a throwing proxy or a half-populated object, so any
+    // app written against the real surface (see system/skeletons/ai) works
+    // verbatim: cpu is the sole registered device (and thus the default
+    // backend), and the method surface exists, mirroring the real binding's
+    // CPU-path answers — no card name, no mem info, nothing to trim.
     installFeatureStub(ctx,
         "(function(){var b=(globalThis.bro=globalThis.bro||{});"
-        "b.gpu={available:false,backend:'cpu',devices:[],compiledBackends:['cpu'],"
+        "b.gpu={available:false,backend:'cpu',devices:['cpu'],compiledBackends:['cpu'],"
         "deviceName:function(){return null;},"
         "memoryInfo:function(){return null;},"
         "trim:function(){return false;}};})();");
