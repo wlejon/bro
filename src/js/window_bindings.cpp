@@ -5,10 +5,14 @@
 
 #include "window_polyfill.js.h"
 
+#include <qjsbind/qjsbind.h>
+
 #include <cstring>
+#include <limits>
 
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_misc.h>   // SDL_OpenURL
+#include <SDL3/SDL_power.h>  // SDL_GetPowerInfo
 #include <SDL3/SDL_stdinc.h> // SDL_free
 
 extern "C" {
@@ -130,6 +134,66 @@ static JSValue js_window_open(JSContext* ctx, JSValueConst /*this_val*/,
     return JS_NULL;
 }
 
+// ---------------------------------------------------------------------------
+// navigator.getBattery() — Promise of a BatteryManager-shaped snapshot over
+// SDL_GetPowerInfo. Snapshot-on-call: call again for fresh values; there are
+// no change events (the listener methods are present but inert). Desktops
+// without a battery report the web convention: charging, full, forever.
+// Headless always reports that no-battery shape.
+// ---------------------------------------------------------------------------
+
+static JSValue js_navigator_getBattery(JSContext* ctx, JSValueConst /*this_val*/,
+                                       int /*argc*/, JSValueConst* /*argv*/)
+{
+    const double inf = std::numeric_limits<double>::infinity();
+    bool charging = true;
+    double chargingTime = 0.0;     // seconds; 0 = full or no battery
+    double dischargingTime = inf;  // seconds until empty
+    double level = 1.0;            // 0.0 .. 1.0
+
+    if (!s_headless) {
+        int secs = 0, pct = 0;
+        switch (SDL_GetPowerInfo(&secs, &pct)) {
+            case SDL_POWERSTATE_ON_BATTERY:
+                charging = false;
+                chargingTime = inf;
+                dischargingTime = secs >= 0 ? static_cast<double>(secs) : inf;
+                if (pct >= 0) level = pct / 100.0;
+                break;
+            case SDL_POWERSTATE_CHARGING:
+                // SDL has no time-to-full estimate — unknown is Infinity per spec.
+                chargingTime = inf;
+                if (pct >= 0) level = pct / 100.0;
+                break;
+            case SDL_POWERSTATE_CHARGED:
+                if (pct >= 0) level = pct / 100.0;
+                break;
+            case SDL_POWERSTATE_NO_BATTERY:
+            case SDL_POWERSTATE_UNKNOWN:
+            case SDL_POWERSTATE_ERROR:
+            default:
+                break;  // keep the desktop no-battery shape
+        }
+    }
+
+    JSValue b = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, b, "charging", JS_NewBool(ctx, charging));
+    JS_SetPropertyStr(ctx, b, "chargingTime", JS_NewFloat64(ctx, chargingTime));
+    JS_SetPropertyStr(ctx, b, "dischargingTime", JS_NewFloat64(ctx, dischargingTime));
+    JS_SetPropertyStr(ctx, b, "level", JS_NewFloat64(ctx, level));
+    // EventTarget veneer so spec-shaped code doesn't throw; never fires.
+    static const char kNoop[] = "(function(){})";
+    JS_SetPropertyStr(ctx, b, "addEventListener",
+        JS_Eval(ctx, kNoop, sizeof(kNoop) - 1, "<battery>", JS_EVAL_TYPE_GLOBAL));
+    JS_SetPropertyStr(ctx, b, "removeEventListener",
+        JS_Eval(ctx, kNoop, sizeof(kNoop) - 1, "<battery>", JS_EVAL_TYPE_GLOBAL));
+    JS_SetPropertyStr(ctx, b, "onchargingchange", JS_NULL);
+    JS_SetPropertyStr(ctx, b, "onchargingtimechange", JS_NULL);
+    JS_SetPropertyStr(ctx, b, "ondischargingtimechange", JS_NULL);
+    JS_SetPropertyStr(ctx, b, "onlevelchange", JS_NULL);
+    return qjsbind::make_resolved_promise(ctx, b);
+}
+
 void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight,
                            double devicePixelRatio,
                            platform::Window* window, bool headless)
@@ -193,6 +257,8 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
     JS_SetPropertyStr(ctx, nav, "userAgent", JS_NewString(ctx, "Bro/1.0"));
     JS_SetPropertyStr(ctx, nav, "platform", JS_NewString(ctx, "Win32"));
     JS_SetPropertyStr(ctx, nav, "language", JS_NewString(ctx, "en-US"));
+    JS_SetPropertyStr(ctx, nav, "getBattery",
+                      JS_NewCFunction(ctx, js_navigator_getBattery, "getBattery", 0));
 
     // navigator.clipboard — the system clipboard over SDL. The native helpers are
     // synchronous; the JS wrapper below presents them as the Promise-returning

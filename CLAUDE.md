@@ -98,6 +98,7 @@ Annotated `.js` files with JSDoc + examples — read the file before using or ch
 | `pointer-api.js` | Pointer + Touch Events — capture, compat mouse synthesis, headless touch injection |
 | `web-animations-api.js` | `element.animate()` — WAAPI subset on the CSS-transition interpolator |
 | `matchmedia-api.js` | `window.matchMedia()` — MediaQueryList, live matches + change events, per-realm |
+| `window-api.js` | `bro.window` — borderless, always-on-top, size limits, position, minimize/maximize/restore, displays; + `window.screen`, `window.open`, `navigator.getBattery` |
 | `wake-api.js` | `bro.wake` — streaming wake-word detection |
 | `kws-api.js` | `bro.kws` — open-vocabulary streaming keyword spotting |
 | `mic-api.js` | `bro.mic` — live mic chunks, peak/RMS, resample + AGC |

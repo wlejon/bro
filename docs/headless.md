@@ -142,6 +142,10 @@ mutation, `beforeinput` is not fired for composition, and
 
 The `bro.settings` API is available in headless mode for reading and writing persistent engine settings (graphics, audio, input, action bindings). See [settings.md](settings.md) for the full API reference.
 
+### Window management, screen, battery
+
+`bro.window`, `window.screen`, `window.open`, and `navigator.getBattery` all install in headless mode, pinned for determinism ([window-api.js](window-api.js)): flag/limit setters (borderless, alwaysOnTop, min/max size) round-trip against the hidden window; state-affecting ops (minimize/maximize/restore, setPosition, moveToDisplay) no-op; `getDisplays()` enumerates the machine's real displays (assert shapes, not values); `screen.*` pins to the hidden window's size; `window.open` never shells out; `getBattery()` always resolves the no-battery shape `{charging: true, chargingTime: 0, dischargingTime: Infinity, level: 1}`.
+
 ### CSS/Layout inspection
 
 | Function | Description |
