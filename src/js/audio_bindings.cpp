@@ -2530,6 +2530,8 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 [](AudioCtxData* d) -> double { return d->engine->currentTime(); })
             .get("sampleRate",
                 [](AudioCtxData* d) -> int { return d->engine->sampleRate(); })
+            .get("outputLatency",
+                [](AudioCtxData* d) -> double { return d->engine->outputLatencySeconds(); })
             .prop("masterGain",
                 [](AudioCtxData* d) -> double { return d->engine->masterGain(); },
                 [](AudioCtxData* d, double v) { d->engine->setMasterGain(static_cast<float>(v)); })
@@ -2617,6 +2619,10 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 [](AudioCtxData* d, int id, double v) { d->engine->setBusPan(id, static_cast<float>(v)); })
             .method("setBusMuted",
                 [](AudioCtxData* d, int id, bool v) { d->engine->setBusMuted(id, v); })
+            .method("setBusSolo",
+                [](AudioCtxData* d, int id, bool v) { d->engine->setBusSolo(id, v); })
+            .method("getBusSolo",
+                [](AudioCtxData* d, int id) -> bool { return d->engine->getBusSolo(id); })
             .method("allocateBusFilterSlot",
                 [](AudioCtxData* d, int busId) -> int { return d->engine->allocateBusFilterSlot(busId); })
             .method("releaseBusFilterSlot",
@@ -2822,6 +2828,19 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                         static_cast<float>(fx), static_cast<float>(fy), static_cast<float>(fz),
                         static_cast<float>(ux), static_cast<float>(uy), static_cast<float>(uz));
                 })
+            .method("setListenerVelocity",
+                [](AudioCtxData* d, double x, double y, double z) {
+                    d->engine->setListenerVelocity(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+                })
+
+            // Doppler
+            .prop("dopplerFactor",
+                [](AudioCtxData* d) -> double { return d->engine->dopplerFactor(); },
+                [](AudioCtxData* d, double v) { d->engine->setDopplerFactor(static_cast<float>(v)); })
+            .method("getPlaybackDopplerRatio",
+                [](AudioCtxData* d, int id) -> double { return d->engine->getPlaybackDopplerRatio(id); })
+            .method("getVoiceDopplerRatio",
+                [](AudioCtxData* d, int id) -> double { return d->engine->getVoiceDopplerRatio(id); })
 
             // Spatial audio — voice sources
             .method("setVoiceSpatialEnabled",
@@ -2829,6 +2848,10 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
             .method("setVoiceSpatialPosition",
                 [](AudioCtxData* d, int voiceId, double x, double y, double z) {
                     d->engine->setVoiceSpatialPosition(voiceId, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+                })
+            .method("setVoiceSpatialVelocity",
+                [](AudioCtxData* d, int voiceId, double x, double y, double z) {
+                    d->engine->setVoiceSpatialVelocity(voiceId, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
                 })
             .method("setVoiceSpatialRefDistance",
                 [](AudioCtxData* d, int voiceId, double v) { d->engine->setVoiceSpatialRefDistance(voiceId, static_cast<float>(v)); })
@@ -2844,6 +2867,10 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
             .method("setPlaybackSpatialPosition",
                 [](AudioCtxData* d, int id, double x, double y, double z) {
                     d->engine->setPlaybackSpatialPosition(id, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
+                })
+            .method("setPlaybackSpatialVelocity",
+                [](AudioCtxData* d, int id, double x, double y, double z) {
+                    d->engine->setPlaybackSpatialVelocity(id, static_cast<float>(x), static_cast<float>(y), static_cast<float>(z));
                 })
             .method("setPlaybackSpatialRefDistance",
                 [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackSpatialRefDistance(id, static_cast<float>(v)); })
@@ -2947,7 +2974,11 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
             .method("setPlaybackPan",
                 [](AudioCtxData* d, int id, double v) { d->engine->setPlaybackPan(id, static_cast<float>(v)); })
             .method("getPlaybackPosition",
-                [](AudioCtxData* d, int id) -> double { return d->engine->getPlaybackPosition(id); });
+                [](AudioCtxData* d, int id) -> double { return d->engine->getPlaybackPosition(id); })
+            .method("getPlaybackPositionSeconds",
+                [](AudioCtxData* d, int id) -> double { return d->engine->getPlaybackPositionSeconds(id); })
+            .method("seekPlayback",
+                [](AudioCtxData* d, int id, double seconds) { d->engine->seekPlayback(id, seconds); });
     }
 
     // The AudioContext constructor created by qjsbind doesn't add the destination property.

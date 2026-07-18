@@ -30,6 +30,15 @@ class AudioContext {
   /** Sample rate of the audio engine, e.g. 44100 or 48000 (read-only). */
   get sampleRate() {}
 
+  /**
+   * Estimated output latency in seconds (read-only, Web Audio's name):
+   * the audio device buffer size divided by the device sample rate,
+   * captured when the output device opened. Only the device buffer is
+   * visible from here — OS mixer / driver / DAC latency are not — so treat
+   * it as a lower-bound estimate. 0 in headless mode (no device).
+   */
+  get outputLatency() {}
+
   /** Master output gain (0.0 - 1.0+). */
   get masterGain() {}
   set masterGain(value) {}
@@ -204,6 +213,25 @@ class AudioContext {
   /** @param {number} busId @param {number} gain */ setBusGain(busId, gain) {}
   /** @param {number} busId @param {number} pan - -1.0 (left) to 1.0 (right) */ setBusPan(busId, pan) {}
   /** @param {number} busId @param {boolean} muted */ setBusMuted(busId, muted) {}
+
+  /**
+   * Solo a bus. While ANY bus is soloed, a bus only reaches the mix if it is
+   * soloed itself, sits inside a soloed group, or carries a soloed bus's
+   * audio toward master (ancestors keep mixing so solo audio still flows to
+   * the output). Every other bus renders silent — its parent mix AND its aux
+   * sends — while its effect tails keep running, so releasing solo is
+   * click-free. Notes: mute wins (a muted+soloed bus stays silent); sources
+   * routed directly to master bypass the bus tree and stay audible (same as
+   * Godot); solo state releases automatically when the bus is deleted.
+   * @param {number} busId @param {boolean} solo
+   * @example
+   *   const drums = ctx.createBus(), music = ctx.createBus();
+   *   ctx.setBusSolo(drums, true);   // audition drums alone
+   *   ctx.setBusSolo(drums, false);  // full mix returns
+   */
+  setBusSolo(busId, solo) {}
+
+  /** @param {number} busId @returns {boolean} current solo flag */ getBusSolo(busId) {}
 
   // Per-bus filters
   /** @param {number} busId @returns {number} slot */ allocateBusFilterSlot(busId) {}
@@ -405,9 +433,48 @@ class AudioContext {
    */
   setListenerOrientation(forwardX, forwardY, forwardZ, upX, upY, upZ) {}
 
+  /**
+   * Listener world-space velocity (units/sec) — the listener half of the
+   * Doppler model. Zero (default) means no listener-motion Doppler.
+   * Scene-attached listeners (scene.bindAudioListenerToCamera, see
+   * scene-api.js) update this automatically every frame.
+   * @param {number} x @param {number} y @param {number} z
+   */
+  setListenerVelocity(x, y, z) {}
+
+  // --- Doppler ---------------------------------------------------------------
+  // Pitch shift from relative listener/source motion, applied to spatialized
+  // sources: clip playbacks compose the ratio into their resample rate
+  // (multiplies setPlaybackRate), voices fold it into pitch as semitones.
+  // Model: ratio = (c − v_l·d̂)/(c − v_s·d̂), c = 343 units/sec, clamped to
+  // [0.5, 2.0] (±1 octave). Streaming playbacks (createStream /
+  // createStreamFromFile) are NOT shifted — their ring mixer has no
+  // resampler, same reason setPlaybackRate is a no-op for them.
+  // Scene-attached emitters (node.attachAudioEmitter, see scene-api.js)
+  // compute and push velocities automatically from node motion.
+
+  /**
+   * Global Doppler strength: scales both projected velocities before the
+   * ratio. 0 disables entirely, 1 is physical (default), >1 exaggerates.
+   * @type {number}
+   */
+  dopplerFactor = 1;
+
+  /**
+   * Last Doppler pitch ratio the mixer applied to a spatialized playback
+   * (1.0 until one was mixed with Doppler active). Introspection/testing —
+   * e.g. assert a node moving toward the listener yields a rising ratio.
+   * @param {number} playbackId @returns {number} ratio in [0.5, 2.0]
+   */
+  getPlaybackDopplerRatio(playbackId) {}
+
+  /** @param {number} voiceId @returns {number} last applied voice Doppler ratio */
+  getVoiceDopplerRatio(voiceId) {}
+
   // Voice spatial sources
   /** @param {number} voiceId @param {boolean} enabled */ setVoiceSpatialEnabled(voiceId, enabled) {}
   /** @param {number} voiceId @param {number} x @param {number} y @param {number} z */ setVoiceSpatialPosition(voiceId, x, y, z) {}
+  /** World-space velocity (units/sec) feeding Doppler. @param {number} voiceId @param {number} x @param {number} y @param {number} z */ setVoiceSpatialVelocity(voiceId, x, y, z) {}
   /** @param {number} voiceId @param {number} distance */ setVoiceSpatialRefDistance(voiceId, distance) {}
   /** @param {number} voiceId @param {number} distance */ setVoiceSpatialMaxDistance(voiceId, distance) {}
   /** @param {number} voiceId @param {number} factor */ setVoiceSpatialRolloff(voiceId, factor) {}
@@ -416,6 +483,7 @@ class AudioContext {
   // Playback spatial sources
   /** @param {number} playbackId @param {boolean} enabled */ setPlaybackSpatialEnabled(playbackId, enabled) {}
   /** @param {number} playbackId @param {number} x @param {number} y @param {number} z */ setPlaybackSpatialPosition(playbackId, x, y, z) {}
+  /** World-space velocity (units/sec) feeding Doppler. @param {number} playbackId @param {number} x @param {number} y @param {number} z */ setPlaybackSpatialVelocity(playbackId, x, y, z) {}
   /** @param {number} playbackId @param {number} distance */ setPlaybackSpatialRefDistance(playbackId, distance) {}
   /** @param {number} playbackId @param {number} distance */ setPlaybackSpatialMaxDistance(playbackId, distance) {}
   /** @param {number} playbackId @param {number} factor */ setPlaybackSpatialRolloff(playbackId, factor) {}
@@ -624,6 +692,35 @@ class AudioContext {
   /** @param {number} playbackId @param {number} rate - 1.0 = normal speed */ setPlaybackRate(playbackId, rate) {}
   /** @param {number} playbackId @param {number} pan - -1.0 to 1.0 */ setPlaybackPan(playbackId, pan) {}
   /** @param {number} playbackId @returns {number} normalized position in the clip/region, [0,1) — multiply by the clip duration for seconds */ getPlaybackPosition(playbackId) {}
+
+  /**
+   * Playback position in seconds — the seconds-domain counterpart of
+   * getPlaybackPosition. Clip playbacks: seconds from the region start
+   * (wraps when looping). Disk-streamed playbacks: current file time
+   * (seek-aware). Live PCM streams: seconds of audio consumed. 0 for
+   * unknown/finished handles.
+   * @param {number} playbackId @returns {number} seconds
+   */
+  getPlaybackPositionSeconds(playbackId) {}
+
+  /**
+   * Jump the playback cursor to `seconds`.
+   * - Clip playbacks: seconds from the playback region start (the whole
+   *   clip unless setPlaybackRegion narrowed it), clamped to the region;
+   *   applies within a few ms (next mixed block).
+   * - Disk-streamed playbacks (createStreamFromFile): seconds are FILE
+   *   time. The decode worker seeks the codec (WAV/FLAC/MP3/Ogg all
+   *   support it), already-buffered audio is skipped, and playback resumes
+   *   once the worker refills from the new position (brief silence, counted
+   *   as underrun in getStreamStats). Seeking a finished stream restarts it.
+   * - Live PCM streams (createStream): no backing store — no-op.
+   * @param {number} playbackId @param {number} seconds
+   * @example
+   *   const id = ctx.createStreamFromFile("music/track.mp3");
+   *   ctx.seekPlayback(id, 60);                     // jump to 1:00
+   *   ctx.getPlaybackPositionSeconds(id);           // ~60 once refilled
+   */
+  seekPlayback(playbackId, seconds) {}
 
 
   // --- Streaming PCM Source (live voice / network audio) --------------------
