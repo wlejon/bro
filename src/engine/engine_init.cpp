@@ -651,7 +651,8 @@ void Engine::initAppRealm() {
 
     // 9. Set up window/navigator/location/history BEFORE DOM bindings
     js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, contentHeight(),
-                              displayScale_);
+                              displayScale_, window_.get(),
+                              displayMode_ == DisplayMode::Headless);
 
     // 9a1. bro.window.* — runtime window management (state, borderless,
     //      always-on-top, size limits, position, displays). App realm only.
