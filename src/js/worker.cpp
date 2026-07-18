@@ -206,6 +206,7 @@ static bool brokitHasPending(JSContext* ctx)
     static const char* kProbes[] = {
         "__brokit_fetch_has_pending",
         "__brokit_ws_has_pending",
+        "__brokit_net_has_pending",
         "__brokit_fs_watch_has_pending",
     };
     JSValue g = JS_GetGlobalObject(ctx);
@@ -453,6 +454,16 @@ void Worker::threadFunc()
         // Tick WebSocket (pump pending connections/messages)
         g = JS_GetGlobalObject(ctx);
         tickFn = JS_GetPropertyStr(ctx, g, "__brokit_ws_tick");
+        if (JS_IsFunction(ctx, tickFn)) {
+            JSValue ret = JS_Call(ctx, tickFn, JS_UNDEFINED, 0, nullptr);
+            JS_FreeValue(ctx, ret);
+        }
+        JS_FreeValue(ctx, tickFn);
+        JS_FreeValue(ctx, g);
+
+        // Tick net (raw TCP/UDP sockets + WebSocketServer)
+        g = JS_GetGlobalObject(ctx);
+        tickFn = JS_GetPropertyStr(ctx, g, "__brokit_net_tick");
         if (JS_IsFunction(ctx, tickFn)) {
             JSValue ret = JS_Call(ctx, tickFn, JS_UNDEFINED, 0, nullptr);
             JS_FreeValue(ctx, ret);

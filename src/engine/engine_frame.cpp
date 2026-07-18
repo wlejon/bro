@@ -125,6 +125,7 @@ void Engine::run() {
             };
             pumpBrokit("__brokit_fetch_tick");
             pumpBrokit("__brokit_ws_tick");
+            pumpBrokit("__brokit_net_tick");
             pumpBrokit("__brokit_fs_watch_tick");
 
             // Reap finished audio voices off the audio thread.
@@ -515,6 +516,7 @@ void Engine::run() {
         };
         pumpBrokit("__brokit_fetch_tick");
         pumpBrokit("__brokit_ws_tick");
+        pumpBrokit("__brokit_net_tick");
         pumpBrokit("__brokit_fs_watch_tick");
 
         // 2c. Tick system panel timers

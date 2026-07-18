@@ -10,6 +10,8 @@
 //     const path = require('path');       // or require('node:path')
 //     const os = require('os');           // or require('node:os')
 //     const cp = require('child_process'); // or require('node:child_process')
+//     const net = require('net');         // raw TCP client + server
+//     const dgram = require('dgram');     // raw UDP sockets
 //
 //   Your own files — require() also loads JS and JSON off disk, so an app's JS
 //   can be split across files instead of living in one script:
@@ -25,7 +27,7 @@
 //   __filename / __dirname.
 //
 //   Web-compatible globals — available on globalThis, matching browser APIs:
-//     fetch, URL, URLSearchParams, crypto, WebSocket, EventSource,
+//     fetch, URL, URLSearchParams, crypto, WebSocket, WebSocketServer, EventSource,
 //     TextEncoder, TextDecoder, ReadableStream, WritableStream,
 //     CompressionStream, DecompressionStream,
 //     Blob, FormData, AbortController, EventTarget, MessageChannel,
@@ -190,6 +192,93 @@ cp.execFile(file, args?, options?, callback?);     // async version of execFileS
 cp.spawnSync(command, args?, options?);            // → { stdout, stderr, status, ... }
 
 
+// -----------------------------------------------------------------------------
+// net — require('net') — raw TCP client + server
+// -----------------------------------------------------------------------------
+//
+// SECURITY: server.listen() binds 127.0.0.1 (loopback) unless a host is given
+// explicitly. A listener is a real port on the user's machine — pass
+// '0.0.0.0' (or an interface address) only when you mean to expose it.
+//
+// v1 notes:
+//   - Backpressure-naive: write() buffers unboundedly in native code and
+//     always returns true; there is no 'drain' event. Do not stream gigabytes.
+//   - allowHalfOpen is always false (Node's default): a received FIN auto-ends
+//     the write side once pending data flushes.
+//   - DNS in connect() resolves synchronously (instant for IPs/localhost; a
+//     remote hostname blocks the JS thread for the lookup).
+//   - Sockets are pumped from the engine frame loop (headless: advanceTime).
+
+const net = require('net');
+
+// ── Server ──
+const server = net.createServer((socket) => { /* per-connection */ });
+server.listen(port, host?, cb?);   // port 0 → ephemeral; host default 127.0.0.1
+server.address();                  // → { address, port, family } (real port after listen)
+server.close(cb?);                 // stops accepting; existing sockets live on
+server.on('listening' | 'connection' | 'close' | 'error', fn);
+
+// ── Client / socket ──
+const sock = net.connect(port, host?, cb?);  // also net.createConnection; host default 127.0.0.1
+sock.write(data);                  // string (UTF-8) | ArrayBuffer | TypedArray → true
+sock.end(data?, cb?);              // flush, then FIN (graceful close)
+sock.destroy();                    // immediate teardown
+sock.address();                    // → { address, port, family }
+sock.remoteAddress; sock.remotePort; sock.localAddress; sock.localPort;
+sock.bytesRead; sock.bytesWritten;
+sock.readyState;                   // 'opening' | 'open' | 'closed'
+sock.on('connect', fn);            // connected (also 'ready')
+sock.on('data', (chunk) => {});    // chunk: Buffer (a Uint8Array subclass)
+sock.on('end', fn);                // peer sent FIN
+sock.on('close', (hadError) => {});// always last
+sock.on('error', (err) => {});     // followed by close(true)
+// No-op compat shims: setNoDelay, setKeepAlive, setTimeout, pause, resume,
+// ref, unref.
+
+net.isIP(s);                       // → 4 | 6 | 0
+net.isIPv4(s); net.isIPv6(s);      // → boolean
+
+// Example: loopback echo
+const srv = net.createServer((s) => s.on('data', (c) => s.write(c)));
+srv.listen(0);
+const c = net.connect(srv.address().port, '127.0.0.1', () => c.write('hi'));
+c.on('data', (chunk) => { c.end(); srv.close(); });
+
+
+// -----------------------------------------------------------------------------
+// dgram — require('dgram') — raw UDP sockets
+// -----------------------------------------------------------------------------
+//
+// SECURITY: bind() defaults to 127.0.0.1 (::1 for udp6) unless a host is
+// given explicitly — pass '0.0.0.0' to receive from the network.
+//
+// v1 notes:
+//   - 'udp4' and 'udp6' both work (same code path, AF_INET / AF_INET6).
+//   - Broadcast is opt-in via setBroadcast(true).
+//   - Multicast (addMembership etc.) is DEFERRED — not implemented.
+//   - send() is fire-and-forget: a full kernel buffer drops the datagram
+//     (faithful UDP); the callback reports only local errors.
+
+const dgram = require('dgram');
+
+const udp = dgram.createSocket('udp4');       // or 'udp6', or { type: 'udp4' }
+udp.bind(port?, host?, cb?);                  // port 0/omitted → ephemeral; emits 'listening'
+udp.send(data, port, host?, cb?);             // data: string | ArrayBuffer | TypedArray;
+                                              // host default 127.0.0.1 (::1 for udp6)
+udp.close(cb?);
+udp.address();                                // → { address, port, family }
+udp.setBroadcast(flag);
+udp.on('message', (msg, rinfo) => {});        // msg: Buffer; rinfo: { address, family, port, size }
+udp.on('listening' | 'close' | 'error', fn);
+
+// Example: loopback round trip
+const rx = dgram.createSocket('udp4');
+rx.on('message', (msg, rinfo) => rx.close());
+rx.bind(0);
+const tx = dgram.createSocket('udp4');
+tx.send('hello', rx.address().port);          // → rx 'message' fires
+
+
 // =============================================================================
 // WEB-COMPATIBLE GLOBALS
 // =============================================================================
@@ -332,6 +421,49 @@ ws.onerror = fn;
 ws.addEventListener(type, listener);
 ws.removeEventListener(type, listener);
 ws.binaryType;           // 'blob' (default) or 'arraybuffer'
+
+
+// -----------------------------------------------------------------------------
+// WebSocketServer — RFC 6455 server (also require('websocket-server'))
+// -----------------------------------------------------------------------------
+//
+// Serves ws:// connections on a raw TCP listener (the `net` module). Delivered
+// sockets mirror the WebSocket CLIENT surface above, so handler code is
+// symmetric across both ends.
+//
+// SECURITY: binds 127.0.0.1 unless options.host is given explicitly — a
+// listener is a real port on the user's machine.
+//
+// v1 notes:
+//   - No TLS serving (no wss:// listener; the CLIENT does support wss://).
+//   - No permessage-deflate (the extension offer is simply not acknowledged).
+//   - Subprotocols are not negotiated (Sec-WebSocket-Protocol ignored).
+//   - Client frames MUST be masked (RFC 6455) — unmasked input fails the
+//     connection with close code 1002. Server frames are never masked.
+//   - Fragmented messages are reassembled; ping frames are answered with pong
+//     automatically; close handshake carries code + reason both ways.
+
+const wss = new WebSocketServer({ port, host? });  // port 0 → ephemeral
+wss.address();                 // → { address, port, family }
+wss.clients;                   // live server-side sockets (array)
+wss.close(cb?);                // 1001 "going away" to clients, then stop listening
+wss.on('listening', fn);
+wss.on('connection', (ws, request) => {});
+// request: { url, headers } from the HTTP upgrade (headers lowercased)
+wss.on('close' | 'error', fn);
+
+// The `ws` handed to 'connection' looks like a client WebSocket, already OPEN:
+//   ws.readyState / ws.send(data) / ws.close(code?, reason?)
+//   ws.onmessage / ws.onclose / ws.onerror (+ addEventListener)
+//   ws.binaryType ('blob' default → Uint8Array messages; 'arraybuffer' → ArrayBuffer)
+// plus server-side extras: ws.remoteAddress, ws.remotePort, ws.url, ws.headers.
+
+// Example: echo server + the standard client, one process
+const echo = new WebSocketServer({ port: 0 });
+echo.on('connection', (ws) => { ws.onmessage = (ev) => ws.send(ev.data); });
+const client = new WebSocket('ws://127.0.0.1:' + echo.address().port + '/');
+client.onopen = () => client.send('hi');
+client.onmessage = (ev) => { client.close(1000); echo.close(); };
 
 
 // -----------------------------------------------------------------------------
