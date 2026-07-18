@@ -449,6 +449,17 @@ void Engine::advanceTime(double ms) {
         }
 #endif
 
+        // Copy body transforms into their bound PhysicsNodes, in the same slot
+        // the windowed frame does it: after the step (so the poses are current)
+        // and before agents/animations/render read node transforms. Without
+        // this a headless app's physics is correct but every body-bound visual
+        // sits at the origin, and only an explicit scene.syncPhysics() moves it.
+#if BRO_WITH_3D
+#if BRO_WITH_PHYSICS
+        for (auto& sg : sceneGraphs_) sg.graph->syncPhysics();
+#endif
+#endif
+
         // Advance dynamic navmesh-obstacle tile rebuilds before agents sync
         // (same ordering as the windowed frame: a batch that finishes this
         // step repaths agents this step).
