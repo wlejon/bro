@@ -194,12 +194,17 @@ void Engine::run() {
 
     // Wire up event-loop callbacks. Every window-associated callback receives
     // the SDL windowID first; `mainWin` tests it against the primary window.
-    // Until per-window input routing lands, events from any other window
-    // (a bro.window.open secondary) are dropped rather than misdelivered into
-    // the app document at that window's local coordinates; window-STATE events
-    // for secondaries are routed to the host registry below.
+    // An event on any other window is a bro.window.open() secondary: `host`
+    // resolves it to that window's bro host id (0 = not a live host) and the
+    // input goes to THAT window's document through the per-window routing
+    // entry points (src/engine/window_host_input.cpp). Window-STATE events for
+    // secondaries go to the host registry further below.
     const uint32_t mainWinId = window_->windowId();
     auto mainWin = [mainWinId](uint32_t id) { return id == mainWinId || id == 0; };
+    auto host = [this](uint32_t id) -> uint64_t {
+        WindowHost* h = windowHostBySdlId(id);
+        return h ? h->id : 0;
+    };
     eventLoop_->onQuit       = [this]() { running_ = false; };
     // Titlebar X / Alt+F4 on any window. Main-window handling must stay out of
     // the SDL_EVENT_QUIT path here: when the main window is the LAST window,
@@ -210,16 +215,19 @@ void Engine::run() {
         if (mainWin(id)) handleResize((int)w, (int)h);
         else handleHostResized(id, (int)w, (int)h);
     };
-    eventLoop_->onMouseDown  = [this, mainWin](uint32_t id, float x, float y, uint8_t b) { if (mainWin(id)) handleMouseDown(x, y, (int)b); };
-    eventLoop_->onMouseUp    = [this, mainWin](uint32_t id, float x, float y, uint8_t b) { if (mainWin(id)) handleMouseUp(x, y, (int)b); };
-    eventLoop_->onMouseMove  = [this, mainWin](uint32_t id, float x, float y, float xr, float yr) { if (mainWin(id)) handleMouseMove(x, y, xr, yr); };
-    eventLoop_->onKeyDown    = [this, mainWin](uint32_t id, int32_t k, int32_t s, uint16_t m, bool r) { if (mainWin(id)) handleKeyDown(k, s, (int)m, r); };
-    eventLoop_->onKeyUp      = [this, mainWin](uint32_t id, int32_t k, int32_t s, uint16_t m, bool r) { if (mainWin(id)) handleKeyUp(k, s, (int)m, r); };
-    eventLoop_->onTextInput  = [this, mainWin](uint32_t id, const std::string& t) { if (mainWin(id)) handleTextInput(t); };
-    eventLoop_->onTextEditing = [this, mainWin](uint32_t id, const std::string& t, int32_t s, int32_t l) { if (mainWin(id)) handleTextEditing(t, s, l); };
-    eventLoop_->onWheel      = [this, mainWin](uint32_t id, float x, float y, float dx, float dy) { if (mainWin(id)) handleWheel(x, y, dx, dy); };
-    eventLoop_->onDropFile   = [this, mainWin](uint32_t id, const std::string& p, float x, float y) { if (mainWin(id)) handleDropFile(p, x, y); };
-    eventLoop_->onDropText   = [this, mainWin](uint32_t id, const std::string& t, float x, float y) { if (mainWin(id)) handleDropText(t, x, y); };
+    eventLoop_->onMouseDown  = [this, mainWin, host](uint32_t id, float x, float y, uint8_t b) { if (mainWin(id)) handleMouseDown(x, y, (int)b); else hostMouseDown(host(id), x, y, (int)b); };
+    eventLoop_->onMouseUp    = [this, mainWin, host](uint32_t id, float x, float y, uint8_t b) { if (mainWin(id)) handleMouseUp(x, y, (int)b); else hostMouseUp(host(id), x, y, (int)b); };
+    eventLoop_->onMouseMove  = [this, mainWin, host](uint32_t id, float x, float y, float xr, float yr) { if (mainWin(id)) handleMouseMove(x, y, xr, yr); else hostMouseMove(host(id), x, y, xr, yr); };
+    eventLoop_->onKeyDown    = [this, mainWin, host](uint32_t id, int32_t k, int32_t s, uint16_t m, bool r) { if (mainWin(id)) handleKeyDown(k, s, (int)m, r); else hostKeyDown(host(id), k, s, (int)m, r); };
+    eventLoop_->onKeyUp      = [this, mainWin, host](uint32_t id, int32_t k, int32_t s, uint16_t m, bool r) { if (mainWin(id)) handleKeyUp(k, s, (int)m, r); else hostKeyUp(host(id), k, s, (int)m, r); };
+    eventLoop_->onTextInput  = [this, mainWin, host](uint32_t id, const std::string& t) { if (mainWin(id)) handleTextInput(t); else hostTextInput(host(id), t); };
+    eventLoop_->onTextEditing = [this, mainWin, host](uint32_t id, const std::string& t, int32_t s, int32_t l) { if (mainWin(id)) handleTextEditing(t, s, l); else hostTextEditing(host(id), t, s, l); };
+    eventLoop_->onWheel      = [this, mainWin, host](uint32_t id, float x, float y, float dx, float dy) { if (mainWin(id)) handleWheel(x, y, dx, dy); else hostWheel(host(id), x, y, dx, dy); };
+    eventLoop_->onDropFile   = [this, mainWin, host](uint32_t id, const std::string& p, float x, float y) { if (mainWin(id)) handleDropFile(p, x, y); else hostDropFile(host(id), p, x, y); };
+    eventLoop_->onDropText   = [this, mainWin, host](uint32_t id, const std::string& t, float x, float y) { if (mainWin(id)) handleDropText(t, x, y); else hostDropText(host(id), t, x, y); };
+    // Touch stays main-window-only in v1: the contact table (engine.h) is a
+    // single global map with no per-window key, so a finger on a secondary
+    // window is dropped rather than misrouted into the app document.
     eventLoop_->onFingerDown = [this, mainWin](uint32_t wid, uint64_t id, float x, float y, float p) { if (mainWin(wid)) handleTouchDown(id, x, y, p); };
     eventLoop_->onFingerMove = [this, mainWin](uint32_t wid, uint64_t id, float x, float y, float p) { if (mainWin(wid)) handleTouchMove(id, x, y, p); };
     eventLoop_->onFingerUp   = [this, mainWin](uint32_t wid, uint64_t id, float x, float y) { if (mainWin(wid)) handleTouchUp(id, x, y); };

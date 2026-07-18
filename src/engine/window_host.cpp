@@ -108,6 +108,8 @@ void Engine::processPendingWindowHosts() {
         WindowHost* h = windowHosts_[i].get();
         if (!h->pendingClose) { ++i; continue; }
         uint64_t id = h->id;
+        // The keyboard cannot stay pointed at a window that is going away.
+        if (focusedHostId_ == id) focusedHostId_ = 0;
         // Document first (frees JS/DOM state the raster thread replays), then
         // the surface into the owning context's free list, then the window.
         teardownWindowHostDoc(*h);
@@ -279,6 +281,7 @@ void Engine::destroyAllWindowHosts(bool notifyJs) {
         h->fboTexture = 0;
     }
     windowHosts_.clear();  // destroys the SDL windows
+    focusedHostId_ = 0;
     if (notifyJs && jsRuntime_) {
         for (uint64_t id : ids)
             js::windowHostNotifyClosed(jsRuntime_->getContext(), id);
@@ -330,14 +333,39 @@ void Engine::handleHostResized(uint32_t sdlWindowId, int w, int h) {
 }
 
 void Engine::handleHostFocusChanged(uint32_t sdlWindowId, bool focused) {
-    if (WindowHost* host = windowHostBySdlId(sdlWindowId)) {
-        host->focused = focused;
+    WindowHost* host = windowHostBySdlId(sdlWindowId);
+    if (!host) return;
+    host->focused = focused;
+    // focusedHostId_ is what keyboard / text input / IME follow. Only clear it
+    // for the window that actually held it: focus moving A → B delivers B's
+    // gain and A's loss in an unspecified order, and clearing on A's loss
+    // after B's gain would strand the keyboard on no window at all.
+    if (focused) focusedHostId_ = host->id;
+    else if (focusedHostId_ == host->id) focusedHostId_ = 0;
+    // Web semantics per realm: an unfocused window is not a hidden document,
+    // but bro treats focus loss as backgrounding for the app realm already
+    // (engine_frame.cpp), so hosts follow the same rule for consistency —
+    // document.hidden flips and visibilitychange fires in THAT realm only.
+    windowHostSetVisibility(*host, focused);
+    if (!focused) {
+        // Dropping the pointer state avoids a stuck :hover / half-finished
+        // click streak when the pointer leaves with the focus.
+        if (host->hoveredElement) {
+            host->hoveredElement->markDirty();
+            host->hoveredElement = nullptr;
+            uiDirty_ = true;
+        }
+        host->pressedButtons = 0;
+        host->controlDragElement.reset();
     }
 }
 
 void Engine::handleHostMinimized(uint32_t sdlWindowId, bool minimized) {
     if (WindowHost* host = windowHostBySdlId(sdlWindowId)) {
         host->minimized = minimized;
+        // A minimized window is a hidden document in that realm; restoring
+        // makes it visible again. Timers keep ticking either way.
+        windowHostSetVisibility(*host, !minimized);
         if (!minimized) uiDirty_ = true;  // present a fresh frame on restore
     }
 }

@@ -49,6 +49,7 @@ add_library(bro_engine STATIC
     iframe.cpp
     sub_document.cpp
     window_host.cpp
+    window_host_input.cpp
     settings.cpp
     overlay.cpp
     dropdown_overlay.cpp

@@ -5,6 +5,7 @@
 #include "engine/key_mapping.h"
 #include "engine/overflow.h"
 #include "engine/overlay.h"
+#include "engine/input_common.h"
 #include "engine/replaced_elements.h"
 #include "engine/settings.h"
 
@@ -294,7 +295,7 @@ int Engine::currentModState() const {
 // Maps a modifier keycode to its SDL_KMOD_* bit (both left/right variants
 // fold onto the same bit, matching SDL_GetModState()'s own behavior). Returns
 // 0 for non-modifier keys.
-static int modifierBitForKeycode(int keycode) {
+int modifierBitForKeycode(int keycode) {
     switch (keycode) {
         case SDLK_LSHIFT: case SDLK_RSHIFT: return SDL_KMOD_SHIFT;
         case SDLK_LCTRL:  case SDLK_RCTRL:  return SDL_KMOD_CTRL;
@@ -305,10 +306,10 @@ static int modifierBitForKeycode(int keycode) {
 }
 
 // Safe wrappers for SDL text input — no-ops when there is no window.
-static void safeStartTextInput(platform::Window* window) {
+void safeStartTextInput(platform::Window* window) {
     if (window) SDL_StartTextInput(window->getSDLWindow());
 }
-static void safeStopTextInput(platform::Window* window) {
+void safeStopTextInput(platform::Window* window) {
     if (window) SDL_StopTextInput(window->getSDLWindow());
 }
 
@@ -320,14 +321,14 @@ static bool isTextEditable(dom::Element* el) {
 // A control that owns a text caret and selection: a <textarea>, or an <input>
 // of a text-ish type. Excludes checkbox/radio/range/color/button inputs, where
 // a press means something else entirely and a drag is not a text drag.
-static bool isCaretControl(dom::Element* el) {
+bool isCaretControl(dom::Element* el) {
     if (getElTextarea(el)) return true;
     if (auto* in = getElInput(el)) return in->isTextType(el);
     return false;
 }
 
 // Build a KeyboardEvent with all modifier fields set.
-static dom::KeyboardEvent makeKeyboardEvent(const char* type,
+dom::KeyboardEvent makeKeyboardEvent(const char* type,
                                             int keycode, int scancode,
                                             int mod, bool repeat) {
     dom::KeyboardEvent evt(type);
@@ -359,7 +360,7 @@ static dom::KeyboardEvent makeKeyboardEvent(const char* type,
 // Convert SDL3 mouse button id (1=left, 2=middle, 3=right, 4=X1, 5=X2)
 // into the DOM MouseEvent.button index (0=left, 1=middle, 2=right, 3=back, 4=forward).
 // SDL and the DOM disagree on both the base index and the middle/right ordering.
-static int sdlToDomButton(int sdlButton) {
+int sdlToDomButton(int sdlButton) {
     switch (sdlButton) {
         case 1: return 0;  // SDL left   -> DOM primary
         case 2: return 1;  // SDL middle -> DOM auxiliary
@@ -372,7 +373,7 @@ static int sdlToDomButton(int sdlButton) {
 
 // MouseEvent.buttons bitmask values, keyed by DOM button index.
 // Note that DOM swaps right (2) and middle (4) relative to a naive 1<<n encoding.
-static int domButtonMask(int domButton) {
+int domButtonMask(int domButton) {
     switch (domButton) {
         case 0: return 1;   // left
         case 1: return 4;   // middle
@@ -386,11 +387,11 @@ static int domButtonMask(int domButton) {
 // Build a MouseEvent with standard fields populated.
 // `x, y` are screen-space; `contentTop` is the engine-reserved top inset
 // (menu bar) so clientY/pageY are reported in the web-standard content space.
-static void populateMouseEvent(dom::MouseEvent& evt, float x, float y,
+void populateMouseEvent(dom::MouseEvent& evt, float x, float y,
                                int button, int buttons,
                                float movementX, float movementY,
                                float scrollY, int mod,
-                               float contentTop = 0.0f) {
+                               float contentTop) {
     float cy = y - contentTop;
     evt.setClientX(static_cast<double>(x));
     evt.setClientY(static_cast<double>(cy));
@@ -1492,7 +1493,7 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
 // elements, not text runs, so the browser "auto = I-beam over text"
 // refinement doesn't apply — text controls get their I-beam from the UA
 // stylesheet instead (default_styles.h).
-static platform::CursorShape cursorShapeFromCss(const std::string& value) {
+platform::CursorShape cursorShapeFromCss(const std::string& value) {
     using platform::CursorShape;
     // Last comma-separated entry, trimmed + lowercased.
     size_t comma = value.find_last_of(',');
@@ -1525,7 +1526,7 @@ static platform::CursorShape cursorShapeFromCss(const std::string& value) {
     return CursorShape::Default;
 }
 
-static const char* cursorShapeName(platform::CursorShape s) {
+const char* cursorShapeName(platform::CursorShape s) {
     using platform::CursorShape;
     switch (s) {
         case CursorShape::Default:    return "default";
@@ -2076,6 +2077,28 @@ void Engine::handleProgrammaticFocus(dom::Document* doc, dom::Element* oldEl,
     uiDirty_ = true;
 }
 
+// System hotkeys are GLOBAL: the perf HUD and the settings modal toggle
+// whichever bro window currently has keyboard focus, so a user working in a
+// secondary window can still open them (they render on the main window). Both
+// the app-document key path and the per-host one (window_host_input.cpp) run
+// this before anything window-specific.
+bool Engine::handleGlobalHotkey(int keycode, int mod, bool repeat) {
+    if (repeat || !settings_) return false;
+    const std::string webKey = sdlKeycodeToWebKey(keycode, mod);
+    const std::string action = settings_->getActionForKey(webKey);
+    if (action == "system_toggle_perf") {
+        toggleSystemPerf();
+        uiDirty_ = true;
+        return true;
+    }
+    if (action == "system_toggle_settings") {
+        toggleSystemSettings();
+        uiDirty_ = true;
+        return true;
+    }
+    return false;
+}
+
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     heldModifierMask_ |= modifierBitForKeycode(keycode);
     // Physical held-key set for polled action state (actionStrength /
@@ -2130,21 +2153,8 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
         return;
     }
 
-    // Check for system actions via the settings action binding system
-    if (!repeat && settings_) {
-        std::string webKey = sdlKeycodeToWebKey(keycode, mod);
-        std::string action = settings_->getActionForKey(webKey);
-        if (action == "system_toggle_perf") {
-            toggleSystemPerf();
-            uiDirty_ = true;
-            return;
-        }
-        if (action == "system_toggle_settings") {
-            toggleSystemSettings();
-            uiDirty_ = true;
-            return;
-        }
-    }
+    // System hotkeys (perf HUD, settings modal).
+    if (handleGlobalHotkey(keycode, mod, repeat)) return;
 
     if (!document_) return;
 
@@ -2529,7 +2539,7 @@ void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
 }
 
 // Filter out control characters (tab, etc.) that shouldn't be inserted as text
-static bool isControlChar(const std::string& text) {
+bool isControlChar(const std::string& text) {
     if (text.empty()) return true;
     unsigned char c = static_cast<unsigned char>(text[0]);
     // Allow printable ASCII and multi-byte UTF-8 sequences

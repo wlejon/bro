@@ -296,9 +296,10 @@ public:
     // a real OS window hosting a full, isolated document realm built from
     // opts.src — open/close/'close'/'load' events, per-host
     // focus/minimized/occluded state, per-host record/replay of that document,
-    // and a per-window composite+swap pass. v1 IN PROGRESS: input routing into
-    // hosts lands with the next chunk of the multiwindow plan, so today only
-    // the main window receives mouse/keyboard/IME.
+    // a per-window composite+swap pass, and its own input routing (mouse,
+    // cursor, keyboard, text input, IME, wheel, drop — see the routing entry
+    // points below and src/engine/window_host_input.cpp). v1 IN PROGRESS:
+    // postMessage between windows lands with the next chunk of the plan.
     //
     // Threading/lifecycle: creation and destruction are QUEUED
     // (openWindowHost/closeWindowHost) and drained at the raster-idle point
@@ -355,9 +356,19 @@ public:
         // this destructs last.
         std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes;
         std::unique_ptr<dom::Document> document;
+        // ── Per-window input state (src/engine/window_host_input.cpp) ───────
+        // A host window carries no engine chrome, so window space == content
+        // space == document space: no menu-bar inset to fold out and no
+        // viewport scroll to add. Every one of these mirrors an app-document
+        // member (appMouseState_, hoveredElement_, lastMouseX_, ...) that the
+        // main window keeps for itself.
         MouseDispatchState mouseState;          // per-doc click/dblclick tracking
         dom::Element* hoveredElement = nullptr; // per-window :hover target
         dom::Element* activeElement = nullptr;  // per-window keyboard focus
+        float lastMouseX = 0.0f, lastMouseY = 0.0f;
+        int pressedButtons = 0;                 // DOM MouseEvent.buttons mask
+        dom::ElementHandle controlDragElement;  // text drag-select in this window
+        std::string resolvedCursor = "default"; // this window's CSS cursor
         int boxW = 0, boxH = 0;                 // last client size laid out
         // Render target: the host document paints into cmdBuffer (main thread),
         // replayed into `surface` (raster thread) → fboTexture, which
@@ -409,6 +420,44 @@ public:
     /// render (chunk 2), and firing 'close' runs app JS. Fires handle 'close'
     /// events through the window-host bindings.
     void processPendingWindowHosts();
+
+    // ── Per-window input routing (src/engine/window_host_input.cpp) ─────────
+    // Every input event that lands on a secondary window comes through here,
+    // keyed by bro host id. Two callers: the event loop (which resolves the
+    // SDL windowID through windowHostBySdlId first) and the headless
+    // injection seams (whose optional windowId argument names the host
+    // directly). Unknown or document-less ids are silently ignored — a window
+    // can close between an event being queued and delivered.
+    //
+    // Coordinates are in the host window's own space, which is also its
+    // document space: a secondary window has no menu-bar inset and no engine
+    // viewport scroll. Button ids are SDL convention, like the main-window
+    // handlers.
+    //
+    // These NEVER consult main-window chrome: overlays, system panels, the
+    // inspector, the gizmo and the viewport scrollbar are all primary-window
+    // furniture. v1 also keeps pointer lock, touch, and the gamepad/"action"
+    // stream bound to the main window (see docs/window-api.js).
+    void hostMouseDown(uint64_t hostId, float x, float y, int sdlButton);
+    void hostMouseUp(uint64_t hostId, float x, float y, int sdlButton);
+    void hostMouseMove(uint64_t hostId, float x, float y, float xrel, float yrel);
+    void hostKeyDown(uint64_t hostId, int keycode, int scancode, int mod, bool repeat);
+    void hostKeyUp(uint64_t hostId, int keycode, int scancode, int mod, bool repeat);
+    void hostTextInput(uint64_t hostId, const std::string& text);
+    void hostTextEditing(uint64_t hostId, const std::string& text, int start, int length);
+    void hostWheel(uint64_t hostId, float x, float y, float dx, float dy);
+    void hostDropFile(uint64_t hostId, const std::string& path, float x, float y);
+    void hostDropText(uint64_t hostId, const std::string& text, float x, float y);
+
+    /// bro host id of the secondary window that currently has input focus,
+    /// or 0 when focus is on the main window (or nowhere). Keyboard, text
+    /// input and IME follow this.
+    uint64_t focusedWindowHostId() const { return focusedHostId_; }
+
+    /// Per-window resolved cursor shape — `hostId` 0 means the main window,
+    /// so the existing no-arg resolvedCursor() is exactly resolvedCursor(0).
+    /// Unknown ids report "default".
+    const std::string& resolvedCursor(uint64_t hostId) const;
 
     /// Synchronous, main-thread capture of a host window's document pixels
     /// (top-down RGBA), for the parent-side handle's capture(). Brings the
@@ -1361,6 +1410,10 @@ private:
     // so host addresses stay stable across registry mutation.
     std::vector<std::unique_ptr<WindowHost>> windowHosts_;
     uint64_t nextWindowHostId_ = 1;
+    // Which secondary window has input focus (0 = none / the main window).
+    // Keyboard, text input and IME follow this; mouse events carry their own
+    // windowID and never consult it.
+    uint64_t focusedHostId_ = 0;
     /// Per-window composite pass (windowed frame loop, after the main
     /// composite): for each created, non-minimized host — MakeCurrent(host,
     /// main ctx), viewport, clear to the host's color, swap at interval 0 —
@@ -1386,6 +1439,60 @@ private:
     /// that false-with-cleanup handled by the bindings' own cleanup instead.
     /// Callers must hold the same quiescence the drain point has.
     void destroyAllWindowHosts(bool notifyJs);
+
+    // ── Per-window input internals (src/engine/window_host_input.cpp) ───────
+    /// Hit-test a host document at window coordinates. Simpler than
+    /// iframeHitTest: there is no element box to translate out of, because a
+    /// host surface IS the window (window-size units in v1, so no HiDPI
+    /// scaling to undo either).
+    dom::Element* windowHostHitTest(WindowHost& h, float x, float y);
+    /// The ControlContext a host document's replaced elements run under: the
+    /// host's own document/realm/window, no overlay manager (dropdowns and
+    /// the colour picker are main-window chrome — a <select> in a secondary
+    /// window focuses but does not open a popup in v1), viewport = the window.
+    ControlContext windowHostControlContext(WindowHost& h);
+    /// Dispatch a DOM event on the host's own JS realm.
+    void windowHostDispatch(WindowHost& h, dom::Element* el, dom::Event& evt);
+    void windowHostDispatchInput(WindowHost& h, dom::Element* el,
+                                 const std::string& data = "",
+                                 const std::string& inputType = "",
+                                 bool isComposing = false);
+    void windowHostDispatchComposition(WindowHost& h, dom::Element* el,
+                                       const char* type, const std::string& data);
+    void windowHostDispatchFocus(WindowHost& h, dom::Element* oldEl,
+                                 dom::Element* newEl);
+    /// applyKeyResult's per-host twin: dispatch the control's change/input
+    /// events on the host realm, honour unfocus against the host's document
+    /// and SDL window, and repaint the host.
+    void windowHostApplyKeyResult(WindowHost& h, dom::Element* el,
+                                  const layout::KeyHandleResult& r);
+    /// Re-resolve the host's hovered element's computed `cursor` into
+    /// h.resolvedCursor, and (windowed) apply it to THAT window's OS cursor —
+    /// Window::setCursor caches per window, so this never fights the main one.
+    void windowHostUpdateCursor(WindowHost& h, dom::Element* target);
+    /// Report the host's focused text control's caret rect to SDL against the
+    /// host's OWN window, so the native IME candidate box appears there.
+    void windowHostUpdateTextInputArea(WindowHost& h);
+    /// Tab focus navigation inside one host document.
+    void windowHostAdvanceFocus(WindowHost& h, bool reverse);
+    /// Commit any in-progress composition in the host's focused control.
+    void windowHostCommitComposition(WindowHost& h);
+    /// Shared body of hostDropFile/hostDropText: hit-test and fire the
+    /// dragenter → dragover → drop triple with the given payload.
+    void windowHostDispatchDrop(WindowHost& h, float x, float y,
+                                const std::string* path, const std::string* text);
+    /// Mark a host document for re-record. Caret moves and control focus
+    /// change no DOM, so tickSubDoc's isDirty() check alone would keep
+    /// re-presenting the stale frame.
+    void windowHostRepaint(WindowHost& h);
+    /// Per-realm page visibility for one host (document.hidden +
+    /// visibilitychange), through the same __bro_set_visibility hook the app
+    /// realm uses.
+    void windowHostSetVisibility(WindowHost& h, bool visible);
+    /// System hotkeys (the settings-bound system_toggle_perf /
+    /// system_toggle_settings actions) are GLOBAL: they fire whichever bro
+    /// window has focus. Returns true when the keystroke was consumed.
+    bool handleGlobalHotkey(int keycode, int mod, bool repeat);
     // Top-level location.reload() queued and not yet performed. Set by
     // requestAppReload() (from JS in the doomed realm), consumed by
     // processPendingAppReload() at the frame loop's idle-workers point

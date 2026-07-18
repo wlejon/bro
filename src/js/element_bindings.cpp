@@ -3842,9 +3842,24 @@ static JSValue js_element_get_shadowRoot(JSContext* ctx, JSValueConst this_val) 
 static JSValue js_element_requestPointerLock(JSContext* ctx, JSValueConst this_val,
                                               int /*argc*/, JSValueConst* /*argv*/) {
     auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
     auto it = s_ctx_engines.find(ctx);
-    if (!el || it == s_ctx_engines.end() || !it->second) return JS_UNDEFINED;
-    auto* engine = static_cast<bro::engine::Engine*>(it->second);
+    auto* engine = (it == s_ctx_engines.end())
+                       ? nullptr
+                       : static_cast<bro::engine::Engine*>(it->second);
+    // v1 cut: pointer lock is main-window only. lockedElement_ and SDL's
+    // relative-mouse-mode toggle are both bound to the PRIMARY window, so a
+    // lock requested from a secondary window (bro.window.open) or an iframe
+    // would capture the wrong window's pointer. Only the main app realm
+    // registers an engine for its context, so "no engine here" and "this
+    // element is not in the app document" both mean the same thing: a sub-doc
+    // realm. Say so out loud instead of no-oping silently.
+    if (!engine || el->document() != engine->document()) {
+        return JS_ThrowTypeError(ctx,
+            "requestPointerLock is only available in the main window's document "
+            "(secondary windows opened with bro.window.open, and iframes, do "
+            "not support pointer lock)");
+    }
     engine->requestPointerLock(el);
     return JS_UNDEFINED;
 }
