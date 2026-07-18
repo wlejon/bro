@@ -171,10 +171,21 @@ public:
     BillboardMode billboardMode() const { return billboardMode_; }
     void setBillboardMode(BillboardMode m) { billboardMode_ = m; }
 
+    // --- JS wrapper cache ---
+    // Opaque handle to the JS object wrapping this node, so every crossing
+    // hands back the SAME object and `===`, Set, Map and indexOf behave. The
+    // reference is BORROWED, never owned: the wrapper's finalizer clears it,
+    // so a non-null value is always a live object. Storing it here rather than
+    // in a side table keeps the lookup free and dies naturally with the node.
+    // Deliberately a void* — the scene layer knows nothing about QuickJS.
+    void* jsWrapper() const { return jsWrapper_; }
+    void setJsWrapper(void* w) { jsWrapper_ = w; }
+
 private:
     void updateLocalMatrix() const;
     void updateWorldMatrix() const;
 
+    void* jsWrapper_ = nullptr;
     uint32_t id_;
     std::string name_;
 

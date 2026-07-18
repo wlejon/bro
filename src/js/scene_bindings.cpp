@@ -439,7 +439,10 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("destroy", js_clip_destroy, 0);
 
     // --- SceneNode class ---
-    qjsbind::Class<NodeWrapper>(ctx, "SceneNode")
+    // Custom finalizer so a collected wrapper drops the node's cache entry;
+    // see wrapNode in scene_bindings_internal.h. It deletes the wrapper too,
+    // which is what the default finalizer would have done.
+    qjsbind::Class<NodeWrapper>(ctx, "SceneNode", 0, nodeWrapperFinalizer)
         // Common properties
         .get("id", [](NodeWrapper* w) -> int { return w->node() ? w->node()->id() : 0; })
         .prop("name",
@@ -1707,11 +1710,28 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setActiveCamera", js_sg_setActiveCamera, 1)
         // Active camera node, or null while the imperative setCamera() view
         // is in effect (or the active node was destroyed).
-        .get("activeCamera", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
-            if (!w || !w->graph()) return JS_NULL;
-            scene::CameraNode* cam = w->graph()->activeCamera();
-            return cam ? wrapNode(ctx, cam, w->graph()) : JS_NULL;
-        })
+        .prop("activeCamera",
+            [](GraphWrapper* w, JSContext* ctx) -> JSValue {
+                if (!w || !w->graph()) return JS_NULL;
+                scene::CameraNode* cam = w->graph()->activeCamera();
+                return cam ? wrapNode(ctx, cam, w->graph()) : JS_NULL;
+            },
+            // Writable as well as readable: assigning was previously a silent
+            // no-op in sloppy mode (and a TypeError in a module), which reads
+            // as the property being broken. Mirrors setActiveCamera, null
+            // included — that falls back to the last derived view.
+            [](GraphWrapper* w, JSContext* ctx, JSValue val) {
+                if (!w || !w->graph()) return;
+                if (JS_IsNull(val) || JS_IsUndefined(val)) {
+                    w->graph()->setActiveCamera(nullptr);
+                    return;
+                }
+                auto* nw = qjsbind::unwrap<NodeWrapper>(ctx, val);
+                if (!nw) return;
+                auto* n = nw->node();
+                if (n && n->type() == scene::SceneNode::Type::Camera)
+                    w->graph()->setActiveCamera(static_cast<scene::CameraNode*>(n));
+            })
         .method_raw("setFog", js_sg_setFog, 1)
         .method_raw("setTiltShift", js_sg_setTiltShift, 1)
         .method_raw("setBloom", js_sg_setBloom, 1)

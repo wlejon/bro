@@ -129,10 +129,33 @@ struct NodeWrapper {
     }
 };
 
+/// Finalizer for SceneNode wrappers. Clears the node's borrowed back-pointer
+/// before deleting the wrapper, so the cache in wrapNode below can never hand
+/// out an object that is on its way to being collected. Resolving the node can
+/// legitimately fail (the node or its whole graph may already be gone, which is
+/// the common case at teardown) — that just means there is nothing to clear.
+inline void nodeWrapperFinalizer(JSRuntime* /*rt*/, JSValue val) {
+    auto* w = static_cast<NodeWrapper*>(
+        JS_GetOpaque(val, qjsbind::class_id<NodeWrapper>()));
+    if (!w) return;
+    if (auto* n = w->node()) {
+        if (n->jsWrapper() == JS_VALUE_GET_PTR(val)) n->setJsWrapper(nullptr);
+    }
+    delete w;
+}
+
+/// Hand back the one JS object for this node, minting it on first crossing.
+/// Identity matters: without the cache every accessor returned a fresh wrapper,
+/// so `scene.root.children[0] === scene.root.children[0]` was false and nodes
+/// could not be used as Set/Map keys or found with indexOf.
 inline JSValue wrapNode(JSContext* ctx, scene::SceneNode* node, scene::SceneGraph* graph) {
     if (!node || !graph) return JS_NULL;
-    return qjsbind::wrap<NodeWrapper>(
+    if (void* cached = node->jsWrapper())
+        return JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, cached));
+    JSValue obj = qjsbind::wrap<NodeWrapper>(
         ctx, new NodeWrapper{graph->livenessToken(), node->id()});
+    if (JS_IsObject(obj)) node->setJsWrapper(JS_VALUE_GET_PTR(obj));
+    return obj;
 }
 
 // ---------------------------------------------------------------------------
