@@ -31,6 +31,12 @@ struct GamepadState {
     bool virtualPad = false;        // injected via the headless seam, no SDL device
     float buttons[kGamepadButtonCount] = {};  // analog value 0..1 per button
     float axes[kGamepadAxisCount] = {};       // -1..1
+    // Per axis-direction action latch for "gamepad:<axis>+/-" bindings
+    // ([axis][0] = negative direction, [axis][1] = positive). Set when the
+    // deflection crosses the action's deadzone, cleared when it falls back
+    // below deadzone * kActionAxisReleaseFactor (hysteresis — see
+    // evaluateAxisActions in action_input.cpp).
+    bool axisActionPressed[kGamepadAxisCount][2] = {};
     double timestampMs = 0.0;       // last state change (engine wall clock)
     // Last rumble request. SDL only sees it for real pads; recorded for all
     // so the headless seam can observe what an app asked for.
@@ -46,6 +52,11 @@ struct GamepadState {
 /// A button reads as pressed once its analog value crosses this (matters for
 /// the trigger buttons 6/7, which are axes on the wire).
 inline constexpr float kGamepadTriggerPressThreshold = 0.1f;
+
+/// Hysteresis for axis-direction action bindings: pressed at deflection >=
+/// deadzone, released only when it falls below deadzone * this factor (a 25%
+/// release margin), so jitter right at the threshold can't spam down/up.
+inline constexpr float kActionAxisReleaseFactor = 0.75f;
 
 /// Canonical button name for a W3C standard-layout index ("south", "start",
 /// "dpup", ...). These match SDL's mapping-string field names and are the

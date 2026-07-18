@@ -158,9 +158,11 @@ void Engine::dispatchGamepadConnectionEvent(const GamepadState& gp, bool connect
 }
 
 // A button's analog value changed. Updates the slot, and on a press/release
-// edge dispatches the same "action" CustomEvent the keyboard path emits (see
-// dispatchActionEvent in input_handling.cpp) when the button is bound via
-// bro.settings — binding strings are "gamepad:<name>", e.g. "gamepad:south".
+// edge dispatches the same "action" CustomEvent the keyboard path emits
+// (dispatchActionEventForKey in action_input.cpp) when the button is bound
+// via bro.settings — binding strings are "gamepad:<name>", e.g.
+// "gamepad:south". detail.strength carries the button's analog value at the
+// edge (1/0 for digital buttons, the trigger's analog value for 6/7).
 void Engine::gamepadButtonChanged(GamepadState& gp, int w3cIndex, float value) {
     if (w3cIndex < 0 || w3cIndex >= kGamepadButtonCount) return;
     value = std::clamp(value, 0.0f, 1.0f);
@@ -171,28 +173,21 @@ void Engine::gamepadButtonChanged(GamepadState& gp, int w3cIndex, float value) {
     gp.timestampMs = util::currentTimeMs();
     if (pressed == wasPressed) return;  // analog-only change, no edge
 
-    if (!settings_ || !jsRuntime_ || !document_ || !document_->body()) return;
     std::string key = std::string("gamepad:") + kButtonNames[w3cIndex];
-    std::string action = settings_->getActionForKey(key);
-    if (action.empty()) return;
+    dispatchActionEventForKey(key, pressed ? "down" : "up", value, gp.index);
+}
 
-    JSContext* ctx = jsRuntime_->getContext();
-    JSValue jsEvent = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, jsEvent, "type", JS_NewString(ctx, "action"));
-    JS_SetPropertyStr(ctx, jsEvent, "bubbles", JS_NewBool(ctx, 1));
-    JS_SetPropertyStr(ctx, jsEvent, "cancelable", JS_NewBool(ctx, 1));
-
-    JSValue detail = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, detail, "action", JS_NewString(ctx, action.c_str()));
-    JS_SetPropertyStr(ctx, detail, "phase", JS_NewString(ctx, pressed ? "down" : "up"));
-    JS_SetPropertyStr(ctx, detail, "key", JS_NewString(ctx, key.c_str()));
-    JS_SetPropertyStr(ctx, detail, "gamepad", JS_NewInt32(ctx, gp.index));
-    JS_SetPropertyStr(ctx, jsEvent, "detail", detail);
-
-    dom::Event evt("action");
-    evt.setIsTrusted(true);
-    js::dispatchDomEvent(ctx, document_->body(), evt, jsEvent);
-    JS_FreeValue(ctx, jsEvent);
+// A stick axis moved (real SDL path and the headless virtual-axis seam both
+// land here): update the slot, then run the "gamepad:<axis>+/-" action
+// bindings' edge detection so injected and real axes drive identical
+// dispatch.
+void Engine::gamepadAxisChanged(GamepadState& gp, int w3cAxis, float value) {
+    if (w3cAxis < 0 || w3cAxis >= kGamepadAxisCount) return;
+    value = std::clamp(value, -1.0f, 1.0f);
+    if (gp.axes[w3cAxis] == value) return;
+    gp.axes[w3cAxis] = value;
+    gp.timestampMs = util::currentTimeMs();
+    evaluateAxisActions(gp, w3cAxis);
 }
 
 // ---------------------------------------------------------------------------
@@ -245,8 +240,7 @@ void Engine::handleGamepadAxis(uint32_t instanceId, int sdlAxis, float value) {
         case SDL_GAMEPAD_AXIS_LEFTX:  case SDL_GAMEPAD_AXIS_LEFTY:
         case SDL_GAMEPAD_AXIS_RIGHTX: case SDL_GAMEPAD_AXIS_RIGHTY: {
             int w3c = sdlAxis - SDL_GAMEPAD_AXIS_LEFTX;  // enum values are contiguous
-            gp->axes[w3c] = std::clamp(value, -1.0f, 1.0f);
-            gp->timestampMs = util::currentTimeMs();
+            gamepadAxisChanged(*gp, w3c, value);
             break;
         }
         // Triggers are axes on the wire but buttons 6/7 in the W3C layout.
@@ -300,8 +294,10 @@ bool Engine::gamepadSetVirtualAxis(int index, int w3cAxis, float value) {
     GamepadState* gp = connectedGamepadAt(index);
     if (!gp || !gp->virtualPad) return false;
     if (w3cAxis < 0 || w3cAxis >= kGamepadAxisCount) return false;
-    gp->axes[w3cAxis] = std::clamp(value, -1.0f, 1.0f);
-    gp->timestampMs = util::currentTimeMs();
+    // Same path as real SDL axis motion — axis-direction action bindings and
+    // hysteresis run identically, so headless tests can assert exact edges
+    // and strengths.
+    gamepadAxisChanged(*gp, w3cAxis, value);
     return true;
 }
 

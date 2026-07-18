@@ -46,6 +46,11 @@ struct ActionBinding {
     std::vector<std::string> keys;
 };
 
+/// Default deadzone for gamepad-axis action bindings ("gamepad:leftx+" etc.):
+/// the magnitude an axis must reach along the bound direction to count as
+/// pressed. Matches the analog-trigger press threshold convention (0.1).
+inline constexpr float kDefaultActionDeadzone = 0.1f;
+
 struct InputSettings {
     float scrollSpeed = 48.0f;
     double doubleClickThresholdMs = 500.0;
@@ -111,6 +116,11 @@ public:
     void resetAllActions();
     std::vector<std::string> getKeysForAction(const std::string& action) const;
     std::string getActionForKey(const std::string& webKey) const;
+    /// Per-action deadzone for gamepad-axis bindings (app-declared alongside
+    /// defineAction, not persisted). Clamped to [0.01, 0.95] so the
+    /// deadzone-rescale (m - dz) / (1 - dz) stays well-defined.
+    void setActionDeadzone(const std::string& action, float deadzone);
+    float getActionDeadzone(const std::string& action) const;
     /// All resolved bindings (engine + app declared). Used internally.
     const std::vector<ActionBinding>& getActions() const { return resolved_.input.actionBindings; }
     /// Only bindings declared by the current app via defineAction. This is
@@ -151,6 +161,10 @@ private:
 
     // Action binding reverse lookup: web key -> action name
     std::unordered_map<std::string, std::string> keyToAction_;
+
+    // Per-action axis deadzones (see setActionDeadzone). App-declared each
+    // session, never persisted.
+    std::unordered_map<std::string, float> actionDeadzones_;
 
     // Actions declared by the running app/engine this session. User-layer
     // bindings for any other action persist on disk (so settings are shared

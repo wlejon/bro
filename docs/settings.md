@@ -117,13 +117,22 @@ Define named actions with default key bindings. Users can rebind them. Key press
 
 | Function | Description |
 |----------|-------------|
-| `bro.settings.defineAction(name, keys)` | Define an action with default key bindings (app-level, not persisted) |
+| `bro.settings.defineAction(name, keys [, options])` | Define an action with default bindings (app-level, not persisted). `options.deadzone` sets the axis-binding deadzone for this action (default 0.1) |
 | `bro.settings.rebindAction(name, keys)` | Rebind an action (user-level, persisted) |
 | `bro.settings.getActionKeys(name)` | Get the current key bindings for an action |
 | `bro.settings.getKeyAction(key)` | Get the action bound to a key (or `null`) |
 | `bro.settings.getActions()` | Get all defined actions as `[{action, keys}, ...]` |
 
-Keys use the [Web KeyboardEvent.key](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values) values — the same strings you see in `event.key` from `keydown` listeners. For example: `" "` (space), `"ArrowUp"`, `"a"`, `"Enter"`, `"Shift"`.
+A binding string is one of (all forms mix freely in one action, and are
+accepted everywhere binding strings are — `defineAction` defaults,
+`rebindAction`, and persisted rebinds):
+
+| Form | Examples | Meaning |
+|------|----------|---------|
+| Web `KeyboardEvent.key` value | `" "`, `"ArrowUp"`, `"a"`, `"Enter"` | Keyboard key ([key values](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values) — the strings you see in `event.key`) |
+| `"mouse:<button>"` | `"mouse:left"`, `"mouse:right"`, `"mouse:x2"` | Mouse button: `left`, `middle`, `right`, `x1` (back), `x2` (forward) |
+| `"gamepad:<button>"` | `"gamepad:south"`, `"gamepad:lefttrigger"` | Gamepad button (standard-layout names; triggers press past 0.1) |
+| `"gamepad:<axis><+/->"` | `"gamepad:leftx+"`, `"gamepad:righty-"` | Stick axis direction: `leftx`, `lefty`, `rightx`, `righty`, each with `+` or `-` |
 
 ```js
 // App defines actions with default bindings
@@ -167,6 +176,39 @@ keys (the analog triggers count as pressed past 0.1). `detail.key` carries the
 `"gamepad:<name>"` string and `detail.gamepad` the controller's slot index.
 See [gamepad-api.js](gamepad-api.js) for the full Gamepad API.
 
+### Mouse-button bindings
+
+`"mouse:left"`, `"mouse:middle"`, `"mouse:right"`, `"mouse:x1"` (back), and
+`"mouse:x2"` (forward) bind mouse buttons. The action `"down"` fires when the
+press reaches the app layer (presses consumed by engine overlays or system
+panels never start an action — the same rule as keyboard actions, which never
+fire for consumed keydowns); once a `"down"` fired, the matching `"up"` is
+always dispatched on release regardless of what consumes it, so down/up pairs
+stay balanced.
+
+```js
+bro.settings.defineAction("fire", ["mouse:left", "gamepad:righttrigger"]);
+bro.settings.defineAction("aim", ["mouse:right"]);
+```
+
+### Gamepad-axis bindings
+
+`"gamepad:<axis><+/->"` binds one direction of a stick axis (`leftx`, `lefty`,
+`rightx`, `righty`) as a pressable input: it counts as pressed once the
+deflection along that direction crosses the action's **deadzone** (default
+0.1, matching the trigger convention; per-action override via
+`defineAction(name, keys, { deadzone })`).
+
+Release uses **hysteresis**: a pressed axis binding releases only when the
+deflection falls below `deadzone * 0.75` (a 25% release margin), so jitter
+right at the threshold can't spam down/up pairs.
+
+```js
+// WASD + left stick, with a wider stick deadzone for this action
+bro.settings.defineAction("move_right", ["d", "gamepad:leftx+"], { deadzone: 0.25 });
+bro.settings.defineAction("move_left",  ["a", "gamepad:leftx-"], { deadzone: 0.25 });
+```
+
 ### Action events
 
 When a key bound to an action is pressed or released, an `"action"` event is dispatched on `document.body` with a `detail` object:
@@ -186,10 +228,12 @@ document.addEventListener("action", (e) => {
 | `detail` property | Description |
 |--------------------|-------------|
 | `action` | The action name (e.g. `"jump"`) |
-| `phase` | `"down"` on key press, `"up"` on key release |
-| `key` | The web key value that triggered the action |
+| `phase` | `"down"` on press, `"up"` on release |
+| `key` | The binding string that triggered the action (`" "`, `"mouse:left"`, `"gamepad:leftx+"`, ...) |
+| `strength` | The binding's contribution at the edge: 1/0 for keys and mouse buttons, the analog value for triggers, the deadzone-rescaled deflection for axis bindings (0 on `"up"`) |
+| `gamepad` | Controller slot index — present only for gamepad-originated events |
 
-Action events fire after the standard `keydown`/`keyup` event. Both events propagate independently.
+Keyboard action events fire after the standard `keydown`/`keyup` event. Both events propagate independently.
 
 ## Priority system
 

@@ -291,6 +291,19 @@ public:
     /// build navigator.getGamepads() snapshots.
     const std::vector<GamepadState>& gamepads() const { return gamepads_; }
 
+    // --- Polled action state (bro.settings.getActionStrength /
+    // isActionPressed; implementations in action_input.cpp) ---
+    /// Current analog strength of a bound action, 0..1: max over the action's
+    /// bindings. Keyboard keys and mouse buttons contribute 0/1, gamepad
+    /// buttons their analog value (0/1 digital, analog for triggers), and
+    /// axis-direction bindings their deadzone-rescaled deflection
+    /// (m - deadzone) / (1 - deadzone), clamped to 0..1.
+    float actionStrength(const std::string& action) const;
+    /// Polled pressed state of a bound action. Axis-direction bindings use
+    /// the same hysteresis latch that drives their "action" events, so this
+    /// always agrees with the down/up stream.
+    bool actionPressed(const std::string& action) const;
+
     /// Programmatic focus transfer from JS .focus()/.blur() on the app
     /// document: commits any in-progress IME composition, mirrors the
     /// control focused flags (so typing works after .focus(), as in a
@@ -1357,6 +1370,36 @@ private:
     GamepadState* connectedGamepadAt(int index);
     GamepadState& allocateGamepadSlot();
     void gamepadButtonChanged(GamepadState& gp, int w3cIndex, float value);
+    /// Stick-axis value changed (real SDL path AND the headless virtual-axis
+    /// seam): updates the slot, then evaluates "gamepad:<axis>+/-" action
+    /// bindings (action_input.cpp) so both producers drive identical action
+    /// dispatch.
+    void gamepadAxisChanged(GamepadState& gp, int w3cAxis, float value);
+
+    // --- Action binding dispatch (implementations in action_input.cpp) ---
+    /// If `key` (a binding string: web key, "mouse:<button>", or
+    /// "gamepad:<name>") is bound to an action, dispatch the "action"
+    /// CustomEvent on document.body with detail {action, phase, key,
+    /// strength, gamepad?}. `gamepadIndex` >= 0 adds detail.gamepad.
+    void dispatchActionEventForKey(const std::string& key, const char* phase,
+                                   float strength, int gamepadIndex = -1);
+    /// Edge-detect "gamepad:<axis>+/-" bindings for one axis of one pad,
+    /// with deadzone hysteresis (press at deadzone, release below
+    /// deadzone * kActionAxisReleaseFactor).
+    void evaluateAxisActions(GamepadState& gp, int w3cAxis);
+    /// Mouse-button ("mouse:left" etc.) action edges. Down is dispatched only
+    /// when the press reaches the app layer (overlay/system-consumed presses
+    /// never start an action — mirroring how consumed keydowns skip the
+    /// keyboard action dispatch); the matching up always fires once a down
+    /// was seen (actionMouseDownMask_), keeping pairs balanced.
+    void dispatchMouseButtonAction(int domButton, bool down);
+    // DOM-convention buttons bitmask of mouse buttons that dispatched an
+    // action "down" and still owe an "up".
+    int actionMouseDownMask_ = 0;
+    // Keyboard keys currently held (keycode -> webKey at press time), for
+    // polled action state. Updated at the very top of handleKeyDown/Up so it
+    // reflects physical key state regardless of DOM/overlay consumption.
+    std::unordered_map<int, std::string> heldKeys_;
     void dispatchGamepadConnectionEvent(const GamepadState& gp, bool connected);
     void closeAllGamepads();
 

@@ -422,6 +422,15 @@ std::string Settings::getActionForKey(const std::string& webKey) const {
     return (it != keyToAction_.end()) ? it->second : "";
 }
 
+void Settings::setActionDeadzone(const std::string& action, float deadzone) {
+    actionDeadzones_[action] = std::clamp(deadzone, 0.01f, 0.95f);
+}
+
+float Settings::getActionDeadzone(const std::string& action) const {
+    auto it = actionDeadzones_.find(action);
+    return (it != actionDeadzones_.end()) ? it->second : kDefaultActionDeadzone;
+}
+
 // ---------------------------------------------------------------------------
 // Layer resolution
 // ---------------------------------------------------------------------------

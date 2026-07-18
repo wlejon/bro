@@ -266,39 +266,8 @@ static void selectionInsertText(bro::dom::Document* doc, const std::string& text
 
 namespace bro::engine {
 
-// ---------------------------------------------------------------------------
-// Action event dispatch helper
-// ---------------------------------------------------------------------------
-
-/// Dispatch an "action" event on document body if the key maps to a defined action.
-/// The JS event has: detail = { action: "name", phase: "down"|"up" }
-static void dispatchActionEvent(JSContext* ctx, Settings* settings,
-                                dom::Element* target,
-                                int keycode, int mod, const char* phase) {
-    if (!settings || !target || !ctx) return;
-
-    std::string webKey = sdlKeycodeToWebKey(keycode, mod);
-    std::string action = settings->getActionForKey(webKey);
-    if (action.empty()) return;
-
-    // Create JS event with detail
-    JSValue jsEvent = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, jsEvent, "type", JS_NewString(ctx, "action"));
-    JS_SetPropertyStr(ctx, jsEvent, "bubbles", JS_NewBool(ctx, 1));
-    JS_SetPropertyStr(ctx, jsEvent, "cancelable", JS_NewBool(ctx, 1));
-
-    JSValue detail = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, detail, "action", JS_NewString(ctx, action.c_str()));
-    JS_SetPropertyStr(ctx, detail, "phase", JS_NewString(ctx, phase));
-    JS_SetPropertyStr(ctx, detail, "key", JS_NewString(ctx, webKey.c_str()));
-    JS_SetPropertyStr(ctx, jsEvent, "detail", detail);
-
-    dom::Event evt("action");
-    evt.setIsTrusted(true);
-    js::dispatchDomEvent(ctx, target, evt, jsEvent);
-
-    JS_FreeValue(ctx, jsEvent);
-}
+// Keyboard "action" event dispatch lives in Engine::dispatchActionEventForKey
+// (action_input.cpp) — shared with the mouse-button and gamepad paths.
 
 // ---------------------------------------------------------------------------
 // Input focus helpers
@@ -692,6 +661,13 @@ void Engine::handleMouseDown(float x, float y, int button) {
     // Update button bitmask (DOM convention: 1=left, 2=right, 4=middle, ...)
     pressedButtons_ |= domButtonMask(button);
 
+    // "mouse:<button>" action bindings fire once the press has cleared the
+    // engine consumers above (overlays, system panels, inspector, gizmo) —
+    // the same rule as keyboard actions, which never fire for consumed
+    // keydowns. The matching "up" is guaranteed by actionMouseDownMask_ in
+    // handleMouseUp regardless of what consumes the release.
+    dispatchMouseButtonAction(button, true);
+
     // --- Scrollbar interaction (before DOM hit testing) ---
 
     // Check viewport scrollbar (sits in the content area, below the menu bar)
@@ -933,6 +909,10 @@ void Engine::handleMouseUp(float x, float y, int button) {
 
     // Update button bitmask (DOM convention)
     pressedButtons_ &= ~domButtonMask(button);
+
+    // Balance the "mouse:<button>" action pair before any consumer can eat
+    // the release: fires only if this button dispatched an action "down".
+    dispatchMouseButtonAction(button, false);
 
     if (overlayMgr_.handleMouseUp(x, overlayMouseY(y), button)) {
         markAppBaseDirty();
@@ -2098,6 +2078,12 @@ void Engine::handleProgrammaticFocus(dom::Document* doc, dom::Element* oldEl,
 
 void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     heldModifierMask_ |= modifierBitForKeycode(keycode);
+    // Physical held-key set for polled action state (actionStrength /
+    // actionPressed). Maintained before any consumption branch below so it
+    // tracks the keyboard itself, and keyed by keycode so the release always
+    // clears the entry recorded at press time (the webKey can differ if a
+    // modifier was released in between).
+    heldKeys_[keycode] = sdlKeycodeToWebKey(keycode, mod);
 
     if (overlayMgr_.handleKeyDown(keycode, mod)) {
         uiDirty_ = true;
@@ -2511,14 +2497,12 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
     }
 
     // Dispatch action event if key is bound to an action
-    if (settings_ && jsRuntime_ && document_->body()) {
-        dispatchActionEvent(jsRuntime_->getContext(), settings_.get(),
-                            document_->body(), keycode, mod, "down");
-    }
+    dispatchActionEventForKey(sdlKeycodeToWebKey(keycode, mod), "down", 1.0f);
 }
 
 void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
     heldModifierMask_ &= ~modifierBitForKeycode(keycode);
+    heldKeys_.erase(keycode);
 
     if (systemSettingsVisible_) {
         systemHandleKeyUp(keycode, scancode, mod, repeat);
@@ -2541,10 +2525,7 @@ void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
     }
 
     // Dispatch action event if key is bound to an action
-    if (settings_ && jsRuntime_ && document_->body()) {
-        dispatchActionEvent(jsRuntime_->getContext(), settings_.get(),
-                            document_->body(), keycode, mod, "up");
-    }
+    dispatchActionEventForKey(sdlKeycodeToWebKey(keycode, mod), "up", 0.0f);
 }
 
 // Filter out control characters (tab, etc.) that shouldn't be inserted as text
