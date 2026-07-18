@@ -1,7 +1,9 @@
 #pragma once
 
 #include "layout/box.h"
+#include "layout/cluster_caret.h"
 #include "render/renderer.h"
+#include "render/shaped_run.h"
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -77,7 +79,70 @@ public:
         return tm.xHeight > 0 ? tm.xHeight : 0.5f * fontSize;
     }
 
+    // --- caret geometry, answered from the shaper's cluster map -------------
+    //
+    // Each of these falls back to the interface default — prefix measurement,
+    // the pre-shaping behaviour — when the shaped run is unavailable, which is
+    // the case for a backend with no shaper as well as when the cluster path
+    // is switched off. See layout/cluster_caret.h.
+
+    bool clusterAware() const override { return clusterCaretEnabled(); }
+
+    CaretXPair caretXAtOffset(std::string_view text, int byteOffset,
+                              std::string_view fontFamily, float fontSize,
+                              std::string_view fontWeight) override {
+        const render::ShapedRun* run = shaped(text, fontFamily, fontSize, fontWeight);
+        if (!run) {
+            return TextMetrics::caretXAtOffset(text, byteOffset, fontFamily,
+                                               fontSize, fontWeight);
+        }
+        const int n = static_cast<int>(text.size());
+        const std::size_t off =
+            static_cast<std::size_t>(byteOffset < 0 ? 0 : (byteOffset > n ? n : byteOffset));
+        auto cp = run->byteOffsetToX(off);
+        CaretXPair out;
+        out.primary = {cp.primary.x, cp.primary.isLeadingEdge};
+        out.secondary = {cp.secondary.x, cp.secondary.isLeadingEdge};
+        out.hasSecondary = cp.hasSecondary;
+        return out;
+    }
+
+    int offsetAtCaretX(std::string_view text, float x,
+                       std::string_view fontFamily, float fontSize,
+                       std::string_view fontWeight) override {
+        const render::ShapedRun* run = shaped(text, fontFamily, fontSize, fontWeight);
+        if (!run) {
+            return TextMetrics::offsetAtCaretX(text, x, fontFamily, fontSize, fontWeight);
+        }
+        return static_cast<int>(run->xToByteOffset(x));
+    }
+
+    ClusterSpan clusterRangeAt(std::string_view text, int byteOffset,
+                               std::string_view fontFamily, float fontSize,
+                               std::string_view fontWeight) override {
+        const render::ShapedRun* run = shaped(text, fontFamily, fontSize, fontWeight);
+        if (!run) {
+            return TextMetrics::clusterRangeAt(text, byteOffset, fontFamily,
+                                               fontSize, fontWeight);
+        }
+        const int n = static_cast<int>(text.size());
+        const std::size_t off =
+            static_cast<std::size_t>(byteOffset < 0 ? 0 : (byteOffset > n ? n : byteOffset));
+        auto cr = run->clusterRange(off);
+        return {static_cast<int>(cr.byteStart), static_cast<int>(cr.byteEnd)};
+    }
+
 private:
+    // Shape through the renderer's own cache. The returned run is owned by that
+    // cache and dies at the next shape() that misses, so every use is
+    // immediate and nothing here holds on to one.
+    const render::ShapedRun* shaped(std::string_view text, std::string_view family,
+                                    float size, std::string_view weight) {
+        if (!clusterCaretEnabled() || text.empty()) return nullptr;
+        measureCalls++;
+        return renderer_->shapeText(text, makeRef(family, size, weight));
+    }
+
     // The one place every metric this class serves reaches the renderer — so the
     // one place worth caching.
     //
