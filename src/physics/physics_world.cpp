@@ -742,7 +742,14 @@ BodyID PhysicsWorld::createBody(const BodyOptions& opts) {
     settings.mAllowedDOFs = opts.dofs;
     settings.mMotionQuality = opts.ccd ? EMotionQuality::LinearCast : EMotionQuality::Discrete;
     if (!isStatic) {
-        settings.mOverrideMassProperties = EOverrideMassProperties::CalculateMassAndInertia;
+        if (opts.mass > 0.0f) {
+            // Direct mass (kg) wins over density: inertia is still derived
+            // from the shape, then scaled to the requested mass.
+            settings.mOverrideMassProperties = EOverrideMassProperties::CalculateInertia;
+            settings.mMassPropertiesOverride.mMass = opts.mass;
+        } else {
+            settings.mOverrideMassProperties = EOverrideMassProperties::CalculateMassAndInertia;
+        }
     }
 
     BodyInterface& bi = physicsSystem_.GetBodyInterface();
@@ -1167,6 +1174,100 @@ void PhysicsWorld::setRestitutionCombine(BodyID id, CombineMode mode) {
         listener_->restitutionModes[idx] = (uint8_t)mode;
         if (mode != CombineMode::Default) listener_->anyCombineModes = true;
     }
+}
+
+// --- Runtime body property mutation ---
+//
+// All of these run on the phase-owning thread while the physics thread is
+// parked (idle-only contract), so BodyLockWrite here is the cold control
+// plane — never a per-step cost.
+
+void PhysicsWorld::setMass(BodyID id, float massKg) {
+    if (massKg <= 0.0f) return;
+    {
+        BodyLockWrite lock(physicsSystem_.GetBodyLockInterface(), id);
+        if (!lock.Succeeded()) return;
+        Body& b = lock.GetBody();
+        // Soft-body mass lives per-vertex; static/kinematic have no finite
+        // mass to set (Jolt asserts on a zero-inv-mass dynamic body instead).
+        if (b.IsSoftBody() || b.GetMotionType() != EMotionType::Dynamic) return;
+        MotionProperties* mp = b.GetMotionPropertiesUnchecked();
+        if (!mp) return;
+        MassProperties m = b.GetShape()->GetMassProperties();
+        m.ScaleToMass(massKg);
+        mp->SetMassProperties(mp->GetAllowedDOFs(), m);
+    }
+    // Outside the write lock (ActivateBody takes its own lock on the body).
+    physicsSystem_.GetBodyInterface().ActivateBody(id);
+}
+
+float PhysicsWorld::getMass(BodyID id) const {
+    BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) return 0.0f;
+    const Body& b = lock.GetBody();
+    if (b.IsSoftBody()) return 0.0f;
+    const MotionProperties* mp = b.GetMotionPropertiesUnchecked();
+    if (!mp) return 0.0f;
+    float inv = mp->GetInverseMassUnchecked();
+    return inv > 0.0f ? 1.0f / inv : 0.0f;
+}
+
+void PhysicsWorld::setLinearDamping(BodyID id, float damping) {
+    if (damping < 0.0f) return;
+    BodyLockWrite lock(physicsSystem_.GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) return;
+    MotionProperties* mp = lock.GetBody().GetMotionPropertiesUnchecked();
+    if (mp) mp->SetLinearDamping(damping);
+}
+
+float PhysicsWorld::getLinearDamping(BodyID id) const {
+    BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) return 0.0f;
+    const MotionProperties* mp = lock.GetBody().GetMotionPropertiesUnchecked();
+    return mp ? mp->GetLinearDamping() : 0.0f;
+}
+
+void PhysicsWorld::setAngularDamping(BodyID id, float damping) {
+    if (damping < 0.0f) return;
+    BodyLockWrite lock(physicsSystem_.GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) return;
+    MotionProperties* mp = lock.GetBody().GetMotionPropertiesUnchecked();
+    if (mp) mp->SetAngularDamping(damping);
+}
+
+float PhysicsWorld::getAngularDamping(BodyID id) const {
+    BodyLockRead lock(physicsSystem_.GetBodyLockInterface(), id);
+    if (!lock.Succeeded()) return 0.0f;
+    const MotionProperties* mp = lock.GetBody().GetMotionPropertiesUnchecked();
+    return mp ? mp->GetAngularDamping() : 0.0f;
+}
+
+void PhysicsWorld::setGravityFactor(BodyID id, float factor) {
+    auto& bi = physicsSystem_.GetBodyInterface();
+    bi.SetGravityFactor(id, factor);
+    // Wake it: a sleeping island never re-evaluates gravity, so e.g. flipping
+    // 0 → 1 on a parked body would otherwise do nothing until poked.
+    bi.ActivateBody(id);
+}
+
+float PhysicsWorld::getGravityFactor(BodyID id) const {
+    return physicsSystem_.GetBodyInterface().GetGravityFactor(id);
+}
+
+void PhysicsWorld::setFriction(BodyID id, float friction) {
+    physicsSystem_.GetBodyInterface().SetFriction(id, std::max(0.0f, friction));
+}
+
+float PhysicsWorld::getFriction(BodyID id) const {
+    return physicsSystem_.GetBodyInterface().GetFriction(id);
+}
+
+void PhysicsWorld::setRestitution(BodyID id, float restitution) {
+    physicsSystem_.GetBodyInterface().SetRestitution(id, std::max(0.0f, restitution));
+}
+
+float PhysicsWorld::getRestitution(BodyID id) const {
+    return physicsSystem_.GetBodyInterface().GetRestitution(id);
 }
 
 void PhysicsWorld::setUserData(BodyID id, uint64_t data) {

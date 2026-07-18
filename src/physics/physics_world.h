@@ -176,6 +176,10 @@ struct BodyOptions {
     CombineMode frictionCombine = CombineMode::Default;
     CombineMode restitutionCombine = CombineMode::Default;
     float density = 1000.0f;
+    /// > 0 = direct body mass in kg — wins over density (inertia is still
+    /// derived from the shape, scaled to this mass). Whole-body only; ignored
+    /// on compound sub-parts. Dynamic bodies only.
+    float mass = 0.0f;
     float gravityFactor = 1.0f;
     float linearDamping = 0.05f;
     float angularDamping = 0.05f;
@@ -780,6 +784,36 @@ public:
     /// of the two wins. Call only when idle.
     void setFrictionCombine(JPH::BodyID id, CombineMode mode);
     void setRestitutionCombine(JPH::BodyID id, CombineMode mode);
+
+    // --- Runtime body property mutation (call only when idle) ---
+
+    /// Set a dynamic body's mass directly (kg). Inertia is recomputed from
+    /// the shape and scaled to the new mass (MassProperties::ScaleToMass),
+    /// respecting the body's allowed DOFs. Wakes the body. No-op for
+    /// static/kinematic/soft bodies and non-positive masses.
+    void setMass(JPH::BodyID id, float massKg);
+    /// A dynamic rigid body's mass in kg; 0 for static/kinematic/soft/unknown.
+    float getMass(JPH::BodyID id) const;
+
+    /// Per-body damping (fraction of velocity removed per second, Jolt
+    /// semantics: v *= max(0, 1 - damping*dt) each step). Negative input is
+    /// ignored. Does not wake the body.
+    void setLinearDamping(JPH::BodyID id, float damping);
+    float getLinearDamping(JPH::BodyID id) const;
+    void setAngularDamping(JPH::BodyID id, float damping);
+    float getAngularDamping(JPH::BodyID id) const;
+
+    /// Per-body gravity multiplier (1 = normal, 0 = floats). Wakes the body
+    /// so the change is immediately visible.
+    void setGravityFactor(JPH::BodyID id, float factor);
+    float getGravityFactor(JPH::BodyID id) const;
+
+    /// Runtime friction/restitution (affect NEW contact solving; existing
+    /// resting contacts pick the change up on their next solver update).
+    void setFriction(JPH::BodyID id, float friction);
+    float getFriction(JPH::BodyID id) const;
+    void setRestitution(JPH::BodyID id, float restitution);
+    float getRestitution(JPH::BodyID id) const;
 
     // --- Constraints ---
 

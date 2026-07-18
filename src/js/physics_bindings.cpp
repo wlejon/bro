@@ -287,6 +287,10 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
         return false;
     }
     out.density = (float)qjsbind::get_prop_number(ctx, opts, "density", 1000.0);
+    // Direct mass (kg) — wins over density when both are given (inertia still
+    // derives from the shape, scaled to this mass). Whole-body only: ignored
+    // on compound sub-parts (their density shapes the inertia distribution).
+    out.mass = (float)qjsbind::get_prop_number(ctx, opts, "mass", 0.0);
     out.gravityFactor = (float)qjsbind::get_prop_number(ctx, opts, "gravityFactor", 1.0);
     out.linearDamping = (float)qjsbind::get_prop_number(ctx, opts, "linearDamping", 0.05);
     out.angularDamping = (float)qjsbind::get_prop_number(ctx, opts, "angularDamping", 0.05);
@@ -3054,6 +3058,50 @@ static JSValue js_physics_setRestitutionCombine(JSContext* ctx, JSValueConst, in
     return worldSetCombine(ctx, s_defaultWorld, argc, argv, /*friction=*/false);
 }
 
+// --- Runtime body property setters (tag, value) + combined getter ---
+
+#define SCALAR_BODY_FN_DEFAULT(name, call) \
+static JSValue js_physics_##name(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) { \
+    DEFW_GUARD(); \
+    if (argc < 2) return JS_UNDEFINED; \
+    int32_t tag; double v; \
+    JS_ToInt32(ctx, &tag, argv[0]); \
+    JS_ToFloat64(ctx, &v, argv[1]); \
+    JPH::BodyID id = s_defaultWorld->bodyIdForTag(tag); \
+    if (id.IsInvalid()) return JS_UNDEFINED; \
+    s_defaultWorld->world->call(id, (float)v); \
+    return JS_UNDEFINED; \
+}
+
+SCALAR_BODY_FN_DEFAULT(setMass, setMass)
+SCALAR_BODY_FN_DEFAULT(setLinearDamping, setLinearDamping)
+SCALAR_BODY_FN_DEFAULT(setAngularDamping, setAngularDamping)
+SCALAR_BODY_FN_DEFAULT(setGravityFactor, setGravityFactor)
+SCALAR_BODY_FN_DEFAULT(setFriction, setFriction)
+SCALAR_BODY_FN_DEFAULT(setRestitution, setRestitution)
+
+// { mass, friction, restitution, linearDamping, angularDamping,
+//   gravityFactor } snapshot — the round-trip companion to the setters.
+static JSValue makeBodyPropsObj(JSContext* ctx, physics::PhysicsWorld* world, JPH::BodyID id) {
+    JSValue o = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, o, "mass", JS_NewFloat64(ctx, world->getMass(id)));
+    JS_SetPropertyStr(ctx, o, "friction", JS_NewFloat64(ctx, world->getFriction(id)));
+    JS_SetPropertyStr(ctx, o, "restitution", JS_NewFloat64(ctx, world->getRestitution(id)));
+    JS_SetPropertyStr(ctx, o, "linearDamping", JS_NewFloat64(ctx, world->getLinearDamping(id)));
+    JS_SetPropertyStr(ctx, o, "angularDamping", JS_NewFloat64(ctx, world->getAngularDamping(id)));
+    JS_SetPropertyStr(ctx, o, "gravityFactor", JS_NewFloat64(ctx, world->getGravityFactor(id)));
+    return o;
+}
+
+static JSValue js_physics_getBodyProperties(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DEFW_GUARD();
+    if (argc < 1) return JS_UNDEFINED;
+    int32_t tag; JS_ToInt32(ctx, &tag, argv[0]);
+    JPH::BodyID id = s_defaultWorld->bodyIdForTag(tag);
+    if (id.IsInvalid()) return JS_UNDEFINED;
+    return makeBodyPropsObj(ctx, s_defaultWorld->world, id);
+}
+
 static JSValue js_physics_setTimeStep(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     DEFW_GUARD();
     if (argc < 1) return JS_UNDEFINED;
@@ -3387,6 +3435,35 @@ VEC3_BODY_FN_HANDLE(addForce, addForce)
 VEC3_BODY_FN_HANDLE(addImpulse, addImpulse)
 VEC3_BODY_FN_HANDLE(addTorque, addTorque)
 
+#define SCALAR_BODY_FN_HANDLE(name, call) \
+static JSValue jsw_##name(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) { \
+    JsWorld* w = worldFromThis(ctx, thisVal); \
+    if (!w || !w->world || argc < 2) return JS_UNDEFINED; \
+    int32_t tag; double v; \
+    JS_ToInt32(ctx, &tag, argv[0]); \
+    JS_ToFloat64(ctx, &v, argv[1]); \
+    JPH::BodyID id = w->bodyIdForTag(tag); \
+    if (id.IsInvalid()) return JS_UNDEFINED; \
+    w->world->call(id, (float)v); \
+    return JS_UNDEFINED; \
+}
+
+SCALAR_BODY_FN_HANDLE(setMass, setMass)
+SCALAR_BODY_FN_HANDLE(setLinearDamping, setLinearDamping)
+SCALAR_BODY_FN_HANDLE(setAngularDamping, setAngularDamping)
+SCALAR_BODY_FN_HANDLE(setGravityFactor, setGravityFactor)
+SCALAR_BODY_FN_HANDLE(setFriction, setFriction)
+SCALAR_BODY_FN_HANDLE(setRestitution, setRestitution)
+
+static JSValue jsw_getBodyProperties(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world || argc < 1) return JS_UNDEFINED;
+    int32_t tag; JS_ToInt32(ctx, &tag, argv[0]);
+    JPH::BodyID id = w->bodyIdForTag(tag);
+    if (id.IsInvalid()) return JS_UNDEFINED;
+    return makeBodyPropsObj(ctx, w->world, id);
+}
+
 static JSValue jsw_raycast(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
     JsWorld* w = worldFromThis(ctx, thisVal);
     if (!w) return JS_NewArray(ctx);
@@ -3671,6 +3748,13 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("getContacts", 0, jsw_getContacts),
     JS_CFUNC_DEF("setFrictionCombine", 2, jsw_setFrictionCombine),
     JS_CFUNC_DEF("setRestitutionCombine", 2, jsw_setRestitutionCombine),
+    JS_CFUNC_DEF("setMass", 2, jsw_setMass),
+    JS_CFUNC_DEF("setLinearDamping", 2, jsw_setLinearDamping),
+    JS_CFUNC_DEF("setAngularDamping", 2, jsw_setAngularDamping),
+    JS_CFUNC_DEF("setGravityFactor", 2, jsw_setGravityFactor),
+    JS_CFUNC_DEF("setFriction", 2, jsw_setFriction),
+    JS_CFUNC_DEF("setRestitution", 2, jsw_setRestitution),
+    JS_CFUNC_DEF("getBodyProperties", 1, jsw_getBodyProperties),
     JS_CFUNC_DEF("createCharacter", 1, jsw_createCharacter),
     JS_CFUNC_DEF("createVehicle", 1, jsw_createVehicle),
     JS_CFUNC_DEF("createRagdoll", 1, jsw_createRagdoll),
@@ -3822,6 +3906,13 @@ void PhysicsBindings::install(JSContext* ctx, physics::PhysicsWorld* world) {
         .function("getContacts", js_physics_getContacts, 0)
         .function("setFrictionCombine", js_physics_setFrictionCombine, 2)
         .function("setRestitutionCombine", js_physics_setRestitutionCombine, 2)
+        .function("setMass", js_physics_setMass, 2)
+        .function("setLinearDamping", js_physics_setLinearDamping, 2)
+        .function("setAngularDamping", js_physics_setAngularDamping, 2)
+        .function("setGravityFactor", js_physics_setGravityFactor, 2)
+        .function("setFriction", js_physics_setFriction, 2)
+        .function("setRestitution", js_physics_setRestitution, 2)
+        .function("getBodyProperties", js_physics_getBodyProperties, 1)
         .function("setTimeStep", js_physics_setTimeStep, 1)
         .function("setInterpolation", js_physics_setInterpolation, 1)
         .function("getInterpolation", js_physics_getInterpolation, 0)

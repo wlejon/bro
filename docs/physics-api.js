@@ -151,6 +151,11 @@ Physics.setLayers({
  * @param {number}  [opts.density=1000]    - kg/m³, sets mass via shape volume
  *                                           (convex shapes: box/sphere/capsule/
  *                                           cylinder/convexHull and compound parts)
+ * @param {number}  [opts.mass]            - direct body mass in kg; wins over
+ *                                           density when both are given (inertia
+ *                                           still derives from the shape, scaled
+ *                                           to this mass). Whole-body only —
+ *                                           ignored on compound sub-parts.
  * @param {number}  [opts.gravityFactor=1]
  * @param {number}  [opts.linearDamping=0.05]
  * @param {number}  [opts.angularDamping=0.05]
@@ -800,6 +805,52 @@ if (events.overflow) { /* events were dropped this drain — resync triggers */ 
  */
 Physics.setFrictionCombine(id, 'min');
 Physics.setRestitutionCombine(id, 'max');
+
+
+// -----------------------------------------------------------------------------
+// Runtime body properties
+// -----------------------------------------------------------------------------
+//
+// Everything below also exists on sandbox world handles (w.setMass(...)).
+
+/**
+ * Set a dynamic body's mass directly (kg). Inertia is recomputed from the
+ * shape and scaled to the new mass, so the body keeps tumbling plausibly.
+ * Wakes the body. No-op for static/kinematic/soft bodies and masses <= 0.
+ */
+Physics.setMass(id, 250);
+
+/**
+ * Per-body damping: the fraction of velocity removed per second
+ * (v *= max(0, 1 - damping*dt) each step — Jolt's model). Creation options
+ * linearDamping/angularDamping set the initial values; these change them
+ * live (drag zones, powerups, underwater state...).
+ */
+Physics.setLinearDamping(id, 0.5);
+Physics.setAngularDamping(id, 0.2);
+
+/**
+ * Per-body gravity multiplier (1 = normal, 0 = floats, negative = rises).
+ * Wakes the body so the change is immediately visible.
+ */
+Physics.setGravityFactor(id, 0.0);
+
+/**
+ * Runtime friction / restitution (values >= 0; combined per pair with the
+ * usual combine rules). New contacts see the change immediately; an
+ * existing resting contact picks it up on its next solver update.
+ */
+Physics.setFriction(id, 0.9);
+Physics.setRestitution(id, 0.6);
+
+/**
+ * Snapshot of the mutable body properties — the round-trip companion to the
+ * setters above. mass is 0 for static/kinematic/soft bodies.
+ * @returns {{ mass:number, friction:number, restitution:number,
+ *             linearDamping:number, angularDamping:number,
+ *             gravityFactor:number } | undefined}
+ */
+const props = Physics.getBodyProperties(id);
 
 
 // -----------------------------------------------------------------------------
