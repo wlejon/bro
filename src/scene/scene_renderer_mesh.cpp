@@ -96,6 +96,8 @@ void SceneRenderer::queryMeshUniformLocs(GLuint prog, MeshDrawLocs& d,
     l.iblIntensity         = U("uIBLIntensity");
     l.iblRotation          = U("uIBLRotation");
     l.iblPrefilterMaxLOD   = U("uIBLPrefilterMaxLOD");
+
+    queryProbeLocs(prog, d.probe);
 }
 
 void SceneRenderer::ensureMeshPipeline() {
@@ -357,6 +359,10 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
     if (L.hasAOMap       >= 0) glUniform1i(L.hasAOMap,       hasAO ? 1 : 0);
     if (L.hasEmissiveMap >= 0) glUniform1i(L.hasEmissiveMap, hasEM ? 1 : 0);
     if (L.receivesShadow >= 0) glUniform1i(L.receivesShadow, mesh->receivesShadow() ? 1 : 0);
+
+    // Local reflection probe: select the probe containing this mesh's bounds
+    // center (or upload "none") — one probe per draw, sampler on unit 9.
+    uploadProbeForDraw(mesh, L.probe);
 
     // Skinned nodes: flush palette/skin-VBO updates and bind the palette UBO
     // before the draw. Only reached with the skinned program bound — the

@@ -20,6 +20,7 @@ class MeshNode;
 class InstancedMeshNode;
 class Particles3DNode;
 class DecalNode;
+class ReflectionProbeNode;
 struct CustomShaderState;
 
 /// Per-frame frustum-culling counters, reset at the top of every render3D().
@@ -314,6 +315,16 @@ public:
                              std::string& errOut);
 
 private:
+    // Per-program uniform locations for the local reflection-probe uniforms
+    // (uProbe*). Embedded in both MeshDrawLocs and InstancedDrawLocs so the
+    // per-draw probe upload (uploadProbeForDraw) works against either
+    // pipeline. Queried by queryProbeLocs (scene_renderer_probes.cpp).
+    struct ProbeLocs {
+        GLint enabled = -1, specular = -1, worldToLocal = -1,
+              localToWorld = -1, pos = -1, boxSize = -1, boxProjection = -1,
+              intensity = -1, blendDist = -1, maxLOD = -1;
+    };
+
     // Per-program uniform locations for the PBR mesh pipeline (everything
     // renderMeshNode + the per-frame globals touch). One instance for the
     // regular mesh program and one for the skinned variant (same GLSL source,
@@ -332,6 +343,7 @@ private:
               fogCamY = -1,
               windDir = -1, windStrength = -1, windTime = -1, windFreq = -1,
               ssrMask = -1;
+        ProbeLocs probe;
     };
     // Per-program uniform locations for the instanced mesh pipeline
     // (everything renderInstancedMeshNode + the per-frame globals touch).
@@ -349,6 +361,7 @@ private:
               fogDensity = -1, fogHeightFalloff = -1, fogStartDist = -1,
               fogCamY = -1,
               atlasGrid = -1, alphaCutoff = -1, ssrMask = -1;
+        ProbeLocs probe;
     };
     struct MeshProgramLocs;  // lighting/shadow/IBL locs — defined below
 
@@ -621,7 +634,35 @@ private:
     bool runIrradianceConvolution();
     void ensurePrefilterPipeline();
     bool runPrefilterConvolution();
+    // Generalized GGX prefilter: convolve `srcCube` (face size `srcSize`,
+    // mipmapped) into `dstCube`'s `mips`-level roughness chain (mip 0 face
+    // size `dstSize`). Shared by the global environment and per-probe
+    // captures. Defined in scene_renderer_environment.cpp.
+    bool runPrefilterInto(GLuint srcCube, int srcSize,
+                          GLuint dstCube, int dstSize, int mips);
     void ensureBRDFLUT();           // 2D RG16F LUT, baked once on first need
+
+    // --- Local reflection probes (scene_renderer_probes.cpp) ---
+    // Capture any visible probes with a pending request (6 cube-face renders
+    // + GGX prefilter each). Runs right after renderShadowPass — the frame's
+    // shadow atlas is fresh and reused (camera-relative shadow matrices are
+    // rebaked per probe eye), and no HDR/post FBO is bound yet, so this obeys
+    // the same pass discipline as the shadow pass (leaves FBO unbound).
+    void updateReflectionProbes(const std::vector<LightNode*>& lights);
+    bool captureReflectionProbe(ReflectionProbeNode* probe,
+                                const std::vector<LightNode*>& lights);
+    // Restricted scene draw used by the capture: skybox + opaque mesh /
+    // skinned / custom / instanced draws only.
+    void renderProbeSceneOpaque(const std::vector<LightNode*>& lights);
+    // Rebuild frameProbes_ (visible, captured probes sorted by priority desc,
+    // volume asc) once per frame at the top of render3D.
+    void collectFrameProbes();
+    // Per-draw: select the probe whose box contains `node`'s bounds center
+    // and upload the uProbe* uniforms + sampler (unit 9) for the currently
+    // bound program; uploads "no probe" when none matches (or during probe
+    // capture — no recursion).
+    void uploadProbeForDraw(SceneNode* node, const ProbeLocs& P);
+    static void queryProbeLocs(GLuint prog, ProbeLocs& p);
 
     void ensureFallbackTextures();
 
@@ -980,6 +1021,30 @@ private:
     GLuint fallbackCube_ = 0;     // white RGBA8 cube
     GLuint fallbackShadow_ = 0;   // depth24 2D with COMPARE_REF_TO_TEXTURE
     GLuint fallback3D_ = 0;       // white RGBA8 1x1x1 3D (LUT sampler when off)
+
+    // --- Local reflection-probe state ---
+    // Per-frame selection list: visible probes with capture data, sorted by
+    // (priority desc, volume asc) so the first containing box wins. Entries
+    // cache the world/inverse matrices so per-draw selection is a couple of
+    // dot products. Rebuilt at the top of every render3D.
+    struct FrameProbe {
+        ReflectionProbeNode* probe = nullptr;
+        bromath::Mat4 world;         // probe unit-box space -> world
+        bromath::Mat4 invWorld;      // world -> probe unit-box space
+        bromath::Vec3 pos;           // capture origin (world)
+        float boxSize[3] = {};       // world-space box size per local axis
+        float volume = 0.0f;
+        int priority = 0;
+    };
+    std::vector<FrameProbe> frameProbes_;
+    // True while a probe capture is rendering: probe application is disabled
+    // for those draws (no probe recursion).
+    bool probeCaptureActive_ = false;
+    // Shared capture FBO + depth renderbuffer (resized to the largest probe
+    // resolution in use; probes own their cubemap textures).
+    GLuint probeCaptureFBO_ = 0;
+    GLuint probeDepthRBO_ = 0;
+    int probeDepthSize_ = 0;
 
     // --- IBL environment state ---
     GLuint envCubemap_ = 0;          // 512² RGBA16F cube, 6 faces, mipmapped

@@ -104,6 +104,25 @@ uniform float       uIBLIntensity;
 uniform float       uIBLRotation;
 uniform float       uIBLPrefilterMaxLOD;
 
+// Local reflection probe — when uProbeEnabled == 1, this draw's SPECULAR
+// ambient samples the probe's GGX-prefiltered capture instead of the global
+// uIBLPrefilter, box-projected (parallax-corrected against the probe's box
+// volume) when uProbeBoxProjection == 1, fading back to the global specular
+// over uProbeBlendDist world units near the box faces. Diffuse ambient stays
+// global (irradiance or flat uAmbient) — probes are specular-only. Probe
+// captures are world-axis-aligned (no uIBLRotation analog). One probe per
+// draw, selected CPU-side (see scene_renderer_probes.cpp).
+uniform int         uProbeEnabled;
+uniform samplerCube uProbeSpecular;
+uniform mat4        uProbeWorldToLocal;  // camera-relative world -> unit-box space
+uniform mat4        uProbeLocalToWorld;  // unit-box space -> camera-relative world
+uniform vec3        uProbePos;           // capture origin, camera-relative
+uniform vec3        uProbeBoxSize;       // world-space box size per probe axis
+uniform int         uProbeBoxProjection;
+uniform float       uProbeIntensity;
+uniform float       uProbeBlendDist;     // interior fade margin (world units; 0 = hard edge)
+uniform float       uProbeMaxLOD;
+
 out vec4 FragColor;
 
 const float PI = 3.14159265359;
@@ -144,6 +163,37 @@ vec3 fresnelSchlickRoughness(float cosTheta, vec3 F0, float roughness) {
 vec3 rotateY(vec3 d, float a) {
     float c = cos(a), s = sin(a);
     return vec3(c * d.x + s * d.z, d.y, -s * d.x + c * d.z);
+}
+
+// Local-probe specular radiance along the reflection vector R (camera-
+// relative world space). Writes the probe weight to `w`: 1 inside the box
+// beyond the interior margin, ramping to 0 at the box faces (fragments
+// outside the box — possible since selection is per-mesh, not per-fragment —
+// get 0 and fall back to the global environment). Box projection is the
+// standard parallax correction: intersect the reflection ray with the box in
+// probe space (slab test against the unit box) and sample the direction from
+// the capture origin to the hit point.
+vec3 probeRadiance(vec3 R, float rough, out float w) {
+    vec3 lp = (uProbeWorldToLocal * vec4(vWorldPos, 1.0)).xyz;
+    vec3 edgeDist = (vec3(0.5) - abs(lp)) * uProbeBoxSize;  // world units
+    float dmin = min(min(edgeDist.x, edgeDist.y), edgeDist.z);
+    w = (uProbeBlendDist > 0.0) ? clamp(dmin / uProbeBlendDist, 0.0, 1.0)
+                                : step(0.0, dmin);
+    vec3 dir = R;
+    if (uProbeBoxProjection == 1) {
+        vec3 ld = mat3(uProbeWorldToLocal) * R;
+        // Nudge components off exact zero so the slab test can't hit 0 * inf.
+        ld = mix(ld, vec3(1e-6), vec3(lessThan(abs(ld), vec3(1e-6))));
+        vec3 invD = 1.0 / ld;
+        vec3 t1 = (vec3(-0.5) - lp) * invD;
+        vec3 t2 = (vec3( 0.5) - lp) * invD;
+        vec3 tm = max(t1, t2);
+        float tHit = min(min(tm.x, tm.y), tm.z);
+        vec3 hit = (uProbeLocalToWorld * vec4(lp + ld * tHit, 1.0)).xyz;
+        vec3 d2 = hit - uProbePos;
+        if (dot(d2, d2) > 1e-8) dir = d2;
+    }
+    return textureLod(uProbeSpecular, dir, rough * uProbeMaxLOD).rgb;
 }
 
 // Smooth distance window (Epic/Frostbite). Vanishes past `range`.
@@ -443,31 +493,50 @@ void main() {
     }
 
     vec3 ambient;
-    if (uIBLEnabled == 1) {
-        // Karis 2013 split-sum IBL. Sample the diffuse irradiance and the
-        // GGX-prefiltered specular along the reflection vector, multiplied
-        // by the env-independent BRDF LUT. The rotateY calls keep the
-        // sampled environment aligned with the skybox under uIBLRotation.
-        vec3 R    = reflect(-V, N);
-        vec3 N_s  = rotateY(N, uIBLRotation);
-        vec3 R_s  = rotateY(R, uIBLRotation);
+    {
+        // Local probe specular (if a probe is bound to this draw). Computed
+        // first so both the IBL and flat-ambient paths can blend it in;
+        // probeW = 0 leaves them untouched.
+        float probeW = 0.0;
+        vec3 probeSpec = vec3(0.0);
+        if (uProbeEnabled == 1) {
+            vec3 R_p    = reflect(-V, N);
+            vec3 F_p    = fresnelSchlickRoughness(NdotV, F0, rough);
+            vec2 brdfP  = texture(uIBLBRDF, vec2(NdotV, rough)).rg;
+            vec3 raw    = probeRadiance(R_p, rough, probeW);
+            probeSpec   = raw * (F_p * brdfP.x + brdfP.y) * uProbeIntensity;
+        }
+        if (uIBLEnabled == 1) {
+            // Karis 2013 split-sum IBL. Sample the diffuse irradiance and the
+            // GGX-prefiltered specular along the reflection vector, multiplied
+            // by the env-independent BRDF LUT. The rotateY calls keep the
+            // sampled environment aligned with the skybox under uIBLRotation.
+            vec3 R    = reflect(-V, N);
+            vec3 N_s  = rotateY(N, uIBLRotation);
+            vec3 R_s  = rotateY(R, uIBLRotation);
 
-        vec3 F  = fresnelSchlickRoughness(NdotV, F0, rough);
-        vec3 kS = F;
-        vec3 kD = (1.0 - kS) * (1.0 - metal);
+            vec3 F  = fresnelSchlickRoughness(NdotV, F0, rough);
+            vec3 kS = F;
+            vec3 kD = (1.0 - kS) * (1.0 - metal);
 
-        vec3 irradiance = texture(uIBLIrradiance, N_s).rgb;
-        vec3 diffuse    = irradiance * baseColor;
+            vec3 irradiance = texture(uIBLIrradiance, N_s).rgb;
+            vec3 diffuse    = irradiance * baseColor;
 
-        float lod = rough * uIBLPrefilterMaxLOD;
-        vec3 prefiltered = textureLod(uIBLPrefilter, R_s, lod).rgb;
-        vec2 brdf        = texture(uIBLBRDF, vec2(NdotV, rough)).rg;
-        vec3 specular    = prefiltered * (F * brdf.x + brdf.y);
+            float lod = rough * uIBLPrefilterMaxLOD;
+            vec3 prefiltered = textureLod(uIBLPrefilter, R_s, lod).rgb;
+            vec2 brdf        = texture(uIBLBRDF, vec2(NdotV, rough)).rg;
+            vec3 specular    = prefiltered * (F * brdf.x + brdf.y);
 
-        ambient = (kD * diffuse + specular) * uIBLIntensity;
-    } else {
-        // Fallback for scenes with no environment loaded — flat tint.
-        ambient = uAmbient * baseColor * (1.0 - metal);
+            // Probe replaces the GLOBAL specular by its interior weight;
+            // diffuse irradiance stays global (probes are specular-only).
+            // Each term keeps its own intensity control.
+            ambient = kD * diffuse * uIBLIntensity
+                    + mix(specular * uIBLIntensity, probeSpec, probeW);
+        } else {
+            // Fallback for scenes with no environment loaded — flat tint,
+            // plus the probe specular where one is bound.
+            ambient = uAmbient * baseColor * (1.0 - metal) + probeSpec * probeW;
+        }
     }
     if (uHasAOMap == 1) {
         ambient *= texture(uAOMap, vUV).r;

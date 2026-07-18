@@ -156,6 +156,8 @@ void SceneRenderer::queryInstancedUniformLocs(GLuint prog, InstancedDrawLocs& d,
     l.iblIntensity         = U("uIBLIntensity");
     l.iblRotation          = U("uIBLRotation");
     l.iblPrefilterMaxLOD   = U("uIBLPrefilterMaxLOD");
+
+    queryProbeLocs(prog, d.probe);
 }
 
 void SceneRenderer::ensureInstancedMeshPipeline() {
@@ -221,6 +223,10 @@ void SceneRenderer::renderInstancedMeshNode(InstancedMeshNode* mesh,
     if (L.receivesShadow >= 0) glUniform1i(L.receivesShadow, mesh->receivesShadow() ? 1 : 0);
     if (L.atlasGrid      >= 0) glUniform2f(L.atlasGrid, (float)mesh->atlasCols(), (float)mesh->atlasRows());
     if (L.alphaCutoff    >= 0) glUniform1f(L.alphaCutoff, mesh->alphaCutoff());
+
+    // Local reflection probe: whole-node selection by instance-bounds center
+    // (one probe for all instances of this draw), sampler on unit 9.
+    uploadProbeForDraw(mesh, L.probe);
 
     bool ds = mesh->doubleSided();
     if (ds) glDisable(GL_CULL_FACE);

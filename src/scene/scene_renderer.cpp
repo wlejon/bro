@@ -80,6 +80,8 @@ SceneRenderer::~SceneRenderer() {
     if (dofProgram_) { glDeleteProgram(dofProgram_); dofProgram_ = 0; }
     destroyFXAAFBO();
     if (fxaaProgram_) { glDeleteProgram(fxaaProgram_); fxaaProgram_ = 0; }
+    if (probeCaptureFBO_) { glDeleteFramebuffers(1, &probeCaptureFBO_); probeCaptureFBO_ = 0; }
+    if (probeDepthRBO_) { glDeleteRenderbuffers(1, &probeDepthRBO_); probeDepthRBO_ = 0; }
     destroyShadowAtlas();
     if (shadowProgram_) { glDeleteProgram(shadowProgram_); shadowProgram_ = 0; }
     if (shadowInstancedProgram_) { glDeleteProgram(shadowInstancedProgram_); shadowInstancedProgram_ = 0; }
@@ -448,6 +450,16 @@ void SceneRenderer::render3D() {
         // Returns with FBO unbound; the mesh pass below rebinds meshFBO_.
         prepareShadows(activeLights);
         renderShadowPass();
+
+        // Reflection-probe captures run here — after the shadow pass (so the
+        // fresh atlas lights the captures) and before any HDR/post FBO work,
+        // matching the pass discipline: the capture manages its own FBO and
+        // returns with the caller's binding restored. Probes wanting capture
+        // ('once' on first visible frame, 'manual' after capture()) render 6
+        // restricted scene passes + a GGX prefilter each. The selection list
+        // is rebuilt afterwards so a fresh capture applies this same frame.
+        updateReflectionProbes(activeLights);
+        collectFrameProbes();
 
         if (meshFBO_) {
             // MSAA: when active, the HDR passes below render into the

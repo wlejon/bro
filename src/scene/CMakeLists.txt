@@ -68,6 +68,7 @@ add_library(bro_scene STATIC
     scene_renderer_ssr.cpp
     scene_renderer_environment.cpp
     scene_renderer_overlays.cpp
+    scene_renderer_probes.cpp
     shape_node.cpp
     sprite_node.cpp
     physics_node.cpp
@@ -82,6 +83,7 @@ add_library(bro_scene STATIC
     particle_node.cpp
     particles3d_node.cpp
     decal_node.cpp
+    reflection_probe_node.cpp
     terrain_manager.cpp
     tile_world.cpp
     agent_binding.cpp

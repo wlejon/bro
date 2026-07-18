@@ -674,6 +674,67 @@ void SceneBindings::install(JSContext* ctx) {
                 if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Decal)
                     static_cast<scene::DecalNode*>(w->node())->setRenderPriority((int)val);
             })
+        // Reflection-probe properties (ReflectionProbeNode only; undefined
+        // elsewhere). The probe volume is the unit box scaled by the node's
+        // `scale`, like decals; `intensity` is shared with LightNode above.
+        // See docs/scene-api.js.
+        .prop("boxProjection",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::ReflectionProbe)
+                    return JS_NewBool(ctx, static_cast<scene::ReflectionProbeNode*>(w->node())->boxProjection());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::ReflectionProbe)
+                    static_cast<scene::ReflectionProbeNode*>(w->node())->setBoxProjection(JS_ToBool(ctx, val) != 0);
+            })
+        .prop("interior",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::ReflectionProbe)
+                    return JS_NewFloat64(ctx, (double)static_cast<scene::ReflectionProbeNode*>(w->node())->interior());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::ReflectionProbe)
+                    static_cast<scene::ReflectionProbeNode*>(w->node())->setInterior((float)val);
+            })
+        .prop("priority",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::ReflectionProbe)
+                    return JS_NewInt32(ctx, static_cast<scene::ReflectionProbeNode*>(w->node())->priority());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::ReflectionProbe)
+                    static_cast<scene::ReflectionProbeNode*>(w->node())->setPriority((int)val);
+            })
+        .prop("resolution",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::ReflectionProbe)
+                    return JS_NewInt32(ctx, static_cast<scene::ReflectionProbeNode*>(w->node())->resolution());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                // Takes effect on the NEXT capture (textures reallocate then).
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::ReflectionProbe)
+                    static_cast<scene::ReflectionProbeNode*>(w->node())->setResolution((int)val);
+            })
+        .prop("updateMode",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::ReflectionProbe)
+                    return JS_NewString(ctx,
+                        static_cast<scene::ReflectionProbeNode*>(w->node())->updateMode()
+                            == scene::ReflectionProbeNode::UpdateMode::Manual
+                            ? "manual" : "once");
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, std::string val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::ReflectionProbe)
+                    static_cast<scene::ReflectionProbeNode*>(w->node())->setUpdateMode(
+                        val == "manual"
+                            ? scene::ReflectionProbeNode::UpdateMode::Manual
+                            : scene::ReflectionProbeNode::UpdateMode::Once);
+            })
         .get("type", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->node()) return JS_UNDEFINED;
             switch (w->node()->type()) {
@@ -692,6 +753,7 @@ void SceneBindings::install(JSContext* ctx) {
                 case scene::SceneNode::Type::Particles3D: return JS_NewString(ctx, "particles3d");
                 case scene::SceneNode::Type::Camera:  return JS_NewString(ctx, "camera");
                 case scene::SceneNode::Type::Decal:   return JS_NewString(ctx, "decal");
+                case scene::SceneNode::Type::ReflectionProbe: return JS_NewString(ctx, "reflectionProbe");
                 case scene::SceneNode::Type::Base:    return JS_NewString(ctx, "group");
                 default: break;
             }
@@ -909,11 +971,15 @@ void SceneBindings::install(JSContext* ctx) {
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
                 if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
                     return JS_NewFloat64(ctx, static_cast<scene::LightNode*>(w->node())->intensity());
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::ReflectionProbe)
+                    return JS_NewFloat64(ctx, static_cast<scene::ReflectionProbeNode*>(w->node())->intensity());
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, double val) {
                 if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Light)
                     static_cast<scene::LightNode*>(w->node())->setIntensity((float)val);
+                else if (w && w->node() && w->node()->type() == scene::SceneNode::Type::ReflectionProbe)
+                    static_cast<scene::ReflectionProbeNode*>(w->node())->setIntensity((float)val);
             })
         .prop("range",
             [](NodeWrapper* w, JSContext* ctx) -> JSValue {
@@ -1395,6 +1461,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setHtml", js_node_setHtml, 1)
         .method_raw("markHtmlDirty", js_node_markHtmlDirty, 0)
         .method_raw("savePly", js_node_savePly, 1)
+        .method_raw("capture", js_node_probeCapture, 0)
         .method_raw("attachAgent", nodeAttachAgent, 3)
         .method_raw("detachAgent", nodeDetachAgent, 0)
         .method_raw("navigateTo", nodeNavigateTo, 2)
@@ -1458,6 +1525,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("createParticles", js_sg_createParticles, 1)
         .method_raw("createParticles3D", js_sg_createParticles3D, 1)
         .method_raw("createDecal", js_sg_createDecal, 1)
+        .method_raw("createReflectionProbe", js_sg_createReflectionProbe, 1)
         .method_raw("createTween", js_sg_createTween, 0)
         .method_raw("setToneMap", js_sg_setToneMap, 1)
         .method_raw("setAmbient", js_sg_setAmbient, 1)

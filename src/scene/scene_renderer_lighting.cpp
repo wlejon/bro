@@ -98,7 +98,10 @@ void SceneRenderer::uploadLights(const std::vector<LightNode*>& lights,
     }
     if (locs.iblBRDF >= 0) {
         glActiveTexture(GL_TEXTURE4);
-        glBindTexture(GL_TEXTURE_2D, iblOn ? brdfLUT_ : fallback2D_);
+        // The BRDF LUT is env-independent and also feeds the local-probe
+        // specular path, so bind it whenever it exists — not only when the
+        // full IBL trio is loaded (probe captures bake it on first need).
+        glBindTexture(GL_TEXTURE_2D, brdfLUT_ ? brdfLUT_ : fallback2D_);
         glUniform1i(locs.iblBRDF, 4);
     }
     glActiveTexture(GL_TEXTURE0);

@@ -1210,6 +1210,115 @@ JSValue js_sg_createDecal(JSContext* ctx, JSValueConst this_val, int argc, JSVal
     return wrapNode(ctx, node, g);
 }
 
+// createReflectionProbe({ name, x, y, z, size|scale, rx, ry, rz, resolution,
+//                         updateMode: 'once'|'manual', boxProjection,
+//                         intensity, interior, priority }) → ReflectionProbeNode
+// Local reflection probe (Godot ReflectionProbe analog). The probe volume is
+// the unit box scaled by the node's scale — `size` is an alias for `scale`
+// (uniform number or [x, y, z]), matching createDecal — and the capture
+// origin is the node's world position. There is NO per-frame auto update
+// mode: 'once' (default) captures on the first visible frame, 'manual' waits
+// for probe.capture(). See docs/scene-api.js for the full contract.
+JSValue js_sg_createReflectionProbe(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+
+    auto* node = g->createReflectionProbe();
+    g->root()->addChild(node);
+
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValueConst opts = argv[0];
+
+        JSValue nameVal = JS_GetPropertyStr(ctx, opts, "name");
+        if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
+        JS_FreeValue(ctx, nameVal);
+
+        double x = qjsbind::get_prop_number(ctx, opts, "x", 0);
+        double y = qjsbind::get_prop_number(ctx, opts, "y", 0);
+        double z = qjsbind::get_prop_number(ctx, opts, "z", 0);
+        node->setPosition((float)x, (float)y, (float)z);
+
+        // Box size = node scale. `size` and `scale` interchangeable (size
+        // wins when both are given); uniform number or [x, y, z].
+        auto applyScale = [&](const char* key) -> bool {
+            JSValue v = JS_GetPropertyStr(ctx, opts, key);
+            bool took = false;
+            if (JS_IsArray(v)) {
+                double s3[3] = {1, 1, 1};
+                for (uint32_t i = 0; i < 3; ++i) {
+                    JSValue e = JS_GetPropertyUint32(ctx, v, i);
+                    if (!JS_IsUndefined(e)) JS_ToFloat64(ctx, &s3[i], e);
+                    JS_FreeValue(ctx, e);
+                }
+                node->setScale((float)s3[0], (float)s3[1], (float)s3[2]);
+                took = true;
+            } else if (!JS_IsUndefined(v)) {
+                double s = 1;
+                JS_ToFloat64(ctx, &s, v);
+                node->setScale((float)s, (float)s, (float)s);
+                took = true;
+            }
+            JS_FreeValue(ctx, v);
+            return took;
+        };
+        if (!applyScale("size")) applyScale("scale");
+
+        // Rotation (Euler degrees, matching createMesh / createDecal).
+        JSValue rxVal = JS_GetPropertyStr(ctx, opts, "rx");
+        JSValue ryVal = JS_GetPropertyStr(ctx, opts, "ry");
+        JSValue rzVal = JS_GetPropertyStr(ctx, opts, "rz");
+        if (!JS_IsUndefined(rxVal) || !JS_IsUndefined(ryVal) || !JS_IsUndefined(rzVal)) {
+            double rx = 0, ry = 0, rz = 0;
+            if (!JS_IsUndefined(rxVal)) JS_ToFloat64(ctx, &rx, rxVal);
+            if (!JS_IsUndefined(ryVal)) JS_ToFloat64(ctx, &ry, ryVal);
+            if (!JS_IsUndefined(rzVal)) JS_ToFloat64(ctx, &rz, rzVal);
+            const float toRad = 3.14159265f / 180.0f;
+            node->setRotationEuler((float)rx * toRad, (float)ry * toRad,
+                                   (float)rz * toRad);
+        }
+        JS_FreeValue(ctx, rxVal);
+        JS_FreeValue(ctx, ryVal);
+        JS_FreeValue(ctx, rzVal);
+
+        node->setResolution((int)qjsbind::get_prop_number(
+            ctx, opts, "resolution", 128.0));
+        node->setIntensity((float)qjsbind::get_prop_number(
+            ctx, opts, "intensity", 1.0));
+        node->setInterior((float)qjsbind::get_prop_number(
+            ctx, opts, "interior", 0.0));
+        node->setPriority((int)qjsbind::get_prop_number(
+            ctx, opts, "priority", 0.0));
+
+        JSValue bpVal = JS_GetPropertyStr(ctx, opts, "boxProjection");
+        if (!JS_IsUndefined(bpVal))
+            node->setBoxProjection(JS_ToBool(ctx, bpVal) != 0);
+        JS_FreeValue(ctx, bpVal);
+
+        JSValue umVal = JS_GetPropertyStr(ctx, opts, "updateMode");
+        if (JS_IsString(umVal)) {
+            std::string m = jsStr(ctx, umVal);
+            node->setUpdateMode(m == "manual"
+                ? scene::ReflectionProbeNode::UpdateMode::Manual
+                : scene::ReflectionProbeNode::UpdateMode::Once);
+        }
+        JS_FreeValue(ctx, umVal);
+    }
+
+    return wrapNode(ctx, node, g);
+}
+
+// probe.capture() — request a (re)capture on the next rendered frame.
+// ReflectionProbeNode only; a clean no-op-with-error elsewhere.
+JSValue js_node_probeCapture(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    (void)argc; (void)argv;
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node() ||
+        w->node()->type() != scene::SceneNode::Type::ReflectionProbe)
+        return JS_ThrowTypeError(ctx, "capture: not a ReflectionProbeNode");
+    static_cast<scene::ReflectionProbeNode*>(w->node())->requestCapture();
+    return JS_UNDEFINED;
+}
+
 } // namespace bro::js
 
 #endif  // BRO_WITH_3D

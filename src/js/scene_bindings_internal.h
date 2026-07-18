@@ -271,6 +271,8 @@ JSValue js_sg_createParticles(JSContext* ctx, JSValueConst this_val, int argc, J
 JSValue js_sg_createParticles3D(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_createGaussianSplat(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_createDecal(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_sg_createReflectionProbe(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_node_probeCapture(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 // Sprite animation-end JS callback. The callback (a shared JSFnRef) is owned
 // by the SpriteNode itself, so it is released on any destruction path —
 // direct destroy, ancestor subtree destroy, graph teardown — with no side

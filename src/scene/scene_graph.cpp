@@ -149,6 +149,13 @@ DecalNode* SceneGraph::createDecal(const std::string& name) {
     return ptr;
 }
 
+ReflectionProbeNode* SceneGraph::createReflectionProbe(const std::string& name) {
+    auto node = std::make_unique<ReflectionProbeNode>(name);
+    auto* ptr = node.get();
+    nodes_[ptr->id()] = std::move(node);
+    return ptr;
+}
+
 void SceneGraph::setActiveCamera(CameraNode* cam) {
     if (!cam) {
         activeCameraId_ = 0;

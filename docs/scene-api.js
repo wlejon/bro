@@ -617,6 +617,95 @@ class SceneGraph {
   createDecal(opts) {}
 
   /**
+   * Create a local reflection probe (Godot ReflectionProbe analog) and add
+   * it to the root. The probe volume is the unit box [-0.5, 0.5]^3 in local
+   * space — the node's SCALE is the box size (`size` is an alias for
+   * `scale`, same convention as createDecal) — and the CAPTURE ORIGIN is the
+   * node's world position (the box center). Meshes whose bounds center lies
+   * inside the box sample the probe's captured surroundings for their
+   * SPECULAR ambient term instead of the global IBL environment, so a chrome
+   * sphere in a red room reflects the room, not the sky.
+   *
+   *   // chrome sphere in a red room
+   *   const room = buildRedRoom();                  // opaque red walls
+   *   const sphere = scene.createMesh({
+   *     mesh: Mesh.sphere(1), color: [1, 1, 1, 1],
+   *     metallic: 1, roughness: 0.05,
+   *   });
+   *   scene.createReflectionProbe({
+   *     size: 10,                 // box covers the room interior
+   *     resolution: 128,
+   *     interior: 0.5,            // fade back to global IBL near the walls
+   *   });
+   *   // default updateMode 'once': the probe captures the room on its first
+   *   // visible frame and the sphere turns red. After moving furniture:
+   *   //   probe.capture();       // explicit recapture next frame
+   *
+   * Capture cost & update modes: a capture renders the scene SIX times (cube
+   * faces, 90° FOV, at `resolution`) plus a GGX prefilter, so there is
+   * deliberately NO per-frame auto mode. 'once' (default) captures on the
+   * first rendered frame the probe is visible; 'manual' never captures until
+   * probe.capture() asks (each call = one recapture on the next frame).
+   * Captures run before the frame's main render, so a capture and its first
+   * application land in the same frame.
+   *
+   * What the capture sees (honest limitations): skybox + OPAQUE meshes
+   * (static, skinned, custom-shader, instanced) with full lighting and fog.
+   * Excluded: translucent meshes, gaussian splats, 3D particles, billboards,
+   * decals, SSR, other probes (no recursion), MSAA, and the post stack
+   * (captures are raw HDR — they tonemap with the scene when reflected).
+   * Shadows ARE captured: the frame's shadow atlas is reused (spot/point
+   * shadows exact; directional cascades stay fitted to the viewer camera, so
+   * far-off geometry may capture unshadowed).
+   *
+   * Application (honest limitations): SPECULAR-ONLY — diffuse ambient stays
+   * on the global irradiance / flat ambient, which is also Godot's
+   * ReflectionProbe default. ONE probe per mesh draw, selected on the CPU:
+   * the highest-`priority` probe whose box contains the mesh's bounds
+   * center wins; ties go to the smallest box volume (the more local probe).
+   * There is no per-pixel probe blending between overlapping probes — a mesh
+   * is either on one probe or on the global environment (the `interior`
+   * margin fades per-fragment between its probe and the global IBL near the
+   * box faces). SSR composes on top: SSR hits win where the ray march lands,
+   * and the probe/IBL result is the natural miss fallback.
+   *
+   * `boxProjection` (default true — it's the point of a local probe)
+   * parallax-corrects the sample: the reflection ray is intersected with the
+   * box volume and the hit point is what gets sampled, so flat mirrors and
+   * floors line their reflections up with the actual walls. Turn it off for
+   * an infinite-distance (skybox-like) sample of the capture.
+   *
+   * @param {Object} [opts]
+   * @param {string} [opts.name]
+   * @param {number} [opts.x=0] @param {number} [opts.y=0] @param {number} [opts.z=0]
+   * @param {number|number[]} [opts.size=1] - box size; alias for scale
+   *        (uniform number or [x, y, z] world units)
+   * @param {number} [opts.rx=0] @param {number} [opts.ry=0] @param {number} [opts.rz=0]
+   *        - rotation in degrees (orients the box; captures stay world-axis
+   *        aligned)
+   * @param {number} [opts.resolution=128] - cube face size in texels,
+   *        clamped to a power of two in [16, 1024]; changing it later takes
+   *        effect on the next capture
+   * @param {string} [opts.updateMode='once'] - 'once' | 'manual' (no
+   *        per-frame auto mode — see above)
+   * @param {boolean} [opts.boxProjection=true] - parallax-correct sampling
+   *        against the box volume
+   * @param {number} [opts.intensity=1] - multiplier on the probe's specular
+   *        contribution
+   * @param {number} [opts.interior=0] - blend margin in world units: within
+   *        this distance of a box face the probe fades back to the global
+   *        IBL (0 = hard edge)
+   * @param {number} [opts.priority=0] - selection priority among overlapping
+   *        probes (higher wins; ties -> smallest volume)
+   * @returns {SceneNode} - .type === 'reflectionProbe'; live properties
+   *          `boxProjection`, `intensity`, `interior`, `priority`,
+   *          `resolution`, `updateMode`, plus .capture() to request a
+   *          recapture. GPU cubemaps are freed with the node (destroy()
+   *          restores the global environment for affected meshes).
+   */
+  createReflectionProbe(opts) {}
+
+  /**
    * Configure global wind sway. Per-vertex windBend (vertex color R, 0..1)
    * modulates: pos += direction * sin(time*frequency + dot(pos.xz, k)) * strength * bend.
    * The engine advances `windTime` from the per-frame virtual delta so offline

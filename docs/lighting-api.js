@@ -241,6 +241,36 @@ scene.setEnvironment(null);
 
 
 // -----------------------------------------------------------------------------
+// Local reflection probes — captured, box-projected specular
+// -----------------------------------------------------------------------------
+//
+// The global environment above is a single infinite-distance cubemap: a
+// chrome sphere indoors still reflects the sky. `scene.createReflectionProbe`
+// captures the ACTUAL surroundings from a point and substitutes that capture
+// for the IBL SPECULAR term on every mesh whose bounds center is inside the
+// probe's box volume (node scale = box size, capture origin = node position).
+// The capture is GGX-prefiltered with the same machinery as the environment,
+// so roughness behaves identically; `boxProjection` (default on) parallax-
+// corrects samples against the box so reflections line up with the walls.
+//
+//   // chrome sphere in a red room reflects the room, not the sky
+//   scene.createReflectionProbe({ size: 10, resolution: 128 });
+//
+// Costs & rules of thumb (see scene-api.js createReflectionProbe for the
+// full contract):
+//   - a capture = 6 restricted scene renders + a prefilter, so updates are
+//     'once' (first visible frame, default) or 'manual' (probe.capture());
+//     there is NO per-frame auto mode by design;
+//   - one probe per mesh draw (highest priority wins, ties -> smallest box);
+//   - specular-only: diffuse ambient stays on the global irradiance/ambient
+//     (Godot's ReflectionProbe default too);
+//   - captures see skybox + opaque lit geometry with shadows; translucents,
+//     splats, particles, billboards, decals, SSR and post are excluded;
+//   - SSR composites on top: where the screen-space march hits, SSR wins;
+//     probe/IBL specular remains the miss fallback.
+
+
+// -----------------------------------------------------------------------------
 // Fallback behavior
 // -----------------------------------------------------------------------------
 //

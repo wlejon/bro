@@ -400,9 +400,6 @@ void SceneRenderer::ensurePrefilterPipeline() {
 
 bool SceneRenderer::runPrefilterConvolution() {
     if (!envCubemap_) return false;
-    ensureEnvConvertPipeline();
-    ensurePrefilterPipeline();
-    if (!prefilterProgram_ || !envConvertFBO_) return false;
 
     if (!envPrefilterCube_) {
         glGenTextures(1, &envPrefilterCube_);
@@ -421,6 +418,22 @@ bool SceneRenderer::runPrefilterConvolution() {
         glGenerateMipmap(GL_TEXTURE_CUBE_MAP);
     }
 
+    return runPrefilterInto(envCubemap_, envCubemapSize_, envPrefilterCube_,
+                            envPrefilterSize_, envPrefilterMips_);
+}
+
+// Shared GGX prefilter core: convolve `srcCube` into `dstCube`'s roughness
+// mip chain. Used by the global environment (above) and by per-probe
+// captures (scene_renderer_probes.cpp). `dstCube` must already have its mip
+// storage allocated; `srcCube` must be mipmapped (the Krivanek bias samples
+// LODs of it).
+bool SceneRenderer::runPrefilterInto(GLuint srcCube, int srcSize,
+                                     GLuint dstCube, int dstSize, int mips) {
+    if (!srcCube || !dstCube || mips < 1) return false;
+    ensureEnvConvertPipeline();
+    ensurePrefilterPipeline();
+    if (!prefilterProgram_ || !envConvertFBO_) return false;
+
     GLint prevFBO = 0, prevViewport[4] = {};
     glGetIntegerv(GL_FRAMEBUFFER_BINDING, &prevFBO);
     glGetIntegerv(GL_VIEWPORT, prevViewport);
@@ -434,25 +447,25 @@ bool SceneRenderer::runPrefilterConvolution() {
 
     glUseProgram(prefilterProgram_);
     glActiveTexture(GL_TEXTURE0);
-    glBindTexture(GL_TEXTURE_CUBE_MAP, envCubemap_);
+    glBindTexture(GL_TEXTURE_CUBE_MAP, srcCube);
     glUniform1i(pfUEnv_, 0);
-    glUniform1f(pfUEnvSize_, (float)envCubemapSize_);
+    glUniform1f(pfUEnvSize_, (float)srcSize);
     glBindVertexArray(envConvertVAO_);
 
     bool ok = true;
-    for (int mip = 0; mip < envPrefilterMips_ && ok; ++mip) {
-        int mipSize = envPrefilterSize_ >> mip;
+    for (int mip = 0; mip < mips && ok; ++mip) {
+        int mipSize = dstSize >> mip;
         if (mipSize < 1) mipSize = 1;
-        float roughness = (envPrefilterMips_ <= 1)
+        float roughness = (mips <= 1)
                           ? 0.0f
-                          : (float)mip / (float)(envPrefilterMips_ - 1);
+                          : (float)mip / (float)(mips - 1);
         glViewport(0, 0, mipSize, mipSize);
         glUniform1f(pfURoughness_, roughness);
 
         for (int face = 0; face < 6; ++face) {
             glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                    GL_TEXTURE_CUBE_MAP_POSITIVE_X + face,
-                                   envPrefilterCube_, mip);
+                                   dstCube, mip);
             GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
             if (status != GL_FRAMEBUFFER_COMPLETE) {
                 LOG_ERROR("Prefilter FBO incomplete (mip %d face %d): 0x%x",
