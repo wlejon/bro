@@ -571,6 +571,9 @@ private:
     // dies at the next shape() that misses — use it and drop it.
     const render::ShapedRun* shapeCurrent(std::string_view text);
     render::TextDirection baseDirection() const;
+    // Normalized OS/2 typographic ascent/descent — the em box. Returns false
+    // when it had to fall back to the hhea ratio.
+    bool typoMetrics(float& ascent, float& descent) const;
     void recordText(bool stroke, const std::string& text, float x, float y);
 
     // --- Canvas thread state ---

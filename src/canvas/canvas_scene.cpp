@@ -897,15 +897,61 @@ float CanvasScene::adjustTextX(float x, float textWidth) const {
     }
 }
 
+// The em box, normalized: the font's OS/2 typographic ascender and descender
+// scaled so they sum to the font size.
+//
+// This is not the same as SkFontMetrics' fAscent/fDescent, which come from hhea
+// and describe the font's LINE box — for Arial that is 0.905em of ascent, well
+// above the em square. `top`, `middle` and `bottom` name the em box, not the
+// line box, so using hhea for them put text about 4px off at 32px versus every
+// browser. Chromium calls the same quantity the normalized typo ascent.
+//
+// Falls back to the hhea ratio when the face has no usable OS/2 table, which
+// keeps a bitmap or synthesized face from collapsing to zero.
+bool CanvasScene::typoMetrics(float& ascent, float& descent) const {
+    const SkTypeface* tf = font_.getTypeface();
+    const float size = font_.getSize();
+    if (tf) {
+        // OS/2: sTypoAscender is at byte 68, sTypoDescender at 70, both int16
+        // in font design units. A table shorter than that is not version 0.
+        constexpr SkFourByteTag kOS2 = SkSetFourByteTag('O', 'S', '/', '2');
+        uint8_t buf[74];
+        const size_t n = tf->getTableData(kOS2, 0, sizeof(buf), buf);
+        const int upem = tf->getUnitsPerEm();
+        if (n >= 72 && upem > 0) {
+            auto be16 = [&](size_t off) -> int16_t {
+                return static_cast<int16_t>((buf[off] << 8) | buf[off + 1]);
+            };
+            const int asc = be16(68);
+            const int desc = be16(70);   // negative below the baseline
+            const float span = static_cast<float>(asc) - static_cast<float>(desc);
+            if (span > 0.0f && asc > 0) {
+                ascent = size * static_cast<float>(asc) / span;
+                descent = size - ascent;
+                return true;
+            }
+        }
+    }
+    SkFontMetrics fm;
+    font_.getMetrics(&fm);
+    const float span = (-fm.fAscent) + fm.fDescent;
+    if (span <= 0.0f) { ascent = size * 0.8f; descent = size * 0.2f; return false; }
+    ascent = size * (-fm.fAscent) / span;
+    descent = size - ascent;
+    return false;
+}
+
 float CanvasScene::adjustTextY(float y) const {
     SkFontMetrics metrics;
     font_.getMetrics(&metrics);
+    float emAsc = 0.0f, emDesc = 0.0f;
+    typoMetrics(emAsc, emDesc);
     switch (textBaseline_) {
-    case 1: return y - metrics.fAscent;           // top
-    case 2: return y - (metrics.fAscent + metrics.fDescent) / 2.0f; // middle
-    case 3: return y - metrics.fDescent;          // bottom
+    case 1: return y + emAsc;                              // top of the em box
+    case 2: return y + emAsc - font_.getSize() / 2.0f;     // middle of it
+    case 3: return y - emDesc;                             // bottom of it
     case 4: return y - metrics.fAscent * 0.8f;    // hanging (approximation)
-    case 5: return y - metrics.fDescent;          // ideographic ≈ bottom
+    case 5: return y - emDesc;                    // ideographic ≈ bottom
     default: return y;                             // alphabetic (baseline)
     }
 }
@@ -1019,17 +1065,13 @@ CanvasTextMetrics CanvasScene::measureText(const std::string& text) {
     m.fontAscent  = -(baseOff + fm.fAscent);
     m.fontDescent = baseOff + fm.fDescent;
 
-    // The em square, split across the baseline in the same proportion as the
-    // font's own ascent and descent. A face's real em-box split lives in the
-    // OS/2 typo metrics, which SkFontMetrics does not surface; this keeps
-    // emAscent + emDescent == the font size, which is the property callers
-    // actually use these for.
-    const float span = (-fm.fAscent) + fm.fDescent;
-    const float size = font_.getSize();
-    if (span > 0.0f) {
-        m.emAscent  = size * (-fm.fAscent) / span - baseOff;
-        m.emDescent = size * fm.fDescent / span + baseOff;
-    }
+    // The em square, from the face's OS/2 typographic metrics — the same
+    // quantity `textBaseline: top` and `bottom` name, so these agree with
+    // where the text would actually be placed.
+    float emAsc = 0.0f, emDesc = 0.0f;
+    typoMetrics(emAsc, emDesc);
+    m.emAscent  = emAsc - baseOff;
+    m.emDescent = emDesc + baseOff;
 
     m.alphabeticBaseline  = -baseOff;
     // No face here exposes a BASE table, so the hanging and ideographic
