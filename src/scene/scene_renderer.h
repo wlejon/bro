@@ -45,8 +45,9 @@ struct CullStats {
 /// GL renderer for a SceneGraph's 3D content. Owns every GPU resource the
 /// scene pipeline uses — mesh + instanced-mesh programs, the HDR mesh FBO,
 /// shadow atlas (incl. CSM), IBL environment (cubemap, irradiance, prefilter,
-/// BRDF LUT, skybox), billboard pipeline, and the post stack (depth-of-field,
-/// SSAO + bloom pre-passes, tonemap + 3D color LUT, tilt-shift DOF, FXAA) —
+/// BRDF LUT, skybox), billboard pipeline, and the post stack (SSR on the
+/// opaque result, depth-of-field, SSAO + bloom pre-passes, tonemap + 3D
+/// color LUT, tilt-shift DOF, FXAA) —
 /// plus the render *settings* that configure them (fog, tonemap/exposure,
 /// ambient, wind, shadow quality, environment).
 ///
@@ -151,6 +152,30 @@ public:
         ssaoBias_      = bias;
     }
     bool ssaoEnabled() const { return ssaoEnabled_; }
+
+    /// Screen-space reflections on opaque surfaces. Runs right after the
+    /// opaque + decal passes (before translucents/particles/billboards):
+    /// the opaque mesh passes write a per-pixel reflectance mask
+    /// (luminance(F0) * (1-roughness)^2) into the HDR alpha channel, then a
+    /// full-screen pass ray-marches the resolved opaque depth along the
+    /// reflected view ray (`steps` linear steps over `maxDistance` world
+    /// units + binary refine, `thickness` view-space acceptance) and blends
+    /// the hit pixel's HDR color over the surface weighted by
+    /// mask * `intensity`, faded near screen borders (`edgeFade`, fraction
+    /// of the viewport) and for camera-facing rays. Misses change nothing —
+    /// SSR composites over the IBL specular fallback, it does not replace
+    /// it. Perspective and ortho cameras both supported.
+    void setSSR(bool enabled, float maxDistance, int steps, float thickness,
+                float intensity, float edgeFade) {
+        ssrEnabled_     = enabled;
+        ssrMaxDistance_ = maxDistance > 0.0f ? maxDistance : 30.0f;
+        ssrSteps_       = steps < 4 ? 4 : (steps > 256 ? 256 : steps);
+        ssrThickness_   = thickness > 0.0f ? thickness : 0.3f;
+        ssrIntensity_   = intensity < 0.0f ? 0.0f : intensity;
+        ssrEdgeFade_    = edgeFade < 0.0f
+                            ? 0.0f : (edgeFade > 0.5f ? 0.5f : edgeFade);
+    }
+    bool ssrEnabled() const { return ssrEnabled_; }
 
     /// Depth-based depth-of-field, applied on the HDR image before bloom +
     /// tonemap. Geometry within focusDistance +/- focusRange (eye-space
@@ -305,7 +330,8 @@ private:
               fogStart = -1, fogEnd = -1, fogColor = -1, ambient = -1,
               fogDensity = -1, fogHeightFalloff = -1, fogStartDist = -1,
               fogCamY = -1,
-              windDir = -1, windStrength = -1, windTime = -1, windFreq = -1;
+              windDir = -1, windStrength = -1, windTime = -1, windFreq = -1,
+              ssrMask = -1;
     };
     // Per-program uniform locations for the instanced mesh pipeline
     // (everything renderInstancedMeshNode + the per-frame globals touch).
@@ -322,7 +348,7 @@ private:
               fogStart = -1, fogEnd = -1, fogColor = -1, ambient = -1,
               fogDensity = -1, fogHeightFalloff = -1, fogStartDist = -1,
               fogCamY = -1,
-              atlasGrid = -1, alphaCutoff = -1;
+              atlasGrid = -1, alphaCutoff = -1, ssrMask = -1;
     };
     struct MeshProgramLocs;  // lighting/shadow/IBL locs — defined below
 
@@ -424,6 +450,17 @@ private:
     void destroySSAOFBOs();
     // AO estimate + blur into ssaoTex_[0]; returns true when AO is ready.
     bool runSSAOPass();
+
+    // --- SSR pass (right after opaques + decals, before blended passes) ---
+    // Defined in scene_renderer_ssr.cpp.
+    void ensureSSRPipeline();
+    void ensureSSRFBO();
+    void destroySSRFBO();
+    // Snapshot the opaque HDR color (+ mask in alpha) and resolved depth,
+    // march reflections, and rewrite the current HDR target in place —
+    // including restoring the alpha channel from mask back to coverage.
+    // Must run whenever ssrMaskActive_ was set for the frame.
+    void runSSRPass();
 
     // --- FXAA post pass (LDR, always last) ---
     void ensureFXAAPipeline();
@@ -721,6 +758,41 @@ private:
     GLint  aoURadius_     = -1;
     GLint  aoUBias_       = -1;
     GLint  aoUNoiseScale_ = -1;
+
+    // --- SSR pass ---
+    bool  ssrEnabled_     = false;
+    float ssrMaxDistance_ = 30.0f;
+    int   ssrSteps_       = 48;
+    float ssrThickness_   = 0.3f;
+    float ssrIntensity_   = 1.0f;
+    float ssrEdgeFade_    = 0.1f;
+    // Per-frame: while true, the opaque mesh/instanced passes write the SSR
+    // reflectance mask into the HDR alpha channel instead of coverage
+    // (uploadMeshGlobals & friends read it into uSSRMask). Set at the top of
+    // render3D, cleared right after runSSRPass restores alpha to coverage —
+    // no pass that blends against dest alpha may run in between.
+    bool  ssrMaskActive_  = false;
+    // Sticky init-failure latch: keeps the mask phase off on later frames so
+    // a broken SSR pipeline can't leave mask values in the coverage channel.
+    bool  ssrPipelineFailed_ = false;
+
+    // Full-res RGBA16F snapshot of the opaque+decal HDR color (alpha =
+    // reflectance mask); the pass samples it while rewriting the HDR target.
+    GLuint ssrFBO_       = 0;
+    GLuint ssrSourceTex_ = 0;
+    int    ssrWidth_ = 0, ssrHeight_ = 0;
+
+    GLuint ssrProgram_ = 0;
+    GLint  ssrUColor_       = -1;
+    GLint  ssrUDepth_       = -1;
+    GLint  ssrUProj_        = -1;
+    GLint  ssrUInvProj_     = -1;
+    GLint  ssrUPerspective_ = -1;
+    GLint  ssrUMaxDistance_ = -1;
+    GLint  ssrUSteps_       = -1;
+    GLint  ssrUThickness_   = -1;
+    GLint  ssrUIntensity_   = -1;
+    GLint  ssrUEdgeFade_    = -1;
 
     // --- Depth-of-field pre-pass ---
     bool  dofEnabled_       = false;

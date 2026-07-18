@@ -70,6 +70,7 @@ void SceneRenderer::queryMeshUniformLocs(GLuint prog, MeshDrawLocs& d,
     d.windStrength   = U("uWindStrength");
     d.windTime       = U("uWindTime");
     d.windFreq       = U("uWindFreq");
+    d.ssrMask        = U("uSSRMask");
 
     l.lightCount           = U("uLightCount");
     l.lightType            = U("uLightType");

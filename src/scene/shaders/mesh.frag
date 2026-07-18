@@ -61,6 +61,9 @@ uniform float uNearClip;
 
 uniform vec3 uAmbient;         // flat ambient fallback used when IBL is disabled
 uniform int uUnlit;            // 1 = skip lighting, output baseColor + emissive
+uniform int uSSRMask;          // 1 = SSR mask phase: alpha carries the SSR
+                               // reflectance mask instead of coverage (opaque
+                               // passes only; the SSR pass restores coverage)
 uniform int uTwoSided;         // 1 = backface culling disabled at the host
 uniform float uSubsurface;     // 0..1; >0 enables wrap-light leaf translucency
 
@@ -274,7 +277,9 @@ void main() {
             color = mix(color, uFogColor, fogFactorU);
             baseAlpha = mix(baseAlpha, 0.0, fogFactorU);
         }
-        FragColor = vec4(color, baseAlpha);
+        // SSR mask phase: unlit surfaces don't reflect (mask 0). Coverage
+        // is restored by the SSR pass right after the opaque passes.
+        FragColor = vec4(color, (uSSRMask == 1) ? 0.0 : baseAlpha);
         return;
     }
 
@@ -468,6 +473,19 @@ void main() {
         ambient *= texture(uAOMap, vUV).r;
     }
     vec3 color = Lo + ambient + emissive;
+
+    // SSR mask phase (opaque passes while scene SSR is enabled): repurpose
+    // the alpha channel to carry the reflectance mask the SSR pass weights
+    // reflections by — luminance of F0 (normal-incidence Fresnel, i.e. 0.04
+    // for dielectrics up to baseColor luminance for metals) scaled by
+    // perceptual smoothness^2, so rough surfaces reflect little and mirrors
+    // reflect fully. The fog fade below applies to the mask too, fading
+    // reflections out with the surface. The SSR pass consumes the mask and
+    // restores alpha to coverage before any pass blends against dest alpha.
+    if (uSSRMask == 1) {
+        baseAlpha = dot(F0, vec3(0.2126, 0.7152, 0.0722))
+                  * (1.0 - rough) * (1.0 - rough);
+    }
 
     // Fog (applied in linear space; tonemap runs after). Exponential-squared
     // height fog or the legacy linear ramp — see fogFactorFor.

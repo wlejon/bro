@@ -873,6 +873,49 @@ class SceneGraph {
   setSSAO(opts) {}
 
   /**
+   * Screen-space reflections (SSR) on opaque surfaces. A full-screen pass
+   * runs right after the opaque + decal passes: for every opaque pixel the
+   * reflected view ray is marched against the scene depth buffer (linear
+   * steps + binary refinement), and on a hit the HDR color at the hit pixel
+   * is blended over the surface. The blend weight is a per-pixel
+   * reflectance mask derived from the material — luminance of F0
+   * (normal-incidence Fresnel: 0.04 for dielectrics, up to the base-color
+   * luminance for metals) x (1 - roughness)^2 — times `intensity`, so
+   * smooth metals mirror, rough or dielectric surfaces reflect faintly, and
+   * unlit surfaces not at all. Off by default; works with perspective AND
+   * orthographic cameras, MSAA, renderScale and the rest of the post stack.
+   *
+   * SSR composites ON TOP of image-based lighting, it does not replace it:
+   * a miss changes nothing, leaving the IBL specular (or flat ambient) as
+   * the fallback reflection. Honest limitations of any screen-space
+   * technique apply: only what is on screen can be reflected (objects
+   * offscreen, behind the camera, or occluded reflect nothing — the miss
+   * falls back to IBL), only opaque geometry reflects and is reflected
+   * (translucents, splats, particles and billboards draw over reflections
+   * and never appear in them), and reflections use the front-face colors
+   * the camera sees. Reflections fade near screen borders (`edgeFade`) and
+   * for rays bending back toward the camera to hide those artifacts.
+   *
+   * @param {Object} opts
+   * @param {boolean} [opts.enabled=false]   - toggle the pass.
+   * @param {number}  [opts.maxDistance=30]  - max reflected-ray length in
+   *   world units.
+   * @param {number}  [opts.steps=48]        - linear march steps across
+   *   maxDistance (a few binary-refine steps sharpen each hit); more steps
+   *   catch thinner geometry at higher cost. Clamped to 4..256.
+   * @param {number}  [opts.thickness=0.3]   - view-space depth tolerance: a
+   *   ray sample counts as a hit when it sits at most this far behind the
+   *   depth buffer. Raise to catch thin ledges; lower to reduce false hits
+   *   at silhouettes.
+   * @param {number}  [opts.intensity=1.0]   - scales the reflection weight
+   *   (0..1+; the final weight is clamped to 1).
+   * @param {number}  [opts.edgeFade=0.1]    - screen-border fade width as a
+   *   fraction of the viewport (0..0.5); hits closer to an edge than this
+   *   fade out linearly.
+   */
+  setSSR(opts) {}
+
+  /**
    * Depth-based depth-of-field. Geometry within focusDistance ± focusRange
    * (eye-space distance) stays sharp; the circle of confusion ramps to fully
    * defocused by ± 2×focusRange. Applied on the HDR image before bloom and

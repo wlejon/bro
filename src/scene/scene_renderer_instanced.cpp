@@ -130,6 +130,7 @@ void SceneRenderer::queryInstancedUniformLocs(GLuint prog, InstancedDrawLocs& d,
     d.ambient        = U("uAmbient");
     d.atlasGrid      = U("uAtlasGrid");
     d.alphaCutoff    = U("uAlphaCutoff");
+    d.ssrMask        = U("uSSRMask");
 
     l.lightCount           = U("uLightCount");
     l.lightType            = U("uLightType");

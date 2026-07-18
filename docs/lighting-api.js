@@ -18,9 +18,12 @@
 // Their world position comes from the node transform; Directional and Spot
 // lights additionally use an explicit `direction` vector.
 //
-// HDR bloom is available via scene.setBloom (see scene-api.js); clustered
-// light culling is deferred to a later milestone. See scene-api.js for the
-// non-lighting surface, including the tilt-shift DOF post pass.
+// HDR bloom is available via scene.setBloom and screen-space reflections via
+// scene.setSSR (see scene-api.js) — SSR composites local-geometry reflections
+// on TOP of the IBL specular described here, weighted by the same
+// metallic/roughness material params; a ray miss keeps the IBL reflection.
+// Clustered light culling is deferred to a later milestone. See scene-api.js
+// for the non-lighting surface, including the tilt-shift DOF post pass.
 //
 // =============================================================================
 

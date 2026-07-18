@@ -353,6 +353,16 @@ public:
     }
     bool ssaoEnabled() const { return renderer_.ssaoEnabled(); }
 
+    /// Screen-space reflections on opaque surfaces, composited over the IBL
+    /// specular before the blended passes. See SceneRenderer::setSSR for
+    /// parameter semantics.
+    void setSSR(bool enabled, float maxDistance, int steps, float thickness,
+                float intensity, float edgeFade) {
+        renderer_.setSSR(enabled, maxDistance, steps, thickness, intensity,
+                         edgeFade);
+    }
+    bool ssrEnabled() const { return renderer_.ssrEnabled(); }
+
     /// Depth-based depth-of-field on the HDR image before bloom + tonemap.
     /// See SceneRenderer::setDepthOfField for parameter semantics.
     void setDepthOfField(bool enabled, float focusDistance, float focusRange,

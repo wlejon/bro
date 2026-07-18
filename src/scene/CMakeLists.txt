@@ -33,6 +33,7 @@ embed_shader(blur.frag             kBlurFragSrc)
 embed_shader(tilt_composite.frag   kTiltCompositeFragSrc)
 embed_shader(bloom_bright.frag     kBloomBrightFragSrc)
 embed_shader(ssao.frag             kSSAOFragSrc)
+embed_shader(ssr.frag              kSSRFragSrc)
 embed_shader(dof_composite.frag    kDoFCompositeFragSrc)
 embed_shader(fxaa.frag             kFXAAFragSrc)
 embed_shader(env_convert.vert      kEnvConvertVertSrc)
@@ -64,6 +65,7 @@ add_library(bro_scene STATIC
     scene_renderer_lighting.cpp
     scene_renderer_shadow.cpp
     scene_renderer_postfx.cpp
+    scene_renderer_ssr.cpp
     scene_renderer_environment.cpp
     scene_renderer_overlays.cpp
     shape_node.cpp

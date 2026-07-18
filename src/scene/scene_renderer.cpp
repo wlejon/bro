@@ -74,6 +74,8 @@ SceneRenderer::~SceneRenderer() {
     destroySSAOFBOs();
     if (ssaoProgram_) { glDeleteProgram(ssaoProgram_); ssaoProgram_ = 0; }
     if (ssaoNoiseTex_) { glDeleteTextures(1, &ssaoNoiseTex_); ssaoNoiseTex_ = 0; }
+    destroySSRFBO();
+    if (ssrProgram_) { glDeleteProgram(ssrProgram_); ssrProgram_ = 0; }
     destroyDoFFBOs();
     if (dofProgram_) { glDeleteProgram(dofProgram_); dofProgram_ = 0; }
     destroyFXAAFBO();
@@ -299,6 +301,9 @@ void SceneRenderer::uploadMeshGlobals(const MeshDrawLocs& L) {
     if (L.windStrength >= 0) glUniform1f(L.windStrength, windStrength_);
     if (L.windTime     >= 0) glUniform1f(L.windTime, windTime_);
     if (L.windFreq     >= 0) glUniform1f(L.windFreq, windFreq_);
+    // SSR mask phase: opaque draws write the reflectance mask into alpha
+    // (see render3D — cleared before any pass that blends against alpha).
+    if (L.ssrMask      >= 0) glUniform1i(L.ssrMask, ssrMaskActive_ ? 1 : 0);
 }
 
 // Conservative world-space bounds per cullable node type. The contract is
@@ -467,6 +472,17 @@ void SceneRenderer::render3D() {
             glDepthFunc(GL_LESS);
 
             hasMeshContent_ = true;
+
+            // SSR mask phase: while set, every opaque mesh/instanced draw
+            // writes the SSR reflectance mask into the HDR alpha channel
+            // instead of coverage (uSSRMask, uploaded with the per-program
+            // frame globals). runSSRPass() below consumes the mask and
+            // restores alpha to coverage; the flag is cleared there so the
+            // translucent/overlay binds upload uSSRMask = 0 again. Never
+            // enabled after a pipeline init failure — the mask must not be
+            // written if nothing will restore coverage.
+            ssrMaskActive_ = ssrEnabled_ && ssrIntensity_ > 0.0f &&
+                             !ssrPipelineFailed_;
 
             // Skybox first — paints the IBL cubemap into the cleared FBO so
             // subsequent geometry naturally composits over it. No-op when no
@@ -688,6 +704,8 @@ void SceneRenderer::render3D() {
                         glUniform1f(L.fogStartDist, fogStartDist_);
                         glUniform1f(L.fogCamY, graph_.cameraEye_.y);
                         glUniform3f(L.ambient, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
+                        if (L.ssrMask >= 0)
+                            glUniform1i(L.ssrMask, ssrMaskActive_ ? 1 : 0);
                         uploadLights(activeLights, locs);
                     };
                     glUseProgram(meshInstancedProgram_);
@@ -794,6 +812,20 @@ void SceneRenderer::render3D() {
                 renderDecalPass(activeLights);
             }
 
+            // --- SSR pass --------------------------------------------------
+            // Screen-space reflections on the opaque + decal result. Runs
+            // here — after the depth resolve and decals, BEFORE any blended
+            // pass — because (a) only opaque draws wrote the reflectance
+            // mask, so the alpha channel is still coherent, and (b) the pass
+            // restores alpha from mask back to coverage, which must happen
+            // before translucents/splats/particles/billboards blend against
+            // dest alpha. Reflections land under all of those, matching the
+            // decal layering. Mandatory whenever the mask phase ran.
+            if (ssrMaskActive_) {
+                runSSRPass();
+                ssrMaskActive_ = false;
+            }
+
             // --- Translucent mesh pass -------------------------------------
             // Meshes / instanced nodes with uniform alpha < 1, deferred from
             // the opaque walks above and drawn back-to-front by view depth so
@@ -849,6 +881,9 @@ void SceneRenderer::render3D() {
                     glUniform1f(d.fogCamY, graph_.cameraEye_.y);
                     glUniform3f(d.ambient, ambientColor_[0], ambientColor_[1],
                                 ambientColor_[2]);
+                    // Translucent pass runs after the SSR mask phase ended.
+                    if (d.ssrMask >= 0)
+                        glUniform1i(d.ssrMask, ssrMaskActive_ ? 1 : 0);
                     uploadLights(activeLights, locs);
                 };
 
@@ -1030,6 +1065,11 @@ void SceneRenderer::render3D() {
                 glUniform3f(meshDraw_.fogColor, 0.0f, 0.0f, 0.0f);
                 glUniform1f(meshDraw_.fogDensity, 0.0f);
                 glUniform3f(meshDraw_.ambient, 0.0f, 0.0f, 0.0f);
+                // The overlay blends with src alpha — make sure the program
+                // isn't still in the SSR mask phase from the opaque pass
+                // (no translucent draw may have rebound it in between).
+                if (meshDraw_.ssrMask >= 0)
+                    glUniform1i(meshDraw_.ssrMask, 0);
                 // uUnlit is set per-mesh by renderMeshNode; still need light
                 // uniforms uploaded (shader accesses count even if unused).
                 uploadLights(activeLights, meshLocs_);
@@ -1049,6 +1089,8 @@ void SceneRenderer::render3D() {
                         glUniform3f(meshSkinnedDraw_.fogColor, 0.0f, 0.0f, 0.0f);
                         glUniform1f(meshSkinnedDraw_.fogDensity, 0.0f);
                         glUniform3f(meshSkinnedDraw_.ambient, 0.0f, 0.0f, 0.0f);
+                        if (meshSkinnedDraw_.ssrMask >= 0)
+                            glUniform1i(meshSkinnedDraw_.ssrMask, 0);
                         uploadLights(activeLights, meshSkinnedLocs_);
                         for (MeshNode* mn : unlitSkinnedMeshes)
                             renderMeshNode(mn, meshSkinnedDraw_);

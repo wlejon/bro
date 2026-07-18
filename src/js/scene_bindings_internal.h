@@ -301,6 +301,7 @@ JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
 JSValue js_sg_setTiltShift(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setBloom(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setSSAO(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_sg_setSSR(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setDepthOfField(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setColorLUT(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setFXAA(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);

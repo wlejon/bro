@@ -675,6 +675,29 @@ JSValue js_sg_setSSAO(JSContext* ctx, JSValueConst this_val, int argc, JSValueCo
     return JS_UNDEFINED;
 }
 
+// setSSR({enabled, maxDistance, steps, thickness, intensity, edgeFade}) —
+// screen-space reflections marched from the opaque depth buffer, composited
+// over the IBL specular before the blended passes.
+JSValue js_sg_setSSR(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
+
+    JSValueConst opts = argv[0];
+    bool enabled = false;
+    JSValue ev = JS_GetPropertyStr(ctx, opts, "enabled");
+    if (!JS_IsUndefined(ev)) enabled = JS_ToBool(ctx, ev);
+    JS_FreeValue(ctx, ev);
+
+    double maxDistance = qjsbind::get_prop_number(ctx, opts, "maxDistance", 30.0);
+    double steps       = qjsbind::get_prop_number(ctx, opts, "steps",       48.0);
+    double thickness   = qjsbind::get_prop_number(ctx, opts, "thickness",   0.3);
+    double intensity   = qjsbind::get_prop_number(ctx, opts, "intensity",   1.0);
+    double edgeFade    = qjsbind::get_prop_number(ctx, opts, "edgeFade",    0.1);
+    g->setSSR(enabled, (float)maxDistance, (int)steps, (float)thickness,
+              (float)intensity, (float)edgeFade);
+    return JS_UNDEFINED;
+}
+
 // setDepthOfField({enabled, focusDistance, focusRange, maxBlur}) —
 // depth-based DoF on the HDR image before bloom + tonemap.
 JSValue js_sg_setDepthOfField(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
