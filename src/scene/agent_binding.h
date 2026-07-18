@@ -150,6 +150,13 @@ public:
     /// false at a clamped route end.
     bool navPartial() const { return navPartial_; }
 
+    /// True while the agent is traversing an off-mesh link segment of the
+    /// active route (takeoff waypoint passed, landing waypoint not yet
+    /// reached). The agent moves straight along the link; apps watch this to
+    /// play jump/climb animations. Repaths are deferred while it reads true —
+    /// a mid-link replan would try to snap the agent's mid-air position.
+    bool navOnLink() const;
+
     /// Current in-flight action (read-only; callers may need to peek for UI).
     const brogameagent::Action& currentAction() const { return current_; }
 
@@ -193,6 +200,7 @@ private:
     void stepNavigation_(float dt);
     std::shared_ptr<const brogameagent::NavMesh> navMesh_;
     std::vector<bromath::Vec3> navPath_;
+    std::vector<uint8_t> navPathFlags_;  // NavMeshPath flags, parallel to navPath_
     int   navWaypoint_ = 0;
     bool  navActive_ = false;
     bromath::Vec3 navTarget_{};

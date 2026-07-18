@@ -355,6 +355,115 @@ function runNavMeshTests() {
     }
 
     // =========================================================================
+    // Off-mesh links — bake, path markers, one-way, save/load, agent traversal
+    // =========================================================================
+    {
+        // Two floors with a 2 m gap the agent cannot walk across.
+        const verts = [], idx = [];
+        pushQuad(verts, idx, -10, -4, -1, 4, 0);   // west floor
+        pushQuad(verts, idx, 1, -4, 10, 4, 0);     // east floor
+        const bake = (links) => G.bakeNavMesh({
+            positions: new Float32Array(verts), indices: new Uint32Array(idx),
+            agentRadius: 0.5, offMeshLinks: links,
+        });
+
+        // Without a link the gap severs the path.
+        const plain = bake([]);
+        const sev = plain.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 0, z: 0 });
+        assert(sev !== null && sev.partial === true, 'gap severs the plain mesh');
+        assert(Array.isArray(sev.links) && sev.links.length === 0,
+            'links array present and empty without links');
+
+        // Bidirectional link across the gap: both directions complete, with
+        // the takeoff marked in `links`.
+        const linked = bake([
+            { start: { x: -2, y: 0, z: 0 }, end: { x: 2, y: 0, z: 0 }, radius: 0.6 },
+        ]);
+        const fwd = linked.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 0, z: 0 });
+        assert(fwd !== null && fwd.partial === false, 'link bridges the gap');
+        assert(fwd.links.length === 1, 'one link takeoff marked, got ' + fwd.links.length);
+        const li = fwd.links[0];
+        assert(Math.hypot(fwd[li * 3] - (-2), fwd[li * 3 + 2] - 0) < 0.7,
+            'takeoff at the link start');
+        assert(li * 3 + 5 < fwd.length, 'takeoff is never the last point');
+        assert(Math.hypot(fwd[li * 3 + 3] - 2, fwd[li * 3 + 5] - 0) < 0.7,
+            'landing (next point) at the link end');
+        const rev = linked.findPath({ x: 8, y: 0, z: 0 }, { x: -8, y: 0, z: 0 });
+        assert(rev !== null && rev.partial === false && rev.links.length === 1,
+            'bidirectional link works in reverse');
+
+        // One-way link: forward completes, reverse clamps at the gap.
+        const oneWay = bake([
+            { start: { x: -2, y: 0, z: 0 }, end: { x: 2, y: 0, z: 0 }, radius: 0.6,
+              bidirectional: false },
+        ]);
+        assert(oneWay.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 0, z: 0 }).partial === false,
+            'one-way link traversable forward');
+        assert(oneWay.findPath({ x: 8, y: 0, z: 0 }, { x: -8, y: 0, z: 0 }).partial === true,
+            'one-way link not traversable backward');
+
+        // Links live in the blob: save/load keeps them.
+        const reloaded = G.loadNavMesh(linked.save());
+        const rp = reloaded.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 0, z: 0 });
+        assert(rp !== null && rp.partial === false && rp.links.length === 1,
+            'links survive save/load');
+
+        // dynamicObstacles + links refuses to bake (would drop links).
+        let threw = false;
+        try {
+            G.bakeNavMesh({
+                positions: new Float32Array(verts), indices: new Uint32Array(idx),
+                dynamicObstacles: true,
+                offMeshLinks: [{ start: { x: -2, y: 0, z: 0 }, end: { x: 2, y: 0, z: 0 } }],
+            });
+        } catch (e) {
+            threw = true;
+            assert(String(e.message).indexOf('offMeshLinks') >= 0,
+                'error names offMeshLinks');
+        }
+        assert(threw, 'dynamicObstacles + offMeshLinks bake throws');
+
+        // Malformed link entry throws.
+        threw = false;
+        try { bake([{ start: { x: 0, y: 0, z: 0 } }]); } catch (e) { threw = true; }
+        assert(threw, 'link without end throws');
+
+        // Agent traversal: the route crosses the link; navigationInfo().onLink
+        // reads true mid-jump and the agent lands on the east floor.
+        const canvasL = document.createElement('canvas');
+        canvasL.setAttribute('width', '64');
+        canvasL.setAttribute('height', '64');
+        document.body.appendChild(canvasL);
+        flush();
+        const sceneL = canvasL.getContext('scene');
+        const worldL = G.createWorld();
+        worldL.setAvoidance(true);
+        sceneL.attachAIWorld(worldL, { stepHz: 60 });
+        const aL = G.createAgent({ x: -8, z: 0, speed: 4, radius: 0.4, avoidance: true });
+        worldL.addAgent(aL);
+        const nL = sceneL.createMesh({ mesh: 'box' });
+        nL.attachAgent(worldL, aL, { navMesh: linked });
+        assert(nL.navigateTo({ x: 8, y: 0, z: 0 }) === true, 'linked route starts');
+        assert(nL.navigationInfo().onLink === false, 'not on the link at start');
+        let sawLink = false;
+        for (let t = 0; t < 300 && nL.navigationInfo().active; t++) {
+            advanceTime(50);
+            if (nL.navigationInfo().onLink) {
+                sawLink = true;
+                assert(aL.x > -3.0 && aL.x < 3.0,
+                    'onLink only around the gap, x=' + aL.x.toFixed(2));
+            }
+        }
+        assert(sawLink, 'agent traversed the link (onLink observed)');
+        assert(nL.navigationInfo().active === false, 'linked route completed');
+        assert(nL.navigationInfo().onLink === false, 'onLink false after arrival');
+        assert(Math.hypot(aL.x - 8, aL.z) < 1.0,
+            'agent crossed the gap, at (' + aL.x.toFixed(2) + ',' + aL.z.toFixed(2) + ')');
+        nL.detachAgent();
+        sceneL.detachAIWorld();
+    }
+
+    // =========================================================================
     // fromTerrain — height-sampled voxel terrain surface
     // =========================================================================
     {

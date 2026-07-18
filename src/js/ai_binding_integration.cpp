@@ -895,12 +895,13 @@ static JSValue js_node_stopNavigation(JSContext* ctx, JSValueConst this_val, int
     return JS_UNDEFINED;
 }
 
-// node.navigationInfo() → { active, partial } — the state of the binding's
-// navmesh route. `active`: a route is being followed. `partial`: the
-// active/most-recent route was clamped because the goal is unreachable (the
-// agent stops at the closest reachable point; agent.atTarget stays false
-// there since it measures against the true goal). All-false without an
-// agent/route.
+// node.navigationInfo() → { active, partial, onLink } — the state of the
+// binding's navmesh route. `active`: a route is being followed. `partial`:
+// the active/most-recent route was clamped because the goal is unreachable
+// (the agent stops at the closest reachable point; agent.atTarget stays
+// false there since it measures against the true goal). `onLink`: the agent
+// is currently traversing an off-mesh link segment — watch the transition
+// to play jump/climb animations. All-false without an agent/route.
 static JSValue js_node_navigationInfo(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* nw = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
     JSValue o = JS_NewObject(ctx);
@@ -908,6 +909,7 @@ static JSValue js_node_navigationInfo(JSContext* ctx, JSValueConst this_val, int
         (nw && nw->node() && nw->graph()) ? nw->graph()->agentBinding(nw->node()) : nullptr;
     JS_SetPropertyStr(ctx, o, "active", JS_NewBool(ctx, binding && binding->navigating()));
     JS_SetPropertyStr(ctx, o, "partial", JS_NewBool(ctx, binding && binding->navPartial()));
+    JS_SetPropertyStr(ctx, o, "onLink", JS_NewBool(ctx, binding && binding->navOnLink()));
     return o;
 }
 

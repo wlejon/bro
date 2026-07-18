@@ -736,6 +736,44 @@ static JSValue js_bakeNavMesh(JSContext* ctx, JSValueConst, int argc, JSValueCon
     cfg.tileSize     = (float)getDoubleProp(ctx, opts, "tileSize", cfg.tileSize);
     cfg.maxObstacles = (int)getDoubleProp(ctx, opts, "maxObstacles", cfg.maxObstacles);
 
+    // Off-mesh links (Godot NavigationLink analog): point-to-point traversal
+    // shortcuts baked into the mesh. Static bakes only — the library refuses
+    // dynamicObstacles + links.
+    {
+        JSValue lv = JS_GetPropertyStr(ctx, opts, "offMeshLinks");
+        if (!JS_IsUndefined(lv) && !JS_IsNull(lv)) {
+            if (!JS_IsArray(lv)) {
+                JS_FreeValue(ctx, lv);
+                return JS_ThrowTypeError(ctx, "bakeNavMesh: offMeshLinks must be an array");
+            }
+            JSValue lenV = JS_GetPropertyStr(ctx, lv, "length");
+            uint32_t n = 0; JS_ToUint32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
+            for (uint32_t i = 0; i < n; i++) {
+                JSValue el = JS_GetPropertyUint32(ctx, lv, i);
+                brogameagent::NavMeshOffMeshLink link;
+                JSValue sv = JS_IsObject(el) ? JS_GetPropertyStr(ctx, el, "start") : JS_UNDEFINED;
+                JSValue ev = JS_IsObject(el) ? JS_GetPropertyStr(ctx, el, "end") : JS_UNDEFINED;
+                const bool ok = JS_IsObject(el) &&
+                                parseVec3Val(ctx, sv, link.start) &&
+                                parseVec3Val(ctx, ev, link.end);
+                JS_FreeValue(ctx, sv);
+                JS_FreeValue(ctx, ev);
+                if (!ok) {
+                    JS_FreeValue(ctx, el);
+                    JS_FreeValue(ctx, lv);
+                    return JS_ThrowTypeError(ctx,
+                        "bakeNavMesh: offMeshLinks[%u] needs {start, end} points", i);
+                }
+                link.radius = (float)getDoubleProp(ctx, el, "radius", link.radius);
+                link.bidirectional = getBoolProp(ctx, el, "bidirectional", true);
+                link.userId = (uint32_t)getDoubleProp(ctx, el, "userId", 0);
+                JS_FreeValue(ctx, el);
+                cfg.offMeshLinks.push_back(link);
+            }
+        }
+        JS_FreeValue(ctx, lv);
+    }
+
     auto mesh = std::make_shared<brogameagent::NavMesh>();
     if (!mesh->bake(xyz.data(), xyz.size() / 3, indices.data(), indices.size(), cfg)) {
         return JS_ThrowInternalError(ctx, "bakeNavMesh: %s", mesh->lastError().c_str());
@@ -2111,9 +2149,11 @@ void AIBindings::install(JSContext* ctx) {
             .get("valid",
                 [](NavMeshData* d) -> bool { return d->mesh && d->mesh->valid(); })
             // findPath(start, end, extentsOrOpts?) → Float32Array of xyz
-            // triples with a `partial` bool property, or null when either
-            // endpoint fails to snap (or, with requireFullPath, when the goal
-            // is unreachable). An unreachable goal otherwise clamps the path
+            // triples with a `partial` bool property and a `links` array of
+            // point indices that are off-mesh-link takeoffs (segment index i
+            // → i+1 traverses the link), or null when either endpoint fails
+            // to snap (or, with requireFullPath, when the goal is
+            // unreachable). An unreachable goal otherwise clamps the path
             // to the closest reachable point and sets partial = true.
             // The third arg is either extents ({x,y,z}/[x,y,z]) or an options
             // object {extents?, requireFullPath?}.
@@ -2146,6 +2186,14 @@ void AIBindings::install(JSContext* ctx) {
                     JSValue arr = make_float32_array(ctx, &res.points[0].x,
                                                      res.points.size() * 3);
                     JS_SetPropertyStr(ctx, arr, "partial", JS_NewBool(ctx, res.partial));
+                    JSValue links = JS_NewArray(ctx);
+                    uint32_t nlinks = 0;
+                    for (size_t i = 0; i < res.points.size(); i++) {
+                        if (res.isLinkStart(i))
+                            JS_SetPropertyUint32(ctx, links, nlinks++,
+                                                 JS_NewUint32(ctx, (uint32_t)i));
+                    }
+                    JS_SetPropertyStr(ctx, arr, "links", links);
                     return arr;
                 }, 3)
             // nearestPoint(p, extents?) → {x,y,z} snapped onto the mesh, or

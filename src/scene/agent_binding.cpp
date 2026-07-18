@@ -112,6 +112,7 @@ bool AgentBinding::navigateTo(bromath::Vec3 target, bromath::Vec3 extents,
     if (path.points.empty()) return false;
 
     navPath_ = std::move(path.points);
+    navPathFlags_ = std::move(path.flags);
     navPartial_ = path.partial;
     navWaypoint_ = 0;
     navActive_ = true;
@@ -134,15 +135,36 @@ void AgentBinding::stopNavigation() {
     if (navActive_ && agent_) agent_->clearTarget();
     navActive_ = false;
     navPath_.clear();
+    navPathFlags_.clear();
     navWaypoint_ = 0;
     repathAccum_ = 0.0f;
     navPartial_ = false;
+}
+
+bool AgentBinding::navOnLink() const {
+#ifdef BROGAMEAGENT_HAS_NAVMESH
+    // Traversing the segment INTO waypoint navWaypoint_: its takeoff is the
+    // previous waypoint — link segments are flagged on the takeoff point.
+    if (!navActive_ || navWaypoint_ <= 0) return false;
+    const size_t prev = static_cast<size_t>(navWaypoint_ - 1);
+    return prev < navPathFlags_.size() &&
+           (navPathFlags_[prev] & brogameagent::NavMeshPath::kLinkStart) != 0;
+#else
+    return false;
+#endif
 }
 
 void AgentBinding::stepNavigation_(float dt) {
 #ifdef BROGAMEAGENT_HAS_NAVMESH
     if (!navActive_ || !agent_) return;
     if (!agent_->unit().alive()) { stopNavigation(); return; }
+
+    // Repaths are deferred while the agent traverses an off-mesh link: its
+    // position is between two surfaces, so a replan would snap the mid-link
+    // point to whichever level happens to be nearest (or fail outright).
+    // The deferral is at most the link segment's travel time; generation()
+    // stays unequal so the surface-change repath fires right after landing.
+    const bool onLink = navOnLink();
 
     // Surface changed under the active path (a dynamic-obstacle batch was
     // applied, or the mesh was re-baked): the stored waypoints may now cut
@@ -151,12 +173,13 @@ void AgentBinding::stepNavigation_(float dt) {
     // (partial); with requireFullPath — or when the start itself no longer
     // snaps — abandon the route: halting honestly beats walking a stale path
     // through the obstacle.
-    if (navMesh_ && navMesh_->generation() != navGeneration_) {
+    if (navMesh_ && !onLink && navMesh_->generation() != navGeneration_) {
         navGeneration_ = navMesh_->generation();
         bromath::Vec3 start{agent_->x(), navY_, agent_->z()};
         auto p = navMesh_->findPathEx(start, navTarget_, navExtents_, navRequireFull_);
         if (p.points.empty()) { stopNavigation(); return; }
         navPath_ = std::move(p.points);
+        navPathFlags_ = std::move(p.flags);
         navPartial_ = p.partial;
         navWaypoint_ = 0;
         repathAccum_ = 0.0f;
@@ -164,7 +187,7 @@ void AgentBinding::stepNavigation_(float dt) {
 
     // Optional periodic re-plan toward the same goal (moving obstacles are
     // ORCA's job; this covers a moved goal snapshot or a drifted agent).
-    if (repathInterval_ > 0.0f && navMesh_) {
+    if (repathInterval_ > 0.0f && navMesh_ && !onLink) {
         repathAccum_ += dt;
         if (repathAccum_ >= repathInterval_) {
             repathAccum_ = 0.0f;
@@ -172,6 +195,7 @@ void AgentBinding::stepNavigation_(float dt) {
             auto p = navMesh_->findPathEx(start, navTarget_, navExtents_, navRequireFull_);
             if (!p.points.empty()) {
                 navPath_ = std::move(p.points);
+                navPathFlags_ = std::move(p.flags);
                 navPartial_ = p.partial;
                 navWaypoint_ = 0;
             }

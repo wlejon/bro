@@ -184,6 +184,13 @@ nav.addObstacle({ x: 5, z: 5, hw: 1, hd: 1 }, 0.4);
  * @param {number} [opts.detailSampleDist=6]  - detail-mesh sampling (cells)
  * @param {number} [opts.detailSampleMaxError=1] - detail-mesh max deviation
  *
+ * Off-mesh links (Godot NavigationLink analog — see "Off-mesh links"):
+ * @param {Array<Object>} [opts.offMeshLinks] - point-to-point traversal
+ *     shortcuts baked into the mesh: jump gaps, drop ledges, ladders,
+ *     teleporters. Each: {start: {x,y,z}, end: {x,y,z}, radius?,
+ *     bidirectional?, userId?}. Static bakes only — combining with
+ *     dynamicObstacles fails the bake (tile rebuilds would drop the links).
+ *
  * Dynamic obstacles (tiled bake — see the "Dynamic obstacles" section):
  * @param {boolean} [opts.dynamicObstacles=false] - bake TILED via Detour's
  *     dtTileCache so obstacles can be added/removed at runtime. Trade-offs vs
@@ -237,6 +244,11 @@ const navMesh = bro.ai.game.bakeNavMesh({
 const wp = navMesh.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 3, z: 0 });
 if (wp) for (let i = 0; i < wp.length; i += 3) walkTo(wp[i], wp[i + 1], wp[i + 2]);
 if (wp && wp.partial) console.log('goal unreachable — walking to the closest point');
+
+// Off-mesh link markers: `wp.links` is an array of POINT indices that are
+// link takeoffs — the segment from point i to point i+1 traverses the link
+// (jump/drop/teleport), not the walkable surface. Empty when the path uses
+// no links. wp.links = [2] means the segment wp[6..8] → wp[9..11] is a jump.
 
 /**
  * Snap an arbitrary point onto the navmesh.
@@ -375,6 +387,47 @@ dyn.obstaclesPending;
  */
 dyn.generation;
 
+// --- Off-mesh links (jump gaps, drop ledges, ladders, teleporters) ---
+//
+// The Godot NavigationLink analog: a point-to-point shortcut baked into the
+// mesh at bakeNavMesh time. Path queries traverse links automatically —
+// Detour routes through them like any polygon — and the result marks each
+// takeoff point (findPath's `links` indices; navigationInfo().onLink for a
+// routed agent) so apps can play a jump/climb animation while the agent
+// moves straight along the link segment.
+//
+// Semantics:
+//   - Each endpoint must land within `radius` of the (eroded) walkable
+//     surface; a link whose endpoint misses is silently dropped, exactly
+//     like a Godot link placed off the mesh.
+//   - `bidirectional: false` makes the link one-way (start → end) — think
+//     drop-down ledges.
+//   - Links live in the baked Detour data, so save()/loadNavMesh() keeps
+//     them.
+//   - Limitation (honest): links are NOT available on dynamicObstacles
+//     (tiled) bakes — dtTileCache rebuilds tiles at runtime and would drop
+//     bake-time connections, so bakeNavMesh throws instead of losing them
+//     silently. Bake a static mesh for linked levels.
+//   - Agents (node.navigateTo) traverse a link by moving straight from
+//     takeoff to landing (Y interpolates linearly along the segment when no
+//     groundFollow probe is set; with groundFollow the node's Y keeps
+//     tracking the probed ground — drive the jump arc yourself off onLink
+//     if you want airtime). Repaths are deferred while onLink so a mid-air
+//     position is never re-snapped.
+
+const linked = bro.ai.game.bakeNavMesh({
+    positions: verts, indices: idx,
+    offMeshLinks: [
+        { start: { x: -2, y: 0, z: 0 }, end: { x: 2, y: 0, z: 0 }, radius: 0.6 },
+        { start: { x: 5, y: 3, z: 0 }, end: { x: 5, y: 0, z: 2 }, bidirectional: false },
+    ],
+});
+const lp = linked.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 0, z: 0 });
+if (lp) for (const i of lp.links) {
+    console.log('jump from', lp[i * 3], lp[i * 3 + 1], lp[i * 3 + 2],
+                'to', lp[i * 3 + 3], lp[i * 3 + 4], lp[i * 3 + 5]);
+}
+
 // --- Agent routing over a navmesh ---
 //
 // node.navigateTo() drives an attached agent along NavMesh::findPath
@@ -438,11 +491,13 @@ node.stopNavigation();
 
 /**
  * State of the binding's navmesh route.
- * @returns {{active: boolean, partial: boolean}} active = a route is being
- *     followed; partial = the active/most-recent route was clamped to the
- *     closest reachable point (goal unreachable). partial persists after
- *     arrival until the next navigateTo()/stopNavigation() so late polls
- *     can still see how the route ended.
+ * @returns {{active: boolean, partial: boolean, onLink: boolean}}
+ *     active = a route is being followed; partial = the active/most-recent
+ *     route was clamped to the closest reachable point (goal unreachable) —
+ *     persists after arrival until the next navigateTo()/stopNavigation()
+ *     so late polls can still see how the route ended; onLink = the agent
+ *     is currently traversing an off-mesh link segment (watch the
+ *     transition to play jump/climb animations).
  */
 node.navigationInfo();
 
