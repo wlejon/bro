@@ -137,12 +137,22 @@ endif()
 # <video> decode needs libvpx (vcpkg), so it lives in the service tier.
 set(_d_audio ON)
 
+# Text shaping (HarfBuzz + Skia's UAX#9 bidi subset) is likewise ON in *every*
+# profile, minimal included. It is deliberately not a vcpkg dependency: the
+# sources are compiled straight out of the Skia source bundle we already ship,
+# so `minimal` still configures and builds with no package manager at all. The
+# point of that is one text path, not two — a build where "fi" is two glyphs and
+# Arabic doesn't join is a different renderer, not a smaller one. The flag exists
+# as an escape hatch for a Skia source tree that predates the shaping sources.
+set(_d_shaping ON)
+
 # Tier 1 — renderer feature groups (all brotensor-free, all vcpkg-free).
 option(BRO_WITH_3D       "3D scene graph (bromesh, terrain, tile, gizmo)"     ${_d_render})
 option(BRO_WITH_PHYSICS  "Jolt rigid-body physics"                           ${_d_render})
 option(BRO_WITH_AUDIO    "broaudio engine + audio inference"                 ${_d_audio})
 option(BRO_WITH_GAMEAI   "brogameagent core (navmesh/pathfinding/MCTS)"      ${_d_render})
 option(BRO_WITH_FLORA    "broflora ecosystem simulation"                     ${_d_render})
+option(BRO_WITH_TEXT_SHAPING "HarfBuzz text shaping + UAX#9 bidi (Skia modules)" ${_d_shaping})
 # Services (each pulls a vcpkg dependency).
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
 option(BRO_WITH_VIDEO    "Video + GIF encode/decode (libvpx/webm / vcpkg)"   ${_d_svc})

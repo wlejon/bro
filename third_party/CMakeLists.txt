@@ -296,5 +296,6 @@ endif()
 # --- Skia (pre-built, optional) ---
 include(skia/skia.cmake)
 
-# --- Skia SVG module (compiled from source against pre-built Skia) ---
-include(skia/skia_svg.cmake)
+# --- Skia modules: svg, skshaper (+ HarfBuzz/skunicode), skresources ---
+#     (compiled from source against pre-built Skia)
+include(skia/skia_modules.cmake)
