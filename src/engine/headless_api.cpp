@@ -206,6 +206,11 @@ void Engine::flush() {
                 js::deliverWebAnimationFinishEvents(jsRuntime_->getContext(),
                                                     std::move(fin));
         }
+
+        // matchMedia change events — resolveStyles above consumed any pending
+        // media-context change for the app document; iframe/system-panel
+        // realms deliver once their own restyle lands (per-realm gate).
+        deliverMediaQueryChangesAllRealms();
     }
 
     // Sync each scene graph's canvas dimensions from the element's layout

@@ -281,6 +281,20 @@ public:
     // retained sheet and marks the document dirty for restyle.
     void setMediaColorScheme(const std::string& scheme);
 
+    // The current media evaluation context (viewport + color scheme). Default
+    // constructed (0x0, light) until setMediaViewport/setMediaColorScheme run.
+    const htmlayout::css::MediaContext& mediaContext() const { return mediaContext_; }
+
+    // Bumped whenever the media context actually changes (resize, scheme
+    // flip). window.matchMedia re-evaluates its live MediaQueryLists when this
+    // moves — a cheap "did anything media-relevant happen" probe per realm.
+    uint64_t mediaGeneration() const { return mediaGeneration_; }
+
+    // True between a media-context change and the resolveStyles() that
+    // consumes it. matchMedia change delivery waits for this to clear so JS
+    // observers always see styles consistent with the new context.
+    bool mediaRestylePending() const { return mediaRebuilt_; }
+
     // ---------- Selection + live Range registry --------------------------
     // The Document owns a single Selection (window.getSelection()) and keeps
     // a set of live Range objects so it can update their endpoints when the
@@ -423,6 +437,8 @@ private:
     // Set by rebuildCascadeForMediaChange; consumed by resolveStyles(), which
     // treats it like a newly-added sheet (full selector-level re-resolve).
     bool mediaRebuilt_ = false;
+    // Bumped by setMediaViewport/setMediaColorScheme on an actual change.
+    uint64_t mediaGeneration_ = 0;
 
     // One-shot restyle+relayout after layout when @container rules exist
     // (container sizes are only known post-layout). See performLayout().

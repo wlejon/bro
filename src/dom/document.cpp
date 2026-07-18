@@ -131,6 +131,7 @@ void Document::setMediaViewport(float w, float h) {
     hasMediaContext_ = true;
     mediaContext_.viewportWidth = w;
     mediaContext_.viewportHeight = h;
+    ++mediaGeneration_;
     rebuildCascadeForMediaChange();
 }
 
@@ -138,6 +139,7 @@ void Document::setMediaColorScheme(const std::string& scheme) {
     if (hasMediaContext_ && mediaContext_.colorScheme == scheme) return;
     hasMediaContext_ = true;
     mediaContext_.colorScheme = scheme;
+    ++mediaGeneration_;
     rebuildCascadeForMediaChange();
 }
 

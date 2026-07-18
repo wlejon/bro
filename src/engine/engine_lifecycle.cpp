@@ -8,6 +8,7 @@
 #include "js/runtime.h"
 #include "js/timers.h"
 #include "js/dom_bindings.h"
+#include "js/matchmedia_bindings.h"
 #include "js/audio_bindings.h"
 #include "js/storage_bindings.h"
 #include "js/webgl2_bindings.h"
@@ -494,6 +495,12 @@ void Engine::handleResize(int w, int h) {
         JS_FreeValue(ctx, global);
         jsRuntime_->executePendingJobs();
     }
+
+    // The app document was restyled synchronously above, so matchMedia change
+    // events can fire now (same task as the resize, like browsers). Realms
+    // whose media-triggered restyle hasn't landed yet (iframes / system panels
+    // on a scheme flip) defer to the frame/flush drain via the per-realm gate.
+    deliverMediaQueryChangesAllRealms();
 }
 
 std::string Engine::effectiveColorScheme() const {
@@ -514,6 +521,16 @@ void Engine::applyColorScheme() {
     }
     for (auto& doc : systemDocs_) {
         if (doc.document) doc.document->setMediaColorScheme(scheme);
+    }
+}
+
+void Engine::deliverMediaQueryChangesAllRealms() {
+    if (jsRuntime_) js::deliverMediaQueryChanges(jsRuntime_->getContext());
+    for (auto& d : iframeDocs_) {
+        if (d && d->jsCtx) js::deliverMediaQueryChanges(d->jsCtx);
+    }
+    for (auto& doc : systemDocs_) {
+        if (doc.jsCtx) js::deliverMediaQueryChanges(doc.jsCtx);
     }
 }
 

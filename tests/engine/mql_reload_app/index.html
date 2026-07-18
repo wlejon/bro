@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head><title>boot</title></head>
+<body>
+<div id="stage">boot</div>
+<script>
+// Two-run app for the top-level location.reload() + matchMedia test (driven
+// by tests/engine/test_match_media_teardown.js via a child bro-headless).
+// Same env-stage pattern as reload_app: realms don't survive the reload, so
+// the run counter lives in process.env.
+//
+// Run 1 pins listener-bearing MediaQueryLists (no reachable JS references —
+// only the engine's strong pins keep them alive) and reloads. The realm swap
+// runs DomBindings::cleanup on the old context; a leaked pin would trip the
+// QuickJS leak asserts (Debug) or crash delivery over the dead realm.
+// Run 2 pins fresh ones too — engine shutdown after verify.js must release
+// those as well.
+(function () {
+    matchMedia('(min-width: 10px)').addEventListener('change', function () {});
+    matchMedia('(prefers-color-scheme: dark)').addListener(function () {});
+    var m = matchMedia('(max-width: 99999px)');
+    m.onchange = function () {};
+    m = null;
+
+    if (!process.env.BRO_MQL_RELOAD_STAGE) {
+        process.env.BRO_MQL_RELOAD_STAGE = '1';
+        location.reload();
+        document.getElementById('stage').textContent = 'first run';
+    } else {
+        document.getElementById('stage').textContent = 'second run';
+    }
+})();
+</script>
+</body>
+</html>

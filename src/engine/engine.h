@@ -182,6 +182,15 @@ public:
     /// Called at init, on OS theme change, and on appearance settings change.
     void applyColorScheme();
 
+    /// Re-evaluate window.matchMedia MediaQueryLists in every live realm
+    /// (app, iframes, system panels) and fire 'change' where matches flipped.
+    /// Cheap no-op per realm unless its document's media context moved; each
+    /// realm additionally defers until its media-triggered restyle has landed,
+    /// so listeners observe styles consistent with the new context. Called at
+    /// the post-restyle drain points (windowed frame, headless flush) and at
+    /// the end of handleResize (which restyles synchronously).
+    void deliverMediaQueryChangesAllRealms();
+
     /// Input events forwarded from the event loop.
     void handleMouseDown(float x, float y, int button);
     void handleMouseUp(float x, float y, int button);

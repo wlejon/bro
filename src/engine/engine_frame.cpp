@@ -756,6 +756,12 @@ void Engine::run() {
                             jsRuntime_->getContext(), std::move(fin));
                 }
 
+                // matchMedia change events — the layout pass above resolved
+                // styles against any new media context, so listeners observe
+                // a consistent world. Per-realm generation gate makes this a
+                // cheap no-op when nothing media-relevant happened.
+                deliverMediaQueryChangesAllRealms();
+
                 // Flush microtasks from event handlers (may have queued DOM mutations).
                 jsRuntime_->executePendingJobs();
 

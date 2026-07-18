@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head><style> body { margin: 0; } </style></head>
+<body>
+<script>
+// Sub-document for the matchMedia teardown test. Proves matchMedia is
+// per-realm — media queries here evaluate against the IFRAME's content box
+// (host creates it 200x120), not the host viewport — then plants
+// listener-bearing MediaQueryLists with no JS references. Those are exactly
+// the wrappers the engine strong-pins for change delivery; the host tears
+// this realm down (iframe removal / reload) and the pins must be released
+// cleanly (no crash windowed, no QuickJS leak assert under Debug).
+var ok = false;
+try {
+  ok = typeof window.matchMedia === 'function' &&
+       matchMedia('(width: 200px)').matches === true &&     // iframe box, not host
+       matchMedia('(min-width: 150px)').matches === true &&
+       matchMedia('(min-width: 500px)').matches === false && // host is wider — realm scoped
+       matchMedia('(max-height: 120px)').matches === true;
+} catch (e) { ok = false; }
+// Host reads the verdict through the composited pixels.
+document.body.style.backgroundColor = ok ? 'rgb(0, 200, 0)' : 'rgb(200, 0, 0)';
+
+// Teardown fodder: pinned (listening) lists with no reachable JS reference.
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {});
+matchMedia('(max-width: 999px)').addListener(function () {});
+var withHandler = matchMedia('(min-width: 10px)');
+withHandler.onchange = function () {};
+</script>
+</body>
+</html>
