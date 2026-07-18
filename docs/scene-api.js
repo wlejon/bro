@@ -2059,6 +2059,15 @@ class SceneNode {
   set emissive(value) {}
 
   /**
+   * Emissive tint as [r,g,b] linear (MeshNode only). The shader emits
+   * baseColor + emissiveColor*emissive, so retinting a glowing node means
+   * setting this as well as `color` — changing `color` alone leaves the glow
+   * its original hue. Assign a CSS string or an [r,g,b] array.
+   */
+  get emissiveColor() {}
+  set emissiveColor(rgbOrCssString) {}
+
+  /**
    * Node colour. On a MeshNode (skinned included) this is the material albedo
    * — the same channel createMesh's `color` option writes — and reads back as
    * [r,g,b,a]. On a LightNode it is the light's [r,g,b] linear colour. Assign

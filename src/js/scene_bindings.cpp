@@ -969,6 +969,40 @@ void SceneBindings::install(JSContext* ctx) {
                 if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh)
                     static_cast<scene::MeshNode*>(w->node())->setEmissive((float)val);
             })
+        // The glow's tint, as [r,g,b]. createMesh has always taken this as an
+        // option; without the property an emissive node could not be retinted
+        // at runtime at all, because the shader emits
+        // baseColor + emissiveColor*emissive — so changing `color` alone
+        // leaves the glow its original hue.
+        .prop("emissiveColor",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Mesh)
+                    return JS_UNDEFINED;
+                const float* c = static_cast<scene::MeshNode*>(w->node())->emissiveColor();
+                JSValue arr = JS_NewArray(ctx);
+                for (uint32_t i = 0; i < 3; ++i)
+                    JS_SetPropertyUint32(ctx, arr, i, JS_NewFloat64(ctx, c[i]));
+                return arr;
+            },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Mesh)
+                    return;
+                auto* M = static_cast<scene::MeshNode*>(w->node());
+                if (JS_IsString(val)) {
+                    uint8_t r, g, b, a;
+                    if (parseColor(jsStr(ctx, val), r, g, b, a))
+                        M->setEmissiveColor(r/255.0f, g/255.0f, b/255.0f);
+                } else if (JS_IsArray(val)) {
+                    const float* cur = M->emissiveColor();
+                    double c3[3] = {cur[0], cur[1], cur[2]};
+                    for (uint32_t i = 0; i < 3; ++i) {
+                        JSValue e = JS_GetPropertyUint32(ctx, val, i);
+                        if (!JS_IsUndefined(e)) JS_ToFloat64(ctx, &c3[i], e);
+                        JS_FreeValue(ctx, e);
+                    }
+                    M->setEmissiveColor((float)c3[0], (float)c3[1], (float)c3[2]);
+                }
+            })
 
         // LightNode properties — no-op on non-light nodes.
         .get("kind", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
