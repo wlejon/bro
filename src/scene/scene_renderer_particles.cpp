@@ -128,10 +128,14 @@ void SceneRenderer::renderParticles3DNodes() {
 
     bool depthReady = false;
     if (wantSoft && meshFBO_) {
+        // Capture the draw FBO BEFORE ensureSceneDepthCopy: the lazy FBO
+        // creation path leaves the binding at 0, so reading it afterwards
+        // would restore 0 and misroute the whole particle pass to the
+        // default framebuffer on the first soft-particle frame.
+        GLint prevFBO = 0;
+        glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevFBO);
         ensureSceneDepthCopy();
         if (sceneDepthCopyFBO_) {
-            GLint prevFBO = 0;
-            glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevFBO);
             glBindFramebuffer(GL_READ_FRAMEBUFFER, meshFBO_);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, sceneDepthCopyFBO_);
             glBlitFramebuffer(0, 0, meshFBOWidth_, meshFBOHeight_,
