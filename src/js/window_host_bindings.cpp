@@ -133,14 +133,13 @@ void registerHandleClass(JSContext* ctx) {
             }
         })
         .method("getSize", [](WindowHandle* h, JSContext* c) -> JSValue {
-            if (auto* host = hostFor(h)) {
-                if (host->window) {
-                    int w = 0, ht = 0;
-                    host->window->getSize(w, ht);
-                    return sizeToJS(c, w, ht);
-                }
-                return sizeToJS(c, host->opts.width, host->opts.height);
-            }
+            // Engine-tracked size, not SDL's: SDL applies sizes asynchronously
+            // on X11 and only commits them on the ConfigureNotify, which an
+            // unmapped (hidden/headless) window never receives — so a
+            // setSize/getSize pair would read back the creation size forever.
+            // host->width/height is seeded at create, written by setSize, and
+            // updated on WM-initiated resizes via Engine::handleHostResized.
+            if (auto* host = hostFor(h)) return sizeToJS(c, host->width, host->height);
             return sizeToJS(c, 0, 0);
         })
         .method("setSize", [](WindowHandle* h, int w, int ht) {
