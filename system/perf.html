@@ -133,6 +133,12 @@ td.value {
         <span id="ms-draw" class="bar-ms">0ms</span>
     </div>
 
+    <div id="windows-section" style="display: none;">
+        <div class="divider"></div>
+        <div class="chart-title">Secondary windows</div>
+        <table id="windows-table"></table>
+    </div>
+
     <div id="scene-section" style="display: none;">
         <div class="divider"></div>
         <div class="chart-title">Scene (drawn / culled)</div>
@@ -190,6 +196,25 @@ td.value {
             var px = Math.max(1, Math.round(pct * 1.8));
             if (bar) bar.style.setProperty('width', px + 'px');
             if (label) label.textContent = ms.toFixed(2) + 'ms';
+        }
+
+        // Secondary windows (bro.window.open). One row per live host: each is
+        // its own document recorded, replayed and composited every frame. The
+        // section stays hidden for the single-window case.
+        var winSection = document.getElementById('windows-section');
+        var winTable = document.getElementById('windows-table');
+        var ws = p.windows || [];
+        if (winSection && winTable) {
+            winSection.style.setProperty('display', ws.length ? 'block' : 'none');
+            var html = '';
+            for (var w = 0; w < ws.length; w++) {
+                var wi = ws[w];
+                var state = wi.minimized ? 'min' : (wi.focused ? 'focus' : '');
+                html += '<tr><td class="label">' + (wi.title || ('#' + wi.id)) +
+                        '</td><td class="value">' + wi.width + 'x' + wi.height +
+                        (state ? ' (' + state + ')' : '') + '</td></tr>';
+            }
+            winTable.innerHTML = html;
         }
 
         // Scene frustum-culling counters (drawn / culled per node family).

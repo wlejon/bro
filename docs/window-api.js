@@ -151,13 +151,13 @@ battery.level;            // 0.0 .. 1.0
 
 // ── bro.window.open(src, opts) — secondary OS windows ────────────────────────
 //
-// *** v1 IN PROGRESS ***  A secondary window is a full, isolated bro app in
-// its own OS window: `src` (an app directory or index.html, resolved exactly
-// like <iframe src>) is loaded into its own JS realm, DOM tree, timers and 2D
-// canvas scenes, laid out at the window's client size and rendered into it.
-// The handle controls geometry/title/focus, reports 'load' when the document
-// is ready, exposes capture() for the window's pixels, and fires 'close' on
-// close() / the OS close button.
+// A secondary window is a full, isolated bro app in its own OS window: `src`
+// (an app directory or index.html, resolved exactly like <iframe src>) is
+// loaded into its own JS realm, DOM tree, timers and 2D canvas scenes, laid
+// out at the window's client size and rendered into it. The handle controls
+// geometry/title/focus, carries messages to and from the child realm, reports
+// 'load' when the document is ready, exposes capture() for the window's
+// pixels, and fires 'close' on close() / the OS close button.
 //
 // Input is routed per window. A secondary window handles its own mouse
 // (click / dblclick / hover / :hover / enter-leave / drag-select), CSS cursor,
@@ -168,37 +168,46 @@ battery.level;            // 0.0 .. 1.0
 // page visibility (document.hidden + visibilitychange) and window resize are
 // likewise per realm.
 //
-// Still to come (next chunk of the multiwindow plan): postMessage in both
-// directions, 'message' events, and window.close() self-close.
+// ── NOT SUPPORTED IN SECONDARY WINDOWS (v1) ─────────────────────────────────
 //
-// v1 refusals inside a secondary window's document, each logged as a clear
-// warning rather than failing silently: WebGL contexts (getContext('webgl')
-// returns null), 3D scene graphs (bro.scene is not installed in a child
-// realm, as in iframes), and nested <iframe> elements (the element lays out
-// as an empty box, its src never loads).
+// The complete list, each with the reason. Nothing here fails silently: a
+// refusal logs a clear warning, returns null, or throws.
 //
-// Input-side v1 cuts, all main-window-only:
-//   • Pointer lock — element.requestPointerLock() from a secondary window's
-//     realm (or an iframe's) throws a clear error. SDL's relative mouse mode
-//     is bound to the primary window, so a lock here would capture the wrong
-//     pointer.
+//   • WebGL contexts — getContext('webgl'/'webgl2') returns null. The GL
+//     frame path assumes the app document owns the single WebGL entry list.
+//   • 3D scene graphs — bro.scene is not installed in a child realm at all
+//     (same as an <iframe>); the 3D renderer draws into the main window.
+//   • Nested <iframe> — the element lays out as an empty box and its src never
+//     loads: the iframe sync walks only the app document.
+//   • bro.window.open from a child realm — throws "only available from the
+//     main app realm"; windows are opened by the app, never by its windows.
+//   • System panels, the menu bar and the inspector — main-window chrome; a
+//     secondary window carries no engine furniture.
+//   • Pointer lock — element.requestPointerLock() in a secondary window's
+//     realm (or an iframe's) throws: SDL's relative mouse mode is bound to the
+//     primary window, so a lock here would capture the wrong pointer.
 //   • Touch — finger events on a secondary window are dropped rather than
-//     misrouted (the engine's contact table is global, with no per-window key).
+//     misrouted: the engine's contact table is global, with no per-window key.
 //   • Gamepad and bro.settings "action" events — always delivered to the main
 //     app realm regardless of which window has focus. Keystrokes in a
 //     secondary window fire DOM key events there but never an "action", so
 //     typing a "w" into a palette's text field can't trigger a movement
 //     binding.
-//   • Overlays — a <select> or <input type="color"> in a secondary window
-//     focuses and takes keys, but its dropdown / colour-picker popup does not
-//     open (the overlay manager draws on the main window).
+//   • Overlays — a <select> or <input type="color"> focuses and takes keys,
+//     but its dropdown / colour-picker popup does not open: the overlay
+//     manager draws on the main window.
 //   • contenteditable editing (and its IME composition) — a contenteditable
-//     element in a secondary window receives key/text DOM events, but the
-//     engine does not splice text into it. <input> and <textarea> have full
-//     support, IME included.
-//   • Viewport scrolling — a secondary window has no engine viewport
-//     scrollbar; a document that overflows scrolls only through its own
-//     overflow: auto/scroll boxes.
+//     element receives key/text DOM events, but the engine does not splice
+//     text into it. <input> and <textarea> have full support, IME included.
+//   • Viewport scrolling — no engine viewport scrollbar; a document that
+//     overflows scrolls only through its own overflow: auto/scroll boxes.
+//   • Layout-thread layout — a host document lays out synchronously on the
+//     main thread (the layout thread is hard-bound to the app document).
+//   • True HiDPI surfaces — host surfaces are rendered at window-size units
+//     and scaled to the drawable, so a 2x display is not pixel-crisp yet.
+//
+// Deliberately never coming: moving DOM nodes between windows. Realms are
+// isolated by construction; postMessage is the contract.
 //
 // System hotkeys stay GLOBAL: the perf-HUD and settings-modal bindings fire
 // whichever bro window has focus (the panels themselves render on the main
@@ -239,7 +248,27 @@ const win = bro.window.open('palette', {   // app dir or index.html, like <ifram
     borderless: false,                     // no title bar / border
     alwaysOnTop: false,                    // keep above normal windows
     hidden: false,                         // create hidden (headless forces true)
+    minWidth: 200, minHeight: 150,         // resize limits, 0 = unconstrained
+    maxWidth: 0,   maxHeight: 0,
 });
+
+// ── The child app's own bro.json supplies the rest ───────────────────────────
+//
+// A window app is a normal bro app, so it may declare its own window shape.
+// These manifest keys are honoured when the window opens: title, width,
+// height, resizable, borderless, alwaysOnTop, minWidth/minHeight/maxWidth/
+// maxHeight. Precedence, highest first:
+//
+//     explicit bro.window.open() options  >  the child's bro.json  >  defaults
+//
+// So a palette app that ships {"title":"Palette","width":240,"height":300,
+// "alwaysOnTop":true} opens exactly that way from a bare
+// bro.window.open('palette'), and the opener can still override any single key.
+// windowX/windowY/display in a child bro.json are ignored — placement of a
+// window the app opened belongs to the opener (x/y/display options).
+//
+// The child app is loaded BEFORE its OS window is created, so a src that does
+// not resolve never flashes an empty window: the handle just closes.
 
 win.id;                  // number, read-only — stable handle id
 win.closed;              // boolean, read-only — true once the window is gone
@@ -259,6 +288,47 @@ win.removeEventListener('close', fn);
 win.addEventListener('load', (ev) => {   // the window's document is parsed,
     ev.target === win;                   // scripted and laid out — fires once,
 });                                      // at the drain after open()
+
+win.addEventListener('resize', (ev) => { // the window's client size changed
+    ev.width; ev.height;                 // (setSize, or the user dragging its
+});                                      // edge). The child realm gets its own
+                                         // window 'resize' event independently.
+
+// ── Messaging ────────────────────────────────────────────────────────────────
+//
+// Both directions are structured clones — the same encoder Worker.postMessage
+// uses, so objects, arrays, Maps/Sets, typed arrays, ArrayBuffers, Mesh and
+// ImageBitmap all cross, and functions throw "not cloneable". The optional
+// second argument is a transfer list; transferred ArrayBuffers are DETACHED on
+// the sending side, exactly as on the web.
+//
+// Delivery is asynchronous and never reentrant: messages queue and are
+// delivered at the engine's idle point (the same drain that materializes and
+// destroys windows), so a 'message' handler never runs mid-frame. Children are
+// delivered first and the parent second, which means a reply posted from a
+// child's handler completes the round trip within the SAME drain — in headless,
+// one flush().
+//
+// Posting to a window that has closed is a silent no-op (the clone still
+// happens, so transfers still detach), never an error and never a crash.
+
+win.postMessage({ type: 'current', color: '#3b82f6' });      // parent → child
+win.postMessage({ buf: pixels.buffer }, [pixels.buffer]);    // …with a transfer
+
+win.addEventListener('message', (ev) => {   // child → parent
+    ev.data;                                // the cloned payload
+    ev.target === win;
+});
+
+// Inside the child window's realm:
+//
+//   window.addEventListener('message', (ev) => { ev.data; });  // from parent
+//   bro.window.parent.postMessage({ type: 'color', color: c }); // to parent
+//   window.onmessage = (ev) => { ... };                        // also works
+//
+// window.close() inside a secondary window's realm closes THAT window: full
+// teardown, and the parent handle's 'close' fires. (In the main app realm
+// window.close() keeps its meaning — quit the app.)
 
 // win.capture() — the window's pixels as ImageData ({ width, height, data },
 // top-down RGBA), or null before the document loads / after close. The engine
@@ -283,5 +353,17 @@ shot.width; shot.height; shot.data;      // Uint8ClampedArray, 4 bytes per px
 //   textInput('hi', win.id);           // type into its focused control
 //   currentCursor(win.id);             // its own resolved cursor shape
 //
-// NEXT CHUNK (not yet available): win.postMessage(data, transfer), 'message'
-// events, and window.close() self-close.
+// ── Perf HUD ─────────────────────────────────────────────────────────────────
+//
+// The perf panel (F8) grows a "Secondary windows" section listing each live
+// host — title, client size, and whether it is focused or minimized. Each row
+// is one more document recorded, replayed and composited every frame.
+//
+// ── Sample app ───────────────────────────────────────────────────────────────
+//
+// tests/manual/multiwindow_demo — a main window plus a tool-palette window
+// exchanging messages (the palette posts a colour, the main window applies it
+// and posts its current colour back; the palette's Close button self-closes).
+// The palette's own bro.json supplies its size, title and alwaysOnTop.
+//
+//   ./build/Release/bro.exe tests/manual/multiwindow_demo

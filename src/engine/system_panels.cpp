@@ -426,6 +426,8 @@ void Engine::installBroObject(SystemDocument& doc) {
     JS_SetPropertyStr(ctx, perf, "raster", JS_NewFloat64(ctx, 0.0));
     JS_SetPropertyStr(ctx, perf, "gpu", JS_NewFloat64(ctx, 0.0));
     JS_SetPropertyStr(ctx, perf, "draw", JS_NewFloat64(ctx, 0.0));
+    // Secondary windows, refreshed each perf update (see updateSystemPanels).
+    JS_SetPropertyStr(ctx, perf, "windows", JS_NewArray(ctx));
 
     JSValue viewport = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, viewport, "width", JS_NewInt32(ctx, viewportWidth_));
@@ -1067,6 +1069,28 @@ void Engine::updateSystemPerf(double fps, double frameTime, double js, double la
             JS_SetPropertyStr(ctx, doc.broPerfObj, "scene", sc);
         }
 #endif
+
+        // Secondary windows (bro.window.open): one row per live host. Each is
+        // an extra document recorded, replayed and composited every frame, so
+        // the HUD names them — empty array when the app is single-window.
+        {
+            JSValue wins = JS_NewArray(ctx);
+            uint32_t wi = 0;
+            for (auto& h : windowHosts_) {
+                if (!h->window || h->pendingClose) continue;
+                JSValue w = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, w, "id",
+                                  JS_NewInt64(ctx, static_cast<int64_t>(h->id)));
+                JS_SetPropertyStr(ctx, w, "title",
+                                  JS_NewString(ctx, h->opts.title.c_str()));
+                JS_SetPropertyStr(ctx, w, "width", JS_NewInt32(ctx, h->boxW));
+                JS_SetPropertyStr(ctx, w, "height", JS_NewInt32(ctx, h->boxH));
+                JS_SetPropertyStr(ctx, w, "focused", JS_NewBool(ctx, h->focused));
+                JS_SetPropertyStr(ctx, w, "minimized", JS_NewBool(ctx, h->minimized));
+                JS_SetPropertyUint32(ctx, wins, wi++, w);
+            }
+            JS_SetPropertyStr(ctx, doc.broPerfObj, "windows", wins);
+        }
 
         JSValue global = JS_GetGlobalObject(ctx);
         JSValue bro = JS_GetPropertyStr(ctx, global, "__bro");

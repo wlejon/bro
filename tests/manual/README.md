@@ -21,3 +21,15 @@ Run any of them from the bro repo root:
 | `smoke_wake_binding.js` | wake weights (self-skips without) | bro.wake JS surface wiring on silence |
 | `smoke_wake_positive.js` | wake weights + positives dataset | Detector fires on known-positive clips |
 | `smoke_wake_tone.js` | wake weights | Probes false-fires on tones/noise (model-quality diagnostic) |
+
+## Hand-run apps
+
+Directories here are whole bro apps rather than scripts — run them windowed:
+
+```bash
+./build/Release/bro.exe tests/manual/<app>
+```
+
+| App | What it demonstrates |
+|---|---|
+| `multiwindow_demo` | Multi-window end to end: the main window opens a tool-palette in its own OS window (`bro.window.open('palette')`, sized/titled by the palette's own `bro.json`), the palette posts the colour you click back through `bro.window.parent.postMessage`, the main window applies it and posts its current colour back, and the palette's Close button self-closes with `window.close()`. See [docs/window-api.js](../../docs/window-api.js). |

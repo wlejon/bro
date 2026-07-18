@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif;
+               background: #14161a; color: #e8e8ea; }
+  #stage { position: absolute; inset: 0; display: flex; flex-direction: column;
+           align-items: center; justify-content: center; gap: 18px;
+           transition: background 160ms linear; background: #3b82f6; }
+  #swatch { width: 220px; height: 120px; border-radius: 12px;
+            background: rgba(0,0,0,0.25); display: flex; align-items: center;
+            justify-content: center; font-size: 22px; letter-spacing: 1px; }
+  #log { position: absolute; left: 12px; bottom: 12px; right: 12px;
+         font: 12px ui-monospace, monospace; opacity: 0.85; white-space: pre;
+         max-height: 120px; overflow: hidden; }
+  button { font: inherit; padding: 8px 14px; border-radius: 8px; border: 0;
+           background: rgba(0,0,0,0.35); color: #fff; cursor: pointer; }
+</style>
+</head>
+<body>
+  <div id="stage">
+    <div id="swatch">#3b82f6</div>
+    <button id="open">Open palette window</button>
+    <div id="log"></div>
+  </div>
+
+  <script>
+    // Multi-window demo — main window + a tool-palette window in a separate OS
+    // window, talking over bro.window postMessage. The palette owns no state:
+    // it sends the colour the user picked, and this window applies it and
+    // sends its current colour back so the palette can highlight it.
+    const stage = document.getElementById('stage');
+    const swatch = document.getElementById('swatch');
+    const logEl = document.getElementById('log');
+    const lines = [];
+    function log(s) {
+        lines.push(s);
+        if (lines.length > 6) lines.shift();
+        logEl.textContent = lines.join('\n');
+    }
+
+    let palette = null;
+
+    function apply(color) {
+        stage.style.background = color;
+        swatch.textContent = color;
+    }
+
+    function openPalette() {
+        if (palette && !palette.closed) { palette.focus(); return; }
+        // No options: the palette app's own bro.json supplies title, size,
+        // min size and alwaysOnTop. Anything passed here would win over it.
+        palette = bro.window.open('palette');
+
+        palette.addEventListener('load', () => {
+            log('palette loaded (window id ' + palette.id + ')');
+            // Tell it what is currently applied so it can mark the swatch.
+            palette.postMessage({ type: 'current', color: swatch.textContent });
+        });
+
+        palette.addEventListener('message', (ev) => {
+            if (ev.data && ev.data.type === 'color') {
+                apply(ev.data.color);
+                log('palette → main: ' + ev.data.color);
+            }
+        });
+
+        palette.addEventListener('resize', (ev) => {
+            log('palette resized to ' + ev.width + 'x' + ev.height);
+        });
+
+        palette.addEventListener('close', () => {
+            log('palette closed');
+            palette = null;
+        });
+    }
+
+    document.getElementById('open').addEventListener('click', openPalette);
+    log('click the button to open the palette in its own OS window');
+  </script>
+</body>
+</html>

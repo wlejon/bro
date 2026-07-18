@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+  html, body { margin: 0; height: 100%; font: 13px system-ui, sans-serif;
+               background: #1b1e24; color: #d8d8dc; }
+  h1 { font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase;
+       opacity: 0.6; margin: 14px 14px 8px; }
+  #grid { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 14px; }
+  .sw { width: 44px; height: 44px; border-radius: 8px; cursor: pointer;
+        border: 2px solid transparent; }
+  .sw.on { border-color: #ffffff; }
+  #foot { position: absolute; left: 14px; right: 14px; bottom: 12px;
+          display: flex; justify-content: space-between; align-items: center; }
+  button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 0;
+           background: #2c313a; color: #d8d8dc; cursor: pointer; }
+  #size { opacity: 0.5; font: 11px ui-monospace, monospace; }
+</style>
+</head>
+<body>
+  <h1>Palette</h1>
+  <div id="grid"></div>
+  <div id="foot">
+    <span id="size"></span>
+    <button id="close">Close</button>
+  </div>
+
+  <script>
+    // The palette half of the multi-window demo. It runs in its own OS window,
+    // its own JS realm and its own DOM — the only channel to the main window is
+    // bro.window.parent.postMessage.
+    const colors = ['#3b82f6', '#ef4444', '#22c55e', '#eab308',
+                    '#a855f7', '#ec4899', '#14b8a6', '#f97316'];
+    const grid = document.getElementById('grid');
+    let current = null;
+
+    colors.forEach((c) => {
+        const el = document.createElement('div');
+        el.className = 'sw';
+        el.style.background = c;
+        el.addEventListener('click', () => {
+            select(c);
+            bro.window.parent.postMessage({ type: 'color', color: c });
+        });
+        el.dataset.color = c;
+        grid.appendChild(el);
+    });
+
+    function select(c) {
+        current = c;
+        const all = document.querySelectorAll('.sw');
+        for (let i = 0; i < all.length; i++)
+            all[i].className = (all[i].dataset.color === c) ? 'sw on' : 'sw';
+    }
+
+    // The main window tells us what is currently applied.
+    window.addEventListener('message', (ev) => {
+        if (ev.data && ev.data.type === 'current') select(ev.data.color);
+    });
+
+    function showSize() {
+        document.getElementById('size').textContent =
+            window.innerWidth + ' x ' + window.innerHeight;
+    }
+    window.addEventListener('resize', showSize);
+    showSize();
+
+    // Self-close: window.close() in a secondary window's realm closes THAT
+    // window (the main app's window.close() still quits the app).
+    document.getElementById('close').addEventListener('click', () => {
+        window.close();
+    });
+  </script>
+</body>
+</html>
