@@ -28,6 +28,7 @@
 #include "js/dom_bindings.h"
 #include "js/audio_bindings.h"
 #include "js/storage_bindings.h"
+#include "js/window_host_bindings.h"
 #include "js/settings_bindings.h"
 #include "js/webgl2_bindings.h"
 #include "js/scene_bindings.h"
@@ -169,6 +170,12 @@ void Engine::performAppReload() {
     pendingIframeReloads_.clear();
     iframeLoadFailed_.clear();
     iframeSyncNeeded_ = false;
+
+    // ── Secondary window hosts ───────────────────────────────────────────────
+    // The dying realm owns every handle; its windows go with it. No 'close'
+    // events (the realm is being destroyed) — the handle refs release in the
+    // binding cleanup below.
+    destroyAllWindowHosts(/*notifyJs=*/false);
     if (displayMode_ == DisplayMode::Headless) {
         // No raster thread — the main renderer created the surfaces, free them
         // here. Windowed leaves the queue for the raster thread's next replay.
@@ -243,6 +250,7 @@ void Engine::performAppReload() {
 #endif
     js::AudioBindings::cleanup(oldCtx);
     js::StorageBindings::cleanup(oldCtx);
+    js::cleanupWindowHostBindings(oldCtx);
     if (gl_) {
         js::WebGL2Bindings::cleanup(oldCtx);
     }

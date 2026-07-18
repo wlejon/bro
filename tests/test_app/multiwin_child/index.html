@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  html, body { margin: 0; width: 100%; height: 100%; }
+</style></head>
+<body>
+  <script>
+    // Probes the multiwindow chunk-1 realm gate: bro.window.open must exist in
+    // this (iframe) realm but throw the deliberate main-realm error. The
+    // result is painted as the body color so the host test can assert it via
+    // iframe.capture() — realms are isolated, so pixels are the only
+    // cross-realm channel available this chunk.
+    //   red   #ff0000 → open() did not throw (gate missing)
+    //   blue  #0000ff → threw, but not the deliberate error
+    //   green #00ff00 → threw the "main app realm" error (expected)
+    let color = '#ff0000';
+    try {
+      bro.window.open('x');
+    } catch (e) {
+      color = (e && String(e.message).indexOf('main app realm') >= 0)
+          ? '#00ff00' : '#0000ff';
+    }
+    document.body.style.background = color;
+  </script>
+</body>
+</html>

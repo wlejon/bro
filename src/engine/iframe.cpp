@@ -28,6 +28,7 @@
 #include "js/image_bindings.h"
 #include "js/imagebitmap_bindings.h"
 #include "js/window_bindings.h"
+#include "js/window_host_bindings.h"
 #include "js/settings_bindings.h"
 #include "js/storage_bindings.h"
 #include "canvas/canvas_scene.h"
@@ -182,6 +183,10 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
     js::installWindowBindings(dp->jsCtx, dp->boxW, dp->boxH, displayScale_,
                               window_.get(),
                               displayMode_ == DisplayMode::Headless);
+    // bro.window.open exists in child realms only to throw its deliberate
+    // "main app realm only" error (the binding gates on the engine's primary
+    // context at call time). Scoped per-window bro.window is a later chunk.
+    js::installWindowHostBindings(dp->jsCtx, this);
 
     // location.reload() inside the sub-document reloads THIS iframe — the same
     // deferred teardown/rebuild as the host calling iframe.reload(). The hook

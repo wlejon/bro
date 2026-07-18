@@ -926,6 +926,12 @@ void Engine::run() {
                 // and skip. Sync-first built it, then the reload tore it straight
                 // back down and rebuilt it: two sub-documents, two load events.
                 processPendingIframeReloads();
+                // Drain queued secondary-window opens/closes at the same
+                // raster-idle point: host teardown will free per-host GPU
+                // state the raster thread replays once host documents land,
+                // and 'close' events run app JS — same reasoning as the
+                // iframe drains around this.
+                processPendingWindowHosts();
                 // Instantiate sub-docs for <iframe>s JS just added, and tear down
                 // those whose element left the tree. Same raster-idle reasoning as
                 // the reload drain. The new element's layout may not have landed
@@ -1026,8 +1032,16 @@ void Engine::run() {
         //     on top of app content.
         compositeLayers(layers.systemLayers);
 
+        // 5g2. Present secondary window hosts (bro.window.open): MakeCurrent
+        //      the main context on each host drawable, clear (v1 — document
+        //      composite lands next chunk), swap at interval 0; then restore
+        //      the main drawable + configured vsync so the main swap below
+        //      stays the frame's single pacing swap, last.
+        compositeWindowHosts();
+
         // Restore WebGL shadow state so apps with internal caches (three.js)
-        // see the same GL state they left on the previous frame.
+        // see the same GL state they left on the previous frame. After the
+        // host-window pass, which clobbers viewport/clear-color/scissor.
         if (activeWebGL) activeWebGL->restoreState();
 
         // Measure GPU work before swap (swap includes vsync wait).
@@ -1047,7 +1061,10 @@ void Engine::run() {
         //     timing below so the perf HUD reports the true present cadence.
         {
             double capMs = frameCapIntervalMs_;  // 0 = app left it uncapped
-            if (!windowFocused_)
+            // Clamp only when NO bro window is focused — a focused secondary
+            // host is still "the app in front", and Windows paces its swap
+            // chain the same way.
+            if (!windowFocused_ && !anyWindowHostFocused())
                 capMs = std::max(capMs, 1000.0 / kUnfocusedFps);
             if (capMs > 0.0) {
                 double elapsed = util::currentTimeMs() - frameStart;

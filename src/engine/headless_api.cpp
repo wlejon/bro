@@ -183,6 +183,11 @@ void Engine::flush() {
     // no raster thread there is nothing to quiesce first.
     processPendingIframeReloads();
     if (structureChanged) syncIframes();
+    // Secondary-window drain — the headless counterpart of the frame loop's
+    // raster-idle drain (there is no raster thread here). This is what makes
+    // open()/close() assertable from a test: open → flush() materializes the
+    // hidden window; close → flush() destroys it and fires 'close'.
+    processPendingWindowHosts();
 
     // Drain CSS transition/animation events and dispatch to JS.
     {

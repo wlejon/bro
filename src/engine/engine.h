@@ -352,6 +352,9 @@ public:
     /// Any created, non-minimized host — i.e. the per-window composite pass
     /// has something to present.
     bool anyPresentableWindowHosts() const;
+    /// Any created host with input focus. The unfocused present-rate clamp
+    /// fires only when NO bro window (main or host) is focused.
+    bool anyWindowHostFocused() const;
 
     /// SDL_EVENT_WINDOW_CLOSE_REQUESTED for any window. Main window: quits
     /// the app — but only when secondary windows exist; with a lone main

@@ -148,3 +148,61 @@ battery.charging;         // boolean
 battery.chargingTime;     // seconds; 0 = full or no battery
 battery.dischargingTime;  // seconds until empty; Infinity on AC
 battery.level;            // 0.0 .. 1.0
+
+// ── bro.window.open(src, opts) — secondary OS windows ────────────────────────
+//
+// *** v1 IN PROGRESS ***  This chunk ships the WINDOW lifecycle only: open()
+// creates a real secondary OS window (blank, cleared to a solid color), the
+// handle controls its geometry/title/focus, and close() / the OS close
+// button destroy it and fire 'close'. The `src` argument (an app directory
+// or index.html, resolved like <iframe src>) is validated and stored but NO
+// DOCUMENT IS CREATED YET — the per-window document/realm, rendering,
+// 'load'/'message' events, and postMessage land with the next chunk of the
+// multiwindow plan. Do not ship apps against this surface yet.
+//
+// Realm policy: only the MAIN app realm may open windows. Calling
+// bro.window.open from an iframe (or any other child realm) throws
+// "bro.window.open is only available from the main app realm".
+//
+// Lifecycle is asynchronous: open() returns the handle immediately, but the
+// OS window materializes at the engine's next idle drain (same cadence as
+// iframe reloads). Geometry getters answer with the requested values until
+// then. close() likewise queues: `closed` flips (and 'close' fires, once)
+// at the drain. Double-close is a no-op. Closing the MAIN window quits the
+// whole app, secondary windows included.
+//
+// Headless: secondary windows are always hidden and their display scale is
+// pinned with the rest of the pipeline. setSize round-trips (pure window
+// state); setPosition no-ops on hidden windows (desk-dependent); focus()
+// no-ops. flush() runs the drain, so open/close are assertable:
+//   const w = bro.window.open('palette', { width: 320 });  flush();
+
+const win = bro.window.open('palette', {   // app dir or index.html, like <iframe src>
+    width: 320, height: 200,               // client size, px (default 800x600)
+    title: 'Palette',                      // window title (default 'bro')
+    x: 100, y: 80,                         // desktop position (BOTH or neither)
+    display: 1,                            // display INDEX to center on (like bro.json)
+    resizable: true,                       // default true
+    borderless: false,                     // no title bar / border
+    alwaysOnTop: false,                    // keep above normal windows
+    hidden: false,                         // create hidden (headless forces true)
+});
+
+win.id;                  // number, read-only — stable handle id
+win.closed;              // boolean, read-only — true once the window is gone
+win.close();             // queue destroy → 'close' fires at the drain; idempotent
+win.setTitle('Palette'); // retitle
+win.getSize();           // → { width, height }
+win.setSize(400, 300);   // resize (applies to hidden windows too)
+win.getPosition();       // → { x, y } desktop coords
+win.setPosition(60, 40); // move (no-op on hidden windows)
+win.focus();             // raise + request input focus (no-op hidden)
+win.addEventListener('close', (ev) => {  // OS close button or close();
+    ev.target === win;                   // fires exactly once, after which
+    win.closed === true;                 // closed already reads true
+});
+win.removeEventListener('close', fn);
+
+// NEXT CHUNK (not yet available): win.postMessage(data, transfer),
+// 'load'/'message'/'resize' events, win.capture(), scoped bro.window inside
+// the child realm, window.close() self-close.

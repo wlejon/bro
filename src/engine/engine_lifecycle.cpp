@@ -12,6 +12,7 @@
 #include "js/audio_bindings.h"
 #include "js/audio_scene_sync.h"
 #include "js/storage_bindings.h"
+#include "js/window_host_bindings.h"
 #include "js/webgl2_bindings.h"
 #include "js/scene_bindings.h"
 #include "js/worker.h"
@@ -141,6 +142,12 @@ void Engine::shutdown() {
 
     // Release SDL gamepad handles (no-op for virtual pads / none connected).
     closeAllGamepads();
+
+    // Destroy secondary windows (bro.window.open) now the worker threads are
+    // quiet — pure SDL windows this chunk (no GL contexts of their own), so
+    // main-thread destruction is safe here. No JS 'close' events during
+    // teardown; the handle refs release in the binding cleanup (~Engine).
+    destroyAllWindowHosts(/*notifyJs=*/false);
 
     // No-op if run() never added it (headless/server never reach that code).
     removeModalEventWatch();
@@ -313,6 +320,7 @@ Engine::~Engine() {
 #endif
         js::AudioBindings::cleanup(ctx);
         js::StorageBindings::cleanup(ctx);
+        js::cleanupWindowHostBindings(ctx);
         if (gl_) {
             js::WebGL2Bindings::cleanup(ctx);
         }

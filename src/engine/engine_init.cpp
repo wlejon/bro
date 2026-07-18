@@ -31,6 +31,7 @@
 #include "js/settings_bindings.h"
 #include "js/dialog_bindings.h"
 #include "js/window_bindings.h"
+#include "js/window_host_bindings.h"
 #include "js/gamepad_bindings.h"
 #include "js/custom_elements.h"
 #include "js/webgl2_bindings.h"
@@ -664,6 +665,11 @@ void Engine::initAppRealm() {
     //      always-on-top, size limits, position, displays). App realm only.
     js::installBroWindowBindings(jsRuntime_->getContext(), window_.get(),
                                  displayMode_ == DisplayMode::Headless);
+
+    // 9a2. bro.window.open — secondary OS windows (v1 in progress: blank
+    //      window + lifecycle; the document lands with the next multiwindow
+    //      chunk). Main-realm-gated inside the binding.
+    js::installWindowHostBindings(jsRuntime_->getContext(), this);
 
     // 9a0. location.reload() — the polyfill's method calls this hook when
     //      present. Queues a full app-realm reload; deferred to a safe point
