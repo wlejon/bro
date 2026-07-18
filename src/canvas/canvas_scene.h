@@ -1,7 +1,9 @@
 #pragma once
 
 #include "canvas/canvas2d.h"
+#include "render/font_fallback.h"
 #include "render/renderer.h"
+#include "render/shaped_run.h"
 
 #include <atomic>
 #include <condition_variable>
@@ -51,9 +53,42 @@ struct CanvasCmd {
     float p[6] = {};
     std::string text;
     SkFont font;
+    // Text commands carry an already-shaped blob. Shaping happens on the JS
+    // thread when the command is recorded, against the scene's own shaper, so
+    // the canvas worker replays glyphs and never touches a shaping cache that
+    // belongs to another thread. `text` and `font` are kept as the fallback
+    // for the case where shaping produced nothing.
+    sk_sp<SkTextBlob> blob;
     sk_sp<SkImage> img;
     SkRect src{}, dst{};
     SkSamplingOptions samp;
+};
+
+/// Canvas2D TextMetrics. Every distance is measured from the *alignment point*
+/// — the (x, y) that would be passed to fillText — which is why textAlign and
+/// textBaseline change these numbers even though they do not change the glyphs.
+/// Positive means right of, or above, that point.
+struct CanvasTextMetrics {
+    float width = 0.0f;
+    // Ink extents, horizontally. `left` is positive when ink reaches left of
+    // the alignment point (an italic overhang, or any centred/right-aligned
+    // text).
+    float actualLeft = 0.0f;
+    float actualRight = 0.0f;
+    // Ink extents, vertically — the tight bounding box of the glyphs actually
+    // drawn, so "abc" and "ABC" report different ascents.
+    float actualAscent = 0.0f;
+    float actualDescent = 0.0f;
+    // The font's own line box, independent of which glyphs were asked for.
+    float fontAscent = 0.0f;
+    float fontDescent = 0.0f;
+    // The em square.
+    float emAscent = 0.0f;
+    float emDescent = 0.0f;
+    // Where the named baselines sit relative to the alignment point.
+    float hangingBaseline = 0.0f;
+    float alphabeticBaseline = 0.0f;
+    float ideographicBaseline = 0.0f;
 };
 
 /// Per-canvas Skia-backed renderer.  Each CanvasScene owns an SkSurface.
@@ -206,10 +241,19 @@ public:
     void setFont(const std::string& fontStr);
     const std::string& fontString() const { return fontString_; }
 
-    void setTextAlign(int align);   // 0=start/left, 1=center, 2=right, 3=end
+    // 0=start, 1=center, 2=right, 3=end, 4=left. `start`/`end` are
+    // direction-relative and resolve against direction(); `left`/`right` are
+    // absolute. They are distinct codes because the getter has to round-trip
+    // what was assigned.
+    void setTextAlign(int align);
     int textAlign() const { return textAlign_; }
     void setTextBaseline(int bl);   // 0=alphabetic, 1=top, 2=middle, 3=bottom, 4=hanging, 5=ideographic
     int textBaseline() const { return textBaseline_; }
+
+    // Canvas2D `direction`: 0=ltr, 1=rtl, 2=inherit. This is the base
+    // direction text is shaped against and what `start`/`end` alignment mean.
+    void setDirection(int dir);
+    int direction() const { return direction_; }
 
     void setShadowBlur(float blur);
     float shadowBlur() const { return shadowBlur_; }
@@ -235,7 +279,7 @@ public:
     void clearRect(float x, float y, float w, float h);
     void fillText(const std::string& text, float x, float y);
     void strokeText(const std::string& text, float x, float y);
-    render::TextMetrics measureText(const std::string& text);
+    CanvasTextMetrics measureText(const std::string& text);
 
     // --- Path API ---
 
@@ -471,6 +515,7 @@ private:
         std::string fontStr = "16px sans-serif";
         int textAlignVal = 0;
         int textBaselineVal = 0;
+        int directionVal = 0;
         float shadowBlurVal = 0;
         uint8_t shadowR = 0, shadowG = 0, shadowB = 0, shadowA = 0;
         float shadowOX = 0, shadowOY = 0;
@@ -493,17 +538,40 @@ private:
     std::string fontString_ = "16px sans-serif";
     int textAlign_ = 0;
     int textBaseline_ = 0;
+    int direction_ = 0;
     float shadowBlur_ = 0;
     uint8_t shadowR_ = 0, shadowG_ = 0, shadowB_ = 0, shadowA_ = 0;
     float shadowOffsetX_ = 0, shadowOffsetY_ = 0;
     bool imageSmoothingEnabled_ = true;
 
-    // Font cache (CSS string -> SkFont)
+    // Font cache (CSS string -> SkFont). The parsed family and style ride
+    // along because the shaper needs what was *asked for*, not just what was
+    // resolved: font fallback for a codepoint the chosen face lacks is driven
+    // by the requested family list and style.
     struct FontCacheEntry {
         sk_sp<SkTypeface> typeface;
         SkFont font;
+        std::string family;
+        SkFontStyle style;
     };
     std::unordered_map<std::string, FontCacheEntry> fontCache_;
+    std::string fontFamily_ = "sans-serif";
+    SkFontStyle fontStyle_;
+
+    // Shaping state, owned by this scene and touched only from the JS thread
+    // that records commands — the same thread-affine-by-ownership rule the
+    // renderers follow for their own shapers. The canvas worker only ever
+    // replays an SkTextBlob, which is immutable and refcounted.
+    sk_sp<SkFontMgr> fontMgr_;
+    render::FontFallbackCache fallbackCache_;
+    render::TextShapingEngine shaper_;
+    SkFontMgr* ensureFontMgr();
+    // Shape `text` with the current font against the current direction, or
+    // null when there is nothing to draw. The pointer belongs to shaper_ and
+    // dies at the next shape() that misses — use it and drop it.
+    const render::ShapedRun* shapeCurrent(std::string_view text);
+    render::TextDirection baseDirection() const;
+    void recordText(bool stroke, const std::string& text, float x, float y);
 
     // --- Canvas thread state ---
     bool threaded_ = false;

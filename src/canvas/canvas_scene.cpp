@@ -89,6 +89,9 @@ void CanvasScene::cleanup() {
     }
     texWidth_ = texHeight_ = 0;
     fontCache_.clear();
+    // The shaped-run cache keys on the font descriptor, and the faces those
+    // descriptors resolve to are exactly what just went away.
+    shaper_.clear();
 }
 
 // ---------------------------------------------------------------------------
@@ -434,8 +437,10 @@ void CanvasScene::flushStagedCommands() {
             break;
         case CanvasCmd::kFillText:
         case CanvasCmd::kStrokeText:
-            c->drawSimpleText(cmd.text.data(), cmd.text.size(), SkTextEncoding::kUTF8,
-                              cmd.p[0], cmd.p[1], cmd.font, cmd.paint);
+            // Shaped at record time; this thread only replays glyphs.
+            if (cmd.blob) c->drawTextBlob(cmd.blob, cmd.p[0], cmd.p[1], cmd.paint);
+            else c->drawSimpleText(cmd.text.data(), cmd.text.size(), SkTextEncoding::kUTF8,
+                                   cmd.p[0], cmd.p[1], cmd.font, cmd.paint);
             break;
         case CanvasCmd::kDrawImage:
             c->drawImageRect(cmd.img, cmd.src, cmd.dst, cmd.samp, &cmd.paint,
@@ -720,6 +725,11 @@ void CanvasScene::setTextBaseline(int bl) {
     textBaseline_ = bl;
 }
 
+void CanvasScene::setDirection(int dir) {
+    state_.directionVal = dir;
+    direction_ = dir;
+}
+
 void CanvasScene::setShadowBlur(float blur) {
     state_.shadowBlurVal = blur;
     shadowBlur_ = blur;
@@ -746,22 +756,28 @@ void CanvasScene::setImageSmoothingEnabled(bool v) {
 // Font management
 // ---------------------------------------------------------------------------
 
+SkFontMgr* CanvasScene::ensureFontMgr() {
+    if (fontMgr_) return fontMgr_.get();
+#ifdef _WIN32
+    fontMgr_ = SkFontMgr_New_DirectWrite();
+#elif defined(__APPLE__)
+    fontMgr_ = SkFontMgr_New_CoreText(nullptr);
+#else
+    fontMgr_ = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
+#endif
+    return fontMgr_.get();
+}
+
 void CanvasScene::applyFont() {
     auto it = fontCache_.find(fontString_);
     if (it != fontCache_.end()) {
         font_ = it->second.font;
+        fontFamily_ = it->second.family;
+        fontStyle_ = it->second.style;
         return;
     }
 
     auto pf = parseCSSFont(fontString_);
-
-#ifdef _WIN32
-    auto mgr = SkFontMgr_New_DirectWrite();
-#elif defined(__APPLE__)
-    auto mgr = SkFontMgr_New_CoreText(nullptr);
-#else
-    auto mgr = SkFontMgr_New_FontConfig(nullptr, SkFontScanner_Make_FreeType());
-#endif
 
     SkFontStyle style(
         pf.weight,
@@ -772,14 +788,36 @@ void CanvasScene::applyFont() {
     // -apple-system, Segoe UI, sans-serif") — resolve it the same way every
     // other text path does (bro::render::resolveFontFamilyList), so a
     // multi-family list can't silently resolve to no glyphs.
-    sk_sp<SkTypeface> tf = bro::render::resolveFontFamilyList(pf.family, style, mgr.get());
+    sk_sp<SkTypeface> tf = bro::render::resolveFontFamilyList(pf.family, style, ensureFontMgr());
 
     SkFont f(tf, pf.size);
     f.setEdging(SkFont::Edging::kSubpixelAntiAlias);
+    // Subpixel advances, for the same reason the renderers set it: HarfBuzz
+    // asks the SkFont for each glyph's width and rounds to a whole pixel
+    // unless the font opts in, which quantizes every advance and drifts a
+    // string's measured width away from what the font specifies.
     f.setSubpixel(true);
 
-    fontCache_[fontString_] = {tf, f};
+    fontCache_[fontString_] = {tf, f, pf.family, style};
     font_ = f;
+    fontFamily_ = pf.family;
+    fontStyle_ = style;
+}
+
+render::TextDirection CanvasScene::baseDirection() const {
+    // `inherit` should take the canvas element's computed CSS direction. The
+    // scene reaches its backing element only through opaque callbacks, so it
+    // cannot read a computed style from here; `inherit` therefore behaves as
+    // `ltr`, which is what it resolves to for any document that has not set
+    // direction. Scripts that need RTL on a canvas set ctx.direction = "rtl"
+    // explicitly, which is honoured exactly.
+    return direction_ == 1 ? render::TextDirection::RTL : render::TextDirection::LTR;
+}
+
+const render::ShapedRun* CanvasScene::shapeCurrent(std::string_view text) {
+    if (text.empty()) return nullptr;
+    return shaper_.shape(text, font_, fontFamily_, fontStyle_,
+                         ensureFontMgr(), fallbackCache_, baseDirection());
 }
 
 // ---------------------------------------------------------------------------
@@ -845,10 +883,17 @@ void CanvasScene::applyShadow(SkPaint& paint) const {
 }
 
 float CanvasScene::adjustTextX(float x, float textWidth) const {
+    // `start` and `end` name the direction-relative edges: in RTL text the
+    // start edge is the right one. `left` and `right` are absolute and do not
+    // move. Getting this wrong is invisible in LTR, which is why the two pairs
+    // were conflated before there was a direction to resolve them against.
+    const bool rtl = baseDirection() == render::TextDirection::RTL;
     switch (textAlign_) {
-    case 1: return x - textWidth / 2.0f;  // center
-    case 2: case 3: return x - textWidth; // right / end
-    default: return x;                     // left / start
+    case 1: return x - textWidth / 2.0f;             // center
+    case 2: return x - textWidth;                    // right
+    case 0: return rtl ? x - textWidth : x;          // start
+    case 3: return rtl ? x : x - textWidth;          // end
+    default: return x;                                // left
     }
 }
 
@@ -901,14 +946,30 @@ void CanvasScene::clearRect(float x, float y, float w, float h) {
     snapshotImageValid_ = false;
 }
 
-void CanvasScene::fillText(const std::string& text, float x, float y) {
+// fillText and strokeText differ only in which paint they build. Both shape
+// here, on the JS thread, and record the resulting blob: the canvas worker then
+// replays glyphs without shaping, and without re-deriving font fallback for
+// every frame the way drawSimpleText did.
+void CanvasScene::recordText(bool stroke, const std::string& text, float x, float y) {
     if (text.empty()) return;
     std::string utf8Scratch;
     std::string_view t = render::ensureValidUtf8(text, utf8Scratch);
-    float tw = font_.measureText(t.data(), t.size(), SkTextEncoding::kUTF8);
+
     CanvasCmd cmd;
-    cmd.type = CanvasCmd::kFillText;
-    cmd.paint = makeFillPaint();
+    cmd.type = stroke ? CanvasCmd::kStrokeText : CanvasCmd::kFillText;
+    cmd.paint = stroke ? makeStrokePaint() : makeFillPaint();
+
+    float tw = 0.0f;
+    if (const render::ShapedRun* run = shapeCurrent(t)) {
+        tw = run->width();
+        cmd.blob = run->makeBlob();
+    } else {
+        // Shaping produced nothing (empty after validation, or a build with
+        // BRO_WITH_TEXT_SHAPING off and no glyphs). Fall back to the raw
+        // string so the replay path still has something to draw.
+        tw = font_.measureText(t.data(), t.size(), SkTextEncoding::kUTF8);
+    }
+
     cmd.p[0] = adjustTextX(x, tw);
     cmd.p[1] = adjustTextY(y);
     cmd.text = std::string(t);
@@ -917,33 +978,66 @@ void CanvasScene::fillText(const std::string& text, float x, float y) {
     dirty_ = true;
     snapshotValid_ = false;
     snapshotImageValid_ = false;
+}
+
+void CanvasScene::fillText(const std::string& text, float x, float y) {
+    recordText(/*stroke=*/false, text, x, y);
 }
 
 void CanvasScene::strokeText(const std::string& text, float x, float y) {
-    if (text.empty()) return;
-    std::string utf8Scratch;
-    std::string_view t = render::ensureValidUtf8(text, utf8Scratch);
-    float tw = font_.measureText(t.data(), t.size(), SkTextEncoding::kUTF8);
-    CanvasCmd cmd;
-    cmd.type = CanvasCmd::kStrokeText;
-    cmd.paint = makeStrokePaint();
-    cmd.p[0] = adjustTextX(x, tw);
-    cmd.p[1] = adjustTextY(y);
-    cmd.text = std::string(t);
-    cmd.font = font_;
-    commands_.push_back(std::move(cmd));
-    dirty_ = true;
-    snapshotValid_ = false;
-    snapshotImageValid_ = false;
+    recordText(/*stroke=*/true, text, x, y);
 }
 
-render::TextMetrics CanvasScene::measureText(const std::string& text) {
+CanvasTextMetrics CanvasScene::measureText(const std::string& text) {
     SkFontMetrics fm;
     font_.getMetrics(&fm);
     std::string utf8Scratch;
     std::string_view t = render::ensureValidUtf8(text, utf8Scratch);
-    float w = font_.measureText(t.data(), t.size(), SkTextEncoding::kUTF8);
-    return { w, -fm.fAscent + fm.fDescent, -fm.fAscent, fm.fDescent };
+
+    CanvasTextMetrics m;
+    SkRect ink = SkRect::MakeEmpty();
+    if (const render::ShapedRun* run = shapeCurrent(t)) {
+        m.width = run->width();
+        ink = run->bounds();
+    }
+
+    // Everything below is relative to the alignment point. `anchorX` is where
+    // the text's left edge lands relative to it, and `baseOff` is where the
+    // alphabetic baseline lands (positive = below). Both come from the very
+    // functions fillText uses to place the text, so the reported box is
+    // exactly the box that would be drawn.
+    const float anchorX = adjustTextX(0.0f, m.width);
+    const float baseOff = adjustTextY(0.0f);
+
+    m.actualLeft  = -(ink.fLeft + anchorX);
+    m.actualRight = ink.fRight + anchorX;
+    // Skia's glyph bounds are y-down from the baseline: fTop is negative for
+    // ink above it. Ascent is reported positive upward, hence the negation.
+    m.actualAscent  = -(baseOff + ink.fTop);
+    m.actualDescent = baseOff + ink.fBottom;
+
+    m.fontAscent  = -(baseOff + fm.fAscent);
+    m.fontDescent = baseOff + fm.fDescent;
+
+    // The em square, split across the baseline in the same proportion as the
+    // font's own ascent and descent. A face's real em-box split lives in the
+    // OS/2 typo metrics, which SkFontMetrics does not surface; this keeps
+    // emAscent + emDescent == the font size, which is the property callers
+    // actually use these for.
+    const float span = (-fm.fAscent) + fm.fDescent;
+    const float size = font_.getSize();
+    if (span > 0.0f) {
+        m.emAscent  = size * (-fm.fAscent) / span - baseOff;
+        m.emDescent = size * fm.fDescent / span + baseOff;
+    }
+
+    m.alphabeticBaseline  = -baseOff;
+    // No face here exposes a BASE table, so the hanging and ideographic
+    // baselines use the conventional fractions of the ascent and descent that
+    // browsers fall back to for fonts without one.
+    m.hangingBaseline     = -baseOff + 0.8f * (-fm.fAscent);
+    m.ideographicBaseline = -baseOff - fm.fDescent;
+    return m;
 }
 
 // ---------------------------------------------------------------------------
@@ -1102,6 +1196,7 @@ void CanvasScene::restore() {
         fontString_ = state_.fontStr;
         textAlign_ = state_.textAlignVal;
         textBaseline_ = state_.textBaselineVal;
+        direction_ = state_.directionVal;
         shadowBlur_ = state_.shadowBlurVal;
         shadowR_ = state_.shadowR; shadowG_ = state_.shadowG;
         shadowB_ = state_.shadowB; shadowA_ = state_.shadowA;
@@ -1403,8 +1498,10 @@ void CanvasScene::flushCommands() {
             break;
         case CanvasCmd::kFillText:
         case CanvasCmd::kStrokeText:
-            c->drawSimpleText(cmd.text.data(), cmd.text.size(), SkTextEncoding::kUTF8,
-                              cmd.p[0], cmd.p[1], cmd.font, cmd.paint);
+            // Shaped at record time; this thread only replays glyphs.
+            if (cmd.blob) c->drawTextBlob(cmd.blob, cmd.p[0], cmd.p[1], cmd.paint);
+            else c->drawSimpleText(cmd.text.data(), cmd.text.size(), SkTextEncoding::kUTF8,
+                                   cmd.p[0], cmd.p[1], cmd.font, cmd.paint);
             break;
         case CanvasCmd::kDrawImage:
             c->drawImageRect(cmd.img, cmd.src, cmd.dst, cmd.samp, &cmd.paint,

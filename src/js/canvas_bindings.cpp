@@ -351,11 +351,23 @@ static JSValue js_measureText(JSContext* ctx, JSValueConst this_val,
     const char* s = JS_ToCString(ctx, argv[0]);
     std::string str = s ? s : "";
     if (s) JS_FreeCString(ctx, s);
-    auto metrics = sc->measureText(str);
+    auto m = sc->measureText(str);
     JSValue obj = JS_NewObject(ctx);
-    JS_SetPropertyStr(ctx, obj, "width", JS_NewFloat64(ctx, metrics.width));
-    JS_SetPropertyStr(ctx, obj, "actualBoundingBoxAscent", JS_NewFloat64(ctx, metrics.ascent));
-    JS_SetPropertyStr(ctx, obj, "actualBoundingBoxDescent", JS_NewFloat64(ctx, metrics.descent));
+    auto set = [&](const char* k, float v) {
+        JS_SetPropertyStr(ctx, obj, k, JS_NewFloat64(ctx, v));
+    };
+    set("width", m.width);
+    set("actualBoundingBoxLeft", m.actualLeft);
+    set("actualBoundingBoxRight", m.actualRight);
+    set("actualBoundingBoxAscent", m.actualAscent);
+    set("actualBoundingBoxDescent", m.actualDescent);
+    set("fontBoundingBoxAscent", m.fontAscent);
+    set("fontBoundingBoxDescent", m.fontDescent);
+    set("emHeightAscent", m.emAscent);
+    set("emHeightDescent", m.emDescent);
+    set("hangingBaseline", m.hangingBaseline);
+    set("alphabeticBaseline", m.alphabeticBaseline);
+    set("ideographicBaseline", m.ideographicBaseline);
     return obj;
 }
 
@@ -530,9 +542,9 @@ static JSValue raw_get_textAlign(JSContext* ctx, JSValueConst this_val, int, JSV
     auto* w = qjsbind::unwrap<CW>(ctx, this_val);
     auto* sc = w ? w->scene : nullptr;
     if (!sc) return JS_UNDEFINED;
-    static const char* names[] = {"start", "center", "right", "end"};
+    static const char* names[] = {"start", "center", "right", "end", "left"};
     int v = sc->textAlign();
-    return JS_NewString(ctx, (v >= 0 && v <= 3) ? names[v] : "start");
+    return JS_NewString(ctx, (v >= 0 && v <= 4) ? names[v] : "start");
 }
 
 static JSValue raw_set_textAlign(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -542,10 +554,35 @@ static JSValue raw_set_textAlign(JSContext* ctx, JSValueConst this_val, int argc
     const char* s = JS_ToCString(ctx, argv[0]);
     std::string str = s ? s : "";
     if (s) JS_FreeCString(ctx, s);
-    if (str == "left" || str == "start") sc->setTextAlign(0);
+    // `left`/`right` are absolute; `start`/`end` resolve against `direction`.
+    // They need distinct codes so the getter returns what was assigned.
+    if (str == "start") sc->setTextAlign(0);
     else if (str == "center") sc->setTextAlign(1);
     else if (str == "right") sc->setTextAlign(2);
     else if (str == "end") sc->setTextAlign(3);
+    else if (str == "left") sc->setTextAlign(4);
+    return JS_UNDEFINED;
+}
+
+static JSValue raw_get_direction(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc) return JS_UNDEFINED;
+    static const char* names[] = {"ltr", "rtl", "inherit"};
+    int v = sc->direction();
+    return JS_NewString(ctx, (v >= 0 && v <= 2) ? names[v] : "ltr");
+}
+
+static JSValue raw_set_direction(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<CW>(ctx, this_val);
+    auto* sc = w ? w->scene : nullptr;
+    if (!sc || argc < 1) return JS_UNDEFINED;
+    const char* s = JS_ToCString(ctx, argv[0]);
+    std::string str = s ? s : "";
+    if (s) JS_FreeCString(ctx, s);
+    if (str == "ltr") sc->setDirection(0);
+    else if (str == "rtl") sc->setDirection(1);
+    else if (str == "inherit") sc->setDirection(2);
     return JS_UNDEFINED;
 }
 
@@ -760,6 +797,7 @@ void CanvasBindings::install(JSContext* ctx) {
     defineRawProp(ctx, proto, "globalCompositeOperation",raw_get_globalCompositeOp, raw_set_globalCompositeOp);
     defineRawProp(ctx, proto, "textAlign",               raw_get_textAlign,       raw_set_textAlign);
     defineRawProp(ctx, proto, "textBaseline",            raw_get_textBaseline,    raw_set_textBaseline);
+    defineRawProp(ctx, proto, "direction",               raw_get_direction,       raw_set_direction);
     defineRawProp(ctx, proto, "shadowColor",             raw_get_shadowColor,     raw_set_shadowColor);
 
     JS_FreeValue(ctx, proto);
