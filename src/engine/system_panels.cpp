@@ -263,7 +263,8 @@ void Engine::scanSystemPanelDir(const std::string& baseDir, const std::string& r
 
         // Install settings bindings if available
         if (settings_) {
-            js::SettingsBindings::install(doc.jsCtx, settings_.get(), window_.get());
+            js::SettingsBindings::install(doc.jsCtx, settings_.get(),
+                                          window_.get(), this);
         }
 
         // Install Canvas 2D bindings on this panel's context. The getContext

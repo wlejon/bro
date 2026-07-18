@@ -1,4 +1,5 @@
 #include "js/settings_bindings.h"
+#include "engine/engine.h"
 #include "engine/settings.h"
 #include "platform/sdl_window.h"
 #include "util/log.h"
@@ -19,6 +20,7 @@ static const char* kWindowKey = "__bro_settings_window_ptr";
 struct SettingsState {
     engine::Settings* settings = nullptr;
     platform::Window* window = nullptr;
+    engine::Engine* engine = nullptr;   // polled action state; may be null
 };
 
 static SettingsState* getState(JSContext* ctx) {
@@ -244,7 +246,9 @@ static JSValue js_settings_reset(JSContext* ctx, JSValueConst, int argc, JSValue
 }
 
 // ---------------------------------------------------------------------------
-// bro.settings.defineAction(action, keys[])
+// bro.settings.defineAction(action, keys[] [, options])
+//   options.deadzone: per-action deadzone for "gamepad:<axis>+/-" bindings
+//   (default 0.1, the analog-trigger press convention).
 // ---------------------------------------------------------------------------
 
 static JSValue js_settings_defineAction(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -268,6 +272,16 @@ static JSValue js_settings_defineAction(JSContext* ctx, JSValueConst, int argc, 
     }
 
     state->settings->defineAction(action, keys);
+
+    if (argc >= 3 && JS_IsObject(argv[2])) {
+        JSValue dz = JS_GetPropertyStr(ctx, argv[2], "deadzone");
+        if (JS_IsNumber(dz)) {
+            double d = 0.0;
+            JS_ToFloat64(ctx, &d, dz);
+            state->settings->setActionDeadzone(action, static_cast<float>(d));
+        }
+        JS_FreeValue(ctx, dz);
+    }
     return JS_UNDEFINED;
 }
 
@@ -352,6 +366,27 @@ static JSValue js_settings_getKeyAction(JSContext* ctx, JSValueConst, int argc, 
     std::string action = state->settings->getActionForKey(jsStr(ctx, argv[0]));
     if (action.empty()) return JS_NULL;
     return JS_NewString(ctx, action.c_str());
+}
+
+// ---------------------------------------------------------------------------
+// bro.settings.getActionStrength(action) / bro.settings.isActionPressed(action)
+// Polled action state, evaluated across all of the action's bindings
+// (implementations in engine/action_input.cpp).
+// ---------------------------------------------------------------------------
+
+static JSValue js_settings_getActionStrength(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NewFloat64(ctx, 0.0);
+    auto* state = getState(ctx);
+    if (!state || !state->engine) return JS_NewFloat64(ctx, 0.0);
+    float s = state->engine->actionStrength(jsStr(ctx, argv[0]));
+    return JS_NewFloat64(ctx, static_cast<double>(s));
+}
+
+static JSValue js_settings_isActionPressed(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_FALSE;
+    auto* state = getState(ctx);
+    if (!state || !state->engine) return JS_FALSE;
+    return JS_NewBool(ctx, state->engine->actionPressed(jsStr(ctx, argv[0])));
 }
 
 // ---------------------------------------------------------------------------
@@ -466,6 +501,8 @@ static const JSCFunctionListEntry js_settings_funcs[] = {
     JS_CFUNC_DEF("resetAllActions", 0, js_settings_resetAllActions),
     JS_CFUNC_DEF("getActionKeys", 1, js_settings_getActionKeys),
     JS_CFUNC_DEF("getKeyAction", 1, js_settings_getKeyAction),
+    JS_CFUNC_DEF("getActionStrength", 1, js_settings_getActionStrength),
+    JS_CFUNC_DEF("isActionPressed", 1, js_settings_isActionPressed),
     JS_CFUNC_DEF("getActions", 0, js_settings_getActions),
     JS_CFUNC_DEF("getAppActions", 0, js_settings_getAppActions),
     JS_CFUNC_DEF("getDisplayModes", 0, js_settings_getDisplayModes),
@@ -477,10 +514,12 @@ static const JSCFunctionListEntry js_settings_funcs[] = {
 // ---------------------------------------------------------------------------
 
 void SettingsBindings::install(JSContext* ctx, engine::Settings* settings,
-                               platform::Window* window) {
+                               platform::Window* window,
+                               engine::Engine* engine) {
     auto* state = new SettingsState();
     state->settings = settings;
     state->window = window;
+    state->engine = engine;
 
     JSValue global = JS_GetGlobalObject(ctx);
 

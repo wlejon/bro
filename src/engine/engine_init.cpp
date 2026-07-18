@@ -257,7 +257,8 @@ Engine::Engine(const EngineConfig& config)
         js::StorageBindings::installSessionStorage(jsRuntime_->getContext());
 
         // Settings JS API
-        js::SettingsBindings::install(jsRuntime_->getContext(), settings_.get(), nullptr);
+        js::SettingsBindings::install(jsRuntime_->getContext(), settings_.get(),
+                                      nullptr, this);
 
         // Register app directory as base path for fetch and fs
         brokit::api::addFetchBasePath(jsRuntime_->getContext(), config.appDir);
@@ -587,7 +588,7 @@ void Engine::initAppRealm() {
 
     // Settings JS API (bro.settings.*)
     js::SettingsBindings::install(jsRuntime_->getContext(), settings_.get(),
-                                  window_ ? window_.get() : nullptr);
+                                  window_ ? window_.get() : nullptr, this);
 
     // Set the base path so relative paths work.
     drawTraversal_->setBasePath(manifest_.basePath);

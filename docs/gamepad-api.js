@@ -130,15 +130,36 @@ gamepad.vibrationActuator.reset();
  *   south east west north leftshoulder rightshoulder lefttrigger righttrigger
  *   back start leftstick rightstick dpup dpdown dpleft dpright guide
  *
+ * Stick-axis DIRECTIONS bind too, as "gamepad:<axis>+" / "gamepad:<axis>-"
+ * (axes: leftx lefty rightx righty). An axis binding presses once the
+ * deflection along its direction crosses the action's deadzone (default 0.1;
+ * per-action override via defineAction's options.deadzone) and releases with
+ * hysteresis below deadzone * 0.75, so jitter at the threshold can't spam
+ * down/up pairs.
+ *
  * Press/release edges dispatch the same "action" CustomEvent on document.body
  * as keys do (triggers count as pressed past 0.1). detail.gamepad carries the
- * slot index. See docs/settings.md for the full action system.
+ * slot index, detail.strength the analog contribution at the edge (trigger
+ * value, deadzone-rescaled axis deflection, 1/0 for digital buttons). See
+ * docs/settings.md for the full action system.
  */
 bro.settings.defineAction("jump", [" ", "gamepad:south"]);
 bro.settings.defineAction("pause", ["Escape", "gamepad:start"]);
+bro.settings.defineAction("move_right", ["d", "gamepad:leftx+"], { deadzone: 0.25 });
 
 document.body.addEventListener("action", (e) => {
     if (e.detail.action === "jump" && e.detail.phase === "down") {
         player.jump();   // e.detail.key === "gamepad:south" when pad-driven
     }
 });
+
+/**
+ * Polled action state — per-frame analog reads without listening for edges.
+ * getActionStrength(name): 0..1, max over the action's bindings (keys/mouse
+ * 0/1, triggers analog, axis bindings deadzone-rescaled: (m - dz) / (1 - dz)).
+ * isActionPressed(name): boolean; axis bindings answer from the same
+ * hysteresis latch that drives their events. Headless-injected gamepadAxis()
+ * values flow through identically, so tests can assert exact strengths.
+ */
+const v = bro.settings.getActionStrength("move_right");   // e.g. 0.5 at 55% stick
+const held = bro.settings.isActionPressed("jump");

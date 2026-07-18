@@ -235,6 +235,29 @@ document.addEventListener("action", (e) => {
 
 Keyboard action events fire after the standard `keydown`/`keyup` event. Both events propagate independently.
 
+### Polled action state
+
+For per-frame game loops, poll instead of (or alongside) listening:
+
+| Function | Description |
+|----------|-------------|
+| `bro.settings.getActionStrength(name)` | Current analog strength 0..1: the max over all of the action's bindings. Keyboard keys and mouse buttons contribute 0/1, gamepad buttons their analog value (triggers are analog), axis bindings their deadzone-rescaled deflection `(m - deadzone) / (1 - deadzone)` |
+| `bro.settings.isActionPressed(name)` | Polled pressed state. Axis bindings use the same hysteresis latch that drives their `"action"` events, so polling always agrees with the down/up stream |
+
+```js
+bro.settings.defineAction("move_right", ["d", "gamepad:leftx+"]);
+
+function tick() {
+    const v = bro.settings.getActionStrength("move_right");  // analog on stick,
+    player.x += v * speed * dt;                              // 0/1 on the key
+    if (bro.settings.isActionPressed("jump")) { /* ... */ }
+}
+```
+
+Unlike `"action"` events (edges only), `getActionStrength` tracks analog
+changes continuously — a trigger held at 0.9 reads 0.9 even though no new
+event fired since it crossed the press threshold.
+
 ## Priority system
 
 Settings are resolved with three layers (later wins):

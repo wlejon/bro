@@ -217,7 +217,7 @@ void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {
     js::StorageBindings::installSessionStorage(dp->jsCtx);
     if (settings_)
         js::SettingsBindings::install(dp->jsCtx, settings_.get(),
-                                      window_ ? window_.get() : nullptr);
+                                      window_ ? window_.get() : nullptr, this);
     js::CanvasBindings::install(dp->jsCtx);
     js::ImageBindings::install(dp->jsCtx, manifest.basePath);
     js::ImageBitmapBindings::install(dp->jsCtx);
