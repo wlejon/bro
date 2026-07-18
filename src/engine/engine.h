@@ -16,6 +16,7 @@
 #include "engine/scrollbar.h"
 #include "engine/settings.h"
 #include "engine/ui_layer.h"
+#include "js/message_queue.h"  // js::Message — secondary-window postMessage queues
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
 #include "render/skia_backend.h"
@@ -321,6 +322,19 @@ public:
         bool borderless = false;
         bool alwaysOnTop = false;
         bool hidden = false;   // forced true in headless (deterministic tests)
+        int minWidth = 0, minHeight = 0;   // 0 = unconstrained
+        int maxWidth = 0, maxHeight = 0;
+
+        /// Which of the above the CALLER passed explicitly. The child app's own
+        /// bro.json supplies the rest (see applyChildManifestDefaults): explicit
+        /// open() options win over the child manifest, which wins over the
+        /// built-in defaults. Only the keys a bro.json can carry need a flag.
+        struct Provided {
+            bool width = false, height = false, title = false;
+            bool resizable = false, borderless = false, alwaysOnTop = false;
+            bool minWidth = false, minHeight = false;
+            bool maxWidth = false, maxHeight = false;
+        } provided;
     };
 
     /// One secondary window host: a real OS window plus the isolated document
@@ -377,6 +391,14 @@ public:
         render::SkiaRenderer::GPUSurface surface;
         int surfW = 0, surfH = 0;
         unsigned int fboTexture = 0;
+
+        /// Parent → this window: structured-clone payloads waiting to be
+        /// deserialized into `jsCtx` and dispatched as 'message' events, in
+        /// post order. Drained at the raster-idle point
+        /// (drainWindowHostMessages) so the app JS a message triggers never
+        /// lands mid-frame. Living IN the host means a window that closes
+        /// before delivery simply drops its undelivered mail.
+        std::vector<std::unique_ptr<js::Message>> inbox;
     };
 
     /// Queue a new host. Returns its bro id immediately; the OS window
@@ -420,6 +442,30 @@ public:
     /// render (chunk 2), and firing 'close' runs app JS. Fires handle 'close'
     /// events through the window-host bindings.
     void processPendingWindowHosts();
+
+    // ── Messaging between a window host's realm and the app realm ───────────
+    // Both directions are structured clones (js/message_serializer.cpp — the
+    // same encoder Worker.postMessage uses, transfers included) handed over as
+    // a serialized Message and deserialized into the DESTINATION context.
+    // Delivery is asynchronous: queued here, drained at the raster-idle point
+    // by drainWindowHostMessages(), never on the caller's stack.
+
+    /// App realm → host `id`. Takes ownership. False when `id` is unknown or
+    /// already closing — a message to a dead window is a silent no-op, exactly
+    /// like the web's postMessage to a closed window.
+    bool postMessageToWindowHost(uint64_t id, std::unique_ptr<js::Message> msg);
+    /// Host `hostId` → the app realm's handle for it. Takes ownership. A
+    /// message whose window (or handle) is gone by delivery time is dropped.
+    void postMessageToParent(uint64_t hostId, std::unique_ptr<js::Message> msg);
+    /// Deliver every queued message: children first (so a reply posted from a
+    /// child's 'message' handler reaches the parent in this same drain), then
+    /// the parent's handles. Runs app JS — raster-idle points only, beside
+    /// processPendingWindowHosts().
+    void drainWindowHostMessages();
+    /// The host whose realm is `ctx`, or 0 when `ctx` is not a host realm
+    /// (the app realm, an iframe, a system panel). Lets the child-side
+    /// bindings resolve "my window" from the context they run on.
+    uint64_t windowHostIdForContext(JSContext* ctx) const;
 
     // ── Per-window input routing (src/engine/window_host_input.cpp) ─────────
     // Every input event that lands on a secondary window comes through here,
@@ -1414,6 +1460,14 @@ private:
     // Keyboard, text input and IME follow this; mouse events carry their own
     // windowID and never consult it.
     uint64_t focusedHostId_ = 0;
+    // Host → app-realm messages awaiting the next drain, in post order across
+    // ALL hosts (each entry names its sender). Parent-bound mail outlives its
+    // window deliberately: a child that posts and then closes itself still gets
+    // its last word delivered, as long as the handle is still around.
+    std::vector<std::pair<uint64_t, std::unique_ptr<js::Message>>> hostToParentMessages_;
+    /// Seed a queued host's options from the child app's own bro.json (window
+    /// keys only), for every option the open() caller did not pass explicitly.
+    void applyChildManifestDefaults(WindowHost& h, const std::string& appDir);
     /// Per-window composite pass (windowed frame loop, after the main
     /// composite): for each created, non-minimized host — MakeCurrent(host,
     /// main ctx), viewport, clear to the host's color, swap at interval 0 —
@@ -1422,7 +1476,7 @@ private:
     void compositeWindowHosts();
     /// Build a host's document realm from opts.src (queued-create drain), and
     /// tear one down. Both run only at the raster-idle drain point.
-    void createWindowHostDoc(WindowHost& h);
+    void createWindowHostDoc(WindowHost& h, struct SubDocSource& source);
     void teardownWindowHostDoc(WindowHost& h);
     /// Refresh a host's layout box from its OS window's current client size,
     /// pushing innerWidth/innerHeight + a 'resize' event into its realm when it

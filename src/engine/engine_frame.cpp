@@ -944,6 +944,10 @@ void Engine::run() {
                 // and 'close' events run app JS — same reasoning as the
                 // iframe drains around this.
                 processPendingWindowHosts();
+                // Deliver queued window postMessage traffic at the same point:
+                // it runs app JS in both realms, so it belongs where the
+                // raster thread is idle and never mid-frame.
+                drainWindowHostMessages();
                 // Instantiate sub-docs for <iframe>s JS just added, and tear down
                 // those whose element left the tree. Same raster-idle reasoning as
                 // the reload drain. The new element's layout may not have landed

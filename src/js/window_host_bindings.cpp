@@ -1,9 +1,15 @@
-// bro.window.open() — secondary OS windows (multiwindow v1 IN PROGRESS).
+// bro.window.open() — secondary OS windows.
 //
 // The handle covers the whole window lifecycle — open → real OS window hosting
 // an isolated document realm built from `src`, geometry/title/focus control,
-// capture() for the window's pixels, 'load' when the document is ready, and
-// 'close' on close() / the OS close button (see docs/window-api.js).
+// capture() for the window's pixels, postMessage() to the child realm, and the
+// 'load' / 'message' / 'resize' / 'close' events (see docs/window-api.js).
+//
+// This file is BOTH sides of the conversation:
+//   • Parent side (app realm) — bro.window.open + the handle class.
+//   • Child side (a host's own realm) — bro.window.parent.postMessage and
+//     window.close() self-close, installed only when the context being set up
+//     IS a window host's realm (the engine answers that per JSContext).
 //
 // Realm policy: only the MAIN app realm may open windows. The binding is
 // also installed into child (iframe) realms so a call there throws a clean,
@@ -15,9 +21,15 @@
 
 #include "engine/engine.h"
 #include "js/imagebitmap_bindings.h"
+#include "js/message_queue.h"
+#include "js/message_serializer.h"
 #include "js/runtime.h"
 #include "platform/sdl_window.h"
 #include "util/log.h"
+
+#include <array>
+#include <functional>
+#include <memory>
 
 #include <qjsbind/qjsbind.h>
 
@@ -34,7 +46,7 @@ namespace bro::js {
 namespace {
 
 // One engine per process (same assumption as the other engine-bound statics
-// in this directory; per-realm scoping is the next chunk's work).
+// in this directory).
 engine::Engine* s_engine = nullptr;
 
 // The JS-side handle for one window host. Owned by its JS wrapper object
@@ -43,15 +55,24 @@ engine::Engine* s_engine = nullptr;
 struct WindowHandle {
     engine::Engine* engine = nullptr;
     uint64_t id = 0;
-    // 'close' / 'load' listeners, JS_DupValue'd. Marked in gc_mark, freed in
+    // Listeners per event type, JS_DupValue'd. Marked in gc_mark, freed in
     // the finalizer / on removeEventListener.
     std::vector<JSValue> closeListeners;
     std::vector<JSValue> loadListeners;
+    std::vector<JSValue> messageListeners;
+    std::vector<JSValue> resizeListeners;
 
     std::vector<JSValue>* listenersFor(std::string_view type) {
-        if (type == "close") return &closeListeners;
-        if (type == "load")  return &loadListeners;
+        if (type == "close")   return &closeListeners;
+        if (type == "load")    return &loadListeners;
+        if (type == "message") return &messageListeners;
+        if (type == "resize")  return &resizeListeners;
         return nullptr;
+    }
+
+    std::array<std::vector<JSValue>*, 4> allListenerLists() {
+        return {&closeListeners, &loadListeners, &messageListeners,
+                &resizeListeners};
     }
 };
 
@@ -64,9 +85,51 @@ void handleFinalizer(JSRuntime* rt, JSValue val) {
     auto* h = static_cast<WindowHandle*>(
         JS_GetOpaque(val, qjsbind::class_id<WindowHandle>()));
     if (!h) return;
-    for (JSValue& fn : h->closeListeners) JS_FreeValueRT(rt, fn);
-    for (JSValue& fn : h->loadListeners) JS_FreeValueRT(rt, fn);
+    for (auto* list : h->allListenerLists())
+        for (JSValue& fn : *list) JS_FreeValueRT(rt, fn);
     delete h;
+}
+
+// Fire one handle event. `fill` decorates the event object with type-specific
+// properties (message data, resize dimensions) and may be null. Listeners are
+// snapshotted first — one may add or remove listeners while we iterate.
+void dispatchHandleEvent(JSContext* ctx, JSValue handle, const char* type,
+                         const std::function<void(JSValue)>& fill) {
+    auto* h = qjsbind::unwrap<WindowHandle>(ctx, handle);
+    if (!h) return;
+    std::vector<JSValue>* list = h->listenersFor(type);
+    if (!list || list->empty()) return;
+    std::vector<JSValue> listeners;
+    listeners.reserve(list->size());
+    for (JSValue& fn : *list) listeners.push_back(JS_DupValue(ctx, fn));
+    for (JSValue& fn : listeners) {
+        JSValue ev = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, ev, "type", JS_NewString(ctx, type));
+        JS_SetPropertyStr(ctx, ev, "target", JS_DupValue(ctx, handle));
+        if (fill) fill(ev);
+        JSValue ret = JS_Call(ctx, fn, handle, 1, &ev);
+        if (JS_IsException(ret)) {
+            JSValue ex = JS_GetException(ctx);
+            const char* str = JS_ToCString(ctx, ex);
+            if (str) {
+                LOG_ERROR("window '%s' listener: %s", type, str);
+                JS_FreeCString(ctx, str);
+            }
+            JS_FreeValue(ctx, ex);
+        }
+        JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, ev);
+        JS_FreeValue(ctx, fn);
+    }
+}
+
+// The registry entry for one host id on one context, or JS_UNDEFINED.
+JSValue handleFor(JSContext* ctx, uint64_t id) {
+    auto ctxIt = s_handles.find(ctx);
+    if (ctxIt == s_handles.end()) return JS_UNDEFINED;
+    auto it = ctxIt->second.find(id);
+    if (it == ctxIt->second.end()) return JS_UNDEFINED;
+    return it->second;
 }
 
 engine::Engine::WindowHost* hostFor(const WindowHandle* h) {
@@ -123,6 +186,28 @@ JSValue js_handle_removeEventListener(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
+// handle.postMessage(data, transfer?) — structured clone into the child realm.
+// Raw so the optional transfer list reaches the serializer untouched.
+//
+// The value is serialized EAGERLY, even for a window that is already gone: the
+// clone is what detaches transferred ArrayBuffers and what rejects a
+// non-cloneable value with a TypeError, and neither should depend on whether
+// the destination happens to still be open. Delivery itself is the part that
+// no-ops (web semantics for posting to a closed window).
+JSValue js_handle_postMessage(JSContext* ctx, JSValueConst this_val,
+                              int argc, JSValueConst* argv) {
+    auto* h = qjsbind::unwrap<WindowHandle>(ctx, this_val);
+    if (!h || !h->engine) return JS_UNDEFINED;
+    JSValue value = argc > 0 ? argv[0] : JS_UNDEFINED;
+    JSValue transferList = argc > 1 ? argv[1] : JS_UNDEFINED;
+
+    auto msg = std::make_unique<Message>();
+    if (!serializeMessage(ctx, value, transferList, *msg))
+        return JS_EXCEPTION;
+    h->engine->postMessageToWindowHost(h->id, std::move(msg));
+    return JS_UNDEFINED;
+}
+
 // Register the handle class on this context. The class id/def are runtime-
 // wide; the Class builder re-run on a fresh context (app reload) just
 // installs a fresh prototype for it — the same pattern the other qjsbind
@@ -132,8 +217,8 @@ void registerHandleClass(JSContext* ctx) {
     qjsbind::Class<WindowHandle>(ctx, "BroWindowHandle",
                                  qjsbind::NoGlobal, handleFinalizer)
         .gc_mark([](WindowHandle* h, JSRuntime* rt, JS_MarkFunc* mark) {
-            for (JSValue& fn : h->closeListeners) JS_MarkValue(rt, fn, mark);
-            for (JSValue& fn : h->loadListeners) JS_MarkValue(rt, fn, mark);
+            for (auto* list : h->allListenerLists())
+                for (JSValue& fn : *list) JS_MarkValue(rt, fn, mark);
         })
         .get("id", [](WindowHandle* h) { return static_cast<double>(h->id); })
         .get("closed", [](WindowHandle* h) { return hostFor(h) == nullptr; })
@@ -219,6 +304,7 @@ void registerHandleClass(JSContext* ctx) {
             JS_FreeValue(c, abuf);
             return ImageBitmapBindings::makeImageData(c, w, ht, dataArr);
         })
+        .method_raw("postMessage", js_handle_postMessage, 2)
         .method_raw("addEventListener", js_handle_addEventListener, 2)
         .method_raw("removeEventListener", js_handle_removeEventListener, 2);
 }
@@ -249,6 +335,15 @@ JSValue js_bro_window_open(JSContext* ctx, JSValueConst /*this_val*/,
 
     if (argc >= 2 && JS_IsObject(argv[1])) {
         JSValueConst o = argv[1];
+        // `provided` records which keys the caller actually passed: those win
+        // over the child app's own bro.json, everything else defers to it
+        // (Engine::applyChildManifestDefaults).
+        auto has = [&](const char* key) {
+            JSValue v = JS_GetPropertyStr(ctx, o, key);
+            bool present = !JS_IsUndefined(v);
+            JS_FreeValue(ctx, v);
+            return present;
+        };
         opts.width  = qjsbind::get_prop_int(ctx, o, "width", opts.width);
         opts.height = qjsbind::get_prop_int(ctx, o, "height", opts.height);
         opts.title  = qjsbind::get_prop_string(ctx, o, "title", opts.title.c_str());
@@ -259,6 +354,20 @@ JSValue js_bro_window_open(JSContext* ctx, JSValueConst /*this_val*/,
         opts.borderless  = qjsbind::get_prop_bool(ctx, o, "borderless", opts.borderless);
         opts.alwaysOnTop = qjsbind::get_prop_bool(ctx, o, "alwaysOnTop", opts.alwaysOnTop);
         opts.hidden      = qjsbind::get_prop_bool(ctx, o, "hidden", opts.hidden);
+        opts.minWidth  = qjsbind::get_prop_int(ctx, o, "minWidth", opts.minWidth);
+        opts.minHeight = qjsbind::get_prop_int(ctx, o, "minHeight", opts.minHeight);
+        opts.maxWidth  = qjsbind::get_prop_int(ctx, o, "maxWidth", opts.maxWidth);
+        opts.maxHeight = qjsbind::get_prop_int(ctx, o, "maxHeight", opts.maxHeight);
+        opts.provided.width       = has("width");
+        opts.provided.height      = has("height");
+        opts.provided.title       = has("title");
+        opts.provided.resizable   = has("resizable");
+        opts.provided.borderless  = has("borderless");
+        opts.provided.alwaysOnTop = has("alwaysOnTop");
+        opts.provided.minWidth    = has("minWidth");
+        opts.provided.minHeight   = has("minHeight");
+        opts.provided.maxWidth    = has("maxWidth");
+        opts.provided.maxHeight   = has("maxHeight");
     }
     if (opts.width < 1) opts.width = 1;
     if (opts.height < 1) opts.height = 1;
@@ -277,6 +386,39 @@ JSValue js_bro_window_open(JSContext* ctx, JSValueConst /*this_val*/,
     // Pin the handle until its 'close' fires (or the realm is cleaned up).
     s_handles[ctx][id] = JS_DupValue(ctx, handle);
     return handle;
+}
+
+// ── Child side: bindings that only exist inside a host window's own realm ──
+
+// bro.window.parent.postMessage(data, transfer?) — child → app realm, arriving
+// as a 'message' event on the parent's handle for THIS window.
+JSValue js_child_parent_postMessage(JSContext* ctx, JSValueConst /*this_val*/,
+                                    int argc, JSValueConst* argv) {
+    if (!s_engine) return JS_UNDEFINED;
+    uint64_t id = s_engine->windowHostIdForContext(ctx);
+    if (id == 0)
+        return JS_ThrowTypeError(ctx,
+            "bro.window.parent.postMessage is only available in a secondary window");
+    JSValue value = argc > 0 ? argv[0] : JS_UNDEFINED;
+    JSValue transferList = argc > 1 ? argv[1] : JS_UNDEFINED;
+    auto msg = std::make_unique<Message>();
+    if (!serializeMessage(ctx, value, transferList, *msg))
+        return JS_EXCEPTION;
+    s_engine->postMessageToParent(id, std::move(msg));
+    return JS_UNDEFINED;
+}
+
+// window.close() inside a host realm closes THAT window — the same queued path
+// as handle.close() and the OS close button, so the parent's 'close' fires and
+// the document tears down at the next drain. The main app realm keeps its own
+// window.close() (installWindowClose: quit the app); this one is installed
+// only on host contexts and never shadows it.
+JSValue js_child_window_close(JSContext* ctx, JSValueConst /*this_val*/,
+                              int /*argc*/, JSValueConst* /*argv*/) {
+    if (!s_engine) return JS_UNDEFINED;
+    if (uint64_t id = s_engine->windowHostIdForContext(ctx))
+        s_engine->closeWindowHost(id);
+    return JS_UNDEFINED;
 }
 
 } // namespace
@@ -304,6 +446,19 @@ void installWindowHostBindings(JSContext* ctx, engine::Engine* engine) {
     }
     JS_SetPropertyStr(ctx, win, "open",
                       JS_NewCFunction(ctx, js_bro_window_open, "open", 2));
+
+    // Is this context a secondary window's own realm? The engine knows: the
+    // host's jsCtx is assigned before the realm's bindings are installed, so
+    // the lookup already answers here. Only such a realm gets a parent to talk
+    // to and a window of its own to close.
+    if (s_engine && s_engine->windowHostIdForContext(ctx) != 0) {
+        JSValue parent = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, parent, "postMessage",
+            JS_NewCFunction(ctx, js_child_parent_postMessage, "postMessage", 2));
+        JS_SetPropertyStr(ctx, win, "parent", parent);
+        JS_SetPropertyStr(ctx, global, "close",
+            JS_NewCFunction(ctx, js_child_window_close, "close", 0));
+    }
     JS_FreeValue(ctx, win);
     JS_FreeValue(ctx, bro);
     JS_FreeValue(ctx, global);
@@ -316,38 +471,35 @@ void cleanupWindowHostBindings(JSContext* ctx) {
     s_handles.erase(it);
 }
 
-// Fire one handle event without unpinning the handle (used by 'load'; 'close'
-// has its own unpin-first ordering below).
+// Fire one handle event without unpinning the handle (used by 'load',
+// 'message' and 'resize'; 'close' has its own unpin-first ordering below).
 void windowHostNotifyLoaded(JSContext* ctx, uint64_t id) {
-    auto ctxIt = s_handles.find(ctx);
-    if (ctxIt == s_handles.end()) return;
-    auto it = ctxIt->second.find(id);
-    if (it == ctxIt->second.end()) return;
-    JSValue handle = it->second;
-    auto* h = qjsbind::unwrap<WindowHandle>(ctx, handle);
-    if (!h || h->loadListeners.empty()) return;
-    // Copy — a listener may add/remove listeners while we iterate.
-    std::vector<JSValue> listeners;
-    listeners.reserve(h->loadListeners.size());
-    for (JSValue& fn : h->loadListeners) listeners.push_back(JS_DupValue(ctx, fn));
-    for (JSValue& fn : listeners) {
-        JSValue ev = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, ev, "type", JS_NewString(ctx, "load"));
-        JS_SetPropertyStr(ctx, ev, "target", JS_DupValue(ctx, handle));
-        JSValue ret = JS_Call(ctx, fn, handle, 1, &ev);
-        if (JS_IsException(ret)) {
-            JSValue ex = JS_GetException(ctx);
-            const char* str = JS_ToCString(ctx, ex);
-            if (str) {
-                LOG_ERROR("window 'load' listener: %s", str);
-                JS_FreeCString(ctx, str);
-            }
-            JS_FreeValue(ctx, ex);
-        }
-        JS_FreeValue(ctx, ret);
-        JS_FreeValue(ctx, ev);
-        JS_FreeValue(ctx, fn);
+    JSValue handle = handleFor(ctx, id);
+    if (JS_IsUndefined(handle)) return;
+    dispatchHandleEvent(ctx, handle, "load", nullptr);
+}
+
+void windowHostNotifyMessage(JSContext* ctx, uint64_t id, JSValue data) {
+    JSValue handle = handleFor(ctx, id);
+    if (JS_IsUndefined(handle)) {
+        // The handle is gone (window closed, realm reloaded): the message has
+        // nowhere to land. Dropping it is the whole no-op story.
+        JS_FreeValue(ctx, data);
+        return;
     }
+    dispatchHandleEvent(ctx, handle, "message", [&](JSValue ev) {
+        JS_SetPropertyStr(ctx, ev, "data", JS_DupValue(ctx, data));
+    });
+    JS_FreeValue(ctx, data);
+}
+
+void windowHostNotifyResized(JSContext* ctx, uint64_t id, int width, int height) {
+    JSValue handle = handleFor(ctx, id);
+    if (JS_IsUndefined(handle)) return;
+    dispatchHandleEvent(ctx, handle, "resize", [&](JSValue ev) {
+        JS_SetPropertyStr(ctx, ev, "width", JS_NewInt32(ctx, width));
+        JS_SetPropertyStr(ctx, ev, "height", JS_NewInt32(ctx, height));
+    });
 }
 
 void windowHostNotifyClosed(JSContext* ctx, uint64_t id) {
@@ -359,32 +511,7 @@ void windowHostNotifyClosed(JSContext* ctx, uint64_t id) {
     // Unpin before dispatch so a listener that drops its own reference lets
     // the handle GC afterwards; `handle` keeps this call's ref until the end.
     ctxIt->second.erase(it);
-
-    if (auto* h = qjsbind::unwrap<WindowHandle>(ctx, handle)) {
-        // Copy — a listener may add/remove listeners while we iterate.
-        std::vector<JSValue> listeners;
-        listeners.reserve(h->closeListeners.size());
-        for (JSValue& fn : h->closeListeners)
-            listeners.push_back(JS_DupValue(ctx, fn));
-        for (JSValue& fn : listeners) {
-            JSValue ev = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, ev, "type", JS_NewString(ctx, "close"));
-            JS_SetPropertyStr(ctx, ev, "target", JS_DupValue(ctx, handle));
-            JSValue ret = JS_Call(ctx, fn, handle, 1, &ev);
-            if (JS_IsException(ret)) {
-                JSValue ex = JS_GetException(ctx);
-                const char* s = JS_ToCString(ctx, ex);
-                if (s) {
-                    LOG_ERROR("window 'close' listener: %s", s);
-                    JS_FreeCString(ctx, s);
-                }
-                JS_FreeValue(ctx, ex);
-            }
-            JS_FreeValue(ctx, ret);
-            JS_FreeValue(ctx, ev);
-            JS_FreeValue(ctx, fn);
-        }
-    }
+    dispatchHandleEvent(ctx, handle, "close", nullptr);
     JS_FreeValue(ctx, handle);
 }
 

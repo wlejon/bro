@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html>
+<head><style>html, body { margin: 0; width: 100%; height: 100%; background: #202020; }</style></head>
+<body>
+  <!-- A child app whose OWN bro.json carries window keys (width/height/title/
+       borderless/min size). tests/window/test_multiwindow_message.js opens it
+       both bare (manifest wins) and with explicit options (options win). It
+       reports its realm's view of the size so the parent can cross-check the
+       handle against innerWidth/innerHeight. -->
+  <script>
+    window.addEventListener('message', function () {
+      bro.window.parent.postMessage({
+        innerWidth: window.innerWidth,
+        innerHeight: window.innerHeight,
+      });
+    });
+  </script>
+</body>
+</html>

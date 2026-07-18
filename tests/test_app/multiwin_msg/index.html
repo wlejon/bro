@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #000000; }
+  #box { position: absolute; inset: 0; background: #000000; }
+</style></head>
+<body>
+  <!-- Message-echo child for tests/window/test_multiwindow_message.js.
+       Every reply goes back through bro.window.parent.postMessage, so the
+       parent test asserts on data rather than pixels. #box turns green when a
+       message has been handled, purely so a capture() can see life. -->
+  <div id="box"></div>
+  <script>
+    var seen = 0;
+    window.addEventListener('message', function (ev) {
+      seen++;
+      document.getElementById('box').style.background = '#00ff00';
+      var d = ev.data;
+
+      // "close-me" — self-close from the child realm.
+      if (d === 'close-me') { window.close(); return; }
+
+      // A transferred ArrayBuffer arrives as a real ArrayBuffer here; sum its
+      // bytes so the parent can prove the payload survived the transfer.
+      if (d && d.buf) {
+        var u8 = new Uint8Array(d.buf);
+        var sum = 0;
+        for (var i = 0; i < u8.length; i++) sum += u8[i];
+        bro.window.parent.postMessage({ kind: 'sum', sum: sum, len: u8.length });
+        return;
+      }
+
+      // Default: echo the payload back with the order it arrived in, plus a
+      // couple of facts about the child realm the parent can check.
+      bro.window.parent.postMessage({
+        kind: 'echo',
+        data: d,
+        seq: seen,
+        hasParent: typeof bro.window.parent.postMessage === 'function',
+        canOpen: (function () {
+          try { bro.window.open('multiwin_msg'); return true; }
+          catch (e) { return false; }   // main-realm-only: must be false
+        })(),
+      });
+    });
+  </script>
+</body>
+</html>

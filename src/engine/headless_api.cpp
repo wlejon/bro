@@ -188,6 +188,14 @@ void Engine::flush() {
     // open()/close() assertable from a test: open → flush() materializes the
     // hidden window; close → flush() destroys it and fires 'close'.
     processPendingWindowHosts();
+    // Catch each host up with its window's current client size here, at the
+    // drain, rather than leaving it to whenever capture() next runs: the size
+    // change fires a 'resize' event in BOTH realms, and app JS belongs at the
+    // drain point, not reentrantly inside a capture() call. Idempotent - a
+    // host whose box already matches returns immediately.
+    for (auto& h : windowHosts_) syncWindowHostBox(*h);
+    // ...and its message traffic, so a test can post and assert after one flush().
+    drainWindowHostMessages();
 
     // Drain CSS transition/animation events and dispatch to JS.
     {

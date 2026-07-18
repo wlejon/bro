@@ -22,11 +22,13 @@
 // callbacks (which run app JS) off the input-event stack.
 
 #include "engine/engine.h"
+#include "engine/config_loader.h"
 #include "engine/sub_document.h"
 
 #include "dom/document.h"
 #include "js/runtime.h"
 #include "js/timers.h"
+#include "js/message_serializer.h"
 #include "js/window_host_bindings.h"
 #include "canvas/canvas_scene.h"
 #include "platform/event_loop.h"
@@ -135,6 +137,17 @@ void Engine::processPendingWindowHosts() {
         if (!h->pendingCreate) continue;
         h->pendingCreate = false;
 
+        // Load the child app BEFORE opening its OS window: a src that doesn't
+        // resolve should never flash an empty window, and the app's own
+        // bro.json is what fills in the window options open() left unset.
+        SubDocSource source = loadSubDocSource(manifest_.basePath, h->opts.src,
+                                               &assetMounts_, "bro.window.open");
+        if (!source.ok) {
+            failed.push_back(h->id);
+            continue;
+        }
+        applyChildManifestDefaults(*h, source.appDir);
+
         platform::Window::SecondaryConfig cfg;
         cfg.title = h->opts.title;
         cfg.width = static_cast<uint32_t>(h->opts.width);
@@ -163,6 +176,12 @@ void Engine::processPendingWindowHosts() {
             continue;
         }
         h->sdlId = h->window->windowId();
+        // Resize limits (bro.json minWidth/… or explicit opts) — applied after
+        // creation, like bro.window.setMinSize does for the primary window.
+        if (h->opts.minWidth > 0 || h->opts.minHeight > 0)
+            h->window->setMinimumSize(h->opts.minWidth, h->opts.minHeight);
+        if (h->opts.maxWidth > 0 || h->opts.maxHeight > 0)
+            h->window->setMaximumSize(h->opts.maxWidth, h->opts.maxHeight);
         int w = 0, ht = 0;
         h->window->getSize(w, ht);
         h->width = w;
@@ -177,7 +196,7 @@ void Engine::processPendingWindowHosts() {
         LOG_INFO("bro.window: opened secondary window id=%llu sdl=%u (%dx%d%s)",
                  static_cast<unsigned long long>(h->id), h->sdlId, w, ht,
                  h->opts.hidden ? ", hidden" : "");
-        createWindowHostDoc(*h);
+        createWindowHostDoc(*h, source);
         if (!h->document) failed.push_back(h->id);
     }
     for (uint64_t id : failed) {
@@ -380,15 +399,49 @@ void Engine::handleHostOccluded(uint32_t sdlWindowId, bool occluded) {
 // The host's document realm
 // ---------------------------------------------------------------------------
 
-// Build one host's document from opts.src. Runs at the raster-idle drain only
-// (processPendingWindowHosts). A src that doesn't resolve leaves h.document
-// null; the caller treats that like a failed window create, so JS gets a clean
-// 'close' instead of a live handle onto a blank window.
-void Engine::createWindowHostDoc(WindowHost& h) {
-    SubDocSource source = loadSubDocSource(manifest_.basePath, h.opts.src,
-                                           &assetMounts_, "bro.window.open");
-    if (!source.ok) return;
+// Seed the window options the open() caller left unset from the child app's
+// own bro.json — a palette app that declares `{"width":320,"borderless":true}`
+// opens that way with a bare bro.window.open('palette'). Precedence:
+// explicit open() options > the child's bro.json > the built-in defaults.
+//
+// Absence is detected by seeding an EngineConfig with the SAME defaults
+// WindowHostOptions carries and letting parseConfig overwrite only the keys
+// the file actually contains.
+void Engine::applyChildManifestDefaults(WindowHost& h, const std::string& appDir) {
+    if (appDir.empty()) return;
+    EngineConfig cfg;
+    cfg.title = "bro";
+    cfg.graphics.width = 800;
+    cfg.graphics.height = 600;
+    cfg.graphics.resizable = true;
+    cfg.graphics.borderless = false;
+    cfg.graphics.alwaysOnTop = false;
+    cfg.graphics.minWidth = cfg.graphics.minHeight = 0;
+    cfg.graphics.maxWidth = cfg.graphics.maxHeight = 0;
+    if (!parseConfig(appDir + "/bro.json", cfg)) return;
 
+    const auto& p = h.opts.provided;
+    if (!p.width)       h.opts.width       = cfg.graphics.width;
+    if (!p.height)      h.opts.height      = cfg.graphics.height;
+    if (!p.title)       h.opts.title       = cfg.title;
+    if (!p.resizable)   h.opts.resizable   = cfg.graphics.resizable;
+    if (!p.borderless)  h.opts.borderless  = cfg.graphics.borderless;
+    if (!p.alwaysOnTop) h.opts.alwaysOnTop = cfg.graphics.alwaysOnTop;
+    if (!p.minWidth)    h.opts.minWidth    = cfg.graphics.minWidth;
+    if (!p.minHeight)   h.opts.minHeight   = cfg.graphics.minHeight;
+    if (!p.maxWidth)    h.opts.maxWidth    = cfg.graphics.maxWidth;
+    if (!p.maxHeight)   h.opts.maxHeight   = cfg.graphics.maxHeight;
+    if (h.opts.width < 1) h.opts.width = 1;
+    if (h.opts.height < 1) h.opts.height = 1;
+    h.width = h.opts.width;
+    h.height = h.opts.height;
+}
+
+// Build one host's document from the already-loaded `source`. Runs at the
+// raster-idle drain only (processPendingWindowHosts). Leaves h.document null if
+// the realm can't be built; the caller treats that like a failed window create,
+// so JS gets a clean 'close' instead of a live handle onto a blank window.
+void Engine::createWindowHostDoc(WindowHost& h, SubDocSource& source) {
     SubDocRef ref = windowHostSubDoc(h);
     buildSubDocDocument(ref, source, effectiveColorScheme());
 
@@ -441,6 +494,11 @@ void Engine::syncWindowHostBox(WindowHost& h) {
     if (w == h.boxW && ht == h.boxH) return;
     h.boxW = w;
     h.boxH = ht;
+    // The parent observes the same resize on its handle ('resize' with
+    // width/height), so an app can react to the user dragging a tool window's
+    // edge without the child having to relay it.
+    if (jsRuntime_)
+        js::windowHostNotifyResized(jsRuntime_->getContext(), h.id, w, ht);
     if (h.document) {
         h.document->setMediaViewport(static_cast<float>(w), static_cast<float>(ht));
         h.document->markDirty();
@@ -475,6 +533,112 @@ void Engine::syncWindowHostBox(WindowHost& h) {
 // (re)recording this frame. Same role tickIframes plays for <iframe>: host
 // activity has no other route to uiDirty_, so without it an animating secondary
 // window would never re-record.
+// ---------------------------------------------------------------------------
+// Messaging (see the header block on postMessageToWindowHost)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Fire a 'message' event at a host realm's window: addEventListener('message')
+// listeners through the window polyfill's dispatcher, plus window.onmessage for
+// the classic handler property. Takes ownership of `data`.
+void dispatchRealmMessage(JSContext* ctx, JSValue data) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue evt = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, evt, "type", JS_NewString(ctx, "message"));
+    JS_SetPropertyStr(ctx, evt, "data", data);  // takes ownership
+    JS_SetPropertyStr(ctx, evt, "target", JS_DupValue(ctx, global));
+
+    JSValue dispatch = JS_GetPropertyStr(ctx, global,
+                                         "__bro_dispatch_window_event");
+    if (JS_IsFunction(ctx, dispatch)) {
+        JSValue type = JS_NewString(ctx, "message");
+        JSValue args[2] = {type, evt};
+        JSValue ret = JS_Call(ctx, dispatch, global, 2, args);
+        JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, type);
+    }
+    JS_FreeValue(ctx, dispatch);
+
+    JSValue onmessage = JS_GetPropertyStr(ctx, global, "onmessage");
+    if (JS_IsFunction(ctx, onmessage)) {
+        JSValue ret = JS_Call(ctx, onmessage, global, 1, &evt);
+        JS_FreeValue(ctx, ret);
+    }
+    JS_FreeValue(ctx, onmessage);
+
+    JS_FreeValue(ctx, evt);
+    JS_FreeValue(ctx, global);
+}
+
+} // namespace
+
+uint64_t Engine::windowHostIdForContext(JSContext* ctx) const {
+    if (!ctx) return 0;
+    for (auto& h : windowHosts_)
+        if (h->jsCtx == ctx) return h->id;
+    return 0;
+}
+
+bool Engine::postMessageToWindowHost(uint64_t id, std::unique_ptr<js::Message> msg) {
+    WindowHost* host = windowHostById(id);
+    if (!host || host->pendingClose) return false;
+    host->inbox.push_back(std::move(msg));
+    uiDirty_ = true;  // make sure a frame reaches the drain point
+    return true;
+}
+
+void Engine::postMessageToParent(uint64_t hostId, std::unique_ptr<js::Message> msg) {
+    hostToParentMessages_.emplace_back(hostId, std::move(msg));
+    uiDirty_ = true;
+}
+
+void Engine::drainWindowHostMessages() {
+    if (!jsRuntime_) return;
+
+    // Children first. Each host's inbox is swapped out before dispatch so a
+    // handler that posts back to its own window queues for the NEXT drain
+    // instead of extending this loop forever.
+    for (auto& hptr : windowHosts_) {
+        WindowHost* h = hptr.get();
+        if (h->inbox.empty()) continue;
+        std::vector<std::unique_ptr<js::Message>> batch;
+        batch.swap(h->inbox);
+        // A window that closed (or failed to build a realm) between post and
+        // drain drops its mail — resolving the destination at DELIVERY time is
+        // what makes a message racing teardown a no-op rather than a crash.
+        if (!h->jsCtx || h->pendingClose) continue;
+        JSContext* ctx = h->jsCtx;
+        for (auto& m : batch) {
+            JSValue data = js::deserializeMessage(ctx, *m);
+            if (JS_IsException(data)) {
+                js::Runtime::checkException(ctx, data);
+                continue;
+            }
+            dispatchRealmMessage(ctx, data);
+        }
+    }
+
+    // Then the parent side, in global post order — taken AFTER the child pass
+    // so a reply posted from a child's 'message' handler lands in this same
+    // drain (one round trip per drain, in both directions).
+    if (!hostToParentMessages_.empty()) {
+        std::vector<std::pair<uint64_t, std::unique_ptr<js::Message>>> batch;
+        batch.swap(hostToParentMessages_);
+        JSContext* ctx = jsRuntime_->getContext();
+        for (auto& [hostId, m] : batch) {
+            JSValue data = js::deserializeMessage(ctx, *m);
+            if (JS_IsException(data)) {
+                js::Runtime::checkException(ctx, data);
+                continue;
+            }
+            // Unknown ids are a no-op inside the binding (handle already gone).
+            js::windowHostNotifyMessage(ctx, hostId, data);
+        }
+    }
+    jsRuntime_->executePendingJobs();
+}
+
 bool Engine::tickWindowHosts(double nowMs) {
     if (windowHosts_.empty()) return false;
     bool active = false;
