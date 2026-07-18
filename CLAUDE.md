@@ -90,6 +90,7 @@ Annotated `.js` files with JSDoc + examples — read the file before using or ch
 | `image-api.js` | `bro.image` — typed-array kernels (CPU, broimage) + `bro.image.gpu.*` WebGL2 renderer (bro-side) |
 | `imagebitmap-api.js` | `ImageBitmap` / `createImageBitmap` — drawImage + texImage2D source, Worker transfer |
 | `scene-api.js` | `bro.scene` — 3D scene graph, shapes, sprites, meshes, splats, physics nodes |
+| `animation-api.js` | `scene.createAnimationPlayer()` — data-driven keyframe clips for node properties (JSON tracks, events, crossfade) |
 | `lighting-api.js` | PBR lighting — LightNode, materials, tonemap, ambient |
 | `net-api.js` | `bro.net` — game networking (host/connect/send) via GNS |
 | `net-sync-api.js` | `bro.net.sync` — high-level replication + RPCs (pure JS module, host-star) |

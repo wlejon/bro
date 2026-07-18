@@ -352,6 +352,15 @@ class SceneGraph {
   createTween() {}
 
   /**
+   * Create a clip player for data-driven multi-track keyframe animation of
+   * node properties (the Godot AnimationPlayer analog): plain-JSON clips
+   * with linear/step/cubic keys, event tracks, loop/pingpong, reverse, and
+   * crossfade. Full data model + semantics in docs/animation-api.js.
+   * @returns {AnimationPlayer}
+   */
+  createAnimationPlayer() {}
+
+  /**
    * Create an HTML-rasterizing scene node and add it to the root.
    *
    * The node owns a detached dom::Document with a root <div> that JS can
