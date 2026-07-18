@@ -2,6 +2,7 @@
 #include "dom/range.h"
 #include "dom/selection.h"
 #include "dom/document.h"
+#include "dom/text_offsets.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -17,6 +18,18 @@ static Selection* getSelection(JSValueConst val) {
 // Boundary-point parsing: a Node-or-null JSValue + an integer offset.
 static bro::dom::Node* argNode(JSContext* ctx, JSValueConst v) {
     return unwrapNode(ctx, v);
+}
+
+// Selection endpoints are stored the engine's way — UTF-8 byte offsets into
+// Text/Comment containers, child indices into Elements — because the caret,
+// hit-testing and contenteditable paths read them directly. The Selection API
+// speaks UTF-16 code units, so every offset converts at this boundary (and
+// nowhere else). See dom/text_offsets.h.
+static int selOffsetToJs(bro::dom::Node* container, int byteOffset) {
+    return bro::dom::nodeOffsetToUtf16(container, byteOffset);
+}
+static int selOffsetFromJs(bro::dom::Node* container, int utf16Offset) {
+    return bro::dom::nodeOffsetToBytes(container, utf16Offset);
 }
 
 // ---------------------------------------------------------------------------
@@ -78,7 +91,7 @@ static JSValue js_sel_collapse(JSContext* ctx, JSValueConst this_val,
     auto* n = argNode(ctx, argv[0]);
     int32_t off = 0;
     if (argc >= 2) JS_ToInt32(ctx, &off, argv[1]);
-    s->collapse(n, off);
+    s->collapse(n, selOffsetFromJs(n, off));
     return JS_UNDEFINED;
 }
 
@@ -109,7 +122,7 @@ static JSValue js_sel_extend(JSContext* ctx, JSValueConst this_val,
     auto* n = argNode(ctx, argv[0]);
     int32_t off = 0;
     if (argc >= 2) JS_ToInt32(ctx, &off, argv[1]);
-    s->extend(n, off);
+    s->extend(n, selOffsetFromJs(n, off));
     return JS_UNDEFINED;
 }
 
@@ -130,9 +143,20 @@ static JSValue js_sel_setBaseAndExtent(JSContext* ctx, JSValueConst this_val,
     auto* focus = argNode(ctx, argv[2]);
     int32_t focusOff = 0; JS_ToInt32(ctx, &focusOff, argv[3]);
     if (!anchor || !focus) return JS_UNDEFINED;
-    // Determine direction by comparing anchor vs focus in tree order.
-    Range probe; probe.setStart(anchor, anchorOff); probe.setEnd(focus, focusOff);
-    bool backward = !(probe.startContainer() == anchor && probe.startOffset() == anchorOff);
+    // Convert once, up front: everything below (including the ordering probe)
+    // works in the engine's byte domain.
+    anchorOff = selOffsetFromJs(anchor, anchorOff);
+    focusOff  = selOffsetFromJs(focus,  focusOff);
+    // Determine direction by comparing anchor vs focus in tree order. Probe
+    // from a range COLLAPSED at the anchor and ask where the focus falls:
+    // setting (start=anchor, end=focus) and re-reading the start cannot work,
+    // because Range::setEnd normalizes an inverted pair by dragging the END
+    // back to the start — the start never moves, so a backward pair looked
+    // forward and collapsed the selection onto the anchor.
+    Range probe;
+    probe.setStart(anchor, anchorOff);
+    probe.setEnd(anchor, anchorOff);
+    const bool backward = probe.comparePoint(focus, focusOff) < 0;
     if (backward) {
         s->setRange(focus, focusOff, anchor, anchorOff, Selection::Backward);
     } else {
@@ -168,11 +192,15 @@ void installSelectionBindings(JSContext* ctx)
         .get("anchorNode",   [](Selection* s, JSContext* cx) -> JSValue {
             return wrapAnyNode(cx, s->anchorNode());
         })
-        .get("anchorOffset", [](Selection* s) -> int { return s->anchorOffset(); })
+        .get("anchorOffset", [](Selection* s) -> int {
+            return selOffsetToJs(s->anchorNode(), s->anchorOffset());
+        })
         .get("focusNode",    [](Selection* s, JSContext* cx) -> JSValue {
             return wrapAnyNode(cx, s->focusNode());
         })
-        .get("focusOffset",  [](Selection* s) -> int { return s->focusOffset(); })
+        .get("focusOffset",  [](Selection* s) -> int {
+            return selOffsetToJs(s->focusNode(), s->focusOffset());
+        })
         .get("isCollapsed",  [](Selection* s) -> bool { return s->isCollapsed(); })
         .get("rangeCount",   [](Selection* s) -> int { return s->rangeCount(); })
         .get("type",         [](Selection* s) -> std::string { return s->type(); })
