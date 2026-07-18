@@ -215,6 +215,14 @@ void Engine::run() {
     // engine-side lock state in sync so apps see a pointerlockchange.
     eventLoop_->onFocusLost   = [this]() { windowFocused_ = false; exitPointerLock(); setPageVisibility(false); };
     eventLoop_->onFocusGained = [this]() { windowFocused_ = true; setPageVisibility(true); };
+    // Web semantics: a minimized window is a hidden document (document.hidden
+    // flips + visibilitychange fires); restore/maximize make it visible again.
+    // Focus loss usually lands first and already set hidden — the JS-side
+    // __bro_set_visibility guard makes the repeat a no-op, so these only add
+    // the transitions focus alone can't see (e.g. restore-without-focus).
+    eventLoop_->onMinimized = [this]() { setPageVisibility(false); };
+    eventLoop_->onMaximized = [this]() { setPageVisibility(true); };
+    eventLoop_->onRestored  = [this]() { setPageVisibility(true); };
     // OS theme flip → re-evaluate @media (prefers-color-scheme) and restyle.
     // A no-op when appearance.colorScheme forces "light"/"dark".
     eventLoop_->onSystemThemeChanged = [this]() { applyColorScheme(); };
