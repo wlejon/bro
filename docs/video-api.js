@@ -1,6 +1,18 @@
 // =============================================================================
-// bro Video / GIF Encoder API
+// bro Video API — <video> playback + WebM/GIF encoders
 // =============================================================================
+//
+// Two surfaces, both gated behind BRO_WITH_VIDEO (vcpkg: libvpx/libwebm/Opus):
+//
+//   1. <video> element playback — an HTMLMediaElement subset backed by the
+//      engine's WebM pipeline (VP9 video + Opus audio, local files). See the
+//      "<video> playback" section at the bottom of this file.
+//   2. VideoEncoder / GifEncoder — RGBA frames in, .webm / .gif file out.
+//
+// In a video-less build the encoders are absent (feature-detect
+// `typeof VideoEncoder`); <video> elements still exist with the full JS
+// surface callable, but nothing decodes — the element paints a black box,
+// load() fails, duration stays NaN.
 //
 // VideoEncoder writes a WebM file with a VP9 video track and an optional
 // Opus audio track. Frames are RGBA in (libvpx software encode); audio is
@@ -197,3 +209,174 @@ gif.addCanvasFrame(canvas);
 
 // Same canvas-snapshot path as VideoEncoder — gif and webm encoders are
 // interchangeable from the addFrame side.
+
+
+// =============================================================================
+// <video> playback — HTMLMediaElement subset
+// =============================================================================
+//
+// A plain HTML <video> element plays local WebM files (VP9 video, Opus
+// audio) through the engine's demux → decode → present pipeline. The decoded
+// frame renders into the element's CSS content box each frame; audio routes
+// through the shared broaudio engine (the same output AudioContext uses).
+//
+//   <video id="clip" src="assets/intro.webm"></video>
+//
+// Sources: local files only, resolved like other element URLs (relative to
+// the document base; asset mounts like /lib and /system work). Container
+// support is exactly WebM/VP9(+VP8)/Opus — canPlayType() answers honestly:
+//
+//   v.canPlayType('video/webm; codecs="vp9,opus"')  // "probably"
+//   v.canPlayType('video/mp4')                      // "" (unsupported)
+//
+// A src attribute present at parse time loads immediately (metadata + first
+// frame are primed synchronously, so videoWidth/duration are readable right
+// after layout). Assigning `v.src = url` — or calling v.load() with a src
+// attribute set — (re)loads the same way. Loading does NOT auto-play.
+//
+// Clock behavior (matters for testing): playback advances on the host wall
+// clock, not the engine's virtual clock — headless advanceTime() does not
+// move video time (use wallSleep), and bro.time pause/timescale do not
+// affect a playing video.
+
+const v = document.getElementById('clip');
+
+// ---------------------------------------------------------------------------
+// Methods
+// ---------------------------------------------------------------------------
+//
+// v.play() → Promise<void>
+//   Starts (or resumes) playback from currentTime and starts the audio
+//   track alongside it. Fires 'play' when transitioning from paused.
+//   The returned promise is already resolved (no autoplay policy to wait
+//   on) — `await v.play()` and fire-and-forget both work.
+//
+// v.pause()
+//   Freezes the pipeline clock and pauses audio. Fires 'pause' when
+//   transitioning from playing.
+//
+// v.load()
+//   Re-opens the resource named by the src attribute. No-op without src.
+//
+// v.canPlayType(mimeType) → "probably" | ""
+//   "probably" for webm / vp8 / vp9 / opus / ogg-opus types, "" otherwise
+//   (no "maybe" tier — support is known exactly).
+
+v.play();     // returns an already-resolved Promise — awaiting is optional
+v.pause();
+
+// ---------------------------------------------------------------------------
+// Time and seeking
+// ---------------------------------------------------------------------------
+//
+// v.currentTime          — playback position in seconds. Assigning seeks
+//                          SYNCHRONOUSLY: the pipeline decodes up to the
+//                          target before the setter returns, firing
+//                          'seeking' → 'seeked' → 'timeupdate' in one go.
+//                          Because seeks complete inline, v.seeking always
+//                          reads false.
+// v.duration             — container duration in seconds; NaN until a
+//                          resource is loaded.
+// v.paused, v.ended      — booleans. Seeking away from the end re-arms
+//                          'ended' so it can fire again.
+// v.buffered, v.seekable — TimeRanges-shaped objects ({length, start(i),
+//                          end(i)}) covering one run [0, duration]: local
+//                          files decode sequentially with no gaps.
+// v.played               — same shape, [0, currentTime] once playback has
+//                          advanced past 0.
+
+v.currentTime = 2.5;                    // seek — synchronous
+console.log(v.currentTime, '/', v.duration);
+
+// ---------------------------------------------------------------------------
+// Audio: volume / muted / playbackRate
+// ---------------------------------------------------------------------------
+//
+// v.volume       — 0..1 gain on the element's audio track (clamped).
+//                  Fires 'volumechange' when the value actually moves.
+// v.muted        — live mute. Fires 'volumechange' on change. Initialized
+//                  from the `muted` content attribute at load time.
+// v.defaultMuted — reflects the `muted` attribute itself.
+// v.playbackRate — playback speed (> 0; invalid values reset to 1). Drives
+//                  both the video clock and the audio playback rate (audio
+//                  pitch-shifts — no time-stretch). Fires 'ratechange'.
+// v.defaultPlaybackRate — stored/reflected only; not applied automatically.
+
+v.volume = 0.5;
+v.muted = true;
+v.playbackRate = 2.0;
+
+// ---------------------------------------------------------------------------
+// Metadata and state
+// ---------------------------------------------------------------------------
+//
+// v.videoWidth, v.videoHeight — intrinsic frame size (300×150 defaults
+//                               before metadata, like the spec's replaced-
+//                               element fallback).
+// v.currentSrc     — resolved URL of the loaded resource ("" before load).
+// v.readyState     — 0 HAVE_NOTHING (no pipeline), 1 HAVE_METADATA,
+//                    4 HAVE_ENOUGH_DATA (frame decoded + tracks ready).
+//                    The intermediate 2/3 states are never reported.
+// v.networkState   — 0 NETWORK_EMPTY (no src), 1 NETWORK_IDLE (loaded),
+//                    3 NETWORK_NO_SOURCE (src set but open failed).
+//                    2 (NETWORK_LOADING) never occurs — loads are synchronous.
+//
+// Attribute-reflected flags:
+// v.autoplay — reflects the attribute only; the engine does NOT auto-start
+//              playback. Call v.play() explicitly (e.g. on 'canplaythrough').
+// v.controls — reflected only; no built-in control chrome is rendered.
+//              Build controls in the DOM and drive play()/pause().
+// v.loop     — reflects the `loop` attribute; ASSIGN IT FROM SCRIPT
+//              (v.loop = true) to actually arm pipeline looping — the setter
+//              is what forwards the flag to the pipeline, so a markup-only
+//              `loop` attribute does not loop by itself. While looping, the
+//              stream rewinds and resumes at the end instead of firing
+//              'ended' (spec behavior).
+// v.preload  — reflected, default "metadata"; informational (local files
+//              are opened fully at load).
+
+// ---------------------------------------------------------------------------
+// Media events
+// ---------------------------------------------------------------------------
+//
+// Non-bubbling, trusted events on the element (addEventListener or on* via
+// attributes is up to the app; there are no onplay-style IDL properties):
+//
+//   loadedmetadata  — after a successful load; dimensions/duration readable.
+//   durationchange  — alongside loadedmetadata (and if duration changes on
+//                     reload).
+//   canplay         — right after loadedmetadata.
+//   canplaythrough  — once the first frame is decoded (local file + audio
+//                     predecode ⇒ guaranteed play-through).
+//   play / pause    — state transitions from play()/pause().
+//   seeking, seeked — around a currentTime assignment (same tick).
+//   timeupdate      — while playing, throttled to ~250 ms of media time;
+//                     also once after each seek.
+//   waiting/playing — decoder stall at the edge of decoded data / recovery.
+//   ended           — pipeline drained and last frame decoded (not while
+//                     v.loop is set).
+//   volumechange    — volume or muted actually changed.
+//   ratechange      — playbackRate actually changed.
+//
+// Delivery: events are pumped on the main thread once per frame in windowed
+// mode; in headless they flow during flush() / advanceTime() / wallSleep()
+// (any script-driven drain), never in the middle of unrelated JS.
+
+v.addEventListener('canplaythrough', () => v.play());
+v.addEventListener('ended', () => console.log('done'));
+
+// ---------------------------------------------------------------------------
+// Recipe: play a clip and verify frames advance (headless)
+// ---------------------------------------------------------------------------
+
+const stage = document.getElementById('root');
+stage.innerHTML = '<video id="v" src="clip.webm" style="width:320px"></video>';
+flush();
+const vid = document.getElementById('v');
+assert(vid.readyState >= 1, 'metadata loaded');
+vid.muted = true;
+vid.play();
+wallSleep(300);          // wall clock — video time ignores advanceTime()
+flush();                 // pump media events + present the current frame
+assert(vid.currentTime > 0, 'playback advanced');
+vid.pause();

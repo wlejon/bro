@@ -125,7 +125,7 @@ Annotated `.js` files with JSDoc + examples — read the file before using or ch
 | `menu-api.js` | `bro.menu` — native menu bar |
 | `time-api.js` | `bro.time` — global pause + timescale over one engine-owned scaled clock |
 | `gizmo-api.js` | `bro.gizmo` — 3D transform handles |
-| `video-api.js` | `VideoEncoder` (WebM/VP9) + `GifEncoder` — RGBA in, file out |
+| `video-api.js` | `<video>` playback (HTMLMediaElement subset, WebM/VP9+Opus) + `VideoEncoder` (WebM/VP9) / `GifEncoder` — RGBA in, file out |
 | `iframe-api.js` | `<iframe src=dir>` — isolated sub-document (own realm/DOM/timers), input routed in |
 
 Other docs: `docs/headless.md` (headless reference incl. input/IME injection + WebGL2 support matrix), `docs/settings.md`, `docs/inspect.md` (DOM inspector, great in headless), `docs/system-panels.md`, `docs/multi-repo-workflow.md`, `docs/coverage.md` (Windows-only line coverage).
