@@ -6,8 +6,9 @@
 // can host or join exactly like the main thread. See docs/net-sync-api.js.
 //
 // Topology is a star: one host, N clients. The host owns object identity
-// (spawn/despawn/authority) and relays client-authority state to the other
-// clients. Objects are id-keyed plain JS objects produced by registered type
+// (spawn/despawn/authority), relays client-authority state to the other
+// clients, and relays client->client targeted RPCs (callTo) after validating
+// them against its own per-RPC config. Objects are id-keyed plain JS objects produced by registered type
 // factories — nothing here touches the DOM or the scene graph.
 //
 // Wire discipline (all sync traffic is tagged clone values {__sync: op}):
@@ -56,7 +57,7 @@
         ticks: 0,
         deltaMsgs: 0, deltaEntities: 0, deltaProps: 0,
         keyframes: 0,
-        rpcsSent: 0, rpcsRecv: 0, rpcsRejected: 0,
+        rpcsSent: 0, rpcsRecv: 0, rpcsRejected: 0, rpcsRelayed: 0,
         applied: 0,          // individual prop values applied from the wire
         stale: 0,            // state entries dropped by the sequence guard
         unknown: 0,          // state entries for ids we don't know (spawn in flight)
@@ -282,7 +283,9 @@
             case 'au': applyAuthority(msg); break;
             case 'd':
             case 'kf': clientApplyState(msg); break;
-            case 'rpc': invokeRpc(conn, msg); break;
+            // A relayed frame carries the true origin in `f` (stamped by the
+            // host); direct host RPCs don't, so the sender is the host conn.
+            case 'rpc': invokeRpc(typeof msg.f === 'number' ? msg.f : conn, msg); break;
             default:
                 console.warn('[net.sync] client ignoring unknown op "' + op + '"');
         }
@@ -409,9 +412,13 @@
         fn(from, ...(Array.isArray(msg.a) ? msg.a : []));
     }
 
-    // Host receives an rpc frame from a client: enforce per-RPC authority.
-    // Rejections warn and drop — never a throw across the wire.
+    // Host receives an rpc frame from a client: enforce per-RPC authority,
+    // and route frames carrying `to` (a client->client callTo) to the relay.
+    // Rejections warn and drop — never a throw across the wire. Any `f` a
+    // client stamped is ignored: the host only trusts the connection it
+    // actually received the frame on.
     function hostRpc(conn, msg) {
+        if (msg.to != null) { relayRpc(conn, msg); return; }
         if (rpcConfig(msg.n).authority === 'host') {
             stats.rpcsRejected++;
             console.warn('[net.sync] rejecting rpc "' + msg.n + '" from client ' +
@@ -419,6 +426,39 @@
             return;
         }
         invokeRpc(conn, msg);
+    }
+
+    // Client->client targeted RPC. The origin client sent {rpc, n, a, to};
+    // the host validates against ITS registration — the RPC must allow relay
+    // and must not be host-authority — then forwards to the target with the
+    // true origin stamped in `f`, so the target's handler sees the origin's
+    // conn id. The forwarded frame carries no `to` and clients never relay,
+    // so a relayed frame is never re-relayed.
+    function relayRpc(conn, msg) {
+        const cfg = rpcConfig(msg.n);
+        if (cfg.relay === false) {
+            stats.rpcsRejected++;
+            console.warn('[net.sync] refusing to relay rpc "' + msg.n +
+                         '" from client ' + conn + ': registered relay:false');
+            return;
+        }
+        if (cfg.authority === 'host') {
+            stats.rpcsRejected++;
+            console.warn('[net.sync] refusing to relay rpc "' + msg.n +
+                         '" from client ' + conn + ': registered authority is host-only');
+            return;
+        }
+        let live = false;
+        for (const c of net.connections()) if (c === msg.to) { live = true; break; }
+        if (!live) {
+            console.warn('[net.sync] dropping relayed rpc "' + msg.n +
+                         '" from client ' + conn + ': target ' + msg.to +
+                         ' is not connected');
+            return;
+        }
+        stats.rpcsRelayed++;
+        net.sendClone(msg.to, { [TAG]: 'rpc', n: msg.n, a: msg.a, f: conn },
+                      rpcOpts(cfg));
     }
 
     // ── bro.net handler chaining ─────────────────────────────────────────────
@@ -664,12 +704,24 @@
         if (cfg.callLocal) invokeRpc(0, { n: name, a: args });
     };
 
-    // Host-only: invoke a named RPC on one specific client.
+    // Invoke a named RPC on one specific peer.
+    //   Host:   sends directly to client `conn`.
+    //   Client: targets ANOTHER CLIENT by its host-side connection id — the
+    //           frame goes to the host, which validates (per-RPC relay +
+    //           authority) and forwards with the true origin stamped, so the
+    //           target's handler sees this client's conn id as fromConn.
     sync.callTo = function (conn, name, ...args) {
-        requireHost('callTo()');
+        requireActive();
+        const cfg = rpcConfig(name);
         stats.rpcsSent++;
-        net.sendClone(conn, { [TAG]: 'rpc', n: name, a: args },
-                      rpcOpts(rpcConfig(name)));
+        if (isHost) {
+            net.sendClone(conn, { [TAG]: 'rpc', n: name, a: args }, rpcOpts(cfg));
+        } else {
+            if (hostConn === null)
+                throw new Error('bro.net.sync: callTo(): not connected to a host');
+            net.sendClone(hostConn, { [TAG]: 'rpc', n: name, a: args, to: conn },
+                          rpcOpts(cfg));
+        }
     };
 
     // ── Introspection ────────────────────────────────────────────────────────

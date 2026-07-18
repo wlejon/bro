@@ -20,6 +20,13 @@ function registerRpcs() {
     // Config-only registration: this context only SENDS 'upstream' (the
     // handler lives on the host); the config makes the send unreliable.
     sync.rpc('upstream', null, { mode: 'unreliable' });
+    // Client->client via host relay: 'greet' relays (the default), 'secret'
+    // is pinned host-only with relay:false (enforced by the HOST's matching
+    // registration; declared here too, same-config-everywhere discipline).
+    sync.rpc('greet', (from, ...args) =>
+        report({ ev: 'rpc', name: 'greet', from, args }));
+    sync.rpc('secret', (from, ...args) =>
+        report({ ev: 'rpc', name: 'secret', from, args }), { relay: false });
 }
 
 onmessage = (e) => {
@@ -33,6 +40,11 @@ onmessage = (e) => {
         }
         case 'call': {
             bro.net.sync.call(m.name, ...(m.args || []));
+            report({ ev: 'reply', seq: m.seq });
+            break;
+        }
+        case 'callTo': {
+            bro.net.sync.callTo(m.to, m.name, ...(m.args || []));
             report({ ev: 'reply', seq: m.seq });
             break;
         }

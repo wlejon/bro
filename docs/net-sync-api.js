@@ -30,7 +30,9 @@
 // -----------------------------------------------------------------------------
 //
 // Sessions are a star: ONE host, N clients. All traffic flows through the
-// host (clients never talk to each other directly):
+// host — clients never talk to each other directly, but a client CAN target
+// another client with callTo(): the host validates and relays the RPC with
+// the true origin stamped (see callTo below).
 //
 //   - The host owns object identity: only the host may spawn(), despawn(),
 //     and setAuthority().
@@ -285,13 +287,35 @@ sync.rpc('emote', null, { mode: 'unreliable' });   // config-only: send-side
 sync.call('chat', 'hello everyone');
 
 /**
- * Invoke a named RPC on one specific client. Host-only (Godot's rpc_id()).
+ * Invoke a named RPC on one specific peer (Godot's rpc_id()).
  *
- * @param {number} conn - Target client connection id
+ *   - called on the HOST:  sends directly to client `conn`.
+ *   - called on a CLIENT:  targets ANOTHER CLIENT. The frame goes to the
+ *     host, which validates it against the HOST's registration and relays it
+ *     to `conn` with the true origin stamped: the target's handler receives
+ *     the ORIGIN client's conn id as fromConn (not the host's). A relayed
+ *     frame is never re-relayed.
+ *
+ * The host refuses to relay (console warning + _stats().rpcsRejected, nothing
+ * delivered, nothing thrown) when the RPC is registered host-side with
+ * relay:false or authority:'host'. A relay to a conn id that is not a live
+ * connection is dropped with a warning.
+ *
+ * Connection ids are HOST-side ids (what the host's onconnect saw). Clients
+ * don't learn each other's ids implicitly — hand them out at the app level
+ * (e.g. the host broadcasts a roster RPC), or reply to a relayed RPC's
+ * fromConn, which is exactly such an id.
+ *
+ * callLocal never applies to callTo(); the caller's handler is not invoked.
+ * An unreliable-mode callTo from a client makes BOTH legs (origin->host,
+ * host->target) unreliable.
+ *
+ * @param {number} conn - Target connection id (host-side)
  * @param {string} name
  * @param {...*} args
  */
-sync.callTo(clientConn, 'chat', 'psst — just you');
+sync.callTo(clientConn, 'chat', 'psst — just you');   // on the host
+sync.callTo(peerConn, 'trade', { gold: 5 });          // on a client: relayed
 
 
 // --- Introspection ---------------------------------------------------------------
@@ -302,7 +326,8 @@ sync.typeOf(obj);      // -> registered type name, or null
 sync.objects();        // -> array of all live replicated objects
 sync._stats();         // -> debug counters: {ticks, deltaMsgs, deltaEntities,
                        //    deltaProps, keyframes, rpcsSent, rpcsRecv,
-                       //    rpcsRejected, applied, stale, unknown, objects}
+                       //    rpcsRejected, rpcsRelayed, applied, stale,
+                       //    unknown, objects}
 
 
 // =============================================================================
