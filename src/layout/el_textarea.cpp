@@ -261,11 +261,11 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
         // An unshifted arrow against a selection collapses to that edge rather
         // than stepping — the selection itself was the movement.
         if (!shift && hasSelection()) setCursorPos(sel_.start());
-        else moveCaret(utf8Prev(val, pos));
+        else moveCaret(caretStepPrev_(val, pos));
         r.handled = true;
     } else if (keycode == SDLK_RIGHT) {
         if (!shift && hasSelection()) setCursorPos(sel_.end());
-        else moveCaret(utf8Next(val, pos));
+        else moveCaret(caretStepNext_(val, pos));
         r.handled = true;
     } else if (keycode == SDLK_UP || keycode == SDLK_DOWN) {
         // Move by VISUAL line so wrapped rows behave like the browser. Fall back
@@ -484,7 +484,7 @@ bool ElTextarea::caretRect(float& x, float& y, float& w, float& h) {
     const int cpos = std::clamp(sel_.caret, 0, static_cast<int>(val.size()));
     const int li = caretVisualLine(vls, cpos);
 
-    x = box.x + runWidthTo(val, vls[li].start, static_cast<size_t>(cpos), fr,
+    x = box.x + caretXInRun(val, vls[li].start, vls[li].end, static_cast<size_t>(cpos), fr,
                            renderer_);
     y = box.y + li * lineH - scrollY_;
     w = 1.0f;
@@ -538,6 +538,27 @@ ElTextarea::DrawPos ElTextarea::contentBox() const {
 // Caret for a click. The draw pass lays the visual lines out from the content
 // box's top-left, shifted up by scrollY_, so the inverse is: which row does y
 // fall in, then which offset within that row's text run does x fall on.
+int ElTextarea::caretStepPrev_(const std::string& val, int pos) const {
+    if (!renderer_) return utf8Prev(val, pos);
+    size_t lo = 0, hi = 0;
+    logicalLineBounds(val, pos, lo, hi);
+    const int step = clusterPrev(val, lo, hi, pos, getFontRef(), renderer_);
+    // A caret at the line's first byte has no cluster behind it within the
+    // line; stepping off the front of a line onto the newline before it is a
+    // character step, not a cluster one.
+    return step < pos ? step : utf8Prev(val, pos);
+}
+
+int ElTextarea::caretStepNext_(const std::string& val, int pos) const {
+    if (!renderer_) return utf8Next(val, pos);
+    size_t lo = 0, hi = 0;
+    logicalLineBounds(val, pos, lo, hi);
+    const int step = clusterNext(val, lo, hi, pos, getFontRef(), renderer_);
+    // Likewise at the end of a line: the next caret site is across the
+    // newline, which no cluster covers.
+    return step > pos ? step : utf8Next(val, pos);
+}
+
 int ElTextarea::caretIndexFromPoint(float px, float py) {
     if (!renderer_ || !elem_) return sel_.caret;
 
@@ -754,9 +775,9 @@ void ElTextarea::draw(render::Renderer* renderer,
             if (a > b) continue;                    // line outside the selection
             if (a == b && !(selS <= ls && selE > le)) continue;  // nothing on this row
 
-            float ax = baseX + runWidthTo(text, vls[i].start, static_cast<size_t>(a),
+            float ax = baseX + caretXInRun(text, vls[i].start, vls[i].end, static_cast<size_t>(a),
                                           fontRef, renderer_);
-            float bx = baseX + runWidthTo(text, vls[i].start, static_cast<size_t>(b),
+            float bx = baseX + caretXInRun(text, vls[i].start, vls[i].end, static_cast<size_t>(b),
                                           fontRef, renderer_);
             // The line break itself is selected: carry the band past the text.
             if (selE > le) bx += breakW;
@@ -792,7 +813,7 @@ void ElTextarea::draw(render::Renderer* renderer,
             int a = std::max(selS, ls);
             int b = std::min(selE, le);
             if (b <= a) continue;
-            float ax = baseX + runWidthTo(text, vls[i].start, static_cast<size_t>(a),
+            float ax = baseX + caretXInRun(text, vls[i].start, vls[i].end, static_cast<size_t>(a),
                                           fontRef, renderer_);
             renderer_->drawText(
                 std::string_view(text).substr(static_cast<size_t>(a),
@@ -805,7 +826,7 @@ void ElTextarea::draw(render::Renderer* renderer,
         int cpos = std::clamp(sel_.caret, 0, static_cast<int>(val.size()));
         int cursorLine = caretVisualLine(vls, cpos);
 
-        float cursorX = baseX + runWidthTo(text, vls[cursorLine].start,
+        float cursorX = baseX + caretXInRun(text, vls[cursorLine].start, vls[cursorLine].end,
                                            static_cast<size_t>(cpos), fontRef, renderer_);
 
         float cursorTop = baseY + cursorLine * lineHeight;
@@ -825,10 +846,10 @@ void ElTextarea::draw(render::Renderer* renderer,
                 int a = std::max(ps, static_cast<int>(vls[i].start));
                 int b = std::min(pe, static_cast<int>(vls[i].end));
                 if (b <= a) continue;
-                float ux0 = baseX + runWidthTo(text, vls[i].start,
+                float ux0 = baseX + caretXInRun(text, vls[i].start, vls[i].end,
                                                static_cast<size_t>(a), fontRef,
                                                renderer_);
-                float ux1 = baseX + runWidthTo(text, vls[i].start,
+                float ux1 = baseX + caretXInRun(text, vls[i].start, vls[i].end,
                                                static_cast<size_t>(b), fontRef,
                                                renderer_);
                 float uy = lineY + lm.ascent + 2.0f;

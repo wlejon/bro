@@ -215,11 +215,11 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
         // An unshifted arrow against a selection collapses to that edge rather
         // than stepping — the selection itself was the movement.
         if (!shift && hasSelection()) setCursorPos(sel_.start());
-        else moveCaret(utf8Prev(val, pos));
+        else moveCaret(caretStepPrev_(val, pos));
         r.handled = true;
     } else if (keycode == SDLK_RIGHT) {
         if (!shift && hasSelection()) setCursorPos(sel_.end());
-        else moveCaret(utf8Next(val, pos));
+        else moveCaret(caretStepNext_(val, pos));
         r.handled = true;
     } else if (keycode == SDLK_HOME) {
         moveCaret(0);
@@ -418,13 +418,36 @@ KeyHandleResult ElInput::compositionCancel(dom::Element* el) {
     return r;
 }
 
+int ElInput::caretStepPrev_(const std::string& val, int pos) const {
+    if (!renderer_ || inputType(nullptr) == InputType::Password)
+        return utf8Prev(val, pos);
+    size_t lo = 0, hi = 0;
+    logicalLineBounds(val, pos, lo, hi);
+    const int step = clusterPrev(val, lo, hi, pos, getFontRef(), renderer_);
+    // A caret at the line's first byte has no cluster behind it within the
+    // line; stepping off the front of a line onto the newline before it is a
+    // character step, not a cluster one.
+    return step < pos ? step : utf8Prev(val, pos);
+}
+
+int ElInput::caretStepNext_(const std::string& val, int pos) const {
+    if (!renderer_ || inputType(nullptr) == InputType::Password)
+        return utf8Next(val, pos);
+    size_t lo = 0, hi = 0;
+    logicalLineBounds(val, pos, lo, hi);
+    const int step = clusterNext(val, lo, hi, pos, getFontRef(), renderer_);
+    // Likewise at the end of a line: the next caret site is across the
+    // newline, which no cluster covers.
+    return step > pos ? step : utf8Next(val, pos);
+}
+
 bool ElInput::caretRect(float& x, float& y, float& w, float& h) {
     if (!renderer_ || !elem_ || !isTextType(nullptr)) return false;
     DrawPos box = contentBox_();
     if (box.w <= 0 || box.h <= 0) return false;
     std::string disp = displayText_();
     const int cpos = std::clamp(sel_.caret, 0, static_cast<int>(disp.size()));
-    float off = runWidthTo(disp, 0, static_cast<size_t>(cpos), getFontRef(),
+    float off = caretXInRun(disp, 0, disp.size(), static_cast<size_t>(cpos), getFontRef(),
                            renderer_);
     x = box.x + off - scrollX_;
     y = box.y;
@@ -716,8 +739,8 @@ void ElInput::drawText_(float x, float y, float w, float h) {
     const int cpos = std::clamp(sel_.caret, 0, static_cast<int>(val.size()));
     float caretOffset = 0.0f;
     if (!isPlaceholder && cpos > 0 && cpos <= static_cast<int>(text.size())) {
-        caretOffset = renderer_->measureText(
-            std::string_view(text).substr(0, static_cast<size_t>(cpos)), fontRef).width;
+        caretOffset = caretXInRun(text, 0, text.size(),
+                                  static_cast<size_t>(cpos), fontRef, renderer_);
     }
 
     // Scroll the text under the fixed box so the caret stays visible once the
@@ -756,8 +779,8 @@ void ElInput::drawText_(float x, float y, float w, float h) {
         if (selE > selS) {
             hasSelBand = true;
             selStyle = resolveStyledPseudo(elem_, "selection");
-            float sx = drawX + runWidthTo(text, 0, static_cast<size_t>(selS), fontRef, renderer_);
-            float ex = drawX + runWidthTo(text, 0, static_cast<size_t>(selE), fontRef, renderer_);
+            float sx = drawX + caretXInRun(text, 0, text.size(), static_cast<size_t>(selS), fontRef, renderer_);
+            float ex = drawX + caretXInRun(text, 0, text.size(), static_cast<size_t>(selE), fontRef, renderer_);
             float top = textY - lm.ascent;
             renderer_->fillRect(sx, top, ex - sx, lm.lineHeight(),
                                 selectionWash(selStyle, accentColor_()));
@@ -798,7 +821,7 @@ void ElInput::drawText_(float x, float y, float w, float h) {
             pseudoColor(selStyle, "color", selColor) &&
             (selColor.r != color.r || selColor.g != color.g ||
              selColor.b != color.b || selColor.a != color.a)) {
-            float sx = drawX + runWidthTo(text, 0, static_cast<size_t>(selS),
+            float sx = drawX + caretXInRun(text, 0, text.size(), static_cast<size_t>(selS),
                                           fontRef, renderer_);
             renderer_->drawText(
                 std::string_view(text).substr(static_cast<size_t>(selS),
@@ -833,9 +856,9 @@ void ElInput::drawText_(float x, float y, float w, float h) {
             const int ps = std::clamp(comp_.start, 0, n);
             const int pe = std::clamp(comp_.start + comp_.length, ps, n);
             if (pe > ps) {
-                float ux0 = drawX + runWidthTo(text, 0, static_cast<size_t>(ps),
+                float ux0 = drawX + caretXInRun(text, 0, text.size(), static_cast<size_t>(ps),
                                                fontRef, renderer_);
-                float ux1 = drawX + runWidthTo(text, 0, static_cast<size_t>(pe),
+                float ux1 = drawX + caretXInRun(text, 0, text.size(), static_cast<size_t>(pe),
                                                fontRef, renderer_);
                 float uy = textY + 2.0f;
                 renderer_->drawLine(ux0, uy, ux1, uy, cursorColor, 1.0f);

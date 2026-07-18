@@ -154,6 +154,14 @@ public:
     void getContentSize(float& w, float& h, float maxWidth);
 
 private:
+    // One arrow-key step of the caret through `val`. Steps by shaped cluster
+    // so the caret never stops somewhere it cannot be drawn (inside a ligature
+    // or a combining sequence), falling back to one character where there is
+    // no shaper — and for password fields, whose mask has its own byte
+    // geometry that the value's clusters say nothing about.
+    int caretStepPrev_(const std::string& val, int pos) const;
+    int caretStepNext_(const std::string& val, int pos) const;
+
     // The text actually painted for the value — the value itself, except for
     // password types, which render one '*' per byte. Hit-testing and caret
     // placement must measure what was drawn, not the underlying value.

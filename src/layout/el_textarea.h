@@ -110,6 +110,14 @@ public:
     void getContentSize(float& w, float& h);
 
 private:
+    // One arrow-key step of the caret through `val`, by shaped cluster rather
+    // than by character, so the caret never stops inside a ligature or a
+    // combining sequence — a place with no geometry to draw it at. Falls back
+    // to one character where there is no shaper. Steps within one hard line;
+    // clusters never span a newline.
+    int caretStepPrev_(const std::string& val, int pos) const;
+    int caretStepNext_(const std::string& val, int pos) const;
+
     render::FontRef getFontRef() const;
     std::string getAttr(const std::string& name) const;
     // CSS accent-color (falls back to the UA blue) — tints the selection wash.
