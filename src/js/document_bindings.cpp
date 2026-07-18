@@ -124,14 +124,18 @@ static JSValue js_document_importNode(JSContext* ctx,
 }
 
 static JSValue js_document_adoptNode(JSContext* ctx,
-                                     JSValueConst /*this_val*/,
+                                     JSValueConst this_val,
                                      int argc, JSValueConst* argv)
 {
     if (argc < 1) return JS_NULL;
     auto* node = unwrapNode(ctx, argv[0]);
     if (!node) return JS_NULL;
-    auto* parent = node->parentNode();
-    if (parent) parent->removeChild(node);
+    // Real adoption: transfer ownership of the whole subtree into this
+    // document. This used to only detach the node from its parent, leaving it
+    // owned (and eventually destroyed) by a document it no longer belonged to.
+    auto* doc = getDocument(this_val);
+    if (!doc) return JS_NULL;
+    doc->adoptNode(node);
     return JS_DupValue(ctx, argv[0]);
 }
 

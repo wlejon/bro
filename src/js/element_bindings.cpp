@@ -2231,6 +2231,21 @@ static void markChildListChanged(bro::dom::Document* doc, bro::dom::Node* parent
         doc->markStructureDirty();
 }
 
+// DOM "pre-insert" step 2: adopt `node` into `parent`'s document when their
+// owner documents differ. Without this, a node built in a DOMParser document
+// and appended into the live tree stayed owned by the parser document — it
+// rendered until that document was collected, then its holder destroyed a node
+// still sitting in the live tree. Spec says pre-insertion adopts; so do we.
+static void adoptIntoParentDocument(bro::dom::Node* parent, bro::dom::Node* node)
+{
+    if (!parent || !node) return;
+    auto* target = parent->document();
+    if (!target || node->document() == target) return;
+    // adoptNode detaches from the old parent, which is also what insertion
+    // would do — the caller's insertBefore/appendChild then re-parents here.
+    target->adoptNode(node);
+}
+
 static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                                       int argc, JSValueConst* argv)
 {
@@ -2242,6 +2257,9 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
         if (child->nodeName() == "#DOCUMENT-FRAGMENT" ||
             child->nodeType() == bro::dom::NodeType::DocumentFragment) {
             auto kids = child->childNodes();
+            // Adopt each child individually: the fragment itself is discarded,
+            // only its children enter the tree.
+            for (auto* kid : kids) adoptIntoParentDocument(el, kid);
             // Build addedNodes array for MutationObserver
             JSValue addedArr = JS_NewArray(ctx);
             uint32_t addedIdx = 0;
@@ -2261,6 +2279,7 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                 nullptr, nullptr, addedArr, JS_NULL);
             JS_FreeValue(ctx, addedArr);
         } else {
+            adoptIntoParentDocument(el, child);
             el->appendChild(child);
             markChildListChanged(doc, el);
             if (child->nodeType() == bro::dom::NodeType::Element) {
@@ -2317,6 +2336,7 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
         refChild = unwrapNode(ctx, argv[1]);
     }
     if (newChild) {
+        adoptIntoParentDocument(el, newChild);
         el->insertBefore(newChild, refChild);
         auto* doc = getDocumentForCtx(ctx);
         markChildListChanged(doc, el);
@@ -2352,6 +2372,7 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
             fireDisconnectedCallback(ctx, w);
             JS_FreeValue(ctx, w);
         }
+        adoptIntoParentDocument(el, newChild);
         el->insertBefore(newChild, oldChild);
         markChildListChanged(doc, el);
         if (oldChild->nodeType() == bro::dom::NodeType::Element) {

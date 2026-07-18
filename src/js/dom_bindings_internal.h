@@ -121,6 +121,10 @@ bro::dom::Node* unwrapNode(JSContext* ctx, JSValueConst val);
 // Make a freed Text/Comment node's cached wrapper inert and drop it from
 // __bro_node_map. Called from fireNodeFreed for every non-element node.
 void invalidateNodeWrapper(JSContext* ctx, bro::dom::Node* node);
+// Re-point a cached Text/Comment wrapper's handle after adoption moved the
+// node to another document. Called from fireNodeAdopted.
+void repointNodeWrapper(JSContext* ctx, bro::dom::Node* node,
+                        bro::dom::Document* newDoc);
 
 // event_bindings.cpp
 JSValue wrapEvent(JSContext* ctx, const std::string& type, bro::dom::Element* target);

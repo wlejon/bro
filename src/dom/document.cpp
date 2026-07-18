@@ -1288,6 +1288,60 @@ ShadowRoot* Document::allocateShadowRoot(Element* host, ShadowRoot::Mode mode) {
     return allocateNode<ShadowRoot>(host, mode);
 }
 
+// Move one node's ownership record from `src` into this document. The subtree
+// walk is the caller's job (adoptNode) so the whole tree moves before any
+// callback observes a half-adopted state.
+void Document::adoptOne(Node* node, Document* src) {
+    if (src && src != this) {
+        // Element ids are per-document: drop the source's registration before
+        // the node stops belonging to it, add ours after.
+        if (node->nodeType() == NodeType::Element) {
+            auto* elem = static_cast<Element*>(node);
+            if (!elem->id().empty()) src->unregisterElementId(elem->id());
+            if (elem == src->focusedElement_) src->focusedElement_ = nullptr;
+        }
+        // Live ranges in the source document can't span into another document.
+        for (auto* r : src->liveRanges_) r->onNodeDestroyed(node);
+
+        auto it = src->ownedNodes_.find(node);
+        if (it != src->ownedNodes_.end()) {
+            ownedNodes_[node] = std::move(it->second);
+            src->ownedNodes_.erase(it);
+        }
+    }
+    node->setDocument(this);
+    if (node->nodeType() == NodeType::Element) {
+        auto* elem = static_cast<Element*>(node);
+        if (!elem->id().empty()) registerElementId(elem->id(), elem);
+        // Styles were resolved against the source document's cascade.
+        elem->markDirty();
+        elem->markStructureDirty();
+    }
+    if (nodeAdoptedCb_) nodeAdoptedCb_(this, src, node);
+}
+
+Node* Document::adoptNode(Node* node) {
+    if (!node) return nullptr;
+    Document* src = node->document();
+    if (src == this) {
+        // Same document: spec still removes the node from its parent.
+        if (auto* p = node->parentNode()) p->removeChild(node);
+        return node;
+    }
+    if (auto* p = node->parentNode()) p->removeChild(node);
+
+    // Deepest-last walk: every node in the subtree changes owner.
+    std::vector<Node*> stack{node};
+    while (!stack.empty()) {
+        Node* n = stack.back();
+        stack.pop_back();
+        for (auto* child : n->childNodes()) stack.push_back(child);
+        adoptOne(n, src);
+    }
+    markDirty();
+    return node;
+}
+
 void Document::freeNode(Node* node) {
     if (!node) return;
     auto kids = node->childNodes();

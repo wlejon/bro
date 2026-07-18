@@ -162,6 +162,8 @@ JSValue DomBindings::wrapDocument(JSContext* ctx, void* document_ptr)
 static std::unordered_map<bro::dom::Document*, JSContext*> s_doc_to_ctx;
 
 static void fireNodeFreed(bro::dom::Document* doc, bro::dom::Node* node);
+static void fireNodeAdopted(bro::dom::Document* newDoc,
+                            bro::dom::Document* oldDoc, bro::dom::Node* node);
 
 // ===========================================================================
 // Detached documents (DOMParser) — JS-owned bro::dom::Document instances
@@ -290,6 +292,7 @@ JSValue wrapDetachedDocument(JSContext* ctx, bro::dom::Document* doc) {
     // Register for freed-node wrapper invalidation, same as the main document.
     s_doc_to_ctx[doc] = ctx;
     doc->setNodeFreedCallback(&fireNodeFreed);
+    doc->setNodeAdoptedCallback(&fireNodeAdopted);
     return docObj;
 }
 
@@ -361,6 +364,63 @@ static void fireNodeFreed(bro::dom::Document* doc, bro::dom::Node* node) {
     }
 }
 
+// A node's owner document changed (Document::adoptNode). Cached wrappers are
+// keyed and lifetime-checked per document, so both caches need fixing up:
+// text/comment handles get re-pointed at the new document, and an element that
+// moved out of a detached (DOMParser) document leaves that document's weak
+// registry and joins the strong __bro_elem_map of the document it now belongs
+// to — otherwise the parser document's holder would still null its opaque, and
+// a node living in the live tree would go inert.
+static void fireNodeAdopted(bro::dom::Document* newDoc,
+                            bro::dom::Document* oldDoc,
+                            bro::dom::Node* node) {
+    if (!node || !newDoc) return;
+    auto it = s_doc_to_ctx.find(newDoc);
+    if (it == s_doc_to_ctx.end() || !it->second) {
+        it = s_doc_to_ctx.find(oldDoc);
+        if (it == s_doc_to_ctx.end() || !it->second) return;
+    }
+    JSContext* ctx = it->second;
+
+    if (node->nodeType() != bro::dom::NodeType::Element) {
+        repointNodeWrapper(ctx, node, newDoc);
+        return;
+    }
+
+    auto* elem = static_cast<bro::dom::Element*>(node);
+
+    // Leaving a detached document: drop the weak registry entry so its holder
+    // never nulls this wrapper's opaque.
+    auto dit = s_detached_docs.find(oldDoc);
+    if (dit != s_detached_docs.end())
+        dit->second.elemWrappers.erase(elem->nodeId());
+
+    void* w = elem->jsWrapper();
+    if (!w) return;  // never wrapped — nothing cached to fix up
+
+    // Joining a non-detached document that this context owns: the wrapper now
+    // belongs in the strong map, same as one wrapElement would have made.
+    if (isDetachedDocument(newDoc)) {
+        noteDetachedElementWrapper(ctx, elem, JS_MKPTR(JS_TAG_OBJECT, w));
+        return;
+    }
+    if (getDocumentForCtx(ctx) != newDoc) return;
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
+    if (JS_IsUndefined(elemMap)) {
+        elemMap = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "__bro_elem_map", JS_DupValue(ctx, elemMap));
+    }
+    if (!JS_IsNull(elemMap)) {
+        std::string key = std::to_string(elem->nodeId());
+        JS_SetPropertyStr(ctx, elemMap, key.c_str(),
+                          JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, w)));
+    }
+    JS_FreeValue(ctx, elemMap);
+    JS_FreeValue(ctx, global);
+}
+
 void DomBindings::install(JSContext* ctx, void* document_ptr)
 {
     JSRuntime* rt = JS_GetRuntime(ctx);
@@ -388,6 +448,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
         s_doc_to_ctx[doc] = ctx;
         doc->setSelectionChangeCallback(&fireSelectionChangeOnDocument);
         doc->setNodeFreedCallback(&fireNodeFreed);
+        doc->setNodeAdoptedCallback(&fireNodeAdopted);
     }
 
     // ----- Stash Document pointer for orphan management (per-context) -----

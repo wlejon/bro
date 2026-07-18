@@ -44,6 +44,15 @@ public:
     // Allocate a ShadowRoot owned by this document
     ShadowRoot* allocateShadowRoot(Element* host, ShadowRoot::Mode mode);
 
+    // Move `node` (and its whole subtree) into this document: transfers the
+    // owning unique_ptr out of the source document, retargets ownerDocument,
+    // and moves element-id registrations. This is the DOM "adopt" algorithm —
+    // pre-insertion runs it whenever a node's ownerDocument differs from the
+    // target's, so appendChild across documents works instead of leaving the
+    // node owned (and eventually freed) by a document it no longer lives in.
+    // Detaches from any current parent first, per spec. Returns `node`.
+    Node* adoptNode(Node* node);
+
     // Queue a node for deletion. The node is detached from ownedNodes_ and
     // held in pendingFrees_ until drainPendingFrees() runs. Deferral is
     // required because the raster/layout threads may still hold pointers
@@ -327,6 +336,13 @@ public:
     using NodeFreedCallback = void(*)(Document*, Node*);
     void setNodeFreedCallback(NodeFreedCallback cb) { nodeFreedCb_ = cb; }
 
+    // Fired from adoptNode() for every node whose owner document changed
+    // (the whole adopted subtree). Cached JS wrappers hold generation-checked
+    // handles that name the OLD document, so they must be re-pointed or they
+    // would resolve to null on a node that is very much alive.
+    using NodeAdoptedCallback = void(*)(Document* newDoc, Document* oldDoc, Node*);
+    void setNodeAdoptedCallback(NodeAdoptedCallback cb) { nodeAdoptedCb_ = cb; }
+
 private:
     // Push this frame's invalidation into the layout tree, right before layout
     // runs. Elements the document could attribute a change to dirty just their
@@ -387,6 +403,9 @@ private:
         ownedNodes_[raw] = std::move(ptr);
         return raw;
     }
+
+    // adoptNode helper: retarget a single node (see document.cpp).
+    void adoptOne(Node* node, Document* src);
 
     Node* root_ = nullptr;
     Element* documentElement_ = nullptr;
@@ -468,6 +487,7 @@ private:
     std::unordered_set<Range*> liveRanges_;
     SelectionChangeCallback selectionChangeCb_ = nullptr;
     NodeFreedCallback nodeFreedCb_ = nullptr;
+    NodeAdoptedCallback nodeAdoptedCb_ = nullptr;
 };
 
 } // namespace bro::dom

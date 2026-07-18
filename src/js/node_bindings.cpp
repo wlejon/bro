@@ -185,6 +185,32 @@ bro::dom::Node* unwrapNode(JSContext* ctx, JSValueConst val)
     return nodeSelf(val);
 }
 
+// Re-point a Text/Comment wrapper's handle after the node was adopted into
+// another document. The handle names the document it was created against, so
+// without this an adopted (very much alive) node's wrapper would resolve to
+// null the moment ownership moved.
+void repointNodeWrapper(JSContext* ctx, bro::dom::Node* node,
+                        bro::dom::Document* newDoc)
+{
+    if (!node) return;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue nodeMap = JS_GetPropertyStr(ctx, global, "__bro_node_map");
+    if (!JS_IsUndefined(nodeMap) && !JS_IsNull(nodeMap)) {
+        std::string key = std::to_string(node->nodeId());
+        JSValue wrapper = JS_GetPropertyStr(ctx, nodeMap, key.c_str());
+        if (!JS_IsUndefined(wrapper) && !JS_IsNull(wrapper)) {
+            if (auto* ref = static_cast<NodeRef*>(
+                    JS_GetOpaque(wrapper, js_node_class_id))) {
+                ref->unowned = nullptr;
+                ref->handle.assign(newDoc, node);
+            }
+            JS_FreeValue(ctx, wrapper);
+        }
+    }
+    JS_FreeValue(ctx, nodeMap);
+    JS_FreeValue(ctx, global);
+}
+
 // Drop a freed Text/Comment node's cached wrapper: make it inert now (the
 // handle would resolve to null anyway, but the entry must also leave the map or
 // __bro_node_map grows without bound — every text node ever wrapped and
