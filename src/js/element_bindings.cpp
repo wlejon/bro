@@ -14,6 +14,7 @@
 #include "js/imagebitmap_bindings.h"
 #include "css/transform.h"
 #include "dom/element_geometry.h"
+#include "dom/text_offsets.h"
 #include "layout/svg_geometry.h"
 
 #include <qjsbind/qjsbind.h>
@@ -1488,50 +1489,11 @@ static JSValue js_element_get_form(JSContext* ctx, JSValueConst this_val) {
 // The text controls (ElInput / ElTextarea) store selection offsets as BYTE
 // indices into the UTF-8 value. The web API speaks UTF-16 code units over the
 // JS string (`value.slice(0, selectionStart)` must be coherent), so every
-// JS-visible offset converts at this boundary. A 4-byte UTF-8 sequence
-// (astral, e.g. emoji) is TWO UTF-16 units; 1–3-byte sequences are one.
-
-// Length in bytes of the UTF-8 sequence starting with lead byte `c`. An
-// invalid lead byte counts as a 1-byte / 1-unit character so walks terminate.
-static int utf8SeqLenAt(unsigned char c) {
-    if (c < 0x80) return 1;
-    if ((c & 0xE0) == 0xC0) return 2;
-    if ((c & 0xF0) == 0xE0) return 3;
-    if ((c & 0xF8) == 0xF0) return 4;
-    return 1;
-}
-
-// Byte offset into `s` → UTF-16 code-unit index. Offsets landing mid-sequence
-// resolve to the preceding character boundary. Clamped to [0, len].
-static int utf8ByteToUtf16(const std::string& s, int byte) {
-    const int n = static_cast<int>(s.size());
-    byte = std::clamp(byte, 0, n);
-    int i = 0, units = 0;
-    while (i < byte) {
-        const int len = utf8SeqLenAt(static_cast<unsigned char>(s[static_cast<size_t>(i)]));
-        if (i + len > byte) break;  // mid-sequence → preceding boundary
-        units += (len == 4) ? 2 : 1;
-        i += len;
-    }
-    return units;
-}
-
-// UTF-16 code-unit index → byte offset into `s`. An index landing between the
-// two units of a surrogate pair resolves to the preceding character boundary
-// (the byte domain cannot name the middle of a code point). Clamped.
-static int utf16ToUtf8Byte(const std::string& s, int u16) {
-    const int n = static_cast<int>(s.size());
-    if (u16 < 0) u16 = 0;
-    int i = 0, units = 0;
-    while (i < n && units < u16) {
-        const int len = utf8SeqLenAt(static_cast<unsigned char>(s[static_cast<size_t>(i)]));
-        const int u = (len == 4) ? 2 : 1;
-        if (units + u > u16) break;  // mid-astral → preceding boundary
-        units += u;
-        i += std::min(len, n - i);
-    }
-    return i;
-}
+// JS-visible offset converts at this boundary — the same conversion the
+// CharacterData / Range / Selection bindings apply, shared from
+// dom/text_offsets.h.
+using bro::dom::utf8ByteToUtf16;
+using bro::dom::utf16ToUtf8Byte;
 
 // Decode the UTF-8 value into UTF-16 code units (JS string semantics) —
 // libregexp's 16-bit subject form, and what a `u`/`v`-flagged RegExp matches

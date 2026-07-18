@@ -1,5 +1,6 @@
 #include "js/dom_bindings_internal.h"
 #include "dom/node_handle.h"
+#include "dom/text_offsets.h"
 #include "util/log.h"
 
 #include <qjsbind/qjsbind.h>
@@ -158,6 +159,25 @@ struct NodeRef {
     bro::dom::Node* get() const { return unowned ? unowned : handle.get(); }
 };
 
+// ---- CharacterData offset domain -----------------------------------------
+// TextNode/CommentNode store data as UTF-8 and index it by BYTE; the DOM spec
+// indexes CharacterData by UTF-16 code unit (`node.substringData(i, n)` must
+// equal `node.data.substr(i, n)` in the JS string domain). Every offset and
+// count crossing this binding converts — see dom/text_offsets.h.
+
+// The (offset, count) pair of substringData/deleteData/replaceData, converted
+// to a byte [start, start+len) span. Widened to int64 first so a caller's
+// `count = 2^31-1` (idiomatic "to the end") can't overflow the addition.
+static void cdSpanToBytes(const std::string& data, int32_t off, int32_t cnt,
+                          int& outStart, int& outLen) {
+    const int64_t end64 = static_cast<int64_t>(off) + static_cast<int64_t>(cnt);
+    const int u16Len = bro::dom::utf16Length(data);
+    const int endU16 = static_cast<int>(std::clamp<int64_t>(end64, 0, u16Len));
+    outStart = bro::dom::utf16ToUtf8Byte(data, off);
+    const int byteEnd = bro::dom::utf16ToUtf8Byte(data, endU16);
+    outLen = byteEnd > outStart ? byteEnd - outStart : 0;
+}
+
 static void js_node_finalizer(JSRuntime* /*rt*/, JSValue val)
 {
     delete static_cast<NodeRef*>(JS_GetOpaque(val, js_node_class_id));
@@ -289,10 +309,9 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
             JSValueConst this_val, int, JSValueConst*) -> JSValue {
             auto* nd = nodeSelf(this_val);
             if (!nd) return JS_NewInt32(cx, 0);
-            if (nd->nodeType() == bro::dom::NodeType::Text)
-                return JS_NewInt32(cx, (int32_t)static_cast<bro::dom::TextNode*>(nd)->length());
-            if (nd->nodeType() == bro::dom::NodeType::Comment)
-                return JS_NewInt32(cx, (int32_t)static_cast<bro::dom::CommentNode*>(nd)->length());
+            // UTF-16 code units, not the UTF-8 byte size of the storage.
+            if (const std::string* d = bro::dom::characterDataOf(nd))
+                return JS_NewInt32(cx, bro::dom::utf16Length(*d));
             return JS_NewInt32(cx, 0);
         }, "get length", 0, JS_CFUNC_generic, 0);
         JSAtom lenAtom = JS_NewAtom(ctx, "length");
@@ -349,11 +368,15 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
                 int32_t off = 0, cnt = 0;
                 JS_ToInt32(cx, &off, argv[0]);
                 JS_ToInt32(cx, &cnt, argv[1]);
+                const std::string* d = bro::dom::characterDataOf(nd);
+                if (!d) return JS_NewString(cx, "");
+                int bOff = 0, bLen = 0;
+                cdSpanToBytes(*d, off, cnt, bOff, bLen);
                 std::string result;
                 if (nd->nodeType() == bro::dom::NodeType::Text)
-                    result = static_cast<bro::dom::TextNode*>(nd)->substringData(off, cnt);
-                else if (nd->nodeType() == bro::dom::NodeType::Comment)
-                    result = static_cast<bro::dom::CommentNode*>(nd)->substringData(off, cnt);
+                    result = static_cast<bro::dom::TextNode*>(nd)->substringData(bOff, bLen);
+                else
+                    result = static_cast<bro::dom::CommentNode*>(nd)->substringData(bOff, bLen);
                 return JS_NewString(cx, result.c_str());
             }, "substringData", 2));
 
@@ -395,13 +418,16 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
                 const char* s = JS_ToCString(cx, argv[1]);
                 std::string v(s ? s : "");
                 if (s) JS_FreeCString(cx, s);
+                const std::string* d = bro::dom::characterDataOf(nd);
+                if (!d) return JS_UNDEFINED;
+                const int bOff = bro::dom::utf16ToUtf8Byte(*d, off);
                 std::string oldData;
                 if (nd->nodeType() == bro::dom::NodeType::Text) {
                     oldData = static_cast<bro::dom::TextNode*>(nd)->data();
-                    static_cast<bro::dom::TextNode*>(nd)->insertData(off, v);
-                } else if (nd->nodeType() == bro::dom::NodeType::Comment) {
+                    static_cast<bro::dom::TextNode*>(nd)->insertData(bOff, v);
+                } else {
                     oldData = static_cast<bro::dom::CommentNode*>(nd)->data();
-                    static_cast<bro::dom::CommentNode*>(nd)->insertData(off, v);
+                    static_cast<bro::dom::CommentNode*>(nd)->insertData(bOff, v);
                 }
                 notifyMutationObservers(cx, this_val, "characterData",
                     nullptr, oldData.c_str(), JS_NULL, JS_NULL);
@@ -422,13 +448,17 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
                 int32_t off = 0, cnt = 0;
                 JS_ToInt32(cx, &off, argv[0]);
                 JS_ToInt32(cx, &cnt, argv[1]);
+                const std::string* d = bro::dom::characterDataOf(nd);
+                if (!d) return JS_UNDEFINED;
+                int bOff = 0, bLen = 0;
+                cdSpanToBytes(*d, off, cnt, bOff, bLen);
                 std::string oldData;
                 if (nd->nodeType() == bro::dom::NodeType::Text) {
                     oldData = static_cast<bro::dom::TextNode*>(nd)->data();
-                    static_cast<bro::dom::TextNode*>(nd)->deleteData(off, cnt);
-                } else if (nd->nodeType() == bro::dom::NodeType::Comment) {
+                    static_cast<bro::dom::TextNode*>(nd)->deleteData(bOff, bLen);
+                } else {
                     oldData = static_cast<bro::dom::CommentNode*>(nd)->data();
-                    static_cast<bro::dom::CommentNode*>(nd)->deleteData(off, cnt);
+                    static_cast<bro::dom::CommentNode*>(nd)->deleteData(bOff, bLen);
                 }
                 notifyMutationObservers(cx, this_val, "characterData",
                     nullptr, oldData.c_str(), JS_NULL, JS_NULL);
@@ -452,13 +482,17 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
                 const char* s = JS_ToCString(cx, argv[2]);
                 std::string v(s ? s : "");
                 if (s) JS_FreeCString(cx, s);
+                const std::string* d = bro::dom::characterDataOf(nd);
+                if (!d) return JS_UNDEFINED;
+                int bOff = 0, bLen = 0;
+                cdSpanToBytes(*d, off, cnt, bOff, bLen);
                 std::string oldData;
                 if (nd->nodeType() == bro::dom::NodeType::Text) {
                     oldData = static_cast<bro::dom::TextNode*>(nd)->data();
-                    static_cast<bro::dom::TextNode*>(nd)->replaceData(off, cnt, v);
-                } else if (nd->nodeType() == bro::dom::NodeType::Comment) {
+                    static_cast<bro::dom::TextNode*>(nd)->replaceData(bOff, bLen, v);
+                } else {
                     oldData = static_cast<bro::dom::CommentNode*>(nd)->data();
-                    static_cast<bro::dom::CommentNode*>(nd)->replaceData(off, cnt, v);
+                    static_cast<bro::dom::CommentNode*>(nd)->replaceData(bOff, bLen, v);
                 }
                 notifyMutationObservers(cx, this_val, "characterData",
                     nullptr, oldData.c_str(), JS_NULL, JS_NULL);
@@ -557,8 +591,11 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
                 auto* tn = static_cast<bro::dom::TextNode*>(nd);
                 int32_t off = 0;
                 JS_ToInt32(cx, &off, argv[0]);
-                size_t splitOff = static_cast<size_t>(off < 0 ? 0 : off);
-                if (splitOff > tn->data().size()) splitOff = tn->data().size();
+                // `off` is a UTF-16 code-unit index; the storage is byte-indexed.
+                // An index inside a surrogate pair resolves to the preceding
+                // code-point boundary rather than cutting a code point in half.
+                const size_t splitOff = static_cast<size_t>(
+                    bro::dom::utf16ToUtf8Byte(tn->data(), off));
                 std::string tail = tn->data().substr(splitOff);
                 tn->setData(tn->data().substr(0, splitOff));
 
