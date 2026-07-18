@@ -290,6 +290,12 @@ const RasterRenderer::FontEntry* RasterRenderer::getOrCreateFont(FontRef ref) {
     sk_sp<SkTypeface> typeface = bro::render::resolveFontFamilyList(ref.family, style, mgrRaw);
     auto sk_font = std::make_unique<SkFont>(typeface, ref.size);
     sk_font->setEdging(SkFont::Edging::kAntiAlias);
+    // Subpixel advances. HarfBuzz asks the SkFont for glyph widths and rounds
+    // each one to a whole pixel unless the font says it wants subpixel
+    // positioning (SkShaper_harfbuzz.cpp's skhb_glyph_h_advance), which
+    // quantizes every advance and drifts a run's width away from what the
+    // font actually specifies. Browsers position text subpixel; so do we.
+    sk_font->setSubpixel(true);
     auto [ins, _] = fonts_.emplace(std::move(key),
         FontEntry{ std::move(typeface), std::move(sk_font), style });
     return &ins->second;

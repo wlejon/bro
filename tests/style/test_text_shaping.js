@@ -74,10 +74,15 @@ function assertTiles(text, opts) {
   const spaced = shape('fi', { ...CALIBRI, letterSpacing: 10 });
   assert(spaced.clusters.length === 2,
          `'fi' with letter-spacing should un-ligate to 2 clusters, got ${spaced.clusters.length}`);
+  // n-1 gaps: one 10px gap between the two clusters, none trailing. Compare
+  // against the sum of THIS run's own advances — the un-ligated pair is not
+  // the same width as the ligature, which is the point of a ligature.
+  const sumAdv = spaced.clusters.reduce((a, c) => a + c.advance, 0);
+  assert(Math.abs(spaced.width - (sumAdv + 10)) < 0.01,
+         `letter-spacing width: got ${spaced.width}, want ${sumAdv + 10}`);
   const plain = shape('fi', CALIBRI);
-  // n-1 gaps: one 10px gap between the two clusters, none trailing.
-  assert(Math.abs(spaced.width - (plain.width + 10)) < 0.01,
-         `letter-spacing width: got ${spaced.width}, want ${plain.width + 10}`);
+  assert(plain.width < sumAdv - 0.05,
+         `the 'fi' ligature (${plain.width}) should be tighter than f+i (${sumAdv})`);
   assert(Math.abs(spaced.clusters[1].x - spaced.clusters[0].x -
                   (spaced.clusters[0].advance + 10)) < 0.01,
          'letter-spacing must land BETWEEN clusters');
