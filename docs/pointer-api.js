@@ -145,19 +145,60 @@ canvas.addEventListener('pointermove', (e) => {
 canvas.addEventListener('pointerup', (e) => strokes.delete(e.pointerId));
 canvas.addEventListener('pointercancel', (e) => strokes.delete(e.pointerId));
 
+// ── Two-finger gestures (pinch / pan / rotate) ─────────────────────────────
+//
+// SDL3 dropped SDL2's gesture subsystem, so bro recognizes gestures
+// engine-side from the active touch contacts and dispatches WebKit-style
+// gesture events. While 2+ fingers are down, the two OLDEST contacts (the
+// "founding pair") drive:
+//
+//   gesturestart    second finger lands (scale 1, rotation 0)
+//   gesturechange   either founding finger moves
+//   gestureend      either founding finger lifts / is cancelled
+//
+// Event properties (on the event object, WebKit GestureEvent style):
+//   scale      current finger distance / distance at gesturestart
+//   rotation   degrees rotated since gesturestart, CLOCKWISE positive,
+//              unwrapped — continuous rotation past ±180° keeps accumulating
+//   clientX/Y  the two fingers' centroid (viewport coordinates)
+//
+// Events fire (bubbling, cancelable) on the hit target of the START
+// centroid for the gesture's whole lifetime — pan by tracking clientX/Y
+// deltas across gesturechange. Fingers beyond the founding pair are
+// ignored; when a founding finger lifts with 2+ fingers still down, the
+// gesture ends and a fresh one starts immediately over the remaining
+// contacts (scale/rotation re-based to 1/0).
+//
+// Regular pointer/touch events keep firing untouched — apps that do their
+// own two-finger math see no change (gestures are a parallel, additive
+// stream).
+
+el.addEventListener('gesturestart', (e) => {
+    baseZoom = view.zoom;                 // e.scale === 1, e.rotation === 0
+});
+el.addEventListener('gesturechange', (e) => {
+    view.zoom = baseZoom * e.scale;       // pinch
+    view.angle = e.rotation;              // rotate (degrees, clockwise +)
+    view.panTo(e.clientX, e.clientY);     // pan follows the centroid
+});
+el.addEventListener('gestureend', (e) => { /* final scale/rotation */ });
+
 // ── Headless injection ──────────────────────────────────────────────────────
 //
 // The headless globals drive the same engine entry points as SDL finger
 // events (the gamepad-seam pattern: injected below the JS API, above SDL),
-// so pointer events, touch events, capture, and the compat mouse sequence
-// all exercise the real pipeline. `id` is a caller-chosen contact id (the
-// SDL finger-id analog): reuse one id for the move/up/cancel of one contact;
-// distinct concurrent ids are distinct fingers. Coordinates are
-// viewport-relative, like the mouse helpers. See docs/headless.md.
+// so pointer events, touch events, capture, gesture recognition, and the
+// compat mouse sequence all exercise the real pipeline. `id` is a
+// caller-chosen contact id (the SDL finger-id analog): reuse one id for the
+// move/up/cancel of one contact; distinct concurrent ids are distinct
+// fingers. Coordinates are viewport-relative, like the mouse helpers. See
+// docs/headless.md.
 
 touchDown(1, 100, 100);        // finger 1 lands (optional 4th arg: pressure 0..1)
 touchMove(1, 140, 100);        // finger 1 slides
 touchDown(2, 300, 200);        // finger 2 lands while 1 is down (non-primary)
-touchUp(2, 300, 200);          // finger 2 taps (no compat click — non-primary)
+                               //   -> also gesturestart (two fingers down)
+touchMove(2, 340, 200);        // -> gesturechange (scale/rotation/centroid)
+touchUp(2, 340, 200);          // finger 2 lifts -> gestureend
 touchUp(1, 140, 100);          // finger 1 lifts (dragged — no compat click)
 touchCancel(1, 0, 0);          // or: abort a contact (pointercancel/touchcancel)

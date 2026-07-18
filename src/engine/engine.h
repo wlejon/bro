@@ -1353,6 +1353,39 @@ private:
     /// (focus semantics included), no pointer aliases.
     void dispatchCompatMouseForTap(const TouchContact& c);
 
+    // --- Two-finger gesture recognition (pinch/pan/rotate) ---
+    // SDL3 dropped SDL2's gesture subsystem, so the engine recognizes
+    // gestures itself from the touch contact table and dispatches
+    // WebKit-style gesturestart / gesturechange / gestureend events (scale,
+    // rotation, clientX/clientY as event properties) on the hit target of
+    // the gesture's start centroid. A gesture is anchored to its two
+    // FOUNDING contacts (the two oldest fingers); lifting either founder
+    // ends it (and immediately starts a fresh one if 2+ fingers remain —
+    // with scale/rotation re-based to 1/0). Additional fingers beyond the
+    // founding pair are ignored. Regular pointer/touch events fire
+    // untouched. Implementations in touch_input.cpp.
+    struct GestureState {
+        bool active = false;
+        uint64_t fingerA = 0, fingerB = 0;  // founding contacts
+        float startDist = 1.0f;             // finger distance at start (px, >= 1)
+        float startAngle = 0.0f;            // atan2 angle at start (radians)
+        float scale = 1.0f;                 // last reported scale
+        float rotation = 0.0f;              // last reported rotation (degrees,
+                                            // unwrapped: continuous past 180)
+        float cx = 0.0f, cy = 0.0f;         // last centroid (window space)
+        dom::ElementHandle target;          // hit target of the start centroid
+    };
+    GestureState gesture_;
+    /// Start a gesture if none is active and 2+ contacts are down.
+    void gestureMaybeStart();
+    /// Recompute scale/rotation/centroid and dispatch gesturechange if the
+    /// moved finger is one of the founding pair.
+    void gestureUpdate(uint64_t movedFinger);
+    /// Dispatch gestureend and clear the gesture if the ended finger was a
+    /// founder; then re-start over the remaining contacts if 2+ are left.
+    void gestureEndIfFounder(uint64_t endedFinger);
+    void dispatchGestureEvent(const char* type);
+
     // HTML document.readyState. Starts "loading" while user scripts execute,
     // advances to "interactive"/"complete" as DOMContentLoaded/load dispatch.
     std::string documentReadyState_ = "loading";

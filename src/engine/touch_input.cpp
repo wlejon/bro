@@ -41,6 +41,7 @@
 
 #include <SDL3/SDL.h>
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 namespace bro::engine {
@@ -319,6 +320,114 @@ void Engine::dispatchCompatMouseForTap(const TouchContact& c) {
 }
 
 // ---------------------------------------------------------------------------
+// Two-finger gestures (pinch / pan / rotate)
+// ---------------------------------------------------------------------------
+// SDL3 dropped SDL2's gesture subsystem, so gestures are recognized here from
+// the live contact table: while 2+ fingers are down, the two OLDEST contacts
+// (the founding pair) drive WebKit-style gesturestart / gesturechange /
+// gestureend events with `scale` (current distance / start distance),
+// `rotation` (degrees from start, clockwise positive, unwrapped past ±180)
+// and the centroid's `clientX`/`clientY` carried as event properties.
+// Events fire on the hit target of the start centroid for the gesture's
+// whole lifetime (the Touch Events targeting idiom). Regular pointer/touch
+// events keep firing untouched — apps doing their own two-finger math see
+// no change.
+
+void Engine::dispatchGestureEvent(const char* type) {
+    if (!jsRuntime_ || !document_) return;
+    dom::Element* target = gesture_.target.get();
+    if (!target) return;   // start target freed by earlier JS
+
+    JSContext* ctx = jsRuntime_->getContext();
+    const float ct = static_cast<float>(contentTop());
+    JSValue jsEvent = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, jsEvent, "type", JS_NewString(ctx, type));
+    JS_SetPropertyStr(ctx, jsEvent, "bubbles", JS_NewBool(ctx, 1));
+    JS_SetPropertyStr(ctx, jsEvent, "cancelable", JS_NewBool(ctx, 1));
+    JS_SetPropertyStr(ctx, jsEvent, "scale",
+                      JS_NewFloat64(ctx, static_cast<double>(gesture_.scale)));
+    JS_SetPropertyStr(ctx, jsEvent, "rotation",
+                      JS_NewFloat64(ctx, static_cast<double>(gesture_.rotation)));
+    JS_SetPropertyStr(ctx, jsEvent, "clientX",
+                      JS_NewFloat64(ctx, static_cast<double>(gesture_.cx)));
+    JS_SetPropertyStr(ctx, jsEvent, "clientY",
+                      JS_NewFloat64(ctx, static_cast<double>(gesture_.cy - ct)));
+
+    dom::Event evt(type, /*bubbles=*/true, /*cancelable=*/true);
+    evt.setIsTrusted(true);
+    js::dispatchDomEvent(ctx, target, evt, jsEvent);
+    JS_FreeValue(ctx, jsEvent);
+}
+
+void Engine::gestureMaybeStart() {
+    if (gesture_.active || touchContacts_.size() < 2) return;
+    if (!jsRuntime_ || !document_) return;
+
+    // Founding pair = the two oldest contacts (table is push_back order).
+    const TouchContact& a = touchContacts_[0];
+    const TouchContact& b = touchContacts_[1];
+    const float dx = b.x - a.x, dy = b.y - a.y;
+    float dist = std::sqrt(dx * dx + dy * dy);
+    if (dist < 1.0f) dist = 1.0f;   // degenerate: coincident fingers
+
+    gesture_.active = true;
+    gesture_.fingerA = a.fingerId;
+    gesture_.fingerB = b.fingerId;
+    gesture_.startDist = dist;
+    gesture_.startAngle = std::atan2(dy, dx);
+    gesture_.scale = 1.0f;
+    gesture_.rotation = 0.0f;
+    gesture_.cx = (a.x + b.x) * 0.5f;
+    gesture_.cy = (a.y + b.y) * 0.5f;
+
+    float docX = gesture_.cx;
+    float docY = gesture_.cy - static_cast<float>(contentTop()) + scrollY_;
+    dom::Element* target = hitTest(docX, docY);
+    if (!target) target = document_->body();
+    gesture_.target.assign(document_.get(), target);
+
+    dispatchGestureEvent("gesturestart");
+}
+
+void Engine::gestureUpdate(uint64_t movedFinger) {
+    if (!gesture_.active) return;
+    if (movedFinger != gesture_.fingerA && movedFinger != gesture_.fingerB) return;
+    TouchContact* a = touchByFinger(gesture_.fingerA);
+    TouchContact* b = touchByFinger(gesture_.fingerB);
+    if (!a || !b) return;
+
+    const float dx = b->x - a->x, dy = b->y - a->y;
+    float dist = std::sqrt(dx * dx + dy * dy);
+    if (dist < 1.0f) dist = 1.0f;
+    gesture_.scale = dist / gesture_.startDist;
+
+    // Screen y grows downward, so a growing atan2 angle is a visually
+    // CLOCKWISE rotation — matching WebKit's clockwise-positive convention.
+    // Unwrap relative to the last report so continuous rotation past ±180°
+    // keeps accumulating instead of snapping.
+    float deg = (std::atan2(dy, dx) - gesture_.startAngle) * (180.0f / 3.14159265358979f);
+    while (deg - gesture_.rotation > 180.0f) deg -= 360.0f;
+    while (deg - gesture_.rotation < -180.0f) deg += 360.0f;
+    gesture_.rotation = deg;
+
+    gesture_.cx = (a->x + b->x) * 0.5f;
+    gesture_.cy = (a->y + b->y) * 0.5f;
+
+    dispatchGestureEvent("gesturechange");
+}
+
+void Engine::gestureEndIfFounder(uint64_t endedFinger) {
+    if (!gesture_.active) return;
+    if (endedFinger != gesture_.fingerA && endedFinger != gesture_.fingerB) return;
+    dispatchGestureEvent("gestureend");   // final scale/rotation/centroid
+    gesture_.active = false;
+    gesture_.target.reset();
+    // 2+ fingers still down (the other founder + extras): a fresh gesture
+    // starts immediately, re-based to scale 1 / rotation 0.
+    gestureMaybeStart();
+}
+
+// ---------------------------------------------------------------------------
 // Contact lifecycle entry points (SDL finger events + headless seam)
 // ---------------------------------------------------------------------------
 
@@ -350,6 +459,9 @@ void Engine::handleTouchDown(uint64_t fingerId, float x, float y, float pressure
             live->compatSuppressed = true;
         }
     }
+    // A second finger landing starts a two-finger gesture (after the normal
+    // pointer/touch dispatch, which is never affected by gestures).
+    gestureMaybeStart();
     jsRuntime_->executePendingJobs();
 }
 
@@ -370,6 +482,7 @@ void Engine::handleTouchMove(uint64_t fingerId, float x, float y, float pressure
     TouchContact snapshot = *live;   // JS below can invalidate the pointer
     dispatchTouchPointerEvent("pointermove", snapshot, /*cancelable=*/true);
     dispatchTouchEvent("touchmove", snapshot, /*cancelable=*/true);
+    gestureUpdate(fingerId);   // gesturechange when a founding finger moved
     jsRuntime_->executePendingJobs();
 }
 
@@ -398,6 +511,10 @@ void Engine::handleTouchUp(uint64_t fingerId, float x, float y) {
     }
     bool endPrevented = dispatchTouchEvent("touchend", ended, /*cancelable=*/true);
 
+    // A founding finger lifting ends the gesture (and re-starts one over the
+    // remaining contacts when 2+ are still down).
+    gestureEndIfFounder(fingerId);
+
     // Compat mouse for a clean primary tap. preventDefault on pointerdown /
     // touchstart (recorded in compatSuppressed) or on this touchend all
     // suppress it, matching the web's "cancel the compat mouse events" rule.
@@ -424,6 +541,7 @@ void Engine::handleTouchCancel(uint64_t fingerId, float x, float y) {
         if (it->fingerId == fingerId) { touchContacts_.erase(it); break; }
     }
     dispatchTouchEvent("touchcancel", ended, /*cancelable=*/false);
+    gestureEndIfFounder(fingerId);
     jsRuntime_->executePendingJobs();
 }
 
