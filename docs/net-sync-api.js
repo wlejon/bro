@@ -49,12 +49,14 @@
 // Wire discipline (what rides where)
 // -----------------------------------------------------------------------------
 //
-//   channel 0, reliable:            spawns, despawns, authority changes, RPCs,
-//                                   and full-state keyframes. Ordered, so
+//   channel 0, reliable:            spawns, despawns, authority changes,
+//                                   full-state keyframes, and RPCs with the
+//                                   default mode:'reliable'. Ordered, so
 //                                   control operations are seen consistently.
 //   channel 1, unreliable+nodelay:  delta state updates (freshest-data-only;
 //                                   losing one is fine — the next change or
-//                                   keyframe repairs it).
+//                                   keyframe repairs it) and RPCs registered
+//                                   mode:'unreliable'.
 //
 // Every sync message is a structured-clone value carrying a reserved `__sync`
 // key. Do NOT use `__sync` as a top-level key in your own sendClone values —
@@ -223,24 +225,59 @@ sync.isAuthority(p1);
 // --- RPC -------------------------------------------------------------------------
 
 /**
- * Register a named RPC handler. Handlers receive the sender's connection id
- * followed by the call args (structured-clone round-tripped).
+ * Register a named RPC handler and/or its per-RPC configuration (Godot's
+ * rpc_config analog). Handlers receive the sender's connection id followed by
+ * the call args (structured-clone round-tripped). fromConn is 0 when the
+ * handler runs via callLocal (a local self-invocation).
+ *
+ * Where each option is read from (register the SAME config on every peer,
+ * exactly like Godot's rpc_config):
+ *   - mode, callLocal: the CALLER's registration — they shape the send.
+ *   - authority:       the HOST's registration — enforced when a client's
+ *     call arrives at the host. A context that only sends an RPC may declare
+ *     config with fn = null.
  *
  * @param {string} name
- * @param {function(number, ...*)} fn - (fromConn, ...args)
+ * @param {?function(number, ...*)} fn - (fromConn, ...args). Pass null to
+ *   declare configuration for an RPC this context only sends.
+ * @param {Object} [opts]
+ * @param {string} [opts.mode='reliable'] - 'reliable' rides the ordered
+ *   control channel (0). 'unreliable' rides the state channel (1,
+ *   unreliable+nodelay): lost frames are simply gone (no keyframe repairs an
+ *   RPC), delivery order is not guaranteed — relative to other unreliable
+ *   RPCs OR to reliable traffic sent around the same time. Use it for
+ *   high-rate fire-and-forget calls (muzzle flashes, pings) where the next
+ *   call supersedes a lost one.
+ * @param {boolean} [opts.callLocal=false] - call() also invokes the caller's
+ *   own handler, synchronously after the send, with fromConn 0 (Godot's
+ *   call_local). Applies to call() only, on host and clients alike; callTo()
+ *   never invokes locally.
+ * @param {string} [opts.authority='any'] - 'host': only the host may invoke
+ *   this RPC. A client call is rejected host-side with a console warning and
+ *   counted in _stats().rpcsRejected — never an exception across the wire.
+ * @param {boolean} [opts.relay=true] - false pins the RPC host-only for
+ *   client->client callTo(): the host refuses to relay it (see callTo).
  */
 sync.rpc('chat', (from, text) => {
   console.log('chat from', from, ':', text);
 });
+sync.rpc('flash', (from, x, y) => { /* ... */ }, { mode: 'unreliable' });
+sync.rpc('kick', (from, who) => { /* ... */ }, { authority: 'host' });
+sync.rpc('emote', null, { mode: 'unreliable' });   // config-only: send-side
 
 /**
- * Invoke a named RPC remotely — never locally (like Godot's rpc() without
- * call_local):
+ * Invoke a named RPC remotely:
  *   - called on a CLIENT: runs on the host.
  *   - called on the HOST:  runs on every client.
+ * With callLocal registered, the caller's own handler ALSO runs, synchronously
+ * after the send, with fromConn 0 — exactly once (there is no wire echo).
+ * Without it, call() never runs locally (Godot's rpc() without call_local).
  *
  * Args may be anything structured-clonable (nested objects, typed arrays,
  * BigInt, ...); functions/Mesh/ImageBitmap reject with a TypeError.
+ *
+ * Unknown RPC names (nothing registered on the receiving side) log a console
+ * warning and drop — a bad name never throws across the wire.
  *
  * @param {string} name
  * @param {...*} args
@@ -264,8 +301,8 @@ sync.idOf(obj);        // -> stable numeric id, or null
 sync.typeOf(obj);      // -> registered type name, or null
 sync.objects();        // -> array of all live replicated objects
 sync._stats();         // -> debug counters: {ticks, deltaMsgs, deltaEntities,
-                       //    deltaProps, keyframes, rpcsSent, rpcsRecv, applied,
-                       //    stale, unknown, objects}
+                       //    deltaProps, keyframes, rpcsSent, rpcsRecv,
+                       //    rpcsRejected, applied, stale, unknown, objects}
 
 
 // =============================================================================

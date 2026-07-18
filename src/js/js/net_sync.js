@@ -11,8 +11,10 @@
 // factories — nothing here touches the DOM or the scene graph.
 //
 // Wire discipline (all sync traffic is tagged clone values {__sync: op}):
-//   channel 0 (control) reliable ......... spawn/despawn/authority/RPC/keyframes
-//   channel 1 (state)   unreliable+nodelay delta state updates
+//   channel 0 (control) reliable ......... spawn/despawn/authority/keyframes,
+//                                          reliable RPCs (the default)
+//   channel 1 (state)   unreliable+nodelay delta state updates, RPCs
+//                                          registered mode:'unreliable'
 // Reliable ordering holds per channel, so everything on the control channel is
 // seen in a consistent order; deltas are freshest-data-only and carry a
 // per-object sequence number so late/reordered ones are dropped. Loss is
@@ -37,7 +39,7 @@
     const types = new Map();     // type name -> normalized def
     const records = new Map();   // id -> record
     const byObj = new WeakMap(); // obj -> record
-    const rpcs = new Map();      // rpc name -> handler fn
+    const rpcs = new Map();      // rpc name -> {fn, mode, callLocal, authority, relay}
     const appHandlers = { onmessage: null, onconnect: null, ondisconnect: null };
 
     let active = false;
@@ -54,7 +56,7 @@
         ticks: 0,
         deltaMsgs: 0, deltaEntities: 0, deltaProps: 0,
         keyframes: 0,
-        rpcsSent: 0, rpcsRecv: 0,
+        rpcsSent: 0, rpcsRecv: 0, rpcsRejected: 0,
         applied: 0,          // individual prop values applied from the wire
         stale: 0,            // state entries dropped by the sequence guard
         unknown: 0,          // state entries for ids we don't know (spawn in flight)
@@ -259,7 +261,7 @@
             switch (op) {
                 case 'd':
                 case 'kf': hostApplyState(conn, msg, op); break;
-                case 'rpc': invokeRpc(conn, msg); break;
+                case 'rpc': hostRpc(conn, msg); break;
                 default:
                     console.warn('[net.sync] host ignoring op "' + op +
                                  '" from client ' + conn);
@@ -376,14 +378,47 @@
         rec.lastSent = null;
     }
 
+    // Per-RPC configuration (Godot's rpc_config analog). Reads fall back to
+    // the defaults for names never registered in this context — mode and
+    // callLocal are the CALLER's registration, authority (and relay, see the
+    // relay path) are enforced from the HOST's registration; register the same
+    // config on every peer, exactly like Godot.
+    const RPC_DEFAULTS = Object.freeze({
+        fn: null, mode: 'reliable', callLocal: false, authority: 'any', relay: true,
+    });
+
+    function rpcConfig(name) {
+        return rpcs.get(name) || RPC_DEFAULTS;
+    }
+
+    // Unreliable RPCs ride the state lane (channel 1, unreliable+nodelay) —
+    // the same lane as delta state updates, keeping the two-lane wire
+    // discipline: channel 0 = everything reliable, channel 1 = everything
+    // loss-tolerant. Lost or reordered unreliable RPCs are simply gone.
+    function rpcOpts(cfg) {
+        return cfg.mode === 'unreliable' ? STATE_OPTS : CONTROL_OPTS;
+    }
+
     function invokeRpc(from, msg) {
-        const fn = rpcs.get(msg.n);
+        const fn = rpcConfig(msg.n).fn;
         if (typeof fn !== 'function') {
             console.warn('[net.sync] no rpc handler registered for "' + msg.n + '"');
             return;
         }
         stats.rpcsRecv++;
         fn(from, ...(Array.isArray(msg.a) ? msg.a : []));
+    }
+
+    // Host receives an rpc frame from a client: enforce per-RPC authority.
+    // Rejections warn and drop — never a throw across the wire.
+    function hostRpc(conn, msg) {
+        if (rpcConfig(msg.n).authority === 'host') {
+            stats.rpcsRejected++;
+            console.warn('[net.sync] rejecting rpc "' + msg.n + '" from client ' +
+                         conn + ': registered authority is host-only');
+            return;
+        }
+        invokeRpc(conn, msg);
     }
 
     // ── bro.net handler chaining ─────────────────────────────────────────────
@@ -593,29 +628,48 @@
         }
     };
 
-    // Register a named RPC handler. Handlers receive (fromConn, ...args).
-    sync.rpc = function (name, fn) {
-        if (typeof name !== 'string' || typeof fn !== 'function')
-            throw new TypeError('sync.rpc(name, fn) requires a name and a function');
-        rpcs.set(name, fn);
+    // Register a named RPC handler and/or its per-RPC configuration.
+    // Handlers receive (fromConn, ...args); fromConn is 0 for callLocal
+    // self-invocations. fn may be null to declare config for an RPC this
+    // context only sends. Defaults preserve the unconfigured behavior:
+    // reliable, remote-only, callable by anyone.
+    sync.rpc = function (name, fn, opts) {
+        if (typeof name !== 'string' || name.length === 0)
+            throw new TypeError('sync.rpc: name must be a non-empty string');
+        if (fn != null && typeof fn !== 'function')
+            throw new TypeError('sync.rpc: fn must be a function (or null for config-only)');
+        const o = (opts == null) ? {} : opts;
+        const mode = o.mode == null ? 'reliable' : o.mode;
+        if (mode !== 'reliable' && mode !== 'unreliable')
+            throw new TypeError("sync.rpc: mode must be 'reliable' or 'unreliable'");
+        const authority = o.authority == null ? 'any' : o.authority;
+        if (authority !== 'any' && authority !== 'host')
+            throw new TypeError("sync.rpc: authority must be 'any' or 'host'");
+        rpcs.set(name, { fn: fn || null, mode, callLocal: !!o.callLocal,
+                         authority, relay: o.relay !== false });
     };
 
-    // Invoke a named RPC remotely (never locally): from a client it runs on
-    // the host; from the host it runs on every client. Args ride sendClone —
-    // anything structured-clonable, functions rejected with a TypeError.
+    // Invoke a named RPC remotely: from a client it runs on the host; from
+    // the host it runs on every client. With callLocal configured, the local
+    // handler also runs, synchronously after the send, with fromConn 0. Args
+    // ride sendClone — anything structured-clonable, functions rejected with
+    // a TypeError.
     sync.call = function (name, ...args) {
         requireActive();
         if (!isHost && hostConn === null)
             throw new Error('bro.net.sync: call(): not connected to a host');
+        const cfg = rpcConfig(name);
         stats.rpcsSent++;
-        sendSync({ [TAG]: 'rpc', n: name, a: args }, CONTROL_OPTS);
+        sendSync({ [TAG]: 'rpc', n: name, a: args }, rpcOpts(cfg));
+        if (cfg.callLocal) invokeRpc(0, { n: name, a: args });
     };
 
     // Host-only: invoke a named RPC on one specific client.
     sync.callTo = function (conn, name, ...args) {
         requireHost('callTo()');
         stats.rpcsSent++;
-        net.sendClone(conn, { [TAG]: 'rpc', n: name, a: args }, CONTROL_OPTS);
+        net.sendClone(conn, { [TAG]: 'rpc', n: name, a: args },
+                      rpcOpts(rpcConfig(name)));
     };
 
     // ── Introspection ────────────────────────────────────────────────────────
