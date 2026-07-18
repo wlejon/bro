@@ -12,6 +12,7 @@
 #include <functional>
 #include <algorithm>
 #include <cstdlib>
+#include <cctype>
 #include <chrono>
 #include <unordered_set>
 
@@ -1665,9 +1666,34 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
         return;
     }
 
-    // Parse HTML fragment with gumbo (wrapped in a div)
-    std::string wrapper = "<html><body><div>" + html + "</div></body></html>";
-    GumboOutput* output = gumbo_parse(wrapper.c_str());
+    // Parse the fragment in the context of the element receiving it. This is
+    // what the HTML fragment parsing algorithm requires, and skipping it is not
+    // cosmetic: without a context the tree builder sits in "in body" mode,
+    // where <tr>, <td>, <tbody>, <thead>, <tfoot> and <caption> start tags are
+    // parse errors and get DROPPED, keeping only their text. So
+    //
+    //     tbody.innerHTML = '<tr><td>a</td></tr>'
+    //
+    // used to yield a row-less table of height 0, and setting a <tr>'s
+    // innerHTML collapsed its cells into one bare text node. gumbo takes the
+    // context as a tag enum; anything it doesn't know (custom elements) falls
+    // back to the historical <div> wrapper.
+    std::string lowerTag = parent->tagName();
+    for (auto& c : lowerTag) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    GumboTag ctxTag = gumbo_tag_enum(lowerTag.c_str());
+
+    GumboOptions opts = kGumboDefaultOptions;
+    std::string wrapper;
+    GumboOutput* output = nullptr;
+
+    if (ctxTag != GUMBO_TAG_UNKNOWN && ctxTag != GUMBO_TAG_LAST) {
+        opts.fragment_context = ctxTag;
+        opts.fragment_namespace = GUMBO_NAMESPACE_HTML;
+        output = gumbo_parse_with_options(&opts, html.c_str(), html.length());
+    } else {
+        wrapper = "<html><body><div>" + html + "</div></body></html>";
+        output = gumbo_parse_with_options(&opts, wrapper.c_str(), wrapper.length());
+    }
     if (!output) {
         parent->markStructureDirty();
         return;
@@ -1699,12 +1725,17 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
         return nullptr;
     };
 
-    GumboNode* wrapperDiv = findWrapper(output->root);
-    if (wrapperDiv) {
-        buildTreeFromGumbo(wrapperDiv, parent);
+    // In fragment mode gumbo synthesizes an <html> root and inserts the parsed
+    // children straight into it, so that root IS the source node. The wrapper
+    // path still has to dig out its <div>.
+    GumboNode* source = (opts.fragment_context != GUMBO_TAG_LAST)
+                      ? output->root
+                      : findWrapper(output->root);
+    if (source) {
+        buildTreeFromGumbo(source, parent);
     }
 
-    gumbo_destroy_output(&kGumboDefaultOptions, output);
+    gumbo_destroy_output(&opts, output);
 
     // Extract <style> elements from the fragment and add CSS to the cascade
     std::vector<Element*> newElems;
