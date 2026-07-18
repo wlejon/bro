@@ -1577,6 +1577,8 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setLayerWeight", js_node_setLayerWeight, 2)
         .method_raw("addStateMachine", js_node_addStateMachine, 1)
         .method_raw("travel", js_node_travel, 1)
+        .method_raw("setRootMotion", js_node_setRootMotion, 1)
+        .method_raw("consumeRootMotion", js_node_consumeRootMotion, 0)
         .method_raw("addAnimation", js_sprite_addAnimation, 2)
         .method_raw("burst", js_particles_burst, 1)
         .method_raw("clear", js_particles_clear, 0)

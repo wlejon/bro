@@ -302,6 +302,48 @@ JSValue js_node_travel(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
     return JS_DupValue(ctx, this_val);
 }
 
+// setRootMotion({enabled, bone?, extractY?}) — bone is a name or index;
+// omitted = auto-detect (first parentless bone, else bone 0).
+JSValue js_node_setRootMotion(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    auto* sm = asSkinnedMesh(w);
+    if (!sm)
+        return JS_ThrowTypeError(ctx, "setRootMotion: node is not a skinned mesh");
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "setRootMotion({enabled, bone?, extractY?})");
+
+    scene::AnimationPlayer::RootMotionOptions opts;
+    opts.enabled  = qjsbind::get_prop_bool(ctx, argv[0], "enabled", false);
+    opts.extractY = qjsbind::get_prop_bool(ctx, argv[0], "extractY", false);
+    JSValue boneVal = JS_GetPropertyStr(ctx, argv[0], "bone");
+    if (JS_IsString(boneVal))       opts.boneName = jsStr(ctx, boneVal);
+    else if (JS_IsNumber(boneVal))  opts.bone = (int)jsNum(ctx, boneVal);
+    JS_FreeValue(ctx, boneVal);
+
+    if (!sm->ensurePlayer().setRootMotion(opts))
+        return JS_ThrowTypeError(ctx,
+            "setRootMotion: no skeleton (setSkeleton first) or unknown bone");
+    return JS_DupValue(ctx, this_val);
+}
+
+// consumeRootMotion() — {translation: [x, y, z], yaw} accumulated in MODEL
+// space since the last call; resets on read.
+JSValue js_node_consumeRootMotion(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    auto* sm = asSkinnedMesh(w);
+    if (!sm)
+        return JS_ThrowTypeError(ctx, "consumeRootMotion: node is not a skinned mesh");
+    scene::AnimationPlayer::RootMotionDelta d;
+    if (auto* player = sm->player()) d = player->consumeRootMotion();
+    JSValue obj = JS_NewObject(ctx);
+    JSValue t = JS_NewArray(ctx);
+    for (uint32_t i = 0; i < 3; i++)
+        JS_SetPropertyUint32(ctx, t, i, JS_NewFloat64(ctx, d.translation[i]));
+    JS_SetPropertyStr(ctx, obj, "translation", t);
+    JS_SetPropertyStr(ctx, obj, "yaw", JS_NewFloat64(ctx, d.yaw));
+    return obj;
+}
+
 // blendState() — { state, clips: [{name, weight}], phase, pos?, layers: [...] }.
 JSValue js_node_blendState(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);

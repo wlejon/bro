@@ -27,8 +27,8 @@ class SkinnedMeshNode;
 /// either a single clip or a registered blend space (1D/2D); play() on the
 /// base crossfades from whatever was playing over fadeTime seconds. Layers
 /// are addressed by slot via playLayer(); the legacy play(name, {mask})
-/// form is slot 0. Not a state machine (that's the next tier up) — but
-/// blend spaces + layers cover locomotion + overlay needs.
+/// form is slot 0. Blend spaces + layers cover locomotion + overlay needs;
+/// the state machine (below) adds authored transitions on top.
 ///
 /// Blend spaces: addBlendSpace1D/2D register a named set of clips at
 /// parameter positions; play(name) makes the space the base track (a space
@@ -51,6 +51,15 @@ class SkinnedMeshNode;
 /// SUSPENDS the machine (state becomes empty, definition retained); the next
 /// travel() re-enters it. autoAdvance transitions fire when a non-looping
 /// state's clip finishes; looping states never auto-advance.
+///
+/// Root motion (opt-in via setRootMotion): each tick, after the full blended
+/// pose is produced and before skinning, the root bone's translation/yaw
+/// delta is extracted (continuous across crossfades because the blended pose
+/// is continuous; loop wraps are corrected with the clip's net-loop root
+/// displacement so deltas telescope exactly), accumulated for
+/// consumeRootMotion(), and removed from the pose (X/Z + yaw pinned to their
+/// values at enable time; Y stays authored unless extractY) so the character
+/// stays put while the app moves the node/physics body.
 class AnimationPlayer {
 public:
     /// Hard cap on simultaneously active layer slots. Bounded so the
@@ -193,6 +202,33 @@ public:
         onStateChanged_ = std::move(cb);
     }
 
+    // --- Root motion (see class comment) ---
+
+    struct RootMotionOptions {
+        bool enabled = false;
+        int bone = -1;           // explicit bone index; -1 = boneName / auto
+        std::string boneName;    // explicit bone name; empty = auto-detect
+                                 // (first parentless bone, else bone 0)
+        bool extractY = false;   // also extract+remove Y (default: Y stays
+                                 // authored so jumps/crouches render)
+    };
+    /// Enable/disable extraction. Requires a skeleton when enabling; returns
+    /// false for a missing skeleton or an unknown/out-of-range bone. Resets
+    /// the accumulator and the delta baseline (the tick after enabling never
+    /// spikes).
+    bool setRootMotion(const RootMotionOptions& opts);
+    bool rootMotionEnabled() const { return rmEnabled_; }
+    int  rootMotionBone() const { return rmBone_; }
+
+    /// Accumulated root displacement in MODEL space (the clip's authoring
+    /// space, before Skeleton::rootTransform and the node's own TRS) since
+    /// the last call; yaw is radians about +Y. Resets to zero on read.
+    struct RootMotionDelta {
+        float translation[3] = {0.0f, 0.0f, 0.0f};
+        float yaw = 0.0f;
+    };
+    RootMotionDelta consumeRootMotion();
+
     /// Fade the whole result (base + layers) to bind pose over fadeTime,
     /// then deactivate — after which manual setSkinningMatrices works again.
     /// fadeTime 0 = immediate bind pose + deactivate.
@@ -273,6 +309,12 @@ private:
         float px = 0.0f, py = 0.0f;
         float timescale = 1.0f;
         bromesh::Pose scratch;   // per-entry eval scratch (no per-frame alloc)
+        // Root motion: this clip's net root displacement over one loop
+        // (rootAt(duration) - rootAt(0)), for wrap correction. Computed
+        // lazily while root motion is enabled.
+        float netT[3] = {0.0f, 0.0f, 0.0f};
+        float netYaw = 0.0f;
+        bool  netValid = false;
     };
     struct BlendSpace {
         bool is2D = false;
@@ -301,11 +343,21 @@ private:
         int   activeCount = 0;
         float cachedCycleDur = 0.0f;
 
+        // Signed loop wraps crossed by the last advance() (clip loop or the
+        // space's shared phase). Consumed (zeroed) by root-motion extraction.
+        int   wrapCount = 0;
+        // Clip mode: net root displacement over one loop (see
+        // BlendSpaceEntry::netT); space mode uses the entries' nets.
+        float rootNetT[3] = {0.0f, 0.0f, 0.0f};
+        float rootNetYaw = 0.0f;
+        bool  rootNetValid = false;
+
         bool valid() const { return clip || space; }
         void reset() {
             clip.reset(); space = nullptr; name.clear();
             time = 0; phase = 0; playing = false;
             activeCount = 0; cachedCycleDur = 0;
+            wrapCount = 0; rootNetValid = false;
         }
         /// Blend-space mode: recompute activeIdx/W + cachedCycleDur from the
         /// space's current parameter. No-op in clip mode.
@@ -409,6 +461,36 @@ private:
     /// Switch the base track to state `idx` (crossfade over `fade`), with
     /// optional phase carry-over, then fire onStateChanged_.
     void enterState(int idx, float fade, bool syncPhase, bool fireCallback);
+
+    // --- Root motion ---
+    bool  rmEnabled_ = false;
+    int   rmBone_ = -1;
+    bool  rmExtractY_ = false;
+    bool  rmInTick_ = false;     // accumulate deltas only from tick()'s pose
+    bool  rmHavePrev_ = false;   // baseline sample valid (rebased on any
+                                 // non-tick re-pose: play/seek/setBlendPos)
+    bool  rmHaveRef_ = false;    // pin target captured (at enable time)
+    float rmPrevT_[3] = {0.0f, 0.0f, 0.0f};
+    float rmPrevYaw_ = 0.0f;
+    float rmRefT_[3] = {0.0f, 0.0f, 0.0f};
+    float rmRefYaw_ = 0.0f;
+    float rmAccumT_[3] = {0.0f, 0.0f, 0.0f};
+    float rmAccumYaw_ = 0.0f;
+    bromesh::Pose rmScratch_;    // net-loop eval scratch (setup-time only)
+
+    static float yawOfQuat(const float q[4]);   // xyzw, yaw about +Y
+    static float wrapPi(float a);               // wrap to (-pi, pi]
+    /// rootAt(duration) - rootAt(0) of `clip`'s root bone (rmBone_).
+    void computeClipRootNet(const bromesh::Animation& clip,
+                            float outT[3], float* outYaw);
+    /// Fill the track's (or its space entries') net-loop displacement.
+    void computeTrackRootNet(Track& t);
+    /// Add `w` × wrapCount × net-loop displacement of `t` to the deltas.
+    void addWrapCorrection(const Track& t, float w,
+                           float* dx, float* dy, float* dz, float* dyaw) const;
+    /// applyPose() tail: accumulate the root delta (tick only) and pin the
+    /// root in result_ so the character stays at its enable-time spot.
+    void extractRootMotion();
 };
 
 } // namespace bro::scene

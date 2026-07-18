@@ -264,6 +264,8 @@ JSValue js_node_stopLayer(JSContext* ctx, JSValueConst this_val, int argc, JSVal
 JSValue js_node_setLayerWeight(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_addStateMachine(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_travel(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_node_setRootMotion(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_node_consumeRootMotion(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_play(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_stop(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_pause(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);

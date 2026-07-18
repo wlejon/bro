@@ -450,3 +450,101 @@ function onTick(dt, velocity) {
 //     char2.setBlendPos('locomotion', speed);       // parameter is per-space,
 //     char2.setBlendPos('locomotionCrouch', speed); // shared across states
 //   }
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Root motion — extract authored root displacement, apply it to the node/body
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// A walk clip that actually moves its root bone forward normally makes the
+// MESH slide away from its node. Root motion (opt-in) extracts that
+// displacement instead: every tick, after the full blended pose is produced
+// (base + crossfade + blend space + layers) and before skinning, the root
+// bone's translation/yaw delta is accumulated for the app and REMOVED from
+// the pose, so the character animates in place and the APP moves the node
+// or physics body — animation stays the source of truth for distance.
+//
+//   node.setRootMotion({
+//     enabled: true,
+//     bone: 'hips',          // name or index; omitted = auto-detect: the
+//                            //   first parentless bone, else bone 0
+//     extractY: false,       // default: Y stays IN the pose (jumps/crouches
+//                            //   render as authored) and is never
+//                            //   accumulated. true: Y is extracted+removed
+//                            //   like X/Z (for fully physics-driven chars).
+//   });
+//
+//   const d = node.consumeRootMotion();
+//   // { translation: [x, y, z], yaw }  — accumulated since the last call,
+//   // reset on read. MODEL space (the clip's authoring space, before
+//   // Skeleton.rootTransform and the node's own TRS); yaw is radians
+//   // about +Y. translation[1] is 0 unless extractY.
+//
+// Semantics (read before relying on it):
+//   - The pose root is PINNED: X/Z and yaw return to their values at enable
+//     time each frame (Y too with extractY). Extraction works from the
+//     final blended pose, so deltas stay continuous through crossfades,
+//     blend-space mixes, and state-machine transitions.
+//   - LOOP WRAPS are corrected with the clip's net-loop root displacement
+//     (blend spaces: the weight-mixed net of the participating clips), so
+//     deltas telescope exactly — summing consumeRootMotion over one full
+//     loop yields precisely the clip's authored net displacement.
+//   - The first tick after enable / play / seek measures only that tick —
+//     enabling mid-clip never spikes. Pausing (player pause or
+//     bro.time.pause) accumulates nothing.
+//   - Crossfading clips whose roots sit at different absolute positions
+//     blends POSITIONS, so an alignment component appears in the deltas
+//     during the fade (can briefly reverse). Author gait clips with the
+//     root starting near origin, or keep fades short.
+//   - Layers that animate the root bone feed the deltas but get no wrap
+//     correction — mask the root bone out of layers when root motion is on.
+//
+// ── Wiring: node-driven character ────────────────────────────────────────────
+//
+//   char2.setRootMotion({ enabled: true });
+//   char2.play('walk');
+//
+//   let heading = 0;                           // world yaw the app owns
+//   function onTick() {                        // any per-frame callback
+//     const d = char2.consumeRootMotion();
+//     // Rotate the MODEL-space delta by the current heading, then apply:
+//     const [dx, , dz] = d.translation;
+//     const c = Math.cos(heading), s = Math.sin(heading);
+//     const p = char2.position;
+//     char2.position = [p[0] + c * dx + s * dz,
+//                       p[1],
+//                       p[2] - s * dx + c * dz];
+//     heading += d.yaw;                        // turn clips steer the node
+//     char2.quaternion = [0, Math.sin(heading / 2), 0, Math.cos(heading / 2)];
+//   }
+//
+// ── Wiring: Jolt character controller ────────────────────────────────────────
+//
+// The engine steps characters inside the fixed physics tick; the app just
+// feeds a desired velocity (docs/physics-api.js). Convert the accumulated
+// delta to a velocity by dividing by the SCALED frame dt — bro.time.now is
+// the scaled clock (ms), so while paused dt is 0 and the character must get
+// zero velocity: guard the division.
+//
+//   const character = Physics.createCharacter({
+//       radius: 0.35, halfHeight: 0.55, position: { x: 0, y: 1, z: 0 } });
+//   char2.setRootMotion({ enabled: true });    // Y stays authored: gravity
+//                                              // and jumps belong to Jolt
+//   let heading = 0;
+//   let lastT = bro.time.now;                  // scaled clock, MILLISECONDS
+//   function onTick() {
+//     const t = bro.time.now, dt = (t - lastT) / 1000; lastT = t;
+//     const d = char2.consumeRootMotion();
+//     if (dt > 0) {
+//       const c = Math.cos(heading), s = Math.sin(heading);
+//       const vx = (c * d.translation[0] + s * d.translation[2]) / dt;
+//       const vz = (-s * d.translation[0] + c * d.translation[2]) / dt;
+//       character.setVelocity(vx, 0, vz);      // grounded: engine handles
+//       heading += d.yaw;                      //   gravity when unsupported
+//     } else {
+//       character.setVelocity(0, 0, 0);        // paused: stand still
+//     }
+//     const p = character.getPosition();       // node follows the body
+//     char2.position = [p.x, p.y, p.z];
+//     char2.quaternion = [0, Math.sin(heading / 2), 0, Math.cos(heading / 2)];
+//   }
