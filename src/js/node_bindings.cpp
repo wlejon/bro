@@ -58,7 +58,10 @@ static std::vector<bro::dom::Element*> htmlcollection_query(HTMLCollectionData* 
     if (!data) return {};
     if (data->root)
         return data->root->querySelectorAll(data->selector);
-    if (data->doc)
+    // The collection holds a raw Document*; a document-scoped collection can
+    // outlive its document (detached DOMParser docs, closed panels) — go
+    // empty rather than dangle.
+    if (data->doc && bro::dom::Document::isLiveDocument(data->doc))
         return data->doc->querySelectorAll(data->selector);
     return {};
 }

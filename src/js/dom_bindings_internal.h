@@ -135,9 +135,22 @@ JSValue wrapShadowRoot(JSContext* ctx, bro::dom::ShadowRoot* sr);
 void invalidateWrapper(JSContext* ctx, bro::dom::Element* elem);
 bro::dom::Element* getElement(JSValueConst val);
 void cleanupCanvasContextCache(JSRuntime* rt);
+// True while engine teardown is running (see setElementFinalizerShutdown) —
+// finalizers must not dereference DOM pointers or touch other wrappers then.
+bool isElementFinalizerShutdown();
 
 // document_bindings.cpp
 bro::dom::Document* getDocument(JSValueConst val);
+
+// dom_bindings.cpp — detached (JS-owned) documents backing DOMParser.
+// wrapDetachedDocument takes ownership of `doc` (deletes it on failure; on
+// success a hidden holder on the wrapper deletes it when the wrapper is GC'd).
+JSValue wrapDetachedDocument(JSContext* ctx, bro::dom::Document* doc);
+bool isDetachedDocument(bro::dom::Document* doc);
+// Dup'd Document wrapper for a registered detached doc, or JS_NULL.
+JSValue detachedDocumentWrapper(JSContext* ctx, bro::dom::Document* doc);
+// Element-wrapper-finalizer hook: drop the weak registry entry.
+void dropDetachedElementWrapper(bro::dom::Element* el, void* wrapperPtr);
 
 // mutation_observer.cpp — notify MutationObservers of DOM changes
 void notifyMutationObservers(JSContext* ctx, JSValueConst target,

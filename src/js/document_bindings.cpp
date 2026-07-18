@@ -180,6 +180,45 @@ static JSValue js_document_exitPointerLock(JSContext* ctx, JSValueConst /*this_v
 }
 
 // ===========================================================================
+// DOMParser — parseFromString returns a REAL detached Document
+// ===========================================================================
+//
+// The string is parsed by the same gumbo path as the app document into a
+// fresh bro::dom::Document owned by JS (see wrapDetachedDocument for the
+// lifetime contract). No layout, rendering, or engine attachment — it is a
+// plain tree with the full Document/Element API surface. All mime types go
+// through the HTML parser: bro has no XML parser, matching the previous
+// polyfill's best-effort behavior for 'text/xml' / 'image/svg+xml'.
+static JSValue js_domparser_parseFromString(JSContext* ctx, JSValueConst /*this_val*/,
+                                            int argc, JSValueConst* argv)
+{
+    std::string html = argc >= 1 ? jsToStdString(ctx, argv[0]) : std::string();
+    auto* doc = new bro::dom::Document();
+    doc->parse(html);
+    return wrapDetachedDocument(ctx, doc);
+}
+
+static JSValue js_domparser_ctor(JSContext* ctx, JSValueConst new_target,
+                                 int /*argc*/, JSValueConst* /*argv*/)
+{
+    JSValue proto = JS_GetPropertyStr(ctx, new_target, "prototype");
+    JSValue obj = JS_IsObject(proto) ? JS_NewObjectProto(ctx, proto)
+                                     : JS_NewObject(ctx);
+    JS_FreeValue(ctx, proto);
+    return obj;
+}
+
+// globalThis.Document exists for instanceof checks (both the realm document
+// and DOMParser results are instances). Constructing one directly is not
+// supported — browsers allow `new Document()`, but a bro Document is engine-
+// or DOMParser-owned; throw the DOM's "Illegal constructor" instead.
+static JSValue js_document_illegal_ctor(JSContext* ctx, JSValueConst /*new_target*/,
+                                        int /*argc*/, JSValueConst* /*argv*/)
+{
+    return JS_ThrowTypeError(ctx, "Illegal constructor");
+}
+
+// ===========================================================================
 // Registration
 // ===========================================================================
 
@@ -318,6 +357,33 @@ void installDocumentBindings(JSContext* ctx) {
         });
 
     js_document_class_id = qjsbind::class_id<Doc>();
+
+    JSValue global = JS_GetGlobalObject(ctx);
+
+    // globalThis.DOMParser
+    {
+        JSValue proto = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, proto, "parseFromString",
+            JS_NewCFunction(ctx, js_domparser_parseFromString, "parseFromString", 2));
+        JSValue ctor = JS_NewCFunction2(ctx, js_domparser_ctor, "DOMParser", 0,
+                                        JS_CFUNC_constructor, 0);
+        JS_SetConstructor(ctx, ctor, proto);   // ctor.prototype / proto.constructor
+        JS_FreeValue(ctx, proto);
+        JS_SetPropertyStr(ctx, global, "DOMParser", ctor);
+    }
+
+    // globalThis.Document — prototype is the Document class proto, so
+    // `document instanceof Document` and DOMParser results both hold.
+    {
+        JSValue ctor = JS_NewCFunction2(ctx, js_document_illegal_ctor, "Document", 0,
+                                        JS_CFUNC_constructor, 0);
+        JSValue proto = JS_GetClassProto(ctx, js_document_class_id);
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+        JS_SetPropertyStr(ctx, global, "Document", ctor);
+    }
+
+    JS_FreeValue(ctx, global);
 }
 
 } // namespace bro::js

@@ -51,6 +51,10 @@ void setElementFinalizerShutdown(bool shutting_down) {
     s_shutting_down = shutting_down;
 }
 
+bool isElementFinalizerShutdown() {
+    return s_shutting_down;
+}
+
 // Release orphaned elements when the JS wrapper is garbage-collected.
 static void js_element_finalizer(JSRuntime* rt, JSValue val)
 {
@@ -66,6 +70,12 @@ static void js_element_finalizer(JSRuntime* rt, JSValue val)
     // against a freed wrapper even if an eager-clear site was missed.
     if (el->isAlive() && el->jsWrapper() == JS_VALUE_GET_PTR(val))
         el->setJsWrapper(nullptr);
+
+    // Detached-document (DOMParser) bookkeeping: this wrapper is leaving the
+    // weak registry, so the document holder will never touch it again. Safe to
+    // dereference el here — a non-null opaque means neither the holder nor
+    // fireNodeFreed invalidated it, so its document is still alive.
+    dropDetachedElementWrapper(el, JS_VALUE_GET_PTR(val));
 
     // Free any cached canvas context for this element
     auto ccIt = s_canvas_contexts.find(el);
@@ -88,7 +98,12 @@ static void js_element_finalizer(JSRuntime* rt, JSValue val)
 
     if (!el->parentNode()) {
         auto* doc = el->document();
-        if (doc) doc->freeNode(el);
+        // Never free the document element: for a detached (DOMParser) document
+        // it is the parentless ROOT of a tree that stays reachable through the
+        // Document wrapper — collecting its (uncached-strongly) wrapper must
+        // not eat the whole parsed tree. The main document's root never gets
+        // here (its wrapper is pinned by __bro_elem_map until shutdown).
+        if (doc && doc->documentElement() != el) doc->freeNode(el);
     }
 }
 
@@ -2648,6 +2663,10 @@ static JSValue js_element_get_ownerDocument(JSContext* ctx, JSValueConst this_va
 {
     auto* el = getElement(this_val);
     if (!el || !el->document()) return JS_NULL;
+    // Detached (DOMParser) nodes answer with THEIR Document wrapper, not the
+    // realm's global document.
+    JSValue detached = detachedDocumentWrapper(ctx, el->document());
+    if (!JS_IsNull(detached)) return detached;
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue doc = JS_GetPropertyStr(ctx, global, "document");
     JS_FreeValue(ctx, global);

@@ -56,6 +56,9 @@ void DomBindings::setGetContextFactory(JSContext* ctx, GetContextFactory factory
 // Wrap / unwrap helpers (public API)
 // ===========================================================================
 
+static void noteDetachedElementWrapper(JSContext* ctx, bro::dom::Element* el,
+                                       JSValue wrapper);
+
 JSValue DomBindings::wrapElement(JSContext* ctx, void* element_ptr)
 {
     if (!element_ptr) return JS_NULL;
@@ -116,6 +119,15 @@ JSValue DomBindings::wrapElement(JSContext* ctx, void* element_ptr)
         // map — a transient wrapper for a doomed node must not be cached, or the
         // raw pointer would outlive it.
         elem->setJsWrapper(JS_VALUE_GET_PTR(obj));
+    } else if (auto* ddoc = elem->document();
+               ddoc && isDetachedDocument(ddoc) && ddoc->ownsNode(elem)) {
+        // Detached-document node (DOMParser). Cache via the element's wrapper
+        // pointer only — NOT the strong __bro_elem_map, so an unreferenced
+        // parsed tree stays collectable — and record it in the weak registry +
+        // pin the Document wrapper so a held child keeps its document alive.
+        // The element finalizer undoes both.
+        elem->setJsWrapper(JS_VALUE_GET_PTR(obj));
+        noteDetachedElementWrapper(ctx, elem, obj);
     }
 
     JS_FreeValue(ctx, elemMap);
@@ -148,6 +160,138 @@ JSValue DomBindings::wrapDocument(JSContext* ctx, void* document_ptr)
 // Thread-local map from Document -> JSContext so the Document's mutation
 // notifications can find the right JS runtime to fire selectionchange into.
 static std::unordered_map<bro::dom::Document*, JSContext*> s_doc_to_ctx;
+
+static void fireNodeFreed(bro::dom::Document* doc, bro::dom::Node* node);
+
+// ===========================================================================
+// Detached documents (DOMParser) — JS-owned bro::dom::Document instances
+// ===========================================================================
+//
+// DOMParser().parseFromString returns a REAL detached Document: parsed by the
+// same gumbo path as the app document, exposed through the same Document /
+// Element wrapper classes, but owned by JS. Ownership lives in a hidden
+// "holder" object (non-configurable property of the Document wrapper) whose
+// finalizer deletes the Document when the wrapper is collected.
+//
+// Wrapper liveness differs from the main document on purpose:
+//   * element wrappers are cached ONLY via Element::jsWrapper() (the element
+//     finalizer clears it) — never in the strong __bro_elem_map, so a parsed
+//     tree nobody references stays collectable;
+//   * each element wrapper pins the Document wrapper through a hidden
+//     "__bro_owner_doc" property, so holding any child keeps the whole
+//     document alive (plain GC reachability — no custom gc_mark needed);
+//   * a weak per-document registry (nodeId → wrapper) lets the holder null
+//     every surviving wrapper's opaque before deleting the Document, so a
+//     wrapper that outlives its document goes cleanly inert instead of
+//     dangling. Entries are erased by the element finalizer, so the holder
+//     only ever touches wrappers whose finalizer has not yet run — their
+//     JSObject memory is still valid in every teardown order (QuickJS frees
+//     cycle members' memory only after the whole finalizer phase).
+//
+// The registry deliberately holds raw JSObject* (weak). All access is on the
+// JS thread.
+struct DetachedDocState {
+    JSContext* ctx = nullptr;
+    JSObject* docWrapper = nullptr;                       // weak
+    std::unordered_map<uint32_t, JSObject*> elemWrappers; // weak, nodeId-keyed
+};
+static std::unordered_map<bro::dom::Document*, DetachedDocState> s_detached_docs;
+
+static JSClassID s_detached_holder_class_id = 0;
+
+bool isDetachedDocument(bro::dom::Document* doc) {
+    return doc && s_detached_docs.count(doc) != 0;
+}
+
+JSValue detachedDocumentWrapper(JSContext* ctx, bro::dom::Document* doc) {
+    auto it = s_detached_docs.find(doc);
+    if (it == s_detached_docs.end() || !it->second.docWrapper) return JS_NULL;
+    return JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, it->second.docWrapper));
+}
+
+// Called from wrapElement for a freshly created detached-document wrapper:
+// record it in the weak registry and pin the Document wrapper from it.
+static void noteDetachedElementWrapper(JSContext* ctx, bro::dom::Element* el,
+                                       JSValue wrapper) {
+    auto it = s_detached_docs.find(el->document());
+    if (it == s_detached_docs.end()) return;
+    it->second.elemWrappers[el->nodeId()] =
+        static_cast<JSObject*>(JS_VALUE_GET_PTR(wrapper));
+    JSValue dw = JS_MKPTR(JS_TAG_OBJECT, it->second.docWrapper);
+    // Non-configurable/non-writable so script can't sever the lifetime pin.
+    JS_DefinePropertyValueStr(ctx, wrapper, "__bro_owner_doc",
+                              JS_DupValue(ctx, dw), 0);
+}
+
+// Called from the element wrapper finalizer (never under shutdown): drop the
+// weak registry entry so the holder never touches a freed wrapper object.
+void dropDetachedElementWrapper(bro::dom::Element* el, void* wrapperPtr) {
+    auto* doc = el->document();
+    if (!doc) return;
+    auto it = s_detached_docs.find(doc);
+    if (it == s_detached_docs.end()) return;
+    auto wit = it->second.elemWrappers.find(el->nodeId());
+    if (wit != it->second.elemWrappers.end() && wit->second == wrapperPtr)
+        it->second.elemWrappers.erase(wit);
+}
+
+// Holder finalizer — the Document wrapper is being collected. Null every
+// surviving element wrapper's opaque (they go inert; getElement() then
+// returns nullptr and every binding takes its safe-default path), then free
+// the Document. Under engine shutdown the wrapper objects may already be
+// gone (their finalizers skip bookkeeping), so only the delete runs.
+static void js_detached_doc_holder_finalizer(JSRuntime* /*rt*/, JSValue val) {
+    auto* doc = static_cast<bro::dom::Document*>(
+        JS_GetOpaque(val, s_detached_holder_class_id));
+    if (!doc) return;
+    auto it = s_detached_docs.find(doc);
+    if (it != s_detached_docs.end()) {
+        if (!isElementFinalizerShutdown()) {
+            for (auto& [id, obj] : it->second.elemWrappers) {
+                (void)id;
+                JS_SetOpaque(JS_MKPTR(JS_TAG_OBJECT, obj), nullptr);
+            }
+            if (it->second.docWrapper) {
+                JS_SetOpaque(JS_MKPTR(JS_TAG_OBJECT, it->second.docWrapper),
+                             nullptr);
+            }
+        }
+        s_detached_docs.erase(it);
+    }
+    s_doc_to_ctx.erase(doc);
+    delete doc;
+}
+
+static const JSClassDef js_detached_doc_holder_class = {
+    "DetachedDocumentHolder",
+    js_detached_doc_holder_finalizer,
+    nullptr, nullptr, nullptr
+};
+
+JSValue wrapDetachedDocument(JSContext* ctx, bro::dom::Document* doc) {
+    if (!doc) return JS_NULL;
+    JSValue docObj = DomBindings::wrapDocument(ctx, doc);
+    if (JS_IsException(docObj)) {
+        delete doc;
+        return docObj;
+    }
+    JSValue holder = JS_NewObjectClass(
+        ctx, static_cast<int>(s_detached_holder_class_id));
+    if (JS_IsException(holder)) {
+        JS_FreeValue(ctx, docObj);
+        delete doc;
+        return holder;
+    }
+    JS_SetOpaque(holder, doc);
+    // Non-configurable: deleting this property would leak/UAF the Document.
+    JS_DefinePropertyValueStr(ctx, docObj, "__bro_doc_holder", holder, 0);
+    s_detached_docs[doc] = DetachedDocState{
+        ctx, static_cast<JSObject*>(JS_VALUE_GET_PTR(docObj)), {}};
+    // Register for freed-node wrapper invalidation, same as the main document.
+    s_doc_to_ctx[doc] = ctx;
+    doc->setNodeFreedCallback(&fireNodeFreed);
+    return docObj;
+}
 
 // Fire `selectionchange` on the document (non-bubbling, non-cancelable per
 // spec). Dispatched to the documentElement which is the closest analogue to
@@ -192,11 +336,28 @@ static void fireNodeFreed(bro::dom::Document* doc, bro::dom::Node* node) {
     }
     JS_FreeValue(ctx, elemMap);
     JS_FreeValue(ctx, global);
+
+    // Detached-document nodes are cached outside __bro_elem_map — null the
+    // wrapper's opaque via the weak registry so it goes inert now, before the
+    // node memory is eventually freed.
+    auto dit = s_detached_docs.find(doc);
+    if (dit != s_detached_docs.end()) {
+        auto wit = dit->second.elemWrappers.find(node->nodeId());
+        if (wit != dit->second.elemWrappers.end()) {
+            JS_SetOpaque(JS_MKPTR(JS_TAG_OBJECT, wit->second), nullptr);
+            dit->second.elemWrappers.erase(wit);
+        }
+    }
 }
 
 void DomBindings::install(JSContext* ctx, void* document_ptr)
 {
     JSRuntime* rt = JS_GetRuntime(ctx);
+
+    // Class backing detached-document ownership (see wrapDetachedDocument).
+    JS_NewClassID(rt, &s_detached_holder_class_id);
+    if (!JS_IsRegisteredClass(rt, s_detached_holder_class_id))
+        JS_NewClass(rt, s_detached_holder_class_id, &js_detached_doc_holder_class);
 
     // ----- qjsbind-managed classes (handle IDs, class registration, prototypes) -----
     installEventBindings(ctx);

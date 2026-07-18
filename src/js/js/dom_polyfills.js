@@ -547,83 +547,10 @@
         wrapWithSignal(globalThis);
     })();
 
-    // ---- DOMParser / XMLSerializer -------------------------------------------
-    // DOMParser: parse an HTML or XML string into a detached Document-like
-    // structure. We reuse the host Document's parser by stamping the string
-    // into a throwaway container via innerHTML, then re-exposing the child
-    // tree as a Document-shaped object. This is the same trick every
-    // lightweight framework polyfill uses and matches the behavior real
-    // browsers reach for HTML. XML support is best-effort — bro has no
-    // dedicated XML parser, so we return the HTML parse result.
-    if (typeof globalThis.DOMParser === 'undefined') {
-        function DOMParser() {}
-        DOMParser.prototype.parseFromString = function(str, mimeType) {
-            str = String(str || '');
-            var isFull = /^<!doctype\b/i.test(str) ||
-                         /<html[\s>]/i.test(str);
-            var hostDoc = document;
-            var wrapper = hostDoc.createElement('div');
-            wrapper.innerHTML = str;
-
-            var htmlEl = null, headEl = null, bodyEl = null;
-            if (isFull) {
-                // The inner parse may have stripped html/head/body depending
-                // on the host parser. Look for them explicitly.
-                for (var i = 0; i < wrapper.children.length; i++) {
-                    var c = wrapper.children[i];
-                    var t = (c.tagName || '').toUpperCase();
-                    if (t === 'HTML') htmlEl = c;
-                    else if (t === 'HEAD') headEl = c;
-                    else if (t === 'BODY') bodyEl = c;
-                }
-            }
-            if (!htmlEl) {
-                htmlEl = hostDoc.createElement('html');
-                headEl = hostDoc.createElement('head');
-                bodyEl = hostDoc.createElement('body');
-                htmlEl.appendChild(headEl);
-                htmlEl.appendChild(bodyEl);
-                // Move wrapper children into body.
-                while (wrapper.firstChild) bodyEl.appendChild(wrapper.firstChild);
-            } else {
-                if (!headEl) {
-                    for (var j = 0; j < htmlEl.children.length; j++) {
-                        var cc = htmlEl.children[j];
-                        var tt = (cc.tagName || '').toUpperCase();
-                        if (tt === 'HEAD') headEl = cc;
-                        if (tt === 'BODY') bodyEl = cc;
-                    }
-                }
-            }
-
-            return {
-                nodeType: 9,
-                contentType: mimeType || 'text/html',
-                documentElement: htmlEl,
-                head: headEl || null,
-                body: bodyEl || null,
-                querySelector: function(sel) {
-                    return htmlEl && htmlEl.querySelector ? htmlEl.querySelector(sel) : null;
-                },
-                querySelectorAll: function(sel) {
-                    return htmlEl && htmlEl.querySelectorAll ? htmlEl.querySelectorAll(sel) : [];
-                },
-                getElementById: function(id) {
-                    if (!htmlEl || !htmlEl.querySelector) return null;
-                    return htmlEl.querySelector('#' + id);
-                },
-                getElementsByTagName: function(tag) {
-                    if (!htmlEl || !htmlEl.getElementsByTagName) return [];
-                    return htmlEl.getElementsByTagName(tag);
-                },
-                createElement: function(t) { return hostDoc.createElement(t); },
-                createTextNode: function(t) { return hostDoc.createTextNode(t); },
-                createDocumentFragment: function() { return hostDoc.createDocumentFragment(); }
-            };
-        };
-        globalThis.DOMParser = DOMParser;
-    }
-
+    // ---- XMLSerializer -------------------------------------------------------
+    // (DOMParser is native — see document_bindings.cpp: parseFromString
+    // returns a real detached Document parsed by the engine's HTML parser.)
+    //
     // XMLSerializer: serialize a node back to a string. For elements, we
     // delegate to outerHTML. Documents round-trip via their documentElement.
     if (typeof globalThis.XMLSerializer === 'undefined') {
