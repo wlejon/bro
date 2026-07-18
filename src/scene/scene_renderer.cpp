@@ -2,6 +2,7 @@
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer_internal.h"
 #include "scene/skinned_mesh_node.h"
+#include "scene/decal_node.h"
 #include "canvas/canvas_scene.h"
 #include "util/log.h"
 
@@ -59,6 +60,9 @@ SceneRenderer::~SceneRenderer() {
     if (bbVAO_) { glDeleteVertexArrays(1, &bbVAO_); bbVAO_ = 0; }
     if (particleProgram_) { glDeleteProgram(particleProgram_); particleProgram_ = 0; }
     if (particleQuadVBO_) { glDeleteBuffers(1, &particleQuadVBO_); particleQuadVBO_ = 0; }
+    if (decalProgram_) { glDeleteProgram(decalProgram_); decalProgram_ = 0; }
+    if (decalVBO_) { glDeleteBuffers(1, &decalVBO_); decalVBO_ = 0; }
+    if (decalVAO_) { glDeleteVertexArrays(1, &decalVAO_); decalVAO_ = 0; }
     if (tonemapProgram_) { glDeleteProgram(tonemapProgram_); tonemapProgram_ = 0; }
     if (tonemapVBO_) { glDeleteBuffers(1, &tonemapVBO_); tonemapVBO_ = 0; }
     if (tonemapVAO_) { glDeleteVertexArrays(1, &tonemapVAO_); tonemapVAO_ = 0; }
@@ -350,6 +354,17 @@ bool SceneRenderer::nodeWorldBounds(SceneNode* n, bromath::AABB3& out) const {
     }
     case SceneNode::Type::Particles3D:
         return static_cast<Particles3DNode*>(n)->worldBounds(out);
+    case SceneNode::Type::Decal: {
+        // The decal volume is exactly the unit box in local space (node
+        // scale IS the size — see DecalNode), so the world AABB is that box
+        // through the world matrix. Exact, no padding needed: the fragment
+        // shader discards outside the volume.
+        bromath::AABB3 local;
+        local.min = Vec3{-0.5f, -0.5f, -0.5f};
+        local.max = Vec3{ 0.5f,  0.5f,  0.5f};
+        out = bromath::atransform(local, n->worldMatrix());
+        return true;
+    }
     default:
         return false;
     }
@@ -374,6 +389,7 @@ void SceneRenderer::render3D() {
     bool hasSplatNodes = false;
     bool hasParticle3DNodes = false;
     bool hasBillboardNodes = false;
+    bool hasDecalNodes = false;
     bool hasLightIcons = false;
     for (auto& [id, node] : graph_.nodes_) {
         // renderVisible = user `visible` flag AND the per-frame visibility-
@@ -384,6 +400,7 @@ void SceneRenderer::render3D() {
         else if (node->type() == SceneNode::Type::InstancedMesh) hasInstancedMeshNodes = true;
         else if (node->type() == SceneNode::Type::GaussianSplat) hasSplatNodes = true;
         else if (node->type() == SceneNode::Type::Particles3D) hasParticle3DNodes = true;
+        else if (node->type() == SceneNode::Type::Decal) hasDecalNodes = true;
         else if (node->hasWorldAnchor())           hasBillboardNodes = true;
         else if (showLightIcons_ && node->type() == SceneNode::Type::Light) hasLightIcons = true;
     }
@@ -394,7 +411,7 @@ void SceneRenderer::render3D() {
     if (graph_.gizmoProvider_) gizmoMeshes = graph_.gizmoProvider_(&graph_);
     const bool hasGizmo = !gizmoMeshes.empty();
 
-    const bool has3D = (hasMeshNodes || hasInstancedMeshNodes || hasSplatNodes || hasParticle3DNodes || hasBillboardNodes || hasGizmo || hasLightIcons)
+    const bool has3D = (hasMeshNodes || hasInstancedMeshNodes || hasSplatNodes || hasParticle3DNodes || hasBillboardNodes || hasDecalNodes || hasGizmo || hasLightIcons)
                        && graph_.canvasWidth_ > 0 && graph_.canvasHeight_ > 0;
 
     // Per-frame culling state. World-space camera frustum: the passes render
@@ -765,6 +782,16 @@ void SceneRenderer::render3D() {
                                   0, 0, meshFBOWidth_, meshFBOHeight_,
                                   GL_DEPTH_BUFFER_BIT, GL_NEAREST);
                 glBindFramebuffer(GL_FRAMEBUFFER, hdrFBO);
+            }
+
+            // --- Projected decal pass --------------------------------------
+            // Screen-space box decals blend onto the lit opaque result.
+            // Placed right after the depth resolve (the pass snapshots the
+            // final single-sampled opaque depth) and BEFORE the blended
+            // passes so translucents, splats, particles and billboards all
+            // draw over decals — decals only affect opaque surfaces.
+            if (hasDecalNodes) {
+                renderDecalPass(activeLights);
             }
 
             // --- Translucent mesh pass -------------------------------------

@@ -264,6 +264,8 @@ static JSValue js_sg_cullStats(JSContext* ctx, JSValueConst this_val, int, JSVal
     num("particlesCulled", s.particlesCulled);
     num("billboardsDrawn", s.billboardsDrawn);
     num("billboardsCulled", s.billboardsCulled);
+    num("decalsDrawn", s.decalsDrawn);
+    num("decalsCulled", s.decalsCulled);
     num("shadowDrawn", s.shadowDrawn);
     num("shadowCulled", s.shadowCulled);
     num("shadowTilesTotal", s.shadowTilesTotal);
@@ -591,6 +593,87 @@ void SceneBindings::install(JSContext* ctx) {
                     static_cast<scene::CameraNode*>(w->node())->setPerspective(
                         !(val == "orthographic" || val == "ortho"));
             })
+        // Decal properties (DecalNode only; undefined elsewhere). The decal
+        // volume is the unit box scaled by the node's `scale` — there is no
+        // separate size property. See docs/scene-api.js.
+        .prop("modulate",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Decal)
+                    return JS_UNDEFINED;
+                const float* m = static_cast<scene::DecalNode*>(w->node())->modulate();
+                JSValue arr = JS_NewArray(ctx);
+                for (uint32_t i = 0; i < 4; ++i)
+                    JS_SetPropertyUint32(ctx, arr, i, JS_NewFloat64(ctx, m[i]));
+                return arr;
+            },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Decal)
+                    return;
+                auto* d = static_cast<scene::DecalNode*>(w->node());
+                if (JS_IsString(val)) {
+                    uint8_t r, g, b, a;
+                    if (parseColor(jsStr(ctx, val), r, g, b, a))
+                        d->setModulate(r / 255.0f, g / 255.0f, b / 255.0f, a / 255.0f);
+                } else if (JS_IsArray(val)) {
+                    double m4[4] = {1, 1, 1, 1};
+                    for (uint32_t i = 0; i < 4; ++i) {
+                        JSValue e = JS_GetPropertyUint32(ctx, val, i);
+                        if (!JS_IsUndefined(e)) JS_ToFloat64(ctx, &m4[i], e);
+                        JS_FreeValue(ctx, e);
+                    }
+                    d->setModulate((float)m4[0], (float)m4[1], (float)m4[2], (float)m4[3]);
+                }
+            })
+        .prop("emissionStrength",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Decal)
+                    return JS_NewFloat64(ctx, (double)static_cast<scene::DecalNode*>(w->node())->emissionStrength());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Decal)
+                    static_cast<scene::DecalNode*>(w->node())->setEmissionStrength((float)val);
+            })
+        .prop("upperFade",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Decal)
+                    return JS_NewFloat64(ctx, (double)static_cast<scene::DecalNode*>(w->node())->upperFade());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Decal)
+                    static_cast<scene::DecalNode*>(w->node())->setUpperFade((float)val);
+            })
+        .prop("lowerFade",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Decal)
+                    return JS_NewFloat64(ctx, (double)static_cast<scene::DecalNode*>(w->node())->lowerFade());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Decal)
+                    static_cast<scene::DecalNode*>(w->node())->setLowerFade((float)val);
+            })
+        .prop("normalFade",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Decal)
+                    return JS_NewFloat64(ctx, (double)static_cast<scene::DecalNode*>(w->node())->normalFade());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Decal)
+                    static_cast<scene::DecalNode*>(w->node())->setNormalFade((float)val);
+            })
+        .prop("renderPriority",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Decal)
+                    return JS_NewInt32(ctx, static_cast<scene::DecalNode*>(w->node())->renderPriority());
+                return JS_UNDEFINED;
+            },
+            [](NodeWrapper* w, double val) {
+                if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Decal)
+                    static_cast<scene::DecalNode*>(w->node())->setRenderPriority((int)val);
+            })
         .get("type", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->node()) return JS_UNDEFINED;
             switch (w->node()->type()) {
@@ -608,6 +691,7 @@ void SceneBindings::install(JSContext* ctx) {
                 case scene::SceneNode::Type::Particles:   return JS_NewString(ctx, "particles");
                 case scene::SceneNode::Type::Particles3D: return JS_NewString(ctx, "particles3d");
                 case scene::SceneNode::Type::Camera:  return JS_NewString(ctx, "camera");
+                case scene::SceneNode::Type::Decal:   return JS_NewString(ctx, "decal");
                 case scene::SceneNode::Type::Base:    return JS_NewString(ctx, "group");
                 default: break;
             }
@@ -1373,6 +1457,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("createLight", js_sg_createLight, 1)
         .method_raw("createParticles", js_sg_createParticles, 1)
         .method_raw("createParticles3D", js_sg_createParticles3D, 1)
+        .method_raw("createDecal", js_sg_createDecal, 1)
         .method_raw("createTween", js_sg_createTween, 0)
         .method_raw("setToneMap", js_sg_setToneMap, 1)
         .method_raw("setAmbient", js_sg_setAmbient, 1)

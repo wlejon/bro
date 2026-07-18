@@ -270,6 +270,7 @@ JSValue js_sg_createHtml(JSContext* ctx, JSValueConst this_val, int argc, JSValu
 JSValue js_sg_createParticles(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_createParticles3D(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_createGaussianSplat(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_sg_createDecal(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 // Sprite animation-end JS callback. The callback (a shared JSFnRef) is owned
 // by the SpriteNode itself, so it is released on any destruction path —
 // direct destroy, ancestor subtree destroy, graph teardown — with no side

@@ -537,6 +537,86 @@ class SceneGraph {
   createGaussianSplat(opts) {}
 
   /**
+   * Create a projected decal (Godot Decal-node analog) and add it to the
+   * root. The decal volume is the unit box [-0.5, 0.5]^3 in local space —
+   * the node's SCALE is the box size (there is no separate size property;
+   * `size` below is just an alias for `scale`), so tweening `scale` animates
+   * the decal extent like any node. The decal projects along its local -Y
+   * (top-down by default, like Godot); rotate the node to reorient the
+   * projection. Texture U maps local +X and V maps local +Z, as seen looking
+   * down the projection axis.
+   *
+   * Per fragment the renderer reconstructs the opaque scene position from
+   * the depth buffer (perspective AND ortho cameras), discards outside the
+   * box, and alpha-blends `texture * modulate` onto the scene. Decals only
+   * appear on OPAQUE geometry (meshes, instanced meshes, terrain, tiles) —
+   * translucent meshes, splats, particles and billboards draw over them and
+   * never receive them. Decals respect `visible`, `visibilityRange`, and
+   * frustum culling like any node.
+   *
+   *   // blob shadow under a character (no texture = plain modulate tint)
+   *   const blob = scene.createDecal({
+   *     modulate: [0, 0, 0, 0.5],       // translucent black
+   *     size: [1.2, 2, 1.2],            // 1.2x1.2 footprint, 2 units tall
+   *     normalFade: 0.3,                // skip walls/cliff faces
+   *   });
+   *   // parent it under the character so it follows:
+   *   hero.add(blob); blob.position = [0, -0.5, 0];
+   *
+   *   // bullet hole — any { width, height, data: Uint8Array(rgba8) } source
+   *   // works (decoded image bytes, canvas readback, procedural), the same
+   *   // texture shape createMesh takes:
+   *   scene.createDecal({
+   *     texture: { width: w, height: h, data: rgbaBytes },
+   *     size: [0.4, 0.6, 0.4],
+   *     x: hit.x, y: hit.y + 0.3, z: hit.z,   // hover the box over the surface
+   *     upperFade: 1, lowerFade: 1,   // soften where the box grazes geometry
+   *   });                             // aim with rotation — projects along -Y
+   *
+   * Lighting (honest limitations vs Godot): Godot's Decal modifies material
+   * inputs BEFORE lighting, so decals there are lit exactly like the surface
+   * under them. bro's forward renderer has no G-buffer, so decals blend onto
+   * the ALREADY-LIT result; to keep them from glowing in shadow they are
+   * modulated by a cheap approximation — scene ambient + the dominant
+   * directional light's Lambert term (using a screen-space normal
+   * reconstructed from depth). Consequences: no per-pixel shadows, IBL, or
+   * point/spot light contribution on decals (point/spot-only scenes light
+   * decals with ambient alone); no normal/ORM material modification; the
+   * reconstructed normal is exact on flat surfaces but faceted on curved
+   * ones and noisy at silhouette edges. Emission is exact: it adds straight
+   * HDR color (blooms past the threshold like any emissive surface).
+   *
+   * @param {Object} [opts]
+   * @param {string} [opts.name]
+   * @param {number} [opts.x=0] @param {number} [opts.y=0] @param {number} [opts.z=0]
+   * @param {number|number[]} [opts.size=1] - box size; alias for scale
+   *        (uniform number or [x, y, z] world units)
+   * @param {number} [opts.rx=0] @param {number} [opts.ry=0] @param {number} [opts.rz=0]
+   *        - rotation in degrees (reorients the projection)
+   * @param {Object} [opts.texture] - albedo { width, height, data: Uint8Array(rgba8) }
+   * @param {Object} [opts.emissionTexture] - self-lit map, same shape
+   * @param {string|number[]} [opts.modulate='white'] - tint x master opacity
+   *        (CSS color string or [r, g, b, a] floats)
+   * @param {number} [opts.emissionStrength=1] - HDR multiplier on emission
+   * @param {number} [opts.upperFade=0] - falloff exponent toward the local
+   *        +Y end of the box (0 = off; alpha *= pow(1 - t, fade) with t
+   *        ramping center -> end)
+   * @param {number} [opts.lowerFade=0] - same toward the local -Y end
+   * @param {number} [opts.normalFade=0] - cut surfaces facing away from the
+   *        projection [0, 1): alpha *= smoothstep(normalFade, 1,
+   *        dot(N, projUp) * 0.5 + 0.5). 0 = off.
+   * @param {number} [opts.renderPriority=0] - draw order among overlapping
+   *        decals (higher = on top; equal keeps creation order)
+   * @returns {SceneNode} - .type === 'decal'; live properties `modulate`,
+   *          `emissionStrength`, `upperFade`, `lowerFade`, `normalFade`,
+   *          `renderPriority`, plus setBaseColorTexture(tex|null) to swap or
+   *          clear the albedo at runtime. cullStats() reports
+   *          decalsDrawn/decalsCulled. There is no cullMask — the engine has
+   *          no mesh-layer concept; use `visible`/`visibilityRange` to gate.
+   */
+  createDecal(opts) {}
+
+  /**
    * Configure global wind sway. Per-vertex windBend (vertex color R, 0..1)
    * modulates: pos += direction * sin(time*frequency + dot(pos.xz, k)) * strength * bend.
    * The engine advances `windTime` from the per-frame virtual delta so offline

@@ -13,6 +13,7 @@
 #include "scene/light_node.h"
 #include "scene/particle_node.h"
 #include "scene/particles3d_node.h"
+#include "scene/decal_node.h"
 #include "scene/agent_binding.h"
 #include "scene/ai_world_ticker.h"
 #include "scene/scene_renderer.h"
@@ -58,6 +59,7 @@ public:
     ParticleNode* createParticles(const std::string& name = "");
     Particles3DNode* createParticles3D(const std::string& name = "");
     CameraNode* createCamera(const std::string& name = "");
+    DecalNode* createDecal(const std::string& name = "");
 
     /// Destroy a node and remove it from the tree. Also destroys children.
     void destroyNode(SceneNode* node);

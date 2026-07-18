@@ -14,6 +14,7 @@
 #include "scene/mesh_node.h"
 #include "scene/skinned_mesh_node.h"
 #include "scene/instanced_mesh_node.h"
+#include "scene/decal_node.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -44,8 +45,38 @@ static bool jsReadUint32Array(JSContext* ctx, JSValueConst obj, const char* prop
 // vertex colors if present).
 JSValue js_node_setBaseColorTexture(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
-    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Mesh)
-        return JS_ThrowTypeError(ctx, "setBaseColorTexture: not a MeshNode");
+    if (!w || !w->node() ||
+        (w->node()->type() != scene::SceneNode::Type::Mesh &&
+         w->node()->type() != scene::SceneNode::Type::Decal))
+        return JS_ThrowTypeError(ctx, "setBaseColorTexture: not a MeshNode or DecalNode");
+
+    // DecalNode: runtime albedo swap — bytes shape only (no scene-as-texture
+    // link for decals). Null/undefined clears back to plain modulate.
+    if (w->node()->type() == scene::SceneNode::Type::Decal) {
+        auto* decal = static_cast<scene::DecalNode*>(w->node());
+        if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
+            decal->clearAlbedoTexture();
+            return JS_UNDEFINED;
+        }
+        if (!JS_IsObject(argv[0]))
+            return JS_ThrowTypeError(ctx, "setBaseColorTexture: expected { width, height, data } or null");
+        int w_ = (int)qjsbind::get_prop_number(ctx, argv[0], "width",  0);
+        int h_ = (int)qjsbind::get_prop_number(ctx, argv[0], "height", 0);
+        JSValue dataVal = JS_GetPropertyStr(ctx, argv[0], "data");
+        size_t off = 0, len = 0;
+        JSValue ab = JS_GetTypedArrayBuffer(ctx, dataVal, &off, &len, nullptr);
+        if (!JS_IsException(ab)) {
+            size_t bytes = 0;
+            uint8_t* base = JS_GetArrayBuffer(ctx, &bytes, ab);
+            if (base && w_ > 0 && h_ > 0 && len >= (size_t)w_ * (size_t)h_ * 4) {
+                decal->setAlbedoTexture(w_, h_, base + off);
+            }
+            JS_FreeValue(ctx, ab);
+        }
+        JS_FreeValue(ctx, dataVal);
+        return JS_UNDEFINED;
+    }
+
     auto* meshNode = static_cast<scene::MeshNode*>(w->node());
 
     if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {

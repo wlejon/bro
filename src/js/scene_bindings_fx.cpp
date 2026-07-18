@@ -15,6 +15,7 @@
 #include "scene/particle_node.h"
 #include "scene/particles3d_node.h"
 #include "scene/gaussian_splat_node.h"
+#include "scene/decal_node.h"
 #include "util/log.h"
 
 #include <qjsbind/qjsbind.h>
@@ -1081,6 +1082,129 @@ JSValue js_sg_createGaussianSplat(JSContext* ctx, JSValueConst this_val,
             node->setScale((float)s, (float)s, (float)s);
         }
         JS_FreeValue(ctx, scaleVal);
+    }
+
+    return wrapNode(ctx, node, g);
+}
+
+// createDecal({ name, x, y, z, size|scale, rx, ry, rz, texture,
+//               emissionTexture, modulate, emissionStrength, upperFade,
+//               lowerFade, normalFade, renderPriority }) → DecalNode
+// Projected decal (Godot Decal analog). The decal volume is the unit box
+// scaled by the node's scale — `size` is an alias for `scale` (uniform
+// number or [x, y, z]); projection runs along local -Y. Textures use the
+// same { width, height, data: Uint8Array(rgba8) } shape as createMesh.
+// See docs/scene-api.js for the full contract + limitations vs Godot.
+JSValue js_sg_createDecal(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_UNDEFINED;
+
+    auto* node = g->createDecal();
+    g->root()->addChild(node);
+
+    if (argc > 0 && JS_IsObject(argv[0])) {
+        JSValueConst opts = argv[0];
+
+        JSValue nameVal = JS_GetPropertyStr(ctx, opts, "name");
+        if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
+        JS_FreeValue(ctx, nameVal);
+
+        double x = qjsbind::get_prop_number(ctx, opts, "x", 0);
+        double y = qjsbind::get_prop_number(ctx, opts, "y", 0);
+        double z = qjsbind::get_prop_number(ctx, opts, "z", 0);
+        node->setPosition((float)x, (float)y, (float)z);
+
+        // Box size = node scale. `size` and `scale` are interchangeable
+        // (size wins when both are given); uniform number or [x, y, z].
+        auto applyScale = [&](const char* key) -> bool {
+            JSValue v = JS_GetPropertyStr(ctx, opts, key);
+            bool took = false;
+            if (JS_IsArray(v)) {
+                double s3[3] = {1, 1, 1};
+                for (uint32_t i = 0; i < 3; ++i) {
+                    JSValue e = JS_GetPropertyUint32(ctx, v, i);
+                    if (!JS_IsUndefined(e)) JS_ToFloat64(ctx, &s3[i], e);
+                    JS_FreeValue(ctx, e);
+                }
+                node->setScale((float)s3[0], (float)s3[1], (float)s3[2]);
+                took = true;
+            } else if (!JS_IsUndefined(v)) {
+                double s = 1;
+                JS_ToFloat64(ctx, &s, v);
+                node->setScale((float)s, (float)s, (float)s);
+                took = true;
+            }
+            JS_FreeValue(ctx, v);
+            return took;
+        };
+        if (!applyScale("size")) applyScale("scale");
+
+        // Rotation (Euler degrees, matching createMesh).
+        JSValue rxVal = JS_GetPropertyStr(ctx, opts, "rx");
+        JSValue ryVal = JS_GetPropertyStr(ctx, opts, "ry");
+        JSValue rzVal = JS_GetPropertyStr(ctx, opts, "rz");
+        if (!JS_IsUndefined(rxVal) || !JS_IsUndefined(ryVal) || !JS_IsUndefined(rzVal)) {
+            double rx = 0, ry = 0, rz = 0;
+            if (!JS_IsUndefined(rxVal)) JS_ToFloat64(ctx, &rx, rxVal);
+            if (!JS_IsUndefined(ryVal)) JS_ToFloat64(ctx, &ry, ryVal);
+            if (!JS_IsUndefined(rzVal)) JS_ToFloat64(ctx, &rz, rzVal);
+            const float toRad = 3.14159265f / 180.0f;
+            node->setRotationEuler((float)rx * toRad, (float)ry * toRad,
+                                   (float)rz * toRad);
+        }
+        JS_FreeValue(ctx, rxVal);
+        JS_FreeValue(ctx, ryVal);
+        JS_FreeValue(ctx, rzVal);
+
+        // Modulate — CSS color string or [r, g, b, a?] floats.
+        JSValue modVal = JS_GetPropertyStr(ctx, opts, "modulate");
+        if (JS_IsString(modVal)) {
+            uint8_t r, gc, b, a;
+            if (parseColor(jsStr(ctx, modVal), r, gc, b, a))
+                node->setModulate(r / 255.0f, gc / 255.0f, b / 255.0f, a / 255.0f);
+        } else if (JS_IsArray(modVal)) {
+            double m4[4] = {1, 1, 1, 1};
+            for (uint32_t i = 0; i < 4; ++i) {
+                JSValue e = JS_GetPropertyUint32(ctx, modVal, i);
+                if (!JS_IsUndefined(e)) JS_ToFloat64(ctx, &m4[i], e);
+                JS_FreeValue(ctx, e);
+            }
+            node->setModulate((float)m4[0], (float)m4[1], (float)m4[2], (float)m4[3]);
+        }
+        JS_FreeValue(ctx, modVal);
+
+        node->setEmissionStrength((float)qjsbind::get_prop_number(
+            ctx, opts, "emissionStrength", 1.0));
+        node->setUpperFade((float)qjsbind::get_prop_number(ctx, opts, "upperFade", 0.0));
+        node->setLowerFade((float)qjsbind::get_prop_number(ctx, opts, "lowerFade", 0.0));
+        node->setNormalFade((float)qjsbind::get_prop_number(ctx, opts, "normalFade", 0.0));
+        node->setRenderPriority((int)qjsbind::get_prop_number(ctx, opts, "renderPriority", 0.0));
+
+        // Textures — { width, height, data: Uint8Array(rgba8) }, the same
+        // shape as createMesh's texture maps.
+        auto applyTex = [&](const char* key,
+                            void (scene::DecalNode::*setter)(int, int, const uint8_t*)) {
+            JSValue tex = JS_GetPropertyStr(ctx, opts, key);
+            if (JS_IsObject(tex)) {
+                int w = (int)qjsbind::get_prop_number(ctx, tex, "width", 0);
+                int h = (int)qjsbind::get_prop_number(ctx, tex, "height", 0);
+                JSValue dataVal = JS_GetPropertyStr(ctx, tex, "data");
+                size_t off = 0, len = 0;
+                JSValue ab = JS_GetTypedArrayBuffer(ctx, dataVal, &off, &len, nullptr);
+                if (!JS_IsException(ab)) {
+                    size_t bytes = 0;
+                    uint8_t* base = JS_GetArrayBuffer(ctx, &bytes, ab);
+                    if (base && w > 0 && h > 0 && len >= (size_t)w * (size_t)h * 4) {
+                        (node->*setter)(w, h, base + off);
+                    }
+                    JS_FreeValue(ctx, ab);
+                }
+                JS_FreeValue(ctx, dataVal);
+            }
+            JS_FreeValue(ctx, tex);
+        };
+        applyTex("texture",         &scene::DecalNode::setAlbedoTexture);
+        applyTex("emissionTexture", &scene::DecalNode::setEmissionTexture);
     }
 
     return wrapNode(ctx, node, g);

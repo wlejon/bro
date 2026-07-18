@@ -49,6 +49,8 @@ embed_shader(billboard.vert        kBillboardVertSrc)
 embed_shader(billboard.frag        kBillboardFragSrc)
 embed_shader(particles3d.vert      kParticles3DVertSrc)
 embed_shader(particles3d.frag      kParticles3DFragSrc)
+embed_shader(decal.vert            kDecalVertSrc)
+embed_shader(decal.frag            kDecalFragSrc)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 add_library(bro_scene STATIC
@@ -58,6 +60,7 @@ add_library(bro_scene STATIC
     scene_renderer_mesh.cpp
     scene_renderer_instanced.cpp
     scene_renderer_particles.cpp
+    scene_renderer_decals.cpp
     scene_renderer_lighting.cpp
     scene_renderer_shadow.cpp
     scene_renderer_postfx.cpp
@@ -76,6 +79,7 @@ add_library(bro_scene STATIC
     light_node.cpp
     particle_node.cpp
     particles3d_node.cpp
+    decal_node.cpp
     terrain_manager.cpp
     tile_world.cpp
     agent_binding.cpp

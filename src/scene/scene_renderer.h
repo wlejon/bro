@@ -19,6 +19,7 @@ class SceneNode;
 class MeshNode;
 class InstancedMeshNode;
 class Particles3DNode;
+class DecalNode;
 struct CustomShaderState;
 
 /// Per-frame frustum-culling counters, reset at the top of every render3D().
@@ -32,6 +33,7 @@ struct CullStats {
     int splatDrawn = 0,      splatCulled = 0;
     int particlesDrawn = 0,  particlesCulled = 0;
     int billboardsDrawn = 0, billboardsCulled = 0;
+    int decalsDrawn = 0,     decalsCulled = 0;
     int shadowDrawn = 0,     shadowCulled = 0;
     // Shadow-tile cache counters: tiles allocated this frame, tiles actually
     // re-rendered, and tiles reused from the atlas (skipped entirely). A
@@ -386,6 +388,14 @@ private:
     // and instance buffer. Defined in scene_renderer_particles.cpp.
     void ensureParticlePipeline();
     void renderParticles3DNodes();
+
+    // --- Projected decal pass (lazy init) ---
+    // Screen-space box-projected decals, drawn right after the opaque
+    // passes (post depth-resolve) so they receive opaque depth and sit
+    // under translucents/splats/particles/billboards. Defined in
+    // scene_renderer_decals.cpp.
+    void ensureDecalPipeline();
+    void renderDecalPass(const std::vector<LightNode*>& lights);
 
     // --- Tonemap pipeline (lazy init) ---
     void ensureTonemapPipeline();
@@ -964,6 +974,32 @@ private:
     GLint pUDepthRange_ = -1;
     GLint pUPerspective_ = -1;
     GLint pUSoftDistance_ = -1;
+
+    // --- Decal pipeline (lazy init) ---
+    // Shared program + unit-cube VBO/VAO (36 positions). Per-decal textures
+    // live on the DecalNode; the scene-depth snapshot reuses
+    // sceneDepthCopyTex_ (same blit as soft particles).
+    GLuint decalProgram_ = 0;
+    GLuint decalVAO_ = 0;
+    GLuint decalVBO_ = 0;
+    GLint dcUMVP_ = -1;
+    GLint dcUInvViewProj_ = -1;
+    GLint dcUInvModel_ = -1;
+    GLint dcUDecalUp_ = -1;
+    GLint dcUViewport_ = -1;
+    GLint dcUSceneDepth_ = -1;
+    GLint dcUAlbedoTex_ = -1;
+    GLint dcUEmissionTex_ = -1;
+    GLint dcUHasAlbedo_ = -1;
+    GLint dcUHasEmission_ = -1;
+    GLint dcUModulate_ = -1;
+    GLint dcUEmissionStrength_ = -1;
+    GLint dcUUpperFade_ = -1;
+    GLint dcULowerFade_ = -1;
+    GLint dcUNormalFade_ = -1;
+    GLint dcUAmbient_ = -1;
+    GLint dcUSunDir_ = -1;
+    GLint dcUSunColor_ = -1;
 
     // --- Billboard pipeline (lazy init) ---
     GLuint bbProgram_ = 0;
