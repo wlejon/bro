@@ -178,8 +178,35 @@ ShapedRun::CaretPositions ShapedRun::byteOffsetToX(std::size_t byteOffset,
                                                    Spacing spacing) const {
     CaretPositions out;
     if (clusters_.empty()) return out;
+
+    // Pen x of cluster `i`, and its spaced advance.
+    auto geometry = [&](std::size_t i, float& penX, float& advance) {
+        penX = 0.0f;
+        forEachClusterPen(spacing, [&](std::size_t idx, float x, float) {
+            if (idx == i) penX = x;
+        });
+        advance = clusters_[i].advance +
+                  (clusters_[i].isWordSep ? spacing.word : 0.0f);
+    };
+
+    // Past the end: the caret sits on the TRAILING edge of the last cluster in
+    // LOGICAL order, which for an RTL run is its LEFT side. Clamping to the run
+    // width instead — the obvious thing, and what this did before runs could be
+    // reordered — puts the end-of-text caret at the far end of a Hebrew word
+    // from where it belongs, and collapses a whole-run selection rect to zero
+    // width because both its edges land on the same x.
     if (byteOffset >= text_.size()) {
-        out.primary = {width(spacing), false};
+        std::size_t last = 0;
+        uint32_t lastStart = 0;
+        for (std::size_t i = 0; i < clusters_.size(); ++i) {
+            if (clusters_[i].byteStart >= lastStart) {
+                lastStart = clusters_[i].byteStart;
+                last = i;
+            }
+        }
+        float penX = 0.0f, advance = 0.0f;
+        geometry(last, penX, advance);
+        out.primary = {clusters_[last].rtl ? penX : penX + advance, false};
         return out;
     }
 
@@ -189,11 +216,8 @@ ShapedRun::CaretPositions ShapedRun::byteOffsetToX(std::size_t byteOffset,
     for (std::size_t i = 0; i < clusters_.size(); ++i) {
         const Cluster& c = clusters_[i];
         if (byteOffset < c.byteStart || byteOffset >= c.byteEnd) continue;
-        float penX = 0.0f;
-        forEachClusterPen(spacing, [&](std::size_t idx, float x, float) {
-            if (idx == i) penX = x;
-        });
-        const float advance = c.advance + (c.isWordSep ? spacing.word : 0.0f);
+        float penX = 0.0f, advance = 0.0f;
+        geometry(i, penX, advance);
         // The leading edge of an RTL cluster is its right side.
         out.primary = {c.rtl ? penX + advance : penX, true};
         return out;

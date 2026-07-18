@@ -3,6 +3,7 @@
 #include "layout/box.h"
 #include "layout/cluster_caret.h"
 #include "render/renderer.h"
+#include "render/bidi.h"
 #include "render/shaped_run.h"
 #include <string>
 #include <string_view>
@@ -10,6 +11,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstdint>
+#include <vector>
 
 namespace bro::layout {
 
@@ -130,6 +132,30 @@ public:
             static_cast<std::size_t>(byteOffset < 0 ? 0 : (byteOffset > n ? n : byteOffset));
         auto cr = run->clusterRange(off);
         return {static_cast<int>(cr.byteStart), static_cast<int>(cr.byteEnd)};
+    }
+
+    // --- Bidi ---------------------------------------------------------------
+    //
+    // Layout reorders a line's runs; resolving what level each run is at needs
+    // the Unicode bidi character classes, which live down in bro::render. This
+    // is the whole of the connection between the two.
+
+    bool bidiAware() const override { return render::bidi::available(); }
+
+    void bidiLevels(std::string_view text, bool rtlBase,
+                    std::vector<uint8_t>& out) override {
+        // A line's text is rebuilt and re-resolved on every layout pass, and a
+        // paragraph of plain Latin is the overwhelmingly common case, so the
+        // trivially-LTR scan in front of this matters: it turns the whole thing
+        // into one pass over the bytes with no allocation and no ICU call.
+        if (!rtlBase && render::bidi::isTriviallyLtr(text)) {
+            out.assign(text.size(), 0);
+            return;
+        }
+        const auto para = render::bidi::resolveParagraph(
+            text, rtlBase ? render::bidi::BaseDirection::RTL
+                          : render::bidi::BaseDirection::LTR);
+        out = para.levels;
     }
 
 private:
