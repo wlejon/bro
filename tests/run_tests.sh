@@ -37,23 +37,109 @@ TEST_APP="$SCRIPT_DIR/test_app"
 
 # Find the headless binary. BRO_HEADLESS overrides auto-detection so the suite
 # can run against an arbitrary build dir or a packaged dist binary.
+#
+# Auto-detection picks the NEWEST candidate, not the first one that exists. The
+# old rule ("Debug if present, else Release") silently ran the suite against a
+# Debug binary left over from an earlier commit, so a green run proved nothing
+# about the code actually in the tree. Whichever binary is chosen, it is then
+# checked against the source tree and the run is REFUSED if any source file is
+# newer (see the staleness gate below) — a stale binary must never be able to
+# masquerade as a passing run.
+BRO=""
+BRO_SELECTED_BY=""
 if [[ -n "${BRO_HEADLESS:-}" ]]; then
     BRO="$BRO_HEADLESS"
+    BRO_SELECTED_BY="BRO_HEADLESS env override"
     if [[ ! -x "$BRO" ]]; then
         echo "ERROR: BRO_HEADLESS=$BRO is not an executable"
         exit 1
     fi
-elif [[ -f "$PROJECT_DIR/build/Debug/bro-headless.exe" ]]; then
-    BRO="$PROJECT_DIR/build/Debug/bro-headless.exe"
-elif [[ -f "$PROJECT_DIR/build/Release/bro-headless.exe" ]]; then
-    BRO="$PROJECT_DIR/build/Release/bro-headless.exe"
-elif [[ -f "$PROJECT_DIR/build/bro-headless" ]]; then
-    BRO="$PROJECT_DIR/build/bro-headless"
-elif [[ -f "$PROJECT_DIR/build-release/bro-headless" ]]; then
-    BRO="$PROJECT_DIR/build-release/bro-headless"
 else
-    echo "ERROR: bro-headless not found. Build first with: cmake --build build"
-    exit 1
+    CANDIDATES=(
+        "$PROJECT_DIR/build/Debug/bro-headless.exe"
+        "$PROJECT_DIR/build/Release/bro-headless.exe"
+        "$PROJECT_DIR/build/bro-headless"
+        "$PROJECT_DIR/build-release/bro-headless"
+        "$PROJECT_DIR/build-debug/bro-headless"
+    )
+    FOUND=()
+    for C in "${CANDIDATES[@]}"; do
+        [[ -f "$C" ]] && FOUND+=("$C")
+    done
+    if [[ ${#FOUND[@]} -eq 0 ]]; then
+        echo "ERROR: bro-headless not found. Build first with: cmake --build build"
+        exit 1
+    fi
+    for C in "${FOUND[@]}"; do
+        if [[ -z "$BRO" || "$C" -nt "$BRO" ]]; then
+            BRO="$C"
+        fi
+    done
+    BRO_SELECTED_BY="auto-detected (newest of ${#FOUND[@]} candidate(s))"
+fi
+
+# --- Staleness gate ---------------------------------------------------------
+# Refuse to run if any source file is newer than the selected binary. Fails
+# closed: an unbuildable answer is better than a false green. Scans bro's own
+# src/ plus any sibling library working trees the build compiles from (see
+# docs/multi-repo-workflow.md) — an edit in ../htmlayout is just as capable of
+# invalidating a binary as an edit in src/.
+SOURCE_ROOTS=("$PROJECT_DIR/src")
+for SIB in htmlayout brokit qjsbind bromath broaudio bromesh broflora brotensor \
+           brogameagent brolm brodiffusion broimage brosoundml brovisionml; do
+    [[ -d "$PROJECT_DIR/../$SIB/src" ]] && SOURCE_ROOTS+=("$PROJECT_DIR/../$SIB/src")
+    [[ -d "$PROJECT_DIR/../$SIB/include" ]] && SOURCE_ROOTS+=("$PROJECT_DIR/../$SIB/include")
+done
+
+NEWER=$(find "${SOURCE_ROOTS[@]}" \
+            \( -name '*.cpp' -o -name '*.cc' -o -name '*.h' -o -name '*.hpp' \
+               -o -name '*.c' -o -name '*.cu' -o -name '*.cuh' \) \
+            -newer "$BRO" -print 2>/dev/null | head -5)
+
+BRO_AGE_S=""
+if command -v stat >/dev/null 2>&1; then
+    BIN_MTIME=$(stat -c %Y "$BRO" 2>/dev/null || stat -f %m "$BRO" 2>/dev/null || echo "")
+    if [[ -n "$BIN_MTIME" ]]; then
+        BRO_AGE_S=$(( $(date +%s) - BIN_MTIME ))
+    fi
+fi
+fmt_age() {
+    local s="$1"
+    if [[ -z "$s" ]]; then echo "unknown age"
+    elif [[ $s -lt 120 ]]; then echo "${s}s old"
+    elif [[ $s -lt 7200 ]]; then echo "$(( s / 60 ))m old"
+    else echo "$(( s / 3600 ))h $(( (s % 3600) / 60 ))m old"
+    fi
+}
+
+echo "════════════════════════════════════════════════════════════════"
+echo "  binary:   $BRO"
+echo "  selected: $BRO_SELECTED_BY"
+echo "  built:    $(fmt_age "$BRO_AGE_S")"
+echo "════════════════════════════════════════════════════════════════"
+
+if [[ -n "$NEWER" ]]; then
+    echo ""
+    echo "  ############################################################"
+    echo "  #  REFUSING TO RUN — THE BINARY IS STALE                   #"
+    echo "  ############################################################"
+    echo ""
+    echo "  These source files are NEWER than the binary above:"
+    echo "$NEWER" | sed 's/^/      /'
+    echo "      ... (first 5 shown)"
+    echo ""
+    echo "  A run against a stale binary tests code that is not in the tree."
+    echo "  Rebuild, then re-run:"
+    echo "      cmake --build build --config Release"
+    echo ""
+    echo "  To run anyway (you are asserting the binary is correct):"
+    echo "      BRO_ALLOW_STALE=1 $0 ${FILTER:-}"
+    echo ""
+    if [[ "${BRO_ALLOW_STALE:-}" != "1" ]]; then
+        exit 1
+    fi
+    echo "  BRO_ALLOW_STALE=1 set — proceeding against a STALE binary."
+    echo ""
 fi
 
 FILTER="${1:-}"
