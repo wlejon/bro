@@ -363,9 +363,16 @@ raise `INVALID_OPERATION` instead of blocking the JS thread); query objects
 `QUERY_RESULT_AVAILABLE` never sync-stalls, and
 `ANY_SAMPLES_PASSED_CONSERVATIVE` is answered with the exact
 `ANY_SAMPLES_PASSED` query on drivers without GL 4.3 / ARB_ES3_compatibility —
-an exact answer is a valid conservative one).
+an exact answer is a valid conservative one); transform feedback (varyings +
+relink, begin/end/pause/resume, TF objects, `TRANSFORM_FEEDBACK_BUFFER`
+indexed binds, `TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN` queries — TF *objects*
+and pause/resume need the driver's ARB_transform_feedback2, universal on
+desktop; `createTransformFeedback` returns null without it);
+`getIndexedParameter` for the `TRANSFORM_FEEDBACK_BUFFER` / `UNIFORM_BUFFER`
+binding/start/size rows (the `*_BINDING` rows return the actual `WebGLBuffer`
+objects).
 
-**Not implemented (absent API families):** transform feedback objects,
+**Not implemented (absent API families):**
 PBO-offset variants of `readPixels`/texture uploads, `compressedTexImage*`,
 `copyTexImage2D`/`copyTexSubImage2D`, `framebufferTextureLayer`,
 `invalidateFramebuffer`/`invalidateSubFramebuffer`, unsigned-int uniform

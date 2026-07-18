@@ -132,6 +132,29 @@ public:
     GLuint getQueryParameteru(WebGLQuery q, GLenum pname);
     GLboolean isQuery(WebGLQuery q);
 
+    // --- Transform feedback (WebGL2) ---
+    /// TF *objects* are ARB_transform_feedback2 (core in GL 4.0, an extension
+    /// on 3.3 hardware — universal on desktop drivers). Everything else
+    /// (begin/end/varyings, the default TF object) is core GL 3.0.
+    bool transformFeedbackObjectsSupported() const;
+    WebGLTransformFeedback createTransformFeedback();
+    void deleteTransformFeedback(WebGLTransformFeedback tf);
+    void bindTransformFeedback(GLenum target, WebGLTransformFeedback tf);
+    void beginTransformFeedback(GLenum primitiveMode);
+    void endTransformFeedback();
+    void pauseTransformFeedback();
+    void resumeTransformFeedback();
+    void transformFeedbackVaryings(WebGLProgram program,
+                                   const std::vector<std::string>& varyings,
+                                   GLenum bufferMode);
+    WebGLActiveInfo getTransformFeedbackVarying(WebGLProgram program, GLuint index);
+    GLboolean isTransformFeedback(WebGLTransformFeedback tf);
+    bool transformFeedbackActive() const { return tfActive_; }
+    bool transformFeedbackPaused() const { return tfPaused_; }
+
+    /// getIndexedParameter numeric rows (indexed buffer-range queries).
+    int64_t getIndexedParameterInt64(GLenum pname, GLuint index);
+
     // --- VAO ---
     WebGLVertexArrayObject createVertexArray();
     void deleteVertexArray(WebGLVertexArrayObject vao);
@@ -306,6 +329,12 @@ private:
     std::unordered_set<GLuint> validSamplers_;
     std::unordered_set<GLuint> validQueries_;
     std::unordered_set<GLsync> validSyncs_;
+    std::unordered_set<GLuint> validTransformFeedbacks_;
+
+    // Transform feedback state (also drives the compositing handoff: an
+    // active TF is paused around engine GL work and resumed afterwards).
+    bool tfActive_ = false;
+    bool tfPaused_ = false;
 
     // pixelStorei state
     GLint unpackAlignment_ = 4;
@@ -349,12 +378,14 @@ private:
     GLenum sDepthFunc_ = GL_LESS;
     GLenum sCullMode_ = GL_BACK;
     GLenum sFrontFace_ = GL_CCW;
+    GLuint sTransformFeedback_ = 0;  // bound TF object (0 = default)
     // Capability flags
     bool sBlend_ = false;
     bool sDepthTest_ = false;
     bool sCullFace_ = false;
     bool sScissorTest_ = false;
     bool sStencilTest_ = false;
+    bool sRasterizerDiscard_ = false;
 };
 
 } // namespace bro::webgl

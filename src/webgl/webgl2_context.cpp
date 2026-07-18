@@ -48,6 +48,7 @@ WebGL2RenderingContext::~WebGL2RenderingContext() {
     for (GLuint id : validSamplers_) glDeleteSamplers(1, &id);
     for (GLuint id : validQueries_) glDeleteQueries(1, &id);
     for (GLsync s : validSyncs_) glDeleteSync(s);
+    for (GLuint id : validTransformFeedbacks_) glDeleteTransformFeedbacks(1, &id);
     destroyCanvasFBO();
 }
 
@@ -124,6 +125,12 @@ void WebGL2RenderingContext::unbindCanvasFBO() {
     for (unsigned u = 0; u < 32; u++) {
         if (sSampler_[u]) glBindSampler(u, 0);
     }
+    // A transform feedback left active would capture (or reject) the
+    // compositor's own draws; a leaked RASTERIZER_DISCARD would blank them.
+    if (tfActive_ && !tfPaused_ && transformFeedbackObjectsSupported()) {
+        glPauseTransformFeedback();
+    }
+    if (sRasterizerDiscard_) glDisable(GL_RASTERIZER_DISCARD);
 }
 
 // ===========================================================================
@@ -150,6 +157,7 @@ void WebGL2RenderingContext::enable(GLenum cap) {
         case GL_CULL_FACE: sCullFace_ = true; break;
         case GL_SCISSOR_TEST: sScissorTest_ = true; break;
         case GL_STENCIL_TEST: sStencilTest_ = true; break;
+        case GL_RASTERIZER_DISCARD: sRasterizerDiscard_ = true; break;
     }
     glEnable(cap);
 }
@@ -160,6 +168,7 @@ void WebGL2RenderingContext::disable(GLenum cap) {
         case GL_CULL_FACE: sCullFace_ = false; break;
         case GL_SCISSOR_TEST: sScissorTest_ = false; break;
         case GL_STENCIL_TEST: sStencilTest_ = false; break;
+        case GL_RASTERIZER_DISCARD: sRasterizerDiscard_ = false; break;
     }
     glDisable(cap);
 }
@@ -438,6 +447,98 @@ GLuint WebGL2RenderingContext::getQueryParameteru(WebGLQuery q, GLenum pname) {
 GLboolean WebGL2RenderingContext::isQuery(WebGLQuery q) {
     if (!q.id || !validQueries_.count(q.id)) return GL_FALSE;
     return glIsQuery(q.id);
+}
+
+// ===========================================================================
+// Transform feedback
+// ===========================================================================
+
+bool WebGL2RenderingContext::transformFeedbackObjectsSupported() const {
+    return GLAD_GL_ARB_transform_feedback2 && glad_glGenTransformFeedbacks != nullptr;
+}
+
+WebGLTransformFeedback WebGL2RenderingContext::createTransformFeedback() {
+    if (!transformFeedbackObjectsSupported()) return {0};
+    GLuint id = 0;
+    glGenTransformFeedbacks(1, &id);
+    validTransformFeedbacks_.insert(id);
+    return {id};
+}
+
+void WebGL2RenderingContext::deleteTransformFeedback(WebGLTransformFeedback tf) {
+    if (tf.id && validTransformFeedbacks_.erase(tf.id)) {
+        // GL reverts to the default TF object if the deleted one was bound.
+        if (sTransformFeedback_ == tf.id) sTransformFeedback_ = 0;
+        glDeleteTransformFeedbacks(1, &tf.id);
+    }
+}
+
+void WebGL2RenderingContext::bindTransformFeedback(GLenum target, WebGLTransformFeedback tf) {
+    if (!transformFeedbackObjectsSupported()) {
+        if (tf.id) setSyntheticError(GL_INVALID_OPERATION);
+        return; // default TF object is implicitly bound
+    }
+    sTransformFeedback_ = tf.id;
+    glBindTransformFeedback(target, tf.id);
+}
+
+void WebGL2RenderingContext::beginTransformFeedback(GLenum primitiveMode) {
+    glBeginTransformFeedback(primitiveMode);
+    tfActive_ = true;
+    tfPaused_ = false;
+}
+
+void WebGL2RenderingContext::endTransformFeedback() {
+    glEndTransformFeedback();
+    tfActive_ = false;
+    tfPaused_ = false;
+}
+
+void WebGL2RenderingContext::pauseTransformFeedback() {
+    if (!transformFeedbackObjectsSupported()) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    glPauseTransformFeedback();
+    if (tfActive_) tfPaused_ = true;
+}
+
+void WebGL2RenderingContext::resumeTransformFeedback() {
+    if (!transformFeedbackObjectsSupported()) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    glResumeTransformFeedback();
+    if (tfActive_) tfPaused_ = false;
+}
+
+void WebGL2RenderingContext::transformFeedbackVaryings(WebGLProgram program,
+                                                       const std::vector<std::string>& varyings,
+                                                       GLenum bufferMode) {
+    std::vector<const char*> ptrs(varyings.size());
+    for (size_t i = 0; i < varyings.size(); i++) ptrs[i] = varyings[i].c_str();
+    glTransformFeedbackVaryings(program.id, (GLsizei)ptrs.size(),
+                                ptrs.empty() ? nullptr : ptrs.data(), bufferMode);
+}
+
+WebGLActiveInfo WebGL2RenderingContext::getTransformFeedbackVarying(WebGLProgram program, GLuint index) {
+    char name[256];
+    GLsizei len = 0;
+    GLsizei size = 0;
+    GLenum type = 0;
+    glGetTransformFeedbackVarying(program.id, index, sizeof(name), &len, &size, &type, name);
+    return {std::string(name, len), type, (GLint)size};
+}
+
+GLboolean WebGL2RenderingContext::isTransformFeedback(WebGLTransformFeedback tf) {
+    if (!tf.id || !validTransformFeedbacks_.count(tf.id)) return GL_FALSE;
+    return glIsTransformFeedback(tf.id);
+}
+
+int64_t WebGL2RenderingContext::getIndexedParameterInt64(GLenum pname, GLuint index) {
+    GLint64 v = 0;
+    glGetInteger64i_v(pname, index, &v);
+    return (int64_t)v;
 }
 
 // ===========================================================================
@@ -1120,6 +1221,14 @@ void WebGL2RenderingContext::restoreState() {
     if (sCullFace_) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
     if (sScissorTest_) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
     if (sStencilTest_) glEnable(GL_STENCIL_TEST); else glDisable(GL_STENCIL_TEST);
+    if (sRasterizerDiscard_) glEnable(GL_RASTERIZER_DISCARD);
+
+    // Re-bind the app's transform feedback object and resume a TF that
+    // unbindCanvasFBO paused around engine compositing.
+    if (transformFeedbackObjectsSupported()) {
+        glBindTransformFeedback(GL_TRANSFORM_FEEDBACK, sTransformFeedback_);
+        if (tfActive_ && !tfPaused_) glResumeTransformFeedback();
+    }
 
     glBlendFuncSeparate(sBlendSrcRGB_, sBlendDstRGB_, sBlendSrcA_, sBlendDstA_);
     glBlendEquationSeparate(sBlendEqRGB_, sBlendEqA_);

@@ -6,6 +6,7 @@
 #include <quickjs.h>
 #include <string>
 #include <cstring>
+#include <cstdio>
 #include <vector>
 
 namespace bro::js::webgl2 {
@@ -23,6 +24,7 @@ extern JSClassID js_webgl_uniform_loc_class_id;
 extern JSClassID js_webgl_sampler_class_id;
 extern JSClassID js_webgl_query_class_id;
 extern JSClassID js_webgl_sync_class_id;
+extern JSClassID js_webgl_tf_class_id;
 
 // --- Extract C++ context from JS this value ---
 inline webgl::WebGL2RenderingContext* getCtx(JSValueConst this_val) {
@@ -52,6 +54,7 @@ JSValue wrapUniformLocation(JSContext* ctx, webgl::WebGLUniformLocation loc);
 JSValue wrapSampler(JSContext* ctx, webgl::WebGLSampler s);
 JSValue wrapQuery(JSContext* ctx, webgl::WebGLQuery q);
 JSValue wrapSync(JSContext* ctx, webgl::WebGLSync s);
+JSValue wrapTransformFeedback(JSContext* ctx, webgl::WebGLTransformFeedback tf);
 
 // Unwrap WebGL objects from JS values (returns id=0 if null/undefined)
 inline webgl::WebGLBuffer unwrapBuffer(JSValueConst val) {
@@ -114,10 +117,48 @@ inline webgl::WebGLSync unwrapSync(JSValueConst val) {
     return p ? *p : webgl::WebGLSync{nullptr};
 }
 
+inline webgl::WebGLTransformFeedback unwrapTransformFeedback(JSValueConst val) {
+    if (JS_IsNull(val) || JS_IsUndefined(val)) return {0};
+    auto* p = static_cast<webgl::WebGLTransformFeedback*>(JS_GetOpaque(val, js_webgl_tf_class_id));
+    return p ? *p : webgl::WebGLTransformFeedback{0};
+}
+
 inline webgl::WebGLUniformLocation unwrapUniformLocation(JSValueConst val) {
     if (JS_IsNull(val) || JS_IsUndefined(val)) return {-1, 0};
     auto* p = static_cast<webgl::WebGLUniformLocation*>(JS_GetOpaque(val, js_webgl_uniform_loc_class_id));
     return p ? *p : webgl::WebGLUniformLocation{-1, 0};
+}
+
+// --- Indexed buffer-binding stash ---
+// getIndexedParameter(TRANSFORM_FEEDBACK_BUFFER_BINDING / UNIFORM_BUFFER_BINDING)
+// must return the WebGLBuffer object bound at an index. The C++ context only
+// tracks GL ids, so bindBufferBase/bindBufferRange stash the JS wrapper on a
+// hidden object keyed by target + index.
+inline void stashIndexedBinding(JSContext* ctx, JSValueConst this_val,
+                                uint32_t target, uint32_t index, JSValueConst bufVal) {
+    JSValue map = JS_GetPropertyStr(ctx, this_val, "__indexedBindings");
+    if (JS_IsUndefined(map)) {
+        map = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, this_val, "__indexedBindings", JS_DupValue(ctx, map));
+    }
+    char key[32];
+    snprintf(key, sizeof(key), "t%xi%u", target, index);
+    JS_SetPropertyStr(ctx, map, key,
+                      JS_IsNull(bufVal) || JS_IsUndefined(bufVal)
+                          ? JS_NULL : JS_DupValue(ctx, bufVal));
+    JS_FreeValue(ctx, map);
+}
+
+inline JSValue loadIndexedBinding(JSContext* ctx, JSValueConst this_val,
+                                  uint32_t target, uint32_t index) {
+    JSValue map = JS_GetPropertyStr(ctx, this_val, "__indexedBindings");
+    if (JS_IsUndefined(map)) return JS_NULL;
+    char key[32];
+    snprintf(key, sizeof(key), "t%xi%u", target, index);
+    JSValue v = JS_GetPropertyStr(ctx, map, key);
+    JS_FreeValue(ctx, map);
+    if (JS_IsUndefined(v)) return JS_NULL;
+    return v;
 }
 
 // --- TypedArray / ArrayBuffer data extraction ---

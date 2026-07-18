@@ -171,6 +171,91 @@ static JSValue js_isQuery(JSContext* ctx, JSValueConst this_val, int argc, JSVal
 }
 
 // ===========================================================================
+// Transform feedback
+// ===========================================================================
+
+static JSValue js_createTransformFeedback(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* gl = getCtx(this_val); if (!gl) return JS_NULL;
+    auto tf = gl->createTransformFeedback();
+    if (!tf.id) return JS_NULL; // driver lacks ARB_transform_feedback2
+    return wrapTransformFeedback(ctx, tf);
+}
+
+static JSValue js_deleteTransformFeedback(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_UNDEFINED;
+    gl->deleteTransformFeedback(unwrapTransformFeedback(argv[0]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_bindTransformFeedback(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
+    uint32_t target; JS_ToUint32(ctx, &target, argv[0]);
+    gl->bindTransformFeedback(target, unwrapTransformFeedback(argv[1]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_beginTransformFeedback(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_UNDEFINED;
+    uint32_t mode; JS_ToUint32(ctx, &mode, argv[0]);
+    gl->beginTransformFeedback(mode);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_endTransformFeedback(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* gl = getCtx(this_val); if (!gl) return JS_UNDEFINED;
+    gl->endTransformFeedback();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_pauseTransformFeedback(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* gl = getCtx(this_val); if (!gl) return JS_UNDEFINED;
+    gl->pauseTransformFeedback();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_resumeTransformFeedback(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* gl = getCtx(this_val); if (!gl) return JS_UNDEFINED;
+    gl->resumeTransformFeedback();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_transformFeedbackVaryings(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
+    uint32_t bufferMode; JS_ToUint32(ctx, &bufferMode, argv[2]);
+
+    std::vector<std::string> names;
+    JSValue lenVal = JS_GetPropertyStr(ctx, argv[1], "length");
+    uint32_t n = 0;
+    JS_ToUint32(ctx, &n, lenVal);
+    JS_FreeValue(ctx, lenVal);
+    names.reserve(n);
+    for (uint32_t i = 0; i < n; i++) {
+        JSValue elem = JS_GetPropertyUint32(ctx, argv[1], i);
+        names.push_back(jsStr(ctx, elem));
+        JS_FreeValue(ctx, elem);
+    }
+    gl->transformFeedbackVaryings(unwrapProgram(argv[0]), names, bufferMode);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_getTransformFeedbackVarying(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_NULL;
+    uint32_t index; JS_ToUint32(ctx, &index, argv[1]);
+    auto info = gl->getTransformFeedbackVarying(unwrapProgram(argv[0]), index);
+    if (info.type == 0) return JS_NULL; // out-of-range index
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "name", JS_NewString(ctx, info.name.c_str()));
+    JS_SetPropertyStr(ctx, obj, "type", JS_NewUint32(ctx, info.type));
+    JS_SetPropertyStr(ctx, obj, "size", JS_NewInt32(ctx, info.size));
+    return obj;
+}
+
+static JSValue js_isTransformFeedback(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_FALSE;
+    return JS_NewBool(ctx, gl->isTransformFeedback(unwrapTransformFeedback(argv[0])));
+}
+
+// ===========================================================================
 // Exported function list
 // ===========================================================================
 
@@ -198,6 +283,17 @@ const JSCFunctionListEntry webgl2_object_funcs[] = {
     JS_CFUNC_DEF("getQuery", 2, js_getQuery),
     JS_CFUNC_DEF("getQueryParameter", 2, js_getQueryParameter),
     JS_CFUNC_DEF("isQuery", 1, js_isQuery),
+    // Transform feedback
+    JS_CFUNC_DEF("createTransformFeedback", 0, js_createTransformFeedback),
+    JS_CFUNC_DEF("deleteTransformFeedback", 1, js_deleteTransformFeedback),
+    JS_CFUNC_DEF("bindTransformFeedback", 2, js_bindTransformFeedback),
+    JS_CFUNC_DEF("beginTransformFeedback", 1, js_beginTransformFeedback),
+    JS_CFUNC_DEF("endTransformFeedback", 0, js_endTransformFeedback),
+    JS_CFUNC_DEF("pauseTransformFeedback", 0, js_pauseTransformFeedback),
+    JS_CFUNC_DEF("resumeTransformFeedback", 0, js_resumeTransformFeedback),
+    JS_CFUNC_DEF("transformFeedbackVaryings", 3, js_transformFeedbackVaryings),
+    JS_CFUNC_DEF("getTransformFeedbackVarying", 2, js_getTransformFeedbackVarying),
+    JS_CFUNC_DEF("isTransformFeedback", 1, js_isTransformFeedback),
 };
 const int webgl2_object_funcs_count = sizeof(webgl2_object_funcs) / sizeof(webgl2_object_funcs[0]);
 

@@ -111,6 +111,7 @@ static JSValue js_getProgramParameter(JSContext* ctx, JSValueConst this_val, int
         case 0x8A36: // GL_ACTIVE_UNIFORM_BLOCKS
         case 0x8B85: // GL_ATTACHED_SHADERS
         case 0x8C83: // GL_TRANSFORM_FEEDBACK_VARYINGS
+        case 0x8C7F: // GL_TRANSFORM_FEEDBACK_BUFFER_MODE
             return JS_NewInt32(ctx, gl->getProgramParameter_int(prog, pname));
         default: return JS_UNDEFINED;
     }

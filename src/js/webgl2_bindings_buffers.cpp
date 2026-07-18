@@ -121,6 +121,7 @@ static JSValue js_bindBufferBase(JSContext* ctx, JSValueConst this_val, int argc
     uint32_t target, index;
     JS_ToUint32(ctx, &target, argv[0]); JS_ToUint32(ctx, &index, argv[1]);
     gl->bindBufferBase(target, index, unwrapBuffer(argv[2]));
+    stashIndexedBinding(ctx, this_val, target, index, argv[2]);
     return JS_UNDEFINED;
 }
 
@@ -130,6 +131,7 @@ static JSValue js_bindBufferRange(JSContext* ctx, JSValueConst this_val, int arg
     JS_ToUint32(ctx, &target, argv[0]); JS_ToUint32(ctx, &index, argv[1]);
     JS_ToInt64(ctx, &offset, argv[3]); JS_ToInt64(ctx, &size, argv[4]);
     gl->bindBufferRange(target, index, unwrapBuffer(argv[2]), (GLintptr)offset, (GLsizeiptr)size);
+    stashIndexedBinding(ctx, this_val, target, index, argv[2]);
     return JS_UNDEFINED;
 }
 

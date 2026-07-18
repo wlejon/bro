@@ -31,6 +31,7 @@ namespace webgl2 {
     JSClassID js_webgl_sampler_class_id = 0;
     JSClassID js_webgl_query_class_id = 0;
     JSClassID js_webgl_sync_class_id = 0;
+    JSClassID js_webgl_tf_class_id = 0;
 }
 
 // ===========================================================================
@@ -55,6 +56,7 @@ IMPL_WRAP(UniformLocation, bro::webgl::WebGLUniformLocation, js_webgl_uniform_lo
 IMPL_WRAP(Sampler, bro::webgl::WebGLSampler, js_webgl_sampler_class_id)
 IMPL_WRAP(Query, bro::webgl::WebGLQuery, js_webgl_query_class_id)
 IMPL_WRAP(Sync, bro::webgl::WebGLSync, js_webgl_sync_class_id)
+IMPL_WRAP(TransformFeedback, bro::webgl::WebGLTransformFeedback, js_webgl_tf_class_id)
 
 #undef IMPL_WRAP
 
@@ -487,6 +489,26 @@ static const JSCFunctionListEntry webgl2_constants[] = {
     JS_PROP_INT32_DEF("MAX_CLIENT_WAIT_TIMEOUT_WEBGL", 0x9247, 0),
     JS_PROP_DOUBLE_DEF("TIMEOUT_IGNORED", -1.0, 0),
 
+    // Transform feedback
+    JS_PROP_INT32_DEF("TRANSFORM_FEEDBACK", 0x8E22, 0),
+    JS_PROP_INT32_DEF("TRANSFORM_FEEDBACK_BINDING", 0x8E25, 0),
+    JS_PROP_INT32_DEF("TRANSFORM_FEEDBACK_BUFFER_BINDING", 0x8C8F, 0),
+    JS_PROP_INT32_DEF("TRANSFORM_FEEDBACK_BUFFER_START", 0x8C84, 0),
+    JS_PROP_INT32_DEF("TRANSFORM_FEEDBACK_BUFFER_SIZE", 0x8C85, 0),
+    JS_PROP_INT32_DEF("TRANSFORM_FEEDBACK_BUFFER_MODE", 0x8C7F, 0),
+    JS_PROP_INT32_DEF("TRANSFORM_FEEDBACK_VARYINGS", 0x8C83, 0),
+    JS_PROP_INT32_DEF("TRANSFORM_FEEDBACK_ACTIVE", 0x8E24, 0),
+    JS_PROP_INT32_DEF("TRANSFORM_FEEDBACK_PAUSED", 0x8E23, 0),
+    JS_PROP_INT32_DEF("INTERLEAVED_ATTRIBS", 0x8C8C, 0),
+    JS_PROP_INT32_DEF("SEPARATE_ATTRIBS", 0x8C8D, 0),
+    JS_PROP_INT32_DEF("MAX_TRANSFORM_FEEDBACK_INTERLEAVED_COMPONENTS", 0x8C8A, 0),
+    JS_PROP_INT32_DEF("MAX_TRANSFORM_FEEDBACK_SEPARATE_ATTRIBS", 0x8C8B, 0),
+    JS_PROP_INT32_DEF("MAX_TRANSFORM_FEEDBACK_SEPARATE_COMPONENTS", 0x8C80, 0),
+
+    // Indexed uniform-buffer ranges (getIndexedParameter)
+    JS_PROP_INT32_DEF("UNIFORM_BUFFER_START", 0x8A29, 0),
+    JS_PROP_INT32_DEF("UNIFORM_BUFFER_SIZE", 0x8A2A, 0),
+
     // Query objects
     JS_PROP_INT32_DEF("CURRENT_QUERY", 0x8865, 0),
     JS_PROP_INT32_DEF("QUERY_RESULT", 0x8866, 0),
@@ -556,6 +578,9 @@ void WebGL2Bindings::install(JSContext* ctx) {
 
     qjsbind::Class<bro::webgl::WebGLSync>(ctx, "WebGLSync", qjsbind::NoGlobal);
     js_webgl_sync_class_id = qjsbind::class_id<bro::webgl::WebGLSync>();
+
+    qjsbind::Class<bro::webgl::WebGLTransformFeedback>(ctx, "WebGLTransformFeedback", qjsbind::NoGlobal);
+    js_webgl_tf_class_id = qjsbind::class_id<bro::webgl::WebGLTransformFeedback>();
 
     // --- three.js compatibility: expose WebGL2RenderingContext as a global constructor ---
     // three.js checks: typeof WebGL2RenderingContext !== "undefined"

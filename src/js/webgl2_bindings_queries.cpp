@@ -124,6 +124,15 @@ static JSValue js_getParameter(JSContext* ctx, JSValueConst this_val, int argc, 
         case 0x9247: // MAX_CLIENT_WAIT_TIMEOUT_WEBGL
             return JS_NewFloat64(ctx, webgl::WebGL2RenderingContext::kMaxClientWaitTimeoutNs);
 
+        // Transform feedback state — answered from shadow flags (the GL
+        // enums are ARB_transform_feedback2-only on 3.3 hardware).
+        case 0x8E24: // GL_TRANSFORM_FEEDBACK_ACTIVE
+            return JS_NewBool(ctx, gl->transformFeedbackActive());
+        case 0x8E23: // GL_TRANSFORM_FEEDBACK_PAUSED
+            return JS_NewBool(ctx, gl->transformFeedbackPaused());
+        case 0x8E25: // GL_TRANSFORM_FEEDBACK_BINDING (object-binding query)
+            return JS_NULL;
+
         // Boolean parameters
         case 0x0BE2: // GL_BLEND
         case 0x0B71: // GL_DEPTH_TEST
@@ -141,6 +150,31 @@ static JSValue js_getParameter(JSContext* ctx, JSValueConst this_val, int argc, 
         // Default: integer parameter
         default:
             return JS_NewInt32(ctx, gl->getParameterInt(pname));
+    }
+}
+
+static JSValue js_getIndexedParameter(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_NULL;
+    uint32_t pname, index;
+    JS_ToUint32(ctx, &pname, argv[0]); JS_ToUint32(ctx, &index, argv[1]);
+
+    switch (pname) {
+        // Object rows: the WebGLBuffer stashed by bindBufferBase/Range.
+        case 0x8C8F: // TRANSFORM_FEEDBACK_BUFFER_BINDING
+            return loadIndexedBinding(ctx, this_val, 0x8C8E /* TRANSFORM_FEEDBACK_BUFFER */, index);
+        case 0x8A28: // UNIFORM_BUFFER_BINDING
+            return loadIndexedBinding(ctx, this_val, 0x8A11 /* UNIFORM_BUFFER */, index);
+
+        // Numeric rows (GLint64 in GL; safe as JS numbers for buffer sizes).
+        case 0x8C84: // TRANSFORM_FEEDBACK_BUFFER_START
+        case 0x8C85: // TRANSFORM_FEEDBACK_BUFFER_SIZE
+        case 0x8A29: // UNIFORM_BUFFER_START
+        case 0x8A2A: // UNIFORM_BUFFER_SIZE
+            return JS_NewFloat64(ctx, (double)gl->getIndexedParameterInt64(pname, index));
+
+        default:
+            gl->setSyntheticError(0x0500 /* GL_INVALID_ENUM */);
+            return JS_NULL;
     }
 }
 
@@ -212,6 +246,7 @@ static JSValue js_get_drawingBufferHeight(JSContext* ctx, JSValueConst this_val)
 
 const JSCFunctionListEntry webgl2_query_funcs[] = {
     JS_CFUNC_DEF("getParameter", 1, js_getParameter),
+    JS_CFUNC_DEF("getIndexedParameter", 2, js_getIndexedParameter),
     JS_CFUNC_DEF("getExtension", 1, js_getExtension),
     JS_CFUNC_DEF("getSupportedExtensions", 0, js_getSupportedExtensions),
     JS_CFUNC_DEF("getShaderPrecisionFormat", 2, js_getShaderPrecisionFormat),
