@@ -1033,6 +1033,11 @@ player.innerBody;
 //   vehicle.speed / .rpm / .gear                            — drivetrain state
 //   vehicle.wheelState(i)                                   — per-wheel render state
 //
+// `type` picks the controller family: 'wheeled' (default, this section),
+// 'tracked' (tanks — two skid-steered tracks), or 'motorcycle' (two-wheeler
+// + lean spring) — see their sections below; both build on everything here.
+// vehicle.type reports it back.
+//
 // Conventions: chassis-local forward defaults to +Z, up to +Y. Wheel
 // positions are in chassis-body local space; suspension extends along
 // suspensionDirection (default straight down).
@@ -1231,6 +1236,162 @@ car.destroy();    // remove the vehicle (constraint + drivetrain). A chassis
 //   const kart = w.createVehicle({ chassis: {...}, wheels: [...] });
 //   kart.setInput({ forward: 1 });
 //   w.step(1/60);
+
+
+// -----------------------------------------------------------------------------
+// Tracked vehicles (Physics.createVehicle({ type: 'tracked' }))
+// -----------------------------------------------------------------------------
+//
+// A tank: Jolt's TrackedVehicleController on the same VehicleConstraint.
+// Instead of steered wheels and differentials, the road wheels belong to two
+// TRACKS ([left, right] — left is the +X side when forward is +Z and up +Y),
+// each with its own drivetrain connection and brake; steering is
+// skid-steering (the tracks run at different rates). Everything else from
+// the wheeled section carries over: chassis creation, up/forward, wheel
+// suspension geometry, engine/transmission (drivetrain defaults switch to
+// Jolt's tank numbers: minRPM 500, maxRPM 4000, shiftUp 3500, shiftDown
+// 1000, gear ratios [4,3,2,1], reverse [-4,-3]), antiRollBars, collision
+// tester, wheelState, getState/speed/rpm/gear, setGear, destroy semantics,
+// scene.createPhysicsNode on .chassisBody.
+//
+// Differences from wheeled:
+//  - `tracks` is REQUIRED: exactly two entries, and together they must list
+//    every wheel index exactly once (a track with zero wheels, an unassigned
+//    wheel, or a doubly-assigned wheel is rejected — createVehicle throws).
+//  - Per-wheel steerable/driven/brake fields are ignored (steer, drive, and
+//    brake are per track); `differentials` is ignored.
+//  - Per-wheel friction is a SCALAR on tracked vehicles (Jolt models the
+//    track's terrain grip per road wheel, not slip curves): the
+//    longitudinalFriction / lateralFriction multipliers apply to Jolt's
+//    track defaults (4.0 longitudinal, 2.0 lateral) and the *FrictionCurve
+//    overrides do not apply.
+//  - setInput maps `right` onto differential track ratios the way Jolt's
+//    tank sample does: the inside track slows linearly with steer input,
+//    reaching a full pivot turn (inside track running backwards) at full
+//    lock. right: 0.2 is a gentle turn, right: 1 spins in place. Sign
+//    convention matches the wheeled controller (right > 0 turns right).
+//    `handBrake` is folded into `brake` (a tank has one brake).
+//  - setInput also takes explicit `leftRatio` / `rightRatio` (-1..1, each
+//    multiplies that track's rotation rate) which BYPASS the steering map
+//    for direct skid control: { forward: 1, leftRatio: 1, rightRatio: -1 }
+//    pivots right. Ratios are clamped away from exactly 0.
+
+/**
+ * Tracked-vehicle creation: wheeled opts plus `tracks`, minus the ignored
+ * fields listed above.
+ *
+ * @param {Object[]} opts.tracks - exactly two: [leftTrack, rightTrack]
+ * @param {number[]} opts.tracks[].wheels       - wheel indices in this track
+ * @param {number}  [opts.tracks[].drivenWheel=-1] - engine-connected wheel
+ *                                          (index into opts.wheels, must be
+ *                                          in this track); -1 = last listed
+ * @param {number}  [opts.tracks[].inertia=10]        - kg·m² of track+wheels
+ *                                          as seen on the driven wheel
+ * @param {number}  [opts.tracks[].angularDamping=0.5]
+ * @param {number}  [opts.tracks[].maxBrakeTorque=15000] - N·m on the driven wheel
+ * @param {number}  [opts.tracks[].differentialRatio=6]  - gearbox → driven wheel
+ * @returns {PhysicsVehicle}
+ */
+const tank = Physics.createVehicle({
+    type: 'tracked',
+    chassis: {
+        shape: 'box', halfExtents: { x: 1.4, y: 0.4, z: 2.4 },
+        position: { x: 0, y: 1.2, z: 0 }, density: 372,   // ≈ 4000 kg
+    },
+    maxPitchRollAngle: 60,
+    wheels: [   // 5 road wheels per side; steer/brake fields not needed
+        ...[0, 1, 2, 3, 4].map(i => ({
+            position: { x:  1.4, y: -0.3, z: 2.0 - i },   // left track
+            radius: 0.3, width: 0.2, suspensionFrequency: 1.0 })),
+        ...[0, 1, 2, 3, 4].map(i => ({
+            position: { x: -1.4, y: -0.3, z: 2.0 - i },   // right track
+            radius: 0.3, width: 0.2, suspensionFrequency: 1.0 })),
+    ],
+    tracks: [
+        { wheels: [0, 1, 2, 3, 4] },    // left
+        { wheels: [5, 6, 7, 8, 9] },    // right
+    ],
+});
+
+tank.type;                                        // 'tracked'
+tank.setInput({ forward: 1 });                    // straight ahead
+tank.setInput({ forward: 1, right: 0.2 });        // gentle right turn
+tank.setInput({ forward: 1, right: 1 });          // pivot turn in place
+tank.setInput({ forward: 1, leftRatio: 1, rightRatio: -1 });  // same pivot, explicit
+tank.setInput({ forward: 0, brake: 1 });          // stop
+
+
+// -----------------------------------------------------------------------------
+// Motorcycles (Physics.createVehicle({ type: 'motorcycle' }))
+// -----------------------------------------------------------------------------
+//
+// A two-wheeler: Jolt's MotorcycleController — the wheeled controller plus a
+// lean spring that torques the chassis toward the balance/turn lean angle,
+// so the bike stays upright at rest and leans into corners on its own. The
+// ENTIRE wheeled section applies (wheels, engine, transmission,
+// differentials — the driven rear wheel auto-derives one — setInput with
+// forward/right/brake/handBrake, wheelState, destroy semantics); `lean` and
+// setLeanController() are the additions.
+//
+// Lean spring strength: by default springConstant/springDamping are AUTO —
+// scaled to the chassis's actual roll inertia (k = 150·I, c = 30·I about the
+// forward axis, the stiffness-to-inertia ratio of Jolt's tuned sample bike).
+// Pass explicit values to override; note Jolt's raw sample numbers
+// (5000/1000) assume that sample's offset-center-of-mass chassis and will
+// violently destabilize a typical uniform-density chassis.
+//
+// A steering-angle limit derived from maxAngle is applied at speed (Jolt's
+// lean steering limit) so full-lock input can't order a lean the spring
+// couldn't hold.
+
+/**
+ * Motorcycle creation: wheeled opts plus optional `lean`.
+ *
+ * @param {Object}  [opts.lean]
+ * @param {number}  [opts.lean.maxAngle=45]       - deg the bike may lean in turns
+ * @param {number}  [opts.lean.springConstant=-1] - -1 = auto (150·I_roll)
+ * @param {number}  [opts.lean.springDamping=-1]  - -1 = auto (30·I_roll)
+ * @param {number}  [opts.lean.springIntegrationCoefficient=0] - PID integral term
+ * @param {number}  [opts.lean.springIntegrationCoefficientDecay=4] - integral
+ *                                          decay while airborne
+ * @param {number}  [opts.lean.smoothingFactor=0.8] - lean-target smoothing,
+ *                                          0 = none, 1 = frozen
+ * @returns {PhysicsVehicle}
+ */
+const bike = Physics.createVehicle({
+    type: 'motorcycle',
+    chassis: {
+        shape: 'box', halfExtents: { x: 0.2, y: 0.3, z: 0.4 },
+        position: { x: 0, y: 1, z: 0 }, density: 1250,   // ≈ 240 kg
+    },
+    maxPitchRollAngle: 60,
+    wheels: [   // front steers on a 30° caster, rear drives
+        { position: { x: 0, y: -0.27, z: 0.75 }, radius: 0.31, width: 0.05,
+          suspensionDirection: { x: 0, y: -1, z: 0.577 },   // tan(30°) caster
+          suspensionFrequency: 1.5, steerable: true, maxSteerAngle: 30,
+          maxBrakeTorque: 500 },
+        { position: { x: 0, y: -0.27, z: -0.75 }, radius: 0.31, width: 0.05,
+          suspensionFrequency: 2.0, driven: true, maxBrakeTorque: 250 },
+    ],
+    engine: { maxTorque: 150, minRPM: 1000, maxRPM: 10000 },
+    transmission: {
+        clutchStrength: 2, shiftUpRPM: 8000, shiftDownRPM: 2000,
+        gearRatios: [2.27, 1.63, 1.3, 1.09, 0.96, 0.88],
+        reverseGearRatios: [-4],
+    },
+});
+
+bike.type;                              // 'motorcycle'
+bike.setInput({ forward: 1 });          // ride; the lean spring keeps it up
+bike.setInput({ forward: 1, right: 0.5 });  // lean into a right turn
+
+/**
+ * Enable/disable the lean spring (motorcycles only; a safe no-op on other
+ * vehicle types). Disable it to let the bike fall over — e.g. when the
+ * rider is knocked off.
+ * @param {boolean} enabled
+ */
+bike.setLeanController(false);
 
 
 // -----------------------------------------------------------------------------

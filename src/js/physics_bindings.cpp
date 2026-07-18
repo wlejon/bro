@@ -1121,6 +1121,8 @@ struct JsVehicle {
     int32_t bodyTag = -1;              // chassis body tag (for .chassisBody)
     bool ownsChassis = false;          // chassis was created inline by createVehicle
                                        // ({chassis:...}) → destroy() destroys it too
+    physics::VehicleOptions::Controller type =
+        physics::VehicleOptions::ControllerWheeled;  // wheeled/tracked/motorcycle
     JSValue worldRef = JS_UNDEFINED;   // strong ref to a sandbox world handle
 };
 
@@ -1514,6 +1516,28 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
 
     physics::VehicleOptions opts;
 
+    // Controller family. 'wheeled' (default) = car, 'tracked' = tank with
+    // two skid-steered tracks, 'motorcycle' = wheeled + lean spring.
+    std::string type = qjsbind::get_prop_string(ctx, optsVal, "type");
+    if (type == "tracked")
+        opts.controller = physics::VehicleOptions::ControllerTracked;
+    else if (type == "motorcycle")
+        opts.controller = physics::VehicleOptions::ControllerMotorcycle;
+    else if (!type.empty() && type != "wheeled")
+        return JS_ThrowTypeError(ctx, "type must be 'wheeled' | 'tracked' | 'motorcycle'");
+    const bool isTracked = opts.controller == physics::VehicleOptions::ControllerTracked;
+
+    // Tracked drivetrains follow Jolt's tank defaults (lower revving, earlier
+    // shifts); wheeled/motorcycle keep the car defaults.
+    const double defMinRPM = isTracked ? 500.0 : 1000.0;
+    const double defMaxRPM = isTracked ? 4000.0 : 6000.0;
+    const double defShiftUp = isTracked ? 3500.0 : 4000.0;
+    const double defShiftDown = isTracked ? 1000.0 : 2000.0;
+    opts.engine.minRPM = (float)defMinRPM;
+    opts.engine.maxRPM = (float)defMaxRPM;
+    opts.transmission.shiftUpRPM = (float)defShiftUp;
+    opts.transmission.shiftDownRPM = (float)defShiftDown;
+
     // Chassis: an existing body tag (`body`) or inline creation opts
     // (`chassis`, same schema as createBody, forced dynamic).
     int32_t chassisTag = -1;
@@ -1587,8 +1611,8 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
     JSValue engVal = JS_GetPropertyStr(ctx, optsVal, "engine");
     if (JS_IsObject(engVal)) {
         opts.engine.maxTorque = (float)qjsbind::get_prop_number(ctx, engVal, "maxTorque", 500.0);
-        opts.engine.minRPM = (float)qjsbind::get_prop_number(ctx, engVal, "minRPM", 1000.0);
-        opts.engine.maxRPM = (float)qjsbind::get_prop_number(ctx, engVal, "maxRPM", 6000.0);
+        opts.engine.minRPM = (float)qjsbind::get_prop_number(ctx, engVal, "minRPM", defMinRPM);
+        opts.engine.maxRPM = (float)qjsbind::get_prop_number(ctx, engVal, "maxRPM", defMaxRPM);
     }
     JS_FreeValue(ctx, engVal);
 
@@ -1604,10 +1628,57 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
         JS_FreeValue(ctx, rgr);
         opts.transmission.switchTime = (float)qjsbind::get_prop_number(ctx, trVal, "switchTime", 0.5);
         opts.transmission.clutchStrength = (float)qjsbind::get_prop_number(ctx, trVal, "clutchStrength", 10.0);
-        opts.transmission.shiftUpRPM = (float)qjsbind::get_prop_number(ctx, trVal, "shiftUpRPM", 4000.0);
-        opts.transmission.shiftDownRPM = (float)qjsbind::get_prop_number(ctx, trVal, "shiftDownRPM", 2000.0);
+        opts.transmission.shiftUpRPM = (float)qjsbind::get_prop_number(ctx, trVal, "shiftUpRPM", defShiftUp);
+        opts.transmission.shiftDownRPM = (float)qjsbind::get_prop_number(ctx, trVal, "shiftDownRPM", defShiftDown);
     }
     JS_FreeValue(ctx, trVal);
+
+    // Tracked: exactly two tracks, [left, right], each listing its wheel
+    // indices. Motorcycle: optional lean-spring configuration.
+    if (isTracked) {
+        JSValue tracksVal = JS_GetPropertyStr(ctx, optsVal, "tracks");
+        if (JS_IsArray(tracksVal)) {
+            JSValue lenV = JS_GetPropertyStr(ctx, tracksVal, "length");
+            uint32_t n = 0; JS_ToUint32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
+            for (uint32_t i = 0; i < n; i++) {
+                JSValue tv = JS_GetPropertyUint32(ctx, tracksVal, i);
+                physics::VehicleTrackOptions trk;
+                if (JS_IsObject(tv)) {
+                    JSValue twv = JS_GetPropertyStr(ctx, tv, "wheels");
+                    std::vector<float> idx;
+                    if (readFloatArray(ctx, twv, idx))
+                        for (float f : idx) trk.wheels.push_back((int)f);
+                    JS_FreeValue(ctx, twv);
+                    trk.drivenWheel = (int)qjsbind::get_prop_number(ctx, tv, "drivenWheel", -1.0);
+                    trk.inertia = (float)qjsbind::get_prop_number(ctx, tv, "inertia", 10.0);
+                    trk.angularDamping = (float)qjsbind::get_prop_number(ctx, tv, "angularDamping", 0.5);
+                    trk.maxBrakeTorque = (float)qjsbind::get_prop_number(ctx, tv, "maxBrakeTorque", 15000.0);
+                    trk.differentialRatio = (float)qjsbind::get_prop_number(ctx, tv, "differentialRatio", 6.0);
+                }
+                JS_FreeValue(ctx, tv);
+                opts.tracks.push_back(trk);
+            }
+        }
+        JS_FreeValue(ctx, tracksVal);
+        if (opts.tracks.size() != 2)
+            return fail(JS_ThrowTypeError(ctx,
+                "type:'tracked' requires tracks: [leftTrack, rightTrack]"));
+    } else if (opts.controller == physics::VehicleOptions::ControllerMotorcycle) {
+        JSValue leanVal = JS_GetPropertyStr(ctx, optsVal, "lean");
+        if (JS_IsObject(leanVal)) {
+            opts.lean.maxAngle = (float)qjsbind::get_prop_number(ctx, leanVal, "maxAngle", 45.0);
+            // -1 = auto: scale to the chassis's roll inertia (see physics_world.h).
+            opts.lean.springConstant = (float)qjsbind::get_prop_number(ctx, leanVal, "springConstant", -1.0);
+            opts.lean.springDamping = (float)qjsbind::get_prop_number(ctx, leanVal, "springDamping", -1.0);
+            opts.lean.springIntegrationCoefficient =
+                (float)qjsbind::get_prop_number(ctx, leanVal, "springIntegrationCoefficient", 0.0);
+            opts.lean.springIntegrationCoefficientDecay =
+                (float)qjsbind::get_prop_number(ctx, leanVal, "springIntegrationCoefficientDecay", 4.0);
+            opts.lean.smoothingFactor =
+                (float)qjsbind::get_prop_number(ctx, leanVal, "smoothingFactor", 0.8);
+        }
+        JS_FreeValue(ctx, leanVal);
+    }
 
     JSValue diffsVal = JS_GetPropertyStr(ctx, optsVal, "differentials");
     if (JS_IsArray(diffsVal)) {
@@ -1680,6 +1751,7 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
     jv->handle = handle;
     jv->bodyTag = chassisTag;
     jv->ownsChassis = createdChassis;
+    jv->type = opts.controller;
     if (!JS_IsUndefined(worldVal)) {
         jv->world = w;
         jv->worldRef = JS_DupValue(ctx, worldVal);
@@ -1699,8 +1771,35 @@ static JSValue jsv_setInput(JSContext* ctx, JSValueConst thisVal, int argc, JSVa
     double right = qjsbind::get_prop_number(ctx, argv[0], "right", 0.0);
     double brake = qjsbind::get_prop_number(ctx, argv[0], "brake", 0.0);
     double handBrake = qjsbind::get_prop_number(ctx, argv[0], "handBrake", 0.0);
-    w->world->setVehicleInput(v->handle, (float)fwd, (float)right,
-                              (float)brake, (float)handBrake);
+    // Tracked vehicles can bypass the steering→ratio mapping with explicit
+    // per-track drive ratios (leftRatio / rightRatio, -1..1).
+    bool explicitRatios = false;
+    if (v->type == physics::VehicleOptions::ControllerTracked) {
+        JSValue lrVal = JS_GetPropertyStr(ctx, argv[0], "leftRatio");
+        JSValue rrVal = JS_GetPropertyStr(ctx, argv[0], "rightRatio");
+        if (JS_IsNumber(lrVal) || JS_IsNumber(rrVal)) {
+            explicitRatios = true;
+            double lr = 1.0, rr = 1.0;
+            if (JS_IsNumber(lrVal)) JS_ToFloat64(ctx, &lr, lrVal);
+            if (JS_IsNumber(rrVal)) JS_ToFloat64(ctx, &rr, rrVal);
+            w->world->setVehicleTrackInput(v->handle, (float)fwd, (float)lr,
+                                           (float)rr, (float)brake);
+        }
+        JS_FreeValue(ctx, lrVal);
+        JS_FreeValue(ctx, rrVal);
+    }
+    if (!explicitRatios)
+        w->world->setVehicleInput(v->handle, (float)fwd, (float)right,
+                                  (float)brake, (float)handBrake);
+    return JS_UNDEFINED;
+}
+
+static JSValue jsv_setLeanController(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsVehicle* v = vehicleFromThis(ctx, thisVal);
+    if (!v) return JS_EXCEPTION;
+    JsWorld* w = vehicleWorld(v);
+    if (!w || !w->world || !v->handle || argc < 1) return JS_UNDEFINED;
+    w->world->setVehicleLeanController(v->handle, JS_ToBool(ctx, argv[0]));
     return JS_UNDEFINED;
 }
 
@@ -1775,6 +1874,16 @@ static JSValue jsv_getChassisBody(JSContext* ctx, JSValueConst thisVal) {
     return JS_NewInt32(ctx, v->bodyTag);
 }
 
+static JSValue jsv_getType(JSContext* ctx, JSValueConst thisVal) {
+    JsVehicle* v = vehicleFromThis(ctx, thisVal);
+    if (!v) return JS_EXCEPTION;
+    const char* s =
+        v->type == physics::VehicleOptions::ControllerTracked ? "tracked"
+        : v->type == physics::VehicleOptions::ControllerMotorcycle ? "motorcycle"
+        : "wheeled";
+    return JS_NewString(ctx, s);
+}
+
 static JSValue jsv_getSpeed(JSContext* ctx, JSValueConst thisVal) {
     JsVehicle* v = vehicleFromThis(ctx, thisVal);
     if (!v) return JS_EXCEPTION;
@@ -1816,11 +1925,13 @@ static JSValue jsv_destroy(JSContext* ctx, JSValueConst thisVal, int, JSValueCon
 static const JSCFunctionListEntry s_vehicleProtoFuncs[] = {
     JS_CFUNC_DEF("setInput", 1, jsv_setInput),
     JS_CFUNC_DEF("setGear", 2, jsv_setGear),
+    JS_CFUNC_DEF("setLeanController", 1, jsv_setLeanController),
     JS_CFUNC_DEF("wheelState", 1, jsv_wheelState),
     JS_CFUNC_DEF("getState", 0, jsv_getState),
     JS_CFUNC_DEF("destroy", 0, jsv_destroy),
     JS_CGETSET_DEF("wheelCount", jsv_getWheelCount, nullptr),
     JS_CGETSET_DEF("chassisBody", jsv_getChassisBody, nullptr),
+    JS_CGETSET_DEF("type", jsv_getType, nullptr),
     JS_CGETSET_DEF("speed", jsv_getSpeed, nullptr),
     JS_CGETSET_DEF("rpm", jsv_getRpm, nullptr),
     JS_CGETSET_DEF("gear", jsv_getGear, nullptr),

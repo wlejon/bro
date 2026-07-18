@@ -282,9 +282,41 @@ struct VehicleAntiRollBarOptions {
     float stiffness = 1000.0f;  // N/m
 };
 
-/// Wheeled-vehicle creation options (Jolt VehicleConstraint +
-/// WheeledVehicleController). The chassis is an existing dynamic body.
+/// One tank track (tracked vehicles only). Wheel fields are indices into
+/// VehicleOptions::wheels; every wheel must belong to exactly one track.
+/// Defaults follow Jolt's VehicleTrackSettings (M1-Abrams-flavored, scaled).
+struct VehicleTrackOptions {
+    std::vector<int> wheels;         // wheels inside this track (non-empty)
+    int drivenWheel = -1;            // engine-connected wheel; -1 = last in `wheels`
+    float inertia = 10.0f;           // kg·m² of track+wheels seen on the driven wheel
+    float angularDamping = 0.5f;     // dw/dt = -c*w on the driven wheel
+    float maxBrakeTorque = 15000.0f; // N·m the brake applies on the driven wheel
+    float differentialRatio = 6.0f;  // gearbox → driven wheel rotation ratio
+};
+
+/// Lean-spring configuration (motorcycles only). Angle/smoothing defaults
+/// follow Jolt's MotorcycleControllerSettings. Spring constant/damping
+/// default to AUTO (-1): k = 150·I, c = 30·I where I is the chassis's roll
+/// inertia about the forward axis — the stiffness-to-inertia ratio of Jolt's
+/// tuned sample bike. (Jolt's raw defaults 5000/1000 assume that sample's
+/// offset-center-of-mass chassis and destabilize a typical uniform-density
+/// chassis, pumping energy through the ground contacts until the bike
+/// launches.) Explicit non-negative values pass through raw.
+struct VehicleLeanOptions {
+    float maxAngle = 45.0f;                    // degrees the bike may lean in turns
+    float springConstant = -1.0f;              // lean spring stiffness; -1 = 150·I(roll)
+    float springDamping = -1.0f;               // lean spring damping;   -1 = 30·I(roll)
+    float springIntegrationCoefficient = 0.0f; // integral term (PID-style)
+    float springIntegrationCoefficientDecay = 4.0f;  // integral decay in air
+    float smoothingFactor = 0.8f;              // 0 = no smoothing, 1 = frozen
+};
+
+/// Vehicle creation options (Jolt VehicleConstraint + a controller picked by
+/// `controller`: WheeledVehicleController, TrackedVehicleController, or
+/// MotorcycleController). The chassis is an existing dynamic body.
 struct VehicleOptions {
+    enum Controller { ControllerWheeled, ControllerTracked, ControllerMotorcycle };
+    Controller controller = ControllerWheeled;
     JPH::BodyID body;                 // chassis body (dynamic)
     JPH::Vec3 up{0, 1, 0};            // chassis-local up
     JPH::Vec3 forward{0, 0, 1};       // chassis-local forward
@@ -292,6 +324,11 @@ struct VehicleOptions {
     std::vector<VehicleWheelOptions> wheels;
     VehicleEngineOptions engine;
     VehicleTransmissionOptions transmission;
+    // Tracked only: exactly two tracks, [left, right]. Together they must
+    // cover every wheel exactly once. Wheeled/motorcycle ignore this.
+    std::vector<VehicleTrackOptions> tracks;
+    // Motorcycle only: lean-spring configuration.
+    VehicleLeanOptions lean;
     // Empty → auto-derived: driven wheels are paired in array order into
     // differentials with equal engineTorqueRatio.
     std::vector<VehicleDifferentialOptions> differentials;
@@ -807,6 +844,19 @@ public:
     void setVehicleInput(uint32_t handle, float forward, float right,
                          float brake, float handBrake);
 
+    /// Tracked vehicles only (no-op otherwise): explicit per-track drive
+    /// ratios, Jolt TrackedVehicleController::SetDriverInput semantics.
+    /// leftRatio / rightRatio -1..1 multiply each track's rotation rate
+    /// (1/1 = straight, 0.6 on the inside track = gentle turn, -1/1 = pivot
+    /// turn). Ratios are clamped away from zero (Jolt asserts on 0).
+    void setVehicleTrackInput(uint32_t handle, float forward, float leftRatio,
+                              float rightRatio, float brake);
+
+    /// Motorcycles only: enable/disable the lean spring that holds the bike
+    /// upright (disable to let it fall over). Returns false for an unknown
+    /// handle or a non-motorcycle vehicle.
+    bool setVehicleLeanController(uint32_t handle, bool enabled);
+
     /// Manual-transmission gear select (-1 reverse, 0 neutral, 1+ forward).
     /// Only meaningful when transmission.manual is set.
     void setVehicleGear(uint32_t handle, int gear, float clutchFriction = 1.0f);
@@ -1058,6 +1108,7 @@ private:
     // detaches both together so the listener can never outlive the constraint.
     struct VehicleEntry {
         JPH::Ref<JPH::VehicleConstraint> constraint;
+        VehicleOptions::Controller controller = VehicleOptions::ControllerWheeled;
         JPH::BodyID body;  // chassis
     };
     std::unordered_map<uint32_t, VehicleEntry> vehicles_;
