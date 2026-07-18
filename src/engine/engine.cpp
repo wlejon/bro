@@ -387,10 +387,48 @@ Engine::ContentInsets Engine::contentInsets() const {
 void Engine::updateSelectionSnapshot() {
     selectionSnapshot_.rects.clear();
     selectionSnapshot_.hasCaret = false;
+    selectionSnapshot_.compUnderlines.clear();
     // Default: translucent accent blue (#3377ff at 1/3 alpha), legible because
     // the highlight paints OVER the glyphs.
     selectionSnapshot_.highlight = bromath::cfromColor8({0x33, 0x77, 0xff, 0x55});
     if (!document_ || !textMetrics_) return;
+
+    // Contenteditable IME preedit: a thin underline segment per line the
+    // composition range covers — the same visual cue the controls draw under
+    // their preedit, in the composition host's text color. Computed before
+    // the Selection logic below (it does not depend on the live range: the
+    // preedit's provisional splice IS the range's neighborhood, and the
+    // collapsed-caret path underneath still paints the composition cursor).
+    if (editComp_.active) {
+        auto* tn = editableCompositionTarget();   // drops a stale composition
+        if (tn && editComp_.length > 0) {
+            auto rects = layout::getSelectionRects(
+                document_.get(), tn, editComp_.start,
+                tn, editComp_.start + editComp_.length, *textMetrics_);
+            auto* ctxEl = nearestElementAncestor(tn);
+            selectionSnapshot_.compColor = bromath::Color{0.0f, 0.0f, 0.0f, 1.0f};
+            if (auto* host = editComp_.host.get()) {
+                auto& style = host->computedStyle();
+                auto cIt = style.find("color");
+                bromath::Color parsed;
+                if (cIt != style.end() && !cIt->second.empty() &&
+                    layout::DrawTraversal::tryParseColor(cIt->second, parsed)) {
+                    selectionSnapshot_.compColor = parsed;
+                }
+            }
+            for (const auto& r : rects) {
+                // Same transform-unaware-geometry projection as the
+                // selection rects below.
+                auto pr = ctxEl ? dom::projectRectThroughAncestors(
+                                      ctxEl, r.x, r.y, r.width, r.height)
+                                : dom::AbsoluteRect{r.x, r.y, r.width, r.height};
+                // 1px line hugging the bottom of the line box (glyphs sit on
+                // the baseline above it — reads as the IME underline).
+                selectionSnapshot_.compUnderlines.push_back(
+                    {pr.x, pr.y + pr.height - 2.0f, pr.width, 1.0f});
+            }
+        }
+    }
     auto* sel = document_->selection();
     if (!sel || sel->rangeCount() == 0) return;
     const auto* range = sel->getRangeAt(0);
@@ -480,6 +518,11 @@ void Engine::drawSelectionHighlight(render::Renderer* renderer, float docOffsetY
         renderer->fillRect(selectionSnapshot_.caretX,
                            selectionSnapshot_.caretY + docOffsetY,
                            1.5f, selectionSnapshot_.caretHeight, caretColor);
+    }
+    // Contenteditable IME preedit underline (see updateSelectionSnapshot).
+    for (const auto& r : selectionSnapshot_.compUnderlines) {
+        renderer->fillRect(r.x, r.y + docOffsetY, r.w, r.h,
+                           selectionSnapshot_.compColor);
     }
 }
 

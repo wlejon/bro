@@ -40,16 +40,24 @@
 // the template definition.
 // ---------------------------------------------------------------------------
 
-// Return true if `node` is inside a contenteditable host (attribute set to
-// anything other than "false"). Skips `contenteditable="false"`.
-static bool inEditableHost(bro::dom::Node* node) {
+// The nearest contenteditable host element of `node`: the closest ancestor
+// (or self) with a contenteditable attribute set to anything other than
+// "false". Returns nullptr when the node isn't editable — including under an
+// explicit `contenteditable="false"`.
+static bro::dom::Element* editableHostOf(bro::dom::Node* node) {
     for (bro::dom::Node* n = node; n; n = n->parentNode()) {
         if (n->nodeType() != bro::dom::NodeType::Element) continue;
         auto* el = static_cast<bro::dom::Element*>(n);
         if (!el->hasAttribute("contenteditable")) continue;
-        return el->getAttribute("contenteditable") != "false";
+        return el->getAttribute("contenteditable") != "false" ? el : nullptr;
     }
-    return false;
+    return nullptr;
+}
+
+// Return true if `node` is inside a contenteditable host (attribute set to
+// anything other than "false"). Skips `contenteditable="false"`.
+static bool inEditableHost(bro::dom::Node* node) {
+    return editableHostOf(node) != nullptr;
 }
 
 // The hovered element changed from `prev` to `target`. Per CSS Selectors L4,
@@ -178,14 +186,23 @@ static void runEditableMutation(bro::dom::Document* doc,
     doc->markDirty();
 }
 
-// Insert `text` at the current Selection. If the selection isn't collapsed,
-// deletes the contents first. Caret ends up after the inserted text.
-static void selectionInsertText(bro::dom::Document* doc, const std::string& text) {
-    if (!doc) return;
+// Resolve the Selection caret to a (textNode, byteOffset) insertion position,
+// deleting any selected content first (typing semantics). When the caret sits
+// between element children — or inside an empty element — a fresh empty text
+// node is inserted at exactly that position, the same placement rule regular
+// contenteditable typing uses, so plain insertion and IME composition share
+// one insertion path. `created` reports whether that happened (a canceled
+// composition removes the node again). Returns nullptr when there is no
+// usable caret.
+static bro::dom::TextNode* selectionCaretTextPosition(bro::dom::Document* doc,
+                                                      int& off, bool& created) {
+    off = 0;
+    created = false;
+    if (!doc) return nullptr;
     auto* sel = doc->selection();
-    if (!sel || sel->rangeCount() == 0) return;
+    if (!sel || sel->rangeCount() == 0) return nullptr;
     auto* range = sel->getRangeAt(0);
-    if (!range) return;
+    if (!range) return nullptr;
 
     bro::dom::Node* caretNode = nullptr;
     int caretOff = 0;
@@ -195,24 +212,41 @@ static void selectionInsertText(bro::dom::Document* doc, const std::string& text
         caretNode = range->startContainer();
         caretOff = range->startOffset();
     }
-    if (!caretNode) return;
+    if (!caretNode) return nullptr;
 
     if (caretNode->nodeType() == bro::dom::NodeType::Text) {
-        auto* tn = static_cast<bro::dom::TextNode*>(caretNode);
-        tn->insertData(caretOff, text);
-        int newOff = caretOff + static_cast<int>(text.size());
-        sel->collapse(tn, newOff);
-    } else if (caretNode->nodeType() == bro::dom::NodeType::Element) {
+        off = caretOff;
+        return static_cast<bro::dom::TextNode*>(caretNode);
+    }
+    if (caretNode->nodeType() == bro::dom::NodeType::Element) {
         auto* el = static_cast<bro::dom::Element*>(caretNode);
-        auto* tn = doc->createTextNode(text);
+        auto* tn = doc->createTextNode("");
         auto& kids = el->childNodes();
         if (caretOff >= static_cast<int>(kids.size())) {
             el->appendChild(tn);
         } else {
             el->insertBefore(tn, kids[caretOff]);
         }
-        sel->collapse(tn, static_cast<int>(text.size()));
+        // Node::appendChild/insertBefore are the raw tree primitives — they
+        // don't mark layout structure. Without this the new text node never
+        // gets a layout adapter, so it renders stale and caret/selection
+        // geometry (getCaretRect / getSelectionRects) can't see it.
+        el->markStructureDirty();
+        created = true;
+        return tn;
     }
+    return nullptr;
+}
+
+// Insert `text` at the current Selection. If the selection isn't collapsed,
+// deletes the contents first. Caret ends up after the inserted text.
+static void selectionInsertText(bro::dom::Document* doc, const std::string& text) {
+    int off = 0;
+    bool created = false;
+    auto* tn = selectionCaretTextPosition(doc, off, created);
+    if (!tn) return;
+    tn->insertData(static_cast<size_t>(off), text);
+    doc->selection()->collapse(tn, off + static_cast<int>(text.size()));
 }
 #include "util/time.h"
 #include "util/log.h"
@@ -1596,7 +1630,149 @@ bool Engine::compositionActive() {
     auto* el = document_ ? document_->activeElement() : nullptr;
     if (auto* input = getElInput(el); input && input->isComposing()) return true;
     if (auto* ta = getElTextarea(el); ta && ta->isComposing()) return true;
+    if (editComp_.active) return true;
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// Contenteditable composition — the DOM-splice counterpart of the controls'
+// TextComposition. The preedit is provisional text inside the caret's text
+// node (browser-observable via textContent), replaced on every update.
+// ---------------------------------------------------------------------------
+
+dom::TextNode* Engine::editableCompositionTarget() {
+    if (!editComp_.active) return nullptr;
+    auto* tn = editComp_.node.get();
+    if (!document_ || !tn || !document_->ownsNode(tn)) {
+        editComp_ = {};
+        return nullptr;
+    }
+    // The preedit bytes must still sit where the composition put them —
+    // script rewriting the node's data (textContent = ...) reuses the node,
+    // so liveness alone can't catch it. A mismatch means script owns the
+    // text now; the stale composition is dropped, and the pending commit
+    // degrades to a plain insert at the caret (the controls behave the same
+    // way after a .value write).
+    const std::string& data = tn->data();
+    if (editComp_.start < 0 || editComp_.length < 0 ||
+        static_cast<size_t>(editComp_.start) + static_cast<size_t>(editComp_.length) > data.size() ||
+        data.compare(static_cast<size_t>(editComp_.start),
+                     static_cast<size_t>(editComp_.length),
+                     editComp_.preedit) != 0) {
+        editComp_ = {};
+        return nullptr;
+    }
+    return tn;
+}
+
+bool Engine::editableCompositionUpdate(const std::string& text, int cursorCp,
+                                       bool& wasComposing,
+                                       std::string& replacedSel,
+                                       dom::Element*& hostOut) {
+    wasComposing = editComp_.active;
+    replacedSel.clear();
+    hostOut = nullptr;
+    if (!document_) return false;
+    auto* sel = document_->selection();
+    if (!sel) return false;
+
+    if (editComp_.active) {
+        // Script can rip the preedit's node out — or rewrite its data —
+        // mid-composition. Drop the stale composition rather than splice
+        // into freed memory or over script-owned text (the contenteditable
+        // analog of the controls dropping theirs on a .value write).
+        auto* tn = editableCompositionTarget();
+        if (!tn) {
+            wasComposing = false;
+            return false;
+        }
+        tn->replaceData(static_cast<size_t>(editComp_.start),
+                        static_cast<size_t>(editComp_.length), text);
+        editComp_.length = static_cast<int>(text.size());
+        editComp_.preedit = text;
+        sel->collapse(tn, editComp_.start +
+                              layout::utf8ByteForCodepoint(text, cursorCp));
+        hostOut = editComp_.host.get();
+        document_->markDirty();
+        return true;
+    }
+
+    // Starting a composition: the caret must sit in a contenteditable host.
+    auto* focusNode = sel->rangeCount() > 0 ? sel->focusNode() : nullptr;
+    auto* host = focusNode ? editableHostOf(focusNode) : nullptr;
+    if (!host) return false;
+
+    // compositionstart.data is the text the composition replaces — capture it
+    // before the caret resolution deletes the selection. NOTE: unlike the
+    // controls (which restore their whole pre-composition value on cancel), a
+    // canceled contenteditable composition does not resurrect the replaced
+    // selection — the deletion happened at compositionstart, and restoring
+    // arbitrary DOM structure would need a tree snapshot.
+    if (!sel->isCollapsed()) replacedSel = sel->toString();
+
+    int off = 0;
+    bool created = false;
+    auto* tn = selectionCaretTextPosition(document_.get(), off, created);
+    if (!tn) return false;
+
+    editComp_.active = true;
+    editComp_.node.assign(document_.get(), tn);
+    editComp_.host.assign(document_.get(), host);
+    editComp_.createdNode = created;
+    editComp_.start = off;
+    tn->insertData(static_cast<size_t>(off), text);
+    editComp_.length = static_cast<int>(text.size());
+    editComp_.preedit = text;
+    sel->collapse(tn, off + layout::utf8ByteForCodepoint(text, cursorCp));
+    hostOut = host;
+    document_->markDirty();
+    return true;
+}
+
+bool Engine::editableCompositionCommit(const std::string& text,
+                                       dom::Element*& hostOut) {
+    hostOut = nullptr;
+    if (!editComp_.active) return false;
+    auto* host = editComp_.host.get();
+    auto* tn = editableCompositionTarget();
+    if (!tn) return false;
+    const int start = editComp_.start;
+    const int length = editComp_.length;
+    const bool createdNode = editComp_.createdNode;
+    editComp_ = {};
+
+    // ONE coherent splice: preedit range → committed text (so a future DOM
+    // undo model can record it as a single edit).
+    tn->replaceData(static_cast<size_t>(start), static_cast<size_t>(length),
+                    text);
+    auto* sel = document_->selection();
+    if (tn->length() == 0 && createdNode && tn->parentNode()) {
+        // An empty commit into a node we created for the composition leaves
+        // an empty text node behind — remove it and re-seat the caret where
+        // the node sat, restoring the pre-composition DOM.
+        auto* parent = tn->parentNode();
+        const auto& kids = parent->childNodes();
+        int idx = 0;
+        for (size_t i = 0; i < kids.size(); ++i) {
+            if (kids[i] == tn) { idx = static_cast<int>(i); break; }
+        }
+        parent->removeChild(tn);
+        // Raw removeChild doesn't mark layout structure (see
+        // selectionCaretTextPosition); rebuild the parent's layout children
+        // so the adapter for the removed node goes away too.
+        if (parent->nodeType() == dom::NodeType::Element)
+            static_cast<dom::Element*>(parent)->markStructureDirty();
+        if (sel) sel->collapse(parent, idx);
+    } else if (sel) {
+        sel->collapse(tn, start + static_cast<int>(text.size()));
+    }
+    document_->markDirty();
+    hostOut = host;
+    return true;
+}
+
+bool Engine::editableCompositionCancel(dom::Element*& hostOut) {
+    return editableCompositionCommit("", hostOut);
 }
 
 void Engine::dispatchCompositionEvent(dom::Element* el, const char* type,
@@ -1623,6 +1799,40 @@ void Engine::updateTextInputArea() {
         have = input->caretRect(x, y, w, h);
     } else if (auto* ta = getElTextarea(activeEl); ta && ta->isFocused()) {
         have = ta->caretRect(x, y, w, h);
+    } else if (textMetrics_) {
+        // Contenteditable: the DOM Selection caret (which sits at the
+        // composition cursor during a composition — editableCompositionUpdate
+        // collapses it there), so the candidate window tracks the preedit.
+        auto* sel = document_->selection();
+        auto* range = (sel && sel->rangeCount() > 0) ? sel->getRangeAt(0)
+                                                     : nullptr;
+        auto* node = range ? range->startContainer() : nullptr;
+        if (node && document_->ownsNode(node) && inEditableHost(node) &&
+            node->nodeType() == dom::NodeType::Text) {
+            auto* tn = static_cast<dom::TextNode*>(node);
+            float cx = 0, cy = 0, chh = 0;
+            if (layout::getCaretRect(document_.get(), tn, range->startOffset(),
+                                     *textMetrics_, cx, cy, chh)) {
+                // getCaretRect is transform-unaware document space: project
+                // through the ancestor transform chain, then remove scroll so
+                // the value below is content space like the control rects.
+                dom::Element* ctxEl = nullptr;
+                for (dom::Node* n = tn; n; n = n->parentNode()) {
+                    if (n->nodeType() == dom::NodeType::Element) {
+                        ctxEl = static_cast<dom::Element*>(n);
+                        break;
+                    }
+                }
+                auto pr = ctxEl ? dom::projectRectThroughAncestors(ctxEl, cx, cy,
+                                                                   1.0f, chh)
+                                : dom::AbsoluteRect{cx, cy, 1.0f, chh};
+                x = pr.x;
+                y = pr.y - scrollY_;
+                w = pr.width;
+                h = pr.height;
+                have = true;
+            }
+        }
     }
     if (!have) return;
     // Control caret rects are in app content space; SDL wants window
@@ -1648,7 +1858,33 @@ void Engine::handleTextEditing(const std::string& text, int start,
     auto* ta = getElTextarea(activeEl);
     const bool inputOk = input && input->isFocused();
     const bool taOk = !inputOk && ta && ta->isFocused();
-    if (!inputOk && !taOk) return;
+    if (!inputOk && !taOk) {
+        // No focused control — maybe the DOM Selection caret sits in a
+        // contenteditable host. Same Chrome-shaped event order as the
+        // controls, targeted at the host element.
+        if (text.empty()) {
+            if (!editComp_.active) return;
+            dom::Element* host = nullptr;
+            if (!editableCompositionCancel(host)) return;
+            dispatchCompositionEvent(host, "compositionupdate", "");
+            dispatchInputEvent(host, "", "insertCompositionText", true);
+            dispatchCompositionEvent(host, "compositionend", "");
+        } else {
+            bool wasComposing = false;
+            std::string replacedSel;
+            dom::Element* host = nullptr;
+            if (!editableCompositionUpdate(text, start, wasComposing,
+                                           replacedSel, host)) return;
+            if (!wasComposing)
+                dispatchCompositionEvent(host, "compositionstart", replacedSel);
+            dispatchCompositionEvent(host, "compositionupdate", text);
+            dispatchInputEvent(host, text, "insertCompositionText", true);
+        }
+        markAppBaseDirty();
+        uiDirty_ = true;
+        updateTextInputArea();
+        return;
+    }
     const bool wasComposing = inputOk ? input->isComposing() : ta->isComposing();
 
     if (text.empty()) {
@@ -1701,6 +1937,18 @@ void Engine::commitActiveComposition() {
                ta && ta->isFocused() && ta->isComposing()) {
         data = ta->compositionText();
         r = ta->compositionCommit(activeEl, data);
+    } else if (editComp_.active) {
+        // Contenteditable composition: finalize the preedit in place.
+        data = editComp_.preedit;
+        dom::Element* host = nullptr;
+        if (!editableCompositionCommit(data, host)) return;
+        dispatchCompositionEvent(host, "compositionupdate", data);
+        dispatchInputEvent(host, data, "insertCompositionText", true);
+        dispatchCompositionEvent(host, "compositionend", data);
+        markAppBaseDirty();
+        uiDirty_ = true;
+        updateTextInputArea();
+        return;
     } else {
         return;
     }
@@ -2251,6 +2499,19 @@ void Engine::handleTextInput(const std::string& text) {
             uiDirty_ = true;
             updateTextInputArea();
             return;
+        }
+        // Contenteditable composition: this TEXT_INPUT is its commit.
+        if (editComp_.active) {
+            dom::Element* host = nullptr;
+            if (editableCompositionCommit(text, host)) {
+                dispatchCompositionEvent(host, "compositionupdate", text);
+                dispatchInputEvent(host, text, "insertCompositionText", true);
+                dispatchCompositionEvent(host, "compositionend", text);
+                markAppBaseDirty();
+                uiDirty_ = true;
+                updateTextInputArea();
+                return;
+            }
         }
     }
 

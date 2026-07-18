@@ -64,7 +64,7 @@ Mouse coordinates are **viewport-relative**, matching `getBoundingClientRect()` 
 | `keyDown(keycode [, scancode, mod, repeat])` | Simulate a key press (SDL keycodes) |
 | `keyUp(keycode [, scancode, mod])` | Simulate a key release |
 | `textInput(text)` | Simulate text input (for typing into focused input/textarea) |
-| `imeCompose(text [, cursorPos])` | Simulate an IME composition (preedit) update on the focused input/textarea — the same engine path as `SDL_EVENT_TEXT_EDITING`. The preedit shows inline in `.value` as underlined provisional text; `cursorPos` is the composition cursor in characters within `text` (default: end). Fires `compositionstart` (first call) / `compositionupdate` and `input` with `inputType: "insertCompositionText"`. |
+| `imeCompose(text [, cursorPos])` | Simulate an IME composition (preedit) update on the focused input/textarea, or on a contenteditable host when the DOM Selection caret sits inside one — the same engine path as `SDL_EVENT_TEXT_EDITING`. The preedit shows inline in `.value` as underlined provisional text; `cursorPos` is the composition cursor in characters within `text` (default: end). Fires `compositionstart` (first call) / `compositionupdate` and `input` with `inputType: "insertCompositionText"`. |
 | `imeCommit(text)` | Commit the composition with `text` (the same path as a real IME's `SDL_EVENT_TEXT_INPUT`): replaces the preedit, fires the final `compositionupdate` → `input` → `compositionend`, and records ONE undo entry for the whole composition. Without an active composition it behaves like `textInput(text)`. |
 | `imeCancel()` | Cancel the composition (an empty editing event): removes the preedit, restores the pre-composition value/selection, fires `compositionupdate("")` → `input` → `compositionend("")`, leaves no undo entry. |
 | `paste(text)` | Simulate paste on focused element with the given text (dispatches paste event, inserts into input/textarea) |
@@ -115,9 +115,27 @@ during composition (rendered with an underline and the composition-cursor
 caret), a commit is one discrete undo entry from the pre-composition state, a
 cancel restores it and leaves no entry, and anything that moves the caret or
 focus mid-composition (mouse press, arrow/command keys, Tab, `.blur()`)
-**commits** the current preedit rather than stranding it. Composition offsets
-follow the controls' byte-offset convention (`selectionStart`/`selectionEnd`
-are UTF-8 byte offsets).
+**commits** the current preedit rather than stranding it. The controls store
+byte offsets internally, but `selectionStart`/`selectionEnd` at the JS
+boundary are UTF-16 code units per spec.
+
+**Contenteditable** composes too: with the DOM Selection caret inside a
+`contenteditable` host (click into it first), the preedit is spliced
+provisionally into the text node at the caret — `textContent` shows it,
+`compositionstart`/`compositionupdate`/`compositionend` and
+`input(insertCompositionText)` target the host element in the same order as
+the controls, the preedit renders with the same thin underline plus the
+composition-cursor caret, and the never-strand commits apply identically. If
+the caret sits between elements (or in an empty host) the text node is
+created by the same insertion rule regular contenteditable typing uses.
+Deviations from the control behavior: contenteditable has **no undo model**
+in bro, so a committed composition records no undo entry (the commit is one
+coherent `replaceData` splice); and composing over a non-collapsed selection
+deletes it at `compositionstart` — `imeCancel()` removes the preedit and
+restores the DOM around it, but does not resurrect that deleted selection.
+Engine-wide deviations shared with the controls: events dispatch after the
+mutation, `beforeinput` is not fired for composition, and
+`compositionstart`'s `preventDefault` is not honored.
 
 ### Settings
 

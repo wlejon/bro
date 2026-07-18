@@ -202,9 +202,12 @@ public:
     /// imeCompose/imeCancel seam). `text` is the current preedit ("" cancels
     /// the composition), `start` the composition cursor in UTF-8 characters
     /// within it. The focused input/textarea shows the preedit inline in its
-    /// value as provisional text (browser behavior); a TEXT_INPUT while
-    /// composing commits it. `length` (SDL's selected span) is accepted for
-    /// signature parity but the preedit renders as one underlined run.
+    /// value as provisional text (browser behavior); with the DOM Selection
+    /// caret inside a contenteditable host instead, the preedit is spliced
+    /// provisionally into the text node at the caret (visible to textContent
+    /// reads). A TEXT_INPUT while composing commits it. `length` (SDL's
+    /// selected span) is accepted for signature parity but the preedit
+    /// renders as one underlined run.
     void handleTextEditing(const std::string& text, int start, int length);
     void handleWheel(float x, float y, float dx, float dy);
 
@@ -572,7 +575,8 @@ private:
                             const std::string& inputType = "",
                             bool isComposing = false);
     // --- IME composition helpers (input_handling.cpp) ---
-    /// True when the app document's focused input/textarea has a preedit.
+    /// True when the app document's focused input/textarea has a preedit,
+    /// or a contenteditable composition is in progress (editComp_).
     bool compositionActive();
     /// Dispatch a bubbling compositionstart/update/end event.
     void dispatchCompositionEvent(dom::Element* el, const char* type,
@@ -583,10 +587,32 @@ private:
     /// before focus changes, mouse presses, and caret-moving keys so
     /// provisional text is never stranded.
     void commitActiveComposition();
-    /// Report the focused text control's caret rect to SDL
-    /// (SDL_SetTextInputArea) so the native IME candidate window tracks the
-    /// caret. No-op without a window or focused text control.
+    /// Report the focused text control's caret rect — or, with no focused
+    /// control, the DOM Selection caret inside a contenteditable host — to
+    /// SDL (SDL_SetTextInputArea) so the native IME candidate window tracks
+    /// the caret. No-op without a window or an eligible caret.
     void updateTextInputArea();
+    // Contenteditable composition mutations (input_handling.cpp). Each
+    // performs the DOM splice only; callers dispatch the composition/input
+    // events (mirroring how the control paths consume KeyHandleResult).
+    /// The live, still-valid text node carrying the contenteditable preedit,
+    /// or nullptr (dropping the composition) when the node died or script
+    /// rewrote its data out from under the composition.
+    dom::TextNode* editableCompositionTarget();
+    /// Replace (or start) the preedit at the Selection caret. On start,
+    /// `replacedSel` receives the selected text the composition replaced
+    /// (compositionstart.data) and `hostOut` the contenteditable host the
+    /// events should target. Returns false when the caret isn't editable.
+    bool editableCompositionUpdate(const std::string& text, int cursorCp,
+                                   bool& wasComposing, std::string& replacedSel,
+                                   dom::Element*& hostOut);
+    /// Finalize the preedit as `text` (one coherent splice). False = no
+    /// contenteditable composition in progress (or its node died).
+    bool editableCompositionCommit(const std::string& text,
+                                   dom::Element*& hostOut);
+    /// Remove the preedit, restoring the pre-composition DOM. A text node
+    /// created for the composition is removed again.
+    bool editableCompositionCancel(dom::Element*& hostOut);
     void dispatchFocusEvents(dom::Element* oldTarget, dom::Element* newTarget);
     void dispatchScrollEvent(dom::Element* el);
 
@@ -971,6 +997,11 @@ private:
         // falling back to the translucent accent default. Snapshotted so the
         // raster thread never touches the cascade.
         bromath::Color highlight{0.0f, 0.0f, 0.0f, 0.0f};
+        // Contenteditable IME preedit underline: one thin segment per line
+        // the composition range covers (same visual as the controls' preedit
+        // underline), in the text color of the composition's host element.
+        std::vector<Rect> compUnderlines;
+        bromath::Color compColor{0.0f, 0.0f, 0.0f, 1.0f};
     };
     SelectionSnapshot selectionSnapshot_;
 
@@ -1308,6 +1339,26 @@ private:
     // document the control belongs to.
     dom::ElementHandle controlDragElement_;
     bool controlDragIsPanel_ = false;
+
+    // In-progress IME composition inside a contenteditable host of the app
+    // document. Contenteditable has no control object (ElInput/ElTextarea
+    // carry a TextComposition of their own), so the engine holds the state:
+    // the preedit lives provisionally in `node`'s data at
+    // [start, start + length) and is replaced on every TEXT_EDITING update,
+    // finalized by TEXT_INPUT, removed by cancel. NOTE: contenteditable has
+    // no undo model in bro, so unlike the controls a committed composition
+    // records no undo entry — the commit is one coherent replaceData splice
+    // so a future DOM undo system can treat it as a single edit.
+    struct EditableComposition {
+        bool active = false;
+        dom::TextNodeHandle node;   // text node carrying the preedit
+        dom::ElementHandle host;    // contenteditable host (event target)
+        bool createdNode = false;   // `node` was created for this composition
+        int start = 0;              // byte offset of the preedit in `node`
+        int length = 0;             // byte length of the current preedit
+        std::string preedit;        // current preedit text
+    };
+    EditableComposition editComp_;
 
     // Viewport scrolling
     float scrollY_ = 0.0f;
