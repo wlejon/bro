@@ -69,8 +69,24 @@ static void js_element_finalizer(JSRuntime* rt, JSValue val)
     // the element map, the object is now being collected, so make sure the
     // element no longer points at it. Guards the fast path in wrapElement()
     // against a freed wrapper even if an eager-clear site was missed.
+    //
+    // The isAlive() guard is NOT optional and must not be "simplified" away.
+    // magic_ is only ever stamped 0xDEAD by ~Element, so !isAlive() means this
+    // Element's storage is already gone; clearing jsWrapper_ then would be a
+    // WRITE to freed memory — strictly worse than leaving a pointer behind.
+    // And a pointer left behind on a destroyed Element is unreachable by
+    // construction: wrapElement() can only consult jsWrapper_ through an
+    // Element* the caller already holds, which for a destroyed Element is a
+    // use-after-free that precedes this cache entirely. Every path that dooms a
+    // still-allocated element (fireNodeFreed, invalidateWrapper, the orphan
+    // sweep's freeNode) clears jsWrapper_ eagerly while the memory is valid.
+    // If that ever stops being true the branch below says so out loud rather
+    // than leaving a silent hazard.
     if (el->isAlive() && el->jsWrapper() == JS_VALUE_GET_PTR(val))
         el->setJsWrapper(nullptr);
+    else if (!el->isAlive() && el->jsWrapper() == JS_VALUE_GET_PTR(val))
+        LOG_ERROR("Element wrapper finalized for a destroyed element that still "
+                  "cached it — an eager wrapper-clear path was missed");
 
     // Detached-document (DOMParser) bookkeeping: this wrapper is leaving the
     // weak registry, so the document holder will never touch it again. Safe to
