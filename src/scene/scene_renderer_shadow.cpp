@@ -173,12 +173,14 @@ SceneRenderer::WorldAABB SceneRenderer::computeShadowCasterBounds() const {
         }
     };
     auto walk = [&](auto&& self, SceneNode* n) -> void {
-        if (!n || !n->visible()) return;
+        if (!n || !n->renderVisible()) return;
         if (n->type() == SceneNode::Type::Mesh) {
             auto* m = static_cast<MeshNode*>(n);
             // Same unlit rule as the caster gather (effectiveUnlit): a
             // custom shader suppresses unlit, so such meshes count here too.
-            if (!m->effectiveUnlit() && !m->mesh().empty()) {
+            // hasDrawableMesh: LOD-chain-only nodes fit too (localBounds is
+            // the chain union, so every level's silhouette is covered).
+            if (!m->effectiveUnlit() && m->hasDrawableMesh()) {
                 // cullMargin pads the fit the same way it pads culling
                 // bounds (world units) — a custom vertex shader can displace
                 // geometry along the light direction past the bind-pose
@@ -254,10 +256,10 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
         return m->hasCustomShader() && !m->customShader()->vertexChunk.empty();
     };
     auto gather = [&](auto&& self, SceneNode* n) -> void {
-        if (!n || !n->visible()) return;
+        if (!n || !n->renderVisible()) return;
         if (n->type() == SceneNode::Type::Mesh) {
             auto* m = static_cast<MeshNode*>(n);
-            if (!m->effectiveUnlit() && m->castsShadow() && !m->mesh().empty()) {
+            if (!m->effectiveUnlit() && m->castsShadow() && m->hasDrawableMesh()) {
                 auto* sm = m->asSkinnedMesh();
                 if (sm && sm->skinReady()) {
                     (hasVertexChunk(m) ? shadowSkinnedCustomCasters_

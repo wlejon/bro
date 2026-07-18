@@ -485,6 +485,47 @@ void SceneBindings::install(JSContext* ctx) {
                 else if (w->node()->type() == scene::SceneNode::Type::InstancedMesh)
                     static_cast<scene::InstancedMeshNode*>(w->node())->setCullMargin((float)val);
             })
+        // Visibility range — {begin, end, margin} world-space camera-distance
+        // window with hysteresis, or null when unset. Renders while
+        // begin <= d < end; independent of (ANDed with) `visible`. See
+        // scene-api.js.
+        .prop("visibilityRange",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (!w || !w->node()) return JS_UNDEFINED;
+                scene::SceneNode* n = w->node();
+                if (!n->hasVisibilityRange()) return JS_NULL;
+                JSValue o = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, o, "begin", JS_NewFloat64(ctx, n->visibilityRangeBegin()));
+                JS_SetPropertyStr(ctx, o, "end", JS_NewFloat64(ctx, n->visibilityRangeEnd()));
+                JS_SetPropertyStr(ctx, o, "margin", JS_NewFloat64(ctx, n->visibilityRangeMargin()));
+                return o;
+            },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (!w || !w->node()) return;
+                if (JS_IsNull(val) || JS_IsUndefined(val)) {
+                    w->node()->clearVisibilityRange();
+                    return;
+                }
+                if (!JS_IsObject(val)) return;
+                double begin = qjsbind::get_prop_number(ctx, val, "begin", 0.0);
+                double end = qjsbind::get_prop_number(ctx, val, "end", 1e30);
+                double margin = qjsbind::get_prop_number(ctx, val, "margin", 0.0);
+                w->node()->setVisibilityRange((float)begin, (float)end, (float)margin);
+            })
+        // LOD chain introspection (MeshNode; undefined elsewhere). lodLevel
+        // is the index selected by the most recent rendered frame.
+        .get("lodLevel", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh) {
+                auto* m = static_cast<scene::MeshNode*>(w->node());
+                if (m->hasLodChain()) return JS_NewInt32(ctx, m->selectedLod());
+            }
+            return JS_UNDEFINED;
+        })
+        .get("lodCount", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+            if (w && w->node() && w->node()->type() == scene::SceneNode::Type::Mesh)
+                return JS_NewInt32(ctx, static_cast<scene::MeshNode*>(w->node())->lodCount());
+            return JS_UNDEFINED;
+        })
         // Camera projection params (CameraNode only; undefined elsewhere).
         // fov is in DEGREES to match scene.setCamera / createCamera opts.
         .prop("fov",
@@ -1250,6 +1291,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("destroy", js_node_destroy, 0)
         .method_raw("localToWorld", js_node_localToWorld, 2)
         .method_raw("lookAt", js_node_lookAt, 3)
+        .method_raw("setLodMeshes", js_node_setLodMeshes, 1)
         .method_raw("attachAudioEmitter", js_node_attachAudioEmitter, 2)
         .method_raw("detachAudioEmitter", js_node_detachAudioEmitter, 0)
         .method_raw("syncToPhysics", js_node_syncToPhysics, 0)

@@ -515,6 +515,14 @@ private:
     /// setActiveCamera, and the top of render().
     void applyActiveCamera();
 
+    /// Once-per-frame camera-distance pass: updates every node's
+    /// visibility-range gate (SceneNode::updateRangeGate) and every mesh
+    /// LOD-chain selection (MeshNode::selectLodByDistance) from the distance
+    /// between cameraEye_ and the node's world origin. One sqrt per
+    /// participating node, no allocations. Called from render() after
+    /// applyActiveCamera(), before the 3D passes.
+    void updateVisibilityGates();
+
     std::unique_ptr<SceneNode> root_;
     std::unordered_map<uint32_t, std::unique_ptr<SceneNode>> nodes_;
 

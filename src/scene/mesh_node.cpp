@@ -5,6 +5,8 @@
 #include <bromesh/analysis/bbox.h>
 #include <bromesh/manipulation/normals.h>
 
+#include <algorithm>
+
 namespace bro::scene {
 
 MeshNode::MeshNode(const std::string& name) : SceneNode(name) {}
@@ -28,7 +30,7 @@ void MeshNode::setMesh(const bromesh::MeshData& mesh) {
     ensureTangents(mesh_);
     gpuDirty_ = true;
     bvhDirty_ = true;
-    bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
+    recomputeBounds();
     bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
 }
 
@@ -37,8 +39,88 @@ void MeshNode::setMesh(bromesh::MeshData&& mesh) {
     ensureTangents(mesh_);
     gpuDirty_ = true;
     bvhDirty_ = true;
-    bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
+    recomputeBounds();
     bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
+}
+
+void MeshNode::recomputeBounds() {
+    // Union of the base mesh and every LOD level, so frustum/shadow culling
+    // is conservative for whichever level is selected on any given frame.
+    bool any = false;
+    bromath::AABB3 acc{};
+    auto merge = [&](const bromesh::MeshData& m) {
+        if (m.empty()) return;
+        bromath::AABB3 b = bromesh::computeBBox(m);
+        if (!any) {
+            acc = b;
+            any = true;
+            return;
+        }
+        acc.min = {std::min(acc.min.x, b.min.x),
+                   std::min(acc.min.y, b.min.y),
+                   std::min(acc.min.z, b.min.z)};
+        acc.max = {std::max(acc.max.x, b.max.x),
+                   std::max(acc.max.y, b.max.y),
+                   std::max(acc.max.z, b.max.z)};
+    };
+    merge(mesh_);
+    for (auto& e : lods_) merge(e.mesh);
+    bounds_ = any ? acc : bromath::AABB3{};
+}
+
+void MeshNode::setLodMeshes(std::vector<LodLevel> levels) {
+    if (asSkinnedMesh()) {
+        LOG_WARN("setLodMeshes: not supported on skinned meshes (ignored)");
+        return;
+    }
+    // Stage the old chain's GL names for deletion on the GL thread.
+    for (auto& e : lods_) {
+        if (e.vao) deadLodVaos_.push_back(e.vao);
+        if (e.vbo) deadLodBufs_.push_back(e.vbo);
+        if (e.ibo) deadLodBufs_.push_back(e.ibo);
+    }
+    lods_.clear();
+    lods_.reserve(levels.size());
+    for (auto& lv : levels) {
+        LodEntry e;
+        e.mesh = std::move(lv.mesh);
+        ensureTangents(e.mesh);
+        e.maxDist = lv.maxDist;
+        e.hasColors = e.mesh.hasColors();
+        lods_.push_back(std::move(e));
+    }
+    std::stable_sort(lods_.begin(), lods_.end(),
+                     [](const LodEntry& a, const LodEntry& b) {
+                         return a.maxDist < b.maxDist;
+                     });
+    lodSelected_ = 0;
+    if (!lods_.empty()) hasVertexColors_ = lods_[0].hasColors;
+    recomputeBounds();
+    bumpChangeGeneration();  // rendered geometry changed
+}
+
+void MeshNode::selectLodByDistance(float d) {
+    if (lods_.empty()) return;
+    int sel = static_cast<int>(lods_.size()) - 1;   // clamp to coarsest
+    for (int i = 0; i < static_cast<int>(lods_.size()); ++i) {
+        if (d < lods_[i].maxDist) { sel = i; break; }
+    }
+    if (sel != lodSelected_) {
+        lodSelected_ = sel;
+        hasVertexColors_ = lods_[sel].hasColors;
+        bumpChangeGeneration();  // shadow tiles hold the old silhouette
+    }
+}
+
+void MeshNode::flushDeadLodBuffers() {
+    if (!deadLodVaos_.empty()) {
+        glDeleteVertexArrays((GLsizei)deadLodVaos_.size(), deadLodVaos_.data());
+        deadLodVaos_.clear();
+    }
+    if (!deadLodBufs_.empty()) {
+        glDeleteBuffers((GLsizei)deadLodBufs_.size(), deadLodBufs_.data());
+        deadLodBufs_.clear();
+    }
 }
 
 const bromesh::MeshBVH& MeshNode::bvh() const {
@@ -53,6 +135,14 @@ void MeshNode::releaseGL() {
     if (vao_) { glDeleteVertexArrays(1, &vao_); vao_ = 0; }
     if (vbo_) { glDeleteBuffers(1, &vbo_); vbo_ = 0; }
     if (ibo_) { glDeleteBuffers(1, &ibo_); ibo_ = 0; }
+    for (auto& e : lods_) {
+        if (e.vao) { glDeleteVertexArrays(1, &e.vao); e.vao = 0; }
+        if (e.vbo) { glDeleteBuffers(1, &e.vbo); e.vbo = 0; }
+        if (e.ibo) { glDeleteBuffers(1, &e.ibo); e.ibo = 0; }
+        e.indexCount = 0;
+        e.gpuDirty = true;
+    }
+    flushDeadLodBuffers();
     if (texture_) { glDeleteTextures(1, &texture_); texture_ = 0; }
     if (normalTex_) { glDeleteTextures(1, &normalTex_); normalTex_ = 0; }
     if (mrTex_) { glDeleteTextures(1, &mrTex_); mrTex_ = 0; }
@@ -145,23 +235,25 @@ void MeshNode::flushPendingTextures() {
     flushTex(pendingEmissive_, emissiveTex_);
 }
 
-void MeshNode::uploadToGPU() {
-    if (mesh_.empty()) return;
-
+// Interleave a MeshData's attribute streams and upload them into the given
+// buffer set (creating GL names on first use). Shared by the base-mesh
+// upload (uploadToGPU) and per-LOD-level uploads; GL thread only.
+static void uploadInterleavedMesh(const bromesh::MeshData& mesh,
+                                  GLuint& vao, GLuint& vbo, GLuint& ibo,
+                                  GLsizei& indexCount) {
     // Create GL objects if needed
-    if (!vao_) glGenVertexArrays(1, &vao_);
-    if (!vbo_) glGenBuffers(1, &vbo_);
-    if (!ibo_) glGenBuffers(1, &ibo_);
+    if (!vao) glGenVertexArrays(1, &vao);
+    if (!vbo) glGenBuffers(1, &vbo);
+    if (!ibo) glGenBuffers(1, &ibo);
 
-    glBindVertexArray(vao_);
+    glBindVertexArray(vao);
 
     // Interleave: pos(3) + normal(3) + uv(2) + color(4) + tangent(4)
-    size_t vertCount = mesh_.vertexCount();
-    bool hasNormals = mesh_.hasNormals();
-    bool hasUVs = mesh_.hasUVs();
-    bool hasColors = mesh_.hasColors();
-    bool hasTangents = mesh_.hasTangents();
-    hasVertexColors_ = hasColors;
+    size_t vertCount = mesh.vertexCount();
+    bool hasNormals = mesh.hasNormals();
+    bool hasUVs = mesh.hasUVs();
+    bool hasColors = mesh.hasColors();
+    bool hasTangents = mesh.hasTangents();
 
     size_t stride = 3; // position always
     if (hasNormals) stride += 3;
@@ -172,37 +264,37 @@ void MeshNode::uploadToGPU() {
     std::vector<float> interleaved(vertCount * stride);
     for (size_t i = 0; i < vertCount; i++) {
         size_t off = i * stride;
-        interleaved[off + 0] = mesh_.positions[i * 3 + 0];
-        interleaved[off + 1] = mesh_.positions[i * 3 + 1];
-        interleaved[off + 2] = mesh_.positions[i * 3 + 2];
+        interleaved[off + 0] = mesh.positions[i * 3 + 0];
+        interleaved[off + 1] = mesh.positions[i * 3 + 1];
+        interleaved[off + 2] = mesh.positions[i * 3 + 2];
         size_t at = 3;
         if (hasNormals) {
-            interleaved[off + at + 0] = mesh_.normals[i * 3 + 0];
-            interleaved[off + at + 1] = mesh_.normals[i * 3 + 1];
-            interleaved[off + at + 2] = mesh_.normals[i * 3 + 2];
+            interleaved[off + at + 0] = mesh.normals[i * 3 + 0];
+            interleaved[off + at + 1] = mesh.normals[i * 3 + 1];
+            interleaved[off + at + 2] = mesh.normals[i * 3 + 2];
             at += 3;
         }
         if (hasUVs) {
-            interleaved[off + at + 0] = mesh_.uvs[i * 2 + 0];
-            interleaved[off + at + 1] = mesh_.uvs[i * 2 + 1];
+            interleaved[off + at + 0] = mesh.uvs[i * 2 + 0];
+            interleaved[off + at + 1] = mesh.uvs[i * 2 + 1];
             at += 2;
         }
         if (hasColors) {
-            interleaved[off + at + 0] = mesh_.colors[i * 4 + 0];
-            interleaved[off + at + 1] = mesh_.colors[i * 4 + 1];
-            interleaved[off + at + 2] = mesh_.colors[i * 4 + 2];
-            interleaved[off + at + 3] = mesh_.colors[i * 4 + 3];
+            interleaved[off + at + 0] = mesh.colors[i * 4 + 0];
+            interleaved[off + at + 1] = mesh.colors[i * 4 + 1];
+            interleaved[off + at + 2] = mesh.colors[i * 4 + 2];
+            interleaved[off + at + 3] = mesh.colors[i * 4 + 3];
             at += 4;
         }
         if (hasTangents) {
-            interleaved[off + at + 0] = mesh_.tangents[i * 4 + 0];
-            interleaved[off + at + 1] = mesh_.tangents[i * 4 + 1];
-            interleaved[off + at + 2] = mesh_.tangents[i * 4 + 2];
-            interleaved[off + at + 3] = mesh_.tangents[i * 4 + 3];
+            interleaved[off + at + 0] = mesh.tangents[i * 4 + 0];
+            interleaved[off + at + 1] = mesh.tangents[i * 4 + 1];
+            interleaved[off + at + 2] = mesh.tangents[i * 4 + 2];
+            interleaved[off + at + 3] = mesh.tangents[i * 4 + 3];
         }
     }
 
-    glBindBuffer(GL_ARRAY_BUFFER, vbo_);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER,
                  interleaved.size() * sizeof(float),
                  interleaved.data(), GL_STATIC_DRAW);
@@ -253,15 +345,20 @@ void MeshNode::uploadToGPU() {
     }
 
     // Index buffer
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 mesh_.indices.size() * sizeof(uint32_t),
-                 mesh_.indices.data(), GL_STATIC_DRAW);
-    indexCount_ = (GLsizei)mesh_.indices.size();
+                 mesh.indices.size() * sizeof(uint32_t),
+                 mesh.indices.data(), GL_STATIC_DRAW);
+    indexCount = (GLsizei)mesh.indices.size();
 
     glBindVertexArray(0);
-    gpuDirty_ = false;
+}
 
+void MeshNode::uploadToGPU() {
+    if (mesh_.empty()) return;
+    uploadInterleavedMesh(mesh_, vao_, vbo_, ibo_, indexCount_);
+    hasVertexColors_ = mesh_.hasColors();
+    gpuDirty_ = false;
     flushPendingTextures();
 }
 
@@ -270,6 +367,32 @@ void MeshNode::onRender(SceneGraph& graph) {
 }
 
 bool MeshNode::drawRaw() {
+    flushDeadLodBuffers();   // GL thread — replaced LOD chains free here
+
+    // LOD chain: the selected level (SceneGraph's per-frame distance pass)
+    // replaces the base mesh. Every caller — color pass and depth-only
+    // shadow pass alike — goes through drawRaw, so all passes draw the SAME
+    // level each frame by construction.
+    if (!lods_.empty()) {
+        LodEntry& e = lods_[(size_t)lodSelected_];
+        if (e.mesh.empty()) return false;
+        if (e.gpuDirty) {
+            uploadInterleavedMesh(e.mesh, e.vao, e.vbo, e.ibo, e.indexCount);
+            e.gpuDirty = false;
+        }
+        flushPendingTextures();
+        if (!e.vao || e.indexCount == 0) return false;
+        glBindVertexArray(e.vao);
+        if (drawMode_ == DrawMode::Lines) {
+            glLineWidth(lineWidth_);
+            glDrawElements(GL_LINES, e.indexCount, GL_UNSIGNED_INT, nullptr);
+        } else {
+            glDrawElements(GL_TRIANGLES, e.indexCount, GL_UNSIGNED_INT, nullptr);
+        }
+        glBindVertexArray(0);
+        return true;
+    }
+
     if (mesh_.empty()) return false;
     if (gpuDirty_) uploadToGPU();
     else flushPendingTextures();  // texture-only changes after geometry upload

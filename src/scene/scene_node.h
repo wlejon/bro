@@ -48,6 +48,58 @@ public:
         if (v != visible_) { visible_ = v; ++changeGeneration_; }
     }
 
+    // --- Visibility range (camera-distance gate) ---
+    // Optional world-space distance window: while set, the node only renders
+    // when begin <= d < end, where d is the distance from the camera eye to
+    // the node's world origin (worldMatrix translation). `margin` adds
+    // hysteresis around both edges — once shown the node stays shown until d
+    // leaves [begin - margin, end + margin); once hidden it stays hidden
+    // until d enters [begin + margin, end - margin) — so a camera hovering
+    // exactly on a boundary doesn't flicker. margin 0 (default) is a hard
+    // switch. Evaluated once per frame by SceneGraph::updateVisibilityGates()
+    // (render-time only: raycast/picking of 3D geometry is NOT gated).
+    //
+    // The gate NEVER mutates the user-visible `visible` flag — the two are
+    // independent and every render walk checks renderVisible(), the AND of
+    // both. Like `visible`, a closed gate prunes the walk at this node, so
+    // the subtree is gated with it (children with their own ranges evaluate
+    // them relative to their own world origins while the parent is shown).
+    bool hasVisibilityRange() const { return hasVisibilityRange_; }
+    void setVisibilityRange(float begin, float end, float margin = 0.0f) {
+        hasVisibilityRange_ = true;
+        rangeBegin_ = begin;
+        rangeEnd_ = end;
+        rangeMargin_ = margin < 0.0f ? 0.0f : margin;
+        // Re-evaluated (with hysteresis from the current state) next frame.
+    }
+    void clearVisibilityRange() {
+        hasVisibilityRange_ = false;
+        rangeGateOpen_ = true;
+    }
+    float visibilityRangeBegin() const { return rangeBegin_; }
+    float visibilityRangeEnd() const { return rangeEnd_; }
+    float visibilityRangeMargin() const { return rangeMargin_; }
+
+    /// Current distance-gate state (true when no range is set).
+    bool rangeGateOpen() const { return rangeGateOpen_; }
+
+    /// What every render/cull path checks: the user flag AND the distance
+    /// gate. Both are required; neither writes the other.
+    bool renderVisible() const { return visible_ && rangeGateOpen_; }
+
+    /// Per-frame gate evaluation with hysteresis (see setVisibilityRange).
+    /// Called by SceneGraph::updateVisibilityGates() with this frame's camera
+    /// distance; no-op when no range is set.
+    void updateRangeGate(float d) {
+        if (!hasVisibilityRange_) return;
+        const float m = rangeMargin_;
+        if (rangeGateOpen_) {
+            if (d < rangeBegin_ - m || d >= rangeEnd_ + m) rangeGateOpen_ = false;
+        } else {
+            if (d >= rangeBegin_ + m && d < rangeEnd_ - m) rangeGateOpen_ = true;
+        }
+    }
+
     // --- Change generation ---
     /// Monotonic per-node mutation counter. Bumped by every transform set
     /// (markDirty, including parent-transform propagation), visibility
@@ -131,6 +183,14 @@ private:
     bromath::Vec3 scale_{1, 1, 1};
     bool visible_ = true;
     uint64_t changeGeneration_ = 1;
+
+    // Visibility-range gate (see setVisibilityRange). rangeGateOpen_ is the
+    // hysteresis state updated once per frame; true whenever no range is set.
+    bool hasVisibilityRange_ = false;
+    bool rangeGateOpen_ = true;
+    float rangeBegin_ = 0.0f;
+    float rangeEnd_ = 0.0f;
+    float rangeMargin_ = 0.0f;
 
     SceneNode* parent_ = nullptr;
     std::vector<SceneNode*> children_;

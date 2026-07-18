@@ -359,6 +359,52 @@ JSValue js_node_updateMesh(JSContext* ctx, JSValueConst this_val, int argc, JSVa
     return JS_DupValue(ctx, this_val);
 }
 
+// setLodMeshes([{mesh, maxDist}, ...]) — install a discrete LOD chain on a
+// plain MeshNode (skinned/instanced are rejected — see scene-api.js). Each
+// entry's `mesh` must be a Mesh object; `maxDist` is the camera distance the
+// level draws up to. An empty array clears the chain (back to the base mesh).
+JSValue js_node_setLodMeshes(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Mesh)
+        return JS_ThrowTypeError(ctx, "setLodMeshes: not a MeshNode");
+    auto* meshNode = static_cast<scene::MeshNode*>(w->node());
+    if (meshNode->asSkinnedMesh())
+        return JS_ThrowTypeError(ctx, "setLodMeshes: not supported on skinned meshes");
+    if (argc < 1 || !JS_IsArray(argv[0]))
+        return JS_ThrowTypeError(ctx, "setLodMeshes: argument must be an array of {mesh, maxDist}");
+
+    JSValue lenVal = JS_GetPropertyStr(ctx, argv[0], "length");
+    uint32_t len = 0;
+    JS_ToUint32(ctx, &len, lenVal);
+    JS_FreeValue(ctx, lenVal);
+
+    std::vector<scene::MeshNode::LodLevel> levels;
+    levels.reserve(len);
+    for (uint32_t i = 0; i < len; ++i) {
+        JSValue entry = JS_GetPropertyUint32(ctx, argv[0], i);
+        if (!JS_IsObject(entry)) {
+            JS_FreeValue(ctx, entry);
+            return JS_ThrowTypeError(ctx, "setLodMeshes: entry %u is not an object", i);
+        }
+        JSValue meshVal = JS_GetPropertyStr(ctx, entry, "mesh");
+        bromesh::MeshData* md = MeshBindings::getMeshData(ctx, meshVal);
+        if (!md) {
+            JS_FreeValue(ctx, meshVal);
+            JS_FreeValue(ctx, entry);
+            return JS_ThrowTypeError(ctx, "setLodMeshes: entry %u has no Mesh in `mesh`", i);
+        }
+        scene::MeshNode::LodLevel lv;
+        lv.mesh = *md;   // copy — the JS Mesh stays usable
+        lv.maxDist = (float)qjsbind::get_prop_number(ctx, entry, "maxDist", 1e30);
+        JS_FreeValue(ctx, meshVal);
+        JS_FreeValue(ctx, entry);
+        levels.push_back(std::move(lv));
+    }
+
+    meshNode->setLodMeshes(std::move(levels));
+    return JS_DupValue(ctx, this_val);
+}
+
 // --- Helper: read a typed array property into a vector<float> or vector<uint32_t> ---
 static bool jsReadFloatArray(JSContext* ctx, JSValueConst obj, const char* prop,
                              std::vector<float>& out) {

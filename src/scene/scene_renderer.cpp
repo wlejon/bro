@@ -306,7 +306,7 @@ bool SceneRenderer::nodeWorldBounds(SceneNode* n, bromath::AABB3& out) const {
     switch (n->type()) {
     case SceneNode::Type::Mesh: {
         auto* m = static_cast<MeshNode*>(n);
-        if (m->mesh().empty()) return false;
+        if (!m->hasDrawableMesh()) return false;
         bromath::AABB3 local = m->localBounds();
         auto* sm = m->asSkinnedMesh();
         if (sm && sm->skinReady()) local = sm->posedLocalBounds();
@@ -376,7 +376,10 @@ void SceneRenderer::render3D() {
     bool hasBillboardNodes = false;
     bool hasLightIcons = false;
     for (auto& [id, node] : graph_.nodes_) {
-        if (!node->visible()) continue;
+        // renderVisible = user `visible` flag AND the per-frame visibility-
+        // range distance gate (SceneGraph::updateVisibilityGates) — every
+        // pass gather in the renderer checks this combined predicate.
+        if (!node->renderVisible()) continue;
         if (node->type() == SceneNode::Type::Mesh) hasMeshNodes = true;
         else if (node->type() == SceneNode::Type::InstancedMesh) hasInstancedMeshNodes = true;
         else if (node->type() == SceneNode::Type::GaussianSplat) hasSplatNodes = true;
@@ -506,7 +509,7 @@ void SceneRenderer::render3D() {
                 uploadLights(activeLights, meshLocs_);
 
                 std::function<void(SceneNode*)> walkMesh = [&](SceneNode* n) {
-                    if (!n->visible()) return;
+                    if (!n->renderVisible()) return;
                     if (n->type() == SceneNode::Type::Mesh) {
                         auto* m = static_cast<MeshNode*>(n);
                         if (cameraCulled(m)) {
@@ -677,7 +680,7 @@ void SceneRenderer::render3D() {
                     // shader nodes are deferred and grouped by program key.
                     std::vector<InstancedMeshNode*> customInstanced;
                     std::function<void(SceneNode*)> walkInst = [&](SceneNode* n) {
-                        if (!n->visible()) return;
+                        if (!n->renderVisible()) return;
                         if (n->type() == SceneNode::Type::InstancedMesh) {
                             auto* m = static_cast<InstancedMeshNode*>(n);
                             // Whole-node test against the world bounds of all
@@ -931,7 +934,7 @@ void SceneRenderer::render3D() {
                 glBindVertexArray(bbVAO_);
 
                 std::function<void(SceneNode*)> walkBB = [&](SceneNode* n) {
-                    if (!n->visible()) return;
+                    if (!n->renderVisible()) return;
                     if (n->hasWorldAnchor()) {
                         renderBillboardNode(n);
                     }
@@ -943,7 +946,7 @@ void SceneRenderer::render3D() {
                 // pass so they occlude correctly against geometry.
                 if (hasLightIcons) {
                     for (auto& [id, node] : graph_.nodes_) {
-                        if (!node->visible()) continue;
+                        if (!node->renderVisible()) continue;
                         if (node->type() != SceneNode::Type::Light) continue;
                         renderLightIcon(static_cast<LightNode*>(node.get()));
                     }

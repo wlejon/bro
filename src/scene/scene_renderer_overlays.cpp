@@ -78,7 +78,7 @@ void SceneRenderer::renderGaussianSplatNodes() {
     glDisable(GL_CULL_FACE);
 
     for (auto& [id, node] : graph_.nodes_) {
-        if (!node->visible()) continue;
+        if (!node->renderVisible()) continue;
         if (node->type() != SceneNode::Type::GaussianSplat) continue;
         if (cameraCulled(node.get())) {
             cullStats_.splatCulled++;

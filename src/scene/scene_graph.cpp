@@ -204,6 +204,26 @@ void SceneGraph::applyActiveCamera() {
     }
 }
 
+void SceneGraph::updateVisibilityGates() {
+    for (auto& [id, node] : nodes_) {
+        SceneNode* n = node.get();
+        MeshNode* lodMesh = nullptr;
+        if (n->type() == SceneNode::Type::Mesh) {
+            auto* m = static_cast<MeshNode*>(n);
+            if (m->hasLodChain()) lodMesh = m;
+        }
+        if (!n->hasVisibilityRange() && !lodMesh) continue;
+        // One distance per node per frame: camera eye -> world origin.
+        const bromath::Mat4& W = n->worldMatrix();
+        const float dx = W.at(0, 3) - cameraEye_.x;
+        const float dy = W.at(1, 3) - cameraEye_.y;
+        const float dz = W.at(2, 3) - cameraEye_.z;
+        const float d = std::sqrt(dx * dx + dy * dy + dz * dz);
+        if (n->hasVisibilityRange()) n->updateRangeGate(d);
+        if (lodMesh) lodMesh->selectLodByDistance(d);
+    }
+}
+
 void SceneGraph::tickAnimations(float dtSec) {
     if (dtSec <= 0.0f) return;
     // Tick the node table (independent of tree visibility, so off-screen /
@@ -465,8 +485,10 @@ void SceneGraph::syncAgents(float dt) {
 }
 void SceneGraph::render() {
     // Re-derive the view from the active camera node (a JS transform write
-    // between tick and render must land this frame).
+    // between tick and render must land this frame), then run the per-frame
+    // camera-distance pass that drives visibility-range gates + LOD chains.
     applyActiveCamera();
+    updateVisibilityGates();
 
     // 2D render path (CanvasScene)
     if (canvasScene_) {
@@ -487,7 +509,7 @@ void SceneGraph::render() {
     // World-anchored nodes already rendered into the FBO above.
     {
         std::function<void(SceneNode*)> walk2D = [&](SceneNode* n) {
-            if (!n->visible()) return;
+            if (!n->renderVisible()) return;
             if (n->type() != SceneNode::Type::Mesh &&
                 n->type() != SceneNode::Type::Html &&
                 !n->hasWorldAnchor()) {
@@ -580,7 +602,9 @@ bool SceneGraph::pickHtmlNode(float canvasLocalX, float canvasLocalY,
     for (auto& [id, node] : nodes_) {
         if (!node) continue;
         if (node->type() != SceneNode::Type::Html) continue;
-        if (!node->visible()) continue;
+        // renderVisible: a range-gated-out billboard isn't drawn, so it must
+        // not catch clicks either.
+        if (!node->renderVisible()) continue;
         if (!node->hasWorldAnchor()) continue;
 
         auto* hn = static_cast<HtmlNode*>(node.get());

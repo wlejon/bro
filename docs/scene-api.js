@@ -1082,6 +1082,29 @@ class SceneNode {
   get visible() {}
   set visible(value) {}
 
+  /**
+   * Optional camera-distance window (Godot visibility_range analog), on ANY
+   * node type: `{begin, end, margin}` or null (default) to disable. The node
+   * renders while `begin <= d < end`, where d is the world-space distance
+   * from the camera eye to the node's world origin, evaluated once per
+   * frame. `margin` (default 0 = hard switch) adds hysteresis: once shown
+   * the node stays shown until d leaves [begin - margin, end + margin), once
+   * hidden it stays hidden until d enters [begin + margin, end - margin) —
+   * no popping when the camera hovers on a boundary.
+   *
+   * The gate is independent of `visible` and never writes it — both must
+   * pass for the node to render. Like `visible`, a closed gate prunes the
+   * subtree. Render-time only: scene.raycast() ignores it. A gated-out
+   * light stops contributing; a gated-out shadow caster stops casting.
+   *
+   * @example
+   *   // Swap a detailed prop for an imposter beyond 40 units:
+   *   detail.visibilityRange = { begin: 0, end: 40, margin: 2 };
+   *   imposter.visibilityRange = { begin: 40, end: 1e30, margin: 2 };
+   */
+  get visibilityRange() {}
+  set visibilityRange(value) {}
+
   /** Parent SceneNode, or null if this is the root or a detached node. */
   get parent() {}
 
@@ -1700,6 +1723,43 @@ class SceneNode {
   /** Emissive intensity scalar (MeshNode only). */
   get emissive() {}
   set emissive(value) {}
+
+  /**
+   * Install a discrete LOD chain (plain MeshNode only). Each frame the
+   * renderer picks the first level whose `maxDist` exceeds the camera
+   * distance (measured to the node's world origin, once per frame); beyond
+   * the last maxDist the coarsest level keeps drawing — combine with
+   * `visibilityRange` to cull entirely. The shadow pass always draws the
+   * SAME selected level as the color pass, so a caster can never shadow
+   * with a different silhouette than it renders.
+   *
+   * A non-empty chain replaces the base mesh for RENDERING only: the base
+   * mesh (createMesh's `mesh` / updateMesh) remains the raycast/picking
+   * source, so set it to the highest-detail level when the node must stay
+   * pickable. Culling bounds are the union of all levels, so switches never
+   * pop. Pass an empty array to clear (back to the base mesh). Not
+   * supported on SkinnedMeshNode or InstancedMeshNode (throws; per-instance
+   * LOD is a separate feature).
+   *
+   * @param {Array<{mesh: Mesh, maxDist: number}>} levels
+   * @returns {SceneNode} this
+   * @example
+   *   const node = scene.createMesh({ mesh: hiMesh, color: 'gray' });
+   *   node.setLodMeshes([
+   *     { mesh: hiMesh,  maxDist: 20 },
+   *     { mesh: midMesh, maxDist: 60 },
+   *     { mesh: loMesh,  maxDist: 1e30 },
+   *   ]);
+   */
+  setLodMeshes(levels) {}
+
+  /** Selected LOD chain index from the most recent rendered frame (MeshNode
+   *  with a chain; undefined otherwise). Read-only. */
+  get lodLevel() {}
+
+  /** Number of LOD chain levels (MeshNode only; 0 = no chain). Read-only. */
+  get lodCount() {}
+
 
   // --- LightNode-only -------------------------------------------------------
 

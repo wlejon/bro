@@ -120,7 +120,7 @@ void SceneRenderer::renderParticles3DNodes() {
 
     bool wantSoft = false;
     for (auto& [id, node] : graph_.nodes_) {
-        if (!node->visible()) continue;
+        if (!node->renderVisible()) continue;
         if (node->type() != SceneNode::Type::Particles3D) continue;
         auto* p = static_cast<Particles3DNode*>(node.get());
         if (p->liveCount() > 0 && p->softness() > 0.0f) { wantSoft = true; break; }
@@ -185,7 +185,7 @@ void SceneRenderer::renderParticles3DNodes() {
     static const Mat4 kIdentity = bromath::midentity();
 
     for (auto& [id, node] : graph_.nodes_) {
-        if (!node->visible()) continue;
+        if (!node->renderVisible()) continue;
         if (node->type() != SceneNode::Type::Particles3D) continue;
         auto* p = static_cast<Particles3DNode*>(node.get());
         if (p->liveCount() <= 0) continue;

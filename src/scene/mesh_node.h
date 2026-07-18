@@ -71,6 +71,47 @@ public:
     /// to avoid O(N) ray-triangle tests on dense meshes (terrain chunks etc.).
     const bromesh::MeshBVH& bvh() const;
 
+    // --- Discrete LOD chain (Godot mesh-LOD analog) ---
+    // A non-empty chain REPLACES the base mesh for rendering: each frame the
+    // level whose maxDist first exceeds the camera distance draws (levels are
+    // kept sorted by maxDist ascending; beyond the last maxDist the coarsest
+    // level keeps drawing — pair with setVisibilityRange to cull entirely).
+    // Distance is measured to the node's world origin, selected once per
+    // frame by SceneGraph::updateVisibilityGates(), and shared by EVERY pass
+    // — color and shadow draw the same selected level, so a caster can never
+    // shadow with a different silhouette than it renders with.
+    //
+    // The base mesh (setMesh) stays the raycast/BVH source — set it to the
+    // highest-detail level if the node must be pickable. Culling bounds are
+    // the union of all levels (+ base mesh), so a level switch never pops.
+    // Not supported on SkinnedMeshNode (setLodMeshes warns and ignores;
+    // per-instance LOD for InstancedMeshNode is likewise out of scope).
+
+    struct LodLevel {
+        bromesh::MeshData mesh;
+        float maxDist = 0.0f;   // level draws while cameraDist < maxDist
+    };
+
+    /// Install (or, with an empty vector, clear) the LOD chain. Copies are
+    /// taken by move; tangents are auto-generated per level like setMesh.
+    void setLodMeshes(std::vector<LodLevel> levels);
+
+    bool hasLodChain() const { return !lods_.empty(); }
+    int lodCount() const { return static_cast<int>(lods_.size()); }
+
+    /// Currently selected chain index (0 when the chain is empty).
+    int selectedLod() const { return lodSelected_; }
+
+    /// Per-frame selection from camera distance (SceneGraph's distance
+    /// pass). Bumps the change generation on a switch so shadow tiles
+    /// holding the old level's silhouette re-render.
+    void selectLodByDistance(float d);
+
+    /// True when drawRaw can emit geometry: a non-empty base mesh or a LOD
+    /// chain. Pass gathers use this instead of mesh().empty() so chain-only
+    /// nodes aren't skipped.
+    bool hasDrawableMesh() const { return !mesh_.empty() || !lods_.empty(); }
+
     // --- Material ---
 
     void setColor(float r, float g, float b, float a = 1.0f) {
@@ -318,14 +359,38 @@ protected:
     GLuint vao_ = 0;
 
 private:
+    // Recompute bounds_ from the base mesh + every LOD level (union), so
+    // culling stays valid across level switches.
+    void recomputeBounds();
+
     bromesh::MeshData mesh_;
     bool gpuDirty_ = false;
 
     // Cached bounds + BVH. Both are invalidated (bvhDirty_ = true, bounds_
-    // recomputed) on every setMesh call.
+    // recomputed) on every setMesh call. The BVH covers the BASE mesh only;
+    // bounds_ additionally unions the LOD chain.
     bromath::AABB3 bounds_;
     mutable bromesh::MeshBVH bvh_;
     mutable bool bvhDirty_ = true;
+
+    // LOD chain (sorted by maxDist ascending). Each level owns its own GL
+    // buffer set, uploaded lazily on first draw; replaced levels stage their
+    // GL names into the dead lists, deleted at the next draw / releaseGL on
+    // the GL thread (setters may run without a context current, matching the
+    // staged-texture pattern above).
+    struct LodEntry {
+        bromesh::MeshData mesh;
+        float maxDist = 0.0f;
+        GLuint vao = 0, vbo = 0, ibo = 0;
+        GLsizei indexCount = 0;
+        bool gpuDirty = true;
+        bool hasColors = false;
+    };
+    std::vector<LodEntry> lods_;
+    int lodSelected_ = 0;
+    std::vector<GLuint> deadLodVaos_;
+    std::vector<GLuint> deadLodBufs_;
+    void flushDeadLodBuffers();   // GL thread
 
     // GL resources
     GLuint vbo_ = 0;

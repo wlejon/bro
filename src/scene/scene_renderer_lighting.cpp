@@ -25,7 +25,9 @@ using bromath::Mat4;
 void SceneRenderer::collectLights(std::vector<LightNode*>& out) const {
     out.clear();
     for (auto& [id, node] : graph_.nodes_) {
-        if (!node->visible()) continue;
+        // renderVisible: a range-gated light stops contributing, same as
+        // toggling `visible` off.
+        if (!node->renderVisible()) continue;
         if (node->type() != SceneNode::Type::Light) continue;
         // Include only nodes actually attached to the tree (parent chain ends
         // at root_). Detached lights created but never added shouldn't light.
