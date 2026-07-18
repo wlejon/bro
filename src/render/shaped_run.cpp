@@ -24,6 +24,69 @@ namespace bro::render {
 // ShapedRun
 // ===========================================================================
 
+void ShapedRun::reorderRunsVisually() {
+    hasRtl_ = false;
+    for (const auto& r : runs_) {
+        if (r.bidiLevel & 1) { hasRtl_ = true; break; }
+    }
+    // With no odd level anywhere, L2 has nothing to reverse — it reverses from
+    // the highest level down to the lowest ODD one — so the answer is the
+    // identity and there is no reason to ask for it.
+    if (!hasRtl_ || runs_.size() < 2) return;
+
+    std::vector<bidi::Level> levels;
+    levels.reserve(runs_.size());
+    for (const auto& r : runs_) levels.push_back(r.bidiLevel);
+
+    const std::vector<int32_t> order = bidi::reorderVisual(levels);
+    if (order.size() != runs_.size()) return;
+    bool identity = true;
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        if (order[i] != static_cast<int32_t>(i)) { identity = false; break; }
+    }
+    if (identity) return;
+
+    // Rebuild the flat arrays in visual run order, re-running the pen so each
+    // run starts where the previous one ended. A run's glyph positions are
+    // relative to its own origin (its first glyph sits at the run's pen), so
+    // rebasing is a single subtract-then-add per glyph.
+    const std::size_t n = glyphs_.size();
+    std::vector<SkGlyphID> g;   g.reserve(n);
+    std::vector<SkPoint>   p;   p.reserve(n);
+    std::vector<SkPoint>   o;   o.reserve(n);
+    std::vector<float>     a;   a.reserve(n);
+    std::vector<uint32_t>  c;   c.reserve(n);
+    std::vector<GlyphRun>  nr;  nr.reserve(runs_.size());
+
+    float pen = 0.0f;
+    for (const int32_t logical : order) {
+        if (logical < 0 || static_cast<std::size_t>(logical) >= runs_.size()) continue;
+        const GlyphRun& r = runs_[static_cast<std::size_t>(logical)];
+        GlyphRun placed = r;
+        placed.first = g.size();
+        const float origin = r.count ? positions_[r.first].fX : 0.0f;
+        float advance = 0.0f;
+        for (std::size_t k = 0; k < r.count; ++k) {
+            const std::size_t s = r.first + k;
+            g.push_back(glyphs_[s]);
+            p.push_back(SkPoint{positions_[s].fX - origin + pen, positions_[s].fY});
+            o.push_back(offsets_[s]);
+            a.push_back(advances_[s]);
+            c.push_back(glyphClusters_[s]);
+            advance += advances_[s];
+        }
+        nr.push_back(placed);
+        pen += advance;
+    }
+
+    glyphs_        = std::move(g);
+    positions_     = std::move(p);
+    offsets_       = std::move(o);
+    advances_      = std::move(a);
+    glyphClusters_ = std::move(c);
+    runs_          = std::move(nr);
+}
+
 void ShapedRun::finalize() {
     clusters_.clear();
     bounds_ = SkRect::MakeEmpty();
@@ -335,6 +398,7 @@ const ShapedRun* TextShapingEngine::shape(std::string_view utf8,
     auto run = std::make_unique<ShapedRun>();
     ShapedRun::Builder b(*run);
     b.setText(utf8);
+    b.setBaseDirection(direction);
 
     bool shaped = false;
 #if BRO_WITH_TEXT_SHAPING
@@ -421,8 +485,14 @@ void TextShapingEngine::buildUnshaped(ShapedRun& run, ShapedRun::Builder& b,
                 default: cp = ((c0 & 0x07) << 18) | ((utf8[i + 1] & 0x3F) << 12) |
                               ((utf8[i + 2] & 0x3F) << 6) | (utf8[i + 3] & 0x3F); break;
             }
-            glyphs.push_back(tr.font.unicharToGlyph(cp));
-            clusters.push_back(static_cast<uint32_t>(i));
+            // Bidi formatting characters (LRM/RLE/PDF/RLI/...) drive level
+            // resolution and are never drawn. HarfBuzz drops them for us as
+            // default-ignorables; this path has to be told, or a font that
+            // does not map them contributes a .notdef box per control.
+            if (!bidi::isFormattingChar(static_cast<uint32_t>(cp))) {
+                glyphs.push_back(tr.font.unicharToGlyph(cp));
+                clusters.push_back(static_cast<uint32_t>(i));
+            }
             i += n;
         }
         if (glyphs.empty()) continue;

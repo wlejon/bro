@@ -39,6 +39,8 @@
 #include <include/core/SkRefCnt.h>
 #include <include/core/SkTextBlob.h>
 
+#include "render/bidi.h"
+
 class SkShaper;
 class SkUnicode;
 
@@ -46,7 +48,8 @@ namespace bro::render {
 
 class FontFallbackCache;
 
-enum class TextDirection : uint8_t { LTR, RTL };
+// TextDirection lives in bidi.h — it is the base direction a paragraph is
+// resolved against, not a property of the shaper.
 
 // CSS letter-spacing / word-spacing. Deliberately NOT part of the shaping
 // cache key: spacing does not change which glyphs the shaper produces, only
@@ -93,6 +96,13 @@ public:
     bool        empty()      const { return clusters_.empty(); }
     std::size_t glyphCount() const { return glyphs_.size(); }
     std::string_view text()  const { return text_; }
+
+    // The base direction this run was shaped against, and whether anything in
+    // it resolved to a right-to-left level. `hasRtl` is false for the
+    // overwhelming majority of runs and is what lets callers skip every
+    // bidi-aware branch below.
+    TextDirection baseDirection() const { return baseDirection_; }
+    bool          hasRtl()        const { return hasRtl_; }
 
     // Total advance width. With spacing applied, letter-spacing lands between
     // clusters (n-1 gaps, never trailing) so the drawn extent matches the
@@ -162,7 +172,12 @@ public:
         std::vector<SkPoint>&   offsets()   { return r_.offsets_; }
         std::vector<float>&     advances()  { return r_.advances_; }
         std::vector<uint32_t>&  clusters()  { return r_.glyphClusters_; }
-        void finish() { r_.finalize(); }
+        void setBaseDirection(TextDirection d) { r_.baseDirection_ = d; }
+        // Rule L2, then derive the cluster table. Reordering must happen
+        // FIRST: finalize() groups clusters by walking the glyph arrays in
+        // storage order and calling that visual order, which is only true once
+        // the runs have been permuted into it.
+        void finish() { r_.reorderRunsVisually(); r_.finalize(); }
 
     private:
         ShapedRun& r_;
@@ -198,6 +213,18 @@ private:
     template <typename Fn>
     void forEachClusterPen(Spacing spacing, Fn&& fn) const;
 
+    // Rule L2 over this run's glyph runs. The shaper emits runs in LOGICAL
+    // order (SkShapers::HB::ShapeDontWrapOrReorder is named for exactly this)
+    // and lays them out left to right, so an RTL sequence spanning more than
+    // one run — two scripts, two fonts, a number inside Arabic — comes out
+    // backwards until this permutes them and re-runs the pen.
+    //
+    // Runs here are finer than level runs (they also split on font and script),
+    // which is harmless: L2 only reverses contiguous spans of equal-or-higher
+    // level, so splitting a level run into adjacent equal-level entries gives
+    // the same result as reordering the unsplit run.
+    void reorderRunsVisually();
+
     // Finish construction: derive cluster table + bounds from the flat glyph
     // arrays the shaping callback filled in.
     void finalize();
@@ -212,6 +239,8 @@ private:
     std::vector<Cluster>   clusters_;
     SkRect                 bounds_ = SkRect::MakeEmpty();
     float                  naturalWidth_ = 0.0f;
+    TextDirection          baseDirection_ = TextDirection::LTR;
+    bool                   hasRtl_ = false;
 };
 
 // -----------------------------------------------------------------------------

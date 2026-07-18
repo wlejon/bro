@@ -1,12 +1,14 @@
 #include "js/text_bindings.h"
 
 #include "engine/engine.h"
+#include "render/bidi.h"
 #include "render/renderer.h"
 #include "render/shaped_run.h"
 
 #include <qjsbind/qjsbind.h>
 
 #include <string>
+#include <vector>
 
 namespace bro::js {
 
@@ -142,6 +144,83 @@ JSValue js_clusterRange(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     return out;
 }
 
+// ---------------------------------------------------------------------------
+// Bidi (UAX #9). Exposed so the Unicode conformance corpus — BidiTest.txt and
+// BidiCharacterTest.txt, ~500k cases between them — can be run as a real test
+// against the engine's own resolver rather than against a reimplementation of
+// it in the test.
+// ---------------------------------------------------------------------------
+
+// bro.text.bidi(text, base) -> { paragraphLevel, levels, runs }
+//   base: "ltr" | "rtl" | "auto" (default "auto" — UAX #9 P2/P3)
+//   levels: one entry PER CODEPOINT (the engine works in bytes; per-codepoint
+//           is what the corpus and every JS caller want)
+JSValue js_bidi(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    const std::string text = qjsbind::Convert<std::string>::from_js(ctx, argv[0]);
+
+    render::bidi::BaseDirection base = render::bidi::BaseDirection::Auto;
+    if (argc > 1 && JS_IsString(argv[1])) {
+        const std::string b = qjsbind::Convert<std::string>::from_js(ctx, argv[1]);
+        if (b == "ltr") base = render::bidi::BaseDirection::LTR;
+        else if (b == "rtl") base = render::bidi::BaseDirection::RTL;
+    }
+    render::bidi::Override ov = render::bidi::Override::Normal;
+    if (argc > 2 && JS_ToBool(ctx, argv[2])) ov = render::bidi::Override::Override;
+
+    const render::bidi::Paragraph para =
+        render::bidi::resolveParagraph(text, base, ov);
+
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "paragraphLevel",
+                      JS_NewInt32(ctx, para.paragraphLevel));
+    JS_SetPropertyStr(ctx, out, "uniform", JS_NewBool(ctx, para.uniform));
+
+    // Per-codepoint levels: take the level at each UTF-8 lead byte.
+    JSValue levels = JS_NewArray(ctx);
+    uint32_t li = 0;
+    for (std::size_t i = 0; i < text.size(); ++i) {
+        if ((static_cast<unsigned char>(text[i]) & 0xC0) == 0x80) continue;
+        JS_SetPropertyUint32(ctx, levels, li++,
+                             JS_NewInt32(ctx, para.levels[i]));
+    }
+    JS_SetPropertyStr(ctx, out, "levels", levels);
+
+    JSValue runs = JS_NewArray(ctx);
+    uint32_t ri = 0;
+    for (const auto& r : para.runs()) {
+        JSValue e = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, e, "start", JS_NewInt32(ctx, static_cast<int>(r.start)));
+        JS_SetPropertyStr(ctx, e, "end", JS_NewInt32(ctx, static_cast<int>(r.end)));
+        JS_SetPropertyStr(ctx, e, "level", JS_NewInt32(ctx, r.level));
+        JS_SetPropertyUint32(ctx, runs, ri++, e);
+    }
+    JS_SetPropertyStr(ctx, out, "runs", runs);
+    return out;
+}
+
+// bro.text.bidiReorder([levels]) -> [logical index per visual slot]  (rule L2)
+JSValue js_bidiReorder(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1 || !JS_IsArray(argv[0])) return JS_NULL;
+    uint32_t n = static_cast<uint32_t>(
+        qjsbind::get_prop_int(ctx, argv[0], "length", 0));
+    std::vector<render::bidi::Level> levels;
+    levels.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        JSValue v = JS_GetPropertyUint32(ctx, argv[0], i);
+        int32_t lv = 0;
+        JS_ToInt32(ctx, &lv, v);
+        JS_FreeValue(ctx, v);
+        levels.push_back(static_cast<render::bidi::Level>(lv < 0 ? 0 : lv));
+    }
+    const std::vector<int32_t> order = render::bidi::reorderVisual(levels);
+    JSValue arr = JS_NewArray(ctx);
+    for (uint32_t i = 0; i < order.size(); ++i) {
+        JS_SetPropertyUint32(ctx, arr, i, JS_NewInt32(ctx, order[i]));
+    }
+    return arr;
+}
+
 JSValue js_cacheStats(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     render::Renderer* r = rendererOf(g_engine);
     render::TextShapingEngine* te = r ? r->textEngine() : nullptr;
@@ -176,6 +255,11 @@ void installTextBindings(JSContext* ctx, engine::Engine* engine) {
                       JS_NewCFunction(ctx, js_clusterRange, "clusterRange", 3));
     JS_SetPropertyStr(ctx, text, "cacheStats",
                       JS_NewCFunction(ctx, js_cacheStats, "cacheStats", 0));
+    JS_SetPropertyStr(ctx, text, "bidi", JS_NewCFunction(ctx, js_bidi, "bidi", 3));
+    JS_SetPropertyStr(ctx, text, "bidiReorder",
+                      JS_NewCFunction(ctx, js_bidiReorder, "bidiReorder", 1));
+    JS_SetPropertyStr(ctx, text, "bidiAvailable",
+                      JS_NewBool(ctx, render::bidi::available()));
     JS_SetPropertyStr(ctx, broObj, "text", text);
 
     JS_FreeValue(ctx, broObj);

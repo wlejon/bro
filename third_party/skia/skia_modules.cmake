@@ -134,6 +134,39 @@ if(BRO_WITH_TEXT_SHAPING)
     )
     set_target_properties(skia_icu_bidi PROPERTIES CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON)
 
+    # -----------------------------------------------------------------------
+    # skia_icu_bidi_api — the UAX#9 C API, usable from outside Skia.
+    # -----------------------------------------------------------------------
+    # bro resolves bidi itself (paragraph level, embedding levels, L2 run
+    # reordering) rather than through SkUnicode, because SkUnicode's wrapper
+    # cannot express the two things bidi display actually needs:
+    #
+    #   * UBIDI_DEFAULT_LTR — rules P2/P3, "the level implied by the first
+    #     strong character". SkUnicode::getBidiRegions only takes an explicit
+    #     LTR/RTL paragraph level, so `dir="auto"` and the paragraph-level
+    #     detection this whole feature rests on are unreachable through it.
+    #   * ubidi_setPara's embeddingLevels argument — which is how
+    #     `unicode-bidi: bidi-override` is expressed (X6).
+    #
+    # The renaming defines are the load-bearing part: ICU's headers rewrite
+    # every entry point to `<name>_skia` when they are set, and the bidi subset
+    # above was compiled with exactly this set. A consumer that includes
+    # unicode/ubidi.h WITHOUT them gets declarations for symbols that were
+    # never compiled, and the failure is a link error at the very end of the
+    # build. Keep the two lists identical.
+    add_library(skia_icu_bidi_api INTERFACE)
+    target_link_libraries(skia_icu_bidi_api INTERFACE skia_icu_bidi)
+    target_include_directories(skia_icu_bidi_api INTERFACE "${_icu_src}/common")
+    target_compile_definitions(skia_icu_bidi_api INTERFACE
+        U_DISABLE_RENAMING=0
+        U_USING_ICU_NAMESPACE=0
+        U_LIB_SUFFIX_C_NAME=_skia
+        U_HAVE_LIB_SUFFIX=1
+        U_DISABLE_VERSION_SUFFIX=1
+        U_STATIC_IMPLEMENTATION
+        U_SHOW_CPLUSPLUS_API=0
+    )
+
     if(MSVC)
         target_compile_options(skia_harfbuzz PRIVATE /W0 /bigobj)
         target_compile_options(skia_icu_bidi PRIVATE /W0)
