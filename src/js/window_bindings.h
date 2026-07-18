@@ -33,6 +33,12 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
 void installBroWindowBindings(JSContext* ctx, platform::Window* window,
                               bool headless = false);
 
+/// Drop the per-realm window state recorded by installWindowBindings /
+/// installBroWindowBindings for `ctx`. MUST be called before a JSContext is
+/// freed: the state is keyed by context ADDRESS, which QuickJS recycles, so a
+/// stale entry would hand a later realm a dangling platform::Window pointer.
+void cleanupWindowBindings(JSContext* ctx);
+
 /// Install window.close() — must be called after event loop is created.
 void installWindowClose(JSContext* ctx, platform::EventLoop* eventLoop);
 

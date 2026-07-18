@@ -93,6 +93,7 @@ void Engine::destroySystemPanels() {
 
         if (doc.jsCtx) {
             js::DomBindings::cleanup(doc.jsCtx);
+            js::cleanupWindowBindings(doc.jsCtx);
         }
 
         doc.document.reset();

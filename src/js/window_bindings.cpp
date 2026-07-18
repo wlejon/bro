@@ -9,6 +9,7 @@
 
 #include <cstring>
 #include <limits>
+#include <unordered_map>
 
 #include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_misc.h>   // SDL_OpenURL
@@ -22,23 +23,59 @@ extern "C" {
 namespace bro::js {
 
 // ---------------------------------------------------------------------------
-// Shared window state — one process, one platform window (may be null under
-// --no-gpu headless). Set once per install; every realm (app, iframes,
-// system panels) sees the same physical window, so plain statics are the
-// right shape (same pattern as dialog_bindings' s_window).
+// PER-REALM window state. These used to be plain statics on the assumption of
+// one process, one platform window — true until bro.window.open() gave a
+// secondary window its own document realm. A host realm's window.screen,
+// devicePixelRatio and bro.window.* must answer for ITS window, not the
+// primary one, so the state is keyed by JSContext: each install() records the
+// window that realm describes, and every accessor resolves through its own ctx.
+//
+// Realms that share the primary window (app, iframes, system panels) simply all
+// record the same pointer, so nothing changes for them. Entries are dropped by
+// cleanupWindowBindings() when a realm dies — required, not hygiene: JSContext
+// addresses are recycled, and a stale entry would hand a fresh realm a dangling
+// window pointer.
 // ---------------------------------------------------------------------------
 
-static platform::Window* s_platWindow = nullptr;
-static bool s_headless = false;
-// screen fallback when no window exists (--no-gpu): captured from the first
-// (top-level) realm install so iframe realms report the same screen.
-static int s_screenFallbackW = 0;
-static int s_screenFallbackH = 0;
+namespace {
 
-// The display this window currently sits on, or false if unknown.
-static bool currentDisplayInfo(platform::DisplayInfo& out) {
-    if (!s_platWindow) return false;
-    for (auto& d : s_platWindow->getDisplays()) {
+struct RealmWindowState {
+    platform::Window* window = nullptr;
+    bool headless = false;
+    // screen fallback when no window exists (--no-gpu).
+    int screenFallbackW = 0;
+    int screenFallbackH = 0;
+};
+
+std::unordered_map<JSContext*, RealmWindowState> s_realms;
+
+// Seeded from the first (top-level) realm install so child realms without a
+// window still report the same screen. Genuinely process-wide — it describes
+// the machine, not a window.
+int s_defaultFallbackW = 0;
+int s_defaultFallbackH = 0;
+
+RealmWindowState& realmFor(JSContext* ctx) {
+    return s_realms[ctx];
+}
+
+platform::Window* realmWindow(JSContext* ctx) {
+    auto it = s_realms.find(ctx);
+    return it == s_realms.end() ? nullptr : it->second.window;
+}
+
+bool realmHeadless(JSContext* ctx) {
+    auto it = s_realms.find(ctx);
+    return it != s_realms.end() && it->second.headless;
+}
+
+} // namespace
+
+// The display this realm's window currently sits on, or false if unknown.
+static bool currentDisplayInfo(JSContext* ctx, platform::DisplayInfo& out) {
+    platform::Window* win = realmWindow(ctx);
+    if (!win) return false;
+    for (auto& d : win->getDisplays()) {
         if (d.isCurrent) { out = d; return true; }
     }
     return false;
@@ -72,38 +109,40 @@ static JSValue js_clipboard_read(JSContext* ctx, JSValueConst /*this_val*/,
 // (same policy as devicePixelRatio — see engine_init.cpp).
 // ---------------------------------------------------------------------------
 
-static void screenDims(int& w, int& h, bool workArea) {
-    if (!s_headless) {
+static void screenDims(JSContext* ctx, int& w, int& h, bool workArea) {
+    auto it = s_realms.find(ctx);
+    const RealmWindowState* st = it == s_realms.end() ? nullptr : &it->second;
+    if (!st || !st->headless) {
         platform::DisplayInfo d;
-        if (currentDisplayInfo(d)) {
+        if (currentDisplayInfo(ctx, d)) {
             w = workArea ? d.workWidth : d.width;
             h = workArea ? d.workHeight : d.height;
             return;
         }
     }
-    if (s_platWindow) {
-        w = static_cast<int>(s_platWindow->getWidth());
-        h = static_cast<int>(s_platWindow->getHeight());
+    if (st && st->window) {
+        w = static_cast<int>(st->window->getWidth());
+        h = static_cast<int>(st->window->getHeight());
     } else {
-        w = s_screenFallbackW;
-        h = s_screenFallbackH;
+        w = st ? st->screenFallbackW : s_defaultFallbackW;
+        h = st ? st->screenFallbackH : s_defaultFallbackH;
     }
 }
 
 static JSValue js_screen_get_width(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    int w, h; screenDims(w, h, false);
+    int w, h; screenDims(ctx, w, h, false);
     return JS_NewInt32(ctx, w);
 }
 static JSValue js_screen_get_height(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    int w, h; screenDims(w, h, false);
+    int w, h; screenDims(ctx, w, h, false);
     return JS_NewInt32(ctx, h);
 }
 static JSValue js_screen_get_availWidth(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    int w, h; screenDims(w, h, true);
+    int w, h; screenDims(ctx, w, h, true);
     return JS_NewInt32(ctx, w);
 }
 static JSValue js_screen_get_availHeight(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    int w, h; screenDims(w, h, true);
+    int w, h; screenDims(ctx, w, h, true);
     return JS_NewInt32(ctx, h);
 }
 
@@ -124,7 +163,7 @@ static JSValue js_window_open(JSContext* ctx, JSValueConst /*this_val*/,
     const char* url = JS_ToCString(ctx, argv[0]);
     if (!url) return JS_NULL;
     if (*url) {
-        if (s_headless) {
+        if (realmHeadless(ctx)) {
             LOG_INFO("window.open('%s'): suppressed in headless mode", url);
         } else if (!SDL_OpenURL(url)) {
             LOG_INFO("window.open('%s') failed: %s", url, SDL_GetError());
@@ -151,7 +190,7 @@ static JSValue js_navigator_getBattery(JSContext* ctx, JSValueConst /*this_val*/
     double dischargingTime = inf;  // seconds until empty
     double level = 1.0;            // 0.0 .. 1.0
 
-    if (!s_headless) {
+    if (!realmHeadless(ctx)) {
         int secs = 0, pct = 0;
         switch (SDL_GetPowerInfo(&secs, &pct)) {
             case SDL_POWERSTATE_ON_BATTERY:
@@ -198,11 +237,18 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
                            double devicePixelRatio,
                            platform::Window* window, bool headless)
 {
-    if (window) s_platWindow = window;
-    s_headless = headless;
-    if (s_screenFallbackW == 0) {
-        s_screenFallbackW = viewportWidth;
-        s_screenFallbackH = viewportHeight;
+    if (s_defaultFallbackW == 0) {
+        s_defaultFallbackW = viewportWidth;
+        s_defaultFallbackH = viewportHeight;
+    }
+    {
+        RealmWindowState& st = realmFor(ctx);
+        if (window) st.window = window;
+        st.headless = headless;
+        if (st.screenFallbackW == 0) {
+            st.screenFallbackW = s_defaultFallbackW;
+            st.screenFallbackH = s_defaultFallbackH;
+        }
     }
 
     JSValue global = JS_GetGlobalObject(ctx);
@@ -320,52 +366,52 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
 
 static JSValue js_brw_get_state(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     const char* state = "normal";
-    if (s_platWindow) {
-        if (s_platWindow->isMinimized())       state = "minimized";
-        else if (s_platWindow->isFullscreen()) state = "fullscreen";
-        else if (s_platWindow->isMaximized())  state = "maximized";
+    if (realmWindow(ctx)) {
+        if (realmWindow(ctx)->isMinimized())       state = "minimized";
+        else if (realmWindow(ctx)->isFullscreen()) state = "fullscreen";
+        else if (realmWindow(ctx)->isMaximized())  state = "maximized";
     }
     return JS_NewString(ctx, state);
 }
 
 static JSValue js_brw_get_borderless(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    return JS_NewBool(ctx, s_platWindow && s_platWindow->isBorderless());
+    return JS_NewBool(ctx, realmWindow(ctx) && realmWindow(ctx)->isBorderless());
 }
 
 static JSValue js_brw_set_borderless(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (s_platWindow && argc >= 1)
-        s_platWindow->setBorderless(JS_ToBool(ctx, argv[0]));
+    if (realmWindow(ctx) && argc >= 1)
+        realmWindow(ctx)->setBorderless(JS_ToBool(ctx, argv[0]));
     return JS_UNDEFINED;
 }
 
 static JSValue js_brw_get_alwaysOnTop(JSContext* ctx, JSValueConst, int, JSValueConst*) {
-    return JS_NewBool(ctx, s_platWindow && s_platWindow->isAlwaysOnTop());
+    return JS_NewBool(ctx, realmWindow(ctx) && realmWindow(ctx)->isAlwaysOnTop());
 }
 
 static JSValue js_brw_set_alwaysOnTop(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (s_platWindow && argc >= 1)
-        s_platWindow->setAlwaysOnTop(JS_ToBool(ctx, argv[0]));
+    if (realmWindow(ctx) && argc >= 1)
+        realmWindow(ctx)->setAlwaysOnTop(JS_ToBool(ctx, argv[0]));
     return JS_UNDEFINED;
 }
 
-static JSValue js_brw_minimize(JSContext*, JSValueConst, int, JSValueConst*) {
-    if (s_platWindow && !s_headless) s_platWindow->minimize();
+static JSValue js_brw_minimize(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    if (realmWindow(ctx) && !realmHeadless(ctx)) realmWindow(ctx)->minimize();
     return JS_UNDEFINED;
 }
 
-static JSValue js_brw_maximize(JSContext*, JSValueConst, int, JSValueConst*) {
-    if (s_platWindow && !s_headless) s_platWindow->maximize();
+static JSValue js_brw_maximize(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    if (realmWindow(ctx) && !realmHeadless(ctx)) realmWindow(ctx)->maximize();
     return JS_UNDEFINED;
 }
 
-static JSValue js_brw_restore(JSContext*, JSValueConst, int, JSValueConst*) {
-    if (s_platWindow && !s_headless) s_platWindow->restore();
+static JSValue js_brw_restore(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    if (realmWindow(ctx) && !realmHeadless(ctx)) realmWindow(ctx)->restore();
     return JS_UNDEFINED;
 }
 
 static JSValue js_brw_getPosition(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     int x = 0, y = 0;
-    if (s_platWindow) s_platWindow->getPosition(x, y);
+    if (realmWindow(ctx)) realmWindow(ctx)->getPosition(x, y);
     JSValue obj = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, obj, "x", JS_NewInt32(ctx, x));
     JS_SetPropertyStr(ctx, obj, "y", JS_NewInt32(ctx, y));
@@ -373,11 +419,11 @@ static JSValue js_brw_getPosition(JSContext* ctx, JSValueConst, int, JSValueCons
 }
 
 static JSValue js_brw_setPosition(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!s_platWindow || s_headless || argc < 2) return JS_UNDEFINED;
+    if (!realmWindow(ctx) || realmHeadless(ctx) || argc < 2) return JS_UNDEFINED;
     int32_t x = 0, y = 0;
     if (JS_ToInt32(ctx, &x, argv[0]) || JS_ToInt32(ctx, &y, argv[1]))
         return JS_EXCEPTION;
-    s_platWindow->setPosition(x, y);
+    realmWindow(ctx)->setPosition(x, y);
     return JS_UNDEFINED;
 }
 
@@ -390,39 +436,39 @@ static JSValue sizePairToJS(JSContext* ctx, int w, int h) {
 
 static JSValue js_brw_getMinSize(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     int w = 0, h = 0;
-    if (s_platWindow) s_platWindow->getMinimumSize(w, h);
+    if (realmWindow(ctx)) realmWindow(ctx)->getMinimumSize(w, h);
     return sizePairToJS(ctx, w, h);
 }
 
 static JSValue js_brw_setMinSize(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!s_platWindow || argc < 2) return JS_UNDEFINED;
+    if (!realmWindow(ctx) || argc < 2) return JS_UNDEFINED;
     int32_t w = 0, h = 0;
     if (JS_ToInt32(ctx, &w, argv[0]) || JS_ToInt32(ctx, &h, argv[1]))
         return JS_EXCEPTION;
-    s_platWindow->setMinimumSize(w, h);
+    realmWindow(ctx)->setMinimumSize(w, h);
     return JS_UNDEFINED;
 }
 
 static JSValue js_brw_getMaxSize(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     int w = 0, h = 0;
-    if (s_platWindow) s_platWindow->getMaximumSize(w, h);
+    if (realmWindow(ctx)) realmWindow(ctx)->getMaximumSize(w, h);
     return sizePairToJS(ctx, w, h);
 }
 
 static JSValue js_brw_setMaxSize(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!s_platWindow || argc < 2) return JS_UNDEFINED;
+    if (!realmWindow(ctx) || argc < 2) return JS_UNDEFINED;
     int32_t w = 0, h = 0;
     if (JS_ToInt32(ctx, &w, argv[0]) || JS_ToInt32(ctx, &h, argv[1]))
         return JS_EXCEPTION;
-    s_platWindow->setMaximumSize(w, h);
+    realmWindow(ctx)->setMaximumSize(w, h);
     return JS_UNDEFINED;
 }
 
 static JSValue js_brw_getDisplays(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     JSValue arr = JS_NewArray(ctx);
-    if (!s_platWindow) return arr;
+    if (!realmWindow(ctx)) return arr;
 
-    auto displays = s_platWindow->getDisplays();
+    auto displays = realmWindow(ctx)->getDisplays();
     for (size_t i = 0; i < displays.size(); i++) {
         const auto& d = displays[i];
         JSValue obj = JS_NewObject(ctx);
@@ -453,11 +499,11 @@ static JSValue js_brw_getDisplays(JSContext* ctx, JSValueConst, int, JSValueCons
 }
 
 static JSValue js_brw_moveToDisplay(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
-    if (!s_platWindow || s_headless || argc < 1) return JS_NewBool(ctx, false);
+    if (!realmWindow(ctx) || realmHeadless(ctx) || argc < 1) return JS_NewBool(ctx, false);
     uint32_t id = 0;
     if (JS_ToUint32(ctx, &id, argv[0]))
         return JS_EXCEPTION;
-    return JS_NewBool(ctx, s_platWindow->moveToDisplay(id));
+    return JS_NewBool(ctx, realmWindow(ctx)->moveToDisplay(id));
 }
 
 static const JSCFunctionListEntry js_brw_funcs[] = {
@@ -477,8 +523,11 @@ static const JSCFunctionListEntry js_brw_funcs[] = {
 void installBroWindowBindings(JSContext* ctx, platform::Window* window,
                               bool headless)
 {
-    if (window) s_platWindow = window;
-    s_headless = headless;
+    {
+        RealmWindowState& st = realmFor(ctx);
+        if (window) st.window = window;
+        st.headless = headless;
+    }
 
     JSValue global = JS_GetGlobalObject(ctx);
     JSValue bro = JS_GetPropertyStr(ctx, global, "bro");
@@ -508,6 +557,10 @@ void installBroWindowBindings(JSContext* ctx, platform::Window* window,
     JS_SetPropertyStr(ctx, bro, "window", win);
     JS_FreeValue(ctx, bro);
     JS_FreeValue(ctx, global);
+}
+
+void cleanupWindowBindings(JSContext* ctx) {
+    s_realms.erase(ctx);
 }
 
 void installWindowClose(JSContext* ctx, platform::EventLoop* eventLoop) {

@@ -29,6 +29,7 @@
 #include "js/audio_bindings.h"
 #include "js/storage_bindings.h"
 #include "js/window_host_bindings.h"
+#include "js/window_bindings.h"
 #include "js/settings_bindings.h"
 #include "js/webgl2_bindings.h"
 #include "js/scene_bindings.h"
@@ -251,6 +252,7 @@ void Engine::performAppReload() {
     js::AudioBindings::cleanup(oldCtx);
     js::StorageBindings::cleanup(oldCtx);
     js::cleanupWindowHostBindings(oldCtx);
+    js::cleanupWindowBindings(oldCtx);
     if (gl_) {
         js::WebGL2Bindings::cleanup(oldCtx);
     }

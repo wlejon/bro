@@ -13,6 +13,7 @@
 #include "js/audio_scene_sync.h"
 #include "js/storage_bindings.h"
 #include "js/window_host_bindings.h"
+#include "js/window_bindings.h"
 #include "js/webgl2_bindings.h"
 #include "js/scene_bindings.h"
 #include "js/worker.h"
@@ -321,6 +322,7 @@ Engine::~Engine() {
         js::AudioBindings::cleanup(ctx);
         js::StorageBindings::cleanup(ctx);
         js::cleanupWindowHostBindings(ctx);
+        js::cleanupWindowBindings(ctx);
         if (gl_) {
             js::WebGL2Bindings::cleanup(ctx);
         }
