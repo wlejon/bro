@@ -116,8 +116,28 @@ public:
     // --- byte-domain queries: the only sanctioned way out of glyph space ---
 
     /// Visual x for a caret sitting at `byteOffset`. Offsets inside a cluster
-    /// snap to the cluster's leading edge. Offsets past the end clamp to the
-    /// run width.
+    /// snap to the cluster's leading edge; an offset past the end lands on the
+    /// trailing edge of the last cluster in LOGICAL order, which for a
+    /// right-to-left run is its left side.
+    ///
+    /// Snapping to the cluster edge is where this differs from Chromium, which
+    /// steps by GRAPHEME and divides a ligature's advance among the graphemes
+    /// inside it, so a caret can sit between the f and the i of an "fi". The
+    /// difference is reachable: measured over ordinary English, Arial, Cambria,
+    /// Georgia and Times New Roman produce no multi-character clusters at all,
+    /// but Calibri turns "office fluffy first" into 14 clusters where the others
+    /// make 19. Arabic lam-alef is the other everyday case.
+    ///
+    /// Not closed here, and the reason is availability rather than cost.
+    /// Grapheme boundaries are UAX #29 data, and this build has none: the
+    /// bidi-only SkUnicode has no break iterator, and libgrapheme is
+    /// deliberately not vendored because its tables are generated at build time
+    /// by host tools run over the UCD. Stepping by codepoint instead is not an
+    /// approximation of grapheme stepping but a regression past it — it puts a
+    /// caret between a base character and its combining mark, which is exactly
+    /// what cluster stepping was introduced to stop. Getting a segmenter is
+    /// build plumbing of the same shape as vendoring HarfBuzz was, and belongs
+    /// with that kind of work rather than inside a change to text ordering.
     CaretPositions byteOffsetToX(std::size_t byteOffset, Spacing spacing = {}) const;
 
     /// Byte offset nearest to visual position `x`, snapped to a cluster
