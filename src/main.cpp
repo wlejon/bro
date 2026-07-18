@@ -142,7 +142,10 @@ static void printUsage() {
         "  vsync (bool), resizable (bool), maxFps (number),\n"
         "  splash (bool, default true),\n"
         "  scrollSpeed (number), doubleClickThreshold (ms),\n"
-        "  doubleClickDistance (px)\n"
+        "  doubleClickDistance (px),\n"
+        "  borderless (bool), alwaysOnTop (bool),\n"
+        "  minWidth/minHeight/maxWidth/maxHeight (px resize limits),\n"
+        "  windowX/windowY (px startup position), display (index to center on)\n"
         "\n"
         "See also: bro-headless for scripted/headless mode.\n");
 }

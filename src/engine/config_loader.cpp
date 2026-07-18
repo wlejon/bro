@@ -114,6 +114,33 @@ bool parseConfig(const std::string& path, EngineConfig& config,
     int splash = getBool("splash");
     if (splash >= 0) config.showSplash = (splash == 1);
 
+    // Startup window management (runtime control lives in bro.window.*).
+    int borderless = getBool("borderless");
+    if (borderless >= 0) config.graphics.borderless = (borderless == 1);
+
+    int alwaysOnTop = getBool("alwaysOnTop");
+    if (alwaysOnTop >= 0) config.graphics.alwaysOnTop = (alwaysOnTop == 1);
+
+    int minW = getInt("minWidth", 0);
+    if (minW > 0) config.graphics.minWidth = minW;
+
+    int minH = getInt("minHeight", 0);
+    if (minH > 0) config.graphics.minHeight = minH;
+
+    int maxW = getInt("maxWidth", 0);
+    if (maxW > 0) config.graphics.maxWidth = maxW;
+
+    int maxH = getInt("maxHeight", 0);
+    if (maxH > 0) config.graphics.maxHeight = maxH;
+
+    // Explicit position — negative values are legal on multi-monitor desktops,
+    // so the "missing" default is the kWindowPosUnset sentinel, not 0/-1.
+    config.graphics.windowX = getInt("windowX", config.graphics.windowX);
+    config.graphics.windowY = getInt("windowY", config.graphics.windowY);
+
+    int display = getInt("display", -1);
+    if (display >= 0) config.graphics.display = display;
+
     float maxFps = getFloat("maxFps", 0);
     if (maxFps > 0) {
         config.graphics.maxFps = maxFps;              // present-rate cap

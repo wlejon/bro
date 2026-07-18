@@ -8,7 +8,9 @@ namespace bro::engine {
 /// Parse a bro.json file into an EngineConfig. Recognized keys:
 ///   App manifest:  app, title, width, height, vsync, resizable, splash,
 ///                  maxFps, scrollSpeed, doubleClickThreshold,
-///                  doubleClickDistance
+///                  doubleClickDistance, borderless, alwaysOnTop,
+///                  minWidth, minHeight, maxWidth, maxHeight,
+///                  windowX, windowY, display
 ///   Project root:  default_app, lib, system
 ///
 /// Returns false if the file can't be opened. Sets `*outIsProjectManifest`

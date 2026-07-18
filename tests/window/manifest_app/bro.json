@@ -1,0 +1,9 @@
+{
+    "title": "Manifest Window Test",
+    "borderless": true,
+    "alwaysOnTop": true,
+    "minWidth": 320,
+    "minHeight": 240,
+    "maxWidth": 1600,
+    "maxHeight": 900
+}

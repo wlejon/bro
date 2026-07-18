@@ -310,3 +310,26 @@ Settings from `bro.json` flow into the app override layer. These keys are suppor
 ```
 
 User overrides from `.bro_settings.json` take priority over `bro.json` values.
+
+Additionally, `bro.json` carries **startup-only window-management keys** — these
+configure the window at creation and are *not* settings (no user-override layer,
+no persistence; runtime control is `bro.window.*` — see
+[window-api.js](window-api.js)):
+
+```json
+{
+    "borderless": true,
+    "alwaysOnTop": true,
+    "minWidth": 320,
+    "minHeight": 240,
+    "maxWidth": 1600,
+    "maxHeight": 900,
+    "windowX": 100,
+    "windowY": 100,
+    "display": 1
+}
+```
+
+`windowX`/`windowY` (both required together; negative values are legal on
+multi-monitor desktops) win over `display` (a display *index* to center the
+window on). Positioning keys are skipped in headless mode.

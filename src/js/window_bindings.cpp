@@ -1,5 +1,6 @@
 #include "js/window_bindings.h"
 #include "platform/event_loop.h"
+#include "platform/sdl_window.h"
 
 #include "window_polyfill.js.h"
 
@@ -13,6 +14,16 @@ extern "C" {
 }
 
 namespace bro::js {
+
+// ---------------------------------------------------------------------------
+// Shared window state — one process, one platform window (may be null under
+// --no-gpu headless). Set once per install; every realm (app, iframes,
+// system panels) sees the same physical window, so plain statics are the
+// right shape (same pattern as dialog_bindings' s_window).
+// ---------------------------------------------------------------------------
+
+static platform::Window* s_platWindow = nullptr;
+static bool s_headless = false;
 
 // navigator.clipboard backing — SDL is the only system-clipboard path bro links.
 // These are the synchronous primitives; installWindowBindings wraps them in the
@@ -110,6 +121,165 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
                         "<window-bindings>", JS_EVAL_TYPE_GLOBAL);
     JS_FreeValue(ctx, r);
 
+    JS_FreeValue(ctx, global);
+}
+
+// ---------------------------------------------------------------------------
+// bro.window.* — runtime window management. Documented in docs/window-api.js.
+//
+// Headless policy: state-affecting ops (minimize/maximize/restore,
+// setPosition) no-op so a test can never disturb the hidden window the whole
+// pipeline renders through; flag/limit setters (borderless, alwaysOnTop,
+// min/max size) still apply — they're pure window state, so tests can
+// round-trip them without visible effect. With no window at all (--no-gpu)
+// every query returns its pinned default and every mutator no-ops.
+// ---------------------------------------------------------------------------
+
+static JSValue js_brw_get_state(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    const char* state = "normal";
+    if (s_platWindow) {
+        if (s_platWindow->isMinimized())       state = "minimized";
+        else if (s_platWindow->isFullscreen()) state = "fullscreen";
+        else if (s_platWindow->isMaximized())  state = "maximized";
+    }
+    return JS_NewString(ctx, state);
+}
+
+static JSValue js_brw_get_borderless(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    return JS_NewBool(ctx, s_platWindow && s_platWindow->isBorderless());
+}
+
+static JSValue js_brw_set_borderless(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (s_platWindow && argc >= 1)
+        s_platWindow->setBorderless(JS_ToBool(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_brw_get_alwaysOnTop(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    return JS_NewBool(ctx, s_platWindow && s_platWindow->isAlwaysOnTop());
+}
+
+static JSValue js_brw_set_alwaysOnTop(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (s_platWindow && argc >= 1)
+        s_platWindow->setAlwaysOnTop(JS_ToBool(ctx, argv[0]));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_brw_minimize(JSContext*, JSValueConst, int, JSValueConst*) {
+    if (s_platWindow && !s_headless) s_platWindow->minimize();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_brw_maximize(JSContext*, JSValueConst, int, JSValueConst*) {
+    if (s_platWindow && !s_headless) s_platWindow->maximize();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_brw_restore(JSContext*, JSValueConst, int, JSValueConst*) {
+    if (s_platWindow && !s_headless) s_platWindow->restore();
+    return JS_UNDEFINED;
+}
+
+static JSValue js_brw_getPosition(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    int x = 0, y = 0;
+    if (s_platWindow) s_platWindow->getPosition(x, y);
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "x", JS_NewInt32(ctx, x));
+    JS_SetPropertyStr(ctx, obj, "y", JS_NewInt32(ctx, y));
+    return obj;
+}
+
+static JSValue js_brw_setPosition(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (!s_platWindow || s_headless || argc < 2) return JS_UNDEFINED;
+    int32_t x = 0, y = 0;
+    if (JS_ToInt32(ctx, &x, argv[0]) || JS_ToInt32(ctx, &y, argv[1]))
+        return JS_EXCEPTION;
+    s_platWindow->setPosition(x, y);
+    return JS_UNDEFINED;
+}
+
+static JSValue sizePairToJS(JSContext* ctx, int w, int h) {
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "width", JS_NewInt32(ctx, w));
+    JS_SetPropertyStr(ctx, obj, "height", JS_NewInt32(ctx, h));
+    return obj;
+}
+
+static JSValue js_brw_getMinSize(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    int w = 0, h = 0;
+    if (s_platWindow) s_platWindow->getMinimumSize(w, h);
+    return sizePairToJS(ctx, w, h);
+}
+
+static JSValue js_brw_setMinSize(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (!s_platWindow || argc < 2) return JS_UNDEFINED;
+    int32_t w = 0, h = 0;
+    if (JS_ToInt32(ctx, &w, argv[0]) || JS_ToInt32(ctx, &h, argv[1]))
+        return JS_EXCEPTION;
+    s_platWindow->setMinimumSize(w, h);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_brw_getMaxSize(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    int w = 0, h = 0;
+    if (s_platWindow) s_platWindow->getMaximumSize(w, h);
+    return sizePairToJS(ctx, w, h);
+}
+
+static JSValue js_brw_setMaxSize(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (!s_platWindow || argc < 2) return JS_UNDEFINED;
+    int32_t w = 0, h = 0;
+    if (JS_ToInt32(ctx, &w, argv[0]) || JS_ToInt32(ctx, &h, argv[1]))
+        return JS_EXCEPTION;
+    s_platWindow->setMaximumSize(w, h);
+    return JS_UNDEFINED;
+}
+
+static const JSCFunctionListEntry js_brw_funcs[] = {
+    JS_CFUNC_DEF("minimize", 0, js_brw_minimize),
+    JS_CFUNC_DEF("maximize", 0, js_brw_maximize),
+    JS_CFUNC_DEF("restore", 0, js_brw_restore),
+    JS_CFUNC_DEF("getPosition", 0, js_brw_getPosition),
+    JS_CFUNC_DEF("setPosition", 2, js_brw_setPosition),
+    JS_CFUNC_DEF("getMinSize", 0, js_brw_getMinSize),
+    JS_CFUNC_DEF("setMinSize", 2, js_brw_setMinSize),
+    JS_CFUNC_DEF("getMaxSize", 0, js_brw_getMaxSize),
+    JS_CFUNC_DEF("setMaxSize", 2, js_brw_setMaxSize),
+};
+
+void installBroWindowBindings(JSContext* ctx, platform::Window* window,
+                              bool headless)
+{
+    if (window) s_platWindow = window;
+    s_headless = headless;
+
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue bro = JS_GetPropertyStr(ctx, global, "bro");
+    if (JS_IsUndefined(bro) || JS_IsNull(bro)) {
+        JS_FreeValue(ctx, bro);
+        bro = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, bro));
+    }
+
+    JSValue win = JS_NewObject(ctx);
+    JS_SetPropertyFunctionList(ctx, win, js_brw_funcs,
+                               sizeof(js_brw_funcs) / sizeof(js_brw_funcs[0]));
+
+    auto defineGetSet = [&](const char* name, JSCFunction* getter,
+                            JSCFunction* setter) {
+        JSAtom atom = JS_NewAtom(ctx, name);
+        JS_DefinePropertyGetSet(ctx, win, atom,
+            JS_NewCFunction(ctx, getter, name, 0),
+            setter ? JS_NewCFunction(ctx, setter, name, 1) : JS_UNDEFINED,
+            JS_PROP_CONFIGURABLE | JS_PROP_ENUMERABLE);
+        JS_FreeAtom(ctx, atom);
+    };
+    defineGetSet("state",       js_brw_get_state,       nullptr);
+    defineGetSet("borderless",  js_brw_get_borderless,  js_brw_set_borderless);
+    defineGetSet("alwaysOnTop", js_brw_get_alwaysOnTop, js_brw_set_alwaysOnTop);
+
+    JS_SetPropertyStr(ctx, bro, "window", win);
+    JS_FreeValue(ctx, bro);
     JS_FreeValue(ctx, global);
 }
 

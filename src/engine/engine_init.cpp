@@ -292,7 +292,35 @@ Engine::Engine(const EngineConfig& config)
             window_ = std::make_unique<platform::Window>("Bro",
                 static_cast<uint32_t>(gfx.width),
                 static_cast<uint32_t>(gfx.height), hidden,
-                gfx.resizable, gfx.vsync);
+                gfx.resizable, gfx.vsync, config.graphics.borderless);
+
+            // Startup window management from bro.json. These are startup-only
+            // config (GraphicsConfig), not persisted settings — runtime
+            // control lives in bro.window.*. Flags and resize limits apply to
+            // the hidden headless window too: they're pure window state, so
+            // bro.window's getters round-trip in tests. Positioning is
+            // skipped when hidden — it depends on the desktop the suite
+            // happens to run on.
+            const auto& wcfg = config.graphics;
+            if (wcfg.alwaysOnTop) window_->setAlwaysOnTop(true);
+            if (wcfg.minWidth > 0 || wcfg.minHeight > 0)
+                window_->setMinimumSize(wcfg.minWidth, wcfg.minHeight);
+            if (wcfg.maxWidth > 0 || wcfg.maxHeight > 0)
+                window_->setMaximumSize(wcfg.maxWidth, wcfg.maxHeight);
+            if (!hidden) {
+                if (wcfg.display >= 0) {
+                    auto displays = window_->getDisplays();
+                    if (wcfg.display < static_cast<int>(displays.size())) {
+                        window_->moveToDisplay(displays[wcfg.display].id);
+                    } else {
+                        LOG_WARN("bro.json display=%d, but only %zu display(s) attached",
+                                 wcfg.display, displays.size());
+                    }
+                }
+                // Explicit position wins over display centering.
+                if (wcfg.windowX != kWindowPosUnset && wcfg.windowY != kWindowPosUnset)
+                    window_->setPosition(wcfg.windowX, wcfg.windowY);
+            }
 
             // Taskbar / Alt-Tab icon. Shipped with system/ alongside the binary
             // (scripts/package-release.sh copies the whole system/ tree). Skip in
@@ -624,6 +652,11 @@ void Engine::initAppRealm() {
     // 9. Set up window/navigator/location/history BEFORE DOM bindings
     js::installWindowBindings(jsRuntime_->getContext(), viewportWidth_, contentHeight(),
                               displayScale_);
+
+    // 9a1. bro.window.* — runtime window management (state, borderless,
+    //      always-on-top, size limits, position, displays). App realm only.
+    js::installBroWindowBindings(jsRuntime_->getContext(), window_.get(),
+                                 displayMode_ == DisplayMode::Headless);
 
     // 9a0. location.reload() — the polyfill's method calls this hook when
     //      present. Queues a full app-realm reload; deferred to a safe point

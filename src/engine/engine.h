@@ -21,6 +21,7 @@
 #include "render/skia_backend.h"
 #include <atomic>
 #include <bit>
+#include <climits>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -68,6 +69,11 @@ class AudioInference;
 
 enum class DisplayMode { Windowed, Headless, Server };
 
+/// Sentinel for "no explicit startup window position requested" (the bro.json
+/// windowX/windowY keys). Any real coordinate — including negative ones on a
+/// multi-monitor desktop — is representable, so use INT_MIN, not 0/-1.
+inline constexpr int kWindowPosUnset = INT_MIN;
+
 /// Graphics/display settings configurable per app.
 struct GraphicsConfig {
     int width = 1920;
@@ -77,6 +83,20 @@ struct GraphicsConfig {
     bool vsync = true;        // true = adaptive or standard vsync; false = uncapped
     double maxFrameIntervalMs = 8.0;  // layout/raster throttle (0 = uncapped)
     double maxFps = 0.0;      // present-rate cap independent of vsync (0 = uncapped)
+
+    // Startup window management (bro.json; runtime control via bro.window.*).
+    // Transparent windows are deliberately NOT offered: the compositor owns
+    // the GL swap chain and a per-pixel-alpha window would need a different
+    // swap-chain setup on every platform — deferred until something needs it.
+    bool borderless = false;   // no title bar / border (SDL_WINDOW_BORDERLESS)
+    bool alwaysOnTop = false;  // keep above all normal windows
+    int minWidth = 0;          // min/max resize limits; 0 = unconstrained
+    int minHeight = 0;
+    int maxWidth = 0;
+    int maxHeight = 0;
+    int windowX = kWindowPosUnset;  // explicit startup position (both must be set)
+    int windowY = kWindowPosUnset;
+    int display = -1;          // display INDEX to center on at startup; -1 = OS default
 };
 
 /// Input behavior settings configurable per app.
