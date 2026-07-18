@@ -87,11 +87,19 @@ for (const i of boundaries) {
         assert(frag.textContent === S.slice(i, j),
                'cloneContents(' + i + ',' + j + ') expected "' + S.slice(i, j) +
                '" got "' + frag.textContent + '"');
-        // Content must survive the clone. (bro divergence, orthogonal to
-        // offsets and pre-existing: cloneContents splits the source text node
-        // at both boundaries instead of cloning without touching the tree, so
-        // `t.data` is only the head afterwards. The rendered text is intact.)
+        // cloneContents must NOT modify the source tree at all (DOM spec: the
+        // clone steps never touch the live nodes). It used to split the source
+        // text node at both boundaries, which left the rendered text intact but
+        // truncated `t.data` to the head and gave root three text children.
         assert(root.textContent === S, 'cloneContents preserves the text content');
+        assert(root.childNodes.length === 1,
+               'cloneContents(' + i + ',' + j + ') must not split the source: ' +
+               'root has ' + root.childNodes.length + ' children');
+        assert(root.childNodes[0] === t,
+               'cloneContents(' + i + ',' + j + ') must not replace the source node');
+        assert(t.data === S,
+               'cloneContents(' + i + ',' + j + ') must not truncate source data, got "' +
+               t.data + '"');
 
         t = freshText();
         const r2 = document.createRange();
@@ -103,6 +111,31 @@ for (const i of boundaries) {
         assert(root.textContent === S.slice(0, i) + S.slice(j),
                'extractContents(' + i + ',' + j + ') remainder "' + root.textContent + '"');
     }
+}
+
+// ---- cloneContents across containers is also non-destructive --------------
+{
+    root.innerHTML = 'héllo<b>中文</b>wörld';
+    flush();
+    const head = root.childNodes[0];
+    const tail = root.childNodes[2];
+    const before = root.innerHTML;
+
+    const r = document.createRange();
+    r.setStart(head, 2);          // inside "héllo", after "hé"
+    r.setEnd(tail, 3);            // inside "wörld", after "wör"
+    const frag = r.cloneContents();
+
+    assert(frag.textContent === 'llo中文wör',
+           'cross-container cloneContents content, got "' + frag.textContent + '"');
+    assert(root.innerHTML === before,
+           'cross-container cloneContents must not mutate the tree: "' +
+           root.innerHTML + '" != "' + before + '"');
+    assert(root.childNodes.length === 3, 'source child count unchanged');
+    assert(head.data === 'héllo', 'source head text unchanged, got "' + head.data + '"');
+    assert(tail.data === 'wörld', 'source tail text unchanged, got "' + tail.data + '"');
+    // The clone must be a deep copy, not aliases of the live nodes.
+    assert(frag.childNodes[0] !== head, 'clone is not the live head node');
 }
 
 // ---- deleteContents -------------------------------------------------------

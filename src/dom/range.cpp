@@ -342,9 +342,43 @@ TextNode* splitAt(TextNode* tn, int offset) {
     return tail;
 }
 
+// Collect the top-level nodes fully contained in [(startC,startOff),
+// (endC,endOff)] without touching the tree. Partially contained text endpoints
+// are simply not collected — the caller decides what to do about them (split
+// them, for the destructive operations; clone a substring, for cloneContents).
+std::vector<Node*> collectFullyContained(Node* startC, int startOff,
+                                         Node* endC, int endOff) {
+    std::vector<Node*> result;
+    Node* common = commonAncestor(startC, endC);
+    if (!common) return result;
+
+    // Walk common's descendants in tree order; collect the topmost nodes
+    // fully inside the range.
+    std::function<void(Node*)> walk = [&](Node* n) {
+        if (!n) return;
+        // Determine if n is fully contained.
+        Node* parent = n->parentNode();
+        if (parent) {
+            int idx = indexOf(parent, n);
+            bool afterS = comparePositions(parent, idx, startC, startOff) >= 0;
+            bool beforeE = comparePositions(parent, idx + 1, endC, endOff) <= 0;
+            if (afterS && beforeE) {
+                result.push_back(n);
+                return;
+            }
+        }
+        for (auto* child : n->childNodes()) walk(child);
+    };
+
+    for (auto* child : common->childNodes()) walk(child);
+    return result;
+}
+
 // Collect the top-level nodes "fully contained" within [start,end]. Partially
 // contained text endpoints are split so the region between them is a clean
-// run of whole nodes.
+// run of whole nodes. DESTRUCTIVE — only for deleteContents/extractContents,
+// where the source nodes are about to be removed anyway. cloneContents must
+// not use this.
 std::vector<Node*> contentsInRange(Range& range) {
     std::vector<Node*> result;
     Node* startC = range.startContainer();
@@ -388,29 +422,7 @@ std::vector<Node*> contentsInRange(Range& range) {
         splitAt(static_cast<TextNode*>(endC), endOff);
     }
 
-    Node* common = commonAncestor(startC, endC);
-    if (!common) return result;
-
-    // Walk common's descendants in tree order; collect the topmost nodes
-    // fully inside the range.
-    std::function<void(Node*)> walk = [&](Node* n) {
-        if (!n) return;
-        // Determine if n is fully contained.
-        Node* parent = n->parentNode();
-        if (parent) {
-            int idx = indexOf(parent, n);
-            bool afterS = comparePositions(parent, idx, startC, startOff) >= 0;
-            bool beforeE = comparePositions(parent, idx + 1, endC, endOff) <= 0;
-            if (afterS && beforeE) {
-                result.push_back(n);
-                return;
-            }
-        }
-        for (auto* child : n->childNodes()) walk(child);
-    };
-
-    for (auto* child : common->childNodes()) walk(child);
-    return result;
+    return collectFullyContained(startC, startOff, endC, endOff);
 }
 
 } // namespace
@@ -437,23 +449,17 @@ Node* Range::cloneContents() const {
     auto* frag = document_->createElement("#DOCUMENT-FRAGMENT");
     if (collapsed()) return frag;
 
-    // A cheap approximation: walk the range tree-in-order, clone each node.
-    // Sufficient for the common "single ancestor, mix of text + elements" case.
-    Range tmp;
-    tmp.startContainer_ = startContainer_;
-    tmp.startOffset_ = startOffset_;
-    tmp.endContainer_ = endContainer_;
-    tmp.endOffset_ = endOffset_;
-    auto nodes = contentsInRange(tmp);
+    // Cloning must not modify the source tree (DOM spec: the clone steps only
+    // read). Partially contained text endpoints are therefore copied as
+    // substrings rather than split — the destructive contentsInRange() path is
+    // reserved for extract/delete, which are about to remove the nodes anyway.
 
-    // contentsInRange may have split text nodes in the live tree. Since we're
-    // cloning, undo nothing — the splits are benign.
-    for (auto* n : nodes) {
-        if (!n) continue;
+    // Appends a deep copy of `n` to the fragment.
+    auto cloneInto = [&](Node* n) {
+        if (!n) return;
         if (n->nodeType() == NodeType::Text) {
-            auto* clone = document_->createTextNode(
-                static_cast<TextNode*>(n)->data());
-            frag->appendChild(clone);
+            frag->appendChild(document_->createTextNode(
+                static_cast<TextNode*>(n)->data()));
         } else if (n->nodeType() == NodeType::Element) {
             // Clone via outerHTML round-trip — preserves nested structure.
             auto* src = static_cast<Element*>(n);
@@ -465,11 +471,60 @@ Node* Range::cloneContents() const {
             for (auto* k : kids) frag->appendChild(k);
             document_->freeNode(holder);
         } else if (n->nodeType() == NodeType::Comment) {
-            auto* clone = document_->createComment(
-                static_cast<CommentNode*>(n)->data());
-            frag->appendChild(clone);
+            frag->appendChild(document_->createComment(
+                static_cast<CommentNode*>(n)->data()));
         }
+    };
+
+    // Character-data helper: clone data[from,to) as a same-type node.
+    // Offsets here are UTF-8 byte offsets (the JS layer converts from UTF-16).
+    auto cloneSubstring = [&](Node* n, int from, int to) {
+        if (!n || to <= from) return;
+        const std::string* data = nullptr;
+        if (n->nodeType() == NodeType::Text)
+            data = &static_cast<TextNode*>(n)->data();
+        else if (n->nodeType() == NodeType::Comment)
+            data = &static_cast<CommentNode*>(n)->data();
+        if (!data) return;
+        int lo = std::clamp(from, 0, static_cast<int>(data->size()));
+        int hi = std::clamp(to, lo, static_cast<int>(data->size()));
+        auto piece = data->substr(lo, hi - lo);
+        if (n->nodeType() == NodeType::Text)
+            frag->appendChild(document_->createTextNode(piece));
+        else
+            frag->appendChild(document_->createComment(piece));
+    };
+
+    bool startIsChars = startContainer_ &&
+                        (startContainer_->nodeType() == NodeType::Text ||
+                         startContainer_->nodeType() == NodeType::Comment);
+    bool endIsChars = endContainer_ &&
+                      (endContainer_->nodeType() == NodeType::Text ||
+                       endContainer_->nodeType() == NodeType::Comment);
+
+    // Both endpoints inside the same character-data node: one substring.
+    if (startContainer_ == endContainer_ && startIsChars) {
+        cloneSubstring(startContainer_, startOffset_, endOffset_);
+        return frag;
     }
+
+    int startLen = childCountOrLen(startContainer_);
+    int endLen = childCountOrLen(endContainer_);
+
+    // Partially contained head: [startOffset_, end of node). When startOffset_
+    // is 0 the node is fully contained and the walk below picks it up instead.
+    if (startIsChars && startOffset_ > 0 && startOffset_ < startLen)
+        cloneSubstring(startContainer_, startOffset_, startLen);
+
+    for (auto* n : collectFullyContained(startContainer_, startOffset_,
+                                         endContainer_, endOffset_))
+        cloneInto(n);
+
+    // Partially contained tail: [0, endOffset_). When endOffset_ equals the
+    // node length the node is fully contained and was collected above.
+    if (endIsChars && endOffset_ > 0 && endOffset_ < endLen)
+        cloneSubstring(endContainer_, 0, endOffset_);
+
     return frag;
 }
 
