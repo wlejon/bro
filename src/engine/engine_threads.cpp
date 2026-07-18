@@ -208,6 +208,12 @@ void Engine::rasterThreadFunc() {
         // UILayer::Iframe quads recorded during the app pass.
         replayIframeLayers(rasterRenderer.get());
 
+        // And each secondary window's document into its window-sized surface →
+        // WindowHost::fboTexture, which the main thread composites onto that
+        // window's drawable after the frame's fence. One texture per host, so
+        // the single fence below covers them exactly as it covers app layers.
+        replayWindowHostLayers(rasterRenderer.get());
+
         rasterRenderer->endFrame();
 
         // GL fence — guarantees all GPU commands are visible before the main
@@ -237,6 +243,17 @@ void Engine::rasterThreadFunc() {
         rasterRenderer->destroyGPUSurface(d->surface);
         d->surfW = d->surfH = 0;
         d->fboTexture = 0;
+    }
+    // Secondary-window host surfaces live on this context for the same reason
+    // and must go out the same door: shutdown() destroys the hosts on the main
+    // thread only AFTER joining this one, by which point rasterGLContext_ is
+    // gone. Same race-free argument as the pools above (main is blocked in
+    // rasterThread_.join()).
+    for (auto& h : windowHosts_) {
+        if (!h) continue;
+        rasterRenderer->destroyGPUSurface(h->surface);
+        h->surfW = h->surfH = 0;
+        h->fboTexture = 0;
     }
     drainIframeSurfaceFrees(rasterRenderer.get());
 

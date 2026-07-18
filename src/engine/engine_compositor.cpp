@@ -1,5 +1,6 @@
 #include "engine/engine.h"
 #include "engine/frame_presenter.h"
+#include "engine/sub_document.h"
 #include "engine/inspector_highlight.h"
 #include "engine/overflow.h"
 
@@ -401,8 +402,6 @@ void Engine::replaySystemPanelLayers(render::SkiaRenderer* renderer,
 void Engine::recordIframeLayers() {
     if (iframeDocs_.empty() || !recordingRenderer_ || !drawTraversal_) return;
     for (auto& d : iframeDocs_) {
-        d->cmdBuffer.clear();
-        if (!d->document || !d->document->documentElement()) continue;
         // Refresh the box from the host <iframe> element's current layout, so a
         // resized preview re-lays-out (and re-rasterizes) at the new size instead
         // of stretching a stale-size texture. The element was laid out by the
@@ -412,36 +411,8 @@ void Engine::recordIframeLayers() {
             if (lb.contentRect.width  > 0) d->boxW = static_cast<int>(lb.contentRect.width);
             if (lb.contentRect.height > 0) d->boxH = static_cast<int>(lb.contentRect.height);
         }
-        // Style + lay the sub-document out at its box (mirrors layoutSystemPanels):
-        // JS may have mutated its DOM since the last frame, and the text runs the
-        // draw consumes are produced here.
-        // Point the style adapter's hover/active state at THIS sub-document's
-        // targets before resolving it (the thread-local was last set for the
-        // host doc). :hover in the sub-doc resolves against its own hovered
-        // element; restored to the host's on the next host resolveStyles.
-        layout::ElementRefAdapter::setHoveredElement(d->hoveredElement);
-        d->document->resolveStyles();
-        d->document->performLayout(static_cast<float>(d->boxW),
-                                   static_cast<float>(d->boxH), *textMetrics_);
-        // Hand this frame's <canvas> draw calls (recorded into each scene's
-        // command list by JS on the main thread) to the scene's staged buffer,
-        // so the raster-side inline blit (replayIframeLayers) can replay them.
-        // Mirrors stageSystemPanelCanvases for panels.
-        for (auto& scene : d->canvasScenes) {
-            if (scene) scene->stageCommandsForRaster();
-        }
-        recordingRenderer_->setBuffer(&d->cmdBuffer);
-        drawTraversal_->setLayerBreakCallback(
-            [this](canvas::CanvasScene* scene, unsigned int, float x, float y,
-                   float w, float h, float, float, float, float) {
-                if (scene) recordingRenderer_->recordBlitCanvasInline(scene, x, y, w, h);
-            });
-        drawTraversal_->setBasePath(d->document->basePath());
-        drawTraversal_->draw(d->document->documentElement(), 0, 0,
-                             static_cast<float>(d->boxW),
-                             static_cast<float>(d->boxH), /*viewportTop=*/0);
-        drawTraversal_->setLayerBreakCallback(nullptr);
-        recordingRenderer_->setBuffer(nullptr);
+        recordSubDoc(iframeSubDoc(*d), recordingRenderer_.get(), drawTraversal_.get(),
+                     *textMetrics_);
     }
 }
 
@@ -457,46 +428,37 @@ void Engine::replayIframeLayers(render::SkiaRenderer* renderer) {
     // context that created them. Ahead of the empty check, or churn that removed
     // the last iframe would leave its surface queued forever.
     drainIframeSurfaceFrees(renderer);
-    if (iframeDocs_.empty()) return;
-    auto* grCtx = renderer->grContext();
-    sk_sp<SkSurface> origSurface;
-    bool haveOrig = false;
-    for (auto& d : iframeDocs_) {
-        if (d->cmdBuffer.commandCount() == 0) { d->fboTexture = 0; continue; }
-        int bw = std::max(1, d->boxW), bh = std::max(1, d->boxH);
-        if (!d->surface.surface || d->surfW != bw || d->surfH != bh) {
-            if (d->surface.surface) renderer->destroyGPUSurface(d->surface);
-            d->surface = renderer->createGPUSurface(bw, bh);
-            d->surfW = bw; d->surfH = bh;
-        }
-        renderer->rewrapGPUSurface(d->surface, bw, bh);
-        auto prev = renderer->switchSurface(d->surface.surface);
-        if (!haveOrig) { origSurface = prev; haveOrig = true; }
-        if (auto* c = renderer->getCanvas()) c->clear(SK_ColorTRANSPARENT);
+    for (auto& d : iframeDocs_) replaySubDoc(iframeSubDoc(*d), renderer);
+}
 
-        render::CommandReplayer replayer(renderer);
-        replayer.setBlitCanvasInlineHandler(
-            [&](void* scenePtr, float x, float y, float w, float h) {
-                auto* scene = static_cast<canvas::CanvasScene*>(scenePtr);
-                if (!scene || w <= 0 || h <= 0) return;
-                if (grCtx) scene->setGrContext(grCtx);
-                scene->flushStaged();
-                auto* src = scene->surface();
-                if (!src) return;
-                auto img = src->makeImageSnapshot();
-                if (!img) return;
-                auto* c = renderer->getCanvas();
-                if (!c) return;
-                if (grCtx) grCtx->resetContext(); // canvas ensureSurface did raw GL; resync before sampling
-                SkRect dst = SkRect::MakeXYWH(x, y, w, h);
-                c->drawImageRect(img, dst, SkSamplingOptions(SkFilterMode::kLinear));
-                scene->clearDirty();
-            });
-        replayer.replay(d->cmdBuffer);
-        if (grCtx) grCtx->flush(d->surface.surface.get());
-        d->fboTexture = d->surface.texture;
+// Main thread: record each secondary window host's document, exactly like an
+// iframe sub-document but sized to the OS window's client area rather than an
+// element box. Runs in the same raster-idle record block.
+void Engine::recordWindowHostLayers() {
+    if (windowHosts_.empty() || !recordingRenderer_ || !drawTraversal_) return;
+    for (auto& h : windowHosts_) {
+        if (!h->document || h->pendingClose) continue;
+        // A minimized host is not presented, so there is nothing to record —
+        // but keep the last recording (and its texture) so a restore shows the
+        // old frame until the next one paints, rather than flashing blank.
+        if (h->minimized) continue;
+        syncWindowHostBox(*h);
+        recordSubDoc(windowHostSubDoc(*h), recordingRenderer_.get(),
+                     drawTraversal_.get(), *textMetrics_);
     }
-    if (haveOrig) renderer->switchSurface(origSurface);
+}
+
+// Raster thread: replay each host document into its window-sized GPU surface ->
+// WindowHost::fboTexture, which compositeWindowHosts() draws as a fullscreen
+// quad on that host's drawable. One texture per host (no layer lists), so the
+// frame's single GLsync fence covers every host's sampling exactly as it covers
+// the app's own layers.
+void Engine::replayWindowHostLayers(render::SkiaRenderer* renderer) {
+    if (!renderer || !renderer->grContext()) return;
+    for (auto& h : windowHosts_) {
+        if (h->pendingClose) continue;
+        replaySubDoc(windowHostSubDoc(*h), renderer);
+    }
 }
 
 // Authoritative, synchronous capture of an <iframe> sub-document's pixels for
@@ -518,90 +480,73 @@ std::vector<uint8_t> Engine::captureIframe(dom::Element* el, int& outW, int& out
         // No main-thread GPU Skia (e.g. --no-gpu CPU renderer): fall back to the
         // last raster-produced texture, if any.
         IframeDoc* d = iframeDocForElement(el);
-        if (!d || d->fboTexture == 0 || d->surfW <= 0 || d->surfH <= 0) return {};
-        GLuint fbo = 0;
-        glGenFramebuffers(1, &fbo);
-        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                               GL_TEXTURE_2D, d->fboTexture, 0);
-        std::vector<uint8_t> px(static_cast<size_t>(d->surfW) * d->surfH * 4);
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
-            glReadPixels(0, 0, d->surfW, d->surfH, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
-        else
-            px.clear();
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glDeleteFramebuffers(1, &fbo);
-        if (px.empty()) return {};
-        outW = d->surfW;
-        outH = d->surfH;
-        return px;
+        if (!d) return {};
+        return readbackSubDocTexture(d->fboTexture, d->surfW, d->surfH, outW, outH);
     }
 
-    // Wait until the raster worker is neither Requested nor Busy, so it is not
-    // mid-replay reading iframeDocs_ / cmdBuffer while we mutate them below. We
-    // deliberately do NOT claim a ResultReady fence — that belongs to the frame
-    // loop's consumeIfReady(); a finished-but-unclaimed worker has already
-    // stopped touching our state, which is all we need.
-    if (framePresenter_)
-        while (framePresenter_->isRasterBusyOrRequested())
-            std::this_thread::yield();
-
+    quiesceRasterForCapture();
     processPendingIframeReloads();
     recordIframeLayers();
 
     IframeDoc* d = iframeDocForElement(el);
-    if (!d || d->cmdBuffer.commandCount() == 0) return {};
-    int w = std::max(1, d->boxW), h = std::max(1, d->boxH);
+    if (!d) return {};
+    return captureSubDoc(iframeSubDoc(*d), skia, outW, outH);
+}
 
-    auto* grCtx = skia->grContext();
-    grCtx->resetContext();
-    render::SkiaRenderer::GPUSurface surf = skia->createGPUSurface(w, h);
-    if (!surf.surface) { grCtx->resetContext(); return {}; }
-    auto prev = skia->switchSurface(surf.surface);
-    if (auto* c = skia->getCanvas()) c->clear(SK_ColorTRANSPARENT);
+// The same "look" for a secondary window host, keyed by host id: quiesce the
+// raster worker, re-record the host document at its CURRENT window size, and
+// render it on the main thread. Used by the parent-side handle's capture(),
+// which is how a headless test observes a secondary window at all.
+std::vector<uint8_t> Engine::captureWindowHost(uint64_t id, int& outW, int& outH) {
+    outW = 0;
+    outH = 0;
+    if (!gl_) return {};
+    WindowHost* h = windowHostById(id);
+    if (!h || !h->document) return {};
 
-    render::CommandReplayer replayer(skia);
-    replayer.setBlitCanvasInlineHandler(
-        [&](void* scenePtr, float x, float y, float ww, float hh) {
-            auto* scene = static_cast<canvas::CanvasScene*>(scenePtr);
-            if (!scene || ww <= 0 || hh <= 0) return;
-            scene->setGrContext(grCtx);
-            scene->flushStaged();
-            auto* src = scene->surface();
-            if (!src) return;
-            auto img = src->makeImageSnapshot();
-            if (!img) return;
-            auto* c = skia->getCanvas();
-            if (!c) return;
-            grCtx->resetContext();  // canvas ensureSurface did raw GL; resync
-            c->drawImageRect(img, SkRect::MakeXYWH(x, y, ww, hh),
-                             SkSamplingOptions(SkFilterMode::kLinear));
-            scene->clearDirty();
-        });
-    replayer.replay(d->cmdBuffer);
-    grCtx->flush(surf.surface.get());
+    auto* skia = dynamic_cast<render::SkiaRenderer*>(renderer_.get());
+    if (!skia || !skia->grContext() || !recordingRenderer_ || !drawTraversal_)
+        return readbackSubDocTexture(h->fboTexture, h->surfW, h->surfH, outW, outH);
 
-    std::vector<uint8_t> pixels(static_cast<size_t>(w) * h * 4);
+    quiesceRasterForCapture();
+    syncWindowHostBox(*h);
+    recordSubDoc(windowHostSubDoc(*h), recordingRenderer_.get(),
+                 drawTraversal_.get(), *textMetrics_);
+    return captureSubDoc(windowHostSubDoc(*h), skia, outW, outH);
+}
+
+// Wait until the raster worker is neither Requested nor Busy, so it is not
+// mid-replay reading the sub-doc registries / command buffers while a capture
+// mutates them. We deliberately do NOT claim a ResultReady fence — that belongs
+// to the frame loop's consumeIfReady(); a finished-but-unclaimed worker has
+// already stopped touching our state, which is all we need.
+void Engine::quiesceRasterForCapture() {
+    if (!framePresenter_) return;
+    while (framePresenter_->isRasterBusyOrRequested())
+        std::this_thread::yield();
+}
+
+// CPU-renderer fallback shared by both capture paths: read back whatever the
+// last replay published into `tex`, with no re-record.
+std::vector<uint8_t> Engine::readbackSubDocTexture(unsigned int tex, int w, int h,
+                                                   int& outW, int& outH) {
+    if (tex == 0 || w <= 0 || h <= 0) return {};
     GLuint fbo = 0;
     glGenFramebuffers(1, &fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
-                           GL_TEXTURE_2D, surf.texture, 0);
-    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
-        pixels.clear();
+                           GL_TEXTURE_2D, tex, 0);
+    std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+    if (glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE)
+        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
     else
-        glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+        px.clear();
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glDeleteFramebuffers(1, &fbo);
-
-    skia->switchSurface(prev);
-    skia->destroyGPUSurface(surf);
-    grCtx->resetContext();
-
-    if (pixels.empty()) return {};
+    if (px.empty()) return {};
     outW = w;
     outH = h;
-    return pixels;
+    return px;
 }
 
 void Engine::compositeLayers(const std::vector<UILayer>& layers, GLuint targetFBO,

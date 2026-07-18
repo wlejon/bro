@@ -151,14 +151,31 @@ battery.level;            // 0.0 .. 1.0
 
 // ── bro.window.open(src, opts) — secondary OS windows ────────────────────────
 //
-// *** v1 IN PROGRESS ***  This chunk ships the WINDOW lifecycle only: open()
-// creates a real secondary OS window (blank, cleared to a solid color), the
-// handle controls its geometry/title/focus, and close() / the OS close
-// button destroy it and fire 'close'. The `src` argument (an app directory
-// or index.html, resolved like <iframe src>) is validated and stored but NO
-// DOCUMENT IS CREATED YET — the per-window document/realm, rendering,
-// 'load'/'message' events, and postMessage land with the next chunk of the
-// multiwindow plan. Do not ship apps against this surface yet.
+// *** v1 IN PROGRESS ***  A secondary window is a full, isolated bro app in
+// its own OS window: `src` (an app directory or index.html, resolved exactly
+// like <iframe src>) is loaded into its own JS realm, DOM tree, timers and 2D
+// canvas scenes, laid out at the window's client size and rendered into it.
+// The handle controls geometry/title/focus, reports 'load' when the document
+// is ready, exposes capture() for the window's pixels, and fires 'close' on
+// close() / the OS close button.
+//
+// Still to come (next chunk of the multiwindow plan): postMessage in both
+// directions, 'message' events, window.close() self-close, and INPUT — mouse,
+// keyboard and IME still go to the main window only, so a secondary window
+// renders and animates but does not yet respond to clicks or typing.
+//
+// v1 refusals inside a secondary window's document, each logged as a clear
+// warning rather than failing silently: WebGL contexts (getContext('webgl')
+// returns null), 3D scene graphs (bro.scene is not installed in a child
+// realm, as in iframes), and nested <iframe> elements (the element lays out
+// as an empty box, its src never loads).
+//
+// The child realm gets the standard sub-document bindings — DOM, timers,
+// 2D canvas, storage, settings, images — plus a bro.window scoped to ITS
+// window: bro.window.state / getPosition / setPosition / minimize / maximize
+// / restore / borderless / alwaysOnTop / getDisplays all act on the secondary
+// window, and window.screen / devicePixelRatio report for the display it sits
+// on. bro.window.open itself stays main-realm-only and throws there.
 //
 // Realm policy: only the MAIN app realm may open windows. Calling
 // bro.window.open from an iframe (or any other child realm) throws
@@ -176,6 +193,8 @@ battery.level;            // 0.0 .. 1.0
 // state); setPosition no-ops on hidden windows (desk-dependent); focus()
 // no-ops. flush() runs the drain, so open/close are assertable:
 //   const w = bro.window.open('palette', { width: 320 });  flush();
+// flush() also runs the child's timers under virtual time, and capture()
+// works, so a headless test can drive and assert a secondary window end to end.
 
 const win = bro.window.open('palette', {   // app dir or index.html, like <iframe src>
     width: 320, height: 200,               // client size, px (default 800x600)
@@ -203,6 +222,21 @@ win.addEventListener('close', (ev) => {  // OS close button or close();
 });
 win.removeEventListener('close', fn);
 
-// NEXT CHUNK (not yet available): win.postMessage(data, transfer),
-// 'load'/'message'/'resize' events, win.capture(), scoped bro.window inside
-// the child realm, window.close() self-close.
+win.addEventListener('load', (ev) => {   // the window's document is parsed,
+    ev.target === win;                   // scripted and laid out — fires once,
+});                                      // at the drain after open()
+
+// win.capture() — the window's pixels as ImageData ({ width, height, data },
+// top-down RGBA), or null before the document loads / after close. The engine
+// re-records the document at its current size on the calling thread, so a
+// capture taken right after a change shows that change (no rAF timing games).
+// This is also how a headless test observes a secondary window at all.
+const shot = win.capture();
+shot.width; shot.height; shot.data;      // Uint8ClampedArray, 4 bytes per px
+
+// Resizing the window (setSize, or the user dragging its edge) updates the
+// child realm's innerWidth/innerHeight and fires a 'resize' event there, then
+// re-lays-out and re-renders the document at the new size.
+
+// NEXT CHUNK (not yet available): win.postMessage(data, transfer), 'message'
+// events, window.close() self-close, and input routing into the window.

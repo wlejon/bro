@@ -47,6 +47,7 @@ add_library(bro_engine STATIC
     replaced_elements.cpp
     system_panels.cpp
     iframe.cpp
+    sub_document.cpp
     window_host.cpp
     settings.cpp
     overlay.cpp

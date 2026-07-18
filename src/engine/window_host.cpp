@@ -1,11 +1,18 @@
 // Secondary window hosts — the engine side of bro.window.open().
 //
-// v1 IN PROGRESS (multiwindow plan, chunk 1): each host owns a real OS window
-// (platform::Window::createSecondary — SDL_WINDOW_OPENGL, NO GL context) with
-// full open/close lifecycle, per-host focus/minimized/occluded state, and a
-// per-window composite pass that clears it to the host's color and swaps at
-// interval 0. The host's document/realm and actual content rendering land
-// with the next chunk; until then `opts.src` is stored, not loaded.
+// Each host owns a real OS window (platform::Window::createSecondary —
+// SDL_WINDOW_OPENGL, NO GL context) AND the isolated document realm rendered
+// into it: its own JSContext, timers, DOM tree and 2D canvas scenes, built from
+// `opts.src` by the shared sub-document core (engine/sub_document.h) that also
+// backs <iframe>. Per frame the host document records on the main thread,
+// replays into a window-sized GPU surface on the raster thread, and composites
+// as one fullscreen quad on its own drawable.
+//
+// GL: there is exactly ONE GL context. compositeWindowHosts() makes it current
+// on each host's drawable in turn, draws that host's single texture, and swaps
+// at interval 0 — the main window keeps the frame's one pacing swap. Because
+// each host publishes exactly ONE texture (no layer lists), the frame's single
+// GLsync fence covers every host's sampling with no extra handshake.
 //
 // Lifecycle discipline: creation and destruction are QUEUED and drained at
 // the raster-idle point (processPendingWindowHosts — beside
@@ -15,16 +22,25 @@
 // callbacks (which run app JS) off the input-event stack.
 
 #include "engine/engine.h"
+#include "engine/sub_document.h"
 
+#include "dom/document.h"
 #include "js/runtime.h"
+#include "js/timers.h"
 #include "js/window_host_bindings.h"
+#include "canvas/canvas_scene.h"
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
+#include "render/command_buffer.h"
+#include "render/gl_context.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 
 #include <SDL3/SDL.h>
 #include <glad/gl.h>
+
+#include <algorithm>
+#include <cstddef>
 
 namespace bro::engine {
 
@@ -92,6 +108,12 @@ void Engine::processPendingWindowHosts() {
         WindowHost* h = windowHosts_[i].get();
         if (!h->pendingClose) { ++i; continue; }
         uint64_t id = h->id;
+        // Document first (frees JS/DOM state the raster thread replays), then
+        // the surface into the owning context's free list, then the window.
+        teardownWindowHostDoc(*h);
+        queueIframeSurfaceFree(std::move(h->surface));
+        h->surfW = h->surfH = 0;
+        h->fboTexture = 0;
         h->window.reset();  // destroys the SDL window (no GL context to touch)
         windowHosts_.erase(windowHosts_.begin() + static_cast<ptrdiff_t>(i));
         // Fire the handle's 'close' AFTER the registry forgot the id, so
@@ -143,13 +165,24 @@ void Engine::processPendingWindowHosts() {
         h->window->getSize(w, ht);
         h->width = w;
         h->height = ht;
+        // Headless pins the scale like the rest of the pipeline; windowed
+        // hosts get the scale of the display they actually opened on.
+        h->displayScale = (displayMode_ == DisplayMode::Headless)
+                              ? 1.0
+                              : static_cast<double>(h->window->getDisplayScale());
+        h->boxW = w;
+        h->boxH = ht;
         LOG_INFO("bro.window: opened secondary window id=%llu sdl=%u (%dx%d%s)",
                  static_cast<unsigned long long>(h->id), h->sdlId, w, ht,
                  h->opts.hidden ? ", hidden" : "");
+        createWindowHostDoc(*h);
+        if (!h->document) failed.push_back(h->id);
     }
     for (uint64_t id : failed) {
         for (size_t i = 0; i < windowHosts_.size(); ++i) {
             if (windowHosts_[i]->id == id) {
+                teardownWindowHostDoc(*windowHosts_[i]);
+                queueIframeSurfaceFree(std::move(windowHosts_[i]->surface));
                 windowHosts_.erase(windowHosts_.begin() + static_cast<ptrdiff_t>(i));
                 break;
             }
@@ -183,8 +216,40 @@ void Engine::compositeWindowHosts() {
         glClearColor(h->clearColor[0], h->clearColor[1],
                      h->clearColor[2], h->clearColor[3]);
         glClear(GL_COLOR_BUFFER_BIT);
-        // v1: blank clear only. The host document's composite (fboTexture
-        // quad) lands with the next multiwindow chunk.
+        // The host document, as one fullscreen quad. The surface is a top-down
+        // Skia GPU surface (V=0 at top), like the iframe layers in
+        // compositeLayers. Quad coordinates are in the host's WINDOW units and
+        // the shader's viewport uniform matches, so a HiDPI drawable simply
+        // scales — v1 keeps host surfaces at window-size units.
+        if (h->fboTexture) {
+            float qw = static_cast<float>(std::max(1, h->boxW));
+            float qh = static_cast<float>(std::max(1, h->boxH));
+            glUseProgram(gl_->textureProgram());
+            float vp[2] = {qw, qh};
+            glUniform2fv(gl_->textureViewportLoc(), 1, vp);
+            glUniform1i(gl_->textureSamplerLoc(), 0);
+            glDisable(GL_DEPTH_TEST);
+            glDisable(GL_CULL_FACE);
+            glEnable(GL_BLEND);
+            glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+            glBindVertexArray(uiQuadVAO_);
+            glBindBuffer(GL_ARRAY_BUFFER, uiQuadVBO_);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE,
+                                  sizeof(render::TextureVertex), (void*)0);
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE,
+                                  sizeof(render::TextureVertex),
+                                  (void*)offsetof(render::TextureVertex, u));
+            glActiveTexture(GL_TEXTURE0);
+            render::TextureVertex quad[6] = {
+                {0,  0,  0, 0}, {qw, 0,  1, 0}, {qw, qh, 1, 1},
+                {0,  0,  0, 0}, {qw, qh, 1, 1}, {0,  qh, 0, 1},
+            };
+            glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_DYNAMIC_DRAW);
+            glBindTexture(GL_TEXTURE_2D, h->fboTexture);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+        }
         h->window->swapWindow();
     }
     if (switched) {
@@ -201,7 +266,18 @@ void Engine::destroyAllWindowHosts(bool notifyJs) {
     if (windowHosts_.empty()) return;
     std::vector<uint64_t> ids;
     ids.reserve(windowHosts_.size());
-    for (auto& h : windowHosts_) ids.push_back(h->id);
+    for (auto& h : windowHosts_) {
+        ids.push_back(h->id);
+        teardownWindowHostDoc(*h);
+        // The surface belongs to whichever context replayed it. Windowed, the
+        // raster thread already released it on its way out (rasterThreadFunc's
+        // exit cleanup runs before shutdown() gets here) and this is a no-op.
+        // Headless, the main renderer owns it and ~Engine drains the queue
+        // right after shutdown() returns.
+        queueIframeSurfaceFree(std::move(h->surface));
+        h->surfW = h->surfH = 0;
+        h->fboTexture = 0;
+    }
     windowHosts_.clear();  // destroys the SDL windows
     if (notifyJs && jsRuntime_) {
         for (uint64_t id : ids)
@@ -246,6 +322,9 @@ void Engine::handleHostResized(uint32_t sdlWindowId, int w, int h) {
     if (WindowHost* host = windowHostBySdlId(sdlWindowId)) {
         host->width = w;
         host->height = h;
+        // The realm's innerWidth/innerHeight + 'resize' event follow at the
+        // next record (syncWindowHostBox) — that runs at the raster-idle point,
+        // so the app JS a resize listener triggers never lands mid-frame.
         uiDirty_ = true;  // repaint the host at its new size
     }
 }
@@ -267,6 +346,116 @@ void Engine::handleHostOccluded(uint32_t sdlWindowId, bool occluded) {
     if (WindowHost* host = windowHostBySdlId(sdlWindowId)) {
         host->occluded = occluded;
     }
+}
+
+// ---------------------------------------------------------------------------
+// The host's document realm
+// ---------------------------------------------------------------------------
+
+// Build one host's document from opts.src. Runs at the raster-idle drain only
+// (processPendingWindowHosts). A src that doesn't resolve leaves h.document
+// null; the caller treats that like a failed window create, so JS gets a clean
+// 'close' instead of a live handle onto a blank window.
+void Engine::createWindowHostDoc(WindowHost& h) {
+    SubDocSource source = loadSubDocSource(manifest_.basePath, h.opts.src,
+                                           &assetMounts_, "bro.window.open");
+    if (!source.ok) return;
+
+    SubDocRef ref = windowHostSubDoc(h);
+    buildSubDocDocument(ref, source, effectiveColorScheme());
+
+    SubDocRealmOptions ropts;
+    // The host realm's window globals describe ITS window, not the primary one:
+    // window.screen, navigator, and the scoped bro.window.* below all resolve
+    // through the per-JSContext state window_bindings now keeps.
+    ropts.window = h.window.get();
+    ropts.displayScale = h.displayScale;
+    ropts.headless = displayMode_ == DisplayMode::Headless;
+    ropts.settings = settings_.get();
+    ropts.installBroWindow = true;
+    ropts.warnOnWebGL = true;
+    ropts.nowMs = engineNowMs_;
+    ropts.what = "bro.window";
+    buildSubDocRealm(ref, jsRuntime_.get(), this, source, renderer_.get(), ropts);
+
+    runSubDocScripts(ref, source, "bro.window");
+    finishSubDocLoad(ref, source, renderer_.get(), audioEngine_.get(), *textMetrics_);
+    // v1 refusal: syncIframes() only walks the app document, so a nested
+    // <iframe> would silently never load. Say so.
+    warnNestedIframes(ref, "bro.window");
+
+    LOG_INFO("bro.window: loaded document '%s' (%dx%d, id=%llu)",
+             source.appDir.c_str(), h.boxW, h.boxH,
+             static_cast<unsigned long long>(h.id));
+
+    // 'load' on the PARENT-side handle, once the document is parsed, scripted
+    // and laid out — the same point <iframe> fires its element 'load'. Runs on
+    // the parent realm's context (the handle lives there).
+    h.loadFired = true;
+    if (jsRuntime_)
+        js::windowHostNotifyLoaded(jsRuntime_->getContext(), h.id);
+}
+
+void Engine::teardownWindowHostDoc(WindowHost& h) {
+    if (!h.jsCtx && !h.document) return;
+    h.hoveredElement = nullptr;
+    h.activeElement = nullptr;
+    // Surface deliberately untouched — see teardownSubDoc; every caller routes
+    // it through queueIframeSurfaceFree.
+    teardownSubDoc(windowHostSubDoc(h));
+}
+
+// Track the OS window's client size. SDL_EVENT_WINDOW_RESIZED already updated
+// width/height; this is where the layout box and the realm catch up.
+void Engine::syncWindowHostBox(WindowHost& h) {
+    int w = std::max(1, h.width);
+    int ht = std::max(1, h.height);
+    if (w == h.boxW && ht == h.boxH) return;
+    h.boxW = w;
+    h.boxH = ht;
+    if (h.document) {
+        h.document->setMediaViewport(static_cast<float>(w), static_cast<float>(ht));
+        h.document->markDirty();
+    }
+    if (!h.jsCtx) return;
+    // Per-realm innerWidth/innerHeight + a 'resize' event — the same bridge the
+    // app realm gets in handleResize().
+    JSValue global = JS_GetGlobalObject(h.jsCtx);
+    JS_SetPropertyStr(h.jsCtx, global, "innerWidth", JS_NewInt32(h.jsCtx, w));
+    JS_SetPropertyStr(h.jsCtx, global, "innerHeight", JS_NewInt32(h.jsCtx, ht));
+    JS_SetPropertyStr(h.jsCtx, global, "outerWidth", JS_NewInt32(h.jsCtx, w));
+    JS_SetPropertyStr(h.jsCtx, global, "outerHeight", JS_NewInt32(h.jsCtx, ht));
+    JSValue dispatch = JS_GetPropertyStr(h.jsCtx, global,
+                                         "__bro_dispatch_window_event");
+    if (JS_IsFunction(h.jsCtx, dispatch)) {
+        JSValue evtType = JS_NewString(h.jsCtx, "resize");
+        JSValue evt = JS_NewObject(h.jsCtx);
+        JS_SetPropertyStr(h.jsCtx, evt, "type", JS_NewString(h.jsCtx, "resize"));
+        JS_SetPropertyStr(h.jsCtx, evt, "target", JS_DupValue(h.jsCtx, global));
+        JSValue dArgs[2] = {evtType, evt};
+        JSValue ret = JS_Call(h.jsCtx, dispatch, global, 2, dArgs);
+        JS_FreeValue(h.jsCtx, ret);
+        JS_FreeValue(h.jsCtx, evtType);
+        JS_FreeValue(h.jsCtx, evt);
+    }
+    JS_FreeValue(h.jsCtx, dispatch);
+    JS_FreeValue(h.jsCtx, global);
+    if (jsRuntime_) jsRuntime_->executePendingJobs();
+}
+
+// Advance every host document's timers + rAF, and report whether any needs
+// (re)recording this frame. Same role tickIframes plays for <iframe>: host
+// activity has no other route to uiDirty_, so without it an animating secondary
+// window would never re-record.
+bool Engine::tickWindowHosts(double nowMs) {
+    if (windowHosts_.empty()) return false;
+    bool active = false;
+    for (auto& h : windowHosts_) {
+        if (!h->document || h->pendingClose) continue;
+        if (tickSubDoc(windowHostSubDoc(*h), nowMs)) active = true;
+    }
+    if (jsRuntime_) jsRuntime_->executePendingJobs();
+    return active;
 }
 
 } // namespace bro::engine

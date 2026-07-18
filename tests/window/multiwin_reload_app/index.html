@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head><title>multiwin reload</title></head>
+<body>
+<div id="stage">boot</div>
+<script>
+// Two-run app for the secondary-window teardown-on-reload test, driven by
+// tests/window/test_multiwindow_reload.js via a child bro-headless.
+//
+// Run 1 opens two secondary windows, lets them fully materialize and load
+// their documents (so there are live realms, live 2D canvas scenes and live
+// GPU surfaces to destroy), then calls location.reload(). performAppReload
+// must tear every one of them down with the dying realm.
+// Run 2 proves the engine came out of that clean: a fresh window opens, loads
+// and renders in the NEW realm.
+//
+// Realms don't survive a reload, so the run counter lives in process.env.
+(function () {
+    var src = '../../test_app/multiwin_doc';
+    if (!process.env.BRO_MULTIWIN_RELOAD_STAGE) {
+        process.env.BRO_MULTIWIN_RELOAD_STAGE = '1';
+        var a = bro.window.open(src, { width: 250, height: 100 });
+        var b = bro.window.open(src, { width: 120, height: 80 });
+        flush();
+        if (a.closed || b.closed) throw new Error('run 1 windows failed to open');
+        if (!a.capture()) throw new Error('run 1 window did not render');
+        document.getElementById('stage').textContent = 'first run';
+        location.reload();
+    } else {
+        var w = bro.window.open(src, { width: 250, height: 100 });
+        flush();
+        if (w.closed) throw new Error('post-reload window failed to open');
+        var shot = w.capture();
+        if (!shot || shot.width !== 250 || shot.height !== 100)
+            throw new Error('post-reload window did not render');
+        // Stripe 1 (x=25) is the child's realm-isolation probe: green.
+        var i = (50 * shot.width + 25) * 4;
+        if (!(shot.data[i] < 64 && shot.data[i + 1] > 192 && shot.data[i + 2] < 64))
+            throw new Error('post-reload window rendered wrong pixels');
+        w.close();
+        flush();
+        document.getElementById('stage').textContent = 'second run';
+        console.log('MULTIWIN_RELOAD_OK');
+    }
+})();
+</script>
+</body>
+</html>

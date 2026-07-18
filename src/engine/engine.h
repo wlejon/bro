@@ -66,6 +66,10 @@ namespace bro::engine {
 class FramePresenter;
 class LayoutPipeline;
 class AudioInference;
+/// By-reference view of the members shared by every hosted sub-document
+/// (engine/sub_document.h). Incomplete here on purpose — engine.h is what
+/// sub_document.h includes, not the other way round.
+struct SubDocRef;
 
 enum class DisplayMode { Windowed, Headless, Server };
 
@@ -288,12 +292,13 @@ public:
     void handleTouchCancel(uint64_t fingerId, float x, float y);
 
     // ── Secondary window hosts (src/engine/window_host.cpp) ─────────────────
-    // One extra OS window opened via bro.window.open(src, opts). v1 IN
-    // PROGRESS: this chunk gives each host a real (blank, clear-color) OS
-    // window with full lifecycle — open/close/'close' events, per-host
-    // focus/minimized/occluded state, and a per-window composite+swap pass.
-    // The src is resolved and STORED only; the host's document/realm and
-    // rendering land with the next chunk of the multiwindow plan.
+    // One extra OS window opened via bro.window.open(src, opts). Each host is
+    // a real OS window hosting a full, isolated document realm built from
+    // opts.src — open/close/'close'/'load' events, per-host
+    // focus/minimized/occluded state, per-host record/replay of that document,
+    // and a per-window composite+swap pass. v1 IN PROGRESS: input routing into
+    // hosts lands with the next chunk of the multiwindow plan, so today only
+    // the main window receives mouse/keyboard/IME.
     //
     // Threading/lifecycle: creation and destruction are QUEUED
     // (openWindowHost/closeWindowHost) and drained at the raster-idle point
@@ -317,8 +322,13 @@ public:
         bool hidden = false;   // forced true in headless (deterministic tests)
     };
 
-    /// One secondary window host. `window` is a context-less platform window
+    /// One secondary window host: a real OS window plus the isolated document
+    /// realm rendered into it. `window` is a context-less platform window
     /// (Window::createSecondary); null while pendingCreate or after close.
+    ///
+    /// The document half is the same shape as IframeDoc and is driven by the
+    /// same shared helpers (engine/sub_document.h) through windowHostSubDoc().
+    /// It is NOT a common base class — see that header for why.
     struct WindowHost {
         uint64_t id = 0;        // bro-side handle id (stable across lifetime)
         uint32_t sdlId = 0;     // SDL windowID for event routing (0 until created)
@@ -330,9 +340,32 @@ public:
         bool minimized = false;
         bool occluded = false;
         int width = 0, height = 0;  // client size in window coords
-        // Host-configurable composite clear color (the blank window's fill
-        // until the sub-document lands).
+        // Composite clear color behind the document (visible only where the
+        // document surface is transparent, and before the first frame lands).
         float clearColor[4] = {0.07f, 0.07f, 0.09f, 1.0f};
+
+        // ── The host's document realm ────────────────────────────────────────
+        double displayScale = 1.0;   // this window's DPR (headless pins 1.0)
+        bool loadFired = false;      // handle 'load' dispatched after first record
+        JSContext* jsCtx = nullptr;
+        std::unique_ptr<js::Timers> timers;
+        // canvasScenes MUST precede `document`: Elements (owned by document)
+        // fire CanvasScene::onElementFinalized on destroy, which needs the
+        // scenes alive. Member destruction is reverse-declaration order, so
+        // this destructs last.
+        std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes;
+        std::unique_ptr<dom::Document> document;
+        MouseDispatchState mouseState;          // per-doc click/dblclick tracking
+        dom::Element* hoveredElement = nullptr; // per-window :hover target
+        dom::Element* activeElement = nullptr;  // per-window keyboard focus
+        int boxW = 0, boxH = 0;                 // last client size laid out
+        // Render target: the host document paints into cmdBuffer (main thread),
+        // replayed into `surface` (raster thread) → fboTexture, which
+        // compositeWindowHosts() draws fullscreen on this window's drawable.
+        render::CommandBuffer cmdBuffer;
+        render::SkiaRenderer::GPUSurface surface;
+        int surfW = 0, surfH = 0;
+        unsigned int fboTexture = 0;
     };
 
     /// Queue a new host. Returns its bro id immediately; the OS window
@@ -376,6 +409,13 @@ public:
     /// render (chunk 2), and firing 'close' runs app JS. Fires handle 'close'
     /// events through the window-host bindings.
     void processPendingWindowHosts();
+
+    /// Synchronous, main-thread capture of a host window's document pixels
+    /// (top-down RGBA), for the parent-side handle's capture(). Brings the
+    /// host current first — quiesce the raster worker, re-record at the
+    /// window's CURRENT size — so the result never lags by a frame. Empty when
+    /// the host is unknown or has no document.
+    std::vector<uint8_t> captureWindowHost(uint64_t id, int& outW, int& outH);
 
     /// All gamepad slots (connected and not) — read by the JS bindings to
     /// build navigator.getGamepads() snapshots.
@@ -981,6 +1021,17 @@ private:
     void processPendingIframeReloads();
     void recordIframeLayers();
     void replayIframeLayers(render::SkiaRenderer* renderer);
+    /// SubDocRef views of the two sub-document flavours — the bridge to the
+    /// shared helpers in engine/sub_document.h.
+    SubDocRef iframeSubDoc(IframeDoc& d);
+    SubDocRef windowHostSubDoc(WindowHost& h);
+    /// Block until the raster worker is idle so a synchronous capture can
+    /// re-record sub-documents it may otherwise be mid-replay on.
+    void quiesceRasterForCapture();
+    /// Read back a sub-document's last published texture with no re-record —
+    /// the fallback when there is no main-thread GPU Skia (--no-gpu).
+    std::vector<uint8_t> readbackSubDocTexture(unsigned int tex, int w, int h,
+                                               int& outW, int& outH);
     /// Hand an orphaned iframe GPU surface to whoever owns its GL context, to be
     /// destroyed there.
     ///
@@ -1316,6 +1367,20 @@ private:
     /// then restore the main drawable + its vsync preference. The main swap
     /// runs after this and stays the frame's single pacing swap.
     void compositeWindowHosts();
+    /// Build a host's document realm from opts.src (queued-create drain), and
+    /// tear one down. Both run only at the raster-idle drain point.
+    void createWindowHostDoc(WindowHost& h);
+    void teardownWindowHostDoc(WindowHost& h);
+    /// Refresh a host's layout box from its OS window's current client size,
+    /// pushing innerWidth/innerHeight + a 'resize' event into its realm when it
+    /// changed. Called before each record.
+    void syncWindowHostBox(WindowHost& h);
+    /// Tick every host document's timers + rAF; true if any needs recording.
+    bool tickWindowHosts(double nowMs);
+    /// Main thread: record each host document into its own command buffer.
+    void recordWindowHostLayers();
+    /// Raster thread: replay each host document into its window-sized surface.
+    void replayWindowHostLayers(render::SkiaRenderer* renderer);
     /// Destroy every host synchronously (window + registry entry).
     /// notifyJs fires each handle's 'close' first — app-reload teardown wants
     /// that false-with-cleanup handled by the bindings' own cleanup instead.

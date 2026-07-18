@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #000000; }
+  .stripe { position: absolute; top: 0; width: 50px; height: 100%; background: #000000; }
+</style></head>
+<body>
+  <!-- Probe stripes. The parent test can only observe this window through
+       win.capture(), so every assertion is encoded as a 50px-wide colour band
+       at a fixed x offset. Sampled at x = 25/75/125/175/225.
+         1  0..50    realm isolation   green = the parent's globals are NOT visible
+         2  50..100  WebGL refusal     green = getContext('webgl') returned null
+         3  100..150 2D canvas         blue  = drawn by this realm's 2D context
+         4  150..200 timers            green = a setTimeout fired
+         5  200..250 resize            green = a resize event with the new width -->
+  <div class="stripe" id="s1" style="left:0"></div>
+  <div class="stripe" id="s2" style="left:50px"></div>
+  <canvas class="stripe" id="s3" style="left:100px" width="50" height="100"></canvas>
+  <div class="stripe" id="s4" style="left:150px"></div>
+  <div class="stripe" id="s5" style="left:200px"></div>
+
+  <!-- v1 refusal: a nested <iframe> in a secondary window is warned about and
+       left unloaded. Present here purely to prove it does not crash. -->
+  <iframe src="iframe_child" style="position:absolute;top:0;left:250px;width:1px;height:1px"></iframe>
+
+  <script>
+    // Anything the parent realm defines must be invisible here, and this must
+    // stay invisible to the parent (asserted on the other side).
+    globalThis.__childMarker = 1;
+    document.getElementById('s1').style.background =
+        (typeof __parentMarker === 'undefined' && typeof document !== 'undefined')
+            ? '#00ff00' : '#ff0000';
+
+    // WebGL is refused in secondary windows (v1) — getContext returns null.
+    var probe = document.createElement('canvas');
+    document.getElementById('s2').style.background =
+        (probe.getContext('webgl') === null) ? '#00ff00' : '#ff0000';
+
+    // 2D canvas IS supported and must actually paint.
+    var ctx = document.getElementById('s3').getContext('2d');
+    ctx.fillStyle = '#0000ff';
+    ctx.fillRect(0, 0, 50, 100);
+
+    // This realm's own timers run.
+    setTimeout(function () {
+      document.getElementById('s4').style.background = '#00ff00';
+    }, 50);
+
+    // A window resize reaches this realm with updated innerWidth.
+    window.addEventListener('resize', function () {
+      if (window.innerWidth === 300)
+        document.getElementById('s5').style.background = '#00ff00';
+    });
+  </script>
+</body>
+</html>

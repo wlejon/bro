@@ -12,14 +12,19 @@ namespace bro::js {
 /// objects if the realm lacks them). Only the engine's MAIN app realm may
 /// actually open windows — the function is also installed into child (iframe)
 /// realms so they get a clean, deliberate error instead of a property lookup
-/// failure. v1 IN PROGRESS: the opened window is a blank clear-color surface;
-/// its document lands with the next multiwindow chunk (docs/window-api.js).
+/// failure. The opened window hosts a real, isolated document realm built from
+/// `src` — see docs/window-api.js.
 void installWindowHostBindings(JSContext* ctx, engine::Engine* engine);
 
 /// Free every handle reference this context's registry holds (no 'close'
 /// events fire). Call on app reload for the dying realm and at engine
 /// teardown, before the context is destroyed.
 void cleanupWindowHostBindings(JSContext* ctx);
+
+/// Engine → JS: the host `id`'s document finished loading (drain point, right
+/// after the realm is built and laid out — the same moment <iframe> fires its
+/// element 'load'). Fires the handle's 'load' listeners. No-op for unknown ids.
+void windowHostNotifyLoaded(JSContext* ctx, uint64_t id);
 
 /// Engine → JS: the host `id` has been destroyed (drain point). Fires the
 /// handle's 'close' listeners (handle.closed already reads true) and releases

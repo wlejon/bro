@@ -561,6 +561,10 @@ void Engine::run() {
         // capture). Iframes host app content, so they run on the scaled
         // clock and freeze entirely while paused (their rAF included).
         if (!timePaused_ && tickIframes(engineNowMs_)) uiDirty_ = true;
+        // Secondary-window documents tick on the same terms and for the same
+        // reason: a host's own animation is the only thing that can dirty it,
+        // and uiDirty_ is what gets the frame as far as the record block.
+        if (!timePaused_ && tickWindowHosts(engineNowMs_)) uiDirty_ = true;
         // System panels (splash animation, menu, perf, settings) share the
         // raster thread, signaled via uiDirty_. Their own DOM edits never
         // touch the app document, so propagate systemDirty_ so the raster
@@ -943,6 +947,9 @@ void Engine::run() {
                     iframeSyncNeeded_ = false;
                 }
                 recordIframeLayers();
+                // Record each secondary window's document too — same thread,
+                // same raster-idle guarantee, one command buffer per host.
+                recordWindowHostLayers();
 
                 framePresenter_->signalRender(rsnap);
                 uiDirty_ = false;

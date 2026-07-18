@@ -1,10 +1,9 @@
 // bro.window.open() — secondary OS windows (multiwindow v1 IN PROGRESS).
 //
-// This chunk ships the window lifecycle: open → real (blank) OS window,
-// handle with geometry/title/focus control, close() / OS close button →
-// 'close' event. The src argument is validated and stored by the engine but
-// no document is created for it yet — that lands with the next chunk
-// (see docs/window-api.js).
+// The handle covers the whole window lifecycle — open → real OS window hosting
+// an isolated document realm built from `src`, geometry/title/focus control,
+// capture() for the window's pixels, 'load' when the document is ready, and
+// 'close' on close() / the OS close button (see docs/window-api.js).
 //
 // Realm policy: only the MAIN app realm may open windows. The binding is
 // also installed into child (iframe) realms so a call there throws a clean,
@@ -15,12 +14,14 @@
 #include "js/window_host_bindings.h"
 
 #include "engine/engine.h"
+#include "js/imagebitmap_bindings.h"
 #include "js/runtime.h"
 #include "platform/sdl_window.h"
 #include "util/log.h"
 
 #include <qjsbind/qjsbind.h>
 
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -42,9 +43,16 @@ engine::Engine* s_engine = nullptr;
 struct WindowHandle {
     engine::Engine* engine = nullptr;
     uint64_t id = 0;
-    // 'close' listeners, JS_DupValue'd. Marked in gc_mark, freed in the
-    // finalizer / on removeEventListener.
+    // 'close' / 'load' listeners, JS_DupValue'd. Marked in gc_mark, freed in
+    // the finalizer / on removeEventListener.
     std::vector<JSValue> closeListeners;
+    std::vector<JSValue> loadListeners;
+
+    std::vector<JSValue>* listenersFor(std::string_view type) {
+        if (type == "close") return &closeListeners;
+        if (type == "load")  return &loadListeners;
+        return nullptr;
+    }
 };
 
 // Per-context registry: host id → dup'd handle object. Keeps the handle
@@ -57,6 +65,7 @@ void handleFinalizer(JSRuntime* rt, JSValue val) {
         JS_GetOpaque(val, qjsbind::class_id<WindowHandle>()));
     if (!h) return;
     for (JSValue& fn : h->closeListeners) JS_FreeValueRT(rt, fn);
+    for (JSValue& fn : h->loadListeners) JS_FreeValueRT(rt, fn);
     delete h;
 }
 
@@ -86,9 +95,11 @@ JSValue js_handle_addEventListener(JSContext* ctx, JSValueConst this_val,
     auto* h = qjsbind::unwrap<WindowHandle>(ctx, this_val);
     if (!h || argc < 2 || !JS_IsFunction(ctx, argv[1])) return JS_UNDEFINED;
     const char* type = JS_ToCString(ctx, argv[0]);
-    if (type && std::string_view(type) == "close")
-        h->closeListeners.push_back(JS_DupValue(ctx, argv[1]));
-    if (type) JS_FreeCString(ctx, type);
+    if (type) {
+        if (auto* list = h->listenersFor(type))
+            list->push_back(JS_DupValue(ctx, argv[1]));
+        JS_FreeCString(ctx, type);
+    }
     return JS_UNDEFINED;
 }
 
@@ -97,16 +108,18 @@ JSValue js_handle_removeEventListener(JSContext* ctx, JSValueConst this_val,
     auto* h = qjsbind::unwrap<WindowHandle>(ctx, this_val);
     if (!h || argc < 2) return JS_UNDEFINED;
     const char* type = JS_ToCString(ctx, argv[0]);
-    if (type && std::string_view(type) == "close") {
-        for (auto it = h->closeListeners.begin(); it != h->closeListeners.end(); ++it) {
-            if (JS_VALUE_GET_PTR(*it) == JS_VALUE_GET_PTR(argv[1])) {
-                JS_FreeValue(ctx, *it);
-                h->closeListeners.erase(it);
-                break;
+    if (type) {
+        if (auto* list = h->listenersFor(type)) {
+            for (auto it = list->begin(); it != list->end(); ++it) {
+                if (JS_VALUE_GET_PTR(*it) == JS_VALUE_GET_PTR(argv[1])) {
+                    JS_FreeValue(ctx, *it);
+                    list->erase(it);
+                    break;
+                }
             }
         }
+        JS_FreeCString(ctx, type);
     }
-    if (type) JS_FreeCString(ctx, type);
     return JS_UNDEFINED;
 }
 
@@ -120,6 +133,7 @@ void registerHandleClass(JSContext* ctx) {
                                  qjsbind::NoGlobal, handleFinalizer)
         .gc_mark([](WindowHandle* h, JSRuntime* rt, JS_MarkFunc* mark) {
             for (JSValue& fn : h->closeListeners) JS_MarkValue(rt, fn, mark);
+            for (JSValue& fn : h->loadListeners) JS_MarkValue(rt, fn, mark);
         })
         .get("id", [](WindowHandle* h) { return static_cast<double>(h->id); })
         .get("closed", [](WindowHandle* h) { return hostFor(h) == nullptr; })
@@ -184,6 +198,26 @@ void registerHandleClass(JSContext* ctx) {
             if (auto* host = hostFor(h)) {
                 if (host->window && !host->opts.hidden) host->window->raise();
             }
+        })
+        // capture() — the window's pixels as ImageData ({width, height,
+        // data:Uint8ClampedArray}, top-down RGBA). Authoritative: the engine
+        // re-records the host document at its current size on this thread
+        // rather than sampling whatever the raster thread last produced, so a
+        // capture right after a DOM edit shows that edit. Null before the
+        // document loads, or once the window is closed.
+        .method("capture", [](WindowHandle* h, JSContext* c) -> JSValue {
+            if (!h->engine || !hostFor(h)) return JS_NULL;
+            int w = 0, ht = 0;
+            auto pixels = h->engine->captureWindowHost(h->id, w, ht);
+            if (pixels.empty() || w <= 0 || ht <= 0) return JS_NULL;
+            JSValue abuf = JS_NewArrayBufferCopy(c, pixels.data(), pixels.size());
+            JSValue global = JS_GetGlobalObject(c);
+            JSValue u8cCtor = JS_GetPropertyStr(c, global, "Uint8ClampedArray");
+            JSValue dataArr = JS_CallConstructor(c, u8cCtor, 1, &abuf);
+            JS_FreeValue(c, u8cCtor);
+            JS_FreeValue(c, global);
+            JS_FreeValue(c, abuf);
+            return ImageBitmapBindings::makeImageData(c, w, ht, dataArr);
         })
         .method_raw("addEventListener", js_handle_addEventListener, 2)
         .method_raw("removeEventListener", js_handle_removeEventListener, 2);
@@ -280,6 +314,40 @@ void cleanupWindowHostBindings(JSContext* ctx) {
     if (it == s_handles.end()) return;
     for (auto& [id, val] : it->second) JS_FreeValue(ctx, val);
     s_handles.erase(it);
+}
+
+// Fire one handle event without unpinning the handle (used by 'load'; 'close'
+// has its own unpin-first ordering below).
+void windowHostNotifyLoaded(JSContext* ctx, uint64_t id) {
+    auto ctxIt = s_handles.find(ctx);
+    if (ctxIt == s_handles.end()) return;
+    auto it = ctxIt->second.find(id);
+    if (it == ctxIt->second.end()) return;
+    JSValue handle = it->second;
+    auto* h = qjsbind::unwrap<WindowHandle>(ctx, handle);
+    if (!h || h->loadListeners.empty()) return;
+    // Copy — a listener may add/remove listeners while we iterate.
+    std::vector<JSValue> listeners;
+    listeners.reserve(h->loadListeners.size());
+    for (JSValue& fn : h->loadListeners) listeners.push_back(JS_DupValue(ctx, fn));
+    for (JSValue& fn : listeners) {
+        JSValue ev = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, ev, "type", JS_NewString(ctx, "load"));
+        JS_SetPropertyStr(ctx, ev, "target", JS_DupValue(ctx, handle));
+        JSValue ret = JS_Call(ctx, fn, handle, 1, &ev);
+        if (JS_IsException(ret)) {
+            JSValue ex = JS_GetException(ctx);
+            const char* str = JS_ToCString(ctx, ex);
+            if (str) {
+                LOG_ERROR("window 'load' listener: %s", str);
+                JS_FreeCString(ctx, str);
+            }
+            JS_FreeValue(ctx, ex);
+        }
+        JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, ev);
+        JS_FreeValue(ctx, fn);
+    }
 }
 
 void windowHostNotifyClosed(JSContext* ctx, uint64_t id) {

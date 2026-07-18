@@ -391,6 +391,10 @@ void Engine::advanceTime(double ms) {
         // (engine_frame.cpp), headless ticked nothing. Iframes host app
         // content, so they run on the scaled clock and freeze while paused.
         if (!timePaused_) tickIframes(engineNowMs_);
+        // Secondary-window documents own their Timers too — without this an
+        // app opened via bro.window.open() would never see setTimeout/rAF fire
+        // under headless virtual time.
+        if (!timePaused_) tickWindowHosts(engineNowMs_);
 
         // Network polling is delivered via a frame pump (registered in
         // engine_init when BRO_WITH_NET is on) — see the framePumps_ loop above.
