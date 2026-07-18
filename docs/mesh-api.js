@@ -1321,6 +1321,22 @@ class Pose {
    * Optional `mask` is a Uint8Array of length boneCount; 1 enables blend.
    */
   static blend(a, b, weight, mask) {}
+
+  /**
+   * Weighted N-way blend → NEW Pose. Weights (plain array or Float32Array,
+   * one per pose) are normalized internally. Translations/scales are
+   * weighted sums; rotations are weighted nlerp, hemisphere-aligned
+   * against the highest-weight pose — the industry-standard N-way
+   * accumulate, and what skinnedMesh blend spaces use internally. With
+   * exactly 2 poses it takes an exact slerp path identical to blend().
+   * Optional `mask` as in blend(); masked-out bones take the
+   * highest-weight pose's values.
+   * @param {Pose[]} poses
+   * @param {number[]|Float32Array} weights
+   * @param {Uint8Array} [mask]
+   * @returns {Pose}
+   */
+  static blendN(poses, weights, mask) {}
 }
 
 

@@ -1835,9 +1835,14 @@ class SceneNode {
   //   node.play('wave', { loop: false, mask: upperBody }); // masked layer on top
   //   node.onAnimationFinished = (name) => node.play('idle', { fadeTime: 0.2 });
   //
-  // Model: one BASE track (full-body clip; play() crossfades from whatever
-  // was playing) plus one optional masked LAYER track blended on top (e.g.
-  // upper-body wave over a walk). Not a state machine or blend tree.
+  // Model: one BASE track — a single clip or a registered BLEND SPACE
+  // (addBlendSpace1D/2D + setBlendPos; Godot BlendSpace analog with shared-
+  // phase sync); play() crossfades from whatever was playing — plus up to 8
+  // ordered masked LAYER tracks blended on top via playLayer(slot, ...)
+  // (e.g. upper-body wave over a walk; play() with a mask is layer slot 0).
+  // blendState() reports the live mix. Not a state machine (yet). Full
+  // blending semantics + locomotion recipe: docs/animation-api.js,
+  // "Skeletal blending".
   //
   // Until the first play() — and again after stop() — the player is inactive
   // and manual setSkinningMatrices keeps full control of the palette.
@@ -1859,28 +1864,114 @@ class SceneNode {
   addClip(name, animation) {}
 
   /**
-   * Start a clip (see also play/stop/pause/resume above).
+   * Start a clip or blend space (see also play/stop/pause/resume above).
    *
-   * Without `mask`, the clip takes the BASE track: with fadeTime > 0 the
-   * player crossfades from the current blended pose over that many seconds
-   * (the outgoing clip keeps advancing while it fades). With `mask`, the
-   * clip becomes the LAYER track, blended over the base only on bones whose
-   * mask entry is 1 — a one-shot layer expires on finish, a looping layer
-   * persists until stop() or a replacement.
+   * Without `mask`, the name takes the BASE track — a clip from addClip or
+   * a blend space from addBlendSpace1D/2D (a space shadows a same-named
+   * clip; spaces always loop). With fadeTime > 0 the player crossfades
+   * from the current blended pose over that many seconds (the outgoing
+   * track keeps advancing while it fades — blend spaces included). With
+   * `mask`, this is shorthand for playLayer(0, name, opts).
    *
-   * @param {string} name - a clip registered with addClip (throws otherwise)
+   * @param {string} name - a registered clip or blend space (throws otherwise)
    * @param {Object} [opts]
    * @param {boolean} [opts.loop=true] - false: hold the last frame and fire
-   *        onAnimationFinished once
+   *        onAnimationFinished once (ignored by blend spaces)
    * @param {number} [opts.speed=1] - playback rate (negative plays backward)
    * @param {number} [opts.fadeTime=0] - crossfade seconds (base track only)
    * @param {number} [opts.weight=1] - blend weight; base: vs bind pose,
    *        layer: vs what's underneath
    * @param {Uint8Array|number[]} [opts.mask] - per-bone 0/1, length =
-   *        skeleton bone count; non-empty selects the layer track
+   *        skeleton bone count; non-empty routes to layer slot 0
    * @returns {SceneNode} this
    */
   // play(name, opts) — documented with the shared play() above.
+
+  /**
+   * Register a 1D blend space: clips at scalar parameter positions
+   * (e.g. speed). play(name) makes it the base track; setBlendPos picks
+   * the mix (clamped to [min, max]; the two neighbors blend by position).
+   * All member clips advance on one shared normalized phase so gait
+   * cycles stay foot-aligned. Replaces a same-named space in place.
+   * Full semantics: docs/animation-api.js, "Skeletal blending".
+   * @param {string} name
+   * @param {Array<{clip: string, pos: number, timescale?: number}>} points
+   *        clip names must already be registered via addClip; timescale
+   *        compensates cadence (2 = counts as a half-length cycle)
+   * @returns {SceneNode} this
+   */
+  addBlendSpace1D(name, points) {}
+
+  /**
+   * Register a 2D blend space (e.g. strafe x/z velocity). The 3 nearest
+   * points blend by normalized inverse-squared-distance weights — on a
+   * sample point that clip takes full weight; degenerate layouts
+   * (coincident/collinear points) are safe. Simpler than Godot's
+   * triangulated BlendSpace2D; see docs/animation-api.js for the
+   * trade-off. Same phase sync as 1D.
+   * @param {string} name
+   * @param {Array<{clip: string, pos: [number, number], timescale?: number}>} points
+   * @returns {SceneNode} this
+   */
+  addBlendSpace2D(name, points) {}
+
+  /**
+   * Move a blend space's parameter — instant, no internal smoothing
+   * (tween it from app code for easing); re-poses immediately even while
+   * paused. 1D clamps x to the space's range; y is ignored. Also accepts
+   * setBlendPos(name, [x, y]).
+   * @param {string} name - a registered blend space (throws otherwise)
+   * @param {number|number[]} x
+   * @param {number} [y]
+   * @returns {SceneNode} this
+   */
+  setBlendPos(name, x, y) {}
+
+  /**
+   * Start a clip on layer `slot` (0..7), replacing that slot atomically.
+   * Layers blend over the base in ascending slot order; each is
+   * independently masked, weighted, and fadeable. Blend spaces are
+   * base-track only. Accepts the same opts as play(), where `fadeTime`
+   * fades the layer's WEIGHT in from 0 and `mask` empty/omitted means the
+   * whole body. A non-looping layer expires on finish (fires
+   * onAnimationFinished); looping layers persist.
+   * @param {number} slot
+   * @param {string} name - a clip registered with addClip
+   * @param {Object} [opts] - {loop, speed, fadeTime, weight, mask}
+   * @returns {SceneNode} this
+   */
+  playLayer(slot, name, opts) {}
+
+  /**
+   * Fade layer `slot` out over opts.fadeTime seconds (0/omitted =
+   * immediately) and free the slot.
+   * @param {number} slot
+   * @param {{fadeTime?: number}} [opts]
+   * @returns {SceneNode} this
+   */
+  stopLayer(slot, opts) {}
+
+  /**
+   * Set a layer's blend weight at runtime (instant; multiplied by any
+   * in-progress fade). Throws on an empty slot.
+   * @param {number} slot
+   * @param {number} weight
+   * @returns {SceneNode} this
+   */
+  setLayerWeight(slot, weight) {}
+
+  /**
+   * Snapshot of the current blend mix — cheap enough for HUDs/tests.
+   * @returns {{clips: Array<{name: string, weight: number}>,
+   *            phase: number, pos?: number[],
+   *            layers: Array<{slot: number, name: string,
+   *                           weight: number, phase: number}>}}
+   *          clips = base-track composition (weights sum to 1; during a
+   *          crossfade the outgoing source appears scaled by 1 - alpha);
+   *          phase = blend space shared phase 0..1 (clip: time/duration);
+   *          pos present while a blend space is the base track.
+   */
+  blendState() {}
 
   /** Playback rate multiplier of the base track (get/set). */
   get animationSpeed() {}
@@ -1890,11 +1981,16 @@ class SceneNode {
    * Base-track clock in seconds (get/set). Setting scrubs: the pose,
    * palette, and getBoneWorldMatrix update immediately, even while paused.
    * Wraps into [0, duration) for looping clips, clamps for one-shots.
+   * For a blend space this is phase × the blended cycle duration; setting
+   * scrubs the shared phase.
    */
   get animationTime() {}
   set animationTime(value) {}
 
-  /** Duration in seconds of the current base clip (0 when none). */
+  /**
+   * Duration in seconds of the current base clip (0 when none); for a
+   * blend space, the current weight-mixed cycle duration.
+   */
   get animationDuration() {}
 
   /** Name of the current base clip ("" when none). Shared with sprites. */

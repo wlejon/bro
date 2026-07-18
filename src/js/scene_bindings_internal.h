@@ -255,6 +255,13 @@ JSValue js_node_clearShader(JSContext* ctx, JSValueConst this_val, int argc, JSV
 JSValue js_node_setSkeleton(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_addClip(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_getBoneWorldMatrix(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_node_addBlendSpace1D(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_node_addBlendSpace2D(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_node_setBlendPos(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_node_blendState(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_node_playLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_node_stopLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_node_setLayerWeight(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_play(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_stop(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_pause(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);

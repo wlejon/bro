@@ -1140,6 +1140,55 @@ void RiggingBindings::install(JSContext* ctx) {
         bromesh::blendPoses(*aw->pose, *bw->pose, (float)weight, maskPtr);
         return JS_DupValue(ctx, aVal);
     })
+
+    // Weighted N-way blend → NEW Pose. Translations/scales are normalized
+    // weighted sums; rotations are weighted nlerp hemisphere-aligned to the
+    // highest-weight pose (2 poses take an exact slerp path identical to
+    // Pose.blend). Optional mask as in blend(); masked-out bones take the
+    // highest-weight pose's values.
+    .static_method("blendN", [](JSContext* ctx, JSValue posesVal, JSValue weightsVal,
+                                 std::optional<JSValue> mask) -> JSValue {
+        if (!JS_IsArray(posesVal))
+            return JS_ThrowTypeError(ctx, "blendN(poses[], weights[], mask?)");
+        JSValue lenVal = JS_GetPropertyStr(ctx, posesVal, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
+        if (len < 1)
+            return JS_ThrowTypeError(ctx, "blendN: need at least one pose");
+        std::vector<const bromesh::Pose*> poses((size_t)len);
+        for (int32_t i = 0; i < len; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, posesVal, (uint32_t)i);
+            auto* pw = qjsbind::unwrap<PW>(ctx, e);
+            JS_FreeValue(ctx, e);
+            if (!pw || !pw->pose)
+                return JS_ThrowTypeError(ctx, "blendN: poses[%d] is not a Pose", i);
+            poses[(size_t)i] = pw->pose.get();
+        }
+        std::vector<float> weights;
+        if (!readFloatArrayVal(ctx, weightsVal, weights) && JS_IsArray(weightsVal)) {
+            // Plain JS array of numbers.
+            JSValue wl = JS_GetPropertyStr(ctx, weightsVal, "length");
+            int32_t wn = 0; JS_ToInt32(ctx, &wn, wl); JS_FreeValue(ctx, wl);
+            weights.resize((size_t)wn, 0.0f);
+            for (int32_t i = 0; i < wn; i++) {
+                JSValue e = JS_GetPropertyUint32(ctx, weightsVal, (uint32_t)i);
+                double d = 0; JS_ToFloat64(ctx, &d, e);
+                JS_FreeValue(ctx, e);
+                weights[(size_t)i] = (float)d;
+            }
+        }
+        if (weights.size() != (size_t)len)
+            return JS_ThrowTypeError(ctx,
+                "blendN: weights must be an array of length poses.length");
+        std::vector<uint8_t> maskVec;
+        const uint8_t* maskPtr = nullptr;
+        if (mask && !JS_IsUndefined(*mask) && !JS_IsNull(*mask)) {
+            if (readUint8ArrayVal(ctx, *mask, maskVec) && !maskVec.empty())
+                maskPtr = maskVec.data();
+        }
+        bromesh::Pose out;
+        bromesh::blendPosesN(poses.data(), weights.data(), (size_t)len, out, maskPtr);
+        return wrapPose(ctx, std::move(out));
+    })
     ;
 
     // =======================================================================

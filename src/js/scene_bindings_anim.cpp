@@ -110,6 +110,215 @@ JSValue js_node_getBoneWorldMatrix(JSContext* ctx, JSValueConst this_val, int ar
     return qjsbind::make_float32_array(ctx, m, 16);
 }
 
+// Shared parser for play()/playLayer() option objects.
+static void readPlayOptions(JSContext* ctx, JSValueConst obj,
+                            scene::AnimationPlayer::PlayOptions& opts) {
+    opts.loop     = qjsbind::get_prop_bool(ctx, obj, "loop", true);
+    opts.speed    = (float)qjsbind::get_prop_number(ctx, obj, "speed", 1.0);
+    opts.fadeTime = (float)qjsbind::get_prop_number(ctx, obj, "fadeTime", 0.0);
+    opts.weight   = (float)qjsbind::get_prop_number(ctx, obj, "weight", 1.0);
+    JSValue maskVal = JS_GetPropertyStr(ctx, obj, "mask");
+    if (!JS_IsUndefined(maskVal) && !JS_IsNull(maskVal))
+        readBoneMask(ctx, maskVal, opts.mask);
+    JS_FreeValue(ctx, maskVal);
+}
+
+// addBlendSpace1D(name, [{clip, pos, timescale?}, ...]) /
+// addBlendSpace2D(name, [{clip, pos: [x, y], timescale?}, ...]).
+static JSValue addBlendSpaceImpl(JSContext* ctx, JSValueConst this_val,
+                                 int argc, JSValueConst* argv, bool is2D) {
+    const char* fn = is2D ? "addBlendSpace2D" : "addBlendSpace1D";
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    auto* sm = asSkinnedMesh(w);
+    if (!sm)
+        return JS_ThrowTypeError(ctx, "%s: node is not a skinned mesh", fn);
+    if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsArray(argv[1]))
+        return JS_ThrowTypeError(ctx, "%s(name, points[])", fn);
+
+    std::vector<scene::AnimationPlayer::BlendSpacePoint> points;
+    JSValue lenVal = JS_GetPropertyStr(ctx, argv[1], "length");
+    int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
+    for (int32_t i = 0; i < len; i++) {
+        JSValue e = JS_GetPropertyUint32(ctx, argv[1], (uint32_t)i);
+        if (!JS_IsObject(e)) {
+            JS_FreeValue(ctx, e);
+            return JS_ThrowTypeError(ctx, "%s: points[%d] is not an object", fn, i);
+        }
+        scene::AnimationPlayer::BlendSpacePoint p;
+        p.clip = qjsbind::get_prop_string(ctx, e, "clip", "");
+        p.timescale = (float)qjsbind::get_prop_number(ctx, e, "timescale", 1.0);
+        JSValue posVal = JS_GetPropertyStr(ctx, e, "pos");
+        if (is2D) {
+            bool ok = JS_IsArray(posVal);
+            if (ok) {
+                for (int k = 0; k < 2; k++) {
+                    JSValue c = JS_GetPropertyUint32(ctx, posVal, (uint32_t)k);
+                    double d = 0;
+                    ok = ok && !JS_ToFloat64(ctx, &d, c);
+                    JS_FreeValue(ctx, c);
+                    p.pos[k] = (float)d;
+                }
+            }
+            if (!ok) {
+                JS_FreeValue(ctx, posVal); JS_FreeValue(ctx, e);
+                return JS_ThrowTypeError(ctx,
+                    "%s: points[%d].pos must be [x, y]", fn, i);
+            }
+        } else {
+            double d = 0;
+            if (JS_ToFloat64(ctx, &d, posVal)) {
+                JS_FreeValue(ctx, posVal); JS_FreeValue(ctx, e);
+                return JS_ThrowTypeError(ctx,
+                    "%s: points[%d].pos must be a number", fn, i);
+            }
+            p.pos[0] = (float)d;
+        }
+        JS_FreeValue(ctx, posVal);
+        JS_FreeValue(ctx, e);
+        points.push_back(std::move(p));
+    }
+
+    std::string name = jsStr(ctx, argv[0]);
+    auto& player = sm->ensurePlayer();
+    bool ok = is2D ? player.addBlendSpace2D(name, std::move(points))
+                   : player.addBlendSpace1D(name, std::move(points));
+    if (!ok)
+        return JS_ThrowTypeError(ctx,
+            "%s: '%s' needs at least one point and every clip registered "
+            "via addClip first", fn, name.c_str());
+    return JS_DupValue(ctx, this_val);
+}
+
+JSValue js_node_addBlendSpace1D(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    return addBlendSpaceImpl(ctx, this_val, argc, argv, false);
+}
+
+JSValue js_node_addBlendSpace2D(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    return addBlendSpaceImpl(ctx, this_val, argc, argv, true);
+}
+
+// setBlendPos(name, x[, y]) or setBlendPos(name, [x, y]).
+JSValue js_node_setBlendPos(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    auto* sm = asSkinnedMesh(w);
+    if (!sm)
+        return JS_ThrowTypeError(ctx, "setBlendPos: node is not a skinned mesh");
+    if (argc < 2 || !JS_IsString(argv[0]))
+        return JS_ThrowTypeError(ctx, "setBlendPos(name, x[, y])");
+    double x = 0, y = 0;
+    if (JS_IsArray(argv[1])) {
+        JSValue e0 = JS_GetPropertyUint32(ctx, argv[1], 0);
+        JSValue e1 = JS_GetPropertyUint32(ctx, argv[1], 1);
+        JS_ToFloat64(ctx, &x, e0);
+        if (!JS_IsUndefined(e1)) JS_ToFloat64(ctx, &y, e1);
+        JS_FreeValue(ctx, e0); JS_FreeValue(ctx, e1);
+    } else {
+        JS_ToFloat64(ctx, &x, argv[1]);
+        if (argc > 2) JS_ToFloat64(ctx, &y, argv[2]);
+    }
+    std::string name = jsStr(ctx, argv[0]);
+    auto* player = sm->player();
+    if (!player || !player->setBlendPos(name, (float)x, (float)y))
+        return JS_ThrowTypeError(ctx, "setBlendPos: unknown blend space '%s'",
+                                 name.c_str());
+    return JS_DupValue(ctx, this_val);
+}
+
+// blendState() — { clips: [{name, weight}], phase, pos?, layers: [...] }.
+JSValue js_node_blendState(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    auto* sm = asSkinnedMesh(w);
+    if (!sm)
+        return JS_ThrowTypeError(ctx, "blendState: node is not a skinned mesh");
+    auto* player = sm->player();
+    JSValue obj = JS_NewObject(ctx);
+    JSValue clips = JS_NewArray(ctx);
+    JSValue layers = JS_NewArray(ctx);
+    double phase = 0.0;
+    if (player) {
+        auto s = player->blendState();
+        phase = s.phase;
+        for (uint32_t i = 0; i < s.clips.size(); i++) {
+            JSValue c = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, c, "name", JS_NewString(ctx, s.clips[i].name.c_str()));
+            JS_SetPropertyStr(ctx, c, "weight", JS_NewFloat64(ctx, s.clips[i].weight));
+            JS_SetPropertyUint32(ctx, clips, i, c);
+        }
+        if (s.hasPos) {
+            JSValue pos = JS_NewArray(ctx);
+            JS_SetPropertyUint32(ctx, pos, 0, JS_NewFloat64(ctx, s.pos[0]));
+            if (s.is2D)
+                JS_SetPropertyUint32(ctx, pos, 1, JS_NewFloat64(ctx, s.pos[1]));
+            JS_SetPropertyStr(ctx, obj, "pos", pos);
+        }
+        for (uint32_t i = 0; i < s.layers.size(); i++) {
+            const auto& L = s.layers[i];
+            JSValue l = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, l, "slot", JS_NewInt32(ctx, L.slot));
+            JS_SetPropertyStr(ctx, l, "name", JS_NewString(ctx, L.name.c_str()));
+            JS_SetPropertyStr(ctx, l, "weight", JS_NewFloat64(ctx, L.weight));
+            JS_SetPropertyStr(ctx, l, "phase", JS_NewFloat64(ctx, L.phase));
+            JS_SetPropertyUint32(ctx, layers, i, l);
+        }
+    }
+    JS_SetPropertyStr(ctx, obj, "clips", clips);
+    JS_SetPropertyStr(ctx, obj, "phase", JS_NewFloat64(ctx, phase));
+    JS_SetPropertyStr(ctx, obj, "layers", layers);
+    return obj;
+}
+
+// playLayer(slot, name, {mask?, weight?, speed?, loop?, fadeTime?}).
+JSValue js_node_playLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    auto* sm = asSkinnedMesh(w);
+    if (!sm)
+        return JS_ThrowTypeError(ctx, "playLayer: node is not a skinned mesh");
+    if (argc < 2 || !JS_IsNumber(argv[0]) || !JS_IsString(argv[1]))
+        return JS_ThrowTypeError(ctx, "playLayer(slot, clipName[, opts])");
+    int slot = (int)jsNum(ctx, argv[0]);
+    scene::AnimationPlayer::PlayOptions opts;
+    if (argc > 2 && JS_IsObject(argv[2])) readPlayOptions(ctx, argv[2], opts);
+    std::string name = jsStr(ctx, argv[1]);
+    if (!sm->ensurePlayer().playLayer(slot, name, opts))
+        return JS_ThrowTypeError(ctx,
+            "playLayer: bad slot %d (0..%d), unknown clip '%s', or no "
+            "skeleton (blend spaces are base-track only)",
+            slot, scene::AnimationPlayer::kMaxLayers - 1, name.c_str());
+    return JS_DupValue(ctx, this_val);
+}
+
+// stopLayer(slot[, {fadeTime}]).
+JSValue js_node_stopLayer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    auto* sm = asSkinnedMesh(w);
+    if (!sm)
+        return JS_ThrowTypeError(ctx, "stopLayer: node is not a skinned mesh");
+    if (argc < 1 || !JS_IsNumber(argv[0]))
+        return JS_ThrowTypeError(ctx, "stopLayer(slot[, {fadeTime}])");
+    float fade = 0.0f;
+    if (argc > 1 && JS_IsObject(argv[1]))
+        fade = (float)qjsbind::get_prop_number(ctx, argv[1], "fadeTime", 0.0);
+    if (auto* player = sm->player())
+        player->stopLayer((int)jsNum(ctx, argv[0]), fade);
+    return JS_DupValue(ctx, this_val);
+}
+
+// setLayerWeight(slot, weight).
+JSValue js_node_setLayerWeight(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    auto* sm = asSkinnedMesh(w);
+    if (!sm)
+        return JS_ThrowTypeError(ctx, "setLayerWeight: node is not a skinned mesh");
+    if (argc < 2 || !JS_IsNumber(argv[0]) || !JS_IsNumber(argv[1]))
+        return JS_ThrowTypeError(ctx, "setLayerWeight(slot, weight)");
+    auto* player = sm->player();
+    if (!player || !player->setLayerWeight((int)jsNum(ctx, argv[0]),
+                                           (float)jsNum(ctx, argv[1])))
+        return JS_ThrowTypeError(ctx, "setLayerWeight: no active layer in slot %d",
+                                 (int)jsNum(ctx, argv[0]));
+    return JS_DupValue(ctx, this_val);
+}
+
 // Unified play() for SpriteNode, ParticleNode, and SkinnedMeshNode.
 // Sprite: play(name?) — resume without a name. Particles: play().
 // Skinned mesh: play(clipName, {loop, speed, fadeTime, weight, mask}).
@@ -128,21 +337,13 @@ JSValue js_node_play(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
         if (argc > 0 && JS_IsString(argv[0])) {
             auto& player = sm->ensurePlayer();
             scene::AnimationPlayer::PlayOptions opts;
-            if (argc > 1 && JS_IsObject(argv[1])) {
-                opts.loop     = qjsbind::get_prop_bool(ctx, argv[1], "loop", true);
-                opts.speed    = (float)qjsbind::get_prop_number(ctx, argv[1], "speed", 1.0);
-                opts.fadeTime = (float)qjsbind::get_prop_number(ctx, argv[1], "fadeTime", 0.0);
-                opts.weight   = (float)qjsbind::get_prop_number(ctx, argv[1], "weight", 1.0);
-                JSValue maskVal = JS_GetPropertyStr(ctx, argv[1], "mask");
-                if (!JS_IsUndefined(maskVal) && !JS_IsNull(maskVal))
-                    readBoneMask(ctx, maskVal, opts.mask);
-                JS_FreeValue(ctx, maskVal);
-            }
+            if (argc > 1 && JS_IsObject(argv[1])) readPlayOptions(ctx, argv[1], opts);
             std::string name = jsStr(ctx, argv[0]);
             if (!player.play(name, opts))
                 return JS_ThrowTypeError(ctx,
-                    "play: unknown clip '%s' (addClip first) or no skeleton "
-                    "(setSkeleton first)", name.c_str());
+                    "play: unknown clip or blend space '%s' (addClip / "
+                    "addBlendSpace first) or no skeleton (setSkeleton first)",
+                    name.c_str());
         } else if (sm->player()) {
             sm->player()->resume();
         }

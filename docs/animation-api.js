@@ -222,3 +222,129 @@ cutscene.play('doorOpen');
 //                    JSON.stringify(cutscene.clipDef('doorOpen')));
 //   cutscene.addClip('doorOpen',
 //                    JSON.parse(fs.readFileSync('cutscene.json', 'utf-8')));
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Skeletal blending — N-way blend spaces + layered blending (SkinnedMeshNode)
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// The skinned-mesh player (skinnedMesh.setSkeleton / addClip / play — method
+// reference in docs/scene-api.js) blends BONE poses, entirely in C++, with
+// zero per-frame JS. Beyond single clips and crossfades it supports:
+//
+//   - BLEND SPACES (Godot BlendSpace1D/2D analog): named sets of clips at
+//     parameter positions; one scalar (1D) or 2D point picks the mix.
+//   - LAYERS: up to 8 ordered masked layers over the base (slot 0..7),
+//     each with a runtime weight and its own fade in/out.
+//
+// Everything below runs on the engine clock (headless advanceTime() works)
+// and allocates nothing per frame.
+//
+// ── Blend spaces ─────────────────────────────────────────────────────────────
+//
+//   node.addBlendSpace1D('locomotion', [
+//       { clip: 'idle', pos: 0 },
+//       { clip: 'walk', pos: 2 },            // m/s at which walk looks right
+//       { clip: 'run',  pos: 6, timescale: 1.1 },
+//   ]);
+//   node.play('locomotion', { fadeTime: 0.25 });   // a base-track citizen
+//   node.setBlendPos('locomotion', 3.1);           // instant; clamped to [0,6]
+//
+//   node.addBlendSpace2D('strafe', [
+//       { clip: 'walkF', pos: [0,  1] },
+//       { clip: 'walkB', pos: [0, -1] },
+//       { clip: 'walkL', pos: [-1, 0] },
+//       { clip: 'walkR', pos: [ 1, 0] },
+//       { clip: 'idle',  pos: [0,  0] },
+//   ]);
+//   node.play('strafe');
+//   node.setBlendPos('strafe', vx, vz);            // or setBlendPos(name, [x, z])
+//
+// Semantics:
+//   - Clips must be registered via addClip() first; the space captures them
+//     at addBlendSpace time. Re-adding a space with the same name replaces
+//     it in place (safe while playing).
+//   - play(name) treats blend spaces exactly like clips on the BASE track:
+//     fadeTime crossfades into/out of a space through the normal fade
+//     machinery, and spaces shadow a same-named clip. Layers compose on
+//     top unchanged. Blend spaces always loop.
+//   - 1D: the parameter clamps to [min pos, max pos]; the two neighboring
+//     clips blend linearly by position (exact slerp — at a sample point you
+//     get that clip bit-exactly).
+//   - 2D: the 3 nearest points blend by inverse-SQUARED-distance weights,
+//     normalized. On a sample point that clip takes full weight (coincident
+//     points split it evenly); degenerate layouts (duplicate or collinear
+//     points) are safe. This is deliberately simpler than Godot's
+//     triangulated BlendSpace2D: no triangulation to author or break, but
+//     weights jump slightly when the nearest-3 set changes — keep sample
+//     points sparse and well-separated.
+//   - setBlendPos is INSTANT — no internal smoothing. Tween the parameter
+//     from app code for eased transitions; the coming state-machine tier
+//     will add authored transitions on top.
+//
+// ── Phase sync ───────────────────────────────────────────────────────────────
+//
+// All clips in a playing space advance on ONE shared normalized phase
+// (0..1 of each clip's own duration), so a 1.0 s walk and a 0.6 s run stay
+// foot-aligned at any mix. The blended cycle duration is the weight-mixed
+// duration of the participating clips (Σ wᵢ · durᵢ / timescaleᵢ); the
+// phase advances at speed / that duration. Per-clip `timescale` compensates
+// authored cadence differences (2 = this clip represents a half-length
+// cycle) without resampling the clip.
+//
+// ── Layers ───────────────────────────────────────────────────────────────────
+//
+//   node.playLayer(1, 'wave',  { mask: upperBody, weight: 0.8 });
+//   node.playLayer(2, 'blink', { mask: faceBones, fadeTime: 0.2 });
+//   node.setLayerWeight(1, 0.5);                   // instant runtime weight
+//   node.stopLayer(1, { fadeTime: 0.3 });          // fade out, then free slot
+//
+//   - 8 slots (0..7), blended over the base in ascending slot order.
+//     playLayer replaces its slot atomically; the legacy
+//     play(name, { mask }) form is slot 0.
+//   - mask: Uint8Array/array, 1 = bone animated by this layer; empty/omitted
+//     = whole body. fadeTime on playLayer fades the layer's WEIGHT in from
+//     0 (layers never crossfade — that's a base-track concept).
+//   - A non-looping layer expires on finish and fires onAnimationFinished
+//     with its clip name; looping layers persist until stopLayer/stop.
+//   - Layers play clips only; blend spaces live on the base track.
+//
+// ── Introspection ────────────────────────────────────────────────────────────
+//
+//   node.blendState() → {
+//     clips:  [{ name, weight }],  // base composition; weights sum to 1
+//                                  // (during a crossfade the outgoing source
+//                                  //  appears too, scaled by 1 - alpha)
+//     phase:  0.42,                // space: shared phase 0..1; clip: t/dur
+//     pos:    [x] | [x, y],        // present while a space is the base
+//     layers: [{ slot, name, weight, phase }],   // active, ascending slot
+//   }
+//
+// Cheap enough for HUDs and assertions; tests drive it with advanceTime().
+//
+// ── Recipe: speed-driven locomotion ──────────────────────────────────────────
+
+const char2 = scene.createSkinnedMesh({ data: gltf.meshes[0], skin: gltf.skins[0] });
+char2.setSkeleton(gltf.skeletons[0]);
+char2.addClip('idle', gltf.animations[0]);
+char2.addClip('walk', gltf.animations[1]);
+char2.addClip('run',  gltf.animations[2]);
+
+char2.addBlendSpace1D('locomotion', [
+    { clip: 'idle', pos: 0 },
+    { clip: 'walk', pos: 2 },
+    { clip: 'run',  pos: 6 },
+]);
+char2.play('locomotion', { fadeTime: 0.2 });
+
+// Each frame: feed the character's actual planar speed into the space.
+// The parameter is instant, so smooth it from gameplay code (or tween it).
+let smoothSpeed = 0;
+function onTick(dt, velocity) {
+    const speed = Math.hypot(velocity[0], velocity[2]);
+    smoothSpeed += (speed - smoothSpeed) * Math.min(1, dt * 8);
+    char2.setBlendPos('locomotion', smoothSpeed);
+}
+
+// An upper-body action over the moving base, whatever the current mix:
+// char2.playLayer(1, 'wave', { mask: upperBody, fadeTime: 0.15 });

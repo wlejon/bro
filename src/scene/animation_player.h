@@ -3,6 +3,7 @@
 #include <bromesh/animation/pose.h>
 #include <bromesh/mesh_data.h>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -21,10 +22,20 @@ class SkinnedMeshNode;
 /// SceneGraph::tickAnimations (windowed frame loop and headless virtual time
 /// alike, so scripted tests are deterministic).
 ///
-/// Model: one BASE track (full-body clip) plus one optional masked LAYER
-/// track on top (e.g. upper-body wave over a walk). play() on the base track
-/// crossfades from whatever was playing over fadeTime seconds; the layer
-/// slot replaces atomically. Not a state machine or blend tree — two slots.
+/// Model: one BASE track plus up to kMaxLayers ordered masked LAYER tracks
+/// blended on top (e.g. upper-body wave over a walk). The base track plays
+/// either a single clip or a registered blend space (1D/2D); play() on the
+/// base crossfades from whatever was playing over fadeTime seconds. Layers
+/// are addressed by slot via playLayer(); the legacy play(name, {mask})
+/// form is slot 0. Not a state machine (that's the next tier up) — but
+/// blend spaces + layers cover locomotion + overlay needs.
+///
+/// Blend spaces: addBlendSpace1D/2D register a named set of clips at
+/// parameter positions; play(name) makes the space the base track (a space
+/// shadows a same-named clip). setBlendPos() moves the parameter instantly —
+/// no internal smoothing; apps tween the parameter if they want easing.
+/// Participating clips advance on one shared normalized phase (0..1 of each
+/// clip's own duration), so gait cycles stay foot-aligned across the blend.
 ///
 /// Skeleton/clips are shared_ptr copies of the JS-side rigging objects, so
 /// the player never dangles when the JS wrapper is GC'd. While the player is
@@ -32,6 +43,10 @@ class SkinnedMeshNode;
 /// manual setSkinningMatrices keeps working.
 class AnimationPlayer {
 public:
+    /// Hard cap on simultaneously active layer slots. Bounded so the
+    /// evaluate/blend path stays allocation-free and O(1) in state.
+    static constexpr int kMaxLayers = 8;
+
     explicit AnimationPlayer(SkinnedMeshNode& owner) : owner_(owner) {}
 
     // --- Setup ---
@@ -40,31 +55,87 @@ public:
     const bromesh::Skeleton* skeleton() const { return skeleton_.get(); }
 
     /// Register a clip under `name`. Replaces an existing clip of the same
-    /// name (a track currently playing the old clip keeps its reference).
+    /// name (a track currently playing the old clip keeps its reference;
+    /// blend spaces capture their clips at addBlendSpace time).
     void addClip(const std::string& name,
                  std::shared_ptr<const bromesh::Animation> clip);
     bool hasClip(const std::string& name) const {
         return clips_.find(name) != clips_.end();
     }
 
+    /// One point of a blend space: a registered clip name at a parameter
+    /// position. `timescale` compensates authored cadence differences: it
+    /// scales this clip's contribution to the blended cycle duration
+    /// (effective cycle = duration / timescale), not its sampling.
+    struct BlendSpacePoint {
+        std::string clip;
+        float pos[2] = {0.0f, 0.0f};   // 1D uses pos[0]
+        float timescale = 1.0f;
+    };
+
+    /// Register a 1D blend space (points sorted by position internally; the
+    /// parameter clamps to [min,max]). Replaces a same-named space in place
+    /// (a track playing it re-resolves weights next evaluate). Returns false
+    /// if points is empty or any clip name is unregistered.
+    bool addBlendSpace1D(const std::string& name,
+                         std::vector<BlendSpacePoint> points);
+
+    /// Register a 2D blend space. Evaluation blends the 3 nearest points by
+    /// inverse-squared-distance weighting (normalized; a zero-distance point
+    /// takes full weight, split evenly across coincident points) — simpler
+    /// and more robust than Godot-style triangulation, at the cost of a
+    /// weight discontinuity when the nearest-3 set changes; keep sample
+    /// points sparse and well-spaced. Degenerate layouts (coincident, all
+    /// collinear) are safe. Returns false as for addBlendSpace1D.
+    bool addBlendSpace2D(const std::string& name,
+                         std::vector<BlendSpacePoint> points);
+
+    bool hasBlendSpace(const std::string& name) const {
+        return spaces_.find(name) != spaces_.end();
+    }
+
+    /// Move a blend space's parameter (y ignored for 1D; x clamped to the
+    /// 1D range). Takes effect immediately — re-poses this frame, even while
+    /// paused — with no internal smoothing. Returns false for an unknown
+    /// space.
+    bool setBlendPos(const std::string& name, float x, float y = 0.0f);
+
     // --- Playback ---
 
     struct PlayOptions {
-        bool  loop = true;
+        bool  loop = true;        // ignored by blend spaces (always looping)
         float speed = 1.0f;
-        float fadeTime = 0.0f;   // seconds; crossfade from the current pose
+        float fadeTime = 0.0f;   // base: crossfade seconds; layer: weight fade-in
         float weight = 1.0f;     // blend weight vs what's underneath
-        std::vector<uint8_t> mask; // non-empty → masked LAYER track (1 = bone
-                                   // animated by this clip, 0 = untouched)
+        std::vector<uint8_t> mask; // per-bone 1 = animated by this track.
+                                   // play(): non-empty → legacy layer slot 0.
+                                   // playLayer(): empty = whole body.
     };
 
-    /// Start a clip. Empty mask → base track (crossfading over fadeTime from
-    /// the current blended pose); non-empty mask → layer track (replaces any
-    /// existing layer). Returns false if the clip or skeleton is missing.
+    /// Start a clip or blend space on the base track, crossfading over
+    /// fadeTime from the current blended pose (blend spaces shadow
+    /// same-named clips). A non-empty opts.mask routes to playLayer(0) for
+    /// back-compat with the old single-layer API. Returns false if the
+    /// name or skeleton is missing.
     bool play(const std::string& name, const PlayOptions& opts);
 
-    /// Fade the whole result (base + layer) to bind pose over fadeTime, then
-    /// deactivate — after which manual setSkinningMatrices works again.
+    /// Start a clip on layer `slot` (0..kMaxLayers-1), replacing that slot
+    /// atomically. opts.mask selects the affected bones (empty = all);
+    /// opts.fadeTime fades the layer's weight in from 0. Layers blend over
+    /// the base in ascending slot order. Blend spaces are base-track only.
+    /// Returns false for a bad slot or unknown clip.
+    bool playLayer(int slot, const std::string& name, const PlayOptions& opts);
+
+    /// Fade layer `slot` out over fadeTime seconds (0 = immediately) and
+    /// free the slot.
+    void stopLayer(int slot, float fadeTime = 0.0f);
+
+    /// Set a layer's blend weight (takes effect immediately; multiplied by
+    /// any in-progress fade). Returns false for a bad/empty slot.
+    bool setLayerWeight(int slot, float weight);
+
+    /// Fade the whole result (base + layers) to bind pose over fadeTime,
+    /// then deactivate — after which manual setSkinningMatrices works again.
     /// fadeTime 0 = immediate bind pose + deactivate.
     void stop(float fadeTime = 0.0f);
 
@@ -82,16 +153,38 @@ public:
 
     const std::string& currentClip() const { return base_.name; }
 
+    /// Base clock in seconds. For a blend space this is phase × the current
+    /// blended cycle duration.
     float time() const { return base_.time; }
     /// Scrub the base track. Re-evaluates + re-stages the palette immediately
-    /// (works while paused). Clamps/wraps like a tick would.
+    /// (works while paused). Clamps/wraps like a tick would; for a blend
+    /// space, scrubs the shared phase (t / blended cycle duration).
     void setTime(float t);
 
     float speed() const { return base_.speed; }
     void setSpeed(float s) { base_.speed = s; }
 
-    /// Duration of the current base clip (0 when nothing is loaded).
-    float duration() const { return base_.clip ? base_.clip->duration : 0.0f; }
+    /// Duration of the current base clip; for a blend space, the current
+    /// weighted cycle duration (0 when nothing is loaded).
+    float duration() const;
+
+    // --- Introspection (cheap; for tests, HUDs, and part-3 tooling) ---
+
+    struct BlendState {
+        struct ClipWeight { std::string name; float weight; };
+        /// The base track's current composition — during a crossfade both
+        /// the outgoing and incoming sources appear, weights summing to 1.
+        std::vector<ClipWeight> clips;
+        /// Blend space: the shared normalized phase (0..1). Single clip:
+        /// time / duration.
+        float phase = 0.0f;
+        bool  hasPos = false;      // base track is a blend space
+        bool  is2D = false;
+        float pos[2] = {0.0f, 0.0f};
+        struct LayerState { int slot; std::string name; float weight; float phase; };
+        std::vector<LayerState> layers;   // active layers, ascending slot
+    };
+    BlendState blendState() const;
 
     /// Fired once when a non-looping track reaches its end (base or layer),
     /// with the clip name. Invoked from the tick (main/JS thread).
@@ -113,23 +206,80 @@ public:
     bool boneWorldMatrix(const std::string& boneName, float out[16]);
 
 private:
-    struct Track {
+    struct BlendSpaceEntry {
         std::shared_ptr<const bromesh::Animation> clip;
         std::string name;
+        float px = 0.0f, py = 0.0f;
+        float timescale = 1.0f;
+        bromesh::Pose scratch;   // per-entry eval scratch (no per-frame alloc)
+    };
+    struct BlendSpace {
+        bool is2D = false;
+        std::vector<BlendSpaceEntry> entries;  // 1D: sorted by px
+        float posX = 0.0f, posY = 0.0f;        // shared parameter
+        float minX = 0.0f, maxX = 0.0f;        // 1D clamp range
+    };
+
+    struct Track {
+        std::shared_ptr<const bromesh::Animation> clip;  // single-clip mode
+        BlendSpace* space = nullptr;                     // blend-space mode
+        std::string name;
         float time = 0.0f;
+        float phase = 0.0f;          // blend space: shared normalized phase
         float speed = 1.0f;
         float weight = 1.0f;
         bool  loop = true;
         bool  playing = false;   // false once a non-looping clip finishes
         bromesh::Pose pose;      // per-track scratch (evaluateInto, no alloc)
 
-        void reset() { clip.reset(); name.clear(); time = 0; playing = false; }
-        /// Advance time; returns true if a non-looping clip just finished.
+        // Blend-space working set, refreshed by updateBlendWeights(): the
+        // (≤3) participating entries, their normalized weights, and the
+        // weighted cycle duration.
+        int   activeIdx[3] = {-1, -1, -1};
+        float activeW[3] = {0.0f, 0.0f, 0.0f};
+        int   activeCount = 0;
+        float cachedCycleDur = 0.0f;
+
+        bool valid() const { return clip || space; }
+        void reset() {
+            clip.reset(); space = nullptr; name.clear();
+            time = 0; phase = 0; playing = false;
+            activeCount = 0; cachedCycleDur = 0;
+        }
+        /// Blend-space mode: recompute activeIdx/W + cachedCycleDur from the
+        /// space's current parameter. No-op in clip mode.
+        void updateBlendWeights();
+        /// Advance time; returns true if a non-looping clip just finished
+        /// (blend spaces always loop).
         bool advance(float dt);
-        void evaluate(const bromesh::Skeleton& skel) {
-            bromesh::evaluateAnimationInto(skel, *clip, time, loop, pose);
+        void evaluate(const bromesh::Skeleton& skel);
+    };
+
+    struct Layer {
+        Track track;
+        std::vector<uint8_t> mask;   // empty = all bones
+        bool  active = false;
+        float fadeInTime = 0.0f, fadeInElapsed = 0.0f;
+        bool  fadingOut = false;
+        float fadeOutTime = 0.0f, fadeOutElapsed = 0.0f;
+        float fadeOutStartW = 0.0f;  // effective weight when stopLayer() hit
+
+        float effectiveWeight() const;
+        void reset() {
+            track.reset(); mask.clear(); active = false;
+            fadeInTime = fadeInElapsed = 0.0f;
+            fadingOut = false; fadeOutTime = fadeOutElapsed = 0.0f;
+            fadeOutStartW = 0.0f;
         }
     };
+
+    bool addBlendSpace(const std::string& name,
+                       std::vector<BlendSpacePoint> points, bool is2D);
+    BlendSpace* findSpace(const std::string& name);
+    /// Size a blend-space track's scratch poses to the skeleton (play time).
+    void presizeSpaceScratch(BlendSpace& sp);
+    void appendTrackWeights(const Track& t, float scale,
+                            std::vector<BlendState::ClipWeight>& out) const;
 
     /// Evaluate all tracks at their current times, blend, stage the node's
     /// palette, and invalidate cached world matrices.
@@ -141,6 +291,7 @@ private:
     std::shared_ptr<const bromesh::Skeleton> skeleton_;
     std::unordered_map<std::string,
                        std::shared_ptr<const bromesh::Animation>> clips_;
+    std::unordered_map<std::string, std::unique_ptr<BlendSpace>> spaces_;
 
     Track base_;
     Track fadeFrom_;             // crossfade source (previous base track)
@@ -148,9 +299,8 @@ private:
     float fadeElapsed_ = 0.0f;
     bool  fading_ = false;
 
-    Track layer_;
-    std::vector<uint8_t> layerMask_;
-    bool  layerActive_ = false;
+    std::array<Layer, kMaxLayers> layers_;
+    bool  anyLayerActive_ = false;
 
     bool  stopping_ = false;     // fading everything to bind pose
     float stopFadeTime_ = 0.0f;
