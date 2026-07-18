@@ -5,6 +5,7 @@
 #include <vector>
 
 struct SDL_Window;
+struct SDL_Cursor;
 typedef struct SDL_GLContextState* SDL_GLContext;
 
 namespace bro::platform {
@@ -14,6 +15,26 @@ struct DisplayModeInfo {
     int width = 0;
     int height = 0;
     float refreshRate = 0.0f;
+};
+
+/// System cursor shapes the engine can request (the CSS `cursor` keywords
+/// collapse onto these — see cursorShapeFromCss in input_handling.cpp).
+/// None hides the OS cursor (CSS `cursor: none`).
+enum class CursorShape {
+    Default,
+    Pointer,
+    Text,
+    Move,
+    Crosshair,
+    Wait,
+    Progress,
+    NotAllowed,
+    ResizeEW,
+    ResizeNS,
+    ResizeNESW,
+    ResizeNWSE,
+    None,
+    Count_  // sentinel — cache array size, not a real shape
 };
 
 class Window {
@@ -72,11 +93,20 @@ public:
     /// should never stop the app from starting.
     void setIcon(const std::string& pngPath);
 
+    /// Apply a system cursor shape to the OS cursor. SDL cursor objects are
+    /// created lazily, cached for the window's lifetime, and destroyed at
+    /// shutdown; a repeated call with the current shape is a no-op (safe to
+    /// drive from per-mouse-move code). CursorShape::None hides the OS
+    /// cursor; switching to any other shape shows it again.
+    void setCursor(CursorShape shape);
+
 private:
     SDL_Window* m_window = nullptr;
     SDL_GLContext m_glContext = nullptr;
     uint32_t m_width = 0;
     uint32_t m_height = 0;
+    SDL_Cursor* m_cursors[static_cast<int>(CursorShape::Count_)] = {};
+    CursorShape m_cursorShape = CursorShape::Default;
 };
 
 } // namespace bro::platform

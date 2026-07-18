@@ -287,6 +287,15 @@ public:
     float getLastMouseX() const { return lastMouseX_; }
     float getLastMouseY() const { return lastMouseY_; }
 
+    /// Resolved OS cursor shape for the current hover target, as a stable
+    /// name ("default", "pointer", "text", "move", "crosshair", "wait",
+    /// "progress", "not-allowed", "ew-resize", "ns-resize", "nesw-resize",
+    /// "nwse-resize", "none"). Updated on every app-document mouse move from
+    /// the hovered element's computed `cursor`; in windowed mode the same
+    /// shape is applied to the OS cursor. This is the headless seam for
+    /// asserting the CSS cursor → OS cursor mapping (currentCursor() global).
+    const std::string& resolvedCursor() const { return resolvedCursor_; }
+
     // --- Pointer lock ---
     // requestPointerLock: freeze the reported cursor position, enable SDL relative
     // mouse mode, and route all subsequent mousemove events to `target` until
@@ -554,6 +563,13 @@ private:
     InputConfig inputConfig_;
 
     dom::Element* hitTest(float x, float y);
+
+    /// Re-resolve the hovered element's computed `cursor` into an OS cursor
+    /// shape: updates resolvedCursor_ in all modes, and applies the shape to
+    /// the OS cursor in windowed mode (skipped under pointer lock — relative
+    /// mouse mode owns cursor visibility there). Cheap when nothing changed:
+    /// Window::setCursor no-ops on an unchanged shape.
+    void updateCursorFromHover(dom::Element* target);
 
     // Find the scene graph whose canvas element is under (x, y) in screen
     // coords. Returns nullptr if none. Writes canvas-local coords (top-left
@@ -1023,6 +1039,10 @@ private:
     // init and on SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED in windowed mode;
     // pinned to 1.0 in headless so tests are reproducible across desktops.
     float displayScale_ = 1.0f;
+    // Resolved OS cursor shape name for the current hover target — see
+    // resolvedCursor(). Maintained in headless too (the mapping is the
+    // testable part; only the SDL apply is windowed-gated).
+    std::string resolvedCursor_ = "default";
 
     // Pre-compiled observer check function (avoids JS_Eval parse per frame)
     JSValue observerCheckFn_ = JS_UNDEFINED;

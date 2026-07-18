@@ -56,6 +56,7 @@ Mouse coordinates are **viewport-relative**, matching `getBoundingClientRect()` 
 | `mouseDown(x, y [, button])` | Simulate a mouse button press |
 | `mouseUp(x, y [, button])` | Simulate a mouse button release |
 | `mouseMove(x, y)` | Simulate mouse movement (triggers hover, mousemove events) |
+| `currentCursor()` | Resolved OS cursor shape name for the current hover target (`"default"`, `"pointer"`, `"text"`, `"move"`, `"crosshair"`, `"wait"`, `"progress"`, `"not-allowed"`, `"ew-resize"`, `"ns-resize"`, `"nesw-resize"`, `"nwse-resize"`, `"none"`). Updated by every `mouseMove()` from the hovered element's computed CSS `cursor`; in windowed mode the same shape drives the real OS cursor. |
 | `wheel(x, y, deltaY [, deltaX])` | Simulate a mouse wheel event (deltaY in scroll lines) |
 | `touchDown(id, x, y [, pressure])` | Simulate a finger landing. `id` is a caller-chosen contact id (reuse it for the move/up/cancel of the same finger; distinct concurrent ids are distinct fingers). Dispatches pointerdown (pointerType `"touch"`, unique pointerId ≥ 2) then touchstart. See [pointer-api.js](pointer-api.js). |
 | `touchMove(id, x, y [, pressure])` | Move a live contact. Dispatches pointermove then touchmove. Travelling past the ~10px tap slop makes the contact a drag (no compat click on lift). |

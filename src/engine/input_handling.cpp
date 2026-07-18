@@ -34,6 +34,8 @@
 #include "layout/selection_geometry.h"
 #include "layout/skia_text_metrics.h"
 
+#include <cctype>
+
 // ---------------------------------------------------------------------------
 // Contenteditable edit helpers — shared by handleKeyDown (backspace/delete,
 // cut/paste) and handleTextInput (typing). Defined here so both sites see
@@ -1424,6 +1426,13 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             hoveredElement_.assign(document_.get(), target);
         }
 
+        // CSS `cursor` → OS cursor. Every move, not just hover changes: a
+        // restyle (:hover rules, class flips) can change the computed cursor
+        // without the hit target changing. Reads through the handle — the
+        // hover-change JS above may have freed the raw target. Cheap when
+        // nothing changed (string compare + Window::setCursor no-op).
+        updateCursorFromHover(hoveredElement_.get());
+
         // World-space HtmlNode hover + move routing. Tracked in parallel
         // with hoveredElement_ — the canvas remains the outer-doc hover
         // target while the inner HtmlNode element gets enter/leave/over/
@@ -1490,6 +1499,90 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
 
     lastMouseX_ = x;
     lastMouseY_ = y;
+}
+
+// ---------------------------------------------------------------------------
+// CSS cursor → OS cursor
+// ---------------------------------------------------------------------------
+
+// Collapse a computed CSS `cursor` value onto a platform CursorShape.
+// Handles the fallback-list form ("url(x.png), pointer" — custom images are
+// not supported, so the last keyword wins, per the spec's fallback order).
+// Unknown keywords and `auto` map to Default: bro's hit test targets
+// elements, not text runs, so the browser "auto = I-beam over text"
+// refinement doesn't apply — text controls get their I-beam from the UA
+// stylesheet instead (default_styles.h).
+static platform::CursorShape cursorShapeFromCss(const std::string& value) {
+    using platform::CursorShape;
+    // Last comma-separated entry, trimmed + lowercased.
+    size_t comma = value.find_last_of(',');
+    std::string v = (comma == std::string::npos) ? value : value.substr(comma + 1);
+    size_t b = v.find_first_not_of(" \t\r\n");
+    size_t e = v.find_last_not_of(" \t\r\n");
+    v = (b == std::string::npos) ? std::string() : v.substr(b, e - b + 1);
+    for (char& c : v) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+
+    if (v.empty() || v == "auto" || v == "default") return CursorShape::Default;
+    if (v == "pointer" || v == "hand")              return CursorShape::Pointer;
+    if (v == "text" || v == "vertical-text")        return CursorShape::Text;
+    // SDL3 has no grab/grabbing shape; MOVE (the four-arrow pan cursor) is
+    // the closest native signal for "this can be dragged".
+    if (v == "move" || v == "grab" || v == "grabbing" || v == "all-scroll")
+        return CursorShape::Move;
+    if (v == "crosshair" || v == "cell")            return CursorShape::Crosshair;
+    if (v == "wait")                                return CursorShape::Wait;
+    if (v == "progress")                            return CursorShape::Progress;
+    if (v == "not-allowed" || v == "no-drop")       return CursorShape::NotAllowed;
+    if (v == "ew-resize" || v == "e-resize" || v == "w-resize" || v == "col-resize")
+        return CursorShape::ResizeEW;
+    if (v == "ns-resize" || v == "n-resize" || v == "s-resize" || v == "row-resize")
+        return CursorShape::ResizeNS;
+    if (v == "nesw-resize" || v == "ne-resize" || v == "sw-resize")
+        return CursorShape::ResizeNESW;
+    if (v == "nwse-resize" || v == "nw-resize" || v == "se-resize")
+        return CursorShape::ResizeNWSE;
+    if (v == "none")                                return CursorShape::None;
+    return CursorShape::Default;
+}
+
+static const char* cursorShapeName(platform::CursorShape s) {
+    using platform::CursorShape;
+    switch (s) {
+        case CursorShape::Default:    return "default";
+        case CursorShape::Pointer:    return "pointer";
+        case CursorShape::Text:       return "text";
+        case CursorShape::Move:       return "move";
+        case CursorShape::Crosshair:  return "crosshair";
+        case CursorShape::Wait:       return "wait";
+        case CursorShape::Progress:   return "progress";
+        case CursorShape::NotAllowed: return "not-allowed";
+        case CursorShape::ResizeEW:   return "ew-resize";
+        case CursorShape::ResizeNS:   return "ns-resize";
+        case CursorShape::ResizeNESW: return "nesw-resize";
+        case CursorShape::ResizeNWSE: return "nwse-resize";
+        case CursorShape::None:       return "none";
+        case CursorShape::Count_:     break;
+    }
+    return "default";
+}
+
+void Engine::updateCursorFromHover(dom::Element* target) {
+    std::string css;
+    if (target) {
+        // `cursor` is inherited, so the resolved cascade already carries any
+        // ancestor's value down to the hit-test leaf.
+        const auto& cs = target->computedStyle();
+        auto it = cs.find("cursor");
+        if (it != cs.end()) css = it->second;
+    }
+    platform::CursorShape shape = cursorShapeFromCss(css);
+    resolvedCursor_ = cursorShapeName(shape);
+    // Windowed only (the headless hidden window never shows a cursor), and
+    // never under pointer lock — relative mouse mode already hides the OS
+    // cursor and restores it on unlock; fighting it would flicker.
+    if (displayMode_ == DisplayMode::Windowed && window_ && !lockedElement_.get()) {
+        window_->setCursor(shape);
+    }
 }
 
 // ---------------------------------------------------------------------------

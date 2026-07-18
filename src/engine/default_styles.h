@@ -128,6 +128,26 @@ input, textarea, select {
     font-size: 13.333px;
 }
 
+/* Text-entry surfaces get the I-beam. Browsers reach this through
+   `cursor: auto` refinement over editable text; bro's hit test targets
+   elements (not text runs), so the UA sheet states it directly. The
+   non-text input types below override back to the arrow; button-like
+   inputs already win via their higher-specificity `cursor: pointer`
+   rule above. */
+input, textarea {
+    cursor: text;
+}
+input[type="checkbox"], input[type="radio"], input[type="range"],
+input[type="color"], select {
+    cursor: default;
+}
+[contenteditable] {
+    cursor: text;
+}
+[contenteditable="false"] {
+    cursor: default;
+}
+
 /* Text-like inputs derive their width from the `size` attribute (default 20)
    against the resolved font — computed in ElInput::getContentSize, not a
    fixed px value, so the box grows with `font-size` the way browsers do. */

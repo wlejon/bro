@@ -130,6 +130,12 @@ Window::Window(const std::string& title, uint32_t width, uint32_t height,
 }
 
 Window::~Window() {
+    for (SDL_Cursor*& c : m_cursors) {
+        if (c) {
+            SDL_DestroyCursor(c);
+            c = nullptr;
+        }
+    }
     if (m_glContext) {
         SDL_GL_DestroyContext(m_glContext);
         m_glContext = nullptr;
@@ -201,6 +207,53 @@ std::vector<DisplayModeInfo> Window::getDisplayModes() const {
         }
     }
     return result;
+}
+
+void Window::setCursor(CursorShape shape) {
+    if (!m_window || shape == m_cursorShape) return;
+
+    if (shape == CursorShape::None) {
+        SDL_HideCursor();
+        m_cursorShape = shape;
+        return;
+    }
+    if (m_cursorShape == CursorShape::None) {
+        SDL_ShowCursor();
+    }
+
+    SDL_SystemCursor id = SDL_SYSTEM_CURSOR_DEFAULT;
+    switch (shape) {
+        case CursorShape::Default:    id = SDL_SYSTEM_CURSOR_DEFAULT;     break;
+        case CursorShape::Pointer:    id = SDL_SYSTEM_CURSOR_POINTER;     break;
+        case CursorShape::Text:       id = SDL_SYSTEM_CURSOR_TEXT;        break;
+        case CursorShape::Move:       id = SDL_SYSTEM_CURSOR_MOVE;        break;
+        case CursorShape::Crosshair:  id = SDL_SYSTEM_CURSOR_CROSSHAIR;   break;
+        case CursorShape::Wait:       id = SDL_SYSTEM_CURSOR_WAIT;        break;
+        case CursorShape::Progress:   id = SDL_SYSTEM_CURSOR_PROGRESS;    break;
+        case CursorShape::NotAllowed: id = SDL_SYSTEM_CURSOR_NOT_ALLOWED; break;
+        case CursorShape::ResizeEW:   id = SDL_SYSTEM_CURSOR_EW_RESIZE;   break;
+        case CursorShape::ResizeNS:   id = SDL_SYSTEM_CURSOR_NS_RESIZE;   break;
+        case CursorShape::ResizeNESW: id = SDL_SYSTEM_CURSOR_NESW_RESIZE; break;
+        case CursorShape::ResizeNWSE: id = SDL_SYSTEM_CURSOR_NWSE_RESIZE; break;
+        case CursorShape::None:
+        case CursorShape::Count_:     break;  // handled above / unreachable
+    }
+
+    SDL_Cursor*& cached = m_cursors[static_cast<int>(shape)];
+    if (!cached) {
+        cached = SDL_CreateSystemCursor(id);
+        if (!cached) {
+            // Driver refused the shape (minimal wayland compositor, etc.) —
+            // record the state so we don't hammer SDL, keep whatever cursor
+            // the OS currently shows.
+            LOG_INFO("SDL_CreateSystemCursor(%d) failed: %s",
+                     static_cast<int>(id), SDL_GetError());
+            m_cursorShape = shape;
+            return;
+        }
+    }
+    SDL_SetCursor(cached);
+    m_cursorShape = shape;
 }
 
 float Window::getDisplayScale() const {

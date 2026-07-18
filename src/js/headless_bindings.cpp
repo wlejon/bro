@@ -265,6 +265,16 @@ static JSValue js_mouseMove(JSContext* ctx, JSValueConst, int argc, JSValueConst
     return JS_UNDEFINED;
 }
 
+// currentCursor() → the resolved OS cursor shape name for the current hover
+// target ("default", "pointer", "text", ..., "none"). Drive a mouseMove()
+// first; the engine re-resolves the hovered element's computed `cursor` on
+// every move (in headless the mapping runs without touching a real cursor).
+static JSValue js_currentCursor(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+    return JS_NewString(ctx, engine->resolvedCursor().c_str());
+}
+
 static JSValue js_click(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "click(x, y [, button]) requires x and y");
     auto* engine = getEngine(ctx);
@@ -1252,6 +1262,7 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         .function("mouseDown", js_mouseDown, 3)
         .function("mouseUp", js_mouseUp, 3)
         .function("mouseMove", js_mouseMove, 2)
+        .function("currentCursor", js_currentCursor, 0)
         .function("click", js_click, 3)
         .function("wheel", js_wheel, 4)
         // Touch input simulation
