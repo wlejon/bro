@@ -97,7 +97,16 @@ static void js_element_finalizer(JSRuntime* rt, JSValue val)
         el->setCanvasScene(nullptr);
     }
 
-    if (!el->parentNode()) {
+    // A <template>'s content fragment is parentless by design — it hangs off
+    // the template's templateContent_ link, not off any child list — so it
+    // looks exactly like an orphan to the check below. Freeing it here
+    // destroyed the template's contents (and unowned the fragment, which then
+    // could never be wrapper-cached again) the first time anyone read
+    // `.content` without keeping the result alive. The template still points
+    // at it; only the template's own collection may take it.
+    // sweepOrphanedWrappers() has always made this exemption; this path had
+    // not, so the two disagreed.
+    if (!el->parentNode() && !el->isTemplateContent()) {
         auto* doc = el->document();
         // Never free the document element: for a detached (DOMParser) document
         // it is the parentless ROOT of a tree that stays reachable through the

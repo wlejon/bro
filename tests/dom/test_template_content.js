@@ -107,6 +107,65 @@ for (let i = 0; i < 6; i++) flush();   // orphan sweep must not eat it
 assert(e.content === ec, 'empty content fragment survives GC sweeps');
 
 // ---------------------------------------------------------------------------
+// Dropping a TRANSIENT .content wrapper must not destroy the fragment.
+//
+// The element finalizer frees any parentless element whose wrapper is being
+// collected — that is how orphaned createElement() nodes get reclaimed. A
+// template's content fragment is parentless by design (it hangs off the
+// template's templateContent_ link, not off a child list), so reading
+// `.content` without keeping the result alive handed the finalizer a
+// parentless element and it released the fragment — and every node in it —
+// out of the document. The orphan SWEEP already knew to skip template
+// content; the finalizer did not.
+// ---------------------------------------------------------------------------
+{
+    const gcDoc = parser.parseFromString(
+        '<html><body><template id="g"><div class="row">hi</div><span>x</span>' +
+        '</template></body></html>', 'text/html');
+    const g = gcDoc.querySelector('#g');
+
+    // Read .content and drop the wrapper on the floor, then churn the GC.
+    String(g.content);
+    void g.content.childNodes.length;
+    for (let i = 0; i < 200000; i++) { const o = { x: i, s: 'abc' + i }; }
+    for (let i = 0; i < 6; i++) flush();
+
+    // The fragment must still be there, intact, and stable.
+    const c = g.content;
+    assert(c, 'content fragment survived a dropped transient wrapper');
+    assert(c.childNodes.length === 2,
+           'content children survived, got ' + c.childNodes.length);
+    assert(c.textContent === 'hix',
+           'content text survived, got "' + c.textContent + '"');
+    assert(g.content === c, 'content identity is stable again afterwards');
+    assert(c.querySelector('.row') !== null, 'content is still queryable');
+
+    // And it is still owned by its document — mutations stick.
+    c.appendChild(gcDoc.createElement('p'));
+    assert(g.content.childNodes.length === 3, 'content still mutable');
+}
+
+// The same, in the MAIN document rather than a DOMParser one.
+{
+    const host = document.getElementById('root');
+    const holder = document.createElement('div');
+    holder.innerHTML = '<template id="gm"><b class="deep">m</b></template>';
+    host.appendChild(holder);
+    flush();
+    const gm = document.getElementById('gm');
+    assert(gm !== null, 'main-document template present');
+
+    String(gm.content);
+    for (let i = 0; i < 200000; i++) { const o = { x: i, s: 'abc' + i }; }
+    for (let i = 0; i < 6; i++) flush();
+
+    assert(gm.content.childNodes.length === 1,
+           'main-document content survived, got ' + gm.content.childNodes.length);
+    assert(gm.content.textContent === 'm', 'main-document content text survived');
+    assert(gm.content === gm.content, 'main-document content identity stable');
+}
+
+// ---------------------------------------------------------------------------
 // Nested templates
 // ---------------------------------------------------------------------------
 const nestDoc = parser.parseFromString(
