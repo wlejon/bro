@@ -416,6 +416,8 @@ node.stopNavigation();
  * @param {number} [opts.z=0] - Initial Z position
  * @param {number} [opts.speed=6] - Movement speed (units/second)
  * @param {number} [opts.radius=0.4] - Collision radius
+ * @param {number} [opts.elevation=0] - Vertical position (Y) for the ORCA
+ *                                  multi-level elevation filter (see bot.elevation)
  * @param {boolean|Object} [opts.avoidance] - ORCA participation/tuning (see
  *                                  "Local avoidance" below)
  * @returns {Agent}
@@ -465,6 +467,15 @@ bot.x;
 
 /** Current Z position (read-only). */
 bot.z;
+
+/**
+ * Vertical position (Y) for multi-level worlds — read/write. Only feeds the
+ * ORCA elevation filter (see avoidance.height): agents on different levels
+ * don't steer around each other. Movement itself stays XZ. Also accepted as
+ * `elevation:` in createAgent(opts). Scene-attached agents with groundFollow
+ * or a navmesh route get it updated automatically from the surface height.
+ */
+bot.elevation = 4;
 
 /** Current facing direction in radians (read-only). 0 = -Z, positive = clockwise. */
 bot.yaw;
@@ -530,6 +541,11 @@ world.avoidanceEnabled;
  * @param {number}  [opts.maxNeighbors=10]   - nearest-N cap on the neighbor set
  * @param {number}  [opts.timeHorizon=2]     - seconds of mutual lookahead vs agents
  * @param {number}  [opts.timeHorizonObst=1] - seconds of lookahead vs walls
+ * @param {number}  [opts.height=2]          - vertical extent for the multi-level
+ *   elevation filter: agents whose spans [elevation - height/2, elevation +
+ *   height/2] don't overlap are on different levels (bridge over tunnel,
+ *   stacked floors) and ignore each other. Elevations default to 0, so
+ *   single-level worlds never filter.
  */
 bot.setAvoidance({ radius: 0.5, timeHorizon: 2.5 });
 

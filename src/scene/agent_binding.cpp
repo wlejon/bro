@@ -231,6 +231,12 @@ void AgentBinding::syncToNode() {
         // route has finished) carries the node, with yOffset as clearance.
         y = navY_ + yOffset_;
     }
+    // Feed the walking-surface height (sans clearance) into the agent so the
+    // World's ORCA pass can elevation-filter neighbors — agents on different
+    // navmesh levels (bridge over tunnel) stop steering around each other.
+    // Without a height source the agent keeps its JS-set elevation.
+    if (hasGround_)     agent_->setElevation(lastGroundY_);
+    else if (hasNavY_)  agent_->setElevation(navY_);
     node_->setPosition(ax, y, az);
     if (faceMovement_) {
         // brogameagent uses FPS yaw (0 = -Z, positive = clockwise from above).

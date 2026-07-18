@@ -248,8 +248,9 @@ static std::vector<brogameagent::AABB> parseAABBArray(JSContext* ctx, JSValueCon
 
 // Apply an `avoidance` opts value onto an agent: `true`/`false` toggles
 // participation with default params; an object sets {enabled?, radius?,
-// maxSpeed?, neighborDist?, maxNeighbors?, timeHorizon?, timeHorizonObst?}
-// (radius/maxSpeed omitted or <= 0 derive from the agent). Shared by
+// maxSpeed?, neighborDist?, maxNeighbors?, timeHorizon?, timeHorizonObst?,
+// height?} (radius/maxSpeed omitted or <= 0 derive from the agent; height is
+// the vertical extent for the multi-level elevation filter). Shared by
 // createAgent, agent.setAvoidance and node.attachAgent.
 void applyAgentAvoidanceOpts(JSContext* ctx, JSValueConst val, brogameagent::Agent& agent) {
     brogameagent::AgentAvoidance av;  // library defaults
@@ -263,6 +264,7 @@ void applyAgentAvoidanceOpts(JSContext* ctx, JSValueConst val, brogameagent::Age
         av.maxNeighbors    = getInt32Prop(ctx, val, "maxNeighbors", av.maxNeighbors);
         av.timeHorizon     = (float)getDoubleProp(ctx, val, "timeHorizon", av.timeHorizon);
         av.timeHorizonObst = (float)getDoubleProp(ctx, val, "timeHorizonObst", av.timeHorizonObst);
+        av.height          = (float)getDoubleProp(ctx, val, "height", av.height);
     } else {
         return;
     }
@@ -788,6 +790,9 @@ static JSValue js_createAgent(JSContext* ctx, JSValueConst, int argc, JSValueCon
         float radius = (float)getDoubleProp(ctx, opts, "radius", 0.4);
 
         h->agent.setPosition(x, z);
+        // Vertical position for multi-level worlds — only feeds the ORCA
+        // elevation filter (agents on different levels ignore each other).
+        h->agent.setElevation((float)getDoubleProp(ctx, opts, "elevation", 0));
         h->agent.setSpeed(speed);
         h->agent.setRadius(radius);
 
@@ -2476,6 +2481,11 @@ void AIBindings::install(JSContext* ctx) {
                 }, 1)
             .get("x", [](AgentData* d) -> double { return d->agent.x(); })
             .get("z", [](AgentData* d) -> double { return d->agent.z(); })
+            // Vertical position for multi-level worlds — feeds the ORCA
+            // elevation filter only (see avoidance.height); movement stays XZ.
+            .prop("elevation",
+                [](AgentData* d) -> double { return d->agent.elevation(); },
+                [](AgentData* d, double y) { d->agent.setElevation((float)y); })
             .get("yaw", [](AgentData* d) -> double { return d->agent.yaw(); })
             .get("aimYaw", [](AgentData* d) -> double { return d->agent.aimYaw(); })
             .get("aimPitch", [](AgentData* d) -> double { return d->agent.aimPitch(); })

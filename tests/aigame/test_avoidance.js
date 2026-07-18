@@ -159,6 +159,68 @@ function dist(a, b) { return Math.hypot(a.x - b.x, a.z - b.z); }
 }
 
 // =========================================================================
+// Multi-level: vertically separated agents ignore each other (elevation
+// filter — bridge over tunnel), same-level agents still avoid
+// =========================================================================
+{
+    // Different levels: |dy| = 6 far exceeds (2 + 2) / 2 with the default
+    // avoidance height 2 — the crossing pair must pass straight through in
+    // XZ with no swerve (only the tiny ORCA symmetry dither bends paths).
+    const world = G.createWorld();
+    world.setAvoidance(true);
+
+    const lower = G.createAgent({ id: 1, x: -5, z: 0, speed: 4, radius: 0.5, elevation: 0 });
+    const upper = G.createAgent({ id: 2, x: 5, z: 0, speed: 4, radius: 0.5, elevation: 6 });
+    assert(Math.abs(upper.elevation - 6) < 1e-6, 'elevation opt lands: ' + upper.elevation);
+    upper.elevation = 7;
+    assert(Math.abs(upper.elevation - 7) < 1e-6, 'elevation is assignable');
+    world.addAgent(lower);
+    world.addAgent(upper);
+    lower.setTarget(5, 0);
+    upper.setTarget(-5, 0);
+
+    let maxLateral = 0;
+    let minDist = Infinity;
+    for (let i = 0; i < 10 * 60; i++) {
+        world.tick(dt);
+        maxLateral = Math.max(maxLateral, Math.abs(lower.z), Math.abs(upper.z));
+        minDist = Math.min(minDist, dist(lower, upper));
+        if (lower.atTarget && upper.atTarget) break;
+    }
+    assert(lower.atTarget && upper.atTarget, 'stacked-level agents reached their goals');
+    assert(minDist < 0.5,
+        'stacked-level agents passed straight through in XZ: minDist=' + minDist.toFixed(3));
+    assert(maxLateral < 0.2,
+        'stacked-level agents never swerved: maxLateral=' + maxLateral.toFixed(3));
+}
+{
+    // Overlapping spans: |dy| = 3 < (4 + 4) / 2 with avoidance.height 4 —
+    // the pair still counts as neighbors and must avoid. Also proves the
+    // height option reaches the solver through the bindings.
+    const world = G.createWorld();
+    world.setAvoidance(true);
+
+    const a = G.createAgent({ id: 1, x: -5, z: 0, speed: 4, radius: 0.5,
+                              elevation: 0, avoidance: { height: 4 } });
+    const b = G.createAgent({ id: 2, x: 5, z: 0, speed: 4, radius: 0.5,
+                              elevation: 3, avoidance: { height: 4 } });
+    world.addAgent(a);
+    world.addAgent(b);
+    a.setTarget(5, 0);
+    b.setTarget(-5, 0);
+
+    let minDist = Infinity;
+    for (let i = 0; i < 15 * 60; i++) {
+        world.tick(dt);
+        minDist = Math.min(minDist, dist(a, b));
+        if (a.atTarget && b.atTarget) break;
+    }
+    assert(a.atTarget && b.atTarget, 'overlapping-span agents reached their goals');
+    assert(minDist >= 1.0 * 0.9,
+        'overlapping vertical spans still avoid: minDist=' + minDist.toFixed(3));
+}
+
+// =========================================================================
 // Scene-attached agents: think() + moveTo flow around each other
 // =========================================================================
 {
