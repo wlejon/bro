@@ -9,6 +9,9 @@
 #include <string_view>
 #include <vector>
 
+#include <include/core/SkRefCnt.h>
+#include <include/core/SkTextBlob.h>
+
 namespace bro::render {
 
 // A flat list of DrawCommands plus an arena for variable-length payloads
@@ -23,6 +26,7 @@ public:
     void clear() {
         cmds_.clear();
         arena_.clear();
+        blobs_.clear();
     }
 
     void reserve(size_t cmdHint, size_t arenaHint) {
@@ -59,7 +63,24 @@ public:
         return {offset, static_cast<uint32_t>(items.size())};
     }
 
+    // Shaped text is recorded as an SkTextBlob rather than as a string, so the
+    // raster thread replays glyphs instead of re-shaping (see
+    // RecordingRenderer::drawTextEx). Blobs are immutable and refcounted, so
+    // holding them here is safe across the record/replay thread boundary; the
+    // arena can't store them because it is raw POD bytes. The refs live until
+    // the buffer is recycled for the next recording.
+    uint32_t pushTextBlob(sk_sp<SkTextBlob> blob) {
+        blobs_.push_back(std::move(blob));
+        return static_cast<uint32_t>(blobs_.size() - 1);
+    }
+
+    static constexpr uint32_t kNoTextBlob = 0xFFFFFFFFu;
+
     // ---- read-side accessors (replayer) ----
+
+    const SkTextBlob* textBlobAt(uint32_t index) const {
+        return index < blobs_.size() ? blobs_[index].get() : nullptr;
+    }
 
     const std::vector<DrawCommand>& commands() const { return cmds_; }
 
@@ -80,8 +101,9 @@ public:
     size_t arenaSize()    const { return arena_.size(); }
 
 private:
-    std::vector<DrawCommand>  cmds_;
-    std::vector<std::byte>    arena_;
+    std::vector<DrawCommand>       cmds_;
+    std::vector<std::byte>         arena_;
+    std::vector<sk_sp<SkTextBlob>> blobs_;
 };
 
 } // namespace bro::render

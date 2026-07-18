@@ -1,4 +1,5 @@
 #include "render/recording_renderer.h"
+#include "render/shaped_run.h"
 
 #include <cassert>
 
@@ -90,6 +91,16 @@ void RecordingRenderer::drawTextEx(std::string_view text, float x, float y,
         return;
     }
     Cmd_DrawText cmd{};
+    cmd.blobIndex = CommandBuffer::kNoTextBlob;
+    // Shape at RECORD time, through the same renderer (and the same shaped-run
+    // cache) that already served this string's measurement during layout. The
+    // raster thread then replays an immutable blob: it does no shaping and no
+    // font fallback, where before it re-did the fallback split for every draw.
+    if (const ShapedRun* run = measureRenderer_->shapeText(text, font, letterSpacing != 0.0f)) {
+        if (sk_sp<SkTextBlob> blob = run->makeBlob(Spacing{letterSpacing, wordSpacing})) {
+            cmd.blobIndex = buffer_->pushTextBlob(std::move(blob));
+        }
+    }
     auto [tOff, tLen] = buffer_->pushString(text);
     cmd.textOffset = tOff;
     cmd.textLen = tLen;

@@ -29,6 +29,11 @@ struct Cmd_DrawBoxShadowRadii { float x, y, w, h; Radii r; float offsetX, offset
 // font against its own renderer at replay time — fonts are never shared
 // across renderers.
 struct Cmd_DrawText {
+    // Shaped path: `blobIndex` names a pre-shaped SkTextBlob in the buffer's
+    // blob table and the replayer just draws it — no shaping, no font
+    // fallback, no re-measure on the raster thread. The string/font fields
+    // stay as the fallback for backends with no shaper.
+    uint32_t blobIndex;               // CommandBuffer::kNoTextBlob if unshaped
     uint32_t textOffset, textLen;     // arena: char[]
     uint32_t familyOffset, familyLen; // arena: char[]
     float x, y;

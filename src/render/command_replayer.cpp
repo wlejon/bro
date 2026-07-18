@@ -64,6 +64,13 @@ void CommandReplayer::replay(const CommandBuffer& buffer) {
                                          c.color, c.inset);
 
             } else if constexpr (std::is_same_v<T, Cmd_DrawText>) {
+                // Recorded text is normally already shaped — drawing the blob
+                // keeps the raster thread out of the shaper entirely.
+                if (c.blobIndex != CommandBuffer::kNoTextBlob &&
+                    dst_->drawTextBlob(buffer.textBlobAt(c.blobIndex),
+                                       c.x, c.y, c.color, c.blur)) {
+                    return;
+                }
                 std::string_view text = buffer.stringAt(c.textOffset, c.textLen);
                 std::string_view family = buffer.stringAt(c.familyOffset, c.familyLen);
                 FontRef font{family, c.fontSize, c.fontWeight, c.fontItalic};
