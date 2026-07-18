@@ -18,12 +18,15 @@
 
 #include <qjsbind/qjsbind.h>
 
+extern "C" {
+#include "libregexp.h"
+}
+
 #include "dataset_proxy.js.h"
 
 #include <algorithm>
 #include <cmath>
 #include <functional>
-#include <regex>
 
 namespace bro::js {
 
@@ -1515,6 +1518,45 @@ static int utf16ToUtf8Byte(const std::string& s, int u16) {
     return i;
 }
 
+// Decode the UTF-8 value into UTF-16 code units (JS string semantics) —
+// libregexp's 16-bit subject form, and what a `u`/`v`-flagged RegExp matches
+// over. A truncated/invalid sequence decodes as U+FFFD, one unit per bad byte.
+static std::vector<uint16_t> utf8ToUtf16Units(const std::string& s) {
+    std::vector<uint16_t> out;
+    out.reserve(s.size());
+    const size_t n = s.size();
+    size_t i = 0;
+    while (i < n) {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        uint32_t cp = 0xFFFD;
+        int len = 1;
+        if (c < 0x80) {
+            cp = c;
+        } else if ((c & 0xE0) == 0xC0 && i + 1 < n) {
+            cp = (uint32_t(c & 0x1F) << 6) | (s[i + 1] & 0x3F);
+            len = 2;
+        } else if ((c & 0xF0) == 0xE0 && i + 2 < n) {
+            cp = (uint32_t(c & 0x0F) << 12) | (uint32_t(s[i + 1] & 0x3F) << 6) |
+                 (s[i + 2] & 0x3F);
+            len = 3;
+        } else if ((c & 0xF8) == 0xF0 && i + 3 < n) {
+            cp = (uint32_t(c & 0x07) << 18) | (uint32_t(s[i + 1] & 0x3F) << 12) |
+                 (uint32_t(s[i + 2] & 0x3F) << 6) | (s[i + 3] & 0x3F);
+            len = 4;
+        }
+        if (cp >= 0x10000 && cp <= 0x10FFFF) {
+            cp -= 0x10000;
+            out.push_back(static_cast<uint16_t>(0xD800 + (cp >> 10)));
+            out.push_back(static_cast<uint16_t>(0xDC00 + (cp & 0x3FF)));
+        } else {
+            if (cp > 0x10FFFF) cp = 0xFFFD;
+            out.push_back(static_cast<uint16_t>(cp));
+        }
+        i += static_cast<size_t>(len);
+    }
+    return out;
+}
+
 // The value string the control's selection offsets index — must match
 // js_element_get_value for the editable types: <input> reads the "value"
 // attribute (which the typing/IME pipeline keeps live, preedit included);
@@ -1656,7 +1698,7 @@ std::string controlValue(bro::dom::Element* el) {
     return el->getAttribute("value");
 }
 
-ValidityReport computeValidity(bro::dom::Element* el) {
+ValidityReport computeValidity(JSContext* ctx, bro::dom::Element* el) {
     ValidityReport r;
     if (!el) return r;
     if (!el->customValidity().empty()) r.customError = true;
@@ -1722,14 +1764,35 @@ ValidityReport computeValidity(bro::dom::Element* el) {
         }
     }
 
-    // patternMismatch — applies to text-like inputs when non-empty.
-    if (!empty && el->hasAttribute("pattern")) {
-        try {
-            std::regex re("^(?:" + el->getAttribute("pattern") + ")$",
-                          std::regex::ECMAScript);
-            if (!std::regex_match(value, re)) r.patternMismatch = true;
-        } catch (...) {
-            // Invalid pattern per author — spec: no mismatch (skip).
+    // patternMismatch — applies to text-like inputs when non-empty. Per spec
+    // the pattern is an ECMAScript RegExp (current spec says the 'v' flag; we
+    // compile with 'u', the spec's sanctioned approximation) implicitly
+    // anchored as ^(?:pattern)$, so it uses QuickJS's own regexp engine
+    // (libregexp — the dialect app JS actually speaks: named groups,
+    // lookbehind, \u{...}), not std::regex. 'u' rather than 'v' because this
+    // libregexp only combines surrogate pairs at exec under LRE_FLAG_UNICODE —
+    // v-mode astral subjects would mis-match. Matching runs over the UTF-16
+    // form of the value, per JS string semantics. An invalid pattern is
+    // ignored (the constraint matches everything).
+    if (ctx && !empty && el->hasAttribute("pattern")) {
+        const std::string source = "^(?:" + el->getAttribute("pattern") + ")$";
+        char errorMsg[64];
+        int bcLen = 0;
+        uint8_t* bc = lre_compile(&bcLen, errorMsg, sizeof errorMsg,
+                                  source.c_str(), source.size(),
+                                  LRE_FLAG_UNICODE, ctx);
+        if (bc) {
+            const std::vector<uint16_t> subject = utf8ToUtf16Units(value);
+            const int captureCount = lre_get_capture_count(bc);
+            std::vector<uint8_t*> capture(static_cast<size_t>(captureCount) * 2);
+            const int rc = lre_exec(capture.data(), bc,
+                                    reinterpret_cast<const uint8_t*>(subject.data()),
+                                    /*cindex=*/0, static_cast<int>(subject.size()),
+                                    /*cbuf_type=*/1, ctx);
+            // rc: 1 = match, 0 = no match, <0 = engine error (treat an engine
+            // error like an invalid pattern: constraint ignored).
+            if (rc == 0) r.patternMismatch = true;
+            js_free(ctx, bc);
         }
     }
 
@@ -1795,7 +1858,7 @@ std::string defaultValidationMessage(const ValidityReport& r,
 
 static JSValue js_element_get_validity(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    ValidityReport r = computeValidity(el);
+    ValidityReport r = computeValidity(ctx, el);
     JSValue o = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, o, "valueMissing",   JS_NewBool(ctx, r.valueMissing));
     JS_SetPropertyStr(ctx, o, "typeMismatch",   JS_NewBool(ctx, r.typeMismatch));
@@ -1814,7 +1877,7 @@ static JSValue js_element_get_validity(JSContext* ctx, JSValueConst this_val) {
 static JSValue js_element_get_validationMessage(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
     if (!el) return JS_NewString(ctx, "");
-    ValidityReport r = computeValidity(el);
+    ValidityReport r = computeValidity(ctx, el);
     if (r.valid()) return JS_NewString(ctx, "");
     return JS_NewString(ctx, defaultValidationMessage(r, el).c_str());
 }
@@ -1834,7 +1897,7 @@ static JSValue js_element_checkValidity(JSContext* ctx, JSValueConst this_val,
     if (el->tagName() == "FORM" || el->tagName() == "form") {
         return js_form_checkValidity_impl(ctx, el);
     }
-    ValidityReport r = computeValidity(el);
+    ValidityReport r = computeValidity(ctx, el);
     if (r.valid()) return JS_TRUE;
     // Fire cancelable 'invalid' event per spec.
     bro::dom::Event evt("invalid", false, true);
@@ -1959,7 +2022,7 @@ void requestFormSubmit(JSContext* ctx, bro::dom::Element* form,
     collectFormElements(form, items);
     bool anyInvalid = false;
     for (auto* c : items) {
-        ValidityReport r = computeValidity(c);
+        ValidityReport r = computeValidity(ctx, c);
         if (!r.valid()) {
             anyInvalid = true;
             bro::dom::Event invalidEvt("invalid", false, true);
@@ -2047,7 +2110,7 @@ static JSValue js_form_checkValidity_impl(JSContext* ctx, bro::dom::Element* el)
     collectFormElements(el, items);
     bool allValid = true;
     for (auto* c : items) {
-        ValidityReport r = computeValidity(c);
+        ValidityReport r = computeValidity(ctx, c);
         if (!r.valid()) {
             allValid = false;
             bro::dom::Event evt("invalid", false, true);
