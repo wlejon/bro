@@ -159,16 +159,50 @@ battery.level;            // 0.0 .. 1.0
 // is ready, exposes capture() for the window's pixels, and fires 'close' on
 // close() / the OS close button.
 //
+// Input is routed per window. A secondary window handles its own mouse
+// (click / dblclick / hover / :hover / enter-leave / drag-select), CSS cursor,
+// keyboard, Tab focus, text input and IME, wheel scrolling of its overflow
+// boxes, and file/text drops — all against ITS document, with its own focus,
+// hover target and click streak. Nothing crosses over: a click in a palette
+// window can never focus an element in the main app, and vice versa. Focus,
+// page visibility (document.hidden + visibilitychange) and window resize are
+// likewise per realm.
+//
 // Still to come (next chunk of the multiwindow plan): postMessage in both
-// directions, 'message' events, window.close() self-close, and INPUT — mouse,
-// keyboard and IME still go to the main window only, so a secondary window
-// renders and animates but does not yet respond to clicks or typing.
+// directions, 'message' events, and window.close() self-close.
 //
 // v1 refusals inside a secondary window's document, each logged as a clear
 // warning rather than failing silently: WebGL contexts (getContext('webgl')
 // returns null), 3D scene graphs (bro.scene is not installed in a child
 // realm, as in iframes), and nested <iframe> elements (the element lays out
 // as an empty box, its src never loads).
+//
+// Input-side v1 cuts, all main-window-only:
+//   • Pointer lock — element.requestPointerLock() from a secondary window's
+//     realm (or an iframe's) throws a clear error. SDL's relative mouse mode
+//     is bound to the primary window, so a lock here would capture the wrong
+//     pointer.
+//   • Touch — finger events on a secondary window are dropped rather than
+//     misrouted (the engine's contact table is global, with no per-window key).
+//   • Gamepad and bro.settings "action" events — always delivered to the main
+//     app realm regardless of which window has focus. Keystrokes in a
+//     secondary window fire DOM key events there but never an "action", so
+//     typing a "w" into a palette's text field can't trigger a movement
+//     binding.
+//   • Overlays — a <select> or <input type="color"> in a secondary window
+//     focuses and takes keys, but its dropdown / colour-picker popup does not
+//     open (the overlay manager draws on the main window).
+//   • contenteditable editing (and its IME composition) — a contenteditable
+//     element in a secondary window receives key/text DOM events, but the
+//     engine does not splice text into it. <input> and <textarea> have full
+//     support, IME included.
+//   • Viewport scrolling — a secondary window has no engine viewport
+//     scrollbar; a document that overflows scrolls only through its own
+//     overflow: auto/scroll boxes.
+//
+// System hotkeys stay GLOBAL: the perf-HUD and settings-modal bindings fire
+// whichever bro window has focus (the panels themselves render on the main
+// window).
 //
 // The child realm gets the standard sub-document bindings — DOM, timers,
 // 2D canvas, storage, settings, images — plus a bro.window scoped to ITS
@@ -238,5 +272,16 @@ shot.width; shot.height; shot.data;      // Uint8ClampedArray, 4 bytes per px
 // child realm's innerWidth/innerHeight and fires a 'resize' event there, then
 // re-lays-out and re-renders the document at the new size.
 
+// Headless input: every injection seam (click / mouseDown / mouseUp /
+// mouseMove / keyDown / keyUp / textInput / imeCompose / imeCommit /
+// imeCancel / wheel / dropText / dropFiles / currentCursor) takes an optional
+// trailing windowId. Omitted means the main window; pass win.id to drive a
+// secondary one. Coordinates there are plain window coordinates (no menu-bar
+// inset, no viewport scroll). See docs/headless.md.
+//
+//   click(50, 30, 0, win.id);          // click inside the palette window
+//   textInput('hi', win.id);           // type into its focused control
+//   currentCursor(win.id);             // its own resolved cursor shape
+//
 // NEXT CHUNK (not yet available): win.postMessage(data, transfer), 'message'
-// events, window.close() self-close, and input routing into the window.
+// events, and window.close() self-close.

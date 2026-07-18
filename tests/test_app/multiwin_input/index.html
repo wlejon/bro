@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  html, body { margin: 0; width: 100%; height: 100%; background: #000000; }
+  #btn {
+    position: absolute; left: 0; top: 0; width: 100px; height: 60px;
+    background: #333333; cursor: pointer;
+  }
+  #hovertarget {
+    position: absolute; left: 100px; top: 0; width: 100px; height: 60px;
+    background: #333333;
+  }
+  /* The whole point of the hover probe: the parent samples this box's pixels
+     directly, so :hover has to resolve against THIS window's hover target. */
+  #hovertarget:hover { background: #00ff00; }
+  #field {
+    position: absolute; left: 0; top: 60px; width: 200px; height: 30px;
+    font-size: 14px;
+  }
+  #scroller {
+    position: absolute; left: 200px; top: 0; width: 100px; height: 90px;
+    overflow-y: auto; background: #111111;
+  }
+  #tall { height: 600px; background: #222222; }
+  .probe {
+    position: absolute; top: 180px; width: 50px; height: 20px;
+    background: #000000;
+  }
+</style></head>
+<body>
+  <!-- Interactive surface. The parent realm can only observe this window
+       through win.capture(), so every assertion is encoded as a 50px probe
+       band along the bottom row (y = 180..200), sampled at x = 25/75/.../275.
+         1  0..50    click        green = a click landed on #btn IN THIS WINDOW
+         2  50..100  keyboard     green = #field's value is "hi" after typing
+         3  100..150 wheel        green = #scroller scrolled past 10px
+         4  150..200 drop         green = a drop event carried the payload
+         5  200..250 focus        green = document.activeElement is #field
+         6  250..300 ime          green = an IME composition committed text -->
+  <div id="btn"></div>
+  <div id="hovertarget"></div>
+  <input id="field" type="text" value="">
+  <div id="scroller"><div id="tall"></div></div>
+
+  <div class="probe" id="p1" style="left:0"></div>
+  <div class="probe" id="p2" style="left:50px"></div>
+  <div class="probe" id="p3" style="left:100px"></div>
+  <div class="probe" id="p4" style="left:150px"></div>
+  <div class="probe" id="p5" style="left:200px"></div>
+  <div class="probe" id="p6" style="left:250px"></div>
+
+  <script>
+    function light(id, on) {
+      document.getElementById(id).style.background = on ? '#00ff00' : '#ff0000';
+    }
+
+    // 1. Click routing: the press must hit THIS document's #btn.
+    document.getElementById('btn').addEventListener('click', function () {
+      light('p1', true);
+    });
+
+    // 2/5. Keyboard + focus: typing goes to this window's focused control, and
+    // this document's activeElement is what the engine focused — not the
+    // parent's.
+    // Latching, not level-triggered: the IME probe below types more text into
+    // the same field afterwards, and a level-triggered probe would flip back
+    // to red on that later edit.
+    var field = document.getElementById('field');
+    field.addEventListener('input', function () {
+      if (field.value === 'hi') light('p2', true);
+      if (document.activeElement === field) light('p5', true);
+    });
+
+    // 3. Wheel: this window's own overflow box scrolls (there is no engine
+    // viewport scrollbar for a secondary window in v1).
+    document.getElementById('scroller').addEventListener('scroll', function (e) {
+      light('p3', e.target.scrollTop > 10);
+    });
+
+    // 4. Drop: dragenter/dragover/drop reach this document.
+    document.addEventListener('drop', function (e) {
+      var txt = e.dataTransfer ? e.dataTransfer.getData('text/plain') : '';
+      light('p4', txt === 'payload');
+    });
+
+    // 6. IME: a composition committed into this window's text control.
+    field.addEventListener('compositionend', function (e) {
+      light('p6', e.data === 'ok');
+    });
+
+    // v1 refusal: pointer lock is main-window only. A host realm asking for it
+    // gets a clean throw, not a silent half-lock. Reaching the catch is what
+    // the parent asserts (the window keeps rendering afterwards).
+    try {
+      document.getElementById('btn').requestPointerLock();
+      // No throw = the refusal regressed. Flood the page background red so the
+      // parent's pixel probes cannot miss it.
+      document.body.style.background = '#ff0000';
+    } catch (err) {
+      /* expected */
+    }
+  </script>
+</body>
+</html>
