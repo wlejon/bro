@@ -5,6 +5,7 @@ add_library(bro_render STATIC
     raster_renderer.cpp
     font_fallback.cpp
     font_family.cpp
+    shaped_run.cpp
     filter_chain.cpp
     recording_renderer.cpp
     command_replayer.cpp

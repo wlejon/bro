@@ -211,25 +211,17 @@ void RasterRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
     canvas_->restore();
 }
 
+const ShapedRun* RasterRenderer::shapeText(std::string_view text, FontRef font,
+                                   bool disableLigatures) {
+    const FontEntry* fe = getOrCreateFont(font);
+    if (!fe) return nullptr;
+    return shaper_.shape(text, *fe->font, font.family, fe->style,
+                         ensureFontMgr(), fallbackCache_,
+                         TextDirection::LTR, disableLigatures);
+}
+
 void RasterRenderer::drawText(std::string_view text, float x, float y, FontRef font, Color c) {
-    if (!canvas_ || text.empty()) return;
-    std::string utf8Scratch;
-    text = ensureValidUtf8(text, utf8Scratch);
-    const FontEntry* fePtr = getOrCreateFont(font);
-    if (!fePtr) return;
-    SkPaint paint;
-    paint.setColor(toSkColor(c));
-    const FontEntry& fe = *fePtr;
-    auto runs = splitTextForFallback(text, *fe.font, ensureFontMgr(),
-                                      fe.style, fallbackCache_);
-    if (runs.empty()) return;
-    float cursor = x;
-    for (const auto& run : runs) {
-        const char* data = text.data() + run.start;
-        canvas_->drawSimpleText(data, run.length, SkTextEncoding::kUTF8,
-                                cursor, y, run.font, paint);
-        cursor += run.font.measureText(data, run.length, SkTextEncoding::kUTF8);
-    }
+    drawTextEx(text, x, y, font, c, 0.0f, 0.0f, 0.0f);
 }
 
 void RasterRenderer::drawTextEx(std::string_view text, float x, float y,
@@ -237,78 +229,41 @@ void RasterRenderer::drawTextEx(std::string_view text, float x, float y,
                                 float letterSpacing, float blur,
                                 float wordSpacing) {
     if (!canvas_ || text.empty()) return;
-    std::string utf8Scratch;
-    text = ensureValidUtf8(text, utf8Scratch);
-    const FontEntry* fePtr = getOrCreateFont(font);
-    if (!fePtr) return;
+    const ShapedRun* run = shapeText(text, font, letterSpacing != 0.0f);
+    if (!run) return;
+    sk_sp<SkTextBlob> blob = run->makeBlob(Spacing{letterSpacing, wordSpacing});
+    if (!blob) return;
 
     SkPaint paint;
     paint.setColor(toSkColor(c));
     if (blur > 0) {
         paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
     }
-    const FontEntry& fe = *fePtr;
-    auto runs = splitTextForFallback(text, *fe.font, ensureFontMgr(),
-                                      fe.style, fallbackCache_);
-    if (runs.empty()) return;
+    canvas_->drawTextBlob(blob, x, y, paint);
+}
 
-    float cursor = x;
-    for (size_t r = 0; r < runs.size(); ++r) {
-        const auto& run = runs[r];
-        const char* data = text.data() + run.start;
-        bool isLastRun = (r + 1 == runs.size());
-        if (letterSpacing == 0.0f && wordSpacing == 0.0f) {
-            canvas_->drawSimpleText(data, run.length, SkTextEncoding::kUTF8,
-                                    cursor, y, run.font, paint);
-            cursor += run.font.measureText(data, run.length, SkTextEncoding::kUTF8);
-        } else {
-            // Walk UTF-8 codepoints, applying letter-spacing BETWEEN them
-            // (n - 1 times) so visible glyph extent matches the layout box
-            // and centered text isn't drifted leftward by trailing dead space.
-            size_t i = 0;
-            while (i < run.length) {
-                unsigned char b = static_cast<unsigned char>(data[i]);
-                size_t n = 1;
-                if      ((b & 0x80) == 0x00) n = 1;
-                else if ((b & 0xE0) == 0xC0) n = 2;
-                else if ((b & 0xF0) == 0xE0) n = 3;
-                else if ((b & 0xF8) == 0xF0) n = 4;
-                if (i + n > run.length) n = run.length - i;
-                canvas_->drawSimpleText(data + i, n, SkTextEncoding::kUTF8,
-                                        cursor, y, run.font, paint);
-                cursor += run.font.measureText(data + i, n, SkTextEncoding::kUTF8);
-                // word-spacing widens the space's own advance (CSS
-                // word-spacing applies to each word-separator character).
-                if (n == 1 && data[i] == ' ') cursor += wordSpacing;
-                bool isLastCodepoint = (i + n >= run.length);
-                if (!(isLastCodepoint && isLastRun)) cursor += letterSpacing;
-                i += n;
-            }
-        }
+bool RasterRenderer::drawTextBlob(const SkTextBlob* blob, float x, float y,
+                                  Color c, float blur) {
+    if (!canvas_ || !blob) return true;
+    SkPaint paint;
+    paint.setColor(toSkColor(c));
+    if (blur > 0) {
+        paint.setMaskFilter(SkMaskFilter::MakeBlur(kNormal_SkBlurStyle, blur / 2.0f));
     }
+    canvas_->drawTextBlob(blob, x, y, paint);
+    return true;
 }
 
 TextMetrics RasterRenderer::measureText(std::string_view text, FontRef font) {
     const FontEntry* fePtr = getOrCreateFont(font);
     if (!fePtr) return {};
-    const FontEntry& fe = *fePtr;
-    const SkFont& primary = *fe.font;
     SkFontMetrics fm;
-    primary.getMetrics(&fm);
+    fePtr->font->getMetrics(&fm);
     if (text.empty()) return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent, fm.fLeading, fm.fXHeight };
-    std::string utf8Scratch;
-    text = ensureValidUtf8(text, utf8Scratch);
-    auto runs = splitTextForFallback(text, primary, ensureFontMgr(),
-                                      fe.style, fallbackCache_);
-    float width = 0.0f;
-    float maxH = 0.0f;
-    for (const auto& run : runs) {
-        const char* data = text.data() + run.start;
-        SkRect b;
-        width += run.font.measureText(data, run.length, SkTextEncoding::kUTF8, &b);
-        if (b.height() > maxH) maxH = b.height();
-    }
-    return { width, maxH, -fm.fAscent, fm.fDescent, fm.fLeading, fm.fXHeight };
+    const ShapedRun* run = shapeText(text, font);
+    if (!run) return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent, fm.fLeading, fm.fXHeight };
+    return { run->width(), run->bounds().height(),
+             -fm.fAscent, fm.fDescent, fm.fLeading, fm.fXHeight };
 }
 
 SkFontMgr* RasterRenderer::ensureFontMgr() {

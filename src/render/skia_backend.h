@@ -17,6 +17,7 @@
 
 #include "render/font_fallback.h"
 #include "render/image_cache.h"
+#include "render/shaped_run.h"
 
 #include <glad/gl.h>
 
@@ -226,6 +227,18 @@ private:
     sk_sp<SkFontMgr> fontMgr_;
     FontFallbackCache fallbackCache_;
     SkFontMgr* ensureFontMgr();
+
+public:
+    const ShapedRun* shapeText(std::string_view text, FontRef font,
+                               bool disableLigatures = false) override;
+    TextShapingEngine* textEngine() override { return &shaper_; }
+    bool drawTextBlob(const SkTextBlob* blob, float x, float y,
+                      bromath::Color color, float blur) override;
+
+private:
+    // Private and unshared, on the same footing as fonts_/fallbackCache_ —
+    // that is what keeps the data plane lock-free here.
+    TextShapingEngine shaper_;
 
     // Custom font typefaces registered via @font-face
     struct CustomFont {

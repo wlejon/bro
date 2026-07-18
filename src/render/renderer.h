@@ -11,8 +11,12 @@
 
 class SkCanvas;
 class SkSurface;
+class SkTextBlob;
 
 namespace bro::render {
+
+class TextShapingEngine;
+class ShapedRun;
 
 // Color is bromath::Color — linear-float RGBA in [0,1]. Per-namespace alias
 // would be a header-level `using` (banned). Spell `bromath::Color` everywhere
@@ -240,6 +244,31 @@ public:
     // measurement taken from this renderer keys on the generation and throws the
     // measurement away when it moves. See layout::SkiaTextMetrics.
     uint64_t fontGeneration() const { return fontGeneration_; }
+
+    // Shape `text` in `font` and return the cached run, or null if this
+    // backend has no shaper. Exposed on the interface so RecordingRenderer can
+    // shape at RECORD time through the very renderer it already delegates
+    // measureText to — same thread, same cache, so a string measured during
+    // layout is shaped once and the raster thread only replays glyphs.
+    //
+    // The result is owned by that renderer's cache and is invalidated by the
+    // next shapeText() call that misses. Use it and drop it.
+    virtual const ShapedRun* shapeText(std::string_view /*text*/, FontRef /*font*/,
+                                       bool /*disableLigatures*/ = false) {
+        return nullptr;
+    }
+
+    // The shaping engine behind shapeText(), for cache instrumentation.
+    virtual TextShapingEngine* textEngine() { return nullptr; }
+
+    // Draw an already-shaped blob whose glyph positions are relative to
+    // (x, y). `blur` > 0 renders a text-shadow halo. Returns false if this
+    // backend can't draw blobs, in which case the caller re-draws from the
+    // source string. This is the replay path for recorded text.
+    virtual bool drawTextBlob(const SkTextBlob* /*blob*/, float /*x*/, float /*y*/,
+                              bromath::Color /*color*/, float /*blur*/) {
+        return false;
+    }
 
     virtual void drawLine(float x1, float y1, float x2, float y2, bromath::Color color, float thickness) = 0;
 
