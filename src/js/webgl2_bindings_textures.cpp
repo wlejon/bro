@@ -84,6 +84,11 @@ static JSValue js_texImage2D(JSContext* ctx, JSValueConst this_val, int argc, JS
 
         if (JS_IsNull(argv[8]) || JS_IsUndefined(argv[8])) {
             gl->texImage2D(target, level, internalformat, width, height, border, format, type, nullptr);
+        } else if (JS_IsNumber(argv[8])) {
+            // WebGL2 offset overload: source from the bound PIXEL_UNPACK_BUFFER.
+            int64_t offset; JS_ToInt64(ctx, &offset, argv[8]);
+            gl->texImage2DFromPBO(target, level, internalformat, width, height, border,
+                                  format, type, (GLintptr)offset);
         } else {
             // Try Image object first, then TypedArray
             if (ImageBindings::getImagePixels(argv[8], img)) {
@@ -130,7 +135,12 @@ static JSValue js_texSubImage2D(JSContext* ctx, JSValueConst this_val, int argc,
         JS_ToInt32(ctx, &width, argv[4]); JS_ToInt32(ctx, &height, argv[5]);
         JS_ToUint32(ctx, &format, argv[6]); JS_ToUint32(ctx, &type, argv[7]);
 
-        if (ImageBindings::getImagePixels(argv[8], img)) {
+        if (JS_IsNumber(argv[8])) {
+            // WebGL2 offset overload: source from the bound PIXEL_UNPACK_BUFFER.
+            int64_t offset; JS_ToInt64(ctx, &offset, argv[8]);
+            gl->texSubImage2DFromPBO(target, level, xoffset, yoffset, width, height,
+                                     format, type, (GLintptr)offset);
+        } else if (ImageBindings::getImagePixels(argv[8], img)) {
             gl->texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, img.data);
         } else {
             const uint8_t* data = nullptr;
@@ -184,6 +194,90 @@ static JSValue js_texSubImage3D(JSContext* ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+static JSValue js_compressedTexImage2D(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 7) return JS_UNDEFINED;
+    uint32_t target, internalformat;
+    int level, width, height, border;
+    JS_ToUint32(ctx, &target, argv[0]); JS_ToInt32(ctx, &level, argv[1]);
+    JS_ToUint32(ctx, &internalformat, argv[2]);
+    JS_ToInt32(ctx, &width, argv[3]); JS_ToInt32(ctx, &height, argv[4]);
+    JS_ToInt32(ctx, &border, argv[5]);
+
+    const uint8_t* data = nullptr;
+    size_t len = 0, elemSize = 1;
+    if (getBufferDataEx(ctx, argv[6], &data, &len, &elemSize)) {
+        // Optional srcOffset/srcLengthOverride (WebGL2) in ELEMENT units.
+        size_t elemCount = len / elemSize;
+        size_t srcOffset = 0, count = elemCount;
+        if (argc >= 8 && !JS_IsUndefined(argv[7])) {
+            uint32_t so; JS_ToUint32(ctx, &so, argv[7]); srcOffset = so;
+        }
+        if (srcOffset > elemCount) srcOffset = elemCount;
+        count = elemCount - srcOffset;
+        if (argc >= 9 && !JS_IsUndefined(argv[8])) {
+            uint32_t l; JS_ToUint32(ctx, &l, argv[8]);
+            if ((size_t)l < count) count = l;
+        }
+        gl->compressedTexImage2D(target, level, internalformat, width, height, border,
+                                 data + srcOffset * elemSize, count * elemSize);
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_compressedTexSubImage2D(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 8) return JS_UNDEFINED;
+    uint32_t target, format;
+    int level, xoffset, yoffset, width, height;
+    JS_ToUint32(ctx, &target, argv[0]); JS_ToInt32(ctx, &level, argv[1]);
+    JS_ToInt32(ctx, &xoffset, argv[2]); JS_ToInt32(ctx, &yoffset, argv[3]);
+    JS_ToInt32(ctx, &width, argv[4]); JS_ToInt32(ctx, &height, argv[5]);
+    JS_ToUint32(ctx, &format, argv[6]);
+
+    const uint8_t* data = nullptr;
+    size_t len = 0, elemSize = 1;
+    if (getBufferDataEx(ctx, argv[7], &data, &len, &elemSize)) {
+        size_t elemCount = len / elemSize;
+        size_t srcOffset = 0, count = elemCount;
+        if (argc >= 9 && !JS_IsUndefined(argv[8])) {
+            uint32_t so; JS_ToUint32(ctx, &so, argv[8]); srcOffset = so;
+        }
+        if (srcOffset > elemCount) srcOffset = elemCount;
+        count = elemCount - srcOffset;
+        if (argc >= 10 && !JS_IsUndefined(argv[9])) {
+            uint32_t l; JS_ToUint32(ctx, &l, argv[9]);
+            if ((size_t)l < count) count = l;
+        }
+        gl->compressedTexSubImage2D(target, level, xoffset, yoffset, width, height, format,
+                                    data + srcOffset * elemSize, count * elemSize);
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_copyTexImage2D(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 8) return JS_UNDEFINED;
+    uint32_t target, internalformat;
+    int level, x, y, width, height, border;
+    JS_ToUint32(ctx, &target, argv[0]); JS_ToInt32(ctx, &level, argv[1]);
+    JS_ToUint32(ctx, &internalformat, argv[2]);
+    JS_ToInt32(ctx, &x, argv[3]); JS_ToInt32(ctx, &y, argv[4]);
+    JS_ToInt32(ctx, &width, argv[5]); JS_ToInt32(ctx, &height, argv[6]);
+    JS_ToInt32(ctx, &border, argv[7]);
+    gl->copyTexImage2D(target, level, internalformat, x, y, width, height, border);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_copyTexSubImage2D(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 8) return JS_UNDEFINED;
+    uint32_t target;
+    int level, xoffset, yoffset, x, y, width, height;
+    JS_ToUint32(ctx, &target, argv[0]); JS_ToInt32(ctx, &level, argv[1]);
+    JS_ToInt32(ctx, &xoffset, argv[2]); JS_ToInt32(ctx, &yoffset, argv[3]);
+    JS_ToInt32(ctx, &x, argv[4]); JS_ToInt32(ctx, &y, argv[5]);
+    JS_ToInt32(ctx, &width, argv[6]); JS_ToInt32(ctx, &height, argv[7]);
+    gl->copyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
+    return JS_UNDEFINED;
+}
+
 static JSValue js_generateMipmap(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_UNDEFINED;
     uint32_t target; JS_ToUint32(ctx, &target, argv[0]);
@@ -227,6 +321,10 @@ const JSCFunctionListEntry webgl2_texture_funcs[] = {
     JS_CFUNC_DEF("texSubImage2D", 9, js_texSubImage2D),
     JS_CFUNC_DEF("texImage3D", 10, js_texImage3D),
     JS_CFUNC_DEF("texSubImage3D", 11, js_texSubImage3D),
+    JS_CFUNC_DEF("compressedTexImage2D", 7, js_compressedTexImage2D),
+    JS_CFUNC_DEF("compressedTexSubImage2D", 8, js_compressedTexSubImage2D),
+    JS_CFUNC_DEF("copyTexImage2D", 8, js_copyTexImage2D),
+    JS_CFUNC_DEF("copyTexSubImage2D", 8, js_copyTexSubImage2D),
     JS_CFUNC_DEF("generateMipmap", 1, js_generateMipmap),
     JS_CFUNC_DEF("texStorage2D", 5, js_texStorage2D),
     JS_CFUNC_DEF("texStorage3D", 6, js_texStorage3D),

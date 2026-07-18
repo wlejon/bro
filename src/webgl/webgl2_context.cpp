@@ -2,6 +2,7 @@
 #include "webgl/glsl_translator.h"
 #include "util/log.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace bro::webgl {
@@ -29,6 +30,26 @@ WebGL2RenderingContext::WebGL2RenderingContext(int width, int height)
     sViewport_[2] = width_;
     sViewport_[3] = height_;
     restoreState();
+
+    // Probe the driver's compressed-texture support once. Desktop GL 3.3 has
+    // no ETC2 (that's 4.3 / ARB_ES3_compatibility's *format list*, which
+    // drivers typically decompress in software or reject); we expose the
+    // desktop-native families only: S3TC / RGTC / BPTC.
+    if (GLAD_GL_EXT_texture_compression_s3tc) {
+        compressedFormats_.insert(compressedFormats_.end(),
+            {0x83F0, 0x83F1, 0x83F2, 0x83F3}); // DXT1 / DXT1a / DXT3 / DXT5
+        if (GLAD_GL_EXT_texture_sRGB) {
+            compressedFormats_.insert(compressedFormats_.end(),
+                {0x8C4C, 0x8C4D, 0x8C4E, 0x8C4F}); // sRGB S3TC variants
+        }
+    }
+    // RGTC is core since GL 3.0 — always present on a 3.3 context.
+    compressedFormats_.insert(compressedFormats_.end(),
+        {0x8DBB, 0x8DBC, 0x8DBD, 0x8DBE}); // RGTC1 / signed / RGTC2 / signed
+    if (GLAD_GL_ARB_texture_compression_bptc) {
+        compressedFormats_.insert(compressedFormats_.end(),
+            {0x8E8C, 0x8E8D, 0x8E8E, 0x8E8F}); // BPTC unorm / srgb / sf / uf
+    }
     glScissor(0, 0, width_, height_);
     glClearDepth(1.0);
     glClearStencil(0);
@@ -131,6 +152,12 @@ void WebGL2RenderingContext::unbindCanvasFBO() {
         glPauseTransformFeedback();
     }
     if (sRasterizerDiscard_) glDisable(GL_RASTERIZER_DISCARD);
+    // A bound PIXEL_PACK buffer would swallow the engine's screenshot /
+    // getPixel readbacks (glReadPixels writes into the PBO instead of client
+    // memory); a bound PIXEL_UNPACK buffer would corrupt engine texture
+    // uploads the same way.
+    if (sPixelPack_) glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    if (sPixelUnpack_) glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 }
 
 // ===========================================================================
@@ -246,6 +273,12 @@ WebGLBuffer WebGL2RenderingContext::createBuffer() {
 
 void WebGL2RenderingContext::deleteBuffer(WebGLBuffer buf) {
     if (buf.id && validBuffers_.erase(buf.id)) {
+        // GL unbinds a deleted buffer from the context; a deleted name must
+        // never be re-bound from shadow state (INVALID_OPERATION).
+        if (sArrayBuf_ == buf.id) sArrayBuf_ = 0;
+        if (sElementBuf_ == buf.id) sElementBuf_ = 0;
+        if (sPixelPack_ == buf.id) sPixelPack_ = 0;
+        if (sPixelUnpack_ == buf.id) sPixelUnpack_ = 0;
         glDeleteBuffers(1, &buf.id);
     }
 }
@@ -253,6 +286,8 @@ void WebGL2RenderingContext::deleteBuffer(WebGLBuffer buf) {
 void WebGL2RenderingContext::bindBuffer(GLenum target, WebGLBuffer buf) {
     if (target == GL_ARRAY_BUFFER) sArrayBuf_ = buf.id;
     else if (target == GL_ELEMENT_ARRAY_BUFFER) sElementBuf_ = buf.id;
+    else if (target == GL_PIXEL_PACK_BUFFER) sPixelPack_ = buf.id;
+    else if (target == GL_PIXEL_UNPACK_BUFFER) sPixelUnpack_ = buf.id;
     glBindBuffer(target, buf.id);
 }
 
@@ -554,6 +589,7 @@ WebGLVertexArrayObject WebGL2RenderingContext::createVertexArray() {
 
 void WebGL2RenderingContext::deleteVertexArray(WebGLVertexArrayObject vao) {
     if (vao.id && validVAOs_.erase(vao.id)) {
+        if (sVAO_ == vao.id) sVAO_ = 0; // GL reverts to the default VAO
         glDeleteVertexArrays(1, &vao.id);
     }
 }
@@ -768,6 +804,8 @@ WebGLTexture WebGL2RenderingContext::createTexture() {
 
 void WebGL2RenderingContext::deleteTexture(WebGLTexture tex) {
     if (tex.id && validTextures_.erase(tex.id)) {
+        for (auto& slot : sTex2D_)
+            if (slot == tex.id) slot = 0; // GL auto-unbinds deleted textures
         glDeleteTextures(1, &tex.id);
     }
 }
@@ -897,6 +935,21 @@ const void* WebGL2RenderingContext::applyUnpackTransforms(
 void WebGL2RenderingContext::texImage2D(GLenum target, GLint level, GLint internalformat,
                                          GLsizei width, GLsizei height, GLint border,
                                          GLenum format, GLenum type, const void* pixels) {
+    if (sPixelUnpack_) {
+        // WebGL2: the client-memory overload is INVALID_OPERATION while a
+        // PIXEL_UNPACK buffer is bound (raw GL would misread the pointer as
+        // a PBO offset). null still means "allocate, no data" — unbind the
+        // PBO around the call so GL doesn't source from offset 0.
+        if (pixels) {
+            setSyntheticError(GL_INVALID_OPERATION);
+            return;
+        }
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
+        glTexImage2D(target, level, translateInternalFormat(internalformat, type),
+                     width, height, border, format, type, nullptr);
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, sPixelUnpack_);
+        return;
+    }
     std::vector<uint8_t> tmp;
     pixels = applyUnpackTransforms(pixels, width, height, format, type, tmp);
     glTexImage2D(target, level, translateInternalFormat(internalformat, type),
@@ -907,6 +960,10 @@ void WebGL2RenderingContext::texSubImage2D(GLenum target, GLint level,
                                             GLint xoffset, GLint yoffset,
                                             GLsizei width, GLsizei height,
                                             GLenum format, GLenum type, const void* pixels) {
+    if (sPixelUnpack_ && pixels) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
     std::vector<uint8_t> tmp;
     pixels = applyUnpackTransforms(pixels, width, height, format, type, tmp);
     glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type, pixels);
@@ -974,6 +1031,85 @@ void WebGL2RenderingContext::texStorage3D(GLenum target, GLsizei levels, GLenum 
 }
 
 // ===========================================================================
+// Compressed textures
+// ===========================================================================
+
+// All exposed families (S3TC, RGTC, BPTC) use 4x4 blocks; DXT1 and RGTC1 are
+// 8 bytes per block, everything else 16. Returns 0 for unknown formats.
+static int compressedBlockBytes(GLenum format) {
+    switch (format) {
+        case 0x83F0: case 0x83F1: // DXT1 / DXT1a
+        case 0x8C4C: case 0x8C4D: // sRGB DXT1 variants
+        case 0x8DBB: case 0x8DBC: // RGTC1 / signed
+            return 8;
+        case 0x83F2: case 0x83F3: // DXT3 / DXT5
+        case 0x8C4E: case 0x8C4F: // sRGB DXT3 / DXT5
+        case 0x8DBD: case 0x8DBE: // RGTC2 / signed
+        case 0x8E8C: case 0x8E8D: case 0x8E8E: case 0x8E8F: // BPTC
+            return 16;
+        default: return 0;
+    }
+}
+
+bool WebGL2RenderingContext::isCompressedFormatSupported(GLenum format) const {
+    return std::find(compressedFormats_.begin(), compressedFormats_.end(),
+                     (GLint)format) != compressedFormats_.end();
+}
+
+void WebGL2RenderingContext::compressedTexImage2D(GLenum target, GLint level,
+                                                   GLenum internalformat,
+                                                   GLsizei width, GLsizei height, GLint border,
+                                                   const void* data, size_t dataLen) {
+    if (!isCompressedFormatSupported(internalformat)) {
+        setSyntheticError(GL_INVALID_ENUM);
+        return;
+    }
+    if (width < 0 || height < 0) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
+    // Block-size math per the WebGL compressed-texture extension specs: the
+    // source must be exactly the block payload, or nothing is uploaded (this
+    // is also the no-overread guard for the client memory).
+    size_t expected = (size_t)((width + 3) / 4) * ((height + 3) / 4) *
+                      compressedBlockBytes(internalformat);
+    if (dataLen != expected) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
+    glCompressedTexImage2D(target, level, internalformat, width, height, border,
+                           (GLsizei)dataLen, data);
+}
+
+void WebGL2RenderingContext::compressedTexSubImage2D(GLenum target, GLint level,
+                                                      GLint xoffset, GLint yoffset,
+                                                      GLsizei width, GLsizei height,
+                                                      GLenum format,
+                                                      const void* data, size_t dataLen) {
+    if (!isCompressedFormatSupported(format)) {
+        setSyntheticError(GL_INVALID_ENUM);
+        return;
+    }
+    // Sub-rect origin must be block-aligned (4x4 for every exposed family).
+    if (xoffset < 0 || yoffset < 0 || (xoffset % 4) || (yoffset % 4)) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    if (width < 0 || height < 0) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
+    size_t expected = (size_t)((width + 3) / 4) * ((height + 3) / 4) *
+                      compressedBlockBytes(format);
+    if (dataLen != expected) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
+    glCompressedTexSubImage2D(target, level, xoffset, yoffset, width, height, format,
+                              (GLsizei)dataLen, data);
+}
+
+// ===========================================================================
 // Framebuffers
 // ===========================================================================
 
@@ -986,6 +1122,9 @@ WebGLFramebuffer WebGL2RenderingContext::createFramebuffer() {
 
 void WebGL2RenderingContext::deleteFramebuffer(WebGLFramebuffer fbo) {
     if (fbo.id && validFramebuffers_.erase(fbo.id)) {
+        // Deleting the bound FBO reverts to the default framebuffer, which
+        // for WebGL is the canvas FBO.
+        if (sFBO_ == fbo.id) sFBO_ = canvasFBO_;
         glDeleteFramebuffers(1, &fbo.id);
     }
 }
@@ -1039,6 +1178,89 @@ bool WebGL2RenderingContext::validateReadPixels(GLsizei width, GLsizei height,
         return false;
     }
     return true;
+}
+
+int64_t WebGL2RenderingContext::boundBufferSize(GLenum target) {
+    GLint64 sz = 0;
+    glGetBufferParameteri64v(target, GL_BUFFER_SIZE, &sz);
+    return (int64_t)sz;
+}
+
+void WebGL2RenderingContext::readPixelsToPBO(GLint x, GLint y, GLsizei width, GLsizei height,
+                                              GLenum format, GLenum type, GLintptr offset) {
+    if (!sPixelPack_) {
+        // Offset overload without a PIXEL_PACK buffer bound.
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    if (offset < 0 || width < 0 || height < 0) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
+    int bpp = bytesPerPixel(format, type);
+    if (bpp > 0) {
+        // Same no-overflow guarantee as the client-memory path, but against
+        // the PBO's byte size.
+        size_t row = (size_t)width * bpp;
+        size_t align = packAlignment_ > 0 ? (size_t)packAlignment_ : 4;
+        size_t stride = (row + align - 1) / align * align;
+        size_t required = height > 0 ? stride * (height - 1) + row : 0;
+        int64_t avail = boundBufferSize(GL_PIXEL_PACK_BUFFER) - (int64_t)offset;
+        if (avail < 0 || (size_t)avail < required) {
+            setSyntheticError(GL_INVALID_OPERATION);
+            return;
+        }
+    }
+    glReadPixels(x, y, width, height, format, type, (void*)offset);
+}
+
+void WebGL2RenderingContext::texImage2DFromPBO(GLenum target, GLint level, GLint internalformat,
+                                                GLsizei width, GLsizei height, GLint border,
+                                                GLenum format, GLenum type, GLintptr offset) {
+    if (!sPixelUnpack_ || offset < 0) {
+        setSyntheticError(!sPixelUnpack_ ? GL_INVALID_OPERATION : GL_INVALID_VALUE);
+        return;
+    }
+    // WebGL2: FLIP_Y / PREMULTIPLY_ALPHA only apply to client-memory uploads;
+    // uploading from a PBO with either set is INVALID_OPERATION, not silent
+    // untransformed data.
+    if (unpackFlipY_ || unpackPremultiplyAlpha_) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    // GL bounds-checks the read against the PBO size itself (INVALID_OPERATION).
+    glTexImage2D(target, level, translateInternalFormat(internalformat, type),
+                 width, height, border, format, type, (const void*)offset);
+}
+
+void WebGL2RenderingContext::texSubImage2DFromPBO(GLenum target, GLint level,
+                                                   GLint xoffset, GLint yoffset,
+                                                   GLsizei width, GLsizei height,
+                                                   GLenum format, GLenum type, GLintptr offset) {
+    if (!sPixelUnpack_ || offset < 0) {
+        setSyntheticError(!sPixelUnpack_ ? GL_INVALID_OPERATION : GL_INVALID_VALUE);
+        return;
+    }
+    if (unpackFlipY_ || unpackPremultiplyAlpha_) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    glTexSubImage2D(target, level, xoffset, yoffset, width, height, format, type,
+                    (const void*)offset);
+}
+
+void WebGL2RenderingContext::copyTexImage2D(GLenum target, GLint level, GLenum internalformat,
+                                             GLint x, GLint y, GLsizei width, GLsizei height,
+                                             GLint border) {
+    glCopyTexImage2D(target, level,
+                     (GLenum)translateInternalFormat((GLint)internalformat, GL_UNSIGNED_BYTE),
+                     x, y, width, height, border);
+}
+
+void WebGL2RenderingContext::copyTexSubImage2D(GLenum target, GLint level,
+                                                GLint xoffset, GLint yoffset,
+                                                GLint x, GLint y, GLsizei width, GLsizei height) {
+    glCopyTexSubImage2D(target, level, xoffset, yoffset, x, y, width, height);
 }
 
 void WebGL2RenderingContext::drawBuffers(GLsizei n, const GLenum* bufs) {
@@ -1141,8 +1363,10 @@ std::string WebGL2RenderingContext::getShadingLanguageVersion() {
 }
 
 std::vector<std::string> WebGL2RenderingContext::getSupportedExtensions() {
-    // Return extensions that WebGL2 typically exposes (all are core in GL 3.3)
-    return {
+    // Extensions that WebGL2 typically exposes; the base list is all core in
+    // GL 3.3, compressed-texture families are gated on the driver's actual
+    // extension support (probed at context creation — no ETC2 on desktop GL).
+    std::vector<std::string> exts = {
         "EXT_color_buffer_float",
         "EXT_float_blend",
         "OES_texture_float_linear",
@@ -1161,8 +1385,16 @@ std::vector<std::string> WebGL2RenderingContext::getSupportedExtensions() {
         "OES_texture_half_float",
         "OES_texture_half_float_linear",
         "WEBGL_lose_context",
-        "WEBGL_compressed_texture_s3tc",
     };
+    if (GLAD_GL_EXT_texture_compression_s3tc) {
+        exts.push_back("WEBGL_compressed_texture_s3tc");
+        if (GLAD_GL_EXT_texture_sRGB)
+            exts.push_back("WEBGL_compressed_texture_s3tc_srgb");
+    }
+    exts.push_back("EXT_texture_compression_rgtc"); // core since GL 3.0
+    if (GLAD_GL_ARB_texture_compression_bptc)
+        exts.push_back("EXT_texture_compression_bptc");
+    return exts;
 }
 
 bool WebGL2RenderingContext::getExtension(const std::string& name) {
@@ -1197,6 +1429,8 @@ void WebGL2RenderingContext::restoreState() {
     if (sVAO_ == 0) {
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sElementBuf_);
     }
+    if (sPixelPack_) glBindBuffer(GL_PIXEL_PACK_BUFFER, sPixelPack_);
+    if (sPixelUnpack_) glBindBuffer(GL_PIXEL_UNPACK_BUFFER, sPixelUnpack_);
 
     // Restore sampler objects (unbound around compositing in unbindCanvasFBO)
     for (unsigned u = 0; u < 32; u++) {

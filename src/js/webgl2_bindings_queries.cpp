@@ -110,13 +110,20 @@ static JSValue js_getParameter(JSContext* ctx, JSValueConst this_val, int argc, 
         case 0x8514: // GL_TEXTURE_BINDING_CUBE_MAP
         case 0x85B5: // GL_VERTEX_ARRAY_BINDING
         case 0x8919: // GL_SAMPLER_BINDING
+        case 0x88ED: // GL_PIXEL_PACK_BUFFER_BINDING
+        case 0x88EF: // GL_PIXEL_UNPACK_BUFFER_BINDING
             // three.js probes these but we can't return wrapped objects from here.
             // Return null (unbound) — three.js handles this gracefully.
             return JS_NULL;
 
-        // Compressed texture formats — return empty array
+        // Compressed texture formats actually supported by the driver
+        // (probed at context creation; S3TC/RGTC/BPTC — no ETC2 on desktop GL)
         case 0x86A3: { // GL_COMPRESSED_TEXTURE_FORMATS
-            return JS_NewArray(ctx);
+            const auto& fmts = gl->compressedTextureFormats();
+            JSValue arr = JS_NewArray(ctx);
+            for (size_t i = 0; i < fmts.size(); i++)
+                JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewUint32(ctx, (uint32_t)fmts[i]));
+            return arr;
         }
 
         // WebGL-only sync limit — not a GL enum; answered from the context's
@@ -182,8 +189,37 @@ static JSValue js_getExtension(JSContext* ctx, JSValueConst this_val, int argc, 
     auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_NULL;
     std::string name = jsStr(ctx, argv[0]);
     if (gl->getExtension(name)) {
-        // Return truthy empty object (WebGL convention)
-        return JS_NewObject(ctx);
+        // Truthy object (WebGL convention); the compressed-texture extension
+        // objects carry their format constants per the WebGL extension specs.
+        JSValue obj = JS_NewObject(ctx);
+        auto def = [&](const char* n, uint32_t v) {
+            JS_SetPropertyStr(ctx, obj, n, JS_NewUint32(ctx, v));
+        };
+        if (name == "WEBGL_compressed_texture_s3tc") {
+            def("COMPRESSED_RGB_S3TC_DXT1_EXT", 0x83F0);
+            def("COMPRESSED_RGBA_S3TC_DXT1_EXT", 0x83F1);
+            def("COMPRESSED_RGBA_S3TC_DXT3_EXT", 0x83F2);
+            def("COMPRESSED_RGBA_S3TC_DXT5_EXT", 0x83F3);
+        } else if (name == "WEBGL_compressed_texture_s3tc_srgb") {
+            def("COMPRESSED_SRGB_S3TC_DXT1_EXT", 0x8C4C);
+            def("COMPRESSED_SRGB_ALPHA_S3TC_DXT1_EXT", 0x8C4D);
+            def("COMPRESSED_SRGB_ALPHA_S3TC_DXT3_EXT", 0x8C4E);
+            def("COMPRESSED_SRGB_ALPHA_S3TC_DXT5_EXT", 0x8C4F);
+        } else if (name == "EXT_texture_compression_rgtc") {
+            def("COMPRESSED_RED_RGTC1_EXT", 0x8DBB);
+            def("COMPRESSED_SIGNED_RED_RGTC1_EXT", 0x8DBC);
+            def("COMPRESSED_RED_GREEN_RGTC2_EXT", 0x8DBD);
+            def("COMPRESSED_SIGNED_RED_GREEN_RGTC2_EXT", 0x8DBE);
+        } else if (name == "EXT_texture_compression_bptc") {
+            def("COMPRESSED_RGBA_BPTC_UNORM_EXT", 0x8E8C);
+            def("COMPRESSED_SRGB_ALPHA_BPTC_UNORM_EXT", 0x8E8D);
+            def("COMPRESSED_RGB_BPTC_SIGNED_FLOAT_EXT", 0x8E8E);
+            def("COMPRESSED_RGB_BPTC_UNSIGNED_FLOAT_EXT", 0x8E8F);
+        } else if (name == "EXT_texture_filter_anisotropic") {
+            def("TEXTURE_MAX_ANISOTROPY_EXT", 0x84FE);
+            def("MAX_TEXTURE_MAX_ANISOTROPY_EXT", 0x84FF);
+        }
+        return obj;
     }
     return JS_NULL;
 }

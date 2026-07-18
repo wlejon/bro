@@ -61,10 +61,25 @@ static JSValue js_readPixels(JSContext* ctx, JSValueConst this_val, int argc, JS
     JS_ToInt32(ctx, &w, argv[2]); JS_ToInt32(ctx, &h, argv[3]);
     JS_ToUint32(ctx, &format, argv[4]); JS_ToUint32(ctx, &type, argv[5]);
 
+    // WebGL2 offset overload: readPixels(..., GLintptr offset) into the
+    // bound PIXEL_PACK_BUFFER (bounds-checked against the PBO size).
+    if (JS_IsNumber(argv[6])) {
+        int64_t offset; JS_ToInt64(ctx, &offset, argv[6]);
+        gl->readPixelsToPBO(x, y, w, h, format, type, (GLintptr)offset);
+        return JS_UNDEFINED;
+    }
+
     // argv[6] is a TypedArray — get writable pointer
     const uint8_t* data = nullptr;
     size_t len = 0;
     if (getBufferData(ctx, argv[6], &data, &len)) {
+        // WebGL2: the client-memory overload is INVALID_OPERATION while a
+        // PIXEL_PACK buffer is bound (raw GL would misread the pointer as a
+        // PBO offset and scribble into the app's buffer).
+        if (gl->pixelPackBuffer()) {
+            gl->setSyntheticError(0x0502 /* GL_INVALID_OPERATION */);
+            return JS_UNDEFINED;
+        }
         // WebGL: a destination too small for the result is INVALID_OPERATION,
         // never an out-of-bounds write.
         if (gl->validateReadPixels(w, h, format, type, len)) {

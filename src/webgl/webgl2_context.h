@@ -155,6 +155,48 @@ public:
     /// getIndexedParameter numeric rows (indexed buffer-range queries).
     int64_t getIndexedParameterInt64(GLenum pname, GLuint index);
 
+    // --- Pixel buffer objects (WebGL2) ---
+    GLuint pixelPackBuffer() const { return sPixelPack_; }
+    GLuint pixelUnpackBuffer() const { return sPixelUnpack_; }
+    /// Byte size of the buffer bound at `target` (0 when none bound).
+    int64_t boundBufferSize(GLenum target);
+    /// readPixels into the bound PIXEL_PACK_BUFFER at a byte offset.
+    /// Bounds-checks the offset against the PBO size (same no-overflow
+    /// guarantee as the client-memory path) and records synthetic errors.
+    void readPixelsToPBO(GLint x, GLint y, GLsizei width, GLsizei height,
+                         GLenum format, GLenum type, GLintptr offset);
+    /// tex(Sub)Image2D sourcing from the bound PIXEL_UNPACK_BUFFER at a byte
+    /// offset. UNPACK_FLIP_Y/PREMULTIPLY_ALPHA are INVALID_OPERATION here
+    /// (WebGL2: the transforms only apply to client-memory uploads).
+    void texImage2DFromPBO(GLenum target, GLint level, GLint internalformat,
+                           GLsizei width, GLsizei height, GLint border,
+                           GLenum format, GLenum type, GLintptr offset);
+    void texSubImage2DFromPBO(GLenum target, GLint level,
+                              GLint xoffset, GLint yoffset,
+                              GLsizei width, GLsizei height,
+                              GLenum format, GLenum type, GLintptr offset);
+
+    // --- Copies (framebuffer -> texture) ---
+    void copyTexImage2D(GLenum target, GLint level, GLenum internalformat,
+                        GLint x, GLint y, GLsizei width, GLsizei height, GLint border);
+    void copyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                           GLint x, GLint y, GLsizei width, GLsizei height);
+
+    // --- Compressed textures ---
+    /// Formats exposed via the driver's real extension support (probed at
+    /// context creation). Desktop GL 3.3 has no ETC2 — S3TC/RGTC/BPTC only.
+    const std::vector<GLint>& compressedTextureFormats() const { return compressedFormats_; }
+    bool isCompressedFormatSupported(GLenum format) const;
+    /// Both validate block-size math against dataLen before touching the
+    /// driver (the no-overread guarantee for client memory).
+    void compressedTexImage2D(GLenum target, GLint level, GLenum internalformat,
+                              GLsizei width, GLsizei height, GLint border,
+                              const void* data, size_t dataLen);
+    void compressedTexSubImage2D(GLenum target, GLint level,
+                                 GLint xoffset, GLint yoffset,
+                                 GLsizei width, GLsizei height, GLenum format,
+                                 const void* data, size_t dataLen);
+
     // --- VAO ---
     WebGLVertexArrayObject createVertexArray();
     void deleteVertexArray(WebGLVertexArrayObject vao);
@@ -336,6 +378,9 @@ private:
     bool tfActive_ = false;
     bool tfPaused_ = false;
 
+    // Compressed formats the driver actually supports (probed once).
+    std::vector<GLint> compressedFormats_;
+
     // pixelStorei state
     GLint unpackAlignment_ = 4;
     GLint packAlignment_ = 4;
@@ -366,6 +411,8 @@ private:
     GLuint sVAO_ = 0;
     GLuint sArrayBuf_ = 0;
     GLuint sElementBuf_ = 0;
+    GLuint sPixelPack_ = 0;
+    GLuint sPixelUnpack_ = 0;
     GLenum sActiveTex_ = GL_TEXTURE0;
     GLuint sTex2D_[32] = {};      // per texture unit
     GLuint sSampler_[32] = {};    // per texture unit (sampler objects)

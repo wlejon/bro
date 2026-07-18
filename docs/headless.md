@@ -370,11 +370,22 @@ and pause/resume need the driver's ARB_transform_feedback2, universal on
 desktop; `createTransformFeedback` returns null without it);
 `getIndexedParameter` for the `TRANSFORM_FEEDBACK_BUFFER` / `UNIFORM_BUFFER`
 binding/start/size rows (the `*_BINDING` rows return the actual `WebGLBuffer`
-objects).
+objects); pixel buffer objects (`readPixels` into a `PIXEL_PACK_BUFFER` at an
+offset with PBO-size bounds checking, `texImage2D`/`texSubImage2D` from a
+`PIXEL_UNPACK_BUFFER` offset, and the WebGL2 client-memory-vs-PBO
+`INVALID_OPERATION` rules — including FLIP_Y/PREMULTIPLY being
+client-memory-only); `copyTexImage2D`/`copyTexSubImage2D`;
+`compressedTexImage2D`/`compressedTexSubImage2D` with block-size and
+alignment validation, `getParameter(COMPRESSED_TEXTURE_FORMATS)`, and the
+compressed extensions gated on real driver support
+(`WEBGL_compressed_texture_s3tc`[`_srgb`], `EXT_texture_compression_rgtc`,
+`EXT_texture_compression_bptc` — extension objects carry their format
+constants). ETC2/ASTC are unavailable: desktop GL 3.3 core cannot express
+them, and they are never claimed.
 
 **Not implemented (absent API families):**
-PBO-offset variants of `readPixels`/texture uploads, `compressedTexImage*`,
-`copyTexImage2D`/`copyTexSubImage2D`, `framebufferTextureLayer`,
+compressed 3D/array uploads (`compressedTexImage3D`), the
+`compressedTex*`-from-PBO offset overloads, `framebufferTextureLayer`,
 `invalidateFramebuffer`/`invalidateSubFramebuffer`, unsigned-int uniform
 setters (`uniform*ui*`), constant vertex attributes (`vertexAttrib[1-4]f*`,
 `vertexAttribI4*`), and the introspection getters `getUniform`,
