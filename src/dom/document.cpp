@@ -261,13 +261,22 @@ void Document::parse(const std::string& html, const std::string& authorCss,
 }
 
 void Document::buildTreeFromGumbo(::GumboNode* node, Element* parentElem) {
-    if (!node || node->type != GUMBO_NODE_ELEMENT) return;
+    // GUMBO_NODE_TEMPLATE is a distinct node type carrying a GumboElement, not a
+    // GUMBO_NODE_ELEMENT — gumbo splits it out precisely so clients can choose
+    // whether to descend (see the comment on the enum in gumbo.h). bro only ever
+    // matched GUMBO_NODE_ELEMENT, so every <template> and everything inside it
+    // silently vanished from any document parsed straight through gumbo
+    // (DOMParser, innerHTML). The app-HTML path only escaped that because
+    // extractTemplates() rewrites templates to placeholders before parsing.
+    if (!node || (node->type != GUMBO_NODE_ELEMENT &&
+                  node->type != GUMBO_NODE_TEMPLATE)) return;
     auto* gumboElem = &node->v.element;
 
     for (unsigned int i = 0; i < gumboElem->children.length; ++i) {
         auto* child = static_cast<GumboNode*>(gumboElem->children.data[i]);
 
-        if (child->type == GUMBO_NODE_ELEMENT) {
+        if (child->type == GUMBO_NODE_ELEMENT ||
+            child->type == GUMBO_NODE_TEMPLATE) {
             const char* tag = gumbo_normalized_tagname(child->v.element.tag);
             std::string tagStr = (tag && tag[0]) ? tag : "";
 
@@ -309,7 +318,17 @@ void Document::buildTreeFromGumbo(::GumboNode* node, Element* parentElem) {
             }
 
             parentElem->appendChild(childElem);
-            buildTreeFromGumbo(child, childElem);
+
+            if (child->type == GUMBO_NODE_TEMPLATE) {
+                // Template children go into a separate DocumentFragment, never
+                // the normal child list — that is what makes them inert: not
+                // laid out, not painted, not reachable from a document query.
+                auto* frag = allocateNode<Element>("#DOCUMENT-FRAGMENT");
+                childElem->setTemplateContent(frag);
+                buildTreeFromGumbo(child, frag);
+            } else {
+                buildTreeFromGumbo(child, childElem);
+            }
 
         } else if (child->type == GUMBO_NODE_TEXT ||
                    child->type == GUMBO_NODE_WHITESPACE) {

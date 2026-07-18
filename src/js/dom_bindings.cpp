@@ -575,6 +575,7 @@ void DomBindings::sweepOrphanedWrappers(JSContext* ctx) {
 
         if (el && el->isAlive() && !el->parentNode() &&
             el->childNodes().empty() &&
+            !el->isTemplateContent() &&
             el->tagName() == "#DOCUMENT-FRAGMENT") {
             auto* doc = el->document();
             JS_SetOpaque(val, nullptr);

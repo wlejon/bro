@@ -3733,9 +3733,20 @@ static JSValue js_element_get_content(JSContext* ctx, JSValueConst this_val)
     if (el->tagName() != "TEMPLATE" && el->tagName() != "template")
         return JS_UNDEFINED;
 
-    auto* doc = getDocumentForCtx(ctx);
+    // The element's own document, not the realm's — a <template> inside a
+    // DOMParser document must build its content there.
+    auto* doc = el->document();
+    if (!doc) doc = getDocumentForCtx(ctx);
     if (!doc) return JS_UNDEFINED;
 
+    // Stable per spec: the same DocumentFragment on every read, so mutations to
+    // .content stick. Parsing populates this directly (see buildTreeFromGumbo).
+    if (auto* existing = el->templateContent())
+        return DomBindings::wrapElement(ctx, existing);
+
+    // Legacy path: templates that came through Document::extractTemplates carry
+    // their markup as an attribute rather than parsed children. Materialize it
+    // once, then it is the stable fragment like any other.
     std::string storedHtml = el->getAttribute("data-bro-template-html");
     if (!storedHtml.empty()) {
         auto* temp = doc->createElement("div");
@@ -3747,6 +3758,7 @@ static JSValue js_element_get_content(JSContext* ctx, JSValueConst this_val)
             frag->appendChild(kid);
         }
         doc->freeNode(temp);
+        el->setTemplateContent(frag);
         return DomBindings::wrapElement(ctx, frag);
     }
 
@@ -3770,6 +3782,7 @@ static JSValue js_element_get_content(JSContext* ctx, JSValueConst this_val)
         }
     }
 
+    el->setTemplateContent(frag);
     return DomBindings::wrapElement(ctx, frag);
 }
 

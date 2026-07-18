@@ -323,6 +323,24 @@ public:
     void* jsWrapper() const { return jsWrapper_; }
     void setJsWrapper(void* w) { jsWrapper_ = w; }
 
+    // <template>.content — the parsed children of a <template>, held in a
+    // DocumentFragment that is NOT part of the tree, so they never render and
+    // never match a document query. Per spec the fragment is stable: the same
+    // object every time .content is read, so mutations to it stick. Null on
+    // every element that is not a <template>, and on a <template> whose content
+    // has not been materialized yet.
+    Element* templateContent() const { return templateContent_; }
+    void setTemplateContent(Element* frag) {
+        templateContent_ = frag;
+        if (frag) frag->isTemplateContent_ = true;
+    }
+
+    // True on the fragment side of the link above. The orphan sweep frees any
+    // parentless, childless #DOCUMENT-FRAGMENT it finds a wrapper for; a
+    // <template> with no children owns exactly such a fragment, and it must
+    // survive because the template still points at it.
+    bool isTemplateContent() const { return isTemplateContent_; }
+
     // Debug: detect use-after-free
     bool isAlive() const { return magic_ == 0xB00E; }
 
@@ -337,6 +355,8 @@ private:
     bool hasStyleAttr_ = false;
     std::unordered_map<std::string, std::vector<uint64_t>> listeners_;
     ShadowRoot* shadowRoot_ = nullptr;
+    Element* templateContent_ = nullptr;
+    bool isTemplateContent_ = false;
     bool dirty_ = false;
     bool layoutDirty_ = false;
     bool selectorDirty_ = true;
