@@ -798,13 +798,17 @@ static JSValue js_node_detachAgent(JSContext* ctx, JSValueConst this_val, int, J
 // the node's height when no groundFollow probe is set (groundFollow wins).
 //
 // target = {x,y,z} or [x,y,z]; opts = {
-//   navMesh,             // bakeNavMesh()/loadNavMesh() handle; optional if
-//                        // one was already set via attachAgent({navMesh})
-//   extents: {x,y,z},    // findPath snap half-extents (default {2,1,2})
-//   repathInterval: 0,   // seconds; > 0 re-plans toward the target
+//   navMesh,               // bakeNavMesh()/loadNavMesh() handle; optional if
+//                          // one was already set via attachAgent({navMesh})
+//   extents: {x,y,z},      // findPath snap half-extents (default {2,1,2})
+//   repathInterval: 0,     // seconds; > 0 re-plans toward the target
+//   requireFullPath: false // true = unreachable goal fails instead of
+//                          // clamping to the closest reachable point
 // }
-// Returns true when a complete path was found and following started; false
-// when either endpoint fails to snap or the goal is unreachable.
+// Returns true when following started; false when an endpoint fails to snap
+// (or, with requireFullPath, when the goal is unreachable). An unreachable
+// goal otherwise starts a PARTIAL route toward the closest reachable point —
+// node.navigationInfo().partial reads true for it.
 // ───────────────────────────────────────────────────────────────────────────
 
 static JSValue js_node_navigateTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
@@ -841,6 +845,7 @@ static JSValue js_node_navigateTo(JSContext* ctx, JSValueConst this_val, int arg
 
     bromath::Vec3 extents = brogameagent::NavMesh::kDefaultExtents;
     float repathInterval = 0.0f;
+    bool requireFullPath = false;
     if (argc >= 2 && JS_IsObject(argv[1])) {
         JSValue mv = JS_GetPropertyStr(ctx, argv[1], "navMesh");
         if (!JS_IsUndefined(mv) && !JS_IsNull(mv)) {
@@ -863,13 +868,18 @@ static JSValue js_node_navigateTo(JSContext* ctx, JSValueConst this_val, int arg
         JS_FreeValue(ctx, ev);
 
         repathInterval = (float)qjsbind::get_prop_number(ctx, argv[1], "repathInterval", 0.0);
+
+        JSValue rf = JS_GetPropertyStr(ctx, argv[1], "requireFullPath");
+        requireFullPath = JS_ToBool(ctx, rf) == 1;
+        JS_FreeValue(ctx, rf);
     }
 
     if (!binding->navMesh())
         return JS_ThrowTypeError(ctx,
             "navigateTo: no navMesh bound (pass one in attachAgent or navigateTo opts)");
 
-    return JS_NewBool(ctx, binding->navigateTo(target, extents, repathInterval));
+    return JS_NewBool(ctx,
+        binding->navigateTo(target, extents, repathInterval, requireFullPath));
 #else
     (void)this_val; (void)argc; (void)argv;
     return JS_ThrowTypeError(ctx,
@@ -883,6 +893,22 @@ static JSValue js_node_stopNavigation(JSContext* ctx, JSValueConst this_val, int
     if (!nw || !nw->node() || !nw->graph()) return JS_UNDEFINED;
     if (auto* binding = nw->graph()->agentBinding(nw->node())) binding->stopNavigation();
     return JS_UNDEFINED;
+}
+
+// node.navigationInfo() → { active, partial } — the state of the binding's
+// navmesh route. `active`: a route is being followed. `partial`: the
+// active/most-recent route was clamped because the goal is unreachable (the
+// agent stops at the closest reachable point; agent.atTarget stays false
+// there since it measures against the true goal). All-false without an
+// agent/route.
+static JSValue js_node_navigationInfo(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
+    auto* nw = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    JSValue o = JS_NewObject(ctx);
+    scene::AgentBinding* binding =
+        (nw && nw->node() && nw->graph()) ? nw->graph()->agentBinding(nw->node()) : nullptr;
+    JS_SetPropertyStr(ctx, o, "active", JS_NewBool(ctx, binding && binding->navigating()));
+    JS_SetPropertyStr(ctx, o, "partial", JS_NewBool(ctx, binding && binding->navPartial()));
+    return o;
 }
 
 } // namespace
@@ -902,6 +928,9 @@ JSValue nodeNavigateTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueC
 }
 JSValue nodeStopNavigation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     return js_node_stopNavigation(ctx, this_val, argc, argv);
+}
+JSValue nodeNavigationInfo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    return js_node_navigationInfo(ctx, this_val, argc, argv);
 }
 JSValue graphAttachAIWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     return js_sg_attachAIWorld(ctx, this_val, argc, argv);

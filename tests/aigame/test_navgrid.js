@@ -58,8 +58,24 @@ const enclosed = G.createNavGrid({
     ],
     padding: 0.4,
 });
-const noPath = enclosed.findPath(0, 0, 5, 6.5);
-assert(noPath.length === 0, 'unreachable returns empty path, got len=' + noPath.length);
+// Walled-off goal → clamped partial path to the closest reachable cell
+// (Godot behavior), flagged partial; requireFullPath restores hard-fail.
+const clamped = enclosed.findPath(0, 0, 5, 6.5);
+assert(clamped.length >= 1 && clamped.partial === true,
+    'unreachable goal yields a clamped partial path, len=' + clamped.length);
+const cEnd = clamped[clamped.length - 1];
+const cDist = Math.hypot(cEnd.x - 5, cEnd.z - 6.5);
+assert(cDist > 0.5 && cDist < 5,
+    'clamped end sits just outside the enclosure, dist=' + cDist.toFixed(2));
+const strict = enclosed.findPath(0, 0, 5, 6.5, { requireFullPath: true });
+assert(strict.length === 0 && strict.partial === true,
+    'requireFullPath: unreachable returns empty (partial flag still set)');
+// Complete paths read partial === false; invalid START stays empty + !partial.
+const complete = enclosed.findPath(0, 0, -5, -5);
+assert(complete.length >= 1 && complete.partial === false, 'complete path: partial false');
+const badStart = enclosed.findPath(5, 5, 0, 0);   // start inside the top wall
+assert(badStart.length === 0 && badStart.partial === false,
+    'blocked start: empty and NOT partial (distinguishable from unreachable)');
 
 // Dynamic obstacle invalidates a route.
 const dyn = G.createNavGrid({ minX: -20, minZ: -20, maxX: 20, maxZ: 20, cellSize: 0.5 });

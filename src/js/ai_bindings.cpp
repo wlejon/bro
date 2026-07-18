@@ -2065,19 +2065,34 @@ void AIBindings::install(JSContext* ctx) {
                 [](NavGridData* d, double x, double z) -> bool {
                     return d->grid && d->grid->isWalkable((float)x, (float)z);
                 })
-            .method("findPath",
-                [](NavGridData* d, JSContext* ctx, double fx, double fz, double tx, double tz) -> JSValue {
-                    if (!d->grid) return JS_NewArray(ctx);
-                    auto path = d->grid->findPath({(float)fx, (float)fz}, {(float)tx, (float)tz});
+            // findPath(fromX, fromZ, toX, toZ, opts?) → array of {x, z} with a
+            // `partial` bool property. A blocked/unreachable goal clamps the
+            // path to the closest reachable cell (partial = true); with
+            // opts.requireFullPath that case returns an empty array instead.
+            .method_raw("findPath",
+                [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
+                    auto* d = qjsbind::unwrap<NavGridData>(ctx, this_val);
                     JSValue arr = JS_NewArray(ctx);
-                    for (size_t i = 0; i < path.size(); i++) {
+                    if (!d || !d->grid || argc < 4) return arr;
+                    double fx = 0, fz = 0, tx = 0, tz = 0;
+                    JS_ToFloat64(ctx, &fx, argv[0]);
+                    JS_ToFloat64(ctx, &fz, argv[1]);
+                    JS_ToFloat64(ctx, &tx, argv[2]);
+                    JS_ToFloat64(ctx, &tz, argv[3]);
+                    bool requireFull = false;
+                    if (argc > 4 && JS_IsObject(argv[4]))
+                        requireFull = getBoolProp(ctx, argv[4], "requireFullPath", false);
+                    auto res = d->grid->findPathEx({(float)fx, (float)fz},
+                                                   {(float)tx, (float)tz}, requireFull);
+                    for (size_t i = 0; i < res.points.size(); i++) {
                         JSValue pt = JS_NewObject(ctx);
-                        JS_SetPropertyStr(ctx, pt, "x", JS_NewFloat64(ctx, path[i].x));
-                        JS_SetPropertyStr(ctx, pt, "z", JS_NewFloat64(ctx, path[i].y));
+                        JS_SetPropertyStr(ctx, pt, "x", JS_NewFloat64(ctx, res.points[i].x));
+                        JS_SetPropertyStr(ctx, pt, "z", JS_NewFloat64(ctx, res.points[i].y));
                         JS_SetPropertyUint32(ctx, arr, (uint32_t)i, pt);
                     }
+                    JS_SetPropertyStr(ctx, arr, "partial", JS_NewBool(ctx, res.partial));
                     return arr;
-                })
+                }, 5)
             .method_raw("addObstacle",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                     auto* d = qjsbind::unwrap<NavGridData>(ctx, this_val);
@@ -2095,21 +2110,43 @@ void AIBindings::install(JSContext* ctx) {
         qjsbind::Class<NavMeshData>(ctx, "AINavMesh", qjsbind::NoGlobal)
             .get("valid",
                 [](NavMeshData* d) -> bool { return d->mesh && d->mesh->valid(); })
-            // findPath(start, end, extents?) → Float32Array of xyz triples,
-            // or null when either endpoint fails to snap or no COMPLETE path
-            // exists (partial paths are failure, never truncation).
+            // findPath(start, end, extentsOrOpts?) → Float32Array of xyz
+            // triples with a `partial` bool property, or null when either
+            // endpoint fails to snap (or, with requireFullPath, when the goal
+            // is unreachable). An unreachable goal otherwise clamps the path
+            // to the closest reachable point and sets partial = true.
+            // The third arg is either extents ({x,y,z}/[x,y,z]) or an options
+            // object {extents?, requireFullPath?}.
             .method_raw("findPath",
                 [](JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
                     auto* d = qjsbind::unwrap<NavMeshData>(ctx, this_val);
                     if (!d || !d->mesh) return JS_NULL;
                     bromath::Vec3 a, b;
                     if (argc < 2 || !parseVec3Val(ctx, argv[0], a) || !parseVec3Val(ctx, argv[1], b))
-                        return JS_ThrowTypeError(ctx, "findPath(start, end, extents?)");
-                    auto path = d->mesh->findPath(a, b, parseExtentsArg(ctx, argc, argv, 2));
-                    if (path.empty()) return JS_NULL;
+                        return JS_ThrowTypeError(ctx, "findPath(start, end, extentsOrOpts?)");
+                    bromath::Vec3 ext = brogameagent::NavMesh::kDefaultExtents;
+                    bool requireFull = false;
+                    if (argc > 2 && JS_IsObject(argv[2])) {
+                        JSValue rf = JS_GetPropertyStr(ctx, argv[2], "requireFullPath");
+                        JSValue ex = JS_GetPropertyStr(ctx, argv[2], "extents");
+                        if (!JS_IsUndefined(rf) || !JS_IsUndefined(ex)) {
+                            // Options form.
+                            requireFull = JS_ToBool(ctx, rf) == 1;
+                            if (JS_IsObject(ex)) parseVec3Val(ctx, ex, ext);
+                        } else {
+                            parseVec3Val(ctx, argv[2], ext);  // bare extents form
+                        }
+                        JS_FreeValue(ctx, rf);
+                        JS_FreeValue(ctx, ex);
+                    }
+                    auto res = d->mesh->findPathEx(a, b, ext, requireFull);
+                    if (res.points.empty()) return JS_NULL;
                     static_assert(sizeof(bromath::Vec3) == 3 * sizeof(float),
                                   "Vec3 must be tightly packed for the flat copy");
-                    return make_float32_array(ctx, &path[0].x, path.size() * 3);
+                    JSValue arr = make_float32_array(ctx, &res.points[0].x,
+                                                     res.points.size() * 3);
+                    JS_SetPropertyStr(ctx, arr, "partial", JS_NewBool(ctx, res.partial));
+                    return arr;
                 }, 3)
             // nearestPoint(p, extents?) → {x,y,z} snapped onto the mesh, or
             // null when nothing is within the search extents.

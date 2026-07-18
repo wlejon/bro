@@ -91,9 +91,23 @@ function runNavMeshTests() {
                 p[i].toFixed(2) + ',' + p[i + 2].toFixed(2) + ')');
         }
 
-        // Unreachable: disconnected island → null (never a truncated partial path).
-        assert(mesh.findPath({ x: 0, y: 0, z: 8 }, { x: 33, y: 0, z: 0 }) === null,
-            'unreachable island returns null');
+        // Complete paths read partial === false.
+        assert(p.partial === false, 'complete path has partial === false');
+
+        // Unreachable: disconnected island → clamped partial path to the
+        // closest reachable point (Godot behavior), flagged partial.
+        const pp = mesh.findPath({ x: 0, y: 0, z: 8 }, { x: 33, y: 0, z: 0 });
+        assert(pp !== null && pp.partial === true, 'unreachable island yields a partial path');
+        assert(pp[pp.length - 3] < 12, 'partial path ends on the reachable floor, x=' +
+            pp[pp.length - 3].toFixed(2));
+        // requireFullPath opts out back into hard-fail semantics.
+        assert(mesh.findPath({ x: 0, y: 0, z: 8 }, { x: 33, y: 0, z: 0 },
+            { requireFullPath: true }) === null,
+            'requireFullPath: unreachable island returns null');
+        // Opts form also carries extents.
+        const ppExt = mesh.findPath({ x: 0, y: 0, z: 8 }, { x: 33, y: 0, z: 0 },
+            { extents: { x: 2, y: 1, z: 2 } });
+        assert(ppExt !== null && ppExt.partial === true, 'opts.extents form works');
         // Off-mesh endpoint (fails to snap) → null.
         assert(mesh.findPath({ x: 0, y: 0, z: 8 }, { x: 100, y: 0, z: 100 }) === null,
             'unsnappable endpoint returns null');
@@ -200,6 +214,7 @@ function runNavMeshTests() {
         pushQuad(verts, idx, -12, -12, 12, 12, 0);       // ground floor
         pushQuad(verts, idx, 4, -4, 12, 4, 3);           // platform at y=3 (over the floor)
         pushRamp(verts, idx, -4, 0, 4, 3, -2, 2);        // ramp up (~20.6 deg)
+        pushQuad(verts, idx, 30, -3, 36, 3, 0);          // disconnected island
         return G.bakeNavMesh({
             positions: new Float32Array(verts),
             indices: new Uint32Array(idx),
@@ -268,11 +283,24 @@ function runNavMeshTests() {
         assert(n2.navigateTo({ x: 10, y: 3, z: 1 }, { navMesh: twoLevel }) === true,
             'navigateTo #2 with opts.navMesh finds a route');
 
-        // Unreachable target reports false and doesn't start moving.
+        // Unsnappable target reports false and doesn't start moving.
         const a3 = mkAgent(0, -8);
         const n3 = scene.createMesh({ mesh: 'box' });
         n3.attachAgent(world, a3, { navMesh: twoLevel });
-        assert(n3.navigateTo({ x: 100, y: 0, z: 100 }) === false, 'unreachable navigateTo returns false');
+        assert(n3.navigateTo({ x: 100, y: 0, z: 100 }) === false, 'unsnappable navigateTo returns false');
+        // Unreachable-but-snappable target with requireFullPath also fails.
+        assert(n3.navigateTo({ x: 33, y: 0, z: 0 }, { requireFullPath: true }) === false,
+            'requireFullPath: unreachable island navigateTo returns false');
+        assert(n3.navigationInfo().active === false, 'no route started');
+
+        // Partial route: unreachable island starts a clamped route toward
+        // the closest reachable point (the floor's east edge).
+        const a5 = mkAgent(6, -8);
+        const n5 = scene.createMesh({ mesh: 'box' });
+        n5.attachAgent(world, a5, { navMesh: twoLevel });
+        assert(n5.navigateTo({ x: 33, y: 0, z: 0 }) === true, 'partial navigateTo starts');
+        assert(n5.navigationInfo().active === true && n5.navigationInfo().partial === true,
+            'partial route reads partial in navigationInfo');
 
         // Drive the sim; track the inter-agent distance for RVO composition.
         let minSep = 1e9, sawClimb = false;
@@ -287,8 +315,19 @@ function runNavMeshTests() {
             'agent 1 arrives, at (' + a1.x.toFixed(2) + ',' + a1.z.toFixed(2) + ')');
         assert(Math.hypot(a2.x - 10, a2.z - 1) < 1.0,
             'agent 2 arrives, at (' + a2.x.toFixed(2) + ',' + a2.z.toFixed(2) + ')');
-        // Unreachable agent never moved.
+        // Unsnappable agent never moved.
         assert(Math.hypot(a3.x - 0, a3.z - (-8)) < 0.01, 'failed navigateTo does not move the agent');
+
+        // Partial-route agent walks to the closest reachable point to the
+        // island (the east edge — floor or platform level) and stops. It
+        // never crosses the gap, and atTarget stays false (it measures
+        // against the true goal).
+        for (let t = 0; t < 300 && n5.navigationInfo().active; t++) advanceTime(50);
+        assert(n5.navigationInfo().active === false, 'partial route completed');
+        assert(a5.x > 9.0, 'partial-route agent reached the east edge, x=' + a5.x.toFixed(2));
+        assert(a5.x < 13.0, 'partial-route agent never crossed the gap');
+        assert(n5.navigationInfo().partial === true, 'partial flag persists after arrival');
+        assert(a5.atTarget === false, 'atTarget false at the clamped end');
 
         // Node Y followed the route: passed through ramp heights, ends at
         // platform height + yOffset (no groundFollow set → waypoint Y drives).
@@ -311,7 +350,7 @@ function runNavMeshTests() {
         advanceTime(500);
         assert(Math.hypot(a4.x - hx, a4.z - hz) < 0.2, 'stopNavigation halts the agent');
 
-        n1.detachAgent(); n2.detachAgent(); n3.detachAgent(); n4.detachAgent();
+        n1.detachAgent(); n2.detachAgent(); n3.detachAgent(); n4.detachAgent(); n5.detachAgent();
         scene.detachAIWorld();
     }
 

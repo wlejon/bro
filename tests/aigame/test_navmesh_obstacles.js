@@ -172,16 +172,24 @@ function runObstacleTests() {
         });
         assert(h > 0, 'box obstacle added');
         settle(mesh);
-        assert(mesh.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 0, z: 0 }) === null,
-            'full-width box severs the corridor (no partial path)');
+        // Severed corridor → clamped partial path ending before the box.
+        const sev = mesh.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 0, z: 0 });
+        assert(sev !== null && sev.partial === true,
+            'full-width box severs the corridor → partial path');
+        assert(sev[sev.length - 3] < -0.9,
+            'partial path stops at the box\'s near face, x=' + sev[sev.length - 3].toFixed(2));
+        assert(mesh.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 0, z: 0 },
+            { requireFullPath: true }) === null,
+            'requireFullPath: severed corridor hard-fails');
         // Endpoints still snap: the failure is connectivity, not snapping.
         assert(mesh.nearestPoint({ x: -8, y: 0, z: 0 }) !== null, 'start still on mesh');
         assert(mesh.nearestPoint({ x: 8, y: 0, z: 0 }) !== null, 'goal still on mesh');
 
         assert(mesh.removeObstacle(h) === true, 'box removed');
         settle(mesh);
-        assert(mesh.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 0, z: 0 }) !== null,
-            'corridor restored after removal');
+        const restored = mesh.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 0, z: 0 });
+        assert(restored !== null && restored.partial === false,
+            'corridor restored after removal (complete path again)');
     }
 
     // =========================================================================
@@ -252,24 +260,35 @@ function runObstacleTests() {
         assert(maxAbsZ > 2.0,
             'agent path bent around the obstacle, maxAbsZ=' + maxAbsZ.toFixed(2));
 
-        // ── Full block: repath fails → the agent halts instead of walking
-        //    a stale path through the obstacle. ──
+        // ── Full block: repath clamps to the closest reachable point — the
+        //    agent walks up to the wall, halts there, and the route reads
+        //    partial (never ghost-walks the stale path through the wall). ──
         const agent2 = G.createAgent({ x: -10, z: 0, speed: 4, radius: 0.4 });
         world.addAgent(agent2);
         const node2 = scene.createMesh({ mesh: 'box', color: 'blue' });
         node2.attachAgent(world, agent2, { navMesh: mesh, yOffset: 0.5 });
         assert(node2.navigateTo({ x: 10, y: 0, z: 0 }) === true, 'route 2 starts');
+        assert(node2.navigationInfo().active === true &&
+               node2.navigationInfo().partial === false, 'route 2 starts complete');
         advanceTime(400);
         const wall = mesh.addObstacle({
             type: 'box', min: { x: 0, y: -1, z: -7 }, max: { x: 2, y: 3, z: 7 },
         });
         assert(wall > 0, 'full-width wall added');
         advanceTime(1500);
+        assert(node2.navigationInfo().partial === true,
+            'severed route re-planned as partial');
+        // Let the clamped route finish, then verify the agent halted before
+        // the wall and stays put.
+        for (let t = 0; t < 200 && node2.navigationInfo().active; t++) advanceTime(50);
+        assert(node2.navigationInfo().active === false, 'clamped route completed');
         const hx = agent2.x, hz = agent2.z;
         assert(hx < 0, 'blocked agent never crossed the wall, x=' + hx.toFixed(2));
         advanceTime(1000);
         assert(Math.hypot(agent2.x - hx, agent2.z - hz) < 0.2,
-            'blocked agent halted (route abandoned, not ghost-walked)');
+            'blocked agent halted at the clamped end, not ghost-walked');
+        assert(agent2.atTarget === false,
+            'atTarget stays false at a clamped route end');
 
         // Removing the first obstacle while the wall stays: still blocked.
         assert(mesh.removeObstacle(h) === true, 'first obstacle removed');
@@ -278,6 +297,7 @@ function runObstacleTests() {
         advanceTime(500);   // engine pump applies the removals
         assert(mesh.obstaclesPending === false, 'removals applied by auto-pump');
         assert(node2.navigateTo({ x: 10, y: 0, z: 0 }) === true, 'route re-plans after removal');
+        assert(node2.navigationInfo().partial === false, 'fresh route is complete again');
         for (let t = 0; t < 140; t++) advanceTime(50);
         assert(Math.hypot(agent2.x - 10, agent2.z) < 1.0,
             'previously blocked agent arrives after removal, at (' +

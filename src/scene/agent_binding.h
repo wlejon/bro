@@ -122,21 +122,33 @@ public:
     /// `target` and start following it. `extents` are the NavMesh snap
     /// half-extents; `repathInterval` > 0 re-plans toward the same target
     /// every that-many seconds (0 = plan once). Returns false (and does not
-    /// start navigating) when there is no navmesh/agent or no COMPLETE path.
-    /// Compiled without navmesh support (BROGAMEAGENT_HAS_NAVMESH unset)
-    /// this always returns false.
+    /// start navigating) when there is no navmesh/agent or an endpoint fails
+    /// to snap. An UNREACHABLE goal starts a partial route: the agent walks
+    /// to the closest reachable point and stops there (navPartial() reads
+    /// true; there is no separate completion event). Pass
+    /// requireFullPath=true to restore hard-fail semantics (unreachable →
+    /// false, agent does not move). Compiled without navmesh support
+    /// (BROGAMEAGENT_HAS_NAVMESH unset) this always returns false.
     ///
     /// Dynamic obstacles: the binding snapshots NavMesh::generation() at plan
     /// time and re-plans automatically when the mesh's walkable surface
     /// changes (an obstacle batch applied, or a re-bake) — the stored path may
-    /// now cut through an obstacle. If the goal has become unreachable the
-    /// route is abandoned (the agent halts) rather than walking a stale path.
+    /// now cut through an obstacle. A goal that becomes unreachable clamps
+    /// the route to the closest reachable point (or, with requireFullPath,
+    /// abandons it and halts the agent).
     bool navigateTo(bromath::Vec3 target, bromath::Vec3 extents,
-                    float repathInterval = 0.0f);
+                    float repathInterval = 0.0f, bool requireFullPath = false);
 
     /// Abandon the current route (agent halts via clearTarget).
     void stopNavigation();
     bool navigating() const { return navActive_; }
+
+    /// True when the most recent route was clamped: the goal is unreachable
+    /// and the route ends at the closest reachable point. Valid while
+    /// navigating AND after arrival (until the next navigateTo). The agent's
+    /// own atTarget() keeps measuring against the true goal, so it stays
+    /// false at a clamped route end.
+    bool navPartial() const { return navPartial_; }
 
     /// Current in-flight action (read-only; callers may need to peek for UI).
     const brogameagent::Action& currentAction() const { return current_; }
@@ -187,6 +199,8 @@ private:
     bromath::Vec3 navExtents_{};
     float repathInterval_ = 0.0f;
     float repathAccum_ = 0.0f;
+    bool  navRequireFull_ = false;  // navigateTo's requireFullPath, kept for repaths
+    bool  navPartial_ = false;      // active/last route was clamped (goal unreachable)
     uint32_t navGeneration_ = 0;  // mesh generation the active path was planned on
     float navY_ = 0.0f;
     bool  hasNavY_ = false;

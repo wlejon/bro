@@ -67,6 +67,7 @@ JSValue nodeAttachAgent(JSContext* ctx, JSValueConst this_val, int argc, JSValue
 JSValue nodeDetachAgent(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue nodeNavigateTo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue nodeStopNavigation(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue nodeNavigationInfo(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue graphAttachAIWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue graphDetachAIWorld(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 

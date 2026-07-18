@@ -96,7 +96,7 @@ void AgentBinding::step(brogameagent::World* world, float dt, float nowSec) {
 }
 
 bool AgentBinding::navigateTo(bromath::Vec3 target, bromath::Vec3 extents,
-                              float repathInterval) {
+                              float repathInterval, bool requireFullPath) {
 #ifdef BROGAMEAGENT_HAS_NAVMESH
     stopNavigation();
     if (!navMesh_ || !agent_) return false;
@@ -108,22 +108,24 @@ bool AgentBinding::navigateTo(bromath::Vec3 target, bromath::Vec3 extents,
     else if (node_)          startY = node_->position().y;
     bromath::Vec3 start{agent_->x(), startY, agent_->z()};
 
-    auto path = navMesh_->findPath(start, target, extents);
-    if (path.empty()) return false;
+    auto path = navMesh_->findPathEx(start, target, extents, requireFullPath);
+    if (path.points.empty()) return false;
 
-    navPath_ = std::move(path);
+    navPath_ = std::move(path.points);
+    navPartial_ = path.partial;
     navWaypoint_ = 0;
     navActive_ = true;
     navTarget_ = target;
     navExtents_ = extents;
     repathInterval_ = repathInterval;
     repathAccum_ = 0.0f;
+    navRequireFull_ = requireFullPath;
     navGeneration_ = navMesh_->generation();
     navY_ = navPath_.front().y;
     hasNavY_ = true;
     return true;
 #else
-    (void)target; (void)extents; (void)repathInterval;
+    (void)target; (void)extents; (void)repathInterval; (void)requireFullPath;
     return false;
 #endif
 }
@@ -134,6 +136,7 @@ void AgentBinding::stopNavigation() {
     navPath_.clear();
     navWaypoint_ = 0;
     repathAccum_ = 0.0f;
+    navPartial_ = false;
 }
 
 void AgentBinding::stepNavigation_(float dt) {
@@ -143,15 +146,18 @@ void AgentBinding::stepNavigation_(float dt) {
 
     // Surface changed under the active path (a dynamic-obstacle batch was
     // applied, or the mesh was re-baked): the stored waypoints may now cut
-    // through an obstacle, so re-plan toward the same goal. When the goal
-    // has become unreachable, abandon the route — halting honestly beats
-    // walking a stale path through the obstacle.
+    // through an obstacle, so re-plan toward the same goal. A goal that has
+    // become unreachable clamps the route to the closest reachable point
+    // (partial); with requireFullPath — or when the start itself no longer
+    // snaps — abandon the route: halting honestly beats walking a stale path
+    // through the obstacle.
     if (navMesh_ && navMesh_->generation() != navGeneration_) {
         navGeneration_ = navMesh_->generation();
         bromath::Vec3 start{agent_->x(), navY_, agent_->z()};
-        auto p = navMesh_->findPath(start, navTarget_, navExtents_);
-        if (p.empty()) { stopNavigation(); return; }
-        navPath_ = std::move(p);
+        auto p = navMesh_->findPathEx(start, navTarget_, navExtents_, navRequireFull_);
+        if (p.points.empty()) { stopNavigation(); return; }
+        navPath_ = std::move(p.points);
+        navPartial_ = p.partial;
         navWaypoint_ = 0;
         repathAccum_ = 0.0f;
     }
@@ -163,9 +169,10 @@ void AgentBinding::stepNavigation_(float dt) {
         if (repathAccum_ >= repathInterval_) {
             repathAccum_ = 0.0f;
             bromath::Vec3 start{agent_->x(), navY_, agent_->z()};
-            auto p = navMesh_->findPath(start, navTarget_, navExtents_);
-            if (!p.empty()) {
-                navPath_ = std::move(p);
+            auto p = navMesh_->findPathEx(start, navTarget_, navExtents_, navRequireFull_);
+            if (!p.points.empty()) {
+                navPath_ = std::move(p.points);
+                navPartial_ = p.partial;
                 navWaypoint_ = 0;
             }
         }

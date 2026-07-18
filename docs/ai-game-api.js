@@ -83,16 +83,25 @@ nav.isWalkable(0, 0);  // false (inside obstacle)
 
 /**
  * Find a path from start to goal using A* with path smoothing.
- * Returns an empty array if no path exists.
+ *
+ * Partial paths (Godot-style): a blocked, out-of-bounds, or walled-off goal
+ * CLAMPS the path to the closest reachable cell instead of failing — the
+ * returned array then has `path.partial === true` and ends at the clamped
+ * point. `partial` is false on a complete path. Empty only when the START is
+ * invalid (out of bounds / on a blocked cell), or when opts.requireFullPath
+ * is set and the goal was not reached.
  *
  * @param {number} fromX
  * @param {number} fromZ
  * @param {number} toX
  * @param {number} toZ
- * @returns {Array<{x: number, z: number}>} Smoothed waypoints
+ * @param {Object} [opts]
+ * @param {boolean} [opts.requireFullPath=false] - hard-fail semantics: an
+ *     unreached goal returns an empty array instead of a clamped path
+ * @returns {Array<{x: number, z: number}> & {partial: boolean}}
  */
 const path = nav.findPath(-10, 0, 10, 0);
-// path = [{ x: -10, z: 0 }, { x: -2, z: 3 }, { x: 10, z: 0 }]
+// path = [{ x: -10, z: 0 }, { x: -2, z: 3 }, { x: 10, z: 0 }], path.partial === false
 
 /**
  * Add an obstacle after creation (e.g., for dynamic obstacles).
@@ -202,20 +211,32 @@ const navMesh = bro.ai.game.bakeNavMesh({
 /**
  * Find a walkable path. Returns the straightened (funnel) waypoint list as a
  * Float32Array of xyz triples — [x0,y0,z0, x1,y1,z1, ...] — including the
- * snapped start and end points. Returns null when either endpoint fails to
- * snap or when no COMPLETE path exists: partial paths toward unreachable
- * goals are reported as failure, never silently truncated.
+ * snapped start and end points, with a `partial` bool property.
+ *
+ * Partial paths (Godot-style): an UNREACHABLE goal (disconnected island)
+ * clamps the path to the closest reachable point — the result then has
+ * `partial === true` and its last triple is the clamped end, not the goal.
+ * Complete paths read `partial === false`. Returns null only when either
+ * endpoint fails to snap within the extents, or when requireFullPath is set
+ * and the goal is unreachable.
  * Deterministic: same mesh + inputs always yield the same waypoints.
+ *
+ * The third argument is either bare extents or an options object:
  *
  * @param {{x,y,z}|number[]} start
  * @param {{x,y,z}|number[]} end
- * @param {{x,y,z}} [extents={x:2,y:1,z:2}] - snap-box half-extents. The tight
- *     Y is deliberate: it makes stacked-level queries resolve to the level
- *     nearest the query point. Keep it smaller than your level spacing.
- * @returns {Float32Array|null}
+ * @param {{x,y,z}|Object} [extentsOrOpts]
+ * @param {{x,y,z}} [extentsOrOpts.extents={x:2,y:1,z:2}] - snap-box
+ *     half-extents. The tight Y is deliberate: it makes stacked-level
+ *     queries resolve to the level nearest the query point. Keep it smaller
+ *     than your level spacing.
+ * @param {boolean} [extentsOrOpts.requireFullPath=false] - hard-fail
+ *     semantics: an unreachable goal returns null instead of a clamped path
+ * @returns {(Float32Array & {partial: boolean})|null}
  */
 const wp = navMesh.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 3, z: 0 });
 if (wp) for (let i = 0; i < wp.length; i += 3) walkTo(wp[i], wp[i + 1], wp[i + 2]);
+if (wp && wp.partial) console.log('goal unreachable — walking to the closest point');
 
 /**
  * Snap an arbitrary point onto the navmesh.
@@ -279,8 +300,9 @@ const mesh = cached
 //
 // Available on meshes baked with `dynamicObstacles: true`. Obstacles carve
 // the walkable surface exactly like baked-in geometry: findPath detours
-// around them (or fails when they sever the corridor — never a partial
-// path), and removing them restores the original surface.
+// around them (or clamps to the closest reachable point with partial=true
+// when they sever the corridor), and removing them restores the original
+// surface.
 //
 // Update semantics: addObstacle/removeObstacle only QUEUE a change. The
 // affected tiles rebuild incrementally — one touched tile per update() call —
@@ -367,9 +389,11 @@ dyn.generation;
 //
 // Dynamic obstacles: the binding snapshots the mesh's `generation` at plan
 // time and re-plans automatically when the surface changes (an obstacle
-// batch applied, or a re-bake). If the goal has become unreachable the route
-// is abandoned and the agent halts — issue a fresh navigateTo() after the
-// blocking obstacle is removed.
+// batch applied, or a re-bake). A goal that becomes unreachable clamps the
+// route to the closest reachable point (navigationInfo().partial turns
+// true); with requireFullPath the route is abandoned and the agent halts
+// instead — issue a fresh navigateTo() after the blocking obstacle is
+// removed.
 
 const world = bro.ai.game.createWorld();
 world.setAvoidance(true);
@@ -386,6 +410,14 @@ node.attachAgent(world, agent, {
  * Plan a path on the bound navmesh from the agent's position to `target`
  * and start following it.
  *
+ * Partial routes (Godot-style): an UNREACHABLE goal still starts a route —
+ * the agent walks to the closest reachable point and stops there.
+ * navigationInfo().partial reads true for such a route, and the agent's
+ * `atTarget` stays false at the clamped end (it measures against the true
+ * goal). There is no separate completion event — poll navigationInfo():
+ * `!active` after a partial route started means the agent finished at the
+ * clamped end. Pass requireFullPath to fail instead of clamping.
+ *
  * @param {{x,y,z}|number[]} target
  * @param {Object} [opts]
  * @param {NavMesh} [opts.navMesh] - bind/replace the navmesh (optional if
@@ -393,14 +425,26 @@ node.attachAgent(world, agent, {
  * @param {{x,y,z}} [opts.extents] - findPath snap half-extents
  * @param {number} [opts.repathInterval=0] - seconds; > 0 re-plans toward the
  *     same target periodically (0 = plan once per navigateTo call)
- * @returns {boolean} true when a complete path was found and following
- *     started; false when an endpoint fails to snap or the goal is
- *     unreachable (the agent does not move)
+ * @param {boolean} [opts.requireFullPath=false] - unreachable goal returns
+ *     false and the agent does not move, instead of a partial route
+ * @returns {boolean} true when following started (complete OR partial
+ *     route); false when an endpoint fails to snap, or — with
+ *     requireFullPath — when the goal is unreachable
  */
 node.navigateTo({ x: 8, y: 3, z: 0 });
 
 /** Abandon the current route (the agent halts). */
 node.stopNavigation();
+
+/**
+ * State of the binding's navmesh route.
+ * @returns {{active: boolean, partial: boolean}} active = a route is being
+ *     followed; partial = the active/most-recent route was clamped to the
+ *     closest reachable point (goal unreachable). partial persists after
+ *     arrival until the next navigateTo()/stopNavigation() so late polls
+ *     can still see how the route ended.
+ */
+node.navigationInfo();
 
 
 // -----------------------------------------------------------------------------
