@@ -206,15 +206,24 @@ td.value {
         var ws = p.windows || [];
         if (winSection && winTable) {
             winSection.style.setProperty('display', ws.length ? 'block' : 'none');
-            var html = '';
+            // Built with DOM calls rather than innerHTML: table markup has
+            // its own parser quirks, and the row count changes rarely.
+            while (winTable.firstChild) winTable.removeChild(winTable.firstChild);
             for (var w = 0; w < ws.length; w++) {
                 var wi = ws[w];
                 var state = wi.minimized ? 'min' : (wi.focused ? 'focus' : '');
-                html += '<tr><td class="label">' + (wi.title || ('#' + wi.id)) +
-                        '</td><td class="value">' + wi.width + 'x' + wi.height +
-                        (state ? ' (' + state + ')' : '') + '</td></tr>';
+                var tr = document.createElement('tr');
+                var name = document.createElement('td');
+                name.className = 'label';
+                name.textContent = wi.title || ('#' + wi.id);
+                var val = document.createElement('td');
+                val.className = 'value';
+                val.textContent = wi.width + 'x' + wi.height +
+                                  (state ? ' (' + state + ')' : '');
+                tr.appendChild(name);
+                tr.appendChild(val);
+                winTable.appendChild(tr);
             }
-            winTable.innerHTML = html;
         }
 
         // Scene frustum-culling counters (drawn / culled per node family).
