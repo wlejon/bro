@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>AI Chat</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main>
+        <header>
+            <div class="title">
+                <h1>AI Chat</h1>
+                <p class="hint">Local LLM chat via bro.lm — pick a GGUF checkpoint to begin.</p>
+            </div>
+            <div class="gpu">
+                <span id="gpu-badge" class="badge">…</span>
+                <span id="gpu-detail" class="gpu-detail"></span>
+            </div>
+        </header>
+
+        <section class="model-row">
+            <button id="load-btn" type="button">Load model…</button>
+            <span id="model-name" class="model-name">no model loaded</span>
+        </section>
+
+        <div id="status" class="status"></div>
+
+        <div id="chat"></div>
+
+        <form id="composer">
+            <input id="prompt" type="text" placeholder="Load a model to chat…"
+                   autocomplete="off" disabled>
+            <button id="send-btn" type="submit" disabled>Send</button>
+        </form>
+    </main>
+    <script src="app.js"></script>
+</body>
+</html>

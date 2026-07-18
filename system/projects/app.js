@@ -254,6 +254,7 @@ function render() {
 // ─── Skeletons ────────────────────────────────────────────────────────────
 
 const SKELETON_DESCRIPTIONS = {
+    'ai':            'GPU probe + local LLM chat (bro.lm)',
     'blank':         'HTML/CSS/JS only',
     'canvas2d':      'Canvas 2D + animation',
     'scene3d':       '3D scene with bro.scene',
