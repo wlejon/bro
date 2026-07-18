@@ -496,6 +496,14 @@ static void applyMeshNodeOptions(JSContext* ctx, scene::MeshNode* node,
         if (JS_IsString(nameVal)) node->setName(jsStr(ctx, nameVal));
         JS_FreeValue(ctx, nameVal);
 
+        // Visibility. Only honoured when actually present, so a node that
+        // omits the option keeps the constructor's default rather than being
+        // forced visible by a JS_ToBool on undefined.
+        JSValue visibleVal = JS_GetPropertyStr(ctx, opts, "visible");
+        if (!JS_IsUndefined(visibleVal))
+            node->setVisible(JS_ToBool(ctx, visibleVal) != 0);
+        JS_FreeValue(ctx, visibleVal);
+
         // Position
         double x = qjsbind::get_prop_number(ctx, opts, "x", 0);
         double y = qjsbind::get_prop_number(ctx, opts, "y", 0);

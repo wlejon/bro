@@ -903,6 +903,39 @@ void SceneBindings::install(JSContext* ctx) {
                 bromath::Quat q{(float)qx, (float)qy, (float)qz, (float)qw};
                 w->node()->setRotation(bromath::qnorm(q));
             })
+        // Whole-node scale. Reads back as [x, y, z]; accepts either a uniform
+        // number or a per-axis array, matching the `scale` option createMesh
+        // already takes. Without this, `node.scale = 2` silently created a
+        // plain JS expando that no one ever read.
+        .prop("scale",
+            [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+                if (!w || !w->node()) return JS_UNDEFINED;
+                const auto& s = w->node()->scale();
+                JSValue arr = JS_NewArray(ctx);
+                JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, s.x));
+                JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, s.y));
+                JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, s.z));
+                return arr;
+            },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                if (!w || !w->node()) return;
+                if (JS_IsArray(val)) {
+                    // Missing entries fall back to the axis's current value, so
+                    // a two-element array leaves Z alone rather than zeroing it.
+                    const auto& cur = w->node()->scale();
+                    double s3[3] = {cur.x, cur.y, cur.z};
+                    for (uint32_t i = 0; i < 3; ++i) {
+                        JSValue e = JS_GetPropertyUint32(ctx, val, i);
+                        if (!JS_IsUndefined(e)) JS_ToFloat64(ctx, &s3[i], e);
+                        JS_FreeValue(ctx, e);
+                    }
+                    w->node()->setScale((float)s3[0], (float)s3[1], (float)s3[2]);
+                } else if (JS_IsNumber(val)) {
+                    double s = 1;
+                    JS_ToFloat64(ctx, &s, val);
+                    w->node()->setScale((float)s, (float)s, (float)s);
+                }
+            })
         .prop("scaleX",
             [](NodeWrapper* w) -> double { return w->node() ? w->node()->scale().x : 1; },
             [](NodeWrapper* w, double val) { if (w->node()) w->node()->setScale((float)val, w->node()->scale().y, w->node()->scale().z); })
@@ -994,27 +1027,54 @@ void SceneBindings::install(JSContext* ctx) {
                     JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, c.z));
                     return arr;
                 }
+                // Mesh albedo. createMesh already takes a `color` option; this
+                // is the same material channel, readable and writable after
+                // creation instead of only at construction. Covers skinned
+                // meshes too — SkinnedMeshNode reports Type::Mesh.
+                if (w->node()->type() == scene::SceneNode::Type::Mesh) {
+                    const float* c = static_cast<scene::MeshNode*>(w->node())->color();
+                    JSValue arr = JS_NewArray(ctx);
+                    for (uint32_t i = 0; i < 4; ++i)
+                        JS_SetPropertyUint32(ctx, arr, i, JS_NewFloat64(ctx, c[i]));
+                    return arr;
+                }
                 return JS_UNDEFINED;
             },
             [](NodeWrapper* w, JSContext* ctx, JSValue val) {
-                if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Light) return;
-                auto* L = static_cast<scene::LightNode*>(w->node());
+                if (!w || !w->node()) return;
+                const auto nodeType = w->node()->type();
+                const bool isLight = nodeType == scene::SceneNode::Type::Light;
+                const bool isMesh  = nodeType == scene::SceneNode::Type::Mesh;
+                if (!isLight && !isMesh) return;
+
+                // Decode to linear RGBA once, then hand it to whichever node
+                // type we have. Lights ignore alpha; meshes keep their existing
+                // alpha unless the value supplies a fourth component.
+                float cr = 1, cg = 1, cb = 1, ca = -1;
                 if (JS_IsString(val)) {
                     uint8_t r, g, b, a;
-                    if (parseColor(jsStr(ctx, val), r, g, b, a))
-                        L->setColor(r/255.0f, g/255.0f, b/255.0f);
+                    if (!parseColor(jsStr(ctx, val), r, g, b, a)) return;
+                    cr = r/255.0f; cg = g/255.0f; cb = b/255.0f; ca = a/255.0f;
                 } else if (JS_IsArray(val)) {
-                    double cr = 1, cg = 1, cb = 1;
-                    JSValue e0 = JS_GetPropertyUint32(ctx, val, 0);
-                    JSValue e1 = JS_GetPropertyUint32(ctx, val, 1);
-                    JSValue e2 = JS_GetPropertyUint32(ctx, val, 2);
-                    JS_ToFloat64(ctx, &cr, e0);
-                    JS_ToFloat64(ctx, &cg, e1);
-                    JS_ToFloat64(ctx, &cb, e2);
-                    L->setColor((float)cr, (float)cg, (float)cb);
-                    JS_FreeValue(ctx, e0);
-                    JS_FreeValue(ctx, e1);
-                    JS_FreeValue(ctx, e2);
+                    float* dst[4] = {&cr, &cg, &cb, &ca};
+                    for (uint32_t i = 0; i < 4; ++i) {
+                        JSValue e = JS_GetPropertyUint32(ctx, val, i);
+                        if (!JS_IsUndefined(e)) {
+                            double d = 0;
+                            JS_ToFloat64(ctx, &d, e);
+                            *dst[i] = (float)d;
+                        }
+                        JS_FreeValue(ctx, e);
+                    }
+                } else {
+                    return;
+                }
+
+                if (isLight) {
+                    static_cast<scene::LightNode*>(w->node())->setColor(cr, cg, cb);
+                } else {
+                    auto* M = static_cast<scene::MeshNode*>(w->node());
+                    M->setColor(cr, cg, cb, ca >= 0 ? ca : M->color()[3]);
                 }
             })
         .prop("intensity",
