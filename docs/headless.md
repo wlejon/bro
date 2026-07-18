@@ -354,10 +354,18 @@ textures 2D / 3D / 2D-array / cube map, sized internal formats,
 `UNPACK_PREMULTIPLY_ALPHA_WEBGL`; framebuffers/renderbuffers including
 multisample + `blitFramebuffer` resolve, MRT via `drawBuffers` +
 `readBuffer`, `readPixels` (with destination-size validation), float
-color buffers (`EXT_color_buffer_float`).
+color buffers (`EXT_color_buffer_float`); sampler objects (full API,
+sampler state overrides texture state, auto-unbind on delete); sync objects
+(`fenceSync`/`clientWaitSync`/`waitSync`/`getSyncParameter` — `clientWaitSync`
+timeouts are capped at `MAX_CLIENT_WAIT_TIMEOUT_WEBGL` = 1 s and larger values
+raise `INVALID_OPERATION` instead of blocking the JS thread); query objects
+(`ANY_SAMPLES_PASSED`, `TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN`;
+`QUERY_RESULT_AVAILABLE` never sync-stalls, and
+`ANY_SAMPLES_PASSED_CONSERVATIVE` is answered with the exact
+`ANY_SAMPLES_PASSED` query on drivers without GL 4.3 / ARB_ES3_compatibility —
+an exact answer is a valid conservative one).
 
-**Not implemented (absent API families):** sampler objects, sync objects
-(`fenceSync`/`clientWaitSync`), query objects, transform feedback objects,
+**Not implemented (absent API families):** transform feedback objects,
 PBO-offset variants of `readPixels`/texture uploads, `compressedTexImage*`,
 `copyTexImage2D`/`copyTexSubImage2D`, `framebufferTextureLayer`,
 `invalidateFramebuffer`/`invalidateSubFramebuffer`, unsigned-int uniform

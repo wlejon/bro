@@ -45,6 +45,9 @@ WebGL2RenderingContext::~WebGL2RenderingContext() {
     for (GLuint id : validFramebuffers_) glDeleteFramebuffers(1, &id);
     for (GLuint id : validRenderbuffers_) glDeleteRenderbuffers(1, &id);
     for (GLuint id : validVAOs_) glDeleteVertexArrays(1, &id);
+    for (GLuint id : validSamplers_) glDeleteSamplers(1, &id);
+    for (GLuint id : validQueries_) glDeleteQueries(1, &id);
+    for (GLsync s : validSyncs_) glDeleteSync(s);
     destroyCanvasFBO();
 }
 
@@ -115,6 +118,12 @@ void WebGL2RenderingContext::bindCanvasFBO() {
 
 void WebGL2RenderingContext::unbindCanvasFBO() {
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // Neutralize WebGL state that would corrupt the engine's own GL work
+    // (compositing, screenshot readback). restoreState() re-applies it before
+    // control returns to the app.
+    for (unsigned u = 0; u < 32; u++) {
+        if (sSampler_[u]) glBindSampler(u, 0);
+    }
 }
 
 // ===========================================================================
@@ -262,6 +271,173 @@ void WebGL2RenderingContext::bindBufferBase(GLenum target, GLuint index, WebGLBu
 void WebGL2RenderingContext::bindBufferRange(GLenum target, GLuint index, WebGLBuffer buf,
                                               GLintptr offset, GLsizeiptr size) {
     glBindBufferRange(target, index, buf.id, offset, size);
+}
+
+// ===========================================================================
+// Sampler objects
+// ===========================================================================
+
+WebGLSampler WebGL2RenderingContext::createSampler() {
+    GLuint id = 0;
+    glGenSamplers(1, &id);
+    validSamplers_.insert(id);
+    return {id};
+}
+
+void WebGL2RenderingContext::deleteSampler(WebGLSampler s) {
+    if (s.id && validSamplers_.erase(s.id)) {
+        // GL auto-unbinds a deleted sampler from every unit it is bound to;
+        // mirror that in the shadow state so restoreState never rebinds a
+        // dead name.
+        for (auto& slot : sSampler_)
+            if (slot == s.id) slot = 0;
+        glDeleteSamplers(1, &s.id);
+    }
+}
+
+void WebGL2RenderingContext::bindSampler(GLuint unit, WebGLSampler s) {
+    if (unit < 32) sSampler_[unit] = s.id;
+    glBindSampler(unit, s.id);
+}
+
+void WebGL2RenderingContext::samplerParameteri(WebGLSampler s, GLenum pname, GLint param) {
+    glSamplerParameteri(s.id, pname, param);
+}
+
+void WebGL2RenderingContext::samplerParameterf(WebGLSampler s, GLenum pname, GLfloat param) {
+    glSamplerParameterf(s.id, pname, param);
+}
+
+GLint WebGL2RenderingContext::getSamplerParameteri(WebGLSampler s, GLenum pname) {
+    GLint v = 0;
+    glGetSamplerParameteriv(s.id, pname, &v);
+    return v;
+}
+
+GLfloat WebGL2RenderingContext::getSamplerParameterf(WebGLSampler s, GLenum pname) {
+    GLfloat v = 0;
+    glGetSamplerParameterfv(s.id, pname, &v);
+    return v;
+}
+
+GLboolean WebGL2RenderingContext::isSampler(WebGLSampler s) {
+    if (!s.id || !validSamplers_.count(s.id)) return GL_FALSE;
+    return glIsSampler(s.id);
+}
+
+// ===========================================================================
+// Sync objects
+// ===========================================================================
+
+WebGLSync WebGL2RenderingContext::fenceSync(GLenum condition, GLbitfield flags) {
+    GLsync sync = glFenceSync(condition, flags);
+    if (sync) validSyncs_.insert(sync);
+    return {sync};
+}
+
+void WebGL2RenderingContext::deleteSync(WebGLSync s) {
+    if (s.sync && validSyncs_.erase(s.sync)) {
+        glDeleteSync(s.sync);
+    }
+}
+
+GLenum WebGL2RenderingContext::clientWaitSync(WebGLSync s, GLbitfield flags, double timeoutNs) {
+    if (!s.sync || !validSyncs_.count(s.sync)) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return 0x911D; // WAIT_FAILED
+    }
+    // WebGL2: timeouts above MAX_CLIENT_WAIT_TIMEOUT_WEBGL are an error, not
+    // an unbounded block of the JS thread.
+    if (timeoutNs < 0 || timeoutNs > kMaxClientWaitTimeoutNs) {
+        setSyntheticError(timeoutNs < 0 ? GL_INVALID_VALUE : GL_INVALID_OPERATION);
+        return 0x911D; // WAIT_FAILED
+    }
+    return glClientWaitSync(s.sync, flags, (GLuint64)timeoutNs);
+}
+
+void WebGL2RenderingContext::waitSync(WebGLSync s, GLbitfield flags, double timeoutNs) {
+    if (!s.sync || !validSyncs_.count(s.sync)) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    // WebGL2 mandates flags == 0 and timeout == TIMEOUT_IGNORED (-1).
+    if (flags != 0 || timeoutNs != -1.0) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return;
+    }
+    glWaitSync(s.sync, 0, GL_TIMEOUT_IGNORED);
+}
+
+GLint WebGL2RenderingContext::getSyncParameter(WebGLSync s, GLenum pname) {
+    if (!s.sync || !validSyncs_.count(s.sync)) return 0;
+    GLint v = 0;
+    GLsizei len = 0;
+    glGetSynciv(s.sync, pname, 1, &len, &v);
+    return v;
+}
+
+GLboolean WebGL2RenderingContext::isSync(WebGLSync s) {
+    if (!s.sync || !validSyncs_.count(s.sync)) return GL_FALSE;
+    return glIsSync(s.sync);
+}
+
+// ===========================================================================
+// Query objects
+// ===========================================================================
+
+// ANY_SAMPLES_PASSED_CONSERVATIVE is GL 4.3 / ARB_ES3_compatibility (glad
+// here is generated for 3.3 core + extensions); without the extension answer
+// it with the exact ANY_SAMPLES_PASSED query (an exact answer is a valid
+// conservative one).
+static GLenum mapQueryTarget(GLenum target) {
+    if (target == 0x8D6A /* ANY_SAMPLES_PASSED_CONSERVATIVE */ &&
+        !GLAD_GL_ARB_ES3_compatibility) {
+        return 0x8C2F; // ANY_SAMPLES_PASSED
+    }
+    return target;
+}
+
+WebGLQuery WebGL2RenderingContext::createQuery() {
+    GLuint id = 0;
+    glGenQueries(1, &id);
+    validQueries_.insert(id);
+    return {id};
+}
+
+void WebGL2RenderingContext::deleteQuery(WebGLQuery q) {
+    if (q.id && validQueries_.erase(q.id)) {
+        glDeleteQueries(1, &q.id);
+    }
+}
+
+void WebGL2RenderingContext::beginQuery(GLenum target, WebGLQuery q) {
+    if (!q.id || !validQueries_.count(q.id)) {
+        // WebGL2: beginQuery with a deleted/invalid query object.
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    glBeginQuery(mapQueryTarget(target), q.id);
+}
+
+void WebGL2RenderingContext::endQuery(GLenum target) {
+    glEndQuery(mapQueryTarget(target));
+}
+
+GLuint WebGL2RenderingContext::getQueryParameteru(WebGLQuery q, GLenum pname) {
+    if (!q.id || !validQueries_.count(q.id)) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return 0;
+    }
+    // QUERY_RESULT_AVAILABLE never stalls; QUERY_RESULT is only meaningful
+    // once available (WebGL apps must poll availability first).
+    GLuint v = 0;
+    glGetQueryObjectuiv(q.id, pname, &v);
+    return v;
+}
+
+GLboolean WebGL2RenderingContext::isQuery(WebGLQuery q) {
+    if (!q.id || !validQueries_.count(q.id)) return GL_FALSE;
+    return glIsQuery(q.id);
 }
 
 // ===========================================================================
@@ -919,6 +1095,11 @@ void WebGL2RenderingContext::restoreState() {
     // default VAO (0) is active, where EAB is context-level state.
     if (sVAO_ == 0) {
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, sElementBuf_);
+    }
+
+    // Restore sampler objects (unbound around compositing in unbindCanvasFBO)
+    for (unsigned u = 0; u < 32; u++) {
+        if (sSampler_[u]) glBindSampler(u, sSampler_[u]);
     }
 
     // Restore texture bindings — unit 0 is the most commonly modified

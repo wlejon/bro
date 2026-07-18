@@ -20,6 +20,9 @@ extern JSClassID js_webgl_framebuffer_class_id;
 extern JSClassID js_webgl_renderbuffer_class_id;
 extern JSClassID js_webgl_vao_class_id;
 extern JSClassID js_webgl_uniform_loc_class_id;
+extern JSClassID js_webgl_sampler_class_id;
+extern JSClassID js_webgl_query_class_id;
+extern JSClassID js_webgl_sync_class_id;
 
 // --- Extract C++ context from JS this value ---
 inline webgl::WebGL2RenderingContext* getCtx(JSValueConst this_val) {
@@ -46,6 +49,9 @@ JSValue wrapFramebuffer(JSContext* ctx, webgl::WebGLFramebuffer fbo);
 JSValue wrapRenderbuffer(JSContext* ctx, webgl::WebGLRenderbuffer rbo);
 JSValue wrapVAO(JSContext* ctx, webgl::WebGLVertexArrayObject vao);
 JSValue wrapUniformLocation(JSContext* ctx, webgl::WebGLUniformLocation loc);
+JSValue wrapSampler(JSContext* ctx, webgl::WebGLSampler s);
+JSValue wrapQuery(JSContext* ctx, webgl::WebGLQuery q);
+JSValue wrapSync(JSContext* ctx, webgl::WebGLSync s);
 
 // Unwrap WebGL objects from JS values (returns id=0 if null/undefined)
 inline webgl::WebGLBuffer unwrapBuffer(JSValueConst val) {
@@ -88,6 +94,24 @@ inline webgl::WebGLVertexArrayObject unwrapVAO(JSValueConst val) {
     if (JS_IsNull(val) || JS_IsUndefined(val)) return {0};
     auto* p = static_cast<webgl::WebGLVertexArrayObject*>(JS_GetOpaque(val, js_webgl_vao_class_id));
     return p ? *p : webgl::WebGLVertexArrayObject{0};
+}
+
+inline webgl::WebGLSampler unwrapSampler(JSValueConst val) {
+    if (JS_IsNull(val) || JS_IsUndefined(val)) return {0};
+    auto* p = static_cast<webgl::WebGLSampler*>(JS_GetOpaque(val, js_webgl_sampler_class_id));
+    return p ? *p : webgl::WebGLSampler{0};
+}
+
+inline webgl::WebGLQuery unwrapQuery(JSValueConst val) {
+    if (JS_IsNull(val) || JS_IsUndefined(val)) return {0};
+    auto* p = static_cast<webgl::WebGLQuery*>(JS_GetOpaque(val, js_webgl_query_class_id));
+    return p ? *p : webgl::WebGLQuery{0};
+}
+
+inline webgl::WebGLSync unwrapSync(JSValueConst val) {
+    if (JS_IsNull(val) || JS_IsUndefined(val)) return {nullptr};
+    auto* p = static_cast<webgl::WebGLSync*>(JS_GetOpaque(val, js_webgl_sync_class_id));
+    return p ? *p : webgl::WebGLSync{nullptr};
 }
 
 inline webgl::WebGLUniformLocation unwrapUniformLocation(JSValueConst val) {
@@ -212,5 +236,8 @@ extern const int webgl2_framebuffer_funcs_count;
 
 extern const JSCFunctionListEntry webgl2_query_funcs[];
 extern const int webgl2_query_funcs_count;
+
+extern const JSCFunctionListEntry webgl2_object_funcs[];
+extern const int webgl2_object_funcs_count;
 
 } // namespace bro::js::webgl2

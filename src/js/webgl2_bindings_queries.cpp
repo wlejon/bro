@@ -109,6 +109,7 @@ static JSValue js_getParameter(JSContext* ctx, JSValueConst this_val, int argc, 
         case 0x8069: // GL_TEXTURE_BINDING_2D
         case 0x8514: // GL_TEXTURE_BINDING_CUBE_MAP
         case 0x85B5: // GL_VERTEX_ARRAY_BINDING
+        case 0x8919: // GL_SAMPLER_BINDING
             // three.js probes these but we can't return wrapped objects from here.
             // Return null (unbound) — three.js handles this gracefully.
             return JS_NULL;
@@ -117,6 +118,11 @@ static JSValue js_getParameter(JSContext* ctx, JSValueConst this_val, int argc, 
         case 0x86A3: { // GL_COMPRESSED_TEXTURE_FORMATS
             return JS_NewArray(ctx);
         }
+
+        // WebGL-only sync limit — not a GL enum; answered from the context's
+        // fixed cap (nanoseconds, exceeds int32).
+        case 0x9247: // MAX_CLIENT_WAIT_TIMEOUT_WEBGL
+            return JS_NewFloat64(ctx, webgl::WebGL2RenderingContext::kMaxClientWaitTimeoutNs);
 
         // Boolean parameters
         case 0x0BE2: // GL_BLEND

@@ -28,6 +28,9 @@ namespace webgl2 {
     JSClassID js_webgl_renderbuffer_class_id = 0;
     JSClassID js_webgl_vao_class_id = 0;
     JSClassID js_webgl_uniform_loc_class_id = 0;
+    JSClassID js_webgl_sampler_class_id = 0;
+    JSClassID js_webgl_query_class_id = 0;
+    JSClassID js_webgl_sync_class_id = 0;
 }
 
 // ===========================================================================
@@ -49,6 +52,9 @@ IMPL_WRAP(Framebuffer, bro::webgl::WebGLFramebuffer, js_webgl_framebuffer_class_
 IMPL_WRAP(Renderbuffer, bro::webgl::WebGLRenderbuffer, js_webgl_renderbuffer_class_id)
 IMPL_WRAP(VAO, bro::webgl::WebGLVertexArrayObject, js_webgl_vao_class_id)
 IMPL_WRAP(UniformLocation, bro::webgl::WebGLUniformLocation, js_webgl_uniform_loc_class_id)
+IMPL_WRAP(Sampler, bro::webgl::WebGLSampler, js_webgl_sampler_class_id)
+IMPL_WRAP(Query, bro::webgl::WebGLQuery, js_webgl_query_class_id)
+IMPL_WRAP(Sync, bro::webgl::WebGLSync, js_webgl_sync_class_id)
 
 #undef IMPL_WRAP
 
@@ -461,6 +467,34 @@ static const JSCFunctionListEntry webgl2_constants[] = {
     JS_PROP_INT32_DEF("INVALID_FRAMEBUFFER_OPERATION", 0x0506, 0),
     JS_PROP_INT32_DEF("CONTEXT_LOST_WEBGL", 0x9242, 0),
 
+    // Sampler objects
+    JS_PROP_INT32_DEF("SAMPLER_BINDING", 0x8919, 0),
+
+    // Sync objects
+    JS_PROP_INT32_DEF("OBJECT_TYPE", 0x9112, 0),
+    JS_PROP_INT32_DEF("SYNC_CONDITION", 0x9113, 0),
+    JS_PROP_INT32_DEF("SYNC_STATUS", 0x9114, 0),
+    JS_PROP_INT32_DEF("SYNC_FLAGS", 0x9115, 0),
+    JS_PROP_INT32_DEF("SYNC_FENCE", 0x9116, 0),
+    JS_PROP_INT32_DEF("SYNC_GPU_COMMANDS_COMPLETE", 0x9117, 0),
+    JS_PROP_INT32_DEF("UNSIGNALED", 0x9118, 0),
+    JS_PROP_INT32_DEF("SIGNALED", 0x9119, 0),
+    JS_PROP_INT32_DEF("ALREADY_SIGNALED", 0x911A, 0),
+    JS_PROP_INT32_DEF("TIMEOUT_EXPIRED", 0x911B, 0),
+    JS_PROP_INT32_DEF("CONDITION_SATISFIED", 0x911C, 0),
+    JS_PROP_INT32_DEF("WAIT_FAILED", 0x911D, 0),
+    JS_PROP_INT32_DEF("SYNC_FLUSH_COMMANDS_BIT", 0x00000001, 0),
+    JS_PROP_INT32_DEF("MAX_CLIENT_WAIT_TIMEOUT_WEBGL", 0x9247, 0),
+    JS_PROP_DOUBLE_DEF("TIMEOUT_IGNORED", -1.0, 0),
+
+    // Query objects
+    JS_PROP_INT32_DEF("CURRENT_QUERY", 0x8865, 0),
+    JS_PROP_INT32_DEF("QUERY_RESULT", 0x8866, 0),
+    JS_PROP_INT32_DEF("QUERY_RESULT_AVAILABLE", 0x8867, 0),
+    JS_PROP_INT32_DEF("ANY_SAMPLES_PASSED", 0x8C2F, 0),
+    JS_PROP_INT32_DEF("ANY_SAMPLES_PASSED_CONSERVATIVE", 0x8D6A, 0),
+    JS_PROP_INT32_DEF("TRANSFORM_FEEDBACK_PRIMITIVES_WRITTEN", 0x8C88, 0),
+
     JS_PROP_INT32_DEF("UNIFORM_BLOCK_DATA_SIZE", 0x8A40, 0),
     // getUniformBlockIndex returns this as an unsigned 4294967295 — the
     // constant must match (an int32 -1 would never compare equal in JS).
@@ -485,7 +519,8 @@ void WebGL2Bindings::install(JSContext* ctx) {
         .function_list(webgl2_shader_funcs, webgl2_shader_funcs_count)
         .function_list(webgl2_texture_funcs, webgl2_texture_funcs_count)
         .function_list(webgl2_framebuffer_funcs, webgl2_framebuffer_funcs_count)
-        .function_list(webgl2_query_funcs, webgl2_query_funcs_count);
+        .function_list(webgl2_query_funcs, webgl2_query_funcs_count)
+        .function_list(webgl2_object_funcs, webgl2_object_funcs_count);
     js_webgl2_ctx_class_id = qjsbind::class_id<WebGL2CtxTag>();
 
     // --- Register WebGL object classes (default delete-ptr finalizer) ---
@@ -512,6 +547,15 @@ void WebGL2Bindings::install(JSContext* ctx) {
 
     qjsbind::Class<bro::webgl::WebGLUniformLocation>(ctx, "WebGLUniformLocation", qjsbind::NoGlobal);
     js_webgl_uniform_loc_class_id = qjsbind::class_id<bro::webgl::WebGLUniformLocation>();
+
+    qjsbind::Class<bro::webgl::WebGLSampler>(ctx, "WebGLSampler", qjsbind::NoGlobal);
+    js_webgl_sampler_class_id = qjsbind::class_id<bro::webgl::WebGLSampler>();
+
+    qjsbind::Class<bro::webgl::WebGLQuery>(ctx, "WebGLQuery", qjsbind::NoGlobal);
+    js_webgl_query_class_id = qjsbind::class_id<bro::webgl::WebGLQuery>();
+
+    qjsbind::Class<bro::webgl::WebGLSync>(ctx, "WebGLSync", qjsbind::NoGlobal);
+    js_webgl_sync_class_id = qjsbind::class_id<bro::webgl::WebGLSync>();
 
     // --- three.js compatibility: expose WebGL2RenderingContext as a global constructor ---
     // three.js checks: typeof WebGL2RenderingContext !== "undefined"

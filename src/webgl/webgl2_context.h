@@ -102,6 +102,36 @@ public:
     void bindBufferRange(GLenum target, GLuint index, WebGLBuffer buf,
                          GLintptr offset, GLsizeiptr size);
 
+    // --- Sampler objects (WebGL2; ARB_sampler_objects, core in GL 3.3) ---
+    WebGLSampler createSampler();
+    void deleteSampler(WebGLSampler s);
+    void bindSampler(GLuint unit, WebGLSampler s);
+    void samplerParameteri(WebGLSampler s, GLenum pname, GLint param);
+    void samplerParameterf(WebGLSampler s, GLenum pname, GLfloat param);
+    GLint getSamplerParameteri(WebGLSampler s, GLenum pname);
+    GLfloat getSamplerParameterf(WebGLSampler s, GLenum pname);
+    GLboolean isSampler(WebGLSampler s);
+
+    // --- Sync objects (WebGL2; core since GL 3.2) ---
+    /// WebGL2 MAX_CLIENT_WAIT_TIMEOUT_WEBGL — clientWaitSync timeouts above
+    /// this (in nanoseconds) raise INVALID_OPERATION instead of blocking the
+    /// JS thread indefinitely.
+    static constexpr double kMaxClientWaitTimeoutNs = 1e9; // 1 second
+    WebGLSync fenceSync(GLenum condition, GLbitfield flags);
+    void deleteSync(WebGLSync s);
+    GLenum clientWaitSync(WebGLSync s, GLbitfield flags, double timeoutNs);
+    void waitSync(WebGLSync s, GLbitfield flags, double timeoutNs);
+    GLint getSyncParameter(WebGLSync s, GLenum pname);
+    GLboolean isSync(WebGLSync s);
+
+    // --- Query objects (WebGL2) ---
+    WebGLQuery createQuery();
+    void deleteQuery(WebGLQuery q);
+    void beginQuery(GLenum target, WebGLQuery q);
+    void endQuery(GLenum target);
+    GLuint getQueryParameteru(WebGLQuery q, GLenum pname);
+    GLboolean isQuery(WebGLQuery q);
+
     // --- VAO ---
     WebGLVertexArrayObject createVertexArray();
     void deleteVertexArray(WebGLVertexArrayObject vao);
@@ -273,6 +303,9 @@ private:
     std::unordered_set<GLuint> validFramebuffers_;
     std::unordered_set<GLuint> validRenderbuffers_;
     std::unordered_set<GLuint> validVAOs_;
+    std::unordered_set<GLuint> validSamplers_;
+    std::unordered_set<GLuint> validQueries_;
+    std::unordered_set<GLsync> validSyncs_;
 
     // pixelStorei state
     GLint unpackAlignment_ = 4;
@@ -306,6 +339,7 @@ private:
     GLuint sElementBuf_ = 0;
     GLenum sActiveTex_ = GL_TEXTURE0;
     GLuint sTex2D_[32] = {};      // per texture unit
+    GLuint sSampler_[32] = {};    // per texture unit (sampler objects)
     GLuint sFBO_ = 0;             // stores the raw GL id (canvasFBO_ for null)
     GLint sBlendSrcRGB_ = GL_ONE, sBlendDstRGB_ = GL_ZERO;
     GLint sBlendSrcA_ = GL_ONE, sBlendDstA_ = GL_ZERO;

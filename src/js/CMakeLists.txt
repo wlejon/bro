@@ -45,6 +45,7 @@ add_library(bro_js STATIC
     webgl2_bindings_textures.cpp
     webgl2_bindings_framebuffers.cpp
     webgl2_bindings_queries.cpp
+    webgl2_bindings_objects.cpp
     image_bindings.cpp
     imagebitmap_bindings.cpp
     video_bindings.cpp
