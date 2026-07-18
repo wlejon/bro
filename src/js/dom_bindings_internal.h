@@ -118,6 +118,9 @@ JSValue wrapLiveHTMLCollection(JSContext* ctx, bro::dom::Element* root,
                                const std::string& selector);
 JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node);
 bro::dom::Node* unwrapNode(JSContext* ctx, JSValueConst val);
+// Make a freed Text/Comment node's cached wrapper inert and drop it from
+// __bro_node_map. Called from fireNodeFreed for every non-element node.
+void invalidateNodeWrapper(JSContext* ctx, bro::dom::Node* node);
 
 // event_bindings.cpp
 JSValue wrapEvent(JSContext* ctx, const std::string& type, bro::dom::Element* target);

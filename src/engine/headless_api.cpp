@@ -287,6 +287,17 @@ void Engine::flush() {
         std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),
             [](auto& cs) { return cs->isDetached(); }),
         canvasScenes_.end());
+
+    // Destroy nodes queued for deferred free — the headless counterpart of the
+    // frame loop's drain (engine_frame.cpp), with the same structure-clean gate
+    // and, like it, placed after layout so the persistent layout tree's
+    // adapters no longer name any doomed node. Headless never drained before,
+    // so every removed node leaked for the life of the process AND the whole
+    // class of "JS wrapper outlives its node" bug was untestable here: the
+    // memory stayed valid, so a dangling wrapper read plausible data instead of
+    // crashing. Draining makes headless match the runtime that ships.
+    if (document_ && !document_->isStructureDirty())
+        document_->drainPendingFrees();
 }
 
 void Engine::advanceTime(double ms) {

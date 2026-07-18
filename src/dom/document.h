@@ -380,6 +380,10 @@ private:
     T* allocateNode(Args&&... args) {
         auto ptr = std::make_unique<T>(std::forward<Args>(args)...);
         T* raw = ptr.get();
+        // Every owned node knows its document: NodeHandle needs it to
+        // lifetime-check text/comment wrappers, and adoption needs it to
+        // retarget a subtree.
+        raw->setDocument(this);
         ownedNodes_[raw] = std::move(ptr);
         return raw;
     }

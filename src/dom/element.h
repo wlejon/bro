@@ -135,9 +135,7 @@ public:
     void markHoverScopeDirty();
     bool takeHoverScopeDirty() { bool d = hoverScopeDirty_; hoverScopeDirty_ = false; return d; }
 
-    // Owner document
-    void setDocument(Document* doc) { document_ = doc; }
-    Document* document() const { return document_; }
+    // Owner document — storage and accessors live on Node (see node.h).
 
     // Resolve a relative URL against the owning Document's basePath.
     // Absolute paths are returned unchanged. Kept on Element so callers
@@ -338,7 +336,6 @@ private:
     // "", not null) until removeAttribute("style") is called.
     bool hasStyleAttr_ = false;
     std::unordered_map<std::string, std::vector<uint64_t>> listeners_;
-    Document* document_ = nullptr;
     ShadowRoot* shadowRoot_ = nullptr;
     bool dirty_ = false;
     bool layoutDirty_ = false;

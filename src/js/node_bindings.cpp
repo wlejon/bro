@@ -1,4 +1,5 @@
 #include "js/dom_bindings_internal.h"
+#include "dom/node_handle.h"
 #include "util/log.h"
 
 #include <qjsbind/qjsbind.h>
@@ -138,19 +139,78 @@ JSValue wrapLiveHTMLCollection(JSContext* ctx, bro::dom::Element* root,
 // Generic Node wrapper (comment nodes, text nodes in tree ops)
 // ===========================================================================
 
+// A Text/Comment wrapper's opaque. Holding the raw Node* here is what used to
+// dangle: the wrapper is cached strongly in __bro_node_map (never collected),
+// while Document::freeNode + drainPendingFrees destroy the node underneath it —
+// fireNodeFreed only ever invalidated *element* wrappers. Any later `.data`,
+// `.length` or `.parentNode` then read a destroyed TextNode. So the opaque is
+// now a generation-checked handle: it resolves to null once the node (or its
+// whole document) is gone, and every accessor already takes a safe default on
+// null, giving the same inert behaviour an invalidated element wrapper has.
+//
+// `unowned` covers the one path that allocates a node outside any document
+// (splitText with no document in scope). Such nodes are never freed, so the
+// raw pointer stays valid for the life of the runtime.
+struct NodeRef {
+    bro::dom::NodeHandle<bro::dom::Node> handle;
+    bro::dom::Node* unowned = nullptr;
+
+    bro::dom::Node* get() const { return unowned ? unowned : handle.get(); }
+};
+
+static void js_node_finalizer(JSRuntime* /*rt*/, JSValue val)
+{
+    delete static_cast<NodeRef*>(JS_GetOpaque(val, js_node_class_id));
+}
+
 static JSClassDef js_node_class = {
     "Node",
-    nullptr,  // finalizer — Node lifetime managed by Document
+    js_node_finalizer,  // frees the NodeRef; the Node itself is Document-owned
     nullptr, nullptr, nullptr
 };
 
+// Resolve the Node behind a Text/Comment wrapper, or null if it has been freed.
+// Every binding below funnels through this — never JS_GetOpaque directly.
+static bro::dom::Node* nodeSelf(JSValueConst val)
+{
+    auto* ref = static_cast<NodeRef*>(JS_GetOpaque(val, js_node_class_id));
+    return ref ? ref->get() : nullptr;
+}
+
 bro::dom::Node* unwrapNode(JSContext* ctx, JSValueConst val)
 {
+    (void)ctx;
     void* ptr = JS_GetOpaque(val, js_element_class_id);
     if (ptr) return static_cast<bro::dom::Node*>(static_cast<bro::dom::Element*>(ptr));
-    ptr = JS_GetOpaque(val, js_node_class_id);
-    if (ptr) return static_cast<bro::dom::Node*>(ptr);
-    return nullptr;
+    return nodeSelf(val);
+}
+
+// Drop a freed Text/Comment node's cached wrapper: make it inert now (the
+// handle would resolve to null anyway, but the entry must also leave the map or
+// __bro_node_map grows without bound — every text node ever wrapped and
+// replaced used to stay in it forever). Called from fireNodeFreed.
+void invalidateNodeWrapper(JSContext* ctx, bro::dom::Node* node)
+{
+    if (!node) return;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue nodeMap = JS_GetPropertyStr(ctx, global, "__bro_node_map");
+    if (!JS_IsUndefined(nodeMap) && !JS_IsNull(nodeMap)) {
+        std::string key = std::to_string(node->nodeId());
+        JSValue wrapper = JS_GetPropertyStr(ctx, nodeMap, key.c_str());
+        if (!JS_IsUndefined(wrapper) && !JS_IsNull(wrapper)) {
+            if (auto* ref = static_cast<NodeRef*>(
+                    JS_GetOpaque(wrapper, js_node_class_id))) {
+                ref->handle.reset();
+                ref->unowned = nullptr;
+            }
+            JS_FreeValue(ctx, wrapper);
+        }
+        JSAtom atom = JS_NewAtom(ctx, key.c_str());
+        JS_DeleteProperty(ctx, nodeMap, atom, 0);
+        JS_FreeAtom(ctx, atom);
+    }
+    JS_FreeValue(ctx, nodeMap);
+    JS_FreeValue(ctx, global);
 }
 
 JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
@@ -181,7 +241,14 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         JS_FreeValue(ctx, global);
         return obj;
     }
-    JS_SetOpaque(obj, node);
+    {
+        auto* ref = new NodeRef();
+        if (auto* owner = node->document())
+            ref->handle.assign(owner, node);
+        else
+            ref->unowned = node;
+        JS_SetOpaque(obj, ref);
+    }
 
     // Set basic DOM properties
     JS_SetPropertyStr(ctx, obj, "nodeType",
@@ -194,7 +261,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         // length getter
         JSValue getLen = JS_NewCFunction2(ctx, [](JSContext* cx,
             JSValueConst this_val, int, JSValueConst*) -> JSValue {
-            auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            auto* nd = nodeSelf(this_val);
             if (!nd) return JS_NewInt32(cx, 0);
             if (nd->nodeType() == bro::dom::NodeType::Text)
                 return JS_NewInt32(cx, (int32_t)static_cast<bro::dom::TextNode*>(nd)->length());
@@ -209,7 +276,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         // data getter/setter
         JSValue getData = JS_NewCFunction2(ctx, [](JSContext* cx,
             JSValueConst this_val, int, JSValueConst*) -> JSValue {
-            auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            auto* nd = nodeSelf(this_val);
             if (!nd) return JS_NULL;
             if (nd->nodeType() == bro::dom::NodeType::Text)
                 return JS_NewString(cx, static_cast<bro::dom::TextNode*>(nd)->data().c_str());
@@ -220,7 +287,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         JSValue setData = JS_NewCFunction2(ctx, [](JSContext* cx,
             JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
             if (argc < 1) return JS_UNDEFINED;
-            auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            auto* nd = nodeSelf(this_val);
             if (!nd) return JS_UNDEFINED;
             const char* s = JS_ToCString(cx, argv[0]);
             std::string v(s ? s : "");
@@ -251,7 +318,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         JS_SetPropertyStr(ctx, obj, "substringData",
             JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst this_val,
                 int argc, JSValueConst* argv) -> JSValue {
-                auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+                auto* nd = nodeSelf(this_val);
                 if (!nd || argc < 2) return JS_NewString(cx, "");
                 int32_t off = 0, cnt = 0;
                 JS_ToInt32(cx, &off, argv[0]);
@@ -268,7 +335,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         JS_SetPropertyStr(ctx, obj, "appendData",
             JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst this_val,
                 int argc, JSValueConst* argv) -> JSValue {
-                auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+                auto* nd = nodeSelf(this_val);
                 if (!nd || argc < 1) return JS_UNDEFINED;
                 const char* s = JS_ToCString(cx, argv[0]);
                 std::string v(s ? s : "");
@@ -295,7 +362,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         JS_SetPropertyStr(ctx, obj, "insertData",
             JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst this_val,
                 int argc, JSValueConst* argv) -> JSValue {
-                auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+                auto* nd = nodeSelf(this_val);
                 if (!nd || argc < 2) return JS_UNDEFINED;
                 int32_t off = 0;
                 JS_ToInt32(cx, &off, argv[0]);
@@ -324,7 +391,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         JS_SetPropertyStr(ctx, obj, "deleteData",
             JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst this_val,
                 int argc, JSValueConst* argv) -> JSValue {
-                auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+                auto* nd = nodeSelf(this_val);
                 if (!nd || argc < 2) return JS_UNDEFINED;
                 int32_t off = 0, cnt = 0;
                 JS_ToInt32(cx, &off, argv[0]);
@@ -351,7 +418,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         JS_SetPropertyStr(ctx, obj, "replaceData",
             JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst this_val,
                 int argc, JSValueConst* argv) -> JSValue {
-                auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+                auto* nd = nodeSelf(this_val);
                 if (!nd || argc < 3) return JS_UNDEFINED;
                 int32_t off = 0, cnt = 0;
                 JS_ToInt32(cx, &off, argv[0]);
@@ -391,7 +458,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         // the C++ TextNode and triggers re-layout.
         JSValue getNodeValue = JS_NewCFunction2(ctx, [](JSContext* cx,
             JSValueConst this_val, int, JSValueConst*) -> JSValue {
-            auto* n = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            auto* n = nodeSelf(this_val);
             if (!n || n->nodeType() != bro::dom::NodeType::Text) return JS_NULL;
             auto* tn = static_cast<bro::dom::TextNode*>(n);
             return JS_NewString(cx, tn->data().c_str());
@@ -400,7 +467,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         JSValue setNodeValue = JS_NewCFunction2(ctx, [](JSContext* cx,
             JSValueConst this_val, int argc, JSValueConst* argv) -> JSValue {
             if (argc < 1) return JS_UNDEFINED;
-            auto* n = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            auto* n = nodeSelf(this_val);
             if (!n || n->nodeType() != bro::dom::NodeType::Text) return JS_UNDEFINED;
             auto* tn = static_cast<bro::dom::TextNode*>(n);
             const char* str = JS_ToCString(cx, argv[0]);
@@ -435,7 +502,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         // getter/setter functions (DefinePropertyGetSet takes ownership)
         JSValue getTC = JS_NewCFunction2(ctx, [](JSContext* cx,
             JSValueConst this_val, int, JSValueConst*) -> JSValue {
-            auto* n = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            auto* n = nodeSelf(this_val);
             if (!n || n->nodeType() != bro::dom::NodeType::Text) return JS_NULL;
             auto* tn = static_cast<bro::dom::TextNode*>(n);
             return JS_NewString(cx, tn->data().c_str());
@@ -458,7 +525,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         JS_SetPropertyStr(ctx, obj, "splitText",
             JS_NewCFunction(ctx, [](JSContext* cx, JSValueConst this_val,
                 int argc, JSValueConst* argv) -> JSValue {
-                auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+                auto* nd = nodeSelf(this_val);
                 if (!nd || nd->nodeType() != bro::dom::NodeType::Text || argc < 1)
                     return JS_NULL;
                 auto* tn = static_cast<bro::dom::TextNode*>(nd);
@@ -501,7 +568,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         // wholeText getter
         JSValue getWholeText = JS_NewCFunction2(ctx, [](JSContext* cx,
             JSValueConst this_val, int, JSValueConst*) -> JSValue {
-            auto* nd = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            auto* nd = nodeSelf(this_val);
             if (!nd || nd->nodeType() != bro::dom::NodeType::Text) return JS_NewString(cx, "");
             std::string result;
             // Collect contiguous text nodes
@@ -530,7 +597,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
     {
         JSValue getParent = JS_NewCFunction2(ctx, [](JSContext* cx,
             JSValueConst this_val, int, JSValueConst*) -> JSValue {
-            auto* n = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            auto* n = nodeSelf(this_val);
             if (!n || !n->parentNode()) return JS_NULL;
             if (n->parentNode()->nodeType() == bro::dom::NodeType::Element)
                 return DomBindings::wrapElement(cx, static_cast<bro::dom::Element*>(n->parentNode()));
@@ -539,7 +606,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
 
         JSValue getNextSibling = JS_NewCFunction2(ctx, [](JSContext* cx,
             JSValueConst this_val, int, JSValueConst*) -> JSValue {
-            auto* n = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            auto* n = nodeSelf(this_val);
             if (!n || !n->parentNode()) return JS_NULL;
             auto& kids = n->parentNode()->childNodes();
             for (size_t i = 0; i < kids.size(); ++i) {
@@ -551,7 +618,7 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
 
         JSValue getPrevSibling = JS_NewCFunction2(ctx, [](JSContext* cx,
             JSValueConst this_val, int, JSValueConst*) -> JSValue {
-            auto* n = static_cast<bro::dom::Node*>(JS_GetOpaque(this_val, js_node_class_id));
+            auto* n = nodeSelf(this_val);
             if (!n || !n->parentNode()) return JS_NULL;
             auto& kids = n->parentNode()->childNodes();
             for (size_t i = 0; i < kids.size(); ++i) {

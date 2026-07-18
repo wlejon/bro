@@ -313,7 +313,18 @@ static void fireSelectionChangeOnDocument(bro::dom::Document* doc) {
 // reference resolves to null instead of dereferencing freed memory, and
 // removes the __bro_elem_map entry so the orphan sweep never sees it.
 static void fireNodeFreed(bro::dom::Document* doc, bro::dom::Node* node) {
-    if (!node || node->nodeType() != bro::dom::NodeType::Element) return;
+    if (!node) return;
+    if (node->nodeType() != bro::dom::NodeType::Element) {
+        // Text/comment wrappers live in __bro_node_map, not __bro_elem_map, and
+        // are cached strongly — so without this they outlived the node and the
+        // next `.data`/`.length` access read destroyed memory. Their opaque is a
+        // generation-checked handle so they would go inert on their own, but the
+        // map entry still has to go or the cache grows forever.
+        auto it = s_doc_to_ctx.find(doc);
+        if (it != s_doc_to_ctx.end() && it->second)
+            invalidateNodeWrapper(it->second, node);
+        return;
+    }
     // Drop the element's cached wrapper pointer before the node is destroyed so
     // no fast-path wrap can hand back a wrapper that's about to be invalidated.
     static_cast<bro::dom::Element*>(node)->setJsWrapper(nullptr);
