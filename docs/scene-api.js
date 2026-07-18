@@ -423,6 +423,8 @@ class SceneGraph {
    * @param {Mesh} [opts.data] - a Mesh instance (takes priority over mesh/positions)
    * @param {string} [opts.mesh="box"] - primitive type (ignored if data or positions provided)
    * @param {string} [opts.name]
+   * @param {boolean} [opts.visible=true] - start hidden with false; omit to
+   *   keep the default rather than forcing either state
    * @param {number} [opts.x=0] - position X
    * @param {number} [opts.y=0] - position Y
    * @param {number} [opts.z=0] - position Z
@@ -831,11 +833,16 @@ class SceneGraph {
 
   /**
    * The active camera node, or null while the imperative setCamera() view is
-   * in effect (or after the active node was destroyed). Read-only — switch
-   * with setActiveCamera().
+   * in effect (or after the active node was destroyed). Writable — assigning
+   * is equivalent to setActiveCamera(), null included.
+   *
+   * Node wrappers have stable identity, so this compares equal to the node you
+   * activated: `scene.activeCamera === myCam` is true, and scene nodes work as
+   * Set/Map keys and with indexOf. No need to compare by .name.
    * @type {SceneNode|null}
    */
   get activeCamera() {}
+  set activeCamera(cameraNode) {}
 
   /**
    * Bind the 3D audio listener to this scene's camera. While bound, the
@@ -1365,6 +1372,16 @@ class SceneNode {
   /** Rotation around Z axis in radians. */
   get rotationZ() {}
   set rotationZ(radians) {}
+
+  /**
+   * Whole-node scale. Reads back as [x, y, z]; assign a uniform number or a
+   * per-axis array (a short array leaves the remaining axes alone). Same
+   * semantics as createMesh's `scale` option, and always consistent with
+   * scaleX/scaleY/scaleZ below.
+   * @type {number[]|number}
+   */
+  get scale() {}
+  set scale(value) {}
 
   /** Scale along X axis (default 1). */
   get scaleX() {}
@@ -2042,6 +2059,17 @@ class SceneNode {
   set emissive(value) {}
 
   /**
+   * Node colour. On a MeshNode (skinned included) this is the material albedo
+   * — the same channel createMesh's `color` option writes — and reads back as
+   * [r,g,b,a]. On a LightNode it is the light's [r,g,b] linear colour. Assign
+   * a CSS string or an [r,g,b] / [r,g,b,a] array; a mesh keeps its existing
+   * alpha unless the value supplies a fourth component. Returns undefined on
+   * node types that have no colour.
+   */
+  get color() {}
+  set color(rgbOrCssString) {}
+
+  /**
    * Install a discrete LOD chain (plain MeshNode only). Each frame the
    * renderer picks the first level whose `maxDist` exceeds the camera
    * distance (measured to the node's world origin, once per frame); beyond
@@ -2083,10 +2111,6 @@ class SceneNode {
   /** [x,y,z] direction vector (directional/spot lights). */
   get direction() {}
   set direction(xyz) {}
-
-  /** [r,g,b] linear color (LightNode only; on other nodes returns undefined). */
-  get color() {}
-  set color(rgbOrCssString) {}
 
   /** Radiance multiplier. */
   get intensity() {}

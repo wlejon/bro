@@ -1329,17 +1329,17 @@ static JSValue js_audioctx_decodeAudioFile(JSContext* ctx, JSValueConst this_val
     auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
     if (!d || argc < 1) return JS_NULL;
 
-    const char* path = JS_ToCString(ctx, argv[0]);
-    if (!path) return JS_NULL;
+    const char* rawPath = JS_ToCString(ctx, argv[0]);
+    if (!rawPath) return JS_NULL;
+    std::string path = resolveAssetPath(rawPath);
+    JS_FreeCString(ctx, rawPath);
 
-    broaudio::AudioFileData data = broaudio::loadAudioFile(path);
+    broaudio::AudioFileData data = broaudio::loadAudioFile(path.c_str());
     if (!data.valid()) {
         if (!data.error.empty())
-            LOG_ERROR("decodeAudioFile: %s: %s", path, data.error.c_str());
-        JS_FreeCString(ctx, path);
+            LOG_ERROR("decodeAudioFile: %s: %s", path.c_str(), data.error.c_str());
         return JS_NULL;
     }
-    JS_FreeCString(ctx, path);
 
     const float* outSamples = data.samples.data();
     int outFrames = data.numFrames;

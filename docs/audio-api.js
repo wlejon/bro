@@ -577,7 +577,8 @@ class AudioContext {
    * Decodes the WHOLE file into RAM (capped at ~200 MB decoded). For big
    * files — long music tracks, ambience beds — use createStreamFromFile,
    * which disk-streams with constant memory.
-   * @param {string} path - file path
+   * @param {string} path - mount path ("/app/assets/hit.ogg"), a path
+   *   relative to the app directory, or an absolute filesystem path
    * @returns {number} clipId, or -1 on failure
    */
   createClipFromFile(path) {}
@@ -590,7 +591,8 @@ class AudioContext {
    *   const clipId = await ctx.createClipFromFileAsync('music/track.mp3');
    *   ctx.playClip(clipId);
    *
-   * @param {string} path - file path
+   * @param {string} path - mount path ("/app/assets/hit.ogg"), a path
+   *   relative to the app directory, or an absolute filesystem path
    * @returns {Promise<number>} resolves with the clipId; rejects with an
    *   Error whose message carries the actionable decode failure (corrupt
    *   stream, unsupported codec, size cap exceeded, unreadable file)
@@ -612,7 +614,8 @@ class AudioContext {
    * Decode an audio file from disk. Same format support and resampling as
    * decodeAudioData, but reads from a file path. Returns the decoded samples
    * for use in the clip editor or other processing.
-   * @param {string} path - file path
+   * @param {string} path - mount path ("/app/assets/hit.ogg"), a path
+   *   relative to the app directory, or an absolute filesystem path
    * @returns {?{samples: Float32Array, channels: number, sampleRate: number, numFrames: number}}
    *          decoded audio data, or null on failure
    */
@@ -793,7 +796,8 @@ class AudioContext {
    *   // ... poll ctx.getStreamStats(s).finished, then:
    *   ctx.closeStream(s);
    *
-   * @param {string} path - file path
+   * @param {string} path - mount path ("/app/assets/hit.ogg"), a path
+   *   relative to the app directory, or an absolute filesystem path
    * @param {{ringFrames?: number, prebufferFrames?: number, loop?: boolean,
    *          gain?: number}} [options] - ring capacity (default ~2 s) and
    *   prebuffer (default ~500 ms) in ENGINE-rate frames, initial loop/gain
