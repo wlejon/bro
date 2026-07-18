@@ -17,6 +17,7 @@
 #include "util/log.h"
 #include "layout/box.h"
 #include "layout/skia_text_metrics.h"
+#include "layout/element_ref_adapter.h"
 #include "render/renderer.h"
 #include "dom/document.h"
 #include "dom/element.h"
@@ -103,6 +104,72 @@ void Engine::syncIframes() {
         if (iframeDocForElement(f)) iframeLoadFailed_.erase(f);
         else iframeLoadFailed_[f] = src;
     }
+}
+
+// Catch a sub-document up with its <iframe> element's current content box.
+// The box was previously refreshed only in recordIframeLayers(), and only for
+// layout — the media viewport stayed frozen at whatever the element measured
+// when the sub-doc was created, so resizing an <iframe> never re-evaluated the
+// sub-document's CSS @media rules or its realm's matchMedia lists. This is the
+// iframe counterpart of syncWindowHostBox().
+void Engine::syncIframeBox(IframeDoc& d) {
+    if (!d.element || !d.document) return;
+    auto& lb = d.element->layoutBox();
+    // A not-yet-laid-out element measures 0; keep the creation-time fallback
+    // rather than collapsing the sub-document to nothing.
+    if (lb.contentRect.width <= 0 || lb.contentRect.height <= 0) return;
+    int w = std::max(1, static_cast<int>(lb.contentRect.width));
+    int h = std::max(1, static_cast<int>(lb.contentRect.height));
+    if (w == d.boxW && h == d.boxH) return;
+    d.boxW = w;
+    d.boxH = h;
+
+    d.document->setMediaViewport(static_cast<float>(w), static_cast<float>(h));
+    d.document->markDirty();
+
+    // Restyle + re-lay-out the sub-document here rather than waiting for the
+    // next record pass. setMediaViewport rebuilt the cascade and left a restyle
+    // pending; matchMedia delivery is gated on that pending flag, so a headless
+    // flush() (which never records iframe layers) would otherwise never see the
+    // change events. resolveStyles() consumes the flag.
+    if (textMetrics_) {
+        layout::ElementRefAdapter::setHoveredElement(d.hoveredElement);
+        d.document->resolveStyles();
+        d.document->performLayout(static_cast<float>(w), static_cast<float>(h),
+                                  *textMetrics_);
+        // Put the thread-local back on the host document's target — the next
+        // host resolveStyles would do it anyway, but a sub-doc pass must not
+        // leave :hover pointing into another document in between.
+        layout::ElementRefAdapter::setHoveredElement(hoveredElement_.get());
+    }
+
+    if (!d.jsCtx) return;
+    // Per-realm innerWidth/innerHeight + a 'resize' event — the same bridge the
+    // app realm gets in handleResize() and a secondary window gets in
+    // syncWindowHostBox().
+    JSValue global = JS_GetGlobalObject(d.jsCtx);
+    JS_SetPropertyStr(d.jsCtx, global, "innerWidth", JS_NewInt32(d.jsCtx, w));
+    JS_SetPropertyStr(d.jsCtx, global, "innerHeight", JS_NewInt32(d.jsCtx, h));
+    JSValue dispatch = JS_GetPropertyStr(d.jsCtx, global,
+                                         "__bro_dispatch_window_event");
+    if (JS_IsFunction(d.jsCtx, dispatch)) {
+        JSValue evtType = JS_NewString(d.jsCtx, "resize");
+        JSValue evt = JS_NewObject(d.jsCtx);
+        JS_SetPropertyStr(d.jsCtx, evt, "type", JS_NewString(d.jsCtx, "resize"));
+        JS_SetPropertyStr(d.jsCtx, evt, "target", JS_DupValue(d.jsCtx, global));
+        JSValue dArgs[2] = {evtType, evt};
+        JSValue ret = JS_Call(d.jsCtx, dispatch, global, 2, dArgs);
+        JS_FreeValue(d.jsCtx, ret);
+        JS_FreeValue(d.jsCtx, evtType);
+        JS_FreeValue(d.jsCtx, evt);
+    }
+    JS_FreeValue(d.jsCtx, dispatch);
+    JS_FreeValue(d.jsCtx, global);
+    if (jsRuntime_) jsRuntime_->executePendingJobs();
+}
+
+void Engine::syncAllIframeBoxes() {
+    for (auto& d : iframeDocs_) syncIframeBox(*d);
 }
 
 void Engine::createIframeDoc(dom::Element* el, const std::string& srcAttr) {

@@ -819,6 +819,12 @@ void Engine::run() {
                             jsRuntime_->getContext(), std::move(fin));
                 }
 
+                // An <iframe> element resized by layout this frame moves its
+                // sub-document's media viewport with it. Done before the
+                // delivery below so the sub-doc realm's change events land on
+                // the same frame as the app realm's, not one frame later.
+                syncAllIframeBoxes();
+
                 // matchMedia change events — the layout pass above resolved
                 // styles against any new media context, so listeners observe
                 // a consistent world. Per-realm generation gate makes this a

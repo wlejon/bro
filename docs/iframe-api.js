@@ -36,6 +36,12 @@
 //   <iframe id="stage" src="./project/" width="640" height="480"></iframe>
 //
 //   iframe { border: 2px solid #444; border-radius: 8px; }
+//
+// The element's CONTENT BOX is the sub-document's viewport, and the
+// sub-document tracks it: resizing the element re-lays-out the sub-document,
+// re-evaluates its CSS @media rules, refreshes innerWidth/innerHeight in its
+// realm, and fires 'resize' there (plus 'change' on any matchMedia list whose
+// state flipped). See docs/matchmedia-api.js.
 
 const frame = document.querySelector('#stage');
 

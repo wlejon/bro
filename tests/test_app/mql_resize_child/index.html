@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head><style>
+  html, body { margin: 0; padding: 0; height: 100%; }
+  #css { height: 50%; background: rgb(200, 0, 0); }   /* narrow default */
+  #js  { height: 50%; background: rgb(60, 60, 60); }  /* no change seen yet */
+  /* Re-evaluated only if the sub-document's media viewport tracks the
+     <iframe> element's content box. Frozen viewport => stays red forever. */
+  @media (min-width: 300px) { #css { background: rgb(0, 0, 200); } }
+</style></head>
+<body>
+<div id="css"></div>
+<div id="js"></div>
+<script>
+// Bottom strip reports what matchMedia's `change` event delivered, so the two
+// halves independently prove the CSS side and the matchMedia side.
+var mql = matchMedia('(min-width: 300px)');
+var js = document.getElementById('js');
+var changes = 0;
+mql.addEventListener('change', function (e) {
+  changes++;
+  // Green once a change with matches=true arrives; magenta if a change arrives
+  // reporting matches=false (so a spurious/backwards event is visible too).
+  js.style.background = e.matches ? 'rgb(0, 200, 0)' : 'rgb(200, 0, 200)';
+  // A second, redundant change for the same state would be a bug — flag it.
+  if (changes > 1) js.style.background = 'rgb(255, 255, 0)';
+});
+</script>
+</body>
+</html>

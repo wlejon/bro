@@ -1103,6 +1103,13 @@ private:
     // animating — so the caller can fold that into uiDirty_ (iframe activity has
     // no other route to the raster thread).
     bool tickIframes(double nowMs);
+    // Catch a sub-document up with its <iframe> element's current content box:
+    // media viewport (so CSS @media and matchMedia re-evaluate against the new
+    // size), a restyle+relayout at that size, and the realm's innerWidth /
+    // innerHeight + a 'resize' event. The iframe counterpart of
+    // syncWindowHostBox; idempotent, returns immediately when nothing changed.
+    void syncIframeBox(IframeDoc& d);
+    void syncAllIframeBoxes();
     IframeDoc* iframeDocById(uint64_t id);
     IframeDoc* iframeDocForElement(const dom::Element* el);
     // Record each iframe sub-document's paint into its own command buffer (main

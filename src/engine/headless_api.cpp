@@ -194,6 +194,10 @@ void Engine::flush() {
     // drain point, not reentrantly inside a capture() call. Idempotent - a
     // host whose box already matches returns immediately.
     for (auto& h : windowHosts_) syncWindowHostBox(*h);
+    // Same for <iframe> sub-documents: an iframe element resized by app JS
+    // re-evaluates the sub-document's media queries here, at the drain, so a
+    // test can resize and assert after one flush(). Idempotent.
+    syncAllIframeBoxes();
     // ...and its message traffic, so a test can post and assert after one flush().
     drainWindowHostMessages();
 

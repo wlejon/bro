@@ -405,12 +405,11 @@ void Engine::recordIframeLayers() {
         // Refresh the box from the host <iframe> element's current layout, so a
         // resized preview re-lays-out (and re-rasterizes) at the new size instead
         // of stretching a stale-size texture. The element was laid out by the
-        // host pass earlier this frame; contentRect is current here.
-        if (d->element) {
-            auto& lb = d->element->layoutBox();
-            if (lb.contentRect.width  > 0) d->boxW = static_cast<int>(lb.contentRect.width);
-            if (lb.contentRect.height > 0) d->boxH = static_cast<int>(lb.contentRect.height);
-        }
+        // host pass earlier this frame; contentRect is current here. Goes
+        // through syncIframeBox so the media viewport moves with the box too —
+        // this used to set boxW/boxH directly and leave @media / matchMedia
+        // pinned to the creation-time size.
+        syncIframeBox(*d);
         recordSubDoc(iframeSubDoc(*d), recordingRenderer_.get(), drawTraversal_.get(),
                      *textMetrics_);
     }

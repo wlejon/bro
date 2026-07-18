@@ -40,10 +40,15 @@
  *   - .matches is LIVE: reading it re-evaluates against the document's
  *     current context, so it is already fresh immediately after a headless
  *     resize(w, h), even before the change event has been delivered.
- *   - <iframe> media viewports are fixed at sub-document creation (the
- *     element's content box); host window resizes don't re-evaluate a
- *     sub-document's width/height queries. Color-scheme changes DO propagate
- *     into iframe realms.
+ *   - An <iframe> sub-document's media viewport is its element's content box,
+ *     and it TRACKS that box: resizing the <iframe> element (directly, or
+ *     because a host window resize reflowed it) re-evaluates the
+ *     sub-document's CSS @media rules and fires 'change' on its realm's
+ *     MediaQueryLists, plus a 'resize' event with fresh innerWidth /
+ *     innerHeight inside the sub-document. A host window resize that leaves
+ *     the iframe's box unchanged (a fixed-px iframe) correctly changes
+ *     nothing inside it. Color-scheme changes also propagate into iframe
+ *     realms.
  *   - Headless: resize(w, h) delivers resize-driven change events
  *     synchronously; scheme flips via bro.settings deliver on the next
  *     flush() / advanceTime().
