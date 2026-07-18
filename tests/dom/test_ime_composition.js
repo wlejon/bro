@@ -6,7 +6,8 @@
 //   - the whole committed composition is ONE undo entry; cancel leaves none
 //   - composing over a selection replaces it (same single entry)
 //   - caret moves / blur / mouse presses mid-composition COMMIT the preedit
-// Offsets are UTF-8 byte offsets (existing selectionStart/End convention).
+// JS-visible offsets (selectionStart/End) are UTF-16 code units per spec;
+// each CJK character below is one unit (three UTF-8 bytes internally).
 
 const SDLK_LEFT = 0x40000050;
 const SDLK_Z = 122;
@@ -44,17 +45,17 @@ function freshInput(id) {
 
     imeCompose('に');                  // に
     assert(el.value === 'に', 'preedit visible in value, got: ' + JSON.stringify(el.value));
-    assert(el.selectionStart === 3 && el.selectionEnd === 3,
-           'composition caret at preedit end (3 bytes), got: ' + el.selectionStart);
+    assert(el.selectionStart === 1 && el.selectionEnd === 1,
+           'composition caret at preedit end (1 unit), got: ' + el.selectionStart);
 
     imeCompose('にほ');            // にほ
     assert(el.value === 'にほ', 'updated preedit replaces the old one, got: ' + JSON.stringify(el.value));
-    assert(el.selectionStart === 6, 'caret tracks the growing preedit, got: ' + el.selectionStart);
+    assert(el.selectionStart === 2, 'caret tracks the growing preedit, got: ' + el.selectionStart);
 
     imeCommit('日本');             // 日本
     assert(el.value === '日本', 'commit replaces preedit with committed text, got: ' + JSON.stringify(el.value));
-    assert(el.selectionStart === 6 && el.selectionEnd === 6,
-           'caret after commit at byte end of committed text, got: ' + el.selectionStart);
+    assert(el.selectionStart === 2 && el.selectionEnd === 2,
+           'caret after commit at end of committed text, got: ' + el.selectionStart);
 
     const expected = [
         'cs:',                                        // no selection replaced
@@ -72,15 +73,15 @@ function freshInput(id) {
     assert(el.selectionStart === 0, 'undo restores pre-composition caret, got: ' + el.selectionStart);
     redo();
     assert(el.value === '日本', 'redo restores the commit, got: ' + JSON.stringify(el.value));
-    assert(el.selectionStart === 6, 'redo restores post-commit caret, got: ' + el.selectionStart);
+    assert(el.selectionStart === 2, 'redo restores post-commit caret, got: ' + el.selectionStart);
 }
 
-// --- Cursor position within the preedit (codepoints → bytes) ---------------
+// --- Cursor position within the preedit (codepoints → units) ---------------
 {
     const el = freshInput('c2');
     imeCompose('にほん', 1);   // にほん, cursor after codepoint 1
-    assert(el.selectionStart === 3,
-           'composition cursor 1 cp = 3 bytes, got: ' + el.selectionStart);
+    assert(el.selectionStart === 1,
+           'composition cursor 1 cp = 1 unit, got: ' + el.selectionStart);
     imeCancel();
 }
 
@@ -120,7 +121,7 @@ function freshInput(id) {
 
     imeCommit('世界');             // 世界
     assert(el.value === 'hello 世界', 'committed over the selection, got: ' + JSON.stringify(el.value));
-    assert(el.selectionStart === 12, 'caret after committed bytes (6+6), got: ' + el.selectionStart);
+    assert(el.selectionStart === 8, 'caret after committed text (6+2 units), got: ' + el.selectionStart);
 
     undo();
     assert(el.value === 'hello world', 'single undo restores replaced text, got: ' + JSON.stringify(el.value));
@@ -168,7 +169,7 @@ function freshInput(id) {
     imeCompose('あ');                  // あ
     press(SDLK_LEFT);
     assert(el.value === 'あ', 'arrow key commits the preedit, got: ' + JSON.stringify(el.value));
-    assert(el.selectionStart === 0, 'then the arrow moves the caret (3 → 0), got: ' + el.selectionStart);
+    assert(el.selectionStart === 0, 'then the arrow moves the caret (1 → 0), got: ' + el.selectionStart);
     // Committed = one undo entry.
     undo();
     assert(el.value === '', 'the committed preedit is one undo entry, got: ' + JSON.stringify(el.value));
@@ -210,7 +211,7 @@ function freshInput(id) {
     imeCommit('ほげ');
     assert(ta.value === 'ab\nほげcd',
            'committed across the newline, got: ' + JSON.stringify(ta.value));
-    assert(ta.selectionStart === 9, 'caret after committed bytes (3+6), got: ' + ta.selectionStart);
+    assert(ta.selectionStart === 5, 'caret after committed text (3+2 units), got: ' + ta.selectionStart);
 
     undo();
     assert(ta.value === 'ab\ncd', 'one undo removes the textarea composition, got: ' + JSON.stringify(ta.value));
@@ -218,17 +219,17 @@ function freshInput(id) {
            'undo restores the pre-composition caret, got: ' + ta.selectionStart);
 }
 
-// --- UTF-8 integrity: byte lengths and no split code points -----------------
+// --- UTF-8 integrity: no split code points ----------------------------------
 {
     const el = freshInput('c9');
     imeCompose('に');
-    imeCommit('日本語');       // 日本語 = 9 bytes
+    imeCommit('日本語');       // 日本語 = 9 UTF-8 bytes, 3 UTF-16 units
     assert(el.value === '日本語', 'exact committed string, got: ' + JSON.stringify(el.value));
-    assert(el.selectionStart === 9, '3 CJK chars = 9 bytes, got: ' + el.selectionStart);
-    // Backspace deletes one whole character (3 bytes), never a split byte.
+    assert(el.selectionStart === 3, '3 CJK chars = 3 units, got: ' + el.selectionStart);
+    // Backspace deletes one whole character (3 bytes internally), never a split byte.
     press(8 /* backspace */);
     assert(el.value === '日本', 'backspace removes one whole character, got: ' + JSON.stringify(el.value));
-    assert(el.selectionStart === 6, 'caret back one character (3 bytes), got: ' + el.selectionStart);
+    assert(el.selectionStart === 2, 'caret back one character, got: ' + el.selectionStart);
 }
 
 // --- Programmatic .focus() enables composition (and typing) -----------------

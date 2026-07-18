@@ -44,9 +44,9 @@ inline int utf8Next(const std::string& s, int pos) {
 }
 
 // Round an offset onto a UTF-8 character boundary — back to the character's
-// first byte, or forward past its last. JS names offsets in bytes and has no
-// way to know where the characters are (`value.length` counts UTF-16 units), so
-// a range it hands us can land mid-character; snapping keeps an edit from
+// first byte, or forward past its last. Offsets normally arrive
+// boundary-aligned (the JS binding converts UTF-16 code units to byte offsets
+// on whole characters), but snapping keeps a stray mid-character offset from
 // splitting one and leaving invalid UTF-8 behind.
 inline int utf8SnapBack(const std::string& s, int pos) {
     int i = std::clamp(pos, 0, static_cast<int>(s.size()));

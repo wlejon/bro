@@ -49,10 +49,11 @@ public:
     int selectionStart() const { return sel_.start(); }
     int selectionEnd() const { return sel_.end(); }
     bool hasSelection() const { return !sel_.collapsed(); }
-    // Offsets are bytes. A caller naming one inside a multi-byte character (JS
-    // counts UTF-16 units, so `value.length` routinely does) is snapped onto a
-    // character boundary: a range grows outward to whole characters, a caret
-    // settles on the boundary at or before it.
+    // Offsets are bytes into the UTF-8 value (the JS binding converts to/from
+    // UTF-16 code units at its boundary). A caller naming one inside a
+    // multi-byte character is snapped onto a character boundary: a range grows
+    // outward to whole characters, a caret settles on the boundary at or
+    // before it.
     void setSelectionRange(int start, int end);
     void selectAll();
     // The selected substring of the value — what a copy/cut takes.
