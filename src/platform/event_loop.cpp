@@ -34,35 +34,46 @@ void EventLoop::pollEvents() {
                 if (onQuit) onQuit();
                 break;
 
+            case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
+                if (onCloseRequested) {
+                    onCloseRequested(event.window.windowID);
+                }
+                break;
+
             case SDL_EVENT_WINDOW_RESIZED:
                 if (onResize) {
-                    onResize(static_cast<uint32_t>(event.window.data1),
+                    onResize(event.window.windowID,
+                             static_cast<uint32_t>(event.window.data1),
                              static_cast<uint32_t>(event.window.data2));
                 }
                 break;
 
             case SDL_EVENT_MOUSE_BUTTON_DOWN:
                 if (onMouseDown) {
-                    onMouseDown(event.button.x, event.button.y, event.button.button);
+                    onMouseDown(event.button.windowID,
+                                event.button.x, event.button.y, event.button.button);
                 }
                 break;
 
             case SDL_EVENT_MOUSE_BUTTON_UP:
                 if (onMouseUp) {
-                    onMouseUp(event.button.x, event.button.y, event.button.button);
+                    onMouseUp(event.button.windowID,
+                              event.button.x, event.button.y, event.button.button);
                 }
                 break;
 
             case SDL_EVENT_MOUSE_MOTION:
                 if (onMouseMove) {
-                    onMouseMove(event.motion.x, event.motion.y,
+                    onMouseMove(event.motion.windowID,
+                                event.motion.x, event.motion.y,
                                 event.motion.xrel, event.motion.yrel);
                 }
                 break;
 
             case SDL_EVENT_KEY_DOWN:
                 if (onKeyDown) {
-                    onKeyDown(static_cast<int32_t>(event.key.key),
+                    onKeyDown(event.key.windowID,
+                              static_cast<int32_t>(event.key.key),
                               static_cast<int32_t>(event.key.scancode),
                               event.key.mod,
                               event.key.repeat);
@@ -71,7 +82,8 @@ void EventLoop::pollEvents() {
 
             case SDL_EVENT_KEY_UP:
                 if (onKeyUp) {
-                    onKeyUp(static_cast<int32_t>(event.key.key),
+                    onKeyUp(event.key.windowID,
+                            static_cast<int32_t>(event.key.key),
                             static_cast<int32_t>(event.key.scancode),
                             event.key.mod,
                             false);
@@ -80,33 +92,37 @@ void EventLoop::pollEvents() {
 
             case SDL_EVENT_TEXT_INPUT:
                 if (onTextInput) {
-                    onTextInput(event.text.text);
+                    onTextInput(event.text.windowID, event.text.text);
                 }
                 break;
 
             case SDL_EVENT_TEXT_EDITING:
                 if (onTextEditing) {
-                    onTextEditing(event.edit.text ? event.edit.text : "",
+                    onTextEditing(event.edit.windowID,
+                                  event.edit.text ? event.edit.text : "",
                                   event.edit.start, event.edit.length);
                 }
                 break;
 
             case SDL_EVENT_MOUSE_WHEEL:
                 if (onWheel) {
-                    onWheel(event.wheel.mouse_x, event.wheel.mouse_y,
+                    onWheel(event.wheel.windowID,
+                            event.wheel.mouse_x, event.wheel.mouse_y,
                             event.wheel.x, event.wheel.y);
                 }
                 break;
 
             case SDL_EVENT_DROP_FILE:
                 if (onDropFile && event.drop.data) {
-                    onDropFile(event.drop.data, event.drop.x, event.drop.y);
+                    onDropFile(event.drop.windowID,
+                               event.drop.data, event.drop.x, event.drop.y);
                 }
                 break;
 
             case SDL_EVENT_DROP_TEXT:
                 if (onDropText && event.drop.data) {
-                    onDropText(event.drop.data, event.drop.x, event.drop.y);
+                    onDropText(event.drop.windowID,
+                               event.drop.data, event.drop.x, event.drop.y);
                 }
                 break;
 
@@ -142,7 +158,8 @@ void EventLoop::pollEvents() {
                 if (onFingerDown) {
                     float x, y;
                     fingerWindowCoords(event.tfinger, x, y);
-                    onFingerDown(static_cast<uint64_t>(event.tfinger.fingerID),
+                    onFingerDown(event.tfinger.windowID,
+                                 static_cast<uint64_t>(event.tfinger.fingerID),
                                  x, y, event.tfinger.pressure);
                 }
                 break;
@@ -151,7 +168,8 @@ void EventLoop::pollEvents() {
                 if (onFingerMove) {
                     float x, y;
                     fingerWindowCoords(event.tfinger, x, y);
-                    onFingerMove(static_cast<uint64_t>(event.tfinger.fingerID),
+                    onFingerMove(event.tfinger.windowID,
+                                 static_cast<uint64_t>(event.tfinger.fingerID),
                                  x, y, event.tfinger.pressure);
                 }
                 break;
@@ -160,7 +178,8 @@ void EventLoop::pollEvents() {
                 if (onFingerUp) {
                     float x, y;
                     fingerWindowCoords(event.tfinger, x, y);
-                    onFingerUp(static_cast<uint64_t>(event.tfinger.fingerID), x, y);
+                    onFingerUp(event.tfinger.windowID,
+                               static_cast<uint64_t>(event.tfinger.fingerID), x, y);
                 }
                 break;
 
@@ -168,28 +187,37 @@ void EventLoop::pollEvents() {
                 if (onFingerCancel) {
                     float x, y;
                     fingerWindowCoords(event.tfinger, x, y);
-                    onFingerCancel(static_cast<uint64_t>(event.tfinger.fingerID), x, y);
+                    onFingerCancel(event.tfinger.windowID,
+                                   static_cast<uint64_t>(event.tfinger.fingerID), x, y);
                 }
                 break;
 
             case SDL_EVENT_WINDOW_FOCUS_LOST:
-                if (onFocusLost) onFocusLost();
+                if (onFocusLost) onFocusLost(event.window.windowID);
                 break;
 
             case SDL_EVENT_WINDOW_MINIMIZED:
-                if (onMinimized) onMinimized();
+                if (onMinimized) onMinimized(event.window.windowID);
                 break;
 
             case SDL_EVENT_WINDOW_MAXIMIZED:
-                if (onMaximized) onMaximized();
+                if (onMaximized) onMaximized(event.window.windowID);
                 break;
 
             case SDL_EVENT_WINDOW_RESTORED:
-                if (onRestored) onRestored();
+                if (onRestored) onRestored(event.window.windowID);
                 break;
 
             case SDL_EVENT_WINDOW_FOCUS_GAINED:
-                if (onFocusGained) onFocusGained();
+                if (onFocusGained) onFocusGained(event.window.windowID);
+                break;
+
+            case SDL_EVENT_WINDOW_OCCLUDED:
+                if (onOccluded) onOccluded(event.window.windowID);
+                break;
+
+            case SDL_EVENT_WINDOW_EXPOSED:
+                if (onExposed) onExposed(event.window.windowID);
                 break;
 
             case SDL_EVENT_SYSTEM_THEME_CHANGED:
@@ -197,7 +225,7 @@ void EventLoop::pollEvents() {
                 break;
 
             case SDL_EVENT_WINDOW_DISPLAY_SCALE_CHANGED:
-                if (onDisplayScaleChanged) onDisplayScaleChanged();
+                if (onDisplayScaleChanged) onDisplayScaleChanged(event.window.windowID);
                 break;
 
             default:

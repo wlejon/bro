@@ -287,6 +287,93 @@ public:
     void handleTouchUp(uint64_t fingerId, float x, float y);
     void handleTouchCancel(uint64_t fingerId, float x, float y);
 
+    // ── Secondary window hosts (src/engine/window_host.cpp) ─────────────────
+    // One extra OS window opened via bro.window.open(src, opts). v1 IN
+    // PROGRESS: this chunk gives each host a real (blank, clear-color) OS
+    // window with full lifecycle — open/close/'close' events, per-host
+    // focus/minimized/occluded state, and a per-window composite+swap pass.
+    // The src is resolved and STORED only; the host's document/realm and
+    // rendering land with the next chunk of the multiwindow plan.
+    //
+    // Threading/lifecycle: creation and destruction are QUEUED
+    // (openWindowHost/closeWindowHost) and drained at the raster-idle point
+    // in the frame loop — processPendingWindowHosts(), beside
+    // processPendingIframeReloads() — or in headless flush(). Nothing else
+    // may create or destroy a host's SDL window.
+
+    /// Options for bro.window.open (geometry/flags feed the secondary
+    /// window; `display` is a display INDEX like bro.json's, -1 = OS default).
+    struct WindowHostOptions {
+        std::string src;
+        std::string title = "bro";
+        int width = 800;
+        int height = 600;
+        int x = kWindowPosUnset;
+        int y = kWindowPosUnset;
+        int display = -1;
+        bool resizable = true;
+        bool borderless = false;
+        bool alwaysOnTop = false;
+        bool hidden = false;   // forced true in headless (deterministic tests)
+    };
+
+    /// One secondary window host. `window` is a context-less platform window
+    /// (Window::createSecondary); null while pendingCreate or after close.
+    struct WindowHost {
+        uint64_t id = 0;        // bro-side handle id (stable across lifetime)
+        uint32_t sdlId = 0;     // SDL windowID for event routing (0 until created)
+        std::unique_ptr<platform::Window> window;
+        WindowHostOptions opts; // requested state; geometry queried live once created
+        bool pendingCreate = true;
+        bool pendingClose = false;
+        bool focused = false;
+        bool minimized = false;
+        bool occluded = false;
+        int width = 0, height = 0;  // client size in window coords
+        // Host-configurable composite clear color (the blank window's fill
+        // until the sub-document lands).
+        float clearColor[4] = {0.07f, 0.07f, 0.09f, 1.0f};
+    };
+
+    /// Queue a new host. Returns its bro id immediately; the OS window
+    /// materializes at the next drain. Caller (the JS binding) has already
+    /// validated mode + realm. Headless forces hidden.
+    uint64_t openWindowHost(const WindowHostOptions& opts);
+    /// Queue destruction of a host (idempotent — double-close is a no-op).
+    /// The window is destroyed and the handle's 'close' event fires at the
+    /// next drain. Also the OS-close-button path via handleWindowCloseRequested.
+    void closeWindowHost(uint64_t id);
+    WindowHost* windowHostById(uint64_t id);
+    WindowHost* windowHostBySdlId(uint32_t sdlId);
+    /// Any host whose SDL window currently exists (pendingClose included —
+    /// SDL still counts it). Drives close-requested routing and the
+    /// unfocused-present-clamp condition.
+    bool anyLiveWindowHosts() const;
+    /// Any created, non-minimized host — i.e. the per-window composite pass
+    /// has something to present.
+    bool anyPresentableWindowHosts() const;
+
+    /// SDL_EVENT_WINDOW_CLOSE_REQUESTED for any window. Main window: quits
+    /// the app — but only when secondary windows exist; with a lone main
+    /// window SDL follows the request with SDL_EVENT_QUIT and the event
+    /// loop's quit path handles it (acting here too would double
+    /// requestInterrupt, whose second call hard-exits). Secondary window:
+    /// queues the host close (window destroys + 'close' event at the drain).
+    void handleWindowCloseRequested(uint32_t sdlWindowId);
+    /// Window-state bookkeeping for secondary hosts (per-host flags; the
+    /// main window keeps its existing dedicated paths).
+    void handleHostResized(uint32_t sdlWindowId, int w, int h);
+    void handleHostFocusChanged(uint32_t sdlWindowId, bool focused);
+    void handleHostMinimized(uint32_t sdlWindowId, bool minimized);
+    void handleHostOccluded(uint32_t sdlWindowId, bool occluded);
+
+    /// Drain queued host creates/destroys. MUST run only at the raster-idle
+    /// point (windowed frame loop) or from headless flush() — destroying a
+    /// host mid-frame would later race the raster thread once host documents
+    /// render (chunk 2), and firing 'close' runs app JS. Fires handle 'close'
+    /// events through the window-host bindings.
+    void processPendingWindowHosts();
+
     /// All gamepad slots (connected and not) — read by the JS bindings to
     /// build navigator.getGamepads() snapshots.
     const std::vector<GamepadState>& gamepads() const { return gamepads_; }
@@ -1216,6 +1303,21 @@ private:
     // referenced from dom::Element::iframeDoc()).
     std::vector<std::unique_ptr<IframeDoc>> iframeDocs_;
     uint64_t nextIframeId_ = 1;
+    // Secondary window hosts (see the public WindowHost section). unique_ptr
+    // so host addresses stay stable across registry mutation.
+    std::vector<std::unique_ptr<WindowHost>> windowHosts_;
+    uint64_t nextWindowHostId_ = 1;
+    /// Per-window composite pass (windowed frame loop, after the main
+    /// composite): for each created, non-minimized host — MakeCurrent(host,
+    /// main ctx), viewport, clear to the host's color, swap at interval 0 —
+    /// then restore the main drawable + its vsync preference. The main swap
+    /// runs after this and stays the frame's single pacing swap.
+    void compositeWindowHosts();
+    /// Destroy every host synchronously (window + registry entry).
+    /// notifyJs fires each handle's 'close' first — app-reload teardown wants
+    /// that false-with-cleanup handled by the bindings' own cleanup instead.
+    /// Callers must hold the same quiescence the drain point has.
+    void destroyAllWindowHosts(bool notifyJs);
     // Top-level location.reload() queued and not yet performed. Set by
     // requestAppReload() (from JS in the doomed realm), consumed by
     // processPendingAppReload() at the frame loop's idle-workers point

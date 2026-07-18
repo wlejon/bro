@@ -192,45 +192,78 @@ void Engine::run() {
 
     running_ = true;
 
-    // Wire up event-loop callbacks.
+    // Wire up event-loop callbacks. Every window-associated callback receives
+    // the SDL windowID first; `mainWin` tests it against the primary window.
+    // Until per-window input routing lands, events from any other window
+    // (a bro.window.open secondary) are dropped rather than misdelivered into
+    // the app document at that window's local coordinates; window-STATE events
+    // for secondaries are routed to the host registry below.
+    const uint32_t mainWinId = window_->windowId();
+    auto mainWin = [mainWinId](uint32_t id) { return id == mainWinId || id == 0; };
     eventLoop_->onQuit       = [this]() { running_ = false; };
-    eventLoop_->onResize     = [this](uint32_t w, uint32_t h) { handleResize((int)w, (int)h); };
-    eventLoop_->onMouseDown  = [this](float x, float y, uint8_t b) { handleMouseDown(x, y, (int)b); };
-    eventLoop_->onMouseUp    = [this](float x, float y, uint8_t b) { handleMouseUp(x, y, (int)b); };
-    eventLoop_->onMouseMove  = [this](float x, float y, float xr, float yr) { handleMouseMove(x, y, xr, yr); };
-    eventLoop_->onKeyDown    = [this](int32_t k, int32_t s, uint16_t m, bool r) { handleKeyDown(k, s, (int)m, r); };
-    eventLoop_->onKeyUp      = [this](int32_t k, int32_t s, uint16_t m, bool r) { handleKeyUp(k, s, (int)m, r); };
-    eventLoop_->onTextInput  = [this](const std::string& t) { handleTextInput(t); };
-    eventLoop_->onTextEditing = [this](const std::string& t, int32_t s, int32_t l) { handleTextEditing(t, s, l); };
-    eventLoop_->onWheel      = [this](float x, float y, float dx, float dy) { handleWheel(x, y, dx, dy); };
-    eventLoop_->onDropFile   = [this](const std::string& p, float x, float y) { handleDropFile(p, x, y); };
-    eventLoop_->onDropText   = [this](const std::string& t, float x, float y) { handleDropText(t, x, y); };
-    eventLoop_->onFingerDown = [this](uint64_t id, float x, float y, float p) { handleTouchDown(id, x, y, p); };
-    eventLoop_->onFingerMove = [this](uint64_t id, float x, float y, float p) { handleTouchMove(id, x, y, p); };
-    eventLoop_->onFingerUp   = [this](uint64_t id, float x, float y) { handleTouchUp(id, x, y); };
-    eventLoop_->onFingerCancel = [this](uint64_t id, float x, float y) { handleTouchCancel(id, x, y); };
+    // Titlebar X / Alt+F4 on any window. Main-window handling must stay out of
+    // the SDL_EVENT_QUIT path here: when the main window is the LAST window,
+    // SDL follows this event with QUIT (handled above) and acting on both
+    // would double-fire requestInterrupt — whose second call hard-exits.
+    eventLoop_->onCloseRequested = [this](uint32_t id) { handleWindowCloseRequested(id); };
+    eventLoop_->onResize     = [this, mainWin](uint32_t id, uint32_t w, uint32_t h) {
+        if (mainWin(id)) handleResize((int)w, (int)h);
+        else handleHostResized(id, (int)w, (int)h);
+    };
+    eventLoop_->onMouseDown  = [this, mainWin](uint32_t id, float x, float y, uint8_t b) { if (mainWin(id)) handleMouseDown(x, y, (int)b); };
+    eventLoop_->onMouseUp    = [this, mainWin](uint32_t id, float x, float y, uint8_t b) { if (mainWin(id)) handleMouseUp(x, y, (int)b); };
+    eventLoop_->onMouseMove  = [this, mainWin](uint32_t id, float x, float y, float xr, float yr) { if (mainWin(id)) handleMouseMove(x, y, xr, yr); };
+    eventLoop_->onKeyDown    = [this, mainWin](uint32_t id, int32_t k, int32_t s, uint16_t m, bool r) { if (mainWin(id)) handleKeyDown(k, s, (int)m, r); };
+    eventLoop_->onKeyUp      = [this, mainWin](uint32_t id, int32_t k, int32_t s, uint16_t m, bool r) { if (mainWin(id)) handleKeyUp(k, s, (int)m, r); };
+    eventLoop_->onTextInput  = [this, mainWin](uint32_t id, const std::string& t) { if (mainWin(id)) handleTextInput(t); };
+    eventLoop_->onTextEditing = [this, mainWin](uint32_t id, const std::string& t, int32_t s, int32_t l) { if (mainWin(id)) handleTextEditing(t, s, l); };
+    eventLoop_->onWheel      = [this, mainWin](uint32_t id, float x, float y, float dx, float dy) { if (mainWin(id)) handleWheel(x, y, dx, dy); };
+    eventLoop_->onDropFile   = [this, mainWin](uint32_t id, const std::string& p, float x, float y) { if (mainWin(id)) handleDropFile(p, x, y); };
+    eventLoop_->onDropText   = [this, mainWin](uint32_t id, const std::string& t, float x, float y) { if (mainWin(id)) handleDropText(t, x, y); };
+    eventLoop_->onFingerDown = [this, mainWin](uint32_t wid, uint64_t id, float x, float y, float p) { if (mainWin(wid)) handleTouchDown(id, x, y, p); };
+    eventLoop_->onFingerMove = [this, mainWin](uint32_t wid, uint64_t id, float x, float y, float p) { if (mainWin(wid)) handleTouchMove(id, x, y, p); };
+    eventLoop_->onFingerUp   = [this, mainWin](uint32_t wid, uint64_t id, float x, float y) { if (mainWin(wid)) handleTouchUp(id, x, y); };
+    eventLoop_->onFingerCancel = [this, mainWin](uint32_t wid, uint64_t id, float x, float y) { if (mainWin(wid)) handleTouchCancel(id, x, y); };
     eventLoop_->onGamepadAdded   = [this](uint32_t id) { handleGamepadAdded(id); };
     eventLoop_->onGamepadRemoved = [this](uint32_t id) { handleGamepadRemoved(id); };
     eventLoop_->onGamepadButton  = [this](uint32_t id, int b, bool down) { handleGamepadButton(id, b, down); };
     eventLoop_->onGamepadAxis    = [this](uint32_t id, int a, float v) { handleGamepadAxis(id, a, v); };
     // SDL drops relative mouse mode on focus loss on some platforms — keep our
     // engine-side lock state in sync so apps see a pointerlockchange.
-    eventLoop_->onFocusLost   = [this]() { windowFocused_ = false; exitPointerLock(); setPageVisibility(false); };
-    eventLoop_->onFocusGained = [this]() { windowFocused_ = true; setPageVisibility(true); };
+    eventLoop_->onFocusLost   = [this, mainWin](uint32_t id) {
+        if (mainWin(id)) { windowFocused_ = false; exitPointerLock(); setPageVisibility(false); }
+        else handleHostFocusChanged(id, false);
+    };
+    eventLoop_->onFocusGained = [this, mainWin](uint32_t id) {
+        if (mainWin(id)) { windowFocused_ = true; setPageVisibility(true); }
+        else handleHostFocusChanged(id, true);
+    };
     // Web semantics: a minimized window is a hidden document (document.hidden
     // flips + visibilitychange fires); restore/maximize make it visible again.
     // Focus loss usually lands first and already set hidden — the JS-side
     // __bro_set_visibility guard makes the repeat a no-op, so these only add
     // the transitions focus alone can't see (e.g. restore-without-focus).
-    eventLoop_->onMinimized = [this]() { setPageVisibility(false); };
-    eventLoop_->onMaximized = [this]() { setPageVisibility(true); };
-    eventLoop_->onRestored  = [this]() { setPageVisibility(true); };
+    eventLoop_->onMinimized = [this, mainWin](uint32_t id) {
+        if (mainWin(id)) setPageVisibility(false);
+        else handleHostMinimized(id, true);
+    };
+    eventLoop_->onMaximized = [this, mainWin](uint32_t id) { if (mainWin(id)) setPageVisibility(true); };
+    eventLoop_->onRestored  = [this, mainWin](uint32_t id) {
+        if (mainWin(id)) setPageVisibility(true);
+        else handleHostMinimized(id, false);
+    };
+    // Occlusion: main-window presentation keeps running when covered (vsync
+    // paces it); secondary hosts record the flag for present-skip policy.
+    eventLoop_->onOccluded = [this, mainWin](uint32_t id) { if (!mainWin(id)) handleHostOccluded(id, true); };
+    eventLoop_->onExposed  = [this, mainWin](uint32_t id) { if (!mainWin(id)) handleHostOccluded(id, false); };
     // OS theme flip → re-evaluate @media (prefers-color-scheme) and restyle.
     // A no-op when appearance.colorScheme forces "light"/"dark".
     eventLoop_->onSystemThemeChanged = [this]() { applyColorScheme(); };
     // OS scaling change / moved to a display with a different scale →
     // refresh window.devicePixelRatio and fire a window resize event.
-    eventLoop_->onDisplayScaleChanged = [this]() { handleDisplayScaleChanged(); };
+    // Main-window only until per-host scale lands (hosts keep their own
+    // surfaces at SDL window-size units in v1).
+    eventLoop_->onDisplayScaleChanged = [this, mainWin](uint32_t id) { if (mainWin(id)) handleDisplayScaleChanged(); };
 
     // Seed focus from the window's actual state — an app can launch unfocused
     // (e.g. spawned behind another window), and SDL won't emit a FOCUS_LOST for
