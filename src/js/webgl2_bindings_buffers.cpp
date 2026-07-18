@@ -203,6 +203,58 @@ static JSValue js_vertexAttribDivisor(JSContext* ctx, JSValueConst this_val, int
     return JS_UNDEFINED;
 }
 
+// --- Constant integer vertex attributes (WebGL2) ---
+
+static JSValue js_vertexAttribI4i(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 5) return JS_UNDEFINED;
+    uint32_t index; int x, y, z, w;
+    JS_ToUint32(ctx, &index, argv[0]);
+    JS_ToInt32(ctx, &x, argv[1]); JS_ToInt32(ctx, &y, argv[2]);
+    JS_ToInt32(ctx, &z, argv[3]); JS_ToInt32(ctx, &w, argv[4]);
+    gl->vertexAttribI4i(index, x, y, z, w);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_vertexAttribI4ui(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 5) return JS_UNDEFINED;
+    uint32_t index, x, y, z, w;
+    JS_ToUint32(ctx, &index, argv[0]);
+    JS_ToUint32(ctx, &x, argv[1]); JS_ToUint32(ctx, &y, argv[2]);
+    JS_ToUint32(ctx, &z, argv[3]); JS_ToUint32(ctx, &w, argv[4]);
+    gl->vertexAttribI4ui(index, x, y, z, w);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_vertexAttribI4iv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
+    uint32_t index; JS_ToUint32(ctx, &index, argv[0]);
+    std::vector<int32_t> storage; const int32_t* data = nullptr; size_t count = 0;
+    if (getInt32Array(ctx, argv[1], storage, &data, &count) && count >= 4)
+        gl->vertexAttribI4iv(index, data);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_vertexAttribI4uiv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
+    uint32_t index; JS_ToUint32(ctx, &index, argv[0]);
+    std::vector<uint32_t> storage; const uint32_t* data = nullptr; size_t count = 0;
+    if (getUint32Array(ctx, argv[1], storage, &data, &count) && count >= 4)
+        gl->vertexAttribI4uiv(index, data);
+    return JS_UNDEFINED;
+}
+
+// --- Object predicates ---
+
+static JSValue js_isBuffer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_FALSE;
+    return JS_NewBool(ctx, gl->isBuffer(unwrapBuffer(argv[0])));
+}
+
+static JSValue js_isVertexArray(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_FALSE;
+    return JS_NewBool(ctx, gl->isVertexArray(unwrapVAO(argv[0])));
+}
+
 // ===========================================================================
 // Exported function list
 // ===========================================================================
@@ -225,6 +277,12 @@ const JSCFunctionListEntry webgl2_buffer_funcs[] = {
     JS_CFUNC_DEF("enableVertexAttribArray", 1, js_enableVertexAttribArray),
     JS_CFUNC_DEF("disableVertexAttribArray", 1, js_disableVertexAttribArray),
     JS_CFUNC_DEF("vertexAttribDivisor", 2, js_vertexAttribDivisor),
+    JS_CFUNC_DEF("vertexAttribI4i", 5, js_vertexAttribI4i),
+    JS_CFUNC_DEF("vertexAttribI4ui", 5, js_vertexAttribI4ui),
+    JS_CFUNC_DEF("vertexAttribI4iv", 2, js_vertexAttribI4iv),
+    JS_CFUNC_DEF("vertexAttribI4uiv", 2, js_vertexAttribI4uiv),
+    JS_CFUNC_DEF("isBuffer", 1, js_isBuffer),
+    JS_CFUNC_DEF("isVertexArray", 1, js_isVertexArray),
 };
 const int webgl2_buffer_funcs_count = sizeof(webgl2_buffer_funcs) / sizeof(webgl2_buffer_funcs[0]);
 

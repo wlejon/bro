@@ -252,6 +252,157 @@ static JSValue js_uniform4i(JSContext* ctx, JSValueConst this_val, int argc, JSV
 }
 
 // ===========================================================================
+// Uniforms — scalar unsigned int (WebGL2)
+// ===========================================================================
+
+static JSValue js_uniform1ui(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
+    uint32_t x; JS_ToUint32(ctx, &x, argv[1]);
+    gl->uniform1ui(unwrapUniformLocation(argv[0]), x);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_uniform2ui(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
+    uint32_t x, y; JS_ToUint32(ctx, &x, argv[1]); JS_ToUint32(ctx, &y, argv[2]);
+    gl->uniform2ui(unwrapUniformLocation(argv[0]), x, y);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_uniform3ui(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 4) return JS_UNDEFINED;
+    uint32_t x, y, z;
+    JS_ToUint32(ctx, &x, argv[1]); JS_ToUint32(ctx, &y, argv[2]); JS_ToUint32(ctx, &z, argv[3]);
+    gl->uniform3ui(unwrapUniformLocation(argv[0]), x, y, z);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_uniform4ui(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 5) return JS_UNDEFINED;
+    uint32_t x, y, z, w;
+    JS_ToUint32(ctx, &x, argv[1]); JS_ToUint32(ctx, &y, argv[2]);
+    JS_ToUint32(ctx, &z, argv[3]); JS_ToUint32(ctx, &w, argv[4]);
+    gl->uniform4ui(unwrapUniformLocation(argv[0]), x, y, z, w);
+    return JS_UNDEFINED;
+}
+
+// ===========================================================================
+// Uniforms — unsigned int vector (WebGL2)
+// ===========================================================================
+
+static JSValue js_uniform1uiv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
+    std::vector<uint32_t> storage; const uint32_t* data = nullptr; size_t count = 0;
+    if (getUint32Array(ctx, argv[1], storage, &data, &count))
+        gl->uniform1uiv(unwrapUniformLocation(argv[0]), (GLsizei)(count / 1), data);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_uniform2uiv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
+    std::vector<uint32_t> storage; const uint32_t* data = nullptr; size_t count = 0;
+    if (getUint32Array(ctx, argv[1], storage, &data, &count))
+        gl->uniform2uiv(unwrapUniformLocation(argv[0]), (GLsizei)(count / 2), data);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_uniform3uiv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
+    std::vector<uint32_t> storage; const uint32_t* data = nullptr; size_t count = 0;
+    if (getUint32Array(ctx, argv[1], storage, &data, &count))
+        gl->uniform3uiv(unwrapUniformLocation(argv[0]), (GLsizei)(count / 3), data);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_uniform4uiv(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_UNDEFINED;
+    std::vector<uint32_t> storage; const uint32_t* data = nullptr; size_t count = 0;
+    if (getUint32Array(ctx, argv[1], storage, &data, &count))
+        gl->uniform4uiv(unwrapUniformLocation(argv[0]), (GLsizei)(count / 4), data);
+    return JS_UNDEFINED;
+}
+
+// ===========================================================================
+// Uniform / block introspection (WebGL2)
+// ===========================================================================
+
+static JSValue js_getUniformIndices(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_NULL;
+    std::vector<std::string> names;
+    JSValue lenVal = JS_GetPropertyStr(ctx, argv[1], "length");
+    uint32_t n = 0;
+    JS_ToUint32(ctx, &n, lenVal);
+    JS_FreeValue(ctx, lenVal);
+    names.reserve(n);
+    for (uint32_t i = 0; i < n; i++) {
+        JSValue elem = JS_GetPropertyUint32(ctx, argv[1], i);
+        names.push_back(jsStr(ctx, elem));
+        JS_FreeValue(ctx, elem);
+    }
+    auto indices = gl->getUniformIndices(unwrapProgram(argv[0]), names);
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < indices.size(); i++)
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewUint32(ctx, indices[i]));
+    return arr;
+}
+
+static JSValue js_getActiveUniforms(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_NULL;
+    uint32_t pname; JS_ToUint32(ctx, &pname, argv[2]);
+    std::vector<uint32_t> storage; const uint32_t* data = nullptr; size_t count = 0;
+    if (!getUint32Array(ctx, argv[1], storage, &data, &count)) return JS_NULL;
+    auto params = gl->getActiveUniforms(unwrapProgram(argv[0]),
+                                        std::vector<GLuint>(data, data + count), pname);
+    JSValue arr = JS_NewArray(ctx);
+    for (size_t i = 0; i < params.size(); i++) {
+        // UNIFORM_IS_ROW_MAJOR answers as booleans per the WebGL2 spec.
+        JSValue v = (pname == 0x8A3E) ? JS_NewBool(ctx, params[i] != 0)
+                                      : JS_NewInt32(ctx, params[i]);
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, v);
+    }
+    return arr;
+}
+
+static JSValue js_getActiveUniformBlockParameter(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_NULL;
+    uint32_t blockIndex, pname;
+    JS_ToUint32(ctx, &blockIndex, argv[1]); JS_ToUint32(ctx, &pname, argv[2]);
+    auto prog = unwrapProgram(argv[0]);
+    switch (pname) {
+        case 0x8A43: { // UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES
+            auto indices = gl->getActiveUniformBlockIndices(prog, blockIndex);
+            JSValue arr = JS_NewArray(ctx);
+            for (size_t i = 0; i < indices.size(); i++)
+                JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewUint32(ctx, (uint32_t)indices[i]));
+            return arr;
+        }
+        case 0x8A44: // UNIFORM_BLOCK_REFERENCED_BY_VERTEX_SHADER
+        case 0x8A46: // UNIFORM_BLOCK_REFERENCED_BY_FRAGMENT_SHADER
+            return JS_NewBool(ctx, gl->getActiveUniformBlockParameteri(prog, blockIndex, pname) != 0);
+        default:     // BINDING / DATA_SIZE / ACTIVE_UNIFORMS
+            return JS_NewInt32(ctx, gl->getActiveUniformBlockParameteri(prog, blockIndex, pname));
+    }
+}
+
+static JSValue js_getActiveUniformBlockName(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 2) return JS_NULL;
+    uint32_t blockIndex; JS_ToUint32(ctx, &blockIndex, argv[1]);
+    std::string name = gl->getActiveUniformBlockName(unwrapProgram(argv[0]), blockIndex);
+    if (name.empty()) return JS_NULL;
+    return JS_NewString(ctx, name.c_str());
+}
+
+static JSValue js_isProgram(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_FALSE;
+    return JS_NewBool(ctx, gl->isProgram(unwrapProgram(argv[0])));
+}
+
+static JSValue js_isShader(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_FALSE;
+    return JS_NewBool(ctx, gl->isShader(unwrapShader(argv[0])));
+}
+
+// ===========================================================================
 // Uniforms — float vector
 // ===========================================================================
 
@@ -441,6 +592,12 @@ const JSCFunctionListEntry webgl2_shader_funcs[] = {
     JS_CFUNC_DEF("getActiveUniform", 2, js_getActiveUniform),
     JS_CFUNC_DEF("getUniformBlockIndex", 2, js_getUniformBlockIndex),
     JS_CFUNC_DEF("uniformBlockBinding", 3, js_uniformBlockBinding),
+    JS_CFUNC_DEF("getUniformIndices", 2, js_getUniformIndices),
+    JS_CFUNC_DEF("getActiveUniforms", 3, js_getActiveUniforms),
+    JS_CFUNC_DEF("getActiveUniformBlockParameter", 3, js_getActiveUniformBlockParameter),
+    JS_CFUNC_DEF("getActiveUniformBlockName", 2, js_getActiveUniformBlockName),
+    JS_CFUNC_DEF("isProgram", 1, js_isProgram),
+    JS_CFUNC_DEF("isShader", 1, js_isShader),
     // Uniforms — scalar float
     JS_CFUNC_DEF("uniform1f", 2, js_uniform1f),
     JS_CFUNC_DEF("uniform2f", 3, js_uniform2f),
@@ -451,6 +608,16 @@ const JSCFunctionListEntry webgl2_shader_funcs[] = {
     JS_CFUNC_DEF("uniform2i", 3, js_uniform2i),
     JS_CFUNC_DEF("uniform3i", 4, js_uniform3i),
     JS_CFUNC_DEF("uniform4i", 5, js_uniform4i),
+    // Uniforms — scalar unsigned int (WebGL2)
+    JS_CFUNC_DEF("uniform1ui", 2, js_uniform1ui),
+    JS_CFUNC_DEF("uniform2ui", 3, js_uniform2ui),
+    JS_CFUNC_DEF("uniform3ui", 4, js_uniform3ui),
+    JS_CFUNC_DEF("uniform4ui", 5, js_uniform4ui),
+    // Uniforms — unsigned int vector (WebGL2)
+    JS_CFUNC_DEF("uniform1uiv", 2, js_uniform1uiv),
+    JS_CFUNC_DEF("uniform2uiv", 2, js_uniform2uiv),
+    JS_CFUNC_DEF("uniform3uiv", 2, js_uniform3uiv),
+    JS_CFUNC_DEF("uniform4uiv", 2, js_uniform4uiv),
     // Uniforms — float vector
     JS_CFUNC_DEF("uniform1fv", 2, js_uniform1fv),
     JS_CFUNC_DEF("uniform2fv", 2, js_uniform2fv),

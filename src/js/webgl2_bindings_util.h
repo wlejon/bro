@@ -259,6 +259,36 @@ inline bool getInt32Array(JSContext* ctx, JSValueConst val,
     return false;
 }
 
+inline bool getUint32Array(JSContext* ctx, JSValueConst val,
+                           std::vector<uint32_t>& storage,
+                           const uint32_t** outData, size_t* outCount) {
+    const uint8_t* data = nullptr;
+    size_t len = 0;
+    if (getBufferData(ctx, val, &data, &len)) {
+        *outData = reinterpret_cast<const uint32_t*>(data);
+        *outCount = len / sizeof(uint32_t);
+        return true;
+    }
+    if (JS_IsArray(val)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, val, "length");
+        uint32_t n = 0;
+        JS_ToUint32(ctx, &n, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        storage.resize(n);
+        for (uint32_t i = 0; i < n; i++) {
+            JSValue elem = JS_GetPropertyUint32(ctx, val, i);
+            uint32_t v = 0;
+            JS_ToUint32(ctx, &v, elem);
+            JS_FreeValue(ctx, elem);
+            storage[i] = v;
+        }
+        *outData = storage.data();
+        *outCount = n;
+        return true;
+    }
+    return false;
+}
+
 // --- Function list arrays exported by each category file ---
 extern const JSCFunctionListEntry webgl2_state_funcs[];
 extern const int webgl2_state_funcs_count;

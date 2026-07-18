@@ -616,6 +616,10 @@ void WebGL2RenderingContext::vertexAttribIPointer(GLuint index, GLint size, GLen
 void WebGL2RenderingContext::enableVertexAttribArray(GLuint index) { glEnableVertexAttribArray(index); }
 void WebGL2RenderingContext::disableVertexAttribArray(GLuint index) { glDisableVertexAttribArray(index); }
 void WebGL2RenderingContext::vertexAttribDivisor(GLuint index, GLuint divisor) { glVertexAttribDivisor(index, divisor); }
+void WebGL2RenderingContext::vertexAttribI4i(GLuint index, GLint x, GLint y, GLint z, GLint w) { glVertexAttribI4i(index, x, y, z, w); }
+void WebGL2RenderingContext::vertexAttribI4ui(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w) { glVertexAttribI4ui(index, x, y, z, w); }
+void WebGL2RenderingContext::vertexAttribI4iv(GLuint index, const GLint* v) { glVertexAttribI4iv(index, v); }
+void WebGL2RenderingContext::vertexAttribI4uiv(GLuint index, const GLuint* v) { glVertexAttribI4uiv(index, v); }
 
 // ===========================================================================
 // Shaders
@@ -759,6 +763,55 @@ void WebGL2RenderingContext::uniformBlockBinding(WebGLProgram program, GLuint bl
     glUniformBlockBinding(program.id, blockIndex, blockBinding);
 }
 
+std::vector<GLuint> WebGL2RenderingContext::getUniformIndices(WebGLProgram program,
+                                                              const std::vector<std::string>& names) {
+    std::vector<const char*> ptrs(names.size());
+    for (size_t i = 0; i < names.size(); i++) ptrs[i] = names[i].c_str();
+    std::vector<GLuint> indices(names.size(), GL_INVALID_INDEX);
+    if (!ptrs.empty()) {
+        glGetUniformIndices(program.id, (GLsizei)ptrs.size(), ptrs.data(), indices.data());
+    }
+    return indices;
+}
+
+std::vector<GLint> WebGL2RenderingContext::getActiveUniforms(WebGLProgram program,
+                                                             const std::vector<GLuint>& indices,
+                                                             GLenum pname) {
+    std::vector<GLint> params(indices.size(), 0);
+    if (!indices.empty()) {
+        glGetActiveUniformsiv(program.id, (GLsizei)indices.size(), indices.data(),
+                              pname, params.data());
+    }
+    return params;
+}
+
+GLint WebGL2RenderingContext::getActiveUniformBlockParameteri(WebGLProgram program,
+                                                              GLuint blockIndex, GLenum pname) {
+    GLint v = 0;
+    glGetActiveUniformBlockiv(program.id, blockIndex, pname, &v);
+    return v;
+}
+
+std::vector<GLint> WebGL2RenderingContext::getActiveUniformBlockIndices(WebGLProgram program,
+                                                                        GLuint blockIndex) {
+    GLint count = 0;
+    glGetActiveUniformBlockiv(program.id, blockIndex,
+                              GL_UNIFORM_BLOCK_ACTIVE_UNIFORMS, &count);
+    if (count <= 0) return {};
+    std::vector<GLint> indices(count, 0);
+    glGetActiveUniformBlockiv(program.id, blockIndex,
+                              GL_UNIFORM_BLOCK_ACTIVE_UNIFORM_INDICES, indices.data());
+    return indices;
+}
+
+std::string WebGL2RenderingContext::getActiveUniformBlockName(WebGLProgram program,
+                                                              GLuint blockIndex) {
+    char name[256];
+    GLsizei len = 0;
+    glGetActiveUniformBlockName(program.id, blockIndex, sizeof(name), &len, name);
+    return std::string(name, len);
+}
+
 // ===========================================================================
 // Uniforms
 // ===========================================================================
@@ -771,6 +824,15 @@ void WebGL2RenderingContext::uniform1i(WebGLUniformLocation loc, GLint x) { glUn
 void WebGL2RenderingContext::uniform2i(WebGLUniformLocation loc, GLint x, GLint y) { glUniform2i(loc.location, x, y); }
 void WebGL2RenderingContext::uniform3i(WebGLUniformLocation loc, GLint x, GLint y, GLint z) { glUniform3i(loc.location, x, y, z); }
 void WebGL2RenderingContext::uniform4i(WebGLUniformLocation loc, GLint x, GLint y, GLint z, GLint w) { glUniform4i(loc.location, x, y, z, w); }
+
+void WebGL2RenderingContext::uniform1ui(WebGLUniformLocation loc, GLuint x) { glUniform1ui(loc.location, x); }
+void WebGL2RenderingContext::uniform2ui(WebGLUniformLocation loc, GLuint x, GLuint y) { glUniform2ui(loc.location, x, y); }
+void WebGL2RenderingContext::uniform3ui(WebGLUniformLocation loc, GLuint x, GLuint y, GLuint z) { glUniform3ui(loc.location, x, y, z); }
+void WebGL2RenderingContext::uniform4ui(WebGLUniformLocation loc, GLuint x, GLuint y, GLuint z, GLuint w) { glUniform4ui(loc.location, x, y, z, w); }
+void WebGL2RenderingContext::uniform1uiv(WebGLUniformLocation loc, GLsizei count, const GLuint* v) { glUniform1uiv(loc.location, count, v); }
+void WebGL2RenderingContext::uniform2uiv(WebGLUniformLocation loc, GLsizei count, const GLuint* v) { glUniform2uiv(loc.location, count, v); }
+void WebGL2RenderingContext::uniform3uiv(WebGLUniformLocation loc, GLsizei count, const GLuint* v) { glUniform3uiv(loc.location, count, v); }
+void WebGL2RenderingContext::uniform4uiv(WebGLUniformLocation loc, GLsizei count, const GLuint* v) { glUniform4uiv(loc.location, count, v); }
 
 void WebGL2RenderingContext::uniform1fv(WebGLUniformLocation loc, GLsizei count, const GLfloat* v) { glUniform1fv(loc.location, count, v); }
 void WebGL2RenderingContext::uniform2fv(WebGLUniformLocation loc, GLsizei count, const GLfloat* v) { glUniform2fv(loc.location, count, v); }
@@ -1404,6 +1466,48 @@ bool WebGL2RenderingContext::getExtension(const std::string& name) {
         if (ext == name) return true;
     }
     return false;
+}
+
+// ===========================================================================
+// Object predicates
+// ===========================================================================
+// The valid-set check guards against GL id reuse after delete (a stale
+// wrapper must answer false even if the driver handed the id to a new
+// object); glIs* then supplies the created-on-first-bind semantics.
+
+GLboolean WebGL2RenderingContext::isBuffer(WebGLBuffer buf) {
+    if (!buf.id || !validBuffers_.count(buf.id)) return GL_FALSE;
+    return glIsBuffer(buf.id);
+}
+
+GLboolean WebGL2RenderingContext::isTexture(WebGLTexture tex) {
+    if (!tex.id || !validTextures_.count(tex.id)) return GL_FALSE;
+    return glIsTexture(tex.id);
+}
+
+GLboolean WebGL2RenderingContext::isFramebuffer(WebGLFramebuffer fbo) {
+    if (!fbo.id || !validFramebuffers_.count(fbo.id)) return GL_FALSE;
+    return glIsFramebuffer(fbo.id);
+}
+
+GLboolean WebGL2RenderingContext::isRenderbuffer(WebGLRenderbuffer rbo) {
+    if (!rbo.id || !validRenderbuffers_.count(rbo.id)) return GL_FALSE;
+    return glIsRenderbuffer(rbo.id);
+}
+
+GLboolean WebGL2RenderingContext::isProgram(WebGLProgram program) {
+    if (!program.id || !validPrograms_.count(program.id)) return GL_FALSE;
+    return glIsProgram(program.id);
+}
+
+GLboolean WebGL2RenderingContext::isShader(WebGLShader shader) {
+    if (!shader.id || !validShaders_.count(shader.id)) return GL_FALSE;
+    return glIsShader(shader.id);
+}
+
+GLboolean WebGL2RenderingContext::isVertexArray(WebGLVertexArrayObject vao) {
+    if (!vao.id || !validVAOs_.count(vao.id)) return GL_FALSE;
+    return glIsVertexArray(vao.id);
 }
 
 // ===========================================================================

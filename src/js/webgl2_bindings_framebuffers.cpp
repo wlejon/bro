@@ -172,6 +172,16 @@ static JSValue js_renderbufferStorageMultisample(JSContext* ctx, JSValueConst th
     return JS_UNDEFINED;
 }
 
+static JSValue js_isFramebuffer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_FALSE;
+    return JS_NewBool(ctx, gl->isFramebuffer(unwrapFramebuffer(argv[0])));
+}
+
+static JSValue js_isRenderbuffer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_FALSE;
+    return JS_NewBool(ctx, gl->isRenderbuffer(unwrapRenderbuffer(argv[0])));
+}
+
 // ===========================================================================
 // Exported function list
 // ===========================================================================
@@ -192,6 +202,8 @@ const JSCFunctionListEntry webgl2_framebuffer_funcs[] = {
     JS_CFUNC_DEF("bindRenderbuffer", 2, js_bindRenderbuffer),
     JS_CFUNC_DEF("renderbufferStorage", 4, js_renderbufferStorage),
     JS_CFUNC_DEF("renderbufferStorageMultisample", 5, js_renderbufferStorageMultisample),
+    JS_CFUNC_DEF("isFramebuffer", 1, js_isFramebuffer),
+    JS_CFUNC_DEF("isRenderbuffer", 1, js_isRenderbuffer),
 };
 const int webgl2_framebuffer_funcs_count = sizeof(webgl2_framebuffer_funcs) / sizeof(webgl2_framebuffer_funcs[0]);
 

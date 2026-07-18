@@ -381,19 +381,28 @@ compressed extensions gated on real driver support
 (`WEBGL_compressed_texture_s3tc`[`_srgb`], `EXT_texture_compression_rgtc`,
 `EXT_texture_compression_bptc` — extension objects carry their format
 constants). ETC2/ASTC are unavailable: desktop GL 3.3 core cannot express
-them, and they are never claimed.
+them, and they are never claimed; unsigned-int uniform setters (`uniform*ui`,
+`uniform*uiv` — typed arrays and plain JS arrays) and constant integer vertex
+attributes (`vertexAttribI4i/ui/iv/uiv`); uniform/block introspection
+(`getUniformIndices` with `INVALID_INDEX` for unknown names,
+`getActiveUniforms` for TYPE/SIZE/BLOCK_INDEX/OFFSET/ARRAY_STRIDE/
+MATRIX_STRIDE/IS_ROW_MAJOR, `getActiveUniformBlockParameter` incl. the
+active-uniform-indices array and boolean referenced-by rows,
+`getActiveUniformBlockName`); the full `is*` predicate family (`isBuffer`/
+`isTexture`/`isFramebuffer`/`isRenderbuffer`/`isProgram`/`isShader`/
+`isVertexArray`/`isSampler`/`isQuery`/`isSync`/`isTransformFeedback`) with
+WebGL lifecycle semantics — false before first bind for gen-style objects,
+false after delete, immune to GL id reuse via the context's valid-object
+sets.
 
 **Not implemented (absent API families):**
 compressed 3D/array uploads (`compressedTexImage3D`), the
 `compressedTex*`-from-PBO offset overloads, `framebufferTextureLayer`,
-`invalidateFramebuffer`/`invalidateSubFramebuffer`, unsigned-int uniform
-setters (`uniform*ui*`), constant vertex attributes (`vertexAttrib[1-4]f*`,
-`vertexAttribI4*`), and the introspection getters `getUniform`,
-`getVertexAttrib`, `getTexParameter`, `getBufferParameter`,
+`invalidateFramebuffer`/`invalidateSubFramebuffer`, constant float vertex
+attributes (`vertexAttrib[1-4]f*`), and the introspection getters
+`getUniform`, `getVertexAttrib`, `getTexParameter`, `getBufferParameter`,
 `getRenderbufferParameter`, `getFramebufferAttachmentParameter`,
-`getActiveUniformBlockParameter`/`Name`, `getUniformIndices`,
-`getInternalformatParameter`, `validateProgram`, and the `is*` object
-predicates.
+`getInternalformatParameter`, `validateProgram`.
 
 **Known deviations:** `texStorage2D` is emulated with mutable storage
 (`texImage2D` per level) so three.js's placeholder-then-allocate flow works —

@@ -278,6 +278,11 @@ static JSValue js_copyTexSubImage2D(JSContext* ctx, JSValueConst this_val, int a
     return JS_UNDEFINED;
 }
 
+static JSValue js_isTexture(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_FALSE;
+    return JS_NewBool(ctx, gl->isTexture(unwrapTexture(argv[0])));
+}
+
 static JSValue js_generateMipmap(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_UNDEFINED;
     uint32_t target; JS_ToUint32(ctx, &target, argv[0]);
@@ -314,6 +319,7 @@ const JSCFunctionListEntry webgl2_texture_funcs[] = {
     JS_CFUNC_DEF("createTexture", 0, js_createTexture),
     JS_CFUNC_DEF("deleteTexture", 1, js_deleteTexture),
     JS_CFUNC_DEF("bindTexture", 2, js_bindTexture),
+    JS_CFUNC_DEF("isTexture", 1, js_isTexture),
     JS_CFUNC_DEF("activeTexture", 1, js_activeTexture),
     JS_CFUNC_DEF("texParameteri", 3, js_texParameteri),
     JS_CFUNC_DEF("texParameterf", 3, js_texParameterf),

@@ -210,6 +210,10 @@ public:
     void enableVertexAttribArray(GLuint index);
     void disableVertexAttribArray(GLuint index);
     void vertexAttribDivisor(GLuint index, GLuint divisor);
+    void vertexAttribI4i(GLuint index, GLint x, GLint y, GLint z, GLint w);
+    void vertexAttribI4ui(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w);
+    void vertexAttribI4iv(GLuint index, const GLint* v);
+    void vertexAttribI4uiv(GLuint index, const GLuint* v);
 
     // --- Shaders ---
     WebGLShader createShader(GLenum type);
@@ -240,6 +244,15 @@ public:
     GLuint getUniformBlockIndex(WebGLProgram program, const std::string& name);
     void uniformBlockBinding(WebGLProgram program, GLuint blockIndex, GLuint blockBinding);
 
+    // --- Uniform / block introspection (WebGL2) ---
+    std::vector<GLuint> getUniformIndices(WebGLProgram program,
+                                          const std::vector<std::string>& names);
+    std::vector<GLint> getActiveUniforms(WebGLProgram program,
+                                         const std::vector<GLuint>& indices, GLenum pname);
+    GLint getActiveUniformBlockParameteri(WebGLProgram program, GLuint blockIndex, GLenum pname);
+    std::vector<GLint> getActiveUniformBlockIndices(WebGLProgram program, GLuint blockIndex);
+    std::string getActiveUniformBlockName(WebGLProgram program, GLuint blockIndex);
+
     // --- Uniforms ---
     void uniform1f(WebGLUniformLocation loc, GLfloat x);
     void uniform2f(WebGLUniformLocation loc, GLfloat x, GLfloat y);
@@ -253,6 +266,14 @@ public:
     void uniform2fv(WebGLUniformLocation loc, GLsizei count, const GLfloat* value);
     void uniform3fv(WebGLUniformLocation loc, GLsizei count, const GLfloat* value);
     void uniform4fv(WebGLUniformLocation loc, GLsizei count, const GLfloat* value);
+    void uniform1ui(WebGLUniformLocation loc, GLuint x);
+    void uniform2ui(WebGLUniformLocation loc, GLuint x, GLuint y);
+    void uniform3ui(WebGLUniformLocation loc, GLuint x, GLuint y, GLuint z);
+    void uniform4ui(WebGLUniformLocation loc, GLuint x, GLuint y, GLuint z, GLuint w);
+    void uniform1uiv(WebGLUniformLocation loc, GLsizei count, const GLuint* value);
+    void uniform2uiv(WebGLUniformLocation loc, GLsizei count, const GLuint* value);
+    void uniform3uiv(WebGLUniformLocation loc, GLsizei count, const GLuint* value);
+    void uniform4uiv(WebGLUniformLocation loc, GLsizei count, const GLuint* value);
     void uniform1iv(WebGLUniformLocation loc, GLsizei count, const GLint* value);
     void uniform2iv(WebGLUniformLocation loc, GLsizei count, const GLint* value);
     void uniform3iv(WebGLUniformLocation loc, GLsizei count, const GLint* value);
@@ -342,6 +363,16 @@ public:
     std::string getShadingLanguageVersion();
     std::vector<std::string> getSupportedExtensions();
     bool getExtension(const std::string& name);
+
+    // --- Object predicates (WebGL is* semantics: false for deleted names,
+    //     false before first bind for gen-style objects — matches GL) ---
+    GLboolean isBuffer(WebGLBuffer buf);
+    GLboolean isTexture(WebGLTexture tex);
+    GLboolean isFramebuffer(WebGLFramebuffer fbo);
+    GLboolean isRenderbuffer(WebGLRenderbuffer rbo);
+    GLboolean isProgram(WebGLProgram program);
+    GLboolean isShader(WebGLShader shader);
+    GLboolean isVertexArray(WebGLVertexArrayObject vao);
 
     // --- Misc ---
     void flush();
