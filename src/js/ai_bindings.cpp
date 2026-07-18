@@ -249,9 +249,12 @@ static std::vector<brogameagent::AABB> parseAABBArray(JSContext* ctx, JSValueCon
 // Apply an `avoidance` opts value onto an agent: `true`/`false` toggles
 // participation with default params; an object sets {enabled?, radius?,
 // maxSpeed?, neighborDist?, maxNeighbors?, timeHorizon?, timeHorizonObst?,
-// height?} (radius/maxSpeed omitted or <= 0 derive from the agent; height is
-// the vertical extent for the multi-level elevation filter). Shared by
-// createAgent, agent.setAvoidance and node.attachAgent.
+// height?, priority?, layers?, mask?} (radius/maxSpeed omitted or <= 0
+// derive from the agent; height is the vertical extent for the multi-level
+// elevation filter; priority 0..1 shifts the pairwise avoidance effort onto
+// the lower-priority agent; layers/mask are bitmasks — A avoids B only when
+// A.mask & B.layers). Shared by createAgent, agent.setAvoidance and
+// node.attachAgent.
 void applyAgentAvoidanceOpts(JSContext* ctx, JSValueConst val, brogameagent::Agent& agent) {
     brogameagent::AgentAvoidance av;  // library defaults
     if (JS_IsBool(val)) {
@@ -265,6 +268,9 @@ void applyAgentAvoidanceOpts(JSContext* ctx, JSValueConst val, brogameagent::Age
         av.timeHorizon     = (float)getDoubleProp(ctx, val, "timeHorizon", av.timeHorizon);
         av.timeHorizonObst = (float)getDoubleProp(ctx, val, "timeHorizonObst", av.timeHorizonObst);
         av.height          = (float)getDoubleProp(ctx, val, "height", av.height);
+        av.priority        = (float)getDoubleProp(ctx, val, "priority", av.priority);
+        av.layers          = (uint32_t)getDoubleProp(ctx, val, "layers", av.layers);
+        av.mask            = (uint32_t)getDoubleProp(ctx, val, "mask", av.mask);
     } else {
         return;
     }

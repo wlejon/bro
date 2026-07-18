@@ -594,10 +594,12 @@ bot.atTarget;
 // world.tick(). Off by default (agents keep the legacy pass-through-each-
 // other movement). When enabled, each living agent's path-following
 // steering becomes its *preferred* velocity, the ORCA solver filters it
-// against nearby agents (each side takes half the avoidance effort) and
-// static walls, and the filtered velocity drives the agent's usual
-// dynamics (maxAccel / maxTurnRate / nav-grid clamping still apply).
-// Deterministic: the same roster + obstacles + ticks replay identically.
+// against nearby agents (the pair splits the avoidance effort by their
+// priorities — 50/50 by default, see avoidance.priority) and static walls,
+// and the filtered velocity drives the agent's usual dynamics (maxAccel /
+// maxTurnRate / nav-grid clamping still apply). avoidance.layers/mask
+// scope who avoids whom. Deterministic: the same roster + obstacles +
+// ticks replay identically.
 //
 // Scene-attached agents get this for free — attachAIWorld ticks the same
 // world, so think() callbacks issuing self.moveTo(...) produce paths that
@@ -645,8 +647,28 @@ world.avoidanceEnabled;
  *   height/2] don't overlap are on different levels (bridge over tunnel,
  *   stacked floors) and ignore each other. Elevations default to 0, so
  *   single-level worlds never filter.
+ * @param {number}  [opts.priority=0.5]      - avoidance responsibility weight,
+ *   0..1. When two agents negotiate, each takes the effort share
+ *       share = clamp(0.5 + 0.5 * (otherPriority - selfPriority), 0, 1)
+ *   — shares sum to 1 across the pair, so ORCA's collision-free reciprocity
+ *   is preserved. Equal priorities keep the classic 50/50; the LOWER-priority
+ *   agent takes proportionally more, and at the extremes (1 vs 0) the
+ *   low-priority agent does all the avoiding while the high-priority one
+ *   holds course (think boss vs minions). Deterministic.
+ * @param {number}  [opts.layers=1]          - layer membership bitmask (which
+ *   avoidance layers this agent occupies)
+ * @param {number}  [opts.mask=1]            - neighbor-selection bitmask: agent
+ *   A avoids neighbor B only when (A.mask & B.layers) !== 0. One-sided by
+ *   design — B may still avoid A if B's mask matches A's layers, and an agent
+ *   avoiding a neighbor that cannot see it back automatically takes the FULL
+ *   effort (no reciprocity to count on). Default 1/1 = everyone avoids
+ *   everyone.
  */
 bot.setAvoidance({ radius: 0.5, timeHorizon: 2.5 });
+// A boss that plows through the crowd; minions scatter:
+boss.setAvoidance({ priority: 1.0 });
+// Ghosts and the living never steer around each other:
+ghost.setAvoidance({ layers: 2, mask: 2 });
 
 // Typical setup: shared nav grid + avoidance, then just set targets.
 const arena = bro.ai.game.createNavGrid({

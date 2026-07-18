@@ -275,4 +275,88 @@ function dist(a, b) { return Math.hypot(a.x - b.x, a.z - b.z); }
     scene.detachAIWorld();
 }
 
+// =========================================================================
+// Priority: the lower-priority agent takes (nearly) all the avoidance
+// effort; the pair still never overlaps and both arrive
+// =========================================================================
+{
+    const world = G.createWorld();
+    world.setAvoidance(true);
+
+    const boss = G.createAgent({
+        id: 1, x: -5, z: 0, speed: 4, radius: 0.5,
+        avoidance: { priority: 1.0 },
+    });
+    const minion = G.createAgent({
+        id: 2, x: 5, z: 0, speed: 4, radius: 0.5,
+        avoidance: { priority: 0.0 },
+    });
+    world.addAgent(boss);
+    world.addAgent(minion);
+    boss.setTarget(5, 0);
+    minion.setTarget(-5, 0);
+
+    let minDist = Infinity, latBoss = 0, latMinion = 0;
+    for (let i = 0; i < 15 * 60; i++) {
+        world.tick(dt);
+        minDist = Math.min(minDist, dist(boss, minion));
+        latBoss = Math.max(latBoss, Math.abs(boss.z));
+        latMinion = Math.max(latMinion, Math.abs(minion.z));
+        if (boss.atTarget && minion.atTarget) break;
+    }
+    assert(boss.atTarget && minion.atTarget, 'priority pair both arrive');
+    assert(minDist >= 1.0 * 0.9,
+        'priority pair never overlapped: minDist=' + minDist.toFixed(3));
+    assert(latMinion > 2 * latBoss,
+        'low-priority agent did the swerving: minion=' + latMinion.toFixed(3) +
+        ' vs boss=' + latBoss.toFixed(3));
+}
+
+// =========================================================================
+// Layers/mask: disjoint groups ghost through each other; runtime
+// setAvoidance updates take effect
+// =========================================================================
+{
+    const world = G.createWorld();
+    world.setAvoidance(true);
+
+    const a = G.createAgent({
+        id: 1, x: -5, z: 0, speed: 4, radius: 0.5,
+        avoidance: { layers: 1, mask: 1 },
+    });
+    const b = G.createAgent({ id: 2, x: 5, z: 0, speed: 4, radius: 0.5 });
+    // Runtime setter: move b onto layer 2, only seeing layer 2.
+    b.setAvoidance({ layers: 2, mask: 2 });
+    world.addAgent(a);
+    world.addAgent(b);
+    a.setTarget(5, 0);
+    b.setTarget(-5, 0);
+
+    let minDist = Infinity;
+    for (let i = 0; i < 15 * 60; i++) {
+        world.tick(dt);
+        minDist = Math.min(minDist, dist(a, b));
+        if (a.atTarget && b.atTarget) break;
+    }
+    assert(a.atTarget && b.atTarget, 'masked-out pair both arrive');
+    assert(minDist < 0.5,
+        'disjoint layers ghost through each other: minDist=' + minDist.toFixed(3));
+
+    // Flip b back onto the shared layer: they avoid again on a fresh run.
+    a.setPosition(-5, 0);
+    b.setPosition(5, 0);
+    b.setAvoidance({ layers: 1, mask: 1 });
+    a.setTarget(5, 0);
+    b.setTarget(-5, 0);
+    minDist = Infinity;
+    for (let i = 0; i < 15 * 60; i++) {
+        world.tick(dt);
+        minDist = Math.min(minDist, dist(a, b));
+        if (a.atTarget && b.atTarget) break;
+    }
+    assert(a.atTarget && b.atTarget, 'shared-layer pair both arrive');
+    assert(minDist >= 1.0 * 0.9,
+        'shared layer avoids again: minDist=' + minDist.toFixed(3));
+}
+
 console.log('test_avoidance: OK');
