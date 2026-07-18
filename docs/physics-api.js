@@ -1105,6 +1105,10 @@ w.destroy();         // tear down the world entirely; do NOT use the handle afte
  *                                           is invisible to all of those (it
  *                                           never enters the broadphase). The
  *                                           body's tag is `character.innerBody`.
+ *                                           This governs DETECTION only —
+ *                                           how hard the character shoves
+ *                                           dynamic bodies is maxStrength,
+ *                                           which works with or without it.
  * @param {string|number} [opts.innerBodyLayer] - inner body's collision layer;
  *                                           default = the character's layer
  * @returns {PhysicsCharacter}

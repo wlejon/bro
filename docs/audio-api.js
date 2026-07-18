@@ -778,10 +778,14 @@ class AudioContext {
    * Playback starts automatically once the prebuffer (~500 ms) is decoded.
    * Looping follows setPlaybackLoop live: the worker rewinds the decoder at
    * end-of-file, so loops are seamless (enabling loop after the stream already
-   * finished restarts it from the top). There is no seek — matching clip
-   * playback, which also has none. If the disk/scheduler stalls long enough to
-   * drain the ring, the stream plays silence and counts the gap (see
-   * getStreamStats), then resumes — it never blocks the audio thread.
+   * finished restarts it from the top). seekPlayback works on a stream just as
+   * it does on a clip voice: the decode worker takes the seek, moves the codec
+   * and refills the ring, so the position readout lands where you asked. The
+   * refill may cost a counted underrun gap if the seek drained the ring — that
+   * depends on scheduling, so treat it as expected but not guaranteed. If the
+   * disk/scheduler stalls long enough to drain the ring, the stream plays
+   * silence and counts the gap (see getStreamStats), then resumes — it never
+   * blocks the audio thread.
    *
    *   const s = ctx.createStreamFromFile('music/long-track.ogg');
    *   ctx.setPlaybackGain(s, 0.8);

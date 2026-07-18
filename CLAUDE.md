@@ -94,7 +94,6 @@ Annotated `.js` files with JSDoc + examples — read the file before using or ch
 | `lighting-api.js` | PBR lighting — LightNode, materials, tonemap, ambient |
 | `net-api.js` | `bro.net` — game networking (host/connect/send) via GNS |
 | `net-sync-api.js` | `bro.net.sync` — high-level replication + RPCs (pure JS module, host-star) |
-| `crosshair-api.js` | `bro.crosshair` — engine crosshair overlay |
 | `gamepad-api.js` | Gamepad API — W3C snapshots, rumble, settings action bindings, headless injection |
 | `pointer-api.js` | Pointer + Touch Events — capture, compat mouse synthesis, headless touch injection |
 | `web-animations-api.js` | `element.animate()` — WAAPI subset on the CSS-transition interpolator |
