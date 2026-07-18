@@ -63,6 +63,37 @@ flush();
 assert(p1.textContent === 'ONE', 'adopted text node still writable');
 
 // ---------------------------------------------------------------------------
+// ownerDocument is a Node property, not an Element property. Text and Comment
+// wrappers had no getter at all, so `t.ownerDocument` read `undefined` — which
+// made adopted text nodes look un-adopted even though ownership had in fact
+// moved correctly.
+// ---------------------------------------------------------------------------
+{
+    const srcT = parser.parseFromString(
+        '<html><body><div id="tw">text<!--cmt--></div></body></html>', 'text/html');
+    const holder = srcT.querySelector('#tw');
+    const txt = holder.childNodes[0];
+    const cmt = holder.childNodes[1];
+    assert(txt.nodeType === 3 && cmt.nodeType === 8, 'grabbed text + comment');
+    assert(txt.ownerDocument === srcT, 'text node ownerDocument before adoption');
+    assert(cmt.ownerDocument === srcT, 'comment node ownerDocument before adoption');
+
+    root.appendChild(txt);
+    flush();
+    assert(txt.ownerDocument === document, 'text node ownerDocument after adoption');
+    assert(txt.parentNode === root, 'adopted text node is in the live tree');
+    assert(txt.data === 'text', 'adopted text node data intact');
+
+    // Same-document nodes report the live document too.
+    const localText = document.createTextNode('local');
+    assert(localText.ownerDocument === document,
+           'createTextNode ownerDocument is the live document');
+    const localFrag = document.createDocumentFragment();
+    assert(localFrag.ownerDocument === document,
+           'createDocumentFragment ownerDocument is the live document');
+}
+
+// ---------------------------------------------------------------------------
 // insertBefore and replaceChild adopt too
 // ---------------------------------------------------------------------------
 const src3 = parser.parseFromString(

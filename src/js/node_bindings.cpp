@@ -302,6 +302,31 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
     JS_SetPropertyStr(ctx, obj, "nodeName",
         JS_NewString(ctx, node->nodeName().c_str()));
 
+    // ownerDocument. This is a Node property, but only the Element wrapper had
+    // it — Text/Comment/DocumentFragment wrappers answered `undefined`, which
+    // made a correctly adopted text node look like adoption had not run. It
+    // must be a live getter rather than a value set at wrap time: adoption
+    // re-points the wrapper's handle at a different document, and a snapshot
+    // taken here would keep naming the old one.
+    {
+        JSValue getOwnerDoc = JS_NewCFunction2(ctx, [](JSContext* cx,
+            JSValueConst this_val, int, JSValueConst*) -> JSValue {
+            auto* nd = nodeSelf(this_val);
+            if (!nd || !nd->document()) return JS_NULL;
+            // Detached (DOMParser) nodes answer with THEIR Document wrapper,
+            // not the realm's global document — same rule as Element.
+            JSValue detached = detachedDocumentWrapper(cx, nd->document());
+            if (!JS_IsNull(detached)) return detached;
+            JSValue g = JS_GetGlobalObject(cx);
+            JSValue d = JS_GetPropertyStr(cx, g, "document");
+            JS_FreeValue(cx, g);
+            return d;
+        }, "get ownerDocument", 0, JS_CFUNC_generic, 0);
+        JSAtom odAtom = JS_NewAtom(ctx, "ownerDocument");
+        JS_DefinePropertyGetSet(ctx, obj, odAtom, getOwnerDoc, JS_UNDEFINED, 0);
+        JS_FreeAtom(ctx, odAtom);
+    }
+
     // -- CharacterData methods shared by Text and Comment nodes --
     auto installCharacterDataMethods = [&](JSValue obj, bro::dom::Node* n) {
         // length getter
