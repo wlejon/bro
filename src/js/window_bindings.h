@@ -9,14 +9,15 @@ namespace bro::platform { class EventLoop; class Window; }
 namespace bro::js {
 
 /// Install window globals: window, navigator, location, history, screen,
-/// addEventListener/removeEventListener, and the SPA history polyfill.
-/// Must be called before DOM bindings.
+/// window.open, addEventListener/removeEventListener, and the SPA history
+/// polyfill. Must be called before DOM bindings.
 /// `devicePixelRatio` is the OS display scale for the hosting window
 /// (Window::getDisplayScale()); headless passes the default 1.0 so tests
 /// stay deterministic across machines. The engine refreshes the global on
 /// resize and display-scale-change events (see Engine::handleResize).
 /// `window` may be null (--no-gpu headless); `headless` pins the surfaces
-/// that would otherwise depend on the host machine (screen metrics).
+/// that would otherwise depend on the host machine (screen metrics) and
+/// disables shell-out (window.open).
 void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight,
                            double devicePixelRatio = 1.0,
                            platform::Window* window = nullptr,

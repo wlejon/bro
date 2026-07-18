@@ -1,12 +1,14 @@
 #include "js/window_bindings.h"
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
+#include "util/log.h"
 
 #include "window_polyfill.js.h"
 
 #include <cstring>
 
 #include <SDL3/SDL_clipboard.h>
+#include <SDL3/SDL_misc.h>   // SDL_OpenURL
 #include <SDL3/SDL_stdinc.h> // SDL_free
 
 extern "C" {
@@ -101,6 +103,33 @@ static JSValue js_screen_get_availHeight(JSContext* ctx, JSValueConst, int, JSVa
     return JS_NewInt32(ctx, h);
 }
 
+// ---------------------------------------------------------------------------
+// window.open(url) — hand the URL to the OS (default browser / mail client)
+// via SDL_OpenURL. There is no Window object to return, so it always returns
+// null; target/features arguments are ignored. Any scheme SDL accepts is
+// allowed — bro apps are local-first and already have full fs/child_process
+// access, so gating URL schemes here would protect nothing (documented in
+// docs/window-api.js). Headless never shells out.
+// ---------------------------------------------------------------------------
+
+static JSValue js_window_open(JSContext* ctx, JSValueConst /*this_val*/,
+                              int argc, JSValueConst* argv)
+{
+    if (argc < 1 || JS_IsUndefined(argv[0]) || JS_IsNull(argv[0]))
+        return JS_NULL;
+    const char* url = JS_ToCString(ctx, argv[0]);
+    if (!url) return JS_NULL;
+    if (*url) {
+        if (s_headless) {
+            LOG_INFO("window.open('%s'): suppressed in headless mode", url);
+        } else if (!SDL_OpenURL(url)) {
+            LOG_INFO("window.open('%s') failed: %s", url, SDL_GetError());
+        }
+    }
+    JS_FreeCString(ctx, url);
+    return JS_NULL;
+}
+
 void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight,
                            double devicePixelRatio,
                            platform::Window* window, bool headless)
@@ -128,6 +157,10 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
     JS_SetPropertyStr(ctx, global, "scrollY", JS_NewInt32(ctx, 0));
     JS_SetPropertyStr(ctx, global, "pageXOffset", JS_NewInt32(ctx, 0));
     JS_SetPropertyStr(ctx, global, "pageYOffset", JS_NewInt32(ctx, 0));
+
+    // window.open — shell out to the OS URL handler (see js_window_open).
+    JS_SetPropertyStr(ctx, global, "open",
+                      JS_NewCFunction(ctx, js_window_open, "open", 1));
 
     // window.screen — live accessors so the values track the display the
     // window actually sits on (constant in practice unless the user drags
