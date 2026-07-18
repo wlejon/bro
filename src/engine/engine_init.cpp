@@ -26,6 +26,7 @@
 #include "js/canvas_bindings.h"
 #include "js/event_dispatch.h"
 #include "js/audio_bindings.h"
+#include "js/audio_scene_sync.h"
 #include "js/storage_bindings.h"
 #include "js/settings_bindings.h"
 #include "js/dialog_bindings.h"
@@ -378,6 +379,10 @@ Engine::Engine(const EngineConfig& config)
     } else {
         audioEngine_->initHeadless();
     }
+
+    // Scene-attached audio emitters + camera listener: wire the registry the
+    // per-frame sync (engine_frame / headless advanceTime) pushes through.
+    js::installAudioSceneSync(audioEngine_.get());
 
     // Audio-inference subsystem: owns the background worker thread that runs
     // audio-driven NN models (wake word today) off the audio thread and off the

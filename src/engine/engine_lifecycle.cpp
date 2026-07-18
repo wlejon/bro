@@ -10,6 +10,7 @@
 #include "js/dom_bindings.h"
 #include "js/matchmedia_bindings.h"
 #include "js/audio_bindings.h"
+#include "js/audio_scene_sync.h"
 #include "js/storage_bindings.h"
 #include "js/webgl2_bindings.h"
 #include "js/scene_bindings.h"
@@ -414,6 +415,9 @@ Engine::~Engine() {
 #endif
     // Worker already joined above (during binding cleanup); this just frees it.
     audioInference_.reset();
+    // Drop the scene-emitter registry's engine pointer before the audio
+    // engine dies (the registry itself holds only weak tokens + ids).
+    js::shutdownAudioSceneSync();
     audioEngine_.reset();
     document_.reset();
     timers_.reset();

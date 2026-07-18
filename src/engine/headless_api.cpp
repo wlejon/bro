@@ -18,6 +18,7 @@
 #include "js/runtime.h"
 #include "js/timers.h"
 #include "js/ai_bindings.h"
+#include "js/audio_scene_sync.h"
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
 #include "js/web_animation_bindings.h"
@@ -422,6 +423,11 @@ void Engine::advanceTime(double ms) {
                 sg.graph->syncAgents(aiDt);
                 sg.graph->tickAnimations(aiDt);
             }
+            // Scene-attached audio emitters + camera listener — same ordering
+            // as the windowed frame (after animations, before the audio
+            // renderBlock below), so advanceTime-driven motion is what the
+            // deterministic audio render hears.
+            js::syncAudioSceneEmitters(aiDt);
         }
 
         // Headless has no raster thread (the normal code path relies on the

@@ -1156,6 +1156,8 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("remove", js_node_remove, 1)
         .method_raw("destroy", js_node_destroy, 0)
         .method_raw("localToWorld", js_node_localToWorld, 2)
+        .method_raw("attachAudioEmitter", js_node_attachAudioEmitter, 2)
+        .method_raw("detachAudioEmitter", js_node_detachAudioEmitter, 0)
         .method_raw("syncToPhysics", js_node_syncToPhysics, 0)
         .method_raw("updateMesh", js_node_updateMesh, 1)
         .method_raw("setSkinningMatrices", js_node_setSkinningMatrices, 1)
@@ -1265,6 +1267,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("toImageData", js_sg_toImageData, 0)
         .method_raw("captureFrame", js_sg_captureFrame, 2)
         .method_raw("asTexture", js_sg_asTexture, 0)
+        .method_raw("bindAudioListenerToCamera", js_sg_bindAudioListenerToCamera, 1)
         .get("viewMatrix", [](GraphWrapper* w, JSContext* ctx) -> JSValue {
             if (!w || !w->graph()) return JS_NULL;
             return mat4ToJSArray(ctx, w->graph()->viewMatrix());

@@ -11,6 +11,7 @@
 #include "js/runtime.h"
 #include "js/timers.h"
 #include "js/ai_bindings.h"
+#include "js/audio_scene_sync.h"
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
 #include "js/net_bindings.h"
@@ -480,6 +481,10 @@ void Engine::run() {
                 sg.graph->syncAgents(frameDt);
                 sg.graph->tickAnimations(frameDt);
             }
+            // Scene-attached audio emitters + camera listener: push node
+            // world positions (and dt-derived velocities → Doppler) into
+            // broaudio AFTER animations/tweens moved nodes this frame.
+            js::syncAudioSceneEmitters(frameDt);
 #endif
             // Wheel smoothing is UI feel, not gameplay — wall dt, so
             // scrolling still eases out while the game is paused.

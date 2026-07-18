@@ -278,6 +278,11 @@ void installSpriteEndCallback(scene::SpriteNode* node, JSContext* ctx, JSValue f
 void installParticles3DOnFinished(JSContext* ctx, JSValueConst fnVal,
                                   scene::Particles3DNode* node);
 
+// audio_scene_sync.cpp — scene-attached audio emitters + camera listener.
+JSValue js_node_attachAudioEmitter(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_node_detachAudioEmitter(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_sg_bindAudioListenerToCamera(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+
 // scene_bindings_view.cpp — camera, lights, environment, post-FX, capture.
 JSValue js_sg_raycast(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_sg_setCamera(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);

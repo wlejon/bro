@@ -590,6 +590,25 @@ class SceneGraph {
   setCamera(opts) {}
 
   /**
+   * Bind the 3D audio listener to this scene's camera. While bound, the
+   * engine pushes the camera's world position, orientation (forward/up from
+   * the view matrix), and velocity (finite difference over the scaled frame
+   * dt — feeds Doppler, see audio-api.js) into the broaudio listener every
+   * frame, after animations/tweens run. Zero per-frame JS; replaces manual
+   * ctx.setListenerPosition/Orientation/Velocity calls.
+   *
+   * One listener exists engine-wide: bind it from ONE scene (binding from
+   * several makes the last-iterated scene win). The binding dies with the
+   * scene graph; pass false to unbind explicitly. Pairs with
+   * node.attachAudioEmitter() for fully automatic 3D audio.
+   * @param {boolean} [enabled=true]
+   * @example
+   *   scene.bindAudioListenerToCamera(true);
+   *   scene.setCamera({ position: [0, 2, 8], target: [0, 0, 0] });  // audio follows
+   */
+  bindAudioListenerToCamera(enabled) {}
+
+  /**
    * Create a dynamic light and add it to the root. Up to 32 visible lights
    * participate in shading per frame. See docs/lighting-api.js for detail.
    *
@@ -1650,6 +1669,41 @@ class SceneNode {
    * @returns {{ x: number, y: number, z: number }}
    */
   localToWorld(x, y, z) {}
+
+
+  // --- Audio emitter (all node types) ---------------------------------------
+
+  /**
+   * Attach a broaudio playback (or voice) handle to this node — the
+   * AudioStreamPlayer3D analog. Each engine frame (after tweens/animations,
+   * before audio renders) the engine pushes the node's WORLD position into
+   * the source's spatial position and derives its velocity from the previous
+   * frame's position over the scaled dt, feeding the Doppler model
+   * (audio-api.js) — no per-frame JS.
+   *
+   * Attaching enables spatialization on the handle
+   * (setPlaybackSpatialEnabled / setVoiceSpatialEnabled) and pushes the
+   * current position immediately. Tune rolloff/refDistance/maxDistance via
+   * the normal ctx.setPlaybackSpatial* / setVoiceSpatial* calls. One emitter
+   * per node (re-attach replaces); any number of emitting nodes per scene.
+   * A handle that finishes or is stopped simply makes the sync a no-op —
+   * attach a fresh handle to reuse the node. The binding dies with the node.
+   * Note: streaming playbacks position/attenuate but do not Doppler-shift
+   * (see audio-api.js).
+   *
+   * @param {number} handle - playbackId (default) or voiceId (opts.voice)
+   * @param {{voice?: boolean}} [opts] - pass { voice: true } for a synth voice id
+   * @example
+   *   const engineSound = ctx.playClip(engineClip, 1.0, true);
+   *   carNode.attachAudioEmitter(engineSound);
+   *   scene.bindAudioListenerToCamera(true);
+   *   // driving the car node around now pans/attenuates/Dopplers the loop
+   */
+  attachAudioEmitter(handle, opts) {}
+
+  /** Remove this node's audio emitter binding (the audio keeps playing,
+   *  position just stops following the node). */
+  detachAudioEmitter() {}
 
 
   // --- Physics Methods (PhysicsNode only) -----------------------------------
