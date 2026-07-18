@@ -9,6 +9,10 @@
 
 #include <bromath/color.h>
 
+// For TextDirection. bidi.h is deliberately ICU-free (see its header comment),
+// so this costs nothing but an enum.
+#include "render/bidi.h"
+
 class SkCanvas;
 class SkSurface;
 class SkTextBlob;
@@ -215,8 +219,20 @@ public:
         drawBoxShadow(x, y, w, h, avg, avg, offsetX, offsetY, blur, spread, color, inset);
     }
 
-    virtual void drawText(std::string_view text, float x, float y, FontRef font, bromath::Color color) = 0;
-    virtual TextMetrics measureText(std::string_view text, FontRef font) = 0;
+    // `direction` is the BASE direction bidi resolves this string against —
+    // not a claim about what the string contains. Passing LTR does not force
+    // Latin order: a run of Arabic still resolves to level 1 and is reordered
+    // (that is UAX #9 P2/P3 doing its job). What the base actually decides is
+    // where neutrals at the edges land, which way multiple direction runs are
+    // ordered relative to each other, and how numbers attach. Callers that
+    // know a paragraph's direction — CSS `direction`, SVG `direction`, the
+    // Canvas2D `direction` attribute — must say so; everything else can leave
+    // it LTR, which is what it was before this parameter existed.
+    virtual void drawText(std::string_view text, float x, float y, FontRef font,
+                          bromath::Color color,
+                          TextDirection direction = TextDirection::LTR) = 0;
+    virtual TextMetrics measureText(std::string_view text, FontRef font,
+                                    TextDirection direction = TextDirection::LTR) = 0;
 
     // Extended text draw: letter-spacing applies a per-character advance on
     // top of the natural glyph advance (matching CSS letter-spacing);
@@ -227,9 +243,10 @@ public:
     virtual void drawTextEx(std::string_view text, float x, float y,
                             FontRef font, bromath::Color color,
                             float letterSpacing, float blur,
-                            float wordSpacing = 0.0f) {
+                            float wordSpacing = 0.0f,
+                            TextDirection direction = TextDirection::LTR) {
         (void)letterSpacing; (void)blur; (void)wordSpacing;
-        drawText(text, x, y, font, color);
+        drawText(text, x, y, font, color, direction);
     }
 
     // Register a custom font from file data (for @font-face support).
@@ -254,7 +271,8 @@ public:
     // The result is owned by that renderer's cache and is invalidated by the
     // next shapeText() call that misses. Use it and drop it.
     virtual const ShapedRun* shapeText(std::string_view /*text*/, FontRef /*font*/,
-                                       bool /*disableLigatures*/ = false) {
+                                       bool /*disableLigatures*/ = false,
+                                       TextDirection /*direction*/ = TextDirection::LTR) {
         return nullptr;
     }
 

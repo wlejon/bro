@@ -73,21 +73,22 @@ void RecordingRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
 }
 
 void RecordingRenderer::drawText(std::string_view text, float x, float y,
-                                 FontRef font, Color color) {
+                                 FontRef font, Color color,
+                                 TextDirection direction) {
     if (!buffer_) {
-        measureRenderer_->drawText(text, x, y, font, color);
+        measureRenderer_->drawText(text, x, y, font, color, direction);
         return;
     }
-    drawTextEx(text, x, y, font, color, 0.0f, 0.0f);
+    drawTextEx(text, x, y, font, color, 0.0f, 0.0f, 0.0f, direction);
 }
 
 void RecordingRenderer::drawTextEx(std::string_view text, float x, float y,
                                    FontRef font, Color color,
                                    float letterSpacing, float blur,
-                                   float wordSpacing) {
+                                   float wordSpacing, TextDirection direction) {
     if (!buffer_) {
         measureRenderer_->drawTextEx(text, x, y, font, color,
-                                     letterSpacing, blur, wordSpacing);
+                                     letterSpacing, blur, wordSpacing, direction);
         return;
     }
     Cmd_DrawText cmd{};
@@ -96,7 +97,8 @@ void RecordingRenderer::drawTextEx(std::string_view text, float x, float y,
     // cache) that already served this string's measurement during layout. The
     // raster thread then replays an immutable blob: it does no shaping and no
     // font fallback, where before it re-did the fallback split for every draw.
-    if (const ShapedRun* run = measureRenderer_->shapeText(text, font, letterSpacing != 0.0f)) {
+    if (const ShapedRun* run = measureRenderer_->shapeText(text, font, letterSpacing != 0.0f,
+                                                           direction)) {
         if (sk_sp<SkTextBlob> blob = run->makeBlob(Spacing{letterSpacing, wordSpacing})) {
             cmd.blobIndex = buffer_->pushTextBlob(std::move(blob));
         }
@@ -120,8 +122,9 @@ void RecordingRenderer::drawTextEx(std::string_view text, float x, float y,
     buffer_->append(cmd);
 }
 
-TextMetrics RecordingRenderer::measureText(std::string_view text, FontRef font) {
-    return measureRenderer_->measureText(text, font);
+TextMetrics RecordingRenderer::measureText(std::string_view text, FontRef font,
+                                           TextDirection direction) {
+    return measureRenderer_->measureText(text, font, direction);
 }
 
 bool RecordingRenderer::registerCustomFont(const std::string& family,

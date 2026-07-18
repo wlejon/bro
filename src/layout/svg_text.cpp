@@ -70,6 +70,16 @@ int anchorMode(const dom::Element* el) {
     return 0;
 }
 
+// The base direction a <text> resolves against. `direction` is an inherited
+// CSS property, so the cascade has already pushed the <text> element's value
+// down to every <tspan>; reading it off whichever element owns the chunk gives
+// the same answer as reading it off the root, and is right when a <tspan>
+// overrides it.
+render::TextDirection baseDirection(const dom::Element* el) {
+    return styleOr(el, "direction", "ltr") == "rtl" ? render::TextDirection::RTL
+                                                    : render::TextDirection::LTR;
+}
+
 // dominant-baseline / alignment-baseline -> downward baseline shift (user
 // units) so the named baseline lands on the run's anchor y.
 float baselineShift(const dom::Element* el, const SvgFont& font, SvgTextMeasurer& m) {
@@ -112,31 +122,40 @@ std::string collapseWs(const std::string& in, bool& prevSpace, bool& any) {
     return out;
 }
 
+// One text chunk: the runs between two absolute-x resets. Anchoring and bidi
+// reordering both operate on a whole chunk, because both need its full extent.
+struct Chunk {
+    size_t                firstRun = 0;
+    int                   anchor = 0;
+    render::TextDirection direction = render::TextDirection::LTR;
+};
+
 struct WalkState {
     SvgTextMeasurer& m;
     std::vector<SvgTextRun> runs;
-    std::vector<std::pair<size_t, int>> chunks;  // (firstRunIndex, anchorMode)
+    std::vector<Chunk> chunks;
     float cx = 0, cy = 0;
     bool prevSpace = true;   // trims leading whitespace
     bool any = false;
 };
 
-void startChunk(WalkState& st, int anchor) {
-    st.chunks.push_back({st.runs.size(), anchor});
+void startChunk(WalkState& st, int anchor, render::TextDirection dir) {
+    st.chunks.push_back(Chunk{st.runs.size(), anchor, dir});
 }
 
 void walk(const dom::Element* el, bool isRoot, WalkState& st) {
     std::string tag = lower(el->tagName());
     SvgFont font = resolveFont(el);
+    render::TextDirection dir = baseDirection(el);
 
     bool hasX = !attrOf(el, "x").empty();
     bool hasY = !attrOf(el, "y").empty();
     if (isRoot) {
         if (hasX) st.cx = attrFloat(el, "x");
         if (hasY) st.cy = attrFloat(el, "y");
-        startChunk(st, anchorMode(el));
+        startChunk(st, anchorMode(el), dir);
     } else {
-        if (hasX) { st.cx = attrFloat(el, "x"); startChunk(st, anchorMode(el)); }
+        if (hasX) { st.cx = attrFloat(el, "x"); startChunk(st, anchorMode(el), dir); }
         if (hasY) st.cy = attrFloat(el, "y");
     }
     st.cx += attrFloat(el, "dx", 0.0f);
@@ -149,7 +168,7 @@ void walk(const dom::Element* el, bool isRoot, WalkState& st) {
             auto* tn = static_cast<dom::TextNode*>(child);
             std::string t = collapseWs(tn->data(), st.prevSpace, st.any);
             if (t.empty()) continue;
-            float w = st.m.advance(t, font);
+            float w = st.m.advance(t, font, dir);
             float asc = 0, desc = 0, xh = 0;
             st.m.vmetrics(font, asc, desc, xh);
             SvgTextRun run;
@@ -161,6 +180,7 @@ void walk(const dom::Element* el, bool isRoot, WalkState& st) {
             run.descent = desc;
             run.styleEl = el;
             run.font = font;
+            run.direction = dir;
             st.runs.push_back(std::move(run));
             st.cx += w;
         } else if (child->nodeType() == dom::NodeType::Element) {
@@ -170,13 +190,87 @@ void walk(const dom::Element* el, bool isRoot, WalkState& st) {
     }
 }
 
+// Reorder each chunk's runs into visual order (UAX #9 rule L2) and re-run the
+// pen over them.
+//
+// The walk above places runs left to right in LOGICAL order, which is only the
+// visual order when everything resolved to level 0. Levels are resolved over
+// the chunk's concatenated text rather than per run, because that is what a
+// paragraph is here: a run boundary in SVG is a <tspan>, and the W and N rules
+// have to see across it — a number in `<tspan>שלום</tspan>123<tspan>עולם</tspan>`
+// resolves differently depending on what surrounds it, and asking each run in
+// isolation gets that wrong.
+//
+// Chunks that resolve uniformly at level 0 — every chunk in Latin text — skip
+// this entirely and keep byte-identical positions to before bidi existed.
+void reorderChunks(WalkState& st) {
+    for (size_t i = 0; i < st.chunks.size(); ++i) {
+        const size_t begin = st.chunks[i].firstRun;
+        const size_t end = (i + 1 < st.chunks.size()) ? st.chunks[i + 1].firstRun
+                                                      : st.runs.size();
+        if (end - begin == 0) continue;
+        const auto base = st.chunks[i].direction == render::TextDirection::RTL
+                              ? render::bidi::BaseDirection::RTL
+                              : render::bidi::BaseDirection::LTR;
+
+        // Cheap out: an LTR base over text that cannot resolve to any non-zero
+        // level is the overwhelmingly common case and needs no work at all.
+        std::string joined;
+        std::vector<size_t> runStart(end - begin, 0);
+        for (size_t j = begin; j < end; ++j) {
+            runStart[j - begin] = joined.size();
+            joined += st.runs[j].text;
+        }
+        if (base == render::bidi::BaseDirection::LTR &&
+            render::bidi::isTriviallyLtr(joined)) {
+            continue;
+        }
+
+        render::bidi::Paragraph para = render::bidi::resolveParagraph(joined, base);
+        if (para.uniform && !para.isRtlParagraph()) continue;
+
+        // A run's level is the level of its first byte. Runs are finer than
+        // level runs (they split on <tspan> and on style), which L2 tolerates:
+        // reversing a span of equal-level entries gives the same answer as
+        // reversing the unsplit run they came from.
+        std::vector<render::bidi::Level> levels(end - begin, para.paragraphLevel);
+        for (size_t k = 0; k < levels.size(); ++k) {
+            const size_t off = runStart[k];
+            if (off < para.levels.size()) levels[k] = para.levels[off];
+        }
+        std::vector<int32_t> visual = render::bidi::reorderVisual(levels);
+        if (visual.size() != levels.size()) continue;
+
+        // Re-run the pen from the chunk's origin in visual order. The origin is
+        // where the first logical run was placed, which is still the chunk's
+        // left edge — anchoring, which happens next, is what moves it.
+        float pen = st.runs[begin].x;
+        std::vector<SvgTextRun> ordered;
+        ordered.reserve(visual.size());
+        for (int32_t slot : visual) {
+            SvgTextRun r = st.runs[begin + static_cast<size_t>(slot)];
+            r.x = pen;
+            pen += r.width;
+            ordered.push_back(std::move(r));
+        }
+        for (size_t k = 0; k < ordered.size(); ++k) st.runs[begin + k] = std::move(ordered[k]);
+    }
+}
+
 // Shift each chunk's runs so the text-anchor point lands correctly.
+//
+// `start` and `end` are direction-relative in SVG: for a right-to-left chunk
+// the start edge is the RIGHT one, so the two anchors trade places. `middle`
+// means the same thing either way.
 void applyAnchors(WalkState& st) {
     for (size_t i = 0; i < st.chunks.size(); ++i) {
-        size_t begin = st.chunks[i].first;
-        size_t end = (i + 1 < st.chunks.size()) ? st.chunks[i + 1].first : st.runs.size();
+        size_t begin = st.chunks[i].firstRun;
+        size_t end = (i + 1 < st.chunks.size()) ? st.chunks[i + 1].firstRun : st.runs.size();
         if (end <= begin) continue;
-        int anchor = st.chunks[i].second;
+        int anchor = st.chunks[i].anchor;
+        const bool rtl = st.chunks[i].direction == render::TextDirection::RTL;
+        if (rtl && anchor == 0) anchor = 2;
+        else if (rtl && anchor == 2) anchor = 0;
         if (anchor == 0) continue;  // start
         float left = st.runs[begin].x;
         float right = st.runs[end - 1].x + st.runs[end - 1].width;
@@ -203,10 +297,11 @@ bool belongsTo(const dom::Element* runEl, const dom::Element* el,
 
 } // namespace
 
-float RendererTextMeasurer::advance(const std::string& text, const SvgFont& f) {
+float RendererTextMeasurer::advance(const std::string& text, const SvgFont& f,
+                                   render::TextDirection dir) {
     if (!r) return 0.0f;
     return r->measureText(text,
-        render::FontRef{f.family, f.size, f.weight, f.italic}).width;
+        render::FontRef{f.family, f.size, f.weight, f.italic}, dir).width;
 }
 
 void RendererTextMeasurer::vmetrics(const SvgFont& f, float& ascent,
@@ -220,6 +315,7 @@ void RendererTextMeasurer::vmetrics(const SvgFont& f, float& ascent,
 std::vector<SvgTextRun> layoutSvgText(const dom::Element* textEl, SvgTextMeasurer& m) {
     WalkState st{m};
     if (textEl) walk(textEl, /*isRoot=*/true, st);
+    reorderChunks(st);
     applyAnchors(st);
     return std::move(st.runs);
 }

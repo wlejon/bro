@@ -212,24 +212,25 @@ void RasterRenderer::drawBoxShadowRadii(float x, float y, float w, float h,
 }
 
 const ShapedRun* RasterRenderer::shapeText(std::string_view text, FontRef font,
-                                   bool disableLigatures) {
+                                   bool disableLigatures, TextDirection direction) {
     const FontEntry* fe = getOrCreateFont(font);
     if (!fe) return nullptr;
     return shaper_.shape(text, *fe->font, font.family, fe->style,
                          ensureFontMgr(), fallbackCache_,
-                         TextDirection::LTR, disableLigatures);
+                         direction, disableLigatures);
 }
 
-void RasterRenderer::drawText(std::string_view text, float x, float y, FontRef font, Color c) {
-    drawTextEx(text, x, y, font, c, 0.0f, 0.0f, 0.0f);
+void RasterRenderer::drawText(std::string_view text, float x, float y, FontRef font, Color c,
+                              TextDirection direction) {
+    drawTextEx(text, x, y, font, c, 0.0f, 0.0f, 0.0f, direction);
 }
 
 void RasterRenderer::drawTextEx(std::string_view text, float x, float y,
                                 FontRef font, Color c,
                                 float letterSpacing, float blur,
-                                float wordSpacing) {
+                                float wordSpacing, TextDirection direction) {
     if (!canvas_ || text.empty()) return;
-    const ShapedRun* run = shapeText(text, font, letterSpacing != 0.0f);
+    const ShapedRun* run = shapeText(text, font, letterSpacing != 0.0f, direction);
     if (!run) return;
     sk_sp<SkTextBlob> blob = run->makeBlob(Spacing{letterSpacing, wordSpacing});
     if (!blob) return;
@@ -254,13 +255,14 @@ bool RasterRenderer::drawTextBlob(const SkTextBlob* blob, float x, float y,
     return true;
 }
 
-TextMetrics RasterRenderer::measureText(std::string_view text, FontRef font) {
+TextMetrics RasterRenderer::measureText(std::string_view text, FontRef font,
+                                        TextDirection direction) {
     const FontEntry* fePtr = getOrCreateFont(font);
     if (!fePtr) return {};
     SkFontMetrics fm;
     fePtr->font->getMetrics(&fm);
     if (text.empty()) return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent, fm.fLeading, fm.fXHeight };
-    const ShapedRun* run = shapeText(text, font);
+    const ShapedRun* run = shapeText(text, font, false, direction);
     if (!run) return { 0.0f, 0.0f, -fm.fAscent, fm.fDescent, fm.fLeading, fm.fXHeight };
     return { run->width(), run->bounds().height(),
              -fm.fAscent, fm.fDescent, fm.fLeading, fm.fXHeight };

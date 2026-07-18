@@ -60,12 +60,15 @@ public:
                             bromath::Color color, bool inset) override;
 
     void drawText(std::string_view text, float x, float y,
-                  FontRef font, bromath::Color color) override;
-    TextMetrics measureText(std::string_view text, FontRef font) override;
+                  FontRef font, bromath::Color color,
+                  TextDirection direction = TextDirection::LTR) override;
+    TextMetrics measureText(std::string_view text, FontRef font,
+                            TextDirection direction = TextDirection::LTR) override;
     void drawTextEx(std::string_view text, float x, float y,
                     FontRef font, bromath::Color color,
                     float letterSpacing, float blur,
-                    float wordSpacing = 0.0f) override;
+                    float wordSpacing = 0.0f,
+                    TextDirection direction = TextDirection::LTR) override;
 
     bool registerCustomFont(const std::string& family,
                             const void* data, size_t len,

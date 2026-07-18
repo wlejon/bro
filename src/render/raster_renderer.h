@@ -40,12 +40,15 @@ public:
                             float blur, float spread,
                             bromath::Color color, bool inset) override;
 
-    void drawText(std::string_view text, float x, float y, FontRef font, bromath::Color c) override;
+    void drawText(std::string_view text, float x, float y, FontRef font, bromath::Color c,
+                  TextDirection direction = TextDirection::LTR) override;
     void drawTextEx(std::string_view text, float x, float y,
                     FontRef font, bromath::Color c,
                     float letterSpacing, float blur,
-                    float wordSpacing = 0.0f) override;
-    TextMetrics measureText(std::string_view text, FontRef font) override;
+                    float wordSpacing = 0.0f,
+                    TextDirection direction = TextDirection::LTR) override;
+    TextMetrics measureText(std::string_view text, FontRef font,
+                            TextDirection direction = TextDirection::LTR) override;
 
     void drawLine(float x1, float y1, float x2, float y2, bromath::Color c, float thickness) override;
     void drawImage(const void* data, size_t len, float x, float y, float w, float h,
@@ -154,7 +157,8 @@ private:
 
 public:
     const ShapedRun* shapeText(std::string_view text, FontRef font,
-                               bool disableLigatures = false) override;
+                               bool disableLigatures = false,
+                               TextDirection direction = TextDirection::LTR) override;
     TextShapingEngine* textEngine() override { return &shaper_; }
     bool drawTextBlob(const SkTextBlob* blob, float x, float y,
                       bromath::Color color, float blur) override;

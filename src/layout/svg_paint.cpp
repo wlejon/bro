@@ -378,7 +378,7 @@ void paintText(render::Renderer* r, const dom::Element* textEl,
                                         svgRoot, noBox, cur);
         if (fill.paint.kind != GradientPaint::Kind::Solid) continue;  // none / gradient (gated out)
         render::FontRef fref{run.font.family, run.font.size, run.font.weight, run.font.italic};
-        r->drawText(run.text, run.x, run.baseline, fref, fill.paint.color);
+        r->drawText(run.text, run.x, run.baseline, fref, fill.paint.color, run.direction);
     }
 }
 
