@@ -1304,6 +1304,47 @@ DocumentFragment* Document::createDocumentFragment() {
     return allocateNode<DocumentFragment>();
 }
 
+Node* Document::cloneNode(Node* src, bool deep, bool preserveId) {
+    if (!src) return nullptr;
+
+    switch (src->nodeType()) {
+        case NodeType::Text:
+            return createTextNode(static_cast<TextNode*>(src)->data());
+        case NodeType::Comment:
+            return createComment(static_cast<CommentNode*>(src)->data());
+        case NodeType::Element:
+            break;
+        default:
+            return nullptr;
+    }
+
+    auto* srcEl = static_cast<Element*>(src);
+    Element* clone = createElement(srcEl->tagName());
+    if (!clone) return nullptr;
+
+    for (const auto& [name, val] : srcEl->attributes()) {
+        if (!preserveId && name == "id") continue;
+        clone->setAttribute(name, val);
+    }
+    // "style" never lives in attributes_ (see Element::setAttribute) — copy the
+    // declaration block from StyleProxy, and only when the attribute is really
+    // present, so an element with no style attribute doesn't grow one.
+    if (srcEl->hasAttribute("style"))
+        clone->setAttribute("style", srcEl->style().cssText());
+
+    if (deep) {
+        for (auto* child : srcEl->childNodes()) {
+            if (Node* childClone = cloneNode(child, true, preserveId))
+                clone->appendChild(childClone);
+        }
+    }
+
+    // Children first: the hook stamps <select> state onto cloned <option>s.
+    if (elementClonedCb_) elementClonedCb_(this, srcEl, clone);
+
+    return clone;
+}
+
 ShadowRoot* Document::allocateShadowRoot(Element* host, ShadowRoot::Mode mode) {
     return allocateNode<ShadowRoot>(host, mode);
 }

@@ -161,6 +161,11 @@ JSValue DomBindings::wrapDocument(JSContext* ctx, void* document_ptr)
 // notifications can find the right JS runtime to fire selectionchange into.
 static std::unordered_map<bro::dom::Document*, JSContext*> s_doc_to_ctx;
 
+JSContext* getCtxForDocument(bro::dom::Document* doc) {
+    auto it = s_doc_to_ctx.find(doc);
+    return it != s_doc_to_ctx.end() ? it->second : nullptr;
+}
+
 static void fireNodeFreed(bro::dom::Document* doc, bro::dom::Node* node);
 static void fireNodeAdopted(bro::dom::Document* newDoc,
                             bro::dom::Document* oldDoc, bro::dom::Node* node);
@@ -293,6 +298,7 @@ JSValue wrapDetachedDocument(JSContext* ctx, bro::dom::Document* doc) {
     s_doc_to_ctx[doc] = ctx;
     doc->setNodeFreedCallback(&fireNodeFreed);
     doc->setNodeAdoptedCallback(&fireNodeAdopted);
+    doc->setElementClonedCallback(&fireElementCloned);
     return docObj;
 }
 
@@ -449,6 +455,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
         doc->setSelectionChangeCallback(&fireSelectionChangeOnDocument);
         doc->setNodeFreedCallback(&fireNodeFreed);
         doc->setNodeAdoptedCallback(&fireNodeAdopted);
+        doc->setElementClonedCallback(&fireElementCloned);
     }
 
     // ----- Stash Document pointer for orphan management (per-context) -----

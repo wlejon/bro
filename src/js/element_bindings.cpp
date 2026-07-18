@@ -167,6 +167,60 @@ void invalidateWrapper(JSContext* ctx, bro::dom::Element* elem) {
     JS_FreeValue(ctx, global);
 }
 
+// Document::ElementClonedCallback. Document::cloneNode has already copied
+// everything the DOM layer owns (tag, attributes, style, children); this hook
+// exists for the two pieces of element state that live in layers ABOVE dom and
+// that a markup round-trip therefore used to silently drop.
+void fireElementCloned(bro::dom::Document* doc, bro::dom::Element* src,
+                       bro::dom::Element* clone) {
+    if (!doc || !src || !clone) return;
+
+    // <select>: the live selection lives in the layout-owned ElSelect, which
+    // the clone has no counterpart of yet. Stamp it onto the cloned <option>s
+    // as a `selected` attribute — the same representation initSelectedIndex
+    // reads when the clone's control is lazily built on first layout, so the
+    // clone's .value and .selectedIndex match the source immediately.
+    if (auto* sel = src->selectControl()) {
+        int want = sel->selectedIndex();
+        int idx = 0;
+        for (auto* opt : clone->children()) {
+            const std::string& t = opt->tagName();
+            if (t != "OPTION" && t != "option") continue;
+            if (idx == want) opt->setAttribute("selected", "");
+            else if (opt->hasAttribute("selected")) opt->removeAttribute("selected");
+            ++idx;
+        }
+    }
+
+    // <canvas>: the backing store is not expressible in markup at all. The HTML
+    // spec's canvas cloning steps require the copy's bitmap to be a copy of the
+    // original's, so materialize a 2D context for the clone through the normal
+    // getContext factory and blit the source pixels into it.
+    auto* srcScene = static_cast<bro::canvas::CanvasScene*>(src->canvasScene());
+    if (!srcScene) return;
+    JSContext* ctx = getCtxForDocument(doc);
+    if (!ctx) return;
+    auto factoryIt = s_ctx_factories.find(ctx);
+    if (factoryIt == s_ctx_factories.end() || !factoryIt->second) return;
+
+    int w = srcScene->width(), h = srcScene->height();
+    if (w <= 0 || h <= 0) return;
+    auto pixels = srcScene->getImageData(0, 0, w, h);
+    if (pixels.empty()) return;
+
+    JSValue cloneCtx = factoryIt->second(ctx, clone, "2d");
+    if (JS_IsException(cloneCtx)) { JS_FreeValue(ctx, cloneCtx); return; }
+    if (auto* dstScene = static_cast<bro::canvas::CanvasScene*>(clone->canvasScene()))
+        dstScene->putImageData(pixels.data(), w, h, 0, 0);
+    // Seed the per-element context cache the same way js_element_getContext
+    // would, so the clone's first getContext('2d') returns this very context
+    // (one rendering context per canvas, per spec) rather than a second one
+    // that would not see the pixels we just wrote.
+    if (!JS_IsNull(cloneCtx) && !JS_IsUndefined(cloneCtx))
+        s_canvas_contexts[clone] = { JS_DupValue(ctx, cloneCtx), "2d" };
+    JS_FreeValue(ctx, cloneCtx);
+}
+
 // ---- Properties -----------------------------------------------------------
 
 static JSValue js_element_get_id(JSContext* ctx, JSValueConst this_val)
@@ -2377,37 +2431,13 @@ static JSValue js_element_cloneNode(JSContext* ctx, JSValueConst this_val,
     bool deep = false;
     if (argc >= 1) deep = JS_ToBool(ctx, argv[0]);
 
-    auto* clone = doc->createElement(el->tagName());
+    // Delegate to the one native clone implementation (Document::cloneNode) so
+    // this binding and Range.cloneContents can never drift apart in fidelity.
+    // preserveId=false keeps this binding's long-standing behaviour of not
+    // duplicating ids into the same document.
+    auto* clone = static_cast<bro::dom::Element*>(
+        doc->cloneNode(el, deep, /*preserveId=*/false));
     if (!clone) return JS_NULL;
-
-    for (auto& [name, val] : el->attributes()) {
-        if (name == "id") continue;
-        clone->setAttribute(name, val);
-    }
-    // "style" lives in StyleProxy, not attributes_ (see Element::setAttribute).
-    if (el->hasAttribute("style")) {
-        clone->setAttribute("style", el->style().cssText());
-    }
-
-    if (deep) {
-        for (auto* child : el->childNodes()) {
-            if (child->nodeType() == bro::dom::NodeType::Element) {
-                JSValue childJs = DomBindings::wrapElement(ctx, static_cast<bro::dom::Element*>(child));
-                JSValue trueVal = JS_TRUE;
-                JSValue clonedJs = js_element_cloneNode(ctx, childJs, 1, &trueVal);
-                auto* clonedElem = static_cast<bro::dom::Element*>(DomBindings::unwrapElement(ctx, clonedJs));
-                if (clonedElem) {
-                    clone->appendChild(clonedElem);
-                }
-                JS_FreeValue(ctx, clonedJs);
-                JS_FreeValue(ctx, childJs);
-            } else if (child->nodeType() == bro::dom::NodeType::Text) {
-                auto* textNode = static_cast<bro::dom::TextNode*>(child);
-                auto* clonedText = doc->createTextNode(textNode->data());
-                clone->appendChild(clonedText);
-            }
-        }
-    }
 
     return DomBindings::wrapElement(ctx, clone);
 }

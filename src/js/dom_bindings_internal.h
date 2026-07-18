@@ -138,8 +138,16 @@ JSValue js_window_getComputedStyle(JSContext* ctx, JSValueConst this_val,
 // shadowroot_bindings.cpp
 JSValue wrapShadowRoot(JSContext* ctx, bro::dom::ShadowRoot* sr);
 
+// dom_bindings.cpp — realm that owns a document, or nullptr. Inverse of
+// getDocumentForCtx; needed by hooks the DOM layer fires with only a Document*.
+JSContext* getCtxForDocument(bro::dom::Document* doc);
+
 // element_bindings.cpp
 void invalidateWrapper(JSContext* ctx, bro::dom::Element* elem);
+// Document::ElementClonedCallback — carries over the clone state that lives
+// above the DOM layer (canvas backing store, <select> selection).
+void fireElementCloned(bro::dom::Document* doc, bro::dom::Element* src,
+                       bro::dom::Element* clone);
 bro::dom::Element* getElement(JSValueConst val);
 void cleanupCanvasContextCache(JSRuntime* rt);
 // True while engine teardown is running (see setElementFinalizerShutdown) —

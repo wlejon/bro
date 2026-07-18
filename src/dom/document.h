@@ -41,6 +41,18 @@ public:
     CommentNode* createComment(const std::string& data);
     DocumentFragment* createDocumentFragment();
 
+    // Native structural clone (the DOM cloneNode algorithm), owned by this
+    // document. Elements, text and comment nodes are copied field by field —
+    // never by serializing to markup and reparsing, which silently drops
+    // everything markup cannot express (a <canvas>'s backing store, a
+    // <select>'s live selection, custom-element upgrade state). Event
+    // listeners are intentionally NOT copied, per spec.
+    //
+    // `preserveId` is spec behaviour (the id attribute is an attribute like
+    // any other); the JS Element.cloneNode binding passes false to keep its
+    // long-standing "clones don't collide on id" contract.
+    Node* cloneNode(Node* src, bool deep, bool preserveId = true);
+
     // Allocate a ShadowRoot owned by this document
     ShadowRoot* allocateShadowRoot(Element* host, ShadowRoot::Mode mode);
 
@@ -336,6 +348,15 @@ public:
     using NodeFreedCallback = void(*)(Document*, Node*);
     void setNodeFreedCallback(NodeFreedCallback cb) { nodeFreedCb_ = cb; }
 
+    // Fired from cloneNode() for each cloned element, after its attributes and
+    // (for a deep clone) its children are in place. Everything the DOM layer
+    // can copy on its own already has been; this hook exists for the state
+    // that lives ABOVE dom — the layout-owned <select> control's live
+    // selection, and the canvas module's backing store — which dom must not
+    // reach into directly. Set by the JS layer alongside the other hooks.
+    using ElementClonedCallback = void(*)(Document*, Element* src, Element* clone);
+    void setElementClonedCallback(ElementClonedCallback cb) { elementClonedCb_ = cb; }
+
     // Fired from adoptNode() for every node whose owner document changed
     // (the whole adopted subtree). Cached JS wrappers hold generation-checked
     // handles that name the OLD document, so they must be re-pointed or they
@@ -487,6 +508,7 @@ private:
     std::unordered_set<Range*> liveRanges_;
     SelectionChangeCallback selectionChangeCb_ = nullptr;
     NodeFreedCallback nodeFreedCb_ = nullptr;
+    ElementClonedCallback elementClonedCb_ = nullptr;
     NodeAdoptedCallback nodeAdoptedCb_ = nullptr;
 };
 

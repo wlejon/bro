@@ -454,26 +454,13 @@ Node* Range::cloneContents() const {
     // substrings rather than split — the destructive contentsInRange() path is
     // reserved for extract/delete, which are about to remove the nodes anyway.
 
-    // Appends a deep copy of `n` to the fragment.
+    // Appends a deep copy of `n` to the fragment. This used to serialize the
+    // node to outerHTML and reparse it, which quietly dropped every piece of
+    // state markup cannot express — canvas backing stores, <select> selection,
+    // custom-element upgrade state. Document::cloneNode is a real native deep
+    // clone; it still drops event listeners, which is what the spec requires.
     auto cloneInto = [&](Node* n) {
-        if (!n) return;
-        if (n->nodeType() == NodeType::Text) {
-            frag->appendChild(document_->createTextNode(
-                static_cast<TextNode*>(n)->data()));
-        } else if (n->nodeType() == NodeType::Element) {
-            // Clone via outerHTML round-trip — preserves nested structure.
-            auto* src = static_cast<Element*>(n);
-            auto* holder = document_->createElement("DIV");
-            document_->parseInnerHTML(holder, src->outerHTML());
-            auto kids = holder->childNodes();
-            for (auto* k : kids) k->setParent(nullptr);
-            holder->childNodes().clear();
-            for (auto* k : kids) frag->appendChild(k);
-            document_->freeNode(holder);
-        } else if (n->nodeType() == NodeType::Comment) {
-            frag->appendChild(document_->createComment(
-                static_cast<CommentNode*>(n)->data()));
-        }
+        if (Node* c = document_->cloneNode(n, /*deep=*/true)) frag->appendChild(c);
     };
 
     // Character-data helper: clone data[from,to) as a same-type node.
