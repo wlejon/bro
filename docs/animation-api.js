@@ -279,8 +279,8 @@ cutscene.play('doorOpen');
 //     weights jump slightly when the nearest-3 set changes — keep sample
 //     points sparse and well-separated.
 //   - setBlendPos is INSTANT — no internal smoothing. Tween the parameter
-//     from app code for eased transitions; the coming state-machine tier
-//     will add authored transitions on top.
+//     from app code for eased transitions; the state-machine tier (below)
+//     adds authored transitions on top.
 //
 // ── Phase sync ───────────────────────────────────────────────────────────────
 //
@@ -312,6 +312,8 @@ cutscene.play('doorOpen');
 // ── Introspection ────────────────────────────────────────────────────────────
 //
 //   node.blendState() → {
+//     state:  'move' | null,       // current state-machine state (null:
+//                                  //  no machine, or suspended — see below)
 //     clips:  [{ name, weight }],  // base composition; weights sum to 1
 //                                  // (during a crossfade the outgoing source
 //                                  //  appears too, scaled by 1 - alpha)
@@ -348,3 +350,103 @@ function onTick(dt, velocity) {
 
 // An upper-body action over the moving base, whatever the current mix:
 // char2.playLayer(1, 'wave', { mask: upperBody, fadeTime: 0.15 });
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Skeletal state machine — authored transitions over clips + blend spaces
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// The Godot AnimationNodeStateMachine analog, code-first: states reference
+// registered clips or blend spaces, transitions carry the fade; the APP
+// decides when to travel (there is no condition/expression language — drive
+// it from gameplay code). The machine sits ABOVE play()/fade: travel() uses
+// exactly the crossfade machinery play() uses, so everything about blend
+// spaces, layers, and blendState() composes unchanged.
+//
+//   node.addStateMachine({
+//     states: [
+//       // source: a registered clip OR blend space. speed/loop as in play();
+//       // blend-space states always loop.
+//       { name: 'idle', source: 'idleClip' },
+//       { name: 'move', source: 'locomotion' },            // a blend space
+//       { name: 'jump', source: 'jumpClip', loop: false }, // one-shot state
+//     ],
+//     transitions: [
+//       // from: state name or '*' (wildcard — matches any current state,
+//       // including the suspended one). fade: crossfade seconds (default 0
+//       // = hard switch). Exact from/to matches win over wildcards;
+//       // definition order breaks remaining ties.
+//       { from: 'idle', to: 'move', fade: 0.25 },
+//       { from: 'move', to: 'idle', fade: 0.25 },
+//       { from: '*',    to: 'jump', fade: 0.10 },
+//       // autoAdvance: fires when the from-state's NON-looping clip ends
+//       // (looping states never auto-advance).
+//       { from: 'jump', to: 'move', fade: 0.20, autoAdvance: true,
+//         syncPhase: true },
+//     ],
+//     initial: 'idle',                    // default: the first state
+//   });
+//
+//   node.travel('move');    // follow the defined transition from the current
+//                           // state (wildcard fallback). NO defined
+//                           // transition: logs a warning and switches
+//                           // directly with fade 0 — authored transitions
+//                           // are the point of this tier.
+//   node.state;             // 'move' — or null (no machine, or suspended)
+//   node.blendState().state // same, alongside the live blend weights
+//   node.onStateChanged = (from, to) => {};  // after every travel/autoAdvance;
+//                           // from is null when re-entering from suspension.
+//                           // NOT fired for the initial state.
+//
+// Semantics:
+//   - travel() to the CURRENT state is a no-op (no restart, no callback).
+//   - addStateMachine replaces any existing machine and enters the initial
+//     state immediately (hard switch); validation errors (unknown source /
+//     endpoint / initial, duplicate names) throw.
+//   - syncPhase: when both states are cycles (blend space, or looping clip),
+//     the incoming track starts at the outgoing track's normalized phase —
+//     use on move↔move-variant transitions so gait cycles stay foot-aligned.
+//     Two states may share one blend space: the space PARAMETER persists
+//     across the switch (it lives on the space); the phase only carries when
+//     syncPhase asks for it.
+//   - SUSPENSION: a manual play() or stop() takes the base track over and
+//     suspends the machine — node.state becomes null, the definition stays,
+//     and the next travel() re-enters (wildcard transitions still match;
+//     anything else warns + switches directly). Layers never suspend.
+//   - onAnimationFinished still fires alongside autoAdvance (after the
+//     transition, so the callback observes the new state).
+//
+// ── Recipe: locomotion machine ───────────────────────────────────────────────
+//
+// idle ↔ move (a blend space), jump as a one-shot that returns to move by
+// itself, crouch-move phase-locked to move:
+//
+//   char2.addBlendSpace1D('locomotion',       [/* idle/walk/run as above */]);
+//   char2.addBlendSpace1D('locomotionCrouch', [/* crouched variants */]);
+//   char2.addStateMachine({
+//     states: [
+//       { name: 'idle',        source: 'idle' },
+//       { name: 'move',        source: 'locomotion' },
+//       { name: 'moveCrouch',  source: 'locomotionCrouch' },
+//       { name: 'jump',        source: 'jumpClip', loop: false },
+//     ],
+//     transitions: [
+//       { from: 'idle', to: 'move',       fade: 0.25 },
+//       { from: 'move', to: 'idle',       fade: 0.30 },
+//       { from: 'move', to: 'moveCrouch', fade: 0.20, syncPhase: true },
+//       { from: 'moveCrouch', to: 'move', fade: 0.20, syncPhase: true },
+//       { from: '*',    to: 'jump',       fade: 0.10 },
+//       { from: 'jump', to: 'move',       fade: 0.20, autoAdvance: true },
+//     ],
+//     initial: 'idle',
+//   });
+//
+//   // Gameplay drives conditions explicitly:
+//   function onMovementTick(speed, wantCrouch, jumpPressed) {
+//     if (jumpPressed)                 char2.travel('jump');
+//     else if (speed < 0.05)           char2.travel('idle');
+//     else                             char2.travel(wantCrouch ? 'moveCrouch'
+//                                                              : 'move');
+//     char2.setBlendPos('locomotion', speed);       // parameter is per-space,
+//     char2.setBlendPos('locomotionCrouch', speed); // shared across states
+//   }

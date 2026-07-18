@@ -224,7 +224,85 @@ JSValue js_node_setBlendPos(JSContext* ctx, JSValueConst this_val, int argc, JSV
     return JS_DupValue(ctx, this_val);
 }
 
-// blendState() — { clips: [{name, weight}], phase, pos?, layers: [...] }.
+// addStateMachine({states, transitions, initial?}) — install a state machine
+// on the animation player and enter its initial state (defaults to the first
+// state). States: {name, source, speed?, loop?} where source names a
+// registered clip or blend space. Transitions: {from, to, fade?,
+// autoAdvance?, syncPhase?}; from may be '*' (wildcard).
+JSValue js_node_addStateMachine(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    auto* sm = asSkinnedMesh(w);
+    if (!sm)
+        return JS_ThrowTypeError(ctx, "addStateMachine: node is not a skinned mesh");
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "addStateMachine({states, transitions, initial?})");
+
+    scene::AnimationPlayer::StateMachineDef def;
+    def.initial = qjsbind::get_prop_string(ctx, argv[0], "initial", "");
+
+    JSValue statesVal = JS_GetPropertyStr(ctx, argv[0], "states");
+    if (JS_IsArray(statesVal)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, statesVal, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
+        for (int32_t i = 0; i < len; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, statesVal, (uint32_t)i);
+            scene::AnimationPlayer::StateDef st;
+            if (JS_IsObject(e)) {
+                st.name   = qjsbind::get_prop_string(ctx, e, "name", "");
+                st.source = qjsbind::get_prop_string(ctx, e, "source", "");
+                st.speed  = (float)qjsbind::get_prop_number(ctx, e, "speed", 1.0);
+                st.loop   = qjsbind::get_prop_bool(ctx, e, "loop", true);
+            }
+            JS_FreeValue(ctx, e);
+            def.states.push_back(std::move(st));
+        }
+    }
+    JS_FreeValue(ctx, statesVal);
+
+    JSValue transVal = JS_GetPropertyStr(ctx, argv[0], "transitions");
+    if (JS_IsArray(transVal)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, transVal, "length");
+        int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
+        for (int32_t i = 0; i < len; i++) {
+            JSValue e = JS_GetPropertyUint32(ctx, transVal, (uint32_t)i);
+            scene::AnimationPlayer::TransitionDef tr;
+            if (JS_IsObject(e)) {
+                tr.from = qjsbind::get_prop_string(ctx, e, "from", "");
+                tr.to   = qjsbind::get_prop_string(ctx, e, "to", "");
+                tr.fade = (float)qjsbind::get_prop_number(ctx, e, "fade", 0.0);
+                tr.autoAdvance = qjsbind::get_prop_bool(ctx, e, "autoAdvance", false);
+                tr.syncPhase   = qjsbind::get_prop_bool(ctx, e, "syncPhase", false);
+            }
+            JS_FreeValue(ctx, e);
+            def.transitions.push_back(std::move(tr));
+        }
+    }
+    JS_FreeValue(ctx, transVal);
+
+    std::string err;
+    if (!sm->ensurePlayer().setStateMachine(std::move(def), &err))
+        return JS_ThrowTypeError(ctx, "addStateMachine: %s", err.c_str());
+    return JS_DupValue(ctx, this_val);
+}
+
+// travel(stateName) — follow the defined transition (wildcard fallback) from
+// the current state; no defined transition warns and hard-switches (fade 0).
+JSValue js_node_travel(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    auto* sm = asSkinnedMesh(w);
+    if (!sm)
+        return JS_ThrowTypeError(ctx, "travel: node is not a skinned mesh");
+    if (argc < 1 || !JS_IsString(argv[0]))
+        return JS_ThrowTypeError(ctx, "travel(stateName)");
+    std::string name = jsStr(ctx, argv[0]);
+    auto* player = sm->player();
+    if (!player || !player->travel(name))
+        return JS_ThrowTypeError(ctx,
+            "travel: unknown state '%s' (addStateMachine first)", name.c_str());
+    return JS_DupValue(ctx, this_val);
+}
+
+// blendState() — { state, clips: [{name, weight}], phase, pos?, layers: [...] }.
 JSValue js_node_blendState(JSContext* ctx, JSValueConst this_val, int, JSValueConst*) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
     auto* sm = asSkinnedMesh(w);
@@ -232,12 +310,15 @@ JSValue js_node_blendState(JSContext* ctx, JSValueConst this_val, int, JSValueCo
         return JS_ThrowTypeError(ctx, "blendState: node is not a skinned mesh");
     auto* player = sm->player();
     JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "state", JS_NULL);
     JSValue clips = JS_NewArray(ctx);
     JSValue layers = JS_NewArray(ctx);
     double phase = 0.0;
     if (player) {
         auto s = player->blendState();
         phase = s.phase;
+        if (!s.state.empty())
+            JS_SetPropertyStr(ctx, obj, "state", JS_NewString(ctx, s.state.c_str()));
         for (uint32_t i = 0; i < s.clips.size(); i++) {
             JSValue c = JS_NewObject(ctx);
             JS_SetPropertyStr(ctx, c, "name", JS_NewString(ctx, s.clips[i].name.c_str()));

@@ -41,6 +41,16 @@ class SkinnedMeshNode;
 /// the player never dangles when the JS wrapper is GC'd. While the player is
 /// inactive (never played, or stopped) it does not touch the node's palette —
 /// manual setSkinningMatrices keeps working.
+///
+/// State machine (the tier above): setStateMachine() registers named states
+/// (each referencing a clip or blend space) plus authored transitions;
+/// travel() follows the defined transition from the current state (wildcard
+/// '*' fallback) using its fade — bro is code-first, so the APP decides when
+/// to travel; there is no condition/expression language. travel() with no
+/// defined transition warns and hard-switches (fade 0). Manual play()/stop()
+/// SUSPENDS the machine (state becomes empty, definition retained); the next
+/// travel() re-enters it. autoAdvance transitions fire when a non-looping
+/// state's clip finishes; looping states never auto-advance.
 class AnimationPlayer {
 public:
     /// Hard cap on simultaneously active layer slots. Bounded so the
@@ -134,6 +144,55 @@ public:
     /// any in-progress fade). Returns false for a bad/empty slot.
     bool setLayerWeight(int slot, float weight);
 
+    // --- State machine (code-first travel(); see class comment) ---
+
+    struct StateDef {
+        std::string name;
+        std::string source;      // registered clip or blend-space name
+        float speed = 1.0f;
+        bool  loop = true;       // clips only; blend spaces always loop
+    };
+    struct TransitionDef {
+        std::string from;        // state name, or "*" wildcard
+        std::string to;
+        float fade = 0.0f;       // crossfade seconds (default: hard switch)
+        bool  autoAdvance = false; // fire when `from`'s non-looping clip ends
+        bool  syncPhase = false;   // carry normalized phase across the switch
+                                   // (only when both states are cycles)
+    };
+    struct StateMachineDef {
+        std::vector<StateDef> states;
+        std::vector<TransitionDef> transitions;
+        std::string initial;     // empty = first state
+    };
+
+    /// Install a state machine and enter its initial state immediately
+    /// (fade 0). Replaces any previous machine. Returns false (with *err
+    /// set) on validation failure: empty/duplicate state names, a source
+    /// that is neither a registered clip nor blend space, a transition
+    /// endpoint naming no state, or an unknown initial state.
+    bool setStateMachine(StateMachineDef def, std::string* err = nullptr);
+    bool hasStateMachine() const { return !machineStates_.empty(); }
+
+    /// Current state name; empty while suspended (manual play()/stop() took
+    /// over) or when no machine is installed.
+    const std::string& currentState() const;
+
+    /// Transition to `stateName` via the defined transition from the current
+    /// state (exact match first, then a "*" wildcard). No defined transition:
+    /// warns and switches directly with fade 0. travel() to the current state
+    /// is a no-op. Returns false only for an unknown state / no machine.
+    bool travel(const std::string& stateName);
+
+    /// Fired after every machine transition (travel or autoAdvance) with
+    /// (fromState, toState); fromState is empty when re-entering from the
+    /// suspended state. Not fired for the initial state on setStateMachine.
+    using StateChangedCallback =
+        std::function<void(const std::string& from, const std::string& to)>;
+    void setOnStateChanged(StateChangedCallback cb) {
+        onStateChanged_ = std::move(cb);
+    }
+
     /// Fade the whole result (base + layers) to bind pose over fadeTime,
     /// then deactivate — after which manual setSkinningMatrices works again.
     /// fadeTime 0 = immediate bind pose + deactivate.
@@ -183,6 +242,8 @@ public:
         float pos[2] = {0.0f, 0.0f};
         struct LayerState { int slot; std::string name; float weight; float phase; };
         std::vector<LayerState> layers;   // active layers, ascending slot
+        /// Current state-machine state (empty: suspended or no machine).
+        std::string state;
     };
     BlendState blendState() const;
 
@@ -275,6 +336,9 @@ private:
 
     bool addBlendSpace(const std::string& name,
                        std::vector<BlendSpacePoint> points, bool is2D);
+    /// The core of play(): starts a clip/space on the base track WITHOUT
+    /// touching the machine (play() suspends it; enterState() keeps it).
+    bool startBase(const std::string& name, const PlayOptions& opts);
     BlendSpace* findSpace(const std::string& name);
     /// Size a blend-space track's scratch poses to the skeleton (play time).
     void presizeSpaceScratch(BlendSpace& sp);
@@ -316,6 +380,35 @@ private:
     bool worldMatsDirty_ = true;
 
     FinishedCallback onFinished_;
+
+    // --- State machine (per-frame state is just machineCurrent_) ---
+    struct MachineState {
+        std::string name;
+        std::string source;
+        float speed = 1.0f;
+        bool  loop = true;
+    };
+    struct MachineTransition {
+        int   from = -1;         // index into machineStates_; -1 = wildcard
+        int   to = 0;
+        float fade = 0.0f;
+        bool  autoAdvance = false;
+        bool  syncPhase = false;
+    };
+    std::vector<MachineState> machineStates_;
+    std::vector<MachineTransition> machineTransitions_;
+    int machineCurrent_ = -1;    // -1 = suspended / no machine
+    StateChangedCallback onStateChanged_;
+
+    int  findState(const std::string& name) const;
+    /// Defined transition from `from` to `to`: exact match first, then a
+    /// wildcard (from == -1). Returns index into machineTransitions_ or -1.
+    int  findTransition(int from, int to) const;
+    /// First autoAdvance transition out of `from` (exact, then wildcard).
+    int  findAutoTransition(int from) const;
+    /// Switch the base track to state `idx` (crossfade over `fade`), with
+    /// optional phase carry-over, then fire onStateChanged_.
+    void enterState(int idx, float fade, bool syncPhase, bool fireCallback);
 };
 
 } // namespace bro::scene

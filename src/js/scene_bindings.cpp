@@ -1426,6 +1426,49 @@ void SceneBindings::install(JSContext* ctx) {
                     player.setOnFinished(nullptr);
                 }
             })
+        // Skinned-mesh state machine: current state name (null while
+        // suspended by a manual play()/stop(), or with no machine).
+        .get("state", [](NodeWrapper* w, JSContext* ctx) -> JSValue {
+            if (auto* sm = asSkinnedMesh(w)) {
+                auto* player = sm->player();
+                if (player && player->hasStateMachine()) {
+                    const std::string& s = player->currentState();
+                    return s.empty() ? JS_NULL : JS_NewString(ctx, s.c_str());
+                }
+                return JS_NULL;
+            }
+            return JS_UNDEFINED;
+        })
+        // Fired after every machine transition (travel or autoAdvance) with
+        // (fromState, toState); fromState is null when re-entering from the
+        // suspended state.
+        .prop("onStateChanged",
+            [](NodeWrapper*, JSContext*) -> JSValue { return JS_UNDEFINED; },
+            [](NodeWrapper* w, JSContext* ctx, JSValue val) {
+                auto* sm = asSkinnedMesh(w);
+                if (!sm) return;
+                auto& player = sm->ensurePlayer();
+                if (JS_IsFunction(ctx, val)) {
+                    auto ref = std::make_shared<JSFnRef>(ctx, JS_DupValue(ctx, val));
+                    player.setOnStateChanged([ref](const std::string& from,
+                                                   const std::string& to) {
+                        JSValue fn = JS_DupValue(ref->ctx, ref->fn);
+                        JSValue args[2] = {
+                            from.empty() ? JS_NULL
+                                         : JS_NewString(ref->ctx, from.c_str()),
+                            JS_NewString(ref->ctx, to.c_str()),
+                        };
+                        JSValue r = JS_Call(ref->ctx, fn, JS_UNDEFINED, 2, args);
+                        if (JS_IsException(r)) Runtime::checkException(ref->ctx, r);
+                        JS_FreeValue(ref->ctx, r);
+                        JS_FreeValue(ref->ctx, args[0]);
+                        JS_FreeValue(ref->ctx, args[1]);
+                        JS_FreeValue(ref->ctx, fn);
+                    });
+                } else {
+                    player.setOnStateChanged(nullptr);
+                }
+            })
         // ParticleNode / Particles3DNode: live count + emitter rate.
         // `particleCount` is the documented name; `liveCount` is kept as the
         // original 2D alias.
@@ -1532,6 +1575,8 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("playLayer", js_node_playLayer, 2)
         .method_raw("stopLayer", js_node_stopLayer, 1)
         .method_raw("setLayerWeight", js_node_setLayerWeight, 2)
+        .method_raw("addStateMachine", js_node_addStateMachine, 1)
+        .method_raw("travel", js_node_travel, 1)
         .method_raw("addAnimation", js_sprite_addAnimation, 2)
         .method_raw("burst", js_particles_burst, 1)
         .method_raw("clear", js_particles_clear, 0)
