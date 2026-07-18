@@ -69,6 +69,7 @@ add_library(bro_js STATIC
     gizmo_bindings.cpp
     menu_bindings.cpp
     time_bindings.cpp
+    text_bindings.cpp
     ai_bindings.cpp
     ai_binding_integration.cpp
     ai_nn_bindings.cpp

@@ -52,6 +52,7 @@
 #include "js/rigging_bindings.h"
 #include "js/ai_bindings.h"
 #include "js/gpu_bindings.h"
+#include "js/text_bindings.h"
 #include "js/diffusion_bindings.h"
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
@@ -1093,6 +1094,10 @@ void Engine::installCoreBindings(JSContext* ctx) {
     // bro.gpu (runtime backend probe via brotensor). Always present — reports
     // whether the ML loaders below will default to a GPU or fall back to CPU.
     js::installGpuBindings(ctx);
+
+    // bro.text — diagnostic view of the shaper's cluster map (see
+    // js/text_bindings.h). Not an app-facing text API.
+    js::installTextBindings(ctx, this);
 
     // bro.tensor / bro.diffusion / bro.lm / bro.stt / bro.tts / bro.diar /
     // bro.rave / bro.vision / bro.triposplat / bro.motion — the ML tower.
