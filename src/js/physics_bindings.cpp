@@ -3809,6 +3809,97 @@ static JSValue jsw_activate(JSContext* ctx, JSValueConst thisVal, int argc, JSVa
     return JS_UNDEFINED;
 }
 
+// --- parity with the default-world Physics.* surface ------------------------
+//
+// The following existed only as Physics.* (default world) and were absent from
+// a world instance entirely, so on a secondary world they were not a no-op but
+// a TypeError on undefined. Every one is a plain PhysicsWorld method that
+// applies to any world; there was no reason for the split beyond the instance
+// table having been filled in by hand and these being missed.
+
+static JSValue jsw_setRotation(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world || argc < 5) return JS_UNDEFINED;
+    int32_t tag; double rx, ry, rz, rw;
+    JS_ToInt32(ctx, &tag, argv[0]);
+    JS_ToFloat64(ctx, &rx, argv[1]); JS_ToFloat64(ctx, &ry, argv[2]);
+    JS_ToFloat64(ctx, &rz, argv[3]); JS_ToFloat64(ctx, &rw, argv[4]);
+    JPH::BodyID id = w->bodyIdForTag(tag);
+    if (id.IsInvalid()) return JS_UNDEFINED;
+    w->world->setRotation(id, JPH::Quat((float)rx, (float)ry, (float)rz, (float)rw).Normalized());
+    return JS_UNDEFINED;
+}
+
+static JSValue jsw_isActive(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world || argc < 1) return JS_FALSE;
+    int32_t tag; JS_ToInt32(ctx, &tag, argv[0]);
+    JPH::BodyID id = w->bodyIdForTag(tag);
+    if (id.IsInvalid()) return JS_FALSE;
+    return JS_NewBool(ctx, w->world->isActive(id));
+}
+
+static JSValue jsw_getGravity(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world) return JS_UNDEFINED;
+    auto g = w->world->gravity();
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "x", JS_NewFloat64(ctx, g.GetX()));
+    JS_SetPropertyStr(ctx, obj, "y", JS_NewFloat64(ctx, g.GetY()));
+    JS_SetPropertyStr(ctx, obj, "z", JS_NewFloat64(ctx, g.GetZ()));
+    return obj;
+}
+
+// step() with no argument falls back to the world's stored timeStep, so this
+// is what makes a bare world.step() mean anything other than the 1/60 default.
+static JSValue jsw_setTimeStep(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world || argc < 1) return JS_UNDEFINED;
+    double dt; JS_ToFloat64(ctx, &dt, argv[0]);
+    w->world->setTimeStep((float)dt);
+    return JS_UNDEFINED;
+}
+
+static JSValue jsw_getTimeStep(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world) return JS_UNDEFINED;
+    return JS_NewFloat64(ctx, w->world->timeStep());
+}
+
+static JSValue jsw_setInterpolation(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world || argc < 1) return JS_UNDEFINED;
+    w->world->setInterpolation(JS_ToBool(ctx, argv[0]) != 0);
+    return JS_UNDEFINED;
+}
+
+static JSValue jsw_getInterpolation(JSContext* ctx, JSValueConst thisVal, int, JSValueConst*) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world) return JS_FALSE;
+    return JS_NewBool(ctx, w->world->interpolation());
+}
+
+static JSValue jsw_setConstraintEnabled(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world || argc < 2) return JS_UNDEFINED;
+    uint32_t h; JS_ToUint32(ctx, &h, argv[0]);
+    w->world->setConstraintEnabled(h, JS_ToBool(ctx, argv[1]) != 0);
+    return JS_UNDEFINED;
+}
+
+static JSValue jsw_setWheelMotor(JSContext* ctx, JSValueConst thisVal, int argc, JSValueConst* argv) {
+    JsWorld* w = worldFromThis(ctx, thisVal);
+    if (!w || !w->world) return JS_UNDEFINED;
+    if (argc < 4) return JS_ThrowTypeError(ctx, "setWheelMotor(handle, enabled, speed, maxTorque)");
+    uint32_t h; JS_ToUint32(ctx, &h, argv[0]);
+    bool en = JS_ToBool(ctx, argv[1]);
+    double speed = 0, torque = 0;
+    JS_ToFloat64(ctx, &speed, argv[2]);
+    JS_ToFloat64(ctx, &torque, argv[3]);
+    w->world->setWheelMotor(h, en, (float)speed, (float)torque);
+    return JS_UNDEFINED;
+}
+
 static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("step", 1, jsw_step),
     JS_CFUNC_DEF("setGravity", 3, jsw_setGravity),
@@ -3860,6 +3951,15 @@ static const JSCFunctionListEntry s_worldProtoFuncs[] = {
     JS_CFUNC_DEF("setConstraintBreakingImpulse", 2, jsw_setConstraintBreakingImpulse),
     JS_CFUNC_DEF("getConstraintBreakingImpulse", 1, jsw_getConstraintBreakingImpulse),
     JS_CFUNC_DEF("getBrokenConstraints", 0, jsw_getBrokenConstraints),
+    JS_CFUNC_DEF("setConstraintEnabled", 2, jsw_setConstraintEnabled),
+    JS_CFUNC_DEF("setWheelMotor", 4, jsw_setWheelMotor),
+    JS_CFUNC_DEF("setRotation", 5, jsw_setRotation),
+    JS_CFUNC_DEF("isActive", 1, jsw_isActive),
+    JS_CFUNC_DEF("getGravity", 0, jsw_getGravity),
+    JS_CFUNC_DEF("setTimeStep", 1, jsw_setTimeStep),
+    JS_CFUNC_DEF("getTimeStep", 0, jsw_getTimeStep),
+    JS_CFUNC_DEF("setInterpolation", 1, jsw_setInterpolation),
+    JS_CFUNC_DEF("getInterpolation", 0, jsw_getInterpolation),
 };
 
 static JSValue js_physics_createWorldHandle(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {

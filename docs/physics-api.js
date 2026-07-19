@@ -1016,11 +1016,14 @@ body.add(visual);
 // -----------------------------------------------------------------------------
 //
 // Returns an opaque handle on its own Jolt world. The engine does NOT step
-// it; you call .step(dt) yourself. Body API largely mirrors the default-world
-// Physics.* functions, but lives on the handle — it is NOT a complete mirror:
-// setConstraintEnabled and setWheelMotor exist on Physics.* only, with no
-// handle equivalent, so a constraint you want to toggle (or a wheel motor you
-// want to drive) has to live in the default world.
+// it; you call .step(dt) yourself. The body/constraint API mirrors the
+// default-world Physics.* functions but lives on the handle.
+//
+// Only world lifecycle differs: createWorld/createWorldHandle are Physics.*
+// only (a world does not make worlds), and .destroy() is handle-only (the
+// default world outlives the app). Stepping config — setTimeStep/getTimeStep,
+// setInterpolation/getInterpolation — is per-world here rather than global,
+// and the timestep is what a bare .step() with no argument uses.
 
 /**
  * @param {Object} [opts]
