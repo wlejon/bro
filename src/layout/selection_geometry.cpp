@@ -108,11 +108,19 @@ void toTextBoundary(dom::Node* node, int off, bool preferLeading,
 } // namespace
 
 TextHit hitTestText(dom::Document* doc, float x, float y,
-                    htmlayout::layout::TextMetrics& metrics) {
+                    htmlayout::layout::TextMetrics& metrics,
+                    dom::Element* scope) {
     TextHit result;
     if (!doc) return result;
     auto* root = doc->layoutRoot();
     if (!root) return result;
+    if (scope) {
+        // Search only the scope's subtree. If it has no adapter yet (styled
+        // display:none, or laid out since the last pass) fall back to the
+        // document rather than returning nothing — a caret somewhere beats no
+        // caret at all.
+        if (auto* scoped = findAdapterForElement(root, scope)) root = scoped;
+    }
     auto hit = htmlayout::layout::hitTestText(root, x, y, metrics);
     if (!hit.node) return result;
     auto* adapter = static_cast<LayoutNodeAdapter*>(hit.node);

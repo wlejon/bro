@@ -22,8 +22,17 @@ struct TextHit {
 };
 
 // (x, y) are document-space coordinates (y already adjusted for scroll).
+//
+// `scope` limits the search to one element's subtree. A hit that misses every
+// run still resolves — to the nearest run — and without a scope "nearest" is
+// measured across the WHOLE document, so a press in the blank right-hand part
+// of a wide editable box lands on whatever unrelated text happens to be
+// closest, typically the line below it. Pass the editing host to keep the
+// caret inside the element the user actually pressed. Null searches the
+// document, which is what a press outside any editable region wants.
 TextHit hitTestText(dom::Document* doc, float x, float y,
-                    htmlayout::layout::TextMetrics& metrics);
+                    htmlayout::layout::TextMetrics& metrics,
+                    dom::Element* scope = nullptr);
 
 // Caret geometry for (textNode, srcOffset) within document.
 // Returns false if the text node has no placed runs.

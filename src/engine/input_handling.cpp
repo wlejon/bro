@@ -1055,7 +1055,16 @@ void Engine::handleMouseDown(float x, float y, int button) {
             }
             bool suppressed = target && isSelectionSuppressed(target);
             if (!isEditableControl && !suppressed) {
-                auto hit = layout::hitTestText(document_.get(), docX, docY, *textMetrics_);
+                // Scope the search to the editing host when the press landed
+                // in one. A press that misses every run still resolves to the
+                // NEAREST run, and unscoped that is measured across the whole
+                // document — so clicking the blank right-hand part of a wide
+                // contenteditable put the caret in whatever text was closest,
+                // usually the line below it. The caret then sat outside the
+                // host, invisible, and typing went nowhere.
+                auto* editHost = editableHostOf(target);
+                auto hit = layout::hitTestText(document_.get(), docX, docY,
+                                               *textMetrics_, editHost);
                 auto* sel = document_->selection();
                 // Validate the hit textnode is still owned by the document.
                 // Hit-testing can surface layout-cached pointers into detached
@@ -1424,8 +1433,14 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
                 selectionPastThreshold_ = true;
             }
         }
+        // Same scoping as the press: a drag that began inside an editing host
+        // extends within it. Unscoped, dragging into the blank area beside the
+        // text jumps the focus to the nearest unrelated run and the selection
+        // swallows content the user never swept across.
+        auto* dragHost = editableHostOf(selAnchor);
         auto hit = selectionPastThreshold_
-            ? layout::hitTestText(document_.get(), docX, docY, *textMetrics_)
+            ? layout::hitTestText(document_.get(), docX, docY, *textMetrics_,
+                                  dragHost)
             : layout::TextHit{};
         // Drop the drag if either endpoint's textnode is no longer live.
         // selectionAnchorNode_ was captured on mousedown and can be freed
