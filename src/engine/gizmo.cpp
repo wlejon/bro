@@ -1014,11 +1014,19 @@ void GizmoManager::beginDrag(const PickResult& hit,
         // same view, felt as the gizmo speeding up and slowing down mid-drag.
         // The grabbed point then no longer stays exactly under the cursor on a
         // steeply foreshortened ring, which is the trade every DCC tool makes.
+        //
+        // The rate must come from the ring's NOMINAL radius, not from where
+        // the ray happened to cross the ring plane. pickRotate accepts a
+        // generous band (tubeRadius * 3, so majorR * (1 +- 0.075)), and taking
+        // the rate from the grab distance let identical mouse travel rotate up
+        // to 1.16x differently depending on which edge of that band was
+        // grabbed. Measured 1.12x across rings before this.
         const float kProbe = 0.05f;
         float px_, py_, rx_, ry_, gx, gy, tx, ty;
-        float radius = vlen_(rel);
+        float radius = ring_.majorRadius * currentScale_ *
+                       (hit.axis == GizmoAxis::View ? kViewRingScale : 1.0f);
         dragParamValid_ =
-            radius > 1e-5f && vlen_(worldTangent) > 1e-5f &&
+            radius > 1e-5f && vlen_(rel) > 1e-5f && vlen_(worldTangent) > 1e-5f &&
             worldToScreen(dragCam_, hit.hitPoint, gx, gy) &&
             // A step along the tangent, projected, gives the on-screen
             // direction that a positive turn about the normal moves the handle.
