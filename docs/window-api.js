@@ -25,7 +25,11 @@
  * disturb the window the whole pipeline renders through. getDisplays()
  * enumerates the real displays of the machine (assert shapes, not values,
  * in tests). Under --no-gpu there is no window at all: queries return their
- * defaults ('normal', 0/0, empty display list) and every mutator no-ops.
+ * defaults ('normal', 0/0, empty display list) and every mutator no-ops —
+ * except bro.window.open(), which THROWS "bro.window.open requires a GPU
+ * window session (unavailable under --no-gpu)": a secondary window needs a
+ * primary one to share a swap chain with, and silently returning a dead
+ * handle would be worse than the error.
  */
 
 // ── bro.json manifest keys (startup) ─────────────────────────────────────────
@@ -138,14 +142,17 @@ window.open('mailto:someone@example.com'); // → null (mail client opens)
 //
 // Mapping: no battery / unknown (desktops) → web convention
 //   { charging: true, chargingTime: 0, dischargingTime: Infinity, level: 1 }
-// On battery → charging false, dischargingTime = seconds left (Infinity if
-// unknown), level 0..1. Charging → charging true, chargingTime Infinity
-// (SDL has no time-to-full estimate). Headless always reports the
-// no-battery shape.
+// On battery → charging false, chargingTime Infinity (not charging, so there
+// is no time-to-full), dischargingTime = seconds left (Infinity if unknown),
+// level 0..1. Charging → charging true, chargingTime Infinity (SDL has no
+// time-to-full estimate). Charged (on AC, battery full) → charging true,
+// chargingTime 0 — the one case where chargingTime is finite. Headless always
+// reports the no-battery shape.
 
 const battery = await navigator.getBattery();
 battery.charging;         // boolean
-battery.chargingTime;     // seconds; 0 = full or no battery
+battery.chargingTime;     // seconds until full; 0 = already full or no
+                          // battery, Infinity whenever it is unknown
 battery.dischargingTime;  // seconds until empty; Infinity on AC
 battery.level;            // 0.0 .. 1.0
 
@@ -215,10 +222,12 @@ battery.level;            // 0.0 .. 1.0
 //
 // The child realm gets the standard sub-document bindings — DOM, timers,
 // 2D canvas, storage, settings, images — plus a bro.window scoped to ITS
-// window: bro.window.state / getPosition / setPosition / minimize / maximize
-// / restore / borderless / alwaysOnTop / getDisplays all act on the secondary
-// window, and window.screen / devicePixelRatio report for the display it sits
-// on. bro.window.open itself stays main-realm-only and throws there.
+// window: bro.window.state / getPosition / setPosition / getMinSize /
+// setMinSize / getMaxSize / setMaxSize / minimize / maximize / restore /
+// borderless / alwaysOnTop / getDisplays / moveToDisplay all act on the
+// secondary window, and window.screen / devicePixelRatio report for the
+// display it sits on. bro.window.open itself stays main-realm-only and
+// throws there.
 //
 // Realm policy: only the MAIN app realm may open windows. Calling
 // bro.window.open from an iframe (or any other child realm) throws
@@ -236,8 +245,11 @@ battery.level;            // 0.0 .. 1.0
 // state); setPosition no-ops on hidden windows (desk-dependent); focus()
 // no-ops. flush() runs the drain, so open/close are assertable:
 //   const w = bro.window.open('palette', { width: 320 });  flush();
-// flush() also runs the child's timers under virtual time, and capture()
-// works, so a headless test can drive and assert a secondary window end to end.
+// flush() drains creates, closes, resizes and messages only — the child's
+// timers and rAF run from advanceTime()'s stepping loop, so a test that waits
+// on a setTimeout inside the window app must advanceTime(), not flush(). With
+// those two plus capture(), a headless test can drive and assert a secondary
+// window end to end.
 
 const win = bro.window.open('palette', {   // app dir or index.html, like <iframe src>
     width: 320, height: 200,               // client size, px (default 800x600)
@@ -294,6 +306,22 @@ win.addEventListener('resize', (ev) => { // the window's client size changed
 });                                      // edge). The child realm gets its own
                                          // window 'resize' event independently.
 
+// ── Failure modes ────────────────────────────────────────────────────────────
+//
+// Bad input is either a throw or a documented no-op — never a half-opened
+// window:
+//
+//   • open(src) with a non-string or empty src throws
+//     "bro.window.open(src, opts): src must be a string" / "must be non-empty".
+//   • open({ display: N }) with N past the attached display count logs
+//     "bro.window.open: display=N, but only K display(s) attached" and falls
+//     back to default placement — the window still opens.
+//   • setSize(w, h) with w < 1 or h < 1 is silently ignored (the previous size
+//     stands); open()'s width/height options clamp up to 1 instead.
+//   • addEventListener drops what it cannot deliver, DOM-style: an unknown
+//     event type, or a second argument that is not a function, registers
+//     nothing and reports nothing.
+//
 // ── Messaging ────────────────────────────────────────────────────────────────
 //
 // Both directions are structured clones — the same encoder Worker.postMessage
@@ -301,6 +329,12 @@ win.addEventListener('resize', (ev) => { // the window's client size changed
 // ImageBitmap all cross, and functions throw "not cloneable". The optional
 // second argument is a transfer list; transferred ArrayBuffers are DETACHED on
 // the sending side, exactly as on the web.
+//
+// A Mesh must be TRANSFERRED, never cloned: one not listed in the transfer
+// list throws "postMessage: Mesh must be listed in the transferList" (and one
+// already transferred throws "Mesh is already neutered"). ImageBitmap is
+// happy either way — unlisted it ref-shares its immutable image rather than
+// copying pixels.
 //
 // Delivery is asynchronous and never reentrant: messages queue and are
 // delivered at the engine's idle point (the same drain that materializes and

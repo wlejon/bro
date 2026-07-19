@@ -110,6 +110,33 @@ elements('.card')
   [3] <DIV#card3.card>  200x100 @ (650, 80)
 ```
 
+### `inspectOverlay(panelName, selector [, verbose])`
+
+Same output as `inspect()`, but resolves the selector inside a **system panel's** document instead of the app's — the perf HUD, menu bar, preferences modal, splash and inspector each have their own `Document` (see [system-panels.md](system-panels.md)). Panel names are the relative paths the panel scan found, without the extension: `"perf"`, `"menu"`, `"nav"`, `"splash"`, `"inspector"`, `"settings/graphics"`.
+
+```js
+inspectOverlay('perf', '#fps')
+inspectOverlay('settings/graphics', '.row', true)
+```
+
+Throws `TypeError` if no element in that panel matches the selector.
+
+### `inspectOverlayTree(panelName, selector [, depth])`
+
+Same output as `inspectTree()`, rooted at an element inside a system panel. Default depth is 3.
+
+```js
+inspectOverlayTree('nav', 'body', 4)
+```
+
+### `overlayPanels()`
+
+Returns an array of the loaded panel names — the values `inspectOverlay` and `inspectOverlayTree` accept.
+
+```js
+overlayPanels()   // ['menu', 'perf', 'nav', 'settings/graphics', ...]
+```
+
 ## Usage Patterns
 
 ### Debugging layout in scripts

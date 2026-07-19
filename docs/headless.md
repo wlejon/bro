@@ -17,8 +17,11 @@ bro-headless [--no-gpu] [--width N] [--height N] <app-directory> [script.js | -e
 | Flag | Description |
 |------|-------------|
 | `--no-gpu` | Disable GPU rendering. Uses CPU-only Skia rasterizer (no WebGL, no scene layer compositing). For CI environments without a GPU. |
+| `--audio` | Open the real SDL audio device and mic. Off by default — headless runs the DSP graph with no device attached, so a test never claims the machine's sound hardware. |
 | `--width N` | Viewport width in pixels (default: 1920) |
 | `--height N` | Viewport height in pixels (default: 1080) |
+| `--splash` | Show the startup splash. Off by default in headless — its canvas animation leaks into early screenshots; opt in only to exercise the splash lifecycle. |
+| `--no-splash` | Explicitly disable the splash (the default). |
 
 By default, headless uses a hidden SDL window with a full OpenGL context — the same rendering pipeline as windowed mode, including GPU-accelerated Skia, WebGL2, and Canvas 2D scene layers.
 
@@ -32,6 +35,7 @@ These functions are available in addition to all standard DOM APIs:
 |----------|-------------|
 | `advanceTime(ms)` | Advance virtual time by N milliseconds (fires timers, rAF callbacks, and pending JS jobs) |
 | `sleep(ms)` | Alias for `advanceTime` |
+| `wallSleep(ms)` | Block for N milliseconds of *real* wall-clock time without advancing virtual time. Gives real threads (network, child process, mic) time to produce work; pair it with `advanceTime()` to deliver that work into JS (see "Waiting in scripts" below). |
 | `flush()` | Force layout recalculation (called automatically after `advanceTime`) |
 | `assert(condition, message?)` | Throw if condition is falsy. Failed assertions produce a nonzero exit code. |
 
@@ -177,6 +181,34 @@ The `bro.settings` API is available in headless mode for reading and writing per
 | `inspectTree(selector [, depth])` | Return a tree view of element layout (sizes + positions). Default depth 3. Traverses shadow DOM. |
 | `computedStyle(selector [, property])` | Return a specific computed style value (string), or all styles as a JS object. |
 | `elements(selector)` | Return a summary of all matching elements with sizes and positions. |
+| `inspectOverlay(panel, selector [, verbose])` | Same output as `inspect()`, but resolves `selector` inside a **system panel's** document (`"perf"`, `"menu"`, `"nav"`, `"settings/graphics"`, ...) instead of the app's. Throws if nothing matches. |
+| `inspectOverlayTree(panel, selector [, depth])` | Same output as `inspectTree()`, rooted at a system panel's element. Default depth 3. |
+| `overlayPanels()` | Array of the loaded system panels' names — the values `inspectOverlay`/`inspectOverlayTree` accept. |
+
+### Text shaping (`bro.text`)
+
+A diagnostic view of the shaper's cluster map and the bidi resolver — not an
+app-facing text API, but installed unconditionally in **both** headless and
+windowed mode, which makes it the way to assert shaping and bidi behavior from
+a script. All offsets are **byte** offsets into the UTF-8 string (the engine
+works in bytes here; `selectionStart`/`selectionEnd` on the DOM controls are
+UTF-16 per spec). Everything that needs a renderer returns `null` when there
+isn't one.
+
+The options bag is shared by the first four functions:
+`{ family: 'Arial', size: 16, weight: 400, italic: false, letterSpacing: 0, wordSpacing: 0 }`
+— every key optional, defaults as shown.
+
+| Function | Description |
+|----------|-------------|
+| `bro.text.shape(text, opts)` | Shape `text` → `{text, glyphCount, width, clusters}`. Each cluster is `{start, end, x, advance, glyphs, rtl}` — its byte span, x offset and advance within the run, how many glyphs it produced, and whether it resolved RTL. |
+| `bro.text.byteOffsetToX(text, opts, byteOffset)` | Caret position for a byte offset → `{x, isLeadingEdge}`, plus a `secondary` caret of the same shape at a directional boundary. |
+| `bro.text.xToByteOffset(text, opts, x)` | The inverse: nearest byte offset for an x position within the run. |
+| `bro.text.clusterRange(text, opts, byteOffset)` | `{start, end}` — the byte span of the cluster containing that offset (grapheme-safe caret movement). |
+| `bro.text.cacheStats()` | `{hits, misses}` for the shaping cache. Useful for asserting that a re-render reused shaped runs instead of re-shaping. |
+| `bro.text.bidi(text [, base, override])` | Run UAX #9 over `text` → `{paragraphLevel, uniform, levels, runs}`. `base` is `"auto"` (default, P2/P3), `"ltr"` or `"rtl"`; a truthy `override` applies a directional override. `levels` has one entry **per codepoint**; `runs` is `[{start, end, level}]` in byte offsets. |
+| `bro.text.bidiReorder(levels)` | Rule L2 applied to an array of levels → the logical index for each visual slot. |
+| `bro.text.bidiAvailable` | Boolean, not a function — whether a bidi resolver is compiled in. |
 
 ### Performance
 
@@ -196,12 +228,16 @@ DOM update actually pays for, and the two a screenshot can't show you.
 | `styleMs` | `resolveStyles()` — selector matching + the computed-style diff |
 | `buildMs` | rebuilding the whole layout tree from the DOM |
 | `invalidateMs` | carrying element dirt into the layout tree, including per-element subtree rebuilds |
-| `layoutMs` | `layoutTree()` itself |
+| `layoutMs` | `layoutTree()` itself — the sum of the three sub-passes below |
+| `layoutTreeMs` | in-flow layout, the only sub-pass that is incremental |
+| `layoutAbsMs` | positioning absolute/fixed boxes |
+| `layoutHitMs` | caching per-node subtree hit bounds |
 | `syncMs` | writing the resulting boxes back onto elements |
 | `totalMs` | the sum of the above |
 | `passes` | how many layout passes ran |
 | `elementsStyled` | elements whose computed style was re-resolved |
 | `nodesLaidOut` | layout nodes that ran a formatting context |
+| `nodeVisits` | every `layoutNodeInner()` call, including re-entrant ones — a flex or grid container lays an item out to measure it, then again to push the resolved size through. `nodeVisits` far above `nodesLaidOut` means the pass is dominated by re-measurement, not by what changed. |
 | `nodesReused` | layout nodes handed back from cache untouched |
 | `measureCalls` | text measurements (shaping) requested |
 | `styleLookups` | string-keyed style map lookups inside `layoutTree()` |
@@ -210,7 +246,7 @@ DOM update actually pays for, and the two a screenshot can't show you.
 | `reuseFailAvailH` | nodes re-laid because their available height differed from cache |
 | `reuseFailOverride` | nodes re-laid because their flex width override differed |
 | `treeRebuilds` | layout subtrees rebuilt from the DOM |
-| `scene` | 3D frustum-culling counters from the most recent frame, summed across all scene graphs: `{mesh,instanced,splat,particles,billboards,shadow}{Drawn,Culled}` (shadow counts are per caster × atlas tile). Per-graph numbers: `scene.cullStats()`; escape hatch: `scene.setFrustumCulling(false)`. See `docs/scene-api.js`. |
+| `scene` | 3D frustum-culling counters from the most recent frame, summed across all scene graphs: `{mesh,instanced,splat,particles,billboards,shadow}{Drawn,Culled}` (shadow counts are per caster × atlas tile), plus `shadowTilesTotal` / `shadowTilesRendered` / `shadowTilesCached` — how many shadow-atlas tiles existed, were re-rendered, and were served from cache this frame. Per-graph numbers: `scene.cullStats()`; escape hatch: `scene.setFrustumCulling(false)`. See `docs/scene-api.js`. |
 
 **The counts matter more than the milliseconds.** Layout and style are both
 incremental: a change is supposed to cost time proportional to what it changed,
@@ -314,6 +350,10 @@ bash tests/run_tests.sh events   # filter by substring
 Each test is a self-contained JS file that manipulates the DOM and uses `assert()` to verify behavior. The runner discovers all `tests/*/test_*.js` files, runs each against the minimal `tests/test_app/` HTML page, and reports pass/fail with a summary.
 
 ### Test categories
+
+`tests/` holds 40+ directories, one per subsystem (`webgl/`, `scene/`, `physics/`,
+`audio/`, `net/`, `window/`, `video/`, the ML suites, ...). A sample of the core
+ones:
 
 | Directory | What it tests |
 |-----------|---------------|
@@ -544,6 +584,6 @@ not survive the swap.
 - `[INFO]` and `[console.log]` lines go to stderr; REPL output and `-e` print results go to stdout. Separate them with `2>/dev/null`.
 - Screenshots are PNG format.
 - The default viewport is 1920x1080. Override with `--width` and `--height`.
-- Audio engine runs in headless mode (no audio device output). `advanceTime()` pumps the audio DSP pipeline, so voices, effects, sequencer, metering, recording, and FFT analysis all work. Use `getBusPeakL/R()`, `getBusRmsL/R()`, `getSpectrum()`, and `stopRecording()` to inspect audio output numerically.
+- Audio engine runs in headless mode; by default no audio device is opened (pass `--audio` to open the real SDL device + mic). `advanceTime()` pumps the audio DSP pipeline, so voices, effects, sequencer, metering, recording, and FFT analysis all work. Use `getBusPeakL/R()`, `getBusRmsL/R()`, `getSpectrum()`, and `stopRecording()` to inspect audio output numerically.
 - In the REPL, the prompt (`bro>`) is printed to stderr so it doesn't contaminate piped output.
 - The REPL supports `quit` and `exit` to terminate.

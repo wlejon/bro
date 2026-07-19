@@ -22,7 +22,7 @@ Both scans match panels by relative path (`menu.html`, `settings/graphics.html`,
 | Panel | File | Visibility flag | Shown via |
 |---|---|---|---|
 | Menu bar | `system/menu.html` | `MenuBar::visible` | `bro.menu.show()` (app-facing, opt-in; hidden by default) |
-| Perf HUD | `system/perf.html` | overlay toggle | `system_toggle_perf` action (default `F8`) |
+| Perf HUD | `system/perf.html` | overlay toggle | `system_toggle_perf` action (default `F8`) — frame/phase timings plus a "Secondary windows" section (one row per live `bro.window.open` window, hidden when there are none) |
 | Preferences modal | `system/nav.html` + `system/settings/{graphics,audio,input}.html` | `Engine::isSystemVisible()` | `system_toggle_settings` action, or the `__system.preferences` menu item |
 | Splash screen | `system/splash.html` | `Engine::splashVisible_` | shown automatically at startup if `splashEnabled_`; dismisses itself |
 | DOM inspector | `system/inspector.html` | `Engine::inspector().visible` | the `__system.inspector` menu item |
@@ -82,6 +82,8 @@ Before this helper existed, every settings-panel file hand-copied `CARD_W`/`CARD
 
 Plain data objects (not namespaced further): `perf.{fps, frameTime, js, layout, raster, gpu, draw}`, `viewport.{width, height}`, refreshed by the engine each frame.
 
+`perf.windows` rides along in the same refresh: an array with one entry per live secondary window (`bro.window.open`, see [window-api.js](window-api.js)) — `{id, title, width, height, focused, minimized}`, empty when the app has opened none. `perf.html` renders it as its "Secondary windows" table.
+
 ### `__bro.menu`
 
 | Function | Description |
@@ -129,4 +131,4 @@ The preferences-modal chrome — distinct from `bro.settings.*` (the settings *v
 There's no automated test suite for this layer — coverage is manual, build + `bro.exe`/`bro-headless.exe` + `screenshot()`. Two things to know if you're scripting a check:
 
 - **`bro-headless` suppresses the menu bar** regardless of `MenuBar::visible`, so screenshots stay consistent with a no-menu viewport — you can't screenshot-verify the menu bar from a headless script.
-- **System-panel DOMs are not reachable from the app-level headless globals.** `document.querySelector`/`inspectTree()` only see the app's own document — each panel is a separate `Document`/`JSContext`. To drive a panel from a headless script, use screen-coordinate `click(x, y)` (routed through the same input path as a real click) rather than DOM queries, and `screenshot()` to verify the result visually.
+- **Panel DOMs need the overlay globals, not the app ones.** `document.querySelector`/`inspect()`/`inspectTree()` only see the app's own document — each panel is a separate `Document`/`JSContext`. Query a panel with `inspectOverlay(panelName, selector [, verbose])` and `inspectOverlayTree(panelName, selector [, depth])`, which resolve the selector against that panel's `Document` (`Engine::overlayQuerySelector`); `overlayPanels()` lists the names they accept (`"perf"`, `"menu"`, `"nav"`, `"settings/graphics"`, ...). See [inspect.md](inspect.md). There is still no way to *mutate* a panel from a script, so drive it with screen-coordinate `click(x, y)` (routed through the same input path as a real click) and then assert with the overlay inspectors or `screenshot()`.
