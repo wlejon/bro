@@ -15,6 +15,7 @@
 
 const SDLK_BACKSPACE = 8;
 const SDLK_DELETE = 127;
+const SDLK_RETURN = 13;
 const SDLK_LEFT = 0x40000050;
 const SDLK_RIGHT = 0x4000004F;
 const SDLK_Z = 122;
@@ -229,6 +230,138 @@ function clickAt(el, dx, dy) {
     assert(sel.rangeCount === 0,
            'a non-editable empty div still clears the selection, got ' +
            sel.rangeCount);
+}
+
+// ---------------------------------------------------------------------------
+// Deletion crosses node boundaries: Backspace at offset 0 and Delete at the
+// end of a text node reach into the neighbouring leaf
+// ---------------------------------------------------------------------------
+{
+    // Backspace at the start of the inline's text takes the character before
+    // the inline. The inline itself survives — it still has content.
+    const ed = freshHost('ab<b>cd</b>ef');
+    const sel = window.getSelection();
+    caret(ed, 0, ed.querySelector('b').firstChild);
+    press(SDLK_BACKSPACE);
+    assert(ed.innerHTML === 'a<b>cd</b>ef',
+           'backspace at offset 0 crosses into the previous text node, got ' +
+           JSON.stringify(ed.innerHTML));
+    assert(sel.focusOffset === 1, 'caret follows to offset 1, got ' + sel.focusOffset);
+}
+
+{
+    // Delete at the end of a text node takes the first character of the next.
+    const ed = freshHost('ab<b>cd</b>ef');
+    caret(ed, 2);
+    press(SDLK_DELETE);
+    assert(ed.innerHTML === 'ab<b>d</b>ef',
+           'delete at end of a text node crosses forward, got ' +
+           JSON.stringify(ed.innerHTML));
+}
+
+{
+    // Emptying an inline drops it, and the text nodes it separated join.
+    const ed = freshHost('ab<b>c</b>ef');
+    const sel = window.getSelection();
+    caret(ed, 1, ed.querySelector('b').firstChild);
+    press(SDLK_BACKSPACE);
+    assert(ed.querySelector('b') === null,
+           'the emptied inline is removed, got ' + JSON.stringify(ed.innerHTML));
+    assert(ed.textContent === 'abef',
+           'text is abef, got ' + JSON.stringify(ed.textContent));
+    assert(ed.childNodes.length === 1,
+           'the two text nodes merged into one, got ' + ed.childNodes.length);
+    assert(sel.focusOffset === 2, 'caret sits at the join, got ' + sel.focusOffset);
+
+    // And typing at the join lands between them.
+    textInput('-');
+    flush();
+    assert(ed.textContent === 'ab-ef',
+           'typing at the join, got ' + JSON.stringify(ed.textContent));
+}
+
+{
+    // Cross-node deletion round-trips through undo.
+    const ed = freshHost('ab<b>c</b>ef');
+    caret(ed, 1, ed.querySelector('b').firstChild);
+    press(SDLK_BACKSPACE);
+    assert(ed.textContent === 'abef', 'deleted across nodes');
+    undo();
+    assert(ed.textContent === 'abcef',
+           'undo restores the text, got ' + JSON.stringify(ed.textContent));
+    assert(ed.querySelector('b') !== null,
+           'undo restores the removed inline, got ' + JSON.stringify(ed.innerHTML));
+    redo();
+    assert(ed.textContent === 'abef',
+           'redo re-applies it, got ' + JSON.stringify(ed.textContent));
+    assert(ed.querySelector('b') === null, 'redo removes the inline again');
+}
+
+{
+    // Backspace at the very start of the host has nothing to reach and is a
+    // no-op — it must not walk out of the editable subtree.
+    root.innerHTML = 'before<div id="ed" contenteditable="true" ' +
+        'style="width:320px;height:60px;font-size:16px">xy</div>';
+    flush();
+    const ed = document.getElementById('ed');
+    caret(ed, 0);
+    press(SDLK_BACKSPACE);
+    assert(ed.textContent === 'xy',
+           'backspace at the host start is a no-op, got ' +
+           JSON.stringify(ed.textContent));
+    assert(root.textContent === 'beforexy',
+           'and does not touch text outside the host, got ' +
+           JSON.stringify(root.textContent));
+}
+
+{
+    // Delete at the very end of the host is likewise a no-op.
+    root.innerHTML = '<div id="ed" contenteditable="true" ' +
+        'style="width:320px;height:60px;font-size:16px">xy</div>after';
+    flush();
+    const ed = document.getElementById('ed');
+    caret(ed, 2);
+    press(SDLK_DELETE);
+    assert(ed.textContent === 'xy',
+           'delete at the host end is a no-op, got ' +
+           JSON.stringify(ed.textContent));
+    assert(root.textContent === 'xyafter', 'and leaves following text alone');
+}
+
+{
+    // Enter inserts a <br>; Backspace after it takes it back, so the editor is
+    // symmetric about the one structural thing it can create.
+    const ed = freshHost('');
+    clickAt(ed, 4, 4);
+    textInput('a');
+    press(SDLK_RETURN);
+    textInput('b');
+    flush();
+    assert(ed.querySelector('br') !== null, 'Enter inserted a <br>');
+
+    // Caret is after "b"; two backspaces remove "b" then the <br>.
+    press(SDLK_BACKSPACE);
+    press(SDLK_BACKSPACE);
+    assert(ed.querySelector('br') === null,
+           'backspace removes the <br>, got ' + JSON.stringify(ed.innerHTML));
+    assert(ed.textContent === 'a',
+           'the text either side is untouched, got ' +
+           JSON.stringify(ed.textContent));
+}
+
+{
+    // A cross-node delete does not coalesce into a neighbouring same-node run:
+    // it is structural, so it stands as its own undo entry.
+    const ed = freshHost('ab<b>cd</b>ef');
+    caret(ed, 2, ed.querySelector('b').firstChild);
+    press(SDLK_BACKSPACE);   // same-node: "cd" -> "c"
+    press(SDLK_BACKSPACE);   // same-node, empties: structural
+    assert(ed.textContent === 'abef',
+           'both characters gone, got ' + JSON.stringify(ed.textContent));
+    undo();
+    assert(ed.textContent === 'abcef',
+           'undo restores the structural delete, got ' +
+           JSON.stringify(ed.textContent));
 }
 
 console.log('contenteditable editing tests passed');
