@@ -28,6 +28,7 @@
 #include "dom/range.h"
 #include "dom/selection.h"
 #include "dom/text_node.h"
+#include "layout/control_text.h"
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
@@ -2540,11 +2541,20 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                                                focusText,
                                                back ? DomUndoStack::Kind::Backspace
                                                     : DomUndoStack::Kind::DeleteForward);
+                            // One code point, not one byte: offsets here are
+                            // byte offsets into UTF-8 data, so a ±1 step would
+                            // chop a multi-byte character in half and leave
+                            // invalid UTF-8 in the tree. utf8Prev/utf8Next are
+                            // what <input>/<textarea> delete with, and the same
+                            // choice applies for the same reason.
+                            const std::string& data = focusText->data();
                             if (back && focusO > 0) {
-                                focusText->deleteData(focusO - 1, 1);
-                                sel->collapse(focusText, focusO - 1);
+                                const int prev = layout::utf8Prev(data, focusO);
+                                focusText->deleteData(prev, focusO - prev);
+                                sel->collapse(focusText, prev);
                             } else if (!back && focusO < len) {
-                                focusText->deleteData(focusO, 1);
+                                const int next = layout::utf8Next(data, focusO);
+                                focusText->deleteData(focusO, next - focusO);
                                 sel->collapse(focusText, focusO);
                             }
                             undo.commit();
@@ -2603,14 +2613,18 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             } else if (focusText) {
                 const std::string& data = focusText->data();
                 int len = static_cast<int>(data.size());
+                // Whole code points, for the same reason deletion steps them:
+                // `data` is UTF-8 and `focusO` indexes its bytes, so ±1 lands
+                // inside a multi-byte character — where the UTF-16 conversion
+                // at the JS boundary snaps back and the caret looks stuck.
                 if (keycode == SDLK_LEFT) {
                     if (focusO > 0) {
-                        moveFocus(focusText, focusO - 1);
+                        moveFocus(focusText, layout::utf8Prev(data, focusO));
                         handled = true;
                     }
                 } else if (keycode == SDLK_RIGHT) {
                     if (focusO < len) {
-                        moveFocus(focusText, focusO + 1);
+                        moveFocus(focusText, layout::utf8Next(data, focusO));
                         handled = true;
                     }
                 } else if (keycode == SDLK_HOME) {
