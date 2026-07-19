@@ -293,8 +293,11 @@ void Engine::performAppReload() {
     JS_RunGC(jsRuntime_->getRuntime());
 
     // Document before context (the iframe teardown order): ~Document fires
-    // fireNodeFreed into the still-live context, nulling wrapper opaques, so
-    // the context free below is inert on element wrappers.
+    // fireNodeDestroying for every element it still owns, nulling wrapper
+    // opaques while the node storage is valid, so the context free below is
+    // inert on element wrappers. (Note the ordering requirement: this must stay
+    // ahead of JS_FreeContext, and the hook deliberately does not consult
+    // s_doc_to_ctx, which DomBindings::cleanup above has already dropped.)
     document_.reset();
     documentHeight_ = 0.0f;
     scrollY_ = 0.0f;

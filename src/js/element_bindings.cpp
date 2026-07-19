@@ -83,8 +83,10 @@ static void js_element_finalizer(JSRuntime* rt, JSValue val)
     // construction: wrapElement() can only consult jsWrapper_ through an
     // Element* the caller already holds, which for a destroyed Element is a
     // use-after-free that precedes this cache entirely. Every path that dooms a
-    // still-allocated element (fireNodeFreed, invalidateWrapper, the orphan
-    // sweep's freeNode) clears jsWrapper_ eagerly while the memory is valid.
+    // still-allocated element (fireNodeFreed, fireNodeDestroying — fired from
+    // both drainPendingFrees() and ~Document — invalidateWrapper, and the
+    // orphan sweep's freeNode) clears jsWrapper_ eagerly while the memory is
+    // valid.
     // If that ever stops being true the branch below says so out loud rather
     // than leaving a silent hazard.
     if (el->isAlive() && el->jsWrapper() == JS_VALUE_GET_PTR(val))
