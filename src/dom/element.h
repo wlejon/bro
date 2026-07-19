@@ -24,6 +24,37 @@ namespace bro::dom {
 class Document;
 class TextNode;
 
+// ---------------------------------------------------------------------------
+// Debug-only use-after-free tripwire for Element storage.
+//
+// isAlive() cannot be used to VALIDATE a pointer: magic_ is stamped 0xDEAD by
+// ~Element, so any code that reads it to find out whether an Element is still
+// there has already read freed memory. Such a read is silent in practice (the
+// freed page usually still holds 0xDEAD, so the probe even returns the "right"
+// answer) which is exactly what let this class of bug hide.
+//
+// In Debug builds every ~Element records its address here and every Element
+// constructor removes its own address again — so the set is precisely "storage
+// that was an Element and has since been destroyed, and has not been reused by
+// a newer Element". Call sites that must never see a freed Element assert on
+// it via BRO_ASSERT_ELEMENT_NOT_FREED, which reports and exits rather than
+// letting the read pass unnoticed.
+//
+// JS-thread only, like all Element construction/destruction.
+#ifndef NDEBUG
+#define BRO_DOM_FREED_ELEMENT_GUARD 1
+bool wasElementFreed(const void* p);
+// Reports and terminates. `what` names the call site.
+[[noreturn]] void reportFreedElementAccess(const void* p, const char* what);
+#define BRO_ASSERT_ELEMENT_NOT_FREED(p, what)                                  \
+    do {                                                                       \
+        if ((p) && ::bro::dom::wasElementFreed(p))                             \
+            ::bro::dom::reportFreedElementAccess((p), (what));                 \
+    } while (0)
+#else
+#define BRO_ASSERT_ELEMENT_NOT_FREED(p, what) ((void)0)
+#endif
+
 class Element : public Node {
 public:
     explicit Element(const std::string& tag);
@@ -342,6 +373,12 @@ public:
     bool isTemplateContent() const { return isTemplateContent_; }
 
     // Debug: detect use-after-free
+    //
+    // NOTE: magic_ is stamped 0xDEAD by ~Element and nowhere else, so a false
+    // return does not mean "live element in a bad state" — it means the storage
+    // is ALREADY FREED and reading magic_ was itself a use-after-free. Never
+    // call this to decide whether a pointer is safe to dereference; use
+    // Document::ownsNode / isNodeLive / resolveNode, which never deref.
     bool isAlive() const { return magic_ == 0xB00E; }
 
 private:

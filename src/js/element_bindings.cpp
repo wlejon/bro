@@ -65,6 +65,11 @@ static void js_element_finalizer(JSRuntime* rt, JSValue val)
 
     if (s_shutting_down) return;
 
+    // Same contract as getElement(): a surviving opaque means the Element is
+    // still allocated. Everything below (including the isAlive() probe) derefs
+    // it, so catch a violation here rather than reading freed storage.
+    BRO_ASSERT_ELEMENT_NOT_FREED(el, "js_element_finalizer()");
+
     // Backstop for the wrapper pointer cache: whatever removed this wrapper from
     // the element map, the object is now being collected, so make sure the
     // element no longer points at it. Guards the fast path in wrapElement()
@@ -139,6 +144,11 @@ bro::dom::Element* getElement(JSValueConst val)
 {
     auto* el = static_cast<bro::dom::Element*>(
         JS_GetOpaque(val, js_element_class_id));
+    // A non-null opaque must mean live storage: every path that dooms an
+    // Element nulls its wrapper's opaque eagerly, while the memory is valid.
+    // If that ever stops holding, the isAlive() probe below would be reading
+    // freed memory rather than catching anything — trip loudly in Debug.
+    BRO_ASSERT_ELEMENT_NOT_FREED(el, "getElement()");
     if (el && !el->isAlive()) {
         LOG_ERROR("USE-AFTER-FREE: Element %u (tag=%s) accessed after destruction!",
                   el->nodeId(), "(freed)");

@@ -15,8 +15,11 @@
 #include "util/log.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace bro::dom {
 
@@ -76,6 +79,30 @@ void Node::insertBefore(Node* newChild, Node* refChild) {
 // Element implementations
 // ---------------------------------------------------------------------------
 
+#if BRO_DOM_FREED_ELEMENT_GUARD
+// See element.h. Function-local static so it outlives every Element (the DOM is
+// torn down long before static destruction ordering matters here).
+static std::unordered_set<const void*>& freedElements() {
+    static std::unordered_set<const void*> s;
+    return s;
+}
+
+bool wasElementFreed(const void* p) {
+    return freedElements().count(p) != 0;
+}
+
+void reportFreedElementAccess(const void* p, const char* what) {
+    LOG_ERROR("USE-AFTER-FREE: %s dereferenced Element storage at %p that "
+              "~Element already destroyed. isAlive()/magic_ cannot catch this "
+              "reliably — the probe is itself the use-after-free.",
+              what, p);
+    std::fflush(nullptr);
+    // Not abort(): avoid the Windows error-reporting dialog, which would hang
+    // an unattended test run instead of failing it.
+    std::_Exit(70);
+}
+#endif
+
 Element::~Element() {
     // Tell the backing CanvasScene (if any) that its Element is gone, so it
     // drops the layout/detached callbacks that aim at this object before the
@@ -88,6 +115,9 @@ Element::~Element() {
         canvasSceneOnDestroy_(canvasScene_);
     }
     magic_ = 0xDEAD;
+#if BRO_DOM_FREED_ELEMENT_GUARD
+    freedElements().insert(this);
+#endif
 }
 
 std::string Element::resolveUrl(const std::string& src) const {
@@ -105,6 +135,11 @@ Element::Element(const std::string& tag)
     : tag_(tag)
     , style_(this)
 {
+#if BRO_DOM_FREED_ELEMENT_GUARD
+    // This address is an Element again — retire any stale freed-record for it,
+    // so recycled storage never produces a false positive.
+    freedElements().erase(this);
+#endif
     for (auto& c : tag_) {
         c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
     }
