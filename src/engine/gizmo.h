@@ -229,10 +229,14 @@ private:
     /// in local-space mode.
     void resolveAxes(bromath::Vec3& ax, bromath::Vec3& ay, bromath::Vec3& az) const;
 
-    /// Closest parameter t on the infinite line (pivot + t * axisDir)
-    /// to the ray. Used for translate / scale drag math.
-    static float rayVsAxisParam(const bromath::Vec3& rayO, const bromath::Vec3& rayD,
-                                const bromath::Vec3& pivot, const bromath::Vec3& axisDir);
+    /// Closest parameter t on the infinite line (pivot + t * axisDir) to the
+    /// ray, written to outParam. Used for translate / scale drag math.
+    /// Returns false when the ray is near-parallel to the axis and no bounded
+    /// answer exists — callers must skip the frame rather than substitute a
+    /// value, since every float (0 included) is a meaningful position.
+    static bool rayVsAxisParam(const bromath::Vec3& rayO, const bromath::Vec3& rayD,
+                               const bromath::Vec3& pivot, const bromath::Vec3& axisDir,
+                               float& outParam);
 
     /// Closest-distance-from-ray-to-finite-segment test (picks against
     /// arrows / scale handles). Returns dist + rayT + segT.
@@ -301,6 +305,7 @@ private:
     float       dragRefAngle_ = 0.0f;     // rotate ring angle at grab-time
     bromath::Vec3 dragLastPoint_{0, 0, 0};
     float       dragLastParam_ = 0.0f;
+    bool        dragParamValid_ = false;  // axis param was solvable at grab time
     float       dragLastAngle_ = 0.0f;
     bromath::Vec3 dragLastScale_{1, 1, 1};
 

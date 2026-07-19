@@ -31,6 +31,28 @@ static bool elementAbsoluteBox(dom::Element* el,
     return outW > 0 && outH > 0;
 }
 
+// Map an absolute (post-transform) screen offset into the scene's own canvas
+// coordinate space.
+//
+// These are two different spaces whenever a CSS transform scales the canvas or
+// an ancestor. absoluteContentBox() projects through ancestor transforms, so
+// its width is the on-screen size, while SceneGraph::canvasWidth() tracks the
+// element's *layout* content rect — unscaled. unprojectLocal() divides by the
+// latter, so feeding it the former made every ray wrong by the scale factor:
+// under a scale(2) the normalized device x ran -1..3 instead of -1..1, and the
+// gizmo's handles could not even be picked, let alone dragged predictably.
+static void absoluteToCanvas(const SceneGraph* g,
+                             float absW, float absH,
+                             float& localX, float& localY) {
+    if (!g) return;
+    const float cw = static_cast<float>(g->canvasWidth());
+    const float ch = static_cast<float>(g->canvasHeight());
+    // Before the first layout-driven setCanvasSize the graph has no size yet;
+    // 1:1 is the only sane assumption and matches the untransformed case.
+    if (cw > 0 && absW > 0) localX *= cw / absW;
+    if (ch > 0 && absH > 0) localY *= ch / absH;
+}
+
 SceneGraph* Engine::findSceneGraphAt(float x, float y,
                                      float& outLocalX, float& outLocalY) const {
     for (auto& entry : sceneGraphs_) {
@@ -41,6 +63,7 @@ SceneGraph* Engine::findSceneGraphAt(float x, float y,
         if (y < ey || y >= ey + eh) continue;
         outLocalX = x - ex;
         outLocalY = y - ey;
+        absoluteToCanvas(entry.graph.get(), ew, eh, outLocalX, outLocalY);
         return entry.graph.get();
     }
     return nullptr;
@@ -105,6 +128,10 @@ bool Engine::gizmoHandleMouseMove(float x, float y) {
                 float ex, ey, ew, eh;
                 if (elementAbsoluteBox(entry.element, ex, ey, ew, eh)) {
                     lx = x - ex; ly = y - ey;
+                    // Same space conversion as findSceneGraphAt — without it a
+                    // drag that wandered off the canvas would jump the moment
+                    // it left, under any scaled view.
+                    absoluteToCanvas(g, ew, eh, lx, ly);
                 }
                 break;
             }

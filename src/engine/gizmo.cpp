@@ -424,8 +424,25 @@ float GizmoManager::screenStableScale(scene::SceneGraph* graph) const {
     const auto& P = graph->projectionMatrix();
     float m11 = P.at(1, 1);
     if (!std::isfinite(m11) || m11 <= 0.0f) return 1.0f;
-    float tanHalfFov = 1.0f / m11;
-    float worldPerPixel = (dist * 2.0f * tanHalfFov) / static_cast<float>(ch);
+
+    // World units covered by one pixel of canvas height.
+    //
+    // Under perspective this grows with distance to the pivot. Under an
+    // orthographic camera it does NOT — the projection's half-height fixes it,
+    // and P11 IS 1/halfHeight — so folding `dist` in made the gizmo scale with
+    // camera dolly, which under ortho changes nothing on screen. Zooming an
+    // ortho view (which changes halfHeight) then failed to resize it at all.
+    // Both errors compound into handles the wrong size for what is drawn, and
+    // since every pick radius below multiplies by this scale, the grab regions
+    // swell until neighbouring axes overlap and a drag catches the wrong one.
+    float worldPerPixel;
+    if (graph->cameraIsPerspective()) {
+        float tanHalfFov = 1.0f / m11;
+        worldPerPixel = (dist * 2.0f * tanHalfFov) / static_cast<float>(ch);
+    } else {
+        float halfH = 1.0f / m11;
+        worldPerPixel = (2.0f * halfH) / static_cast<float>(ch);
+    }
     float world = config_.targetPixelSize * worldPerPixel;
     float baseLen = arrow_.length();
     if (baseLen <= 0.0f) baseLen = 1.0f;
@@ -539,12 +556,18 @@ GizmoManager::closestRayToSegment(const Vec3& rayO, const Vec3& rayD,
     return { rayT, segT, dist, segP };
 }
 
-float GizmoManager::rayVsAxisParam(const Vec3& rayO, const Vec3& rayD,
-                                   const Vec3& pivot, const Vec3& axisDir) {
-    // Closest point on infinite axis line to ray; returns t such that the
-    // closest point = pivot + t * axisDir. Solves the 3D line/line problem
-    // and takes the axis-line parameter. Matches rayVsAxisDistance in
-    // apps/scene-editor/app.js.
+bool GizmoManager::rayVsAxisParam(const Vec3& rayO, const Vec3& rayD,
+                                  const Vec3& pivot, const Vec3& axisDir,
+                                  float& outParam) {
+    // Closest point on the infinite axis line to the ray; outParam is t such
+    // that the closest point = pivot + t * axisDir.
+    //
+    // Returns false when the ray is (near) parallel to the axis, where the
+    // solution is unbounded. That case has to be distinguishable from a real
+    // answer: this used to return 0.0f, but 0 is a perfectly valid parameter —
+    // it names the pivot — so a drag that started well-conditioned and then
+    // grazed parallel would read t=0 and jump the object back to its pivot in
+    // a single frame. Callers skip the frame instead.
     Vec3 w = rayO - pivot;
     Vec3 u = axisDir;
     float a = rayD.x*rayD.x + rayD.y*rayD.y + rayD.z*rayD.z;
@@ -553,8 +576,11 @@ float GizmoManager::rayVsAxisParam(const Vec3& rayO, const Vec3& rayD,
     float d = rayD.x*w.x + rayD.y*w.y + rayD.z*w.z;
     float e = u.x*w.x + u.y*w.y + u.z*w.z;
     float denom = a*c - b*b;
-    if (std::fabs(denom) < 1e-9f) return 0.0f;
-    return (a*e - b*d) / denom;
+    // Relative test: with both vectors normalized denom is sin²(angle), so this
+    // is a fixed angular cutoff rather than a magnitude-dependent one.
+    if (!std::isfinite(denom) || std::fabs(denom) < 1e-7f * (a * c)) return false;
+    outParam = (a*e - b*d) / denom;
+    return std::isfinite(outParam);
 }
 
 bool GizmoManager::rayVsPlane(const Vec3& rayO, const Vec3& rayD,
@@ -685,7 +711,12 @@ void GizmoManager::beginDrag(const PickResult& hit,
     switch (config_.mode) {
     case GizmoMode::Translate:
     case GizmoMode::Scale: {
-        dragRefParam_  = rayVsAxisParam(rayO, rayD, dragPivot_, dragAxisDir_);
+        // A degenerate grab leaves the reference at 0; updateDrag re-seeds it
+        // on the first frame that yields a bounded parameter, so the drag
+        // simply does nothing until the view is usable rather than lurching.
+        dragParamValid_ = rayVsAxisParam(rayO, rayD, dragPivot_, dragAxisDir_,
+                                         dragRefParam_);
+        if (!dragParamValid_) dragRefParam_ = 0.0f;
         dragLastParam_ = dragRefParam_;
         break;
     }
@@ -726,14 +757,30 @@ bool GizmoManager::updateDrag(const Vec3& rayO, const Vec3& rayD,
 
     switch (config_.mode) {
     case GizmoMode::Translate: {
-        float t = rayVsAxisParam(rayO, rayD, dragPivot_, dragAxisDir_);
+        float t;
+        if (!rayVsAxisParam(rayO, rayD, dragPivot_, dragAxisDir_, t))
+            return true;  // consumed, but no motion this frame
+        if (!dragParamValid_) {   // first usable frame after a degenerate grab
+            dragParamValid_ = true;
+            dragRefParam_ = t;
+            dragLastParam_ = t;
+            return true;
+        }
         float dt = t - dragLastParam_;
         dragLastParam_ = t;
         outTranslate = dragAxisDir_ * dt;
         break;
     }
     case GizmoMode::Scale: {
-        float t = rayVsAxisParam(rayO, rayD, dragPivot_, dragAxisDir_);
+        float t;
+        if (!rayVsAxisParam(rayO, rayD, dragPivot_, dragAxisDir_, t))
+            return true;
+        if (!dragParamValid_) {
+            dragParamValid_ = true;
+            dragRefParam_ = t;
+            dragLastParam_ = t;
+            return true;
+        }
         // Ratio-style scale: factor = (currentRefDist + delta) / refDist.
         // Uses axis-projection distance from pivot, avoids negative zero-crossings.
         float ref = dragRefParam_;

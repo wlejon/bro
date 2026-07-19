@@ -277,6 +277,12 @@ public:
     /// Camera eye position (for lighting calculations).
     const bromath::Vec3& cameraEye() const { return cameraEye_; }
 
+    /// False for an orthographic camera. Anything deriving world-units-per-
+    /// pixel has to branch on this: under perspective that quantity depends on
+    /// distance to the camera, under ortho it is fixed by the projection's
+    /// half-height and distance does not enter into it.
+    bool cameraIsPerspective() const { return cameraIsPerspective_; }
+
     /// Unproject canvas-local pixel coordinates to a world-space ray.
     /// `localX` / `localY` are in pixels relative to the canvas (top-left
     /// origin). Returns true on success; false if the camera has not been
