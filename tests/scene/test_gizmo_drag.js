@@ -208,5 +208,90 @@ if (!plain) {
                'no other axis interrupts the +X arm: ' + row);
     }
 
+    // =======================================================================
+    // Plane handles (XY / YZ / XZ) and the screen-facing rotate ring.
+    //
+    // The GizmoAxis enum has named these since the beginning but nothing
+    // built or picked them, so they were unreachable; `hovered` could never
+    // report them either.
+    // =======================================================================
+    function surveyHandles(mode, camera, x0, x1, y0, y1, step) {
+        const c = makeCanvas(1);
+        const s = c.getContext('scene');
+        if (!s) return {};
+        s.setCamera(camera);
+        flush();
+        bro.gizmo.setMode(mode);
+        attachTarget();
+
+        const seen = {};
+        for (let px = x0; px <= x1; px += step) {
+            for (let py = y0; py <= y1; py += step) {
+                mouseMove(px, py);
+                const h = bro.gizmo.hovered;
+                if (h && h !== 'none') seen[h] = (seen[h] || 0) + 1;
+            }
+        }
+        return seen;
+    }
+
+    // An off-axis camera so all three planes present some area to the viewer.
+    const angled = { fov: 60, near: 0.1, far: 1000,
+                     position: [7, 6, 9], target: [0, 0, 0], up: [0, 1, 0] };
+
+    const tHandles = surveyHandles('translate', angled, 130, 270, 80, 220, 2);
+    for (const name of ['x', 'y', 'z', 'xy', 'yz', 'xz']) {
+        assert(tHandles[name] > 0,
+               'translate handle "' + name + '" is reachable, saw ' +
+               JSON.stringify(tHandles));
+    }
+
+    const rHandles = surveyHandles('rotate', angled, 100, 300, 50, 250, 2);
+    for (const name of ['x', 'y', 'z', 'view']) {
+        assert(rHandles[name] > 0,
+               'rotate handle "' + name + '" is reachable, saw ' +
+               JSON.stringify(rHandles));
+    }
+
+    // A plane drag must move in exactly the two axes it spans and leave the
+    // third alone — that constraint is the whole point of the handle.
+    function dragPlane(want) {
+        const c = makeCanvas(1);
+        const s = c.getContext('scene');
+        if (!s) return null;
+        s.setCamera(angled);
+        flush();
+        bro.gizmo.setMode('translate');
+        const sel = attachTarget();
+
+        let gx = -1, gy = -1;
+        outer:
+        for (let px = 130; px <= 270; px += 1) {
+            for (let py = 80; py <= 220; py += 1) {
+                mouseMove(px, py);
+                if (bro.gizmo.hovered === want) { gx = px; gy = py; break outer; }
+            }
+        }
+        if (gx < 0) return null;
+        mouseDown(gx, gy);
+        mouseMove(gx + 40, gy + 25);
+        mouseUp(gx + 40, gy + 25);
+        flush();
+        return sel;
+    }
+
+    const locked = { xy: 'z', yz: 'x', xz: 'y' };
+    for (const plane of ['xy', 'yz', 'xz']) {
+        const sel = dragPlane(plane);
+        assert(sel, 'the ' + plane + ' plane handle could be grabbed');
+        const free = ['x', 'y', 'z'].filter((a) => a !== locked[plane]);
+        assert(Math.abs(sel[locked[plane]]) < 1e-5,
+               plane + ' drag left ' + locked[plane] + ' untouched, got ' +
+               sel[locked[plane]]);
+        const moved = free.some((a) => Math.abs(sel[a]) > 1e-3);
+        assert(moved, plane + ' drag moved along ' + free.join('/') +
+                      ', got x=' + sel.x + ' y=' + sel.y + ' z=' + sel.z);
+    }
+
     console.log('PASS gizmo drag');
 }

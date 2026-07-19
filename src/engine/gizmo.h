@@ -254,6 +254,15 @@ private:
     void ensureTranslateMeshes();
     void ensureRotateMeshes();
     void ensureScaleMeshes();
+    void ensurePlaneMeshes();
+
+    /// The two axes a plane handle spans, and its normal, for `axis` one of
+    /// XY / YZ / XZ. Returns false for any other axis.
+    static bool planeBasis(GizmoAxis axis,
+                           const bromath::Vec3& ax, const bromath::Vec3& ay,
+                           const bromath::Vec3& az,
+                           bromath::Vec3& u, bromath::Vec3& v,
+                           bromath::Vec3& normal);
 
     GizmoConfig config_;
     bromath::Vec3 position_{0, 0, 0};
@@ -261,12 +270,36 @@ private:
     GizmoAxis hovered_ = GizmoAxis::None;
     float currentScale_ = 1.0f;   // last screen-stable scale (for pick radii)
 
+    // Cached view direction (pivot → camera, normalized), refreshed every
+    // frame from the scene graph in meshesForRender. The screen-facing
+    // rotate ring needs a camera to be defined at all, and picking runs
+    // outside any render pass, so it has to be remembered here — same
+    // reasoning as currentScale_.
+    bromath::Vec3 viewDir_{0, 0, 1};
+
     // Translate arrows.
     ArrowGeom arrow_;
     std::unique_ptr<scene::MeshNode> arrowX_;
     std::unique_ptr<scene::MeshNode> arrowY_;
     std::unique_ptr<scene::MeshNode> arrowZ_;
     bool arrowsBuilt_ = false;
+
+    // Plane handles — small quads spanning each axis pair, offset into the
+    // positive quadrant so they sit beside the arms rather than over them.
+    struct PlaneGeom {
+        float offset = 0.28f;   // inner edge, along both spanning axes
+        float size   = 0.30f;   // edge length
+        float outer() const { return offset + size; }
+    };
+    PlaneGeom plane_;
+    std::unique_ptr<scene::MeshNode> planeXY_;
+    std::unique_ptr<scene::MeshNode> planeYZ_;
+    std::unique_ptr<scene::MeshNode> planeXZ_;
+    bool planesBuilt_ = false;
+
+    // Screen-facing rotate ring (GizmoAxis::View) — rotates about the view
+    // axis, the one rotation the three world rings cannot express comfortably.
+    std::unique_ptr<scene::MeshNode> ringView_;
 
     // Rotate rings — tori around each axis.
     struct RingGeom {

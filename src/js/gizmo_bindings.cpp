@@ -249,6 +249,10 @@ static JSValue js_gizmo_get_hovered(JSContext* ctx, JSValueConst, int, JSValueCo
     case engine::GizmoAxis::X: s = "x"; break;
     case engine::GizmoAxis::Y: s = "y"; break;
     case engine::GizmoAxis::Z: s = "z"; break;
+    case engine::GizmoAxis::XY: s = "xy"; break;
+    case engine::GizmoAxis::YZ: s = "yz"; break;
+    case engine::GizmoAxis::XZ: s = "xz"; break;
+    case engine::GizmoAxis::View: s = "view"; break;
     case engine::GizmoAxis::Center: s = "center"; break;
     default: return JS_NULL;
     }

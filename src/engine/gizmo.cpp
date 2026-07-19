@@ -17,6 +17,16 @@ using bromath::Vec3;
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
 
+// The screen-facing rotate ring sits outside the three axis rings.
+constexpr float kViewRingScale = 1.25f;
+
+// Plane quads are translucent so the geometry behind them stays readable.
+constexpr float kPlaneAlpha = 0.55f;
+
+inline bool isPlaneAxis(GizmoAxis a) {
+    return a == GizmoAxis::XY || a == GizmoAxis::YZ || a == GizmoAxis::XZ;
+}
+
 inline float clamp01(float v) { return v < 0 ? 0 : (v > 1 ? 1 : v); }
 inline float vlen_(const Vec3& v) { return std::sqrt(v.x*v.x + v.y*v.y + v.z*v.z); }
 inline Vec3  vnorm_(const Vec3& v) {
@@ -72,6 +82,18 @@ void GizmoManager::setHovered(GizmoAxis axis) {
     apply(scaleX_.get(), config_.colorX, GizmoAxis::X);
     apply(scaleY_.get(), config_.colorY, GizmoAxis::Y);
     apply(scaleZ_.get(), config_.colorZ, GizmoAxis::Z);
+    // Plane quads take the colour of the axis they are NORMAL to (XY is
+    // normal to Z, XZ to Y, YZ to X) at the translucent alpha they were built
+    // with — reusing the opaque axis colour here would make an unhovered
+    // plane snap to solid the first time the pointer left it.
+    const float planeZ[4] = { config_.colorZ[0], config_.colorZ[1], config_.colorZ[2], kPlaneAlpha };
+    const float planeX[4] = { config_.colorX[0], config_.colorX[1], config_.colorX[2], kPlaneAlpha };
+    const float planeY[4] = { config_.colorY[0], config_.colorY[1], config_.colorY[2], kPlaneAlpha };
+    static const float kViewBase[4] = { 0.85f, 0.85f, 0.85f, 0.9f };
+    apply(planeXY_.get(), planeZ, GizmoAxis::XY);
+    apply(planeYZ_.get(), planeX, GizmoAxis::YZ);
+    apply(planeXZ_.get(), planeY, GizmoAxis::XZ);
+    apply(ringView_.get(), kViewBase, GizmoAxis::View);
 
     fireHoverChange();
 }
@@ -82,6 +104,8 @@ void GizmoManager::releaseGL() {
     r(ringX_.get());  r(ringY_.get());  r(ringZ_.get());
     r(scaleX_.get()); r(scaleY_.get()); r(scaleZ_.get());
     r(scaleCenter_.get());
+    r(planeXY_.get()); r(planeYZ_.get()); r(planeXZ_.get());
+    r(ringView_.get());
 }
 
 // ---------------------------------------------------------------------------
@@ -341,6 +365,75 @@ void GizmoManager::ensureTranslateMeshes() {
     arrowsBuilt_ = true;
 }
 
+// Quad spanning two of the three canonical planes, offset into the positive
+// quadrant. Emitted with both windings: these are unlit, camera-facing-
+// agnostic handles that must stay visible from either side of the plane.
+static void buildPlaneQuadMesh(int normalAxis, float offset, float size,
+                               bromesh::MeshData& out) {
+    out.clear();
+    const float a = offset, b = offset + size;
+    // Corners in the plane, ordered around the quad.
+    float c[4][3];
+    auto set = [&](int i, float x, float y, float z) {
+        c[i][0] = x; c[i][1] = y; c[i][2] = z;
+    };
+    float n[3] = {0, 0, 0};
+    n[normalAxis] = 1.0f;
+    if (normalAxis == 2) {          // XY quad
+        set(0, a, a, 0); set(1, b, a, 0); set(2, b, b, 0); set(3, a, b, 0);
+    } else if (normalAxis == 0) {   // YZ quad
+        set(0, 0, a, a); set(1, 0, b, a); set(2, 0, b, b); set(3, 0, a, b);
+    } else {                        // XZ quad
+        set(0, a, 0, a); set(1, b, 0, a); set(2, b, 0, b); set(3, a, 0, b);
+    }
+    for (int i = 0; i < 4; ++i) {
+        out.positions.push_back(c[i][0]);
+        out.positions.push_back(c[i][1]);
+        out.positions.push_back(c[i][2]);
+        out.normals.push_back(n[0]);
+        out.normals.push_back(n[1]);
+        out.normals.push_back(n[2]);
+    }
+    const uint32_t idx[] = { 0, 1, 2,  0, 2, 3,   // front
+                             0, 2, 1,  0, 3, 2 }; // back
+    for (uint32_t i : idx) out.indices.push_back(i);
+}
+
+bool GizmoManager::planeBasis(GizmoAxis axis, const Vec3& ax, const Vec3& ay,
+                              const Vec3& az, Vec3& u, Vec3& v, Vec3& normal) {
+    switch (axis) {
+    case GizmoAxis::XY: u = ax; v = ay; normal = az; return true;
+    case GizmoAxis::YZ: u = ay; v = az; normal = ax; return true;
+    case GizmoAxis::XZ: u = ax; v = az; normal = ay; return true;
+    default: return false;
+    }
+}
+
+void GizmoManager::ensurePlaneMeshes() {
+    if (planesBuilt_) return;
+    bromesh::MeshData xy, yz, xz;
+    buildPlaneQuadMesh(2, plane_.offset, plane_.size, xy);
+    buildPlaneQuadMesh(0, plane_.offset, plane_.size, yz);
+    buildPlaneQuadMesh(1, plane_.offset, plane_.size, xz);
+
+    planeXY_ = std::make_unique<MeshNode>("gizmo-plane-xy");
+    planeYZ_ = std::make_unique<MeshNode>("gizmo-plane-yz");
+    planeXZ_ = std::make_unique<MeshNode>("gizmo-plane-xz");
+    planeXY_->setMesh(xy);
+    planeYZ_->setMesh(yz);
+    planeXZ_->setMesh(xz);
+
+    // Coloured by the axis each plane is NORMAL to, which is the convention
+    // every DCC uses: the blue quad moves in XY, i.e. the plane Z points out of.
+    planeXY_->setColor(config_.colorZ[0], config_.colorZ[1], config_.colorZ[2], kPlaneAlpha);
+    planeYZ_->setColor(config_.colorX[0], config_.colorX[1], config_.colorX[2], kPlaneAlpha);
+    planeXZ_->setColor(config_.colorY[0], config_.colorY[1], config_.colorY[2], kPlaneAlpha);
+    planeXY_->setUnlit(true);
+    planeYZ_->setUnlit(true);
+    planeXZ_->setUnlit(true);
+    planesBuilt_ = true;
+}
+
 void GizmoManager::ensureRotateMeshes() {
     if (ringsBuilt_) return;
     bromesh::MeshData md;
@@ -357,6 +450,16 @@ void GizmoManager::ensureRotateMeshes() {
     ringX_->setUnlit(true);
     ringY_->setUnlit(true);
     ringZ_->setUnlit(true);
+
+    // Screen-facing ring, drawn slightly larger so it reads as an outer band
+    // rather than fighting the three axis rings for the same pixels.
+    bromesh::MeshData vm;
+    buildRingMesh(ring_.majorRadius * kViewRingScale, ring_.tubeRadius,
+                  ring_.majorSegs, ring_.minorSegs, vm);
+    ringView_ = std::make_unique<MeshNode>("gizmo-rotate-view");
+    ringView_->setMesh(vm);
+    ringView_->setColor(0.85f, 0.85f, 0.85f, 0.9f);
+    ringView_->setUnlit(true);
     ringsBuilt_ = true;
 }
 
@@ -464,6 +567,14 @@ std::vector<MeshNode*> GizmoManager::meshesForRender(scene::SceneGraph* graph) {
     float s = screenStableScale(graph);
     currentScale_ = s;
 
+    // Remember which way the camera lies so the screen-facing ring can be
+    // oriented, and so picking (which runs outside any render pass) agrees
+    // with what was drawn.
+    if (graph) {
+        Vec3 toEye = graph->cameraEye() - position_;
+        if (vlen_(toEye) > 1e-6f) viewDir_ = vnorm_(toEye);
+    }
+
     Vec3 axX, axY, axZ;
     resolveAxes(axX, axY, axZ);
 
@@ -493,19 +604,37 @@ std::vector<MeshNode*> GizmoManager::meshesForRender(scene::SceneGraph* graph) {
 
     std::vector<MeshNode*> out;
     switch (config_.mode) {
-    case GizmoMode::Translate:
+    case GizmoMode::Translate: {
         ensureTranslateMeshes();
+        ensurePlaneMeshes();
         place(arrowX_.get(), axX);
         place(arrowY_.get(), axY);
         place(arrowZ_.get(), axZ);
-        out = { arrowX_.get(), arrowY_.get(), arrowZ_.get() };
+        // The plane quads are modelled in the canonical XY/YZ/XZ planes, and
+        // resolveAxes() produces exactly the identity basis (world space) or
+        // the target's orientation (local space) — so the gizmo's own
+        // orientation is the correct rotation for them, no per-axis fitting.
+        Quat axisSpace = (config_.space == GizmoSpace::World)
+                             ? bromath::qidentity() : orientation_;
+        for (MeshNode* n : { planeXY_.get(), planeYZ_.get(), planeXZ_.get() }) {
+            if (!n) continue;
+            n->setPosition(position_);
+            n->setScale(s, s, s);
+            n->setRotation(axisSpace);
+        }
+        out = { arrowX_.get(), arrowY_.get(), arrowZ_.get(),
+                planeXY_.get(), planeYZ_.get(), planeXZ_.get() };
         break;
+    }
     case GizmoMode::Rotate:
         ensureRotateMeshes();
         place(ringX_.get(), axX);
         place(ringY_.get(), axY);
         place(ringZ_.get(), axZ);
-        out = { ringX_.get(), ringY_.get(), ringZ_.get() };
+        // The view ring faces the camera, so it is placed against viewDir_
+        // rather than an axis of the gizmo's basis.
+        place(ringView_.get(), viewDir_);
+        out = { ringX_.get(), ringY_.get(), ringZ_.get(), ringView_.get() };
         break;
     case GizmoMode::Scale:
         ensureScaleMeshes();
@@ -651,6 +780,27 @@ GizmoManager::pick(const Vec3& rayO, const Vec3& rayD) {
             if (r.dist > pickRad) continue;
             consider(r.dist, r.rayT, axisIds[i], axes[i], r.segPoint);
         }
+        // Plane quads. A hit anywhere inside the quad counts as distance 0 —
+        // it is a filled surface, not a line, so it should win over an arm
+        // whose centreline merely passes nearby.
+        {
+            const GizmoAxis planeIds[3] = { GizmoAxis::XY, GizmoAxis::YZ, GizmoAxis::XZ };
+            const float lo = plane_.offset * currentScale_;
+            const float hi = plane_.outer() * currentScale_;
+            for (GizmoAxis pid : planeIds) {
+                Vec3 u, v, n;
+                if (!planeBasis(pid, axX, axY, axZ, u, v, n)) continue;
+                Vec3 hit;
+                if (!rayVsPlane(rayO, rayD, position_, n, hit)) continue;
+                Vec3 rel = hit - position_;
+                float du = rel.x*u.x + rel.y*u.y + rel.z*u.z;
+                float dv = rel.x*v.x + rel.y*v.y + rel.z*v.z;
+                if (du < lo || du > hi || dv < lo || dv > hi) continue;
+                float t = (hit - rayO).x*rayD.x + (hit - rayO).y*rayD.y + (hit - rayO).z*rayD.z;
+                if (t < 0) continue;
+                consider(0.0f, t, pid, n, hit);
+            }
+        }
         break;
     }
     case GizmoMode::Scale: {
@@ -697,6 +847,18 @@ GizmoManager::pick(const Vec3& rayO, const Vec3& rayD) {
             // cursor takes the one it is actually nearest to.
             consider(bandDist, t, axisIds[i], normal, hit);
         }
+        // Screen-facing ring, on the same distance-from-the-circle footing.
+        {
+            float viewR = majorR * kViewRingScale;
+            Vec3 hit;
+            if (rayVsPlane(rayO, rayD, position_, viewDir_, hit)) {
+                Vec3 rel = hit - position_;
+                float bandDist = std::fabs(vlen_(rel) - viewR);
+                float t = (hit - rayO).x*rayD.x + (hit - rayO).y*rayD.y + (hit - rayO).z*rayD.z;
+                if (bandDist <= tube && t >= 0)
+                    consider(bandDist, t, GizmoAxis::View, viewDir_, hit);
+            }
+        }
         break;
     }
     }
@@ -715,6 +877,16 @@ void GizmoManager::beginDrag(const PickResult& hit,
     dragAxisDir_ = hit.axisDir;
     dragLastPoint_ = hit.hitPoint;
     dragLastScale_ = Vec3(1, 1, 1);
+
+    // A plane handle drags in its own plane regardless of mode, so it is
+    // resolved before the per-mode axis math.
+    if (isPlaneAxis(dragAxis_)) {
+        dragNormal_ = hit.axisDir;   // pick stored the plane normal here
+        dragLastPoint_ = hit.hitPoint;
+        setHovered(dragAxis_);
+        fireBegin();
+        return;
+    }
 
     switch (config_.mode) {
     case GizmoMode::Translate:
@@ -762,6 +934,19 @@ bool GizmoManager::updateDrag(const Vec3& rayO, const Vec3& rayD,
     outRotate    = bromath::qidentity();
     outScale     = Vec3(1, 1, 1);
     if (!isDragging()) return false;
+
+    // Plane drag: keep the grabbed point under the cursor. The delta is just
+    // how far the ray/plane intersection moved, which needs no reference
+    // parameter and stays well conditioned until the plane is edge-on (where
+    // rayVsPlane declines and the frame is skipped).
+    if (isPlaneAxis(dragAxis_)) {
+        Vec3 hit;
+        if (!rayVsPlane(rayO, rayD, dragPivot_, dragNormal_, hit)) return true;
+        outTranslate = hit - dragLastPoint_;
+        dragLastPoint_ = hit;
+        fireTranslate(outTranslate);
+        return true;
+    }
 
     switch (config_.mode) {
     case GizmoMode::Translate: {

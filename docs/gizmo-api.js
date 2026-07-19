@@ -8,17 +8,28 @@
 // apply to whatever the app considers "selected".
 //
 // Handles:
-//   - translate: 3 axis arrows
-//   - rotate:    3 axis rings
+//   - translate: 3 axis arrows + 3 plane quads (XY / YZ / XZ)
+//   - rotate:    3 axis rings + an outer screen-facing ring
 //   - scale:     3 axis boxes + center uniform cube
 //
-// There is no translate center sphere, no plane (XY/YZ/XZ) quads, and no
-// outer view ring — none are built or picked. Only scale has a center
+// A plane quad drags in the plane it spans, keeping the grabbed point under
+// the cursor and leaving the third axis untouched. The screen-facing ring
+// rotates about the view axis — the one rotation the three world rings
+// cannot express comfortably. There is still no translate center (free-move)
 // handle, so `hovered` is 'center' in scale mode only.
 //
-// Visuals stay at ~80px regardless of camera zoom (configurable via
-// configure({size})). Depth test is disabled so handles always win over
-// scene geometry — grabbable even when inside meshes.
+// `hovered` values: 'x' | 'y' | 'z' | 'xy' | 'yz' | 'xz' | 'view' | 'center'
+// | null. Plane and view handles report through the same `translate` and
+// `rotate` callbacks as the axis handles — an app that only reads the delta
+// needs no changes to support them.
+//
+// Visuals stay at ~80px regardless of camera zoom or projection mode
+// (configurable via configure({size})). Depth test is disabled so handles
+// always win over scene geometry — grabbable even when inside meshes.
+//
+// Picking ranks candidates by distance to the cursor, not by depth, so the
+// handle you are pointing at is the one you get even where several overlap
+// near the pivot.
 // =============================================================================
 
 bro.gizmo.show();                     // make visible (no-op if already shown)
@@ -99,4 +110,4 @@ bro.gizmo.detach();
 // Read-only state.
 bro.gizmo.visible;                   // bool
 bro.gizmo.dragging;                  // bool
-bro.gizmo.hovered;                   // 'x' | 'y' | 'z' | 'center' | null
+bro.gizmo.hovered;                   // 'x'|'y'|'z'|'xy'|'yz'|'xz'|'view'|'center'|null
