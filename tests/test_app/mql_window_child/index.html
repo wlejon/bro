@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head><style> body { margin: 0; background: rgb(20,20,20); } </style></head>
+<body>
+<script>
+// Secondary-window child for the multi-window matchMedia regression test.
+//
+// A secondary window installs matchMedia like any other realm, but for a long
+// time it never received 'change': delivery walked the app / iframe / system
+// realms only, and — separately — a host document was never restyled in
+// headless, so the restyle-pending gate that change delivery waits on never
+// cleared. `.matches` read correctly the whole time, which is what made the
+// gap so quiet. This child reports BOTH so a regression in either half fails.
+var mq = matchMedia('(prefers-color-scheme: dark)');
+var changes = [];
+mq.addEventListener('change', function (ev) {
+  changes.push({ matches: mq.matches, evMatches: ev.matches });
+});
+
+window.addEventListener('message', function (ev) {
+  if (ev.data && ev.data.ask === 'state') {
+    bro.window.parent.postMessage({
+      matches: mq.matches,        // live read — half 1 (scheme reaches the realm)
+      changes: changes.slice(),   // delivered events — half 2 (gate clears)
+    });
+  }
+});
+</script>
+</body>
+</html>

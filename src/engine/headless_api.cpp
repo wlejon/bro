@@ -194,6 +194,28 @@ void Engine::flush() {
     // drain point, not reentrantly inside a capture() call. Idempotent - a
     // host whose box already matches returns immediately.
     for (auto& h : windowHosts_) syncWindowHostBox(*h);
+    // Bring each host document's styles current. Windowed builds get this from
+    // recordWindowHostLayers() every frame; headless has no frame loop, and
+    // host documents are not part of the app screenshot, so without this they
+    // are never restyled at all. That is not merely a staleness problem: a media
+    // -context change (color-scheme flip, resize) sets the document's
+    // restyle-pending flag, matchMedia delivery waits for that flag to clear,
+    // and a flag that nothing ever clears means a listener in a secondary
+    // window NEVER fires while .matches reads correctly — silent and very hard
+    // to spot from JS. Restyle before the media-query drain below.
+    if (textMetrics_) {
+        for (auto& h : windowHosts_) {
+            if (!h || !h->document || h->pendingClose) continue;
+            if (!h->document->documentElement()) continue;
+            layout::ElementRefAdapter::setHoveredElement(h->hoveredElement);
+            h->document->resolveStyles();
+            h->document->performLayout(static_cast<float>(h->boxW),
+                                       static_cast<float>(h->boxH), *textMetrics_);
+        }
+        // Restore the adapter's hover target to the app document's, so the
+        // app's own :hover resolves correctly on the next pass.
+        layout::ElementRefAdapter::setHoveredElement(hoveredElement_.get());
+    }
     // Same for <iframe> sub-documents: an iframe element resized by app JS
     // re-evaluates the sub-document's media queries here, at the drain, so a
     // test can resize and assert after one flush(). Idempotent.

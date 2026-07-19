@@ -563,6 +563,11 @@ std::string Engine::effectiveColorScheme() const {
     return SDL_GetSystemTheme() == SDL_SYSTEM_THEME_DARK ? "dark" : "light";
 }
 
+// Every realm that can own a Document has to be walked by both functions
+// below. Secondary windows are the newest such realm and were missed when
+// they landed: they install matchMedia like any other realm, so omitting them
+// left `.matches` correct-on-read but permanently silent — a listener in a
+// secondary window never fired, and a theme switch never reached it.
 void Engine::applyColorScheme() {
     const std::string scheme = effectiveColorScheme();
     if (document_) document_->setMediaColorScheme(scheme);
@@ -571,6 +576,9 @@ void Engine::applyColorScheme() {
     }
     for (auto& doc : systemDocs_) {
         if (doc.document) doc.document->setMediaColorScheme(scheme);
+    }
+    for (auto& host : windowHosts_) {
+        if (host && host->document) host->document->setMediaColorScheme(scheme);
     }
 }
 
@@ -581,6 +589,9 @@ void Engine::deliverMediaQueryChangesAllRealms() {
     }
     for (auto& doc : systemDocs_) {
         if (doc.jsCtx) js::deliverMediaQueryChanges(doc.jsCtx);
+    }
+    for (auto& host : windowHosts_) {
+        if (host && host->jsCtx) js::deliverMediaQueryChanges(host->jsCtx);
     }
 }
 
