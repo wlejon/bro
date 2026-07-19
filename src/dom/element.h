@@ -303,6 +303,30 @@ public:
     layout::ElSvg* svgControl() const { return svgControl_.get(); }
     layout::ElVideo* videoControl() const { return videoControl_.get(); }
 
+    // <img> intrinsic size — the decoded pixel dimensions of `src`.
+    //
+    // An <img> is a REPLACED element, and layout can only treat it as one if
+    // it can answer "how big is it?". Without an answer it degenerates to an
+    // empty inline box: zero-sized, and CSS width/height silently ignored
+    // (correctly — those don't apply to non-replaced inlines), so the image
+    // simply doesn't appear. Attributes and SVG data URLs used to be the only
+    // sources of an answer, which is why a plain <img src="photo.png"> was
+    // invisible.
+    //
+    // Filled in by engine::ensureReplacedElements, which resolves `src`
+    // against the document base path and reads just the file header. Cached
+    // against the src it was probed for so a src change re-probes, and a
+    // layout pass never does I/O.
+    int imageNaturalWidth() const { return imageNaturalWidth_; }
+    int imageNaturalHeight() const { return imageNaturalHeight_; }
+    /// The src these dimensions were probed for; empty until one is.
+    const std::string& imageProbedSrc() const { return imageProbedSrc_; }
+    void setImageNaturalSize(const std::string& src, int w, int h) {
+        imageProbedSrc_ = src;
+        imageNaturalWidth_ = w;
+        imageNaturalHeight_ = h;
+    }
+
     void setInputControl(std::unique_ptr<layout::ElInput> ctrl);
     void setTextareaControl(std::unique_ptr<layout::ElTextarea> ctrl);
     void setSelectControl(std::unique_ptr<layout::ElSelect> ctrl);
@@ -428,6 +452,10 @@ private:
     std::unique_ptr<layout::ElTextarea> textareaControl_;
     std::unique_ptr<layout::ElSelect> selectControl_;
     std::unique_ptr<layout::ElSvg> svgControl_;
+    // <img> probed intrinsic size — see imageNaturalWidth().
+    std::string imageProbedSrc_;
+    int imageNaturalWidth_ = 0;
+    int imageNaturalHeight_ = 0;
     std::unique_ptr<layout::ElVideo> videoControl_;
     std::string customValidity_;
     void* canvasScene_ = nullptr;

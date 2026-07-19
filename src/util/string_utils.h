@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -12,5 +13,11 @@ std::string toUpper(const std::string& str);
 bool startsWith(const std::string& str, const std::string& prefix);
 bool endsWith(const std::string& str, const std::string& suffix);
 std::string replace(const std::string& str, const std::string& from, const std::string& to);
+
+/// Decode standard base64. Skips whitespace and padding, and ignores any
+/// character outside the alphabet rather than failing — callers here feed it
+/// data: URL bodies, where a stray newline is normal and a hard error would
+/// only turn a renderable image into a blank one.
+std::vector<uint8_t> base64Decode(const std::string& s);
 
 } // namespace bro::util

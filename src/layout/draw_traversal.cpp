@@ -12,6 +12,7 @@
 #include "dom/text_node.h"
 #include "dom/node.h"
 #include "util/log.h"
+#include "util/string_utils.h"
 
 #include <algorithm>
 #include <array>
@@ -3397,31 +3398,10 @@ static std::string urlDecode(const std::string& s) {
 }
 
 // Decode standard base64 (RFC 4648). Tolerates whitespace and missing padding.
+// Base64 lives in util so the <img> intrinsic-size probe in
+// engine/replaced_elements.cpp decodes data: URLs the same way this does.
 static std::vector<uint8_t> base64Decode(const std::string& s) {
-    static int8_t table[256];
-    static bool init = false;
-    if (!init) {
-        for (int i = 0; i < 256; ++i) table[i] = -1;
-        const char* alpha = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        for (int i = 0; i < 64; ++i) table[(unsigned char)alpha[i]] = (int8_t)i;
-        init = true;
-    }
-    std::vector<uint8_t> out;
-    out.reserve(s.size() * 3 / 4);
-    uint32_t buf = 0;
-    int bits = 0;
-    for (unsigned char c : s) {
-        if (c == '=' || c <= ' ') continue;
-        int v = table[c];
-        if (v < 0) continue;
-        buf = (buf << 6) | (uint32_t)v;
-        bits += 6;
-        if (bits >= 8) {
-            bits -= 8;
-            out.push_back((uint8_t)((buf >> bits) & 0xff));
-        }
-    }
-    return out;
+    return bro::util::base64Decode(s);
 }
 
 void DrawTraversal::loadImage(const std::string& url, const std::string& basePath) {

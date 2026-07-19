@@ -44,6 +44,11 @@ namespace bro::render {
 bool decodeWebP(const void* data, std::size_t len,
                 int& width, int& height, std::vector<uint8_t>& out);
 
+/// Dimensions only, without decoding pixels — the header read layout needs to
+/// size an <img> before anything paints. Same false-means-"not WebP or
+/// unusable" contract as decodeWebP.
+bool decodeWebPHeader(const void* data, std::size_t len, int& width, int& height);
+
 /// Read `path` and decode it as WebP. Convenience for the callers that hold a
 /// path rather than bytes; same return contract, including for a file that
 /// doesn't exist.

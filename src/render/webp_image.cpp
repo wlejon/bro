@@ -36,6 +36,16 @@ bool decodeWebP(const void* data, std::size_t len,
     return true;
 }
 
+bool decodeWebPHeader(const void* data, std::size_t len, int& width, int& height) {
+    if (!data || len == 0) return false;
+    int w = 0, h = 0;
+    if (!WebPGetInfo(static_cast<const uint8_t*>(data), len, &w, &h)) return false;
+    if (w <= 0 || h <= 0) return false;
+    width = w;
+    height = h;
+    return true;
+}
+
 bool decodeWebPFile(const std::string& path,
                     int& width, int& height, std::vector<uint8_t>& out) {
     std::FILE* f = std::fopen(path.c_str(), "rb");

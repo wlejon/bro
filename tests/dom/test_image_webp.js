@@ -109,16 +109,39 @@ function load(p) {
 }
 
 // ---------------------------------------------------------------------------
-// NOT COVERED HERE: the renderer's own decode path
+// The renderer decodes WebP too, not just `new Image()`
 // ---------------------------------------------------------------------------
-// bro has a second, independent image entry point — render/image_cache.cpp,
-// which the renderer uses when painting an <img> — and it gets the same
-// libwebp fallback (see render/webp_image.h). It is not asserted here because
-// a DOM <img> does not paint in this harness for ANY format: with a PNG in an
-// <img> over a black div, the div paints and the image does not. That is
-// pre-existing and format-independent, so proving it out belongs with
-// whatever fixes <img> painting, not with WebP. No test in the suite covers
-// DOM <img> rendering today.
+// bro has two independent image entry points: the Image binding above
+// (broimage, then libwebp) and the renderer's own cache (SkCodec, then
+// libwebp). They are separate code, so a fix applied to only one yields a
+// .webp that reports naturalWidth 0 but paints, or the reverse. This paints
+// an <img> into the document and reads the composited pixel back.
+{
+    // Forward slashes: the path goes through HTML, where a backslash is not a
+    // path separator.
+    const webpPath = writeTemp('paint.webp', HALF_TRANSPARENT_WHITE).split('\\').join('/');
+    const root = document.getElementById('root');
+    // Black backdrop, so the 50%-alpha white composites to an obvious mid
+    // grey — distinct from both the backdrop and a fully opaque draw.
+    root.innerHTML =
+        '<div id="bg" style="position:absolute;left:20px;top:20px;' +
+        'width:60px;height:60px;background:#000">' +
+        '<img src="' + webpPath + '" style="width:60px;height:60px">' +
+        '</div>';
+    flush();
+
+    const rect = document.getElementById('bg').getBoundingClientRect();
+    const px = getPixel(rect.left + 30, rect.top + 30);
+    // Not the backdrop: something painted.
+    assert(px.r > 40, 'the WebP painted over black, got r=' + px.r);
+    // Not opaque white either: the alpha channel survived compositing.
+    assert(px.r < 240, 'painted with partial alpha, got r=' + px.r);
+    // Grey — the three channels track each other, so no channel swap.
+    assert(Math.abs(px.r - px.g) < 12 && Math.abs(px.g - px.b) < 12,
+           'grey, got ' + px.r + ',' + px.g + ',' + px.b);
+    root.innerHTML = '';
+    flush();
+}
 
 // ---------------------------------------------------------------------------
 // The other formats still work — the WebP branch sits in a shared decode path

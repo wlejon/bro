@@ -193,10 +193,28 @@ public:
                     }
                 }
             }
+            // A raster image's intrinsic size is its decoded pixel size, which
+            // is only knowable by reading the file — so it is probed once when
+            // `src` is set (engine::ensureReplacedElements) and cached on the
+            // element. Without this an <img src="photo.png"> carrying neither
+            // width/height attributes nor an SVG payload reported NO intrinsic
+            // size at all, which made it a non-replaced inline box: zero-sized,
+            // with CSS width/height correctly ignored, so the image never
+            // appeared. SVG data URLs are parsed above and win, since their
+            // declared size is authoritative and needs no file read.
+            if (intrW <= 0 && intrH <= 0) {
+                const int natW = elem_->imageNaturalWidth();
+                const int natH = elem_->imageNaturalHeight();
+                if (natW > 0 && natH > 0) {
+                    intrW = static_cast<float>(natW);
+                    intrH = static_cast<float>(natH);
+                }
+            }
+
             // Resolve final intrinsic size:
             //   - Explicit attrs on both axes win.
             //   - Single attr derives the other axis from intrinsic aspect ratio.
-            //   - Otherwise use the SVG's intrinsic dimensions if known.
+            //   - Otherwise use the intrinsic dimensions if known.
             float aspect = (intrW > 0 && intrH > 0) ? (intrW / intrH) : 0.0f;
             if (attrW >= 0 && attrH >= 0) { w = attrW; h = attrH; return true; }
             if (attrW >= 0) {

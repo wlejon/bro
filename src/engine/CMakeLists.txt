@@ -66,6 +66,11 @@ endif()
 target_include_directories(bro_engine PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_include_directories(bro_engine PRIVATE ${GEN_DIR})
 target_link_libraries(bro_engine PUBLIC bro_platform bro_render bro_js bro_dom bro_layout bro_canvas bro_webgl bro_audio_inference bro_steam broaudio bro_util glad)
+# <img> intrinsic sizing probes WebP headers too, so the engine needs the same
+# decoder the two image paths use (render/webp_image.h).
+if(BRO_WITH_WEBP)
+    target_link_libraries(bro_engine PRIVATE bro_webp)
+endif()
 if(BRO_WITH_NET)
     target_link_libraries(bro_engine PUBLIC bro_net)
 endif()

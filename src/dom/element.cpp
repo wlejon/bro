@@ -226,8 +226,18 @@ void Element::setAttribute(const std::string& name, const std::string& val) {
     }
 
     attributes_[name] = val;
-    if (name == "id") markPaintDirty();
-    else markDirty();
+    if (name == "id") {
+        markPaintDirty();
+    } else if (name == "src" && (tag_ == "IMG" || tag_ == "img")) {
+        // A new src means a new intrinsic size, and the size is only recovered
+        // by re-probing the file — which happens in the structure pass
+        // (engine::ensureReplacedElements). A plain layout mark would relayout
+        // the old dimensions and leave the image sized for its predecessor, so
+        // this is one of the few attribute writes that genuinely restructures.
+        markStructureDirty();
+    } else {
+        markDirty();
+    }
 }
 
 void Element::removeAttribute(const std::string& name) {
