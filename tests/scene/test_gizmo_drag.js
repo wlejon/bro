@@ -420,9 +420,11 @@ if (!plain) {
         const hi = Math.max.apply(null, mags.map((m) => m.mag));
         assert(lo > 0.5, 'every ring grab produced real rotation, got ' +
                          JSON.stringify(mags));
-        // Was a 47x spread. Allow modest slack for the foreshortening of a
-        // near-edge-on ring's tangent, but nothing like the old behaviour.
-        assert(hi / lo < 1.6,
+        // Was a 47x spread, then 2.6x once the angle was measured as arc over
+        // the local radius. The rate is now pinned to the ring's face-on pixel
+        // radius for the whole gesture, so foreshortening cannot move it at
+        // all and this should sit at ~1.0.
+        assert(hi / lo < 1.1,
                'equal mouse travel rotates equally across rings and grab ' +
                'points (max/min = ' + (hi / lo).toFixed(2) + '): ' +
                JSON.stringify(mags));

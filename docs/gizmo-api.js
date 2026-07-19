@@ -31,12 +31,19 @@
 // handle you are pointing at is the one you get even where several overlap
 // near the pivot.
 //
-// Rotation tracks how far the cursor travels ALONG the grabbed ring, divided
-// by that ring's radius — so equal mouse travel turns any ring by the same
-// amount no matter how foreshortened it looks, and a ring behaves like a
-// wheel: dragging down its near edge and its far edge turn it opposite ways.
-// Motion across the ring rather than along it is the pointer leaving the
-// handle, and correctly rotates nothing.
+// Rotation is measured entirely in screen pixels, against the camera as it
+// stood when the handle was grabbed — so an app that moves the camera in
+// response to `rotate` (a view gizmo that orbits) does not feed its own motion
+// back in and change the drag's speed mid-gesture.
+//
+// The grabbed ring's tangent sets the DIRECTION the cursor must travel to turn
+// it forwards; the rate is fixed for the whole drag at the ring's face-on pixel
+// radius. So equal travel turns any ring by the same amount however
+// foreshortened it looks, a ring behaves like a wheel (its near and far edges
+// turn opposite ways), and motion across the ring rather than along it
+// correctly rotates nothing. On a steeply foreshortened ring the grabbed point
+// no longer stays exactly under the cursor — the usual trade for a rate that
+// does not swing.
 // =============================================================================
 
 bro.gizmo.show();                     // make visible (no-op if already shown)

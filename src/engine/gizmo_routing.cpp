@@ -87,7 +87,7 @@ bool Engine::gizmoHandleMouseDown(float x, float y, int /*button*/) {
     auto hit = gizmo_->pick(rayO, rayD);
     if (hit.axis == engine::GizmoAxis::None) return false;
 
-    gizmo_->beginDrag(hit, rayO, rayD);
+    gizmo_->beginDrag(hit, rayO, rayD, lx, ly);
     uiDirty_ = true;
     return true;
 }
@@ -143,7 +143,7 @@ bool Engine::gizmoHandleMouseMove(float x, float y) {
     if (!g->unprojectLocal(lx, ly, rayO, rayD)) return true;
 
     Vec3 dT; Quat dR; Vec3 dS;
-    gizmo_->updateDrag(rayO, rayD, dT, dR, dS);
+    gizmo_->updateDrag(rayO, rayD, lx, ly, dT, dR, dS);
     uiDirty_ = true;
     return true;
 }

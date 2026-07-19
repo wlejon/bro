@@ -133,8 +133,12 @@ public:
     /// Begin a drag along the picked handle. Captures the pivot + the
     /// initial ray parameter / angle so subsequent updateDrag() calls can
     /// produce cumulative world deltas.
+    /// screenX/screenY are canvas-local cursor pixels. Rotation is measured
+    /// in that space, because an app moving the camera in response to the
+    /// deltas changes what world ray a given pixel maps to.
     void beginDrag(const PickResult& hit,
-                   const bromath::Vec3& rayOrigin, const bromath::Vec3& rayDir);
+                   const bromath::Vec3& rayOrigin, const bromath::Vec3& rayDir,
+                   float screenX, float screenY);
 
     /// Update a drag with a new ray and return the per-frame delta for
     /// the active mode via out-params. Returns true if the gizmo is
@@ -144,6 +148,7 @@ public:
     ///                             since last call (world space)
     ///   scale:     outScale     = per-axis multiplicative factor
     bool updateDrag(const bromath::Vec3& rayOrigin, const bromath::Vec3& rayDir,
+                    float screenX, float screenY,
                     bromath::Vec3& outTranslate,
                     bromath::Quat& outRotate,
                     bromath::Vec3& outScale);
@@ -242,7 +247,8 @@ private:
     /// Rotation tracks cursor motion here rather than in each ring's own
     /// plane, which goes ill-conditioned as that ring turns edge-on.
     bool viewPlanePoint(const bromath::Vec3& rayO, const bromath::Vec3& rayD,
-                        const bromath::Vec3& pivot, bromath::Vec3& outPoint) const;
+                        const bromath::Vec3& pivot, const bromath::Vec3& planeNormal,
+                        bromath::Vec3& outPoint) const;
 
     /// Closest-distance-from-ray-to-finite-segment test (picks against
     /// arrows / scale handles). Returns dist + rayT + segT.
@@ -282,6 +288,29 @@ private:
     // outside any render pass, so it has to be remembered here — same
     // reasoning as currentScale_.
     bromath::Vec3 viewDir_{0, 0, 1};
+
+    /// Everything needed to project a world point to canvas pixels. Captured
+    /// per frame, and copied once at grab time so a drag can keep projecting
+    /// through the camera the user actually grabbed against.
+    struct CameraSnapshot {
+        bromath::Vec3 eye{0, 0, 0};
+        bromath::Vec3 right{1, 0, 0};
+        bromath::Vec3 up{0, 1, 0};
+        bromath::Vec3 forward{0, 0, -1};
+        float p00 = 1.0f, p11 = 1.0f;
+        float aspect = 1.0f;
+        bool  perspective = true;
+        int   canvasW = 0, canvasH = 0;
+        bool  valid = false;
+    };
+    CameraSnapshot cam_;      // live, refreshed every frame
+    CameraSnapshot dragCam_;  // pinned for the duration of a drag
+
+    /// World point → canvas pixels. The exact inverse of
+    /// SceneGraph::unprojectLocal, and deliberately written against the same
+    /// projection-matrix entries so the two cannot drift apart.
+    static bool worldToScreen(const CameraSnapshot& cam, const bromath::Vec3& p,
+                              float& outX, float& outY);
 
     // Translate arrows.
     ArrowGeom arrow_;
@@ -346,7 +375,8 @@ private:
     float       dragLastParam_ = 0.0f;
     bool        dragParamValid_ = false;  // axis param was solvable at grab time
     bromath::Vec3 dragTangent_{0, 0, 0};  // rotate: screen-space along-ring direction
-    float       dragRadius_ = 1.0f;       // rotate: ring radius at the grab point
+    bromath::Vec3 dragViewDir_{0, 0, 1};  // view direction pinned at grab time
+    float       dragRadius_ = 1.0f;       // rotate: screen pixels per radian at the grab point
     float       dragLastAngle_ = 0.0f;
     bromath::Vec3 dragLastScale_{1, 1, 1};
 

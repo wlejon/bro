@@ -573,6 +573,26 @@ std::vector<MeshNode*> GizmoManager::meshesForRender(scene::SceneGraph* graph) {
     if (graph) {
         Vec3 toEye = graph->cameraEye() - position_;
         if (vlen_(toEye) > 1e-6f) viewDir_ = vnorm_(toEye);
+
+        // Camera basis, matching SceneGraph::unprojectLocal's reading of the
+        // view matrix: row 0 is right, row 1 up, row 2 the negated forward.
+        const auto& V = graph->viewMatrix();
+        const auto& P = graph->projectionMatrix();
+        cam_.eye     = graph->cameraEye();
+        cam_.right   = Vec3(V.at(0, 0), V.at(0, 1), V.at(0, 2));
+        cam_.up      = Vec3(V.at(1, 0), V.at(1, 1), V.at(1, 2));
+        cam_.forward = Vec3(-V.at(2, 0), -V.at(2, 1), -V.at(2, 2));
+        cam_.p00 = P.at(0, 0);
+        cam_.p11 = P.at(1, 1);
+        cam_.canvasW = graph->canvasWidth();
+        cam_.canvasH = graph->canvasHeight();
+        cam_.aspect = (cam_.canvasH > 0)
+                          ? static_cast<float>(cam_.canvasW) / static_cast<float>(cam_.canvasH)
+                          : 1.0f;
+        cam_.perspective = graph->cameraIsPerspective();
+        cam_.valid = std::isfinite(cam_.p00) && std::isfinite(cam_.p11) &&
+                     cam_.p00 != 0.0f && cam_.p11 != 0.0f &&
+                     cam_.canvasW > 0 && cam_.canvasH > 0;
     }
 
     Vec3 axX, axY, axZ;
@@ -732,9 +752,43 @@ Quat GizmoManager::quatAxisAngle(const Vec3& axis, float radians) {
 // camera. Cursor motion is tracked here because this plane is the one plane
 // that can never turn edge-on, so the point moves smoothly with the mouse no
 // matter how the gizmo is oriented.
+//
+// The plane normal is passed in rather than read from viewDir_ so a drag can
+// pin it to the direction captured at grab time. That matters because apps
+// routinely move the camera in response to the rotation they are handed — a
+// view gizmo that orbits the camera is the obvious case — and a live viewDir_
+// then feeds the camera's own motion back in as though it were cursor motion.
+// The loop makes a perfectly steady drag change speed as it goes: measured on
+// an orbit-the-camera app, 1.22 degrees per 10px at the start of one gesture
+// against 0.22 at the end, drifting the other way for the opposite drag.
 bool GizmoManager::viewPlanePoint(const Vec3& rayO, const Vec3& rayD,
-                                  const Vec3& pivot, Vec3& outPoint) const {
-    return rayVsPlane(rayO, rayD, pivot, viewDir_, outPoint);
+                                  const Vec3& pivot, const Vec3& planeNormal,
+                                  Vec3& outPoint) const {
+    return rayVsPlane(rayO, rayD, pivot, planeNormal, outPoint);
+}
+
+bool GizmoManager::worldToScreen(const CameraSnapshot& cam, const Vec3& p,
+                                 float& outX, float& outY) {
+    if (!cam.valid || cam.canvasW <= 0 || cam.canvasH <= 0) return false;
+    Vec3 v = p - cam.eye;
+    float xc = v.x*cam.right.x   + v.y*cam.right.y   + v.z*cam.right.z;
+    float yc = v.x*cam.up.x      + v.y*cam.up.y      + v.z*cam.up.z;
+    float zc = v.x*cam.forward.x + v.y*cam.forward.y + v.z*cam.forward.z;
+
+    float nx, ny;
+    if (cam.perspective) {
+        if (zc < 1e-5f) return false;              // at or behind the eye
+        float tanHalfFov = 1.0f / cam.p11;
+        nx = xc / (zc * cam.aspect * tanHalfFov);
+        ny = yc / (zc * tanHalfFov);
+    } else {
+        nx = xc * cam.p00;                          // p00 = 1/halfWidth
+        ny = yc * cam.p11;
+    }
+    if (!std::isfinite(nx) || !std::isfinite(ny)) return false;
+    outX = (nx + 1.0f) * 0.5f * static_cast<float>(cam.canvasW);
+    outY = (1.0f - ny) * 0.5f * static_cast<float>(cam.canvasH);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -879,7 +933,8 @@ GizmoManager::pick(const Vec3& rayO, const Vec3& rayD) {
 // ---------------------------------------------------------------------------
 
 void GizmoManager::beginDrag(const PickResult& hit,
-                             const Vec3& rayO, const Vec3& rayD) {
+                             const Vec3& rayO, const Vec3& rayD,
+                             float screenX, float screenY) {
     if (hit.axis == GizmoAxis::None) return;
     dragAxis_    = hit.axis;
     dragPivot_   = position_;
@@ -924,19 +979,73 @@ void GizmoManager::beginDrag(const PickResult& hit,
         // positive turn about the normal moves the handle, so projecting it to
         // screen gives exactly the drag direction the user sees as "forwards"
         // — no separate sign correction, and none to get backwards.
+        // The whole gesture is measured in SCREEN pixels against the camera as
+        // it stood at grab time.
+        //
+        // Measuring in world space cannot work here: apps routinely move the
+        // camera in response to the rotation they are handed (a view gizmo
+        // that orbits the camera is the obvious case), and once the camera
+        // moves, the same screen pixel unprojects to a different world ray. The
+        // camera's own motion then reads back as cursor motion and the gesture
+        // changes speed as it goes — measured on an orbit-the-camera app, a
+        // perfectly steady drag ran 1.22 degrees per 10px at the start and 0.22
+        // at the end. Pinning the camera basis alone does not fix it, because
+        // the incoming ray is built from the live camera. Pixels are the only
+        // frame the user is actually working in.
         dragNormal_ = hit.axisDir;
+        dragViewDir_ = viewDir_;
+        dragCam_ = cam_;
+
         Vec3 rel = hit.hitPoint - dragPivot_;
-        dragRadius_ = vlen_(rel);
+        Vec3 worldTangent = bromath::vcross(dragNormal_, rel);
 
-        Vec3 tangent = bromath::vcross(dragNormal_, rel);
-        // Flatten into the view plane: only the visible part of that direction
-        // can be dragged along.
-        float along = tangent.x*viewDir_.x + tangent.y*viewDir_.y + tangent.z*viewDir_.z;
-        tangent = tangent - viewDir_ * along;
+        // Two separate quantities, and conflating them is what made this feel
+        // erratic:
+        //
+        //   direction — where the cursor must go to turn the ring forwards.
+        //               That IS local to the grab point, from the tangent.
+        //   rate      — how much turn a pixel of that travel buys. Held fixed
+        //               for the whole gesture at the ring's face-on pixel
+        //               radius, so a radian costs the same travel everywhere.
+        //
+        // Deriving the rate locally instead (from the tangent's own projected
+        // length, or from the distance to the projected pivot) makes it swing
+        // with foreshortening: measured 2.0x-2.6x between grab points on the
+        // same view, felt as the gizmo speeding up and slowing down mid-drag.
+        // The grabbed point then no longer stays exactly under the cursor on a
+        // steeply foreshortened ring, which is the trade every DCC tool makes.
+        const float kProbe = 0.05f;
+        float px_, py_, rx_, ry_, gx, gy, tx, ty;
+        float radius = vlen_(rel);
+        dragParamValid_ =
+            radius > 1e-5f && vlen_(worldTangent) > 1e-5f &&
+            worldToScreen(dragCam_, hit.hitPoint, gx, gy) &&
+            // A step along the tangent, projected, gives the on-screen
+            // direction that a positive turn about the normal moves the handle.
+            worldToScreen(dragCam_, hit.hitPoint + vnorm_(worldTangent) * (radius * kProbe),
+                          tx, ty) &&
+            // The rate reference: one ring-radius across the screen, measured
+            // at the pivot's depth so it is the same for every ring.
+            worldToScreen(dragCam_, dragPivot_, px_, py_) &&
+            worldToScreen(dragCam_, dragPivot_ + dragCam_.right * radius, rx_, ry_);
 
-        dragParamValid_ = (dragRadius_ > 1e-5f) && (vlen_(tangent) > 1e-5f) &&
-                          viewPlanePoint(rayO, rayD, dragPivot_, dragLastPoint_);
-        dragTangent_ = dragParamValid_ ? vnorm_(tangent) : Vec3(0, 0, 0);
+        if (dragParamValid_) {
+            float dx = tx - gx, dy = ty - gy;
+            float dl = std::sqrt(dx*dx + dy*dy);
+            float ex = rx_ - px_, ey = ry_ - py_;
+            float ppr = std::sqrt(ex*ex + ey*ey);    // pixels per radian
+            if (ppr > 1e-3f && dl > 1e-6f) {
+                dragRadius_ = ppr;
+                dragTangent_ = Vec3(dx / dl, dy / dl, 0.0f); // screen-space unit
+                dragLastPoint_ = Vec3(screenX, screenY, 0.0f);
+            } else {
+                dragParamValid_ = false;
+            }
+        }
+        if (!dragParamValid_) {
+            dragTangent_ = Vec3(0, 0, 0);
+            dragRadius_ = 1.0f;
+        }
         break;
     }
     }
@@ -948,6 +1057,7 @@ void GizmoManager::beginDrag(const PickResult& hit,
 }
 
 bool GizmoManager::updateDrag(const Vec3& rayO, const Vec3& rayD,
+                              float screenX, float screenY,
                               Vec3& outTranslate, Quat& outRotate, Vec3& outScale) {
     outTranslate = Vec3(0, 0, 0);
     outRotate    = bromath::qidentity();
@@ -1017,16 +1127,16 @@ bool GizmoManager::updateDrag(const Vec3& rayO, const Vec3& rayD,
     }
     case GizmoMode::Rotate: {
         if (!dragParamValid_) return true;   // degenerate grab; nothing to do
-        Vec3 now;
-        if (!viewPlanePoint(rayO, rayD, dragPivot_, now)) return true;
-        Vec3 delta = now - dragLastPoint_;
-        dragLastPoint_ = now;
-        // Arc travelled along the ring = the part of the cursor's motion that
-        // runs with the tangent. Motion across the tangent is the user pulling
-        // off the ring, and correctly turns it not at all.
-        float arc = delta.x*dragTangent_.x + delta.y*dragTangent_.y
-                  + delta.z*dragTangent_.z;
-        outRotate = quatAxisAngle(dragNormal_, arc / dragRadius_);
+        // Pixels moved since the last event, projected onto the ring's
+        // on-screen tangent, over the ring's pixels-per-radian. Both of those
+        // are fixed for the gesture, so the turn per pixel of travel is
+        // constant: only the direction of the motion decides the sign, and
+        // motion across the ring instead of along it turns nothing.
+        float dx = screenX - dragLastPoint_.x;
+        float dy = screenY - dragLastPoint_.y;
+        dragLastPoint_ = Vec3(screenX, screenY, 0.0f);
+        float arcPx = dx*dragTangent_.x + dy*dragTangent_.y;
+        outRotate = quatAxisAngle(dragNormal_, arcPx / dragRadius_);
         break;
     }
     }
