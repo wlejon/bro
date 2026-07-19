@@ -35,6 +35,12 @@ enum Tag : uint8_t {
     kTransferMesh    = 0x0C,  // index into transferredObjects (zero-copy Mesh)
     kBigInt          = 0x0D,  // arbitrary-precision: decimal string representation
     kTransferImageBitmap = 0x0E,  // index into transferredObjects (ImageBitmap)
+    kDate            = 0x0F,  // epoch milliseconds as f64
+    kRegExp          = 0x10,  // source string + flags string
+    kMap             = 0x11,  // entry count, then key/value pairs
+    kSet             = 0x12,  // entry count, then values
+    kError           = 0x13,  // name + message + stack strings
+    kDataView        = 0x14,  // byte offset + length + underlying ArrayBuffer
 };
 
 #if BRO_WITH_3D
@@ -113,6 +119,27 @@ private:
 // ---------------------------------------------------------------------------
 // Serialize
 // ---------------------------------------------------------------------------
+
+// Array.from(iterable). Used to walk a Map/Set in insertion order without
+// reimplementing their iterators against QuickJS internals.
+static JSValue arrayFrom(JSContext* ctx, JSValueConst iterable) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue arrayCtor = JS_GetPropertyStr(ctx, global, "Array");
+    JS_FreeValue(ctx, global);
+    if (JS_IsException(arrayCtor)) return arrayCtor;
+
+    JSValue from = JS_GetPropertyStr(ctx, arrayCtor, "from");
+    if (JS_IsException(from)) {
+        JS_FreeValue(ctx, arrayCtor);
+        return from;
+    }
+    JSValueConst arg = iterable;
+    JSValue out = JS_Call(ctx, from, arrayCtor, 1, &arg);
+    JS_FreeValue(ctx, from);
+    JS_FreeValue(ctx, arrayCtor);
+    return out;
+}
+
 static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
                        const JSValue* transfers, size_t numTransfers,
                        std::vector<std::vector<uint8_t>>& transferBufs,
@@ -333,8 +360,149 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
             JS_FreeValue(ctx, abBuf);
             return true;
         }
-        // Not a TypedArray — JS_GetTypedArrayBuffer returned exception, clear it
-        // (QuickJS sets exception on non-TypedArray, we just ignore it)
+        // Not a TypedArray. JS_GetTypedArrayBuffer raises on anything else, and
+        // that exception has to be dropped here rather than merely ignored:
+        // the branches below call back into JS (Array.from, constructors), and
+        // entering a call with an exception already pending either trips it
+        // immediately or surfaces it somewhere unrelated later. This used to
+        // claim it cleared and did not — harmless only because nothing after
+        // it touched the JS stack.
+        JS_FreeValue(ctx, JS_GetException(ctx));
+    }
+
+    // ---- Platform objects that are cloneable per the structured-clone spec --
+    //
+    // Every one of these used to fall through to the plain-object branch below
+    // and arrive as {} — no error, just an empty object where a Date or a Map
+    // was. They are checked before that branch, and before JS_IsObject, for
+    // exactly that reason.
+
+    if (JS_IsDate(val)) {
+        // Serialized as the epoch milliseconds behind the object. An invalid
+        // Date carries NaN, which round-trips as an invalid Date.
+        // ToNumber on a Date is its time value, so this is getTime() without
+        // going through a method lookup the app could have shadowed.
+        double ms = 0;
+        if (JS_ToFloat64(ctx, &ms, val) < 0) return false;
+        w.u8(kDate);
+        w.f64(ms);
+        return true;
+    }
+
+    if (JS_IsRegExp(val)) {
+        JSValue srcVal = JS_GetPropertyStr(ctx, val, "source");
+        JSValue flagsVal = JS_GetPropertyStr(ctx, val, "flags");
+        bool ok = !JS_IsException(srcVal) && !JS_IsException(flagsVal);
+        if (ok) {
+            const char* src = JS_ToCString(ctx, srcVal);
+            const char* flags = JS_ToCString(ctx, flagsVal);
+            ok = src && flags;
+            if (ok) {
+                w.u8(kRegExp);
+                uint32_t n = static_cast<uint32_t>(strlen(src));
+                w.u32(n);
+                w.bytes(reinterpret_cast<const uint8_t*>(src), n);
+                n = static_cast<uint32_t>(strlen(flags));
+                w.u32(n);
+                w.bytes(reinterpret_cast<const uint8_t*>(flags), n);
+            }
+            if (src) JS_FreeCString(ctx, src);
+            if (flags) JS_FreeCString(ctx, flags);
+        }
+        JS_FreeValue(ctx, srcVal);
+        JS_FreeValue(ctx, flagsVal);
+        // lastIndex is deliberately not carried: structured clone resets it.
+        return ok;
+    }
+
+    if (JS_IsMap(val) || JS_IsSet(val)) {
+        const bool isMap = JS_IsMap(val);
+        // Array.from() flattens either into insertion order — a Map to
+        // [key, value] pairs, a Set to plain values — which is exactly the
+        // order the clone has to preserve.
+        JSValue flat = arrayFrom(ctx, val);
+        if (JS_IsException(flat)) return false;
+
+        uint32_t len = 0;
+        JSValue lenVal = JS_GetPropertyStr(ctx, flat, "length");
+        JS_ToUint32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+
+        w.u8(isMap ? kMap : kSet);
+        w.u32(len);
+
+        bool ok = true;
+        for (uint32_t i = 0; i < len && ok; i++) {
+            JSValue entry = JS_GetPropertyUint32(ctx, flat, i);
+            if (isMap) {
+                JSValue k = JS_GetPropertyUint32(ctx, entry, 0);
+                JSValue v = JS_GetPropertyUint32(ctx, entry, 1);
+                ok = writeValue(ctx, k, w, transfers, numTransfers, transferBufs,
+                                transferObjs, depth + 1, forNetwork) &&
+                     writeValue(ctx, v, w, transfers, numTransfers, transferBufs,
+                                transferObjs, depth + 1, forNetwork);
+                JS_FreeValue(ctx, k);
+                JS_FreeValue(ctx, v);
+            } else {
+                ok = writeValue(ctx, entry, w, transfers, numTransfers, transferBufs,
+                                transferObjs, depth + 1, forNetwork);
+            }
+            JS_FreeValue(ctx, entry);
+        }
+        JS_FreeValue(ctx, flat);
+        return ok;
+    }
+
+    if (JS_IsError(val)) {
+        // Spec carries name/message/stack and drops any own properties the
+        // app hung on the error.
+        auto writeStrProp = [&](const char* prop) {
+            JSValue v = JS_GetPropertyStr(ctx, val, prop);
+            const char* s = JS_IsUndefined(v) ? nullptr : JS_ToCString(ctx, v);
+            uint32_t n = s ? static_cast<uint32_t>(strlen(s)) : 0;
+            w.u32(n);
+            if (n) w.bytes(reinterpret_cast<const uint8_t*>(s), n);
+            if (s) JS_FreeCString(ctx, s);
+            JS_FreeValue(ctx, v);
+        };
+        w.u8(kError);
+        writeStrProp("name");
+        writeStrProp("message");
+        writeStrProp("stack");
+        return true;
+    }
+
+    if (JS_IsDataView(val)) {
+        JSValue bufVal = JS_GetPropertyStr(ctx, val, "buffer");
+        uint32_t offset = 0, viewBytes = 0;
+        JSValue v = JS_GetPropertyStr(ctx, val, "byteOffset");
+        JS_ToUint32(ctx, &offset, v);
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, val, "byteLength");
+        JS_ToUint32(ctx, &viewBytes, v);
+        JS_FreeValue(ctx, v);
+
+        size_t bufLen = 0;
+        uint8_t* bufData = JS_GetArrayBuffer(ctx, &bufLen, bufVal);
+        w.u8(kDataView);
+        w.u32(offset);
+        w.u32(viewBytes);
+        w.u32(static_cast<uint32_t>(bufLen));
+        if (bufData && bufLen > 0) w.bytes(bufData, bufLen);
+        JS_FreeValue(ctx, bufVal);
+        return true;
+    }
+
+    // Objects the spec explicitly refuses to clone. Without these they would
+    // reach the plain-object branch and arrive as {} — a Promise that silently
+    // becomes an empty object is worse than a clear failure at send time.
+    if (JS_IsPromise(val)) {
+        JS_ThrowTypeError(ctx, "postMessage: Promise is not cloneable");
+        return false;
+    }
+    if (JS_IsWeakRef(val) || JS_IsWeakMap(val) || JS_IsWeakSet(val)) {
+        JS_ThrowTypeError(ctx, "postMessage: weak collections are not cloneable");
+        return false;
     }
 
     // Array
@@ -459,6 +627,17 @@ bool serializeMessage(JSContext* ctx, JSValue value, JSValue transferList, Messa
 // ---------------------------------------------------------------------------
 // Deserialize
 // ---------------------------------------------------------------------------
+// Read a u32-length-prefixed byte string. Returns false (leaving `out`
+// unspecified) if the stream is truncated, so callers can fail cleanly.
+static bool readStr(Reader& r, std::string& out) {
+    if (!r.ok(4)) return false;
+    uint32_t len = r.u32();
+    if (!r.ok(len)) return false;
+    const uint8_t* p = r.ptr(len);
+    out.assign(reinterpret_cast<const char*>(p), len);
+    return true;
+}
+
 static JSValue readValue(JSContext* ctx, Reader& r, Message& msg, int depth)
 {
     // Mirror of the writer's depth>64 limit. The writer never produces deeper
@@ -624,6 +803,150 @@ static JSValue readValue(JSContext* ctx, Reader& r, Message& msg, int depth)
         JS_FreeValue(ctx, args[1]);
         JS_FreeValue(ctx, args[2]);
         return result;
+    }
+    case kDate: {
+        if (!r.ok(8)) return JS_ThrowTypeError(ctx, "postMessage: truncated date");
+        return JS_NewDate(ctx, r.f64());
+    }
+    case kRegExp: {
+        std::string src, flags;
+        if (!readStr(r, src) || !readStr(r, flags))
+            return JS_ThrowTypeError(ctx, "postMessage: truncated regexp");
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor = JS_GetPropertyStr(ctx, global, "RegExp");
+        JS_FreeValue(ctx, global);
+        if (!JS_IsFunction(ctx, ctor)) {
+            JS_FreeValue(ctx, ctor);
+            return JS_ThrowTypeError(ctx, "postMessage: RegExp global not available");
+        }
+        JSValue args[2] = { JS_NewStringLen(ctx, src.data(), src.size()),
+                            JS_NewStringLen(ctx, flags.data(), flags.size()) };
+        JSValue out = JS_CallConstructor(ctx, ctor, 2, args);
+        JS_FreeValue(ctx, args[0]);
+        JS_FreeValue(ctx, args[1]);
+        JS_FreeValue(ctx, ctor);
+        return out;
+    }
+    case kMap:
+    case kSet: {
+        const bool isMap = (tag == kMap);
+        if (!r.ok(4)) return JS_ThrowTypeError(ctx, "postMessage: truncated collection length");
+        uint32_t len = r.u32();
+
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor = JS_GetPropertyStr(ctx, global, isMap ? "Map" : "Set");
+        JS_FreeValue(ctx, global);
+        if (!JS_IsFunction(ctx, ctor)) {
+            JS_FreeValue(ctx, ctor);
+            return JS_ThrowTypeError(ctx, "postMessage: %s global not available",
+                                     isMap ? "Map" : "Set");
+        }
+        JSValue coll = JS_CallConstructor(ctx, ctor, 0, nullptr);
+        JS_FreeValue(ctx, ctor);
+        if (JS_IsException(coll)) return coll;
+
+        // Insert one at a time rather than building an entries array first:
+        // an entry that fails to read aborts without leaving a half-built
+        // array to clean up, and insertion order is preserved either way.
+        JSValue adder = JS_GetPropertyStr(ctx, coll, isMap ? "set" : "add");
+        if (!JS_IsFunction(ctx, adder)) {
+            JS_FreeValue(ctx, adder);
+            JS_FreeValue(ctx, coll);
+            return JS_ThrowTypeError(ctx, "postMessage: collection has no insert method");
+        }
+        for (uint32_t i = 0; i < len; i++) {
+            JSValue a = readValue(ctx, r, msg, depth + 1);
+            if (JS_IsException(a)) {
+                JS_FreeValue(ctx, adder); JS_FreeValue(ctx, coll);
+                return a;
+            }
+            JSValue b = JS_UNDEFINED;
+            if (isMap) {
+                b = readValue(ctx, r, msg, depth + 1);
+                if (JS_IsException(b)) {
+                    JS_FreeValue(ctx, a);
+                    JS_FreeValue(ctx, adder); JS_FreeValue(ctx, coll);
+                    return b;
+                }
+            }
+            JSValue args[2] = { a, b };
+            JSValue ret = JS_Call(ctx, adder, coll, isMap ? 2 : 1, args);
+            JS_FreeValue(ctx, a);
+            if (isMap) JS_FreeValue(ctx, b);
+            if (JS_IsException(ret)) {
+                JS_FreeValue(ctx, adder); JS_FreeValue(ctx, coll);
+                return ret;
+            }
+            JS_FreeValue(ctx, ret);
+        }
+        JS_FreeValue(ctx, adder);
+        return coll;
+    }
+    case kError: {
+        std::string name, message, stack;
+        if (!readStr(r, name) || !readStr(r, message) || !readStr(r, stack))
+            return JS_ThrowTypeError(ctx, "postMessage: truncated error");
+
+        // Rebuild through the matching global constructor when the name is one
+        // of the standard error types, so `instanceof TypeError` still holds
+        // on the far side; anything else becomes a plain Error carrying name.
+        static const char* kStdErrors[] = {
+            "Error", "EvalError", "RangeError", "ReferenceError",
+            "SyntaxError", "TypeError", "URIError", "AggregateError",
+        };
+        const char* ctorName = "Error";
+        for (const char* n : kStdErrors)
+            if (name == n) { ctorName = n; break; }
+
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor = JS_GetPropertyStr(ctx, global, ctorName);
+        JS_FreeValue(ctx, global);
+        if (!JS_IsFunction(ctx, ctor)) {
+            JS_FreeValue(ctx, ctor);
+            return JS_ThrowTypeError(ctx, "postMessage: %s global not available", ctorName);
+        }
+        JSValue arg = JS_NewStringLen(ctx, message.data(), message.size());
+        JSValue err = JS_CallConstructor(ctx, ctor, 1, &arg);
+        JS_FreeValue(ctx, arg);
+        JS_FreeValue(ctx, ctor);
+        if (JS_IsException(err)) return err;
+
+        if (name != ctorName)
+            JS_SetPropertyStr(ctx, err, "name",
+                              JS_NewStringLen(ctx, name.data(), name.size()));
+        // The constructor synthesizes a stack pointing at this deserializer;
+        // replace it with the originating one.
+        JS_SetPropertyStr(ctx, err, "stack",
+                          JS_NewStringLen(ctx, stack.data(), stack.size()));
+        return err;
+    }
+    case kDataView: {
+        if (!r.ok(4 + 4 + 4))
+            return JS_ThrowTypeError(ctx, "postMessage: truncated dataview header");
+        uint32_t offset = r.u32();
+        uint32_t viewBytes = r.u32();
+        uint32_t bufBytes = r.u32();
+        if (!r.ok(bufBytes))
+            return JS_ThrowTypeError(ctx, "postMessage: truncated dataview data");
+        const uint8_t* bufData = r.ptr(bufBytes);
+
+        JSValue ab = JS_NewArrayBufferCopy(ctx, bufData, bufBytes);
+        if (JS_IsException(ab)) return ab;
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue ctor = JS_GetPropertyStr(ctx, global, "DataView");
+        JS_FreeValue(ctx, global);
+        if (!JS_IsFunction(ctx, ctor)) {
+            JS_FreeValue(ctx, ctor);
+            JS_FreeValue(ctx, ab);
+            return JS_ThrowTypeError(ctx, "postMessage: DataView global not available");
+        }
+        JSValue args[3] = { ab, JS_NewUint32(ctx, offset), JS_NewUint32(ctx, viewBytes) };
+        JSValue out = JS_CallConstructor(ctx, ctor, 3, args);
+        JS_FreeValue(ctx, ctor);
+        JS_FreeValue(ctx, ab);
+        JS_FreeValue(ctx, args[1]);
+        JS_FreeValue(ctx, args[2]);
+        return out;
     }
     case kArray: {
         if (!r.ok(4)) return JS_ThrowTypeError(ctx, "postMessage: truncated array length");

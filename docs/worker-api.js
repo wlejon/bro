@@ -271,33 +271,31 @@ class MessagePort extends EventTarget {
 //     Plain objects (own enumerable string properties, recursive)
 //     Arrays (recursive)
 //
+//   Platform objects:
+//     Date     (time value; an invalid Date stays invalid)
+//     RegExp   (source + flags; lastIndex resets, per spec)
+//     Map, Set (recursive, insertion order preserved)
+//     Error    (name + message + stack; a TypeError arrives as a TypeError.
+//               Own properties hung on the error are dropped, per spec)
+//
 //   Binary data:
 //     ArrayBuffer (copied by default; listing it in transferList still copies
 //                  the bytes, then detaches the source)
+//     DataView (byte offset and length preserved)
 //     Int8Array, Uint8Array, Uint8ClampedArray
 //     Int16Array, Uint16Array
 //     Int32Array, Uint32Array
-//     Float32Array, Float64Array
+//     Float16Array, Float32Array, Float64Array
+//     BigInt64Array, BigUint64Array
 //
 //   NOT cloneable (throws TypeError):
-//     Functions only. `postMessage(fn)` throws "function is not cloneable";
-//     a function nested anywhere in the payload throws the same way.
+//     Functions, Promises, and the weak collections (WeakMap, WeakSet,
+//     WeakRef). Any of these nested anywhere in the payload throws the same
+//     way — the send fails whole rather than delivering a partial payload.
 //
-//   SILENT DATA LOSS — these do NOT throw, they serialize as {}:
-//     Map, Set, Date, RegExp, Error, Promise, WeakRef, and any class
-//     instance. They fall through to the plain-object branch, which copies
-//     own enumerable string properties only — and those types keep their
-//     contents in internal slots, so the receiver gets an empty object.
-//     Real structured clone would either clone them or throw
-//     DataCloneError; bro does neither. Convert before sending:
-//       [...map]  /  [...set]  /  date.getTime()  /  re.source
-//
-//   SILENT REINTERPRETATION — BigInt64Array and BigUint64Array:
-//     the subtype tag is chosen by constructor name, and anything
-//     unrecognized defaults to Float32Array. A BigInt64Array's bytes arrive
-//     intact but are handed to the receiver as a Float32Array view, so the
-//     values are garbage. Send bigints as a plain Array or as a
-//     Uint8Array of the raw bytes instead.
+//   Class instances are NOT reconstructed: an instance of an app-defined
+//   class arrives as a plain object carrying its own enumerable string
+//   properties, with the prototype gone. This matches structured clone.
 //
 // Nesting depth limit: 64 levels.
 // Transfer list may contain ArrayBuffer, Mesh, or ImageBitmap; anything else
