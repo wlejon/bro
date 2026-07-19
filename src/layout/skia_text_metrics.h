@@ -109,6 +109,74 @@ public:
         return out;
     }
 
+    // Visual bands for a logical byte range, straight off the cluster map.
+    //
+    // Every cluster whose bytes fall in the range contributes its own box;
+    // the boxes are then merged where they touch. In left-to-right text they
+    // all merge into one. In bidi text they merge into one band per direction
+    // run, which is the answer a pair of caret positions cannot express — for
+    // a wholly RTL range both carets sit on the same leading edge.
+    std::vector<SelBox> selectionBoxes(std::string_view text,
+                                       int startByte, int endByte,
+                                       std::string_view fontFamily,
+                                       float fontSize,
+                                       std::string_view fontWeight) override {
+        const render::ShapedRun* run = shaped(text, fontFamily, fontSize, fontWeight);
+        if (!run) {
+            return TextMetrics::selectionBoxes(text, startByte, endByte,
+                                               fontFamily, fontSize, fontWeight);
+        }
+        std::vector<SelBox> out;
+        if (endByte <= startByte) return out;
+
+        struct Span { float left, right; bool rtl; };
+        std::vector<Span> spans;
+        for (const auto& c : run->clusterList()) {
+            if (static_cast<int>(c.byteEnd) <= startByte ||
+                static_cast<int>(c.byteStart) >= endByte) continue;
+            spans.push_back({c.x, c.x + c.advance, c.rtl});
+        }
+        if (spans.empty()) return out;
+
+        std::sort(spans.begin(), spans.end(),
+                  [](const Span& a, const Span& b) { return a.left < b.left; });
+        Span cur = spans.front();
+        for (std::size_t i = 1; i < spans.size(); ++i) {
+            // Touching or overlapping clusters of the SAME direction are one
+            // band; a direction change starts a new one even where they meet.
+            // The epsilon absorbs the sub-pixel gap adjacent advances leave.
+            if (spans[i].rtl == cur.rtl && spans[i].left <= cur.right + 0.01f) {
+                cur.right = std::max(cur.right, spans[i].right);
+            } else {
+                out.push_back({cur.left, cur.right - cur.left, cur.rtl});
+                cur = spans[i];
+            }
+        }
+        out.push_back({cur.left, cur.right - cur.left, cur.rtl});
+        return out;
+    }
+
+    // Sum the advances of every cluster the byte range covers. A length, not a
+    // difference of positions, so it is right in both directions and the words
+    // on a line sum to the line.
+    float advanceBetween(std::string_view text, int startByte, int endByte,
+                         std::string_view fontFamily, float fontSize,
+                         std::string_view fontWeight) override {
+        const render::ShapedRun* run = shaped(text, fontFamily, fontSize, fontWeight);
+        if (!run) {
+            return TextMetrics::advanceBetween(text, startByte, endByte,
+                                               fontFamily, fontSize, fontWeight);
+        }
+        if (endByte <= startByte) return 0.0f;
+        float total = 0.0f;
+        for (const auto& c : run->clusterList()) {
+            if (static_cast<int>(c.byteEnd) <= startByte ||
+                static_cast<int>(c.byteStart) >= endByte) continue;
+            total += c.advance;
+        }
+        return total;
+    }
+
     int offsetAtCaretX(std::string_view text, float x,
                        std::string_view fontFamily, float fontSize,
                        std::string_view fontWeight) override {

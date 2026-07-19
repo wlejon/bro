@@ -18,6 +18,20 @@ const ALEF = String.fromCharCode(0x05D0, 0x05D1, 0x05D2);   // aleph bet gimel
 const DALET = String.fromCharCode(0x05D3, 0x05D4);          // dalet he — narrower
 const ARABIC = String.fromCharCode(0x0645, 0x0631, 0x062D, 0x0628, 0x0627);
 
+// The rect of one word inside the paragraph, by UTF-16 offsets. Band counts
+// say how the line divides into direction runs; this says where a particular
+// word ended up, which is what "the order reversed" actually means.
+function wordRect(html, a, z) {
+    root.innerHTML = html;
+    flush();
+    const t = root.firstChild.firstChild;
+    const r = document.createRange();
+    r.setStart(t, a);
+    r.setEnd(t, z);
+    const b = r.getBoundingClientRect();
+    return { x: b.x, w: b.width };
+}
+
 function runRects(html) {
     root.innerHTML = html;
     flush();
@@ -59,33 +73,48 @@ function ascendingX(rects) {
 
 // --- two RTL words swap, under either base direction -------------------------
 {
-    const ltr = runRects('<p style="width:400px">' + ALEF + ' ' + DALET + '</p>');
-    assert(ltr.length === 2, 'two Hebrew words make two runs, got ' + ltr.length);
-    assert(ascendingX(ltr), 'runs are recorded left to right');
-    // ALEF is the wider word; after reversal it must be on the RIGHT.
-    assert(ltr[1].w > ltr[0].w,
-           'under an LTR base the first Hebrew word ends up rightmost: ' +
-           JSON.stringify(ltr));
+    // Two Hebrew words separated by a space are ONE band, not two: the space
+    // is a UAX #9 neutral between two right-to-left runs, so it resolves RTL
+    // and the whole span is a single direction run. Chromium reports one rect
+    // here too. (This used to assert two, which described how layout happens
+    // to split runs at wrap opportunities rather than anything about bidi.)
+    const html = '<p style="width:400px">' + ALEF + ' ' + DALET + '</p>';
+    const ltr = runRects(html);
+    assert(ltr.length === 1, 'two Hebrew words are one RTL band, got ' + ltr.length);
 
-    const rtl = runRects('<p dir="rtl" style="width:400px">' + ALEF + ' ' + DALET + '</p>');
-    assert(rtl.length === 2, 'two runs with an RTL base');
-    assert(rtl[1].w > rtl[0].w,
-           'under an RTL base the first Hebrew word is still rightmost: ' +
-           JSON.stringify(rtl));
+    // The reversal itself, stated where it is actually visible: ALEF is
+    // logically first and must be drawn to the RIGHT of DALET.
+    const alef = wordRect(html, 0, 3);
+    const dalet = wordRect(html, 4, 6);
+    assert(alef.x > dalet.x,
+           'under an LTR base the first Hebrew word ends up rightmost: ' +
+           JSON.stringify({ alef, dalet }));
+    assert(alef.w > dalet.w, 'and ALEF is the wider of the two');
+
+    const rtlHtml = '<p dir="rtl" style="width:400px">' + ALEF + ' ' + DALET + '</p>';
+    const rtl = runRects(rtlHtml);
+    assert(rtl.length === 1, 'one band with an RTL base too, got ' + rtl.length);
+    assert(wordRect(rtlHtml, 0, 3).x > wordRect(rtlHtml, 4, 6).x,
+           'under an RTL base the first Hebrew word is still rightmost');
     // text-align: start resolves to right for an RTL block.
-    assert(rtl[1].x + rtl[1].w > 380,
+    assert(rtl[0].x + rtl[0].w > 380,
            'an RTL paragraph is flush to the right edge, got ' +
-           (rtl[1].x + rtl[1].w));
+           (rtl[0].x + rtl[0].w));
 }
 
 // --- Latin around an RTL island: only the island reverses --------------------
 {
-    const rects = runRects(
-        '<p style="width:400px">start ' + ALEF + ' ' + DALET + ' end</p>');
-    // start, ALEF, DALET, end -> start, DALET, ALEF, end
-    assert(rects.length === 4, 'four runs, got ' + rects.length);
+    const html = '<p style="width:400px">start ' + ALEF + ' ' + DALET + ' end</p>';
+    const rects = runRects(html);
+    // Three bands, not four: "start " | the whole Hebrew island | " end". Each
+    // space takes the base direction where it separates opposite runs, and RTL
+    // where it sits between the two Hebrew words — so the island's internal
+    // space belongs to the island. Chromium reports the same three.
+    assert(rects.length === 3, 'three direction bands, got ' + rects.length);
     assert(rects[0].x < 1, 'the LTR text still begins at the left edge');
-    assert(rects[2].w > rects[1].w,
+    // The island reversed: ALEF (logically first) is right of DALET.
+    // "start " is 6 UTF-16 units, ALEF 3, a space, DALET 2.
+    assert(wordRect(html, 6, 9).x > wordRect(html, 10, 12).x,
            'the Hebrew island reversed within the LTR line: ' +
            JSON.stringify(rects));
 }
@@ -95,17 +124,23 @@ function ascendingX(rects) {
 // Digits after Arabic resolve one level above it, which means they keep their
 // own left-to-right order inside a line that is otherwise reversed.
 {
-    const rects = runRects(
-        '<p dir="rtl" style="width:400px">' + ARABIC + ' abc 123 ' + ALEF + '</p>');
-    assert(rects.length === 4, 'four runs, got ' + rects.length);
+    const html =
+        '<p dir="rtl" style="width:400px">' + ARABIC + ' abc 123 ' + ALEF + '</p>';
+    const rects = runRects(html);
+    // Three bands: ALEF | "abc 123" | ARABIC. The Latin text and the digits
+    // are one left-to-right island — the space between them is a neutral with
+    // the same direction on both sides — so they do not divide. Chromium
+    // reports the same three.
+    assert(rects.length === 3, 'three direction bands, got ' + rects.length);
     assert(ascendingX(rects), 'runs are recorded left to right');
-    // Visually: ALEF | abc | 123 | ARABIC. The Latin island keeps its order,
-    // so "abc" is left of "123" even though the line reads right to left.
-    const abc = rects[1];
-    const digits = rects[2];
+    // The island keeps its internal order: "abc" is left of "123" even though
+    // the line reads right to left. ARABIC is 5 units, then a space at 5,
+    // "abc" at 6-9, a space, "123" at 10-13.
+    const abc = wordRect(html, 6, 9);
+    const digits = wordRect(html, 10, 13);
     assert(abc.x < digits.x,
            'the LTR island keeps its internal order inside an RTL line: ' +
-           JSON.stringify(rects));
+           JSON.stringify({ abc, digits }));
 }
 
 // --- bidi control characters -------------------------------------------------
@@ -157,10 +192,20 @@ function ascendingX(rects) {
 //
 // The 99% case. Reordering must be a no-op here, not merely a correct one.
 {
-    const rects = runRects('<p style="width:400px">one two three</p>');
-    assert(rects.length === 3, 'three Latin runs');
-    assert(ascendingX(rects), 'Latin runs stay in source order');
-    assert(rects[0].x < 1, 'and start at the left edge');
+    const html = '<p style="width:400px">one two three</p>';
+    const rects = runRects(html);
+    // One band: unidirectional text is one direction run however many words
+    // it has. Chromium reports one rect here too.
+    assert(rects.length === 1, 'one Latin band, got ' + rects.length);
+    assert(rects[0].x < 1, 'and it starts at the left edge');
+    // Source order preserved, checked where it is visible: each word is left
+    // of the next.
+    const one = wordRect(html, 0, 3);
+    const two = wordRect(html, 4, 7);
+    const three = wordRect(html, 8, 13);
+    assert(one.x < two.x && two.x < three.x,
+           'Latin words stay in source order: ' +
+           JSON.stringify({ one, two, three }));
 }
 
 root.innerHTML = '';
