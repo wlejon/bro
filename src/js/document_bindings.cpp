@@ -305,6 +305,42 @@ void installDocumentBindings(JSContext* ctx) {
             auto* el = engine->pointerLockElement();
             return el ? DomBindings::wrapElement(cx, el) : JS_NULL;
         })
+        // Editing commands. All three resolve the engine the same way the
+        // other engine-backed members here do, and report the browser's
+        // "unsupported / nothing to do" answer (false) when there is no
+        // engine at all — a document parsed with no engine behind it can't
+        // edit anything.
+        .method("execCommand", [](Doc*, JSContext* cx, std::string name,
+                                  JSValue showUI, JSValue value) -> bool {
+            auto it = s_ctx_engines.find(cx);
+            if (it == s_ctx_engines.end() || !it->second) return false;
+            auto* engine = static_cast<bro::engine::Engine*>(it->second);
+            // Both trailing arguments are optional in every browser, and
+            // callers routinely pass only the name.
+            const bool ui = JS_ToBool(cx, showUI) > 0;
+            std::string arg;
+            if (!JS_IsUndefined(value) && !JS_IsNull(value)) {
+                if (const char* s = JS_ToCString(cx, value)) {
+                    arg = s;
+                    JS_FreeCString(cx, s);
+                }
+            }
+            return engine->execCommand(name, ui, arg);
+        })
+        .method("queryCommandSupported", [](Doc*, JSContext* cx,
+                                            std::string name) -> bool {
+            auto it = s_ctx_engines.find(cx);
+            if (it == s_ctx_engines.end() || !it->second) return false;
+            return static_cast<bro::engine::Engine*>(it->second)
+                ->queryCommandSupported(name);
+        })
+        .method("queryCommandEnabled", [](Doc*, JSContext* cx,
+                                          std::string name) -> bool {
+            auto it = s_ctx_engines.find(cx);
+            if (it == s_ctx_engines.end() || !it->second) return false;
+            return static_cast<bro::engine::Engine*>(it->second)
+                ->queryCommandEnabled(name);
+        })
         // Simple methods with auto conversion
         .method("getElementById", [](Doc* d, JSContext* cx, std::string id) -> JSValue {
             auto* el = d->getElementById(id);

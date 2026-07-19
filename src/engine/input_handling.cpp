@@ -601,6 +601,7 @@ static void selectionInsertText(bro::dom::Document* doc, const std::string& text
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_keycode.h>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -2822,143 +2823,22 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             // branches (and returning early) so the recording sites below
             // never see a history move as a fresh edit.
             if (editable && ctrl && (keycode == SDLK_Z || keycode == SDLK_Y)) {
-                const bool isRedo = (keycode == SDLK_Y) || shift;
-                // find(), not forHost(): asking whether an untouched host can
-                // undo must not mint a history for it.
-                auto* stack = editUndo_.find(editHost);
-                if (stack) {
-                    const char* inputType = isRedo ? "historyRedo" : "historyUndo";
-                    runEditableMutation(document_.get(), jsRuntime_.get(), focusN,
-                        inputType, "",
-                        [&] {
-                            if (isRedo) stack->redo(document_.get(), editHost);
-                            else stack->undo(document_.get(), editHost);
-                        });
-                    uiDirty_ = true;
-                }
+                // Handled whether or not there was anything to step to:
+                // Ctrl+Z over an empty history is still Ctrl+Z, and must not
+                // fall through to the editing branches below.
+                editHistoryStep(/*redo=*/(keycode == SDLK_Y) || shift);
                 handled = true;
             } else if (editable && (keycode == SDLK_BACKSPACE || keycode == SDLK_DELETE)) {
-                std::string inputType = (keycode == SDLK_BACKSPACE)
-                    ? "deleteContentBackward" : "deleteContentForward";
-                runEditableMutation(document_.get(), jsRuntime_.get(), focusN,
-                    inputType, "",
-                    [&] {
-                        auto* range = sel->getRangeAt(0);
-                        if (!range) return;
-                        if (!range->collapsed()) {
-                            // A selection delete can span nodes — structural.
-                            EditUndoScope undo(&editUndo_, document_.get(), editHost,
-                                               nullptr, DomUndoStack::Kind::Discrete);
-                            dom::Node* after = nullptr; int afterOff = 0;
-                            deleteRangeContents(document_.get(), *range, after, afterOff);
-                            if (after) sel->collapse(after, afterOff);
-                            undo.commit();
-                            return;
-                        }
-                        // Collapsed: delete one character backward/forward
-                        // within the current text node when possible. That is
-                        // confined to one node's data, so it records as a
-                        // mergeable splice and consecutive presses coalesce.
-                        //
-                        // The character to delete may not be in the caret's own
-                        // node — at offset 0, or at the end of a text node, it
-                        // is in the neighbouring leaf. Resolve it first, then
-                        // pick the undo scope, because a delete that empties an
-                        // inline or crosses a node is structural and a plain
-                        // splice inside one node is not.
-                        //
-                        // One code point, not one byte: offsets here index UTF-8
-                        // bytes, so a ±1 step would chop a multi-byte character
-                        // in half and leave invalid UTF-8 in the tree.
-                        // resolveDeleteTarget steps with utf8Prev/utf8Next, the
-                        // same helpers <input>/<textarea> delete with.
-                        const bool back = (keycode == SDLK_BACKSPACE);
-                        const EditDeleteTarget target =
-                            resolveDeleteTarget(focusN, focusO, editHost,
-                                                back ? -1 : 1);
-                        if (!target.text && !target.remove) return;
-
-                        const bool sameNodeSplice =
-                            target.text && target.text == focusText &&
-                            static_cast<int>(target.text->length()) >
-                                (target.end - target.start);
-                        EditUndoScope undo(
-                            &editUndo_, document_.get(), editHost,
-                            sameNodeSplice ? target.text : nullptr,
-                            sameNodeSplice
-                                ? (back ? DomUndoStack::Kind::Backspace
-                                        : DomUndoStack::Kind::DeleteForward)
-                                : DomUndoStack::Kind::Discrete);
-
-                        dom::Node* caretNode = nullptr;
-                        int caretOff = 0;
-                        if (target.remove) {
-                            auto* p = target.remove->parentNode();
-                            const int idx = indexInParent(target.remove);
-                            if (!p) return;
-                            p->removeChild(target.remove);
-                            caretNode = p;
-                            caretOff = idx < 0 ? 0 : idx;
-                        } else {
-                            target.text->deleteData(target.start,
-                                                    target.end - target.start);
-                            caretNode = target.text;
-                            caretOff = target.start;
-                        }
-                        if (!sameNodeSplice)
-                            pruneAndMerge(editHost, caretNode, caretOff);
-                        if (caretNode) sel->collapse(caretNode, caretOff);
-                        undo.commit();
-                    });
+                editDeleteAtCaret(/*backward=*/keycode == SDLK_BACKSPACE);
                 handled = true;
             } else if (editable && keycode == SDLK_RETURN) {
-                // Enter inserts a <br> element — v1 treats contenteditable
-                // as plaintext-only (no block splitting on Enter).
-                runEditableMutation(document_.get(), jsRuntime_.get(), focusN,
-                    "insertLineBreak", "\n",
-                    [&] {
-                        // Enter inserts an element and splits a text node —
-                        // always structural, always its own entry.
-                        EditUndoScope undo(&editUndo_, document_.get(), editHost,
-                                           nullptr, DomUndoStack::Kind::Discrete);
-                        auto* range = sel->getRangeAt(0);
-                        if (!range) return;
-                        if (!range->collapsed()) {
-                            dom::Node* after = nullptr; int afterOff = 0;
-                            deleteRangeContents(document_.get(), *range, after, afterOff);
-                            if (after) sel->collapse(after, afterOff);
-                        }
-                        auto* br = document_->createElement("BR");
-                        range = sel->getRangeAt(0);
-                        if (range) range->insertNode(br);
-                        // Move caret past the <br>. For a text-node caret,
-                        // insertNode splits the text; the caret now sits
-                        // immediately after the <br> in its parent.
-                        if (br->parentNode()) {
-                            auto* p = br->parentNode();
-                            const auto& kids = p->childNodes();
-                            for (size_t i = 0; i < kids.size(); ++i) {
-                                if (kids[i] == br) {
-                                    sel->collapse(p, static_cast<int>(i + 1));
-                                    break;
-                                }
-                            }
-                        }
-                        undo.commit();
-                    });
+                editInsertLineBreak();
                 handled = true;
             } else if (ctrl && keycode == SDLK_A) {
-                // Ctrl+A: select all children of the containing contenteditable
-                // host, or fall back to the body.
-                dom::Node* host = focusN;
-                while (host && host->nodeType() != dom::NodeType::Element)
-                    host = host->parentNode();
-                auto* el = static_cast<dom::Element*>(host);
-                while (el && !el->hasAttribute("contenteditable"))
-                    el = el->parentElement();
-                dom::Node* target = el ? static_cast<dom::Node*>(el)
-                                       : static_cast<dom::Node*>(document_->body());
-                if (target) sel->selectAllChildren(target);
+                // Ctrl+A selects the containing contenteditable host's
+                // children, or the body's — not gated on `editable`, so it
+                // works over ordinary text too.
+                editSelectAll();
                 handled = true;
             } else if (focusText) {
                 const std::string& data = focusText->data();
@@ -3120,52 +3000,364 @@ void Engine::handleTextInput(const std::string& text) {
 
     // No form-field consumer — maybe the selection is inside a
     // contenteditable host. Fire beforeinput → mutate → input.
-    auto* sel = document_->selection();
-    if (!sel || sel->rangeCount() == 0) return;
-    auto* focusNode = sel->focusNode();
-    if (!focusNode || !inEditableHost(focusNode)) return;
+    editInsertTextAtSelection(text);
+}
 
-    auto* host = editableHostOf(focusNode);
-    runEditableMutation(document_.get(), jsRuntime_.get(), focusNode,
-                        "insertText", text,
-                        [&] {
-                            auto* r = sel->getRangeAt(0);
-                            if (!r) return;
-                            if (!r->collapsed()) {
-                                // Typing over a selection replaces a range
-                                // that can span nodes, and stands alone —
-                                // the same rule the controls apply.
-                                EditUndoScope undo(&editUndo_, document_.get(), host,
-                                                   nullptr, DomUndoStack::Kind::Discrete);
-                                selectionInsertText(document_.get(), text);
-                                undo.commit();
-                                return;
-                            }
-                            // Collapsed caret: resolve it to a text node
-                            // BEFORE opening the scope. Minting an empty text
-                            // node at an element boundary is not itself an
-                            // edit (an empty text node serializes to nothing),
-                            // so doing it first lets every plain keystroke
-                            // record the same cheap splice — and a run
-                            // coalesces whether or not the host started empty.
-                            int off = 0;
-                            bool created = false;
-                            auto* tn = selectionCaretTextPosition(document_.get(),
-                                                                  off, created);
-                            if (!tn) return;
-                            EditUndoScope undo(&editUndo_, document_.get(), host, tn,
-                                               DomUndoStack::Kind::Typing);
-                            tn->insertData(static_cast<size_t>(off), text);
-                            const int caret =
-                                off + static_cast<int>(text.size());
-                            document_->selection()->collapse(tn, caret);
-                            // Inside the undo scope: the re-encoding is part
-                            // of the same keystroke, so undo takes the whole
-                            // thing back rather than leaving stray U+00A0.
-                            rebalanceAfterEdit(document_.get(), tn, caret);
-                            undo.commit();
-                        });
+// ---------------------------------------------------------------------------
+// contenteditable edit primitives
+//
+// The bodies below were lifted verbatim out of handleKeyDown/handleTextInput
+// so that execCommand() runs the SAME code a key press runs rather than a
+// second implementation of it. Editing a DOM tree has enough corners —
+// cross-node deletes, whitespace re-encoding, which edits coalesce in undo —
+// that two implementations would diverge silently, and the divergence would
+// show up as script-driven edits corrupting a tree that typed edits handle.
+//
+// Each re-derives (selection, focus node, offset, host) instead of taking
+// them as parameters. That costs nothing, and it means a caller cannot hand
+// in a stale caret: script may have moved the Selection between the
+// beforeinput handler and the edit.
+// ---------------------------------------------------------------------------
+
+namespace {
+// The (selection, focus, host) tuple every edit primitive starts from.
+// `host` is null when the caret isn't inside a contenteditable.
+struct EditCaret {
+    bro::dom::Selection* sel = nullptr;
+    bro::dom::Node* node = nullptr;
+    int offset = 0;
+    bro::dom::TextNode* text = nullptr;
+    bro::dom::Element* host = nullptr;
+    explicit operator bool() const { return sel && node && host; }
+};
+
+EditCaret editCaretOf(bro::dom::Document* doc) {
+    EditCaret c;
+    if (!doc) return c;
+    auto* sel = doc->selection();
+    if (!sel || sel->rangeCount() == 0) return c;
+    auto* focusN = sel->focusNode();
+    if (!focusN || !inEditableHost(focusN)) return c;
+    c.sel = sel;
+    c.node = focusN;
+    c.offset = sel->focusOffset();
+    c.text = (focusN->nodeType() == bro::dom::NodeType::Text)
+                 ? static_cast<bro::dom::TextNode*>(focusN) : nullptr;
+    c.host = editableHostOf(focusN);
+    return c;
+}
+} // namespace
+
+bool Engine::editDeleteAtCaret(bool backward) {
+    const EditCaret c = editCaretOf(document_.get());
+    if (!c) return false;
+    const std::string inputType =
+        backward ? "deleteContentBackward" : "deleteContentForward";
+    runEditableMutation(document_.get(), jsRuntime_.get(), c.node, inputType, "",
+        [&] {
+            auto* range = c.sel->getRangeAt(0);
+            if (!range) return;
+            if (!range->collapsed()) {
+                // A selection delete can span nodes — structural.
+                EditUndoScope undo(&editUndo_, document_.get(), c.host,
+                                   nullptr, DomUndoStack::Kind::Discrete);
+                dom::Node* after = nullptr; int afterOff = 0;
+                deleteRangeContents(document_.get(), *range, after, afterOff);
+                if (after) c.sel->collapse(after, afterOff);
+                undo.commit();
+                return;
+            }
+            // Collapsed: delete one character backward/forward within the
+            // current text node when possible. That is confined to one node's
+            // data, so it records as a mergeable splice and consecutive
+            // presses coalesce.
+            //
+            // The character to delete may not be in the caret's own node — at
+            // offset 0, or at the end of a text node, it is in the
+            // neighbouring leaf. Resolve it first, then pick the undo scope,
+            // because a delete that empties an inline or crosses a node is
+            // structural and a plain splice inside one node is not.
+            //
+            // One code point, not one byte: offsets here index UTF-8 bytes, so
+            // a ±1 step would chop a multi-byte character in half and leave
+            // invalid UTF-8 in the tree. resolveDeleteTarget steps with
+            // utf8Prev/utf8Next, the same helpers <input>/<textarea> delete
+            // with.
+            const EditDeleteTarget target =
+                resolveDeleteTarget(c.node, c.offset, c.host, backward ? -1 : 1);
+            if (!target.text && !target.remove) return;
+
+            const bool sameNodeSplice =
+                target.text && target.text == c.text &&
+                static_cast<int>(target.text->length()) >
+                    (target.end - target.start);
+            EditUndoScope undo(
+                &editUndo_, document_.get(), c.host,
+                sameNodeSplice ? target.text : nullptr,
+                sameNodeSplice
+                    ? (backward ? DomUndoStack::Kind::Backspace
+                                : DomUndoStack::Kind::DeleteForward)
+                    : DomUndoStack::Kind::Discrete);
+
+            dom::Node* caretNode = nullptr;
+            int caretOff = 0;
+            if (target.remove) {
+                auto* p = target.remove->parentNode();
+                const int idx = indexInParent(target.remove);
+                if (!p) return;
+                p->removeChild(target.remove);
+                caretNode = p;
+                caretOff = idx < 0 ? 0 : idx;
+            } else {
+                target.text->deleteData(target.start,
+                                        target.end - target.start);
+                caretNode = target.text;
+                caretOff = target.start;
+            }
+            if (!sameNodeSplice)
+                pruneAndMerge(c.host, caretNode, caretOff);
+            if (caretNode) c.sel->collapse(caretNode, caretOff);
+            undo.commit();
+        });
     uiDirty_ = true;
+    return true;
+}
+
+bool Engine::editInsertLineBreak() {
+    const EditCaret c = editCaretOf(document_.get());
+    if (!c) return false;
+    // Inserts a <br> element — v1 treats contenteditable as plaintext-only
+    // (no block splitting on Enter).
+    runEditableMutation(document_.get(), jsRuntime_.get(), c.node,
+        "insertLineBreak", "\n",
+        [&] {
+            // Enter inserts an element and splits a text node — always
+            // structural, always its own entry.
+            EditUndoScope undo(&editUndo_, document_.get(), c.host,
+                               nullptr, DomUndoStack::Kind::Discrete);
+            auto* range = c.sel->getRangeAt(0);
+            if (!range) return;
+            if (!range->collapsed()) {
+                dom::Node* after = nullptr; int afterOff = 0;
+                deleteRangeContents(document_.get(), *range, after, afterOff);
+                if (after) c.sel->collapse(after, afterOff);
+            }
+            auto* br = document_->createElement("BR");
+            range = c.sel->getRangeAt(0);
+            if (range) range->insertNode(br);
+            // Move caret past the <br>. For a text-node caret, insertNode
+            // splits the text; the caret now sits immediately after the <br>
+            // in its parent.
+            if (br->parentNode()) {
+                auto* p = br->parentNode();
+                const auto& kids = p->childNodes();
+                for (size_t i = 0; i < kids.size(); ++i) {
+                    if (kids[i] == br) {
+                        c.sel->collapse(p, static_cast<int>(i + 1));
+                        break;
+                    }
+                }
+            }
+            undo.commit();
+        });
+    uiDirty_ = true;
+    return true;
+}
+
+bool Engine::editInsertTextAtSelection(const std::string& text) {
+    const EditCaret c = editCaretOf(document_.get());
+    if (!c) return false;
+    runEditableMutation(document_.get(), jsRuntime_.get(), c.node,
+        "insertText", text,
+        [&] {
+            auto* r = c.sel->getRangeAt(0);
+            if (!r) return;
+            if (!r->collapsed()) {
+                // Typing over a selection replaces a range that can span
+                // nodes, and stands alone — the same rule the controls apply.
+                EditUndoScope undo(&editUndo_, document_.get(), c.host,
+                                   nullptr, DomUndoStack::Kind::Discrete);
+                selectionInsertText(document_.get(), text);
+                undo.commit();
+                return;
+            }
+            // Collapsed caret: resolve it to a text node BEFORE opening the
+            // scope. Minting an empty text node at an element boundary is not
+            // itself an edit (an empty text node serializes to nothing), so
+            // doing it first lets every plain keystroke record the same cheap
+            // splice — and a run coalesces whether or not the host started
+            // empty.
+            int off = 0;
+            bool created = false;
+            auto* tn = selectionCaretTextPosition(document_.get(), off, created);
+            if (!tn) return;
+            EditUndoScope undo(&editUndo_, document_.get(), c.host, tn,
+                               DomUndoStack::Kind::Typing);
+            tn->insertData(static_cast<size_t>(off), text);
+            const int caret = off + static_cast<int>(text.size());
+            document_->selection()->collapse(tn, caret);
+            // Inside the undo scope: the re-encoding is part of the same
+            // keystroke, so undo takes the whole thing back rather than
+            // leaving stray U+00A0.
+            rebalanceAfterEdit(document_.get(), tn, caret);
+            undo.commit();
+        });
+    uiDirty_ = true;
+    return true;
+}
+
+bool Engine::editHistoryStep(bool redo) {
+    const EditCaret c = editCaretOf(document_.get());
+    if (!c) return false;
+    // find(), not forHost(): asking whether an untouched host can undo must
+    // not mint a history for it.
+    auto* stack = editUndo_.find(c.host);
+    if (!stack) return false;
+    if (redo ? !stack->canRedo() : !stack->canUndo()) return false;
+    const char* inputType = redo ? "historyRedo" : "historyUndo";
+    runEditableMutation(document_.get(), jsRuntime_.get(), c.node, inputType, "",
+        [&] {
+            if (redo) stack->redo(document_.get(), c.host);
+            else stack->undo(document_.get(), c.host);
+        });
+    uiDirty_ = true;
+    return true;
+}
+
+bool Engine::editSelectAll() {
+    if (!document_) return false;
+    auto* sel = document_->selection();
+    if (!sel) return false;
+    // The caret's contenteditable host if there is one, else the body — the
+    // rule Ctrl+A follows, which is deliberately not gated on editability.
+    dom::Node* host = (sel->rangeCount() > 0) ? sel->focusNode() : nullptr;
+    while (host && host->nodeType() != dom::NodeType::Element)
+        host = host->parentNode();
+    auto* el = static_cast<dom::Element*>(host);
+    while (el && !el->hasAttribute("contenteditable"))
+        el = el->parentElement();
+    dom::Node* target = el ? static_cast<dom::Node*>(el)
+                           : static_cast<dom::Node*>(document_->body());
+    if (!target) return false;
+    sel->selectAllChildren(target);
+    uiDirty_ = true;
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// document.execCommand
+//
+// SCOPE: the commands whose primitives this build actually has. Everything
+// here maps onto an edit the keyboard can already perform, which is the line
+// that decides what is in and what is out:
+//
+//   in    insertText, insertLineBreak/insertParagraph, delete, forwardDelete,
+//         undo, redo, selectAll, copy, cut, paste
+//   out   bold/italic/underline/foreColor/… — these wrap content in inline
+//         elements or style it, and contenteditable here is plaintext-v1: it
+//         has no inline-formatting model to hang them on. They report
+//         unsupported rather than silently doing nothing, so a caller can
+//         feature-detect with queryCommandSupported() instead of discovering
+//         it from a no-op.
+//
+// DIVERGENCE FROM BROWSERS, deliberate: browsers refuse execCommand("paste")
+// (and often cut/copy) from script, because a web page reading the user's
+// clipboard without a gesture is a privilege escalation. bro is an app
+// runtime, not a web sandbox — the app IS the trusted party, and
+// bro.window's clipboard read/write is already exposed to it unconditionally.
+// Refusing here would buy no safety and would only make the keyboard path and
+// the scripted path disagree.
+// ---------------------------------------------------------------------------
+
+namespace {
+// Canonical command name: browsers match case-insensitively, and accept a
+// legacy "cmd_"-free spelling only.
+std::string normalizeCommand(const std::string& name) {
+    std::string out;
+    out.reserve(name.size());
+    for (char ch : name)
+        out.push_back(static_cast<char>(std::tolower(
+            static_cast<unsigned char>(ch))));
+    return out;
+}
+} // namespace
+
+bool Engine::queryCommandSupported(const std::string& name) const {
+    const std::string cmd = normalizeCommand(name);
+    return cmd == "inserttext" || cmd == "insertlinebreak" ||
+           cmd == "insertparagraph" || cmd == "delete" ||
+           cmd == "forwarddelete" || cmd == "undo" || cmd == "redo" ||
+           cmd == "selectall" || cmd == "copy" || cmd == "cut" ||
+           cmd == "paste";
+}
+
+bool Engine::queryCommandEnabled(const std::string& name) {
+    if (!queryCommandSupported(name)) return false;
+    const std::string cmd = normalizeCommand(name);
+    // selectAll needs no editable caret — it falls back to the body.
+    if (cmd == "selectall") return document_ && document_->body() != nullptr;
+    const EditCaret c = editCaretOf(document_.get());
+    if (!c) return false;
+    // undo/redo are only enabled with something to step to, which is the one
+    // case where "supported and editable" still isn't enough.
+    if (cmd == "undo" || cmd == "redo") {
+        auto* stack = editUndo_.find(c.host);
+        if (!stack) return false;
+        return (cmd == "redo") ? stack->canRedo() : stack->canUndo();
+    }
+    // copy/cut need a non-collapsed selection to have anything to take.
+    if (cmd == "copy" || cmd == "cut") return !c.sel->isCollapsed();
+    return true;
+}
+
+bool Engine::execCommand(const std::string& name, bool /*showUI*/,
+                         const std::string& value) {
+    if (!document_) return false;
+    const std::string cmd = normalizeCommand(name);
+
+    if (cmd == "inserttext") {
+        // An empty insertion is a no-op, not a failure to run the command,
+        // but it must not fire beforeinput/input for a zero-length edit.
+        if (value.empty()) return editCaretOf(document_.get()) ? true : false;
+        return editInsertTextAtSelection(value);
+    }
+    // insertParagraph is distinct from insertLineBreak in a browser (a new
+    // block vs a <br>), but plaintext-v1 has no block splitting, so both
+    // land on the <br> Enter inserts. Named separately anyway: callers
+    // feature-detect the name, and the day blocks arrive this is the seam
+    // where they diverge.
+    if (cmd == "insertlinebreak" || cmd == "insertparagraph")
+        return editInsertLineBreak();
+    if (cmd == "delete") return editDeleteAtCaret(/*backward=*/true);
+    if (cmd == "forwarddelete") return editDeleteAtCaret(/*backward=*/false);
+    if (cmd == "undo") return editHistoryStep(/*redo=*/false);
+    if (cmd == "redo") return editHistoryStep(/*redo=*/true);
+    if (cmd == "selectall") return editSelectAll();
+    if (cmd == "copy") {
+        // Same source the Ctrl+C path reads, and the same system clipboard it
+        // writes: a scripted copy has to leave the clipboard in the state the
+        // key press would, or a following paste sees stale text.
+        const std::string text = simulateCopy();
+        if (text.empty()) return false;
+        SDL_SetClipboardText(text.c_str());
+        return true;
+    }
+    if (cmd == "cut") {
+        const std::string text = simulateCut();
+        if (text.empty()) return false;
+        SDL_SetClipboardText(text.c_str());
+        return true;
+    }
+    if (cmd == "paste") {
+        char* clip = SDL_GetClipboardText();
+        const std::string text = clip ? clip : "";
+        SDL_free(clip);
+        if (text.empty()) return false;
+        if (!editCaretOf(document_.get())) return false;
+        simulatePaste(text);
+        return true;
+    }
+    return false;  // unsupported command
 }
 
 // ---------------------------------------------------------------------------

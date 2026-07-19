@@ -543,6 +543,24 @@ public:
     std::string simulateCopy();
     std::string simulateCut();
 
+    /// document.execCommand(): run a named editing command against the current
+    /// Selection, as the equivalent key press would. Returns false for an
+    /// unsupported command and for a supported one that had nothing to act on
+    /// (no editable selection, an empty history) — the same true/false
+    /// contract browsers give. `showUI` is accepted and ignored, as it is
+    /// everywhere; `value` carries the argument for the commands that take one
+    /// ("insertText"). Implemented in input_handling.cpp on the same edit
+    /// primitives the keyboard path uses, so a scripted command and a typed
+    /// one produce identical DOM, undo entries and beforeinput/input events.
+    bool execCommand(const std::string& name, bool showUI,
+                     const std::string& value);
+    /// Whether `name` is a command this build implements at all — a static
+    /// property of the name, independent of the current selection.
+    bool queryCommandSupported(const std::string& name) const;
+    /// Whether `name` would do something right now: supported, and with a
+    /// selection (and, for undo/redo, a history) it can act on.
+    bool queryCommandEnabled(const std::string& name);
+
     float getLastMouseX() const { return lastMouseX_; }
     float getLastMouseY() const { return lastMouseY_; }
 
@@ -900,6 +918,29 @@ private:
     /// Remove the preedit, restoring the pre-composition DOM. A text node
     /// created for the composition is removed again.
     bool editableCompositionCancel(dom::Element*& hostOut);
+
+    // --- contenteditable edit primitives ---------------------------------
+    // One implementation per editing operation, shared by the keyboard path
+    // and execCommand(). Each derives its own caret from the Selection (the
+    // same derivation handleKeyDown does), dispatches beforeinput → mutate →
+    // input, and records the undo entry, so a scripted command and the key
+    // press it names cannot drift apart. All return false when the Selection
+    // isn't in an editable host, which is what makes them safe to call
+    // unconditionally from execCommand.
+    /// Backspace (`backward`) / Delete. Deletes the selected range when the
+    /// selection isn't collapsed, otherwise one character on that side.
+    bool editDeleteAtCaret(bool backward);
+    /// Enter — inserts a <br>, replacing any selected range first.
+    bool editInsertLineBreak();
+    /// Typing `text` at the caret, replacing any selected range.
+    bool editInsertTextAtSelection(const std::string& text);
+    /// Undo (`redo` false) / redo one history entry for the caret's host.
+    /// False when the host has no history, or none in that direction.
+    bool editHistoryStep(bool redo);
+    /// Select the caret's contenteditable host's children, else the body's —
+    /// the Ctrl+A rule, which deliberately works outside an editable too.
+    bool editSelectAll();
+
     void dispatchFocusEvents(dom::Element* oldTarget, dom::Element* newTarget);
     void dispatchScrollEvent(dom::Element* el);
 

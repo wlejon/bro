@@ -165,6 +165,44 @@ and its DOM. Engine-wide deviations shared with the controls: events dispatch af
 mutation, `beforeinput` is not fired for composition, and
 `compositionstart`'s `preventDefault` is not honored.
 
+### Editing commands (`document.execCommand`)
+
+`document.execCommand(name [, showUI, value])` runs an editing command against
+the current Selection, and `queryCommandSupported(name)` /
+`queryCommandEnabled(name)` report whether a command exists in this build and
+whether it would do anything right now. Names match case-insensitively.
+
+Every supported command runs the *same* engine primitive as the key press it
+names — one implementation, not two — so a scripted edit and a typed one
+produce identical DOM, identical `beforeinput`/`input` events (a canceled
+`beforeinput` blocks the command) and identical undo entries in one shared
+history. `execCommand("undo")` and Ctrl+Z step the same stack.
+
+| Command | Equivalent | Notes |
+|---------|-----------|-------|
+| `insertText` | typing | `value` is the text. Empty `value` is a no-op that still returns true and fires no events. Replaces a non-collapsed selection. |
+| `insertLineBreak`, `insertParagraph` | Enter | Both insert a `<br>`: contenteditable is plaintext-v1, so there is no block splitting to tell them apart yet. |
+| `delete` | Backspace | Deletes the selected range, else one character backward. |
+| `forwardDelete` | Delete | One character forward. |
+| `undo`, `redo` | Ctrl+Z / Ctrl+Y | False when the host's history has nothing in that direction. |
+| `selectAll` | Ctrl+A | Selects the containing host's children, or the body's — the one command that works outside an editable. |
+| `copy`, `cut`, `paste` | Ctrl+C/X/V | Real system clipboard, not the `copy()`/`paste()` headless hooks. |
+
+Returns false for an unsupported command, and for a supported one with
+nothing to act on (no editable selection, empty history, collapsed selection
+for copy/cut). Formatting commands — `bold`, `italic`, `underline`,
+`foreColor`, `createLink`, `formatBlock` — are **not** supported: they need an
+inline-formatting model plaintext-v1 doesn't have, and they report
+`queryCommandSupported === false` rather than silently doing nothing, so
+callers can feature-detect instead of discovering it from a no-op.
+
+Deliberate divergence from browsers: `paste` (and `cut`/`copy`) work from
+script. Browsers refuse them because a web page reading the user's clipboard
+without a gesture is a privilege escalation; bro is an app runtime whose app
+is the trusted party, and `navigator.clipboard` is already available to it
+unconditionally. Refusing here would buy no safety and would only make the
+keyboard and scripted paths disagree.
+
 ### Settings
 
 The `bro.settings` API is available in headless mode for reading and writing persistent engine settings (graphics, audio, input, action bindings). See [settings.md](settings.md) for the full API reference.
