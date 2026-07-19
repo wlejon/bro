@@ -6,6 +6,14 @@
 // "tag" (a small monotonic ID) — not by JS object. Pair a tag with
 // scene.createPhysicsNode({ body: tag }) for visual sync.
 //
+// WARNING — createPhysicsNode resolves tags against the DEFAULT WORLD ONLY.
+// There is no way to tell it which world a tag came from. Every world's tag
+// space starts at 1, so passing a sandbox-world tag does not fail: it
+// silently binds the node to whatever unrelated default-world body happens
+// to hold that number, and the visual tracks the wrong object. Only ever
+// pass Physics.createBody tags to createPhysicsNode; sync sandbox bodies
+// yourself from w.getTransform / w.getAllTransforms.
+//
 // Methods live on the global `Physics` namespace (no `bro.` prefix — this
 // binding pre-dates the bro.* convention).
 //
@@ -45,10 +53,12 @@
 /**
  * Acknowledge the physics world. The engine has already created it; this
  * call is a no-op kept for forward compat. Returns true on success.
- * @param {Object} [opts]
- * @param {number} [opts.maxBodies=4096]
+ *
+ * Takes NO options — any argument is ignored outright, including maxBodies.
+ * The default world's capacity is fixed by the engine; use
+ * Physics.createWorldHandle({ maxBodies }) if you need to size a world.
  */
-Physics.createWorld(opts);
+Physics.createWorld();
 
 /** Set world gravity (default 0, -9.81, 0). */
 Physics.setGravity(x, y, z);
@@ -179,6 +189,13 @@ Physics.setLayers({
  * @param {number}  [opts.sampleCount]  - heightfield n (inferred from heights.length if omitted); n >= 4
  * @param {{x,y,z}} [opts.scale]        - heightfield cell size / height scale (default {1,1,1})
  * @param {{x,y,z}} [opts.offset]       - heightfield local offset applied before the body transform
+ * @param {Float32Array|number[]} [opts.points] - chain, flat 2D [x0,y0,x1,y1,...]
+ *                                          in the XY plane (same key as convexHull)
+ * @param {number}  [opts.depth=20]     - chain total Z thickness of the extruded
+ *                                          wall. The default is deliberately deep
+ *                                          so 3D bodies can't slip past a 2D wall
+ * @param {boolean} [opts.closed=false] - chain, weld the last point back to the first
+ * @param {boolean} [opts.flipNormal=false] - chain, swap which side is the front face
  *
  * Notes:
  * - "heightfield" shapes are always static. The surface in body-local space is
@@ -244,9 +261,9 @@ Physics.createBody({
 Physics.createBody({
     shape: 'chain',
     points: [-10, 0,  0, 0,  0, 10],   // flat [x0,y0,x1,y1,...] in 2D
-    depth: 4,                          // total Z thickness (for 2D-DOF bodies)
-    closed: false,                     // close loop: connects last→first
-    flipNormal: false,
+    depth: 4,                          // total Z thickness (default 20)
+    closed: false,                     // close loop: connects last→first (default)
+    flipNormal: false,                 // (default)
 });
 
 // Heightfield terrain: 64x64 samples, 1m cells, heights from any source
@@ -450,8 +467,10 @@ Physics.moveKinematic(id, x, y, z, qx, qy, qz, qw, dt);
  *                                  min/max = limit range (m for translation; rad for
  *                                  rotation — rotationX is the twist in [-π,π],
  *                                  rotationY/Z limits are symmetric, Jolt uses max);
- *                                  frequency/damping (>0 Hz) make translation limits
- *                                  soft springs; friction = resistance (N / N·m) when
+ *                                  frequency (default 0 = hard limits; >0 Hz) makes
+ *                                  translation limits soft springs, with damping
+ *                                  (default 1 = critical, NOT 0) on that spring;
+ *                                  friction (default 0) = resistance (N / N·m) when
  *                                  the axis has no motor. An object without min/max
  *                                  means 'free' (useful for friction-only axes).
  * @param {Object}  [opts.motors]          - per-axis motors at create, keyed like `axes`,
@@ -618,6 +637,9 @@ Physics.destroyConstraint(handle);
  * real surface normal on the hit body (pointing back toward the ray origin
  * for a ray arriving from outside). One hit per body (earliest contact).
  *
+ * maxDist defaults to 1000 world units when omitted (or when the 7th argument
+ * is the opts object rather than a number) — the ray is never unbounded.
+ *
  * An optional trailing opts object takes the same filter fields as the shape
  * queries below: `layers` (array of layer names/indices the ray can see),
  * `ignoreBody` (one body tag to exclude) and `ignoreBodies` (array of tags to
@@ -635,7 +657,8 @@ const seen = Physics.raycast(ox, oy, oz, dx, dy, dz, 100,
  * Cast a ray and return ONLY the nearest hit (or null if nothing was hit).
  * Cheaper than raycast() for long-range line-of-sight / pick queries since it
  * collects a single closest hit instead of sorting an array. Same narrow-phase
- * precision and optional trailing filter opts as raycast().
+ * precision, same maxDist=1000 default, and same optional trailing filter opts
+ * as raycast().
  *
  * @returns {{ bodyId:number, fraction:number, position:{x,y,z},
  *             normal:{x,y,z}, userData:bigint } | null}
@@ -976,6 +999,10 @@ for (let i = 0; i < buf.length; i += 8) {
 //
 // PhysicsNode auto-syncs its transform from the body each frame. See
 // docs/scene-api.js → SceneGraph.createPhysicsNode.
+//
+// DEFAULT-WORLD TAGS ONLY. createPhysicsNode has no world parameter and
+// resolves the tag against the default world; a sandbox tag silently binds
+// to a different body (see the warning at the top of this file).
 
 const tag = Physics.createBody({ shape: "sphere", radius: 0.5,
                                   position: { x: 0, y: 10, z: 0 } });
@@ -989,8 +1016,11 @@ body.add(visual);
 // -----------------------------------------------------------------------------
 //
 // Returns an opaque handle on its own Jolt world. The engine does NOT step
-// it; you call .step(dt) yourself. Body API mirrors the default-world
-// Physics.* functions, but lives on the handle.
+// it; you call .step(dt) yourself. Body API largely mirrors the default-world
+// Physics.* functions, but lives on the handle — it is NOT a complete mirror:
+// setConstraintEnabled and setWheelMotor exist on Physics.* only, with no
+// handle equivalent, so a constraint you want to toggle (or a wheel motor you
+// want to drive) has to live in the default world.
 
 /**
  * @param {Object} [opts]
@@ -1015,6 +1045,19 @@ w.setLinearVelocity(tag, 0, -1, 0);
 w.setKinematic(tag);
 w.moveKinematic(tag, x, y, z, dt);
 w.setLayer(tag, "ghost");
+w.setMotionType(tag, true);                // BOOLEAN isStatic (not a string):
+                                           // true = static, false = dynamic. A body
+                                           // CREATED static can never go dynamic
+                                           // (no Jolt MotionProperties) — no-op.
+w.activate(tag);                           // wake a sleeping body
+w.setUserData(tag, 42n);                   // 64-bit; w.getUserData(tag) reads back
+w.addForce(tag, fx, fy, fz);               // continuous, cleared each step
+w.addImpulse(tag, ix, iy, iz);             // instantaneous
+w.addTorque(tag, tx, ty, tz);
+w.setAngularVelocity(tag, wx, wy, wz);
+const all = w.getAllTransforms();          // packed 8 floats/body, same layout as
+                                           // Physics.getAllTransforms. Takes no opts —
+                                           // sandbox worlds have no interpolation.
 w.destroyBody(tag);
 
 const c = w.createConstraint({ type:'distance', body1:a, body2:b, ... });
@@ -1367,7 +1410,14 @@ car.destroy();    // remove the vehicle (constraint + drivetrain). A chassis
                   // created inline via `chassis:` is destroyed with it; a
                   // chassis passed as an existing `body:` tag survives —
                   // it stays yours to manage.
-                  // Destroying the chassis body also removes the vehicle.
+                  //
+                  // Destroying the chassis body directly (Physics.destroyBody
+                  // (car.chassisBody)) also removes the vehicle in the engine —
+                  // but it does NOT notify this JS wrapper. `car` still looks
+                  // alive: .chassisBody keeps returning the now-dead tag, and
+                  // setInput/getState/wheelState quietly do nothing. Prefer
+                  // car.destroy(), and drop your reference to `car` whenever
+                  // you destroy the chassis yourself.
 
 // Rendering recipe — chassis under a PhysicsNode, wheels as chassis children
 // driven from wheelState each frame (no new engine machinery needed):
@@ -1415,7 +1465,11 @@ car.destroy();    // remove the vehicle (constraint + drivetrain). A chassis
 // the wheeled section carries over: chassis creation, up/forward, wheel
 // suspension geometry, engine/transmission (drivetrain defaults switch to
 // Jolt's tank numbers: minRPM 500, maxRPM 4000, shiftUp 3500, shiftDown
-// 1000, gear ratios [4,3,2,1], reverse [-4,-3]), antiRollBars, collision
+// 1000 — but NOT the gear ratios: the binding only writes gearRatios /
+// reverseGearRatios when JS supplies a non-empty array, so an unconfigured
+// tank keeps Jolt's car ratios [2.66, 1.78, 1.3, 1.0, 0.74] / [-2.90].
+// Pass transmission.gearRatios explicitly if you want tank ratios),
+// antiRollBars, collision
 // tester, wheelState, getState/speed/rpm/gear, setGear, destroy semantics,
 // scene.createPhysicsNode on .chassisBody.
 //
@@ -1615,7 +1669,7 @@ bike.setLeanController(false);
  *                                             to lay a limb along X/Z
  * @param {number}  [opts.parts[].halfHeight=0.15] - capsule cylinder half-height
  * @param {number}  [opts.parts[].radius=0.08]    - capsule/sphere radius
- * @param {{x,y,z}} [opts.parts[].halfExtents]    - box half-extents
+ * @param {{x,y,z}} [opts.parts[].halfExtents={0.1,0.1,0.1}] - box half-extents
  * @param {number}  [opts.parts[].density=1000]   - kg/m³ (mass from shape volume)
  * @param {number}  [opts.parts[].mass=0]         - > 0 overrides the mass in kg
  *                                             (inertia recomputed from the

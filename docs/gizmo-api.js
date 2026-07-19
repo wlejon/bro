@@ -8,9 +8,13 @@
 // apply to whatever the app considers "selected".
 //
 // Handles:
-//   - translate: 3 axis arrows + center sphere + plane quads (phase 5)
-//   - rotate:    3 axis rings (+ outer view ring, phase 5)
+//   - translate: 3 axis arrows
+//   - rotate:    3 axis rings
 //   - scale:     3 axis boxes + center uniform cube
+//
+// There is no translate center sphere, no plane (XY/YZ/XZ) quads, and no
+// outer view ring — none are built or picked. Only scale has a center
+// handle, so `hovered` is 'center' in scale mode only.
 //
 // Visuals stay at ~80px regardless of camera zoom (configurable via
 // configure({size})). Depth test is disabled so handles always win over
@@ -30,16 +34,21 @@ bro.gizmo.setPosition(x, y, z);
 // world-space orientation. Ignored in world mode.
 bro.gizmo.setOrientation(qx, qy, qz, qw);
 
-// Visuals.
+// Visuals. Only `size` and colors.x/y/z/hover have any visible effect —
+// `emissive`, `emissiveHover`, `alwaysOnTop` and `colors.active` are parsed
+// and stored but never read by the renderer. (Handles are always unlit and
+// always drawn on top regardless of alwaysOnTop; a dragged axis keeps its
+// hover color.)
 bro.gizmo.configure({
     size: 80,                         // target pixel height on screen
     colors: {
         x: '#e74c3c', y: '#27ae60', z: '#3498db',
-        hover: '#ffd166', active: '#ffffff',
+        hover: '#ffd166',
+        active: '#ffffff',            // stored, unused
     },
-    emissive: 0.55,
-    emissiveHover: 1.4,
-    alwaysOnTop: true,
+    emissive: 0.55,                   // stored, unused
+    emissiveHover: 1.4,               // stored, unused
+    alwaysOnTop: true,                // stored, unused (always on top)
 });
 
 // -----------------------------------------------------------------------------

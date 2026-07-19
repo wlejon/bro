@@ -2,10 +2,21 @@
 // bro Terrain API Reference
 // =============================================================================
 //
-// Voxel terrain manager: noise-driven height fields, chunked, with greedy
-// meshing and optional LOD rings. All heavy lifting (noise, voxel grids,
-// meshing, chunk lifecycle) runs in C++ via TerrainManager. JS configures,
-// drives the camera-following update, edits voxels, and reads picks.
+// Chunked terrain manager: noise-driven height fields with optional LOD
+// rings. All heavy lifting (noise, heightmaps, meshing, chunk lifecycle)
+// runs in C++ via TerrainManager. JS configures, drives the camera-following
+// update, edits the surface, and reads picks.
+//
+// NOT a voxel engine. Storage is one float height per grid column
+// (TerrainManager::ChunkEntry holds `heightmap` / `heightmapPadded`), not a
+// 3D occupancy grid. Consequences:
+//   - No overhangs, caves, arches, or floating geometry — the surface is a
+//     height field, so every column has exactly one solid span from the
+//     bottom up to its height.
+//   - The "voxel" names below (setVoxel/getVoxel, chunkSize's y component)
+//     are legacy; they address columns, not cells. See setVoxel().
+//   - raycast() tests LOD-0 chunks only, so rays miss visible distant
+//     terrain rendered from coarser LOD rings.
 //
 // Created via the scene graph (chunks register as MeshNode children of the
 // scene root, so they participate in the normal 3D pipeline — depth test,
@@ -27,8 +38,9 @@
 // All options are optional; defaults below match the C++ TerrainConfig struct.
 //
 // {
-//   chunkSize:         [64, 48, 64],     // voxels per chunk [x, y, z]
-//   cellSize:          1.0,              // world units per voxel
+//   chunkSize:         [64, 48, 64],     // grid cells per chunk [x, y, z];
+//                                        // y bounds the height range only
+//   cellSize:          1.0,              // world units per cell
 //
 //   loadRadius:        4,                // Manhattan distance, in chunks
 //   unloadRadius:      6,                // chunks farther than this are freed
@@ -98,9 +110,13 @@ class Terrain {
     update(x, y, z) {}
 
     /**
-     * Cast a ray against the loaded voxel grid. Hits return the surface
-     * voxel coords, the chunk it lives in, and the material ID. Returns
+     * Cast a ray against the loaded terrain meshes. Hits return the surface
+     * cell coords, the chunk it lives in, and the material ID. Returns
      * null on miss (or when the ray exits the loaded radius).
+     *
+     * LOD-0 chunks only — coarser LOD rings are skipped, so a ray aimed at
+     * distant terrain that is plainly visible on screen returns null. Keep
+     * picking within the LOD-0 radius.
      *
      * @param {number[]} origin     - [x, y, z] world space
      * @param {number[]} direction  - [x, y, z] (need not be unit length)
@@ -116,16 +132,28 @@ class Terrain {
     raycast(origin, direction, maxDist) {}
 
     /**
-     * Set a voxel by world-space coordinate. Pass material 0 to clear
-     * (dig). Returns true if the voxel was modified (false if outside the
-     * loaded radius). Edits flag the chunk dirty — call rebuild() to
-     * regenerate the mesh.
+     * Raise or lower the terrain column at world-space (wx, wz) by one
+     * cell. Despite the name this is a heightmap edit, not a voxel write:
+     *
+     *   - `wy` is ignored entirely. You cannot dig at a chosen altitude,
+     *     carve a cave, or punch a hole — only move the surface up/down.
+     *   - `material` is read as a sign, not an ID: 0 lowers the column by
+     *     one cell, anything non-zero raises it by one. Materials 1, 3 and
+     *     7 all do the same thing. Materials are assigned by height at
+     *     raycast time, not stored.
+     *
+     * Returns true if the column was modified (false if outside the loaded
+     * radius). Edits flag the chunk dirty — call rebuild() to re-mesh.
      *
      * @returns {boolean}
      */
     setVoxel(wx, wy, wz, material) {}
 
-    /** Read a voxel by world-space coordinate. Returns 0 (air) if not loaded. */
+    /**
+     * Solidity test at a world-space point: returns 1 when wy is at or
+     * below the height of the column at (wx, wz), else 0. Returns 0 if the
+     * chunk is not loaded. Never returns a material ID.
+     */
     getVoxel(wx, wy, wz) {}
 
     /** Re-mesh any chunks flagged dirty by setVoxel. Cheap if nothing changed. */
@@ -133,7 +161,10 @@ class Terrain {
 
     /**
      * Reconfigure the entire terrain (re-seeds noise, palette, mesh mode,
-     * etc.) and rebuilds all loaded chunks. Slow — debounce in UI sliders.
+     * etc.). Frees every loaded chunk and regenerates nothing: the terrain
+     * is empty until the next update() streams chunks back in, throttled by
+     * maxLoadsPerUpdate. Debounce in UI sliders, and call update() right
+     * after if you need geometry in the same frame.
      */
     configure(opts) {}
 
@@ -179,7 +210,8 @@ function frame() {
 }
 frame();
 
-// Pick the voxel under the crosshair and dig:
+// Pick the surface under the crosshair and lower that column by one cell
+// (material 0 = lower, non-zero = raise; the y argument is ignored):
 const hit = terrain.raycast(cam.pos, cam.forward, 200);
 if (hit) {
     terrain.setVoxel(hit.position[0], hit.position[1], hit.position[2], 0);

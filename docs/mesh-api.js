@@ -417,7 +417,14 @@ class Mesh {
 
   // --- Static: File I/O (load) ----------------------------------------------
 
-  /** Load a glTF/GLB file. @returns {{ meshes: Mesh[] }} */
+  /**
+   * Load a glTF/GLB file. Returns the whole scene, not just geometry — see
+   * the "glTF rigged extensions" section for the field list.
+   * @returns {{ meshes: Mesh[], skins: SkinData[], skeletons: Skeleton[],
+   *            animations: Animation[], meshSkeleton: number[],
+   *            animationSkeleton: number[], meshMaterial: number[],
+   *            images: Object[], materials: Object[] }}
+   */
   static loadGLTF(path) {}
 
   /** Load a Wavefront OBJ file. @returns {Mesh} */
@@ -784,7 +791,11 @@ class Mesh {
   // --- UV -------------------------------------------------------------------
 
   /**
-   * Automatic UV unwrapping. Modifies uvs in-place.
+   * Automatic UV unwrapping. Rewrites the whole mesh in place, not just uvs:
+   * vertices on chart seams are duplicated, so vertexCount grows and
+   * positions / normals / colors / indices are all rebuilt. Any index or
+   * per-vertex data you cached before the call is stale afterwards — unwrap
+   * before you build attribute buffers, not after.
    * @returns {{ atlasWidth: number, atlasHeight: number, chartCount: number, success: boolean }}
    */
   unwrapUVs() {}
@@ -906,7 +917,15 @@ class Mesh {
 
   // --- File I/O (save) ------------------------------------------------------
 
-  /** @param {string} path @returns {boolean} */ saveGLTF(path) {}
+  /**
+   * @param {string} path
+   * @param {Object} [opts] - omit for a plain unskinned mesh
+   * @param {SkinData}    [opts.skin]
+   * @param {Skeleton}    [opts.skeleton]
+   * @param {Animation[]} [opts.animations] - only written with opts.skeleton
+   * @returns {boolean}
+   */
+  saveGLTF(path, opts) {}
   /** @param {string} path @returns {boolean} */ saveOBJ(path) {}
   /** @param {string} path @returns {boolean} */ savePLY(path) {}
   /** @param {string} path @returns {boolean} */ saveSTL(path) {}
@@ -1393,6 +1412,12 @@ function Rig_spec(name) {}             // -> RigSpec (empty if unknown)
 function Rig_specFromJSON(jsonText) {} // -> RigSpec
 function Rig_specFromFile(path) {}     // -> RigSpec
 
+/** RigSpec inspectors (also available as RigSpec properties). */
+function Rig_specName(spec) {}          // -> string, null if not a RigSpec
+function Rig_specToJSON(spec) {}        // -> JSON text, null if not a RigSpec
+function Rig_specBoneCount(spec) {}     // -> number, 0 if not a RigSpec
+function Rig_specLandmarkCount(spec) {} // -> number, 0 if not a RigSpec
+
 /** Geometric landmark detection (returns { name: [x,y,z], ... }). */
 function Rig_detectHumanoid(mesh) {}
 function Rig_detectQuadruped(mesh) {}
@@ -1411,7 +1436,16 @@ function Rig_fitSkeleton(spec, landmarks, mesh) {} // -> Skeleton
  */
 function Rig_autoRig(mesh, spec, landmarks, options) {}
 // options: { method: 'auto'|'voxelBind'|'boneHeat'|'bbw',
-//            smoothIterations: 2, smoothAlpha: 0.5, minWeight: 1e-3 }
+//            smoothIterations: 2, smoothAlpha: 0.5, minWeight: 1e-3,
+//            // Per-method sub-objects. All three are read regardless of
+//            // `method`; only the one matching the method in use is applied,
+//            // so you can set defaults once and switch methods freely.
+//            voxel:    { maxResolution: 96, maxInfluences: 4, falloffPower: 4,
+//                        minWeight: 1e-3, smoothIterations: 4, smoothAlpha: 0.5 },
+//            boneHeat: { maxInfluences: 4, minWeight: 1e-3, heatStrength: 1.0,
+//                        solverTol: 1e-7, solverMaxIter: 2000 },
+//            bbw:      { maxInfluences: 4, minWeight: 1e-3, anchorsPerBone: 3,
+//                        eps: 1e-4, maxIter: 5000 } }
 
 /** Synthesized walk/run cycle from skeleton + spec. */
 function Rig_generateLocomotionCycle(skeleton, spec, params) {} // -> Animation
@@ -1459,6 +1493,15 @@ class VoxelChunk {
 //     animations:        Animation[],
 //     meshSkeleton:      number[],   // index into skeletons (-1 if unskinned)
 //     animationSkeleton: number[],   // index into skeletons
+//     meshMaterial:      number[],   // per-mesh index into materials (-1 = none)
+//     images:            [{ name, mimeType, width, height,
+//                           data: ?Uint8Array }],   // RGBA8; data null if empty
+//     materials:         [{ name, baseColorFactor: [r,g,b,a],
+//                           metallicFactor, roughnessFactor,
+//                           emissiveFactor: [r,g,b],
+//                           baseColorTexture, metallicRoughnessTexture,
+//                           normalTexture, occlusionTexture, emissiveTexture }],
+//                        // texture fields are indices into `images`, -1 = none
 //   }
 //
 // mesh.saveGLTF(path, opts?) — opts: { skin?, skeleton?, animations? }
@@ -1494,11 +1537,22 @@ class VoxelChunk {
  * @param {number}  [opts.length=1.0]
  * @param {number}  [opts.bend=0]            radians of forward arc deflection
  * @param {number}  [opts.curl=0]            radians of roll around length axis
+ * @param {number}  [opts.cup=0]             bilateral cupping: both width edges
+ *                                           curl toward the normal (~(x/halfW)^2,
+ *                                           engaging from base to tip), giving a
+ *                                           U cross-section instead of a flat
+ *                                           strip. Rose petals: 0.5–1.2
  * @param {boolean} [opts.stemOffset=true]   pivot at base when true
  * @param {number}  [opts.widthSegments=4]
  * @param {number}  [opts.lengthSegments=8]
  * @param {boolean} [opts.fullUV=false]      span UVs over [0,1] instead of an
  *                                           atlas sub-cell; `shape` is ignored
+ * @param {boolean} [opts.shapedSilhouette=false] vary the geometric width along
+ *                                           the length per `shape` (oval broad
+ *                                           mid, petal almond, etc.). Default
+ *                                           false = a flat rectangle where
+ *                                           `shape` only picks the atlas cell —
+ *                                           set this when there is no texture
  * @returns {Mesh}
  *
  * @example
@@ -1523,6 +1577,22 @@ Mesh.leafCard = function(shape, opts) {};
  * @param {number} [opts.centerRadius=0.08]
  * @param {number} [opts.centerHeight=0.04]
  * @param {number[]} [opts.centerColor=[1,0.85,0.2]]
+ *
+ * Rose shaping — without these a flower is a flat daisy disk of rectangular
+ * cards. Petal tilt is radians about the radial axis; negative lifts the tip.
+ * @param {number} [opts.outerTilt=-0.40]  tilt of the outermost ring (layer 0)
+ * @param {number} [opts.innerTilt=-0.25]  tilt of the innermost ring; layers
+ *                                         between interpolate linearly. Rose:
+ *                                         outer ≈ -0.15, inner ≈ -1.20
+ * @param {number} [opts.layerScaleFalloff=0.40] inner layers scale by
+ *                                         1 - falloff*layerT; higher = tighter bud
+ * @param {number} [opts.outerYLift=0.40]  layer-0 Y-lift in centerHeight units
+ * @param {number} [opts.innerYLift=0.80]  innermost Y-lift — stacked-cup silhouette
+ * @param {number} [opts.petalCup=0]       per-petal bilateral cup (leafCard.cup);
+ *                                         0.6–1.0 reads as a rose
+ * @param {boolean} [opts.shapedPetals=false] shaped petal silhouettes instead of
+ *                                         rectangular cards; recommended when
+ *                                         no petal atlas texture is bound
  * @returns {Mesh}
  *
  * @example

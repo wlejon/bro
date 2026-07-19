@@ -81,6 +81,9 @@ class SceneGraph {
    * Tileset atlas (optional — replaces palette colour with a texture):
    * @param {string} [opts.atlas] - app-relative path to a tileset image. The
    *        atlas is a regular grid of cells (see atlasColumns/atlasRows).
+   *        A path that does not exist or fails to decode is ignored SILENTLY
+   *        — no throw, no warning; the world just renders untextured. Check
+   *        the atlas path first if tiles come out flat grey.
    * @param {Uint8Array} [opts.atlasPixels] - raw RGBA8 alternative to `atlas`;
    *        requires `atlasWidth` + `atlasHeight`.
    * @param {number} [opts.atlasWidth] - atlas pixel width (with atlasPixels)
@@ -103,7 +106,9 @@ class SceneGraph {
    * @param {number}   opts.autotiles[].id   - ground tile id the rule applies to
    * @param {string}   opts.autotiles[].mode - "edge" (4-bit edge mask → 16
    *        variants, E,N,W,S = bits 0..3), "blob47" (8-neighbour blob → 47
-   *        variants), or "wang" (4-bit corner mask → 16, NE,SE,SW,NW = bits 0..3)
+   *        variants), or "wang" (4-bit corner mask → 16, NE,SE,SW,NW = bits 0..3).
+   *        Any other string — including a typo — silently becomes "blob47",
+   *        so a misspelled mode misrenders instead of erroring.
    * @param {number}   [opts.autotiles[].layer=0] - layer the rule + family run
    *        on (use the overlay layer index for autotiled decals)
    * @param {string}   [opts.autotiles[].family="id"] - which neighbours "join":
@@ -143,6 +148,10 @@ class SceneGraph {
    * @param {number}   [opts.animations[].fps=4] - frames per second
    * @param {number[]} opts.animations[].frames - atlas cell per frame
    * @returns {TileWorld}
+   * @throws {RangeError} width/height < 1 or > 65536, width*height over
+   *         16,777,216 cells, or chunkSize < 1. The grid is allocated eagerly,
+   *         so these are rejected before the allocation rather than wedging.
+   *         configure() validates identically.
    */
   createTileWorld(opts) {}
 }
@@ -328,6 +337,8 @@ class TileWorld {
    * findPath's "you can path OUT of a blocked cell").
    * Movement ranges (field[i] <= moveRange), tower-defense creep flow (walk
    * downhill), influence maps.
+   * Returns null (not an empty field) when the world has no grid or
+   * `sources` is omitted — null-check before indexing.
    */
   distanceField(sources, opts) {}
 
@@ -349,6 +360,8 @@ class TileWorld {
   /**
    * Topology grid distance between two cells: Manhattan (edge) / Chebyshev
    * (vertex) on square, cube metric on hex. `conn` is an optional "vertex".
+   * Returns -1 when fewer than four coordinates are passed, or the world has
+   * no grid; a real distance is never negative.
    */
   cellDistance(x0, y0, x1, y1, conn) {}
 
@@ -428,7 +441,11 @@ class TileWorld {
    *        anchor stays the anchor cell's).
    * @param {number} [opts.offsetZ=0]
    * @param {number} [opts.variant=0] - atlas cell when the kind has an atlas
-   * @param {number[]} [opts.color=[1,1,1,1]] - per-instance tint
+   * @param {number[]} [opts.color=[1,1,1,1]] - per-instance tint. RGB only on
+   *        atlased kinds (atlasColumns/atlasRows > 1): the alpha channel is
+   *        the variant carrier there, so whatever alpha you pass is
+   *        overwritten by `variant` and per-instance transparency is
+   *        unavailable. Alpha is honoured on non-atlased kinds.
    * @returns {number} instance index
    */
   addObject(kind, x, y, opts) {}
