@@ -111,8 +111,8 @@ JSValue js_byteOffsetToX(JSContext* ctx, JSValueConst, int argc, JSValueConst* a
     if (argc > 2) JS_ToInt32(ctx, &off, argv[2]);
     auto pos = run->byteOffsetToX(static_cast<std::size_t>(off < 0 ? 0 : off), opts.spacing);
     JSValue out = caretToJs(ctx, pos.primary);
-    // Present from day one so a bidi-aware caller written today keeps working
-    // when chunk 4 starts filling it in.
+    // Only present at a direction boundary, where the offset names two places
+    // on the line. Absent means the offset has a single unambiguous caret.
     if (pos.hasSecondary) {
         JS_SetPropertyStr(ctx, out, "secondary", caretToJs(ctx, pos.secondary));
     }

@@ -189,40 +189,69 @@ ShapedRun::CaretPositions ShapedRun::byteOffsetToX(std::size_t byteOffset,
                   (clusters_[i].isWordSep ? spacing.word : 0.0f);
     };
 
-    // Past the end: the caret sits on the TRAILING edge of the last cluster in
-    // LOGICAL order, which for an RTL run is its LEFT side. Clamping to the run
-    // width instead — the obvious thing, and what this did before runs could be
-    // reordered — puts the end-of-text caret at the far end of a Hebrew word
-    // from where it belongs, and collapses a whole-run selection rect to zero
-    // width because both its edges land on the same x.
-    if (byteOffset >= text_.size()) {
-        std::size_t last = 0;
-        uint32_t lastStart = 0;
-        for (std::size_t i = 0; i < clusters_.size(); ++i) {
-            if (clusters_[i].byteStart >= lastStart) {
-                lastStart = clusters_[i].byteStart;
-                last = i;
-            }
-        }
+    // Edge helpers. A cluster's LEADING edge is the side the reader arrives
+    // from — its left for LTR, its right for RTL — and the trailing edge is
+    // the other one.
+    auto leadingEdge = [&](std::size_t i) {
         float penX = 0.0f, advance = 0.0f;
-        geometry(last, penX, advance);
-        out.primary = {clusters_[last].rtl ? penX : penX + advance, false};
+        geometry(i, penX, advance);
+        return clusters_[i].rtl ? penX + advance : penX;
+    };
+    auto trailingEdge = [&](std::size_t i) {
+        float penX = 0.0f, advance = 0.0f;
+        geometry(i, penX, advance);
+        return clusters_[i].rtl ? penX : penX + advance;
+    };
+
+    // A caret at `byteOffset` is named by up to two clusters: the one that
+    // ENDS there (caret on its trailing edge) and the one that STARTS there
+    // (caret on its leading edge). In unidirectional text both land on the
+    // same x and there is nothing to choose between them. At a direction
+    // boundary they are different places on the line and BOTH are real — that
+    // is the whole reason this returns a pair. Looking only for the cluster
+    // that *contains* the offset, as this used to, can only ever produce
+    // leading edges, which leaves the trailing edge of an RTL run reachable
+    // from no offset at all and collapses any range that ends there.
+    bool haveBefore = false, haveAfter = false;
+    std::size_t before = 0, after = 0;
+    for (std::size_t i = 0; i < clusters_.size(); ++i) {
+        if (clusters_[i].byteEnd == byteOffset)   { before = i; haveBefore = true; }
+        if (clusters_[i].byteStart == byteOffset) { after  = i; haveAfter  = true; }
+    }
+
+    if (!haveBefore && !haveAfter) {
+        // Strictly inside a cluster (a ligature, a combining sequence): snap to
+        // its leading edge — there is no glyph geometry inside a ligature for a
+        // caret to point at. Past the end of the text falls through to the
+        // run's trailing edge.
+        for (std::size_t i = 0; i < clusters_.size(); ++i) {
+            const Cluster& c = clusters_[i];
+            if (byteOffset <= c.byteStart || byteOffset >= c.byteEnd) continue;
+            out.primary = {leadingEdge(i), true};
+            return out;
+        }
+        out.primary = {width(spacing), false};
         return out;
     }
 
-    // Find the cluster owning this byte. Offsets landing inside a cluster (a
-    // ligature, a combining sequence) snap to its leading edge — there is no
-    // glyph geometry for a position inside a ligature to point at.
-    for (std::size_t i = 0; i < clusters_.size(); ++i) {
-        const Cluster& c = clusters_[i];
-        if (byteOffset < c.byteStart || byteOffset >= c.byteEnd) continue;
-        float penX = 0.0f, advance = 0.0f;
-        geometry(i, penX, advance);
-        // The leading edge of an RTL cluster is its right side.
-        out.primary = {c.rtl ? penX + advance : penX, true};
-        return out;
-    }
-    out.primary = {width(spacing), false};
+    Caret fromAfter{haveAfter ? leadingEdge(after) : 0.0f, true};
+    Caret fromBefore{haveBefore ? trailingEdge(before) : 0.0f, false};
+
+    if (!haveBefore) { out.primary = fromAfter;  return out; }
+    if (!haveAfter)  { out.primary = fromBefore; return out; }
+
+    // Both exist. Same x means unidirectional text and one answer.
+    if (fromAfter.x == fromBefore.x) { out.primary = fromBefore; return out; }
+
+    // A genuine direction boundary. The caret belongs to the character BEFORE
+    // it — upstream affinity — so the primary is the trailing edge of the run
+    // that ends here and the leading edge of the run that starts here is the
+    // secondary. Checked against Chromium on "abc <hebrew> def": it puts the
+    // caret at both ends of the Hebrew run on the run's left side, which is
+    // the upstream answer at the first boundary and at the second.
+    out.primary      = fromBefore;
+    out.secondary    = fromAfter;
+    out.hasSecondary = true;
     return out;
 }
 

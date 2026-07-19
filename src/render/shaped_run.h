@@ -16,11 +16,10 @@
 // construction, and the cluster map is the only correct source of caret
 // geometry.
 //
-// byteOffsetToX returns a *pair* of positions even though only one is ever
-// filled today. Under bidi (chunk 4) a single logical offset at a direction
-// boundary has two visual x positions — the trailing edge of the LTR run and
-// the leading edge of the RTL run. Baking that into the signature now means
-// chunk 4 changes the bodies of these functions, not every caller of them.
+// byteOffsetToX returns a *pair* of positions because under bidi a single
+// logical offset at a direction boundary has two visual x positions — the
+// trailing edge of the LTR run and the leading edge of the RTL run. Callers
+// that only draw one caret can use `primary` and ignore the rest.
 // -----------------------------------------------------------------------------
 
 #include <cstddef>
@@ -76,8 +75,11 @@ public:
         bool  isLeadingEdge = true;
     };
 
-    // One offset, up to two visual positions. `hasSecondary` is always false
-    // until bidi reordering lands; callers must already handle it being true.
+    // One offset, up to two visual positions. `hasSecondary` is true only at a
+    // direction boundary, where a single logical offset genuinely names two
+    // places on the line: the trailing edge of the run that ends there and the
+    // leading edge of the run that starts there. `primary` is whichever of the
+    // two belongs to the paragraph's base direction.
     struct CaretPositions {
         Caret primary;
         Caret secondary;

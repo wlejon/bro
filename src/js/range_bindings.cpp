@@ -339,6 +339,24 @@ static JSValue js_range_getBoundingClientRect(JSContext* ctx, JSValueConst this_
     auto rects = bro::layout::getSelectionRects(
         doc, r->startContainer(), r->startOffset(),
         r->endContainer(), r->endOffset(), *metrics);
+
+    // A collapsed range selects no text, so there are no highlight rects — but
+    // it still has a position, and per spec its rect is an empty one AT the
+    // caret rather than a degenerate one at the document origin. Returning
+    // {0,0,0,0} here made a collapsed range indistinguishable from a failed
+    // query, and put every "where is the caret" answer in the top-left corner.
+    if (rects.empty() && r->collapsed()) {
+        if (auto* tn = dynamic_cast<bro::dom::TextNode*>(r->startContainer())) {
+            float cx = 0.0f, cy = 0.0f, ch = 0.0f;
+            if (bro::layout::getCaretRect(doc, tn, r->startOffset(), *metrics,
+                                          cx, cy, ch)) {
+                auto* el = nearestElementAncestor(r->startContainer());
+                auto pr = el ? bro::dom::projectRectThroughAncestors(el, cx, cy, 0.0f, ch)
+                             : bro::dom::AbsoluteRect{cx, cy, 0.0f, ch};
+                return makeDomRect(ctx, pr.x, pr.y + offY, 0.0f, pr.height);
+            }
+        }
+    }
     if (rects.empty()) return makeDomRect(ctx, 0, 0, 0, 0);
 
     // See getClientRects() above — project each rect before taking the AABB.
