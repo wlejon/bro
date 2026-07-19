@@ -60,9 +60,9 @@ if(BRO_FETCH_SKIA)
     # (1) Headers + source bundle (platform-independent).
     if(NOT EXISTS "${CMAKE_CURRENT_LIST_DIR}/src/include/core/SkCanvas.h")
         set(_skia_bundle "${CMAKE_CURRENT_LIST_DIR}/skia-src.tar.gz")
-        message(STATUS "Skia: fetching source bundle (headers + svg/expat/shaping sources, ~9 MB)...")
+        message(STATUS "Skia: fetching source bundle (headers + svg/expat/shaping/webp sources, ~9.5 MB)...")
         _bro_skia_download("${_skia_base}/skia-src-m147.tar.gz" "${_skia_bundle}"
-            "80299aa1556a0630a5322799b4968816d8a0fa94d4d92de22805b6b4d7b5ffbc" _skia_src_ok)
+            "52edef59f65d0e7d252009e8a52b36ce8881938570e854147f89f3a33d501da6" _skia_src_ok)
         if(_skia_src_ok)
             file(MAKE_DIRECTORY "${CMAKE_CURRENT_LIST_DIR}/src")
             file(ARCHIVE_EXTRACT INPUT "${_skia_bundle}"

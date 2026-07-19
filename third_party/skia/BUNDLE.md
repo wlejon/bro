@@ -28,6 +28,7 @@ time naming the missing files.
 | `third_party/externals/harfbuzz/src/` | HarfBuzz. Built as the upstream unity TU `harfbuzz.cc`. |
 | `third_party/harfbuzz/` | `config-override.h` (the `std::mutex` shim Skia injects) + `LICENSE`. |
 | `third_party/externals/icu/source/common/` | ICU's UAX#9 bidi subset — 14 `.cpp` and their header closure. **Not** full ICU: `source/i18n/`, `source/data/`, and the 30 MB data blob are not needed and must not be shipped. |
+| `third_party/externals/libwebp/src/{dec,dsp,utils,webp}/` + `enc/*.h` | libwebp's decoder (`BRO_WITH_WEBP`, ON in every profile). Decode only — `enc/`, `mux/` and `demux/` sources are not shipped. The enc **headers** are, because `dsp/lossless.h` includes `enc/histogram_enc.h`; without them `dsp/lossless.c` will not compile. |
 
 `modules/skshaper/src/SkShaper_harfbuzz.cpp` and `SkShaper_skunicode.cpp` are
 **already** in the existing bundle — `modules/` is shipped whole. So is the
@@ -72,6 +73,12 @@ cp -r "$SRC/third_party/externals/harfbuzz/src"         staging/third_party/exte
 cp -r "$SRC/third_party/externals/icu/source/common"    staging/third_party/externals/icu/source/
 cp    "$SRC/third_party/externals/icu/LICENSE"          staging/third_party/externals/icu/
 
+WEBP="$SRC/third_party/externals/libwebp"
+mkdir -p staging/third_party/externals/libwebp/src/enc
+cp -r "$WEBP"/src/{dec,dsp,utils,webp} staging/third_party/externals/libwebp/src/
+cp    "$WEBP"/src/enc/*.h              staging/third_party/externals/libwebp/src/enc/
+cp    "$WEBP"/{COPYING,PATENTS,AUTHORS} staging/third_party/externals/libwebp/
+
 find staging -type d \( -name test -o -name tests -o -name wasm \) -prune -exec rm -rf {} +
 find staging -name '*.py' -delete
 find staging -name '*.rl' -delete
@@ -85,7 +92,23 @@ and extract straight into `third_party/skia/src/` (`skia.cmake` extracts with
 `DESTINATION third_party/skia/src`). There is no top-level directory in the
 archive.
 
-Sizes: pre-shaping bundle 6,159,567 B; with shaping **9,132,917 B** (~9.1 MB).
+Sizes: pre-shaping bundle 6,159,567 B; with shaping 9,132,917 B; with shaping +
+WebP **9,513,711 B** (~9.5 MB).
+
+### `third_party/skia/src/` is gitignored — do not trust it
+
+The single most likely way to break CI here is to add a `skia_modules.cmake`
+target that compiles files your **local** `src/` happens to have. If you ever
+hand-built Skia, `src/` is a full `git-sync-deps` checkout carrying all ~40
+externals, so a new target builds clean locally and then fails at *configure*
+on every machine that fetched the published bundle — which ships four.
+
+This is exactly how WebP shipped broken: `libwebp` was present locally, absent
+from the bundle, and the whole feature (build, full suite, commit) was
+validated without ever exercising the path CI takes. Before publishing a target
+that reaches into `third_party/externals/`, either extract the bundle somewhere
+empty and compile the source list against *that*, or confirm the tree is in the
+table above.
 
 ### Verify before publishing
 
