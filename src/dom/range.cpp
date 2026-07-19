@@ -433,15 +433,43 @@ void Range::deleteContents() {
     Node* start = startContainer_;
     int startOff = startOffset_;
     Document* doc = document_;
+
+    // Where the range collapses afterwards. The start container is often one
+    // of the nodes about to be removed — contentsInRange() splits a partially
+    // selected text node so the selected half becomes a whole node, and a
+    // fully selected one is removed outright — so keeping the old start
+    // position would leave both endpoints pointing at freed memory. Anchor to
+    // the first removed node's parent and its child index instead: that
+    // parent survives, and the index is exactly the gap the removal leaves.
+    Node* collapseTo = start;
+    int collapseOff = startOff;
+    bool startRemoved = false;
+    for (auto* n : nodes) {
+        for (Node* a = start; a; a = a->parentNode()) {
+            if (a == n) { startRemoved = true; break; }
+        }
+        if (startRemoved) break;
+    }
+    if (startRemoved && nodes[0] && nodes[0]->parentNode()) {
+        Node* p = nodes[0]->parentNode();
+        const auto& kids = p->childNodes();
+        for (size_t i = 0; i < kids.size(); ++i) {
+            if (kids[i] == nodes[0]) {
+                collapseTo = p;
+                collapseOff = static_cast<int>(i);
+                break;
+            }
+        }
+    }
+
     for (auto* n : nodes) {
         if (!n) continue;
         Node* p = n->parentNode();
         if (p) p->removeChild(n);
         if (doc) doc->freeNode(n);
     }
-    // Collapse to the start position (end endpoint may now be invalid).
-    startContainer_ = endContainer_ = start;
-    startOffset_ = endOffset_ = startOff;
+    startContainer_ = endContainer_ = collapseTo;
+    startOffset_ = endOffset_ = collapseOff;
 }
 
 Node* Range::cloneContents() const {
