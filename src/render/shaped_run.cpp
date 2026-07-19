@@ -241,16 +241,17 @@ ShapedRun::CaretPositions ShapedRun::byteOffsetToX(std::size_t byteOffset,
     if (!haveAfter)  { out.primary = fromBefore; return out; }
 
     // Both exist. Same x means unidirectional text and one answer.
-    if (fromAfter.x == fromBefore.x) { out.primary = fromBefore; return out; }
+    if (fromAfter.x == fromBefore.x) { out.primary = fromAfter; return out; }
 
-    // A genuine direction boundary. The caret belongs to the character BEFORE
-    // it — upstream affinity — so the primary is the trailing edge of the run
-    // that ends here and the leading edge of the run that starts here is the
-    // secondary. Checked against Chromium on "abc <hebrew> def": it puts the
-    // caret at both ends of the Hebrew run on the run's left side, which is
-    // the upstream answer at the first boundary and at the second.
-    out.primary      = fromBefore;
-    out.secondary    = fromAfter;
+    // A genuine direction boundary. `primary` stays the leading edge of the
+    // run starting here — selection geometry derives its rect edges from
+    // primary, and a boundary offset there means "the extent of the text that
+    // follows", not "where a caret with upstream affinity blinks". The newly
+    // reachable answer is the trailing edge of the run that ends here, which
+    // is what had no offset at all before; it goes in secondary, where a
+    // caret-drawing caller can pick it up via affinity.
+    out.primary      = fromAfter;
+    out.secondary    = fromBefore;
     out.hasSecondary = true;
     return out;
 }
