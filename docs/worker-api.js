@@ -48,18 +48,28 @@ class Worker {
    * Send a message to the worker thread.
    * The value is serialized using structured clone (see Cloneable Types below).
    *
+   * Throws TypeError "Worker is not running" if the worker has been
+   * terminate()d or closed itself.
+   *
    * @param {*} value - any cloneable value
-   * @param {ArrayBuffer[]} [transferList] - ArrayBuffers to transfer (zero-copy).
-   *   Transferred buffers are detached from the sender and become unusable.
+   * @param {(ArrayBuffer|Mesh|ImageBitmap)[]} [transferList] - objects to
+   *   transfer. Anything else in the list throws TypeError. ArrayBuffer
+   *   transfer is NOT zero-copy today: the bytes are copied out and the
+   *   source is then detached, so the sender loses the buffer either way.
+   *   Mesh and ImageBitmap do transfer by pointer (true zero-copy).
    *
    * @example
    *   worker.postMessage('hello');
    *   worker.postMessage({ cmd: 'process', items: [1, 2, 3] });
    *
-   *   // Transfer an ArrayBuffer (zero-copy, detaches from sender)
+   *   // Transfer an ArrayBuffer (copies bytes, then detaches the source)
    *   const buf = new Float32Array([1, 2, 3]).buffer;
    *   worker.postMessage({ data: buf }, [buf]);
    *   // buf.byteLength === 0 after transfer
+   *
+   *   // A Mesh in the payload MUST be listed — otherwise postMessage throws
+   *   // ("Mesh must be listed in the transferList").
+   *   worker.postMessage({ geometry: mesh }, [mesh]);
    */
   postMessage(value, transferList) {}
 
@@ -103,7 +113,9 @@ class WorkerGlobalScope {
    * Send a message to the main thread.
    *
    * @param {*} value - any cloneable value
-   * @param {ArrayBuffer[]} [transferList] - ArrayBuffers to transfer (zero-copy)
+   * @param {(ArrayBuffer|Mesh|ImageBitmap)[]} [transferList] - objects to
+   *   transfer. ArrayBuffer transfer copies the bytes and detaches the
+   *   source; Mesh / ImageBitmap move by pointer.
    *
    * @example
    *   self.postMessage({ type: 'result', value: 42 });
@@ -170,7 +182,7 @@ class WorkerGlobalScope {
   //                   model + KV cache.
   //   bro.stt.* / bro.tts.* — Whisper STT / Kokoro TTS (brosoundml).
   //                   Run heavy inference here to keep the main thread
-  //                   responsive; transfer Float32 audio buffers zero-copy.
+  //                   responsive; transfer Float32 audio buffers back.
   //   ImageBitmap / createImageBitmap — build frames here, transfer to main.
   //
   // NOT available: window, document, DOM, canvas, scene, Worker (no nesting),
@@ -260,18 +272,37 @@ class MessagePort extends EventTarget {
 //     Arrays (recursive)
 //
 //   Binary data:
-//     ArrayBuffer (copied by default, or transferred via transferList)
+//     ArrayBuffer (copied by default; listing it in transferList still copies
+//                  the bytes, then detaches the source)
 //     Int8Array, Uint8Array, Uint8ClampedArray
 //     Int16Array, Uint16Array
 //     Int32Array, Uint32Array
 //     Float32Array, Float64Array
 //
 //   NOT cloneable (throws TypeError):
-//     Functions, Symbols, DOM nodes, classes with methods,
-//     Map, Set, Date, RegExp, Error, Promise, WeakRef
+//     Functions only. `postMessage(fn)` throws "function is not cloneable";
+//     a function nested anywhere in the payload throws the same way.
+//
+//   SILENT DATA LOSS — these do NOT throw, they serialize as {}:
+//     Map, Set, Date, RegExp, Error, Promise, WeakRef, and any class
+//     instance. They fall through to the plain-object branch, which copies
+//     own enumerable string properties only — and those types keep their
+//     contents in internal slots, so the receiver gets an empty object.
+//     Real structured clone would either clone them or throw
+//     DataCloneError; bro does neither. Convert before sending:
+//       [...map]  /  [...set]  /  date.getTime()  /  re.source
+//
+//   SILENT REINTERPRETATION — BigInt64Array and BigUint64Array:
+//     the subtype tag is chosen by constructor name, and anything
+//     unrecognized defaults to Float32Array. A BigInt64Array's bytes arrive
+//     intact but are handed to the receiver as a Float32Array view, so the
+//     values are garbage. Send bigints as a plain Array or as a
+//     Uint8Array of the raw bytes instead.
 //
 // Nesting depth limit: 64 levels.
-// Transfer list must contain only ArrayBuffers.
+// Transfer list may contain ArrayBuffer, Mesh, or ImageBitmap; anything else
+// throws TypeError. A Mesh in the payload MUST be listed or postMessage
+// throws — Mesh has no clone path.
 
 
 // -----------------------------------------------------------------------------
@@ -282,6 +313,9 @@ class MessagePort extends EventTarget {
 // - No importScripts() — worker script is a single file
 // - No nested Workers (cannot create a Worker inside a worker)
 // - No SharedArrayBuffer or Atomics
-// - Message queue capacity: 256 messages per direction.
+// - Message queue capacity: 255 messages per direction (a 256-slot ring with
+//   one slot always left empty to distinguish full from empty).
 //   postMessage() throws if the queue is full.
+// - postMessage() on a worker that has been terminate()d, or that called
+//   self.close(), throws TypeError "Worker is not running".
 // - Worker thread polls at ~1ms intervals when idle

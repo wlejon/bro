@@ -12,21 +12,32 @@
  *   __system.quit         — close the app (sets running=false)
  *   __system.preferences  — open the settings overlay (Graphics/Audio/Input)
  *   __system.inspector    — toggle the DOM inspector panel; item is auto-checked when open
- *   __system.togglePerf   — toggle the perf HUD overlay (same as F8); item is auto-checked when open
+ *   __system.togglePerf   — toggle the perf HUD overlay (same as F8)
+ *
+ * Only the inspector item syncs its checkmark from the engine side. The
+ * __system.togglePerf item is re-checked inside its own menu handler, so
+ * toggling the HUD with F8 leaves the menu item's checkmark stale — mirror it
+ * yourself with updateItem() if you offer both paths.
  *
  * All other action IDs dispatch to handlers registered via bro.menu.on(id, fn).
  * The ESC key is no longer reserved by the engine — apps are free to use it.
  *
+ * bro.menu lives on the primary app realm only. Code in an <iframe> or in a
+ * secondary window (bro.window.open) has no bro.menu, and a secondary window
+ * has no menu bar of its own — the bar belongs to the main window.
+ *
  * Default menu (engine-built):
  *   File  — Quit (Ctrl+Q → __system.quit)
  *   Edit  — Preferences... (__system.preferences)
+ *   View  — Inspector (__system.inspector)
  */
 
 // ── Show / Hide ──────────────────────────────────────────────────────────────
 
 bro.menu.show();
 bro.menu.hide();
-bro.menu.visible;   // read-only boolean
+bro.menu.visible;   // read-only boolean (a non-enumerable accessor — it does
+                    // not show up in Object.keys(bro.menu) or a spread copy)
 
 
 // ── Set the tree (replaces any existing menus) ──────────────────────────────
@@ -53,8 +64,14 @@ bro.menu.set([
 
 // ── Mutate the tree ──────────────────────────────────────────────────────────
 
+// addItem / updateItem / removeItem each return a boolean: true if the target
+// was found and the tree changed, false otherwise (e.g. an unknown id). They
+// do not throw on a miss — check the return value.
+//
 // Add an item. parentId = '' (empty) appends a new root; otherwise appends
-// into that submenu. index is optional (negative = append).
+// into that submenu. index is optional (negative = append). Any non-string
+// parentId or id is coerced to '' rather than rejected, so addItem(null, item)
+// quietly appends a new ROOT instead of erroring.
 bro.menu.addItem('file', { id: 'file.recent', label: 'Recent', items: [
     { id: 'recent.1', label: 'project1.json' },
     { id: 'recent.2', label: 'project2.json' },
@@ -71,9 +88,13 @@ bro.menu.removeItem('recent.2');
 
 // ── Register action handlers ────────────────────────────────────────────────
 
-bro.menu.on('file.open', async () => {
-    const path = await showOpenFileDialog({ filters: 'JSON|json' });
-    if (path) loadProject(path);
+// showOpenFileDialog is synchronous and takes a filter STRING (not an options
+// object — a non-string first argument is silently ignored, showing all
+// files). It returns an array of paths, empty on cancel — so test .length,
+// never truthiness. See docs/dialogs-api.js.
+bro.menu.on('file.open', () => {
+    const files = showOpenFileDialog('JSON|json');
+    if (files.length) loadProject(files[0]);
 });
 
 bro.menu.on('file.save', () => { /* ... */ });

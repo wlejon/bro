@@ -16,7 +16,12 @@
  *       how much sim time accumulates per wall second, so scale 2 runs the
  *       sim at double speed with identical determinism)
  *     - scene-graph animations and AI agents (syncAgents/tickAnimations dt)
- *     - <iframe> sub-documents (timers + rAF; frozen entirely while paused)
+ *     - <iframe> sub-documents (timers + rAF; frozen entirely while paused).
+ *       NOTE: the sub-document is governed by bro.time but cannot see it —
+ *       `bro.time` is installed on the primary app context only, so code
+ *       running inside an <iframe> or a secondary window (bro.window.open)
+ *       has no bro.time at all and can neither read nor change the clock.
+ *       Drive it from the host realm and message the result in.
  *
  *   WALL CLOCK (exempt — the shell never freezes):
  *     - system panels: menu bar, perf HUD, settings overlay, splash
@@ -29,7 +34,10 @@
  *   AUDIO:
  *     - paused = true suspends audio output (broaudio master pause — a
  *       transport freeze: voices, clips, and scheduled events resume exactly
- *       in place on unpause, nothing is dropped)
+ *       in place on unpause, nothing is dropped). With no audio engine
+ *       running (headless, or a build/device with no audio output) this half
+ *       of the pause contract is simply a no-op — everything else about
+ *       pause still applies.
  *     - timescale does NOT touch audio: playback always renders at real
  *       rate, so there is never a pitch shift
  *
@@ -46,7 +54,10 @@ bro.time.scale = 0.5;    // slow motion (half speed)
 bro.time.scale = 2;      // fast-forward (double speed)
 bro.time.scale = 0;      // freeze gameplay time without the pause side-effects
                          // (audio keeps playing, rAF keeps firing)
-// Assignments clamp to [0, 100]; non-finite values are ignored.
+// Assignments clamp to [0, 100]; non-finite values are ignored. The value is
+// first put through ToNumber, so an unparseable string ('fast') becomes NaN
+// and is ignored, but a BigInt or Symbol THROWS TypeError rather than being
+// ignored — validate before assigning if the value comes from user data.
 
 bro.time.paused;         // boolean — global pause, default false
 bro.time.paused = true;  // effective scale 0 + rAF skipped + audio suspended

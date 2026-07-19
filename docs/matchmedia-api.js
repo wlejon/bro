@@ -3,10 +3,18 @@
  *
  * Programmatic media-query evaluation that reuses the exact same evaluator
  * and MediaContext that filter the document's @media blocks (htmlayout), so
- * matchMedia and CSS can never disagree. Each realm — the app document, every
- * <iframe> sub-document, and every system panel — has its own matchMedia
- * evaluating against ITS document's context: an iframe's queries see the
- * iframe's content box, not the host viewport.
+ * matchMedia and CSS can never disagree. Every realm — the app document, every
+ * <iframe> sub-document, every secondary window opened with bro.window.open,
+ * and every system panel — has its own matchMedia evaluating against ITS
+ * document's context: an iframe's queries see the iframe's content box, not
+ * the host viewport.
+ *
+ * KNOWN GAP — secondary windows get .matches but never 'change' events. The
+ * engine's change-delivery pass walks the app context, the iframe realms, and
+ * the system panels; secondary-window host realms are not in that list, so a
+ * MediaQueryList created inside one evaluates correctly on every read and its
+ * listeners simply never fire. Poll .matches there (e.g. from a resize
+ * listener) instead of relying on 'change'.
  *
  * FEATURE COVERAGE — exactly the CSS side's:
  *   - width / height, min-/max- prefixed, and range syntax
@@ -26,8 +34,25 @@
  *   appearance.colorScheme setting or an OS theme flip). Delivery happens on
  *   the main thread AFTER the media-triggered restyle has landed, so
  *   listeners always observe getComputedStyle() results consistent with the
- *   new context. The event is a MediaQueryListEvent-shaped plain object:
- *   { type: 'change', matches, media, target, currentTarget }.
+ *   new context. The event is a MediaQueryListEvent-SHAPED plain object, not
+ *   a real Event: { type: 'change', matches, media, target, currentTarget }
+ *   and nothing else — no preventDefault / stopPropagation / bubbles /
+ *   timeStamp. Its `matches` is the cached flip value that triggered the
+ *   delivery, so it can differ from a live mql.matches read if the context
+ *   changed again inside the handler.
+ *
+ *   Not delivered in secondary windows — see KNOWN GAP above.
+ *
+ *   Listener registration is a minimal surface, not full EventTarget:
+ *     - addEventListener/removeEventListener with fewer than 2 arguments are
+ *       silent no-ops, and the third `options` argument is ignored entirely
+ *       — no once, capture, passive, or signal.
+ *     - only the "change" type is honoured; any other type is dropped.
+ *     - a non-function listener is silently ignored (no TypeError).
+ *     - assigning a non-function to .onchange silently CLEARS the handler
+ *       rather than throwing, so `mql.onchange = someUndefinedVar` quietly
+ *       unsubscribes.
+ *     - registering the same function twice registers it once (spec).
  *
  * LIFETIME
  *   A MediaQueryList with at least one listener (addEventListener /

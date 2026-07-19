@@ -28,10 +28,19 @@
  * Gamepad buttons also participate in the bro.settings action-binding system
  * via `"gamepad:<name>"` binding strings — see docs/settings.md.
  *
- * Headless testing: `gamepadConnect()` / `gamepadDisconnect()` /
- * `gamepadButton()` / `gamepadAxis()` inject a virtual controller at the
- * engine layer, driving this whole surface without hardware — see
- * docs/headless.md.
+ * Headless testing: inject a virtual controller at the engine layer and drive
+ * this whole surface without hardware — see docs/headless.md.
+ *
+ *   gamepadConnect([id])                         -> slot index
+ *   gamepadDisconnect(index)
+ *   gamepadButton(index, button, pressed [, value])
+ *   gamepadAxis(index, axis, value)
+ *
+ * `button` and `axis` take either the W3C index or the SDL name ("south",
+ * "lefttrigger", "leftx", ...). `value` on gamepadButton gives triggers an
+ * analog level, defaulting to pressed ? 1 : 0. The three mutators throw
+ * TypeError ("no virtual gamepad at index N") if that slot is empty or holds
+ * a REAL controller — they only drive pads created by gamepadConnect().
  */
 
 // ── Polling ───────────────────────────────────────────────────────────────────
@@ -57,7 +66,11 @@ navigator.getGamepads();
  * @property {"standard"} mapping - Always the W3C standard layout
  * @property {{pressed: boolean, touched: boolean, value: number}[]} buttons
  *                                 - 17 entries; value is 0..1 (analog for the
- *                                 triggers, 0/1 for digital buttons)
+ *                                 triggers, 0/1 for digital buttons).
+ *                                 `touched` is derived, not sensed: it is
+ *                                 `pressed || value > 0`, so a trigger held
+ *                                 below the 0.1 press threshold reads
+ *                                 touched:true with pressed:false.
  * @property {number[]} axes     - 4 stick axes, each -1..1
  * @property {number}  timestamp - Engine wall-clock ms of the last state change
  * @property {GamepadHapticActuator} vibrationActuator - Rumble control.
@@ -94,21 +107,32 @@ window.addEventListener("gamepaddisconnected", (e) => {
 // ── Rumble ────────────────────────────────────────────────────────────────────
 
 /**
- * Dual-rumble haptics, mapped to SDL_RumbleGamepad.
+ * Rumble haptics, mapped to SDL_RumbleGamepad (+ SDL_RumbleGamepadTriggers).
  *
  * @typedef {Object} GamepadHapticActuator
  * @property {"dual-rumble"} type
+ * @property {("dual-rumble"|"trigger-rumble")[]} effects
+ *   - Always ["dual-rumble", "trigger-rumble"]
  */
 
 /**
- * Start a rumble effect. Only `"dual-rumble"` is supported; startDelay is
- * ignored (the effect starts immediately).
+ * Start a rumble effect. `"dual-rumble"` and `"trigger-rumble"` are both
+ * accepted; any other type throws TypeError. startDelay is ignored (the
+ * effect starts immediately).
  *
- * @param {"dual-rumble"} type
+ * "trigger-rumble" drives the body motors exactly like "dual-rumble" AND the
+ * per-trigger motors from leftTrigger / rightTrigger (Xbox-style pads; others
+ * ignore the trigger part).
+ *
+ * @param {"dual-rumble"|"trigger-rumble"} type
  * @param {Object} [params]
  * @param {number} [params.duration=0]        - Effect length in ms
  * @param {number} [params.strongMagnitude=0] - Low-frequency motor, 0..1
  * @param {number} [params.weakMagnitude=0]   - High-frequency motor, 0..1
+ * @param {number} [params.leftTrigger=0]     - Left trigger motor, 0..1
+ *                                              ("trigger-rumble" only)
+ * @param {number} [params.rightTrigger=0]    - Right trigger motor, 0..1
+ *                                              ("trigger-rumble" only)
  * @returns {Promise<"complete"|"preempted">} Resolves immediately ("preempted"
  *   if the slot is gone); it does not wait out the duration.
  */
@@ -116,8 +140,13 @@ gamepad.vibrationActuator.playEffect("dual-rumble", {
     duration: 200, strongMagnitude: 1.0, weakMagnitude: 0.4,
 });
 
+gamepad.vibrationActuator.playEffect("trigger-rumble", {
+    duration: 120, strongMagnitude: 0.2, weakMagnitude: 0.2,
+    leftTrigger: 0.0, rightTrigger: 1.0,     // recoil in the right trigger
+});
+
 /**
- * Stop any in-progress rumble.
+ * Stop any in-progress rumble — both the body and the trigger motors.
  * @returns {Promise<"complete">}
  */
 gamepad.vibrationActuator.reset();

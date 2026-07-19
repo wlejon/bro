@@ -38,7 +38,23 @@
  * second finger scrolls elsewhere. The capture auto-releases after
  * pointerup / pointercancel; gotpointercapture / lostpointercapture fire on
  * the holder. Capturing an inactive pointerId is a silent no-op (the web
- * throws NotFoundError). Mouse events are never retargeted by capture.
+ * throws NotFoundError). Classic mouse events are never retargeted by
+ * capture — only the pointer aliases are.
+ *
+ * pointercancel is a TOUCH-ONLY event in bro: the mouse path aliases exactly
+ * pointerdown / pointermove / pointerup and never emits one. So a mouse
+ * capture whose pointerup went missing (swallowed by a native dialog, a
+ * window switch) is not ended by a cancel — it self-heals instead on the
+ * next pointermove that arrives with no buttons held, which releases the
+ * capture and fires lostpointercapture. Don't wait for pointercancel to
+ * clean up mouse drag state; clean up on pointerup and on
+ * lostpointercapture.
+ *
+ * setPointerCapture is app-document only. It is refused (returns without
+ * capturing) when the element is not live in the app document, and a capture
+ * is ignored for any event whose hit target belongs to another document — so
+ * elements inside an <iframe> sub-document or a 3D HtmlNode panel cannot
+ * capture a pointer.
  *
  * ── Touch Events ───────────────────────────────────────────────────────────
  *
@@ -55,6 +71,12 @@
  *                   by this very event is already excluded)
  *   targetTouches   the subset that started on this event's target
  *   changedTouches  the contact(s) this event reports
+ *
+ * Touch.force and PointerEvent.pressure DISAGREE at the end of a contact:
+ * pointerup / pointercancel report pressure 0 (per spec), while the Touch
+ * objects on the paired touchend / touchcancel carry the contact's
+ * last-known pressure instead of 0. Read pressure from the pointer stream if
+ * you need the spec value.
  *
  * Touch.identifier equals the contact's pointerId, so the pointer and touch
  * streams correlate 1:1. Touch events always fire at the contact's
@@ -109,7 +131,8 @@ el.addEventListener('pointerdown', (e) => {
 });
 el.addEventListener('pointermove', (e) => { /* per-pointer moves */ });
 el.addEventListener('pointerup', (e) => { /* capture auto-releases after this */ });
-el.addEventListener('pointercancel', (e) => { /* gesture aborted (OS/palm) */ });
+el.addEventListener('pointercancel', (e) => { /* touch only — never fires for the mouse */ });
+el.addEventListener('lostpointercapture', (e) => { /* the reliable mouse-drag cleanup hook */ });
 
 el.setPointerCapture(pointerId);      // route this pointer's events here
 el.releasePointerCapture(pointerId);  // explicit release (holder only)
@@ -193,9 +216,15 @@ el.addEventListener('gestureend', (e) => { /* final scale/rotation */ });
 // move/up/cancel of one contact; distinct concurrent ids are distinct
 // fingers. Coordinates are viewport-relative, like the mouse helpers. See
 // docs/headless.md.
+//
+// Touch is main-window-only: none of the seams take a windowId, and real SDL
+// finger events on a secondary window are dropped rather than routed (the
+// contact table is a single global map with no per-window key). Injected
+// touches always land in the app document.
 
 touchDown(1, 100, 100);        // finger 1 lands (optional 4th arg: pressure 0..1)
-touchMove(1, 140, 100);        // finger 1 slides
+touchMove(1, 140, 100);        // finger 1 slides (also takes the optional
+                               //   4th pressure arg; defaults to 1.0)
 touchDown(2, 300, 200);        // finger 2 lands while 1 is down (non-primary)
                                //   -> also gesturestart (two fingers down)
 touchMove(2, 340, 200);        // -> gesturechange (scale/rotation/centroid)
