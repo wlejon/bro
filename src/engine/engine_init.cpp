@@ -55,6 +55,7 @@
 #include "js/gpu_bindings.h"
 #include "js/text_bindings.h"
 #include "js/diffusion_bindings.h"
+#include "js/worldgen_bindings.h"
 #include "js/lm_bindings.h"
 #include "js/stt_bindings.h"
 #include "js/tts_bindings.h"
@@ -1115,6 +1116,7 @@ void Engine::installCoreBindings(JSContext* ctx) {
     js::installTtsBindings(ctx);
     js::installDiarBindings(ctx);
     js::installRaveBindings(ctx);
+    js::installWorldgenBindings(ctx);
     js::installVisionBindings(ctx);
     js::installTriposplatBindings(ctx);
     js::installMotionBindings(ctx);

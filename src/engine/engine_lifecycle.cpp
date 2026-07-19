@@ -43,6 +43,7 @@
 #include "js/tts_bindings.h"
 #include "js/diar_bindings.h"
 #include "js/rave_bindings.h"
+#include "js/worldgen_bindings.h"
 #include "layout/box.h"
 #include "layout/element_ref_adapter.h"
 #include "layout/skia_text_metrics.h"
@@ -286,6 +287,7 @@ Engine::~Engine() {
         js::cleanupTtsBindings(ctx);
         js::cleanupDiarBindings(ctx);
         js::cleanupRaveBindings(ctx);
+        js::cleanupWorldgenBindings(ctx);
 #endif
 #if BRO_WITH_LM
         js::cleanupLmBindings(ctx);

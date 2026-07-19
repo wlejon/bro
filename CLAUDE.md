@@ -118,6 +118,7 @@ Annotated `.js` files with JSDoc + examples — read the file before using or ch
 | `rave-api.js` | `bro.rave` — RAVE neural audio autoencoder: encode → edit latents → decode |
 | `vision-api.js` | `bro.vision` — SAM, Depth-Anything-V2, DSINE normals, BiRefNet matting, ControlNet annotators |
 | `triposplat-api.js` | `bro.triposplat` — single image → 3D Gaussian splat for `createGaussianSplat` |
+| `worldgen-api.js` | `bro.worldgen` — learned terrain: infinite deterministic elevation in metres (30 m/cell) |
 | `motion-api.js` | `bro.motion` — text-to-motion (G1 skeleton, 25 fps); sync/blocking — run in a Worker |
 | `brokit-api.js` | brokit runtime — Node modules (fs, path, os, child_process) + web globals |
 | `physics-api.js` | `Physics` — Jolt bodies, shapes, raycasts, contacts, characters, vehicles (wheeled/tracked/motorcycle) |
