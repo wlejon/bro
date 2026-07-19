@@ -34,6 +34,7 @@
 #include "layout/key_handle_result.h"
 #include "layout/selection_geometry.h"
 #include "layout/skia_text_metrics.h"
+#include "util/time.h"
 
 #include <cctype>
 
@@ -146,9 +147,12 @@ static bool isSelectionSuppressed(bro::dom::Element* el) {
 static void deleteRangeContents(bro::dom::Document* doc,
                                 bro::dom::Range& r,
                                 bro::dom::Node*& node, int& off) {
+    // Read the caret AFTER the removal: deleteContents() collapses the range
+    // to a position that survives it, whereas the pre-removal start container
+    // is frequently one of the nodes it frees.
+    r.deleteContents();
     node = r.startContainer();
     off = r.startOffset();
-    r.deleteContents();
     if (doc) doc->markDirty();
 }
 
@@ -188,6 +192,58 @@ static void runEditableMutation(bro::dom::Document* doc,
     }
     doc->markDirty();
 }
+
+// Snapshot the state one contenteditable edit needs, then hand it to the
+// host's undo history. Two modes, matching DomUndoStack's two entry shapes:
+//
+//   - text mode (`tn` non-null): the caller knows the edit only rewrites that
+//     one node's data — plain typing at a text caret, a backspace or delete
+//     inside a node. Records a cheap splice that coalesces with its neighbors
+//     exactly as the controls' typing/backspace/delete runs do.
+//
+//   - structural mode (`tn` null): the edit may reshape the tree (Enter,
+//     paste, cut, typing over a selection). Records the host's serialized
+//     children either side of the edit as one Discrete entry.
+//
+// The snapshot is taken when the scope is constructed, so callers construct
+// it INSIDE the edit lambda — after a beforeinput handler has had its say,
+// so script's own mutations aren't folded into the user's undo entry.
+class EditUndoScope {
+public:
+    EditUndoScope(bro::engine::DomUndoHistories* hist, bro::dom::Document* doc,
+                  bro::dom::Element* host, bro::dom::TextNode* tn,
+                  bro::engine::DomUndoStack::Kind kind)
+        : hist_(hist), doc_(doc), host_(host), tn_(tn), kind_(kind) {
+        if (!hist_ || !host_ || !doc_) return;
+        selBefore_ = bro::engine::DomUndoStack::selectionOf(doc_, host_);
+        if (tn_) beforeData_ = tn_->data();
+        else beforeHTML_ = host_->innerHTML();
+    }
+
+    void commit() {
+        if (!hist_ || !host_ || !doc_) return;
+        const auto selAfter = bro::engine::DomUndoStack::selectionOf(doc_, host_);
+        const double now = bro::util::currentTimeMs();
+        auto& stack = hist_->forHost(doc_, host_);
+        if (tn_) {
+            stack.recordTextEdit(host_, tn_, beforeData_, tn_->data(),
+                                 selBefore_, selAfter, kind_, now);
+        } else {
+            stack.recordStructural(host_, beforeHTML_, host_->innerHTML(),
+                                   selBefore_, selAfter, now);
+        }
+    }
+
+private:
+    bro::engine::DomUndoHistories* hist_;
+    bro::dom::Document* doc_;
+    bro::dom::Element* host_;
+    bro::dom::TextNode* tn_;
+    bro::engine::DomUndoStack::Kind kind_;
+    std::string beforeData_;
+    std::string beforeHTML_;
+    bro::engine::DomUndoStack::Sel selBefore_;
+};
 
 // Resolve the Selection caret to a (textNode, byteOffset) insertion position,
 // deleting any selected content first (typing semantics). When the caret sits
@@ -1777,18 +1833,24 @@ bool Engine::editableCompositionUpdate(const std::string& text, int cursorCp,
     if (!host) return false;
 
     // compositionstart.data is the text the composition replaces — capture it
-    // before the caret resolution deletes the selection. NOTE: unlike the
-    // controls (which restore their whole pre-composition value on cancel), a
-    // canceled contenteditable composition does not resurrect the replaced
-    // selection — the deletion happened at compositionstart, and restoring
-    // arbitrary DOM structure would need a tree snapshot.
+    // before the caret resolution deletes the selection.
     if (!sel->isCollapsed()) replacedSel = sel->toString();
+
+    // Snapshot the host before the caret resolution deletes anything. This is
+    // what a cancel restores (resurrecting a selection the composition
+    // replaced, as the controls do by restoring their pre-composition value)
+    // and what a commit records as its single undo entry.
+    const std::string hostBefore = host->innerHTML();
+    const auto compSelBefore = DomUndoStack::selectionOf(document_.get(), host);
 
     int off = 0;
     bool created = false;
     auto* tn = selectionCaretTextPosition(document_.get(), off, created);
     if (!tn) return false;
 
+    editComp_.hostBefore = hostBefore;
+    editComp_.selBefore = compSelBefore;
+    editComp_.replacedSelection = !replacedSel.empty();
     editComp_.active = true;
     editComp_.node.assign(document_.get(), tn);
     editComp_.host.assign(document_.get(), host);
@@ -1804,7 +1866,7 @@ bool Engine::editableCompositionUpdate(const std::string& text, int cursorCp,
 }
 
 bool Engine::editableCompositionCommit(const std::string& text,
-                                       dom::Element*& hostOut) {
+                                       dom::Element*& hostOut, bool cancel) {
     hostOut = nullptr;
     if (!editComp_.active) return false;
     auto* host = editComp_.host.get();
@@ -1813,10 +1875,30 @@ bool Engine::editableCompositionCommit(const std::string& text,
     const int start = editComp_.start;
     const int length = editComp_.length;
     const bool createdNode = editComp_.createdNode;
+    const std::string hostBefore = editComp_.hostBefore;
+    const auto selBefore = editComp_.selBefore;
+    const bool replacedSelection = editComp_.replacedSelection;
     editComp_ = {};
 
-    // ONE coherent splice: preedit range → committed text (so a future DOM
-    // undo model can record it as a single edit).
+    // A canceled composition that had replaced a selection must resurrect it
+    // — the deletion happened back at compositionstart, so undoing just the
+    // preedit splice is not enough. Restoring the host's pre-composition
+    // serialization puts the whole replaced range back, matching the controls
+    // (which restore their pre-composition value wholesale). Only taken when
+    // a selection was actually replaced: the common case rewrites nothing but
+    // the preedit bytes, and re-parsing the host there would needlessly
+    // destroy every node in it.
+    if (cancel && replacedSelection && host) {
+        host->setInnerHTML(hostBefore);
+        host->markStructureDirty();
+        DomUndoStack::restoreSelection(document_.get(), host, selBefore);
+        document_->markDirty();
+        hostOut = host;
+        return true;
+    }
+
+    // ONE coherent splice: preedit range → committed text, recorded below as
+    // a single discrete undo entry.
     tn->replaceData(static_cast<size_t>(start), static_cast<size_t>(length),
                     text);
     auto* sel = document_->selection();
@@ -1840,13 +1922,24 @@ bool Engine::editableCompositionCommit(const std::string& text,
     } else if (sel) {
         sel->collapse(tn, start + static_cast<int>(text.size()));
     }
+
+    // One discrete entry spanning pre-composition → committed, so a single
+    // Ctrl+Z removes the whole committed run. A cancel records nothing: it
+    // leaves the host as it found it.
+    if (!cancel && host) {
+        editUndo_.forHost(document_.get(), host)
+            .recordStructural(host, hostBefore, host->innerHTML(), selBefore,
+                              DomUndoStack::selectionOf(document_.get(), host),
+                              util::currentTimeMs());
+    }
+
     document_->markDirty();
     hostOut = host;
     return true;
 }
 
 bool Engine::editableCompositionCancel(dom::Element*& hostOut) {
-    return editableCompositionCommit("", hostOut);
+    return editableCompositionCommit("", hostOut, /*cancel=*/true);
 }
 
 void Engine::dispatchCompositionEvent(dom::Element* el, const char* type,
@@ -2240,9 +2333,17 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                     if (sel && sel->rangeCount() > 0) {
                         auto* fn = sel->focusNode();
                         if (fn && inEditableHost(fn)) {
+                            auto* host = editableHostOf(fn);
                             runEditableMutation(document_.get(), jsRuntime_.get(), fn,
                                 "insertFromPaste", text,
-                                [&] { selectionInsertText(document_.get(), text); });
+                                [&] {
+                                    // A paste always stands alone, and may
+                                    // replace a multi-node selection.
+                                    EditUndoScope undo(&editUndo_, document_.get(), host,
+                                                       nullptr, DomUndoStack::Kind::Discrete);
+                                    selectionInsertText(document_.get(), text);
+                                    undo.commit();
+                                });
                             uiDirty_ = true;
                         }
                     }
@@ -2316,14 +2417,18 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                     if (sel && sel->rangeCount() > 0 && !sel->isCollapsed()) {
                         auto* fn = sel->focusNode();
                         if (fn && inEditableHost(fn)) {
+                            auto* host = editableHostOf(fn);
                             runEditableMutation(document_.get(), jsRuntime_.get(), fn,
                                 "deleteByCut", "",
                                 [&] {
+                                    EditUndoScope undo(&editUndo_, document_.get(), host,
+                                                       nullptr, DomUndoStack::Kind::Discrete);
                                     auto* range = sel->getRangeAt(0);
                                     if (!range) return;
                                     dom::Node* after = nullptr; int afterOff = 0;
                                     deleteRangeContents(document_.get(), *range, after, afterOff);
                                     if (after) sel->collapse(after, afterOff);
+                                    undo.commit();
                                 });
                             uiDirty_ = true;
                         }
@@ -2384,7 +2489,29 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             // Only fires when the focus endpoint sits in an editable host.
             // -----------------------------------------------------------
             bool editable = focusN && inEditableHost(focusN);
-            if (editable && (keycode == SDLK_BACKSPACE || keycode == SDLK_DELETE)) {
+            dom::Element* editHost = editable ? editableHostOf(focusN) : nullptr;
+
+            // Undo / redo, mirroring the controls: primary+Z undoes,
+            // primary+Y or primary+shift+Z redoes. Handled before the editing
+            // branches (and returning early) so the recording sites below
+            // never see a history move as a fresh edit.
+            if (editable && ctrl && (keycode == SDLK_Z || keycode == SDLK_Y)) {
+                const bool isRedo = (keycode == SDLK_Y) || shift;
+                // find(), not forHost(): asking whether an untouched host can
+                // undo must not mint a history for it.
+                auto* stack = editUndo_.find(editHost);
+                if (stack) {
+                    const char* inputType = isRedo ? "historyRedo" : "historyUndo";
+                    runEditableMutation(document_.get(), jsRuntime_.get(), focusN,
+                        inputType, "",
+                        [&] {
+                            if (isRedo) stack->redo(document_.get(), editHost);
+                            else stack->undo(document_.get(), editHost);
+                        });
+                    uiDirty_ = true;
+                }
+                handled = true;
+            } else if (editable && (keycode == SDLK_BACKSPACE || keycode == SDLK_DELETE)) {
                 std::string inputType = (keycode == SDLK_BACKSPACE)
                     ? "deleteContentBackward" : "deleteContentForward";
                 runEditableMutation(document_.get(), jsRuntime_.get(), focusN,
@@ -2393,22 +2520,34 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                         auto* range = sel->getRangeAt(0);
                         if (!range) return;
                         if (!range->collapsed()) {
+                            // A selection delete can span nodes — structural.
+                            EditUndoScope undo(&editUndo_, document_.get(), editHost,
+                                               nullptr, DomUndoStack::Kind::Discrete);
                             dom::Node* after = nullptr; int afterOff = 0;
                             deleteRangeContents(document_.get(), *range, after, afterOff);
                             if (after) sel->collapse(after, afterOff);
+                            undo.commit();
                             return;
                         }
                         // Collapsed: delete one character backward/forward
-                        // within the current text node when possible.
+                        // within the current text node when possible. That is
+                        // confined to one node's data, so it records as a
+                        // mergeable splice and consecutive presses coalesce.
                         if (focusText) {
                             int len = static_cast<int>(focusText->length());
-                            if (keycode == SDLK_BACKSPACE && focusO > 0) {
+                            const bool back = (keycode == SDLK_BACKSPACE);
+                            EditUndoScope undo(&editUndo_, document_.get(), editHost,
+                                               focusText,
+                                               back ? DomUndoStack::Kind::Backspace
+                                                    : DomUndoStack::Kind::DeleteForward);
+                            if (back && focusO > 0) {
                                 focusText->deleteData(focusO - 1, 1);
                                 sel->collapse(focusText, focusO - 1);
-                            } else if (keycode == SDLK_DELETE && focusO < len) {
+                            } else if (!back && focusO < len) {
                                 focusText->deleteData(focusO, 1);
                                 sel->collapse(focusText, focusO);
                             }
+                            undo.commit();
                         }
                     });
                 handled = true;
@@ -2418,6 +2557,10 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                 runEditableMutation(document_.get(), jsRuntime_.get(), focusN,
                     "insertLineBreak", "\n",
                     [&] {
+                        // Enter inserts an element and splits a text node —
+                        // always structural, always its own entry.
+                        EditUndoScope undo(&editUndo_, document_.get(), editHost,
+                                           nullptr, DomUndoStack::Kind::Discrete);
                         auto* range = sel->getRangeAt(0);
                         if (!range) return;
                         if (!range->collapsed()) {
@@ -2441,6 +2584,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                                 }
                             }
                         }
+                        undo.commit();
                     });
                 handled = true;
             } else if (ctrl && keycode == SDLK_A) {
@@ -2617,9 +2761,41 @@ void Engine::handleTextInput(const std::string& text) {
     auto* focusNode = sel->focusNode();
     if (!focusNode || !inEditableHost(focusNode)) return;
 
+    auto* host = editableHostOf(focusNode);
     runEditableMutation(document_.get(), jsRuntime_.get(), focusNode,
                         "insertText", text,
-                        [&] { selectionInsertText(document_.get(), text); });
+                        [&] {
+                            auto* r = sel->getRangeAt(0);
+                            if (!r) return;
+                            if (!r->collapsed()) {
+                                // Typing over a selection replaces a range
+                                // that can span nodes, and stands alone —
+                                // the same rule the controls apply.
+                                EditUndoScope undo(&editUndo_, document_.get(), host,
+                                                   nullptr, DomUndoStack::Kind::Discrete);
+                                selectionInsertText(document_.get(), text);
+                                undo.commit();
+                                return;
+                            }
+                            // Collapsed caret: resolve it to a text node
+                            // BEFORE opening the scope. Minting an empty text
+                            // node at an element boundary is not itself an
+                            // edit (an empty text node serializes to nothing),
+                            // so doing it first lets every plain keystroke
+                            // record the same cheap splice — and a run
+                            // coalesces whether or not the host started empty.
+                            int off = 0;
+                            bool created = false;
+                            auto* tn = selectionCaretTextPosition(document_.get(),
+                                                                  off, created);
+                            if (!tn) return;
+                            EditUndoScope undo(&editUndo_, document_.get(), host, tn,
+                                               DomUndoStack::Kind::Typing);
+                            tn->insertData(static_cast<size_t>(off), text);
+                            document_->selection()->collapse(
+                                tn, off + static_cast<int>(text.size()));
+                            undo.commit();
+                        });
     uiDirty_ = true;
 }
 
@@ -2985,8 +3161,27 @@ void Engine::simulatePaste(const std::string& text) {
         if (r.handled) {
             applyKeyResult(activeEl, r);
             uiDirty_ = true;
+            return;
         }
     }
+
+    // No form field took it — fall through to a contenteditable selection,
+    // the same way the real Ctrl+V path does.
+    if (pasteEvt.defaultPrevented() || text.empty()) return;
+    auto* sel = document_->selection();
+    if (!sel || sel->rangeCount() == 0) return;
+    auto* fn = sel->focusNode();
+    auto* host = fn ? editableHostOf(fn) : nullptr;
+    if (!host) return;
+    runEditableMutation(document_.get(), jsRuntime_.get(), fn,
+        "insertFromPaste", text,
+        [&] {
+            EditUndoScope undo(&editUndo_, document_.get(), host, nullptr,
+                               DomUndoStack::Kind::Discrete);
+            selectionInsertText(document_.get(), text);
+            undo.commit();
+        });
+    uiDirty_ = true;
 }
 
 std::string Engine::simulateCopy() {
@@ -3022,12 +3217,25 @@ std::string Engine::simulateCut() {
 
     // Cuts the selected range only — see simulateCopy. Mirrors Ctrl+X.
     std::string text;
+    bool fromFormField = false;
     if (activeEl) {
         if (auto* input = getElInput(activeEl); input && input->isFocused()) {
             text = input->selectedText();
+            fromFormField = true;
         } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
             text = textarea->selectedText();
+            fromFormField = true;
         }
+    }
+    // No focused form field: a DOM Selection inside a contenteditable host
+    // cuts instead, as it does on the real Ctrl+X path.
+    auto* sel = document_->selection();
+    dom::Element* ceHost = nullptr;
+    dom::Node* ceFocus = nullptr;
+    if (!fromFormField && sel && sel->rangeCount() > 0 && !sel->isCollapsed()) {
+        ceFocus = sel->focusNode();
+        ceHost = ceFocus ? editableHostOf(ceFocus) : nullptr;
+        if (ceHost) text = sel->toString();
     }
 
     dom::ClipboardEvent clipEvt("cut", true, true);
@@ -3050,6 +3258,22 @@ std::string Engine::simulateCut() {
             if (activeEl->document()) activeEl->document()->markDirty();
             uiDirty_ = true;
         }
+    }
+
+    if (!clipEvt.defaultPrevented() && !text.empty() && ceHost) {
+        runEditableMutation(document_.get(), jsRuntime_.get(), ceFocus,
+            "deleteByCut", "",
+            [&] {
+                EditUndoScope undo(&editUndo_, document_.get(), ceHost, nullptr,
+                                   DomUndoStack::Kind::Discrete);
+                auto* range = sel->getRangeAt(0);
+                if (!range) return;
+                dom::Node* after = nullptr; int afterOff = 0;
+                deleteRangeContents(document_.get(), *range, after, afterOff);
+                if (after) sel->collapse(after, afterOff);
+                undo.commit();
+            });
+        uiDirty_ = true;
     }
 
     return text;

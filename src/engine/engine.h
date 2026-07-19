@@ -3,6 +3,7 @@
 #include "engine/app_loader.h"
 #include "util/asset_mounts.h"
 #include "engine/css_transitions.h"
+#include "engine/dom_undo.h"
 #include "engine/web_animations.h"
 #if BRO_WITH_3D
 #include "engine/gizmo.h"  // GizmoManager (3D-only; pulls scene::MeshNode)
@@ -892,8 +893,10 @@ private:
                                    dom::Element*& hostOut);
     /// Finalize the preedit as `text` (one coherent splice). False = no
     /// contenteditable composition in progress (or its node died).
+    // `cancel` distinguishes an abandoned composition (restore the host,
+    // record no undo entry) from a real commit (one discrete entry).
     bool editableCompositionCommit(const std::string& text,
-                                   dom::Element*& hostOut);
+                                   dom::Element*& hostOut, bool cancel = false);
     /// Remove the preedit, restoring the pre-composition DOM. A text node
     /// created for the composition is removed again.
     bool editableCompositionCancel(dom::Element*& hostOut);
@@ -1813,10 +1816,11 @@ private:
     // carry a TextComposition of their own), so the engine holds the state:
     // the preedit lives provisionally in `node`'s data at
     // [start, start + length) and is replaced on every TEXT_EDITING update,
-    // finalized by TEXT_INPUT, removed by cancel. NOTE: contenteditable has
-    // no undo model in bro, so unlike the controls a committed composition
-    // records no undo entry — the commit is one coherent replaceData splice
-    // so a future DOM undo system can treat it as a single edit.
+    // finalized by TEXT_INPUT, removed by cancel. Like the controls, the
+    // commit records ONE discrete undo entry spanning the pre-composition
+    // state → the committed state, and a cancel records none — `hostBefore`
+    // is the pre-composition snapshot both of those need, and is also what
+    // lets a cancel resurrect a selection the composition replaced.
     struct EditableComposition {
         bool active = false;
         dom::TextNodeHandle node;   // text node carrying the preedit
@@ -1825,8 +1829,14 @@ private:
         int start = 0;              // byte offset of the preedit in `node`
         int length = 0;             // byte length of the current preedit
         std::string preedit;        // current preedit text
+        std::string hostBefore;     // host innerHTML before the composition
+        DomUndoStack::Sel selBefore;// selection before the composition
+        bool replacedSelection = false;  // composition started over a selection
     };
     EditableComposition editComp_;
+
+    // Undo/redo histories for contenteditable hosts, keyed by host element.
+    DomUndoHistories editUndo_;
 
     // Viewport scrolling
     float scrollY_ = 0.0f;
