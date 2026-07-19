@@ -6,7 +6,7 @@
 //   - Cook-Torrance BRDF (GGX distribution, Schlick Fresnel, Smith geometry)
 //   - Up to 32 dynamic lights per frame (directional / point / spot)
 //   - Shadow atlas: CSM for directional, 6-face cube for point, spot tiles
-//   - Per-mesh PBR material: baseColor, metallic, roughness, emissive, AND
+//   - Per-mesh PBR material: color, metallic, roughness, emissive, AND
 //     normal / metallic-roughness / occlusion textures
 //   - Image-based lighting (HDR env → irradiance + GGX prefilter + BRDF LUT)
 //   - HDR intermediate render target (RGBA16F) + tonemap pass (ACES by default)
@@ -75,11 +75,13 @@ lamp.range = 10;
 //
 // Mesh material uses the glTF metallic/roughness model:
 //
-//   baseColor   — CSS string or [r,g,b,a]; tinted albedo for dielectrics,
-//                 reflectance tint (F0) for metals.
+//   color       — CSS string or [r,g,b] / [r,g,b,a]; tinted albedo for
+//                 dielectrics, reflectance tint (F0) for metals. (The option
+//                 key is `color`; the shader calls the resulting value
+//                 baseColor.)
 //   metallic    — 0 = dielectric (wood, plastic, skin), 1 = metal.
-//   roughness   — 0 = mirror, 1 = fully diffuse. Values below ~0.05 are
-//                 clamped in the shader to avoid specular singularities.
+//   roughness   — 0 = mirror, 1 = fully diffuse. Clamped to a 0.04 floor in
+//                 the shader to avoid specular singularities.
 //   emissive    — scalar multiplier on emissiveColor; 0 disables emission.
 //   emissiveColor — linear RGB tint for self-lit surfaces. Defaults to the
 //                 base color when `emissive > 0` is set without a color.
@@ -321,7 +323,7 @@ scene.setEnvironment(null);
 // -----------------------------------------------------------------------------
 //
 // Each LightNode can opt into shadow casting. Shadows render into a single
-// shared depth atlas (default 4096^2, 16 tiles); the BRDF samples it with
+// shared depth atlas (default 8192^2, 16 tiles); the BRDF samples it with
 // hardware PCF (default 3x3). All three light kinds are supported:
 //
 //   directional → 1-4 cascades (CSM), tightly fit per camera-frustum slice
@@ -350,8 +352,11 @@ scene.setEnvironment(null);
 //
 // Global controls:
 //
-//   scene.setShadowQuality(atlasSize, pcfTaps)
+//   scene.setShadowQuality({ atlasSize, pcfTaps })
+//     Takes ONE options object — a positional call is silently ignored.
 //     atlasSize: 1024 / 2048 / 4096 / 8192 (square depth texture side).
+//                Engine default is 8192; omitting the key in a call you do
+//                make falls back to 4096, so pass it explicitly.
 //     pcfTaps: 1 (single sample, hard edges) or 3 (3x3 kernel, default).
 //
 // Static shadow-tile cache (default ON):
@@ -398,7 +403,8 @@ scene.setEnvironment(null);
 //                                    range:8, intensity:30 });
 //   lamp.castsShadow = true;
 //
-//   scene.setShadowQuality(2048, 3);   // smaller atlas if VRAM is tight
+//   scene.setShadowQuality({ atlasSize: 2048, pcfTaps: 3 });  // smaller atlas
+//                                                             // if VRAM is tight
 
 
 // -----------------------------------------------------------------------------

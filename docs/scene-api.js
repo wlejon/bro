@@ -10,8 +10,9 @@
 //
 // The scene graph supports 2D shapes, sprites, 3D meshes (via bromesh), and
 // physics bodies (via Jolt). Nodes form a parent-child hierarchy rooted at
-// scene.root. Rendering happens automatically each frame for visible nodes,
-// or can be triggered manually via scene.render().
+// scene.root. Rendering happens automatically each frame for visible nodes —
+// there is no manual render() entry point; the only JS-driven render is
+// captureFrame(), which renders once off-screen and hands back pixels.
 //
 // =============================================================================
 
@@ -95,6 +96,7 @@ class SceneGraph {
    *            splatDrawn:number, splatCulled:number,
    *            particlesDrawn:number, particlesCulled:number,
    *            billboardsDrawn:number, billboardsCulled:number,
+   *            decalsDrawn:number, decalsCulled:number,
    *            shadowDrawn:number, shadowCulled:number,
    *            shadowTilesTotal:number, shadowTilesRendered:number,
    *            shadowTilesCached:number}}
@@ -442,8 +444,43 @@ class SceneGraph {
    * @param {Object} [opts.material] - {metallic, roughness} nested form
    * @param {boolean} [opts.twoSided=false] - disable backface culling (leaves, fabric)
    * @param {number} [opts.subsurface=0] - leaf-translucency wrap term [0..1]; takes effect when twoSided is true
+   * @param {boolean} [opts.unlit=false] - skip lighting entirely and output
+   *   baseColor (x texture x vertex color). Use for UI/gizmo/debug geometry
+   *   and emissive-look surfaces. A custom shader suppresses unlit — see the
+   *   custom-shader section for the exact contract.
+   * @param {number} [opts.alphaCutoff=0] - alpha test: fragments whose final
+   *   alpha is below this `discard`. 0 disables the test. Leaf cards and
+   *   other cutout textures want ~0.5.
+   * @param {string} [opts.drawMode="triangles"] - "lines"/"line" switches to
+   *   GL_LINES (indices are endpoint PAIRS, not triangles) and flips the node
+   *   to unlit + non-shadow-casting. Explicit `unlit`/`castsShadow` still win.
+   * @param {number} [opts.lineWidth] - GL line width for drawMode 'lines'
+   *   (driver-clamped; many drivers only honour 1.0).
+   * @param {boolean|number} [opts.wind] - opt into global wind sway
+   *   (scene.setWind). true = 1.0, or pass a [0,1] scalar as the whole-mesh
+   *   multiplier. Per-vertex bend comes from vertex-color R.
+   * @param {boolean} [opts.vertexColorTint] - whether the per-vertex color
+   *   stream tints albedo. Unset = auto (tints iff a color buffer exists).
+   *   Pass false to keep a color buffer purely as the wind-bend channel, so
+   *   foliage sways without being washed by the bend gradient.
+   * @param {number|number[]} [opts.depthBias] - polygon offset. A number is
+   *   `units`; [factor, units] sets both. Nudges coplanar geometry (decal-ish
+   *   overlays, ground markings) out of z-fighting.
+   * @param {boolean} [opts.transfer=false] - move the Mesh's buffers into the
+   *   node instead of copying them (`data`/`mesh` paths). Faster and
+   *   allocation-free for big meshes, but the source Mesh is left empty —
+   *   only pass it when you're done with the Mesh.
+   * @param {Object} [opts.texture] - base-color (albedo) map, as
+   *   { width, height, data: Uint8Array } RGBA8. The node owns a copy.
+   * @param {Object} [opts.normalTexture] - tangent-space normal map, same shape
+   * @param {Object} [opts.metallicRoughnessTexture] - glTF packed map (G =
+   *   roughness, B = metallic), same shape
+   * @param {Object} [opts.occlusionTexture] - ambient-occlusion map, same shape
+   * @param {Object} [opts.emissiveTexture] - emissive map, same shape
    * @param {Float32Array} [opts.positions] - raw vertex positions (xyz, stride 3)
    * @param {Float32Array} [opts.normals] - raw vertex normals (xyz, stride 3)
+   * @param {Float32Array} [opts.colors] - raw per-vertex colors (raw-data path
+   *   only); doubles as the wind-bend channel via its R component
    * @param {Uint32Array} [opts.indices] - raw triangle indices
    * @param {boolean} [opts.recomputeNormals=false] - raw-data path only:
    *   derive smooth normals from positions+indices when no normals are given
@@ -516,6 +553,98 @@ class SceneGraph {
    *          .skinReady, and .setSkinningMatrices(mats)
    */
   createSkinnedMesh(opts) {}
+
+  /**
+   * Create an instanced-mesh node and add it to the root: N copies of ONE
+   * mesh sharing ONE material, drawn in a single glDrawElementsInstanced
+   * call. This is the answer for forests, crowds, debris, bullet swarms,
+   * grass — anything where a per-node SceneNode per copy would drown the
+   * scene graph. Frustum culling is per-node, not per-instance: the whole
+   * batch is drawn or skipped together (cullStats() reports it as
+   * instancedDrawn/instancedCulled), so split very large spreads into a few
+   * spatially-coherent nodes rather than one global batch.
+   *
+   * Per-instance state is a 4x3 affine model transform plus an RGBA tint,
+   * packed as 16 floats in ROW-major order:
+   *
+   *   [ m00 m01 m02 tx ]     rows 0-2: the 3x3 basis (rotation x scale)
+   *   [ m10 m11 m12 ty ]               with the translation in the last
+   *   [ m20 m21 m22 tz ]               column
+   *   [ r   g   b   a  ]     row 3: per-instance color
+   *
+   * The instance color multiplies the material base color in the fragment
+   * shader. When an atlas grid is set, alpha instead carries the variant
+   * index (see setAtlasGrid). The node's own transform composes on top, so
+   * you can move/rotate the whole batch without touching the buffer.
+   *
+   * Building the buffer by hand is fiddly, so the common path is
+   * `instancesFromTransforms`: 9 floats per instance —
+   * (px, py, pz, qx, qy, qz, qw, scale, variantIndex) — converted internally
+   * to the canonical layout, with RGB defaulting to white and variantIndex
+   * packed into alpha as 0..255 → 0..1. Tint individual instances afterwards
+   * with updateInstance().
+   *
+   * @example
+   *   // 5000 trees from a single mesh, one draw call:
+   *   const xf = new Float32Array(5000 * 9);
+   *   for (let i = 0, o = 0; i < 5000; i++, o += 9) {
+   *     xf[o] = rand(-200, 200); xf[o+1] = 0; xf[o+2] = rand(-200, 200);
+   *     const a = Math.random() * Math.PI * 2;          // yaw only
+   *     xf[o+3] = 0; xf[o+4] = Math.sin(a/2); xf[o+5] = 0; xf[o+6] = Math.cos(a/2);
+   *     xf[o+7] = rand(0.8, 1.4);                       // scale
+   *     xf[o+8] = (i % 4);                              // atlas variant
+   *   }
+   *   const trees = scene.createInstancedMesh({
+   *     mesh: Mesh.loadGLTF('tree.glb').meshes[0],
+   *     instancesFromTransforms: xf,
+   *     texture: leafAtlas, atlasCols: 2, atlasRows: 2,
+   *     alphaCutoff: 0.5, doubleSided: true,
+   *     roughness: 0.9,
+   *   });
+   *   trees.instanceCount;  // 5000
+   *
+   * @param {Object} [opts]
+   * @param {Mesh} opts.mesh - the Mesh instance to replicate (a Mesh handle,
+   *   NOT a primitive name — there is no named-primitive path here)
+   * @param {Float32Array} [opts.instances] - canonical buffer, 16 floats per
+   *   instance; length/16 sets the count
+   * @param {Float32Array} [opts.instancesFromTransforms] - convenience
+   *   buffer, 9 floats per instance (ignored if `instances` is given)
+   * @param {boolean} [opts.transfer=false] - move the Mesh's buffers in
+   *   instead of copying (leaves the source Mesh empty)
+   * @param {string} [opts.name]
+   * @param {number} [opts.x=0] - batch-node position X
+   * @param {number} [opts.y=0] - batch-node position Y
+   * @param {number} [opts.z=0] - batch-node position Z
+   * @param {string|number[]} [opts.color] - material base color; the
+   *   per-instance tint multiplies it
+   * @param {number} [opts.metallic] - PBR metallic
+   * @param {number} [opts.roughness] - PBR roughness
+   * @param {number} [opts.emissive=0] - emissive intensity
+   * @param {string|number[]} [opts.emissiveColor] - emissive tint (defaults
+   *   to the base color when emissive > 0)
+   * @param {boolean} [opts.unlit] - skip lighting; suppressed by a custom shader
+   * @param {number} [opts.alphaCutoff] - alpha-test threshold (0 = off);
+   *   cutout foliage wants ~0.5
+   * @param {boolean} [opts.doubleSided] - disable backface culling, so the
+   *   back of a leaf card is visible too
+   * @param {boolean} [opts.vertexColorTint] - whether the mesh's vertex-color
+   *   stream tints albedo
+   * @param {boolean} [opts.castsShadow] - include the batch in shadow passes
+   * @param {boolean} [opts.receivesShadow] - sample shadows when shading
+   * @param {number} [opts.atlasCols=1] - texture-atlas grid columns
+   * @param {number} [opts.atlasRows=1] - texture-atlas grid rows; with a grid
+   *   set, each instance's alpha selects its atlas cell (see setAtlasGrid)
+   * @param {Object} [opts.texture] - base-color map, { width, height,
+   *   data: Uint8Array } RGBA8 — same shape as createMesh
+   * @param {Object} [opts.normalTexture] - normal map, same shape
+   * @param {Object} [opts.metallicRoughnessTexture] - packed MR map, same shape
+   * @param {Object} [opts.occlusionTexture] - AO map, same shape
+   * @param {Object} [opts.emissiveTexture] - emissive map, same shape
+   * @returns {SceneNode} - .type === 'instancedMesh'; see the
+   *   "Instanced meshes" section on SceneNode for the runtime surface
+   */
+  createInstancedMesh(opts) {}
 
   /**
    * Create a 3D Gaussian Splat node and add it to the root. Renders a splat
@@ -733,7 +862,10 @@ class SceneGraph {
    * @param {Object} [opts]
    * @param {string} [opts.name]
    * @param {number} [opts.body] - Jolt BodyID (raw index+sequence number)
-   * @param {number} [opts.pixelsPerUnit=100] - scale factor for physics-to-pixel conversion
+   * @param {number} [opts.pixelsPerUnit=1] - scale factor for physics-to-scene
+   *   conversion: the body's position is multiplied by this on every sync.
+   *   Leave at 1 for a 3D scene in physics units; set it to e.g. 50 for a 2D
+   *   scene laid out in pixels against a metres-based physics world.
    * @param {boolean} [opts.autoSync=true] - automatically sync transform from physics each frame
    * @returns {SceneNode}
    */
@@ -761,7 +893,11 @@ class SceneGraph {
    * @param {number} [opts.size=10] - view height in world units (orthographic only)
    * @param {number} [opts.near=0.1] - near clipping plane
    * @param {number} [opts.far=1000] - far clipping plane
-   * @param {number} [opts.aspect] - width/height ratio (defaults to 4/3)
+   * @param {number} [opts.aspect] - width/height ratio. Omit it (or pass <= 0)
+   *   and the projection is built from the current canvas size AND flagged to
+   *   auto-follow future canvas resizes — normally what you want. An explicit
+   *   aspect pins the projection and disables the follow behavior. With no
+   *   canvas size yet, the omitted case falls back to 4/3.
    * @param {number[]} [opts.position=[0,5,-10]] - camera position [x, y, z]
    * @param {number[]} [opts.target=[0,0,0]] - look-at target [x, y, z]
    * @param {number[]} [opts.up=[0,1,0]] - up vector [x, y, z]
@@ -1245,7 +1381,18 @@ class SceneGraph {
    */
   destroyNode(node) {}
 
-  /** Sync all physics node transforms from the physics world. */
+  /**
+   * Pull physics-node transforms from the physics world (position scaled by
+   * each node's `pixelsPerUnit`, rotation copied as-is). Nodes with
+   * `autoSync === false` are SKIPPED — this is the same pass the engine runs,
+   * not an override, so a manually-driven node stays manual.
+   *
+   * The engine already calls this on every scene graph each frame, right
+   * after the physics step and before animations/tweens tick, so you rarely
+   * need it by hand — reach for it after stepping physics yourself, or to
+   * re-read transforms mid-frame before a raycast. With interpolation on
+   * (Physics.setInterpolation) the transform read is the interpolated one.
+   */
   syncPhysics() {}
 
 
@@ -1306,6 +1453,21 @@ class SceneNode {
   get name() {}
   set name(value) {}
 
+  /**
+   * Node type as a string (read-only): 'group' | 'mesh' | 'skinnedMesh' |
+   * 'instancedMesh' | 'light' | 'shape' | 'sprite' | 'physics' | 'html' |
+   * 'gaussianSplat' | 'particles' | 'particles3d' | 'camera' | 'decal' |
+   * 'reflectionProbe'. Use it to branch before touching a type-specific
+   * property, since those silently no-op on the wrong type.
+   */
+  get type() {}
+
+  /**
+   * Light subtype (read-only): 'directional' | 'point' | 'spot'. undefined on
+   * every non-light node. See docs/lighting-api.js.
+   */
+  get kind() {}
+
   /** Whether this node is visible. */
   get visible() {}
   set visible(value) {}
@@ -1345,6 +1507,15 @@ class SceneNode {
 
   // --- Transform (all node types) -------------------------------------------
 
+  /**
+   * Whole-node position as [x, y, z]. Reads back a fresh array; assign a
+   * 3-element array to set all axes in one write. Equivalent to setting
+   * x/y/z individually.
+   * @type {number[]}
+   */
+  get position() {}
+  set position(value) {}
+
   /** Position X. */
   get x() {}
   set x(value) {}
@@ -1372,6 +1543,16 @@ class SceneNode {
   /** Rotation around Z axis in radians. */
   get rotationZ() {}
   set rotationZ(radians) {}
+
+  /**
+   * Orientation as an [x, y, z, w] quaternion. Unlike rotationX/Y/Z — which
+   * round-trip through Euler angles on every set — this writes the node
+   * orientation atomically, so it's the correct channel for arbitrary
+   * rotations (6DOF cameras, port-to-port mating, physics-derived poses).
+   * @type {number[]}
+   */
+  get quaternion() {}
+  set quaternion(value) {}
 
   /**
    * Whole-node scale. Reads back as [x, y, z]; assign a uniform number or a
@@ -1857,9 +2038,18 @@ class SceneNode {
   // phase sync); play() crossfades from whatever was playing — plus up to 8
   // ordered masked LAYER tracks blended on top via playLayer(slot, ...)
   // (e.g. upper-body wave over a walk; play() with a mask is layer slot 0).
-  // blendState() reports the live mix. Not a state machine (yet). Full
-  // blending semantics + locomotion recipe: docs/animation-api.js,
-  // "Skeletal blending".
+  // blendState() reports the live mix. Full blending semantics + locomotion
+  // recipe: docs/animation-api.js, "Skeletal blending".
+  //
+  // Above that sits an optional STATE MACHINE (addStateMachine + travel), the
+  // Godot AnimationTree/StateMachine analog: named states each backed by a
+  // clip or blend space, with declared transitions carrying their own fade
+  // time. travel() names the destination and the machine picks the transition;
+  // `node.state` reads the current one and `onStateChanged` fires after every
+  // switch. There is no condition language — gameplay code decides when to
+  // travel. A manual play()/stop() suspends the machine (state reads null)
+  // until the next travel(). Full semantics: docs/animation-api.js,
+  // "State machine".
   //
   // Until the first play() — and again after stop() — the player is inactive
   // and manual setSkinningMatrices keeps full control of the palette.
@@ -1978,11 +2168,63 @@ class SceneNode {
   setLayerWeight(slot, weight) {}
 
   /**
+   * Install a state machine on the player and enter its initial state
+   * (defaults to the first state). Replaces any existing machine. Every
+   * state's `source` must already be registered via addClip or
+   * addBlendSpace1D/2D — otherwise this throws.
+   *
+   * @param {Object} def
+   * @param {Array<{name: string, source: string, speed?: number,
+   *                loop?: boolean}>} def.states
+   *        `source` names a registered clip or blend space; speed defaults
+   *        to 1, loop to true.
+   * @param {Array<{from: string, to: string, fade?: number,
+   *                autoAdvance?: boolean, syncPhase?: boolean}>} def.transitions
+   *        `from` may be '*' as a wildcard fallback. `fade` is the crossfade
+   *        in seconds (default 0 = hard cut). `autoAdvance` fires the
+   *        transition automatically when a non-looping source finishes.
+   *        `syncPhase` carries the outgoing normalized phase into the
+   *        incoming source — keeps gait cycles foot-aligned across a switch.
+   * @param {string} [def.initial] - starting state (default: states[0])
+   * @returns {SceneNode} this
+   */
+  addStateMachine(def) {}
+
+  /**
+   * Switch to `stateName`, following the transition declared from the
+   * current state (falling back to a '*' wildcard). With no matching
+   * transition it warns and hard-switches (fade 0). Traveling to the
+   * current state is a no-op. Throws on an unknown state, or if no machine
+   * has been installed.
+   * @param {string} stateName
+   * @returns {SceneNode} this
+   */
+  travel(stateName) {}
+
+  /**
+   * Current state machine state name (read-only), or null when there is no
+   * machine or the machine is suspended by a manual play()/stop().
+   * @type {?string}
+   */
+  get state() {}
+
+  /**
+   * Called after every machine transition (travel or autoAdvance) with
+   * (fromState, toState). `fromState` is null when re-entering from the
+   * suspended state. Assign null to clear.
+   * @type {?function(?string, string): void}
+   */
+  set onStateChanged(fn) {}
+
+  /**
    * Snapshot of the current blend mix — cheap enough for HUDs/tests.
-   * @returns {{clips: Array<{name: string, weight: number}>,
+   * @returns {{state: ?string,
+   *            clips: Array<{name: string, weight: number}>,
    *            phase: number, pos?: number[],
    *            layers: Array<{slot: number, name: string,
    *                           weight: number, phase: number}>}}
+   *          state = current state machine state, always present but null
+   *          without a machine (or while one is suspended);
    *          clips = base-track composition (weights sum to 1; during a
    *          crossfade the outgoing source appears scaled by 1 - alpha);
    *          phase = blend space shared phase 0..1 (clip: time/duration);
@@ -2113,6 +2355,84 @@ class SceneNode {
 
   /** Number of LOD chain levels (MeshNode only; 0 = no chain). Read-only. */
   get lodCount() {}
+
+
+  // --- InstancedMeshNode-only ------------------------------------------------
+  //
+  // Runtime surface for nodes made by scene.createInstancedMesh (see there for
+  // the instance-buffer layout). Every method below is a silent no-op on any
+  // other node type, and the properties read back undefined.
+
+  /**
+   * Replace the whole instance buffer. `data` is a Float32Array of 16 floats
+   * per instance in the canonical layout; the count is derived from its
+   * length. Uploads once — cheap enough to call per frame for a few thousand
+   * instances, but prefer updateInstance() when only a handful moved.
+   * @param {Float32Array} data
+   */
+  setInstances(data) {}
+
+  /**
+   * Replace the whole instance buffer from the 9-floats-per-instance
+   * convenience form: (px, py, pz, qx, qy, qz, qw, scale, variantIndex).
+   * RGB defaults to white; variantIndex is packed into alpha.
+   * @param {Float32Array} data
+   */
+  setInstancesFromTransforms(data) {}
+
+  /**
+   * Rewrite ONE instance's 16-float record in place — the cheap path for a
+   * few moving instances in a large static batch. `data16` must hold at
+   * least 16 floats; out-of-range indices are ignored.
+   * @param {number} index
+   * @param {Float32Array} data16
+   */
+  updateInstance(index, data16) {}
+
+  /**
+   * Swap the replicated mesh, keeping the instance buffer and material.
+   * @param {Mesh} mesh
+   */
+  setInstancedMesh(mesh) {}
+
+  /**
+   * Split the base-color texture into a cols x rows grid of variants. With a
+   * grid set, each instance's alpha channel selects its cell (0..255 → cell
+   * index), so one batch can show several sprites/leaf shapes from a shared
+   * atlas. Pass (1, 1) to disable.
+   * @param {number} cols
+   * @param {number} rows
+   */
+  setAtlasGrid(cols, rows) {}
+
+  /** Number of instances currently in the buffer (read-only). */
+  get instanceCount() {}
+
+  /** Atlas grid columns (read-only; 0 on non-instanced nodes). */
+  get atlasCols() {}
+
+  /** Atlas grid rows (read-only; 0 on non-instanced nodes). */
+  get atlasRows() {}
+
+  /**
+   * Alpha-test cutoff. > 0 discards fragments below the threshold (cutout
+   * leaf cards); 0 disables. Also settable via setAlphaCutoff(c).
+   */
+  get alphaCutoff() {}
+  set alphaCutoff(value) {}
+
+  /**
+   * Disable backface culling for the batch — needed so the back face of a
+   * double-sided leaf card renders. Also settable via setDoubleSided(b).
+   */
+  get doubleSided() {}
+  set doubleSided(value) {}
+
+  /** Method form of the `alphaCutoff` property. @param {number} c */
+  setAlphaCutoff(c) {}
+
+  /** Method form of the `doubleSided` property. @param {boolean} b */
+  setDoubleSided(b) {}
 
 
   // --- LightNode-only -------------------------------------------------------

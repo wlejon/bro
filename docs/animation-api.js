@@ -22,10 +22,13 @@
  * Ticking + coexistence (last-writer-wins per property per frame):
  *   Every frame SceneGraph::tickAnimations runs, in order:
  *     1. node ticks (sprite frames, particles, skeletal players)
- *     2. tweens (creation order)
+ *     2. tweens (unspecified order — do NOT rely on it)
  *     3. clip players (creation order)
  *   so when a tween and a clip player write the same property in the same
- *   frame, the clip player wins; among clip players the newest-created wins.
+ *   frame, the clip player wins; among clip players the newest-created wins
+ *   (ids are sorted, so hash-map iteration order can't perturb it). Tweens
+ *   are NOT sorted: two tweens writing the same property in the same frame
+ *   resolve arbitrarily — give them disjoint properties instead.
  *   Everything runs on the scaled clock: bro.time.paused/scale and headless
  *   advanceTime() apply automatically.
  *
