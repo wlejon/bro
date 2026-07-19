@@ -114,14 +114,15 @@ TextHit hitTestText(dom::Document* doc, float x, float y,
     if (!doc) return result;
     auto* root = doc->layoutRoot();
     if (!root) return result;
-    if (scope) {
-        // Search only the scope's subtree. If it has no adapter yet (styled
-        // display:none, or laid out since the last pass) fall back to the
-        // document rather than returning nothing — a caret somewhere beats no
-        // caret at all.
-        if (auto* scoped = findAdapterForElement(root, scope)) root = scoped;
-    }
-    auto hit = htmlayout::layout::hitTestText(root, x, y, metrics);
+    // Restrict the answer to the scope's subtree, but keep walking from the
+    // document root: the walk accumulates offsets from wherever it starts, so
+    // handing it the subtree would make every run's coordinates relative to
+    // that subtree while (x, y) stayed absolute. If the scope has no adapter
+    // (display:none, or not laid out yet) the filter is dropped rather than
+    // returning nothing — a caret somewhere beats no caret at all.
+    const auto* scopeAdapter =
+        scope ? findAdapterForElement(root, scope) : nullptr;
+    auto hit = htmlayout::layout::hitTestText(root, x, y, metrics, scopeAdapter);
     if (!hit.node) return result;
     auto* adapter = static_cast<LayoutNodeAdapter*>(hit.node);
     if (adapter->isTextNode()) {

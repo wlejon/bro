@@ -101,6 +101,53 @@ function clickAt(x, y) {
            JSON.stringify(host.textContent));
 }
 
+// --- the scope must not move the coordinate space ---------------------------
+//
+// Restricting the search to a subtree and RESTARTING the walk at that subtree
+// look equivalent and are not: the walk accumulates offsets from wherever it
+// starts, so handing it the subtree returns runs positioned relative to the
+// subtree while the query point is still absolute. The error is the host's own
+// distance from the origin, which is why it hides completely in a host near
+// the top-left corner — the first version of this test had one and passed.
+//
+// So: push the host far down and far right, and assert the caret lands on the
+// character actually under the pointer rather than merely inside the host.
+{
+    root.innerHTML =
+        '<div style="padding-top:900px;padding-left:220px">' +
+        '<div id="host3" contenteditable="true" ' +
+        'style="width:700px;padding:6px 9px;font-family:Arial;font-size:20px">' +
+        'abcdefghij</div>' +
+        '<div style="width:700px;font-family:Arial;font-size:20px">' +
+        'a much longer neighbouring line of text that reaches further right</div>' +
+        '</div>';
+    flush();
+
+    const host = document.getElementById('host3');
+    const t = host.firstChild;
+    const g = rects(host);
+    const y = (Math.max(g.host.y, g.text.y) +
+               Math.min(g.host.bottom, g.text.bottom)) / 2;
+    assert(g.text.x > 200 && g.text.y > 900,
+           `the host really is far from the origin (${g.text.x}, ${g.text.y}) — ` +
+           'otherwise this test cannot see the bug it exists for');
+
+    // The middle of a character must resolve to that character's own boundary.
+    for (const i of [1, 4, 7]) {
+        const r = document.createRange();
+        r.setStart(t, i);
+        r.setEnd(t, i + 1);
+        const b = r.getBoundingClientRect();
+        const hit = clickAt((b.x + b.right) / 2, y);
+        assert(host.contains(hit.node),
+               `a press on character ${i} stays in the host`);
+        assert(hit.offset === i || hit.offset === i + 1,
+               `and resolves to character ${i}, not ${hit.offset} — a constant ` +
+               'offset error here means the hit test is reading run coordinates ' +
+               'in a different space from the one the press is measured in');
+    }
+}
+
 // --- a press outside every editable still reaches ordinary text --------------
 //
 // The scope must not become a cage: selecting normal page text is unaffected,
