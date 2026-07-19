@@ -613,7 +613,32 @@ GizmoManager::pick(const Vec3& rayO, const Vec3& rayD) {
     Vec3 axes[3] = { axX, axY, axZ };
     GizmoAxis axisIds[3] = { GizmoAxis::X, GizmoAxis::Y, GizmoAxis::Z };
 
-    float bestT = 1e30f;
+    // Candidates are ranked by how close the cursor is to the handle, NOT by
+    // which handle is nearest the camera.
+    //
+    // Depth ordering is what a solid-geometry picker wants, but these handles
+    // are thin sticks that all radiate from one point, so within a couple of
+    // handle-widths of the pivot every arm is inside the pick radius at once.
+    // Ranking those by depth hands the pick to whichever arm happens to lean
+    // toward the viewer — scanning straight along the visible +X arrow from a
+    // +Z camera picked "x z z x x x…", a Z hole punched through the middle of
+    // X. Worse, the winner changes as the camera orbits, so the same cursor
+    // position over the same picture grabs a different axis from a different
+    // viewpoint. Ranking by distance-to-cursor picks what the user is pointing
+    // at; depth only breaks exact ties, where it is the sensible answer.
+    float bestDist = 1e30f;
+    float bestT    = 1e30f;
+    auto consider = [&](float dist, float rayT, GizmoAxis axis,
+                        const Vec3& axisDir, const Vec3& hitPoint) {
+        if (dist > bestDist + 1e-6f) return;
+        if (std::fabs(dist - bestDist) <= 1e-6f && rayT >= bestT) return;
+        bestDist = dist;
+        bestT    = rayT;
+        out.axis = axis;
+        out.axisDir = axisDir;
+        out.rayT = rayT;
+        out.hitPoint = hitPoint;
+    };
 
     switch (config_.mode) {
     case GizmoMode::Translate: {
@@ -624,13 +649,7 @@ GizmoManager::pick(const Vec3& rayO, const Vec3& rayD) {
             auto r = closestRayToSegment(rayO, rayD, position_, tip);
             if (r.rayT < 0) continue;
             if (r.dist > pickRad) continue;
-            if (r.rayT < bestT) {
-                bestT = r.rayT;
-                out.axis = axisIds[i];
-                out.axisDir = axes[i];
-                out.rayT = r.rayT;
-                out.hitPoint = r.segPoint;
-            }
+            consider(r.dist, r.rayT, axisIds[i], axes[i], r.segPoint);
         }
         break;
     }
@@ -642,15 +661,11 @@ GizmoManager::pick(const Vec3& rayO, const Vec3& rayD) {
             auto r = closestRayToSegment(rayO, rayD, position_, tip);
             if (r.rayT < 0) continue;
             if (r.dist > pickRad) continue;
-            if (r.rayT < bestT) {
-                bestT = r.rayT;
-                out.axis = axisIds[i];
-                out.axisDir = axes[i];
-                out.rayT = r.rayT;
-                out.hitPoint = r.segPoint;
-            }
+            consider(r.dist, r.rayT, axisIds[i], axes[i], r.segPoint);
         }
-        // Center uniform-scale cube (picks as a sphere of ~cubeSize).
+        // Center uniform-scale cube (picks as a sphere of ~cubeSize). It sits
+        // at the pivot where all three arms also qualify, so it competes on
+        // the same distance-to-cursor footing as everything else.
         {
             float rad = scaleGeom_.cubeSize * 0.9f * currentScale_;
             Vec3 diff = position_ - rayO;
@@ -658,13 +673,9 @@ GizmoManager::pick(const Vec3& rayO, const Vec3& rayD) {
             if (tProj > 0) {
                 Vec3 closest = rayO + rayD * tProj;
                 Vec3 dd = closest - position_;
-                if (vlen_(dd) < rad && tProj < bestT) {
-                    bestT = tProj;
-                    out.axis = GizmoAxis::Center;
-                    out.axisDir = Vec3(1, 1, 1);
-                    out.rayT = tProj;
-                    out.hitPoint = closest;
-                }
+                float d = vlen_(dd);
+                if (d < rad)
+                    consider(d, tProj, GizmoAxis::Center, Vec3(1, 1, 1), closest);
             }
         }
         break;
@@ -678,16 +689,13 @@ GizmoManager::pick(const Vec3& rayO, const Vec3& rayD) {
             if (!rayVsPlane(rayO, rayD, position_, normal, hit)) continue;
             Vec3 rel = hit - position_;
             float r = vlen_(rel);
-            if (std::fabs(r - majorR) > tube) continue;
+            float bandDist = std::fabs(r - majorR);
+            if (bandDist > tube) continue;
             float t = (hit - rayO).x * rayD.x + (hit - rayO).y * rayD.y + (hit - rayO).z * rayD.z;
             if (t < 0) continue;
-            if (t < bestT) {
-                bestT = t;
-                out.axis = axisIds[i];
-                out.axisDir = normal;
-                out.rayT = t;
-                out.hitPoint = hit;
-            }
+            // Distance from the ring's circle, so where two rings cross the
+            // cursor takes the one it is actually nearest to.
+            consider(bandDist, t, axisIds[i], normal, hit);
         }
         break;
     }

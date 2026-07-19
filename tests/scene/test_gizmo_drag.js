@@ -166,5 +166,47 @@ if (!plain) {
            'ortho and perspective agree on the gizmo screen size, ' +
            o1 + 'px vs ' + p1 + 'px');
 
+    // =======================================================================
+    // Picking follows the cursor, not the depth order.
+    //
+    // The handles are thin sticks radiating from one point, so near the pivot
+    // every arm is inside the pick radius at once. Ranking those candidates by
+    // distance-along-the-ray handed the pick to whichever arm leaned toward
+    // the viewer: scanning straight along the visible +X arrow from a +Z
+    // camera used to report "x z z x x x…", a Z hole punched through the
+    // middle of X — and which axis stole it changed as the camera orbited.
+    // =======================================================================
+    function scanAxes(camera, y) {
+        const c = makeCanvas(1);
+        const s = c.getContext('scene');
+        if (!s) return '';
+        s.setCamera(camera);
+        flush();
+        bro.gizmo.setMode('translate');
+        attachTarget();
+
+        let row = '';
+        for (let px = 200; px <= 320; px += 3) {
+            mouseMove(px, y);
+            const h = bro.gizmo.hovered;
+            row += (!h || h === 'none') ? '.' : h;
+        }
+        return row;
+    }
+
+    // Walking outward along the +X arm must never report another axis in the
+    // middle of the run. A leading run of 'x' followed by misses is correct;
+    // an interior non-x is the bug.
+    for (const cam of [persp(10), { ...persp(10), position: [0.01, 0.01, 10] }]) {
+        const row = scanAxes(cam, 150);
+        const firstX = row.indexOf('x');
+        assert(firstX >= 0, 'the +X arm is pickable somewhere along the scan: ' + row);
+        const run = row.slice(firstX);
+        const end = run.indexOf('.');
+        const solid = end < 0 ? run : run.slice(0, end);
+        assert(/^x+$/.test(solid),
+               'no other axis interrupts the +X arm: ' + row);
+    }
+
     console.log('PASS gizmo drag');
 }
