@@ -465,6 +465,123 @@ static bro::dom::TextNode* selectionCaretTextPosition(bro::dom::Document* doc,
     return nullptr;
 }
 
+// ---------------------------------------------------------------------------
+// Whitespace rebalancing.
+//
+// Under `white-space: normal` a run of spaces renders as ONE space, and a
+// space at the start or end of a line renders as nothing. That is correct CSS
+// and completely wrong as editing behaviour: type a space at the end of a
+// contenteditable and the caret does not move, type three and only one shows.
+//
+// Every browser solves this the same way — store U+00A0 (no-break space) in
+// the positions that would otherwise collapse, so what the user typed is what
+// the layout sees. The text is still N characters to the DOM and to
+// Selection; only the encoding changes.
+//
+// The pattern, matched against Chromium exactly (a run of N spaces, `_` a
+// plain space and `+` a no-break space):
+//
+//     "ab| "     -> ab+          a lone space at the end cannot be plain
+//     "ab| c"    -> ab_c         between two words a plain space renders
+//     "ab|  c"   -> ab+_c        alternate, so no two plain spaces meet
+//     "ab|   c"  -> ab+_+c
+//     "ab|   "   -> ab+_+
+//     "ab|  "    -> ab++         alternating ends plain — forced back
+//     "| ab"     -> +ab          a run at the start cannot be plain either
+//
+// So: alternate from the run's start beginning with no-break; force the last
+// one when the run ends the text; and a lone interior space stays plain,
+// which is the overwhelmingly common case and keeps the data readable.
+constexpr char kNbspUtf8[] = "\xc2\xa0";
+
+// Is the character at byte `i` a space this pass owns? Plain ASCII space or
+// an existing U+00A0 — an existing one has to be re-examined, because a run
+// it used to end may have grown a neighbour that changes its encoding.
+static bool isRebalanceSpace(const std::string& s, size_t i, size_t& len) {
+    if (s[i] == ' ') { len = 1; return true; }
+    if (i + 1 < s.size() &&
+        static_cast<unsigned char>(s[i]) == 0xC2 &&
+        static_cast<unsigned char>(s[i + 1]) == 0xA0) { len = 2; return true; }
+    return false;
+}
+
+// Re-encode every space run in `data`, moving `caret` (a byte offset) to the
+// matching position in the result. Returns true if anything changed.
+static bool rebalanceWhitespace(std::string& data, int& caret) {
+    std::string out;
+    out.reserve(data.size());
+    int newCaret = caret;
+    bool changed = false;
+
+    size_t i = 0;
+    while (i < data.size()) {
+        size_t len = 0;
+        if (!isRebalanceSpace(data, i, len)) {
+            if (static_cast<int>(i) == caret) newCaret = static_cast<int>(out.size());
+            out += data[i];
+            ++i;
+            continue;
+        }
+        // Collect the whole run, remembering each member's source offset so
+        // the caret can be placed against the same member afterwards.
+        std::vector<size_t> srcOffsets;
+        size_t j = i;
+        while (j < data.size()) {
+            size_t l = 0;
+            if (!isRebalanceSpace(data, j, l)) break;
+            srcOffsets.push_back(j);
+            j += l;
+        }
+        const size_t n = srcOffsets.size();
+        const bool atStart = (i == 0);
+        const bool atEnd   = (j == data.size());
+
+        for (size_t k = 0; k < n; ++k) {
+            bool nbsp = (k % 2 == 0);
+            if (k + 1 == n && atEnd) nbsp = true;       // cannot end plain
+            if (n == 1 && !atStart && !atEnd) nbsp = false;  // lone interior
+            if (static_cast<int>(srcOffsets[k]) == caret)
+                newCaret = static_cast<int>(out.size());
+            if (nbsp) out += kNbspUtf8; else out += ' ';
+        }
+        if (static_cast<int>(j) == caret) newCaret = static_cast<int>(out.size());
+        i = j;
+    }
+    if (static_cast<int>(data.size()) == caret) newCaret = static_cast<int>(out.size());
+
+    changed = (out != data);
+    if (changed) { data = std::move(out); caret = newCaret; }
+    return changed;
+}
+
+// Rebalancing only applies where the renderer actually collapses. Under
+// `pre` / `pre-wrap` / `break-spaces` a plain space already renders, and
+// rewriting it to U+00A0 would change what the document means — a
+// pre-formatted block is exactly where the distinction matters.
+static bool collapsesWhitespace(bro::dom::Node* textNode) {
+    for (bro::dom::Node* n = textNode; n; n = n->parentNode()) {
+        if (n->nodeType() != bro::dom::NodeType::Element) continue;
+        const auto& style = static_cast<bro::dom::Element*>(n)->computedStyle();
+        auto it = style.find("white-space");
+        if (it == style.end()) continue;
+        return it->second == "normal" || it->second == "nowrap";
+    }
+    return true;   // the initial value is `normal`
+}
+
+// Re-encode the node's spaces after an edit and keep the caret on the same
+// character. No-op when nothing needed changing, so the common keystroke
+// costs one scan and no DOM mutation.
+static void rebalanceAfterEdit(bro::dom::Document* doc,
+                               bro::dom::TextNode* tn, int caret) {
+    if (!tn || !collapsesWhitespace(tn)) return;
+    std::string data = tn->data();
+    int newCaret = caret;
+    if (!rebalanceWhitespace(data, newCaret)) return;
+    tn->setData(data);
+    doc->selection()->collapse(tn, newCaret);
+}
+
 // Insert `text` at the current Selection. If the selection isn't collapsed,
 // deletes the contents first. Caret ends up after the inserted text.
 static void selectionInsertText(bro::dom::Document* doc, const std::string& text) {
@@ -473,7 +590,9 @@ static void selectionInsertText(bro::dom::Document* doc, const std::string& text
     auto* tn = selectionCaretTextPosition(doc, off, created);
     if (!tn) return;
     tn->insertData(static_cast<size_t>(off), text);
-    doc->selection()->collapse(tn, off + static_cast<int>(text.size()));
+    const int caret = off + static_cast<int>(text.size());
+    doc->selection()->collapse(tn, caret);
+    rebalanceAfterEdit(doc, tn, caret);
 }
 #include "util/time.h"
 #include "util/log.h"
@@ -3037,8 +3156,13 @@ void Engine::handleTextInput(const std::string& text) {
                             EditUndoScope undo(&editUndo_, document_.get(), host, tn,
                                                DomUndoStack::Kind::Typing);
                             tn->insertData(static_cast<size_t>(off), text);
-                            document_->selection()->collapse(
-                                tn, off + static_cast<int>(text.size()));
+                            const int caret =
+                                off + static_cast<int>(text.size());
+                            document_->selection()->collapse(tn, caret);
+                            // Inside the undo scope: the re-encoding is part
+                            // of the same keystroke, so undo takes the whole
+                            // thing back rather than leaving stray U+00A0.
+                            rebalanceAfterEdit(document_.get(), tn, caret);
                             undo.commit();
                         });
     uiDirty_ = true;
