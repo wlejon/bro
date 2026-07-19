@@ -28,7 +28,6 @@
 #include "dom/range.h"
 #include "dom/selection.h"
 #include "dom/text_node.h"
-#include "layout/control_text.h"
 #include "layout/el_input.h"
 #include "layout/el_textarea.h"
 #include "layout/el_select.h"
@@ -63,173 +62,6 @@ static bro::dom::Element* editableHostOf(bro::dom::Node* node) {
 // anything other than "false"). Skips `contenteditable="false"`.
 static bool inEditableHost(bro::dom::Node* node) {
     return editableHostOf(node) != nullptr;
-}
-
-// ---------------------------------------------------------------------------
-// Cross-node deletion.
-//
-// Backspace at offset 0 of a text node, or Delete at its end, has no character
-// left in that node to take. The character the user means lives in the
-// neighbouring leaf: the tail of the text before an inline, the head of the
-// text after it, or a <br> the Enter path inserted. Finding it is a walk over
-// the editable host's leaves, which is all these helpers do — the key handler
-// stays a decision about which direction to walk.
-//
-// Plaintext scope: text nodes merge and emptied inlines are dropped. Nothing
-// here merges blocks or reparents content across them.
-// ---------------------------------------------------------------------------
-
-static int indexInParent(bro::dom::Node* n) {
-    auto* p = n ? n->parentNode() : nullptr;
-    if (!p) return -1;
-    const auto& kids = p->childNodes();
-    for (size_t i = 0; i < kids.size(); ++i)
-        if (kids[i] == n) return static_cast<int>(i);
-    return -1;
-}
-
-static bro::dom::Node* deepestLast(bro::dom::Node* n) {
-    while (n && !n->childNodes().empty()) n = n->childNodes().back();
-    return n;
-}
-static bro::dom::Node* deepestFirst(bro::dom::Node* n) {
-    while (n && !n->childNodes().empty()) n = n->childNodes().front();
-    return n;
-}
-
-static bool isBrElement(bro::dom::Node* n) {
-    return n && n->nodeType() == bro::dom::NodeType::Element &&
-           static_cast<bro::dom::Element*>(n)->tagName() == "BR";
-}
-
-// The leaf immediately before / after `n` in document order, without leaving
-// `host`'s subtree. nullptr at the host's edge.
-static bro::dom::Node* prevLeafWithin(bro::dom::Node* n, bro::dom::Element* host) {
-    while (n && n != host) {
-        const int i = indexInParent(n);
-        auto* p = n->parentNode();
-        if (i > 0) return deepestLast(p->childNodes()[i - 1]);
-        n = p;
-    }
-    return nullptr;
-}
-static bro::dom::Node* nextLeafWithin(bro::dom::Node* n, bro::dom::Element* host) {
-    while (n && n != host) {
-        const int i = indexInParent(n);
-        auto* p = n->parentNode();
-        if (i >= 0 && i + 1 < static_cast<int>(p->childNodes().size()))
-            return deepestFirst(p->childNodes()[i + 1]);
-        n = p;
-    }
-    return nullptr;
-}
-
-// What a collapsed caret deletes: a byte range in some text node, or a whole
-// node (a <br>). Both empty means there is nothing on that side to delete.
-struct EditDeleteTarget {
-    bro::dom::TextNode* text = nullptr;
-    int start = 0;
-    int end = 0;
-    bro::dom::Node* remove = nullptr;
-};
-
-// Resolve the character a collapsed caret at (node, offset) deletes, walking
-// `dir` (-1 backward, +1 forward) across leaf boundaries within `host`.
-static EditDeleteTarget resolveDeleteTarget(bro::dom::Node* node, int offset,
-                                            bro::dom::Element* host, int dir) {
-    EditDeleteTarget out;
-    if (!node || !host) return out;
-
-    auto spliceAt = [&](bro::dom::TextNode* t, int off) {
-        const std::string& d = t->data();
-        out.text = t;
-        if (dir < 0) { out.start = bro::layout::utf8Prev(d, off); out.end = off; }
-        else         { out.start = off; out.end = bro::layout::utf8Next(d, off); }
-    };
-
-    bro::dom::Node* leaf = nullptr;
-    if (node->nodeType() == bro::dom::NodeType::Text) {
-        auto* t = static_cast<bro::dom::TextNode*>(node);
-        const int len = static_cast<int>(t->length());
-        offset = std::clamp(offset, 0, len);
-        // The caret's own node still has a character on the requested side.
-        if (dir < 0 ? offset > 0 : offset < len) { spliceAt(t, offset); return out; }
-        leaf = (dir < 0) ? prevLeafWithin(t, host) : nextLeafWithin(t, host);
-    } else {
-        // Element position: the caret sits between children.
-        const auto& kids = node->childNodes();
-        offset = std::clamp(offset, 0, static_cast<int>(kids.size()));
-        if (dir < 0)
-            leaf = (offset > 0) ? deepestLast(kids[offset - 1])
-                                : prevLeafWithin(node, host);
-        else
-            leaf = (offset < static_cast<int>(kids.size()))
-                       ? deepestFirst(kids[offset])
-                       : nextLeafWithin(node, host);
-    }
-
-    // Skip leaves that hold no character (empty text nodes, empty inlines)
-    // until one does, or until the host's edge.
-    while (leaf) {
-        if (leaf->nodeType() == bro::dom::NodeType::Text) {
-            auto* t = static_cast<bro::dom::TextNode*>(leaf);
-            const int len = static_cast<int>(t->length());
-            if (len > 0) { spliceAt(t, dir < 0 ? len : 0); return out; }
-        } else if (isBrElement(leaf)) {
-            // Enter inserts a <br>; Backspace has to be able to take it back.
-            out.remove = leaf;
-            return out;
-        }
-        leaf = (dir < 0) ? prevLeafWithin(leaf, host) : nextLeafWithin(leaf, host);
-    }
-    return out;
-}
-
-// Tidy up after a delete: drop an emptied inline element (and any now-empty
-// ancestors below the host), then merge the text nodes the removal left
-// adjacent. `caretNode`/`caretOff` are updated to follow the content.
-static void pruneAndMerge(bro::dom::Element* host,
-                          bro::dom::Node*& caretNode, int& caretOff) {
-    if (!host || !caretNode) return;
-
-    // An emptied text node inside a non-host inline takes the inline with it.
-    if (caretNode->nodeType() == bro::dom::NodeType::Text &&
-        static_cast<bro::dom::TextNode*>(caretNode)->length() == 0 &&
-        caretNode->parentNode() && caretNode->parentNode() != host) {
-        auto* p = caretNode->parentNode();
-        p->removeChild(caretNode);
-        caretNode = p;
-        caretOff = static_cast<int>(p->childNodes().size());
-    }
-    // Then any ancestors the removal emptied, stopping below the host.
-    while (caretNode != host && caretNode->childNodes().empty() &&
-           caretNode->nodeType() == bro::dom::NodeType::Element &&
-           caretNode->parentNode()) {
-        auto* p = caretNode->parentNode();
-        const int idx = indexInParent(caretNode);
-        p->removeChild(caretNode);
-        caretNode = p;
-        caretOff = idx < 0 ? 0 : idx;
-        if (p == host) break;
-    }
-
-    // Removing the inline can leave two text nodes side by side. Join them so
-    // the caret sits in one node rather than at a seam that only looks like
-    // one position.
-    if (caretNode->nodeType() != bro::dom::NodeType::Element) return;
-    auto& kids = caretNode->childNodes();
-    if (caretOff <= 0 || caretOff >= static_cast<int>(kids.size())) return;
-    auto* left = kids[caretOff - 1];
-    auto* right = kids[caretOff];
-    if (left->nodeType() != bro::dom::NodeType::Text ||
-        right->nodeType() != bro::dom::NodeType::Text) return;
-    auto* lt = static_cast<bro::dom::TextNode*>(left);
-    auto* rt = static_cast<bro::dom::TextNode*>(right);
-    const int join = static_cast<int>(lt->length());
-    lt->appendData(rt->data());
-    caretNode->removeChild(rt);
-    caretNode = lt;
-    caretOff = join;
 }
 
 // The hovered element changed from `prev` to `target`. Per CSS Selectors L4,
@@ -1102,30 +934,6 @@ void Engine::handleMouseDown(float x, float y, int button) {
                     }
                     // Selection highlight + caret are base-only chrome; force a
                     // re-record (no relayout) so the new selection paints.
-                    markAppBaseDirty();
-                } else if (target && document_->ownsNode(target) &&
-                           inEditableHost(target)) {
-                    // No text was hit, but the press landed inside an editable
-                    // host — an empty contenteditable has no text node to hit
-                    // at all, and a press in the padding below a host's text
-                    // misses every run. Either way a browser gives you a
-                    // caret; leaving rangeCount() at 0 means the next
-                    // keystroke has nowhere to go and typing silently does
-                    // nothing until script calls collapse().
-                    //
-                    // Element position, since there is no text node: the end
-                    // of the pressed element's children, which is the start
-                    // for an empty host and "after the content" for a press
-                    // past it — what clicking below a paragraph does.
-                    //
-                    // No drag is armed: the drag anchor is a text-node handle
-                    // and this position has no text node behind it. A press
-                    // that misses every run has nothing to sweep a selection
-                    // across anyway.
-                    const int idx = static_cast<int>(target->childNodes().size());
-                    sel->collapse(target, idx);
-                    selectionDragging_ = false;
-                    selectionAnchorNode_.reset();
                     markAppBaseDirty();
                 } else {
                     // Click outside any text: clear selection.
@@ -2725,56 +2533,22 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                         // within the current text node when possible. That is
                         // confined to one node's data, so it records as a
                         // mergeable splice and consecutive presses coalesce.
-                        //
-                        // The character to delete may not be in the caret's own
-                        // node — at offset 0, or at the end of a text node, it
-                        // is in the neighbouring leaf. Resolve it first, then
-                        // pick the undo scope, because a delete that empties an
-                        // inline or crosses a node is structural and a plain
-                        // splice inside one node is not.
-                        //
-                        // One code point, not one byte: offsets here index UTF-8
-                        // bytes, so a ±1 step would chop a multi-byte character
-                        // in half and leave invalid UTF-8 in the tree.
-                        // resolveDeleteTarget steps with utf8Prev/utf8Next, the
-                        // same helpers <input>/<textarea> delete with.
-                        const bool back = (keycode == SDLK_BACKSPACE);
-                        const EditDeleteTarget target =
-                            resolveDeleteTarget(focusN, focusO, editHost,
-                                                back ? -1 : 1);
-                        if (!target.text && !target.remove) return;
-
-                        const bool sameNodeSplice =
-                            target.text && target.text == focusText &&
-                            static_cast<int>(target.text->length()) >
-                                (target.end - target.start);
-                        EditUndoScope undo(
-                            &editUndo_, document_.get(), editHost,
-                            sameNodeSplice ? target.text : nullptr,
-                            sameNodeSplice
-                                ? (back ? DomUndoStack::Kind::Backspace
-                                        : DomUndoStack::Kind::DeleteForward)
-                                : DomUndoStack::Kind::Discrete);
-
-                        dom::Node* caretNode = nullptr;
-                        int caretOff = 0;
-                        if (target.remove) {
-                            auto* p = target.remove->parentNode();
-                            const int idx = indexInParent(target.remove);
-                            if (!p) return;
-                            p->removeChild(target.remove);
-                            caretNode = p;
-                            caretOff = idx < 0 ? 0 : idx;
-                        } else {
-                            target.text->deleteData(target.start,
-                                                    target.end - target.start);
-                            caretNode = target.text;
-                            caretOff = target.start;
+                        if (focusText) {
+                            int len = static_cast<int>(focusText->length());
+                            const bool back = (keycode == SDLK_BACKSPACE);
+                            EditUndoScope undo(&editUndo_, document_.get(), editHost,
+                                               focusText,
+                                               back ? DomUndoStack::Kind::Backspace
+                                                    : DomUndoStack::Kind::DeleteForward);
+                            if (back && focusO > 0) {
+                                focusText->deleteData(focusO - 1, 1);
+                                sel->collapse(focusText, focusO - 1);
+                            } else if (!back && focusO < len) {
+                                focusText->deleteData(focusO, 1);
+                                sel->collapse(focusText, focusO);
+                            }
+                            undo.commit();
                         }
-                        if (!sameNodeSplice)
-                            pruneAndMerge(editHost, caretNode, caretOff);
-                        if (caretNode) sel->collapse(caretNode, caretOff);
-                        undo.commit();
                     });
                 handled = true;
             } else if (editable && keycode == SDLK_RETURN) {
@@ -2829,18 +2603,14 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             } else if (focusText) {
                 const std::string& data = focusText->data();
                 int len = static_cast<int>(data.size());
-                // Whole code points, for the same reason deletion steps them:
-                // `data` is UTF-8 and `focusO` indexes its bytes, so ±1 lands
-                // inside a multi-byte character — where the UTF-16 conversion
-                // at the JS boundary snaps back and the caret looks stuck.
                 if (keycode == SDLK_LEFT) {
                     if (focusO > 0) {
-                        moveFocus(focusText, layout::utf8Prev(data, focusO));
+                        moveFocus(focusText, focusO - 1);
                         handled = true;
                     }
                 } else if (keycode == SDLK_RIGHT) {
                     if (focusO < len) {
-                        moveFocus(focusText, layout::utf8Next(data, focusO));
+                        moveFocus(focusText, focusO + 1);
                         handled = true;
                     }
                 } else if (keycode == SDLK_HOME) {
@@ -3423,25 +3193,11 @@ std::string Engine::simulateCopy() {
     // A focused field copies its *selected* text — a collapsed caret copies
     // nothing, as in a browser. Mirrors the Ctrl+C path in handleKeyDown.
     std::string text;
-    bool fromFormField = false;
     if (activeEl) {
         if (auto* input = getElInput(activeEl); input && input->isFocused()) {
             text = input->selectedText();
-            fromFormField = true;
         } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
             text = textarea->selectedText();
-            fromFormField = true;
-        }
-    }
-    // No focused form field: a DOM Selection inside a contenteditable host
-    // copies instead, the same source simulateCut() takes its text from.
-    // Copy reads and never mutates, so there is no cut/paste counterpart to
-    // the deletion those two go on to do.
-    if (!fromFormField) {
-        auto* sel = document_->selection();
-        if (sel && sel->rangeCount() > 0 && !sel->isCollapsed()) {
-            auto* fn = sel->focusNode();
-            if (fn && editableHostOf(fn)) text = sel->toString();
         }
     }
 

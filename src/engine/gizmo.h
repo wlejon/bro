@@ -238,6 +238,12 @@ private:
                                const bromath::Vec3& pivot, const bromath::Vec3& axisDir,
                                float& outParam);
 
+    /// Where the cursor ray meets the camera-facing plane through the pivot.
+    /// Rotation tracks cursor motion here rather than in each ring's own
+    /// plane, which goes ill-conditioned as that ring turns edge-on.
+    bool viewPlanePoint(const bromath::Vec3& rayO, const bromath::Vec3& rayD,
+                        const bromath::Vec3& pivot, bromath::Vec3& outPoint) const;
+
     /// Closest-distance-from-ray-to-finite-segment test (picks against
     /// arrows / scale handles). Returns dist + rayT + segT.
     struct RaySegResult { float rayT; float segT; float dist; bromath::Vec3 segPoint; };
@@ -339,6 +345,8 @@ private:
     bromath::Vec3 dragLastPoint_{0, 0, 0};
     float       dragLastParam_ = 0.0f;
     bool        dragParamValid_ = false;  // axis param was solvable at grab time
+    bromath::Vec3 dragTangent_{0, 0, 0};  // rotate: screen-space along-ring direction
+    float       dragRadius_ = 1.0f;       // rotate: ring radius at the grab point
     float       dragLastAngle_ = 0.0f;
     bromath::Vec3 dragLastScale_{1, 1, 1};
 

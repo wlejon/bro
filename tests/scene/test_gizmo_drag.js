@@ -293,5 +293,140 @@ if (!plain) {
                       ', got x=' + sel.x + ' y=' + sel.y + ' z=' + sel.z);
     }
 
+    // =======================================================================
+    // Rotate: equal mouse travel produces equal rotation, and the ring turns
+    // the way it was dragged.
+    //
+    // Rotation used to be the angle subtended at the pivot, which varies
+    // wildly for identical mouse travel — a drag pointing at the pivot sweeps
+    // almost nothing, while the same drag across a ring whose ellipse passes
+    // close to the pivot sweeps an enormous angle. Measured on one view, the
+    // same 12px gesture gave 0.34 degrees on one ring and 16.09 on another,
+    // and a single ring reversed direction between its near and far side.
+    // Rotation is now arc-along-the-ring over ring radius.
+    // =======================================================================
+    function rotateHarness(camera) {
+        const c = makeCanvas(1);
+        const s = c.getContext('scene');
+        if (!s) return null;
+        s.setCamera(camera);
+        flush();
+        bro.gizmo.setMode('rotate');
+
+        const st = { q: [0, 0, 0, 1] };
+        bro.gizmo.attach({
+            position: () => [0, 0, 0],
+            orientation: () => [0, 0, 0, 1],
+            beginDrag: () => { st.q = [0, 0, 0, 1]; },
+            translate: () => {},
+            rotate: (x, y, z, w) => {
+                const a = [x, y, z, w], b = st.q;
+                st.q = [
+                    a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1],
+                    a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0],
+                    a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3],
+                    a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2],
+                ];
+            },
+            scale: () => {},
+            endDrag: () => {},
+        });
+        flush();
+
+        // Total rotation in degrees, signed about `axis`.
+        st.degrees = (axis) => {
+            const q = st.q;
+            const sw = q[3] < 0 ? -1 : 1;
+            const v = [sw*q[0], sw*q[1], sw*q[2]];
+            const m = Math.hypot(v[0], v[1], v[2]);
+            if (m < 1e-12) return 0;
+            const deg = 2 * Math.atan2(m, sw*q[3]) * 180 / Math.PI;
+            const dot = (v[0]*axis[0] + v[1]*axis[1] + v[2]*axis[2]) / m;
+            return deg * (dot < 0 ? -1 : 1);
+        };
+        st.drag = (px, py, dx, dy, axis) => {
+            mouseDown(px, py);
+            mouseMove(px + dx, py + dy);
+            mouseUp(px + dx, py + dy);
+            flush();
+            return st.degrees(axis);
+        };
+        return st;
+    }
+
+    // --- direction: a ring behaves like a wheel -----------------------------
+    // Face-on Z ring. Dragging down on its left edge and on its right edge
+    // must turn it opposite ways by the same amount, exactly as a physical
+    // wheel would. Getting this backwards is what made dragging feel inverted.
+    {
+        const h = rotateHarness({ fov: 60, near: 0.1, far: 1000,
+                                  position: [0, 0, 9], target: [0, 0, 0], up: [0, 1, 0] });
+        assert(h, 'rotate harness built');
+        let left = -1, right = -1;
+        for (let px = 100; px <= 300; px++) {
+            mouseMove(px, 150);
+            if (bro.gizmo.hovered === 'z') { if (left < 0) left = px; right = px; }
+        }
+        assert(left > 0 && right > left, 'found both edges of the face-on Z ring');
+
+        const Z = [0, 0, 1];
+        const dl = h.drag(left + 2, 150, 0, 12, Z);
+        const dr = h.drag(right - 2, 150, 0, 12, Z);
+        assert(Math.abs(dl) > 1, 'dragging the left edge rotated the ring, got ' + dl);
+        assert((dl > 0) !== (dr > 0),
+               'opposite edges turn opposite ways: left=' + dl + ' right=' + dr);
+        assert(Math.abs(Math.abs(dl) - Math.abs(dr)) < 1.0,
+               'both edges turn by the same amount: left=' + dl + ' right=' + dr);
+    }
+
+    // --- speed: identical travel, identical rotation ------------------------
+    // From an angled view every ring is foreshortened differently. Dragging
+    // the same distance must still rotate by the same amount. Direction is
+    // handled by combining an x-drag and a y-drag: their magnitude is the
+    // rotation for that travel regardless of which way the tangent points.
+    {
+        const axes = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+        const grabs = {};
+        {
+            const h = rotateHarness(angled);
+            assert(h, 'rotate harness built for the angled view');
+            for (let px = 130; px <= 270; px++) {
+                for (let py = 80; py <= 220; py++) {
+                    mouseMove(px, py);
+                    const hv = bro.gizmo.hovered;
+                    if (hv && hv !== 'view' && hv !== 'none') {
+                        const key = hv + ':' + (px < 200 ? 'L' : 'R');
+                        if (!grabs[key]) grabs[key] = [px, py];
+                    }
+                }
+            }
+        }
+        const keys = Object.keys(grabs);
+        assert(keys.length >= 4,
+               'found several distinct ring grab points, got ' + keys.join(','));
+
+        const mags = [];
+        for (const key of keys) {
+            const [px, py] = grabs[key];
+            const axis = axes[key.split(':')[0]];
+            const h = rotateHarness(angled);
+            const a = h.drag(px, py, 12, 0, axis);
+            const b = h.drag(px, py, 0, 12, axis);
+            const mag = Math.hypot(a, b);
+            mags.push({ key: key, mag: mag,
+                        radius: Math.hypot(px - 200, py - 150) });
+        }
+        const lo = Math.min.apply(null, mags.map((m) => m.mag));
+        const hi = Math.max.apply(null, mags.map((m) => m.mag));
+        assert(lo > 0.5, 'every ring grab produced real rotation, got ' +
+                         JSON.stringify(mags));
+        // Was a 47x spread. Allow modest slack for the foreshortening of a
+        // near-edge-on ring's tangent, but nothing like the old behaviour.
+        assert(hi / lo < 1.6,
+               'equal mouse travel rotates equally across rings and grab ' +
+               'points (max/min = ' + (hi / lo).toFixed(2) + '): ' +
+               JSON.stringify(mags));
+    }
+
     console.log('PASS gizmo drag');
 }

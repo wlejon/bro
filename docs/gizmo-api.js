@@ -30,6 +30,13 @@
 // Picking ranks candidates by distance to the cursor, not by depth, so the
 // handle you are pointing at is the one you get even where several overlap
 // near the pivot.
+//
+// Rotation tracks how far the cursor travels ALONG the grabbed ring, divided
+// by that ring's radius — so equal mouse travel turns any ring by the same
+// amount no matter how foreshortened it looks, and a ring behaves like a
+// wheel: dragging down its near edge and its far edge turn it opposite ways.
+// Motion across the ring rather than along it is the pointer leaving the
+// handle, and correctly rotates nothing.
 // =============================================================================
 
 bro.gizmo.show();                     // make visible (no-op if already shown)
