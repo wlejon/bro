@@ -7,7 +7,12 @@
 // under every image"). Headless used to force the menu off, which is why no
 // headless test could see this — test_menu_inset.js covers that.
 
-const CT = 28;   // MenuBar::height
+// getPixel() is document-space — the same origin getBoundingClientRect()
+// reports in — so the assertions below compare a probe directly against a
+// rect with no inset arithmetic. That is the whole claim being tested: a
+// layer quad lands exactly where the surrounding HTML painted it. (This test
+// used to add MenuBar::height to every rect by hand, back when getPixel took
+// raw frame coordinates.)
 
 bro.menu.show();
 
@@ -48,7 +53,7 @@ const show = (p) => p.r + ',' + p.g + ',' + p.b;
 // --- plain canvas: quad exactly at rect + contentTop -----------------------
 const rc = c.getBoundingClientRect();
 assert(rc.y === 50, 'canvas doc-space rect.y is 50, got ' + rc.y);
-const cy = rc.y + CT;   // true screen-space top
+const cy = rc.y;   // document-space top; no inset arithmetic needed
 
 let p = px(10, cy - 6);
 assert(isBg(p), 'no canvas content above the element box, got ' + show(p));
@@ -61,16 +66,16 @@ assert(isBg(p), 'no canvas content below the element box, got ' + show(p));
 
 // --- canvas under a CSS-transformed ancestor (2ae5786's original fix) ------
 const rt = t.getBoundingClientRect();   // includes the translate(40px, 20px)
-p = px(rt.x + 40, rt.y + CT + 40);
+p = px(rt.x + 40, rt.y + 40);
 assert(isGreen(p), 'transformed canvas centered at rect + inset, got ' + show(p));
-p = px(rt.x - 8, rt.y + CT + 40);
+p = px(rt.x - 8, rt.y + 40);
 assert(isBg(p), 'no content left of the transformed canvas, got ' + show(p));
-p = px(rt.x + 40, rt.y + CT - 8);
+p = px(rt.x + 40, rt.y - 8);
 assert(isBg(p), 'no content above the transformed canvas, got ' + show(p));
 
 // --- <select> dropdown overlay anchors below the select --------------------
 const rs = document.getElementById('s').getBoundingClientRect();
-const belowY = rs.bottom + CT + 5;   // just inside where the list must open
+const belowY = rs.bottom + 5;   // just inside where the list must open
 p = px(rs.x + 8, belowY);
 assert(isBg(p), 'below the select before click is page background, got ' + show(p));
 

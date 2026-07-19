@@ -1186,8 +1186,57 @@ static JSValue js_inspectOverlayTree(JSContext* ctx, JSValueConst, int argc, JSV
 }
 
 // getPixel(x, y) — returns {r, g, b, a} for the pixel at (x, y)
+//
+// (x, y) are *document* coordinates, i.e. the space getBoundingClientRect()
+// reports in, so a test can probe exactly where it measured. capturePixels()
+// hands back the whole frame, and the app document is drawn inset into that
+// frame by contentInsets() — the menu bar on top, a docked inspector on the
+// right/left. Probing the raw frame buffer with a DOM coordinate therefore
+// reads the wrong pixel whenever any inset is non-zero: with the menu bar
+// visible every y was off by its height, which silently shifted every pixel
+// assertion in every headless test rather than failing them outright.
 static JSValue js_getPixel(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 2) return JS_ThrowTypeError(ctx, "getPixel(x, y) requires x and y");
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+
+    int x, y;
+    if (JS_ToInt32(ctx, &x, argv[0])) return JS_EXCEPTION;
+    if (JS_ToInt32(ctx, &y, argv[1])) return JS_EXCEPTION;
+
+    auto pixels = engine->capturePixels();
+    // Bounds are the document box; the buffer stride is the full frame width.
+    int w = engine->contentWidth();
+    int h = engine->contentHeight();
+    int stride = engine->viewportWidth();
+
+    if (pixels.empty() || x < 0 || y < 0 || x >= w || y >= h) {
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "r", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, obj, "g", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, obj, "b", JS_NewInt32(ctx, 0));
+        JS_SetPropertyStr(ctx, obj, "a", JS_NewInt32(ctx, 0));
+        return obj;
+    }
+
+    size_t offset = (static_cast<size_t>(y + engine->contentTop()) * stride
+                     + (x + engine->contentLeft())) * 4;
+    JSValue obj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, obj, "r", JS_NewInt32(ctx, pixels[offset]));
+    JS_SetPropertyStr(ctx, obj, "g", JS_NewInt32(ctx, pixels[offset + 1]));
+    JS_SetPropertyStr(ctx, obj, "b", JS_NewInt32(ctx, pixels[offset + 2]));
+    JS_SetPropertyStr(ctx, obj, "a", JS_NewInt32(ctx, pixels[offset + 3]));
+    return obj;
+}
+
+// getFramePixel(x, y) — like getPixel, but in *frame* coordinates: the whole
+// composited window including engine chrome (menu bar, docked inspector).
+//
+// Only tests that are asserting something about the chrome itself want this —
+// "the menu bar physically occupies the top 28px". App content is far easier
+// to probe with getPixel(), which shares getBoundingClientRect()'s space.
+static JSValue js_getFramePixel(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "getFramePixel(x, y) requires x and y");
     auto* engine = getEngine(ctx);
     if (!engine) return JS_ThrowInternalError(ctx, "No engine");
 
@@ -1199,8 +1248,8 @@ static JSValue js_getPixel(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     int w = engine->viewportWidth();
     int h = engine->viewportHeight();
 
+    JSValue obj = JS_NewObject(ctx);
     if (pixels.empty() || x < 0 || y < 0 || x >= w || y >= h) {
-        JSValue obj = JS_NewObject(ctx);
         JS_SetPropertyStr(ctx, obj, "r", JS_NewInt32(ctx, 0));
         JS_SetPropertyStr(ctx, obj, "g", JS_NewInt32(ctx, 0));
         JS_SetPropertyStr(ctx, obj, "b", JS_NewInt32(ctx, 0));
@@ -1209,7 +1258,6 @@ static JSValue js_getPixel(JSContext* ctx, JSValueConst, int argc, JSValueConst*
     }
 
     size_t offset = (static_cast<size_t>(y) * w + x) * 4;
-    JSValue obj = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, obj, "r", JS_NewInt32(ctx, pixels[offset]));
     JS_SetPropertyStr(ctx, obj, "g", JS_NewInt32(ctx, pixels[offset + 1]));
     JS_SetPropertyStr(ctx, obj, "b", JS_NewInt32(ctx, pixels[offset + 2]));
@@ -1386,7 +1434,8 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         .function("inspectOverlayTree", js_inspectOverlayTree, 3)
         .function("overlayPanels", js_overlayPanels, 0)
         // Pixel inspection
-        .function("getPixel", js_getPixel, 2);
+        .function("getPixel", js_getPixel, 2)
+        .function("getFramePixel", js_getFramePixel, 2);
 }
 
 } // namespace bro::js

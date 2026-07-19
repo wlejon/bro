@@ -34,11 +34,20 @@ assert(innerHeight === H0 - MENU_H,
        (H0 - MENU_H) + ')');
 assert(resizes >= 1, 'resize event fired on menu show');
 
-p = getPixel(50, 5);
+// Frame space: the chrome strip itself. getPixel() is document-space (it
+// shares getBoundingClientRect()'s origin), so it cannot see the menu bar at
+// all once the inset exists — probing the chrome is what getFramePixel is for.
+p = getFramePixel(50, 5);
 assert(!isRed(p), 'menu bar occupies the top inset (not app content), got ' +
        JSON.stringify(p));
-p = getPixel(50, MENU_H + 4);
+p = getFramePixel(50, MENU_H + 4);
 assert(isRed(p), 'app content starts directly below the inset, got ' +
+       JSON.stringify(p));
+
+// Document space: the same app pixel, addressed the way an app test would.
+// y=4 is inside the document because the document now starts below the menu.
+p = getPixel(50, 4);
+assert(isRed(p), 'document y=4 is app content regardless of the inset, got ' +
        JSON.stringify(p));
 
 // --- hide(): full frame returns to the app ---------------------------------

@@ -46,7 +46,8 @@ These functions are available in addition to all standard DOM APIs:
 | `screenshot(path)` | Render the current frame to a PNG file. Composites scene layers (WebGL, Canvas 2D) with the HTML/CSS UI overlay. Throws on failure. |
 | `screenshot(path, selector)` | Render the current frame and crop to the element's bounding box before saving. Bounding box uses viewport-relative coords (matches `getBoundingClientRect`). Transparent canvas pixels flatten to opaque black; for alpha-preserving canvas exports use `screenshotCanvas`. |
 | `screenshotCanvas(path, selector)` | Snapshot a `<canvas>` element's underlying Skia surface directly to PNG, preserving alpha. Selector must point to a 2D canvas (not WebGL or scene). |
-| `getPixel(x, y)` | Return `{r, g, b, a}` for the pixel at viewport coordinates. Renders the full composited frame (HTML, Canvas, WebGL, scene) and reads back the pixel. |
+| `getPixel(x, y)` | Return `{r, g, b, a}` for the pixel at **document** coordinates — the same space `getBoundingClientRect()` reports in, so a probe can be compared against a measured rect with no inset arithmetic. Renders the full composited frame (HTML, Canvas, WebGL, scene) and reads back the pixel. Engine chrome (menu bar, docked inspector) insets the document within the frame; `getPixel` folds that in for you. Out-of-document coordinates return all zeroes. |
+| `getFramePixel(x, y)` | Same readback in **frame** coordinates — the whole composited window including engine chrome. Only needed when asserting something about the chrome itself (e.g. that the menu bar occupies the top strip); app content is easier to probe with `getPixel`. |
 
 ### Input simulation
 
