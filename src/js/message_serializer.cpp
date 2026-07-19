@@ -287,31 +287,35 @@ static bool writeValue(JSContext* ctx, JSValue val, Writer& w,
         size_t abBufLen;
         JSValue abBuf = JS_GetTypedArrayBuffer(ctx, val, &abOffset, &abSize, nullptr);
         if (!JS_IsException(abBuf)) {
-            // It's a TypedArray — get its type
-            // Subtypes: 0=Int8, 1=Uint8, 2=Uint8Clamped, 3=Int16, 4=Uint16,
-            //           5=Int32, 6=Uint32, 7=Float32, 8=Float64, 9=BigInt64, 10=BigUint64
-            JSValue ctorName = JS_GetPropertyStr(ctx, val, "constructor");
-            JSValue nameVal = JS_UNDEFINED;
-            if (!JS_IsException(ctorName) && !JS_IsUndefined(ctorName)) {
-                nameVal = JS_GetPropertyStr(ctx, ctorName, "name");
-                JS_FreeValue(ctx, ctorName);
-            }
-            uint8_t subtype = 7; // default Float32
-            if (!JS_IsUndefined(nameVal) && !JS_IsException(nameVal)) {
-                const char* name = JS_ToCString(ctx, nameVal);
-                if (name) {
-                    if (strcmp(name, "Int8Array") == 0)           subtype = 0;
-                    else if (strcmp(name, "Uint8Array") == 0)     subtype = 1;
-                    else if (strcmp(name, "Uint8ClampedArray") == 0) subtype = 2;
-                    else if (strcmp(name, "Int16Array") == 0)     subtype = 3;
-                    else if (strcmp(name, "Uint16Array") == 0)    subtype = 4;
-                    else if (strcmp(name, "Int32Array") == 0)     subtype = 5;
-                    else if (strcmp(name, "Uint32Array") == 0)    subtype = 6;
-                    else if (strcmp(name, "Float32Array") == 0)   subtype = 7;
-                    else if (strcmp(name, "Float64Array") == 0)   subtype = 8;
-                    JS_FreeCString(ctx, name);
-                }
-                JS_FreeValue(ctx, nameVal);
+            // It's a TypedArray — get its element type.
+            //
+            // Ask QuickJS for the class rather than reading constructor.name.
+            // The name is wrong in two ways that both used to land on the
+            // Float32 default and reinterpret the bytes silently: BigInt64Array
+            // / BigUint64Array / Float16Array were simply absent from the table,
+            // and a subclass (`class Px extends Uint8Array {}`) reports its own
+            // name, not the base class's. An unknown class must throw, never
+            // fall back to a guess.
+            int taType = JS_GetTypedArrayType(val);
+            uint8_t subtype;
+            switch (taType) {
+                case JS_TYPED_ARRAY_INT8:       subtype = 0;  break;
+                case JS_TYPED_ARRAY_UINT8:      subtype = 1;  break;
+                case JS_TYPED_ARRAY_UINT8C:     subtype = 2;  break;
+                case JS_TYPED_ARRAY_INT16:      subtype = 3;  break;
+                case JS_TYPED_ARRAY_UINT16:     subtype = 4;  break;
+                case JS_TYPED_ARRAY_INT32:      subtype = 5;  break;
+                case JS_TYPED_ARRAY_UINT32:     subtype = 6;  break;
+                case JS_TYPED_ARRAY_FLOAT32:    subtype = 7;  break;
+                case JS_TYPED_ARRAY_FLOAT64:    subtype = 8;  break;
+                case JS_TYPED_ARRAY_BIG_INT64:  subtype = 9;  break;
+                case JS_TYPED_ARRAY_BIG_UINT64: subtype = 10; break;
+                case JS_TYPED_ARRAY_FLOAT16:    subtype = 11; break;
+                default:
+                    JS_FreeValue(ctx, abBuf);
+                    JS_ThrowTypeError(ctx,
+                        "postMessage: unsupported TypedArray element type %d", taType);
+                    return false;
             }
 
             // Get the raw bytes from the underlying ArrayBuffer
@@ -573,19 +577,28 @@ static JSValue readValue(JSContext* ctx, Reader& r, Message& msg, int depth)
         JSValue ab = JS_NewArrayBufferCopy(ctx, bufData, bufBytes);
         if (JS_IsException(ab)) return ab;
 
-        // Map subtype to constructor name
-        const char* ctorName = "Float32Array";
-        int bytesPerElement = 4;
+        // Map subtype back to a constructor name. An unrecognized subtype is a
+        // corrupt or newer-than-us stream: say so rather than handing back a
+        // Float32Array over bytes that were never floats.
+        const char* ctorName;
+        int bytesPerElement;
         switch (subtype) {
-            case 0: ctorName = "Int8Array";           bytesPerElement = 1; break;
-            case 1: ctorName = "Uint8Array";          bytesPerElement = 1; break;
-            case 2: ctorName = "Uint8ClampedArray";   bytesPerElement = 1; break;
-            case 3: ctorName = "Int16Array";          bytesPerElement = 2; break;
-            case 4: ctorName = "Uint16Array";         bytesPerElement = 2; break;
-            case 5: ctorName = "Int32Array";          bytesPerElement = 4; break;
-            case 6: ctorName = "Uint32Array";         bytesPerElement = 4; break;
-            case 7: ctorName = "Float32Array";        bytesPerElement = 4; break;
-            case 8: ctorName = "Float64Array";        bytesPerElement = 8; break;
+            case 0:  ctorName = "Int8Array";          bytesPerElement = 1; break;
+            case 1:  ctorName = "Uint8Array";         bytesPerElement = 1; break;
+            case 2:  ctorName = "Uint8ClampedArray";  bytesPerElement = 1; break;
+            case 3:  ctorName = "Int16Array";         bytesPerElement = 2; break;
+            case 4:  ctorName = "Uint16Array";        bytesPerElement = 2; break;
+            case 5:  ctorName = "Int32Array";         bytesPerElement = 4; break;
+            case 6:  ctorName = "Uint32Array";        bytesPerElement = 4; break;
+            case 7:  ctorName = "Float32Array";       bytesPerElement = 4; break;
+            case 8:  ctorName = "Float64Array";       bytesPerElement = 8; break;
+            case 9:  ctorName = "BigInt64Array";      bytesPerElement = 8; break;
+            case 10: ctorName = "BigUint64Array";     bytesPerElement = 8; break;
+            case 11: ctorName = "Float16Array";       bytesPerElement = 2; break;
+            default:
+                JS_FreeValue(ctx, ab);
+                return JS_ThrowTypeError(ctx,
+                    "postMessage: unknown TypedArray subtype %u", subtype);
         }
 
         // Create TypedArray: new Ctor(arrayBuffer, byteOffset, length)
