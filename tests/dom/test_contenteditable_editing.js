@@ -172,4 +172,63 @@ function caret(ed, off, node) {
            'one step crosses the whole surrogate pair -> 3, got ' + sel.focusOffset);
 }
 
+// ---------------------------------------------------------------------------
+// Clicking an editable host establishes a Selection even with no text to hit
+// ---------------------------------------------------------------------------
+function clickAt(el, dx, dy) {
+    const r = el.getBoundingClientRect();
+    mouseDown(r.left + dx, r.top + dy);
+    mouseUp(r.left + dx, r.top + dy);
+    flush();
+}
+
+{
+    // An empty host has no text node at all, so the text hit-test misses and
+    // the press used to fall through to removeAllRanges().
+    const ed = freshHost('');
+    const sel = window.getSelection();
+    clickAt(ed, 20, 10);
+    assert(sel.rangeCount === 1,
+           'clicking an empty contenteditable gives a range, got rangeCount=' +
+           sel.rangeCount);
+    assert(sel.focusNode === ed, 'caret is an element position on the host');
+    assert(sel.isCollapsed, 'the caret is collapsed');
+
+    // The point of having a caret: typing works without script intervention.
+    textInput('h'); textInput('i');
+    flush();
+    assert(ed.textContent === 'hi',
+           'typing after the click lands in the host, got ' +
+           JSON.stringify(ed.textContent));
+}
+
+{
+    // A press below a host's text also misses every run; it should put the
+    // caret after the content rather than dropping the selection.
+    const ed = freshHost('abc');
+    const sel = window.getSelection();
+    clickAt(ed, 300, 50);
+    assert(sel.rangeCount === 1,
+           'clicking past a host\'s text keeps a caret, got rangeCount=' +
+           sel.rangeCount);
+    textInput('!');
+    flush();
+    assert(ed.textContent === 'abc!',
+           'typing goes after the existing text, got ' +
+           JSON.stringify(ed.textContent));
+}
+
+{
+    // Non-editable content is untouched: a press that hits no text still
+    // clears the selection there.
+    root.innerHTML = '<div id="plain" style="width:320px;height:60px"></div>';
+    flush();
+    const plain = document.getElementById('plain');
+    const sel = window.getSelection();
+    clickAt(plain, 20, 10);
+    assert(sel.rangeCount === 0,
+           'a non-editable empty div still clears the selection, got ' +
+           sel.rangeCount);
+}
+
 console.log('contenteditable editing tests passed');

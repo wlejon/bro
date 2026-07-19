@@ -49,6 +49,15 @@ function selectRange(ed, a, b, node) {
     sel.setBaseAndExtent(n, a, n, b);
     flush();
 }
+// Click into a host to get a caret, the way a user does. An empty host has no
+// text node to hit, so this exercises the element-position caret the press
+// path establishes — seeding the caret from script instead would skip it.
+function clickInto(ed) {
+    const r = ed.getBoundingClientRect();
+    mouseDown(r.left + 4, r.top + 4);
+    mouseUp(r.left + 4, r.top + 4);
+    flush();
+}
 function selOffsets() {
     const s = window.getSelection();
     return s.anchorOffset + ':' + s.focusOffset;
@@ -57,7 +66,7 @@ function selOffsets() {
 // --- Typing coalesces into one entry; undo/redo round-trips with caret -----
 {
     const ed = freshHost('');
-    caret(ed, 0, ed);          // empty host: caret is an element position
+    clickInto(ed);             // empty host: the press path plants the caret
     textInput('a'); textInput('b'); textInput('c');
     flush();
     assert(ed.textContent === 'abc', 'typed abc, got: ' + JSON.stringify(ed.textContent));
@@ -80,7 +89,7 @@ function selOffsets() {
 // --- A caret move between characters breaks the run ------------------------
 {
     const ed = freshHost('');
-    caret(ed, 0, ed);          // empty host: caret is an element position
+    clickInto(ed);             // empty host: the press path plants the caret
     textInput('a'); textInput('b');
     flush();
     press(SDLK_LEFT);                 // caret move breaks coalescing
@@ -131,7 +140,7 @@ function selOffsets() {
 // --- Enter is discrete: it stands alone between two typing runs ------------
 {
     const ed = freshHost('');
-    caret(ed, 0, ed);          // empty host: caret is an element position
+    clickInto(ed);             // empty host: the press path plants the caret
     textInput('a');
     press(SDLK_RETURN);
     textInput('b');

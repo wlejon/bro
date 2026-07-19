@@ -936,6 +936,30 @@ void Engine::handleMouseDown(float x, float y, int button) {
                     // Selection highlight + caret are base-only chrome; force a
                     // re-record (no relayout) so the new selection paints.
                     markAppBaseDirty();
+                } else if (target && document_->ownsNode(target) &&
+                           inEditableHost(target)) {
+                    // No text was hit, but the press landed inside an editable
+                    // host — an empty contenteditable has no text node to hit
+                    // at all, and a press in the padding below a host's text
+                    // misses every run. Either way a browser gives you a
+                    // caret; leaving rangeCount() at 0 means the next
+                    // keystroke has nowhere to go and typing silently does
+                    // nothing until script calls collapse().
+                    //
+                    // Element position, since there is no text node: the end
+                    // of the pressed element's children, which is the start
+                    // for an empty host and "after the content" for a press
+                    // past it — what clicking below a paragraph does.
+                    //
+                    // No drag is armed: the drag anchor is a text-node handle
+                    // and this position has no text node behind it. A press
+                    // that misses every run has nothing to sweep a selection
+                    // across anyway.
+                    const int idx = static_cast<int>(target->childNodes().size());
+                    sel->collapse(target, idx);
+                    selectionDragging_ = false;
+                    selectionAnchorNode_.reset();
+                    markAppBaseDirty();
                 } else {
                     // Click outside any text: clear selection.
                     sel->removeAllRanges();
