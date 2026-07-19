@@ -41,6 +41,19 @@ Document::Document() {
 // selection_ down first, then clear any JS-owned Ranges that outlived us.
 Document::~Document() {
     liveDocuments().erase(this);
+    // Sever anything still pointing into this document's node storage before
+    // that storage goes away. Destroying ownedNodes_/pendingFrees_ below runs
+    // ~Element on every node without going through freeNode(), so the per-node
+    // NodeFreedCallback never fires for them — a JS wrapper that outlives the
+    // document would keep a raw Element* to freed memory and dereference it
+    // when it is finally collected.
+    //
+    // This is not hypothetical: teardown order for sub-documents, system panels
+    // and app reload is cleanup(ctx) -> document.reset() -> JS_FreeContext(ctx),
+    // so the wrappers are ALWAYS finalized after their Elements are gone.
+    if (nodeDestroyingCb_) {
+        forEachLiveElement([this](Element* el) { nodeDestroyingCb_(this, el); });
+    }
     selection_.reset();
     auto ranges = std::move(liveRanges_);
     for (auto* r : ranges) {
@@ -1454,6 +1467,20 @@ void Document::freeNode(Node* node) {
 }
 
 void Document::drainPendingFrees() {
+    // Last chance to sever anything still pointing into this storage, while it
+    // is unambiguously valid. freeNode() already fired nodeFreedCb_ for every
+    // one of these nodes, so this normally finds nothing left to do; it catches
+    // references taken during the window BETWEEN freeNode() and here — notably
+    // a JS wrapper handed out for an already-doomed node by an event dispatch
+    // still unwinding its propagation path.
+    if (nodeDestroyingCb_) {
+        std::function<void(Node*)> walk = [&](Node* n) {
+            if (!n) return;
+            for (Node* child : n->childNodes()) walk(child);
+            nodeDestroyingCb_(this, n);
+        };
+        for (auto& root : pendingFrees_) walk(root.get());
+    }
     pendingFrees_.clear();
     pendingSet_.clear();
 }

@@ -119,6 +119,18 @@ JSValue DomBindings::wrapElement(JSContext* ctx, void* element_ptr)
         // map — a transient wrapper for a doomed node must not be cached, or the
         // raw pointer would outlive it.
         elem->setJsWrapper(JS_VALUE_GET_PTR(obj));
+    } else if (ctxDoc->isNodeLive(elem)) {
+        // Doomed but not yet destroyed: queued in pendingFrees_. Deliberately
+        // NOT added to __bro_elem_map (see above) — but it must still be
+        // reachable from the element, because fireNodeFreed has already run for
+        // this node and can never come back for a wrapper made after the fact.
+        // The jsWrapper_ slot is what fireNodeDestroying reads at
+        // drainPendingFrees() to null this opaque while the storage is still
+        // valid; without it the wrapper outlives the Element and every later
+        // touch reads freed memory. Safe to cache: if the wrapper is collected
+        // first, its finalizer clears the slot (the Element is alive until the
+        // drain, so that clear is a valid write).
+        elem->setJsWrapper(JS_VALUE_GET_PTR(obj));
     } else if (auto* ddoc = elem->document();
                ddoc && isDetachedDocument(ddoc) && ddoc->ownsNode(elem)) {
         // Detached-document node (DOMParser). Cache via the element's wrapper
@@ -167,6 +179,7 @@ JSContext* getCtxForDocument(bro::dom::Document* doc) {
 }
 
 static void fireNodeFreed(bro::dom::Document* doc, bro::dom::Node* node);
+static void fireNodeDestroying(bro::dom::Document* doc, bro::dom::Node* node);
 static void fireNodeAdopted(bro::dom::Document* newDoc,
                             bro::dom::Document* oldDoc, bro::dom::Node* node);
 
@@ -297,6 +310,7 @@ JSValue wrapDetachedDocument(JSContext* ctx, bro::dom::Document* doc) {
     // Register for freed-node wrapper invalidation, same as the main document.
     s_doc_to_ctx[doc] = ctx;
     doc->setNodeFreedCallback(&fireNodeFreed);
+    doc->setNodeDestroyingCallback(&fireNodeDestroying);
     doc->setNodeAdoptedCallback(&fireNodeAdopted);
     doc->setElementClonedCallback(&fireElementCloned);
     return docObj;
@@ -368,6 +382,43 @@ static void fireNodeFreed(bro::dom::Document* doc, bro::dom::Node* node) {
             dit->second.elemWrappers.erase(wit);
         }
     }
+}
+
+// Last-chance wrapper invalidation. Fired from Document::drainPendingFrees()
+// for every node in a doomed subtree, at the last instant its storage is valid.
+//
+// fireNodeFreed() already ran for these nodes when freeNode() queued them, so
+// jsWrapper_ is normally null here and this does nothing. The case it exists
+// for is a wrapper created AFTER the node was doomed: wrapElement() hands out a
+// transient wrapper when an event dispatch, still unwinding its propagation
+// path, re-wraps the target its own handler just removed. Such a wrapper is
+// rooted in neither __bro_elem_map nor the detached-document registry, so
+// fireNodeFreed cannot reach it — but the element's jsWrapper_ slot can, and
+// that is exactly what wrapElement records it in.
+//
+// Nulling the opaque here keeps the invariant every other free path maintains:
+// a wrapper is invalidated eagerly, while the memory behind it is still valid.
+// Afterwards getElement() sees a null opaque and the wrapper is simply inert —
+// no liveness probing of freed storage anywhere.
+static void fireNodeDestroying(bro::dom::Document* doc, bro::dom::Node* node) {
+    if (!node || node->nodeType() != bro::dom::NodeType::Element) return;
+    auto* elem = static_cast<bro::dom::Element*>(node);
+    void* w = elem->jsWrapper();
+    if (!w) return;
+    elem->setJsWrapper(nullptr);
+    // Under engine shutdown the wrapper objects may already be gone (their
+    // finalizers skip the bookkeeping that would have cleared the slot above),
+    // so the pointer is only trustworthy while the runtime is up. That is also
+    // exactly when js_element_finalizer skips its own dereference, so nothing
+    // reads the Element we are declining to detach from.
+    //
+    // Deliberately NOT gated on s_doc_to_ctx: DomBindings::cleanup() drops that
+    // mapping before the caller destroys the Document, and ~Document invoking
+    // this hook is the last chance to null these opaques. The wrapper objects
+    // outlive the mapping — they are not freed until JS_FreeContext, after.
+    (void)doc;
+    if (isElementFinalizerShutdown()) return;
+    JS_SetOpaque(JS_MKPTR(JS_TAG_OBJECT, w), nullptr);
 }
 
 // A node's owner document changed (Document::adoptNode). Cached wrappers are
@@ -454,6 +505,7 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
         s_doc_to_ctx[doc] = ctx;
         doc->setSelectionChangeCallback(&fireSelectionChangeOnDocument);
         doc->setNodeFreedCallback(&fireNodeFreed);
+        doc->setNodeDestroyingCallback(&fireNodeDestroying);
         doc->setNodeAdoptedCallback(&fireNodeAdopted);
         doc->setElementClonedCallback(&fireElementCloned);
     }

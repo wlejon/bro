@@ -348,6 +348,17 @@ public:
     using NodeFreedCallback = void(*)(Document*, Node*);
     void setNodeFreedCallback(NodeFreedCallback cb) { nodeFreedCb_ = cb; }
 
+    // Fired from drainPendingFrees() for every node in a doomed subtree, at the
+    // last instant its storage is still valid. NodeFreedCallback above already
+    // ran for these nodes when freeNode() queued them, so this is normally a
+    // no-op — it exists for wrappers created AFTER the node was doomed, which
+    // that earlier hook cannot possibly have known about. Deepest-first, same
+    // order as freeNode().
+    using NodeDestroyingCallback = void(*)(Document*, Node*);
+    void setNodeDestroyingCallback(NodeDestroyingCallback cb) {
+        nodeDestroyingCb_ = cb;
+    }
+
     // Fired from cloneNode() for each cloned element, after its attributes and
     // (for a deep clone) its children are in place. Everything the DOM layer
     // can copy on its own already has been; this hook exists for the state
@@ -508,6 +519,7 @@ private:
     std::unordered_set<Range*> liveRanges_;
     SelectionChangeCallback selectionChangeCb_ = nullptr;
     NodeFreedCallback nodeFreedCb_ = nullptr;
+    NodeDestroyingCallback nodeDestroyingCb_ = nullptr;
     ElementClonedCallback elementClonedCb_ = nullptr;
     NodeAdoptedCallback nodeAdoptedCb_ = nullptr;
 };
