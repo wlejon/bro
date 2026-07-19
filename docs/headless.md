@@ -156,12 +156,11 @@ the controls, the preedit renders with the same thin underline plus the
 composition-cursor caret, and the never-strand commits apply identically. If
 the caret sits between elements (or in an empty host) the text node is
 created by the same insertion rule regular contenteditable typing uses.
-Deviations from the control behavior: contenteditable has **no undo model**
-in bro, so a committed composition records no undo entry (the commit is one
-coherent `replaceData` splice); and composing over a non-collapsed selection
-deletes it at `compositionstart` — `imeCancel()` removes the preedit and
-restores the DOM around it, but does not resurrect that deleted selection.
-Engine-wide deviations shared with the controls: events dispatch after the
+Undo matches the controls: a committed composition records one discrete
+entry, so a single Ctrl+Z removes the whole committed run, and `imeCancel()`
+records none — it removes the preedit and, when the composition had replaced
+a non-collapsed selection at `compositionstart`, resurrects that selection
+and its DOM. Engine-wide deviations shared with the controls: events dispatch after the
 mutation, `beforeinput` is not fired for composition, and
 `compositionstart`'s `preventDefault` is not honored.
 

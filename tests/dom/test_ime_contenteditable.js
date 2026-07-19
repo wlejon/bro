@@ -10,8 +10,9 @@
 //   - caret moves / clicks / Tab / programmatic focus mid-composition COMMIT
 //   - at an element boundary the preedit lands in a text node created by the
 //     same insertion rule regular contenteditable typing uses
-// NOTE: contenteditable has no undo model in bro — composition records no
-// undo entries (unlike the controls' single discrete entry).
+// Undo behavior matches the controls and is covered separately, by
+// tests/dom/test_undo_contenteditable.js: a commit records one discrete
+// entry, a cancel records none.
 
 const SDLK_TAB = 9;
 
