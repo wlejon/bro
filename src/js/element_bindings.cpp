@@ -2674,10 +2674,12 @@ static JSValue js_element_contains(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el || argc < 1) return JS_FALSE;
-    auto* other = static_cast<bro::dom::Element*>(
-        DomBindings::unwrapElement(ctx, argv[0]));
-    if (!other) return JS_FALSE;
-    auto* node = static_cast<bro::dom::Node*>(other);
+    // Any node, not just an element. Unwrapping as an Element yields null for
+    // a Text node, so `div.contains(div.firstChild)` used to answer false for
+    // a text child the element demonstrably owns — and every guard written as
+    // "is this node inside my subtree" silently excluded all text.
+    auto* node = unwrapNode(ctx, argv[0]);
+    if (!node) return JS_FALSE;
     while (node) {
         if (node == el) return JS_TRUE;
         node = node->parentNode();
@@ -2691,12 +2693,12 @@ static JSValue js_element_compareDocumentPosition(JSContext* ctx,
 {
     auto* el = getElement(this_val);
     if (!el || argc < 1) return JS_NewInt32(ctx, 0);
-    auto* other = static_cast<bro::dom::Element*>(
-        DomBindings::unwrapElement(ctx, argv[0]));
+    // Same reason as contains(): a Text argument must compare, not vanish.
+    auto* other = unwrapNode(ctx, argv[0]);
     if (!other) return JS_NewInt32(ctx, 0);
-    if (el == other) return JS_NewInt32(ctx, 0);
+    if (static_cast<bro::dom::Node*>(el) == other) return JS_NewInt32(ctx, 0);
 
-    auto* node = static_cast<bro::dom::Node*>(other);
+    auto* node = other;
     while (node) {
         if (node == el) return JS_NewInt32(ctx, 16 | 4);
         node = node->parentNode();

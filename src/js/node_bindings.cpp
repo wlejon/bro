@@ -692,6 +692,25 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
             return wrapAnyNode(cx, n->parentNode());
         }, "get parentNode", 0, JS_CFUNC_generic, 0);
 
+        // parentElement is parentNode narrowed to elements — null when the
+        // parent is a Document or a DocumentFragment, the element otherwise.
+        // Element has it; without it here a Text node reported null for a
+        // parent it plainly has, so `node.parentElement.tagName` threw on
+        // every text node in the document.
+        JSValue getParentElement = JS_NewCFunction2(ctx, [](JSContext* cx,
+            JSValueConst this_val, int, JSValueConst*) -> JSValue {
+            auto* n = nodeSelf(this_val);
+            if (!n || !n->parentNode()) return JS_NULL;
+            auto* p = n->parentNode();
+            if (p->nodeType() != bro::dom::NodeType::Element) return JS_NULL;
+            // createDocumentFragment() models a fragment as an Element with a
+            // reserved tag (see document_bindings.cpp), so the nodeType check
+            // above waves it through. A fragment is not an element parent.
+            if (static_cast<bro::dom::Element*>(p)->tagName() == "#DOCUMENT-FRAGMENT")
+                return JS_NULL;
+            return DomBindings::wrapElement(cx, static_cast<bro::dom::Element*>(p));
+        }, "get parentElement", 0, JS_CFUNC_generic, 0);
+
         JSValue getNextSibling = JS_NewCFunction2(ctx, [](JSContext* cx,
             JSValueConst this_val, int, JSValueConst*) -> JSValue {
             auto* n = nodeSelf(this_val);
@@ -719,12 +738,15 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
         }, "get previousSibling", 0, JS_CFUNC_generic, 0);
 
         JSAtom parentAtom = JS_NewAtom(ctx, "parentNode");
+        JSAtom parentElAtom = JS_NewAtom(ctx, "parentElement");
         JSAtom nextAtom = JS_NewAtom(ctx, "nextSibling");
         JSAtom prevAtom = JS_NewAtom(ctx, "previousSibling");
         JS_DefinePropertyGetSet(ctx, obj, parentAtom, getParent, JS_UNDEFINED, 0);
+        JS_DefinePropertyGetSet(ctx, obj, parentElAtom, getParentElement, JS_UNDEFINED, 0);
         JS_DefinePropertyGetSet(ctx, obj, nextAtom, getNextSibling, JS_UNDEFINED, 0);
         JS_DefinePropertyGetSet(ctx, obj, prevAtom, getPrevSibling, JS_UNDEFINED, 0);
         JS_FreeAtom(ctx, parentAtom);
+        JS_FreeAtom(ctx, parentElAtom);
         JS_FreeAtom(ctx, nextAtom);
         JS_FreeAtom(ctx, prevAtom);
     }
