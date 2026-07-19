@@ -1485,19 +1485,56 @@ static JSValue makeSplatCloud(JSContext* ctx, const bromesh::GaussianSplatCloud&
 }
 
 // Read a { positions, scales, rotations, opacities, sh, shDegree } JS object
-// into a GaussianSplatCloud. Missing attribute arrays are left empty (the
-// saver tolerates absent normals/colors-equivalents the same way it would an
-// SH-degree-0 cloud). Returns false only if there are no positions.
+// into a GaussianSplatCloud, validating that every companion array is long
+// enough for the vertex count implied by `positions`.
+//
+// The validation is load-bearing, not defensive padding: bromesh::saveSplatPLY
+// takes its count from positions and then indexes scales/rotations/opacities/sh
+// unconditionally (io/splat_ply.cpp), so a cloud missing `sh` or `opacities` —
+// trivially easy to hand it from JS, e.g. a hand-built cloud carrying `colors`
+// instead — walked off the end of an empty vector and segfaulted the process.
+// A JS caller must get a TypeError, never a crash.
+//
+// `err` receives a caller-actionable message when this returns false.
 static bool readSplatCloud(JSContext* ctx, JSValueConst obj,
-                           bromesh::GaussianSplatCloud& cloud) {
-    if (!JS_IsObject(obj)) return false;
+                           bromesh::GaussianSplatCloud& cloud,
+                           std::string& err) {
+    if (!JS_IsObject(obj)) { err = "cloud must be an object"; return false; }
     readFloatArray(ctx, obj, "positions", cloud.positions);
     readFloatArray(ctx, obj, "scales",    cloud.scales);
     readFloatArray(ctx, obj, "rotations", cloud.rotations);
     readFloatArray(ctx, obj, "opacities", cloud.opacities);
     readFloatArray(ctx, obj, "sh",        cloud.sh);
     cloud.shDegree = objInt(ctx, obj, "shDegree", 0);
-    return !cloud.positions.empty();
+
+    if (cloud.positions.empty()) { err = "cloud has no positions"; return false; }
+    if (cloud.positions.size() % 3 != 0) {
+        err = "positions length must be a multiple of 3";
+        return false;
+    }
+    const size_t n = cloud.positions.size() / 3;
+
+    // Mirrors GaussianSplatCloud::shStride() for the clamped degree the saver
+    // actually uses, so the bound checked here is the bound it will index.
+    const int degree = std::min(3, std::max(0, cloud.shDegree));
+    const size_t shStride = static_cast<size_t>((degree + 1) * (degree + 1)) * 3;
+
+    struct { const char* name; size_t have; size_t need; } req[] = {
+        { "scales",    cloud.scales.size(),    n * 3 },
+        { "rotations", cloud.rotations.size(), n * 4 },
+        { "opacities", cloud.opacities.size(), n },
+        { "sh",        cloud.sh.size(),        n * shStride },
+    };
+    for (const auto& r : req) {
+        if (r.have < r.need) {
+            err = std::string(r.name) + " has " + std::to_string(r.have) +
+                  " floats, need " + std::to_string(r.need) + " for " +
+                  std::to_string(n) + " splats" +
+                  (r.have == 0 ? " (array missing)" : "");
+            return false;
+        }
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2492,8 +2529,9 @@ void MeshBindings::install(JSContext* ctx) {
             std::string path = p ? p : "";
             if (p) JS_FreeCString(ctx, p);
             bromesh::GaussianSplatCloud cloud;
-            if (!readSplatCloud(ctx, argv[1], cloud))
-                return JS_ThrowTypeError(ctx, "saveSplatPLY: cloud has no positions");
+            std::string err;
+            if (!readSplatCloud(ctx, argv[1], cloud, err))
+                return JS_ThrowTypeError(ctx, "saveSplatPLY: %s", err.c_str());
             return JS_NewBool(ctx, bromesh::saveSplatPLY(
                 cloud, resolveMeshWritePath(ctx, path)));
         }, 2)
