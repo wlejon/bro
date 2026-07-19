@@ -3423,11 +3423,25 @@ std::string Engine::simulateCopy() {
     // A focused field copies its *selected* text — a collapsed caret copies
     // nothing, as in a browser. Mirrors the Ctrl+C path in handleKeyDown.
     std::string text;
+    bool fromFormField = false;
     if (activeEl) {
         if (auto* input = getElInput(activeEl); input && input->isFocused()) {
             text = input->selectedText();
+            fromFormField = true;
         } else if (auto* textarea = getElTextarea(activeEl); textarea && textarea->isFocused()) {
             text = textarea->selectedText();
+            fromFormField = true;
+        }
+    }
+    // No focused form field: a DOM Selection inside a contenteditable host
+    // copies instead, the same source simulateCut() takes its text from.
+    // Copy reads and never mutates, so there is no cut/paste counterpart to
+    // the deletion those two go on to do.
+    if (!fromFormField) {
+        auto* sel = document_->selection();
+        if (sel && sel->rangeCount() > 0 && !sel->isCollapsed()) {
+            auto* fn = sel->focusNode();
+            if (fn && editableHostOf(fn)) text = sel->toString();
         }
     }
 

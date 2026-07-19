@@ -364,4 +364,53 @@ function clickAt(el, dx, dy) {
            JSON.stringify(ed.textContent));
 }
 
+// ---------------------------------------------------------------------------
+// copy() reads a contenteditable selection, the same source cut() takes from
+// ---------------------------------------------------------------------------
+{
+    const ed = freshHost('hello world');
+    const sel = window.getSelection();
+    sel.setBaseAndExtent(ed.firstChild, 0, ed.firstChild, 5);
+    flush();
+    assert(copy() === 'hello',
+           'copy returns the CE selection, got ' + JSON.stringify(copy()));
+    assert(ed.textContent === 'hello world', 'copy does not mutate the host');
+
+    // A collapsed caret copies nothing, as in a browser.
+    sel.collapse(ed.firstChild, 3);
+    flush();
+    assert(copy() === '',
+           'a collapsed caret copies nothing, got ' + JSON.stringify(copy()));
+}
+
+{
+    // Multi-byte content survives the round trip through copy and paste.
+    const ed = freshHost('a日😀b');
+    const sel = window.getSelection();
+    sel.setBaseAndExtent(ed.firstChild, 1, ed.firstChild, 4);
+    flush();
+    const got = copy();
+    assert(got === '日😀', 'copied the multi-byte run, got ' + JSON.stringify(got));
+
+    sel.collapse(ed.firstChild, ed.firstChild.data.length);
+    flush();
+    paste(got);
+    flush();
+    assert(ed.textContent === 'a日😀b日😀',
+           'pasted it back intact, got ' + JSON.stringify(ed.textContent));
+}
+
+{
+    // A selection outside any editable host still copies nothing — copy() is
+    // about editable surfaces, not about document text at large.
+    root.innerHTML = '<div id="plain" style="width:320px">hello world</div>';
+    flush();
+    const plain = document.getElementById('plain');
+    const sel = window.getSelection();
+    sel.setBaseAndExtent(plain.firstChild, 0, plain.firstChild, 5);
+    flush();
+    assert(copy() === '',
+           'a non-editable selection copies nothing, got ' + JSON.stringify(copy()));
+}
+
 console.log('contenteditable editing tests passed');
