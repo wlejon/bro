@@ -59,7 +59,7 @@ cmake -B build                                        # app (default)
 cmake -B build -DBRO_PROFILE=minimal                  # 2D/canvas/WebGL floor, no vcpkg
 cmake -B build -DBRO_PROFILE=full                     # + AI tower (CPU)
 cmake -B build -DBRO_PROFILE=full -DBRO_WITH_TENSOR_CUDA=ON   # + AI tower on CUDA
-cmake -B build -DBRO_PROFILE=minimal -DBRO_WITH_3D=ON # minimal + just the 3D scene graph
+cmake -B build -DBRO_PROFILE=minimal -DBRO_WITH_3D=ON # minimal + the 3D scene graph (forces PHYSICS + GAMEAI on)
 ```
 
 > Note: `-DBRO_PROFILE` seeds flag defaults on the **first** configure of a build
@@ -153,8 +153,16 @@ cd third_party/skia
 ```
 
 On Windows, build Skia with `gn`/`ninja` (`cd third_party/skia/src && python3
-tools/git-sync-deps`, then `bin/gn gen` + `ninja` — see the args in `CLAUDE.md`)
-and place `skia.lib` in `third_party/skia/lib/{Debug,Release}/`.
+tools/git-sync-deps`, then `bin/gn gen` + `ninja`) and place `skia.lib` in
+`third_party/skia/lib/{Debug,Release}/`.
+
+Whichever route you take, the Skia **source** tree must carry the shaping
+modules — `modules/skshaper`, `modules/skunicode`, and the bundled HarfBuzz and
+ICU sources. bro compiles those itself (`third_party/skia/skia_modules.cmake`)
+rather than taking them from the pre-built lib, and `BRO_WITH_TEXT_SHAPING`
+defaults ON in every profile. A hand-built or older bundle that lacks them will
+configure with shaping silently unavailable, which is a different renderer — no
+ligatures, no cursive joining, no bidi. See `third_party/skia/BUNDLE.md`.
 
 ## Build commands
 

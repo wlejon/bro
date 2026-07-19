@@ -94,7 +94,7 @@ error on use.
 
 `util · platform · render · svg · layout · dom · canvas · webgl · engine ·
 headless` + Skia · SDL · glad · qjs · qjsbind · brokit · htmlayout ·
-**broimage (tensor-free)**. The 37 core `*_bindings.cpp`. A complete
+**broimage (tensor-free)**. The core, always-compiled `*_bindings.cpp`. A complete
 HTML/CSS/JS + Canvas2D + WebGL runtime with working screenshots.
 
 ### Tier 1 — feature groups (brotensor-free)
@@ -117,6 +117,7 @@ HTML/CSS/JS + Canvas2D + WebGL runtime with working screenshots.
 |---|:--|:--:|---|
 | `BRO_WITH_TENSOR` | brotensor (CPU); gpu/tensor bindings | on | — |
 | `BRO_WITH_TENSOR_CUDA` | brotensor CUDA backend | **off** | `TENSOR` + CUDA toolkit |
+| `BRO_WITH_TENSOR_METAL` | brotensor Metal backend | **off** | `TENSOR` + macOS |
 | `BRO_WITH_LM` | brolm | on | `TENSOR` |
 | `BRO_WITH_DIFFUSION` | brodiffusion | on | `LM` (text encoder) |
 | `BRO_WITH_VISION` | brovisionml | on | `TENSOR` |
@@ -144,26 +145,48 @@ LM         → TENSOR
 VISION     → TENSOR
 GAMEAI_NN  → GAMEAI, TENSOR
 FLORA      → 3D
+3D         → PHYSICS, GAMEAI
 ```
+
+`3D → PHYSICS, GAMEAI` is not a convenience: `scene_graph.h` includes
+`physics_node.h` / `agent_binding.h` / `ai_world_ticker.h` and `bro_scene` hard-links
+`bro_physics` + `brogameagent`, so the scene graph cannot be built without them.
+It resolves after `FLORA → 3D` so the whole `FLORA → 3D → {PHYSICS, GAMEAI}`
+chain settles in one pass.
 
 (All of the above also imply `TENSOR` transitively via `LM`/direct.)
 
 ## How a module is compiled in or stubbed
 
-Per optional cluster, two source files that both define the same
-`installXBindings(qjs::Context)` symbol:
+There is **one** `x_bindings.cpp` per cluster, always in `bro_js`'s source list.
+Its body is wrapped in `#if BRO_WITH_X`, and the `#else` branch installs the
+stub via the shared helper in `src/js/feature_stub.h`:
 
-- `x_bindings.cpp` — the real implementation (compiled when the flag is ON).
-- `x_bindings_stub.cpp` — installs `bro.x = { available: false, ... }` whose
-  methods throw `"bro.x unavailable: built without BRO_WITH_X"` (compiled when OFF).
+```cpp
+#if BRO_WITH_LM
+void installLmBindings(qjs::Context& ctx) { /* the real thing */ }
+#else
+void installLmBindings(qjs::Context& ctx) {
+    installUnavailableNamespace(ctx, "lm", "BRO_WITH_LM");
+}
+#endif
+```
 
-`src/js/CMakeLists.txt` selects which file goes into `bro_js`'s source list, and
-wraps the sibling `target_link_libraries` entry in the same `if()`. The
+`installUnavailableNamespace` installs `bro.x` as a **Proxy** over
+`{available: false}`: any property other than `available` resolves to a function
+that throws `"bro.x is unavailable: this build was compiled without BRO_WITH_X"`.
+
+> Feature-detect with `bro.x.available === false`, **not** `if (bro.x)`. The
+> namespace object always exists and is always truthy, and so is every method
+> reached through it — the throw happens on call, not on lookup.
+
+`src/js/CMakeLists.txt` doesn't swap sources; it only wraps each optional
+sibling's `target_link_libraries` entry in the matching `if()`. The
 `installXBindings()` call in `engine_init.cpp` stays **unconditional** — the call
 site never learns whether the module is real. `third_party/CMakeLists.txt` wraps
 each optional sibling's `add_subdirectory` in `if(BRO_WITH_X)`.
 
-This keeps `bro_js` monolithic (no new libraries) while making its heavy `.cpp`s
+This keeps `bro_js` monolithic (no new libraries) while making its heavy code
 and sibling links conditional, and keeps `engine_init.cpp` clean.
 
 ## Seam files that need special handling
@@ -223,12 +246,14 @@ an existing build dir won't move flags already cached — clear the specific
   brotensor `add_subdirectory` + link + `tensor_adapter.cpp`).
 - **`../brogameagent/CMakeLists.txt`** — `BROGAMEAGENT_WITH_NN` option (gate the
   brotensor dep + the `nn/*` `learn/*` source list + NN tools).
-- **`src/js/CMakeLists.txt`** — conditional source lists (real vs `_stub.cpp`) and
-  conditional sibling links.
+- **`src/js/CMakeLists.txt`** — conditional sibling links (the source list is
+  unconditional; the gating lives in `#if BRO_WITH_X` inside each
+  `*_bindings.cpp`).
 - **`src/scene/CMakeLists.txt`** — conditional brogameagent/physics/flora links;
   gate the AI-world files (`agent_binding.*`, `ai_world_ticker.*`) and the
   `scene_graph` AI/physics hooks.
-- **New `*_bindings_stub.cpp`** per optional cluster.
+- **`src/js/feature_stub.h` + `feature_stubs.cpp`** — the one shared
+  `installUnavailableNamespace` helper every compiled-out cluster falls back to.
 - **`engine_init.cpp`** — unchanged call sites (the point of the stub pattern).
 
 ## Testing implications
