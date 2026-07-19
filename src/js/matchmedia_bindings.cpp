@@ -16,8 +16,12 @@
 //
 // Supported: matches (live — evaluated against the realm document's current
 // MediaContext on every read), media (the input string, trimmed; "" → "all"),
-// onchange, addEventListener('change', fn) / removeEventListener, and the
-// legacy addListener(fn)/removeListener(fn) aliases. The change event is a
+// onchange, addEventListener('change', fn, opts) / removeEventListener — with
+// the {capture, once, signal} options bag and the legacy boolean-capture third
+// argument — and the legacy addListener(fn)/removeListener(fn) aliases, which
+// take no options. `capture` has no propagation meaning here (a
+// MediaQueryList is not in a tree) but is part of listener identity, so
+// add/remove pair up per spec. The change event is a
 // plain MediaQueryListEvent-shaped object {type, matches, media, target,
 // currentTarget} (same pattern as the AnimationPlaybackEvent in
 // web_animation_bindings.cpp — MediaQueryList is not a DOM node, so it does
@@ -43,6 +47,17 @@ namespace {
 // Wrapper state
 // ---------------------------------------------------------------------------
 
+// A registered 'change' listener. Per the DOM spec a listener is keyed by
+// (type, callback, capture) — capture has no other meaning here, since a
+// MediaQueryList is not in a tree and has no propagation path, but it still
+// participates in identity, so add/remove pair up the way callers expect.
+struct ChangeListener {
+    JSValue fn = JS_UNDEFINED;
+    JSValue signal = JS_UNDEFINED;  // AbortSignal, or undefined
+    bool capture = false;
+    bool once = false;
+};
+
 struct MediaQueryListJS {
     JSContext* ctx = nullptr;
     uint64_t id = 0;
@@ -50,7 +65,7 @@ struct MediaQueryListJS {
     bool lastMatches = false;  // last delivered/observed state (flip detection)
 
     JSValue onchange = JS_UNDEFINED;
-    std::vector<JSValue> listeners; // 'change' listeners, registration order
+    std::vector<ChangeListener> listeners; // 'change' listeners, registration order
 
     ~MediaQueryListJS();
 };
@@ -84,7 +99,10 @@ MediaQueryListJS::~MediaQueryListJS() {
     if (ctx) {
         JSRuntime* rt = JS_GetRuntime(ctx);
         if (!JS_IsUndefined(onchange)) JS_FreeValueRT(rt, onchange);
-        for (JSValue& v : listeners) JS_FreeValueRT(rt, v);
+        for (ChangeListener& l : listeners) {
+            JS_FreeValueRT(rt, l.fn);
+            if (!JS_IsUndefined(l.signal)) JS_FreeValueRT(rt, l.signal);
+        }
     }
 }
 
@@ -127,6 +145,10 @@ bool evaluateFor(const MediaQueryListJS* a, bool* out) {
 // change event dispatch
 // ---------------------------------------------------------------------------
 
+// Defined with the rest of the listener bookkeeping below.
+void pruneAborted(JSContext* ctx, MediaQueryListJS* a);
+void dropListener(JSContext* ctx, ChangeListener& l);
+
 JSValue makeChangeEvent(JSContext* ctx, const MediaQueryListJS* a,
                         JSValueConst mqlObj) {
     JSValue ev = JS_NewObject(ctx);
@@ -139,12 +161,27 @@ JSValue makeChangeEvent(JSContext* ctx, const MediaQueryListJS* a,
 }
 
 void fireChange(JSContext* ctx, MediaQueryListJS* a, JSValueConst mqlObj) {
+    // Drop listeners whose AbortSignal has fired — they must not be called.
+    pruneAborted(ctx, a);
+
     // Snapshot the listeners — a handler may add/remove listeners on this
     // very list (the removed ones still fire this round, like DOM events
     // mid-dispatch removal semantics are close enough for MQL).
     std::vector<JSValue> snap;
     snap.reserve(a->listeners.size() + 1);
-    for (JSValue& l : a->listeners) snap.push_back(JS_DupValue(ctx, l));
+    for (ChangeListener& l : a->listeners) snap.push_back(JS_DupValue(ctx, l.fn));
+
+    // Spec order: a `once` listener is removed BEFORE it is invoked, so a
+    // handler that re-adds itself stays registered instead of being wiped by
+    // its own removal afterwards.
+    for (auto it = a->listeners.begin(); it != a->listeners.end();) {
+        if (it->once) {
+            dropListener(ctx, *it);
+            it = a->listeners.erase(it);
+        } else {
+            ++it;
+        }
+    }
     JSValue onchange = JS_IsUndefined(a->onchange)
                            ? JS_UNDEFINED
                            : JS_DupValue(ctx, a->onchange);
@@ -163,6 +200,10 @@ void fireChange(JSContext* ctx, MediaQueryListJS* a, JSValueConst mqlObj) {
         JS_FreeValue(ctx, onchange);
     }
     JS_FreeValue(ctx, ev);
+
+    // `once` removals and aborted prunes may have taken the last listener, so
+    // the pin that kept this list reachable has to be re-evaluated.
+    updatePin(ctx, a, mqlObj);
 }
 
 // ---------------------------------------------------------------------------
@@ -174,21 +215,109 @@ bool sameFunction(JSValueConst a, JSValueConst b) {
            JS_VALUE_GET_PTR(a) == JS_VALUE_GET_PTR(b);
 }
 
-void addChangeListener(JSContext* ctx, JSValueConst this_val, JSValueConst fn) {
+// Options bag: addEventListener(type, fn, opts) accepts either a boolean
+// (legacy capture flag) or {capture, once, signal}.
+struct ListenerOptions {
+    bool capture = false;
+    bool once = false;
+    JSValue signal = JS_UNDEFINED;  // borrowed; dup'd only on registration
+};
+
+ListenerOptions parseListenerOptions(JSContext* ctx, JSValueConst opts) {
+    ListenerOptions o;
+    if (JS_IsUndefined(opts) || JS_IsNull(opts)) return o;
+    if (JS_IsBool(opts) || JS_IsNumber(opts) || JS_IsString(opts)) {
+        o.capture = JS_ToBool(ctx, opts);
+        return o;
+    }
+    if (!JS_IsObject(opts)) return o;
+
+    JSValue v = JS_GetPropertyStr(ctx, opts, "capture");
+    o.capture = JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+
+    v = JS_GetPropertyStr(ctx, opts, "once");
+    o.once = JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+
+    // Held as an owned value by the caller (see addChangeListener) — returned
+    // here so option parsing stays in one place.
+    v = JS_GetPropertyStr(ctx, opts, "signal");
+    if (JS_IsObject(v)) o.signal = v;
+    else JS_FreeValue(ctx, v);
+    return o;
+}
+
+// An AbortSignal's listener is dropped when the signal fires. Rather than
+// registering an 'abort' callback that would have to hold the MediaQueryList
+// alive to reach back into it, entries are checked lazily and pruned by
+// whatever touches the list next. Nothing can observe the difference —
+// listeners are not enumerable — and it keeps the abort path free of the
+// signal→MQL→signal reference cycle a callback would create.
+bool listenerAborted(JSContext* ctx, const ChangeListener& l) {
+    if (JS_IsUndefined(l.signal)) return false;
+    JSValue v = JS_GetPropertyStr(ctx, l.signal, "aborted");
+    bool aborted = JS_ToBool(ctx, v);
+    JS_FreeValue(ctx, v);
+    return aborted;
+}
+
+void dropListener(JSContext* ctx, ChangeListener& l) {
+    JS_FreeValue(ctx, l.fn);
+    if (!JS_IsUndefined(l.signal)) JS_FreeValue(ctx, l.signal);
+}
+
+void pruneAborted(JSContext* ctx, MediaQueryListJS* a) {
+    for (auto it = a->listeners.begin(); it != a->listeners.end();) {
+        if (listenerAborted(ctx, *it)) {
+            dropListener(ctx, *it);
+            it = a->listeners.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+void addChangeListener(JSContext* ctx, JSValueConst this_val, JSValueConst fn,
+                       JSValueConst opts) {
     auto* a = self(this_val);
     if (!a || !JS_IsFunction(ctx, fn)) return;
-    for (JSValue& l : a->listeners)
-        if (sameFunction(l, fn)) return; // spec: same callback registers once
-    a->listeners.push_back(JS_DupValue(ctx, fn));
+    ListenerOptions o = parseListenerOptions(ctx, opts);
+
+    // An already-aborted signal means the listener is never registered at all.
+    if (JS_IsObject(o.signal)) {
+        ChangeListener probe{ JS_UNDEFINED, o.signal, false, false };
+        if (listenerAborted(ctx, probe)) {
+            JS_FreeValue(ctx, o.signal);
+            return;
+        }
+    }
+
+    pruneAborted(ctx, a);
+    for (ChangeListener& l : a->listeners) {
+        // spec: (callback, capture) registers once; a repeat add is a no-op
+        // and notably does NOT update once/signal on the existing entry.
+        if (sameFunction(l.fn, fn) && l.capture == o.capture) {
+            if (JS_IsObject(o.signal)) JS_FreeValue(ctx, o.signal);
+            return;
+        }
+    }
+    a->listeners.push_back(ChangeListener{
+        JS_DupValue(ctx, fn), o.signal, o.capture, o.once });
     updatePin(ctx, a, this_val);
 }
 
-void removeChangeListener(JSContext* ctx, JSValueConst this_val, JSValueConst fn) {
+void removeChangeListener(JSContext* ctx, JSValueConst this_val, JSValueConst fn,
+                          JSValueConst opts) {
     auto* a = self(this_val);
     if (!a) return;
+    ListenerOptions o = parseListenerOptions(ctx, opts);
+    if (JS_IsObject(o.signal)) JS_FreeValue(ctx, o.signal); // ignored on remove
+
+    pruneAborted(ctx, a);
     for (auto it = a->listeners.begin(); it != a->listeners.end(); ++it) {
-        if (sameFunction(*it, fn)) {
-            JS_FreeValue(ctx, *it);
+        if (sameFunction(it->fn, fn) && it->capture == o.capture) {
+            dropListener(ctx, *it);
             a->listeners.erase(it);
             break;
         }
@@ -240,7 +369,9 @@ JSValue js_mql_addEventListener(JSContext* ctx, JSValueConst this_val,
     const char* type = JS_ToCString(ctx, argv[0]);
     bool isChange = type && std::string(type) == "change";
     if (type) JS_FreeCString(ctx, type);
-    if (isChange) addChangeListener(ctx, this_val, argv[1]);
+    if (isChange)
+        addChangeListener(ctx, this_val, argv[1],
+                          argc >= 3 ? argv[2] : JS_UNDEFINED);
     return JS_UNDEFINED;
 }
 
@@ -250,19 +381,22 @@ JSValue js_mql_removeEventListener(JSContext* ctx, JSValueConst this_val,
     const char* type = JS_ToCString(ctx, argv[0]);
     bool isChange = type && std::string(type) == "change";
     if (type) JS_FreeCString(ctx, type);
-    if (isChange) removeChangeListener(ctx, this_val, argv[1]);
+    if (isChange)
+        removeChangeListener(ctx, this_val, argv[1],
+                             argc >= 3 ? argv[2] : JS_UNDEFINED);
     return JS_UNDEFINED;
 }
 
 JSValue js_mql_addListener(JSContext* ctx, JSValueConst this_val,
                            int argc, JSValueConst* argv) {
-    if (argc >= 1) addChangeListener(ctx, this_val, argv[0]);
+    // Legacy alias — no options bag; equivalent to a plain non-capture add.
+    if (argc >= 1) addChangeListener(ctx, this_val, argv[0], JS_UNDEFINED);
     return JS_UNDEFINED;
 }
 
 JSValue js_mql_removeListener(JSContext* ctx, JSValueConst this_val,
                               int argc, JSValueConst* argv) {
-    if (argc >= 1) removeChangeListener(ctx, this_val, argv[0]);
+    if (argc >= 1) removeChangeListener(ctx, this_val, argv[0], JS_UNDEFINED);
     return JS_UNDEFINED;
 }
 
@@ -314,7 +448,12 @@ void installMatchMediaBindings(JSContext* ctx) {
     qjsbind::Class<MediaQueryListJS>(ctx, "MediaQueryList", qjsbind::NoGlobal)
         .gc_mark([](MediaQueryListJS* a, JSRuntime* rt, JS_MarkFunc* mark) {
             if (!JS_IsUndefined(a->onchange)) JS_MarkValue(rt, a->onchange, mark);
-            for (JSValue& l : a->listeners) JS_MarkValue(rt, l, mark);
+            for (ChangeListener& l : a->listeners) {
+                JS_MarkValue(rt, l.fn, mark);
+                // The AbortSignal is held too, so it has to be marked with the
+                // callback or the cycle collector cannot see through this entry.
+                if (!JS_IsUndefined(l.signal)) JS_MarkValue(rt, l.signal, mark);
+            }
         })
         .function_list(js_mql_proto_funcs,
                        sizeof(js_mql_proto_funcs) / sizeof(js_mql_proto_funcs[0]));
