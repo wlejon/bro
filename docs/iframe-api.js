@@ -112,23 +112,21 @@ frame.reload();
 // iframe at it, let a frame render, then read what it produced and hand it to
 // an encoder or a vision model.
 //
-// Returns null if the sub-document hasn't rendered yet, so capture AFTER the
-// 'load' event AND after a frame has been drawn (in a windowed app the render
-// loop is continuous; in headless, call screenshot()/flush() to force a frame,
-// or capture from within a requestAnimationFrame callback).
+// capture() is authoritative, not a passive readback of whatever the compositor
+// happens to be holding: it quiesces the raster worker, drains any queued
+// reload, re-records the sub-document at its current box, and renders it on the
+// host thread. So reload() + capture() returns the JUST-WRITTEN app on the FIRST
+// call — no rAF timing games, no "wait for a frame to land" dance.
 //
-// The readback is a direct GL read of the sub-document's own GPU surface on the
-// host thread — no copy back through JS of the whole DOM, and no cross-context
-// stall.
+// (On the GPU path that render targets the sub-document's own surface; under
+// --no-gpu it goes through the CPU rasterizer instead.)
 
 frame.addEventListener('load', () => {
-    requestAnimationFrame(() => {
-        const shot = frame.capture();            // ImageData or null
-        if (shot) {
-            const jpeg = bro.image.encodeJpeg(shot);   // → bytes for a vision model
-            // ...send jpeg to the model, critique, rewrite files, frame.reload()
-        }
-    });
+    const shot = frame.capture();            // ImageData
+    if (shot) {
+        const jpeg = bro.image.encodeJpeg(shot);   // → bytes for a vision model
+        // ...send jpeg to the model, critique, rewrite files, frame.reload()
+    }
 });
 
 
@@ -170,5 +168,7 @@ frame.addEventListener('load', () => {
 //   • There is no contentWindow / contentDocument accessor yet: the host cannot
 //     reach into the sub-document's DOM or JS from script. Drive it via files +
 //     reload(), and via input.
-//   • Nesting works (an iframe app may itself contain an <iframe>), each level a
-//     fresh isolated sub-document.
+//   • Nesting is NOT supported (v1): an <iframe> inside an iframe app never gets
+//     a sub-document — the element renders as an empty box. Only the app
+//     document is walked for frames. A nested frame under a bro.window host logs
+//     a warning; nested inside another iframe it fails silently.

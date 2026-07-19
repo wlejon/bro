@@ -42,7 +42,7 @@ These functions are available in addition to all standard DOM APIs:
 | `screenshot(path)` | Render the current frame to a PNG file. Composites scene layers (WebGL, Canvas 2D) with the HTML/CSS UI overlay. Throws on failure. |
 | `screenshot(path, selector)` | Render the current frame and crop to the element's bounding box before saving. Bounding box uses viewport-relative coords (matches `getBoundingClientRect`). Transparent canvas pixels flatten to opaque black; for alpha-preserving canvas exports use `screenshotCanvas`. |
 | `screenshotCanvas(path, selector)` | Snapshot a `<canvas>` element's underlying Skia surface directly to PNG, preserving alpha. Selector must point to a 2D canvas (not WebGL or scene). |
-| `getPixel(x, y)` | Return `{r, g, b, a}` for the pixel at viewport coordinates. Renders the full composited frame (HTML, Canvas, WebGL, crosshair) and reads back the pixel. |
+| `getPixel(x, y)` | Return `{r, g, b, a}` for the pixel at viewport coordinates. Renders the full composited frame (HTML, Canvas, WebGL, scene) and reads back the pixel. |
 
 ### Input simulation
 

@@ -69,7 +69,7 @@ See [broworkshop](https://github.com/wlejon/broworkshop) for example application
 | `Physics` / physics nodes | Jolt rigid bodies, contact events, constraints, raycasts |
 | `AudioContext` (broaudio) | real-time audio — synthesis, effects, spatial, MIDI |
 | `bro.mesh` · `bro.ai.game` · `bro.net` | mesh generation + CSG · navmesh + A* pathfinding · game networking (GNS) |
-| native dialogs · menu bars · gizmos · crosshair | OS-native app chrome |
+| native dialogs · menu bars · gizmos · multi-window | OS-native app chrome |
 
 **On-device AI** — every modality above, the engine can also **generate and perceive** — locally, on the GPU, in the frame loop. No API key, no network, runs offline; `bro.gpu` probes the live CUDA/Metal/CPU backend.
 
@@ -103,12 +103,12 @@ The left-hand `bro.*` names are the whole surface — each has an annotated JSDo
 - **brovisionml** — Vision-model inference: SAM segmentation, Depth-Anything-V2 depth, DSINE surface normals, and the ControlNet conditioning annotators (HED, lineart, MLSD, OpenPose, SegFormer). See [brovisionml](https://github.com/wlejon/brovisionml).
 - **broimage** — Image decode/encode (stb) plus composable kernels (reduce/map/combine/lookup/stencil/resample/gradient), geometric ops, alpha-correct compositing, color/HSV/sRGB, normalization presets, and NHWC↔NCHW preproc. Backs `bro.image` and host-side preprocessing in brolm/brodiffusion. See [broimage](https://github.com/wlejon/broimage).
 - **Jolt Physics** — Rigid body physics with contact listeners, integrated into the scene graph.
-- **Skia** — 2D rasterization (text, paths, images, gradients). HTML/CSS is rasterized to a texture via Skia's Ganesh GL backend, with a CPU raster fallback for `--no-gpu` headless runs.
+- **Skia** — 2D rasterization (text, paths, images, gradients). HTML/CSS is rasterized to a texture via Skia's Ganesh GL backend, with a CPU raster fallback for `--no-gpu` headless runs. Text runs through HarfBuzz shaping and Skia's UAX#9 bidi subset — both compiled from the Skia source bundle, on in every build profile — so ligatures, cursive joining, and RTL reordering are the one text path, not an optional upgrade.
 - **SDL3** — Windowing, input events, and OpenGL contexts. All GPU work is OpenGL 3.3 Core (via glad) on SDL_GL contexts — there is no SDL_GPU/D3D12/Metal path. The Skia-rasterized UI texture (Ganesh-GL) and the 3D scene layer are composited together as textured quads in the main GL context.
 
 Also uses **GameNetworkingSockets** (Valve's GNS, via vcpkg), **glad** (OpenGL 3.3 Core loader), and **FastNoise2** (via brokit).
 
-C++20. `bro` (windowed) and `bro-headless` (headless JS scripting and testing). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
+C++20. Three executables over one `Engine`: `bro` (windowed), `bro-headless` (headless JS scripting and testing), and `bro-server` (dedicated game server — fixed-tickrate JS loop with net, physics, mesh and noise, no window or renderer). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
 
 ## Building
 
@@ -162,7 +162,11 @@ For more elaborate setups — multiple apps under a project root with shared `li
 
 Annotated `.js` files in [docs/](docs/) — load them in your editor for JSDoc on every binding:
 
-`audio-api.js`, `mesh-api.js`, `flora-api.js`, `math-api.js`, `scene-api.js`, `lighting-api.js`, `physics-api.js`, `terrain-api.js`, `ai-game-api.js`, `gpu-api.js`, `tensor-api.js`, `lm-api.js`, `diffusion-api.js`, `tts-api.js`, `stt-api.js`, `wake-api.js`, `mic-api.js`, `vision-api.js`, `net-api.js`, `noise-api.js`, `worker-api.js`, `image-api.js`, `imagebitmap-api.js`, `video-api.js`, `dialogs-api.js`, `menu-api.js`, `gizmo-api.js`, `crosshair-api.js`, `brokit-api.js`.
+**Graphics & world** — `scene-api.js`, `animation-api.js`, `lighting-api.js`, `mesh-api.js`, `terrain-api.js`, `tile-api.js`, `flora-api.js`, `physics-api.js`, `gizmo-api.js`, `math-api.js`, `noise-api.js`.
+
+**Web & app surface** — `brokit-api.js`, `worker-api.js`, `iframe-api.js`, `window-api.js`, `matchmedia-api.js`, `web-animations-api.js`, `pointer-api.js`, `gamepad-api.js`, `time-api.js`, `menu-api.js`, `dialogs-api.js`, `image-api.js`, `imagebitmap-api.js`, `video-api.js`, `audio-api.js`, `net-api.js`, `net-sync-api.js`.
+
+**On-device AI** — `gpu-api.js`, `tensor-api.js`, `lm-api.js`, `diffusion-api.js`, `vision-api.js`, `triposplat-api.js`, `motion-api.js`, `tts-api.js`, `stt-api.js`, `diar-api.js`, `rave-api.js`, `wake-api.js`, `kws-api.js`, `mic-api.js`, `sense-api.js`, `gesture-api.js`, `listen-api.js`, `ai-game-api.js`.
 
 Plus [settings.md](docs/settings.md) (settings + action binding), [inspect.md](docs/inspect.md) (DOM inspector, very useful in headless), and [system-panels.md](docs/system-panels.md) (authoring/overriding engine-level UI panels — menu bar, preferences modal, splash, inspector).
 
