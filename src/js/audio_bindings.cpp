@@ -1404,7 +1404,9 @@ static JSValue js_audioctx_saveWav(JSContext* ctx, JSValueConst this_val, int ar
     JS_ToInt32(ctx, &sr, argv[3]);
 
     int numFrames = static_cast<int>(len / sizeof(float)) / std::max(channels, 1);
-    bool ok = broaudio::saveWav(path, reinterpret_cast<float*>(raw), numFrames, channels, sr);
+    std::string resolved = resolveAssetWritePath(path);
+    bool ok = broaudio::saveWav(resolved.c_str(), reinterpret_cast<float*>(raw),
+                                numFrames, channels, sr);
     JS_FreeCString(ctx, path);
     return JS_NewBool(ctx, ok);
 }
@@ -2105,7 +2107,7 @@ static JSValue js_audioctx_savePreset(JSContext* ctx, JSValueConst, int argc, JS
     const char* j = JS_ToCString(ctx, argv[0]);
     const char* path = JS_ToCString(ctx, argv[1]);
     bool ok = false;
-    if (j && path) ok = broaudio::savePresetToFile(j, path);
+    if (j && path) ok = broaudio::savePresetToFile(j, resolveAssetWritePath(path).c_str());
     if (j) JS_FreeCString(ctx, j);
     if (path) JS_FreeCString(ctx, path);
     return JS_NewBool(ctx, ok);
@@ -2113,7 +2115,8 @@ static JSValue js_audioctx_savePreset(JSContext* ctx, JSValueConst, int argc, JS
 static JSValue js_audioctx_loadPreset(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NULL;
     const char* path = JS_ToCString(ctx, argv[0]); if (!path) return JS_NULL;
-    std::string s = broaudio::loadPresetFromFile(path); JS_FreeCString(ctx, path);
+    std::string s = broaudio::loadPresetFromFile(resolveAssetPath(path).c_str());
+    JS_FreeCString(ctx, path);
     if (s.empty()) return JS_NULL;
     return JS_NewStringLen(ctx, s.data(), s.size());
 }
@@ -2941,7 +2944,8 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 [](AudioCtxData* d, JSContext* ctx, JSValue pathVal) -> JSValue {
                     const char* path = JS_ToCString(ctx, pathVal);
                     if (!path) return JS_FALSE;
-                    bool ok = d->engine->exportRecordingToWav(path);
+                    std::string resolved = resolveAssetWritePath(path);
+                    bool ok = d->engine->exportRecordingToWav(resolved.c_str());
                     JS_FreeCString(ctx, path);
                     return JS_NewBool(ctx, ok);
                 })

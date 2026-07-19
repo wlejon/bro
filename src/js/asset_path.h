@@ -33,4 +33,11 @@ void setAssetPathContext(const std::string& basePath, const util::AssetMounts* m
 
 std::string resolveAssetPath(const std::string& src);
 
+/// The same rules, for a path being WRITTEN to. A write target does not exist
+/// yet, so asking a mount to resolve the file itself can't work; this resolves
+/// the parent directory and rejoins the filename. Use it for every save/export
+/// binding — the read/write asymmetry is why the audio file APIs accepted
+/// "/app/..." on load and silently wrote next to the executable on save.
+std::string resolveAssetWritePath(const std::string& src);
+
 } // namespace bro::js

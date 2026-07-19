@@ -1513,6 +1513,11 @@ static bool readSplatCloud(JSContext* ctx, JSValueConst obj,
 // silently failed whenever the CWD copy of the dir didn't exist (fresh checkout).
 // (brokit's create-mode resolver would be marginally cleaner but lives behind a
 // static helper; keeping this bro-side avoids a brokit/submodule change.)
+//
+// Deliberately NOT folded into js::resolveAssetWritePath, which applies the
+// same parent-dir rule for the audio/asset surface: mesh bindings also run in
+// worker realms, where the process-wide asset context that resolver reads is
+// not the right one. Same rule, different context source — see js/asset_path.h.
 static std::string resolveMeshWritePath(JSContext* ctx, const std::string& path) {
     namespace fs = std::filesystem;
     fs::path p(path);
@@ -2476,7 +2481,8 @@ void MeshBindings::install(JSContext* ctx) {
     // and bro.triposplat.generate exactly, so a loaded .ply feeds straight
     // into scene.createGaussianSplat({ cloud }) with no reshaping.
     .static_method("loadSplatPLY", [](JSContext* ctx, std::string path) -> JSValue {
-        return makeSplatCloud(ctx, bromesh::loadSplatPLY(path));
+        return makeSplatCloud(ctx, bromesh::loadSplatPLY(
+            brokit::api::resolveAssetPath(ctx, path)));
     })
     .static_raw("saveSplatPLY",
         [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
@@ -2488,7 +2494,8 @@ void MeshBindings::install(JSContext* ctx) {
             bromesh::GaussianSplatCloud cloud;
             if (!readSplatCloud(ctx, argv[1], cloud))
                 return JS_ThrowTypeError(ctx, "saveSplatPLY: cloud has no positions");
-            return JS_NewBool(ctx, bromesh::saveSplatPLY(cloud, path));
+            return JS_NewBool(ctx, bromesh::saveSplatPLY(
+                cloud, resolveMeshWritePath(ctx, path)));
         }, 2)
 
     // ── Static: Reconstruction ──────────────────────────────────────────

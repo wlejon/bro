@@ -2,6 +2,8 @@
 
 #include "util/asset_mounts.h"
 
+#include <filesystem>
+
 namespace bro::js {
 
 namespace {
@@ -28,6 +30,19 @@ std::string resolveAssetPath(const std::string& src) {
     std::string path = s_basePath;
     if (path.back() != '/' && path.back() != '\\') path += '/';
     return path + src;
+}
+
+std::string resolveAssetWritePath(const std::string& src) {
+    namespace fs = std::filesystem;
+    fs::path p(src);
+    // No parent to resolve (a bare filename), or already absolute: the read
+    // rules are exactly right.
+    if (p.is_absolute() || !p.has_parent_path()) return resolveAssetPath(src);
+    // Resolve the DIRECTORY and rejoin the filename. Resolving the whole path
+    // would ask a mount to resolve a file that does not exist yet, which is
+    // the one thing the read path cannot answer.
+    std::string dir = resolveAssetPath(p.parent_path().generic_string());
+    return (fs::path(dir) / p.filename()).generic_string();
 }
 
 } // namespace bro::js
