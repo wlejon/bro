@@ -9,9 +9,41 @@
 
 #include "broimage/decode.h"
 
+#if BRO_WITH_WEBP
+#include "render/webp_image.h"
+#endif
+
 namespace bro::render {
 
 namespace {
+
+#if BRO_WITH_WEBP
+// Wrap the shared WebP decoder as an SkImage. The pixel buffer is heap-owned
+// and released by Skia's callback, matching how the broimage fallback below
+// hands its buffer over — installPixels references the bytes zero-copy, so
+// they have to outlive this scope.
+sk_sp<SkImage> decodeWebPImage(const void* data, size_t len) {
+    int w = 0, h = 0;
+    auto* rgba = new std::vector<uint8_t>();
+    if (!decodeWebP(data, len, w, h, *rgba)) { delete rgba; return nullptr; }
+
+    // Unpremultiplied, matching what decodeWebP emits and what the broimage
+    // fallback below produces; premultiplying is Skia's business.
+    const SkImageInfo info = SkImageInfo::Make(w, h, kRGBA_8888_SkColorType,
+                                               kUnpremul_SkAlphaType);
+    SkBitmap bmp;
+    if (!bmp.installPixels(info, rgba->data(), static_cast<size_t>(w) * 4,
+            [](void*, void* ctx) {
+                delete static_cast<std::vector<uint8_t>*>(ctx);
+            }, rgba)) {
+        delete rgba;
+        return nullptr;
+    }
+    bmp.setImmutable();
+    return bmp.asImage();
+}
+#endif
+
 // A cached image survives this many frames without being drawn before it is
 // evicted. Generous on purpose: it absorbs brief off-screen gaps (and any
 // renderer that happens to call beginFrame more than once per frame) without
@@ -31,6 +63,17 @@ sk_sp<SkImage> decodeImageBytes(const void* data, size_t len) {
         auto [image, result] = codec->getImage();
         if (image) return image;
     }
+
+#if BRO_WITH_WEBP
+    // WebP, before the stb fallback (stb has no WebP either).
+    //
+    // Whether SkCodec above handled this depends on how the linked Skia was
+    // built: the hand-build scripts enable libwebp, the pinned pre-built
+    // Windows lib does not. Rather than let .webp work on one platform and
+    // fail on another, decode it here on every platform — the cost of doing
+    // it unconditionally is one signature check on formats Skia already took.
+    if (auto webp = decodeWebPImage(data, len)) return webp;
+#endif
 
     // Fallback: decode via broimage (stb-backed). Our Skia build may not link
     // PNG/JPEG codecs. Heap-allocated so the pixel buffer outlives this scope —

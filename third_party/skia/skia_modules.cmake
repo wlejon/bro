@@ -303,3 +303,113 @@ if(MSVC)
 else()
     target_compile_options(skia_svg PRIVATE -w)
 endif()
+
+# ---------------------------------------------------------------------------
+# libwebp (decode only) — WebP image support
+# ---------------------------------------------------------------------------
+# The pinned pre-built skia.lib was built WITHOUT libwebp, so SkCodec rejects
+# .webp on Windows while a hand-built Linux/macOS Skia (whose build scripts set
+# skia_use_libwebp_decode=true) accepts it. That split is worse than uniform
+# absence: an app authored on Linux fails on Windows with nothing but a warning
+# line. broimage's stb fallback can't cover it either — stb has no WebP.
+#
+# So compile libwebp's decoder straight out of the Skia source bundle, exactly
+# as HarfBuzz and the ICU bidi subset above are compiled. Same rationale as
+# text shaping: no vcpkg, no Skia rebuild, and ON in every profile including
+# minimal, because a build where .webp silently fails to decode is a different
+# renderer rather than a smaller one.
+#
+# Decode only. The source lists mirror libwebp's own Makefile.am decoder
+# targets (dec/ + dsp/ and utils/ COMMON_SOURCES); encoder, mux and demux are
+# left out. SIMD variants are included and self-gate at compile time on
+# WEBP_USE_* plus a runtime CPU check, so listing them costs nothing on
+# targets that can't use them.
+option(BRO_WITH_WEBP "WebP image decoding (libwebp from the Skia source bundle)" ON)
+
+if(BRO_WITH_WEBP)
+    set(_webp_src "${_skia_src}/third_party/externals/libwebp/src")
+
+    # Same actionable-failure policy as text shaping: a bundle without libwebp
+    # should name the flag, not produce a build that quietly can't open a
+    # format the docs say is supported.
+    if(NOT EXISTS "${_webp_src}/dec/webp_dec.c")
+        message(FATAL_ERROR
+            "BRO_WITH_WEBP=ON but the Skia source bundle has no libwebp at:\n"
+            "  third_party/skia/src/third_party/externals/libwebp/src\n\n"
+            "The bundle for release tag '${BRO_SKIA_RELEASE_TAG}' predates it "
+            "(or was published without externals). Re-fetch the bundle, or "
+            "configure with -DBRO_WITH_WEBP=OFF to build without WebP.")
+    endif()
+
+    add_library(webp_decode STATIC
+        # dec/ — the decoder proper
+        "${_webp_src}/dec/alpha_dec.c"
+        "${_webp_src}/dec/buffer_dec.c"
+        "${_webp_src}/dec/frame_dec.c"
+        "${_webp_src}/dec/idec_dec.c"
+        "${_webp_src}/dec/io_dec.c"
+        "${_webp_src}/dec/quant_dec.c"
+        "${_webp_src}/dec/tree_dec.c"
+        "${_webp_src}/dec/vp8_dec.c"
+        "${_webp_src}/dec/vp8l_dec.c"
+        "${_webp_src}/dec/webp_dec.c"
+        # dsp/ COMMON_SOURCES + the decode SIMD variants
+        "${_webp_src}/dsp/alpha_processing.c"
+        "${_webp_src}/dsp/alpha_processing_sse2.c"
+        "${_webp_src}/dsp/alpha_processing_sse41.c"
+        "${_webp_src}/dsp/alpha_processing_neon.c"
+        "${_webp_src}/dsp/cpu.c"
+        "${_webp_src}/dsp/dec.c"
+        "${_webp_src}/dsp/dec_clip_tables.c"
+        "${_webp_src}/dsp/dec_sse2.c"
+        "${_webp_src}/dsp/dec_sse41.c"
+        "${_webp_src}/dsp/dec_neon.c"
+        "${_webp_src}/dsp/filters.c"
+        "${_webp_src}/dsp/filters_sse2.c"
+        "${_webp_src}/dsp/filters_neon.c"
+        "${_webp_src}/dsp/lossless.c"
+        "${_webp_src}/dsp/lossless_sse2.c"
+        "${_webp_src}/dsp/lossless_sse41.c"
+        "${_webp_src}/dsp/lossless_neon.c"
+        "${_webp_src}/dsp/rescaler.c"
+        "${_webp_src}/dsp/rescaler_sse2.c"
+        "${_webp_src}/dsp/rescaler_neon.c"
+        "${_webp_src}/dsp/upsampling.c"
+        "${_webp_src}/dsp/upsampling_sse2.c"
+        "${_webp_src}/dsp/upsampling_sse41.c"
+        "${_webp_src}/dsp/upsampling_neon.c"
+        "${_webp_src}/dsp/yuv.c"
+        "${_webp_src}/dsp/yuv_sse2.c"
+        "${_webp_src}/dsp/yuv_sse41.c"
+        "${_webp_src}/dsp/yuv_neon.c"
+        # utils/ COMMON_SOURCES
+        "${_webp_src}/utils/bit_reader_utils.c"
+        "${_webp_src}/utils/color_cache_utils.c"
+        "${_webp_src}/utils/filters_utils.c"
+        "${_webp_src}/utils/huffman_utils.c"
+        "${_webp_src}/utils/palette.c"
+        "${_webp_src}/utils/quant_levels_dec_utils.c"
+        "${_webp_src}/utils/random_utils.c"
+        "${_webp_src}/utils/rescaler_utils.c"
+        "${_webp_src}/utils/thread_utils.c"
+        "${_webp_src}/utils/utils.c"
+    )
+    # libwebp includes its own headers as "src/dec/..." etc., so the include
+    # root is the directory ABOVE src/, while consumers want <webp/decode.h>
+    # which lives at src/webp/decode.h.
+    target_include_directories(webp_decode PUBLIC
+        "${_webp_src}/.."
+        "${_webp_src}"
+    )
+    set_target_properties(webp_decode PROPERTIES C_STANDARD 99)
+    if(MSVC)
+        target_compile_options(webp_decode PRIVATE /W0)
+    else()
+        target_compile_options(webp_decode PRIVATE -w)
+        # thread_utils.c wants pthreads where they exist.
+        find_package(Threads)
+        if(Threads_FOUND)
+            target_link_libraries(webp_decode PRIVATE Threads::Threads)
+        endif()
+    endif()
+endif()

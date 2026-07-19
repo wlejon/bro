@@ -13,6 +13,10 @@
 #include "util/log.h"
 
 #include "broimage/decode.h"
+
+#if BRO_WITH_WEBP
+#include "render/webp_image.h"
+#endif
 #include "broimage/encode.h"
 #include "broimage/geometric.h"
 #include "broimage/alpha.h"
@@ -91,7 +95,26 @@ static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val,
     std::string path = resolvePath(img->src);
     broimage::Image decoded;
     std::string err;
-    const bool ok = broimage::decode_file(path, decoded, &err);
+    bool ok = broimage::decode_file(path, decoded, &err);
+
+#if BRO_WITH_WEBP
+    // broimage is stb-backed and stb has no WebP, so a .webp lands here as a
+    // plain decode failure. Try libwebp before calling the image broken —
+    // this is the same fallback the renderer's decode path takes, and both
+    // have to agree or a .webp would draw but report naturalWidth 0 (or the
+    // reverse). See render/webp_image.h.
+    if (!ok) {
+        int w = 0, h = 0;
+        std::vector<uint8_t> rgba;
+        if (bro::render::decodeWebPFile(path, w, h, rgba)) {
+            decoded.width = w;
+            decoded.height = h;
+            decoded.channels = 4;
+            decoded.pixels = std::move(rgba);
+            ok = true;
+        }
+    }
+#endif
 
     // A failed decode is a *broken image*, not a 1x1 white one. broimage hands
     // back a white fallback pixel on failure; adopting it would make a missing

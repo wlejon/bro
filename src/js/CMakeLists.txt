@@ -118,6 +118,13 @@ target_include_directories(bro_js PRIVATE ${GEN_DIR})
 # diffusion_bindings.cpp uses brolm::clip for diffusion text encoding, and
 # lm_bindings.cpp exposes brolm::qwen as bro.lm.
 target_link_libraries(bro_js PUBLIC qjs qjsbind brokit bro_dom bro_util bro_canvas bro_audio_inference bro_steam broaudio bro_webgl SDL3::SDL3 broimage::broimage)
+
+# WebP: `new Image()` decodes here, and the renderer decodes in
+# render/image_cache.cpp. Both go through bro_webp so the two cannot disagree
+# about which formats exist — see render/webp_image.h.
+if(BRO_WITH_WEBP)
+    target_link_libraries(bro_js PRIVATE bro_webp)
+endif()
 # bro_scene + bromesh back the 3D scene graph / Mesh bindings (3D-only);
 # brogameagent backs the bro.ai.game bindings (GAMEAI-only). Their *_bindings.cpp
 # bodies are wrapped in the matching #if and their off-state stubs live in

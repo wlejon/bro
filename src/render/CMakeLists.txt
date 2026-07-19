@@ -32,6 +32,22 @@ add_library(bro_render STATIC
 target_include_directories(bro_render PUBLIC ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_bidi glad broimage::broimage)
 
+# WebP decoding. Its own small library rather than a part of bro_render,
+# because bro has two independent image entry points that must agree — the
+# renderer's draw path (image_cache.cpp, here) and `new Image()` (bro_js's
+# image_bindings.cpp) — and neither of those links the other. See
+# webp_image.h for the full why, and skia_modules.cmake for why libwebp is
+# compiled from the Skia source bundle rather than pulled from vcpkg.
+if(BRO_WITH_WEBP)
+    add_library(bro_webp STATIC webp_image.cpp)
+    target_include_directories(bro_webp PUBLIC ${CMAKE_SOURCE_DIR}/src)
+    target_link_libraries(bro_webp PRIVATE webp_decode)
+    target_compile_definitions(bro_webp PUBLIC BRO_WITH_WEBP=1)
+    target_link_libraries(bro_render PRIVATE bro_webp)
+else()
+    target_compile_definitions(bro_render PRIVATE BRO_WITH_WEBP=0)
+endif()
+
 find_package(OpenGL REQUIRED)
 target_link_libraries(bro_render PUBLIC OpenGL::GL)
 

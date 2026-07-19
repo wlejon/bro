@@ -107,6 +107,7 @@ HTML/CSS/JS + Canvas2D + WebGL runtime with working screenshots.
 | `BRO_WITH_GAMEAI` | brogameagent **core** (nav/path/steer/MCTS) | off | on | on | brotensor-free |
 | `BRO_WITH_FLORA` | broflora | off | on | on | needs `3D` (bromesh) |
 | `BRO_WITH_TEXT_SHAPING` | HarfBuzz + Skia's UAX#9 ICU bidi subset + `modules/skunicode` | **on** | on | on | no vcpkg, no Skia rebuild — compiled from the Skia source bundle. On in *every* profile so there is one text path, not two. Off = 1:1 codepoint→glyph (no ligatures, kerning or Arabic joining). Needs a source bundle carrying the shaping sources — see [third_party/skia/BUNDLE.md](../third_party/skia/BUNDLE.md) |
+| `BRO_WITH_WEBP` | libwebp decoder | **on** | on | on | no vcpkg, no Skia rebuild — compiled from the Skia source bundle alongside HarfBuzz. On in *every* profile for the same reason shaping is: the pinned pre-built Skia has no libwebp while a hand-built Linux/macOS one does, so leaving it to Skia makes `.webp` work on one platform and fail on another. Off = `.webp` does not decode anywhere |
 | `BRO_WITH_NET` | GameNetworkingSockets | off | on | on | **needs vcpkg**; a runtime without JS network access would be surprising |
 | `BRO_WITH_VIDEO` | libvpx/webm/Opus | off | on | on | **needs vcpkg**; `<video>` should work out of the box |
 | `BRO_WITH_STEAM` | — (runtime dlopen) | off | on | on | already implemented; the stub template |
