@@ -655,6 +655,7 @@ void SceneRenderer::render3D() {
                         if (entry) {
                             uploadUserUniforms(entry->prog, entry->userLocs,
                                                m->customShader());
+                            uploadUserTextures(entry->prog, entry->userLocs, m);
                             renderMeshNode(m, entry->draw);
                         } else {
                             renderMeshNode(m, fallbackDraw);
@@ -951,6 +952,7 @@ void SceneRenderer::render3D() {
                                          entry->locs);
                             uploadUserUniforms(entry->prog, entry->userLocs,
                                                m->customShader());
+                            uploadUserTextures(entry->prog, entry->userLocs, m);
                             renderMeshNode(m, entry->draw);
                         } else if (skinned) {
                             // Failed skinned custom variant degrades to the

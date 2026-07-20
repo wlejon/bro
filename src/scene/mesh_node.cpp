@@ -148,6 +148,10 @@ void MeshNode::releaseGL() {
     if (mrTex_) { glDeleteTextures(1, &mrTex_); mrTex_ = 0; }
     if (aoTex_) { glDeleteTextures(1, &aoTex_); aoTex_ = 0; }
     if (emissiveTex_) { glDeleteTextures(1, &emissiveTex_); emissiveTex_ = 0; }
+    for (auto& t : userTextures_) {
+        if (t.tex) { glDeleteTextures(1, &t.tex); t.tex = 0; }
+    }
+    userTextures_.clear();
     indexCount_ = 0;
 }
 
@@ -227,12 +231,79 @@ static void flushTex(MeshNode::PendingTex& p, GLuint& glTex) {
     p.dirty = false;
 }
 
+bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
+                                      int height, const float* data) {
+    const bool release = (width <= 0 || height <= 0 || !data);
+    for (auto& t : userTextures_) {
+        if (t.name != name) continue;
+        if (release) {
+            t.data.clear();
+            t.data.shrink_to_fit();
+            t.w = t.h = 0;
+        } else {
+            t.data.assign(data, data + (size_t)width * (size_t)height);
+            t.w = width;
+            t.h = height;
+        }
+        t.dirty = true;
+        return true;
+    }
+    if (release) return true;   // releasing an unknown slot is a no-op
+    if ((int)userTextures_.size() >= kMaxUserTextures) return false;
+    UserTexture t;
+    t.name = name;
+    t.data.assign(data, data + (size_t)width * (size_t)height);
+    t.w = width;
+    t.h = height;
+    t.dirty = true;
+    userTextures_.push_back(std::move(t));
+    return true;
+}
+
+void MeshNode::clearCustomShaderTexture(const std::string& name) {
+    setCustomShaderTexture(name, 0, 0, nullptr);
+}
+
+// Upload/release one staged user sampler slot. Single-channel float, LINEAR
+// + CLAMP_TO_EDGE and no mipmaps — bilinear sampling of a heightfield with no
+// wrap-around at the edges is exactly what a raymarcher needs.
+static void flushUserTex(MeshNode::UserTexture& t) {
+    if (!t.dirty) return;
+    if (t.w > 0 && t.h > 0 && !t.data.empty()) {
+        if (!t.tex) glGenTextures(1, &t.tex);
+        glBindTexture(GL_TEXTURE_2D, t.tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, t.w, t.h, 0,
+                     GL_RED, GL_FLOAT, t.data.data());
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        t.data.clear();
+        t.data.shrink_to_fit();
+    } else if (t.tex) {
+        glDeleteTextures(1, &t.tex);
+        t.tex = 0;
+    }
+    t.dirty = false;
+}
+
 void MeshNode::flushPendingTextures() {
     flushTex(pendingBase_,     texture_);
     flushTex(pendingNormal_,   normalTex_);
     flushTex(pendingMR_,       mrTex_);
     flushTex(pendingAO_,       aoTex_);
     flushTex(pendingEmissive_, emissiveTex_);
+    for (auto& t : userTextures_) flushUserTex(t);
+    // Drop fully-released slots so the name can be re-bound later without
+    // counting against the unit budget.
+    userTextures_.erase(
+        std::remove_if(userTextures_.begin(), userTextures_.end(),
+                       [](const UserTexture& t) {
+                           return t.tex == 0 && !t.dirty && t.w == 0;
+                       }),
+        userTextures_.end());
 }
 
 // Interleave a MeshData's attribute streams and upload them into the given

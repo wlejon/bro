@@ -315,6 +315,45 @@ public:
         if (customShader_) customShader_->setUniform(name, comps, vals);
     }
 
+    // --- Custom-shader sampler uniforms ---
+    // Single-channel float (R32F) textures a user fragment/vertex chunk can
+    // sample, e.g. a terrain heightfield raymarched by a sky-dome shader.
+    //
+    // Texture units: the mesh uber-shader already owns units 0..9 (baseColor
+    // 0, shadow atlas 1, IBL irradiance/prefilter/BRDF 2/3/4, normal 5, MR 6,
+    // AO 7, emissive 8, reflection probe 9). User samplers therefore start at
+    // unit 10. GL 3.3 guarantees only 16 combined texture image units, so a
+    // node may bind at most kMaxUserTextures slots.
+    static constexpr int kUserTextureUnitBase = 10;
+    static constexpr int kUserTextureUnitLimit = 16;   // GL 3.3 guaranteed min
+    static constexpr int kMaxUserTextures =
+        kUserTextureUnitLimit - kUserTextureUnitBase;  // 6
+
+    /// One user sampler slot. `data`/`w`/`h` stage a CPU-side upload that
+    /// flushPendingTextures() consumes on the GL thread; `tex` is the owned
+    /// GL name (0 until first upload / after release).
+    struct UserTexture {
+        std::string name;            // carries the `u_` prefix
+        std::vector<float> data;     // staged R32F pixels (cleared on upload)
+        int w = 0;
+        int h = 0;
+        bool dirty = false;
+        GLuint tex = 0;
+    };
+
+    /// Stage a single-channel float texture for the named user sampler.
+    /// `data` must hold width*height floats; pass data=nullptr (or a zero
+    /// extent) to release the slot. Returns false only when a NEW name would
+    /// exceed kMaxUserTextures — existing names always succeed. Safe off the
+    /// GL thread: the upload happens in flushPendingTextures().
+    bool setCustomShaderTexture(const std::string& name, int width, int height,
+                                const float* data);
+    /// Release the named slot (GL delete happens at the next flush).
+    void clearCustomShaderTexture(const std::string& name);
+    const std::vector<UserTexture>& customShaderTextures() const {
+        return userTextures_;
+    }
+
     // --- Culling margin ---
     // Extra world-space padding (in units) added to this node's frustum- and
     // shadow-culling bounds. A custom vertex shader that displaces geometry
@@ -444,6 +483,11 @@ private:
     // Custom shader chunks + user-uniform values (null = default pipeline).
     // Heap-allocated so the common shaderless mesh pays one pointer.
     std::unique_ptr<CustomShaderState> customShader_;
+    // User sampler slots (see setCustomShaderTexture). Deliberately NOT part
+    // of CustomShaderState: setShader() replaces that state wholesale, which
+    // would drop owned GL names on the floor. Owned here, released in
+    // releaseGL() alongside the material textures.
+    std::vector<UserTexture> userTextures_;
     float cullMargin_ = 0.0f;
 };
 

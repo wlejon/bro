@@ -272,6 +272,7 @@ JSValue js_node_setDoubleSided(JSContext* ctx, JSValueConst this_val, int argc, 
 JSValue js_node_setLodMeshes(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_setShader(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_setShaderUniform(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_node_setShaderTexture(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_clearShader(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 
 // scene_bindings_anim.cpp — skinned-mesh animation player + tween.

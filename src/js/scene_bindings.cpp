@@ -1636,6 +1636,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setBaseColorTexture", js_node_setBaseColorTexture, 1)
         .method_raw("setShader", js_node_setShader, 1)
         .method_raw("setShaderUniform", js_node_setShaderUniform, 2)
+        .method_raw("setShaderTexture", js_node_setShaderTexture, 2)
         .method_raw("clearShader", js_node_clearShader, 0)
         .method_raw("setHtml", js_node_setHtml, 1)
         .method_raw("markHtmlDirty", js_node_markHtmlDirty, 0)

@@ -289,6 +289,79 @@ JSValue js_node_setShaderUniform(JSContext* ctx, JSValueConst this_val, int argc
     return JS_DupValue(ctx, this_val);
 }
 
+// setShaderTexture(name, { width, height, data: Float32Array } | null) —
+// bind a single-channel float texture to a `uniform sampler2D u_*` declared
+// by the custom shader. Uploaded as R32F / GL_RED / GL_FLOAT with LINEAR
+// filtering and CLAMP_TO_EDGE, no mipmaps, so a heightfield raymarcher gets
+// bilinear samples and no wrap-around at the borders. Pass null to release.
+//
+// User samplers occupy texture units starting ABOVE every unit the material
+// uber-shader uses (baseColor 0, shadow atlas 1, IBL 2/3/4, normal 5, MR 6,
+// AO 7, emissive 8, reflection probe 9) — see MeshNode::kUserTextureUnitBase.
+// Starting at or below those units would not error anywhere: the user texture
+// would simply overwrite a material binding and the mesh would silently
+// sample a heightfield as its albedo/shadow map. The budget is bounded by
+// GL 3.3's guaranteed 16 combined texture image units, so a node gets
+// kMaxUserTextures slots and asking for more throws rather than clobbering.
+JSValue js_node_setShaderTexture(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Mesh)
+        return JS_ThrowTypeError(ctx, "setShaderTexture: not a MeshNode");
+    auto* meshNode = static_cast<scene::MeshNode*>(w->node());
+    if (!meshNode->hasCustomShader())
+        return JS_ThrowTypeError(ctx,
+            "setShaderTexture: no custom shader set (call setShader first)");
+    if (argc < 1 || !JS_IsString(argv[0]))
+        return JS_ThrowTypeError(ctx,
+            "setShaderTexture: expected (name, { width, height, data } | null)");
+    std::string name = jsStr(ctx, argv[0]);
+    if (!validUserUniformName(name))
+        return JS_ThrowTypeError(ctx,
+            "setShaderTexture: uniform name must use the u_ prefix (got '%s')",
+            name.c_str());
+
+    if (argc < 2 || JS_IsNull(argv[1]) || JS_IsUndefined(argv[1])) {
+        meshNode->clearCustomShaderTexture(name);
+        return JS_DupValue(ctx, this_val);
+    }
+    if (!JS_IsObject(argv[1]))
+        return JS_ThrowTypeError(ctx,
+            "setShaderTexture: expected { width, height, data: Float32Array } or null");
+
+    int tw = (int)qjsbind::get_prop_number(ctx, argv[1], "width",  0);
+    int th = (int)qjsbind::get_prop_number(ctx, argv[1], "height", 0);
+    if (tw <= 0 || th <= 0)
+        return JS_ThrowTypeError(ctx,
+            "setShaderTexture: width and height must be positive");
+
+    JSValue dataVal = JS_GetPropertyStr(ctx, argv[1], "data");
+    size_t off = 0, len = 0;
+    JSValue ab = JS_GetTypedArrayBuffer(ctx, dataVal, &off, &len, nullptr);
+    JS_FreeValue(ctx, dataVal);
+    if (JS_IsException(ab))
+        return JS_ThrowTypeError(ctx,
+            "setShaderTexture: data must be a Float32Array");
+    size_t bytes = 0;
+    uint8_t* base = JS_GetArrayBuffer(ctx, &bytes, ab);
+    JS_FreeValue(ctx, ab);
+    const size_t need = (size_t)tw * (size_t)th * sizeof(float);
+    if (!base || len < need)
+        return JS_ThrowTypeError(ctx,
+            "setShaderTexture: data must hold width*height floats "
+            "(%d*%d, got %d)", tw, th, (int)(len / sizeof(float)));
+
+    if (!meshNode->setCustomShaderTexture(
+            name, tw, th, reinterpret_cast<const float*>(base + off)))
+        return JS_ThrowTypeError(ctx,
+            "setShaderTexture: too many sampler uniforms on this node "
+            "(max %d, GL 3.3 guarantees only %d combined texture units and "
+            "the material shader uses the first %d)",
+            scene::MeshNode::kMaxUserTextures,
+            scene::MeshNode::kUserTextureUnitLimit,
+            scene::MeshNode::kUserTextureUnitBase);
+    return JS_DupValue(ctx, this_val);
+}
+
 // clearShader() — drop the custom shader (and its uniform values); the mesh
 // returns to the default pipeline (including its unlit behavior, if set).
 // The cached program stays in the renderer for future reuse.

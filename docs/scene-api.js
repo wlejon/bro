@@ -1885,8 +1885,9 @@ class SceneNode {
    * Both chunks may also:
    *   - declare their own uniforms in the reserved `u_` namespace
    *     (e.g. `uniform vec3 u_tint;`) — set values via the `uniforms` option
-   *     or setShaderUniform(). Numeric only: float / vec2 / vec3 / vec4.
-   *     Sampler/texture uniforms are NOT supported yet.
+   *     or setShaderUniform(). Numeric: float / vec2 / vec3 / vec4.
+   *   - declare `uniform sampler2D u_*;` and feed it a single-channel float
+   *     texture with setShaderTexture() — see below (static MeshNode only).
    *   - declare custom varyings in the reserved `v_` namespace (an `out` in
    *     the vertex chunk paired with an `in` in the fragment chunk).
    *   - read the engine varyings: vWorldPos (camera-relative world position),
@@ -1956,6 +1957,66 @@ class SceneNode {
    * @returns {SceneNode} this
    */
   setShaderUniform(name, value) {}
+
+  /**
+   * Bind a single-channel float texture to a `uniform sampler2D u_*`
+   * declared by this node's custom shader. Static MeshNode only (not
+   * instanced); requires a shader installed via setShader.
+   *
+   * Format contract: the data uploads as **R32F** (`GL_R32F` / `GL_RED` /
+   * `GL_FLOAT`) with **LINEAR** min+mag filtering, **CLAMP_TO_EDGE** wrap on
+   * both axes, and **no mipmaps**. Sampling in GLSL gives a bilinearly
+   * interpolated float in `.r` — which is what a heightfield raymarcher
+   * wants: smooth between texels, no wrap-around at the borders. `data`
+   * must hold exactly width*height floats; a short array throws.
+   *
+   * Upload is staged, not immediate: the bytes are copied on the calling
+   * thread and uploaded on the GL thread at the start of the next frame
+   * that draws this node. The caller's Float32Array may be reused or
+   * dropped as soon as the call returns.
+   *
+   * Texture-unit budget: the material uber-shader owns units 0-9 (baseColor
+   * 0, shadow atlas 1, IBL irradiance/prefilter/BRDF 2/3/4, normal 5,
+   * metallic-roughness 6, AO 7, emissive 8, reflection probe 9). User
+   * samplers start at unit **10**, and GL 3.3 guarantees only 16 combined
+   * texture image units — so a node may bind at most **6** sampler
+   * uniforms. Asking for a 7th throws rather than reusing a material unit,
+   * where the collision would silently corrupt material sampling instead of
+   * erroring. Releasing a slot frees its unit for a later name.
+   *
+   * Passing null/undefined releases the slot (the GL texture is deleted on
+   * the GL thread). Setting a name the shader never declares is silently
+   * ignored, mirroring GL and setShaderUniform.
+   *
+   *   // raymarch a terrain heightfield in a sky-dome fragment shader
+   *   const N = 256;
+   *   const height = new Float32Array(N * N);
+   *   for (let y = 0; y < N; y++)
+   *     for (let x = 0; x < N; x++) height[y * N + x] = terrainAt(x, y);
+   *   dome.setShader({
+   *     fragment: `
+   *       uniform sampler2D u_height;
+   *       uniform vec2 u_extent;
+   *       void userFragment(inout vec3 baseColor, inout vec3 normal,
+   *                         inout float metallic, inout float roughness,
+   *                         inout vec3 emissive, inout float alpha) {
+   *         float h = texture(u_height, vWorldPos.xz / u_extent + 0.5).r;
+   *         emissive += vec3(h);
+   *       }`,
+   *     uniforms: { u_extent: [1024, 1024] },
+   *   });
+   *   dome.setShaderTexture('u_height', { width: N, height: N, data: height });
+   *   dome.setShaderTexture('u_height', null);   // release
+   *
+   * @param {string} name - must use the `u_` prefix
+   * @param {?{width: number, height: number, data: Float32Array}} tex -
+   *        width*height floats, or null to release the slot
+   * @returns {SceneNode} this
+   * @throws {TypeError} non-`u_` name, non-mesh node, no shader installed,
+   *         non-positive extent, data shorter than width*height, or more
+   *         than 6 sampler slots on one node
+   */
+  setShaderTexture(name, tex) {}
 
   /**
    * Remove the custom shader (and its uniform values); the mesh returns to

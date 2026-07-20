@@ -237,6 +237,36 @@ void SceneRenderer::uploadUserUniforms(
     }
 }
 
+void SceneRenderer::uploadUserTextures(
+        GLuint prog, std::unordered_map<std::string, GLint>& cache,
+        MeshNode* mesh) {
+    const auto& texes = mesh->customShaderTextures();
+    if (texes.empty()) return;
+    // Consume staged uploads first — the setter runs on the JS thread and
+    // only records bytes; this is the GL thread. renderMeshNode flushes
+    // again right after, which is a no-op once the dirty flags are cleared.
+    mesh->flushPendingTextures();
+    int unit = MeshNode::kUserTextureUnitBase;
+    for (const auto& t : mesh->customShaderTextures()) {
+        if (unit >= MeshNode::kUserTextureUnitLimit) break;  // budget checked at set time
+        if (!t.tex) continue;
+        GLint loc;
+        auto it = cache.find(t.name);
+        if (it != cache.end()) {
+            loc = it->second;
+        } else {
+            loc = glGetUniformLocation(prog, t.name.c_str());
+            cache.emplace(t.name, loc);
+        }
+        if (loc < 0) { ++unit; continue; }  // not declared — silent, like GL
+        glActiveTexture(GL_TEXTURE0 + unit);
+        glBindTexture(GL_TEXTURE_2D, t.tex);
+        glUniform1i(loc, unit);
+        ++unit;
+    }
+    glActiveTexture(GL_TEXTURE0);
+}
+
 void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
     // Apply any staged texture uploads/releases before reading material
     // state, so runtime texture swaps take effect this frame (the geometry

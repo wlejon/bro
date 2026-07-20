@@ -429,6 +429,7 @@ void SceneRenderer::renderProbeSceneOpaque(const std::vector<LightNode*>& lights
                     bindMeshProg(entry->prog, entry->draw, entry->locs);
                     uploadUserUniforms(entry->prog, entry->userLocs,
                                        m->customShader());
+                    uploadUserTextures(entry->prog, entry->userLocs, m);
                     renderMeshNode(m, entry->draw);
                 } else if (skinnedReady) {
                     ensureSkinnedMeshPipeline();

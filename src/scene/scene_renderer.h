@@ -572,6 +572,14 @@ private:
                             std::unordered_map<std::string, GLint>& cache,
                             const CustomShaderState* st);
 
+    // Bind one mesh's user sampler textures (node.setShaderTexture) to units
+    // starting at MeshNode::kUserTextureUnitBase and point the matching
+    // sampler uniforms at them. `prog` must be bound. Defined in
+    // scene_renderer_mesh.cpp.
+    void uploadUserTextures(GLuint prog,
+                            std::unordered_map<std::string, GLint>& cache,
+                            MeshNode* mesh);
+
     // --- Custom shadow-program cache ------------------------------------
     // Depth-only shadow.vert variants with a user vertex chunk spliced in
     // (per Static/Skinned flavour), so vertex-displaced meshes cast the
