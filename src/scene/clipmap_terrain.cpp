@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 #include "clipmap_common.glsl.h" // kClipmapCommonSrc
 #include "clipmap_detail.glsl.h"   // kClipmapDetailSrc
@@ -221,6 +222,7 @@ void ClipmapTerrain::pushStaticUniforms() {
 
 void ClipmapTerrain::pushLayerUniforms() {
     if (!node_) return;
+    float wrap[kMaxLayers] = {0.0f, 0.0f, 0.0f, 0.0f};
     for (int i = 0; i < kMaxLayers; ++i) {
         const ClipmapLayer& l = layers_[i];
         const float a[3] = {l.originX, l.originZ,
@@ -229,7 +231,9 @@ void ClipmapTerrain::pushLayerUniforms() {
                             l.present ? static_cast<float>(l.height) : 0.0f};
         node_->setCustomShaderUniform(kLayerA[i], 3, a);
         node_->setCustomShaderUniform(kLayerB[i], 2, b);
+        wrap[i] = (l.present && l.wrapX) ? 1.0f : 0.0f;
     }
+    node_->setCustomShaderUniform("u_lWrapX", 4, wrap);
     const float n = static_cast<float>(layerCount_);
     node_->setCustomShaderUniform("u_layerCount", 1, &n);
 
@@ -270,7 +274,7 @@ void ClipmapTerrain::recomputeHeightRange() {
 
 void ClipmapTerrain::setHeightLayer(int index, const float* data, int width,
                                     int height, float originX, float originZ,
-                                    float metresPerCell) {
+                                    float metresPerCell, bool wrapX) {
     if (!node_ || index < 0 || index >= kMaxLayers) return;
     ClipmapLayer& l = layers_[index];
 
@@ -286,12 +290,14 @@ void ClipmapTerrain::setHeightLayer(int index, const float* data, int width,
         l.originX = originX;
         l.originZ = originZ;
         l.metresPerCell = metresPerCell > 0.0f ? metresPerCell : 1.0f;
+        l.wrapX = wrapX;
         l.present = true;
         // mipmap: true is load-bearing, not an optimisation. The shader samples
         // at a FRACTIONAL textureLod level; without a chain GL clamps every lod
         // to 0 and the whole distance-continuous filtering story collapses.
+        // repeat in S, clamp in T: longitude is periodic, latitude is not.
         node_->setCustomShaderTexture(kLayerTex[index], width, height,
-                                      l.data.data(), true);
+                                      l.data.data(), true, wrapX, wrapX);
     }
 
     layerCount_ = 0;
@@ -372,44 +378,113 @@ void ClipmapTerrain::setDetailExemplar(const float* data, int width, int height,
         }
     }
 
+    // MAKE IT PERIODIC FIRST. The order matters and it used to be the other way.
+    //
+    // The high-pass below blurs with a WRAPPING kernel, which is only meaningful
+    // on a patch that already wraps. Run against the raw crop it averaged the
+    // tile's left edge with its unrelated right edge, so the low-frequency
+    // estimate went wrong exactly at the edges and subtracting it left a ridge
+    // of ~7x the patch's own energy along both. The tap repeats that ridge every
+    // lambda along a fixed rotation, which is what drew long streaks across
+    // every continent. The periodic blend then folded those same corrupted
+    // columns back into the patch, so the artifact was fed its own output.
+    //
+    // Cross-fade the last `band` columns/rows over the first and crop to `keep`:
+    // out(0) is then literally the sample that follows out(keep-1) in the
+    // source, so the wrap is continuous by construction rather than by hoping
+    // the edges match. Plain smoothstep weights here, on RAW elevation — the two
+    // sides sit at different heights and the ramp between them is low-frequency
+    // content the high-pass is about to remove anyway.
+    std::vector<float> p(static_cast<size_t>(keep) * keep);
+    {
+        auto at = [&](int x, int y) { return e[static_cast<size_t>(y) * n + x]; };
+        auto ease = [](float t) { return t * t * (3.0f - 2.0f * t); };
+        std::vector<float> q(static_cast<size_t>(keep) * n);   // X folded, all rows
+        for (int y = 0; y < n; ++y)
+            for (int x = 0; x < keep; ++x)
+                q[static_cast<size_t>(y) * keep + x] =
+                    (x < band)
+                        ? at(x + keep, y) * (1.0f - ease(float(x) / band))
+                          + at(x, y) * ease(float(x) / band)
+                        : at(x, y);
+        for (int y = 0; y < keep; ++y)
+            for (int x = 0; x < keep; ++x) {
+                const float here = q[static_cast<size_t>(y) * keep + x];
+                p[static_cast<size_t>(y) * keep + x] =
+                    (y < band)
+                        ? q[static_cast<size_t>(y + keep) * keep + x]
+                              * (1.0f - ease(float(y) / band))
+                          + here * ease(float(y) / band)
+                        : here;
+            }
+    }
+
     // HIGH-PASS. The patch must supply detail, never landforms: its own valley
     // and range scales are already in the height pyramid, and adding them back
     // would fight the model's terrain rather than extend it.
-    std::vector<float> lo = e;
-    boxBlurWrap(lo, n, std::max(1, n / 8));
-    for (size_t i = 0; i < e.size(); ++i) e[i] -= lo[i];
+    //
+    // The radius sets the cutoff and has to agree with what the SHADER assumes
+    // this patch contains. cmExRedundancy weighs each tap as though its content
+    // sits at lambda/8; two box passes at radius r cut at ~4r texels, so
+    // keep/32 puts the cutoff at keep/8 and makes that true.
+    //
+    // It was keep/8, cutting at lambda/2. With lambda = 2x the coarsest cell
+    // that left the patch carrying structure at the DATA FLOOR itself — landform
+    // scale, from a tile repeating every 15.36 km. The redundancy test could not
+    // suppress it, because that test asks about lambda/8 while the visible
+    // lattice is at lambda. From 28 km up it read as a regular grid of identical
+    // ridges over every continent.
+    {
+        std::vector<float> lo = p;
+        boxBlurWrap(lo, keep, std::max(1, keep / 32));
+        for (size_t i = 0; i < p.size(); ++i) p[i] -= lo[i];
+    }
 
-    // MAKE IT PERIODIC. Cross-fade the last `band` columns/rows over the first
-    // ones and crop to `keep`: out(0) is then literally the sample that follows
-    // out(keep-1) in the source, so the wrap is continuous by construction
-    // rather than by hoping the edges happen to match.
-    std::vector<float> p(static_cast<size_t>(keep) * keep);
-    auto at = [&](int x, int y) { return e[static_cast<size_t>(y) * n + x]; };
-    for (int y = 0; y < keep; ++y) {
-        for (int x = 0; x < keep; ++x) {
-            float v = at(x, y);
-            if (x < band) {
-                const float t = static_cast<float>(x) / static_cast<float>(band);
-                v = at(x + keep, y) * (1.0f - t) + v * t;
-            }
-            if (y < band) {
-                const float t = static_cast<float>(y) / static_cast<float>(band);
-                float w = (x < band)
-                        ? at(x + keep, y + keep) * (1.0f - static_cast<float>(x) / band)
-                          + at(x, y + keep) * (static_cast<float>(x) / band)
-                        : at(x, y + keep);
-                v = w * (1.0f - t) + v * t;
-            }
-            p[static_cast<size_t>(y) * keep + x] = v;
+    // MAKE IT STATIONARY.
+    //
+    // The patch is ONE 61 km tile of real terrain, and real terrain is not:
+    // this one runs from a smooth plain at one end to broken mountains at the
+    // other. The high-pass takes out low-frequency ELEVATION and leaves
+    // low-frequency AMPLITUDE untouched, so tiling the result paints the
+    // source's own roughness map across the world every lambda.
+    //
+    // Dividing by a smoothed local RMS keeps the structure while flattening the
+    // envelope: ridge and drainage character lives in the SHAPE, not in how loud
+    // the tile happens to be at that spot. Measured over the patch's column RMS
+    // this takes the spread from 5.2x to 3.2x. It does not reach 1.0x and should
+    // not — the remainder is variation at 1-3 km, which IS the structure, and
+    // flattening that would leave uniform noise instead of terrain.
+    //
+    // The floor is a rail rather than the mechanism (it does not currently
+    // bind): it stops a genuinely flat reach from being amplified to full
+    // relief if a future exemplar contains one. Where ground should be smooth
+    // versus broken is the DATA's business — it follows the coarse field's
+    // slope, and it does not repeat.
+    {
+        std::vector<float> amp(p.size());
+        for (size_t i = 0; i < p.size(); ++i) amp[i] = p[i] * p[i];
+        boxBlurWrap(amp, keep, std::max(1, keep / 8));
+        double acc = 0.0;
+        for (size_t i = 0; i < amp.size(); ++i) {
+            amp[i] = std::sqrt(std::max(0.0f, amp[i]));
+            acc += amp[i];
+        }
+        const float mean = static_cast<float>(acc / std::max<size_t>(1, amp.size()));
+        if (mean > 0.0f) {
+            const float floorAmp = 0.35f * mean;
+            for (size_t i = 0; i < p.size(); ++i)
+                p[i] *= mean / std::max(amp[i], floorAmp);
         }
     }
 
     // NORMALISE BY FOOTPRINT. Relief per unit length is dimensionless, so the
     // patch applied at any wavelength carries the aspect ratio the model
     // produced at that scale — no tuned amplitude constant anywhere.
-    const float footprint = static_cast<float>(src) * metresPerCell;
-    const float inv = footprint > 0.0f ? 1.0f / footprint : 0.0f;
-    for (float& v : p) v *= inv;
+    {
+        const float footprint = static_cast<float>(src) * metresPerCell;
+        const float inv = footprint > 0.0f ? 1.0f / footprint : 0.0f;
+        for (float& v : p) v *= inv;
+    }
 
     exemplar_ = std::move(p);
     exemplarN_ = keep;
@@ -610,16 +685,21 @@ float ClipmapTerrain::baseElevationAt(float x, float z) const {
         const float tz = (z - l.originZ) / l.metresPerCell;
         const float ux = (tx + 0.5f) / static_cast<float>(l.width);
         const float uz = (tz + 0.5f) / static_cast<float>(l.height);
-        w = smoothstep01(kFade, std::min(std::min(ux, 1.0f - ux),
-                                         std::min(uz, 1.0f - uz)));
+        // cmEdge: a periodic layer has no east-west edge to be near.
+        w = l.wrapX
+            ? smoothstep01(kFade, std::min(uz, 1.0f - uz))
+            : smoothstep01(kFade, std::min(std::min(ux, 1.0f - ux),
+                                           std::min(uz, 1.0f - uz)));
 
-        // GL_LINEAR + GL_CLAMP_TO_EDGE at level 0, in texel space.
+        // GL_LINEAR at level 0, in texel space: GL_REPEAT in S when the layer
+        // wraps, GL_CLAMP_TO_EDGE otherwise, and always clamped in T.
         const int x0 = static_cast<int>(std::floor(tx));
         const int z0 = static_cast<int>(std::floor(tz));
         const float fx = tx - static_cast<float>(x0);
         const float fz = tz - static_cast<float>(z0);
         auto at = [&](int ix, int iz) -> float {
-            ix = std::clamp(ix, 0, l.width - 1);
+            ix = l.wrapX ? ((ix % l.width) + l.width) % l.width
+                         : std::clamp(ix, 0, l.width - 1);
             iz = std::clamp(iz, 0, l.height - 1);
             return l.data[static_cast<size_t>(iz) * l.width + ix];
         };
@@ -654,6 +734,7 @@ float ClipmapTerrain::dataFloorAt(float x, float z) const {
                        / static_cast<float>(l.width);
         const float uz = ((z - l.originZ) / l.metresPerCell + 0.5f)
                        / static_cast<float>(l.height);
+        if (l.wrapX) return smoothstep01(kFade, std::min(uz, 1.0f - uz));
         return smoothstep01(kFade, std::min(std::min(ux, 1.0f - ux),
                                             std::min(uz, 1.0f - uz)));
     };
@@ -745,19 +826,27 @@ float ClipmapTerrain::elevationAt(float x, float z) const {
     // The band starts above cfg_.detailWavelength wherever the data is coarser
     // than it — see cmDetail. The high-pass against the data floor is mirrored;
     // the shader's low-pass against the rendered cell still is not, for the
-    // reason above. Where anything collides the floor is the finest layer's,
-    // the upward octaves are off, and the two reduce to the same sum.
+    // reason above.
+    //
+    // THE UPWARD OCTAVES STAND DOWN WITH AN EXEMPLAR LOADED, exactly as
+    // cmDetail does: they exist only to fill the gap between the data floor and
+    // the base wavelength, and an exemplar fills that gap with real landforms.
+    // Without this gate the two disagree wherever the floor is coarse — i.e.
+    // outside the finest layer's window, where wDat passes every upward octave
+    // on this side and none on the shader's — and elevationAt is what a caller
+    // stands the camera and its collision on. It is the drawn surface or it is
+    // nothing.
     const float floorM = dataFloorAt(x, z);
+    const int   up     = (exemplarN_ > 0) ? 0 : kDetailUpOctaves;
     double lambda = static_cast<double>(cfg_.detailWavelength)
-                  * std::exp2(static_cast<double>(kDetailUpOctaves));
+                  * std::exp2(static_cast<double>(up));
     float  sum    = 0.0f;
-    const int n = kDetailUpOctaves + std::min(cfg_.detailOctaves, 8);
+    const int n = up + std::min(cfg_.detailOctaves, 8);
     for (int i = 0; i < n; ++i) {
         const float wDat = 1.0f - smoothstep01(2.0f * floorM,
                                                static_cast<float>(lambda) - 2.0f * floorM);
         if (wDat > 0.0f) {
-            const float gain = std::pow(cfg_.detailGain,
-                                        std::max(0, i - kDetailUpOctaves));
+            const float gain = std::pow(cfg_.detailGain, std::max(0, i - up));
             const float amp = cfg_.detailRelief * static_cast<float>(lambda) * gain;
             sum += amp * wDat * detailNoise(x / lambda, z / lambda);
         }

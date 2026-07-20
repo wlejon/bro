@@ -51,7 +51,7 @@ using CW = ClipmapWrapper;
 
 // -------------------------------------------------------------------------
 // clipmap.setHeightLayer(index, { data, width, height, originX, originZ,
-//                                 metresPerCell } | null)
+//                                 metresPerCell, wrapX } | null)
 //
 // Returns `this` so calls chain. A null/undefined descriptor releases the
 // layer's pixels.
@@ -85,6 +85,11 @@ static JSValue js_clipmap_setHeightLayer(JSContext* ctx, JSValueConst this_val,
     const double originX = qjsbind::get_prop_number(ctx, argv[1], "originX", 0.0);
     const double originZ = qjsbind::get_prop_number(ctx, argv[1], "originZ", 0.0);
     const double mpc = qjsbind::get_prop_number(ctx, argv[1], "metresPerCell", 1.0);
+    // wrapX: the layer is periodic in X — a global equirectangular chart whose
+    // column 0 continues column W-1. Off by default, because a camera-following
+    // window is NOT periodic and wrapping one would fold the far side of the
+    // window into view.
+    const bool wrapX = qjsbind::get_prop_bool(ctx, argv[1], "wrapX", false);
     if (width <= 0 || height <= 0)
         return JS_ThrowTypeError(ctx,
             "setHeightLayer: width and height must be positive");
@@ -118,7 +123,7 @@ static JSValue js_clipmap_setHeightLayer(JSContext* ctx, JSValueConst this_val,
                                   reinterpret_cast<const float*>(ptr + byteOff),
                                   width, height, static_cast<float>(originX),
                                   static_cast<float>(originZ),
-                                  static_cast<float>(mpc));
+                                  static_cast<float>(mpc), wrapX);
     JS_FreeValue(ctx, abuf);
     JS_FreeValue(ctx, dataVal);
     return JS_DupValue(ctx, this_val);

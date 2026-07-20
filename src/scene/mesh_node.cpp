@@ -233,7 +233,8 @@ static void flushTex(MeshNode::PendingTex& p, GLuint& glTex) {
 
 bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
                                       int height, const float* data,
-                                      bool mipmap, bool repeat) {
+                                      bool mipmap, bool repeat,
+                                      bool clampT) {
     const bool release = (width <= 0 || height <= 0 || !data);
     for (auto& t : userTextures_) {
         if (t.name != name) continue;
@@ -252,6 +253,7 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
             t.h = height;
             t.mipmap = mipmap;
             t.repeat = repeat;
+            t.clampT = clampT;
         }
         t.dirty = true;
         return true;
@@ -265,6 +267,7 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
     t.h = height;
     t.mipmap = mipmap;
     t.repeat = repeat;
+    t.clampT = clampT;
     t.dirty = true;
     userTextures_.push_back(std::move(t));
     return true;
@@ -328,7 +331,8 @@ static void flushUserTex(MeshNode::UserTexture& t) {
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             const GLint wrap = t.repeat ? GL_REPEAT : GL_CLAMP_TO_EDGE;
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, wrap);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T,
+                            t.clampT ? GL_CLAMP_TO_EDGE : wrap);
             t.data.clear();
             t.data.shrink_to_fit();
         }

@@ -358,6 +358,13 @@ public:
         // the opposite, and cannot get it from a fract() in the shader: that
         // leaves a texel-wide seam at the wrap which every mip level widens.
         bool repeat = false;
+        // Repeat in S but CLAMP in T. An equirectangular chart is periodic in
+        // longitude and emphatically not in latitude: wrapping T blends the
+        // north pole row into the south pole row across the half texel past
+        // v = 0, which puts the wrong hemisphere's elevation within a few km of
+        // each pole. Clamping there is not an approximation — the pole rows are
+        // single-valued, so the clamped value is the correct one.
+        bool clampT = false;
         GLuint tex = 0;
         std::vector<SubUpdate> subUpdates;
     };
@@ -373,7 +380,7 @@ public:
     /// happens in flushPendingTextures().
     bool setCustomShaderTexture(const std::string& name, int width, int height,
                                 const float* data, bool mipmap = false,
-                                bool repeat = false);
+                                bool repeat = false, bool clampT = false);
 
     /// Stage a sub-rectangle write into an EXISTING slot, avoiding the
     /// reallocation (and mip-chain rebuild from scratch) a full re-upload

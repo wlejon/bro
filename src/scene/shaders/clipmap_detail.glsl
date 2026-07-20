@@ -306,7 +306,25 @@ void cmBSplineD(vec2 f, out vec2 d0, out vec2 d1, out vec2 d2, out vec2 d3) {
 // axis of the gradient. `grad` = 0 skips the eight gradient taps, which is what
 // the vertex stage takes â€” it only ever reads the height.
 vec3 cmExBicubic(vec2 u, float lod, float n, float grad) {
-    vec2 t = u * n - 0.5;
+    // WRAP FIRST. `u` arrives as world position / lambda, and the fine tap's
+    // lambda is only ~1.1 km, so 500 km from the origin u is ~600 and u * n
+    // reaches ~500,000 — where an fp32 ULP is a twentieth of a texel and `i`
+    // has no room left to carry a sub-texel offset.
+    //
+    // That offset is not a refinement, it IS the method: Sigg & Hadwiger
+    // reproduce a weighted pair of texels with ONE bilinear fetch by placing it
+    // at a precise fraction between them, so quantising the fraction silently
+    // returns some other blend.
+    //
+    // The patch is periodic and the sampler is GL_REPEAT, so folding u into
+    // [0,1) changes nothing mathematically and bounds u * n by n. The CPU
+    // mirror always did this (ClipmapTerrain::exemplarAt), so this also removes
+    // a real divergence between the two — they now agree on which texels a
+    // world position lands between, at any distance from the origin.
+    //
+    // NOT the cause of the ring-overlap sheets in the near field: those were
+    // measured to survive this, a point-sampled tap, and a pinned mip.
+    vec2 t = fract(u) * n - 0.5;
     vec2 f = fract(t);
     vec2 i = t - f;
 

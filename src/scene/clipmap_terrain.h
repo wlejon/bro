@@ -86,6 +86,9 @@ struct ClipmapLayer {
     float originX = 0.0f;       // world metres of texel 0
     float originZ = 0.0f;
     float metresPerCell = 1.0f;
+    // Periodic in X. Set for a global equirectangular chart, where column 0
+    // continues column W-1 and there is no east-west edge to fade out at.
+    bool  wrapX   = false;
     bool  present = false;
 };
 
@@ -107,8 +110,13 @@ public:
     /// slot in the middle simply contributes zero weight. A released slot keeps
     /// a 1x1 placeholder texture bound so the sampler is never unbound, but
     /// drops the pixel data.
+    /// `wrapX` marks the layer periodic in X — a global equirectangular chart,
+    /// where column 0 continues column W-1. Such a layer is sampled GL_REPEAT
+    /// in S (still clamped in T, since latitude does not wrap) and its coverage
+    /// ramp has no east-west edge to fade at.
     void setHeightLayer(int index, const float* data, int width, int height,
-                        float originX, float originZ, float metresPerCell);
+                        float originX, float originZ, float metresPerCell,
+                        bool wrapX = false);
 
     /// Install a DETAIL EXEMPLAR: a patch of real terrain, in metres, whose
     /// structure is reused as the source of everything below the data floor.

@@ -20,6 +20,13 @@ uniform vec3 u_l1a;  uniform vec2 u_l1b;
 uniform vec3 u_l2a;  uniform vec2 u_l2b;
 uniform vec3 u_l3a;  uniform vec2 u_l3b;
 
+// Per layer, 1 = periodic in X. A global equirectangular chart has no east-west
+// edge: column 0 continues column W-1, and the bake closes that join over a
+// 1500 km band so the two sides are the same geography. The sampler is GL_REPEAT
+// in S for such a layer, and its coverage ramp must not fade in X either — a
+// fade there would reopen, as a hole, exactly the seam the bake closed.
+uniform vec4 u_lWrapX;
+
 uniform vec2  u_camXZ;
 uniform float u_camY;
 uniform float u_cellSize;      // c0, level-0 cell size in metres (EFFECTIVE —
@@ -120,28 +127,39 @@ const float CM_PIXELS_PER_CELL = 1.5;
 // that gave both.
 const float CM_SHADE_PIXELS_PER_CELL = 3.5;
 
+// Distance to the nearest edge this layer actually HAS, in uv. A periodic layer
+// has only two, north and south, so X is left out of the minimum entirely
+// rather than fed through a wrap — the point is that there is no edge there to
+// be near.
+float cmEdge(vec2 uv, float wrapX) {
+    float v = min(uv.y, 1.0 - uv.y);
+    return (wrapX > 0.5) ? v : min(v, min(uv.x, 1.0 - uv.x));
+}
+
 // One layer's height sample. `w` is its blend weight: 1 well inside the
 // layer's extent, smoothly 0 at (and outside) its edge.
 float cmLayer(sampler2D tex, vec3 a, vec2 sz, vec2 wxz, float cDesired,
-              out float w) {
+              float wrapX, out float w) {
     if (sz.x < 0.5 || sz.y < 0.5) { w = 0.0; return 0.0; }
     vec2 t  = (wxz - a.xy) / a.z;      // position in texels; texel 0 at origin
     vec2 uv = (t + 0.5) / sz;          // -> texel centres
     // Fractional mip: the layer is sampled at whatever footprint this part of
     // the ring actually needs. Clamped at 0 — there is no level finer than 0.
     float lod = max(log2(cDesired / a.z), 0.0);
-    w = smoothstep(0.0, CM_FADE,
-                   min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
+    // uv.x is deliberately left outside [0,1] when the layer wraps. GL_REPEAT
+    // resolves it, and it does so ACROSS MIP LEVELS, which a fract() here could
+    // not: a manual wrap leaves a texel-wide discontinuity that every coarser
+    // level widens into a visible meridian.
+    w = smoothstep(0.0, CM_FADE, cmEdge(uv, wrapX));
     return textureLod(tex, uv, lod).r;
 }
 
 // A layer's coverage weight alone, without the texture fetch — the same ramp
 // cmLayer applies, so the two agree on where a layer stops.
-float cmCoverage(vec3 a, vec2 sz, vec2 wxz) {
+float cmCoverage(vec3 a, vec2 sz, vec2 wxz, float wrapX) {
     if (sz.x < 0.5 || sz.y < 0.5) return 0.0;
     vec2 uv = ((wxz - a.xy) / a.z + 0.5) / sz;
-    return smoothstep(0.0, CM_FADE,
-                      min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
+    return smoothstep(0.0, CM_FADE, cmEdge(uv, wrapX));
 }
 
 // The finest cell size the DATA actually resolves here, in metres.
@@ -167,9 +185,9 @@ float cmDataFloor(vec2 wxz) {
     else if (n > 2.5) { f = log2(u_l2a.z); }
     else if (n > 1.5) { f = log2(u_l1a.z); }
     else if (n > 0.5) { f = log2(u_l0a.z); }
-    if (n > 3.5) { w = cmCoverage(u_l2a, u_l2b, wxz); f = mix(f, log2(u_l2a.z), w); }
-    if (n > 2.5) { w = cmCoverage(u_l1a, u_l1b, wxz); f = mix(f, log2(u_l1a.z), w); }
-    if (n > 1.5) { w = cmCoverage(u_l0a, u_l0b, wxz); f = mix(f, log2(u_l0a.z), w); }
+    if (n > 3.5) { w = cmCoverage(u_l2a, u_l2b, wxz, u_lWrapX.z); f = mix(f, log2(u_l2a.z), w); }
+    if (n > 2.5) { w = cmCoverage(u_l1a, u_l1b, wxz, u_lWrapX.y); f = mix(f, log2(u_l1a.z), w); }
+    if (n > 1.5) { w = cmCoverage(u_l0a, u_l0b, wxz, u_lWrapX.x); f = mix(f, log2(u_l0a.z), w); }
     return exp2(f);
 }
 
@@ -180,13 +198,13 @@ float cmHeight(vec2 wxz, float cDesired) {
     float n = u_layerCount;
     float w = 0.0;
     float h = 0.0;
-    if      (n > 3.5) h = cmLayer(u_h3, u_l3a, u_l3b, wxz, cDesired, w);
-    else if (n > 2.5) h = cmLayer(u_h2, u_l2a, u_l2b, wxz, cDesired, w);
-    else if (n > 1.5) h = cmLayer(u_h1, u_l1a, u_l1b, wxz, cDesired, w);
-    else if (n > 0.5) h = cmLayer(u_h0, u_l0a, u_l0b, wxz, cDesired, w);
-    if (n > 3.5) { float s = cmLayer(u_h2, u_l2a, u_l2b, wxz, cDesired, w); h = mix(h, s, w); }
-    if (n > 2.5) { float s = cmLayer(u_h1, u_l1a, u_l1b, wxz, cDesired, w); h = mix(h, s, w); }
-    if (n > 1.5) { float s = cmLayer(u_h0, u_l0a, u_l0b, wxz, cDesired, w); h = mix(h, s, w); }
+    if      (n > 3.5) h = cmLayer(u_h3, u_l3a, u_l3b, wxz, cDesired, u_lWrapX.w, w);
+    else if (n > 2.5) h = cmLayer(u_h2, u_l2a, u_l2b, wxz, cDesired, u_lWrapX.z, w);
+    else if (n > 1.5) h = cmLayer(u_h1, u_l1a, u_l1b, wxz, cDesired, u_lWrapX.y, w);
+    else if (n > 0.5) h = cmLayer(u_h0, u_l0a, u_l0b, wxz, cDesired, u_lWrapX.x, w);
+    if (n > 3.5) { float s = cmLayer(u_h2, u_l2a, u_l2b, wxz, cDesired, u_lWrapX.z, w); h = mix(h, s, w); }
+    if (n > 2.5) { float s = cmLayer(u_h1, u_l1a, u_l1b, wxz, cDesired, u_lWrapX.y, w); h = mix(h, s, w); }
+    if (n > 1.5) { float s = cmLayer(u_h0, u_l0a, u_l0b, wxz, cDesired, u_lWrapX.x, w); h = mix(h, s, w); }
     return u_seaLevel + u_heightScale * h;
 }
 
