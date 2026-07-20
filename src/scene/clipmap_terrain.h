@@ -1,5 +1,7 @@
 #pragma once
 
+#include <cmath>
+
 #include <memory>
 #include <string>
 #include <vector>
@@ -124,7 +126,20 @@ private:
     // The detail lattice is anchored to the camera on this grid so its noise
     // coordinate stays small far from the world origin; see clipmap_detail.glsl
     // for why that matters and why the grid must divide every octave.
-    static constexpr float kDetailAnchor = 256.0f;
+    //
+    // It is therefore a whole number of coarsest-octave wavelengths, NOT a round
+    // metre count: the shader turns the anchor into a lattice cell index with
+    // ivec2(u_detailAnchor / lambda), so a fractional ratio truncates and leaves
+    // a residue that CHANGES every time the anchor steps — the detail field
+    // visibly jumps once per anchor cell as the camera travels. Every finer
+    // octave is lambda/2^i, so a multiple of the coarsest divides them all.
+    // ~256 m is the target; the wavelength decides the achievable value.
+    float detailAnchorStep() const {
+        const float lambda = cfg_.detailWavelength;
+        if (!(lambda > 0.0f)) return 256.0f;
+        const float n = std::round(256.0f / lambda);
+        return lambda * (n < 1.0f ? 1.0f : n);
+    }
     void recomputeHeightRange();
 
     /// The height-layer stack alone, without procedural detail.

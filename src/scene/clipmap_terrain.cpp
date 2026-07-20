@@ -296,10 +296,9 @@ void ClipmapTerrain::update(float camX, float camY, float camZ) {
     // coordinate, and because the anchor step is an exact multiple of every
     // octave wavelength, an anchor jump cancels exactly against the offset and
     // the field does not shift.
-    const double ax = std::floor(static_cast<double>(camX) / kDetailAnchor)
-                    * kDetailAnchor;
-    const double az = std::floor(static_cast<double>(camZ) / kDetailAnchor)
-                    * kDetailAnchor;
+    const double step = static_cast<double>(detailAnchorStep());
+    const double ax = std::floor(static_cast<double>(camX) / step) * step;
+    const double az = std::floor(static_cast<double>(camZ) / step) * step;
     const float anchor[2] = {static_cast<float>(ax), static_cast<float>(az)};
     const float offset[2] = {static_cast<float>(camX - ax),
                              static_cast<float>(camZ - az)};
