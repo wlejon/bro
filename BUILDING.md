@@ -10,7 +10,7 @@ cmake -B build
 cmake --build build --config Release      # Windows (Visual Studio multi-config)
 ```
 
-That's it — **Skia downloads itself** (prebuilt, from the repo's GitHub releases)
+That's it. **Skia downloads itself** (prebuilt, from the repo's GitHub releases)
 and the default `app` profile builds the full runtime. The only external
 dependency the default build needs is **vcpkg** (for networking + video); if you
 don't have it, build the `minimal` profile instead, which needs nothing beyond
@@ -21,7 +21,7 @@ cmake -B build -DBRO_PROFILE=minimal      # HTML/CSS/JS + Canvas2D + WebGL + aud
 ```
 
 On Linux/macOS (single-config generators) drop `--config` and set the build type
-at configure time — see [Build commands](#build-commands) below.
+at configure time. See [Build commands](#build-commands) below.
 
 ## Build profiles
 
@@ -34,7 +34,7 @@ reports `{ available: false }`, so apps feature-detect instead of crashing.
 |---|---|:--:|:--:|
 | `minimal` | HTML/CSS/JS + Canvas2D + WebGL + audio. 2D renderer only. | no | no |
 | **`app`** (default) | Full renderer (3D scene graph, Jolt physics, audio, core game-AI) + networking, video, Steam. No AI tower. | yes | no |
-| `full` | Everything — adds the on-device AI tower (tensor, LM, diffusion, vision, audio-ML). | yes | opt-in |
+| `full` | Everything, adding the on-device AI tower (tensor, LM, diffusion, vision, audio-ML). | yes | opt-in |
 
 - **`minimal`** (~16 MB) builds, links, and runs with no vcpkg, no CUDA, and no
   `brotensor`. It's the HTML/CSS/JS + Canvas2D + WebGL floor, plus audio (broaudio
@@ -43,10 +43,10 @@ reports `{ available: false }`, so apps feature-detect instead of crashing.
   tower report unavailable.
 - **`app`** (~22 MB, default) is a complete web/app/game runtime. It needs vcpkg
   only because networking (GameNetworkingSockets) and video decode (libvpx/webm)
-  pull vcpkg ports — a runtime where `bro.net` and `<video>` silently didn't work
+  pull vcpkg ports. A runtime where `bro.net` and `<video>` silently didn't work
   would be surprising, so they're in the default.
 - **`full`** adds the AI tower. The CUDA GPU backend stays **opt-in even here**
-  (`-DBRO_WITH_TENSOR_CUDA=ON`, needs the CUDA toolkit) — it's the single largest
+  (`-DBRO_WITH_TENSOR_CUDA=ON`, needs the CUDA toolkit), since it's the single largest
   build-time cost.
 
 Enabling a flag force-enables its prerequisites (e.g. `-DBRO_WITH_DIFFUSION=ON`
@@ -64,25 +64,25 @@ cmake -B build -DBRO_PROFILE=minimal -DBRO_WITH_3D=ON # minimal + the 3D scene g
 
 > Note: `-DBRO_PROFILE` seeds flag defaults on the **first** configure of a build
 > dir. Switching the profile on an existing build dir won't move flags already in
-> the CMake cache — reconfigure fresh (or clear the specific `BRO_WITH_*` cache
+> the CMake cache. Reconfigure fresh (or clear the specific `BRO_WITH_*` cache
 > entries) to re-baseline.
 
 ## Prerequisites
 
 Dependency versions are **pinned** by the `vcpkg.json` manifest at the repo
-root: its `builtin-baseline` locks every port (and transitives — protobuf,
-openssl, abseil, …) to one microsoft/vcpkg commit, so every machine and CI
+root: its `builtin-baseline` locks every port (and transitives such as protobuf,
+openssl, and abseil) to one microsoft/vcpkg commit, so every machine and CI
 build identical dependencies. When the vcpkg toolchain is active, the deps
-install automatically into `<build>/vcpkg_installed` at configure time — no
+install automatically into `<build>/vcpkg_installed` at configure time, with no
 manual `vcpkg install` step. Your vcpkg clone must contain the baseline
 commit; if configure can't resolve it, `git -C <vcpkg> pull` and retry. To
 bump dependency versions, update the baseline in `vcpkg.json` **and** the
 matching `VCPKG_COMMIT` in `.github/workflows/{ci,nightly}.yml`.
 
 **Windows:**
-- **MSVC** (Visual Studio 2022+) — MinGW is not supported
+- **MSVC** (Visual Studio 2022+). MinGW is not supported
 - **CMake** 3.24+
-- **vcpkg** — only for the `app`/`full` profiles (networking + video). Set
+- **vcpkg**, only for the `app`/`full` profiles (networking + video). Set
   `VCPKG_ROOT`, or pass `-DCMAKE_TOOLCHAIN_FILE=…`, or install it at a
   common location (`../vcpkg`, `%HOME%/vcpkg`) where CMake auto-detects it.
   The `minimal` profile needs no vcpkg.
@@ -90,22 +90,22 @@ matching `VCPKG_COMMIT` in `.github/workflows/{ci,nightly}.yml`.
 **Linux (Debian/Ubuntu):**
 - **GCC 12+** or **Clang 15+**
 - **CMake** 3.24+ and **Ninja** (`-G Ninja`, or install `ninja-build`)
-- System packages (needed by all profiles — Skia links them):
+- System packages (needed by all profiles, since Skia links them):
   `build-essential cmake ninja-build libfreetype-dev libfontconfig-dev libgl-dev libjpeg-dev libpng-dev libwebp-dev`
-- **vcpkg** — only for `app`/`full` (networking + video). The video dep
-  (libvpx) assembles with **`nasm`** — `sudo apt-get install nasm` (vcpkg
+- **vcpkg**, only for `app`/`full` (networking + video). The video dep
+  (libvpx) assembles with **`nasm`**, so `sudo apt-get install nasm` (vcpkg
   auto-acquires it on Windows/macOS, but refuses to on Linux).
 
 **macOS (12+, arm64 or x86_64):**
-- **Xcode Command Line Tools** (`xcode-select --install`) — Apple clang 17+
+- **Xcode Command Line Tools** (`xcode-select --install`), Apple clang 17+
 - `brew install cmake ninja bash pkg-config`
   - **CMake** 3.24+ and **Ninja** for building
   - **bash 4+** for `tests/run_tests.sh` (system bash 3.2 lacks `mapfile`)
   - **pkg-config** is used by vcpkg's abseil port while building GameNetworkingSockets
-- **vcpkg** — only for `app`/`full`.
+- **vcpkg**, only for `app`/`full`.
 
 On Apple Silicon machines provisioned via Migration Assistant from an Intel Mac,
-verify Homebrew is the native arm64 build at `/opt/homebrew` — a leftover Intel
+verify Homebrew is the native arm64 build at `/opt/homebrew`. A leftover Intel
 brew at `/usr/local` runs under Rosetta and its cmake defaults to the `x64-osx`
 vcpkg triplet, which won't match an arm64 GameNetworkingSockets install. The
 top-level `CMakeLists.txt` detects arm64 hardware via `sysctl` and forces
@@ -121,7 +121,7 @@ git submodule update --init --recursive
 
 Sibling libraries (`brokit`, `htmlayout`, `broaudio`, `bromesh`, `qjsbind`,
 `brogameagent`, …) are also picked up from standalone checkouts at `../<name>`
-if present — see [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md).
+if present. See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md).
 
 ## Skia
 
@@ -129,7 +129,7 @@ Skia is a **prebuilt** dependency, and by default CMake fetches it for you: on t
 first configure it downloads the headers/source bundle and the Release library
 from the repo's GitHub releases (pinned to Skia `chrome/m147`, SHA-256 verified),
 and drops them into `third_party/skia/`. The Release library is used for **all**
-configs, including Debug. Nothing to do — it just works on:
+configs, including Debug. There is nothing to do; it just works on:
 
 - **Windows** (x64)
 - **Linux** (x64)
@@ -138,7 +138,7 @@ configs, including Debug. Nothing to do — it just works on:
 Disable the download with `-DBRO_FETCH_SKIA=OFF`. You need to **build Skia by
 hand** only in these cases (no prebuilt is hosted, or you want a different one):
 
-- **Intel (x86_64) macOS** — no prebuilt arm64 lib would link
+- **Intel (x86_64) macOS**, where no prebuilt arm64 lib would link
 - a **Windows Debug** Skia lib (the hosted lib is Release; only needed if you
   specifically want a Debug Skia)
 - a **different Skia version**
@@ -157,16 +157,16 @@ tools/git-sync-deps`, then `bin/gn gen` + `ninja`) and place `skia.lib` in
 `third_party/skia/lib/{Debug,Release}/`.
 
 Whichever route you take, the Skia **source** tree must carry the shaping
-modules — `modules/skshaper`, `modules/skunicode`, and the bundled HarfBuzz and
+modules: `modules/skshaper`, `modules/skunicode`, and the bundled HarfBuzz and
 ICU sources. bro compiles those itself (`third_party/skia/skia_modules.cmake`)
 rather than taking them from the pre-built lib, and `BRO_WITH_TEXT_SHAPING`
 defaults ON in every profile. A hand-built or older bundle that lacks them will
-configure with shaping silently unavailable, which is a different renderer — no
+configure with shaping silently unavailable, which is a different renderer: no
 ligatures, no cursive joining, no bidi. See `third_party/skia/BUNDLE.md`.
 
 ## Build commands
 
-**Windows** — Visual Studio multi-config generator. One build dir; pick the
+**Windows** uses the Visual Studio multi-config generator. One build dir; pick the
 config at build time:
 
 ```bash
@@ -175,7 +175,7 @@ cmake --build build --config Debug
 cmake --build build --config Release
 ```
 
-**Linux / macOS** — Ninja single-config generator. `--config` is ignored, so use
+**Linux / macOS** use the Ninja single-config generator. `--config` is ignored, so use
 a separate build dir per config:
 
 ```bash
@@ -186,13 +186,13 @@ cmake -B build-release -DCMAKE_BUILD_TYPE=Release
 cmake --build build-release
 ```
 
-All three executables — `bro` (windowed), `bro-headless` (JS scripting/testing),
-and `bro-server` — are produced. On Windows they land in `build/Debug/` and
+All three executables are produced: `bro` (windowed), `bro-headless` (JS
+scripting/testing), and `bro-server`. On Windows they land in `build/Debug/` and
 `build/Release/`; on Linux/macOS directly in the build dir.
 
 ## Running
 
-bro ships no apps of its own — the launcher and starter apps live in the sibling
+bro ships no apps of its own. The launcher and starter apps live in the sibling
 [broworkshop](https://github.com/wlejon/broworkshop) repo. Clone it next to bro
 and point bro at it:
 
@@ -202,12 +202,12 @@ git clone https://github.com/wlejon/broworkshop
 cd bro
 
 # Windows
-./build/Release/bro.exe ../broworkshop                  # → project manager / launcher
+./build/Release/bro.exe ../broworkshop                  # opens the project manager / launcher
 ./build/Release/bro.exe ../broworkshop/games/snake
 
 # Linux / macOS
-./build/bro ../broworkshop
-./build/bro ../broworkshop/games/snake
+./build-release/bro ../broworkshop
+./build-release/bro ../broworkshop/games/snake
 ```
 
 Running `bro` with no arguments opens the built-in project manager. For headless
