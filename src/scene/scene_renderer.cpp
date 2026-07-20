@@ -91,6 +91,7 @@ SceneRenderer::~SceneRenderer() {
     if (envConvertVBO_) { glDeleteBuffers(1, &envConvertVBO_); envConvertVBO_ = 0; }
     if (envConvertVAO_) { glDeleteVertexArrays(1, &envConvertVAO_); envConvertVAO_ = 0; }
     if (envConvertFBO_) { glDeleteFramebuffers(1, &envConvertFBO_); envConvertFBO_ = 0; }
+    if (atmProgram_) { glDeleteProgram(atmProgram_); atmProgram_ = 0; }
     if (skyboxProgram_) { glDeleteProgram(skyboxProgram_); skyboxProgram_ = 0; }
     if (skyboxVBO_) { glDeleteBuffers(1, &skyboxVBO_); skyboxVBO_ = 0; }
     if (skyboxVAO_) { glDeleteVertexArrays(1, &skyboxVAO_); skyboxVAO_ = 0; }
@@ -515,7 +516,11 @@ void SceneRenderer::render3D() {
             // subsequent geometry naturally composits over it. No-op when no
             // environment is loaded; depth state is left as the geometry
             // pass expects (test on, write on, LESS).
-            renderSkyboxPass();
+            // The analytic sky supersedes the cubemap when it is on: both
+            // paint the whole background, and the cubemap would only overwrite
+            // it with a constant.
+            if (atmosphere_.enabled) renderAtmospherePass();
+            else                     renderSkyboxPass();
 
             // --- Mesh pass --------------------------------------------------
             // Lit meshes render to the HDR FBO (pass through tonemap). Unlit

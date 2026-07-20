@@ -326,6 +326,11 @@ public:
         renderer_.setFogExp(density, heightFalloff, startDistance);
     }
 
+    /// Analytic atmosphere: replaces the cubemap sky and the flat fog colour
+    /// with a scattering model that stays valid from the ground to orbit.
+    void setAtmosphere(const AtmosphereParams& a) { renderer_.setAtmosphere(a); }
+    const AtmosphereParams& atmosphere() const { return renderer_.atmosphere(); }
+
     /// Tone mapping mode applied when composing the HDR mesh FBO to the
     /// caller-facing LDR texture. ACES matches modern filmic defaults;
     /// Reinhard is a cheaper fallback; Linear is raw clamp to 0-1.

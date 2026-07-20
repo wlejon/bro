@@ -55,6 +55,8 @@ embed_shader(decal.frag            kDecalFragSrc)
 # Clipmap-terrain user chunks — spliced into mesh.vert / mesh.frag at the
 # //__USER_CHUNK__ markers via MeshNode::setCustomShader, not compiled alone.
 embed_shader(clipmap_common.glsl   kClipmapCommonSrc)
+embed_shader(atmosphere.glsl       kAtmosphereSrc)
+embed_shader(sky_atmosphere.frag   kSkyAtmosphereFragSrc)
 embed_shader(clipmap_detail.glsl   kClipmapDetailSrc)
 embed_shader(clipmap_material.glsl kClipmapMaterialSrc)
 embed_shader(clipmap.vert.glsl     kClipmapVertSrc)

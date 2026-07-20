@@ -613,6 +613,52 @@ JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
     return JS_UNDEFINED;
 }
 
+// setAtmosphere({enabled, sunDirection, sunColor, planetRadius, thickness,
+//                betaRayleigh, betaMie, mieG, scaleHeightRayleigh,
+//                scaleHeightMie, seaLevel, sunAngularRadius, sunDiskIntensity})
+//
+// Omitted fields keep their Earth defaults rather than reading back the current
+// value: the parameters only make sense as a set, and a half-applied atmosphere
+// is a worse failure than an obviously wrong one.
+JSValue js_sg_setAtmosphere(JSContext* ctx, JSValueConst this_val, int argc,
+                            JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
+
+    JSValueConst o = argv[0];
+    scene::AtmosphereParams a;   // Earth defaults
+
+    a.enabled = qjsbind::get_prop_bool(ctx, o, "enabled", true);
+
+    bromath::Vec3 sd = jsGetVec3(ctx, o, "sunDirection",
+                                 a.sunDir[0], a.sunDir[1], a.sunDir[2]);
+    a.sunDir[0] = sd.x; a.sunDir[1] = sd.y; a.sunDir[2] = sd.z;
+
+    bromath::Vec3 sc = jsGetVec3(ctx, o, "sunColor",
+                                 a.sunColor[0], a.sunColor[1], a.sunColor[2]);
+    a.sunColor[0] = sc.x; a.sunColor[1] = sc.y; a.sunColor[2] = sc.z;
+
+    bromath::Vec3 br = jsGetVec3(ctx, o, "betaRayleigh",
+                                 a.betaR[0], a.betaR[1], a.betaR[2]);
+    a.betaR[0] = br.x; a.betaR[1] = br.y; a.betaR[2] = br.z;
+
+    auto num = [&](const char* n, float cur) {
+        return (float)qjsbind::get_prop_number(ctx, o, n, cur);
+    };
+    a.planetRadius     = num("planetRadius", a.planetRadius);
+    a.thickness        = num("thickness", a.thickness);
+    a.betaM            = num("betaMie", a.betaM);
+    a.mieG             = num("mieG", a.mieG);
+    a.scaleHeightR     = num("scaleHeightRayleigh", a.scaleHeightR);
+    a.scaleHeightM     = num("scaleHeightMie", a.scaleHeightM);
+    a.seaLevel         = num("seaLevel", a.seaLevel);
+    a.sunAngularRadius = num("sunAngularRadius", a.sunAngularRadius);
+    a.sunDiskIntensity = num("sunDiskIntensity", a.sunDiskIntensity);
+
+    g->setAtmosphere(a);
+    return JS_UNDEFINED;
+}
+
 // setTiltShift({enabled, focusCenter, focusWidth, feather, strength,
 //               saturation, contrast}) — screen-space miniature DOF.
 // Passing { enabled: false } (or omitting enabled) turns the pass off.

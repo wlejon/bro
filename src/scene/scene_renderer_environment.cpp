@@ -19,6 +19,8 @@
 #include "brdf_lut.frag.h"
 #include "skybox.vert.h"
 #include "skybox.frag.h"
+#include "atmosphere.glsl.h"      // kAtmosphereSrc
+#include "sky_atmosphere.frag.h"  // kSkyAtmosphereFragSrc
 
 namespace bro::scene {
 
@@ -316,6 +318,98 @@ bool SceneRenderer::runIrradianceConvolution() {
     glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
     glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
     return ok;
+}
+
+// ---------------------------------------------------------------------------
+// Analytic sky
+// ---------------------------------------------------------------------------
+
+void SceneRenderer::ensureAtmospherePipeline() {
+    if (atmProgram_) return;
+    ensureSkyboxPipeline();          // shares its vertex shader, VAO and quad
+    if (!skyboxVAO_) return;
+
+    // atmosphere.glsl is a bare chunk with no #version of its own, so it goes
+    // in after the sky shader's. Same splice the mesh shaders use for their
+    // feature defines.
+    const std::string frag =
+        insertAfterVersion(kSkyAtmosphereFragSrc, std::string(kAtmosphereSrc) + "\n");
+    atmProgram_ = linkProgram(kSkyboxVertSrc, frag.c_str(), "Atmosphere sky program");
+    if (!atmProgram_) return;
+
+    atmUViewToWorld_      = glGetUniformLocation(atmProgram_, "uViewToWorld");
+    atmUTanHalfFovY_      = glGetUniformLocation(atmProgram_, "uTanHalfFovY");
+    atmUAspect_           = glGetUniformLocation(atmProgram_, "uAspect");
+    atmUCamPos_           = glGetUniformLocation(atmProgram_, "uCamPos");
+    atmUSunAngularRadius_ = glGetUniformLocation(atmProgram_, "uSunAngularRadius");
+    atmUSunDiskIntensity_ = glGetUniformLocation(atmProgram_, "uSunDiskIntensity");
+}
+
+// Shared by the sky pass and (later) by anything else that integrates the same
+// model, so the parameters cannot drift between them.
+void SceneRenderer::uploadAtmosphereUniforms(GLuint prog) {
+    const AtmosphereParams& a = atmosphere_;
+
+    float len = std::sqrt(a.sunDir[0] * a.sunDir[0] + a.sunDir[1] * a.sunDir[1]
+                        + a.sunDir[2] * a.sunDir[2]);
+    if (!(len > 0.0f)) len = 1.0f;
+    const float sd[3] = {a.sunDir[0] / len, a.sunDir[1] / len, a.sunDir[2] / len};
+
+    auto u3 = [&](const char* n, const float* v) {
+        const GLint l = glGetUniformLocation(prog, n);
+        if (l >= 0) glUniform3fv(l, 1, v);
+    };
+    auto u1 = [&](const char* n, float v) {
+        const GLint l = glGetUniformLocation(prog, n);
+        if (l >= 0) glUniform1f(l, v);
+    };
+    u3("uAtmSunDir", sd);
+    u3("uAtmSunColor", a.sunColor);
+    u3("uAtmBetaR", a.betaR);
+    u1("uAtmPlanetRadius", a.planetRadius);
+    u1("uAtmThickness", a.thickness);
+    u1("uAtmBetaM", a.betaM);
+    u1("uAtmMieG", a.mieG);
+    u1("uAtmScaleHeightR", a.scaleHeightR);
+    u1("uAtmScaleHeightM", a.scaleHeightM);
+    u1("uAtmSeaLevel", a.seaLevel);
+}
+
+void SceneRenderer::renderAtmospherePass() {
+    if (!atmosphere_.enabled) return;
+    if (!graph_.cameraIsPerspective_) return;   // ortho has no view direction
+    ensureAtmospherePipeline();
+    if (!atmProgram_) return;
+
+    float viewToWorld[9] = {
+        graph_.viewMatrix_.at(0, 0), graph_.viewMatrix_.at(1, 0), graph_.viewMatrix_.at(2, 0),
+        graph_.viewMatrix_.at(0, 1), graph_.viewMatrix_.at(1, 1), graph_.viewMatrix_.at(2, 1),
+        graph_.viewMatrix_.at(0, 2), graph_.viewMatrix_.at(1, 2), graph_.viewMatrix_.at(2, 2),
+    };
+
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_BLEND);
+    glDisable(GL_CULL_FACE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+
+    glUseProgram(atmProgram_);
+    glUniformMatrix3fv(atmUViewToWorld_, 1, GL_FALSE, viewToWorld);
+    glUniform1f(atmUTanHalfFovY_, std::tan(graph_.cameraFovY_ * 0.5f));
+    glUniform1f(atmUAspect_, graph_.cameraAspect_);
+    const bromath::Vec3& eye = graph_.cameraEye();
+    glUniform3f(atmUCamPos_, eye.x, eye.y, eye.z);
+    glUniform1f(atmUSunAngularRadius_, atmosphere_.sunAngularRadius);
+    glUniform1f(atmUSunDiskIntensity_, atmosphere_.sunDiskIntensity);
+    uploadAtmosphereUniforms(atmProgram_);
+
+    glBindVertexArray(skyboxVAO_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    glUseProgram(0);
+
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
 }
 
 void SceneRenderer::ensureSkyboxPipeline() {

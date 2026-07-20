@@ -1779,6 +1779,7 @@ void SceneBindings::install(JSContext* ctx) {
                     w->graph()->setActiveCamera(static_cast<scene::CameraNode*>(n));
             })
         .method_raw("setFog", js_sg_setFog, 1)
+        .method_raw("setAtmosphere", js_sg_setAtmosphere, 1)
         .method_raw("setTiltShift", js_sg_setTiltShift, 1)
         .method_raw("setBloom", js_sg_setBloom, 1)
         .method_raw("setSSAO", js_sg_setSSAO, 1)

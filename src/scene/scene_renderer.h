@@ -4,6 +4,7 @@
 
 #include <bromath/frustum.h>
 
+#include "scene/atmosphere.h"
 #include "scene/light_node.h"
 
 #include <cstdint>
@@ -280,6 +281,9 @@ public:
     void clearEnvironment();
     bool hasEnvironment() const { return envCubemap_ != 0; }
     const std::string& environmentPath() const { return envPath_; }
+
+    void setAtmosphere(const AtmosphereParams& a) { atmosphere_ = a; }
+    const AtmosphereParams& atmosphere() const { return atmosphere_; }
 
     void  setEnvironmentIntensity(float i) { envIntensity_ = (i < 0.0f) ? 0.0f : i; }
     float environmentIntensity() const { return envIntensity_; }
@@ -636,6 +640,9 @@ private:
     // --- IBL environment internals ---
     void ensureEnvConvertPipeline();
     bool runEquirectToCubemap(GLuint equirectTex, GLuint cubemap, int faceSize);
+    void ensureAtmospherePipeline();
+    void renderAtmospherePass();
+    void uploadAtmosphereUniforms(GLuint prog);
     void ensureSkyboxPipeline();
     void renderSkyboxPass();
     void ensureIrradiancePipeline();
@@ -1090,6 +1097,16 @@ private:
 
     // BRDF LUT bake (lazy init, reuses envConvert FBO/VAO)
     GLuint brdfLUTProgram_ = 0;
+
+    // Analytic sky draw pipeline (lazy init). Shares skybox.vert.
+    GLuint atmProgram_ = 0;
+    GLint  atmUViewToWorld_ = -1;
+    GLint  atmUTanHalfFovY_ = -1;
+    GLint  atmUAspect_ = -1;
+    GLint  atmUCamPos_ = -1;
+    GLint  atmUSunAngularRadius_ = -1;
+    GLint  atmUSunDiskIntensity_ = -1;
+    AtmosphereParams atmosphere_;
 
     // Skybox draw pipeline (lazy init)
     GLuint skyboxProgram_ = 0;
