@@ -38,7 +38,7 @@
 
 
 // -----------------------------------------------------------------------------
-// bro.image — namespace
+// bro.image, namespace
 // -----------------------------------------------------------------------------
 
 const image = {
@@ -243,7 +243,7 @@ const image = {
   // high-bit-depth, HDR, and auto-oriented cases.
 
   /**
-   * Decode a 16-bit image (most importantly 16-bit PNGs — depth maps, masks).
+   * Decode a 16-bit image (most importantly 16-bit PNGs: depth maps, masks).
    * Channels forced to 4 (RGBA). Returns null on failure.
    * @param {string|Uint8Array|ArrayBuffer} src
    * @returns {{width:number,height:number,channels:number,pixels:Uint16Array}|null}
@@ -268,7 +268,7 @@ const image = {
   decodeOriented(src) {},
 
   /**
-   * Cheap header probe — dimensions without decoding pixels.
+   * Cheap header probe: dimensions without decoding pixels.
    * @param {Uint8Array|ArrayBuffer} bytes
    * @returns {{width:number,height:number,channels:number}|null}
    */
@@ -314,7 +314,7 @@ const image = {
 
 
   // ===========================================================================
-  // Geometric  (broimage geometric.h) — caller-allocated dst (into-style)
+  // Geometric  (broimage geometric.h). Caller-allocated dst (into-style)
   // ===========================================================================
   //
   // Resize filters: 'nearest' | 'bilinear' | 'bicubic' | 'lanczos3' | 'area'
@@ -392,7 +392,7 @@ const image = {
 
 
   // ===========================================================================
-  // Alpha  (broimage alpha.h) — RGBA8, fixes composite fringing
+  // Alpha  (broimage alpha.h), RGBA8, fixes composite fringing
   // ===========================================================================
 
   /** R,G,B *= a/255. @param {Uint8Array} dst @param {Uint8Array} src */
@@ -467,7 +467,7 @@ const image = {
 
 
   // ===========================================================================
-  // Preproc  (broimage preproc.h) — NHWC <-> NCHW + dtype scale/bias
+  // Preproc  (broimage preproc.h), NHWC <-> NCHW + dtype scale/bias
   // ===========================================================================
   //
   // The layout shuffle every model preprocess does on the way into a Tensor.
@@ -522,7 +522,7 @@ const image = {
   /**
    * HWC float32 convolution: the same kernel applied to each channel
    * independently. The multi-channel companion to `stencil` (which is
-   * single-channel) — what you want for blur/sharpen/edge on an RGB(A) image
+   * single-channel): what you want for blur/sharpen/edge on an RGB(A) image
    * without deinterleaving first.
    * @param {Float32Array} dst
    * @param {Float32Array} src
@@ -533,7 +533,7 @@ const image = {
 
 
   // ===========================================================================
-  // Tiling  (broimage tiling.h) — feather window + weighted accumulate
+  // Tiling  (broimage tiling.h), feather window + weighted accumulate
   // ===========================================================================
   //
   // Split a large image into overlapping tiles, run a local operator per tile,
@@ -574,12 +574,12 @@ const image = {
 
 
 // =============================================================================
-// bro.image.gpu — WebGL2-backed counterparts (lives in bro, NOT broimage)
+// bro.image.gpu, WebGL2-backed counterparts (lives in bro, NOT broimage)
 // =============================================================================
 //
 // Ownership boundary: the CPU `bro.image` kernels above are the broimage C++
 // library (surfaced via brokit). `bro.image.gpu.*` is a separate, bro-side
-// WebGL2 *renderer* — it draws to a canvas via fragment shaders and shares the
+// WebGL2 *renderer*, it draws to a canvas via fragment shaders and shares the
 // namespace only for ergonomics (CPU `lookup` ↔ GPU `colormap`, both consuming
 // a `bro.image.gradient` LUT). It is not part of broimage and does not dispatch
 // through brotensor; broimage's own GPU path is CUDA/Metal compute on tensors,
@@ -605,7 +605,7 @@ const image = {
 // autoRange mode: the engine computes (min, max) via a parallel GPU
 // reduction over the noise texture, EMA-smooths it across frames in a 1×1
 // RG32F ping-pong, and the colormap shader samples that range. The CPU
-// never sees the values — no `bro.image.reduce`, no per-frame range
+// never sees the values, no `bro.image.reduce`, no per-frame range
 // uniforms. EXT_color_buffer_float must be supported (it is on every
 // real-world WebGL2 implementation; the autoRange path throws cleanly if
 // not).
@@ -660,7 +660,7 @@ const imageGpu = {
 
   /**
    * Generate a 2D Simplex FBm field on the GPU and colormap it to `canvas`
-   * in one call. The scalar field never materializes on the CPU side — it
+   * in one call. The scalar field never materializes on the CPU side, it
    * lives only as an intermediate R32F texture between the FBm shader and
    * the colormap shader.
    *
@@ -672,7 +672,7 @@ const imageGpu = {
    *
    * V1 supports type === 'Simplex' only. SuperSimplex, Perlin, Value,
    * CellularValue and CellularDistance are not implemented in shader form
-   * yet — stay on the CPU path for those types.
+   * yet: stay on the CPU path for those types.
    *
    * @param {HTMLCanvasElement} canvas - webgl2-backed
    * @param {Uint8Array} lut           - RGBA8 LUT (see gradient())
@@ -697,7 +697,7 @@ const imageGpu = {
    *        pipeline. Throws if no field has been generated yet.
    *
    * @example
-   *   // Animating FBm with autoRange — no CPU buffer, no reduce, no upload.
+   *   // Animating FBm with autoRange: no CPU buffer, no reduce, no upload.
    *   function frame() {
    *       t += dt * scrollSpeed;
    *       bro.image.gpu.fbm2D(canvas, lut, {

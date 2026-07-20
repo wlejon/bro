@@ -1,5 +1,5 @@
 /**
- * bro.kws — open-vocabulary streaming keyword spotting
+ * bro.kws, open-vocabulary streaming keyword spotting
  *           (brosoundml::PhonemeSpotter)
  *
  * The open-vocab sibling of bro.wake: instead of one trained-in keyword,
@@ -12,7 +12,7 @@
  *
  * PER STREAM. bro.kws.load() loads PhonemeNet ONCE into a shared net; bro.kws.*
  * targets the default microphone, and stream.kws.* (on a bro.listen.open()
- * handle — see docs/listen-api.js) targets that stream, each with its own
+ * handle: see docs/listen-api.js) targets that stream, each with its own
  * templates + matcher over the shared weights. So you can spot one vocabulary on
  * the mic and another on system audio at once. The two homes are one
  * implementation; everything below applies to either.
@@ -22,17 +22,17 @@
  *   - reference audio              →  bro.kws.enrollFromAudio(name, samples)
  *   - raw class ids                →  enroll() accepts those too
  *
- * Plumbing: bro.kws is a member of the engine's SHARED listen host — one raw
+ * Plumbing: bro.kws is a member of the engine's SHARED listen host, one raw
  * (no-AGC) mic tap + lock-free ring + inference task drive a single PCEN mel
  * front-end (brosoundml::ListenBus) feeding every attached tenant, so running
  * bro.kws alongside bro.sense costs one feature pass and one PhonemeNet
  * forward, and both hear the SAME stream. Result delivery is still bro.kws's
  * own: spot events → onSpot (main thread). No AGC anywhere on this path: the
  * PCEN front-end is loudness-robust by design. bro.wake is a third member of
- * the same host — its AGC-free-trained model hears this stream too.
+ * the same host: its AGC-free-trained model hears this stream too.
  *
  * Single-producer rule: enroll/remove/clear/reset share the spotter's feed
- * thread, so they are only allowed while NOT listening — load, enroll, then
+ * thread, so they are only allowed while NOT listening, load, enroll, then
  * listen; stop() to change templates.
  *
  * Defaults to CUDA; pass { device: 'cpu' } to force the CPU backend.
@@ -66,7 +66,7 @@
  *        completion must have at least ceil(minCoverage * length) of the
  *        template's phonemes ACTUALLY emitted (above the emission floor), not
  *        merely floored. This is what stops a long phrase from firing on a
- *        short suffix — "what is the first" completing on just "first" with the
+ *        short suffix: "what is the first" completing on just "first" with the
  *        leading phonemes riding the floor. 0 = absolute minPhonemes gate only;
  *        ~0.6–0.8 makes a typed phrase require most of itself to be heard.
  * @param {number} [opts.scoreNorm=0]         - competition-normalization
@@ -76,17 +76,17 @@
  * @param {boolean} [opts.enrollGaps=false]   - rhythm templates: when
  *        enrolling FROM AUDIO, keep internal silence runs as TIMED gap states
  *        instead of dropping them. Off, click·gap·click collapses to just
- *        "click"; on, the rhythm itself — sound, a timed gap, sound — is the
+ *        "click"; on, the rhythm itself, sound, a timed gap, sound, is the
  *        template, and a re-performance at the wrong tempo is an illegal
  *        path, not a low score. The matcher is stricter for gap templates
- *        (every state must actually be heard — entry may precede evidence
+ *        (every state must actually be heard: entry may precede evidence
  *        by a few frames, but floor-riding is bounded), so percussive
  *        gestures usually also want minPhonemes lowered. Enroll rhythm
  *        gestures from a clip recorded in the room they'll be performed in:
  *        the streaming front-end adapts to the ambient, and a mic recording
  *        carries that same ambient into enrollment's offline pass.
  * @param {number} [opts.gapMinFrames=5]      - internal silence shorter than
- *        this (10 ms frames) still collapses out — speech stop closures stay
+ *        this (10 ms frames) still collapses out: speech stop closures stay
  *        invisible, so enrollGaps is safe for spoken phrases too.
  * @param {number} [opts.gapTolerance=0.5]    - gap duration window as a
  *        fraction of the enrolled gap g: legal dwell is [g*(1-tol), g*(1+tol)]
@@ -103,7 +103,7 @@ bro.kws.load({ weights: '../brosoundml/weights/phoneme/english.bpm' });
 // ── Enroll ──────────────────────────────────────────────────────────────────
 
 /**
- * Enroll a phrase template from phoneme ids — exactly what
+ * Enroll a phrase template from phoneme ids: exactly what
  * bro.tts.phonemize(text) returns. Silence and suprasegmental ids are
  * dropped and duplicate adjacent classes collapsed. Returns the resulting
  * template length (throws if it collapses to empty). Throws while listening.
@@ -135,7 +135,7 @@ const len = bro.kws.enroll('lights-on', bro.tts.phonemize('turn on the lights'))
 // bro.kws.enrollFromAudio('jingle', refSamples);
 
 /**
- * Re-enroll from raw phoneme-CLASS ids (already in [0,K) — the matcher's own
+ * Re-enroll from raw phoneme-CLASS ids (already in [0,K), the matcher's own
  * alphabet, e.g. an edited `cls` sequence from bro.kws.inspect). Silence (class
  * 0) is dropped and adjacent duplicates collapsed. This is the EDIT path: read
  * a template with inspect(), trim/reorder its tokens, enroll the result back.
@@ -149,7 +149,7 @@ const len = bro.kws.enroll('lights-on', bro.tts.phonemize('turn on the lights'))
 // bro.kws.enrollFromClasses('lights-on', [12, 7, 33]);
 
 /**
- * Inspect an enrolled template — its decoded token sequence, so a tool can show
+ * Inspect an enrolled template: its decoded token sequence, so a tool can show
  * the user "you enrolled 'what is the first' as [W AH T · IH Z · DH AH ·
  * F ER S T]", reveal why a suffix matches, and offer an edit. Each state is one
  * template position; for a rhythm template (enrollGaps) gap states carry their
@@ -197,7 +197,7 @@ const names = bro.kws.templates();
  *        template completed an alignment. confidence is the geometric-mean
  *        posterior over the matched span, (0, 1]. `span` is the matched region
  *        on the frames axis: { startFrame, endFrame, matchedFrames } (same axis
- *        as progress().frames / bro.sense frames) — use it to mark where in the
+ *        as progress().frames / bro.sense frames). Use it to mark where in the
  *        stream the match landed. Backward-compatible: (name, confidence)
  *        handlers ignore the 3rd arg.
  */
@@ -208,7 +208,7 @@ bro.kws.listen({
     },
 });
 
-/** Stop listening. Keeps the spotter and its templates — re-enroll or
+/** Stop listening. Keeps the spotter and its templates, re-enroll or
  *  listen() again without reloading weights. */
 // bro.kws.stop();
 
@@ -221,7 +221,7 @@ bro.kws.listen({
 // bro.kws.isActive();  bro.kws.isSuspended();
 
 /**
- * Best current prefix progress across all templates, in [0, 1] — how far the
+ * Best current prefix progress across all templates, in [0, 1], how far the
  * furthest-advanced template has matched. Lock-free; poll it from UI code
  * while live (e.g. a "heard so far" meter).
  * @returns {number}
@@ -229,7 +229,7 @@ bro.kws.listen({
 const best = bro.kws.prefixProgress();
 
 /**
- * Per-template alignment telemetry — the spotter's contribution to the fused
+ * Per-template alignment telemetry: the spotter's contribution to the fused
  * listening surface. One coherent lock-free snapshot, every entry taken after
  * the SAME posterior frame, pollable from any thread while live. Where onSpot
  * reports a completed match after the fact, this reports partial evidence as
@@ -237,7 +237,7 @@ const best = bro.kws.prefixProgress();
  * live AND 'hello there' is 5/7 deep, scoring 0.6" seconds before any event
  * fires (gate a heavier tier, light a per-phrase UI meter).
  *
- * `confidence` is the geometric-mean posterior over the matched prefix — the
+ * `confidence` is the geometric-mean posterior over the matched prefix, the
  * same statistic the firing threshold tests on completion, so it is directly
  * comparable to the template's threshold. `completions` and the last-*frame
  * indices are monotonic (they survive bro.kws.reset()), so diff them between
@@ -261,17 +261,17 @@ const best = bro.kws.prefixProgress();
 const prog = bro.kws.progress();
 
 /**
- * The model's RAW per-frame readout: which phoneme PhonemeNet is hearing right
+ * The model's RAW per-frame readout, which phoneme PhonemeNet is hearing right
  * now, independent of any enrolled template. Where progress() reports template
  * ALIGNMENT and inspect() reports the enrolled SEQUENCE, posterior() exposes the
- * underlying per-frame posterior stream both are built on — so a HUD can show
+ * underlying per-frame posterior stream both are built on, so a HUD can show
  * the live decoded phoneme(s), and a fuser can use "a real phoneme is present
  * (not silence/churn)" as its own speech-evidence sensor (e.g. to discount a
  * tier-0 gesture match that coincides with actual speech).
  *
  * Lock-free seqlock read, safe to poll while the inference thread feeds. `top`
  * is the `topK` classes by posterior, descending; class 0 ("sil") is silence.
- * `frame` is the spotter's monotonic frame counter — aligns with
+ * `frame` is the spotter's monotonic frame counter: aligns with
  * progress().frames and bro.sense.snapshot().frames.
  *
  * @param {number} [topK=3]
@@ -290,7 +290,7 @@ const stats = bro.kws.stats();
 /**
  * Manual feed for tests / scripted scenarios (headless). Samples must be at
  * bro.kws.sampleRate(). Refused while live mic capture is active. The listen
- * host carries ONE stream, so this advances every attached tenant — audio fed
+ * host carries ONE stream, so this advances every attached tenant, audio fed
  * here also moves bro.sense's sensors, and vice versa.
  *   - Headless: runs the shared bus synchronously and returns the events
  *     fired during this call as [{ name, confidence }] (onSpot also fires on

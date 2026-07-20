@@ -1,5 +1,5 @@
 // =====================================================================
-// bro.math — math primitives bound from the bromath C++ library
+// bro.math, math primitives bound from the bromath C++ library
 // =====================================================================
 //
 // Most bromath types (Vec3, Quat, Mat4, AABB, Color) are passed implicitly
@@ -7,11 +7,11 @@
 // explicit JS classes. This file documents the bromath surfaces that ARE
 // reachable as `bro.math.*`.
 //
-// Constructors (also registered globally for convenience —
+// Constructors (also registered globally for convenience,
 // `bro.math.SpatialHash3D === SpatialHash3D`):
-//   SpatialHash3D — uniform-grid 3D spatial index over points and spheres.
-//   Rng           — deterministic SplitMix64 generator (seeded, reproducible).
-//   Smoother      — one-pole exponential ramp.
+//   SpatialHash3D, uniform-grid 3D spatial index over points and spheres.
+//   Rng, deterministic SplitMix64 generator (seeded, reproducible).
+//   Smoother, one-pole exponential ramp.
 //
 // Free functions on bro.math (curves, color, scalar/angle, geometry queries,
 // grid/hash) are documented at the bottom of this file.
@@ -34,7 +34,7 @@
 // footprint of every query by that amount, so a large sphere whose center
 // sits outside the query region is still found.
 //
-// Mixed point/sphere inserts are fine — point entries behave as zero-radius
+// Mixed point/sphere inserts are fine, point entries behave as zero-radius
 // spheres for the purpose of radius queries.
 
 class SpatialHash3D {
@@ -83,7 +83,7 @@ class SpatialHash3D {
   /**
    * Center-only nearest lookup: id of the entry whose center is closest
    * to (x,y,z), provided that center is within `maxRadius`. Sphere radii
-   * are ignored for this query — use radiusQuery for sphere-aware reach.
+   * are ignored for this query: use radiusQuery for sphere-aware reach.
    * @returns {number} id, or -1 if no entry is within range
    */
   nearest(x, y, z, maxRadius) {}
@@ -104,7 +104,7 @@ class SpatialHash3D {
 // -----------------------------------------------------------------------------
 // Deterministic SplitMix64 generator carrying its own 64-bit state. Two Rng
 // instances seeded with the same value emit identical sequences across runs
-// and platforms — use it for reproducible procedural generation, jitter, and
+// and platforms, use it for reproducible procedural generation, jitter, and
 // tests. No global state is touched.
 //
 //   const rng = new bro.math.Rng(1234);
@@ -137,7 +137,7 @@ class Rng {
   /** Standard normal sample (mean 0, stddev 1; Box-Muller). */
   normal() {}
 
-  /** 2D gaussian — {x,y}, each ~ N(0, sigma). */
+  /** 2D gaussian, {x,y}, each ~ N(0, sigma). */
   gaussian2D(sigma) {}
 
   /** Uniform point inside the unit disc (XY plane) → {x,y}. */

@@ -1,11 +1,11 @@
 /**
- * Gamepad API — W3C-style controller input over SDL3's gamepad abstraction
+ * Gamepad API: W3C-style controller input over SDL3's gamepad abstraction
  *
  * bro implements the web Gamepad API poll model: controllers surface through
  * `navigator.getGamepads()` as immutable per-call snapshots, and connection
  * changes fire `gamepadconnected` / `gamepaddisconnected` on `window`. SDL3
  * normalizes every recognized device to one logical layout, so `mapping` is
- * always `"standard"` — button and axis indices mean the same thing on every
+ * always `"standard"`: button and axis indices mean the same thing on every
  * controller:
  *
  *   buttons[0]  south (A / Cross)         buttons[9]   start
@@ -26,10 +26,10 @@
  * reads `null` in getGamepads() and is reused by the next device.
  *
  * Gamepad buttons also participate in the bro.settings action-binding system
- * via `"gamepad:<name>"` binding strings — see docs/settings.md.
+ * via `"gamepad:<name>"` binding strings. See docs/settings.md.
  *
  * Headless testing: inject a virtual controller at the engine layer and drive
- * this whole surface without hardware — see docs/headless.md.
+ * this whole surface without hardware: see docs/headless.md.
  *
  *   gamepadConnect([id])                         -> slot index
  *   gamepadDisconnect(index)
@@ -40,7 +40,7 @@
  * "lefttrigger", "leftx", ...). `value` on gamepadButton gives triggers an
  * analog level, defaulting to pressed ? 1 : 0. The three mutators throw
  * TypeError ("no virtual gamepad at index N") if that slot is empty or holds
- * a REAL controller — they only drive pads created by gamepadConnect().
+ * a REAL controller: they only drive pads created by gamepadConnect().
  */
 
 // ── Polling ───────────────────────────────────────────────────────────────────
@@ -50,7 +50,7 @@
  *
  * @returns {(Gamepad|null)[]} One entry per slot ever seen this session;
  *   `null` where the slot's device is disconnected. Empty array when no
- *   controller was ever connected. Each Gamepad is a plain snapshot — poll
+ *   controller was ever connected. Each Gamepad is a plain snapshot, poll
  *   again for fresh state; old snapshots never mutate.
  */
 navigator.getGamepads();
@@ -146,7 +146,7 @@ gamepad.vibrationActuator.playEffect("trigger-rumble", {
 });
 
 /**
- * Stop any in-progress rumble — both the body and the trigger motors.
+ * Stop any in-progress rumble: both the body and the trigger motors.
  * @returns {Promise<"complete">}
  */
 gamepad.vibrationActuator.reset();
@@ -183,7 +183,7 @@ document.body.addEventListener("action", (e) => {
 });
 
 /**
- * Polled action state — per-frame analog reads without listening for edges.
+ * Polled action state: per-frame analog reads without listening for edges.
  * getActionStrength(name): 0..1, max over the action's bindings (keys/mouse
  * 0/1, triggers analog, axis bindings deadzone-rescaled: (m - dz) / (1 - dz)).
  * isActionPressed(name): boolean; axis bindings answer from the same

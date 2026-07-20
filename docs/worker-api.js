@@ -67,7 +67,7 @@ class Worker {
    *   worker.postMessage({ data: buf }, [buf]);
    *   // buf.byteLength === 0 after transfer
    *
-   *   // A Mesh in the payload MUST be listed — otherwise postMessage throws
+   *   // A Mesh in the payload MUST be listed, otherwise postMessage throws
    *   // ("Mesh must be listed in the transferList").
    *   worker.postMessage({ geometry: mesh }, [mesh]);
    */
@@ -100,7 +100,7 @@ class Worker {
 // Worker Global Scope (inside the worker script)
 // -----------------------------------------------------------------------------
 // These globals are available inside the worker script. There is no `window`
-// or `document` — use `self` to refer to the worker global scope.
+// or `document`, use `self` to refer to the worker global scope.
 
 /** @type {WorkerGlobalScope} */
 var self;
@@ -166,24 +166,24 @@ class WorkerGlobalScope {
   //
   // Engine APIs available in workers:
   //   Mesh (bromesh geometry)
-  //   bro.net.*     — own subscriber against the shared NetService: host(),
+  //   bro.net.*, own subscriber against the shared NetService: host(),
   //                   connect(), send(), broadcast(), onconnect, ondisconnect,
   //                   onmessage. Safe to host a server entirely inside a
   //                   worker.
-  //   bro.server.*  — worker-scoped: tickrate (this worker's event-loop
+  //   bro.server.*, worker-scoped: tickrate (this worker's event-loop
   //                   rate), uptime (seconds since this worker started),
   //                   stop() (terminate this worker).
-  //   bro.ai.game.* — navmesh, pathfinding, LOS, steering — same API as
+  //   bro.ai.game.*, navmesh, pathfinding, LOS, steering, same API as
   //                   the main thread. All state lives on JS objects, so
   //                   worker and main contexts have independent worlds.
-  //   bro.tensor.*  — GPU tensor + ops (brotensor).
-  //   bro.diffusion.* — diffusion-model inference (brodiffusion).
-  //   bro.lm.*      — Qwen3 text generation (brolm). Each worker owns its own
+  //   bro.tensor.*, GPU tensor + ops (brotensor).
+  //   bro.diffusion.*, diffusion-model inference (brodiffusion).
+  //   bro.lm.*, Qwen3 text generation (brolm). Each worker owns its own
   //                   model + KV cache.
-  //   bro.stt.* / bro.tts.* — Whisper STT / Kokoro TTS (brosoundml).
+  //   bro.stt.* / bro.tts.*, Whisper STT / Kokoro TTS (brosoundml).
   //                   Run heavy inference here to keep the main thread
   //                   responsive; transfer Float32 audio buffers back.
-  //   ImageBitmap / createImageBitmap — build frames here, transfer to main.
+  //   ImageBitmap / createImageBitmap, build frames here, transfer to main.
   //
   // NOT available: window, document, DOM, canvas, scene, Worker (no nesting),
   //                bro.physics, bro.audio (playback is main-thread only)
@@ -291,7 +291,7 @@ class MessagePort extends EventTarget {
 //   NOT cloneable (throws TypeError):
 //     Functions, Promises, and the weak collections (WeakMap, WeakSet,
 //     WeakRef). Any of these nested anywhere in the payload throws the same
-//     way — the send fails whole rather than delivering a partial payload.
+//     way, the send fails whole rather than delivering a partial payload.
 //
 //   Class instances are NOT reconstructed: an instance of an app-defined
 //   class arrives as a plain object carrying its own enumerable string
@@ -300,7 +300,7 @@ class MessagePort extends EventTarget {
 // Nesting depth limit: 64 levels.
 // Transfer list may contain ArrayBuffer, Mesh, or ImageBitmap; anything else
 // throws TypeError. A Mesh in the payload MUST be listed or postMessage
-// throws — Mesh has no clone path.
+// throws, Mesh has no clone path.
 
 
 // -----------------------------------------------------------------------------
@@ -308,7 +308,7 @@ class MessagePort extends EventTarget {
 // -----------------------------------------------------------------------------
 //
 // - No SharedWorker or ServiceWorker
-// - No importScripts() — worker script is a single file
+// - No importScripts(): worker script is a single file
 // - No nested Workers (cannot create a Worker inside a worker)
 // - No SharedArrayBuffer or Atomics
 // - Message queue capacity: 255 messages per direction (a 256-slot ring with

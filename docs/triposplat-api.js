@@ -1,9 +1,9 @@
 // =============================================================================
-// bro.triposplat — single image -> 3D Gaussian Splat
+// bro.triposplat, single image -> 3D Gaussian Splat
 // =============================================================================
 //
 // TripoSplat (VAST-AI/TripoSplat) reconstructed as a composition over the bro
-// sibling stack — no single library owns it:
+// sibling stack, no single library owns it:
 //
 //   DINOv3 ViT-H (brovisionml)  ─┐
 //   Flux.2 VAE encoder (brodiffusion) ─┤→ two image-conditioning features
@@ -17,14 +17,14 @@
 //
 // GPU by default (FP16). The pipeline is heavy (a few seconds to a couple of
 // minutes per image, dominated by the DINOv3 encode and the per-block rotary);
-// run generate() inside a Worker to keep the UI responsive — the binding is
+// run generate() inside a Worker to keep the UI responsive, the binding is
 // installed in the worker context too.
 //
 // Background removal: pass the optional `birefnet` checkpoint to load() and the
 // upstream BiRefNet (Swin-L + ASPP-deformable) matte is predicted per image and
 // used to isolate the subject before the cover-fit / composite-over-black step.
 // Without it, the preprocessor only cover-fits to 1024² and composites the
-// image's own alpha over black — so give a pre-masked / foreground-on-black
+// image's own alpha over black. So give a pre-masked / foreground-on-black
 // image for the best result.
 
 // -----------------------------------------------------------------------------
@@ -32,7 +32,7 @@
 // -----------------------------------------------------------------------------
 
 /**
- * Initialize the brotensor runtime (idempotent). Optional — load() calls it.
+ * Initialize the brotensor runtime (idempotent). Optional, load() calls it.
  */
 bro.triposplat.init = function () {};
 
@@ -61,7 +61,7 @@ class TripoSplatPipeline {
   get device() {}
 
   /** True when a BiRefNet matte model was loaded (the `birefnet` path was
-   *  given to load()) — i.e. generate() can isolate the subject. Use it to
+   *  given to load()): i.e. generate() can isolate the subject. Use it to
    *  gate a "remove background" toggle in a UI. */
   get backgroundRemoval() {}
 
@@ -87,14 +87,14 @@ class TripoSplatPipeline {
    *   Render-ready SoA (positions xyz / scales xyz linear / rotations xyzw unit /
    *   opacities [0,1] / SH-DC color). Feeds scene.createGaussianSplat({ cloud }).
    *   Returns `{ cancelled: true }` instead (no cloud) when bro.triposplat.cancel()
-   *   was called during the run — check for it before reading `.count`.
+   *   was called during the run: check for it before reading `.count`.
    */
   generate(image, opts) {}
 }
 
 /**
  * Request that an in-flight generate() abort. generate() is a single synchronous
- * native call — run it inside a Worker and call this from the MAIN thread to
+ * native call: run it inside a Worker and call this from the MAIN thread to
  * interrupt it. The cancel is cooperative: it lands at the next stage boundary
  * (after the DINOv3 / VAE encoders) or between Euler sampler steps, so a run
  * stuck in the octree decode finishes that stage first. The aborted generate()

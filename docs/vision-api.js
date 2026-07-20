@@ -1,15 +1,15 @@
 /**
- * bro.vision — Vision-model inference (brovisionml sibling)
+ * bro.vision, Vision-model inference (brovisionml sibling)
  *
  * Image-understanding models that take pixels in and emit masks / maps /
  * boxes: promptable segmentation (SAM), monocular depth (Depth-Anything-V2),
- * surface normals (DSINE), and the ControlNet conditioning annotators — soft
+ * surface normals (DSINE), and the ControlNet conditioning annotators, soft
  * edges (HED), line drawing (lineart), straight lines (MLSD), body pose
  * (OpenPose), semantic segmentation (SegFormer). Plus one *generative* model
  * that runs the other way, latent → image: StyleGAN3-R (loadStyleGAN3).
  *
  * Backed by brovisionml on top of brotensor + broimage. Models run on CUDA by
- * default — pass { device: 'cpu' } to force the CPU backend. brovisionml ships
+ * default: pass { device: 'cpu' } to force the CPU backend. brovisionml ships
  * code only; you supply the weight directories (HF safetensors checkpoints).
  *
  * ── Inputs ──
@@ -25,8 +25,8 @@
  *
  * ── Sync vs async ──
  * Heavy work (load, SAM's image encode, every inference call, "segment
- * everything") runs on a background thread when you pass a callback —
- * loaders take opts.onReady/onError; inference takes opts.onDone — keeping the
+ * everything") runs on a background thread when you pass a callback,
+ * loaders take opts.onReady/onError; inference takes opts.onDone, keeping the
  * JS thread responsive (the same convention bro.stt / bro.tts / bro.lm use).
  * The async call returns an AsyncHandle with `.cancel()`; onDone(result, info)
  * fires once on the JS thread with info = { cancelled, error? }. With no
@@ -41,7 +41,7 @@
 
 /**
  * Initialize brotensor (probes the CUDA backend). Idempotent and thread-safe.
- * Optional — every loadXxx calls it — but useful to warm up explicitly.
+ * Optional: every loadXxx calls it, but useful to warm up explicitly.
  */
 bro.vision.init();
 
@@ -63,14 +63,14 @@ sam.device;    // 'CUDA'
 sam.hasImage;  // false until setImage()
 
 /**
- * Sam.setImage(image, opts?) — run the slow ViT encode once; the embedding is
- * cached for subsequent segment() calls. Heavy — pass opts.onDone to run async.
+ * Sam.setImage(image, opts?), run the slow ViT encode once; the embedding is
+ * cached for subsequent segment() calls. Heavy. Pass opts.onDone to run async.
  * @returns {undefined|AsyncHandle}
  */
 sam.setImage(img);  // sync; or sam.setImage(img, { onDone: () => {...} })
 
 /**
- * Sam.segment(opts) — cheap per-prompt decode against the cached embedding.
+ * Sam.segment(opts), cheap per-prompt decode against the cached embedding.
  * Synchronous. Coordinates are ORIGINAL-image pixels.
  * @param {Object} opts
  * @param {number[][]} [opts.points]  [[x,y], ...] click points
@@ -87,9 +87,9 @@ const seg = sam.segment({ points: [[320, 240]], labels: [1] });
 const best = seg.masks[seg.best];   // best.iou, best.data, best.image
 
 /**
- * Sam.segmentEverything(image, opts?) — the automatic mask generator
+ * Sam.segmentEverything(image, opts?), the automatic mask generator
  * ("segment everything"): a regular point grid → multi-mask proposals →
- * IoU / stability filtering → box-NMS. Heavy — pass opts.onDone for async.
+ * IoU / stability filtering → box-NMS. Heavy. Pass opts.onDone for async.
  * @param {Object} [opts]  pointsPerSide(32), pointsPerBatch(64),
  *   predIouThresh(0.88), stabilityThresh(0.95), boxNmsThresh(0.7),
  *   cropNLayers(0), minMaskRegionArea(0)
@@ -110,7 +110,7 @@ const depth = bro.vision.loadDepth('weights/Depth-Anything-V2-Small');
 
 /**
  * DepthEstimator.estimate(image, opts?)
- * @param {Object} [opts]  invert(false) — flip grayscale; onDone — run async
+ * @param {Object} [opts]  invert(false): flip grayscale; onDone: run async
  * @returns {{ width, height, depth: Float32Array, image: ImageBitmap, min, max }}
  *   `depth` is relative inverse-depth (nearer = larger; NOT metric); `image`
  *   is the min-max-normalized grayscale map (brighter = nearer by default).
@@ -118,12 +118,12 @@ const depth = bro.vision.loadDepth('weights/Depth-Anything-V2-Small');
 const dm = depth.estimate(img);   // dm.depth, dm.image, dm.min, dm.max
 
 
-// ── DSINE — surface normals ────────────────────────────────────────────────
+// ── DSINE, surface normals ────────────────────────────────────────────────
 
 /**
  * @param {string} dir
- * @param {Object} [opts]  fov(60) — assumed field-of-view for synthesized
- *   intrinsics; maxResolution(0=native) — cap the longer side: larger images are
+ * @param {Object} [opts]  fov(60): assumed field-of-view for synthesized
+ *   intrinsics; maxResolution(0=native), cap the longer side: larger images are
  *   downscaled before inference and the normal map upscaled + re-normalized back
  *   (the OOM guard for big images; DSINE is capped, not tiled, because its
  *   geometry is conditioned on global intrinsics); device; onReady/onError
@@ -133,8 +133,8 @@ const normals = bro.vision.loadNormal('weights/dsine');
 
 /**
  * NormalEstimator.estimate(image, opts?)
- * @param {Object} [opts]  fx,fy,cx,cy — explicit pinhole intrinsics (else
- *   synthesized from fov); onDone — run async
+ * @param {Object} [opts]  fx,fy,cx,cy: explicit pinhole intrinsics (else
+ *   synthesized from fov); onDone, run async
  * @returns {{ width, height, normals: Float32Array(3*h*w, planar NCHW),
  *             image: ImageBitmap }}
  *   Each pixel is a unit normal in CAMERA space (nx,ny,nz); `image` maps it to
@@ -146,7 +146,7 @@ const nm = normals.estimate(img);
 // ── ControlNet annotators (HED / lineart / MLSD / OpenPose / SegFormer) ──────
 
 /**
- * HED soft edges — bro.vision.loadHed(dir,
+ * HED soft edges: bro.vision.loadHed(dir,
  *   { resolution?(0=native), tile?(0=off), overlap?(0), device, onReady })
  * SoftEdgeDetector.detect(image, opts?{onDone}) →
  *   { width, height, edge: Float32Array([0,1]), image: ImageBitmap (grayscale) }
@@ -161,11 +161,11 @@ const hed = bro.vision.loadHed('weights/hed');
 const edges = hed.detect(img);   // edges.edge, edges.image
 
 /**
- * Lineart — bro.vision.loadLineart(dir,
+ * Lineart: bro.vision.loadLineart(dir,
  *   { resolution?, invert?(true), tile?(0=off), overlap?(0), device, onReady })
  * LineartDetector.detect(image, opts?{onDone}) →
  *   { width, height, line: Float32Array([0,1]), image: ImageBitmap }
- *   invert (default) gives bright lines on a dark field — the ControlNet convention.
+ *   invert (default) gives bright lines on a dark field, the ControlNet convention.
  *   `tile`/`overlap` work as in loadHed: tile large images and feather-blend the
  *   per-tile line maps (the generator is a local FCN; invert commutes with the
  *   blend). When tiling is active each tile runs native, so `resolution` is ignored.
@@ -174,7 +174,7 @@ const lineart = bro.vision.loadLineart('weights/lineart');
 const lines = lineart.detect(img);
 
 /**
- * MLSD straight lines — bro.vision.loadMlsd(dir, { scoreThr?(0.1), distThr?(0.1), device, onReady })
+ * MLSD straight lines: bro.vision.loadMlsd(dir, { scoreThr?(0.1), distThr?(0.1), device, onReady })
  * MLSDdetector.detect(image, opts?{onDone}) →
  *   { width, height, segments: [{x1,y1,x2,y2,score}], image: ImageBitmap (white lines) }
  *   segment coords are ORIGINAL-image pixels.
@@ -183,7 +183,7 @@ const mlsd = bro.vision.loadMlsd('weights/mlsd');
 const segs = mlsd.detect(img);   // segs.segments, segs.image
 
 /**
- * OpenPose body pose — bro.vision.loadOpenpose(dir, { resolution?(512), device, onReady })
+ * OpenPose body pose: bro.vision.loadOpenpose(dir, { resolution?(512), device, onReady })
  * OpenposeDetector.detect(image, opts?{onDone}) →
  *   { width, height,
  *     bodies: [{ keypoints: [{x,y,score,present}×18], totalScore, totalParts }],
@@ -195,7 +195,7 @@ const openpose = bro.vision.loadOpenpose('weights/openpose');
 const pose = openpose.detect(img);   // pose.bodies, pose.image
 
 /**
- * SegFormer semantic segmentation — bro.vision.loadSegformer(dir, { device, onReady })
+ * SegFormer semantic segmentation: bro.vision.loadSegformer(dir, { device, onReady })
  *   dir holds model.safetensors + config.json (e.g. segformer-b0-finetuned-ade-512-512).
  * SegformerDetector.detect(image, opts?{onDone}) →
  *   { width, height, classes: Uint8Array(ADE20K ids 0..149),
@@ -205,14 +205,14 @@ const segformer = bro.vision.loadSegformer('weights/segformer-b0-ade');
 const sem = segformer.detect(img);   // sem.classes, sem.image
 
 
-// ── BiRefNet — background removal ─────────────────────────────────────────────
+// ── BiRefNet, background removal ─────────────────────────────────────────────
 
 /**
- * BiRefNet dichotomous segmentation / background removal —
+ * BiRefNet dichotomous segmentation / background removal:
  * bro.vision.loadBirefnet(safetensorsPath, { device, modelSize, onReady })
  *   safetensorsPath: the Swin-L BiRefNet checkpoint file (the same one
  *   bro.triposplat takes as its optional `birefnet` matting front-end).
- *   modelSize: square inference resolution, multiple of 32 (default 1024 — the
+ *   modelSize: square inference resolution, multiple of 32 (default 1024, the
  *   reference recipe; lower for speed at the cost of edge fidelity).
  *
  * BackgroundRemover.removeBackground(image, opts?{onDone}) →
@@ -228,19 +228,19 @@ const cut = rembg.removeBackground(img);
 // ctx.drawImage(cut.image, 0, 0);   // subject only, transparent background
 
 
-// ── StyleGAN3 — image generation (the one generative model) ──────────────────
+// ── StyleGAN3, image generation (the one generative model) ──────────────────
 
 /**
  * Load an NVlabs StyleGAN3 generator. Unlike the image→X models above, this one
  * runs latent → RGB. The checkpoint is a CONVERTED safetensors (StyleGAN3 ships
  * Python pickles): brovisionml/scripts/download-stylegan3.sh fetches + converts
  * a released model into weights/<name>/model.safetensors. Both config families
- * load — config-R (rotation-equivariant, the default) and config-T
+ * load: config-R (rotation-equivariant, the default) and config-T
  * (translation-equivariant); pass `variant` to pick, matching the checkpoint.
  * @param {string} dir   holds model.safetensors
  * @param {Object} [opts]
- * @param {number} [opts.resolution=256]  256 | 512 | 1024 — must match the checkpoint
- * @param {string} [opts.variant='r']     'r' (config-R) | 't' (config-T) — must match too
+ * @param {number} [opts.resolution=256]  256 | 512 | 1024: must match the checkpoint
+ * @param {string} [opts.variant='r']     'r' (config-R) | 't' (config-T): must match too
  * @param {string} [opts.device='cuda']   'cuda' | 'cpu'
  * @param {function} [opts.onReady]        async load: onReady(gen)
  * @param {function} [opts.onError]
@@ -250,7 +250,7 @@ const cut = rembg.removeBackground(img);
 const gan = bro.vision.loadStyleGAN3('weights/stylegan3-r-ffhqu-256', { resolution: 256 });
 
 /**
- * StyleGAN3.generate(opts?) — sample/render an image.
+ * StyleGAN3.generate(opts?), sample/render an image.
  * @param {Object} [opts]
  * @param {number}       [opts.seed=0]            sample z ~ N(0,1) from this seed
  * @param {Float32Array} [opts.z]                 use this latent (length zDim) instead of a seed
@@ -261,15 +261,15 @@ const gan = bro.vision.loadStyleGAN3('weights/stylegan3-r-ffhqu-256', { resoluti
  * @returns {{ width, height, image: ImageBitmap, seed?, w?: Float32Array, numWs?, wDim? }}
  *   `image` is the RGB result (drawImage / WebGL texImage2D ready). `seed` echoes
  *   the seed when one was used. With returnLatents, `w` is the (numWs*wDim) W+
- *   row-major — edit/interpolate it and feed it back through synthesize().
+ *   row-major: edit/interpolate it and feed it back through synthesize().
  */
 const r = gan.generate({ seed: 42, truncation: 0.7 });   // r.image, r.seed
 
 /**
- * StyleGAN3.synthesize(w, opts?) — render an explicit W+ (skip the mapping).
+ * StyleGAN3.synthesize(w, opts?), render an explicit W+ (skip the mapping).
  * @param {Float32Array} w   the full w+ (numWs*wDim) OR a single w (wDim),
  *                           broadcast across all rows.
- * @param {Object} [opts]    onDone — run async
+ * @param {Object} [opts]    onDone: run async
  * @returns {{ width, height, image: ImageBitmap }}
  *
  *   Latent-space interpolation, end to end:
@@ -281,13 +281,13 @@ const r = gan.generate({ seed: 42, truncation: 0.7 });   // r.image, r.seed
 const mid = gan.synthesize(someWPlus);   // mid.image
 
 /**
- * StyleGAN3.invert(image, opts?) — recover a W+ latent from an image (the
+ * StyleGAN3.invert(image, opts?), recover a W+ latent from an image (the
  * reverse of synthesize). Optimization-based GAN inversion: Adam on the W+ rows
  * minimizing image-space MSE through the frozen synthesis network. The recovered
  * `w` drops straight back into synthesize() / interpolation / style-mixing, so an
  * arbitrary face can be edited in the same latent space as a sampled one.
  * @param {ImageBitmap|{data,width,height}} image  RGBA source; MUST be the model
- *   resolution (e.g. 256×256) — resize the source first (drawImage onto a
+ *   resolution (e.g. 256×256), resize the source first (drawImage onto a
  *   resolution-sized canvas) if it isn't.
  * @param {Object} [opts]
  * @param {number}   [opts.steps=350]      Adam iterations (more = closer fit, slower)
@@ -296,15 +296,15 @@ const mid = gan.synthesize(someWPlus);   // mid.image
  * @param {number}   [opts.initNoise=0]    stddev of gaussian jitter on the w_avg init
  * @param {number}   [opts.seed=0]         rng for initNoise
  * @param {Float32Array} [opts.initW]      start latent (num_ws*w_dim) to resume/refine
- *   from instead of w_avg — run invert in chunks (feed back the previous `w`) for
+ *   from instead of w_avg: run invert in chunks (feed back the previous `w`) for
  *   live progressive refinement, or seed it from a known latent. regW still pulls toward w_avg.
- * @param {function} [opts.onDone]         run async — RECOMMENDED, inversion is slow (hundreds of synthesis passes)
+ * @param {function} [opts.onDone]         run async: RECOMMENDED, inversion is slow (hundreds of synthesis passes)
  * @returns {{ width, height, image: ImageBitmap, w: Float32Array, numWs, wDim,
  *             loss: number, lossCurve: Float32Array }}
  *   `image` is the re-rendered recovered face, `w` the (numWs*wDim) W+, `loss`
  *   the final image-space MSE, `lossCurve` the per-step MSE (plot to watch convergence).
  *
- *   Invert then edit, end to end (async — the windowed event loop drives onDone):
+ *   Invert then edit, end to end (async, the windowed event loop drives onDone):
  *     gan.invert(photo256, { steps: 300, onDone(res) {
  *       const w = res.w;                       // recovered latent
  *       // …interpolate / style-mix `w` like any sampled latent, then:
@@ -317,7 +317,7 @@ const rec = gan.invert(photo256, { steps: 300 });   // rec.image, rec.w, rec.los
 // ── DINOv2 backbone (raw ViT features) ───────────────────────────────────────
 
 /**
- * Load the DINOv2 ViT feature-extractor backbone — the image encoder behind
+ * Load the DINOv2 ViT feature-extractor backbone: the image encoder behind
  * Depth-Anything-V2, exposed standalone for raw patch features. Reads
  * `model.safetensors` from the dir (the `backbone.` namespace of an HF
  * DepthAnythingForDepthEstimation / DINOv2 checkpoint).
@@ -332,14 +332,14 @@ const rec = gan.invert(photo256, { steps: 300 });   // rec.image, rec.w, rec.los
 bro.vision.loadDinov2(dir, opts);
 
 /**
- * Dinov2Backbone.encode(image, opts?) — run the backbone and return the four
+ * Dinov2Backbone.encode(image, opts?), run the backbone and return the four
  * DPT-stage hidden states (HF Dinov2Backbone out_features stage3/6/9/12). Each
  * feature map has the backbone's final LayerNorm applied; token row 0 is the
  * cls token, the rest are patch tokens in row-major (h-major) order.
  * @param {ImageBitmap|{data,width,height}} image  RGBA source (stretched to a square)
  * @param {Object} [opts]
  * @param {number}   [opts.size]    square input side, multiple of patchSize (default img_size, 518)
- * @param {function} [opts.onDone]  run async — onDone(result, info)
+ * @param {function} [opts.onDone]  run async: onDone(result, info)
  * @returns {{ features: Float32Array[], stages: number[], tokens: number,
  *             dim: number, patchH: number, patchW: number, numPrefixTokens: 1 }}
  *   `features[i]` is the (tokens*dim) stage map for `stages[i]`; tokens =
@@ -353,7 +353,7 @@ const f2 = d2.encode(photo);          // f2.features[3] = last-stage (tokens*dim
 // ── DINOv3 backbone (raw ViT features) ───────────────────────────────────────
 
 /**
- * Load the DINOv3 ViT-H backbone — the image encoder behind TripoSplat, exposed
+ * Load the DINOv3 ViT-H backbone: the image encoder behind TripoSplat, exposed
  * standalone. `modelPath` is the `dino_v3_vit_h.safetensors` file (or a dir
  * containing it); the same checkpoint and entry points bro.triposplat drives.
  * @param {string} modelPath
@@ -366,34 +366,34 @@ const f2 = d2.encode(photo);          // f2.features[3] = last-stage (tokens*dim
 bro.vision.loadDinov3(modelPath, opts);
 
 /**
- * Dinov3Backbone.encode(image, opts?) — run the backbone and return the single
+ * Dinov3Backbone.encode(image, opts?), run the backbone and return the single
  * final hidden state (final LayerNorm applied). The token sequence is
  * [cls, register×4, patch tokens]: rows [0, numPrefixTokens) are the cls +
  * register tokens, the rest patch tokens in row-major order.
  * @param {ImageBitmap|{data,width,height}} image  RGBA source (stretched to a square)
  * @param {Object} [opts]
  * @param {number}   [opts.size]    square input side, multiple of patchSize=16 (default 224)
- * @param {function} [opts.onDone]  run async — onDone(result, info)
+ * @param {function} [opts.onDone]  run async: onDone(result, info)
  * @returns {{ features: Float32Array, tokens: number, dim: number,
  *             patchH: number, patchW: number, numPrefixTokens: number }}
  *   `features` is the (tokens*dim) map; tokens = numPrefixTokens + patchH*patchW.
  * Properties: `device`, `patchSize`, `embedDim`, `numRegisterTokens`, `defaultSize`.
  *
- * Dinov3Backbone.dispose() / BackgroundRemover.dispose() — deterministically
+ * Dinov3Backbone.dispose() / BackgroundRemover.dispose(), deterministically
  * free the model's weights (~1.3 GB / ~1.7 GB GPU). GPU memory is invisible
  * to the JS GC, so a caller done with a model must not wait for the
- * finalizer — dispose, then `bro.gpu.trim()` to hand the cached blocks back
+ * finalizer: dispose, then `bro.gpu.trim()` to hand the cached blocks back
  * to the driver. The handle is dead afterwards; load again for a fresh one.
  */
 const d3 = bro.vision.loadDinov3('weights/triposplat/clip_vision/dino_v3_vit_h.safetensors');
 const f3 = d3.encode(photo, { size: 224 });   // f3.features = (tokens*dim) patch features
-d3.dispose();                                 // done with it — free the 1.3 GB now
+d3.dispose();                                 // done with it, free the 1.3 GB now
 
 
 // ── Pipe an annotator into bro.diffusion ─────────────────────────────────────
 //
 // The five ControlNet annotators produce conditioning images that feed
-// bro.diffusion directly — the annotator's `image` ImageBitmap is exactly the
+// bro.diffusion directly, the annotator's `image` ImageBitmap is exactly the
 // control input a ControlNet-conditioned generate expects.
 //
 //   const cond = bro.vision.loadHed('weights/hed').detect(photo).image;

@@ -2,13 +2,13 @@
 // bro Worldgen API Reference
 // =============================================================================
 //
-// `bro.worldgen` — learned terrain generation. A port of xandergos/terrain-
+// `bro.worldgen`: learned terrain generation. A port of xandergos/terrain-
 // diffusion (MIT) running on brodiffusion's WorldPipeline.
 //
 // This is a REPLACEMENT for noise, not a filter on top of it. Three magnitude-
 // preserving UNets (a 2.8M coarse net, a 253.7M latent net, a 27.9M decoder)
 // produce an infinite, deterministic, randomly accessible world with coherent
-// drainage networks, coastlines, continental shelves and mountain ranges —
+// drainage networks, coastlines, continental shelves and mountain ranges,
 // structure that FBm cannot produce at any parameter setting, because FBm has
 // no notion of water flowing downhill.
 //
@@ -24,7 +24,7 @@
 //   bro.worldgen.loadWorld(dir, opts) // -> AsyncHandle
 //
 // Requires a converted checkpoint directory (config.json + coarse/base/decoder
-// safetensors + synthetic_map_stats.json) — the output of brodiffusion's
+// safetensors + synthetic_map_stats.json), the output of brodiffusion's
 // scripts/convert-terrain-diffusion.py. Paths resolve relative to the app
 // directory, as with the other model loaders.
 // =============================================================================
@@ -62,12 +62,12 @@ class World {
      * `data` is a row-major Float32Array of height*width metres; index (z, x)
      * lives at `data[z * width + x]`. `cellSize` is metres per cell (30).
      *
-     * Bounds are in CELLS and may be negative — the origin is just the seed's
+     * Bounds are in CELLS and may be negative: the origin is just the seed's
      * reference point, not a corner of anything. i is the north-south axis
      * (rows), j is west-east (columns).
      *
      * SIZE THE REQUEST GENEROUSLY. Cost is dominated by fixed overhead, not by
-     * area — measured on one machine: 256x256 takes ~2.3 s, 1024x1024 ~4.6 s,
+     * area: measured on one machine: 256x256 takes ~2.3 s, 1024x1024 ~4.6 s,
      * 2048x2048 ~14.6 s. That makes the largest request about 25x cheaper per
      * cell than the smallest. Ask for one big tile and sample it; do NOT issue
      * one request per consumer chunk.
@@ -79,7 +79,7 @@ class World {
      * cache is not thread-safe, so calling this while `world.generating` is
      * true throws rather than racing. Queue in JS, or load a second world.
      *
-     * @returns {AsyncHandle} with .cancel() — monolithic, so cancelling drops
+     * @returns {AsyncHandle} with .cancel(): monolithic, so cancelling drops
      *                        the result rather than stopping the work.
      */
     elevation(i1, j1, i2, j2, opts) {}
@@ -88,23 +88,23 @@ class World {
      * The same, but blocking on the calling thread. For headless tests and
      * Workers. Returns the result object directly; throws on failure.
      *
-     * Do not call this on the main thread of a windowed app — a multi-second
+     * Do not call this on the main thread of a windowed app, a multi-second
      * request will freeze the frame.
      */
     elevationSync(i1, j1, i2, j2, opts) {}
 
-    /** Drop every cached tile. Purely an optimisation — the world is a pure
+    /** Drop every cached tile. Purely an optimisation, the world is a pure
      *  function of (seed, position), so this changes timing and nothing else. */
     clearCache() {}
 
     get seed()       {}   // number (lossy above 2^53; echoed, not round-tripped)
-    get cellSize()   {}   // metres per cell — 30 for the 30m checkpoint
+    get cellSize()   {}   // metres per cell, 30 for the 30m checkpoint
     get generating() {}   // true while an async request is in flight
 }
 
 
 // -----------------------------------------------------------------------------
-// Tiles compose exactly — why `margin` exists
+// Tiles compose exactly, why `margin` exists
 // -----------------------------------------------------------------------------
 //
 // Reconstruction pads outward and crops, because the Gaussian blur and the
@@ -126,7 +126,7 @@ class World {
 
 
 // -----------------------------------------------------------------------------
-// Feeding terrain — the intended shape
+// Feeding terrain, the intended shape
 // -----------------------------------------------------------------------------
 //
 // Generate large tiles asynchronously, cache them, and sample per chunk. The
@@ -151,6 +151,6 @@ class World {
 // At 30 m/cell the model resolves geology, not footsteps: on a valley floor
 // adjacent cells differ by ~0.4 m (walks smooth), but on a mountainside the
 // median step is ~6.7 m and can reach 26 m, which reads as faceting up close.
-// Layering FBm detail on top of the diffusion macro-relief is the intended fix —
+// Layering FBm detail on top of the diffusion macro-relief is the intended fix,
 // returning null from a heightSource falls back to the built-in noise, and the
 // two can be summed.

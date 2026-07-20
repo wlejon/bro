@@ -10,7 +10,7 @@
 // NOT a voxel engine. Storage is one float height per grid column
 // (TerrainManager::ChunkEntry holds `heightmap` / `heightmapPadded`), not a
 // 3D occupancy grid. Consequences:
-//   - No overhangs, caves, arches, or floating geometry — the surface is a
+//   - No overhangs, caves, arches, or floating geometry, the surface is a
 //     height field, so every column has exactly one solid span from the
 //     bottom up to its height.
 //   - The "voxel" names below (setVoxel/getVoxel, chunkSize's y component)
@@ -19,7 +19,7 @@
 //     terrain rendered from coarser LOD rings.
 //
 // Created via the scene graph (chunks register as MeshNode children of the
-// scene root, so they participate in the normal 3D pipeline — depth test,
+// scene root, so they participate in the normal 3D pipeline, depth test,
 // raycast, camera).
 //
 //   const scene = canvas.getContext('scene');
@@ -102,7 +102,7 @@
 class Terrain {
 
     /**
-     * Stream chunks around (x, y, z) in world space — typically the camera.
+     * Stream chunks around (x, y, z) in world space, typically the camera.
      * Loads up to maxLoadsPerUpdate new chunks and frees chunks beyond
      * unloadRadius. Returns the number of chunks newly loaded this call.
      * @returns {number}
@@ -114,7 +114,7 @@ class Terrain {
      * cell coords, the chunk it lives in, and the material ID. Returns
      * null on miss (or when the ray exits the loaded radius).
      *
-     * LOD-0 chunks only — coarser LOD rings are skipped, so a ray aimed at
+     * LOD-0 chunks only: coarser LOD rings are skipped, so a ray aimed at
      * distant terrain that is plainly visible on screen returns null. Keep
      * picking within the LOD-0 radius.
      *
@@ -136,14 +136,14 @@ class Terrain {
      * cell. Despite the name this is a heightmap edit, not a voxel write:
      *
      *   - `wy` is ignored entirely. You cannot dig at a chosen altitude,
-     *     carve a cave, or punch a hole — only move the surface up/down.
+     *     carve a cave, or punch a hole, only move the surface up/down.
      *   - `material` is read as a sign, not an ID: 0 lowers the column by
      *     one cell, anything non-zero raises it by one. Materials 1, 3 and
      *     7 all do the same thing. Materials are assigned by height at
      *     raycast time, not stored.
      *
      * Returns true if the column was modified (false if outside the loaded
-     * radius). Edits flag the chunk dirty — call rebuild() to re-mesh.
+     * radius). Edits flag the chunk dirty. Call rebuild() to re-mesh.
      *
      * @returns {boolean}
      */
@@ -185,20 +185,20 @@ class Terrain {
      *
      * Return a Float32Array of exactly paddedW*paddedH absolute world-space Y
      * values (row-major, z-major: sample (px, pz) at `out[pz * paddedW + px]`),
-     * or null/undefined to fall back to the built-in noise FOR THAT CHUNK —
+     * or null/undefined to fall back to the built-in noise FOR THAT CHUNK,
      * which is how you serve only the region you have data for, or layer a
      * coarse learned source under noise detail.
      *
      * A short array or a thrown exception logs and falls back; it never renders
      * a partially filled chunk.
      *
-     * USE worldX0/worldZ0 — DO NOT DERIVE THEM. The grid is padded one sample
+     * USE worldX0/worldZ0: DO NOT DERIVE THEM. The grid is padded one sample
      * beyond the chunk on every side (paddedW = chunkSizeX + 3), and that outer
      * ring is shared with the neighbours so edge normals can use true central
      * differences. worldX0/worldZ0 already carry that skirt offset. Re-deriving
      * it and dropping the -1 shifts every chunk one cell against its neighbours,
      * which for a coherent (non-noise) source produces terrain that looks
-     * completely correct and simply does not line up — a silent seam at every
+     * completely correct and simply does not line up: a silent seam at every
      * boundary. For the same reason the provider must be deterministic across
      * chunk boundaries: two chunks sampling the same shared world position must
      * return the same height.
@@ -206,12 +206,12 @@ class Terrain {
      * These positions include config.origin; the built-in noise path does not,
      * a pre-existing quirk that only shows up with a non-zero origin.
      *
-     * RUNS INSIDE update(), ON THE JS THREAD, once per newly loaded chunk — so
+     * RUNS INSIDE update(), ON THE JS THREAD, once per newly loaded chunk. So
      * it must be cheap. Sample an already-resident tile; do not generate on
      * demand here. See docs/worldgen-api.js for the intended tile-cache shape
      * with a multi-second generator behind it.
      *
-     * Does not rebuild existing chunks — call configure() to regenerate.
+     * Does not rebuild existing chunks: call configure() to regenerate.
      */
     setHeightSource(fn) {}
 

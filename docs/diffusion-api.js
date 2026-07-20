@@ -4,38 +4,38 @@
 //
 // Diffusion-model text-to-image inference, backed by the brodiffusion sibling
 // library. Five model families are supported:
-//   - Stable Diffusion 1.5 — CLIP text encoder + U-Net + VAE, DDIM/LCM
+//   - Stable Diffusion 1.5, CLIP text encoder + U-Net + VAE, DDIM/LCM
 //     schedulers, LoRA, INT8 quantization.
-//   - Flux — CLIP (pooled) + T5-XXL text encoders + Flux DiT denoiser + VAE,
+//   - Flux: CLIP (pooled) + T5-XXL text encoders + Flux DiT denoiser + VAE,
 //     flow-match scheduler.
-//   - Sana (NVIDIA) — Gemma-2 text encoder + Linear DiT denoiser + DC-AE
+//   - Sana (NVIDIA): Gemma-2 text encoder + Linear DiT denoiser + DC-AE
 //     f32c32 autoencoder (32x latent, vs 8x for SD/Flux), flow-match scheduler.
 //     Sana-Sprint is the few-step guidance-distilled variant (SCM scheduler).
 //     Sana txt2img runs through the same generate()/prime() path; img2img,
 //     inpaint, ControlNet, and LoRA are not wired for Sana.
-//   - PixArt-Sigma — T5-XXL text encoder + PixArt DiT (AdaLN-single) + SDXL
+//   - PixArt-Sigma: T5-XXL text encoder + PixArt DiT (AdaLN-single) + SDXL
 //     KL-VAE (8x latent), true classifier-free guidance. The T5-XXL encoder is
 //     resolved from $BRODIFFUSION_T5_DIR, a bundled text_encoder/, or a sibling
 //     t5-xxl/. txt2img runs through the same generate()/prime() path; img2img,
 //     inpaint, ControlNet, LoRA, and the conditioning-control seam are not
 //     wired for PixArt.
-//   - Krea 2 — Qwen3-VL-4B text encoder (single-stream flow DiT, 3-shard
+//   - Krea 2: Qwen3-VL-4B text encoder (single-stream flow DiT, 3-shard
 //     transformer/) + Qwen-Image VAE decoder. txt2img runs through the same
 //     generate()/prime() path. LoRA is supported as runtime adapters
-//     (applyLora / setLoraScale / clearLoras — live rescale, INT8-safe);
+//     (applyLora / setLoraScale / clearLoras, live rescale, INT8-safe);
 //     img2img, inpaint, and ControlNet are not wired for Krea 2.
 // loadModel() takes a model directory and auto-detects the family;
 // createPipeline() builds the SD1.5 stack explicitly.
 //
 // The native Pipeline owns the multi-GB model weights. JavaScript never holds
-// or moves weight bytes — it holds an opaque *handle* (the Pipeline object).
+// or moves weight bytes. It holds an opaque *handle* (the Pipeline object).
 // Latents and attention maps are small and download to Float32Arrays on
 // demand. Only the final decoded image crosses into JS as pixel data.
 //
 // bro.diffusion is installed in both the main JS context and every Worker
 // context, and is available on CPU-only builds (brodiffusion's CPU FP32 path
 // is always built). It runs on whatever backend brotensor resolves at
-// runtime — CPU FP32 by default, CUDA/Metal FP16 when a GPU build has one.
+// runtime, CPU FP32 by default, CUDA/Metal FP16 when a GPU build has one.
 //
 // Two usage modes, one binding:
 //   - Main thread:  step-wise prime() -> stepOnce() -> decode(), inspecting
@@ -43,14 +43,14 @@
 //   - Worker:       full generate() off the main thread (see "Workers" below).
 //
 // Weights are not bundled. brodiffusion ships scripts/download-weights.ps1;
-// each model is a diffusers-format export — text_encoder/, unet/, vae/, and a
+// each model is a diffusers-format export, text_encoder/, unet/, vae/, and a
 // tokenizer/ with vocab.json + merges.txt.
 //
 // =============================================================================
 
 
 // -----------------------------------------------------------------------------
-// bro.diffusion — namespace
+// bro.diffusion, namespace
 // -----------------------------------------------------------------------------
 
 const diffusion = {
@@ -76,18 +76,18 @@ const diffusion = {
    *                        Flux DiT + VAE, flow-match scheduler
    *   - Sana             → Gemma-2 tokenizer/encoder + Linear DiT + DC-AE
    *                        decoder, flow-match (or SCM for Sana-Sprint). The
-   *                        Gemma-2 text encoder is loaded internally — no
+   *                        Gemma-2 text encoder is loaded internally: no
    *                        bro.lm.loadGemma2 needed for Sana txt2img.
    *   - PixArt           → T5-XXL tokenizer/encoder + PixArt DiT + SDXL KL-VAE.
    *                        The T5-XXL encoder resolves from $BRODIFFUSION_T5_DIR,
    *                        a bundled text_encoder/, or a sibling t5-xxl/.
    *   - Krea2            → Qwen3-VL-4B tokenizer/encoder (loaded from
-   *                        tokenizer/ + text_encoder/, internally — no
+   *                        tokenizer/ + text_encoder/, internally, no
    *                        bro.lm.loadQwen3VL needed) + single-stream flow DiT
    *                        + Qwen-Image VAE decoder.
    *
    * Every weight and tokenizer is loaded by this call, so the returned
-   * Pipeline needs no loadWeights() — call generate()/prime() directly. This
+   * Pipeline needs no loadWeights(): call generate()/prime() directly. This
    * is the only way to run a Flux, Sana, PixArt, or Krea2 model. Blocking and
    * slow (multi-GB read); run it in a Worker. Check pipeline.config().modelClass
    * for the family ('StableDiffusion' | 'Flux' | 'Sana' | 'PixArt' | 'Krea2').
@@ -110,11 +110,11 @@ const diffusion = {
   /**
    * Expand an init-noise tensor to an integer-factor larger resolution while
    * preserving the identity/composition it encodes. The source is NCHW raw
-   * N(0,1) — e.g. `state.latent()` right after prime() (sigma_0 is 1.0 for
+   * N(0,1), e.g. `state.latent()` right after prime() (sigma_0 is 1.0 for
    * flow-match, so the latent IS the init noise). The result is exactly
    * i.i.d. N(0,1) whose k×k block means are tied to the source, so the
-   * low-frequency structure — which decides the character in the first
-   * step or two — carries over. A SEED cannot do this: the same seed at a
+   * low-frequency structure, which decides the character in the first
+   * step or two: carries over. A SEED cannot do this: the same seed at a
    * different latent shape is an unrelated noise field.
    *
    * Feed the result back via `opts.initNoise` at the larger size.
@@ -144,7 +144,7 @@ const diffusion = {
 
   /**
    * Create a Stable Diffusion 1.5 inference Pipeline. Loads the CLIP
-   * tokenizer and builds the model graph (no weights yet — call
+   * tokenizer and builds the model graph (no weights yet. Call
    * pipeline.loadWeights()). For Flux, use loadModel() instead.
    *
    * @param {object} opts
@@ -189,7 +189,7 @@ class Pipeline {
    *     A single file with explicit safetensors key prefixes.
    *
    *   loadWeights(textPath, unetPath, vaePath)
-   *     A diffusers three-file export — text_encoder/, unet/, vae/.
+   *     A diffusers three-file export: text_encoder/, unet/, vae/.
    *
    * Must be called before generate()/prime(). The safetensors files are only
    * read during this call; nothing in JS retains them.
@@ -207,7 +207,7 @@ class Pipeline {
    * Apply a LoRA file. Two behaviours by model family:
    *
    *   - SD1.5: the deltas are MERGED into the loaded weights (irreversible).
-   *   - Krea 2: the file is attached as a RUNTIME-ADAPTER group — the base
+   *   - Krea 2: the file is attached as a RUNTIME-ADAPTER group, the base
    *     weights (possibly INT8-quantized) are untouched and each adapted
    *     linear adds scale * (x @ downT) @ upT per forward. Groups are indexed
    *     in applyLora() call order; rescale live with setLoraScale(index,
@@ -215,7 +215,7 @@ class Pipeline {
    *     needed for any of it.
    *
    * Call after loadWeights() / loadModel() and before generate()/prime().
-   * Stackable — call repeatedly to layer multiple LoRAs. Key conventions are
+   * Stackable: call repeatedly to layer multiple LoRAs. Key conventions are
    * auto-detected: kohya-ss/A1111 and diffusers/PEFT for SD1.5; diffusers
    * `transformer.`, ComfyUI `diffusion_model.`, bare, and kohya-mangled
    * `lora_unet_transformer_blocks_*` spellings for Krea 2.
@@ -223,7 +223,7 @@ class Pipeline {
    * @param {string} path    - LoRA .safetensors file
    * @param {number} [scale] - multiplier on the per-LoRA alpha/rank factor
    *                           (default 1.0; may be negative to subtract)
-   * @returns {number|undefined} the runtime-adapter group index (Krea 2 —
+   * @returns {number|undefined} the runtime-adapter group index (Krea 2:
    *          pass to setLoraScale), or undefined when merged (SD1.5)
    *
    * @example
@@ -239,7 +239,7 @@ class Pipeline {
 
   /**
    * Change a runtime LoRA group's user multiplier (0 disables it; negative
-   * subtracts). `index` is the applyLora() call order, 0-based. Krea 2 only —
+   * subtracts). `index` is the applyLora() call order, 0-based. Krea 2 only,
    * SD1.5 LoRAs are merged irreversibly and throw here.
    *
    * @param {number} index - LoRA group index (applyLora call order)
@@ -254,7 +254,7 @@ class Pipeline {
   numLoras() {}
 
   /**
-   * Register a ControlNet safetensors file. SD1.5 only — throws on Flux. Call
+   * Register a ControlNet safetensors file. SD1.5 only, throws on Flux. Call
    * after loadWeights(); stackable (call repeatedly to register multiple
    * nets). The returned index is the position into GenerateOptions.controls
    * and the addressing key for removeControlNet(). LCM and trace mode both
@@ -284,18 +284,18 @@ class Pipeline {
   clearControlNets() {}
 
   /**
-   * One-shot text-to-image generation. Blocking — runs the full denoising
+   * One-shot text-to-image generation. Blocking, runs the full denoising
    * loop synchronously. Intended for a Worker thread; on the main thread use
    * the step-wise prime()/stepOnce()/decode() API so the event loop stays
    * responsive.
    *
    * If the process is shutting down (Ctrl+C / window close / engine teardown)
    * the denoise loop aborts at the next step and generate() returns
-   * { cancelled: true } with no pixels — check for it before using the result.
+   * { cancelled: true } with no pixels. Check for it before using the result.
    *
    * @param {string} prompt
    * @param {object} [opts]                 - see GenerateOptions below
-   * @returns {ImageResult} { width, height, data } — or { cancelled: true }
+   * @returns {ImageResult} { width, height, data }, or { cancelled: true }
    *
    * @example
    *   const img = pipe.generate('a cat astronaut, oil painting', {
@@ -332,7 +332,7 @@ class Pipeline {
 
   /**
    * The flow-match sigma schedule of the most recent prime()/generate():
-   * a Float32Array of length numSteps + 1 with a trailing 0.0 — sigmas()[i]
+   * a Float32Array of length numSteps + 1 with a trailing 0.0, sigmas()[i]
    * is the noise level entering step i. Empty for non-flow-match schedulers
    * (DDIM/LCM/SCM) or before any schedule has been set.
    *
@@ -381,7 +381,7 @@ class Pipeline {
    *
    * With `{merge: true}` the file's axes are ADDED to those already loaded
    * instead (a same-named axis is overwritten, its weight reset). Banks come
-   * from different discoveries — a word-derived one, an SAE-discovered one —
+   * from different discoveries: a word-derived one, an SAE-discovered one,
    * and stacking them needs no offline concatenation. A merged file must agree
    * on the encoder dim with what is already loaded, or it throws.
    *
@@ -400,7 +400,7 @@ class Pipeline {
   controlAxes() {}
 
   /**
-   * The stored direction + baked scale of one axis — introspection for
+   * The stored direction + baked scale of one axis, introspection for
    * explaining axes (e.g. cosine-decompose a freshly minted axis against the
    * dictionary's named directions). Throws on unknown name.
    * @param {string} name
@@ -434,7 +434,7 @@ class Pipeline {
    * Cap how hard a STACK of axes may push, in the same alpha units the weights
    * use. Each axis is added to every token row, so what the denoiser sees is
    * the SUM: ten axes at +2 push harder than one at +10, and past a length of
-   * roughly the conditioning's own token norm the injection — not the prompt —
+   * roughly the conditioning's own token norm the injection: not the prompt,
    * is what gets rendered (on Krea 2 a ten-axis deck past ~12 alpha turns any
    * scene into dramatic crowds). Over budget, every active axis is scaled by
    * ONE common factor, so the dialled-in mix is kept and only the overdrive is
@@ -445,7 +445,7 @@ class Pipeline {
 
   /**
    * The current stack's length in alpha units, its budget, and whether the next
-   * generation will hold it back — what a UI draws a stack meter from.
+   * generation will hold it back: what a UI draws a stack meter from.
    * `scale` is the factor every active axis will be multiplied by (1 when in
    * budget).
    * @returns {{norm: number, budget: number, clamped: boolean, scale: number}}
@@ -460,7 +460,7 @@ class Pipeline {
    * attention seam. Runs ONE full generation of `prompt` (returned as the
    * anchor image, e.g. a neutral portrait) while recording the DiT's per-step
    * linear-attention summaries. Every subsequent generate()/prime() then adds
-   * those summaries back — scaled by setIdentityWeight() — so the subject stays
+   * those summaries back: scaled by setIdentityWeight(). So the subject stays
    * the same person while the prompt and control axes drive pose/expression.
    *
    * Sana only (throws on other model classes). The summaries are token-count
@@ -470,7 +470,7 @@ class Pipeline {
    *
    * @param {string} prompt - the face/subject to hold (e.g. a neutral portrait)
    * @param {object} [opts] - GenerateOptions; use the same steps/seed as later runs
-   * @returns {ImageResult} the anchor image — or { cancelled: true }
+   * @returns {ImageResult} the anchor image, or { cancelled: true }
    *
    * @example
    *   const neutral = pipe.setIdentityAnchor('a portrait of a woman, neutral', { steps: 8, seed: 1 });
@@ -482,7 +482,7 @@ class Pipeline {
 
   /**
    * Injection strength for the armed identity anchor. 0 (default) disables
-   * injection even with an anchor set — a true no-op; ~1 holds identity
+   * injection even with an anchor set: a true no-op; ~1 holds identity
    * faithfully; higher over-anchors (identity locked, the edit damped). Takes
    * effect on the next generate()/prime(). Sana only.
    * @param {number} weight
@@ -513,7 +513,7 @@ class Pipeline {
 //   negativePrompt string   negative prompt (default "")
 //   seed           number   RNG seed for the initial latent noise (default 0).
 //                           Pass a BigInt for seeds above 2^53.
-//   includeFp32    boolean  generate()/decode() only — also attach the raw
+//   includeFp32    boolean  generate()/decode() only, also attach the raw
 //                           NCHW FP32 buffer ([-1,1]) to the result as `fp32`.
 //
 //   ── img2img / inpaint (SD1.5 only) ───────────────────────────────────────
@@ -521,7 +521,7 @@ class Pipeline {
 //                           it to the appropriate point in the schedule
 //                           instead of starting from pure Gaussian noise.
 //                           Decoded by broimage and resized to width×height.
-//   strength       number   0..1 — fraction of the schedule used for
+//   strength       number   0..1, fraction of the schedule used for
 //                           denoising; higher = more freedom from the init.
 //                           Default 0.8. Ignored when initImagePath is empty.
 //   vaeEncodeSample boolean false (default) = use the VAE mean; true = sample
@@ -566,16 +566,16 @@ class Pipeline {
 //   width   number              image width in pixels
 //   height  number              image height in pixels
 //   data    Uint8ClampedArray   4 * width * height bytes, interleaved RGBA
-//                               (HWC) — drop-in for ctx.createImageData() +
+//                               (HWC), drop-in for ctx.createImageData() +
 //                               id.data.set(data) + putImageData().
-//   fp32    Float32Array?       present only when opts.includeFp32 was set —
+//   fp32    Float32Array?       present only when opts.includeFp32 was set,
 //                               raw 3*H*W planar NCHW values in [-1, 1].
 
 
 // -----------------------------------------------------------------------------
 // PipelineState
 // -----------------------------------------------------------------------------
-// Opaque handle to a mid-generation state — the working latent plus scheduler
+// Opaque handle to a mid-generation state, the working latent plus scheduler
 // progress. The working latent stays native across the whole denoising loop;
 // it only materializes in JS if you call latent(). Created via Pipeline.prime()
 // or PipelineState.clone(). Each state keeps its owning Pipeline alive.
@@ -614,7 +614,7 @@ class PipelineState {
    *   const st = pipe.prime('a red apple', { width: 256, height: 256, steps: 8 });
    *   while (!st.done) {
    *       const r = st.stepOnce({ trace: true });
-   *       // r.trace[i].data — attention map for cross-attn block i
+   *       // r.trace[i].data, attention map for cross-attn block i
    *   }
    *   const img = st.decode();
    *
@@ -646,7 +646,7 @@ class PipelineState {
 
   /**
    * Deep-copy this state (one latent clone; RNG and counters are trivially
-   * copied). The clone advances independently — the basis for branch-and-
+   * copied). The clone advances independently, the basis for branch-and-
    * score / cross-attention tree search. The owning Pipeline is shared.
    * @returns {PipelineState}
    */
@@ -655,16 +655,16 @@ class PipelineState {
 
 
 // -----------------------------------------------------------------------------
-// Workers — running generation off the main thread
+// Workers, running generation off the main thread
 // -----------------------------------------------------------------------------
 //
 // bro.diffusion is installed in Worker contexts too. A Worker is an isolated
 // JS context with its own native heap: it must load its own weights and own
-// its own Pipeline. Treat the Worker as a long-lived inference server — load
+// its own Pipeline. Treat the Worker as a long-lived inference server, load
 // the weights once, then feed it prompts; never reload per generation.
 //
 // Only plain cloneable data crosses postMessage. A Pipeline / PipelineState
-// handle cannot (and need not) cross — keep it inside the Worker. Send the
+// handle cannot (and need not) cross, keep it inside the Worker. Send the
 // prompt and options in; send the result image's typed array back (transfer
 // it for zero-copy).
 //
@@ -694,7 +694,7 @@ class PipelineState {
 //                   text: '...', unet: '...', vae: '...' });
 //
 // CPU generation is slow (minutes per image); a GPU build is strongly
-// recommended for interactive use — build bro with -DBROGAMEAGENT_WITH_CUDA=ON,
+// recommended for interactive use, build bro with -DBROGAMEAGENT_WITH_CUDA=ON,
 // which also compiles brodiffusion's fused CUDA kernels.
 //
 // =============================================================================

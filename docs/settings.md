@@ -29,12 +29,12 @@ let all = bro.settings.getAll("audio");
 | `bro.settings.setDefault(key, value)` | Set an app-level default (not persisted, overridden by user settings) |
 
 ```js
-// User overrides — persisted to .bro_settings.json, applied at runtime
+// User overrides, persisted to .bro_settings.json, applied at runtime
 bro.settings.set("graphics.fullscreen", true);
 bro.settings.set("audio.masterVolume", 0.7);
 bro.settings.set("graphics.vsync", false);
 
-// App defaults — not persisted, lower priority than user overrides
+// App defaults, not persisted, lower priority than user overrides
 bro.settings.setDefault("graphics.width", 1280);
 bro.settings.setDefault("graphics.height", 720);
 ```
@@ -99,7 +99,7 @@ let modes = bro.settings.getDisplayModes();
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `appearance.colorScheme` | string | `"system"` | Color scheme fed to CSS `@media (prefers-color-scheme: ...)`: `"system"` follows the OS theme (live — an OS theme flip restyles running apps), `"light"`/`"dark"` force a scheme. Applies to the app document, iframes, and system panels. Changing it at runtime re-evaluates every `@media` block and restyles immediately — which also makes it the headless-test hook for deterministic dark/light rendering. |
+| `appearance.colorScheme` | string | `"system"` | Color scheme fed to CSS `@media (prefers-color-scheme: ...)`: `"system"` follows the OS theme (live, an OS theme flip restyles running apps), `"light"`/`"dark"` force a scheme. Applies to the app document, iframes, and system panels. Changing it at runtime re-evaluates every `@media` block and restyles immediately, which also makes it the headless-test hook for deterministic dark/light rendering. |
 
 ```js
 // App prefers dark unless the user says otherwise
@@ -124,12 +124,12 @@ Define named actions with default key bindings. Users can rebind them. Key press
 | `bro.settings.getActions()` | Get all defined actions as `[{action, keys}, ...]` |
 
 A binding string is one of (all forms mix freely in one action, and are
-accepted everywhere binding strings are — `defineAction` defaults,
+accepted everywhere binding strings are: `defineAction` defaults,
 `rebindAction`, and persisted rebinds):
 
 | Form | Examples | Meaning |
 |------|----------|---------|
-| Web `KeyboardEvent.key` value | `" "`, `"ArrowUp"`, `"a"`, `"Enter"` | Keyboard key ([key values](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values) — the strings you see in `event.key`) |
+| Web `KeyboardEvent.key` value | `" "`, `"ArrowUp"`, `"a"`, `"Enter"` | Keyboard key ([key values](https://developer.mozilla.org/en-US/docs/Web/API/KeyboardEvent/key/Key_Values): the strings you see in `event.key`) |
 | `"mouse:<button>"` | `"mouse:left"`, `"mouse:right"`, `"mouse:x2"` | Mouse button: `left`, `middle`, `right`, `x1` (back), `x2` (forward) |
 | `"gamepad:<button>"` | `"gamepad:south"`, `"gamepad:lefttrigger"` | Gamepad button (standard-layout names; triggers press past 0.1) |
 | `"gamepad:<axis><+/->"` | `"gamepad:leftx+"`, `"gamepad:righty-"` | Stick axis direction: `leftx`, `lefty`, `rightx`, `righty`, each with `+` or `-` |
@@ -181,7 +181,7 @@ See [gamepad-api.js](gamepad-api.js) for the full Gamepad API.
 `"mouse:left"`, `"mouse:middle"`, `"mouse:right"`, `"mouse:x1"` (back), and
 `"mouse:x2"` (forward) bind mouse buttons. The action `"down"` fires when the
 press reaches the app layer (presses consumed by engine overlays or system
-panels never start an action — the same rule as keyboard actions, which never
+panels never start an action, the same rule as keyboard actions, which never
 fire for consumed keydowns); once a `"down"` fired, the matching `"up"` is
 always dispatched on release regardless of what consumes it, so down/up pairs
 stay balanced.
@@ -231,7 +231,7 @@ document.addEventListener("action", (e) => {
 | `phase` | `"down"` on press, `"up"` on release |
 | `key` | The binding string that triggered the action (`" "`, `"mouse:left"`, `"gamepad:leftx+"`, ...) |
 | `strength` | The binding's contribution at the edge: 1/0 for keys and mouse buttons, the analog value for triggers, the deadzone-rescaled deflection for axis bindings (0 on `"up"`) |
-| `gamepad` | Controller slot index — present only for gamepad-originated events |
+| `gamepad` | Controller slot index: present only for gamepad-originated events |
 
 Keyboard action events fire after the standard `keydown`/`keyup` event. Both events propagate independently.
 
@@ -255,16 +255,16 @@ function tick() {
 ```
 
 Unlike `"action"` events (edges only), `getActionStrength` tracks analog
-changes continuously — a trigger held at 0.9 reads 0.9 even though no new
+changes continuously, a trigger held at 0.9 reads 0.9 even though no new
 event fired since it crossed the press threshold.
 
 ## Priority system
 
 Settings are resolved with three layers (later wins):
 
-1. **Engine defaults** — hardcoded values (see tables above)
-2. **App overrides** — set via `bro.json` or `bro.settings.setDefault()` at runtime
-3. **User overrides** — set via `bro.settings.set()`, persisted to `.bro_settings.json`
+1. **Engine defaults**: hardcoded values (see tables above)
+2. **App overrides**: set via `bro.json` or `bro.settings.setDefault()` at runtime
+3. **User overrides**: set via `bro.settings.set()`, persisted to `.bro_settings.json`
 
 When a user override exists, it takes priority. When it doesn't, the app override is used. When neither exists, the engine default is used. `bro.settings.reset()` clears user overrides, reverting to app/engine defaults.
 
@@ -302,7 +302,7 @@ This file is engine-global (shared across all apps). It is written automatically
 
 The engine ships a standard Preferences dialog reachable via **Edit → Preferences** or however the app rebinds `system_toggle_settings`. It's a modal: backdrop click or **ESC** dismisses it.
 
-Default panels are `Graphics`, `Audio`, and `Input`, covering the keys in the tables above. Apps extend the dialog by dropping HTML files into `<app-dir>/system/settings/`. The engine scans that directory at startup and the nav auto-populates tabs from whatever it finds — no registration step.
+Default panels are `Graphics`, `Audio`, and `Input`, covering the keys in the tables above. Apps extend the dialog by dropping HTML files into `<app-dir>/system/settings/`. The engine scans that directory at startup and the nav auto-populates tabs from whatever it finds, no registration step.
 
 See [system-panels.md](system-panels.md) for the full system-panel authoring surface (the `__bro` bridge, panel lifecycle hooks, `<script src>` support). The rest of this section covers just the settings-specific piece: getting a new tab's content region positioned correctly.
 
@@ -355,7 +355,7 @@ h1 { margin: 0 0 20px 0; font-size: 16px; color: #e0e0e0; }
 </html>
 ```
 
-The tab label comes from the `<title>` element; the file's stem (`gameplay`) becomes the panel id. Use `bro.settings.set(...)` for any key — custom app keys are persisted to `.bro_settings.json` alongside engine keys and survive restarts. `PanelLayout` (`system/lib/panel-runtime.js`) is what keeps this tab's content region aligned with the modal shell — see [system-panels.md](system-panels.md#panellayout--shared-modal-geometry).
+The tab label comes from the `<title>` element; the file's stem (`gameplay`) becomes the panel id. Use `bro.settings.set(...)` for any key, custom app keys are persisted to `.bro_settings.json` alongside engine keys and survive restarts. `PanelLayout` (`system/lib/panel-runtime.js`) is what keeps this tab's content region aligned with the modal shell. See [system-panels.md](system-panels.md#panellayout--shared-modal-geometry).
 
 ## bro.json integration
 
@@ -378,9 +378,9 @@ Settings from `bro.json` flow into the app override layer. These keys are suppor
 
 User overrides from `.bro_settings.json` take priority over `bro.json` values.
 
-Additionally, `bro.json` carries **startup-only window-management keys** — these
+Additionally, `bro.json` carries **startup-only window-management keys**. These
 configure the window at creation and are *not* settings (no user-override layer,
-no persistence; runtime control is `bro.window.*` — see
+no persistence; runtime control is `bro.window.*`. See
 [window-api.js](window-api.js)):
 
 ```json

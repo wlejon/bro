@@ -1,9 +1,9 @@
 // =============================================================================
-// bro.gizmo — engine-level 3D transform gizmo.
+// bro.gizmo, engine-level 3D transform gizmo.
 //
 // Renders standardized translate / rotate / scale handles inside the scene's
 // 3D pipeline, hit-tests against them, and drives the default drag
-// interaction. Apps hook in via callbacks — position/orientation read the
+// interaction. Apps hook in via callbacks, position/orientation read the
 // pivot each frame, translate/rotate/scale receive the per-frame delta to
 // apply to whatever the app considers "selected".
 //
@@ -14,25 +14,25 @@
 //
 // A plane quad drags in the plane it spans, keeping the grabbed point under
 // the cursor and leaving the third axis untouched. The screen-facing ring
-// rotates about the view axis — the one rotation the three world rings
+// rotates about the view axis, the one rotation the three world rings
 // cannot express comfortably. There is still no translate center (free-move)
 // handle, so `hovered` is 'center' in scale mode only.
 //
 // `hovered` values: 'x' | 'y' | 'z' | 'xy' | 'yz' | 'xz' | 'view' | 'center'
 // | null. Plane and view handles report through the same `translate` and
-// `rotate` callbacks as the axis handles — an app that only reads the delta
+// `rotate` callbacks as the axis handles, an app that only reads the delta
 // needs no changes to support them.
 //
 // Visuals stay at ~80px regardless of camera zoom or projection mode
 // (configurable via configure({size})). Depth test is disabled so handles
-// always win over scene geometry — grabbable even when inside meshes.
+// always win over scene geometry, grabbable even when inside meshes.
 //
 // Picking ranks candidates by distance to the cursor, not by depth, so the
 // handle you are pointing at is the one you get even where several overlap
 // near the pivot.
 //
 // Rotation is measured entirely in screen pixels, against the camera as it
-// stood when the handle was grabbed — so an app that moves the camera in
+// stood when the handle was grabbed. So an app that moves the camera in
 // response to `rotate` (a view gizmo that orbits) does not feed its own motion
 // back in and change the drag's speed mid-gesture.
 //
@@ -42,7 +42,7 @@
 // foreshortened it looks, a ring behaves like a wheel (its near and far edges
 // turn opposite ways), and motion across the ring rather than along it
 // correctly rotates nothing. On a steeply foreshortened ring the grabbed point
-// no longer stays exactly under the cursor — the usual trade for a rate that
+// no longer stays exactly under the cursor, the usual trade for a rate that
 // does not swing.
 // =============================================================================
 
@@ -55,11 +55,11 @@ bro.gizmo.setSpace('world');          // 'world' | 'local'
 // Explicit pivot (ignored when a `position` callback is attached).
 bro.gizmo.setPosition(x, y, z);
 
-// Used when setSpace('local') — rotates each handle to match the target's
+// Used when setSpace('local'), rotates each handle to match the target's
 // world-space orientation. Ignored in world mode.
 bro.gizmo.setOrientation(qx, qy, qz, qw);
 
-// Visuals. Only `size` and colors.x/y/z/hover have any visible effect —
+// Visuals. Only `size` and colors.x/y/z/hover have any visible effect,
 // `emissive`, `emissiveHover`, `alwaysOnTop` and `colors.active` are parsed
 // and stored but never read by the renderer. (Handles are always unlit and
 // always drawn on top regardless of alwaysOnTop; a dragged axis keeps its
@@ -77,7 +77,7 @@ bro.gizmo.configure({
 });
 
 // -----------------------------------------------------------------------------
-// attach(handlers) — subscribe to the engine-driven interaction.
+// attach(handlers), subscribe to the engine-driven interaction.
 // All handlers are optional; any subset works. Keys:
 //
 //   position():    [x,y,z]   - called each frame for the pivot (attach to a

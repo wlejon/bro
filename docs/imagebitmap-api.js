@@ -4,8 +4,8 @@
 //
 // ImageBitmap is the engine's pixels-to-drawable primitive: an immutable image
 // constructed from raw RGBA (not from a file path, the way `Image` is). It
-// fills the gap between pixels a program produces — a decoded video/diffusion
-// frame, a `bro.image` kernel result, a generated texture — and something that
+// fills the gap between pixels a program produces, a decoded video/diffusion
+// frame, a `bro.image` kernel result, a generated texture, and something that
 // can actually be drawn.
 //
 // Why it exists / when to reach for it:
@@ -20,7 +20,7 @@
 //   - A Worker produces frames. ImageBitmap is transferable: a worker builds
 //     one and postMessage()s it to the main thread with no pixel copy.
 //
-// ImageBitmap is a CanvasImageSource — `ctx.drawImage()` and WebGL
+// ImageBitmap is a CanvasImageSource, `ctx.drawImage()` and WebGL
 // `gl.texImage2D()` both accept it directly.
 //
 // =============================================================================
@@ -37,7 +37,7 @@
  *
  * Accepted sources:
  *   - An ImageData-shaped object: { width, height, data: Uint8ClampedArray }.
- *     This is the load-bearing case — it is exactly what a diffusion `decode()`
+ *     This is the load-bearing case: it is exactly what a diffusion `decode()`
  *     and `ctx.createImageData()` / `bro.image` produce.
  *   - An `Image` (a loaded HTMLImageElement).
  *   - An `HTMLCanvasElement`.
@@ -79,8 +79,8 @@ const ImageBitmap = {
 
   /**
    * Release the backing image eagerly. After close() the bitmap draws as a
-   * no-op and width/height read 0. Optional — the bitmap is also freed when
-   * garbage-collected — but useful to drop GPU/CPU memory promptly when a
+   * no-op and width/height read 0. Optional, the bitmap is also freed when
+   * garbage-collected, but useful to drop GPU/CPU memory promptly when a
    * large set of frames is discarded.
    */
   close() {},
@@ -94,7 +94,7 @@ const ImageBitmap = {
 // ImageBitmap is a transferable object. List it in the postMessage transfer
 // array and it moves to the receiving thread with no pixel copy; the source
 // bitmap is neutered (drawing it becomes a no-op). An ImageBitmap NOT in the
-// transfer list is structured-cloned — but since the image is immutable, the
+// transfer list is structured-cloned, but since the image is immutable, the
 // clone shares the backing pixels (observationally identical to a deep copy).
 //
 //   // --- in the worker ---
@@ -121,7 +121,7 @@ const ImageBitmap = {
 //
 // Smooth scrub over a fixed sequence
 // ----------------------------------
-//   // Each frame is an immutable ImageBitmap — drawing it re-uses one cached
+//   // Each frame is an immutable ImageBitmap, drawing it re-uses one cached
 //   // GPU texture, so scrubbing back and forth costs no re-upload.
 //   const frames = [];                       // ImageBitmap[]
 //   function showFrame(i) {

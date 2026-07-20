@@ -1,11 +1,11 @@
 /**
- * bro.listen — open N concurrent, unmixed listening streams
+ * bro.listen, open N concurrent, unmixed listening streams
  *
  * A listening STREAM is one independent pipeline: a single audio SOURCE (the
  * microphone, the whole-system render mix, or one application's audio) → one raw
  * 16 kHz ring → one PCEN mel front-end → up to one each of {sense, kws, wake,
  * gesture} attached as members. One feature pass, one forward per attached
- * model, many listeners — all hearing THAT source.
+ * model, many listeners, all hearing THAT source.
  *
  * Multiple streams run concurrently and independently, with NO mixing: a mic
  * stream driving wake/kws for voice commands can run alongside a system-audio
@@ -20,7 +20,7 @@
  *
  * THE DEFAULT MIC. The globals bro.kws / bro.wake / bro.sense / bro.gesture (and
  * bro.listen.retain/audio/frame/info) target one shared, implicit
- * default-microphone stream — the ergonomic path when you only need the mic.
+ * default-microphone stream: the ergonomic path when you only need the mic.
  * stream.kws / .wake / .sense / .gesture on a handle target THAT stream. The two
  * are the same implementation, just homed to different streams.
  *
@@ -28,9 +28,9 @@
  * read-only net; each stream that listens builds its own lightweight session
  * over it (its own templates, threshold, matcher state). The same vocabulary /
  * wake word runs on N streams without copying weights. sense and gesture are
- * model-free — each stream just gets its own SensorHub / GestureSpotter.
+ * model-free: each stream just gets its own SensorHub / GestureSpotter.
  *
- * Frame axis: total samples consumed / hop — the SAME axis a stream's
+ * Frame axis: total samples consumed / hop, the SAME axis a stream's
  * sense.snapshot().frames and kws onSpot spans report. Each stream has its own
  * axis, restarting at 0 when (re)opened.
  */
@@ -62,7 +62,7 @@ for (const { pid, name } of bro.listen.apps()) console.log(pid, name);
 
 // ── The flagship: transcribe system audio while taking mic commands ───────────
 //
-// Two unmixed streams at once — no model weights duplicated for the mic side,
+// Two unmixed streams at once, no model weights duplicated for the mic side,
 // and the system side feeds STT straight from retained PCM.
 
 const sys = bro.listen.open('system');
@@ -79,14 +79,14 @@ bro.kws.listen({ onSpot: (name) => doCommand(name) });   // default mic
 //
 // Returned by bro.listen.open(). Holds the stream; closing it (explicitly or by
 // GC) frees the source + front-end. Stream ids are monotonic (never reused), so
-// a stale handle can never address a different stream — its methods no-op once
+// a stale handle can never address a different stream, its methods no-op once
 // closed.
 
 /** @typedef {object} ListenStream */
 
-mic.id;        // number — the stream id (monotonic)
+mic.id;        // number, the stream id (monotonic)
 mic.kind;      // 'mic' | 'system' | 'process'
-mic.valid;     // boolean — false once closed
+mic.valid;     // boolean, false once closed
 
 // Per-stream raw-audio retention (same shape as the bro.listen.* globals, which
 // are just these scoped to the default mic).
@@ -109,7 +109,7 @@ mic.close();   // detach members, stop the source, free infra. Idempotent.
 // the bro.kws / bro.wake / bro.sense / bro.gesture globals (see their api docs),
 // just bound to this stream instead of the default mic.
 
-// Wake-word on system audio, kws on the mic — at the same time, one net each:
+// Wake-word on system audio, kws on the mic, at the same time, one net each:
 bro.wake.load({ weights: '.../computer.bw' });    // shared net, loaded once
 system.wake.listen({ onFire: () => console.log('heard it in the system audio') });
 bro.wake.listen({ onFire: () => console.log('heard it on the mic') });   // default mic
@@ -127,7 +127,7 @@ system.gesture;  // → bro.gesture, scoped to this stream
 // ── Retention on the default mic (globals) ────────────────────────────────────
 //
 // bro.listen.retain/audio/frame/info are the per-stream retention API scoped to
-// the shared default-microphone stream — the same one bro.kws/.wake/.sense/
+// the shared default-microphone stream, the same one bro.kws/.wake/.sense/
 // .gesture target. Use them when you only care about the mic.
 
 bro.listen.retain(600);

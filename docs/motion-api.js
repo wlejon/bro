@@ -1,14 +1,14 @@
 /**
- * bro.motion — Text-to-motion (nvidia ARDY, Unitree G1 humanoid)
+ * bro.motion, Text-to-motion (nvidia ARDY, Unitree G1 humanoid)
  *
  * Generates a humanoid motion clip from a text prompt: per-frame world-space
  * joint positions (plus the skeleton hierarchy and foot contacts) ready to
  * drive a scene skeleton / mesh. The model is ARDY
- * (nvidia/ARDY-G1-RP-25FPS-Horizon52, "g152") — a text-conditioned
+ * (nvidia/ARDY-G1-RP-25FPS-Horizon52, "g152"), a text-conditioned
  * autoregressive diffusion motion model for the 34-joint Unitree G1 skeleton
  * at 25 fps.
  *
- * The C++ port is a composition over two siblings — no single library owns it:
+ * The C++ port is a composition over two siblings, no single library owns it:
  *
  *   Llama-3 tokenizer + LLM2Vec text encoder (brolm) ─→ pooled (4096) text feature
  *   two-stage diffusion denoiser (brodiffusion::ardy) ─┐
@@ -21,9 +21,9 @@
  * window, classifier-free-guided DDIM), detokenize to explicit motion
  * features, unnormalize, and run FK to world joint positions.
  *
- * GPU by default (brotensor CUDA/Metal when available, CPU fallback). Heavy —
+ * GPU by default (brotensor CUDA/Metal when available, CPU fallback). Heavy,
  * load() reads an 8B text encoder plus the motion model, and generate() is a
- * multi-second synchronous native call — so run the pipeline inside a Worker
+ * multi-second synchronous native call, so run the pipeline inside a Worker
  * to keep the UI responsive; the binding is installed in worker contexts too.
  *
  * Everything here is synchronous and throws on error (no callbacks, no
@@ -31,14 +31,14 @@
  * model file can't be read; generate() throws TypeError on a missing prompt.
  *
  * Model files (both directories, converted/downloaded offline):
- *   checkpoint   — the ARDY g152 dir. Download with brodiffusion's
+ *   checkpoint: the ARDY g152 dir. Download with brodiffusion's
  *                  scripts/download-ardy.sh (nvidia/ARDY-G1-RP-25FPS-Horizon52,
  *                  ungated). Contents the binding reads:
  *                    denoiser.safetensors                (two-stage denoiser)
  *                    tokenizer.safetensors               (FSQ motion autoencoder)
  *                    stats/motion/{mean,std}.npy         (418-entry motion stats)
  *                    stats/post_quantization/{mean,std}.npy
- *   textEncoder  — the merged LLM2Vec Llama-3-8B dir: model.safetensors +
+ *   textEncoder: the merged LLM2Vec Llama-3-8B dir: model.safetensors +
  *                  config.json + tokenizer.json. Built offline from
  *                  McGill-NLP/LLM2Vec-Meta-Llama-3-8B-Instruct-mntp (+ the
  *                  -supervised LoRA adapter) by brolm's
@@ -51,7 +51,7 @@
 
 /**
  * Initialize the brotensor runtime (registers the CUDA/Metal backends).
- * Idempotent, and load() calls it for you — only useful to front-load the
+ * Idempotent, and load() calls it for you, only useful to front-load the
  * driver probe.
  */
 bro.motion.init();
@@ -114,7 +114,7 @@ const m = bro.motion.load({
  *                                   // row-major [frame][joint][x,y,z]
  *   parents: Int32Array,            // 34 parent indices, -1 for the root;
  *                                   // topologically sorted (parent < child)
- *   footContacts: Float32Array,     // F*4 — L-heel, L-toe, R-heel, R-toe, 0/1
+ *   footContacts: Float32Array,     // F*4. L-heel, L-toe, R-heel, R-toe, 0/1
  * }}
  * @throws {TypeError} when text is missing / not a string, or the pipeline
  *         isn't loaded.
@@ -126,7 +126,7 @@ const clip = m.generate('a person walks forward and waves',
                         { frames: 104, steps: 10, cfg: 2.5, seed: 0 });
 console.log(`${clip.frames} frames @ ${clip.fps} fps, ${clip.joints} joints`);
 
-// Play the clip back — index positions per frame and drive scene nodes (one
+// Play the clip back, index positions per frame and drive scene nodes (one
 // small sphere per joint here; a real app would retarget onto a skinned mesh):
 const at = (f, j) => {
     const o = (f * clip.joints + j) * 3;
@@ -144,7 +144,7 @@ setInterval(() => {
 
 // Bones follow from parents: joint j's bone spans at(f, clip.parents[j]) →
 // at(f, j) for every j with parents[j] >= 0. footContacts flags which of the
-// four foot points (heels/toes) are planted each frame — use it for foot-lock
+// four foot points (heels/toes) are planted each frame. Use it for foot-lock
 // IK or footstep sounds.
 
 

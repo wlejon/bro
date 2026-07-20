@@ -1,5 +1,5 @@
 /**
- * bro.gesture — open-vocabulary NON-SPEECH gesture matching
+ * bro.gesture, open-vocabulary NON-SPEECH gesture matching
  *               (brosoundml::GestureSpotter)
  *
  * The tier-0 sibling of bro.kws. PhonemeNet is speech-only: run a whistle or a
@@ -10,15 +10,15 @@
  *
  * PER STREAM. Model-free, so each stream gets its own GestureSpotter riding THAT
  * stream's SensorHub. bro.gesture.* targets the default microphone (needs
- * bro.sense active); stream.gesture.* (on a bro.listen.open() handle — see
+ * bro.sense active); stream.gesture.* (on a bro.listen.open() handle. See
  * docs/listen-api.js) targets that stream (needs that stream's .sense active).
  * The two homes are one implementation; everything below applies to either.
  *
- *   rhythm  >= 2 onsets — the inter-onset intervals are the template. A
+ *   rhythm  >= 2 onsets: the inter-onset intervals are the template. A
  *           re-performance whose taps land at the same spacing (within a tempo
  *           tolerance) fires. A single lone transient is too ambiguous to
  *           enroll (it would fire on every tap), so rhythms need >= 2 hits.
- *   tone    a sustained tonal run — its dominant pitch (and minimum duration)
+ *   tone    a sustained tonal run: its dominant pitch (and minimum duration)
  *           is the template. A held whistle/hum at the same pitch fires.
  *
  * The kind is decided FROM THE CLIP at enroll: a substantial sustained tonal
@@ -26,14 +26,14 @@
  * onsets make it a rhythm; otherwise it is too sparse and enroll throws.
  *
  * Plumbing: bro.gesture is a member of the engine's shared listen host. It owns
- * no DSP — it reads the SAME per-frame SensorHub snapshot bro.sense produces,
+ * no DSP: it reads the SAME per-frame SensorHub snapshot bro.sense produces,
  * so a gesture costs nothing beyond the tier-0 sensors already running. Because
  * of that, bro.gesture only fires while bro.sense is ALSO active (the matcher
  * has no sensors to read otherwise). Result delivery is its own: fired gestures
  * -> onGesture (main thread).
  *
  * Single-producer rule (same as bro.kws): enroll/remove/clear/reset share the
- * matcher's feed thread, so they are only allowed while NOT listening — enroll
+ * matcher's feed thread, so they are only allowed while NOT listening, enroll
  * first, then listen(); stop() to change gestures.
  */
 
@@ -48,7 +48,7 @@
  * the clip is too sparse to be a gesture. Throws while listening.
  *
  * Record the clip with bro.mic (agc:false, samples:true) in the room the
- * gesture will be performed in — the sensors adapt to the ambient, and the clip
+ * gesture will be performed in: the sensors adapt to the ambient, and the clip
  * carries that same ambient into enrollment.
  *
  * @param {string} name
@@ -74,7 +74,7 @@
  * @param {number} [policy.minOnsets=2]    - a rhythm needs at least this many onsets.
  * @param {number} [policy.minToneFrames=8]- a tone's run must last at least this long.
  * @param {number} [policy.onsetSigFrames=5] - rhythm: frames after each onset
- *        averaged into its acoustic signature (~50 ms — the beat's body).
+ *        averaged into its acoustic signature (~50 ms: the beat's body).
  * @returns {number} beats.
  */
 // const beats = bro.gesture.enrollFromAudio('double-knock', clip);
@@ -92,7 +92,7 @@
 // bro.gesture.sampleRate();
 
 /**
- * Inspect an enrolled gesture — the legible view of what the clip became, so a
+ * Inspect an enrolled gesture: the legible view of what the clip became, so a
  * tool can show "rhythm · 3 taps · 250/250 ms" or "tone · 1200 Hz".
  *
  * @param {string} name
@@ -108,7 +108,7 @@
  *   }>,
  *   toneHz: number,             // tone: dominant pitch (0 for rhythm)
  *   toneMs: number,             // tone: enrolled run length in ms (0 for rhythm)
- *   toneSpread: number,         // tone: enrolled pitch spread (std/mean) — how
+ *   toneSpread: number,         // tone: enrolled pitch spread (std/mean), how
  *                               //       steady the captured tone was (~0 = clean)
  * }} null if no such gesture.
  */
@@ -127,7 +127,7 @@
  *        an enrolled gesture re-occurred. confidence is in (0, 1] (1 == exact
  *        reproduction); kind is 'rhythm' or 'tone'. `span` is the matched region
  *        on the SensorHub frames axis: { startFrame, endFrame, matchedFrames }
- *        (rhythm: first..last matched onset; tone: run start..fire) — align with
+ *        (rhythm: first..last matched onset; tone: run start..fire), align with
  *        bro.sense.snapshot().frames to mark it. Backward-compatible: existing
  *        (name, confidence, kind) handlers ignore the 4th arg.
  */
@@ -139,6 +139,6 @@
 //     },
 // });
 
-/** Stop matching. Keeps the gestures — re-enroll or listen() again. */
+/** Stop matching. Keeps the gestures, re-enroll or listen() again. */
 // bro.gesture.stop();
 // bro.gesture.isActive();

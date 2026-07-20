@@ -51,12 +51,12 @@
 //     channel.
 //
 // Reliability x nodelay matrix ({reliable, nodelay} send options):
-//   reliable:true,  nodelay:false  (default) — ordered, retransmitted, Nagle
+//   reliable:true,  nodelay:false  (default), ordered, retransmitted, Nagle
 //                                   batching (small sends coalesce ~a few ms).
-//   reliable:true,  nodelay:true   — ordered + retransmitted, flushed
+//   reliable:true,  nodelay:true, ordered + retransmitted, flushed
 //                                   immediately (no Nagle batching).
-//   reliable:false, nodelay:false  — fire-and-forget, Nagle batching.
-//   reliable:false, nodelay:true   — fire-and-forget, flushed immediately, and
+//   reliable:false, nodelay:false, fire-and-forget, Nagle batching.
+//   reliable:false, nodelay:true, fire-and-forget, flushed immediately, and
 //                                   DROPPED rather than buffered if the link
 //                                   can't take it right now (freshest-data-only
 //                                   semantics for high-rate state updates).
@@ -68,23 +68,23 @@
 // -----------------------------------------------------------------------------
 //
 // Every message carries a 2-byte frame header on the wire:
-//   byte 0: 0xB7 — magic/format version. Changes if the framing ever changes,
+//   byte 0: 0xB7, magic/format version. Changes if the framing ever changes,
 //           so mismatched peers drop messages loudly instead of misparsing.
-//   byte 1: frame type — 0x00 raw bytes (send/broadcast), 0x01 structured
+//   byte 1: frame type, 0x00 raw bytes (send/broadcast), 0x01 structured
 //           clone (sendClone/broadcastClone). Room for future frame types.
 //
 // Consequence: raw payloads are NOT byte-identical on the wire to what send()
 // was given, so bro.net peers must all speak this format (any bro build with
 // this API does; non-bro peers are not supported). Messages with an
 // unrecognized header, unknown frame type, or malformed clone payload are
-// dropped with a log diagnostic — they never reach onmessage and never crash
+// dropped with a log diagnostic. They never reach onmessage and never crash
 // the receiver, even from a hostile peer.
 //
 // =============================================================================
 
 
 // -----------------------------------------------------------------------------
-// bro.net — Namespace (not a constructor)
+// bro.net, Namespace (not a constructor)
 // -----------------------------------------------------------------------------
 
 const net = bro.net;
@@ -175,7 +175,7 @@ net.broadcast(new Float32Array([x, y, z]).buffer, { reliable: false });
  * up to 64 levels deep).
  *
  * Rejected with a TypeError: functions, symbols, Mesh, ImageBitmap (these
- * transfer by in-process pointer and cannot cross a network — export bytes
+ * transfer by in-process pointer and cannot cross a network, export bytes
  * instead), and transfer lists (pass an options object, not an array).
  *
  * @param {number} connId - Connection handle

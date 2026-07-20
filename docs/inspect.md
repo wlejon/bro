@@ -67,10 +67,10 @@ inspectTree('body', 2)
 ```
 
 Each line shows: `indent` `<TAG#id.classes>` `WxH` `@ (x, y)` plus inline annotations:
-- `[flex]`, `[inline-block]`, `[none]`, etc. — non-block display values
-- `[relative]`, `[absolute]`, `[fixed]` — non-static position
-- `[overflow:auto]` — overflow clipping
-- `[shadow]` — element has a shadow root
+- `[flex]`, `[inline-block]`, `[none]`, etc.: non-block display values
+- `[relative]`, `[absolute]`, `[fixed]`: non-static position
+- `[overflow:auto]`: overflow clipping
+- `[shadow]`: element has a shadow root
 
 Text nodes appear as `#text "content..."` (whitespace-only nodes are skipped, long text is truncated to 40 chars).
 
@@ -112,7 +112,7 @@ elements('.card')
 
 ### `inspectOverlay(panelName, selector [, verbose])`
 
-Same output as `inspect()`, but resolves the selector inside a **system panel's** document instead of the app's — the perf HUD, menu bar, preferences modal, splash and inspector each have their own `Document` (see [system-panels.md](system-panels.md)). Panel names are the relative paths the panel scan found, without the extension: `"perf"`, `"menu"`, `"nav"`, `"splash"`, `"inspector"`, `"settings/graphics"`.
+Same output as `inspect()`, but resolves the selector inside a **system panel's** document instead of the app's, the perf HUD, menu bar, preferences modal, splash and inspector each have their own `Document` (see [system-panels.md](system-panels.md)). Panel names are the relative paths the panel scan found, without the extension: `"perf"`, `"menu"`, `"nav"`, `"splash"`, `"inspector"`, `"settings/graphics"`.
 
 ```js
 inspectOverlay('perf', '#fps')
@@ -131,7 +131,7 @@ inspectOverlayTree('nav', 'body', 4)
 
 ### `overlayPanels()`
 
-Returns an array of the loaded panel names — the values `inspectOverlay` and `inspectOverlayTree` accept.
+Returns an array of the loaded panel names, the values `inspectOverlay` and `inspectOverlayTree` accept.
 
 ```js
 overlayPanels()   // ['menu', 'perf', 'nav', 'settings/graphics', ...]
@@ -154,7 +154,7 @@ assert(computedStyle('#modal', 'display') === 'none', 'modal should be hidden');
 
 ### Debugging from the REPL
 
-In the REPL, return values are printed automatically — no `console.log` needed:
+In the REPL, return values are printed automatically, no `console.log` needed:
 
 ```
 bro> inspect('#header')

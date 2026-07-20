@@ -2,7 +2,7 @@
 
 bro depends on fourteen sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
 
-A fifteenth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library — it's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
+A fifteenth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library. It's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
 | Library | Standalone repo | Submodule fallback |
 |---------|----------------|-------------------|
@@ -60,10 +60,10 @@ D:/projects/
 
 ## How It Works
 
-bro's CMake auto-detects standalone repos at `../<name>`. If found, it builds from there directly — **no submodule copy involved**. This means:
+bro's CMake auto-detects standalone repos at `../<name>`. If found, it builds from there directly, **no submodule copy involved**. This means:
 
-- **Edit once** — only touch files in the standalone repo
-- **One build** — `cmake --build build` in bro compiles every sibling from its standalone source
+- **Edit once**: only touch files in the standalone repo
+- **One build**: `cmake --build build` in bro compiles every sibling from its standalone source
 - Submodules are only used when standalone repos aren't present (CI, fresh clones)
 
 The detection pattern in `third_party/CMakeLists.txt`:
@@ -78,7 +78,7 @@ endif()
 
 The same pattern is used for every sibling in the table above.
 
-Note: bromath is pulled in transitively by several siblings (bromesh, brogameagent, etc.). bro's `third_party/CMakeLists.txt` guards the `add_subdirectory` with `if(NOT TARGET bromath)` so the first loader wins — overriding `BROMATH_DIR` only takes effect if bro is the first to add it.
+Note: bromath is pulled in transitively by several siblings (bromesh, brogameagent, etc.). bro's `third_party/CMakeLists.txt` guards the `add_subdirectory` with `if(NOT TARGET bromath)` so the first loader wins, overriding `BROMATH_DIR` only takes effect if bro is the first to add it.
 
 ### Feature gates
 
@@ -99,21 +99,21 @@ With a gate off, the sibling is never added and the JS bindings it backs compile
 
 ### brotensor
 
-**bro is the first loader of brotensor** — `third_party/CMakeLists.txt` adds it early, before broimage. This is deliberate: each sibling's own fallback resolution assumes it is the standalone CMake root, so when nested under bro it looks for `../brotensor` / `third_party/brotensor` relative to the wrong directory and misses the submodule (this is what broke the full-profile nightly configure). Loading it once from bro, with bro's correct paths, makes every sibling's `if(NOT TARGET brotensor)` guard trip instead.
+**bro is the first loader of brotensor**: `third_party/CMakeLists.txt` adds it early, before broimage. This is deliberate: each sibling's own fallback resolution assumes it is the standalone CMake root, so when nested under bro it looks for `../brotensor` / `third_party/brotensor` relative to the wrong directory and misses the submodule (this is what broke the full-profile nightly configure). Loading it once from bro, with bro's correct paths, makes every sibling's `if(NOT TARGET brotensor)` guard trip instead.
 
 brotensor is the foundation of the ML stack: it owns the unified `brotensor::Tensor` type (one type, runtime `Device` tag), the device-neutral op family, and the full training surface (forward + backward ops, losses, optimizers) that every other ML sibling composes on. Its backend is fixed at the **first** `add_subdirectory()`, which is why bro's top-level `CMakeLists.txt` forwards the GPU choice into the `BROTENSOR_WITH_CUDA` / `_WITH_METAL` cache vars **before** `add_subdirectory(third_party)`. The CPU backend is always built; CUDA and Metal are additive and opt-in via `-DBRO_WITH_TENSOR_CUDA=ON` / `-DBRO_WITH_TENSOR_METAL=ON`. With a GPU backend selected, brotensor publishes the `BROTENSOR_HAS_CUDA` / `_HAS_METAL` / `_HAS_GPU` defines, which propagate to bro's `tensor_bindings.cpp`; without one, brotensor still builds CPU-only and `BROTENSOR_HAS_GPU` stays undefined.
 
-bro also forwards `BROIMAGE_WITH_TENSOR` (from `BRO_WITH_TENSOR`), `BROGAMEAGENT_WITH_NN` (from `BRO_WITH_GAMEAI_NN`), and `BROGAMEAGENT_WITH_CUDA` / `_WITH_METAL` (from the tensor backend choice) in the same block. Those are internal plumbing — configure with the `BRO_WITH_*` flags, not the sibling ones.
+bro also forwards `BROIMAGE_WITH_TENSOR` (from `BRO_WITH_TENSOR`), `BROGAMEAGENT_WITH_NN` (from `BRO_WITH_GAMEAI_NN`), and `BROGAMEAGENT_WITH_CUDA` / `_WITH_METAL` (from the tensor backend choice) in the same block. Those are internal plumbing, configure with the `BRO_WITH_*` flags, not the sibling ones.
 
-**brolm** (language/text-model inference — tokenizers, text encoders, and generative text / vision-language / translation models) depends on `bromath` + `brotensor`. Because it also provides the text encoders **brodiffusion** consumes, bro's `third_party/CMakeLists.txt` adds it **after the siblings that have already loaded brotensor/bromath** and **before brodiffusion**. brolm guards both deps with `if(NOT TARGET ...)`, reusing the already-loaded targets.
+**brolm** (language/text-model inference, tokenizers, text encoders, and generative text / vision-language / translation models) depends on `bromath` + `brotensor`. Because it also provides the text encoders **brodiffusion** consumes, bro's `third_party/CMakeLists.txt` adds it **after the siblings that have already loaded brotensor/bromath** and **before brodiffusion**. brolm guards both deps with `if(NOT TARGET ...)`, reusing the already-loaded targets.
 
 **brodiffusion** (diffusion / flow-matching generative inference, `bro.diffusion` JS bindings) depends on `bromath` + `brotensor` + `brolm`. Its `third_party/CMakeLists.txt` block **must be added after brolm's** (it consumes brolm's text encoders). brodiffusion's CMake guards those deps with `if(NOT TARGET ...)` so it reuses the targets bro already added. Its CPU FP32 path is always built, so whenever `BRO_WITH_DIFFUSION` is on the binding is real regardless of GPU backend; `-DBRO_WITH_TENSOR_CUDA=ON` additionally compiles brodiffusion's fused CUDA kernels.
 
-**broimage** (image decode/encode + composable kernels) is the single home for image work that used to be duplicated across the stack: brokit's `bro.image` JS kernels, bro's HTML `Image` decode, the model siblings' host-side resize + normalize, and pixel preprocessing for the generative siblings. It depends on `bromath` and, when `BRO_WITH_TENSOR` is on, `brotensor` (the tensor adapter forwards `image_normalize` / `image_u8_to_f32_nhwc_to_nchw` to brotensor when the destination is a GPU `Tensor`) — bro forwards that choice as `BROIMAGE_WITH_TENSOR`. bro's `third_party/CMakeLists.txt` adds broimage **before brokit** because brokit's image kernels link against `broimage::broimage`, and **after** brotensor so it reuses that target. broimage also vendors its own `stb_image` static lib (with a `if(NOT TARGET stb_image)` guard); bro's own `stb_image` declaration is guarded to match, so either load order works.
+**broimage** (image decode/encode + composable kernels) is the single home for image work that used to be duplicated across the stack: brokit's `bro.image` JS kernels, bro's HTML `Image` decode, the model siblings' host-side resize + normalize, and pixel preprocessing for the generative siblings. It depends on `bromath` and, when `BRO_WITH_TENSOR` is on, `brotensor` (the tensor adapter forwards `image_normalize` / `image_u8_to_f32_nhwc_to_nchw` to brotensor when the destination is a GPU `Tensor`), bro forwards that choice as `BROIMAGE_WITH_TENSOR`. bro's `third_party/CMakeLists.txt` adds broimage **before brokit** because brokit's image kernels link against `broimage::broimage`, and **after** brotensor so it reuses that target. broimage also vendors its own `stb_image` static lib (with a `if(NOT TARGET stb_image)` guard); bro's own `stb_image` declaration is guarded to match, so either load order works.
 
-**brosoundml** (audio-ML model inference — speech-to-text, text-to-speech, speaker diarization, neural codec, and the streaming wake / keyword / sensor listening stack) depends on `brotensor` for its audio op family (FFT/STFT, 1D conv, vocoder/codec activations, resampling, AR sampling) and on `brolm` for shared text tokenizers. Its `third_party/CMakeLists.txt` block **must be added after brolm's**: a brosoundml tokenizer target links against a brolm tokenizer target, and brosoundml guards `bromath`/`brotensor` with `if(NOT TARGET ...)` so it reuses the already-loaded targets. It backs bro's audio-ML JS bindings (`bro.stt`, `bro.tts`, `bro.wake`, and the rest of the listening stack). Like brodiffusion its CPU path is always built, so with `BRO_WITH_SOUNDML` on the bindings are real; `-DBRO_WITH_TENSOR_CUDA=ON` additionally compiles its fused CUDA kernels.
+**brosoundml** (audio-ML model inference, speech-to-text, text-to-speech, speaker diarization, neural codec, and the streaming wake / keyword / sensor listening stack) depends on `brotensor` for its audio op family (FFT/STFT, 1D conv, vocoder/codec activations, resampling, AR sampling) and on `brolm` for shared text tokenizers. Its `third_party/CMakeLists.txt` block **must be added after brolm's**: a brosoundml tokenizer target links against a brolm tokenizer target, and brosoundml guards `bromath`/`brotensor` with `if(NOT TARGET ...)` so it reuses the already-loaded targets. It backs bro's audio-ML JS bindings (`bro.stt`, `bro.tts`, `bro.wake`, and the rest of the listening stack). Like brodiffusion its CPU path is always built, so with `BRO_WITH_SOUNDML` on the bindings are real; `-DBRO_WITH_TENSOR_CUDA=ON` additionally compiles its fused CUDA kernels.
 
-**brovisionml** (vision-model inference — segmentation, depth, surface normals, background removal, image backbones, the ControlNet conditioning annotators, and generative image models) depends on `bromath` + `brotensor` + `broimage`. By the time its `third_party/CMakeLists.txt` block is added (after brodiffusion) all three are already targets, and brovisionml guards all three with `if(NOT TARGET ...)`. It backs the `bro.vision` JS bindings — image in (ImageBitmap / ImageData) → ImageBitmap + typed-array out. Like brodiffusion its CPU path is always built, so with `BRO_WITH_VISION` on the binding is real; it ships its own CUDA kernels gated on `BROTENSOR_WITH_CUDA`, so `-DBRO_WITH_TENSOR_CUDA=ON` compiles them automatically.
+**brovisionml** (vision-model inference, segmentation, depth, surface normals, background removal, image backbones, the ControlNet conditioning annotators, and generative image models) depends on `bromath` + `brotensor` + `broimage`. By the time its `third_party/CMakeLists.txt` block is added (after brodiffusion) all three are already targets, and brovisionml guards all three with `if(NOT TARGET ...)`. It backs the `bro.vision` JS bindings, image in (ImageBitmap / ImageData) → ImageBitmap + typed-array out. Like brodiffusion its CPU path is always built, so with `BRO_WITH_VISION` on the binding is real; it ships its own CUDA kernels gated on `BROTENSOR_WITH_CUDA`, so `-DBRO_WITH_TENSOR_CUDA=ON` compiles them automatically.
 
 ## Day-to-Day Development
 
@@ -138,7 +138,7 @@ cd D:/projects/htmlayout && cmake --build build --config Debug
 cd D:/projects/broaudio && cmake --build build --config Debug
 ./build/tests/Debug/broaudio_test.exe
 
-# Note: bromesh tests must be built in Release — meshoptimizer's Debug
+# Note: bromesh tests must be built in Release, meshoptimizer's Debug
 # assertions trigger a modal abort() dialog on Windows.
 cd D:/projects/bromesh && cmake --build build --config Release
 ./build/tests/Release/bromesh_test.exe
@@ -202,12 +202,12 @@ cmake -B build -DBROMATH_DIR=none -DQJSBIND_DIR=none -DBROKIT_DIR=none \
 
 ## Apps tree
 
-Apps live in [broworkshop](https://github.com/wlejon/broworkshop) at `../broworkshop` — a sibling repo, not a CMake dependency. Its layout:
+Apps live in [broworkshop](https://github.com/wlejon/broworkshop) at `../broworkshop`, a sibling repo, not a CMake dependency. Its layout:
 
 ```
 broworkshop/
 ├── bro.json                  # project manifest (default_app, lib, system)
-├── lib/                      # shared JS modules — apps load via "/lib/foo.js"
+├── lib/                      # shared JS modules, apps load via "/lib/foo.js"
 ├── launcher/                 # the default app (bro grid launcher)
 ├── games/                    # blockfall, snake, asteroids, ...
 ├── tools/                    # synth, mesh-viewer, scene-editor, ...

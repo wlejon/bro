@@ -1,10 +1,10 @@
 /**
- * bro.mic — Live mic chunk consumer (fixed-size frames)
+ * bro.mic, Live mic chunk consumer (fixed-size frames)
  *
  * A general-purpose live-microphone consumer built on broaudio's multi-consumer
  * mic-tap dispatch. Where bro.wake feeds a model that does its own internal
  * framing, bro.mic asks broaudio for FIXED-SIZE frames (chunkFrames) and hands
- * each one to JS at a steady cadence — the worked example of broaudio's
+ * each one to JS at a steady cadence: the worked example of broaudio's
  * chunkFrames feature. A 16 kHz / 160-frame tap yields exactly one onChunk per
  * 10 ms of audio (100 chunks/sec).
  *
@@ -14,7 +14,7 @@
  * lock-free ring; onChunk is drained on the JS main thread once per engine
  * frame, so you can safely touch the DOM from it.
  *
- * Multiple mic consumers coexist — bro.mic and bro.wake each register their own
+ * Multiple mic consumers coexist: bro.mic and bro.wake each register their own
  * tap and both fan out from the same captured audio, so there are no
  * last-writer-wins races over the mic.
  *
@@ -52,7 +52,7 @@
  *                                            targetRate). Requires a fixed
  *                                            chunkFrames (> 0). This is the
  *                                            capture path for recording /
- *                                            STT consumers — concatenate the
+ *                                            STT consumers: concatenate the
  *                                            chunks for the utterance.
  * @param {Function} [opts.onChunk]         - Called per chunk on the JS thread
  *                                            with { index, peak, rms, samples? }.
@@ -76,7 +76,7 @@ bro.mic.start = function (opts) {};
 // ── Stop ──────────────────────────────────────────────────────────────────────
 
 /**
- * Remove the tap and free the onChunk callback. Does NOT stop mic capture —
+ * Remove the tap and free the onChunk callback. Does NOT stop mic capture,
  * other consumers (e.g. bro.wake) may share the device. Safe to call when not
  * started.
  */
@@ -89,7 +89,7 @@ bro.mic.stop = function () {};
  * Push synthetic mic-rate audio through the active tap exactly as the recording
  * callback would (resample → AGC → chunk → onChunk / ring). For headless tests
  * and offline replay. Throws if live capture is active (feed and the recording
- * callback would race the same per-tap state) — pair it with start({ live:false }).
+ * callback would race the same per-tap state): pair it with start({ live:false }).
  *
  * @param {Float32Array} samples       - Mono PCM at the engine mic rate.
  * @param {number}       [sampleRate]  - If given, must equal bro.mic.engineRate().
@@ -131,7 +131,7 @@ bro.mic.engineRate = function () {};
 bro.mic.stats = function () {};
 
 /**
- * Snapshot of the most recent chunk peaks, oldest-first — for a polling level
+ * Snapshot of the most recent chunk peaks, oldest-first, for a polling level
  * meter. Each value is a peak in [0, ~1].
  *
  * @param {number} [maxCount] - Cap the number returned (default: all buffered).

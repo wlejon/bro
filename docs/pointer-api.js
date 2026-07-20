@@ -1,5 +1,5 @@
 /**
- * Pointer Events + Touch Events — unified W3C input over mouse and touch
+ * Pointer Events + Touch Events: unified W3C input over mouse and touch
  *
  * bro dispatches W3C Pointer Events for every input device and W3C Touch
  * Events alongside them for touch, on top of the classic mouse events.
@@ -16,7 +16,7 @@
  *           mouseup. pressure reads 0.5 while any button is held, else 0.
  *
  *   touch   one pointer per finger. pointerIds are unique per contact,
- *           minted monotonically starting at 2 — they NEVER collide with the
+ *           minted monotonically starting at 2: they NEVER collide with the
  *           mouse's 1, and a lifted finger's id is not reused. The first
  *           finger of a contact set (a touch landing on an empty surface) is
  *           the primary pointer for its whole lifetime; fingers added while
@@ -26,7 +26,7 @@
  *           0 on the down/up transitions and -1 on moves.
  *
  * Pointer events hit-test their contact point per event (per finger, for
- * touch). Touch does not have implicit capture in bro — capture it
+ * touch). Touch does not have implicit capture in bro, capture it
  * explicitly from pointerdown (below) if you want the drag idiom.
  *
  * ── Per-pointer capture ────────────────────────────────────────────────────
@@ -34,17 +34,17 @@
  * Element.setPointerCapture(pointerId) routes subsequent pointermove /
  * pointerup / pointercancel for THAT pointer to the element regardless of
  * the hit target (offsetX/Y recomputed against it). Each pointerId is
- * captured independently — one finger can be captured by a slider while a
+ * captured independently: one finger can be captured by a slider while a
  * second finger scrolls elsewhere. The capture auto-releases after
  * pointerup / pointercancel; gotpointercapture / lostpointercapture fire on
  * the holder. Capturing an inactive pointerId is a silent no-op (the web
  * throws NotFoundError). Classic mouse events are never retargeted by
- * capture — only the pointer aliases are.
+ * capture: only the pointer aliases are.
  *
  * pointercancel is a TOUCH-ONLY event in bro: the mouse path aliases exactly
  * pointerdown / pointermove / pointerup and never emits one. So a mouse
  * capture whose pointerup went missing (swallowed by a native dialog, a
- * window switch) is not ended by a cancel — it self-heals instead on the
+ * window switch) is not ended by a cancel: it self-heals instead on the
  * next pointermove that arrives with no buttons held, which releases the
  * capture and fires lostpointercapture. Don't wait for pointercancel to
  * clean up mouse drag state; clean up on pointerup and on
@@ -52,7 +52,7 @@
  *
  * setPointerCapture is app-document only. It is refused (returns without
  * capturing) when the element is not live in the app document, and a capture
- * is ignored for any event whose hit target belongs to another document — so
+ * is ignored for any event whose hit target belongs to another document. So
  * elements inside an <iframe> sub-document or a 3D HtmlNode panel cannot
  * capture a pointer.
  *
@@ -86,8 +86,8 @@
  *
  * ── Compat mouse events ────────────────────────────────────────────────────
  *
- * A TAP of the primary finger — down and up without travelling past the
- * ~10 px slop radius — synthesizes the classic mouse sequence after
+ * A TAP of the primary finger: down and up without travelling past the
+ * ~10 px slop radius: synthesizes the classic mouse sequence after
  * touchend:
  *
  *   mousedown → mouseup → click
@@ -99,11 +99,11 @@
  * the slop, a pointercancel, or the finger being non-primary.
  *
  * Deviations from full browser compat behavior (deliberate, documented):
- *   * no mousemove/mouseover/mouseout synthesis from touch movement — only
+ *   * no mousemove/mouseover/mouseout synthesis from touch movement: only
  *     the tap sequence above is synthesized;
  *   * hover is mouse-only: touch never updates :hover styling and never
  *     fires mouseover/mouseenter/mouseleave/mouseout;
- *   * touch targets the app document only — system panels, native menus and
+ *   * touch targets the app document only: system panels, native menus and
  *     engine overlays remain mouse-driven;
  *   * touch contacts never begin text-selection drags.
  */
@@ -131,7 +131,7 @@ el.addEventListener('pointerdown', (e) => {
 });
 el.addEventListener('pointermove', (e) => { /* per-pointer moves */ });
 el.addEventListener('pointerup', (e) => { /* capture auto-releases after this */ });
-el.addEventListener('pointercancel', (e) => { /* touch only — never fires for the mouse */ });
+el.addEventListener('pointercancel', (e) => { /* touch only. Never fires for the mouse */ });
 el.addEventListener('lostpointercapture', (e) => { /* the reliable mouse-drag cleanup hook */ });
 
 el.setPointerCapture(pointerId);      // route this pointer's events here
@@ -182,17 +182,17 @@ canvas.addEventListener('pointercancel', (e) => strokes.delete(e.pointerId));
 // Event properties (on the event object, WebKit GestureEvent style):
 //   scale      current finger distance / distance at gesturestart
 //   rotation   degrees rotated since gesturestart, CLOCKWISE positive,
-//              unwrapped — continuous rotation past ±180° keeps accumulating
+//              unwrapped, continuous rotation past ±180° keeps accumulating
 //   clientX/Y  the two fingers' centroid (viewport coordinates)
 //
 // Events fire (bubbling, cancelable) on the hit target of the START
-// centroid for the gesture's whole lifetime — pan by tracking clientX/Y
+// centroid for the gesture's whole lifetime, pan by tracking clientX/Y
 // deltas across gesturechange. Fingers beyond the founding pair are
 // ignored; when a founding finger lifts with 2+ fingers still down, the
 // gesture ends and a fresh one starts immediately over the remaining
 // contacts (scale/rotation re-based to 1/0).
 //
-// Regular pointer/touch events keep firing untouched — apps that do their
+// Regular pointer/touch events keep firing untouched, apps that do their
 // own two-finger math see no change (gestures are a parallel, additive
 // stream).
 
@@ -229,5 +229,5 @@ touchDown(2, 300, 200);        // finger 2 lands while 1 is down (non-primary)
                                //   -> also gesturestart (two fingers down)
 touchMove(2, 340, 200);        // -> gesturechange (scale/rotation/centroid)
 touchUp(2, 340, 200);          // finger 2 lifts -> gestureend
-touchUp(1, 140, 100);          // finger 1 lifts (dragged — no compat click)
+touchUp(1, 140, 100);          // finger 1 lifts (dragged, no compat click)
 touchCancel(1, 0, 0);          // or: abort a contact (pointercancel/touchcancel)

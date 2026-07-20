@@ -10,7 +10,7 @@ winget install OpenCppCoverage.OpenCppCoverage
 
 Installs to `C:\Program Files\OpenCppCoverage\OpenCppCoverage.exe`, which the scripts pick up.
 
-The Debug build needs PDBs to be present — `cmake -B build` with the default Visual Studio generator emits them. For bromesh specifically, tests run in **Release** (Debug meshoptimizer asserts hang on a modal abort dialog); see notes in its `scripts/coverage.ps1`.
+The Debug build needs PDBs to be present; `cmake -B build` with the default Visual Studio generator emits them. For bromesh specifically, tests run in **Release** (Debug meshoptimizer asserts hang on a modal abort dialog); see notes in its `scripts/coverage.ps1`.
 
 ## Generating a report
 
@@ -31,7 +31,7 @@ pwsh scripts/coverage.ps1 -Output build/cov  # custom output dir
 
 ## How it works
 
-OpenCppCoverage attaches to a running process via PDB symbols — no recompile needed. The pattern across all repos:
+OpenCppCoverage attaches to a running process via PDB symbols, so no recompile is needed. The pattern across all repos:
 
 ```
 OpenCppCoverage.exe `
@@ -53,6 +53,6 @@ OpenCppCoverage.exe `
 
 ## Bro-specific quirk
 
-bro has no native C++ unit tests — its tests are all JS-driven through `bro-headless`. So bro's coverage measures *engine code exercised by the JS test suite*. Uncovered C++ usually means "no JS test reaches this path," not "no test file exists." Adding coverage in bro means writing new headless JS tests under `tests/`, not C++ test exes.
+bro has no native C++ unit tests; its tests are all JS-driven through `bro-headless`. So bro's coverage measures *engine code exercised by the JS test suite*. Uncovered C++ usually means "no JS test reaches this path," not "no test file exists." Adding coverage in bro means writing new headless JS tests under `tests/`, not C++ test exes.
 
 

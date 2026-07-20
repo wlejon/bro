@@ -1,5 +1,5 @@
 /**
- * bro.diar — Speaker diarization (streaming Sortformer)
+ * bro.diar, Speaker diarization (streaming Sortformer)
  *
  * "Who spoke when": given 16 kHz mono audio, emits per 80 ms frame an
  * independent activity probability for up to four speakers, with speaker labels
@@ -7,7 +7,7 @@
  *
  *   - Sortformer (nvidia/diar_streaming_sortformer_4spk-v2.1): a NEST /
  *     FastConformer acoustic encoder (the same backbone Parakeet uses) feeding
- *     an 18-layer Transformer head + a two-layer sigmoid head. End-to-end —
+ *     an 18-layer Transformer head + a two-layer sigmoid head. End-to-end,
  *     no clustering, no separate VAD or speaker-embedding step.
  *
  * Backed by brosoundml on top of brotensor. Defaults to CUDA; pass
@@ -24,7 +24,7 @@
  *     a short window each tick (isLast=true) for rolling, low-latency output.
  *
  * Audio is { samples: Float32Array, sampleRate } in [-1, 1] (a bare
- * Float32Array is assumed 16 kHz). The model expects 16 kHz mono — bro.listen /
+ * Float32Array is assumed 16 kHz). The model expects 16 kHz mono, bro.listen /
  * bro.mic taps already deliver that; resample/downmix anything else first.
  *
  * Every result is a Diarization object:
@@ -39,7 +39,7 @@
 
 /**
  * Load a Sortformer model from a converted checkpoint directory (config.json +
- * model.safetensors — brosoundml/scripts/convert-sortformer.py).
+ * model.safetensors, brosoundml/scripts/convert-sortformer.py).
  *
  * Synchronous unless opts.onReady is given, in which case the load runs on a
  * background thread and returns an AsyncHandle.
@@ -61,7 +61,7 @@ bro.diar.init = function () {};
 
 /**
  * Diarize a whole clip on a background thread (the JS thread stays responsive).
- * The forward is monolithic — .cancel() drops the result rather than
+ * The forward is monolithic: .cancel() drops the result rather than
  * interrupting mid-clip.
  *
  * @param {Sortformer} model
@@ -86,7 +86,7 @@ bro.diar.diarize = function (model, audio, opts) {};
  */
 
 /**
- * Synchronous offline diarization (blocks the JS thread — prefer bro.diar.diarize
+ * Synchronous offline diarization (blocks the JS thread: prefer bro.diar.diarize
  * for anything but short clips / tests).
  * @returns {Diarization}
  */
@@ -107,8 +107,8 @@ Sortformer.prototype.createSession = function () {};
 
 /**
  * Feed the next block of 16 kHz mono PCM. The session accumulates audio; on
- * isLast=true it runs the streaming loop over the buffered PCM — continuing this
- * session's speaker cache so labels stay stable — and returns the activity for
+ * isLast=true it runs the streaming loop over the buffered PCM, continuing this
+ * session's speaker cache so labels stay stable, and returns the activity for
  * the finalized frames. With isLast=false it only buffers (numFrames=0).
  *
  * @param {{samples:Float32Array, sampleRate:number}|Float32Array} audio
@@ -121,18 +121,18 @@ SortformerSession.prototype.feed = function (audio, isLast) {};
 SortformerSession.prototype.reset = function () {};
 
 
-// ── ClusterDiarizer — telling apart similar-sounding voices ─────────────────
+// ── ClusterDiarizer, telling apart similar-sounding voices ─────────────────
 //
 // Sortformer (and its NeMo reference, confirmed bit-for-bit) collapses
-// acoustically SIMILAR voices — e.g. two women in the same pitch range — into a
+// acoustically SIMILAR voices, e.g. two women in the same pitch range, into a
 // single speaker slot: a limit of its 4-slot end-to-end head, which has no
 // control over how different two voices must be to count as two people. There is
 // no threshold to turn up; the head simply emits one speaker.
 //
 // ClusterDiarizer is the alternative design for that case. It splits the two jobs
 // Sortformer fuses:
-//   - WHERE is speech  — Sortformer's per-frame activity, reused purely as a VAD.
-//   - WHO is speaking   — each speech window is embedded with an ECAPA-TDNN
+//   - WHERE is speech: Sortformer's per-frame activity, reused purely as a VAD.
+//   - WHO is speaking: each speech window is embedded with an ECAPA-TDNN
 //                         x-vector, the embeddings are mean-centered against a
 //                         fixed population mean (raw x-vectors sit in a narrow
 //                         cone where every cosine is ~0.95; centering makes them
@@ -143,7 +143,7 @@ SortformerSession.prototype.reset = function () {};
 // overlapped speech, and it needs ~2.5 s of audio per window for a stable
 // x-vector. In return it resolves similar voices Sortformer merges. Speaker count
 // is discovered from the threshold; labels are arrival-ordered. Offline only for
-// now (whole-clip). Feed it CLEAN 16 kHz mono — bro.listen / bro.mic already
+// now (whole-clip). Feed it CLEAN 16 kHz mono, bro.listen / bro.mic already
 // deliver that; avoid decode/resample round-trips, which blur the speaker margin.
 
 /**
@@ -177,7 +177,7 @@ bro.diar.clusterDiarize = function (model, audio, opts) {};
  */
 
 /**
- * Synchronous whole-clip diarization (blocks the JS thread — prefer
+ * Synchronous whole-clip diarization (blocks the JS thread: prefer
  * bro.diar.clusterDiarize for long clips). Returns a Diarization where probs is
  * one-hot per speech frame and numSpeakers is the discovered count.
  *

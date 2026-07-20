@@ -1,13 +1,13 @@
 /**
- * bro.lm — Language-model text generation (Qwen3, Mistral 3.1, Gemma-2,
+ * bro.lm, Language-model text generation (Qwen3, Mistral 3.1, Gemma-2,
  *          Qwen3.5, Qwen3-VL) + NLLB-200 machine translation
  *
  * Backed by brolm (tokenizers + transformer text models) on top of brotensor.
  * Defaults to CUDA; pass { device: 'cpu' } to force the CPU backend.
  *
- * Generation model families (plus the NLLB-200 translator — see its section):
+ * Generation model families (plus the NLLB-200 translator: see its section):
  *   - Qwen3 (loadQwen): GGUF checkpoint, Qwen BPE tokenizer, ChatML chat
- *     template. The original surface — most of this file documents it.
+ *     template. The original surface, most of this file documents it.
  *   - Mistral 3.1 text (loadMistral): quantized GGUF + the native "tekken"
  *     tokenizer (tekken.json), [INST] chat template. Returns the same
  *     { model, tokenizer } pair, and the model speaks the same LMModel API
@@ -15,17 +15,17 @@
  *     model.family distinguishes 'qwen3' from 'mistral3'. See the Mistral
  *     section at the bottom.
  *   - Gemma-2 (loadGemma2): HF checkpoint dir (config.json + tokenizer.json +
- *     *.safetensors shards) — google/gemma-2-2b, added to brolm as Sana's text
+ *     *.safetensors shards), google/gemma-2-2b, added to brolm as Sana's text
  *     encoder. Same { model, tokenizer } pair and LMModel API (family
  *     'gemma2'); the base PT tokenizer has no chat template. See the Gemma-2
  *     section at the bottom.
  *   - Qwen3.5 (loadQwen35): safetensors checkpoint dir driven by brolm's VLM
  *     driver (hybrid full/linear-attention decoder, M-RoPE). The driver owns
  *     tokenization, so generate() takes a STRING prompt and the model exposes
- *     encode()/decode() itself — no separate tokenizer handle. See the
+ *     encode()/decode() itself: no separate tokenizer handle. See the
  *     Qwen3.5 section at the bottom.
  *   - Qwen3-VL (loadQwen3VL): safetensors checkpoint dir driven by brolm's VLM
- *     driver — a dense (plain GQA, full-rotary M-RoPE) decoder plus a vision
+ *     driver: a dense (plain GQA, full-rotary M-RoPE) decoder plus a vision
  *     tower with DeepStack feature injection, the vision-language sibling of
  *     Qwen3.5. Same VLM-owns-tokenization shape as Qwen3.5: generate() takes
  *     a STRING prompt and opts.images for vision input. See the Qwen3-VL
@@ -33,16 +33,16 @@
  *
  * A loadQwen/loadMistral load returns two objects: a `model` (the transformer
  * + KV cache) and a `tokenizer` (BPE encode/decode + chat templating). They
- * are paired — encode a prompt with the tokenizer, generate with the model,
+ * are paired: encode a prompt with the tokenizer, generate with the model,
  * decode the result.
  *
- * Sampling defaults to temperature 1.0 (full sampling) for every family —
- * pass sampling: { temperature: 0 } for greedy decoding.
+ * Sampling defaults to temperature 1.0 (full sampling) for every family.
+ * Pass sampling: { temperature: 0 } for greedy decoding.
  *
  * Generation is synchronous and blocks the JS thread for its duration; for a
  * 0.6B model on CUDA expect a few ms per token. Allocate the KV cache once
  * (promptLen + maxNewTokens) before the first generate(). For non-blocking,
- * cancellable generation use bro.lm.generate(model, promptIds, opts) — the
+ * cancellable generation use bro.lm.generate(model, promptIds, opts), the
  * async form every family shares (see the voice-pipeline app).
  */
 
@@ -63,7 +63,7 @@ const { model, tokenizer } =
 // model.vocabSize === 151936, model.hiddenSize === 1024, model.numLayers === 28
 
 /**
- * Load only a tokenizer (no model) — e.g. to count tokens or build prompts
+ * Load only a tokenizer (no model): e.g. to count tokens or build prompts
  * ahead of loading the weights. (loadQwen already returns a tokenizer paired
  * with the model; use this when you want the tokenizer on its own.)
  *
@@ -141,7 +141,7 @@ console.log(reply.trim());
  *
  *   Same prefill + decode loop as generate(), but invokes onToken(id) after
  *   each sampled token so callers can stream text as it is produced. The KV
- *   cache persists across the per-token forwards, so this is O(n) — do NOT
+ *   cache persists across the per-token forwards, so this is O(n). Do NOT
  *   emulate streaming by calling generate() in a loop (it resets the cache and
  *   re-prefills the prompt each call).
  *
@@ -200,12 +200,12 @@ const h = bro.lm.generate(model, promptIds, {
 
 /**
  * Load the Mistral 3.1 text decoder from a quantized GGUF (Q4_K / Q6_K /
- * Q8_0) + its native tekken tokenizer. The quant matmul path is GPU-only —
+ * Q8_0) + its native tekken tokenizer. The quant matmul path is GPU-only,
  * loading works on CPU but the first forward throws without a GPU backend.
  *
  * @param {string} ggufPath           - the text .gguf (not the mmproj one).
  * @param {Object} opts
- * @param {string} opts.tokenizerPath - tekken.json (REQUIRED — Mistral has no
+ * @param {string} opts.tokenizerPath - tekken.json (REQUIRED: Mistral has no
  *                                      vocab.json + merges.txt).
  * @param {string} [opts.device='cuda']
  * @param {function} [opts.onReady]   - async load: onReady({model, tokenizer}).
@@ -222,7 +222,7 @@ const h = bro.lm.generate(model, promptIds, {
  *         Mistral's [INST] template.
  *
  * The returned model is the same LMModel class as loadQwen's (family
- * 'mistral3') — generate, generateStream, and async bro.lm.generate all work.
+ * 'mistral3'): generate, generateStream, and async bro.lm.generate all work.
  */
 const mis = bro.lm.loadMistral(
     '../brolm/weights/Mistral-Small-3.1-24B-Instruct-2503-GGUF/mistralai_Mistral-Small-3.1-24B-Instruct-2503-Q4_K_M.gguf',
@@ -243,7 +243,7 @@ console.log(mis.tokenizer.decode(mIds));
  * Load Gemma-2 (google/gemma-2-2b family) from a HuggingFace checkpoint
  * directory: config.json + tokenizer.json + one or more *.safetensors shards.
  * Gemma-2 was added to brolm as Sana's text encoder (its last_hidden_state
- * conditions the Sana DiT — see bro.diffusion.loadModel for Sana txt2img), but
+ * conditions the Sana DiT: see bro.diffusion.loadModel for Sana txt2img), but
  * it is a full causal LM and is bound here as one.
  *
  * Unlike loadMistral, the tokenizer travels with the checkpoint (tokenizer.json
@@ -265,14 +265,14 @@ console.log(mis.tokenizer.decode(mIds));
  *         Prepends <bos> by default (no <eos>), matching GemmaTokenizer. Pass
  *         false to suppress the leading <bos>.
  * @method decode(ids) → string
- *         There is NO applyChatTemplate — gemma-2-2b ships as a base PT model.
+ *         There is NO applyChatTemplate: gemma-2-2b ships as a base PT model.
  *         For an -it checkpoint build the turn framing in JS (the added tokens
  *         are matched verbatim):
  *           '<start_of_turn>user\n' + text +
  *           '<end_of_turn>\n<start_of_turn>model\n'
  *
- * The returned model is the same LMModel class as loadQwen's (family 'gemma2')
- * — generate, generateStream, and async bro.lm.generate all work.
+ * The returned model is the same LMModel class as loadQwen's (family 'gemma2'),
+ * generate, generateStream, and async bro.lm.generate all work.
  */
 const gem = bro.lm.loadGemma2('../brolm/weights/gemma-2-2b');
 const gIds = gem.model.generate(
@@ -288,7 +288,7 @@ console.log(gem.tokenizer.decode(gIds));
 
 /**
  * Load a Qwen3.5 checkpoint directory (HF layout: config.json, vocab.json +
- * merges.txt, model.safetensors shard(s) — e.g. Qwen3.5-0.8B). Driven by
+ * merges.txt, model.safetensors shard(s), e.g. Qwen3.5-0.8B). Driven by
  * brolm's qwen35::VLM driver, which owns the tokenizer and the M-RoPE/hybrid
  * cache plumbing.
  *
@@ -307,14 +307,14 @@ console.log(gem.tokenizer.decode(gIds));
  * @method encode(text, addSpecial?) → Int32Array
  * @method decode(ids) → string
  * @method generate(prompt, opts) → Int32Array
- *         prompt is a STRING — the driver tokenizes. Wrap chat turns in
+ *         prompt is a STRING: the driver tokenizes. Wrap chat turns in
  *         ChatML yourself:
  *           '<|im_start|>user\n' + text + '<|im_end|>\n<|im_start|>assistant\n'
  *         Generation stops on <|im_end|> / <|endoftext|> or maxNewTokens.
  *         opts: { maxNewTokens, sampling: {temperature, topK, topP, seed},
  *                 images, onToken(id) → return false to stop early }
  *
- *         VISION INPUT — opts.images is an ImageBitmap / ImageData
+ *         VISION INPUT: opts.images is an ImageBitmap / ImageData
  *         ({data,width,height}, RGBA) or an array of them. The prompt must
  *         already contain one placeholder triple per image, in the position the
  *         image should appear:
@@ -322,7 +322,7 @@ console.log(gem.tokenizer.decode(gIds));
  *         Images are consumed in order. Supported on the async
  *         bro.lm.generate(q35, prompt, { images, onToken, onDone }) too.
  *
- * Async: bro.lm.generate(q35, promptString, opts) — same streaming/cancel
+ * Async: bro.lm.generate(q35, promptString, opts), same streaming/cancel
  * contract as the LMModel form (opts.images supported there too).
  */
 const q35 = bro.lm.loadQwen35('../brolm/weights/Qwen3.5-0.8B');
@@ -345,14 +345,14 @@ console.log(q35.decode(visIds));
 /**
  * Load a Qwen3-VL checkpoint directory (HF layout: config.json, vocab.json +
  * merges.txt, an optional preprocessor_config.json, model*.safetensors
- * shard(s) — e.g. Qwen3-VL-4B-Instruct). Driven by brolm's qwen3vl::VLM
+ * shard(s): e.g. Qwen3-VL-4B-Instruct). Driven by brolm's qwen3vl::VLM
  * driver, which owns the tokenizer, the vision tower (DeepStack feature
  * injection into the first few decoder layers), and the M-RoPE/KV cache
  * plumbing.
  *
  * Unlike Qwen3.5's hybrid full/linear-attention decoder, Qwen3-VL's text
  * backbone is a plain dense Qwen3 decoder (standard GQA full attention every
- * layer, full-rotary M-RoPE) — otherwise the JS surface is identical:
+ * layer, full-rotary M-RoPE), otherwise the JS surface is identical:
  * generate() takes a STRING prompt and the model exposes encode()/decode()
  * itself, no separate tokenizer handle.
  *
@@ -371,14 +371,14 @@ console.log(q35.decode(visIds));
  * @method encode(text, addSpecial?) → Int32Array
  * @method decode(ids) → string
  * @method generate(prompt, opts) → Int32Array
- *         prompt is a STRING — the driver tokenizes. Wrap chat turns in
+ *         prompt is a STRING: the driver tokenizes. Wrap chat turns in
  *         ChatML yourself:
  *           '<|im_start|>user\n' + text + '<|im_end|>\n<|im_start|>assistant\n'
  *         Generation stops on <|im_end|> / <|endoftext|> or maxNewTokens.
  *         opts: { maxNewTokens, sampling: {temperature, topK, topP, seed},
  *                 images, onToken(id) → return false to stop early }
  *
- *         VISION INPUT — opts.images is an ImageBitmap / ImageData
+ *         VISION INPUT: opts.images is an ImageBitmap / ImageData
  *         ({data,width,height}, RGBA) or an array of them. The prompt must
  *         already contain one placeholder triple per image, in the position the
  *         image should appear:
@@ -386,7 +386,7 @@ console.log(q35.decode(visIds));
  *         Images are consumed in order. Supported on the async
  *         bro.lm.generate(qvl, prompt, { images, onToken, onDone }) too.
  *
- * Async: bro.lm.generate(qvl, promptString, opts) — same streaming/cancel
+ * Async: bro.lm.generate(qvl, promptString, opts), same streaming/cancel
  * contract as the LMModel form (opts.images supported there too).
  */
 const qvl = bro.lm.loadQwen3VL('../brolm/weights/Qwen3-VL-4B-Instruct');
@@ -404,11 +404,11 @@ const qvlVisIds = qvl.generate(
 console.log(qvl.decode(qvlVisIds));
 
 
-// ── NLLB-200 — encoder-decoder machine translation ──────────────────────────────
+// ── NLLB-200, encoder-decoder machine translation ──────────────────────────────
 
 /**
  * Load an NLLB-200 checkpoint directory (the converted HF layout: config.json,
- * tokenizer.json, model.safetensors — e.g. nllb-200-distilled-600M). brolm's
+ * tokenizer.json, model.safetensors, e.g. nllb-200-distilled-600M). brolm's
  * Translator owns the SentencePiece-metaspace-BPE tokenizer, the M2M-100
  * encoder-decoder transformer, and beam search; the model translates between any
  * pair of the 200+ FLORES-200 languages. CUDA by default; CPU FP32 otherwise.
@@ -432,19 +432,19 @@ console.log(qvl.decode(qvlVisIds));
  *         srcLang / tgtLang are FLORES-200 codes ('eng_Latn', 'fra_Latn',
  *         'spa_Latn', 'zho_Hans', 'arb_Arab', ...). Throws on an unknown code.
  *         opts: { numBeams=5, maxNewTokens=200, lengthPenalty=1.0 }
- *         SYNC by default — returns the translated string (blocks on the beam
+ *         SYNC by default: returns the translated string (blocks on the beam
  *         search). If opts.onDone is a function the search runs on a background
  *         thread and the call returns an AsyncHandle:
  *           opts.onDone(text)      - the translation, on the JS thread.
  *           opts.onError(message)  - on failure.
  *         handle.cancel() drops the pending result (the in-flight search is
- *         monolithic — it runs to completion but onDone is not fired).
+ *         monolithic: it runs to completion but onDone is not fired).
  *         One translation per model at a time: a second concurrent call throws.
  */
 const nllb = bro.lm.loadNllb('../brolm/weights/nllb-200-distilled-600M');
-// Sync — short text, blocks until done.
+// Sync, short text, blocks until done.
 console.log(nllb.translate('Hello, world!', 'eng_Latn', 'fra_Latn'));
-// Async — keep the UI responsive on longer text.
+// Async, keep the UI responsive on longer text.
 const tr = nllb.translate('The quick brown fox jumps over the lazy dog.',
     'eng_Latn', 'spa_Latn', {
         numBeams: 5,
@@ -454,7 +454,7 @@ const tr = nllb.translate('The quick brown fox jumps over the lazy dog.',
 // tr.cancel();  // abandon the pending result if needed
 
 
-// ── CLIP — ViT-L/14 cross-modal scorer (text ↔ image) ───────────────────────────
+// ── CLIP, ViT-L/14 cross-modal scorer (text ↔ image) ───────────────────────────
 
 /**
  * Load the CLIP ViT-L/14 cross-modal scorer (openai/clip-vit-large-patch14):
@@ -484,14 +484,14 @@ const tr = nllb.translate('The quick brown fox jumps over the lazy dog.',
  *         Projected, L2-normalised text feature(s) in the shared space.
  * @method encodeImage(image) → Float32Array
  *         Projected, L2-normalised image feature (ImageBitmap / ImageData) in
- *         that same space — dot it against an encodeText() vector and you have
+ *         that same space: dot it against an encodeText() vector and you have
  *         the cosine. Use it when the embedding itself is the object of
  *         interest: difference two renders to measure what a control changed,
  *         or cluster / PCA a corpus of images.
  * @method score(text|text[], image) → number | number[]
  *         Cosine similarity in [-1, 1] between `image` (ImageBitmap / ImageData)
  *         and each prompt. Passing a text[] scores the one image against every
- *         candidate — the zero-shot-classification call (take the argmax).
+ *         candidate: the zero-shot-classification call (take the argmax).
  *         Convenience: dot(encodeImage(image), encodeText(text)).
  */
 const clip = bro.lm.loadClip({
@@ -507,7 +507,7 @@ const best   = labels[scores.indexOf(Math.max(...scores))];
 console.log('best match:', best, scores);
 // Text embeddings (e.g. to cache / cluster prompts).
 const emb = clip.encodeText('a photo of an astronaut riding a horse');
-// Image embeddings — what changed between two renders, measured perceptually.
+// Image embeddings, what changed between two renders, measured perceptually.
 const before = clip.encodeImage(await createImageBitmap(renderA));
 const after  = clip.encodeImage(await createImageBitmap(renderB));
 let moved = 0;
@@ -515,11 +515,11 @@ for (let i = 0; i < before.length; i++) moved += (after[i] - before[i]) ** 2;
 console.log('perceptual displacement:', Math.sqrt(moved));
 
 
-// ── T5 — encoder-only text encoder (T5-XXL, Flux's second text encoder) ──────────
+// ── T5, encoder-only text encoder (T5-XXL, Flux's second text encoder) ──────────
 
 /**
- * Load the T5 encoder (brolm's t5::TextEncoder). Defaults to the T5-XXL config —
- * Flux's second text encoder — but the architectural dims can be overridden for
+ * Load the T5 encoder (brolm's t5::TextEncoder). Defaults to the T5-XXL config.
+ * Flux's second text encoder, but the architectural dims can be overridden for
  * smaller T5 variants. Blocking, matching the bro.diffusion loaders. CUDA by
  * default.
  *

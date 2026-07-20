@@ -10,8 +10,8 @@
 //
 // The scene graph supports 2D shapes, sprites, 3D meshes (via bromesh), and
 // physics bodies (via Jolt). Nodes form a parent-child hierarchy rooted at
-// scene.root. Rendering happens automatically each frame for visible nodes —
-// there is no manual render() entry point; the only JS-driven render is
+// scene.root. Rendering happens automatically each frame for visible nodes.
+// There is no manual render() entry point; the only JS-driven render is
 // captureFrame(), which renders once off-screen and hands back pixels.
 //
 // =============================================================================
@@ -57,8 +57,8 @@ class SceneGraph {
    * meshes as a whole node, splats, 3D particles, billboards); shadow
    * casters are culled per light/cascade tile against the LIGHT volume,
    * never the camera, so off-screen casters keep shadowing the view.
-   * Culling is strictly conservative — pixels are identical either way —
-   * so turning it off is only useful for debugging/regression bisecting.
+   * Culling is strictly conservative: pixels are identical either way.
+   * So turning it off is only useful for debugging/regression bisecting.
    * Also settable via `setFrustumCulling(on)`.
    */
   get frustumCulling() {}
@@ -70,7 +70,7 @@ class SceneGraph {
   /**
    * Static shadow-tile cache (default true). Atlas tiles whose light
    * projection and overlapping caster set are unchanged are reused instead
-   * of re-rendered — strictly conservative, so pixels are identical either
+   * of re-rendered: strictly conservative, so pixels are identical either
    * way. See the Shadows section of docs/lighting-api.js for what caches
    * when (spot/point: camera-independent; directional cascades: only while
    * the camera is still; skinned/custom-vertex casters: never).
@@ -155,14 +155,14 @@ class SceneGraph {
    * and renders inside the 3D mesh FBO, depth-tested against scene
    * geometry. If width/height are unset, the world quad sizes itself
    * from the active sheet frame (or full image) using one world unit
-   * per pixel — pass explicit width/height to override.
+   * per pixel: pass explicit width/height to override.
    *
    * Spritesheet animation: pass `sheet` to slice the source image into
    * frames, then either set `frameIndex` directly or register named
    * `animations` and `play` one. The engine advances frames each
    * frame using the standard frame dt (windowed real time, headless
    * virtual time). When the active animation is non-looping, set
-   * `sprite.onAnimationEnd = (name) => {}` to be notified — and
+   * `sprite.onAnimationEnd = (name) => {}` to be notified, and
    * optionally chain via the spec's `next` field.
    *
    * @example
@@ -207,7 +207,7 @@ class SceneGraph {
    * particles in the engine's per-frame tick. Renders via the canvas
    * 2D path and honors the scene's camera transform.
    *
-   * `texture` is optional — without it particles render as filled
+   * `texture` is optional: without it particles render as filled
    * circles using the colour gradient. `blend: "additive"` switches to
    * the canvas-2D `kPlus` blend mode for a glow look (good for sparks,
    * embers).
@@ -258,7 +258,7 @@ class SceneGraph {
   /**
    * Create a world-space 3D particle emitter node. CPU-simulated on the
    * engine tick (fixed-size pool, deterministic seeded RNG) and rendered as
-   * camera-facing instanced billboard quads — one draw call per system —
+   * camera-facing instanced billboard quads: one draw call per system,
    * into the HDR 3D pass: particles depth-test against scene geometry
    * (occluded behind walls) without writing depth, and render before
    * tonemap, so `blend: "additive"` systems push HDR luminance and glow
@@ -273,7 +273,7 @@ class SceneGraph {
    * integrates in emitter space so the whole cloud rides the node transform
    * (torch flames on a moving character).
    *
-   * One-shot systems: give a `duration` (and leave `loop` false) — the
+   * One-shot systems: give a `duration` (and leave `loop` false), the
    * system emits for `duration` seconds, drains, and fires `onFinished`
    * exactly once. The callback runs after the node tick, so it may safely
    * destroy the emitter node itself.
@@ -342,7 +342,7 @@ class SceneGraph {
   createParticles3D(opts) {}
 
   /**
-   * Create a property Tween — a chainable, engine-ticked animation of node
+   * Create a property Tween: a chainable, engine-ticked animation of node
    * properties (position/rotation/scale/opacity/color), Godot-Tween-flavored.
    * See the Tween class at the bottom of this file for the full surface and
    * a complete example. The tween is owned by the scene graph and advances
@@ -366,7 +366,7 @@ class SceneGraph {
    * Create an HTML-rasterizing scene node and add it to the root.
    *
    * The node owns a detached dom::Document with a root <div> that JS can
-   * mutate imperatively via `node.root` (a standard Element wrapper —
+   * mutate imperatively via `node.root` (a standard Element wrapper,
    * setInnerHTML, appendChild, textContent, etc). Mutations flag the
    * subtree dirty; the engine re-rasterizes via Skia into an off-screen
    * RGBA buffer and renders as a billboard textured quad through the 3D
@@ -376,7 +376,7 @@ class SceneGraph {
    * Mouse events routed through the engine input pipeline (mousedown,
    * mouseup, click, mousemove, mouseover/out, mouseenter/leave) hit-test
    * against world-space HtmlNode billboards before reaching the canvas
-   * itself — listeners attached to elements inside `node.root` fire as
+   * itself: listeners attached to elements inside `node.root` fire as
    * if they were rendered in the page. Keyboard input and focus are not
    * routed through HtmlNodes.
    *
@@ -446,7 +446,7 @@ class SceneGraph {
    * @param {number} [opts.subsurface=0] - leaf-translucency wrap term [0..1]; takes effect when twoSided is true
    * @param {boolean} [opts.unlit=false] - skip lighting entirely and output
    *   baseColor (x texture x vertex color). Use for UI/gizmo/debug geometry
-   *   and emissive-look surfaces. A custom shader suppresses unlit — see the
+   *   and emissive-look surfaces. A custom shader suppresses unlit. See the
    *   custom-shader section for the exact contract.
    * @param {number} [opts.alphaCutoff=0] - alpha test: fragments whose final
    *   alpha is below this `discard`. 0 disables the test. Leaf cards and
@@ -468,7 +468,7 @@ class SceneGraph {
    *   overlays, ground markings) out of z-fighting.
    * @param {boolean} [opts.transfer=false] - move the Mesh's buffers into the
    *   node instead of copying them (`data`/`mesh` paths). Faster and
-   *   allocation-free for big meshes, but the source Mesh is left empty —
+   *   allocation-free for big meshes, but the source Mesh is left empty,
    *   only pass it when you're done with the Mesh.
    * @param {Object} [opts.texture] - base-color (albedo) map, as
    *   { width, height, data: Uint8Array } RGBA8. The node owns a copy.
@@ -484,7 +484,7 @@ class SceneGraph {
    * @param {Uint32Array} [opts.indices] - raw triangle indices
    * @param {boolean} [opts.recomputeNormals=false] - raw-data path only:
    *   derive smooth normals from positions+indices when no normals are given
-   *   (same flag as updateMesh — see the soft-body recipe in physics-api.js)
+   *   (same flag as updateMesh: see the soft-body recipe in physics-api.js)
    * @returns {SceneNode}
    */
   createMesh(opts) {}
@@ -499,13 +499,13 @@ class SceneGraph {
    * Skinned meshes cast deforming shadows (the shadow pass has a skinned
    * depth-shader variant).
    *
-   * The palette holds FINAL skinning matrices — world(bone) * inverseBind —
+   * The palette holds FINAL skinning matrices: world(bone) * inverseBind,
    * exactly what Pose.computeSkinningMatrices returns (boneCount * 16 floats,
    * column-major mat4). Bone cap: 256 (palette lives in a 16 KB UBO, GL 3.3's
    * guaranteed minimum block size). Until the first setSkinningMatrices the
    * node renders in bind pose.
    *
-   * Complete recipe — glTF to animated node (the CPU rigging API computes
+   * Complete recipe: glTF to animated node (the CPU rigging API computes
    * poses; the GPU node consumes the palettes):
    *
    *   const gltf = Mesh.loadGLTF('character.glb');
@@ -519,7 +519,7 @@ class SceneGraph {
    *     color: 'white', roughness: 0.8,
    *   });
    *
-   *   // easiest: hand the clip to the built-in animation player — the whole
+   *   // easiest: hand the clip to the built-in animation player, the whole
    *   // evaluate → blend → palette pipeline then runs in C++ every frame
    *   // (see the "Skeletal animation player" section on SceneNode):
    *   node.setSkeleton(skel);
@@ -558,7 +558,7 @@ class SceneGraph {
    * Create an instanced-mesh node and add it to the root: N copies of ONE
    * mesh sharing ONE material, drawn in a single glDrawElementsInstanced
    * call. This is the answer for forests, crowds, debris, bullet swarms,
-   * grass — anything where a per-node SceneNode per copy would drown the
+   * grass: anything where a per-node SceneNode per copy would drown the
    * scene graph. Frustum culling is per-node, not per-instance: the whole
    * batch is drawn or skipped together (cullStats() reports it as
    * instancedDrawn/instancedCulled), so split very large spreads into a few
@@ -578,8 +578,8 @@ class SceneGraph {
    * you can move/rotate the whole batch without touching the buffer.
    *
    * Building the buffer by hand is fiddly, so the common path is
-   * `instancesFromTransforms`: 9 floats per instance —
-   * (px, py, pz, qx, qy, qz, qw, scale, variantIndex) — converted internally
+   * `instancesFromTransforms`: 9 floats per instance,
+   * (px, py, pz, qx, qy, qz, qw, scale, variantIndex), converted internally
    * to the canonical layout, with RGB defaulting to white and variantIndex
    * packed into alpha as 0..255 → 0..1. Tint individual instances afterwards
    * with updateInstance().
@@ -605,7 +605,7 @@ class SceneGraph {
    *
    * @param {Object} [opts]
    * @param {Mesh} opts.mesh - the Mesh instance to replicate (a Mesh handle,
-   *   NOT a primitive name — there is no named-primitive path here)
+   *   NOT a primitive name: there is no named-primitive path here)
    * @param {Float32Array} [opts.instances] - canonical buffer, 16 floats per
    *   instance; length/16 sets the count
    * @param {Float32Array} [opts.instancesFromTransforms] - convenience
@@ -636,7 +636,7 @@ class SceneGraph {
    * @param {number} [opts.atlasRows=1] - texture-atlas grid rows; with a grid
    *   set, each instance's alpha selects its atlas cell (see setAtlasGrid)
    * @param {Object} [opts.texture] - base-color map, { width, height,
-   *   data: Uint8Array } RGBA8 — same shape as createMesh
+   *   data: Uint8Array } RGBA8, same shape as createMesh
    * @param {Object} [opts.normalTexture] - normal map, same shape
    * @param {Object} [opts.metallicRoughnessTexture] - packed MR map, same shape
    * @param {Object} [opts.occlusionTexture] - AO map, same shape
@@ -654,7 +654,7 @@ class SceneGraph {
    *   // from a .ply on disk (INRIA/3DGS field convention)
    *   scene.createGaussianSplat({ path: "model.ply", scale: 1 });
    *
-   *   // from an in-memory cloud — the SoA typed arrays bro.triposplat.generate
+   *   // from an in-memory cloud: the SoA typed arrays bro.triposplat.generate
    *   // returns drop straight in
    *   const cloud = pipeline.generate(image);
    *   const node = scene.createGaussianSplat({ cloud });
@@ -678,7 +678,7 @@ class SceneGraph {
 
   /**
    * Create a projected decal (Godot Decal-node analog) and add it to the
-   * root. The decal volume is the unit box [-0.5, 0.5]^3 in local space —
+   * root. The decal volume is the unit box [-0.5, 0.5]^3 in local space,
    * the node's SCALE is the box size (there is no separate size property;
    * `size` below is just an alias for `scale`), so tweening `scale` animates
    * the decal extent like any node. The decal projects along its local -Y
@@ -689,7 +689,7 @@ class SceneGraph {
    * Per fragment the renderer reconstructs the opaque scene position from
    * the depth buffer (perspective AND ortho cameras), discards outside the
    * box, and alpha-blends `texture * modulate` onto the scene. Decals only
-   * appear on OPAQUE geometry (meshes, instanced meshes, terrain, tiles) —
+   * appear on OPAQUE geometry (meshes, instanced meshes, terrain, tiles),
    * translucent meshes, splats, particles and billboards draw over them and
    * never receive them. Decals respect `visible`, `visibilityRange`, and
    * frustum culling like any node.
@@ -703,7 +703,7 @@ class SceneGraph {
    *   // parent it under the character so it follows:
    *   hero.add(blob); blob.position = [0, -0.5, 0];
    *
-   *   // bullet hole — any { width, height, data: Uint8Array(rgba8) } source
+   *   // bullet hole: any { width, height, data: Uint8Array(rgba8) } source
    *   // works (decoded image bytes, canvas readback, procedural), the same
    *   // texture shape createMesh takes:
    *   scene.createDecal({
@@ -711,13 +711,13 @@ class SceneGraph {
    *     size: [0.4, 0.6, 0.4],
    *     x: hit.x, y: hit.y + 0.3, z: hit.z,   // hover the box over the surface
    *     upperFade: 1, lowerFade: 1,   // soften where the box grazes geometry
-   *   });                             // aim with rotation — projects along -Y
+   *   });                             // aim with rotation, projects along -Y
    *
    * Lighting (honest limitations vs Godot): Godot's Decal modifies material
    * inputs BEFORE lighting, so decals there are lit exactly like the surface
    * under them. bro's forward renderer has no G-buffer, so decals blend onto
    * the ALREADY-LIT result; to keep them from glowing in shadow they are
-   * modulated by a cheap approximation — scene ambient + the dominant
+   * modulated by a cheap approximation: scene ambient + the dominant
    * directional light's Lambert term (using a screen-space normal
    * reconstructed from depth). Consequences: no per-pixel shadows, IBL, or
    * point/spot light contribution on decals (point/spot-only scenes light
@@ -751,7 +751,7 @@ class SceneGraph {
    *          `emissionStrength`, `upperFade`, `lowerFade`, `normalFade`,
    *          `renderPriority`, plus setBaseColorTexture(tex|null) to swap or
    *          clear the albedo at runtime. cullStats() reports
-   *          decalsDrawn/decalsCulled. There is no cullMask — the engine has
+   *          decalsDrawn/decalsCulled. There is no cullMask, the engine has
    *          no mesh-layer concept; use `visible`/`visibilityRange` to gate.
    */
   createDecal(opts) {}
@@ -759,8 +759,8 @@ class SceneGraph {
   /**
    * Create a local reflection probe (Godot ReflectionProbe analog) and add
    * it to the root. The probe volume is the unit box [-0.5, 0.5]^3 in local
-   * space — the node's SCALE is the box size (`size` is an alias for
-   * `scale`, same convention as createDecal) — and the CAPTURE ORIGIN is the
+   * space: the node's SCALE is the box size (`size` is an alias for
+   * `scale`, same convention as createDecal), and the CAPTURE ORIGIN is the
    * node's world position (the box center). Meshes whose bounds center lies
    * inside the box sample the probe's captured surroundings for their
    * SPECULAR ambient term instead of the global IBL environment, so a chrome
@@ -793,23 +793,23 @@ class SceneGraph {
    * (static, skinned, custom-shader, instanced) with full lighting and fog.
    * Excluded: translucent meshes, gaussian splats, 3D particles, billboards,
    * decals, SSR, other probes (no recursion), MSAA, and the post stack
-   * (captures are raw HDR — they tonemap with the scene when reflected).
+   * (captures are raw HDR: they tonemap with the scene when reflected).
    * Shadows ARE captured: the frame's shadow atlas is reused (spot/point
    * shadows exact; directional cascades stay fitted to the viewer camera, so
    * far-off geometry may capture unshadowed).
    *
-   * Application (honest limitations): SPECULAR-ONLY — diffuse ambient stays
+   * Application (honest limitations): SPECULAR-ONLY, diffuse ambient stays
    * on the global irradiance / flat ambient, which is also Godot's
    * ReflectionProbe default. ONE probe per mesh draw, selected on the CPU:
    * the highest-`priority` probe whose box contains the mesh's bounds
    * center wins; ties go to the smallest box volume (the more local probe).
-   * There is no per-pixel probe blending between overlapping probes — a mesh
+   * There is no per-pixel probe blending between overlapping probes, a mesh
    * is either on one probe or on the global environment (the `interior`
    * margin fades per-fragment between its probe and the global IBL near the
    * box faces). SSR composes on top: SSR hits win where the ray march lands,
    * and the probe/IBL result is the natural miss fallback.
    *
-   * `boxProjection` (default true — it's the point of a local probe)
+   * `boxProjection` (default true: it's the point of a local probe)
    * parallax-corrects the sample: the reflection ray is intersected with the
    * box volume and the hit point is what gets sampled, so flat mirrors and
    * floors line their reflections up with the actual walls. Turn it off for
@@ -827,7 +827,7 @@ class SceneGraph {
    *        clamped to a power of two in [16, 1024]; changing it later takes
    *        effect on the next capture
    * @param {string} [opts.updateMode='once'] - 'once' | 'manual' (no
-   *        per-frame auto mode — see above)
+   *        per-frame auto mode: see above)
    * @param {boolean} [opts.boxProjection=true] - parallax-correct sampling
    *        against the box volume
    * @param {number} [opts.intensity=1] - multiplier on the probe's specular
@@ -895,7 +895,7 @@ class SceneGraph {
    * @param {number} [opts.far=1000] - far clipping plane
    * @param {number} [opts.aspect] - width/height ratio. Omit it (or pass <= 0)
    *   and the projection is built from the current canvas size AND flagged to
-   *   auto-follow future canvas resizes — normally what you want. An explicit
+   *   auto-follow future canvas resizes: normally what you want. An explicit
    *   aspect pins the projection and disables the follow behavior. With no
    *   canvas size yet, the omitted case falls back to 4/3.
    * @param {number[]} [opts.position=[0,5,-10]] - camera position [x, y, z]
@@ -904,7 +904,7 @@ class SceneGraph {
    * @param {number[]} [opts.quaternion] - [x,y,z,w] camera orientation (overrides target/up/mode)
    *
    * Precedence vs camera NODES (createCamera/setActiveCamera): the LAST
-   * camera call wins — calling setCamera (any variant) deactivates the
+   * camera call wins: calling setCamera (any variant) deactivates the
    * active camera node and installs this imperative view; setActiveCamera
    * overrides an imperative view. `scene.activeCamera` is null while the
    * imperative view is in effect.
@@ -913,7 +913,7 @@ class SceneGraph {
 
   /**
    * Create a camera NODE (Godot Camera3D analog) and add it to the root.
-   * Only projection parameters live on the node — the VIEW is the node's
+   * Only projection parameters live on the node: the VIEW is the node's
    * world transform: the camera looks down its local -Z axis with local +Y
    * up, so parent it under a vehicle/character node and it inherits that
    * motion like any other node. Position/orient it with the normal node
@@ -928,8 +928,8 @@ class SceneGraph {
    * readbacks (toImageData/captureFrame), and a listener bound with
    * bindAudioListenerToCamera.
    *
-   * Aspect follows the canvas through resizes unless `aspect` is set (> 0)
-   * — same behavior as setCamera's omitted-aspect mode.
+   * Aspect follows the canvas through resizes unless `aspect` is set (> 0),
+   * same behavior as setCamera's omitted-aspect mode.
    *
    * Projection params are live-editable on the node afterwards: `fov`
    * (degrees), `near`, `far`, `aspect`, `size`, `projection`. Tween a zoom
@@ -962,14 +962,14 @@ class SceneGraph {
    * Activate a camera node created with createCamera(): its world transform
    * drives the view from now on. Pass null to deactivate (the last derived
    * view is kept until the next camera call). Any imperative setCamera()
-   * call also deactivates — last camera call wins.
+   * call also deactivates: last camera call wins.
    * @param {SceneNode|null} cameraNode
    */
   setActiveCamera(cameraNode) {}
 
   /**
    * The active camera node, or null while the imperative setCamera() view is
-   * in effect (or after the active node was destroyed). Writable — assigning
+   * in effect (or after the active node was destroyed). Writable, assigning
    * is equivalent to setActiveCamera(), null included.
    *
    * Node wrappers have stable identity, so this compares equal to the node you
@@ -984,7 +984,7 @@ class SceneGraph {
    * Bind the 3D audio listener to this scene's camera. While bound, the
    * engine pushes the camera's world position, orientation (forward/up from
    * the view matrix), and velocity (finite difference over the scaled frame
-   * dt — feeds Doppler, see audio-api.js) into the broaudio listener every
+   * dt: feeds Doppler, see audio-api.js) into the broaudio listener every
    * frame, after animations/tweens run. Zero per-frame JS; replaces manual
    * ctx.setListenerPosition/Orientation/Velocity calls.
    *
@@ -1036,7 +1036,7 @@ class SceneGraph {
 
   /**
    * Distance fog, applied per-fragment during the forward pass (in linear
-   * space, before tonemap) — opaque, translucent, instanced and custom-shader
+   * space, before tonemap), opaque, translucent, instanced and custom-shader
    * meshes are all fogged consistently; the skybox is never fogged, and fully
    * fogged geometry also fades its alpha so it dissolves into the page
    * background rather than plastering fog color over it.
@@ -1050,7 +1050,7 @@ class SceneGraph {
    *    exp(-heightFalloff * worldY), so low-lying geometry sits deeper in
    *    fog than high geometry at the same distance (ground mist).
    *
-   * Every call resets both modes' parameters — `setFog({})` disables fog.
+   * Every call resets both modes' parameters: `setFog({})` disables fog.
    *
    * @param {Object} opts
    * @param {number} [opts.start=0] - linear ramp start distance (world units)
@@ -1063,7 +1063,7 @@ class SceneGraph {
   setFog(opts) {}
 
   /**
-   * Screen-space tilt-shift depth-of-field — the "miniature" / toy-model look.
+   * Screen-space tilt-shift depth-of-field: the "miniature" / toy-model look.
    * Applied as a post pass on the tonemapped LDR frame: a horizontal band stays
    * sharp while the scene blurs toward the top and bottom edges, with an
    * optional saturation/contrast push for the candy-diorama feel. Reads best on
@@ -1101,7 +1101,7 @@ class SceneGraph {
    * and multiplied into the lit HDR image before tonemap, darkening creases,
    * corners and contact regions. As a post-multiply on the lit image it
    * affects everything rendered into the 3D FBO (including emissive
-   * surfaces) — the standard approach for a forward renderer. Off by
+   * surfaces): the standard approach for a forward renderer. Off by
    * default; combines freely with MSAA, bloom, fog and renderScale.
    *
    * @param {Object} opts
@@ -1119,9 +1119,9 @@ class SceneGraph {
    * reflected view ray is marched against the scene depth buffer (linear
    * steps + binary refinement), and on a hit the HDR color at the hit pixel
    * is blended over the surface. The blend weight is a per-pixel
-   * reflectance mask derived from the material — luminance of F0
+   * reflectance mask derived from the material: luminance of F0
    * (normal-incidence Fresnel: 0.04 for dielectrics, up to the base-color
-   * luminance for metals) x (1 - roughness)^2 — times `intensity`, so
+   * luminance for metals) x (1 - roughness)^2: times `intensity`, so
    * smooth metals mirror, rough or dielectric surfaces reflect faintly, and
    * unlit surfaces not at all. Off by default; works with perspective AND
    * orthographic cameras, MSAA, renderScale and the rest of the post stack.
@@ -1130,7 +1130,7 @@ class SceneGraph {
    * a miss changes nothing, leaving the IBL specular (or flat ambient) as
    * the fallback reflection. Honest limitations of any screen-space
    * technique apply: only what is on screen can be reflected (objects
-   * offscreen, behind the camera, or occluded reflect nothing — the miss
+   * offscreen, behind the camera, or occluded reflect nothing, the miss
    * falls back to IBL), only opaque geometry reflects and is reflected
    * (translucents, splats, particles and billboards draw over reflections
    * and never appear in them), and reflections use the front-face colors
@@ -1162,7 +1162,7 @@ class SceneGraph {
    * defocused by ± 2×focusRange. Applied on the HDR image before bloom and
    * tonemap (defocused highlights still bloom); the defocused image is a
    * half-res Gaussian of the frame (radius maxBlur half-res texels) that the
-   * CoC mixes toward — cheap and smooth, same cost tier as tilt-shift. For
+   * CoC mixes toward: cheap and smooth, same cost tier as tilt-shift. For
    * the screen-space "miniature" band DoF, see setTiltShift; both can be on.
    *
    * @param {Object} opts
@@ -1178,7 +1178,7 @@ class SceneGraph {
    * gamma (LUTs are authored in display space) with trilinear sampling from
    * a real 3D texture. The LUT is loaded from a horizontal strip image:
    * `size` tiles of size×size laid out left to right, tile index = blue,
-   * tile x = red, tile y = green (all increasing left-right / top-down) —
+   * tile x = red, tile y = green (all increasing left-right / top-down),
    * e.g. a 16³ LUT is a 256×16 image, the standard neutral-strip layout.
    * A neutral strip is an exact identity. Pass `null` to clear.
    *
@@ -1192,11 +1192,11 @@ class SceneGraph {
   setColorLUT(opts) {}
 
   /**
-   * FXAA 3.11 (quality preset) on the final LDR image — always the LAST
+   * FXAA 3.11 (quality preset) on the final LDR image. Always the LAST
    * pass in the post stack, after tonemap / LUT / tilt-shift. Complements
    * MSAA rather than replacing it: MSAA resolves geometry edges in HDR,
    * FXAA additionally smooths shader/specular/post-pass aliasing on the
-   * LDR result — both can be enabled together. Off by default.
+   * LDR result: both can be enabled together. Off by default.
    *
    * @param {boolean|Object} enabled - true/false, or {enabled}.
    */
@@ -1274,12 +1274,12 @@ class SceneGraph {
    * object: `{ width, height, data: Uint8ClampedArray }`. Pixels arrive in
    * top-down row order (matches CSS / putImageData), pre-flipped from GL's
    * native bottom-up layout. Alpha is preserved end-to-end, so areas with
-   * no 3D content come back as RGBA(0,0,0,0) — letting the result composite
+   * no 3D content come back as RGBA(0,0,0,0), letting the result composite
    * cleanly onto a 2D canvas via `ctx2d.putImageData()`.
    *
    * Returns null if no 3D content has been rendered yet (the tonemap FBO is
    * allocated lazily on first 3D pass). Most callers want `captureFrame()`
-   * instead — this only returns whatever the engine's last tick produced.
+   * instead: this only returns whatever the engine's last tick produced.
    *
    * @returns {?{ width: number, height: number, data: Uint8ClampedArray }}
    */
@@ -1289,13 +1289,13 @@ class SceneGraph {
    * Synchronously render the scene and return its tonemap output as an
    * ImageData-shaped object: `{ width, height, data: Uint8ClampedArray }`.
    * Unlike `toImageData()`, this drives the render itself rather than
-   * reading whatever the last engine tick happened to produce — so it
+   * reading whatever the last engine tick happened to produce. So it
    * works in windowed mode (no `flush()` global required) and in any code
    * path that needs a deterministic readback after mutating the scene.
    *
    * Optional `width` / `height` resize the scene's render target before
    * rendering. Sprite-sheet authoring uses this to capture each frame at
-   * exactly the cell size, regardless of the host canvas's layout box —
+   * exactly the cell size, regardless of the host canvas's layout box,
    * the capture canvas can be `display:none`.
    *
    * @example
@@ -1313,7 +1313,7 @@ class SceneGraph {
 
   /**
    * Live-linked handle to this scene's rendered output (the post-tonemap
-   * LDR texture — exactly what the canvas composites), for use as a
+   * LDR texture: exactly what the canvas composites), for use as a
    * baseColor map on a mesh in another scene:
    *
    *   const monitor = sceneB.createMesh({ mesh: 'plane', color: '#ffffff' });
@@ -1321,7 +1321,7 @@ class SceneGraph {
    *
    * The link resolves the source texture every frame, so it survives source
    * canvas resizes and renderScale changes (which recreate the underlying
-   * GL texture). Lifetime: the handle never keeps the source scene alive —
+   * GL texture). Lifetime: the handle never keeps the source scene alive,
    * when the source canvas is removed from the document and its scene is
    * destroyed, consuming meshes fall back to their plain `color`. Before
    * the source has rendered its first 3D frame, consumers are likewise
@@ -1330,15 +1330,15 @@ class SceneGraph {
    * Ordering: scenes render once per frame in canvas getContext('scene')
    * creation order. If the source scene was created before the consumer,
    * the consumer samples this frame's output; otherwise it samples the
-   * previous frame's (one frame of latency). There is no reordering API —
+   * previous frame's (one frame of latency). There is no reordering API,
    * create the source scene first when same-frame freshness matters.
    *
    * A scene sampling ITSELF (a mesh in A textured with A.asTexture()) is
    * allowed. Lit meshes produce the classic one-frame-delayed recursive
    * "video feedback" image (the lit pass renders into the HDR target, never
    * into the texture being sampled). Unlit meshes draw in a post-tonemap
-   * overlay pass directly into the sampled output — a GL feedback loop —
-   * so the renderer guards that one case by drawing the mesh untextured
+   * overlay pass directly into the sampled output: a GL feedback loop.
+   * So the renderer guards that one case by drawing the mesh untextured
    * (base color) in the overlay pass.
    *
    * @returns {?SceneTexture} handle with a `valid` getter (true while the
@@ -1352,10 +1352,10 @@ class SceneGraph {
    * the node's pre-built BVH; the ray is transformed by the node's TRS.
    * Non-mesh nodes (shapes, sprites, html, physics nodes) are ignored.
    *
-   * Direction need not be unit length — it is normalized internally.
+   * Direction need not be unit length: it is normalized internally.
    * `maxDistance` is in world units; pass 0 (or omit) for unlimited range.
    *
-   * Example (terrain block picker — aim a ray straight down from above
+   * Example (terrain block picker: aim a ray straight down from above
    * the chunk to find the surface column):
    *   const hit = scene.raycast([cx, chunkH + 20, cz], [0, -1, 0], 200);
    *   if (hit) {
@@ -1384,12 +1384,12 @@ class SceneGraph {
   /**
    * Pull physics-node transforms from the physics world (position scaled by
    * each node's `pixelsPerUnit`, rotation copied as-is). Nodes with
-   * `autoSync === false` are SKIPPED — this is the same pass the engine runs,
+   * `autoSync === false` are SKIPPED: this is the same pass the engine runs,
    * not an override, so a manually-driven node stays manual.
    *
    * The engine already calls this on every scene graph each frame, right
    * after the physics step and before animations/tweens tick, so you rarely
-   * need it by hand — reach for it after stepping physics yourself, or to
+   * need it by hand: reach for it after stepping physics yourself, or to
    * re-read transforms mid-frame before a raycast. With interpolation on
    * (Physics.setInterpolation) the transform read is the interpolated one.
    */
@@ -1479,10 +1479,10 @@ class SceneNode {
    * from the camera eye to the node's world origin, evaluated once per
    * frame. `margin` (default 0 = hard switch) adds hysteresis: once shown
    * the node stays shown until d leaves [begin - margin, end + margin), once
-   * hidden it stays hidden until d enters [begin + margin, end - margin) —
+   * hidden it stays hidden until d enters [begin + margin, end - margin),
    * no popping when the camera hovers on a boundary.
    *
-   * The gate is independent of `visible` and never writes it — both must
+   * The gate is independent of `visible` and never writes it, both must
    * pass for the node to render. Like `visible`, a closed gate prunes the
    * subtree. Render-time only: scene.raycast() ignores it. A gated-out
    * light stops contributing; a gated-out shadow caster stops casting.
@@ -1545,8 +1545,8 @@ class SceneNode {
   set rotationZ(radians) {}
 
   /**
-   * Orientation as an [x, y, z, w] quaternion. Unlike rotationX/Y/Z — which
-   * round-trip through Euler angles on every set — this writes the node
+   * Orientation as an [x, y, z, w] quaternion. Unlike rotationX/Y/Z, which
+   * round-trip through Euler angles on every set: this writes the node
    * orientation atomically, so it's the correct channel for arbitrary
    * rotations (6DOF cameras, port-to-port mating, physics-derived poses).
    * @type {number[]}
@@ -1597,7 +1597,7 @@ class SceneNode {
 
   /**
    * Root Element of the HtmlNode's detached DOM subtree. Standard
-   * Element API — mutate via innerHTML, appendChild, textContent, etc.
+   * Element API: mutate via innerHTML, appendChild, textContent, etc.
    * Every mutation flips the node dirty; re-rasterization happens on
    * the next frame. Only available on nodes created via createHtmlNode.
    */
@@ -1722,7 +1722,7 @@ class SceneNode {
    * SpriteNode: start (or resume) an animation. With no argument,
    * resumes the most recently played animation.
    * ParticleNode: resume emission.
-   * SkinnedMeshNode: start a registered clip — see the "Skeletal animation
+   * SkinnedMeshNode: start a registered clip. See the "Skeletal animation
    * player" section below for the options.
    * @param {string} [name]
    * @param {Object} [opts] - skinned mesh only: {loop, speed, fadeTime,
@@ -1735,7 +1735,7 @@ class SceneNode {
    * SpriteNode: pause animation playback (current frame is held).
    * ParticleNode: stop emitting; existing particles finish naturally.
    * SkinnedMeshNode: fade the player out to bind pose over opts.fadeTime
-   * seconds (0 = immediately) and deactivate it — after which manual
+   * seconds (0 = immediately) and deactivate it: after which manual
    * setSkinningMatrices drives the palette again.
    * @param {{fadeTime?: number}} [opts] - skinned mesh only
    * @returns {SceneNode} this
@@ -1807,7 +1807,7 @@ class SceneNode {
    * No-op on non-mesh nodes.
    *
    * `recomputeNormals: true` (in either argument) derives smooth vertex
-   * normals from positions+indices after the swap — the tool for geometry
+   * normals from positions+indices after the swap: the tool for geometry
    * that DEFORMS per frame (a physics soft body streaming `sb.vertices()`
    * in, procedural water, ...) where stale or missing normals render black
    * or faceted. createMesh's raw positions+indices path accepts the same
@@ -1821,16 +1821,16 @@ class SceneNode {
   /**
    * Replace or clear the baseColor texture of a MeshNode at runtime. The
    * sample composes with the node's `color` factor (and vertex colors when
-   * present), matching glTF `baseColorTexture * baseColorFactor` — set
+   * present), matching glTF `baseColorTexture * baseColorFactor`, set
    * `color` to white for texture pass-through. Three argument forms:
    *
-   *   - `{ width, height, data: Uint8Array }` — RGBA8 pixel upload, same
+   *   - `{ width, height, data: Uint8Array }`: RGBA8 pixel upload, same
    *     shape as createMesh's `texture` option. The node owns a copy.
-   *   - a SceneTexture handle from another scene's `asTexture()` — installs
+   *   - a SceneTexture handle from another scene's `asTexture()`: installs
    *     a LIVE link to that scene's rendered output (see asTexture() for
    *     ordering/lifetime semantics). Non-owning: the source scene keeps
    *     ownership of the texture.
-   *   - `null` / `undefined` — clear either form; the mesh falls back to
+   *   - `null` / `undefined`: clear either form; the mesh falls back to
    *     its plain `color` (and vertex colors if present).
    *
    * The two forms are mutually exclusive: setting one replaces the other.
@@ -1844,10 +1844,10 @@ class SceneNode {
   //
   // ShaderMaterial-style hooks: user GLSL chunks spliced into the engine's
   // mesh uber-shaders, so custom code composes with everything the material
-  // system already does — textures, the 32-light PBR loop, shadows, IBL,
+  // system already does, textures, the 32-light PBR loop, shadows, IBL,
   // fog, tonemap. You write GLSL 330 core function bodies, not whole
   // shaders; the engine owns the pipeline around them. One chunk pair works
-  // across all three mesh flavours — the engine compiles a program variant
+  // across all three mesh flavours, the engine compiles a program variant
   // per pipeline (static / skinned / instanced) behind the scenes.
 
   /**
@@ -1861,7 +1861,7 @@ class SceneNode {
    *   void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv)
    *
    * It runs in OBJECT space, after skinning and wind sway and before the
-   * camera transforms — displace `pos` and the world position, lighting,
+   * camera transforms: displace `pos` and the world position, lighting,
    * fog and shadows all track it. On a skinned mesh the hook receives the
    * POSED position/normal (displacements ride the animation); on an
    * instanced mesh it runs in mesh-local space before the per-instance
@@ -1884,24 +1884,24 @@ class SceneNode {
    *
    * Both chunks may also:
    *   - declare their own uniforms in the reserved `u_` namespace
-   *     (e.g. `uniform vec3 u_tint;`) — set values via the `uniforms` option
+   *     (e.g. `uniform vec3 u_tint;`), set values via the `uniforms` option
    *     or setShaderUniform(). Numeric: float / vec2 / vec3 / vec4.
    *   - declare `uniform sampler2D u_*;` and feed it a single-channel float
-   *     texture with setShaderTexture() — see below (static MeshNode only).
+   *     texture with setShaderTexture(): see below (static MeshNode only).
    *   - declare custom varyings in the reserved `v_` namespace (an `out` in
    *     the vertex chunk paired with an `in` in the fragment chunk).
    *   - read the engine varyings: vWorldPos (camera-relative world position),
-   *     vNormal, vUV, vColor, vCamDist — and engine uniforms like uWindTime.
+   *     vNormal, vUV, vColor, vCamDist, and engine uniforms like uWindTime.
    *
    * Semantics and limits:
-   *   - Compilation happens NOW, at set time — every program variant the
+   *   - Compilation happens NOW, at set time, every program variant the
    *     node can render with. Invalid GLSL throws a SyntaxError carrying
    *     the full driver log; the node keeps its previous shader (or the
-   *     default pipeline) — nothing half-applies.
+   *     default pipeline): nothing half-applies.
    *   - Identical chunk sources across meshes share one compiled program
    *     per pipeline flavour; uniform VALUES stay per-node. Programs are
    *     cached for the scene's lifetime (no eviction).
-   *   - A custom shader forces the LIT pass: while one is set, the `unlit`
+   *   - A custom shader forces the LIT pass, while one is set, the `unlit`
    *     flag is ignored (unlit meshes normally draw post-tonemap, where the
    *     hook's PBR inputs don't exist). clearShader() restores it.
    *   - Shadows: the depth-only shadow pass runs userVertex too, so a
@@ -1911,13 +1911,13 @@ class SceneNode {
    *     and a vertex chunk that references mesh-pass-only symbols (e.g. a
    *     varying it declares) falls back to the undisplaced silhouette with
    *     a warning instead of failing.
-   *   - Culling: frustum/shadow culling can't see GLSL — a displacement
+   *   - Culling: frustum/shadow culling can't see GLSL, a displacement
    *     that pushes geometry outside the mesh's AABB can be culled while
    *     still visible. Set node.cullMargin to the max displacement (world
    *     units) to pad the bounds (same contract as Godot's
    *     extra_cull_margin). On an instanced mesh the hook displaces in
    *     mesh-local space, so scaled instances move displacement x scale in
-   *     world units — size cullMargin for the largest instance scale.
+   *     world units: size cullMargin for the largest instance scale.
    *
    *   // pulse a fresnel-ish rim via a driven uniform
    *   const node = scene.createMesh({ mesh: 'sphere', color: '#334455' });
@@ -1949,7 +1949,7 @@ class SceneNode {
   /**
    * Update one custom-shader uniform on this node. Values are plain numbers
    * (float) or arrays of 1-4 numbers (float/vec2/vec3/vec4) and live on the
-   * node — two meshes sharing identical shader source keep independent
+   * node: two meshes sharing identical shader source keep independent
    * values. Setting a name the chunk never declares is silently ignored
    * (mirrors GL). Requires a shader installed via setShader.
    * @param {string} name - must use the `u_` prefix
@@ -1966,7 +1966,7 @@ class SceneNode {
    * Format contract: the data uploads as **R32F** (`GL_R32F` / `GL_RED` /
    * `GL_FLOAT`) with **LINEAR** magnification and **CLAMP_TO_EDGE** wrap on
    * both axes. Sampling in GLSL gives a bilinearly interpolated float in
-   * `.r` — which is what a heightfield raymarcher wants: smooth between
+   * `.r`, which is what a heightfield raymarcher wants: smooth between
    * texels, no wrap-around at the borders. `data` must hold exactly
    * width*height floats; a short array throws.
    *
@@ -1978,7 +1978,7 @@ class SceneNode {
    * **Mipmaps** (`mipmap: true`, off by default): generates the full chain
    * and switches minification to `LINEAR_MIPMAP_LINEAR`. Needed whenever the
    * shader calls `textureLod(u_tex, uv, lod)` with a FRACTIONAL lod and
-   * expects GL to blend the two bracketing levels — without a chain there is
+   * expects GL to blend the two bracketing levels: without a chain there is
    * only level 0, and every lod > 0 reads as 0. Also what you want for a
    * texture minified in screen space (a heightfield on a distant mesh), at
    * the cost of ~33% more texture memory and a generate pass per upload.
@@ -1986,23 +1986,23 @@ class SceneNode {
    *
    * **Sub-rectangle updates** (`x` / `y`): passing either key updates just
    * that region of the existing texture via `glTexSubImage2D` instead of
-   * reallocating — `width`/`height` then describe the RECT, and `data` holds
+   * reallocating: `width`/`height` then describe the RECT, and `data` holds
    * the rect's width*height floats row-major. The mip chain is preserved
    * (regenerated after the write when the slot is mipmapped). Use this for
-   * streaming edits — a terrain brush, a repainted tile — where a full
+   * streaming edits: a terrain brush, a repainted tile, where a full
    * re-upload of a large texture per frame is the actual cost.
    *
    * Unlike the full-upload path, a rejected sub-update does not throw: it
    * logs a warning and is ignored. Rejected when the slot does not exist,
-   * has never been given dimensions, or the rect falls outside them —
-   * never a partial or out-of-bounds write. Queue order is preserved, and a
+   * has never been given dimensions, or the rect falls outside them.
+   * Never a partial or out-of-bounds write. Queue order is preserved, and a
    * full upload supersedes any sub-updates staged before it.
    *
    * Texture-unit budget: the material uber-shader owns units 0-9 (baseColor
    * 0, shadow atlas 1, IBL irradiance/prefilter/BRDF 2/3/4, normal 5,
    * metallic-roughness 6, AO 7, emissive 8, reflection probe 9). User
    * samplers start at unit **10**, and GL 3.3 guarantees only 16 combined
-   * texture image units — so a node may bind at most **6** sampler
+   * texture image units, so a node may bind at most **6** sampler
    * uniforms. Asking for a 7th throws rather than reusing a material unit,
    * where the collision would silently corrupt material sampling instead of
    * erroring. Releasing a slot frees its unit for a later name.
@@ -2071,7 +2071,7 @@ class SceneNode {
   /**
    * Extra world-space padding (units) added to this node's frustum- and
    * shadow-culling bounds. Culling can't see what a custom vertex shader
-   * does — set this to the maximum displacement so geometry pushed outside
+   * does: set this to the maximum displacement so geometry pushed outside
    * the mesh AABB isn't culled while still visible. 0 by default; Mesh and
    * InstancedMesh nodes only (undefined elsewhere).
    * @type {number}
@@ -2084,10 +2084,10 @@ class SceneNode {
   /**
    * Upload the bone palette for a skinned mesh node (created with
    * createSkinnedMesh). `mats` is count * 16 floats of column-major 4x4
-   * skinning matrices — Pose.computeSkinningMatrices output drops straight
+   * skinning matrices: Pose.computeSkinningMatrices output drops straight
    * in. Matrices beyond the node's boneCount are ignored; fewer than
    * boneCount updates only the leading bones. Cheap (one memcpy + one UBO
-   * sub-upload next frame); this is the per-frame animation hot path — the
+   * sub-upload next frame); this is the per-frame animation hot path, the
    * mesh itself is never re-uploaded.
    * @param {Float32Array} mats
    * @returns {number} matrices actually staged
@@ -2100,7 +2100,7 @@ class SceneNode {
   /**
    * True when the skin covers the current mesh (the node renders through the
    * skinned pipeline). Goes false if updateMesh() swaps in a mesh with a
-   * different vertex count — the node then draws statically in bind-buffer
+   * different vertex count: the node then draws statically in bind-buffer
    * pose until the mesh matches again.
    */
   get skinReady() {}
@@ -2109,8 +2109,8 @@ class SceneNode {
   // --- Skeletal animation player (SkinnedMeshNode) ---------------------------
   //
   // The node owns a C++ animation player that runs the whole per-frame
-  // pipeline natively — evaluate clip(s) → blend → computeSkinningMatrices →
-  // palette — so an app that calls only play() gets animated characters with
+  // pipeline natively, evaluate clip(s) → blend → computeSkinningMatrices →
+  // palette, so an app that calls only play() gets animated characters with
   // zero per-frame JS, for any number of characters. It ticks on the engine
   // frame clock (and headless virtual time, so advanceTime() drives it
   // deterministically in tests).
@@ -2130,9 +2130,9 @@ class SceneNode {
   //   node.play('wave', { loop: false, mask: upperBody }); // masked layer on top
   //   node.onAnimationFinished = (name) => node.play('idle', { fadeTime: 0.2 });
   //
-  // Model: one BASE track — a single clip or a registered BLEND SPACE
+  // Model: one BASE track, a single clip or a registered BLEND SPACE
   // (addBlendSpace1D/2D + setBlendPos; Godot BlendSpace analog with shared-
-  // phase sync); play() crossfades from whatever was playing — plus up to 8
+  // phase sync); play() crossfades from whatever was playing, plus up to 8
   // ordered masked LAYER tracks blended on top via playLayer(slot, ...)
   // (e.g. upper-body wave over a walk; play() with a mask is layer slot 0).
   // blendState() reports the live mix. Full blending semantics + locomotion
@@ -2143,16 +2143,16 @@ class SceneNode {
   // clip or blend space, with declared transitions carrying their own fade
   // time. travel() names the destination and the machine picks the transition;
   // `node.state` reads the current one and `onStateChanged` fires after every
-  // switch. There is no condition language — gameplay code decides when to
+  // switch. There is no condition language, gameplay code decides when to
   // travel. A manual play()/stop() suspends the machine (state reads null)
   // until the next travel(). Full semantics: docs/animation-api.js,
   // "State machine".
   //
-  // Until the first play() — and again after stop() — the player is inactive
+  // Until the first play(), and again after stop(), the player is inactive
   // and manual setSkinningMatrices keeps full control of the palette.
 
   /**
-   * Set the Skeleton the player evaluates clips against (copied — the node
+   * Set the Skeleton the player evaluates clips against (copied, the node
    * keeps its own reference, safe from JS GC). Required before play().
    * @param {Skeleton} skeleton
    * @returns {SceneNode} this
@@ -2170,11 +2170,11 @@ class SceneNode {
   /**
    * Start a clip or blend space (see also play/stop/pause/resume above).
    *
-   * Without `mask`, the name takes the BASE track — a clip from addClip or
+   * Without `mask`, the name takes the BASE track, a clip from addClip or
    * a blend space from addBlendSpace1D/2D (a space shadows a same-named
    * clip; spaces always loop). With fadeTime > 0 the player crossfades
    * from the current blended pose over that many seconds (the outgoing
-   * track keeps advancing while it fades — blend spaces included). With
+   * track keeps advancing while it fades: blend spaces included). With
    * `mask`, this is shorthand for playLayer(0, name, opts).
    *
    * @param {string} name - a registered clip or blend space (throws otherwise)
@@ -2189,7 +2189,7 @@ class SceneNode {
    *        skeleton bone count; non-empty routes to layer slot 0
    * @returns {SceneNode} this
    */
-  // play(name, opts) — documented with the shared play() above.
+  // play(name, opts), documented with the shared play() above.
 
   /**
    * Register a 1D blend space: clips at scalar parameter positions
@@ -2208,7 +2208,7 @@ class SceneNode {
 
   /**
    * Register a 2D blend space (e.g. strafe x/z velocity). The 3 nearest
-   * points blend by normalized inverse-squared-distance weights — on a
+   * points blend by normalized inverse-squared-distance weights: on a
    * sample point that clip takes full weight; degenerate layouts
    * (coincident/collinear points) are safe. Simpler than Godot's
    * triangulated BlendSpace2D; see docs/animation-api.js for the
@@ -2220,7 +2220,7 @@ class SceneNode {
   addBlendSpace2D(name, points) {}
 
   /**
-   * Move a blend space's parameter — instant, no internal smoothing
+   * Move a blend space's parameter: instant, no internal smoothing
    * (tween it from app code for easing); re-poses immediately even while
    * paused. 1D clamps x to the space's range; y is ignored. Also accepts
    * setBlendPos(name, [x, y]).
@@ -2268,7 +2268,7 @@ class SceneNode {
    * Install a state machine on the player and enter its initial state
    * (defaults to the first state). Replaces any existing machine. Every
    * state's `source` must already be registered via addClip or
-   * addBlendSpace1D/2D — otherwise this throws.
+   * addBlendSpace1D/2D: otherwise this throws.
    *
    * @param {Object} def
    * @param {Array<{name: string, source: string, speed?: number,
@@ -2281,7 +2281,7 @@ class SceneNode {
    *        in seconds (default 0 = hard cut). `autoAdvance` fires the
    *        transition automatically when a non-looping source finishes.
    *        `syncPhase` carries the outgoing normalized phase into the
-   *        incoming source — keeps gait cycles foot-aligned across a switch.
+   *        incoming source: keeps gait cycles foot-aligned across a switch.
    * @param {string} [def.initial] - starting state (default: states[0])
    * @returns {SceneNode} this
    */
@@ -2314,7 +2314,7 @@ class SceneNode {
   set onStateChanged(fn) {}
 
   /**
-   * Snapshot of the current blend mix — cheap enough for HUDs/tests.
+   * Snapshot of the current blend mix: cheap enough for HUDs/tests.
    * @returns {{state: ?string,
    *            clips: Array<{name: string, weight: number}>,
    *            phase: number, pos?: number[],
@@ -2364,8 +2364,8 @@ class SceneNode {
   set onAnimationFinished(fn) {}
 
   /**
-   * Current posed matrix of a bone in MODEL space — the skinned mesh's
-   * local space, before the node's own position/rotation/scale — as
+   * Current posed matrix of a bone in MODEL space, the skinned mesh's
+   * local space, before the node's own position/rotation/scale, as
    * computed by Pose.computeWorldMatrices over the player's current blended
    * pose (bind pose before the first play()). The verification seam for
    * tests and the attachment seam for sockets/props.
@@ -2400,15 +2400,15 @@ class SceneNode {
   /**
    * Emissive tint as [r,g,b] linear (MeshNode only). The shader emits
    * baseColor + emissiveColor*emissive, so retinting a glowing node means
-   * setting this as well as `color` — changing `color` alone leaves the glow
+   * setting this as well as `color`: changing `color` alone leaves the glow
    * its original hue. Assign a CSS string or an [r,g,b] array.
    */
   get emissiveColor() {}
   set emissiveColor(rgbOrCssString) {}
 
   /**
-   * Node colour. On a MeshNode (skinned included) this is the material albedo
-   * — the same channel createMesh's `color` option writes — and reads back as
+   * Node colour. On a MeshNode (skinned included) this is the material albedo,
+   * the same channel createMesh's `color` option writes, and reads back as
    * [r,g,b,a]. On a LightNode it is the light's [r,g,b] linear colour. Assign
    * a CSS string or an [r,g,b] / [r,g,b,a] array; a mesh keeps its existing
    * alpha unless the value supplies a fourth component. Returns undefined on
@@ -2421,7 +2421,7 @@ class SceneNode {
    * Install a discrete LOD chain (plain MeshNode only). Each frame the
    * renderer picks the first level whose `maxDist` exceeds the camera
    * distance (measured to the node's world origin, once per frame); beyond
-   * the last maxDist the coarsest level keeps drawing — combine with
+   * the last maxDist the coarsest level keeps drawing: combine with
    * `visibilityRange` to cull entirely. The shadow pass always draws the
    * SAME selected level as the color pass, so a caster can never shadow
    * with a different silhouette than it renders.
@@ -2463,7 +2463,7 @@ class SceneNode {
   /**
    * Replace the whole instance buffer. `data` is a Float32Array of 16 floats
    * per instance in the canonical layout; the count is derived from its
-   * length. Uploads once — cheap enough to call per frame for a few thousand
+   * length. Uploads once, cheap enough to call per frame for a few thousand
    * instances, but prefer updateInstance() when only a handful moved.
    * @param {Float32Array} data
    */
@@ -2478,7 +2478,7 @@ class SceneNode {
   setInstancesFromTransforms(data) {}
 
   /**
-   * Rewrite ONE instance's 16-float record in place — the cheap path for a
+   * Rewrite ONE instance's 16-float record in place: the cheap path for a
    * few moving instances in a large static batch. `data16` must hold at
    * least 16 floats; out-of-range indices are ignored.
    * @param {number} index
@@ -2519,7 +2519,7 @@ class SceneNode {
   set alphaCutoff(value) {}
 
   /**
-   * Disable backface culling for the batch — needed so the back face of a
+   * Disable backface culling for the batch: needed so the back face of a
    * double-sided leaf card renders. Also settable via setDoubleSided(b).
    */
   get doubleSided() {}
@@ -2584,19 +2584,19 @@ class SceneNode {
   // --- Audio emitter (all node types) ---------------------------------------
 
   /**
-   * Attach a broaudio playback (or voice) handle to this node — the
+   * Attach a broaudio playback (or voice) handle to this node, the
    * AudioStreamPlayer3D analog. Each engine frame (after tweens/animations,
    * before audio renders) the engine pushes the node's WORLD position into
    * the source's spatial position and derives its velocity from the previous
    * frame's position over the scaled dt, feeding the Doppler model
-   * (audio-api.js) — no per-frame JS.
+   * (audio-api.js), no per-frame JS.
    *
    * Attaching enables spatialization on the handle
    * (setPlaybackSpatialEnabled / setVoiceSpatialEnabled) and pushes the
    * current position immediately. Tune rolloff/refDistance/maxDistance via
    * the normal ctx.setPlaybackSpatial* / setVoiceSpatial* calls. One emitter
    * per node (re-attach replaces); any number of emitting nodes per scene.
-   * A handle that finishes or is stopped simply makes the sync a no-op —
+   * A handle that finishes or is stopped simply makes the sync a no-op,
    * attach a fresh handle to reuse the node. The binding dies with the node.
    * Note: streaming playbacks position/attenuate but do not Doppler-shift
    * (see audio-api.js).
@@ -2624,7 +2624,7 @@ class SceneNode {
 
 
 // =============================================================================
-// Tween — engine-ticked property animation (scene.createTween())
+// Tween, engine-ticked property animation (scene.createTween())
 // =============================================================================
 //
 // A Tween is a SEQUENCE of steps. Each `to()` appends a step; steps run one
@@ -2634,12 +2634,12 @@ class SceneNode {
 // writes go through the exact same setters the JS API uses, so dirty flags
 // and GPU uploads behave as if your code had set node.position itself.
 //
-// Ticked from the engine frame clock — the same clock as sprite and skeletal
-// animation — and under headless virtual time, so advanceTime() drives
+// Ticked from the engine frame clock, the same clock as sprite and skeletal
+// animation, and under headless virtual time, so advanceTime() drives
 // tweens deterministically in tests. Tick overshoot carries across step
 // boundaries: timing is independent of frame rate.
 //
-//   // Slide a crate up with a bounce, flash it red, then fade it out —
+//   // Slide a crate up with a bounce, flash it red, then fade it out,
 //   // looping the whole routine three times:
 //   const crate = scene.createMesh({ mesh: 'box', color: 'white' });
 //   scene.createTween()
@@ -2657,7 +2657,7 @@ class SceneNode {
 //     .to(nodeB, { position: [-5, 0, 0] }, 1)
 //     .start();
 //
-//   // Anything else is tweenable through the callback form — the tween
+//   // Anything else is tweenable through the callback form, the tween
 //   // hands you eased progress t in [0..1] every frame:
 //   scene.createTween()
 //     .to(null, {}, 2, { easing: 'sineInOut', onUpdate: (t) => {
@@ -2668,7 +2668,7 @@ class SceneNode {
 //
 // Easing names (bromath's Penner set): 'linear', and In/Out/InOut variants
 // of 'quad', 'cubic', 'quart', 'quint', 'sine', 'expo', 'circ', 'back',
-// 'elastic', 'bounce' — e.g. 'quadInOut', 'backOut', 'elasticIn'.
+// 'elastic', 'bounce', e.g. 'quadInOut', 'backOut', 'elasticIn'.
 // back/elastic overshoot their endpoints mid-curve by design.
 class Tween {
   /**
@@ -2688,7 +2688,7 @@ class Tween {
    * currently is. A destroyed node is skipped harmlessly.
    *
    * Pass `null` as the node for a callback-only step: `onUpdate(t)` receives
-   * eased progress every tick (t in [0,1]; back/elastic may overshoot) —
+   * eased progress every tick (t in [0,1]; back/elastic may overshoot),
    * tween cameras, lights, materials, anything. With neither props nor
    * onUpdate, the step is a pure wait of `duration` seconds.
    *
@@ -2734,7 +2734,7 @@ class Tween {
 
   /**
    * Halt and rewind the sequence position (node properties stay wherever
-   * they are — nothing snaps back). start() plays again from the top.
+   * they are: nothing snaps back). start() plays again from the top.
    * @returns {Tween} this
    */
   stop() {}

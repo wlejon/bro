@@ -19,7 +19,7 @@
 //
 // Why there are no cracks. Vertex displacement is a PURE FUNCTION of world XZ,
 // sampled with textureLod() at a FRACTIONAL mip level that depends only on
-// distance from the camera — never on which ring a vertex belongs to. Two rings
+// distance from the camera. Never on which ring a vertex belongs to. Two rings
 // meeting at a boundary therefore evaluate the same function at the same
 // position and land on the same height. Nothing is stitched, because nothing
 // can disagree. The fractional mip also means GL's trilinear filtering blends
@@ -48,14 +48,14 @@
 //   resolution:  128,    // quads per ring per axis. Rounded to a multiple of 4
 //                        // (the central hole is inset by resolution/4). Drives
 //                        // both triangle count and how far each ring reaches.
-//   cellSize:    1.0,    // metres per cell at level 0 — the finest detail the
+//   cellSize:    1.0,    // metres per cell at level 0, the finest detail the
 //                        // geometry can express, right under the camera.
 //   heightScale: 1.0,    // sampled texel value -> metres
 //   seaLevel:    0.0,    // metres added to every sample
 // }
 //
 // Total triangles ~= 2 * resolution^2 * (levels/4 + 3/4). With the defaults
-// (128 / 10) that is roughly 250k — fixed, forever, regardless of view.
+// (128 / 10) that is roughly 250k, fixed, forever, regardless of view.
 //
 // The node is added to the scene root immediately and starts rendering flat at
 // y = seaLevel until you install a height layer.
@@ -90,7 +90,7 @@
 // plausible and simply does not line up.
 //
 // `data` is copied and uploaded as an R32F texture WITH A MIP CHAIN. The chain
-// is not an optimisation — the shader samples at a fractional lod, and without
+// is not an optimisation, the shader samples at a fractional lod, and without
 // a chain GL clamps every lod to level 0 and the whole distance-continuous
 // filtering story collapses.
 //
@@ -124,12 +124,12 @@
 // Call EVERY FRAME with the camera eye. This does three things:
 //   - parks the node's world position on the eye, which is what leaves the
 //     model matrix at identity for the camera-relative vertex shader (the whole
-//     matrix pipeline is fp32 — keeping object space small is what makes a
+//     matrix pipeline is fp32, keeping object space small is what makes a
 //     100 km world stable);
 //   - pushes the camera uniforms the rings snap and filter against;
 //   - refreshes the cull margin, which depends on camera altitude.
 //
-// It does NOT rebuild geometry, allocate, or touch the CPU height data — it is
+// It does NOT rebuild geometry, allocate, or touch the CPU height data. It is
 // a handful of uniform writes. There is no load budget to throttle and no
 // equivalent of terrain.rebuild().
 //
@@ -150,8 +150,8 @@
 //
 // One documented divergence: the CPU path samples the BASE level (bilinear at
 // mip 0) of each layer, while the GPU moves to a coarser mip with distance. So
-// elevationAt is EXACT near the camera — the region that matters for collision,
-// where the GPU is also on level 0 — and APPROXIMATE far away, where the GPU is
+// elevationAt is EXACT near the camera, the region that matters for collision,
+// where the GPU is also on level 0, and APPROXIMATE far away, where the GPU is
 // rendering a smoothed version of the same field. Do not use it to place
 // objects tens of kilometres away and expect them to sit exactly on the pixels.
 //
@@ -164,7 +164,7 @@
 // -----------------------------------------------------------------------------
 //
 // The MeshNode carrying the ring geometry. Null after destroy(). Use it for
-// anything the mesh surface exposes — visibility, material tweaks, render
+// anything the mesh surface exposes, visibility, material tweaks, render
 // order:
 //
 //   clipmap.node.visible = false;
@@ -179,13 +179,13 @@
 //
 //   cullMargin is managed per update(), not fixed. Frustum culling cannot see
 //   GLSL displacement, and this node's baked AABB is a flat sheet at y = 0 in
-//   an object space parked at the eye — every vertex the shader emits is
+//   an object space parked at the eye, every vertex the shader emits is
 //   outside it. The margin is recomputed each update from (a) the sample
 //   extremes across the installed layers relative to the current camera
 //   altitude and (b) the per-level grid-snap slop. Culling is deliberately left
 //   ON rather than disabled: this is one of the largest nodes in any scene that
 //   has it, and it should still drop out when the camera looks away from it.
-//   Do not overwrite clipmap.node.cullMargin — update() will replace it.
+//   Do not overwrite clipmap.node.cullMargin, update() will replace it.
 
 
 // -----------------------------------------------------------------------------
@@ -208,7 +208,7 @@
 //   clipmap.triangleCount   Number   fixed for the node's lifetime
 //   clipmap.vertexCount     Number   likewise
 //   clipmap.farDistance     Number   outer half-extent of the coarsest ring,
-//                                    in metres — past this there is no geometry
+//                                    in metres, past this there is no geometry
 
 
 // -----------------------------------------------------------------------------
@@ -224,7 +224,7 @@
 //     levels: 10, resolution: 128, cellSize: 4, heightScale: 1, seaLevel: 0,
 //   });
 //
-//   // Coarse world field first — it is the base of the blend and must cover
+//   // Coarse world field first. It is the base of the blend and must cover
 //   // everywhere the camera can reach.
 //   clipmap.setHeightLayer(1, {
 //     data: worldHeights, width: 512, height: 512,
@@ -261,7 +261,7 @@
 // Limitations
 // -----------------------------------------------------------------------------
 //
-//  - Height field only. No overhangs, caves or arches, and no editing API —
+//  - Height field only. No overhangs, caves or arches, and no editing API,
 //    change the terrain by re-uploading a height layer.
 //  - Finite reach. Beyond farDistance there is no geometry; size `levels` so
 //    the stack covers the highest camera you allow.

@@ -3,10 +3,10 @@
 // =============================================================================
 //
 // Thin JS wrapper around Jolt physics. Bodies are referenced by an integer
-// "tag" (a small monotonic ID) — not by JS object. Pair a tag with
+// "tag" (a small monotonic ID), not by JS object. Pair a tag with
 // scene.createPhysicsNode({ body: tag }) for visual sync.
 //
-// WARNING — createPhysicsNode resolves tags against the DEFAULT WORLD ONLY.
+// WARNING, createPhysicsNode resolves tags against the DEFAULT WORLD ONLY.
 // There is no way to tell it which world a tag came from. Every world's tag
 // space starts at 1, so passing a sandbox-world tag does not fail: it
 // silently binds the node to whatever unrelated default-world body happens
@@ -14,7 +14,7 @@
 // pass Physics.createBody tags to createPhysicsNode; sync sandbox bodies
 // yourself from w.getTransform / w.getAllTransforms.
 //
-// Methods live on the global `Physics` namespace (no `bro.` prefix — this
+// Methods live on the global `Physics` namespace (no `bro.` prefix. This
 // binding pre-dates the bro.* convention).
 //
 // Coordinate system: right-handed Y-up, world units (typically meters).
@@ -35,14 +35,14 @@
 // 2. SANDBOX WORLDS. Created on demand via Physics.createWorldHandle({...}).
 //    Each handle is an independent Jolt world with its own bodies,
 //    constraints, contact events, and collision-layer config. The engine
-//    does NOT auto-step these — the caller invokes handle.step(dt) manually.
+//    does NOT auto-step these, the caller invokes handle.step(dt) manually.
 //    Use cases: trajectory previews ("ghost" balls / what-if simulations),
 //    deterministic side-simulations for AI, server-authoritative replicas.
 //    Sandbox worlds share the same body-creation API as the default world.
 //
 // Tag spaces are PER WORLD: a tag returned by w.createBody is meaningful
 // only on `w`, never on the default world. The same number could refer to
-// different bodies in different worlds — keep them straight.
+// different bodies in different worlds, keep them straight.
 // =============================================================================
 
 
@@ -54,7 +54,7 @@
  * Acknowledge the physics world. The engine has already created it; this
  * call is a no-op kept for forward compat. Returns true on success.
  *
- * Takes NO options — any argument is ignored outright, including maxBodies.
+ * Takes NO options: any argument is ignored outright, including maxBodies.
  * The default world's capacity is fixed by the engine; use
  * Physics.createWorldHandle({ maxBodies }) if you need to size a world.
  */
@@ -79,15 +79,15 @@ Physics.setTimeStep(dt);
  * rotation slerp), which makes motion smooth at any display rate at the cost
  * of the visual state lagging up to one fixed step behind the simulation.
  *
- * What is interpolated (Godot semantics — interpolate what you SEE):
+ * What is interpolated (Godot semantics: interpolate what you SEE):
  *   - PhysicsNode scene sync (scene.createPhysicsNode visuals)
  *   - getTransform(id, { interpolated: true })
  *   - getAllTransforms({ interpolated: true })
- * Physics queries — plain getTransform/getAllTransforms, raycasts, shape
- * casts, overlaps, contacts — always return the true stepped state.
+ * Physics queries: plain getTransform/getAllTransforms, raycasts, shape
+ * casts, overlaps, contacts. Always return the true stepped state.
  *
  * Sleeping and static bodies always render at their true pose (no jitter).
- * Teleports via setPosition/setRotation snap — the previous-step snapshot is
+ * Teleports via setPosition/setRotation snap: the previous-step snapshot is
  * dropped so the body never glides across the world. moveKinematic is
  * velocity-driven and interpolates smoothly.
  *
@@ -107,8 +107,8 @@ Physics.getInterpolation();
 // Default config: ["static", "moving"] with [false, true, true, true]
 // (static-vs-static disabled, everything else enabled).
 //
-// Reconfiguring layers takes effect for ALL bodies — including ones already
-// created — so call this once at startup before creating gameplay bodies.
+// Reconfiguring layers takes effect for ALL bodies, including ones already
+// created, so call this once at startup before creating gameplay bodies.
 
 /**
  * @param {{names: string[], matrix: boolean[]}} cfg
@@ -142,7 +142,7 @@ Physics.setLayers({
  * @param {boolean} [opts.static=false]
  * @param {boolean} [opts.sensor=false] - sensors fire contact events but generate no response
  * @param {Object}  [opts.area]         - field override installed on this sensor
- *                                        (requires sensor:true) — see the
+ *                                        (requires sensor:true), see the
  *                                        "Area field overrides" section
  * @param {boolean} [opts.ccd=false]    - LinearCast motion quality (for fast-moving bodies)
  * @param {string}  [opts.dofs]         - "all" (default) | "2d"
@@ -167,7 +167,7 @@ Physics.setLayers({
  * @param {number}  [opts.mass]            - direct body mass in kg; wins over
  *                                           density when both are given (inertia
  *                                           still derives from the shape, scaled
- *                                           to this mass). Whole-body only —
+ *                                           to this mass). Whole-body only,
  *                                           ignored on compound sub-parts.
  * @param {number}  [opts.gravityFactor=1]
  * @param {number}  [opts.linearDamping=0.05]
@@ -199,13 +199,13 @@ Physics.setLayers({
  *
  * Notes:
  * - "heightfield" shapes are always static. The surface in body-local space is
- *   offset + scale * (x, heights[z*n + x], z) for integer x,z in [0, n-1] — the
+ *   offset + scale * (x, heights[z*n + x], z) for integer x,z in [0, n-1], the
  *   grid spans scale.x*(n-1) by scale.z*(n-1) starting at the body position, NOT
  *   centered on it; use offset (or position) to center. Much cheaper than an
  *   equivalent static "mesh" for terrain (quantized samples + hierarchical grid,
  *   no triangle soup).
  * - "mesh" shapes are always static (Jolt limitation). Triangle winding determines
- *   which side collides — Jolt mesh shapes are one-sided. CCW = +Y normal in
+ *   which side collides: Jolt mesh shapes are one-sided. CCW = +Y normal in
  *   right-handed Y-up.
  * - "compound" parts can be any non-mesh, non-compound shape. Wrap moving multi-
  *   part objects (L-blocks, T-shapes, ragdoll torsos) in a compound.
@@ -256,7 +256,7 @@ Physics.createBody({
 // 2D ground / chain (one-sided edge primitive). Polyline lives in the XY
 // plane; the engine extrudes a vertical wall along ±Z by `depth/2` and
 // triangulates so the in-plane left-normal of the walking direction is the
-// front face — back-face culling makes the chain one-sided. Set flipNormal
+// front face, back-face culling makes the chain one-sided. Set flipNormal
 // to swap. Always static.
 Physics.createBody({
     shape: 'chain',
@@ -267,7 +267,7 @@ Physics.createBody({
 });
 
 // Heightfield terrain: 64x64 samples, 1m cells, heights from any source
-// (noise, image, analytic). Collides as real terrain — much cheaper than a
+// (noise, image, analytic). Collides as real terrain, much cheaper than a
 // triangle mesh of the same grid.
 const n = 64;
 const heights = new Float32Array(n * n);
@@ -324,12 +324,12 @@ Physics.addImpulse(id, x, y, z);
 /** Continuous torque. */
 Physics.addTorque(id, x, y, z);
 
-/** 64-bit user data — typically used to map body→entity-id. */
+/** 64-bit user data, typically used to map body→entity-id. */
 Physics.setUserData(id, value);
 /** @returns {bigint} */
 Physics.getUserData(id);
 
-/** @returns {boolean} — false for sleeping bodies and unknown tags. */
+/** @returns {boolean}: false for sleeping bodies and unknown tags. */
 Physics.isActive(id);
 
 /** Wake a sleeping body. */
@@ -352,7 +352,7 @@ Physics.setLayer(id, "ghost");
 // Kinematic bodies
 // -----------------------------------------------------------------------------
 //
-// A kinematic body is moved by script — gravity does not affect it, and
+// A kinematic body is moved by script, gravity does not affect it, and
 // dynamic bodies do not push it. But it DOES push dynamic bodies on
 // contact, with stable contact forces (unlike teleporting via setPosition,
 // which produces unphysical impulses). Use for moving platforms, paddles,
@@ -364,8 +364,8 @@ Physics.setKinematic(id);
 /**
  * Toggle a body between static (isStatic=true) and dynamic (false). The
  * body's collision layer is preserved, with one exception: a body going
- * dynamic while on layer 0 — the only layer in the non-moving broadphase
- * tree — moves to the default "moving" layer (1). A body CREATED static can
+ * dynamic while on layer 0: the only layer in the non-moving broadphase
+ * tree: moves to the default "moving" layer (1). A body CREATED static can
  * never become dynamic (no motion state is allocated for it); create it
  * dynamic and freeze it instead. Also available on sandbox world handles.
  */
@@ -417,7 +417,7 @@ Physics.moveKinematic(id, x, y, z, qx, qy, qz, qw, dt);
  *                                  reported by Physics.getBrokenConstraints(). Also settable
  *                                  later via setConstraintBreakingImpulse().
  *
- * Cone-only fields (point + limited swing about the twist axis — e.g. a shoulder):
+ * Cone-only fields (point + limited swing about the twist axis, e.g. a shoulder):
  * @param {number}  [opts.halfConeAngle=0]   - max swing half-angle (radians)
  *
  * SwingTwist-only fields (ragdoll joint: independent swing + twist limits):
@@ -456,7 +456,7 @@ Physics.moveKinematic(id, x, y, z, qx, qy, qz, qw, dt);
  * @param {number}  [opts.motorSpeed=0]           - target angular velocity (rad/s)
  * @param {number}  [opts.maxMotorTorque=0]       - motor torque cap (N·m)
  *
- * SixDOF-only fields (Godot Generic6DOFJoint3D analog — configure each of the
+ * SixDOF-only fields (Godot Generic6DOFJoint3D analog: configure each of the
  * six degrees of freedom independently):
  * @param {{x,y,z}} [opts.axisX={1,0,0}]   - constraint-space X axis (world)
  * @param {{x,y,z}} [opts.axisY={0,1,0}]   - constraint-space Y axis (world; re-orthonormalized)
@@ -465,7 +465,7 @@ Physics.moveKinematic(id, x, y, z, qx, qy, qz, qw, dt);
  *                                  rotationX/Y/Z. Each value is 'locked' (default),
  *                                  'free', or { min, max, frequency?, damping?, friction? }:
  *                                  min/max = limit range (m for translation; rad for
- *                                  rotation — rotationX is the twist in [-π,π],
+ *                                  rotation: rotationX is the twist in [-π,π],
  *                                  rotationY/Z limits are symmetric, Jolt uses max);
  *                                  frequency (default 0 = hard limits; >0 Hz) makes
  *                                  translation limits soft springs, with damping
@@ -476,7 +476,7 @@ Physics.moveKinematic(id, x, y, z, qx, qy, qz, qw, dt);
  * @param {Object}  [opts.motors]          - per-axis motors at create, keyed like `axes`,
  *                                  each a motor options object (see setConstraintMotor).
  *
- * Motors at create (hinge / slider only — sixdof uses `motors` above):
+ * Motors at create (hinge / slider only: sixdof uses `motors` above):
  * @param {Object}  [opts.motor]           - motor options object (see setConstraintMotor)
  * @returns {number} handle (truthy on success)
  */
@@ -550,7 +550,7 @@ const rack = Physics.createConstraint({
     constraint1: pinionHinge, constraint2: rackSlider,
 });
 
-// SixDOF: a crane arm — free vertical travel within ±2 m (soft-limited by a
+// SixDOF: a crane arm, free vertical travel within ±2 m (soft-limited by a
 // spring), yaw free, everything else locked; the yaw axis is motorized.
 const arm = Physics.createConstraint({
     type: 'sixdof',
@@ -581,7 +581,7 @@ Physics.setWheelMotor(wheel, /*enabled*/ true, /*speed*/ -8.0, /*maxTorque*/ 60)
 
 /**
  * Configure/steer a constraint motor at runtime. Works on hinge and slider
- * handles (single driven axis — `axis` is ignored) and on sixdof handles
+ * handles (single driven axis: `axis` is ignored) and on sixdof handles
  * (pass `axis`; wheel handles are sixdof underneath, their pin is
  * 'rotationZ'). Wakes both bodies. Returns false for unknown handles,
  * non-motorized constraint types, or a missing/invalid sixdof axis.
@@ -613,7 +613,7 @@ const threshold = Physics.getConstraintBreakingImpulse(handle);
 
 /**
  * Drain the handles of constraints that broke since the last call (call once
- * per frame). Broken constraints are disabled, not destroyed — call
+ * per frame). Broken constraints are disabled, not destroyed. Call
  * destroyConstraint() if you want them gone.
  * @returns {number[]} handles that broke this frame
  */
@@ -638,7 +638,7 @@ Physics.destroyConstraint(handle);
  * for a ray arriving from outside). One hit per body (earliest contact).
  *
  * maxDist defaults to 1000 world units when omitted (or when the 7th argument
- * is the opts object rather than a number) — the ray is never unbounded.
+ * is the opts object rather than a number): the ray is never unbounded.
  *
  * An optional trailing opts object takes the same filter fields as the shape
  * queries below: `layers` (array of layer names/indices the ray can see),
@@ -681,15 +681,15 @@ if (hit) console.log('nearest', hit.bodyId, hit.fraction, hit.normal);
 //
 // Shared filter fields (also on overlapPoint's trailing opts):
 //   layers:     array of layer names/indices the query can SEE. Independent
-//               of the collision matrix — a query may see layers that never
+//               of the collision matrix, a query may see layers that never
 //               collide with anything. Default: all layers.
 //   ignoreBody: one body tag to exclude (e.g. the caster itself).
-//   ignoreBodies: array of body tags to exclude (union with ignoreBody —
+//   ignoreBodies: array of body tags to exclude (union with ignoreBody,
 //               e.g. the caster plus everything it is carrying).
 
 /**
  * Sweep a convex shape from its transform along direction*maxDistance and
- * return ALL hits — one per body (its earliest contact), sorted by fraction.
+ * return ALL hits: one per body (its earliest contact), sorted by fraction.
  *
  * @param {Object} opts
  * @param {string}  opts.shape        - "box" | "sphere" | "capsule" | "cylinder" | "convexHull"
@@ -715,7 +715,7 @@ const sweeps = Physics.castShape({
 });
 
 /**
- * Like castShape but returns ONLY the nearest hit (or null). Cheaper — Jolt
+ * Like castShape but returns ONLY the nearest hit (or null). Cheaper. Jolt
  * early-outs beyond the best fraction. The go-to for "can I move there"
  * checks, projectile sweeps, and character-controller style probes.
  * @returns {{ bodyId, fraction, position, normal, userData } | null}
@@ -773,35 +773,35 @@ if (under.length) console.log('picked body', under[0].bodyId);
  *               touching.
  *   - "removed" fires ONCE when a pair separates (Jolt's OnContactRemoved).
  *   - There is NO per-step "still in contact" event. Jolt's
- *     OnContactPersisted is intentionally not surfaced — most game code
+ *     OnContactPersisted is intentionally not surfaced: most game code
  *     wants begin/end semantics, and surfacing per-pair-per-frame events
  *     swamps the queue. If you need persistent presence, track which pairs
  *     you've seen "added" and not yet "removed" yourself.
  *
  * `sensor` is reported on removed events as well as added ones, so a trigger
  * gives you a clean enter/leave pair. (Jolt's removal callback fires from the
- * broadphase with only body IDs — and possibly for a body that has just been
- * destroyed — so the engine keeps its own per-body sensor bit to label these.)
+ * broadphase with only body IDs, and possibly for a body that has just been
+ * destroyed, so the engine keeps its own per-body sensor bit to label these.)
  *
  * The returned array also carries an `overflow` property: true when the
  * fixed-capacity per-step contact buffer overflowed since the last drain and
- * events were DROPPED — possibly including sensor exits, so any enter/leave
+ * events were DROPPED: possibly including sensor exits, so any enter/leave
  * bookkeeping you keep may be wedged. On overflow, re-derive presence with a
  * query (overlapShape / overlapPoint) instead of trusting the stream.
  *
  * "added" events also carry a manifold snapshot:
  *   - points:      up to 4 world-space contact points (on body2's surface)
- *   - normal:      the contact normal — the direction body2 moves out of
+ *   - normal:      the contact normal, the direction body2 moves out of
  *                  collision, i.e. it points from body1 toward body2
  *   - penetration: penetration depth in meters; negative = speculative
  *                  contact (bodies may not actually touch after solving)
  *   - impulse:     estimated collision impulse magnitude (kg·m/s), summed
  *                  over the contact points. This is a PRE-SOLVE estimate
- *                  (Jolt's EstimateCollisionResponse — the solver never
+ *                  (Jolt's EstimateCollisionResponse: the solver never
  *                  reports the solved impulses): accurate for an isolated
  *                  two-body impact, approximate when several bodies pile
  *                  into the same island. 0 for sensor overlaps. Scales with
- *                  impact speed and mass — the natural "how hard did we
+ *                  impact speed and mass: the natural "how hard did we
  *                  hit" input for impact sounds / damage / particles.
  * "removed" events have none of these (Jolt's removal callback carries only
  * the body pair).
@@ -817,7 +817,7 @@ if (under.length) console.log('picked body', under[0].bodyId);
  * }> & { overflow: boolean }}
  */
 const events = Physics.getContacts();
-if (events.overflow) { /* events were dropped this drain — resync triggers */ }
+if (events.overflow) { /* events were dropped this drain, resync triggers */ }
 
 /**
  * Change a body's friction/restitution combine mode at runtime (same values
@@ -838,7 +838,7 @@ Physics.setRestitutionCombine(id, 'max');
 // -----------------------------------------------------------------------------
 //
 // A SENSOR body can carry a field override that automatically affects every
-// dynamic body overlapping its volume, applied inside the physics step — no
+// dynamic body overlapping its volume, applied inside the physics step, no
 // per-frame JS needed. Water, low-gravity zones, planet gravity wells, fans,
 // drag fields.
 //
@@ -846,7 +846,7 @@ Physics.setRestitutionCombine(id, 'max');
 // runtime via setAreaOverride(tag, opts) on any sensor (bodies already
 // inside are picked up immediately); setAreaOverride(tag, null) clears it.
 //
-// Stacking (a Godot space-override subset — replace + combine + scale):
+// Stacking (a Godot space-override subset, replace + combine + scale):
 // overlapping areas are walked highest `priority` first (ties: the
 // earlier-created area first). Per body:
 //   - gravityMode 'combine':  adds this area's field, keeps walking.
@@ -866,7 +866,7 @@ Physics.setRestitutionCombine(id, 'max');
 //     on the step AFTER the overlap begins, and lets go on the step after it
 //     ends (one fixed step of latency).
 //   - Contact-buffer overflow (getContacts().overflow) can drop enter/exit
-//     events — membership may wedge until the pair re-fires.
+//     events, membership may wedge until the pair re-fires.
 //   - A body that falls asleep inside an area loses its sensor contact until
 //     it wakes (Jolt sensors track active bodies only).
 //   - Sensor-vs-sensor overlaps carry no fields; kinematic/static bodies are
@@ -939,12 +939,12 @@ Physics.setMass(id, 250);
 
 /**
  * Per-body damping: the fraction of velocity removed per second
- * (v *= max(0, 1 - damping*dt) each step — Jolt's model). Creation options
+ * (v *= max(0, 1 - damping*dt) each step. Jolt's model). Creation options
  * linearDamping/angularDamping set the initial values; these change them
  * live (drag zones, powerups, underwater state...).
  *
  * While a body is inside an area damping override (see setAreaOverride),
- * these set the body's BASE damping — the value restored when it exits.
+ * these set the body's BASE damping: the value restored when it exits.
  */
 Physics.setLinearDamping(id, 0.5);
 Physics.setAngularDamping(id, 0.2);
@@ -964,7 +964,7 @@ Physics.setFriction(id, 0.9);
 Physics.setRestitution(id, 0.6);
 
 /**
- * Snapshot of the mutable body properties — the round-trip companion to the
+ * Snapshot of the mutable body properties: the round-trip companion to the
  * setters above. mass is 0 for static/kinematic/soft bodies.
  * @returns {{ mass:number, friction:number, restitution:number,
  *             linearDamping:number, angularDamping:number,
@@ -980,7 +980,7 @@ const props = Physics.getBodyProperties(id);
 /**
  * Returns a Float32Array of [tag, px, py, pz, qx, qy, qz, qw, ...] for
  * every body, packed at stride 8. Single allocation, no per-body JS
- * objects — preferred when you need to sync many transforms each frame.
+ * objects: preferred when you need to sync many transforms each frame.
  *
  * @param {{interpolated?: boolean}} [opts] - interpolated: true packs the
  *  render-side (interpolated) transforms when Physics.setInterpolation is on.
@@ -1021,8 +1021,8 @@ body.add(visual);
 //
 // Only world lifecycle differs: createWorld/createWorldHandle are Physics.*
 // only (a world does not make worlds), and .destroy() is handle-only (the
-// default world outlives the app). Stepping config — setTimeStep/getTimeStep,
-// setInterpolation/getInterpolation — is per-world here rather than global,
+// default world outlives the app). Stepping config, setTimeStep/getTimeStep,
+// setInterpolation/getInterpolation, is per-world here rather than global,
 // and the timestep is what a bare .step() with no argument uses.
 
 /**
@@ -1051,7 +1051,7 @@ w.setLayer(tag, "ghost");
 w.setMotionType(tag, true);                // BOOLEAN isStatic (not a string):
                                            // true = static, false = dynamic. A body
                                            // CREATED static can never go dynamic
-                                           // (no Jolt MotionProperties) — no-op.
+                                           // (no Jolt MotionProperties), no-op.
 w.activate(tag);                           // wake a sleeping body
 w.setUserData(tag, 42n);                   // 64-bit; w.getUserData(tag) reads back
 w.addForce(tag, fx, fy, fz);               // continuous, cleared each step
@@ -1059,7 +1059,7 @@ w.addImpulse(tag, ix, iy, iz);             // instantaneous
 w.addTorque(tag, tx, ty, tz);
 w.setAngularVelocity(tag, wx, wy, wz);
 const all = w.getAllTransforms();          // packed 8 floats/body, same layout as
-                                           // Physics.getAllTransforms. Takes no opts —
+                                           // Physics.getAllTransforms. Takes no opts,
                                            // sandbox worlds have no interpolation.
 w.destroyBody(tag);
 
@@ -1093,7 +1093,7 @@ w.destroy();         // tear down the world entirely; do NOT use the handle afte
 //                                  points.push(ghostWorld.getTransform(ghost).position); }
 //
 // Reusing one world via destroyAll is much cheaper than creating/destroying
-// the handle every frame — the JobSystem and Jolt's allocators stay warm.
+// the handle every frame, the JobSystem and Jolt's allocators stay warm.
 
 
 // -----------------------------------------------------------------------------
@@ -1111,8 +1111,8 @@ w.destroy();         // tear down the world entirely; do NOT use the handle afte
 // (headless: advanceTime drives the same tick deterministically). Your loop
 // just sets a desired velocity and reads state:
 //
-//   character.setVelocity(vx, vy, vz)   — persists until changed
-//   character.getState()                — position/velocity/ground info
+//   character.setVelocity(vx, vy, vz), persists until changed
+//   character.getState(), position/velocity/ground info
 //
 // Velocity semantics per fixed step:
 //   - SUPPORTED (groundState "onGround"): the character moves at
@@ -1151,7 +1151,7 @@ w.destroy();         // tear down the world entirely; do NOT use the handle afte
  *                                           is invisible to all of those (it
  *                                           never enters the broadphase). The
  *                                           body's tag is `character.innerBody`.
- *                                           This governs DETECTION only —
+ *                                           This governs DETECTION only:
  *                                           how hard the character shoves
  *                                           dynamic bodies is maxStrength,
  *                                           which works with or without it.
@@ -1195,13 +1195,13 @@ player.destroy();              // remove from the world; handle is dead after
 
 /**
  * Crouch / stance: switch the character's shape at runtime. Takes the same
- * descriptor syntax as createBody (non-mesh shapes only — capsule, box,
+ * descriptor syntax as createBody (non-mesh shapes only: capsule, box,
  * sphere, cylinder, convexHull, compound). FEET-PLANTED: the position (shape
  * center) is shifted along `up` so the new shape's bottom lands exactly where
- * the old one's was — crouching pulls the center down, standing pushes it up.
+ * the old one's was: crouching pulls the center down, standing pushes it up.
  *
  * Jolt collision-checks the new shape first: returns FALSE and changes
- * nothing when there is no room — e.g. standing up under a low ceiling. Keep
+ * nothing when there is no room: e.g. standing up under a low ceiling. Keep
  * polling while the crouch key is released to stand up as soon as there's
  * clearance. Updates the inner body's shape too (if innerBody was set).
  *
@@ -1212,7 +1212,7 @@ const crouched = player.setShape({ shape: 'capsule', radius: 0.3, halfHeight: 0.
 /**
  * Body tag of the inner rigid body (created with innerBody: true), or -1.
  * It's a real body: contact events report it, raycasts hit it, and
- * Physics.getTransform works on it. It is OWNED by the character —
+ * Physics.getTransform works on it. It is OWNED by the character.
  * Physics.destroyBody on it is refused (destroy the character instead).
  * @type {number}
  */
@@ -1232,21 +1232,21 @@ player.innerBody;
 // A full Jolt vehicle simulation (VehicleConstraint + WheeledVehicleController)
 // on a dynamic chassis body: sprung suspension per wheel, engine torque curve,
 // clutch + gearbox (auto or manual), differentials with limited slip, tire
-// slip-based friction, anti-roll bars. Strictly stronger than a raycast car —
+// slip-based friction, anti-roll bars. Strictly stronger than a raycast car,
 // wheels are real collision shapes (cylinder-cast by default), the drivetrain
 // has state (RPM, gear), and brake/handbrake are torque-based.
 //
 // The vehicle steps inside the engine's fixed physics tick automatically
-// (the constraint registers as a Jolt step listener) — there is no per-frame
+// (the constraint registers as a Jolt step listener). There is no per-frame
 // vehicle.update() call. Your loop sets driver input and reads state:
 //
-//   vehicle.setInput({ forward, right, brake, handBrake })  — persists
-//   vehicle.speed / .rpm / .gear                            — drivetrain state
-//   vehicle.wheelState(i)                                   — per-wheel render state
+//   vehicle.setInput({ forward, right, brake, handBrake }), persists
+//   vehicle.speed / .rpm / .gear, drivetrain state
+//   vehicle.wheelState(i), per-wheel render state
 //
 // `type` picks the controller family: 'wheeled' (default, this section),
-// 'tracked' (tanks — two skid-steered tracks), or 'motorcycle' (two-wheeler
-// + lean spring) — see their sections below; both build on everything here.
+// 'tracked' (tanks, two skid-steered tracks), or 'motorcycle' (two-wheeler
+// + lean spring): see their sections below; both build on everything here.
 // vehicle.type reports it back.
 //
 // Conventions: chassis-local forward defaults to +Z, up to +Y. Wheel
@@ -1258,7 +1258,7 @@ player.innerBody;
  *
  * Pass EITHER an existing dynamic body's tag as `body`, OR inline chassis
  * creation opts as `chassis` (same schema as createBody, forced dynamic).
- * Give the chassis a realistic mass via `density` — a 1.8×0.8×4 m box at
+ * Give the chassis a realistic mass via `density`: a 1.8×0.8×4 m box at
  * density 260 is ≈1500 kg; the default 1000 kg/m³ makes a very heavy car
  * that the default 500 N·m engine will barely move.
  *
@@ -1326,7 +1326,7 @@ player.innerBody;
  *                                          are paired in array order, torque
  *                                          split equally. At least one wheel
  *                                          must be driven (or one explicit
- *                                          differential given) — a drivetrain
+ *                                          differential given): a drivetrain
  *                                          with no driven wheels is rejected
  *                                          (createVehicle throws). Explicit form:
  * @param {number}  [opts.differentials[].leftWheel=-1]  - wheel index or -1
@@ -1377,7 +1377,7 @@ car.speed;        // signed speed along chassis forward (m/s)
 car.rpm;          // current engine RPM
 car.gear;         // -1 reverse, 0 neutral, 1+ forward
 car.wheelCount;   // number of wheels
-car.chassisBody;  // the chassis body TAG — use with Physics.* body functions,
+car.chassisBody;  // the chassis body TAG. Use with Physics.* body functions,
                   // raycast filters, and scene.createPhysicsNode
 car.getState();   // { speed, rpm, gear, isSwitchingGear } in one call
 
@@ -1397,10 +1397,10 @@ car.setGear(1);
  *   position: {x,y,z},        // wheel center, CHASSIS-LOCAL space
  *   rotation: {x,y,z,w},      // chassis-local; includes steer + suspension +
  *                             // spin. Maps a Y-axis-aligned cylinder onto the
- *                             // wheel — exactly what a bro.mesh cylinder needs
+ *                             // wheel: exactly what a bro.mesh cylinder needs
  *   suspensionLength: number, // m, within [suspensionMinLength, suspensionMaxLength]
  *   steerAngle: number,       // rad, positive = left
- *   rotationAngle: number,    // rad [0, 2π] — wheel spin
+ *   rotationAngle: number,    // rad [0, 2π], wheel spin
  *   angularVelocity: number,  // rad/s, positive = driving the car forward
  *   contact: boolean,         // touching anything?
  *   contactBody: number,      // body tag under the wheel, -1 if none
@@ -1411,18 +1411,18 @@ const ws = car.wheelState(0);
 
 car.destroy();    // remove the vehicle (constraint + drivetrain). A chassis
                   // created inline via `chassis:` is destroyed with it; a
-                  // chassis passed as an existing `body:` tag survives —
-                  // it stays yours to manage.
+                  // chassis passed as an existing `body:` tag survives.
+                  // It stays yours to manage.
                   //
                   // Destroying the chassis body directly (Physics.destroyBody
-                  // (car.chassisBody)) also removes the vehicle in the engine —
+                  // (car.chassisBody)) also removes the vehicle in the engine,
                   // but it does NOT notify this JS wrapper. `car` still looks
                   // alive: .chassisBody keeps returning the now-dead tag, and
                   // setInput/getState/wheelState quietly do nothing. Prefer
                   // car.destroy(), and drop your reference to `car` whenever
                   // you destroy the chassis yourself.
 
-// Rendering recipe — chassis under a PhysicsNode, wheels as chassis children
+// Rendering recipe, chassis under a PhysicsNode, wheels as chassis children
 // driven from wheelState each frame (no new engine machinery needed):
 //
 //   const chassisNode = scene.createPhysicsNode({ body: car.chassisBody });
@@ -1444,7 +1444,7 @@ car.destroy();    // remove the vehicle (constraint + drivetrain). A chassis
 //
 // Transmission notes: in 'auto' mode the gearbox shifts itself using
 // shiftUpRPM/shiftDownRPM and needs only the sign of `forward` to pick a
-// direction — hold forward: -1 from a stop and it engages reverse. In
+// direction, hold forward: -1 from a stop and it engages reverse. In
 // 'manual' mode the gearbox stays in the gear set by setGear(); forward is
 // just the gas pedal. While isSwitchingGear is true the clutch is open and
 // no engine torque reaches the wheels.
@@ -1462,13 +1462,13 @@ car.destroy();    // remove the vehicle (constraint + drivetrain). A chassis
 //
 // A tank: Jolt's TrackedVehicleController on the same VehicleConstraint.
 // Instead of steered wheels and differentials, the road wheels belong to two
-// TRACKS ([left, right] — left is the +X side when forward is +Z and up +Y),
+// TRACKS ([left, right], left is the +X side when forward is +Z and up +Y),
 // each with its own drivetrain connection and brake; steering is
 // skid-steering (the tracks run at different rates). Everything else from
 // the wheeled section carries over: chassis creation, up/forward, wheel
 // suspension geometry, engine/transmission (drivetrain defaults switch to
 // Jolt's tank numbers: minRPM 500, maxRPM 4000, shiftUp 3500, shiftDown
-// 1000 — but NOT the gear ratios: the binding only writes gearRatios /
+// 1000, but NOT the gear ratios: the binding only writes gearRatios /
 // reverseGearRatios when JS supplies a non-empty array, so an unconfigured
 // tank keeps Jolt's car ratios [2.66, 1.78, 1.3, 1.0, 0.74] / [-2.90].
 // Pass transmission.gearRatios explicitly if you want tank ratios),
@@ -1479,7 +1479,7 @@ car.destroy();    // remove the vehicle (constraint + drivetrain). A chassis
 // Differences from wheeled:
 //  - `tracks` is REQUIRED: exactly two entries, and together they must list
 //    every wheel index exactly once (a track with zero wheels, an unassigned
-//    wheel, or a doubly-assigned wheel is rejected — createVehicle throws).
+//    wheel, or a doubly-assigned wheel is rejected, createVehicle throws).
 //  - Per-wheel steerable/driven/brake fields are ignored (steer, drive, and
 //    brake are per track); `differentials` is ignored.
 //  - Per-wheel friction is a SCALAR on tracked vehicles (Jolt models the
@@ -1547,15 +1547,15 @@ tank.setInput({ forward: 0, brake: 1 });          // stop
 // Motorcycles (Physics.createVehicle({ type: 'motorcycle' }))
 // -----------------------------------------------------------------------------
 //
-// A two-wheeler: Jolt's MotorcycleController — the wheeled controller plus a
+// A two-wheeler: Jolt's MotorcycleController, the wheeled controller plus a
 // lean spring that torques the chassis toward the balance/turn lean angle,
 // so the bike stays upright at rest and leans into corners on its own. The
 // ENTIRE wheeled section applies (wheels, engine, transmission,
-// differentials — the driven rear wheel auto-derives one — setInput with
+// differentials, the driven rear wheel auto-derives one, setInput with
 // forward/right/brake/handBrake, wheelState, destroy semantics); `lean` and
 // setLeanController() are the additions.
 //
-// Lean spring strength: by default springConstant/springDamping are AUTO —
+// Lean spring strength: by default springConstant/springDamping are AUTO,
 // scaled to the chassis's actual roll inertia (k = 150·I, c = 30·I about the
 // forward axis, the stiffness-to-inertia ratio of Jolt's tuned sample bike).
 // Pass explicit values to override; note Jolt's raw sample numbers
@@ -1609,7 +1609,7 @@ bike.setInput({ forward: 1, right: 0.5 });  // lean into a right turn
 
 /**
  * Enable/disable the lean spring (motorcycles only; a safe no-op on other
- * vehicle types). Disable it to let the bike fall over — e.g. when the
+ * vehicle types). Disable it to let the bike fall over, e.g. when the
  * rider is knocked off.
  * @param {boolean} enabled
  */
@@ -1621,22 +1621,22 @@ bike.setLeanController(false);
 // -----------------------------------------------------------------------------
 //
 // A Jolt Ragdoll: a tree of dynamic rigid parts joined by swing-twist (or
-// fixed) constraints — the PhysicalBone3D analog. Parent/child part pairs,
+// fixed) constraints, the PhysicalBone3D analog. Parent/child part pairs,
 // and any parts that overlap in the bind pose, never collide with each
 // other; everything else self-collides normally, and the whole ragdoll
 // collides with the rest of the world.
 //
 // Part bodies are ORDINARY bodies in their world: partBody(i) returns a
-// regular body tag, so every body API works on them — addImpulse to shove a
+// regular body tag, so every body API works on them, addImpulse to shove a
 // limb, getVelocity, contact events, and raycasts report them like any other
 // body. The flip side: destroying a part body (Physics.destroyBody) destroys
 // the WHOLE ragdoll, because bodies + joints live and die as one unit.
 //
 // Pose format (used by pose()/localPose()/setPose/driveToPose*): a
-// Float32Array, 7 floats per part — [px,py,pz, qx,qy,qz,qw] — in the parts
+// Float32Array, 7 floats per part, [px,py,pz, qx,qy,qz,qw], in the parts
 // array order. pose() is world space; localPose() is relative to each
 // part's parent (root = world). setPose and the two drive calls also accept
-// 16 floats per part (column-major rigid mat4s — exactly what
+// 16 floats per part (column-major rigid mat4s, exactly what
 // AnimationPlayer.getBoneWorldMatrix returns, packed per part).
 
 /**
@@ -1668,7 +1668,7 @@ bike.setLeanController(false);
  * @param {{x,y,z,w}} [opts.parts[].rotation]- bind rotation, model space
  * @param {string}  [opts.parts[].shape='capsule'] - 'capsule' | 'box' | 'sphere'.
  *                                             Capsules are Y-axis-aligned in
- *                                             part-local space — use rotation
+ *                                             part-local space: use rotation
  *                                             to lay a limb along X/Z
  * @param {number}  [opts.parts[].halfHeight=0.15] - capsule cylinder half-height
  * @param {number}  [opts.parts[].radius=0.08]    - capsule/sphere radius
@@ -1726,13 +1726,13 @@ const rd = Physics.createRagdoll({
 rd.partCount;            // number of parts
 rd.partIndex('head');    // name → part index (-1 unknown)
 rd.partParent(i);        // parent part index (-1 = root)
-rd.partBody(i);          // the part's regular body TAG — Physics.addImpulse,
+rd.partBody(i);          // the part's regular body TAG. Physics.addImpulse,
                          // getVelocity, raycast hits, contact events all work
 rd.isActive;             // true while any part body is awake
 
 rd.pose();               // Float32Array partCount*7, WORLD space
 rd.localPose();          // Float32Array partCount*7, relative to parent part
-                         // (root = world) — drops into a bromesh Pose
+                         // (root = world), drops into a bromesh Pose
 rd.setPose(pose);        // teleport all parts (7- or 16-stride)
 rd.activate();           // wake / sleep the whole body set
 rd.deactivate();
@@ -1741,7 +1741,7 @@ rd.addImpulse(x, y, z);  // impulse on every part (N·s each)
 /**
  * Power the swing-twist joints toward the target pose's parent-relative
  * rotations (Jolt DriveToPoseUsingMotors: position motors on swing + twist).
- * Motors PERSIST until stopDrive() — call once, not per frame (re-call to
+ * Motors PERSIST until stopDrive(): call once, not per frame (re-call to
  * change the target). The root is not driven; positions in the pose are
  * ignored (only relative rotations matter). Great for "get up", stagger,
  * or animation-following that stays physical.
@@ -1757,7 +1757,7 @@ rd.stopDrive();          // motors off → limp ragdoll again
 /**
  * Hard tracking: set part velocities so every part reaches its target
  * transform in dt seconds (Jolt DriveToPoseUsingKinematics). Positions ARE
- * used. Re-issue every step while tracking — large jumps are clamped by the
+ * used. Re-issue every step while tracking, large jumps are clamped by the
  * max velocity caps, so treat it as incremental pursuit, not teleport.
  *
  * @param {Float32Array|number[]} pose - partCount*7 or partCount*16 floats
@@ -1779,13 +1779,13 @@ rd.destroy();            // remove bodies + joints; handle is dead after.
 // Ragdoll ↔ skinned mesh recipes (Godot PhysicalBone3D flow)
 // -----------------------------------------------------------------------------
 //
-// Author the skeleton so bone i mirrors part i — same order, same parents,
+// Author the skeleton so bone i mirrors part i, same order, same parents,
 // bones AT the part bind transforms (inverseBind = inverse of the part's
-// model-space bind matrix) — and keep the skinned node's own transform at
+// model-space bind matrix), and keep the skinned node's own transform at
 // identity (the ragdoll's world transforms then ARE the mesh's model space).
 // Both recipes are verified end-to-end in tests/physics/test_ragdoll.js.
 //
-// RECIPE 1 — ragdoll drives the mesh (limp / knocked out). localPose() is
+// RECIPE 1, ragdoll drives the mesh (limp / knocked out). localPose() is
 // parent-relative, exactly what the bromesh Pose's local joint slots hold:
 //
 //   const pose = skel.bindPose();                // bromesh rigging objects
@@ -1804,8 +1804,8 @@ rd.destroy();            // remove bodies + joints; handle is dead after.
 // map ragdoll parts onto their bone indices and leave the rest at bind:
 // pd[boneOf[i] * 10 + k] = rp[i * 7 + k].
 //
-// RECIPE 2 — animation drives the ragdoll (powered / getting up). Sample the
-// AnimationPlayer's bone matrices (model space, column-major — accepted
+// RECIPE 2, animation drives the ragdoll (powered / getting up). Sample the
+// AnimationPlayer's bone matrices (model space, column-major, accepted
 // directly as a 16-stride pose) and set them as the motor target:
 //
 //   const boneOfPart = ['pelvis', 'spine', 'head', 'upperArmR'];  // part i → bone name
@@ -1818,7 +1818,7 @@ rd.destroy();            // remove bodies + joints; handle is dead after.
 //   }
 //   // call when the target should change (e.g. each frame during a getup);
 //   // rd.stopDrive() to go limp again. driveToPoseKinematic(target, dt) is
-//   // the hard-tracking variant (call every step — parts remain real bodies
+//   // the hard-tracking variant (call every step, parts remain real bodies
 //   // that push whatever is in the way).
 
 // -----------------------------------------------------------------------------
@@ -1826,7 +1826,7 @@ rd.destroy();            // remove bodies + joints; handle is dead after.
 // -----------------------------------------------------------------------------
 //
 // A Jolt SoftBody (XPBD): a particle cloud held together by edge / shear /
-// bend constraints, colliding with the rest of the world — the SoftBody3D
+// bend constraints, colliding with the rest of the world, the SoftBody3D
 // analog. Two creation paths:
 //
 //   cloth: a gridX*gridZ vertex grid in the LOCAL XZ plane (Y up), centered
@@ -1834,7 +1834,7 @@ rd.destroy();            // remove bodies + joints; handle is dead after.
 //     corners are 0, gridX-1, (gridZ-1)*gridX and gridX*gridZ-1. Faces wind
 //     counter-clockwise seen from +Y (rest normals point up).
 //   mesh: an arbitrary triangle mesh. With pressure > 0 it should be CLOSED
-//     with outward (CCW-from-outside) winding — the enclosed gas volume is
+//     with outward (CCW-from-outside) winding, the enclosed gas volume is
 //     what inflates it (an inside-out mesh is flipped automatically). A
 //     pressurized ball is mesh + pressure; no extra constraints needed.
 //
@@ -1868,7 +1868,7 @@ rd.destroy();            // remove bodies + joints; handle is dead after.
  *
  * @param {number}  [opts.compliance=0]      - edge stretch compliance
  *                                             (1/stiffness; 0 = rigid edges,
- *                                             larger = stretchier — 1e-4 is
+ *                                             larger = stretchier: 1e-4 is
  *                                             already noticeably soft)
  * @param {number}  [opts.shearCompliance]   - cloth shear edges; default =
  *                                             compliance
@@ -1895,7 +1895,7 @@ rd.destroy();            // remove bodies + joints; handle is dead after.
  * @param {{x,y,z}}   [opts.position]        - world placement of the local origin
  * @param {{x,y,z,w}} [opts.rotation]        - baked into the vertices (the
  *                                             body itself keeps identity
- *                                             rotation — Jolt simulates soft
+ *                                             rotation: Jolt simulates soft
  *                                             bodies more accurately that way)
  * @returns {PhysicsSoftBody}
  */
@@ -1906,16 +1906,16 @@ const sb = Physics.createSoftBody({
 
 sb.vertexCount;          // number of particles
 sb.body;                 // the soft body's regular body TAG (-1 after destroy)
-sb.vertices();           // Float32Array vertexCount*3 — WORLD-space positions,
+sb.vertices();           // Float32Array vertexCount*3, WORLD-space positions,
                          // one snapshot per call (stream this into a mesh)
-sb.topology();           // { positions, indices, gridX, gridZ } — the REST
+sb.topology();           // { positions, indices, gridX, gridZ }, the REST
                          // shape: local positions (Float32Array), triangle
                          // list (Uint32Array), and the cloth grid (0/0 for
                          // mesh bodies). Vertex order matches vertices()
                          // one-to-one and is stable for the body's lifetime.
 
 sb.setVertex(i, x, y, z);         // teleport one vertex (world space, zeroes
-                                  // its velocity) — grab interactions. Fast
+                                  // its velocity), grab interactions. Fast
                                   // drags prefer setVertexVelocity (a placed
                                   // vertex can tunnel).
 sb.setVertexVelocity(i, x, y, z); // set one vertex's velocity (world space)
@@ -1929,7 +1929,7 @@ sb.destroy();                     // remove the body; handle is dead after.
 //       mesh: { vertices, indices, pressure: 2000, mass: 2 },  // closed mesh
 //       position: { x: 0, y: 3, z: 0 }, restitution: 0.6,
 //   });
-//   Physics.addImpulse(ball.body, 20, 0, 0);   // regular body API — it rolls
+//   Physics.addImpulse(ball.body, 20, 0, 0);   // regular body API. It rolls
 
 // Sandbox worlds have the same API; the soft body steps inside w.step(dt):
 //   const w = Physics.createWorldHandle({ maxBodies: 64 });
@@ -1953,7 +1953,7 @@ sb.destroy();                     // remove the body; handle is dead after.
 //   const topo = sb.topology();
 //   const node = scene.createMesh({
 //       positions: sb.vertices(), indices: topo.indices,
-//       recomputeNormals: true,               // no normals in the stream —
+//       recomputeNormals: true,               // no normals in the stream,
 //       color: 'crimson', roughness: 0.9,     // derive smooth ones
 //   });
 //   // per frame:
@@ -1962,4 +1962,4 @@ sb.destroy();                     // remove the body; handle is dead after.
 //
 // A cloth seen from both sides wants `twoSided: true` on createMesh (the
 // mesh pass backface-culls otherwise). For a pressurized ball pass the SAME
-// vertices/indices you gave the physics mesh — vertex order is preserved.
+// vertices/indices you gave the physics mesh, vertex order is preserved.

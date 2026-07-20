@@ -1,4 +1,4 @@
-// bro.flora — broflora ecosystem simulation
+// bro.flora, broflora ecosystem simulation
 // =========================================
 // Bindings for the broflora multi-scale plant simulation
 // (Makowski et al. 2019, "Synthetic Silviculture"). A world is a ticking
@@ -47,7 +47,7 @@ const world = bro.flora.createWorld({
 /**
  * Register a branch-module prototype. Returns the prototype's index, to
  * be passed to addVoronoiSite / addPlant. Prototypes are immutable once
- * registered — every plant referencing a prototype holds a raw pointer
+ * registered: every plant referencing a prototype holds a raw pointer
  * to broflora's internal storage, which the world manages.
  *
  * Topology rules: edges are undirected pairs into `nodes`, declared in
@@ -80,7 +80,7 @@ const protoY = world.addPrototype({
 });
 
 /**
- * Built-in prototype specs — ready-made branch modules so you don't have
+ * Built-in prototype specs: ready-made branch modules so you don't have
  * to hand-author node/edge graphs (and the basipetal parent<child edge
  * ordering they require). Each returns a plain spec object that drops
  * straight into world.addPrototype(...).
@@ -92,7 +92,7 @@ const protoY = world.addPrototype({
  *                                              3D and pitched out by `spread`
  *                                              (0..1, default 0.55). The
  *                                              workhorse for full, rounded
- *                                              crowns — every spawn adds
+ *                                              crowns: every spawn adds
  *                                              `arms` shoots so the crown
  *                                              fills volumetrically.
  */
@@ -118,7 +118,7 @@ world.addVoronoiSite(protoY, 0.2, 0.85);
  * Plant a seedling. The plant's initial root module is created from
  * `prototypeIndex`; subsequent modules are spawned by the simulation.
  *
- * Species fields are partially applied — fields you omit keep their
+ * Species fields are partially applied: fields you omit keep their
  * defaults. See broflora's `Species` definition for the full list.
  *
  * @typedef {Object} PlantSpec
@@ -153,7 +153,7 @@ world.addPlant({
  *
  * Modules inside plants reference only their plant's prototypes (by
  * pointer) and other modules inside the same plant (by index), so the
- * swap is safe — no cross-plant pointers exist.
+ * swap is safe: no cross-plant pointers exist.
  *
  * @param {number} plantIdx
  * @returns {boolean}
@@ -201,14 +201,14 @@ world.emitSegments;
  * are in [0,1] (or [0,2] for age01) so they can drive vertex attributes
  * or scatter density without normalisation.
  *
- * `light01` is the shade-tolerance-adjusted light (Q_eff) the sim runs on —
+ * `light01` is the shade-tolerance-adjusted light (Q_eff) the sim runs on,
  * a tolerant species floors it near 1.0. `lightExposure01` is the RAW
  * illumination Q·Q_G before that lerp, so it carries the true shadow
- * gradient (~1 in sun, →0 deep in a closed canopy) — use it (not light01)
+ * gradient (~1 in sun, →0 deep in a closed canopy). Use it (not light01)
  * to carve foliage/bloom density by actual shade.
  *
  * `twigGrade01` is 1 on shoots at leaf thickness, falling to 0 on branches
- * thicker than ~6x the species leaf diameter — the "off the trunk/scaffold"
+ * thicker than ~6x the species leaf diameter: the "off the trunk/scaffold"
  * component baked into `mass`. Multiply it into any custom density recipe
  * that ignores `mass` (e.g. one built from `lightExposure01`), or leaves
  * will scatter onto structural branches as readily as onto twigs.
@@ -222,7 +222,7 @@ const fol  = world.emitFoliage();
 // Zip them: segs[i] and fol[i] describe the same prototype edge.
 
 /**
- * Bloom / fruit anchor candidates — one per terminal node of each
+ * Bloom / fruit anchor candidates: one per terminal node of each
  * terminal module on every flowering plant. Empty for pre-flowering
  * plants. Feed to bromesh.packAnchors to thin overlapping candidates,
  * then instance a flower mesh at each survivor.
@@ -317,7 +317,7 @@ world.setClimate({ annualTempBase: 5 });
 /**
  * Read the cell-centered Q_G value at world-space `[x,y,z]`. Returns
  * null if the world has no shadow grid or the position falls outside.
- * Nearest-cell lookup — matches the value the simulation itself uses
+ * Nearest-cell lookup: matches the value the simulation itself uses
  * when computing each module's incident light. The shadow grid is
  * rebuilt every `step()`, so calling this between steps reflects the
  * current canopy occlusion.
@@ -332,14 +332,14 @@ const sun = world.sampleShadow([0, 5, 0]);   // ~1.0 above the canopy
 /**
  * Validate world invariants (topological order, prototype refs,
  * Voronoi indices). Returns null on success, an error string on
- * failure. O(N) over modules — useful in tests, not every tick.
+ * failure. O(N) over modules. Useful in tests, not every tick.
  *
  * @returns {string|null}
  */
 world.validate;
 
 // Read-only properties:
-//   world.simTime         — total simulated time (sum of dt).
-//   world.plantCount      — number of plants.
-//   world.prototypeCount  — number of registered prototypes.
-//   world.moduleCount     — sum of modules across all plants.
+//   world.simTime, total simulated time (sum of dt).
+//   world.plantCount, number of plants.
+//   world.prototypeCount, number of registered prototypes.
+//   world.moduleCount, sum of modules across all plants.

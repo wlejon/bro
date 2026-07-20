@@ -1,5 +1,5 @@
 // =============================================================================
-// bro TileWorld API Reference  —  scene.createTileWorld
+// bro TileWorld API Reference, scene.createTileWorld
 // =============================================================================
 //
 // A TileWorld renders a `bro::tile` grid as chunked, flat-topped tile geometry
@@ -9,18 +9,18 @@
 // world meshes that grid into chunk MeshNodes parented under one root node.
 //
 // Because tiles are real 3D geometry, "2D top-down", "isometric", and "3D" are
-// just camera choices (see scene.setCamera — orthographic + tilt gives iso) over
+// just camera choices (see scene.setCamera, orthographic + tilt gives iso) over
 // the same data. Flat maps are simply elevation-0 fields.
 //
 // Each solid cell (non-empty tile on the ground layer, index 0) emits a flat top
 // quad at its elevation height, plus vertical CLIFF quads on any edge where the
-// neighbour sits lower — or is empty / off the map, dropping to `baseLevel`.
+// neighbour sits lower, or is empty / off the map, dropping to `baseLevel`.
 // Top-face corners are darkened by an ambient-occlusion term from taller
 // neighbours, so steps and valleys read with contact shading.
 //
 // Surface appearance is one of two modes:
-//   • Palette   — `palette` gives an RGBA per ground-tile id (flat colour).
-//   • Atlas     — `atlas` (a tileset image) maps each ground-tile id to an
+//   • Palette, `palette` gives an RGBA per ground-tile id (flat colour).
+//   • Atlas, `atlas` (a tileset image) maps each ground-tile id to an
 //                 atlas cell on the top faces, with a `cliffCell` on the sides.
 //                 The AO term rides in per-vertex shading, so steps still read.
 // (Autotiling, multi-layer compositing, animation, object layers and ray→cell
@@ -75,14 +75,14 @@ class SceneGraph {
    *        (4 floats each); index 0 is empty. Absent → flat grey. Ignored when
    *        an atlas is set. Colours pass through the PBR lighting + ACES
    *        tonemap, so fully saturated values (e.g. pure 1,0,0) wash out
-   *        under a strong directional light — author palettes a step darker /
+   *        under a strong directional light: author palettes a step darker /
    *        desaturated from the colour you want on screen.
    *
-   * Tileset atlas (optional — replaces palette colour with a texture):
+   * Tileset atlas (optional: replaces palette colour with a texture):
    * @param {string} [opts.atlas] - app-relative path to a tileset image. The
    *        atlas is a regular grid of cells (see atlasColumns/atlasRows).
-   *        A path that does not exist or fails to decode is ignored SILENTLY
-   *        — no throw, no warning; the world just renders untextured. Check
+   *        A path that does not exist or fails to decode is ignored SILENTLY,
+   * no throw, no warning; the world just renders untextured. Check
    *        the atlas path first if tiles come out flat grey.
    * @param {Uint8Array} [opts.atlasPixels] - raw RGBA8 alternative to `atlas`;
    *        requires `atlasWidth` + `atlasHeight`.
@@ -107,7 +107,7 @@ class SceneGraph {
    * @param {string}   opts.autotiles[].mode - "edge" (4-bit edge mask → 16
    *        variants, E,N,W,S = bits 0..3), "blob47" (8-neighbour blob → 47
    *        variants), or "wang" (4-bit corner mask → 16, NE,SE,SW,NW = bits 0..3).
-   *        Any other string — including a typo — silently becomes "blob47",
+   *        Any other string: including a typo, silently becomes "blob47",
    *        so a misspelled mode misrenders instead of erroring.
    * @param {number}   [opts.autotiles[].layer=0] - layer the rule + family run
    *        on (use the overlay layer index for autotiled decals)
@@ -128,7 +128,7 @@ class SceneGraph {
    * Multi-layer overlays (optional; require an atlas). Name more than one layer
    * (`layers`) and tiles placed on layers >= 1 render as atlas-textured DECAL
    * quads floating just above each cell's ground top face, drawn bottom-up by
-   * layer index — roads, crops, decals over the base tile. `overlays` styles
+   * layer index: roads, crops, decals over the base tile. `overlays` styles
    * them, aligned to `layers` (index 0 = ground, ignored):
    * @param {Object[]} [opts.overlays] - per-layer style array
    * @param {number}   [opts.overlays[].opacity=1] - <1 makes the whole layer
@@ -137,10 +137,10 @@ class SceneGraph {
    *        from the atlas alpha channel
    *
    * Animated tiles (optional; require an atlas). A tile id cycles through a
-   * sequence of atlas cells over time — flowing water, swaying crops, torch
+   * sequence of atlas cells over time: flowing water, swaying crops, torch
    * flicker. Drive it from your frame loop with world.advance(dtMs); only
    * chunks holding animated tiles remesh, and only when the frame changes.
-   * NOTE: animations are keyed by tile id across ALL layers — the same id on
+   * NOTE: animations are keyed by tile id across ALL layers, the same id on
    * the ground layer and an overlay layer animates in both places. Use
    * globally unique ids for tiles that animate.
    * @param {Object[]} [opts.animations] - array of animations:
@@ -178,8 +178,8 @@ class TileWorld {
    * Set a per-cell RGB(A) tint (0..1), multiplied into the cell's ground and
    * overlay colour. Default white = no tint. Alpha is stored but only bites
    * with a layer's alphaCutoff; for translucency use an overlay layer opacity.
-   * Values are stored quantized to 8 bits per channel and clamped to 0..1 —
-   * don't rely on float-exact round-trips or >1 "overbright" tints.
+   * Values are stored quantized to 8 bits per channel and clamped to 0..1.
+   * Don't rely on float-exact round-trips or >1 "overbright" tints.
    */
   setTint(x, y, r, g, b, a = 1) {}
 
@@ -216,7 +216,7 @@ class TileWorld {
   worldToCell(worldX, worldZ) {}
 
   /**
-   * World-space XZ center of cell (x, y) — topology-aware (square cell center
+   * World-space XZ center of cell (x, y), topology-aware (square cell center
    * or hex pointy-top pixel center). Returns { x, z }. Useful for camera
    * framing, minimaps, and object anchoring without reimplementing the hex
    * pixel-center formula in JS.
@@ -225,7 +225,7 @@ class TileWorld {
 
   /**
    * Axis-aligned XZ bounding box of the whole grid in world space, topology-
-   * aware (a hex grid's extent isn't a clean width*cellSize box — this sweeps
+   * aware (a hex grid's extent isn't a clean width*cellSize box. This sweeps
    * the actual border-cell corners). Returns { minX, minZ, maxX, maxZ }.
    */
   worldBounds() {}
@@ -233,8 +233,8 @@ class TileWorld {
   // --- Picking / collision / navigation -------------------------------------
 
   /**
-   * Cast a world-space ray against the tile surface — the per-cell top faces
-   * AND the cliff sides between them — front-to-back with elevation occlusion
+   * Cast a world-space ray against the tile surface: the per-cell top faces
+   * AND the cliff sides between them: front-to-back with elevation occlusion
    * (a near plateau hides the ground behind it). Analytic grid traversal; no
    * BVH, so it works the instant the grid is authored, before any mesh build.
    *
@@ -255,13 +255,13 @@ class TileWorld {
    *
    * Hex worlds use a marching+bisection approximation instead of square's exact
    * analytic DDA (hex neighbour steps aren't axis-aligned, so there's no clean
-   * equivalent) — precision is bounded but more than sufficient for interactive
+   * equivalent): precision is bounded but more than sufficient for interactive
    * picking.
    */
   raycastCell(origin, dir, maxDist) {}
 
   /**
-   * World Y of the top surface of the cell under a world XZ position — the
+   * World Y of the top surface of the cell under a world XZ position, the
    * ground height an agent stands at. Returns a number, or null when that XZ is
    * off the grid or over an empty (hole) cell.
    */
@@ -269,7 +269,7 @@ class TileWorld {
 
   /**
    * Whether cell (x, y) is walkable: it carries ground (non-empty tile on layer
-   * 0) and none of `blockMask`'s flag bits are set on it — ANY shared bit
+   * 0) and none of `blockMask`'s flag bits are set on it, ANY shared bit
    * blocks, so a multi-bit mask means "blocked by any of these" (identical to
    * findPath/distanceField's blockMask). blockMask 0 (default) => every solid
    * cell is walkable. This is the predicate the nav-grid export uses per cell.
@@ -294,7 +294,7 @@ class TileWorld {
 
   /**
    * Stamp this world's non-walkable cells into an EXISTING bro.ai.game nav grid
-   * (additive — leaves its other obstacles intact). Returns the number of cells
+   * (additive: leaves its other obstacles intact). Returns the number of cells
    * blocked. Use when the nav grid spans more than just the tiles.
    * @param {AINavGrid} navGrid
    * @param {Object} [opts] { blockMask=0, padding=0 }
@@ -304,15 +304,15 @@ class TileWorld {
   // --- Grid search / regions / coordinate math ------------------------------
   // Deterministic integer queries over the cell grid (the bro::tile pathfind /
   // region / coord layers). Distinct from toNavGrid(): that feeds continuous-
-  // space steering agents; these are the turn-based / game-logic primitives —
+  // space steering agents; these are the turn-based / game-logic primitives,
   // movement ranges, creep pathing, blast propagation, zoning. Passability is
   // everywhere the isWalkable() predicate: non-empty ground tile and none of
   // `blockMask`'s flag bits set. Options common to the search calls:
-  //   blockMask — flag bits that make a cell impassable (default 0)
-  //   costs     — per-ground-tile-id step cost array (entering a cell costs
+  //   blockMask, flag bits that make a cell impassable (default 0)
+  //   costs, per-ground-tile-id step cost array (entering a cell costs
   //               costs[tileId], clamped >= 1; missing ids cost 1). Terrain
   //               movement costs for findPath.
-  //   conn      — "edge" (default; 4-way on square) or "vertex" (8-way with
+  //   conn, "edge" (default; 4-way on square) or "vertex" (8-way with
   //               diagonals). Hex is always 6-way and ignores conn.
 
   /**
@@ -332,13 +332,13 @@ class TileWorld {
    * -1 for unreachable/impassable cells. Without `costs` it's a uniform-step
    * BFS returning an Int32Array; with `costs` (per-tile-id step cost, as in
    * findPath) it's a weighted Dijkstra returning a Float32Array.
-   * Sources need not be passable themselves — a source on a blocked cell
+   * Sources need not be passable themselves: a source on a blocked cell
    * seeds distance 0 and spreads through its passable neighbours (matches
    * findPath's "you can path OUT of a blocked cell").
    * Movement ranges (field[i] <= moveRange), tower-defense creep flow (walk
    * downhill), influence maps.
    * Returns null (not an empty field) when the world has no grid or
-   * `sources` is omitted — null-check before indexing.
+   * `sources` is omitted: null-check before indexing.
    */
   distanceField(sources, opts) {}
 
@@ -353,7 +353,7 @@ class TileWorld {
   /**
    * Every maximal connected component of matching cells, scan order. Default
    * rule: any non-empty cell on `layer`; { id } or { flag } narrow it as in
-   * floodFill. Returns [ [{x,y},...], ... ] — "how many separate districts".
+   * floodFill. Returns [ [{x,y},...], ... ], "how many separate districts".
    */
   components(opts) {}
 
@@ -367,23 +367,23 @@ class TileWorld {
 
   /**
    * The cells adjacent to (x, y) in canonical direction order, in-bounds only.
-   * Topology-aware: 4 on square edge, 8 on square vertex, 6 on hex — so apps
+   * Topology-aware: 4 on square edge, 8 on square vertex, 6 on hex. So apps
    * never hand-roll odd-r hex offset tables.
    */
   cellNeighbors(x, y, conn) {}
 
-  /** Cells at EXACTLY `radius` from (x, y) — the hollow ring, in-bounds only. */
+  /** Cells at EXACTLY `radius` from (x, y), the hollow ring, in-bounds only. */
   cellRing(x, y, radius, conn) {}
 
   /**
-   * Cells within `radius` of (x, y) inclusive — the filled disk (diamond/box/
+   * Cells within `radius` of (x, y) inclusive, the filled disk (diamond/box/
    * hex per topology+conn), in-bounds only. Attack and movement ranges.
    */
   cellsInRange(x, y, radius, conn) {}
 
   /**
    * A connected cell line from (x0,y0) to (x1,y1) inclusive (Bresenham
-   * supercover on square — no diagonal gaps; cube-lerp on hex), in-bounds
+   * supercover on square: no diagonal gaps; cube-lerp on hex), in-bounds
    * only. Line-of-sight and projectile traces.
    */
   cellLine(x0, y0, x1, y1) {}
@@ -465,11 +465,11 @@ class TileWorld {
   /** Remesh every chunk (use after mutating the grid out-of-band). */
   rebuildAll() {}
 
-  /** Reconfigure from scratch — rebuilds the grid and all chunks. */
+  /** Reconfigure from scratch, rebuilds the grid and all chunks. */
   configure(opts) {}
 
   /**
-   * Serialize the grid (tiles/elevation/flags — not rendering config like
+   * Serialize the grid (tiles/elevation/flags: not rendering config like
    * palette/atlas/autotiles) to a versioned binary blob. Round-trips exactly
    * with load(): save() -> load(bytes) restores the same grid contents.
    * @returns {Uint8Array}
@@ -481,8 +481,8 @@ class TileWorld {
    * are taken from the saved data (may differ from the current config);
    * rendering config (cellSize, atlas, autotiles, overlays, animations, ...)
    * is preserved. Registered object KINDS survive too (kind indices stay
-   * valid), but their instance placements are cleared — cell coordinates are
-   * meaningless against the new grid — so re-place with addObject() after a
+   * valid), but their instance placements are cleared, cell coordinates are
+   * meaningless against the new grid, so re-place with addObject() after a
    * load. configure(), by contrast, is a full reset and destroys kinds.
    * Remeshes every chunk on success.
    * @param {Uint8Array} bytes

@@ -1,13 +1,13 @@
 // =============================================================================
-// bro <iframe> — embedded, isolated sub-documents
+// bro <iframe>, embedded, isolated sub-documents
 // =============================================================================
 //
 // An <iframe src="..."> embeds a full, isolated bro app inside a box in the
-// host document. It is not a web browsing context in the HTML sense — there is
-// no network, no history, no same-origin policy — but it IS a real, live,
+// host document. It is not a web browsing context in the HTML sense. There is
+// no network, no history, no same-origin policy, but it IS a real, live,
 // isolated sub-document:
 //
-//   • its own JS realm (a separate JSContext — globals do NOT leak either way)
+//   • its own JS realm (a separate JSContext, globals do NOT leak either way)
 //   • its own DOM tree, CSS cascade, layout, and timers/requestAnimationFrame
 //   • its own <canvas> scenes (2D), images, and ImageBitmaps
 //   • rendered to its own GPU surface and composited at the element's box,
@@ -16,7 +16,7 @@
 //     own :hover / :active / focus and click/dblclick semantics
 //
 // `src` points at a directory (or an index.html inside one): an iframe hosts a
-// directory-based bro app — index.html + styles + scripts — exactly like a
+// directory-based bro app, index.html + styles + scripts, exactly like a
 // top-level `bro <dir>`. Classic scripts run; <script type="module"> is not
 // yet supported inside an iframe and is skipped with a warning.
 //
@@ -50,7 +50,7 @@ const frame = document.querySelector('#stage');
 // Created from script
 // -----------------------------------------------------------------------------
 //
-// An <iframe> does not have to come from the app's initial HTML — create one and
+// An <iframe> does not have to come from the app's initial HTML, create one and
 // append it, and its sub-document is built on the next frame (in headless, on the
 // next flush()). Removing the element tears the sub-document down: JS realm, DOM,
 // timers, canvas scenes, and GPU surface.
@@ -64,11 +64,11 @@ const frame = document.querySelector('#stage');
 //
 // A src that names neither a directory nor a file is an error: the iframe stays
 // empty (capture() returns null) and the failure is logged once. It is NOT
-// retried on every DOM change — assign src again, or call reload(), to retry.
+// retried on every DOM change, assign src again, or call reload(), to retry.
 
 
 // -----------------------------------------------------------------------------
-// frame.src  — get / set
+// frame.src, get / set
 // -----------------------------------------------------------------------------
 //
 // The getter reflects the src attribute. Assigning src (re)loads the embedded
@@ -94,8 +94,8 @@ frame.reload();
 
 // The sub-document can also reload ITSELF: location.reload() inside the
 // embedded app queues the same deferred teardown + rebuild of its own iframe.
-// Deferred means the calling script keeps running to completion — the realm is
-// torn down at the engine's next safe point, never re-entrantly — and multiple
+// Deferred means the calling script keeps running to completion, the realm is
+// torn down at the engine's next safe point, never re-entrantly, and multiple
 // requests in one frame coalesce into a single rebuild. The host sees another
 // 'load' event, exactly as if it had called frame.reload().
 // (In the TOP-LEVEL document, location.reload() likewise tears down the app's
@@ -103,11 +103,11 @@ frame.reload();
 
 
 // -----------------------------------------------------------------------------
-// frame.capture()  — read back the rendered pixels ("look")
+// frame.capture(), read back the rendered pixels ("look")
 // -----------------------------------------------------------------------------
 //
 // Returns an ImageData ({ width, height, data:Uint8ClampedArray }, top-down
-// RGBA) of exactly what the sub-document last rendered into its box — the same
+// RGBA) of exactly what the sub-document last rendered into its box, the same
 // frame the user sees. This is the host's "look": generate an app, point an
 // iframe at it, let a frame render, then read what it produced and hand it to
 // an encoder or a vision model.
@@ -116,7 +116,7 @@ frame.reload();
 // happens to be holding: it quiesces the raster worker, drains any queued
 // reload, re-records the sub-document at its current box, and renders it on the
 // host thread. So reload() + capture() returns the JUST-WRITTEN app on the FIRST
-// call — no rAF timing games, no "wait for a frame to land" dance.
+// call, no rAF timing games, no "wait for a frame to land" dance.
 //
 // (On the GPU path that render targets the sub-document's own surface; under
 // --no-gpu it goes through the CPU rasterizer instead.)
@@ -135,7 +135,7 @@ frame.addEventListener('load', () => {
 // -----------------------------------------------------------------------------
 //
 // Fires on the <iframe> element (host realm) once the sub-document has been
-// parsed, scripted, and laid out — i.e. when it is safe to look at or drive the
+// parsed, scripted, and laid out, i.e. when it is safe to look at or drive the
 // embedded app. Fires on the initial load and on every reload()/src assignment.
 // Does not bubble.
 
@@ -153,10 +153,10 @@ frame.addEventListener('load', () => {
 // own coordinate space and dispatched there: the embedded app sees mousedown /
 // mouseup / click / mousemove, resolves its own :hover, and runs its own
 // listeners. The host does NOT see those events as clicks on the <iframe>
-// element — the frame is opaque to the host, like a real embedded document.
+// element, the frame is opaque to the host, like a real embedded document.
 //
 // (Keyboard/focus routing and wheel routing into sub-documents are not yet
-//  wired — a follow-up.)
+//  wired, a follow-up.)
 
 
 // -----------------------------------------------------------------------------
@@ -169,6 +169,6 @@ frame.addEventListener('load', () => {
 //     reach into the sub-document's DOM or JS from script. Drive it via files +
 //     reload(), and via input.
 //   • Nesting is NOT supported (v1): an <iframe> inside an iframe app never gets
-//     a sub-document — the element renders as an empty box. Only the app
+//     a sub-document, the element renders as an empty box. Only the app
 //     document is walked for frames. A nested frame under a bro.window host logs
 //     a warning; nested inside another iframe it fails silently.

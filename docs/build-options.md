@@ -1,4 +1,4 @@
-# Build options — modular `--with` / `--without` builds
+# Build options: modular `--with` / `--without` builds
 
 bro is split into a small always-buildable core plus optional feature groups, so
 a first build is trivial and extra capabilities can be added later without a
@@ -13,9 +13,9 @@ quickstart, see [BUILDING.md](../BUILDING.md).
    `cmake --build build`. No vcpkg, no CUDA toolkit, no hand-built Skia, no
    proprietary SDKs.
 2. **Heavy, self-contained subsystems are opt-in**, gated at their one real seam.
-3. **Adding a module later is incremental** — flip a flag, reconfigure, relink;
+3. **Adding a module later is incremental**: flip a flag, reconfigure, relink;
    not a from-scratch rebuild.
-4. **The JS API surface stays stable whether or not a module is compiled in** —
+4. **The JS API surface stays stable whether or not a module is compiled in**:
    an absent module reports `{ available: false }` (the existing `bro.steam` /
    `bro.gpu` pattern), so apps feature-detect instead of crashing.
 
@@ -26,23 +26,23 @@ lifetime constraint); it is out of scope here.
 
 ## Why this is worth doing (the cost centers)
 
-The current build is one chain — `bro` → `bro_engine` → `bro_js` (one monolithic
+The current build is one chain: `bro` → `bro_engine` → `bro_js` (one monolithic
 static lib) → **every** sibling, linked unconditionally in
 `src/js/CMakeLists.txt`. The onboarding friction is concentrated in three places,
 each isolated to a small number of edges:
 
 | Friction | Caused by | Isolated to |
 |---|---|---|
-| **vcpkg** required | `find_package` | `net` (GameNetworkingSockets) + `video` (libvpx/webm/Opus) — *only these two* |
+| **vcpkg** required | `find_package` | `net` (GameNetworkingSockets) + `video` (libvpx/webm/Opus): *only these two* |
 | **CUDA toolkit** required | nvcc | brotensor's GPU backend only (already `BROTENSOR_WITH_CUDA`) |
 | **Skia** hand-built | gitignored `lib/`, no prebuilt | core; fixed on a separate track (see [Skia](#skia-orthogonal-but-required)) |
 
 Gate net/video and the AI tower, keep CUDA opt-in, auto-fetch Skia, and a minimal
 build needs nothing but the submodules.
 
-Build mass, for scale (sibling source-file counts): the AI tower —
+Build mass, for scale (sibling source-file counts): the AI tower (
 brotensor (362) + brosoundml (171) + brolm (151) + brovisionml (121) +
-brodiffusion (119) ≈ **924 files** — is the dominant cost and is exactly what the
+brodiffusion, 119) is roughly **924 files**, the dominant cost, and exactly what the
 default build sheds.
 
 ## The key structural finding: brotensor is fully extractable
@@ -54,8 +54,8 @@ omit the Tensor type entirely:
 - **broimage → brotensor** is a single translation unit (`tensor_adapter.cpp`);
   its header only forward-declares `brotensor::Tensor`. The other 11 CPU source
   files never touch it. → gate with `BROIMAGE_WITH_TENSOR` (trivial).
-- **brogameagent → brotensor** lives *entirely* in `nn/*` and `learn/*`. The core
-  — navmesh, pathfinding, steering, perception, MCTS — has **zero** brotensor
+- **brogameagent → brotensor** lives *entirely* in `nn/*` and `learn/*`. The core (
+  navmesh, pathfinding, steering, perception, MCTS) has **zero** brotensor
   references, already walled off by directory. → gate with `BROGAMEAGENT_WITH_NN`
   (mechanical: move the nn/learn source list + the brotensor link behind the flag).
 
@@ -74,12 +74,12 @@ pathfinding) still ships.
 | `full` | Everything except the CUDA sub-lever (still opt-in). | yes | no (opt-in) |
 
 > All three profiles build, link, and run. `minimal` (~16 MB) compiles with no
-> vcpkg, no Jolt, no bromesh/brogameagent, and no AI tower — the renderer and
+> vcpkg, no Jolt, no bromesh/brogameagent, and no AI tower: the renderer and
 > service subsystems are gated at their engine seams behind the `BRO_WITH_*`
 > flags. `app` (~22 MB) is the default; `full` adds the AI tower.
 
 ```bash
-cmake -B build                                 # app profile (default) — needs vcpkg for net/video
+cmake -B build                                 # app profile (default), needs vcpkg for net/video
 cmake -B build -DBRO_PROFILE=full              # everything (adds the AI tower)
 cmake -B build -DBRO_PROFILE=app -DBRO_WITH_LM=ON   # app + language models (adds brolm+brotensor)
 ```
@@ -90,14 +90,14 @@ All default-off flags, when OFF, still install their JS namespace as a stub that
 reports `{ available: false }` and throws a clear "built without BRO_WITH_X"
 error on use.
 
-### Tier 0 — CORE (always on, no flag)
+### Tier 0: CORE (always on, no flag)
 
 `util · platform · render · svg · layout · dom · canvas · webgl · engine ·
 headless` + Skia · SDL · glad · qjs · qjsbind · brokit · htmlayout ·
 **broimage (tensor-free)**. The core, always-compiled `*_bindings.cpp`. A complete
 HTML/CSS/JS + Canvas2D + WebGL runtime with working screenshots.
 
-### Tier 1 — feature groups (brotensor-free)
+### Tier 1: feature groups (brotensor-free)
 
 | Flag | Pulls in | `minimal` | `app` | `full` | Notes |
 |---|:--|:--:|:--:|:--:|---|
@@ -106,17 +106,17 @@ HTML/CSS/JS + Canvas2D + WebGL runtime with working screenshots.
 | `BRO_WITH_AUDIO` | broaudio + audio_inference | off | on | on | self-contained, no vcpkg |
 | `BRO_WITH_GAMEAI` | brogameagent **core** (nav/path/steer/MCTS) | off | on | on | brotensor-free |
 | `BRO_WITH_FLORA` | broflora | off | on | on | needs `3D` (bromesh) |
-| `BRO_WITH_TEXT_SHAPING` | HarfBuzz + Skia's UAX#9 ICU bidi subset + `modules/skunicode` | **on** | on | on | no vcpkg, no Skia rebuild — compiled from the Skia source bundle. On in *every* profile so there is one text path, not two. Off = 1:1 codepoint→glyph (no ligatures, kerning or Arabic joining). Needs a source bundle carrying the shaping sources — see [third_party/skia/BUNDLE.md](../third_party/skia/BUNDLE.md) |
-| `BRO_WITH_WEBP` | libwebp decoder | **on** | on | on | no vcpkg, no Skia rebuild — compiled from the Skia source bundle alongside HarfBuzz. On in *every* profile for the same reason shaping is: the pinned pre-built Skia has no libwebp while a hand-built Linux/macOS one does, so leaving it to Skia makes `.webp` work on one platform and fail on another. Off = `.webp` does not decode anywhere |
+| `BRO_WITH_TEXT_SHAPING` | HarfBuzz + Skia's UAX#9 ICU bidi subset + `modules/skunicode` | **on** | on | on | no vcpkg, no Skia rebuild: compiled from the Skia source bundle. On in *every* profile so there is one text path, not two. Off = 1:1 codepoint→glyph (no ligatures, kerning or Arabic joining). Needs a source bundle carrying the shaping sources. See [third_party/skia/BUNDLE.md](../third_party/skia/BUNDLE.md) |
+| `BRO_WITH_WEBP` | libwebp decoder | **on** | on | on | no vcpkg, no Skia rebuild: compiled from the Skia source bundle alongside HarfBuzz. On in *every* profile for the same reason shaping is: the pinned pre-built Skia has no libwebp while a hand-built Linux/macOS one does, so leaving it to Skia makes `.webp` work on one platform and fail on another. Off = `.webp` does not decode anywhere |
 | `BRO_WITH_NET` | GameNetworkingSockets | off | on | on | **needs vcpkg**; a runtime without JS network access would be surprising |
 | `BRO_WITH_VIDEO` | libvpx/webm/Opus | off | on | on | **needs vcpkg**; `<video>` should work out of the box |
-| `BRO_WITH_STEAM` | — (runtime dlopen) | off | on | on | already implemented; the stub template |
+| `BRO_WITH_STEAM` | none (runtime dlopen) | off | on | on | already implemented; the stub template |
 
-### Tier 2 — the AI tower (brotensor is the base)
+### Tier 2: the AI tower (brotensor is the base)
 
 | Flag | Pulls in | `full` | Requires |
 |---|:--|:--:|---|
-| `BRO_WITH_TENSOR` | brotensor (CPU); gpu/tensor bindings | on | — |
+| `BRO_WITH_TENSOR` | brotensor (CPU); gpu/tensor bindings | on | none |
 | `BRO_WITH_TENSOR_CUDA` | brotensor CUDA backend | **off** | `TENSOR` + CUDA toolkit |
 | `BRO_WITH_TENSOR_METAL` | brotensor Metal backend | **off** | `TENSOR` + macOS |
 | `BRO_WITH_LM` | brolm | on | `TENSOR` |
@@ -126,7 +126,7 @@ HTML/CSS/JS + Canvas2D + WebGL runtime with working screenshots.
 | `BRO_WITH_TRIPOSPLAT` | triposplat pipeline | on | `VISION` + `DIFFUSION` + `3D` |
 | `BRO_WITH_GAMEAI_NN` | brogameagent `nn/*` + `learn/*` | on | `GAMEAI` + `TENSOR` |
 
-`BRO_WITH_TENSOR_CUDA` stays **off even in `full`** — it needs the CUDA toolkit
+`BRO_WITH_TENSOR_CUDA` stays **off even in `full`**. It needs the CUDA toolkit
 and is the single biggest build-time cost. It maps to the existing
 `BROTENSOR_WITH_CUDA` (see the forwarding block in the top-level `CMakeLists.txt`)
 and is turned on explicitly, orthogonal to the feature flags.
@@ -179,11 +179,11 @@ that throws `"bro.x is unavailable: this build was compiled without BRO_WITH_X"`
 
 > Feature-detect with `bro.x.available === false`, **not** `if (bro.x)`. The
 > namespace object always exists and is always truthy, and so is every method
-> reached through it — the throw happens on call, not on lookup.
+> reached through it; the throw happens on call, not on lookup.
 
 `src/js/CMakeLists.txt` doesn't swap sources; it only wraps each optional
 sibling's `target_link_libraries` entry in the matching `if()`. The
-`installXBindings()` call in `engine_init.cpp` stays **unconditional** — the call
+`installXBindings()` call in `engine_init.cpp` stays **unconditional**: the call
 site never learns whether the module is real. `third_party/CMakeLists.txt` wraps
 each optional sibling's `add_subdirectory` in `if(BRO_WITH_X)`.
 
@@ -201,65 +201,65 @@ contained fix:
 | `triposplat_bindings.cpp` | vision + diffusion + tensor + image | its own flag `BRO_WITH_TRIPOSPLAT` |
 | `message_serializer.cpp` | bromesh (worker plumbing) | mesh-serialization branch behind `#if BRO_WITH_3D`; forward-decl otherwise |
 | `tile_bindings.cpp` | broimage (core) + brogameagent nav_grid | tile is `3D`; the nav_grid branch behind `#if BRO_WITH_GAMEAI` |
-| `diffusion_bindings.cpp` | brodiffusion + brolm | no file work — auto-enable pulls `LM` |
-| `stt_bindings.cpp` | brosoundml + brolm | no file work — auto-enable pulls `LM` |
+| `diffusion_bindings.cpp` | brodiffusion + brolm | no file work: auto-enable pulls `LM` |
+| `stt_bindings.cpp` | brosoundml + brolm | no file work: auto-enable pulls `LM` |
 | `ai_nn_bindings.cpp` | brogameagent + brotensor | `BRO_WITH_GAMEAI_NN` |
 | `ai_learn_bindings.cpp` | brogameagent + brotensor | `BRO_WITH_GAMEAI_NN` |
 | `flora_bindings.cpp` | broflora + bromesh | `BRO_WITH_FLORA` (implies `3D`) |
 
-## Skia — orthogonal but required
+## Skia: orthogonal but required
 
 Skia is core (dom/canvas/render need it) and is **not** a `BRO_WITH_` flag. It
-used to be the worst onboarding step — `third_party/skia/{src,include,lib}` are
+used to be the worst onboarding step. `third_party/skia/{src,include,lib}` are
 gitignored, so a fresh clone had to hand-build Skia (GN + ninja + `git-sync-deps`).
 
 **Now auto-fetched** (`third_party/skia/skia.cmake`): on first configure,
 `file(DOWNLOAD)` + SHA-256-verify pulls the headers/source bundle and the Release
-library — pinned to Skia `chrome/m147`, so lib and headers always match — from
+library, pinned to Skia `chrome/m147`, so lib and headers always match, from
 the repo's GitHub releases, and the Release lib is used for all configs (Debug
 included). Prebuilt libs are hosted for Windows x64, Linux x64, and macOS arm64;
 Intel macOS and a Windows Debug lib still fall back to the `build_skia_*.sh`
 scripts. Set `-DBRO_FETCH_SKIA=OFF` to opt out. Skia is BSD-3-Clause, so
 redistributing the prebuilt binaries (with the permissive licenses of its
-vendored deps — HarfBuzz, zlib, libpng/jpeg/webp, expat, …) is permitted.
+vendored deps, HarfBuzz, zlib, libpng/jpeg/webp, expat, …) is permitted.
 
 ## Adding a module later
 
 With the static-lib structure, `-DBRO_WITH_LM=ON` + rebuild reconfigures,
 compiles only brolm (+ brotensor) and `lm_bindings.cpp`, and **relinks**
 `bro`/`bro-headless`. As long as the build dir is intact, that is incremental
-(minutes, mostly the sibling) — not a from-scratch rebuild. ccache/incremental
+(minutes, mostly the sibling), not a from-scratch rebuild. ccache/incremental
 compilation covers the rest.
 
 Caveat on presets: `-DBRO_PROFILE` seeds flag defaults on **first** configure via
 `option()`; individual `-D` flags (already in the cache) win. Switching profile on
-an existing build dir won't move flags already cached — clear the specific
+an existing build dir won't move flags already cached. Clear the specific
 `BRO_WITH_*` cache entries (or reconfigure fresh) to re-baseline.
 
 ## Implementation surface (where changes land)
 
-- **Top-level `CMakeLists.txt`** — profile → flag defaults; the auto-enable
+- **Top-level `CMakeLists.txt`**: profile → flag defaults; the auto-enable
   resolve block (next to the existing CUDA forwarding).
-- **`third_party/CMakeLists.txt`** — wrap each optional sibling's
+- **`third_party/CMakeLists.txt`**: wrap each optional sibling's
   `add_subdirectory` in `if(BRO_WITH_X)`; add `BROIMAGE_WITH_TENSOR` /
   `BROGAMEAGENT_WITH_NN` forwarding.
-- **`../broimage/CMakeLists.txt`** — `BROIMAGE_WITH_TENSOR` option (gate the
+- **`../broimage/CMakeLists.txt`**: `BROIMAGE_WITH_TENSOR` option (gate the
   brotensor `add_subdirectory` + link + `tensor_adapter.cpp`).
-- **`../brogameagent/CMakeLists.txt`** — `BROGAMEAGENT_WITH_NN` option (gate the
+- **`../brogameagent/CMakeLists.txt`**: `BROGAMEAGENT_WITH_NN` option (gate the
   brotensor dep + the `nn/*` `learn/*` source list + NN tools).
-- **`src/js/CMakeLists.txt`** — conditional sibling links (the source list is
+- **`src/js/CMakeLists.txt`**: conditional sibling links (the source list is
   unconditional; the gating lives in `#if BRO_WITH_X` inside each
   `*_bindings.cpp`).
-- **`src/scene/CMakeLists.txt`** — conditional brogameagent/physics/flora links;
+- **`src/scene/CMakeLists.txt`**: conditional brogameagent/physics/flora links;
   gate the AI-world files (`agent_binding.*`, `ai_world_ticker.*`) and the
   `scene_graph` AI/physics hooks.
-- **`src/js/feature_stub.h` + `feature_stubs.cpp`** — the one shared
+- **`src/js/feature_stub.h` + `feature_stubs.cpp`**: the one shared
   `installUnavailableNamespace` helper every compiled-out cluster falls back to.
-- **`engine_init.cpp`** — unchanged call sites (the point of the stub pattern).
+- **`engine_init.cpp`**: unchanged call sites (the point of the stub pattern).
 
 ## Testing implications
 
-The preset triple (`minimal` / `app` / `full`) is the CI matrix that matters —
+The preset triple (`minimal` / `app` / `full`) is the CI matrix that matters:
 three configurations cover the meaningful surface. Individual-flag combinations
 are constrained by auto-enable, so the combinatorial space is small; spot-check
 `app + one AI flag` to exercise the stub↔real boundary and the auto-enable rules.

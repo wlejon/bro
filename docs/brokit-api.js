@@ -5,7 +5,7 @@
 // brokit provides the standard runtime APIs available to all bro JS contexts.
 // APIs fall into two categories:
 //
-//   Node-compatible modules — available via require():
+//   Node-compatible modules, available via require():
 //     const fs = require('fs');           // or require('node:fs')
 //     const path = require('path');       // or require('node:path')
 //     const os = require('os');           // or require('node:os')
@@ -13,7 +13,7 @@
 //     const net = require('net');         // raw TCP client + server
 //     const dgram = require('dgram');     // raw UDP sockets
 //
-//   Your own files — require() also loads JS and JSON off disk, so an app's JS
+//   Your own files, require() also loads JS and JSON off disk, so an app's JS
 //   can be split across files instead of living in one script:
 //     const { photoFeats } = require('./photo_feats.js');  // .js optional
 //     const config = require('./config.json');             // parsed
@@ -26,7 +26,7 @@
 //   `module.exports = {...}` and `exports.foo = ...` work, and the module sees
 //   __filename / __dirname.
 //
-//   Web-compatible globals — available on globalThis, matching browser APIs:
+//   Web-compatible globals, available on globalThis, matching browser APIs:
 //     fetch, URL, URLSearchParams, crypto, WebSocket, WebSocketServer, EventSource,
 //     TextEncoder, TextDecoder, ReadableStream, WritableStream,
 //     CompressionStream, DecompressionStream,
@@ -47,7 +47,7 @@
 
 
 // -----------------------------------------------------------------------------
-// fs — require('fs')
+// fs, require('fs')
 // -----------------------------------------------------------------------------
 
 const fs = require('fs');
@@ -123,7 +123,7 @@ fs.constants.X_OK;  // 1
 //
 //   options: {
 //     recursive: boolean,   // include subdirectories (default false)
-//     persistent: boolean,  // accepted for Node compat — currently ignored
+//     persistent: boolean,  // accepted for Node compat, currently ignored
 //   }
 //   listener: (eventType, filename) => void
 //     eventType: 'rename' (created/deleted/moved) | 'change' (modified)
@@ -136,7 +136,7 @@ fs.constants.X_OK;  // 1
 //   w.off(event, listener);
 //   w.close();                       // idempotent
 //
-// Events are coalesced by the OS, not by us — a single editor save may
+// Events are coalesced by the OS, not by us, a single editor save may
 // produce one or several 'change' events depending on how the editor writes
 // (truncate-then-write, atomic-rename, etc).
 
@@ -147,7 +147,7 @@ watcher.on('error', err => console.error('watch error:', err.message));
 
 
 // -----------------------------------------------------------------------------
-// path — require('path')
+// path, require('path')
 // -----------------------------------------------------------------------------
 
 const path = require('path');
@@ -166,7 +166,7 @@ path.delimiter;          // ';' on Windows, ':' on Linux
 
 
 // -----------------------------------------------------------------------------
-// os — require('os')
+// os, require('os')
 // -----------------------------------------------------------------------------
 
 const os = require('os');
@@ -180,7 +180,7 @@ os.EOL;                  // '\r\n' on Windows, '\n' on Linux
 
 
 // -----------------------------------------------------------------------------
-// child_process — require('child_process')
+// child_process, require('child_process')
 // -----------------------------------------------------------------------------
 
 const cp = require('child_process');
@@ -193,11 +193,11 @@ cp.spawnSync(command, args?, options?);            // → { stdout, stderr, stat
 
 
 // -----------------------------------------------------------------------------
-// net — require('net') — raw TCP client + server
+// net, require('net'), raw TCP client + server
 // -----------------------------------------------------------------------------
 //
 // SECURITY: server.listen() binds 127.0.0.1 (loopback) unless a host is given
-// explicitly. A listener is a real port on the user's machine — pass
+// explicitly. A listener is a real port on the user's machine. Pass
 // '0.0.0.0' (or an interface address) only when you mean to expose it.
 //
 // v1 notes:
@@ -246,16 +246,16 @@ c.on('data', (chunk) => { c.end(); srv.close(); });
 
 
 // -----------------------------------------------------------------------------
-// dgram — require('dgram') — raw UDP sockets
+// dgram, require('dgram'), raw UDP sockets
 // -----------------------------------------------------------------------------
 //
 // SECURITY: bind() defaults to 127.0.0.1 (::1 for udp6) unless a host is
-// given explicitly — pass '0.0.0.0' to receive from the network.
+// given explicitly, pass '0.0.0.0' to receive from the network.
 //
 // v1 notes:
 //   - 'udp4' and 'udp6' both work (same code path, AF_INET / AF_INET6).
 //   - Broadcast is opt-in via setBroadcast(true).
-//   - Multicast (addMembership etc.) is DEFERRED — not implemented.
+//   - Multicast (addMembership etc.) is DEFERRED, not implemented.
 //   - send() is fire-and-forget: a full kernel buffer drops the datagram
 //     (faithful UDP); the callback reports only local errors.
 
@@ -290,16 +290,16 @@ tx.send('hello', rx.address().port);          // → rx 'message' fires
 
 fetch(url, options?);    // → Promise<Response>
 // options:
-//   method   — 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | ...   (default 'GET')
-//   headers  — plain object { 'Content-Type': 'application/json', ... } or Headers
-//   body     — string, ArrayBuffer, or TypedArray (Blob/FormData not yet supported)
+//   method, 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | ...   (default 'GET')
+//   headers, plain object { 'Content-Type': 'application/json', ... } or Headers
+//   body, string, ArrayBuffer, or TypedArray (Blob/FormData not yet supported)
 // Note: brokit's fetch does NOT yet implement signal/AbortSignal, keepalive, redirect,
 // credentials, mode, cache, referrer, or integrity. Pass only the keys above.
 //
 // Response: {
 //   ok, status, statusText, url,
 //   headers,                  // Headers object (get/has/forEach)
-//   body,                     // ReadableStream — pull chunks for streaming
+//   body,                     // ReadableStream, pull chunks for streaming
 //   bodyUsed,                 // becomes true after text()/json()/arrayBuffer()/blob()
 //   text()       → Promise<string>,
 //   json()       → Promise<any>,
@@ -309,7 +309,7 @@ fetch(url, options?);    // → Promise<Response>
 // }
 // file:// and data: URLs are also supported (no network).
 
-// Example — POST JSON
+// Example, POST JSON
 const res = await fetch('https://api.example.com/users', {
   method: 'POST',
   headers: { 'Content-Type': 'application/json' },
@@ -318,7 +318,7 @@ const res = await fetch('https://api.example.com/users', {
 if (!res.ok) throw new Error(res.statusText);
 const user = await res.json();
 
-// Example — stream a large response
+// Example, stream a large response
 const r = await fetch('https://example.com/big.bin');
 const reader = r.body.getReader();
 let total = 0;
@@ -391,10 +391,10 @@ new WritableStream({ start, write, close, abort });
 // ── Compression Streams ──
 // Incremental DEFLATE codec (miniz-backed) behind the web-standard classes.
 // format: 'gzip' (RFC 1952) | 'deflate' (ZLIB-wrapped, RFC 1950) |
-//         'deflate-raw' (raw DEFLATE, RFC 1951) — anything else → TypeError.
+//         'deflate-raw' (raw DEFLATE, RFC 1951), anything else → TypeError.
 // Chunks written must be BufferSource (ArrayBuffer or view); other types
 // error the stream with TypeError. Output arrives as Uint8Array chunks as
-// the codec produces them (bounded ≤64 KiB — nothing buffers whole inputs).
+// the codec produces them (bounded ≤64 KiB, nothing buffers whole inputs).
 // Decompression errors (corrupt data, truncated stream, trailing garbage,
 // gzip crc/size mismatch) error the stream with TypeError.
 
@@ -424,21 +424,21 @@ ws.binaryType;           // 'blob' (default) or 'arraybuffer'
 
 
 // -----------------------------------------------------------------------------
-// WebSocketServer — RFC 6455 server (also require('websocket-server'))
+// WebSocketServer, RFC 6455 server (also require('websocket-server'))
 // -----------------------------------------------------------------------------
 //
 // Serves ws:// connections on a raw TCP listener (the `net` module). Delivered
 // sockets mirror the WebSocket CLIENT surface above, so handler code is
 // symmetric across both ends.
 //
-// SECURITY: binds 127.0.0.1 unless options.host is given explicitly — a
+// SECURITY: binds 127.0.0.1 unless options.host is given explicitly, a
 // listener is a real port on the user's machine.
 //
 // v1 notes:
 //   - No TLS serving (no wss:// listener; the CLIENT does support wss://).
 //   - No permessage-deflate (the extension offer is simply not acknowledged).
 //   - Subprotocols are not negotiated (Sec-WebSocket-Protocol ignored).
-//   - Client frames MUST be masked (RFC 6455) — unmasked input fails the
+//   - Client frames MUST be masked (RFC 6455): unmasked input fails the
 //     connection with close code 1002. Server frames are never masked.
 //   - Fragmented messages are reassembled; ping frames are answered with pong
 //     automatically; close handshake carries code + reason both ways.
@@ -486,7 +486,7 @@ es.removeEventListener(type, listener);
 // -----------------------------------------------------------------------------
 
 new Blob(parts?, options?);              // parts: array of (string | ArrayBuffer | TypedArray | Blob)
-                                         // options: { type }   — MIME type string
+                                         // options: { type }, MIME type string
 // Properties:
 //   size                                  // total byte length
 //   type                                  // MIME type (lowercase, '' if unset)
@@ -494,7 +494,7 @@ new Blob(parts?, options?);              // parts: array of (string | ArrayBuffe
 //   text()             → Promise<string>            // UTF-8 decode
 //   arrayBuffer()      → Promise<ArrayBuffer>       // raw bytes copy
 //   slice(start?, end?, contentType?) → Blob        // byte range; contentType overrides .type
-// Note: brokit Blob does NOT implement .stream() — use arrayBuffer() and wrap manually
+// Note: brokit Blob does NOT implement .stream(). Use arrayBuffer() and wrap manually
 // in a ReadableStream if you need a stream.
 
 // Example
@@ -594,12 +594,12 @@ clearInterval(id);
 // process (global)
 // -----------------------------------------------------------------------------
 //
-// Minimal Node-compatible process global. Available everywhere — no require().
+// Minimal Node-compatible process global. Available everywhere, no require().
 
 process.platform;        // 'win32' | 'linux' | 'darwin' (or 'unknown')
 process.cwd();           // → string, current working directory
 process.exit(code?);     // terminates the process; default code 0
-process.env;             // Proxy — string-keyed environment variables
+process.env;             // Proxy, string-keyed environment variables
                          //   read:    process.env.PATH       → string | undefined
                          //   write:   process.env.FOO = 'x'  // updates real env (setenv)
                          //   delete:  delete process.env.FOO
@@ -651,11 +651,11 @@ NodeFilter.SHOW_TEXT;         // 0x4
 NodeFilter.SHOW_COMMENT;      // 0x80
 // (also SHOW_ATTRIBUTE, SHOW_CDATA_SECTION, SHOW_PROCESSING_INSTRUCTION,
 //  SHOW_DOCUMENT, SHOW_DOCUMENT_TYPE, SHOW_DOCUMENT_FRAGMENT, ...)
-NodeFilter.FILTER_ACCEPT;     // 1 — yield this node
-NodeFilter.FILTER_REJECT;     // 2 — skip node and its subtree
-NodeFilter.FILTER_SKIP;       // 3 — skip node, but recurse into children
+NodeFilter.FILTER_ACCEPT;     // 1, yield this node
+NodeFilter.FILTER_REJECT;     // 2, skip node and its subtree
+NodeFilter.FILTER_SKIP;       // 3, skip node, but recurse into children
 
-// Example — collect every <a> under document.body
+// Example, collect every <a> under document.body
 const walker = new TreeWalker(
   document.body,
   NodeFilter.SHOW_ELEMENT,
@@ -677,11 +677,11 @@ queueMicrotask(callback);
 
 
 // -----------------------------------------------------------------------------
-// FastNoise (global) — FastNoise2 SIMD noise
+// FastNoise (global), FastNoise2 SIMD noise
 // -----------------------------------------------------------------------------
 //
 // Metadata-driven binding to FastNoise2. Build a node graph (generators +
-// modifiers + blends), then sample it — single points, dense 2D/3D grids,
+// modifiers + blends), then sample it, single points, dense 2D/3D grids,
 // or seamless tileable 2D. Every node type registered with FastNoise2 is
 // available via FastNoise.create(name); a few common ones also have named
 // shortcuts on the FastNoise constructor.
@@ -730,10 +730,10 @@ noise.genTileable2D(xSize, ySize, frequency, seed);             // → Float32Ar
 // ── Configuration (metadata-driven) ──
 //
 // FastNoise2 nodes have three kinds of members:
-//   - Variables  — named scalars (float, int, or enum). Enums accept the int
+//   - Variables: named scalars (float, int, or enum). Enums accept the int
 //                  index or the enum name string ("Manhattan", "Euclidean", ...)
-//   - Nodes      — typed source connections (e.g. FractalFBm's "Source")
-//   - Hybrids    — accept either a float OR a node (e.g. FractalFBm's "Gain")
+//   - Nodes: typed source connections (e.g. FractalFBm's "Source")
+//   - Hybrids: accept either a float OR a node (e.g. FractalFBm's "Gain")
 
 noise.set(name, value);                   // assigns by member name
 noise.getMembers();                       // → { type, variables, nodes, hybrids }
@@ -742,7 +742,7 @@ noise.getMembers();                       // → { type, variables, nodes, hybri
 // Per-dimension members ("Multiplier X", "Multiplier Y", ...) are addressed
 // by appending the dimension letter: noise.set('Multiplier Y', 2.0).
 
-// Example — programmatic terrain heightmap (broworkshop's demos/terrain uses this pattern)
+// Example, programmatic terrain heightmap (broworkshop's demos/terrain uses this pattern)
 const fbm = FastNoise.create('FractalFBm');
 fbm.set('Source', FastNoise.create('Simplex'));
 fbm.set('Octaves', 5);
@@ -751,7 +751,7 @@ fbm.set('Gain', 0.5);
 const heightmap = fbm.genUniformGrid2D(0, 0, 512, 512, 0.005, 1337);
 // heightmap is a Float32Array(512*512), row-major
 
-// Example — blend two fractals with a Fade node
+// Example, blend two fractals with a Fade node
 const base = FastNoise.create('FractalFBm');
 base.set('Source', FastNoise.create('Simplex'));
 base.set('Octaves', 4);
@@ -764,7 +764,7 @@ blend.set('B', ridges);
 blend.set('Fade', 0.4);
 const map = blend.genUniformGrid2D(0, 0, 256, 256, 0.01, 1337);
 
-// Example — voxel density field, reusing one buffer per chunk
+// Example, voxel density field, reusing one buffer per chunk
 const dest = new Float32Array(32 * 32 * 32);
 const vox = FastNoise.create('FractalRidged');
 vox.set('Source', FastNoise.create('Perlin'));
@@ -772,7 +772,7 @@ vox.set('Octaves', 4);
 vox.genUniformGrid3DInto(dest, chunkX*32, chunkY*32, chunkZ*32,
                          32, 32, 32, 0.05, 42);
 
-// Example — load a graph designed in the FastNoise2 NoiseTool
+// Example, load a graph designed in the FastNoise2 NoiseTool
 const ENCODED = 'EwAAAIA/AAAAAAAAAEAAAACAQAAAACEABA==';
 const designed = new FastNoise(ENCODED);
 const v = designed.genSingle2D(10, 20, 1337);

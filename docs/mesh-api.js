@@ -4,30 +4,30 @@
 //
 // The bromesh C++ library is exposed via these classes and namespaces:
 //
-//   Mesh             — geometry container plus primitive factories, I/O, CSG,
+//   Mesh, geometry container plus primitive factories, I/O, CSG,
 //                      isosurface extraction, simplification, baking, UV, and
 //                      analysis. Also: applySkinning, applyMorphTarget.
-//   MeshBVH          — bounding-volume hierarchy for accelerated ray queries.
-//   ProgressiveMesh  — pre-computed edge-collapse sequence for streaming LOD.
-//   PolyMesh         — half-edge mesh over N-gon faces with face groups.
+//   MeshBVH, bounding-volume hierarchy for accelerated ray queries.
+//   ProgressiveMesh, pre-computed edge-collapse sequence for streaming LOD.
+//   PolyMesh, half-edge mesh over N-gon faces with face groups.
 //                      Edit topology (extrude, translate, merge by group)
 //                      independent of triangulation; tessellate() on demand
 //                      to produce a render-ready triangle mesh.
-//   LSystem          — string-rule stochastic L-system rewriter (axiom +
+//   LSystem, string-rule stochastic L-system rewriter (axiom +
 //                      production rules → derived module sequence).
 //
-//   Skeleton         — bones + sockets + bindPose.
-//   Pose             — flat array of local TRS per bone (stride 10).
+//   Skeleton, bones + sockets + bindPose.
+//   Pose, flat array of local TRS per bone (stride 10).
 //                      computeWorld/SkinningMatrices, socketWorld, blend.
-//   Animation        — keyframed channels; evaluate, evaluateInto, retarget.
-//   SkinData         — per-vertex bone weights/indices + inverse-bind matrices;
+//   Animation, keyframed channels; evaluate, evaluateInto, retarget.
+//   SkinData, per-vertex bone weights/indices + inverse-bind matrices;
 //                      normalize, validate, transfer.
-//   RigSpec          — opaque template (humanoid / quadruped / hexapod /
+//   RigSpec, opaque template (humanoid / quadruped / hexapod /
 //                      octopod, or custom JSON).
-//   VoxelChunk       — fixed-size voxel grid with greedy meshing.
+//   VoxelChunk, fixed-size voxel grid with greedy meshing.
 //
-//   IK.*             — twoBone, FABRIK, lookAt solvers (mutate a Pose).
-//   Rig.*            — spec / specFromJSON / detectHumanoid / detectQuadruped
+//   IK.*, twoBone, FABRIK, lookAt solvers (mutate a Pose).
+//   Rig.*, spec / specFromJSON / detectHumanoid / detectQuadruped
 //                      / missingLandmarks / fitSkeleton / autoRig /
 //                      generateLocomotionCycle.
 //
@@ -230,7 +230,7 @@ class Mesh {
   static disc(radius, slices) {}
 
   /**
-   * Procedural rock — displaced icosphere.
+   * Procedural rock: displaced icosphere.
    * @param {number} [radius=0.5]
    * @param {number} [seed=42]
    * @param {number} [nsubdivisions=2]
@@ -377,7 +377,7 @@ class Mesh {
   static dualContour(field, gridX, gridY, gridZ, isoLevel, cellSize) {}
 
   /**
-   * Naive surface nets — smoother than marching cubes with shared vertices.
+   * Naive surface nets: smoother than marching cubes with shared vertices.
    * @param {Float32Array} field
    * @param {number} gridX
    * @param {number} gridY
@@ -418,7 +418,7 @@ class Mesh {
   // --- Static: File I/O (load) ----------------------------------------------
 
   /**
-   * Load a glTF/GLB file. Returns the whole scene, not just geometry — see
+   * Load a glTF/GLB file. Returns the whole scene, not just geometry. See
    * the "glTF rigged extensions" section for the field list.
    * @returns {{ meshes: Mesh[], skins: SkinData[], skeletons: Skeleton[],
    *            animations: Animation[], meshSkeleton: number[],
@@ -430,7 +430,7 @@ class Mesh {
   /** Load a Wavefront OBJ file. @returns {Mesh} */
   static loadOBJ(path) {}
 
-  /** Load an FBX file. Read-only — there is no saveFBX. @returns {Mesh[]} */
+  /** Load an FBX file. Read-only. There is no saveFBX. @returns {Mesh[]} */
   static loadFBX(path) {}
 
   /** Load a PLY file. @returns {Mesh} */
@@ -440,7 +440,7 @@ class Mesh {
   static loadSTL(path) {}
 
   /**
-   * Load a MagicaVoxel VOX file. Read-only — there is no saveVOX.
+   * Load a MagicaVoxel VOX file. Read-only. There is no saveVOX.
    * Pair with `Mesh.greedyMesh(voxels, sizeX, sizeY, sizeZ, 1, palette)` or
    * `new VoxelChunk(...)` + `setData(voxels)` to build geometry.
    * @returns {{ sizeX: number, sizeY: number, sizeZ: number,
@@ -482,7 +482,7 @@ class Mesh {
    * the load activations (log scale, logit opacity) so the result round-trips
    * through standard 3DGS tooling and back through `Mesh.loadSplatPLY`.
    * `cloud` is the same SoA object `loadSplatPLY` returns / that
-   * `scene.createGaussianSplat({ cloud })` accepts — only `positions` is
+   * `scene.createGaussianSplat({ cloud })` accepts, only `positions` is
    * required; omitted attributes are written as defaults.
    * @param {string} path
    * @param {{ positions: Float32Array, scales?: Float32Array,
@@ -653,7 +653,7 @@ class Mesh {
   smoothTaubin(lambda, mu, iterations) {}
 
   /**
-   * Isotropic remeshing — split long edges, collapse short ones, relax valence.
+   * Isotropic remeshing: split long edges, collapse short ones, relax valence.
    * @param {number} [targetEdgeLength=0] - 0 = auto
    * @param {number} [iterations=5]
    * @returns {Mesh} this
@@ -794,7 +794,7 @@ class Mesh {
    * Automatic UV unwrapping. Rewrites the whole mesh in place, not just uvs:
    * vertices on chart seams are duplicated, so vertexCount grows and
    * positions / normals / colors / indices are all rebuilt. Any index or
-   * per-vertex data you cached before the call is stale afterwards — unwrap
+   * per-vertex data you cached before the call is stale afterwards, unwrap
    * before you build attribute buffers, not after.
    * @returns {{ atlasWidth: number, atlasHeight: number, chartCount: number, success: boolean }}
    */
@@ -1035,9 +1035,9 @@ class ProgressiveMesh {
 // PolyMesh
 // -----------------------------------------------------------------------------
 // Half-edge mesh over N-gon (not necessarily triangular) faces, with per-face
-// integer "group" tags. Use this when you want to edit topology — extrude a
+// integer "group" tags. Use this when you want to edit topology, extrude a
 // face, translate a face and have its surrounding ring follow, merge coplanar
-// faces by group — that survives arbitrary triangulation choices. The render
+// faces by group, that survives arbitrary triangulation choices. The render
 // mesh is produced on demand via tessellate().
 //
 // Typical flow (face-group editing in scene-editor):
@@ -1345,7 +1345,7 @@ class Pose {
    * Weighted N-way blend → NEW Pose. Weights (plain array or Float32Array,
    * one per pose) are normalized internally. Translations/scales are
    * weighted sums; rotations are weighted nlerp, hemisphere-aligned
-   * against the highest-weight pose — the industry-standard N-way
+   * against the highest-weight pose: the industry-standard N-way
    * accumulate, and what skinnedMesh blend spaces use internally. With
    * exactly 2 poses it takes an exact slerp path identical to blend().
    * Optional `mask` as in blend(); masked-out bones take the
@@ -1388,7 +1388,7 @@ class Animation {
 
 
 // -----------------------------------------------------------------------------
-// IK — solvers (mutate the supplied Pose in place; return bool)
+// IK, solvers (mutate the supplied Pose in place; return bool)
 // -----------------------------------------------------------------------------
 
 /** Two-bone analytic IK (root, mid, end). target / pole are [x,y,z] world. */
@@ -1404,7 +1404,7 @@ function IK_lookAt(skel, pose, bone, target, options) {}
 
 
 // -----------------------------------------------------------------------------
-// Rig — high-level pipeline (global namespace object)
+// Rig, high-level pipeline (global namespace object)
 // -----------------------------------------------------------------------------
 
 /** Built-in spec by name: 'humanoid' | 'quadruped' | 'hexapod' | 'octopod'. */
@@ -1504,12 +1504,12 @@ class VoxelChunk {
 //                        // texture fields are indices into `images`, -1 = none
 //   }
 //
-// mesh.saveGLTF(path, opts?) — opts: { skin?, skeleton?, animations? }
+// mesh.saveGLTF(path, opts?), opts: { skin?, skeleton?, animations? }
 //   Without opts, saves an unskinned mesh (back-compat).
 //   With opts.skeleton, animations may be supplied.
 
 // -----------------------------------------------------------------------------
-// Plant primitives — leafCard, flower, bezierSweep
+// Plant primitives, leafCard, flower, bezierSweep
 // -----------------------------------------------------------------------------
 //
 // Procedural plant shapes for foliage and bloom rendering. UVs on leafCard /
@@ -1524,7 +1524,7 @@ class VoxelChunk {
 //   'petal'   -> (col 1, row 1)
 //
 // Vertex colors (R channel) carry per-vertex windBend [0..1] consumed by
-// scene.setWind — base of the leaf is anchored (0), the tip sways (1).
+// scene.setWind, base of the leaf is anchored (0), the tip sways (1).
 
 /**
  * Build a low-poly leaf or petal card lying in the XZ plane (Y is the card
@@ -1551,7 +1551,7 @@ class VoxelChunk {
  *                                           the length per `shape` (oval broad
  *                                           mid, petal almond, etc.). Default
  *                                           false = a flat rectangle where
- *                                           `shape` only picks the atlas cell —
+ *                                           `shape` only picks the atlas cell:
  *                                           set this when there is no texture
  * @returns {Mesh}
  *
@@ -1578,7 +1578,7 @@ Mesh.leafCard = function(shape, opts) {};
  * @param {number} [opts.centerHeight=0.04]
  * @param {number[]} [opts.centerColor=[1,0.85,0.2]]
  *
- * Rose shaping — without these a flower is a flat daisy disk of rectangular
+ * Rose shaping: without these a flower is a flat daisy disk of rectangular
  * cards. Petal tilt is radians about the radial axis; negative lifts the tip.
  * @param {number} [opts.outerTilt=-0.40]  tilt of the outermost ring (layer 0)
  * @param {number} [opts.innerTilt=-0.25]  tilt of the innermost ring; layers
@@ -1587,7 +1587,7 @@ Mesh.leafCard = function(shape, opts) {};
  * @param {number} [opts.layerScaleFalloff=0.40] inner layers scale by
  *                                         1 - falloff*layerT; higher = tighter bud
  * @param {number} [opts.outerYLift=0.40]  layer-0 Y-lift in centerHeight units
- * @param {number} [opts.innerYLift=0.80]  innermost Y-lift — stacked-cup silhouette
+ * @param {number} [opts.innerYLift=0.80]  innermost Y-lift: stacked-cup silhouette
  * @param {number} [opts.petalCup=0]       per-petal bilateral cup (leafCard.cup);
  *                                         0.6–1.0 reads as a rose
  * @param {boolean} [opts.shapedPetals=false] shaped petal silhouettes instead of
@@ -1603,7 +1603,7 @@ Mesh.flower = function(opts) {};
 /**
  * Sweep a 2D profile along a cubic-bezier polyline. controlPoints is treated
  * as a sequence of cubic segments where every group of 4 points (P0,P1,P2,P3)
- * defines one segment, and consecutive segments share their endpoint — for two
+ * defines one segment, and consecutive segments share their endpoint, for two
  * segments pass 7 points (P0,P1,P2,P3=Q0,Q1,Q2,Q3). Length must satisfy
  * (N-1) % 3 == 0 and N >= 4.
  *
@@ -1631,7 +1631,7 @@ Mesh.bezierSweep = function(controlPoints, profile, opts) {};
 /**
  * Sweep a circular cross-section of `sides` vertices along `path`, scaled
  * per-ring by `radius`. Convenience wrapper over `sweep` for the common
- * branch / vine / stem case — equivalent to `sweep(circleProfile(sides),
+ * branch / vine / stem case: equivalent to `sweep(circleProfile(sides),
  * path, { profileScale: radius, ... })` but spares the caller the profile
  * setup.
  *
@@ -1656,7 +1656,7 @@ Mesh.tube = function(path, radius, sides, opts) {};
 /**
  * Sweep a 4-vertex diamond profile along `path`, producing a thin tapered
  * blade-like ribbon with optional out-of-plane thickness. Convenience
- * wrapper over `sweep` for grass blades, fern leaflets, succulent leaves —
+ * wrapper over `sweep` for grass blades, fern leaflets, succulent leaves,
  * spares the caller the diamond-profile setup.
  *
  * `width` and `thickness` are half-extents along profile-X and profile-Y;
@@ -1709,7 +1709,7 @@ Mesh.bladePath = function(opts) {};
 /**
  * Sweep a 2D profile (in the local XY plane) along a 3D polyline `path` using
  * parallel-transport (rotation-minimizing) frames. The lower-level building
- * block that `bezierSweep` wraps — pass an arbitrary path rather than a
+ * block that `bezierSweep` wraps: pass an arbitrary path rather than a
  * cubic-bezier control polygon. Returns a triangulated mesh with smooth
  * ring-averaged normals; caps assume the profile is convex (concave caps fan
  * from the centroid and may overlap).
@@ -1735,7 +1735,7 @@ Mesh.sweep = function(profile, path, opts) {};
 
 
 // -----------------------------------------------------------------------------
-// Procedural branches — space colonization, pipe-model thickening, sweep mesh
+// Procedural branches, space colonization, pipe-model thickening, sweep mesh
 // -----------------------------------------------------------------------------
 //
 // Pipeline:
@@ -1767,7 +1767,7 @@ Mesh.sweep = function(profile, path, opts) {};
  * @param {number[]} [opts.tropism=[0,0,0]]    biased direction added every step
  * @param {number} [opts.tropismWeight=0]
  * @param {CapsuleField} [opts.obstacles]      growth steps that would land
- *   inside an obstacle are rejected (or steered around — see below). Pass a
+ *   inside an obstacle are rejected (or steered around: see below). Pass a
  *   field built via `Mesh.capsuleFieldFromSegments(prevSegs)` to grow new
  *   canes that avoid earlier ones; combine iteratively for self-avoiding
  *   bushes.
@@ -1813,7 +1813,7 @@ Mesh.meshBranches = function(segments, sides) {};
 
 
 // -----------------------------------------------------------------------------
-// CapsuleField — collision-aware placement substrate
+// CapsuleField, collision-aware placement substrate
 // -----------------------------------------------------------------------------
 //
 // Capsule + sphere occupancy lookup, built once per scatter / colonize pass
@@ -1939,7 +1939,7 @@ class CapsuleField {
 
 
 // -----------------------------------------------------------------------------
-// Leaf scattering — attach leafCards / flowers to a branch tree
+// Leaf scattering, attach leafCards / flowers to a branch tree
 // -----------------------------------------------------------------------------
 //
 // `placeLeavesOnBranches` returns instance transforms for GPU instancing.
@@ -1953,7 +1953,7 @@ class CapsuleField {
 //   densityWeight=[]    optional per-segment density multiplier, lockstep with
 //                       `segments`. Scales perUnitLength per segment: 0 = bare,
 //                       1 = full, >1 over-packs; empty = uniform. The hook for
-//                       light/vigor-driven foliage — pass broflora's per-segment
+//                       light/vigor-driven foliage, pass broflora's per-segment
 //                       FoliageSample.mass so shaded shoots go bare and lit
 //                       crowns stay lush.
 //   densityFalloff=0    >0 biases samples toward the tip
@@ -1969,7 +1969,7 @@ class CapsuleField {
 //   avoid=null          CapsuleField; candidates whose origin lies within
 //                       obstacleClearance of any non-self capsule/sphere are
 //                       rejected. The candidate's own segment is excluded via
-//                       its segment index — build the field via
+//                       its segment index, build the field via
 //                       `Mesh.capsuleFieldFromSegments(segs)` for this to
 //                       work automatically.
 //   obstacleClearance=0 extra clearance applied to every avoid test.
@@ -2018,7 +2018,7 @@ Mesh.scatterLeaves = function(segments, leaf, opts) {};
  * High-level tree archetype: samples attractors uniformly inside a sphere
  * around `canopyCenter`, runs space colonization from `base` toward them,
  * thickens via the pipe model, and meshes the resulting tree as one merged
- * tube. Foliage is the caller's responsibility — pass the returned
+ * tube. Foliage is the caller's responsibility. Pass the returned
  * `segments` into `Mesh.scatterLeaves` (or `Mesh.placeLeavesOnBranches`)
  * with your own leaf mesh. Deterministic for a given `seed`.
  *
@@ -2055,7 +2055,7 @@ Mesh.tree = function(opts) {};
 // L-system rewriting
 // -----------------------------------------------------------------------------
 //
-// String-rule stochastic L-system. Produces a flat module sequence — turtle
+// String-rule stochastic L-system. Produces a flat module sequence, turtle
 // interpretation and geometry building are caller concerns. Bracket symbols
 // `[` and `]` pass through unchanged when no rule matches them.
 //
@@ -2151,7 +2151,7 @@ class LSystem {
 
   /**
    * Same as `derive` but returns the parsed module list directly instead of a
-   * compact-form string — saves a re-parse if you need the structured form.
+   * compact-form string: saves a re-parse if you need the structured form.
    * @param {number} iterations
    * @param {number} [seed=0]
    * @returns {Array<{symbol: string, params: number[]}>}

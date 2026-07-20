@@ -13,13 +13,13 @@
 //   - Configurable exposure, gamma, and flat ambient fill
 //   - Per-mesh shadow opt-out: `castsShadow`, `receivesShadow`
 //
-// Lights are SceneNodes — they participate in the hierarchy, transforms, and
+// Lights are SceneNodes. They participate in the hierarchy, transforms, and
 // any scene subsystem that operates on nodes (find-by-name, agents, gizmos).
 // Their world position comes from the node transform; Directional and Spot
 // lights additionally use an explicit `direction` vector.
 //
 // HDR bloom is available via scene.setBloom and screen-space reflections via
-// scene.setSSR (see scene-api.js) — SSR composites local-geometry reflections
+// scene.setSSR (see scene-api.js), SSR composites local-geometry reflections
 // on TOP of the IBL specular described here, weighted by the same
 // metallic/roughness material params; a ray miss keeps the IBL reflection.
 // Clustered light culling is deferred to a later milestone. See scene-api.js
@@ -75,15 +75,15 @@ lamp.range = 10;
 //
 // Mesh material uses the glTF metallic/roughness model:
 //
-//   color       — CSS string or [r,g,b] / [r,g,b,a]; tinted albedo for
+//   color, CSS string or [r,g,b] / [r,g,b,a]; tinted albedo for
 //                 dielectrics, reflectance tint (F0) for metals. (The option
 //                 key is `color`; the shader calls the resulting value
 //                 baseColor.)
-//   metallic    — 0 = dielectric (wood, plastic, skin), 1 = metal.
-//   roughness   — 0 = mirror, 1 = fully diffuse. Clamped to a 0.04 floor in
+//   metallic, 0 = dielectric (wood, plastic, skin), 1 = metal.
+//   roughness, 0 = mirror, 1 = fully diffuse. Clamped to a 0.04 floor in
 //                 the shader to avoid specular singularities.
-//   emissive    — scalar multiplier on emissiveColor; 0 disables emission.
-//   emissiveColor — linear RGB tint for self-lit surfaces. Defaults to the
+//   emissive, scalar multiplier on emissiveColor; 0 disables emission.
+//   emissiveColor, linear RGB tint for self-lit surfaces. Defaults to the
 //                 base color when `emissive > 0` is set without a color.
 
 scene.createMesh({
@@ -125,13 +125,13 @@ s.emissive = 2.0;
 // { width, height, data: Uint8Array(rgba8) }. Tangents for normal mapping
 // are generated automatically from the mesh UVs when a normal map is used.
 //
-//   normalTexture            — tangent-space normal map (RGBA8, xyz read).
-//   metallicRoughnessTexture — glTF packing: G = roughness, B = metallic.
+//   normalTexture, tangent-space normal map (RGBA8, xyz read).
+//   metallicRoughnessTexture, glTF packing: G = roughness, B = metallic.
 //                              Scalar `metallic` / `roughness` multiply with
 //                              the sampled channel, so set scalars to 1.0 to
 //                              let the texture drive the value directly.
-//   occlusionTexture         — R channel; modulates ambient/IBL only.
-//   emissiveTexture          — RGB, multiplied by `emissive` × `emissiveColor`.
+//   occlusionTexture, R channel; modulates ambient/IBL only.
+//   emissiveTexture, RGB, multiplied by `emissive` × `emissiveColor`.
 //                              Matches glTF's `emission = factor * sample()`:
 //                              set `emissive = 1.0` and `emissiveColor` to
 //                              the glTF emissiveFactor.
@@ -161,10 +161,10 @@ scene.createMesh({
 //
 // Both default to true. Set either on the createMesh options or at runtime.
 //
-//   castsShadow    — whether this mesh writes into the shadow atlas. Disable
+//   castsShadow, whether this mesh writes into the shadow atlas. Disable
 //                    for foliage impostors, transparent geometry, or meshes
 //                    whose silhouette isn't meaningful for shadows.
-//   receivesShadow — whether light contributions to this mesh are shadow-
+//   receivesShadow, whether light contributions to this mesh are shadow-
 //                    attenuated. Disable for self-lit props or UI billboards
 //                    that should stay visible regardless of occluders.
 //
@@ -186,7 +186,7 @@ hud.receivesShadow   = false;
 // ACES is the default (filmic curve, neutral highlights); Reinhard is a
 // cheaper approximation; Linear is a raw clamp.
 //
-// Exposure is a pre-tonemap multiplier — 2.0 = +1 stop brighter. Gamma is
+// Exposure is a pre-tonemap multiplier, 2.0 = +1 stop brighter. Gamma is
 // applied after tonemap for display correction; 2.2 matches sRGB.
 
 scene.setToneMap({ mode: "aces",     exposure: 1.0, gamma: 2.2 });
@@ -201,7 +201,7 @@ scene.setAmbient([0.03, 0.03, 0.035]);
 
 
 // -----------------------------------------------------------------------------
-// Image-Based Lighting (IBL) — HDR environment maps
+// Image-Based Lighting (IBL), HDR environment maps
 // -----------------------------------------------------------------------------
 //
 // `scene.setEnvironment` loads an HDR equirectangular image (.hdr) and
@@ -213,7 +213,7 @@ scene.setAmbient([0.03, 0.03, 0.035]);
 // Loading is synchronous and runs three GPU bake passes off the .hdr:
 // equirect→cube, irradiance convolution, and the GGX prefilter chain.
 // First call also bakes the env-independent BRDF LUT. Total work is
-// ~few hundred million texture taps but happens once per HDR — runtime
+// ~few hundred million texture taps but happens once per HDR, runtime
 // shading is just three texture samples per fragment.
 
 scene.setEnvironment({ hdr: "hdri/venice_sunset_1k.hdr" });
@@ -229,7 +229,7 @@ scene.setEnvironment({ hdr: "/hdri/kiara_dawn_1k.hdr", intensity: 1.5 });
 // consistent.
 scene.setEnvironment({ rotation: Math.PI / 2 });
 
-// Pass any subset of fields to update — omit `hdr` to keep the loaded
+// Pass any subset of fields to update, omit `hdr` to keep the loaded
 // env, omit `intensity`/`rotation` to keep the current values.
 scene.setEnvironment({ intensity: 2.0 });
 
@@ -243,7 +243,7 @@ scene.setEnvironment(null);
 
 
 // -----------------------------------------------------------------------------
-// Local reflection probes — captured, box-projected specular
+// Local reflection probes, captured, box-projected specular
 // -----------------------------------------------------------------------------
 //
 // The global environment above is a single infinite-distance cubemap: a
@@ -283,7 +283,7 @@ scene.setEnvironment(null);
 
 
 // -----------------------------------------------------------------------------
-// Editor affordances — light icons + click-to-select
+// Editor affordances, light icons + click-to-select
 // -----------------------------------------------------------------------------
 //
 // `scene.showLightIcons = true` enables two behaviors in tandem:
@@ -293,7 +293,7 @@ scene.setEnvironment(null);
 //      Markers depth-test against geometry, so they occlude correctly.
 //   2. `scene.raycast(origin, dir)` also hits those icons as tiny
 //      world-space spheres (~0.32 units). Hits return the LightNode as
-//      `hit.node` — the same shape mesh hits return. Every scene node
+//      `hit.node`: the same shape mesh hits return. Every scene node
 //      exposes a `type` string ('mesh' | 'light' | 'shape' | 'sprite' |
 //      'physics' | 'html' | 'group'); lights additionally expose
 //      `kind` ('directional' | 'point' | 'spot').
@@ -337,23 +337,23 @@ scene.setEnvironment(null);
 //
 // Per-light shadow controls:
 //
-//   light.castsShadow       — bool. Default false. Set true to allocate a
+//   light.castsShadow, bool. Default false. Set true to allocate a
 //                             tile and start writing this light's shadow.
-//   light.shadowBias        — float, default 5e-4. Constant subtracted from
+//   light.shadowBias, float, default 5e-4. Constant subtracted from
 //                             the depth-compare reference. Increase if you
 //                             see acne, decrease if peter-panning.
-//   light.shadowNormalBias  — float, default 0.03. World-space normal offset
+//   light.shadowNormalBias, float, default 0.03. World-space normal offset
 //                             applied to the receiver before sampling. Cheap
 //                             curved-surface acne fix; usually leave alone.
-//   light.cascadeCount      — int, 1-4 (directional only). Default 4. Each
+//   light.cascadeCount, int, 1-4 (directional only). Default 4. Each
 //                             cascade burns one atlas tile.
-//   light.cascadeSplitLambda — 0..1 (directional only). 0 = uniform splits
+//   light.cascadeSplitLambda, 0..1 (directional only). 0 = uniform splits
 //                             (indoor), 1 = log splits (outdoor). Default 0.5.
 //
 // Global controls:
 //
 //   scene.setShadowQuality({ atlasSize, pcfTaps })
-//     Takes ONE options object — a positional call is silently ignored.
+//     Takes ONE options object, a positional call is silently ignored.
 //     atlasSize: 1024 / 2048 / 4096 / 8192 (square depth texture side).
 //                Engine default is 8192; omitting the key in a call you do
 //                make falls back to 4096, so pass it explicitly.
@@ -365,21 +365,21 @@ scene.setEnvironment(null);
 //   A tile is reused verbatim when the owning light's shadow projection is
 //   unchanged AND the set of shadow casters overlapping the light's frustum
 //   is unchanged (no transform/geometry/visibility change, no add/remove).
-//   Change detection is conservative-correct — any doubt re-renders — so
+//   Change detection is conservative-correct, any doubt re-renders. So
 //   output pixels are IDENTICAL with the cache on or off; it is pure perf.
 //
 //   What caches when:
-//     spot / point   — camera-independent: fully cached on static scenes,
+//     spot / point, camera-independent: fully cached on static scenes,
 //                      regardless of camera movement. The big win.
-//     directional    — the cascade fit follows the camera, so cascades cache
+//     directional, the cascade fit follows the camera, so cascades cache
 //                      only while the camera is still (menus, idle scenes,
 //                      fixed-camera games).
-//     skinned / custom-vertex-shader casters — permanently dynamic: every
+//     skinned / custom-vertex-shader casters, permanently dynamic: every
 //                      tile they overlap re-renders every frame (their pose/
 //                      displacement changes without a scene-graph signal).
 //
 //   Partial invalidation: a single moving caster re-renders only the tiles
-//   whose light frustum its bounds overlap — other lights' tiles stay
+//   whose light frustum its bounds overlap, other lights' tiles stay
 //   cached. Moving or reconfiguring a light (position, direction, range,
 //   outerAngle, cascade count) invalidates that light's tiles only.
 //
@@ -388,12 +388,12 @@ scene.setEnvironment(null);
 //     shadowDrawn counts, since cached tiles submit no casters).
 //
 //   Per-frame counters in scene.cullStats() / perf.stats().scene:
-//     shadowTilesTotal     — atlas tiles allocated this frame
-//     shadowTilesRendered  — tiles actually re-rendered
-//     shadowTilesCached    — tiles reused from the previous render
+//     shadowTilesTotal, atlas tiles allocated this frame
+//     shadowTilesRendered, tiles actually re-rendered
+//     shadowTilesCached, tiles reused from the previous render
 //   A fully cached frame reports shadowDrawn 0 (nothing submitted).
 //
-// Example — sun + a couple of accent lamps casting shadows:
+// Example, sun + a couple of accent lamps casting shadows:
 //
 //   const sun = scene.createLight({ type:'directional', direction:[-0.4,-1,-0.2] });
 //   sun.castsShadow = true;
@@ -418,5 +418,5 @@ scene.setEnvironment(null);
 //   a clustered pass is the next milestone.
 // - Spot attenuation uses smoothstep on the cone; inner/outer angles too
 //   close together cause a visible hard edge.
-// - Range falloff uses the Epic/Frostbite smooth window — lights have
+// - Range falloff uses the Epic/Frostbite smooth window: lights have
 //   physically zero contribution beyond `range`.

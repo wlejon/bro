@@ -1,27 +1,27 @@
-// bro.sense — tier-0 acoustic sensor bus (brosoundml::SensorHub)
+// bro.sense, tier-0 acoustic sensor bus (brosoundml::SensorHub)
 // ================================================================
 //
 // The fast, cheap, always-on layer of the listening stack. One streaming
 // PCEN mel front-end (the same recipe bro.wake / bro.kws run) drives a set
-// of per-frame DSP sensors — no model, no enrollment, no GPU — and publishes
+// of per-frame DSP sensors, no model, no enrollment, no GPU, and publishes
 // every signal into one lock-free snapshot you poll:
 //
 // PER STREAM. Model-free, so each stream just gets its own SensorHub.
 // bro.sense.* targets the default microphone; stream.sense.* (on a
-// bro.listen.open() handle — see docs/listen-api.js) targets that stream, so you
+// bro.listen.open() handle, see docs/listen-api.js) targets that stream, so you
 // can sense the mic and system audio independently. The two homes are one
 // implementation; everything below applies to either. (bro.sense.analyze() is
-// an offline op over a private hub — not stream-scoped.)
+// an offline op over a private hub, not stream-scoped.)
 //
-//   level     window RMS / peak / dBFS on raw PCM (no AGC — this is the
+//   level     window RMS / peak / dBFS on raw PCM (no AGC. This is the
 //             stack's one absolute-loudness signal).
 //   voice     energy VAD: adaptive noise floor + SNR gate + hangover.
 //   onset     PCEN spectral flux: percussive transients (clicks, taps,
-//             snaps) fire here in a single 10 ms frame — including the
+//             snaps) fire here in a single 10 ms frame, including the
 //             isolated one-shot sounds a sequence matcher (bro.kws)
 //             structurally cannot hold onto.
 //   tonality  autocorrelation periodicity + dominant frequency: sustained
-//             periodic sounds (whistles, hums — pure or harmonic) read as a
+//             periodic sounds (whistles, hums, pure or harmonic) read as a
 //             high-periodicity run with a stable dominantHz.
 //
 // bro.sense is designed for FUSION, not for being right on its own: each
@@ -30,14 +30,14 @@
 // signals into a conclusion. Latency is one mel frame (10 ms) + your poll
 // interval.
 //
-// Plumbing: bro.sense is a member of the engine's SHARED listen host — one
+// Plumbing: bro.sense is a member of the engine's SHARED listen host, one
 // raw (no-AGC) mic tap + ring + inference task drive a single PCEN front-end
 // feeding every attached tenant, so running bro.sense alongside bro.kws costs
 // one feature pass and both hear the SAME stream.
 //
 // There are no callbacks. Every momentary boolean (onset, voice, tonal) is
 // paired with a monotonic counter (onsets, voiceEvents, tonalEvents) and a
-// last-event frame index, so polling at frame rate — or slower — still
+// last-event frame index, so polling at frame rate, or slower, still
 // observes every event as a counter delta. Diff the counters between polls.
 
 // ─── Lifecycle ──────────────────────────────────────────────────────────────
@@ -91,7 +91,7 @@ const s = bro.sense.snapshot();
 //
 //   // onset
 //   flux: 0.012,           // this frame's positive PCEN flux
-//   onset: false,          // true ONLY on the triggering frame — diff
+//   onset: false,          // true ONLY on the triggering frame, diff
 //   onsets: 17,            //   `onsets` between polls instead
 //   lastOnsetFrame: 1201,
 //
@@ -146,7 +146,7 @@ setInterval(() => {
 // ─── Headless / scripted feeding ────────────────────────────────────────────
 
 // In headless mode (no inference worker) feed() runs the shared bus
-// synchronously and returns the post-feed snapshot — deterministic for
+// synchronously and returns the post-feed snapshot, deterministic for
 // tests. The listen host carries ONE stream, so the feed advances every
 // attached tenant (audio fed here also drives bro.kws, and vice versa).
 // While an inference worker is running, feed() writes the live shared ring
@@ -161,7 +161,7 @@ const snap = bro.sense.feed(pcm);
 // no effect on the live bus (callable any time, even before start()), returning
 // the per-frame sensor timeline as columnar typed arrays. It is the SAME stream
 // bro.gesture.enrollFromAudio sees, so a tool can map each frame to its samples
-// and overlay onsets / tonal runs / pitch onto a waveform — e.g. to show why a
+// and overlay onsets / tonal runs / pitch onto a waveform, e.g. to show why a
 // clip enrolled the way it did, or why a cough's wandering pitch reads tonal but
 // unsteady. `opts` overlays the same sensor-policy keys as start().
 //

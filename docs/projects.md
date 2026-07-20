@@ -2,15 +2,15 @@
 
 When `bro` is launched with no app argument and no `bro.json`/`index.html` next to the executable, it falls through to the built-in **project manager** at `system/projects/`. This is the default home screen for plain bro releases.
 
-`system/projects/` has its own `bro.json`, so it's a self-contained app, not a [system panel](system-panels.md) — the panel scanner skips any `system/<dir>/` that contains one.
+`system/projects/` has its own `bro.json`, so it's a self-contained app, not a [system panel](system-panels.md), the panel scanner skips any `system/<dir>/` that contains one.
 
 ## What it does
 
 - Lists projects from a per-user registry, sorted by last opened.
 - Click a tile to launch (`bro <projectPath>` in a detached child process).
-- **New project** — copies one of the skeletons under `system/skeletons/<name>/` into a folder you pick.
-- **Open existing** — pick any folder containing `bro.json` or `index.html`; it's added to the registry.
-- **Drag-and-drop** — drop a folder onto the window to register it in place; drop a `.zip` to extract (PowerShell `Expand-Archive` on Windows, `unzip`/`tar` elsewhere) into a destination you pick, then register.
+- **New project**: copies one of the skeletons under `system/skeletons/<name>/` into a folder you pick.
+- **Open existing**: pick any folder containing `bro.json` or `index.html`; it's added to the registry.
+- **Drag-and-drop**: drop a folder onto the window to register it in place; drop a `.zip` to extract (PowerShell `Expand-Archive` on Windows, `unzip`/`tar` elsewhere) into a destination you pick, then register.
 - **Remove** (the × on hover) drops a project from the registry without deleting any files.
 
 ## Where state lives
@@ -21,7 +21,7 @@ When `bro` is launched with no app argument and no `bro.json`/`index.html` next 
 | macOS | `~/Library/Application Support/bro/projects.json` |
 | Linux | `${XDG_DATA_HOME:-~/.local/share}/bro/projects.json` |
 
-The registry is plain JSON: `{ "projects": [{ "path", "name", "lastOpened" }, ...] }`. Projects sit wherever you create them — the manager only stores paths.
+The registry is plain JSON: `{ "projects": [{ "path", "name", "lastOpened" }, ...] }`. Projects sit wherever you create them, the manager only stores paths.
 
 ## Skeletons
 
@@ -46,4 +46,4 @@ bro path/to/project/bro.json     # explicit project manifest
 bro                              # no args + no bro.json next to exe → project manager
 ```
 
-Placing a `bro.json` or `index.html` next to `bro.exe` short-circuits the manager and runs that instead — useful for redistributing a bro app as a single zip.
+Placing a `bro.json` or `index.html` next to `bro.exe` short-circuits the manager and runs that instead. Useful for redistributing a bro app as a single zip.

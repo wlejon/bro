@@ -1,5 +1,5 @@
 /**
- * element.animate() — Web Animations API (commonly-used subset)
+ * element.animate(), Web Animations API (commonly-used subset)
  *
  * Script-driven animations that ride the exact same machinery as CSS
  * transitions and @keyframes animations: interpolated values are injected
@@ -9,19 +9,19 @@
  * them), transform/opacity-only animations get the same compositor-layer
  * promotion, and headless advanceTime(ms) drives them deterministically.
  *
- * PROPERTY COVERAGE — inherited from the transition interpolator:
+ * PROPERTY COVERAGE: inherited from the transition interpolator:
  *   - numbers and lengths (opacity, width, top, margin-*, border-radius, …
  *     any "12px"/"0.5"-shaped value; the unit comes from the target)
  *   - colors (#hex, rgb(), rgba())
- *   - CSS function lists with matching shapes (transform, filter — e.g.
+ *   - CSS function lists with matching shapes (transform, filter, e.g.
  *     'rotate(0deg)' → 'rotate(360deg)', 'scale(1) translateX(0px)' →
  *     'scale(2) translateX(40px)')
  *   Anything else is non-interpolable and snaps at 50% (discrete-ish).
- *   Values are not validated — they land in computed style verbatim.
+ *   Values are not validated: they land in computed style verbatim.
  *
  * DELIBERATE SIMPLIFICATIONS (vs the full spec):
  *   - Stacking: multiple animations on one element compose in creation
- *     order — the LAST-CREATED animation wins per property (no full
+ *     order: the LAST-CREATED animation wins per property (no full
  *     composite-order machinery; composite modes other than "replace" are
  *     ignored).
  *   - commitStyles() / persist() / updatePlaybackRate() / ready promise /
@@ -49,7 +49,7 @@
  *     fire finished normally (matching CSS transitions); it just stops
  *     rendering.
  *   - Running/paused animations keep their Animation object alive even if
- *     script drops every reference (a finish can still be delivered — same
+ *     script drops every reference (a finish can still be delivered, same
  *     as browsers). A finished forwards-filling animation keeps applying its
  *     final value even after the object is GC'd.
  */
@@ -77,7 +77,7 @@ const anim = el.animate([
 // Number shorthand: options = duration in ms.
 el.animate([{ opacity: 0 }, { opacity: 1 }], 300);
 
-// Object-of-arrays form — values distribute evenly across the duration.
+// Object-of-arrays form, values distribute evenly across the duration.
 el.animate({ opacity: [0, 1], transform: ['scale(0.5)', 'scale(1)'] }, 400);
 
 // Single keyframe animates from the element's current (base) value.
@@ -99,7 +99,7 @@ anim.finish();           // jump to the end (start when playbackRate < 0);
                          // Throws InvalidStateError on infinite animations.
 anim.reverse();          // flip playbackRate and play (from the end if done)
 
-anim.currentTime;        // number ms (null when idle) — get/set to seek
+anim.currentTime;        // number ms (null when idle), get/set to seek
 anim.currentTime = 500;  // seek; un-finishes a finished animation
 anim.playbackRate;       // get/set; 0 freezes, negative runs backwards
 anim.playState;          // 'idle' | 'running' | 'paused' | 'finished'
@@ -126,7 +126,7 @@ document.getAnimations();  // the same across the whole document
 //
 // - Overrides inline style and the cascade while active, and sits above CSS
 //   transitions AND CSS animations for the properties it animates.
-// - bro.time: pause freezes playback in place; scale stretches it — identical
+// - bro.time: pause freezes playback in place; scale stretches it, identical
 //   behavior to CSS transitions.
 // - Headless: advanceTime(ms) advances animations deterministically;
 //   getComputedStyle() reads the interpolated values; `await anim.finished`

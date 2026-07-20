@@ -126,7 +126,7 @@ class FastNoise {
   /**
    * In-place variant of genUniformGrid2D. Writes into a caller-supplied
    * Float32Array (xSize*ySize floats minimum); no per-call allocation.
-   * Preferred on the per-frame path — pair with bro.image.alloc(w, h, 1).
+   * Preferred on the per-frame path: pair with bro.image.alloc(w, h, 1).
    *
    * @param {Float32Array} dest - reusable buffer, length >= xSize*ySize
    * @param {number} xOffset
@@ -188,13 +188,13 @@ class FastNoise {
 // Every node type and its configurable properties. Properties are set via
 // node.set("Name", value). Types are:
 //
-//   VAR (float/int)    — set with a number
-//   VAR (enum)         — set with a string name or int index
-//   NODE               — set with another FastNoise instance
-//   HYBRID             — set with a number (constant) or FastNoise (node-driven)
+//   VAR (float/int), set with a number
+//   VAR (enum), set with a string name or int index
+//   NODE, set with another FastNoise instance
+//   HYBRID, set with a number (constant) or FastNoise (node-driven)
 //
 // Per-dimension properties (marked with [per-dim]) appear multiple times in
-// getMembers() — one per dimension (X, Y, Z, W). They share the same base
+// getMembers(), one per dimension (X, Y, Z, W). They share the same base
 // name; the dimension index distinguishes them internally.
 //
 // =============================================================================
@@ -321,7 +321,7 @@ class FastNoise {
 //   VAR     "Seed Offset"        (int)
 //   VAR     "Distance Function"  (enum)  {Euclidean, Euclidean Squared, Manhattan,
 //                                          Hybrid, Max Axis, Minkowski}
-//   NODE    "Lookup"             — generator evaluated at cell positions
+//   NODE    "Lookup", generator evaluated at cell positions
 //   HYBRID  "Minkowski P"        (float) default: 1.5
 //   HYBRID  "Grid Jitter"        (float) default: 1.0
 //   HYBRID  "Size Jitter"        (float) default: 0.0
@@ -335,9 +335,9 @@ class FastNoise {
 // =============================================================================
 
 // --- FractalFBm -------------------------------------------------------------
-// Fractal Brownian Motion — stacks octaves of a source generator.
+// Fractal Brownian Motion, stacks octaves of a source generator.
 //
-//   NODE    "Source"              — the base generator to fractalise
+//   NODE    "Source", the base generator to fractalise
 //   VAR     "Octaves"            (int)    default: 3
 //   VAR     "Lacunarity"         (float)  default: 2.0
 //   HYBRID  "Gain"               (float)  default: 0.5
@@ -350,9 +350,9 @@ class FastNoise {
 //   fbm.set("Lacunarity", 2.0);
 
 // --- FractalRidged ----------------------------------------------------------
-// Ridged multifractal — absolute-value inversion creates ridges.
+// Ridged multifractal, absolute-value inversion creates ridges.
 //
-//   NODE    "Source"              — the base generator
+//   NODE    "Source", the base generator
 //   VAR     "Octaves"            (int)    default: 3
 //   VAR     "Lacunarity"         (float)  default: 2.0
 //   HYBRID  "Gain"               (float)  default: 0.5
@@ -370,7 +370,7 @@ class FastNoise {
 // --- DomainWarpGradient -----------------------------------------------------
 // Warps input coordinates using gradient-based displacement.
 //
-//   NODE    "Source"              — generator whose domain is warped
+//   NODE    "Source", generator whose domain is warped
 //   VAR     "Feature Scale"      (float)
 //   VAR     "Seed Offset"        (int)
 //   HYBRID  "Warp Amplitude"     (float)  default: 1.0
@@ -400,7 +400,7 @@ class FastNoise {
 // --- DomainWarpFractalProgressive -------------------------------------------
 // Applies fractal octaves to a domain warp, warping progressively.
 //
-//   NODE    "Domain Warp Source"  — must be a DomainWarp node
+//   NODE    "Domain Warp Source", must be a DomainWarp node
 //   VAR     "Octaves"            (int)    default: 3
 //   VAR     "Lacunarity"         (float)  default: 2.0
 //   HYBRID  "Gain"               (float)  default: 0.5
@@ -427,7 +427,7 @@ class FastNoise {
 // Some operators (Subtract, Divide, Modulus) have hybrid LHS too.
 
 // --- Add --------------------------------------------------------------------
-//   NODE    "LHS"    — left-hand source
+//   NODE    "LHS", left-hand source
 //   HYBRID  "RHS"    (float) default: 0.0
 //
 //   const add = FastNoise.create("Add");
@@ -436,7 +436,7 @@ class FastNoise {
 //   add.set("RHS", anotherNoise);    // or add two noise sources
 
 // --- Subtract ---------------------------------------------------------------
-//   HYBRID  "LHS"    (float) default: 0.0  — also accepts constant
+//   HYBRID  "LHS"    (float) default: 0.0, also accepts constant
 //   HYBRID  "RHS"    (float) default: 0.0
 
 // --- Multiply ---------------------------------------------------------------
@@ -468,7 +468,7 @@ class FastNoise {
 //   HYBRID  "RHS"    (float) default: 0.0
 
 // --- MinSmooth --------------------------------------------------------------
-// Smooth minimum — blends near the boundary instead of a hard cutoff.
+// Smooth minimum, blends near the boundary instead of a hard cutoff.
 //
 //   NODE    "LHS"
 //   HYBRID  "RHS"        (float) default: 0.0
@@ -482,8 +482,8 @@ class FastNoise {
 // --- Fade -------------------------------------------------------------------
 // Interpolates between two sources based on a fade value.
 //
-//   NODE    "A"           — source when fade = min
-//   NODE    "B"           — source when fade = max
+//   NODE    "A", source when fade = min
+//   NODE    "B", source when fade = max
 //   HYBRID  "Fade"        (float) default: 0.5
 //   HYBRID  "Fade Min"    (float) default: -1.0
 //   HYBRID  "Fade Max"    (float) default: 1.0
@@ -670,7 +670,7 @@ warped.set("Source", caveShape);
 warped.set("Warp Amplitude", 30.0);
 
 const density = warped.genUniformGrid3D(0, 0, 0, 64, 64, 64, 0.02, 7);
-// density[z * 64*64 + y * 64 + x] — negative = solid, positive = air
+// density[z * 64*64 + y * 64 + x], negative = solid, positive = air
 
 
 // --- Domain warp fractal for organic terrain --------------------------------

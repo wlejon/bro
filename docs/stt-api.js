@@ -1,5 +1,5 @@
 /**
- * bro.stt — Speech-to-text (Whisper, Parakeet, Qwen3-ASR)
+ * bro.stt, Speech-to-text (Whisper, Parakeet, Qwen3-ASR)
  *
  * Transcribes 16 kHz mono audio to text. Three model families:
  *   - Whisper: encoder/decoder transformer. Prompted (language/task), 30 s
@@ -25,7 +25,7 @@
  * (vocab.json + merges.txt sit in the model dir).
  *
  * Audio is supplied as { samples: Float32Array, sampleRate: number } in the
- * [-1, 1] range. All models expect 16 kHz mono — resample/downmix before
+ * [-1, 1] range. All models expect 16 kHz mono, resample/downmix before
  * calling (see tests/smoke_voice_pipeline.js for a WAV reader that does this).
  */
 
@@ -107,7 +107,7 @@ const prompt = tok.buildPrompt('en', 'transcribe', /*timestamps=*/false);
  *         `prompt`, returning the generated token ids.
  *
  *         audio: { samples: Float32Array, sampleRate: number }  (16 kHz mono)
- *         opts:  { maxNewTokens, timestampBeginId, onToken } — see below.
+ *         opts:  { maxNewTokens, timestampBeginId, onToken }. See below.
  *
  * opts.timestampBeginId (= tok.firstTimestampId) turns on Whisper's sequential
  *   long-form decode: when set AND the audio is longer than 30 s, the input is
@@ -115,7 +115,7 @@ const prompt = tok.buildPrompt('en', 'transcribe', /*timestamps=*/false);
  *   of being truncated to the first window. Requires a timestamps prompt
  *   (buildPrompt(lang, task, /*withTimestamps=* /true)). Omit (or < 0) for the
  *   legacy single-window behaviour.
- * opts.onToken(id) fires once per decoded token, in order, as it is produced —
+ * opts.onToken(id) fires once per decoded token, in order, as it is produced,
  *   detokenize incrementally for a live partial transcript. Runs synchronously
  *   inside transcribe() on this thread; keep it cheap.
  */
@@ -137,8 +137,8 @@ console.log(text.trim());
  * Runs Whisper's autoregressive decode on a background thread so the JS thread
  * (and the app) stays responsive. opts.onToken(id) streams each decoded token
  * to the JS thread as it is produced (lock-free handoff, drained once per
- * frame). Cancellation (handle.cancel()) is real — the decode loop polls the
- * flag once per token and stops — and drops the result; onDone still fires
+ * frame). Cancellation (handle.cancel()) is real, the decode loop polls the
+ * flag once per token and stops, and drops the result; onDone still fires
  * with { cancelled: true }.
  *
  * @param {WhisperModel} whisper           - from loadWhisper().
@@ -164,14 +164,14 @@ const handle = bro.stt.transcribe(whisper, audio, prompt, {
         console.log(tok.decode(ids, /*skipSpecial=*/true).trim());
     },
 });
-// handle.cancel();  // e.g. on barge-in — onDone fires with cancelled:true
+// handle.cancel();  // e.g. on barge-in, onDone fires with cancelled:true
 
 
 // ── Parakeet ────────────────────────────────────────────────────────────────
 
 /**
  * Load a Parakeet-TDT model from a weights directory (config.json +
- * model.safetensors — the HF `transformers` checkpoint layout, e.g.
+ * model.safetensors, the HF `transformers` checkpoint layout, e.g.
  * nvidia/parakeet-tdt-0.6b-v3 fetched by brosoundml/scripts/download-parakeet.sh).
  *
  * @param {string} dir            - Parakeet weights directory.
@@ -202,7 +202,7 @@ const parakeet = bro.stt.loadParakeet('../brosoundml/weights/parakeet/0.6b-v3');
  *         Detokenize piece ids to text. Ids outside the vocab (blank/pad) are
  *         skipped, so the raw transcription id stream decodes directly.
  * @method tokenize(text) → Int32Array
- *         Text to unigram piece ids (no eos/padding) — handy for tests.
+ *         Text to unigram piece ids (no eos/padding): handy for tests.
  * @property {number} vocabCount
  */
 const ptok = bro.stt.loadParakeetTokenizer(
@@ -219,16 +219,16 @@ const ptok = bro.stt.loadParakeetTokenizer(
  *           tokenFrames[i] * frameSeconds = token i's start time.
  *
  * @method transcribe(audio, opts) → { tokenIds, tokenFrames }
- *         Run the full pipeline over `audio` (no prompt — Parakeet is
+ *         Run the full pipeline over `audio` (no prompt: Parakeet is
  *         unconditional). Single pass over the whole clip; no windowing.
  *
  *         audio: Float32Array @ 16 kHz, or { samples, sampleRate } (16 kHz mono)
  *         opts:  { maxNewTokens=0 (0 = whole clip), onToken }
  *         tokenIds:    Int32Array of SentencePiece piece ids (no blank/pad).
- *         tokenFrames: Int32Array — encoder frame each token was emitted at.
+ *         tokenFrames: Int32Array, encoder frame each token was emitted at.
  *
  * opts.onToken(id) fires once per emitted token, in order, synchronously on
- *   this thread — detokenize incrementally for a live partial transcript.
+ *   this thread: detokenize incrementally for a live partial transcript.
  */
 const res = parakeet.transcribe(audio);
 console.log(ptok.decode(res.tokenIds).trim());
@@ -240,7 +240,7 @@ for (let i = 0; i < res.tokenIds.length; i++) {
 /**
  * bro.stt.transcribe(parakeet, audio, opts) → AsyncHandle
  *
- * Async Parakeet decode on a background thread — same machinery as the
+ * Async Parakeet decode on a background thread: same machinery as the
  * Whisper form (the first argument selects the model family; Parakeet takes
  * no promptIds). opts.onToken streams tokens; handle.cancel() is real (the
  * TDT loop polls once per encoder frame).
@@ -269,7 +269,7 @@ bro.stt.transcribe(parakeet, audio, {
 
 /**
  * Load a Qwen3-ASR model from a weights directory (config.json +
- * model.safetensors — the HF checkpoint layout, e.g. Qwen/Qwen3-ASR-0.6B).
+ * model.safetensors, the HF checkpoint layout, e.g. Qwen/Qwen3-ASR-0.6B).
  *
  * @param {string} dir            - Qwen3-ASR weights directory.
  * @param {Object} [opts]
@@ -304,7 +304,7 @@ const qtok = bro.lm.loadTokenizer({
  * @method transcribe(audio, opts) → Int32Array
  *         Run the full pipeline (mel → AuT encoder → autoregressive Qwen3
  *         decode) and return the GENERATED token ids only. The stream is the
- *         model's native "language <Language><asr_text>transcript" format —
+ *         model's native "language <Language><asr_text>transcript" format:
  *         split the ID STREAM on asrTextId, then decode each side with the
  *         Qwen tokenizer. (The marker detokenizes to an empty string, so a
  *         text-level split does not work.)
@@ -313,14 +313,14 @@ const qtok = bro.lm.loadTokenizer({
  *         opts:  { maxNewTokens=0 (0 = 1024), contextIds, onToken }
  *
  * opts.contextIds (Int32Array from qtok.encode(text)) biases recognition
- *   toward names / domain terms — the ids land in the chat template's system
+ *   toward names / domain terms: the ids land in the chat template's system
  *   block.
  * opts.onToken(id) fires once per decoded token, in order, synchronously on
- *   this thread — detokenize incrementally for a live partial transcript.
+ *   this thread: detokenize incrementally for a live partial transcript.
  *
  * @method encode(audio) → { latents, frames, latentDim, latentHz }
  *         Latent tap: AuT encoder + projector only (no decoder). `latents` is
- *         a row-major (frames, latentDim) Float32Array on the host — the rows
+ *         a row-major (frames, latentDim) Float32Array on the host, the rows
  *         transcribe() splices over the <|audio_pad|> block. For bridge
  *         pipelines that drive a separate decoder.
  */
@@ -333,7 +333,7 @@ console.log(qtok.decode(asrIds.slice(0, cut)).trim());    // "language English"
 /**
  * bro.stt.transcribe(asr, audio, opts) → AsyncHandle
  *
- * Async Qwen3-ASR decode on a background thread — same machinery as the
+ * Async Qwen3-ASR decode on a background thread: same machinery as the
  * Whisper/Parakeet forms (the first argument selects the model family; Qwen3-ASR
  * takes no promptIds). opts.onToken streams tokens; handle.cancel() is real
  * (the greedy loop polls once per token).
@@ -360,7 +360,7 @@ bro.stt.transcribe(asr, audio, {
 
 /**
  * Load the encoder-only streaming tap (no decoder weights). Feed mic chunks;
- * latent rows finalize per block (~blockChunks seconds) and never change —
+ * latent rows finalize per block (~blockChunks seconds) and never change,
  * the encoder's attention is windowed within a block, so nothing is
  * re-encoded. A single-block clip streams bit-identically to asr.encode().
  *
@@ -406,23 +406,23 @@ bro.mic.start({ chunkFrames: 160, onChunk: (chunk) => {
  * ── Multi-stream sessions (load-once weights, N decode streams) ──────────────
  *
  * model.createSession() turns one loaded model into N independent transcription
- * streams over ONE shared weight set — the STT analog of N wake detectors on a
+ * streams over ONE shared weight set: the STT analog of N wake detectors on a
  * single shared net. Each session owns its own decode state (Whisper/QwenAsr KV
  * cache; Parakeet TDT prediction state); the immutable weights stay read-only in
  * the model. Use it to transcribe several mic / system / per-NPC streams without
  * copying the weights once per stream.
  *
- * Concurrency: SERIALIZED, INDEPENDENT STATE. Every inference over one model —
- * the module-level bro.stt.transcribe(model, ...) AND each session.transcribe()
- * — shares a single in-flight gate, because the GPU runs one stream and the
+ * Concurrency: SERIALIZED, INDEPENDENT STATE. Every inference over one model,
+ * the module-level bro.stt.transcribe(model, ...) AND each session.transcribe(),
+ * shares a single in-flight gate, because the GPU runs one stream and the
  * captured decoder step-graph is shared across sessions of a model. A second
  * call while one is in flight throws ("an operation is already in flight on this
  * model"); drive the streams from one worker / queue (run them back-to-back, or
  * await each onDone before starting the next). Sessions isolate STATE, not
- * parallel execution — but a session's transcript is bit-identical to the same
+ * parallel execution, but a session's transcript is bit-identical to the same
  * call on a fresh model, so interleaving streams never cross-talks.
  *
- * The model handle may be dropped while a session is still alive — the session
+ * The model handle may be dropped while a session is still alive, the session
  * keeps the weights (and the shared gate) alive on its own.
  *
  * @method Whisper#createSession() → WhisperSession
@@ -447,7 +447,7 @@ bro.mic.start({ chunkFrames: 160, onChunk: (chunk) => {
 const parakeet = bro.stt.loadParakeet('../brosoundml/weights/parakeet');
 const tok      = bro.stt.loadParakeetTokenizer('../brosoundml/weights/parakeet/tokenizer.json');
 const sessionA = parakeet.createSession();   // stream A's TDT state
-const sessionB = parakeet.createSession();   // stream B's TDT state — independent
+const sessionB = parakeet.createSession();   // stream B's TDT state, independent
 sessionA.transcribe(clipA, { onDone(a) {
     console.log('A:', tok.decode(Array.from(a.tokenIds)));
     // start B only after A finishes (one model = one in-flight op)

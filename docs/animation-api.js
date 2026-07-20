@@ -1,5 +1,5 @@
 /**
- * Animation clips — data-driven multi-track keyframes for scene-node
+ * Animation clips: data-driven multi-track keyframes for scene-node
  * properties. The Godot Animation-resource + AnimationPlayer analog for
  * bro's 3D scene: a clip is plain JSON (storable in files, round-trippable),
  * a player resolves its tracks against named scene nodes and plays it on the
@@ -12,7 +12,7 @@
  *
  * Relationship to the other animation systems:
  *   - Tween (scene.createTween) is imperative "go to X over N seconds";
- *     clips are declarative keyframe data — use clips for anything authored,
+ *     clips are declarative keyframe data: use clips for anything authored,
  *     stored, or re-played.
  *   - The skeletal player (skinnedMesh.play) drives BONE palettes and is a
  *     separate domain: a clip can animate the same skinned node's
@@ -22,18 +22,18 @@
  * Ticking + coexistence (last-writer-wins per property per frame):
  *   Every frame SceneGraph::tickAnimations runs, in order:
  *     1. node ticks (sprite frames, particles, skeletal players)
- *     2. tweens (unspecified order — do NOT rely on it)
+ *     2. tweens (unspecified order: do NOT rely on it)
  *     3. clip players (creation order)
  *   so when a tween and a clip player write the same property in the same
  *   frame, the clip player wins; among clip players the newest-created wins
  *   (ids are sorted, so hash-map iteration order can't perturb it). Tweens
  *   are NOT sorted: two tweens writing the same property in the same frame
- *   resolve arbitrarily — give them disjoint properties instead.
+ *   resolve arbitrarily: give them disjoint properties instead.
  *   Everything runs on the scaled clock: bro.time.paused/scale and headless
  *   advanceTime() apply automatically.
  *
  * Liveness: targets are resolved by node NAME at play() time and tracked by
- * node id afterwards — a node destroyed mid-playback simply stops receiving
+ * node id afterwards: a node destroyed mid-playback simply stops receiving
  * writes (no error, no dangling). Destroying the canvas/scene destroys its
  * players; JS wrappers then throw ("player has been destroyed") on use.
  */
@@ -41,31 +41,31 @@
 // ── Clip definition (plain JSON) ─────────────────────────────────────────────
 
 const clipDef = {
-    duration: 2,            // seconds; optional — defaults to the last key time.
+    duration: 2,            // seconds; optional, defaults to the last key time.
                             // May be shorter than the last key (trailing keys
                             // are then unreachable).
-    loop: 'none',           // 'none' (default) — hold final value, fire
+    loop: 'none',           // 'none' (default), hold final value, fire
                             //   onFinished once
-                            // 'loop'     — wrap around
-                            // 'pingpong' — reflect at both ends (full cycle
+                            // 'loop', wrap around
+                            // 'pingpong', reflect at both ends (full cycle
                             //   = 2 x duration)
     tracks: [
-        // Property track: target names a scene node (SceneNode.name — first
+        // Property track: target names a scene node (SceneNode.name, first
         // match wins), property one of the supported set below.
         {
             target: 'door',
             property: 'rotation',
             keys: [
                 // Keys may be listed in any order (sorted by time on add).
-                // interp: interpolation for the segment LEAVING this key —
-                //   'linear' (default) — lerp; rotation: shortest-path slerp
-                //   'step'             — hold until the next key
-                //   'cubic'            — Catmull-Rom: tangents derived from
+                // interp: interpolation for the segment LEAVING this key,
+                //   'linear' (default), lerp; rotation: shortest-path slerp
+                //   'step', hold until the next key
+                //   'cubic', Catmull-Rom: tangents derived from
                 //     the neighboring keys (one-sided at the endpoints),
                 //     same Hermite basis as the skeletal glTF CUBICSPLINE
                 //     path; rotation keys are hemisphere-aligned first
-                // ease: any tween easing name ('quadInOut', 'bounceOut', ...)
-                //   — warps the segment's normalized time BEFORE the
+                // ease: any tween easing name ('quadInOut', 'bounceOut', ...),
+                // warps the segment's normalized time BEFORE the
                 //   interpolation above (default 'linear').
                 { time: 0.0, value: { euler: [0, 0, 0] }, interp: 'cubic' },
                 { time: 1.5, value: { euler: [0, 1.9, 0] }, ease: 'quadOut' },
@@ -104,7 +104,7 @@ const clipDef = {
 //   metallic    number               Mesh
 //   roughness   number               Mesh
 //
-// Rotation key values (interpolation is always quaternion slerp — Euler is
+// Rotation key values (interpolation is always quaternion slerp. Euler is
 // converted on the way in; note plain arrays are quaternions, NOT Euler):
 //   { euler: [rx, ry, rz] }          radians, XYZ intrinsic
 //   { axis: [x, y, z], angle: a }    axis-angle, radians
@@ -118,7 +118,7 @@ const player = scene.createAnimationPlayer();   // many per scene is fine
 player.addClip('intro', clipDef);  // parse + register (replaces same name;
                                    //   an in-flight playback is unaffected)
 player.clipDef('intro');           // the verbatim clipDef JSON back out
-                                   //   (null for unknown names) — clips are
+                                   //   (null for unknown names), clips are
                                    //   pure data; persist them with
                                    //   JSON.stringify to a file
 player.play('intro');              // resolve targets, validate, start
@@ -126,7 +126,7 @@ player.play('intro', {
     speed: -1,                     // playback rate; negative = reverse
     from: 0.5,                     // start time (default 0; duration when
                                    //   speed < 0)
-    fade: 0.3,                     // crossfade seconds — see below
+    fade: 0.3,                     // crossfade seconds. See below
 });
 player.pause();                    // freeze in place (fade too)
 player.resume();
@@ -137,7 +137,7 @@ player.seek(1.2);                  // scrub: clamps to [0, duration], writes
                                    //   fires NO events, clears the finished
                                    //   latch, cancels a running crossfade
 player.speed = 2;                  // live-settable mid-playback
-player.playing;                    // bool — advancing (not paused/finished)
+player.playing;                    // bool, advancing (not paused/finished)
 player.currentTime;                // seconds into the current clip
 player.currentClip;                // name, or '' when stopped
 
@@ -150,12 +150,12 @@ player.destroy();                  // stop + release (safe from callbacks)
 
 // ── Event semantics (Godot-style) ────────────────────────────────────────────
 //
-//   - A key fires exactly once per pass, when the playhead crosses it —
+//   - A key fires exactly once per pass, when the playhead crosses it,
 //     in either direction (reverse playback fires in reverse order).
 //   - play() fires a key sitting exactly at the start position; each loop
 //     pass re-fires keys (including one at t=0); pingpong fires boundary
 //     keys once per arrival.
-//   - seek() NEVER fires events — not the skipped ones, not the key at the
+//   - seek() NEVER fires events: not the skipped ones, not the key at the
 //     seek position itself. Keys strictly ahead of the playhead fire as
 //     playback proceeds.
 //   - Callbacks run during the engine tick, before that frame's property
@@ -165,7 +165,7 @@ player.destroy();                  // stop + release (safe from callbacks)
 // ── Crossfade semantics ──────────────────────────────────────────────────────
 //
 // player.play(next, { fade: seconds }) blends from the current state:
-//   - The outgoing clip keeps advancing during the fade — property tracks
+//   - The outgoing clip keeps advancing during the fade: property tracks
 //     only; its EVENT tracks stop firing at the switch.
 //   - Each incoming property track blends toward its sampled value from:
 //     the outgoing clip's matching (same node, same property) track when
@@ -228,10 +228,10 @@ cutscene.play('doorOpen');
 
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Skeletal blending — N-way blend spaces + layered blending (SkinnedMeshNode)
+// Skeletal blending, N-way blend spaces + layered blending (SkinnedMeshNode)
 // ═════════════════════════════════════════════════════════════════════════════
 //
-// The skinned-mesh player (skinnedMesh.setSkeleton / addClip / play — method
+// The skinned-mesh player (skinnedMesh.setSkeleton / addClip / play, method
 // reference in docs/scene-api.js) blends BONE poses, entirely in C++, with
 // zero per-frame JS. Beyond single clips and crossfades it supports:
 //
@@ -272,16 +272,16 @@ cutscene.play('doorOpen');
 //     machinery, and spaces shadow a same-named clip. Layers compose on
 //     top unchanged. Blend spaces always loop.
 //   - 1D: the parameter clamps to [min pos, max pos]; the two neighboring
-//     clips blend linearly by position (exact slerp — at a sample point you
+//     clips blend linearly by position (exact slerp, at a sample point you
 //     get that clip bit-exactly).
 //   - 2D: the 3 nearest points blend by inverse-SQUARED-distance weights,
 //     normalized. On a sample point that clip takes full weight (coincident
 //     points split it evenly); degenerate layouts (duplicate or collinear
 //     points) are safe. This is deliberately simpler than Godot's
 //     triangulated BlendSpace2D: no triangulation to author or break, but
-//     weights jump slightly when the nearest-3 set changes — keep sample
+//     weights jump slightly when the nearest-3 set changes, keep sample
 //     points sparse and well-separated.
-//   - setBlendPos is INSTANT — no internal smoothing. Tween the parameter
+//   - setBlendPos is INSTANT: no internal smoothing. Tween the parameter
 //     from app code for eased transitions; the state-machine tier (below)
 //     adds authored transitions on top.
 //
@@ -307,7 +307,7 @@ cutscene.play('doorOpen');
 //     play(name, { mask }) form is slot 0.
 //   - mask: Uint8Array/array, 1 = bone animated by this layer; empty/omitted
 //     = whole body. fadeTime on playLayer fades the layer's WEIGHT in from
-//     0 (layers never crossfade — that's a base-track concept).
+//     0 (layers never crossfade. That's a base-track concept).
 //   - A non-looping layer expires on finish and fires onAnimationFinished
 //     with its clip name; looping layers persist until stopLayer/stop.
 //   - Layers play clips only; blend spaces live on the base track.
@@ -316,7 +316,7 @@ cutscene.play('doorOpen');
 //
 //   node.blendState() → {
 //     state:  'move' | null,       // current state-machine state (null:
-//                                  //  no machine, or suspended — see below)
+//                                  //  no machine, or suspended. See below)
 //     clips:  [{ name, weight }],  // base composition; weights sum to 1
 //                                  // (during a crossfade the outgoing source
 //                                  //  appears too, scaled by 1 - alpha)
@@ -356,12 +356,12 @@ function onTick(dt, velocity) {
 
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Skeletal state machine — authored transitions over clips + blend spaces
+// Skeletal state machine, authored transitions over clips + blend spaces
 // ═════════════════════════════════════════════════════════════════════════════
 //
 // The Godot AnimationNodeStateMachine analog, code-first: states reference
 // registered clips or blend spaces, transitions carry the fade; the APP
-// decides when to travel (there is no condition/expression language — drive
+// decides when to travel (there is no condition/expression language, drive
 // it from gameplay code). The machine sits ABOVE play()/fade: travel() uses
 // exactly the crossfade machinery play() uses, so everything about blend
 // spaces, layers, and blendState() composes unchanged.
@@ -375,7 +375,7 @@ function onTick(dt, velocity) {
 //       { name: 'jump', source: 'jumpClip', loop: false }, // one-shot state
 //     ],
 //     transitions: [
-//       // from: state name or '*' (wildcard — matches any current state,
+//       // from: state name or '*' (wildcard, matches any current state,
 //       // including the suspended one). fade: crossfade seconds (default 0
 //       // = hard switch). Exact from/to matches win over wildcards;
 //       // definition order breaks remaining ties.
@@ -393,9 +393,9 @@ function onTick(dt, velocity) {
 //   node.travel('move');    // follow the defined transition from the current
 //                           // state (wildcard fallback). NO defined
 //                           // transition: logs a warning and switches
-//                           // directly with fade 0 — authored transitions
+//                           // directly with fade 0, authored transitions
 //                           // are the point of this tier.
-//   node.state;             // 'move' — or null (no machine, or suspended)
+//   node.state;             // 'move', or null (no machine, or suspended)
 //   node.blendState().state // same, alongside the live blend weights
 //   node.onStateChanged = (from, to) => {};  // after every travel/autoAdvance;
 //                           // from is null when re-entering from suspension.
@@ -407,13 +407,13 @@ function onTick(dt, velocity) {
 //     state immediately (hard switch); validation errors (unknown source /
 //     endpoint / initial, duplicate names) throw.
 //   - syncPhase: when both states are cycles (blend space, or looping clip),
-//     the incoming track starts at the outgoing track's normalized phase —
-//     use on move↔move-variant transitions so gait cycles stay foot-aligned.
+//     the incoming track starts at the outgoing track's normalized phase.
+//     Use on move↔move-variant transitions so gait cycles stay foot-aligned.
 //     Two states may share one blend space: the space PARAMETER persists
 //     across the switch (it lives on the space); the phase only carries when
 //     syncPhase asks for it.
 //   - SUSPENSION: a manual play() or stop() takes the base track over and
-//     suspends the machine — node.state becomes null, the definition stays,
+//     suspends the machine, node.state becomes null, the definition stays,
 //     and the next travel() re-enters (wildcard transitions still match;
 //     anything else warns + switches directly). Layers never suspend.
 //   - onAnimationFinished still fires alongside autoAdvance (after the
@@ -456,7 +456,7 @@ function onTick(dt, velocity) {
 
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Root motion — extract authored root displacement, apply it to the node/body
+// Root motion, extract authored root displacement, apply it to the node/body
 // ═════════════════════════════════════════════════════════════════════════════
 //
 // A walk clip that actually moves its root bone forward normally makes the
@@ -465,7 +465,7 @@ function onTick(dt, velocity) {
 // (base + crossfade + blend space + layers) and before skinning, the root
 // bone's translation/yaw delta is accumulated for the app and REMOVED from
 // the pose, so the character animates in place and the APP moves the node
-// or physics body — animation stays the source of truth for distance.
+// or physics body, animation stays the source of truth for distance.
 //
 //   node.setRootMotion({
 //     enabled: true,
@@ -478,7 +478,7 @@ function onTick(dt, velocity) {
 //   });
 //
 //   const d = node.consumeRootMotion();
-//   // { translation: [x, y, z], yaw }  — accumulated since the last call,
+//   // { translation: [x, y, z], yaw }, accumulated since the last call,
 //   // reset on read. MODEL space (the clip's authoring space, before
 //   // Skeleton.rootTransform and the node's own TRS); yaw is radians
 //   // about +Y. translation[1] is 0 unless extractY.
@@ -490,9 +490,9 @@ function onTick(dt, velocity) {
 //     blend-space mixes, and state-machine transitions.
 //   - LOOP WRAPS are corrected with the clip's net-loop root displacement
 //     (blend spaces: the weight-mixed net of the participating clips), so
-//     deltas telescope exactly — summing consumeRootMotion over one full
+//     deltas telescope exactly, summing consumeRootMotion over one full
 //     loop yields precisely the clip's authored net displacement.
-//   - The first tick after enable / play / seek measures only that tick —
+//   - The first tick after enable / play / seek measures only that tick,
 //     enabling mid-clip never spikes. Pausing (player pause or
 //     bro.time.pause) accumulates nothing.
 //   - Crossfading clips whose roots sit at different absolute positions
@@ -500,7 +500,7 @@ function onTick(dt, velocity) {
 //     during the fade (can briefly reverse). Author gait clips with the
 //     root starting near origin, or keep fades short.
 //   - Layers that animate the root bone feed the deltas but get no wrap
-//     correction — mask the root bone out of layers when root motion is on.
+//     correction, mask the root bone out of layers when root motion is on.
 //
 // ── Wiring: node-driven character ────────────────────────────────────────────
 //
@@ -525,7 +525,7 @@ function onTick(dt, velocity) {
 //
 // The engine steps characters inside the fixed physics tick; the app just
 // feeds a desired velocity (docs/physics-api.js). Convert the accumulated
-// delta to a velocity by dividing by the SCALED frame dt — bro.time.now is
+// delta to a velocity by dividing by the SCALED frame dt, bro.time.now is
 // the scaled clock (ms), so while paused dt is 0 and the character must get
 // zero velocity: guard the division.
 //

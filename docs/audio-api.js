@@ -34,7 +34,7 @@ class AudioContext {
    * Estimated output latency in seconds (read-only, Web Audio's name):
    * the audio device buffer size divided by the device sample rate,
    * captured when the output device opened. Only the device buffer is
-   * visible from here — OS mixer / driver / DAC latency are not — so treat
+   * visible from here: OS mixer / driver / DAC latency are not. So treat
    * it as a lower-bound estimate. 0 in headless mode (no device).
    */
   get outputLatency() {}
@@ -190,7 +190,7 @@ class AudioContext {
   /** @param {number} ms - attack time in milliseconds, clamped to [0.1, 100] */ setCompressorAttack(ms) {}
   /** @param {number} ms - release time in milliseconds, clamped to [1, 1000] */ setCompressorRelease(ms) {}
 
-  // Master limiter — a lookahead peak limiter on the master bus, applied after
+  // Master limiter, a lookahead peak limiter on the master bus, applied after
   // master gain. Catches inter-sample peaks the compressor misses; keep it on
   // to prevent clipping when many voices stack up.
   //   ctx.setLimiterEnabled(true);
@@ -218,8 +218,8 @@ class AudioContext {
    * Solo a bus. While ANY bus is soloed, a bus only reaches the mix if it is
    * soloed itself, sits inside a soloed group, or carries a soloed bus's
    * audio toward master (ancestors keep mixing so solo audio still flows to
-   * the output). Every other bus renders silent — its parent mix AND its aux
-   * sends — while its effect tails keep running, so releasing solo is
+   * the output). Every other bus renders silent, its parent mix AND its aux
+   * sends, while its effect tails keep running, so releasing solo is
    * click-free. Notes: mute wins (a muted+soloed bus stays silent); sources
    * routed directly to master bypass the bus tree and stay audible (same as
    * Godot); solo state releases automatically when the bus is deleted.
@@ -434,7 +434,7 @@ class AudioContext {
   setListenerOrientation(forwardX, forwardY, forwardZ, upX, upY, upZ) {}
 
   /**
-   * Listener world-space velocity (units/sec) — the listener half of the
+   * Listener world-space velocity (units/sec): the listener half of the
    * Doppler model. Zero (default) means no listener-motion Doppler.
    * Scene-attached listeners (scene.bindAudioListenerToCamera, see
    * scene-api.js) update this automatically every frame.
@@ -448,7 +448,7 @@ class AudioContext {
   // (multiplies setPlaybackRate), voices fold it into pitch as semitones.
   // Model: ratio = (c − v_l·d̂)/(c − v_s·d̂), c = 343 units/sec, clamped to
   // [0.5, 2.0] (±1 octave). Streaming playbacks (createStream /
-  // createStreamFromFile) are NOT shifted — their ring mixer has no
+  // createStreamFromFile) are NOT shifted, their ring mixer has no
   // resampler, same reason setPlaybackRate is a no-op for them.
   // Scene-attached emitters (node.attachAudioEmitter, see scene-api.js)
   // compute and push velocities automatically from node motion.
@@ -462,7 +462,7 @@ class AudioContext {
 
   /**
    * Last Doppler pitch ratio the mixer applied to a spatialized playback
-   * (1.0 until one was mixed with Doppler active). Introspection/testing —
+   * (1.0 until one was mixed with Doppler active). Introspection/testing,
    * e.g. assert a node moving toward the listener yields a rising ratio.
    * @param {number} playbackId @returns {number} ratio in [0.5, 2.0]
    */
@@ -575,7 +575,7 @@ class AudioContext {
    * engine sample rate using a high-quality polyphase sinc resampler.
    *
    * Decodes the WHOLE file into RAM (capped at ~200 MB decoded). For big
-   * files — long music tracks, ambience beds — use createStreamFromFile,
+   * files: long music tracks, ambience beds. Use createStreamFromFile,
    * which disk-streams with constant memory.
    * @param {string} path - mount path ("/app/assets/hit.ogg"), a path
    *   relative to the app directory, or an absolute filesystem path
@@ -670,7 +670,7 @@ class AudioContext {
    *   clock instead of starting immediately, so back-to-back calls (e.g.
    *   streaming fixed-size chunks) join gaplessly with no main-thread
    *   setTimeout jitter or clock drift. A `when` at/before now plays
-   *   immediately, same as the 3-arg form. This is playClipAt() — same
+   *   immediately, same as the 3-arg form. This is playClipAt(), same
    *   underlying method, just called with a 4th argument.
    * @returns {number} playbackId - handle for controlling this playback instance
    *
@@ -694,10 +694,10 @@ class AudioContext {
   setPlaybackRegion(playbackId, startSample, endSample) {}
   /** @param {number} playbackId @param {number} rate - 1.0 = normal speed */ setPlaybackRate(playbackId, rate) {}
   /** @param {number} playbackId @param {number} pan - -1.0 to 1.0 */ setPlaybackPan(playbackId, pan) {}
-  /** @param {number} playbackId @returns {number} normalized position in the clip/region, [0,1) — multiply by the clip duration for seconds */ getPlaybackPosition(playbackId) {}
+  /** @param {number} playbackId @returns {number} normalized position in the clip/region, [0,1): multiply by the clip duration for seconds */ getPlaybackPosition(playbackId) {}
 
   /**
-   * Playback position in seconds — the seconds-domain counterpart of
+   * Playback position in seconds: the seconds-domain counterpart of
    * getPlaybackPosition. Clip playbacks: seconds from the region start
    * (wraps when looping). Disk-streamed playbacks: current file time
    * (seek-aware). Live PCM streams: seconds of audio consumed. 0 for
@@ -716,7 +716,7 @@ class AudioContext {
    *   support it), already-buffered audio is skipped, and playback resumes
    *   once the worker refills from the new position (brief silence, counted
    *   as underrun in getStreamStats). Seeking a finished stream restarts it.
-   * - Live PCM streams (createStream): no backing store — no-op.
+   * - Live PCM streams (createStream): no backing store, no-op.
    * @param {number} playbackId @param {number} seconds
    * @example
    *   const id = ctx.createStreamFromFile("music/track.mp3");
@@ -729,7 +729,7 @@ class AudioContext {
   // --- Streaming PCM Source (live voice / network audio) --------------------
 
   /**
-   * Create a streaming PCM source — a persistent, spatializable playback fed
+   * Create a streaming PCM source: a persistent, spatializable playback fed
    * sample data frame-by-frame instead of from a fixed clip. The returned id is
    * an ordinary playbackId: drive it with every setPlayback* / setPlaybackSpatial*
    * method (gain, pan, bus, sends, 3D position). The audio thread reads a ring
@@ -753,7 +753,7 @@ class AudioContext {
 
   /**
    * Append interleaved PCM to a streaming source. Samples MUST be at the engine
-   * sample rate (resample on the producer side — e.g. decode voice directly at
+   * sample rate (resample on the producer side: e.g. decode voice directly at
    * ctx.sampleRate). Single-producer: push from one thread. On underrun the
    * source plays silence; on overrun (producer far ahead of playback) the oldest
    * audio is dropped to bound latency.
@@ -784,10 +784,10 @@ class AudioContext {
    * finished restarts it from the top). seekPlayback works on a stream just as
    * it does on a clip voice: the decode worker takes the seek, moves the codec
    * and refills the ring, so the position readout lands where you asked. The
-   * refill may cost a counted underrun gap if the seek drained the ring — that
+   * refill may cost a counted underrun gap if the seek drained the ring, that
    * depends on scheduling, so treat it as expected but not guaranteed. If the
    * disk/scheduler stalls long enough to drain the ring, the stream plays
-   * silence and counts the gap (see getStreamStats), then resumes — it never
+   * silence and counts the gap (see getStreamStats), then resumes. It never
    * blocks the audio thread.
    *
    *   const s = ctx.createStreamFromFile('music/long-track.ogg');
@@ -833,7 +833,7 @@ class AudioContext {
   /**
    * Render `numFrames` through the full pipeline (voices, clips, bus effects,
    * mix, limiter) WITHOUT a playback device, then return the latest mono
-   * mixdown as a Float32Array. This is the offline/headless pump — in
+   * mixdown as a Float32Array. This is the offline/headless pump, in
    * bro-headless there is no audio device thread, so call this (or advanceTime,
    * which renders for you) to advance audio. Do NOT call it in a windowed app
    * with a live device: it would race the audio callback.

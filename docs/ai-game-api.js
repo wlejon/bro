@@ -1,5 +1,5 @@
 // =============================================================================
-// bro.ai.game — Game AI API Reference
+// bro.ai.game, Game AI API Reference
 // =============================================================================
 //
 // The game AI API provides server-side pathfinding, steering, and perception
@@ -24,7 +24,7 @@
 
 
 // -----------------------------------------------------------------------------
-// NavGrid — 2D grid-based navigation mesh
+// NavGrid, 2D grid-based navigation mesh
 // -----------------------------------------------------------------------------
 
 /**
@@ -39,7 +39,7 @@
  * @param {Array<{x, z, hw, hd}>} [opts.obstacles] - AABB obstacles to mark as blocked
  * @param {number} [opts.padding=0] - Extra clearance around obstacles (agent radius)
  *
- * Physics bake — derive obstacles from collision geometry so AI and physics
+ * Physics bake: derive obstacles from collision geometry so AI and physics
  * can never disagree. Every static, non-sensor body's world-space AABB is
  * projected to XZ and added as an obstacle (with `padding`). Bodies whose XZ
  * footprint covers the entire grid (ground slabs) are skipped automatically.
@@ -49,7 +49,7 @@
  * @param {Array<string|number>} [opts.physicsLayers] - only bake bodies on
  *                                  these collision layers (names or indices)
  * @param {number} [opts.physicsMinY=-Infinity] - only bake bodies whose AABB
- * @param {number} [opts.physicsMaxY=+Infinity]   intersects [minY, maxY] —
+ * @param {number} [opts.physicsMaxY=+Infinity]   intersects [minY, maxY]:
  *                                  use to carve out the walkable slab
  * @returns {NavGrid}
  */
@@ -85,7 +85,7 @@ nav.isWalkable(0, 0);  // false (inside obstacle)
  * Find a path from start to goal using A* with path smoothing.
  *
  * Partial paths (Godot-style): a blocked, out-of-bounds, or walled-off goal
- * CLAMPS the path to the closest reachable cell instead of failing — the
+ * CLAMPS the path to the closest reachable cell instead of failing, the
  * returned array then has `path.partial === true` and ends at the clamped
  * point. `partial` is false on a complete path. Empty only when the START is
  * invalid (out of bounds / on a blocked cell), or when opts.requireFullPath
@@ -113,32 +113,32 @@ nav.addObstacle({ x: 5, z: 5, hw: 1, hd: 1 }, 0.4);
 
 
 // -----------------------------------------------------------------------------
-// NavMesh — polygon navigation mesh (Recast/Detour)
+// NavMesh, polygon navigation mesh (Recast/Detour)
 // -----------------------------------------------------------------------------
 //
 // The 3D counterpart to NavGrid, for worlds a flat 2D grid cannot represent:
 // slopes, ramps, bridges/overpasses, multi-level interiors. Baked from
 // arbitrary triangle soup; all points are y-up world-space {x, y, z}.
 //
-// NavGrid vs NavMesh: use a NavGrid for flat single-level arenas — it is
+// NavGrid vs NavMesh: use a NavGrid for flat single-level arenas. It is
 // instant to build, supports dynamic obstacles (addObstacle after creation),
 // and backs the avoidance wall bridge. Use a NavMesh when the level has
-// height: walkable slopes, stacked floors, or interiors — the bake voxelizes
+// height: walkable slopes, stacked floors, or interiors, the bake voxelizes
 // real geometry, erodes by agent radius, and findPath returns 3D waypoints.
 // A default bake is static: rebake (or cache + reload) when the level
 // changes. For doors, crates, and spawned walls, bake with
-// `dynamicObstacles: true` instead — that enables the runtime obstacle API
+// `dynamicObstacles: true` instead, that enables the runtime obstacle API
 // (see "Dynamic obstacles" below) with incremental tile rebuilds, no rebake.
 //
 // Availability: requires a build configured with
 // -DBROGAMEAGENT_WITH_NAVMESH=ON (Recast/Detour from vcpkg). Feature-detect
-// with `bro.ai.game.navMeshAvailable` — when false, bakeNavMesh/loadNavMesh
+// with `bro.ai.game.navMeshAvailable`, when false, bakeNavMesh/loadNavMesh
 // throw.
 
 /**
  * Bake a polygon navmesh from any mix of geometry sources. All requested
  * sources are concatenated into one triangle soup and baked once. Baking is
- * seconds-scale for big levels — cache the result with navMesh.save() and
+ * seconds-scale for big levels: cache the result with navMesh.save() and
  * restore with loadNavMesh() at startup.
  *
  * Triangles must be wound counter-clockwise when viewed from above (+Y
@@ -153,14 +153,14 @@ nav.addObstacle({ x: 5, z: 5, hw: 1, hd: 1 }, 0.4);
  *     world via `Physics`/`true`, or a Physics.createWorldHandle() sandbox).
  *     Mesh and heightfield shapes contribute their exact triangles;
  *     primitive/convex shapes (box/sphere/capsule/hull) contribute Jolt's
- *     coarse triangulation — a box is 12 triangles, spheres/capsules a
+ *     coarse triangulation: a box is 12 triangles, spheres/capsules a
  *     low-LOD tessellation. Fine for navigation, not render-accurate.
  * @param {Array<string|number>} [opts.physicsLayers] - only collect bodies on
  *     these collision layers (names or indices)
  *
  * @param {Terrain} [opts.fromTerrain] - a scene.createTerrain() handle. The
  *     terrain's top surface is height-sampled on a regular grid (one down-
- *     raycast per sample) over `terrainBounds` — slopes and plateaus bake
+ *     raycast per sample) over `terrainBounds`: slopes and plateaus bake
  *     accurately; caves/overhangs are approximated by the top surface.
  *     Chunks must be streamed in (terrain.update) before baking.
  * @param {{minX, minZ, maxX, maxZ}} [opts.terrainBounds] - required with
@@ -184,18 +184,18 @@ nav.addObstacle({ x: 5, z: 5, hw: 1, hd: 1 }, 0.4);
  * @param {number} [opts.detailSampleDist=6]  - detail-mesh sampling (cells)
  * @param {number} [opts.detailSampleMaxError=1] - detail-mesh max deviation
  *
- * Off-mesh links (Godot NavigationLink analog — see "Off-mesh links"):
+ * Off-mesh links (Godot NavigationLink analog: see "Off-mesh links"):
  * @param {Array<Object>} [opts.offMeshLinks] - point-to-point traversal
  *     shortcuts baked into the mesh: jump gaps, drop ledges, ladders,
  *     teleporters. Each: {start: {x,y,z}, end: {x,y,z}, radius?,
- *     bidirectional?, userId?}. Static bakes only — combining with
+ *     bidirectional?, userId?}. Static bakes only, combining with
  *     dynamicObstacles fails the bake (tile rebuilds would drop the links).
  *
- * Dynamic obstacles (tiled bake — see the "Dynamic obstacles" section):
+ * Dynamic obstacles (tiled bake: see the "Dynamic obstacles" section):
  * @param {boolean} [opts.dynamicObstacles=false] - bake TILED via Detour's
  *     dtTileCache so obstacles can be added/removed at runtime. Trade-offs vs
  *     the default static bake: no detail mesh (waypoint Y is quantized to
- *     cellHeight — slightly coarser on slopes), no save() serialization, and
+ *     cellHeight: slightly coarser on slopes), no save() serialization, and
  *     small disconnected islands (e.g. crate tops) survive instead of being
  *     culled by regionMinSize. Bake time is comparable; queries are the same.
  * @param {number} [opts.tileSize=16] - tile edge length (world units),
@@ -217,11 +217,11 @@ const navMesh = bro.ai.game.bakeNavMesh({
 
 /**
  * Find a walkable path. Returns the straightened (funnel) waypoint list as a
- * Float32Array of xyz triples — [x0,y0,z0, x1,y1,z1, ...] — including the
+ * Float32Array of xyz triples: [x0,y0,z0, x1,y1,z1, ...], including the
  * snapped start and end points, with a `partial` bool property.
  *
  * Partial paths (Godot-style): an UNREACHABLE goal (disconnected island)
- * clamps the path to the closest reachable point — the result then has
+ * clamps the path to the closest reachable point: the result then has
  * `partial === true` and its last triple is the clamped end, not the goal.
  * Complete paths read `partial === false`. Returns null only when either
  * endpoint fails to snap within the extents, or when requireFullPath is set
@@ -243,10 +243,10 @@ const navMesh = bro.ai.game.bakeNavMesh({
  */
 const wp = navMesh.findPath({ x: -8, y: 0, z: 0 }, { x: 8, y: 3, z: 0 });
 if (wp) for (let i = 0; i < wp.length; i += 3) walkTo(wp[i], wp[i + 1], wp[i + 2]);
-if (wp && wp.partial) console.log('goal unreachable — walking to the closest point');
+if (wp && wp.partial) console.log('goal unreachable, walking to the closest point');
 
 // Off-mesh link markers: `wp.links` is an array of POINT indices that are
-// link takeoffs — the segment from point i to point i+1 traverses the link
+// link takeoffs, the segment from point i to point i+1 traverses the link
 // (jump/drop/teleport), not the walkable surface. Empty when the path uses
 // no links. wp.links = [2] means the segment wp[6..8] → wp[9..11] is a jump.
 
@@ -290,8 +290,8 @@ navMesh.valid;
 const blob = navMesh.save();
 
 /**
- * Restore a mesh previously produced by save(). Loading is a cheap memcpy —
- * the bake is the expensive part — so the standard recipe is: bake once,
+ * Restore a mesh previously produced by save(). Loading is a cheap memcpy,
+ * the bake is the expensive part, so the standard recipe is: bake once,
  * cache to disk, load at startup.
  * @param {ArrayBuffer|TypedArray} buffer
  * @returns {NavMesh}
@@ -317,11 +317,11 @@ const mesh = cached
 // surface.
 //
 // Update semantics: addObstacle/removeObstacle only QUEUE a change. The
-// affected tiles rebuild incrementally — one touched tile per update() call —
+// affected tiles rebuild incrementally, one touched tile per update() call,
 // and the engine pumps update() automatically once per frame, so a change
 // takes effect over the next few frames (typically 1-2). `generation` bumps
 // once per applied batch; navigating agents (node.navigateTo) watch it and
-// repath automatically — an agent whose corridor gets blocked detours, and
+// repath automatically, an agent whose corridor gets blocked detours, and
 // one whose goal becomes unreachable halts instead of ghost-walking the
 // stale route. Call `while (!mesh.update()) {}` only when a change must
 // apply synchronously (e.g. right before a findPath in the same tick).
@@ -365,7 +365,7 @@ dyn.removeObstacle(door);
 /**
  * Pump pending changes by hand: rebuilds at most one touched tile per call,
  * returns true once fully up to date. The engine already pumps once per
- * frame — use this only for synchronous application.
+ * frame: use this only for synchronous application.
  * @param {number} [dt=1/60] - forwarded to Detour (currently unused by it)
  * @returns {boolean}
  */
@@ -374,7 +374,7 @@ while (!dyn.update()) {}          // apply everything right now
 /** Whether this mesh was baked with dynamicObstacles (read-only). */
 dyn.supportsObstacles;
 
-/** Active obstacles — added and not removed, including queued (read-only). */
+/** Active obstacles, added and not removed, including queued (read-only). */
 dyn.obstacleCount;
 
 /** True while queued changes have not been fully applied yet (read-only). */
@@ -390,8 +390,8 @@ dyn.generation;
 // --- Off-mesh links (jump gaps, drop ledges, ladders, teleporters) ---
 //
 // The Godot NavigationLink analog: a point-to-point shortcut baked into the
-// mesh at bakeNavMesh time. Path queries traverse links automatically —
-// Detour routes through them like any polygon — and the result marks each
+// mesh at bakeNavMesh time. Path queries traverse links automatically.
+// Detour routes through them like any polygon, and the result marks each
 // takeoff point (findPath's `links` indices; navigationInfo().onLink for a
 // routed agent) so apps can play a jump/climb animation while the agent
 // moves straight along the link segment.
@@ -400,18 +400,18 @@ dyn.generation;
 //   - Each endpoint must land within `radius` of the (eroded) walkable
 //     surface; a link whose endpoint misses is silently dropped, exactly
 //     like a Godot link placed off the mesh.
-//   - `bidirectional: false` makes the link one-way (start → end) — think
+//   - `bidirectional: false` makes the link one-way (start → end), think
 //     drop-down ledges.
 //   - Links live in the baked Detour data, so save()/loadNavMesh() keeps
 //     them.
 //   - Limitation (honest): links are NOT available on dynamicObstacles
-//     (tiled) bakes — dtTileCache rebuilds tiles at runtime and would drop
+//     (tiled) bakes, dtTileCache rebuilds tiles at runtime and would drop
 //     bake-time connections, so bakeNavMesh throws instead of losing them
 //     silently. Bake a static mesh for linked levels.
 //   - Agents (node.navigateTo) traverse a link by moving straight from
 //     takeoff to landing (Y interpolates linearly along the segment when no
 //     groundFollow probe is set; with groundFollow the node's Y keeps
-//     tracking the probed ground — drive the jump arc yourself off onLink
+//     tracking the probed ground, drive the jump arc yourself off onLink
 //     if you want airtime). Repaths are deferred while onLink so a mid-air
 //     position is never re-snapped.
 
@@ -433,7 +433,7 @@ if (lp) for (const i of lp.links) {
 // node.navigateTo() drives an attached agent along NavMesh::findPath
 // waypoints using the agent's existing setTarget/followPath steering (XZ),
 // so the AI world's ORCA avoidance pass (world.setAvoidance) composes
-// unchanged — routed agents still locally avoid each other. Waypoint Y is
+// unchanged, routed agents still locally avoid each other. Waypoint Y is
 // interpolated along the active segment and drives the node's height when no
 // groundFollow probe is set; groundFollow, when set, wins. While a route is
 // active the binding owns the agent's movement target (a think-hook moveTo
@@ -445,7 +445,7 @@ if (lp) for (const i of lp.links) {
 // batch applied, or a re-bake). A goal that becomes unreachable clamps the
 // route to the closest reachable point (navigationInfo().partial turns
 // true); with requireFullPath the route is abandoned and the agent halts
-// instead — issue a fresh navigateTo() after the blocking obstacle is
+// instead, issue a fresh navigateTo() after the blocking obstacle is
 // removed.
 
 const world = bro.ai.game.createWorld();
@@ -463,11 +463,11 @@ node.attachAgent(world, agent, {
  * Plan a path on the bound navmesh from the agent's position to `target`
  * and start following it.
  *
- * Partial routes (Godot-style): an UNREACHABLE goal still starts a route —
+ * Partial routes (Godot-style): an UNREACHABLE goal still starts a route,
  * the agent walks to the closest reachable point and stops there.
  * navigationInfo().partial reads true for such a route, and the agent's
  * `atTarget` stays false at the clamped end (it measures against the true
- * goal). There is no separate completion event — poll navigationInfo():
+ * goal). There is no separate completion event, poll navigationInfo():
  * `!active` after a partial route started means the agent finished at the
  * clamped end. Pass requireFullPath to fail instead of clamping.
  *
@@ -481,8 +481,8 @@ node.attachAgent(world, agent, {
  * @param {boolean} [opts.requireFullPath=false] - unreachable goal returns
  *     false and the agent does not move, instead of a partial route
  * @returns {boolean} true when following started (complete OR partial
- *     route); false when an endpoint fails to snap, or — with
- *     requireFullPath — when the goal is unreachable
+ *     route); false when an endpoint fails to snap, or, with
+ *     requireFullPath: when the goal is unreachable
  */
 node.navigateTo({ x: 8, y: 3, z: 0 });
 
@@ -493,7 +493,7 @@ node.stopNavigation();
  * State of the binding's navmesh route.
  * @returns {{active: boolean, partial: boolean, onLink: boolean}}
  *     active = a route is being followed; partial = the active/most-recent
- *     route was clamped to the closest reachable point (goal unreachable) —
+ *     route was clamped to the closest reachable point (goal unreachable),
  *     persists after arrival until the next navigateTo()/stopNavigation()
  *     so late polls can still see how the route ended; onLink = the agent
  *     is currently traversing an off-mesh link segment (watch the
@@ -503,7 +503,7 @@ node.navigationInfo();
 
 
 // -----------------------------------------------------------------------------
-// Agent — Pathfinding + steering combined
+// Agent, Pathfinding + steering combined
 // -----------------------------------------------------------------------------
 
 /**
@@ -568,7 +568,7 @@ bot.x;
 bot.z;
 
 /**
- * Vertical position (Y) for multi-level worlds — read/write. Only feeds the
+ * Vertical position (Y) for multi-level worlds: read/write. Only feeds the
  * ORCA elevation filter (see avoidance.height): agents on different levels
  * don't steer around each other. Movement itself stays XZ. Also accepted as
  * `elevation:` in createAgent(opts). Scene-attached agents with groundFollow
@@ -587,7 +587,7 @@ bot.atTarget;
 
 
 // -----------------------------------------------------------------------------
-// Local avoidance (ORCA) — agents stop walking through each other
+// Local avoidance (ORCA), agents stop walking through each other
 // -----------------------------------------------------------------------------
 //
 // Optimal Reciprocal Collision Avoidance, solved natively inside
@@ -595,13 +595,13 @@ bot.atTarget;
 // other movement). When enabled, each living agent's path-following
 // steering becomes its *preferred* velocity, the ORCA solver filters it
 // against nearby agents (the pair splits the avoidance effort by their
-// priorities — 50/50 by default, see avoidance.priority) and static walls,
+// priorities, 50/50 by default, see avoidance.priority) and static walls,
 // and the filtered velocity drives the agent's usual dynamics (maxAccel /
 // maxTurnRate / nav-grid clamping still apply). avoidance.layers/mask
 // scope who avoids whom. Deterministic: the same roster + obstacles +
 // ticks replay identically.
 //
-// Scene-attached agents get this for free — attachAIWorld ticks the same
+// Scene-attached agents get this for free, attachAIWorld ticks the same
 // world, so think() callbacks issuing self.moveTo(...) produce paths that
 // flow around other agents.
 
@@ -611,7 +611,7 @@ bot.atTarget;
  * Walls: the world's own addObstacle() AABBs are always respected while
  * avoidance is on. Passing a navGrid additionally bases avoidance-only
  * walls on that grid's obstacle boxes, so agents locally steer around the
- * exact geometry A* paths around — and since createNavGrid({fromPhysics})
+ * exact geometry A* paths around, and since createNavGrid({fromPhysics})
  * bakes obstacles from static physics bodies, that composition makes
  * avoidance physics-aware for free. Boxes are copied (no reference kept);
  * call again after mutating the grid.
@@ -631,7 +631,7 @@ world.avoidanceEnabled;
  * Per-agent participation + tuning. Also accepted as `avoidance:` in
  * createAgent(opts) and node.attachAgent(world, agent, opts).
  * `false` opts the agent out: it keeps legacy (unfiltered) movement but
- * others still steer around it at full effort — good for bosses or
+ * others still steer around it at full effort: good for bosses or
  * player-driven units that shouldn't yield.
  *
  * @param {boolean|Object} opts - boolean, or:
@@ -649,8 +649,8 @@ world.avoidanceEnabled;
  *   single-level worlds never filter.
  * @param {number}  [opts.priority=0.5]      - avoidance responsibility weight,
  *   0..1. When two agents negotiate, each takes the effort share
- *       share = clamp(0.5 + 0.5 * (otherPriority - selfPriority), 0, 1)
- *   — shares sum to 1 across the pair, so ORCA's collision-free reciprocity
+ *       share = clamp(0.5 + 0.5 * (otherPriority - selfPriority), 0, 1),
+ * shares sum to 1 across the pair, so ORCA's collision-free reciprocity
  *   is preserved. Equal priorities keep the classic 50/50; the LOWER-priority
  *   agent takes proportionally more, and at the extremes (1 vs 0) the
  *   low-priority agent does all the avoiding while the high-priority one
@@ -659,7 +659,7 @@ world.avoidanceEnabled;
  *   avoidance layers this agent occupies)
  * @param {number}  [opts.mask=1]            - neighbor-selection bitmask: agent
  *   A avoids neighbor B only when (A.mask & B.layers) !== 0. One-sided by
- *   design — B may still avoid A if B's mask matches A's layers, and an agent
+ *   design: B may still avoid A if B's mask matches A's layers, and an agent
  *   avoiding a neighbor that cannot see it back automatically takes the FULL
  *   effort (no reciprocity to count on). Default 1/1 = everyone avoids
  *   everyone.
@@ -681,11 +681,11 @@ const a1 = bro.ai.game.createAgent({ navGrid: arena, x: -10, z: 0, avoidance: { 
 const a2 = bro.ai.game.createAgent({ navGrid: arena, x: 10, z: 0 });
 world2.addAgent(a1); world2.addAgent(a2);
 a1.setTarget(10, 0); a2.setTarget(-10, 0);   // they pass, not overlap
-// world2.tick(dt) each frame — or scene.attachAIWorld(world2).
+// world2.tick(dt) each frame, or scene.attachAIWorld(world2).
 
 
 // -----------------------------------------------------------------------------
-// Perception — Line of sight, aim computation
+// Perception, Line of sight, aim computation
 // -----------------------------------------------------------------------------
 
 /**
@@ -738,11 +738,11 @@ if (lead.valid) bot.fire(lead.yaw, lead.pitch);
 
 
 // -----------------------------------------------------------------------------
-// bro.ai.game.steer.* — pure-function steering primitives
+// bro.ai.game.steer.*, pure-function steering primitives
 // -----------------------------------------------------------------------------
 //
 // Stateless 2D steering kernels. Each returns a desired-velocity direction
-// `{fx, fz}` (NOT normalized) — the caller integrates it into actual motion
+// `{fx, fz}` (NOT normalized), the caller integrates it into actual motion
 // (multiply by speed * dt, clamp, blend, etc.). Use these inside custom
 // think() callbacks or scripted policies when Agent's built-in path-following
 // isn't the right behavior. All positions and velocities are XZ-plane.
@@ -759,49 +759,49 @@ const s2 = bro.ai.game.steer.arrive(selfX, selfZ, targetX, targetZ, 1.5);
 /** Move directly away from a threat point. */
 const s3 = bro.ai.game.steer.flee(selfX, selfZ, threatX, threatZ);
 
-/** Lead a moving target — seeks the predicted future position assuming
+/** Lead a moving target. Seeks the predicted future position assuming
  *  constant target velocity. `selfSpeed` sets the lookahead horizon.
  *  @param {number} targetVX @param {number} targetVZ @param {number} selfSpeed */
 const s4 = bro.ai.game.steer.pursue(
     selfX, selfZ, targetX, targetZ, targetVX, targetVZ, selfSpeed);
 
-/** Inverse of pursue — flee from the threat's predicted future position.
+/** Inverse of pursue, flee from the threat's predicted future position.
  *  @param {number} threatVX @param {number} threatVZ @param {number} selfSpeed */
 const s5 = bro.ai.game.steer.evade(
     selfX, selfZ, threatX, threatZ, threatVX, threatVZ, selfSpeed);
 
 
 // -----------------------------------------------------------------------------
-// Capability / policy / AgentBinding — scene-driven AI
+// Capability / policy / AgentBinding, scene-driven AI
 // -----------------------------------------------------------------------------
 //
-// A scene node can own an "agent binding" — a capability set (the tools this
+// A scene node can own an "agent binding", a capability set (the tools this
 // object can use) plus a JS think(self, world) callback (how it decides).
 // Minions, towers, and heroes all use the same binding shape; behaviour
 // differs only by which capabilities are enabled and which think() fn is
 // supplied. Difficulty scales along three orthogonal knobs:
-//   1. capability set — add or remove tools
-//   2. thinkHz        — how often the decision fires
-//   3. think fn       — simple scripted, MCTS wrapper, or NN policy
+//   1. capability set, add or remove tools
+//   2. thinkHz, how often the decision fires
+//   3. think fn, simple scripted, MCTS wrapper, or NN policy
 //
 // Built-in capabilities (string ids used in opts.capabilities):
-//   "move_to"      — self.moveTo(x, z) sets the pathfinding target
-//   "lane_walk"    — self.laneWalk() steps through opts.laneWaypoints
-//   "basic_attack" — self.attack(targetId); blocks for 1/attacksPerSec
-//   "cast_ability" — self.cast(slot, targetId); blocks for cast time (~0.25s)
-//   "flee"         — self.flee([x, z]); retreats away from nearest enemy
-//   "hold"         — self.hold([dur]); no-op for dur seconds (always exposed)
+//   "move_to", self.moveTo(x, z) sets the pathfinding target
+//   "lane_walk", self.laneWalk() steps through opts.laneWaypoints
+//   "basic_attack", self.attack(targetId); blocks for 1/attacksPerSec
+//   "cast_ability", self.cast(slot, targetId); blocks for cast time (~0.25s)
+//   "flee", self.flee([x, z]); retreats away from nearest enemy
+//   "hold", self.hold([dur]); no-op for dur seconds (always exposed)
 //
 // A `self` proxy is built fresh each think tick. It only exposes methods
-// whose capability is present on the binding — towers won't have .moveTo.
+// whose capability is present on the binding, towers won't have .moveTo.
 //
 // Custom capabilities (registerCapability, below) have no dedicated
-// self.<name>() accessor of their own — invoke them with:
+// self.<name>() accessor of their own, invoke them with:
 //   self.useCapability(name, arg0?, arg1?)
 // exposed whenever the binding's capabilities list contains at least one
 // registerCapability'd id. arg0/arg1 land in the capability's Action as
 // i0/i1 (same slots self.attack/self.cast use for target/slot ids) but
-// aren't visible to gate/start/advance below — read them via a JS-side
+// aren't visible to gate/start/advance below. Read them via a JS-side
 // closure handoff instead, same as self.attack/self.cast's targets aren't
 // passed to the *native* capability callbacks either.
 
@@ -828,7 +828,7 @@ bro.ai.game.registerCapability("kite", {
 
 
 // -----------------------------------------------------------------------------
-// SceneGraph.attachAIWorld — auto-tick a World each frame
+// SceneGraph.attachAIWorld, auto-tick a World each frame
 // -----------------------------------------------------------------------------
 
 /**
@@ -845,7 +845,7 @@ scene.detachAIWorld();
 
 
 // -----------------------------------------------------------------------------
-// SceneNode.attachAgent — bind an AI agent to a scene object
+// SceneNode.attachAgent, bind an AI agent to a scene object
 // -----------------------------------------------------------------------------
 
 /**
@@ -874,7 +874,7 @@ scene.detachAIWorld();
  *                                        route-following (see "Agent routing
  *                                        over a navmesh" above)
  *
- * Ground follow — agents plan in 2D (x, z); groundFollow makes the bound
+ * Ground follow: agents plan in 2D (x, z); groundFollow makes the bound
  * node's Y track the ground under the agent instead of sitting at a constant
  * height. The probe runs natively once per frame; when it has no answer
  * (chunk not streamed in / nothing under the ray) the node keeps the last
@@ -929,12 +929,12 @@ minionNode.detachAgent();
 //
 // Read-only:
 //   self.hp / mana / x / z / id / teamId / attackRange / alive
-//   self.agent                          — the underlying AIAgent (for world queries)
+//   self.agent, the underlying AIAgent (for world queries)
 //
 // Universal helpers (always available):
-//   self.distanceTo(target)             — target may be {x,z}, AIAgent, or self
-//   self.inRange(target [, range])      — default range is self.attackRange
-//   self.hold([dur])                    — no-op fallback
+//   self.distanceTo(target), target may be {x,z}, AIAgent, or self
+//   self.inRange(target [, range]), default range is self.attackRange
+//   self.hold([dur]), no-op fallback
 //
 // Capability methods (present only when the cap is enabled):
 //   self.moveTo(x, z)                   // if move_to
@@ -954,24 +954,24 @@ minionNode.detachAgent();
 //
 // Seven flavors, all sharing the same MctsConfig:
 //
-//   createMcts(cfg)           — single agent vs scripted opponents
-//   createDecoupledMcts(cfg)  — simultaneous-move 1v1 (both sides searched)
-//   createTeamMcts(cfg)       — cooperative N-hero joint planner
-//   createTacticMcts(cfg)     — coarse team-tactic planner (Hold / FocusLowestHp / ...)
-//   createLayeredPlanner({ tactic, fine })
-//                             — TacticMcts over TeamMcts with a tactic-match prior
-//   createOptionMcts(cfg)     — search over caller-authored single-hero Options
+//   createMcts(cfg), single agent vs scripted opponents
+//   createDecoupledMcts(cfg), simultaneous-move 1v1 (both sides searched)
+//   createTeamMcts(cfg), cooperative N-hero joint planner
+//   createTacticMcts(cfg), coarse team-tactic planner (Hold / FocusLowestHp / ...)
+//   createLayeredPlanner({ tactic, fine }).
+// TacticMcts over TeamMcts with a tactic-match prior
+//   createOptionMcts(cfg), search over caller-authored single-hero Options
 //                               (temporally-extended macro-actions)
-//   createTeamOptionMcts(cfg) — team-scoped option search
+//   createTeamOptionMcts(cfg), team-scoped option search
 //
 // MctsConfig fields (all optional):
 //   iterations, budgetMs, rolloutHorizon, simDt, actionRepeat, uctC, seed,
-//   pwAlpha                        — progressive widening α (0 disables)
-//   priorC                         — PUCT weight (0 ⇒ plain UCT with uctC)
-//   tacticWindowDecisions          — LayeredPlanner / TacticMcts only
-//   optionMaxWindows               — OptionMcts / TeamOptionMcts only; cap
+//   pwAlpha, progressive widening α (0 disables)
+//   priorC, PUCT weight (0 ⇒ plain UCT with uctC)
+//   tacticWindowDecisions, LayeredPlanner / TacticMcts only
+//   optionMaxWindows, OptionMcts / TeamOptionMcts only; cap
 //                                    on in-tree option execution length
-//   useLeafValue                   — skip rollout entirely and return the
+//   useLeafValue, skip rollout entirely and return the
 //                                    evaluator's value at the expand site.
 //                                    Pair with a strong heuristic/learned
 //                                    evaluator to decouple depth from cost.
@@ -1035,13 +1035,13 @@ console.log(planner.lastStats.fineStats.iterations);
 
 // Root-parallel: N native threads, each with its own Mcts over its own
 // World, joined and merged into one action. Caller must hand in an array of
-// pre-built Worlds already seeded to the SAME game state — this does not
+// pre-built Worlds already seeded to the SAME game state. This does not
 // clone `world` for you (a World doesn't own its Agents, so cloning would be
 // unsafe to do implicitly). Blocking call: all worker threads are fully
 // joined before it returns, so QuickJS never observes concurrency and there
 // is no JS-side locking to worry about. Because of that same threading,
 // `evaluator`/`rolloutPolicy` MUST be a string preset or a native/neural
-// wrapper (e.g. bro.ai.game.learn.createNeuralEvaluator(...)) — a plain JS
+// wrapper (e.g. bro.ai.game.learn.createNeuralEvaluator(...)), a plain JS
 // function is rejected with a TypeError, since N native threads calling
 // back into QuickJS concurrently would be unsafe.
 const parallelWorlds = [world1, world2, world3, world4]; // same state, N clones
@@ -1069,14 +1069,14 @@ const concrete = bro.ai.game.tacticToAction(              // Tactic → CombatAc
 // ─── Options (temporally-extended macro-actions) ──────────────────────────
 //
 // An Option is a policy with initiation + termination predicates. OptionMcts
-// plans at the granularity of options rather than per-tick CombatActions —
+// plans at the granularity of options rather than per-tick CombatActions,
 // branching collapses from ~18 to the size of the option set, and each tree
 // edge covers many windows, so the effective horizon multiplies by option
 // length. The right tool for multi-tick maneuvers (peek/shoot, retreat to
 // cover, flank) that plain search can't plan cheaply at realtime budgets.
 
 // Author a single-hero option. All three callbacks run synchronously inside
-// MCTS search — keep them allocation-light.
+// MCTS search, keep them allocation-light.
 const peekAndShoot = bro.ai.game.createOption({
     name: "peekAndShoot",
     canInitiate:     (self, world) =>
@@ -1115,7 +1115,7 @@ if (chosen) {
     opt.advanceRoot(chosen);                  // reuse tree next call
 }
 
-// Team variant — callbacks receive heroesView[] and step returns a
+// Team variant, callbacks receive heroesView[] and step returns a
 // CombatAction[] (one per hero, in order).
 const teamPush = bro.ai.game.createTeamOption({
     name: "push",
@@ -1137,7 +1137,7 @@ const chosenTeam = teamOpt.search(world, heroes);  // option name or null
 //
 // Assigns heroes to roles (lead / flank / support / etc.); each role owns
 // an option set and optional per-role evaluator. Per-hero OptionMcts runs
-// within the role's option space — no joint-action combinatorial search.
+// within the role's option space, no joint-action combinatorial search.
 // Role re-assignment fires every `replanEveryWindows` decide() calls, or
 // whenever the team composition changes.
 //
@@ -1205,10 +1205,10 @@ UI.drawObservation(obs);
  * softmax over only currently-valid choices.
  *
  * Layout (`bro.ai.game.MASK_TOTAL` floats, 1.0 = legal, 0.0 = illegal):
- *   [0 .. N_ENEMY_SLOTS)   "attack enemy in slot k" — slot k matches the
+ *   [0 .. N_ENEMY_SLOTS)   "attack enemy in slot k", slot k matches the
  *                          k-th enemy in the observation (nearest-first).
  *                          `enemyIds[k]` is the underlying Unit::id (or -1).
- *   [N_ENEMY_SLOTS ..)     "cast ability slot s" — bound + cooldown ready
+ *   [N_ENEMY_SLOTS ..)     "cast ability slot s", bound + cooldown ready
  *                          + mana sufficient (range not checked).
  *
  * @param {AIAgent} agent
@@ -1221,7 +1221,7 @@ const legalAttacks = am.enemyIds.filter((id, k) => id >= 0 && am.mask[k] > 0);
 /**
  * Per-agent reward-delta accumulator. Captures the agent's baseline at
  * construction; each `consume()` call returns the delta since the previous
- * call and re-latches. Reads `world.events()` — do not call
+ * call and re-latches. Reads `world.events()`. Do not call
  * `world.clearEvents()` in between consume() calls.
  *
  * @param {AIAgent} agent
@@ -1270,7 +1270,7 @@ sim.addPolicy(heroAgent.unit.id, function (self, w) {
     return myPolicy.forward(obs, mask);   // your NN inference
 });
 
-/** Stop driving this agent — it falls back to scripted World::tick. */
+/** Stop driving this agent. It falls back to scripted World::tick. */
 sim.removePolicy(heroAgent.unit.id);
 
 /** One fixed-dt step. */
@@ -1341,7 +1341,7 @@ const dmg = rr.damageSummary();
 
 
 // =============================================================================
-// bro.ai.game.nn — Neural network primitives
+// bro.ai.game.nn, Neural network primitives
 // =============================================================================
 //
 // Thin bindings over brogameagent::nn. Intended for training loops and custom
@@ -1377,7 +1377,7 @@ lin.load(blob);
 const relu = bro.ai.game.nn.createRelu();
 const tanh = bro.ai.game.nn.createTanh();
 
-/** DeepSetsEncoder — permutation-invariant self+enemies+allies encoder. */
+/** DeepSetsEncoder, permutation-invariant self+enemies+allies encoder. */
 const enc = bro.ai.game.nn.createDeepSetsEncoder({hidden: 32, embedDim: 32}, seed);
 enc.outDim;                    // 3 * embedDim
 enc.forward(obsVec, embed);
@@ -1392,7 +1392,7 @@ pHead.totalLogits;                  // N_MOVE + N_ATTACK + N_ABILITY
 pHead.forward(embed, logits);
 pHead.backward(dLogits, dEmbed);
 
-/** PolicyValueNet — generic small MLP with value head and a single (flat)
+/** PolicyValueNet, generic small MLP with value head and a single (flat)
  *  policy head, decoupled from the MOBA-shaped observation/action layout
  *  that SingleHeroNet assumes. Use this when your observation is hand-crafted
  *  and your action space is a small flat set of discrete choices (e.g.
@@ -1405,7 +1405,7 @@ pHead.backward(dLogits, dEmbed);
  *  Tensor. Backward expects (dValue, dLogits) where dLogits is typically
  *  (probs - target) from nn.softmaxXent (with optional legal-action mask).
  *
- *  Wire format magic differs from SingleHeroNet — blobs are not interchangeable.
+ *  Wire format magic differs from SingleHeroNet: blobs are not interchangeable.
  */
 const pvnet = bro.ai.game.nn.createPolicyValueNet({
     inDim: 60,
@@ -1420,18 +1420,18 @@ pvnet.backward(dValuePV, dLogitsTensor);
 pvnet.zeroGrad(); pvnet.sgdStep(lr, momentum);
 const pvBlob = pvnet.save();   pvnet.load(pvBlob);
 
-// forwardBatched(x, logits, values) — B rows in one call (one dispatch
+// forwardBatched(x, logits, values), B rows in one call (one dispatch
 // instead of B), for interleaving multiple searches' leaf evaluations
 // gathered within a single JS tick. x is (B, inDim); logits/values are
 // pre-sized by the caller as (B, numActions) / (B, 1). Same shape on
-// SingleHeroNetTX below — SingleHeroNet does NOT have this method (it
+// SingleHeroNetTX below, SingleHeroNet does NOT have this method (it
 // doesn't implement the underlying BatchedNet interface).
 const xB = bro.ai.game.nn.createTensor(8, pvnet.inDim);
 const logitsB = bro.ai.game.nn.createTensor(8, pvnet.numActions);
 const valuesB = bro.ai.game.nn.createTensor(8, 1);
 pvnet.forwardBatched(xB, logitsB, valuesB);
 
-/** SingleHeroNet — encoder → trunk → {value, policy}. */
+/** SingleHeroNet, encoder → trunk → {value, policy}. */
 const net = bro.ai.game.nn.createSingleHeroNet({
   enc: { hidden: 32, embedDim: 32 },
   trunkHidden: 64,
@@ -1445,7 +1445,7 @@ net.embedDim; net.trunkDim; net.policyLogits; net.numParams;
 const blob2 = net.save();            // Uint8Array
 net.load(blob2);
 
-/** WeightsHandle — atomic publish/snapshot of net weights across threads. */
+/** WeightsHandle, atomic publish/snapshot of net weights across threads. */
 const handle = bro.ai.game.nn.createWeightsHandle();
 handle.publish(blob2, 1n);           // blob = Uint8Array, version = BigInt
 const snap = handle.snapshot();      // { blob: Uint8Array, version: BigInt } | null
@@ -1477,36 +1477,36 @@ bro.ai.game.nn.N_ABILITY;// N_ABILITY_SLOTS + 1
 
 
 // =============================================================================
-// bro.ai.game.learn — Training infrastructure
+// bro.ai.game.learn, Training infrastructure
 // =============================================================================
 
-/** NeuralEvaluator — IEvaluator adapter wrapping a SingleHeroNet. Pass as
+/** NeuralEvaluator, IEvaluator adapter wrapping a SingleHeroNet. Pass as
  *  the `evaluator` option in any Mcts/InfoSetMcts config. */
 const neuralEval = bro.ai.game.learn.createNeuralEvaluator(net, handle);
 neuralEval.evaluate(world, heroId);    // scalar in [-1,1]
 
-/** NeuralPrior — IPrior adapter. Pass as `prior` in Mcts/InfoSetMcts config. */
+/** NeuralPrior, IPrior adapter. Pass as `prior` in Mcts/InfoSetMcts config. */
 const neuralPrior = bro.ai.game.learn.createNeuralPrior(net, handle);
 neuralPrior.setTemperature(1.0);
 neuralPrior.setUniformMix(0.05);
 
-/** GumbelNoisePrior — wraps an inner prior and adds IID Gumbel noise at the
+/** GumbelNoisePrior, wraps an inner prior and adds IID Gumbel noise at the
  *  root for exploration under small MCTS budgets. */
 const gumbel = bro.ai.game.learn.createGumbelNoisePrior(neuralPrior, /*scale*/ 1.0);
 gumbel.reseed(0xA11CEn);
 gumbel.setScale(1.0);
 
-/** Situation — training example as a plain object.
+/** Situation, training example as a plain object.
  *  {obs, atkMask, abilMask, targetMove, targetAttack, targetAbility, valueTarget} */
 
-/** ReplayBuffer — fixed-capacity FIFO of situations. */
+/** ReplayBuffer, fixed-capacity FIFO of situations. */
 const buf = bro.ai.game.learn.createReplayBuffer(/*capacity*/ 4096);
 buf.push(situation);
 buf.size; buf.capacity;
 const batch = buf.sample(32);
 const all = buf.all(); buf.clear();
 
-/** ExItTrainer — mini-batch SGD+momentum against (value, policy) targets. */
+/** ExItTrainer, mini-batch SGD+momentum against (value, policy) targets. */
 const trainer = bro.ai.game.learn.createExItTrainer();
 trainer.setNet(net);
 trainer.setBuffer(buf);
@@ -1526,7 +1526,7 @@ trainer.totalSteps; trainer.totalPublishes;
  *  or null if the tree is empty. */
 const targets = bro.ai.game.learn.targetsFromMcts(mcts);
 
-/** Build a Situation from a completed search. value_target is left at 0 —
+/** Build a Situation from a completed search. value_target is left at 0,
  *  the caller fills it with the eventual episode return before pushing. */
 const sit = bro.ai.game.learn.makeSituation(mcts, hero, world);
 sit.valueTarget = finalReturn;
@@ -1544,7 +1544,7 @@ const tgt2 = bro.ai.game.learn.gumbelImprovedPolicy(mcts);
 // WeightsHandle hot-swap; differs only in the Situation shape and which
 // net it drives.
 
-/** GenericSituation — plain JS object the buffer accepts:
+/** GenericSituation, plain JS object the buffer accepts:
  *    {
  *      obs:          Float32Array(net.inDim),
  *      policyTarget: Float32Array(net.numActions),  // soft distribution, sums to ≈ 1
@@ -1576,36 +1576,36 @@ gtrainer.totalSteps; gtrainer.totalPublishes;
 
 // ─── Batched GPU inference (BatchedInferenceServer / IInferenceBackend) ────
 //
-// Batching only pays off under CONCURRENT callers — a single-threaded JS
+// Batching only pays off under CONCURRENT callers, a single-threaded JS
 // caller always submits one observation at a time (batch-of-1 through the
 // server). For batching multiple observations gathered within a single JS
-// tick, use net.forwardBatched(x, logits, values) above instead — that's
+// tick, use net.forwardBatched(x, logits, values) above instead. That's
 // the actual single-threaded-JS win. These bindings exist for completeness
 // and forward-compat with future concurrent callers (e.g. a root-parallel
 // GenericMcts sharing one server), and to power the GenericMcts `backend`
 // fast path below.
 //
 // net must be a PolicyValueNet or SingleHeroNetTX (both implement the
-// underlying BatchedNet interface) — SingleHeroNet does not, and is
+// underlying BatchedNet interface), SingleHeroNet does not, and is
 // rejected with a TypeError.
 
 const server = bro.ai.game.learn.createInferenceServer(pvnet, {
     maxBatchSize: 64,       // default 64
-    maxWaitMicros: 500,     // default 500 — how long to wait for a batch to fill
+    maxWaitMicros: 500,     // default 500, how long to wait for a batch to fill
 });
 const r1 = server.evaluate(obsF32);              // blocking: { logits: Float32Array, value }
 const rows = server.evaluateBatch([obsF32, obsF32Other]);  // [{ logits, value }, ...]
 server.batchesRun;      // int
 server.shutdown();      // stop the server's worker thread
 
-// Direct (no server/threading — evaluates net inline, same process/thread)
+// Direct (no server/threading, evaluates net inline, same process/thread)
 // or server-backed IInferenceBackend, for plugging into GenericMcts's
 // `backend` option (see below):
 const directBackend = bro.ai.game.learn.createDirectBackend(pvnet);
 const serverBackend = bro.ai.game.learn.createServerBackend(server, pvnet);
 directBackend.numActions; directBackend.inDim;
 
-// GenericMcts native `backend` option — masked-softmax prior + value
+// GenericMcts native `backend` option, masked-softmax prior + value
 // evaluated entirely in C++, no per-node JS-callback round trip (the env's
 // snapshot/restore/step/legalActions/observe callbacks are still JS, since
 // the env itself is JS-authored; only the prior/value leaf evaluation moves
@@ -1613,7 +1613,7 @@ directBackend.numActions; directBackend.inDim;
 // are given.
 //
 // IMPORTANT: this is NOT a drop-in for the hero-Mcts `evaluator`/`prior`
-// config slot on createMcts/createDecoupledMcts/createTeamMcts/etc — those
+// config slot on createMcts/createDecoupledMcts/createTeamMcts/etc. Those
 // take combat-shaped IEvaluator/IPrior. A backend plugs in one layer down,
 // at GenericMcts's own prior_fn/value_fn (this section), over a flat
 // action space matching net.numActions.
@@ -1640,7 +1640,7 @@ const teamObs = bro.ai.game.observe(world, teamId, visCfg, /*now*/ simTime);
  *  forward with lastSeenElapsed updated. */
 const merged = bro.ai.game.mergeObservations(prior, fresh, now);
 
-/** TeamBelief — per-team particle cloud over hidden enemy state. */
+/** TeamBelief, per-team particle cloud over hidden enemy state. */
 const tb = bro.ai.game.createTeamBelief({
   teamId: 0, numParticles: 32, navGrid: nav,
   motion: { maxSpeed: 6, accelStd: 4, spreadOnLoss: 3 },
@@ -1655,7 +1655,7 @@ tb.ess;                                // effective sample size
 tb.enemies();                          // per-enemy {enemyId, visible, everSeen, ...}
 tb.teamId; tb.numParticles; tb.clear();
 
-/** InfoSetMcts — IS-MCTS for single-hero under partial observability. */
+/** InfoSetMcts, IS-MCTS for single-hero under partial observability. */
 const isMcts = bro.ai.game.createInfoSetMcts();
 isMcts.setBelief(tb);
 isMcts.setEvaluator("hpDelta");       // string preset, function, or object
@@ -1666,7 +1666,7 @@ isMcts.advanceRoot(act);
 isMcts.resetTree();
 isMcts.lastStats;                      // {iterations, meanEss, ...}
 
-/** InfoSetTeamMcts — team analogue. */
+/** InfoSetTeamMcts, team analogue. */
 const isTeam = bro.ai.game.createInfoSetTeamMcts();
 isTeam.setBelief(tb);
 isTeam.setConfig({iterations: 400});
@@ -1677,7 +1677,7 @@ const joint = isTeam.search(world, [hero1, hero2]);
 // Snapshots, projectiles, VecSimulation, MCTS primitives
 // =============================================================================
 
-/** Snapshot / restore — opaque handles. */
+/** Snapshot / restore, opaque handles. */
 const asnap = bro.ai.game.captureAgentSnapshot(agent);
 bro.ai.game.applyAgentSnapshot(agent, asnap);
 asnap.id; asnap.x; asnap.z; asnap.hp; asnap.alive;
@@ -1691,7 +1691,7 @@ const projs = wsnap.projectiles();     // [{id, x, z, mode, ...}, ...]
  *  determinization helper). */
 bro.ai.game.patchSnapshotWithParticles(wsnap, particles);
 
-/** Projectiles — plain objects. kind: "physical"|"magical"|"true",
+/** Projectiles, plain objects. kind: "physical"|"magical"|"true",
  *  mode: "single"|"pierce"|"aoe" (see bro.ai.game.PROJECTILE_MODE / DAMAGE_KIND). */
 const pid = bro.ai.game.spawnProjectile(world, {
   ownerId: attackerId, teamId: 0, targetId: -1,
@@ -1701,7 +1701,7 @@ const pid = bro.ai.game.spawnProjectile(world, {
 });
 const live = bro.ai.game.worldProjectiles(world);
 
-/** VecSimulation — batched 1v1 envs for self-play training. */
+/** VecSimulation, batched 1v1 envs for self-play training. */
 const vec = bro.ai.game.createVecSimulation({
   numEnvs: 64, arenaHalfSize: 12, dt: 0.016, maxStepsPerEpisode: 600,
   hp: 100, damage: 5, attackRange: 2.5, moveSpeed: 6,
@@ -1718,7 +1718,7 @@ const d = vec.dones();                    // {done: Int32Array, winner: Int32Arr
 const r = vec.rewards();                  // {hero: Float32Array, opponent: Float32Array}
 vec.stepCounts(); vec.episodeCounts(); vec.resetDone(); vec.resetEnv(0);
 
-/** MCTS primitives as first-class objects — pass them as `evaluator`,
+/** MCTS primitives as first-class objects. Pass them as `evaluator`,
  *  `prior`, or `rolloutPolicy` in any Mcts / InfoSetMcts / LayeredPlanner
  *  / Commander config, in addition to the existing string presets. */
 const hpEval     = bro.ai.game.createHpDeltaEvaluator();
@@ -1746,7 +1746,7 @@ bro.ai.game.DAMAGE_KIND.Magical;         // "magical"
 
 
 // =============================================================================
-// Unit buffs / DoT / HoT — extended fields on agent.unit
+// Unit buffs / DoT / HoT, extended fields on agent.unit
 // =============================================================================
 //
 // In addition to the base combat fields, every Unit proxy exposes the timed
@@ -1771,12 +1771,12 @@ bro.ai.game.DAMAGE_KIND.Magical;         // "magical"
 
 
 // =============================================================================
-// GenericMcts — env-agnostic PUCT search
+// GenericMcts, env-agnostic PUCT search
 // =============================================================================
 //
 // The MCTS classes above (Mcts / DecoupledMcts / TeamMcts / TacticMcts /
 // OptionMcts / Commander) are welded to the bundled World/Agent/CombatAction
-// model — they only plan over brogameagent's combat sim. createGenericMcts
+// model, they only plan over brogameagent's combat sim. createGenericMcts
 // is the escape hatch for anything else: a custom JS-side env, a 2D platformer,
 // a board game, a planner test harness. You describe the env with five
 // callbacks and search() runs the same AlphaZero-style PUCT algorithm over it.
@@ -1886,7 +1886,7 @@ const stats = m.lastStats();
 
 
 // =============================================================================
-// bro.ai.game.grid — 2D grid-world / side-scrolling platformer training kit
+// bro.ai.game.grid, 2D grid-world / side-scrolling platformer training kit
 // =============================================================================
 //
 // Built on top of the env-agnostic primitives (createGenericMcts,
@@ -1897,37 +1897,37 @@ const stats = m.lastStats();
 // projects don't re-author the boilerplate.
 
 // -----------------------------------------------------------------------------
-// ObsWindow — egocentric multi-channel rasterizer
+// ObsWindow, egocentric multi-channel rasterizer
 // -----------------------------------------------------------------------------
 //
 // Caller-driven rasterization of an egocentric (cols × rows) window around
 // the agent into a flat Float32Array. Tile sampler returns per-cell channel
 // values; entity layers rasterize as additional channel planes by walking
-// caller-supplied entity lists. No top-K cap — entities collide naturally
+// caller-supplied entity lists. No top-K cap, entities collide naturally
 // into channels via accumulation (or "last write wins" in overwrite mode).
 // A tail "self block" of caller-filled scalars is appended (velocities,
-// flags, signed distances — whatever doesn't fit the grid).
+// flags, signed distances, whatever doesn't fit the grid).
 
 /**
  * @param {Object} opts
  * @param {Object} opts.spec
- *   .colsBehind / .colsAhead / .rowsUp / .rowsDown — window extents
- *   .tileChannels      — channels per tile cell (default 1)
- *   .selfBlockSize     — tail floats appended for ego state (default 0)
+ *   .colsBehind / .colsAhead / .rowsUp / .rowsDown, window extents
+ *   .tileChannels, channels per tile cell (default 1)
+ *   .selfBlockSize, tail floats appended for ego state (default 0)
  * @param {Object} [opts.tile]
- *   .channels  — overrides spec.tileChannels
- *   .normalize — Float32Array per-tile-channel multiplier
- *   .oob       — Float32Array filled into out-of-world cells
+ *   .channels, overrides spec.tileChannels
+ *   .normalize, Float32Array per-tile-channel multiplier
+ *   .oob, Float32Array filled into out-of-world cells
  *   .sample(col, row) → bool | number | Array | Float32Array
  *     Return false for OOB cells; otherwise the rasterizer writes either a
  *     bool/number broadcast across all channels, or an array of length
  *     tileChannels.
- * @param {Array<Object>} [opts.layers] — entity layers in z-order
- *   .channels    — per-cell channels for this layer
- *   .overwrite   — true => last write wins; false (default) => additive
- *   .normalize   — per-channel multiplier applied AFTER accumulation
- *   .enumerate() → number              — count of entities to walk
- *   .sample(i)   → { col, row, values } — values is per-channel array; or
+ * @param {Array<Object>} [opts.layers]: entity layers in z-order
+ *   .channels, per-cell channels for this layer
+ *   .overwrite, true => last write wins; false (default) => additive
+ *   .normalize, per-channel multiplier applied AFTER accumulation
+ *   .enumerate() → number, count of entities to walk
+ *   .sample(i)   → { col, row, values }, values is per-channel array; or
  *                                          { col, row, value } for a
  *                                          single-channel layer shorthand
  * @returns {ObsWindow}
@@ -1961,11 +1961,11 @@ const buf = obsWin.build(egoCol, egoRow,
 
 
 // -----------------------------------------------------------------------------
-// FrameStack — last-k frames concatenated for temporal context
+// FrameStack, last-k frames concatenated for temporal context
 // -----------------------------------------------------------------------------
 //
 // Stateful ring of k inner observations. read() returns the chronological
-// concatenation [oldest, ..., newest]. reset() at episode boundaries —
+// concatenation [oldest, ..., newest]. reset() at episode boundaries,
 // without it, the first decision sees the previous episode's tail.
 
 /** @param {{innerDim, k}} opts @returns {FrameStack} */
@@ -1978,12 +1978,12 @@ stack.reset();      // call at episode start
 
 
 // -----------------------------------------------------------------------------
-// FailureTape — penalize repeated bad-state actions
+// FailureTape, penalize repeated bad-state actions
 // -----------------------------------------------------------------------------
 //
 // Records (signature, action) pairs from the tail of failed episodes.
 // Emits floor-clamped penalty^count multipliers for use as a prior post-
-// multiplier in GenericMcts.priorFn — discourages repeating mistakes at
+// multiplier in GenericMcts.priorFn, discourages repeating mistakes at
 // known-bad state signatures.
 
 /** @param {{tapeDepth, ringCapacity, penalty, floor}} opts */
@@ -2004,12 +2004,12 @@ tape.size; tape.capacity; tape.clear();
 
 
 // -----------------------------------------------------------------------------
-// BestCrop — ranked snapshot pool for "search from historical bests"
+// BestCrop, ranked snapshot pool for "search from historical bests"
 // -----------------------------------------------------------------------------
 //
 // Bounded pool of (snapshot, action prefix, score, depth). Effective rank =
 // score + depthBonus*depth - ageDecay*age. seed() picks uniformly from the
-// top-K — feed its result to GenericMcts to start search at a historical
+// top-K, feed its result to GenericMcts to start search at a historical
 // good state instead of always replaying from spawn.
 
 /** @param {{capacity, depthBonus, ageDecay, seedTopK, seed}} opts */
@@ -2029,7 +2029,7 @@ crop.size; crop.capacity; crop.clear();
 
 
 // -----------------------------------------------------------------------------
-// PotentialShaper / StallDetector — reward shaping helpers
+// PotentialShaper / StallDetector, reward shaping helpers
 // -----------------------------------------------------------------------------
 
 /** Ng/Harada/Russell potential-based shaping: emit γΦ(s')-Φ(s) per step.
@@ -2039,7 +2039,7 @@ shaper.reset(/*phi0*/ -distToGoal(state) * 0.01);
 const bonus = shaper.step(/*phi'*/ -distToGoal(nextState) * 0.01);
 // r_shaped = r + bonus
 
-/** Stall detector — fires once a sliding window of progress samples has
+/** Stall detector, fires once a sliding window of progress samples has
  *  spread < epsilon. Use for early termination of stuck episodes. */
 const stallDet = bro.ai.game.grid.createStallDetector({ epsilon: 0.5, patience: 60 });
 stallDet.reset();
@@ -2047,7 +2047,7 @@ if (stallDet.tick(progress(state))) endEpisode("stalled");
 
 
 // -----------------------------------------------------------------------------
-// generateBC — heuristic policy → GenericSituation tuples
+// generateBC, heuristic policy → GenericSituation tuples
 // -----------------------------------------------------------------------------
 //
 // Run a hand-coded policy from each starting snapshot, filter by minReturn,
@@ -2056,9 +2056,9 @@ if (stallDet.tick(progress(state))) endEpisode("stalled");
 // initialized net never stumbles into reward.
 
 /** @param {Object} opts
- *  @param {Object} opts.env   — same shape as createGenericMcts env (numActions, snapshot, restore, step, legalActions, observe)
+ *  @param {Object} opts.env: same shape as createGenericMcts env (numActions, snapshot, restore, step, legalActions, observe)
  *  @param {function(obs, legal): number} opts.heuristic
- *  @param {Array<any>} opts.starts — env-snapshot objects
+ *  @param {Array<any>} opts.starts: env-snapshot objects
  *  @param {number} [opts.minReturn=0]
  *  @param {number} [opts.rolloutHorizon=256]
  *  @param {number} [opts.gamma=0.99]
@@ -2075,7 +2075,7 @@ gtrainer.warmupWith(bcSits);
 
 
 // -----------------------------------------------------------------------------
-// GenericRecorder / GenericReplayReader — schema-driven .bgargrid replays
+// GenericRecorder / GenericReplayReader, schema-driven .bgargrid replays
 // -----------------------------------------------------------------------------
 //
 // Caller declares roster / frame / event schemas at open time (i32, i64, f32,
@@ -2105,7 +2105,7 @@ const xs = rr.trajectory(/*rowIndex*/ 0, "x"); // values for that field across a
 
 
 // -----------------------------------------------------------------------------
-// GridTrainer — owns net + buffer + trainer + best/failure trackers
+// GridTrainer, owns net + buffer + trainer + best/failure trackers
 // -----------------------------------------------------------------------------
 //
 // Wires the generic primitives into a complete training loop. Producers (self-
@@ -2121,10 +2121,10 @@ const xs = rr.trajectory(/*rowIndex*/ 0, "x"); // values for that field across a
 //   - Sync:  stepSync(n) drains the rings and runs n SGD steps in line.
 
 /** @param {Object} opts
- *  @param {Object} opts.net      — { inDim, hidden:[...], valueHidden, numActions, seed:bigint }
- *  @param {Object} [opts.buffer] — { capacity }
- *  @param {Object} [opts.trainer]— { lr, momentum, batch, policyWeight, valueWeight, publishEvery, rngSeed }
- *  @param {Object} [opts.ckpt]   — { dir, ringSize, bestWindow }   omit for no disk writes
+ *  @param {Object} opts.net: { inDim, hidden:[...], valueHidden, numActions, seed:bigint }
+ *  @param {Object} [opts.buffer]: { capacity }
+ *  @param {Object} [opts.trainer]: { lr, momentum, batch, policyWeight, valueWeight, publishEvery, rngSeed }
+ *  @param {Object} [opts.ckpt]: { dir, ringSize, bestWindow }   omit for no disk writes
  *  @param {number} [opts.ingestBurst=64]
  *  @param {number} [opts.stepsPerTick=1]
  *  @returns {GridTrainer}
@@ -2139,7 +2139,7 @@ const gtrainer = bro.ai.game.grid.createGridTrainer({
 
 gtrainer.warmupWith(bcSits);                    // optional BC warmup
 
-// Producers — safe from any thread.
+// Producers, safe from any thread.
 gtrainer.ingestSituation({
     obs:          stack.read(),
     policyTarget: mcts.rootVisits(),

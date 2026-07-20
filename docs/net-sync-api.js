@@ -1,5 +1,5 @@
 // =============================================================================
-// bro.net.sync API Reference — high-level multiplayer
+// bro.net.sync API Reference, high-level multiplayer
 // =============================================================================
 //
 // `bro.net.sync` is a Godot-style high-level multiplayer layer (think
@@ -16,7 +16,7 @@
 //     smooths numeric props on replicas.
 //   - RPC: named handlers invoked across the wire, args structured-cloned.
 //
-// Objects are id-keyed PLAIN JS OBJECTS produced by your factories — sync is
+// Objects are id-keyed PLAIN JS OBJECTS produced by your factories, sync is
 // deliberately not coupled to the DOM or the 3D scene graph. Your factory is
 // the place to create scene nodes/elements; your destroy hook is where they
 // are torn down.
@@ -30,20 +30,20 @@
 // -----------------------------------------------------------------------------
 //
 // Sessions are a star: ONE host, N clients. All traffic flows through the
-// host — clients never talk to each other directly, but a client CAN target
+// host, clients never talk to each other directly, but a client CAN target
 // another client with callTo(): the host validates and relays the RPC with
 // the true origin stamped (see callTo below).
 //
 //   - The host owns object identity: only the host may spawn(), despawn(),
 //     and setAuthority().
-//   - Every object has one authority — the host (default) or one client.
+//   - Every object has one authority: the host (default) or one client.
 //     The authority's writes to the declared sync props replicate to
 //     everyone; the host relays client-authority state to the other clients.
 //   - Writes by non-authorities are NOT sent anywhere and are overwritten
 //     when the authority next changes the prop or a keyframe arrives.
 //   - If a client disconnects, its objects REVERT TO HOST AUTHORITY (they are
 //     not despawned). If a client loses the host, its replicas are kept,
-//     frozen at their last state — the app decides what that means.
+//     frozen at their last state, the app decides what that means.
 //   - A client that connects late receives the full current world: the host
 //     replays every live object as a spawn carrying its current state.
 //
@@ -56,14 +56,14 @@
 //                                   default mode:'reliable'. Ordered, so
 //                                   control operations are seen consistently.
 //   channel 1, unreliable+nodelay:  delta state updates (freshest-data-only;
-//                                   losing one is fine — the next change or
+//                                   losing one is fine, the next change or
 //                                   keyframe repairs it) and RPCs registered
 //                                   mode:'unreliable'.
 //
 // Every sync message is a structured-clone value carrying a reserved `__sync`
-// key. Do NOT use `__sync` as a top-level key in your own sendClone values —
-// such messages are treated as sync traffic. Everything else — raw
-// send()/broadcast() bytes and untagged clone values — passes through to your
+// key. Do NOT use `__sync` as a top-level key in your own sendClone values,
+// such messages are treated as sync traffic. Everything else, raw
+// send()/broadcast() bytes and untagged clone values. Passes through to your
 // own bro.net.onmessage untouched.
 //
 // Deltas carry per-object sequence numbers; stale or reordered deltas are
@@ -103,7 +103,7 @@ const sync = bro.net.sync;
  *   `interpolate` lists numeric props that replicas smooth: instead of
  *   snapping, the value lerps to each incoming target over one tick interval
  *   (adding ~1/tickHz of display latency). Interpolation is a REPLICA-side
- *   registration choice — each context smooths according to its own def.
+ *   registration choice: each context smooths according to its own def.
  */
 sync.register('player', {
   create(state) {
@@ -141,7 +141,7 @@ sync.host({ port: 27015 });
  * Join a session as a client.
  *
  * With `address`, calls bro.net.init() + bro.net.connect(address) for you.
- * Without it, layers over a connection the app is establishing itself — call
+ * Without it, layers over a connection the app is establishing itself. Call
  * sync.join() BEFORE the connection lands so the host's spawn replay is
  * received. One host connection per context.
  *
@@ -169,7 +169,7 @@ sync.hostConn;
 /**
  * Create a replicated object. Host-only. Runs the local factory, assigns the
  * initial state, and replicates the spawn (with full state, reliable) to all
- * clients — including clients that connect later (late-join replay).
+ * clients: including clients that connect later (late-join replay).
  *
  * @param {string} type - A registered type name
  * @param {Object} [state] - Initial values for declared sync props
@@ -216,7 +216,7 @@ sync.isAuthority(p1);
 // There is no "send state" call: the authority just writes to the object.
 //
 //   p1.x = 42;      // replicated (declared prop, we are the authority)
-//   p1.vx = 3;      // NOT replicated (undeclared) — purely local
+//   p1.vx = 3;      // NOT replicated (undeclared), purely local
 //
 // Each tick, changed declared props go out as a delta; every keyframeEvery
 // ticks the full declared state goes out reliably. Replicas apply state onto
@@ -234,8 +234,8 @@ sync.isAuthority(p1);
  *
  * Where each option is read from (register the SAME config on every peer,
  * exactly like Godot's rpc_config):
- *   - mode, callLocal: the CALLER's registration — they shape the send.
- *   - authority:       the HOST's registration — enforced when a client's
+ *   - mode, callLocal: the CALLER's registration. They shape the send.
+ *   - authority:       the HOST's registration, enforced when a client's
  *     call arrives at the host. A context that only sends an RPC may declare
  *     config with fn = null.
  *
@@ -246,7 +246,7 @@ sync.isAuthority(p1);
  * @param {string} [opts.mode='reliable'] - 'reliable' rides the ordered
  *   control channel (0). 'unreliable' rides the state channel (1,
  *   unreliable+nodelay): lost frames are simply gone (no keyframe repairs an
- *   RPC), delivery order is not guaranteed — relative to other unreliable
+ *   RPC), delivery order is not guaranteed, relative to other unreliable
  *   RPCs OR to reliable traffic sent around the same time. Use it for
  *   high-rate fire-and-forget calls (muzzle flashes, pings) where the next
  *   call supersedes a lost one.
@@ -256,7 +256,7 @@ sync.isAuthority(p1);
  *   never invokes locally.
  * @param {string} [opts.authority='any'] - 'host': only the host may invoke
  *   this RPC. A client call is rejected host-side with a console warning and
- *   counted in _stats().rpcsRejected — never an exception across the wire.
+ *   counted in _stats().rpcsRejected. Never an exception across the wire.
  * @param {boolean} [opts.relay=true] - false pins the RPC host-only for
  *   client->client callTo(): the host refuses to relay it (see callTo).
  */
@@ -272,14 +272,14 @@ sync.rpc('emote', null, { mode: 'unreliable' });   // config-only: send-side
  *   - called on a CLIENT: runs on the host.
  *   - called on the HOST:  runs on every client.
  * With callLocal registered, the caller's own handler ALSO runs, synchronously
- * after the send, with fromConn 0 — exactly once (there is no wire echo).
+ * after the send, with fromConn 0, exactly once (there is no wire echo).
  * Without it, call() never runs locally (Godot's rpc() without call_local).
  *
  * Args may be anything structured-clonable (nested objects, typed arrays,
  * BigInt, ...); functions/Mesh/ImageBitmap reject with a TypeError.
  *
  * Unknown RPC names (nothing registered on the receiving side) log a console
- * warning and drop — a bad name never throws across the wire.
+ * warning and drop: a bad name never throws across the wire.
  *
  * @param {string} name
  * @param {...*} args
@@ -302,7 +302,7 @@ sync.call('chat', 'hello everyone');
  * connection is dropped with a warning.
  *
  * Connection ids are HOST-side ids (what the host's onconnect saw). Clients
- * don't learn each other's ids implicitly — hand them out at the app level
+ * don't learn each other's ids implicitly: hand them out at the app level
  * (e.g. the host broadcasts a roster RPC), or reply to a relayed RPC's
  * fromConn, which is exactly such an id.
  *
@@ -314,7 +314,7 @@ sync.call('chat', 'hello everyone');
  * @param {string} name
  * @param {...*} args
  */
-sync.callTo(clientConn, 'chat', 'psst — just you');   // on the host
+sync.callTo(clientConn, 'chat', 'psst, just you');   // on the host
 sync.callTo(peerConn, 'trade', { gold: 5 });          // on a client: relayed
 
 
