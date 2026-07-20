@@ -351,6 +351,13 @@ public:
         // a heightfield raymarcher wants the level-0 samples it staged, and
         // the chain costs both memory and a per-upload generate pass.
         bool mipmap = false;
+        // GL_REPEAT instead of GL_CLAMP_TO_EDGE. Off by default: a slot is
+        // usually a window onto the world with no meaning outside its extent,
+        // where repeating would wrap the far edge into view. A slot that is a
+        // TILE — one periodic patch sampled at arbitrary coordinates — needs
+        // the opposite, and cannot get it from a fract() in the shader: that
+        // leaves a texel-wide seam at the wrap which every mip level widens.
+        bool repeat = false;
         GLuint tex = 0;
         std::vector<SubUpdate> subUpdates;
     };
@@ -365,7 +372,8 @@ public:
     /// existing names always succeed. Safe off the GL thread: the upload
     /// happens in flushPendingTextures().
     bool setCustomShaderTexture(const std::string& name, int width, int height,
-                                const float* data, bool mipmap = false);
+                                const float* data, bool mipmap = false,
+                                bool repeat = false);
 
     /// Stage a sub-rectangle write into an EXISTING slot, avoiding the
     /// reallocation (and mip-chain rebuild from scratch) a full re-upload

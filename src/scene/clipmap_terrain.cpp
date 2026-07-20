@@ -219,6 +219,20 @@ void ClipmapTerrain::pushLayerUniforms() {
     }
     const float n = static_cast<float>(layerCount_);
     node_->setCustomShaderUniform("u_layerCount", 1, &n);
+
+    const float lam = exemplarLambda();
+    node_->setCustomShaderUniform("u_exLambda", 1, &lam);
+}
+
+// The exemplar's coarse repeat: twice the coarsest layer's cell, so the patch
+// starts just under what the pyramid can represent. A property of the LAYER
+// STACK, not of position — see cmExemplar for why it must not vary across the
+// world. Falls back to the ring extent when no layer is installed yet.
+float ClipmapTerrain::exemplarLambda() const {
+    for (int i = kMaxLayers - 1; i >= 0; --i)
+        if (layers_[i].present && layers_[i].metresPerCell > 0.0f)
+            return 2.0f * layers_[i].metresPerCell;
+    return 2.0f * cfg_.cellSize * std::exp2(static_cast<float>(cfg_.levels));
 }
 
 void ClipmapTerrain::recomputeHeightRange() {
@@ -273,6 +287,141 @@ void ClipmapTerrain::setHeightLayer(int index, const float* data, int width,
 
     recomputeHeightRange();
     pushLayerUniforms();
+}
+
+// ---------------------------------------------------------------------------
+// Detail exemplar
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Separable box blur, run twice — close enough to a Gaussian for a high-pass
+// whose only job is to strip landform-scale content off the patch.
+void boxBlurWrap(std::vector<float>& v, int n, int radius) {
+    if (radius < 1) return;
+    std::vector<float> tmp(v.size());
+    const float inv = 1.0f / static_cast<float>(2 * radius + 1);
+    for (int pass = 0; pass < 2; ++pass) {
+        for (int y = 0; y < n; ++y) {          // horizontal
+            for (int x = 0; x < n; ++x) {
+                float s = 0.0f;
+                for (int k = -radius; k <= radius; ++k)
+                    s += v[static_cast<size_t>(y) * n + ((x + k) % n + n) % n];
+                tmp[static_cast<size_t>(y) * n + x] = s * inv;
+            }
+        }
+        for (int x = 0; x < n; ++x) {          // vertical
+            for (int y = 0; y < n; ++y) {
+                float s = 0.0f;
+                for (int k = -radius; k <= radius; ++k)
+                    s += tmp[static_cast<size_t>(((y + k) % n + n) % n) * n + x];
+                v[static_cast<size_t>(y) * n + x] = s * inv;
+            }
+        }
+    }
+}
+
+} // namespace
+
+void ClipmapTerrain::setDetailExemplar(const float* data, int width, int height,
+                                       float metresPerCell) {
+    if (!node_) return;
+    if (!data || width <= 8 || height <= 8 || metresPerCell <= 0.0f) {
+        exemplar_.clear();
+        exemplarN_ = 0;
+        const float zero = 0.0f;
+        node_->setCustomShaderTexture("u_exemplar", 1, 1, &zero, true);
+        const float present = 0.0f;
+        node_->setCustomShaderUniform("u_exPresent", 1, &present);
+        return;
+    }
+
+    // Square, power-of-two and bounded: the shader indexes it as one repeat, so
+    // a non-square patch would stretch the structure along one axis, and the
+    // mip chain wants a clean reduction. 1024 texels over a 61 km tile is 60 m
+    // per texel, already finer than the 30 m data it came from can support once
+    // the low frequencies are gone.
+    const int src = std::min(width, height);
+    int n = 1;
+    while (n * 2 <= std::min(src, 1024)) n *= 2;
+
+    // Crop a band before resampling: the wrap blend below consumes it.
+    const int band = n / 8;
+    const int keep = n - band;
+
+    std::vector<float> e(static_cast<size_t>(n) * n);
+    for (int y = 0; y < n; ++y) {
+        for (int x = 0; x < n; ++x) {
+            const int sx = std::min(width - 1, x * src / n);
+            const int sy = std::min(height - 1, y * src / n);
+            e[static_cast<size_t>(y) * n + x] =
+                data[static_cast<size_t>(sy) * width + sx];
+        }
+    }
+
+    // HIGH-PASS. The patch must supply detail, never landforms: its own valley
+    // and range scales are already in the height pyramid, and adding them back
+    // would fight the model's terrain rather than extend it.
+    std::vector<float> lo = e;
+    boxBlurWrap(lo, n, std::max(1, n / 8));
+    for (size_t i = 0; i < e.size(); ++i) e[i] -= lo[i];
+
+    // MAKE IT PERIODIC. Cross-fade the last `band` columns/rows over the first
+    // ones and crop to `keep`: out(0) is then literally the sample that follows
+    // out(keep-1) in the source, so the wrap is continuous by construction
+    // rather than by hoping the edges happen to match.
+    std::vector<float> p(static_cast<size_t>(keep) * keep);
+    auto at = [&](int x, int y) { return e[static_cast<size_t>(y) * n + x]; };
+    for (int y = 0; y < keep; ++y) {
+        for (int x = 0; x < keep; ++x) {
+            float v = at(x, y);
+            if (x < band) {
+                const float t = static_cast<float>(x) / static_cast<float>(band);
+                v = at(x + keep, y) * (1.0f - t) + v * t;
+            }
+            if (y < band) {
+                const float t = static_cast<float>(y) / static_cast<float>(band);
+                float w = (x < band)
+                        ? at(x + keep, y + keep) * (1.0f - static_cast<float>(x) / band)
+                          + at(x, y + keep) * (static_cast<float>(x) / band)
+                        : at(x, y + keep);
+                v = w * (1.0f - t) + v * t;
+            }
+            p[static_cast<size_t>(y) * keep + x] = v;
+        }
+    }
+
+    // NORMALISE BY FOOTPRINT. Relief per unit length is dimensionless, so the
+    // patch applied at any wavelength carries the aspect ratio the model
+    // produced at that scale — no tuned amplitude constant anywhere.
+    const float footprint = static_cast<float>(src) * metresPerCell;
+    const float inv = footprint > 0.0f ? 1.0f / footprint : 0.0f;
+    for (float& v : p) v *= inv;
+
+    exemplar_ = std::move(p);
+    exemplarN_ = keep;
+    node_->setCustomShaderTexture("u_exemplar", keep, keep, exemplar_.data(),
+                                  true, /*repeat=*/true);
+    const float nTexels = static_cast<float>(keep);
+    node_->setCustomShaderUniform("u_exN", 1, &nTexels);
+    const float present = 1.0f;
+    node_->setCustomShaderUniform("u_exPresent", 1, &present);
+    recomputeHeightRange();
+}
+
+float ClipmapTerrain::exemplarAt(float ux, float uz) const {
+    if (exemplarN_ <= 0) return 0.0f;
+    const int   n = exemplarN_;
+    const float fx = (ux - std::floor(ux)) * static_cast<float>(n);
+    const float fz = (uz - std::floor(uz)) * static_cast<float>(n);
+    const int   x0 = static_cast<int>(fx), z0 = static_cast<int>(fz);
+    const float tx = fx - static_cast<float>(x0), tz = fz - static_cast<float>(z0);
+    auto at = [&](int x, int z) {
+        return exemplar_[static_cast<size_t>(((z % n) + n) % n) * n
+                       + static_cast<size_t>(((x % n) + n) % n)];
+    };
+    return (at(x0, z0) * (1 - tx) + at(x0 + 1, z0) * tx) * (1 - tz)
+         + (at(x0, z0 + 1) * (1 - tx) + at(x0 + 1, z0 + 1) * tx) * tz;
 }
 
 // ---------------------------------------------------------------------------
@@ -516,7 +665,29 @@ float ClipmapTerrain::elevationAt(float x, float z) const {
         }
         lambda *= 0.5;
     }
-    return h0 + weight * sum;
+
+    // The exemplar, mirroring cmExemplar: same two taps, same rotations, same
+    // ratio, at level 0 — the shader's lod only coarsens with distance and
+    // anything that collides is near the camera, where it reads level 0 too.
+    // Must match CM_EX_* in clipmap_detail.glsl.
+    float ex = 0.0f;
+    if (exemplarN_ > 0) {
+        constexpr float kRatio = 13.7f, kRotA = 0.31f, kRotB = 2.24f, kFineW = 0.55f;
+        const float la = exemplarLambda(), lb = la / kRatio;
+        // cmExRedundancy, verbatim.
+        auto redundancy = [&](float lambda) {
+            return 1.0f - smoothstep01(6.0f * floorM,
+                                       lambda * 0.125f - 2.0f * floorM);
+        };
+        auto tap = [&](float l, float rot) {
+            const float cs = std::cos(rot), sn = std::sin(rot);
+            return l * exemplarAt((cs * x - sn * z) / l, (sn * x + cs * z) / l);
+        };
+        const float wa = redundancy(la), wb = redundancy(lb) * kFineW;
+        if (wa > 0.0f) ex += wa * tap(la, kRotA);
+        if (wb > 0.0f) ex += wb * tap(lb, kRotB);
+    }
+    return h0 + weight * sum + ex;
 }
 
 float ClipmapTerrain::detailBound() const {

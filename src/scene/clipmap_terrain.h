@@ -95,6 +95,28 @@ public:
     void setHeightLayer(int index, const float* data, int width, int height,
                         float originX, float originZ, float metresPerCell);
 
+    /// Install a DETAIL EXEMPLAR: a patch of real terrain, in metres, whose
+    /// structure is reused as the source of everything below the data floor.
+    ///
+    /// Gradient noise carries one feature per wavelength, so filling the
+    /// decades between a coarse cell and the finest data costs an octave per
+    /// decade and still produces rounded blobs — it has no notion of water
+    /// running downhill, which is precisely what makes terrain read as terrain.
+    /// A patch that came out of the decoder already has ridges, drainage and
+    /// valley networks, and a mip chain over it is a band-limited multi-octave
+    /// field for free: ONE tap at repeat length lambda delivers lambda down to
+    /// lambda/width, with the fractional lod doing the anti-aliasing.
+    ///
+    /// The patch is high-passed (it supplies detail, not landforms), made
+    /// exactly periodic, and divided by its own footprint at upload. That last
+    /// step is what removes the magic number: relief-per-unit-length is
+    /// dimensionless, so applying the patch at any wavelength reproduces the
+    /// aspect ratio the model itself produced, at that scale.
+    ///
+    /// Pass data == nullptr to drop back to gradient noise.
+    void setDetailExemplar(const float* data, int width, int height,
+                           float metresPerCell);
+
     /// Per frame: park the node on the camera and push the camera uniforms.
     void update(float camX, float camY, float camZ);
 
@@ -153,6 +175,19 @@ private:
     /// Finest cell size the DATA resolves at this point, in metres — the top of
     /// the procedural band. Mirrors cmDataFloor() in clipmap_common.glsl.
     float dataFloorAt(float x, float z) const;
+
+    /// High-passed, periodic, footprint-normalised exemplar. Empty until
+    /// setDetailExemplar(); `exemplarN_` is its edge in texels.
+    std::vector<float> exemplar_;
+    int                exemplarN_ = 0;
+
+    /// Bilinear tap into the exemplar with wraparound, matching the shader's
+    /// GL_REPEAT sampling at lod 0. `u` is in repeats, not texels.
+    float exemplarAt(float ux, float uz) const;
+
+    /// Repeat length of the exemplar's coarse tap, in metres. Constant across
+    /// the world by design — mirrors u_exLambda.
+    float exemplarLambda() const;
 
     /// Octaves the detail band may climb ABOVE detailWavelength when the data
     /// underfoot is coarser than it. Must equal CM_DETAIL_UP_OCTAVES in

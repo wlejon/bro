@@ -44,15 +44,20 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     // as you walk towards it.
     float cs = cmCellSizeAA(wxz);
 
+    float floorM = cmDataFloor(wxz);
     float dAmp;
-    vec3  d  = cmDetail(rel, cs, cmDataFloor(wxz), dAmp);
+    vec3  d  = cmDetail(rel, cs, floorM, dAmp);
     float dw = cmDetailWeight(slope);
     grad += dw * d.yz;
+
+    // Learned structure, at its own amplitude and unmodulated — see cmExemplar.
+    vec3 ex = cmExemplar(rel, cs, floorM);
+    grad += ex.yz;
 
     vec3 n = normalize(vec3(-grad.x, 1.0, -grad.y));
     normal = n;
 
-    float wy     = h0 + dw * d.x;
+    float wy     = h0 + dw * d.x + ex.x;
     // Normalised against the amplitude actually summed — the band's top moves
     // with the data floor, so u_detailWavelength no longer bounds d.x and
     // dividing by it would drive cavity to +-1 across all distant ground.

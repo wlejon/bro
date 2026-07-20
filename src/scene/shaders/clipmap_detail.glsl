@@ -29,6 +29,14 @@ uniform float u_detailRelief;      // detail slope as a fraction of the ground's
 uniform float u_detailGain;        // amplitude ratio between octaves
 uniform float u_detailOctaves;
 
+// The learned detail exemplar — see cmExemplar below. Declared up here because
+// cmDetail has to know whether it exists: the patch supersedes the octaves that
+// would otherwise climb toward the data floor.
+uniform sampler2D u_exemplar;
+uniform float     u_exN;         // texels per repeat
+uniform float     u_exPresent;
+uniform float     u_exLambda;    // repeat length of the coarse tap, metres
+
 // Enough to span the whole pyramid: the band runs from just under the coarsest
 // data cell (7.68 km for the worldgen source) down past the finest the eye can
 // resolve. Only the octaves inside the band-pass window are evaluated — the
@@ -147,11 +155,16 @@ vec3 cmDetail(vec2 rel, float c, float dataFloor, out float ampSum) {
     ampSum       = 0.0;
     vec2  q      = rel + u_detailOffset;
     vec2  abs_   = rel + u_camXZ;
-    float lambda = u_detailWavelength * exp2(float(CM_DETAIL_UP_OCTAVES));
+    // The upward octaves exist only to fill the gap between the data floor and
+    // the base wavelength. An exemplar fills that gap with real landforms, so
+    // the noise stands down to its original band rather than summing on top of
+    // structure that is already there.
+    int   up     = (u_exPresent > 0.5) ? 0 : CM_DETAIL_UP_OCTAVES;
+    float lambda = u_detailWavelength * exp2(float(up));
     vec3  acc    = vec3(0.0);
     bool  live   = false;
 
-    int n = CM_DETAIL_UP_OCTAVES + int(u_detailOctaves);
+    int n = up + int(u_detailOctaves);
     for (int i = 0; i < CM_DETAIL_MAX_OCTAVES; ++i) {
         if (i >= n) break;
         // LOW-PASS — the pixel. Sampling finer than the framebuffer aliases.
@@ -177,8 +190,7 @@ vec3 cmDetail(vec2 rel, float c, float dataFloor, out float ampSum) {
         // Self-similar at and above the base wavelength; u_detailGain only
         // shapes the decades BELOW it, so widening the band upward leaves the
         // near-ground look exactly as it was tuned.
-        float gain = pow(u_detailGain,
-                         max(0.0, float(i) - float(CM_DETAIL_UP_OCTAVES)));
+        float gain = pow(u_detailGain, max(0.0, float(i) - float(up)));
 
         // Amplitude is PROPORTIONAL TO WAVELENGTH, not an absolute metre
         // count. An absolute amplitude has to be retuned for every world — six
@@ -208,6 +220,95 @@ vec3 cmDetail(vec2 rel, float c, float dataFloor, out float ampSum) {
 
         lambda *= 0.5;
     }
+    return acc;
+}
+
+// ---------------------------------------------------------------------------
+// Learned detail exemplar.
+//
+// A patch of decoder output, high-passed, made periodic and divided by its own
+// footprint (see ClipmapTerrain::setDetailExemplar). Because it is stored as
+// relief PER UNIT LENGTH, applying it over a repeat of `lambda` metres gives a
+// height of lambda * E — the aspect ratio the model produced, at whatever scale
+// it is asked for, with no tuned amplitude anywhere.
+//
+// One tap is a whole octave stack. The patch holds ~900 texels per repeat, so a
+// single sample at lambda carries structure from lambda down to lambda/900, and
+// the mip chain band-limits the fine end exactly the way the octave loop's
+// smoothstep does — that is what a mip chain IS. The gradient costs four more
+// taps at an EXPLICIT lod, which is also why manual wrapping is not needed and
+// would not work: the sampler wraps (GL_REPEAT), and explicit-lod sampling has
+// no implicit derivatives to break at the seam.
+// Two taps at an awkward ratio, each rotated differently. One tap alone repeats
+// on a visible grid at this scale; a second at a non-integer ratio beats
+// against the first with a period neither one has, and the rotation stops the
+// pair from sharing a drainage direction across the whole world.
+const float CM_EX_RATIO  = 13.7;
+const float CM_EX_ROT_A  = 0.31;
+const float CM_EX_ROT_B  = 2.24;
+const float CM_EX_FINE_W = 0.55;
+
+vec3 cmExemplarTap(vec2 wxz, float lambda, float c, float rot) {
+    float cs = cos(rot), sn = sin(rot);
+    mat2  R  = mat2(cs, -sn, sn, cs);
+    vec2  u  = (R * wxz) / lambda;
+
+    // The patch's texel is lambda/N metres; ask for the level whose texel
+    // matches the rendered cell, so the tap is filtered to the same scale
+    // everything else at this distance is.
+    float texel = lambda / u_exN;
+    float lod   = max(0.0, log2(max(c, 1e-6) / texel));
+    float step  = exp2(lod) / u_exN;          // one sampled texel, in repeats
+
+    float h  = textureLod(u_exemplar, u, lod).r;
+    float hR = textureLod(u_exemplar, u + vec2(step, 0.0), lod).r;
+    float hL = textureLod(u_exemplar, u - vec2(step, 0.0), lod).r;
+    float hU = textureLod(u_exemplar, u + vec2(0.0, step), lod).r;
+    float hD = textureLod(u_exemplar, u - vec2(0.0, step), lod).r;
+
+    // H = lambda * E(u), u = R*w/lambda  =>  dH/dw = R^T * dE/du, so the
+    // gradient is scale-free and the lambda cancels exactly.
+    vec2 dU = vec2(hR - hL, hU - hD) / (2.0 * step);
+    vec2 dW = transpose(R) * dU;
+    return vec3(lambda * h, dW);
+}
+
+// How much of a tap at `lambda` is NOT already in the data.
+//
+// The patch is high-passed at about an eighth of its footprint, so a tap at
+// repeat `lambda` has its coarsest content near lambda/8; the pyramid holds
+// nothing below 2*dataFloor. Where the patch's content is entirely above that,
+// the data already says it and the tap fades out.
+float cmExRedundancy(float lambda, float dataFloor) {
+    return 1.0 - smoothstep(2.0 * dataFloor, 8.0 * dataFloor, lambda * 0.125);
+}
+
+// Detail from the exemplar at a point. `c` is the cell this stage is limited by
+// and `dataFloor` the finest cell the height pyramid resolves here.
+//
+// The repeat lengths are FIXED — tied to the coarsest layer, uniform across the
+// world — and redundancy against the data is expressed as AMPLITUDE. Scaling
+// the wavelength by the local data floor instead would look equivalent and is
+// not: the floor moves as the fine layer travels with the camera, so the patch
+// would stretch and the structure at a fixed world point would morph
+// continuously. Same reason the noise octaves sit on a fixed lattice.
+//
+// NOT modulated by the ground's slope, unlike the noise: the patch is real
+// terrain and already carries its own flat reaches and broken faces. Scaling it
+// by the coarse field's slope would double-count the landscape's own roughness
+// and flatten exactly the distant ground this exists to give relief to.
+vec3 cmExemplar(vec2 rel, float c, float dataFloor) {
+    if (u_exPresent < 0.5) return vec3(0.0);
+    vec2 w = rel + u_camXZ;
+
+    float la = u_exLambda;
+    float lb = la / CM_EX_RATIO;
+    float wa = cmExRedundancy(la, dataFloor);
+    float wb = cmExRedundancy(lb, dataFloor) * CM_EX_FINE_W;
+
+    vec3 acc = vec3(0.0);
+    if (wa > 0.0) acc += wa * cmExemplarTap(w, la, c, CM_EX_ROT_A);
+    if (wb > 0.0) acc += wb * cmExemplarTap(w, lb, c, CM_EX_ROT_B);
     return acc;
 }
 

@@ -49,9 +49,16 @@ void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
     // rather than the pixel: the mesh displaces the octaves it can express and
     // the normal carries the rest. Both stages read the same data floor, so the
     // surface stays one surface.
-    vec2  rel = wxz - u_camXZ;
+    vec2  rel   = wxz - u_camXZ;
+    float floorM = cmDataFloor(wxz);
     float amp;
-    float h   = h0 + cmDetailWeight(slope) * cmDetail(rel, c, cmDataFloor(wxz), amp).x;
+    // The exemplar displaces too, not just shades: at these wavelengths it is
+    // ridges and valleys, and terrain whose silhouette stays flat while its
+    // shading says otherwise reads as a painted plane. It is band-limited by
+    // the ring cell here and by the pixel in the fragment stage, exactly as the
+    // noise is, so the two stages still describe one surface.
+    float h = h0 + cmDetailWeight(slope) * cmDetail(rel, c, floorM, amp).x
+                 + cmExemplar(rel, c, floorM).x;
 
     pos    = vec3(rel.x, h - u_camY, rel.y);
     normal = vec3(0.0, 1.0, 0.0);          // real normal is per-pixel

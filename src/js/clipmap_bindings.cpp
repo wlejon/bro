@@ -124,6 +124,67 @@ static JSValue js_clipmap_setHeightLayer(JSContext* ctx, JSValueConst this_val,
     return JS_DupValue(ctx, this_val);
 }
 
+// -------------------------------------------------------------------------
+// clipmap.setDetailExemplar({ data, width, height, metresPerCell } | null)
+//
+// Hands the terrain a patch of real elevation whose structure becomes the
+// source of all detail below the data floor. Any height field in metres will
+// do; the point is that a generated one carries ridges and drainage that noise
+// cannot. Returns `this` so calls chain.
+// -------------------------------------------------------------------------
+
+static JSValue js_clipmap_setDetailExemplar(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    auto* self = qjsbind::unwrap<CW>(ctx, this_val);
+    if (!self || !self->terrain) return JS_DupValue(ctx, this_val);
+
+    if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
+        self->terrain->setDetailExemplar(nullptr, 0, 0, 1.0f);
+        return JS_DupValue(ctx, this_val);
+    }
+    if (!JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx,
+            "setDetailExemplar: expected { data, width, height, "
+            "metresPerCell } or null");
+
+    const int width  = qjsbind::get_prop_int(ctx, argv[0], "width", 0);
+    const int height = qjsbind::get_prop_int(ctx, argv[0], "height", 0);
+    const double mpc = qjsbind::get_prop_number(ctx, argv[0], "metresPerCell", 1.0);
+    if (width <= 8 || height <= 8)
+        return JS_ThrowTypeError(ctx,
+            "setDetailExemplar: width and height must exceed 8");
+    if (!(mpc > 0.0))
+        return JS_ThrowTypeError(ctx,
+            "setDetailExemplar: metresPerCell must be positive");
+
+    JSValue dataVal = JS_GetPropertyStr(ctx, argv[0], "data");
+    size_t byteOff = 0, viewLen = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, dataVal, &byteOff, &viewLen, nullptr);
+    if (JS_IsException(abuf)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_FreeValue(ctx, abuf);
+        JS_FreeValue(ctx, dataVal);
+        return JS_ThrowTypeError(ctx,
+            "setDetailExemplar: data must be a Float32Array");
+    }
+    size_t abufLen = 0;
+    uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+    const size_t want = static_cast<size_t>(width) * height * sizeof(float);
+    if (!ptr || viewLen < want) {
+        JS_FreeValue(ctx, abuf);
+        JS_FreeValue(ctx, dataVal);
+        return JS_ThrowRangeError(ctx,
+            "setDetailExemplar: data holds %zu bytes, need %zu (%dx%d floats)",
+            viewLen, want, width, height);
+    }
+
+    self->terrain->setDetailExemplar(reinterpret_cast<const float*>(ptr + byteOff),
+                                     width, height, static_cast<float>(mpc));
+    JS_FreeValue(ctx, abuf);
+    JS_FreeValue(ctx, dataVal);
+    return JS_DupValue(ctx, this_val);
+}
+
 // clipmap.update(camX, camY, camZ) -> this
 static JSValue js_clipmap_update(JSContext* ctx, JSValueConst this_val,
                                  int argc, JSValueConst* argv) {
@@ -178,6 +239,7 @@ void ClipmapBindings::install(JSContext* ctx) {
     qjsbind::Class<CW>(ctx, "ClipmapTerrain")
         // No constructor — created via scene.createClipmapTerrain()
         .method_raw("setHeightLayer", js_clipmap_setHeightLayer, 2)
+        .method_raw("setDetailExemplar", js_clipmap_setDetailExemplar, 1)
         .method_raw("update", js_clipmap_update, 3)
         .method("elevationAt", [](CW* self, double x, double z) -> double {
             if (!self->terrain) return 0.0;
