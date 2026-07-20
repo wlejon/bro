@@ -216,6 +216,33 @@ void TerrainManager::generateHeightmap(ChunkEntry& entry, int cx, int cz, int lo
 
     float effCellSize = lodCellSize(lod);
 
+    // The interior grid is strictly derived from the padded one: row z is the
+    // padded row z+1, offset one column in. Both the provider path and the noise
+    // path below end with this.
+    auto copyInterior = [&]() {
+        for (int z = 0; z < gridH; z++) {
+            std::memcpy(entry.heightmap.data() + static_cast<size_t>(z) * gridW,
+                        entry.heightmapPadded.data()
+                            + static_cast<size_t>(z + 1) * paddedW + 1,
+                        sizeof(float) * gridW);
+        }
+    };
+
+    // An external height source pre-empts the built-in generator entirely.
+    // Returning false falls through to the noise below, so a provider can serve
+    // only the chunks it has data for.
+    if (heightSource_) {
+        const float worldX0 =
+            config_.origin.x + (static_cast<float>(cx) * config_.chunkSizeX - 1.0f) * effCellSize;
+        const float worldZ0 =
+            config_.origin.z + (static_cast<float>(cz) * config_.chunkSizeZ - 1.0f) * effCellSize;
+        if (heightSource_(cx, cz, lod, entry.heightmapPadded.data(),
+                          paddedW, paddedH, effCellSize, worldX0, worldZ0)) {
+            copyInterior();
+            return;
+        }
+    }
+
     // Sample the noise fields over a 1-voxel-wider grid on every side. The
     // outer ring is shared with the neighbouring chunks' boundary rows, which
     // lets heightmapGrid and greedyMesh produce seam-free normals and faces
@@ -301,12 +328,7 @@ void TerrainManager::generateHeightmap(ChunkEntry& entry, int cx, int cz, int lo
     }
 
     // Copy the interior region into the plain heightmap for gameplay queries.
-    for (int z = 0; z < gridH; z++) {
-        std::memcpy(entry.heightmap.data() + static_cast<size_t>(z) * gridW,
-                    entry.heightmapPadded.data()
-                        + static_cast<size_t>(z + 1) * paddedW + 1,
-                    sizeof(float) * gridW);
-    }
+    copyInterior();
 }
 
 // -------------------------------------------------------------------------

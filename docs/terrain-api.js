@@ -168,6 +168,53 @@ class Terrain {
      */
     configure(opts) {}
 
+    /**
+     * Supply chunk heights yourself, in place of the built-in FBm generator.
+     * Pass null to go back to noise.
+     *
+     *   terrain.setHeightSource((cx, cz, lod, paddedW, paddedH,
+     *                            cellSize, worldX0, worldZ0) => {
+     *       const out = new Float32Array(paddedW * paddedH);
+     *       for (let pz = 0; pz < paddedH; pz++)
+     *           for (let px = 0; px < paddedW; px++)
+     *               out[pz * paddedW + px] =
+     *                   heightAt(worldX0 + px * cellSize,
+     *                            worldZ0 + pz * cellSize);
+     *       return out;
+     *   });
+     *
+     * Return a Float32Array of exactly paddedW*paddedH absolute world-space Y
+     * values (row-major, z-major: sample (px, pz) at `out[pz * paddedW + px]`),
+     * or null/undefined to fall back to the built-in noise FOR THAT CHUNK —
+     * which is how you serve only the region you have data for, or layer a
+     * coarse learned source under noise detail.
+     *
+     * A short array or a thrown exception logs and falls back; it never renders
+     * a partially filled chunk.
+     *
+     * USE worldX0/worldZ0 — DO NOT DERIVE THEM. The grid is padded one sample
+     * beyond the chunk on every side (paddedW = chunkSizeX + 3), and that outer
+     * ring is shared with the neighbours so edge normals can use true central
+     * differences. worldX0/worldZ0 already carry that skirt offset. Re-deriving
+     * it and dropping the -1 shifts every chunk one cell against its neighbours,
+     * which for a coherent (non-noise) source produces terrain that looks
+     * completely correct and simply does not line up — a silent seam at every
+     * boundary. For the same reason the provider must be deterministic across
+     * chunk boundaries: two chunks sampling the same shared world position must
+     * return the same height.
+     *
+     * These positions include config.origin; the built-in noise path does not,
+     * a pre-existing quirk that only shows up with a non-zero origin.
+     *
+     * RUNS INSIDE update(), ON THE JS THREAD, once per newly loaded chunk — so
+     * it must be cheap. Sample an already-resident tile; do not generate on
+     * demand here. See docs/worldgen-api.js for the intended tile-cache shape
+     * with a multi-second generator behind it.
+     *
+     * Does not rebuild existing chunks — call configure() to regenerate.
+     */
+    setHeightSource(fn) {}
+
     /** Free all chunks and detach the manager. The instance becomes inert. */
     destroy() {}
 

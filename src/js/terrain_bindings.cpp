@@ -7,6 +7,9 @@
 #include "scene/scene_graph.h"
 #include "js/scene_bindings.h"
 
+#include "util/log.h"
+
+#include <cstring>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -20,9 +23,19 @@ namespace bro::js {
 struct TerrainWrapper {
     std::unique_ptr<scene::TerrainManager> manager;
 
+    // The JS height provider, if one is installed. Held as a dup'd JSValue for
+    // the wrapper's lifetime; the context outlives every DOM/scene object, so
+    // freeing it in the destructor is safe.
+    JSContext* cbCtx = nullptr;
+    JSValue    heightSource = JS_UNDEFINED;
+    bool       hasHeightSource = false;
+
     explicit TerrainWrapper(std::unique_ptr<scene::TerrainManager> mgr)
         : manager(std::move(mgr)) { allInstances().insert(this); }
-    ~TerrainWrapper() { allInstances().erase(this); }
+    ~TerrainWrapper() {
+        if (hasHeightSource && cbCtx) JS_FreeValue(cbCtx, heightSource);
+        allInstances().erase(this);
+    }
 
     static std::unordered_set<TerrainWrapper*>& allInstances() {
         static std::unordered_set<TerrainWrapper*> s;
@@ -252,6 +265,93 @@ bool terrainSampleHeight(void* handle, float x, float z,
 // Install / Cleanup
 // -------------------------------------------------------------------------
 
+// terrain.setHeightSource(fn | null)
+//
+// fn(cx, cz, lod, paddedW, paddedH, cellSize, worldX0, worldZ0) must return a
+// Float32Array of paddedW*paddedH heights (row-major, z-major, absolute world Y)
+// or null/undefined to fall back to the built-in noise for that chunk.
+//
+// This runs INSIDE terrain.update(), on the JS thread, once per newly loaded
+// chunk — so it must be cheap. The intended shape is to sample an already
+// resident tile (see docs/worldgen-api.js); anything that generates on demand
+// here will stall the frame.
+static JSValue js_terrain_setHeightSource(JSContext* ctx, JSValueConst this_val,
+                                          int argc, JSValueConst* argv) {
+    auto* self = qjsbind::unwrap<TW>(ctx, this_val);
+    if (!self || !self->manager) return JS_UNDEFINED;
+
+    if (self->hasHeightSource) {
+        JS_FreeValue(self->cbCtx, self->heightSource);
+        self->hasHeightSource = false;
+        self->heightSource = JS_UNDEFINED;
+    }
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) {
+        self->manager->setHeightSource(nullptr);
+        return JS_UNDEFINED;
+    }
+
+    self->cbCtx = ctx;
+    self->heightSource = JS_DupValue(ctx, argv[0]);
+    self->hasHeightSource = true;
+
+    self->manager->setHeightSource(
+        [self](int cx, int cz, int lod, float* padded, int paddedW, int paddedH,
+               float cellSize, float worldX0, float worldZ0) -> bool {
+            JSContext* c = self->cbCtx;
+            JSValue args[8] = {
+                JS_NewInt32(c, cx),          JS_NewInt32(c, cz),
+                JS_NewInt32(c, lod),         JS_NewInt32(c, paddedW),
+                JS_NewInt32(c, paddedH),     JS_NewFloat64(c, cellSize),
+                JS_NewFloat64(c, worldX0),   JS_NewFloat64(c, worldZ0),
+            };
+            JSValue r = JS_Call(c, self->heightSource, JS_UNDEFINED, 8, args);
+            for (JSValue& a : args) JS_FreeValue(c, a);
+
+            if (JS_IsException(r)) {
+                // Swallowing the exception here would silently substitute noise
+                // for a provider the app believes is running; report it and let
+                // the chunk fall back visibly.
+                JSValue e = JS_GetException(c);
+                const char* msg = JS_ToCString(c, e);
+                if (msg) {
+                    LOG_ERROR("terrain heightSource threw: %s", msg);
+                    JS_FreeCString(c, msg);
+                }
+                JS_FreeValue(c, e);
+                JS_FreeValue(c, r);
+                return false;
+            }
+            if (!JS_IsObject(r)) { JS_FreeValue(c, r); return false; }
+
+            size_t byteOff = 0, viewLen = 0;
+            JSValue abuf = JS_GetTypedArrayBuffer(c, r, &byteOff, &viewLen, nullptr);
+            if (JS_IsException(abuf)) {
+                JS_FreeValue(c, JS_GetException(c));
+                JS_FreeValue(c, r);
+                return false;
+            }
+            size_t abufLen = 0;
+            uint8_t* ptr = JS_GetArrayBuffer(c, &abufLen, abuf);
+
+            const size_t want = static_cast<size_t>(paddedW) * paddedH * sizeof(float);
+            bool ok = ptr && viewLen >= want;
+            if (ok) {
+                std::memcpy(padded, ptr + byteOff, want);
+            } else if (ptr) {
+                // A short buffer would leave the tail of the chunk as whatever
+                // was in the vector — stale heights from a previously unloaded
+                // chunk. Refuse rather than render that.
+                LOG_ERROR("terrain heightSource returned %zu bytes, expected %zu "
+                          "(%dx%d padded floats) - falling back to noise",
+                          viewLen, want, paddedW, paddedH);
+            }
+            JS_FreeValue(c, abuf);
+            JS_FreeValue(c, r);
+            return ok;
+        });
+    return JS_UNDEFINED;
+}
+
 void TerrainBindings::install(JSContext* ctx) {
     qjsbind::Class<TW>(ctx, "Terrain")
         // No constructor — created via scene.createTerrain()
@@ -272,6 +372,7 @@ void TerrainBindings::install(JSContext* ctx) {
             if (self->manager) self->manager->rebuildDirty();
         })
         .method_raw("configure", js_terrain_configure, 1)
+        .method_raw("setHeightSource", js_terrain_setHeightSource, 1)
         .method("destroy", [](TW* self) {
             if (self->manager) {
                 self->manager->clear();

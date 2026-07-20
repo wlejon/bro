@@ -141,6 +141,38 @@ public:
     /// Rebuild meshes for all dirty chunks.
     void rebuildDirty();
 
+    /// Supplies a chunk's heights in place of the built-in FBm generator.
+    ///
+    /// Called with the PADDED grid — paddedW * paddedH floats, row-major and
+    /// z-major, so sample (px, pz) is at `padded[pz * paddedW + px]`. Values are
+    /// absolute world-space Y in world units, exactly as the noise path writes
+    /// them. The padded ring is one sample beyond the chunk on every side and is
+    /// shared with the neighbours, which is what lets normals use true central
+    /// differences at a chunk edge; a provider that is not consistent across
+    /// chunk boundaries will show seams there.
+    ///
+    /// `worldX0`/`worldZ0` are the world position of sample (0, 0), so the
+    /// provider never has to re-derive the skirt offset:
+    ///     worldX = worldX0 + px * cellSize
+    ///     worldZ = worldZ0 + pz * cellSize
+    /// Getting that offset wrong shifts a chunk by one cell against its
+    /// neighbours, which for a coherent (non-noise) source yields terrain that
+    /// looks entirely correct and simply does not line up.
+    ///
+    /// Note these positions include config.origin, while the built-in noise path
+    /// does not — a pre-existing quirk that only matters for a non-zero origin.
+    ///
+    /// Return false to fall back to the built-in noise for this chunk, which is
+    /// what makes layering a coarse learned source under FBm detail possible.
+    using HeightSource =
+        std::function<bool(int cx, int cz, int lod, float* padded,
+                           int paddedW, int paddedH, float cellSize,
+                           float worldX0, float worldZ0)>;
+
+    /// Install (or clear, with nullptr) the height source. Does not rebuild —
+    /// call configure() or clear() to regenerate existing chunks.
+    void setHeightSource(HeightSource fn) { heightSource_ = std::move(fn); }
+
     /// Stats.
     int chunkCount() const { return static_cast<int>(chunks_.size()); }
     int totalTriangles() const;
@@ -193,6 +225,8 @@ private:
 
     std::unordered_map<ChunkCoord, ChunkEntry, ChunkCoordHash> chunks_;
     std::unordered_map<const MeshNode*, ChunkCoord> nodeToChunk_;
+
+    HeightSource heightSource_;
 
     // FastNoise2 state (opaque, defined in .cpp)
     struct NoiseState;
