@@ -297,9 +297,7 @@ vec3 applyAerialPerspective(vec3 color) {
     if (dist <= 0.0) return color;
 
     vec3 rd = vWorldPos / dist;
-    vec3 ro = vec3(uAtmCamPos.x,
-                   uAtmCamPos.y - uAtmSeaLevel + uAtmPlanetRadius,
-                   uAtmCamPos.z);
+    vec3 ro = atmOrigin(uAtmCamPos);
 
     vec3 tr;
     vec3 inscatter = atmScatter(ro, rd, dist, ATM_AERIAL_STEPS,

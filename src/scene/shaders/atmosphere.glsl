@@ -31,6 +31,25 @@ uniform float uAtmSeaLevel;      // world Y that counts as the planet's surface
 // is a little larger than scattering. Rayleigh does not absorb.
 const float ATM_MIE_EXTINCTION = 1.1;
 
+// View position relative to the planet centre.
+//
+// The horizontal components are deliberately DROPPED: the planet is placed
+// directly beneath the viewer rather than beneath the world origin. The
+// sphere is here to give the air a horizon and a thickness that falls off with
+// height — but the surface it has to agree with is a FLAT height field whose
+// up is world +Y everywhere. Anchoring the sphere at the origin instead tilts
+// the atmosphere's local vertical by atan(d / R) once the viewer is d metres
+// away from it, which draws a second, sloping horizon across the sky that
+// pulls further from the terrain's the further you travel — about 1.4 degrees
+// at 150 km out, and unbounded beyond that.
+//
+// Everything downstream is a function of |ro| and of the ray direction, so
+// this costs nothing and keeps sky, aerial perspective and the CPU irradiance
+// integrator (scene/atmosphere_irradiance.h) on one definition of "up".
+vec3 atmOrigin(vec3 worldPos) {
+    return vec3(0.0, worldPos.y - uAtmSeaLevel + uAtmPlanetRadius, 0.0);
+}
+
 // Distance to where a ray leaves a sphere of radius R centred at the origin.
 // Returns -1 when the ray never reaches it. `ro` is relative to the centre.
 float atmExitDistance(vec3 ro, vec3 rd, float R) {
@@ -135,9 +154,7 @@ vec3 atmScatter(vec3 ro, vec3 rd, float tMax, const int steps,
 // `worldPos` is a world-space position; the planet is centred below the origin
 // so that world Y == uAtmSeaLevel sits on the surface.
 vec3 atmSky(vec3 worldPos, vec3 rd, const int steps, const int sunSteps) {
-    vec3 ro = vec3(worldPos.x,
-                   worldPos.y - uAtmSeaLevel + uAtmPlanetRadius,
-                   worldPos.z);
+    vec3 ro = atmOrigin(worldPos);
     float atmR = uAtmPlanetRadius + uAtmThickness;
 
     float tMax = atmExitDistance(ro, rd, atmR);

@@ -33,9 +33,7 @@ void main() {
     // what turns it orange at the horizon without any special case for sunset.
     float mu = dot(rd, uAtmSunDir);
     if (mu > cos(uSunAngularRadius)) {
-        vec3 ro = vec3(uCamPos.x,
-                       uCamPos.y - uAtmSeaLevel + uAtmPlanetRadius,
-                       uCamPos.z);
+        vec3 ro = atmOrigin(uCamPos);
         if (atmHitDistance(ro, rd, uAtmPlanetRadius) < 0.0) {
             float t = atmExitDistance(ro, rd, uAtmPlanetRadius + uAtmThickness);
             if (t > 0.0) {
