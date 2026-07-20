@@ -399,8 +399,8 @@ void SceneRenderer::renderProbeSceneOpaque(const std::vector<LightNode*>& lights
         glUniform1f(d.fogHeightFalloff, fogHeightFalloff_);
         glUniform1f(d.fogStartDist, fogStartDist_);
         glUniform1f(d.fogCamY, graph_.cameraEye_.y);
-        glUniform3f(d.ambient, ambientColor_[0], ambientColor_[1],
-                    ambientColor_[2]);
+        glUniform3f(d.ambient, effectiveAmbient()[0], effectiveAmbient()[1],
+                    effectiveAmbient()[2]);
         if (d.ssrMask >= 0) glUniform1i(d.ssrMask, 0);
         uploadLights(lights, locs);
     };

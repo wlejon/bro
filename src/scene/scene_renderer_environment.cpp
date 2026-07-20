@@ -1,6 +1,7 @@
 #include "scene/scene_renderer.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer_internal.h"
+#include "scene/atmosphere_irradiance.h"
 #include "canvas/canvas_scene.h"
 #include "util/log.h"
 
@@ -617,6 +618,18 @@ bool SceneRenderer::runPrefilterInto(GLuint srcCube, int srcSize,
     glBindFramebuffer(GL_FRAMEBUFFER, prevFBO);
     glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3]);
     return ok;
+}
+
+// Refresh the cached sky ambient. Skipped entirely when the atmosphere is off,
+// and when neither the altitude nor the parameters have moved — a static camera
+// under a static sun recomputes nothing.
+void SceneRenderer::updateSkyAmbient(float camY) {
+    if (!atmosphere_.enabled) return;
+    // Irradiance changes slowly with height; a metre of bob is not worth an
+    // integration, but a climb into thin air very much is.
+    if (std::abs(camY - skyAmbientCamY_) < 25.0f) return;
+    skyAmbientCamY_ = camY;
+    computeSkyAmbient(atmosphere_, camY, skyAmbient_);
 }
 
 }  // namespace bro::scene

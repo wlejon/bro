@@ -174,8 +174,8 @@ void SceneRenderer::renderDecalPass(const std::vector<LightNode*>& lights) {
     // light (the implicit sun when the scene declares no lights). Scenes lit
     // only by points/spots leave the sun term black — the decal then gets
     // ambient only (documented limitation).
-    glUniform3f(dcUAmbient_, ambientColor_[0], ambientColor_[1],
-                ambientColor_[2]);
+    glUniform3f(dcUAmbient_, effectiveAmbient()[0], effectiveAmbient()[1],
+                effectiveAmbient()[2]);
     Vec3 sunDir{0.0f, -1.0f, 0.0f};
     Vec3 sunColor{0.0f, 0.0f, 0.0f};
     for (LightNode* L : lights) {

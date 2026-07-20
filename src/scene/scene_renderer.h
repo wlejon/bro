@@ -120,6 +120,15 @@ public:
         ambientColor_[0] = r; ambientColor_[1] = g; ambientColor_[2] = b;
     }
 
+    // The ambient the mesh shaders actually get. With the atmosphere on this is
+    // the sky's own irradiance (refreshed per frame in updateSkyAmbient), so a
+    // surface is lit by the sky it is under rather than by a constant; with it
+    // off it is whatever setAmbient was given. Every uAmbient upload site reads
+    // this rather than ambientColor_, so the two can never disagree.
+    const float* effectiveAmbient() const {
+        return atmosphere_.enabled ? skyAmbient_ : ambientColor_;
+    }
+
     void setTiltShift(bool enabled, float focusCenter, float focusWidth,
                       float feather, float strength, float saturation,
                       float contrast) {
@@ -282,7 +291,10 @@ public:
     bool hasEnvironment() const { return envCubemap_ != 0; }
     const std::string& environmentPath() const { return envPath_; }
 
-    void setAtmosphere(const AtmosphereParams& a) { atmosphere_ = a; }
+    void setAtmosphere(const AtmosphereParams& a) {
+        atmosphere_ = a;
+        skyAmbientCamY_ = 1e30f;   // sun moved: force a re-integration
+    }
     const AtmosphereParams& atmosphere() const { return atmosphere_; }
 
     void  setEnvironmentIntensity(float i) { envIntensity_ = (i < 0.0f) ? 0.0f : i; }
@@ -1121,6 +1133,13 @@ private:
     GLint  atmUSunAngularRadius_ = -1;
     GLint  atmUSunDiskIntensity_ = -1;
     AtmosphereParams atmosphere_;
+
+    // Sky irradiance, recomputed once a frame from atmosphere_ and the camera
+    // altitude. Cached against the inputs it depends on so a static camera
+    // under a static sun costs nothing.
+    float skyAmbient_[3] = {0.03f, 0.03f, 0.03f};
+    float skyAmbientCamY_ = 1e30f;
+    void  updateSkyAmbient(float camY);
 
     // Skybox draw pipeline (lazy init)
     GLuint skyboxProgram_ = 0;

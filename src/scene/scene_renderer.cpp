@@ -301,7 +301,7 @@ void SceneRenderer::uploadMeshGlobals(const MeshDrawLocs& L) {
     glUniform1f(L.fogStartDist, fogStartDist_);
     glUniform1f(L.fogCamY, graph_.cameraEye_.y);
     uploadAtmLocs(L.atm);
-    glUniform3f(L.ambient, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
+    glUniform3f(L.ambient, effectiveAmbient()[0], effectiveAmbient()[1], effectiveAmbient()[2]);
     if (L.windDir      >= 0) glUniform3fv(L.windDir, 1, windDir_);
     if (L.windStrength >= 0) glUniform1f(L.windStrength, windStrength_);
     if (L.windTime     >= 0) glUniform1f(L.windTime, windTime_);
@@ -397,6 +397,10 @@ void SceneRenderer::render3D() {
     // depth test.
     initDepthPolicy();
     graph_.syncProjectionToDepthPolicy();
+
+    // Ahead of every pass that uploads uAmbient (mesh, instanced, decals,
+    // probes), so they all see the same sky for this frame.
+    updateSkyAmbient(graph_.cameraEye().y);
 
     hasMeshContent_ = false;
     cullStats_ = CullStats{};
@@ -737,7 +741,7 @@ void SceneRenderer::render3D() {
                         glUniform1f(L.fogHeightFalloff, fogHeightFalloff_);
                         glUniform1f(L.fogStartDist, fogStartDist_);
                         glUniform1f(L.fogCamY, graph_.cameraEye_.y);
-                        glUniform3f(L.ambient, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
+                        glUniform3f(L.ambient, effectiveAmbient()[0], effectiveAmbient()[1], effectiveAmbient()[2]);
                         if (L.ssrMask >= 0)
                             glUniform1i(L.ssrMask, ssrMaskActive_ ? 1 : 0);
                         uploadLights(activeLights, locs);
@@ -913,8 +917,8 @@ void SceneRenderer::render3D() {
                     glUniform1f(d.fogHeightFalloff, fogHeightFalloff_);
                     glUniform1f(d.fogStartDist, fogStartDist_);
                     glUniform1f(d.fogCamY, graph_.cameraEye_.y);
-                    glUniform3f(d.ambient, ambientColor_[0], ambientColor_[1],
-                                ambientColor_[2]);
+                    glUniform3f(d.ambient, effectiveAmbient()[0], effectiveAmbient()[1],
+                                effectiveAmbient()[2]);
                     // Translucent pass runs after the SSR mask phase ended.
                     if (d.ssrMask >= 0)
                         glUniform1i(d.ssrMask, ssrMaskActive_ ? 1 : 0);
