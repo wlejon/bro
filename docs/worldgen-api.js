@@ -93,12 +93,70 @@ class World {
      */
     elevationSync(i1, j1, i2, j2, opts) {}
 
+    /**
+     * One stage of the pipeline's DAG, rather than its product.
+     *
+     *   world.stage('coarse', i1, j1, i2, j2, {
+     *       onDone:  ({ stage, width, height, channels, cellSize,
+     *                   names, units, data }) => { ... },
+     *       onError: (msg) => { ... },
+     *   });
+     *
+     * `data` is PLANAR: channel c of cell (z, x) lives at
+     * `data[(c * height + z) * width + x]`. `names[c]` and `units[c]` describe
+     * each channel, so a caller never has to remember the layout — and a unit
+     * the source does not state is reported as `'?'` rather than guessed.
+     *
+     * Bounds are in that STAGE's cells, which get coarser up the DAG:
+     *
+     *   stage        cells       channels
+     *   ─────────────────────────────────────────────────────────────────────
+     *   coarse       256 x       elevation, p5, temperature,
+     *                            temperatureSeasonality, precipitation,
+     *                            precipitationSeasonality
+     *   latent         8 x       latent0..latent3, lowFrequency
+     *   latentInit     8 x       the same five, at step 1 of the latent
+     *                            stage's 2 — noisier, and exposed so a
+     *                            discrepancy can be attributed to one step
+     *   residual       1 x       residual (STANDARDISED, not metres)
+     *   elevation      1 x       elevation in metres; identical to
+     *                            elevationSync with margin 0
+     *
+     * `world.cellSize`, `latentCellSize` and `coarseCellSize` give those three
+     * scales in metres.
+     *
+     * WHY THIS EXISTS: the pipeline is three nets in series, so when the output
+     * is wrong the only useful question is which stage it was already wrong in.
+     * Reading a stage alone halves the composition depth below it, which is
+     * what separates error accumulating per step from error arriving
+     * already-formed out of the coarse net.
+     *
+     * Two channels are elevation in disguise — the network works in the SIGNED
+     * SQUARE ROOT of metres — and are squared back before you see them, so
+     * `units` saying `'m'` means metres. Note coarse `elevation` is the mean of
+     * signed-sqrt elevation over the cell, so it is the square of a mean of
+     * roots: fine to draw and to pick biomes with, not a number to quote.
+     *
+     * `residual` is handed over raw because converting it needs the latent low
+     * band, a denoise round-trip and a bilinear upsample — which is what
+     * `elevation()` already is. A partial conversion would look like metres.
+     *
+     * @returns {AsyncHandle} with .cancel(); monolithic, as elevation() is.
+     */
+    stage(name, i1, j1, i2, j2, opts) {}
+
+    /** The same, blocking. For headless tests and Workers, as elevationSync is
+     *  to elevation. Returns the result object directly; throws on failure. */
+    stageSync(name, i1, j1, i2, j2) {}
+
     /** Drop every cached tile. Purely an optimisation, the world is a pure
      *  function of (seed, position), so this changes timing and nothing else. */
     clearCache() {}
 
     get seed()       {}   // number (lossy above 2^53; echoed, not round-tripped)
     get cellSize()   {}   // metres per cell, 30 for the 30m checkpoint
+    get latentCellSize() {}  // metres per latent cell — 8 x cellSize
+    get coarseCellSize() {}  // metres per coarse cell — 256 x cellSize
     get generating() {}   // true while an async request is in flight
 }
 
