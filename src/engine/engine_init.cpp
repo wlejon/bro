@@ -73,6 +73,7 @@
 #endif
 #include "js/sense_bindings.h"
 #include "js/mic_bindings.h"
+#include "js/clipmap_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/tile_bindings.h"
 #include "js/net_bindings.h"
@@ -1124,6 +1125,7 @@ void Engine::installCoreBindings(JSContext* ctx) {
     // Terrain + tile-world bindings (voxel terrain / chunked tile grid) — 3D-only.
 #if BRO_WITH_3D
     js::TerrainBindings::install(ctx);
+    js::ClipmapBindings::install(ctx);
     js::TileBindings::install(ctx);
 #endif
 

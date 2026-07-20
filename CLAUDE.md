@@ -123,6 +123,7 @@ Annotated `.js` files with JSDoc + examples — read the file before using or ch
 | `brokit-api.js` | brokit runtime — Node modules (fs, path, os, child_process) + web globals |
 | `physics-api.js` | `Physics` — Jolt bodies, shapes, raycasts, contacts, characters, vehicles (wheeled/tracked/motorcycle) |
 | `terrain-api.js` | `scene.createTerrain` — voxel terrain: noise, chunk streaming, edits, raycast |
+| `clipmap-api.js` | `scene.createClipmapTerrain` — camera-centred clipmap: fixed ring geometry, GPU displacement from a streamed height pyramid |
 | `tile-api.js` | `scene.createTileWorld` — tile-grid meshing, square + hex, elevation/cliffs/AO |
 | `dialogs-api.js` | native file/folder dialogs (blocking — never trigger in tests) |
 | `menu-api.js` | `bro.menu` — native menu bar |

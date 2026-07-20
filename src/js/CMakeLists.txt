@@ -62,6 +62,7 @@ add_library(bro_js STATIC
     math_bindings.cpp
     rigging_bindings.cpp
     terrain_bindings.cpp
+    clipmap_bindings.cpp
     tile_bindings.cpp
     settings_bindings.cpp
     net_bindings.cpp

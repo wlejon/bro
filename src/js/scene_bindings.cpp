@@ -4,6 +4,7 @@
 #include "js/scene_bindings_internal.h"
 #include "js/ai_bindings.h"
 #include "js/mesh_bindings.h"
+#include "js/clipmap_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/tile_bindings.h"
 #include "js/dom_bindings.h"
@@ -307,6 +308,26 @@ static JSValue js_sg_createTerrain(JSContext* ctx, JSValueConst this_val, int ar
         opts = tmpOpts;
     }
     JSValue result = createTerrainJS(ctx, g, opts);
+    JS_FreeValue(ctx, tmpOpts);
+    return result;
+}
+
+// createClipmapTerrain(opts) → ClipmapTerrain
+//
+// The camera-centred GPU-displaced terrain. Deliberately a separate factory
+// from createTerrain: that one stays the voxel/editable terrain, this one is
+// the continuous underfoot-to-horizon case with no geometry rebuilds.
+static JSValue js_sg_createClipmapTerrain(JSContext* ctx, JSValueConst this_val,
+                                          int argc, JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g) return JS_NULL;
+    JSValueConst opts = (argc >= 1 && JS_IsObject(argv[0])) ? argv[0] : JS_UNDEFINED;
+    JSValue tmpOpts = JS_UNDEFINED;
+    if (JS_IsUndefined(opts)) {
+        tmpOpts = JS_NewObject(ctx);
+        opts = tmpOpts;
+    }
+    JSValue result = createClipmapTerrainJS(ctx, g, opts);
     JS_FreeValue(ctx, tmpOpts);
     return result;
 }
@@ -1725,6 +1746,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("setShadowQuality", js_sg_setShadowQuality, 1)
         .method_raw("setShadowCache", js_sg_setShadowCache, 1)
         .method_raw("createTerrain", js_sg_createTerrain, 1)
+        .method_raw("createClipmapTerrain", js_sg_createClipmapTerrain, 1)
         .method_raw("createTileWorld", js_sg_createTileWorld, 1)
         .method_raw("findById", js_sg_findById, 1)
         .method_raw("findByName", js_sg_findByName, 1)

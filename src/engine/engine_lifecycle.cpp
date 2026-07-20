@@ -27,6 +27,7 @@
 #include "js/mesh_bindings.h"
 #include "js/rigging_bindings.h"
 #include "js/ai_bindings.h"
+#include "js/clipmap_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/tile_bindings.h"
 #include "js/custom_elements.h"
@@ -209,6 +210,7 @@ Engine::~Engine() {
 #if BRO_WITH_3D
     if (jsRuntime_) {
         js::TerrainBindings::cleanup(jsRuntime_->getContext());
+        js::ClipmapBindings::cleanup(jsRuntime_->getContext());
         js::TileBindings::cleanup(jsRuntime_->getContext());
     }
 
@@ -313,6 +315,7 @@ Engine::~Engine() {
 #endif
 #if BRO_WITH_3D
         js::TerrainBindings::cleanup(ctx);
+        js::ClipmapBindings::cleanup(ctx);
         js::TileBindings::cleanup(ctx);
         js::MeshBindings::cleanup(ctx);
         js::RiggingBindings::cleanup(ctx);

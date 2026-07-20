@@ -44,6 +44,7 @@
 #include "js/mesh_bindings.h"
 #include "js/rigging_bindings.h"
 #include "js/ai_bindings.h"
+#include "js/clipmap_bindings.h"
 #include "js/terrain_bindings.h"
 #include "js/tile_bindings.h"
 #include "js/custom_elements.h"
@@ -138,6 +139,7 @@ void Engine::performAppReload() {
     // Terrain/tile managers before the graphs — their destructors call
     // SceneGraph::destroyNode() (same order as ~Engine).
     js::TerrainBindings::cleanup(oldCtx);
+    js::ClipmapBindings::cleanup(oldCtx);
     js::TileBindings::cleanup(oldCtx);
     sceneGraphs_.clear();
 #endif

@@ -282,6 +282,7 @@ public:
     /// distance to the camera, under ortho it is fixed by the projection's
     /// half-height and distance does not enter into it.
     bool cameraIsPerspective() const { return cameraIsPerspective_; }
+    float cameraFovY() const { return cameraFovY_; }
 
     /// Rebuild the projection if it was built under a different depth
     /// convention than the one now active. No-op in the overwhelmingly common
