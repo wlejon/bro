@@ -22,13 +22,84 @@ uniform vec3 u_l3a;  uniform vec2 u_l3b;
 
 uniform vec2  u_camXZ;
 uniform float u_camY;
-uniform float u_cellSize;      // c0, level-0 cell size in metres
+uniform float u_cellSize;      // c0, level-0 cell size in metres (EFFECTIVE —
+                               // already multiplied by u_cellScale)
+uniform float u_cellScale;     // power-of-two zoom of the whole ring stack —
+                               // see ClipmapTerrain::update
 uniform float u_invK;          // 1/K = 4/N — see cmCellSize
 uniform float u_pixelScale;    // 2*tan(fovY/2)/viewportHeight — see cmCellSize
 uniform float u_layerCount;
 uniform float u_heightScale;
 uniform float u_seaLevel;
 uniform float u_camGroundY;    // terrain height under the camera, world metres
+uniform float u_planetRadius;  // metres; 0 = flat world, no curvature
+
+// ---------------------------------------------------------------------------
+// PLANETARY CURVATURE
+//
+// The height field stays a flat function of world XZ; this bends the SURFACE
+// it describes onto a sphere. World XZ is read as arc length from the camera's
+// ground point, i.e. an azimuthal-equidistant chart centred on the eye, so the
+// cap is exact under the camera and stretches at its rim. That chart moves with
+// the camera, which is fine for the near field and is what a cube-sphere
+// replaces for the far field — but the cue it buys is the one that matters:
+// the horizon lands where a planet of this radius puts it.
+//
+// Without this the world showed ground to 524 km from a 2 m eye height. Earth
+// shows 5 km. That single number is why a correct-looking height field still
+// read as a tabletop model: nothing else the renderer does can say "big" while
+// the horizon says "small". It also BOUNDS work rather than adding it, because
+// everything past the horizon now falls below the eye ray and is culled.
+//
+// Everything here is a pure function of (rel, h), so the crack-free guarantee
+// survives: two rings meeting at a boundary bend identically.
+
+// The camera-relative position of a point that sits `h` metres above the datum
+// at flat offset `rel` from the camera.
+vec3 cmCurve(vec2 rel, float h) {
+    float R = u_planetRadius;
+    if (R <= 0.0) return vec3(rel.x, h - u_camY, rel.y);
+
+    float d  = length(rel);
+    float th = d / R;                       // subtended angle
+
+    // NOT (R+h)*cos(th) - R. That difference is ~d^2/(2R): at d = 1 km it is
+    // 8 cm out of 6371 km, and fp32 carries seven digits, so the subtraction
+    // returns zero and the whole near field stays flat. The half-angle form
+    // computes the drop directly and is exact at every scale.
+    float s  = sin(0.5 * th);
+    float y  = h * cos(th) - 2.0 * R * s * s;
+
+    // Horizontal foreshortening: arc length d maps to chord R*sin(th).
+    // sin(th)/th is 0/0 at the camera, so series-expand under the threshold.
+    float sinc = (th < 1e-4) ? 1.0 - th * th / 6.0 : sin(th) / th;
+
+    vec2 xz = rel * ((1.0 + h / R) * sinc);
+    return vec3(xz.x, y - u_camY, xz.y);
+}
+
+// Rotate a normal built in the flat chart into the curved frame. The local up
+// tilts by exactly th, about the axis perpendicular to rel. Distant ground can
+// subtend tens of degrees, so skipping this lights the far field as though it
+// were still a plane and the terminator lands in the wrong place.
+vec3 cmCurveNormal(vec2 rel, vec3 n) {
+    float R = u_planetRadius;
+    float d = length(rel);
+    if (R <= 0.0 || d < 1e-3) return n;
+
+    float th = d / R;
+    vec2  u  = rel / d;
+    float ct = cos(th), st = sin(th);
+
+    // Flat basis: e1 along rel, e2 up, e3 across. Only e1 and e2 rotate.
+    float a = dot(n, vec3(u.x, 0.0, u.y));   // along
+    float b = n.y;                           // up
+    float c = dot(n, vec3(-u.y, 0.0, u.x));  // across
+    vec3  E1 = vec3( ct * u.x, -st, ct * u.y);
+    vec3  E2 = vec3( st * u.x,  ct, st * u.y);
+    vec3  E3 = vec3(-u.y, 0.0, u.x);
+    return normalize(a * E1 + b * E2 + c * E3);
+}
 
 // A layer's outermost 8% (per axis) ramps its weight from 1 down to 0, so
 // running off a fine layer's footprint degrades gradually into the coarser

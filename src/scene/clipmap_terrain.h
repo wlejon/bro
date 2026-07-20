@@ -1,6 +1,8 @@
 #pragma once
 
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include <memory>
 #include <string>
@@ -59,6 +61,19 @@ struct ClipmapConfig {
     int   detailOctaves    = 7;       // clamped to 8 by the shader
 
     float snowLine = 1600.0f;         // world metres, before per-place jitter
+
+    // Largest power-of-two zoom of the ring stack (see ClipmapTerrain::update).
+    // 1 pins the stack to cellSize and gives it a fixed, finite footprint —
+    // the world then simply ENDS at farDistance, which from altitude is a lip
+    // of terrain hanging in the sky. The cap exists because the app has to
+    // supply height data across whatever footprint the stack claims, and
+    // extent grows linearly with this.
+    float maxCellScale = 64.0f;
+
+    // Planet radius in metres; 0 draws a flat world. Curvature is what bounds
+    // the terrain — see cmCurve in clipmap_common.glsl and horizonDistance().
+    // Earth is 6371000.
+    float planetRadius = 0.0f;
 };
 
 /// One level of the height pyramid: an R32F mipmapped texture plus where it
@@ -137,6 +152,64 @@ public:
     int vertexCount() const { return vertexCount_; }
     int layerCount() const { return layerCount_; }
 
+    /// Current power-of-two zoom of the ring stack, >= 1. Set by update().
+    float cellScale() const { return cellScale_; }
+
+    /// How far the surface is visible from `eyeAboveSeaLevel` metres up, for
+    /// the configured planet: sqrt(2Rh + h^2). Infinite on a flat world.
+    ///
+    /// ABOVE SEA LEVEL, not above the ground under your feet. Height above
+    /// ground is the right measure for pixel footprint (see cmCellSizeAA) and
+    /// the wrong one for visibility: standing 2 m up on a 3700 m massif you can
+    /// see 219 km, not 5 km, because the horizon is set by your distance from
+    /// the planet's centre. Using height-above-ground here cut the world off a
+    /// few tens of km out and left the terrain ending in a wall.
+    ///
+    /// It grows as sqrt(h): 5 km from a 2 m eye height at sea level, 195 km
+    /// from a 3000 m summit, 2293 km from 400 km up.
+    float horizonDistance(float eyeAboveSeaLevel) const {
+        if (cfg_.planetRadius <= 0.0f) return std::numeric_limits<float>::infinity();
+        const float h = std::max(eyeAboveSeaLevel, 0.0f);
+        return std::sqrt(2.0f * cfg_.planetRadius * h + h * h);
+    }
+
+    /// Radius the app actually has to supply height data across, world metres.
+    ///
+    /// NOT the same as farDistance, and conflating them is what made the data
+    /// bill quadratic. The rings are a fixed triangle budget, so reaching 524 km
+    /// from a 2 m eye height costs nothing to DRAW — but demanding elevation
+    /// across 524 km costs a 137,000 sq km field, of which 5 km of radius is
+    /// above the horizon and the rest is behind the curve.
+    ///
+    /// Curvature is what makes the shortfall safe: past this radius a layer's
+    /// coverage weight fades out and the surface falls to sea level, and that
+    /// ground has already bent below the eye ray, so nothing renders. On a flat
+    /// world there is no horizon and this correctly equals farDistance.
+    ///
+    /// Call it every frame with the current eye height above SEA LEVEL.
+    float coverageDistance(float eyeAboveSeaLevel) const {
+        const float far = farDistance();
+        if (cfg_.planetRadius <= 0.0f) return far;
+        // Two tangent lengths, not one. The far bound is where the line of
+        // sight grazing the planet meets the highest ground the world contains:
+        // an eye at h sees the horizon at horizon(h), and a peak of height H
+        // beyond it stays visible for another horizon(H). Anything past their
+        // sum is behind the curve whatever its elevation.
+        //
+        // maxHeight_ comes from the layers actually loaded, so a world of
+        // rolling hills asks for less than one with 8 km peaks, automatically.
+        const float peak = std::max(maxHeight_ - cfg_.seaLevel, 0.0f);
+        return std::min(far, horizonDistance(eyeAboveSeaLevel) + horizonDistance(peak));
+    }
+
+    /// Half-extent of the coarsest ring, world metres — how far the terrain
+    /// reaches from the camera RIGHT NOW. Callers must keep height data
+    /// covering at least this radius, and a camera far plane past it.
+    float farDistance() const {
+        return cfg_.cellSize * cellScale_ * static_cast<float>(cfg_.resolution / 2)
+             * std::exp2(static_cast<float>(cfg_.levels - 1));
+    }
+
     /// Destroy the node and drop every layer. Idempotent.
     void destroy();
 
@@ -212,6 +285,9 @@ private:
 
     int triangleCount_ = 0;
     int vertexCount_   = 0;
+
+    // Power-of-two zoom of the ring stack, chosen per update from altitude.
+    float cellScale_ = 1.0f;
 };
 
 } // namespace bro::scene

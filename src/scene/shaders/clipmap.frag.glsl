@@ -18,14 +18,40 @@
 
 void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
                   inout float roughness, inout vec3 emissive, inout float alpha) {
-    vec2  rel = vWorldPos.xz;
+    // The FLAT chart offset, forwarded through vUV by the vertex stage. Not
+    // vWorldPos.xz — that is the curved position, and the height field is
+    // indexed in the flat chart.
+    vec2  rel = vUV;
     vec2  wxz = rel + u_camXZ;
     float c   = cmCellSize(wxz);
 
-    // Central differences one desired-cell apart: the gradient is measured at
-    // the same scale the height is filtered at, so distant terrain reads as
-    // smooth rather than as aliasing noise.
-    float e  = c;
+    // NEVER DIFFERENCE THE LAYER BELOW ITS OWN CELL.
+    //
+    // The obvious spacing is the rendered cell c, and it is wrong wherever the
+    // data is coarser than the pixel — which is everywhere the coarse field is
+    // the only layer. c is tens of metres; the coarse cell is 7.68 km. That
+    // asks the hardware to resolve a height difference across a THOUSANDTH of a
+    // texel, and bilinear filtering carries about eight bits of sub-texel
+    // weight. So the interpolated height is a staircase with steps of
+    // (texel height range)/256 — a couple of metres — and a difference taken
+    // over 50 m turns a 2 m step into a 2-degree slope step held flat across
+    // the whole quantisation cell.
+    //
+    // That is the shingling: hard-edged plates in the shading normal, aligned
+    // to the layer's texture axes, growing with distance because the difference
+    // baseline does, and present only when a height layer is installed. It was
+    // never the exemplar, the mesh, shadows or the atmosphere, all of which
+    // were bisected away while the layer itself was never suspected — the
+    // height field looks perfectly smooth, because the defect is metres in a
+    // field with kilometres of range and only its DERIVATIVE is ruinous.
+    //
+    // cmDataFloor is exactly the right spacing: the finest cell the pyramid
+    // resolves here, blended across layer edges the same way the height is. The
+    // layer has no slope information below it, so measuring there samples
+    // filter noise instead of terrain. Detail and the exemplar are unaffected —
+    // they carry analytic derivatives and fill the band under this floor.
+    float floorM = cmDataFloor(wxz);
+    float e  = max(c, floorM);
     float h0 = cmHeight(wxz, c);
     float hL = cmHeight(wxz - vec2(e, 0.0), c);
     float hR = cmHeight(wxz + vec2(e, 0.0), c);
@@ -44,7 +70,6 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     // as you walk towards it.
     float cs = cmCellSizeAA(wxz);
 
-    float floorM = cmDataFloor(wxz);
     float dAmp;
     vec3  d  = cmDetail(rel, cs, floorM, dAmp);
     float dw = cmDetailWeight(slope);
@@ -54,8 +79,13 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     vec3 ex = cmExemplar(rel, cs, floorM);
     grad += ex.yz;
 
+    // The gradient was taken in the flat chart, so this normal is relative to
+    // the chart's up. On a planet the local up leans away from the eye with
+    // distance; cmCurveNormal applies that lean. Material selection below still
+    // wants the CHART normal — "how steep is this ground" is a property of the
+    // terrain, not of where the camera happens to be standing.
     vec3 n = normalize(vec3(-grad.x, 1.0, -grad.y));
-    normal = n;
+    normal = cmCurveNormal(rel, n);
 
     float wy     = h0 + dw * d.x + ex.x;
 
@@ -96,8 +126,8 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     //   5 shading normal                        6 albedo
     baseColor = vec3(0.0);
     if (CM_DEBUG_EXEMPLAR == 1)      emissive = vec3(fract(ex.x / 20.0));
-    else if (CM_DEBUG_EXEMPLAR == 2) emissive = vec3(0.5 + 4.0 * ex.y,
-                                                     0.5 + 4.0 * ex.z, 0.5);
+    else if (CM_DEBUG_EXEMPLAR == 2) emissive = vec3(0.5 + 0.5 * ex.y,
+                                                     0.5 + 0.5 * ex.z, 0.5);
     else if (CM_DEBUG_EXEMPLAR == 3) emissive = vec3(fract(cmExemplarLod(cs)));
     else if (CM_DEBUG_EXEMPLAR == 4) emissive = vec3(0.5 + 0.5 * cavity);
     else if (CM_DEBUG_EXEMPLAR == 5) emissive = 0.5 + 0.5 * n;

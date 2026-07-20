@@ -253,7 +253,94 @@ float cmExemplarLod(float c) {
     return max(0.0, log2(max(c, 1e-6) / (u_exLambda / u_exN)));
 }
 
-vec3 cmExemplarTap(vec2 wxz, float lambda, float c, float rot) {
+// WHY THE EXEMPLAR IS NOT SAMPLED BILINEARLY.
+//
+// A texture fetch is bilinear, so the surface it defines is C0 but NOT C1: its
+// slope is constant along x within a texel cell and steps at every boundary.
+// The fragment stage builds its normal from that slope, so the normal comes out
+// as a grid of near-constant plates on the exemplar's texel lattice — rotated
+// with the tap, and growing with distance because the mip level does.
+// Multiplied by u_exLambda (twice the coarsest layer's cell, so kilometres) a
+// relative kink of a few percent becomes a large absolute slope step. That is
+// the shingling that made close mountainsides read as overlapping translucent
+// sheets, and it is why the artifact needed the exemplar present, ignored the
+// ring resolution, and left the height field itself looking smooth.
+//
+// Widening the difference stencil CANNOT fix it, which is what the first two
+// attempts got wrong. A coarser mip is still bilinear, so its derivative is
+// still piecewise constant — the plates just get bigger.
+//
+// The interpolant itself has to be C1. This is the cubic B-spline, which is C2
+// and evaluates in four bilinear fetches instead of sixteen point fetches by
+// folding each weight pair into one offset tap (Sigg & Hadwiger). The exemplar
+// is periodic and the sampler is GL_REPEAT, so the taps wrap correctly.
+//
+// The B-spline is chosen over Catmull-Rom deliberately: it approximates rather
+// than interpolates, so it has no negative lobes and cannot overshoot into
+// ringing along a ridge line. It is slightly softer than the bilinear fetch at
+// the same level, which costs nothing here — this field is band-limited to the
+// rendered cell anyway.
+
+// Cubic B-spline weights and their derivatives w.r.t. the fractional position.
+// Both sets are needed: the height uses w, the gradient uses dw, and dw sums to
+// zero rather than one, which is why the two share no normalisation.
+void cmBSpline(vec2 f, out vec2 w0, out vec2 w1, out vec2 w2, out vec2 w3) {
+    vec2 f2 = f * f, f3 = f2 * f, g = 1.0 - f;
+    w0 = g * g * g / 6.0;
+    w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
+    w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
+    w3 = f3 / 6.0;
+}
+
+void cmBSplineD(vec2 f, out vec2 d0, out vec2 d1, out vec2 d2, out vec2 d3) {
+    vec2 f2 = f * f, g = 1.0 - f;
+    d0 = -0.5 * g * g;
+    d1 = (9.0 * f2 - 12.0 * f) / 6.0;
+    d2 = (-9.0 * f2 + 6.0 * f + 3.0) / 6.0;
+    d3 = 0.5 * f2;
+}
+
+// Value and gradient of the B-spline surface at `u`, sampled at fractional mip
+// `lod`. `n` is the texel count per axis at that level. dE is d(value)/d(u),
+// in normalised-uv units. Twelve bilinear taps: four for the value, four per
+// axis of the gradient. `grad` = 0 skips the eight gradient taps, which is what
+// the vertex stage takes — it only ever reads the height.
+vec3 cmExBicubic(vec2 u, float lod, float n, float grad) {
+    vec2 t = u * n - 0.5;
+    vec2 f = fract(t);
+    vec2 i = t - f;
+
+    vec2 w0, w1, w2, w3;  cmBSpline(f, w0, w1, w2, w3);
+    vec2 s0 = w0 + w1, s1 = w2 + w3;
+    // Offsets that make one bilinear fetch reproduce a weighted pair exactly.
+    vec2 a0 = (i + 0.5 + (w1 / s0) - 1.0) / n;
+    vec2 a1 = (i + 0.5 + (w3 / s1) + 1.0) / n;
+
+    float v = mix(mix(textureLod(u_exemplar, vec2(a0.x, a0.y), lod).r,
+                      textureLod(u_exemplar, vec2(a1.x, a0.y), lod).r, s1.x),
+                  mix(textureLod(u_exemplar, vec2(a0.x, a1.y), lod).r,
+                      textureLod(u_exemplar, vec2(a1.x, a1.y), lod).r, s1.x), s1.y);
+    if (grad < 0.5) return vec3(v, 0.0, 0.0);
+
+    vec2 d0, d1, d2, d3;  cmBSplineD(f, d0, d1, d2, d3);
+    vec2 e0 = d0 + d1, e1 = d2 + d3;   // both are bounded away from zero
+    vec2 b0 = (i + 0.5 + (d1 / e0) - 1.0) / n;
+    vec2 b1 = (i + 0.5 + (d3 / e1) + 1.0) / n;
+
+    // dE/dx: derivative weights along x, value weights along y (and vice versa).
+    // The pair sums e0/e1 cancel, so they scale the taps rather than blend them.
+    float dx = e0.x * mix(textureLod(u_exemplar, vec2(b0.x, a0.y), lod).r,
+                          textureLod(u_exemplar, vec2(b0.x, a1.y), lod).r, s1.y)
+             + e1.x * mix(textureLod(u_exemplar, vec2(b1.x, a0.y), lod).r,
+                          textureLod(u_exemplar, vec2(b1.x, a1.y), lod).r, s1.y);
+    float dy = e0.y * mix(textureLod(u_exemplar, vec2(a0.x, b0.y), lod).r,
+                          textureLod(u_exemplar, vec2(a1.x, b0.y), lod).r, s1.x)
+             + e1.y * mix(textureLod(u_exemplar, vec2(a0.x, b1.y), lod).r,
+                          textureLod(u_exemplar, vec2(a1.x, b1.y), lod).r, s1.x);
+    return vec3(v, n * dx, n * dy);
+}
+
+vec3 cmExemplarTap(vec2 wxz, float lambda, float c, float rot, float grad) {
     float cs = cos(rot), sn = sin(rot);
     mat2  R  = mat2(cs, -sn, sn, cs);
     vec2  u  = (R * wxz) / lambda;
@@ -264,40 +351,12 @@ vec3 cmExemplarTap(vec2 wxz, float lambda, float c, float rot) {
     float texel = lambda / u_exN;
     float lod   = max(0.0, log2(max(c, 1e-6) / texel));
 
-    // THE GRADIENT NEEDS A BLURRIER TAP THAN THE HEIGHT DOES.
-    //
-    // A texture fetch is bilinear, so the surface it defines is C0 but not C1:
-    // its slope is constant along x within a texel cell and steps at every cell
-    // boundary. A central difference one texel wide reproduces that step almost
-    // exactly, so the derivative comes out as a grid of near-constant plates on
-    // the exemplar's texel lattice — rotated with the tap, and growing with
-    // distance because lod does. Multiplied by u_exLambda (twice the coarsest
-    // layer's cell, so kilometres) a relative kink of a few percent becomes a
-    // large absolute slope step, and the fragment stage builds its NORMAL from
-    // this. That is the shingling that made close mountainsides read as
-    // overlapping translucent sheets, and it is why the artifact needed the
-    // exemplar present, ignored the ring resolution, and left the height field
-    // itself looking perfectly smooth.
-    //
-    // Taking the derivative one mip coarser, over two of THAT level's texels,
-    // spreads the difference across several cells of the level the height came
-    // from, so the steps average out instead of being sampled. The step stays
-    // continuous in lod — rounding the level (ceil/floor) would trade the
-    // plates for concentric bands at every integer lod.
-    float lodG  = lod + 1.0;
-    float step  = 2.0 * exp2(lodG) / u_exN;
-
-    float h  = textureLod(u_exemplar, u, lod).r;
-    float hR = textureLod(u_exemplar, u + vec2(step, 0.0), lodG).r;
-    float hL = textureLod(u_exemplar, u - vec2(step, 0.0), lodG).r;
-    float hU = textureLod(u_exemplar, u + vec2(0.0, step), lodG).r;
-    float hD = textureLod(u_exemplar, u - vec2(0.0, step), lodG).r;
+    vec3 e = cmExBicubic(u, lod, u_exN / exp2(lod), grad);
 
     // H = lambda * E(u), u = R*w/lambda  =>  dH/dw = R^T * dE/du, so the
     // gradient is scale-free and the lambda cancels exactly.
-    vec2 dU = vec2(hR - hL, hU - hD) / (2.0 * step);
-    vec2 dW = transpose(R) * dU;
-    return vec3(lambda * h, dW);
+    vec2 dW = transpose(R) * e.yz;
+    return vec3(lambda * e.x, dW);
 }
 
 // How much of a tap at `lambda` is NOT already in the data.
@@ -324,7 +383,7 @@ float cmExRedundancy(float lambda, float dataFloor) {
 // terrain and already carries its own flat reaches and broken faces. Scaling it
 // by the coarse field's slope would double-count the landscape's own roughness
 // and flatten exactly the distant ground this exists to give relief to.
-vec3 cmExemplar(vec2 rel, float c, float dataFloor) {
+vec3 cmExemplarG(vec2 rel, float c, float dataFloor, float grad) {
     if (u_exPresent < 0.5) return vec3(0.0);
     vec2 w = rel + u_camXZ;
 
@@ -334,9 +393,21 @@ vec3 cmExemplar(vec2 rel, float c, float dataFloor) {
     float wb = cmExRedundancy(lb, dataFloor) * CM_EX_FINE_W;
 
     vec3 acc = vec3(0.0);
-    if (wa > 0.0) acc += wa * cmExemplarTap(w, la, c, CM_EX_ROT_A);
-    if (wb > 0.0) acc += wb * cmExemplarTap(w, lb, c, CM_EX_ROT_B);
+    if (wa > 0.0) acc += wa * cmExemplarTap(w, la, c, CM_EX_ROT_A, grad);
+    if (wb > 0.0) acc += wb * cmExemplarTap(w, lb, c, CM_EX_ROT_B, grad);
     return acc;
+}
+
+// Height and gradient — the fragment stage, which shades from the gradient.
+vec3 cmExemplar(vec2 rel, float c, float dataFloor) {
+    return cmExemplarG(rel, c, dataFloor, 1.0);
+}
+
+// Height alone. The vertex stage reads nothing else, and cmSurface is evaluated
+// up to five times per vertex for the morph band, so skipping the eight
+// gradient taps there is most of the cost of going bicubic.
+float cmExemplarH(vec2 rel, float c, float dataFloor) {
+    return cmExemplarG(rel, c, dataFloor, 0.0).x;
 }
 
 // How much detail this part of the world wants.

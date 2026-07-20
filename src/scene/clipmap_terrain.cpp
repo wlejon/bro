@@ -203,7 +203,10 @@ void ClipmapTerrain::pushStaticUniforms() {
     auto set = [&](const char* n, std::initializer_list<float> v) {
         node_->setCustomShaderUniform(n, static_cast<int>(v.size()), v.begin());
     };
+    // Both are re-pushed every update once altitude is known; these are the
+    // unzoomed values, so a terrain that is never updated still draws.
     set("u_cellSize", {cfg_.cellSize});
+    set("u_cellScale", {1.0f});
     // K = N/4 — see the derivation in clipmap.vert.glsl.
     set("u_invK", {4.0f / static_cast<float>(cfg_.resolution)});
     set("u_heightScale", {cfg_.heightScale});
@@ -213,6 +216,7 @@ void ClipmapTerrain::pushStaticUniforms() {
     set("u_detailRelief", {cfg_.detailRelief});
     set("u_detailGain", {cfg_.detailGain});
     set("u_detailOctaves", {static_cast<float>(cfg_.detailOctaves)});
+    set("u_planetRadius", {cfg_.planetRadius});
 }
 
 void ClipmapTerrain::pushLayerUniforms() {
@@ -482,6 +486,91 @@ void ClipmapTerrain::update(float camX, float camY, float camZ) {
         : 0.0f;   // 0 disables the term; the geometry limit still applies
     node_->setCustomShaderUniform("u_pixelScale", 1, &scale);
 
+    // ZOOM THE STACK WITH ALTITUDE — why the world stops having an edge.
+    //
+    // The ring stack's reach is c0 * (N/2) * 2^(L-1), a CONSTANT. At 8 m cells
+    // that is 524 km, which is a horizon from the ground and a plate of land
+    // floating in the sky from 280 km up. Adding levels would fix the reach and
+    // cost triangles forever; instead, re-read the same rings at a coarser c0.
+    //
+    // The choice is not a tuning knob — there is exactly one scale that costs
+    // nothing. cmCellSize returns max(cGeo, cAA), and cGeo's floor is c0. So
+    // raising c0 changes NOTHING anywhere cAA already exceeds it, and cAA is
+    // smallest directly under the eye, where it is
+    //     aa = |camY - groundY| * pixelScale * CM_PIXELS_PER_CELL.
+    // Take the largest power of two with c0*2^k <= aa and the inequality holds
+    // at every point in the stack (cAA only grows with distance). The rendered
+    // surface is therefore IDENTICAL, and the extent is 2^k times larger: the
+    // rings we drop were drawing sub-pixel triangles under the camera.
+    //
+    // From 280 km up, aa is ~540 m against an 8 m cell — six levels of the
+    // stack were being spent on detail finer than the framebuffer could show.
+    //
+    // Power-of-two steps keep every level's snap grid nested (buildGeometry
+    // relies on it) and keep the mip pyramid aligned.
+    //
+    // THE HYSTERESIS IS LOAD-BEARING, not polish. A step changes farDistance,
+    // and an app that sizes its height data from farDistance answers by
+    // re-cutting and re-uploading a layer — megabytes, plus mipmap generation.
+    // So a step has to be RARE, and the thing being compared is noisy: aa is
+    // driven by height above the TERRAIN, and terrain height under a camera
+    // crossing the world at 13 km/s swings hundreds of metres per frame. With
+    // the band at 10% that noise walked back and forth across a threshold and
+    // re-uploaded the layer every frame, which reads as a hard lock.
+    //
+    // Stepping up at 2.5x and down at 0.8x leaves a 1.56x band between them,
+    // far wider than the ground can jitter in a frame. The cost of the wider
+    // band is only that the stack sometimes carries a finer c0 than it strictly
+    // needs — that is, less reach than is free, never a visible change.
+    // AND NEVER REACH PAST THE HORIZON. On a planet the zoom has a second upper
+    // bound that has nothing to do with pixels: ground beyond sqrt(2Rh+h^2) is
+    // behind the curve, so rings that extend past it draw geometry that bends
+    // below the eye ray and is never seen — while still obliging the app to
+    // generate height data across the whole footprint. That was the actual cost
+    // driver: from the deck, reach was 524 km against a 5 km horizon, a factor
+    // of a hundred in radius and ten thousand in area, all of it invisible.
+    //
+    // The bound is horizon(eye) + horizon(highest ground) — see
+    // coverageDistance, which is the same rule and the number the app sizes its
+    // data from. Height above SEA LEVEL: a camera on a summit sees much further
+    // than one on a plain, and measuring from the ground underfoot cannot tell
+    // them apart.
+    //
+    // It enters as a SECOND TARGET, not as a clamp after the fact. Both targets
+    // are noisy — the pixel one through the ground underfoot, the horizon one
+    // through maxHeight_, which is recomputed on every setHeightLayer — so a
+    // clamp applied downstream of the band would be a threshold with no
+    // hysteresis at all, and would close exactly the loop the band exists to
+    // open: sizing a layer from farDistance moves maxHeight_, which moves the
+    // cap, which moves farDistance, which re-uploads the layer. Taking the min
+    // of the two targets and running the result through the one band means
+    // every step, from either cause, has to clear 1.56x to fire.
+    //
+    // The cost is that cellScale_ may sit up to 2.5x past the horizon bound for
+    // the frames before a step fires, i.e. some invisible geometry and a wider
+    // data request. That is the same trade the band already makes in the other
+    // direction, and it is bounded and transient where the re-upload loop was
+    // neither.
+    constexpr float kPixelsPerCell = 1.5f;   // == CM_PIXELS_PER_CELL
+    if (scale > 0.0f) {
+        const float aa = std::abs(camY - groundY) * scale * kPixelsPerCell;
+        float want = aa / cfg_.cellSize;
+        if (cfg_.planetRadius > 0.0f) {
+            const float peak  = std::max(maxHeight_ - cfg_.seaLevel, 0.0f);
+            const float reach = horizonDistance(camY - cfg_.seaLevel)
+                              + horizonDistance(peak);
+            const float unit  = cfg_.cellSize * static_cast<float>(cfg_.resolution / 2)
+                              * std::exp2(static_cast<float>(cfg_.levels - 1));
+            if (unit > 0.0f) want = std::min(want, reach / unit);
+        }
+        if (want >= cellScale_ * 2.5f)        cellScale_ *= 2.0f;
+        else if (want < cellScale_ * 0.8f)    cellScale_ *= 0.5f;
+        cellScale_ = std::clamp(cellScale_, 1.0f, std::max(1.0f, cfg_.maxCellScale));
+    }
+    const float c0 = cfg_.cellSize * cellScale_;
+    node_->setCustomShaderUniform("u_cellSize", 1, &c0);
+    node_->setCustomShaderUniform("u_cellScale", 1, &cellScale_);
+
     // Cull margin, not "disable culling". Frustum culling cannot see GLSL
     // displacement, and this node's baked AABB is a flat sheet at y = 0 in an
     // object space parked at the eye — everything the shader emits is outside
@@ -496,7 +585,7 @@ void ClipmapTerrain::update(float camX, float camY, float camZ) {
     // that has it, and it should still drop out when the camera looks away.
     const float vertical = std::max(std::abs(maxHeight_ - camY),
                                     std::abs(minHeight_ - camY));
-    const float snapSlop = cfg_.cellSize * std::exp2(static_cast<float>(cfg_.levels));
+    const float snapSlop = c0 * std::exp2(static_cast<float>(cfg_.levels));
     // Detail rides on top of the layer range, so it widens the vertical span.
     // Octave i contributes detailRelief * lambda0 * (gain/2)^i at most, and the
     // slope modulator only scales that down, so the series bounds it.

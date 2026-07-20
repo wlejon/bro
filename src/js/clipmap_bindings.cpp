@@ -216,6 +216,10 @@ JSValue createClipmapTerrainJS(JSContext* ctx, scene::SceneGraph* graph,
         cfg.heightScale = (float)qjsbind::get_prop_number(ctx, opts, "heightScale", cfg.heightScale);
         cfg.seaLevel    = (float)qjsbind::get_prop_number(ctx, opts, "seaLevel", cfg.seaLevel);
         cfg.snowLine    = (float)qjsbind::get_prop_number(ctx, opts, "snowLine", cfg.snowLine);
+        cfg.maxCellScale =
+            (float)qjsbind::get_prop_number(ctx, opts, "maxCellScale", cfg.maxCellScale);
+        cfg.planetRadius =
+            (float)qjsbind::get_prop_number(ctx, opts, "planetRadius", cfg.planetRadius);
         cfg.detailWavelength =
             (float)qjsbind::get_prop_number(ctx, opts, "detailWavelength", cfg.detailWavelength);
         cfg.detailRelief =
@@ -276,11 +280,41 @@ void ClipmapBindings::install(JSContext* ctx) {
             return self->terrain ? self->terrain->vertexCount() : 0;
         })
         .get("farDistance", [](CW* self) -> double {
-            if (!self->terrain) return 0.0;
-            const auto& c = self->terrain->config();
-            // Outer half-extent of the coarsest ring.
-            return (double)c.cellSize * (c.resolution / 2) *
-                   std::pow(2.0, c.levels - 1);
+            // Outer half-extent of the coarsest ring. NOT a constant: update()
+            // zooms the stack with altitude, so read this every frame — it is
+            // both the camera's far plane and the radius the app must keep
+            // height data across.
+            return self->terrain ? (double)self->terrain->farDistance() : 0.0;
+        })
+        .get("cellScale", [](CW* self) -> double {
+            return self->terrain ? (double)self->terrain->cellScale() : 1.0;
+        })
+        .get("planetRadius", [](CW* self) -> double {
+            return self->terrain ? (double)self->terrain->config().planetRadius : 0.0;
+        })
+        .method("coverageDistance", [](CW* self, double eyeAboveSeaLevel) -> double {
+            // The radius the APP must supply height data across:
+            // horizon(eye) + horizon(highest ground). Sizing a layer from
+            // farDistance instead is what makes the data bill quadratic in a
+            // reach that is mostly behind the planet. See
+            // ClipmapTerrain::coverageDistance.
+            //
+            // ABOVE SEA LEVEL, not above the ground underfoot: a camera on a
+            // summit sees much further than one on a plain, and height above
+            // the ground cannot tell the two apart. Passing height above ground
+            // here under-sizes the request and cuts the world off short.
+            return self->terrain
+                ? (double)self->terrain->coverageDistance((float)eyeAboveSeaLevel)
+                : 0.0;
+        })
+        .method("horizonDistance", [](CW* self, double eyeAboveSeaLevel) -> double {
+            // How far the surface is visible from that height, measured from
+            // sea level as above. Infinite on a flat world, so JS sees
+            // Infinity — sizing data from it is then correctly an error rather
+            // than a silently huge number.
+            return self->terrain
+                ? (double)self->terrain->horizonDistance((float)eyeAboveSeaLevel)
+                : 0.0;
         });
 }
 

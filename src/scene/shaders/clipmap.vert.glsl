@@ -49,16 +49,20 @@
 // the morph's neighbour taps go through this, so "what the coarser ring would
 // interpolate" is built from the same function the coarser ring evaluates.
 float cmSurface(vec2 wxz) {
-    float c  = cmCellSize(wxz);
-    float h0 = cmHeight(wxz, c);
-    float hx = cmHeight(wxz + vec2(c, 0.0), c);
-    float hz = cmHeight(wxz + vec2(0.0, c), c);
-    float slope  = cmSlopeFrom(h0, hx, hz, c);
+    float c      = cmCellSize(wxz);
     vec2  rel    = wxz - u_camXZ;
     float floorM = cmDataFloor(wxz);
+    // Same spacing rule as the fragment stage — see the long comment there.
+    // Both stages have to agree on the slope, since it modulates the detail
+    // that displaces here and shades there.
+    float e  = max(c, floorM);
+    float h0 = cmHeight(wxz, c);
+    float hx = cmHeight(wxz + vec2(e, 0.0), c);
+    float hz = cmHeight(wxz + vec2(0.0, e), c);
+    float slope = cmSlopeFrom(h0, hx, hz, e);
     float amp;
     return h0 + cmDetailWeight(slope) * cmDetail(rel, c, floorM, amp).x
-              + cmExemplar(rel, c, floorM).x;
+              + cmExemplarH(rel, c, floorM);
 }
 
 // Cells from the level's outer edge over which the morph runs. The overlap
@@ -72,6 +76,12 @@ const float CM_MORPH_RAMP = 9.0;    // ramping over this many more
 
 void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
     float level = uv.x;                    // baked per ring
+
+    // ZOOM. The ring offsets in the VBO are baked at the CONFIGURED cell size;
+    // u_cellScale re-reads that same geometry at a coarser one, which is how
+    // the stack's reach grows with altitude without a rebuild or a triangle.
+    // u_cellSize is already the scaled c0, so cl is consistent with cmCellSize.
+    pos.xz     *= u_cellScale;
     float cl    = u_cellSize * exp2(level);
 
     // Each level snaps its own centre to its own grid, so the terrain does not
@@ -121,6 +131,14 @@ void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
     }
 
     vec2 rel = wxz - u_camXZ;
-    pos    = vec3(rel.x, h - u_camY, rel.y);
+    pos    = cmCurve(rel, h);              // bend the chart onto the planet
     normal = vec3(0.0, 1.0, 0.0);          // real normal is per-pixel
+
+    // Hand the FLAT chart offset to the fragment stage. It used to reconstruct
+    // it from vWorldPos.xz, which worked only while the two were the same
+    // thing; cmCurve foreshortens horizontally, so inverting it per pixel would
+    // mean an asin and would still be wrong by the h/R term. rel is affine
+    // within a triangle, so the interpolator carries it exactly. The level and
+    // parity that arrived in uv have both been consumed by now.
+    uv = rel;
 }
