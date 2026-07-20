@@ -125,6 +125,12 @@ public:
     // surface is lit by the sky it is under rather than by a constant; with it
     // off it is whatever setAmbient was given. Every uAmbient upload site reads
     // this rather than ambientColor_, so the two can never disagree.
+    // The solar irradiance the atmosphere actually integrates with.
+    const float* effectiveSunColor() const {
+        return atmosphere_.sunColorExplicit ? atmosphere_.sunColor
+                                            : sunIrradiance_;
+    }
+
     const float* effectiveAmbient() const {
         return atmosphere_.enabled ? skyAmbient_ : ambientColor_;
     }
@@ -1137,6 +1143,11 @@ private:
     // Sky irradiance, recomputed once a frame from atmosphere_ and the camera
     // altitude. Cached against the inputs it depends on so a static camera
     // under a static sun costs nothing.
+    // Solar irradiance taken from the scene's brightest directional light,
+    // so the atmosphere scatters the same sun the surface is lit by.
+    float sunIrradiance_[3] = {3.0f, 2.94f, 2.85f};
+    void  updateSunIrradiance(const std::vector<LightNode*>& lights);
+
     float skyAmbient_[3] = {0.03f, 0.03f, 0.03f};
     float skyAmbientCamY_ = 1e30f;
     void  updateSkyAmbient(float camY);

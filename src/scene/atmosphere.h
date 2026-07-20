@@ -17,6 +17,10 @@ struct AtmosphereParams {
     // arbitrary, so this is really "how bright is the sky" and is meant to be
     // set alongside the directional light that casts the matching shadows.
     float sunColor[3] = {20.0f, 20.0f, 20.0f};
+    // False means sunColor TRACKS the scene's brightest directional light
+    // (colour * intensity), which is what keeps inscatter and lit ground on
+    // one scale. Set only when an app passes sunColor explicitly.
+    bool  sunColorExplicit = false;
 
     float planetRadius = 6371000.0f;   // metres
     float thickness    = 100000.0f;    // metres of air above the surface

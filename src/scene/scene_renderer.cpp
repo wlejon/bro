@@ -463,6 +463,15 @@ void SceneRenderer::render3D() {
         if (lights.empty()) { fallback.push_back(&implicitSun_); }
         const auto& activeLights = lights.empty() ? fallback : lights;
 
+        // The atmosphere scatters the SAME sun that lights the surface, so its
+        // solar irradiance is taken from the brightest directional light rather
+        // than configured separately. Two independent numbers for one sun is a
+        // calibration trap: set the atmosphere's higher than the light's and
+        // inscatter outruns lit ground, so distant terrain washes to exactly sky
+        // colour and the world appears to end at a "second horizon" well short
+        // of the geometry. Only an explicit sunColor overrides this.
+        updateSunIrradiance(activeLights);
+
         // Shadow caster pass renders into the shadow atlas (its own FBO).
         // Returns with FBO unbound; the mesh pass below rebinds meshFBO_.
         prepareShadows(activeLights);

@@ -637,6 +637,11 @@ JSValue js_sg_setAtmosphere(JSContext* ctx, JSValueConst this_val, int argc,
     bromath::Vec3 sc = jsGetVec3(ctx, o, "sunColor",
                                  a.sunColor[0], a.sunColor[1], a.sunColor[2]);
     a.sunColor[0] = sc.x; a.sunColor[1] = sc.y; a.sunColor[2] = sc.z;
+    // An explicit sunColor pins the atmosphere to it; otherwise it tracks the
+    // scene's directional light so inscatter and lit ground share one scale.
+    JSValue scProbe = JS_GetPropertyStr(ctx, o, "sunColor");
+    a.sunColorExplicit = !JS_IsUndefined(scProbe);
+    JS_FreeValue(ctx, scProbe);
 
     bromath::Vec3 br = jsGetVec3(ctx, o, "betaRayleigh",
                                  a.betaR[0], a.betaR[1], a.betaR[2]);

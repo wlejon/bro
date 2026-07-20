@@ -365,7 +365,7 @@ void SceneRenderer::uploadAtmosphereUniforms(GLuint prog) {
         if (l >= 0) glUniform1f(l, v);
     };
     u3("uAtmSunDir", sd);
-    u3("uAtmSunColor", a.sunColor);
+    u3("uAtmSunColor", effectiveSunColor());
     u3("uAtmBetaR", a.betaR);
     u1("uAtmPlanetRadius", a.planetRadius);
     u1("uAtmThickness", a.thickness);
@@ -405,7 +405,7 @@ void SceneRenderer::uploadAtmLocs(const AtmLocs& L) const {
     if (L.camPos >= 0) glUniform3f(L.camPos, eye.x, eye.y, eye.z);
     if (L.sunDir >= 0)
         glUniform3f(L.sunDir, a.sunDir[0] / len, a.sunDir[1] / len, a.sunDir[2] / len);
-    if (L.sunColor     >= 0) glUniform3fv(L.sunColor, 1, a.sunColor);
+    if (L.sunColor     >= 0) glUniform3fv(L.sunColor, 1, effectiveSunColor());
     if (L.betaR        >= 0) glUniform3fv(L.betaR, 1, a.betaR);
     if (L.planetRadius >= 0) glUniform1f(L.planetRadius, a.planetRadius);
     if (L.thickness    >= 0) glUniform1f(L.thickness, a.thickness);
@@ -416,17 +416,33 @@ void SceneRenderer::uploadAtmLocs(const AtmLocs& L) const {
     if (L.seaLevel     >= 0) glUniform1f(L.seaLevel, a.seaLevel);
 }
 
+// View->world rotation for the fullscreen sky passes (skybox + atmosphere),
+// packed as a GLSL mat3 for glUniformMatrix3fv(transpose = GL_FALSE).
+//
+// viewMatrix_ is world->view, column-major, with at(row, col) = data[col*4+row].
+// The rotation block is orthonormal, so view->world is its TRANSPOSE: mat3
+// column 0 must be the world-space camera-right vector, which is view's ROW 0
+// -- at(0,0), at(0,1), at(0,2).
+//
+// Packing view's COLUMNS here instead uploads world->view under a uniform named
+// uViewToWorld, which inverts the sky's rotation. Pure yaw merely counter-spins
+// it; yaw combined with pitch tilts the sky's horizon off the terrain's, by an
+// amount that changes as the camera turns -- two horizons that will not stay on
+// one axis. Both sky passes read this one helper so they cannot drift apart.
+static void packViewToWorld(const bromath::Mat4& view, float out[9]) {
+    out[0] = view.at(0, 0); out[1] = view.at(0, 1); out[2] = view.at(0, 2);
+    out[3] = view.at(1, 0); out[4] = view.at(1, 1); out[5] = view.at(1, 2);
+    out[6] = view.at(2, 0); out[7] = view.at(2, 1); out[8] = view.at(2, 2);
+}
+
 void SceneRenderer::renderAtmospherePass() {
     if (!atmosphere_.enabled) return;
     if (!graph_.cameraIsPerspective_) return;   // ortho has no view direction
     ensureAtmospherePipeline();
     if (!atmProgram_) return;
 
-    float viewToWorld[9] = {
-        graph_.viewMatrix_.at(0, 0), graph_.viewMatrix_.at(1, 0), graph_.viewMatrix_.at(2, 0),
-        graph_.viewMatrix_.at(0, 1), graph_.viewMatrix_.at(1, 1), graph_.viewMatrix_.at(2, 1),
-        graph_.viewMatrix_.at(0, 2), graph_.viewMatrix_.at(1, 2), graph_.viewMatrix_.at(2, 2),
-    };
+    float viewToWorld[9];
+    packViewToWorld(graph_.viewMatrix_, viewToWorld);
 
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
@@ -484,18 +500,8 @@ void SceneRenderer::renderSkyboxPass() {
     ensureSkyboxPipeline();
     if (!skyboxProgram_) return;
 
-    // viewMatrix_ stores world→view (column-major). The 3x3 rotation block
-    // is orthonormal (lookAt produces it), so its transpose is its inverse
-    // and gives view→world. Pass that to the shader as a mat3.
-    float viewToWorld[9] = {
-        graph_.viewMatrix_.at(0, 0), graph_.viewMatrix_.at(1, 0), graph_.viewMatrix_.at(2, 0),
-        graph_.viewMatrix_.at(0, 1), graph_.viewMatrix_.at(1, 1), graph_.viewMatrix_.at(2, 1),
-        graph_.viewMatrix_.at(0, 2), graph_.viewMatrix_.at(1, 2), graph_.viewMatrix_.at(2, 2),
-    };
-    // GLSL mat3 columns are: column 0 = view→world basis vector for view-X.
-    // viewMatrix's row 0 (m[0..2][0]) is the world-space camera-right vector,
-    // which is exactly view-X→world. So packing rows-of-view as cols-of-m3
-    // gives the transpose we want. The pack above does that.
+    float viewToWorld[9];
+    packViewToWorld(graph_.viewMatrix_, viewToWorld);
 
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
@@ -620,6 +626,24 @@ bool SceneRenderer::runPrefilterInto(GLuint srcCube, int srcSize,
     return ok;
 }
 
+// Solar irradiance for the atmosphere, taken from the brightest directional
+// light in the scene so the air scatters the same sun the surface is lit by.
+void SceneRenderer::updateSunIrradiance(const std::vector<LightNode*>& lights) {
+    const LightNode* best = nullptr;
+    float bestPower = -1.0f;
+    for (const LightNode* l : lights) {
+        if (!l || l->kind() != LightNode::Kind::Directional) continue;
+        const bromath::Vec3& c = l->color();
+        const float power = (c.x + c.y + c.z) * (1.0f / 3.0f) * l->intensity();
+        if (power > bestPower) { bestPower = power; best = l; }
+    }
+    if (!best) return;                 // no directional light: keep the last value
+    const bromath::Vec3& c = best->color();
+    sunIrradiance_[0] = c.x * best->intensity();
+    sunIrradiance_[1] = c.y * best->intensity();
+    sunIrradiance_[2] = c.z * best->intensity();
+}
+
 // Refresh the cached sky ambient. Skipped entirely when the atmosphere is off,
 // and when neither the altitude nor the parameters have moved — a static camera
 // under a static sun recomputes nothing.
@@ -629,7 +653,10 @@ void SceneRenderer::updateSkyAmbient(float camY) {
     // integration, but a climb into thin air very much is.
     if (std::abs(camY - skyAmbientCamY_) < 25.0f) return;
     skyAmbientCamY_ = camY;
-    computeSkyAmbient(atmosphere_, camY, skyAmbient_);
+    AtmosphereParams a = atmosphere_;
+    const float* sun = effectiveSunColor();
+    a.sunColor[0] = sun[0]; a.sunColor[1] = sun[1]; a.sunColor[2] = sun[2];
+    computeSkyAmbient(a, camY, skyAmbient_);
 }
 
 }  // namespace bro::scene
