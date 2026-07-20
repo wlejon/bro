@@ -323,6 +323,18 @@ private:
     // (uProbe*). Embedded in both MeshDrawLocs and InstancedDrawLocs so the
     // per-draw probe upload (uploadProbeForDraw) works against either
     // pipeline. Queried by queryProbeLocs (scene_renderer_probes.cpp).
+    // Atmosphere uniform locations. Grouped because every mesh-family program
+    // needs the identical set, and resolving them one field at a time in each
+    // pipeline is how the two drift apart.
+    struct AtmLocs {
+        GLint enabled = -1, camPos = -1, sunDir = -1, sunColor = -1,
+              betaR = -1, planetRadius = -1, thickness = -1, betaM = -1,
+              mieG = -1, scaleHeightR = -1, scaleHeightM = -1, seaLevel = -1;
+    };
+
+    void resolveAtmLocs(GLuint prog, AtmLocs& a) const;
+    void uploadAtmLocs(const AtmLocs& a) const;
+
     struct ProbeLocs {
         GLint enabled = -1, specular = -1, worldToLocal = -1,
               localToWorld = -1, pos = -1, boxSize = -1, boxProjection = -1,
@@ -348,6 +360,7 @@ private:
               windDir = -1, windStrength = -1, windTime = -1, windFreq = -1,
               ssrMask = -1;
         ProbeLocs probe;
+        AtmLocs   atm;
     };
     // Per-program uniform locations for the instanced mesh pipeline
     // (everything renderInstancedMeshNode + the per-frame globals touch).
@@ -366,6 +379,7 @@ private:
               fogCamY = -1,
               atlasGrid = -1, alphaCutoff = -1, ssrMask = -1;
         ProbeLocs probe;
+        AtmLocs   atm;
     };
     struct MeshProgramLocs;  // lighting/shadow/IBL locs — defined below
 

@@ -6,6 +6,7 @@
 // used by all of them, so they live here as inline functions rather than a
 // file-local static in any one unit.
 
+#include "atmosphere.glsl.h"   // kAtmosphereSrc
 #include <glad/gl.h>
 
 #include <cassert>
@@ -48,6 +49,15 @@ std::string makeMeshInstancedFragSrc();
 // userVertex/userFragment call in main) and replace the `//__USER_CHUNK__`
 // marker line with the user's GLSL chunk. Empty chunk returns the source
 // unchanged (the marker stays an inert comment).
+// The atmosphere model, spliced into a mesh fragment shader so aerial
+// perspective integrates exactly what the sky pass integrates. Always injected
+// rather than made a program variant: the atmosphere can be toggled at runtime,
+// and a variant key would double the mesh program matrix for a branch the GPU
+// takes uniformly. uAtmEnabled gates it at zero cost when it is off.
+inline std::string withAtmosphere(const char* src) {
+    return insertAfterVersion(src ? src : "", std::string(kAtmosphereSrc) + "\n");
+}
+
 inline std::string withUserChunk(const char* src, const std::string& chunk,
                                  const char* defineName) {
     std::string s(src ? src : "");

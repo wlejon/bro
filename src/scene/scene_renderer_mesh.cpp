@@ -65,6 +65,7 @@ void SceneRenderer::queryMeshUniformLocs(GLuint prog, MeshDrawLocs& d,
     d.fogHeightFalloff = U("uFogHeightFalloff");
     d.fogStartDist   = U("uFogStartDist");
     d.fogCamY        = U("uFogCamY");
+    resolveAtmLocs(prog, d.atm);
     d.ambient        = U("uAmbient");
     d.windDir        = U("uWindDir");
     d.windStrength   = U("uWindStrength");
@@ -103,7 +104,8 @@ void SceneRenderer::queryMeshUniformLocs(GLuint prog, MeshDrawLocs& d,
 void SceneRenderer::ensureMeshPipeline() {
     if (meshProgram_) return;
 
-    meshProgram_ = linkProgram(kMeshVertSrc, kMeshFragSrc, "Mesh program");
+    const std::string meshFs = withAtmosphere(kMeshFragSrc);
+    meshProgram_ = linkProgram(kMeshVertSrc, meshFs.c_str(), "Mesh program");
     if (!meshProgram_) return;
 
     queryMeshUniformLocs(meshProgram_, meshDraw_, meshLocs_);
@@ -114,7 +116,8 @@ void SceneRenderer::ensureSkinnedMeshPipeline() {
 
     std::string vsSrc = withSkinnedDefine(kMeshVertSrc);
     meshSkinnedProgram_ =
-        linkProgram(vsSrc.c_str(), kMeshFragSrc, "Skinned mesh program");
+        linkProgram(vsSrc.c_str(), withAtmosphere(kMeshFragSrc).c_str(),
+                    "Skinned mesh program");
     if (!meshSkinnedProgram_) return;
 
     queryMeshUniformLocs(meshSkinnedProgram_, meshSkinnedDraw_, meshSkinnedLocs_);
@@ -175,12 +178,14 @@ SceneRenderer::CustomProgramEntry* SceneRenderer::ensureCustomProgram(
     switch (target) {
         case CustomShaderTarget::Static:
             vsSrc = withUserChunk(kMeshVertSrc, vertexChunk, "CUSTOM_VERTEX");
-            fsSrc = withUserChunk(kMeshFragSrc, fragmentChunk, "CUSTOM_FRAGMENT");
+            fsSrc = withAtmosphere(withUserChunk(kMeshFragSrc, fragmentChunk,
+                                                 "CUSTOM_FRAGMENT").c_str());
             break;
         case CustomShaderTarget::Skinned: {
             std::string skinned = withSkinnedDefine(kMeshVertSrc);
             vsSrc = withUserChunk(skinned.c_str(), vertexChunk, "CUSTOM_VERTEX");
-            fsSrc = withUserChunk(kMeshFragSrc, fragmentChunk, "CUSTOM_FRAGMENT");
+            fsSrc = withAtmosphere(withUserChunk(kMeshFragSrc, fragmentChunk,
+                                                 "CUSTOM_FRAGMENT").c_str());
             break;
         }
         case CustomShaderTarget::Instanced: {

@@ -375,6 +375,46 @@ void SceneRenderer::uploadAtmosphereUniforms(GLuint prog) {
     u1("uAtmSeaLevel", a.seaLevel);
 }
 
+void SceneRenderer::resolveAtmLocs(GLuint prog, AtmLocs& a) const {
+    auto U = [&](const char* n) { return glGetUniformLocation(prog, n); };
+    a.enabled      = U("uAtmEnabled");
+    a.camPos       = U("uAtmCamPos");
+    a.sunDir       = U("uAtmSunDir");
+    a.sunColor     = U("uAtmSunColor");
+    a.betaR        = U("uAtmBetaR");
+    a.planetRadius = U("uAtmPlanetRadius");
+    a.thickness    = U("uAtmThickness");
+    a.betaM        = U("uAtmBetaM");
+    a.mieG         = U("uAtmMieG");
+    a.scaleHeightR = U("uAtmScaleHeightR");
+    a.scaleHeightM = U("uAtmScaleHeightM");
+    a.seaLevel     = U("uAtmSeaLevel");
+}
+
+void SceneRenderer::uploadAtmLocs(const AtmLocs& L) const {
+    const AtmosphereParams& a = atmosphere_;
+    if (L.enabled >= 0) glUniform1i(L.enabled, a.enabled ? 1 : 0);
+    if (!a.enabled) return;   // the rest is dead weight when the branch is off
+
+    float len = std::sqrt(a.sunDir[0] * a.sunDir[0] + a.sunDir[1] * a.sunDir[1]
+                        + a.sunDir[2] * a.sunDir[2]);
+    if (!(len > 0.0f)) len = 1.0f;
+
+    const bromath::Vec3& eye = graph_.cameraEye();
+    if (L.camPos >= 0) glUniform3f(L.camPos, eye.x, eye.y, eye.z);
+    if (L.sunDir >= 0)
+        glUniform3f(L.sunDir, a.sunDir[0] / len, a.sunDir[1] / len, a.sunDir[2] / len);
+    if (L.sunColor     >= 0) glUniform3fv(L.sunColor, 1, a.sunColor);
+    if (L.betaR        >= 0) glUniform3fv(L.betaR, 1, a.betaR);
+    if (L.planetRadius >= 0) glUniform1f(L.planetRadius, a.planetRadius);
+    if (L.thickness    >= 0) glUniform1f(L.thickness, a.thickness);
+    if (L.betaM        >= 0) glUniform1f(L.betaM, a.betaM);
+    if (L.mieG         >= 0) glUniform1f(L.mieG, a.mieG);
+    if (L.scaleHeightR >= 0) glUniform1f(L.scaleHeightR, a.scaleHeightR);
+    if (L.scaleHeightM >= 0) glUniform1f(L.scaleHeightM, a.scaleHeightM);
+    if (L.seaLevel     >= 0) glUniform1f(L.seaLevel, a.seaLevel);
+}
+
 void SceneRenderer::renderAtmospherePass() {
     if (!atmosphere_.enabled) return;
     if (!graph_.cameraIsPerspective_) return;   // ortho has no view direction

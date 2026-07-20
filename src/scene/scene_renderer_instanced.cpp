@@ -29,7 +29,7 @@ using bromath::Mat4;
 // scene_renderer_internal.h — the custom-shader path (ensureCustomProgram,
 // scene_renderer_mesh.cpp) splices user fragment chunks into this source.
 std::string makeMeshInstancedFragSrc() {
-    std::string s = kMeshFragSrc;
+    std::string s = withAtmosphere(kMeshFragSrc);
     // A miss on any anchor below means mesh.frag was edited without updating
     // this derivation — the injection would silently be skipped and instanced
     // tint/atlas would silently break, so make it loud (and fatal in Debug).
@@ -127,6 +127,7 @@ void SceneRenderer::queryInstancedUniformLocs(GLuint prog, InstancedDrawLocs& d,
     d.fogHeightFalloff = U("uFogHeightFalloff");
     d.fogStartDist   = U("uFogStartDist");
     d.fogCamY        = U("uFogCamY");
+    resolveAtmLocs(prog, d.atm);
     d.ambient        = U("uAmbient");
     d.atlasGrid      = U("uAtlasGrid");
     d.alphaCutoff    = U("uAlphaCutoff");

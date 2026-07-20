@@ -300,6 +300,7 @@ void SceneRenderer::uploadMeshGlobals(const MeshDrawLocs& L) {
     glUniform1f(L.fogHeightFalloff, fogHeightFalloff_);
     glUniform1f(L.fogStartDist, fogStartDist_);
     glUniform1f(L.fogCamY, graph_.cameraEye_.y);
+    uploadAtmLocs(L.atm);
     glUniform3f(L.ambient, ambientColor_[0], ambientColor_[1], ambientColor_[2]);
     if (L.windDir      >= 0) glUniform3fv(L.windDir, 1, windDir_);
     if (L.windStrength >= 0) glUniform1f(L.windStrength, windStrength_);

@@ -45,6 +45,9 @@ uniform sampler2D uAOMap;        // R channel
 uniform sampler2D uEmissiveMap;  // RGB, multiplied by uEmissive * uEmissiveColor
 uniform int       uReceivesShadow;
 
+uniform int  uAtmEnabled;    // 1 = aerial perspective replaces uFogColor
+uniform vec3 uAtmCamPos;     // camera in world space (vWorldPos is relative)
+
 uniform float uFogStart;
 uniform float uFogEnd;
 uniform vec3 uFogColor;
@@ -274,6 +277,36 @@ float sampleShadow(int slot, vec3 posCamRel) {
 // (density decays with height when uFogHeightFalloff > 0, no fog closer than
 // uFogStartDist), else the legacy linear start/end ramp when uFogEnd > 0.
 // Returns 0 when fog is fully off.
+// Aerial perspective: the air between the eye and this surface, integrated
+// with the SAME model the sky pass uses (atmosphere.glsl, spliced in above).
+//
+// This is what a single fogColor could never be. Haze is not one colour — it is
+// the sky seen through a shorter path, so it is blue away from the sun and warm
+// toward it, and it reddens with the sun rather than staying grey. Sharing the
+// integration with the sky is the point: a ridge on the horizon fades into
+// exactly the colour of the sky immediately behind it, with no seam to tune.
+//
+// Far fewer steps than the sky pass, because this runs on every lit fragment
+// rather than on background pixels. The segment is short and mostly at one
+// altitude, so it needs far less resolution to look right.
+const int ATM_AERIAL_STEPS     = 4;
+const int ATM_AERIAL_SUN_STEPS = 2;
+
+vec3 applyAerialPerspective(vec3 color) {
+    float dist = length(vWorldPos);        // camera-relative, so this is the ray
+    if (dist <= 0.0) return color;
+
+    vec3 rd = vWorldPos / dist;
+    vec3 ro = vec3(uAtmCamPos.x,
+                   uAtmCamPos.y - uAtmSeaLevel + uAtmPlanetRadius,
+                   uAtmCamPos.z);
+
+    vec3 tr;
+    vec3 inscatter = atmScatter(ro, rd, dist, ATM_AERIAL_STEPS,
+                                ATM_AERIAL_SUN_STEPS, tr);
+    return color * tr + inscatter;
+}
+
 float fogFactorFor(float camDist, float worldY) {
     if (uFogDensity > 0.0) {
         float d = max(camDist - uFogStartDist, 0.0);
@@ -322,10 +355,16 @@ void main() {
 
     if (uUnlit == 1) {
         vec3 color = baseColor;
-        float fogFactorU = fogFactorFor(vCamDist, vWorldPos.y + uFogCamY);
-        if (fogFactorU > 0.0) {
-            color = mix(color, uFogColor, fogFactorU);
-            baseAlpha = mix(baseAlpha, 0.0, fogFactorU);
+        // Aerial perspective supersedes fog rather than adding to it — both
+        // model the same air, and running them together double-counts it.
+        if (uAtmEnabled == 1) {
+            color = applyAerialPerspective(color);
+        } else {
+            float fogFactorU = fogFactorFor(vCamDist, vWorldPos.y + uFogCamY);
+            if (fogFactorU > 0.0) {
+                color = mix(color, uFogColor, fogFactorU);
+                baseAlpha = mix(baseAlpha, 0.0, fogFactorU);
+            }
         }
         // SSR mask phase: unlit surfaces don't reflect (mask 0). Coverage
         // is restored by the SSR pass right after the opaque passes.
@@ -558,10 +597,14 @@ void main() {
 
     // Fog (applied in linear space; tonemap runs after). Exponential-squared
     // height fog or the legacy linear ramp — see fogFactorFor.
-    float fogFactor = fogFactorFor(vCamDist, vWorldPos.y + uFogCamY);
-    if (fogFactor > 0.0) {
-        color = mix(color, uFogColor, fogFactor);
-        baseAlpha = mix(baseAlpha, 0.0, fogFactor);
+    if (uAtmEnabled == 1) {
+        color = applyAerialPerspective(color);
+    } else {
+        float fogFactor = fogFactorFor(vCamDist, vWorldPos.y + uFogCamY);
+        if (fogFactor > 0.0) {
+            color = mix(color, uFogColor, fogFactor);
+            baseAlpha = mix(baseAlpha, 0.0, fogFactor);
+        }
     }
 
     FragColor = vec4(color, baseAlpha);
