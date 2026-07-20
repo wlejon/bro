@@ -232,10 +232,16 @@ static void flushTex(MeshNode::PendingTex& p, GLuint& glTex) {
 }
 
 bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
-                                      int height, const float* data) {
+                                      int height, const float* data,
+                                      bool mipmap) {
     const bool release = (width <= 0 || height <= 0 || !data);
     for (auto& t : userTextures_) {
         if (t.name != name) continue;
+        // A full upload replaces the whole image, so any sub-rect writes
+        // staged against the OLD contents are superseded — dropping them here
+        // is what keeps the flush order (full first, then subs) equivalent to
+        // the order the setters were called in.
+        t.subUpdates.clear();
         if (release) {
             t.data.clear();
             t.data.shrink_to_fit();
@@ -244,6 +250,7 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
             t.data.assign(data, data + (size_t)width * (size_t)height);
             t.w = width;
             t.h = height;
+            t.mipmap = mipmap;
         }
         t.dirty = true;
         return true;
@@ -255,37 +262,87 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
     t.data.assign(data, data + (size_t)width * (size_t)height);
     t.w = width;
     t.h = height;
+    t.mipmap = mipmap;
     t.dirty = true;
     userTextures_.push_back(std::move(t));
     return true;
+}
+
+bool MeshNode::updateCustomShaderTexture(const std::string& name, int x, int y,
+                                         int width, int height,
+                                         const float* data) {
+    if (width <= 0 || height <= 0 || !data) {
+        LOG_WARN("updateShaderTexture('%s'): non-positive extent or no data "
+                 "(ignored)", name.c_str());
+        return false;
+    }
+    for (auto& t : userTextures_) {
+        if (t.name != name) continue;
+        // Bound against the staged extent, not the GL texture: the slot may
+        // not have flushed yet, and t.w/t.h are the dimensions it WILL have.
+        if (t.w <= 0 || t.h <= 0) {
+            LOG_WARN("updateShaderTexture('%s'): slot has no dimensions yet — "
+                     "set the full texture first (ignored)", name.c_str());
+            return false;
+        }
+        if (x < 0 || y < 0 || x + width > t.w || y + height > t.h) {
+            LOG_WARN("updateShaderTexture('%s'): rect %dx%d at (%d,%d) is "
+                     "outside the %dx%d texture (ignored)",
+                     name.c_str(), width, height, x, y, t.w, t.h);
+            return false;
+        }
+        UserTexture::SubUpdate s;
+        s.data.assign(data, data + (size_t)width * (size_t)height);
+        s.x = x; s.y = y; s.w = width; s.h = height;
+        t.subUpdates.push_back(std::move(s));
+        return true;
+    }
+    LOG_WARN("updateShaderTexture('%s'): no such sampler slot (ignored)",
+             name.c_str());
+    return false;
 }
 
 void MeshNode::clearCustomShaderTexture(const std::string& name) {
     setCustomShaderTexture(name, 0, 0, nullptr);
 }
 
-// Upload/release one staged user sampler slot. Single-channel float, LINEAR
-// + CLAMP_TO_EDGE and no mipmaps — bilinear sampling of a heightfield with no
-// wrap-around at the edges is exactly what a raymarcher needs.
+// Upload/release one staged user sampler slot, then apply any staged
+// sub-rectangle writes. Single-channel float with CLAMP_TO_EDGE — bilinear
+// sampling of a heightfield with no wrap-around at the edges is exactly what
+// a raymarcher needs. Minification is trilinear only for mipmapped slots;
+// a mip-filtered min filter without a chain would render the texture
+// incomplete and sample black.
 static void flushUserTex(MeshNode::UserTexture& t) {
-    if (!t.dirty) return;
-    if (t.w > 0 && t.h > 0 && !t.data.empty()) {
+    if (!t.dirty && t.subUpdates.empty()) return;
+    if (t.w > 0 && t.h > 0 && (t.dirty ? !t.data.empty() : t.tex != 0)) {
         if (!t.tex) glGenTextures(1, &t.tex);
         glBindTexture(GL_TEXTURE_2D, t.tex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, t.w, t.h, 0,
-                     GL_RED, GL_FLOAT, t.data.data());
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        if (t.dirty) {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, t.w, t.h, 0,
+                         GL_RED, GL_FLOAT, t.data.data());
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                            t.mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            t.data.clear();
+            t.data.shrink_to_fit();
+        }
+        for (const auto& s : t.subUpdates) {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, s.x, s.y, s.w, s.h,
+                            GL_RED, GL_FLOAT, s.data.data());
+        }
+        // One generate covers the full upload and every sub-rect: a partial
+        // write invalidates the levels above it, and GL has no partial
+        // regenerate.
+        if (t.mipmap) glGenerateMipmap(GL_TEXTURE_2D);
         glBindTexture(GL_TEXTURE_2D, 0);
-        t.data.clear();
-        t.data.shrink_to_fit();
-    } else if (t.tex) {
+    } else if (t.dirty && t.tex) {
         glDeleteTextures(1, &t.tex);
         t.tex = 0;
     }
+    t.subUpdates.clear();
     t.dirty = false;
 }
 

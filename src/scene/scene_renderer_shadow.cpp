@@ -835,6 +835,11 @@ void SceneRenderer::renderShadowPass() {
                         glUniform1f(entry->windMask, mesh->windMask());
                     uploadUserUniforms(entry->prog, entry->userLocs,
                                        mesh->customShader());
+                    // Same sampler bindings as the color pass: a vertex chunk
+                    // that displaces from a height texture must read the same
+                    // texels here, or the caster's depth silhouette won't
+                    // match the geometry the color pass actually draws.
+                    uploadUserTextures(entry->prog, entry->userLocs, mesh);
                 } else {
                     glUniformMatrix4fv(fallbackMVP, 1, GL_FALSE, mvp.data);
                 }

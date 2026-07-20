@@ -21,6 +21,7 @@
 #include <bromesh/primitives/primitives.h>
 #include <bromesh/manipulation/normals.h>
 
+#include <climits>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -289,11 +290,24 @@ JSValue js_node_setShaderUniform(JSContext* ctx, JSValueConst this_val, int argc
     return JS_DupValue(ctx, this_val);
 }
 
-// setShaderTexture(name, { width, height, data: Float32Array } | null) —
+// setShaderTexture(name, { width, height, data: Float32Array,
+//                          mipmap?, x?, y? } | null) —
 // bind a single-channel float texture to a `uniform sampler2D u_*` declared
 // by the custom shader. Uploaded as R32F / GL_RED / GL_FLOAT with LINEAR
-// filtering and CLAMP_TO_EDGE, no mipmaps, so a heightfield raymarcher gets
-// bilinear samples and no wrap-around at the borders. Pass null to release.
+// filtering and CLAMP_TO_EDGE, so a heightfield raymarcher gets bilinear
+// samples and no wrap-around at the borders. Pass null to release.
+//
+// `mipmap: true` generates a mip chain and switches minification to
+// trilinear — required for a shader that calls textureLod() at a fractional
+// level, which needs two populated levels to blend between.
+//
+// `x`/`y` turn the call into a sub-rectangle update of the EXISTING texture
+// (glTexSubImage2D, no reallocation, mips regenerated when the slot is
+// mipmapped). Presence of either key is the discriminator: a full upload has
+// no position, and a sub-update is meaningless without one. An out-of-bounds
+// rect, or one against a slot that was never sized, is rejected rather than
+// clamped — a silently clipped write would corrupt the region the caller
+// believes it just wrote.
 //
 // User samplers occupy texture units starting ABOVE every unit the material
 // uber-shader uses (baseColor 0, shadow atlas 1, IBL 2/3/4, normal 5, MR 6,
@@ -334,6 +348,13 @@ JSValue js_node_setShaderTexture(JSContext* ctx, JSValueConst this_val, int argc
         return JS_ThrowTypeError(ctx,
             "setShaderTexture: width and height must be positive");
 
+    // INT_MIN can't be produced by a caller who meant a coordinate, so it
+    // distinguishes "no x/y given" (full upload) from an explicit x: 0.
+    constexpr int kNoPos = INT_MIN;
+    const int sx = qjsbind::get_prop_int(ctx, argv[1], "x", kNoPos);
+    const int sy = qjsbind::get_prop_int(ctx, argv[1], "y", kNoPos);
+    const bool isSub = (sx != kNoPos || sy != kNoPos);
+
     JSValue dataVal = JS_GetPropertyStr(ctx, argv[1], "data");
     size_t off = 0, len = 0;
     JSValue ab = JS_GetTypedArrayBuffer(ctx, dataVal, &off, &len, nullptr);
@@ -350,8 +371,21 @@ JSValue js_node_setShaderTexture(JSContext* ctx, JSValueConst this_val, int argc
             "setShaderTexture: data must hold width*height floats "
             "(%d*%d, got %d)", tw, th, (int)(len / sizeof(float)));
 
-    if (!meshNode->setCustomShaderTexture(
-            name, tw, th, reinterpret_cast<const float*>(base + off)))
+    const float* pixels = reinterpret_cast<const float*>(base + off);
+
+    if (isSub) {
+        // Rejection is reported by return value (logged native-side), not by
+        // throwing: a streaming caller updating a tile per frame shouldn't
+        // have to guard every call once the slot exists.
+        meshNode->updateCustomShaderTexture(name,
+                                            sx == kNoPos ? 0 : sx,
+                                            sy == kNoPos ? 0 : sy,
+                                            tw, th, pixels);
+        return JS_DupValue(ctx, this_val);
+    }
+
+    const bool mipmap = qjsbind::get_prop_bool(ctx, argv[1], "mipmap", false);
+    if (!meshNode->setCustomShaderTexture(name, tw, th, pixels, mipmap))
         return JS_ThrowTypeError(ctx,
             "setShaderTexture: too many sampler uniforms on this node "
             "(max %d, GL 3.3 guarantees only %d combined texture units and "

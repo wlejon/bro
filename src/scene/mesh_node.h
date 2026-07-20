@@ -333,21 +333,49 @@ public:
     /// flushPendingTextures() consumes on the GL thread; `tex` is the owned
     /// GL name (0 until first upload / after release).
     struct UserTexture {
+        /// A staged sub-rectangle write (glTexSubImage2D at the next flush).
+        /// Kept as a queue rather than folded into `data` because the slot
+        /// does not keep a CPU mirror of the texture after upload — there is
+        /// nothing to fold into.
+        struct SubUpdate {
+            std::vector<float> data;
+            int x = 0, y = 0, w = 0, h = 0;
+        };
+
         std::string name;            // carries the `u_` prefix
         std::vector<float> data;     // staged R32F pixels (cleared on upload)
         int w = 0;
         int h = 0;
         bool dirty = false;
+        // Generate a mip chain and use trilinear minification. Off by default:
+        // a heightfield raymarcher wants the level-0 samples it staged, and
+        // the chain costs both memory and a per-upload generate pass.
+        bool mipmap = false;
         GLuint tex = 0;
+        std::vector<SubUpdate> subUpdates;
     };
 
     /// Stage a single-channel float texture for the named user sampler.
     /// `data` must hold width*height floats; pass data=nullptr (or a zero
-    /// extent) to release the slot. Returns false only when a NEW name would
-    /// exceed kMaxUserTextures — existing names always succeed. Safe off the
-    /// GL thread: the upload happens in flushPendingTextures().
+    /// extent) to release the slot. `mipmap` opts the slot into a generated
+    /// mip chain with GL_LINEAR_MIPMAP_LINEAR minification, which is what a
+    /// shader sampling textureLod() at a FRACTIONAL level needs — without it
+    /// GL has no second level to blend toward and every level reads as 0.
+    /// Returns false only when a NEW name would exceed kMaxUserTextures —
+    /// existing names always succeed. Safe off the GL thread: the upload
+    /// happens in flushPendingTextures().
     bool setCustomShaderTexture(const std::string& name, int width, int height,
-                                const float* data);
+                                const float* data, bool mipmap = false);
+
+    /// Stage a sub-rectangle write into an EXISTING slot, avoiding the
+    /// reallocation (and mip-chain rebuild from scratch) a full re-upload
+    /// costs. `data` must hold width*height floats laid out row-major for the
+    /// sub-rect alone. Returns false — logging, never writing partially or
+    /// out of bounds — when the slot is unknown, has no dimensions yet, or
+    /// the rect falls outside them. Safe off the GL thread; bounds are
+    /// checked against the CPU-side extent, which outlives the staged bytes.
+    bool updateCustomShaderTexture(const std::string& name, int x, int y,
+                                   int width, int height, const float* data);
     /// Release the named slot (GL delete happens at the next flush).
     void clearCustomShaderTexture(const std::string& name);
     const std::vector<UserTexture>& customShaderTextures() const {

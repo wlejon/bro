@@ -1964,16 +1964,39 @@ class SceneNode {
    * instanced); requires a shader installed via setShader.
    *
    * Format contract: the data uploads as **R32F** (`GL_R32F` / `GL_RED` /
-   * `GL_FLOAT`) with **LINEAR** min+mag filtering, **CLAMP_TO_EDGE** wrap on
-   * both axes, and **no mipmaps**. Sampling in GLSL gives a bilinearly
-   * interpolated float in `.r` — which is what a heightfield raymarcher
-   * wants: smooth between texels, no wrap-around at the borders. `data`
-   * must hold exactly width*height floats; a short array throws.
+   * `GL_FLOAT`) with **LINEAR** magnification and **CLAMP_TO_EDGE** wrap on
+   * both axes. Sampling in GLSL gives a bilinearly interpolated float in
+   * `.r` — which is what a heightfield raymarcher wants: smooth between
+   * texels, no wrap-around at the borders. `data` must hold exactly
+   * width*height floats; a short array throws.
    *
    * Upload is staged, not immediate: the bytes are copied on the calling
    * thread and uploaded on the GL thread at the start of the next frame
    * that draws this node. The caller's Float32Array may be reused or
    * dropped as soon as the call returns.
+   *
+   * **Mipmaps** (`mipmap: true`, off by default): generates the full chain
+   * and switches minification to `LINEAR_MIPMAP_LINEAR`. Needed whenever the
+   * shader calls `textureLod(u_tex, uv, lod)` with a FRACTIONAL lod and
+   * expects GL to blend the two bracketing levels — without a chain there is
+   * only level 0, and every lod > 0 reads as 0. Also what you want for a
+   * texture minified in screen space (a heightfield on a distant mesh), at
+   * the cost of ~33% more texture memory and a generate pass per upload.
+   * The flag is per slot and sticks until the next full upload changes it.
+   *
+   * **Sub-rectangle updates** (`x` / `y`): passing either key updates just
+   * that region of the existing texture via `glTexSubImage2D` instead of
+   * reallocating — `width`/`height` then describe the RECT, and `data` holds
+   * the rect's width*height floats row-major. The mip chain is preserved
+   * (regenerated after the write when the slot is mipmapped). Use this for
+   * streaming edits — a terrain brush, a repainted tile — where a full
+   * re-upload of a large texture per frame is the actual cost.
+   *
+   * Unlike the full-upload path, a rejected sub-update does not throw: it
+   * logs a warning and is ignored. Rejected when the slot does not exist,
+   * has never been given dimensions, or the rect falls outside them —
+   * never a partial or out-of-bounds write. Queue order is preserved, and a
+   * full upload supersedes any sub-updates staged before it.
    *
    * Texture-unit budget: the material uber-shader owns units 0-9 (baseColor
    * 0, shadow atlas 1, IBL irradiance/prefilter/BRDF 2/3/4, normal 5,
@@ -2006,15 +2029,28 @@ class SceneNode {
    *     uniforms: { u_extent: [1024, 1024] },
    *   });
    *   dome.setShaderTexture('u_height', { width: N, height: N, data: height });
+   *
+   *   // repaint one 16x16 tile without touching the rest
+   *   dome.setShaderTexture('u_height',
+   *     { x: 32, y: 48, width: 16, height: 16, data: tile });
+   *
    *   dome.setShaderTexture('u_height', null);   // release
    *
+   * The shadow pass binds these samplers exactly as the color pass does, so
+   * a vertex chunk that displaces geometry by sampling one casts the
+   * matching displaced silhouette.
+   *
    * @param {string} name - must use the `u_` prefix
-   * @param {?{width: number, height: number, data: Float32Array}} tex -
-   *        width*height floats, or null to release the slot
+   * @param {?{width: number, height: number, data: Float32Array,
+   *           mipmap?: boolean, x?: number, y?: number}} tex -
+   *        width*height floats, or null to release the slot. `mipmap`
+   *        generates a mip chain; `x`/`y` make it a sub-rectangle update
+   *        (then width/height describe the rect).
    * @returns {SceneNode} this
    * @throws {TypeError} non-`u_` name, non-mesh node, no shader installed,
    *         non-positive extent, data shorter than width*height, or more
-   *         than 6 sampler slots on one node
+   *         than 6 sampler slots on one node. Sub-rect rejections warn and
+   *         are ignored rather than throwing.
    */
   setShaderTexture(name, tex) {}
 
