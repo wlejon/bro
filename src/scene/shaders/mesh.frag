@@ -286,11 +286,25 @@ float sampleShadow(int slot, vec3 posCamRel) {
 // integration with the sky is the point: a ridge on the horizon fades into
 // exactly the colour of the sky immediately behind it, with no seam to tune.
 //
-// Far fewer steps than the sky pass, because this runs on every lit fragment
-// rather than on background pixels. The segment is short and mostly at one
-// altitude, so it needs far less resolution to look right.
-const int ATM_AERIAL_STEPS     = 4;
-const int ATM_AERIAL_SUN_STEPS = 2;
+// Step counts SCALE WITH RAY LENGTH, and top out at what the sky pass uses.
+//
+// A fixed low count was the original choice, on the reasoning that this runs
+// per lit fragment and the segment is "short and mostly at one altitude". That
+// reasoning holds for a room and fails completely for terrain that reaches
+// hundreds of kilometres: four samples cannot resolve the density falloff along
+// a 100 km ray, so the ridge and the sky pixel just above it — the same
+// integral, sampled six times more finely on one side — resolve to visibly
+// different colours. The ridge then detaches and reads as a pale cloud instead
+// of as distant ground, which is exactly the seam this shared model exists to
+// prevent.
+//
+// Cost stays low where it always was: a fragment a few hundred metres away
+// still takes the minimum. Only pixels genuinely tens of kilometres out pay
+// the full count, and those are the ones that were wrong.
+const int   ATM_AERIAL_MIN_STEPS = 4;
+const int   ATM_AERIAL_MAX_STEPS = 24;   // matches SKY_STEPS
+const int   ATM_AERIAL_SUN_STEPS = 4;
+const float ATM_AERIAL_STEP_KM   = 3000.0;   // metres of ray per extra sample
 
 vec3 applyAerialPerspective(vec3 color) {
     float dist = length(vWorldPos);        // camera-relative, so this is the ray
@@ -299,9 +313,12 @@ vec3 applyAerialPerspective(vec3 color) {
     vec3 rd = vWorldPos / dist;
     vec3 ro = atmOrigin(uAtmCamPos);
 
+    int steps = int(clamp(dist / ATM_AERIAL_STEP_KM,
+                          float(ATM_AERIAL_MIN_STEPS),
+                          float(ATM_AERIAL_MAX_STEPS)));
+
     vec3 tr;
-    vec3 inscatter = atmScatter(ro, rd, dist, ATM_AERIAL_STEPS,
-                                ATM_AERIAL_SUN_STEPS, tr);
+    vec3 inscatter = atmScatter(ro, rd, dist, steps, ATM_AERIAL_SUN_STEPS, tr);
     return color * tr + inscatter;
 }
 
