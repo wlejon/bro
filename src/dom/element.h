@@ -327,6 +327,16 @@ public:
         imageNaturalHeight_ = h;
     }
 
+    // Pre-layout <select> selection. selectedIndex is a DOM property scripts
+    // read and write before any frame, but the ElSelect control that stores it
+    // is not created until the first layout pass. This carries a value set
+    // before then; ElSelect::initSelectedIndex() adopts it when the control is
+    // created. Without it, a selectedIndex assignment before layout is silently
+    // lost — the setter no-ops and the getter reads back -1.
+    bool hasPendingSelectedIndex() const { return pendingSelIndexSet_; }
+    int  pendingSelectedIndex() const { return pendingSelIndex_; }
+    void setPendingSelectedIndex(int i) { pendingSelIndex_ = i; pendingSelIndexSet_ = true; }
+
     void setInputControl(std::unique_ptr<layout::ElInput> ctrl);
     void setTextareaControl(std::unique_ptr<layout::ElTextarea> ctrl);
     void setSelectControl(std::unique_ptr<layout::ElSelect> ctrl);
@@ -451,6 +461,9 @@ private:
     std::unique_ptr<layout::ElInput> inputControl_;
     std::unique_ptr<layout::ElTextarea> textareaControl_;
     std::unique_ptr<layout::ElSelect> selectControl_;
+    // selectedIndex set before the layout control exists — see the accessors.
+    int  pendingSelIndex_ = 0;
+    bool pendingSelIndexSet_ = false;
     std::unique_ptr<layout::ElSvg> svgControl_;
     // <img> probed intrinsic size — see imageNaturalWidth().
     std::string imageProbedSrc_;

@@ -134,5 +134,40 @@ assert(q.value === 'x', 'pre-layout: setter matches by attribute value');
 q.value = '';
 assert(q.value === '', "pre-layout: value='' re-selects the placeholder");
 
+// =========================================================================
+// selectedIndex round-trips BEFORE the select is ever laid out.
+// Regression: selection lived only on the layout-side ElSelect control, which
+// isn't created until the first layout pass, so a pre-layout `selectedIndex =`
+// silently no-opped and the getter read back -1. A viz that builds a <select>,
+// sets selectedIndex, and reads it back in the same tick got -1, which then
+// indexed a typed array as subarray(-n, 0) — an empty buffer — three layers
+// downstream. The property is DOM state and must answer without a frame.
+// =========================================================================
+const r = document.createElement('select');
+r.innerHTML = '<option>zero</option><option>one</option><option>two</option>';
+// Default with options present and none `selected` is 0, not -1.
+assert(r.selectedIndex === 0, 'pre-layout default selectedIndex is 0, got: ' + r.selectedIndex);
+r.selectedIndex = 2;
+assert(r.selectedIndex === 2, 'pre-layout selectedIndex set 2 -> read 2, got: ' + r.selectedIndex);
+r.selectedIndex = 1;
+assert(r.selectedIndex === 1, 'pre-layout selectedIndex set 1 -> read 1, got: ' + r.selectedIndex);
+// The value assigned before layout survives into the laid-out control.
+root.appendChild(r);
+flush();
+assert(r.selectedIndex === 1, 'the pre-layout selection is adopted on layout, got: ' + r.selectedIndex);
+
+// The viz's exact pattern: wipe, append options, set index 0, read it back.
+const v = document.createElement('select');
+document.body.appendChild(v);
+v.innerHTML = '';
+for (const label of ['ch0', 'ch1', 'ch2']) {
+    const o = document.createElement('option');
+    o.textContent = label;
+    v.appendChild(o);
+}
+v.selectedIndex = Math.min(0, v.options.length - 1);
+assert(v.selectedIndex === 0, 'viz pattern: set 0 after append reads back 0, got: ' + v.selectedIndex);
+document.body.removeChild(v);
+
 // Cleanup
 root.innerHTML = '';

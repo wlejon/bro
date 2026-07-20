@@ -1361,7 +1361,20 @@ static JSValue js_element_get_selectedIndex(JSContext* ctx, JSValueConst this_va
     if (!el) return JS_NewInt32(ctx, -1);
     if (auto* sel = el->selectControl())
         return JS_NewInt32(ctx, sel->selectedIndex());
-    return JS_NewInt32(ctx, -1);
+    // No layout control yet (the <select> hasn't been laid out): answer from DOM
+    // state so a value set before the first frame round-trips, and so the
+    // default matches what the control will adopt when it is created.
+    if (el->tagName() != "SELECT") return JS_NewInt32(ctx, -1);
+    if (el->hasPendingSelectedIndex())
+        return JS_NewInt32(ctx, el->pendingSelectedIndex());
+    int idx = -1, i = 0;
+    for (auto* child : el->children()) {
+        if (child->tagName() != "OPTION") continue;
+        if (idx < 0) idx = 0;                      // first option is the default
+        if (child->hasAttribute("selected")) { idx = i; break; }
+        ++i;
+    }
+    return JS_NewInt32(ctx, idx);
 }
 
 static JSValue js_element_set_selectedIndex(JSContext* ctx, JSValueConst this_val,
@@ -1369,10 +1382,14 @@ static JSValue js_element_set_selectedIndex(JSContext* ctx, JSValueConst this_va
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    int idx;
+    JS_ToInt32(ctx, &idx, val);
     if (auto* sel = el->selectControl()) {
-        int idx;
-        JS_ToInt32(ctx, &idx, val);
         sel->setSelectedIndex(idx);
+    } else if (el->tagName() == "SELECT") {
+        // No layout control yet; remember the assignment so the control adopts
+        // it on creation and the getter reflects it immediately.
+        el->setPendingSelectedIndex(idx);
     }
     return JS_UNDEFINED;
 }

@@ -48,6 +48,12 @@ std::vector<ElSelect::Option> ElSelect::getOptions() const {
 
 void ElSelect::initSelectedIndex() {
     if (!elem_) return;
+    // A value assigned through element.selectedIndex before this control existed
+    // wins over the markup default — the script spoke last.
+    if (elem_->hasPendingSelectedIndex()) {
+        selectedIndex_ = elem_->pendingSelectedIndex();
+        return;
+    }
     int idx = 0;
     for (auto* child : elem_->children()) {
         if (child->tagName() != "OPTION") continue;
