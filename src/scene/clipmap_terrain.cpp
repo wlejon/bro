@@ -155,7 +155,16 @@ void ClipmapTerrain::buildGeometry() {
                 // The level index rides in aUV.x; the vertex chunk reads it to
                 // derive this level's cell size and snap grid.
                 m.uvs.push_back(static_cast<float>(l));
-                m.uvs.push_back(0.0f);
+                // aUV.y is the morph parity — which axes this vertex is OFF
+                // the next coarser level's grid on. Level l snaps its centre
+                // to a 2*c_l grid and its vertices sit at centre + (i - N/2)*
+                // c_l with N/2 even, so the vertex lands on the coarser
+                // level's grid exactly when the index is even. The coarsest
+                // level has no coarser neighbour, so it never morphs.
+                const int parity = (l + 1 < L)
+                                 ? ((i & 1) | ((j & 1) << 1))
+                                 : 0;
+                m.uvs.push_back(static_cast<float>(parity));
                 // Supplied rather than generated: MeshNode::setMesh runs
                 // bromesh::generateTangents on any mesh with UVs+normals and
                 // none, which on a quarter-million triangles is pure waste for

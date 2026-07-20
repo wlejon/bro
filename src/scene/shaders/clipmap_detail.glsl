@@ -248,6 +248,11 @@ const float CM_EX_ROT_A  = 0.31;
 const float CM_EX_ROT_B  = 2.24;
 const float CM_EX_FINE_W = 0.55;
 
+// The fractional mip the coarse tap lands on — diagnostics only.
+float cmExemplarLod(float c) {
+    return max(0.0, log2(max(c, 1e-6) / (u_exLambda / u_exN)));
+}
+
 vec3 cmExemplarTap(vec2 wxz, float lambda, float c, float rot) {
     float cs = cos(rot), sn = sin(rot);
     mat2  R  = mat2(cs, -sn, sn, cs);
@@ -258,13 +263,35 @@ vec3 cmExemplarTap(vec2 wxz, float lambda, float c, float rot) {
     // everything else at this distance is.
     float texel = lambda / u_exN;
     float lod   = max(0.0, log2(max(c, 1e-6) / texel));
-    float step  = exp2(lod) / u_exN;          // one sampled texel, in repeats
+
+    // THE GRADIENT NEEDS A BLURRIER TAP THAN THE HEIGHT DOES.
+    //
+    // A texture fetch is bilinear, so the surface it defines is C0 but not C1:
+    // its slope is constant along x within a texel cell and steps at every cell
+    // boundary. A central difference one texel wide reproduces that step almost
+    // exactly, so the derivative comes out as a grid of near-constant plates on
+    // the exemplar's texel lattice — rotated with the tap, and growing with
+    // distance because lod does. Multiplied by u_exLambda (twice the coarsest
+    // layer's cell, so kilometres) a relative kink of a few percent becomes a
+    // large absolute slope step, and the fragment stage builds its NORMAL from
+    // this. That is the shingling that made close mountainsides read as
+    // overlapping translucent sheets, and it is why the artifact needed the
+    // exemplar present, ignored the ring resolution, and left the height field
+    // itself looking perfectly smooth.
+    //
+    // Taking the derivative one mip coarser, over two of THAT level's texels,
+    // spreads the difference across several cells of the level the height came
+    // from, so the steps average out instead of being sampled. The step stays
+    // continuous in lod — rounding the level (ceil/floor) would trade the
+    // plates for concentric bands at every integer lod.
+    float lodG  = lod + 1.0;
+    float step  = 2.0 * exp2(lodG) / u_exN;
 
     float h  = textureLod(u_exemplar, u, lod).r;
-    float hR = textureLod(u_exemplar, u + vec2(step, 0.0), lod).r;
-    float hL = textureLod(u_exemplar, u - vec2(step, 0.0), lod).r;
-    float hU = textureLod(u_exemplar, u + vec2(0.0, step), lod).r;
-    float hD = textureLod(u_exemplar, u - vec2(0.0, step), lod).r;
+    float hR = textureLod(u_exemplar, u + vec2(step, 0.0), lodG).r;
+    float hL = textureLod(u_exemplar, u - vec2(step, 0.0), lodG).r;
+    float hU = textureLod(u_exemplar, u + vec2(0.0, step), lodG).r;
+    float hD = textureLod(u_exemplar, u - vec2(0.0, step), lodG).r;
 
     // H = lambda * E(u), u = R*w/lambda  =>  dH/dw = R^T * dE/du, so the
     // gradient is scale-free and the lambda cancels exactly.

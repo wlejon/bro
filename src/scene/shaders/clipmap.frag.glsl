@@ -58,10 +58,26 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     normal = n;
 
     float wy     = h0 + dw * d.x + ex.x;
-    // Normalised against the amplitude actually summed — the band's top moves
-    // with the data floor, so u_detailWavelength no longer bounds d.x and
-    // dividing by it would drive cavity to +-1 across all distant ground.
-    float cavity = clamp(d.x / max(dw * dAmp, 1e-3), -1.0, 1.0);
+
+    // Cavity is "how far below the local detail mean this point sits", so the
+    // two sides of the ratio have to be the SAME quantity. dAmp is the summed
+    // amplitude of the live octaves — the bound on |d.x| — and d.x is what that
+    // sum actually came to. The slope weight dw scales both when the height is
+    // built (see wy above), so carrying it on the denominator alone inflated
+    // the ratio by up to 1/CM_DETAIL_FLOOR, i.e. 8x on flat ground.
+    //
+    // The floor mattered more. Where every octave has faded under the pixel
+    // limit, d.x and dAmp go to zero TOGETHER and the ratio is 0/0; pinning the
+    // denominator at a constant turned that into sign(d.x) — a hard binary mask
+    // that multiplied albedo by 0.88 or 1.0 with nothing in between. Wherever
+    // the exemplar was present the noise band starts at u_detailWavelength
+    // instead of eight octaves above it, so that band died early and the mask
+    // covered whole mountainsides: the plates that read as overlapping
+    // translucent sheets. Fading the term out with the amplitude that feeds it
+    // leaves distant ground with NO cavity, which is the honest answer, rather
+    // than with a two-tone one.
+    float conf   = smoothstep(0.0, 0.25, dAmp);
+    float cavity = conf * clamp(d.x / max(dAmp, 1e-4), -1.0, 1.0);
 
     CmMaterial m;
     cmMaterialAt(rel, wy, n, cs, cavity, m);
@@ -69,4 +85,22 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     baseColor = m.albedo;
     metallic  = 0.0;
     roughness = m.roughness;
+
+#ifdef CM_DEBUG_EXEMPLAR
+    // Unlit visualisations, for bisecting shading artifacts. Define the macro
+    // at the top of this file and rebuild. Scales are chosen to be readable,
+    // not calibrated — check for saturation before concluding a field is
+    // smooth, which is a mistake this block has already caused once.
+    //   1 exemplar height, banded every 20 m   2 exemplar gradient
+    //   3 exemplar mip level, banded            4 cavity
+    //   5 shading normal                        6 albedo
+    baseColor = vec3(0.0);
+    if (CM_DEBUG_EXEMPLAR == 1)      emissive = vec3(fract(ex.x / 20.0));
+    else if (CM_DEBUG_EXEMPLAR == 2) emissive = vec3(0.5 + 4.0 * ex.y,
+                                                     0.5 + 4.0 * ex.z, 0.5);
+    else if (CM_DEBUG_EXEMPLAR == 3) emissive = vec3(fract(cmExemplarLod(cs)));
+    else if (CM_DEBUG_EXEMPLAR == 4) emissive = vec3(0.5 + 0.5 * cavity);
+    else if (CM_DEBUG_EXEMPLAR == 5) emissive = 0.5 + 0.5 * n;
+    else                             emissive = m.albedo;
+#endif
 }
