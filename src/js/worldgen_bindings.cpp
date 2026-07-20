@@ -4,6 +4,7 @@
 #include <qjsbind/qjsbind.h>
 
 #include "js/async_job.h"
+#include "js/runtime.h"  // Runtime::checkException — route callback throws to the funnel
 
 #include <brodiffusion/terrain/world_pipeline.h>
 #include <brotensor/runtime.h>
@@ -485,20 +486,16 @@ JSValue js_world_stage(JSContext* ctx, JSValueConst this_val,
         if (!cancelled && error.empty()) {
             if (job->hasDone) {
                 JSValue res = makeStageResult(c, job->out);
-                if (JS_IsException(res)) {
-                    JS_FreeValue(c, JS_GetException(c));
-                } else {
+                if (!Runtime::checkException(c, res)) {
                     JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 1, &res);
-                    if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
-                    JS_FreeValue(c, r);
+                    if (!Runtime::checkException(c, r)) JS_FreeValue(c, r);
+                    JS_FreeValue(c, res);
                 }
-                JS_FreeValue(c, res);
             }
         } else if (!cancelled && job->hasError) {
             JSValue e = JS_NewString(c, error.empty() ? "stage failed" : error.c_str());
             JSValue r = JS_Call(c, job->onError, JS_UNDEFINED, 1, &e);
-            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
-            JS_FreeValue(c, r);
+            if (!Runtime::checkException(c, r)) JS_FreeValue(c, r);
             JS_FreeValue(c, e);
         }
         if (job->hasDone)  JS_FreeValue(c, job->onDone);
@@ -586,21 +583,17 @@ JSValue js_world_elevation(JSContext* ctx, JSValueConst this_val,
             if (job->hasDone) {
                 JSValue res = makeElevResult(
                     c, job->out, job->w->pipe->config().native_resolution);
-                if (JS_IsException(res)) {
-                    JS_FreeValue(c, JS_GetException(c));
-                } else {
+                if (!Runtime::checkException(c, res)) {
                     JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 1, &res);
-                    if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
-                    JS_FreeValue(c, r);
+                    if (!Runtime::checkException(c, r)) JS_FreeValue(c, r);
+                    JS_FreeValue(c, res);
                 }
-                JS_FreeValue(c, res);
             }
         } else if (!cancelled && job->hasError) {
             JSValue e = JS_NewString(c, error.empty() ? "elevation failed"
                                                       : error.c_str());
             JSValue r = JS_Call(c, job->onError, JS_UNDEFINED, 1, &e);
-            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
-            JS_FreeValue(c, r);
+            if (!Runtime::checkException(c, r)) JS_FreeValue(c, r);
             JS_FreeValue(c, e);
         }
 
@@ -738,15 +731,13 @@ JSValue js_loadWorld(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv)
                 JSValue e = JS_NewString(c, error.empty() ? "loadWorld failed"
                                                           : error.c_str());
                 JSValue r = JS_Call(c, ls->onError, JS_UNDEFINED, 1, &e);
-                if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
-                JS_FreeValue(c, r);
+                if (!Runtime::checkException(c, r)) JS_FreeValue(c, r);
                 JS_FreeValue(c, e);
             }
         } else if (ls->hasReady) {
             JSValue out = qjsbind::wrap<WorldWrapper>(c, ls->w.release());
             JSValue r = JS_Call(c, ls->onReady, JS_UNDEFINED, 1, &out);
-            if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
-            JS_FreeValue(c, r);
+            if (!Runtime::checkException(c, r)) JS_FreeValue(c, r);
             JS_FreeValue(c, out);
         }
         if (ls->hasReady) JS_FreeValue(c, ls->onReady);

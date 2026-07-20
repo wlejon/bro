@@ -175,6 +175,37 @@ if (bro.worldgen.available === false) {
                 'async stage() delivers the same shape as stageSync');
         }
 
+        // An exception thrown INSIDE an async callback must be reported through
+        // the error funnel (window.onerror), not swallowed. Regression: the
+        // binding's JS_Call sites checked JS_IsException and then discarded the
+        // exception with no log, so a TypeError in onDone froze the caller's
+        // generation chain with zero diagnostic — a one-line app bug read as an
+        // unbounded hang. It must surface, and the async machinery must survive
+        // it (report-and-continue), so a following request still completes.
+        {
+            const prevOnError = (typeof window === 'object') ? window.onerror : undefined;
+            let reported = null;
+            window.onerror = (message) => { reported = String(message); return false; };
+
+            world.stage('elevation', 0, 0, N, N, {
+                onDone: () => { throw new TypeError('boom from onDone'); },
+            });
+            for (let i = 0; i < 600 && !reported; i++) { sleep(100); flush(); }
+            assert(reported, 'a throw inside onDone reached window.onerror');
+            assert(reported.includes('boom from onDone'),
+                'the reported error is the one that was thrown: ' + reported);
+
+            // Report-and-continue: the machinery is not wedged, a later request
+            // still lands.
+            let after = null;
+            world.stage('coarse', 0, 0, N, N, { onDone: (r) => { after = r; } });
+            for (let i = 0; i < 600 && !after; i++) { sleep(100); flush(); }
+            assert(after && after.stage === 'coarse',
+                'the async pipeline survives a throwing callback');
+
+            window.onerror = prevOnError;
+        }
+
         // Unknown stages are refused by name rather than silently defaulting.
         {
             let err = null;
