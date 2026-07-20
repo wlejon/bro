@@ -10,6 +10,8 @@
 #include <cmath>
 
 #include "clipmap_common.glsl.h" // kClipmapCommonSrc
+#include "clipmap_detail.glsl.h"   // kClipmapDetailSrc
+#include "clipmap_material.glsl.h" // kClipmapMaterialSrc
 #include "clipmap.vert.glsl.h"   // kClipmapVertSrc
 #include "clipmap.frag.glsl.h"   // kClipmapFragSrc
 
@@ -57,8 +59,9 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
     // alternative is two copies that must stay byte-identical — a promise
     // rather than a guarantee. If the stages ever disagreed, the surface the
     // fragment shades would stop being the surface the vertex built.
-    const std::string common(kClipmapCommonSrc);
-    node_->setCustomShader(common + kClipmapVertSrc, common + kClipmapFragSrc);
+    const std::string shared = std::string(kClipmapCommonSrc) + kClipmapDetailSrc;
+    node_->setCustomShader(shared + kClipmapVertSrc,
+                           shared + kClipmapMaterialSrc + kClipmapFragSrc);
     node_->setColor(0.40f, 0.44f, 0.36f, 1.0f);
     node_->setMetallic(0.0f);
     node_->setRoughness(0.95f);
@@ -196,6 +199,11 @@ void ClipmapTerrain::pushStaticUniforms() {
     set("u_invK", {4.0f / static_cast<float>(cfg_.resolution)});
     set("u_heightScale", {cfg_.heightScale});
     set("u_seaLevel", {cfg_.seaLevel});
+    set("u_snowLine", {cfg_.snowLine});
+    set("u_detailWavelength", {cfg_.detailWavelength});
+    set("u_detailRelief", {cfg_.detailRelief});
+    set("u_detailGain", {cfg_.detailGain});
+    set("u_detailOctaves", {static_cast<float>(cfg_.detailOctaves)});
 }
 
 void ClipmapTerrain::pushLayerUniforms() {
@@ -281,6 +289,28 @@ void ClipmapTerrain::update(float camX, float camY, float camZ) {
 
     const float camXZ[2] = {camX, camZ};
     node_->setCustomShaderUniform("u_camXZ", 2, camXZ);
+
+    // Anchor the detail lattice near the camera. Snapping in double and
+    // handing the shader both the anchor and the camera's small offset from it
+    // is the whole trick: the shader never has to form a large noise
+    // coordinate, and because the anchor step is an exact multiple of every
+    // octave wavelength, an anchor jump cancels exactly against the offset and
+    // the field does not shift.
+    const double ax = std::floor(static_cast<double>(camX) / kDetailAnchor)
+                    * kDetailAnchor;
+    const double az = std::floor(static_cast<double>(camZ) / kDetailAnchor)
+                    * kDetailAnchor;
+    const float anchor[2] = {static_cast<float>(ax), static_cast<float>(az)};
+    const float offset[2] = {static_cast<float>(camX - ax),
+                             static_cast<float>(camZ - az)};
+    node_->setCustomShaderUniform("u_detailAnchor", 2, anchor);
+    node_->setCustomShaderUniform("u_detailOffset", 2, offset);
+
+    // Height above the ground, not above sea level — see cmCellSize. The base
+    // stack is enough: detail is metres against an altitude term that only
+    // matters at hundreds.
+    const float groundY = baseElevationAt(camX, camZ);
+    node_->setCustomShaderUniform("u_camGroundY", 1, &groundY);
     node_->setCustomShaderUniform("u_camY", 1, &camY);
 
     // World size of one pixel per unit of distance: 2*tan(fovY/2)/height. The
@@ -310,14 +340,18 @@ void ClipmapTerrain::update(float camX, float camY, float camZ) {
     const float vertical = std::max(std::abs(maxHeight_ - camY),
                                     std::abs(minHeight_ - camY));
     const float snapSlop = cfg_.cellSize * std::exp2(static_cast<float>(cfg_.levels));
-    node_->setCullMargin(std::max(vertical, snapSlop));
+    // Detail rides on top of the layer range, so it widens the vertical span.
+    // Octave i contributes detailRelief * lambda0 * (gain/2)^i at most, and the
+    // slope modulator only scales that down, so the series bounds it.
+    const float detail = detailBound();
+    node_->setCullMargin(std::max(vertical + detail, snapSlop));
 }
 
 // ---------------------------------------------------------------------------
 // CPU height query — must agree with the GPU or things fall through the floor
 // ---------------------------------------------------------------------------
 
-float ClipmapTerrain::elevationAt(float x, float z) const {
+float ClipmapTerrain::baseElevationAt(float x, float z) const {
     // Mirrors cmHeight() in the shaders exactly, except that it always samples
     // mip level 0 (bilinear) — there is no CPU mip chain. Same layer order,
     // same coverage weights, same coarse-to-fine blend.
@@ -361,6 +395,104 @@ float ClipmapTerrain::elevationAt(float x, float z) const {
     if (n > 1) { float s = sample(layers_[0], w); h = h + (s - h) * w; }
 
     return cfg_.seaLevel + cfg_.heightScale * h;
+}
+
+// ---------------------------------------------------------------------------
+// CPU mirror of the procedural detail.
+//
+// Mirrors cmDetail() in clipmap_detail.glsl — same hash, same quintic fade,
+// same octave amplitudes — with two deliberate differences:
+//
+//   * No band limit. The shader fades octaves out against the rendered cell
+//     size, a screen-space quantity this query has no business knowing. A
+//     collision query wants the surface as it exists, so every octave counts.
+//     Near the camera the two agree anyway: that is where the rendered cell is
+//     smallest and every octave is at full strength, and near the camera is the
+//     only place anything collides.
+//   * Doubles for the lattice coordinate, which makes the shader's anchoring
+//     trick unnecessary.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+uint32_t detailHash(int32_t cx, int32_t cz) {
+    uint32_t h = static_cast<uint32_t>(cx + 0x2000000) * 0x8da6b343u
+               + static_cast<uint32_t>(cz + 0x2000000) * 0xd8163841u;
+    h ^= h >> 15; h *= 0x2c1b3c6du;
+    h ^= h >> 12; h *= 0x297a2d39u;
+    h ^= h >> 15;
+    return h;
+}
+
+void detailGradient(int32_t cx, int32_t cz, float& gx, float& gz) {
+    const float a = static_cast<float>(detailHash(cx, cz) & 0xffffu)
+                  * (6.2831853f / 65536.0f);
+    gx = std::cos(a);
+    gz = std::sin(a);
+}
+
+float detailNoise(double px, double pz) {
+    const double flx = std::floor(px), flz = std::floor(pz);
+    const auto ix = static_cast<int32_t>(flx);
+    const auto iz = static_cast<int32_t>(flz);
+    const float fx = static_cast<float>(px - flx);
+    const float fz = static_cast<float>(pz - flz);
+
+    const float ux = fx * fx * fx * (fx * (fx * 6.0f - 15.0f) + 10.0f);
+    const float uz = fz * fz * fz * (fz * (fz * 6.0f - 15.0f) + 10.0f);
+
+    auto corner = [&](int dx, int dz) {
+        float gx, gz;
+        detailGradient(ix + dx, iz + dz, gx, gz);
+        return gx * (fx - static_cast<float>(dx))
+             + gz * (fz - static_cast<float>(dz));
+    };
+    const float va = corner(0, 0), vb = corner(1, 0);
+    const float vc = corner(0, 1), vd = corner(1, 1);
+
+    return va + (vb - va) * ux + (vc - va) * uz
+              + (va - vb - vc + vd) * ux * uz;
+}
+
+} // namespace
+
+float ClipmapTerrain::elevationAt(float x, float z) const {
+    const float h0 = baseElevationAt(x, z);
+
+    const float e  = cfg_.cellSize;
+    const float hx = baseElevationAt(x + e, z);
+    const float hz = baseElevationAt(x, z + e);
+
+    // cmSlopeFrom, verbatim: normalize(h0-hx, e, h0-hz).y, then 1 - that.
+    const float dx = h0 - hx, dz = h0 - hz;
+    const float len = std::sqrt(dx * dx + e * e + dz * dz);
+    const float slope = std::clamp(1.0f - e / std::max(len, 1e-6f), 0.0f, 1.0f);
+    const float weight = std::max(slope, 0.12f);   // cmDetailWeight
+
+    double lambda = cfg_.detailWavelength;
+    float  gain   = 1.0f;
+    float  sum    = 0.0f;
+    const int n = std::min(cfg_.detailOctaves, 8);
+    for (int i = 0; i < n; ++i) {
+        const float amp = cfg_.detailRelief * static_cast<float>(lambda) * gain;
+        sum += amp * detailNoise(x / lambda, z / lambda);
+        lambda *= 0.5;
+        gain   *= cfg_.detailGain;
+    }
+    return h0 + weight * sum;
+}
+
+float ClipmapTerrain::detailBound() const {
+    float lambda = cfg_.detailWavelength;
+    float gain   = 1.0f;
+    float sum    = 0.0f;
+    const int n = std::min(cfg_.detailOctaves, 8);
+    for (int i = 0; i < n; ++i) {
+        sum += cfg_.detailRelief * lambda * gain;
+        lambda *= 0.5f;
+        gain   *= cfg_.detailGain;
+    }
+    return sum;
 }
 
 } // namespace bro::scene

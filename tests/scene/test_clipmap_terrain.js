@@ -73,8 +73,10 @@ if (!scene) {
     // equality test (to float epsilon), not a tolerance test.
     // =====================================================================
     {
+        // detailAmplitude 0: this section is about the layer stack, and
+        // procedural detail deliberately displaces the surface away from it.
         const cm = scene.createClipmapTerrain({
-            levels: 6, resolution: 32, cellSize: 1,
+            levels: 6, resolution: 32, cellSize: 1, detailRelief: 0,
         });
         const f = (x, z) => 0.01 * x + 0.02 * z;
         cm.setHeightLayer(0, makeLayer(64, 64, -128, -128, 4, f));
@@ -105,7 +107,7 @@ if (!scene) {
     {
         const cm = scene.createClipmapTerrain({
             levels: 4, resolution: 16, cellSize: 2,
-            heightScale: 3, seaLevel: 25,
+            heightScale: 3, seaLevel: 25, detailRelief: 0,
         });
         cm.setHeightLayer(0, makeLayer(32, 32, -256, -256, 16,
                                        (x, z) => 0.001 * x - 0.002 * z));
@@ -122,7 +124,8 @@ if (!scene) {
     // Two layers: the fine one wins well inside its footprint, the coarse one
     // takes over outside it, and the handover is a ramp rather than a step.
     {
-        const cm = scene.createClipmapTerrain({ levels: 5, resolution: 16, cellSize: 1 });
+        const cm = scene.createClipmapTerrain({
+            levels: 5, resolution: 16, cellSize: 1, detailRelief: 0 });
         // Coarse layer 1: constant 100, covering +-4096 m.
         cm.setHeightLayer(1, makeLayer(64, 64, -4096, -4096, 128, () => 100));
         // Fine layer 0: constant 0, covering +-512 m.
@@ -187,7 +190,8 @@ if (!scene) {
     // field's own variation could otherwise hide. Run before the main terrain
     // exists so nothing else can be filling the gaps.
     {
-        const cmFlat = scene.createClipmapTerrain({ levels: 8, resolution: 64, cellSize: 1 });
+        const cmFlat = scene.createClipmapTerrain({
+            levels: 8, resolution: 64, cellSize: 1, detailRelief: 0 });
         cmFlat.setHeightLayer(0, makeLayer(64, 64, -2048, -2048, 64, () => 0));
         scene.setCamera({
             fov: 60, near: 1, far: 100000, position: [0, 120, 0],
@@ -297,6 +301,73 @@ if (!scene) {
             prevMean = mean;
         }
         assert(prevMean !== null, 'altitude sweep ran');
+    }
+
+    // =====================================================================
+    // (5) Procedural detail. It synthesises the decades below the finest layer,
+    //     so the collision query has to carry it too — a surface you can see
+    //     and a surface you can stand on that disagree by metres is the "fall
+    //     through the floor" bug. And it must not cost the crack-free
+    //     guarantee: the octaves are band-limited by the same cell size that
+    //     picks the height mip, so rings still agree at their boundaries.
+    // =====================================================================
+    {
+        const opts = {
+            levels: 8, resolution: 64, cellSize: 1,
+            detailWavelength: 32, detailRelief: 0.25, detailGain: 1.0,
+            detailOctaves: 6,
+        };
+        const flat = (w) => makeLayer(64, 64, -2048, -2048, 64, () => 0);
+
+        const cmD = scene.createClipmapTerrain(opts);
+        cmD.setHeightLayer(0, flat());
+
+        // Detail moves a flat field, deterministically, within its bound.
+        // Octave i contributes relief * lambda0 / 2^i, so the series caps at
+        // 0.25 * 32 * 2 = 16 m; the slope modulator only scales that down, and
+        // on a flat field it sits at its 0.05 floor.
+        let moved = 0, maxAbs = 0;
+        for (let i = 0; i < 64; i++) {
+            const x = i * 7.3 - 200, z = i * -3.1 + 150;
+            const h = cmD.elevationAt(x, z);
+            if (Math.abs(h) > 1e-4) moved++;
+            maxAbs = Math.max(maxAbs, Math.abs(h));
+            assert(cmD.elevationAt(x, z) === h, `elevationAt is deterministic at ${x},${z}`);
+        }
+        assert(moved > 50, `detail displaces a flat field (${moved}/64 samples)`);
+        assert(maxAbs < 16.01, `detail stays inside its amplitude bound (${maxAbs.toFixed(2)})`);
+
+        // Continuous, not hashed-per-sample: neighbouring queries a tenth of
+        // the finest octave apart must not jump. Finest octave here is 1 m.
+        let maxJump = 0;
+        for (let i = 0; i < 200; i++) {
+            const x = 40 + i * 0.1;
+            maxJump = Math.max(maxJump,
+                Math.abs(cmD.elevationAt(x + 0.1, 12) - cmD.elevationAt(x, 12)));
+        }
+        assert(maxJump < 1.5, `detail is continuous (largest 0.1 m step ${maxJump.toFixed(3)})`);
+
+        // Turning it off returns the layer stack exactly.
+        const cmOff = scene.createClipmapTerrain(
+            Object.assign({}, opts, { detailRelief: 0 }));
+        cmOff.setHeightLayer(0, flat());
+        assert(Math.abs(cmOff.elevationAt(17.5, -22.5)) < 1e-4,
+            'detailRelief 0 leaves the layer stack untouched');
+        cmOff.destroy();
+
+        // Still no cracks, and the surface now has texture: a detailed flat
+        // field must vary in luminance where the undetailed one was uniform.
+        scene.setCamera({
+            fov: 60, near: 1, far: 100000, position: [0, 60, 0],
+            target: [0.001, 0, 0], up: [0, 0, -1],
+        });
+        cmD.update(0, 60, 0);
+        const img = scene.captureFrame();
+        assert(holeCount(img, 4) === 0, 'detail keeps the surface crack-free');
+        const sd = luminanceStdDev(img, 4);
+        assert(sd > 1.0, `detail gives a flat field visible relief (sd ${sd.toFixed(2)})`);
+
+        cmD.destroy();
     }
 
     cm.destroy();

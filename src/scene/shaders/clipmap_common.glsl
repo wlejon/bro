@@ -28,6 +28,7 @@ uniform float u_pixelScale;    // 2*tan(fovY/2)/viewportHeight — see cmCellSiz
 uniform float u_layerCount;
 uniform float u_heightScale;
 uniform float u_seaLevel;
+uniform float u_camGroundY;    // terrain height under the camera, world metres
 
 // A layer's outermost 8% (per axis) ramps its weight from 1 down to 0, so
 // running off a fine layer's footprint degrades gradually into the coarser
@@ -39,6 +40,14 @@ const float CM_FADE = 0.08;
 // blurs. 1.5 keeps a margin over the Nyquist limit without softening detail
 // the viewer can actually resolve.
 const float CM_PIXELS_PER_CELL = 1.5;
+
+// The same, for detail that is only ever SHADED rather than displaced. It is
+// deliberately coarser. A height sampled near Nyquist looks slightly soft; a
+// normal sampled near Nyquist sparkles, because shading responds to the
+// derivative and so loses its footing about an octave earlier. Sharing one
+// constant meant either grainy distance or blurred distance, with no setting
+// that gave both.
+const float CM_SHADE_PIXELS_PER_CELL = 3.5;
 
 // One layer's height sample. `w` is its blend weight: 1 well inside the
 // layer's extent, smoothly 0 at (and outside) its edge.
@@ -96,6 +105,24 @@ float cmHeight(vec2 wxz, float cDesired) {
 // u_camY and u_pixelScale are uniform across the draw — so the crack-free
 // guarantee holds: two rings meeting at a boundary still evaluate the same
 // height there.
+// The anti-aliasing limit alone, with no geometry floor: the finest detail a
+// PIXEL can resolve at this point, whether or not the mesh could express it.
+//
+// The fragment stage shades from an analytic normal, so it is not held to the
+// ring's cell size the way the vertex stage is. Band-limiting fragment detail
+// by the geometry cell was costing exactly the decades that make ground read as
+// ground: with a one-metre finest ring, nothing below a metre could ever be
+// shaded, no matter how close you stood. Splitting the two limits is what lets
+// the surface keep gaining detail as you approach it, long after the triangles
+// have run out.
+float cmCellSizeAA(vec2 wxz) {
+    vec2  d    = abs(wxz - u_camXZ);
+    float dxz  = max(d.x, d.y);
+    float dy   = abs(u_camY - u_camGroundY);
+    float dist = max(dxz, dy);
+    return dist * u_pixelScale * CM_SHADE_PIXELS_PER_CELL;
+}
+
 float cmCellSize(vec2 wxz) {
     vec2 d = abs(wxz - u_camXZ);
     float dxz = max(d.x, d.y);
@@ -117,13 +144,34 @@ float cmCellSize(vec2 wxz) {
     // point is 90 km away and one pixel covers ~100 m, which produced a moire
     // grid across the whole surface.
     //
+    // The altitude that matters is height above the TERRAIN, not above sea
+    // level. Measuring from sea level means standing on a 1200 m mountain
+    // coarsens the ground at your feet as though you were 1200 m above it —
+    // the surface under a climber goes smooth exactly where they can see it
+    // best. u_camGroundY is the terrain height under the eye, so this is a
+    // real eye-to-surface distance.
+    //
     // These must NOT share a constant. u_invK comes from the ring layout;
     // u_pixelScale is 2*tan(fovY/2)/viewportHeight, the world size of one pixel
     // per unit distance. Reusing u_invK for altitude over-coarsened by ~24x at
     // 90 km and flattened the world to a featureless plane.
-    float dy    = abs(u_camY - u_seaLevel);
+    float dy    = abs(u_camY - u_camGroundY);
     float dist  = max(dxz, dy);
     float cAA   = dist * u_pixelScale * CM_PIXELS_PER_CELL;
 
     return max(cGeo, cAA);
+}
+
+// Surface slope in [0,1] from three height samples one cell apart.
+//
+// FORWARD differences, not central, and shared by both stages deliberately.
+// The vertex stage needs a slope to modulate detail amplitude, and every extra
+// tap there is paid once per vertex across every ring; forward differences cost
+// two taps instead of four. The fragment stage gets the same estimate for free
+// out of the samples it already takes for its normal, so both stages agree on
+// how much detail this ground wants. The shading normal itself is still built
+// from central differences — this is only the modulator.
+float cmSlopeFrom(float h0, float hx, float hz, float e) {
+    vec3 n = normalize(vec3(h0 - hx, e, h0 - hz));
+    return clamp(1.0 - n.y, 0.0, 1.0);
 }

@@ -154,6 +154,15 @@ JSValue createClipmapTerrainJS(JSContext* ctx, scene::SceneGraph* graph,
         cfg.cellSize    = (float)qjsbind::get_prop_number(ctx, opts, "cellSize", cfg.cellSize);
         cfg.heightScale = (float)qjsbind::get_prop_number(ctx, opts, "heightScale", cfg.heightScale);
         cfg.seaLevel    = (float)qjsbind::get_prop_number(ctx, opts, "seaLevel", cfg.seaLevel);
+        cfg.snowLine    = (float)qjsbind::get_prop_number(ctx, opts, "snowLine", cfg.snowLine);
+        cfg.detailWavelength =
+            (float)qjsbind::get_prop_number(ctx, opts, "detailWavelength", cfg.detailWavelength);
+        cfg.detailRelief =
+            (float)qjsbind::get_prop_number(ctx, opts, "detailRelief", cfg.detailRelief);
+        cfg.detailGain =
+            (float)qjsbind::get_prop_number(ctx, opts, "detailGain", cfg.detailGain);
+        cfg.detailOctaves =
+            qjsbind::get_prop_int(ctx, opts, "detailOctaves", cfg.detailOctaves);
     }
 
     auto terrain = std::make_unique<scene::ClipmapTerrain>(*graph, cfg);

@@ -8,11 +8,13 @@
 // CRACK-FREE BY CONSTRUCTION. Displacement is a pure function of world XZ:
 //
 //     h = cmHeight(worldXZ, cmCellSize(worldXZ))
+//       + cmDetail(worldXZ, cmCellSize(worldXZ))
 //
-// Neither term looks at the level index, so two rings meeting at a boundary
+// No term looks at the level index, so two rings meeting at a boundary
 // evaluate the SAME function at the SAME position and land on the same height.
 // There is nothing to stitch. cmCellSize is continuous in distance, so the mip
-// level is continuous too and GL's trilinear filter removes LOD popping.
+// level and the detail band limit are continuous too — GL's trilinear filter
+// removes LOD popping and the octave fades cover the rest.
 //
 // Output is CAMERA-RELATIVE (mesh.vert's vWorldPos convention). ClipmapTerrain
 // parks the node at the camera eye every update, so uModel is identity and the
@@ -34,8 +36,18 @@ void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
 
     vec2  wxz = centre + pos.xz;
     float c   = cmCellSize(wxz);
-    float h   = cmHeight(wxz, c);
 
-    pos    = vec3(wxz.x - u_camXZ.x, h - u_camY, wxz.y - u_camXZ.y);
+    // Two forward taps beyond the height itself, for the detail modulator. The
+    // fragment stage recovers the same estimate from samples it already takes,
+    // so both agree on how rough this ground is.
+    float h0 = cmHeight(wxz, c);
+    float hx = cmHeight(wxz + vec2(c, 0.0), c);
+    float hz = cmHeight(wxz + vec2(0.0, c), c);
+    float slope = cmSlopeFrom(h0, hx, hz, c);
+
+    vec2  rel = wxz - u_camXZ;
+    float h   = h0 + cmDetailWeight(slope) * cmDetail(rel, c).x;
+
+    pos    = vec3(rel.x, h - u_camY, rel.y);
     normal = vec3(0.0, 1.0, 0.0);          // real normal is per-pixel
 }

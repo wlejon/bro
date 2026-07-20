@@ -40,6 +40,23 @@ struct ClipmapConfig {
     float cellSize    = 1.0f;   // metres per cell at level 0
     float heightScale = 1.0f;   // sampled value -> metres
     float seaLevel    = 0.0f;   // metres added to every sample
+
+    // Procedural detail below the data floor. The height layers stop at their
+    // finest cell size; these octaves synthesise everything under it, so the
+    // wavelength wants to start at roughly that floor rather than duplicating
+    // structure the data already carries.
+    float detailWavelength = 48.0f;   // coarsest synthesised octave, metres
+    // Relief is a SLOPE, not a height: the amplitude of each octave is
+    // detailRelief * (that octave's wavelength) * (the ground's own slope). So
+    // it needs no retuning when a world changes heightScale, and it is 0 on
+    // ground that is already flat. detailGain deviates from exact
+    // self-similarity: 1 keeps every octave equally rough, below 1 smooths the
+    // fine end, above 1 sharpens it.
+    float detailRelief     = 0.35f;
+    float detailGain       = 1.0f;
+    int   detailOctaves    = 7;       // clamped to 8 by the shader
+
+    float snowLine = 1600.0f;         // world metres, before per-place jitter
 };
 
 /// One level of the height pyramid: an R32F mipmapped texture plus where it
@@ -79,7 +96,10 @@ public:
     /// Per frame: park the node on the camera and push the camera uniforms.
     void update(float camX, float camY, float camZ);
 
-    /// CPU sample of the SAME layer stack the GPU renders, in world metres.
+    /// CPU sample of the SAME surface the GPU renders, in world metres —
+    /// height layers plus procedural detail. This is what collision and camera
+    /// grounding must use: detail displaces the drawn surface by metres, and a
+    /// query that only knew about the layers would let everything fall through.
     /// Same layer selection and coverage blending; bilinear at mip level 0
     /// within each layer. Exact near the camera (where the GPU also samples
     /// level 0) and approximate far away, where the GPU has moved to a coarser
@@ -100,7 +120,19 @@ private:
     void buildGeometry();
     void pushLayerUniforms();
     void pushStaticUniforms();
+
+    // The detail lattice is anchored to the camera on this grid so its noise
+    // coordinate stays small far from the world origin; see clipmap_detail.glsl
+    // for why that matters and why the grid must divide every octave.
+    static constexpr float kDetailAnchor = 256.0f;
     void recomputeHeightRange();
+
+    /// The height-layer stack alone, without procedural detail.
+    float baseElevationAt(float x, float z) const;
+
+    /// Largest height the detail octaves can add, in metres. Feeds the cull
+    /// margin, which has to bound what the shader will emit.
+    float detailBound() const;
 
     SceneGraph&   graph_;
     ClipmapConfig cfg_;
