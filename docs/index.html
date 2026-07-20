@@ -3,9 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bro — HTML/CSS/JS runtime for desktop apps and games</title>
-<meta name="description" content="Bro is a desktop app and game runtime that renders HTML/CSS/JS with its own pipeline — Skia, SDL_GPU, QuickJS — and wires 3D, physics, audio, game networking, and on-device AI/ML straight into the DOM.">
-<meta property="og:title" content="Bro — HTML/CSS/JS runtime for desktop apps and games">
+<title>Bro: an HTML/CSS/JS runtime for desktop apps and games</title>
+<meta name="description" content="Bro is a desktop app and game runtime that renders HTML/CSS/JS with its own pipeline (QuickJS, a custom layout engine, Skia, and OpenGL) and wires 3D, physics, audio, game networking, and on-device AI/ML straight into the DOM.">
+<meta property="og:title" content="Bro: an HTML/CSS/JS runtime for desktop apps and games">
 <meta property="og:description" content="An Electron-shaped runtime with its own rendering pipeline: HTML/CSS/JS for the UI, with 3D, physics, audio, game networking, and on-device AI/ML wired straight into the DOM.">
 <meta property="og:type" content="website">
 <style>
@@ -221,9 +221,9 @@ footer { padding: 40px 0 56px; }
   <div class="wrap inner">
     <div class="hero-grid">
       <div>
-        <span class="pill"><span class="blip"></span> pre-release · pre-alpha</span>
+        <span class="pill"><span class="blip"></span> pre-alpha</span>
         <h1>An HTML/CSS/JS runtime for <span class="grad">desktop apps and games</span>.</h1>
-        <p class="lede">Electron-shaped, but the rendering pipeline is ours — QuickJS, a custom layout engine, Skia, and SDL_GPU. So 3D, physics, audio, game networking, and on-device AI/ML wire straight into the DOM, in one process, no IPC to a Chromium renderer.</p>
+        <p class="lede">Electron-shaped, but the rendering pipeline is ours: QuickJS, a custom layout engine, Skia, and OpenGL. So 3D, physics, audio, game networking, and on-device AI/ML wire straight into the DOM, in one process, no IPC to a Chromium renderer.</p>
         <div class="cta-row">
           <a class="btn primary" href="reference.html">Browse the reference →</a>
           <a class="btn ghost" href="https://github.com/wlejon/bro">View on GitHub ↗</a>
@@ -251,10 +251,10 @@ footer { padding: 40px 0 56px; }
       <div>
         <p class="kicker">Why it exists</p>
         <h2>The web platform is a great UI layer. The rest, we built in.</h2>
-        <p class="section-lede">Coding agents build web UIs really well. Native UIs take more debugging to get right. Electron solves that — but only for what the web platform natively supports.</p>
+        <p class="section-lede">Coding agents build web UIs really well. Native UIs take more debugging to get right. Electron solves that, but only for what the web platform natively supports.</p>
       </div>
       <div class="prose">
-        <p>In bro, HTML/CSS/JS is the UI/app layer like Electron. But the rendering pipeline is ours, which means we can plug in whatever we want underneath. And we have: a <strong>3D scene graph</strong>, <strong>Jolt physics</strong>, a real-time <strong>audio engine</strong>, <strong>mesh generation and CSG</strong>, <strong>navmesh pathfinding</strong>, <strong>game networking over GNS</strong>, and a full <strong>on-device AI/ML inference stack</strong> — all exposed to JS, all running in one process, no IPC to a Chromium renderer.</p>
+        <p>In bro, HTML/CSS/JS is the UI/app layer like Electron. But the rendering pipeline is ours, which means we can plug in whatever we want underneath. And we have: a <strong>3D scene graph</strong>, <strong>Jolt physics</strong>, a real-time <strong>audio engine</strong>, <strong>mesh generation and CSG</strong>, <strong>navmesh pathfinding</strong>, <strong>game networking over GNS</strong>, and a full <strong>on-device AI/ML inference stack</strong>. All of it is exposed to JS, all running in one process, no IPC to a Chromium renderer.</p>
         <p>None of this is new. It's a reconfiguration that works better for coding agents.</p>
       </div>
     </div>
@@ -265,7 +265,7 @@ footer { padding: 40px 0 56px; }
   <div class="wrap">
     <p class="kicker">Rendering parity vs Chromium</p>
     <h2>Bro draws its own pixels.</h2>
-    <p class="section-lede">HTML and CSS are rendered by our own engine — not by embedding Chromium. <a href="https://github.com/wlejon/broparity">Broparity</a> is a side-by-side test suite that compares bro's output to Chromium, pixel-by-pixel and structurally, on a curated set of layout cases.</p>
+    <p class="section-lede">HTML and CSS are rendered by our own engine, not by embedding Chromium. <a href="https://github.com/wlejon/broparity">Broparity</a> is a side-by-side test suite that compares bro's output to Chromium, pixel-by-pixel and structurally, on a curated set of layout cases.</p>
     <div class="parity-card" style="margin-top:22px;">
       <div class="parity-stats" id="parity-stats">
         <div class="pstat loading"><div class="v">…</div><div class="os">loading</div><div class="sub">fetching live numbers</div></div>
@@ -290,47 +290,47 @@ footer { padding: 40px 0 56px; }
 
       <div class="cap">
         <h3><span class="ic">◆</span> Graphics &amp; 3D</h3>
-        <p>A 3D scene graph with mesh rendering and voxel terrain, PBR lighting, procedural mesh generation and CSG, SIMD noise, an ecosystem sim, and transform gizmos for editing.</p>
+        <p>A 3D scene graph with mesh rendering, skinned characters, height-field and clipmap terrain, tile grids, PBR lighting, procedural mesh generation and CSG, SIMD noise, an ecosystem sim, and transform gizmos for editing.</p>
         <div class="chips"><span class="chip accent">bro.scene</span><span class="chip accent">bro.mesh</span><span class="chip accent">bro.noise</span><span class="chip accent">bro.flora</span><span class="chip accent">bro.gizmo</span></div>
       </div>
 
       <div class="cap">
         <h3><span class="ic">▸</span> Physics &amp; audio</h3>
-        <p>Jolt rigid-body physics with contact events, wired into the scene graph. A real-time Web Audio engine with synthesis, effects, spatialization, and MIDI — plus live mic capture.</p>
+        <p>Jolt rigid-body physics with contact events, wired into the scene graph. A real-time Web Audio engine with synthesis, effects, spatialization, and MIDI, plus live mic capture.</p>
         <div class="chips"><span class="chip accent">Physics</span><span class="chip accent">AudioContext</span><span class="chip accent">bro.mic</span></div>
       </div>
 
       <div class="cap">
         <h3><span class="ic">⬡</span> Game systems</h3>
-        <p>Navmesh and A* pathfinding, steering, and perception for game agents. Peer-to-peer game networking over Valve's GameNetworkingSockets. Native file dialogs and menu bars.</p>
-        <div class="chips"><span class="chip accent">bro.ai.game</span><span class="chip accent">bro.net</span><span class="chip accent">dialogs</span><span class="chip accent">bro.menu</span></div>
+        <p>Navmesh and A* pathfinding, steering, and perception for game agents. Peer-to-peer game networking over Valve's GameNetworkingSockets, plus a headless <code style="font-family:var(--mono);color:var(--text)">bro-server</code> for dedicated servers. Native file dialogs, menu bars, and Steamworks.</p>
+        <div class="chips"><span class="chip accent">bro.ai.game</span><span class="chip accent">bro.net</span><span class="chip accent">bro-server</span><span class="chip accent">dialogs</span><span class="chip accent">bro.menu</span><span class="chip accent">bro.steam</span></div>
       </div>
 
       <div class="cap feat">
         <h3><span class="ic">✦</span> On-device AI/ML inference</h3>
-        <p>GPU-accelerated model inference wired into JS — CUDA / Metal with a CPU fallback (<code style="font-family:var(--mono);color:var(--text)">bro.gpu</code> probes the live backend). A unified tensor type and op set underpins text generation, diffusion, speech, and vision — all running locally, no server.</p>
+        <p>GPU-accelerated model inference wired into JS: CUDA or Metal with a CPU fallback (<code style="font-family:var(--mono);color:var(--text)">bro.gpu</code> probes the live backend). A unified tensor type and op set underpins text generation, diffusion, speech, and vision, all running locally, no server.</p>
         <div class="chips">
           <span class="chip accent">bro.tensor</span>
-          <span class="chip accent">bro.lm — Qwen3</span>
-          <span class="chip accent">bro.diffusion — SD U-Net/VAE/LoRA</span>
-          <span class="chip accent">bro.tts — Kokoro · Qwen3-TTS</span>
-          <span class="chip accent">bro.stt — Whisper</span>
+          <span class="chip accent">bro.lm: Qwen3</span>
+          <span class="chip accent">bro.diffusion: SD U-Net/VAE/LoRA</span>
+          <span class="chip accent">bro.tts: Kokoro, Qwen3-TTS</span>
+          <span class="chip accent">bro.stt: Whisper, Parakeet</span>
           <span class="chip accent">bro.wake</span>
-          <span class="chip accent">bro.vision — SAM · depth · normals · ControlNet</span>
+          <span class="chip accent">bro.vision: SAM, depth, normals, ControlNet</span>
           <span class="chip accent">bro.image</span>
-          <span class="chip accent">triposplat — image → 3D</span>
+          <span class="chip accent">bro.triposplat: image to 3D</span>
         </div>
       </div>
 
       <div class="cap">
         <h3><span class="ic">⌘</span> Built for development</h3>
-        <p>Headless mode runs the full pipeline — GPU, real fonts, WebGL — without a window, driven by JS with virtual time for deterministic testing. A DOM inspector, settings system, and line-coverage reports round it out.</p>
+        <p>Headless mode runs the full pipeline (GPU, real fonts, WebGL) without a window, driven by JS with virtual time for deterministic testing. A DOM inspector, settings system, and line-coverage reports round it out.</p>
         <div class="chips"><span class="chip">bro-headless</span><span class="chip">virtual time</span><span class="chip">inspect()</span><span class="chip">coverage</span></div>
       </div>
 
       <div class="cap">
         <h3><span class="ic">⊞</span> The launcher</h3>
-        <p>Naked <code style="font-family:var(--mono);color:var(--text)">bro</code> opens a built-in project manager. The launcher and a curated set of starter apps live in the sibling <a href="https://github.com/wlejon/broworkshop">broworkshop</a> repo — games, tools, demos, and AI/research apps you can clone and reshape.</p>
+        <p>Naked <code style="font-family:var(--mono);color:var(--text)">bro</code> opens a built-in project manager. The launcher and a curated set of starter apps live in the sibling <a href="https://github.com/wlejon/broworkshop">broworkshop</a> repo: games, tools, demos, and AI/research apps you can clone and reshape.</p>
         <div class="chips"><span class="chip">games</span><span class="chip">tools</span><span class="chip">demos</span><span class="chip">ai</span></div>
       </div>
     </div>
@@ -341,7 +341,7 @@ footer { padding: 40px 0 56px; }
   <div class="wrap">
     <p class="kicker">Architecture</p>
     <h2>One engine, layered cleanly.</h2>
-    <p class="section-lede">HTML is parsed into a single DOM, CSS resolved by a cascade, layout computed, and the tree rasterized by Skia — then composited with the 3D scene layer through SDL_GPU. The subsystems stack:</p>
+    <p class="section-lede">HTML is parsed into a single DOM, CSS resolved by a cascade, layout computed, and the tree rasterized by Skia through its Ganesh GL backend, then composited with the 3D scene layer as textured quads in an OpenGL 3.3 core context. The subsystems stack:</p>
     <div class="arch-diagram"><span class="ar">       </span><span class="l">util</span>  <span class="ar">logging · strings (standalone)</span>
 <span class="ar">         ↑</span>
 <span class="ar">     </span><span class="l">platform</span>  <span class="ar">SDL3 window · event loop</span>
@@ -373,7 +373,7 @@ footer { padding: 40px 0 56px; }
       <a class="repo" href="https://github.com/wlejon/brogameagent"><div class="n">brogameagent</div><div class="d">navmesh · pathfinding · perception</div></a>
       <a class="repo" href="https://github.com/wlejon/broflora"><div class="n">broflora</div><div class="d">ecosystem simulation</div></a>
     </div>
-    <p class="section-lede" style="margin-top:24px; font-size:15px;">Plus <b>Jolt</b> for physics, <b>Skia</b> for rasterization, <b>SDL3</b> for windowing and GPU display, and <b>QuickJS</b> as the JS engine.</p>
+    <p class="section-lede" style="margin-top:24px; font-size:15px;">Plus <b>Jolt</b> for physics, <b>Skia</b> for rasterization, <b>SDL3</b> for windowing and GL contexts, and <b>QuickJS</b> as the JS engine.</p>
   </div>
 </section>
 
@@ -382,7 +382,7 @@ footer { padding: 40px 0 56px; }
     <div class="ref-cta">
       <div class="t">
         <h3>Read the reference</h3>
-        <p>Every API surface — audio, scene, physics, mesh, networking, AI/ML, and the rest — is documented as an annotated <code style="font-family:var(--mono);color:var(--text)">.js</code> file with JSDoc and usage examples. Guides cover headless mode, settings, the inspector, projects, and multi-repo workflow.</p>
+        <p>Every API surface, from audio and scene to physics, mesh, networking, and AI/ML, is documented as an annotated <code style="font-family:var(--mono);color:var(--text)">.js</code> file with JSDoc and usage examples. Guides cover headless mode, settings, the inspector, projects, and multi-repo workflow.</p>
       </div>
       <a class="btn primary" href="reference.html">Browse the reference →</a>
     </div>
@@ -393,7 +393,7 @@ footer { padding: 40px 0 56px; }
   <div class="wrap">
     <div class="foot-inner">
       <span><a href="https://github.com/wlejon/bro">github.com/wlejon/bro</a> · MIT</span>
-      <span>QuickJS · htmlayout · Skia · SDL_GPU · Jolt · brotensor</span>
+      <span>QuickJS · htmlayout · Skia · OpenGL · Jolt · brotensor</span>
     </div>
     <p class="foot-note">Heads up: bro exposes far more of your system to JavaScript than a browser does, and was not built with a security sandbox. Don't point it at untrusted code.</p>
   </div>
@@ -421,7 +421,7 @@ footer { padding: 40px 0 56px; }
       </div>`;
     }).join("");
   } catch (e) {
-    el.innerHTML = `<div class="perr">Couldn't load live parity numbers — see the <a href="https://wlejon.github.io/broparity/">parity site</a> for current data.</div>`;
+    el.innerHTML = `<div class="perr">Couldn't load live parity numbers. See the <a href="https://wlejon.github.io/broparity/">parity site</a> for current data.</div>`;
   }
 })();
 </script>
