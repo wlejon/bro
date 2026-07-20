@@ -63,13 +63,16 @@ void SceneRenderer::ensureSceneDepthCopy() {
     sceneDepthCopyWidth_  = meshFBOWidth_;
     sceneDepthCopyHeight_ = meshFBOHeight_;
 
-    // DEPTH24_STENCIL8 to match the mesh FBO's depth attachment —
-    // glBlitFramebuffer requires identical depth formats on both ends.
+    // Must match the mesh FBO's depth attachment exactly — glBlitFramebuffer
+    // requires identical depth formats on both ends, and a mismatch is an
+    // INVALID_OPERATION that leaves this snapshot empty rather than raising
+    // anything visible. Both sides go through depthStencilInternalFormat() so
+    // the depth policy can never move one without the other.
     glGenTextures(1, &sceneDepthCopyTex_);
     glBindTexture(GL_TEXTURE_2D, sceneDepthCopyTex_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8,
+    glTexImage2D(GL_TEXTURE_2D, 0, depthStencilInternalFormat(),
                  sceneDepthCopyWidth_, sceneDepthCopyHeight_, 0,
-                 GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+                 GL_DEPTH_STENCIL, depthStencilType(), nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -148,7 +151,7 @@ void SceneRenderer::renderParticles3DNodes() {
 
     glUseProgram(particleProgram_);
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
+    glDepthFunc(depthFuncCloser());
     glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
     glDisable(GL_CULL_FACE);

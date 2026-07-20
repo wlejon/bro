@@ -294,8 +294,15 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     WorldAABB bounds = computeShadowCasterBounds();
     if (bounds.empty) return;
 
-    // Bias matrix maps NDC [-1,1] to UV [0,1] in all three dims.
-    Mat4 bias = bromath::mmul(bromath::mtranslate({0.5f, 0.5f, 0.5f}), bromath::mscale({0.5f, 0.5f, 0.5f}));
+    // Bias matrix maps NDC to UV [0,1]. XY always need the half-scale-and-
+    // offset, but Z only does under the conventional [-1,1] mapping: with
+    // clip control on, the shadow projections above already emit [0,1] depth,
+    // so remapping z again would compress every comparison into [0.5,1] and
+    // shadow everything.
+    const float zs = gReversedZ ? 1.0f : 0.5f;
+    const float zo = gReversedZ ? 0.0f : 0.5f;
+    Mat4 bias = bromath::mmul(bromath::mtranslate({0.5f, 0.5f, zo}),
+                              bromath::mscale({0.5f, 0.5f, zs}));
 
     // Allocate atlas tiles in a square grid: ceil(sqrt(MAX)) x ceil(sqrt(MAX)).
     // For MAX=16 this gives a clean 4x4. Each tile gets equal area.
@@ -444,7 +451,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                 float dxLS = centerLS.x - snapX;
                 float dyLS = centerLS.y - snapY;
                 // Build ortho extents around the snapped origin.
-                Mat4 proj = bromath::mortho(
+                Mat4 proj = makeOrthoZeroToOne(
                     -radius - dxLS, radius - dxLS,
                     -radius - dyLS, radius - dyLS,
                     -radius * 2.0f - radius, -(-radius * 2.0f) + radius);
@@ -465,7 +472,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                                               boundsExt.y*boundsExt.y +
                                               boundsExt.z*boundsExt.z);
                 float depthExt = std::max(sceneRadius * 2.0f, radius * 4.0f);
-                proj = bromath::mortho(
+                proj = makeOrthoZeroToOne(
                     -radius - dxLS, radius - dxLS,
                     -radius - dyLS, radius - dyLS,
                     0.0f, depthExt);
@@ -497,7 +504,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             if (fov > 3.10f) fov = 3.10f;
 
             Mat4 view = bromath::mlookAt(eye, target, up);
-            Mat4 proj = bromath::mperspective(fov, 1.0f, near, far);
+            Mat4 proj = makePerspectiveZeroToOne(fov, 1.0f, near, far);
             Mat4 projView = bromath::mmul(proj, view);
             bakeTile(shadowTileCount_, projView, L);
             lightShadowSlot_[i] = shadowTileCount_;
@@ -517,7 +524,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             // PI/2 + small fudge so the 6 frusta have a smidge of overlap
             // at the seams; eliminates a single-texel sliver of "no shadow"
             // at face boundaries.
-            Mat4 proj = bromath::mperspective(1.5708f, 1.0f, near, far);
+            Mat4 proj = makePerspectiveZeroToOne(1.5708f, 1.0f, near, far);
 
             // Cube-face conventions (matches D3D / OpenGL cube map order).
             // Each entry is { forward.xyz, up.xyz }.
@@ -589,7 +596,7 @@ void SceneRenderer::renderShadowPass() {
     bromath::Frustum tileFrustum[kMaxShadowTiles];
     for (int slot = 0; slot < shadowTileCount_; ++slot) {
         std::memcpy(tileVP[slot].data, shadowRenderMatrix_[slot], sizeof(float) * 16);
-        if (cullingActive_) tileFrustum[slot] = bromath::ffromViewProj(tileVP[slot]);
+        if (cullingActive_) tileFrustum[slot] = makeFrustum(tileVP[slot]);
     }
 
     // --- Static shadow-tile cache decision -------------------------------
@@ -673,6 +680,7 @@ void SceneRenderer::renderShadowPass() {
     glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
     glDepthMask(GL_TRUE);
     if (fullClear) {
+        glClearDepth(1.0);   // shadow depth stays conventional: near 0, far 1
         glClear(GL_DEPTH_BUFFER_BIT);
         shadowAtlasNeedsClear_ = false;
     }
@@ -735,6 +743,7 @@ void SceneRenderer::renderShadowPass() {
             // full clear, so the two paths are pixel-identical.
             glEnable(GL_SCISSOR_TEST);
             glScissor(gx * tileSize, gy * tileSize, tileSize, tileSize);
+            glClearDepth(1.0);   // shadow depth stays conventional: near 0, far 1
             glClear(GL_DEPTH_BUFFER_BIT);
         }
 

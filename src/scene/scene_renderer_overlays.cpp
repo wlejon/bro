@@ -70,7 +70,7 @@ void SceneRenderer::renderGaussianSplatNodes() {
     const float eye[3] = {graph_.cameraEye_.x, graph_.cameraEye_.y, graph_.cameraEye_.z};
 
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_LESS);
+    glDepthFunc(depthFuncCloser());
     glDepthMask(GL_FALSE);
     glEnable(GL_BLEND);
     glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC_ALPHA,

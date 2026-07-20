@@ -13,6 +13,7 @@
 #include <string>
 
 #include "util/log.h"
+#include "scene/depth_policy.h"
 
 namespace bro::scene {
 
@@ -71,8 +72,18 @@ inline std::string withUserChunk(const char* src, const std::string& chunk,
 
 // Compile a single shader stage. Returns 0 (and logs) on failure.
 inline GLuint compileShader(GLenum type, const char* src) {
+    // Every program in the renderer funnels through here, so the depth
+    // convention is injected once rather than at each call site — a shader
+    // that encodes the convention (the skybox's far-plane z, the depth
+    // linearizers, the depth->world reconstructions) can never be missed as
+    // the renderer grows. Shaders that don't care just ignore the define.
+    const std::string withPolicy =
+        gReversedZ ? insertAfterVersion(src ? src : "", "#define REVERSED_Z 1\n")
+                   : std::string(src ? src : "");
+    const char* finalSrc = withPolicy.c_str();
+
     GLuint s = glCreateShader(type);
-    glShaderSource(s, 1, &src, nullptr);
+    glShaderSource(s, 1, &finalSrc, nullptr);
     glCompileShader(s);
     GLint ok = 0;
     glGetShaderiv(s, GL_COMPILE_STATUS, &ok);

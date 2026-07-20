@@ -57,6 +57,7 @@ embed_shader(decal.frag            kDecalFragSrc)
 add_library(bro_scene STATIC
     scene_node.cpp
     scene_graph.cpp
+    depth_policy.cpp
     scene_renderer.cpp
     scene_renderer_mesh.cpp
     scene_renderer_instanced.cpp

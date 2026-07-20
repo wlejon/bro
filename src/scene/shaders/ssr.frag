@@ -53,7 +53,12 @@ out vec4 FragColor;
 
 // Window-space UV + depth -> view-space position.
 vec3 viewPos(vec2 uv, float d) {
+    // Window depth is already the clip-space z under [0,1] clip control.
+#ifdef REVERSED_Z
+    vec4 clip = vec4(uv * 2.0 - 1.0, d, 1.0);
+#else
     vec4 clip = vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+#endif
     vec4 v = uInvProj * clip;
     return v.xyz / v.w;
 }
@@ -65,7 +70,11 @@ void main() {
     // Face normal from position derivatives (before any discard).
     vec3 N = normalize(cross(dFdx(P), dFdy(P)));
 
+#ifdef REVERSED_Z
+    if (d0 <= 0.0) discard;    // sky / empty: color + coverage stay untouched
+#else
     if (d0 >= 1.0) discard;    // sky / empty: color + coverage stay untouched
+#endif
 
     float mask = src.a;
     vec3 refl = vec3(0.0);
@@ -99,7 +108,11 @@ void main() {
 
                 float sd = texture(uDepthTex, uv).r;
                 // dz > 0: ray point is behind the surface at this pixel.
+#ifdef REVERSED_Z
+                float dz = (sd > 0.0) ? viewPos(uv, sd).z - Q.z : -1.0;
+#else
                 float dz = (sd < 1.0) ? viewPos(uv, sd).z - Q.z : -1.0;
+#endif
 
                 if (dz > 0.0 && dzPrev <= 0.0) {
                     // Crossed the depth shell: bisect to the crossing point,
@@ -113,7 +126,11 @@ void main() {
                         vec4 cm = uProj * vec4(Qm, 1.0);
                         vec2 um = (cm.xy / cm.w) * 0.5 + 0.5;
                         float sm = texture(uDepthTex, um).r;
+#ifdef REVERSED_Z
+                        float dm = (sm > 0.0) ? viewPos(um, sm).z - Qm.z : -1.0;
+#else
                         float dm = (sm < 1.0) ? viewPos(um, sm).z - Qm.z : -1.0;
+#endif
                         if (dm > 0.0) { hi = mid; hitUV = um; hitDz = dm; }
                         else          { lo = mid; }
                     }

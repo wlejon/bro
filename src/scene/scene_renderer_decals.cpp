@@ -147,7 +147,7 @@ void SceneRenderer::renderDecalPass(const std::vector<LightNode*>& lights) {
 
     glUseProgram(decalProgram_);
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(GL_GEQUAL);
+    glDepthFunc(depthFuncFartherEqual());
     glDepthMask(GL_FALSE);
     glEnable(GL_CULL_FACE);
     glCullFace(GL_FRONT);
@@ -240,7 +240,7 @@ void SceneRenderer::renderDecalPass(const std::vector<LightNode*>& lights) {
     glDisable(GL_BLEND);
     glCullFace(GL_BACK);
     glDisable(GL_CULL_FACE);
-    glDepthFunc(GL_LESS);
+    glDepthFunc(depthFuncCloser());
     glDepthMask(GL_TRUE);
     glUseProgram(0);
 }

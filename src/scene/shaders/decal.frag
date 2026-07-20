@@ -57,7 +57,13 @@ void main() {
     float d = texture(uSceneDepth, screenUV).r;
 
     // Reconstruct the camera-relative world position of the opaque surface.
+    // Window depth is already the clip-space z under [0,1] clip control; only
+    // the conventional [-1,1] mapping needs the rescale.
+#ifdef REVERSED_Z
+    vec4 ndc = vec4(screenUV * 2.0 - 1.0, d, 1.0);
+#else
     vec4 ndc = vec4(screenUV * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+#endif
     vec4 pw = uInvViewProj * ndc;
     vec3 camRel = pw.xyz / pw.w;
 
@@ -67,7 +73,13 @@ void main() {
     // i.e. out of the surface.
     vec3 nrm = normalize(cross(dFdx(camRel), dFdy(camRel)));
 
+    // "nothing was drawn here" is the cleared depth value, which the
+    // reversed convention puts at 0 rather than 1.
+#ifdef REVERSED_Z
+    if (d <= 0.0) discard;                 // sky / no opaque geometry
+#else
     if (d >= 1.0) discard;                 // sky / no opaque geometry
+#endif
 
     vec3 local = (uInvModel * vec4(camRel, 1.0)).xyz;
     if (any(greaterThan(abs(local), vec3(0.5)))) discard;   // outside the box

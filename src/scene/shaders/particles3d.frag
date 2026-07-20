@@ -29,8 +29,14 @@ float linearizeDepth(float d) {
     float n = uDepthRange.x;
     float f = uDepthRange.y;
     if (uPerspective == 1) {
+#ifdef REVERSED_Z
+        // Inverse of the reversed [0,1] mapping:
+        //   z_ndc = n * (f - dist) / (dist * (f - n))
+        return n * f / max(d * (f - n) + n, 1e-9);
+#else
         float z = d * 2.0 - 1.0;
         return 2.0 * n * f / (f + n - z * (f - n));
+#endif
     }
     return n + d * (f - n);
 }

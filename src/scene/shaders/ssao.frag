@@ -25,14 +25,23 @@ out vec4 FragColor;
 // Window-space UV + depth -> view-space position.
 vec3 viewPos(vec2 uv) {
     float d = texture(uDepthTex, uv).r;
+    // Window depth is already the clip-space z under [0,1] clip control.
+#ifdef REVERSED_Z
+    vec4 clip = vec4(uv * 2.0 - 1.0, d, 1.0);
+#else
     vec4 clip = vec4(uv * 2.0 - 1.0, d * 2.0 - 1.0, 1.0);
+#endif
     vec4 v = uInvProj * clip;
     return v.xyz / v.w;
 }
 
 void main() {
     float d0 = texture(uDepthTex, vUV).r;
+#ifdef REVERSED_Z
+    if (d0 <= 0.0) {   // background / sky: never occluded
+#else
     if (d0 >= 1.0) {   // background / sky: never occluded
+#endif
         FragColor = vec4(1.0);
         return;
     }

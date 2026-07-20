@@ -283,6 +283,12 @@ public:
     /// half-height and distance does not enter into it.
     bool cameraIsPerspective() const { return cameraIsPerspective_; }
 
+    /// Rebuild the projection if it was built under a different depth
+    /// convention than the one now active. No-op in the overwhelmingly common
+    /// case; the renderer calls it once per frame because the convention is
+    /// only settled on the first frame that has a GL context.
+    void syncProjectionToDepthPolicy();
+
     /// Unproject canvas-local pixel coordinates to a world-space ray.
     /// `localX` / `localY` are in pixels relative to the canvas (top-left
     /// origin). Returns true on success; false if the camera has not been
@@ -593,6 +599,16 @@ private:
     float cameraFovY_  = 1.0f;
     float cameraAspect_ = 1.0f;
     bool  cameraIsPerspective_ = true;
+    // Orthographic half-extents, kept for the same reason as the intrinsics
+    // above: so a projection built through the imperative setCameraOrtho path
+    // can be rebuilt without the caller.
+    float cameraOrthoL_ = -1.0f, cameraOrthoR_ = 1.0f;
+    float cameraOrthoB_ = -1.0f, cameraOrthoT_ = 1.0f;
+    // Which depth convention built projectionMatrix_. The convention is only
+    // decided once a GL context exists, which can be after JS has already set
+    // a camera, so the matrix and the context can disagree for exactly one
+    // frame; syncProjectionToDepthPolicy() closes that gap.
+    bool  projectionBuiltReversed_ = false;
     // When the caller didn't pin an explicit aspect (e.g. omitted `aspect`
     // in scene.setCamera), the projection matrix must stay in lock-step with
     // canvas/FBO dimensions — otherwise resizing the window squishes content

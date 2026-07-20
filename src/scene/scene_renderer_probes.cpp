@@ -215,7 +215,7 @@ bool SceneRenderer::captureReflectionProbe(ReflectionProbeNode* probe,
         if (probeDepthRBO_) glDeleteRenderbuffers(1, &probeDepthRBO_);
         glGenRenderbuffers(1, &probeDepthRBO_);
         glBindRenderbuffer(GL_RENDERBUFFER, probeDepthRBO_);
-        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, res, res);
+        glRenderbufferStorage(GL_RENDERBUFFER, depthStencilInternalFormat(), res, res);
         glBindRenderbuffer(GL_RENDERBUFFER, 0);
         probeDepthSize_ = res;
     }
@@ -264,7 +264,7 @@ bool SceneRenderer::captureReflectionProbe(ReflectionProbeNode* probe,
     const float nearZ = 0.05f;
     const float farZ = savedFar > 1000.0f ? savedFar : 1000.0f;
     const float fovY = 1.57079632679f;   // 90°
-    const Mat4 proj = bromath::mperspective(fovY, 1.0f, nearZ, farZ);
+    const Mat4 proj = makePerspective(fovY, 1.0f, nearZ, farZ);
 
     // Standard GL cube-face capture bases (+X -X +Y -Y +Z -Z with the
     // V-flip folded into the up vectors) so the cubemap samples correctly
@@ -310,14 +310,15 @@ bool SceneRenderer::captureReflectionProbe(ReflectionProbeNode* probe,
         graph_.cameraIsPerspective_ = true;
         cullingActive_ = frustumCullingEnabled_;
         if (cullingActive_) {
-            cameraFrustum_ = bromath::ffromViewProj(
+            cameraFrustum_ = makeFrustum(
                 bromath::mmul(proj, graph_.viewMatrix_));
         }
 
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        glClearDepth(depthClearFar());
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
         glEnable(GL_DEPTH_TEST);
-        glDepthFunc(GL_LESS);
+        glDepthFunc(depthFuncCloser());
 
         renderSkyboxPass();
         renderProbeSceneOpaque(lights);

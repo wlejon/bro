@@ -4,6 +4,7 @@
 #include "render/skia_backend.h"
 #include "dom/document.h"
 #include "util/log.h"
+#include "scene/depth_policy.h"
 #include "brogameagent/world.h"
 
 #include "broimage/decode.h"
@@ -206,15 +207,31 @@ void SceneGraph::applyActiveCamera() {
     cameraAspect_ = aspect;
     if (cam->perspective()) {
         cameraFovY_ = cam->fovY();
-        projectionMatrix_ = bromath::mperspective(cam->fovY(), aspect,
-                                                  cam->nearZ(), cam->farZ());
+        projectionMatrix_ = makePerspective(cam->fovY(), aspect,
+                                                                            cam->nearZ(), cam->farZ());
         cameraIsPerspective_ = true;
     } else {
         const float halfH = 0.5f * cam->orthoHeight();
         const float halfW = halfH * aspect;
-        projectionMatrix_ = bromath::mortho(-halfW, halfW, -halfH, halfH,
-                                            cam->nearZ(), cam->farZ());
+        cameraOrthoL_ = -halfW; cameraOrthoR_ = halfW;
+        cameraOrthoB_ = -halfH; cameraOrthoT_ = halfH;
+        projectionMatrix_ = makeOrtho(-halfW, halfW, -halfH, halfH,
+                                                          cam->nearZ(), cam->farZ());
         cameraIsPerspective_ = false;
+    }
+}
+
+void SceneGraph::syncProjectionToDepthPolicy() {
+    if (projectionBuiltReversed_ == gReversedZ) return;
+    projectionBuiltReversed_ = gReversedZ;
+
+    if (cameraIsPerspective_) {
+        projectionMatrix_ = makePerspective(cameraFovY_, cameraAspect_,
+                                            cameraNearZ_, cameraFarZ_);
+    } else {
+        projectionMatrix_ = makeOrtho(cameraOrthoL_, cameraOrthoR_,
+                                      cameraOrthoB_, cameraOrthoT_,
+                                      cameraNearZ_, cameraFarZ_);
     }
 }
 
@@ -368,8 +385,8 @@ void SceneGraph::setCanvasSize(int w, int h) {
     if (cameraAspectFollowsCanvas_ && cameraIsPerspective_ && w > 0 && h > 0) {
         float aspect = static_cast<float>(w) / static_cast<float>(h);
         cameraAspect_ = aspect;
-        projectionMatrix_ = bromath::mperspective(cameraFovY_, aspect,
-                                              cameraNearZ_, cameraFarZ_);
+        projectionMatrix_ = makePerspective(cameraFovY_, aspect,
+                                                                    cameraNearZ_, cameraFarZ_);
     }
 }
 
@@ -417,7 +434,7 @@ SceneNode* SceneGraph::findByName(const std::string& name) const {
 void SceneGraph::setCamera(float fovY, float aspect, float nearZ, float farZ,
                            const Vec3& eye, const Vec3& target, const Vec3& up) {
     activeCameraId_ = 0;  // imperative view wins (last camera call wins)
-    projectionMatrix_ = bromath::mperspective(fovY, aspect, nearZ, farZ);
+    projectionMatrix_ = makePerspective(fovY, aspect, nearZ, farZ);
     viewMatrix_ = bromath::mlookAt(eye, target, up);
     cameraEye_ = eye;
     cameraNearZ_ = nearZ; cameraFarZ_ = farZ; cameraFovY_ = fovY; cameraAspect_ = aspect;
@@ -427,7 +444,7 @@ void SceneGraph::setCamera(float fovY, float aspect, float nearZ, float farZ,
 void SceneGraph::setCameraQuat(float fovY, float aspect, float nearZ, float farZ,
                                const Vec3& eye, const Quat& orientation) {
     activeCameraId_ = 0;  // imperative view wins (last camera call wins)
-    projectionMatrix_ = bromath::mperspective(fovY, aspect, nearZ, farZ);
+    projectionMatrix_ = makePerspective(fovY, aspect, nearZ, farZ);
     // View matrix = inverse camera transform. For unit quaternion, inverse = conjugate.
     Quat inv = bromath::qconjugate(orientation);
     viewMatrix_ = bromath::mfromQuat(inv);
@@ -445,7 +462,9 @@ void SceneGraph::setCameraOrtho(float left, float right, float bottom, float top
                                 float nearZ, float farZ,
                                 const Vec3& eye, const Vec3& target, const Vec3& up) {
     activeCameraId_ = 0;  // imperative view wins (last camera call wins)
-    projectionMatrix_ = bromath::mortho(left, right, bottom, top, nearZ, farZ);
+    projectionMatrix_ = makeOrtho(left, right, bottom, top, nearZ, farZ);
+    cameraOrthoL_ = left; cameraOrthoR_ = right;
+    cameraOrthoB_ = bottom; cameraOrthoT_ = top;
     viewMatrix_ = bromath::mlookAt(eye, target, up);
     cameraEye_ = eye;
     cameraNearZ_ = nearZ; cameraFarZ_ = farZ;

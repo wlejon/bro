@@ -200,8 +200,9 @@ void SceneRenderer::ensureMeshFBO() {
     // the post-tonemap unlit overlay's depth test.
     glGenTextures(1, &meshDepthTex_);
     glBindTexture(GL_TEXTURE_2D, meshDepthTex_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH24_STENCIL8, meshFBOWidth_, meshFBOHeight_, 0,
-                 GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, nullptr);
+    glTexImage2D(GL_TEXTURE_2D, 0, depthStencilInternalFormat(),
+                 meshFBOWidth_, meshFBOHeight_, 0,
+                 GL_DEPTH_STENCIL, depthStencilType(), nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -256,7 +257,7 @@ void SceneRenderer::ensureMSAAFBO() {
                                          meshFBOWidth_, meshFBOHeight_);
         glGenRenderbuffers(1, &msaaDepthRBO_);
         glBindRenderbuffer(GL_RENDERBUFFER, msaaDepthRBO_);
-        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, GL_DEPTH24_STENCIL8,
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, samples, depthStencilInternalFormat(),
                                          meshFBOWidth_, meshFBOHeight_);
         glBindRenderbuffer(GL_RENDERBUFFER, 0);
 
@@ -385,6 +386,16 @@ bool SceneRenderer::cameraCulled(SceneNode* n) const {
 }
 
 void SceneRenderer::render3D() {
+    // First frame that reaches here is the first point a GL context is
+    // guaranteed current, so this is where the depth convention gets decided.
+    // Idempotent; every later call is a load-and-compare. The graph may have
+    // built a projection before this (the imperative setCamera path runs
+    // whenever JS says so), so bring it into agreement immediately after —
+    // clip control is context-wide and a stale projection would fail every
+    // depth test.
+    initDepthPolicy();
+    graph_.syncProjectionToDepthPolicy();
+
     hasMeshContent_ = false;
     cullStats_ = CullStats{};
 
@@ -428,7 +439,7 @@ void SceneRenderer::render3D() {
     // projection-agnostic, so ortho cameras work unchanged.
     cullingActive_ = frustumCullingEnabled_ && has3D;
     if (cullingActive_) {
-        cameraFrustum_ = bromath::ffromViewProj(
+        cameraFrustum_ = makeFrustum(
             bromath::mmul(graph_.projectionMatrix_, graph_.viewMatrix_));
     }
 
@@ -479,9 +490,13 @@ void SceneRenderer::render3D() {
             glDepthMask(GL_TRUE);
 
             glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+            // Under reversed-Z "far" is 0, not 1. glClearDepth is global
+            // state and the shadow pass sets its own, so set it here every
+            // frame rather than once at init.
+            glClearDepth(depthClearFar());
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
             glEnable(GL_DEPTH_TEST);
-            glDepthFunc(GL_LESS);
+            glDepthFunc(depthFuncCloser());
 
             hasMeshContent_ = true;
 
@@ -1066,7 +1081,7 @@ void SceneRenderer::render3D() {
                 glBindFramebuffer(GL_FRAMEBUFFER, tonemapFBO_);
                 glViewport(0, 0, tonemapFBOWidth_, tonemapFBOHeight_);
                 glEnable(GL_DEPTH_TEST);
-                glDepthFunc(GL_LESS);
+                glDepthFunc(depthFuncCloser());
                 glDepthMask(GL_FALSE);                  // scene depth stays intact
                 glEnable(GL_CULL_FACE);
                 glCullFace(GL_BACK);
