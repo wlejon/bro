@@ -370,6 +370,124 @@ if (!scene) {
         cmD.destroy();
     }
 
+    // =====================================================================
+    // (6) The zoom is STABLE under an app that sizes its data from the
+    //     terrain. farDistance changing is not cosmetic: an app answers it by
+    //     re-cutting and re-uploading a height layer, megabytes plus mipmap
+    //     generation, so a farDistance that steps every frame reads as a hard
+    //     stutter. The loop closes because the horizon bound depends on
+    //     maxHeight_, which is recomputed on every setHeightLayer — upload,
+    //     bound moves, farDistance moves, upload again.
+    //
+    //     So: hold the altitude constant, jitter only the terrain height, and
+    //     require the reach to settle. The jitter is small (peaks 2000..2600 m,
+    //     a factor of 1.14 in horizon(peak)) — well inside the hysteresis band,
+    //     and therefore something no amount of it may push across.
+    // =====================================================================
+    {
+        // Peaks spanning 200..3000 m move horizon(peak) from 50 to 196 km, so
+        // the bound swings by about 1.19x at these altitudes — comfortably
+        // inside the 1.56x band, and therefore something that must never move
+        // a settled stack.
+        const PEAKS = [200, 1200, 2200, 3000];
+        // SWEEP A FULL OCTAVE OF ALTITUDE. A threshold with no hysteresis only
+        // misbehaves where the jitter straddles one of its steps, and the steps
+        // are powers of two in reach — so a handful of arbitrary altitudes can
+        // all land in flat regions and pass while the mechanism is broken (an
+        // earlier four-altitude version of this test did exactly that). Walking
+        // camY across a factor of two walks reach across a factor of two, which
+        // cannot avoid a boundary.
+        for (let s = 0; s < 16; s++) {
+            const camY = 30000 * Math.pow(2, s / 16);
+            const cmP = scene.createClipmapTerrain({
+                levels: 10, resolution: 64, cellSize: 8,
+                planetRadius: 6371000, seaLevel: 0, maxCellScale: 4096,
+                detailWavelength: 64, detailRelief: 0.2, detailOctaves: 4,
+            });
+
+            const reaches = [];
+            for (let frame = 0; frame < 40; frame++) {
+                // What a well-behaved app does: size the request from the
+                // terrain's own answer, then hand the result back.
+                const cov = cmP.coverageDistance(camY);
+                assert(isFinite(cov) && cov > 0,
+                    `coverageDistance is a usable number (${cov})`);
+                const peak = PEAKS[frame % PEAKS.length];
+                const mpc = Math.max(1, (2 * cov) / 64);
+                cmP.setHeightLayer(0, makeLayer(64, 64, -32 * mpc, -32 * mpc, mpc,
+                    (x, z) => peak * (0.5 + 0.5 * Math.sin(x / 90000)
+                                                * Math.cos(z / 70000))));
+                cmP.update(0, camY, 0);
+                reaches.push(cmP.farDistance);
+            }
+
+            // Warm-up is allowed: the stack starts at cellScale 1 and has to
+            // climb to the altitude. What must not happen is perpetual motion.
+            const settled = reaches.slice(24);
+            const steps = settled.filter((r, i) => i > 0 && r !== settled[i - 1]).length;
+            assert(steps === 0,
+                `reach settles under a re-sizing app (camY ${camY.toFixed(0)}: ` +
+                `${steps} steps in the last ${settled.length} frames, ` +
+                `${[...new Set(settled)].join('/')})`);
+            cmP.destroy();
+        }
+    }
+
+    // =====================================================================
+    // (7) elevationAt mirrors cmDetail's exemplar stand-down. The upward
+    //     octaves exist only to fill the gap between the data floor and the
+    //     base wavelength; an exemplar fills that gap with real landforms, so
+    //     the shader switches them off. If the CPU side does not, the two
+    //     disagree by the whole upward band wherever the floor is coarse —
+    //     which is everywhere outside the finest layer's window — and
+    //     elevationAt is the surface a caller stands the camera on.
+    // =====================================================================
+    {
+        const opts = {
+            levels: 8, resolution: 64, cellSize: 4,
+            detailWavelength: 32, detailRelief: 0.25, detailGain: 1.0,
+            detailOctaves: 4,
+        };
+        // A COARSE layer, so the data floor is far above detailWavelength and
+        // the upward octaves are live. Flat, so anything nonzero is detail.
+        const coarseFlat = () => makeLayer(64, 64, -16384, -16384, 512, () => 0);
+
+        const cmNo = scene.createClipmapTerrain(opts);
+        cmNo.setHeightLayer(0, coarseFlat());
+
+        const cmEx = scene.createClipmapTerrain(opts);
+        cmEx.setHeightLayer(0, coarseFlat());
+        // A ZERO exemplar: present, so the gate trips, but contributing nothing
+        // of its own. What is left is purely the octave band difference.
+        cmEx.setDetailExemplar({
+            data: new Float32Array(64 * 64), width: 64, height: 64,
+            metresPerCell: 30,
+        });
+
+        let maxNo = 0, maxEx = 0;
+        for (let i = 0; i < 64; i++) {
+            const x = i * 613.7 - 8000, z = i * -419.3 + 6000;
+            maxNo = Math.max(maxNo, Math.abs(cmNo.elevationAt(x, z)));
+            maxEx = Math.max(maxEx, Math.abs(cmEx.elevationAt(x, z)));
+        }
+
+        // Scale, for the thresholds below: wDat kills every octave whose
+        // wavelength exceeds 4x the data floor, and a flat field pins the slope
+        // weight at its 0.12 floor, so the live upward band lands in the tens
+        // of metres rather than the hundreds the raw amplitudes suggest. The
+        // base band alone (what remains once the gate trips) is ~1 m.
+        console.log(`  exemplar gate: ${maxNo.toFixed(1)} m without, ` +
+                    `${maxEx.toFixed(1)} m with`);
+        assert(maxNo > 10,
+            `upward octaves are live without an exemplar (${maxNo.toFixed(1)} m)`);
+        assert(maxEx < 0.25 * maxNo,
+            `elevationAt stands the upward octaves down with an exemplar ` +
+            `(${maxEx.toFixed(1)} m vs ${maxNo.toFixed(1)} m)`);
+
+        cmNo.destroy();
+        cmEx.destroy();
+    }
+
     cm.destroy();
     assert(cm.node === null, 'destroy() releases the node');
     // Destroy is idempotent and every accessor stays safe afterwards.
