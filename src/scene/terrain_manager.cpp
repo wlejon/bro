@@ -627,6 +627,14 @@ int TerrainManager::update(float camX, float camY, float camZ) {
     int maxPerFrame = config_.maxLoadsPerUpdate;
     int levelCount = std::max(1, config_.lodLevelCount);
 
+    // Refresh stale chunks before loading new ones. They share the budget: a
+    // chunk that exists but shows placeholder data is worth more than one that
+    // does not exist yet, and letting both run at full budget in the same frame
+    // is how a streaming source turns into a stutter.
+    totalLoaded += processRegen(maxPerFrame);
+    maxPerFrame -= totalLoaded;
+    if (maxPerFrame <= 0) return totalLoaded;
+
     struct LoadCandidate {
         int cx, cz, lod, dist;
     };
@@ -895,6 +903,53 @@ uint8_t TerrainManager::getVoxel(float wx, float wy, float wz) const {
 
     float h = it->second.heightmap[lz * gridW + lx];
     return (wy <= h) ? 1 : 0;
+}
+
+void TerrainManager::invalidateRegion(float wx0, float wz0, float wx1, float wz1) {
+    if (wx1 < wx0) std::swap(wx0, wx1);
+    if (wz1 < wz0) std::swap(wz0, wz1);
+
+    for (auto& [coord, entry] : chunks_) {
+        const float cell   = lodCellSize(coord.lod);
+        const float chunkW = config_.chunkSizeX * cell;
+        const float chunkD = config_.chunkSizeZ * cell;
+        const float x0 = config_.origin.x + coord.x * chunkW;
+        const float z0 = config_.origin.z + coord.z * chunkD;
+
+        // The padded ring reaches one cell past the chunk on every side, so a
+        // chunk whose interior misses the region may still have sampled inside
+        // it — and a stale skirt is a seam against the neighbour that updated.
+        if (x0 + chunkW + cell < wx0 || x0 - cell > wx1) continue;
+        if (z0 + chunkD + cell < wz0 || z0 - cell > wz1) continue;
+        entry.needsRegen_ = true;
+    }
+}
+
+// Regenerate a bounded number of stale chunks. Called from update() so the work
+// is spread across frames the same way chunk loading is.
+int TerrainManager::processRegen(int budget) {
+    int done = 0;
+    std::vector<float> previous;
+    for (auto& [coord, entry] : chunks_) {
+        if (done >= budget) break;
+        if (!entry.needsRegen_) continue;
+        entry.needsRegen_ = false;
+
+        previous = entry.heightmapPadded;
+        generateHeightmap(entry, coord.x, coord.z, coord.lod);
+
+        // Most invalidated chunks are unchanged — an arriving tile is far
+        // larger than the region whose answers were actually placeholders — and
+        // remeshing them would burn the whole budget on no visible difference.
+        const bool changed =
+            previous.size() != entry.heightmapPadded.size() ||
+            std::memcmp(previous.data(), entry.heightmapPadded.data(),
+                        previous.size() * sizeof(float)) != 0;
+        if (changed) buildChunkMesh(entry, coord.x, coord.z, coord.lod);
+
+        done++;
+    }
+    return done;
 }
 
 void TerrainManager::rebuildDirty() {

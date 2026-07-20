@@ -173,6 +173,27 @@ public:
     /// call configure() or clear() to regenerate existing chunks.
     void setHeightSource(HeightSource fn) { heightSource_ = std::move(fn); }
 
+    /// Re-ask the height source for every chunk overlapping a world-space XZ
+    /// region, because the data behind it changed.
+    ///
+    /// This exists for streaming height sources. Such a source has to serve
+    /// chunks before its data arrives — with a placeholder, or by declining —
+    /// and needs a way to say "that answer is stale now" when it does arrive.
+    /// The only tool for that used to be configure(), which clear()s every
+    /// chunk and rebuilds from nothing; with data landing every few seconds
+    /// the terrain is wiped faster than the load budget can refill it and it
+    /// visibly appears and disappears on repeat, forever.
+    ///
+    /// Nothing is destroyed here. Affected chunks keep their MeshNode and are
+    /// regenerated in place, a few per update() against maxLoadsPerUpdate, and
+    /// a chunk whose heights come back byte-identical does not even rebuild
+    /// its mesh. So terrain refines rather than blinking.
+    ///
+    /// The region is expanded by one cell internally: a chunk's padded ring
+    /// samples into its neighbours, so a chunk just outside the region can
+    /// still have read data from inside it.
+    void invalidateRegion(float wx0, float wz0, float wx1, float wz1);
+
     /// Stats.
     int chunkCount() const { return static_cast<int>(chunks_.size()); }
     int totalTriangles() const;
@@ -197,6 +218,7 @@ private:
         std::vector<float> heightmapPadded;
         MeshNode* meshNode = nullptr;   // owned by SceneGraph
         bool dirty_ = false;            // needs mesh rebuild
+        bool needsRegen_ = false;       // heights are stale; re-ask the source
     };
 
     // LOD helpers
@@ -207,6 +229,7 @@ private:
     bool  isChunkCoveredByFinerLOD(int cx, int cz, int lod,
                                    float camWorldX, float camWorldZ) const;
 
+    int  processRegen(int budget);
     void generateHeightmap(ChunkEntry& entry, int cx, int cz, int lod);
     void buildChunkMesh(ChunkEntry& entry, int cx, int cz, int lod);
     void colorizeByHeight(bromesh::MeshData& mesh);

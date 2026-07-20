@@ -265,6 +265,29 @@ bool terrainSampleHeight(void* handle, float x, float z,
 // Install / Cleanup
 // -------------------------------------------------------------------------
 
+// terrain.invalidateRegion(x0, z0, x1, z1)
+//
+// Tell the terrain that the height source will now answer differently inside a
+// world-space XZ rectangle. Chunks overlapping it are regenerated in place, a
+// few per update(); nothing is destroyed. This is what a streaming source calls
+// when data arrives, instead of configure() — which wipes every chunk and, if
+// data keeps arriving, wipes them faster than they can be rebuilt.
+static JSValue js_terrain_invalidateRegion(JSContext* ctx, JSValueConst this_val,
+                                           int argc, JSValueConst* argv) {
+    auto* self = qjsbind::unwrap<TW>(ctx, this_val);
+    if (!self || !self->manager) return JS_UNDEFINED;
+    if (argc < 4) {
+        return JS_ThrowTypeError(ctx, "invalidateRegion(x0, z0, x1, z1) needs 4 numbers");
+    }
+    double v[4];
+    for (int i = 0; i < 4; i++) {
+        if (JS_ToFloat64(ctx, &v[i], argv[i]) < 0) return JS_EXCEPTION;
+    }
+    self->manager->invalidateRegion(static_cast<float>(v[0]), static_cast<float>(v[1]),
+                                    static_cast<float>(v[2]), static_cast<float>(v[3]));
+    return JS_UNDEFINED;
+}
+
 // terrain.setHeightSource(fn | null)
 //
 // fn(cx, cz, lod, paddedW, paddedH, cellSize, worldX0, worldZ0) must return a
@@ -373,6 +396,7 @@ void TerrainBindings::install(JSContext* ctx) {
         })
         .method_raw("configure", js_terrain_configure, 1)
         .method_raw("setHeightSource", js_terrain_setHeightSource, 1)
+        .method_raw("invalidateRegion", js_terrain_invalidateRegion, 4)
         .method("destroy", [](TW* self) {
             if (self->manager) {
                 self->manager->clear();
