@@ -150,7 +150,7 @@ bool TerrainManager::isChunkCoveredByFinerLOD(int cx, int cz, int lod,
     int camFinerX = static_cast<int>(std::floor(camWorldX / finerChunkWorld));
     int camFinerZ = static_cast<int>(std::floor(camWorldZ / finerChunkWorld));
 
-    // This chunk's world bounds → finer-level chunk coords
+    // This chunk's world bounds -> finer-level chunk coords
     int scale = config_.lodScaleFactor;
     int finerMinX = cx * scale;
     int finerMaxX = (cx + 1) * scale - 1;
@@ -702,7 +702,15 @@ int TerrainManager::update(float camX, float camY, float camZ) {
         int finerLod = coord.lod - 1;
         if (finerLod < levelCount && lodHasChunks[finerLod]) {
             float finerCoverage = lodChunkWorldSize(finerLod) * lodLoadRadius(finerLod);
-            entry.meshNode->setNearClipDist(finerCoverage * 0.9f);
+            // lodLoadRadius is a MANHATTAN radius, so the finer level covers a
+            // diamond, not a disc. A diamond of radius R only reaches R/sqrt(2)
+            // along its diagonals, so clipping this ring at 0.9*R cut away
+            // coarse fragments in the diagonal directions where no finer chunk
+            // had been loaded to replace them — punching wedge-shaped holes
+            // clean through the terrain, showing sky or water beneath.
+            // 0.65 stays inside the diamond's inscribed circle (0.707) with
+            // margin for the chunks being squares rather than points.
+            entry.meshNode->setNearClipDist(finerCoverage * 0.65f);
         } else {
             entry.meshNode->setNearClipDist(0.0f);
         }
