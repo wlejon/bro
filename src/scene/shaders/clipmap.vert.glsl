@@ -45,8 +45,13 @@ void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
     float hz = cmHeight(wxz + vec2(0.0, c), c);
     float slope = cmSlopeFrom(h0, hx, hz, c);
 
+    // Same band the fragment stage shades from, band-limited by the RING cell
+    // rather than the pixel: the mesh displaces the octaves it can express and
+    // the normal carries the rest. Both stages read the same data floor, so the
+    // surface stays one surface.
     vec2  rel = wxz - u_camXZ;
-    float h   = h0 + cmDetailWeight(slope) * cmDetail(rel, c).x;
+    float amp;
+    float h   = h0 + cmDetailWeight(slope) * cmDetail(rel, c, cmDataFloor(wxz), amp).x;
 
     pos    = vec3(rel.x, h - u_camY, rel.y);
     normal = vec3(0.0, 1.0, 0.0);          // real normal is per-pixel

@@ -29,7 +29,16 @@ uniform float u_detailRelief;      // detail slope as a fraction of the ground's
 uniform float u_detailGain;        // amplitude ratio between octaves
 uniform float u_detailOctaves;
 
-const int CM_DETAIL_MAX_OCTAVES = 8;
+// Enough to span the whole pyramid: the band runs from just under the coarsest
+// data cell (7.68 km for the worldgen source) down past the finest the eye can
+// resolve. Only the octaves inside the band-pass window are evaluated — the
+// window is a handful of octaves wide anywhere, so the loop bound is a ceiling,
+// not a cost.
+const int CM_DETAIL_MAX_OCTAVES = 20;
+
+// Octaves COARSER than u_detailWavelength, i.e. how far the band can climb when
+// the data underfoot is coarse. 2^8 * 48 m = 12 km, past the coarse cell.
+const int CM_DETAIL_UP_OCTAVES = 8;
 
 // Fade window, as a fraction of an octave's wavelength. An octave is at full
 // strength while the rendered cell is under 0.25 of its wavelength and gone by
@@ -103,36 +112,73 @@ vec3 cmNoiseD(vec2 p, ivec2 cellOfs) {
 }
 
 // ---------------------------------------------------------------------------
-// Band-limited fBm.
+// Band-passed fBm.
 //
 // `rel` is CAMERA-RELATIVE world XZ — the coordinate both stages already hold,
 // and the one that stays small. `c` is the rendered cell size from cmCellSize.
+// `dataFloor` is the finest cell the height pyramid resolves here.
 // Returns vec3(metres, dH/dx, dH/dz).
 //
-// Precision, concretely: an octave is alive only where c < 0.6*lambda, and
+// The octave stack is a FIXED lattice of absolute wavelengths, and the two
+// limits select a window into it rather than moving it. That distinction is the
+// whole design: a start wavelength that slid with the data floor would make the
+// noise pattern morph continuously as the fine layer travels with the camera,
+// which reads as the ground swimming. Octaves at fixed wavelengths only fade in
+// and out.
+//
+// Precision, concretely. Octaves at or below u_detailWavelength take the
+// anchored path: such an octave is alive only where c < 0.6*lambda, and
 // c >= dxz * u_invK, so it is evaluated only within ~19 wavelengths of the
 // camera. The lattice coordinate there is (|rel| + |u_detailOffset|)/lambda,
-// bounded by roughly 19 + kDetailAnchor/lambda — a few hundred even for the
-// finest octave, which fp32 resolves to thousands of steps per lattice cell.
-// The world position that would have blown that budget lives in `cellOfs`,
-// exactly: u_detailAnchor is a multiple of kDetailAnchor and every
-// wavelength divides it, so u_detailAnchor/lambda is an exact integer in fp32.
-// When the anchor jumps a step, u_detailOffset absorbs the same step and the
-// two cancel, so the field does not shift under a moving camera.
-vec3 cmDetail(vec2 rel, float c) {
+// bounded by roughly 19 + detailAnchorStep()/lambda — a few hundred even for
+// the finest octave, which fp32 resolves to thousands of steps per lattice
+// cell. The world position that would have blown that budget lives in
+// `cellOfs`, exactly: detailAnchorStep() is a whole number of base wavelengths
+// and every finer octave halves it, so u_detailAnchor/lambda is an exact
+// integer in fp32. When the anchor jumps a step, u_detailOffset absorbs the
+// same step and the two cancel, so the field does not shift under a moving
+// camera. Octaves ABOVE the base wavelength do not divide the anchor step and
+// do not need to — see the branch below.
+// `ampSum` returns the total amplitude actually summed, which is what acc.x is
+// bounded by. The band's top now MOVES with the data, so a caller cannot infer
+// the dominant amplitude from u_detailWavelength any more — it has to be
+// measured, or anything normalised against it (cavity) saturates at distance.
+vec3 cmDetail(vec2 rel, float c, float dataFloor, out float ampSum) {
+    ampSum       = 0.0;
     vec2  q      = rel + u_detailOffset;
-    float lambda = u_detailWavelength;
+    vec2  abs_   = rel + u_camXZ;
+    float lambda = u_detailWavelength * exp2(float(CM_DETAIL_UP_OCTAVES));
     vec3  acc    = vec3(0.0);
-    float gain   = 1.0;
+    bool  live   = false;
 
-    int n = int(u_detailOctaves);
+    int n = CM_DETAIL_UP_OCTAVES + int(u_detailOctaves);
     for (int i = 0; i < CM_DETAIL_MAX_OCTAVES; ++i) {
         if (i >= n) break;
-        // Monotonic in i: coarser octaves have a wider window, so once one
-        // octave is fully faded every finer one is too.
-        float w = 1.0 - smoothstep(CM_DETAIL_FADE_LO * lambda,
-                                   CM_DETAIL_FADE_HI * lambda, c);
-        if (w <= 0.0) break;
+        // LOW-PASS — the pixel. Sampling finer than the framebuffer aliases.
+        float wPix = 1.0 - smoothstep(CM_DETAIL_FADE_LO * lambda,
+                                      CM_DETAIL_FADE_HI * lambda, c);
+        // HIGH-PASS — the data. A grid of cell d represents no wavelength
+        // shorter than 2d, so detail owns everything below that and the height
+        // pyramid owns everything above. Without this the two overlap wherever
+        // the data is fine and, far more visibly, NEITHER covers the decades
+        // between a 7.68 km coarse cell and a fixed 48 m start.
+        float wDat = 1.0 - smoothstep(2.0 * dataFloor, 4.0 * dataFloor, lambda);
+        float w    = wPix * wDat;
+        // Coarse→fine, so the live octaves are one contiguous run: the data
+        // kills the coarse end, the pixel the fine end. Skip up to the run,
+        // stop after it.
+        if (w <= 0.0) {
+            if (live) break;
+            lambda *= 0.5;
+            continue;
+        }
+        live = true;
+
+        // Self-similar at and above the base wavelength; u_detailGain only
+        // shapes the decades BELOW it, so widening the band upward leaves the
+        // near-ground look exactly as it was tuned.
+        float gain = pow(u_detailGain,
+                         max(0.0, float(i) - float(CM_DETAIL_UP_OCTAVES)));
 
         // Amplitude is PROPORTIONAL TO WAVELENGTH, not an absolute metre
         // count. An absolute amplitude has to be retuned for every world — six
@@ -145,12 +191,22 @@ vec3 cmDetail(vec2 rel, float c) {
         float amp = u_detailRelief * lambda * gain;
 
         float inv = 1.0 / lambda;
-        vec3  nd  = cmNoiseD(q * inv, ivec2(u_detailAnchor * inv));
-        acc.x += amp * w * nd.x;
+        // The anchor split exists to keep the LATTICE COORDINATE small where
+        // fp32 would otherwise quantise it — at 100 km a 0.75 m octave gets
+        // only ~96 steps per cell. It costs an exact anchor/lambda integer,
+        // which holds only for octaves that divide the anchor step. Coarser
+        // octaves do not need it: at lambda >= the base wavelength the absolute
+        // coordinate still resolves thousands of steps per cell even 500 km
+        // out. The two branches agree exactly where both are valid, so the
+        // switch introduces no seam.
+        vec3 nd = (lambda > u_detailWavelength)
+                ? cmNoiseD(abs_ * inv, ivec2(0))
+                : cmNoiseD(q * inv, ivec2(u_detailAnchor * inv));
+        acc.x  += amp * w * nd.x;
         acc.yz += amp * w * inv * nd.yz;   // chain rule through q * inv
+        ampSum += amp * w;
 
         lambda *= 0.5;
-        gain   *= u_detailGain;
     }
     return acc;
 }

@@ -134,6 +134,11 @@ private:
     // visibly jumps once per anchor cell as the camera travels. Every finer
     // octave is lambda/2^i, so a multiple of the coarsest divides them all.
     // ~256 m is the target; the wavelength decides the achievable value.
+    //
+    // Only octaves at or below detailWavelength are anchored — the band now
+    // climbs above it wherever the data is coarse, and those octaves are wide
+    // enough that absolute world coordinates keep full fp32 precision. See the
+    // branch in cmDetail.
     float detailAnchorStep() const {
         const float lambda = cfg_.detailWavelength;
         if (!(lambda > 0.0f)) return 256.0f;
@@ -144,6 +149,15 @@ private:
 
     /// The height-layer stack alone, without procedural detail.
     float baseElevationAt(float x, float z) const;
+
+    /// Finest cell size the DATA resolves at this point, in metres — the top of
+    /// the procedural band. Mirrors cmDataFloor() in clipmap_common.glsl.
+    float dataFloorAt(float x, float z) const;
+
+    /// Octaves the detail band may climb ABOVE detailWavelength when the data
+    /// underfoot is coarser than it. Must equal CM_DETAIL_UP_OCTAVES in
+    /// clipmap_detail.glsl — the CPU query and the GPU surface diverge otherwise.
+    static constexpr int kDetailUpOctaves = 8;
 
     /// Largest height the detail octaves can add, in metres. Feeds the cull
     /// margin, which has to bound what the shader will emit.

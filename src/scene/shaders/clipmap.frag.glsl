@@ -44,7 +44,8 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     // as you walk towards it.
     float cs = cmCellSizeAA(wxz);
 
-    vec3  d  = cmDetail(rel, cs);
+    float dAmp;
+    vec3  d  = cmDetail(rel, cs, cmDataFloor(wxz), dAmp);
     float dw = cmDetailWeight(slope);
     grad += dw * d.yz;
 
@@ -52,10 +53,10 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     normal = n;
 
     float wy     = h0 + dw * d.x;
-    // Normalised against the coarsest octave's amplitude, which is what d.x is
-    // dominated by, so the term means the same thing in any world.
-    float cavity = clamp(d.x / max(dw * u_detailRelief * u_detailWavelength, 1e-3),
-                         -1.0, 1.0);
+    // Normalised against the amplitude actually summed — the band's top moves
+    // with the data floor, so u_detailWavelength no longer bounds d.x and
+    // dividing by it would drive cavity to +-1 across all distant ground.
+    float cavity = clamp(d.x / max(dw * dAmp, 1e-3), -1.0, 1.0);
 
     CmMaterial m;
     cmMaterialAt(rel, wy, n, cs, cavity, m);

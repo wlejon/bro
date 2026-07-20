@@ -64,6 +64,44 @@ float cmLayer(sampler2D tex, vec3 a, vec2 sz, vec2 wxz, float cDesired,
     return textureLod(tex, uv, lod).r;
 }
 
+// A layer's coverage weight alone, without the texture fetch — the same ramp
+// cmLayer applies, so the two agree on where a layer stops.
+float cmCoverage(vec3 a, vec2 sz, vec2 wxz) {
+    if (sz.x < 0.5 || sz.y < 0.5) return 0.0;
+    vec2 uv = ((wxz - a.xy) / a.z + 0.5) / sz;
+    return smoothstep(0.0, CM_FADE,
+                      min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
+}
+
+// The finest cell size the DATA actually resolves here, in metres.
+//
+// This is the upper end of the band procedural detail has to fill. The pyramid
+// is not uniform across the world: the finest layer is a window that follows
+// the camera, so a point inside it is described down to 30 m while a point
+// beyond it has nothing finer than the coarse field's 7.68 km. Without this,
+// detail starts at one constant everywhere and the spectrum between the coarse
+// cell and that constant is simply missing — kilometres of terrain that the
+// pixel can resolve and nothing generates, which is what makes distant ground
+// read as flat paint.
+//
+// Blended in LOG2 with the same weights cmHeight uses, so the floor crosses a
+// layer edge exactly as smoothly as the height does — a geometric quantity
+// deserves a geometric mean, and the octave selection downstream is log-scaled
+// anyway.
+float cmDataFloor(vec2 wxz) {
+    float n = u_layerCount;
+    float w = 0.0;
+    float f = 0.0;
+    if      (n > 3.5) { f = log2(u_l3a.z); }
+    else if (n > 2.5) { f = log2(u_l2a.z); }
+    else if (n > 1.5) { f = log2(u_l1a.z); }
+    else if (n > 0.5) { f = log2(u_l0a.z); }
+    if (n > 3.5) { w = cmCoverage(u_l2a, u_l2b, wxz); f = mix(f, log2(u_l2a.z), w); }
+    if (n > 2.5) { w = cmCoverage(u_l1a, u_l1b, wxz); f = mix(f, log2(u_l1a.z), w); }
+    if (n > 1.5) { w = cmCoverage(u_l0a, u_l0b, wxz); f = mix(f, log2(u_l0a.z), w); }
+    return exp2(f);
+}
+
 // Multi-scale height. Start from the COARSEST present layer (assumed to cover
 // everything), then blend each finer layer in by its coverage weight.
 // GL 3.3 cannot index a sampler array dynamically, so this is unrolled.

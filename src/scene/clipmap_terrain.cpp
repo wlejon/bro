@@ -396,6 +396,33 @@ float ClipmapTerrain::baseElevationAt(float x, float z) const {
     return cfg_.seaLevel + cfg_.heightScale * h;
 }
 
+// Mirrors cmDataFloor() — the finest cell the DATA resolves here, blended in
+// log2 with the same coverage weights baseElevationAt uses. It sets where the
+// procedural band starts, so it has to agree with the shader or the surface a
+// query reports stops being the surface the GPU draws.
+float ClipmapTerrain::dataFloorAt(float x, float z) const {
+    auto cover = [&](const ClipmapLayer& l) -> float {
+        if (!l.present || l.width < 1 || l.height < 1 || l.data.empty()) return 0.0f;
+        const float ux = ((x - l.originX) / l.metresPerCell + 0.5f)
+                       / static_cast<float>(l.width);
+        const float uz = ((z - l.originZ) / l.metresPerCell + 0.5f)
+                       / static_cast<float>(l.height);
+        return smoothstep01(kFade, std::min(std::min(ux, 1.0f - ux),
+                                            std::min(uz, 1.0f - uz)));
+    };
+    const int n = layerCount_;
+    float f = 0.0f;
+    if      (n > 3) f = std::log2(layers_[3].metresPerCell);
+    else if (n > 2) f = std::log2(layers_[2].metresPerCell);
+    else if (n > 1) f = std::log2(layers_[1].metresPerCell);
+    else if (n > 0) f = std::log2(layers_[0].metresPerCell);
+    else return cfg_.cellSize;
+    if (n > 3) { float w = cover(layers_[2]); f += (std::log2(layers_[2].metresPerCell) - f) * w; }
+    if (n > 2) { float w = cover(layers_[1]); f += (std::log2(layers_[1].metresPerCell) - f) * w; }
+    if (n > 1) { float w = cover(layers_[0]); f += (std::log2(layers_[0].metresPerCell) - f) * w; }
+    return std::exp2(f);
+}
+
 // ---------------------------------------------------------------------------
 // CPU mirror of the procedural detail.
 //
@@ -468,28 +495,41 @@ float ClipmapTerrain::elevationAt(float x, float z) const {
     const float slope = std::clamp(1.0f - e / std::max(len, 1e-6f), 0.0f, 1.0f);
     const float weight = std::max(slope, 0.12f);   // cmDetailWeight
 
-    double lambda = cfg_.detailWavelength;
-    float  gain   = 1.0f;
+    // The band starts above cfg_.detailWavelength wherever the data is coarser
+    // than it — see cmDetail. The high-pass against the data floor is mirrored;
+    // the shader's low-pass against the rendered cell still is not, for the
+    // reason above. Where anything collides the floor is the finest layer's,
+    // the upward octaves are off, and the two reduce to the same sum.
+    const float floorM = dataFloorAt(x, z);
+    double lambda = static_cast<double>(cfg_.detailWavelength)
+                  * std::exp2(static_cast<double>(kDetailUpOctaves));
     float  sum    = 0.0f;
-    const int n = std::min(cfg_.detailOctaves, 8);
+    const int n = kDetailUpOctaves + std::min(cfg_.detailOctaves, 8);
     for (int i = 0; i < n; ++i) {
-        const float amp = cfg_.detailRelief * static_cast<float>(lambda) * gain;
-        sum += amp * detailNoise(x / lambda, z / lambda);
+        const float wDat = 1.0f - smoothstep01(2.0f * floorM,
+                                               static_cast<float>(lambda) - 2.0f * floorM);
+        if (wDat > 0.0f) {
+            const float gain = std::pow(cfg_.detailGain,
+                                        std::max(0, i - kDetailUpOctaves));
+            const float amp = cfg_.detailRelief * static_cast<float>(lambda) * gain;
+            sum += amp * wDat * detailNoise(x / lambda, z / lambda);
+        }
         lambda *= 0.5;
-        gain   *= cfg_.detailGain;
     }
     return h0 + weight * sum;
 }
 
 float ClipmapTerrain::detailBound() const {
-    float lambda = cfg_.detailWavelength;
-    float gain   = 1.0f;
+    // Worst case over the whole world, so it assumes the band has climbed as
+    // far as it can: the upward octaves are only live where the data is coarse,
+    // but a cull margin has to hold everywhere.
+    float lambda = cfg_.detailWavelength * std::exp2(float(kDetailUpOctaves));
     float sum    = 0.0f;
-    const int n = std::min(cfg_.detailOctaves, 8);
+    const int n = kDetailUpOctaves + std::min(cfg_.detailOctaves, 8);
     for (int i = 0; i < n; ++i) {
-        sum += cfg_.detailRelief * lambda * gain;
+        sum += cfg_.detailRelief * lambda
+             * std::pow(cfg_.detailGain, std::max(0, i - kDetailUpOctaves));
         lambda *= 0.5f;
-        gain   *= cfg_.detailGain;
     }
     return sum;
 }
