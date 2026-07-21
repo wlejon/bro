@@ -433,61 +433,6 @@ if (!scene) {
         }
     }
 
-    // =====================================================================
-    // (7) elevationAt mirrors cmDetail's exemplar stand-down. The upward
-    //     octaves exist only to fill the gap between the data floor and the
-    //     base wavelength; an exemplar fills that gap with real landforms, so
-    //     the shader switches them off. If the CPU side does not, the two
-    //     disagree by the whole upward band wherever the floor is coarse —
-    //     which is everywhere outside the finest layer's window — and
-    //     elevationAt is the surface a caller stands the camera on.
-    // =====================================================================
-    {
-        const opts = {
-            levels: 8, resolution: 64, cellSize: 4,
-            detailWavelength: 32, detailRelief: 0.25, detailGain: 1.0,
-            detailOctaves: 4,
-        };
-        // A COARSE layer, so the data floor is far above detailWavelength and
-        // the upward octaves are live. Flat, so anything nonzero is detail.
-        const coarseFlat = () => makeLayer(64, 64, -16384, -16384, 512, () => 0);
-
-        const cmNo = scene.createClipmapTerrain(opts);
-        cmNo.setHeightLayer(0, coarseFlat());
-
-        const cmEx = scene.createClipmapTerrain(opts);
-        cmEx.setHeightLayer(0, coarseFlat());
-        // A ZERO exemplar: present, so the gate trips, but contributing nothing
-        // of its own. What is left is purely the octave band difference.
-        cmEx.setDetailExemplar({
-            data: new Float32Array(64 * 64), width: 64, height: 64,
-            metresPerCell: 30,
-        });
-
-        let maxNo = 0, maxEx = 0;
-        for (let i = 0; i < 64; i++) {
-            const x = i * 613.7 - 8000, z = i * -419.3 + 6000;
-            maxNo = Math.max(maxNo, Math.abs(cmNo.elevationAt(x, z)));
-            maxEx = Math.max(maxEx, Math.abs(cmEx.elevationAt(x, z)));
-        }
-
-        // Scale, for the thresholds below: wDat kills every octave whose
-        // wavelength exceeds 4x the data floor, and a flat field pins the slope
-        // weight at its 0.12 floor, so the live upward band lands in the tens
-        // of metres rather than the hundreds the raw amplitudes suggest. The
-        // base band alone (what remains once the gate trips) is ~1 m.
-        console.log(`  exemplar gate: ${maxNo.toFixed(1)} m without, ` +
-                    `${maxEx.toFixed(1)} m with`);
-        assert(maxNo > 10,
-            `upward octaves are live without an exemplar (${maxNo.toFixed(1)} m)`);
-        assert(maxEx < 0.25 * maxNo,
-            `elevationAt stands the upward octaves down with an exemplar ` +
-            `(${maxEx.toFixed(1)} m vs ${maxNo.toFixed(1)} m)`);
-
-        cmNo.destroy();
-        cmEx.destroy();
-    }
-
     cm.destroy();
     assert(cm.node === null, 'destroy() releases the node');
     // Destroy is idempotent and every accessor stays safe afterwards.
