@@ -385,7 +385,12 @@ JSValue js_node_setShaderTexture(JSContext* ctx, JSValueConst this_val, int argc
     }
 
     const bool mipmap = qjsbind::get_prop_bool(ctx, argv[1], "mipmap", false);
-    if (!meshNode->setCustomShaderTexture(name, tw, th, pixels, mipmap))
+    // Wrap mode: a window onto the world clamps (default); a periodic tile
+    // repeats; an equirect chart repeats in S but clamps in T (poles are
+    // single-valued and must not wrap the wrong hemisphere in).
+    const bool repeat = qjsbind::get_prop_bool(ctx, argv[1], "repeat", false);
+    const bool clampT = qjsbind::get_prop_bool(ctx, argv[1], "clampT", false);
+    if (!meshNode->setCustomShaderTexture(name, tw, th, pixels, mipmap, repeat, clampT))
         return JS_ThrowTypeError(ctx,
             "setShaderTexture: too many sampler uniforms on this node "
             "(max %d, GL 3.3 guarantees only %d combined texture units and "

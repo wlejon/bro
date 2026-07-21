@@ -1984,6 +1984,16 @@ class SceneNode {
    * the cost of ~33% more texture memory and a generate pass per upload.
    * The flag is per slot and sticks until the next full upload changes it.
    *
+   * **Wrap mode** (`repeat` / `clampT`, both off by default): the default
+   * clamps S and T, right for a slot that is a window onto the world with no
+   * meaning past its edge. `repeat: true` wraps both, for a periodic TILE
+   * sampled at arbitrary coordinates (a `fract()` in the shader can't do this
+   * — it leaves a texel seam every mip level widens). `clampT: true` wraps S
+   * but clamps T, for an equirectangular chart: periodic in longitude,
+   * single-valued at the poles, so wrapping T would blend the wrong
+   * hemisphere in within a few km of each pole. Like `mipmap`, per slot and
+   * applied on full upload.
+   *
    * **Sub-rectangle updates** (`x` / `y`): passing either key updates just
    * that region of the existing texture via `glTexSubImage2D` instead of
    * reallocating: `width`/`height` then describe the RECT, and `data` holds
@@ -2042,10 +2052,12 @@ class SceneNode {
    *
    * @param {string} name - must use the `u_` prefix
    * @param {?{width: number, height: number, data: Float32Array,
-   *           mipmap?: boolean, x?: number, y?: number}} tex -
+   *           mipmap?: boolean, repeat?: boolean, clampT?: boolean,
+   *           x?: number, y?: number}} tex -
    *        width*height floats, or null to release the slot. `mipmap`
-   *        generates a mip chain; `x`/`y` make it a sub-rectangle update
-   *        (then width/height describe the rect).
+   *        generates a mip chain; `repeat`/`clampT` set the wrap mode;
+   *        `x`/`y` make it a sub-rectangle update (then width/height
+   *        describe the rect).
    * @returns {SceneNode} this
    * @throws {TypeError} non-`u_` name, non-mesh node, no shader installed,
    *         non-positive extent, data shorter than width*height, or more
