@@ -372,6 +372,10 @@ static JSValue js_createPipeline(JSContext* ctx, JSValueConst, int argc,
 //   FP16 total doesn't fit a single GPU's VRAM still loads whole). GPU-only,
 //   ignored (with a warning) on the CPU backend. See
 //   brodiffusion::Pipeline::ModelDirOptions.
+//   opts.textEncoderPath — Krea 2 only: load the Qwen3-VL-4B text backbone
+//   from this path (a llama.cpp .gguf quant, or another diffusers
+//   text_encoder file/dir) instead of the bundled one; the vision tower still
+//   comes from the model dir. App-relative paths resolve like modelDir.
 static JSValue js_loadModel(JSContext* ctx, JSValueConst, int argc,
                             JSValueConst* argv) {
     std::string dir;
@@ -379,7 +383,17 @@ static JSValue js_loadModel(JSContext* ctx, JSValueConst, int argc,
         return JS_ThrowTypeError(ctx, "loadModel(modelDir, opts?): path string required");
     JSValueConst optsv = (argc >= 2) ? argv[1] : JS_UNDEFINED;
     bdp::Pipeline::ModelDirOptions dirOpts;
-    if (JS_IsObject(optsv)) dirOpts.quantize = getBool(ctx, optsv, "quantizeWeights");
+    if (JS_IsObject(optsv)) {
+        dirOpts.quantize = getBool(ctx, optsv, "quantizeWeights");
+        // Krea 2 only: override the Qwen3-VL-4B text encoder (e.g. a Q8_0
+        // .gguf, or another diffusers text_encoder). Resolved like the model
+        // dir so an app-relative path works. Empty → bundled encoder.
+        std::string tePath;
+        JSValue tev = JS_GetPropertyStr(ctx, optsv, "textEncoderPath");
+        if (argStr(ctx, tev, tePath) && !tePath.empty())
+            dirOpts.text_encoder_path = resolveAppPath(tePath);
+        JS_FreeValue(ctx, tev);
+    }
     // Cooperative cancellation: a Krea 2 load reads ~26GB on the worker thread —
     // one long synchronous native call the QuickJS interrupt can't break. Poll
     // the process-wide interrupt (set by Ctrl+C / window close / engine teardown)
