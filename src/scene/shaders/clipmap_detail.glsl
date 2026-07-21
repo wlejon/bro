@@ -52,6 +52,22 @@ const float CM_DETAIL_FLOOR = 0.12;
 const float CM_DETAIL_FADE_LO = 0.25;
 const float CM_DETAIL_FADE_HI = 0.60;
 
+// Roughening a SMOOTH learned layer.
+//
+// The data high-pass below assumes the height pyramid is band-limited: a grid of
+// cell d carries every wavelength down to 2d, so detail owns only what is finer.
+// That holds for the coarse chart. It does NOT hold for the streamed 30 m
+// decoder layer — that is a smooth heightfield that carries a mountain's macro
+// SHAPE but none of its sub-kilometre ruggedness, so trusting it down to 2*30 m
+// leaves the mountainside glassy (the "airplane view" look). Where the data
+// floor is finer than CM_ROUGHEN_DATA_M we therefore stop trusting the data at
+// 2*floor and instead let procedural detail fill down from CM_ROUGHEN_M — adding
+// the rock the smooth layer lacks. It is still slope-keyed by cmDetailWeight, so
+// it lands on the steep faces the decoder smoothed and leaves plains alone, and
+// the coarse-only world (data floor kilometres wide) is completely unaffected.
+const float CM_ROUGHEN_DATA_M = 400.0;   // a data floor finer than this = smooth learned window
+const float CM_ROUGHEN_M      = 500.0;   // procedural fills the surface from ~2x this down
+
 // ---------------------------------------------------------------------------
 // Hashed gradients.
 //
@@ -167,7 +183,13 @@ vec3 cmDetail(vec2 rel, float c, float dataFloor, out float ampSum) {
         // pyramid owns everything above. Without this the two overlap wherever
         // the data is fine and, far more visibly, NEITHER covers the decades
         // between a 7.68 km coarse cell and a fixed 48 m start.
-        float wDat = 1.0 - smoothstep(2.0 * dataFloor, 4.0 * dataFloor, lambda);
+        //
+        // EXCEPT over a smooth learned window (see CM_ROUGHEN_*): there the data
+        // floor is metres but the data is glassy below the kilometre, so trusting
+        // it that far leaves no ruggedness. Roughen from a fixed coarser ceiling
+        // instead, letting procedural overlap the band the decoder rendered flat.
+        float hpFloor = (dataFloor < CM_ROUGHEN_DATA_M) ? CM_ROUGHEN_M : dataFloor;
+        float wDat = 1.0 - smoothstep(2.0 * hpFloor, 4.0 * hpFloor, lambda);
         float w    = wPix * wDat;
         // Coarse→fine, so the live octaves are one contiguous run: the data
         // kills the coarse end, the pixel the fine end. Skip up to the run,
