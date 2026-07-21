@@ -87,8 +87,18 @@ uint cmHashU(ivec2 c) {
 }
 
 vec2 cmGradient(ivec2 c) {
-    float a = float(cmHashU(c) & 0xffffu) * (6.2831853 / 65536.0);
-    return vec2(cos(a), sin(a));
+    uint h = cmHashU(c);
+    const vec2 grads[8] = vec2[](
+        vec2( 1.0,  0.0),
+        vec2( 0.70710678,  0.70710678),
+        vec2( 0.0,  1.0),
+        vec2(-0.70710678,  0.70710678),
+        vec2(-1.0,  0.0),
+        vec2(-0.70710678, -0.70710678),
+        vec2( 0.0, -1.0),
+        vec2( 0.70710678, -0.70710678)
+    );
+    return grads[h & 7u];
 }
 
 // Gradient noise in [-1,1] with its exact derivative: vec3(value, d/dx, d/dz).
