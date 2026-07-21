@@ -536,6 +536,10 @@ void SceneRenderer::render3D() {
             if (atmosphere_.enabled) renderAtmospherePass();
             else                     renderSkyboxPass();
 
+            // Stars sum additively onto whichever sky drew: swamped by a bright
+            // day sky, visible against the near-black sky above the atmosphere.
+            renderStarfieldPass();
+
             // --- Mesh pass --------------------------------------------------
             // Lit meshes render to the HDR FBO (pass through tonemap). Unlit
             // meshes are deferred to a post-tonemap overlay pass so their

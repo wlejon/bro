@@ -40,4 +40,14 @@ struct AtmosphereParams {
     float sunDiskIntensity = 25.0f;
 };
 
+// Parameters for the additive starfield (src/scene/shaders/starfield.frag).
+// Drawn over whichever sky is active, so the same field reads as invisible in a
+// bright day sky and as stars against the near-black sky above the atmosphere.
+struct StarfieldParams {
+    bool  enabled   = false;
+    float intensity = 1.0f;   // overall brightness
+    float density   = 1.0f;   // ~0..2, relative fraction of cells that hold a star
+    float rotation  = 0.0f;   // radians; slowly turns the celestial sphere about Y
+};
+
 } // namespace bro::scene

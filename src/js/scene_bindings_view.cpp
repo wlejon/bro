@@ -664,6 +664,24 @@ JSValue js_sg_setAtmosphere(JSContext* ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+// setStarfield({enabled, intensity, density, rotation}) — additive stars over
+// the sky. Omitted fields keep their defaults; setStarfield({enabled:false})
+// turns the pass off.
+JSValue js_sg_setStarfield(JSContext* ctx, JSValueConst this_val, int argc,
+                           JSValueConst* argv) {
+    auto* g = getGraph(ctx, this_val);
+    if (!g || argc < 1 || !JS_IsObject(argv[0])) return JS_UNDEFINED;
+
+    JSValueConst o = argv[0];
+    scene::StarfieldParams s;
+    s.enabled   = qjsbind::get_prop_bool(ctx, o, "enabled", true);
+    s.intensity = (float)qjsbind::get_prop_number(ctx, o, "intensity", s.intensity);
+    s.density   = (float)qjsbind::get_prop_number(ctx, o, "density", s.density);
+    s.rotation  = (float)qjsbind::get_prop_number(ctx, o, "rotation", s.rotation);
+    g->setStarfield(s);
+    return JS_UNDEFINED;
+}
+
 // setTiltShift({enabled, focusCenter, focusWidth, feather, strength,
 //               saturation, contrast}) — screen-space miniature DOF.
 // Passing { enabled: false } (or omitting enabled) turns the pass off.

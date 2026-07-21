@@ -20,6 +20,7 @@
 #include "brdf_lut.frag.h"
 #include "skybox.vert.h"
 #include "skybox.frag.h"
+#include "starfield.frag.h"
 #include "atmosphere.glsl.h"      // kAtmosphereSrc
 #include "sky_atmosphere.frag.h"  // kSkyAtmosphereFragSrc
 
@@ -526,6 +527,58 @@ void SceneRenderer::renderSkyboxPass() {
     glUseProgram(0);
 
     // Re-enable depth write/test for the geometry passes that follow.
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+}
+
+void SceneRenderer::ensureStarfieldPipeline() {
+    if (starProgram_) return;
+    ensureSkyboxPipeline();          // shares its vertex shader, VAO and quad
+    if (!skyboxVAO_) return;
+
+    starProgram_ = linkProgram(kSkyboxVertSrc, kStarfieldFragSrc, "Starfield program");
+    if (!starProgram_) return;
+    starUViewToWorld_ = glGetUniformLocation(starProgram_, "uViewToWorld");
+    starUTanHalfFovY_ = glGetUniformLocation(starProgram_, "uTanHalfFovY");
+    starUAspect_      = glGetUniformLocation(starProgram_, "uAspect");
+    starUIntensity_   = glGetUniformLocation(starProgram_, "uIntensity");
+    starUDensity_     = glGetUniformLocation(starProgram_, "uDensity");
+    starURotation_    = glGetUniformLocation(starProgram_, "uRotation");
+}
+
+// Additive over whichever sky already painted the background (atmosphere or
+// cubemap). Depth off like the other sky passes; the only difference is the
+// blend — GL_ONE/GL_ONE so stars sum onto the sky instead of replacing it.
+void SceneRenderer::renderStarfieldPass() {
+    if (!starfield_.enabled) return;
+    if (!graph_.cameraIsPerspective_) return;   // ortho has no view direction
+    ensureStarfieldPipeline();
+    if (!starProgram_) return;
+
+    float viewToWorld[9];
+    packViewToWorld(graph_.viewMatrix_, viewToWorld);
+
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_CULL_FACE);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_ONE, GL_ONE);
+
+    glUseProgram(starProgram_);
+    glUniformMatrix3fv(starUViewToWorld_, 1, GL_FALSE, viewToWorld);
+    glUniform1f(starUTanHalfFovY_, std::tan(graph_.cameraFovY_ * 0.5f));
+    glUniform1f(starUAspect_, graph_.cameraAspect_);
+    glUniform1f(starUIntensity_, starfield_.intensity);
+    glUniform1f(starUDensity_, starfield_.density);
+    glUniform1f(starURotation_, starfield_.rotation);
+
+    glBindVertexArray(skyboxVAO_);
+    glDrawArrays(GL_TRIANGLES, 0, 6);
+    glBindVertexArray(0);
+    glUseProgram(0);
+
+    glDisable(GL_BLEND);
     glDepthMask(GL_TRUE);
     glEnable(GL_DEPTH_TEST);
 }

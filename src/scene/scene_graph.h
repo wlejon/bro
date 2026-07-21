@@ -331,6 +331,10 @@ public:
     void setAtmosphere(const AtmosphereParams& a) { renderer_.setAtmosphere(a); }
     const AtmosphereParams& atmosphere() const { return renderer_.atmosphere(); }
 
+    /// Additive starfield over the sky: invisible by day, stars above the air.
+    void setStarfield(const StarfieldParams& s) { renderer_.setStarfield(s); }
+    const StarfieldParams& starfield() const { return renderer_.starfield(); }
+
     /// Tone mapping mode applied when composing the HDR mesh FBO to the
     /// caller-facing LDR texture. ACES matches modern filmic defaults;
     /// Reinhard is a cheaper fallback; Linear is raw clamp to 0-1.

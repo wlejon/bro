@@ -309,6 +309,9 @@ public:
     void  setEnvironmentRotation(float r) { envRotation_ = r; }
     float environmentRotation() const { return envRotation_; }
 
+    void setStarfield(const StarfieldParams& s) { starfield_ = s; }
+    const StarfieldParams& starfield() const { return starfield_; }
+
     // --- Custom mesh shaders ---
 
     /// Which mesh pipeline a custom-shader program variant targets. Static
@@ -677,6 +680,8 @@ private:
     void uploadAtmosphereUniforms(GLuint prog);
     void ensureSkyboxPipeline();
     void renderSkyboxPass();
+    void ensureStarfieldPipeline();
+    void renderStarfieldPass();
     void ensureIrradiancePipeline();
     bool runIrradianceConvolution();
     void ensurePrefilterPipeline();
@@ -1162,6 +1167,17 @@ private:
     GLint  skyUEnv_ = -1;
     GLint  skyUIntensity_ = -1;
     GLint  skyURotation_ = -1;
+
+    // Starfield draw pipeline (lazy init, additive over the sky). Shares
+    // skybox.vert's fullscreen ray and VAO.
+    StarfieldParams starfield_;
+    GLuint starProgram_ = 0;
+    GLint  starUViewToWorld_ = -1;
+    GLint  starUTanHalfFovY_ = -1;
+    GLint  starUAspect_ = -1;
+    GLint  starUIntensity_ = -1;
+    GLint  starUDensity_ = -1;
+    GLint  starURotation_ = -1;
 
     // --- 3D particle pipeline (lazy init) ---
     GLuint particleProgram_ = 0;
