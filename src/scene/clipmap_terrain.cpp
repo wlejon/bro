@@ -231,6 +231,8 @@ void ClipmapTerrain::pushStaticUniforms() {
     set("u_roughnessSand", {sandRoughness_});
     set("u_albedoGrass", {grassAlbedo_[0], grassAlbedo_[1], grassAlbedo_[2]});
     set("u_roughnessGrass", {grassRoughness_});
+    set("u_albedoForest", {forestAlbedo_[0], forestAlbedo_[1], forestAlbedo_[2]});
+    set("u_forestTint", {forestTint_});
 
     // Surface layer defaults
     set("u_surfA", {0.0f, 0.0f, 1.0f});
@@ -668,6 +670,15 @@ void ClipmapTerrain::setSnowLine(float snowLine) {
     if (node_) {
         float sl = snowLine;
         node_->setCustomShaderUniform("u_snowLine", 1, &sl);
+    }
+}
+
+void ClipmapTerrain::setForest(const float* albedo, float strength) {
+    std::copy(albedo, albedo + 3, forestAlbedo_);
+    forestTint_ = strength;
+    if (node_) {
+        node_->setCustomShaderUniform("u_albedoForest", 3, forestAlbedo_);
+        node_->setCustomShaderUniform("u_forestTint", 1, &forestTint_);
     }
 }
 

@@ -204,6 +204,30 @@ static JSValue js_clipmap_setMaterials(JSContext* ctx, JSValueConst this_val,
     return JS_DupValue(ctx, this_val);
 }
 
+// setForest({ albedo:[r,g,b], strength:0..1 }) — L0 forest canopy tint.
+static JSValue js_clipmap_setForest(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    auto* self = qjsbind::unwrap<CW>(ctx, this_val);
+    if (!self || !self->terrain) return JS_DupValue(ctx, this_val);
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "setForest(desc) needs an object");
+
+    float albedo[3] = {0.105f, 0.205f, 0.098f};
+    JSValue albVal = JS_GetPropertyStr(ctx, argv[0], "albedo");
+    if (JS_IsObject(albVal)) {
+        for (int i = 0; i < 3; ++i) {
+            JSValue el = JS_GetPropertyUint32(ctx, albVal, i);
+            double v = 0.0;
+            if (JS_ToFloat64(ctx, &v, el) >= 0) albedo[i] = (float)v;
+            JS_FreeValue(ctx, el);
+        }
+    }
+    JS_FreeValue(ctx, albVal);
+    double strength = qjsbind::get_prop_number(ctx, argv[0], "strength", 0.85);
+    self->terrain->setForest(albedo, (float)strength);
+    return JS_DupValue(ctx, this_val);
+}
+
 static JSValue js_clipmap_setSurfaceLayer(JSContext* ctx, JSValueConst this_val,
                                           int argc, JSValueConst* argv) {
     auto* self = qjsbind::unwrap<CW>(ctx, this_val);
@@ -320,6 +344,7 @@ void ClipmapBindings::install(JSContext* ctx) {
         .method_raw("setSnowLine", js_clipmap_setSnowLine, 1)
         .method_raw("setDetail", js_clipmap_setDetail, 1)
         .method_raw("setMaterials", js_clipmap_setMaterials, 1)
+        .method_raw("setForest", js_clipmap_setForest, 1)
         .method_raw("setSurfaceLayer", js_clipmap_setSurfaceLayer, 1)
         .method_raw("update", js_clipmap_update, 3)
         .method("elevationAt", [](CW* self, double x, double z) -> double {

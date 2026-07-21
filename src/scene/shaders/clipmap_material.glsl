@@ -25,6 +25,8 @@ uniform vec3  u_albedoSand;
 uniform float u_roughnessSand;
 uniform vec3  u_albedoGrass;
 uniform float u_roughnessGrass;
+uniform vec3  u_albedoForest;  // L0 canopy albedo (linear) for the forest tint
+uniform float u_forestTint;    // 0..1 strength of the forest recolour (0 = off)
 
 uniform sampler2D u_surface;  // surface layer: R=biome, G=moisture, B=temperature
 uniform vec3 u_surfA;         // (originX, originZ, metresPerCell)
@@ -144,6 +146,29 @@ void cmMaterialAt(vec2 rel, float wy, vec3 n, float c, float cavity,
     }
     vec3 cGrass = mix(baseGrass, baseGrass * 1.4,
                       clamp(0.5 + 0.5 * coarse + 0.18 * fine, 0.0, 1.0));
+
+    // ---- L0 forest canopy tint ----------------------------------------------
+    // Dense-forest biomes on tree-holding ground read as a darker, richer canopy
+    // green straight from the terrain material — this is the FAR foliage layer,
+    // so distant forest needs no billboards drawn at all. Recolours the grass
+    // toward canopy where the surface layer says forest; band-limited by the
+    // same coarse/fine mottle it borrows, so it breaks into clumps and dissolves
+    // to its mean at range rather than aliasing into speckle.
+    if (u_surfPresent > 0.5 && u_forestTint > 0.001) {
+        float bf = surfVal.r;
+        float forest =
+            (bf > 3.5 && bf < 4.5)  ? 1.0  :   // boreal / taiga
+            (bf > 6.5 && bf < 7.5)  ? 1.0  :   // temperate forest
+            (bf > 9.5 && bf < 11.5) ? 1.0  :   // seasonal tropical + rainforest
+            (bf > 5.5 && bf < 6.5)  ? 0.35 :   // grassland (scattered trees)
+            (bf > 8.5 && bf < 9.5)  ? 0.35 :   // savanna (scattered trees)
+            0.0;
+        forest *= (1.0 - smoothstep(0.22, 0.5, slope));       // only where trees hold
+        forest *= clamp(0.45 + 0.7 * surfVal.g, 0.0, 1.0);    // wetter -> denser
+        float clump = clamp(0.6 + 0.7 * coarse + 0.3 * fine, 0.0, 1.0);
+        vec3 canopy = u_albedoForest * (0.7 + 0.55 * clump);
+        cGrass = mix(cGrass, canopy, forest * u_forestTint);
+    }
 
     m.albedo = (cRock * rock + cSnow * snow + cSand * sand + cGrass * grass)
              / max(total, 1e-4);

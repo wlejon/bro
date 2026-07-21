@@ -124,6 +124,9 @@ public:
                       const float* snowAlbedo, float snowRoughness,
                       const float* sandAlbedo, float sandRoughness,
                       const float* grassAlbedo, float grassRoughness);
+    /// L0 forest canopy tint: recolour forest-biome ground toward `albedo`
+    /// (linear rgb) at `strength` in [0,1]. strength 0 disables it.
+    void setForest(const float* albedo, float strength);
     void setSurfaceLayer(const float* data, int width, int height,
                          float originX, float originZ, float metresPerCell);
 
@@ -280,6 +283,8 @@ private:
     float sandRoughness_  = 0.94f;
     float grassAlbedo_[3] = {0.180f, 0.235f, 0.128f};
     float grassRoughness_ = 0.97f;
+    float forestAlbedo_[3] = {0.105f, 0.205f, 0.098f};   // L0 canopy tint colour
+    float forestTint_      = 0.0f;                        // off until setForest()
 
     struct SurfaceLayer {
         std::vector<float> data;
