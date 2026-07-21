@@ -129,6 +129,136 @@ static JSValue js_clipmap_setHeightLayer(JSContext* ctx, JSValueConst this_val,
     return JS_DupValue(ctx, this_val);
 }
 
+static JSValue js_clipmap_setSnowLine(JSContext* ctx, JSValueConst this_val,
+                                      int argc, JSValueConst* argv) {
+    auto* self = qjsbind::unwrap<CW>(ctx, this_val);
+    if (!self || !self->terrain) return JS_DupValue(ctx, this_val);
+    if (argc < 1)
+        return JS_ThrowTypeError(ctx, "setSnowLine(m) needs a number");
+    double sl = 0.0;
+    if (JS_ToFloat64(ctx, &sl, argv[0]) < 0) return JS_EXCEPTION;
+    self->terrain->setSnowLine((float)sl);
+    return JS_DupValue(ctx, this_val);
+}
+
+static JSValue js_clipmap_setDetail(JSContext* ctx, JSValueConst this_val,
+                                    int argc, JSValueConst* argv) {
+    auto* self = qjsbind::unwrap<CW>(ctx, this_val);
+    if (!self || !self->terrain) return JS_DupValue(ctx, this_val);
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "setDetail(desc) needs an object");
+
+    const auto& cfg = self->terrain->config();
+    double wl = qjsbind::get_prop_number(ctx, argv[0], "wavelength", cfg.detailWavelength);
+    double rel = qjsbind::get_prop_number(ctx, argv[0], "relief", cfg.detailRelief);
+    double gain = qjsbind::get_prop_number(ctx, argv[0], "gain", cfg.detailGain);
+    int oct = qjsbind::get_prop_int(ctx, argv[0], "octaves", cfg.detailOctaves);
+
+    self->terrain->setDetail((float)wl, (float)rel, (float)gain, oct);
+    return JS_DupValue(ctx, this_val);
+}
+
+static void parseMaterialProp(JSContext* ctx, JSValueConst parent, const char* name,
+                              float* albedo_out, float& roughness_out) {
+    JSValue val = JS_GetPropertyStr(ctx, parent, name);
+    if (JS_IsObject(val)) {
+        JSValue albVal = JS_GetPropertyStr(ctx, val, "albedo");
+        if (JS_IsObject(albVal)) {
+            for (int i = 0; i < 3; ++i) {
+                JSValue el = JS_GetPropertyUint32(ctx, albVal, i);
+                double v = 0.0;
+                if (JS_ToFloat64(ctx, &v, el) >= 0) {
+                    albedo_out[i] = (float)v;
+                }
+                JS_FreeValue(ctx, el);
+            }
+        }
+        JS_FreeValue(ctx, albVal);
+        roughness_out = (float)qjsbind::get_prop_number(ctx, val, "roughness", roughness_out);
+    }
+    JS_FreeValue(ctx, val);
+}
+
+static JSValue js_clipmap_setMaterials(JSContext* ctx, JSValueConst this_val,
+                                       int argc, JSValueConst* argv) {
+    auto* self = qjsbind::unwrap<CW>(ctx, this_val);
+    if (!self || !self->terrain) return JS_DupValue(ctx, this_val);
+    if (argc < 1 || !JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx, "setMaterials(desc) needs an object");
+
+    float rockAlb[3]  = {0.246f, 0.232f, 0.221f};
+    float rockRough  = 0.88f;
+    float snowAlb[3]  = {0.760f, 0.790f, 0.830f};
+    float snowRough  = 0.62f;
+    float sandAlb[3]  = {0.480f, 0.430f, 0.330f};
+    float sandRough  = 0.94f;
+    float grassAlb[3] = {0.180f, 0.235f, 0.128f};
+    float grassRough = 0.97f;
+
+    parseMaterialProp(ctx, argv[0], "rock",  rockAlb,  rockRough);
+    parseMaterialProp(ctx, argv[0], "snow",  snowAlb,  snowRough);
+    parseMaterialProp(ctx, argv[0], "sand",  sandAlb,  sandRough);
+    parseMaterialProp(ctx, argv[0], "grass", grassAlb, grassRough);
+
+    self->terrain->setMaterials(rockAlb, rockRough, snowAlb, snowRough, sandAlb, sandRough, grassAlb, grassRough);
+    return JS_DupValue(ctx, this_val);
+}
+
+static JSValue js_clipmap_setSurfaceLayer(JSContext* ctx, JSValueConst this_val,
+                                          int argc, JSValueConst* argv) {
+    auto* self = qjsbind::unwrap<CW>(ctx, this_val);
+    if (!self || !self->terrain) return JS_DupValue(ctx, this_val);
+
+    if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
+        self->terrain->setSurfaceLayer(nullptr, 0, 0, 0, 0, 1);
+        return JS_DupValue(ctx, this_val);
+    }
+    if (!JS_IsObject(argv[0]))
+        return JS_ThrowTypeError(ctx,
+            "setSurfaceLayer: expected { data, width, height, originX, "
+            "originZ, metresPerCell } or null");
+
+    const int width  = qjsbind::get_prop_int(ctx, argv[0], "width", 0);
+    const int height = qjsbind::get_prop_int(ctx, argv[0], "height", 0);
+    const double originX = qjsbind::get_prop_number(ctx, argv[0], "originX", 0.0);
+    const double originZ = qjsbind::get_prop_number(ctx, argv[0], "originZ", 0.0);
+    const double mpc = qjsbind::get_prop_number(ctx, argv[0], "metresPerCell", 1.0);
+    if (width <= 0 || height <= 0)
+        return JS_ThrowTypeError(ctx,
+            "setSurfaceLayer: width and height must be positive");
+    if (!(mpc > 0.0))
+        return JS_ThrowTypeError(ctx,
+            "setSurfaceLayer: metresPerCell must be positive");
+
+    JSValue dataVal = JS_GetPropertyStr(ctx, argv[0], "data");
+    size_t byteOff = 0, viewLen = 0;
+    JSValue abuf = JS_GetTypedArrayBuffer(ctx, dataVal, &byteOff, &viewLen, nullptr);
+    if (JS_IsException(abuf)) {
+        JS_FreeValue(ctx, JS_GetException(ctx));
+        JS_FreeValue(ctx, abuf);
+        JS_FreeValue(ctx, dataVal);
+        return JS_ThrowTypeError(ctx, "setSurfaceLayer: data must be a Float32Array");
+    }
+    size_t abufLen = 0;
+    uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
+    const size_t want = static_cast<size_t>(width) * height * 3 * sizeof(float);
+    if (!ptr || viewLen < want) {
+        JS_FreeValue(ctx, abuf);
+        JS_FreeValue(ctx, dataVal);
+        return JS_ThrowRangeError(ctx,
+            "setSurfaceLayer: data holds %zu bytes, need %zu (%dx%dx3 floats)",
+            viewLen, want, width, height);
+    }
+
+    self->terrain->setSurfaceLayer(reinterpret_cast<const float*>(ptr + byteOff),
+                                   width, height, static_cast<float>(originX),
+                                   static_cast<float>(originZ),
+                                   static_cast<float>(mpc));
+    JS_FreeValue(ctx, abuf);
+    JS_FreeValue(ctx, dataVal);
+    return JS_DupValue(ctx, this_val);
+}
+
 // clipmap.update(camX, camY, camZ) -> this
 static JSValue js_clipmap_update(JSContext* ctx, JSValueConst this_val,
                                  int argc, JSValueConst* argv) {
@@ -187,6 +317,10 @@ void ClipmapBindings::install(JSContext* ctx) {
     qjsbind::Class<CW>(ctx, "ClipmapTerrain")
         // No constructor — created via scene.createClipmapTerrain()
         .method_raw("setHeightLayer", js_clipmap_setHeightLayer, 2)
+        .method_raw("setSnowLine", js_clipmap_setSnowLine, 1)
+        .method_raw("setDetail", js_clipmap_setDetail, 1)
+        .method_raw("setMaterials", js_clipmap_setMaterials, 1)
+        .method_raw("setSurfaceLayer", js_clipmap_setSurfaceLayer, 1)
         .method_raw("update", js_clipmap_update, 3)
         .method("elevationAt", [](CW* self, double x, double z) -> double {
             if (!self->terrain) return 0.0;

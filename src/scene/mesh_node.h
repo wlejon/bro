@@ -346,6 +346,7 @@ public:
         std::vector<float> data;     // staged R32F pixels (cleared on upload)
         int w = 0;
         int h = 0;
+        int channels = 1;
         bool dirty = false;
         // Generate a mip chain and use trilinear minification. Off by default:
         // a heightfield raymarcher wants the level-0 samples it staged, and
@@ -369,8 +370,8 @@ public:
         std::vector<SubUpdate> subUpdates;
     };
 
-    /// Stage a single-channel float texture for the named user sampler.
-    /// `data` must hold width*height floats; pass data=nullptr (or a zero
+    /// Stage a float texture for the named user sampler.
+    /// `data` must hold width*height*channels floats; pass data=nullptr (or a zero
     /// extent) to release the slot. `mipmap` opts the slot into a generated
     /// mip chain with GL_LINEAR_MIPMAP_LINEAR minification, which is what a
     /// shader sampling textureLod() at a FRACTIONAL level needs — without it
@@ -380,7 +381,8 @@ public:
     /// happens in flushPendingTextures().
     bool setCustomShaderTexture(const std::string& name, int width, int height,
                                 const float* data, bool mipmap = false,
-                                bool repeat = false, bool clampT = false);
+                                bool repeat = false, bool clampT = false,
+                                int channels = 1);
 
     /// Stage a sub-rectangle write into an EXISTING slot, avoiding the
     /// reallocation (and mip-chain rebuild from scratch) a full re-upload

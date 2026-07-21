@@ -81,6 +81,9 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
     for (int i = 0; i < kMaxLayers; ++i)
         node_->setCustomShaderTexture(kLayerTex[i], 1, 1, &zero, true);
 
+    const float zero3[3] = {0.0f, 0.0f, 0.0f};
+    node_->setCustomShaderTexture("u_surface", 1, 1, zero3, false, false, true, 3);
+
     pushStaticUniforms();
     pushLayerUniforms();
     update(0.0f, 0.0f, 0.0f);
@@ -218,6 +221,21 @@ void ClipmapTerrain::pushStaticUniforms() {
     set("u_detailGain", {cfg_.detailGain});
     set("u_detailOctaves", {static_cast<float>(cfg_.detailOctaves)});
     set("u_planetRadius", {cfg_.planetRadius});
+
+    // Material defaults
+    set("u_albedoRock", {rockAlbedo_[0], rockAlbedo_[1], rockAlbedo_[2]});
+    set("u_roughnessRock", {rockRoughness_});
+    set("u_albedoSnow", {snowAlbedo_[0], snowAlbedo_[1], snowAlbedo_[2]});
+    set("u_roughnessSnow", {snowRoughness_});
+    set("u_albedoSand", {sandAlbedo_[0], sandAlbedo_[1], sandAlbedo_[2]});
+    set("u_roughnessSand", {sandRoughness_});
+    set("u_albedoGrass", {grassAlbedo_[0], grassAlbedo_[1], grassAlbedo_[2]});
+    set("u_roughnessGrass", {grassRoughness_});
+
+    // Surface layer defaults
+    set("u_surfA", {0.0f, 0.0f, 1.0f});
+    set("u_surfB", {0.0f, 0.0f});
+    set("u_surfPresent", {0.0f});
 }
 
 void ClipmapTerrain::pushLayerUniforms() {
@@ -643,6 +661,81 @@ float ClipmapTerrain::detailBound() const {
         lambda *= 0.5f;
     }
     return sum;
+}
+
+void ClipmapTerrain::setSnowLine(float snowLine) {
+    cfg_.snowLine = snowLine;
+    if (node_) {
+        float sl = snowLine;
+        node_->setCustomShaderUniform("u_snowLine", 1, &sl);
+    }
+}
+
+void ClipmapTerrain::setDetail(float wavelength, float relief, float gain, int octaves) {
+    cfg_.detailWavelength = wavelength;
+    cfg_.detailRelief = relief;
+    cfg_.detailGain = gain;
+    cfg_.detailOctaves = octaves;
+    if (node_) {
+        node_->setCustomShaderUniform("u_detailWavelength", 1, &wavelength);
+        node_->setCustomShaderUniform("u_detailRelief", 1, &relief);
+        node_->setCustomShaderUniform("u_detailGain", 1, &gain);
+        float oct = (float)octaves;
+        node_->setCustomShaderUniform("u_detailOctaves", 1, &oct);
+    }
+}
+
+void ClipmapTerrain::setMaterials(const float* rockAlbedo, float rockRoughness,
+                                  const float* snowAlbedo, float snowRoughness,
+                                  const float* sandAlbedo, float sandRoughness,
+                                  const float* grassAlbedo, float grassRoughness) {
+    std::copy(rockAlbedo, rockAlbedo + 3, rockAlbedo_);
+    rockRoughness_ = rockRoughness;
+    std::copy(snowAlbedo, snowAlbedo + 3, snowAlbedo_);
+    snowRoughness_ = snowRoughness;
+    std::copy(sandAlbedo, sandAlbedo + 3, sandAlbedo_);
+    sandRoughness_ = sandRoughness;
+    std::copy(grassAlbedo, grassAlbedo + 3, grassAlbedo_);
+    grassRoughness_ = grassRoughness;
+
+    if (node_) {
+        node_->setCustomShaderUniform("u_albedoRock", 3, rockAlbedo_);
+        node_->setCustomShaderUniform("u_roughnessRock", 1, &rockRoughness_);
+        node_->setCustomShaderUniform("u_albedoSnow", 3, snowAlbedo_);
+        node_->setCustomShaderUniform("u_roughnessSnow", 1, &snowRoughness_);
+        node_->setCustomShaderUniform("u_albedoSand", 3, sandAlbedo_);
+        node_->setCustomShaderUniform("u_roughnessSand", 1, &sandRoughness_);
+        node_->setCustomShaderUniform("u_albedoGrass", 3, grassAlbedo_);
+        node_->setCustomShaderUniform("u_roughnessGrass", 1, &grassRoughness_);
+    }
+}
+
+void ClipmapTerrain::setSurfaceLayer(const float* data, int width, int height,
+                                     float originX, float originZ, float metresPerCell) {
+    if (!node_) return;
+    if (!data || width <= 0 || height <= 0) {
+        surf_.data.clear();
+        surf_.width = surf_.height = 0;
+        surf_.present = false;
+        const float zero3[3] = {0.0f, 0.0f, 0.0f};
+        node_->setCustomShaderTexture("u_surface", 1, 1, zero3, false, false, true, 3);
+    } else {
+        surf_.data.assign(data, data + (size_t)width * height * 3);
+        surf_.width = width;
+        surf_.height = height;
+        surf_.originX = originX;
+        surf_.originZ = originZ;
+        surf_.metresPerCell = metresPerCell;
+        surf_.present = true;
+        node_->setCustomShaderTexture("u_surface", width, height, surf_.data.data(), false, false, true, 3);
+    }
+
+    float a[3] = {surf_.originX, surf_.originZ, surf_.metresPerCell};
+    float b[2] = {surf_.present ? (float)surf_.width : 0.0f, surf_.present ? (float)surf_.height : 0.0f};
+    float present = surf_.present ? 1.0f : 0.0f;
+    node_->setCustomShaderUniform("u_surfA", 3, a);
+    node_->setCustomShaderUniform("u_surfB", 2, b);
+    node_->setCustomShaderUniform("u_surfPresent", 1, &present);
 }
 
 } // namespace bro::scene

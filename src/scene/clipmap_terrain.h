@@ -118,6 +118,15 @@ public:
                         float originX, float originZ, float metresPerCell,
                         bool wrapX = false);
 
+    void setSnowLine(float snowLine);
+    void setDetail(float wavelength, float relief, float gain, int octaves);
+    void setMaterials(const float* rockAlbedo, float rockRoughness,
+                      const float* snowAlbedo, float snowRoughness,
+                      const float* sandAlbedo, float sandRoughness,
+                      const float* grassAlbedo, float grassRoughness);
+    void setSurfaceLayer(const float* data, int width, int height,
+                         float originX, float originZ, float metresPerCell);
+
     /// Per frame: park the node on the camera and push the camera uniforms.
     void update(float camX, float camY, float camZ);
 
@@ -261,6 +270,26 @@ private:
 
     // Power-of-two zoom of the ring stack, chosen per update from altitude.
     float cellScale_ = 1.0f;
+
+    // Material uniforms
+    float rockAlbedo_[3]  = {0.246f, 0.232f, 0.221f};
+    float rockRoughness_  = 0.88f;
+    float snowAlbedo_[3]  = {0.760f, 0.790f, 0.830f};
+    float snowRoughness_  = 0.62f;
+    float sandAlbedo_[3]  = {0.480f, 0.430f, 0.330f};
+    float sandRoughness_  = 0.94f;
+    float grassAlbedo_[3] = {0.180f, 0.235f, 0.128f};
+    float grassRoughness_ = 0.97f;
+
+    struct SurfaceLayer {
+        std::vector<float> data;
+        int width = 0;
+        int height = 0;
+        float originX = 0.0f;
+        float originZ = 0.0f;
+        float metresPerCell = 1.0f;
+        bool present = false;
+    } surf_;
 };
 
 } // namespace bro::scene

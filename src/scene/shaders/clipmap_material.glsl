@@ -17,6 +17,20 @@
 
 uniform float u_snowLine;   // world metres where snow starts, before jitter
 
+uniform vec3  u_albedoRock;
+uniform float u_roughnessRock;
+uniform vec3  u_albedoSnow;
+uniform float u_roughnessSnow;
+uniform vec3  u_albedoSand;
+uniform float u_roughnessSand;
+uniform vec3  u_albedoGrass;
+uniform float u_roughnessGrass;
+
+uniform sampler2D u_surface;  // surface layer: R=biome, G=moisture, B=temperature
+uniform vec3 u_surfA;         // (originX, originZ, metresPerCell)
+uniform vec2 u_surfB;         // (width, height)
+uniform float u_surfPresent;  // 1.0 if present, 0.0 otherwise
+
 // Mottling scales, metres. Coarse breaks up the large flat washes; fine is the
 // scale you notice underfoot.
 const float CM_MOTTLE_COARSE = 34.0;
@@ -67,12 +81,26 @@ void cmMaterialAt(vec2 rel, float wy, vec3 n, float c, float cavity,
 
     float slope = clamp(1.0 - n.y, 0.0, 1.0);
 
+    // Sample surface layer if present
+    vec3 surfVal = vec3(0.0);
+    if (u_surfPresent > 0.5) {
+        vec2 t = (rel + u_camXZ - u_surfA.xy) / u_surfA.z;
+        vec2 uv = (t + 0.5) / u_surfB;
+        uv = clamp(uv, vec2(0.5 / u_surfB.x, 0.5 / u_surfB.y), vec2(1.0 - 0.5 / u_surfB.x, 1.0 - 0.5 / u_surfB.y));
+        surfVal = texture(u_surface, uv).rgb;
+    }
+
     // Rock wherever the surface is too steep to hold soil.
     float rock = smoothstep(0.10, 0.42, slope + 0.06 * coarse);
 
     // Snow above a jittered line, and only where it can settle: a 60-degree
     // face keeps none. Wind-scouring is what the coarse term stands in for.
     float snowLine = u_snowLine + 260.0 * coarse;
+    if (u_surfPresent > 0.5) {
+        // Temperature (surfVal.b) is low (cold) -> lower snow line. High -> higher snow line.
+        // Assume temperature is centered around 0.3.
+        snowLine += (surfVal.b - 0.3) * 1500.0;
+    }
     float snow = smoothstep(snowLine, snowLine + 340.0, wy)
                * (1.0 - smoothstep(0.18, 0.52, slope));
 
@@ -81,21 +109,45 @@ void cmMaterialAt(vec2 rel, float wy, vec3 n, float c, float cavity,
                * (1.0 - smoothstep(0.06, 0.20, slope));
 
     float grass = clamp(1.0 - rock - snow - sand, 0.0, 1.0);
+
+    // Spatially modulate by biome ID (surfVal.r)
+    if (u_surfPresent > 0.5) {
+        float b = surfVal.r;
+        if (b == 5.0 || b == 8.0) {
+            // Desert (cold desert / subtropical desert): convert grass to sand/rock
+            sand += grass * 0.7;
+            rock += grass * 0.3;
+            grass = 0.0;
+        } else if (b == 2.0) {
+            // Ice / Tundra: convert half grass to snow
+            snow += grass * 0.5;
+            grass *= 0.5;
+        }
+    }
+
     float total = rock + snow + sand + grass;
 
-    vec3 cRock  = mix(vec3(0.246, 0.232, 0.221), vec3(0.336, 0.313, 0.288),
-                      0.5 + 0.5 * fine);
-    vec3 cSnow  = vec3(0.760, 0.790, 0.830) * (1.0 + 0.05 * fine);
-    vec3 cSand  = mix(vec3(0.480, 0.430, 0.330), vec3(0.560, 0.510, 0.400),
-                      0.5 + 0.5 * fine);
-    // Grass swings between dry and lush over hundreds of metres; a single green
-    // over a whole continent is the other half of the "pastel painting" look.
-    vec3 cGrass = mix(vec3(0.180, 0.235, 0.128), vec3(0.268, 0.322, 0.170),
+    vec3 cRock  = mix(u_albedoRock, u_albedoRock * 1.36, 0.5 + 0.5 * fine);
+    vec3 cSnow  = u_albedoSnow * (1.0 + 0.05 * fine);
+    vec3 cSand  = mix(u_albedoSand, u_albedoSand * 1.17, 0.5 + 0.5 * fine);
+
+    // Grass swings between dry and lush over hundreds of metres/climate:
+    vec3 lushGrass = u_albedoGrass;
+    vec3 dryGrass  = vec3(0.38, 0.34, 0.20); // parched savanna/desert grass
+    vec3 coldGrass = vec3(0.28, 0.26, 0.22); // tundra grey-brown grass
+
+    vec3 baseGrass = u_albedoGrass;
+    if (u_surfPresent > 0.5) {
+        // Blend based on moisture (surfVal.g) and temperature (surfVal.b)
+        baseGrass = mix(dryGrass, lushGrass, clamp(surfVal.g * 1.5, 0.0, 1.0));
+        baseGrass = mix(coldGrass, baseGrass, clamp(surfVal.b * 2.0, 0.0, 1.0));
+    }
+    vec3 cGrass = mix(baseGrass, baseGrass * 1.4,
                       clamp(0.5 + 0.5 * coarse + 0.18 * fine, 0.0, 1.0));
 
     m.albedo = (cRock * rock + cSnow * snow + cSand * sand + cGrass * grass)
              / max(total, 1e-4);
-    m.roughness = (0.88 * rock + 0.62 * snow + 0.94 * sand + 0.97 * grass)
+    m.roughness = (u_roughnessRock * rock + u_roughnessSnow * snow + u_roughnessSand * sand + u_roughnessGrass * grass)
                 / max(total, 1e-4);
 
     // Cavity: sitting below the local detail mean means less sky reaches here.

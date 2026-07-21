@@ -234,7 +234,7 @@ static void flushTex(MeshNode::PendingTex& p, GLuint& glTex) {
 bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
                                       int height, const float* data,
                                       bool mipmap, bool repeat,
-                                      bool clampT) {
+                                      bool clampT, int channels) {
     const bool release = (width <= 0 || height <= 0 || !data);
     for (auto& t : userTextures_) {
         if (t.name != name) continue;
@@ -247,10 +247,12 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
             t.data.clear();
             t.data.shrink_to_fit();
             t.w = t.h = 0;
+            t.channels = 1;
         } else {
-            t.data.assign(data, data + (size_t)width * (size_t)height);
+            t.data.assign(data, data + (size_t)width * (size_t)height * (size_t)channels);
             t.w = width;
             t.h = height;
+            t.channels = channels;
             t.mipmap = mipmap;
             t.repeat = repeat;
             t.clampT = clampT;
@@ -262,9 +264,10 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
     if ((int)userTextures_.size() >= kMaxUserTextures) return false;
     UserTexture t;
     t.name = name;
-    t.data.assign(data, data + (size_t)width * (size_t)height);
+    t.data.assign(data, data + (size_t)width * (size_t)height * (size_t)channels);
     t.w = width;
     t.h = height;
+    t.channels = channels;
     t.mipmap = mipmap;
     t.repeat = repeat;
     t.clampT = clampT;
@@ -297,7 +300,7 @@ bool MeshNode::updateCustomShaderTexture(const std::string& name, int x, int y,
             return false;
         }
         UserTexture::SubUpdate s;
-        s.data.assign(data, data + (size_t)width * (size_t)height);
+        s.data.assign(data, data + (size_t)width * (size_t)height * (size_t)t.channels);
         s.x = x; s.y = y; s.w = width; s.h = height;
         t.subUpdates.push_back(std::move(s));
         return true;
@@ -312,7 +315,7 @@ void MeshNode::clearCustomShaderTexture(const std::string& name) {
 }
 
 // Upload/release one staged user sampler slot, then apply any staged
-// sub-rectangle writes. Single-channel float with CLAMP_TO_EDGE — bilinear
+// sub-rectangle writes. Float texture with CLAMP_TO_EDGE — bilinear
 // sampling of a heightfield with no wrap-around at the edges is exactly what
 // a raymarcher needs. Minification is trilinear only for mipmapped slots;
 // a mip-filtered min filter without a chain would render the texture
@@ -323,9 +326,23 @@ static void flushUserTex(MeshNode::UserTexture& t) {
         if (!t.tex) glGenTextures(1, &t.tex);
         glBindTexture(GL_TEXTURE_2D, t.tex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+
+        GLint internalFormat = GL_R32F;
+        GLenum format = GL_RED;
+        if (t.channels == 2) {
+            internalFormat = GL_RG32F;
+            format = GL_RG;
+        } else if (t.channels == 3) {
+            internalFormat = GL_RGB32F;
+            format = GL_RGB;
+        } else if (t.channels == 4) {
+            internalFormat = GL_RGBA32F;
+            format = GL_RGBA;
+        }
+
         if (t.dirty) {
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, t.w, t.h, 0,
-                         GL_RED, GL_FLOAT, t.data.data());
+            glTexImage2D(GL_TEXTURE_2D, 0, internalFormat, t.w, t.h, 0,
+                         format, GL_FLOAT, t.data.data());
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
                             t.mipmap ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -338,7 +355,7 @@ static void flushUserTex(MeshNode::UserTexture& t) {
         }
         for (const auto& s : t.subUpdates) {
             glTexSubImage2D(GL_TEXTURE_2D, 0, s.x, s.y, s.w, s.h,
-                            GL_RED, GL_FLOAT, s.data.data());
+                            format, GL_FLOAT, s.data.data());
         }
         // One generate covers the full upload and every sub-rect: a partial
         // write invalidates the levels above it, and GL has no partial
