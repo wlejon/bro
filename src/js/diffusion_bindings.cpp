@@ -427,6 +427,35 @@ static PipelineWrapper* pipelineSelf(JSContext* ctx, JSValueConst this_val) {
     return qjsbind::unwrap<PipelineWrapper>(ctx, this_val);
 }
 
+// pipeline.reloadTextEncoder(modelDir, textEncoderPath, opts?) -> undefined
+//   Krea 2 only. Reload JUST the Qwen3-VL-4B text backbone in place, keeping
+//   the resident DiT / VAE / vision tower — the cheap swap for comparing text
+//   encoders. `textEncoderPath` is a .gguf or diffusers safetensors file/dir,
+//   or "" to restore the model dir's bundled encoder. Paths resolve like
+//   loadModel's. opts.quantizeWeights (default true) matches loadModel.
+static JSValue js_pipeline_reloadTextEncoder(JSContext* ctx, JSValueConst this_val,
+                                             int argc, JSValueConst* argv) {
+    auto* w = pipelineSelf(ctx, this_val);
+    if (!w || !w->pipeline)
+        return JS_ThrowTypeError(ctx, "reloadTextEncoder: not a loaded Pipeline");
+    std::string dir, tePath;
+    if (argc < 1 || !argStr(ctx, argv[0], dir))
+        return JS_ThrowTypeError(ctx, "reloadTextEncoder(modelDir, textEncoderPath, opts?)");
+    if (argc >= 2) argStr(ctx, argv[1], tePath);   // "" allowed → bundled
+    bool quantize = true;
+    if (argc >= 3 && JS_IsObject(argv[2]))
+        quantize = getBool(ctx, argv[2], "quantizeWeights", true);
+    try {
+        w->pipeline->reload_krea2_text_encoder(
+            resolveAppPath(dir),
+            tePath.empty() ? std::string() : resolveAppPath(tePath),
+            quantize);
+        return JS_UNDEFINED;
+    } catch (const std::exception& e) {
+        return JS_ThrowInternalError(ctx, "reloadTextEncoder: %s", e.what());
+    }
+}
+
 // loadWeights(path)                              — single-file checkpoint
 // loadWeights(path, {textPrefix,unetPrefix,vaePrefix}) — single file, custom prefixes
 // loadWeights(textPath, unetPath, vaePath)       — diffusers 3-file export
@@ -1348,6 +1377,7 @@ static void registerPipelineClass(JSContext* ctx) {
         .method_raw("removeControlNet",   js_pipeline_removeControlNet,   1)
         .method_raw("clearControlNets",   js_pipeline_clearControlNets,   0)
         .method_raw("generate",           js_pipeline_generate,           2)
+        .method_raw("reloadTextEncoder",  js_pipeline_reloadTextEncoder,  3)
         .method_raw("prime",              js_pipeline_prime,              2)
         .method_raw("numXAttnBlocks",     js_pipeline_numXAttnBlocks,     0)
         .method_raw("sigmas",             js_pipeline_sigmas,             0)
