@@ -61,8 +61,7 @@ float cmSurface(vec2 wxz) {
     float hz = cmHeight(wxz + vec2(0.0, e), c);
     float slope = cmSlopeFrom(h0, hx, hz, e);
     float amp;
-    return h0 + cmDetailWeight(slope) * cmDetail(rel, c, floorM, amp).x
-              + cmExemplarH(rel, c, floorM);
+    return h0 + cmDetailWeight(slope) * cmDetail(rel, c, floorM, amp).x;
 }
 
 // Cells from the level's outer edge over which the morph runs. The overlap
@@ -94,9 +93,9 @@ void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
     vec2  wxz = centre + pos.xz;
 
     // The surface this ring would draw on its own. cmSurface carries the
-    // detail band and the exemplar as well as the layers — the exemplar
-    // displaces rather than only shading, because terrain whose silhouette
-    // stays flat while its shading says otherwise reads as a painted plane.
+    // procedural detail band as well as the layers — detail displaces rather
+    // than only shading, because terrain whose silhouette stays flat while its
+    // shading says otherwise reads as a painted plane.
     float h = cmSurface(wxz);
 
     // MORPH toward the next coarser ring across the outer band. Chebyshev

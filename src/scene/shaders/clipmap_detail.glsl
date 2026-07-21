@@ -29,14 +29,6 @@ uniform float u_detailRelief;      // detail slope as a fraction of the ground's
 uniform float u_detailGain;        // amplitude ratio between octaves
 uniform float u_detailOctaves;
 
-// The learned detail exemplar — see cmExemplar below. Declared up here because
-// cmDetail has to know whether it exists: the patch supersedes the octaves that
-// would otherwise climb toward the data floor.
-uniform sampler2D u_exemplar;
-uniform float     u_exN;         // texels per repeat
-uniform float     u_exPresent;
-uniform float     u_exLambda;    // repeat length of the coarse tap, metres
-
 // Enough to span the whole pyramid: the band runs from just under the coarsest
 // data cell (7.68 km for the worldgen source) down past the finest the eye can
 // resolve. Only the octaves inside the band-pass window are evaluated — the
@@ -155,11 +147,11 @@ vec3 cmDetail(vec2 rel, float c, float dataFloor, out float ampSum) {
     ampSum       = 0.0;
     vec2  q      = rel + u_detailOffset;
     vec2  abs_   = rel + u_camXZ;
-    // The upward octaves exist only to fill the gap between the data floor and
-    // the base wavelength. An exemplar fills that gap with real landforms, so
-    // the noise stands down to its original band rather than summing on top of
-    // structure that is already there.
-    int   up     = (u_exPresent > 0.5) ? 0 : CM_DETAIL_UP_OCTAVES;
+    // The upward octaves fill the gap between the data floor and the base
+    // wavelength: wherever the finest data underfoot is coarser than the base
+    // wavelength, the band climbs above it so the surface reads as terrain
+    // rather than a smooth ramp under the coarse cell.
+    int   up     = CM_DETAIL_UP_OCTAVES;
     float lambda = u_detailWavelength * exp2(float(up));
     vec3  acc    = vec3(0.0);
     bool  live   = false;
@@ -221,211 +213,6 @@ vec3 cmDetail(vec2 rel, float c, float dataFloor, out float ampSum) {
         lambda *= 0.5;
     }
     return acc;
-}
-
-// ---------------------------------------------------------------------------
-// Learned detail exemplar.
-//
-// A patch of decoder output, high-passed, made periodic and divided by its own
-// footprint (see ClipmapTerrain::setDetailExemplar). Because it is stored as
-// relief PER UNIT LENGTH, applying it over a repeat of `lambda` metres gives a
-// height of lambda * E — the aspect ratio the model produced, at whatever scale
-// it is asked for, with no tuned amplitude anywhere.
-//
-// One tap is a whole octave stack. The patch holds ~900 texels per repeat, so a
-// single sample at lambda carries structure from lambda down to lambda/900, and
-// the mip chain band-limits the fine end exactly the way the octave loop's
-// smoothstep does — that is what a mip chain IS. The gradient costs four more
-// taps at an EXPLICIT lod, which is also why manual wrapping is not needed and
-// would not work: the sampler wraps (GL_REPEAT), and explicit-lod sampling has
-// no implicit derivatives to break at the seam.
-// Two taps at an awkward ratio, each rotated differently. One tap alone repeats
-// on a visible grid at this scale; a second at a non-integer ratio beats
-// against the first with a period neither one has, and the rotation stops the
-// pair from sharing a drainage direction across the whole world.
-const float CM_EX_RATIO  = 13.7;
-const float CM_EX_ROT_A  = 0.31;
-const float CM_EX_ROT_B  = 2.24;
-const float CM_EX_FINE_W = 0.55;
-
-// The fractional mip the coarse tap lands on — diagnostics only.
-float cmExemplarLod(float c) {
-    return max(0.0, log2(max(c, 1e-6) / (u_exLambda / u_exN)));
-}
-
-// WHY THE EXEMPLAR IS NOT SAMPLED BILINEARLY.
-//
-// A texture fetch is bilinear, so the surface it defines is C0 but NOT C1: its
-// slope is constant along x within a texel cell and steps at every boundary.
-// The fragment stage builds its normal from that slope, so the normal comes out
-// as a grid of near-constant plates on the exemplar's texel lattice — rotated
-// with the tap, and growing with distance because the mip level does.
-// Multiplied by u_exLambda (twice the coarsest layer's cell, so kilometres) a
-// relative kink of a few percent becomes a large absolute slope step. That is
-// the shingling that made close mountainsides read as overlapping translucent
-// sheets, and it is why the artifact needed the exemplar present, ignored the
-// ring resolution, and left the height field itself looking smooth.
-//
-// Widening the difference stencil CANNOT fix it, which is what the first two
-// attempts got wrong. A coarser mip is still bilinear, so its derivative is
-// still piecewise constant — the plates just get bigger.
-//
-// The interpolant itself has to be C1. This is the cubic B-spline, which is C2
-// and evaluates in four bilinear fetches instead of sixteen point fetches by
-// folding each weight pair into one offset tap (Sigg & Hadwiger). The exemplar
-// is periodic and the sampler is GL_REPEAT, so the taps wrap correctly.
-//
-// The B-spline is chosen over Catmull-Rom deliberately: it approximates rather
-// than interpolates, so it has no negative lobes and cannot overshoot into
-// ringing along a ridge line. It is slightly softer than the bilinear fetch at
-// the same level, which costs nothing here — this field is band-limited to the
-// rendered cell anyway.
-
-// Cubic B-spline weights and their derivatives w.r.t. the fractional position.
-// Both sets are needed: the height uses w, the gradient uses dw, and dw sums to
-// zero rather than one, which is why the two share no normalisation.
-void cmBSpline(vec2 f, out vec2 w0, out vec2 w1, out vec2 w2, out vec2 w3) {
-    vec2 f2 = f * f, f3 = f2 * f, g = 1.0 - f;
-    w0 = g * g * g / 6.0;
-    w1 = (3.0 * f3 - 6.0 * f2 + 4.0) / 6.0;
-    w2 = (-3.0 * f3 + 3.0 * f2 + 3.0 * f + 1.0) / 6.0;
-    w3 = f3 / 6.0;
-}
-
-void cmBSplineD(vec2 f, out vec2 d0, out vec2 d1, out vec2 d2, out vec2 d3) {
-    vec2 f2 = f * f, g = 1.0 - f;
-    d0 = -0.5 * g * g;
-    d1 = (9.0 * f2 - 12.0 * f) / 6.0;
-    d2 = (-9.0 * f2 + 6.0 * f + 3.0) / 6.0;
-    d3 = 0.5 * f2;
-}
-
-// Value and gradient of the B-spline surface at `u`, sampled at fractional mip
-// `lod`. `n` is the texel count per axis at that level. dE is d(value)/d(u),
-// in normalised-uv units. Twelve bilinear taps: four for the value, four per
-// axis of the gradient. `grad` = 0 skips the eight gradient taps, which is what
-// the vertex stage takes — it only ever reads the height.
-vec3 cmExBicubic(vec2 u, float lod, float n, float grad) {
-    // WRAP FIRST. `u` arrives as world position / lambda, and the fine tap's
-    // lambda is only ~1.1 km, so 500 km from the origin u is ~600 and u * n
-    // reaches ~500,000 � where an fp32 ULP is a twentieth of a texel and `i`
-    // has no room left to carry a sub-texel offset.
-    //
-    // That offset is not a refinement, it IS the method: Sigg & Hadwiger
-    // reproduce a weighted pair of texels with ONE bilinear fetch by placing it
-    // at a precise fraction between them, so quantising the fraction silently
-    // returns some other blend.
-    //
-    // The patch is periodic and the sampler is GL_REPEAT, so folding u into
-    // [0,1) changes nothing mathematically and bounds u * n by n. The CPU
-    // mirror always did this (ClipmapTerrain::exemplarAt), so this also removes
-    // a real divergence between the two � they now agree on which texels a
-    // world position lands between, at any distance from the origin.
-    //
-    // NOT the cause of the ring-overlap sheets in the near field: those were
-    // measured to survive this, a point-sampled tap, and a pinned mip.
-    vec2 t = fract(u) * n - 0.5;
-    vec2 f = fract(t);
-    vec2 i = t - f;
-
-    vec2 w0, w1, w2, w3;  cmBSpline(f, w0, w1, w2, w3);
-    vec2 s0 = w0 + w1, s1 = w2 + w3;
-    // Offsets that make one bilinear fetch reproduce a weighted pair exactly.
-    vec2 a0 = (i + 0.5 + (w1 / s0) - 1.0) / n;
-    vec2 a1 = (i + 0.5 + (w3 / s1) + 1.0) / n;
-
-    float v = mix(mix(textureLod(u_exemplar, vec2(a0.x, a0.y), lod).r,
-                      textureLod(u_exemplar, vec2(a1.x, a0.y), lod).r, s1.x),
-                  mix(textureLod(u_exemplar, vec2(a0.x, a1.y), lod).r,
-                      textureLod(u_exemplar, vec2(a1.x, a1.y), lod).r, s1.x), s1.y);
-    if (grad < 0.5) return vec3(v, 0.0, 0.0);
-
-    vec2 d0, d1, d2, d3;  cmBSplineD(f, d0, d1, d2, d3);
-    vec2 e0 = d0 + d1, e1 = d2 + d3;   // both are bounded away from zero
-    vec2 b0 = (i + 0.5 + (d1 / e0) - 1.0) / n;
-    vec2 b1 = (i + 0.5 + (d3 / e1) + 1.0) / n;
-
-    // dE/dx: derivative weights along x, value weights along y (and vice versa).
-    // The pair sums e0/e1 cancel, so they scale the taps rather than blend them.
-    float dx = e0.x * mix(textureLod(u_exemplar, vec2(b0.x, a0.y), lod).r,
-                          textureLod(u_exemplar, vec2(b0.x, a1.y), lod).r, s1.y)
-             + e1.x * mix(textureLod(u_exemplar, vec2(b1.x, a0.y), lod).r,
-                          textureLod(u_exemplar, vec2(b1.x, a1.y), lod).r, s1.y);
-    float dy = e0.y * mix(textureLod(u_exemplar, vec2(a0.x, b0.y), lod).r,
-                          textureLod(u_exemplar, vec2(a1.x, b0.y), lod).r, s1.x)
-             + e1.y * mix(textureLod(u_exemplar, vec2(a0.x, b1.y), lod).r,
-                          textureLod(u_exemplar, vec2(a1.x, b1.y), lod).r, s1.x);
-    return vec3(v, n * dx, n * dy);
-}
-
-vec3 cmExemplarTap(vec2 wxz, float lambda, float c, float rot, float grad) {
-    float cs = cos(rot), sn = sin(rot);
-    mat2  R  = mat2(cs, -sn, sn, cs);
-    vec2  u  = (R * wxz) / lambda;
-
-    // The patch's texel is lambda/N metres; ask for the level whose texel
-    // matches the rendered cell, so the tap is filtered to the same scale
-    // everything else at this distance is.
-    float texel = lambda / u_exN;
-    float lod   = max(0.0, log2(max(c, 1e-6) / texel));
-
-    vec3 e = cmExBicubic(u, lod, u_exN / exp2(lod), grad);
-
-    // H = lambda * E(u), u = R*w/lambda  =>  dH/dw = R^T * dE/du, so the
-    // gradient is scale-free and the lambda cancels exactly.
-    vec2 dW = transpose(R) * e.yz;
-    return vec3(lambda * e.x, dW);
-}
-
-// How much of a tap at `lambda` is NOT already in the data.
-//
-// The patch is high-passed at about an eighth of its footprint, so a tap at
-// repeat `lambda` has its coarsest content near lambda/8; the pyramid holds
-// nothing below 2*dataFloor. Where the patch's content is entirely above that,
-// the data already says it and the tap fades out.
-float cmExRedundancy(float lambda, float dataFloor) {
-    return 1.0 - smoothstep(2.0 * dataFloor, 8.0 * dataFloor, lambda * 0.125);
-}
-
-// Detail from the exemplar at a point. `c` is the cell this stage is limited by
-// and `dataFloor` the finest cell the height pyramid resolves here.
-//
-// The repeat lengths are FIXED — tied to the coarsest layer, uniform across the
-// world — and redundancy against the data is expressed as AMPLITUDE. Scaling
-// the wavelength by the local data floor instead would look equivalent and is
-// not: the floor moves as the fine layer travels with the camera, so the patch
-// would stretch and the structure at a fixed world point would morph
-// continuously. Same reason the noise octaves sit on a fixed lattice.
-//
-// NOT modulated by the ground's slope, unlike the noise: the patch is real
-// terrain and already carries its own flat reaches and broken faces. Scaling it
-// by the coarse field's slope would double-count the landscape's own roughness
-// and flatten exactly the distant ground this exists to give relief to.
-vec3 cmExemplarG(vec2 rel, float c, float dataFloor, float grad) {
-    if (u_exPresent < 0.5) return vec3(0.0);
-    vec2 w = rel + u_camXZ;
-
-    float la = u_exLambda;
-    float lb = la / CM_EX_RATIO;
-    float wa = cmExRedundancy(la, dataFloor);
-    float wb = cmExRedundancy(lb, dataFloor) * CM_EX_FINE_W;
-
-    vec3 acc = vec3(0.0);
-    if (wa > 0.0) acc += wa * cmExemplarTap(w, la, c, CM_EX_ROT_A, grad);
-    if (wb > 0.0) acc += wb * cmExemplarTap(w, lb, c, CM_EX_ROT_B, grad);
-    return acc;
-}
-
-// Height and gradient — the fragment stage, which shades from the gradient.
-vec3 cmExemplar(vec2 rel, float c, float dataFloor) {
-    return cmExemplarG(rel, c, dataFloor, 1.0);
-}
-
-// Height alone. The vertex stage reads nothing else, and cmSurface is evaluated
-// up to five times per vertex for the morph band, so skipping the eight
-// gradient taps there is most of the cost of going bicubic.
-float cmExemplarH(vec2 rel, float c, float dataFloor) {
-    return cmExemplarG(rel, c, dataFloor, 0.0).x;
 }
 
 // How much detail this part of the world wants.

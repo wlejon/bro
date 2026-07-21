@@ -75,10 +75,6 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     float dw = cmDetailWeight(slope);
     grad += dw * d.yz;
 
-    // Learned structure, at its own amplitude and unmodulated — see cmExemplar.
-    vec3 ex = cmExemplar(rel, cs, floorM);
-    grad += ex.yz;
-
     // The gradient was taken in the flat chart, so this normal is relative to
     // the chart's up. On a planet the local up leans away from the eye with
     // distance; cmCurveNormal applies that lean. Material selection below still
@@ -87,7 +83,7 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     vec3 n = normalize(vec3(-grad.x, 1.0, -grad.y));
     normal = cmCurveNormal(rel, n);
 
-    float wy     = h0 + dw * d.x + ex.x;
+    float wy     = h0 + dw * d.x;
 
     // Cavity is "how far below the local detail mean this point sits", so the
     // two sides of the ratio have to be the SAME quantity. dAmp is the summed
@@ -115,22 +111,4 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     baseColor = m.albedo;
     metallic  = 0.0;
     roughness = m.roughness;
-
-#ifdef CM_DEBUG_EXEMPLAR
-    // Unlit visualisations, for bisecting shading artifacts. Define the macro
-    // at the top of this file and rebuild. Scales are chosen to be readable,
-    // not calibrated — check for saturation before concluding a field is
-    // smooth, which is a mistake this block has already caused once.
-    //   1 exemplar height, banded every 20 m   2 exemplar gradient
-    //   3 exemplar mip level, banded            4 cavity
-    //   5 shading normal                        6 albedo
-    baseColor = vec3(0.0);
-    if (CM_DEBUG_EXEMPLAR == 1)      emissive = vec3(fract(ex.x / 20.0));
-    else if (CM_DEBUG_EXEMPLAR == 2) emissive = vec3(0.5 + 0.5 * ex.y,
-                                                     0.5 + 0.5 * ex.z, 0.5);
-    else if (CM_DEBUG_EXEMPLAR == 3) emissive = vec3(fract(cmExemplarLod(cs)));
-    else if (CM_DEBUG_EXEMPLAR == 4) emissive = vec3(0.5 + 0.5 * cavity);
-    else if (CM_DEBUG_EXEMPLAR == 5) emissive = 0.5 + 0.5 * n;
-    else                             emissive = m.albedo;
-#endif
 }
