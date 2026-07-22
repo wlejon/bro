@@ -111,6 +111,9 @@ fs.constants.F_OK;  // 0
 fs.constants.R_OK;  // 4
 fs.constants.W_OK;  // 2
 fs.constants.X_OK;  // 1
+fs.constants.COPYFILE_EXCL;          // 1
+fs.constants.COPYFILE_FICLONE;       // 2
+fs.constants.COPYFILE_FICLONE_FORCE; // 4
 
 // ── Watch (native FSWatcher) ──
 //

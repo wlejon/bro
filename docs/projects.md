@@ -32,6 +32,7 @@ Found at `system/skeletons/<name>/`. Each is a complete, runnable bro app the ne
 | `blank` | HTML + CSS + JS only. Input + add button + dynamic list. |
 | `canvas2d` | `<canvas>` + `requestAnimationFrame` loop. Draggable circle with a fading trail. |
 | `scene3d` | `bro.scene` minimal: camera, lights, rotating cube on a ground plane. |
+| `ai` | Local LLM chat via `bro.lm` (`bro.lm` text generation + model picker). |
 | `headless-tool` | CLI script meant to be driven by `bro-headless . run.js`. |
 
 To add another skeleton, drop a folder under `system/skeletons/`. Any subdirectory containing a `bro.json` is picked up automatically by the new-project picker.

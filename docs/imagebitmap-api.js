@@ -87,6 +87,31 @@ const ImageBitmap = {
 };
 
 
+// -----------------------------------------------------------------------------
+// ImageData
+// -----------------------------------------------------------------------------
+//
+// Standard Web ImageData constructor.
+//   new ImageData(width, height)
+//   new ImageData(typedArray, width[, height])
+
+class ImageData {
+  /**
+   * @param {number|Uint8ClampedArray} widthOrData
+   * @param {number} widthOrHeight
+   * @param {number} [height]
+   */
+  constructor(widthOrData, widthOrHeight, height) {}
+
+  /** @type {number} */
+  width;
+  /** @type {number} */
+  height;
+  /** @type {Uint8ClampedArray} */
+  data;
+}
+
+
 // =============================================================================
 // Worker transfer
 // =============================================================================

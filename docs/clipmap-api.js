@@ -42,16 +42,22 @@
 // -----------------------------------------------------------------------------
 //
 // {
-//   levels:      10,     // number of concentric rings (1..20). Ring l has cell
-//                        // size cellSize * 2^l, so the stack reaches
-//                        //   (resolution/2) * cellSize * 2^(levels-1) metres.
-//   resolution:  128,    // quads per ring per axis. Rounded to a multiple of 4
-//                        // (the central hole is inset by resolution/4). Drives
-//                        // both triangle count and how far each ring reaches.
-//   cellSize:    1.0,    // metres per cell at level 0, the finest detail the
-//                        // geometry can express, right under the camera.
-//   heightScale: 1.0,    // sampled texel value -> metres
-//   seaLevel:    0.0,    // metres added to every sample
+//   levels:           10,     // number of concentric rings (1..20). Ring l has cell
+//                             // size cellSize * 2^l, so the stack reaches
+//                             //   (resolution/2) * cellSize * 2^(levels-1) metres.
+//   resolution:       128,    // quads per ring per axis. Rounded to a multiple of 4
+//                             // (the central hole is inset by resolution/4). Drives
+//                             // both triangle count and how far each ring reaches.
+//   cellSize:         1.0,    // metres per cell at level 0, the finest detail the
+//                             // geometry can express, right under the camera.
+//   heightScale:      1.0,    // sampled texel value -> metres
+//   seaLevel:         0.0,    // metres added to every sample
+//   snowLine:         3500.0, // altitude in metres where snow blending begins
+//   planetRadius:     0.0,    // planet radius for spherical curvature (0 = flat)
+//   detailWavelength: 4.0,    // procedural micro-detail noise wavelength
+//   detailRelief:     0.5,    // procedural micro-detail amplitude
+//   detailGain:       0.5,    // micro-detail octave gain
+//   detailOctaves:    4,      // micro-detail octave count
 // }
 //
 // Total triangles ~= 2 * resolution^2 * (levels/4 + 3/4). With the defaults
@@ -81,6 +87,7 @@
 //     originX:       Number,         // WORLD metres of texel (0, 0)
 //     originZ:       Number,
 //     metresPerCell: Number,         // world metres between adjacent texels
+//     wrapX:         Boolean,        // periodic in X (for planetary charts, default false)
 //   }
 //
 // Texel (i, j) therefore sits at world
@@ -115,6 +122,32 @@
 //                          metresPerCell: 30 });
 //
 //   clipmap.setHeightLayer(0, null);   // release the fine field
+
+
+// -----------------------------------------------------------------------------
+// Additional styling and layer configuration methods
+// -----------------------------------------------------------------------------
+//
+// clipmap.setSnowLine(altitudeMetres) → clipmap
+//   Set the altitude in metres where snow blending begins.
+//
+// clipmap.setDetail({ wavelength, relief, gain, octaves }) → clipmap
+//   Configure procedural micro-detail noise applied on the GPU shader.
+//
+// clipmap.setMaterials({ rock, snow, sand, grass }) → clipmap
+//   Set material PBR properties ({ albedo: [r,g,b], roughness: number }) per biome.
+//
+// clipmap.setForest({ albedo: [r,g,b], strength: 0..1 }) → clipmap
+//   Set L0 forest canopy tint color and blend strength.
+//
+// clipmap.setSurfaceLayer({ data, width, height, originX, originZ, metresPerCell }) → clipmap
+//   Install a 3-channel RGB surface map (width*height*3 Float32Array).
+//
+// clipmap.coverageDistance(eyeAboveSeaLevel) → Number
+//   Radius in metres across which height data is required for a camera at eyeAboveSeaLevel.
+//
+// clipmap.horizonDistance(eyeAboveSeaLevel) → Number
+//   Distance to the curved planet horizon in metres (Infinity on flat worlds).
 
 
 // -----------------------------------------------------------------------------
@@ -209,6 +242,9 @@
 //   clipmap.vertexCount     Number   likewise
 //   clipmap.farDistance     Number   outer half-extent of the coarsest ring,
 //                                    in metres, past this there is no geometry
+//   clipmap.snowLine        Number   altitude in metres where snow begins
+//   clipmap.planetRadius    Number   curvature radius in metres
+//   clipmap.seaLevel        Number   base altitude offset
 
 
 // -----------------------------------------------------------------------------

@@ -698,9 +698,27 @@ a1.setTarget(10, 0); a2.setTarget(-10, 0);   // they pass, not overlap
  * @param {Array<{x, z, hw, hd}>} obstacles - AABBs to test against
  * @returns {boolean} true if line is clear
  */
-const canSee = bro.ai.game.hasLineOfSight(
+const clear = bro.ai.game.hasLineOfSight(
     botX, botZ, enemyX, enemyZ,
     obstacles
+);
+
+/**
+ * 2D field-of-view and line-of-sight check through AABB obstacles.
+ *
+ * @param {number} fromX
+ * @param {number} fromZ
+ * @param {number} toX
+ * @param {number} toZ
+ * @param {number} facingYaw - Facing direction in radians (0 = -Z)
+ * @param {number} fovRadians - Field of view arc in radians (e.g. Math.PI / 2 for 90°)
+ * @param {number} maxRange - Sight range limit in world units
+ * @param {Array<{x, z, hw, hd}>} obstacles - AABBs to test against
+ * @returns {boolean} true if target is within FOV arc, within maxRange, and unobstructed
+ */
+const canSee = bro.ai.game.canSee(
+    botX, botZ, enemyX, enemyZ,
+    facingYaw, Math.PI / 2, 15, obstacles
 );
 
 /**

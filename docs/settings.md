@@ -9,8 +9,10 @@ Persistent, layered settings system for graphics, audio, input, and appearance c
 | Function | Description |
 |----------|-------------|
 | `bro.settings.get(key)` | Get a single setting value (typed: boolean, number, or string) |
-| `bro.settings.getAll()` | Get all settings as `{graphics: {...}, audio: {...}, input: {...}}` |
+| `bro.settings.getAll()` | Get all settings as `{graphics: {...}, audio: {...}, input: {...}, appearance: {...}}` |
 | `bro.settings.getAll(category)` | Get all settings in a category (`"graphics"`, `"audio"`, `"input"`, or `"appearance"`) |
+| `bro.settings.getDefaults()` | Get app/engine defaults (from `bro.json`/engine layer), independent of user overrides |
+| `bro.settings.getDefaults(category)` | Get app/engine defaults for a category |
 
 ```js
 bro.settings.get("graphics.vsync")         // true
@@ -119,9 +121,12 @@ Define named actions with default key bindings. Users can rebind them. Key press
 |----------|-------------|
 | `bro.settings.defineAction(name, keys [, options])` | Define an action with default bindings (app-level, not persisted). `options.deadzone` sets the axis-binding deadzone for this action (default 0.1) |
 | `bro.settings.rebindAction(name, keys)` | Rebind an action (user-level, persisted) |
+| `bro.settings.resetAction(name)` | Remove user-level rebind for a single action, reverting to app/engine defaults |
+| `bro.settings.resetAllActions()` | Remove all user-level rebinds for actions at once |
 | `bro.settings.getActionKeys(name)` | Get the current key bindings for an action |
 | `bro.settings.getKeyAction(key)` | Get the action bound to a key (or `null`) |
-| `bro.settings.getActions()` | Get all defined actions as `[{action, keys}, ...]` |
+| `bro.settings.getActions()` | Get all defined actions (engine + app) as `[{action, keys}, ...]` |
+| `bro.settings.getAppActions()` | Get actions declared by the current app only |
 
 A binding string is one of (all forms mix freely in one action, and are
 accepted everywhere binding strings are: `defineAction` defaults,

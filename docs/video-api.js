@@ -114,6 +114,18 @@ for (let i = 0; i < 60; i++) {
 
 
 // -----------------------------------------------------------------------------
+// enc.addViewportFrame()
+// -----------------------------------------------------------------------------
+//
+// Capture the full composited viewport (canvas scene layers + HTML/CSS
+// overlay) — same pixel source as screenshot() — and encode it. Use this
+// when the app draws part of its UI as DOM elements that addCanvasFrame
+// would miss. Viewport size must match encoder size.
+
+enc.addViewportFrame();
+
+
+// -----------------------------------------------------------------------------
 // enc.addAudioFramesPCM(float32Array)
 // -----------------------------------------------------------------------------
 //

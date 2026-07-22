@@ -82,7 +82,7 @@ Note: bromath is pulled in transitively by several siblings (bromesh, brogameage
 
 ### Feature gates
 
-Most siblings are added **conditionally**, behind the modular-build flags (see [build-options.md](build-options.md)). `bromath`, `qjsbind`, `brokit`, `htmlayout`, and `broimage` are unconditional; the rest are gated:
+Most siblings are added **conditionally**, behind the modular-build flags (see [build-options.md](build-options.md)). `bromath`, `qjsbind`, `brokit`, `htmlayout`, `broaudio`, and `broimage` are unconditional; the rest are gated:
 
 | Sibling | Gate |
 |---------|------|

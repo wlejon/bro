@@ -871,6 +871,28 @@ class SceneGraph {
    */
   createPhysicsNode(opts) {}
 
+  /**
+   * Create a heightmap Terrain manager node (see docs/terrain-api.js).
+   * @param {Object} opts
+   * @returns {TerrainManager}
+   */
+  createTerrain(opts) {}
+
+  /**
+   * Create a ClipmapTerrain node (see docs/clipmap-api.js).
+   * @param {Object} opts
+   * @returns {ClipmapTerrain}
+   */
+  createClipmapTerrain(opts) {}
+
+  /**
+   * Create a TileWorld manager node (see docs/tile-api.js).
+   * @param {Object} opts
+   * @returns {TileWorld}
+   */
+  createTileWorld(opts) {}
+
+
 
   // --- 3D Camera ------------------------------------------------------------
 
@@ -1061,6 +1083,37 @@ class SceneGraph {
    * @param {number} [opts.startDistance=0] - fog-free distance around the camera
    */
   setFog(opts) {}
+
+  /**
+   * Atmosphere scattering parameters (Preetham/Hosek-Wilkie style sky & inscatter).
+   * Omitted fields keep their Earth defaults.
+   * @param {Object} opts
+   * @param {boolean} [opts.enabled=true]
+   * @param {number[]} [opts.sunDirection] - [x,y,z] direction vector toward the sun
+   * @param {number[]} [opts.sunColor] - explicit sun light color [r,g,b]
+   * @param {number[]} [opts.betaRayleigh] - Rayleigh scattering coefficients
+   * @param {number} [opts.planetRadius] - planet radius in meters
+   * @param {number} [opts.thickness] - atmosphere thickness in meters
+   * @param {number} [opts.betaMie] - Mie scattering coefficient
+   * @param {number} [opts.mieG] - Mie phase function asymmetry factor
+   * @param {number} [opts.scaleHeightRayleigh] - Rayleigh scale height in meters
+   * @param {number} [opts.scaleHeightMie] - Mie scale height in meters
+   * @param {number} [opts.seaLevel] - sea level offset
+   * @param {number} [opts.sunAngularRadius] - sun disk radius
+   * @param {number} [opts.sunDiskIntensity] - sun disk brightness multiplier
+   */
+  setAtmosphere(opts) {}
+
+  /**
+   * Additive starfield pass over the sky background.
+   * @param {Object} opts
+   * @param {boolean} [opts.enabled=true] - toggle the starfield pass
+   * @param {number} [opts.intensity=1.0] - brightness multiplier
+   * @param {number} [opts.density=1.0] - star density factor
+   * @param {number} [opts.rotation=0] - Y-axis rotation in radians
+   */
+  setStarfield(opts) {}
+
 
   /**
    * Screen-space tilt-shift depth-of-field: the "miniature" / toy-model look.
@@ -2309,6 +2362,23 @@ class SceneNode {
    * @returns {SceneNode} this
    */
   travel(stateName) {}
+
+  /**
+   * Configure root motion extraction on this skinned mesh node.
+   * @param {Object} [opts]
+   * @param {boolean} [opts.enabled=true]
+   * @param {string|number} [opts.bone] - root bone name or index (omitted = auto-detect)
+   * @param {boolean} [opts.extractY=false] - extract vertical displacement too
+   * @returns {SceneNode} this
+   */
+  setRootMotion(opts) {}
+
+  /**
+   * Consume accumulated root motion displacement since the last call.
+   * @returns {{ translation: number[], yaw: number }}
+   */
+  consumeRootMotion() {}
+
 
   /**
    * Current state machine state name (read-only), or null when there is no
