@@ -55,6 +55,7 @@ SceneRenderer::~SceneRenderer() {
     customShadowPrograms_.clear();
     if (meshSkinnedProgram_) { glDeleteProgram(meshSkinnedProgram_); meshSkinnedProgram_ = 0; }
     if (meshInstancedProgram_) { glDeleteProgram(meshInstancedProgram_); meshInstancedProgram_ = 0; }
+    if (foliageScatterProgram_) { glDeleteProgram(foliageScatterProgram_); foliageScatterProgram_ = 0; }
     if (bbProgram_) { glDeleteProgram(bbProgram_); bbProgram_ = 0; }
     if (bbVBO_) { glDeleteBuffers(1, &bbVBO_); bbVBO_ = 0; }
     if (bbVAO_) { glDeleteVertexArrays(1, &bbVAO_); bbVAO_ = 0; }
@@ -763,8 +764,10 @@ void SceneRenderer::render3D() {
                     uploadInstGlobals(meshInstDraw_, meshInstLocs_);
 
                     // Default-shader nodes draw during the walk; custom-
-                    // shader nodes are deferred and grouped by program key.
+                    // shader nodes are deferred and grouped by program key;
+                    // scatter nodes are deferred to their own program pass.
                     std::vector<InstancedMeshNode*> customInstanced;
+                    std::vector<InstancedMeshNode*> scatterInstanced;
                     std::function<void(SceneNode*)> walkInst = [&](SceneNode* n) {
                         if (!n->renderVisible()) return;
                         if (n->type() == SceneNode::Type::InstancedMesh) {
@@ -775,7 +778,11 @@ void SceneRenderer::render3D() {
                                 cullStats_.instancedCulled++;
                             } else {
                                 cullStats_.instancedDrawn++;
-                                if (m->color()[3] < 1.0f) {
+                                if (m->isScatter()) {
+                                    // GPU scatter: different vertex program,
+                                    // drawn in its own pass below.
+                                    scatterInstanced.push_back(m);
+                                } else if (m->color()[3] < 1.0f) {
                                     // Deferred to the sorted translucent
                                     // pass (whole-node depth).
                                     translucentMeshes.push_back(
@@ -791,6 +798,22 @@ void SceneRenderer::render3D() {
                         for (auto* c : n->children()) walkInst(c);
                     };
                     walkInst(graph_.root_.get());
+
+                    // Foliage-scatter sub-pass — bind the scatter program once
+                    // and draw every scatter node (leaf transforms synthesised
+                    // in the VS from each node's segment TBO). Opaque cutout
+                    // (leaf cards alpha-test), so it belongs in the opaque pass.
+                    if (!scatterInstanced.empty()) {
+                        ensureFoliageScatterPipeline();
+                        if (foliageScatterProgram_) {
+                            glUseProgram(foliageScatterProgram_);
+                            uploadInstGlobals(meshScatterDraw_, meshScatterLocs_);
+                            for (InstancedMeshNode* m : scatterInstanced) {
+                                renderInstancedMeshNode(m, meshScatterDraw_);
+                            }
+                            glUseProgram(meshInstancedProgram_);
+                        }
+                    }
 
                     // Custom-shader instanced sub-pass — same grouping/
                     // fallback contract as the mesh sub-passes above.

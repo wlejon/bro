@@ -112,11 +112,32 @@ void InstancedMeshNode::updateInstance(size_t i, const float* data16) {
     bumpChangeGeneration();  // instance set changed — shadow tiles must re-render
 }
 
+void InstancedMeshNode::setScatterSegments(const float* segData, size_t segCount,
+                                           const float* instSeg, size_t instCount,
+                                           const ScatterParams& params,
+                                           const float boundsMin[3],
+                                           const float boundsMax[3]) {
+    scatterMode_ = true;
+    scatterData_.assign(segData, segData + segCount * 8);
+    scatterInstSeg_.assign(instSeg, instSeg + instCount);
+    scatterSegCount_ = segCount;
+    scatterInstCount_ = instCount;
+    scatterParams_ = params;
+    scatterBounds_.min = {boundsMin[0], boundsMin[1], boundsMin[2]};
+    scatterBounds_.max = {boundsMax[0], boundsMax[1], boundsMax[2]};
+    scatterDirty_ = true;
+    bumpChangeGeneration();
+}
+
 void InstancedMeshNode::releaseGL() {
     if (vao_) { glDeleteVertexArrays(1, &vao_); vao_ = 0; }
     if (vbo_) { glDeleteBuffers(1, &vbo_); vbo_ = 0; }
     if (ibo_) { glDeleteBuffers(1, &ibo_); ibo_ = 0; }
     if (instVbo_) { glDeleteBuffers(1, &instVbo_); instVbo_ = 0; }
+    if (segTex_) { glDeleteTextures(1, &segTex_); segTex_ = 0; }
+    if (segBuf_) { glDeleteBuffers(1, &segBuf_); segBuf_ = 0; }
+    if (instSegTex_) { glDeleteTextures(1, &instSegTex_); instSegTex_ = 0; }
+    if (instSegBuf_) { glDeleteBuffers(1, &instSegBuf_); instSegBuf_ = 0; }
     if (texture_) { glDeleteTextures(1, &texture_); texture_ = 0; }
     if (normalTex_) { glDeleteTextures(1, &normalTex_); normalTex_ = 0; }
     if (mrTex_) { glDeleteTextures(1, &mrTex_); mrTex_ = 0; }
@@ -422,14 +443,24 @@ void InstancedMeshNode::uploadMeshToGPU() {
     // VAO. The instance VBO itself may not be uploaded yet; the bindings are
     // valid even with an empty buffer and become live once we glBufferData
     // into instVbo_ during uploadInstancesToGPU().
-    if (!instVbo_) glGenBuffers(1, &instVbo_);
-    glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
-    GLsizei instStride = (GLsizei)(16 * sizeof(float));
-    for (int loc = 8; loc <= 11; ++loc) {
-        glEnableVertexAttribArray(loc);
-        glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE, instStride,
-                              (void*)((loc - 8) * 4 * sizeof(float)));
-        glVertexAttribDivisor(loc, 1);
+    //
+    // Scatter mode has NO instance buffer (the VS synthesises transforms from
+    // gl_InstanceID). Leaving 8..11 enabled here would point them at the empty
+    // instVbo_ with divisor 1, so a scatter draw of N instances reads N*64
+    // bytes past a zero-size buffer — an out-of-bounds fetch that segfaults the
+    // driver. Keep them disabled (a fresh VAO defaults to disabled).
+    if (!scatterMode_) {
+        if (!instVbo_) glGenBuffers(1, &instVbo_);
+        glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
+        GLsizei instStride = (GLsizei)(16 * sizeof(float));
+        for (int loc = 8; loc <= 11; ++loc) {
+            glEnableVertexAttribArray(loc);
+            glVertexAttribPointer(loc, 4, GL_FLOAT, GL_FALSE, instStride,
+                                  (void*)((loc - 8) * 4 * sizeof(float)));
+            glVertexAttribDivisor(loc, 1);
+        }
+    } else {
+        for (int loc = 8; loc <= 11; ++loc) glDisableVertexAttribArray(loc);
     }
 
     glBindVertexArray(0);
@@ -464,12 +495,58 @@ void InstancedMeshNode::uploadInstancesToGPU() {
     instancesDirty_ = false;
 }
 
+// Upload the packed segment records into a texture buffer the scatter VS
+// samples (RGBA32F, 2 texels per segment). Only re-run when the segment set
+// changes (the sim grows) — never per frame.
+void InstancedMeshNode::uploadScatterToGPU() {
+    // Segment records (RGBA32F, 2 texels each).
+    if (!segBuf_) glGenBuffers(1, &segBuf_);
+    glBindBuffer(GL_TEXTURE_BUFFER, segBuf_);
+    glBufferData(GL_TEXTURE_BUFFER,
+                 scatterData_.size() * sizeof(float),
+                 scatterData_.data(), GL_DYNAMIC_DRAW);
+    if (!segTex_) glGenTextures(1, &segTex_);
+    glBindTexture(GL_TEXTURE_BUFFER, segTex_);
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, segBuf_);
+
+    // Per-leaf segment index (R32F, one texel each).
+    if (!instSegBuf_) glGenBuffers(1, &instSegBuf_);
+    glBindBuffer(GL_TEXTURE_BUFFER, instSegBuf_);
+    glBufferData(GL_TEXTURE_BUFFER,
+                 scatterInstSeg_.size() * sizeof(float),
+                 scatterInstSeg_.data(), GL_DYNAMIC_DRAW);
+    if (!instSegTex_) glGenTextures(1, &instSegTex_);
+    glBindTexture(GL_TEXTURE_BUFFER, instSegTex_);
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_R32F, instSegBuf_);
+
+    glBindTexture(GL_TEXTURE_BUFFER, 0);
+    glBindBuffer(GL_TEXTURE_BUFFER, 0);
+    scatterDirty_ = false;
+}
+
+bool InstancedMeshNode::drawScatter() {
+    if (mesh_.empty() || scatterSegCount_ == 0 || scatterInstCount_ == 0) return false;
+    if (meshDirty_) uploadMeshToGPU();       // uploads the leaf card + its VAO
+    if (scatterDirty_) uploadScatterToGPU();
+    if (!vao_ || indexCount_ == 0) return false;
+    const size_t inst = scatterInstCount_;
+    if (inst == 0) return false;
+    // The scatter VS reads only the mesh attributes + gl_InstanceID + the
+    // segment TBO (bound by the renderer); no instance VBO is needed.
+    glBindVertexArray(vao_);
+    glDrawElementsInstanced(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr,
+                            (GLsizei)inst);
+    glBindVertexArray(0);
+    return true;
+}
+
 void InstancedMeshNode::onRender(SceneGraph& graph) {
     (void)graph;
     drawRawInstanced();
 }
 
 bool InstancedMeshNode::drawRawInstanced() {
+    if (scatterMode_) return drawScatter();
     if (mesh_.empty() || instanceCount_ == 0) return false;
     if (renderingBatched() && batchDirty_) rebuildStaticBatch();
     if (meshDirty_) uploadMeshToGPU();
@@ -484,6 +561,15 @@ bool InstancedMeshNode::drawRawInstanced() {
 }
 
 bool InstancedMeshNode::computeWorldInstanceBounds(float outMin[3], float outMax[3]) const {
+    if (scatterMode_) {
+        if (scatterSegCount_ == 0) return false;
+        // Explicit node-local bounds supplied at setScatterSegments (segment
+        // AABB padded for leaf reach); fold in the parent-chain transform.
+        bromath::AABB3 wb = bromath::atransform(scatterBounds_, worldMatrix());
+        outMin[0] = wb.min.x; outMin[1] = wb.min.y; outMin[2] = wb.min.z;
+        outMax[0] = wb.max.x; outMax[1] = wb.max.y; outMax[2] = wb.max.z;
+        return true;
+    }
     if (mesh_.empty() || instanceCount_ == 0) return false;
 
     // Node-space union of all instance-transformed mesh bounds. O(instances),
@@ -523,6 +609,10 @@ bool InstancedMeshNode::computeWorldInstanceBounds(float outMin[3], float outMax
 }
 
 bool InstancedMeshNode::drawRawInstancedDepth() {
+    // Scatter nodes have no matching depth-only shadow VS (the shadow pipeline
+    // reads per-instance attributes the scatter path doesn't provide), so they
+    // don't cast shadows. Foliage sets castsShadow=false anyway.
+    if (scatterMode_) return false;
     // Same VAO as the forward pass — the depth-only shader reads aPos
     // (location 0) and the per-instance matrix attributes (8..10). Other
     // vertex attributes are simply unused.

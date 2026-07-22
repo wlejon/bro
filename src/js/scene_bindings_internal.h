@@ -264,6 +264,7 @@ JSValue js_node_setSkinningMatrices(JSContext* ctx, JSValueConst this_val, int a
 JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_setInstancedMesh(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_setInstances(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
+JSValue js_node_setScatterSegments(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_setInstancesFromTransforms(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_updateInstance(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);
 JSValue js_node_setAtlasGrid(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv);

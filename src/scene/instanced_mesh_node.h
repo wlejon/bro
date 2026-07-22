@@ -148,6 +148,37 @@ public:
         return renderingBatched() ? batchMesh_.hasColors() : vertexColorTintEnabled();
     }
 
+    // --- GPU foliage scatter mode ---
+    // Expand `segCount` branch segments into leaves entirely in the vertex
+    // shader (shaders/foliage_scatter.vert), so the tens-of-thousands-of-leaves
+    // scatter never touches the CPU and no per-leaf instance buffer is built or
+    // uploaded — only the compact per-segment buffer is. The draw issues
+    // `segCount * maxPerSeg` instances; slots past a segment's leaf count clip
+    // to a degenerate triangle. `segData` is segCount*8 floats, 2 RGBA32F
+    // texels per segment: [from.xyz, radius] then [dir.xyz, leafCount], with
+    // dir = to - from and leafCount the CPU-precomputed integer leaf count.
+    // Mirrors bromesh::placeLeavesOnBranches; obstacle avoidance / dedup are not
+    // modelled (use the CPU path for those). Sets the node into scatter mode —
+    // setInstances() and scatter are mutually exclusive. The draw issues one
+    // instance per leaf; `instSeg` (instCount entries) maps each leaf to its
+    // segment index, so there are no wasted/degenerate instances.
+    struct ScatterParams {
+        uint32_t seed = 0;
+        float    upBias = 0.5f, tiltJitter = 0.3f, rollJitter = 0.2f;
+        float    baseScale = 1.0f, scaleJitter = 0.2f, scaleByRadius = 0.0f;
+        float    refRadius = 0.05f, densityFalloff = 0.0f;
+    };
+    void setScatterSegments(const float* segData, size_t segCount,
+                            const float* instSeg, size_t instCount,
+                            const ScatterParams& params,
+                            const float boundsMin[3], const float boundsMax[3]);
+    bool isScatter() const { return scatterMode_; }
+    size_t scatterSegCount() const { return scatterSegCount_; }
+    size_t scatterInstanceCount() const { return scatterInstCount_; }
+    const ScatterParams& scatterParams() const { return scatterParams_; }
+    GLuint scatterSegTexture() const { return segTex_; }
+    GLuint scatterInstSegTexture() const { return instSegTex_; }
+
     void setMetallic(float m) { metallic_ = m; }
     float metallic() const { return metallic_; }
 
@@ -252,6 +283,8 @@ public:
 private:
     void uploadMeshToGPU();
     void uploadInstancesToGPU();
+    void uploadScatterToGPU();
+    bool drawScatter();
     // Rebake batchMesh_ from mesh_ + instanceData_ (static-batch path). Clears
     // batchDirty_ and marks the GL mesh/instance buffers dirty for re-upload.
     void rebuildStaticBatch();
@@ -283,6 +316,21 @@ private:
     GLuint ibo_ = 0;       // index buffer
     GLuint instVbo_ = 0;   // per-instance interleaved buffer
     size_t instVboCapacity_ = 0;  // bytes currently allocated on GPU
+
+    // Scatter mode (see setScatterSegments). segBuf_ holds the packed segment
+    // records; segTex_ is the texture-buffer view the scatter VS samples.
+    bool scatterMode_ = false;
+    bool scatterDirty_ = false;
+    std::vector<float> scatterData_;     // segCount*8 floats (2 RGBA32F texels)
+    std::vector<float> scatterInstSeg_;  // instCount floats (leaf → segment idx)
+    size_t scatterSegCount_ = 0;
+    size_t scatterInstCount_ = 0;
+    ScatterParams scatterParams_;
+    bromath::AABB3 scatterBounds_;
+    GLuint segBuf_ = 0;       // GL_TEXTURE_BUFFER of segment records
+    GLuint segTex_ = 0;       // texture bound to segBuf_ (RGBA32F samplerBuffer)
+    GLuint instSegBuf_ = 0;   // GL_TEXTURE_BUFFER of per-leaf segment indices
+    GLuint instSegTex_ = 0;   // texture bound to instSegBuf_ (R32F samplerBuffer)
     GLuint texture_ = 0;
     GLuint normalTex_ = 0;
     GLuint mrTex_ = 0;

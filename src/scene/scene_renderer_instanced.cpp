@@ -15,6 +15,7 @@
 
 #include "mesh.frag.h"
 #include "mesh_instanced.vert.h"
+#include "foliage_scatter.vert.h"
 
 namespace bro::scene {
 
@@ -132,6 +133,18 @@ void SceneRenderer::queryInstancedUniformLocs(GLuint prog, InstancedDrawLocs& d,
     d.atlasGrid      = U("uAtlasGrid");
     d.alphaCutoff    = U("uAlphaCutoff");
     d.ssrMask        = U("uSSRMask");
+    // Scatter-only uniforms (present only in the foliage-scatter program).
+    d.segments       = U("uSegments");
+    d.instSeg        = U("uInstSeg");
+    d.scatterSeed    = U("uScatterSeed");
+    d.upBias         = U("uUpBias");
+    d.tiltJitter     = U("uTiltJitter");
+    d.rollJitter     = U("uRollJitter");
+    d.baseScale      = U("uBaseScale");
+    d.scaleJitter    = U("uScaleJitter");
+    d.scaleByRadius  = U("uScaleByRadius");
+    d.refRadius      = U("uRefRadius");
+    d.densityFalloff = U("uDensityFalloff");
 
     l.lightCount           = U("uLightCount");
     l.lightType            = U("uLightType");
@@ -170,6 +183,19 @@ void SceneRenderer::ensureInstancedMeshPipeline() {
     if (!meshInstancedProgram_) return;
 
     queryInstancedUniformLocs(meshInstancedProgram_, meshInstDraw_, meshInstLocs_);
+}
+
+void SceneRenderer::ensureFoliageScatterPipeline() {
+    if (foliageScatterProgram_) return;
+
+    // Same derived fragment shader as the instanced program (so tint/atlas/
+    // lighting behave identically); only the vertex stage differs.
+    std::string fragSrc = makeMeshInstancedFragSrc();
+    foliageScatterProgram_ = linkProgram(kFoliageScatterVertSrc, fragSrc.c_str(),
+                                         "Foliage scatter program");
+    if (!foliageScatterProgram_) return;
+
+    queryInstancedUniformLocs(foliageScatterProgram_, meshScatterDraw_, meshScatterLocs_);
 }
 
 void SceneRenderer::renderInstancedMeshNode(InstancedMeshNode* mesh,
@@ -228,6 +254,29 @@ void SceneRenderer::renderInstancedMeshNode(InstancedMeshNode* mesh,
     // Local reflection probe: whole-node selection by instance-bounds center
     // (one probe for all instances of this draw), sampler on unit 9.
     uploadProbeForDraw(mesh, L.probe);
+
+    // GPU foliage scatter: bind the per-segment texture buffer (unit 10, past
+    // the material/probe units) and push the placement params. Only the scatter
+    // program declares these (L.segments >= 0 there, -1 otherwise).
+    if (mesh->isScatter() && L.segments >= 0) {
+        glActiveTexture(GL_TEXTURE10);
+        glBindTexture(GL_TEXTURE_BUFFER, mesh->scatterSegTexture());
+        glUniform1i(L.segments, 10);
+        glActiveTexture(GL_TEXTURE11);
+        glBindTexture(GL_TEXTURE_BUFFER, mesh->scatterInstSegTexture());
+        glUniform1i(L.instSeg, 11);
+        const auto& sp = mesh->scatterParams();
+        glUniform1ui(L.scatterSeed,   sp.seed);
+        glUniform1f (L.upBias,        sp.upBias);
+        glUniform1f (L.tiltJitter,    sp.tiltJitter);
+        glUniform1f (L.rollJitter,    sp.rollJitter);
+        glUniform1f (L.baseScale,     sp.baseScale);
+        glUniform1f (L.scaleJitter,   sp.scaleJitter);
+        glUniform1f (L.scaleByRadius, sp.scaleByRadius);
+        glUniform1f (L.refRadius,     sp.refRadius);
+        glUniform1f (L.densityFalloff,sp.densityFalloff);
+        glActiveTexture(GL_TEXTURE0);
+    }
 
     bool ds = mesh->doubleSided();
     if (ds) glDisable(GL_CULL_FACE);

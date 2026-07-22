@@ -14,6 +14,8 @@
 #include <bromesh/mesh_data.h>
 #include <bromesh/procedural/leaf_scatter.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -496,6 +498,104 @@ static void installWorldClass(JSContext* ctx) {
             return makeFloat32Array(ctx, nullptr, 0);
         }
         return makeFloat32Array(ctx, pl.transforms.data(), count);
+    })
+
+    // -- GPU foliage scatter: pack per-segment records for foliage_scatter.vert --
+    // Instead of scattering tens of thousands of leaves on the CPU
+    // (emitFoliageTransforms), emit ONE record per foliage-bearing twig:
+    //   [from.xyz, radius, dir.xyz, leafCount]   (8 floats, dir = to - from)
+    // The leaf count is computed here (length * perUnitLength * densityWeight,
+    // stochastically rounded) so the vertex shader can expand each segment into
+    // exactly that many leaves. Segments that carry no leaves (filtered by
+    // depth/radius/terminalOnly or zeroed by the density weight) are dropped, so
+    // the buffer stays small — the sim uploads a few hundred records, not a few
+    // MB of leaf transforms. Returns { segments, segCount, maxPerSeg,
+    // boundsMin, boundsMax }; feed it (spread with the same opts) to
+    // createInstancedMesh({ scatter }) / node.setScatterSegments().
+    .method("emitScatterSegments", [](FWW* w, JSContext* ctx, JSValueConst optsVal) -> JSValue {
+        auto segs = broflora::emitWorldSegments(*w->world);
+        auto samples = broflora::emitWorldFoliage(*w->world);
+
+        bromesh::LeafPlacementOptions opts;
+        if (JS_IsObject(optsVal)) readLeafPlacementOptions(ctx, optsVal, opts);
+        fillFoliageDensity(samples, segs.size(), opts);
+
+        // Child counts for the terminalOnly filter (leaves only on chain tips).
+        std::vector<int> childCount(segs.size(), 0);
+        for (size_t i = 0; i < segs.size(); ++i) {
+            int p = segs[i].parent;
+            if (p >= 0 && static_cast<size_t>(p) < segs.size()) ++childCount[p];
+        }
+
+        std::vector<float> packed;    // per-segment records (8 floats each)
+        std::vector<float> instSeg;   // per-leaf segment index (into packed)
+        packed.reserve(segs.size() * 8);
+        float bmin[3] = { 1e30f, 1e30f, 1e30f };
+        float bmax[3] = { -1e30f, -1e30f, -1e30f };
+
+        for (size_t i = 0; i < segs.size(); ++i) {
+            const auto& s = segs[i];
+            bromath::Vec3 d = s.to - s.from;
+            float len = bromath::vlen(d);
+            if (len < 1e-6f) continue;
+            if (s.depth < opts.minDepth) continue;
+            if (s.radius > 0.0f && s.radius > opts.maxRadius) continue;
+            if (opts.terminalOnly && childCount[i] > 0) continue;
+
+            float weight = 1.0f;
+            if (!opts.densityWeight.empty()) {
+                weight = (i < opts.densityWeight.size())
+                             ? std::max(0.0f, opts.densityWeight[i]) : 0.0f;
+            }
+            if (weight <= 0.0f) continue;
+
+            // Stochastic round of the expected count, deterministic per segment
+            // (splitmix-style hash for the fractional carry).
+            float expected = len * opts.perUnitLength * weight;
+            uint64_t h = opts.seed ^ (static_cast<uint64_t>(i) * 0x9E3779B97F4A7C15ULL);
+            h ^= h >> 30; h *= 0xBF58476D1CE4E5B9ULL; h ^= h >> 27;
+            float frac = static_cast<float>((h >> 40) * (1.0 / 16777216.0));
+            int count = static_cast<int>(std::floor(expected + frac));
+            if (count <= 0) continue;
+            if (count > 4096) count = 4096;   // sanity clamp
+
+            // This packed segment's index, and one instSeg entry per leaf.
+            float segIdx = static_cast<float>(packed.size() / 8);
+            for (int k = 0; k < count; ++k) instSeg.push_back(segIdx);
+
+            packed.push_back(s.from.x); packed.push_back(s.from.y);
+            packed.push_back(s.from.z); packed.push_back(s.radius);
+            packed.push_back(d.x); packed.push_back(d.y);
+            packed.push_back(d.z); packed.push_back(0.0f);  // reserved
+
+            float tox = s.to.x, toy = s.to.y, toz = s.to.z;
+            bmin[0] = std::min({ bmin[0], s.from.x, tox });
+            bmin[1] = std::min({ bmin[1], s.from.y, toy });
+            bmin[2] = std::min({ bmin[2], s.from.z, toz });
+            bmax[0] = std::max({ bmax[0], s.from.x, tox });
+            bmax[1] = std::max({ bmax[1], s.from.y, toy });
+            bmax[2] = std::max({ bmax[2], s.from.z, toz });
+        }
+
+        size_t segCount = packed.size() / 8;
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "segments",
+                          makeFloat32Array(ctx, packed.empty() ? nullptr : packed.data(),
+                                           packed.size()));
+        JS_SetPropertyStr(ctx, obj, "instSeg",
+                          makeFloat32Array(ctx, instSeg.empty() ? nullptr : instSeg.data(),
+                                           instSeg.size()));
+        JS_SetPropertyStr(ctx, obj, "segCount", JS_NewInt64(ctx, (int64_t)segCount));
+        JS_SetPropertyStr(ctx, obj, "instanceCount", JS_NewInt64(ctx, (int64_t)instSeg.size()));
+        if (segCount == 0) { bmin[0]=bmin[1]=bmin[2]=bmax[0]=bmax[1]=bmax[2]=0.0f; }
+        JSValue bminA = JS_NewArray(ctx), bmaxA = JS_NewArray(ctx);
+        for (int i = 0; i < 3; ++i) {
+            JS_SetPropertyUint32(ctx, bminA, i, JS_NewFloat64(ctx, bmin[i]));
+            JS_SetPropertyUint32(ctx, bmaxA, i, JS_NewFloat64(ctx, bmax[i]));
+        }
+        JS_SetPropertyStr(ctx, obj, "boundsMin", bminA);
+        JS_SetPropertyStr(ctx, obj, "boundsMax", bmaxA);
+        return obj;
     })
 
     // -- fast native C++ branch segment transform buffer for InstancedMeshNode --

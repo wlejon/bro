@@ -16,6 +16,7 @@
 #include "scene/instanced_mesh_node.h"
 #include "scene/decal_node.h"
 
+#include <algorithm>
 #include <qjsbind/qjsbind.h>
 
 #include <bromesh/primitives/primitives.h>
@@ -1057,6 +1058,61 @@ JSValue js_node_setSkinningMatrices(JSContext* ctx, JSValueConst this_val,
 //     4x3 affine transform rows + RGBA tint), or
 //   - `instancesFromTransforms`: Float32Array of 9*count floats
 //     (px py pz, qx qy qz qw, scale, variantIndex), converted internally.
+// Apply a `scatter` descriptor to an InstancedMeshNode, switching it into GPU
+// foliage-scatter mode. `scatterVal` carries the packed per-segment buffer
+// (segments: Float32Array, 8 floats/segment) plus the placement params, as
+// produced by `world.emitScatterSegments(opts)` spread with the same opts. See
+// InstancedMeshNode::setScatterSegments / shaders/foliage_scatter.vert.
+static bool applyScatter(JSContext* ctx, scene::InstancedMeshNode* node,
+                         JSValueConst scatterVal) {
+    if (!JS_IsObject(scatterVal)) return false;
+    std::vector<float> seg, instSeg;
+    if (!jsReadFloatArray(ctx, scatterVal, "segments", seg) || seg.empty())
+        return false;
+    if (!jsReadFloatArray(ctx, scatterVal, "instSeg", instSeg) || instSeg.empty())
+        return false;
+    size_t segCount = seg.size() / 8;
+    if (segCount == 0) return false;
+
+    scene::InstancedMeshNode::ScatterParams p;
+    p.seed          = (uint32_t)qjsbind::get_prop_number(ctx, scatterVal, "seed", 0);
+    p.upBias        = (float)qjsbind::get_prop_number(ctx, scatterVal, "upBias", 0.5);
+    p.tiltJitter    = (float)qjsbind::get_prop_number(ctx, scatterVal, "tiltJitter", 0.3);
+    p.rollJitter    = (float)qjsbind::get_prop_number(ctx, scatterVal, "rollJitter", 0.2);
+    p.baseScale     = (float)qjsbind::get_prop_number(ctx, scatterVal, "baseScale", 1.0);
+    p.scaleJitter   = (float)qjsbind::get_prop_number(ctx, scatterVal, "scaleJitter", 0.2);
+    p.scaleByRadius = (float)qjsbind::get_prop_number(ctx, scatterVal, "scaleByRadius", 0.0);
+    p.refRadius     = (float)qjsbind::get_prop_number(ctx, scatterVal, "maxRadius", 0.05);
+    p.densityFalloff= (float)qjsbind::get_prop_number(ctx, scatterVal, "densityFalloff", 0.0);
+
+    // Bounds: prefer explicit boundsMin/boundsMax (emit supplies them); else
+    // derive from the segment endpoints and pad for leaf reach.
+    float bmin[3], bmax[3];
+    std::vector<float> vmin, vmax;
+    bool haveB = jsReadFloatArray(ctx, scatterVal, "boundsMin", vmin) && vmin.size() >= 3 &&
+                 jsReadFloatArray(ctx, scatterVal, "boundsMax", vmax) && vmax.size() >= 3;
+    if (haveB) {
+        for (int i = 0; i < 3; ++i) { bmin[i] = vmin[i]; bmax[i] = vmax[i]; }
+    } else {
+        bmin[0] = bmin[1] = bmin[2] =  1e30f;
+        bmax[0] = bmax[1] = bmax[2] = -1e30f;
+        for (size_t s = 0; s < segCount; ++s) {
+            const float* r = seg.data() + s * 8;
+            float from[3] = { r[0], r[1], r[2] };
+            float to[3]   = { r[0] + r[4], r[1] + r[5], r[2] + r[6] };  // from + dir
+            for (int i = 0; i < 3; ++i) {
+                bmin[i] = std::min({ bmin[i], from[i], to[i] });
+                bmax[i] = std::max({ bmax[i], from[i], to[i] });
+            }
+        }
+        float pad = p.baseScale * (1.0f + p.scaleJitter) * 0.3f;  // leaf reach
+        for (int i = 0; i < 3; ++i) { bmin[i] -= pad; bmax[i] += pad; }
+    }
+    node->setScatterSegments(seg.data(), segCount, instSeg.data(), instSeg.size(),
+                             p, bmin, bmax);
+    return true;
+}
+
 JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
                                          int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
@@ -1216,9 +1272,27 @@ JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
         JSValue sbVal = JS_GetPropertyStr(ctx, opts, "staticBatch");
         if (!JS_IsUndefined(sbVal)) node->setStaticBatch(JS_ToBool(ctx, sbVal) == 1);
         JS_FreeValue(ctx, sbVal);
+
+        // GPU foliage scatter: leaves synthesised in the VS from a per-segment
+        // buffer (mutually exclusive with `instances`).
+        JSValue scatVal = JS_GetPropertyStr(ctx, opts, "scatter");
+        if (JS_IsObject(scatVal)) applyScatter(ctx, node, scatVal);
+        JS_FreeValue(ctx, scatVal);
     }
 
     return wrapNode(ctx, node, g);
+}
+
+// Live update of an instanced node's scatter segments (the sim grew). Same
+// descriptor shape as the `scatter` create option.
+JSValue js_node_setScatterSegments(JSContext* ctx, JSValueConst this_val,
+                                   int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::InstancedMesh)
+        return JS_UNDEFINED;
+    if (argc < 1) return JS_UNDEFINED;
+    applyScatter(ctx, static_cast<scene::InstancedMeshNode*>(w->node()), argv[0]);
+    return JS_UNDEFINED;
 }
 
 // Per-node setters for InstancedMeshNode — setMesh / setInstances /

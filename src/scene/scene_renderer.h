@@ -399,6 +399,12 @@ private:
               fogDensity = -1, fogHeightFalloff = -1, fogStartDist = -1,
               fogCamY = -1,
               atlasGrid = -1, alphaCutoff = -1, ssrMask = -1;
+        // GPU foliage-scatter uniforms (foliage_scatter.vert). All -1 for the
+        // normal instanced program, which doesn't declare them.
+        GLint segments = -1, instSeg = -1, scatterSeed = -1,
+              upBias = -1, tiltJitter = -1, rollJitter = -1,
+              baseScale = -1, scaleJitter = -1, scaleByRadius = -1,
+              refRadius = -1, densityFalloff = -1;
         ProbeLocs probe;
         AtmLocs   atm;
     };
@@ -408,6 +414,7 @@ private:
     void renderInstancedMeshNode(InstancedMeshNode* mesh,
                                  const InstancedDrawLocs& L);
     void ensureInstancedMeshPipeline();
+    void ensureFoliageScatterPipeline();
     void renderGaussianSplatNodes();
     void renderBillboardNode(SceneNode* node);
 
@@ -571,6 +578,7 @@ private:
     };
     MeshProgramLocs meshLocs_;
     MeshProgramLocs meshInstLocs_;
+    MeshProgramLocs meshScatterLocs_;
     MeshProgramLocs meshSkinnedLocs_;
     void uploadLights(const std::vector<LightNode*>& lights,
                       const MeshProgramLocs& locs);
@@ -736,6 +744,13 @@ private:
     // analog of meshDraw_; light locs live in meshInstLocs_ below.
     GLuint meshInstancedProgram_ = 0;
     InstancedDrawLocs meshInstDraw_;
+
+    // GPU foliage-scatter program: same derived fragment shader as the
+    // instanced program, but foliage_scatter.vert synthesises each leaf's
+    // transform from a per-segment texture buffer + gl_InstanceID instead of
+    // reading per-instance attributes. scatterDraw_ adds the scatter uniforms.
+    GLuint foliageScatterProgram_ = 0;
+    InstancedDrawLocs meshScatterDraw_;
 
     // Mesh FBO. The depth-stencil attachment is a texture (not an RBO) so
     // the soft-particle pass can sample scene depth; the tonemap FBO
