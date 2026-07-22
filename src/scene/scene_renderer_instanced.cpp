@@ -16,6 +16,8 @@
 #include "mesh.frag.h"
 #include "mesh_instanced.vert.h"
 #include "foliage_scatter.vert.h"
+#include "branch_tube.vert.h"
+#include "shadow.frag.h"
 
 namespace bro::scene {
 
@@ -145,6 +147,10 @@ void SceneRenderer::queryInstancedUniformLocs(GLuint prog, InstancedDrawLocs& d,
     d.scaleByRadius  = U("uScaleByRadius");
     d.refRadius      = U("uRefRadius");
     d.densityFalloff = U("uDensityFalloff");
+    // Tube-only uniforms (present only in the branch-tube program; uSegments
+    // above is shared with the scatter program).
+    d.tubeSides       = U("uSides");
+    d.tubeRadiusScale = U("uRadiusScale");
 
     l.lightCount           = U("uLightCount");
     l.lightType            = U("uLightType");
@@ -196,6 +202,33 @@ void SceneRenderer::ensureFoliageScatterPipeline() {
     if (!foliageScatterProgram_) return;
 
     queryInstancedUniformLocs(foliageScatterProgram_, meshScatterDraw_, meshScatterLocs_);
+}
+
+void SceneRenderer::ensureTubePipeline() {
+    if (tubeProgram_) return;
+    // Same derived fragment shader as the instanced program; branch_tube.vert
+    // synthesises tube geometry from gl_VertexID + the segment TBO.
+    std::string fragSrc = makeMeshInstancedFragSrc();
+    tubeProgram_ = linkProgram(kBranchTubeVertSrc, fragSrc.c_str(),
+                               "Branch tube program");
+    if (!tubeProgram_) return;
+    queryInstancedUniformLocs(tubeProgram_, meshTubeDraw_, meshTubeLocs_);
+}
+
+void SceneRenderer::ensureTubeDepthPipeline() {
+    if (tubeDepthProgram_) return;
+    // Same tube vertex stage, but SHADOW_PASS swaps clip to light space and a
+    // trivial depth fragment replaces the lit fragment.
+    std::string vsSrc = insertAfterVersion(kBranchTubeVertSrc,
+                                           "#define SHADOW_PASS 1\n");
+    tubeDepthProgram_ = linkProgram(vsSrc.c_str(), kShadowFragSrc,
+                                    "Branch tube depth program");
+    if (!tubeDepthProgram_) return;
+    tubeDepthULightVP_     = glGetUniformLocation(tubeDepthProgram_, "uLightVP");
+    tubeDepthUModel_       = glGetUniformLocation(tubeDepthProgram_, "uInstModel");
+    tubeDepthUSegments_    = glGetUniformLocation(tubeDepthProgram_, "uSegments");
+    tubeDepthUSides_       = glGetUniformLocation(tubeDepthProgram_, "uSides");
+    tubeDepthURadiusScale_ = glGetUniformLocation(tubeDepthProgram_, "uRadiusScale");
 }
 
 void SceneRenderer::renderInstancedMeshNode(InstancedMeshNode* mesh,
@@ -275,6 +308,18 @@ void SceneRenderer::renderInstancedMeshNode(InstancedMeshNode* mesh,
         glUniform1f (L.scaleByRadius, sp.scaleByRadius);
         glUniform1f (L.refRadius,     sp.refRadius);
         glUniform1f (L.densityFalloff,sp.densityFalloff);
+        glActiveTexture(GL_TEXTURE0);
+    }
+
+    // GPU procedural branch tube: bind the per-segment texture buffer (unit 10)
+    // and push the ring resolution + radius scale. Only the tube program
+    // declares uSides (L.tubeSides >= 0 there, -1 otherwise).
+    if (mesh->isTube() && L.tubeSides >= 0) {
+        glActiveTexture(GL_TEXTURE10);
+        glBindTexture(GL_TEXTURE_BUFFER, mesh->tubeSegTexture());
+        glUniform1i(L.segments, 10);
+        glUniform1i(L.tubeSides, mesh->tubeSides());
+        glUniform1f(L.tubeRadiusScale, mesh->tubeRadiusScale());
         glActiveTexture(GL_TEXTURE0);
     }
 

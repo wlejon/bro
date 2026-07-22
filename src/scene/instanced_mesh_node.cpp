@@ -129,6 +129,21 @@ void InstancedMeshNode::setScatterSegments(const float* segData, size_t segCount
     bumpChangeGeneration();
 }
 
+void InstancedMeshNode::setTubeSegments(const float* segData, size_t segCount,
+                                        int sides, float radiusScale,
+                                        const float boundsMin[3],
+                                        const float boundsMax[3]) {
+    tubeMode_ = true;
+    tubeData_.assign(segData, segData + segCount * 8);
+    tubeSegCount_ = segCount;
+    tubeSides_ = sides < 3 ? 3 : sides;
+    tubeRadiusScale_ = radiusScale;
+    tubeBounds_.min = {boundsMin[0], boundsMin[1], boundsMin[2]};
+    tubeBounds_.max = {boundsMax[0], boundsMax[1], boundsMax[2]};
+    tubeDirty_ = true;
+    bumpChangeGeneration();
+}
+
 void InstancedMeshNode::releaseGL() {
     if (vao_) { glDeleteVertexArrays(1, &vao_); vao_ = 0; }
     if (vbo_) { glDeleteBuffers(1, &vbo_); vbo_ = 0; }
@@ -138,6 +153,9 @@ void InstancedMeshNode::releaseGL() {
     if (segBuf_) { glDeleteBuffers(1, &segBuf_); segBuf_ = 0; }
     if (instSegTex_) { glDeleteTextures(1, &instSegTex_); instSegTex_ = 0; }
     if (instSegBuf_) { glDeleteBuffers(1, &instSegBuf_); instSegBuf_ = 0; }
+    if (tubeTex_) { glDeleteTextures(1, &tubeTex_); tubeTex_ = 0; }
+    if (tubeBuf_) { glDeleteBuffers(1, &tubeBuf_); tubeBuf_ = 0; }
+    if (tubeVao_) { glDeleteVertexArrays(1, &tubeVao_); tubeVao_ = 0; }
     if (texture_) { glDeleteTextures(1, &texture_); texture_ = 0; }
     if (normalTex_) { glDeleteTextures(1, &normalTex_); normalTex_ = 0; }
     if (mrTex_) { glDeleteTextures(1, &mrTex_); mrTex_ = 0; }
@@ -540,6 +558,40 @@ bool InstancedMeshNode::drawScatter() {
     return true;
 }
 
+// Upload the packed tube segment records into a texture buffer the tube VS
+// samples (RGBA32F, 2 texels per segment). Re-run only when the segment set
+// changes (the skeleton grows) — never per frame.
+void InstancedMeshNode::uploadTubeToGPU() {
+    if (!tubeBuf_) glGenBuffers(1, &tubeBuf_);
+    glBindBuffer(GL_TEXTURE_BUFFER, tubeBuf_);
+    glBufferData(GL_TEXTURE_BUFFER,
+                 tubeData_.size() * sizeof(float),
+                 tubeData_.data(), GL_DYNAMIC_DRAW);
+    if (!tubeTex_) glGenTextures(1, &tubeTex_);
+    glBindTexture(GL_TEXTURE_BUFFER, tubeTex_);
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGBA32F, tubeBuf_);
+    glBindTexture(GL_TEXTURE_BUFFER, 0);
+    glBindBuffer(GL_TEXTURE_BUFFER, 0);
+    tubeDirty_ = false;
+}
+
+bool InstancedMeshNode::drawTube() {
+    if (tubeSegCount_ == 0) return false;
+    if (tubeDirty_) uploadTubeToGPU();
+    // Attribute-less draw: gl_VertexID + the segment TBO carry everything.
+    // Core profile still requires a VAO bound, so keep a dedicated empty one.
+    if (!tubeVao_) glGenVertexArrays(1, &tubeVao_);
+    glBindVertexArray(tubeVao_);
+    glDrawArrays(GL_TRIANGLES, 0, tubeVertexCount());
+    glBindVertexArray(0);
+    return true;
+}
+
+bool InstancedMeshNode::drawTubeDepth() {
+    // Same geometry, different program (uLightVP, shadow frag) bound by caller.
+    return drawTube();
+}
+
 void InstancedMeshNode::onRender(SceneGraph& graph) {
     (void)graph;
     drawRawInstanced();
@@ -547,6 +599,7 @@ void InstancedMeshNode::onRender(SceneGraph& graph) {
 
 bool InstancedMeshNode::drawRawInstanced() {
     if (scatterMode_) return drawScatter();
+    if (tubeMode_) return drawTube();
     if (mesh_.empty() || instanceCount_ == 0) return false;
     if (renderingBatched() && batchDirty_) rebuildStaticBatch();
     if (meshDirty_) uploadMeshToGPU();
@@ -566,6 +619,13 @@ bool InstancedMeshNode::computeWorldInstanceBounds(float outMin[3], float outMax
         // Explicit node-local bounds supplied at setScatterSegments (segment
         // AABB padded for leaf reach); fold in the parent-chain transform.
         bromath::AABB3 wb = bromath::atransform(scatterBounds_, worldMatrix());
+        outMin[0] = wb.min.x; outMin[1] = wb.min.y; outMin[2] = wb.min.z;
+        outMax[0] = wb.max.x; outMax[1] = wb.max.y; outMax[2] = wb.max.z;
+        return true;
+    }
+    if (tubeMode_) {
+        if (tubeSegCount_ == 0) return false;
+        bromath::AABB3 wb = bromath::atransform(tubeBounds_, worldMatrix());
         outMin[0] = wb.min.x; outMin[1] = wb.min.y; outMin[2] = wb.min.z;
         outMax[0] = wb.max.x; outMax[1] = wb.max.y; outMax[2] = wb.max.z;
         return true;
@@ -613,6 +673,9 @@ bool InstancedMeshNode::drawRawInstancedDepth() {
     // reads per-instance attributes the scatter path doesn't provide), so they
     // don't cast shadows. Foliage sets castsShadow=false anyway.
     if (scatterMode_) return false;
+    // Tube nodes cast shadows through their own tube-depth sub-pass, not the
+    // instanced depth path (they have no mesh/instance buffer to draw here).
+    if (tubeMode_) return false;
     // Same VAO as the forward pass — the depth-only shader reads aPos
     // (location 0) and the per-instance matrix attributes (8..10). Other
     // vertex attributes are simply unused.

@@ -179,6 +179,37 @@ public:
     GLuint scatterSegTexture() const { return segTex_; }
     GLuint scatterInstSegTexture() const { return instSegTex_; }
 
+    // --- GPU procedural branch-tube mode ---
+    // Synthesise tapered tube (stem) geometry entirely in the vertex shader
+    // (shaders/branch_tube.vert) from a compact per-segment texture buffer, so
+    // a growing skeleton re-uploads only the segment records — never a re-baked
+    // multi-MB merged mesh. `segData` is segCount*8 floats, 2 RGBA32F texels per
+    // segment: [from.xyz, radiusFrom] then [to.xyz, radiusTo]. Each segment
+    // draws `sides` quads (a capless tube wall); the draw issues
+    // segCount*sides*6 vertices with NO vertex or instance attributes (the VS
+    // reads gl_VertexID + the segment TBO). Mutually exclusive with mesh
+    // instances and with scatter mode. Casts/receives shadows via a depth
+    // variant of the same VS.
+    void setTubeSegments(const float* segData, size_t segCount, int sides,
+                         float radiusScale,
+                         const float boundsMin[3], const float boundsMax[3]);
+    bool isTube() const { return tubeMode_; }
+    size_t tubeSegCount() const { return tubeSegCount_; }
+    int tubeSides() const { return tubeSides_; }
+    float tubeRadiusScale() const { return tubeRadiusScale_; }
+    GLuint tubeSegTexture() const { return tubeTex_; }
+    /// Vertices a full tube draw issues (segCount * sides * 6).
+    GLsizei tubeVertexCount() const {
+        return (GLsizei)(tubeSegCount_ * (size_t)tubeSides_ * 6);
+    }
+    /// Bind the (attribute-less) tube VAO and issue the forward tube draw. The
+    /// caller has already bound the tube program + uploaded uniforms and the
+    /// segment TBO. Returns true if anything drew.
+    bool drawTube();
+    /// Same geometry into the shadow depth pass (caller bound the tube-depth
+    /// program + uLightVP + the segment TBO).
+    bool drawTubeDepth();
+
     void setMetallic(float m) { metallic_ = m; }
     float metallic() const { return metallic_; }
 
@@ -285,6 +316,7 @@ private:
     void uploadInstancesToGPU();
     void uploadScatterToGPU();
     bool drawScatter();
+    void uploadTubeToGPU();
     // Rebake batchMesh_ from mesh_ + instanceData_ (static-batch path). Clears
     // batchDirty_ and marks the GL mesh/instance buffers dirty for re-upload.
     void rebuildStaticBatch();
@@ -331,6 +363,21 @@ private:
     GLuint segTex_ = 0;       // texture bound to segBuf_ (RGBA32F samplerBuffer)
     GLuint instSegBuf_ = 0;   // GL_TEXTURE_BUFFER of per-leaf segment indices
     GLuint instSegTex_ = 0;   // texture bound to instSegBuf_ (R32F samplerBuffer)
+
+    // Procedural branch-tube mode (see setTubeSegments). tubeBuf_ holds the
+    // packed segment records; tubeTex_ is the RGBA32F samplerBuffer view the
+    // tube VS samples. tubeVao_ is an empty VAO bound for the attribute-less
+    // draw (core profile requires some VAO bound even with no vertex attribs).
+    bool tubeMode_ = false;
+    bool tubeDirty_ = false;
+    std::vector<float> tubeData_;   // segCount*8 floats (2 RGBA32F texels each)
+    size_t tubeSegCount_ = 0;
+    int    tubeSides_ = 6;
+    float  tubeRadiusScale_ = 1.0f;
+    bromath::AABB3 tubeBounds_;
+    GLuint tubeBuf_ = 0;      // GL_TEXTURE_BUFFER of segment records
+    GLuint tubeTex_ = 0;      // texture bound to tubeBuf_ (RGBA32F samplerBuffer)
+    GLuint tubeVao_ = 0;      // empty VAO for the attribute-less tube draw
     GLuint texture_ = 0;
     GLuint normalTex_ = 0;
     GLuint mrTex_ = 0;

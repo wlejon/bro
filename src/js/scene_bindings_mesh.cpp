@@ -1113,6 +1113,52 @@ static bool applyScatter(JSContext* ctx, scene::InstancedMeshNode* node,
     return true;
 }
 
+// Apply a `tube` option / setTubeSegments argument: a compact per-segment
+// buffer (8 floats each: [from.xyz, radiusFrom, to.xyz, radiusTo]) that the
+// tube VS expands into tapered stem geometry. Produced by
+// `world.emitBranchTubes(opts)`. See InstancedMeshNode::setTubeSegments /
+// shaders/branch_tube.vert.
+static bool applyTube(JSContext* ctx, scene::InstancedMeshNode* node,
+                      JSValueConst tubeVal) {
+    if (!JS_IsObject(tubeVal)) return false;
+    std::vector<float> seg;
+    if (!jsReadFloatArray(ctx, tubeVal, "segments", seg) || seg.empty())
+        return false;
+    size_t segCount = seg.size() / 8;
+    if (segCount == 0) return false;
+
+    int   sides       = (int)qjsbind::get_prop_number(ctx, tubeVal, "sides", 6);
+    float radiusScale = (float)qjsbind::get_prop_number(ctx, tubeVal, "radiusScale", 1.0);
+
+    // Bounds: prefer explicit boundsMin/boundsMax (emit supplies them); else
+    // derive from the segment endpoints, padded by the max ring radius.
+    float bmin[3], bmax[3];
+    std::vector<float> vmin, vmax;
+    bool haveB = jsReadFloatArray(ctx, tubeVal, "boundsMin", vmin) && vmin.size() >= 3 &&
+                 jsReadFloatArray(ctx, tubeVal, "boundsMax", vmax) && vmax.size() >= 3;
+    if (haveB) {
+        for (int i = 0; i < 3; ++i) { bmin[i] = vmin[i]; bmax[i] = vmax[i]; }
+    } else {
+        bmin[0] = bmin[1] = bmin[2] =  1e30f;
+        bmax[0] = bmax[1] = bmax[2] = -1e30f;
+        float maxR = 0.0f;
+        for (size_t s = 0; s < segCount; ++s) {
+            const float* r = seg.data() + s * 8;
+            float from[3] = { r[0], r[1], r[2] };
+            float to[3]   = { r[4], r[5], r[6] };
+            maxR = std::max({ maxR, r[3], r[7] });
+            for (int i = 0; i < 3; ++i) {
+                bmin[i] = std::min({ bmin[i], from[i], to[i] });
+                bmax[i] = std::max({ bmax[i], from[i], to[i] });
+            }
+        }
+        float pad = maxR * radiusScale;
+        for (int i = 0; i < 3; ++i) { bmin[i] -= pad; bmax[i] += pad; }
+    }
+    node->setTubeSegments(seg.data(), segCount, sides, radiusScale, bmin, bmax);
+    return true;
+}
+
 JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
                                          int argc, JSValueConst* argv) {
     auto* g = getGraph(ctx, this_val);
@@ -1278,9 +1324,28 @@ JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
         JSValue scatVal = JS_GetPropertyStr(ctx, opts, "scatter");
         if (JS_IsObject(scatVal)) applyScatter(ctx, node, scatVal);
         JS_FreeValue(ctx, scatVal);
+
+        // GPU procedural branch tubes: tapered stem geometry synthesised in the
+        // VS from a per-segment buffer (needs no template mesh, mutually
+        // exclusive with `instances` and `scatter`).
+        JSValue tubeVal = JS_GetPropertyStr(ctx, opts, "tube");
+        if (JS_IsObject(tubeVal)) applyTube(ctx, node, tubeVal);
+        JS_FreeValue(ctx, tubeVal);
     }
 
     return wrapNode(ctx, node, g);
+}
+
+// Live update of an instanced node's tube segments (the skeleton grew). Same
+// descriptor shape as the `tube` create option.
+JSValue js_node_setTubeSegments(JSContext* ctx, JSValueConst this_val,
+                                int argc, JSValueConst* argv) {
+    auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
+    if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::InstancedMesh)
+        return JS_UNDEFINED;
+    if (argc < 1) return JS_UNDEFINED;
+    applyTube(ctx, static_cast<scene::InstancedMeshNode*>(w->node()), argv[0]);
+    return JS_UNDEFINED;
 }
 
 // Live update of an instanced node's scatter segments (the sim grew). Same

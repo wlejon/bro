@@ -56,6 +56,8 @@ SceneRenderer::~SceneRenderer() {
     if (meshSkinnedProgram_) { glDeleteProgram(meshSkinnedProgram_); meshSkinnedProgram_ = 0; }
     if (meshInstancedProgram_) { glDeleteProgram(meshInstancedProgram_); meshInstancedProgram_ = 0; }
     if (foliageScatterProgram_) { glDeleteProgram(foliageScatterProgram_); foliageScatterProgram_ = 0; }
+    if (tubeProgram_) { glDeleteProgram(tubeProgram_); tubeProgram_ = 0; }
+    if (tubeDepthProgram_) { glDeleteProgram(tubeDepthProgram_); tubeDepthProgram_ = 0; }
     if (bbProgram_) { glDeleteProgram(bbProgram_); bbProgram_ = 0; }
     if (bbVBO_) { glDeleteBuffers(1, &bbVBO_); bbVBO_ = 0; }
     if (bbVAO_) { glDeleteVertexArrays(1, &bbVAO_); bbVAO_ = 0; }
@@ -768,6 +770,7 @@ void SceneRenderer::render3D() {
                     // scatter nodes are deferred to their own program pass.
                     std::vector<InstancedMeshNode*> customInstanced;
                     std::vector<InstancedMeshNode*> scatterInstanced;
+                    std::vector<InstancedMeshNode*> tubeInstanced;
                     std::function<void(SceneNode*)> walkInst = [&](SceneNode* n) {
                         if (!n->renderVisible()) return;
                         if (n->type() == SceneNode::Type::InstancedMesh) {
@@ -782,6 +785,10 @@ void SceneRenderer::render3D() {
                                     // GPU scatter: different vertex program,
                                     // drawn in its own pass below.
                                     scatterInstanced.push_back(m);
+                                } else if (m->isTube()) {
+                                    // GPU procedural tubes: own vertex program,
+                                    // drawn in its own pass below.
+                                    tubeInstanced.push_back(m);
                                 } else if (m->color()[3] < 1.0f) {
                                     // Deferred to the sorted translucent
                                     // pass (whole-node depth).
@@ -810,6 +817,21 @@ void SceneRenderer::render3D() {
                             uploadInstGlobals(meshScatterDraw_, meshScatterLocs_);
                             for (InstancedMeshNode* m : scatterInstanced) {
                                 renderInstancedMeshNode(m, meshScatterDraw_);
+                            }
+                            glUseProgram(meshInstancedProgram_);
+                        }
+                    }
+
+                    // Branch-tube sub-pass — bind the tube program once and draw
+                    // every tube node (tapered stem geometry synthesised in the
+                    // VS from each node's segment TBO). Opaque solids.
+                    if (!tubeInstanced.empty()) {
+                        ensureTubePipeline();
+                        if (tubeProgram_) {
+                            glUseProgram(tubeProgram_);
+                            uploadInstGlobals(meshTubeDraw_, meshTubeLocs_);
+                            for (InstancedMeshNode* m : tubeInstanced) {
+                                renderInstancedMeshNode(m, meshTubeDraw_);
                             }
                             glUseProgram(meshInstancedProgram_);
                         }

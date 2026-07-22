@@ -405,6 +405,9 @@ private:
               upBias = -1, tiltJitter = -1, rollJitter = -1,
               baseScale = -1, scaleJitter = -1, scaleByRadius = -1,
               refRadius = -1, densityFalloff = -1;
+        // GPU procedural branch-tube uniforms (branch_tube.vert). uSegments
+        // reuses `segments` above; these two are tube-only. -1 elsewhere.
+        GLint tubeSides = -1, tubeRadiusScale = -1;
         ProbeLocs probe;
         AtmLocs   atm;
     };
@@ -415,6 +418,8 @@ private:
                                  const InstancedDrawLocs& L);
     void ensureInstancedMeshPipeline();
     void ensureFoliageScatterPipeline();
+    void ensureTubePipeline();
+    void ensureTubeDepthPipeline();
     void renderGaussianSplatNodes();
     void renderBillboardNode(SceneNode* node);
 
@@ -579,6 +584,7 @@ private:
     MeshProgramLocs meshLocs_;
     MeshProgramLocs meshInstLocs_;
     MeshProgramLocs meshScatterLocs_;
+    MeshProgramLocs meshTubeLocs_;
     MeshProgramLocs meshSkinnedLocs_;
     void uploadLights(const std::vector<LightNode*>& lights,
                       const MeshProgramLocs& locs);
@@ -751,6 +757,21 @@ private:
     // reading per-instance attributes. scatterDraw_ adds the scatter uniforms.
     GLuint foliageScatterProgram_ = 0;
     InstancedDrawLocs meshScatterDraw_;
+
+    // GPU procedural branch-tube program: same derived fragment shader as the
+    // instanced program, but branch_tube.vert synthesises tapered tube geometry
+    // from a per-segment texture buffer + gl_VertexID (no vertex/instance
+    // attributes). meshTubeDraw_ adds the tube uniforms; meshTubeLocs_ (below)
+    // carries its lighting/shadow/IBL locs.
+    GLuint tubeProgram_ = 0;
+    InstancedDrawLocs meshTubeDraw_;
+
+    // Tube depth variant (branch_tube.vert with #define SHADOW_PASS + shadow
+    // fragment) — the tube casters' shadow silhouette pass.
+    GLuint tubeDepthProgram_ = 0;
+    GLint  tubeDepthULightVP_ = -1, tubeDepthUModel_ = -1,
+           tubeDepthUSegments_ = -1, tubeDepthUSides_ = -1,
+           tubeDepthURadiusScale_ = -1;
 
     // Mesh FBO. The depth-stencil attachment is a texture (not an RBO) so
     // the soft-particle pass can sample scene depth; the tonemap FBO
@@ -1078,6 +1099,7 @@ private:
     std::vector<MeshNode*> shadowCustomCasters_;
     std::vector<MeshNode*> shadowSkinnedCustomCasters_;
     std::vector<InstancedMeshNode*> shadowInstancedCasters_;
+    std::vector<InstancedMeshNode*> shadowTubeCasters_;
 
     // 1×1 fallback textures bound to sampler units when the real textures
     // aren't available. Prevents GL_INVALID_OPERATION on strict core-profile

@@ -228,6 +228,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
     shadowCustomCasters_.clear();
     shadowSkinnedCustomCasters_.clear();
     shadowInstancedCasters_.clear();
+    shadowTubeCasters_.clear();
     for (int i = 0; i < 32; ++i) {
         lightShadowSlot_[i] = -1;
         lightShadowSlotCount_[i] = 0;
@@ -271,7 +272,9 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
             }
         } else if (n->type() == SceneNode::Type::InstancedMesh) {
             auto* m = static_cast<InstancedMeshNode*>(n);
-            if (!m->effectiveUnlit() && m->castsShadow() && !m->mesh().empty() && m->instanceCount() > 0)
+            if (m->castsShadow() && m->isTube() && m->tubeSegCount() > 0)
+                shadowTubeCasters_.push_back(m);
+            else if (!m->effectiveUnlit() && m->castsShadow() && !m->mesh().empty() && m->instanceCount() > 0)
                 shadowInstancedCasters_.push_back(m);
         }
         for (auto* c : n->children()) self(self, c);
@@ -287,7 +290,7 @@ void SceneRenderer::prepareShadows(const std::vector<LightNode*>& lights) {
                      shadowSkinnedCustomCasters_.end(), byChunk);
     if (shadowCasters_.empty() && shadowSkinnedCasters_.empty() &&
         shadowCustomCasters_.empty() && shadowSkinnedCustomCasters_.empty() &&
-        shadowInstancedCasters_.empty()) return;
+        shadowInstancedCasters_.empty() && shadowTubeCasters_.empty()) return;
 
     // Scene bounds for fitting directional frustums. CSM uses view-frustum
     // slices instead — added in a follow-up commit.
@@ -564,6 +567,7 @@ void SceneRenderer::renderShadowPass() {
     const bool hasSkinnedCasters = !shadowSkinnedCasters_.empty();
     const bool hasCustomCasters = !shadowCustomCasters_.empty();
     const bool hasSkinnedCustomCasters = !shadowSkinnedCustomCasters_.empty();
+    const bool hasTubeCasters = !shadowTubeCasters_.empty();
 
     const int tileSize = shadowAtlasSize_ / 4;  // matches gridDim in prepareShadows
 
@@ -576,7 +580,7 @@ void SceneRenderer::renderShadowPass() {
     // into every tile.
     struct CasterBounds { bromath::AABB3 box; bool valid; };
     std::vector<CasterBounds> staticBounds, skinnedBounds, instBounds,
-                              customBounds, skinnedCustomBounds;
+                              customBounds, skinnedCustomBounds, tubeBounds;
     if (cullingActive_) {
         auto cache = [&](auto& casters, std::vector<CasterBounds>& out) {
             out.resize(casters.size());
@@ -588,6 +592,7 @@ void SceneRenderer::renderShadowPass() {
         cache(shadowCustomCasters_, customBounds);
         cache(shadowSkinnedCustomCasters_, skinnedCustomBounds);
         cache(shadowInstancedCasters_, instBounds);
+        cache(shadowTubeCasters_, tubeBounds);
     }
 
     // Tile frustums, shared by the cache-signature build below and the
@@ -642,6 +647,7 @@ void SceneRenderer::renderShadowPass() {
             addList(shadowCustomCasters_,        customBounds,        3, false);
             addList(shadowSkinnedCustomCasters_, skinnedCustomBounds, 4, true);
             addList(shadowInstancedCasters_,     instBounds,          5, false);
+            addList(shadowTubeCasters_,          tubeBounds,          6, false);
 
             ShadowTileCacheEntry& e = shadowTileCache_[slot];
             const uint32_t lightId = shadowTileLight_[slot]->id();
@@ -668,6 +674,7 @@ void SceneRenderer::renderShadowPass() {
     if (!anyRender) return;  // every tile reused — no GL work at all
 
     if (hasInstancedCasters) ensureShadowInstancedPipeline();
+    if (hasTubeCasters) ensureTubeDepthPipeline();
     if (hasSkinnedCasters) ensureShadowSkinnedPipeline();
     // Custom casters whose shadow variant failed to compile (cached failure
     // in ensureCustomShadowProgram) fall back to the default depth programs.
@@ -864,6 +871,29 @@ void SceneRenderer::renderShadowPass() {
                 InstancedMeshNode* m = shadowInstancedCasters_[i];
                 glUniformMatrix4fv(shadowInstUModel_, 1, GL_FALSE, m->worldMatrix().data);
                 m->drawRawInstancedDepth();
+            }
+            glUseProgram(shadowProgram_);
+        }
+
+        // Branch-tube casters: the SHADOW_PASS variant of the tube VS emits the
+        // tube silhouette in light space. The segment TBO binds to unit 10 (the
+        // same unit the forward tube pass uses).
+        if (hasTubeCasters && tubeDepthProgram_) {
+            glUseProgram(tubeDepthProgram_);
+            glUniformMatrix4fv(tubeDepthULightVP_, 1, GL_FALSE, lightVP.data);
+            for (size_t i = 0; i < shadowTubeCasters_.size(); ++i) {
+                if (tileCulled(tubeBounds, i)) { cullStats_.shadowCulled++; continue; }
+                cullStats_.shadowDrawn++;
+                InstancedMeshNode* m = shadowTubeCasters_[i];
+                glUniformMatrix4fv(tubeDepthUModel_, 1, GL_FALSE, m->worldMatrix().data);
+                if (tubeDepthUSides_ >= 0) glUniform1i(tubeDepthUSides_, m->tubeSides());
+                if (tubeDepthURadiusScale_ >= 0)
+                    glUniform1f(tubeDepthURadiusScale_, m->tubeRadiusScale());
+                glActiveTexture(GL_TEXTURE10);
+                glBindTexture(GL_TEXTURE_BUFFER, m->tubeSegTexture());
+                if (tubeDepthUSegments_ >= 0) glUniform1i(tubeDepthUSegments_, 10);
+                glActiveTexture(GL_TEXTURE0);
+                m->drawTubeDepth();
             }
             glUseProgram(shadowProgram_);
         }

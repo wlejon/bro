@@ -598,6 +598,76 @@ static void installWorldClass(JSContext* ctx) {
         return obj;
     })
 
+    // Compact per-segment tube buffer for the GPU branch-tube node. Returns
+    // { segments: Float32Array (segCount*8: [from.xyz, radiusFrom, to.xyz,
+    // radiusTo]), segCount, boundsMin, boundsMax }. radiusFrom is the parent
+    // segment's radius (pipe-model taper toward the root); radiusTo is the
+    // segment's own radius. Feed it (spread with { sides, radiusScale }) to
+    // createInstancedMesh({ tube }) / node.setTubeSegments(). See
+    // shaders/branch_tube.vert. opts.minRadius drops hair-thin twigs (default 0).
+    .method("emitBranchTubes", [](FWW* w, JSContext* ctx, JSValueConst optsVal) -> JSValue {
+        auto segs = broflora::emitWorldSegments(*w->world);
+
+        float minRadius = 0.0f;
+        if (JS_IsObject(optsVal))
+            minRadius = (float)qjsbind::get_prop_number(ctx, optsVal, "minRadius", 0.0);
+
+        std::vector<float> packed;   // per-segment records (8 floats each)
+        packed.reserve(segs.size() * 8);
+        float bmin[3] = { 1e30f, 1e30f, 1e30f };
+        float bmax[3] = { -1e30f, -1e30f, -1e30f };
+        float maxR = 0.0f;
+
+        for (size_t i = 0; i < segs.size(); ++i) {
+            const auto& s = segs[i];
+            bromath::Vec3 d = s.to - s.from;
+            if (bromath::vlen(d) < 1e-6f) continue;
+            if (s.radius < minRadius) continue;
+
+            // Pipe-model taper: base radius = parent's radius (thicker toward
+            // the root), tip radius = this segment's own radius.
+            float rTo = s.radius;
+            float rFrom = rTo;
+            int p = s.parent;
+            if (p >= 0 && static_cast<size_t>(p) < segs.size() && segs[p].radius > 0.0f)
+                rFrom = segs[p].radius;
+
+            packed.push_back(s.from.x); packed.push_back(s.from.y);
+            packed.push_back(s.from.z); packed.push_back(rFrom);
+            packed.push_back(s.to.x);   packed.push_back(s.to.y);
+            packed.push_back(s.to.z);   packed.push_back(rTo);
+
+            maxR = std::max({ maxR, rFrom, rTo });
+            bmin[0] = std::min({ bmin[0], s.from.x, s.to.x });
+            bmin[1] = std::min({ bmin[1], s.from.y, s.to.y });
+            bmin[2] = std::min({ bmin[2], s.from.z, s.to.z });
+            bmax[0] = std::max({ bmax[0], s.from.x, s.to.x });
+            bmax[1] = std::max({ bmax[1], s.from.y, s.to.y });
+            bmax[2] = std::max({ bmax[2], s.from.z, s.to.z });
+        }
+
+        size_t segCount = packed.size() / 8;
+        if (segCount == 0) {
+            bmin[0]=bmin[1]=bmin[2]=bmax[0]=bmax[1]=bmax[2]=0.0f;
+        } else {
+            for (int i = 0; i < 3; ++i) { bmin[i] -= maxR; bmax[i] += maxR; }
+        }
+
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "segments",
+                          makeFloat32Array(ctx, packed.empty() ? nullptr : packed.data(),
+                                           packed.size()));
+        JS_SetPropertyStr(ctx, obj, "segCount", JS_NewInt64(ctx, (int64_t)segCount));
+        JSValue bminA = JS_NewArray(ctx), bmaxA = JS_NewArray(ctx);
+        for (int i = 0; i < 3; ++i) {
+            JS_SetPropertyUint32(ctx, bminA, i, JS_NewFloat64(ctx, bmin[i]));
+            JS_SetPropertyUint32(ctx, bmaxA, i, JS_NewFloat64(ctx, bmax[i]));
+        }
+        JS_SetPropertyStr(ctx, obj, "boundsMin", bminA);
+        JS_SetPropertyStr(ctx, obj, "boundsMax", bmaxA);
+        return obj;
+    })
+
     // -- fast native C++ branch segment transform buffer for InstancedMeshNode --
     .method("emitSegmentTransforms", [](FWW* w, JSContext* ctx) -> JSValue {
         auto segs = broflora::emitWorldSegments(*w->world);
