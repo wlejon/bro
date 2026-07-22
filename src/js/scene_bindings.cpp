@@ -32,7 +32,10 @@
 #include "util/asset_mounts.h"
 #include "util/log.h"
 
+#include "impostor_layer.js.h"  // generates `static const char js_impostor_layer[]`
+
 #include <qjsbind/qjsbind.h>
+#include <cstring>
 
 #include <bromesh/primitives/primitives.h>
 #include <bromesh/analysis/raycast.h>
@@ -1814,6 +1817,21 @@ void SceneBindings::install(JSContext* ctx) {
         })
         .method_raw("attachAIWorld", graphAttachAIWorld, 2)
         .method_raw("detachAIWorld", graphDetachAIWorld, 0);
+
+    // --- bro.impostor — camera-facing octahedral impostor billboards as ONE
+    //     merged draw (pure JS over scene.createMesh + a billboard shader).
+    //     Avoids the per-instance GPU cost of the instanced path for high
+    //     counts of tiny billboard quads. See src/js/js/impostor_layer.js. ---
+    JSValue r = JS_Eval(ctx, js_impostor_layer, std::strlen(js_impostor_layer),
+                        "<bro.impostor>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(r)) {
+        JSValue exc = JS_GetException(ctx);
+        const char* what = JS_ToCString(ctx, exc);
+        LOG_ERROR("[scene] bro.impostor install failed: %s", what ? what : "(unknown)");
+        if (what) JS_FreeCString(ctx, what);
+        JS_FreeValue(ctx, exc);
+    }
+    JS_FreeValue(ctx, r);
 }
 
 JSValue SceneBindings::wrapSceneGraph(JSContext* ctx, scene::SceneGraph* graph) {
