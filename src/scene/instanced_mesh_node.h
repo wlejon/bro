@@ -112,6 +112,42 @@ public:
     void setDoubleSided(bool b) { doubleSided_ = b; }
     bool doubleSided() const { return doubleSided_; }
 
+    // --- Static batching ---
+    // Collapse ALL instances into ONE merged mesh drawn as a single instance.
+    // `glDrawElementsInstanced` carries a fixed ~7-9us of GPU time PER INSTANCE
+    // on some drivers (measured + Nsight-confirmed), independent of the
+    // instance's geometry — negligible for a big mesh drawn a few times, but
+    // catastrophic for high counts of tiny (few-triangle) meshes (20000 quads =
+    // ~150ms vs ~0.03ms merged). Static batch bakes each instance's transform
+    // into vertices, its RGB tint into vertex colors, and its atlas cell into
+    // UVs, then draws the merge as instanceCount=1 through the SAME shader, so
+    // it renders pixel-identical while paying the per-instance cost exactly
+    // once. Trade-off: merged geometry costs memory, and any instance/mesh
+    // change forces an O(total-verts) CPU rebake on the next draw — only worth
+    // it when instances rarely move and each mesh is small. Ignored while a
+    // custom shader is set (camera-facing billboards can't bake a static
+    // transform — they use a shader-side merge instead). Atlas baking assumes a
+    // base-colour-only material (normal/MR/AO/emissive keep raw UVs in the
+    // shader, so they'd mis-sample a baked atlas sub-rect).
+    void setStaticBatch(bool b);
+    bool staticBatch() const { return staticBatch_; }
+
+    /// True when the NEXT draw renders as one merged instance: the flag is on,
+    /// there is geometry to merge, and no custom shader overrides it. The
+    /// renderer keys the atlas + vertex-colour-tint uniforms off this.
+    bool renderingBatched() const {
+        return staticBatch_ && !customShader_ && instanceCount_ > 0 && !mesh_.empty();
+    }
+    /// Atlas grid the current draw samples: 1x1 when batched (the cell is baked
+    /// into the merged UVs so the shader must NOT remap), else the authored grid.
+    int effectiveAtlasCols() const { return renderingBatched() ? 1 : atlasCols_; }
+    int effectiveAtlasRows() const { return renderingBatched() ? 1 : atlasRows_; }
+    /// Whether the draw applies per-vertex colour as albedo: a batched draw
+    /// bakes the per-instance tint into vertex colours and always needs it on.
+    bool useVertexColorForDraw() const {
+        return renderingBatched() ? batchMesh_.hasColors() : vertexColorTintEnabled();
+    }
+
     void setMetallic(float m) { metallic_ = m; }
     float metallic() const { return metallic_; }
 
@@ -216,6 +252,9 @@ public:
 private:
     void uploadMeshToGPU();
     void uploadInstancesToGPU();
+    // Rebake batchMesh_ from mesh_ + instanceData_ (static-batch path). Clears
+    // batchDirty_ and marks the GL mesh/instance buffers dirty for re-upload.
+    void rebuildStaticBatch();
 
     bromesh::MeshData mesh_;
     bool meshDirty_ = false;
@@ -224,6 +263,12 @@ private:
     std::vector<float> instanceData_;
     size_t instanceCount_ = 0;
     bool instancesDirty_ = false;
+
+    // Static batching: mesh_ + instanceData_ merged into one draw. batchMesh_
+    // is the baked geometry uploaded (instead of mesh_) when renderingBatched().
+    bool staticBatch_ = false;
+    bool batchDirty_ = true;
+    bromesh::MeshData batchMesh_;
 
     // Node-space union of instance-transformed mesh bounds, rebuilt lazily by
     // computeWorldInstanceBounds when the mesh or instances change. Cached

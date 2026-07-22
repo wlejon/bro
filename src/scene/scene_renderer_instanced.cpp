@@ -183,7 +183,7 @@ void SceneRenderer::renderInstancedMeshNode(InstancedMeshNode* mesh,
     // Same rule as renderMeshNode: a custom shader forces the lit path
     // (see InstancedMeshNode::effectiveUnlit).
     if (L.unlit >= 0) glUniform1i(L.unlit, mesh->effectiveUnlit() ? 1 : 0);
-    glUniform1i(L.useVertexColor, mesh->vertexColorTintEnabled() ? 1 : 0);
+    glUniform1i(L.useVertexColor, mesh->useVertexColorForDraw() ? 1 : 0);
     glUniform1f(L.nearClip, mesh->nearClipDist());
 
     bool bindTex = mesh->hasBaseColorTexture();
@@ -222,7 +222,7 @@ void SceneRenderer::renderInstancedMeshNode(InstancedMeshNode* mesh,
     if (L.hasAOMap       >= 0) glUniform1i(L.hasAOMap,       hasAO ? 1 : 0);
     if (L.hasEmissiveMap >= 0) glUniform1i(L.hasEmissiveMap, hasEM ? 1 : 0);
     if (L.receivesShadow >= 0) glUniform1i(L.receivesShadow, mesh->receivesShadow() ? 1 : 0);
-    if (L.atlasGrid      >= 0) glUniform2f(L.atlasGrid, (float)mesh->atlasCols(), (float)mesh->atlasRows());
+    if (L.atlasGrid      >= 0) glUniform2f(L.atlasGrid, (float)mesh->effectiveAtlasCols(), (float)mesh->effectiveAtlasRows());
     if (L.alphaCutoff    >= 0) glUniform1f(L.alphaCutoff, mesh->alphaCutoff());
 
     // Local reflection probe: whole-node selection by instance-bounds center

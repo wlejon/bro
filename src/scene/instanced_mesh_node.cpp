@@ -3,6 +3,8 @@
 #include "util/log.h"
 
 #include <bromesh/manipulation/normals.h>
+#include <bromesh/manipulation/merge.h>
+#include <bromesh/manipulation/transform.h>
 #include <bromesh/analysis/bbox.h>
 
 #include <cmath>
@@ -25,6 +27,7 @@ void InstancedMeshNode::setMesh(const bromesh::MeshData& mesh) {
     mesh_ = mesh;
     ensureTangents(mesh_);
     meshDirty_ = true;
+    batchDirty_ = true;
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
     instanceBoundsDirty_ = true;
     bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
@@ -34,15 +37,27 @@ void InstancedMeshNode::setMesh(bromesh::MeshData&& mesh) {
     mesh_ = std::move(mesh);
     ensureTangents(mesh_);
     meshDirty_ = true;
+    batchDirty_ = true;
     bounds_ = mesh_.empty() ? bromath::AABB3{} : bromesh::computeBBox(mesh_);
     instanceBoundsDirty_ = true;
     bumpChangeGeneration();  // geometry changed — shadow tiles must re-render
+}
+
+void InstancedMeshNode::setStaticBatch(bool b) {
+    if (staticBatch_ == b) return;
+    staticBatch_ = b;
+    batchDirty_ = true;
+    meshDirty_ = true;       // the uploaded mesh switches between mesh_/batchMesh_
+    instancesDirty_ = true;  // and the instance buffer between N rows and 1
+    if (!b) batchMesh_.clear();
+    bumpChangeGeneration();
 }
 
 void InstancedMeshNode::setInstances(const float* data, size_t count) {
     instanceData_.assign(data, data + count * 16);
     instanceCount_ = count;
     instancesDirty_ = true;
+    batchDirty_ = true;
     instanceBoundsDirty_ = true;
     bumpChangeGeneration();  // instance set changed — shadow tiles must re-render
 }
@@ -83,6 +98,7 @@ void InstancedMeshNode::setInstancesFromPosQuatScale(const float* data, size_t c
         o[15] = (idxClamped + 0.5f) / 256.0f;
     }
     instancesDirty_ = true;
+    batchDirty_ = true;
     instanceBoundsDirty_ = true;
     bumpChangeGeneration();  // instance set changed — shadow tiles must re-render
 }
@@ -91,6 +107,7 @@ void InstancedMeshNode::updateInstance(size_t i, const float* data16) {
     if (i >= instanceCount_) return;
     std::memcpy(instanceData_.data() + i * 16, data16, sizeof(float) * 16);
     instancesDirty_ = true;
+    batchDirty_ = true;
     instanceBoundsDirty_ = true;
     bumpChangeGeneration();  // instance set changed — shadow tiles must re-render
 }
@@ -236,8 +253,74 @@ static void flushTex(InstancedMeshNode::PendingTex& p, GLuint& glTex) {
     p.dirty = false;
 }
 
+// Bake mesh_ + instanceData_ into batchMesh_: one copy of the mesh per
+// instance, transformed into node space, with the instance RGB tint folded
+// into vertex colours and the atlas cell folded into UVs, all merged. The
+// draw then renders batchMesh_ as a single identity instance (see
+// setStaticBatch). O(total verts); only runs when batchDirty_ && renderingBatched.
+void InstancedMeshNode::rebuildStaticBatch() {
+    batchDirty_ = false;
+    batchMesh_.clear();
+    if (mesh_.empty() || instanceCount_ == 0) return;
+
+    const int cols = atlasCols_ < 1 ? 1 : atlasCols_;
+    const int rows = atlasRows_ < 1 ? 1 : atlasRows_;
+    const bool atlas = (cols > 1 || rows > 1) && mesh_.hasUVs();
+
+    std::vector<bromesh::MeshData> parts;
+    parts.reserve(instanceCount_);
+    for (size_t i = 0; i < instanceCount_; ++i) {
+        const float* r = instanceData_.data() + i * 16;
+        // Instance rows are a 4x3 ROW-major affine (rows r0..r2, translation in
+        // .w). transformMesh wants a COLUMN-major 4x4 — transpose the 3x3 and
+        // put translation in the last column.
+        const float m[16] = {
+            r[0], r[4], r[8],  0.0f,   // col 0
+            r[1], r[5], r[9],  0.0f,   // col 1
+            r[2], r[6], r[10], 0.0f,   // col 2
+            r[3], r[7], r[11], 1.0f,   // col 3 (translation)
+        };
+        bromesh::MeshData part = mesh_;
+        bromesh::transformMesh(part, m);
+
+        const size_t vc = part.vertexCount();
+        // Fold per-instance RGB tint (instance row .w column, indices 12..14)
+        // into vertex colours so the single merged instance keeps per-tree tint.
+        const float tr = r[12], tg = r[13], tb = r[14];
+        if (part.colors.size() != vc * 4) part.colors.assign(vc * 4, 1.0f);
+        for (size_t v = 0; v < vc; ++v) {
+            part.colors[v * 4 + 0] *= tr;
+            part.colors[v * 4 + 1] *= tg;
+            part.colors[v * 4 + 2] *= tb;
+        }
+        // Fold the atlas cell (packed in r[15] as (idx+0.5)/256) into UVs,
+        // matching the shader's remap: uv = (cell.xy + fract(uv)) * cellSize.
+        if (atlas) {
+            int cell = (int)(r[15] * 256.0f);
+            const int total = cols * rows;
+            if (cell < 0) cell = 0;
+            if (cell >= total) cell = total - 1;
+            const int cx = cell % cols, cy = cell / cols;
+            const float sw = 1.0f / (float)cols, sh = 1.0f / (float)rows;
+            for (size_t v = 0; v < vc; ++v) {
+                float u = part.uvs[v * 2 + 0], w = part.uvs[v * 2 + 1];
+                u -= std::floor(u); w -= std::floor(w);
+                part.uvs[v * 2 + 0] = ((float)cx + u) * sw;
+                part.uvs[v * 2 + 1] = ((float)cy + w) * sh;
+            }
+        }
+        parts.push_back(std::move(part));
+    }
+    batchMesh_ = bromesh::mergeMeshes(parts);
+    ensureTangents(batchMesh_);
+    meshDirty_ = true;       // batchMesh_ must be (re)uploaded
+    instancesDirty_ = true;  // single identity instance row
+}
+
 void InstancedMeshNode::uploadMeshToGPU() {
-    if (mesh_.empty()) return;
+    // Static batch uploads the merged geometry; otherwise the authored mesh.
+    const bromesh::MeshData& M = renderingBatched() ? batchMesh_ : mesh_;
+    if (M.empty()) return;
 
     if (!vao_) glGenVertexArrays(1, &vao_);
     if (!vbo_) glGenBuffers(1, &vbo_);
@@ -245,11 +328,11 @@ void InstancedMeshNode::uploadMeshToGPU() {
 
     glBindVertexArray(vao_);
 
-    size_t vertCount = mesh_.vertexCount();
-    bool hasNormals = mesh_.hasNormals();
-    bool hasUVs = mesh_.hasUVs();
-    bool hasColors = mesh_.hasColors();
-    bool hasTangents = mesh_.hasTangents();
+    size_t vertCount = M.vertexCount();
+    bool hasNormals = M.hasNormals();
+    bool hasUVs = M.hasUVs();
+    bool hasColors = M.hasColors();
+    bool hasTangents = M.hasTangents();
     hasVertexColors_ = hasColors;
 
     size_t stride = 3;
@@ -261,33 +344,33 @@ void InstancedMeshNode::uploadMeshToGPU() {
     std::vector<float> interleaved(vertCount * stride);
     for (size_t i = 0; i < vertCount; i++) {
         size_t off = i * stride;
-        interleaved[off + 0] = mesh_.positions[i * 3 + 0];
-        interleaved[off + 1] = mesh_.positions[i * 3 + 1];
-        interleaved[off + 2] = mesh_.positions[i * 3 + 2];
+        interleaved[off + 0] = M.positions[i * 3 + 0];
+        interleaved[off + 1] = M.positions[i * 3 + 1];
+        interleaved[off + 2] = M.positions[i * 3 + 2];
         size_t at = 3;
         if (hasNormals) {
-            interleaved[off + at + 0] = mesh_.normals[i * 3 + 0];
-            interleaved[off + at + 1] = mesh_.normals[i * 3 + 1];
-            interleaved[off + at + 2] = mesh_.normals[i * 3 + 2];
+            interleaved[off + at + 0] = M.normals[i * 3 + 0];
+            interleaved[off + at + 1] = M.normals[i * 3 + 1];
+            interleaved[off + at + 2] = M.normals[i * 3 + 2];
             at += 3;
         }
         if (hasUVs) {
-            interleaved[off + at + 0] = mesh_.uvs[i * 2 + 0];
-            interleaved[off + at + 1] = mesh_.uvs[i * 2 + 1];
+            interleaved[off + at + 0] = M.uvs[i * 2 + 0];
+            interleaved[off + at + 1] = M.uvs[i * 2 + 1];
             at += 2;
         }
         if (hasColors) {
-            interleaved[off + at + 0] = mesh_.colors[i * 4 + 0];
-            interleaved[off + at + 1] = mesh_.colors[i * 4 + 1];
-            interleaved[off + at + 2] = mesh_.colors[i * 4 + 2];
-            interleaved[off + at + 3] = mesh_.colors[i * 4 + 3];
+            interleaved[off + at + 0] = M.colors[i * 4 + 0];
+            interleaved[off + at + 1] = M.colors[i * 4 + 1];
+            interleaved[off + at + 2] = M.colors[i * 4 + 2];
+            interleaved[off + at + 3] = M.colors[i * 4 + 3];
             at += 4;
         }
         if (hasTangents) {
-            interleaved[off + at + 0] = mesh_.tangents[i * 4 + 0];
-            interleaved[off + at + 1] = mesh_.tangents[i * 4 + 1];
-            interleaved[off + at + 2] = mesh_.tangents[i * 4 + 2];
-            interleaved[off + at + 3] = mesh_.tangents[i * 4 + 3];
+            interleaved[off + at + 0] = M.tangents[i * 4 + 0];
+            interleaved[off + at + 1] = M.tangents[i * 4 + 1];
+            interleaved[off + at + 2] = M.tangents[i * 4 + 2];
+            interleaved[off + at + 3] = M.tangents[i * 4 + 3];
         }
     }
 
@@ -331,9 +414,9 @@ void InstancedMeshNode::uploadMeshToGPU() {
 
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ibo_);
     glBufferData(GL_ELEMENT_ARRAY_BUFFER,
-                 mesh_.indices.size() * sizeof(uint32_t),
-                 mesh_.indices.data(), GL_STATIC_DRAW);
-    indexCount_ = (GLsizei)mesh_.indices.size();
+                 M.indices.size() * sizeof(uint32_t),
+                 M.indices.data(), GL_STATIC_DRAW);
+    indexCount_ = (GLsizei)M.indices.size();
 
     // Re-bind the instance buffer's attributes (locations 8..11) into this
     // VAO. The instance VBO itself may not be uploaded yet; the bindings are
@@ -360,14 +443,23 @@ void InstancedMeshNode::uploadMeshToGPU() {
 }
 
 void InstancedMeshNode::uploadInstancesToGPU() {
+    // A batched draw is one identity instance (white tint — per-instance colour
+    // is already baked into the merged mesh's vertex colours).
+    static const float kIdentityInst[16] = {
+        1, 0, 0, 0,   0, 1, 0, 0,   0, 0, 1, 0,   1, 1, 1, 1,
+    };
+    const bool batched = renderingBatched();
+    const float* src = batched ? kIdentityInst : instanceData_.data();
+    const size_t floats = batched ? 16 : instanceData_.size();
+
     if (!instVbo_) glGenBuffers(1, &instVbo_);
     glBindBuffer(GL_ARRAY_BUFFER, instVbo_);
-    size_t bytes = instanceData_.size() * sizeof(float);
+    size_t bytes = floats * sizeof(float);
     if (bytes > instVboCapacity_) {
-        glBufferData(GL_ARRAY_BUFFER, bytes, instanceData_.data(), GL_DYNAMIC_DRAW);
+        glBufferData(GL_ARRAY_BUFFER, bytes, src, GL_DYNAMIC_DRAW);
         instVboCapacity_ = bytes;
     } else if (bytes > 0) {
-        glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, instanceData_.data());
+        glBufferSubData(GL_ARRAY_BUFFER, 0, bytes, src);
     }
     instancesDirty_ = false;
 }
@@ -379,13 +471,14 @@ void InstancedMeshNode::onRender(SceneGraph& graph) {
 
 bool InstancedMeshNode::drawRawInstanced() {
     if (mesh_.empty() || instanceCount_ == 0) return false;
+    if (renderingBatched() && batchDirty_) rebuildStaticBatch();
     if (meshDirty_) uploadMeshToGPU();
     if (instancesDirty_) uploadInstancesToGPU();
     if (!vao_ || indexCount_ == 0) return false;
 
     glBindVertexArray(vao_);
     glDrawElementsInstanced(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr,
-                            (GLsizei)instanceCount_);
+                            (GLsizei)(renderingBatched() ? 1 : instanceCount_));
     glBindVertexArray(0);
     return true;
 }

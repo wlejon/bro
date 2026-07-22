@@ -1209,6 +1209,13 @@ JSValue js_sg_createInstancedMesh(JSContext* ctx, JSValueConst this_val,
         }
         JS_FreeValue(ctx, acVal);
         JS_FreeValue(ctx, arVal);
+
+        // Static batching: collapse all instances into one merged draw. Kills
+        // the per-instance GPU cost for high counts of tiny meshes. Opt-in —
+        // see InstancedMeshNode::setStaticBatch.
+        JSValue sbVal = JS_GetPropertyStr(ctx, opts, "staticBatch");
+        if (!JS_IsUndefined(sbVal)) node->setStaticBatch(JS_ToBool(ctx, sbVal) == 1);
+        JS_FreeValue(ctx, sbVal);
     }
 
     return wrapNode(ctx, node, g);
