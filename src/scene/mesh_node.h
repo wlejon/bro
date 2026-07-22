@@ -312,7 +312,10 @@ public:
     /// without a custom shader installed.
     void setCustomShaderUniform(const std::string& name, int comps,
                                 const float* vals) {
-        if (customShader_) customShader_->setUniform(name, comps, vals);
+        if (customShader_) {
+            customShader_->setUniform(name, comps, vals);
+            bumpChangeGeneration();
+        }
     }
 
     // --- Custom-shader sampler uniforms ---

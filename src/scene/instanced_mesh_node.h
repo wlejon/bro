@@ -258,13 +258,20 @@ public:
     void setCustomShader(std::string vertexChunk, std::string fragmentChunk) {
         customShader_ = CustomShaderState::make(std::move(vertexChunk),
                                                 std::move(fragmentChunk));
+        bumpChangeGeneration();
     }
-    void clearCustomShader() { customShader_.reset(); }
+    void clearCustomShader() {
+        customShader_.reset();
+        bumpChangeGeneration();
+    }
     bool hasCustomShader() const { return customShader_ != nullptr; }
     const CustomShaderState* customShader() const { return customShader_.get(); }
     void setCustomShaderUniform(const std::string& name, int comps,
                                 const float* vals) {
-        if (customShader_) customShader_->setUniform(name, comps, vals);
+        if (customShader_) {
+            customShader_->setUniform(name, comps, vals);
+            bumpChangeGeneration();
+        }
     }
 
     // --- Culling margin ---

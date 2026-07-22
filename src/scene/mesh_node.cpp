@@ -258,6 +258,7 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
             t.clampT = clampT;
         }
         t.dirty = true;
+        bumpChangeGeneration();
         return true;
     }
     if (release) return true;   // releasing an unknown slot is a no-op
@@ -273,6 +274,7 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
     t.clampT = clampT;
     t.dirty = true;
     userTextures_.push_back(std::move(t));
+    bumpChangeGeneration();
     return true;
 }
 
@@ -303,6 +305,7 @@ bool MeshNode::updateCustomShaderTexture(const std::string& name, int x, int y,
         s.data.assign(data, data + (size_t)width * (size_t)height * (size_t)t.channels);
         s.x = x; s.y = y; s.w = width; s.h = height;
         t.subUpdates.push_back(std::move(s));
+        bumpChangeGeneration();
         return true;
     }
     LOG_WARN("updateShaderTexture('%s'): no such sampler slot (ignored)",
