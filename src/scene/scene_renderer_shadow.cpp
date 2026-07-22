@@ -639,7 +639,7 @@ void SceneRenderer::renderShadowPass() {
             };
             addList(shadowCasters_,              staticBounds,        1, false);
             addList(shadowSkinnedCasters_,       skinnedBounds,       2, true);
-            addList(shadowCustomCasters_,        customBounds,        3, true);
+            addList(shadowCustomCasters_,        customBounds,        3, false);
             addList(shadowSkinnedCustomCasters_, skinnedCustomBounds, 4, true);
             addList(shadowInstancedCasters_,     instBounds,          5, false);
 

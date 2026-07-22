@@ -6,9 +6,12 @@ extern "C" {
 #include "quickjs.h"
 }
 
-namespace bromesh { struct MeshData; }
+namespace bromesh { struct MeshData; struct LeafPlacementOptions; }
 
 namespace bro::js {
+
+void readLeafPlacementOptions(JSContext* ctx, JSValueConst o, bromesh::LeafPlacementOptions& opts);
+
 
 class MeshBindings {
 public:

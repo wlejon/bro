@@ -12,6 +12,7 @@
 
 #include <bromath/vec.h>
 #include <bromesh/mesh_data.h>
+#include <bromesh/procedural/leaf_scatter.h>
 
 #include <cstdint>
 #include <memory>
@@ -54,6 +55,44 @@ static JSValue makeVec3(JSContext* ctx, const bromath::Vec3& v) {
     JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, v.y));
     JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, v.z));
     return arr;
+}
+
+static JSValue makeFloat32Array(JSContext* ctx, const float* data, size_t count) {
+    size_t size = count * sizeof(float);
+    JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(data), size);
+    if (JS_IsException(abuf)) return abuf;
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue ctor = JS_GetPropertyStr(ctx, global, "Float32Array");
+    JS_FreeValue(ctx, global);
+    JSValue arr = JS_CallConstructor(ctx, ctor, 1, &abuf);
+    JS_FreeValue(ctx, ctor);
+    JS_FreeValue(ctx, abuf);
+    return arr;
+}
+
+// Per-segment leaf density from a plant's foliage samples. Leaves grow on
+// stems — thin current-season shoots — not along the length of woody branches
+// or the trunk, so scattering uniformly by the raw twig grade reads as "fur on
+// a stick." twigGrade01 is broflora's diameter gate (1 at leaf thickness, →0
+// past ~6x leaf diameter); squaring it collapses the medium-branch tail so only
+// genuinely thin shoots carry leaves, and terminal shoots (no child modules,
+// where a real stem actually leafs out) get a boost. lightExposure01 carves by
+// true shade so interior twigs go bare; maturity/senescence gate by age. A
+// caller can still override by passing its own densityWeight.
+static void fillFoliageDensity(const std::vector<broflora::FoliageSample>& samples,
+                               size_t segCount,
+                               bromesh::LeafPlacementOptions& opts) {
+    if (!opts.densityWeight.empty() || samples.size() != segCount) return;
+    opts.densityWeight.resize(samples.size());
+    for (size_t i = 0; i < samples.size(); ++i) {
+        const auto& f = samples[i];
+        float exposure = 0.12f + 0.88f * f.lightExposure01;
+        float maturity = std::min(1.0f, f.age01);
+        float alive    = 1.0f - f.senescence01;
+        float stem     = f.twigGrade01 * f.twigGrade01;        // sharpen the thin-shoot bias
+        if (f.isTerminal) stem = std::min(1.0f, stem * 2.0f);  // shoots leaf out at the growing tips
+        opts.densityWeight[i] = exposure * maturity * alive * stem;
+    }
 }
 
 // ── Optional-field readers ─────────────────────────────────────────────
@@ -417,6 +456,108 @@ static void installWorldClass(JSContext* ctx) {
         return arr;
     })
 
+    // -- fast native C++ foliage mesh emitter --
+    .method("emitFoliageMesh", [](FWW* w, JSContext* ctx, JSValueConst leafVal, JSValueConst optsVal) -> JSValue {
+        auto* lw = MeshBindings::getMeshData(ctx, leafVal);
+        if (!lw || lw->empty()) return JS_ThrowTypeError(ctx, "emitFoliageMesh requires valid leaf Mesh");
+
+        auto segs = broflora::emitWorldSegments(*w->world);
+        if (segs.empty()) {
+            return MeshBindings::wrapMeshData(ctx, std::make_unique<bromesh::MeshData>());
+        }
+        auto samples = broflora::emitWorldFoliage(*w->world);
+
+        bromesh::LeafPlacementOptions opts;
+        if (JS_IsObject(optsVal)) readLeafPlacementOptions(ctx, optsVal, opts);
+
+        fillFoliageDensity(samples, segs.size(), opts);
+
+        auto md = std::make_unique<bromesh::MeshData>(
+            bromesh::scatterLeaves(segs, *lw, opts));
+        return MeshBindings::wrapMeshData(ctx, std::move(md));
+    })
+
+    // -- fast native C++ foliage transform buffer for InstancedMeshNode --
+    .method("emitFoliageTransforms", [](FWW* w, JSContext* ctx, JSValueConst optsVal) -> JSValue {
+        auto segs = broflora::emitWorldSegments(*w->world);
+        if (segs.empty()) {
+            return makeFloat32Array(ctx, nullptr, 0);
+        }
+        auto samples = broflora::emitWorldFoliage(*w->world);
+
+        bromesh::LeafPlacementOptions opts;
+        if (JS_IsObject(optsVal)) readLeafPlacementOptions(ctx, optsVal, opts);
+
+        fillFoliageDensity(samples, segs.size(), opts);
+
+        auto pl = bromesh::placeLeavesOnBranches(segs, opts);
+        size_t count = pl.transforms.size();
+        if (count == 0) {
+            return makeFloat32Array(ctx, nullptr, 0);
+        }
+        return makeFloat32Array(ctx, pl.transforms.data(), count);
+    })
+
+    // -- fast native C++ branch segment transform buffer for InstancedMeshNode --
+    .method("emitSegmentTransforms", [](FWW* w, JSContext* ctx) -> JSValue {
+        auto segs = broflora::emitWorldSegments(*w->world);
+        if (segs.empty()) {
+            return makeFloat32Array(ctx, nullptr, 0);
+        }
+        size_t count = segs.size();
+        std::vector<float> transforms(count * 16);
+
+        #pragma omp parallel for schedule(static) if(count > 64)
+        for (int i = 0; i < static_cast<int>(count); ++i) {
+            const auto& seg = segs[static_cast<size_t>(i)];
+            bromath::Vec3 d = seg.to - seg.from;
+            float len = bromath::vlen(d);
+            if (len < 1e-6f) len = 1e-6f;
+            bromath::Vec3 fwd = d * (1.0f / len);
+
+            bromath::Vec3 worldUp{0, 1, 0};
+            bromath::Vec3 side = bromath::vcross(fwd, worldUp);
+            if (bromath::vdot(side, side) < 1e-8f) {
+                side = bromath::vcross(fwd, bromath::Vec3{1, 0, 0});
+            }
+            side = bromath::vnorm(side);
+            bromath::Vec3 up = bromath::vnorm(bromath::vcross(side, fwd));
+
+            float r = seg.radius > 0.001f ? seg.radius : 0.001f;
+            bromath::Vec3 origin = seg.from;
+
+            float* o = transforms.data() + static_cast<size_t>(i) * 16;
+            o[0] = side.x * r;  o[1] = up.x * r;  o[2] = fwd.x * len;  o[3] = origin.x;
+            o[4] = side.y * r;  o[5] = up.y * r;  o[6] = fwd.y * len;  o[7] = origin.y;
+            o[8] = side.z * r;  o[9] = up.z * r;  o[10] = fwd.z * len; o[11] = origin.z;
+            o[12] = 1.0f;       o[13] = 1.0f;      o[14] = 1.0f;       o[15] = 1.0f;
+        }
+
+        return makeFloat32Array(ctx, transforms.data(), count * 16);
+    })
+
+    .method("emitPlantFoliageMesh", [](FWW* w, JSContext* ctx, int plantIdx, JSValueConst leafVal, JSValueConst optsVal) -> JSValue {
+        if (plantIdx < 0 || (size_t)plantIdx >= w->world->plants.size()) return JS_NULL;
+        auto* lw = MeshBindings::getMeshData(ctx, leafVal);
+        if (!lw || lw->empty()) return JS_ThrowTypeError(ctx, "emitPlantFoliageMesh requires valid leaf Mesh");
+
+        const auto& plant = w->world->plants[(size_t)plantIdx];
+        auto segs = broflora::emitPlantSegments(plant);
+        if (segs.empty()) {
+            return MeshBindings::wrapMeshData(ctx, std::make_unique<bromesh::MeshData>());
+        }
+        auto samples = broflora::emitPlantFoliage(plant);
+
+        bromesh::LeafPlacementOptions opts;
+        if (JS_IsObject(optsVal)) readLeafPlacementOptions(ctx, optsVal, opts);
+
+        fillFoliageDensity(samples, segs.size(), opts);
+
+        auto md = std::make_unique<bromesh::MeshData>(
+            bromesh::scatterLeaves(segs, *lw, opts));
+        return MeshBindings::wrapMeshData(ctx, std::move(md));
+    })
+
     // -- bloom anchors --
     .method("emitBloomAnchors", [](FWW* w, JSContext* ctx) -> JSValue {
         auto anchors = broflora::emitWorldBloomAnchors(*w->world);
@@ -432,6 +573,135 @@ static void installWorldClass(JSContext* ctx) {
             JS_SetPropertyStr(ctx, o, "senescence01", JS_NewFloat64(ctx, a.senescence01));
             JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
         }
+        return arr;
+    })
+
+    // -- fast native C++ bloom mesh emitter --
+    .method("emitBloomMesh", [](FWW* w, JSContext* ctx, JSValueConst petalVal, JSValueConst centerVal, JSValueConst optsVal) -> JSValue {
+        auto* pw = MeshBindings::getMeshData(ctx, petalVal);
+        auto* cw = MeshBindings::getMeshData(ctx, centerVal);
+        if (!pw || pw->empty()) return JS_ThrowTypeError(ctx, "emitBloomMesh requires valid petal Mesh");
+
+        auto anchors = broflora::emitWorldBloomAnchors(*w->world);
+        if (anchors.empty()) {
+            JSValue arr = JS_NewArray(ctx);
+            JS_SetPropertyUint32(ctx, arr, 0, MeshBindings::wrapMeshData(ctx, std::make_unique<bromesh::MeshData>()));
+            JS_SetPropertyUint32(ctx, arr, 1, MeshBindings::wrapMeshData(ctx, std::make_unique<bromesh::MeshData>()));
+            return arr;
+        }
+
+        uint32_t bloomCap = 500;
+        float bloomLightMin = 0.18f;
+        if (JS_IsObject(optsVal)) {
+            readUint32Field(ctx, optsVal, "bloomCap", bloomCap);
+            readFloatField(ctx, optsVal, "bloomLightMin", bloomLightMin);
+        }
+        if (bloomCap == 0) bloomCap = 1;
+
+        size_t stride = (anchors.size() > bloomCap) ? (anchors.size() + bloomCap - 1) / bloomCap : 1;
+
+        auto mergedPetals = std::make_unique<bromesh::MeshData>();
+        auto mergedCenters = std::make_unique<bromesh::MeshData>();
+
+        auto appendTransformed = [](bromesh::MeshData& target, const bromesh::MeshData& src,
+                                    const bromath::Vec3& pos, const bromath::Vec3& norm, float scale) {
+            if (src.empty()) return;
+            uint32_t baseIndex = static_cast<uint32_t>(target.vertexCount());
+            size_t nv = src.vertexCount();
+
+            bromath::Vec3 n = norm;
+            float len = std::hypot(n.x, std::hypot(n.y, n.z));
+            if (len > 1e-6f) { n.x /= len; n.y /= len; n.z /= len; }
+            else { n = {0.0f, 1.0f, 0.0f}; }
+
+            float ny = std::max(-1.0f, std::min(1.0f, n.y));
+            float ang = std::acos(ny);
+            bromath::Vec3 axis{1.0f, 0.0f, 0.0f};
+            if (ang >= 1e-4f) {
+                if (ang > 3.14159265f - 1e-4f) {
+                    axis = {1.0f, 0.0f, 0.0f};
+                } else {
+                    axis = {n.z, 0.0f, -n.x};
+                    float al = std::hypot(axis.x, axis.z);
+                    if (al > 1e-6f) { axis.x /= al; axis.z /= al; }
+                    else { axis = {1.0f, 0.0f, 0.0f}; }
+                }
+            }
+
+            float c = std::cos(ang), s = std::sin(ang);
+            float omc = 1.0f - c;
+            float R[3][3] = {
+                { c + axis.x*axis.x*omc,          axis.x*axis.y*omc - axis.z*s, axis.x*axis.z*omc + axis.y*s },
+                { axis.y*axis.x*omc + axis.z*s,  c + axis.y*axis.y*omc,          axis.y*axis.z*omc - axis.x*s },
+                { axis.z*axis.x*omc - axis.y*s,  axis.z*axis.y*omc + axis.x*s,  c + axis.z*axis.z*omc          }
+            };
+
+            target.positions.reserve(target.positions.size() + nv * 3);
+            target.normals.reserve(target.normals.size() + nv * 3);
+            if (!src.uvs.empty()) target.uvs.reserve(target.uvs.size() + src.uvs.size());
+            target.indices.reserve(target.indices.size() + src.indices.size());
+
+            for (size_t i = 0; i < nv; ++i) {
+                float px = src.positions[i * 3] * scale;
+                float py = src.positions[i * 3 + 1] * scale;
+                float pz = src.positions[i * 3 + 2] * scale;
+
+                float rx = R[0][0]*px + R[0][1]*py + R[0][2]*pz + pos.x;
+                float ry = R[1][0]*px + R[1][1]*py + R[1][2]*pz + pos.y;
+                float rz = R[2][0]*px + R[2][1]*py + R[2][2]*pz + pos.z;
+
+                target.positions.push_back(rx);
+                target.positions.push_back(ry);
+                target.positions.push_back(rz);
+
+                if (src.hasNormals()) {
+                    float nx = src.normals[i * 3];
+                    float ny_ = src.normals[i * 3 + 1];
+                    float nz = src.normals[i * 3 + 2];
+                    float rnx = R[0][0]*nx + R[0][1]*ny_ + R[0][2]*nz;
+                    float rny = R[1][0]*nx + R[1][1]*ny_ + R[1][2]*nz;
+                    float rnz = R[2][0]*nx + R[2][1]*ny_ + R[2][2]*nz;
+                    target.normals.push_back(rnx);
+                    target.normals.push_back(rny);
+                    target.normals.push_back(rnz);
+                } else {
+                    target.normals.push_back(0.0f);
+                    target.normals.push_back(1.0f);
+                    target.normals.push_back(0.0f);
+                }
+
+                if (src.hasUVs()) {
+                    target.uvs.push_back(src.uvs[i * 2]);
+                    target.uvs.push_back(src.uvs[i * 2 + 1]);
+                }
+            }
+
+            for (size_t i = 0; i < src.indices.size(); ++i) {
+                target.indices.push_back(baseIndex + src.indices[i]);
+            }
+        };
+
+        for (size_t i = 0; i < anchors.size(); i += stride) {
+            const auto& a = anchors[i];
+            if (a.lightExposure01 < bloomLightMin) continue;
+            float s = 0.8f + 0.5f * std::min(1.0f, a.age01);
+
+            appendTransformed(*mergedPetals, *pw, a.position, a.normal, s);
+
+            if (cw && !cw->empty()) {
+                float lift = 0.012f * s;
+                bromath::Vec3 cPos = {
+                    a.position.x + a.normal.x * lift,
+                    a.position.y + a.normal.y * lift,
+                    a.position.z + a.normal.z * lift
+                };
+                appendTransformed(*mergedCenters, *cw, cPos, a.normal, s);
+            }
+        }
+
+        JSValue arr = JS_NewArray(ctx);
+        JS_SetPropertyUint32(ctx, arr, 0, MeshBindings::wrapMeshData(ctx, std::move(mergedPetals)));
+        JS_SetPropertyUint32(ctx, arr, 1, MeshBindings::wrapMeshData(ctx, std::move(mergedCenters)));
         return arr;
     })
 

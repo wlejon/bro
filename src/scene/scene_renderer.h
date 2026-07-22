@@ -987,8 +987,8 @@ private:
     // unshadowed.
     static constexpr int kMaxShadowTiles = 16;
 
-    int shadowAtlasSize_ = 8192;
-    int shadowPCFTaps_ = 3;       // 1 or 3 (3x3 PCF)
+    int shadowAtlasSize_ = 2048;
+    int shadowPCFTaps_ = 1;       // 1 (hardware PCF) or 3 (3x3 PCF)
     bool shadowAtlasDirty_ = true;
 
     GLuint shadowProgram_ = 0;

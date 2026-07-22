@@ -1651,6 +1651,7 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("updateMesh", js_node_updateMesh, 1)
         .method_raw("setSkinningMatrices", js_node_setSkinningMatrices, 1)
         .method_raw("setInstances", js_node_setInstances, 1)
+        .method_raw("updateInstances", js_node_setInstances, 1)
         .method_raw("setInstancesFromTransforms", js_node_setInstancesFromTransforms, 1)
         .method_raw("updateInstance", js_node_updateInstance, 2)
         .method_raw("setInstancedMesh", js_node_setInstancedMesh, 1)

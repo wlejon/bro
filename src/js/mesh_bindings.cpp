@@ -1008,7 +1008,7 @@ static JSValue js_meshBranches(JSContext* ctx, JSValueConst, int argc, JSValueCo
     return wrapMesh(ctx, bromesh::meshBranches(segs, sides));
 }
 
-static void readLeafPlacementOptions(JSContext* ctx, JSValueConst o,
+void readLeafPlacementOptions(JSContext* ctx, JSValueConst o,
                                      bromesh::LeafPlacementOptions& opts) {
     opts.maxRadius      = (float)objNum(ctx, o, "maxRadius",       opts.maxRadius);
     opts.minDepth       =        objInt(ctx, o, "minDepth",        opts.minDepth);
