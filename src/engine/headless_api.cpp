@@ -266,6 +266,17 @@ void Engine::flush() {
             if (sg.graph) sg.graph->materializeHtmlNodes(skia);
         }
     }
+    // GPU timer: bracket the scene render with a GL_TIME_ELAPSED query so
+    // headless perf.gpuFrameMs() can read the REAL GPU cost of this frame.
+    // Wall-clock timing around flush() misses it entirely — the draws are
+    // submitted here but the GPU runs them asynchronously and nothing syncs
+    // until a screenshot/readback. gpuFrameMs() reads the result (blocking).
+    const bool gpuTiming = gl_ && !sceneGraphs_.empty() &&
+                           dynamic_cast<render::SkiaRenderer*>(renderer_.get());
+    if (gpuTiming) {
+        if (gpuTimerQuery_ == 0) glGenQueries(1, &gpuTimerQuery_);
+        glBeginQuery(GL_TIME_ELAPSED, gpuTimerQuery_);
+    }
     for (auto& sg : sceneGraphs_) {
         if (sg.element) {
             auto& box = sg.element->layoutBox();
@@ -278,6 +289,7 @@ void Engine::flush() {
         }
         if (sg.graph) sg.graph->render();
     }
+    if (gpuTiming) { glEndQuery(GL_TIME_ELAPSED); gpuTimerPending_ = true; }
 
     // Prune detached scene graphs (elements removed from DOM).
     // Must happen before canvas scene pruning so the scene graph releases
@@ -843,6 +855,20 @@ bool Engine::screenshot(const std::string& path, int cx, int cy, int cw, int ch)
     }
 
     return broimage::encode_png_file(path, cropped.data(), cw, ch, 4);
+}
+
+double Engine::gpuFrameMs() {
+    // No query issued yet (no GPU scene flush, or --no-gpu): return the last
+    // known value (-1 until the first real measurement).
+    if (gpuTimerQuery_ == 0 || !gpuTimerPending_) return lastGpuFrameMs_;
+    // GL_QUERY_RESULT blocks until the GPU has finished the bracketed draws, so
+    // this call both fetches the elapsed time AND guarantees the frame's GPU work
+    // is complete — each call yields an isolated, honest per-frame GPU cost.
+    GLuint64 elapsedNs = 0;
+    glGetQueryObjectui64v(gpuTimerQuery_, GL_QUERY_RESULT, &elapsedNs);
+    gpuTimerPending_ = false;
+    lastGpuFrameMs_ = static_cast<double>(elapsedNs) / 1.0e6;
+    return lastGpuFrameMs_;
 }
 
 dom::Element* Engine::querySelector(const std::string& selector) const {

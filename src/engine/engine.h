@@ -688,6 +688,16 @@ public:
     /// Returns empty vector on failure.
     std::vector<uint8_t> capturePixels();
 
+    /// Real GPU time (milliseconds) spent rendering the 3D scene graph(s) in the
+    /// most recent flush(). Measured with a GL_TIME_ELAPSED timer query wrapped
+    /// around the scene render, so it reflects actual GPU cost — unlike wall-clock
+    /// timing around flush(), which returns before the GPU finishes. Blocking:
+    /// reads GL_QUERY_RESULT, forcing that frame's GPU work to complete, so each
+    /// call yields an isolated per-frame GPU cost. Returns -1 if no GPU scene was
+    /// rendered (2D-only page, --no-gpu, or before the first scene flush).
+    /// Consumed by the headless perf.gpuFrameMs() binding.
+    double gpuFrameMs();
+
 private:
     /// Unified GPU readback used by screenshot() and capturePixels(). Mirrors
     /// the windowed pipeline: rAF → render scenes → buildAppLayers →
@@ -1918,6 +1928,13 @@ private:
     // QuickJS cycle-collector GC — run periodically to free cyclic garbage
     static constexpr double kGCIntervalMs = 1000.0;
     double lastGCMs_ = 0.0;
+
+    // Headless GPU frame timing (GL_TIME_ELAPSED). flush() wraps the scene render
+    // in this query; gpuFrameMs() reads it. unsigned int, not GLuint, to keep glad
+    // out of engine.h. Query id is lazily created on first GPU scene flush.
+    unsigned int gpuTimerQuery_ = 0;
+    bool gpuTimerPending_ = false;   // a begin/end pair is awaiting a read
+    double lastGpuFrameMs_ = -1.0;
 
     // Per-phase timing (smoothed over stats window)
     double phaseJsMs_ = 0.0;       // JS execution (rAF + pending jobs)

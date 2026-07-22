@@ -257,7 +257,23 @@ DOM update actually pays for, and the two a screenshot can't show you.
 |----------|-------------|
 | `perf.now()` | Real wall-clock milliseconds. **Use this, not `performance.now()`**: that one rides virtual time (see below) and reports 0ms for work that took a second. |
 | `perf.reset()` | Zero the counters. |
-| `perf.stats()` | The counters since the last reset. |
+| `perf.stats()` | The counters since the last reset (CPU style/layout only). |
+| `perf.gpuFrameMs()` | **Real GPU milliseconds** for the last `flush()`'s 3D scene render, from a native `GL_TIME_ELAPSED` query wrapped around the scene draw. Blocking: it reads `GL_QUERY_RESULT`, which forces that frame's GPU work to finish, so each call returns an isolated per-frame GPU cost. This is the number to trust for 3D/render perf — wall-clock around `flush()` returns *before* the GPU runs the draws and so measures nothing. Returns `-1` for a 2D-only page, under `--no-gpu`, or before the first scene flush. |
+
+Measuring GPU frame cost — drive the camera directly (suppress the app's rAF so it can't clobber it), `flush()`, and read `perf.gpuFrameMs()` each frame; each read serializes on that frame's query, so summing gives a clean average:
+
+```js
+window.requestAnimationFrame = () => 0;        // stop the app driving the camera
+const cam = { mode:'perspective', fov:58, aspect, near:1, far:120000,
+              position:[px,py,pz], target:[tx,ty,tz], up:[0,1,0] };
+for (let i = 0; i < 40; i++) { scene.setCamera(cam); flush(); }  // warm/stream
+perf.gpuFrameMs();                              // drain the pending query
+let sum = 0;
+for (let i = 0; i < 200; i++) { scene.setCamera(cam); flush(); sum += perf.gpuFrameMs(); }
+console.log(`${(sum/200).toFixed(2)} ms/frame (${(200000/sum).toFixed(0)} fps)`);
+```
+
+Toggle a subsystem's scene nodes `.visible` on/off across two such runs and subtract to attribute GPU cost to it. The absolute numbers track real windowed framerate.
 
 `perf.stats()` returns, accumulated over every style/layout pass since the reset:
 

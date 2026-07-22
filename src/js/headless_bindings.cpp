@@ -1291,6 +1291,17 @@ static JSValue js_perf_now(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return JS_NewFloat64(ctx, std::chrono::duration<double, std::milli>(t).count());
 }
 
+// Real GPU milliseconds for the last flush()'s 3D scene render, from a native
+// GL_TIME_ELAPSED query. Blocking: forces that frame's GPU work to complete, so
+// the returned number is an isolated per-frame GPU cost (not wall-clock, which
+// misses async GPU work). Returns -1 with no GPU scene (2D page / --no-gpu / no
+// flush yet). Typical use: `for(...){ scene.setCamera(c); flush(); s+=perf.gpuFrameMs(); }`.
+static JSValue js_perf_gpu(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    auto* engine = getEngine(ctx);
+    if (!engine) return JS_ThrowInternalError(ctx, "No engine");
+    return JS_NewFloat64(ctx, engine->gpuFrameMs());
+}
+
 static JSValue js_perf_reset(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     auto* engine = getEngine(ctx);
     if (!engine || !engine->document()) return JS_ThrowInternalError(ctx, "No document");
@@ -1378,6 +1389,7 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
     JS_SetPropertyStr(ctx, perf, "now",   JS_NewCFunction(ctx, js_perf_now, "now", 0));
     JS_SetPropertyStr(ctx, perf, "reset", JS_NewCFunction(ctx, js_perf_reset, "reset", 0));
     JS_SetPropertyStr(ctx, perf, "stats", JS_NewCFunction(ctx, js_perf_stats, "stats", 0));
+    JS_SetPropertyStr(ctx, perf, "gpuFrameMs", JS_NewCFunction(ctx, js_perf_gpu, "gpuFrameMs", 0));
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "perf", perf);
     JS_FreeValue(ctx, global);
