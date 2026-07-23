@@ -170,6 +170,64 @@ class FastNoise {
   genUniformGrid3DInto(dest, xOffset, yOffset, zOffset, xSize, ySize, zSize, frequency, seed) {}
 
   /**
+   * Sample at arbitrary 2D positions rather than on a lattice.
+   *
+   * Positions are consumed as given — there is no `frequency` argument, because
+   * there is no lattice step to scale. Pre-multiply the positions instead.
+   *
+   * The run length is the SHORTEST of xs/ys, so over-allocating one axis yields
+   * the intersection rather than reading past the end of the other. `dest` must
+   * hold at least that many floats or the call throws.
+   *
+   * @param {Float32Array} dest - reusable output, length >= min(xs.length, ys.length)
+   * @param {Float32Array} xs
+   * @param {Float32Array} ys
+   * @param {number} xOffset - added to every xs value
+   * @param {number} yOffset
+   * @param {number} seed
+   * @returns {undefined}
+   */
+  genPositionArray2D(dest, xs, ys, xOffset, yOffset, seed) {}
+
+  /**
+   * Sample at arbitrary 3D positions rather than on a lattice.
+   *
+   * The uniform-grid calls can only express an axis-aligned box, which rules out
+   * any sample set that is regular in some *other* space. The motivating case is
+   * a cube-sphere planet: its vertices form a regular grid in face space but an
+   * irregular point set in 3D, so no genUniformGrid3D call can produce them.
+   *
+   * Sampling a 3D field directly on a sphere surface also involves no projection,
+   * so spherical noise built this way has no wrap seam, no pole singularity, and
+   * no discontinuity where cube faces meet — unlike any 2D-per-face scheme.
+   *
+   *   // elevation on a unit sphere, seamless everywhere
+   *   const n = dirs.length / 3;
+   *   const xs = new Float32Array(n), ys = new Float32Array(n), zs = new Float32Array(n);
+   *   for (let i = 0; i < n; i++) {
+   *       xs[i] = dirs[i*3+0] * freq;
+   *       ys[i] = dirs[i*3+1] * freq;
+   *       zs[i] = dirs[i*3+2] * freq;
+   *   }
+   *   const h = new Float32Array(n);
+   *   fbm.genPositionArray3D(h, xs, ys, zs, 0, 0, 0, seed);
+   *
+   * Positions are consumed as given — there is no `frequency` argument. The run
+   * length is the SHORTEST of xs/ys/zs; `dest` must hold at least that many.
+   *
+   * @param {Float32Array} dest - reusable output
+   * @param {Float32Array} xs
+   * @param {Float32Array} ys
+   * @param {Float32Array} zs
+   * @param {number} xOffset - added to every xs value
+   * @param {number} yOffset
+   * @param {number} zOffset
+   * @param {number} seed
+   * @returns {undefined}
+   */
+  genPositionArray3D(dest, xs, ys, zs, xOffset, yOffset, zOffset, seed) {}
+
+  /**
    * Generate seamlessly tileable 2D noise. Maps onto a 4D hypertorus internally.
    * @param {number} xSize - Tile width in samples
    * @param {number} ySize - Tile height in samples
