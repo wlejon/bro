@@ -615,7 +615,8 @@ JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
 
 // setAtmosphere({enabled, sunDirection, sunColor, planetRadius, thickness,
 //                betaRayleigh, betaMie, mieG, scaleHeightRayleigh,
-//                scaleHeightMie, seaLevel, sunAngularRadius, sunDiskIntensity})
+//                scaleHeightMie, seaLevel, spherical, center,
+//                sunAngularRadius, sunDiskIntensity})
 //
 // Omitted fields keep their Earth defaults rather than reading back the current
 // value: the parameters only make sense as a set, and a half-applied atmosphere
@@ -657,6 +658,16 @@ JSValue js_sg_setAtmosphere(JSContext* ctx, JSValueConst this_val, int argc,
     a.scaleHeightR     = num("scaleHeightRayleigh", a.scaleHeightR);
     a.scaleHeightM     = num("scaleHeightMie", a.scaleHeightM);
     a.seaLevel         = num("seaLevel", a.seaLevel);
+
+    // Spherical mode centres the air on an actual globe instead of hanging it
+    // under the viewer — see AtmosphereParams. `center` implies it, because a
+    // scene that has a planet centre has a planet.
+    JSValue cProbe = JS_GetPropertyStr(ctx, o, "center");
+    bool hasCenter = !JS_IsUndefined(cProbe);
+    JS_FreeValue(ctx, cProbe);
+    bromath::Vec3 cc = jsGetVec3(ctx, o, "center", 0.0f, 0.0f, 0.0f);
+    a.center[0] = cc.x; a.center[1] = cc.y; a.center[2] = cc.z;
+    a.spherical = qjsbind::get_prop_bool(ctx, o, "spherical", hasCenter);
     a.sunAngularRadius = num("sunAngularRadius", a.sunAngularRadius);
     a.sunDiskIntensity = num("sunDiskIntensity", a.sunDiskIntensity);
 

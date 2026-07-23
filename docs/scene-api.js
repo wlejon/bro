@@ -1098,7 +1098,16 @@ class SceneGraph {
    * @param {number} [opts.mieG] - Mie phase function asymmetry factor
    * @param {number} [opts.scaleHeightRayleigh] - Rayleigh scale height in meters
    * @param {number} [opts.scaleHeightMie] - Mie scale height in meters
-   * @param {number} [opts.seaLevel] - sea level offset
+   * @param {number} [opts.seaLevel] - sea level offset (flat mode only)
+   * @param {number[]} [opts.center] - world position of the planet's centre;
+   *   passing it switches the model to SPHERICAL mode, for a scene that
+   *   contains an actual globe rather than a height field. In the default flat
+   *   mode the air is hung directly beneath the viewer so its local vertical
+   *   always matches the terrain's +Y; on a real sphere that puts the
+   *   atmosphere on the wrong side of the world as soon as the camera moves off
+   *   the axis. Also required for a planet seen from OUTSIDE the atmosphere.
+   * @param {boolean} [opts.spherical] - force the mode; defaults to true when
+   *   `center` is given and false otherwise
    * @param {number} [opts.sunAngularRadius] - sun disk radius
    * @param {number} [opts.sunDiskIntensity] - sun disk brightness multiplier
    */

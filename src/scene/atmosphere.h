@@ -33,8 +33,24 @@ struct AtmosphereParams {
 
     // World Y that sits on the planet's surface. Terrain built around y = 0
     // wants 0; a world whose ground sits at 1200 m wants 1200, or the viewer
-    // starts a kilometre of extra air deep.
+    // starts a kilometre of extra air deep. Ignored in spherical mode, where
+    // the radius already says where the surface is.
     float seaLevel = 0.0f;
+
+    // FLAT (default) or SPHERICAL, which is a statement about the SCENE, not
+    // about the model — the scattering integral has always been spherical.
+    //
+    // Flat: the world is a height field whose up is +Y everywhere, so the
+    // planet is placed directly beneath the viewer. Anchoring it anywhere fixed
+    // would tilt the air's local vertical away from the terrain's as the viewer
+    // travelled, drawing a second sloping horizon across the sky.
+    //
+    // Spherical: the scene contains an actual globe centred at `center`, and
+    // the air must be centred on the same point or the atmosphere slides off
+    // the planet as soon as the camera leaves the pole facing it. This is the
+    // mode for a body viewed from orbit.
+    bool  spherical  = false;
+    float center[3]  = {0.0f, 0.0f, 0.0f};   // world position of the planet's centre
 
     float sunAngularRadius = 0.00465f;   // radians; the real sun
     float sunDiskIntensity = 25.0f;

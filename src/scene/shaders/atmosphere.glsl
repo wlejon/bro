@@ -26,6 +26,8 @@ uniform float uAtmMieG;          // Mie asymmetry, ~0.76 for haze
 uniform float uAtmScaleHeightR;  // Rayleigh density scale height, metres
 uniform float uAtmScaleHeightM;  // Mie density scale height, metres
 uniform float uAtmSeaLevel;      // world Y that counts as the planet's surface
+uniform vec3  uAtmCenter;        // world position of the planet's centre
+uniform float uAtmSpherical;     // 1 = globe at uAtmCenter, 0 = flat height field
 
 // Mie absorbs as well as scatters; the usual approximation is that extinction
 // is a little larger than scattering. Rayleigh does not absorb.
@@ -46,8 +48,16 @@ const float ATM_MIE_EXTINCTION = 1.1;
 // Everything downstream is a function of |ro| and of the ray direction, so
 // this costs nothing and keeps sky, aerial perspective and the CPU irradiance
 // integrator (scene/atmosphere_irradiance.h) on one definition of "up".
+//
+// None of that reasoning survives contact with an actual globe. When the scene
+// IS a planet, its surface curves and its up is radial, so dropping the
+// horizontals puts the air on the wrong side of the world the moment the camera
+// moves off the axis. uAtmSpherical picks the other definition: the true offset
+// from the planet's centre. Blended rather than branched — both terms are two
+// instructions and the choice is uniform across the draw.
 vec3 atmOrigin(vec3 worldPos) {
-    return vec3(0.0, worldPos.y - uAtmSeaLevel + uAtmPlanetRadius, 0.0);
+    vec3 flatRo = vec3(0.0, worldPos.y - uAtmSeaLevel + uAtmPlanetRadius, 0.0);
+    return mix(flatRo, worldPos - uAtmCenter, uAtmSpherical);
 }
 
 // Distance to where a ray leaves a sphere of radius R centred at the origin.
@@ -58,6 +68,26 @@ float atmExitDistance(vec3 ro, vec3 rd, float R) {
     float d = b * b - c;
     if (d < 0.0) return -1.0;
     return -b + sqrt(d);
+}
+
+// Distance at which a ray ENTERS a sphere: 0 when it starts inside, the near
+// intersection when it starts outside, -1 when it never gets there.
+//
+// This is what makes the model usable from orbit. The integral used to start at
+// the camera, which is right whenever the camera is in the air and useless when
+// it is not: from 9,000 km up, a fixed step count spreads its samples over
+// thousands of kilometres of vacuum and lands perhaps one inside the 100 km
+// that actually scatters. The atmosphere either vanished or flickered as the
+// samples slid through it. Starting the march at the shell puts every step
+// where the air is, and costs one quadratic when the camera is already inside.
+float atmEntryDistance(vec3 ro, vec3 rd, float R) {
+    float c = dot(ro, ro) - R * R;
+    if (c <= 0.0) return 0.0;           // already inside
+    float b = dot(ro, rd);
+    if (b > 0.0) return -1.0;           // outside, pointing away
+    float d = b * b - c;
+    if (d < 0.0) return -1.0;           // outside, missing
+    return -b - sqrt(d);
 }
 
 // Distance to where a ray first hits a sphere, or -1 if it misses or the hit
@@ -113,19 +143,26 @@ vec3 atmExtinction(vec2 od) {
 // sky just above it cannot drift apart.
 vec3 atmScatter(vec3 ro, vec3 rd, float tMax, const int steps,
                 const int sunSteps, out vec3 transmittance) {
-    float dt = tMax / float(steps);
+    float atmR = uAtmPlanetRadius + uAtmThickness;
+
+    // Skip the vacuum in front of the atmosphere rather than sampling it.
+    float t0 = atmEntryDistance(ro, rd, atmR);
+    if (t0 < 0.0 || t0 >= tMax) {
+        transmittance = vec3(1.0);
+        return vec3(0.0);
+    }
+
+    float dt = (tMax - t0) / float(steps);
     float mu = dot(rd, uAtmSunDir);
     float pr = atmPhaseR(mu);
     float pm = atmPhaseM(mu, uAtmMieG);
-
-    float atmR = uAtmPlanetRadius + uAtmThickness;
 
     vec2 odView = vec2(0.0);          // accumulated along the view ray
     vec3 sumR = vec3(0.0);
     float sumM = 0.0;
 
     for (int i = 0; i < steps; ++i) {
-        vec3  p = ro + rd * (dt * (float(i) + 0.5));
+        vec3  p = ro + rd * (t0 + dt * (float(i) + 0.5));
         float h = max(length(p) - uAtmPlanetRadius, 0.0);
         vec2  density = exp(-h / vec2(uAtmScaleHeightR, uAtmScaleHeightM)) * dt;
         odView += density;
