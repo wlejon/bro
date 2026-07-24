@@ -230,14 +230,15 @@ static double getDoublePropAtom(JSContext* ctx, JSValueConst obj, JSAtom key, do
     return out;
 }
 
-// Parse {x, z, hw, hd} from a JS object into an AABB
+// Parse {x, z, hw, hd} from a JS object into an AABB.
+// One pass over the object rather than four property reads — parseAABBArray
+// runs this per element, per call, per frame.
 static brogameagent::AABB parseAABB(JSContext* ctx, JSValueConst obj) {
-    return {
-        static_cast<float>(getDoublePropAtom(ctx, obj, JS_BRO(x), 0)),
-        static_cast<float>(getDoublePropAtom(ctx, obj, JS_BRO(z), 0)),
-        static_cast<float>(getDoublePropAtom(ctx, obj, JS_BRO(hw), 0)),
-        static_cast<float>(getDoublePropAtom(ctx, obj, JS_BRO(hd), 0)),
-    };
+    const JSAtom keys[4] = { JS_BRO(x), JS_BRO(z), JS_BRO(hw), JS_BRO(hd) };
+    double v[4] = { 0, 0, 0, 0 };
+    JS_GetPropsFloat64(ctx, obj, 4, keys, v);
+    return { static_cast<float>(v[0]), static_cast<float>(v[1]),
+             static_cast<float>(v[2]), static_cast<float>(v[3]) };
 }
 
 // Parse a JS array of {x, z, hw, hd} into a vector of AABBs
