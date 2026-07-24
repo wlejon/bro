@@ -23,6 +23,8 @@ using bro::engine::findAncestorProjectRoot;
 #include <windows.h>
 #include <io.h>
 #include <crtdbg.h>
+#include <tlhelp32.h>
+#include <psapi.h>
 #define isatty _isatty
 #define fileno _fileno
 #else
@@ -36,6 +38,78 @@ using bro::engine::findAncestorProjectRoot;
 extern "C" {
 #include "quickjs.h"
 }
+
+#ifdef _WIN32
+// BRO_THREAD_CENSUS=1: right before _exit(), tally the threads still alive in
+// this process by owning module. Every live thread here gets force-terminated
+// by the kernel's process rundown, which is the race window behind the
+// recurring 0x139 CORRUPT_LIST_ENTRY bugchecks (see commit 1ab30390) — this
+// census is how we measure whether teardown actually retired them.
+typedef LONG(NTAPI* NtQueryInformationThreadFn)(HANDLE, ULONG, PVOID, ULONG, PULONG);
+
+static void printThreadCensus() {
+    auto* ntdll = GetModuleHandleA("ntdll.dll");
+    auto queryThread = ntdll ? reinterpret_cast<NtQueryInformationThreadFn>(
+                                   GetProcAddress(ntdll, "NtQueryInformationThread"))
+                             : nullptr;
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+    if (snap == INVALID_HANDLE_VALUE) return;
+
+    DWORD pid = GetCurrentProcessId(), self = GetCurrentThreadId();
+    std::vector<std::pair<std::string, int>> tally;  // module -> count
+    int total = 0;
+    THREADENTRY32 te{sizeof(te)};
+    for (BOOL ok = Thread32First(snap, &te); ok; ok = Thread32Next(snap, &te)) {
+        if (te.th32OwnerProcessID != pid || te.th32ThreadID == self) continue;
+        total++;
+        std::string mod = "<unknown>";
+        HANDLE h = OpenThread(THREAD_QUERY_INFORMATION, FALSE, te.th32ThreadID);
+        if (!h) h = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, te.th32ThreadID);
+        if (h) {
+            PVOID start = nullptr;
+            ULONG got = 0;
+            // 9 = ThreadQuerySetWin32StartAddress
+            if (queryThread && queryThread(h, 9, &start, sizeof(start), &got) == 0 && start) {
+                HMODULE hm = nullptr;
+                if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                                       reinterpret_cast<LPCSTR>(start), &hm) && hm) {
+                    char path[MAX_PATH];
+                    if (GetModuleFileNameA(hm, path, MAX_PATH)) {
+                        const char* base = strrchr(path, '\\');
+                        mod = base ? base + 1 : path;
+                    }
+                }
+            }
+            CloseHandle(h);
+        }
+        // Thread name (if the owner labeled it) pins down which driver
+        // subsystem owns it — that decides which knob can prevent it.
+        HANDLE hd = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, te.th32ThreadID);
+        if (hd) {
+            PWSTR desc = nullptr;
+            if (SUCCEEDED(GetThreadDescription(hd, &desc)) && desc) {
+                if (desc[0]) {
+                    char nbuf[128];
+                    int len = WideCharToMultiByte(CP_UTF8, 0, desc, -1, nbuf, sizeof(nbuf),
+                                                  nullptr, nullptr);
+                    if (len > 0) mod += std::string(" \"") + nbuf + "\"";
+                }
+                LocalFree(desc);
+            }
+            CloseHandle(hd);
+        }
+        bool found = false;
+        for (auto& [m, n] : tally)
+            if (m == mod) { n++; found = true; break; }
+        if (!found) tally.emplace_back(mod, 1);
+    }
+    CloseHandle(snap);
+    fprintf(stderr, "[thread-census] %d live threads at _exit (excluding main):\n", total);
+    for (auto& [m, n] : tally) fprintf(stderr, "[thread-census]   %3d  %s\n", n, m.c_str());
+    fflush(stderr);
+}
+#endif
 
 // Get the directory containing the current executable.
 static std::string exeDir() {
@@ -594,5 +668,8 @@ int main(int argc, char* argv[]) {
         exitCode = 1;
     }
 
+#ifdef _WIN32
+    if (getenv("BRO_THREAD_CENSUS")) printThreadCensus();
+#endif
     _exit(exitCode);
 }
