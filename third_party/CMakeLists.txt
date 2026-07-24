@@ -9,14 +9,82 @@ set(BUILD_QJS_LIBC ON CACHE BOOL "" FORCE)
 set(QUICKJS_DIR "${CMAKE_SOURCE_DIR}/../quickjs-ng" CACHE PATH "quickjs-ng standalone repo")
 if(EXISTS "${QUICKJS_DIR}/quickjs.c")
     message(STATUS "QuickJS: building from standalone repo ${QUICKJS_DIR}")
-    add_subdirectory("${QUICKJS_DIR}" "${CMAKE_BINARY_DIR}/quickjs" EXCLUDE_FROM_ALL)
+    set(BRO_QUICKJS_SRC "${QUICKJS_DIR}")
 else()
-    add_subdirectory(quickjs EXCLUDE_FROM_ALL)
+    set(BRO_QUICKJS_SRC "${CMAKE_CURRENT_SOURCE_DIR}/quickjs")
 endif()
 
-# Enable QuickJS leak/diagnostic dumps in Debug so JS_SetDumpFlags(JS_DUMP_LEAKS)
-# actually prints leaked GC objects before JS_FreeRuntime asserts.
-target_compile_definitions(qjs PRIVATE $<$<CONFIG:Debug>:ENABLE_DUMPS>)
+# MSVC compiles the QuickJS interpreter badly. Same source, same flags
+# (/MD /O2 /Ob2 /DNDEBUG), MSVC vs clang-cl: three.js updateMatrixWorld 1.36x,
+# 20k Matrix4 multiply 1.51x, and up to 2.79x on branch-heavy microbenchmarks.
+# The bytecode loop is one enormous function and MSVC does not do well by it.
+# (It is NOT about computed goto — clang-cl defines _MSC_VER, so it takes the
+# same `switch` dispatch path. It simply generates better code for it.)
+#
+# CMake's VS generator sets the toolset per *solution*, so building one target
+# with a different compiler requires a nested build. That is contained here:
+# qjs is a plain C static library with a stable C ABI, no dependencies, and the
+# same /MD runtime, so linking a clang-cl-built qjs.lib into the MSVC build
+# changes nothing else in the tree.
+set(BRO_CLANG_CL_EXE "${CMAKE_GENERATOR_INSTANCE}/VC/Tools/Llvm/x64/bin/clang-cl.exe")
+if(MSVC AND CMAKE_GENERATOR MATCHES "Visual Studio" AND EXISTS "${BRO_CLANG_CL_EXE}")
+    set(_bro_qjs_clang_default ON)
+else()
+    set(_bro_qjs_clang_default OFF)
+endif()
+option(BRO_QUICKJS_CLANG_CL
+       "Build the QuickJS static library with clang-cl (much faster interpreter)"
+       ${_bro_qjs_clang_default})
+
+if(BRO_QUICKJS_CLANG_CL)
+    message(STATUS "QuickJS: building qjs.lib with clang-cl (nested build)")
+    include(ExternalProject)
+    # Debug keeps ENABLE_DUMPS so JS_SetDumpFlags(JS_DUMP_LEAKS) still prints
+    # leaked GC objects before JS_FreeRuntime asserts.
+    ExternalProject_Add(quickjs_clangcl
+        SOURCE_DIR "${BRO_QUICKJS_SRC}"
+        BINARY_DIR "${CMAKE_BINARY_DIR}/quickjs-clangcl"
+        CMAKE_GENERATOR "${CMAKE_GENERATOR}"
+        CMAKE_GENERATOR_PLATFORM "${CMAKE_GENERATOR_PLATFORM}"
+        CMAKE_GENERATOR_TOOLSET "ClangCL"
+        CMAKE_ARGS
+            -DQJS_BUILD_CLI=OFF
+            -DQJS_BUILD_EXAMPLES=OFF
+            -DQJS_ENABLE_INSTALL=OFF
+            -DBUILD_QJS_LIBC=ON
+            "-DCMAKE_C_FLAGS_DEBUG=${CMAKE_C_FLAGS_DEBUG} /DENABLE_DUMPS"
+        BUILD_COMMAND ${CMAKE_COMMAND} --build <BINARY_DIR> --config $<CONFIG> --target qjs
+        BUILD_ALWAYS 1            # let the nested build do its own up-to-date check
+        INSTALL_COMMAND ""
+        BUILD_BYPRODUCTS "${CMAKE_BINARY_DIR}/quickjs-clangcl/$<CONFIG>/qjs.lib"
+        USES_TERMINAL_BUILD 1
+    )
+    # IMPORTED_LOCATION takes no generator expression, so the per-config
+    # properties have to be spelled out; the nested build writes each config to
+    # its own subdirectory the same way the outer one does.
+    add_library(bro_qjs_clangcl STATIC IMPORTED GLOBAL)
+    set(_qjs_cfgs ${CMAKE_CONFIGURATION_TYPES})
+    if(NOT _qjs_cfgs)
+        set(_qjs_cfgs ${CMAKE_BUILD_TYPE})
+    endif()
+    set_property(TARGET bro_qjs_clangcl PROPERTY IMPORTED_CONFIGURATIONS "")
+    foreach(_cfg IN LISTS _qjs_cfgs)
+        string(TOUPPER "${_cfg}" _CFG)
+        set_property(TARGET bro_qjs_clangcl APPEND PROPERTY IMPORTED_CONFIGURATIONS ${_CFG})
+        set_target_properties(bro_qjs_clangcl PROPERTIES
+            IMPORTED_LOCATION_${_CFG} "${CMAKE_BINARY_DIR}/quickjs-clangcl/${_cfg}/qjs.lib")
+    endforeach()
+    # `qjs` stays the name everything links (bro, brokit and qjsbind all just
+    # look for a target called qjs); INTERFACE rather than IMPORTED so the
+    # nested build can be an ordering dependency that propagates to consumers.
+    add_library(qjs INTERFACE)
+    target_link_libraries(qjs INTERFACE bro_qjs_clangcl)
+    target_include_directories(qjs INTERFACE "${BRO_QUICKJS_SRC}")
+    add_dependencies(qjs quickjs_clangcl)
+else()
+    add_subdirectory("${BRO_QUICKJS_SRC}" "${CMAKE_BINARY_DIR}/quickjs" EXCLUDE_FROM_ALL)
+    target_compile_definitions(qjs PRIVATE $<$<CONFIG:Debug>:ENABLE_DUMPS>)
+endif()
 
 # --- FastNoise2 (SIMD noise generation) ---
 # Used directly by bro's terrain system. The source lives inside brokit's
