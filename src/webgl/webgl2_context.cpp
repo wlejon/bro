@@ -279,6 +279,9 @@ void WebGL2RenderingContext::deleteBuffer(WebGLBuffer buf) {
         if (sElementBuf_ == buf.id) sElementBuf_ = 0;
         if (sPixelPack_ == buf.id) sPixelPack_ = 0;
         if (sPixelUnpack_ == buf.id) sPixelUnpack_ = 0;
+        // Deleting implicitly unmaps, so drop the bookkeeping too — otherwise
+        // a recycled id would look permanently mapped.
+        mappedBuffers_.erase(buf.id);
         glDeleteBuffers(1, &buf.id);
     }
 }
@@ -306,6 +309,86 @@ void WebGL2RenderingContext::copyBufferSubData(GLenum readTarget, GLenum writeTa
 
 void WebGL2RenderingContext::getBufferSubData(GLenum target, GLintptr srcByteOffset, void* dstData, GLsizeiptr length) {
     glGetBufferSubData(target, srcByteOffset, length, dstData);
+}
+
+// --- Buffer mapping (BRO_buffer_map) ---
+
+GLuint WebGL2RenderingContext::boundBuffer(GLenum target) {
+    GLenum pname;
+    switch (target) {
+        case GL_ARRAY_BUFFER:              pname = GL_ARRAY_BUFFER_BINDING; break;
+        case GL_ELEMENT_ARRAY_BUFFER:      pname = GL_ELEMENT_ARRAY_BUFFER_BINDING; break;
+        case GL_PIXEL_PACK_BUFFER:         pname = GL_PIXEL_PACK_BUFFER_BINDING; break;
+        case GL_PIXEL_UNPACK_BUFFER:       pname = GL_PIXEL_UNPACK_BUFFER_BINDING; break;
+        case GL_UNIFORM_BUFFER:            pname = GL_UNIFORM_BUFFER_BINDING; break;
+        case GL_TRANSFORM_FEEDBACK_BUFFER: pname = GL_TRANSFORM_FEEDBACK_BUFFER_BINDING; break;
+        // GL_COPY_{READ,WRITE}_BUFFER_BINDING share their target's value and
+        // are not in glad's 3.3 core header; the target enum queries the same
+        // state.
+        case GL_COPY_READ_BUFFER:          pname = GL_COPY_READ_BUFFER; break;
+        case GL_COPY_WRITE_BUFFER:         pname = GL_COPY_WRITE_BUFFER; break;
+        default: return 0;
+    }
+    GLint id = 0;
+    glGetIntegerv(pname, &id);
+    return (GLuint)id;
+}
+
+void* WebGL2RenderingContext::mapBufferRange(GLenum target, GLintptr offset,
+                                             GLsizeiptr length, GLbitfield access) {
+    GLuint id = boundBuffer(target);
+    if (!id) { // unknown target, or nothing bound to it
+        setSyntheticError(GL_INVALID_OPERATION);
+        return nullptr;
+    }
+    if (mappedBuffers_.count(id)) { // GL forbids mapping an already-mapped buffer
+        setSyntheticError(GL_INVALID_OPERATION);
+        return nullptr;
+    }
+    if (offset < 0 || length <= 0) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return nullptr;
+    }
+    constexpr GLbitfield kKnownBits =
+        GL_MAP_READ_BIT | GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_RANGE_BIT |
+        GL_MAP_INVALIDATE_BUFFER_BIT | GL_MAP_FLUSH_EXPLICIT_BIT | GL_MAP_UNSYNCHRONIZED_BIT;
+    if ((access & ~kKnownBits) || !(access & (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT))) {
+        setSyntheticError(GL_INVALID_VALUE);
+        return nullptr;
+    }
+    // Per glMapBufferRange: READ rules out the discard/flush bits (they all
+    // describe what happens to writes), and FLUSH_EXPLICIT needs WRITE.
+    // UNSYNCHRONIZED is deliberately not in that set — it is legal with READ.
+    if (((access & GL_MAP_READ_BIT) &&
+         (access & (GL_MAP_INVALIDATE_RANGE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT |
+                    GL_MAP_FLUSH_EXPLICIT_BIT))) ||
+        ((access & GL_MAP_FLUSH_EXPLICIT_BIT) && !(access & GL_MAP_WRITE_BIT))) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return nullptr;
+    }
+    void* ptr = glMapBufferRange(target, offset, length, access);
+    if (ptr) mappedBuffers_[id] = ptr;
+    return ptr;
+}
+
+bool WebGL2RenderingContext::unmapBuffer(GLenum target) {
+    GLuint id = boundBuffer(target);
+    auto it = mappedBuffers_.find(id);
+    if (!id || it == mappedBuffers_.end()) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return false;
+    }
+    mappedBuffers_.erase(it);
+    return glUnmapBuffer(target) == GL_TRUE;
+}
+
+void WebGL2RenderingContext::flushMappedBufferRange(GLenum target, GLintptr offset,
+                                                    GLsizeiptr length) {
+    if (!mappedBuffers_.count(boundBuffer(target))) {
+        setSyntheticError(GL_INVALID_OPERATION);
+        return;
+    }
+    glFlushMappedBufferRange(target, offset, length);
 }
 
 void WebGL2RenderingContext::bindBufferBase(GLenum target, GLuint index, WebGLBuffer buf) {
@@ -1447,6 +1530,11 @@ std::vector<std::string> WebGL2RenderingContext::getSupportedExtensions() {
         "OES_texture_half_float",
         "OES_texture_half_float_linear",
         "WEBGL_lose_context",
+        // bro extension, not a WebGL one: desktop GL 3.0 buffer mapping, which
+        // WebGL cannot offer because it must not hand a page a raw pointer into
+        // driver memory. Advertised so apps can feature-detect rather than
+        // sniff for the methods.
+        "BRO_buffer_map",
     };
     if (GLAD_GL_EXT_texture_compression_s3tc) {
         exts.push_back("WEBGL_compressed_texture_s3tc");

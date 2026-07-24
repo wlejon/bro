@@ -116,6 +116,86 @@ static JSValue js_getBufferSubData(JSContext* ctx, JSValueConst this_val, int ar
     return JS_UNDEFINED;
 }
 
+// ===========================================================================
+// Buffer mapping (BRO_buffer_map)
+// ===========================================================================
+// mapBufferRange hands back an ArrayBuffer whose storage IS the driver's
+// mapped range — no copy in either direction. That makes unmapping a lifetime
+// problem: the moment glUnmapBuffer runs, any surviving ArrayBuffer aliases
+// memory the driver has taken back. So the ArrayBuffer is detached first and
+// unmapped second, and it is parked on the context (in `__mappedBuffers`,
+// keyed by GL buffer id) in between. Parking it there is what makes the
+// ordering enforceable: the registry is a strong reference, so the buffer
+// cannot be collected while mapped, and unmapBuffer always has the exact
+// JSValue it needs to detach.
+//
+// GL 3.3 has no persistent mapping, so this is a per-update handle, not
+// something to hold across frames.
+
+// The mapped range is driver memory; the ArrayBuffer only borrows it.
+static void freeMappedRange(JSRuntime*, void*, void*) {}
+
+static JSValue mappedRegistry(JSContext* ctx, JSValueConst this_val) {
+    JSValue reg = JS_GetPropertyStr(ctx, this_val, "__mappedBuffers");
+    if (JS_IsUndefined(reg)) {
+        reg = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, this_val, "__mappedBuffers", JS_DupValue(ctx, reg));
+    }
+    return reg;
+}
+
+static JSValue js_mapBufferRange(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 4) return JS_NULL;
+    uint32_t target, access; int64_t offset, length;
+    JS_ToUint32(ctx, &target, argv[0]);
+    JS_ToInt64(ctx, &offset, argv[1]);
+    JS_ToInt64(ctx, &length, argv[2]);
+    JS_ToUint32(ctx, &access, argv[3]);
+
+    void* ptr = gl->mapBufferRange(target, (GLintptr)offset, (GLsizeiptr)length, access);
+    if (!ptr) return JS_NULL; // context already recorded the GL error
+
+    JSValue ab = JS_NewArrayBuffer(ctx, (uint8_t*)ptr, (size_t)length,
+                                   freeMappedRange, nullptr, /*is_shared*/ false);
+    if (JS_IsException(ab)) { gl->unmapBuffer(target); return ab; } // OOM; keep the exception
+
+    char key[16];
+    snprintf(key, sizeof(key), "b%u", gl->boundBuffer(target));
+    JSValue reg = mappedRegistry(ctx, this_val);
+    JS_SetPropertyStr(ctx, reg, key, JS_DupValue(ctx, ab));
+    JS_FreeValue(ctx, reg);
+    return ab;
+}
+
+static JSValue js_unmapBuffer(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 1) return JS_FALSE;
+    uint32_t target; JS_ToUint32(ctx, &target, argv[0]);
+
+    char key[16];
+    snprintf(key, sizeof(key), "b%u", gl->boundBuffer(target));
+    JSValue reg = mappedRegistry(ctx, this_val);
+    JSValue ab = JS_GetPropertyStr(ctx, reg, key);
+    if (!JS_IsUndefined(ab)) {
+        // Detach before unmapping: after this the ArrayBuffer reads as
+        // zero-length rather than aliasing memory the driver has reclaimed.
+        JS_DetachArrayBuffer(ctx, ab);
+        JS_FreeValue(ctx, ab);
+        JS_SetPropertyStr(ctx, reg, key, JS_UNDEFINED);
+    }
+    JS_FreeValue(ctx, reg);
+    return JS_NewBool(ctx, gl->unmapBuffer(target));
+}
+
+static JSValue js_flushMappedBufferRange(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
+    uint32_t target; int64_t offset, length;
+    JS_ToUint32(ctx, &target, argv[0]);
+    JS_ToInt64(ctx, &offset, argv[1]);
+    JS_ToInt64(ctx, &length, argv[2]);
+    gl->flushMappedBufferRange(target, (GLintptr)offset, (GLsizeiptr)length);
+    return JS_UNDEFINED;
+}
+
 static JSValue js_bindBufferBase(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 3) return JS_UNDEFINED;
     uint32_t target, index;
@@ -267,6 +347,9 @@ const JSCFunctionListEntry webgl2_buffer_funcs[] = {
     JS_CFUNC_DEF("bufferSubData", 3, js_bufferSubData),
     JS_CFUNC_DEF("copyBufferSubData", 5, js_copyBufferSubData),
     JS_CFUNC_DEF("getBufferSubData", 3, js_getBufferSubData),
+    JS_CFUNC_DEF("mapBufferRange", 4, js_mapBufferRange),
+    JS_CFUNC_DEF("unmapBuffer", 1, js_unmapBuffer),
+    JS_CFUNC_DEF("flushMappedBufferRange", 3, js_flushMappedBufferRange),
     JS_CFUNC_DEF("bindBufferBase", 3, js_bindBufferBase),
     JS_CFUNC_DEF("bindBufferRange", 5, js_bindBufferRange),
     JS_CFUNC_DEF("createVertexArray", 0, js_createVertexArray),

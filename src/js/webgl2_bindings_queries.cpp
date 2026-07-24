@@ -218,6 +218,14 @@ static JSValue js_getExtension(JSContext* ctx, JSValueConst this_val, int argc, 
         } else if (name == "EXT_texture_filter_anisotropic") {
             def("TEXTURE_MAX_ANISOTROPY_EXT", 0x84FE);
             def("MAX_TEXTURE_MAX_ANISOTROPY_EXT", 0x84FF);
+        } else if (name == "BRO_buffer_map") {
+            // access bits for gl.mapBufferRange (GL_MAP_*_BIT)
+            def("MAP_READ_BIT", 0x0001);
+            def("MAP_WRITE_BIT", 0x0002);
+            def("MAP_INVALIDATE_RANGE_BIT", 0x0004);
+            def("MAP_INVALIDATE_BUFFER_BIT", 0x0008);
+            def("MAP_FLUSH_EXPLICIT_BIT", 0x0010);
+            def("MAP_UNSYNCHRONIZED_BIT", 0x0020);
         }
         return obj;
     }

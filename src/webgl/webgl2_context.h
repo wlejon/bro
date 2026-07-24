@@ -97,6 +97,28 @@ public:
                            GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size);
     void getBufferSubData(GLenum target, GLintptr srcByteOffset, void* dstData, GLsizeiptr length);
 
+    // --- Buffer mapping (BRO_buffer_map; GL 3.0, no WebGL equivalent) ---
+    // Hands JS a pointer into driver-owned buffer storage.
+    //
+    // This is a capability, not a speed-up: measured against bufferSubData it
+    // is a wash (1.00x/1.15x/1.00x at 64 KB/1 MB/4 MB), because our
+    // bufferSubData already passes the caller's TypedArray straight to GL, so
+    // both paths move the bytes exactly once. What mapping buys is
+    // read-modify-write of a sub-range with no JS-side mirror of the data, and
+    // UNSYNCHRONIZED streaming, neither of which bufferSubData can express.
+    //
+    // Mappings are keyed by buffer id, not by target: GL ties a mapping to the
+    // buffer object, so rebinding the target neither moves nor cancels one,
+    // and keying by target would lose track of it.
+    void* mapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access);
+    /// False if the mapping was lost and its contents must be resubmitted
+    /// (glUnmapBuffer's documented GL_FALSE case), or on validation failure.
+    bool unmapBuffer(GLenum target);
+    void flushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr length);
+    /// GL id currently bound to `target`, or 0 for an unbound or non-buffer
+    /// target. Lets the JS layer key its ArrayBuffer registry the same way.
+    GLuint boundBuffer(GLenum target);
+
     // --- Buffer binding (WebGL2) ---
     void bindBufferBase(GLenum target, GLuint index, WebGLBuffer buf);
     void bindBufferRange(GLenum target, GLuint index, WebGLBuffer buf,
@@ -403,6 +425,11 @@ private:
     std::unordered_set<GLuint> validQueries_;
     std::unordered_set<GLsync> validSyncs_;
     std::unordered_set<GLuint> validTransformFeedbacks_;
+
+    // Live glMapBufferRange mappings, keyed by buffer id (see mapBufferRange).
+    // Almost always empty, and never large: GL 3.3 has no persistent mapping,
+    // so a mapping spans one update, not a frame.
+    std::unordered_map<GLuint, void*> mappedBuffers_;
 
     // Transform feedback state (also drives the compositing handoff: an
     // active TF is paused around engine GL work and resumed afterwards).

@@ -551,6 +551,65 @@ mutable; `getParameter` object-binding queries (`CURRENT_PROGRAM`,
 `ARRAY_BUFFER_BINDING`, `TEXTURE_BINDING_2D`, ...) return `null` rather than
 the wrapper objects; `getShaderPrecisionFormat` returns fixed highp values.
 
+#### `BRO_buffer_map` — direct access to buffer storage
+
+Not a WebGL extension. WebGL cannot expose `glMapBufferRange`, because doing so
+means handing a web page a raw pointer into driver memory; bro is not a browser
+and can.
+
+**It is not faster than `bufferSubData`.** Measured per update, RTX 4090:
+
+| payload | `bufferSubData` | `mapBufferRange` |
+|---|---|---|
+| 64 KB | 0.008 ms | 0.008 ms |
+| 1 MB | 0.130 ms | 0.113 ms |
+| 4 MB | 0.495 ms | 0.496 ms |
+
+The intuition that mapping removes a copy does not apply here: bro's
+`bufferSubData` already hands the caller's `TypedArray` pointer straight to GL,
+so both paths move the bytes exactly once. And if JS *generates* the data
+element by element rather than already holding it, the fill loop costs ~60 ns
+per float against ~0.1 ns per byte of transport — the copy is nowhere near the
+bottleneck, so removing it changes nothing (measured 0.93x–1.02x).
+
+What mapping actually buys is two things `bufferSubData` cannot express:
+
+- **Read-modify-write of a sub-range** with no JS-side mirror of the buffer.
+  Changing a few values in a large buffer otherwise means either keeping a full
+  shadow copy in JS or reading back first.
+- **`MAP_UNSYNCHRONIZED_BIT` streaming**, where the app takes responsibility for
+  not overwriting in-flight data (ring-buffer style) instead of letting the
+  driver serialize.
+
+```js
+const M = gl.getExtension('BRO_buffer_map');   // null if unavailable
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+
+// Nudge one vertex inside a large buffer, without a JS-side copy of it.
+const ab = gl.mapBufferRange(gl.ARRAY_BUFFER, vertexIndex * 12, 12,
+                             M.MAP_READ_BIT | M.MAP_WRITE_BIT);
+const v = new Float32Array(ab);
+v[1] += 0.5;
+gl.unmapBuffer(gl.ARRAY_BUFFER);               // `ab` is detached here
+```
+
+- `mapBufferRange(target, offset, length, access)` → an `ArrayBuffer` aliasing
+  the mapped range, or `null` with a GL error set. `access` takes the
+  `MAP_*_BIT` values off the extension object.
+- `unmapBuffer(target)` → `false` if the mapping was lost and its contents must
+  be resubmitted (GL's documented `glUnmapBuffer` failure), otherwise `true`.
+- `flushMappedBufferRange(target, offset, length)` for `MAP_FLUSH_EXPLICIT_BIT`.
+
+**The returned `ArrayBuffer` is detached by `unmapBuffer`** — it aliases memory
+the driver reclaims, so it cannot be allowed to outlive the mapping. Keep any
+typed-array views inside the map/unmap pair. Mappings are tracked per buffer
+object, so rebinding the target mid-mapping is harmless, and `deleteBuffer`
+drops the mapping with the buffer.
+
+GL 3.3 has no persistent mapping, so a mapping spans a single update rather
+than a frame. As in raw GL, drawing from a buffer while it is mapped is
+undefined; this layer passes calls through and does not police it.
+
 ### CPU mode (`--no-gpu`)
 
 - No window, no SDL video subsystem, no OpenGL context
