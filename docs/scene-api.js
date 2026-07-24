@@ -1108,6 +1108,15 @@ class SceneGraph {
    *   the axis. Also required for a planet seen from OUTSIDE the atmosphere.
    * @param {boolean} [opts.spherical] - force the mode; defaults to true when
    *   `center` is given and false otherwise
+   * @param {number} [opts.multiScatter] - strength of the isotropic
+   *   multiple-scattering fill (0 = single scatter only, the default). Single
+   *   scatter alone leaves the daytime sky dark and over-saturated from inside
+   *   the atmosphere; the usual fix — raising sunColor — over-brightens the
+   *   aerial perspective over ground in equal measure, since sky and ground
+   *   haze are one integral. This term re-radiates the in-scattered field
+   *   isotropically and is view-extinction weighted, so it lifts long sky
+   *   columns without touching short ground rays, letting sunColor sit near
+   *   physical: crisp planet from orbit, blue sky on approach. Try ~2.
    * @param {number} [opts.sunAngularRadius] - sun disk radius
    * @param {number} [opts.sunDiskIntensity] - sun disk brightness multiplier
    */

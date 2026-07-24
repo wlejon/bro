@@ -351,7 +351,7 @@ private:
         GLint enabled = -1, camPos = -1, sunDir = -1, sunColor = -1,
               betaR = -1, planetRadius = -1, thickness = -1, betaM = -1,
               mieG = -1, scaleHeightR = -1, scaleHeightM = -1, seaLevel = -1,
-              center = -1, spherical = -1;
+              center = -1, spherical = -1, multiScatter = -1;
     };
 
     void resolveAtmLocs(GLuint prog, AtmLocs& a) const;

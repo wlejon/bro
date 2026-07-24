@@ -52,6 +52,12 @@ struct AtmosphereParams {
     bool  spherical  = false;
     float center[3]  = {0.0f, 0.0f, 0.0f};   // world position of the planet's centre
 
+    // Strength of the isotropic multiple-scattering fill (0 = single scatter
+    // only, the historical behaviour). Lets sunColor drop to a physical value
+    // — which keeps aerial perspective over ground crisp — while the sky stays
+    // bright and blue from inside the atmosphere. See atmosphere.glsl.
+    float multiScatter = 0.0f;
+
     float sunAngularRadius = 0.00465f;   // radians; the real sun
     float sunDiskIntensity = 25.0f;
 };

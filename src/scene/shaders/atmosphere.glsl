@@ -28,6 +28,7 @@ uniform float uAtmScaleHeightM;  // Mie density scale height, metres
 uniform float uAtmSeaLevel;      // world Y that counts as the planet's surface
 uniform vec3  uAtmCenter;        // world position of the planet's centre
 uniform float uAtmSpherical;     // 1 = globe at uAtmCenter, 0 = flat height field
+uniform float uAtmMultiScatter;  // isotropic multiple-scattering fill, 0 = single scatter only
 
 // Mie absorbs as well as scatters; the usual approximation is that extinction
 // is a little larger than scattering. Rayleigh does not absorb.
@@ -160,6 +161,7 @@ vec3 atmScatter(vec3 ro, vec3 rd, float tMax, const int steps,
     vec2 odView = vec2(0.0);          // accumulated along the view ray
     vec3 sumR = vec3(0.0);
     float sumM = 0.0;
+    vec3 sumMS = vec3(0.0);           // isotropic, for the multiple-scatter fill
 
     for (int i = 0; i < steps; ++i) {
         vec3  p = ro + rd * (t0 + dt * (float(i) + 0.5));
@@ -181,10 +183,27 @@ vec3 atmScatter(vec3 ro, vec3 rd, float tMax, const int steps,
         }
         sumR += sunTrans * density.x;
         sumM += dot(sunTrans, vec3(0.3333)) * density.y;
+        // Beta-weighted, phase-free: what feeds the isotropic re-radiation.
+        sumMS += sunTrans * (uAtmBetaR * density.x + uAtmBetaM * density.y);
     }
 
     transmittance = atmExtinction(odView);
-    return uAtmSunColor * (uAtmBetaR * sumR * pr + uAtmBetaM * sumM * pm);
+    vec3 single = uAtmSunColor * (uAtmBetaR * sumR * pr + uAtmBetaM * sumM * pm);
+
+    // Cheap multiple scattering. Single scatter alone leaves the daytime sky
+    // too dark and too saturated from inside the atmosphere — the light that
+    // has bounced twice or more is missing — and the usual fix, cranking the
+    // sun's irradiance, over-brightens the aerial perspective over ground in
+    // equal measure, washing distant terrain milky. This term restores the sky
+    // without that cost: it re-radiates the in-scattered field ISOTROPICALLY
+    // (phase 1/4pi, so it fills the whole dome rather than lobing toward the
+    // sun) and it is already view-extinction weighted through sunTrans, so a
+    // short ground ray accumulates almost none of it while a full sky column
+    // accumulates a lot. sunColor can then sit at a physical value: ground
+    // stays crisp, sky stays blue.
+    const float ATM_ISO = 1.0 / (4.0 * 3.14159265);
+    vec3 multi = uAtmSunColor * uAtmMultiScatter * ATM_ISO * sumMS;
+    return single + multi;
 }
 
 // Sky radiance for a view ray that leaves the atmosphere (or hits the ground).

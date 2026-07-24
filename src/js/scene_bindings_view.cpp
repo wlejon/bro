@@ -616,7 +616,7 @@ JSValue js_sg_setFog(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
 // setAtmosphere({enabled, sunDirection, sunColor, planetRadius, thickness,
 //                betaRayleigh, betaMie, mieG, scaleHeightRayleigh,
 //                scaleHeightMie, seaLevel, spherical, center,
-//                sunAngularRadius, sunDiskIntensity})
+//                multiScatter, sunAngularRadius, sunDiskIntensity})
 //
 // Omitted fields keep their Earth defaults rather than reading back the current
 // value: the parameters only make sense as a set, and a half-applied atmosphere
@@ -658,6 +658,7 @@ JSValue js_sg_setAtmosphere(JSContext* ctx, JSValueConst this_val, int argc,
     a.scaleHeightR     = num("scaleHeightRayleigh", a.scaleHeightR);
     a.scaleHeightM     = num("scaleHeightMie", a.scaleHeightM);
     a.seaLevel         = num("seaLevel", a.seaLevel);
+    a.multiScatter     = num("multiScatter", a.multiScatter);
 
     // Spherical mode centres the air on an actual globe instead of hanging it
     // under the viewer — see AtmosphereParams. `center` implies it, because a

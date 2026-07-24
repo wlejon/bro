@@ -380,6 +380,7 @@ void SceneRenderer::uploadAtmosphereUniforms(GLuint prog) {
         if (l >= 0) glUniform3fv(l, 1, a.center);
     }
     u1("uAtmSpherical", a.spherical ? 1.0f : 0.0f);
+    u1("uAtmMultiScatter", a.multiScatter);
 }
 
 void SceneRenderer::resolveAtmLocs(GLuint prog, AtmLocs& a) const {
@@ -398,6 +399,7 @@ void SceneRenderer::resolveAtmLocs(GLuint prog, AtmLocs& a) const {
     a.seaLevel     = U("uAtmSeaLevel");
     a.center       = U("uAtmCenter");
     a.spherical    = U("uAtmSpherical");
+    a.multiScatter = U("uAtmMultiScatter");
 }
 
 void SceneRenderer::uploadAtmLocs(const AtmLocs& L) const {
@@ -424,6 +426,7 @@ void SceneRenderer::uploadAtmLocs(const AtmLocs& L) const {
     if (L.seaLevel     >= 0) glUniform1f(L.seaLevel, a.seaLevel);
     if (L.center       >= 0) glUniform3fv(L.center, 1, a.center);
     if (L.spherical    >= 0) glUniform1f(L.spherical, a.spherical ? 1.0f : 0.0f);
+    if (L.multiScatter >= 0) glUniform1f(L.multiScatter, a.multiScatter);
 }
 
 // View->world rotation for the fullscreen sky passes (skybox + atmosphere),
