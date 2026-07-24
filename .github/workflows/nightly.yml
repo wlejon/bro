@@ -40,6 +40,12 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    # id-token lets the Windows job mint a GitHub OIDC token and exchange it for
+    # an Azure one (see the signing steps). Declared per-job rather than at the
+    # top level so only this job can request it; publish keeps contents:write.
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -249,6 +255,72 @@ jobs:
           else
             scripts/package-release.sh --version "$VERSION" --build-dir build
           fi
+
+      # --- Windows code signing ---------------------------------------------
+      # Signs the packaged tree before it is zipped, so what users download is
+      # what was signed. Authenticode covers PE files only; the Linux and macOS
+      # zips ship unsigned (macOS notarization needs an Apple Developer ID,
+      # which is a separate thing entirely).
+      #
+      # No key or secret exists in this repo or on the runner. Auth is GitHub
+      # OIDC federation against an Entra app whose federated credential only
+      # trusts subject repo:wlejon/bro:ref:refs/heads/main, and the signing key
+      # itself never leaves Azure's HSM — the action uploads a digest and gets a
+      # signature back. The three AZURE_* values below are identifiers, not
+      # credentials, which is why they are `vars` and not `secrets`.
+      #
+      # Timestamping is load-bearing, not optional: Artifact Signing issues
+      # ~3-day certificates, so an untimestamped signature stops validating
+      # almost immediately. The RFC3161 countersignature is what pins validity
+      # to signing time and keeps old nightlies verifiable after rotation.
+      - name: Resolve package directory (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          d=$(ls -d dist/bro-${VERSION}-* | head -1)
+          # Absolute Windows path — the signing action is .NET and does not
+          # understand MSYS-style /d/... paths.
+          echo "PKG_DIR=$(cygpath -w "$(pwd)/$d")" >> "$GITHUB_ENV"
+
+      - name: Azure login (OIDC, no stored secret)
+        if: runner.os == 'Windows'
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Sign Windows binaries
+        if: runner.os == 'Windows'
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: https://cus.codesigning.azure.net/
+          signing-account-name: brosigning
+          certificate-profile-name: broPublicTrust
+          files-folder: ${{ env.PKG_DIR }}
+          # The three executables plus the vcpkg DLLs loaded into our process.
+          # Basic SKU allows 5,000 signatures/month; a nightly uses ~20.
+          files-folder-filter: exe,dll
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      # Fail the job rather than publish silently-unsigned binaries if the step
+      # above ever soft-fails. Get-AuthenticodeSignature is used instead of
+      # signtool because it is built into PowerShell and needs no SDK path hunt.
+      - name: Verify signatures (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bad = @()
+          foreach ($exe in @('bro.exe','bro-headless.exe','bro-server.exe')) {
+            $p = Join-Path $env:PKG_DIR $exe
+            if (-not (Test-Path $p)) { Write-Host "MISSING $exe"; $bad += $exe; continue }
+            $sig = Get-AuthenticodeSignature $p
+            Write-Host "$exe -> $($sig.Status) | $($sig.SignerCertificate.Subject)"
+            if ($sig.Status -ne 'Valid') { $bad += $exe }
+          }
+          if ($bad.Count) { throw "unsigned or invalid: $($bad -join ', ')" }
 
       - name: Zip
         shell: bash
