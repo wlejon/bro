@@ -177,5 +177,3 @@ endif()
 # Stamp BRO_WITH_* as compile definitions for the #if guards in the bindings
 # (feature gating is added cluster-by-cluster; see docs/build-options.md).
 bro_apply_feature_defs(bro_js)
-# QuickJS headers
-target_include_directories(bro_js PRIVATE ${CMAKE_SOURCE_DIR}/third_party/quickjs)

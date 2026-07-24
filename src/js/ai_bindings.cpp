@@ -219,13 +219,24 @@ static bool getBoolProp(JSContext* ctx, JSValueConst obj, const char* key, bool 
     return out;
 }
 
+// Read a double from a JS object property by atom, with a default value.
+// Same as getDoubleProp but without interning the key — for the loops below,
+// which re-read a fixed set of names once per element, per call, per frame.
+static double getDoublePropAtom(JSContext* ctx, JSValueConst obj, JSAtom key, double def) {
+    JSValue v = JS_GetProperty(ctx, obj, key);
+    double out = def;
+    if (JS_IsNumber(v)) JS_ToFloat64(ctx, &out, v);
+    JS_FreeValue(ctx, v);
+    return out;
+}
+
 // Parse {x, z, hw, hd} from a JS object into an AABB
 static brogameagent::AABB parseAABB(JSContext* ctx, JSValueConst obj) {
     return {
-        static_cast<float>(getDoubleProp(ctx, obj, "x", 0)),
-        static_cast<float>(getDoubleProp(ctx, obj, "z", 0)),
-        static_cast<float>(getDoubleProp(ctx, obj, "hw", 0)),
-        static_cast<float>(getDoubleProp(ctx, obj, "hd", 0)),
+        static_cast<float>(getDoublePropAtom(ctx, obj, JS_BRO(x), 0)),
+        static_cast<float>(getDoublePropAtom(ctx, obj, JS_BRO(z), 0)),
+        static_cast<float>(getDoublePropAtom(ctx, obj, JS_BRO(hw), 0)),
+        static_cast<float>(getDoublePropAtom(ctx, obj, JS_BRO(hd), 0)),
     };
 }
 
@@ -233,7 +244,7 @@ static brogameagent::AABB parseAABB(JSContext* ctx, JSValueConst obj) {
 static std::vector<brogameagent::AABB> parseAABBArray(JSContext* ctx, JSValueConst arr) {
     std::vector<brogameagent::AABB> out;
     if (!JS_IsArray(arr)) return out;
-    JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");
+    JSValue lenVal = JS_GetProperty(ctx, arr, JS_BRO(length));
     int32_t len = 0;
     JS_ToInt32(ctx, &len, lenVal);
     JS_FreeValue(ctx, lenVal);
