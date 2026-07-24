@@ -1,8 +1,18 @@
 # --- QuickJS ---
+# Same standalone-repo-wins pattern as the siblings below, with one wrinkle:
+# the sibling directory is `../quickjs-ng`, not `../quickjs`. Upstream is
+# quickjs-ng, and `../quickjs` is commonly a checkout of Bellard's original
+# quickjs, which is a different project and must not be picked up here.
 set(QJS_BUILD_CLI OFF CACHE BOOL "" FORCE)
 set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_QJS_LIBC ON CACHE BOOL "" FORCE)
-add_subdirectory(quickjs EXCLUDE_FROM_ALL)
+set(QUICKJS_DIR "${CMAKE_SOURCE_DIR}/../quickjs-ng" CACHE PATH "quickjs-ng standalone repo")
+if(EXISTS "${QUICKJS_DIR}/quickjs.c")
+    message(STATUS "QuickJS: building from standalone repo ${QUICKJS_DIR}")
+    add_subdirectory("${QUICKJS_DIR}" "${CMAKE_BINARY_DIR}/quickjs" EXCLUDE_FROM_ALL)
+else()
+    add_subdirectory(quickjs EXCLUDE_FROM_ALL)
+endif()
 
 # Enable QuickJS leak/diagnostic dumps in Debug so JS_SetDumpFlags(JS_DUMP_LEAKS)
 # actually prints leaked GC objects before JS_FreeRuntime asserts.
