@@ -1,4 +1,5 @@
 #include "engine/engine.h"
+#include "js/headless_bindings.h"   // installScriptArgs
 #include "js/server_bindings.h"
 #include "js/runtime.h"
 #include "util/interrupt.h"
@@ -10,6 +11,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -85,8 +87,10 @@ static bool evalCode(JSContext* ctx, bro::js::Runtime* rt,
 int main(int argc, char* argv[]) {
     bro::util::installSignalHandler();
 
+    // `--` ends bro-server's own options; everything after it is the script's.
     bool showHelp = false;
     for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--") == 0) break;
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
             showHelp = true;
     }
@@ -115,16 +119,24 @@ int main(int argc, char* argv[]) {
     double tickrate = 60.0;
     std::string appDir;
     std::string scriptPath;
+    std::vector<std::string> scriptArgs;
 
+    bool passThrough = false;
     for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--tickrate") == 0 && i + 1 < argc) {
+        if (passThrough) {
+            scriptArgs.push_back(argv[i]);
+        } else if (strcmp(argv[i], "--") == 0) {
+            passThrough = true;
+        } else if (strcmp(argv[i], "--tickrate") == 0 && i + 1 < argc) {
             tickrate = atof(argv[++i]);
             if (tickrate < 1.0) tickrate = 1.0;
             if (tickrate > 1000.0) tickrate = 1000.0;
         } else if (appDir.empty()) {
             appDir = argv[i];
-        } else if (scriptPath.empty()) {
+        } else if (scriptPath.empty() && argv[i][0] != '-') {
             scriptPath = argv[i];
+        } else {
+            scriptArgs.push_back(argv[i]);
         }
     }
 
@@ -150,6 +162,7 @@ int main(int argc, char* argv[]) {
 
         auto* rt = engine->jsRuntime();
         auto* ctx = rt->getContext();
+        bro::js::installScriptArgs(ctx, scriptArgs);
 
         // Load and execute the server script
         std::ifstream ifs(scriptPath);

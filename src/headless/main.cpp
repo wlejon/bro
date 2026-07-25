@@ -408,8 +408,11 @@ int main(int argc, char* argv[]) {
 #endif
     bro::util::installSignalHandler();
 
+    // `--` ends bro's own options; everything after it belongs to the script,
+    // so a script flag named --help must not print bro's help and exit.
     bool showHelp = false;
     for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--") == 0) break;
         if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0)
             showHelp = true;
     }
@@ -418,12 +421,19 @@ int main(int argc, char* argv[]) {
         fprintf(stderr,
             "bro-headless — headless mode for bro\n"
             "\n"
-            "Usage: bro-headless [--no-gpu] <app-directory> [script.js | -e \"expr\" ...]\n"
+            "Usage: bro-headless [options] <app-directory> [script.js | -e \"expr\"] [-- script-args...]\n"
             "\n"
             "Modes:\n"
             "  bro-headless app/              Interactive JS REPL\n"
             "  bro-headless app/ test.js      Run script file\n"
             "  bro-headless app/ -e \"expr\"     Evaluate inline expression(s)\n"
+            "\n"
+            "Script arguments:\n"
+            "  Anything after the script path that bro does not recognise is passed\n"
+            "  through as globalThis.scriptArgs (an array of strings). Use -- to pass\n"
+            "  through arguments that would otherwise be read as bro options:\n"
+            "    bro-headless app/ etl/build.js --force\n"
+            "    bro-headless app/ etl/build.js -- --width 40\n"
             "\n"
             "Options:\n"
             "  --no-gpu              Disable GPU rendering (CPU-only, no WebGL)\n"
@@ -453,9 +463,19 @@ int main(int argc, char* argv[]) {
     std::string appDir;
     std::string scriptPath;
     std::vector<std::string> inlineExprs;
+    std::vector<std::string> scriptArgs;
 
+    // Everything past the app directory and the script path is the script's,
+    // not ours. Without this a script had no way to take an argument at all,
+    // which pushed ETL and test drivers into environment variables for what is
+    // plainly a command-line flag.
+    bool passThrough = false;
     for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--no-gpu") == 0) {
+        if (passThrough) {
+            scriptArgs.push_back(argv[i]);
+        } else if (strcmp(argv[i], "--") == 0) {
+            passThrough = true;
+        } else if (strcmp(argv[i], "--no-gpu") == 0) {
             useGPU = false;
         } else if (strcmp(argv[i], "--audio") == 0) {
             realAudio = true;
@@ -471,8 +491,10 @@ int main(int argc, char* argv[]) {
             inlineExprs.push_back(argv[++i]);
         } else if (appDir.empty()) {
             appDir = argv[i];
-        } else if (scriptPath.empty()) {
+        } else if (scriptPath.empty() && argv[i][0] != '-') {
             scriptPath = argv[i];
+        } else {
+            scriptArgs.push_back(argv[i]);
         }
     }
 
@@ -598,6 +620,7 @@ int main(int argc, char* argv[]) {
         auto* rt = engine->jsRuntime();
         auto* ctx = rt->getContext();
         bro::js::installHeadlessBindings(ctx, engine);
+        bro::js::installScriptArgs(ctx, scriptArgs);
 
         // Drain any top-level location.reload() the app queued. In headless
         // the driving script runs INSIDE the app realm, so a reload can only
@@ -608,8 +631,13 @@ int main(int argc, char* argv[]) {
         // re-fetch ctx after draining. Bounded: an app that unconditionally
         // reloads itself would otherwise never yield.
         auto drainAppReloads = [&]() {
-            for (int i = 0; i < 8 && engine->processPendingAppReload(); ++i) {}
+            bool reloaded = false;
+            for (int i = 0; i < 8 && engine->processPendingAppReload(); ++i) reloaded = true;
             ctx = rt->getContext();
+            // A reload builds a fresh realm and re-installs the headless
+            // globals into it; the process's arguments have not changed, so
+            // the new realm gets them back too.
+            if (reloaded) bro::js::installScriptArgs(ctx, scriptArgs);
         };
         drainAppReloads();
 

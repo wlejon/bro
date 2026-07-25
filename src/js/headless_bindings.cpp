@@ -1379,6 +1379,17 @@ void installCanvasSnapshotBinding(JSContext* ctx, engine::Engine* engine) {
         .function("screenshotCanvas", js_screenshotCanvas, 2);
 }
 
+void installScriptArgs(JSContext* ctx, const std::vector<std::string>& args) {
+    JSValue arr = JS_NewArray(ctx);
+    for (uint32_t i = 0; i < args.size(); ++i) {
+        JS_SetPropertyUint32(ctx, arr, i,
+                             JS_NewStringLen(ctx, args[i].data(), args[i].size()));
+    }
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "scriptArgs", arr);
+    JS_FreeValue(ctx, global);
+}
+
 void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
     // The canvas-snapshot binding is also installed by Engine in both modes;
     // re-installing is harmless (same engine pointer, same function).
