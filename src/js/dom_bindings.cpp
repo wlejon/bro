@@ -499,6 +499,18 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     installWebAnimationBindings(ctx);
     installMatchMediaBindings(ctx);
 
+    // Put Element, Document and ShadowRoot underneath Node.prototype.
+    //
+    // qjsbind gives each class a prototype whose parent is Object.prototype, so
+    // without this the DOM's inheritance chain is flat and `el instanceof Node`
+    // is false — for an element. Code that guards an append with that test then
+    // silently rejects every element it is given. This has to run after all
+    // three classes are registered, which is why it is here and not at the
+    // registration sites.
+    linkNodePrototype(ctx, qjsbind::class_id<bro::dom::Element>());
+    linkNodePrototype(ctx, js_document_class_id);
+    linkNodePrototype(ctx, js_shadowroot_class_id);
+
     // Wire Document's selectionchange callback through JS event dispatch.
     auto* doc = static_cast<bro::dom::Document*>(document_ptr);
     if (doc) {

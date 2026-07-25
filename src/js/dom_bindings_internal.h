@@ -182,6 +182,11 @@ void notifyMutationObservers(JSContext* ctx, JSValueConst target,
 
 void installEventBindings(JSContext* ctx);
 void installNodeBindings(JSContext* ctx);
+
+/// Splice Node.prototype in underneath another DOM class's prototype, so that
+/// `instanceof Node` holds for its instances. Must run after
+/// installNodeBindings() and after the child class is registered.
+void linkNodePrototype(JSContext* ctx, JSClassID childClassId);
 void installDocumentBindings(JSContext* ctx);
 void installShadowRootBindings(JSContext* ctx);
 void installRangeBindings(JSContext* ctx);

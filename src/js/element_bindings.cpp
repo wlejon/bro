@@ -4178,6 +4178,13 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
 // Registration
 // ===========================================================================
 
+// `new Element()` is not allowed by the spec.
+static JSValue js_element_illegal_ctor(JSContext* ctx, JSValueConst /*new_target*/,
+                                       int /*argc*/, JSValueConst* /*argv*/)
+{
+    return JS_ThrowTypeError(ctx, "Illegal constructor");
+}
+
 void installElementBindings(JSContext* ctx) {
     using Elem = bro::dom::Element;
     qjsbind::Class<Elem>(ctx, "Element", qjsbind::NoGlobal,
@@ -4186,6 +4193,30 @@ void installElementBindings(JSContext* ctx) {
                        sizeof(js_element_proto_funcs) / sizeof(js_element_proto_funcs[0]));
 
     js_element_class_id = qjsbind::class_id<Elem>();
+
+    // globalThis.Element, wired to the prototype elements actually have.
+    //
+    // There was already an `Element` global, and it was a lie: dom_polyfills.js
+    // defines `globalThis.Element = class Element {}` when the name is
+    // undefined, which it was, because the class above is registered NoGlobal.
+    // So `el instanceof Element` was false for every element bro has ever
+    // created — silently, which is worse than the ReferenceError `Node` used to
+    // give, because a guard written that way simply never fires and the code
+    // takes its else branch forever.
+    //
+    // Defining it here means the polyfill's `typeof Element === 'undefined'`
+    // guard finds it already present and leaves it alone; the polyfill runs
+    // later in DomBindings::install.
+    {
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue proto = JS_GetClassProto(ctx, js_element_class_id);
+        JSValue ctor = JS_NewCFunction2(ctx, js_element_illegal_ctor, "Element", 0,
+                                        JS_CFUNC_constructor, 0);
+        JS_SetConstructor(ctx, ctor, proto);
+        JS_FreeValue(ctx, proto);
+        JS_SetPropertyStr(ctx, global, "Element", ctor);
+        JS_FreeValue(ctx, global);
+    }
 }
 
 } // namespace bro::js

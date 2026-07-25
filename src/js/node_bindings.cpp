@@ -763,6 +763,14 @@ JSValue wrapAnyNode(JSContext* ctx, bro::dom::Node* node)
 // Registration
 // ===========================================================================
 
+// `new Node()` is not allowed by the spec, and a constructor that silently
+// produced a broken object would be worse than one that says so.
+static JSValue js_node_illegal_ctor(JSContext* ctx, JSValueConst /*new_target*/,
+                                    int /*argc*/, JSValueConst* /*argv*/)
+{
+    return JS_ThrowTypeError(ctx, "Illegal constructor");
+}
+
 void installNodeBindings(JSContext* ctx) {
     JSRuntime* rt = JS_GetRuntime(ctx);
 
@@ -782,6 +790,76 @@ void installNodeBindings(JSContext* ctx) {
     JS_NewClassID(rt, &js_node_class_id);
     JS_NewClass(rt, js_node_class_id, &js_node_class);
     // Node class has no prototype functions — properties are set per-instance
+
+    // globalThis.Node, with the nodeType constants.
+    //
+    // Without this, `x instanceof Node` — which is how ordinary DOM code asks
+    // "is this a thing I can append?" — throws a ReferenceError rather than
+    // returning false, and there is no correct way to write the test. Node is
+    // also where the nodeType numbers are defined; code that reads
+    // `n.nodeType === Node.TEXT_NODE` is not being clever, it is being
+    // readable, and the alternative is a bare 3.
+    //
+    // linkNodePrototype() below then puts Element and Document underneath this
+    // prototype, so the instanceof holds for every node kind rather than only
+    // for text and comment nodes.
+    {
+        JSValue global = JS_GetGlobalObject(ctx);
+
+        // The class was registered on the RUNTIME but never given a prototype
+        // in this CONTEXT — the wrappers set every property per instance, so
+        // nothing needed one. `JS_GetClassProto` therefore returned null, which
+        // makes `x instanceof Node` fail with "operand 'prototype' property is
+        // not an object" rather than returning false. Create the prototype and
+        // register it, which also gives every existing text and comment node
+        // wrapper somewhere to inherit the nodeType constants from.
+        JSValue proto = JS_NewObject(ctx);
+        JS_SetClassProto(ctx, js_node_class_id, JS_DupValue(ctx, proto));
+
+        JSValue ctor = JS_NewCFunction2(ctx, js_node_illegal_ctor, "Node", 0,
+                                        JS_CFUNC_constructor, 0);
+        JS_SetConstructor(ctx, ctor, proto);
+
+        static const struct { const char* name; int32_t value; } kNodeTypes[] = {
+            { "ELEMENT_NODE", 1 },
+            { "ATTRIBUTE_NODE", 2 },
+            { "TEXT_NODE", 3 },
+            { "CDATA_SECTION_NODE", 4 },
+            { "ENTITY_REFERENCE_NODE", 5 },
+            { "ENTITY_NODE", 6 },
+            { "PROCESSING_INSTRUCTION_NODE", 7 },
+            { "COMMENT_NODE", 8 },
+            { "DOCUMENT_NODE", 9 },
+            { "DOCUMENT_TYPE_NODE", 10 },
+            { "DOCUMENT_FRAGMENT_NODE", 11 },
+            { "NOTATION_NODE", 12 },
+        };
+        // The spec puts these on both the constructor and the prototype, and
+        // real code uses both spellings.
+        for (const auto& t : kNodeTypes) {
+            JS_SetPropertyStr(ctx, ctor, t.name, JS_NewInt32(ctx, t.value));
+            JS_SetPropertyStr(ctx, proto, t.name, JS_NewInt32(ctx, t.value));
+        }
+        JS_FreeValue(ctx, proto);
+        JS_SetPropertyStr(ctx, global, "Node", ctor);
+        JS_FreeValue(ctx, global);
+    }
+}
+
+void linkNodePrototype(JSContext* ctx, JSClassID childClassId)
+{
+    // Splice Node.prototype in underneath a class prototype that qjsbind
+    // created with Object.prototype as its parent. Called after every DOM class
+    // is registered; doing it here rather than at each registration site keeps
+    // the ordering requirement — Node first, then everything else — in one
+    // place where it can be seen.
+    JSValue nodeProto = JS_GetClassProto(ctx, js_node_class_id);
+    JSValue childProto = JS_GetClassProto(ctx, childClassId);
+    if (JS_IsObject(nodeProto) && JS_IsObject(childProto)) {
+        JS_SetPrototype(ctx, childProto, nodeProto);
+    }
+    JS_FreeValue(ctx, childProto);
+    JS_FreeValue(ctx, nodeProto);
 }
 
 } // namespace bro::js
