@@ -58,6 +58,10 @@ WebGL2RenderingContext::WebGL2RenderingContext(int width, int height)
 }
 
 WebGL2RenderingContext::~WebGL2RenderingContext() {
+    // A destroyed context must not stay the "live" one, or the next
+    // makeCurrent() on another context would skip restoring its state.
+    if (current_ == this) current_ = nullptr;
+
     // Delete all tracked objects
     for (GLuint id : validBuffers_) glDeleteBuffers(1, &id);
     for (GLuint id : validTextures_) glDeleteTextures(1, &id);
@@ -131,6 +135,17 @@ void WebGL2RenderingContext::resize(int width, int height) {
     // (null → old canvas FBO) bound, re-point shadow state at the new one,
     // then reapply the app's shadow-tracked state.
     if (sFBO_ == oldCanvasFBO || sFBO_ == 0) sFBO_ = canvasFBO_;
+    restoreState();
+}
+
+WebGL2RenderingContext* WebGL2RenderingContext::current_ = nullptr;
+
+void WebGL2RenderingContext::makeCurrent() {
+    if (current_ == this) return;
+    current_ = this;
+    // restoreState() re-applies every piece of shadow state this context
+    // tracks, including glBindFramebuffer(sFBO_) — which is exactly what
+    // makes a second canvas draw into its own FBO rather than the first's.
     restoreState();
 }
 

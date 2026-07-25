@@ -27,9 +27,15 @@ extern JSClassID js_webgl_sync_class_id;
 extern JSClassID js_webgl_tf_class_id;
 
 // --- Extract C++ context from JS this value ---
+// Every WebGL binding funnels through here, which makes it the one place that
+// can guarantee a call issued on context B does not execute against context A's
+// framebuffer and state. makeCurrent() is a no-op unless the context actually
+// changed, so the single-canvas path costs one pointer compare.
 inline webgl::WebGL2RenderingContext* getCtx(JSValueConst this_val) {
-    return static_cast<webgl::WebGL2RenderingContext*>(
+    auto* c = static_cast<webgl::WebGL2RenderingContext*>(
         JS_GetOpaque(this_val, js_webgl2_ctx_class_id));
+    if (c) c->makeCurrent();
+    return c;
 }
 
 // --- String extraction ---

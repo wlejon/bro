@@ -423,6 +423,8 @@ void Engine::advanceTime(double ms) {
             JS_FreeValue(jsRuntime_->getContext(), global);
         }
 
+        syncWebGLCanvasSizes();
+        webgl::WebGL2RenderingContext::invalidateCurrent();
         if (activeWebGL) activeWebGL->bindCanvasFBO();
         // rAF skips entirely while paused (the web's _process analog);
         // timescale changes only the timestamp, not the firing cadence.
@@ -465,7 +467,7 @@ void Engine::advanceTime(double ms) {
             jsRuntime_->executePendingJobs();
         }
 
-        if (activeWebGL) activeWebGL->unbindCanvasFBO();
+        webgl::WebGL2RenderingContext::endAppGL();
 
         // Step physics deterministically against virtual time, synchronously
         // on the main thread (headless does not start the physics worker thread).
@@ -594,6 +596,8 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     // 1. Bind WebGL canvas FBO before firing rAF + scene graph render.
     webgl::WebGL2RenderingContext* activeWebGL = nullptr;
     if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
+    syncWebGLCanvasSizes();
+    webgl::WebGL2RenderingContext::invalidateCurrent();
     if (activeWebGL) activeWebGL->bindCanvasFBO();
 
     // Scaled clock + pause gate, same as the frame loop: capturing a paused
@@ -602,7 +606,7 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
     if (!timePaused_) timers_->fireAnimationFrames(engineNowMs_);
     jsRuntime_->executePendingJobs();
 
-    if (activeWebGL) activeWebGL->unbindCanvasFBO();
+    webgl::WebGL2RenderingContext::endAppGL();
 
     // 2. Materialize HtmlNodes + render scene graphs (windowed path runs both
     //    on the main thread before signaling raster).
@@ -715,10 +719,12 @@ bool Engine::screenshot(const std::string& path) {
     {
         webgl::WebGL2RenderingContext* activeWebGL = nullptr;
         if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
+        syncWebGLCanvasSizes();
+        webgl::WebGL2RenderingContext::invalidateCurrent();
         if (activeWebGL) activeWebGL->bindCanvasFBO();
         if (!timePaused_) timers_->fireAnimationFrames(engineNowMs_);
         jsRuntime_->executePendingJobs();
-        if (activeWebGL) activeWebGL->unbindCanvasFBO();
+        webgl::WebGL2RenderingContext::endAppGL();
     }
 
     renderer_->beginFrame(viewportWidth_, viewportHeight_);
@@ -784,10 +790,12 @@ std::vector<uint8_t> Engine::capturePixels() {
     {
         webgl::WebGL2RenderingContext* activeWebGL = nullptr;
         if (!webglEntries_.empty()) activeWebGL = webglEntries_[0].context.get();
+        syncWebGLCanvasSizes();
+        webgl::WebGL2RenderingContext::invalidateCurrent();
         if (activeWebGL) activeWebGL->bindCanvasFBO();
         if (!timePaused_) timers_->fireAnimationFrames(engineNowMs_);
         jsRuntime_->executePendingJobs();
-        if (activeWebGL) activeWebGL->unbindCanvasFBO();
+        webgl::WebGL2RenderingContext::endAppGL();
     }
 
     renderer_->beginFrame(viewportWidth_, viewportHeight_);

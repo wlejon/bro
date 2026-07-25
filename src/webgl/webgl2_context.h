@@ -40,6 +40,41 @@ public:
     void unbindCanvasFBO();
 
     // =================================================================
+    // Multiple canvases
+    //
+    // A document may hold several <canvas> elements with their own WebGL
+    // contexts, but they all multiplex one real GL context, so "which
+    // context's state is live in the driver" has to be tracked here. Every
+    // WebGL call arriving from JS routes through getCtx(), which calls
+    // makeCurrent(): if this context is not the live one, its shadow state
+    // (FBO, program, VAO, bindings, blend/depth/cull, viewport) is re-applied
+    // first. Without it, a second canvas's draw calls land in the first
+    // canvas's framebuffer.
+    //
+    // The engine invalidates the cache around its own GL work (compositing,
+    // screenshot readback), since that clobbers state behind every context's
+    // back.
+    // =================================================================
+
+    /// Make this context's shadow state live in the driver. Cheap no-op when
+    /// it already is, which is the overwhelmingly common single-canvas case.
+    void makeCurrent();
+
+    /// The context whose state is currently live, or nullptr.
+    static WebGL2RenderingContext* current() { return current_; }
+
+    /// Forget which context is live; the next WebGL call re-applies its state.
+    /// Call before handing GL to app JS after the engine has used it.
+    static void invalidateCurrent() { current_ = nullptr; }
+
+    /// Hand GL back to the engine: neutralise the live context's state and
+    /// drop the cache. Safe when no context was touched.
+    static void endAppGL() {
+        if (current_) current_->unbindCanvasFBO();
+        current_ = nullptr;
+    }
+
+    // =================================================================
     // WebGL2 API methods
     // =================================================================
 
@@ -410,6 +445,9 @@ private:
 
     // Canvas FBO (the WebGL "default framebuffer")
     GLuint canvasFBO_ = 0;
+    /// Which context's shadow state is live in the shared GL context.
+    static WebGL2RenderingContext* current_;
+
     GLuint colorTex_ = 0;
     GLuint depthStencilRBO_ = 0;
 

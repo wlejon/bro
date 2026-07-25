@@ -1413,6 +1413,13 @@ private:
     };
     std::vector<WebGLEntry> webglEntries_;
 
+    /// Fit every WebGL canvas's drawing buffer to its element box, for canvases
+    /// that have not set width/height themselves. Per HTML, those attributes
+    /// ARE the drawing-buffer size, so an app that sets them (typically to
+    /// clientWidth * devicePixelRatio) owns the size and the engine must not
+    /// fight it every frame.
+    void syncWebGLCanvasSizes();
+
     // --- Threaded rasterization / layout ---
     // FramePresenter owns the raster thread's synchronization (state machine,
     // fence handshake, double-buffered layer lists) and the snapshot atomics

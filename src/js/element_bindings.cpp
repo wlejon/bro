@@ -1,5 +1,6 @@
 #include "js/dom_bindings_internal.h"
 #include "js/custom_elements.h"
+#include "webgl/webgl2_context.h"
 #include "js/event_dispatch.h"
 #include "util/log.h"
 #include "dom/event.h"
@@ -2838,6 +2839,14 @@ static JSValue js_element_set_width(JSContext* ctx, JSValueConst this_val, JSVal
         cs->setIntrinsicWidth(w);
         cs->reset();
     }
+    // Same rule for a WebGL canvas: width/height IS the drawing buffer size.
+    // Without this the FBO keeps whatever size it had at getContext() time
+    // while the app's gl.viewport() shrinks to the new one, so the compositor
+    // stretches a mostly-empty oversized texture into the element box and the
+    // content lands scaled and corner-anchored.
+    if (auto* wg = static_cast<bro::webgl::WebGL2RenderingContext*>(el->webglContext())) {
+        if (w > 0 && w != wg->canvasWidth()) wg->resize(w, wg->canvasHeight());
+    }
     return JS_UNDEFINED;
 }
 
@@ -2855,6 +2864,9 @@ static JSValue js_element_set_height(JSContext* ctx, JSValueConst this_val, JSVa
     if (auto* cs = static_cast<bro::canvas::CanvasScene*>(el->canvasScene())) {
         cs->setIntrinsicHeight(h);
         cs->reset();
+    }
+    if (auto* wg = static_cast<bro::webgl::WebGL2RenderingContext*>(el->webglContext())) {
+        if (h > 0 && h != wg->canvasHeight()) wg->resize(wg->canvasWidth(), h);
     }
     return JS_UNDEFINED;
 }

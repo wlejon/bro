@@ -59,6 +59,26 @@
 
 namespace bro::engine {
 
+void Engine::syncWebGLCanvasSizes() {
+    for (auto& entry : webglEntries_) {
+        auto* c = entry.context.get();
+        if (!c || !entry.element) continue;
+        // An explicit width/height attribute means the app is managing the
+        // drawing buffer (almost always element box x devicePixelRatio).
+        // Auto-fitting on top of that would undo it every frame.
+        if (!entry.element->getAttribute("width").empty() ||
+            !entry.element->getAttribute("height").empty()) {
+            continue;
+        }
+        auto& box = entry.element->layoutBox();
+        int ew = static_cast<int>(box.contentRect.width);
+        int eh = static_cast<int>(box.contentRect.height);
+        if (ew > 0 && eh > 0 && (ew != c->canvasWidth() || eh != c->canvasHeight())) {
+            c->resize(ew, eh);
+        }
+    }
+}
+
 double Engine::serverUptime() const {
     if (serverStartTime_ <= 0.0) return 0.0;
     return (util::currentTimeMs() - serverStartTime_) / 1000.0;
@@ -581,21 +601,12 @@ void Engine::run() {
 
         // 3. Bind WebGL FBO before JS callbacks (gl.bindFramebuffer(null) →
         //    canvas). Resize WebGL FBO to match element layout if needed.
-        webgl::WebGL2RenderingContext* activeWebGL = nullptr;
-        if (!webglEntries_.empty()) {
-            auto& entry = webglEntries_[0];
-            activeWebGL = entry.context.get();
-            if (entry.element) {
-                auto& box = entry.element->layoutBox();
-                int ew = static_cast<int>(box.contentRect.width);
-                int eh = static_cast<int>(box.contentRect.height);
-                if (ew > 0 && eh > 0 &&
-                    (ew != activeWebGL->canvasWidth() || eh != activeWebGL->canvasHeight())) {
-                    activeWebGL->resize(ew, eh);
-                }
-            }
-            activeWebGL->bindCanvasFBO();
-        }
+        syncWebGLCanvasSizes();
+        // NOTE: the engine has been using GL (compositing, raster handoff) since the
+        // app last ran, so no context's shadow state is live. Dropping the
+        // cache makes each context re-apply its own state on its first call.
+        webgl::WebGL2RenderingContext::invalidateCurrent();
+        if (!webglEntries_.empty()) webglEntries_[0].context->bindCanvasFBO();
 
         // 3a. Fire requestAnimationFrame callbacks. rAF is the web's
         //     per-frame gameplay hook (_process analog), so pause skips it
@@ -621,7 +632,8 @@ void Engine::run() {
             jsRuntime_->executePendingJobs();
         }
 
-        if (activeWebGL) activeWebGL->unbindCanvasFBO();
+        // Unbind whichever context the app actually left live, not a guess.
+        webgl::WebGL2RenderingContext::endAppGL();
 
         // 3c1. Materialize dirty HtmlNodes on the main thread (layout + paint
         //      + GL upload). Runs here — not on the raster thread — so JS
@@ -1064,10 +1076,14 @@ void Engine::run() {
         //      stays the frame's single pacing swap, last.
         compositeWindowHosts();
 
-        // Restore WebGL shadow state so apps with internal caches (three.js)
-        // see the same GL state they left on the previous frame. After the
-        // host-window pass, which clobbers viewport/clear-color/scissor.
-        if (activeWebGL) activeWebGL->restoreState();
+        // Compositing and the host-window pass have clobbered viewport, clear
+        // colour and scissor, so no WebGL context's shadow state is live any
+        // more. Dropping the cache makes each context re-apply its own state on
+        // its next call, which is what lets apps with internal GL caches
+        // (three.js and friends) still see the state they left — and, unlike
+        // restoring one chosen context here, it stays correct when the document
+        // holds several canvases.
+        webgl::WebGL2RenderingContext::invalidateCurrent();
 
         // Measure GPU work before swap (swap includes vsync wait).
         accumGpuMs_ += util::currentTimeMs() - tGpu;
