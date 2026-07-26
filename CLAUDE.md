@@ -135,7 +135,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 
 Bindings without a `docs/` file yet: `bro.steam` (`src/js/steam_bindings.cpp`, Steamworks via a runtime-loaded flat C API) and `bro.text` (`src/js/text_bindings.cpp`, shaping diagnostics). Read the binding source for those.
 
-Other docs: `docs/headless.md` (headless reference including input/IME injection and the WebGL2 support matrix), `docs/settings.md`, `docs/inspect.md` (DOM inspector, great in headless), `docs/system-panels.md`, `docs/multi-repo-workflow.md`, `docs/coverage.md` (Windows-only line coverage).
+Other docs: `docs/headless.md` (headless reference including input/IME injection and the WebGL2 support matrix), `docs/settings.md`, `docs/inspect.md` (DOM inspector, great in headless), `docs/system-panels.md`, `docs/embedding.md` (linking bro_engine into your own executable: host bindings, media backends, the headless driver), `docs/multi-repo-workflow.md`, `docs/coverage.md` (Windows-only line coverage).
 
 ## Namespace
 
