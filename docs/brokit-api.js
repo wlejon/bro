@@ -188,12 +188,29 @@ os.EOL;                  // '\r\n' on Windows, '\n' on Linux
 
 const cp = require('child_process');
 
-cp.execSync(command, options?);                    // → stdout string. Throws on non-zero exit
+cp.execSync(command, options?);                    // → stdout string. Throws on non-zero exit. BLOCKS
 cp.exec(command, options?, callback?);             // callback(err, stdout, stderr) or Promise<{ stdout, stderr }>
-cp.execFileSync(file, args?, options?);            // like execSync but takes file + args array
+cp.execFileSync(file, args?, options?);            // like execSync but takes file + args array. BLOCKS
 cp.execFile(file, args?, options?, callback?);     // async version of execFileSync
-cp.spawnSync(command, args?, options?);            // → { stdout, stderr, status, ... }
+cp.spawnSync(command, args?, options?);            // → { stdout, stderr, status, ... }. BLOCKS
 cp.spawn(file, args?, options?);                   // → ChildProcess (non-blocking, see below)
+
+// ── Which of these involves a shell (it matters) ──
+//
+// COMMAND STRING → a shell parses it:   exec, execSync
+//   `&`, `|`, `>`, and builtins all work, and quoting is yours to get right.
+//   Never paste a user-supplied value into one of these strings.
+//
+// FILE + ARGV ARRAY → no shell at all:  execFile, execFileSync, spawn, spawnSync
+//   Entries are passed to the child verbatim, so a path holding `&`, `(`, `)`,
+//   `^` or a quote arrives intact and cannot be executed as syntax. This is the
+//   form to use for anything the user chose — a media filename like
+//   `mix & master (final).mov` is ordinary, and only this form survives it.
+//   Pass `{ shell: true }` to spawn/spawnSync if you deliberately want the
+//   shell back (builtins, redirects).
+//
+// Only the *Sync calls block. exec and execFile run on top of spawn, so the
+// frame loop keeps running while the child works — safe to await from a UI.
 
 // ── cp.spawn: long-running children ──
 //
