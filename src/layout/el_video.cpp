@@ -24,13 +24,33 @@ using bromath::cfromColor8;
 static constexpr double kTimeUpdateIntervalSec = 0.25;
 
 
+// How much decoded audio to keep queued ahead of the mixer. Half a second
+// absorbs a slow frame or a GC pause without the ring running dry, and is
+// small enough that a seek doesn't have to throw much away.
+static constexpr double kAudioBufferSeconds = 0.5;
+
+// Streaming audio mixes at most this many channels. broaudio's live PCM
+// streams are mono/stereo, so a 5.1 track is downmixed by the decoder's
+// resampler, which folds centre and surrounds in at the right levels rather
+// than dropping them.
+static constexpr uint32_t kMaxStreamChannels = 2;
+
 ElVideo::ElVideo(render::Renderer* renderer) : renderer_(renderer) {}
-ElVideo::~ElVideo() { delete pipeline_; }
+ElVideo::~ElVideo() {
+    closeStreamingAudio();
+    delete pipeline_;
+}
 
 bool ElVideo::load(const std::string& path) {
     auto* p = new bro::video::VideoPipeline();
     const std::string resolved = elem_ ? elem_->resolveUrl(path) : path;
     if (!p->open(resolved)) { delete p; return false; }
+    // Setting .src twice used to leak the previous pipeline and leave the old
+    // audio playing under the new video.
+    closeStreamingAudio();
+    stopAudioPlayback();
+    audioClipId_ = -1;
+    delete pipeline_;
     pipeline_ = p;
     currentSrc_ = resolved;
     intrinsicWidth_ = pipeline_->frameWidth() > 0 ? pipeline_->frameWidth() : intrinsicWidth_;
@@ -48,13 +68,135 @@ bool ElVideo::load(const std::string& path) {
     waiting_ = false;
     lastTimeUpdateSec_ = -1.0;
 
-    // Predecode the audio track in parallel through an independent demuxer.
-    // VideoPipeline's main source pumps video only and drops audio packets,
-    // so we open the file a second time just for audio.
+    // Audio runs on its own demuxer: VideoPipeline's source pumps video only
+    // and drops audio packets, so the file is opened a second time. Prefer
+    // streaming; fall back to predecoding when the decoder can't resample.
     if (audioEngine_ && pipeline_->audioDecoder()) {
-        openAudioTrack(resolved);
+        if (!openStreamingAudio(resolved)) openAudioTrack(resolved);
     }
     return true;
+}
+
+// ── Streaming audio ────────────────────────────────────────────────────────
+
+bool ElVideo::openStreamingAudio(const std::string& resolvedPath) {
+    closeStreamingAudio();
+    if (!audioEngine_) return false;
+
+    std::unique_ptr<bro::video::MediaSource> source;
+    const bro::video::MediaBackend* backend = nullptr;
+    for (const auto& be : bro::video::mediaBackends()) {
+        if (!be.open) continue;
+        source = be.open(resolvedPath);
+        if (source) { backend = &be; break; }
+    }
+    if (!source || !backend || !backend->makeAudioDecoder) return false;
+
+    const uint32_t engineRate = static_cast<uint32_t>(audioEngine_->sampleRate());
+    std::unique_ptr<bro::video::AudioDecoder> decoder;
+    uint32_t trackId = 0, channels = 0;
+    for (const auto& t : source->tracks()) {
+        if (t.kind != bro::video::TrackKind::Audio) continue;
+        auto dec = backend->makeAudioDecoder(t);
+        if (!dec) continue;
+        channels = t.channels > kMaxStreamChannels ? kMaxStreamChannels : t.channels;
+        if (channels == 0) continue;
+        // The whole decision: a decoder that can hand back engine-rate PCM
+        // chunk by chunk can stream. One that can't would need a resampler
+        // carrying state across calls, which bro doesn't have.
+        if (!dec->setOutputFormat(engineRate, channels)) continue;
+        decoder = std::move(dec);
+        trackId = t.id;
+        break;
+    }
+    if (!decoder || trackId == 0) return false;
+
+    // Now that we know which track we want, stop the demuxer delivering the
+    // video packets we would only throw away.
+    source->setActiveTracks({trackId});
+
+    const int ringFrames = static_cast<int>(engineRate * (kAudioBufferSeconds * 2));
+    int streamId = audioEngine_->createStream(static_cast<int>(channels), ringFrames);
+    if (streamId < 0) return false;
+    // Created running; hold it until play(). Nothing has been pushed yet, so
+    // leaving it live would just accumulate underruns.
+    audioEngine_->setPlaybackPlaying(streamId, false);
+    audioEngine_->setPlaybackGain(streamId, muted_ ? 0.0f : static_cast<float>(volume_));
+
+    audioSource_ = source.release();
+    audioStreamDec_ = decoder.release();
+    audioSourceTrackId_ = trackId;
+    audioStreamId_ = streamId;
+    audioStreamChannels_ = static_cast<int>(channels);
+    audioStreamRate_ = static_cast<int>(engineRate);
+    audioSourceEnded_ = false;
+
+    // Prime the ring so the first play() starts on sound, not on silence.
+    pumpStreamingAudio();
+    return true;
+}
+
+void ElVideo::closeStreamingAudio() {
+    if (audioEngine_ && audioStreamId_ >= 0) audioEngine_->closeStream(audioStreamId_);
+    audioStreamId_ = -1;
+    delete audioStreamDec_;
+    audioStreamDec_ = nullptr;
+    delete audioSource_;
+    audioSource_ = nullptr;
+    audioSourceTrackId_ = 0;
+    audioStreamChannels_ = 0;
+    audioStreamRate_ = 0;
+    audioSourceEnded_ = false;
+}
+
+// Top the ring back up to kAudioBufferSeconds. Called once per frame from
+// pumpEvents() — main thread, so decode never runs on the audio thread.
+void ElVideo::pumpStreamingAudio() {
+    if (!audioEngine_ || audioStreamId_ < 0 || !audioSource_ || !audioStreamDec_) return;
+    if (audioSourceEnded_) return;
+
+    auto stats = audioEngine_->getStreamStats(audioStreamId_);
+    if (!stats.valid) return;
+
+    const int64_t target = static_cast<int64_t>(audioStreamRate_ * kAudioBufferSeconds);
+    int64_t buffered = static_cast<int64_t>(stats.bufferedFrames);
+
+    bro::video::MediaPacket pkt;
+    bro::video::AudioFrame frame;
+    while (buffered < target) {
+        if (!audioSource_->readPacket(pkt)) { audioSourceEnded_ = true; break; }
+        if (pkt.trackId != audioSourceTrackId_) continue;
+        if (!audioStreamDec_->decode(pkt, frame) || frame.samples.empty()) continue;
+        const int pushed = audioEngine_->pushStreamSamples(
+            audioStreamId_, frame.samples.data(), static_cast<int>(frame.samples.size()));
+        if (pushed <= 0) break;   // ring full: try again next frame
+        buffered += pushed;
+    }
+}
+
+// Seek: drop everything queued and re-anchor the decoder at the new position.
+// The ring has no seek of its own, so it is torn down and rebuilt — cheaper
+// than it sounds, and the alternative is half a second of stale audio.
+void ElVideo::restartStreamingAudio(double fromSeconds) {
+    if (!audioEngine_ || audioStreamId_ < 0 || !audioSource_ || !audioStreamDec_) return;
+
+    const bool wasPlaying = pipeline_ && pipeline_->isPlaying();
+    audioEngine_->closeStream(audioStreamId_);
+    audioStreamId_ = -1;
+
+    audioSource_->seekTo(static_cast<bro::video::TimeNs>(fromSeconds * 1e9));
+    audioStreamDec_->flush();
+    audioSourceEnded_ = false;
+
+    const int ringFrames = static_cast<int>(audioStreamRate_ * (kAudioBufferSeconds * 2));
+    audioStreamId_ = audioEngine_->createStream(audioStreamChannels_, ringFrames);
+    if (audioStreamId_ < 0) return;
+    audioEngine_->setPlaybackPlaying(audioStreamId_, false);
+    audioEngine_->setPlaybackGain(audioStreamId_, muted_ ? 0.0f : static_cast<float>(volume_));
+    audioEngine_->setPlaybackRate(audioStreamId_, static_cast<float>(playbackRate_));
+
+    pumpStreamingAudio();
+    if (wasPlaying) audioEngine_->setPlaybackPlaying(audioStreamId_, true);
 }
 
 void ElVideo::openAudioTrack(const std::string& resolvedPath) {
@@ -138,7 +280,14 @@ void ElVideo::startAudioPlayback(double fromSeconds) {
 }
 
 void ElVideo::stopAudioPlayback() {
-    if (!audioEngine_ || audioPlaybackId_ < 0) return;
+    if (!audioEngine_) return;
+    if (audioStreamId_ >= 0) {
+        // A live stream is halted, not destroyed: play() after ended has to
+        // be able to resume it, and a seek rebuilds it anyway.
+        audioEngine_->setPlaybackPlaying(audioStreamId_, false);
+        return;
+    }
+    if (audioPlaybackId_ < 0) return;
     audioEngine_->stopPlayback(audioPlaybackId_);
     audioPlaybackId_ = -1;
 }
@@ -146,10 +295,15 @@ void ElVideo::stopAudioPlayback() {
 void ElVideo::play() {
     if (!pipeline_) return;
     pipeline_->play();
-    // A/V sync: start audio from the current video clock position. For the
-    // short-clip MVP both advance on independent clocks; drift over a few
-    // seconds is imperceptible. Longer clips will pull the master clock from
-    // the audio output (getPlaybackPosition()) when we add streaming audio.
+    if (audioStreamId_ >= 0 && audioEngine_) {
+        // Refill first: starting a drained ring emits silence and counts it
+        // as underrun, which is exactly the "first second is missing" bug.
+        pumpStreamingAudio();
+        audioEngine_->setPlaybackPlaying(audioStreamId_, true);
+        return;
+    }
+    // Predecoded route. Both clocks advance off real time independently;
+    // drift over the short clips this route serves is imperceptible.
     if (audioPlaybackId_ < 0) {
         startAudioPlayback(currentTime());
     } else if (audioEngine_) {
@@ -158,7 +312,10 @@ void ElVideo::play() {
 }
 void ElVideo::pause() {
     if (pipeline_) pipeline_->pause();
-    if (audioEngine_ && audioPlaybackId_ >= 0) {
+    if (!audioEngine_) return;
+    if (audioStreamId_ >= 0) {
+        audioEngine_->setPlaybackPlaying(audioStreamId_, false);
+    } else if (audioPlaybackId_ >= 0) {
         audioEngine_->setPlaybackPlaying(audioPlaybackId_, false);
     }
 }
@@ -173,8 +330,10 @@ void ElVideo::seekTo(double seconds) {
     // stream is re-played past its tail, and force the next timeupdate.
     endedFired_ = false;
     lastTimeUpdateSec_ = -1.0;
-    // Re-anchor audio at the new position if we were playing.
-    if (pipeline_->isPlaying() && audioClipId_ >= 0) {
+    // Re-anchor audio at the new position.
+    if (audioStreamId_ >= 0) {
+        restartStreamingAudio(seconds);
+    } else if (pipeline_->isPlaying() && audioClipId_ >= 0) {
         startAudioPlayback(seconds);
     } else {
         stopAudioPlayback();
@@ -208,6 +367,13 @@ void ElVideo::setVolume(double v) {
 void ElVideo::setMuted(bool m) {
     if (muted_ == m) return;
     muted_ = m;
+    if (audioStreamId_ >= 0) {
+        // Gain, not stop: the ring must keep draining in step with the video
+        // clock so unmuting lands at the right place instead of half a
+        // second behind.
+        applyAudioVolume();
+        return;
+    }
     if (muted_) {
         stopAudioPlayback();
     } else if (pipeline_ && pipeline_->isPlaying() && audioClipId_ >= 0) {
@@ -219,14 +385,22 @@ void ElVideo::setPlaybackRate(double r) {
     if (r <= 0.0) r = 1.0;
     playbackRate_ = r;
     if (pipeline_) pipeline_->setRate(r);
-    if (audioEngine_ && audioPlaybackId_ >= 0) {
+    if (!audioEngine_) return;
+    if (audioStreamId_ >= 0) {
+        audioEngine_->setPlaybackRate(audioStreamId_, static_cast<float>(r));
+    } else if (audioPlaybackId_ >= 0) {
         audioEngine_->setPlaybackRate(audioPlaybackId_, static_cast<float>(r));
     }
 }
 
 void ElVideo::applyAudioVolume() {
-    if (!audioEngine_ || audioPlaybackId_ < 0) return;
-    audioEngine_->setPlaybackGain(audioPlaybackId_, static_cast<float>(volume_));
+    if (!audioEngine_) return;
+    const float gain = muted_ ? 0.0f : static_cast<float>(volume_);
+    if (audioStreamId_ >= 0) {
+        audioEngine_->setPlaybackGain(audioStreamId_, gain);
+    } else if (audioPlaybackId_ >= 0) {
+        audioEngine_->setPlaybackGain(audioPlaybackId_, static_cast<float>(volume_));
+    }
 }
 
 void ElVideo::getContentSize(float& w, float& h) {
@@ -272,7 +446,11 @@ void ElVideo::draw(render::Renderer* renderer,
 }
 
 void ElVideo::pumpEvents() {
-    if (!jsCtx_ || !elem_ || !pipeline_) return;
+    if (!pipeline_) return;
+    // Keep the audio ring ahead of the mixer. Deliberately before the jsCtx_
+    // guard: a document with no JS listeners still has to make sound.
+    pumpStreamingAudio();
+    if (!jsCtx_ || !elem_) return;
 
     // loadedmetadata fires once after a successful open(). HTMLMediaElement
     // fires loadedmetadata even before the first frame has been decoded, but
@@ -357,7 +535,9 @@ void ElVideo::pumpEvents() {
         if (loop_) {
             seekTo(0.0);
             pipeline_->play();
-            if (audioClipId_ >= 0 && !muted_) {
+            if (audioStreamId_ >= 0 && audioEngine_) {
+                audioEngine_->setPlaybackPlaying(audioStreamId_, true);
+            } else if (audioClipId_ >= 0 && !muted_) {
                 startAudioPlayback(0.0);
             }
             endedFired_ = false;
@@ -386,6 +566,10 @@ ElVideo::ElVideo(render::Renderer* renderer) : renderer_(renderer) {}
 ElVideo::~ElVideo() = default;  // pipeline_ is always null in this build
 
 bool   ElVideo::load(const std::string&) { return false; }
+bool   ElVideo::openStreamingAudio(const std::string&) { return false; }
+void   ElVideo::closeStreamingAudio() {}
+void   ElVideo::pumpStreamingAudio() {}
+void   ElVideo::restartStreamingAudio(double) {}
 void   ElVideo::openAudioTrack(const std::string&) {}
 void   ElVideo::startAudioPlayback(double) {}
 void   ElVideo::stopAudioPlayback() {}

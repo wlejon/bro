@@ -9,7 +9,7 @@
 extern "C" { typedef struct JSContext JSContext; }
 
 namespace bro::dom { class Element; }
-namespace bro::video { class VideoPipeline; }
+namespace bro::video { class VideoPipeline; class MediaSource; class AudioDecoder; }
 namespace broaudio { class Engine; }
 
 namespace bro::layout {
@@ -107,13 +107,41 @@ private:
     double lastTimeUpdateSec_ = -1.0;
     std::string currentSrc_;
 
-    // Audio is predecoded at load() into a single broaudio clip and played
-    // back via a clip playback instance. The first iteration buffers the
-    // whole audio track; streaming audio decode arrives with the decode
-    // thread. audioClipId_ = -1 when the source has no audio track.
+    // Audio takes one of two routes, decided at load() by whether the
+    // backend's decoder can deliver PCM at the audio engine's sample rate
+    // (AudioDecoder::setOutputFormat).
+    //
+    //  - STREAMING (audioStreamId_ >= 0): a live broaudio PCM ring topped up
+    //    from pumpEvents() as it drains. The only workable route for real
+    //    media — a two-hour film's audio track is gigabytes decoded, and
+    //    decoding it up front would stall load() for a minute.
+    //  - PREDECODED (audioClipId_ >= 0): the whole track decoded into one
+    //    clip at load(). Used when the decoder can't resample, which today
+    //    means bro's built-in Opus path (libopus decodes only to its own
+    //    rates, and bro's resampler is one-shot). Fine for the short clips
+    //    that path serves.
+    //
+    // Both -1 when the source has no audio track.
     broaudio::Engine* audioEngine_ = nullptr;
     int audioClipId_ = -1;
     int audioPlaybackId_ = -1;
+
+    // Streaming route. Its own demuxer + decoder: VideoPipeline's source is
+    // filtered down to the video track, and interleaving two consumers on one
+    // demuxer would need a packet queue between them.
+    bro::video::MediaSource* audioSource_ = nullptr;
+    bro::video::AudioDecoder* audioStreamDec_ = nullptr;
+    uint32_t audioSourceTrackId_ = 0;
+    int audioStreamId_ = -1;
+    int audioStreamChannels_ = 0;
+    int audioStreamRate_ = 0;
+    bool audioSourceEnded_ = false;
+
+    bool openStreamingAudio(const std::string& resolvedPath);
+    void closeStreamingAudio();
+    void pumpStreamingAudio();
+    void restartStreamingAudio(double fromSeconds);
+
     void openAudioTrack(const std::string& resolvedPath);
     void startAudioPlayback(double fromSeconds);
     void stopAudioPlayback();
