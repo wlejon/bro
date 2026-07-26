@@ -91,10 +91,18 @@ assert(fileDropCount === 1,
 
 const files = fileDropEvt.dataTransfer.files;
 assert(files.length === 2, 'both dropped files present, got ' + files.length);
-const names = [files[0].name || files[0].path, files[1].name || files[1].path];
-assert(names.every((n) => typeof n === 'string'), 'each file has name/path');
-assert(names.some((n) => n.indexOf('a.png') !== -1), 'first path present: ' + names);
-assert(names.some((n) => n.indexOf('b.txt') !== -1), 'second path present: ' + names);
+// `name` is the basename and `path` the full location, as in the real
+// DataTransfer. An app displaying file.name — the obvious thing to display —
+// must get a filename, not an absolute path.
+const paths = [files[0].path, files[1].path];
+assert(paths.some((p) => p === '/tmp/a.png'), 'first full path present: ' + paths);
+assert(paths.some((p) => p === '/tmp/b.txt'), 'second full path present: ' + paths);
+
+const names = [files[0].name, files[1].name];
+assert(names.some((n) => n === 'a.png'), 'first name is the basename: ' + names);
+assert(names.some((n) => n === 'b.txt'), 'second name is the basename: ' + names);
+assert(names.every((n) => n.indexOf('/') === -1 && n.indexOf('\\') === -1),
+       'name carries no directory part: ' + names);
 
 // A single-path drop still works and reports one file.
 let singleEvt = null;

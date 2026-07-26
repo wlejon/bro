@@ -7,6 +7,7 @@
 
 #include <string>
 #include <cstring>
+#include <filesystem>
 #include <vector>
 
 extern "C" {
@@ -455,8 +456,12 @@ static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& ev
         JSValue filesArr = JS_NewArray(ctx);
         for (size_t i = 0; i < files.size(); i++) {
             JSValue fileObj = JS_NewObject(ctx);
+            // `name` is the basename and `path` the full location, as in the
+            // real DataTransfer. Setting both to the path made every app that
+            // displayed file.name — the obvious thing to display — print an
+            // absolute path instead of a filename.
             JS_SetPropertyStr(ctx, fileObj, "name",
-                JS_NewString(ctx, files[i].c_str()));
+                JS_NewString(ctx, std::filesystem::path(files[i]).filename().string().c_str()));
             JS_SetPropertyStr(ctx, fileObj, "path",
                 JS_NewString(ctx, files[i].c_str()));
             JS_SetPropertyInt64(ctx, filesArr, static_cast<int64_t>(i), fileObj);
