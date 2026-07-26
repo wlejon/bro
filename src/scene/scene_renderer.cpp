@@ -1,6 +1,7 @@
 #include "scene/scene_renderer.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer_internal.h"
+#include "scene/gl_available.h"
 #include "scene/skinned_mesh_node.h"
 #include "scene/decal_node.h"
 #include "canvas/canvas_scene.h"
@@ -391,6 +392,22 @@ bool SceneRenderer::cameraCulled(SceneNode* n) const {
 }
 
 void SceneRenderer::render3D() {
+    // No GL context, no 3D pass. Nothing below this line is safe without one —
+    // the very first call (a shader compile in ensureMeshPipeline) would jump
+    // through a null glad pointer. The engine already declines to hand out a
+    // scene context on the CPU-raster path, so reaching here means an embedder
+    // built a SceneGraph directly; warn once and leave the 2D overlay path in
+    // SceneGraph::render() to carry on.
+    if (!glFunctionsLoaded()) {
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            LOG_WARN("scene: no GL context — the 3D pass is disabled for this "
+                     "process (CPU raster path). 2D canvas content still draws.");
+        }
+        return;
+    }
+
     // First frame that reaches here is the first point a GL context is
     // guaranteed current, so this is where the depth convention gets decided.
     // Idempotent; every later call is a load-and-compare. The graph may have

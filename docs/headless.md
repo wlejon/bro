@@ -616,6 +616,8 @@ undefined; this layer passes calls through and does not police it.
 - Uses `RasterRenderer`: CPU-only Skia with real platform-native fonts
 - Canvas 2D rendered via software command replay
 - No WebGL support (apps fall back gracefully)
+- No 3D scene: `canvas.getContext('scene')` returns `null`, so branch on it (`const s = canvas.getContext('scene'); if (!s) { /* 2D fallback */ }`). The 3D renderer is OpenGL end to end and there is no GL context here. Note that `bro.gpu.available` is **not** the gate — it reports the ML/compute backend (CUDA/Metal), which is unrelated to whether a GL context exists.
+- The same applies when a headless boot *tries* for GPU and fails: if SDL can't open a video device the engine logs `falling back to CPU raster rendering` and behaves exactly as `--no-gpu` from then on
 - Screenshots captured directly from the Skia raster surface
 - Input simulation (click, mouseDown, etc.) works fully, hit testing, event dispatch, focus management all function without a GPU
 

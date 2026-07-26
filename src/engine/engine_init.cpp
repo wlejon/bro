@@ -869,9 +869,21 @@ void Engine::initAppRealm() {
                 return JS_NULL;
             });
     } else {
-        // CPU path: 2D canvas + scene graph, no WebGL
+        // CPU path: 2D canvas only — no WebGL, and no 3D scene.
         js::DomBindings::setGetContextFactory(jsRuntime_->getContext(),
             [this](JSContext* ctx, dom::Element* el, const std::string& type) -> JSValue {
+#if BRO_WITH_3D
+                // getContext('scene') returns null here: the 3D renderer is
+                // OpenGL from top to bottom and there is no GL context on this
+                // path (--no-gpu, or a headless boot whose SDL video init failed
+                // and fell back to raster above). Handing back a live SceneGraph used
+                // to look like it worked right up to the first flush(), which
+                // rendered it and segfaulted on an unresolved glad pointer.
+                // Null is the documented "no scene here" answer and apps
+                // already branch on it — `const s = c.getContext('scene');
+                // if (!s) ...`.
+                if (type == "scene") return JS_NULL;
+#endif
                 auto canvasScene = std::make_unique<canvas::CanvasScene>(renderer_.get());
                 if (el) {
                     // Honour width/height attributes set before getContext() —
@@ -904,33 +916,6 @@ void Engine::initAppRealm() {
                 canvasScene->init(nullptr);
                 canvasSceneRegistry_[canvasScene->sceneId()] = csPtr;
                 canvasScenes_.push_back(std::move(canvasScene));
-#if BRO_WITH_3D
-                if (type == "scene") {
-                    int cw = viewportWidth_, ch = viewportHeight_;
-                    if (el) {
-                        auto& box = el->layoutBox();
-                        if (box.contentRect.width > 0) cw = static_cast<int>(box.contentRect.width);
-                        if (box.contentRect.height > 0) ch = static_cast<int>(box.contentRect.height);
-                    }
-                    auto graph = std::make_unique<scene::SceneGraph>();
-                    graph->setCanvasScene(csPtr);
-                    graph->setPhysicsWorld(physicsWorld_.get());
-                    graph->setCanvasSize(cw, ch);
-                    auto* graphPtr = graph.get();
-                    if (el) {
-                        el->setSceneGraph(graphPtr);
-                        graphPtr->setFBOTextureCallback([el](unsigned int tex) {
-                            el->setSceneGraphFBOTexture(tex);
-                        });
-                    }
-                    graphPtr->setGizmoProvider([this](scene::SceneGraph* g) {
-                        return gizmo_ ? gizmo_->meshesForRender(g)
-                                       : std::vector<scene::MeshNode*>{};
-                    });
-                    sceneGraphs_.push_back({std::move(graph), el});
-                    return js::SceneBindings::wrapSceneGraph(ctx, graphPtr);
-                }
-#endif  // BRO_WITH_3D
                 return js::CanvasBindings::wrapContext2D(ctx, csPtr);
             });
     }

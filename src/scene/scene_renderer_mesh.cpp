@@ -1,6 +1,7 @@
 #include "scene/scene_renderer.h"
 #include "scene/scene_graph.h"
 #include "scene/scene_renderer_internal.h"
+#include "scene/gl_available.h"
 #include "scene/skinned_mesh_node.h"
 #include "canvas/canvas_scene.h"
 #include "util/log.h"
@@ -103,6 +104,11 @@ void SceneRenderer::queryMeshUniformLocs(GLuint prog, MeshDrawLocs& d,
 
 void SceneRenderer::ensureMeshPipeline() {
     if (meshProgram_) return;
+    // The other way in is reflection-probe capture, which JS can request
+    // without a render pass having run. Leaving meshProgram_ at 0 makes the
+    // capture re-queue itself, which is exactly the "pipeline isn't up yet"
+    // case it already handles.
+    if (!glFunctionsLoaded()) return;
 
     const std::string meshFs = withAtmosphere(kMeshFragSrc);
     meshProgram_ = linkProgram(kMeshVertSrc, meshFs.c_str(), "Mesh program");

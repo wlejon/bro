@@ -6,7 +6,9 @@
 # Discovers all tests/*/test_*.js files, runs each via bro-headless, and reports
 # pass/fail with a summary. Runs on the GPU path (headless's default) so the
 # tests exercise the same renderer, WebGL, and layer compositing that ship —
-# CPU-only raster is a different code path and would leave those untested.
+# CPU-only raster is a different code path and would leave those untested. A
+# test whose engine silently fell back to raster is reported as a FAIL for that
+# reason (see run_one_test); BRO_TEST_ALLOW_RASTER=1 permits it.
 #
 # Parallelism: test GROUPS (per-directory) run concurrently, tests WITHIN a
 # group stay serial — that preserves intra-group ordering/resource assumptions
@@ -173,6 +175,22 @@ run_one_test() {
     else
         OUTPUT=$("$BRO" "$TEST_APP" "$TEST_FILE" 2>&1)
         STATUS=$?
+    fi
+
+    # The engine falls back to CPU raster when it can't get a GL context, which
+    # for a test run is an infrastructure failure wearing a warning's clothes:
+    # WebGL, layer compositing, and the whole 3D scene silently stop being
+    # exercised, so a green result proves nothing about the code that ships. It
+    # also used to be flaky per-process (one test losing the xvfb display while
+    # its neighbours kept it), which reads as "one weird test" rather than "no
+    # GPU here". Fail loudly, pass or crash. BRO_TEST_ALLOW_RASTER=1 opts out
+    # for a deliberate raster-only run on a box with no GL at all.
+    if [[ "${BRO_TEST_ALLOW_RASTER:-0}" != "1" ]] &&
+       [[ "$OUTPUT" == *"falling back to CPU raster rendering"* ]]; then
+        echo "  FAIL  $REL  (NO GPU — SDL/GL init failed, engine fell back to CPU raster)"
+        echo "$OUTPUT" | grep -iE "SDL|GPU init failed" | head -5 | sed 's/^/        /'
+        echo "        Set BRO_TEST_ALLOW_RASTER=1 to run anyway (GPU paths untested)."
+        return 1
     fi
 
     if [[ $STATUS -eq 0 ]]; then
