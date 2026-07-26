@@ -11,6 +11,7 @@
 #include "dom/element.h"
 #include "dom/event.h"
 #include "js/event_dispatch.h"
+#include "util/log.h"
 #include "video/audio_decoder.h"
 #include "video/media_backend.h"
 #include "video/video_pipeline.h"
@@ -133,6 +134,8 @@ bool ElVideo::openStreamingAudio(const std::string& resolvedPath) {
 
     // Prime the ring so the first play() starts on sound, not on silence.
     pumpStreamingAudio();
+    LOG_INFO("video: audio streaming (%d ch @ %d Hz, %.0f ms ring)",
+             audioStreamChannels_, audioStreamRate_, kAudioBufferSeconds * 2000.0);
     return true;
 }
 
@@ -260,6 +263,10 @@ void ElVideo::openAudioTrack(const std::string& resolvedPath) {
         audioClipId_ = audioEngine_->createClip(pcm.data(), numFrames,
                                                  static_cast<int>(channels));
     }
+    LOG_INFO("video: audio predecoded (%u ch @ %u Hz, %.1f s, %.1f MB) — this "
+             "decoder cannot resample, so the whole track is resident",
+             channels, sampleRate, numFrames / double(engineRate),
+             pcm.size() * sizeof(float) / (1024.0 * 1024.0));
 }
 
 void ElVideo::startAudioPlayback(double fromSeconds) {
@@ -411,7 +418,8 @@ void ElVideo::getContentSize(float& w, float& h) {
 void ElVideo::draw(render::Renderer* renderer,
                    dom::Element* elem,
                    const htmlayout::layout::LayoutBox& box,
-                   float offsetX, float offsetY) {
+                   float offsetX, float offsetY,
+                   const std::string& objectFit) {
     if (!renderer || !elem) return;
 
     const float x = box.contentRect.x + offsetX;
@@ -435,14 +443,44 @@ void ElVideo::draw(render::Renderer* renderer,
     // read tolerance (same discipline as the rest of the pipeline state).
 
     if (pipeline_->hasFrame() && !pipeline_->currentRgba().empty()) {
+        const float fw = static_cast<float>(pipeline_->frameWidth());
+        const float fh = static_cast<float>(pipeline_->frameHeight());
+
+        float dx = x, dy = y, dw = w, dh = h;
+        bool needClip = false;
+        if (objectFit != "fill" && fw > 0 && fh > 0) {
+            float scale = 1.0f;
+            if (objectFit == "contain")          scale = std::min(w / fw, h / fh);
+            else if (objectFit == "cover")       scale = std::max(w / fw, h / fh);
+            else if (objectFit == "none")        scale = 1.0f;
+            else if (objectFit == "scale-down")  scale = std::min(1.0f, std::min(w / fw, h / fh));
+            dw = fw * scale;
+            dh = fh * scale;
+            // object-position is not plumbed through yet; centre, which is
+            // its default and what a viewport wants anyway.
+            dx = x + (w - dw) * 0.5f;
+            dy = y + (h - dh) * 0.5f;
+            // Letterbox bars, and the backdrop for a cover crop.
+            renderer->fillRect(x, y, w, h, cfromColor8({0, 0, 0, 255}));
+            // cover and none can spill outside the content box.
+            needClip = (dw > w + 0.5f) || (dh > h + 0.5f) ||
+                       dx < x - 0.5f || dy < y - 0.5f;
+        }
+
+        if (needClip) { renderer->save(); renderer->setClip(x, y, w, h); }
         renderer->drawPixelsRGBA(pipeline_->currentRgba().data(),
                                   pipeline_->frameWidth(),
                                   pipeline_->frameHeight(),
                                   pipeline_->frameWidth() * 4,
-                                  x, y, w, h);
+                                  dx, dy, dw, dh);
+        if (needClip) renderer->restore();
     } else {
         renderer->fillRect(x, y, w, h, cfromColor8({0, 0, 0, 255}));
     }
+}
+
+void ElVideo::advancePipeline() {
+    if (pipeline_) pipeline_->advance();
 }
 
 void ElVideo::pumpEvents() {
@@ -581,6 +619,7 @@ double ElVideo::currentTime() const { return 0.0; }
 double ElVideo::duration() const { return 0.0; }
 bool   ElVideo::isReady() const { return false; }
 bool   ElVideo::isEnded() const { return false; }
+void   ElVideo::advancePipeline() {}
 void   ElVideo::applyAudioVolume() {}
 
 void ElVideo::setVolume(double v) {
@@ -601,7 +640,8 @@ void ElVideo::getContentSize(float& w, float& h) {
 
 void ElVideo::draw(render::Renderer* renderer, dom::Element* elem,
                    const htmlayout::layout::LayoutBox& box,
-                   float offsetX, float offsetY) {
+                   float offsetX, float offsetY,
+                   const std::string& /*objectFit*/) {
     if (!renderer || !elem) return;
     renderer->fillRect(box.contentRect.x + offsetX, box.contentRect.y + offsetY,
                        box.contentRect.width, box.contentRect.height,

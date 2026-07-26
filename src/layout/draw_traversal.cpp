@@ -1350,7 +1350,14 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
         }
         auto* videoCtrl = elem->videoControl();
         if (videoCtrl) {
-            videoCtrl->draw(renderer_, elem, box, offsetX, offsetY);
+            // object-fit, same as <img>. A player sizes its viewport to the
+            // window and lets the picture letterbox inside it; without this
+            // every video is stretched to whatever shape the box happens to
+            // be.
+            std::string videoFit = "fill";
+            if (auto ofIt = style.find("object-fit"); ofIt != style.end() && !ofIt->second.empty())
+                videoFit = ofIt->second;
+            videoCtrl->draw(renderer_, elem, box, offsetX, offsetY, videoFit);
         }
         // <img> replaced content. Layout already sized the box via
         // intrinsicSize() in layout_node_adapter; here we paint the raster

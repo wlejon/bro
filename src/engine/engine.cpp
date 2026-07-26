@@ -300,14 +300,15 @@ bool Engine::hasPointerCapture(const dom::Element* target, int pointerId) const 
 // events (loadedmetadata, timeupdate, ended) on each ElVideo. Called from
 // the main thread because QuickJS is not thread-safe; ElVideo::draw() runs
 // on the raster thread and deliberately does not touch JS.
-static void pumpVideoEventsWalk(dom::Element* el, bool& anyPlaying) {
+static void pumpVideoEventsWalk(dom::Element* el, bool& anyPlaying, bool advance) {
     if (!el) return;
     if (auto* v = el->videoControl()) {
+        if (advance) v->advancePipeline();
         v->pumpEvents();
         if (v->isPlaying()) anyPlaying = true;
     }
     el->forEachComposedChild([&](dom::Element* c) {
-        pumpVideoEventsWalk(c, anyPlaying);
+        pumpVideoEventsWalk(c, anyPlaying, advance);
     });
 }
 void Engine::pumpVideoEvents() {
@@ -319,7 +320,13 @@ void Engine::pumpVideoEvents() {
     if (!mediaEventsArmed_) return;
     if (!document_) return;
     bool anyPlaying = false;
-    pumpVideoEventsWalk(document_->documentElement(), anyPlaying);
+    // Headless has no raster thread and only renders when a script asks for a
+    // screenshot, so ElVideo::draw() — which is what normally pulls the
+    // pipeline forward — may never run. Drive it from here instead: a playing
+    // <video> then advances across flush() the way the documentation has
+    // always said it does, and there is no concurrent reader to race.
+    const bool advanceHere = (displayMode_ == DisplayMode::Headless);
+    pumpVideoEventsWalk(document_->documentElement(), anyPlaying, advanceHere);
     // Playing <video> elements don't mutate the DOM, so nothing else would
     // mark the document dirty. Force a re-raster each frame while any video
     // is advancing so ElVideo::draw() keeps calling pipeline_->advance() and

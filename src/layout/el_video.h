@@ -23,10 +23,13 @@ public:
     explicit ElVideo(render::Renderer* renderer);
     ~ElVideo();
 
+    /// `objectFit` is the CSS object-fit keyword: "fill" (default, stretch),
+    /// "contain", "cover", "none" or "scale-down".
     void draw(render::Renderer* renderer,
               dom::Element* elem,
               const htmlayout::layout::LayoutBox& box,
-              float offsetX, float offsetY);
+              float offsetX, float offsetY,
+              const std::string& objectFit = "fill");
 
     void setElement(dom::Element* el) { elem_ = el; }
     dom::Element* element() const { return elem_; }
@@ -82,6 +85,16 @@ public:
     // passed via setJsContext(). draw() runs on the raster thread, so the
     // engine pumps events from its main loop instead.
     void pumpEvents();
+
+    // Pull the pipeline up to its clock without drawing anything.
+    //
+    // Normally draw() does this, because the frame it decodes is the frame it
+    // is about to present. Headless has no raster thread and only renders when
+    // a script asks for a screenshot, so without this a playing <video> sits
+    // at 0:00 through any amount of flush() — the clock runs but nothing ever
+    // consumes it. Safe there precisely because nothing else is touching the
+    // pipeline concurrently; the windowed engine must NOT call it.
+    void advancePipeline();
 
 private:
     render::Renderer* renderer_;
