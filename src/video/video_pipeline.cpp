@@ -118,6 +118,7 @@ void VideoPipeline::restartAt(TimeNs target) {
     if (adec_) adec_->flush();
     while (!staged_.empty()) { recycle(std::move(staged_.front())); staged_.pop_front(); }
     recycle(std::move(cur_));
+    drained_ = false;
     endOfStream_ = false;
 }
 
@@ -243,7 +244,10 @@ bool VideoPipeline::decodePacket(const MediaPacket& pkt, TimeNs nowNs) {
         return false;
     }
     if (!vdec_->decode(pkt)) return false;
+    return collectFrames(nowNs);
+}
 
+bool VideoPipeline::collectFrames(TimeNs nowNs) {
     VideoFrame frame;
     bool changed = false;
     while (vdec_->nextFrame(frame)) {
@@ -275,6 +279,18 @@ bool VideoPipeline::decodePacket(const MediaPacket& pkt, TimeNs nowNs) {
 bool VideoPipeline::pumpOne(TimeNs nowNs, bool* changed) {
     MediaPacket pkt;
     if (!source_->readPacket(pkt)) {
+        // Out of packets is not out of pictures. A codec that reorders is
+        // still holding its whole reorder buffer — sixteen frames for HEVC —
+        // waiting for a packet that will never arrive. Tell it the stream has
+        // ended and take what comes out; only then is the file really over.
+        // Without this the tail of every such file is simply never shown, and
+        // the playhead stops a second short of the end.
+        if (!drained_) {
+            drained_ = true;
+            vdec_->drain();
+            if (collectFrames(nowNs) && changed) *changed = true;
+            return true;
+        }
         endOfStream_ = true;
         return false;
     }

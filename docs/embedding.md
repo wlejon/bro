@@ -121,6 +121,13 @@ Rules worth knowing:
   yours. Reserve logging for a file you recognised but could not read.
 - Decoders come from the same backend that opened the source: `codecPrivate` is
   written by that demuxer and packets carry its framing.
+- Implement `VideoDecoder::drain()` if your codec reorders. The pipeline calls
+  it once the demuxer runs out of packets, and then keeps pulling `nextFrame()`
+  until the buffer is empty. H.264 and HEVC hold their whole DPB back — sixteen
+  pictures — waiting for a packet that decides the order, so a decoder that
+  ignores `drain()` never shows the last second of any file it plays. For
+  libavcodec it is `avcodec_send_packet(ctx, nullptr)`. `flush()` must clear
+  the drained state too, or a seek away from the end will not decode.
 - `TrackInfo::backendPrivate` is a `shared_ptr<void>` your source can hang
   anything on for your decoder to read back. `codecPrivate` is a flat blob,
   which is all WebM needs; a richer decoder usually wants a whole parameter

@@ -215,25 +215,32 @@ bool grabThumbnails(const std::string& path, int count, int height,
         MediaPacket pkt;
         auto walkTo = [&] {
             int walked = 0;
+            bool drained = false;
             for (int guard = 0; guard < 4096; ++guard) {
                 if (got && (frame.pts >= target || walked >= walkBudget)) break;
-                if (!opened.source->readPacket(pkt)) break;
-                if (pkt.trackId != track->id) continue;
-                if (!dec->decode(pkt)) continue;
-                while (dec->nextFrame(frame)) { got = true; ++walked; }
+                if (!opened.source->readPacket(pkt)) {
+                    // Out of packets is not out of pictures. A reordering
+                    // codec is still holding its buffer, and that buffer is
+                    // the tail of the file — the last thumbnails of the strip
+                    // live in it and nothing else will ever produce them.
+                    if (drained) break;
+                    drained = true;
+                    dec->drain();
+                } else {
+                    if (pkt.trackId != track->id) continue;
+                    if (!dec->decode(pkt)) continue;
+                }
+                // Stop on the first picture at or after the target rather than
+                // consuming everything the decoder offers: the overshoot would
+                // be thrown away, and the next thumbnail resumes from here.
+                while (dec->nextFrame(frame)) {
+                    got = true;
+                    ++walked;
+                    if (frame.pts >= target) break;
+                }
             }
         };
         walkTo();
-        if (!got && !needSeek) {
-            // Ran into the end of the file while decoding on from the previous
-            // thumbnail — the last frames are still inside the decoder and
-            // nothing here drains it. Go back for the keyframe instead of
-            // giving up on the tail of the strip.
-            if (opened.source->seekTo(target)) {
-                dec->flush();
-                walkTo();
-            }
-        }
         if (!got) break;
         pos = frame.pts;
 

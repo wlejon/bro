@@ -53,6 +53,17 @@ public:
     // is why the built-in path never needed this.
     virtual void flush() {}
 
+    // No more packets are coming. Reordering codecs hold finished pictures
+    // back — an HEVC decoder can be sitting on sixteen of them — and without
+    // being told the stream has ended they wait forever for a packet that
+    // decides the order. After this, nextFrame() keeps returning true until
+    // that buffer is empty. Nothing else changes: decode() after a flush()
+    // starts a fresh stream, which is what a seek away from the end does.
+    //
+    // Cost of not calling it: the tail of every reordered file is invisible.
+    // VP8/VP9 don't reorder, which is why the built-in path never needed it.
+    virtual void drain() {}
+
     // Signal to the encoder peer that a keyframe is needed to recover
     // from unreferenced frames after a loss burst.
     virtual bool needsKeyframe() const { return false; }

@@ -331,6 +331,13 @@ console.log(v.currentTime, '/', v.duration);
 v.stepFrame(1);                         // next picture
 v.stepFrame(-1);                        // back to where you were, exactly
 
+// Stepping forward reaches the real last picture, which is not something you
+// can take for granted elsewhere: a codec that reorders holds its whole buffer
+// back until it is told the stream ended, and a player that never tells it
+// silently loses that many frames off the end of every file. bro drains the
+// decoder at end of stream, so the last picture lands one frame interval
+// before `duration` — the width of its own presentation interval, and no more.
+
 // ---------------------------------------------------------------------------
 // Audio: volume / muted / playbackRate
 // ---------------------------------------------------------------------------

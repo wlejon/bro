@@ -115,6 +115,10 @@ private:
     /// True if the displayed frame changed.
     bool decodePacket(const MediaPacket& pkt, TimeNs nowNs);
 
+    /// Pull every picture the decoder is willing to hand over and file it.
+    /// True if the displayed frame changed.
+    bool collectFrames(TimeNs nowNs);
+
     /// Restart the demuxer at the keyframe at or before `target`, dropping
     /// every picture decoded from the old position.
     void restartAt(TimeNs target);
@@ -168,6 +172,10 @@ private:
     int frameH_ = 0;
     bool rgbaStale_ = false;        // cur_ has changed since the last convert
 
+    // The demuxer has run out of packets and the decoder has been told so.
+    // Separate from endOfStream_ because there is a whole reorder buffer of
+    // pictures still to come out between those two moments.
+    bool drained_ = false;
     bool endOfStream_ = false;
 };
 
