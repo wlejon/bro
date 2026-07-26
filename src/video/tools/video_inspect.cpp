@@ -17,11 +17,24 @@ namespace {
 
 const char* codecName(Codec c) {
     switch (c) {
-        case Codec::VP8:    return "VP8";
-        case Codec::VP9:    return "VP9";
-        case Codec::Opus:   return "Opus";
-        case Codec::Vorbis: return "Vorbis";
-        default:            return "unknown";
+        case Codec::VP8:        return "VP8";
+        case Codec::VP9:        return "VP9";
+        case Codec::AV1:        return "AV1";
+        case Codec::H264:       return "H.264";
+        case Codec::H265:       return "H.265";
+        case Codec::MPEG2Video: return "MPEG-2";
+        case Codec::MPEG4:      return "MPEG-4";
+        case Codec::ProRes:     return "ProRes";
+        case Codec::Opus:       return "Opus";
+        case Codec::Vorbis:     return "Vorbis";
+        case Codec::AAC:        return "AAC";
+        case Codec::MP3:        return "MP3";
+        case Codec::FLAC:       return "FLAC";
+        case Codec::AC3:        return "AC-3";
+        case Codec::EAC3:       return "E-AC-3";
+        case Codec::PCM:        return "PCM";
+        case Codec::Other:      return "other";
+        default:                return "unknown";
     }
 }
 

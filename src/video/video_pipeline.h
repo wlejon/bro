@@ -1,6 +1,7 @@
 #pragma once
 
 #include "video/audio_decoder.h"
+#include "video/media_backend.h"
 #include "video/media_clock.h"
 #include "video/media_source.h"
 #include "video/video_decoder.h"
@@ -74,6 +75,11 @@ public:
 
 private:
     bool decodePacket(const MediaPacket& pkt);
+
+    /// Wire an opened source and its backend's decoders into this pipeline.
+    /// False when the file carries no video track this backend can decode,
+    /// with the pipeline left clean so open() can try the next one.
+    bool adoptSource(const MediaBackend& backend, std::unique_ptr<MediaSource> source);
 
     std::unique_ptr<MediaSource> source_;
     std::unique_ptr<VideoDecoder> vdec_;

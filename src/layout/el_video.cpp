@@ -12,8 +12,8 @@
 #include "dom/event.h"
 #include "js/event_dispatch.h"
 #include "video/audio_decoder.h"
+#include "video/media_backend.h"
 #include "video/video_pipeline.h"
-#include "video/webm_demuxer.h"
 
 namespace bro::layout {
 
@@ -58,32 +58,43 @@ bool ElVideo::load(const std::string& path) {
 }
 
 void ElVideo::openAudioTrack(const std::string& resolvedPath) {
-    bro::video::WebMDemuxer audioDemux;
-    if (!audioDemux.open(resolvedPath)) return;
+    // Open the file a second time for audio alone: VideoPipeline's source
+    // pumps video and drops audio packets. Go through the backend registry
+    // for the same reason the pipeline does — a host application's backend
+    // has to be able to deliver sound, not just picture. Hardcoding a WebM
+    // demuxer and an Opus decoder here would have left `<video>` silent under
+    // every other backend.
+    std::unique_ptr<bro::video::MediaSource> audioSource;
+    const bro::video::MediaBackend* backend = nullptr;
+    for (const auto& be : bro::video::mediaBackends()) {
+        if (!be.open) continue;
+        audioSource = be.open(resolvedPath);
+        if (audioSource) { backend = &be; break; }
+    }
+    if (!audioSource || !backend || !backend->makeAudioDecoder) return;
 
     uint32_t audioTrackId = 0;
     uint32_t sampleRate = 0, channels = 0;
-    for (const auto& t : audioDemux.tracks()) {
-        if (t.kind == bro::video::TrackKind::Audio && t.codec == bro::video::Codec::Opus) {
-            audioTrackId = t.id;
-            sampleRate = t.sampleRate;
-            channels = t.channels;
-            break;
-        }
+    std::unique_ptr<bro::video::AudioDecoder> decoder;
+    for (const auto& t : audioSource->tracks()) {
+        if (t.kind != bro::video::TrackKind::Audio) continue;
+        decoder = backend->makeAudioDecoder(t);
+        if (!decoder) continue;          // codec this backend can't decode
+        audioTrackId = t.id;
+        sampleRate = t.sampleRate;
+        channels = t.channels;
+        break;
     }
-    if (audioTrackId == 0) return;
+    if (!decoder || audioTrackId == 0 || sampleRate == 0 || channels == 0) return;
 
-    auto decoder = bro::video::createOpusDecoder(sampleRate, channels);
-    if (!decoder) return;
-
-    // Drain Opus packets → PCM. For short clips (calling-app MVP is on the
+    // Drain audio packets → PCM. For short clips (calling-app MVP is on the
     // order of seconds) this fits comfortably in memory. Longer clips will
     // move to a streaming source fed by the decode thread.
     std::vector<float> pcm;
     pcm.reserve(static_cast<size_t>(sampleRate) * channels * 2);
     bro::video::MediaPacket pkt;
     bro::video::AudioFrame frame;
-    while (audioDemux.readPacket(pkt)) {
+    while (audioSource->readPacket(pkt)) {
         if (pkt.trackId != audioTrackId) continue;
         if (!decoder->decode(pkt, frame)) continue;
         pcm.insert(pcm.end(), frame.samples.begin(), frame.samples.end());

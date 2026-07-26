@@ -1,7 +1,9 @@
 #include "video/video_pipeline.h"
 
-#include "video/webm_demuxer.h"
+#include "video/media_backend.h"
 #include "video/yuv_to_rgb.h"
+
+#include "util/log.h"
 
 namespace bro::video {
 
@@ -11,34 +13,66 @@ VideoPipeline::VideoPipeline() {
 
 VideoPipeline::~VideoPipeline() = default;
 
-bool VideoPipeline::open(const std::string& path) {
-    auto demux = std::make_unique<WebMDemuxer>();
-    if (!demux->open(path)) return false;
+// Try one backend against an already-opened source. Returns false if the
+// file has no video track this backend can decode, leaving the pipeline
+// clean for the next candidate.
+bool VideoPipeline::adoptSource(const MediaBackend& backend,
+                                std::unique_ptr<MediaSource> source) {
+    videoTrackId_ = 0;
+    audioTrackId_ = 0;
+    audioRate_ = 0;
+    audioChannels_ = 0;
+    duration_ = 0;
+    frameW_ = 0;
+    frameH_ = 0;
+    vdec_.reset();
+    adec_.reset();
 
-    Codec videoCodec = Codec::Unknown;
-    for (const auto& t : demux->tracks()) {
+    for (const auto& t : source->tracks()) {
         if (t.kind == TrackKind::Video && videoTrackId_ == 0) {
+            auto dec = backend.makeVideoDecoder ? backend.makeVideoDecoder(t) : nullptr;
+            if (!dec) continue;           // unsupported codec: keep looking
+            vdec_ = std::move(dec);
             videoTrackId_ = t.id;
-            videoCodec = t.codec;
             frameW_ = static_cast<int>(t.width);
             frameH_ = static_cast<int>(t.height);
             duration_ = t.durationNs;
         } else if (t.kind == TrackKind::Audio && audioTrackId_ == 0) {
+            // Audio is optional: a file whose audio codec this backend can't
+            // handle still plays, silently.
+            auto dec = backend.makeAudioDecoder ? backend.makeAudioDecoder(t) : nullptr;
+            if (!dec) continue;
+            adec_ = std::move(dec);
             audioTrackId_ = t.id;
             audioRate_ = t.sampleRate;
             audioChannels_ = t.channels;
-            adec_ = createOpusDecoder(audioRate_, audioChannels_);
         }
     }
 
-    if (videoTrackId_ == 0 ||
-        (videoCodec != Codec::VP9 && videoCodec != Codec::VP8)) {
+    if (!vdec_) {
+        adec_.reset();
         return false;
     }
-
-    vdec_ = createVpxDecoder(videoCodec, /*lowLatency=*/false);
-    source_ = std::move(demux);
+    source_ = std::move(source);
     return true;
+}
+
+bool VideoPipeline::open(const std::string& path) {
+    // Highest-priority backend that both recognises the container and can
+    // decode a video track inside it wins. A host application registering an
+    // ffmpeg backend therefore takes over transparently, and with none
+    // registered this is exactly the old WebM/VP9/Opus path.
+    for (const auto& backend : mediaBackends()) {
+        if (!backend.open) continue;
+        auto source = backend.open(path);
+        if (!source) continue;
+        if (adoptSource(backend, std::move(source))) {
+            LOG_INFO("video: '%s' opened by the %s backend", path.c_str(),
+                     backend.name.c_str());
+            return true;
+        }
+    }
+    return false;
 }
 
 void VideoPipeline::play() { if (clock_) clock_->setPlaying(true); }

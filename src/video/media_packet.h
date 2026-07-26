@@ -6,15 +6,39 @@
 
 namespace bro::video {
 
-// Codec identifier on the wire / in containers. Kept narrow on purpose:
-// the engine commits to a single pipeline (VP9 video + Opus audio in WebM).
-// Additional entries should be added only when a second pipeline is supported.
+// Codec identifier on the wire / in containers.
+//
+// The engine itself still decodes only VP8/VP9 + Opus — the rest are here
+// because a registered MediaBackend (see media_backend.h) reports what it
+// found, and that value reaches JS and the UI. A player wants to display
+// "h264" whether or not bro is the thing decoding it.
+//
+// `Other` is the escape hatch: a backend handling something not named here
+// reports Other and keeps its own identification in the TrackInfo it built.
+// Nothing in the engine switches on these beyond the built-in WebM backend
+// matching its own three.
 enum class Codec : uint8_t {
     Unknown = 0,
+    // Video
     VP8,
     VP9,
+    AV1,
+    H264,
+    H265,
+    MPEG2Video,
+    MPEG4,
+    ProRes,
+    // Audio
     Opus,
     Vorbis,
+    AAC,
+    MP3,
+    FLAC,
+    AC3,
+    EAC3,
+    PCM,
+    // Handled by a backend, not named above.
+    Other,
 };
 
 enum class TrackKind : uint8_t {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "video/media_packet.h"
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,20 @@ struct TrackInfo {
     // Codec-private data (e.g. Opus head, VP9 codec config). Demuxer fills,
     // decoder consumes at init.
     std::vector<uint8_t> codecPrivate;
+
+    // Backend-private handle, attached by the MediaSource that produced this
+    // track and read back by the SAME backend's decoder factory.
+    //
+    // codecPrivate is a flat byte blob, which is all the built-in WebM path
+    // needs. A richer backend needs more: an ffmpeg decoder wants the whole
+    // AVCodecParameters, and flattening and re-parsing that would lose
+    // exactly the details (extradata layout, pixel format, colour space) that
+    // make an H.264 stream decodable. So a backend can hand its own object
+    // through instead.
+    //
+    // Opaque to the engine — it is only ever moved along, never inspected.
+    // Not valid across backends: only the backend that set it knows the type.
+    std::shared_ptr<void> backendPrivate;
 
     // Total stream duration for seekable sources; 0 for live.
     TimeNs durationNs = 0;
