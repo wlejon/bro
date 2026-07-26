@@ -1,3 +1,5 @@
+#include "engine/headless_driver.h"
+
 #include "engine/engine.h"
 #include "engine/config_loader.h"
 
@@ -388,7 +390,7 @@ static void runRepl(JSContext* ctx, bro::js::Runtime* rt,
 // Main
 // ---------------------------------------------------------------------------
 
-int main(int argc, char* argv[]) {
+int bro::engine::runHeadless(int argc, char* argv[], const HeadlessHooks& hooks) {
 #ifdef _WIN32
     // Suppress the WER "bro-headless.exe has stopped working" dialog that
     // Windows shows after an unhandled crash/abort() — headless is driven
@@ -418,22 +420,28 @@ int main(int argc, char* argv[]) {
     }
 
     if (argc < 2 || showHelp) {
+        const char* prog = hooks.programName.empty() ? "bro-headless"
+                                                     : hooks.programName.c_str();
+        const char* tag = hooks.tagline.empty() ? "headless mode for bro"
+                                                : hooks.tagline.c_str();
         fprintf(stderr,
-            "bro-headless — headless mode for bro\n"
+            "%s — %s\n"
             "\n"
-            "Usage: bro-headless [options] <app-directory> [script.js | -e \"expr\"] [-- script-args...]\n"
+            "Usage: %s [options] <app-directory> [script.js | -e \"expr\"] [-- script-args...]\n"
             "\n"
             "Modes:\n"
-            "  bro-headless app/              Interactive JS REPL\n"
-            "  bro-headless app/ test.js      Run script file\n"
-            "  bro-headless app/ -e \"expr\"     Evaluate inline expression(s)\n"
-            "\n"
+            "  %s app/              Interactive JS REPL\n"
+            "  %s app/ test.js      Run script file\n"
+            "  %s app/ -e \"expr\"     Evaluate inline expression(s)\n"
+            "\n",
+            prog, tag, prog, prog, prog, prog);
+        fprintf(stderr,
             "Script arguments:\n"
             "  Anything after the script path that bro does not recognise is passed\n"
             "  through as globalThis.scriptArgs (an array of strings). Use -- to pass\n"
             "  through arguments that would otherwise be read as bro options:\n"
-            "    bro-headless app/ etl/build.js --force\n"
-            "    bro-headless app/ etl/build.js -- --width 40\n"
+            "    %s app/ etl/build.js --force\n"
+            "    %s app/ etl/build.js -- --width 40\n"
             "\n"
             "Options:\n"
             "  --no-gpu              Disable GPU rendering (CPU-only, no WebGL)\n"
@@ -447,7 +455,8 @@ int main(int argc, char* argv[]) {
             "  screenshot(path [, selector])  Render to PNG (optionally cropped to element)\n"
             "  advanceTime(ms) / sleep(ms)    Advance virtual time\n"
             "  flush()                        Force layout recalculation\n"
-            "  assert(cond [, msg])           Throw on failure (exit code 1)\n");
+            "  assert(cond [, msg])           Throw on failure (exit code 1)\n",
+            prog, prog);
         return showHelp ? 0 : 1;
     }
 
@@ -613,6 +622,11 @@ int main(int argc, char* argv[]) {
         // Headless: splash defaults off; --splash opts in, --no-splash is
         // explicit-off (kept for symmetry with windowed bro).
         config.showSplash = (cliSplash == 1);
+        config.installHostBindings = hooks.installHostBindings;
+
+        // Host setup that the first document may depend on — a media backend
+        // registration has to be in place before any <video> is parsed.
+        if (hooks.beforeEngine) hooks.beforeEngine();
 
         auto* engine = new bro::engine::Engine(config);
         engine->run();  // initial layout, returns immediately in headless

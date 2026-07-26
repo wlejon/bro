@@ -39,6 +39,7 @@ add_library(bro_engine STATIC
     touch_input.cpp
     gamepad.cpp
     headless_api.cpp
+    headless_driver.cpp
     key_mapping.cpp
     overflow.cpp
     scrollbar.cpp
