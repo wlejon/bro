@@ -193,6 +193,58 @@ cp.exec(command, options?, callback?);             // callback(err, stdout, stde
 cp.execFileSync(file, args?, options?);            // like execSync but takes file + args array
 cp.execFile(file, args?, options?, callback?);     // async version of execFileSync
 cp.spawnSync(command, args?, options?);            // → { stdout, stderr, status, ... }
+cp.spawn(file, args?, options?);                   // → ChildProcess (non-blocking, see below)
+
+// ── cp.spawn: long-running children ──
+//
+// options: { cwd, env, stdio, encoding, highWaterMark, stdoutFile, stderrFile }
+//   stdio         'pipe' to stream output and write stdin. DEFAULT IS 'ignore'
+//                 (no pipes at all) — this diverges from Node deliberately, so
+//                 an existing caller that never reads can't silently buffer,
+//                 and a GUI child keeps its own window. Opt in explicitly.
+//   encoding      with stdio:'pipe', 'utf8' delivers decoded strings (UTF-8
+//                 safe across chunk boundaries). Default is binary Uint8Array,
+//                 which is what raw pixel/audio streams need.
+//   highWaterMark per-stream buffer cap, default 8 MB. When full the reader
+//                 stops and the child blocks in write() — real backpressure.
+//                 Draining happens automatically on the poll tick.
+//   env           REPLACES the child environment (Node semantics).
+//   stdoutFile /  redirect output to files instead (truncate on open; same
+//   stderrFile    path for both = combined log). Ignored when stdio:'pipe'.
+//
+// ChildProcess:
+//   .pid .killed .exitCode .signal
+//   .kill(signal?)                       // 'SIGTERM' default, 'SIGKILL' to force
+//   .on('exit',  (code, signal) => {})   // process is gone
+//   .on('close', (code, signal) => {})   // gone AND both pipes drained to EOF
+//   with stdio:'pipe':
+//   .stdout / .stderr   .on('data', chunk) / .on('end') / .setEncoding(enc)
+//   .stdin              .write(stringOrBytes) → bytes written; .end() sends EOF
+//
+// Every byte the child wrote is delivered before 'close' fires. Polling adapts:
+// ~4 ms while bytes flow, 25 ms idle piped, 100 ms unpiped.
+
+// Live progress from a long-running tool:
+const enc = cp.spawn('ffmpeg', ['-i', 'in.mov', '-progress', 'pipe:1', 'out.mp4'],
+                     { stdio: 'pipe', encoding: 'utf8' });
+let tail = '';
+enc.stdout.on('data', (chunk) => {
+    tail += chunk;
+    const lines = tail.split('\n');
+    tail = lines.pop();                    // keep the partial line for next chunk
+    for (const line of lines) {
+        const [k, v] = line.split('=');
+        if (k === 'frame') updateProgressBar(Number(v));
+    }
+});
+enc.on('close', (code) => { if (code !== 0) showError(); });
+// enc.kill() to cancel.
+
+// Binary out (raw frames), and stdin in:
+const dec = cp.spawn('ffmpeg', ['-i', 'clip.mp4', '-f', 'rawvideo',
+                                '-pix_fmt', 'rgba', 'pipe:1'], { stdio: 'pipe' });
+dec.stdout.on('data', (bytes) => { /* bytes is a Uint8Array */ });
+dec.stdin.end();                           // EOF — tools reading pipe:0 need this
 
 
 // -----------------------------------------------------------------------------
