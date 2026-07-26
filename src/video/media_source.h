@@ -16,6 +16,12 @@ struct TrackInfo {
     uint32_t width = 0;
     uint32_t height = 0;
 
+    // Nominal frames per second, 0 when the container doesn't say. An
+    // average: a variable-frame-rate file still reports one, so this is for
+    // display (timecode, "29.97 fps" in an info panel) and never for deciding
+    // where a frame boundary is. Stepping uses the frames' own timestamps.
+    double frameRate = 0.0;
+
     // Audio
     uint32_t sampleRate = 0;
     uint32_t channels = 0;

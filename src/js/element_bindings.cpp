@@ -937,6 +937,38 @@ static JSValue js_element_video_set_currentTime(JSContext* ctx, JSValueConst thi
     return JS_UNDEFINED;
 }
 
+// video.stepFrame(n) — bro extension. The web platform has no frame step, so
+// every player emulates one with currentTime += 1/fps, and that is wrong: a
+// nominal frame rate is an average, and even on constant-rate 30000/1001 the
+// seconds round trip misses the frame boundary by nanoseconds and the step
+// lands back where it started. Stepping has to come from the frames.
+static JSValue js_element_video_step_frame(JSContext* ctx, JSValueConst this_val,
+                                           int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_NewInt32(ctx, 0);
+    auto* v = el->videoControl();
+    if (!v) return JS_NewInt32(ctx, 0);
+
+    int32_t frames = 1;
+    if (argc >= 1 && !JS_IsUndefined(argv[0])) {
+        double d = 0.0;
+        if (JS_ToFloat64(ctx, &d, argv[0])) return JS_EXCEPTION;
+        frames = static_cast<int32_t>(d);
+    }
+    fireMediaEvent(ctx, el, "seeking");
+    const int moved = v->stepFrame(frames);
+    fireMediaEvent(ctx, el, "seeked");
+    if (moved) fireMediaEvent(ctx, el, "timeupdate");
+    return JS_NewInt32(ctx, moved);
+}
+
+static JSValue js_element_video_get_frameRate(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    double r = 0.0;
+    if (el) if (auto* v = el->videoControl()) r = v->frameRate();
+    return JS_NewFloat64(ctx, r);
+}
+
 static JSValue js_element_video_get_duration(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
     if (!el) return JS_NewFloat64(ctx, std::nan(""));
@@ -4059,6 +4091,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("readyState",  js_element_video_get_readyState, nullptr),
     JS_CGETSET_DEF("networkState", js_element_video_get_networkState, nullptr),
     JS_CGETSET_DEF("currentSrc",  js_element_video_get_currentSrc, nullptr),
+    JS_CGETSET_DEF("frameRate",   js_element_video_get_frameRate, nullptr),
     JS_CGETSET_DEF("videoWidth",  js_element_video_get_videoWidth, nullptr),
     JS_CGETSET_DEF("videoHeight", js_element_video_get_videoHeight, nullptr),
     JS_CGETSET_DEF("src",         js_element_video_get_src, js_element_video_set_src),
@@ -4078,6 +4111,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("pause", 0, js_element_video_pause),
     JS_CFUNC_DEF("load",  0, js_element_video_load),
     JS_CFUNC_DEF("canPlayType", 1, js_element_video_canPlayType),
+    JS_CFUNC_DEF("stepFrame", 1, js_element_video_step_frame),
     // Iframe control
     JS_CFUNC_DEF("reload", 0, js_element_iframe_reload),
     JS_CFUNC_DEF("capture", 0, js_element_iframe_capture),

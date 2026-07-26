@@ -23,6 +23,7 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
     audioRate_ = 0;
     audioChannels_ = 0;
     duration_ = 0;
+    frameRate_ = 0.0;
     frameW_ = 0;
     frameH_ = 0;
     vdec_.reset();
@@ -37,6 +38,7 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
             frameW_ = static_cast<int>(t.width);
             frameH_ = static_cast<int>(t.height);
             duration_ = t.durationNs;
+            frameRate_ = t.frameRate;
         } else if (t.kind == TrackKind::Audio && audioTrackId_ == 0) {
             // Audio is optional: a file whose audio codec this backend can't
             // handle still plays, silently.
@@ -98,31 +100,64 @@ static constexpr TimeNs kForwardNudgeNs = 500 * 1000000LL;   // 0.5 s
 void VideoPipeline::seekTo(TimeNs pts) {
     if (!source_) return;
 
-    const bool nudgeForward = hasFrame_ && currentPts_ >= 0 &&
-                              pts >= currentPts_ &&
-                              (pts - currentPts_) <= kForwardNudgeNs;
+    const bool nudgeForward = cur_.valid && cur_.pts >= 0 && pts >= cur_.pts &&
+                              (pts - cur_.pts) <= kForwardNudgeNs;
     if (!nudgeForward) {
         source_->seekTo(pts);
         // Frames still in flight belong to the old position: drop them before
         // decoding at the new one.
         if (vdec_) vdec_->flush();
         if (adec_) adec_->flush();
-        pendingVideoValid_ = false;
-        hasFrame_ = false;
-        currentPts_ = -1;
+        while (!staged_.empty()) { recycle(std::move(staged_.front())); staged_.pop_front(); }
+        recycle(std::move(cur_));
     }
     if (clock_) clock_->seekTo(pts);
     endOfStream_ = false;
     advanceTo(pts);
 }
 
-bool VideoPipeline::wouldNudge(TimeNs pts) const {
-    return hasFrame_ && currentPts_ >= 0 && pts >= currentPts_ &&
-           (pts - currentPts_) <= kForwardNudgeNs;
+bool VideoPipeline::stepFrame(int direction) {
+    if (!source_ || !vdec_) return false;
+
+    if (direction < 0) {
+        if (!cur_.valid || cur_.pts <= 0) return false;
+        // One nanosecond before the picture on screen. Seeking displays the
+        // last frame at or before the target, so that IS the frame before
+        // this one — whatever the file's frame rate happens to be, constant
+        // or not.
+        const TimeNs was = cur_.pts;
+        seekTo(cur_.pts - 1);
+        return cur_.valid && cur_.pts < was;
+    }
+    if (direction == 0) return false;
+
+    // Forward: whatever picture comes after the one on screen. Decode until
+    // there is one — the staged queue already holds it during playback.
+    while (staged_.empty() && !endOfStream_) pumpOne(cur_.pts, nullptr);
+    if (staged_.empty()) return false;
+
+    const TimeNs t = staged_.front().pts;
+    if (clock_) clock_->seekTo(t);
+    advanceTo(t);
+    return true;
 }
 
-// Copy a decoded frame's planes into yuv_ with tight strides.
-void VideoPipeline::storeFrame(const VideoFrame& frame) {
+VideoPipeline::Picture VideoPipeline::takePicture() {
+    if (pool_.empty()) return Picture{};
+    Picture p = std::move(pool_.back());
+    pool_.pop_back();
+    return p;
+}
+
+void VideoPipeline::recycle(Picture&& p) {
+    p.valid = false;
+    p.pts = -1;
+    if (pool_.size() < 4) pool_.push_back(std::move(p));
+    p = Picture{};
+}
+
+// Copy a decoded frame's planes into a picture with tight strides.
+void VideoPipeline::storeFrame(Picture& dst, const VideoFrame& frame) {
     const int w = static_cast<int>(frame.width);
     const int h = static_cast<int>(frame.height);
     if (w <= 0 || h <= 0) return;
@@ -130,11 +165,13 @@ void VideoPipeline::storeFrame(const VideoFrame& frame) {
     const int cw = (w + 1) / 2, ch = (h + 1) / 2;
     const size_t ySize = static_cast<size_t>(w) * h;
     const size_t cSize = static_cast<size_t>(cw) * ch;
-    yuv_.resize(ySize + cSize * 2);
-    yuvW_ = w;
-    yuvH_ = h;
+    dst.yuv.resize(ySize + cSize * 2);
+    dst.w = w;
+    dst.h = h;
+    dst.pts = frame.pts;
+    dst.valid = true;
 
-    uint8_t* dstY = yuv_.data();
+    uint8_t* dstY = dst.yuv.data();
     uint8_t* dstU = dstY + ySize;
     uint8_t* dstV = dstU + cSize;
     for (int row = 0; row < h; ++row)
@@ -146,53 +183,72 @@ void VideoPipeline::storeFrame(const VideoFrame& frame) {
         std::memcpy(dstV + static_cast<size_t>(row) * cw,
                     frame.v + static_cast<size_t>(row) * frame.strideV, cw);
     }
-    rgbaStale_ = true;
 }
 
 void VideoPipeline::refreshRgba() {
-    if (!rgbaStale_ || yuvW_ <= 0 || yuvH_ <= 0) return;
+    if (!rgbaStale_ || !cur_.valid || cur_.w <= 0 || cur_.h <= 0) return;
     rgbaStale_ = false;
 
-    frameW_ = yuvW_;
-    frameH_ = yuvH_;
-    const int cw = (yuvW_ + 1) / 2, ch = (yuvH_ + 1) / 2;
-    const size_t ySize = static_cast<size_t>(yuvW_) * yuvH_;
-    const size_t cSize = static_cast<size_t>(cw) * ch;
-    (void)ch;
+    frameW_ = cur_.w;
+    frameH_ = cur_.h;
+    const int cw = (cur_.w + 1) / 2;
+    const size_t ySize = static_cast<size_t>(cur_.w) * cur_.h;
+    const size_t cSize = static_cast<size_t>(cw) * ((cur_.h + 1) / 2);
 
     rgba_.resize(ySize * 4);
-    const uint8_t* y = yuv_.data();
+    const uint8_t* y = cur_.yuv.data();
     i420ToRgba(y, y + ySize, y + ySize + cSize,
-               yuvW_, cw, cw, yuvW_, yuvH_, rgba_.data(), yuvW_ * 4);
+               cur_.w, cw, cw, cur_.w, cur_.h, rgba_.data(), cur_.w * 4);
 }
 
-bool VideoPipeline::decodePacket(const MediaPacket& pkt) {
-    if (pkt.trackId == videoTrackId_ && vdec_) {
-        if (!vdec_->decode(pkt)) return false;
-        VideoFrame frame;
-        bool got = false;
-        while (vdec_->nextFrame(frame)) {
-            // Keep the picture, don't convert it. A seek walks the whole GOP
-            // to reach one frame; converting all of them cost 3.3 ms each and
-            // was the entire reason scrubbing felt broken.
-            storeFrame(frame);
-            // The FRAME's pts, not the packet's. A codec with B-frames emits
-            // pictures in a different order than the packets that carried
-            // them, so the frame coming out of decode() is generally not the
-            // one the packet just fed in. VP8/VP9 don't reorder, which is why
-            // the packet pts was indistinguishable until now.
-            currentPts_ = frame.pts;
-            hasFrame_ = true;
-            got = true;
-        }
-        return got;
+bool VideoPipeline::decodePacket(const MediaPacket& pkt, TimeNs nowNs) {
+    if (pkt.trackId != videoTrackId_ || !vdec_) {
+        // Audio packets are dropped here — audio playback is driven by a
+        // separate demuxer instance (see ElVideo::openAudioTrack), which
+        // predecodes the whole audio track into one clip up front rather than
+        // pumping packets in lockstep with video. audioDecoder() is exposed
+        // for callers that want to decode Opus packets themselves.
+        return false;
     }
-    // Audio packets are dropped here — audio playback is driven by a
-    // separate demuxer instance (see ElVideo::openAudioTrack), which
-    // predecodes the whole audio track into one clip up front rather than
-    // pumping packets in lockstep with video. audioDecoder() is exposed
-    // for callers that want to decode Opus packets themselves.
-    return false;
+    if (!vdec_->decode(pkt)) return false;
+
+    VideoFrame frame;
+    bool changed = false;
+    while (vdec_->nextFrame(frame)) {
+        // Keep the picture, don't convert it. A seek walks the whole GOP to
+        // reach one frame; converting all of them cost 3.3 ms each and was
+        // the entire reason scrubbing felt broken.
+        //
+        // The FRAME's pts, not the packet's. A codec with B-frames emits
+        // pictures in a different order than the packets that carried them,
+        // so the frame coming out of decode() is generally not the one the
+        // packet just fed in. VP8/VP9 don't reorder, which is why the packet
+        // pts was indistinguishable until now.
+        if (cur_.valid && frame.pts > nowNs) {
+            Picture p = takePicture();
+            storeFrame(p, frame);
+            staged_.push_back(std::move(p));
+        } else {
+            Picture p = takePicture();
+            storeFrame(p, frame);
+            recycle(std::move(cur_));
+            cur_ = std::move(p);
+            rgbaStale_ = true;
+            changed = true;
+        }
+    }
+    return changed;
+}
+
+bool VideoPipeline::pumpOne(TimeNs nowNs, bool* changed) {
+    MediaPacket pkt;
+    if (!source_->readPacket(pkt)) {
+        endOfStream_ = true;
+        return false;
+    }
+    if (pkt.trackId != videoTrackId_) return true;   // not ours; keep going
+    if (decodePacket(pkt, nowNs) && changed) *changed = true;
+    return true;
 }
 
 bool VideoPipeline::advance() {
@@ -204,40 +260,20 @@ bool VideoPipeline::advanceTo(TimeNs nowNs) {
     if (!source_ || !vdec_) return false;
     bool changed = false;
 
-    // Walk packets until we've consumed anything with pts <= now. The
-    // pending slot holds a demuxed-but-not-yet-due packet across calls.
-    while (!endOfStream_) {
-        MediaPacket pkt;
-        bool have = false;
-        if (pendingVideoValid_) {
-            pkt = std::move(pendingVideo_);
-            pendingVideoValid_ = false;
-            have = true;
-        } else {
-            have = source_->readPacket(pkt);
-            if (!have) { endOfStream_ = true; break; }
-        }
+    // A staged picture becomes the displayed one as soon as its time comes.
+    while (!staged_.empty() && staged_.front().pts <= nowNs) {
+        recycle(std::move(cur_));
+        cur_ = std::move(staged_.front());
+        staged_.pop_front();
+        rgbaStale_ = true;
+        changed = true;
+    }
 
-        if (pkt.trackId != videoTrackId_) {
-            // Audio packets on this source are ignored — see decodePacket().
-            continue;
-        }
-
-        // Stop once the decoder has actually PRODUCED a frame at or past now.
-        // Gating on the packet alone breaks under frame reordering: packets
-        // arrive in decode order, so a packet with a far-future pts is often
-        // exactly the reference the frame due right now needs. Waiting on
-        // currentPts_ keeps feeding until the picture we're waiting for is
-        // out, and collapses to the old one-packet-lookahead behaviour when
-        // decode order equals presentation order.
-        if (pkt.pts > nowNs && hasFrame_ && currentPts_ >= nowNs) {
-            // Stash and wait until time catches up.
-            pendingVideo_ = std::move(pkt);
-            pendingVideoValid_ = true;
-            break;
-        }
-
-        if (decodePacket(pkt)) changed = true;
+    // Then decode until something is staged — proof that the picture now on
+    // screen really is the one `now` falls inside, rather than merely the
+    // newest we happen to have decoded.
+    while (staged_.empty() && !endOfStream_) {
+        if (!pumpOne(nowNs, &changed)) break;
     }
 
     // One colour conversion per advance, however many frames were decoded to

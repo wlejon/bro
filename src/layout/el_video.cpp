@@ -338,23 +338,35 @@ bool ElVideo::isPlaying() const { return pipeline_ && pipeline_->isPlaying(); }
 void ElVideo::seekTo(double seconds) {
     if (!pipeline_) return;
     auto ns = static_cast<bro::video::TimeNs>(seconds * 1e9);
-    // Tearing down and refilling the audio ring costs more than a short
-    // forward step is worth. While paused nothing is being heard, so a frame
-    // step can leave it alone entirely; while playing it has to be re-anchored
-    // or the sound drifts away from the picture.
-    // While paused nothing is being heard, so the ring does not have to be
-    // rebuilt at all — just remember where it owes us and re-anchor on the
-    // next play(). This is what makes scrubbing cheap: dragging a playhead is
-    // dozens of seeks a second, and each one was tearing down an audio stream
-    // and decoding half a second of sound nobody would hear.
     const bool deferAudio = !pipeline_->isPlaying();
     pipeline_->seekTo(ns);
     pipeline_->advanceTo(ns);
+    reanchorAudio(seconds, deferAudio);
+}
+
+int ElVideo::stepFrame(int frames) {
+    if (!pipeline_ || frames == 0) return 0;
+    const bool deferAudio = !pipeline_->isPlaying();
+    const int dir = frames > 0 ? 1 : -1;
+    const int want = frames > 0 ? frames : -frames;
+    int done = 0;
+    while (done < want && pipeline_->stepFrame(dir)) ++done;
+    if (done > 0) reanchorAudio(currentTime(), deferAudio);
+    return done;
+}
+
+// Shared tail of every deliberate jump in the timeline.
+void ElVideo::reanchorAudio(double seconds, bool deferAudio) {
     // Seek can move playback away from the end; let ended fire again if the
     // stream is re-played past its tail, and force the next timeupdate.
     endedFired_ = false;
     lastTimeUpdateSec_ = -1.0;
-    // Re-anchor audio at the new position.
+    // Tearing down and refilling the audio ring costs more than a short step
+    // is worth. While paused nothing is being heard, so the ring does not have
+    // to be rebuilt at all — just remember where it owes us and re-anchor on
+    // the next play(). This is what makes scrubbing cheap: dragging a playhead
+    // is dozens of seeks a second, and each one was tearing down an audio
+    // stream and decoding half a second of sound nobody would hear.
     if (audioStreamId_ >= 0) {
         if (deferAudio) audioSeekPending_ = seconds;
         else restartStreamingAudio(seconds);
@@ -367,6 +379,10 @@ void ElVideo::seekTo(double seconds) {
 
 double ElVideo::currentTime() const {
     return pipeline_ ? pipeline_->currentPts() / 1e9 : 0.0;
+}
+
+double ElVideo::frameRate() const {
+    return pipeline_ ? pipeline_->frameRate() : 0.0;
 }
 
 double ElVideo::duration() const {
@@ -626,6 +642,7 @@ bool   ElVideo::openStreamingAudio(const std::string&) { return false; }
 void   ElVideo::closeStreamingAudio() {}
 void   ElVideo::pumpStreamingAudio() {}
 void   ElVideo::restartStreamingAudio(double) {}
+void   ElVideo::reanchorAudio(double, bool) {}
 void   ElVideo::openAudioTrack(const std::string&) {}
 void   ElVideo::startAudioPlayback(double) {}
 void   ElVideo::stopAudioPlayback() {}
@@ -633,8 +650,10 @@ void   ElVideo::play() {}
 void   ElVideo::pause() {}
 bool   ElVideo::isPlaying() const { return false; }
 void   ElVideo::seekTo(double) {}
+int    ElVideo::stepFrame(int) { return 0; }
 double ElVideo::currentTime() const { return 0.0; }
 double ElVideo::duration() const { return 0.0; }
+double ElVideo::frameRate() const { return 0.0; }
 bool   ElVideo::isReady() const { return false; }
 bool   ElVideo::isEnded() const { return false; }
 void   ElVideo::advancePipeline() {}

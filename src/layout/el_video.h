@@ -50,8 +50,20 @@ public:
     void pause();
     bool isPlaying() const;
     void seekTo(double seconds);
+
+    /// Move `frames` pictures forward (positive) or back (negative), landing
+    /// on real decoded frames rather than on a computed time. Returns how many
+    /// steps actually happened — short of what was asked at either end of the
+    /// file. Leaves play state alone; a caller wanting the picture to stay put
+    /// should pause first.
+    int stepFrame(int frames);
+
     double currentTime() const;
     double duration() const;
+
+    /// Container-declared frames per second, 0 when unknown. For timecode,
+    /// not for stepping — see stepFrame().
+    double frameRate() const;
     bool isReady() const;   // have a decoded frame and tracks
     bool isEnded() const;   // pipeline has drained and decoded last frame
     bool hasPipeline() const { return pipeline_ != nullptr; }
@@ -157,6 +169,10 @@ private:
     void closeStreamingAudio();
     void pumpStreamingAudio();
     void restartStreamingAudio(double fromSeconds);
+
+    /// Shared tail of seekTo()/stepFrame(): put the sound back where the
+    /// picture now is, or note that it owes us a move once playback resumes.
+    void reanchorAudio(double seconds, bool deferAudio);
 
     void openAudioTrack(const std::string& resolvedPath);
     void startAudioPlayback(double fromSeconds);

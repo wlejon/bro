@@ -300,6 +300,37 @@ v.pause();
 v.currentTime = 2.5;                    // seek, synchronous
 console.log(v.currentTime, '/', v.duration);
 
+// Seeking shows the frame the instant falls INSIDE — the last picture at or
+// before the target — so currentTime reads back snapped to that frame's own
+// timestamp, not the value you assigned.
+
+// ---------------------------------------------------------------------------
+// Frame stepping (bro extension)
+// ---------------------------------------------------------------------------
+//
+// v.stepFrame(n), move n decoded pictures forward (positive) or back
+//                          (negative). Returns how many steps happened —
+//                          short of what you asked at either end of the file,
+//                          0 if it could not move at all. Fires
+//                          'seeking' → 'seeked' → 'timeupdate' like a seek.
+//                          Does not pause: a transport that wants the picture
+//                          to stay put should pause first.
+// v.frameRate, container-declared frames per second, 0 when it
+//                          declares none. An AVERAGE — a variable-frame-rate
+//                          phone capture still reports one — so it is for
+//                          timecode display and info panels.
+//
+// The web platform has no frame step, so players emulate one with
+// `currentTime += 1 / fps`. That does not work here and does not really work
+// anywhere: the frame rate is an average, and the seconds round trip through
+// a double misses the frame boundary by nanoseconds, so a backward step lands
+// on the frame it started from and the picture never moves. Only the frames'
+// own timestamps know where the next picture is, which is why this is an API
+// and not something you can compute.
+
+v.stepFrame(1);                         // next picture
+v.stepFrame(-1);                        // back to where you were, exactly
+
 // ---------------------------------------------------------------------------
 // Audio: volume / muted / playbackRate
 // ---------------------------------------------------------------------------
@@ -325,6 +356,7 @@ v.playbackRate = 2.0;
 // v.videoWidth, v.videoHeight, intrinsic frame size (300×150 defaults
 //                               before metadata, like the spec's replaced-
 //                               element fallback).
+// v.frameRate, nominal fps, or 0 — see Frame stepping above.
 // v.currentSrc, resolved URL of the loaded resource ("" before load).
 // v.readyState, 0 HAVE_NOTHING (no pipeline), 1 HAVE_METADATA,
 //                    4 HAVE_ENOUGH_DATA (frame decoded + tracks ready).
