@@ -3,6 +3,7 @@ find_package(unofficial-libvpx CONFIG REQUIRED)
 find_package(Opus CONFIG REQUIRED)
 
 add_library(bro_video STATIC
+    media_backend.cpp
     media_clock.cpp
     webm_demuxer.cpp
     video_decoder.cpp
@@ -13,7 +14,7 @@ add_library(bro_video STATIC
     gif_encoder.cpp
     video_pipeline.cpp
 )
-target_include_directories(bro_video PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(bro_video PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_video
     PUBLIC bro_util
     PRIVATE unofficial::libwebm::libwebm
@@ -41,3 +42,9 @@ target_link_libraries(bro_videoinspect PRIVATE bro_video)
 # report frame counts / sizes / first-pixel sanity check. Not linked into bro.
 add_executable(bro_videoencodetest tools/video_encode_test.cpp)
 target_link_libraries(bro_videoencodetest PRIVATE bro_video)
+
+# Smoke test: the media backend registry — precedence, fallthrough when a
+# backend can't decode, and a non-WebM source reaching the pipeline. Uses fake
+# backends, since the built-in can't demonstrate any of that alone.
+add_executable(bro_mediabackendtest tools/media_backend_test.cpp)
+target_link_libraries(bro_mediabackendtest PRIVATE bro_video)

@@ -2,7 +2,7 @@
 ## Mirrors the pattern in src/js/CMakeLists.txt. Each shaders/<file>.glsl becomes
 ## generated/<file>.h holding `static const char <VAR>[]` (a null-terminated byte
 ## array — dodges MSVC's ~16KB single-literal limit that mesh.frag exceeds).
-set(EMBED_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/embed_js.cmake")
+set(EMBED_SCRIPT "${bro_SOURCE_DIR}/cmake/embed_js.cmake")
 set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${GEN_DIR}")
 
@@ -106,7 +106,7 @@ add_library(bro_scene STATIC
     ${GENERATED_HEADERS}
 )
 
-target_include_directories(bro_scene PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(bro_scene PUBLIC ${bro_SOURCE_DIR}/src)
 target_include_directories(bro_scene PRIVATE ${GEN_DIR})
 # bro_scene is only built when BRO_WITH_3D is on, and 3D forces PHYSICS + GAMEAI
 # on (see the _bro_require chain in the top-level CMakeLists), so bro_physics +

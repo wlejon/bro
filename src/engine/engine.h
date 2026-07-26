@@ -146,6 +146,16 @@ struct EngineConfig {
     /// to dismiss). Can be overridden per-app via bro.json `"splash": false`
     /// or the `--no-splash` / `--splash` CLI flags.
     bool showSplash = true;
+    /// Hook for a host application that embeds the engine: called during JS
+    /// init, after every built-in binding is installed and before any app
+    /// script runs. This is how an executable that links bro_engine adds its
+    /// own `bro.*` namespace without editing engine_init.cpp — ffmpeg-bro
+    /// installs `bro.ffmpeg` through it.
+    ///
+    /// Runs on the main thread, once per realm the engine creates bindings
+    /// for. Keep it to installing bindings; the Engine is still mid-init.
+    std::function<void(JSContext*)> installHostBindings;
+
     GraphicsConfig graphics;
     InputConfig input;
     Scrollbar::Style viewportScrollbar;    // default Scrollbar::Style
@@ -1390,6 +1400,8 @@ private:
     // the optional window-title override. Stored so initAppRealm() can re-run
     // the full load on a location.reload() without the EngineConfig.
     std::string appDir_;
+    /// Host application's binding installer (EngineConfig::installHostBindings).
+    std::function<void(JSContext*)> installHostBindings_;
     std::string titleOverride_;
     util::AssetMounts assetMounts_;
     std::vector<std::unique_ptr<canvas::CanvasScene>> canvasScenes_;

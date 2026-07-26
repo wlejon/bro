@@ -1,5 +1,6 @@
 #include "engine/engine.h"
 #include "engine/config_loader.h"
+#include "engine/launcher.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 
@@ -83,40 +84,6 @@ static void redirectLogToFile() {
     setvbuf(stdout, nullptr, _IONBF, 0);
 }
 
-// Get the directory containing the current executable.
-static std::string exeDir() {
-    std::string path;
-#ifdef _WIN32
-    char buf[MAX_PATH];
-    DWORD len = GetModuleFileNameA(nullptr, buf, MAX_PATH);
-    if (len > 0 && len < MAX_PATH) path = std::string(buf, len);
-#elif defined(__APPLE__)
-    char buf[PATH_MAX];
-    uint32_t size = sizeof(buf);
-    if (_NSGetExecutablePath(buf, &size) == 0) {
-        char resolved[PATH_MAX];
-        if (realpath(buf, resolved)) path = resolved;
-        else path = buf;
-    }
-#else
-    char buf[PATH_MAX];
-    ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
-    if (len > 0) { buf[len] = '\0'; path = buf; }
-#endif
-    auto slash = path.find_last_of("/\\");
-    if (slash != std::string::npos) return path.substr(0, slash);
-    return ".";
-}
-
-// Check if a file exists.
-static bool fileExists(const std::string& path) {
-    std::ifstream f(path);
-    return f.good();
-}
-
-using bro::engine::parseConfig;
-using bro::engine::findAncestorProjectRoot;
-
 static void printUsage() {
     fprintf(stderr,
         "bro -- lightweight HTML/CSS/JS app runtime\n"
@@ -198,168 +165,28 @@ int main(int argc, char* argv[]) {
         else posArgs.push_back(argv[i]);
     }
 
-    // Settings persist next to the executable
-    std::string settingsDir = exeDir();
-    config.settingsPath = settingsDir + "/.bro_settings.json";
+    // Settings persist next to the executable.
+    config.settingsPath = bro::engine::executableDir() + "/.bro_settings.json";
 
-    // Expose exe directory to JS (process.env.BRO_EXE_DIR) so apps like the
-    // launcher can locate sibling executables (bro, bro-headless, bro-server).
-    // Windows uses _putenv_s so the CRT's getenv() reflects the change.
-#ifdef _WIN32
-    _putenv_s("BRO_EXE_DIR", settingsDir.c_str());
-#else
-    setenv("BRO_EXE_DIR", settingsDir.c_str(), 1);
-#endif
-
-    // Resolve launch target → projectRoot + appDir. Three modes:
-    //   bro                          (no args) — exe dir is the target
-    //   bro <path>                   path is either an app dir, a project dir,
-    //                                or a project bro.json file
-    //   bro <project.json> --app X   (future, not parsed here yet)
-    //
-    // A bro.json with `default_app`, `lib`, or `system` keys is treated as a
-    // project manifest: its directory becomes the projectRoot, and `app`/
-    // `default_app` resolves against it.
-    auto isJsonFile = [](const std::string& s) {
-        return s.size() >= 5 && s.substr(s.size() - 5) == ".json";
-    };
-    auto dirOf = [](const std::string& p) -> std::string {
-        size_t i = p.find_last_of("/\\");
-        return (i == std::string::npos) ? std::string(".") : p.substr(0, i);
-    };
-    auto isAbsolute = [](const std::string& p) {
-        return !p.empty() && (p[0] == '/' || p[0] == '\\' ||
-                              (p.size() >= 2 && p[1] == ':'));
-    };
-
-    if (!posArgs.empty()) {
-        std::string target = posArgs[0];
-
-        if (isJsonFile(target) && fileExists(target)) {
-            // Explicit project (or app) bro.json launch.
-            bool isProject = false;
-            parseConfig(target, config, &isProject);
-            std::string targetDir = dirOf(target);
-            if (isProject) {
-                config.projectRoot = targetDir;
-                if (config.appDir.empty()) config.appDir = targetDir;
-                else if (!isAbsolute(config.appDir)) config.appDir = targetDir + "/" + config.appDir;
-            } else {
-                // App manifest pointed to directly — its dir is the appDir.
-                config.appDir = targetDir;
-            }
-        } else {
-            // Directory target. Don't preset config.appDir before parseConfig
-            // — the empty-check guard in config_loader skips default_app when
-            // appDir is already set.
-            std::string broJson = target + "/bro.json";
-            if (fileExists(broJson)) {
-                bool isProject = false;
-                parseConfig(broJson, config, &isProject);
-                if (isProject) {
-                    config.projectRoot = target;
-                    if (config.appDir.empty()) config.appDir = target;
-                    else if (!isAbsolute(config.appDir)) config.appDir = target + "/" + config.appDir;
-                } else {
-                    // Plain app bro.json — its dir is the appDir.
-                    config.appDir = target;
-                }
-            } else {
-                // No bro.json — treat directory as the app dir directly.
-                config.appDir = target;
-            }
-        }
-    } else {
-        // No arguments — auto-detect from exe directory.
-        std::string dir = exeDir();
-#ifndef _WIN32
-        if (!dir.empty() && dir != ".") chdir(dir.c_str());
-#endif
-        std::string configPath = dir + "/bro.json";
-
-        if (fileExists(configPath)) {
-            bool isProject = false;
-            parseConfig(configPath, config, &isProject);
-            if (isProject) {
-                config.projectRoot = dir;
-            }
-            if (config.appDir.empty()) {
-                config.appDir = dir;
-            } else if (!isAbsolute(config.appDir)) {
-                config.appDir = dir + "/" + config.appDir;
-            }
-        } else if (fileExists(dir + "/index.html")) {
-            config.appDir = dir;
-        } else if (fileExists(dir + "/system/projects/index.html")) {
-            // No app next to the exe — fall back to the built-in project
-            // manager. Ships under system/projects/ in every release.
-            config.appDir = dir + "/system/projects";
-        } else {
-            printUsage();
-            return 1;
-        }
-    }
-
-    // Inherit projectRoot from a parent bro process when this app was spawned
-    // from a launcher running inside a project.
-    if (config.projectRoot.empty()) {
-        if (const char* env = std::getenv("BRO_PROJECT_ROOT")) {
-            if (*env) config.projectRoot = env;
-        }
-    }
-
-    // Still nothing: the app was launched by passing its own directory
-    // directly (this file's own documented usage) and its bro.json carries
-    // no project keys itself. Walk up looking for an ancestor project
-    // manifest so /lib, /system, /std, /app mounts still resolve standalone.
-    if (config.projectRoot.empty() && !config.appDir.empty()) {
-        config.projectRoot = findAncestorProjectRoot(config.appDir);
-    }
-
-    // When launching via a project bro.json, the app's own bro.json also
-    // provides per-app overrides (title, width, height, etc.). Parse it
-    // after the project manifest so app-level keys take precedence. Preserve
-    // the resolved appDir against the app manifest's `"app": "."` field.
-    if (!config.projectRoot.empty() && !config.appDir.empty()) {
-        std::string appBroJson = config.appDir + "/bro.json";
-        if (fileExists(appBroJson) && appBroJson != config.projectRoot + "/bro.json") {
-            std::string preservedAppDir = config.appDir;
-            parseConfig(appBroJson, config, nullptr);
-            config.appDir = preservedAppDir;
-        }
+    // Resolve launch target → projectRoot + appDir. The target may be an app
+    // directory, a project directory, or a bro.json of either kind; with no
+    // argument the executable's own directory is probed. Shared with
+    // bro-headless, bro-server and any host application that links
+    // bro_engine — see engine/launcher.h.
+    if (!bro::engine::resolveLaunchTarget(posArgs.empty() ? std::string()
+                                                          : std::string(posArgs[0]),
+                                          config)) {
+        printUsage();
+        return 1;
     }
 
     // CLI splash overrides — applied last so they win over bro.json.
     if (cliNoSplash) config.showSplash = false;
     if (cliSplash)   config.showSplash = true;
 
-    // Expose the resolved app directory and project root to JS / child
-    // processes (process.env.BRO_APP_DIR, BRO_PROJECT_ROOT) so the launcher
-    // and other meta-apps can locate themselves and their siblings on disk
-    // without guessing from cwd, and so spawned children inherit the project
-    // context. Resolved to absolute paths.
-    auto absolutize = [&](const std::string& p) -> std::string {
-        if (p.empty()) return p;
-#ifdef _WIN32
-        char abs[MAX_PATH];
-        return _fullpath(abs, p.c_str(), MAX_PATH) ? std::string(abs) : p;
-#else
-        char abs[PATH_MAX];
-        return realpath(p.c_str(), abs) ? std::string(abs) : p;
-#endif
-    };
-
-    config.appDir = absolutize(config.appDir);
-    if (!config.projectRoot.empty()) config.projectRoot = absolutize(config.projectRoot);
-
-#ifdef _WIN32
-    _putenv_s("BRO_APP_DIR", config.appDir.c_str());
-    _putenv_s("BRO_PROJECT_ROOT", config.projectRoot.c_str());
-#else
-    setenv("BRO_APP_DIR", config.appDir.c_str(), 1);
-    if (!config.projectRoot.empty()) setenv("BRO_PROJECT_ROOT", config.projectRoot.c_str(), 1);
-    else unsetenv("BRO_PROJECT_ROOT");
-#endif
+    // Absolutise and publish BRO_EXE_DIR / BRO_APP_DIR / BRO_PROJECT_ROOT so
+    // JS and spawned children can locate themselves without guessing from cwd.
+    bro::engine::publishLaunchEnv(config);
 
     try {
         bro::engine::Engine engine(config);

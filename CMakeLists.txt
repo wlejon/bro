@@ -153,6 +153,18 @@ option(BRO_WITH_AUDIO    "broaudio engine + audio inference"                 ${_
 option(BRO_WITH_GAMEAI   "brogameagent core (navmesh/pathfinding/MCTS)"      ${_d_render})
 option(BRO_WITH_FLORA    "broflora ecosystem simulation"                     ${_d_render})
 option(BRO_WITH_TEXT_SHAPING "HarfBuzz text shaping + UAX#9 bidi (Skia modules)" ${_d_shaping})
+# Build the stock bro/bro-headless/bro-server executables. A host application
+# that embeds the engine (add_subdirectory(bro), link bro_engine, supply its
+# own main) turns this OFF: it wants the libraries, not a second bro.exe in
+# its build tree. Defaults to ON, and to OFF when bro is not the top-level
+# project — an embedder gets the sensible thing without asking for it.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    set(_d_exes ON)
+else()
+    set(_d_exes OFF)
+endif()
+option(BRO_BUILD_EXECUTABLES "Build the bro/bro-headless/bro-server binaries" ${_d_exes})
+
 # Services (each pulls a vcpkg dependency).
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
 option(BRO_WITH_VIDEO    "Video + GIF encode/decode (libvpx/webm / vcpkg)"   ${_d_svc})

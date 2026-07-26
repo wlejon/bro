@@ -1,5 +1,5 @@
 ## ── Embed JS polyfills as C++ headers at build time ──────────────────────────
-set(EMBED_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/embed_js.cmake")
+set(EMBED_SCRIPT "${bro_SOURCE_DIR}/cmake/embed_js.cmake")
 set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${GEN_DIR}")
 
@@ -115,7 +115,7 @@ add_library(bro_js STATIC
     feature_stubs.cpp
     ${GENERATED_HEADERS}
 )
-target_include_directories(bro_js PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(bro_js PUBLIC ${bro_SOURCE_DIR}/src)
 target_include_directories(bro_js PRIVATE ${GEN_DIR})
 # brolm is linked explicitly (not just transitively via brodiffusion):
 # diffusion_bindings.cpp uses brolm::clip for diffusion text encoding, and

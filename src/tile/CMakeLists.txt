@@ -12,7 +12,7 @@ add_library(bro_tile STATIC
     pathfind.cpp
     serialize.cpp
 )
-target_include_directories(bro_tile PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(bro_tile PUBLIC ${bro_SOURCE_DIR}/src)
 target_compile_features(bro_tile PUBLIC cxx_std_20)
 
 if(MSVC)

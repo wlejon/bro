@@ -1,5 +1,5 @@
 ## ── Embed JS scripts as C++ headers at build time ────────────────────────────
-set(EMBED_SCRIPT "${CMAKE_SOURCE_DIR}/cmake/embed_js.cmake")
+set(EMBED_SCRIPT "${bro_SOURCE_DIR}/cmake/embed_js.cmake")
 set(GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(MAKE_DIRECTORY "${GEN_DIR}")
 
@@ -44,6 +44,7 @@ add_library(bro_engine STATIC
     scrollbar.cpp
     app_loader.cpp
     config_loader.cpp
+    launcher.cpp
     replaced_elements.cpp
     system_panels.cpp
     iframe.cpp
@@ -63,7 +64,7 @@ add_library(bro_engine STATIC
 if(BRO_WITH_3D)
     target_sources(bro_engine PRIVATE gizmo.cpp gizmo_routing.cpp)
 endif()
-target_include_directories(bro_engine PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(bro_engine PUBLIC ${bro_SOURCE_DIR}/src)
 target_include_directories(bro_engine PRIVATE ${GEN_DIR})
 target_link_libraries(bro_engine PUBLIC bro_platform bro_render bro_js bro_dom bro_layout bro_canvas bro_webgl bro_audio_inference bro_steam broaudio bro_util glad)
 # <img> intrinsic sizing probes WebP headers too, so the engine needs the same

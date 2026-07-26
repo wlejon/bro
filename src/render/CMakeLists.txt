@@ -7,7 +7,7 @@
 # every other translation unit, where they would be inert at best and confusing
 # at worst.
 add_library(bro_bidi STATIC bidi.cpp)
-target_include_directories(bro_bidi PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(bro_bidi PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_bidi PUBLIC bro_util)
 if(BRO_WITH_TEXT_SHAPING)
     target_link_libraries(bro_bidi PRIVATE skia_icu_bidi_api)
@@ -29,7 +29,7 @@ add_library(bro_render STATIC
     command_replayer.cpp
     image_cache.cpp
 )
-target_include_directories(bro_render PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(bro_render PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_bidi glad broimage::broimage)
 
 # WebP decoding. Its own small library rather than a part of bro_render,
@@ -40,7 +40,7 @@ target_link_libraries(bro_render PUBLIC bro_platform skia bro_svg bro_util bro_b
 # compiled from the Skia source bundle rather than pulled from vcpkg.
 if(BRO_WITH_WEBP)
     add_library(bro_webp STATIC webp_image.cpp)
-    target_include_directories(bro_webp PUBLIC ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(bro_webp PUBLIC ${bro_SOURCE_DIR}/src)
     target_link_libraries(bro_webp PRIVATE webp_decode)
     target_compile_definitions(bro_webp PUBLIC BRO_WITH_WEBP=1)
     target_link_libraries(bro_render PRIVATE bro_webp)

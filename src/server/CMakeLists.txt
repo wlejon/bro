@@ -1,6 +1,6 @@
 add_executable(bro-server main.cpp)
 target_link_libraries(bro-server PRIVATE bro_engine)
-target_include_directories(bro-server PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(bro-server PRIVATE ${bro_SOURCE_DIR}/src)
 
 # QuickJS's JS_CallInternal has a large stack frame; deep JS recursion needs
 # more than the default 1 MB stack.

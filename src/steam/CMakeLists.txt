@@ -11,6 +11,6 @@ add_library(bro_steam STATIC
     steam_service.cpp
     steam_flat.cpp
 )
-target_include_directories(bro_steam PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(bro_steam PUBLIC ${bro_SOURCE_DIR}/src)
 # ${CMAKE_DL_LIBS} = libdl on Linux for dlopen/dlsym; empty on Windows/macOS.
 target_link_libraries(bro_steam PUBLIC bro_util ${CMAKE_DL_LIBS})

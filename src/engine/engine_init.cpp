@@ -126,6 +126,7 @@ Engine::Engine(const EngineConfig& config)
     splashEnabled_ = config.showSplash;
     appDir_ = config.appDir;
     titleOverride_ = config.title;
+    installHostBindings_ = config.installHostBindings;
 
     // === Asset mounts (engine-supplied virtual paths: /lib, /system, ...) ===
     // Project-root mounts come first; app-local overrides applied after the
@@ -1147,6 +1148,12 @@ void Engine::installCoreBindings(JSContext* ctx) {
     // bro.server.* (all modes) — in windowed mode this lets the process host
     // an in-process server script (e.g. the launcher running apps/fps/server.js).
     js::ServerBindings::install(ctx, this);
+
+    // Last: a host application's own bindings. Runs after every built-in so a
+    // host can extend or override what it finds, and per realm so a
+    // location.reload() or a sub-document gets them too — the same reason the
+    // built-ins live in this function rather than at first boot.
+    if (installHostBindings_) installHostBindings_(ctx);
 }
 
 // (Re)build the engine's default menu tree. On a location.reload() the app

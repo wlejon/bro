@@ -1,7 +1,7 @@
 add_library(bro_net STATIC
     net_service.cpp
 )
-target_include_directories(bro_net PUBLIC ${CMAKE_SOURCE_DIR}/src)
+target_include_directories(bro_net PUBLIC ${bro_SOURCE_DIR}/src)
 
 # GameNetworkingSockets exports its static and shared consumer targets under
 # different names, and any one vcpkg triplet builds only ONE of them:
