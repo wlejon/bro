@@ -20,9 +20,28 @@ class AudioDecoder {
 public:
     virtual ~AudioDecoder() = default;
 
+    // Ask for PCM in a specific shape — the audio engine's sample rate and a
+    // channel count it can mix — instead of whatever the stream happens to
+    // carry. Returns false if the decoder can't convert, in which case it
+    // keeps emitting its native format.
+    //
+    // This is what makes STREAMING playback possible. Converting rates chunk
+    // by chunk needs a resampler that carries filter state across calls;
+    // bro's own is a one-shot offline function, so a decoder that can't do
+    // this leaves the caller to decode the whole track up front and convert
+    // it in one pass. A decoder wrapping libswresample can, and streams.
+    virtual bool setOutputFormat(uint32_t sampleRate, uint32_t channels) {
+        (void)sampleRate; (void)channels;
+        return false;
+    }
+
     // Feed one compressed packet and return the decoded PCM. Single
     // packet in → single frame out (Opus/Vorbis don't fan out).
     virtual bool decode(const MediaPacket& pkt, AudioFrame& out) = 0;
+
+    // Drop buffered decoder state after the source has jumped. See
+    // VideoDecoder::flush().
+    virtual void flush() {}
 };
 
 // Opus decoder (libopus). `channels` and `sampleRate` come from the

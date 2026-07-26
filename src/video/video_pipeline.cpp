@@ -53,6 +53,10 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
         adec_.reset();
         return false;
     }
+    // This source pumps video only — audio plays from a second demuxer (see
+    // ElVideo). Asking for just the video track stops us reading and copying
+    // audio packets we immediately drop.
+    source->setActiveTracks({videoTrackId_});
     source_ = std::move(source);
     return true;
 }
@@ -86,6 +90,10 @@ void VideoPipeline::setRate(double rate) {
 void VideoPipeline::seekTo(TimeNs pts) {
     if (!source_) return;
     source_->seekTo(pts);
+    // Frames still in flight belong to the old position: drop them before
+    // decoding at the new one.
+    if (vdec_) vdec_->flush();
+    if (adec_) adec_->flush();
     if (clock_) clock_->seekTo(pts);
     pendingVideoValid_ = false;
     endOfStream_ = false;
@@ -106,7 +114,12 @@ bool VideoPipeline::decodePacket(const MediaPacket& pkt) {
             i420ToRgba(frame.y, frame.u, frame.v,
                        frame.strideY, frame.strideU, frame.strideV,
                        frameW_, frameH_, rgba_.data(), frameW_ * 4);
-            currentPts_ = pkt.pts;
+            // The FRAME's pts, not the packet's. A codec with B-frames emits
+            // pictures in a different order than the packets that carried
+            // them, so the frame coming out of decode() is generally not the
+            // one the packet just fed in. VP8/VP9 don't reorder, which is why
+            // the packet pts was indistinguishable until now.
+            currentPts_ = frame.pts;
             hasFrame_ = true;
             got = true;
         }
@@ -148,7 +161,14 @@ bool VideoPipeline::advanceTo(TimeNs nowNs) {
             continue;
         }
 
-        if (pkt.pts > nowNs && hasFrame_) {
+        // Stop once the decoder has actually PRODUCED a frame at or past now.
+        // Gating on the packet alone breaks under frame reordering: packets
+        // arrive in decode order, so a packet with a far-future pts is often
+        // exactly the reference the frame due right now needs. Waiting on
+        // currentPts_ keeps feeding until the picture we're waiting for is
+        // out, and collapses to the old one-packet-lookahead behaviour when
+        // decode order equals presentation order.
+        if (pkt.pts > nowNs && hasFrame_ && currentPts_ >= nowNs) {
             // Stash and wait until time catches up.
             pendingVideo_ = std::move(pkt);
             pendingVideoValid_ = true;

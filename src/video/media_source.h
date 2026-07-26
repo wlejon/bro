@@ -59,6 +59,15 @@ public:
     // Optional: seek to the nearest keyframe at or before `pts`. Returns
     // false if the source doesn't support seeking (network live).
     virtual bool seekTo(TimeNs pts) { (void)pts; return false; }
+
+    // Only deliver packets for these tracks. A player opens the same file
+    // twice — once pumping video, once pumping audio — and without this each
+    // instance reads, copies and discards the other's packets, which for
+    // 1080p is several MB/s of pure waste. Ignored by sources that can't
+    // filter; readPacket callers must still check trackId.
+    virtual void setActiveTracks(const std::vector<uint32_t>& trackIds) {
+        (void)trackIds;
+    }
 };
 
 } // namespace bro::video

@@ -46,6 +46,13 @@ public:
     // single decode() if the codec emits more than one frame per packet.
     virtual bool nextFrame(VideoFrame& out) = 0;
 
+    // Drop all buffered state after the source has jumped. Codecs that
+    // reorder frames (H.264/HEVC/AV1 with B-frames) hold several frames in
+    // flight, and replaying those across a seek emits pictures from the old
+    // position with timestamps from the new one. VP8/VP9 don't reorder, which
+    // is why the built-in path never needed this.
+    virtual void flush() {}
+
     // Signal to the encoder peer that a keyframe is needed to recover
     // from unreferenced frames after a loss burst.
     virtual bool needsKeyframe() const { return false; }
