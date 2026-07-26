@@ -16,4 +16,16 @@ void i420ToRgba(const uint8_t* y, const uint8_t* u, const uint8_t* v,
                 int width, int height,
                 uint8_t* dst, int dstStride);
 
+// Same conversion, box-filtered down to dstW x dstH on the way out. For
+// thumbnails: converting a 1440p frame in full and then shrinking it costs
+// 5 ms and 15 MB per thumbnail, while averaging straight out of the planes
+// touches each source pixel once and writes only what is kept.
+//
+// Downscale only — enlarging works but is a blocky nearest-neighbour result,
+// which is not what this is for.
+void i420ToRgbaScaled(const uint8_t* y, const uint8_t* u, const uint8_t* v,
+                      int strideY, int strideU, int strideV,
+                      int srcW, int srcH,
+                      uint8_t* dst, int dstStride, int dstW, int dstH);
+
 } // namespace bro::video

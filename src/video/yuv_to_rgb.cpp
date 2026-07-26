@@ -85,4 +85,63 @@ void i420ToRgba(const uint8_t* y, const uint8_t* u, const uint8_t* v,
     }
 }
 
+void i420ToRgbaScaled(const uint8_t* y, const uint8_t* u, const uint8_t* v,
+                      int strideY, int strideU, int strideV,
+                      int srcW, int srcH,
+                      uint8_t* dst, int dstStride, int dstW, int dstH) {
+    if (srcW <= 0 || srcH <= 0 || dstW <= 0 || dstH <= 0) return;
+    if (dstStride <= 0) dstStride = dstW * 4;
+
+    const int cw = (srcW + 1) / 2, chh = (srcH + 1) / 2;
+
+    for (int dy = 0; dy < dstH; ++dy) {
+        int y0 = static_cast<int>(static_cast<int64_t>(dy) * srcH / dstH);
+        int y1 = static_cast<int>(static_cast<int64_t>(dy + 1) * srcH / dstH);
+        if (y1 <= y0) y1 = y0 + 1;
+        if (y1 > srcH) y1 = srcH;
+
+        uint8_t* out = dst + static_cast<size_t>(dy) * dstStride;
+        for (int dx = 0; dx < dstW; ++dx) {
+            int x0 = static_cast<int>(static_cast<int64_t>(dx) * srcW / dstW);
+            int x1 = static_cast<int>(static_cast<int64_t>(dx + 1) * srcW / dstW);
+            if (x1 <= x0) x1 = x0 + 1;
+            if (x1 > srcW) x1 = srcW;
+
+            int ySum = 0, yN = 0;
+            for (int sy = y0; sy < y1; ++sy) {
+                const uint8_t* row = y + static_cast<size_t>(sy) * strideY;
+                for (int sx = x0; sx < x1; ++sx) ySum += row[sx];
+                yN += x1 - x0;
+            }
+
+            // Chroma is half resolution in both axes, so the same source box
+            // maps to half the coordinates — and never to an empty range.
+            int cy0 = y0 / 2, cy1 = (y1 + 1) / 2;
+            int cx0 = x0 / 2, cx1 = (x1 + 1) / 2;
+            if (cy1 <= cy0) cy1 = cy0 + 1;
+            if (cx1 <= cx0) cx1 = cx0 + 1;
+            if (cy1 > chh) cy1 = chh;
+            if (cx1 > cw) cx1 = cw;
+
+            int uSum = 0, vSum = 0, cN = 0;
+            for (int sy = cy0; sy < cy1; ++sy) {
+                const uint8_t* uRow = u + static_cast<size_t>(sy) * strideU;
+                const uint8_t* vRow = v + static_cast<size_t>(sy) * strideV;
+                for (int sx = cx0; sx < cx1; ++sx) { uSum += uRow[sx]; vSum += vRow[sx]; }
+                cN += cx1 - cx0;
+            }
+
+            const int yy = yN ? ySum / yN : 16;
+            const int ui = (cN ? uSum / cN : 128) - 128;
+            const int vi = (cN ? vSum / cN : 128) - 128;
+            const int c = 298 * (yy - 16);
+            out[0] = sat((c + 409 * vi + 128) >> 8);
+            out[1] = sat((c - 100 * ui - 208 * vi + 128) >> 8);
+            out[2] = sat((c + 516 * ui + 128) >> 8);
+            out[3] = 255;
+            out += 4;
+        }
+    }
+}
+
 } // namespace bro::video

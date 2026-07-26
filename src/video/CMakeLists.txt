@@ -13,6 +13,7 @@ add_library(bro_video STATIC
     webm_encoder.cpp
     gif_encoder.cpp
     video_pipeline.cpp
+    media_analysis.cpp
 )
 target_include_directories(bro_video PUBLIC ${bro_SOURCE_DIR}/src)
 target_link_libraries(bro_video

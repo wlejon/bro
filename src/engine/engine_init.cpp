@@ -38,6 +38,7 @@
 #include "js/webgl2_bindings.h"
 #include "js/image_bindings.h"
 #include "js/imagebitmap_bindings.h"
+#include "js/media_bindings.h"
 #include "js/video_bindings.h"
 #include "js/worker.h"
 #if BRO_WITH_PHYSICS
@@ -1111,6 +1112,10 @@ void Engine::installCoreBindings(JSContext* ctx) {
     // bro.text — diagnostic view of the shaper's cluster map (see
     // js/text_bindings.h). Not an app-facing text API.
     js::installTextBindings(ctx, this);
+
+    // bro.media — waveform + filmstrip analysis of a media file, through the
+    // same backend registry <video> plays through.
+    js::installMediaBindings(ctx, manifest_.basePath);
 
     // bro.tensor / bro.diffusion / bro.lm / bro.stt / bro.tts / bro.diar /
     // bro.rave / bro.vision / bro.triposplat / bro.motion — the ML tower.

@@ -50,6 +50,7 @@ add_library(bro_js STATIC
     webgl2_bindings_objects.cpp
     image_bindings.cpp
     imagebitmap_bindings.cpp
+    media_bindings.cpp
     video_bindings.cpp
     physics_bindings.cpp
     scene_bindings.cpp

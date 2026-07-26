@@ -130,7 +130,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `menu-api.js` | `bro.menu`: native menu bar |
 | `time-api.js` | `bro.time`: global pause + timescale over one engine-owned scaled clock |
 | `gizmo-api.js` | `bro.gizmo`: 3D transform handles |
-| `video-api.js` | `<video>` playback (HTMLMediaElement subset, WebM/VP9+Opus) + `VideoEncoder` (WebM/VP9) / `GifEncoder`: RGBA in, file out |
+| `video-api.js` | `<video>` playback (HTMLMediaElement subset, WebM/VP9+Opus) incl. `stepFrame`/`frameRate`, `bro.media` waveform + filmstrip analysis, `VideoEncoder` (WebM/VP9) / `GifEncoder`: RGBA in, file out |
 | `iframe-api.js` | `<iframe src=dir>`: isolated sub-document (own realm/DOM/timers), input routed in |
 
 Bindings without a `docs/` file yet: `bro.steam` (`src/js/steam_bindings.cpp`, Steamworks via a runtime-loaded flat C API) and `bro.text` (`src/js/text_bindings.cpp`, shaping diagnostics). Read the binding source for those.

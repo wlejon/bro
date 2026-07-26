@@ -424,3 +424,63 @@ wallSleep(300);          // wall clock, video time ignores advanceTime()
 flush();                 // pump media events + present the current frame
 assert(vid.currentTime > 0, 'playback advanced');
 vid.pause();
+
+// ---------------------------------------------------------------------------
+// bro.media — the waveform and the filmstrip
+// ---------------------------------------------------------------------------
+//
+// A timeline has to show what is INSIDE a file, not just play it. Neither the
+// samples nor the frames exist anywhere the DOM can reach — they only appear
+// inside a decoder, and only if someone decodes the whole file — so the engine
+// hands them over in the shape a timeline draws from.
+//
+// Both calls go through the same media backend registry <video> plays through,
+// so a host that registered its own backend (see docs/embedding.md) gets them
+// for every format it can open. `bro.media.available` is false in a build
+// without video.
+//
+// Both are SYNCHRONOUS full-file decodes. bro.media is installed in worker
+// realms for exactly this reason: run them in a Worker and post the arrays
+// back, or the UI sits frozen for as long as the decode takes.
+
+// bro.media.peaks(path, { buckets = 2048 })
+//   → { sampleRate, channels, duration, buckets,
+//       min, max, rms }        Float32Array each, one entry per bucket,
+//                              spread evenly across the file, all in [-1, 1].
+//                              min/max are the envelope a waveform is drawn
+//                              from; rms is loudness, for a filled body.
+//   → null if the file has no audio track this build can decode.
+//
+//   Cost: one full audio decode. ~350 ms for five minutes of AAC.
+
+const peaks = bro.media.peaks('clip.mp4', { buckets: 3000 });
+if (peaks) {
+    for (let x = 0; x < width; x++) {
+        const b = Math.floor((x / width) * peaks.buckets);
+        ctx.fillRect(x, mid - peaks.max[b] * mid, 1, (peaks.max[b] - peaks.min[b]) * mid);
+    }
+}
+
+// bro.media.thumbnails(path, { count = 24, height = 72 })
+//   → { width, height, count,  width is per thumbnail, from the frame aspect
+//       times,                 seconds, one per thumbnail: when it is FROM
+//       data }                 Uint8ClampedArray, RGBA — ONE image, `count`
+//                              thumbnails side by side, (width*count) x height.
+//                              One image because that is one putImageData and
+//                              one texture upload instead of `count` of each.
+//   → null if the file has no video track this build can decode.
+//
+//   `count` may come back short if the file runs out of frames.
+//
+//   Grabs are seeked, then decoded forward toward the requested time within a
+//   budget that scales with frame size — a 720p file lands close to the time
+//   asked for, a 4K one settles for the keyframe rather than making the caller
+//   wait. `times` reports what was actually grabbed, which is why it exists.
+
+const strip = bro.media.thumbnails('clip.mp4', { count: 32, height: 96 });
+const img = new ImageData(strip.data, strip.width * strip.count, strip.height);
+createImageBitmap(img).then((bmp) => {
+    for (let i = 0; i < strip.count; i++)
+        ctx.drawImage(bmp, i * strip.width, 0, strip.width, strip.height,
+                      i * slotWidth, 0, slotWidth, laneHeight);
+});

@@ -16,6 +16,7 @@
 #include "js/flora_bindings.h"
 #include "js/image_bindings.h"
 #include "js/math_bindings.h"
+#include "js/media_bindings.h"
 #include "js/message_serializer.h"
 #include "js/net_bindings.h"
 #include "js/runtime.h"
@@ -291,6 +292,11 @@ void Worker::threadFunc()
     // tensor + ops, brotensor sibling). ---
     installGpuBindings(ctx);
     installTensorBindings(ctx);
+
+    // --- 3b''ᵐ. Install bro.media (waveform + filmstrip analysis). A full-file
+    // decode is exactly the kind of work a worker exists for: an app builds
+    // its timeline here and posts the arrays back. ---
+    installMediaBindings(ctx, basePath_);
 
     // --- 3b'''. Install bro.diffusion (diffusion-model inference, brodiffusion
     // sibling). Same binding as the main context; this worker owns its own
