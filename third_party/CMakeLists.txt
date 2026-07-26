@@ -98,6 +98,18 @@ if(NOT TARGET FastNoise)
     if(NOT EXISTS "${_BROKIT_ROOT}/CMakeLists.txt")
         set(_BROKIT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/brokit")
     endif()
+    # FastNoise2 fetches FastSIMD through the CPM.cmake copy vendored next to it.
+    # CPM caches CPM_DIRECTORY and early-returns (defining nothing) when a *different*
+    # copy of CPM.cmake is included later. Switching brokit roots between configures
+    # -- submodule to standalone or back -- therefore leaves a stale CPM_DIRECTORY
+    # that makes CPMAddPackage undefined. Drop it when it no longer matches.
+    get_filename_component(_fn2_cpm_dir
+                           "${_BROKIT_ROOT}/third_party/FastNoise2/cmake" REALPATH)
+    if(DEFINED CPM_DIRECTORY AND NOT CPM_DIRECTORY STREQUAL _fn2_cpm_dir)
+        unset(CPM_DIRECTORY CACHE)
+        unset(CPM_FILE CACHE)
+        unset(CPM_VERSION CACHE)
+    endif()
     add_subdirectory("${_BROKIT_ROOT}/third_party/FastNoise2"
                      "${CMAKE_BINARY_DIR}/FastNoise2" EXCLUDE_FROM_ALL)
 

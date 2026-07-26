@@ -5,6 +5,8 @@
 
 #include "util/log.h"
 
+#include <cstring>
+
 namespace bro::video {
 
 VideoPipeline::VideoPipeline() {
