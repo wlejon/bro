@@ -36,6 +36,12 @@ public:
     // Move playback to `pts` ns; the next advanceTo() resumes from there.
     void seekTo(TimeNs pts);
 
+    /// True when seekTo(pts) would just decode on from the current position
+    /// rather than restarting the demuxer. Callers with their own per-seek
+    /// costs — an audio ring that has to be torn down and refilled — use this
+    /// to skip that work for a frame step.
+    bool wouldNudge(TimeNs pts) const;
+
     // Playback rate multiplier applied to the pipeline's MediaClock. Audio
     // is not yet rate-scaled; callers that care about audio pitch will need
     // to gate rate != 1.0.
@@ -76,6 +82,16 @@ public:
 private:
     bool decodePacket(const MediaPacket& pkt);
 
+    /// Keep a decoded frame as I420 in our own buffer. The decoder's planes
+    /// are only valid until its next call, so catching up across a seek would
+    /// otherwise have to convert every intermediate frame to RGBA just to
+    /// keep it alive — and a memcpy is an order of magnitude cheaper than a
+    /// per-pixel colour conversion.
+    void storeFrame(const VideoFrame& frame);
+
+    /// Convert the stored I420 to RGBA, once, if it has changed.
+    void refreshRgba();
+
     /// Wire an opened source and its backend's decoders into this pipeline.
     /// False when the file carries no video track this backend can decode,
     /// with the pipeline left clean so open() can try the next one.
@@ -92,7 +108,14 @@ private:
     uint32_t audioChannels_ = 0;
     TimeNs duration_ = 0;
 
-    // Latest decoded frame kept hot for the render thread.
+    // Latest decoded frame kept hot for the render thread. The I420 copy is
+    // what decode writes; the RGBA is derived from it once per advance, not
+    // once per decoded frame.
+    std::vector<uint8_t> yuv_;      // packed Y then U then V, tight strides
+    int yuvW_ = 0;
+    int yuvH_ = 0;
+    bool rgbaStale_ = false;
+
     std::vector<uint8_t> rgba_;
     int frameW_ = 0;
     int frameH_ = 0;

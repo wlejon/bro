@@ -448,8 +448,9 @@ class AudioContext {
   // (multiplies setPlaybackRate), voices fold it into pitch as semitones.
   // Model: ratio = (c − v_l·d̂)/(c − v_s·d̂), c = 343 units/sec, clamped to
   // [0.5, 2.0] (±1 octave). Streaming playbacks (createStream /
-  // createStreamFromFile) are NOT shifted, their ring mixer has no
-  // resampler, same reason setPlaybackRate is a no-op for them.
+  // createStreamFromFile) are shifted too — their ring mixer interpolates
+  // with a fractional read cursor, the same way setPlaybackRate works on
+  // them.
   // Scene-attached emitters (node.attachAudioEmitter, see scene-api.js)
   // compute and push velocities automatically from node motion.
 
@@ -692,7 +693,15 @@ class AudioContext {
    * @param {number} endSample
    */
   setPlaybackRegion(playbackId, startSample, endSample) {}
-  /** @param {number} playbackId @param {number} rate - 1.0 = normal speed */ setPlaybackRate(playbackId, rate) {}
+  /**
+   * Playback speed, tape-style: pitch follows speed. Works on clip playbacks
+   * and on streaming playbacks alike (createStream / createStreamFromFile),
+   * where the ring is read through a fractional cursor with linear
+   * interpolation. A stream at rate r drains its ring r times as fast, so a
+   * producer feeding it has to keep up.
+   * @param {number} playbackId @param {number} rate - 1.0 = normal speed
+   */
+  setPlaybackRate(playbackId, rate) {}
   /** @param {number} playbackId @param {number} pan - -1.0 to 1.0 */ setPlaybackPan(playbackId, pan) {}
   /** @param {number} playbackId @returns {number} normalized position in the clip/region, [0,1): multiply by the clip duration for seconds */ getPlaybackPosition(playbackId) {}
 

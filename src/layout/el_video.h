@@ -149,6 +149,9 @@ private:
     int audioStreamChannels_ = 0;
     int audioStreamRate_ = 0;
     bool audioSourceEnded_ = false;
+    // Position a seek-while-paused owes the audio ring, applied on the next
+    // play(). Negative when there is nothing outstanding.
+    double audioSeekPending_ = -1.0;
 
     bool openStreamingAudio(const std::string& resolvedPath);
     void closeStreamingAudio();

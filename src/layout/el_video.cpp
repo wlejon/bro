@@ -150,6 +150,7 @@ void ElVideo::closeStreamingAudio() {
     audioStreamChannels_ = 0;
     audioStreamRate_ = 0;
     audioSourceEnded_ = false;
+    audioSeekPending_ = -1.0;
 }
 
 // Top the ring back up to kAudioBufferSeconds. Called once per frame from
@@ -303,6 +304,12 @@ void ElVideo::play() {
     if (!pipeline_) return;
     pipeline_->play();
     if (audioStreamId_ >= 0 && audioEngine_) {
+        // Pay for any seeks made while paused, once, here.
+        if (audioSeekPending_ >= 0.0) {
+            const double at = audioSeekPending_;
+            audioSeekPending_ = -1.0;
+            restartStreamingAudio(at);
+        }
         // Refill first: starting a drained ring emits silence and counts it
         // as underrun, which is exactly the "first second is missing" bug.
         pumpStreamingAudio();
@@ -331,6 +338,16 @@ bool ElVideo::isPlaying() const { return pipeline_ && pipeline_->isPlaying(); }
 void ElVideo::seekTo(double seconds) {
     if (!pipeline_) return;
     auto ns = static_cast<bro::video::TimeNs>(seconds * 1e9);
+    // Tearing down and refilling the audio ring costs more than a short
+    // forward step is worth. While paused nothing is being heard, so a frame
+    // step can leave it alone entirely; while playing it has to be re-anchored
+    // or the sound drifts away from the picture.
+    // While paused nothing is being heard, so the ring does not have to be
+    // rebuilt at all — just remember where it owes us and re-anchor on the
+    // next play(). This is what makes scrubbing cheap: dragging a playhead is
+    // dozens of seeks a second, and each one was tearing down an audio stream
+    // and decoding half a second of sound nobody would hear.
+    const bool deferAudio = !pipeline_->isPlaying();
     pipeline_->seekTo(ns);
     pipeline_->advanceTo(ns);
     // Seek can move playback away from the end; let ended fire again if the
@@ -339,7 +356,8 @@ void ElVideo::seekTo(double seconds) {
     lastTimeUpdateSec_ = -1.0;
     // Re-anchor audio at the new position.
     if (audioStreamId_ >= 0) {
-        restartStreamingAudio(seconds);
+        if (deferAudio) audioSeekPending_ = seconds;
+        else restartStreamingAudio(seconds);
     } else if (pipeline_->isPlaying() && audioClipId_ >= 0) {
         startAudioPlayback(seconds);
     } else {

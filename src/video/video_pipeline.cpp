@@ -87,19 +87,83 @@ void VideoPipeline::setRate(double rate) {
     if (clock_) clock_->setRate(rate);
 }
 
+// A forward seek shorter than this decodes on from where we are instead of
+// restarting the demuxer. A demuxer seek lands on the keyframe at or BEFORE
+// the target — which for a target just ahead of the playhead is usually
+// BEHIND the playhead, so it decodes a whole GOP to reach a picture that was
+// only a few frames away. Frame stepping is the extreme case: one frame
+// forward cost an entire GOP.
+static constexpr TimeNs kForwardNudgeNs = 500 * 1000000LL;   // 0.5 s
+
 void VideoPipeline::seekTo(TimeNs pts) {
     if (!source_) return;
-    source_->seekTo(pts);
-    // Frames still in flight belong to the old position: drop them before
-    // decoding at the new one.
-    if (vdec_) vdec_->flush();
-    if (adec_) adec_->flush();
+
+    const bool nudgeForward = hasFrame_ && currentPts_ >= 0 &&
+                              pts >= currentPts_ &&
+                              (pts - currentPts_) <= kForwardNudgeNs;
+    if (!nudgeForward) {
+        source_->seekTo(pts);
+        // Frames still in flight belong to the old position: drop them before
+        // decoding at the new one.
+        if (vdec_) vdec_->flush();
+        if (adec_) adec_->flush();
+        pendingVideoValid_ = false;
+        hasFrame_ = false;
+        currentPts_ = -1;
+    }
     if (clock_) clock_->seekTo(pts);
-    pendingVideoValid_ = false;
     endOfStream_ = false;
-    hasFrame_ = false;
-    currentPts_ = -1;
     advanceTo(pts);
+}
+
+bool VideoPipeline::wouldNudge(TimeNs pts) const {
+    return hasFrame_ && currentPts_ >= 0 && pts >= currentPts_ &&
+           (pts - currentPts_) <= kForwardNudgeNs;
+}
+
+// Copy a decoded frame's planes into yuv_ with tight strides.
+void VideoPipeline::storeFrame(const VideoFrame& frame) {
+    const int w = static_cast<int>(frame.width);
+    const int h = static_cast<int>(frame.height);
+    if (w <= 0 || h <= 0) return;
+
+    const int cw = (w + 1) / 2, ch = (h + 1) / 2;
+    const size_t ySize = static_cast<size_t>(w) * h;
+    const size_t cSize = static_cast<size_t>(cw) * ch;
+    yuv_.resize(ySize + cSize * 2);
+    yuvW_ = w;
+    yuvH_ = h;
+
+    uint8_t* dstY = yuv_.data();
+    uint8_t* dstU = dstY + ySize;
+    uint8_t* dstV = dstU + cSize;
+    for (int row = 0; row < h; ++row)
+        std::memcpy(dstY + static_cast<size_t>(row) * w,
+                    frame.y + static_cast<size_t>(row) * frame.strideY, w);
+    for (int row = 0; row < ch; ++row) {
+        std::memcpy(dstU + static_cast<size_t>(row) * cw,
+                    frame.u + static_cast<size_t>(row) * frame.strideU, cw);
+        std::memcpy(dstV + static_cast<size_t>(row) * cw,
+                    frame.v + static_cast<size_t>(row) * frame.strideV, cw);
+    }
+    rgbaStale_ = true;
+}
+
+void VideoPipeline::refreshRgba() {
+    if (!rgbaStale_ || yuvW_ <= 0 || yuvH_ <= 0) return;
+    rgbaStale_ = false;
+
+    frameW_ = yuvW_;
+    frameH_ = yuvH_;
+    const int cw = (yuvW_ + 1) / 2, ch = (yuvH_ + 1) / 2;
+    const size_t ySize = static_cast<size_t>(yuvW_) * yuvH_;
+    const size_t cSize = static_cast<size_t>(cw) * ch;
+    (void)ch;
+
+    rgba_.resize(ySize * 4);
+    const uint8_t* y = yuv_.data();
+    i420ToRgba(y, y + ySize, y + ySize + cSize,
+               yuvW_, cw, cw, yuvW_, yuvH_, rgba_.data(), yuvW_ * 4);
 }
 
 bool VideoPipeline::decodePacket(const MediaPacket& pkt) {
@@ -108,12 +172,10 @@ bool VideoPipeline::decodePacket(const MediaPacket& pkt) {
         VideoFrame frame;
         bool got = false;
         while (vdec_->nextFrame(frame)) {
-            frameW_ = static_cast<int>(frame.width);
-            frameH_ = static_cast<int>(frame.height);
-            rgba_.resize(static_cast<size_t>(frameW_) * frameH_ * 4);
-            i420ToRgba(frame.y, frame.u, frame.v,
-                       frame.strideY, frame.strideU, frame.strideV,
-                       frameW_, frameH_, rgba_.data(), frameW_ * 4);
+            // Keep the picture, don't convert it. A seek walks the whole GOP
+            // to reach one frame; converting all of them cost 3.3 ms each and
+            // was the entire reason scrubbing felt broken.
+            storeFrame(frame);
             // The FRAME's pts, not the packet's. A codec with B-frames emits
             // pictures in a different order than the packets that carried
             // them, so the frame coming out of decode() is generally not the
@@ -178,6 +240,9 @@ bool VideoPipeline::advanceTo(TimeNs nowNs) {
         if (decodePacket(pkt)) changed = true;
     }
 
+    // One colour conversion per advance, however many frames were decoded to
+    // get here.
+    if (changed) refreshRgba();
     return changed;
 }
 
