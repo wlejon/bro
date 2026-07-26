@@ -102,18 +102,21 @@ void VideoPipeline::seekTo(TimeNs pts) {
 
     const bool nudgeForward = cur_.valid && cur_.pts >= 0 && pts >= cur_.pts &&
                               (pts - cur_.pts) <= kForwardNudgeNs;
-    if (!nudgeForward) {
-        source_->seekTo(pts);
-        // Frames still in flight belong to the old position: drop them before
-        // decoding at the new one.
-        if (vdec_) vdec_->flush();
-        if (adec_) adec_->flush();
-        while (!staged_.empty()) { recycle(std::move(staged_.front())); staged_.pop_front(); }
-        recycle(std::move(cur_));
-    }
+    if (!nudgeForward) restartAt(pts);
     if (clock_) clock_->seekTo(pts);
-    endOfStream_ = false;
     advanceTo(pts);
+}
+
+// Point the demuxer at the keyframe at or before `target` and throw away
+// everything decoded from the old position — frames still in flight belong
+// there, not here.
+void VideoPipeline::restartAt(TimeNs target) {
+    source_->seekTo(target);
+    if (vdec_) vdec_->flush();
+    if (adec_) adec_->flush();
+    while (!staged_.empty()) { recycle(std::move(staged_.front())); staged_.pop_front(); }
+    recycle(std::move(cur_));
+    endOfStream_ = false;
 }
 
 bool VideoPipeline::stepFrame(int direction) {
@@ -121,13 +124,40 @@ bool VideoPipeline::stepFrame(int direction) {
 
     if (direction < 0) {
         if (!cur_.valid || cur_.pts <= 0) return false;
-        // One nanosecond before the picture on screen. Seeking displays the
-        // last frame at or before the target, so that IS the frame before
-        // this one — whatever the file's frame rate happens to be, constant
-        // or not.
         const TimeNs was = cur_.pts;
-        seekTo(cur_.pts - 1);
-        return cur_.valid && cur_.pts < was;
+
+        // Restart the demuxer a little BEFORE the picture on screen, then
+        // decode forward and keep the last frame that is still earlier than
+        // it. Comparing frames is exact — their timestamps are already in ns —
+        // so the only question is where to restart from.
+        //
+        // Not one nanosecond before: a demuxer converts the target into the
+        // container's own timebase, where one nanosecond is far below a tick,
+        // and the rounding puts it back on the current frame. When that frame
+        // is a keyframe the seek then lands on the frame we are trying to
+        // leave, the step reports nothing to do, and stepping back stalls
+        // there for good — which is exactly what a viewer sees as "it won't
+        // go back past this point".
+        //
+        // A wider guard is never wrong, only slower: from wherever we land we
+        // still decode forward to the frame just before `was`. So start at a
+        // couple of frames and widen hard if the file disagrees.
+        TimeNs guard = frameRate_ > 0.0
+                           ? static_cast<TimeNs>(2e9 / frameRate_)
+                           : 100 * 1000000LL;                     // 100 ms
+        for (int attempt = 0; attempt < 6; ++attempt) {
+            const TimeNs target = was > guard ? was - guard : 0;
+            restartAt(target);
+            advanceTo(was - 1);
+
+            if (cur_.valid && cur_.pts < was) {
+                if (clock_) clock_->seekTo(cur_.pts);
+                return true;
+            }
+            if (target == 0) break;
+            guard *= 8;
+        }
+        return false;
     }
     if (direction == 0) return false;
 

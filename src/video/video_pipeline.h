@@ -115,6 +115,10 @@ private:
     /// True if the displayed frame changed.
     bool decodePacket(const MediaPacket& pkt, TimeNs nowNs);
 
+    /// Restart the demuxer at the keyframe at or before `target`, dropping
+    /// every picture decoded from the old position.
+    void restartAt(TimeNs target);
+
     /// Demux and decode one video packet. False at end of stream. Sets
     /// *changed when the displayed picture moved on.
     bool pumpOne(TimeNs nowNs, bool* changed);

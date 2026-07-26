@@ -81,6 +81,24 @@ assert(v.stepFrame(-8) === 8, 'stepFrame(-8) moved eight');
 assert(near(v.currentTime, before),
        `eight back returns exactly (${v.currentTime.toFixed(3)}s)`);
 
+// ── back to the very start, one frame at a time ───────────────────────────
+// Backward stepping used to stall at a keyframe: the step asked for a target
+// one nanosecond earlier, which rounds to nothing in the container's timebase,
+// so the seek landed back on the frame it was trying to leave and the walk
+// stopped dead there.
+v.currentTime = v.duration * 0.8;
+let prev = v.currentTime;
+let walked = 0;
+while (v.stepFrame(-1) === 1) {
+    assert(v.currentTime < prev,
+           `walk back stalled at ${prev.toFixed(3)}s after ${walked} frames`);
+    prev = v.currentTime;
+    walked++;
+    if (walked > N * 2) break;
+}
+assert(near(prev, 0), `walked ${walked} frames back to the start (${prev.toFixed(3)}s)`);
+assert(walked >= N / 2, `and that was most of the file (${walked} frames)`);
+
 // ── the ends of the file report honestly ──────────────────────────────────
 v.currentTime = 0;
 assert(near(v.currentTime, 0), 'seek to 0 shows the first frame');
