@@ -32,6 +32,44 @@ std::string resolveAssetPath(const std::string& src) {
     return path + src;
 }
 
+namespace {
+
+JSValue js_resolvePath(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "resolvePath: path required");
+    const char* s = JS_ToCString(ctx, argv[0]);
+    if (!s) return JS_EXCEPTION;
+    std::string resolved = resolveAssetPath(s);
+    JS_FreeCString(ctx, s);
+    // Hand back a native-separator path: the caller's next move is usually to
+    // spawn a process with it, and Windows tools are happier with backslashes.
+    return JS_NewString(ctx, std::filesystem::path(resolved).make_preferred().string().c_str());
+}
+
+} // namespace
+
+void installAssetPathBindings(JSContext* ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue broObj = JS_GetPropertyStr(ctx, global, "bro");
+    if (JS_IsUndefined(broObj)) {
+        JS_FreeValue(ctx, broObj);
+        broObj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, global, "bro", JS_DupValue(ctx, broObj));
+    }
+
+    JS_SetPropertyStr(ctx, broObj, "resolvePath",
+                      JS_NewCFunction(ctx, js_resolvePath, "resolvePath", 1));
+
+    // The app's own root. Empty when there is no app directory (a bare
+    // `bro-headless -e` session), which callers can test for.
+    std::string dir = s_basePath.empty()
+                          ? std::string()
+                          : std::filesystem::path(s_basePath).make_preferred().string();
+    JS_SetPropertyStr(ctx, broObj, "appDir", JS_NewString(ctx, dir.c_str()));
+
+    JS_FreeValue(ctx, broObj);
+    JS_FreeValue(ctx, global);
+}
+
 std::string resolveAssetWritePath(const std::string& src) {
     namespace fs = std::filesystem;
     fs::path p(src);

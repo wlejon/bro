@@ -109,6 +109,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `worker-api.js` | `Worker`, web worker threads |
 | `ai-game-api.js` | `bro.ai.game`: navmesh, pathfinding, steering, perception, AgentBinding |
 | `gpu-api.js` | `bro.gpu`: runtime backend probe (`available`/`backend`/`devices`/`compiledBackends`) |
+| `paths-api.js` | `bro.appDir` / `bro.resolvePath`: real filesystem paths, for sidecar binaries and external tools |
 | `tensor-api.js` | `bro.tensor`: GPU tensor + ops (dense/attention/optim, batched) |
 | `diffusion-api.js` | `bro.diffusion`: text-to-image pipelines, step-wise API, attention trace, LoRA |
 | `lm-api.js` | `bro.lm` text generation: Qwen3/Mistral (GGUF), Qwen3.5 (safetensors); streaming `generate` + cancel |

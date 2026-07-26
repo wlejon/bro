@@ -720,6 +720,10 @@ void Engine::initAppRealm() {
     // audio/image/scene/tile surfaces all accept the same spellings. Must run
     // before any binding install that might resolve a path.
     js::setAssetPathContext(manifest_.basePath, &assetMounts_);
+    // Same rules, exposed to JS: an app that ships a sidecar binary or hands a
+    // path to an external tool needs a real filesystem path, which neither the
+    // /app mount nor process.cwd() can give it.
+    js::installAssetPathBindings(jsRuntime_->getContext());
 
     // 9c. Install Canvas 2D bindings + getContext factory
     js::CanvasBindings::install(jsRuntime_->getContext());

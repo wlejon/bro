@@ -1,5 +1,7 @@
 #pragma once
 
+#include <quickjs.h>
+
 #include <string>
 
 namespace bro::util { class AssetMounts; }
@@ -32,6 +34,20 @@ namespace bro::js {
 void setAssetPathContext(const std::string& basePath, const util::AssetMounts* mounts);
 
 std::string resolveAssetPath(const std::string& src);
+
+/// Install `bro.appDir` and `bro.resolvePath(path)` on the JS global.
+///
+/// Reading an app's own files already works through the `/app` mount, but a
+/// mount path is virtual: it cannot be handed to an external process, and it
+/// cannot be used to launch a binary the app ships alongside itself. Nothing
+/// else fills that gap — `process.cwd()` is wherever the user launched bro
+/// from, not the app directory, and `__dirname` only exists inside require()'d
+/// modules. So an app that bundles a sidecar executable or hands a path to a
+/// command-line tool had no way to name it.
+///
+/// resolvePath applies exactly the rules above and returns a real filesystem
+/// path; appDir is the app's own root, the value most callers actually want.
+void installAssetPathBindings(JSContext* ctx);
 
 /// The same rules, for a path being WRITTEN to. A write target does not exist
 /// yet, so asking a mount to resolve the file itself can't work; this resolves
