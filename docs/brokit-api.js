@@ -207,7 +207,12 @@ cp.spawn(file, args?, options?);                   // → ChildProcess (non-bloc
 //                 which is what raw pixel/audio streams need.
 //   highWaterMark per-stream buffer cap, default 8 MB. When full the reader
 //                 stops and the child blocks in write() — real backpressure.
-//                 Draining happens automatically on the poll tick.
+//                 Draining happens automatically on the poll tick. A single
+//                 read never overshoots it, so a very small value also caps
+//                 read size and costs throughput: for raw video, size it to a
+//                 few frames (w*h*4 bytes each) rather than leaving the
+//                 default. Measured headroom is multiple GB/s, well clear of
+//                 the ~237 MB/s a 1080p30 RGBA feed needs.
 //   env           REPLACES the child environment (Node semantics).
 //   stdoutFile /  redirect output to files instead (truncate on open; same
 //   stderrFile    path for both = combined log). Ignored when stdio:'pipe'.
