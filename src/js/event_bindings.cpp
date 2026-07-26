@@ -36,7 +36,30 @@ JSValue wrapEvent(JSContext* ctx, const std::string& type,
 // ===========================================================================
 
 void installEventBindings(JSContext* ctx) {
-    qjsbind::Class<EventData>(ctx, "Event", qjsbind::NoGlobal)
+    // `new Event(type, {bubbles, cancelable})`, per the DOM spec. Without a
+    // global constructor, synthesising an event — the normal way to drive a
+    // component from a test, or to notify listeners of a state change a
+    // script made itself — meant hand-rolling an object literal with a `type`
+    // property and hoping dispatchEvent kept accepting it.
+    qjsbind::Class<EventData>(ctx, "Event")
+        .constructor([](JSContext* cx, int argc, JSValueConst* argv) -> EventData* {
+            auto* e = new EventData();
+            if (argc >= 1) {
+                if (const char* t = JS_ToCString(cx, argv[0])) {
+                    e->type = t;
+                    JS_FreeCString(cx, t);
+                }
+            }
+            if (argc >= 2 && JS_IsObject(argv[1])) {
+                JSValue b = JS_GetPropertyStr(cx, argv[1], "bubbles");
+                e->bubbles = JS_ToBool(cx, b);
+                JS_FreeValue(cx, b);
+                JSValue c = JS_GetPropertyStr(cx, argv[1], "cancelable");
+                e->cancelable = JS_ToBool(cx, c);
+                JS_FreeValue(cx, c);
+            }
+            return e;
+        })
         .get("type", [](EventData* e) -> std::string { return e->type; })
         .get("target", [](EventData* e, JSContext* cx) -> JSValue {
             if (!e->target) return JS_NULL;
