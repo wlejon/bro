@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace bro::platform {
 
@@ -40,7 +41,12 @@ public:
     // within it, both in UTF-8 characters (SDL's units).
     std::function<void(uint32_t windowId, const std::string& text, int32_t start, int32_t length)> onTextEditing;
     std::function<void(uint32_t windowId, float x, float y, float dx, float dy)> onWheel;
-    std::function<void(uint32_t windowId, const std::string& path, float x, float y)> onDropFile;
+    // One drop gesture, however many files it carried. SDL emits a separate
+    // SDL_EVENT_DROP_FILE per path, bracketed by DROP_BEGIN/DROP_COMPLETE;
+    // EventLoop coalesces the group so the DOM sees a single `drop` event with
+    // dataTransfer.files populated, which is what the web platform specifies
+    // and what a batch drop target needs to group its work.
+    std::function<void(uint32_t windowId, const std::vector<std::string>& paths, float x, float y)> onDropFile;
     std::function<void(uint32_t windowId, const std::string& text, float x, float y)> onDropText;
     std::function<void(uint32_t windowId)> onFocusLost;
     std::function<void(uint32_t windowId)> onFocusGained;
@@ -97,6 +103,17 @@ private:
     bool m_quit = false;
     float m_deltaTime = 0.0f;
     uint64_t m_lastFrameTime = 0;
+
+    // In-progress file drop, accumulated between DROP_BEGIN and DROP_COMPLETE.
+    // m_dropActive distinguishes "a group is open" from "no files yet", so a
+    // DROP_FILE arriving without the bracketing events (defensive: SDL always
+    // sends them today) still dispatches on its own rather than being lost.
+    bool m_dropActive = false;
+    uint32_t m_dropWindowId = 0;
+    float m_dropX = -1.0f, m_dropY = -1.0f;
+    std::vector<std::string> m_dropPaths;
+
+    void flushDropGroup();
 
     void updateTiming();
 };

@@ -611,7 +611,11 @@ static JSValue js_dropFiles(JSContext* ctx, JSValueConst, int argc, JSValueConst
                                 fy - engine->getLastMouseY());
     }
 
-    // Drop each file path
+    // Collect every path, then drop them as ONE gesture — matching what the
+    // platform layer now does for a real multi-file drop (a single `drop`
+    // event whose dataTransfer.files holds them all), rather than synthesizing
+    // N separate single-file drops.
+    std::vector<std::string> paths;
     if (JS_IsArray(argv[2])) {
         JSValue lenVal = JS_GetPropertyStr(ctx, argv[2], "length");
         int32_t len = 0;
@@ -621,8 +625,7 @@ static JSValue js_dropFiles(JSContext* ctx, JSValueConst, int argc, JSValueConst
             JSValue item = JS_GetPropertyUint32(ctx, argv[2], static_cast<uint32_t>(i));
             const char* path = JS_ToCString(ctx, item);
             if (path) {
-                if (wid) engine->hostDropFile(wid, path, fx, fy);
-                else engine->handleDropFile(path);
+                paths.emplace_back(path);
                 JS_FreeCString(ctx, path);
             }
             JS_FreeValue(ctx, item);
@@ -631,10 +634,14 @@ static JSValue js_dropFiles(JSContext* ctx, JSValueConst, int argc, JSValueConst
         // Single string path
         const char* path = JS_ToCString(ctx, argv[2]);
         if (path) {
-            if (wid) engine->hostDropFile(wid, path, fx, fy);
-            else engine->handleDropFile(path);
+            paths.emplace_back(path);
             JS_FreeCString(ctx, path);
         }
+    }
+
+    if (!paths.empty()) {
+        if (wid) engine->hostDropFile(wid, paths, fx, fy);
+        else engine->handleDropFile(paths, fx, fy);
     }
 
     engine->flush();

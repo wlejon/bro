@@ -112,11 +112,36 @@ void EventLoop::pollEvents() {
                 }
                 break;
 
+            // A multi-file drop arrives as DROP_BEGIN, N × DROP_FILE,
+            // DROP_COMPLETE. Accumulate the group and dispatch it once, so the
+            // DOM gets a single `drop` carrying every path.
+            case SDL_EVENT_DROP_BEGIN:
+                flushDropGroup();          // defensive: unterminated prior group
+                m_dropActive = true;
+                m_dropWindowId = event.drop.windowID;
+                m_dropX = event.drop.x;
+                m_dropY = event.drop.y;
+                m_dropPaths.clear();
+                break;
+
             case SDL_EVENT_DROP_FILE:
-                if (onDropFile && event.drop.data) {
-                    onDropFile(event.drop.windowID,
-                               event.drop.data, event.drop.x, event.drop.y);
+                if (event.drop.data) {
+                    if (m_dropActive) {
+                        // DROP_BEGIN's position is (0,0) on some backends; the
+                        // per-file events carry the real cursor position.
+                        m_dropWindowId = event.drop.windowID;
+                        m_dropX = event.drop.x;
+                        m_dropY = event.drop.y;
+                        m_dropPaths.emplace_back(event.drop.data);
+                    } else if (onDropFile) {
+                        onDropFile(event.drop.windowID, { std::string(event.drop.data) },
+                                   event.drop.x, event.drop.y);
+                    }
                 }
+                break;
+
+            case SDL_EVENT_DROP_COMPLETE:
+                flushDropGroup();
                 break;
 
             case SDL_EVENT_DROP_TEXT:
@@ -232,6 +257,16 @@ void EventLoop::pollEvents() {
                 break;
         }
     }
+}
+
+// Dispatch whatever the current DROP_BEGIN..DROP_COMPLETE group accumulated.
+// A group with no files (drag cancelled over the window) fires nothing.
+void EventLoop::flushDropGroup() {
+    if (!m_dropActive) return;
+    m_dropActive = false;
+    if (m_dropPaths.empty()) return;
+    if (onDropFile) onDropFile(m_dropWindowId, m_dropPaths, m_dropX, m_dropY);
+    m_dropPaths.clear();
 }
 
 void EventLoop::updateTiming() {

@@ -76,22 +76,37 @@ assert(overFired, 'dragover fired');
 // dropFiles — file array drop
 // =========================================================================
 let fileDropEvt = null;
-dropTarget.addEventListener('drop', (e) => { fileDropEvt = e; });
+let fileDropCount = 0;
+dropTarget.addEventListener('drop', (e) => { fileDropEvt = e; fileDropCount++; });
 
 dropFiles(rDrop.left + 50, rDrop.top + 50, ['/tmp/a.png', '/tmp/b.txt']);
 assert(fileDropEvt !== null, 'file drop event');
 
-// Inspect dataTransfer.files
-if (fileDropEvt.dataTransfer && fileDropEvt.dataTransfer.files) {
-    const files = fileDropEvt.dataTransfer.files;
-    // Number of files may vary if paths are filtered/validated; just verify >=1
-    assert(files.length >= 1, 'at least one file dropped, got ' + files.length);
-    if (files[0]) {
-        // Each file is a File-like object with name/path
-        const name = files[0].name || files[0].path;
-        assert(typeof name === 'string', 'file has name/path');
-    }
-}
+// A multi-file drop is ONE gesture: a single `drop` event whose
+// dataTransfer.files holds every path, per the web platform. Dispatching one
+// event per file would make a batch drop target unable to tell which files
+// arrived together.
+assert(fileDropCount === 1,
+       'multi-file drop fires exactly one drop event, got ' + fileDropCount);
+
+const files = fileDropEvt.dataTransfer.files;
+assert(files.length === 2, 'both dropped files present, got ' + files.length);
+const names = [files[0].name || files[0].path, files[1].name || files[1].path];
+assert(names.every((n) => typeof n === 'string'), 'each file has name/path');
+assert(names.some((n) => n.indexOf('a.png') !== -1), 'first path present: ' + names);
+assert(names.some((n) => n.indexOf('b.txt') !== -1), 'second path present: ' + names);
+
+// A single-path drop still works and reports one file.
+let singleEvt = null;
+let singleCount = 0;
+const singleHandler = (e) => { singleEvt = e; singleCount++; };
+dropTarget.addEventListener('drop', singleHandler);
+fileDropCount = 0;
+dropFiles(rDrop.left + 50, rDrop.top + 50, '/tmp/solo.mp4');
+assert(singleCount === 1, 'single-path drop fires one event, got ' + singleCount);
+assert(singleEvt.dataTransfer.files.length === 1,
+       'single-path drop carries one file, got ' + singleEvt.dataTransfer.files.length);
+dropTarget.removeEventListener('drop', singleHandler);
 
 // =========================================================================
 // mouseMove fires mousemove

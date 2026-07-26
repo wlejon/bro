@@ -745,7 +745,7 @@ void Engine::hostWheel(uint64_t hostId, float x, float y, float dx, float dy) {
 // ---------------------------------------------------------------------------
 
 void Engine::windowHostDispatchDrop(WindowHost& h, float x, float y,
-                                    const std::string* path,
+                                    const std::vector<std::string>* paths,
                                     const std::string* text) {
     dom::Element* target = windowHostHitTest(h, x, y);
     if (!target) target = h.document->body();
@@ -753,7 +753,7 @@ void Engine::windowHostDispatchDrop(WindowHost& h, float x, float y,
 
     for (const char* type : {"dragenter", "dragover", "drop"}) {
         dom::DragEvent evt(type, true, true);
-        if (path) evt.addFile(*path);
+        if (paths) for (const auto& p : *paths) evt.addFile(p);
         if (text) evt.setDataText(*text);
         evt.setIsTrusted(true);
         windowHostDispatch(h, target, evt);
@@ -761,12 +761,13 @@ void Engine::windowHostDispatchDrop(WindowHost& h, float x, float y,
     if (jsRuntime_) jsRuntime_->executePendingJobs();
 }
 
-void Engine::hostDropFile(uint64_t hostId, const std::string& path,
+void Engine::hostDropFile(uint64_t hostId, const std::vector<std::string>& paths,
                           float x, float y) {
     WindowHost* hp = windowHostById(hostId);
     if (!hp || !hp->document || !hp->jsCtx) return;
+    if (paths.empty()) return;
     windowHostDispatchDrop(*hp, (x >= 0) ? x : hp->lastMouseX,
-                           (y >= 0) ? y : hp->lastMouseY, &path, nullptr);
+                           (y >= 0) ? y : hp->lastMouseY, &paths, nullptr);
 }
 
 void Engine::hostDropText(uint64_t hostId, const std::string& text,

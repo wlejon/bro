@@ -243,7 +243,7 @@ void Engine::run() {
     eventLoop_->onTextInput  = [this, mainWin, host](uint32_t id, const std::string& t) { if (mainWin(id)) handleTextInput(t); else hostTextInput(host(id), t); };
     eventLoop_->onTextEditing = [this, mainWin, host](uint32_t id, const std::string& t, int32_t s, int32_t l) { if (mainWin(id)) handleTextEditing(t, s, l); else hostTextEditing(host(id), t, s, l); };
     eventLoop_->onWheel      = [this, mainWin, host](uint32_t id, float x, float y, float dx, float dy) { if (mainWin(id)) handleWheel(x, y, dx, dy); else hostWheel(host(id), x, y, dx, dy); };
-    eventLoop_->onDropFile   = [this, mainWin, host](uint32_t id, const std::string& p, float x, float y) { if (mainWin(id)) handleDropFile(p, x, y); else hostDropFile(host(id), p, x, y); };
+    eventLoop_->onDropFile   = [this, mainWin, host](uint32_t id, const std::vector<std::string>& p, float x, float y) { if (mainWin(id)) handleDropFile(p, x, y); else hostDropFile(host(id), p, x, y); };
     eventLoop_->onDropText   = [this, mainWin, host](uint32_t id, const std::string& t, float x, float y) { if (mainWin(id)) handleDropText(t, x, y); else hostDropText(host(id), t, x, y); };
     // Touch stays main-window-only in v1: the contact table (engine.h) is a
     // single global map with no per-window key, so a finger on a secondary

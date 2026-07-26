@@ -250,7 +250,13 @@ public:
     /// Eases accumulated wheel deltas (see wheelResidualY_) into scrollY_
     /// over time. Called once per frame before layout/render.
     void drainWheelSmoothing(float frameDtSec);
-    void handleDropFile(const std::string& path, float x = -1, float y = -1);
+    /// One drop gesture. `paths` carries every file the user dropped together;
+    /// they land in a single DragEvent as dataTransfer.files.
+    void handleDropFile(const std::vector<std::string>& paths, float x = -1, float y = -1);
+    /// Single-file convenience for callers that genuinely have one path.
+    void handleDropFile(const std::string& path, float x = -1, float y = -1) {
+        handleDropFile(std::vector<std::string>{ path }, x, y);
+    }
     void handleDropText(const std::string& text, float x = -1, float y = -1);
 
     // --- Gamepads (SDL event path; implementations in gamepad.cpp) ---
@@ -493,7 +499,10 @@ public:
     void hostTextInput(uint64_t hostId, const std::string& text);
     void hostTextEditing(uint64_t hostId, const std::string& text, int start, int length);
     void hostWheel(uint64_t hostId, float x, float y, float dx, float dy);
-    void hostDropFile(uint64_t hostId, const std::string& path, float x, float y);
+    void hostDropFile(uint64_t hostId, const std::vector<std::string>& paths, float x, float y);
+    void hostDropFile(uint64_t hostId, const std::string& path, float x, float y) {
+        hostDropFile(hostId, std::vector<std::string>{ path }, x, y);
+    }
     void hostDropText(uint64_t hostId, const std::string& text, float x, float y);
 
     /// bro host id of the secondary window that currently has input focus,
@@ -1602,7 +1611,7 @@ private:
     /// Shared body of hostDropFile/hostDropText: hit-test and fire the
     /// dragenter → dragover → drop triple with the given payload.
     void windowHostDispatchDrop(WindowHost& h, float x, float y,
-                                const std::string* path, const std::string* text);
+                                const std::vector<std::string>* paths, const std::string* text);
     /// Mark a host document for re-record. Caret moves and control focus
     /// change no DOM, so tickSubDoc's isDirty() check alone would keep
     /// re-presenting the stale frame.

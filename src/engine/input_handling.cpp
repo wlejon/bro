@@ -3638,8 +3638,9 @@ void Engine::drainWheelSmoothing(float frameDtSec) {
 // File/text drop handling
 // ---------------------------------------------------------------------------
 
-void Engine::handleDropFile(const std::string& path, float x, float y) {
+void Engine::handleDropFile(const std::vector<std::string>& paths, float x, float y) {
     if (!document_) return;
+    if (paths.empty()) return;
 
     // Use provided coordinates, fall back to last mouse position
     float dropX = (x >= 0) ? x : lastMouseX_;
@@ -3649,21 +3650,14 @@ void Engine::handleDropFile(const std::string& path, float x, float y) {
     if (!target) target = document_->body();
     if (!target) return;
 
-    // Dispatch dragenter, dragover, then drop
-    dom::DragEvent enterEvt("dragenter", true, true);
-    enterEvt.addFile(path);
-    enterEvt.setIsTrusted(true);
-    dispatchEvent(target, enterEvt);
-
-    dom::DragEvent overEvt("dragover", true, true);
-    overEvt.addFile(path);
-    overEvt.setIsTrusted(true);
-    dispatchEvent(target, overEvt);
-
-    dom::DragEvent dropEvt("drop", true, true);
-    dropEvt.addFile(path);
-    dropEvt.setIsTrusted(true);
-    dispatchEvent(target, dropEvt);
+    // Dispatch dragenter, dragover, then drop — one triple for the whole
+    // gesture, each event carrying every dropped path in dataTransfer.files.
+    for (const char* type : { "dragenter", "dragover", "drop" }) {
+        dom::DragEvent evt(type, true, true);
+        for (const auto& p : paths) evt.addFile(p);
+        evt.setIsTrusted(true);
+        dispatchEvent(target, evt);
+    }
 }
 
 void Engine::handleDropText(const std::string& text, float x, float y) {
