@@ -433,8 +433,17 @@ Engine::~Engine() {
     // Drop the scene-emitter registry's engine pointer before the audio
     // engine dies (the registry itself holds only weak tokens + ids).
     js::shutdownAudioSceneSync();
-    audioEngine_.reset();
+    // Document before the audio engine, because elements call into it as they
+    // go. ~ElVideo runs closeStreamingAudio(), whose first act is
+    // audioEngine_->closeStream(id) — a <video> with an audio track holds a
+    // live streaming ring, and the element's pointer to the engine is
+    // non-owning. Reset the other way round and every document that ever
+    // played sound corrupted the heap on the way out, far enough from the
+    // cause that it read as a bug in whatever media backend was loaded.
+    // A silent file never showed it: with no audio track there is no stream to
+    // close and the destructor touches nothing.
     document_.reset();
+    audioEngine_.reset();
     timers_.reset();
     renderer_.reset();
 }
