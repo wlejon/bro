@@ -43,7 +43,7 @@ These functions are available in addition to all standard DOM APIs:
 
 | Function | Description |
 |----------|-------------|
-| `screenshot(path)` | Render the current frame to a PNG file. Composites scene layers (WebGL, Canvas 2D) with the HTML/CSS UI overlay. Throws on failure. |
+| `screenshot(path)` | Render the current frame to a PNG file. Composites scene layers (WebGL, Canvas 2D) with the HTML/CSS UI overlay. Missing parent directories are created, so a test can dump into `tests/out/` without anything having made it first. Throws on failure, naming the path. |
 | `screenshot(path, selector)` | Render the current frame and crop to the element's bounding box before saving. Bounding box uses viewport-relative coords (matches `getBoundingClientRect`). Transparent canvas pixels flatten to opaque black; for alpha-preserving canvas exports use `screenshotCanvas`. |
 | `screenshotCanvas(path, selector)` | Snapshot a `<canvas>` element's underlying Skia surface directly to PNG, preserving alpha. Selector must point to a 2D canvas (not WebGL or scene). |
 | `getPixel(x, y)` | Return `{r, g, b, a}` for the pixel at **document** coordinates, the same space `getBoundingClientRect()` reports in, so a probe can be compared against a measured rect with no inset arithmetic. Renders the full composited frame (HTML, Canvas, WebGL, scene) and reads back the pixel. Engine chrome (menu bar, docked inspector) insets the document within the frame; `getPixel` folds that in for you. Out-of-document coordinates return all zeroes. |

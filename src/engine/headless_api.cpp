@@ -2,6 +2,7 @@
 // These are Engine member function implementations, not a separate class.
 
 #include "engine/engine.h"
+#include "engine/capture_path.h"
 #include "engine/overflow.h"
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
@@ -705,6 +706,9 @@ std::vector<uint8_t> Engine::renderUnifiedToPixels() {
 
 bool Engine::screenshot(const std::string& path) {
     if (!document_) return false;
+    // Before rendering anything: the GPU path encodes here, the CPU path hands
+    // off to renderer_->saveScreenshot(), and both want the directory to exist.
+    if (!ensureParentDir(path)) return false;
 
     // GPU path: unified pipeline (same layer list + compositeLayers as windowed).
     if (gl_ && dynamic_cast<render::SkiaRenderer*>(renderer_.get())) {
@@ -862,6 +866,7 @@ bool Engine::screenshot(const std::string& path, int cx, int cy, int cw, int ch)
         memcpy(dst, src, cw * 4);
     }
 
+    if (!ensureParentDir(path)) return false;
     return broimage::encode_png_file(path, cropped.data(), cw, ch, 4);
 }
 

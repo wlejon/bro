@@ -1,5 +1,6 @@
 #include "js/headless_bindings.h"
 #include "engine/engine.h"
+#include "engine/capture_path.h"
 #include "engine/gamepad.h"
 #include "canvas/canvas_scene.h"
 #if BRO_WITH_3D
@@ -87,9 +88,13 @@ static JSValue js_screenshot(JSContext* ctx, JSValueConst, int argc, JSValueCons
         ok = engine->screenshot(path);
     }
 
+    if (!ok) {
+        JSValue err = JS_ThrowInternalError(ctx, "screenshot: could not write %s", path);
+        JS_FreeCString(ctx, path);
+        return err;
+    }
     JS_FreeCString(ctx, path);
-    if (ok) return JS_TRUE;
-    return JS_ThrowInternalError(ctx, "screenshot failed");
+    return JS_TRUE;
 }
 
 // screenshotCanvas(path, selector) — direct snapshot of a <canvas> element's
@@ -139,10 +144,15 @@ static JSValue js_screenshotCanvas(JSContext* ctx, JSValueConst, int argc, JSVal
     auto pixels = cs->getImageData(0, 0, w, h);
     if (pixels.empty()) { cleanup(); return JS_ThrowInternalError(ctx, "screenshotCanvas: read failed"); }
 
-    bool ok = broimage::encode_png_file(path, pixels.data(), w, h, 4);
+    bool ok = bro::ensureParentDir(path) &&
+              broimage::encode_png_file(path, pixels.data(), w, h, 4);
+    if (!ok) {
+        JSValue err = JS_ThrowInternalError(ctx, "screenshotCanvas: could not write %s", path);
+        cleanup();
+        return err;
+    }
     cleanup();
-    if (ok) return JS_TRUE;
-    return JS_ThrowInternalError(ctx, "screenshotCanvas: write failed");
+    return JS_TRUE;
 }
 
 static JSValue js_advanceTime(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
