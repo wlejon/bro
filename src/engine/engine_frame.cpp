@@ -1162,4 +1162,99 @@ void Engine::removeModalEventWatch() {
     SDL_RemoveEventWatch(modalEventWatcher, this);
 }
 
+// ---------------------------------------------------------------------------
+// Synchronous layout for a geometry read (see the header for what this is for)
+// ---------------------------------------------------------------------------
+
+void Engine::flushLayoutForRead(dom::Document* doc) {
+    if (!doc || !textMetrics_ || !doc->isDirty() || !doc->documentElement()) return;
+
+    // Already brought this document up to date and nothing has changed since:
+    // a loop that measures fifty rows pays for one pass, not fifty. (The
+    // document stays *paint* dirty after a flush — see the end of this
+    // function — so isDirty() alone cannot answer this.)
+    if (doc->layoutIsCurrent()) return;
+
+    // The layout worker runs a whole document; running a second pass over the
+    // same tree underneath it would be two writers on one set of boxes. It
+    // cannot normally be mid-flight here — the frame loop signals layout only
+    // after the JS phase and blocks on it before the next one, so JS on the
+    // stack means the worker is Idle — but "cannot normally" is not a thing to
+    // dereference. If it is busy, leave the boxes alone and answer from the
+    // pass in progress.
+    if (layoutPipeline_ && !layoutPipeline_->isIdle()) return;
+
+    // Which viewport this document is laid out against depends on what hosts
+    // it: the app and the system panels fill the window, an <iframe> or a
+    // secondary window its own box. A document this engine does not host (a
+    // worker's, a scene HtmlNode's detached tree) is left alone — nothing here
+    // knows what size it would be.
+    float width = 0.0f, height = 0.0f;
+    dom::Element* hovered = nullptr;
+    if (doc == document_.get()) {
+        width  = static_cast<float>(viewportWidth_);
+        height = static_cast<float>(contentHeight());
+        hovered = hoveredElement_.get();
+    } else {
+        bool found = false;
+        for (auto& sys : systemDocs_) {
+            if (sys.document.get() != doc) continue;
+            if (!isSystemDocVisible(sys)) return;   // not on screen, not laid out
+            width  = static_cast<float>(viewportWidth_);
+            height = static_cast<float>(viewportHeight_);
+            found = true;
+            break;
+        }
+        for (auto& frame : iframeDocs_) {
+            if (!frame || frame->document.get() != doc) continue;
+            width  = static_cast<float>(frame->boxW);
+            height = static_cast<float>(frame->boxH);
+            hovered = frame->hoveredElement;
+            found = true;
+            break;
+        }
+        for (auto& host : windowHosts_) {
+            if (!host || host->pendingClose || host->document.get() != doc) continue;
+            width  = static_cast<float>(host->boxW);
+            height = static_cast<float>(host->boxH);
+            hovered = host->hoveredElement;
+            found = true;
+            break;
+        }
+        if (!found || width <= 0.0f) return;
+    }
+
+    // An <img> or <video> added this turn has no intrinsic size until the file
+    // has been probed, and laying out before that measures it at nothing —
+    // which is the same wrong answer this whole function exists to stop giving.
+    if (doc->isStructureDirty()) ensureReplacedElements(doc->documentElement());
+
+    // :hover is resolved through a thread-local, so a pass over a sub-document
+    // has to point it at that document's target and put it back afterwards —
+    // otherwise the next pass over the app document matches :hover against an
+    // element in someone else's tree.
+    dom::Element* previousHover = hoveredElement_.get();
+    layout::ElementRefAdapter::setHoveredElement(hovered);
+    doc->resolveStyles();
+    if (doc->isLayoutDirty() || doc->isStructureDirty() || !doc->layoutRoot())
+        doc->performLayout(width, height, *textMetrics_);
+
+    // Layout is current; paint is not. Clearing the dirty flag outright would
+    // tell the frame loop there is nothing to draw, and the mutation that
+    // prompted the measurement — the appended row, the changed width — would
+    // sit in the tree, laid out, and never appear on screen. So the layout
+    // half of the flag is cleared and the paint half is re-armed: the frame
+    // still records, and the layout thread skips a pass it no longer owes.
+    doc->clearDirty();
+    doc->markPaintDirty();
+
+    if (hovered != previousHover)
+        layout::ElementRefAdapter::setHoveredElement(previousHover);
+
+    if (doc == document_.get())
+        documentHeight_ = doc->documentElement()->layoutBox().marginBox().height;
+
+    doc->noteLayoutCurrent();
+}
+
 } // namespace bro::engine

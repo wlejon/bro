@@ -176,7 +176,7 @@ void invalidateWrapper(JSContext* ctx, bro::dom::Element* elem) {
     auto* ctxDoc = getDocumentForCtx(ctx);
     if (ctxDoc) {
         if (!elem->id().empty())
-            ctxDoc->unregisterElementId(elem->id());
+            ctxDoc->unregisterElementId(elem->id(), elem);
     }
 
     JSValue global = JS_GetGlobalObject(ctx);
@@ -336,7 +336,7 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
                 // reparents the children). Just unregister the id so the
                 // detached subtree doesn't match document.getElementById.
                 auto* elChild = static_cast<bro::dom::Element*>(child);
-                if (doc && !elChild->id().empty()) doc->unregisterElementId(elChild->id());
+                if (doc && !elChild->id().empty()) doc->unregisterElementId(elChild->id(), elChild);
             } else {
                 if (doc) doc->freeNode(child);
             }
@@ -419,7 +419,7 @@ static JSValue js_element_set_innerHTML(JSContext* ctx, JSValueConst this_val,
                 // Detach without nuking the JS wrapper — see matching note
                 // in js_element_set_textContent above.
                 auto* elChild = static_cast<bro::dom::Element*>(child);
-                if (doc && !elChild->id().empty()) doc->unregisterElementId(elChild->id());
+                if (doc && !elChild->id().empty()) doc->unregisterElementId(elChild->id(), elChild);
             } else {
                 if (doc) doc->freeNode(child);
             }
@@ -2417,7 +2417,7 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
             fireDisconnectedCallback(ctx, w);
             JS_FreeValue(ctx, w);
             if (doc && !childElem->id().empty())
-                doc->unregisterElementId(childElem->id());
+                doc->unregisterElementId(childElem->id(), childElem);
         }
         markChildListChanged(doc, el);
         el->removeChild(child);
@@ -2481,7 +2481,7 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
         if (oldChild->nodeType() == bro::dom::NodeType::Element) {
             auto* oldElem = static_cast<bro::dom::Element*>(oldChild);
             if (doc && !oldElem->id().empty())
-                doc->unregisterElementId(oldElem->id());
+                doc->unregisterElementId(oldElem->id(), oldElem);
         }
         el->removeChild(oldChild);
         if (newChild->nodeType() == bro::dom::NodeType::Element) {
@@ -2529,7 +2529,7 @@ static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
     if (parent) {
         auto* doc = getDocumentForCtx(ctx);
         if (doc && !el->id().empty())
-            doc->unregisterElementId(el->id());
+            doc->unregisterElementId(el->id(), el);
         markChildListChanged(doc, parent);
         invalidateWrapper(ctx, el);
         parent->removeChild(el);
@@ -2905,15 +2905,38 @@ static JSValue js_element_set_height(JSContext* ctx, JSValueConst this_val, JSVa
 
 // ---- Layout measurement ---------------------------------------------------
 
-static const htmlayout::layout::LayoutBox& getLayoutBox(bro::dom::Element* el) {
+/// Lay out the element's document first, if a mutation is pending.
+///
+/// Every geometry read in this file goes through here, because a layout box is
+/// only an answer to "where is this now" if "now" includes what JS did a line
+/// ago. Appending an element and measuring it in the same turn used to report
+/// the box it did not have yet — not even honestly empty: getBoundingClientRect
+/// said width 0 while clientWidth said 300, the two disagreeing because they
+/// fall back differently when there is no box. See Engine::flushLayoutForRead
+/// for what the flush does and does not do.
+static void flushLayoutFor(JSContext* ctx, bro::dom::Element* el) {
+    if (!el) return;
+    auto it = s_ctx_engines.find(ctx);
+    if (it == s_ctx_engines.end() || !it->second) return;
+    static_cast<bro::engine::Engine*>(it->second)->flushLayoutForRead(el->document());
+}
+
+static const htmlayout::layout::LayoutBox& getLayoutBox(JSContext* ctx,
+                                                        bro::dom::Element* el) {
     static const htmlayout::layout::LayoutBox empty{};
     if (!el) return empty;
+    flushLayoutFor(ctx, el);
     return el->layoutBox();
 }
 
-// Per CSSOM spec, inline non-replaced elements return 0 for client/scroll dimensions.
-static bool isInlineDisplay(bro::dom::Element* el) {
+// Per CSSOM spec, inline non-replaced elements return 0 for client/scroll
+// dimensions. Takes the context because the answer comes out of the computed
+// style, and a pending style write has to be resolved before it can be read —
+// the same flush the boxes need, and it belongs before this test rather than
+// after it.
+static bool isInlineDisplay(JSContext* ctx, bro::dom::Element* el) {
     if (!el) return false;
+    flushLayoutFor(ctx, el);
     auto& style = el->computedStyle();
     auto it = style.find("display");
     return it != style.end() && it->second == "inline";
@@ -2921,8 +2944,8 @@ static bool isInlineDisplay(bro::dom::Element* el) {
 
 static JSValue js_element_get_clientWidth(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    if (isInlineDisplay(el)) return JS_NewInt32(ctx, 0);
-    auto& box = getLayoutBox(el);
+    if (isInlineDisplay(ctx, el)) return JS_NewInt32(ctx, 0);
+    auto& box = getLayoutBox(ctx, el);
     float cw = box.contentRect.width + box.padding.left + box.padding.right;
     if (cw > 0) return JS_NewInt32(ctx, static_cast<int>(cw));
     return js_element_get_width(ctx, this_val);
@@ -2930,8 +2953,8 @@ static JSValue js_element_get_clientWidth(JSContext* ctx, JSValueConst this_val)
 
 static JSValue js_element_get_clientHeight(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    if (isInlineDisplay(el)) return JS_NewInt32(ctx, 0);
-    auto& box = getLayoutBox(el);
+    if (isInlineDisplay(ctx, el)) return JS_NewInt32(ctx, 0);
+    auto& box = getLayoutBox(ctx, el);
     float ch = box.contentRect.height + box.padding.top + box.padding.bottom;
     if (ch > 0) return JS_NewInt32(ctx, static_cast<int>(ch));
     return js_element_get_height(ctx, this_val);
@@ -2939,39 +2962,39 @@ static JSValue js_element_get_clientHeight(JSContext* ctx, JSValueConst this_val
 
 static JSValue js_element_get_offsetWidth(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    auto& box = getLayoutBox(el);
+    auto& box = getLayoutBox(ctx, el);
     return JS_NewInt32(ctx, static_cast<int>(box.fullWidth()));
 }
 
 static JSValue js_element_get_offsetHeight(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    auto& box = getLayoutBox(el);
+    auto& box = getLayoutBox(ctx, el);
     return JS_NewInt32(ctx, static_cast<int>(box.fullHeight()));
 }
 
 static JSValue js_element_get_offsetLeft(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    auto& box = getLayoutBox(el);
+    auto& box = getLayoutBox(ctx, el);
     return JS_NewInt32(ctx, static_cast<int>(box.contentRect.x - box.padding.left - box.border.left));
 }
 
 static JSValue js_element_get_offsetTop(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    auto& box = getLayoutBox(el);
+    auto& box = getLayoutBox(ctx, el);
     return JS_NewInt32(ctx, static_cast<int>(box.contentRect.y - box.padding.top - box.border.top));
 }
 
 static JSValue js_element_get_clientTop(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    if (isInlineDisplay(el)) return JS_NewInt32(ctx, 0);
-    auto& box = getLayoutBox(el);
+    if (isInlineDisplay(ctx, el)) return JS_NewInt32(ctx, 0);
+    auto& box = getLayoutBox(ctx, el);
     return JS_NewInt32(ctx, static_cast<int>(box.border.top));
 }
 
 static JSValue js_element_get_clientLeft(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
-    if (isInlineDisplay(el)) return JS_NewInt32(ctx, 0);
-    auto& box = getLayoutBox(el);
+    if (isInlineDisplay(ctx, el)) return JS_NewInt32(ctx, 0);
+    auto& box = getLayoutBox(ctx, el);
     return JS_NewInt32(ctx, static_cast<int>(box.border.left));
 }
 
@@ -2996,8 +3019,8 @@ static JSValue js_element_get_scrollWidth(JSContext* ctx, JSValueConst this_val)
     // Per spec: scrollWidth = max(clientWidth, scrollable content width including padding)
     // Inline non-replaced elements return 0.
     auto* el = getElement(this_val);
-    if (isInlineDisplay(el)) return JS_NewInt32(ctx, 0);
-    auto& box = getLayoutBox(el);
+    if (isInlineDisplay(ctx, el)) return JS_NewInt32(ctx, 0);
+    auto& box = getLayoutBox(ctx, el);
     float clientW = box.contentRect.width + box.padding.left + box.padding.right;
     if (clientW > 0) return JS_NewInt32(ctx, static_cast<int>(clientW));
     return js_element_get_offsetWidth(ctx, this_val);
@@ -3008,7 +3031,7 @@ static JSValue js_element_get_scrollHeight(JSContext* ctx, JSValueConst this_val
     // Inline non-replaced elements return 0.
     auto* el = getElement(this_val);
     if (!el) return JS_NewInt32(ctx, 0);
-    if (isInlineDisplay(el)) return JS_NewInt32(ctx, 0);
+    if (isInlineDisplay(ctx, el)) return JS_NewInt32(ctx, 0);
     auto& box = el->layoutBox();
     float clientH = box.contentRect.height + box.padding.top + box.padding.bottom;
     // naturalHeight is the unclamped content height (before min/max-height).
@@ -3125,6 +3148,7 @@ static JSValue js_element_scrollIntoView(JSContext* /*ctx*/, JSValueConst /*this
 static JSValue js_element_getBoundingClientRect(JSContext* ctx, JSValueConst this_val,
                                                  int /*argc*/, JSValueConst* /*argv*/) {
     auto* el = getElement(this_val);
+    flushLayoutFor(ctx, el);
 
     // display:none elements have no box at all, and a null element has no
     // ancestor chain to walk — bro::dom::absoluteBorderBox() returns
@@ -3596,7 +3620,7 @@ static JSValue js_element_replaceWith(JSContext* ctx, JSValueConst this_val,
 
     // Remove the old element
     if (doc && !el->id().empty())
-        doc->unregisterElementId(el->id());
+        doc->unregisterElementId(el->id(), el);
     markChildListChanged(doc, parent);
     JSValue w = DomBindings::wrapElement(ctx, el);
     fireDisconnectedCallback(ctx, w);

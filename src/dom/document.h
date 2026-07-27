@@ -150,9 +150,25 @@ public:
     // markElementDirty() here; Document::markDirty() is the unattributed
     // version — the caller can't name an element, so the whole tree is
     // relaid-out. Prefer the element form wherever there is an element.
-    void markDirty() { dirty_ = true; layoutDirty_ = true; fullLayout_ = true; }
-    void markElementDirty() { dirty_ = true; layoutDirty_ = true; }
-    void markPaintDirty() { dirty_ = true; }
+    void markDirty() { dirty_ = true; layoutDirty_ = true; fullLayout_ = true; ++mutationEpoch_; }
+    void markElementDirty() { dirty_ = true; layoutDirty_ = true; ++mutationEpoch_; }
+    void markPaintDirty() { dirty_ = true; ++mutationEpoch_; }
+
+    // Counts the marks above. Anything that brings this document up to date
+    // outside the frame loop — Engine::flushLayoutForRead, laying out because
+    // JS asked how wide something is — remembers the epoch it flushed at, so a
+    // run of geometry reads with nothing mutated between them costs one pass
+    // and not one per read. A counter rather than a "clean" flag because the
+    // marks come from a hundred call sites and only one place has to notice.
+    uint64_t mutationEpoch() const { return mutationEpoch_; }
+
+    /// "The boxes in this tree were computed from the DOM as it stands now."
+    /// Set by whoever lays the document out off the frame loop's schedule;
+    /// read by the next such caller to decide it has nothing to do. The frame
+    /// loop does not participate — it lays out because the frame needs it, not
+    /// because someone asked a question.
+    bool layoutIsCurrent() const { return layoutCurrentEpoch_ == mutationEpoch_; }
+    void noteLayoutCurrent() { layoutCurrentEpoch_ = mutationEpoch_; }
     // An inline style wrote a bare `inherit`. We do not know here whether the
     // property inherits, so take the safe branch and stop scoping restyles.
     void noteForcedInherit() { forcedInherit_ = true; }
@@ -181,6 +197,7 @@ public:
     // rebuilds that node's children and keeps every other subtree's geometry.
     void markElementStructureDirty() {
         structureDirty_ = true; dirty_ = true; layoutDirty_ = true; styleElsDirty_ = true;
+        ++mutationEpoch_;
     }
     // ...and this is the unattributed form, for a change no element can be
     // pinned to: a reparse, a fresh documentElement. Throw the layout tree away
@@ -258,9 +275,12 @@ public:
     // when only styles/sizes change. Hit testing walks this tree directly.
     layout::LayoutNodeAdapter* layoutRoot() const { return layoutRoot_.get(); }
 
-    // ID map management (called by elements when id attribute changes)
+    // ID map management (called by elements when id attribute changes).
+    // Unregistering names the element as well as the id: ids are not unique in
+    // practice, and an erase by string alone drops whichever element currently
+    // answers to it — see the note on idMap_.
     void registerElementId(const std::string& id, Element* elem);
-    void unregisterElementId(const std::string& id);
+    void unregisterElementId(const std::string& id, const Element* elem);
 
     /// Pre-process HTML: extract <template> blocks that gumbo would
     /// discard, replacing them with hidden placeholder divs.
@@ -444,6 +464,8 @@ private:
     Element* body_ = nullptr;
     Element* focusedElement_ = nullptr;
     bool dirty_ = false;
+    uint64_t mutationEpoch_ = 0;
+    uint64_t layoutCurrentEpoch_ = UINT64_MAX;   // never "current" before a pass
     bool layoutDirty_ = false;
     bool structureDirty_ = false;
     bool rebuildLayoutTree_ = false;
@@ -455,7 +477,17 @@ private:
     bool forcedInherit_ = false;      // relayout the whole tree, not just what changed
     Perf perf_;
     std::string basePath_;
-    std::unordered_map<std::string, Element*> idMap_;
+    // Every element that has ever claimed an id, keyed by the id. A *list* per
+    // id, not one element, because the map is a cache of a tree query and the
+    // tree does not enforce uniqueness: two elements can hold the same id at
+    // once, legally (a redraw that builds its replacement before clearing the
+    // old content) or by mistake, and a single slot forces one of them to be
+    // forgotten. Which one it forgot used to depend on the order of the writes,
+    // so getElementById could return null for an element sitting in the tree,
+    // or hand back a detached predecessor that measured zero and was wired to
+    // nothing. Membership here says only "claimed this id at some point";
+    // getElementById is what decides which candidate is in the document now.
+    std::unordered_map<std::string, std::vector<Element*>> idMap_;
     std::unordered_map<Node*, std::unique_ptr<Node>> ownedNodes_;
 
     // Nodes moved out of ownedNodes_ by freeNode() but not yet destroyed.

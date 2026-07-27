@@ -424,6 +424,8 @@ ones:
 
 Tests run against `tests/test_app/` which provides a minimal HTML page with a `<div id="root">` and a reset stylesheet (`* { margin: 0; box-sizing: border-box }`). Tests create DOM elements dynamically, use `flush()` to trigger layout, and `assert()` to verify:
 
+`flush()` is about the *frame* — painting, observers, events, sub-documents. Measurement no longer needs it: reading `getBoundingClientRect()`, `offsetWidth`, `getComputedStyle()` and the rest lays the document out first, so an element built and measured in the same turn measures correctly. Anything that waits on a frame — a screenshot, a hit test, a ResizeObserver callback — still needs the flush.
+
 ```js
 // tests/dom/test_example.js
 const root = document.getElementById('root');

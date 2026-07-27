@@ -637,6 +637,27 @@ public:
     /// Access the renderer.
     render::Renderer* renderer() const { return renderer_.get(); }
 
+    /// Bring `doc`'s layout up to date NOW, because JS is about to read
+    /// geometry out of it. CSSOM calls this flushing pending layout, and it is
+    /// what makes `parent.appendChild(el); el.getBoundingClientRect()` answer
+    /// with the box the element actually has rather than the box it had before
+    /// it existed. Without it the only way to measure anything an app just
+    /// built is to wait a frame, which every caller then has to know — and the
+    /// stale answers are not even honestly zero (a fresh element reported its
+    /// parent's width for clientWidth and 0 for getBoundingClientRect().width
+    /// in the same turn).
+    ///
+    /// Cheap when nothing changed: a clean document returns immediately, so a
+    /// read loop over an untouched tree costs one flag test per read. A write
+    /// between every read is layout thrashing and costs a layout each time, on
+    /// the web as much as here.
+    ///
+    /// Only lays out. No observers are notified, no events dispatched, no
+    /// sub-documents built — those belong to the frame drain, and firing them
+    /// from inside a property getter would run app code in the middle of an
+    /// expression that only asked how wide something is.
+    void flushLayoutForRead(dom::Document* doc);
+
     /// Request an <iframe> element's sub-document be reloaded from its current
     /// src attribute (tear down + rebuild). Public: driven from JS by
     /// iframe.reload() and by assigning iframe.src. The actual teardown/rebuild

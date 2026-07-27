@@ -199,7 +199,7 @@ void Element::setAttribute(const std::string& name, const std::string& val) {
 
     if (name == "id" && document_) {
         std::string oldId = getAttribute("id");
-        if (!oldId.empty()) document_->unregisterElementId(oldId);
+        if (!oldId.empty()) document_->unregisterElementId(oldId, this);
         if (!val.empty()) document_->registerElementId(val, this);
     }
 
@@ -248,7 +248,7 @@ void Element::removeAttribute(const std::string& name) {
     }
     if (name == "id" && document_) {
         std::string oldId = getAttribute("id");
-        if (!oldId.empty()) document_->unregisterElementId(oldId);
+        if (!oldId.empty()) document_->unregisterElementId(oldId, this);
     }
     attributes_.erase(name);
     if (name == "class" || name == "id") markPaintDirty();  // see setAttribute
@@ -615,7 +615,7 @@ void Element::setOuterHTML(const std::string& html) {
 
     // Unregister this element's ID before removal
     if (!id().empty()) {
-        document_->unregisterElementId(id());
+        document_->unregisterElementId(id(), this);
     }
 
     // Remove this element from parent. Mark the parent, not this element: its

@@ -557,6 +557,13 @@ JSValue js_window_getComputedStyle(JSContext* ctx,
         return obj;
     }
 
+    // Resolve pending style and layout first. A computed style read a line
+    // after the class that changes it, or after the element was created, has to
+    // report what the cascade now says — and the resolved values of width and
+    // height are read off the layout box, so this owes the same flush a
+    // geometry read does.
+    if (auto* engine = getEngineFromCtx(ctx)) engine->flushLayoutForRead(el->document());
+
     JSValue obj = JS_NewObjectClass(ctx, static_cast<int>(js_computed_class_id));
     if (JS_IsException(obj)) return obj;
     JS_SetOpaque(obj, el);

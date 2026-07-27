@@ -251,10 +251,7 @@ void Document::parse(const std::string& html, const std::string& authorCss,
             }
 
             // Register IDs
-            std::string elemId = elem->id();
-            if (!elemId.empty()) {
-                idMap_[elemId] = elem;
-            }
+            registerElementId(elem->id(), elem);
 
             // Extract <style> elements and add their CSS to the cascade
             if (elem->tagName() == "STYLE") {
@@ -1371,7 +1368,7 @@ void Document::adoptOne(Node* node, Document* src) {
         // the node stops belonging to it, add ours after.
         if (node->nodeType() == NodeType::Element) {
             auto* elem = static_cast<Element*>(node);
-            if (!elem->id().empty()) src->unregisterElementId(elem->id());
+            if (!elem->id().empty()) src->unregisterElementId(elem->id(), elem);
             if (elem == src->focusedElement_) src->focusedElement_ = nullptr;
         }
         // Live ranges in the source document can't span into another document.
@@ -1435,7 +1432,7 @@ void Document::freeNode(Node* node) {
         auto* elem = static_cast<Element*>(node);
         std::string id = elem->id();
         if (!id.empty())
-            unregisterElementId(id);
+            unregisterElementId(id, elem);
         // The focused element is about to be deallocated — drop the document's
         // reference so activeElement() can never hand out freed memory. (The
         // engine polls activeElement() on every mouse event: a button that
@@ -1535,9 +1532,56 @@ Node* Document::resolveNode(const Node* ptr, uint32_t id) const {
 // Queries
 // ---------------------------------------------------------------------------
 
+// True when `node` hangs off this document's root. Shadow content is excluded
+// on purpose: a shadow tree's parent chain stops at its ShadowRoot, so it is
+// not part of the document tree and document.getElementById must not see into
+// it — ShadowRoot::getElementById is the scoped query for that.
+static bool inDocumentTree(const Node* node, const Node* root) {
+    for (const Node* n = node; n; n = n->parentNode())
+        if (n == root) return true;
+    return false;
+}
+
+/// The first element in the document with this id, in document order.
+///
+/// The map is a *cache* of that question and not the answer to it, which is
+/// the whole of the design here. It holds every element that has ever claimed
+/// the id, because an entry outlives its element leaving the tree (the element
+/// may be put back without its id attribute ever being written again, and
+/// nothing on the insertion path registers ids) and because two elements can
+/// hold one id at the same time — legally, as when a redraw builds its
+/// replacement before clearing what it replaces. So a cached candidate is
+/// believed only while it still carries the id and is still in the tree, and
+/// when no candidate qualifies the tree itself is asked. That fallback is what
+/// makes every path that forgets to register self-healing: the worst an
+/// unregistered element costs is one walk, once, and then it is cached.
 Element* Document::getElementById(const std::string& id) {
+    if (id.empty()) return nullptr;
+
     auto it = idMap_.find(id);
-    return (it != idMap_.end()) ? it->second : nullptr;
+    if (it != idMap_.end()) {
+        Element* only = nullptr;
+        int live = 0;
+        for (Element* elem : it->second) {
+            if (elem->id() != id || !inDocumentTree(elem, root_)) continue;
+            if (++live > 1) break;
+            only = elem;
+        }
+        // Exactly one element in the tree wears this id: the common case, and
+        // the only one the cache can answer on its own. Two or more and it
+        // cannot say which comes first in document order — the map has no
+        // order — so that falls through to the walk as well.
+        if (live == 1) return only;
+    }
+
+    std::vector<Element*> all;
+    collectElements(root_, all);
+    for (Element* elem : all) {
+        if (elem->id() != id) continue;
+        registerElementId(id, elem);
+        return elem;
+    }
+    return nullptr;
 }
 
 Element* Document::querySelector(const std::string& selector) {
@@ -1591,13 +1635,24 @@ void Document::setTitle(const std::string& title) {
 }
 
 void Document::registerElementId(const std::string& id, Element* elem) {
-    if (!id.empty() && elem) {
-        idMap_[id] = elem;
-    }
+    if (id.empty() || !elem) return;
+    auto& candidates = idMap_[id];
+    for (Element* known : candidates)
+        if (known == elem) return;
+    candidates.push_back(elem);
 }
 
-void Document::unregisterElementId(const std::string& id) {
-    idMap_.erase(id);
+/// Drop one element's claim on an id. Only that element's: an element leaving
+/// the tree says nothing about any other element holding the same id, and the
+/// erase-by-string this replaced would take the whole entry with it.
+void Document::unregisterElementId(const std::string& id, const Element* elem) {
+    if (id.empty()) return;
+    auto it = idMap_.find(id);
+    if (it == idMap_.end()) return;
+    auto& candidates = it->second;
+    candidates.erase(std::remove(candidates.begin(), candidates.end(), elem),
+                     candidates.end());
+    if (candidates.empty()) idMap_.erase(it);
 }
 
 void Document::collectElements(Node* node, std::vector<Element*>& out) {
@@ -1821,8 +1876,7 @@ void Document::parseInnerHTML(Element* parent, const std::string& html) {
                 elem->setStyleSheetAdded(true);
             }
         }
-        std::string elemId = elem->id();
-        if (!elemId.empty()) idMap_[elemId] = elem;
+        registerElementId(elem->id(), elem);
     }
 
     // Only this element's children moved, so only its layout children have to be
