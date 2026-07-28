@@ -174,6 +174,36 @@ static JSValue js_document_removeEventListener(JSContext* ctx,
     return JS_UNDEFINED;
 }
 
+// dispatchEvent delegates the same way, and it has to: addEventListener above
+// stores the document's listeners on documentElement, so an event aimed at the
+// document has to be dispatched there or none of them would run. Delegating
+// also means the document gets the propagation order a bubbled event already
+// takes — window's capture pass, the document's own listeners at target, then
+// the bubble back out to window — rather than a second, nearly-identical order
+// written out here that could drift from it.
+//
+// Consequence worth knowing: currentTarget inside the handler is the <html>
+// element, not the document. That is already true of every event that reaches
+// a document listener by bubbling, for the same reason.
+static JSValue js_document_dispatchEvent(JSContext* ctx,
+                                         JSValueConst this_val,
+                                         int argc, JSValueConst* argv)
+{
+    auto* doc = getDocument(this_val);
+    if (!doc || argc < 1) return JS_FALSE;
+    auto* root = doc->documentElement();
+    if (!root) return JS_FALSE;
+    JSValue rootVal = DomBindings::wrapElement(ctx, root);
+    JSAtom fn = JS_NewAtom(ctx, "dispatchEvent");
+    // Element.dispatchEvent already answers !defaultPrevented, which is what
+    // this returns too — so hand its result straight back rather than deciding
+    // the same thing twice.
+    JSValue result = JS_Invoke(ctx, rootVal, fn, argc, argv);
+    JS_FreeAtom(ctx, fn);
+    JS_FreeValue(ctx, rootVal);
+    return result;
+}
+
 static JSValue js_document_exitPointerLock(JSContext* ctx, JSValueConst /*this_val*/,
                                             int /*argc*/, JSValueConst* /*argv*/) {
     auto it = s_ctx_engines.find(ctx);
@@ -386,6 +416,7 @@ void installDocumentBindings(JSContext* ctx) {
         .method_raw("adoptNode", js_document_adoptNode, 1)
         .method_raw("addEventListener", js_document_addEventListener, 2)
         .method_raw("removeEventListener", js_document_removeEventListener, 2)
+        .method_raw("dispatchEvent", js_document_dispatchEvent, 1)
         .method_raw("exitPointerLock", js_document_exitPointerLock, 0)
         .method("createRange", [](Doc* d, JSContext* cx) -> JSValue {
             auto* r = new bro::dom::Range();

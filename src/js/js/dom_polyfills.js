@@ -452,12 +452,11 @@
                     cancelable: false, defaultPrevented: false, isTrusted: true,
                     preventDefault: function() { this.defaultPrevented = true; } };
         }
-        // document.addEventListener in bro forwards to document.documentElement,
-        // but document itself has no dispatchEvent — fire on the root element
-        // so registered listeners actually run. Also notify window listeners.
-        var root = document.documentElement;
-        if (root && typeof root.dispatchEvent === 'function') {
-            try { root.dispatchEvent(evt); } catch(_) {}
+        // Fires the document's own listeners (which live on documentElement)
+        // and, on the way out, window's. The explicit window call below is
+        // still needed because these events do not bubble.
+        if (typeof document.dispatchEvent === 'function') {
+            try { document.dispatchEvent(evt); } catch(_) {}
         }
         if (typeof globalThis.__bro_dispatch_window_event === 'function') {
             globalThis.__bro_dispatch_window_event(type, evt);
