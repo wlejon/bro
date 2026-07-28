@@ -3637,24 +3637,49 @@ static JSValue js_element_replaceChildren(JSContext* ctx, JSValueConst this_val,
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
     auto* doc = getDocumentForCtx(ctx);
-    // Remove all existing children
+
+    // replaceChildren *removes* its old children — per the spec they are
+    // detached, not destroyed, and stay re-insertable for as long as anything
+    // holds a reference to them. This used to invalidateWrapper() every element
+    // child, which turned an ordinary thing to do (keeping a reference across a
+    // rebuild, so a live <video> or a canvas is not thrown away and remade) into
+    // a silent no-op somewhere else entirely: appending the held element back
+    // did nothing at all — no error, no exception, childNodes.length stayed
+    // zero. textContent= and innerHTML= already detach element children without
+    // touching their wrappers, and removeChild always has; this path was the
+    // one that disagreed.
+    //
+    // Text and comment children are still freed outright, exactly as they are
+    // on those two paths. Their wrappers are cached strongly in __bro_node_map,
+    // so a detached text node nothing points at would never be reclaimed, and a
+    // freed one goes inert through a generation-checked handle rather than
+    // dangling (tests/gc/test_node_wrapper_invalidation.js depends on both).
+    //
+    // Removal goes through Node::removeChild rather than clearing the child
+    // list, so live Range endpoints are told while the child still knows its
+    // former parent and index.
     auto oldKids = el->childNodes();
     for (auto* child : oldKids) {
         if (child->nodeType() == bro::dom::NodeType::Element) {
-            JSValue w = DomBindings::wrapElement(ctx, child);
+            auto* childElem = static_cast<bro::dom::Element*>(child);
+            JSValue w = DomBindings::wrapElement(ctx, childElem);
             fireDisconnectedCallback(ctx, w);
             JS_FreeValue(ctx, w);
-        }
-        child->setParent(nullptr);
-    }
-    el->childNodes().clear();
-    for (auto* child : oldKids) {
-        if (child->nodeType() == bro::dom::NodeType::Element) {
-            invalidateWrapper(ctx, static_cast<bro::dom::Element*>(child));
+            // A detached subtree must stop answering document.getElementById,
+            // which is the one thing invalidateWrapper did here that still has
+            // to happen. removeChild does the same.
+            if (doc && !childElem->id().empty())
+                doc->unregisterElementId(childElem->id(), childElem);
+            el->removeChild(child);
         } else {
+            el->removeChild(child);
             if (doc) doc->freeNode(child);
         }
     }
+    // Emptying a container is a structural change even when nothing replaces
+    // it; the append loop below only marks what it adds.
+    if (!oldKids.empty()) markChildListChanged(doc, el);
+
     // Append new children
     for (int i = 0; i < argc; ++i) {
         auto* node = nodeOrTextFromArg(ctx, argv[i]);
