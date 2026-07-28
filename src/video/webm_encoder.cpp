@@ -71,9 +71,15 @@ public:
 
     bool open(const std::string& path, const Config& cfg, std::string* err) {
         cfg_ = cfg;
-        if (cfg_.width <= 0 || cfg_.height <= 0 ||
-            (cfg_.width  & 1) || (cfg_.height & 1)) {
-            setErr("width/height must be positive and even");
+        // No size at all, with an audio rate, is a sound-only file: a legal
+        // WebM with an Opus track and no video track in it. Any other missing
+        // dimension is still the mistake it always was.
+        hasVideo_ = !(cfg_.width == 0 && cfg_.height == 0 &&
+                      cfg_.audioSampleRate > 0);
+        if (hasVideo_ && (cfg_.width <= 0 || cfg_.height <= 0 ||
+                          (cfg_.width  & 1) || (cfg_.height & 1))) {
+            setErr("width/height must be positive and even "
+                   "(omit both, with audioSampleRate set, for a sound-only file)");
             if (err) *err = lastErr_;
             return false;
         }
@@ -89,54 +95,7 @@ public:
         }
         deadline_ = qualityToDeadline(cfg_.quality);
 
-        // ---- libvpx encoder ----
-        const auto* iface = vpx_codec_vp9_cx();
-        vpx_codec_enc_cfg_t vc{};
-        if (vpx_codec_enc_config_default(iface, &vc, 0) != VPX_CODEC_OK) {
-            setErr("vpx_codec_enc_config_default failed");
-            if (err) *err = lastErr_;
-            return false;
-        }
-        vc.g_w = cfg_.width;
-        vc.g_h = cfg_.height;
-        vc.g_timebase.num = cfg_.fpsDen;
-        vc.g_timebase.den = cfg_.fpsNum;
-        vc.rc_target_bitrate = static_cast<unsigned int>(cfg_.targetBitrateKbps);
-        vc.rc_end_usage = VPX_VBR;
-        vc.kf_mode = VPX_KF_AUTO;
-        vc.kf_max_dist = static_cast<unsigned int>(cfg_.keyframeIntervalSec) *
-                         static_cast<unsigned int>(cfg_.fpsNum) /
-                         static_cast<unsigned int>(cfg_.fpsDen);
-        if (vc.kf_max_dist == 0) vc.kf_max_dist = 1;
-        vc.kf_min_dist = 0;
-        vc.g_threads = (cfg_.threads > 0) ? static_cast<unsigned int>(cfg_.threads) : 1;
-        vc.g_pass = VPX_RC_ONE_PASS;
-        vc.g_lag_in_frames = 0;       // no look-ahead — keeps encode synchronous
-        vc.g_error_resilient = 0;
-
-        if (vpx_codec_enc_init(&codec_, iface, &vc, 0) != VPX_CODEC_OK) {
-            setErr(std::string("vpx_codec_enc_init failed: ") +
-                   (vpx_codec_error_detail(&codec_) ? vpx_codec_error_detail(&codec_) : ""));
-            if (err) *err = lastErr_;
-            return false;
-        }
-        codecInited_ = true;
-
-        // Realtime preset: row-MT + cpu-used 7 (fastest); Good: cpu-used 1.
-        const int cpuUsed =
-            (cfg_.quality == Quality::Realtime) ? 7 :
-            (cfg_.quality == Quality::Best)     ? 0 : 1;
-        vpx_codec_control(&codec_, VP8E_SET_CPUUSED, cpuUsed);
-        if (cfg_.quality == Quality::Realtime) {
-            vpx_codec_control(&codec_, VP9E_SET_ROW_MT, 1);
-        }
-
-        if (!vpx_img_alloc(&image_, VPX_IMG_FMT_I420, cfg_.width, cfg_.height, 1)) {
-            setErr("vpx_img_alloc failed");
-            if (err) *err = lastErr_;
-            return false;
-        }
-        imgInited_ = true;
+        if (hasVideo_ && !initVideoCodec(err)) return false;
 
         // ---- WebM muxer ----
         if (!writer_.Open(path.c_str())) {
@@ -156,44 +115,7 @@ public:
         auto* info = segment_.GetSegmentInfo();
         info->set_writing_app("bro");
 
-        videoTrackId_ = segment_.AddVideoTrack(cfg_.width, cfg_.height, 1);
-        if (videoTrackId_ == 0) {
-            setErr("AddVideoTrack failed");
-            if (err) *err = lastErr_;
-            return false;
-        }
-        auto* track = static_cast<mkvmuxer::VideoTrack*>(
-            segment_.GetTrackByNumber(videoTrackId_));
-        if (!track) {
-            setErr("GetTrackByNumber returned null");
-            if (err) *err = lastErr_;
-            return false;
-        }
-        // Hardcode the codec id literal — the static const char arrays in
-        // mkvmuxer::Tracks aren't exported by the vcpkg unofficial-libwebm
-        // build, so referencing kVp9CodecId fails to link.
-        track->set_codec_id("V_VP9");
-        const double frameRate = double(cfg_.fpsNum) / double(cfg_.fpsDen);
-        track->set_frame_rate(frameRate);
-        // Rotation goes in the Video Projection element's pose roll — a
-        // rectangular projection rolled about the forward vector, which is
-        // what a sideways-recorded clip is. Written only when there is one, so
-        // an ordinary file has no Projection element and is unchanged.
-        const int rot = ((cfg_.rotationDegrees % 360) + 360) % 360;
-        if (rot == 90 || rot == 180 || rot == 270) {
-            mkvmuxer::Projection projection;
-            projection.set_type(mkvmuxer::Projection::kRectangular);
-            projection.set_pose_yaw(0.0f);
-            projection.set_pose_pitch(0.0f);
-            projection.set_pose_roll(static_cast<float>(rot));
-            if (!track->SetProjection(projection)) {
-                setErr("SetProjection failed");
-                if (err) *err = lastErr_;
-                return false;
-            }
-        }
-        // default_duration is in nanoseconds.
-        track->set_default_duration(static_cast<uint64_t>(1.0e9 / frameRate));
+        if (hasVideo_ && !addVideoTrack(err)) return false;
 
         // ---- Optional Opus audio track ----
         if (cfg_.audioSampleRate > 0) {
@@ -264,6 +186,10 @@ public:
     }
 
     bool addFrameRGBA(const uint8_t* rgba, int srcStride) override {
+        if (!hasVideo_) {
+            setErr("this encoder has no video track: it was opened with no size");
+            return false;
+        }
         if (!codecInited_ || !writerOpen_) {
             setErr("encoder not open");
             return false;
@@ -396,6 +322,105 @@ public:
     int framesWritten() const override { return framesWritten_; }
 
 private:
+    // The video half of open(), lifted out so a sound-only file simply does
+    // not run it. Everything below the muxer is shared.
+    bool initVideoCodec(std::string* err) {
+        // ---- libvpx encoder ----
+        const auto* iface = vpx_codec_vp9_cx();
+        vpx_codec_enc_cfg_t vc{};
+        if (vpx_codec_enc_config_default(iface, &vc, 0) != VPX_CODEC_OK) {
+            setErr("vpx_codec_enc_config_default failed");
+            if (err) *err = lastErr_;
+            return false;
+        }
+        vc.g_w = cfg_.width;
+        vc.g_h = cfg_.height;
+        vc.g_timebase.num = cfg_.fpsDen;
+        vc.g_timebase.den = cfg_.fpsNum;
+        vc.rc_target_bitrate = static_cast<unsigned int>(cfg_.targetBitrateKbps);
+        vc.rc_end_usage = VPX_VBR;
+        vc.kf_mode = VPX_KF_AUTO;
+        vc.kf_max_dist = static_cast<unsigned int>(cfg_.keyframeIntervalSec) *
+                         static_cast<unsigned int>(cfg_.fpsNum) /
+                         static_cast<unsigned int>(cfg_.fpsDen);
+        if (vc.kf_max_dist == 0) vc.kf_max_dist = 1;
+        vc.kf_min_dist = 0;
+        vc.g_threads = (cfg_.threads > 0) ? static_cast<unsigned int>(cfg_.threads) : 1;
+        vc.g_pass = VPX_RC_ONE_PASS;
+        vc.g_lag_in_frames = 0;       // no look-ahead — keeps encode synchronous
+        vc.g_error_resilient = 0;
+
+        if (vpx_codec_enc_init(&codec_, iface, &vc, 0) != VPX_CODEC_OK) {
+            setErr(std::string("vpx_codec_enc_init failed: ") +
+                   (vpx_codec_error_detail(&codec_) ? vpx_codec_error_detail(&codec_) : ""));
+            if (err) *err = lastErr_;
+            return false;
+        }
+        codecInited_ = true;
+
+        // Realtime preset: row-MT + cpu-used 7 (fastest); Good: cpu-used 1.
+        const int cpuUsed =
+            (cfg_.quality == Quality::Realtime) ? 7 :
+            (cfg_.quality == Quality::Best)     ? 0 : 1;
+        vpx_codec_control(&codec_, VP8E_SET_CPUUSED, cpuUsed);
+        if (cfg_.quality == Quality::Realtime) {
+            vpx_codec_control(&codec_, VP9E_SET_ROW_MT, 1);
+        }
+
+        if (!vpx_img_alloc(&image_, VPX_IMG_FMT_I420, cfg_.width, cfg_.height, 1)) {
+            setErr("vpx_img_alloc failed");
+            if (err) *err = lastErr_;
+            return false;
+        }
+        imgInited_ = true;
+        return true;
+    }
+
+    bool addVideoTrack(std::string* err) {
+        videoTrackId_ = segment_.AddVideoTrack(cfg_.width, cfg_.height, 1);
+        if (videoTrackId_ == 0) {
+            setErr("AddVideoTrack failed");
+            if (err) *err = lastErr_;
+            return false;
+        }
+        auto* track = static_cast<mkvmuxer::VideoTrack*>(
+            segment_.GetTrackByNumber(videoTrackId_));
+        if (!track) {
+            setErr("GetTrackByNumber returned null");
+            if (err) *err = lastErr_;
+            return false;
+        }
+        // Hardcode the codec id literal — the static const char arrays in
+        // mkvmuxer::Tracks aren't exported by the vcpkg unofficial-libwebm
+        // build, so referencing kVp9CodecId fails to link.
+        track->set_codec_id("V_VP9");
+        const double frameRate = double(cfg_.fpsNum) / double(cfg_.fpsDen);
+        track->set_frame_rate(frameRate);
+        // Rotation goes in the Video Projection element's pose roll — a
+        // rectangular projection rolled about the forward vector, which is
+        // what a sideways-recorded clip is. Written only when there is one, so
+        // an ordinary file has no Projection element and is unchanged.
+        const int rot = ((cfg_.rotationDegrees % 360) + 360) % 360;
+        if (rot == 90 || rot == 180 || rot == 270) {
+            mkvmuxer::Projection projection;
+            projection.set_type(mkvmuxer::Projection::kRectangular);
+            projection.set_pose_yaw(0.0f);
+            projection.set_pose_pitch(0.0f);
+            projection.set_pose_roll(static_cast<float>(rot));
+            if (!track->SetProjection(projection)) {
+                setErr("SetProjection failed");
+                if (err) *err = lastErr_;
+                return false;
+            }
+        }
+        // default_duration is in nanoseconds.
+        track->set_default_duration(static_cast<uint64_t>(1.0e9 / frameRate));
+        return true;
+    }
+
+    // False when this file has no video track at all.
+    bool hasVideo_ = true;
+
     void setErr(const std::string& s) { lastErr_ = s; }
 
     // Pull all available packets from the encoder and mux them. Returns true

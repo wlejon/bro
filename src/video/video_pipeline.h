@@ -26,8 +26,11 @@ public:
     VideoPipeline();
     ~VideoPipeline();
 
-    // Open a WebM file. Returns false if the file is missing or has no
-    // supported video track. Audio is optional — absence is not an error.
+    // Open a media file through the registered backends. Returns false only
+    // when nothing in it can be decoded: a file with no video track is opened
+    // and plays as sound, with no picture, and a file whose audio codec is
+    // unsupported plays silently. Refusing the first of those is why an
+    // audio-only source could not be played at all.
     bool open(const std::string& path);
 
     void play();
@@ -89,7 +92,23 @@ public:
 
     bool hasFrame() const { return cur_.valid; }
     TimeNs durationNs() const { return duration_; }
-    TimeNs currentPts() const { return cur_.pts; }
+
+    /// True when this source has a video track this backend could decode.
+    /// False for a sound-only file, which plays with no picture at all.
+    bool hasVideo() const { return vdec_ != nullptr; }
+
+    /// Where playback is.
+    ///
+    /// With a picture that is the timestamp of the picture on screen, which is
+    /// why a seek reads back snapped to a frame boundary. With no picture
+    /// there are no timestamps to read, so it is the media clock the sound is
+    /// anchored to instead — the same clock that decides which frame to show
+    /// when there is one.
+    ///
+    /// The clock is a FALLBACK, taken only when there is no video track. Two
+    /// clocks arbitrating is how A/V sync bugs are born: with a picture the
+    /// pictures decide, always, and the sound is re-anchored to them.
+    TimeNs currentPts() const { return vdec_ ? cur_.pts : soundPos_; }
 
     /// Nominal frames per second as the container declares it, or 0 when it
     /// declares nothing. An average — a variable-frame-rate file still has
@@ -152,7 +171,7 @@ private:
     bool quarterTurned() const { return rotation_ == 90 || rotation_ == 270; }
 
     /// Wire an opened source and its backend's decoders into this pipeline.
-    /// False when the file carries no video track this backend can decode,
+    /// False when this backend can decode neither the picture nor the sound,
     /// with the pipeline left clean so open() can try the next one.
     bool adoptSource(const MediaBackend& backend, std::unique_ptr<MediaSource> source);
 
@@ -168,6 +187,11 @@ private:
     TimeNs duration_ = 0;
     double frameRate_ = 0.0;
     int rotation_ = 0;
+
+    // Where a sound-only file has got to. Written by advanceTo() from the
+    // clock and read by currentPts(); untouched, and unread, whenever there
+    // is a picture.
+    TimeNs soundPos_ = 0;
 
     // What is on screen: the last picture at or before `now`.
     Picture cur_;

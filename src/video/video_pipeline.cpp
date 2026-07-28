@@ -29,8 +29,11 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
     rotation_ = 0;
     frameW_ = 0;
     frameH_ = 0;
+    soundPos_ = 0;
     vdec_.reset();
     adec_.reset();
+
+    TimeNs audioDuration = 0;
 
     for (const auto& t : source->tracks()) {
         if (t.kind == TrackKind::Video && videoTrackId_ == 0) {
@@ -58,12 +61,24 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
             audioTrackId_ = t.id;
             audioRate_ = t.sampleRate;
             audioChannels_ = t.channels;
+            audioDuration = t.durationNs;
         }
     }
 
+    // Nothing decodable at all: not ours, let the next backend try.
+    if (!vdec_ && !adec_) return false;
+
     if (!vdec_) {
-        adec_.reset();
-        return false;
+        // Sound only. There is no picture, so there is nothing for this
+        // source to pump — the sound plays from a second demuxer the same way
+        // it does beside a picture (see ElVideo), and this pipeline is reduced
+        // to what it always also was: a clock, a length, and an end. It is
+        // still opened rather than refused, because a file with no video track
+        // is a file that plays, and refusing it here is why one could not.
+        duration_ = audioDuration;
+        source->setActiveTracks({});
+        source_ = std::move(source);
+        return true;
     }
     // This source pumps video only — audio plays from a second demuxer (see
     // ElVideo). Asking for just the video track stops us reading and copying
@@ -109,6 +124,13 @@ static constexpr TimeNs kForwardNudgeNs = 500 * 1000000LL;   // 0.5 s
 
 void VideoPipeline::seekTo(TimeNs pts) {
     if (!source_) return;
+    if (!vdec_) {
+        // No pictures to throw away and no demuxer of ours to restart: the
+        // clock IS the position, so moving it is the whole of the seek.
+        if (clock_) clock_->seekTo(pts);
+        advanceTo(pts);
+        return;
+    }
 
     const bool nudgeForward = cur_.valid && cur_.pts >= 0 && pts >= cur_.pts &&
                               (pts - cur_.pts) <= kForwardNudgeNs;
@@ -313,7 +335,23 @@ bool VideoPipeline::advance() {
 }
 
 bool VideoPipeline::advanceTo(TimeNs nowNs) {
-    if (!source_ || !vdec_) return false;
+    if (!source_) return false;
+    if (!vdec_) {
+        // Sound only: nothing is decoded here and there is no picture to
+        // promote, so advancing is reading the clock and noticing the end.
+        // Reported as "nothing changed" because nothing on screen did — the
+        // return value is about the picture, and there is none.
+        soundPos_ = nowNs < 0 ? 0 : nowNs;
+        if (duration_ > 0 && soundPos_ >= duration_) {
+            soundPos_ = duration_;
+            drained_ = true;
+            endOfStream_ = true;
+        } else {
+            drained_ = false;
+            endOfStream_ = false;
+        }
+        return false;
+    }
     bool changed = false;
 
     // A staged picture becomes the displayed one as soon as its time comes.

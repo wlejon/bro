@@ -57,9 +57,17 @@ bool ElVideo::load(const std::string& path) {
     // displayWidth/Height rather than frameWidth/Height: a clip recorded
     // sideways is 1920x1080 in the file and 1080x1920 on the page, and the
     // intrinsic size is what the page lays out against.
+    //
+    // A sound-only file keeps the 300x150 replaced-element fallback for
+    // layout — a box of zero would collapse the element out of the page —
+    // while videoWidth/videoHeight report 0, which is what "there is no
+    // picture" means to a script.
+    hasPicture_ = pipeline_->hasVideo();
     rotation_ = pipeline_->rotationDegrees();
-    intrinsicWidth_ = pipeline_->displayWidth() > 0 ? pipeline_->displayWidth() : intrinsicWidth_;
-    intrinsicHeight_ = pipeline_->displayHeight() > 0 ? pipeline_->displayHeight() : intrinsicHeight_;
+    if (hasPicture_) {
+        intrinsicWidth_ = pipeline_->displayWidth() > 0 ? pipeline_->displayWidth() : intrinsicWidth_;
+        intrinsicHeight_ = pipeline_->displayHeight() > 0 ? pipeline_->displayHeight() : intrinsicHeight_;
+    }
     // Apply IDL state that was set before/after the element had a pipeline:
     // rate goes to the freshly-created clock, and the "muted" content
     // attribute (reflected by defaultMuted) initializes the live muted state.
@@ -393,8 +401,12 @@ double ElVideo::duration() const {
     return pipeline_ ? pipeline_->durationNs() / 1e9 : 0.0;
 }
 
+// "There is something to present." With a picture that is a decoded frame;
+// with no video track there never will be one, and the file is ready as soon
+// as it is open — otherwise a sound-only source would sit at readyState 1 and
+// never fire canplaythrough or ended.
 bool ElVideo::isReady() const {
-    return pipeline_ && pipeline_->hasFrame();
+    return pipeline_ && (pipeline_->hasFrame() || !pipeline_->hasVideo());
 }
 
 bool ElVideo::isEnded() const {
@@ -473,7 +485,11 @@ void ElVideo::draw(render::Renderer* renderer,
     // Pull frames up to the current clock time. Paused state is tracked
     // by the pipeline's FileClock, which freezes nowNs() between
     // pause() and play().
-    pipeline_->advance();
+    // A sound-only file has nothing to decode here, and its clock is walked
+    // from pumpEvents() on the main thread instead — so it keeps time even
+    // while the element is not being drawn, which is the whole of what a
+    // pictureless <video> is.
+    if (pipeline_->hasVideo()) pipeline_->advance();
     // NOTE: pumpEvents() runs on the main thread (Engine::pumpVideoEvents)
     // — QuickJS is not thread-safe, and draw() executes on the raster
     // thread. Pipeline state read here (currentPts, hasFrame) is written by
@@ -557,6 +573,10 @@ void ElVideo::pumpEvents() {
     // Keep the audio ring ahead of the mixer. Deliberately before the jsCtx_
     // guard: a document with no JS listeners still has to make sound.
     pumpStreamingAudio();
+    // With no picture nothing drives the clock from the draw path — there is
+    // no frame to decode and draw() bows out — so walk it here. Safe on this
+    // thread precisely because the raster side is not touching it.
+    if (!pipeline_->hasVideo()) pipeline_->advance();
     if (!jsCtx_ || !elem_) return;
 
     // loadedmetadata fires once after a successful open(). HTMLMediaElement
@@ -585,7 +605,7 @@ void ElVideo::pumpEvents() {
     // canplaythrough: bro predecodes audio into a single clip and demuxes
     // video from a local file, so once metadata + first frame are ready we
     // can assert the stream will play through without buffering.
-    if (pendingCanPlayThrough_ && !pendingLoadedMetadata_ && pipeline_->hasFrame()) {
+    if (pendingCanPlayThrough_ && !pendingLoadedMetadata_ && isReady()) {
         pendingCanPlayThrough_ = false;
         dom::Event evt("canplaythrough", false, false);
         evt.setIsTrusted(true);
@@ -598,7 +618,10 @@ void ElVideo::pumpEvents() {
     // waiting / playing: while the clock advances but no decoded frame is
     // available, the element is "stalled at the edge of decoded data". Fire
     // 'waiting' when that happens, 'playing' when a frame appears again.
-    if (pipeline_->isPlaying() && !pipeline_->isEnded()) {
+    // A file with no picture is never "stalled at the edge of decoded data":
+    // there is no decoded data to be at the edge of, and testing hasFrame()
+    // would leave it firing 'waiting' for the whole of its length.
+    if (pipeline_->isPlaying() && !pipeline_->isEnded() && pipeline_->hasVideo()) {
         const bool hasFrame = pipeline_->hasFrame();
         if (!hasFrame && !waiting_) {
             waiting_ = true;
@@ -633,7 +656,7 @@ void ElVideo::pumpEvents() {
     // t to duration — the last packet's pts typically falls short of the
     // container-reported duration by one frame's worth of time.
     (void)dur;
-    if (!endedFired_ && pipeline_->isEnded() && pipeline_->hasFrame()) {
+    if (!endedFired_ && pipeline_->isEnded() && isReady()) {
         endedFired_ = true;
         pipeline_->pause();
         stopAudioPlayback();

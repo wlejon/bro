@@ -115,10 +115,15 @@ Register **before** constructing the Engine, so the first document's first
 Rules worth knowing:
 
 - Backends are tried highest priority first, and one wins only if it both opens
-  the container *and* produces a video decoder. A backend that opens an `.mkv`
+  the container *and* can decode something in it. A backend that opens an `.mkv`
   it cannot decode falls through to the next instead of failing the load.
 - `open` returns `nullptr` **without logging** when the format simply isn't
   yours. Reserve logging for a file you recognised but could not read.
+- A source is adopted if **either** its picture or its sound can be decoded. A
+  file with no video track plays as sound with no picture (`videoWidth` and
+  `videoHeight` read 0), and a file whose audio codec you do not handle plays
+  silently. Only a source where neither works is handed on to the next
+  backend.
 - Decoders come from the same backend that opened the source: `codecPrivate` is
   written by that demuxer and packets carry its framing.
 - Implement `VideoDecoder::drain()` if your codec reorders. The pipeline calls

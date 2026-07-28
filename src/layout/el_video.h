@@ -90,8 +90,13 @@ public:
     // The size the picture is *presented* at, which is the decoded frame size
     // swapped when the source says it was recorded a quarter turn over. That
     // is the number a page lays out against, so it is the number reported.
-    int videoWidth() const { return intrinsicWidth_; }
-    int videoHeight() const { return intrinsicHeight_; }
+    //
+    // Zero once a source with no video track has been loaded — "there is no
+    // picture" is what a script reads these for. The element's *box* keeps the
+    // 300x150 replaced-element fallback (see getContentSize), because a box of
+    // zero would collapse a playing element out of the page.
+    int videoWidth() const { return hasPicture_ ? intrinsicWidth_ : 0; }
+    int videoHeight() const { return hasPicture_ ? intrinsicHeight_ : 0; }
 
     /// How far the picture is turned clockwise to be shown, in degrees:
     /// 0, 90, 180 or 270. Read-only — it comes from the container.
@@ -128,6 +133,9 @@ private:
     int intrinsicWidth_ = 300;
     int intrinsicHeight_ = 150;
     int rotation_ = 0;
+    // True until a load says otherwise, so an element with nothing loaded
+    // still reports the spec's 300x150 fallback rather than 0.
+    bool hasPicture_ = true;
 
     // Event-lifecycle bookkeeping. ElVideo fires media events during draw()
     // (on the main thread, with a known JSContext). Fields here latch what

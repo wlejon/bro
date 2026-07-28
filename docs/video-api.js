@@ -43,6 +43,10 @@
 //   path, output .webm file path (string).
 //   width,
 //   height, frame size in pixels. Both must be even (4:2:0 chroma).
+//                   Omit BOTH, with audioSampleRate set, to write a
+//                   sound-only file: an Opus track and no video track at
+//                   all. addFrameRGBA() then refuses rather than silently
+//                   dropping frames there is no track for.
 //
 // Optional:
 //   fps, integer frames per second (default 30).
@@ -239,6 +243,15 @@ gif.addCanvasFrame(canvas);
 // audio) through the engine's demux → decode → present pipeline. The decoded
 // frame renders into the element's CSS content box each frame; audio routes
 // through the shared broaudio engine (the same output AudioContext uses).
+//
+// A file with NO video track plays too, as sound with no picture. It is an
+// ordinary <video> in every other respect — duration, currentTime, play,
+// pause, seek and 'ended' all work — but videoWidth and videoHeight are 0 and
+// nothing is drawn. The box keeps the spec's 300x150 replaced-element
+// fallback, so a playing element does not collapse out of the page; give it a
+// size in CSS, or `display: none` it, if you are only after the sound.
+// Position then comes from the media clock rather than from frame
+// timestamps, so it is continuous instead of snapping to a frame boundary.
 //
 //   <video id="clip" src="assets/intro.webm"></video>
 //
