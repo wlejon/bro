@@ -54,8 +54,12 @@ bool ElVideo::load(const std::string& path) {
     delete pipeline_;
     pipeline_ = p;
     currentSrc_ = resolved;
-    intrinsicWidth_ = pipeline_->frameWidth() > 0 ? pipeline_->frameWidth() : intrinsicWidth_;
-    intrinsicHeight_ = pipeline_->frameHeight() > 0 ? pipeline_->frameHeight() : intrinsicHeight_;
+    // displayWidth/Height rather than frameWidth/Height: a clip recorded
+    // sideways is 1920x1080 in the file and 1080x1920 on the page, and the
+    // intrinsic size is what the page lays out against.
+    rotation_ = pipeline_->rotationDegrees();
+    intrinsicWidth_ = pipeline_->displayWidth() > 0 ? pipeline_->displayWidth() : intrinsicWidth_;
+    intrinsicHeight_ = pipeline_->displayHeight() > 0 ? pipeline_->displayHeight() : intrinsicHeight_;
     // Apply IDL state that was set before/after the element had a pipeline:
     // rate goes to the freshly-created clock, and the "muted" content
     // attribute (reflected by defaultMuted) initializes the live muted state.
@@ -477,8 +481,12 @@ void ElVideo::draw(render::Renderer* renderer,
     // read tolerance (same discipline as the rest of the pipeline state).
 
     if (pipeline_->hasFrame() && !pipeline_->currentRgba().empty()) {
-        const float fw = static_cast<float>(pipeline_->frameWidth());
-        const float fh = static_cast<float>(pipeline_->frameHeight());
+        // The picture is fitted at the size it is *shown*, which is the
+        // decoded frame size swapped at a quarter turn. Fitting at the frame's
+        // own size would letterbox a portrait clip as though it were
+        // landscape.
+        const float fw = static_cast<float>(pipeline_->displayWidth());
+        const float fh = static_cast<float>(pipeline_->displayHeight());
 
         float dx = x, dy = y, dw = w, dh = h;
         bool needClip = false;
@@ -502,11 +510,38 @@ void ElVideo::draw(render::Renderer* renderer,
         }
 
         if (needClip) { renderer->save(); renderer->setClip(x, y, w, h); }
-        renderer->drawPixelsRGBA(pipeline_->currentRgba().data(),
-                                  pipeline_->frameWidth(),
-                                  pipeline_->frameHeight(),
-                                  pipeline_->frameWidth() * 4,
-                                  dx, dy, dw, dh);
+
+        // Rotation is a transform on the quad, never a pass over the pixels:
+        // turning a 1080p frame every frame is a copy nobody can afford, and
+        // the renderer already has the matrix. The clip above is set first and
+        // deliberately outside it — it is the element's box, in the page's
+        // coordinates, and rotating it would crop the picture at an angle.
+        const int rot = pipeline_->rotationDegrees();
+        if (rot != 0) {
+            const float cx = dx + dw * 0.5f;
+            const float cy = dy + dh * 0.5f;
+            // Inside the rotated frame the picture is back on the buffer's own
+            // axes, so a quarter turn draws into the destination rect with its
+            // sides swapped, centred on the same point.
+            const bool quarter = (rot == 90 || rot == 270);
+            const float bw = quarter ? dh : dw;
+            const float bh = quarter ? dw : dh;
+            renderer->save();
+            renderer->translate(cx, cy);
+            renderer->rotate(static_cast<float>(rot));
+            renderer->drawPixelsRGBA(pipeline_->currentRgba().data(),
+                                      pipeline_->frameWidth(),
+                                      pipeline_->frameHeight(),
+                                      pipeline_->frameWidth() * 4,
+                                      -bw * 0.5f, -bh * 0.5f, bw, bh);
+            renderer->restore();
+        } else {
+            renderer->drawPixelsRGBA(pipeline_->currentRgba().data(),
+                                      pipeline_->frameWidth(),
+                                      pipeline_->frameHeight(),
+                                      pipeline_->frameWidth() * 4,
+                                      dx, dy, dw, dh);
+        }
         if (needClip) renderer->restore();
     } else {
         renderer->fillRect(x, y, w, h, cfromColor8({0, 0, 0, 255}));

@@ -175,6 +175,23 @@ public:
         track->set_codec_id("V_VP9");
         const double frameRate = double(cfg_.fpsNum) / double(cfg_.fpsDen);
         track->set_frame_rate(frameRate);
+        // Rotation goes in the Video Projection element's pose roll — a
+        // rectangular projection rolled about the forward vector, which is
+        // what a sideways-recorded clip is. Written only when there is one, so
+        // an ordinary file has no Projection element and is unchanged.
+        const int rot = ((cfg_.rotationDegrees % 360) + 360) % 360;
+        if (rot == 90 || rot == 180 || rot == 270) {
+            mkvmuxer::Projection projection;
+            projection.set_type(mkvmuxer::Projection::kRectangular);
+            projection.set_pose_yaw(0.0f);
+            projection.set_pose_pitch(0.0f);
+            projection.set_pose_roll(static_cast<float>(rot));
+            if (!track->SetProjection(projection)) {
+                setErr("SetProjection failed");
+                if (err) *err = lastErr_;
+                return false;
+            }
+        }
         // default_duration is in nanoseconds.
         track->set_default_duration(static_cast<uint64_t>(1.0e9 / frameRate));
 

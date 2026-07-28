@@ -26,6 +26,7 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
     audioChannels_ = 0;
     duration_ = 0;
     frameRate_ = 0.0;
+    rotation_ = 0;
     frameW_ = 0;
     frameH_ = 0;
     vdec_.reset();
@@ -41,6 +42,13 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
             frameH_ = static_cast<int>(t.height);
             duration_ = t.durationNs;
             frameRate_ = t.frameRate;
+            // Only quarter turns; anything else is a transform this pipeline
+            // cannot express as a display size, and a size that is wrong is
+            // worse than the picture as it was stored. Negative and
+            // out-of-range angles are normalised rather than refused, since a
+            // container is free to say -90.
+            const int r = ((t.rotationDegrees % 360) + 360) % 360;
+            rotation_ = (r == 90 || r == 180 || r == 270) ? r : 0;
         } else if (t.kind == TrackKind::Audio && audioTrackId_ == 0) {
             // Audio is optional: a file whose audio codec this backend can't
             // handle still plays, silently.

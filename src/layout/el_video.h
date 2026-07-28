@@ -87,8 +87,15 @@ public:
 
     void getContentSize(float& w, float& h);
 
+    // The size the picture is *presented* at, which is the decoded frame size
+    // swapped when the source says it was recorded a quarter turn over. That
+    // is the number a page lays out against, so it is the number reported.
     int videoWidth() const { return intrinsicWidth_; }
     int videoHeight() const { return intrinsicHeight_; }
+
+    /// How far the picture is turned clockwise to be shown, in degrees:
+    /// 0, 90, 180 or 270. Read-only — it comes from the container.
+    int videoRotation() const { return rotation_; }
 
     bro::video::VideoPipeline* pipeline() const { return pipeline_; }
 
@@ -120,6 +127,7 @@ private:
 
     int intrinsicWidth_ = 300;
     int intrinsicHeight_ = 150;
+    int rotation_ = 0;
 
     // Event-lifecycle bookkeeping. ElVideo fires media events during draw()
     // (on the main thread, with a known JSContext). Fields here latch what

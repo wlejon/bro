@@ -73,6 +73,20 @@ public:
     const std::vector<uint8_t>& currentRgba() const { return rgba_; }
     int frameWidth() const { return frameW_; }
     int frameHeight() const { return frameH_; }
+
+    /// How far the picture has to be turned clockwise to be the right way up:
+    /// 0, 90, 180 or 270. See TrackInfo::rotationDegrees. Zero for every
+    /// source that says nothing, which is most of them.
+    int rotationDegrees() const { return rotation_; }
+
+    /// The size the picture is *shown* at, which is frameWidth/frameHeight
+    /// swapped at a quarter turn. The rule lives here rather than at each
+    /// caller because there are several — the element's intrinsic size, its
+    /// object-fit arithmetic — and a caller that forgot to swap would lay a
+    /// portrait clip out as a landscape one.
+    int displayWidth() const { return quarterTurned() ? frameH_ : frameW_; }
+    int displayHeight() const { return quarterTurned() ? frameW_ : frameH_; }
+
     bool hasFrame() const { return cur_.valid; }
     TimeNs durationNs() const { return duration_; }
     TimeNs currentPts() const { return cur_.pts; }
@@ -135,6 +149,8 @@ private:
     Picture takePicture();
     void recycle(Picture&& p);
 
+    bool quarterTurned() const { return rotation_ == 90 || rotation_ == 270; }
+
     /// Wire an opened source and its backend's decoders into this pipeline.
     /// False when the file carries no video track this backend can decode,
     /// with the pipeline left clean so open() can try the next one.
@@ -151,6 +167,7 @@ private:
     uint32_t audioChannels_ = 0;
     TimeNs duration_ = 0;
     double frameRate_ = 0.0;
+    int rotation_ = 0;
 
     // What is on screen: the last picture at or before `now`.
     Picture cur_;

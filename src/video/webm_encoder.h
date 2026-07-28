@@ -37,6 +37,14 @@ public:
         // 0 = libvpx default (typically 1).
         int threads = 0;
 
+        // How far a player has to turn the picture clockwise to show it the
+        // right way up: 0, 90, 180 or 270. The pixels are written as they are
+        // given; this is metadata, so a portrait clip encoded from landscape
+        // frames stays landscape in the file and is presented portrait. 0
+        // writes no Projection element at all, which is why every file this
+        // encoder wrote before is byte-for-byte what it was.
+        int rotationDegrees = 0;
+
         // Audio. 0 = no audio track. Opus only accepts 8/12/16/24/48 kHz.
         int audioSampleRate = 0;
         int audioChannels   = 2;

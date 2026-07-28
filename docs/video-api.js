@@ -36,7 +36,7 @@
 
 // -----------------------------------------------------------------------------
 // new VideoEncoder({ path, width, height, fps?, fpsDen?, bitrateKbps?,
-//                    keyframeIntervalSec?, quality?, threads? })
+//                    keyframeIntervalSec?, quality?, threads?, rotation? })
 // -----------------------------------------------------------------------------
 //
 // Required:
@@ -56,6 +56,14 @@
 //                   Maps to libvpx VPX_DL_REALTIME / GOOD / BEST and
 //                   tunes cpu-used (7 / 1 / 0).
 //   threads, encoder threads (default 1). Bump for >720p.
+//   rotation, 0 | 90 | 180 | 270 (default 0). How far a player has to
+//                   turn the picture CLOCKWISE to show it the right way up.
+//                   Metadata, not a pass over the pixels: the frames are
+//                   written exactly as handed over, so a portrait clip is
+//                   stored as landscape frames plus this tag — which is what
+//                   a phone does. 0 writes no rotation metadata at all, so
+//                   an ordinary file is unchanged. Anything that is not a
+//                   quarter turn is ignored.
 //   audioSampleRate, 8000 / 12000 / 16000 / 24000 / 48000. Set to enable
 //                      the Opus audio track; 0 (default) = no audio.
 //   audioChannels, 1 (mono) or 2 (stereo). Default 2.
@@ -360,9 +368,25 @@ v.playbackRate = 2.0;
 // Metadata and state
 // ---------------------------------------------------------------------------
 //
-// v.videoWidth, v.videoHeight, intrinsic frame size (300×150 defaults
-//                               before metadata, like the spec's replaced-
-//                               element fallback).
+// v.videoWidth, v.videoHeight, intrinsic size as the picture is SHOWN
+//                               (300×150 defaults before metadata, like the
+//                               spec's replaced-element fallback). A source
+//                               that says it was recorded a quarter turn over
+//                               reports these swapped: a 1920×1080 file tagged
+//                               90 is 1080×1920 here, and lays out portrait.
+// v.videoRotation, 0 | 90 | 180 | 270. How far the picture is turned
+//                               CLOCKWISE to be shown. Read-only: it is a
+//                               fact about the file, and the element has
+//                               already applied it. Rotation is a transform
+//                               on the quad the frame is drawn as, never a
+//                               pass over the pixels, so it costs nothing per
+//                               frame. 0 for anything that does not say —
+//                               which is every source until a backend reports
+//                               one, so nothing that worked before moves.
+//                               (WebM carries it in the Video Projection
+//                               element's pose roll; only quarter turns are
+//                               honoured, since a size can be swapped or not
+//                               and there is no third answer.)
 // v.frameRate, nominal fps, or 0 — see Frame stepping above.
 // v.currentSrc, resolved URL of the loaded resource ("" before load).
 // v.readyState, 0 HAVE_NOTHING (no pipeline), 1 HAVE_METADATA,

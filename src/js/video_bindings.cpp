@@ -102,6 +102,9 @@ ED* js_videoEncoderCtor(JSContext* ctx, int argc, JSValueConst* argv) {
     cfg.targetBitrateKbps = getInt("bitrateKbps", 0);
     cfg.keyframeIntervalSec = getInt("keyframeIntervalSec", 2);
     cfg.threads = getInt("threads", 0);
+    // Metadata, not a pass over the pixels: the frames go in as they are
+    // handed over and a player turns them. 0 writes nothing.
+    cfg.rotationDegrees = getInt("rotation", 0);
     cfg.quality = parseQuality(getStr("quality"));
     cfg.audioSampleRate  = getInt("audioSampleRate", 0);
     cfg.audioChannels    = getInt("audioChannels", 2);

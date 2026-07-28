@@ -1042,6 +1042,16 @@ static JSValue js_element_video_get_videoHeight(JSContext* ctx, JSValueConst thi
     return JS_NewInt32(ctx, 0);
 }
 
+// How far the picture is turned clockwise to be shown: 0, 90, 180 or 270.
+// Read-only, because it is a fact about the file and not a control — the
+// element already presents it, and a page that could set it would be able to
+// disagree with the size it is being laid out at.
+static JSValue js_element_video_get_videoRotation(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (el) if (auto* v = el->videoControl()) return JS_NewInt32(ctx, v->videoRotation());
+    return JS_NewInt32(ctx, 0);
+}
+
 // ---- Attribute-reflected media properties -----------------------------------
 
 static JSValue js_element_video_get_src(JSContext* ctx, JSValueConst this_val) {
@@ -4143,6 +4153,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("frameRate",   js_element_video_get_frameRate, nullptr),
     JS_CGETSET_DEF("videoWidth",  js_element_video_get_videoWidth, nullptr),
     JS_CGETSET_DEF("videoHeight", js_element_video_get_videoHeight, nullptr),
+    JS_CGETSET_DEF("videoRotation", js_element_video_get_videoRotation, nullptr),
     JS_CGETSET_DEF("src",         js_element_video_get_src, js_element_video_set_src),
     JS_CGETSET_DEF("autoplay",    js_element_video_get_autoplay, js_element_video_set_autoplay),
     JS_CGETSET_DEF("controls",    js_element_video_get_controls, js_element_video_set_controls),

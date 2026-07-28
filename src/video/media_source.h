@@ -22,6 +22,24 @@ struct TrackInfo {
     // where a frame boundary is. Stepping uses the frames' own timestamps.
     double frameRate = 0.0;
 
+    // How far the decoded picture has to be turned CLOCKWISE to be the right
+    // way up, in degrees: 0, 90, 180 or 270, and 0 when the container says
+    // nothing. Phones record sideways and write the correction into the
+    // container rather than rotating the pixels, so a portrait clip whose
+    // frames are 1920x1080 is shown 1080x1920.
+    //
+    // This is metadata about the picture, not a property of it: width and
+    // height stay the size of the frames the decoder produces, and turning
+    // them is presentation. VideoPipeline::displayWidth/displayHeight are
+    // the swapped pair, and <video> rotates the quad it draws rather than
+    // the pixels it decoded.
+    //
+    // Anything that is not a quarter turn is refused by whoever reads the
+    // container and reported as 0 — an arbitrary angle is a transform this
+    // element cannot express as a size, and claiming a size that is wrong is
+    // worse than showing the picture as it was stored.
+    int rotationDegrees = 0;
+
     // Audio
     uint32_t sampleRate = 0;
     uint32_t channels = 0;

@@ -128,6 +128,16 @@ Rules worth knowing:
   ignores `drain()` never shows the last second of any file it plays. For
   libavcodec it is `avcodec_send_packet(ctx, nullptr)`. `flush()` must clear
   the drained state too, or a seek away from the end will not decode.
+- `TrackInfo::rotationDegrees` is how far the decoded picture has to be turned
+  **clockwise** to be the right way up: 0, 90, 180 or 270, and 0 — the default —
+  when the container says nothing. Fill it in if you can read one; a phone
+  records landscape frames and writes the correction into the container, and
+  without this a portrait clip plays on its side. `width`/`height` stay the size
+  of the frames you decode: the swap is presentation, and `<video>` does it
+  (`videoWidth`/`videoHeight` report the shown size, and the picture is turned
+  by a transform on the quad rather than by a pass over the pixels). Anything
+  that is not a quarter turn is refused and read as 0, because a size can be
+  swapped or not and there is no third answer.
 - `TrackInfo::backendPrivate` is a `shared_ptr<void>` your source can hang
   anything on for your decoder to read back. `codecPrivate` is a flat blob,
   which is all WebM needs; a richer decoder usually wants a whole parameter

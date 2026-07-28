@@ -3,6 +3,7 @@
 #include <mkvparser/mkvparser.h>
 #include <mkvparser/mkvreader.h>
 
+#include <cmath>
 #include <cstring>
 
 namespace bro::video {
@@ -16,6 +17,36 @@ Codec codecFromWebmId(const char* id) {
     if (std::strcmp(id, "A_OPUS") == 0) return Codec::Opus;
     if (std::strcmp(id, "A_VORBIS") == 0) return Codec::Vorbis;
     return Codec::Unknown;
+}
+
+// Matroska keeps a rotation in the Video Projection element's ProjectionPoseRoll:
+// a clockwise roll about the forward vector, which is exactly how far the
+// decoded picture has to be turned clockwise to be the right way up. Only a
+// rectangular projection with no yaw and no pitch means "this picture is
+// sideways" — anything else is a spherical or cube-mapped video, which is not
+// a rotation at all and must not be read as one.
+//
+// Only quarter turns are taken. A container may say 89.9 (the field is a
+// float) and a size can only be swapped or not, so anything off a quarter turn
+// is reported as no rotation rather than as an angle nothing can honour.
+//
+// "Absent" is spelt as FLT_MAX by libwebm, but its kValueNotPresent constant
+// is not exported by the vcpkg unofficial-libwebm build and referencing it
+// fails to link — the same thing the encoder hit with the codec-id literals.
+// A finite angle inside a plausible range is the same question asked of the
+// value itself, and it does not depend on a symbol being exported.
+int rotationFromProjection(const mkvparser::Projection* p) {
+    if (!p || p->type != mkvparser::Projection::kRectangular) return 0;
+    auto stated = [](float v) { return std::isfinite(v) && std::fabs(v) < 1.0e6f; };
+    if (stated(p->pose_yaw)   && p->pose_yaw   != 0.0f) return 0;
+    if (stated(p->pose_pitch) && p->pose_pitch != 0.0f) return 0;
+    if (!stated(p->pose_roll)) return 0;
+
+    const float roll = p->pose_roll;
+    const int quarter = static_cast<int>(roll < 0 ? roll / 90.0f - 0.5f
+                                                  : roll / 90.0f + 0.5f);
+    if (roll - quarter * 90.0f > 0.5f || roll - quarter * 90.0f < -0.5f) return 0;
+    return ((quarter % 4) + 4) % 4 * 90;
 }
 
 } // namespace
@@ -73,6 +104,7 @@ bool WebMDemuxer::open(const std::string& path) {
             ti.kind = TrackKind::Video;
             ti.width = static_cast<uint32_t>(vt->GetWidth());
             ti.height = static_cast<uint32_t>(vt->GetHeight());
+            ti.rotationDegrees = rotationFromProjection(vt->GetProjection());
         } else if (track->GetType() == mkvparser::Track::kAudio) {
             const auto* at = static_cast<const mkvparser::AudioTrack*>(track);
             ti.kind = TrackKind::Audio;
