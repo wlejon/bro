@@ -158,9 +158,20 @@ bool grabThumbnails(const std::string& path, int count, int height,
                    : nullptr;
     if (!dec) return false;
 
+    // **The video track's own duration, not the container's.** They differ: a
+    // recording routinely stops the audio a fraction of a second after the last
+    // picture, and spreading the strip over the longer of the two puts the last
+    // thumbnails past the end of the video, where the walk runs out of frames
+    // and repeats whatever it last decoded.
+    //
+    // Falling back to the longest track — not to failure — for the reason
+    // analyzeAudioPeaks does: Matroska keeps one duration for the whole file,
+    // so a track that reports nothing of its own is ordinary rather than
+    // broken, and a strip spread over the wrong span still beats no strip.
     TimeNs duration = track->durationNs;
-    for (const auto& t : opened.source->tracks())
-        duration = std::max(duration, t.durationNs);
+    if (duration <= 0)
+        for (const auto& t : opened.source->tracks())
+            duration = std::max(duration, t.durationNs);
 
     // The aspect the strip is cut to is the DISPLAYED one. A sideways phone
     // clip is 1920x1080 on disk and 1080x1920 on screen, and a filmstrip that
