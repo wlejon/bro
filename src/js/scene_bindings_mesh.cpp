@@ -856,7 +856,7 @@ static void applyMeshNodeOptions(JSContext* ctx, scene::MeshNode* node,
 
         // Check for raw vertex data (positions + indices arrays)
         if (!hasRawData) {
-            std::vector<float> positions, normals, colors;
+            std::vector<float> positions, normals, colors, uvs, tangents;
             std::vector<uint32_t> indices;
             if (jsReadFloatArray(ctx, opts, "positions", positions) &&
                 jsReadUint32Array(ctx, opts, "indices", indices)) {
@@ -867,6 +867,20 @@ static void applyMeshNodeOptions(JSContext* ctx, scene::MeshNode* node,
                 }
                 if (jsReadFloatArray(ctx, opts, "colors", colors)) {
                     meshData.colors = std::move(colors);
+                }
+                // UVs and tangents, which MeshData has always carried and this
+                // path has never filled. mesh.vert declares both (aUV, and
+                // aTangent at location 4) and passes them to the user chunk, so
+                // a shader written against them silently read zeros for every
+                // mesh built from raw arrays — the geometry looked right and the
+                // material was wrong, which is the hardest kind of gap to see.
+                // Loaded meshes came in through a different path and were fine,
+                // so nothing in the engine's own content ever exercised it.
+                if (jsReadFloatArray(ctx, opts, "uvs", uvs)) {
+                    meshData.uvs = std::move(uvs);
+                }
+                if (jsReadFloatArray(ctx, opts, "tangents", tangents)) {
+                    meshData.tangents = std::move(tangents);
                 }
                 if (meshData.normals.empty() &&
                     qjsbind::get_prop_bool(ctx, opts, "recomputeNormals", false))
