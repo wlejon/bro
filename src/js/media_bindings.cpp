@@ -102,6 +102,9 @@ JSValue js_media_thumbnails(JSContext* ctx, JSValueConst, int argc, JSValueConst
     JS_SetPropertyStr(ctx, out, "width", JS_NewInt32(ctx, strip.width));
     JS_SetPropertyStr(ctx, out, "height", JS_NewInt32(ctx, strip.height));
     JS_SetPropertyStr(ctx, out, "count", JS_NewInt32(ctx, strip.count));
+    // What was turned to get these upright, not what is left to do: the pixels
+    // are already the right way up, and `width` is the turned width.
+    JS_SetPropertyStr(ctx, out, "rotation", JS_NewInt32(ctx, strip.rotationDegrees));
     JS_SetPropertyStr(ctx, out, "times", times);
     JS_SetPropertyStr(ctx, out, "data", data);
     return out;

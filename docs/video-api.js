@@ -506,7 +506,8 @@ if (peaks) {
 }
 
 // bro.media.thumbnails(path, { count = 24, height = 72 })
-//   → { width, height, count,  width is per thumbnail, from the frame aspect
+//   → { width, height, count,  width is per thumbnail, from the DISPLAYED aspect
+//       rotation,              0/90/180/270: the turn already APPLIED below
 //       times,                 seconds, one per thumbnail: when it is FROM
 //       data }                 Uint8ClampedArray, RGBA — ONE image, `count`
 //                              thumbnails side by side, (width*count) x height.
@@ -520,6 +521,15 @@ if (peaks) {
 //   budget that scales with frame size — a 720p file lands close to the time
 //   asked for, a 4K one settles for the keyframe rather than making the caller
 //   wait. `times` reports what was actually grabbed, which is why it exists.
+//
+//   **Thumbnails come out the right way up.** A phone records landscape frames
+//   and writes the correction into the container, so `width` follows the
+//   displayed aspect — a sideways 1920x1080 clip gives PORTRAIT tiles — and the
+//   pixels are turned to match. This is the one place bro rotates pixels rather
+//   than the quad it draws them on: <video> has a quad to turn and a strip is a
+//   baked image with nothing downstream of it. `rotation` reports what was
+//   applied, so a caller can tell a phone clip from an upright one without
+//   opening the file again; it is never work left for the caller to do.
 
 const strip = bro.media.thumbnails('clip.mp4', { count: 32, height: 96 });
 const img = new ImageData(strip.data, strip.width * strip.count, strip.height);

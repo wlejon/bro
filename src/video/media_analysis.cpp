@@ -162,11 +162,21 @@ bool grabThumbnails(const std::string& path, int count, int height,
     for (const auto& t : opened.source->tracks())
         duration = std::max(duration, t.durationNs);
 
+    // The aspect the strip is cut to is the DISPLAYED one. A sideways phone
+    // clip is 1920x1080 on disk and 1080x1920 on screen, and a filmstrip that
+    // followed the coded pair would lay landscape frames under a portrait
+    // picture — which is what it used to do.
+    const int rot = ((track->rotationDegrees % 360) + 360) % 360;
+    const bool turned = (rot == 90 || rot == 270);
+    const uint32_t dispW = turned ? track->height : track->width;
+    const uint32_t dispH = turned ? track->width : track->height;
+
     const int tw = std::max(1, static_cast<int>(std::lround(
-        double(height) * double(track->width) / double(track->height))));
+        double(height) * double(dispW) / double(dispH))));
     out.width = tw;
     out.height = height;
     out.count = count;
+    out.rotationDegrees = rot;
     out.times.assign(static_cast<size_t>(count), -1);
     out.rgba.assign(static_cast<size_t>(tw) * count * height * 4, 0);
     const int stride = tw * count * 4;
@@ -248,7 +258,7 @@ bool grabThumbnails(const std::string& path, int count, int height,
                          frame.strideY, frame.strideU, frame.strideV,
                          static_cast<int>(frame.width), static_cast<int>(frame.height),
                          out.rgba.data() + static_cast<size_t>(i) * tw * 4,
-                         stride, tw, height);
+                         stride, tw, height, rot);
         out.times[static_cast<size_t>(i)] = frame.pts;
         ++filled;
     }

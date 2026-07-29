@@ -23,9 +23,23 @@ void i420ToRgba(const uint8_t* y, const uint8_t* u, const uint8_t* v,
 //
 // Downscale only — enlarging works but is a blocky nearest-neighbour result,
 // which is not what this is for.
+//
+// `rotationDegrees` is TrackInfo::rotationDegrees: how far the stored frame
+// has to be turned CLOCKWISE to be the right way up. It is applied here, so
+// dstW/dstH are the size of the picture the RIGHT WAY UP — at a quarter turn
+// that is the swapped pair, and a caller asking for a 128x72 box out of a
+// sideways phone clip wants 72x128. Anything that is not a quarter turn is
+// treated as no rotation, matching every reader that fills the field.
+//
+// Applied to the SAMPLING box rather than by a second pass over the output:
+// each destination pixel is an unweighted average of a source rectangle, and
+// an average does not care which order it walks, so turning the rectangle is
+// exact. Rotating the scaled image afterwards would be a second resampling
+// and would soften every thumbnail on a phone clip to buy nothing.
 void i420ToRgbaScaled(const uint8_t* y, const uint8_t* u, const uint8_t* v,
                       int strideY, int strideU, int strideV,
                       int srcW, int srcH,
-                      uint8_t* dst, int dstStride, int dstW, int dstH);
+                      uint8_t* dst, int dstStride, int dstW, int dstH,
+                      int rotationDegrees);
 
 } // namespace bro::video

@@ -44,6 +44,12 @@ struct ThumbnailStrip {
     int width = 0;      // of one thumbnail
     int height = 0;
     int count = 0;
+    // What the frames had to be turned by to come out the right way up: 0, 90,
+    // 180 or 270, from TrackInfo::rotationDegrees. Already APPLIED to the
+    // pixels below — this reports what was done, so a caller can tell a phone
+    // clip from an upright one without opening the file again. `width` is the
+    // width of the turned picture, so it is the SHORT side of a sideways clip.
+    int rotationDegrees = 0;
     std::vector<TimeNs> times;    // when each thumbnail is actually from
     // count thumbnails side by side in one image, (width*count) x height
     // RGBA8. One image because that is one texture upload and one putImageData
@@ -59,6 +65,13 @@ struct ThumbnailStrip {
 // forward to an exact time — which is both what makes this fast and what a
 // filmstrip wants, since a keyframe is where the picture changed. `times`
 // reports what was actually grabbed.
+//
+// **Thumbnails come out the right way up.** A phone records landscape frames
+// and writes the correction into the container, so a strip taken at the coded
+// size is a row of frames lying on their side under a portrait picture. Unlike
+// <video> — which turns the quad it draws and leaves the pixels alone — there
+// is nothing downstream of a strip to do the turning: it is a baked RGBA
+// image, so the turn happens here, in the same pass that scales.
 bool grabThumbnails(const std::string& path, int count, int height,
                     ThumbnailStrip& out);
 
