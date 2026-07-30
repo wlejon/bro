@@ -125,12 +125,7 @@ static JSValue rayHitToJS(JSContext* ctx, const bromath::RayHit& h) {
 // Attach an auto-marshalling free function onto an arbitrary object.
 template <typename Fn>
 static void mfn(JSContext* ctx, JSValue obj, const char* name, Fn&& fn) {
-    using Caller = qjsbind::detail::StaticCaller<void, std::decay_t<Fn>>;
-    qjsbind::detail::FnStore<std::decay_t<Fn>>::fn.emplace(std::forward<Fn>(fn));
-    JS_SetPropertyStr(ctx, obj, name,
-        JS_NewCFunction(ctx,
-            &qjsbind::detail::static_trampoline<void, std::decay_t<Fn>>,
-            name, static_cast<int>(Caller::js_argc)));
+    qjsbind::set_function(ctx, obj, name, std::forward<Fn>(fn));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
