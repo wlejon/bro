@@ -1338,15 +1338,60 @@ static JSValue js_element_get_checked(JSContext* ctx, JSValueConst this_val)
     return JS_NewBool(ctx, el->attributes().count("checked") > 0);
 }
 
+static bool isRadioInput(bro::dom::Element* el)
+{
+    if (!el) return false;
+    const std::string& tag = el->tagName();
+    if (tag != "INPUT" && tag != "input") return false;
+    return el->getAttribute("type") == "radio";
+}
+
+static bro::dom::Element* formOwnerOf(bro::dom::Element* el)
+{
+    for (auto* p = el ? el->parentElement() : nullptr; p; p = p->parentElement()) {
+        const std::string& tag = p->tagName();
+        if (tag == "FORM" || tag == "form") return p;
+    }
+    return nullptr;
+}
+
+void clearRadioGroup(bro::dom::Element* el)
+{
+    if (!isRadioInput(el)) return;
+    const std::string name = el->getAttribute("name");
+    // "The name attribute must not be empty" for a group to exist — an unnamed
+    // radio is a group of one, and clearing on it would unpick unrelated radios.
+    if (name.empty()) return;
+    auto* doc = el->document();
+    auto* root = doc ? doc->documentElement() : nullptr;
+    if (!root) return;
+    // Scoped to the form owner, not the whole document: two forms may each hold
+    // a "size" radio group without either one steering the other.
+    auto* owner = formOwnerOf(el);
+    for (auto* other : root->querySelectorAll("input[type=\"radio\"]")) {
+        if (other == el) continue;
+        if (other->getAttribute("name") != name) continue;
+        if (formOwnerOf(other) != owner) continue;
+        other->removeAttribute("checked");
+    }
+}
+
 static JSValue js_element_set_checked(JSContext* ctx, JSValueConst this_val,
                                       JSValueConst val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    if (JS_ToBool(ctx, val))
+    if (JS_ToBool(ctx, val)) {
+        // A radio's group is cleared however its checkedness became true, not
+        // only by a click: code that restores a saved selection assigns .checked
+        // here, and leaving the old member checked would show two picked radios
+        // in a group that can only mean one. Per spec this setter fires no
+        // change/input event — only user interaction does.
+        clearRadioGroup(el);
         el->setAttribute("checked", "");
-    else
+    } else {
         el->removeAttribute("checked");
+    }
     return JS_UNDEFINED;
 }
 
@@ -3376,15 +3421,7 @@ static void js_element_click_impl(JSContext* ctx, dom::Element* el) {
                 else el->setAttribute("checked", "");
             } else {
                 // Radio: checking one unchecks the rest of its name group.
-                const std::string nameStr = el->getAttribute("name");
-                if (!nameStr.empty() && el->document() && el->document()->body()) {
-                    auto radios =
-                        el->document()->body()->querySelectorAll("input[type=\"radio\"]");
-                    for (auto* other : radios) {
-                        if (other != el && other->getAttribute("name") == nameStr)
-                            other->removeAttribute("checked");
-                    }
-                }
+                clearRadioGroup(el);
                 el->setAttribute("checked", "");
             }
             dom::Event changeEvt("change");

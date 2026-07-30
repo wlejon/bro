@@ -87,4 +87,14 @@ bool forwardLabelActivation(JSContext* ctx, bro::dom::Element* clickTarget);
 /// activating a control inside a label cannot recurse back into the label.
 void activateElement(JSContext* ctx, bro::dom::Element* el);
 
+/// Uncheck every other member of `el`'s radio button group: same tree, same form
+/// owner, type=radio, same non-empty name. HTML requires this whenever a radio's
+/// checkedness becomes true "for whatever reason" — a click, element.click(), or
+/// an assignment to .checked — since the group is what makes several radios
+/// behave as one control. A nameless radio is a group of one and is left alone.
+///
+/// Does not touch `el` itself and fires no events; the caller sets the checked
+/// state and decides whether the change was user-initiated.
+void clearRadioGroup(bro::dom::Element* el);
+
 } // namespace bro::js

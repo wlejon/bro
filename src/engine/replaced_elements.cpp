@@ -333,24 +333,7 @@ void focusNewControl(
             dispatchInputEvent(ctx, target);
             *ctx.dirtyFlag = true;
         } else if (itype == layout::ElInput::InputType::Radio) {
-            std::string nameStr = target->getAttribute("name");
-            const char* name = nameStr.empty() ? nullptr : nameStr.c_str();
-            if (name && *name && ctx.document) {
-                auto* body = ctx.document->body();
-                if (body) {
-                    auto radios = body->querySelectorAll("input[type=\"radio\"]");
-                    for (auto* el : radios) {
-                        if (el == target) continue;
-                        auto* otherInput = getElInput(el);
-                        if (otherInput) {
-                            std::string otherNameStr = el->getAttribute("name");
-                            if (!otherNameStr.empty() && otherNameStr == nameStr) {
-                                el->removeAttribute("checked");
-                            }
-                        }
-                    }
-                }
-            }
+            js::clearRadioGroup(target);
             target->setAttribute("checked", "");
             dom::Event changeEvt("change");
             dispatchControlEvent(ctx, target, changeEvt);
