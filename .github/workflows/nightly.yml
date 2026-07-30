@@ -116,7 +116,7 @@ jobs:
       # an ABI change are re-saved). ci.yml and nightly share these caches —
       # the key is content-addressed per package, not per workflow.
       - name: vcpkg binary cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/vcpkg-bincache
           key: vcpkg-bin-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}

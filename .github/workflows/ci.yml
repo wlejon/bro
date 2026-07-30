@@ -75,7 +75,7 @@ jobs:
       # anything (e.g. a runner-image compiler bump changed ABIs) saves the new
       # archives instead of hitting the "exact key exists, skip save" trap.
       - name: vcpkg binary cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ${{ runner.temp }}/vcpkg-bincache
           key: vcpkg-bin-${{ matrix.triplet }}-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}
