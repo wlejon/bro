@@ -29,6 +29,30 @@ float maxScrollTop(dom::Element* el) {
     return std::max(0.0f, box.naturalHeight - box.contentRect.height);
 }
 
+bool clampScrollOffsets(dom::Element* root, std::vector<dom::Element*>* changed) {
+    if (!root) return false;
+    auto& style = root->computedStyle();
+    {
+        auto it = style.find("display");
+        if (it != style.end() && it->second == "none") return false;
+    }
+
+    bool moved = false;
+    // A scroller only holds an offset if it clips; overflow:visible never does.
+    if (root->scrollTopValue() != 0.0f && overflowClips(getOverflowY(style))) {
+        float clamped = std::clamp(root->scrollTopValue(), 0.0f, maxScrollTop(root));
+        if (clamped != root->scrollTopValue()) {
+            root->setScrollTopValue(clamped);
+            if (changed) changed->push_back(root);
+            moved = true;
+        }
+    }
+    root->forEachComposedChild([&](dom::Element* child) {
+        if (clampScrollOffsets(child, changed)) moved = true;
+    });
+    return moved;
+}
+
 dom::Element* findElementScrollbarHit(
     dom::Element* elem, float x, float y,
     float offsetX, float offsetY,
@@ -45,9 +69,13 @@ dom::Element* findElementScrollbarHit(
     float absX = lbox.contentRect.x + offsetX;
     float absY = lbox.contentRect.y + offsetY;
 
+    // Clamped to match what was painted (drawElementScrollbars uses the same
+    // clamp), so the scrollbar we hit-test is the one on screen.
+    float scrollTop = std::clamp(elem->scrollTopValue(), 0.0f, maxScrollTop(elem));
+
     // Recurse into composed children FIRST to find the deepest match.
     float childOffsetX = absX;
-    float childOffsetY = absY - elem->scrollTopValue();
+    float childOffsetY = absY - scrollTop;
     dom::Element* hit = nullptr;
     elem->forEachComposedChild([&](dom::Element* child) {
         if (!hit) {
@@ -72,7 +100,7 @@ dom::Element* findElementScrollbarHit(
             auto m = scrollbar.layout(
                 bx + bw - es.width - es.margin,
                 by, bh, contentH, viewH,
-                elem->scrollTopValue());
+                scrollTop);
             if (scrollbar.hitTest(x, y, m)) {
                 outMetrics = m;
                 return elem;

@@ -10,6 +10,7 @@
 #include "dom/text_node.h"
 #include "dom/node.h"
 #include "dom/shadow_root.h"
+#include <algorithm>
 #include <string>
 #include <string_view>
 #include <span>
@@ -105,8 +106,16 @@ public:
     // bro::dom::Element only tracks vertical scroll today (scrollTop_).
     // scrollLeftPx() returns 0 until horizontal scrolling is supported.
     float scrollLeftPx() const override { return 0.0f; }
+    // Clamped to the current scrollable range, exactly as the draw traversal
+    // clamps when it paints. This is what htmlayout's hit testing, hit-bounds
+    // pruning, and caret/selection geometry read, so an offset that is briefly
+    // out of range (JS set it before layout caught up, or the content shrank
+    // earlier this frame) can't put the pointer somewhere the pixels aren't.
     float scrollTopPx() const override {
-        return elem_ ? elem_->scrollTopValue() : 0.0f;
+        if (!elem_) return 0.0f;
+        const auto& box = elem_->layoutBox();
+        float maxST = std::max(0.0f, box.naturalHeight - box.contentRect.height);
+        return std::clamp(elem_->scrollTopValue(), 0.0f, maxST);
     }
 
     bool intrinsicSize(float& w, float& h, float maxWidth) const override {

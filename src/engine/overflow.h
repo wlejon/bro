@@ -6,6 +6,8 @@
 // heterogeneously now, and this copy was not).
 #include "css/cascade.h"
 
+#include <vector>
+
 namespace bro::dom { class Element; }
 namespace bro::engine { struct ScrollbarMetrics; class Scrollbar; }
 
@@ -24,6 +26,21 @@ bool overflowScrollable(const std::string& ov);
 /// Compute the maximum scroll offset for an overflow element.
 /// Returns 0 if content fits within the element's visible area.
 float maxScrollTop(dom::Element* el);
+
+/// Re-clamp every scroller's stored scrollTop into its post-layout range,
+/// walking the composed tree from `root`. Call this after layout: content that
+/// shrank (a tab panel swapped for a shorter one, a collapsed fold, a filtered
+/// list) leaves the stored offset above the new max, and nothing else brings it
+/// back down — the wheel handler skips a scroller whose content now fits
+/// (maxST == 0), so the stale offset would persist indefinitely. Paint clamps
+/// on read, so the frame *looks* right while hit testing reads the raw value
+/// and lands the pointer somewhere else entirely.
+///
+/// display:none subtrees are skipped: their boxes are stale, so clamping there
+/// would zero a remembered offset using a height that is no longer meaningful.
+/// Returns true if any offset moved, so the caller can dispatch scroll events.
+bool clampScrollOffsets(dom::Element* root,
+                        std::vector<dom::Element*>* changed = nullptr);
 
 /// Walk up the composed tree (crosses shadow boundaries via host element).
 dom::Element* composedParent(dom::Element* el);

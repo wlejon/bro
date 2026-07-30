@@ -163,6 +163,16 @@ void Engine::flush() {
             }
         }
 
+        // Re-clamp scrollers to the fresh layout, same as the windowed loop:
+        // content that shrank leaves an out-of-range offset that only the paint
+        // path clamps, which desyncs hit testing from what was drawn.
+        if (auto* rootEl = document_->documentElement()) {
+            std::vector<dom::Element*> reclamped;
+            if (clampScrollOffsets(rootEl, &reclamped)) {
+                for (auto* elem : reclamped) dispatchScrollEvent(elem);
+            }
+        }
+
         // Notify ResizeObserver / IntersectionObserver after layout
         if (jsRuntime_) {
             JSValue r = JS_Eval(jsRuntime_->getContext(), js_observer_check,

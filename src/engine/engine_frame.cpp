@@ -793,6 +793,19 @@ void Engine::run() {
                     }
                 }
 
+                // Bring every scroller's stored offset back inside its new
+                // range. Layout just changed the content heights, so an offset
+                // valid for the old content can now sit past the end — and the
+                // paint path clamps on read while hit testing does not, so
+                // leaving it stale desyncs the pointer from what's on screen.
+                if (document_ && document_->documentElement()) {
+                    std::vector<dom::Element*> reclamped;
+                    if (clampScrollOffsets(document_->documentElement(), &reclamped)) {
+                        for (auto* elem : reclamped) dispatchScrollEvent(elem);
+                        markAppBaseDirty();
+                    }
+                }
+
                 // Notify ResizeObserver / IntersectionObserver after layout.
                 if (jsRuntime_) {
                     auto* ctx = jsRuntime_->getContext();

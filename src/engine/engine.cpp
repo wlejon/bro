@@ -548,6 +548,11 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
         float absX = lbox.contentRect.x + ox;
         float absY = lbox.contentRect.y + oy;
 
+        // Clamped like the draw traversal clamps: an offset past the end would
+        // otherwise put the thumb outside its track and shift this element's
+        // scrollbar subtree away from the content it belongs to.
+        float scrollTop = std::clamp(elem->scrollTopValue(), 0.0f, maxScrollTop(elem));
+
         std::string ov = getOverflowY(style);
         if (overflowScrollable(ov)) {
             float maxST = maxScrollTop(elem);
@@ -563,13 +568,13 @@ void Engine::drawElementScrollbars(render::Renderer* renderer,
                 auto m = elementScrollbar_.layout(
                     bx + bw - es.width - es.margin,
                     by, bh, contentH, viewH,
-                    elem->scrollTopValue());
+                    scrollTop);
                 elementScrollbar_.draw(renderer, m);
             }
         }
 
         float childOx = absX;
-        float childOy = absY - elem->scrollTopValue();
+        float childOy = absY - scrollTop;
         elem->forEachComposedChild([&](dom::Element* child) {
             walk(child, childOx, childOy);
         });
