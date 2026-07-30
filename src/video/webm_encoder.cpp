@@ -296,6 +296,18 @@ public:
 
         if (writerOpen_) {
             if (!flushPending()) ok = false;
+            // Declare the real duration. Left to itself, libwebm computes the
+            // segment Duration from the last block's TIMESTAMP, which is where
+            // the final frame starts, not where it ends — a 5-frame 5 fps clip
+            // came out 0.8s instead of 1.0s and a looping player dropped the
+            // last frame. Segment::set_duration overrides that computation;
+            // the value is in timecode-scale units (ns per tick, 1 ms default).
+            if (streamEndNs_ > 0) {
+                const uint64_t scale = segment_.GetSegmentInfo()->timecode_scale();
+                if (scale > 0)
+                    segment_.set_duration(static_cast<double>(streamEndNs_) /
+                                          static_cast<double>(scale));
+            }
             if (!segment_.Finalize()) {
                 setErr("Segment::Finalize failed");
                 ok = false;
@@ -469,6 +481,18 @@ private:
         p.discardPaddingNs = discardPaddingNs;
         p.data.assign(buf, buf + len);
         pending_.push_back(std::move(p));
+        // Where this packet ENDS, not where it starts. libwebm derives the
+        // segment Duration from the last block's timestamp, which is the start
+        // of the final frame — so a clip came out one frame short and a looping
+        // player dropped its last frame. Tracked here, for both tracks, so
+        // finish() can write the real end of the stream.
+        const uint64_t durNs = (trackId == audioTrackId_ && cfg_.audioSampleRate > 0)
+            ? (static_cast<uint64_t>(audioFrameSize_) * 1'000'000'000ULL /
+               static_cast<uint64_t>(cfg_.audioSampleRate))
+            : (1'000'000'000ULL * static_cast<uint64_t>(cfg_.fpsDen) /
+               static_cast<uint64_t>(cfg_.fpsNum));
+        const uint64_t end = pts_ns + durNs;
+        if (end > streamEndNs_) streamEndNs_ = end;
     }
     bool flushPending() {
         std::stable_sort(pending_.begin(), pending_.end(),
@@ -513,6 +537,8 @@ private:
     }
 
     Config cfg_{};
+    // End of the latest packet on any track, in ns — the file's true duration.
+    uint64_t streamEndNs_ = 0;
     int deadline_ = VPX_DL_GOOD_QUALITY;
     vpx_codec_ctx_t codec_{};
     vpx_image_t image_{};
