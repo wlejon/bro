@@ -64,4 +64,27 @@ void setElementFinalizerShutdown(bool shutting_down);
 void requestFormSubmit(JSContext* ctx, bro::dom::Element* form,
                        bro::dom::Element* submitter);
 
+/// The control a <label> labels: its [for] target when that names a labelable
+/// element, otherwise the label's first labelable descendant in tree order.
+/// Returns null for a label that labels nothing (or a non-label element).
+bro::dom::Element* labeledControlFor(bro::dom::Element* label);
+
+/// HTML's label activation behavior. Given the element a click landed on, walk
+/// up to the nearest enclosing <label> and, if the click did NOT already land on
+/// that label's control (or on other interactive content inside the label),
+/// activate the control: focus it and run its click default actions, so clicking
+/// a label's TEXT ticks its checkbox.
+///
+/// Does nothing and returns false when there is no label, no control, or the
+/// click already went to the control — which is what keeps a direct click on a
+/// wrapped checkbox from toggling twice and cancelling itself out.
+bool forwardLabelActivation(JSContext* ctx, bro::dom::Element* clickTarget);
+
+/// Dispatch a trusted click on `el` and run its default actions (button submit,
+/// checkbox/radio toggle + change/input, <summary> toggle). This is the one
+/// implementation behind element.click(), the hit-tested click path's defaults,
+/// and label forwarding. It deliberately does NOT forward label activation, so
+/// activating a control inside a label cannot recurse back into the label.
+void activateElement(JSContext* ctx, bro::dom::Element* el);
+
 } // namespace bro::js

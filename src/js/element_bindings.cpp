@@ -3225,10 +3225,109 @@ static JSValue js_element_dispatchEvent(JSContext* ctx, JSValueConst this_val,
     return JS_NewBool(ctx, !evt.defaultPrevented());
 }
 
+// ---------------------------------------------------------------------------
+// <label> activation behavior
+// ---------------------------------------------------------------------------
+
+static void js_element_click_impl(JSContext* ctx, dom::Element* el);
+
+static bool isLabelTag(const std::string& tag) {
+    return tag == "LABEL" || tag == "label";
+}
+
+// A disabled control has no activation behavior, and neither does anything
+// inside a disabled <fieldset>.
+static bool labelTargetDisabled(dom::Element* el) {
+    for (auto* p = el; p; p = p->parentElement()) {
+        if (!p->hasAttribute("disabled")) continue;
+        const auto& tag = p->tagName();
+        if (p == el || tag == "FIELDSET" || tag == "fieldset") return true;
+    }
+    return false;
+}
+
+// HTML's "labelable elements". <input type=hidden> is excluded: it has no box to
+// click and no activation behavior, so a label whose only input is hidden labels
+// nothing rather than labelling the hidden field.
+static bool isLabelable(dom::Element* el) {
+    if (!el) return false;
+    const auto& tag = el->tagName();
+    if (tag == "BUTTON" || tag == "button" || tag == "METER" || tag == "meter" ||
+        tag == "OUTPUT" || tag == "output" || tag == "PROGRESS" || tag == "progress" ||
+        tag == "SELECT" || tag == "select" || tag == "TEXTAREA" || tag == "textarea")
+        return true;
+    if (tag == "INPUT" || tag == "input") {
+        const std::string t = el->getAttribute("type");
+        return t != "hidden";
+    }
+    return false;
+}
+
+static dom::Element* firstLabelableDescendant(dom::Element* el) {
+    for (auto* c : el->children()) {
+        if (isLabelable(c)) return c;
+        if (auto* deep = firstLabelableDescendant(c)) return deep;
+    }
+    return nullptr;
+}
+
+dom::Element* labeledControlFor(dom::Element* label) {
+    if (!label || !isLabelTag(label->tagName())) return nullptr;
+    const std::string& forId = label->getAttribute("for");
+    if (!forId.empty()) {
+        // With [for] present it names the control outright — a labelable
+        // descendant does NOT stand in for a missing or non-labelable target.
+        if (!label->document()) return nullptr;
+        auto* target = label->document()->getElementById(forId);
+        return isLabelable(target) ? target : nullptr;
+    }
+    return firstLabelableDescendant(label);
+}
+
+bool forwardLabelActivation(JSContext* ctx, dom::Element* clickTarget) {
+    if (!clickTarget) return false;
+    // Nearest enclosing label, and what stands between it and the click.
+    dom::Element* label = nullptr;
+    for (auto* el = clickTarget; el; el = el->parentElement()) {
+        if (isLabelTag(el->tagName())) { label = el; break; }
+        // Interactive content inside the label handles its own clicks: a button
+        // or link next to the checkbox must not tick it.
+        if (el != clickTarget || isLabelable(el)) {
+            const auto& tag = el->tagName();
+            if (isLabelable(el) || tag == "A" || tag == "a") return false;
+        }
+    }
+    if (!label) return false;
+    auto* control = labeledControlFor(label);
+    if (!control || control == clickTarget) return false;
+    // The click already went to the control (or something inside it), so the
+    // control has already run its own activation. Forwarding here is what would
+    // toggle a wrapped checkbox twice and leave it apparently dead.
+    for (auto* el = clickTarget; el; el = el->parentElement()) {
+        if (el == control) return false;
+        if (el == label) break;
+    }
+    if (labelTargetDisabled(control)) return false;
+    activateElement(ctx, control);
+    return true;
+}
+
+void activateElement(JSContext* ctx, dom::Element* el) {
+    if (el) js_element_click_impl(ctx, el);
+}
+
 static JSValue js_element_click(JSContext* ctx, JSValueConst this_val,
                                 int /*argc*/, JSValueConst* /*argv*/) {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    js_element_click_impl(ctx, el);
+    // A programmatic label.click() forwards to its control, exactly as a real
+    // click on the label's text does.
+    forwardLabelActivation(ctx, el);
+    return JS_UNDEFINED;
+}
+
+static void js_element_click_impl(JSContext* ctx, dom::Element* el) {
     auto* doc = getDocumentForCtx(ctx);
     if (doc) doc->setActiveElement(el);
     dom::MouseEvent event("click");
@@ -3320,7 +3419,6 @@ static JSValue js_element_click(JSContext* ctx, JSValueConst this_val,
             }
         }
     }
-    return JS_UNDEFINED;
 }
 
 // Engine-side focus sync for programmatic .focus()/.blur(): commits any

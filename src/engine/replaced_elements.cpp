@@ -735,6 +735,14 @@ void dispatchDocMouseRelease(
             }
         }
 
+        // <label> default action: a click on the label's text (or an icon, or a
+        // wrapper span) activates the control the label labels. Runs last, and
+        // only when the click did not already land on that control, so a direct
+        // click on a wrapped checkbox is not toggled a second time here.
+        if (!clickEvt.defaultPrevented() && target && ctx.jsCtx) {
+            js::forwardLabelActivation(ctx.jsCtx, target);
+        }
+
         if (state.clickCount == 2) {
             dom::MouseEvent dblEvt("dblclick", true, true);
             populate(dblEvt);
