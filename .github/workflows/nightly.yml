@@ -109,7 +109,7 @@ jobs:
           sub-packages: ${{ runner.os == 'Linux' && '["nvcc", "cudart-dev"]' || '[]' }}
 
       - name: sccache
-        uses: mozilla-actions/sccache-action@v0.0.10
+        uses: mozilla-actions/sccache-action@v0.0.11
 
       # Persist vcpkg's built-package archives across runs (same scheme as
       # ci.yml: per-run key + restore-keys pick the newest, so rebuilds after
