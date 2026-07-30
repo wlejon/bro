@@ -2711,14 +2711,55 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
         }
         float ox0 = x,         oy0 = y;
         float ox1 = x + w,     oy1 = y + h;
-        float ix0 = x + L,     iy0 = y + T;
-        float ix1 = x + w - R, iy1 = y + h - B;
+
+        // How far each side's wedge reaches INWARD along the two corner split
+        // lines, as a multiple of the border width. A square box needs exactly
+        // 1 — the wedge is then the familiar outer-corner→inner-corner
+        // trapezoid. A rounded corner needs more: its split line stays inside
+        // the corner's rx×ry box for `min(rx/w, ry/w)` widths, and everything
+        // the side owns of that arc lies along it. Clipping to the flat
+        // trapezoid instead is what turned a spinner into four disconnected
+        // chords with the corners missing — the arcs sweep a full radius deep
+        // while the trapezoid is only one border-width tall.
+        //
+        // Never past where the two split lines cross, or the quad folds into a
+        // bowtie and the clip means nothing. On a circle the crossing IS the
+        // centre and the wedge is the exact quadrant, which is the whole point.
+        // depth = the side's own width (how far in the split line travels per
+        // unit); along = the adjacent side's width (how far sideways).
+        auto wedgeK = [](float rxA, float ryA, float alongA,
+                         float rxB, float ryB, float alongB,
+                         float depth, float extent) {
+            auto exitAt = [](float rx, float ry, float alongW, float depthW) -> float {
+                if (alongW <= 0.0f || depthW <= 0.0f) return 0.0f;
+                return std::min(rx / alongW, ry / depthW);
+            };
+            float needed = std::max(exitAt(rxA, ryA, alongA, depth),
+                                    exitAt(rxB, ryB, alongB, depth));
+            float cross = (alongA + alongB) > 0.0f ? extent / (alongA + alongB)
+                                                   : 1.0f;
+            return std::min(cross, std::max(1.0f, needed));
+        };
+        // radii index order is TL, TR, BR, BL.
+        float kT = wedgeK(radii.x[0], radii.y[0], L, radii.x[1], radii.y[1], R, T, w);
+        float kR = wedgeK(radii.x[1], radii.y[1], T, radii.x[2], radii.y[2], B, R, h);
+        float kB = wedgeK(radii.x[3], radii.y[3], L, radii.x[2], radii.y[2], R, B, w);
+        float kL = wedgeK(radii.x[0], radii.y[0], T, radii.x[3], radii.y[3], B, L, h);
+
         struct Wedge { const char* colorProp; render::PointF p[4]; };
         Wedge wedges[4] = {
-            {"border-top-color",    {{ox0, oy0}, {ox1, oy0}, {ix1, iy0}, {ix0, iy0}}},
-            {"border-right-color",  {{ox1, oy0}, {ox1, oy1}, {ix1, iy1}, {ix1, iy0}}},
-            {"border-bottom-color", {{ox1, oy1}, {ox0, oy1}, {ix0, iy1}, {ix1, iy1}}},
-            {"border-left-color",   {{ox0, oy1}, {ox0, oy0}, {ix0, iy0}, {ix0, iy1}}},
+            {"border-top-color",    {{ox0, oy0}, {ox1, oy0},
+                                     {ox1 - R * kT, oy0 + T * kT},
+                                     {ox0 + L * kT, oy0 + T * kT}}},
+            {"border-right-color",  {{ox1, oy0}, {ox1, oy1},
+                                     {ox1 - R * kR, oy1 - B * kR},
+                                     {ox1 - R * kR, oy0 + T * kR}}},
+            {"border-bottom-color", {{ox1, oy1}, {ox0, oy1},
+                                     {ox0 + L * kB, oy1 - B * kB},
+                                     {ox1 - R * kB, oy1 - B * kB}}},
+            {"border-left-color",   {{ox0, oy1}, {ox0, oy0},
+                                     {ox0 + L * kL, oy0 + T * kL},
+                                     {ox0 + L * kL, oy1 - B * kL}}},
         };
         for (auto& wd : wedges) {
             auto c = getBorderColor(wd.colorProp);
