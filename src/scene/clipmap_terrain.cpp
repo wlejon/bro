@@ -243,6 +243,7 @@ void ClipmapTerrain::pushStaticUniforms() {
 void ClipmapTerrain::pushLayerUniforms() {
     if (!node_) return;
     float wrap[kMaxLayers] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float band[kMaxLayers] = {0.0f, 0.0f, 0.0f, 0.0f};
     for (int i = 0; i < kMaxLayers; ++i) {
         const ClipmapLayer& l = layers_[i];
         const float a[3] = {l.originX, l.originZ,
@@ -252,8 +253,13 @@ void ClipmapTerrain::pushLayerUniforms() {
         node_->setCustomShaderUniform(kLayerA[i], 3, a);
         node_->setCustomShaderUniform(kLayerB[i], 2, b);
         wrap[i] = (l.present && l.wrapX) ? 1.0f : 0.0f;
+        // An absent slot declares nothing: cmDataFloor's blend starts from the
+        // coarsest PRESENT layer, and a released slot must not leave a claim
+        // about band limits behind for the next one to inherit.
+        band[i] = (l.present && l.bandLimited) ? 1.0f : 0.0f;
     }
     node_->setCustomShaderUniform("u_lWrapX", 4, wrap);
+    node_->setCustomShaderUniform("u_lBandLimited", 4, band);
     const float n = static_cast<float>(layerCount_);
     node_->setCustomShaderUniform("u_layerCount", 1, &n);
 }
@@ -280,7 +286,8 @@ void ClipmapTerrain::recomputeHeightRange() {
 
 void ClipmapTerrain::setHeightLayer(int index, const float* data, int width,
                                     int height, float originX, float originZ,
-                                    float metresPerCell, bool wrapX) {
+                                    float metresPerCell, bool wrapX,
+                                    bool bandLimited) {
     if (!node_ || index < 0 || index >= kMaxLayers) return;
     ClipmapLayer& l = layers_[index];
 
@@ -297,6 +304,7 @@ void ClipmapTerrain::setHeightLayer(int index, const float* data, int width,
         l.originZ = originZ;
         l.metresPerCell = metresPerCell > 0.0f ? metresPerCell : 1.0f;
         l.wrapX = wrapX;
+        l.bandLimited = bandLimited;
         l.present = true;
         // mipmap: true is load-bearing, not an optimisation. The shader samples
         // at a FRACTIONAL textureLod level; without a chain GL clamps every lod

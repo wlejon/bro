@@ -51,7 +51,8 @@
 float cmSurface(vec2 wxz) {
     float c      = cmCellSize(wxz);
     vec2  rel    = wxz - u_camXZ;
-    float floorM = cmDataFloor(wxz);
+    float bandLim;
+    float floorM = cmDataFloor(wxz, bandLim);
     // Same spacing rule as the fragment stage — see the long comment there.
     // Both stages have to agree on the slope, since it modulates the detail
     // that displaces here and shades there.
@@ -61,7 +62,7 @@ float cmSurface(vec2 wxz) {
     float hz = cmHeight(wxz + vec2(0.0, e), c);
     float slope = cmSlopeFrom(h0, hx, hz, e);
     float amp;
-    return h0 + cmDetailWeight(slope) * cmDetail(rel, c, floorM, amp).x;
+    return h0 + cmDetailWeight(slope) * cmDetail(rel, c, floorM, bandLim, amp).x;
 }
 
 // Cells from the level's outer edge over which the morph runs. The overlap

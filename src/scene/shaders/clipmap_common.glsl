@@ -27,6 +27,17 @@ uniform vec3 u_l3a;  uniform vec2 u_l3b;
 // fade there would reopen, as a hole, exactly the seam the bake closed.
 uniform vec4 u_lWrapX;
 
+// Per layer, 1 = the layer is BAND-LIMITED: it carries real content all the way
+// down to twice its own cell size, so procedural detail may own everything finer
+// and must own nothing coarser. 0 says nothing, and the cell-size heuristic in
+// clipmap_detail.glsl (CM_ROUGHEN_*) then decides — a fine floor is read as a
+// smooth learned window and roughened from a fixed ceiling instead.
+//
+// It is declared PER LAYER because it is a property of where the data came from,
+// not of the clipmap: a stack may legitimately mix a smooth streamed window with
+// a band-limited procedural one, and cell size cannot tell them apart.
+uniform vec4 u_lBandLimited;
+
 uniform vec2  u_camXZ;
 uniform float u_camY;
 uniform float u_cellSize;      // c0, level-0 cell size in metres (EFFECTIVE —
@@ -177,17 +188,26 @@ float cmCoverage(vec3 a, vec2 sz, vec2 wxz, float wrapX) {
 // layer edge exactly as smoothly as the height does — a geometric quantity
 // deserves a geometric mean, and the octave selection downstream is log-scaled
 // anyway.
-float cmDataFloor(vec2 wxz) {
+//
+// `bandLimited` rides along because it answers a question about the same blend:
+// WHOSE floor is this. It is carried through the identical weights, so a stack
+// that mixes a smooth streamed window with a band-limited procedural layer
+// crosses between their two high-pass rules exactly as smoothly as the floor
+// itself crosses — and a stack that declares nothing gets 0 everywhere, which is
+// what leaves the heuristic in sole charge.
+float cmDataFloor(vec2 wxz, out float bandLimited) {
     float n = u_layerCount;
     float w = 0.0;
     float f = 0.0;
-    if      (n > 3.5) { f = log2(u_l3a.z); }
-    else if (n > 2.5) { f = log2(u_l2a.z); }
-    else if (n > 1.5) { f = log2(u_l1a.z); }
-    else if (n > 0.5) { f = log2(u_l0a.z); }
-    if (n > 3.5) { w = cmCoverage(u_l2a, u_l2b, wxz, u_lWrapX.z); f = mix(f, log2(u_l2a.z), w); }
-    if (n > 2.5) { w = cmCoverage(u_l1a, u_l1b, wxz, u_lWrapX.y); f = mix(f, log2(u_l1a.z), w); }
-    if (n > 1.5) { w = cmCoverage(u_l0a, u_l0b, wxz, u_lWrapX.x); f = mix(f, log2(u_l0a.z), w); }
+    float b = 0.0;
+    if      (n > 3.5) { f = log2(u_l3a.z); b = u_lBandLimited.w; }
+    else if (n > 2.5) { f = log2(u_l2a.z); b = u_lBandLimited.z; }
+    else if (n > 1.5) { f = log2(u_l1a.z); b = u_lBandLimited.y; }
+    else if (n > 0.5) { f = log2(u_l0a.z); b = u_lBandLimited.x; }
+    if (n > 3.5) { w = cmCoverage(u_l2a, u_l2b, wxz, u_lWrapX.z); f = mix(f, log2(u_l2a.z), w); b = mix(b, u_lBandLimited.z, w); }
+    if (n > 2.5) { w = cmCoverage(u_l1a, u_l1b, wxz, u_lWrapX.y); f = mix(f, log2(u_l1a.z), w); b = mix(b, u_lBandLimited.y, w); }
+    if (n > 1.5) { w = cmCoverage(u_l0a, u_l0b, wxz, u_lWrapX.x); f = mix(f, log2(u_l0a.z), w); b = mix(b, u_lBandLimited.x, w); }
+    bandLimited = b;
     return exp2(f);
 }
 

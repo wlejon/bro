@@ -88,6 +88,8 @@
 //     originZ:       Number,
 //     metresPerCell: Number,         // world metres between adjacent texels
 //     wrapX:         Boolean,        // periodic in X (for planetary charts, default false)
+//     bandLimited:   Boolean,        // the data really does reach its own Nyquist
+//                                    // (default false — see below)
 //   }
 //
 // Texel (i, j) therefore sits at world
@@ -107,6 +109,51 @@
 // axis) of its extent. So running off a fine layer's coverage degrades
 // gradually into the layer beneath it instead of showing a seam. Outside every
 // layer, GL_CLAMP_TO_EDGE holds the border value rather than folding to zero.
+//
+// bandLimited — WHO OWNS THE FINE END, the data or the procedural detail.
+//
+// The GPU synthesises detail below the data (see setDetail), and it has to know
+// where "below" starts. A grid of cell d can represent no wavelength shorter
+// than 2d, so the honest answer is 2 * metresPerCell — detail owns everything
+// finer, the layer owns everything coarser, and the two never overlap.
+//
+// That is only true of data that actually reaches its own Nyquist. A SMOOTH
+// LEARNED OR DECODED field does not: bro.worldgen's 30 m elevation carries a
+// mountain's macro shape but none of its sub-kilometre ruggedness, so trusting
+// it down to 60 m leaves the mountainside glassy — correctly lit, correctly
+// shaped, and made of glass. For those, detail is deliberately allowed to
+// overlap the band the decoder rendered flat, roughening it from a fixed
+// kilometre-scale ceiling instead. That is the DEFAULT, inferred from a data
+// floor finer than ~400 m, and it is what a streamed decoder layer wants.
+//
+// Set bandLimited: true when the layer is not that — a field you generated,
+// eroded or authored at its own cell size, which genuinely carries content down
+// to 2 * metresPerCell. The high-pass then sits at the layer's own Nyquist,
+// where it belongs. Left false, such a layer gets roughened over a band it
+// already occupies: four extra octaves for a 32 m layer, each adding another
+// detailRelief to the shading tangent, which tips the normal past the
+// terminator on ground already near it and speckles every steep slope. The
+// symptom looks like a lighting or noise bug and is neither.
+//
+// Rules of thumb:
+//
+//   coarse world chart (km/cell)   either — the heuristic never fires that
+//                                  coarse, so the flag changes nothing
+//   streamed learned/decoded       leave false (roughening is the point)
+//   procedural / eroded / authored bandLimited: true
+//   real DEM resampled fine        true if it was band-limited on the way down,
+//                                  false if it was upsampled from something
+//                                  coarser and is smooth between samples
+//
+// It is per LAYER, not per terrain, so a stack can mix them: a smooth 30 m
+// decoder window over a band-limited procedural regional field is a legitimate
+// and correctly handled combination. Across a layer edge the two rules cross
+// over on the same coverage ramp the heights blend on.
+//
+// It also settles a divergence: elevationAt() high-passes at the layer's own
+// Nyquist unconditionally, so on a band-limited layer the query and the drawn
+// surface agree, while on a roughened one the GPU adds coarse octaves the query
+// does not carry.
 //
 // Passing null (or omitting the descriptor) releases the layer's pixels.
 //

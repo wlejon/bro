@@ -50,7 +50,8 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     // layer has no slope information below it, so measuring there samples
     // filter noise instead of terrain. Detail and the exemplar are unaffected —
     // they carry analytic derivatives and fill the band under this floor.
-    float floorM = cmDataFloor(wxz);
+    float bandLim;
+    float floorM = cmDataFloor(wxz, bandLim);
     float e  = max(c, floorM);
     float h0 = cmHeight(wxz, c);
     float hL = cmHeight(wxz - vec2(e, 0.0), c);
@@ -71,7 +72,7 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     float cs = cmCellSizeAA(wxz);
 
     float dAmp;
-    vec3  d  = cmDetail(rel, cs, floorM, dAmp);
+    vec3  d  = cmDetail(rel, cs, floorM, bandLim, dAmp);
     float dw = cmDetailWeight(slope);
     grad += dw * d.yz;
 

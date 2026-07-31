@@ -51,7 +51,7 @@ using CW = ClipmapWrapper;
 
 // -------------------------------------------------------------------------
 // clipmap.setHeightLayer(index, { data, width, height, originX, originZ,
-//                                 metresPerCell, wrapX } | null)
+//                                 metresPerCell, wrapX, bandLimited } | null)
 //
 // Returns `this` so calls chain. A null/undefined descriptor releases the
 // layer's pixels.
@@ -90,6 +90,13 @@ static JSValue js_clipmap_setHeightLayer(JSContext* ctx, JSValueConst this_val,
     // window is NOT periodic and wrapping one would fold the far side of the
     // window into view.
     const bool wrapX = qjsbind::get_prop_bool(ctx, argv[1], "wrapX", false);
+    // bandLimited: the samples carry real content down to 2 * metresPerCell, so
+    // the procedural detail band high-passes against that and adds nothing
+    // coarser. Off by default — the default is the pre-existing cell-size
+    // inference, which reads a fine floor as a smooth learned window and
+    // roughens it from a fixed ceiling. See docs/clipmap-api.js.
+    const bool bandLimited =
+        qjsbind::get_prop_bool(ctx, argv[1], "bandLimited", false);
     if (width <= 0 || height <= 0)
         return JS_ThrowTypeError(ctx,
             "setHeightLayer: width and height must be positive");
@@ -123,7 +130,7 @@ static JSValue js_clipmap_setHeightLayer(JSContext* ctx, JSValueConst this_val,
                                   reinterpret_cast<const float*>(ptr + byteOff),
                                   width, height, static_cast<float>(originX),
                                   static_cast<float>(originZ),
-                                  static_cast<float>(mpc), wrapX);
+                                  static_cast<float>(mpc), wrapX, bandLimited);
     JS_FreeValue(ctx, abuf);
     JS_FreeValue(ctx, dataVal);
     return JS_DupValue(ctx, this_val);

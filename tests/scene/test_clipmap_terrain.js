@@ -433,6 +433,109 @@ if (!scene) {
         }
     }
 
+    // =====================================================================
+    // (7) bandLimited — where the data ends is DECLARED, not inferred.
+    //
+    // Procedural detail high-passes against the height data so the two never
+    // describe the same wavelength twice. A grid of cell d carries nothing
+    // shorter than 2d, so that is where the hand-over belongs — EXCEPT over a
+    // smooth learned field, whose cell is metres but whose content stops at the
+    // kilometre; there detail is deliberately allowed to overlap and roughen
+    // from a fixed ceiling. Cell size alone cannot tell those two apart, so a
+    // layer says which it is, per layer, and says nothing by default.
+    //
+    // Measured as displacement of the PICTURE against the same terrain with
+    // detail switched off. That isolates what the synthetic band contributed
+    // and is independent of what the underlying field happens to look like.
+    // =====================================================================
+    {
+        // (4) parked the main terrain 60 km up and it is still in the graph; it
+        // would draw over every frame below.
+        cm.node.visible = false;
+
+        const opts = {
+            levels: 8, resolution: 64, cellSize: 1,
+            detailWavelength: 48, detailRelief: 0.5, detailGain: 1.0,
+            detailOctaves: 4,
+        };
+        const field = (x, z) => 200 * Math.sin(x * 0.0016) * Math.cos(z * 0.0014);
+
+        function shot(layers, extra) {
+            const t = scene.createClipmapTerrain(Object.assign({}, opts, extra || {}));
+            for (const [i, desc] of layers) t.setHeightLayer(i, desc);
+            scene.setCamera({
+                fov: 60, near: 1, far: 100000, position: [0, 400, 0],
+                target: [0.001, 0, 0], up: [0, 0, -1],
+            });
+            t.update(0, 400, 0);
+            const img = scene.captureFrame();
+            t.destroy();
+            return img;
+        }
+        const meanAbsDiff = (a, b) => {
+            let s = 0;
+            for (let i = 0; i < a.data.length; i++) s += Math.abs(a.data[i] - b.data[i]);
+            return s / a.data.length;
+        };
+        const maxAbsDiff = (a, b) => {
+            let m = 0;
+            for (let i = 0; i < a.data.length; i++)
+                m = Math.max(m, Math.abs(a.data[i] - b.data[i]));
+            return m;
+        };
+
+        // A 30 m layer: fine enough that the smooth-learned-window heuristic
+        // fires, which is exactly the case the flag exists to override.
+        const fine = () => makeLayer(256, 256, -3840, -3840, 30, field);
+        const flagged = (desc) => Object.assign(desc, { bandLimited: true });
+
+        const base  = shot([[0, fine()]], { detailRelief: 0 });
+        const infer = shot([[0, fine()]]);
+        const band  = shot([[0, flagged(fine())]]);
+
+        const dInfer = meanAbsDiff(infer, base);
+        const dBand  = meanAbsDiff(band, base);
+
+        // The detail band is doing something in both cases — a flag that simply
+        // switched detail off would pass the comparison below for the wrong
+        // reason.
+        assert(dBand > 0.3,
+            `band-limited detail still textures the surface (${dBand.toFixed(2)})`);
+        // ...but the inferred path adds the ~4 extra octaves between the layer's
+        // own 60 m Nyquist and the 1 km roughening ceiling, and they dominate.
+        assert(dInfer > 2.5 * dBand,
+            `declaring the layer band-limited drops the synthesised band ` +
+            `(inferred ${dInfer.toFixed(2)}, band-limited ${dBand.toFixed(2)})`);
+
+        // BACKWARDS COMPATIBILITY. Saying nothing and saying false are the same
+        // thing, and both are what the terrain drew before the flag existed.
+        const explicitFalse = shot([[0, Object.assign(fine(), { bandLimited: false })]]);
+        assert(maxAbsDiff(explicitFalse, infer) === 0,
+            'omitting bandLimited renders identically to bandLimited: false');
+
+        // The coarse-only world is untouched either way: the heuristic never
+        // fires at kilometre cells, so the flag has nothing to override and must
+        // not perturb the picture by so much as a bit.
+        const coarse = () => makeLayer(64, 64, -245760, -245760, 7680, field);
+        const coarseOff = shot([[0, coarse()]]);
+        const coarseOn  = shot([[0, flagged(coarse())]]);
+        assert(maxAbsDiff(coarseOn, coarseOff) === 0,
+            'a kilometre-cell layer renders identically with and without the flag');
+
+        // A MIXED STACK is the case the flag has to be per-layer for: a coarse
+        // chart under a fine window, where only the fine layer declares itself.
+        // The blend has to pick that declaration up where the fine layer covers.
+        const stack = (bl) => [
+            [1, makeLayer(64, 64, -245760, -245760, 7680, field)],
+            [0, bl ? flagged(fine()) : fine()],
+        ];
+        const mixOff = shot(stack(false));
+        const mixOn  = shot(stack(true));
+        assert(meanAbsDiff(mixOn, mixOff) > 1.0,
+            `the fine layer's declaration reaches the blend under a coarse ` +
+            `chart (${meanAbsDiff(mixOn, mixOff).toFixed(2)})`);
+    }
+
     cm.destroy();
     assert(cm.node === null, 'destroy() releases the node');
     // Destroy is idempotent and every accessor stays safe afterwards.

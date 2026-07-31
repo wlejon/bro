@@ -89,6 +89,11 @@ struct ClipmapLayer {
     // Periodic in X. Set for a global equirectangular chart, where column 0
     // continues column W-1 and there is no east-west edge to fade out at.
     bool  wrapX   = false;
+    // The samples carry real content down to twice metresPerCell, so procedural
+    // detail must own everything finer and nothing coarser. Off by default,
+    // which leaves the cell-size heuristic in clipmap_detail.glsl to guess —
+    // see setHeightLayer().
+    bool  bandLimited = false;
     bool  present = false;
 };
 
@@ -114,9 +119,21 @@ public:
     /// where column 0 continues column W-1. Such a layer is sampled GL_REPEAT
     /// in S (still clamped in T, since latitude does not wrap) and its coverage
     /// ramp has no east-west edge to fade at.
+    ///
+    /// `bandLimited` marks the layer as carrying real content all the way down
+    /// to twice metresPerCell, so procedural detail high-passes against that and
+    /// adds nothing coarser. Leave it OFF for a smooth learned/decoded field:
+    /// such a layer has a fine cell but no sub-kilometre ruggedness in it, and
+    /// the detail band then roughens it from a fixed ceiling instead (see
+    /// CM_ROUGHEN_* in clipmap_detail.glsl), which is what keeps a decoded
+    /// mountainside from reading as glass. Turn it ON for a field that was
+    /// generated or eroded at its own cell size: roughening one of those lays
+    /// octaves on top of a band the data already fills, and every extra live
+    /// octave adds another detailRelief to the shading tangent until the normal
+    /// tips past the terminator and steep ground speckles.
     void setHeightLayer(int index, const float* data, int width, int height,
                         float originX, float originZ, float metresPerCell,
-                        bool wrapX = false);
+                        bool wrapX = false, bool bandLimited = false);
 
     void setSnowLine(float snowLine);
     void setDetail(float wavelength, float relief, float gain, int octaves);

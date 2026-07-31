@@ -65,6 +65,17 @@ const float CM_DETAIL_FADE_HI = 0.60;
 // the rock the smooth layer lacks. It is still slope-keyed by cmDetailWeight, so
 // it lands on the steep faces the decoder smoothed and leaves plains alone, and
 // the coarse-only world (data floor kilometres wide) is completely unaffected.
+//
+// CELL SIZE IS THE FALLBACK, NOT THE ANSWER. It is an inference about where the
+// samples came from, and a fine grid can equally well hold an eroded procedural
+// field that really does carry content to its own Nyquist. Roughening that one
+// lays four more octaves on top of a band the data already occupies, and since
+// every live octave adds ~detailRelief to the shading tangent (see cmDetail),
+// the summed normal tips past the terminator on ground that was already near it
+// — a hard speckle over every steep face. So a layer can DECLARE itself
+// band-limited (setHeightLayer's `bandLimited`, arriving as u_lBandLimited), and
+// the declaration wins. A layer that declares nothing keeps exactly the
+// behaviour below, which is what the streamed decoder wants.
 const float CM_ROUGHEN_DATA_M = 400.0;   // a data floor finer than this = smooth learned window
 const float CM_ROUGHEN_M      = 500.0;   // procedural fills the surface from ~2x this down
 
@@ -169,7 +180,12 @@ vec3 cmNoiseD(vec2 p, ivec2 cellOfs) {
 // bounded by. The band's top now MOVES with the data, so a caller cannot infer
 // the dominant amplitude from u_detailWavelength any more — it has to be
 // measured, or anything normalised against it (cavity) saturates at distance.
-vec3 cmDetail(vec2 rel, float c, float dataFloor, out float ampSum) {
+// `bandLimited` in [0,1] is how much of the data underfoot has declared that it
+// carries content to its own Nyquist — cmDataFloor blends it with the same
+// weights as the floor. 0 (nothing declared) leaves the CM_ROUGHEN_* inference
+// in charge, which is what every caller that says nothing gets.
+vec3 cmDetail(vec2 rel, float c, float dataFloor, float bandLimited,
+              out float ampSum) {
     ampSum       = 0.0;
     vec2  q      = rel + u_detailOffset;
     vec2  abs_   = rel + u_camXZ;
@@ -181,6 +197,18 @@ vec3 cmDetail(vec2 rel, float c, float dataFloor, out float ampSum) {
     float lambda = u_detailWavelength * exp2(float(up));
     vec3  acc    = vec3(0.0);
     bool  live   = false;
+
+    // Where the data stops being trusted, in metres — the high-pass edge every
+    // octave below is measured against. Loop-invariant, so it is settled once.
+    //
+    // The inference first (see CM_ROUGHEN_*), then the declaration overriding it.
+    // mix() at 0 returns the inferred value bit for bit, so a stack in which no
+    // layer declares anything takes exactly the path it always took; at 1 it
+    // returns the data floor, i.e. the plain Nyquist rule. Between the two it is
+    // a layer edge mid-fade, where a linear crossing over an 8% coverage ramp is
+    // indistinguishable from any other monotone one.
+    float hpFloor = (dataFloor < CM_ROUGHEN_DATA_M) ? CM_ROUGHEN_M : dataFloor;
+    hpFloor       = mix(hpFloor, dataFloor, bandLimited);
 
     int n = up + int(u_detailOctaves);
     for (int i = 0; i < CM_DETAIL_MAX_OCTAVES; ++i) {
@@ -198,7 +226,7 @@ vec3 cmDetail(vec2 rel, float c, float dataFloor, out float ampSum) {
         // floor is metres but the data is glassy below the kilometre, so trusting
         // it that far leaves no ruggedness. Roughen from a fixed coarser ceiling
         // instead, letting procedural overlap the band the decoder rendered flat.
-        float hpFloor = (dataFloor < CM_ROUGHEN_DATA_M) ? CM_ROUGHEN_M : dataFloor;
+        // hpFloor above is that choice, already made.
         float wDat = 1.0 - smoothstep(2.0 * hpFloor, 4.0 * hpFloor, lambda);
         float w    = wPix * wDat;
         // Coarse→fine, so the live octaves are one contiguous run: the data
