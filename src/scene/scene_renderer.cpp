@@ -384,6 +384,25 @@ bool SceneRenderer::nodeWorldBounds(SceneNode* n, bromath::AABB3& out) const {
     }
 }
 
+const bromath::Mat4& SceneRenderer::viewProjRot() const {
+    if (vpValid_ &&
+        std::memcmp(&vpSrcProj_, &graph_.projectionMatrix_,
+                    sizeof(bromath::Mat4)) == 0 &&
+        std::memcmp(&vpSrcView_, &graph_.viewMatrix_,
+                    sizeof(bromath::Mat4)) == 0) {
+        return vpCached_;
+    }
+    vpSrcProj_ = graph_.projectionMatrix_;
+    vpSrcView_ = graph_.viewMatrix_;
+    bromath::Mat4 viewRot = graph_.viewMatrix_;
+    viewRot.at(0, 3) = 0.0f;
+    viewRot.at(1, 3) = 0.0f;
+    viewRot.at(2, 3) = 0.0f;
+    vpCached_ = bromath::mmul(graph_.projectionMatrix_, viewRot);
+    vpValid_ = true;
+    return vpCached_;
+}
+
 bool SceneRenderer::cameraCulled(SceneNode* n) const {
     if (!cullingActive_) return false;
     bromath::AABB3 wb;

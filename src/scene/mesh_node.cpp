@@ -387,7 +387,7 @@ static void flushUserTex(MeshNode::UserTexture& t) {
     t.dirty = false;
 }
 
-void MeshNode::flushPendingTextures() {
+void MeshNode::flushPendingTexturesImpl() {
     flushTex(pendingBase_,     texture_);
     flushTex(pendingNormal_,   normalTex_);
     flushTex(pendingMR_,       mrTex_);

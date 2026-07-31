@@ -426,7 +426,17 @@ public:
     /// renderer calls this before reading material texture state so runtime
     /// texture swaps (setBaseColorTexture and friends) apply the same frame
     /// they were set; drawRaw also flushes for depth-only paths.
-    void flushPendingTextures();
+    ///
+    /// Two calls land on every mesh draw (renderMeshNode, then drawRaw), and on
+    /// a steady scene both have nothing to do — but the work they skip used to
+    /// be behind an out-of-line call that ran a remove_if over userTextures_
+    /// regardless. The gate is derived from the staged state rather than kept
+    /// as a flag, so no future setter can forget to raise it.
+    void flushPendingTextures() {
+        if (pendingBase_.dirty || pendingNormal_.dirty || pendingMR_.dirty ||
+            pendingAO_.dirty || pendingEmissive_.dirty || !userTextures_.empty())
+            flushPendingTexturesImpl();
+    }
 
     /// Release GPU resources (call before GL context is destroyed).
     virtual void releaseGL();
@@ -469,6 +479,11 @@ public:
     const float* normalMatrix3(const bromath::Mat4& model) const;
 
 private:
+    /// The real flush. Only reached when flushPendingTextures() sees staged
+    /// work; it is also the one place that can rebind a texture out from under
+    /// a caller, which is why the gate above matters beyond speed.
+    void flushPendingTexturesImpl();
+
     mutable float normalMat3_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
     mutable float normalMatSrc_[9] = {};   // the 3x3 normalMat3_ was built from
     mutable bool  normalMatValid_ = false;

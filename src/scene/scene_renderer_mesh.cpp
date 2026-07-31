@@ -330,13 +330,10 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
     model.at(2, 3) -= graph_.cameraEye_.z;
 
     // View matrix without translation (rotation only) since model is now
-    // camera-relative
-    Mat4 viewRot = graph_.viewMatrix_;
-    viewRot.at(0, 3) = 0.0f;
-    viewRot.at(1, 3) = 0.0f;
-    viewRot.at(2, 3) = 0.0f;
-
-    Mat4 mvp = bromath::mmul(bromath::mmul(graph_.projectionMatrix_, viewRot), model);
+    // camera-relative. That product is the same for every mesh the camera
+    // sees, so it is built once per camera rather than once per draw — same
+    // operations in the same order, so the result is bit-identical.
+    Mat4 mvp = bromath::mmul(viewProjRot(), model);
 
     glUniformMatrix4fv(L.mvp, 1, GL_FALSE, mvp.data);
     glUniformMatrix4fv(L.model, 1, GL_FALSE, model.data);

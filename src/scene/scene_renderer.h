@@ -471,6 +471,19 @@ private:
     // program is currently bound. Defined in scene_renderer.cpp.
     void uploadMeshGlobals(const MeshDrawLocs& L);
 
+    // projection * (view with translation dropped) — the half of every mesh's
+    // MVP that does not depend on the mesh. It was being recomputed per draw,
+    // which is one full 4x4 multiply per mesh thrown away. Cached against the
+    // two source matrices rather than a frame counter because probe capture
+    // swaps the graph's camera mid-frame and must not reuse the main camera's
+    // product; comparing 128 bytes is far cheaper than the multiply it skips.
+    const bromath::Mat4& viewProjRot() const;
+
+    mutable bromath::Mat4 vpCached_;
+    mutable bromath::Mat4 vpSrcProj_;
+    mutable bromath::Mat4 vpSrcView_;
+    mutable bool vpValid_ = false;
+
     // Conservative world-space AABB for a cullable node (Mesh incl. skinned,
     // InstancedMesh, GaussianSplat, Particles3D). Returns false when the node
     // has no valid bounds — such nodes draw unconditionally. Defined in
