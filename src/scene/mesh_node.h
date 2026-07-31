@@ -325,12 +325,23 @@ public:
     // Texture units: the mesh uber-shader already owns units 0..9 (baseColor
     // 0, shadow atlas 1, IBL irradiance/prefilter/BRDF 2/3/4, normal 5, MR 6,
     // AO 7, emissive 8, reflection probe 9). User samplers therefore start at
-    // unit 10. GL 3.3 guarantees only 16 combined texture image units, so a
-    // node may bind at most kMaxUserTextures slots.
+    // unit 10, and a node may bind whatever is left above that.
+    //
+    // The limit is QUERIED, not assumed. It used to be a constexpr 16 — GL
+    // 3.3's guaranteed minimum — which left exactly 6 user slots on every
+    // machine regardless of what the machine had. That is a real budget on
+    // hardware from 2010 and pure invention on anything since: desktop drivers
+    // in practice report 32 to 192. A terrain wanting four height layers, a
+    // control-channel layer and a water layer hits 6 exactly, and the next
+    // feature that needs a sampler is then blocked by a number the hardware
+    // never imposed.
+    //
+    // The floor is unchanged: render::GLCaps clamps up to 16 and returns 16
+    // before the latch, so nothing that worked under the old constant can stop
+    // working under this. See render/gl_context.h.
     static constexpr int kUserTextureUnitBase = 10;
-    static constexpr int kUserTextureUnitLimit = 16;   // GL 3.3 guaranteed min
-    static constexpr int kMaxUserTextures =
-        kUserTextureUnitLimit - kUserTextureUnitBase;  // 6
+    static int userTextureUnitLimit();
+    static int maxUserTextures();
 
     /// One user sampler slot. `data`/`w`/`h` stage a CPU-side upload that
     /// flushPendingTextures() consumes on the GL thread; `tex` is the owned
@@ -379,7 +390,7 @@ public:
     /// mip chain with GL_LINEAR_MIPMAP_LINEAR minification, which is what a
     /// shader sampling textureLod() at a FRACTIONAL level needs — without it
     /// GL has no second level to blend toward and every level reads as 0.
-    /// Returns false only when a NEW name would exceed kMaxUserTextures —
+    /// Returns false only when a NEW name would exceed maxUserTextures() —
     /// existing names always succeed. Safe off the GL thread: the upload
     /// happens in flushPendingTextures().
     bool setCustomShaderTexture(const std::string& name, int width, int height,

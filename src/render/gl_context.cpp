@@ -2,6 +2,7 @@
 #include "platform/sdl_window.h"
 #include "util/log.h"
 
+#include <atomic>
 #include <stdexcept>
 #include <cstring>
 
@@ -62,9 +63,35 @@ void main() {
 // Construction / destruction
 // ---------------------------------------------------------------------------
 
+// --- GL capabilities ---------------------------------------------------------
+
+namespace {
+// Relaxed atomic: written once from the GL thread during context construction,
+// read from the JS thread when a node decides whether a sampler slot is
+// available. Any reader that races the latch sees the GL 3.3 floor, which is
+// the conservative answer and the one the code used unconditionally before.
+std::atomic<int> gCombinedTextureUnits{16};
+}
+
+int GLCaps::combinedTextureImageUnits() {
+    return gCombinedTextureUnits.load(std::memory_order_relaxed);
+}
+
+void GLCaps::latch() {
+    GLint units = 0;
+    glGetIntegerv(GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, &units);
+    // Clamp UP to the GL 3.3 guarantee. A driver reporting less than the spec
+    // minimum is either lying or broken, and trusting it would shrink a budget
+    // that already worked.
+    if (units < 16) units = 16;
+    gCombinedTextureUnits.store(units, std::memory_order_relaxed);
+}
+
 GLContext::GLContext(platform::Window& window) : window_(window) {
+    GLCaps::latch();
     createPipelines();
-    LOG_INFO("GL pipelines created (color + texture)");
+    LOG_INFO("GL pipelines created (color + texture), %d combined texture units",
+             GLCaps::combinedTextureImageUnits());
 }
 
 GLContext::~GLContext() {

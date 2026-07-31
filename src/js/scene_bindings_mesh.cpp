@@ -315,9 +315,10 @@ JSValue js_node_setShaderUniform(JSContext* ctx, JSValueConst this_val, int argc
 // AO 7, emissive 8, reflection probe 9) — see MeshNode::kUserTextureUnitBase.
 // Starting at or below those units would not error anywhere: the user texture
 // would simply overwrite a material binding and the mesh would silently
-// sample a heightfield as its albedo/shadow map. The budget is bounded by
-// GL 3.3's guaranteed 16 combined texture image units, so a node gets
-// kMaxUserTextures slots and asking for more throws rather than clobbering.
+// sample a heightfield as its albedo/shadow map. The budget is bounded by the
+// QUERIED combined texture image unit count (GL 3.3's 16 is the floor, not the
+// assumption — see MeshNode::maxUserTextures), so a node gets whatever this GL
+// actually has above the base and asking for more throws rather than clobbering.
 JSValue js_node_setShaderTexture(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* w = qjsbind::unwrap<NodeWrapper>(ctx, this_val);
     if (!w || !w->node() || w->node()->type() != scene::SceneNode::Type::Mesh)
@@ -394,10 +395,10 @@ JSValue js_node_setShaderTexture(JSContext* ctx, JSValueConst this_val, int argc
     if (!meshNode->setCustomShaderTexture(name, tw, th, pixels, mipmap, repeat, clampT))
         return JS_ThrowTypeError(ctx,
             "setShaderTexture: too many sampler uniforms on this node "
-            "(max %d, GL 3.3 guarantees only %d combined texture units and "
-            "the material shader uses the first %d)",
-            scene::MeshNode::kMaxUserTextures,
-            scene::MeshNode::kUserTextureUnitLimit,
+            "(max %d; this GL reports %d combined texture units and the "
+            "material shader uses the first %d)",
+            scene::MeshNode::maxUserTextures(),
+            scene::MeshNode::userTextureUnitLimit(),
             scene::MeshNode::kUserTextureUnitBase);
     return JS_DupValue(ctx, this_val);
 }
