@@ -744,24 +744,39 @@ void ClipmapTerrain::setMaterials(const float* rockAlbedo, float rockRoughness,
 }
 
 void ClipmapTerrain::setSurfaceLayer(const float* data, int width, int height,
-                                     float originX, float originZ, float metresPerCell) {
-    setSurfaceLayer(0, data, width, height, originX, originZ, metresPerCell);
+                                     float originX, float originZ, float metresPerCell,
+                                     int components) {
+    setSurfaceLayer(0, data, width, height, originX, originZ, metresPerCell, components);
 }
 
 void ClipmapTerrain::setSurfaceLayer(int index, const float* data, int width, int height,
-                                     float originX, float originZ, float metresPerCell) {
+                                     float originX, float originZ, float metresPerCell,
+                                     int components) {
     if (!node_) return;
     if (index < 0 || index >= kMaxLayers) return;
+    if (components != 3 && components != 4) return;
 
     SurfaceLayer& s = surf_[index];
     if (!data || width <= 0 || height <= 0) {
         s.data.clear();
         s.width = s.height = 0;
         s.present = false;
-        const float zero3[3] = {0.0f, 0.0f, 0.0f};
-        node_->setCustomShaderTexture(kSurfTex[index], 1, 1, zero3, false, false, true, 3);
+        const float zero4[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+        node_->setCustomShaderTexture(kSurfTex[index], 1, 1, zero4, false, false, true, 4);
     } else {
-        s.data.assign(data, data + (size_t)width * height * 3);
+        // Stored RGBA whatever the caller supplied, so the sampler's swizzle is
+        // one thing and not two. A three-channel caller gets w = 0: GL would
+        // fill an RGB texture's alpha with 1.0, and a channel nobody supplied
+        // reading as saturated is a bug waiting for the first shader that uses
+        // it.
+        const size_t texels = (size_t)width * (size_t)height;
+        s.data.assign(texels * 4, 0.0f);
+        for (size_t i = 0; i < texels; ++i) {
+            s.data[i * 4 + 0] = data[i * components + 0];
+            s.data[i * 4 + 1] = data[i * components + 1];
+            s.data[i * 4 + 2] = data[i * components + 2];
+            if (components == 4) s.data[i * 4 + 3] = data[i * 4 + 3];
+        }
         s.width = width;
         s.height = height;
         s.originX = originX;
@@ -769,7 +784,7 @@ void ClipmapTerrain::setSurfaceLayer(int index, const float* data, int width, in
         s.metresPerCell = metresPerCell;
         s.present = true;
         node_->setCustomShaderTexture(kSurfTex[index], width, height, s.data.data(),
-                                      false, false, true, 3);
+                                      false, false, true, 4);
     }
 
     // Contiguous run from 0, exactly like the height stack: the shader's blend

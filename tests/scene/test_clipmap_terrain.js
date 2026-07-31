@@ -631,6 +631,61 @@ if (!scene) {
             probe.destroy();
         }
         assert(threw, 'setSurfaceLayer rejects an out-of-range index');
+
+        // FOUR CHANNELS.
+        //
+        // The three-channel form has to stay bit-identical — every existing
+        // caller passes width*height*3 and says nothing about components — and
+        // the fourth channel has to actually arrive. The second half is the
+        // one worth having: a widened buffer that the sampler still reads as
+        // three would pass a "does the old form still work" test perfectly.
+        function surf4(w, mpc, rgb, a) {
+            const data = new Float32Array(w * w * 4);
+            for (let i = 0; i < w * w; i++) {
+                data[i * 4 + 0] = rgb; data[i * 4 + 1] = rgb;
+                data[i * 4 + 2] = rgb; data[i * 4 + 3] = a;
+            }
+            const span = w * mpc;
+            return { data, width: w, height: w, components: 4,
+                     originX: -span / 2, originZ: -span / 2, metresPerCell: mpc };
+        }
+
+        // Same RGB as the three-channel case, so anything that differs came
+        // through the widened path rather than through the values.
+        const four = shot([[0, surf4(64, 64, 0.0, 0.0)],
+                           [1, surf4(64, 2048, 0.9, 0.0)]]);
+        assert(meanDiff(four, stacked) === 0,
+            'a 4-component layer with w = 0 renders exactly as the 3-component one');
+
+        // A short buffer must be refused rather than read past its end: the
+        // size check multiplies by `components`, so declaring 4 and supplying
+        // 3 is the way this API gets someone a heap overread.
+        let shortThrew = false;
+        const probe4 = scene.createClipmapTerrain(opts);
+        try {
+            const bad = surf(8, 64, 0.5);   // 8*8*3 floats
+            bad.components = 4;             // ... declared as 8*8*4
+            probe4.setSurfaceLayer(0, bad);
+        } catch (e) {
+            shortThrew = true;
+        } finally {
+            probe4.destroy();
+        }
+        assert(shortThrew, 'setSurfaceLayer rejects a buffer too short for its components');
+
+        // 5 channels is not a thing, and failing loudly beats uploading garbage.
+        let compsThrew = false;
+        const probe5 = scene.createClipmapTerrain(opts);
+        try {
+            const bad = surf(8, 64, 0.5);
+            bad.components = 5;
+            probe5.setSurfaceLayer(0, bad);
+        } catch (e) {
+            compsThrew = true;
+        } finally {
+            probe5.destroy();
+        }
+        assert(compsThrew, 'setSurfaceLayer rejects a components count other than 3 or 4');
     }
 
     cm.destroy();

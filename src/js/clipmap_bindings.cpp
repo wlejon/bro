@@ -265,19 +265,25 @@ static JSValue js_clipmap_setSurfaceLayer(JSContext* ctx, JSValueConst this_val,
     if (!JS_IsObject(argv[specArg]))
         return JS_ThrowTypeError(ctx,
             "setSurfaceLayer: expected [index,] { data, width, height, originX, "
-            "originZ, metresPerCell } or null");
+            "originZ, metresPerCell[, components] } or null");
 
     const int width  = qjsbind::get_prop_int(ctx, argv[specArg], "width", 0);
     const int height = qjsbind::get_prop_int(ctx, argv[specArg], "height", 0);
     const double originX = qjsbind::get_prop_number(ctx, argv[specArg], "originX", 0.0);
     const double originZ = qjsbind::get_prop_number(ctx, argv[specArg], "originZ", 0.0);
     const double mpc = qjsbind::get_prop_number(ctx, argv[specArg], "metresPerCell", 1.0);
+    // Defaults to 3 so every caller written against the three-channel API keeps
+    // working without saying so.
+    const int comps = qjsbind::get_prop_int(ctx, argv[specArg], "components", 3);
     if (width <= 0 || height <= 0)
         return JS_ThrowTypeError(ctx,
             "setSurfaceLayer: width and height must be positive");
     if (!(mpc > 0.0))
         return JS_ThrowTypeError(ctx,
             "setSurfaceLayer: metresPerCell must be positive");
+    if (comps != 3 && comps != 4)
+        return JS_ThrowRangeError(ctx,
+            "setSurfaceLayer: components must be 3 or 4, got %d", comps);
 
     JSValue dataVal = JS_GetPropertyStr(ctx, argv[specArg], "data");
     size_t byteOff = 0, viewLen = 0;
@@ -290,19 +296,19 @@ static JSValue js_clipmap_setSurfaceLayer(JSContext* ctx, JSValueConst this_val,
     }
     size_t abufLen = 0;
     uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
-    const size_t want = static_cast<size_t>(width) * height * 3 * sizeof(float);
+    const size_t want = static_cast<size_t>(width) * height * comps * sizeof(float);
     if (!ptr || viewLen < want) {
         JS_FreeValue(ctx, abuf);
         JS_FreeValue(ctx, dataVal);
         return JS_ThrowRangeError(ctx,
-            "setSurfaceLayer: data holds %zu bytes, need %zu (%dx%dx3 floats)",
-            viewLen, want, width, height);
+            "setSurfaceLayer: data holds %zu bytes, need %zu (%dx%dx%d floats)",
+            viewLen, want, width, height, comps);
     }
 
     self->terrain->setSurfaceLayer(idx, reinterpret_cast<const float*>(ptr + byteOff),
                                    width, height, static_cast<float>(originX),
                                    static_cast<float>(originZ),
-                                   static_cast<float>(mpc));
+                                   static_cast<float>(mpc), comps);
     JS_FreeValue(ctx, abuf);
     JS_FreeValue(ctx, dataVal);
     return JS_DupValue(ctx, this_val);

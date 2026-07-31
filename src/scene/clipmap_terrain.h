@@ -145,9 +145,18 @@ public:
     /// (linear rgb) at `strength` in [0,1]. strength 0 disables it.
     void setForest(const float* albedo, float strength);
     /// Install (or, with data == nullptr, release) surface layer `index`:
-    /// three control channels per texel, resampled and blended by exactly the
-    /// same coverage rule the height layers use. Finest-first and contiguous
-    /// from 0, like setHeightLayer.
+    /// `components` control channels per texel (3 or 4), resampled and blended
+    /// by exactly the same coverage rule the height layers use. Finest-first
+    /// and contiguous from 0, like setHeightLayer.
+    ///
+    /// FOUR CHANNELS, AND WHY THE THIRD IS NOT ENOUGH. Three was never a
+    /// property of anything — it was the width of the first caller. A layer
+    /// carrying drainage, sediment and hardness has no room left for the one
+    /// channel that means the same thing at 32 m and at 2 km: climate. Storage
+    /// is always RGBA internally, and a caller supplying three components gets
+    /// w = 0 rather than GL's fill of 1 — a channel nobody supplied should read
+    /// as absent, not as saturated, and 1.0 is a value some shader will treat
+    /// as "maximally wet" on the day it is added.
     ///
     /// WHY THIS IS INDEXED. It used to store one struct and take no index,
     /// which quietly made control channels a property of the FINEST layer
@@ -169,11 +178,13 @@ public:
     /// layer already does this to an ID channel at every texel boundary, so
     /// this is a sharper version of a knife the API already had.
     void setSurfaceLayer(int index, const float* data, int width, int height,
-                         float originX, float originZ, float metresPerCell);
+                         float originX, float originZ, float metresPerCell,
+                         int components = 3);
 
     /// Single-layer form, unchanged: installs (or releases) layer 0.
     void setSurfaceLayer(const float* data, int width, int height,
-                         float originX, float originZ, float metresPerCell);
+                         float originX, float originZ, float metresPerCell,
+                         int components = 3);
 
     int surfaceLayerCount() const { return surfaceLayerCount_; }
 

@@ -187,12 +187,21 @@
 // clipmap.setForest({ albedo: [r,g,b], strength: 0..1 }) → clipmap
 //   Set L0 forest canopy tint color and blend strength.
 //
-// clipmap.setSurfaceLayer([index,] { data, width, height, originX, originZ, metresPerCell } | null) → clipmap
-//   Install a 3-channel RGB control map (width*height*3 Float32Array) at layer
-//   `index`, or release it with null. Finest-first and contiguous from 0, the
-//   same convention setHeightLayer uses, and blended by the same coverage ramp
-//   so material state and shape cross a layer edge together. Omitting the index
-//   addresses layer 0, which is what the single-layer form has always done.
+// clipmap.setSurfaceLayer([index,] { data, width, height, originX, originZ, metresPerCell, components } | null) → clipmap
+//   Install a control map (width*height*components Float32Array, components 3
+//   or 4, default 3) at layer `index`, or release it with null. Finest-first
+//   and contiguous from 0, the same convention setHeightLayer uses, and blended
+//   by the same coverage ramp so material state and shape cross a layer edge
+//   together. Omitting the index addresses layer 0, which is what the
+//   single-layer form has always done.
+//
+//   FOUR CHANNELS. Three was the width of the first caller, never a property of
+//   anything: drainage, sediment and hardness fill it exactly, leaving no room
+//   for the channel a coarse layer can carry most honestly — climate, which
+//   means the same thing at 32 m and at 2 km where a riverbank does not.
+//   Storage is RGBA internally either way, and a 3-component caller reads back
+//   w = 0, NOT GL's fill of 1.0: a channel nobody supplied should read as
+//   absent rather than as saturated.
 //
 //   Use the stack whenever the height stack has one. With a single control
 //   layer under a four-layer height pyramid, everything past the finest chart's

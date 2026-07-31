@@ -88,7 +88,7 @@ void cmMaterialAt(vec2 rel, float wy, vec3 n, float c, float cavity,
     // channels follow the height stack out to the coarsest layer instead of
     // stopping at the finest one's edge.
     float surfPresent = 0.0;
-    vec3 surfVal = cmSurface(rel + u_camXZ, surfPresent);
+    vec4 surfVal = cmSurface(rel + u_camXZ, surfPresent);
 
     // Rock wherever the surface is too steep to hold soil.
     float rock = smoothstep(0.10, 0.42, slope + 0.06 * coarse);

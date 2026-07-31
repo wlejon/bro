@@ -259,12 +259,12 @@ uniform float u_surfaceCount;
 // blurred hardness or moisture reads as a soft gradient, which is harmless,
 // whereas the height stack's mip choice exists to stop the DISPLACEMENT
 // aliasing and has no counterpart here.
-vec3 cmSurfLayer(sampler2D tex, vec3 a, vec2 sz, vec2 wxz, out float w) {
-    if (sz.x < 0.5 || sz.y < 0.5) { w = 0.0; return vec3(0.0); }
+vec4 cmSurfLayer(sampler2D tex, vec3 a, vec2 sz, vec2 wxz, out float w) {
+    if (sz.x < 0.5 || sz.y < 0.5) { w = 0.0; return vec4(0.0); }
     vec2 uv = ((wxz - a.xy) / a.z + 0.5) / sz;
     w = smoothstep(0.0, CM_FADE, cmEdge(uv, 0.0));
     vec2 half_ = 0.5 / sz;
-    return texture(tex, clamp(uv, half_, 1.0 - half_)).rgb;
+    return texture(tex, clamp(uv, half_, 1.0 - half_));
 }
 
 // Multi-scale control channels. Same shape as cmHeight: start from the coarsest
@@ -274,19 +274,19 @@ vec3 cmSurfLayer(sampler2D tex, vec3 a, vec2 sz, vec2 wxz, out float w) {
 // `present` comes back 0 when the stack is empty, so a caller can keep its
 // existing "no surface layer" branch rather than inventing a neutral value here
 // — what neutral MEANS is the material's business, not the clipmap's.
-vec3 cmSurface(vec2 wxz, out float present) {
+vec4 cmSurface(vec2 wxz, out float present) {
     float n = u_surfaceCount;
     present = n > 0.5 ? 1.0 : 0.0;
-    if (n < 0.5) return vec3(0.0);
+    if (n < 0.5) return vec4(0.0);
     float w = 0.0;
-    vec3 s = vec3(0.0);
+    vec4 s = vec4(0.0);
     if      (n > 3.5) s = cmSurfLayer(u_surface3, u_surf3A, u_surf3B, wxz, w);
     else if (n > 2.5) s = cmSurfLayer(u_surface2, u_surf2A, u_surf2B, wxz, w);
     else if (n > 1.5) s = cmSurfLayer(u_surface1, u_surf1A, u_surf1B, wxz, w);
     else              s = cmSurfLayer(u_surface,  u_surfA,  u_surfB,  wxz, w);
-    if (n > 3.5) { vec3 f = cmSurfLayer(u_surface2, u_surf2A, u_surf2B, wxz, w); s = mix(s, f, w); }
-    if (n > 2.5) { vec3 f = cmSurfLayer(u_surface1, u_surf1A, u_surf1B, wxz, w); s = mix(s, f, w); }
-    if (n > 1.5) { vec3 f = cmSurfLayer(u_surface,  u_surfA,  u_surfB,  wxz, w); s = mix(s, f, w); }
+    if (n > 3.5) { vec4 f = cmSurfLayer(u_surface2, u_surf2A, u_surf2B, wxz, w); s = mix(s, f, w); }
+    if (n > 2.5) { vec4 f = cmSurfLayer(u_surface1, u_surf1A, u_surf1B, wxz, w); s = mix(s, f, w); }
+    if (n > 1.5) { vec4 f = cmSurfLayer(u_surface,  u_surfA,  u_surfB,  wxz, w); s = mix(s, f, w); }
     return s;
 }
 
