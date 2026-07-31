@@ -91,7 +91,31 @@ public:
     int displayHeight() const { return quarterTurned() ? frameW_ : frameH_; }
 
     bool hasFrame() const { return cur_.valid; }
+
+    /// How long the media resource is: the longest of the tracks this pipeline
+    /// opened, and deliberately not the video track's own length.
+    ///
+    /// The two differ by more than a rounding. A soundtrack routinely runs a
+    /// fraction of a second past the last picture, and a second of animation
+    /// over six seconds of music is an ordinary file — which reported a
+    /// duration of 1 while it was the video track's length that was taken.
     TimeNs durationNs() const { return duration_; }
+
+    /// Where the CLOCK is, which after the last picture is not where
+    /// `currentPts()` is.
+    ///
+    /// `currentPts()` is the timestamp of the picture on screen, so it freezes
+    /// on the final frame — that is what a viewer is looking at, and it is the
+    /// right answer to "which frame". The clock is host time scaled by the
+    /// rate, so it goes on past that frame for as long as the resource does,
+    /// which is the only thing that can say whether a file whose sound outlives
+    /// its picture is over. See `ElVideo::isEnded`, the one caller.
+    ///
+    /// Deliberately NOT folded into `currentPts()`: two clocks arbitrating over
+    /// which frame to show is how A/V sync bugs are born, and `currentPts()` is
+    /// the one that answers that question. Safe from any thread — MediaClock
+    /// takes its own lock for one multi-field snapshot.
+    TimeNs clockNs() const { return clock_ ? clock_->nowNs() : 0; }
 
     /// True when this source has a video track this backend could decode.
     /// False for a sound-only file, which plays with no picture at all.
@@ -105,10 +129,20 @@ public:
     /// anchored to instead — the same clock that decides which frame to show
     /// when there is one.
     ///
-    /// The clock is a FALLBACK, taken only when there is no video track. Two
-    /// clocks arbitrating is how A/V sync bugs are born: with a picture the
-    /// pictures decide, always, and the sound is re-anchored to them.
-    TimeNs currentPts() const { return vdec_ ? cur_.pts : soundPos_; }
+    /// The clock is a FALLBACK, taken only when the pictures are not answering.
+    /// Two clocks arbitrating is how A/V sync bugs are born: for as long as
+    /// pictures are arriving they decide, always, and the sound is re-anchored
+    /// to them. There are two ways for them to stop answering and the second
+    /// was missed: a file with no video track at all, and a file whose pictures
+    /// have RUN OUT while its sound plays on. Holding the last frame's
+    /// timestamp through the rest of a soundtrack is an element that looks
+    /// stuck — no `timeupdate` fires, the position never reaches `duration`,
+    /// and then `ended` arrives from nowhere.
+    ///
+    /// Only while PLAYING, and clamped to the length. Paused at the end the
+    /// last picture's own timestamp is still the answer, which is what keeps a
+    /// seek reading back snapped to the frame it landed on.
+    TimeNs currentPts() const;
 
     /// Nominal frames per second as the container declares it, or 0 when it
     /// declares nothing. An average — a variable-frame-rate file still has
@@ -116,8 +150,13 @@ public:
     double frameRate() const { return frameRate_; }
 
     // True once the demuxer has returned no more packets and every decoded
-    // frame has been shown. Callers use this to fire the HTMLMediaElement
-    // "ended" event. Cleared by seekTo().
+    // frame has been shown. Cleared by seekTo().
+    //
+    // This is "the PICTURES have run out", which is not the same thing as "the
+    // resource is over" — a file can have six seconds of sound behind one
+    // second of picture. `ElVideo::isEnded` is the second question and is what
+    // the HTMLMediaElement "ended" event is fired from; this is a necessary
+    // half of it and was mistaken for the whole of it.
     bool isEnded() const { return endOfStream_ && staged_.empty(); }
 
     // Audio decode pulls packets as wall-clock advances; callers can drain

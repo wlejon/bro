@@ -409,8 +409,31 @@ bool ElVideo::isReady() const {
     return pipeline_ && (pipeline_->hasFrame() || !pipeline_->hasVideo());
 }
 
+// "Is the media resource over?" — which is not the question the pipeline
+// answers. Its EOS flag is the demuxer having no more packets and the decoder
+// having been drained: the PICTURES have run out. That was taken for the whole
+// answer for as long as every file's picture and its sound ended together, and
+// they do not. Measured: one second of h264 over six seconds of aac fired
+// 'ended' at 0.96 s and paused the element, so five seconds of sound were never
+// heard.
+//
+// So pictures running out is necessary and not sufficient — the clock has to
+// have reached the end of the resource too. The CLOCK, and not currentTime():
+// the last picture's timestamp falls one presentation interval short of the
+// declared duration by construction, so gating on that is a file that never
+// ends. That is why this used to be the raw EOS flag and why the fix is not
+// simply "compare t to duration".
+//
+// A resource that does not say how long it is keeps the old rule, because there
+// is no end for a clock to reach: a live source, and a single picture, whose
+// length libavformat genuinely reports as zero. One picture is no time at all,
+// and an element showing it with duration 0 and ended true at position 0 is
+// what the HTMLMediaElement contract says about a resource whose end is its
+// beginning — not a gap to be papered over with an invented length.
 bool ElVideo::isEnded() const {
-    return pipeline_ && pipeline_->isEnded();
+    if (!pipeline_ || !pipeline_->isEnded()) return false;
+    const auto durationNs = pipeline_->durationNs();
+    return durationNs <= 0 || pipeline_->clockNs() >= durationNs;
 }
 
 void ElVideo::setVolume(double v) {
@@ -613,7 +636,6 @@ void ElVideo::pumpEvents() {
     }
 
     const double t = currentTime();
-    const double dur = duration();
 
     // waiting / playing: while the clock advances but no decoded frame is
     // available, the element is "stalled at the edge of decoded data". Fire
@@ -651,12 +673,9 @@ void ElVideo::pumpEvents() {
         }
     }
 
-    // ended: fire once when the demuxer has drained and we've decoded the
-    // last frame. Gate on the pipeline's own EOS flag rather than comparing
-    // t to duration — the last packet's pts typically falls short of the
-    // container-reported duration by one frame's worth of time.
-    (void)dur;
-    if (!endedFired_ && pipeline_->isEnded() && isReady()) {
+    // ended: fire once when the resource is over — see isEnded(), which is
+    // where the "over" is decided and why it is not simply the last picture.
+    if (!endedFired_ && isEnded() && isReady()) {
         endedFired_ = true;
         pipeline_->pause();
         stopAudioPlayback();

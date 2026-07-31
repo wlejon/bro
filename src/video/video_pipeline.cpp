@@ -33,6 +33,7 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
     vdec_.reset();
     adec_.reset();
 
+    TimeNs videoDuration = 0;
     TimeNs audioDuration = 0;
 
     for (const auto& t : source->tracks()) {
@@ -43,7 +44,7 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
             videoTrackId_ = t.id;
             frameW_ = static_cast<int>(t.width);
             frameH_ = static_cast<int>(t.height);
-            duration_ = t.durationNs;
+            videoDuration = t.durationNs;
             frameRate_ = t.frameRate;
             // Only quarter turns; anything else is a transform this pipeline
             // cannot express as a display size, and a size that is wrong is
@@ -68,6 +69,17 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
     // Nothing decodable at all: not ours, let the next backend try.
     if (!vdec_ && !adec_) return false;
 
+    // The resource is as long as the longest thing in it, which is NOT the
+    // video track's own length. That is what this used to report whenever
+    // there was a picture, and the two differ by more than a rounding: a
+    // soundtrack routinely runs a fraction of a second past the last picture,
+    // and a second of animation over six seconds of music is an ordinary file.
+    // Measured, before this line existed: 1 s of h264 beside 6 s of aac gave
+    // `<video>.duration === 1`, and the element stopped there with five
+    // seconds of music still to come. The pictures decide which frame is on
+    // screen and nothing else.
+    duration_ = videoDuration > audioDuration ? videoDuration : audioDuration;
+
     if (!vdec_) {
         // Sound only. There is no picture, so there is nothing for this
         // source to pump — the sound plays from a second demuxer the same way
@@ -75,7 +87,6 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
         // to what it always also was: a clock, a length, and an end. It is
         // still opened rather than refused, because a file with no video track
         // is a file that plays, and refusing it here is why one could not.
-        duration_ = audioDuration;
         source->setActiveTracks({});
         source_ = std::move(source);
         return true;
@@ -104,6 +115,18 @@ bool VideoPipeline::open(const std::string& path) {
         }
     }
     return false;
+}
+
+TimeNs VideoPipeline::currentPts() const {
+    if (!vdec_) return soundPos_;
+    // The pictures answer for as long as there are any. Once they have run out
+    // the clock takes over — see the header for why that is not a second clock
+    // arbitrating — and it is clamped to the length so a position can never be
+    // reported past the end of the resource it belongs to.
+    if (!clock_ || !clock_->isPlaying() || !isEnded()) return cur_.pts;
+    const TimeNs now = clock_->nowNs();
+    if (now <= cur_.pts) return cur_.pts;
+    return duration_ > 0 && now > duration_ ? duration_ : now;
 }
 
 void VideoPipeline::play() { if (clock_) clock_->setPlaying(true); }

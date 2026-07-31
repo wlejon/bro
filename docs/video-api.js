@@ -308,10 +308,22 @@ v.pause();
 //                          'seeking' → 'seeked' → 'timeupdate' in one go.
 //                          Because seeks complete inline, v.seeking always
 //                          reads false.
-// v.duration, container duration in seconds; NaN until a
-//                          resource is loaded.
+// v.duration, how long the resource is, in seconds; NaN until one
+//                          is loaded. The LONGEST track in it, not the video
+//                          track's own length — a soundtrack routinely runs
+//                          past the last picture, and a short animation over a
+//                          longer piece of music is an ordinary file.
 // v.paused, v.ended, booleans. Seeking away from the end re-arms
-//                          'ended' so it can fire again.
+//                          'ended' so it can fire again. `ended` means the
+//                          resource is over, which is not the same as the
+//                          pictures having run out: a file whose sound
+//                          outlives its picture holds the final frame on
+//                          screen and goes on playing to the end of the
+//                          sound. A resource with no length to reach —
+//                          a single picture, which really is no time at all —
+//                          reads duration 0 and ended true at position 0,
+//                          which is what the spec says about a resource whose
+//                          end is its beginning.
 // v.buffered, v.seekable, TimeRanges-shaped objects ({length, start(i),
 //                          end(i)}) covering one run [0, duration]: local
 //                          files decode sequentially with no gaps.
@@ -441,8 +453,13 @@ v.playbackRate = 2.0;
 //   timeupdate, while playing, throttled to ~250 ms of media time;
 //                     also once after each seek.
 //   waiting/playing, decoder stall at the edge of decoded data / recovery.
-//   ended, pipeline drained and last frame decoded (not while
-//                     v.loop is set).
+//   ended, the resource is over: the pictures have run out AND
+//                     the clock has reached `duration` (not while v.loop is
+//                     set). Both halves are needed — the last picture's
+//                     timestamp falls one presentation interval short of
+//                     `duration` by construction, so the clock is what says
+//                     the file is finished, and it is the clock that keeps
+//                     moving under a soundtrack that outlives the picture.
 //   volumechange, volume or muted actually changed.
 //   ratechange, playbackRate actually changed.
 //
