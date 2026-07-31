@@ -2082,11 +2082,19 @@ class SceneNode {
    * Texture-unit budget: the material uber-shader owns units 0-9 (baseColor
    * 0, shadow atlas 1, IBL irradiance/prefilter/BRDF 2/3/4, normal 5,
    * metallic-roughness 6, AO 7, emissive 8, reflection probe 9). User
-   * samplers start at unit **10**, and GL 3.3 guarantees only 16 combined
-   * texture image units, so a node may bind at most **6** sampler
-   * uniforms. Asking for a 7th throws rather than reusing a material unit,
-   * where the collision would silently corrupt material sampling instead of
-   * erroring. Releasing a slot frees its unit for a later name.
+   * samplers start at unit **10**, and the budget above that is the value
+   * GL actually reports for `GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS` — not the
+   * spec minimum. GL 3.3 guarantees 16, which would leave 6 slots, but every
+   * desktop driver reports far more (32-192 is typical), so a node normally
+   * gets tens of samplers rather than six. 16 is treated as a floor, so the
+   * old 6-slot guarantee always holds. Asking for one past the limit throws
+   * rather than reusing a material unit, where the collision would silently
+   * corrupt material sampling instead of erroring. Releasing a slot frees its
+   * unit for a later name.
+   *
+   * Do not hardcode a slot count in application code — a machine reporting
+   * the 16-unit minimum genuinely gives 6, and the error message reports what
+   * this GL actually has.
    *
    * Passing null/undefined releases the slot (the GL texture is deleted on
    * the GL thread). Setting a name the shader never declares is silently

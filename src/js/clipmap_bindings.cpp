@@ -240,20 +240,38 @@ static JSValue js_clipmap_setSurfaceLayer(JSContext* ctx, JSValueConst this_val,
     auto* self = qjsbind::unwrap<CW>(ctx, this_val);
     if (!self || !self->terrain) return JS_DupValue(ctx, this_val);
 
-    if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
-        self->terrain->setSurfaceLayer(nullptr, 0, 0, 0, 0, 1);
+    // Two shapes, because this used to take no index and existing callers pass
+    // the spec first: setSurfaceLayer(spec) is layer 0, setSurfaceLayer(index,
+    // spec) addresses the stack. Distinguished on the FIRST argument's type,
+    // not on argc, so setSurfaceLayer(2, null) releases layer 2 rather than
+    // looking like a one-argument release of layer 0.
+    int idx = 0;
+    int specArg = 0;
+    if (argc >= 1 && JS_IsNumber(argv[0])) {
+        int32_t i = 0;
+        JS_ToInt32(ctx, &i, argv[0]);
+        if (i < 0 || i >= scene::ClipmapTerrain::kMaxLayers)
+            return JS_ThrowRangeError(ctx,
+                "setSurfaceLayer: index %d out of range [0, %d)",
+                i, scene::ClipmapTerrain::kMaxLayers);
+        idx = i;
+        specArg = 1;
+    }
+
+    if (argc <= specArg || JS_IsNull(argv[specArg]) || JS_IsUndefined(argv[specArg])) {
+        self->terrain->setSurfaceLayer(idx, nullptr, 0, 0, 0, 0, 1);
         return JS_DupValue(ctx, this_val);
     }
-    if (!JS_IsObject(argv[0]))
+    if (!JS_IsObject(argv[specArg]))
         return JS_ThrowTypeError(ctx,
-            "setSurfaceLayer: expected { data, width, height, originX, "
+            "setSurfaceLayer: expected [index,] { data, width, height, originX, "
             "originZ, metresPerCell } or null");
 
-    const int width  = qjsbind::get_prop_int(ctx, argv[0], "width", 0);
-    const int height = qjsbind::get_prop_int(ctx, argv[0], "height", 0);
-    const double originX = qjsbind::get_prop_number(ctx, argv[0], "originX", 0.0);
-    const double originZ = qjsbind::get_prop_number(ctx, argv[0], "originZ", 0.0);
-    const double mpc = qjsbind::get_prop_number(ctx, argv[0], "metresPerCell", 1.0);
+    const int width  = qjsbind::get_prop_int(ctx, argv[specArg], "width", 0);
+    const int height = qjsbind::get_prop_int(ctx, argv[specArg], "height", 0);
+    const double originX = qjsbind::get_prop_number(ctx, argv[specArg], "originX", 0.0);
+    const double originZ = qjsbind::get_prop_number(ctx, argv[specArg], "originZ", 0.0);
+    const double mpc = qjsbind::get_prop_number(ctx, argv[specArg], "metresPerCell", 1.0);
     if (width <= 0 || height <= 0)
         return JS_ThrowTypeError(ctx,
             "setSurfaceLayer: width and height must be positive");
@@ -261,7 +279,7 @@ static JSValue js_clipmap_setSurfaceLayer(JSContext* ctx, JSValueConst this_val,
         return JS_ThrowTypeError(ctx,
             "setSurfaceLayer: metresPerCell must be positive");
 
-    JSValue dataVal = JS_GetPropertyStr(ctx, argv[0], "data");
+    JSValue dataVal = JS_GetPropertyStr(ctx, argv[specArg], "data");
     size_t byteOff = 0, viewLen = 0;
     JSValue abuf = JS_GetTypedArrayBuffer(ctx, dataVal, &byteOff, &viewLen, nullptr);
     if (JS_IsException(abuf)) {
@@ -281,7 +299,7 @@ static JSValue js_clipmap_setSurfaceLayer(JSContext* ctx, JSValueConst this_val,
             viewLen, want, width, height);
     }
 
-    self->terrain->setSurfaceLayer(reinterpret_cast<const float*>(ptr + byteOff),
+    self->terrain->setSurfaceLayer(idx, reinterpret_cast<const float*>(ptr + byteOff),
                                    width, height, static_cast<float>(originX),
                                    static_cast<float>(originZ),
                                    static_cast<float>(mpc));

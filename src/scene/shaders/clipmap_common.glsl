@@ -228,6 +228,68 @@ float cmHeight(vec2 wxz, float cDesired) {
     return u_seaLevel + u_heightScale * h;
 }
 
+// --- surface (control-channel) layers ---------------------------------------
+//
+// Three channels per texel describing what the ground IS rather than where it
+// is, on the same footing as the height stack: finest-first, contiguous from 0,
+// blended by the identical coverage ramp so control data and height cross a
+// layer edge together. They used to be a single layer, which made every channel
+// a property of the finest chart and left the other 90% of a wide frame with
+// either one clamped texel or a fade to neutral.
+//
+// The blend is LINEAR PER CHANNEL. That is correct for a quantity and wrong for
+// an ID — see ClipmapTerrain::setSurfaceLayer for the argument. Do not put a
+// biome index in here and expect it to survive a fade.
+uniform sampler2D u_surface;    // finest ... u_surface3 coarsest
+uniform sampler2D u_surface1;
+uniform sampler2D u_surface2;
+uniform sampler2D u_surface3;
+uniform vec3  u_surfA;          // (originX, originZ, metresPerCell) per layer
+uniform vec2  u_surfB;          // (width, height) in texels
+uniform vec3  u_surf1A;
+uniform vec2  u_surf1B;
+uniform vec3  u_surf2A;
+uniform vec2  u_surf2B;
+uniform vec3  u_surf3A;
+uniform vec2  u_surf3B;
+uniform float u_surfaceCount;
+
+// One surface layer's sample plus its coverage weight. Control channels are
+// sampled at level 0 rather than through a fractional mip like cmLayer: a
+// blurred hardness or moisture reads as a soft gradient, which is harmless,
+// whereas the height stack's mip choice exists to stop the DISPLACEMENT
+// aliasing and has no counterpart here.
+vec3 cmSurfLayer(sampler2D tex, vec3 a, vec2 sz, vec2 wxz, out float w) {
+    if (sz.x < 0.5 || sz.y < 0.5) { w = 0.0; return vec3(0.0); }
+    vec2 uv = ((wxz - a.xy) / a.z + 0.5) / sz;
+    w = smoothstep(0.0, CM_FADE, cmEdge(uv, 0.0));
+    vec2 half_ = 0.5 / sz;
+    return texture(tex, clamp(uv, half_, 1.0 - half_)).rgb;
+}
+
+// Multi-scale control channels. Same shape as cmHeight: start from the coarsest
+// present layer, blend each finer one in by its coverage weight. Unrolled for
+// the same reason — GL 3.3 cannot index a sampler array dynamically.
+//
+// `present` comes back 0 when the stack is empty, so a caller can keep its
+// existing "no surface layer" branch rather than inventing a neutral value here
+// — what neutral MEANS is the material's business, not the clipmap's.
+vec3 cmSurface(vec2 wxz, out float present) {
+    float n = u_surfaceCount;
+    present = n > 0.5 ? 1.0 : 0.0;
+    if (n < 0.5) return vec3(0.0);
+    float w = 0.0;
+    vec3 s = vec3(0.0);
+    if      (n > 3.5) s = cmSurfLayer(u_surface3, u_surf3A, u_surf3B, wxz, w);
+    else if (n > 2.5) s = cmSurfLayer(u_surface2, u_surf2A, u_surf2B, wxz, w);
+    else if (n > 1.5) s = cmSurfLayer(u_surface1, u_surf1A, u_surf1B, wxz, w);
+    else              s = cmSurfLayer(u_surface,  u_surfA,  u_surfB,  wxz, w);
+    if (n > 3.5) { vec3 f = cmSurfLayer(u_surface2, u_surf2A, u_surf2B, wxz, w); s = mix(s, f, w); }
+    if (n > 2.5) { vec3 f = cmSurfLayer(u_surface1, u_surf1A, u_surf1B, wxz, w); s = mix(s, f, w); }
+    if (n > 1.5) { vec3 f = cmSurfLayer(u_surface,  u_surfA,  u_surfB,  wxz, w); s = mix(s, f, w); }
+    return s;
+}
+
 // Desired cell size at a world position — a CONTINUOUS function of distance
 // from the camera, never of the discrete level index. That continuity is what
 // keeps the displacement single-valued across a ring boundary.

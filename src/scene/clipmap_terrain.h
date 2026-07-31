@@ -144,8 +144,38 @@ public:
     /// L0 forest canopy tint: recolour forest-biome ground toward `albedo`
     /// (linear rgb) at `strength` in [0,1]. strength 0 disables it.
     void setForest(const float* albedo, float strength);
+    /// Install (or, with data == nullptr, release) surface layer `index`:
+    /// three control channels per texel, resampled and blended by exactly the
+    /// same coverage rule the height layers use. Finest-first and contiguous
+    /// from 0, like setHeightLayer.
+    ///
+    /// WHY THIS IS INDEXED. It used to store one struct and take no index,
+    /// which quietly made control channels a property of the FINEST layer
+    /// alone. That is fine for a single-chart world and wrong for a stack: a
+    /// clipmap reaching 262 km with a 33 km fine layer has one layer's drainage
+    /// and lithology painted, clamped, across an entire aerial frame — or faded
+    /// to neutral, which is the same information loss wearing a nicer coat. A
+    /// height pyramid whose control channels stop at layer 0 describes the
+    /// shape of distant ground and nothing about what it is made of.
+    ///
+    /// THE ONE CAVEAT, and it is a real one: the blend is LINEAR PER CHANNEL,
+    /// because that is what the height blend is and two different rules across
+    /// the same seam is worse than one imperfect rule. A channel carrying a
+    /// QUANTITY (moisture, drainage, hardness, temperature) blends correctly. A
+    /// channel carrying an ID does not — halfway across a fade between biome 5
+    /// and biome 8 the sample reads 6.5, which is a biome nobody defined. Keep
+    /// IDs on one layer, or carry them as a set of weights, which is what they
+    /// should have been anyway. Note that bilinear filtering inside a single
+    /// layer already does this to an ID channel at every texel boundary, so
+    /// this is a sharper version of a knife the API already had.
+    void setSurfaceLayer(int index, const float* data, int width, int height,
+                         float originX, float originZ, float metresPerCell);
+
+    /// Single-layer form, unchanged: installs (or releases) layer 0.
     void setSurfaceLayer(const float* data, int width, int height,
                          float originX, float originZ, float metresPerCell);
+
+    int surfaceLayerCount() const { return surfaceLayerCount_; }
 
     /// Per frame: park the node on the camera and push the camera uniforms.
     void update(float camX, float camY, float camZ);
@@ -311,7 +341,14 @@ private:
         float originZ = 0.0f;
         float metresPerCell = 1.0f;
         bool present = false;
-    } surf_;
+    };
+    // Same count as the height stack: a control layer without a height layer
+    // under it has nothing to describe, and the reverse is the gap this exists
+    // to close.
+    SurfaceLayer surf_[kMaxLayers];
+    int surfaceLayerCount_ = 0;
+
+    void pushSurfaceUniforms();
 };
 
 } // namespace bro::scene

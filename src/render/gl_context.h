@@ -8,6 +8,31 @@ namespace bro::platform { class Window; }
 
 namespace bro::render {
 
+// --- GL capabilities, latched once from the GL thread ------------------------
+//
+// Queried limits rather than the spec's guaranteed minimums, for the one case
+// where the difference is the difference between a feature existing and not:
+// combined texture image units. GL 3.3 guarantees 16 and every desktop driver
+// this runs on reports far more (32 to 192 is the usual range), so hardcoding
+// the guarantee spends a budget the hardware does not actually impose.
+//
+// This lives in the render layer because that is where a current context is,
+// and scene/ may include render/ but not the other way round. It is latched in
+// GLContext's constructor and read from anywhere afterwards.
+//
+// Both accessors are safe before the latch: they return the GL 3.3 guaranteed
+// minimum, which is what the code assumed unconditionally before. A caller that
+// runs early therefore gets the old, conservative answer rather than a wrong
+// one — the failure mode is "fewer slots than the hardware has", never "more".
+struct GLCaps {
+    /// GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS, never reported below the GL 3.3
+    /// guaranteed minimum of 16 even if a driver claims less.
+    static int combinedTextureImageUnits();
+
+    /// Called once, from the GL thread, with a context current.
+    static void latch();
+};
+
 struct ColorVertex {
     float x, y;
     float r, g, b, a;

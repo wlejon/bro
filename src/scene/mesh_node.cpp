@@ -1,5 +1,6 @@
 #include "scene/mesh_node.h"
 #include "scene/scene_graph.h"
+#include "render/gl_context.h"
 #include "util/log.h"
 
 #include <bromesh/analysis/bbox.h>
@@ -8,6 +9,18 @@
 #include <algorithm>
 
 namespace bro::scene {
+
+// The user-sampler budget, from the queried GL limit rather than the spec
+// minimum. Defined here rather than inline in the header so scene/ does not
+// have to pull glad into every translation unit that includes mesh_node.h.
+int MeshNode::userTextureUnitLimit() {
+    return render::GLCaps::combinedTextureImageUnits();
+}
+
+int MeshNode::maxUserTextures() {
+    const int n = userTextureUnitLimit() - kUserTextureUnitBase;
+    return n > 0 ? n : 0;
+}
 
 MeshNode::MeshNode(const std::string& name) : SceneNode(name) {}
 
@@ -262,7 +275,7 @@ bool MeshNode::setCustomShaderTexture(const std::string& name, int width,
         return true;
     }
     if (release) return true;   // releasing an unknown slot is a no-op
-    if ((int)userTextures_.size() >= kMaxUserTextures) return false;
+    if ((int)userTextures_.size() >= maxUserTextures()) return false;
     UserTexture t;
     t.name = name;
     t.data.assign(data, data + (size_t)width * (size_t)height * (size_t)channels);

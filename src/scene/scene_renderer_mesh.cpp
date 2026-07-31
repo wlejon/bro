@@ -259,7 +259,7 @@ void SceneRenderer::uploadUserTextures(
     mesh->flushPendingTextures();
     int unit = MeshNode::kUserTextureUnitBase;
     for (const auto& t : mesh->customShaderTextures()) {
-        if (unit >= MeshNode::kUserTextureUnitLimit) break;  // budget checked at set time
+        if (unit >= MeshNode::userTextureUnitLimit()) break;  // budget checked at set time
         if (!t.tex) continue;
         GLint loc;
         auto it = cache.find(t.name);
