@@ -255,6 +255,13 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
 
     // window = globalThis
     JS_SetPropertyStr(ctx, global, "window", JS_DupValue(ctx, global));
+    // self = globalThis. Standard WindowOrWorkerGlobalScope.self, and the
+    // document realm is the only one that was missing it — worker realms
+    // already install it (src/js/worker.cpp). Libraries feature-detect on it
+    // constantly: three.js guards `if (typeof self !== 'undefined')` before
+    // wiring its animation loop, so without this every three.js app dies on
+    // renderer.setAnimationLoop() with a null-context deref.
+    JS_SetPropertyStr(ctx, global, "self", JS_DupValue(ctx, global));
     JS_SetPropertyStr(ctx, global, "devicePixelRatio",
                       JS_NewFloat64(ctx, devicePixelRatio));
     JS_SetPropertyStr(ctx, global, "innerWidth", JS_NewInt32(ctx, viewportWidth));
