@@ -25,6 +25,18 @@ const char* kLayerA[ClipmapTerrain::kMaxLayers] = {"u_l0a", "u_l1a", "u_l2a", "u
 const char* kLayerB[ClipmapTerrain::kMaxLayers] = {"u_l0b", "u_l1b", "u_l2b", "u_l3b"};
 const char* kLayerTex[ClipmapTerrain::kMaxLayers] = {"u_h0", "u_h1", "u_h2", "u_h3"};
 
+// Surface (control-channel) layers. Layer 0 keeps the unnumbered names it has
+// always had — `u_surface`, `u_surfA`, `u_surfB` — because shaders written
+// against the single-layer API read them by name, and renaming for symmetry
+// would break every one of them to no visual end. The stack extends upward from
+// there.
+const char* kSurfTex[ClipmapTerrain::kMaxLayers] =
+    {"u_surface", "u_surface1", "u_surface2", "u_surface3"};
+const char* kSurfA[ClipmapTerrain::kMaxLayers] =
+    {"u_surfA", "u_surf1A", "u_surf2A", "u_surf3A"};
+const char* kSurfB[ClipmapTerrain::kMaxLayers] =
+    {"u_surfB", "u_surf1B", "u_surf2B", "u_surf3B"};
+
 // Must match CM_FADE in clipmap.vert.glsl / clipmap.frag.glsl.
 constexpr float kFade = 0.08f;
 
@@ -82,10 +94,12 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
         node_->setCustomShaderTexture(kLayerTex[i], 1, 1, &zero, true);
 
     const float zero3[3] = {0.0f, 0.0f, 0.0f};
-    node_->setCustomShaderTexture("u_surface", 1, 1, zero3, false, false, true, 3);
+    for (int i = 0; i < kMaxLayers; ++i)
+        node_->setCustomShaderTexture(kSurfTex[i], 1, 1, zero3, false, false, true, 3);
 
     pushStaticUniforms();
     pushLayerUniforms();
+    pushSurfaceUniforms();
     update(0.0f, 0.0f, 0.0f);
 }
 
@@ -731,29 +745,61 @@ void ClipmapTerrain::setMaterials(const float* rockAlbedo, float rockRoughness,
 
 void ClipmapTerrain::setSurfaceLayer(const float* data, int width, int height,
                                      float originX, float originZ, float metresPerCell) {
+    setSurfaceLayer(0, data, width, height, originX, originZ, metresPerCell);
+}
+
+void ClipmapTerrain::setSurfaceLayer(int index, const float* data, int width, int height,
+                                     float originX, float originZ, float metresPerCell) {
     if (!node_) return;
+    if (index < 0 || index >= kMaxLayers) return;
+
+    SurfaceLayer& s = surf_[index];
     if (!data || width <= 0 || height <= 0) {
-        surf_.data.clear();
-        surf_.width = surf_.height = 0;
-        surf_.present = false;
+        s.data.clear();
+        s.width = s.height = 0;
+        s.present = false;
         const float zero3[3] = {0.0f, 0.0f, 0.0f};
-        node_->setCustomShaderTexture("u_surface", 1, 1, zero3, false, false, true, 3);
+        node_->setCustomShaderTexture(kSurfTex[index], 1, 1, zero3, false, false, true, 3);
     } else {
-        surf_.data.assign(data, data + (size_t)width * height * 3);
-        surf_.width = width;
-        surf_.height = height;
-        surf_.originX = originX;
-        surf_.originZ = originZ;
-        surf_.metresPerCell = metresPerCell;
-        surf_.present = true;
-        node_->setCustomShaderTexture("u_surface", width, height, surf_.data.data(), false, false, true, 3);
+        s.data.assign(data, data + (size_t)width * height * 3);
+        s.width = width;
+        s.height = height;
+        s.originX = originX;
+        s.originZ = originZ;
+        s.metresPerCell = metresPerCell;
+        s.present = true;
+        node_->setCustomShaderTexture(kSurfTex[index], width, height, s.data.data(),
+                                      false, false, true, 3);
     }
 
-    float a[3] = {surf_.originX, surf_.originZ, surf_.metresPerCell};
-    float b[2] = {surf_.present ? (float)surf_.width : 0.0f, surf_.present ? (float)surf_.height : 0.0f};
-    float present = surf_.present ? 1.0f : 0.0f;
-    node_->setCustomShaderUniform("u_surfA", 3, a);
-    node_->setCustomShaderUniform("u_surfB", 2, b);
+    // Contiguous run from 0, exactly like the height stack: the shader's blend
+    // starts from the coarsest PRESENT layer and a hole in the middle would make
+    // "coarsest present" mean something different per fragment.
+    surfaceLayerCount_ = 0;
+    for (int i = 0; i < kMaxLayers && surf_[i].present; ++i) surfaceLayerCount_ = i + 1;
+
+    pushSurfaceUniforms();
+}
+
+void ClipmapTerrain::pushSurfaceUniforms() {
+    if (!node_) return;
+    for (int i = 0; i < kMaxLayers; ++i) {
+        const SurfaceLayer& s = surf_[i];
+        const float a[3] = {s.originX, s.originZ,
+                            s.metresPerCell > 0.0f ? s.metresPerCell : 1.0f};
+        const float b[2] = {s.present ? static_cast<float>(s.width) : 0.0f,
+                            s.present ? static_cast<float>(s.height) : 0.0f};
+        node_->setCustomShaderUniform(kSurfA[i], 3, a);
+        node_->setCustomShaderUniform(kSurfB[i], 2, b);
+    }
+    const float n = static_cast<float>(surfaceLayerCount_);
+    node_->setCustomShaderUniform("u_surfaceCount", 1, &n);
+
+    // u_surfPresent is layer 0's own flag and is kept because shaders written
+    // against the single-layer API branch on it. It means exactly what it always
+    // meant — "is there a finest control layer" — and stays truthful under the
+    // stack; `u_surfaceCount` is what a multi-layer shader reads.
+    const float present = surf_[0].present ? 1.0f : 0.0f;
     node_->setCustomShaderUniform("u_surfPresent", 1, &present);
 }
 

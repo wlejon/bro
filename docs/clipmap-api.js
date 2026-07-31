@@ -187,8 +187,29 @@
 // clipmap.setForest({ albedo: [r,g,b], strength: 0..1 }) → clipmap
 //   Set L0 forest canopy tint color and blend strength.
 //
-// clipmap.setSurfaceLayer({ data, width, height, originX, originZ, metresPerCell }) → clipmap
-//   Install a 3-channel RGB surface map (width*height*3 Float32Array).
+// clipmap.setSurfaceLayer([index,] { data, width, height, originX, originZ, metresPerCell } | null) → clipmap
+//   Install a 3-channel RGB control map (width*height*3 Float32Array) at layer
+//   `index`, or release it with null. Finest-first and contiguous from 0, the
+//   same convention setHeightLayer uses, and blended by the same coverage ramp
+//   so material state and shape cross a layer edge together. Omitting the index
+//   addresses layer 0, which is what the single-layer form has always done.
+//
+//   Use the stack whenever the height stack has one. With a single control
+//   layer under a four-layer height pyramid, everything past the finest chart's
+//   edge is shaded from geometry alone — a 33 km window of material state
+//   inside a stack reaching hundreds of kilometres.
+//
+//   The blend is LINEAR PER CHANNEL, so a channel holding a QUANTITY (moisture,
+//   drainage, hardness) is fine and a channel holding an ID is not: halfway
+//   through a fade between biome 5 and biome 8 the sample reads 6.5. Keep IDs
+//   on one layer or carry them as weights.
+//
+//   A threshold read off a control channel should be expressed in the LAYER'S
+//   OWN units, not in absolute ones. A contributing-area channel is the worked
+//   example: a cell's area includes its own, so a 2 km cell reports a floor of
+//   several km² and every cell in that layer trips an absolute "this is a
+//   river" test. Subtract the layer's own floor, or fade the term out where the
+//   cell is too coarse to resolve what it is claiming to show.
 //
 // clipmap.coverageDistance(eyeAboveSeaLevel) → Number
 //   Radius in metres across which height data is required for a camera at eyeAboveSeaLevel.

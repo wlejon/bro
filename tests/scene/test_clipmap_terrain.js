@@ -536,6 +536,103 @@ if (!scene) {
             `chart (${meanAbsDiff(mixOn, mixOff).toFixed(2)})`);
     }
 
+    // =====================================================================
+    // Surface layers are a STACK, not a single chart.
+    //
+    // Before they were indexed, control channels were a property of the finest
+    // layer alone: a terrain reaching hundreds of kilometres had one chart's
+    // biome/moisture/temperature and nothing beyond its edge. The test that
+    // matters is therefore about GROUND THE FINE LAYER DOES NOT COVER — an
+    // assertion taken inside its footprint would pass on the old code too.
+    // =====================================================================
+    {
+        const opts = { levels: 8, resolution: 64, cellSize: 1 };
+        const flat = () => 0;
+        const height = (w, mpc) => makeLayer(w, w, -(w * mpc) / 2, -(w * mpc) / 2, mpc, flat);
+
+        // Three channels per texel. `v` is written to all three so a difference
+        // shows whichever the material happens to read.
+        function surf(w, mpc, v) {
+            const data = new Float32Array(w * w * 3);
+            data.fill(v);
+            const span = w * mpc;
+            return { data, width: w, height: w,
+                     originX: -span / 2, originZ: -span / 2, metresPerCell: mpc };
+        }
+
+        // A fine 4 km window inside a coarse 128 km one. The camera looks at
+        // ground ~20 km out, well outside the fine layer, so what is shaded
+        // there can only have come from the coarse surface layer.
+        function shot(surfaces) {
+            const t = scene.createClipmapTerrain(opts);
+            t.setHeightLayer(0, height(64, 64));      //   4.1 km span
+            t.setHeightLayer(1, height(64, 2048));    // 131 km span
+            for (const [i, desc] of surfaces) t.setSurfaceLayer(i, desc);
+            scene.setCamera({
+                fov: 60, near: 1, far: 200000, position: [0, 3000, 0],
+                target: [0, 0, 20000], up: [0, 1, 0],
+            });
+            t.update(0, 3000, 0);
+            const img = scene.captureFrame();
+            t.destroy();
+            return img;
+        }
+        const meanDiff = (a, b) => {
+            let s = 0;
+            for (let i = 0; i < a.data.length; i++) s += Math.abs(a.data[i] - b.data[i]);
+            return s / a.data.length;
+        };
+
+        // Layer 0 alone, versus layer 0 plus a coarse layer that says something
+        // different. If only the finest layer were consulted these would match.
+        const fineOnly = shot([[0, surf(64, 64, 0.0)]]);
+        const stacked  = shot([[0, surf(64, 64, 0.0)], [1, surf(64, 2048, 0.9)]]);
+        assert(meanDiff(stacked, fineOnly) > 0.5,
+            `a coarse surface layer shades ground the fine one does not cover ` +
+            `(${meanDiff(stacked, fineOnly).toFixed(2)})`);
+
+        // The single-argument form still addresses layer 0 — the whole reason
+        // index 0 kept the unnumbered uniform names.
+        function shotLegacy() {
+            const t = scene.createClipmapTerrain(opts);
+            t.setHeightLayer(0, height(64, 64));
+            t.setHeightLayer(1, height(64, 2048));
+            t.setSurfaceLayer(surf(64, 64, 0.0));     // no index
+            scene.setCamera({
+                fov: 60, near: 1, far: 200000, position: [0, 3000, 0],
+                target: [0, 0, 20000], up: [0, 1, 0],
+            });
+            t.update(0, 3000, 0);
+            const img = scene.captureFrame();
+            t.destroy();
+            return img;
+        }
+        assert(meanDiff(shotLegacy(), fineOnly) === 0,
+            'setSurfaceLayer(desc) is exactly setSurfaceLayer(0, desc)');
+
+        // Releasing a layer must actually release it, or a stale chart keeps
+        // shading ground its owner thinks it gave back.
+        const released = shot([[0, surf(64, 64, 0.0)], [1, surf(64, 2048, 0.9)],
+                               [1, null]]);
+        assert(meanDiff(released, fineOnly) === 0,
+            'releasing a surface layer restores the shorter stack exactly');
+
+        // Out-of-range indices throw rather than silently landing somewhere.
+        let threw = false;
+        const probe = scene.createClipmapTerrain(opts);
+        try {
+            probe.setSurfaceLayer(9, surf(8, 64, 0.5));
+        } catch (e) {
+            threw = true;
+        } finally {
+            // Created outside the try so the throw cannot leak it — a leaked
+            // terrain survives to teardown and fails the run somewhere with no
+            // relation to the assertion that caused it.
+            probe.destroy();
+        }
+        assert(threw, 'setSurfaceLayer rejects an out-of-range index');
+    }
+
     cm.destroy();
     assert(cm.node === null, 'destroy() releases the node');
     // Destroy is idempotent and every accessor stays safe afterwards.

@@ -28,10 +28,9 @@ uniform float u_roughnessGrass;
 uniform vec3  u_albedoForest;  // L0 canopy albedo (linear) for the forest tint
 uniform float u_forestTint;    // 0..1 strength of the forest recolour (0 = off)
 
-uniform sampler2D u_surface;  // surface layer: R=biome, G=moisture, B=temperature
-uniform vec3 u_surfA;         // (originX, originZ, metresPerCell)
-uniform vec2 u_surfB;         // (width, height)
-uniform float u_surfPresent;  // 1.0 if present, 0.0 otherwise
+// u_surface / u_surfA / u_surfB and the rest of the surface stack are declared
+// in clipmap_common.glsl, which is prepended to this chunk. Channels here are
+// R=biome, G=moisture, B=temperature.
 
 // Mottling scales, metres. Coarse breaks up the large flat washes; fine is the
 // scale you notice underfoot.
@@ -83,14 +82,13 @@ void cmMaterialAt(vec2 rel, float wy, vec3 n, float c, float cavity,
 
     float slope = clamp(1.0 - n.y, 0.0, 1.0);
 
-    // Sample surface layer if present
-    vec3 surfVal = vec3(0.0);
-    if (u_surfPresent > 0.5) {
-        vec2 t = (rel + u_camXZ - u_surfA.xy) / u_surfA.z;
-        vec2 uv = (t + 0.5) / u_surfB;
-        uv = clamp(uv, vec2(0.5 / u_surfB.x, 0.5 / u_surfB.y), vec2(1.0 - 0.5 / u_surfB.x, 1.0 - 0.5 / u_surfB.y));
-        surfVal = texture(u_surface, uv).rgb;
-    }
+    // Sample the surface stack. With a single layer installed this is exactly
+    // the sample the old inline fetch produced — same clamp, same filtering —
+    // so behaviour is unchanged for every caller that has one. With more, the
+    // channels follow the height stack out to the coarsest layer instead of
+    // stopping at the finest one's edge.
+    float surfPresent = 0.0;
+    vec3 surfVal = cmSurface(rel + u_camXZ, surfPresent);
 
     // Rock wherever the surface is too steep to hold soil.
     float rock = smoothstep(0.10, 0.42, slope + 0.06 * coarse);
@@ -98,7 +96,7 @@ void cmMaterialAt(vec2 rel, float wy, vec3 n, float c, float cavity,
     // Snow above a jittered line, and only where it can settle: a 60-degree
     // face keeps none. Wind-scouring is what the coarse term stands in for.
     float snowLine = u_snowLine + 260.0 * coarse;
-    if (u_surfPresent > 0.5) {
+    if (surfPresent > 0.5) {
         // Temperature (surfVal.b) is low (cold) -> lower snow line. High -> higher snow line.
         // Assume temperature is centered around 0.3.
         snowLine += (surfVal.b - 0.3) * 1500.0;
@@ -113,7 +111,7 @@ void cmMaterialAt(vec2 rel, float wy, vec3 n, float c, float cavity,
     float grass = clamp(1.0 - rock - snow - sand, 0.0, 1.0);
 
     // Spatially modulate by biome ID (surfVal.r)
-    if (u_surfPresent > 0.5) {
+    if (surfPresent > 0.5) {
         float b = surfVal.r;
         if (b == 5.0 || b == 8.0) {
             // Desert (cold desert / subtropical desert): convert grass to sand/rock
@@ -139,7 +137,7 @@ void cmMaterialAt(vec2 rel, float wy, vec3 n, float c, float cavity,
     vec3 coldGrass = vec3(0.28, 0.26, 0.22); // tundra grey-brown grass
 
     vec3 baseGrass = u_albedoGrass;
-    if (u_surfPresent > 0.5) {
+    if (surfPresent > 0.5) {
         // Blend based on moisture (surfVal.g) and temperature (surfVal.b)
         baseGrass = mix(dryGrass, lushGrass, clamp(surfVal.g * 1.5, 0.0, 1.0));
         baseGrass = mix(coldGrass, baseGrass, clamp(surfVal.b * 2.0, 0.0, 1.0));
@@ -154,7 +152,7 @@ void cmMaterialAt(vec2 rel, float wy, vec3 n, float c, float cavity,
     // toward canopy where the surface layer says forest; band-limited by the
     // same coarse/fine mottle it borrows, so it breaks into clumps and dissolves
     // to its mean at range rather than aliasing into speckle.
-    if (u_surfPresent > 0.5 && u_forestTint > 0.001) {
+    if (surfPresent > 0.5 && u_forestTint > 0.001) {
         float bf = surfVal.r;
         float forest =
             (bf > 3.5 && bf < 4.5)  ? 1.0  :   // boreal / taiga
