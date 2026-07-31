@@ -24,6 +24,39 @@ using bromath::Vec3;
 using bromath::Quat;
 using bromath::Mat4;
 
+namespace {
+
+// Upload a per-mesh uniform only when its value actually changed since the last
+// draw on this program. See MeshDrawCache (scene_renderer.h) for why comparing
+// against a per-program cache is sound. A location of -1 (uniform absent or
+// optimised out) is skipped as before.
+//
+// The comparisons deliberately use ==/!= on floats: this is an "is it already
+// exactly what we sent" test, not a numeric tolerance question, and the cached
+// value is a bit-for-bit copy of what was uploaded. NaN sentinels never compare
+// equal, which is what makes the first upload after a reset unconditional.
+inline void uni1f(GLint loc, float& cached, float v) {
+    if (loc >= 0 && cached != v) { glUniform1f(loc, v); cached = v; }
+}
+inline void uni1i(GLint loc, int& cached, int v) {
+    if (loc >= 0 && cached != v) { glUniform1i(loc, v); cached = v; }
+}
+inline void uni3fv(GLint loc, float* cached, const float* v) {
+    if (loc < 0) return;
+    if (cached[0] == v[0] && cached[1] == v[1] && cached[2] == v[2]) return;
+    glUniform3fv(loc, 1, v);
+    cached[0] = v[0]; cached[1] = v[1]; cached[2] = v[2];
+}
+inline void uni4fv(GLint loc, float* cached, const float* v) {
+    if (loc < 0) return;
+    if (cached[0] == v[0] && cached[1] == v[1] &&
+        cached[2] == v[2] && cached[3] == v[3]) return;
+    glUniform4fv(loc, 1, v);
+    cached[0] = v[0]; cached[1] = v[1]; cached[2] = v[2]; cached[3] = v[3];
+}
+
+}  // namespace
+
 // Query every uniform location the mesh draw path uses. Shared by the regular
 // and skinned mesh pipelines — both link mesh.frag against mesh.vert (the
 // skinned one with the SKINNED define), so the uniform surface is identical.
@@ -32,6 +65,11 @@ void SceneRenderer::queryMeshUniformLocs(GLuint prog, MeshDrawLocs& d,
     auto U = [prog](const char* name) {
         return glGetUniformLocation(prog, name);
     };
+    // These locs are about to describe a (possibly different) program, whose
+    // uniform state starts zeroed. Drop anything the value cache thinks it
+    // knows — this is the one point where the "same program, same state"
+    // assumption it relies on can change underneath it.
+    d.cache = MeshDrawCache{};
     d.mvp            = U("uMVP");
     d.model          = U("uModel");
     d.normalMat      = U("uNormalMat");
@@ -304,32 +342,31 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
     glUniformMatrix4fv(L.model, 1, GL_FALSE, model.data);
 
     // Normal matrix: inverse-transpose of the model's upper 3x3, so normals
-    // stay perpendicular under non-uniform scale. The camera-relative
-    // translation applied above only touches column 3 and drops out of the
-    // 3x3. minverse returns identity for a singular matrix (zero scale), so
-    // degenerate nodes fall back to untransformed normals instead of NaNs.
-    if (L.normalMat >= 0) {
-        Mat4 invT = bromath::mtranspose(bromath::minverse(model));
-        float n3[9];
-        for (int c = 0; c < 3; ++c)
-            for (int r = 0; r < 3; ++r)
-                n3[c * 3 + r] = invT.at(r, c);
-        glUniformMatrix3fv(L.normalMat, 1, GL_FALSE, n3);
-    }
-    glUniform4fv(L.color, 1, mesh->color());
-    glUniform1f(L.emissive, mesh->emissive());
-    glUniform3fv(L.emissiveColor, 1, mesh->emissiveColor());
-    glUniform1f(L.metallic, mesh->metallic());
-    glUniform1f(L.roughness, mesh->roughness());
+    // stay perpendicular under non-uniform scale. Cached per node — see
+    // MeshNode::normalMatrix3 for why the camera-relative offset applied above
+    // does not invalidate it.
+    if (L.normalMat >= 0)
+        glUniformMatrix3fv(L.normalMat, 1, GL_FALSE, mesh->normalMatrix3(model));
+    // Material uniforms, sent only when they differ from what this program was
+    // last given. A scene of many meshes sharing one material re-sends every
+    // one of these on every draw otherwise, and the driver charges full price
+    // for each. mvp/model/normalMat above stay unconditional — they are
+    // per-mesh by definition and would never hit the cache.
+    MeshDrawCache& C = L.cache;
+    uni4fv(L.color, C.color, mesh->color());
+    uni1f(L.emissive, C.emissive, mesh->emissive());
+    uni3fv(L.emissiveColor, C.emissiveColor, mesh->emissiveColor());
+    uni1f(L.metallic, C.metallic, mesh->metallic());
+    uni1f(L.roughness, C.roughness, mesh->roughness());
     // A custom shader forces the lit path — see MeshNode::effectiveUnlit
     // (the mesh renders lit, pre-tonemap; routing in render3D agrees).
-    if (L.unlit >= 0) glUniform1i(L.unlit, mesh->effectiveUnlit() ? 1 : 0);
-    if (L.twoSided >= 0)   glUniform1i(L.twoSided, mesh->twoSided() ? 1 : 0);
-    if (L.subsurface >= 0) glUniform1f(L.subsurface, mesh->subsurface());
-    if (L.alphaCutoff >= 0) glUniform1f(L.alphaCutoff, mesh->alphaCutoff());
-    glUniform1i(L.useVertexColor, mesh->vertexColorTintEnabled() ? 1 : 0);
-    glUniform1f(L.nearClip, mesh->nearClipDist());
-    if (L.windMask >= 0) glUniform1f(L.windMask, mesh->windMask());
+    uni1i(L.unlit, C.unlit, mesh->effectiveUnlit() ? 1 : 0);
+    uni1i(L.twoSided, C.twoSided, mesh->twoSided() ? 1 : 0);
+    uni1f(L.subsurface, C.subsurface, mesh->subsurface());
+    uni1f(L.alphaCutoff, C.alphaCutoff, mesh->alphaCutoff());
+    uni1i(L.useVertexColor, C.useVertexColor, mesh->vertexColorTintEnabled() ? 1 : 0);
+    uni1f(L.nearClip, C.nearClip, mesh->nearClipDist());
+    uni1f(L.windMask, C.windMask, mesh->windMask());
 
     // Bind baseColor texture if present. Texture composes with the baseColor
     // factor and per-vertex tint — matches glTF "baseColorTexture *
@@ -365,8 +402,12 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
-    glUniform1i(L.baseColorTex, 0);
-    glUniform1i(L.useTexture, bindTex ? 1 : 0);
+    // The texture BIND above stays unconditional: unit 0 is also written by
+    // uploadUserTextures on the custom-shader path, so a cache here could go
+    // stale behind our back. The sampler-unit and has-texture uniforms are
+    // ours alone and cache safely.
+    uni1i(L.baseColorTex, C.baseColorTex, 0);
+    uni1i(L.useTexture, C.useTexture, bindTex ? 1 : 0);
 
     // PBR map bindings — units 5/6/7/8 avoid collision with baseColor (0),
     // shadow atlas (1), and IBL cubemaps/BRDF LUT (2/3/4).
@@ -377,29 +418,29 @@ void SceneRenderer::renderMeshNode(MeshNode* mesh, const MeshDrawLocs& L) {
     if (hasNM) {
         glActiveTexture(GL_TEXTURE5);
         glBindTexture(GL_TEXTURE_2D, mesh->normalTextureId());
-        if (L.normalMap >= 0) glUniform1i(L.normalMap, 5);
+        uni1i(L.normalMap, C.normalMap, 5);
     }
     if (hasMR) {
         glActiveTexture(GL_TEXTURE6);
         glBindTexture(GL_TEXTURE_2D, mesh->metallicRoughnessTextureId());
-        if (L.mrMap >= 0) glUniform1i(L.mrMap, 6);
+        uni1i(L.mrMap, C.mrMap, 6);
     }
     if (hasAO) {
         glActiveTexture(GL_TEXTURE7);
         glBindTexture(GL_TEXTURE_2D, mesh->occlusionTextureId());
-        if (L.aoMap >= 0) glUniform1i(L.aoMap, 7);
+        uni1i(L.aoMap, C.aoMap, 7);
     }
     if (hasEM) {
         glActiveTexture(GL_TEXTURE8);
         glBindTexture(GL_TEXTURE_2D, mesh->emissiveTextureId());
-        if (L.emissiveMap >= 0) glUniform1i(L.emissiveMap, 8);
+        uni1i(L.emissiveMap, C.emissiveMap, 8);
     }
-    if (L.hasTangent     >= 0) glUniform1i(L.hasTangent,     mesh->mesh().hasTangents() ? 1 : 0);
-    if (L.hasNormalMap   >= 0) glUniform1i(L.hasNormalMap,   hasNM ? 1 : 0);
-    if (L.hasMRMap       >= 0) glUniform1i(L.hasMRMap,       hasMR ? 1 : 0);
-    if (L.hasAOMap       >= 0) glUniform1i(L.hasAOMap,       hasAO ? 1 : 0);
-    if (L.hasEmissiveMap >= 0) glUniform1i(L.hasEmissiveMap, hasEM ? 1 : 0);
-    if (L.receivesShadow >= 0) glUniform1i(L.receivesShadow, mesh->receivesShadow() ? 1 : 0);
+    uni1i(L.hasTangent,     C.hasTangent,     mesh->mesh().hasTangents() ? 1 : 0);
+    uni1i(L.hasNormalMap,   C.hasNormalMap,   hasNM ? 1 : 0);
+    uni1i(L.hasMRMap,       C.hasMRMap,       hasMR ? 1 : 0);
+    uni1i(L.hasAOMap,       C.hasAOMap,       hasAO ? 1 : 0);
+    uni1i(L.hasEmissiveMap, C.hasEmissiveMap, hasEM ? 1 : 0);
+    uni1i(L.receivesShadow, C.receivesShadow, mesh->receivesShadow() ? 1 : 0);
 
     // Local reflection probe: select the probe containing this mesh's bounds
     // center (or upload "none") — one probe per draw, sampler on unit 9.

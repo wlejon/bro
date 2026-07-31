@@ -109,6 +109,13 @@ void SceneRenderer::collectFrameProbes() {
             if (a.priority != b.priority) return a.priority > b.priority;
             return a.volume < b.volume;
         });
+
+    // The push_backs above just invalidated every FrameProbe address, and the
+    // capture/prefilter passes that ran before this bind their own cubemaps on
+    // the same texture unit uploadProbeForDraw uses. Retire the per-program
+    // probe caches again here so the mesh pass starts from a real upload
+    // rather than trusting unit 9 to be where it left it.
+    ++probeEpoch_;
 }
 
 void SceneRenderer::uploadProbeForDraw(SceneNode* node, const ProbeLocs& P) {
@@ -133,6 +140,15 @@ void SceneRenderer::uploadProbeForDraw(SceneNode* node, const ProbeLocs& P) {
             }
         }
     }
+
+    // Everything below is a function of `sel` alone — the mesh only chose it.
+    // So a run of meshes resolving to the same probe, and the common case of
+    // resolving to none (still 4 GL calls a draw), can skip the whole upload.
+    // Epoch first: a FrameProbe* from a previous frame points into a vector
+    // that has since been cleared, so it must never even be compared.
+    if (P.cacheEpoch == probeEpoch_ && P.cacheSel == sel) return;
+    P.cacheEpoch = probeEpoch_;
+    P.cacheSel = sel;
 
     if (!sel) {
         glUniform1i(P.enabled, 0);

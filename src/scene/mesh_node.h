@@ -456,7 +456,23 @@ protected:
     // upload, which binds it to add attributes 5/6.
     GLuint vao_ = 0;
 
+public:
+    /// Inverse-transpose of `model`'s upper 3x3 — the normal matrix, so normals
+    /// stay perpendicular under non-uniform scale. Returns 9 floats in column-
+    /// major order, valid until the next call on this node.
+    ///
+    /// Cached against the 3x3 it was built from, because the alternative is a
+    /// full 4x4 inverse + transpose on every draw. The per-frame camera-relative
+    /// offset the renderer applies touches only column 3, which drops out of the
+    /// 3x3 entirely — so a mesh that is not rotating or scaling computes this
+    /// once and then never again, however far the camera travels.
+    const float* normalMatrix3(const bromath::Mat4& model) const;
+
 private:
+    mutable float normalMat3_[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    mutable float normalMatSrc_[9] = {};   // the 3x3 normalMat3_ was built from
+    mutable bool  normalMatValid_ = false;
+
     // Recompute bounds_ from the base mesh + every LOD level (union), so
     // culling stays valid across level switches.
     void recomputeBounds();

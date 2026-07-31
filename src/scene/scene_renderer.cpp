@@ -418,6 +418,12 @@ void SceneRenderer::render3D() {
     initDepthPolicy();
     graph_.syncProjectionToDepthPolicy();
 
+    // New frame: every per-program probe cache is now stale, because the probe
+    // matrices carry this frame's camera eye and frameProbes_ is about to be
+    // rebuilt from scratch. One increment retires them all without touching
+    // each program's locs.
+    ++probeEpoch_;
+
     // Ahead of every pass that uploads uAmbient (mesh, instanced, decals,
     // probes), so they all see the same sky for this frame.
     updateSkyAmbient(graph_.cameraEye().y);
@@ -1244,6 +1250,13 @@ void SceneRenderer::render3D() {
             runFXAAPass();
         }
     }
+
+    // Hand the context back with no VAO bound. The draw paths deliberately do
+    // not unbind per draw (MeshNode::drawRaw) — the driver charges for a bind
+    // it could have elided, and at high mesh counts that is the single most
+    // pointless call in the frame. One unbind here restores what everything
+    // downstream (compositor, Skia/Ganesh) used to be handed.
+    glBindVertexArray(0);
 }
 
 }  // namespace bro::scene

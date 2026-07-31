@@ -7,6 +7,7 @@
 #include <bromesh/manipulation/normals.h>
 
 #include <algorithm>
+#include <cstring>
 
 namespace bro::scene {
 
@@ -522,6 +523,27 @@ static void uploadInterleavedMesh(const bromesh::MeshData& mesh,
     glBindVertexArray(0);
 }
 
+const float* MeshNode::normalMatrix3(const bromath::Mat4& model) const {
+    float src[9];
+    for (int c = 0; c < 3; ++c)
+        for (int r = 0; r < 3; ++r)
+            src[c * 3 + r] = model.at(r, c);
+
+    if (normalMatValid_ && std::memcmp(src, normalMatSrc_, sizeof(src)) == 0)
+        return normalMat3_;
+
+    // minverse returns identity for a singular matrix (zero scale), so
+    // degenerate nodes fall back to untransformed normals instead of NaNs.
+    const bromath::Mat4 invT = bromath::mtranspose(bromath::minverse(model));
+    for (int c = 0; c < 3; ++c)
+        for (int r = 0; r < 3; ++r)
+            normalMat3_[c * 3 + r] = invT.at(r, c);
+
+    std::memcpy(normalMatSrc_, src, sizeof(src));
+    normalMatValid_ = true;
+    return normalMat3_;
+}
+
 void MeshNode::uploadToGPU() {
     if (mesh_.empty()) return;
     uploadInterleavedMesh(mesh_, vao_, vbo_, ibo_, indexCount_);
@@ -557,7 +579,11 @@ bool MeshNode::drawRaw() {
         } else {
             glDrawElements(GL_TRIANGLES, e.indexCount, GL_UNSIGNED_INT, nullptr);
         }
-        glBindVertexArray(0);
+        // No unbind: the next draw binds its own VAO, and the driver charges
+        // a full bind (~18 ns measured) for one it could have elided. Passes
+        // that need VAO 0 bind it once when they finish. Safe because nothing
+        // binds GL_ELEMENT_ARRAY_BUFFER outside a VAO-setup function, which is
+        // the only way a left-bound VAO could be corrupted from a distance.
         return true;
     }
 
@@ -573,7 +599,7 @@ bool MeshNode::drawRaw() {
     } else {
         glDrawElements(GL_TRIANGLES, indexCount_, GL_UNSIGNED_INT, nullptr);
     }
-    glBindVertexArray(0);
+    // See the LOD branch above: the per-draw unbind is pure cost.
     return true;
 }
 

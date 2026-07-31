@@ -8,6 +8,7 @@
 #include "scene/light_node.h"
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -357,16 +358,54 @@ private:
     void resolveAtmLocs(GLuint prog, AtmLocs& a) const;
     void uploadAtmLocs(const AtmLocs& a) const;
 
+    struct FrameProbe;   // defined below; the per-frame resolved probe list
+
     struct ProbeLocs {
         GLint enabled = -1, specular = -1, worldToLocal = -1,
               localToWorld = -1, pos = -1, boxSize = -1, boxProjection = -1,
               intensity = -1, blendDist = -1, maxLOD = -1;
+
+        // Which probe this program was last told about, and in which frame.
+        // Every uniform uploadProbeForDraw sends is a function of the SELECTED
+        // PROBE, not of the mesh — so consecutive meshes resolving to the same
+        // probe (and the overwhelmingly common case of resolving to no probe
+        // at all, which still costs 4 GL calls a draw) can skip the upload
+        // entirely. The epoch is what makes it safe across frames: the camera
+        // eye is folded into worldToLocal/localToWorld, so a probe that has
+        // not changed still needs re-sending once the camera moves.
+        mutable const FrameProbe* cacheSel = nullptr;
+        mutable uint64_t cacheEpoch = 0;   // 0 = nothing cached yet
     };
 
     // Per-program uniform locations for the PBR mesh pipeline (everything
     // renderMeshNode + the per-frame globals touch). One instance for the
     // regular mesh program and one for the skinned variant (same GLSL source,
     // SKINNED define), so both passes share renderMeshNode.
+    // Last per-mesh uniform values uploaded to one program, so a draw can skip
+    // re-sending what is already there. GL keeps uniform state in the program
+    // OBJECT, not in the context, so a value written here survives unbinding
+    // and rebinding — the skip stays valid across passes, not just within one.
+    //
+    // Worth it because a scene of many meshes sharing a material re-sends ~20
+    // identical scalars per draw, and the driver charges for every one of them
+    // (measured: ~20-30 ns each, against a 145 ns glDrawElements).
+    //
+    // Sentinels are values no real uniform can hold, so the first draw after a
+    // reset always uploads: NaN never compares equal to itself, and INT_MIN is
+    // outside every flag/sampler-unit range these hold.
+    struct MeshDrawCache {
+        static constexpr float kF = std::numeric_limits<float>::quiet_NaN();
+        static constexpr int   kI = INT32_MIN;
+        float color[4]         = {kF, kF, kF, kF};
+        float emissiveColor[3] = {kF, kF, kF};
+        float emissive = kF, metallic = kF, roughness = kF, subsurface = kF;
+        float alphaCutoff = kF, nearClip = kF, windMask = kF;
+        int unlit = kI, twoSided = kI, useVertexColor = kI, useTexture = kI;
+        int baseColorTex = kI, normalMap = kI, mrMap = kI, aoMap = kI;
+        int emissiveMap = kI, hasTangent = kI, hasNormalMap = kI, hasMRMap = kI;
+        int hasAOMap = kI, hasEmissiveMap = kI, receivesShadow = kI;
+    };
+
     struct MeshDrawLocs {
         GLint mvp = -1, model = -1, normalMat = -1, color = -1, emissive = -1,
               emissiveColor = -1, metallic = -1, roughness = -1, unlit = -1,
@@ -383,6 +422,10 @@ private:
               ssrMask = -1;
         ProbeLocs probe;
         AtmLocs   atm;
+        // Travels with the locs because both are per-program: same program,
+        // same uniform state. Mutable so the const-ref upload paths (which
+        // change no logical state, only elide redundant GL traffic) still work.
+        mutable MeshDrawCache cache;
     };
     // Per-program uniform locations for the instanced mesh pipeline
     // (everything renderInstancedMeshNode + the per-frame globals touch).
@@ -724,6 +767,13 @@ private:
     // Rebuild frameProbes_ (visible, captured probes sorted by priority desc,
     // volume asc) once per frame at the top of render3D.
     void collectFrameProbes();
+
+    // Bumped once per render3D. Guards ProbeLocs' per-program probe cache:
+    // frameProbes_ is cleared and rebuilt every frame, so a cached FrameProbe*
+    // must never be compared across frames (let alone dereferenced), and the
+    // camera eye folded into the probe matrices changes every frame anyway.
+    // Starts at 1 so a default-constructed cache (epoch 0) never matches.
+    uint64_t probeEpoch_ = 1;
     // Per-draw: select the probe whose box contains `node`'s bounds center
     // and upload the uProbe* uniforms + sampler (unit 9) for the currently
     // bound program; uploads "no probe" when none matches (or during probe
