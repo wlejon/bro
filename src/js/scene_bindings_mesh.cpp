@@ -292,11 +292,14 @@ JSValue js_node_setShaderUniform(JSContext* ctx, JSValueConst this_val, int argc
 }
 
 // setShaderTexture(name, { width, height, data: Float32Array,
-//                          mipmap?, x?, y? } | null) —
-// bind a single-channel float texture to a `uniform sampler2D u_*` declared
-// by the custom shader. Uploaded as R32F / GL_RED / GL_FLOAT with LINEAR
-// filtering and CLAMP_TO_EDGE, so a heightfield raymarcher gets bilinear
-// samples and no wrap-around at the borders. Pass null to release.
+//                          channels?, mipmap?, x?, y? } | null) —
+// bind a float texture to a `uniform sampler2D u_*` declared by the custom
+// shader. `channels` (1..4, default 1) selects R32F / RG32F / RGB32F /
+// RGBA32F with interleaved data — MeshNode::setCustomShaderTexture has
+// carried the parameter all along; this forwards it rather than pinning JS
+// callers to the single-channel case. GL_LINEAR filtering and CLAMP_TO_EDGE,
+// so a heightfield raymarcher gets bilinear samples and no wrap-around at
+// the borders. Pass null to release.
 //
 // `mipmap: true` generates a mip chain and switches minification to
 // trilinear — required for a shader that calls textureLod() at a fractional
@@ -357,6 +360,11 @@ JSValue js_node_setShaderTexture(JSContext* ctx, JSValueConst this_val, int argc
     const int sy = qjsbind::get_prop_int(ctx, argv[1], "y", kNoPos);
     const bool isSub = (sx != kNoPos || sy != kNoPos);
 
+    const int channels = qjsbind::get_prop_int(ctx, argv[1], "channels", 1);
+    if (channels < 1 || channels > 4)
+        return JS_ThrowTypeError(ctx,
+            "setShaderTexture: channels must be 1..4 (got %d)", channels);
+
     JSValue dataVal = JS_GetPropertyStr(ctx, argv[1], "data");
     size_t off = 0, len = 0;
     JSValue ab = JS_GetTypedArrayBuffer(ctx, dataVal, &off, &len, nullptr);
@@ -367,11 +375,11 @@ JSValue js_node_setShaderTexture(JSContext* ctx, JSValueConst this_val, int argc
     size_t bytes = 0;
     uint8_t* base = JS_GetArrayBuffer(ctx, &bytes, ab);
     JS_FreeValue(ctx, ab);
-    const size_t need = (size_t)tw * (size_t)th * sizeof(float);
+    const size_t need = (size_t)tw * (size_t)th * (size_t)channels * sizeof(float);
     if (!base || len < need)
         return JS_ThrowTypeError(ctx,
-            "setShaderTexture: data must hold width*height floats "
-            "(%d*%d, got %d)", tw, th, (int)(len / sizeof(float)));
+            "setShaderTexture: data must hold width*height*channels floats "
+            "(%d*%d*%d, got %d)", tw, th, channels, (int)(len / sizeof(float)));
 
     const float* pixels = reinterpret_cast<const float*>(base + off);
 
@@ -392,7 +400,8 @@ JSValue js_node_setShaderTexture(JSContext* ctx, JSValueConst this_val, int argc
     // single-valued and must not wrap the wrong hemisphere in).
     const bool repeat = qjsbind::get_prop_bool(ctx, argv[1], "repeat", false);
     const bool clampT = qjsbind::get_prop_bool(ctx, argv[1], "clampT", false);
-    if (!meshNode->setCustomShaderTexture(name, tw, th, pixels, mipmap, repeat, clampT))
+    if (!meshNode->setCustomShaderTexture(name, tw, th, pixels, mipmap, repeat, clampT,
+                                          channels))
         return JS_ThrowTypeError(ctx,
             "setShaderTexture: too many sampler uniforms on this node "
             "(max %d; this GL reports %d combined texture units and the "
