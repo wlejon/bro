@@ -397,6 +397,11 @@ static WhisperWrapper* whisperSelf(JSContext* ctx, JSValueConst this_val) {
 //                      segments (Whisper sequential long-form decode) instead of
 //                      truncated to the first window. Requires a timestamps prompt
 //                      (buildPrompt(lang, task, true)).
+//   opts.noTimestampsId: tokenizer.noTimestampsId — when set (>= 0) the decoder is
+//                      never allowed to pick <|notimestamps|>. Pass it whenever you
+//                      want timings: a timestamps prompt only omits the token, it
+//                      does not stop the model generating it, and once generated
+//                      the segment carries no timestamp at all.
 //   opts.onToken(id):  invoked once per decoded token, in order, as it is produced
 //                      (synchronously on this thread) — for live partial decode.
 static JSValue js_whisper_transcribe(JSContext* ctx, JSValueConst this_val,
@@ -424,6 +429,7 @@ static JSValue js_whisper_transcribe(JSContext* ctx, JSValueConst this_val,
         getInt(ctx, argv[2], "maxNewTokens", opts.max_new_tokens);
         opts.timestamp_begin_id = -1;
         getInt(ctx, argv[2], "timestampBeginId", opts.timestamp_begin_id);
+        getInt(ctx, argv[2], "noTimestampsId", opts.no_timestamps_id);
         onToken = JS_GetPropertyStr(ctx, argv[2], "onToken");
     }
     // The callback fires synchronously inside transcribe() on this (JS) thread,
@@ -1401,6 +1407,7 @@ struct SttJob {
     std::vector<int32_t>    prompt;
     int                     maxNew = 0;
     int                     timestampBeginId = -1;     // long-form seek anchor; <0 = off
+    int                     noTimestampsId   = -1;     // suppressed token; <0 = off
     std::vector<int32_t>    token_ids;          // filled by work()
     JSValue                 onDone     = JS_UNDEFINED;  // dup'd; UNDEFINED if absent
     JSValue                 onToken    = JS_UNDEFINED;  // dup'd; UNDEFINED if absent
@@ -1690,6 +1697,7 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
     if (argc >= 4 && JS_IsObject(argv[3])) {
         getInt(ctx, argv[3], "maxNewTokens", job->maxNew);
         getInt(ctx, argv[3], "timestampBeginId", job->timestampBeginId);
+        getInt(ctx, argv[3], "noTimestampsId", job->noTimestampsId);
         onDone  = JS_GetPropertyStr(ctx, argv[3], "onDone");
         onToken = JS_GetPropertyStr(ctx, argv[3], "onToken");
     }
@@ -1728,6 +1736,7 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
         brosoundml::Whisper::TranscribeOptions opts;
         opts.max_new_tokens      = job->maxNew;
         opts.timestamp_begin_id  = job->timestampBeginId;
+        opts.no_timestamps_id    = job->noTimestampsId;
         opts.cancel = [&cancel] {
             return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
         };
@@ -1854,6 +1863,7 @@ static JSValue js_whisper_session_transcribe(JSContext* ctx, JSValueConst this_v
     if (argc >= 3 && JS_IsObject(argv[2])) {
         getInt(ctx, argv[2], "maxNewTokens", job->maxNew);
         getInt(ctx, argv[2], "timestampBeginId", job->timestampBeginId);
+        getInt(ctx, argv[2], "noTimestampsId", job->noTimestampsId);
         onDone  = JS_GetPropertyStr(ctx, argv[2], "onDone");
         onToken = JS_GetPropertyStr(ctx, argv[2], "onToken");
     }
@@ -1882,6 +1892,7 @@ static JSValue js_whisper_session_transcribe(JSContext* ctx, JSValueConst this_v
         brosoundml::Whisper::TranscribeOptions opts;
         opts.max_new_tokens     = job->maxNew;
         opts.timestamp_begin_id = job->timestampBeginId;
+        opts.no_timestamps_id   = job->noTimestampsId;
         opts.cancel = [&cancel] {
             return cancel.load(std::memory_order_acquire) || bro::util::interrupted();
         };
