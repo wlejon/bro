@@ -15,6 +15,7 @@
 
 #include <qjsbind/qjsbind.h>
 
+#include <cctype>
 #include <string>
 #include <vector>
 
@@ -24,9 +25,25 @@ namespace {
 
 std::string s_basePath;
 
+// Is this a URL rather than a path? A scheme is letters, then `://` — which
+// is deliberately narrower than "contains a colon", because `C:\clips` has one
+// of those and is a drive letter. Without this an `https://` source is treated
+// as relative and resolved against the app directory, which is a path no
+// backend can open: <video> reaches its own loader and never came through
+// here, so it was only ever wrong for a caller that analyses what it plays.
+bool hasScheme(const std::string& src) {
+    size_t i = 0;
+    while (i < src.size() && (std::isalpha(static_cast<unsigned char>(src[i])) ||
+                              (i > 0 && (std::isdigit(static_cast<unsigned char>(src[i])) ||
+                                         src[i] == '+' || src[i] == '-' || src[i] == '.'))))
+        ++i;
+    return i > 1 && src.compare(i, 3, "://") == 0;
+}
+
 std::string resolveMediaPath(const std::string& src) {
     if (src.size() >= 2 && src[1] == ':') return src;              // C:\...
     if (!src.empty() && (src[0] == '/' || src[0] == '\\')) return src;
+    if (hasScheme(src)) return src;                                // https://...
     if (s_basePath.empty()) return src;
     std::string p = s_basePath;
     if (p.back() != '/' && p.back() != '\\') p += '/';
