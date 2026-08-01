@@ -404,6 +404,12 @@ static WhisperWrapper* whisperSelf(JSContext* ctx, JSValueConst this_val) {
 //                      the segment carries no timestamp at all.
 //   opts.onToken(id):  invoked once per decoded token, in order, as it is produced
 //                      (synchronously on this thread) — for live partial decode.
+//   opts.onWindow(t):  invoked as each long-form window opens, with the absolute
+//                      offset in seconds of that window's <|0.00|>. Pair it with
+//                      onToken whenever the timestamps are being placed in time:
+//                      every window restarts at <|0.00|>, so a timestamp in the
+//                      returned stream is meaningless without knowing which
+//                      window it fell in.
 static JSValue js_whisper_transcribe(JSContext* ctx, JSValueConst this_val,
                                      int argc, JSValueConst* argv) {
     auto* w = whisperSelf(ctx, this_val);
@@ -424,13 +430,23 @@ static JSValue js_whisper_transcribe(JSContext* ctx, JSValueConst this_val,
             "(use tokenizer.buildPrompt(lang, task))");
 
     brosoundml::Whisper::TranscribeOptions opts;
-    JSValue onToken = JS_UNDEFINED;
+    JSValue onToken = JS_UNDEFINED, onWindow = JS_UNDEFINED;
     if (argc >= 3 && JS_IsObject(argv[2])) {
         getInt(ctx, argv[2], "maxNewTokens", opts.max_new_tokens);
         opts.timestamp_begin_id = -1;
         getInt(ctx, argv[2], "timestampBeginId", opts.timestamp_begin_id);
         getInt(ctx, argv[2], "noTimestampsId", opts.no_timestamps_id);
         onToken = JS_GetPropertyStr(ctx, argv[2], "onToken");
+        onWindow = JS_GetPropertyStr(ctx, argv[2], "onWindow");
+    }
+    if (JS_IsFunction(ctx, onWindow)) {
+        opts.on_window = [ctx, onWindow](double start) {
+            JSValue a = JS_NewFloat64(ctx, start);
+            JSValue r = JS_Call(ctx, onWindow, JS_UNDEFINED, 1, &a);
+            if (JS_IsException(r)) JS_FreeValue(ctx, JS_GetException(ctx));
+            JS_FreeValue(ctx, r);
+            JS_FreeValue(ctx, a);
+        };
     }
     // The callback fires synchronously inside transcribe() on this (JS) thread,
     // so it can call straight back into JS — no handoff needed for the sync path.
@@ -456,6 +472,7 @@ static JSValue js_whisper_transcribe(JSContext* ctx, JSValueConst this_val,
         result = JS_ThrowInternalError(ctx, "transcribe: %s", e.what());
     }
     JS_FreeValue(ctx, onToken);
+    JS_FreeValue(ctx, onWindow);
     return result;
 }
 
@@ -1408,6 +1425,21 @@ struct SttJob {
     int                     maxNew = 0;
     int                     timestampBeginId = -1;     // long-form seek anchor; <0 = off
     int                     noTimestampsId   = -1;     // suppressed token; <0 = off
+
+    // Long-form window marks, published by the decode thread and drained by the
+    // JS-thread poll alongside the tokens. Each carries the token index it
+    // precedes, so the poll can fire onWindow *before* the tokens belonging to
+    // that window — without which a caller placing timestamps live would attach
+    // them to the previous window. Same lock-free shape as tokenSlots: the
+    // producer stores the payload then releases the count.
+    struct WindowSlot { double start = 0.0; size_t at = 0; };
+    std::vector<WindowSlot> windowSlots;
+    std::atomic<size_t>     windowsProduced{0};
+    size_t                  windowsDrained = 0;
+    bool                    hasOnWindow = false;
+    JSValue                 onWindow = JS_UNDEFINED;   // dup'd; UNDEFINED if absent
+    // Filled by work(): where every window began, for the onDone answer.
+    std::vector<std::pair<double, size_t>> windows;
     std::vector<int32_t>    token_ids;          // filled by work()
     JSValue                 onDone     = JS_UNDEFINED;  // dup'd; UNDEFINED if absent
     JSValue                 onToken    = JS_UNDEFINED;  // dup'd; UNDEFINED if absent
@@ -1693,19 +1725,21 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
             "transcribe: promptIds must be a non-empty Int32Array or number[] "
             "(use tokenizer.buildPrompt(lang, task))");
 
-    JSValue onDone = JS_UNDEFINED, onToken = JS_UNDEFINED;
+    JSValue onDone = JS_UNDEFINED, onToken = JS_UNDEFINED, onWindow = JS_UNDEFINED;
     if (argc >= 4 && JS_IsObject(argv[3])) {
         getInt(ctx, argv[3], "maxNewTokens", job->maxNew);
         getInt(ctx, argv[3], "timestampBeginId", job->timestampBeginId);
         getInt(ctx, argv[3], "noTimestampsId", job->noTimestampsId);
-        onDone  = JS_GetPropertyStr(ctx, argv[3], "onDone");
-        onToken = JS_GetPropertyStr(ctx, argv[3], "onToken");
+        onDone   = JS_GetPropertyStr(ctx, argv[3], "onDone");
+        onToken  = JS_GetPropertyStr(ctx, argv[3], "onToken");
+        onWindow = JS_GetPropertyStr(ctx, argv[3], "onWindow");
     }
 
     // Claim the model for this transcription (single-owner; one in flight).
     if (!w->busy.tryClaim()) {
         JS_FreeValue(ctx, onDone);
         JS_FreeValue(ctx, onToken);
+        JS_FreeValue(ctx, onWindow);
         return JS_ThrowInternalError(ctx,
             "transcribe: an operation is already in flight on this model");
     }
@@ -1714,14 +1748,20 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
     job->onDone     = job->hasOnDone ? JS_DupValue(ctx, onDone) : JS_UNDEFINED;
     job->hasOnToken = JS_IsFunction(ctx, onToken);
     job->onToken    = job->hasOnToken ? JS_DupValue(ctx, onToken) : JS_UNDEFINED;
+    job->hasOnWindow = JS_IsFunction(ctx, onWindow);
+    job->onWindow    = job->hasOnWindow ? JS_DupValue(ctx, onWindow) : JS_UNDEFINED;
     job->whisperRef = JS_DupValue(ctx, argv[0]);  // keep the model alive
     JS_FreeValue(ctx, onDone);
     JS_FreeValue(ctx, onToken);
+    JS_FreeValue(ctx, onWindow);
     // Pre-size the token slots so the work thread never reallocates while the JS
     // thread reads. Generous fixed cap (covers a long-form transcription of many
     // 30 s windows); if exceeded, streaming stops emitting but the full id stream
     // still arrives via onDone.
     if (job->hasOnToken) job->tokenSlots.resize(1u << 16);
+    // One per 30 s window: 4096 covers thirty-four hours of audio, well past
+    // anything the token cap above allows through.
+    if (job->hasOnWindow) job->windowSlots.resize(4096);
 
     WhisperWrapper* mw = w;
 
@@ -1750,21 +1790,59 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
                 job->produced.store(idx + 1, std::memory_order_release);
             };
         }
+        if (job->hasOnWindow) {
+            // Same thread, same shape. `at` is the count of tokens streamed so
+            // far, which is what the poll compares its drain cursor against.
+            opts.on_window = [job](double start) {
+                const size_t idx = job->windowsProduced.load(std::memory_order_relaxed);
+                if (idx >= job->windowSlots.size()) return;  // bound guard
+                job->windowSlots[idx] = {start,
+                                         job->produced.load(std::memory_order_relaxed)};
+                job->windowsProduced.store(idx + 1, std::memory_order_release);
+            };
+        }
         auto out = mw->whisper->transcribe(job->audio, job->prompt, opts);
         job->token_ids = std::move(out.token_ids);
+        for (const auto& w : out.windows)
+            job->windows.emplace_back(w.start_seconds, w.first_token);
     };
 
-    // JS thread, drains committed tokens and fires onToken for each.
+    // JS thread, drains committed window marks and tokens and fires the
+    // callbacks for each, **interleaved in decode order**.
     auto poll = [job](JSContext* c) {
-        if (!job->hasOnToken) return;
-        const size_t n = job->produced.load(std::memory_order_acquire);
-        while (job->drained < n) {
-            JSValue a = JS_NewInt32(c, job->tokenSlots[job->drained]);
-            JSValue r = JS_Call(c, job->onToken, JS_UNDEFINED, 1, &a);
+        /// One callback, one argument, swallowing a throw as the drain always has.
+        auto call = [c](JSValue fn, JSValue arg) {
+            JSValue r = JS_Call(c, fn, JS_UNDEFINED, 1, &arg);
             if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
             JS_FreeValue(c, r);
-            JS_FreeValue(c, a);
-            job->drained++;
+            JS_FreeValue(c, arg);
+        };
+
+        const size_t nw = job->hasOnWindow
+                              ? job->windowsProduced.load(std::memory_order_acquire)
+                              : 0;
+        const size_t n = job->hasOnToken
+                             ? job->produced.load(std::memory_order_acquire)
+                             : 0;
+
+        // A window mark fires before the tokens that belong to it. Draining the
+        // tokens first would hand a caller that window's own timestamps while it
+        // still believed itself to be in the previous window, which is exactly
+        // the misplacement onWindow exists to prevent.
+        for (;;) {
+            if (job->windowsDrained < nw &&
+                job->windowSlots[job->windowsDrained].at <= job->drained) {
+                call(job->onWindow,
+                     JS_NewFloat64(c, job->windowSlots[job->windowsDrained].start));
+                job->windowsDrained++;
+                continue;
+            }
+            if (job->drained < n) {
+                call(job->onToken, JS_NewInt32(c, job->tokenSlots[job->drained]));
+                job->drained++;
+                continue;
+            }
+            break;
         }
     };
 
@@ -1783,6 +1861,22 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
             JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
             if (!error.empty())
                 JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            // Where each long-form window began: [{ start, at }], `at` indexing
+            // the id array beside it. A caller that did not stream still needs
+            // this to read the timestamps in `arr` as absolute times, because
+            // every window restarts them at zero. Absent for a short-form decode.
+            if (!job->windows.empty()) {
+                JSValue ws = JS_NewArray(c);
+                uint32_t i = 0;
+                for (const auto& w : job->windows) {
+                    JSValue o = JS_NewObject(c);
+                    JS_SetPropertyStr(c, o, "start", JS_NewFloat64(c, w.first));
+                    JS_SetPropertyStr(c, o, "at",
+                                      JS_NewInt64(c, static_cast<int64_t>(w.second)));
+                    JS_SetPropertyUint32(c, ws, i++, o);
+                }
+                JS_SetPropertyStr(c, info, "windows", ws);
+            }
             JSValue args[2] = { arr, info };
             JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
             if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
@@ -1790,8 +1884,9 @@ static JSValue js_stt_transcribe(JSContext* ctx, JSValueConst,
             JS_FreeValue(c, arr);
             JS_FreeValue(c, info);
         }
-        if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
-        if (job->hasOnToken) JS_FreeValue(c, job->onToken);
+        if (job->hasOnDone)   JS_FreeValue(c, job->onDone);
+        if (job->hasOnToken)  JS_FreeValue(c, job->onToken);
+        if (job->hasOnWindow) JS_FreeValue(c, job->onWindow);
         JS_FreeValue(c, job->whisperRef);
     };
 
@@ -1934,6 +2029,22 @@ static JSValue js_whisper_session_transcribe(JSContext* ctx, JSValueConst this_v
             JS_SetPropertyStr(c, info, "cancelled", JS_NewBool(c, cancelled));
             if (!error.empty())
                 JS_SetPropertyStr(c, info, "error", JS_NewString(c, error.c_str()));
+            // Where each long-form window began: [{ start, at }], `at` indexing
+            // the id array beside it. A caller that did not stream still needs
+            // this to read the timestamps in `arr` as absolute times, because
+            // every window restarts them at zero. Absent for a short-form decode.
+            if (!job->windows.empty()) {
+                JSValue ws = JS_NewArray(c);
+                uint32_t i = 0;
+                for (const auto& w : job->windows) {
+                    JSValue o = JS_NewObject(c);
+                    JS_SetPropertyStr(c, o, "start", JS_NewFloat64(c, w.first));
+                    JS_SetPropertyStr(c, o, "at",
+                                      JS_NewInt64(c, static_cast<int64_t>(w.second)));
+                    JS_SetPropertyUint32(c, ws, i++, o);
+                }
+                JS_SetPropertyStr(c, info, "windows", ws);
+            }
             JSValue args[2] = { arr, info };
             JSValue r = JS_Call(c, job->onDone, JS_UNDEFINED, 2, args);
             if (JS_IsException(r)) JS_FreeValue(c, JS_GetException(c));
@@ -1941,8 +2052,9 @@ static JSValue js_whisper_session_transcribe(JSContext* ctx, JSValueConst this_v
             JS_FreeValue(c, arr);
             JS_FreeValue(c, info);
         }
-        if (job->hasOnDone)  JS_FreeValue(c, job->onDone);
-        if (job->hasOnToken) JS_FreeValue(c, job->onToken);
+        if (job->hasOnDone)   JS_FreeValue(c, job->onDone);
+        if (job->hasOnToken)  JS_FreeValue(c, job->onToken);
+        if (job->hasOnWindow) JS_FreeValue(c, job->onWindow);
         JS_FreeValue(c, job->whisperRef);
     };
 
