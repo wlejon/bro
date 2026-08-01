@@ -102,6 +102,57 @@ let rising = 0;
 for (let i = 1; i < strip.count; ++i) if (redOf(i) > redOf(i - 1)) rising++;
 assert(rising >= strip.count - 2, `and does it monotonically (${rising}/${strip.count - 1})`);
 
+// ── a window ──────────────────────────────────────────────────────────────
+//
+// The clip is quiet for its first half and loud for its second, so "did the
+// window move" is answerable rather than a matter of taste: a read of the
+// first half must be quiet all the way across and a read of the second loud
+// all the way across. A window that was ignored would give both of them the
+// same shape, which is the failure worth catching — the buckets would still
+// come back the right length and full of plausible numbers.
+
+const secs = N / FPS;
+const early = bro.media.peaks(src, { buckets: 100, from: 0, to: secs / 2 });
+const late = bro.media.peaks(src, { buckets: 100, from: secs / 2 });
+assert(early && late, 'a windowed peaks() at each end');
+assert(Math.abs(early.from - 0) < 0.01 && Math.abs(early.to - secs / 2) < 0.3,
+       `the early window says where it is (${early.from.toFixed(2)}..${early.to.toFixed(2)})`);
+assert(Math.abs(late.to - secs) < 0.3,
+       `and 'to' omitted runs to the end (${late.to.toFixed(2)}s of ${secs}s)`);
+assert(Math.abs(early.duration - secs) < 0.5,
+       'duration is still the FILE, not the window');
+
+const loudest = (p) => { let m = 0; for (let i = 0; i < p.buckets; ++i) m = Math.max(m, p.rms[i]); return m; };
+let lateQuiet = 0;
+for (let i = 4; i < late.buckets - 4; ++i) if (late.rms[i] > 0.2) lateQuiet++;
+assert(loudest(early) < 0.05, `the first half is quiet throughout (peak ${loudest(early).toFixed(3)})`);
+assert(lateQuiet > (late.buckets - 8) * 0.8,
+       `the second half is loud throughout (${lateQuiet}/${late.buckets - 8} buckets)`);
+
+// Whole-file reads report the whole file as their span, so a caller drawing a
+// lane needs no branch for "did I ask for a window".
+assert(peaks.from === 0 && Math.abs(peaks.to - peaks.duration) < 1e-6,
+       'an unwindowed read spans the file');
+
+assert(bro.media.peaks(src, { buckets: 16, from: 3, to: 1 }) === null,
+       'a window that ends before it starts is null, not the whole file');
+assert(bro.media.peaks(src, { buckets: 16, from: secs + 10 }) === null,
+       'and one that starts past the end is too');
+
+// The same for the picture: a strip of the second half is grabbed from the
+// second half, and the file ramps black to red so it is visibly redder than
+// one of the first.
+const lateStrip = bro.media.thumbnails(src, { count: 6, height: 32, from: secs / 2 });
+assert(lateStrip && lateStrip.count > 0, 'a windowed thumbnails()');
+for (const t of lateStrip.times)
+    assert(t >= secs / 2 - 0.25, `every frame is from the window (${t.toFixed(2)}s)`);
+const lateW = lateStrip.width * lateStrip.count;
+let sum = 0, n = 0;
+for (let y = 4; y < lateStrip.height - 4; ++y)
+    for (let x = 2; x < lateStrip.width - 2; ++x) { sum += lateStrip.data[((y * lateW) + x) * 4]; n++; }
+assert(sum / n > first + 60,
+       `and starts where the file is redder (${(sum / n).toFixed(0)} vs ${first.toFixed(0)})`);
+
 // ── failures are reported, not thrown ─────────────────────────────────────
 
 assert(bro.media.peaks(src + '.nope', { buckets: 16 }) === null,

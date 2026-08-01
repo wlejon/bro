@@ -500,19 +500,32 @@ vid.pause();
 // for every format it can open. `bro.media.available` is false in a build
 // without video.
 //
-// Both are SYNCHRONOUS full-file decodes. bro.media is installed in worker
-// realms for exactly this reason: run them in a Worker and post the arrays
-// back, or the UI sits frozen for as long as the decode takes.
+// Both are SYNCHRONOUS decodes. bro.media is installed in worker realms for
+// exactly this reason: run them in a Worker and post the arrays back, or the UI
+// sits frozen for as long as the decode takes.
+//
+// Both take `from`/`to` in seconds and read only that span, defaulting to the
+// whole file. Ask for the part you are SHOWING. A two-hour recording read from
+// the start to fill a lane you are looking one minute of is the whole recording
+// decoded to draw a hundredth of it — and if the file is over the network, the
+// whole recording pulled down the link as well. `to: 0` means the end, so
+// `{ from: t }` is a tail. A span that clamps to nothing is null, not the
+// whole file.
 
-// bro.media.peaks(path, { buckets = 2048 })
-//   → { sampleRate, channels, duration, buckets,
+// bro.media.peaks(path, { buckets = 2048, from = 0, to = 0 })
+//   → { sampleRate, channels, duration,
+//       from, to,              seconds: the span the buckets COVER, after
+//                              clamping — 0 and duration for a whole-file read,
+//                              so the drawing arithmetic has no special case.
+//       buckets,
 //       min, max, rms }        Float32Array each, one entry per bucket,
-//                              spread evenly across the file, all in [-1, 1].
+//                              spread evenly across [from, to), all in [-1, 1].
 //                              min/max are the envelope a waveform is drawn
 //                              from; rms is loudness, for a filled body.
-//   → null if the file has no audio track this build can decode.
+//   → null if the file has no audio track this build can decode, or the window
+//     is empty.
 //
-//   Cost: one full audio decode. ~350 ms for five minutes of AAC.
+//   Cost: one audio decode of the span. ~350 ms for five minutes of AAC.
 
 const peaks = bro.media.peaks('clip.mp4', { buckets: 3000 });
 if (peaks) {
@@ -522,7 +535,11 @@ if (peaks) {
     }
 }
 
-// bro.media.thumbnails(path, { count = 24, height = 72 })
+// A minute of a long one, at a resolution the whole file could not afford:
+// 6000 buckets over 60 s is 10 ms each, and it costs a minute of decoding.
+const near = bro.media.peaks('vod.m3u8', { buckets: 6000, from: 3600, to: 3660 });
+
+// bro.media.thumbnails(path, { count = 24, height = 72, from = 0, to = 0 })
 //   → { width, height, count,  width is per thumbnail, from the DISPLAYED aspect
 //       rotation,              0/90/180/270: the turn already APPLIED below
 //       times,                 seconds, one per thumbnail: when it is FROM
@@ -533,6 +550,11 @@ if (peaks) {
 //   → null if the file has no video track this build can decode.
 //
 //   `count` may come back short if the file runs out of frames.
+//
+//   Spread across [from, to) rather than across the file when a window is
+//   given. A windowed grab needs the file to declare a duration to clamp
+//   against and is null when it does not — the whole-file case still spreads
+//   the strip over the longest track it can find.
 //
 //   Grabs are seeked, then decoded forward toward the requested time within a
 //   budget that scales with frame size — a 720p file lands close to the time

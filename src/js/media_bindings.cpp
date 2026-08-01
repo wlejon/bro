@@ -42,6 +42,28 @@ int intOption(JSContext* ctx, JSValueConst opts, const char* name, int fallback)
     return out;
 }
 
+double numOption(JSContext* ctx, JSValueConst opts, const char* name, double fallback) {
+    if (!JS_IsObject(opts)) return fallback;
+    JSValue v = JS_GetPropertyStr(ctx, opts, name);
+    double out = fallback;
+    if (!JS_IsUndefined(v) && !JS_IsNull(v)) JS_ToFloat64(ctx, &out, v);
+    JS_FreeValue(ctx, v);
+    return out;
+}
+
+// `from`/`to` are seconds, and both default to zero — which is the whole file,
+// because zero and zero is the span nobody asked for. A negative one is clamped
+// away here rather than in the analysis, where a negative TimeNs already means
+// something else.
+video::Window windowOption(JSContext* ctx, JSValueConst opts) {
+    const double from = numOption(ctx, opts, "from", 0.0);
+    const double to = numOption(ctx, opts, "to", 0.0);
+    video::Window w;
+    if (from > 0) w.fromNs = static_cast<video::TimeNs>(from * 1e9);
+    if (to > 0) w.toNs = static_cast<video::TimeNs>(to * 1e9);
+    return w;
+}
+
 bool pathArg(JSContext* ctx, JSValueConst v, std::string& out) {
     const char* s = JS_ToCString(ctx, v);
     if (!s) return false;
@@ -50,7 +72,7 @@ bool pathArg(JSContext* ctx, JSValueConst v, std::string& out) {
     return true;
 }
 
-// bro.media.peaks(path, { buckets })
+// bro.media.peaks(path, { buckets, from, to })
 JSValue js_media_peaks(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_ThrowTypeError(ctx, "peaks(path, options)");
     std::string path;
@@ -59,14 +81,20 @@ JSValue js_media_peaks(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     int buckets = argc >= 2 ? intOption(ctx, argv[1], "buckets", 2048) : 2048;
     if (buckets < 1) buckets = 1;
     if (buckets > (1 << 20)) buckets = 1 << 20;
+    video::Window window = argc >= 2 ? windowOption(ctx, argv[1]) : video::Window{};
 
     video::AudioPeaks peaks;
-    if (!video::analyzeAudioPeaks(path, buckets, peaks)) return JS_NULL;
+    if (!video::analyzeAudioPeaks(path, buckets, peaks, window)) return JS_NULL;
 
     JSValue out = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, out, "sampleRate", JS_NewInt32(ctx, int(peaks.sampleRate)));
     JS_SetPropertyStr(ctx, out, "channels", JS_NewInt32(ctx, int(peaks.channels)));
     JS_SetPropertyStr(ctx, out, "duration", JS_NewFloat64(ctx, peaks.durationNs / 1e9));
+    // Where the buckets are, always — a caller that asked for the whole file
+    // gets 0 and the duration, so the drawing arithmetic is the same one
+    // either way and there is no "did I ask for a window" branch in it.
+    JS_SetPropertyStr(ctx, out, "from", JS_NewFloat64(ctx, peaks.fromNs / 1e9));
+    JS_SetPropertyStr(ctx, out, "to", JS_NewFloat64(ctx, peaks.toNs / 1e9));
     JS_SetPropertyStr(ctx, out, "buckets", JS_NewInt32(ctx, int(peaks.maxv.size())));
     JS_SetPropertyStr(ctx, out, "min", qjsbind::make_float32_array(ctx, peaks.minv));
     JS_SetPropertyStr(ctx, out, "max", qjsbind::make_float32_array(ctx, peaks.maxv));
@@ -74,7 +102,7 @@ JSValue js_media_peaks(JSContext* ctx, JSValueConst, int argc, JSValueConst* arg
     return out;
 }
 
-// bro.media.thumbnails(path, { count, height })
+// bro.media.thumbnails(path, { count, height, from, to })
 JSValue js_media_thumbnails(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_ThrowTypeError(ctx, "thumbnails(path, options)");
     std::string path;
@@ -84,9 +112,10 @@ JSValue js_media_thumbnails(JSContext* ctx, JSValueConst, int argc, JSValueConst
     int height = argc >= 2 ? intOption(ctx, argv[1], "height", 72) : 72;
     count = count < 1 ? 1 : (count > 4096 ? 4096 : count);
     height = height < 1 ? 1 : (height > 2048 ? 2048 : height);
+    video::Window window = argc >= 2 ? windowOption(ctx, argv[1]) : video::Window{};
 
     video::ThumbnailStrip strip;
-    if (!video::grabThumbnails(path, count, height, strip)) return JS_NULL;
+    if (!video::grabThumbnails(path, count, height, strip, window)) return JS_NULL;
 
     JSValue abuf = JS_NewArrayBufferCopy(ctx, strip.rgba.data(), strip.rgba.size());
     JSValue args[3] = { abuf, JS_UNDEFINED, JS_UNDEFINED };

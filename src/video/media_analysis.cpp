@@ -47,9 +47,26 @@ const TrackInfo* firstTrack(const MediaSource& src, TrackKind kind) {
     return nullptr;
 }
 
+// Clamp a window to a file of `duration` and say whether anything is left.
+//
+// `toNs` of 0 is the end, and both ends are clamped rather than refused,
+// because a caller drawing a lane routinely asks for a span that runs a little
+// past the last frame and the answer to that is the tail, not an error. What
+// *is* refused is an empty span — a from at or past the end, or a to at or
+// before the from — since spreading buckets across nothing would divide by it.
+bool clampWindow(Window w, TimeNs duration, TimeNs& from, TimeNs& to) {
+    if (duration <= 0) return false;
+    from = w.fromNs > 0 ? w.fromNs : 0;
+    to = w.toNs > 0 ? w.toNs : duration;
+    if (from > duration) from = duration;
+    if (to > duration) to = duration;
+    return to > from;
+}
+
 } // namespace
 
-bool analyzeAudioPeaks(const std::string& path, int buckets, AudioPeaks& out) {
+bool analyzeAudioPeaks(const std::string& path, int buckets, AudioPeaks& out,
+                       Window window) {
     if (buckets <= 0) return false;
 
     Opened opened = openAny(path, TrackKind::Audio);
@@ -71,9 +88,15 @@ bool analyzeAudioPeaks(const std::string& path, int buckets, AudioPeaks& out) {
         if (duration <= 0) return false;
     }
 
+    TimeNs from = 0, to = 0;
+    if (!clampWindow(window, duration, from, to)) return false;
+    const TimeNs span = to - from;
+
     out.sampleRate = track->sampleRate;
     out.channels = track->channels;
     out.durationNs = duration;
+    out.fromNs = from;
+    out.toNs = to;
     out.minv.assign(static_cast<size_t>(buckets), 0.0f);
     out.maxv.assign(static_cast<size_t>(buckets), 0.0f);
     out.rms.assign(static_cast<size_t>(buckets), 0.0f);
@@ -81,6 +104,13 @@ bool analyzeAudioPeaks(const std::string& path, int buckets, AudioPeaks& out) {
     std::vector<uint64_t> counts(static_cast<size_t>(buckets), 0);
 
     opened.source->setActiveTracks({track->id});
+
+    // A seek that fails is not a failure here: reading from the start and
+    // throwing away everything before `from` gives exactly the same buckets,
+    // just slowly. Which is the trade the caller was trying to avoid, so it is
+    // worth a line in the log — but a lane drawn late beats one not drawn.
+    if (from > 0 && !opened.source->seekTo(from))
+        LOG_INFO("peaks: '%s' will not seek; reading from the start", path.c_str());
 
     MediaPacket pkt;
     AudioFrame frame;
@@ -93,10 +123,16 @@ bool analyzeAudioPeaks(const std::string& path, int buckets, AudioPeaks& out) {
         const size_t frames = frame.samples.size() / ch;
         if (!frames) continue;
 
+        // -1 is before the window and `buckets` is past it, and neither is
+        // clamped into an edge bucket. A seek lands on the packet boundary
+        // *before* the time asked for, so there is always a run of samples in
+        // front of the window; folding them into bucket 0 would draw the
+        // second before the window as though it were the first one in it.
         auto bucketOf = [&](size_t i) {
             const TimeNs t = frame.pts + static_cast<TimeNs>(i * 1000000000ULL / rate);
-            auto b = static_cast<int64_t>(t * buckets / duration);
-            return b < 0 ? 0 : (b >= buckets ? buckets - 1 : static_cast<int>(b));
+            if (t < from) return -1;
+            if (t >= to) return buckets;
+            return static_cast<int>((t - from) * buckets / span);
         };
 
         // A codec frame is ~20 ms and a bucket is duration/buckets wide, so in
@@ -113,6 +149,7 @@ bool analyzeAudioPeaks(const std::string& path, int buckets, AudioPeaks& out) {
                 end = i + 1;
                 while (end < frames && bucketOf(end) == b) ++end;
             }
+            if (b < 0 || b >= buckets) { i = end; continue; }   // outside the window
 
             float lo = out.minv[static_cast<size_t>(b)];
             float hi = out.maxv[static_cast<size_t>(b)];
@@ -131,6 +168,12 @@ bool analyzeAudioPeaks(const std::string& path, int buckets, AudioPeaks& out) {
             counts[static_cast<size_t>(b)] += (end - i) * ch;
             i = end;
         }
+
+        // Past the far end. Audio does not reorder, so the first frame that
+        // begins at or after `to` is the last one worth decoding — and that is
+        // what makes a window on a two-hour file cost a window rather than two
+        // hours whichever end of it you asked for.
+        if (frame.pts >= to) break;
     }
 
     uint64_t total = 0;
@@ -145,7 +188,7 @@ bool analyzeAudioPeaks(const std::string& path, int buckets, AudioPeaks& out) {
 }
 
 bool grabThumbnails(const std::string& path, int count, int height,
-                    ThumbnailStrip& out) {
+                    ThumbnailStrip& out, Window window) {
     if (count <= 0 || height <= 0) return false;
 
     Opened opened = openAny(path, TrackKind::Video);
@@ -172,6 +215,18 @@ bool grabThumbnails(const std::string& path, int count, int height,
     if (duration <= 0)
         for (const auto& t : opened.source->tracks())
             duration = std::max(duration, t.durationNs);
+
+    // A window has to be clamped against something, and a file that will not
+    // say how long it is offers nothing to clamp against — so a windowed grab
+    // on one is refused rather than answered with a strip of whichever seconds
+    // the walk happened to reach. The whole-file case keeps its own fallback
+    // just above: no window, no clamping, and a span of zero puts every target
+    // at the start, which is what it has always done.
+    TimeNs from = 0, to = duration;
+    if (window.fromNs > 0 || window.toNs > 0) {
+        if (!clampWindow(window, duration, from, to)) return false;
+    }
+    const TimeNs span = to > from ? to - from : 0;
 
     // The aspect the strip is cut to is the DISPLAYED one. A sideways phone
     // clip is 1920x1080 on disk and 1080x1920 on screen, and a filmstrip that
@@ -215,8 +270,8 @@ bool grabThumbnails(const std::string& path, int count, int height,
         // Sample from the middle of each slice, so the first thumbnail is a
         // frame of content rather than whatever black the file opens on.
         const TimeNs target =
-            duration > 0
-                ? static_cast<TimeNs>(duration * (2 * int64_t(i) + 1) / (2 * int64_t(count)))
+            span > 0
+                ? from + static_cast<TimeNs>(span * (2 * int64_t(i) + 1) / (2 * int64_t(count)))
                 : 0;
 
         const bool needSeek = pos < 0 || target < pos || (target - pos) > kResumeGapNs;
