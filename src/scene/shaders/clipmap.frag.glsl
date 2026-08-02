@@ -82,7 +82,7 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     // wants the CHART normal — "how steep is this ground" is a property of the
     // terrain, not of where the camera happens to be standing.
     vec3 n = normalize(vec3(-grad.x, 1.0, -grad.y));
-    normal = cmCurveNormal(rel, n);
+    normal = cmCurveNormal(cmChartRel(rel), n);
 
     float wy     = h0 + dw * d.x;
 

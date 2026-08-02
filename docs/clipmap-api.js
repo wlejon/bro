@@ -220,6 +220,25 @@
 //   river" test. Subtract the layer's own floor, or fade the term out where the
 //   cell is too coarse to resolve what it is claiming to show.
 //
+// clipmap.setChartCenter(x, z) → clipmap
+// clipmap.setChartCenter(null) → clipmap
+//   Pin the planetary-curvature chart to a fixed world XZ, or restore the
+//   default (null): a chart centred on the camera's ground point, re-centred
+//   every update(). Only meaningful with planetRadius > 0.
+//
+//   The sheet's datum is the sphere of radius planetRadius TANGENT to y = 0 at
+//   the chart centre. The camera-following default keeps the chart exact under
+//   the eye, which is right whenever the sheet is the only representation of
+//   the world. An app that also draws a real, world-anchored globe of the same
+//   radius must pin the chart to the globe's tangent point: two equal spheres
+//   tangent at points a distance c apart differ in height by c²/2R at either
+//   tangent point — 11.5 km at c = 383 km on Earth radius — so a camera-centred
+//   sheet drifts kilometres off a world-anchored globe as the camera travels.
+//   Pinned, they are the same sphere by construction. The cost is second-order
+//   azimuthal-equidistant compression at a camera d off the centre (radial
+//   cos(d/R), tangential sin(d/R)/(d/R): 0.18% / 0.06% at d = 383 km) instead
+//   of at the stack's rim.
+//
 // clipmap.coverageDistance(eyeAboveSeaLevel) → Number
 //   Radius in metres across which height data is required for a camera at eyeAboveSeaLevel.
 //

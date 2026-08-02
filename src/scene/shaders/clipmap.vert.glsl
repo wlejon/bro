@@ -131,7 +131,7 @@ void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
     }
 
     vec2 rel = wxz - u_camXZ;
-    pos    = cmCurve(rel, h);              // bend the chart onto the planet
+    pos    = cmCurve(cmChartRel(rel), h);  // bend the chart onto the planet
     normal = vec3(0.0, 1.0, 0.0);          // real normal is per-pixel
 
     // Hand the FLAT chart offset to the fragment stage. It used to reconstruct

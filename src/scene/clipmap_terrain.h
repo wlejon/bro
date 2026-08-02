@@ -191,6 +191,27 @@ public:
     /// Per frame: park the node on the camera and push the camera uniforms.
     void update(float camX, float camY, float camZ);
 
+    /// Pin the planetary-curvature chart centre to a fixed world XZ, instead of
+    /// the default (the camera's ground point, re-centred every update).
+    ///
+    /// WHY. cmCurve bends the flat height field onto the sphere of radius
+    /// planetRadius TANGENT to the y = 0 plane at the chart centre. With the
+    /// default centre that sphere follows the camera, and any world-anchored
+    /// sphere of the same radius (an app's real globe) diverges from it by
+    /// |camXZ - anchor|^2 / 2R at the tangent points — kilometres once the
+    /// camera is a few hundred km off the anchor, however exact the fit was
+    /// over the anchor itself. Pinning the centre to the globe's tangent point
+    /// makes sheet and globe the SAME sphere at every distance, by
+    /// construction. The price is second-order AE-chart compression at the
+    /// camera when it travels off the centre (cos th radial, sin(th)/th
+    /// tangential — 0.18% / 0.06% at 383 km on Earth radius) instead of at the
+    /// stack's rim. See u_chartXZ in clipmap_common.glsl for the derivation.
+    ///
+    /// No effect on a flat world (planetRadius 0). clearChartCenter() restores
+    /// the camera-following default exactly.
+    void setChartCenter(float x, float z);
+    void clearChartCenter();
+
     /// CPU sample of the SAME surface the GPU renders, in world metres —
     /// height layers plus procedural detail. This is what collision and camera
     /// grounding must use: detail displaces the drawn surface by metres, and a
@@ -331,6 +352,16 @@ private:
 
     // Power-of-two zoom of the ring stack, chosen per update from altitude.
     float cellScale_ = 1.0f;
+
+    // Pinned curvature-chart centre (setChartCenter); when unset, update()
+    // pushes the camera ground point and behaviour is exactly the old one.
+    bool  chartPinned_ = false;
+    float chartX_ = 0.0f;
+    float chartZ_ = 0.0f;
+    // Last camera handed to update(), so setChartCenter/clearChartCenter can
+    // re-push the uniform immediately rather than waiting a frame.
+    float lastCamX_ = 0.0f;
+    float lastCamZ_ = 0.0f;
 
     // Material uniforms
     float rockAlbedo_[3]  = {0.246f, 0.232f, 0.221f};

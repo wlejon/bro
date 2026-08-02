@@ -148,6 +148,27 @@ static JSValue js_clipmap_setSnowLine(JSContext* ctx, JSValueConst this_val,
     return JS_DupValue(ctx, this_val);
 }
 
+// clipmap.setChartCenter(x, z) — pin the planetary-curvature chart to a fixed
+// world XZ (the tangent point of the sphere the sheet should agree with);
+// clipmap.setChartCenter(null) restores the camera-following default. See
+// ClipmapTerrain::setChartCenter for the geometry.
+static JSValue js_clipmap_setChartCenter(JSContext* ctx, JSValueConst this_val,
+                                         int argc, JSValueConst* argv) {
+    auto* self = qjsbind::unwrap<CW>(ctx, this_val);
+    if (!self || !self->terrain) return JS_DupValue(ctx, this_val);
+    if (argc < 1 || JS_IsNull(argv[0]) || JS_IsUndefined(argv[0])) {
+        self->terrain->clearChartCenter();
+        return JS_DupValue(ctx, this_val);
+    }
+    if (argc < 2)
+        return JS_ThrowTypeError(ctx, "setChartCenter(x, z) needs two numbers, or null to clear");
+    double x = 0.0, z = 0.0;
+    if (JS_ToFloat64(ctx, &x, argv[0]) < 0) return JS_EXCEPTION;
+    if (JS_ToFloat64(ctx, &z, argv[1]) < 0) return JS_EXCEPTION;
+    self->terrain->setChartCenter((float)x, (float)z);
+    return JS_DupValue(ctx, this_val);
+}
+
 static JSValue js_clipmap_setDetail(JSContext* ctx, JSValueConst this_val,
                                     int argc, JSValueConst* argv) {
     auto* self = qjsbind::unwrap<CW>(ctx, this_val);
@@ -373,6 +394,7 @@ void ClipmapBindings::install(JSContext* ctx) {
         // No constructor — created via scene.createClipmapTerrain()
         .method_raw("setHeightLayer", js_clipmap_setHeightLayer, 2)
         .method_raw("setSnowLine", js_clipmap_setSnowLine, 1)
+        .method_raw("setChartCenter", js_clipmap_setChartCenter, 2)
         .method_raw("setDetail", js_clipmap_setDetail, 1)
         .method_raw("setMaterials", js_clipmap_setMaterials, 1)
         .method_raw("setForest", js_clipmap_setForest, 1)

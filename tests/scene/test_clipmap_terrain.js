@@ -688,6 +688,50 @@ if (!scene) {
         assert(compsThrew, 'setSurfaceLayer rejects a components count other than 3 or 4');
     }
 
+    // =====================================================================
+    // (7) The curvature chart centre.
+    //
+    // Default = the camera ground point, re-pushed every update; pinning it
+    // via setChartCenter must (a) be a no-op when pinned exactly AT the
+    // camera ground point — same floats, same frame — and (b) actually move
+    // the picture when pinned elsewhere, or the uniform is a dead wire. The
+    // camera parks at XZ = (0,0) so (a) is an exact-equality test.
+    // =====================================================================
+    {
+        const opts = { levels: 8, resolution: 64, cellSize: 4,
+                       planetRadius: 6371000, detailRelief: 0 };
+        function shotChart(pin) {
+            const t = scene.createClipmapTerrain(opts);
+            const w = 64, mpc = 8192;
+            t.setHeightLayer(0, makeLayer(w, w, -(w * mpc) / 2, -(w * mpc) / 2,
+                                          mpc, (x, z) => 0.0001 * x + 200));
+            scene.setCamera({
+                fov: 60, near: 1, far: 800000, position: [0, 3000, 0],
+                target: [0, 0, 40000], up: [0, 1, 0],
+            });
+            if (pin === 'clear') { t.setChartCenter(250000, 0); t.setChartCenter(null); }
+            else if (pin) t.setChartCenter(pin[0], pin[1]);
+            t.update(0, 3000, 0);
+            const img = scene.captureFrame();
+            t.destroy();
+            return img;
+        }
+        const meanDiff = (a, b) => {
+            let s = 0;
+            for (let i = 0; i < a.data.length; i++) s += Math.abs(a.data[i] - b.data[i]);
+            return s / a.data.length;
+        };
+
+        const def = shotChart(null);
+        assert(meanDiff(shotChart([0, 0]), def) === 0,
+            'a chart pinned at the camera ground point renders the default frame exactly');
+        assert(meanDiff(shotChart([250000, 0]), def) > 0.5,
+            `a chart pinned 250 km away moves the picture — the wire is live ` +
+            `(${meanDiff(shotChart([250000, 0]), def).toFixed(2)})`);
+        assert(meanDiff(shotChart('clear'), def) === 0,
+            'setChartCenter(null) restores the camera-following default exactly');
+    }
+
     cm.destroy();
     assert(cm.node === null, 'destroy() releases the node');
     // Destroy is idempotent and every accessor stays safe afterwards.

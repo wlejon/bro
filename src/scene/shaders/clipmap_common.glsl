@@ -40,6 +40,29 @@ uniform vec4 u_lBandLimited;
 
 uniform vec2  u_camXZ;
 uniform float u_camY;
+// Centre of the curvature chart, world XZ (see PLANETARY CURVATURE below).
+// DEFAULTS TO u_camXZ — ClipmapTerrain::update pushes the camera ground point
+// unless the app pinned a centre with setChartCenter(), so existing apps are
+// unchanged. An app that draws a real globe under this sheet pins the chart to
+// the globe's tangent point, and then both describe the SAME sphere:
+//
+//   cmCurve's datum maps flat offset rel onto exactly the sphere of radius R
+//   tangent to the plane y=0 at the chart centre —
+//   |(R sin th, R - 2R sin^2(th/2))| = R identically. Two such spheres with
+//   tangent points t1, t2 differ in height at flat position x by
+//       (|x - t2|^2 - |x - t1|^2) / 2R,
+//   which is |t1 - t2|^2 / 2R at either tangent point: ~11.5 km for two
+//   centres 383 km apart on an Earth-radius sphere. A camera-centred sheet
+//   under a world-anchored globe therefore diverges by KILOMETRES as the
+//   camera travels, however perfectly the two agree over the anchor.
+//
+// What pinning costs: the azimuthal-equidistant chart is exact at its centre
+// and compresses with distance (radially by cos th, tangentially by
+// sin(th)/th). Pinned, that compression sits at the CAMERA when it is d off
+// the centre — at d = 383 km it is 0.18% radial / 0.06% tangential, metres
+// per kilometre of ground — instead of at the rim. Second order and smooth,
+// against the first-order kilometre-scale disagreement it removes.
+uniform vec2  u_chartXZ;
 uniform float u_cellSize;      // c0, level-0 cell size in metres (EFFECTIVE —
                                // already multiplied by u_cellScale)
 uniform float u_cellScale;     // power-of-two zoom of the whole ring stack —
@@ -56,12 +79,15 @@ uniform float u_planetRadius;  // metres; 0 = flat world, no curvature
 // PLANETARY CURVATURE
 //
 // The height field stays a flat function of world XZ; this bends the SURFACE
-// it describes onto a sphere. World XZ is read as arc length from the camera's
-// ground point, i.e. an azimuthal-equidistant chart centred on the eye, so the
-// cap is exact under the camera and stretches at its rim. That chart moves with
-// the camera, which is fine for the near field and is what a cube-sphere
-// replaces for the far field — but the cue it buys is the one that matters:
-// the horizon lands where a planet of this radius puts it.
+// it describes onto a sphere. World XZ is read as arc length from the chart
+// centre u_chartXZ — by default the camera's ground point, i.e. an
+// azimuthal-equidistant chart centred on the eye, so the cap is exact under
+// the camera and stretches at its rim. That default chart moves with the
+// camera, which is fine for the near field and is what a cube-sphere replaces
+// for the far field — but the cue it buys is the one that matters: the horizon
+// lands where a planet of this radius puts it. An app whose world has a FIXED
+// tangent point (a globe under the sheet) pins the chart there instead — see
+// u_chartXZ above for the tangent-sphere arithmetic.
 //
 // Without this the world showed ground to 524 km from a 2 m eye height. Earth
 // shows 5 km. That single number is why a correct-looking height field still
@@ -72,11 +98,22 @@ uniform float u_planetRadius;  // metres; 0 = flat world, no curvature
 // Everything here is a pure function of (rel, h), so the crack-free guarantee
 // survives: two rings meeting at a boundary bend identically.
 
+// Flat chart offset from the CHART CENTRE, given the offset from the camera.
+// Written as rel minus a delta (rather than wxz - u_chartXZ) so that in the
+// default chart the delta is an exact 0.0 and rel passes through bit-for-bit.
+vec2 cmChartRel(vec2 rel) {
+    return rel - (u_chartXZ - u_camXZ);
+}
+
 // The camera-relative position of a point that sits `h` metres above the datum
-// at flat offset `rel` from the camera.
+// at flat offset `rel` from the CHART CENTRE (cmChartRel of the camera-relative
+// offset). The chart-to-camera delta is added back on the way out, so the
+// output stays camera-relative whatever the chart centre is; with the default
+// centre the delta is an exact 0.0 and the result is unchanged.
 vec3 cmCurve(vec2 rel, float h) {
     float R = u_planetRadius;
-    if (R <= 0.0) return vec3(rel.x, h - u_camY, rel.y);
+    vec2 delta = u_chartXZ - u_camXZ;
+    if (R <= 0.0) return vec3(rel.x + delta.x, h - u_camY, rel.y + delta.y);
 
     float d  = length(rel);
     float th = d / R;                       // subtended angle
@@ -92,14 +129,15 @@ vec3 cmCurve(vec2 rel, float h) {
     // sin(th)/th is 0/0 at the camera, so series-expand under the threshold.
     float sinc = (th < 1e-4) ? 1.0 - th * th / 6.0 : sin(th) / th;
 
-    vec2 xz = rel * ((1.0 + h / R) * sinc);
+    vec2 xz = rel * ((1.0 + h / R) * sinc) + delta;
     return vec3(xz.x, y - u_camY, xz.y);
 }
 
-// Rotate a normal built in the flat chart into the curved frame. The local up
-// tilts by exactly th, about the axis perpendicular to rel. Distant ground can
-// subtend tens of degrees, so skipping this lights the far field as though it
-// were still a plane and the terminator lands in the wrong place.
+// Rotate a normal built in the flat chart into the curved frame. `rel` is the
+// offset from the CHART CENTRE (as for cmCurve): the local up tilts by exactly
+// th about the axis perpendicular to rel. Distant ground can subtend tens of
+// degrees, so skipping this lights the far field as though it were still a
+// plane and the terminator lands in the wrong place.
 vec3 cmCurveNormal(vec2 rel, vec3 n) {
     float R = u_planetRadius;
     float d = length(rel);

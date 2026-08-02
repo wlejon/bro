@@ -350,6 +350,16 @@ void ClipmapTerrain::update(float camX, float camY, float camZ) {
 
     const float camXZ[2] = {camX, camZ};
     node_->setCustomShaderUniform("u_camXZ", 2, camXZ);
+    lastCamX_ = camX;
+    lastCamZ_ = camZ;
+
+    // The curvature chart centre: the camera ground point unless the app
+    // pinned it (setChartCenter). Pushing the SAME floats as u_camXZ in the
+    // default case is what keeps the shader's delta an exact 0.0 and the
+    // default path bit-for-bit what it was.
+    const float chartXZ[2] = {chartPinned_ ? chartX_ : camX,
+                              chartPinned_ ? chartZ_ : camZ};
+    node_->setCustomShaderUniform("u_chartXZ", 2, chartXZ);
 
     // Anchor the detail lattice near the camera. Snapping in double and
     // handing the shader both the anchor and the camera's small offset from it
@@ -482,8 +492,20 @@ void ClipmapTerrain::update(float camX, float camY, float camZ) {
     //     it by up to 2*c_(L-1) = cellSize * 2^L beyond the baked extent.
     // Keeping culling ON matters: the node is one of the largest in any scene
     // that has it, and it should still drop out when the camera looks away.
-    const float vertical = std::max(std::abs(maxHeight_ - camY),
-                                    std::abs(minHeight_ - camY));
+    float vertical = std::max(std::abs(maxHeight_ - camY),
+                              std::abs(minHeight_ - camY));
+    // On a planet the sheet also SAGS below the flat heights: the datum at arc
+    // distance d from the chart centre sits 2R*sin^2(d/2R) below y = 0 — 86 km
+    // at a 1049 km reach. The farthest ground from the chart centre is the
+    // stack's rim on the far side of the camera, so the bound is reach plus
+    // the camera's own offset from the centre (0 unless the chart is pinned).
+    if (cfg_.planetRadius > 0.0f) {
+        const float dx = camX - (chartPinned_ ? chartX_ : camX);
+        const float dz = camZ - (chartPinned_ ? chartZ_ : camZ);
+        const float d  = farDistance() + std::sqrt(dx * dx + dz * dz);
+        const float s  = std::sin(0.5f * d / cfg_.planetRadius);
+        vertical += 2.0f * cfg_.planetRadius * s * s;
+    }
     const float snapSlop = c0 * std::exp2(static_cast<float>(cfg_.levels));
     // Detail rides on top of the layer range, so it widens the vertical span.
     // Octave i contributes detailRelief * lambda0 * (gain/2)^i at most, and the
@@ -685,6 +707,24 @@ float ClipmapTerrain::detailBound() const {
         lambda *= 0.5f;
     }
     return sum;
+}
+
+void ClipmapTerrain::setChartCenter(float x, float z) {
+    chartPinned_ = true;
+    chartX_ = x;
+    chartZ_ = z;
+    if (node_) {
+        const float chartXZ[2] = {x, z};
+        node_->setCustomShaderUniform("u_chartXZ", 2, chartXZ);
+    }
+}
+
+void ClipmapTerrain::clearChartCenter() {
+    chartPinned_ = false;
+    if (node_) {
+        const float chartXZ[2] = {lastCamX_, lastCamZ_};
+        node_->setCustomShaderUniform("u_chartXZ", 2, chartXZ);
+    }
 }
 
 void ClipmapTerrain::setSnowLine(float snowLine) {
