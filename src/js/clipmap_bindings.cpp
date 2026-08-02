@@ -404,6 +404,17 @@ void ClipmapBindings::install(JSContext* ctx) {
             if (!self->terrain) return 0.0;
             return self->terrain->elevationAt((float)x, (float)z);
         })
+        .method("renderedElevationAt", [](CW* self, double x, double z) -> double {
+            // elevationAt() bent by the planetary-curvature chart: the world Y
+            // at which the DRAWN sheet sits under (x, z). Identical to
+            // elevationAt() unless a chart centre is pinned on a round world;
+            // pinned, the sheet at chord rho from the centre has dropped by
+            // ~rho^2/2R, and a camera grounded on elevationAt() floats
+            // kilometres above the picture. Ground cameras and AGL readouts on
+            // this one; keep elevationAt() for the field's own space.
+            if (!self->terrain) return 0.0;
+            return self->terrain->renderedElevationAt((float)x, (float)z);
+        })
         .method("destroy", [](CW* self) {
             if (self->terrain) {
                 self->terrain->destroy();

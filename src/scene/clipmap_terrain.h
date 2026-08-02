@@ -222,6 +222,18 @@ public:
     /// mip — see docs/clipmap-api.js.
     float elevationAt(float x, float z) const;
 
+    /// World Y at which the RENDERED sheet sits beneath world (x, z) —
+    /// elevationAt() bent by the planetary curvature chart. Bit-for-bit equal
+    /// to elevationAt() on a flat world or with the default camera-following
+    /// chart, where the bend under any point is re-zeroed every update; under
+    /// a PINNED chart (setChartCenter) the sheet at chord distance rho from
+    /// the centre has dropped by the sagitta ~rho^2/2R — 12.6 km at 400 km on
+    /// Earth radius — and a camera grounded on elevationAt() floats that far
+    /// above the picture. Camera grounding and AGL readouts against a pinned
+    /// chart belong on THIS query; elevationAt() stays the flat-field answer
+    /// (the height data's own space, which generators and editors want).
+    float renderedElevationAt(float x, float z) const;
+
     MeshNode* node() const { return node_; }
 
     int levelCount() const { return cfg_.levels; }
@@ -325,6 +337,15 @@ private:
     /// Finest cell size the DATA resolves at this point, in metres — the top of
     /// the procedural band. Mirrors cmDataFloor() in clipmap_common.glsl.
     float dataFloorAt(float x, float z) const;
+
+    /// Flat-chart point rendered beneath world (x, z) under a pinned
+    /// curvature chart, plus the subtended angle th = d/R. Returns false —
+    /// leaving fx = x, fz = z, th = 0 — whenever the chart mapping is the
+    /// identity (no pinned centre, flat world, or (x, z) at the centre), so
+    /// the default path stays bit-for-bit what it was. See the derivation
+    /// above the definition.
+    bool chartPointUnder(float x, float z, float& fx, float& fz,
+                         float& th) const;
 
     /// Octaves the detail band may climb ABOVE detailWavelength when the data
     /// underfoot is coarser than it. Must equal CM_DETAIL_UP_OCTAVES in

@@ -732,6 +732,106 @@ if (!scene) {
             'setChartCenter(null) restores the camera-following default exactly');
     }
 
+    // =====================================================================
+    // (8) Chart-pinned ground truths — the LOD and the reach follow the
+    //     RENDERED sheet, not the flat field.
+    //
+    // With a pinned centre, cmCurve drops the sheet at chord rho by the
+    // sagitta ~rho^2/2R — 12.55 km at 400 km on Earth radius. Three claims:
+    //   (a) renderedElevationAt is elevationAt EXACTLY (same bits) while no
+    //       chart is pinned, and the analytic bent height once one is;
+    //   (b) an eye standing ON the bent sheet 400 km out still renders its
+    //       procedural detail. Broken, u_camGroundY carried the UNBENT field
+    //       height, cmCellSize believed the eye was 12.6 km up, and its AA
+    //       floor (~170 m at this viewport) killed every octave in the frame
+    //       — the far-station picture airbrushed while the near one stayed
+    //       crisp;
+    //   (c) an eye flying high above the bent sheet keeps its horizon reach.
+    //       Broken, its world Y was negative, horizonDistance clamped it to
+    //       an eye at zero altitude, and the stack capped at horizon(peak)
+    //       alone — the world ended tens of km out from a 20 km cruise.
+    // =====================================================================
+    {
+        const R = 6371000;
+        const w = 64, mpc = 16384;          // one layer covering +-524 km
+        const rho = 400000;
+
+        // (a) The query itself, against the closed form on a constant field.
+        const tV = scene.createClipmapTerrain({
+            levels: 8, resolution: 64, cellSize: 4,
+            planetRadius: R, detailRelief: 0,
+        });
+        tV.setHeightLayer(0, makeLayer(w, w, -(w * mpc) / 2, -(w * mpc) / 2,
+                                       mpc, () => 200));
+        for (const [x, z] of [[0, 0], [123456, -98765], [400000, 250000]])
+            assert(tV.renderedElevationAt(x, z) === tV.elevationAt(x, z),
+                `renderedElevationAt IS elevationAt with no pinned chart (${x}, ${z})`);
+        tV.setChartCenter(0, 0);
+        assert(tV.renderedElevationAt(0, 0) === tV.elevationAt(0, 0),
+            'renderedElevationAt at the pinned centre is still the flat answer');
+        const th    = Math.asin(rho / (R + 200));
+        const wantY = 200 * Math.cos(th) - 2 * R * Math.sin(th / 2) ** 2;
+        const gotY  = tV.renderedElevationAt(rho, 0);
+        assert(Math.abs(gotY - wantY) < 0.5,
+            `renderedElevationAt bends by the sagitta at 400 km ` +
+            `(${gotY.toFixed(1)} vs ${wantY.toFixed(1)} analytic)`);
+        assert(tV.elevationAt(rho, 0) - gotY > 12000,
+            'the 400 km drop is kilometres, not noise');
+        tV.destroy();
+
+        // (b) Eye-level detail at a 400 km station: a fine band-limited
+        // window under the eye, detail on vs off, the frame must move.
+        const t8 = scene.createClipmapTerrain({
+            levels: 8, resolution: 64, cellSize: 4,
+            planetRadius: R, maxCellScale: 4096,
+            detailWavelength: 64, detailRelief: 0.6, detailOctaves: 6,
+        });
+        t8.setHeightLayer(1, Object.assign(
+            makeLayer(w, w, -(w * mpc) / 2, -(w * mpc) / 2, mpc, () => 200),
+            { bandLimited: true }));
+        const fmpc = 32;                     // 2 km window centred on the station
+        t8.setHeightLayer(0, Object.assign(
+            makeLayer(w, w, rho - (w * fmpc) / 2, -(w * fmpc) / 2, fmpc,
+                      () => 200),
+            { bandLimited: true }));
+        t8.setChartCenter(0, 0);
+
+        const eyeY = t8.renderedElevationAt(rho, 0) + 2;
+        assert(eyeY < -12000,
+            `the station eye rides the bent sheet (${eyeY.toFixed(0)})`);
+        scene.setCamera({ fov: 60, near: 0.5, far: 200000,
+                          position: [rho, eyeY, 0],
+                          target: [rho + 40, eyeY - 4, 0], up: [0, 1, 0] });
+        for (let i = 0; i < 6; i++) t8.update(rho, eyeY, 0);
+        assert(t8.cellScale === 1,
+            `an eye 2 m over the rendered sheet keeps the finest rings ` +
+            `(cellScale ${t8.cellScale})`);
+        const withDetail = scene.captureFrame();
+        t8.setDetail({ relief: 0 });
+        t8.update(rho, eyeY, 0);
+        const noDetail = scene.captureFrame();
+        let diff = 0;
+        for (let i = 0; i < withDetail.data.length; i++)
+            diff += Math.abs(withDetail.data[i] - noDetail.data[i]);
+        diff /= withDetail.data.length;
+        assert(diff > 1,
+            `detail octaves survive a 400 km chart offset — switching them ` +
+            `off moves the frame (meanDiff ${diff.toFixed(2)})`);
+
+        // (c) Reach for a 20 km eye 600 km off the pinned centre.
+        const rho2 = 600000;
+        const hiY  = t8.renderedElevationAt(rho2, 0) + 20000;
+        assert(hiY < 0,
+            `the cruise camera's world Y is negative under the bend ` +
+            `(${hiY.toFixed(0)})`);
+        for (let i = 0; i < 12; i++) t8.update(rho2, hiY, 0);
+        assert(t8.cellScale >= 8,
+            `a 20 km eye 600 km off the pinned centre zooms the stack out ` +
+            `(cellScale ${t8.cellScale}, farDistance ` +
+            `${(t8.farDistance / 1000).toFixed(0)} km)`);
+        t8.destroy();
+    }
+
     cm.destroy();
     assert(cm.node === null, 'destroy() releases the node');
     // Destroy is idempotent and every accessor stays safe afterwards.

@@ -72,7 +72,11 @@ uniform float u_pixelScale;    // 2*tan(fovY/2)/viewportHeight — see cmCellSiz
 uniform float u_layerCount;
 uniform float u_heightScale;
 uniform float u_seaLevel;
-uniform float u_camGroundY;    // terrain height under the camera, world metres
+uniform float u_camGroundY;    // world Y of the RENDERED sheet under the
+                               // camera — chart-aware when a centre is pinned
+                               // (see ClipmapTerrain::update), so that
+                               // |u_camY - u_camGroundY| is a true
+                               // eye-to-surface distance in every chart
 uniform float u_planetRadius;  // metres; 0 = flat world, no curvature
 
 // ---------------------------------------------------------------------------

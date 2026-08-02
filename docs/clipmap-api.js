@@ -286,6 +286,31 @@
 //
 //   const y = clipmap.elevationAt(player.x, player.z);
 //   player.y = y + 1.8;
+//
+// elevationAt answers in the FIELD's own space — the flat chart the height
+// data lives in. That is the right space for generators and editors, and it
+// is also the drawn surface whenever the curvature chart follows the camera
+// (the bend under the camera is then zero by construction). It stops being
+// the drawn surface the moment a chart centre is pinned — see below.
+
+
+// -----------------------------------------------------------------------------
+// clipmap.renderedElevationAt(x, z) → Number
+// -----------------------------------------------------------------------------
+//
+// elevationAt() bent by the planetary-curvature chart: the world Y at which
+// the sheet is actually DRAWN under (x, z). Identical to elevationAt() on a
+// flat world or with the default camera-following chart. With a pinned chart
+// centre (setChartCenter) the sheet at chord distance rho from the centre has
+// dropped by the sagitta ~rho²/2R — 12.6 km at 400 km on Earth radius — and a
+// camera grounded on elevationAt() floats that far above the picture.
+//
+// So: ground cameras, characters and AGL readouts on THIS query whenever a
+// chart centre is pinned; keep elevationAt() for questions about the height
+// field itself (what the generator wrote, what an editor should read back).
+//
+//   clipmap.setChartCenter(0, 0);
+//   cam.y = clipmap.renderedElevationAt(cam.x, cam.z) + 1.8;
 
 
 // -----------------------------------------------------------------------------

@@ -379,7 +379,34 @@ void ClipmapTerrain::update(float camX, float camY, float camZ) {
     // Height above the ground, not above sea level — see cmCellSize. The base
     // stack is enough: detail is metres against an altitude term that only
     // matters at hundreds.
-    const float groundY = baseElevationAt(camX, camZ);
+    //
+    // "Ground" means the RENDERED sheet, and under a pinned chart centre that
+    // is not the flat field height. cmCurve maps the flat point at arc
+    // distance d = R*th from the centre to chord rho = (R+h)*sin th and
+    // height y = h*cos th - 2R*sin^2(th/2), so the sheet under a camera at
+    // chord rho sits ~rho^2/2R BELOW the field — 12.6 km at rho = 400 km on
+    // Earth radius. The shader's cmCellSize/cmCellSizeAA read
+    //     dy = |u_camY - u_camGroundY|
+    // as the eye-to-surface distance and floor the sampled cell at
+    // dy * u_pixelScale * CM_PIXELS_PER_CELL; feeding the flat height makes
+    // dy ~ rho^2/2R for an eye standing ON the sheet, an ~18 m minimum cell
+    // (1080 px, 55 deg fov) that airbrushes the whole frame. So: invert the
+    // chord mapping to the flat point actually drawn beneath the eye, and
+    // bend its height exactly as cmCurve will. chartPointUnder is the
+    // identity — same call, same bits — whenever no chart is pinned.
+    float groundY;
+    {
+        float gx, gz, gth;
+        if (chartPointUnder(camX, camZ, gx, gz, gth)) {
+            const double h = baseElevationAt(gx, gz);
+            const double s = std::sin(0.5 * static_cast<double>(gth));
+            groundY = static_cast<float>(
+                h * std::cos(static_cast<double>(gth))
+                - 2.0 * static_cast<double>(cfg_.planetRadius) * s * s);
+        } else {
+            groundY = baseElevationAt(camX, camZ);
+        }
+    }
     node_->setCustomShaderUniform("u_camGroundY", 1, &groundY);
     node_->setCustomShaderUniform("u_camY", 1, &camY);
 
@@ -465,8 +492,30 @@ void ClipmapTerrain::update(float camX, float camY, float camZ) {
         const float aa = std::abs(camY - groundY) * scale * kPixelsPerCell;
         float want = aa / cfg_.cellSize;
         if (cfg_.planetRadius > 0.0f) {
+            // Eye height above SEA LEVEL for the horizon reach. Raw camY is
+            // that height only while the datum is the y = 0 plane; under a
+            // pinned chart the datum is cmCurve's sphere — radius R centred
+            // at C = (chartX, -R, chartZ), since |cmCurve(rel, h) - C| =
+            // R + h identically — and a camera hugging the bent sheet at
+            // chord rho has camY ~ -rho^2/2R. horizonDistance's max(h, 0)
+            // reads that as an eye at the planet's surface with zero height:
+            // reach collapses to horizon(peak) alone and the stack is capped
+            // tens of km out however high the camera actually flies. The real
+            // altitude, whatever the chart, is |cam - C| - R. Double, not
+            // float: R eats seven significant digits and the float
+            // subtraction would quantise the altitude to half-metres.
+            float eyeASL = camY - cfg_.seaLevel;
+            if (chartPinned_) {
+                const double R  = cfg_.planetRadius;
+                const double dx = static_cast<double>(camX) - chartX_;
+                const double dz = static_cast<double>(camZ) - chartZ_;
+                const double dy = static_cast<double>(camY) + R;
+                eyeASL = static_cast<float>(
+                             std::sqrt(dx * dx + dz * dz + dy * dy) - R)
+                       - cfg_.seaLevel;
+            }
             const float peak  = std::max(maxHeight_ - cfg_.seaLevel, 0.0f);
-            const float reach = horizonDistance(camY - cfg_.seaLevel)
+            const float reach = horizonDistance(eyeASL)
                               + horizonDistance(peak);
             const float unit  = cfg_.cellSize * static_cast<float>(cfg_.resolution / 2)
                               * std::exp2(static_cast<float>(cfg_.levels - 1));
@@ -692,6 +741,61 @@ float ClipmapTerrain::elevationAt(float x, float z) const {
     }
 
     return h0 + weight * sum;
+}
+
+// ---------------------------------------------------------------------------
+// Chart-aware ground — where the RENDERED sheet is, not where the field is.
+//
+// cmCurve (clipmap_common.glsl) maps the flat-chart point at arc distance
+// d = R*th from the chart centre to
+//     chord  rho = (R + h) * sin th                (horizontal, from centre)
+//     height y   = h * cos th - 2R * sin^2(th/2)
+// With the default camera-following centre the bend under any point the
+// engine asks about is re-zeroed every update; with a PINNED centre
+// (setChartCenter) a world position at chord rho sits over the flat point at
+// arc d = R * asin(rho / (R + h)), and the sheet there has dropped by the
+// sagitta 2R*sin^2(th/2) ~ rho^2/2R. Both R and the mapping are the very
+// ones the shader uses (cfg_.planetRadius is pushed as u_planetRadius), so
+// the two cannot drift.
+//
+// The inversion needs h before it has found the point that carries h, so it
+// runs twice: h/R < ~1.3e-3 on any Earth-like world, so the h = 0 pass lands
+// within rho * h/R (~500 m at 400 km) and the refined pass within
+// centimetres of the true foot point.
+// ---------------------------------------------------------------------------
+
+bool ClipmapTerrain::chartPointUnder(float x, float z, float& fx, float& fz,
+                                     float& th) const {
+    fx = x;
+    fz = z;
+    th = 0.0f;
+    if (!chartPinned_ || cfg_.planetRadius <= 0.0f) return false;
+    const double R  = cfg_.planetRadius;
+    const double dx = static_cast<double>(x) - chartX_;
+    const double dz = static_cast<double>(z) - chartZ_;
+    const double rho = std::sqrt(dx * dx + dz * dz);
+    if (!(rho > 0.0)) return false;
+    const double ux = dx / rho, uz = dz / rho;
+    // asin's argument is clamped: a chord past R + h has bent beyond the
+    // sphere's equator and has no point beneath it — answer with the rim.
+    double t = std::asin(std::min(rho / R, 1.0));
+    const double h0 = baseElevationAt(static_cast<float>(chartX_ + ux * R * t),
+                                      static_cast<float>(chartZ_ + uz * R * t));
+    t = std::asin(std::min(rho / std::max(R + h0, 1.0), 1.0));
+    fx = static_cast<float>(chartX_ + ux * R * t);
+    fz = static_cast<float>(chartZ_ + uz * R * t);
+    th = static_cast<float>(t);
+    return true;
+}
+
+float ClipmapTerrain::renderedElevationAt(float x, float z) const {
+    float fx, fz, th;
+    if (!chartPointUnder(x, z, fx, fz, th)) return elevationAt(x, z);
+    const double h = elevationAt(fx, fz);
+    const double s = std::sin(0.5 * static_cast<double>(th));
+    return static_cast<float>(h * std::cos(static_cast<double>(th))
+                              - 2.0 * static_cast<double>(cfg_.planetRadius)
+                                    * s * s);
 }
 
 float ClipmapTerrain::detailBound() const {
