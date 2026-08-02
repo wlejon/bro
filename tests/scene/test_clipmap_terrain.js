@@ -1280,6 +1280,340 @@ if (!scene) {
     cm.destroy();
     assert(cm.elevationAt(0, 0) === 0, 'elevationAt on a destroyed terrain is inert');
 
+    // =====================================================================
+    // (11) CUBIC RECONSTRUCTION OF THE CONTROL CHANNELS (cubicSurface).
+    //
+    // Bilinear is C0: its derivative jumps at every texel edge, so a threshold
+    // placed on a control channel draws its contour as a chain of straight
+    // segments hinged on the texel lattice — an organic feature bounded by the
+    // data grid, worst at the coarse rungs where a texel is kilometres. The
+    // opt-in mode reconstructs each surface layer with a cubic B-spline (C2)
+    // instead. Weights, the sixteen-taps-to-four reduction, the edge clamp and
+    // why not Catmull-Rom: clipmap_cubic.glsl.
+    //
+    // What this section proves:
+    //   * OFF changes nothing — not the vertex source, not one byte of the
+    //     fragment source outside a single contiguous insertion, not one bit
+    //     of a frame with no control layer to read.
+    //   * ON is measurably smoother, measured as the thing the artefact IS:
+    //     the second difference of the rendered channel across the texel
+    //     lattice, with a gate the bilinear path cannot pass.
+    //   * The geometry is untouched in both modes.
+    //   * layerFade's exact zero survives the new chain.
+    //   * The four-tap footprint stays inside the layer.
+    // =====================================================================
+    {
+        const bytesEqual = (a, b) => {
+            if (a.data.length !== b.data.length) return false;
+            for (let i = 0; i < a.data.length; i++)
+                if (a.data[i] !== b.data[i]) return false;
+            return true;
+        };
+
+        // --- OFF is not merely equivalent, it is the same source ------------
+        {
+            const off = scene.createClipmapTerrain({ levels: 4, resolution: 16 });
+            const on  = scene.createClipmapTerrain({ levels: 4, resolution: 16,
+                                                     cubicSurface: true });
+            const fOff = off.shaderSource('fragment');
+            const fOn  = on.shaderSource('fragment');
+
+            assert(fOff.length > 0 && fOn.length > fOff.length,
+                'shaderSource returns the composed fragment chunk');
+            assert(fOff.indexOf('cmCubicTap') < 0,
+                'the default fragment source carries no cubic code at all');
+            assert(fOn.indexOf('cmCubicTap') > 0,
+                'the cubic fragment source carries the filter');
+
+            // The strong statement, and the one that survives future edits to
+            // any of the four chunks: turning the mode ON inserts ONE
+            // contiguous run of bytes and changes nothing else. Turning it off
+            // therefore cannot shift a single instruction — the off path is
+            // not a dead branch, it is source that is not there.
+            let p = 0;
+            while (p < fOff.length && fOff.charCodeAt(p) === fOn.charCodeAt(p)) p++;
+            let s = 0;
+            while (s < fOff.length - p &&
+                   fOff.charCodeAt(fOff.length - 1 - s) ===
+                   fOn.charCodeAt(fOn.length - 1 - s)) s++;
+            assert(p + s === fOff.length,
+                `the cubic source is the default source plus one contiguous ` +
+                `insertion (matched ${p} + ${s} of ${fOff.length} bytes)`);
+
+            // The vertex stage never receives the chunk. It must not: nothing
+            // there reads a control channel, and clipmap.vert.glsl declares a
+            // cmSurface of its own (the sheet height) that the chunk's rename
+            // would otherwise capture.
+            assert(off.shaderSource('vertex') === on.shaderSource('vertex'),
+                'the vertex source is identical in both modes');
+            assert(on.shaderSource('vertex').indexOf('cmCubicTap') < 0,
+                'the cubic chunk never reaches the vertex stage');
+            assert(off.shaderSource('geometry') === '',
+                'an unknown stage name returns empty');
+
+            off.destroy();
+            on.destroy();
+        }
+
+        // --- the measurement scene -----------------------------------------
+        //
+        // Flat ground under a high, narrow-angle camera, so the frame is a
+        // pure picture of the reconstructed channel and nothing else:
+        //   * a constant height layer  -> every fragment has the same normal
+        //     and the same altitude, so slope, snow and sand are identically 0
+        //     and grass owns the whole frame;
+        //   * detailRelief 0 and an altitude far above the mottle's fade band
+        //     -> no procedural term contributes;
+        //   * biome 6 (grassland) and temperature 0.5 -> no biome branch, no
+        //     forest tint, past the cold clamp, so the grass colour is a
+        //     monotone function of the MOISTURE channel alone.
+        // One control texel is 2048 m — the coarse rung the artefact was
+        // measured at — and the camera sits where that texel spans about ten
+        // pixels.
+        const SURF = 64, TEXEL = 2048, ALT = 74200, FOV = 20;
+        const HALF = SURF * TEXEL / 2;
+
+        function control(fn) {
+            const data = new Float32Array(SURF * SURF * 3);
+            for (let j = 0; j < SURF; j++)
+                for (let i = 0; i < SURF; i++) {
+                    const k = (j * SURF + i) * 3;
+                    data[k]     = 6.0;
+                    data[k + 1] = fn(i, j);
+                    data[k + 2] = 0.5;
+                }
+            return { data, width: SURF, height: SURF,
+                     originX: -HALF, originZ: -HALF,
+                     metresPerCell: TEXEL, components: 3 };
+        }
+
+        function flat(cubic, extra) {
+            const opts = { levels: 12, resolution: 64, cellSize: 8,
+                           detailRelief: 0, snowLine: 1e9, cubicSurface: cubic };
+            for (const k in (extra || {})) opts[k] = extra[k];
+            const t = scene.createClipmapTerrain(opts);
+            t.setHeightLayer(0, makeLayer(64, 64, -HALF * 2, -HALF * 2,
+                                          HALF * 4 / 64, () => 100));
+            t.setMaterials({ grass: { albedo: [0.05, 0.95, 0.05] } });
+            return t;
+        }
+
+        function shotDown(t) {
+            scene.setCamera({
+                fov: FOV, near: 1, far: 4000000,
+                position: [0, ALT, 0], target: [0.001, 0, 0], up: [0, 0, -1],
+            });
+            t.update(0, ALT, 0);
+            return scene.captureFrame();
+        }
+
+        // Mean over scanlines of each scanline's LARGEST second difference in
+        // green. The second difference is exactly the quantity that is
+        // discontinuous: a bilinear reconstruction is piecewise linear along a
+        // row, so its second difference is ~0 inside a texel and spikes at
+        // every texel edge, and it is those spikes a threshold turns into the
+        // straight segments of a jagged contour. A C2 reconstruction has no
+        // spike to find. Taking the per-row maximum rather than the mean keeps
+        // the statistic on the kinks instead of drowning them in the 8-bit
+        // quantisation floor that both paths share.
+        function kinkEnergy(img) {
+            let sum = 0, rows = 0;
+            for (let y = 8; y < img.height - 8; y++) {
+                let mx = 0;
+                for (let x = 9; x < img.width - 9; x++) {
+                    const i = (y * img.width + x) * 4 + 1;
+                    const d2 = Math.abs(img.data[i - 4] - 2 * img.data[i] +
+                                        img.data[i + 4]);
+                    if (d2 > mx) mx = d2;
+                }
+                sum += mx; rows++;
+            }
+            return sum / rows;
+        }
+
+        // --- the gate -------------------------------------------------------
+        //
+        // Moisture runs through a cosine of two, three and four texels across
+        // X — real content near the top of the band a chart can carry, which
+        // is what a coarse rung holds and what bilinear renders as a fan of
+        // straight segments. Three periods rather than one so the gate does
+        // not rest on a single number.
+        //
+        // Strictly one terrain in the scene at a time: two overlapping sheets
+        // at the same altitude decide themselves by depth, and the frame would
+        // be measuring the tie-break rather than the filter.
+        const probes = [[0, 0], [4321, -8765], [60000, 60000]];
+        function run(cubic, field) {
+            const t = flat(cubic);
+            t.setSurfaceLayer(0, field);
+            const img = shotDown(t);
+            const mirror = probes.map(([x, z]) =>
+                [t.elevationAt(x, z), t.renderedElevationAt(x, z)]);
+            t.destroy();
+            return { img, mirror };
+        }
+        {
+            let off = null, on = null;
+            for (const period of [2, 3, 4]) {
+                const field = control((i) =>
+                    0.333 + 0.333 * Math.cos(2 * Math.PI * i / period));
+                off = run(false, field);
+                on  = run(true, field);
+                const kOff = kinkEnergy(off.img), kOn = kinkEnergy(on.img);
+                console.log(`  cubic: ${period}-texel period — kink energy ` +
+                            `bilinear ${kOff.toFixed(2)} -> cubic ` +
+                            `${kOn.toFixed(2)} (${(kOff / kOn).toFixed(2)}x)`);
+
+                // The bilinear path cannot pass this at any of the three. Its
+                // kink is a property of the FILTER, not of the data or the
+                // resolution: it is the field's curvature over one texel,
+                // collected into one pixel at the texel edge, so it grows as
+                // the content gets shorter — 5, 8, 11.7, 16 levels at 6, 4, 3,
+                // 2 texels — while the cubic path sits at 2, which is the
+                // 8-bit quantisation floor of the measurement itself. There is
+                // nothing left in the frame for a smoother filter to remove.
+                assert(kOff > 2.5 * kOn,
+                    `cubic reconstruction removes the texel-lattice kinks at a ` +
+                    `${period}-texel period (bilinear ${kOff.toFixed(2)}, ` +
+                    `cubic ${kOn.toFixed(2)})`);
+            }
+            const imgOff = off.img, imgOn = on.img;
+
+            // ...and it is a smoothing, not a flattening: the channel still
+            // drives the frame. A filter that had simply washed the field out
+            // would pass the gate above and be useless.
+            const spread = (img) => {
+                let lo = 255, hi = 0;
+                for (let i = 1; i < img.data.length; i += 4) {
+                    if (img.data[i] < lo) lo = img.data[i];
+                    if (img.data[i] > hi) hi = img.data[i];
+                }
+                return hi - lo;
+            };
+            const sOn = spread(imgOn), sOff = spread(imgOff);
+            assert(sOn > 0.5 * sOff,
+                `the smoothed channel still carries its signal ` +
+                `(green spread ${sOn} vs ${sOff})`);
+
+            // GEOMETRY IS UNTOUCHED. The mode changes what a fragment reads,
+            // never where the surface is: the coverage mask must be identical
+            // to the bit, and the CPU mirrors with it.
+            let alphaDiff = 0;
+            for (let i = 3; i < imgOff.data.length; i += 4)
+                if (imgOff.data[i] !== imgOn.data[i]) alphaDiff++;
+            assert(alphaDiff === 0,
+                `the drawn surface does not move (${alphaDiff} alpha pixels differ)`);
+            probes.forEach(([x, z], i) => {
+                assert(on.mirror[i][0] === off.mirror[i][0] &&
+                       on.mirror[i][1] === off.mirror[i][1],
+                    `the CPU elevation mirrors are unchanged at (${x}, ${z})`);
+            });
+        }
+
+        // --- with no control layer there is nothing to reconstruct ----------
+        // The chain returns before its first fetch, so the frame must be
+        // identical to the bit. This is the frame-level half of the source
+        // argument above: the chunk cannot leak into a stack that never calls
+        // it.
+        {
+            function bare(cubic) {
+                const t = flat(cubic);
+                const img = shotDown(t);
+                t.destroy();
+                return img;
+            }
+            assert(bytesEqual(bare(false), bare(true)),
+                'with no surface layer installed both modes render identically');
+        }
+
+        // --- a constant field is reproduced exactly, edges included ---------
+        // The B-spline's weights are non-negative and sum to 1, so a constant
+        // field must come back as that constant EVERYWHERE — including the
+        // border rows, where the four taps clamp into the band of texel
+        // centres. If the clamp were wrong the border would read something
+        // else, and this frame would differ from the bilinear one. It is the
+        // edge behaviour asserted rather than described.
+        {
+            const k = control(() => 0.42);
+            // A camera aimed across the layer's own corner, so the assertion
+            // covers the border rows and not just the interior.
+            function shotEdge(cubic) {
+                const t = flat(cubic);
+                t.setSurfaceLayer(0, k);
+                scene.setCamera({
+                    fov: 70, near: 1, far: 4000000,
+                    position: [HALF, ALT, HALF], target: [0, 0, 0], up: [0, 1, 0],
+                });
+                t.update(HALF, ALT, HALF);
+                const img = scene.captureFrame();
+                t.destroy();
+                return img;
+            }
+            assert(bytesEqual(shotEdge(false), shotEdge(true)),
+                'a constant control field reconstructs identically under both ' +
+                'filters, across the layer edge included');
+        }
+
+        // --- layerFade's exact zero survives --------------------------------
+        // A layer whose data has gone deeply sub-pixel is mixed in with an
+        // EXACT 0.0, and mix(s, f, 0.0) is s to the bit. The test does not
+        // trust the arithmetic: it replaces the faded layer's contents with a
+        // completely different field and demands the frame not move by one
+        // bit. That also proves the cubic fetches stay finite — a NaN arriving
+        // from off the texture would survive the zero and poison the mix.
+        {
+            // 64 m texels seen from 200 km: the rendered cell there is ~830 m,
+            // past the 8T = 512 m at which cmLayerFade reaches an exact zero.
+            const FINE = 64, N = 128, ALT2 = 200000;
+            const coarse = control((i, j) =>
+                0.333 + 0.333 * Math.cos(Math.PI * (i + j) / 3));
+            function fine(fn) {
+                const data = new Float32Array(N * N * 3);
+                for (let j = 0; j < N; j++)
+                    for (let i = 0; i < N; i++) {
+                        const k = (j * N + i) * 3;
+                        data[k] = 6.0; data[k + 1] = fn(i, j); data[k + 2] = 0.5;
+                    }
+                return { data, width: N, height: N,
+                         originX: -N * FINE / 2, originZ: -N * FINE / 2,
+                         metresPerCell: FINE, components: 3 };
+            }
+            const quietFine = fine(() => 0.05);
+            const loudFine  = fine((i, j) => ((i ^ j) & 1) ? 0.0 : 0.66);
+            function shotHigh(t) {
+                scene.setCamera({
+                    fov: FOV, near: 1, far: 4000000,
+                    position: [0, ALT2, 0], target: [0.001, 0, 0], up: [0, 0, -1],
+                });
+                // Let the cellScale hysteresis settle before measuring, or
+                // the two captures would differ by the zoom policy's own
+                // step rather than by the layer under test.
+                for (let i = 0; i < 12; i++) t.update(0, ALT2, 0);
+                return scene.captureFrame();
+            }
+            function swap(cubic, fade) {
+                const t = flat(cubic, { layerFade: fade });
+                t.setSurfaceLayer(1, coarse);
+                t.setSurfaceLayer(0, quietFine);
+                const a = shotHigh(t);
+                t.setSurfaceLayer(0, loudFine);
+                const b = shotHigh(t);
+                t.destroy();
+                return bytesEqual(a, b);
+            }
+            for (const cubic of [false, true]) {
+                assert(swap(cubic, true),
+                    `a faded-out layer contributes nothing to the bit ` +
+                    `(cubicSurface ${cubic})`);
+                // ...and the assertion above is not passing because nothing was
+                // looking: the identical swap with the fade OFF moves the frame.
+                assert(!swap(cubic, false),
+                    `the faded-layer test has teeth — unfaded, the same swap ` +
+                    `changes the frame (cubicSurface ${cubic})`);
+            }
+        }
+    }
+
     console.log('clipmap terrain test passed');
 }
 

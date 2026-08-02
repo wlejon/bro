@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstring>
 #include <memory>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -377,6 +378,12 @@ JSValue createClipmapTerrainJS(JSContext* ctx, scene::SceneGraph* graph,
         // the data allows it. See ClipmapConfig::coverageFloor.
         cfg.coverageFloor =
             qjsbind::get_prop_bool(ctx, opts, "coverageFloor", cfg.coverageFloor);
+        // Opt-in cubic reconstruction of the CONTROL CHANNELS — height,
+        // geometry and the CPU mirrors are untouched. Off is bit-identical:
+        // the chunk is not appended to the shader source at all. See
+        // ClipmapConfig::cubicSurface and clipmap_cubic.glsl.
+        cfg.cubicSurface =
+            qjsbind::get_prop_bool(ctx, opts, "cubicSurface", cfg.cubicSurface);
         cfg.detailWavelength =
             (float)qjsbind::get_prop_number(ctx, opts, "detailWavelength", cfg.detailWavelength);
         cfg.detailRelief =
@@ -407,6 +414,14 @@ void ClipmapBindings::install(JSContext* ctx) {
         .method_raw("setForest", js_clipmap_setForest, 1)
         .method_raw("setSurfaceLayer", js_clipmap_setSurfaceLayer, 1)
         .method_raw("update", js_clipmap_update, 3)
+        // The composed GLSL for 'vertex' or 'fragment'. An app that replaces
+        // one chunk with a material of its own needs the other four exactly as
+        // the clipmap assembles them, and the suite needs it to prove that
+        // cubicSurface off changes the source by zero bytes.
+        .method("shaderSource", [](CW* self, std::string stage) -> std::string {
+            if (!self->terrain) return std::string();
+            return self->terrain->shaderSource(stage);
+        })
         .method("elevationAt", [](CW* self, double x, double z) -> double {
             if (!self->terrain) return 0.0;
             return self->terrain->elevationAt((float)x, (float)z);

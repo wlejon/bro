@@ -13,6 +13,7 @@
 #include "clipmap_common.glsl.h" // kClipmapCommonSrc
 #include "clipmap_detail.glsl.h"   // kClipmapDetailSrc
 #include "clipmap_material.glsl.h" // kClipmapMaterialSrc
+#include "clipmap_cubic.glsl.h"    // kClipmapCubicSrc — opt-in, fragment only
 #include "clipmap.vert.glsl.h"   // kClipmapVertSrc
 #include "clipmap.frag.glsl.h"   // kClipmapFragSrc
 
@@ -71,14 +72,7 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
 
     buildGeometry();
 
-    // Both stages get the same height source prepended. GLSL 330 has no
-    // #include, and the two chunks are separate compilation units, so the
-    // alternative is two copies that must stay byte-identical — a promise
-    // rather than a guarantee. If the stages ever disagreed, the surface the
-    // fragment shades would stop being the surface the vertex built.
-    const std::string shared = std::string(kClipmapCommonSrc) + kClipmapDetailSrc;
-    node_->setCustomShader(shared + kClipmapVertSrc,
-                           shared + kClipmapMaterialSrc + kClipmapFragSrc);
+    node_->setCustomShader(shaderSource("vertex"), shaderSource("fragment"));
     node_->setColor(0.40f, 0.44f, 0.36f, 1.0f);
     node_->setMetallic(0.0f);
     node_->setRoughness(0.95f);
@@ -121,6 +115,34 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
     pushLayerUniforms();
     pushSurfaceUniforms();
     update(0.0f, 0.0f, 0.0f);
+}
+
+// The composed source for one stage. THE ONE PLACE the chunk order lives.
+//
+// Both stages get the same height source prepended. GLSL 330 has no #include,
+// and the two chunks are separate compilation units, so the alternative is two
+// copies that must stay byte-identical — a promise rather than a guarantee. If
+// the stages ever disagreed, the surface the fragment shades would stop being
+// the surface the vertex built.
+//
+// The cubic chunk (opt-in, cubicSurface) goes into the FRAGMENT source only,
+// and between the shared chunks and the material chunk: it redefines the
+// control-channel read that clipmap_common.glsl declares and that the material
+// chunk calls, so it has to sit after the one and before the other. The vertex
+// stage never sees it — nothing there reads a control channel, and
+// clipmap.vert.glsl has a `cmSurface` of its own (the sheet height) that the
+// chunk's rename must not reach.
+//
+// When the flag is off NOTHING is appended: the two strings below are the two
+// strings this file built before the chunk existed, byte for byte. That is the
+// whole bit-identity argument — not a uniform the compiler might branch on,
+// and not a dead block that could shift codegen, but source that is not there.
+std::string ClipmapTerrain::shaderSource(const std::string& stage) const {
+    const std::string shared = std::string(kClipmapCommonSrc) + kClipmapDetailSrc;
+    if (stage == "vertex") return shared + kClipmapVertSrc;
+    if (stage != "fragment") return std::string();
+    if (!cfg_.cubicSurface) return shared + kClipmapMaterialSrc + kClipmapFragSrc;
+    return shared + kClipmapCubicSrc + kClipmapMaterialSrc + kClipmapFragSrc;
 }
 
 ClipmapTerrain::~ClipmapTerrain() { destroy(); }

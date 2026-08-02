@@ -62,6 +62,10 @@ embed_shader(atmosphere.glsl       kAtmosphereSrc)
 embed_shader(sky_atmosphere.frag   kSkyAtmosphereFragSrc)
 embed_shader(clipmap_detail.glsl   kClipmapDetailSrc)
 embed_shader(clipmap_material.glsl kClipmapMaterialSrc)
+# Opt-in only (ClipmapConfig::cubicSurface). Spliced between the shared chunks
+# and the material chunk when the flag is on, and not appended at all when it
+# is off — which is what keeps the default source byte-identical.
+embed_shader(clipmap_cubic.glsl    kClipmapCubicSrc)
 embed_shader(clipmap.vert.glsl     kClipmapVertSrc)
 embed_shader(clipmap.frag.glsl     kClipmapFragSrc)
 

@@ -100,6 +100,33 @@ struct ClipmapConfig {
     // cannot oscillate against the 0.8x step-down — is derived in the long
     // comment in update().
     bool coverageFloor = false;
+
+    // Cubic (C2 B-spline) reconstruction of the SURFACE layers — the control
+    // channels — instead of the hardware's bilinear (opt-in).
+    //
+    // It says `surface` and it means only that. The height pyramid, the
+    // shading normal built from it, the displaced geometry and the CPU
+    // elevation mirrors are untouched in both modes: the drawn ground and the
+    // standable ground stay the same field, to the bit. What changes is what a
+    // fragment READS from the control channels, and therefore where every
+    // threshold placed on them lands.
+    //
+    // WHY IT IS WORTH A FLAG. Bilinear is C0: its derivative jumps at every
+    // texel edge, so the level set of any threshold over it is a chain of
+    // straight segments hinged on the texel lattice — straight-edged patches,
+    // stair-stepped margins, diamond fringes, worst at the coarse rungs where
+    // a texel is kilometres. A C2 reconstruction has smooth level sets at any
+    // zoom, so the fix is resolution-independent rather than a wider band.
+    //
+    // WHY IT IS NOT THE DEFAULT. A B-spline approximates rather than
+    // interpolates: it reads an isolated one-texel spike at 2/3 of its stored
+    // value and spreads a one-texel step over about two. An app that has
+    // already tuned thresholds against the stored deciles would see them move.
+    // Off renders bit-identically to a build without the flag — the chunk is
+    // not appended to the shader source at all, so there is no dead block to
+    // shift codegen. Derivation, tap reduction, cost and edge handling:
+    // clipmap_cubic.glsl.
+    bool cubicSurface = false;
 };
 
 /// One level of the height pyramid: an R32F mipmapped texture plus where it
@@ -269,6 +296,19 @@ public:
     float renderedElevationAt(float x, float z) const;
 
     MeshNode* node() const { return node_; }
+
+    /// The composed GLSL this terrain handed to setCustomShader, for
+    /// `stage` = "vertex" or "fragment" (anything else returns empty).
+    ///
+    /// The composition is the clipmap's own and has to stay that way — the
+    /// chunks are not independently compilable, they are spliced into
+    /// mesh.vert / mesh.frag at //__USER_CHUNK__ and depend on each other's
+    /// order. An app replacing ONE chunk (a material of its own) needs to see
+    /// the other four exactly as this class assembles them, or it re-derives a
+    /// composition nobody will remember to keep in step. It is also what lets
+    /// the suite assert that turning cubicSurface off leaves the source
+    /// unchanged by a single byte.
+    std::string shaderSource(const std::string& stage) const;
 
     int levelCount() const { return cfg_.levels; }
     int triangleCount() const { return triangleCount_; }

@@ -67,6 +67,18 @@
 //                             // maxCellScale), so the sheet does not end
 //                             // mid-disc from 360-2,200 km up. Off renders
 //                             // bit-identically to before the flag existed.
+//   cubicSurface:     false,  // opt-in: reconstruct the SURFACE layers (the
+//                             // control channels) with a cubic B-spline
+//                             // instead of the hardware's bilinear, so that
+//                             // thresholds placed on them stop inheriting the
+//                             // texel lattice. Four bilinear taps per layer,
+//                             // once per fragment. It says `surface` and it
+//                             // means only that: the height pyramid, the
+//                             // shading normal, the drawn geometry and
+//                             // elevationAt() are untouched, and off renders
+//                             // bit-identically to before the flag existed —
+//                             // the chunk is not appended to the shader
+//                             // source at all. See clipmap_cubic.glsl.
 //   detailWavelength: 4.0,    // procedural micro-detail noise wavelength
 //   detailRelief:     0.5,    // procedural micro-detail amplitude
 //   detailGain:       0.5,    // micro-detail octave gain
@@ -325,6 +337,25 @@
 //
 //   clipmap.setChartCenter(0, 0);
 //   cam.y = clipmap.renderedElevationAt(cam.x, cam.z) + 1.8;
+
+
+// -----------------------------------------------------------------------------
+// clipmap.shaderSource(stage) → String
+// -----------------------------------------------------------------------------
+//
+// The composed GLSL this terrain handed to the mesh pipeline, for
+// stage = 'vertex' or 'fragment' (any other name returns ''). The chunks are
+// not independently compilable — they are spliced into mesh.vert / mesh.frag
+// at //__USER_CHUNK__ and depend on each other's order — so an app that wants
+// to replace ONE of them with a material of its own needs the rest exactly as
+// the clipmap assembles them:
+//
+//   const fs = clipmap.shaderSource('fragment');
+//   clipmap.node.setCustomShader(clipmap.shaderSource('vertex'),
+//                                fs.replace(BRO_MATERIAL_CHUNK, myMaterial));
+//
+// Re-deriving that composition downstream means owning a copy of a decision
+// nobody will remember to keep in step.
 
 
 // -----------------------------------------------------------------------------
