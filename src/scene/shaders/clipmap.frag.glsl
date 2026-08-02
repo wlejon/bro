@@ -78,11 +78,20 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
 
     // The gradient was taken in the flat chart, so this normal is relative to
     // the chart's up. On a planet the local up leans away from the eye with
-    // distance; cmCurveNormal applies that lean. Material selection below still
-    // wants the CHART normal — "how steep is this ground" is a property of the
-    // terrain, not of where the camera happens to be standing.
-    vec3 n = normalize(vec3(-grad.x, 1.0, -grad.y));
-    normal = cmCurveNormal(cmChartRel(rel), n);
+    // distance; cmCurveNormal applies that lean (and the chart's across-track
+    // metric — see cmChartMetricNormal). Material selection below still wants
+    // the CHART-FRAME normal — "how steep is this ground" is a property of
+    // the terrain, not of where the camera happens to be standing — but
+    // steepness in TRUE metres over true metres, so the metric correction
+    // applies to it without the rotation. The detail-amplitude modulator
+    // (`slope` above) deliberately stays on the flat metric: it feeds the
+    // displacement in the vertex stage and the CPU collision mirror
+    // (elevationAt), which are chart-agnostic by design, and correcting one
+    // consumer of the trio would tear the drawn surface off the standable one.
+    vec3 nFlat = normalize(vec3(-grad.x, 1.0, -grad.y));
+    vec2 crel  = cmChartRel(rel);
+    vec3 n     = cmChartMetricNormal(crel, nFlat);
+    normal = cmCurveNormal(crel, nFlat);
 
     float wy     = h0 + dw * d.x;
 

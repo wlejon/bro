@@ -181,7 +181,7 @@ if (!scene) {
     const coarse = makeLayer(128, 128, -15360, -15360, 240, bumpy);
     const fine   = makeLayer(256, 256, -3840, -3840, 30, bumpy);
 
-    scene.createLight({
+    const sun = scene.createLight({
         type: 'directional', direction: [0.3, -0.9, 0.3],
         color: [1, 1, 1], intensity: 2.5,
     });
@@ -933,6 +933,132 @@ if (!scene) {
             `(cellScale ${t8.cellScale}, farDistance ` +
             `${(t8.farDistance / 1000).toFixed(0)} km)`);
         t8.destroy();
+    }
+
+    // =====================================================================
+    // (9) The shading normal knows the chart's own metric.
+    //
+    // The AE chart is length-true radially and compresses ACROSS-track by
+    // sinc = sin(th)/th — cmCurve builds the geometry that way — so the true
+    // across-slope of the drawn surface is flat_gradient / sinc. The shading
+    // normal used to be built from the flat gradient alone, understating
+    // across-slope by 0.32% at th = 0.138 (881 km) and 24% at th = 1.256
+    // (8,000 km): the shaded surface was not the drawn surface.
+    //
+    // The assertion is an EQUIVALENCE, because the whole claim of the pinned
+    // chart is that a station at any radius is the same place as the centre:
+    // a flat across-slope g at flat radius rho is, on the sphere, the slope
+    // g/sinc — so a frame of it, taken along the LOCAL vertical with the
+    // light along the LOCAL up, must match a frame of an explicit g/sinc
+    // slope at the chart centre, where the chart is exact by construction.
+    // Materials are forced uniform and the camera sits high enough that the
+    // mottle band-limits to zero, so luminance is pure shading response.
+    //
+    // WHERE THE STATION CAN BE. u_camXZ does double duty — the camera's
+    // world position and the flat coordinate the rings sample from — so the
+    // sheet drawn near a camera at world chord x comes from flat
+    // F = R asin(x / R) and lands (by cmCurve) at world x = F sinc exactly:
+    // hovering over a flat point means standing at ITS WORLD CHORD, and the
+    // ring stack then has to reach the F - x = F (1 - sinc) flat metres from
+    // its own centre to the window. That bounds the test radius: at
+    // th = 0.44 the offset is ~91 km, inside a settled 131 km reach, and the
+    // window is sized (262 km at 4096 m/cell) so the sampled mip at that
+    // flat distance still resolves it. The field is a LINEAR across-slope,
+    // which every mip level and every differencing spacing reproduces
+    // exactly, so the analytic slope is the rendered slope.
+    //
+    //   analytic margins, g = 1.4, th = 0.4395, sinc = 0.9681, and the
+    //   pipeline's measured response of ~46.6 LSB per unit N.L per unit
+    //   intensity at this albedo — so ~373 per N.L at intensity 8:
+    //     N.L true  = 1/sqrt(1 + (g/sinc)^2) = 0.5683  -> ~212
+    //     N.L flat  = 1/sqrt(1 + g^2)        = 0.5812  -> ~217
+    //   a ~4.8-LSB mismatch pre-fix against the 2.5-LSB gate below
+    //   (measured: station 215.5 vs centre 211.1 on the pre-fix binary).
+    //   At 881 km — today's rim, th = 0.1383, sinc error 0.32% — the same
+    //   construction moves by ~0.5 LSB, gated at 1.5: the fix leaves
+    //   today's frames within an LSB.
+    // =====================================================================
+    {
+        cm.node.visible = false;   // (4) parked it 60 km up, still in the graph
+        const R = 6371000;
+        const g = 1.4;
+        const sunWas = { direction: [0.3, -0.9, 0.3], intensity: 2.5 };
+        sun.intensity = 8.0;
+        scene.setAmbient([0, 0, 0]);
+
+        // One frame: an across-track slope `s` painted into a 262 km window
+        // at flat radius rho, camera 3000 m up the LOCAL vertical over the
+        // window centre's own world chord, light down the LOCAL up, screen
+        // up = the across axis (+z) in both frames.
+        function slopeShot(rho, s) {
+            const t = scene.createClipmapTerrain({
+                levels: 8, resolution: 64, cellSize: 4,
+                planetRadius: R, detailRelief: 0, snowLine: 1e6,
+            });
+            const m = { albedo: [0.5, 0.5, 0.5], roughness: 1.0 };
+            t.setMaterials({ rock: m, snow: m, sand: m, grass: m });
+            const w = 64, mpc = 4096;
+            t.setHeightLayer(0, makeLayer(w, w, rho - (w * mpc) / 2,
+                                          -(w * mpc) / 2, mpc,
+                                          (x, z) => s * z));
+            t.setChartCenter(0, 0);
+            const th = rho / R;
+            const sinc = th > 0 ? Math.sin(th) / th : 1;
+            // The window centre's world position and local up, exactly as
+            // cmCurve places them (h = 0 on the window's centreline).
+            const P  = [rho * sinc, -2 * R * Math.sin(th / 2) ** 2, 0];
+            const E2 = [Math.sin(th), Math.cos(th), 0];
+            const cam = [P[0] + 3000 * E2[0], P[1] + 3000 * E2[1], P[2]];
+            sun.direction = [-E2[0], -E2[1], -E2[2]];
+            scene.setCamera({ fov: 60, near: 10, far: 400000,
+                              position: cam, target: P, up: [0, 0, 1] });
+            for (let i = 0; i < 8; i++) t.update(cam[0], cam[1], cam[2]);
+            const img = scene.captureFrame();
+            t.destroy();
+            return img;
+        }
+        function patchMean(img) {
+            const inset = Math.floor(img.width * 0.34);
+            let sum = 0, n = 0;
+            for (let y = inset; y < img.height - inset; y++)
+                for (let x = inset; x < img.width - inset; x++) {
+                    const i = (y * img.width + x) * 4;
+                    sum += (img.data[i] + img.data[i + 1] + img.data[i + 2]) / 3;
+                    n++;
+                }
+            return sum / n;
+        }
+
+        // The far station — the analytic point that fails on the
+        // uncorrected normal.
+        {
+            const rho = 2800000;                  // th = 0.4395
+            const th = rho / R, sinc = Math.sin(th) / th;
+            const station = patchMean(slopeShot(rho, g));
+            const centre  = patchMean(slopeShot(0, g / sinc));
+            assert(centre > 100,
+                `metric reference frame is lit (${centre.toFixed(1)})`);
+            assert(Math.abs(station - centre) <= 2.5,
+                `across-slope at th=${th.toFixed(3)} shades as its true ` +
+                `sphere slope g/sinc (station ${station.toFixed(2)} vs ` +
+                `centre ${centre.toFixed(2)})`);
+        }
+
+        // Today's rim — quantifies that the fix leaves the near field
+        // within an LSB.
+        {
+            const rho = 881000;                   // th = 0.1383
+            const th = rho / R, sinc = Math.sin(th) / th;
+            const station = patchMean(slopeShot(rho, g));
+            const centre  = patchMean(slopeShot(0, g / sinc));
+            assert(Math.abs(station - centre) <= 1.5,
+                `the 881 km rim moves by at most an LSB ` +
+                `(station ${station.toFixed(2)} vs centre ${centre.toFixed(2)})`);
+        }
+
+        sun.direction = sunWas.direction;
+        sun.intensity = sunWas.intensity;
+        cm.node.visible = true;
     }
 
     cm.destroy();

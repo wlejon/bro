@@ -150,11 +150,54 @@ vec3 cmCurve(vec2 rel, float h) {
     return vec3(xz.x, y - u_camY, xz.y);
 }
 
+// THE CHART'S OWN METRIC. The azimuthal-equidistant chart is length-true
+// RADIALLY — flat arc length IS sphere arc length along rel — but compresses
+// ACROSS-track by sinc = sin(th)/th: a flat across-step dt lands on a
+// parallel circle of radius R sin(th) rather than R th, so it covers only
+// dt * sinc metres of real ground (cmCurve applies exactly this to the
+// geometry). A height gradient measured in flat coordinates therefore
+// UNDERSTATES the true across-track slope by that factor — the real slope is
+// flat_gradient / sinc — and a normal built straight from the flat gradient
+// shades a mountainside 0.32% too shallow across-track at th = 0.138
+// (881 km) and 24% too shallow at th = 1.256 (8,000 km). The correction
+// divides the normal's across component by sinc before renormalising: for
+// n ∝ (-g_along, 1, -g_across), scaling the across component alone yields
+// exactly n' ∝ (-g_along, 1, -g_across / sinc). The along component needs
+// nothing — radial lengths are true by the chart's construction. Everything
+// h/R-sized is deliberately ignored, as in cmCurve's xz term.
+//
+// Correct the metric WITHOUT leaving the chart frame: what material selection
+// wants ("how steep is this ground", in real metres over real metres) —
+// rotating into the curved frame is a separate concern, layered on by
+// cmCurveNormal below.
+vec3 cmChartMetricNormal(vec2 rel, vec3 n) {
+    float R = u_planetRadius;
+    float d = length(rel);
+    if (R <= 0.0 || d < 1e-3) return n;
+
+    float th = d / R;
+    // Same series guard as cmCurve: sin(th)/th is 0/0 at the centre.
+    float sinc = (th < 1e-4) ? 1.0 - th * th / 6.0 : sin(th) / th;
+    vec2  u = rel / d;
+    vec3  e1 = vec3(u.x, 0.0, u.y);          // along
+    vec3  e3 = vec3(-u.y, 0.0, u.x);         // across
+    float a = dot(n, e1);
+    float b = n.y;
+    float c = dot(n, e3) / sinc;
+    return normalize(a * e1 + vec3(0.0, b, 0.0) + c * e3);
+}
+
 // Rotate a normal built in the flat chart into the curved frame. `rel` is the
 // offset from the CHART CENTRE (as for cmCurve): the local up tilts by exactly
 // th about the axis perpendicular to rel. Distant ground can subtend tens of
 // degrees, so skipping this lights the far field as though it were still a
 // plane and the terminator lands in the wrong place.
+//
+// Takes the FLAT-chart normal (straight from the flat gradient) and applies
+// the across-track metric correction above before rotating, so the normal it
+// returns is the true sphere-frame normal of the surface cmCurve actually
+// builds — the shaded surface and the drawn surface agree about across-track
+// slope at every radius.
 vec3 cmCurveNormal(vec2 rel, vec3 n) {
     float R = u_planetRadius;
     float d = length(rel);
@@ -163,11 +206,16 @@ vec3 cmCurveNormal(vec2 rel, vec3 n) {
     float th = d / R;
     vec2  u  = rel / d;
     float ct = cos(th), st = sin(th);
+    // sin(th)/th with cmCurve's series guard — see cmChartMetricNormal.
+    float sinc = (th < 1e-4) ? 1.0 - th * th / 6.0 : st / th;
 
-    // Flat basis: e1 along rel, e2 up, e3 across. Only e1 and e2 rotate.
+    // Flat basis: e1 along rel, e2 up, e3 across. Only e1 and e2 rotate; the
+    // across component is divided by sinc for the chart's azimuthal
+    // compression (cmChartMetricNormal, inlined so the decomposition is done
+    // once), then the whole thing is renormalised.
     float a = dot(n, vec3(u.x, 0.0, u.y));   // along
     float b = n.y;                           // up
-    float c = dot(n, vec3(-u.y, 0.0, u.x));  // across
+    float c = dot(n, vec3(-u.y, 0.0, u.x)) / sinc;  // across, true metric
     vec3  E1 = vec3( ct * u.x, -st, ct * u.y);
     vec3  E2 = vec3( st * u.x,  ct, st * u.y);
     vec3  E3 = vec3(-u.y, 0.0, u.x);
