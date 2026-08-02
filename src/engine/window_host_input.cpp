@@ -168,6 +168,12 @@ void Engine::windowHostApplyKeyResult(WindowHost& h, dom::Element* el,
     }
     if (r.dispatchInput) windowHostDispatchInput(h, el, r.inputData, r.inputType);
     if (r.unfocus) {
+        // Escape out of an edited field reports it, as in the app document.
+        if (takeValueChange(el)) {
+            dom::Event changeEvt("change");
+            changeEvt.setIsTrusted(true);
+            windowHostDispatch(h, el, changeEvt);
+        }
         windowHostDispatchFocus(h, el, nullptr);
         if (h.document) h.document->setActiveElement(nullptr);
         h.activeElement = nullptr;

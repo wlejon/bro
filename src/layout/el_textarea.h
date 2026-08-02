@@ -4,6 +4,7 @@
 #include "layout/control_text.h"
 #include "layout/key_handle_result.h"
 #include "layout/text_undo.h"
+#include "layout/value_change.h"
 #include "css/cascade.h"
 #include "render/renderer.h"
 #include <string>
@@ -59,6 +60,14 @@ public:
     // which invalidate every recorded delta (browser behavior). Also drops
     // any in-progress composition state — the script owns the value now.
     void clearHistory() { undo_.clear(); comp_ = {}; }
+
+    // --- The `change` event (see layout/value_change.h) --------------------
+    // Only the departure, unlike ElInput's: Enter in a textarea is a newline,
+    // so there is no key here that means "I mean it".
+    /// This element's value counts as already reported.
+    void armChange(dom::Element* el);
+    /// Is there an edit to report on this element? True once per edit.
+    bool takeChange(dom::Element* el);
 
     // --- IME composition (see TextComposition in text_undo.h; semantics
     // identical to ElInput's) ----------------------------------------------
@@ -137,6 +146,8 @@ private:
     TextUndoStack undo_;
     // In-progress IME composition (inactive when comp_.active is false).
     TextComposition comp_;
+    // The value this control last reported through a `change` event.
+    ValueChange change_;
     bool focused_ = false;
     float scrollY_ = 0.0f;
     // Content width the text last soft-wrapped against (set in draw()). Cursor

@@ -839,12 +839,14 @@ static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
     if (el->tagName() == "TEXTAREA" || el->tagName() == "textarea") {
         el->setAttribute("value", s);
         // A programmatic value write invalidates the control's undo history
-        // (browser behavior — Ctrl+Z can't cross a script's rewrite).
-        if (auto* ta = el->textareaControl()) ta->clearHistory();
+        // (browser behavior — Ctrl+Z can't cross a script's rewrite). It also
+        // re-arms `change`: the value moved, but nobody *changed* it in the
+        // sense that event is about, so the next click away must be silent.
+        if (auto* ta = el->textareaControl()) { ta->clearHistory(); ta->armChange(el); }
         return JS_UNDEFINED;
     }
     el->setAttribute("value", s);
-    if (auto* inp = el->inputControl()) inp->clearHistory();
+    if (auto* inp = el->inputControl()) { inp->clearHistory(); inp->armChange(el); }
     return JS_UNDEFINED;
 }
 

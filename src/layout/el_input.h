@@ -4,6 +4,7 @@
 #include "layout/control_text.h"
 #include "layout/key_handle_result.h"
 #include "layout/text_undo.h"
+#include "layout/value_change.h"
 #include "css/cascade.h"
 #include "render/renderer.h"
 #include <string>
@@ -76,6 +77,16 @@ public:
     // any in-progress composition state — the script owns the value now, so
     // the preedit's recorded position is meaningless.
     void clearHistory() { undo_.clear(); comp_ = {}; }
+
+    // --- The `change` event (see layout/value_change.h) --------------------
+    // Text types only: a checkbox, a radio, a range and a colour all report
+    // their change at the press that made it, which is the whole interaction.
+    // A typed value has no such moment, so it has these two.
+    /// This element's value counts as already reported. Called when focus
+    /// arrives and when a script writes `.value`.
+    void armChange(dom::Element* el);
+    /// Is there an edit to report on this element? True once per edit.
+    bool takeChange(dom::Element* el);
 
     // --- IME composition (see TextComposition in text_undo.h) -------------
     bool isComposing() const { return comp_.active; }
@@ -197,6 +208,8 @@ private:
     TextUndoStack undo_;
     // In-progress IME composition (inactive when comp_.active is false).
     TextComposition comp_;
+    // The value this control last reported through a `change` event.
+    ValueChange change_;
     // Horizontal scroll of the text under the (fixed) content box, in px. Set
     // in draw() to keep the caret inside the box once the value outgrows it;
     // caretIndexFromPoint adds it back to undo the shift.

@@ -268,6 +268,87 @@ void dispatchFocusEvents(const ControlContext& ctx,
 }
 
 // ---------------------------------------------------------------------------
+// The `change` event of a text control
+// ---------------------------------------------------------------------------
+
+namespace {
+
+// Where an element stands, well enough to find the same one again after the
+// tree it was in has been rebuilt.
+//
+// The child indices from the root, plus what the element is and what it says.
+// An application that redraws a panel builds the same rows in the same order,
+// so the redrawn control lands at the same path with the same tag and the same
+// text — and a control that is *not* the same one is caught by one of those
+// three. Deliberately blunt: this is only ever asked about a press that the
+// application has just been made to redraw, and the alternative to a blunt
+// answer is no answer at all.
+struct ElementPlace {
+    std::vector<int> path;   // child index at each level, root first
+    std::string tag;
+    std::string text;
+    bool ok = false;
+};
+
+ElementPlace placeOf(dom::Element* el) {
+    ElementPlace p;
+    if (!el) return p;
+    p.tag = el->tagName();
+    p.text = el->textContent();
+    for (auto* node = el; node; node = node->parentElement()) {
+        auto* parent = node->parentElement();
+        if (!parent) { p.ok = true; break; }   // reached the root
+        const auto kids = parent->children();
+        int idx = -1;
+        for (size_t i = 0; i < kids.size(); i++) {
+            if (kids[i] == node) { idx = static_cast<int>(i); break; }
+        }
+        if (idx < 0) return {};                 // detached already: no place
+        p.path.push_back(idx);
+    }
+    std::reverse(p.path.begin(), p.path.end());
+    return p;
+}
+
+// Is this element still in the document, rather than in a subtree somebody
+// replaced? A freed node stays resolvable until the deferred free is drained
+// (see NodeHandle), so being alive is not the same question.
+bool isAttached(dom::Document* doc, dom::Element* el) {
+    if (!doc || !el) return false;
+    auto* root = doc->documentElement();
+    for (auto* node = el; node; node = node->parentElement()) {
+        if (node == root) return true;
+    }
+    return false;
+}
+
+dom::Element* elementAt(dom::Document* doc, const ElementPlace& p) {
+    if (!p.ok || !doc) return nullptr;
+    dom::Element* at = doc->documentElement();
+    for (int idx : p.path) {
+        if (!at) return nullptr;
+        const auto kids = at->children();
+        if (idx < 0 || idx >= static_cast<int>(kids.size())) return nullptr;
+        at = kids[idx];
+    }
+    if (!at || at->tagName() != p.tag || at->textContent() != p.text) return nullptr;
+    return at;
+}
+
+} // namespace
+
+void armValueChange(dom::Element* el) {
+    if (auto* input = getElInput(el)) input->armChange(el);
+    if (auto* ta = getElTextarea(el)) ta->armChange(el);
+}
+
+bool takeValueChange(dom::Element* el) {
+    if (auto* input = getElInput(el)) return input->takeChange(el);
+    if (auto* ta = getElTextarea(el)) return ta->takeChange(el);
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // Unfocus previous control
 // ---------------------------------------------------------------------------
 
@@ -558,7 +639,55 @@ bool dispatchDocMousePress(
 
     ctx.document->setActiveElement(target);
     if (target != prevActive) {
+        // A text control that was edited reports it now, before blur — the
+        // order browsers use, and the one that matters: a listener reading the
+        // model on blur must already have been told what was typed. Only when
+        // focus genuinely leaves, which is why this is here rather than in
+        // unfocusPreviousControl: a press *inside* the focused field to move
+        // the caret goes through that too, and is not a departure.
+        if (takeValueChange(prevActive)) {
+            // A change listener is application code that has just been handed
+            // something new, and the usual thing to do with something new is to
+            // redraw — which frees the element this very press is on its way to.
+            //
+            // **The press survives that.** A browser loses it: click fires only
+            // where mousedown and mouseup land on one element, so typing in a
+            // field and clicking the button beside it does nothing the first
+            // time and works the second, which is the wart every DOM
+            // application knows and nobody wants. The engine caused the
+            // interleaving — it is the one that reports `change` in the middle
+            // of a press — so it is the one that puts the press back: the
+            // element is found again where it stood, and only if what stands
+            // there now is the same tag with the same text. A control that was
+            // genuinely replaced by a different one fails that and the press is
+            // dropped, which is the browser's answer and the safe one.
+            const ElementPlace place = placeOf(target);
+            dom::ElementHandle keep(ctx.document, target);
+            // And the field itself, which the same redraw takes with it — blur
+            // still has to be dispatched on it, and a field that is gone gets
+            // no blur rather than one on a node nothing owns.
+            dom::ElementHandle keepPrev(ctx.document, prevActive);
+            dom::Event changeEvt("change");
+            changeEvt.setIsTrusted(true);
+            dispatchControlEvent(ctx, prevActive, changeEvt);
+            prevActive = keepPrev.get();
+            if (prevActive && !isAttached(ctx.document, prevActive)) prevActive = nullptr;
+            // The one it landed on if that is still in the tree — nothing was
+            // rebuilt, or not this part of it — and the one standing in its
+            // place if it is not.
+            dom::Element* still = keep.get();
+            if (still && !isAttached(ctx.document, still)) still = nullptr;
+            target = still ? still : elementAt(ctx.document, place);
+            if (!target) {
+                state.mouseDownTarget.reset();
+                if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
+                return false;
+            }
+            ctx.document->setActiveElement(target);
+        }
         dispatchFocusEvents(ctx, prevActive, target);
+        // What the departure will be measured against next time.
+        armValueChange(target);
     }
 
     focusNewControl(ctx, target, focusX, focusY, intent);

@@ -56,6 +56,15 @@ bool ElInput::isTextType(dom::Element* el) const {
            t == InputType::Number;
 }
 
+void ElInput::armChange(dom::Element* el) {
+    change_.arm(el ? el->getAttribute("value") : std::string());
+}
+
+bool ElInput::takeChange(dom::Element* el) {
+    if (!el || !isTextType(el)) return false;
+    return change_.take(el->getAttribute("value"));
+}
+
 bool ElInput::isButtonType(dom::Element* el) const {
     auto t = inputType(el);
     return t == InputType::Button || t == InputType::Submit || t == InputType::Reset;
@@ -248,6 +257,13 @@ KeyHandleResult ElInput::handleKeyDown(dom::Element* el, int keycode, int mod) {
         // focus is retained so the user can keep typing afterward. Blurring
         // here previously left the control unfocused but still the document's
         // activeElement, wedging all further text entry until a click.
+        //
+        // It does commit, though, which is the other half of what browsers do
+        // with it: Enter in a text field is somebody saying they mean it, and
+        // an application that only learns the value when the field is left
+        // would sit there having been told and doing nothing. takeChange()
+        // moves the baseline, so the blur that eventually follows is silent.
+        r.dispatchChange = takeChange(el);
         r.handled = true;
     } else if (keycode == SDLK_ESCAPE) {
         setFocused(false);

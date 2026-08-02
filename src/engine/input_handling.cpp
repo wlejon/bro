@@ -2058,6 +2058,14 @@ void Engine::applyKeyResult(dom::Element* el, const layout::KeyHandleResult& r) 
         dispatchInputEvent(el, r.inputData, r.inputType);
     }
     if (r.unfocus) {
+        // Escape leaves the field, and leaving a field that was typed in is
+        // what `change` reports — the key does not put the old value back, so
+        // what stands is an edit nobody has been told about yet.
+        if (takeValueChange(el)) {
+            dom::Event changeEvt("change");
+            changeEvt.setIsTrusted(true);
+            dispatchEvent(el, changeEvt);
+        }
         dispatchFocusEvents(el, nullptr);
         // Keep the document's active element in sync with the control's focus
         // flag. Without this the field stays activeElement while its control
@@ -2462,6 +2470,18 @@ void Engine::handleProgrammaticFocus(dom::Document* doc, dom::Element* oldEl,
     if (!doc || !document_ || doc != document_.get()) return;
 
     commitActiveComposition();
+
+    // A script moving focus off an edited field reports the edit, exactly as a
+    // click elsewhere does — the caller (js_element_focus / js_element_blur)
+    // dispatches blur after this, so the order is the same too.
+    if (takeValueChange(oldEl)) {
+        dom::ElementHandle keepNew(document_.get(), newEl);
+        dom::Event changeEvt("change");
+        changeEvt.setIsTrusted(true);
+        dispatchEvent(oldEl, changeEvt);
+        newEl = keepNew.get();
+    }
+    armValueChange(newEl);
 
     if (auto* prevInput = getElInput(oldEl)) prevInput->setFocused(false);
     if (auto* prevTa = getElTextarea(oldEl)) prevTa->setFocused(false);
@@ -3426,6 +3446,18 @@ void Engine::advanceFocus(bool reverse) {
 
     // Unfocus current
     if (activeEl) {
+        // Tab out of a field that was typed in is a departure like any other,
+        // and reports the edit before blur. The listener may redraw and take
+        // the element Tab was heading for with it, so that one is held across
+        // the dispatch — there is nothing to focus if it is gone.
+        if (takeValueChange(activeEl)) {
+            dom::ElementHandle keepNext(document_.get(), nextEl);
+            dom::Event changeEvt("change");
+            changeEvt.setIsTrusted(true);
+            dispatchEvent(activeEl, changeEvt);
+            nextEl = keepNext.get();
+            if (!nextEl) { uiDirty_ = true; return; }
+        }
         auto* prevInput = getElInput(activeEl);
         if (prevInput) prevInput->setFocused(false);
         auto* prevTa = getElTextarea(activeEl);
@@ -3437,6 +3469,7 @@ void Engine::advanceFocus(bool reverse) {
     // Focus next
     document_->setActiveElement(nextEl);
     dispatchFocusEvents(activeEl, nextEl);
+    armValueChange(nextEl);
 
     auto* newInput = getElInput(nextEl);
     auto* newTa = getElTextarea(nextEl);

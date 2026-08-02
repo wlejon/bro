@@ -34,6 +34,15 @@ static std::string readCurrentValue(dom::Element* el) {
     return el->textContent();
 }
 
+void ElTextarea::armChange(dom::Element* el) {
+    change_.arm(readCurrentValue(el));
+}
+
+bool ElTextarea::takeChange(dom::Element* el) {
+    if (!el) return false;
+    return change_.take(readCurrentValue(el));
+}
+
 int ElTextarea::rows() const {
     std::string r = getAttr("rows");
     if (!r.empty()) {

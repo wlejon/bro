@@ -179,4 +179,22 @@ void dispatchControlEvent(const ControlContext& ctx, dom::Element* el,
 void dispatchFocusEvents(const ControlContext& ctx,
                          dom::Element* oldTarget, dom::Element* newTarget);
 
+// ---------------------------------------------------------------------------
+// The `change` event of a text control
+// ---------------------------------------------------------------------------
+//
+// Focus arrives and departs through five doors — a press elsewhere, Tab,
+// Escape, a script's focus()/blur(), and a window host's own press — and the
+// event belongs to the departure rather than to any of them. These two put the
+// decision (layout/value_change.h) behind one call so every door asks the same
+// question; only the dispatch differs, as it already does for blur itself.
+
+/// Whichever text control this element is, remember its value as reported.
+/// Safe on anything: an element that is not a text control is ignored.
+void armValueChange(dom::Element* el);
+
+/// Does this element owe a `change` event? True at most once per edit, so the
+/// caller must dispatch when it answers yes.
+bool takeValueChange(dom::Element* el);
+
 } // namespace bro::engine
