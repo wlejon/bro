@@ -75,10 +75,11 @@
 // clipmap.setHeightLayer(index, desc | null) → clipmap   (chainable)
 // -----------------------------------------------------------------------------
 //
-// Install one level of the height pyramid. Up to 4 layers (index 0..3),
+// Install one level of the height pyramid. Up to 6 layers (index 0..5),
 // ordered FINEST FIRST. Together they are the multi-scale height source; the
 // intended shape is something like a 30 m decoder field over the player, a
-// 240 m regional field, and a 7.68 km world field.
+// 240 m regional field, and a 7.68 km world field, with room above for
+// continental and global charts on a planet-scale stack.
 //
 //   desc = {
 //     data:          Float32Array,   // width*height samples, row-major
@@ -422,9 +423,9 @@
 //    change the terrain by re-uploading a height layer.
 //  - Finite reach. Beyond farDistance there is no geometry; size `levels` so
 //    the stack covers the highest camera you allow.
-//  - At most 4 layers (the mesh user-sampler budget is 6 units on GL 3.3, and
-//    a sampler array cannot be dynamically indexed there, so the shader
-//    unrolls a fixed 4).
+//  - At most 6 layers (a GL 3.3 sampler array cannot be dynamically indexed,
+//    so the shader unrolls a fixed 6; the sampler budget is queried from the
+//    driver and the clipmap logs at construction if it falls short).
 //  - scene.raycast() does not hit it usefully: the collision surface lives in
 //    the vertex shader, not in the mesh's BVH, which sees a flat sheet at
 //    y = 0. Use elevationAt().

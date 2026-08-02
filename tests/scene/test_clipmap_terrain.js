@@ -689,6 +689,109 @@ if (!scene) {
     }
 
     // =====================================================================
+    // Six data slots. The cap was four because the first world needed four;
+    // a planet-scale stack wants a fine window, regional, continental and
+    // global charts with room over. The wiring proof has to be a PICTURE:
+    // an unrolled blend chain that stops at four would leave slots 4 and 5
+    // silently dead while every CPU-side accessor still reported them.
+    //   - a SET 6th layer moves the frame (the wire is live),
+    //   - an UNSET one does not (releasing it restores the frame exactly),
+    //   - the CPU mirror agrees layer by layer out to the 6th.
+    // =====================================================================
+    {
+        const opts = { levels: 10, resolution: 64, cellSize: 1, detailRelief: 0 };
+        // Nested footprints, finest first, each with its own constant height
+        // so whichever layer wins at a radius is legible in the query.
+        const heights = () => [
+            makeLayer(64, 64, -512, -512, 16, () => 0),          //   1 km span
+            makeLayer(64, 64, -1024, -1024, 32, () => 5),        //   2 km
+            makeLayer(64, 64, -2048, -2048, 64, () => 10),       //   4 km
+            makeLayer(64, 64, -4096, -4096, 128, () => 15),      //   8 km
+            makeLayer(64, 64, -8192, -8192, 256, () => 20),      //  16 km
+            makeLayer(64, 64, -262144, -262144, 8192, () => 2000) // 524 km
+        ];
+
+        const t6 = scene.createClipmapTerrain(opts);
+        heights().forEach((h, i) => t6.setHeightLayer(i, h));
+        assert(t6.layerCount === 6, `six height layers install (${t6.layerCount})`);
+
+        // Each finer layer wins at its own radius; the 6th is the base.
+        for (const [x, want] of [[0, 0], [700, 5], [1500, 10], [3000, 15],
+                                 [6000, 20], [100000, 2000]]) {
+            const got = t6.elevationAt(x, 0);
+            assert(Math.abs(got - want) < 0.5,
+                `layer stack of six blends correctly at x=${x} ` +
+                `(${got.toFixed(2)} vs ${want})`);
+        }
+
+        const maxAbsDiff = (a, b) => {
+            let m = 0;
+            for (let i = 0; i < a.data.length; i++)
+                m = Math.max(m, Math.abs(a.data[i] - b.data[i]));
+            return m;
+        };
+        const meanAbsDiff = (a, b) => {
+            let s = 0;
+            for (let i = 0; i < a.data.length; i++) s += Math.abs(a.data[i] - b.data[i]);
+            return s / a.data.length;
+        };
+        function frame6() {
+            // Ground ~60 km out is covered by layer 5 alone (2000 m) — with
+            // it released the stack clamps to layer 4's edge texel (20 m), so
+            // the far field's whole silhouette moves.
+            scene.setCamera({
+                fov: 60, near: 1, far: 400000, position: [0, 4000, 0],
+                target: [0, 0, 60000], up: [0, 1, 0],
+            });
+            // Update until the zoom hysteresis settles: a single update per
+            // capture would leave cellScale mid-climb, and two captures at
+            // different zooms cannot be compared bit for bit.
+            for (let i = 0; i < 8; i++) t6.update(0, 4000, 0);
+            return scene.captureFrame();
+        }
+
+        const withSix = frame6();
+        t6.setHeightLayer(5, null);
+        const withFive = frame6();
+        assert(meanAbsDiff(withSix, withFive) > 0.5,
+            `the 6th height slot is a live wire — releasing it moves the frame ` +
+            `(${meanAbsDiff(withSix, withFive).toFixed(2)})`);
+        t6.setHeightLayer(5, heights()[5]);
+        assert(maxAbsDiff(frame6(), withSix) === 0,
+            're-installing the 6th layer restores the frame bit for bit');
+
+        // The 6th SURFACE slot reaches the blend too: a coarse control layer
+        // at index 5 must shade ground the finer ones do not cover.
+        function surf6(w, mpc, v) {
+            const data = new Float32Array(w * w * 3);
+            data.fill(v);
+            const span = w * mpc;
+            return { data, width: w, height: w,
+                     originX: -span / 2, originZ: -span / 2, metresPerCell: mpc };
+        }
+        for (let i = 0; i < 5; i++) t6.setSurfaceLayer(i, surf6(64, 8 << i, 0.1));
+        const surfFive = frame6();
+        t6.setSurfaceLayer(5, surf6(64, 8192, 0.9));
+        const surfSix = frame6();
+        assert(meanAbsDiff(surfSix, surfFive) > 0.5,
+            `the 6th surface slot is a live wire ` +
+            `(${meanAbsDiff(surfSix, surfFive).toFixed(2)})`);
+        t6.setSurfaceLayer(5, null);
+        assert(maxAbsDiff(frame6(), surfFive) === 0,
+            'releasing the 6th surface layer restores the frame bit for bit');
+        t6.destroy();
+
+        // Indices 0..5 are in range; 6 is not.
+        const probe6 = scene.createClipmapTerrain(opts);
+        let threw6 = false;
+        try { probe6.setHeightLayer(6, heights()[0]); } catch (e) { threw6 = true; }
+        probe6.setHeightLayer(5, heights()[0]);
+        assert(probe6.layerCount === 6, 'index 5 is a valid height slot');
+        probe6.destroy();
+        assert(threw6, 'setHeightLayer rejects index 6');
+    }
+
+    // =====================================================================
     // (7) The curvature chart centre.
     //
     // Default = the camera ground point, re-pushed every update; pinning it

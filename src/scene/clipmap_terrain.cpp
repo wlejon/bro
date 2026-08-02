@@ -21,9 +21,12 @@ namespace bro::scene {
 namespace {
 
 // Uniform names, indexed by layer. Kept next to the shader's declarations.
-const char* kLayerA[ClipmapTerrain::kMaxLayers] = {"u_l0a", "u_l1a", "u_l2a", "u_l3a"};
-const char* kLayerB[ClipmapTerrain::kMaxLayers] = {"u_l0b", "u_l1b", "u_l2b", "u_l3b"};
-const char* kLayerTex[ClipmapTerrain::kMaxLayers] = {"u_h0", "u_h1", "u_h2", "u_h3"};
+const char* kLayerA[ClipmapTerrain::kMaxLayers] =
+    {"u_l0a", "u_l1a", "u_l2a", "u_l3a", "u_l4a", "u_l5a"};
+const char* kLayerB[ClipmapTerrain::kMaxLayers] =
+    {"u_l0b", "u_l1b", "u_l2b", "u_l3b", "u_l4b", "u_l5b"};
+const char* kLayerTex[ClipmapTerrain::kMaxLayers] =
+    {"u_h0", "u_h1", "u_h2", "u_h3", "u_h4", "u_h5"};
 
 // Surface (control-channel) layers. Layer 0 keeps the unnumbered names it has
 // always had — `u_surface`, `u_surfA`, `u_surfB` — because shaders written
@@ -31,11 +34,12 @@ const char* kLayerTex[ClipmapTerrain::kMaxLayers] = {"u_h0", "u_h1", "u_h2", "u_
 // would break every one of them to no visual end. The stack extends upward from
 // there.
 const char* kSurfTex[ClipmapTerrain::kMaxLayers] =
-    {"u_surface", "u_surface1", "u_surface2", "u_surface3"};
+    {"u_surface", "u_surface1", "u_surface2", "u_surface3", "u_surface4",
+     "u_surface5"};
 const char* kSurfA[ClipmapTerrain::kMaxLayers] =
-    {"u_surfA", "u_surf1A", "u_surf2A", "u_surf3A"};
+    {"u_surfA", "u_surf1A", "u_surf2A", "u_surf3A", "u_surf4A", "u_surf5A"};
 const char* kSurfB[ClipmapTerrain::kMaxLayers] =
-    {"u_surfB", "u_surf1B", "u_surf2B", "u_surf3B"};
+    {"u_surfB", "u_surf1B", "u_surf2B", "u_surf3B", "u_surf4B", "u_surf5B"};
 
 // Must match CM_FADE in clipmap.vert.glsl / clipmap.frag.glsl.
 constexpr float kFade = 0.08f;
@@ -85,9 +89,25 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
     node_->setCastsShadow(false);
     node_->setReceivesShadow(true);
 
+    // The clipmap owns two sampler slots per layer (height + surface) on top
+    // of the mesh pipeline's 10 fixed units. The budget is queried from the
+    // driver, never assumed — GL 3.3's floor is 16 combined units, desktop
+    // drivers report 32..192 — so a machine below the need is worth one loud
+    // line at construction rather than a silent black layer later.
+    {
+        const int need = 2 * kMaxLayers;
+        const int have = MeshNode::maxUserTextures();
+        if (have > 0 && have < need) {
+            LOG_WARN("clipmap: driver reports %d user sampler slots, the "
+                     "clipmap needs %d (%d combined units) — layers past the "
+                     "budget will not bind",
+                     have, need, MeshNode::kUserTextureUnitBase + need);
+        }
+    }
+
     // Every sampler slot is bound from the start with a 1x1 zero placeholder.
     // An unbound sampler unit is undefined behaviour to read, and the shader
-    // evaluates all four branches' texture fetches on some drivers regardless
+    // evaluates all the branches' texture fetches on some drivers regardless
     // of u_layerCount.
     const float zero = 0.0f;
     for (int i = 0; i < kMaxLayers; ++i)
@@ -256,8 +276,8 @@ void ClipmapTerrain::pushStaticUniforms() {
 
 void ClipmapTerrain::pushLayerUniforms() {
     if (!node_) return;
-    float wrap[kMaxLayers] = {0.0f, 0.0f, 0.0f, 0.0f};
-    float band[kMaxLayers] = {0.0f, 0.0f, 0.0f, 0.0f};
+    float wrap[kMaxLayers] = {};
+    float band[kMaxLayers] = {};
     for (int i = 0; i < kMaxLayers; ++i) {
         const ClipmapLayer& l = layers_[i];
         const float a[3] = {l.originX, l.originZ,
@@ -272,8 +292,14 @@ void ClipmapTerrain::pushLayerUniforms() {
         // about band limits behind for the next one to inherit.
         band[i] = (l.present && l.bandLimited) ? 1.0f : 0.0f;
     }
+    // Per-layer flags ride as a vec4 for layers 0..3 plus a vec2 for 4..5 —
+    // the custom-uniform plumbing carries at most four components per name,
+    // and keeping the original vec4 untouched keeps the first four layers'
+    // uniform traffic bit-identical to the four-slot clipmap.
     node_->setCustomShaderUniform("u_lWrapX", 4, wrap);
+    node_->setCustomShaderUniform("u_lWrapX45", 2, wrap + 4);
     node_->setCustomShaderUniform("u_lBandLimited", 4, band);
+    node_->setCustomShaderUniform("u_lBandLimited45", 2, band + 4);
     const float n = static_cast<float>(layerCount_);
     node_->setCustomShaderUniform("u_layerCount", 1, &n);
 }
@@ -607,10 +633,14 @@ float ClipmapTerrain::baseElevationAt(float x, float z) const {
     const int n = layerCount_;
     float w = 0.0f;
     float h = 0.0f;
-    if      (n > 3) h = sample(layers_[3], w);
+    if      (n > 5) h = sample(layers_[5], w);
+    else if (n > 4) h = sample(layers_[4], w);
+    else if (n > 3) h = sample(layers_[3], w);
     else if (n > 2) h = sample(layers_[2], w);
     else if (n > 1) h = sample(layers_[1], w);
     else if (n > 0) h = sample(layers_[0], w);
+    if (n > 5) { float s = sample(layers_[4], w); h = h + (s - h) * w; }
+    if (n > 4) { float s = sample(layers_[3], w); h = h + (s - h) * w; }
     if (n > 3) { float s = sample(layers_[2], w); h = h + (s - h) * w; }
     if (n > 2) { float s = sample(layers_[1], w); h = h + (s - h) * w; }
     if (n > 1) { float s = sample(layers_[0], w); h = h + (s - h) * w; }
@@ -635,11 +665,15 @@ float ClipmapTerrain::dataFloorAt(float x, float z) const {
     };
     const int n = layerCount_;
     float f = 0.0f;
-    if      (n > 3) f = std::log2(layers_[3].metresPerCell);
+    if      (n > 5) f = std::log2(layers_[5].metresPerCell);
+    else if (n > 4) f = std::log2(layers_[4].metresPerCell);
+    else if (n > 3) f = std::log2(layers_[3].metresPerCell);
     else if (n > 2) f = std::log2(layers_[2].metresPerCell);
     else if (n > 1) f = std::log2(layers_[1].metresPerCell);
     else if (n > 0) f = std::log2(layers_[0].metresPerCell);
     else return cfg_.cellSize;
+    if (n > 5) { float w = cover(layers_[4]); f += (std::log2(layers_[4].metresPerCell) - f) * w; }
+    if (n > 4) { float w = cover(layers_[3]); f += (std::log2(layers_[3].metresPerCell) - f) * w; }
     if (n > 3) { float w = cover(layers_[2]); f += (std::log2(layers_[2].metresPerCell) - f) * w; }
     if (n > 2) { float w = cover(layers_[1]); f += (std::log2(layers_[1].metresPerCell) - f) * w; }
     if (n > 1) { float w = cover(layers_[0]); f += (std::log2(layers_[0].metresPerCell) - f) * w; }

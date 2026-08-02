@@ -99,7 +99,15 @@ struct ClipmapLayer {
 
 class ClipmapTerrain {
 public:
-    static constexpr int kMaxLayers = 4;
+    // Six data slots, height and surface alike. Four was the width of the
+    // first world that used this; a planet-scale stack wants a fine window, a
+    // regional chart, a continental chart and a global base with room left
+    // over, and GL is not the constraint — the shader's unrolled chains grow
+    // by two branches and the sampler budget (2 slots per layer on top of the
+    // mesh pipeline's 10 fixed units) is queried, not assumed. The
+    // constructor logs if the driver reports fewer combined units than the
+    // clipmap needs; every desktop driver since 2010 reports 32+.
+    static constexpr int kMaxLayers = 6;
 
     /// Builds the ring mesh and installs the node + custom shader immediately.
     ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg);
