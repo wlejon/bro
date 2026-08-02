@@ -384,6 +384,15 @@ JSValue createClipmapTerrainJS(JSContext* ctx, scene::SceneGraph* graph,
         // ClipmapConfig::cubicSurface and clipmap_cubic.glsl.
         cfg.cubicSurface =
             qjsbind::get_prop_bool(ctx, opts, "cubicSurface", cfg.cubicSurface);
+        // Opt-in MIP-AWARE cubic reconstruction of the HEIGHT field, in the
+        // vertex and fragment stages together so the drawn surface and the
+        // shaded one stay the same surface. Gated to the rungs whose texels are
+        // a few pixels wide, so the near field is untouched and the CPU mirrors
+        // stay exact there. Off is bit-identical: the chunk is not appended to
+        // either source. See ClipmapConfig::cubicHeight and
+        // clipmap_cubic_height.glsl.
+        cfg.cubicHeight =
+            qjsbind::get_prop_bool(ctx, opts, "cubicHeight", cfg.cubicHeight);
         cfg.detailWavelength =
             (float)qjsbind::get_prop_number(ctx, opts, "detailWavelength", cfg.detailWavelength);
         cfg.detailRelief =

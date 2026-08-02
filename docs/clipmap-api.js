@@ -79,6 +79,25 @@
 //                             // bit-identically to before the flag existed —
 //                             // the chunk is not appended to the shader
 //                             // source at all. See clipmap_cubic.glsl.
+//   cubicHeight:      false,  // opt-in: reconstruct the HEIGHT field with a
+//                             // MIP-AWARE cubic B-spline — taps spaced at the
+//                             // sampled mip level's texel size, at both
+//                             // bracketing levels, blended C1 — so that a
+//                             // threshold on ALTITUDE (a snow line, a
+//                             // shoreline) stops being drawn as a chain of
+//                             // straight segments hinged on the data lattice,
+//                             // and the shading normal stops showing texel
+//                             // facets. Applied in the vertex and fragment
+//                             // stages together: the drawn ground and the
+//                             // shaded ground are one surface in both modes.
+//                             // Cost is keyed to the RUNG, not the camera —
+//                             // the path fades out between 32 and 128 pixels
+//                             // per sampled texel, so the ground underfoot
+//                             // (thousands of pixels per texel) is the
+//                             // bilinear fetch it always was, to the bit, and
+//                             // elevationAt() stays exact there. Off renders
+//                             // bit-identically to before the flag existed.
+//                             // See clipmap_cubic_height.glsl.
 //   detailWavelength: 4.0,    // procedural micro-detail noise wavelength
 //   detailRelief:     0.5,    // procedural micro-detail amplitude
 //   detailGain:       0.5,    // micro-detail octave gain
@@ -309,6 +328,15 @@
 // where the GPU is also on level 0, and APPROXIMATE far away, where the GPU is
 // rendering a smoothed version of the same field. Do not use it to place
 // objects tens of kilometres away and expect them to sit exactly on the pixels.
+//
+// cubicHeight lands in exactly that same divergence and nowhere else. The
+// filter's gate is an exact 0 while a sampled texel is more than 128 pixels
+// wide, which is the whole near field, so near the camera this query is
+// bit-identical in both modes and still IS the drawn surface. Far away, where
+// it is already approximate for the mip, it is additionally approximate by at
+// most 1/6 of the field's second difference over one sampled texel. It stays
+// camera-free on purpose: a collision height that moved when the camera moved
+// would be a worse defect than any reconstruction fixes.
 //
 //   const y = clipmap.elevationAt(player.x, player.z);
 //   player.y = y + 1.8;

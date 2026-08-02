@@ -14,6 +14,7 @@
 #include "clipmap_detail.glsl.h"   // kClipmapDetailSrc
 #include "clipmap_material.glsl.h" // kClipmapMaterialSrc
 #include "clipmap_cubic.glsl.h"    // kClipmapCubicSrc — opt-in, fragment only
+#include "clipmap_cubic_height.glsl.h"  // kClipmapCubicHeightSrc — opt-in, both stages
 #include "clipmap.vert.glsl.h"   // kClipmapVertSrc
 #include "clipmap.frag.glsl.h"   // kClipmapFragSrc
 
@@ -133,12 +134,22 @@ ClipmapTerrain::ClipmapTerrain(SceneGraph& graph, const ClipmapConfig& cfg)
 // clipmap.vert.glsl has a `cmSurface` of its own (the sheet height) that the
 // chunk's rename must not reach.
 //
+// The height cubic chunk (opt-in, cubicHeight) goes into BOTH stages, and
+// immediately after the shared chunks: it redefines the height read that
+// clipmap_common.glsl declares and that everything downstream calls — the
+// vertex stage's own cmSurface() and its morph taps, the fragment stage's five
+// normal taps. Nothing in clipmap_detail.glsl reads the height pyramid, so
+// sitting after it changes nothing there. It goes BEFORE the surface chunk so
+// that with both flags on the two are one adjacent run rather than two
+// insertions in the middle of the same file.
+//
 // When the flag is off NOTHING is appended: the two strings below are the two
 // strings this file built before the chunk existed, byte for byte. That is the
 // whole bit-identity argument — not a uniform the compiler might branch on,
 // and not a dead block that could shift codegen, but source that is not there.
 std::string ClipmapTerrain::shaderSource(const std::string& stage) const {
-    const std::string shared = std::string(kClipmapCommonSrc) + kClipmapDetailSrc;
+    std::string shared = std::string(kClipmapCommonSrc) + kClipmapDetailSrc;
+    if (cfg_.cubicHeight) shared += kClipmapCubicHeightSrc;
     if (stage == "vertex") return shared + kClipmapVertSrc;
     if (stage != "fragment") return std::string();
     if (!cfg_.cubicSurface) return shared + kClipmapMaterialSrc + kClipmapFragSrc;
@@ -668,6 +679,16 @@ float ClipmapTerrain::baseElevationAt(float x, float z) const {
     // Mirrors cmHeight() in the shaders exactly, except that it always samples
     // mip level 0 (bilinear) — there is no CPU mip chain. Same layer order,
     // same coverage weights, same coarse-to-fine blend.
+    //
+    // cubicHeight does NOT change this, and that is the answer rather than the
+    // omission. This query is camera-free — a collision height that moved when
+    // the camera moved would be a worse defect than any filter fixes — and the
+    // shader's cubic path is gated on a screen-space quantity (pixels per
+    // sampled texel) that is an exact 0 in the near field, where this mirror is
+    // exact and where things actually stand. Past that gate the mirror is
+    // already approximate for the mip it cannot model; the cubic adds at most
+    // 1/6 of the field's second difference over one sampled texel on top, in
+    // the same place. See clipmap_cubic_height.glsl, THE CPU MIRRORS.
     auto sample = [&](const ClipmapLayer& l, float& w) -> float {
         if (!l.present || l.width < 1 || l.height < 1 || l.data.empty()) {
             w = 0.0f;

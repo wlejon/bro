@@ -66,6 +66,11 @@ embed_shader(clipmap_material.glsl kClipmapMaterialSrc)
 # and the material chunk when the flag is on, and not appended at all when it
 # is off — which is what keeps the default source byte-identical.
 embed_shader(clipmap_cubic.glsl    kClipmapCubicSrc)
+# Opt-in only (ClipmapConfig::cubicHeight). The same idiom one field over, and
+# spliced into BOTH stages rather than the fragment alone: it reconstructs the
+# HEIGHT the vertex stage displaces with and the fragment stage shades from, and
+# those two have to be the same surface.
+embed_shader(clipmap_cubic_height.glsl kClipmapCubicHeightSrc)
 embed_shader(clipmap.vert.glsl     kClipmapVertSrc)
 embed_shader(clipmap.frag.glsl     kClipmapFragSrc)
 

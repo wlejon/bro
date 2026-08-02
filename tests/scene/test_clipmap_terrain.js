@@ -1101,7 +1101,7 @@ if (!scene) {
         const R = 6371000;
         const g = 1.4;
         const sunWas = { direction: [0.3, -0.9, 0.3], intensity: 2.5 };
-        sun.intensity = 8.0;
+        sun.intensity = 4.0;
         scene.setAmbient([0, 0, 0]);
 
         // One frame: an across-track slope `s` painted into a 262 km window
@@ -1612,6 +1612,421 @@ if (!scene) {
                     `changes the frame (cubicSurface ${cubic})`);
             }
         }
+    }
+
+    // =====================================================================
+    // (12) MIP-AWARE CUBIC RECONSTRUCTION OF THE HEIGHT FIELD (cubicHeight).
+    //
+    // The same C0 problem as (11), one field over and with two differences
+    // that are the whole of the work. Height is read by the VERTEX stage (the
+    // displaced geometry) and five more times per FRAGMENT (the shading
+    // normal's taps), so the filter has to go into both stages at once or the
+    // shaded surface stops being the drawn one. And cmLayer samples a
+    // FRACTIONAL MIP, so correct tap spacing is the SAMPLED level's texel size
+    // — a level-0-spaced filter puts all four fetches inside one sampled texel
+    // and returns plain trilinear at exactly the coarse rungs it was added for.
+    // Derivation, the fractional-mip choice and the gate:
+    // clipmap_cubic_height.glsl.
+    //
+    // What this section proves:
+    //   * OFF changes nothing — not one byte of either stage's source outside
+    //     a single contiguous insertion.
+    //   * ON is measurably smoother at TWO coarse rungs, one of them at
+    //     lod > 1, where a level-0-spaced filter would be trilinear and score
+    //     no better than bilinear. That second rung is the mip-awareness
+    //     proof: there is nothing else in the frame that could move it.
+    //   * The near field — where the CPU mirrors are exact and where things
+    //     stand — is untouched to the bit, in the frame and in the queries.
+    //     That is the coherence proof AND the cost bound: those fragments
+    //     take no extra fetch at all.
+    //   * The four-tap footprint stays inside a clamped layer and keeps
+    //     wrapping on a periodic one.
+    //   * layerFade's exact zero survives the new chain, in both modes.
+    // =====================================================================
+    {
+        const bytesEqual = (a, b) => {
+            if (a.data.length !== b.data.length) return false;
+            for (let i = 0; i < a.data.length; i++)
+                if (a.data[i] !== b.data[i]) return false;
+            return true;
+        };
+        const maxDiff = (a, b) => {
+            let m = 0;
+            for (let i = 0; i < a.data.length; i++) {
+                const d = Math.abs(a.data[i] - b.data[i]);
+                if (d > m) m = d;
+            }
+            return m;
+        };
+
+        // --- OFF is not merely equivalent, it is the same source, twice -----
+        {
+            const off = scene.createClipmapTerrain({ levels: 4, resolution: 16 });
+            const on  = scene.createClipmapTerrain({ levels: 4, resolution: 16,
+                                                     cubicHeight: true });
+            const both = scene.createClipmapTerrain({ levels: 4, resolution: 16,
+                                                      cubicHeight: true,
+                                                      cubicSurface: true });
+
+            // The strong statement, for BOTH stages this time: turning the mode
+            // on inserts ONE contiguous run of bytes and changes nothing else,
+            // so turning it off cannot shift a single instruction.
+            function oneInsertion(base, grown) {
+                let p = 0;
+                while (p < base.length && base.charCodeAt(p) === grown.charCodeAt(p)) p++;
+                let s = 0;
+                while (s < base.length - p &&
+                       base.charCodeAt(base.length - 1 - s) ===
+                       grown.charCodeAt(grown.length - 1 - s)) s++;
+                return p + s === base.length;
+            }
+            for (const stage of ['vertex', 'fragment']) {
+                const a = off.shaderSource(stage), b = on.shaderSource(stage);
+                assert(a.indexOf('cmHeightCubic') < 0,
+                    `the default ${stage} source carries no cubic height code`);
+                assert(b.indexOf('cmHeightCubic') > 0,
+                    `the cubic ${stage} source carries the filter`);
+                assert(b.length > a.length && oneInsertion(a, b),
+                    `the cubic ${stage} source is the default plus exactly one ` +
+                    `contiguous insertion`);
+            }
+            // Unlike cubicSurface this one MUST reach the vertex stage: the
+            // displaced geometry is one of the two things it exists to keep in
+            // step with the other.
+            assert(on.shaderSource('vertex').indexOf('cmCubicTapLevel') > 0,
+                'the height chunk reaches the vertex stage — the geometry is ' +
+                'reconstructed by the same filter the fragment shades from');
+            // The two flags are independent, and together they are still one
+            // run of bytes: the chunks are adjacent by construction.
+            assert(oneInsertion(off.shaderSource('fragment'),
+                                both.shaderSource('fragment')),
+                'both cubic flags together are still one contiguous insertion');
+            assert(both.shaderSource('fragment').indexOf('cmSurfaceCubic') > 0 &&
+                   both.shaderSource('fragment').indexOf('cmHeightCubic') > 0,
+                'both flags compose');
+
+            off.destroy(); on.destroy(); both.destroy();
+        }
+
+        // --- the measurement rig --------------------------------------------
+        //
+        // Nadir over a field that varies only in X, lit from the side, with
+        // every material albedo set to the same grey. Nothing in the frame is
+        // then a function of anything but the SHADING NORMAL — which is the
+        // derivative of the reconstruction, and therefore exactly where a C0
+        // height field's discontinuity lives. Mottling is faded out at this
+        // cell size and detailRelief is 0, so no procedural term contributes.
+        //
+        // The cell size is pinned: cellSize 1024 with maxCellScale 1 makes
+        // cDesired an exact 1024 m across the whole frame (the ring-cell limit
+        // beats the pixel limit everywhere in it), so the sampled mip level is
+        // one number and the rung under test is the rung that was chosen.
+        const CH_ALT = 80000, CH_FOV = 20;
+        const chSunWas = { direction: sun.direction, intensity: sun.intensity };
+        sun.direction = [-0.6, -0.8, 0.0];
+        sun.intensity = 4.0;
+
+        function chTerrain(cubic, extra) {
+            const opts = { levels: 6, resolution: 64, cellSize: 1024,
+                           maxCellScale: 1, detailRelief: 0, snowLine: 1e9,
+                           cubicHeight: cubic };
+            for (const k in (extra || {})) opts[k] = extra[k];
+            const t = scene.createClipmapTerrain(opts);
+            const m = { albedo: [0.5, 0.5, 0.5], roughness: 1.0 };
+            t.setMaterials({ rock: m, snow: m, sand: m, grass: m });
+            return t;
+        }
+        function chShot(t, x, alt, fov) {
+            scene.setCamera({
+                fov: fov, near: 1, far: 4000000,
+                position: [x, alt, 0], target: [x + 0.001, 0, 0], up: [0, 0, -1],
+            });
+            t.update(x, alt, 0);
+            return scene.captureFrame();
+        }
+        // Mean over scanlines of each scanline's largest second difference in
+        // green — 57d75804's statistic, on the channel this field drives. A
+        // bilinear height is piecewise linear along a row, so its NORMAL is
+        // piecewise constant and jumps once per texel; the second difference
+        // of the shaded result spikes at every one of those jumps, and it is
+        // those spikes a threshold on altitude turns into straight segments.
+        // A C1 reconstruction has no spike to find. Per-row MAX rather than
+        // mean, so the statistic stays on the kinks instead of drowning in the
+        // 8-bit floor both paths share.
+        function kinkEnergy(img) {
+            let sum = 0, rows = 0;
+            for (let y = 8; y < img.height - 8; y++) {
+                let mx = 0;
+                for (let x = 9; x < img.width - 9; x++) {
+                    const i = (y * img.width + x) * 4 + 1;
+                    const d2 = Math.abs(img.data[i - 4] - 2 * img.data[i] +
+                                        img.data[i + 4]);
+                    if (d2 > mx) mx = d2;
+                }
+                sum += mx; rows++;
+            }
+            return sum / rows;
+        }
+
+        // --- the gate, at two rungs -----------------------------------------
+        //
+        // cDesired is 1024 m in both. The rungs differ in the LAYER's texel
+        // size, and therefore in the mip level the fragment reads:
+        //
+        //   texel 2048 m -> lod = 0      -> sampled texel 2048 m
+        //   texel  448 m -> lod = 1.193  -> sampled texel 1024 m
+        //
+        // The second is the one that matters. There, a filter spaced at LEVEL
+        // ZERO's 448 m would put all four fetches inside a single 1024 m
+        // sampled texel, where the hardware is already exactly linear, and
+        // would return trilinear to the bit — the same number the bilinear
+        // path scores. Passing at that rung cannot happen by accident. Its lod
+        // is deliberately FRACTIONAL as well, so the two-level blend is under
+        // test and not just the level-1 spacing.
+        //
+        // The camera altitude is set per rung so that a sampled texel is ~20
+        // pixels in both — inside the gate's fully-on region and far enough
+        // above the 8-bit floor for the two numbers to be comparable. Content
+        // sits at three sampled texels per period, near the top of the band a
+        // chart at that rung can carry, which is what a coarse rung holds.
+        {
+            const rungs = [
+                { texel: 2048, w: 64,  lod: '0',     alt: 37000 },
+                { texel: 448,  w: 192, lod: '1.193', alt: 18500 },
+            ];
+            for (const r of rungs) {
+                const sampled = Math.max(r.texel, 1024);
+                const period  = 3 * sampled;
+                const half    = r.w * r.texel / 2;
+                const field   = makeLayer(r.w, r.w, -half, -half, r.texel,
+                    (x) => 3000 + 1200 * Math.cos(2 * Math.PI * x / period));
+                function shot(cubic) {
+                    const t = chTerrain(cubic);
+                    t.setHeightLayer(0, field);
+                    const img = chShot(t, 0, r.alt, CH_FOV);
+                    t.destroy();
+                    return img;
+                }
+                const kOff = kinkEnergy(shot(false));
+                const kOn  = kinkEnergy(shot(true));
+                console.log(`  cubicHeight: ${r.texel} m texel at lod ${r.lod} — ` +
+                            `kink energy bilinear ${kOff.toFixed(2)} -> cubic ` +
+                            `${kOn.toFixed(2)} (${(kOff / kOn).toFixed(2)}x)`);
+                assert(kOff > 2.5 * kOn,
+                    `the mip-aware cubic removes the texel-lattice kinks in the ` +
+                    `shading normal at a ${r.texel} m texel, lod ${r.lod} ` +
+                    `(bilinear ${kOff.toFixed(2)}, cubic ${kOn.toFixed(2)})`);
+            }
+        }
+
+        // --- the near field is untouched, to the bit ------------------------
+        //
+        // Two things at once, and they are the same fact. THE COST BOUND: the
+        // gate is an exact 0 while a sampled texel is more than 128 pixels
+        // wide, so a fragment looking at ground underfoot takes the single
+        // trilinear fetch it always took — not a cheaper cubic, no cubic. And
+        // THE COHERENCE: elevationAt / renderedElevationAt are camera-free and
+        // therefore unchanged by this mode, which is only honest because the
+        // surface they mirror has not moved either. Here that is asserted as
+        // frame equality rather than argued: 150 m up over a 128 m texel, one
+        // texel is 310 pixels wide and both modes draw the same bits.
+        {
+            const near = makeLayer(128, 128, -8192, -8192, 128,
+                (x, z) => 60 * Math.sin(x / 700) * Math.cos(z / 540)
+                        + 18 * Math.sin(x / 130 + z / 90));
+            const probes = [[0, 0], [211, -389], [1500, 900]];
+            function nearRun(cubic) {
+                const t = chTerrain(cubic, { cellSize: 4, levels: 8,
+                                             snowLine: 1e9 });
+                t.setHeightLayer(0, near);
+                const img = chShot(t, 0, 150, CH_FOV);
+                const mirror = probes.map(([x, z]) =>
+                    [t.elevationAt(x, z), t.renderedElevationAt(x, z)]);
+                t.destroy();
+                return { img, mirror };
+            }
+            const a = nearRun(false), b = nearRun(true);
+            assert(bytesEqual(a.img, b.img),
+                'the near field is bit-identical in both modes — the gate is ' +
+                'off where a texel spans hundreds of pixels, so those ' +
+                'fragments pay nothing and the CPU mirrors stay exact');
+            probes.forEach(([x, z], i) => {
+                assert(b.mirror[i][0] === a.mirror[i][0] &&
+                       b.mirror[i][1] === a.mirror[i][1],
+                    `the CPU elevation mirrors do not move at (${x}, ${z})`);
+            });
+
+            // ...and the frame equality above is not passing because nothing
+            // was looking. The SAME terrain seen from orbit, where a sampled
+            // texel is a handful of pixels, does move.
+            function farRun(cubic) {
+                const t = chTerrain(cubic, { cellSize: 4, levels: 8,
+                                             snowLine: 1e9 });
+                t.setHeightLayer(0, near);
+                const img = chShot(t, 0, 60000, CH_FOV);
+                t.destroy();
+                return img;
+            }
+            assert(!bytesEqual(farRun(false), farRun(true)),
+                'the near-field test has teeth — the same stack seen from a ' +
+                'coarse rung does move');
+        }
+
+        // --- a constant field, edges included --------------------------------
+        // The B-spline's weights are non-negative and sum to 1, so a constant
+        // field must come back as that constant EVERYWHERE — including the
+        // border texels, where the four fetches clamp into the band of texel
+        // centres AT THE SAMPLED LEVEL. If that clamp were wrong the border
+        // would read something else and this frame would move. It is the edge
+        // behaviour asserted rather than described.
+        {
+            const k = makeLayer(64, 64, -65536, -65536, 2048, () => 3000);
+            function edgeShot(cubic) {
+                const t = chTerrain(cubic);
+                t.setHeightLayer(0, k);
+                // Aimed at the layer's own corner, so the assertion covers the
+                // border texels and not just the interior.
+                const img = chShot(t, 62000, CH_ALT, 60);
+                t.destroy();
+                return img;
+            }
+            assert(bytesEqual(edgeShot(false), edgeShot(true)),
+                'a constant height field reconstructs identically under both ' +
+                'filters, across the layer edge included');
+        }
+
+        // --- a periodic layer keeps wrapping ---------------------------------
+        // A wrapX layer has no east-west edge, and cmLayer deliberately leaves
+        // uv.x outside [0,1] for GL_REPEAT to resolve ACROSS MIP LEVELS. The
+        // cubic tap must leave X alone on such a layer for the same reason; had
+        // it clamped X the way it clamps a bounded layer, the reconstruction
+        // would flatten into a band at the seam. The field below is periodic in
+        // texel index with a period that divides the width, so the ground at
+        // the seam is the SAME ground as half a chart away — two frames of the
+        // same data, one straddling the seam and one not. They must agree, and
+        // agree no worse than the bilinear path's own two frames do (which is
+        // the honest tolerance: both carry the fp noise of a world X that
+        // differs by 65 km).
+        {
+            const W = 64, MPC = 2048, PERIOD = 8;      // 8 texels | 64
+            const half = W * MPC / 2;
+            const data = new Float32Array(W * W);
+            for (let j = 0; j < W; j++)
+                for (let i = 0; i < W; i++)
+                    data[j * W + i] = 3000 + 400 * Math.cos(2 * Math.PI * i / PERIOD);
+            const wrapLayer = { data, width: W, height: W, originX: -half,
+                                originZ: -half, metresPerCell: MPC, wrapX: true };
+            // uv = 0 sits half a texel before texel 0's centre.
+            const seamX = -half - MPC / 2;
+            const midX  = seamX + 4 * PERIOD * MPC;    // the same data, 65 km east
+            function wrapPair(cubic) {
+                const t = chTerrain(cubic);
+                t.setHeightLayer(0, wrapLayer);
+                const a = chShot(t, seamX, CH_ALT, CH_FOV);
+                const b = chShot(t, midX, CH_ALT, CH_FOV);
+                t.destroy();
+                return maxDiff(a, b);
+            }
+            const dOff = wrapPair(false), dOn = wrapPair(true);
+            console.log(`  cubicHeight: periodic layer, seam vs mid — ` +
+                        `bilinear ${dOff}, cubic ${dOn}`);
+            assert(dOn <= dOff + 2,
+                `the cubic tap keeps a periodic layer periodic across the seam ` +
+                `(seam-vs-mid max difference ${dOn}, bilinear's own ${dOff})`);
+            // ...and the comparison can see a seam when there is one: the same
+            // data NOT declared periodic has a real east-west edge there, the
+            // coverage ramp and the clamp both fire, and the two frames stop
+            // being the same picture. (It does not isolate the tap clamp on its
+            // own — the ramp is enough by itself — but it is what proves the
+            // measurement above is not blind.)
+            {
+                const bounded = { data, width: W, height: W, originX: -half,
+                                  originZ: -half, metresPerCell: MPC };
+                const t = chTerrain(true);
+                t.setHeightLayer(0, bounded);
+                const a = chShot(t, seamX, CH_ALT, CH_FOV);
+                const b = chShot(t, midX, CH_ALT, CH_FOV);
+                t.destroy();
+                assert(maxDiff(a, b) > 8,
+                    `the periodic-seam comparison has teeth — the same data ` +
+                    `without wrapX differs across the seam (${maxDiff(a, b)})`);
+            }
+        }
+
+        // --- layerFade's exact zero survives ---------------------------------
+        // A layer whose data has gone deeply sub-pixel is mixed in with an
+        // EXACT 0.0, and mix(h, s, 0.0) is h to the bit — which is what lets
+        // the new chain SKIP the reconstruction it would discard. The test does
+        // not trust that: it replaces the faded layer's contents with a
+        // completely different field and demands the frame not move by one bit.
+        // That also proves the cubic fetches stay finite — a NaN arriving from
+        // off the texture would survive the zero and poison the mix.
+        {
+            const coarse = makeLayer(64, 64, -65536, -65536, 2048,
+                (x) => 3000 + 400 * Math.cos(2 * Math.PI * x / 6144));
+            // 64 m texels against a 1024 m rendered cell: past the 8T = 512 m
+            // at which cmLayerFade reaches an exact zero.
+            function fine(fn) {
+                return makeLayer(128, 128, -4096, -4096, 64, fn);
+            }
+            const quietFine = fine(() => 3000);
+            const loudFine  = fine((x, z) => 3000 + 900 * Math.sin(x / 190)
+                                                        * Math.cos(z / 150));
+            function swap(cubic, fade) {
+                const t = chTerrain(cubic, { layerFade: fade });
+                t.setHeightLayer(1, coarse);
+                t.setHeightLayer(0, quietFine);
+                const a = chShot(t, 0, CH_ALT, CH_FOV);
+                t.setHeightLayer(0, loudFine);
+                const b = chShot(t, 0, CH_ALT, CH_FOV);
+                t.destroy();
+                return bytesEqual(a, b);
+            }
+            for (const cubic of [false, true]) {
+                assert(swap(cubic, true),
+                    `a faded-out height layer contributes nothing to the bit ` +
+                    `(cubicHeight ${cubic})`);
+                assert(!swap(cubic, false),
+                    `the faded-layer test has teeth — unfaded, the same swap ` +
+                    `changes the frame (cubicHeight ${cubic})`);
+            }
+        }
+
+        // --- cost, at a ground camera and an orbital one ---------------------
+        // Printed rather than gated: frame time is not a stable assertion in a
+        // suite that shares a GPU with whatever else is running. The ground
+        // camera's cost is asserted STRUCTURALLY instead, above — a frame that
+        // is identical to the bit took the same fetches. The orbital number is
+        // here so a regression in the gate has somewhere to show up.
+        {
+            const fld = makeLayer(64, 64, -65536, -65536, 2048,
+                (x, z) => 3000 + 400 * Math.cos(2 * Math.PI * x / 6144)
+                               + 300 * Math.sin(2 * Math.PI * z / 5000));
+            function timeAt(cubic, alt, fov) {
+                const t = chTerrain(cubic);
+                t.setHeightLayer(0, fld);
+                chShot(t, 0, alt, fov);                 // warm
+                let best = Infinity;
+                for (let run = 0; run < 5; run++) {
+                    const t0 = Date.now();
+                    for (let i = 0; i < 200; i++) chShot(t, 0, alt, fov);
+                    const dt = (Date.now() - t0) / 200;
+                    if (dt < best) best = dt;
+                }
+                t.destroy();
+                return best;
+            }
+            for (const [name, alt, fov] of [['ground', 150, CH_FOV],
+                                            ['orbit', CH_ALT, CH_FOV]]) {
+                const a = timeAt(false, alt, fov), b = timeAt(true, alt, fov);
+                console.log(`  cubicHeight: ${name} camera — ` +
+                            `${a.toFixed(3)} ms -> ${b.toFixed(3)} ms ` +
+                            `(${(b / a).toFixed(2)}x)`);
+            }
+        }
+
+        sun.direction = chSunWas.direction;
+        sun.intensity = chSunWas.intensity;
     }
 
     console.log('clipmap terrain test passed');

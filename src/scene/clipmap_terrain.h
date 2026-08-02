@@ -127,6 +127,43 @@ struct ClipmapConfig {
     // shift codegen. Derivation, tap reduction, cost and edge handling:
     // clipmap_cubic.glsl.
     bool cubicSurface = false;
+
+    // Cubic (C1/C2 B-spline) reconstruction of the HEIGHT field — mip-aware,
+    // and applied in both stages at once (opt-in).
+    //
+    // The same argument as cubicSurface, one field over, and with two
+    // differences that are the whole of the work. First, height is read by the
+    // vertex stage (the displaced geometry), by the fragment stage five times
+    // over (the shading normal's taps), and by nothing else — so the filter
+    // goes into BOTH shader stages or the shaded surface stops being the drawn
+    // one. Second, cmLayer samples a FRACTIONAL MIP, so the taps are spaced at
+    // the SAMPLED level's texel size and taken at that level; a level-0-spaced
+    // filter would put all four fetches inside one sampled texel and return
+    // plain trilinear at exactly the coarse rungs this exists for.
+    //
+    // WHERE IT COSTS ANYTHING. Keyed to the rung, not to the camera. The
+    // artefact's period is one sampled texel, so it is visible only while a
+    // texel is a handful of pixels wide; the path fades out between 32 and 128
+    // pixels per texel and is off entirely underfoot, where a texel spans
+    // thousands. In the geometry-limited far field the ratio is a constant
+    // 1/(u_invK * u_pixelScale) at every altitude, so the fragments that pay
+    // are the ones reading from a coarse rung — the far field at eye level and
+    // the whole frame from orbit.
+    //
+    // THE CPU MIRRORS ARE UNCHANGED, and that is the coherent answer rather
+    // than an omission: elevationAt / renderedElevationAt are camera-free (a
+    // collision height that moved with the camera would be a worse bug than any
+    // filter fixes), and the gate is an exact 0 in the near field where those
+    // mirrors are exact. So the standable ground is the drawn ground there in
+    // both modes, to the bit. Past the ramp they diverge by at most 1/6 of the
+    // field's second difference over one sampled texel — the same order as the
+    // mip divergence the mirror already carries and documents.
+    //
+    // Off renders bit-identically to a build without the flag: the chunk is not
+    // appended to either shader source at all. Derivation, the tap reduction,
+    // the fractional-mip choice, the gate and the edge handling:
+    // clipmap_cubic_height.glsl.
+    bool cubicHeight = false;
 };
 
 /// One level of the height pyramid: an R32F mipmapped texture plus where it
