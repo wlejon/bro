@@ -54,6 +54,14 @@
 //   seaLevel:         0.0,    // metres added to every sample
 //   snowLine:         3500.0, // altitude in metres where snow blending begins
 //   planetRadius:     0.0,    // planet radius for spherical curvature (0 = flat)
+//   layerFade:        false,  // opt-in: fade a finer layer out of the blend —
+//                             // height, data floor and surface channels
+//                             // together — once its data is 2x..8x sub-pixel,
+//                             // so a fine window stops reading as a
+//                             // different-toned rectangle from altitude.
+//                             // Off renders bit-identically to before the
+//                             // flag existed. See cmLayerFade (shader) for
+//                             // the ramp's derivation.
 //   detailWavelength: 4.0,    // procedural micro-detail noise wavelength
 //   detailRelief:     0.5,    // procedural micro-detail amplitude
 //   detailGain:       0.5,    // micro-detail octave gain

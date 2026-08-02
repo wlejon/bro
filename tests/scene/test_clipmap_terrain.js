@@ -792,6 +792,124 @@ if (!scene) {
     }
 
     // =====================================================================
+    // Per-layer LOD fade (layerFade, opt-in).
+    //
+    // With the flag on, a finer layer's blend weight in ALL THREE chains
+    // (height, data floor, surface channels) is scaled by
+    // 1 - smoothstep(2T, 8T, c): full weight while its data is within a mip
+    // level of the pixel, gone once it is three levels under. What must
+    // hold, measured as the frame difference between the same scene WITH and
+    // WITHOUT a 30 m fine window (height + surface + the detail floor it
+    // moves):
+    //   * low camera (c ~ 20 m under the eye): the window is live;
+    //   * high camera (c ~ 338 m >= 8T = 240 m): the window's contribution
+    //     is gone TO THE BIT — this is also the coherence proof, because a
+    //     chain that kept fading independently (say surface but not floor)
+    //     would leave a nonzero residue here;
+    //   * mid camera: strictly between — the fade is a ramp, not a switch;
+    //   * with the fade OFF at the same high camera the window still stamps
+    //     the frame (the different-toned rectangle this flag exists to
+    //     remove), so the zero above is the fade's doing, not invisibility;
+    //   * omitted and explicit-false render bit-identically.
+    // =====================================================================
+    {
+        const optsBase = {
+            levels: 10, resolution: 64, cellSize: 2,
+            detailWavelength: 48, detailRelief: 0.3, detailOctaves: 5,
+        };
+        // Both fields ride 200 m up so the moisture-driven grass band — the
+        // material channel that makes the tone rectangle visible — is what
+        // covers the frame, not the surface-channel-blind sand band at sea
+        // level.
+        const rough = (x, z) => 200 + 40 * Math.sin(x * 0.05) * Math.cos(z * 0.045);
+        const gentle = (x, z) => 200 + 8 * Math.sin(x * 0.0004) * Math.cos(z * 0.00035);
+        function surfL(w, mpc, v) {
+            const data = new Float32Array(w * w * 3);
+            data.fill(v);
+            const span = w * mpc;
+            return { data, width: w, height: w,
+                     originX: -span / 2, originZ: -span / 2, metresPerCell: mpc };
+        }
+        function shot(alt, withFine, extra) {
+            const t = scene.createClipmapTerrain(
+                Object.assign({}, optsBase, extra || {}));
+            t.setHeightLayer(1, makeLayer(128, 128, -15360, -15360, 240, gentle));
+            if (withFine) {
+                // Height, surface and (through the floor) detail all at
+                // T = 30 m, so every chain's fade is exercised and they must
+                // all be gone together at c >= 240 m.
+                t.setHeightLayer(0, makeLayer(256, 256, -3840, -3840, 30, rough));
+                t.setSurfaceLayer(0, surfL(128, 30, 0.9));
+                t.setSurfaceLayer(1, surfL(128, 240, 0.1));
+            } else {
+                // Surface layers must stay contiguous from 0, so the coarse
+                // chart sits at index 0 here — same data, same arithmetic,
+                // just a shorter stack.
+                t.setSurfaceLayer(0, surfL(128, 240, 0.1));
+            }
+            scene.setCamera({ fov: 60, near: 1, far: 300000,
+                              position: [0, alt, 0], target: [0.001, 0, 0],
+                              up: [0, 0, -1] });
+            for (let i = 0; i < 10; i++) t.update(0, alt, 0);
+            const img = scene.captureFrame();
+            t.destroy();
+            return img;
+        }
+        const meanAbsDiff = (a, b) => {
+            let s = 0;
+            for (let i = 0; i < a.data.length; i++) s += Math.abs(a.data[i] - b.data[i]);
+            return s / a.data.length;
+        };
+        const maxAbsDiff = (a, b) => {
+            let m = 0;
+            for (let i = 0; i < a.data.length; i++)
+                m = Math.max(m, Math.abs(a.data[i] - b.data[i]));
+            return m;
+        };
+        const dAt = (alt, extra) =>
+            meanAbsDiff(shot(alt, true, extra), shot(alt, false, extra));
+
+        const ON = { layerFade: true };
+        const dLow  = dAt(1500, ON);    // c ~ 20 m: full weight
+        const dMid  = dAt(8000, ON);    // c ~ 108 m: mid-ramp
+        const dHigh = maxAbsDiff(shot(25000, true, ON), shot(25000, false, ON));
+        assert(dLow > 2,
+            `faded stack still shows the fine window at eye scale (${dLow.toFixed(2)})`);
+        assert(dHigh === 0,
+            `at c >= 8T every chain's contribution from the window is gone ` +
+            `to the bit (maxAbsDiff ${dHigh})`);
+        assert(dMid > 0.05 && dMid < dLow,
+            `the fade is a monotone ramp, not a switch ` +
+            `(low ${dLow.toFixed(2)}, mid ${dMid.toFixed(2)}, high 0)`);
+
+        // The zero above is the FADE's doing: with the flag off the same
+        // window still stamps the same high frame — the different-toned
+        // rectangle the consumer measured at -20/-11/-4 RGB. Measured on the
+        // window's own pixels (the centre patch), where it is ~17 LSB here.
+        const patchLum = (img) => {
+            let s = 0, n = 0;
+            const w = img.width, lo = Math.floor(w * 0.44), hi = w - lo;
+            for (let y = lo; y < hi; y++)
+                for (let x = lo; x < hi; x++) {
+                    const i = (y * w + x) * 4;
+                    s += (img.data[i] + img.data[i + 1] + img.data[i + 2]) / 3;
+                    n++;
+                }
+            return s / n;
+        };
+        const offHighWith    = patchLum(shot(25000, true, {}));
+        const offHighWithout = patchLum(shot(25000, false, {}));
+        assert(Math.abs(offHighWith - offHighWithout) > 8,
+            `without the fade the sub-pixel window still stamps its rectangle ` +
+            `(${offHighWith.toFixed(1)} vs ${offHighWithout.toFixed(1)})`);
+
+        // Default-off bit-identity: omitting the flag IS the flag at false.
+        assert(maxAbsDiff(shot(1500, true, {}),
+                          shot(1500, true, { layerFade: false })) === 0,
+            'omitting layerFade renders identically to layerFade: false');
+    }
+
+    // =====================================================================
     // (7) The curvature chart centre.
     //
     // Default = the camera ground point, re-pushed every update; pinning it

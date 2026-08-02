@@ -74,6 +74,19 @@ struct ClipmapConfig {
     // the terrain — see cmCurve in clipmap_common.glsl and horizonDistance().
     // Earth is 6371000.
     float planetRadius = 0.0f;
+
+    // Per-layer LOD fade (opt-in). When on, a finer layer's blend weight in
+    // every chain — height, data floor and surface channels together — is
+    // additionally scaled by 1 - smoothstep(2T, 8T, c) for its texel size T
+    // against the rendered cell size c, so a layer whose data has gone deeply
+    // sub-pixel fades out instead of stamping its own local mean over the
+    // coarser chart as a visibly different-toned rectangle. Off (the default)
+    // renders bit-identically to a build without the flag. Derivation and
+    // consumer numbers: cmLayerFade in clipmap_common.glsl. The CPU mirrors
+    // (elevationAt, dataFloorAt) deliberately ignore it — it is a function of
+    // the rendered cell, which is a screen-space quantity, and near the
+    // camera (where collision lives) it is inactive by construction.
+    bool layerFade = false;
 };
 
 /// One level of the height pyramid: an R32F mipmapped texture plus where it

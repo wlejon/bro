@@ -370,6 +370,9 @@ JSValue createClipmapTerrainJS(JSContext* ctx, scene::SceneGraph* graph,
             (float)qjsbind::get_prop_number(ctx, opts, "maxCellScale", cfg.maxCellScale);
         cfg.planetRadius =
             (float)qjsbind::get_prop_number(ctx, opts, "planetRadius", cfg.planetRadius);
+        // Opt-in per-layer LOD fade; off is bit-identical to the flag not
+        // existing. See ClipmapConfig::layerFade.
+        cfg.layerFade = qjsbind::get_prop_bool(ctx, opts, "layerFade", cfg.layerFade);
         cfg.detailWavelength =
             (float)qjsbind::get_prop_number(ctx, opts, "detailWavelength", cfg.detailWavelength);
         cfg.detailRelief =

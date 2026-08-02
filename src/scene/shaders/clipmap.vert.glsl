@@ -52,7 +52,7 @@ float cmSurface(vec2 wxz) {
     float c      = cmCellSize(wxz);
     vec2  rel    = wxz - u_camXZ;
     float bandLim;
-    float floorM = cmDataFloor(wxz, bandLim);
+    float floorM = cmDataFloor(wxz, c, bandLim);
     // Same spacing rule as the fragment stage — see the long comment there.
     // Both stages have to agree on the slope, since it modulates the detail
     // that displaces here and shades there.

@@ -255,6 +255,7 @@ void ClipmapTerrain::pushStaticUniforms() {
     set("u_detailGain", {cfg_.detailGain});
     set("u_detailOctaves", {static_cast<float>(cfg_.detailOctaves)});
     set("u_planetRadius", {cfg_.planetRadius});
+    set("u_layerFade", {cfg_.layerFade ? 1.0f : 0.0f});
 
     // Material defaults
     set("u_albedoRock", {rockAlbedo_[0], rockAlbedo_[1], rockAlbedo_[2]});

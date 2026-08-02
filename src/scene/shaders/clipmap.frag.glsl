@@ -51,7 +51,7 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     // filter noise instead of terrain. Detail and the exemplar are unaffected —
     // they carry analytic derivatives and fill the band under this floor.
     float bandLim;
-    float floorM = cmDataFloor(wxz, bandLim);
+    float floorM = cmDataFloor(wxz, c, bandLim);
     float e  = max(c, floorM);
     float h0 = cmHeight(wxz, c);
     float hL = cmHeight(wxz - vec2(e, 0.0), c);
@@ -116,7 +116,7 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     float cavity = conf * clamp(d.x / max(dAmp, 1e-4), -1.0, 1.0);
 
     CmMaterial m;
-    cmMaterialAt(rel, wy, n, cs, cavity, m);
+    cmMaterialAt(rel, wy, n, cs, c, cavity, m);
 
     baseColor = m.albedo;
     metallic  = 0.0;

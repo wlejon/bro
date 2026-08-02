@@ -227,6 +227,55 @@ vec3 cmCurveNormal(vec2 rel, vec3 n) {
 // layer under it instead of showing a hard seam.
 const float CM_FADE = 0.08;
 
+// --- per-layer LOD fade (opt-in, u_layerFade) --------------------------------
+//
+// The blend chains below always mix the finest covering layer in at full
+// weight, however coarse the rendered cell has become. From altitude that is
+// wasteful but harmless for HEIGHT (the mip chain has already averaged the
+// data to its local mean) — and visibly wrong for anything a material derives
+// from the stack: a fine window whose channels differ in local mean from the
+// coarse chart under it reads as a different-toned RECTANGLE, its edges the
+// window's own footprint (measured -20/-11/-4 RGB against the surround at
+// 640 km over a 32 m window). Fading a layer out once its data is deeply
+// sub-pixel replaces that rectangle with the coarse layer's own mean, which
+// is what the rest of the frame is already showing.
+//
+// THE RAMP, derived before it was coded. For a layer of texel size T metres
+// rendered at cell size c (the cDesired the chains already carry —
+// cmCellSize's continuous function of distance and altitude):
+//     fade = 1 - smoothstep(2T, 8T, c)
+//   * c <= 2T: full weight. Up to one mip level down (lod = log2(c/T) <= 1)
+//     the layer still contributes real structure the pixel can resolve.
+//   * c >= 8T: zero. Three mip levels down, every sample is a 64-texel
+//     average — the layer's contribution has collapsed to its local mean,
+//     which the coarser layer under it carries anyway.
+//   * between: smoothstep, C0 (in fact C1) in c; c is continuous in camera
+//     altitude and in world position, so the fade cannot pop — it slides
+//     with exactly the same continuity argument the mip selection rides on.
+// Consumer numbers (1080 px, 55 deg fov, 1.5 px/cell): a 32 m window holds
+// full weight below ~44 km altitude, fades across ~44-177 km, and is gone
+// well before the 640 km where the tone mismatch was measured.
+//
+// THE SAME FADE IN ALL THREE CHAINS, by construction: cmHeight, cmDataFloor
+// and cmSurface all scale a finer layer's blend weight by cmLayerFade of the
+// same (T, c) pair, so height, data floor and surface channels agree about
+// which data is live at every point. If they disagreed, material would smear
+// at fade boundaries: surface channels from a layer whose height is gone, or
+// detail octaves high-passed against a floor the height blend no longer uses.
+//
+// Off (the default) multiplies every weight by an exact 1.0, which is
+// bit-identical to the unfaded chain. The CPU mirrors (baseElevationAt,
+// dataFloorAt) deliberately do NOT carry the fade: it is a function of the
+// rendered cell — a screen-space quantity — and the mirrors already ignore
+// the shader's mip selection for the same reason. Near the camera, where
+// collision happens, c is at its smallest and the fade is inactive.
+uniform float u_layerFade;   // 0 = off (default), 1 = fade sub-pixel layers
+
+float cmLayerFade(float texel, float cDesired) {
+    if (u_layerFade < 0.5) return 1.0;
+    return 1.0 - smoothstep(2.0 * texel, 8.0 * texel, cDesired);
+}
+
 // How many pixels one sampled cell should span. Below 1 the field is sampled
 // finer than the framebuffer can show and aliases; well above 1 it visibly
 // blurs. 1.5 keeps a margin over the Nyquist limit without softening detail
@@ -298,7 +347,10 @@ float cmCoverage(vec3 a, vec2 sz, vec2 wxz, float wrapX) {
 // crosses between their two high-pass rules exactly as smoothly as the floor
 // itself crosses — and a stack that declares nothing gets 0 everywhere, which is
 // what leaves the heuristic in sole charge.
-float cmDataFloor(vec2 wxz, out float bandLimited) {
+// `cDesired` is the rendered cell size, for the per-layer LOD fade — the SAME
+// value the caller hands cmHeight, so the floor and the height agree about
+// which layers are live (see cmLayerFade). With the fade off it is unused.
+float cmDataFloor(vec2 wxz, float cDesired, out float bandLimited) {
     float n = u_layerCount;
     float w = 0.0;
     float f = 0.0;
@@ -309,11 +361,11 @@ float cmDataFloor(vec2 wxz, out float bandLimited) {
     else if (n > 2.5) { f = log2(u_l2a.z); b = u_lBandLimited.z; }
     else if (n > 1.5) { f = log2(u_l1a.z); b = u_lBandLimited.y; }
     else if (n > 0.5) { f = log2(u_l0a.z); b = u_lBandLimited.x; }
-    if (n > 5.5) { w = cmCoverage(u_l4a, u_l4b, wxz, u_lWrapX45.x); f = mix(f, log2(u_l4a.z), w); b = mix(b, u_lBandLimited45.x, w); }
-    if (n > 4.5) { w = cmCoverage(u_l3a, u_l3b, wxz, u_lWrapX.w); f = mix(f, log2(u_l3a.z), w); b = mix(b, u_lBandLimited.w, w); }
-    if (n > 3.5) { w = cmCoverage(u_l2a, u_l2b, wxz, u_lWrapX.z); f = mix(f, log2(u_l2a.z), w); b = mix(b, u_lBandLimited.z, w); }
-    if (n > 2.5) { w = cmCoverage(u_l1a, u_l1b, wxz, u_lWrapX.y); f = mix(f, log2(u_l1a.z), w); b = mix(b, u_lBandLimited.y, w); }
-    if (n > 1.5) { w = cmCoverage(u_l0a, u_l0b, wxz, u_lWrapX.x); f = mix(f, log2(u_l0a.z), w); b = mix(b, u_lBandLimited.x, w); }
+    if (n > 5.5) { w = cmCoverage(u_l4a, u_l4b, wxz, u_lWrapX45.x) * cmLayerFade(u_l4a.z, cDesired); f = mix(f, log2(u_l4a.z), w); b = mix(b, u_lBandLimited45.x, w); }
+    if (n > 4.5) { w = cmCoverage(u_l3a, u_l3b, wxz, u_lWrapX.w) * cmLayerFade(u_l3a.z, cDesired); f = mix(f, log2(u_l3a.z), w); b = mix(b, u_lBandLimited.w, w); }
+    if (n > 3.5) { w = cmCoverage(u_l2a, u_l2b, wxz, u_lWrapX.z) * cmLayerFade(u_l2a.z, cDesired); f = mix(f, log2(u_l2a.z), w); b = mix(b, u_lBandLimited.z, w); }
+    if (n > 2.5) { w = cmCoverage(u_l1a, u_l1b, wxz, u_lWrapX.y) * cmLayerFade(u_l1a.z, cDesired); f = mix(f, log2(u_l1a.z), w); b = mix(b, u_lBandLimited.y, w); }
+    if (n > 1.5) { w = cmCoverage(u_l0a, u_l0b, wxz, u_lWrapX.x) * cmLayerFade(u_l0a.z, cDesired); f = mix(f, log2(u_l0a.z), w); b = mix(b, u_lBandLimited.x, w); }
     bandLimited = b;
     return exp2(f);
 }
@@ -331,11 +383,11 @@ float cmHeight(vec2 wxz, float cDesired) {
     else if (n > 2.5) h = cmLayer(u_h2, u_l2a, u_l2b, wxz, cDesired, u_lWrapX.z, w);
     else if (n > 1.5) h = cmLayer(u_h1, u_l1a, u_l1b, wxz, cDesired, u_lWrapX.y, w);
     else if (n > 0.5) h = cmLayer(u_h0, u_l0a, u_l0b, wxz, cDesired, u_lWrapX.x, w);
-    if (n > 5.5) { float s = cmLayer(u_h4, u_l4a, u_l4b, wxz, cDesired, u_lWrapX45.x, w); h = mix(h, s, w); }
-    if (n > 4.5) { float s = cmLayer(u_h3, u_l3a, u_l3b, wxz, cDesired, u_lWrapX.w, w); h = mix(h, s, w); }
-    if (n > 3.5) { float s = cmLayer(u_h2, u_l2a, u_l2b, wxz, cDesired, u_lWrapX.z, w); h = mix(h, s, w); }
-    if (n > 2.5) { float s = cmLayer(u_h1, u_l1a, u_l1b, wxz, cDesired, u_lWrapX.y, w); h = mix(h, s, w); }
-    if (n > 1.5) { float s = cmLayer(u_h0, u_l0a, u_l0b, wxz, cDesired, u_lWrapX.x, w); h = mix(h, s, w); }
+    if (n > 5.5) { float s = cmLayer(u_h4, u_l4a, u_l4b, wxz, cDesired, u_lWrapX45.x, w); h = mix(h, s, w * cmLayerFade(u_l4a.z, cDesired)); }
+    if (n > 4.5) { float s = cmLayer(u_h3, u_l3a, u_l3b, wxz, cDesired, u_lWrapX.w, w); h = mix(h, s, w * cmLayerFade(u_l3a.z, cDesired)); }
+    if (n > 3.5) { float s = cmLayer(u_h2, u_l2a, u_l2b, wxz, cDesired, u_lWrapX.z, w); h = mix(h, s, w * cmLayerFade(u_l2a.z, cDesired)); }
+    if (n > 2.5) { float s = cmLayer(u_h1, u_l1a, u_l1b, wxz, cDesired, u_lWrapX.y, w); h = mix(h, s, w * cmLayerFade(u_l1a.z, cDesired)); }
+    if (n > 1.5) { float s = cmLayer(u_h0, u_l0a, u_l0b, wxz, cDesired, u_lWrapX.x, w); h = mix(h, s, w * cmLayerFade(u_l0a.z, cDesired)); }
     return u_seaLevel + u_heightScale * h;
 }
 
@@ -391,7 +443,12 @@ vec4 cmSurfLayer(sampler2D tex, vec3 a, vec2 sz, vec2 wxz, out float w) {
 // `present` comes back 0 when the stack is empty, so a caller can keep its
 // existing "no surface layer" branch rather than inventing a neutral value here
 // — what neutral MEANS is the material's business, not the clipmap's.
-vec4 cmSurface(vec2 wxz, out float present) {
+//
+// `cDesired` is the rendered cell size for the per-layer LOD fade — pass the
+// SAME cmCellSize value the height chain uses, NOT cmCellSizeAA: the fade's
+// whole contract is that height, floor and surface agree about which layers
+// are live, and two different cell measures would fade them apart.
+vec4 cmSurface(vec2 wxz, float cDesired, out float present) {
     float n = u_surfaceCount;
     present = n > 0.5 ? 1.0 : 0.0;
     if (n < 0.5) return vec4(0.0);
@@ -403,11 +460,11 @@ vec4 cmSurface(vec2 wxz, out float present) {
     else if (n > 2.5) s = cmSurfLayer(u_surface2, u_surf2A, u_surf2B, wxz, w);
     else if (n > 1.5) s = cmSurfLayer(u_surface1, u_surf1A, u_surf1B, wxz, w);
     else              s = cmSurfLayer(u_surface,  u_surfA,  u_surfB,  wxz, w);
-    if (n > 5.5) { vec4 f = cmSurfLayer(u_surface4, u_surf4A, u_surf4B, wxz, w); s = mix(s, f, w); }
-    if (n > 4.5) { vec4 f = cmSurfLayer(u_surface3, u_surf3A, u_surf3B, wxz, w); s = mix(s, f, w); }
-    if (n > 3.5) { vec4 f = cmSurfLayer(u_surface2, u_surf2A, u_surf2B, wxz, w); s = mix(s, f, w); }
-    if (n > 2.5) { vec4 f = cmSurfLayer(u_surface1, u_surf1A, u_surf1B, wxz, w); s = mix(s, f, w); }
-    if (n > 1.5) { vec4 f = cmSurfLayer(u_surface,  u_surfA,  u_surfB,  wxz, w); s = mix(s, f, w); }
+    if (n > 5.5) { vec4 f = cmSurfLayer(u_surface4, u_surf4A, u_surf4B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf4A.z, cDesired)); }
+    if (n > 4.5) { vec4 f = cmSurfLayer(u_surface3, u_surf3A, u_surf3B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf3A.z, cDesired)); }
+    if (n > 3.5) { vec4 f = cmSurfLayer(u_surface2, u_surf2A, u_surf2B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf2A.z, cDesired)); }
+    if (n > 2.5) { vec4 f = cmSurfLayer(u_surface1, u_surf1A, u_surf1B, wxz, w); s = mix(s, f, w * cmLayerFade(u_surf1A.z, cDesired)); }
+    if (n > 1.5) { vec4 f = cmSurfLayer(u_surface,  u_surfA,  u_surfB,  wxz, w); s = mix(s, f, w * cmLayerFade(u_surfA.z, cDesired)); }
     return s;
 }
 

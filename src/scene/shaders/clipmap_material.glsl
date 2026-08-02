@@ -75,8 +75,13 @@ struct CmMaterial {
 // Weights sum to 1. Every threshold is jittered by the coarse mottle so that
 // nothing in the world is a contour line — an unjittered snowline is the single
 // most artificial thing a terrain shader can draw.
-void cmMaterialAt(vec2 rel, float wy, vec3 n, float c, float cavity,
-                  out CmMaterial m) {
+//
+// `cLayer` is the height chain's rendered cell size (cmCellSize, NOT the
+// shading cell `c` from cmCellSizeAA) — it drives the surface stack's
+// per-layer LOD fade, which must agree with the height blend about which
+// layers are live. See cmLayerFade.
+void cmMaterialAt(vec2 rel, float wy, vec3 n, float c, float cLayer,
+                  float cavity, out CmMaterial m) {
     float coarse = cmMottle(rel, wy, n, CM_MOTTLE_COARSE, c);
     float fine   = cmMottle(rel, wy, n, CM_MOTTLE_FINE,   c);
 
@@ -88,7 +93,7 @@ void cmMaterialAt(vec2 rel, float wy, vec3 n, float c, float cavity,
     // channels follow the height stack out to the coarsest layer instead of
     // stopping at the finest one's edge.
     float surfPresent = 0.0;
-    vec4 surfVal = cmSurface(rel + u_camXZ, surfPresent);
+    vec4 surfVal = cmSurface(rel + u_camXZ, cLayer, surfPresent);
 
     // Rock wherever the surface is too steep to hold soil.
     float rock = smoothstep(0.10, 0.42, slope + 0.06 * coarse);
