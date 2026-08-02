@@ -1179,6 +1179,101 @@ if (!scene) {
         cm.node.visible = true;
     }
 
+    // =====================================================================
+    // (10) Coverage floor (coverageFloor, opt-in).
+    //
+    // The horizon enters the zoom policy only as a CEILING, and the 2.5x
+    // step-up gate lets the settled cellScale sit up to 2.5x below it — so
+    // at a 1,111 km camera the stack reaches 2,097 km against a 3,923 km
+    // tangent to the limb, and the sheet ends mid-disc. The floor asks for
+    // reach >= the limb, clamped to the data's own edge (maxCellScale).
+    //   * default OFF: today's numbers exactly (cellScale 16, reach
+    //     2,097 km < limb) — the lag is real and unchanged;
+    //   * ON at the same camera: reach >= min(limb, data reach);
+    //   * ON at eye level: cellScale identical to default — the floor is
+    //     fractions of one scale step there;
+    //   * ON under the §6 app loop (re-sizing its layer from the terrain's
+    //     own answer every frame): reach settles — the floor depends only
+    //     on eye altitude and static config, not on maxHeight_, so it
+    //     cannot reopen the re-upload loop, and its 1x up-gate plus the
+    //     1.25x down-veto cannot fight the 0.8x step-down (derivation in
+    //     ClipmapTerrain::update).
+    // =====================================================================
+    {
+        const R = 6371000;
+        const opts = { levels: 10, resolution: 64, cellSize: 8,
+                       planetRadius: R, maxCellScale: 4096, detailRelief: 0 };
+        const unit = 8 * 32 * Math.pow(2, 9);        // 131072 m at cellScale 1
+        const field = (x, z) =>
+            1500 * (0.5 + 0.5 * Math.sin(x / 90000) * Math.cos(z / 70000));
+        function mk(extra) {
+            const t = scene.createClipmapTerrain(Object.assign({}, opts, extra || {}));
+            const w = 64, mpc = 131072;              // global chart, +-4,194 km
+            t.setHeightLayer(0, makeLayer(w, w, -(w * mpc) / 2, -(w * mpc) / 2,
+                                          mpc, field));
+            t.setChartCenter(0, 0);
+            return t;
+        }
+        const alt = 1111000;
+
+        // Default off — pin the lag itself so this section notices if the
+        // baseline behaviour ever drifts.
+        const off = mk({});
+        for (let i = 0; i < 20; i++) off.update(0, alt, 0);
+        const limb = off.horizonDistance(alt);
+        assert(limb > 3.9e6 && limb < 4.0e6,
+            `tangent to the limb at 1,111 km is ~3,923 km (${(limb / 1000).toFixed(0)} km)`);
+        assert(off.cellScale === 16 && off.farDistance < limb,
+            `without the floor the reach lags the limb (cellScale ` +
+            `${off.cellScale}, ${(off.farDistance / 1000).toFixed(0)} km vs ` +
+            `${(limb / 1000).toFixed(0)} km)`);
+        off.destroy();
+
+        // On — reach clears min(limb need, data reach).
+        const on = mk({ coverageFloor: true });
+        for (let i = 0; i < 20; i++) on.update(0, alt, 0);
+        const dataReach = 4096 * unit;
+        assert(on.farDistance >= Math.min(limb, dataReach),
+            `the floor carries the reach to the limb ` +
+            `(cellScale ${on.cellScale}, ${(on.farDistance / 1000).toFixed(0)} km)`);
+
+        // ...and stays settled under the app loop from (6): re-cut the layer
+        // from coverageDistance every frame, jitter the peaks, demand zero
+        // steps once warm.
+        const reaches = [];
+        const PEAKS = [2000, 2300, 2600, 2150];
+        for (let f = 0; f < 40; f++) {
+            const cov = on.coverageDistance(alt);
+            const mpc = Math.max(1, (2 * cov) / 64);
+            const peak = PEAKS[f % PEAKS.length];
+            on.setHeightLayer(0, makeLayer(64, 64, -32 * mpc, -32 * mpc, mpc,
+                (x, z) => peak * (0.5 + 0.5 * Math.sin(x / 90000)
+                                            * Math.cos(z / 70000))));
+            on.update(0, alt, 0);
+            reaches.push(on.farDistance);
+        }
+        const settled = reaches.slice(24);
+        const steps = settled.filter((r, i) => i > 0 && r !== settled[i - 1]).length;
+        assert(steps === 0,
+            `floored reach settles under a re-sizing app (${steps} steps, ` +
+            `${[...new Set(settled)].join('/')})`);
+        on.destroy();
+
+        // Eye level: the floor must not move the zoom the pixels chose.
+        function eyeScale(extra) {
+            const t = mk(extra);
+            const y = t.elevationAt(0, 0) + 2;
+            for (let i = 0; i < 10; i++) t.update(0, y, 0);
+            const cs = t.cellScale;
+            t.destroy();
+            return cs;
+        }
+        const eyeOff = eyeScale({});
+        const eyeOn  = eyeScale({ coverageFloor: true });
+        assert(eyeOn === eyeOff,
+            `at eye level the floor is inactive (cellScale ${eyeOn} vs ${eyeOff})`);
+    }
+
     cm.destroy();
     assert(cm.node === null, 'destroy() releases the node');
     // Destroy is idempotent and every accessor stays safe afterwards.

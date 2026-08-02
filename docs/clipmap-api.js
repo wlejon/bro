@@ -62,6 +62,11 @@
 //                             // Off renders bit-identically to before the
 //                             // flag existed. See cmLayerFade (shader) for
 //                             // the ramp's derivation.
+//   coverageFloor:    false,  // opt-in: floor the altitude zoom at what
+//                             // reach >= the visible limb needs (clamped to
+//                             // maxCellScale), so the sheet does not end
+//                             // mid-disc from 360-2,200 km up. Off renders
+//                             // bit-identically to before the flag existed.
 //   detailWavelength: 4.0,    // procedural micro-detail noise wavelength
 //   detailRelief:     0.5,    // procedural micro-detail amplitude
 //   detailGain:       0.5,    // micro-detail octave gain

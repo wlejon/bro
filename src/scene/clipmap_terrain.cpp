@@ -514,10 +514,47 @@ void ClipmapTerrain::update(float camX, float camY, float camZ) {
     // data request. That is the same trade the band already makes in the other
     // direction, and it is bounded and transient where the re-upload loop was
     // neither.
+    // AND, OPT-IN, NEVER STOP SHORT OF THE LIMB EITHER (cfg_.coverageFloor).
+    // The horizon only ever enters the policy as a CEILING, and the step-up
+    // gate fires at 2.5x, so between the two the settled cellScale can sit as
+    // much as 2.5x below the horizon target: from ~360 km to ~2,200 km of
+    // altitude the stack's reach lags the visible limb even when coarse data
+    // extends far enough (measured 2,097 km of reach against a 3,923 km
+    // tangent at 1,111 km up — the sheet visibly ends mid-disc). The floor
+    // asks for reach >= the limb distance, using horizonDistance(eye) — the
+    // tangent length, >= the arc to the limb, conservative in the safe
+    // direction — and never asks past maxCellScale, the data's own edge:
+    //     floorScale = min(horizon(eyeASL) / unit, maxCellScale).
+    //
+    // HOW IT MEETS THE HYSTERESIS (the re-upload-loop argument above is the
+    // constraint). Three properties, each load-bearing:
+    //   * floorScale depends on eyeASL and the static config ALONE — not on
+    //     maxHeight_, which setHeightLayer recomputes, so the app's
+    //     size-from-farDistance loop cannot move the floor and the floor
+    //     cannot re-open that loop. And eyeASL is smooth in camera position
+    //     (sea-level referenced), untouched by the per-frame terrain noise
+    //     the band exists to absorb.
+    //   * UP: the stack also steps up while cellScale_ < floorScale — a 1x
+    //     gate, because a reach short of the limb is a hole in the picture,
+    //     not a preference. It stops at the first power of two >= floorScale.
+    //   * DOWN: the 0.8x step-down is additionally vetoed unless the HALVED
+    //     scale still clears 1.25 * floorScale. That is what makes up and
+    //     down unable to fight: a down-step never lands below the floor (so
+    //     the floor-up cannot re-fire from it), and once the floor has pushed
+    //     the scale to 2^k, coming back down requires floorScale to fall 20%
+    //     below 2^(k-1) — horizon goes as sqrt(altitude), so that is a ~36%
+    //     altitude drop, a real descent and not jitter. The only way to
+    //     oscillate would be the camera deliberately riding an altitude
+    //     boundary across a 1.25x band, the same exposure the 2.5x/0.8x band
+    //     already accepts.
+    // With the flag off floorScale stays 0.0: max(want, 0) returns want
+    // unchanged, cellScale_ < 0 never fires, and 0.5*cellScale_ >= 0 always
+    // holds — the policy below is bit-identical to the unflagged one.
     constexpr float kPixelsPerCell = 1.5f;   // == CM_PIXELS_PER_CELL
     if (scale > 0.0f) {
         const float aa = std::abs(camY - groundY) * scale * kPixelsPerCell;
         float want = aa / cfg_.cellSize;
+        float floorScale = 0.0f;
         if (cfg_.planetRadius > 0.0f) {
             // Eye height above SEA LEVEL for the horizon reach. Raw camY is
             // that height only while the datum is the y = 0 plane; under a
@@ -546,10 +583,21 @@ void ClipmapTerrain::update(float camX, float camY, float camZ) {
                               + horizonDistance(peak);
             const float unit  = cfg_.cellSize * static_cast<float>(cfg_.resolution / 2)
                               * std::exp2(static_cast<float>(cfg_.levels - 1));
-            if (unit > 0.0f) want = std::min(want, reach / unit);
+            if (unit > 0.0f) {
+                want = std::min(want, reach / unit);
+                if (cfg_.coverageFloor)
+                    floorScale = std::min(horizonDistance(eyeASL) / unit,
+                                          std::max(1.0f, cfg_.maxCellScale));
+            }
         }
-        if (want >= cellScale_ * 2.5f)        cellScale_ *= 2.0f;
-        else if (want < cellScale_ * 0.8f)    cellScale_ *= 0.5f;
+        // The floor is always <= the ceiling above (reach adds horizon(peak)
+        // on top of horizon(eye)), so the min and the max cannot fight.
+        want = std::max(want, floorScale);
+        if (want >= cellScale_ * 2.5f || cellScale_ < floorScale)
+            cellScale_ *= 2.0f;
+        else if (want < cellScale_ * 0.8f &&
+                 0.5f * cellScale_ >= 1.25f * floorScale)
+            cellScale_ *= 0.5f;
         cellScale_ = std::clamp(cellScale_, 1.0f, std::max(1.0f, cfg_.maxCellScale));
     }
     const float c0 = cfg_.cellSize * cellScale_;

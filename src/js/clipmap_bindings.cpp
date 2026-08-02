@@ -373,6 +373,10 @@ JSValue createClipmapTerrainJS(JSContext* ctx, scene::SceneGraph* graph,
         // Opt-in per-layer LOD fade; off is bit-identical to the flag not
         // existing. See ClipmapConfig::layerFade.
         cfg.layerFade = qjsbind::get_prop_bool(ctx, opts, "layerFade", cfg.layerFade);
+        // Opt-in coverage floor: keep reach at or past the visible limb when
+        // the data allows it. See ClipmapConfig::coverageFloor.
+        cfg.coverageFloor =
+            qjsbind::get_prop_bool(ctx, opts, "coverageFloor", cfg.coverageFloor);
         cfg.detailWavelength =
             (float)qjsbind::get_prop_number(ctx, opts, "detailWavelength", cfg.detailWavelength);
         cfg.detailRelief =

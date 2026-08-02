@@ -87,6 +87,19 @@ struct ClipmapConfig {
     // the rendered cell, which is a screen-space quantity, and near the
     // camera (where collision lives) it is inactive by construction.
     bool layerFade = false;
+
+    // Coverage floor in the cellScale policy (opt-in). The horizon bound in
+    // update() is only ever a CEILING, and the 2.5x step-up gate lets the
+    // settled zoom sit up to 2.5x below it — so from roughly 360 km to
+    // 2,200 km of altitude the stack's reach lags the visible limb even when
+    // coarse data extends far enough, and the sheet ends mid-disc. When on,
+    // the zoom is additionally FLOORED at what reach >= the limb distance
+    // needs, clamped to maxCellScale (the data's own edge). At eye level the
+    // floor is fractions of one scale step and changes nothing. Off (the
+    // default) is bit-identical. Hysteresis interaction — why the floor
+    // cannot oscillate against the 0.8x step-down — is derived in the long
+    // comment in update().
+    bool coverageFloor = false;
 };
 
 /// One level of the height pyramid: an R32F mipmapped texture plus where it
