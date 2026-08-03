@@ -2045,6 +2045,25 @@ if (!scene) {
         // camera's cost is asserted STRUCTURALLY instead, above — a frame that
         // is identical to the bit took the same fetches. The orbital number is
         // here so a regression in the gate has somewhere to show up.
+        //
+        // THE REP COUNT IS A TEST-SUITE BUDGET, NOT A STATISTICS CHOICE.
+        // This block was 5 reps of 200 frames: 1001 frames per measurement,
+        // four measurements, 4004 frames — which was 98% of every frame this
+        // 2000-line file drew, for two printed lines that nothing asserts.
+        // Under a software rasteriser (which is what CI has) a cubic frame here
+        // is 150 ms, so those four numbers cost SEVEN AND A HALF MINUTES
+        // against a 120 s per-test timeout, while the whole rest of the file —
+        // every assertion in all twelve sections — ran in 15 s. CI did not fail
+        // on a bad claim; it was killed mid-benchmark, twice, and the timeout
+        // read as an intermittent hang because it lands wherever the runner's
+        // speed happens to put it.
+        //
+        // 24 frames still swamps Date.now's millisecond resolution on any
+        // renderer that can draw this at all (24 frames is 60 ms even at a
+        // 2.5 ms frame), and min-of-3 is enough to shake off a scheduler blip
+        // for a number read by eye. If you want a tighter figure, raise these
+        // locally — do not commit the raise.
+        const CH_REPS = 3, CH_ITERS = 24;
         {
             const fld = makeLayer(64, 64, -65536, -65536, 2048,
                 (x, z) => 3000 + 400 * Math.cos(2 * Math.PI * x / 6144)
@@ -2054,10 +2073,10 @@ if (!scene) {
                 t.setHeightLayer(0, fld);
                 chShot(t, 0, alt, fov);                 // warm
                 let best = Infinity;
-                for (let run = 0; run < 5; run++) {
+                for (let run = 0; run < CH_REPS; run++) {
                     const t0 = Date.now();
-                    for (let i = 0; i < 200; i++) chShot(t, 0, alt, fov);
-                    const dt = (Date.now() - t0) / 200;
+                    for (let i = 0; i < CH_ITERS; i++) chShot(t, 0, alt, fov);
+                    const dt = (Date.now() - t0) / CH_ITERS;
                     if (dt < best) best = dt;
                 }
                 t.destroy();
