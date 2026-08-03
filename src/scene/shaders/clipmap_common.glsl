@@ -510,6 +510,19 @@ float cmCellSizeAA(vec2 wxz) {
     return dist * u_pixelScale * CM_SHADE_PIXELS_PER_CELL;
 }
 
+// Overload taking surface normal n to compute effective pixel footprint size
+// accounting for perspective foreshortening along grazing view angles.
+float cmCellSizeAA(vec2 wxz, vec3 n) {
+    vec2  rel  = wxz - u_camXZ;
+    float dxz  = max(abs(rel.x), abs(rel.y));
+    float dy   = abs(u_camY - u_camGroundY);
+    float dist = max(dxz, dy);
+    float cAA  = dist * u_pixelScale * CM_SHADE_PIXELS_PER_CELL;
+    vec3  vDir = normalize(vec3(-rel.x, dy, -rel.y));
+    float NdotV = clamp(abs(dot(n, vDir)), 0.05, 1.0);
+    return cAA / NdotV;
+}
+
 float cmCellSize(vec2 wxz) {
     vec2 d = abs(wxz - u_camXZ);
     float dxz = max(d.x, d.y);

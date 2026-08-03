@@ -65,11 +65,10 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     // modulator, not an approximation of it.
     float slope = cmSlopeFrom(h0, hR, hU, e);
 
-    // Detail and materials are limited by the PIXEL, not by the ring cell that
-    // limits the geometry — see cmCellSizeAA. The mesh stops at c; shading
-    // carries on past it, which is the whole reason ground keeps gaining detail
-    // as you walk towards it.
-    float cs = cmCellSizeAA(wxz);
+    vec3 nBase = normalize(vec3(-grad.x, 1.0, -grad.y));
+
+    // Detail and materials are limited by the PIXEL, accounting for grazing-angle foreshortening.
+    float cs = cmCellSizeAA(wxz, nBase);
 
     float dAmp;
     vec3  d  = cmDetail(rel, cs, floorM, bandLim, dAmp);
