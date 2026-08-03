@@ -273,7 +273,7 @@ uniform float u_layerFade;   // 0 = off (default), 1 = fade sub-pixel layers
 
 float cmLayerFade(float texel, float cDesired) {
     if (u_layerFade < 0.5) return 1.0;
-    return 1.0 - smoothstep(2.0 * texel, 8.0 * texel, cDesired);
+    return 1.0 - smoothstep(1.2 * texel, 3.2 * texel, cDesired);
 }
 
 // How many pixels one sampled cell should span. Below 1 the field is sampled
