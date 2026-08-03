@@ -796,13 +796,17 @@ if (!scene) {
     //
     // With the flag on, a finer layer's blend weight in ALL THREE chains
     // (height, data floor, surface channels) is scaled by
-    // 1 - smoothstep(2T, 8T, c): full weight while its data is within a mip
-    // level of the pixel, gone once it is three levels under. What must
-    // hold, measured as the frame difference between the same scene WITH and
-    // WITHOUT a 30 m fine window (height + surface + the detail floor it
-    // moves):
-    //   * low camera (c ~ 20 m under the eye): the window is live;
-    //   * high camera (c ~ 338 m >= 8T = 240 m): the window's contribution
+    // 1 - smoothstep(1.2T, 3.2T, c): full weight while the rendered cell is
+    // still finer than the layer's texel, gone by the time the cell is a
+    // little over a mip level and a half wider. The band was [2T, 8T] until
+    // c8184413 narrowed it; the probe altitudes below are chosen against the
+    // band that is actually in cmLayerFade, so they move when it does.
+    // What must hold, measured as the frame difference between the same scene
+    // WITH and WITHOUT a 30 m fine window (height + surface + the detail floor
+    // it moves):
+    //   * low camera (c ~ 20 m under the eye, under 1.2T = 36 m): the window
+    //     is live at full weight;
+    //   * high camera (c ~ 338 m >= 3.2T = 96 m): the window's contribution
     //     is gone TO THE BIT — this is also the coherence proof, because a
     //     chain that kept fading independently (say surface but not floor)
     //     would leave a nonzero residue here;
@@ -837,7 +841,7 @@ if (!scene) {
             if (withFine) {
                 // Height, surface and (through the floor) detail all at
                 // T = 30 m, so every chain's fade is exercised and they must
-                // all be gone together at c >= 240 m.
+                // all be gone together at c >= 3.2T = 96 m.
                 t.setHeightLayer(0, makeLayer(256, 256, -3840, -3840, 30, rough));
                 t.setSurfaceLayer(0, surfL(128, 30, 0.9));
                 t.setSurfaceLayer(1, surfL(128, 240, 0.1));
@@ -870,13 +874,17 @@ if (!scene) {
             meanAbsDiff(shot(alt, true, extra), shot(alt, false, extra));
 
         const ON = { layerFade: true };
-        const dLow  = dAt(1500, ON);    // c ~ 20 m: full weight
-        const dMid  = dAt(8000, ON);    // c ~ 108 m: mid-ramp
+        const dLow  = dAt(1500, ON);    // c ~ 20 m  (< 1.2T): full weight
+        // Mid-ramp, and deliberately not near either end of it: the fade runs
+        // from c = 36 m to c = 96 m, which is roughly alt 1900 to alt 7000, so
+        // 4000 sits inside with room on both sides. Measured dMid ~ 3 against
+        // a dLow of ~15 and a floor of 0.05.
+        const dMid  = dAt(4000, ON);    // c ~ 54 m  (mid-band): partial weight
         const dHigh = maxAbsDiff(shot(25000, true, ON), shot(25000, false, ON));
         assert(dLow > 2,
             `faded stack still shows the fine window at eye scale (${dLow.toFixed(2)})`);
         assert(dHigh === 0,
-            `at c >= 8T every chain's contribution from the window is gone ` +
+            `at c >= 3.2T every chain's contribution from the window is gone ` +
             `to the bit (maxAbsDiff ${dHigh})`);
         assert(dMid > 0.05 && dMid < dLow,
             `the fade is a monotone ramp, not a switch ` +
@@ -1563,7 +1571,7 @@ if (!scene) {
         // from off the texture would survive the zero and poison the mix.
         {
             // 64 m texels seen from 200 km: the rendered cell there is ~830 m,
-            // past the 8T = 512 m at which cmLayerFade reaches an exact zero.
+            // past the 3.2T = 205 m at which cmLayerFade reaches an exact zero.
             const FINE = 64, N = 128, ALT2 = 200000;
             const coarse = control((i, j) =>
                 0.333 + 0.333 * Math.cos(Math.PI * (i + j) / 3));
@@ -1964,8 +1972,8 @@ if (!scene) {
         {
             const coarse = makeLayer(64, 64, -65536, -65536, 2048,
                 (x) => 3000 + 400 * Math.cos(2 * Math.PI * x / 6144));
-            // 64 m texels against a 1024 m rendered cell: past the 8T = 512 m
-            // at which cmLayerFade reaches an exact zero.
+            // 64 m texels against a 1024 m rendered cell: past the
+            // 3.2T = 205 m at which cmLayerFade reaches an exact zero.
             function fine(fn) {
                 return makeLayer(128, 128, -4096, -4096, 64, fn);
             }
