@@ -810,7 +810,10 @@ if (!scene) {
     //     is gone TO THE BIT — this is also the coherence proof, because a
     //     chain that kept fading independently (say surface but not floor)
     //     would leave a nonzero residue here;
-    //   * mid camera: strictly between — the fade is a ramp, not a switch;
+    //   * in between: a SWEPT range of altitudes, of which some sample shows a
+    //     partial contribution and none of which rises — the fade is a ramp,
+    //     not a switch. Swept rather than probed at one altitude on purpose:
+    //     see the note on the sweep for why a fixed altitude is not portable;
     //   * with the fade OFF at the same high camera the window still stamps
     //     the frame (the different-toned rectangle this flag exists to
     //     remove), so the zero above is the fade's doing, not invisibility;
@@ -874,21 +877,57 @@ if (!scene) {
             meanAbsDiff(shot(alt, true, extra), shot(alt, false, extra));
 
         const ON = { layerFade: true };
-        const dLow  = dAt(1500, ON);    // c ~ 20 m  (< 1.2T): full weight
-        // Mid-ramp, and deliberately not near either end of it: the fade runs
-        // from c = 36 m to c = 96 m, which is roughly alt 1900 to alt 7000, so
-        // 4000 sits inside with room on both sides. Measured dMid ~ 3 against
-        // a dLow of ~15 and a floor of 0.05.
-        const dMid  = dAt(4000, ON);    // c ~ 54 m  (mid-band): partial weight
+        const dLow  = dAt(1500, ON);
         const dHigh = maxAbsDiff(shot(25000, true, ON), shot(25000, false, ON));
         assert(dLow > 2,
             `faded stack still shows the fine window at eye scale (${dLow.toFixed(2)})`);
         assert(dHigh === 0,
             `at c >= 3.2T every chain's contribution from the window is gone ` +
             `to the bit (maxAbsDiff ${dHigh})`);
-        assert(dMid > 0.05 && dMid < dLow,
-            `the fade is a monotone ramp, not a switch ` +
-            `(low ${dLow.toFixed(2)}, mid ${dMid.toFixed(2)}, high 0)`);
+
+        // THE RAMP IS SWEPT, NOT PROBED AT ONE ALTITUDE, and that is the whole
+        // point of the shape below.
+        //
+        // A single "mid-ramp" altitude encodes an assumption about what c is at
+        // that altitude, and c is not a property of this test. It comes out of
+        // cmCellSize — max(cGeo, cAA), where cAA rides on u_pixelScale, i.e. on
+        // the projection and the render target the frame is actually drawn into.
+        // The fade band is only 1.2T..3.2T, a factor of 2.7 in c, so an altitude
+        // that measures a partial weight in one configuration can be past the
+        // end of the ramp in another. That is not hypothetical: alt 8000 sat
+        // mid-band until c8184413 narrowed the band, and alt 4000 measured a
+        // partial 3.36 on both a hardware driver and llvmpipe here while
+        // reading an exact 0 on CI. Chasing the number is the wrong move; the
+        // section's claim does not depend on it.
+        //
+        // So sweep geometrically and assert the CLAIM: that between full weight
+        // and gone the contribution passes through partial values rather than
+        // switching. The step ratio is ~1.35, comfortably inside the band's own
+        // 2.7, so wherever the band falls within the swept range at least one
+        // sample lands inside it — for any u_pixelScale, on any driver.
+        const ALTS = [1500, 2000, 2700, 3600, 4900, 6600, 8900, 12000, 16000, 22000];
+        const ramp = ALTS.map((alt) => dAt(alt, ON));
+        const shown = ramp.map((d) => d.toFixed(2)).join(' ');
+
+        const partial = ramp.filter((d) => d > 0.05 && d < dLow);
+        assert(partial.length > 0,
+            `the fade is a ramp, not a switch — some altitude between full ` +
+            `weight and gone shows a PARTIAL contribution ` +
+            `(dLow ${dLow.toFixed(2)}, sweep ${shown})`);
+
+        // ...and it only ever descends. Equal steps are expected (both ends of
+        // the band are flat), so this is non-increasing rather than strictly
+        // decreasing; the tolerance is 1% of dLow, since the two scenes differ
+        // in more than the fade weight alone and the frame is 8-bit. A step
+        // back UP beyond that would mean this is not a fade at all.
+        const tol = 0.01 * dLow;
+        for (let i = 1; i < ramp.length; i++) {
+            assert(ramp[i] <= ramp[i - 1] + tol,
+                `the fade is monotone in altitude — step ${i} ` +
+                `(alt ${ALTS[i - 1]} -> ${ALTS[i]}) rose from ` +
+                `${ramp[i - 1].toFixed(2)} to ${ramp[i].toFixed(2)} ` +
+                `(sweep ${shown})`);
+        }
 
         // The zero above is the FADE's doing: with the flag off the same
         // window still stamps the same high frame — the different-toned
