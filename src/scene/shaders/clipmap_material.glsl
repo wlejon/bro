@@ -80,7 +80,7 @@ struct CmMaterial {
 // shading cell `c` from cmCellSizeAA) — it drives the surface stack's
 // per-layer LOD fade, which must agree with the height blend about which
 // layers are live. See cmLayerFade.
-void cmMaterialAt(vec2 rel, float wy, vec3 n, float c, float cLayer,
+void cmMaterialAt(vec2 rel, float wy, inout vec3 n, float c, float cLayer,
                   float cavity, out CmMaterial m) {
     float coarse = cmMottle(rel, wy, n, CM_MOTTLE_COARSE, c);
     float fine   = cmMottle(rel, wy, n, CM_MOTTLE_FINE,   c);

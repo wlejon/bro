@@ -151,7 +151,7 @@ void userFragment(inout vec3 baseColor, inout vec3 normal, inout float metallic,
     float cavity = conf * clamp(d.x / max(dAmp, 1e-4), -1.0, 1.0);
 
     CmMaterial m;
-    cmMaterialAt(rel, wy, n, cs, c, cavity, m);
+    cmMaterialAt(rel, wy, normal, cs, c, cavity, m);
 
     baseColor = m.albedo;
     metallic  = 0.0;
