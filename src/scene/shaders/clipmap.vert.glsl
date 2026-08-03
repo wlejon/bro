@@ -57,9 +57,17 @@ float cmSurface(vec2 wxz) {
     // Both stages have to agree on the slope, since it modulates the detail
     // that displaces here and shades there.
     float e  = max(c, floorM);
-    float h0 = cmHeight(wxz, c);
-    float hx = cmHeight(wxz + vec2(e, 0.0), c);
-    float hz = cmHeight(wxz + vec2(0.0, e), c);
+    // One call site for the three taps — same reasoning, and the same
+    // bit-identity, as the fragment stage's five. See the long note there.
+    float h0 = 0.0, hx = 0.0, hz = 0.0;
+    for (int i = 0; i < 3; i++) {
+        vec2  o = (i == 0) ? vec2(0.0, 0.0)
+                : (i == 1) ? vec2(e, 0.0) : vec2(0.0, e);
+        float v = cmHeight(wxz + o, c);
+        if      (i == 0) h0 = v;
+        else if (i == 1) hx = v;
+        else             hz = v;
+    }
     float slope = cmSlopeFrom(h0, hx, hz, e);
     float amp;
     return h0 + cmDetailWeight(slope) * cmDetail(rel, c, floorM, bandLim, amp).x;
@@ -113,20 +121,45 @@ void userVertex(inout vec3 pos, inout vec3 normal, inout vec2 uv) {
     // coarsest level has no coarser neighbour and is baked 0 throughout.
     float parity = uv.y;
     if (a > 0.0 && parity > 0.5) {
-        float hc;
-        if (parity < 1.5) {
-            hc = 0.5 * (cmSurface(wxz - vec2(cl, 0.0))
-                      + cmSurface(wxz + vec2(cl, 0.0)));
-        } else if (parity < 2.5) {
-            hc = 0.5 * (cmSurface(wxz - vec2(0.0, cl))
-                      + cmSurface(wxz + vec2(0.0, cl)));
-        } else {
-            // Cell centre: the bilinear value is the mean of the four corners.
-            hc = 0.25 * (cmSurface(wxz + vec2(-cl, -cl))
-                       + cmSurface(wxz + vec2( cl, -cl))
-                       + cmSurface(wxz + vec2(-cl,  cl))
-                       + cmSurface(wxz + vec2( cl,  cl)));
+        // ONE call site for the taps, with parity choosing the offsets rather
+        // than choosing between written-out cases. This is the largest of the
+        // three such loops; the full argument is in clipmap.frag.glsl, above
+        // its five normal taps.
+        //
+        // Short version: cmSurface inlines cmHeight, cmHeight is the largest
+        // expression in either stage (six layer instantiations, because GL 3.3
+        // cannot index a sampler array dynamically, each carrying eight
+        // texture fetches instead of one when cubicHeight is on), and the three
+        // parity cases spelled out were EIGHT such call sites — of which
+        // exactly one branch ever runs, while the driver optimises and
+        // register-allocates all eight regardless. This block was the single
+        // biggest term in a thirty-two-second shader build.
+        //
+        // Bit-identical, deliberately: the two axis cases still average two
+        // taps and the centre case still averages four in the same order,
+        // 0 + x is exactly x, and a divide by a power of two is exact. So the
+        // surface is the surface this shader always drew. The suite asserts
+        // that as frame equality.
+        //
+        // The offsets are computed rather than held in an indexed local array,
+        // for the reason the fragment stage's note gives — an indexed array is
+        // liable to land in scratch memory rather than registers, and it
+        // measured worse.
+        int n = (parity < 2.5) ? 2 : 4;
+        float hc = 0.0;
+        for (int i = 0; i < n; i++) {
+            vec2 o;
+            if (n == 2) {
+                float s = (i == 0) ? -cl : cl;
+                o = (parity < 1.5) ? vec2(s, 0.0) : vec2(0.0, s);
+            } else {
+                // Cell centre: the bilinear value is the mean of the four
+                // corners, taken (-,-) (+,-) (-,+) (+,+) as before.
+                o = vec2(((i & 1) == 0) ? -cl : cl, (i < 2) ? -cl : cl);
+            }
+            hc += cmSurface(wxz + o);
         }
+        hc /= float(n);
         h = mix(h, hc, a);
     }
 
