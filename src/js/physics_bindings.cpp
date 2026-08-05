@@ -1633,18 +1633,7 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
         opts.controller = physics::VehicleOptions::ControllerMotorcycle;
     else if (!type.empty() && type != "wheeled")
         return JS_ThrowTypeError(ctx, "type must be 'wheeled' | 'tracked' | 'motorcycle'");
-    const bool isTracked = opts.controller == physics::VehicleOptions::ControllerTracked;
-
-    // Tracked drivetrains follow Jolt's tank defaults (lower revving, earlier
-    // shifts); wheeled/motorcycle keep the car defaults.
-    const double defMinRPM = isTracked ? 500.0 : 1000.0;
-    const double defMaxRPM = isTracked ? 4000.0 : 6000.0;
-    const double defShiftUp = isTracked ? 3500.0 : 4000.0;
-    const double defShiftDown = isTracked ? 1000.0 : 2000.0;
-    opts.engine.minRPM = (float)defMinRPM;
-    opts.engine.maxRPM = (float)defMaxRPM;
-    opts.transmission.shiftUpRPM = (float)defShiftUp;
-    opts.transmission.shiftDownRPM = (float)defShiftDown;
+    opts.applyControllerDefaults();
 
     // Chassis: an existing body tag (`body`) or inline creation opts
     // (`chassis`, same schema as createBody, forced dynamic).
@@ -1718,9 +1707,9 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
 
     JSValue engVal = JS_GetPropertyStr(ctx, optsVal, "engine");
     if (JS_IsObject(engVal)) {
-        opts.engine.maxTorque = (float)qjsbind::get_prop_number(ctx, engVal, "maxTorque", 500.0);
-        opts.engine.minRPM = (float)qjsbind::get_prop_number(ctx, engVal, "minRPM", defMinRPM);
-        opts.engine.maxRPM = (float)qjsbind::get_prop_number(ctx, engVal, "maxRPM", defMaxRPM);
+        opts.engine.maxTorque = (float)qjsbind::get_prop_number(ctx, engVal, "maxTorque", opts.engine.maxTorque);
+        opts.engine.minRPM = (float)qjsbind::get_prop_number(ctx, engVal, "minRPM", opts.engine.minRPM);
+        opts.engine.maxRPM = (float)qjsbind::get_prop_number(ctx, engVal, "maxRPM", opts.engine.maxRPM);
     }
     JS_FreeValue(ctx, engVal);
 
@@ -1736,14 +1725,14 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
         JS_FreeValue(ctx, rgr);
         opts.transmission.switchTime = (float)qjsbind::get_prop_number(ctx, trVal, "switchTime", 0.5);
         opts.transmission.clutchStrength = (float)qjsbind::get_prop_number(ctx, trVal, "clutchStrength", 10.0);
-        opts.transmission.shiftUpRPM = (float)qjsbind::get_prop_number(ctx, trVal, "shiftUpRPM", defShiftUp);
-        opts.transmission.shiftDownRPM = (float)qjsbind::get_prop_number(ctx, trVal, "shiftDownRPM", defShiftDown);
+        opts.transmission.shiftUpRPM = (float)qjsbind::get_prop_number(ctx, trVal, "shiftUpRPM", opts.transmission.shiftUpRPM);
+        opts.transmission.shiftDownRPM = (float)qjsbind::get_prop_number(ctx, trVal, "shiftDownRPM", opts.transmission.shiftDownRPM);
     }
     JS_FreeValue(ctx, trVal);
 
     // Tracked: exactly two tracks, [left, right], each listing its wheel
     // indices. Motorcycle: optional lean-spring configuration.
-    if (isTracked) {
+    if (opts.controller == physics::VehicleOptions::ControllerTracked) {
         JSValue tracksVal = JS_GetPropertyStr(ctx, optsVal, "tracks");
         if (JS_IsArray(tracksVal)) {
             JSValue lenV = JS_GetPropertyStr(ctx, tracksVal, "length");
@@ -2070,7 +2059,7 @@ static void ragdollClassFinalizer(JSRuntime* rt, JSValue val) {
     if (!r) return;
     JsWorld* w = ragdollWorld(r);
     if (w && w->world && r->handle) {
-        w->world->destroyRagdoll(r->handle);
+        w->world->destroyRagdoll(r->handle, [w](JPH::BodyID bid) { w->unregisterBodyId(bid); });
         for (int32_t tag : r->partTags) w->unregisterBody(tag);
     }
     if (r->world) r->world->liveRagdolls.erase(r);
@@ -2503,7 +2492,7 @@ static JSValue jsr_destroy(JSContext* ctx, JSValueConst thisVal, int, JSValueCon
     if (!r) return JS_EXCEPTION;
     JsWorld* w = ragdollWorld(r);
     if (w && w->world && r->handle) {
-        w->world->destroyRagdoll(r->handle);
+        w->world->destroyRagdoll(r->handle, [w](JPH::BodyID bid) { w->unregisterBodyId(bid); });
         for (int32_t tag : r->partTags) w->unregisterBody(tag);
     }
     r->handle = 0;
@@ -3233,9 +3222,7 @@ static JSValue js_physics_getAllTransforms(JSContext* ctx, JSValueConst, int arg
     // a step overran the frame (consumeStep is non-blocking) fall back to the
     // locking interface — reading body transforms during Update() without
     // locks is a data race.
-    auto& bi = s_defaultWorld->world->isIdle()
-        ? s_defaultWorld->world->system().GetBodyInterfaceNoLock()
-        : s_defaultWorld->world->system().GetBodyInterface();
+    auto& bi = s_defaultWorld->world->getBodyInterface();
     for (auto& [key, tag] : s_defaultWorld->bodyTags) {
         JPH::BodyID id(key);
         JPH::RVec3 pos;
@@ -3447,8 +3434,7 @@ static JSValue jsw_getAllTransforms(JSContext* ctx, JSValueConst thisVal, int, J
     size_t i = 0;
     // Same lock-choice rule as Physics.getAllTransforms (sandbox worlds step
     // inline, so this is always the no-lock path in practice).
-    auto& bi = w->world->isIdle() ? w->world->system().GetBodyInterfaceNoLock()
-                                  : w->world->system().GetBodyInterface();
+    auto& bi = w->world->getBodyInterface();
     for (auto& [key, tag] : w->bodyTags) {
         JPH::BodyID id(key);
         auto pos = bi.GetPosition(id);

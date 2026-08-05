@@ -70,41 +70,7 @@ inline std::string jsStr(JSContext* ctx, JSValueConst val) {
 /// Parse a CSS-style color string into RGBA. Supports: #RGB, #RRGGBB, #RRGGBBAA,
 /// rgb(r,g,b), rgba(r,g,b,a), and named colors (basic subset).
 inline bool parseColor(const std::string& str, uint8_t& r, uint8_t& g, uint8_t& b, uint8_t& a) {
-    a = 255;
-    if (str.empty()) return false;
-    if (str[0] == '#') {
-        unsigned long hex = std::strtoul(str.c_str() + 1, nullptr, 16);
-        if (str.size() == 4) { // #RGB
-            r = ((hex >> 8) & 0xF) * 17;
-            g = ((hex >> 4) & 0xF) * 17;
-            b = (hex & 0xF) * 17;
-        } else if (str.size() == 7) { // #RRGGBB
-            r = (hex >> 16) & 0xFF;
-            g = (hex >> 8) & 0xFF;
-            b = hex & 0xFF;
-        } else if (str.size() == 9) { // #RRGGBBAA
-            r = (hex >> 24) & 0xFF;
-            g = (hex >> 16) & 0xFF;
-            b = (hex >> 8) & 0xFF;
-            a = hex & 0xFF;
-        } else return false;
-        return true;
-    }
-    // Named colors (small subset)
-    if (str == "red")     { r=255; g=0;   b=0;   return true; }
-    if (str == "green")   { r=0;   g=128; b=0;   return true; }
-    if (str == "blue")    { r=0;   g=0;   b=255; return true; }
-    if (str == "white")   { r=255; g=255; b=255; return true; }
-    if (str == "black")   { r=0;   g=0;   b=0;   return true; }
-    if (str == "yellow")  { r=255; g=255; b=0;   return true; }
-    if (str == "cyan")    { r=0;   g=255; b=255; return true; }
-    if (str == "magenta") { r=255; g=0;   b=255; return true; }
-    if (str == "gray" || str == "grey") { r=128; g=128; b=128; return true; }
-    if (str == "orange")  { r=255; g=165; b=0;   return true; }
-    if (str == "purple")  { r=128; g=0;   b=128; return true; }
-    if (str == "brown")   { r=165; g=42;  b=42;  return true; }
-    if (str == "pink")    { r=255; g=192; b=203; return true; }
-    return false;
+    return bromath::parseCSSColor(str, r, g, b, a);
 }
 
 // ---------------------------------------------------------------------------

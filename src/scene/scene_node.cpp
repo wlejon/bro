@@ -67,6 +67,27 @@ void SceneNode::setScale(const Vec3& s) {
     markDirty();
 }
 
+void SceneNode::setScale2D(float sx, float sy) {
+    scale_.x = sx;
+    scale_.y = sy;
+    localDirty_ = true;
+    markDirty();
+}
+
+void SceneNode::setScalePartial(const float* values, size_t count) {
+    if (count == 0 || !values) return;
+    if (count == 1) {
+        scale_ = {values[0], values[0], values[0]};
+    } else if (count == 2) {
+        scale_.x = values[0];
+        scale_.y = values[1];
+    } else {
+        scale_ = {values[0], values[1], values[2]};
+    }
+    localDirty_ = true;
+    markDirty();
+}
+
 void SceneNode::addChild(SceneNode* child) {
     if (!child || child == this) return;
     if (child->parent_) child->removeFromParent();

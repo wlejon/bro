@@ -40,8 +40,16 @@ public:
     void setPerspective(bool p) { perspective_ = p; }
 
     /// Vertical field of view in radians (perspective mode).
-    float fovY() const { return fovY_; }
-    void setFovY(float f) { if (f > 0.0f) fovY_ = f; }
+    float fovRadians() const { return fovY_; }
+    void setFovRadians(float rad) { if (rad > 0.0f) fovY_ = rad; }
+
+    /// Vertical field of view in degrees (perspective mode).
+    float fovDegrees() const { return fovY_ * (180.0f / 3.14159265358979323846f); }
+    void setFovDegrees(float deg) { if (deg > 0.0f) fovY_ = deg * (3.14159265358979323846f / 180.0f); }
+
+    /// Alias for vertical FOV in radians.
+    float fovY() const { return fovRadians(); }
+    void setFovY(float f) { setFovRadians(f); }
 
     /// Full view height in world units (orthographic mode); width follows
     /// the aspect. Matches setCamera's `size` option.

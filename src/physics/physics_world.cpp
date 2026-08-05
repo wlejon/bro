@@ -538,6 +538,14 @@ bool PhysicsWorld::isIdle() const {
     return shared_.state == kPhysicsIdle;
 }
 
+JPH::BodyInterface& PhysicsWorld::getBodyInterface() {
+    return isIdle() ? physicsSystem_.GetBodyInterfaceNoLock() : physicsSystem_.GetBodyInterface();
+}
+
+const JPH::BodyInterface& PhysicsWorld::getBodyInterface() const {
+    return isIdle() ? physicsSystem_.GetBodyInterfaceNoLock() : physicsSystem_.GetBodyInterface();
+}
+
 void PhysicsWorld::stepInline() {
     if (!initialized_) return;
     capturePrevTransforms();
@@ -723,9 +731,11 @@ static RefConst<Shape> buildShape(const BodyOptions& opts) {
             return r.HasError() ? RefConst<Shape>() : r.Get();
         }
         case BodyOptions::ShapeHeightField: {
-            const uint32_t n = opts.heightSampleCount;
+            const size_t sz = opts.heightSamples.size();
+            const uint32_t n = (opts.heightSampleCount >= 4) ? opts.heightSampleCount
+                                                             : static_cast<uint32_t>(std::sqrt(sz));
             // Jolt requires sampleCount / blockSize (default 2) >= 2.
-            if (n < 4 || opts.heightSamples.size() != size_t(n) * n)
+            if (n < 4 || sz != static_cast<size_t>(n) * n || (opts.heightSampleCount > 0 && opts.heightSampleCount != n))
                 return RefConst<Shape>();
             HeightFieldShapeSettings s(opts.heightSamples.data(), opts.heightOffset,
                                        opts.heightScale, n);
@@ -748,6 +758,8 @@ static RefConst<Shape> buildShape(const BodyOptions& opts) {
 }
 
 BodyID PhysicsWorld::createBody(const BodyOptions& opts) {
+    if (opts.hasArea && !opts.isSensor) return BodyID();
+    if (opts.shape == BodyOptions::ShapeConvexHull && opts.hullPoints.size() < 4) return BodyID();
     auto shape = buildShape(opts);
     if (!shape) return BodyID();
 
@@ -2923,9 +2935,17 @@ void PhysicsWorld::removeRagdollFromSystem(RagdollEntry& e) {
     e.ragdoll->RemoveFromPhysicsSystem();
 }
 
-void PhysicsWorld::destroyRagdoll(uint32_t handle) {
+void PhysicsWorld::destroyRagdoll(uint32_t handle,
+                                  const std::function<void(BodyID)>& onBodyDestroyed) {
     auto it = ragdolls_.find(handle);
     if (it == ragdolls_.end()) return;
+    if (it->second.ragdoll) {
+        const auto& ids = it->second.ragdoll->GetBodyIDs();
+        if (onBodyDestroyed) {
+            for (const BodyID& pid : ids) onBodyDestroyed(pid);
+        }
+        for (const BodyID& pid : ids) evictAreaBookkeeping(pid);
+    }
     removeRagdollFromSystem(it->second);
     ragdolls_.erase(it);  // Ref release destroys the part bodies
 }

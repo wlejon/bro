@@ -408,6 +408,15 @@ struct VehicleOptions {
     enum Tester { TesterRay, TesterCastSphere, TesterCastCylinder };
     Tester tester = TesterCastCylinder;
     int testerLayer = -1;  // object layer the wheels collide as; -1 = chassis layer
+
+    void applyControllerDefaults() {
+        if (controller == ControllerTracked) {
+            engine.minRPM = 500.0f;
+            engine.maxRPM = 4000.0f;
+            transmission.shiftUpRPM = 3500.0f;
+            transmission.shiftDownRPM = 1000.0f;
+        }
+    }
 };
 
 /// Per-wheel state snapshot for rendering.
@@ -697,6 +706,10 @@ public:
 
     /// Returns true if the physics thread is idle (JS can access bodies).
     bool isIdle() const;
+
+    /// Return the appropriate BodyInterface (NoLock when idle, locking otherwise).
+    JPH::BodyInterface& getBodyInterface();
+    const JPH::BodyInterface& getBodyInterface() const;
 
     /// Step the simulation synchronously on the calling thread. Use when no
     /// worker thread is active (e.g. headless mode).
@@ -993,7 +1006,8 @@ public:
     /// Returns a non-zero handle on success, 0 on failure (empty parts,
     /// parent ordering violation, bad shape, out of bodies).
     uint32_t createRagdoll(const RagdollOptions& opts);
-    void destroyRagdoll(uint32_t handle);
+    void destroyRagdoll(uint32_t handle,
+                        const std::function<void(JPH::BodyID)>& onBodyDestroyed = nullptr);
 
     /// Number of parts, or -1 for an unknown handle.
     int ragdollPartCount(uint32_t handle) const;

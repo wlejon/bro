@@ -4,6 +4,8 @@
 #include "engine/engine.h"
 #include "engine/capture_path.h"
 #include "engine/overflow.h"
+#include "engine/navmesh_subsystem.h"
+#include "engine/scene_audio_sync.h"
 #if BRO_WITH_PHYSICS
 #include "physics/physics_world.h"
 #endif
@@ -517,7 +519,7 @@ void Engine::advanceTime(double ms) {
         // Advance dynamic navmesh-obstacle tile rebuilds before agents sync
         // (same ordering as the windowed frame: a batch that finishes this
         // step repaths agents this step).
-        js::pumpNavMeshObstacles(static_cast<float>(scaledStep * 0.001));
+        pumpNavMeshObstacles(static_cast<float>(scaledStep * 0.001));
 
         // Step AI bindings once per advanceTime step (deterministic, uses the
         // scaled step as dt — agents obey bro.time like everything gameplay).
@@ -532,7 +534,7 @@ void Engine::advanceTime(double ms) {
             // as the windowed frame (after animations, before the audio
             // renderBlock below), so advanceTime-driven motion is what the
             // deterministic audio render hears.
-            js::syncAudioSceneEmitters(aiDt);
+            SceneAudioSync::sync(aiDt);
         }
 
         // Headless has no raster thread (the normal code path relies on the

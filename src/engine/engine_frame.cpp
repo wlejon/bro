@@ -3,6 +3,8 @@
 #include "engine/layout_pipeline.h"
 #include "engine/overflow.h"
 #include "engine/replaced_elements.h"
+#include "engine/navmesh_subsystem.h"
+#include "engine/scene_audio_sync.h"
 
 #include "canvas/canvas_scene.h"
 #include "dom/document.h"
@@ -538,7 +540,7 @@ void Engine::run() {
             // sync, so a batch that finishes this frame repaths them this
             // frame. (Detour ignores dt; rebuilds progress even while
             // bro.time is paused — pending edits shouldn't wedge on pause.)
-            js::pumpNavMeshObstacles(frameDt);
+            pumpNavMeshObstacles(frameDt);
 #if BRO_WITH_3D
             for (auto& sg : sceneGraphs_) {
                 sg.graph->syncAgents(frameDt);
@@ -547,7 +549,7 @@ void Engine::run() {
             // Scene-attached audio emitters + camera listener: push node
             // world positions (and dt-derived velocities → Doppler) into
             // broaudio AFTER animations/tweens moved nodes this frame.
-            js::syncAudioSceneEmitters(frameDt);
+            SceneAudioSync::sync(frameDt);
 #endif
             // Wheel smoothing is UI feel, not gameplay — wall dt, so
             // scrolling still eases out while the game is paused.

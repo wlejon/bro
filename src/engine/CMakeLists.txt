@@ -27,6 +27,9 @@ embed_js(observer_check.js  js_observer_check)
 add_library(bro_engine STATIC
     app_reload.cpp
     engine.cpp
+    navmesh_subsystem.cpp
+    scene_audio_sync.cpp
+    audio_subsystem.cpp
     engine_compositor.cpp
     engine_init.cpp
     engine_lifecycle.cpp

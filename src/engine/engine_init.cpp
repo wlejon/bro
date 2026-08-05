@@ -9,6 +9,8 @@
 #include "engine/overflow.h"
 #include "engine/replaced_elements.h"
 #include "engine/default_styles.h"
+#include "engine/scene_audio_sync.h"
+#include "engine/audio_subsystem.h"
 
 #include <filesystem>
 #include <fstream>
@@ -397,7 +399,7 @@ Engine::Engine(const EngineConfig& config)
 
     // Scene-attached audio emitters + camera listener: wire the registry the
     // per-frame sync (engine_frame / headless advanceTime) pushes through.
-    js::installAudioSceneSync(audioEngine_.get());
+    SceneAudioSync::install(audioEngine_.get());
 
     // Audio-inference subsystem: owns the background worker thread that runs
     // audio-driven NN models (wake word today) off the audio thread and off the
@@ -421,15 +423,12 @@ Engine::Engine(const EngineConfig& config)
     // when the soundml models are built, so the frame loop carries no stubbed
     // hook when they aren't.
     framePumps_.push_back([this] {
-        JSContext* c = jsRuntime_->getContext();
-        js::tickWake(c);
-        js::tickKws(c);
-        js::tickGesture(c);
+        tickAudioInferenceSubsystem(jsRuntime_->getContext());
     });
 #endif
 
     // bro.mic chunk delivery — audio tier, independent of the AI models above.
-    framePumps_.push_back([this] { js::tickMic(jsRuntime_->getContext()); });
+    framePumps_.push_back([this] { tickMicSubsystem(jsRuntime_->getContext()); });
 
     // Apply initial audio settings from persisted user overrides
     {

@@ -1,6 +1,7 @@
 #include "engine/engine.h"
 #include "engine/frame_presenter.h"
 #include "engine/layout_pipeline.h"
+#include "engine/scene_audio_sync.h"
 
 #include "canvas/canvas_scene.h"
 #include "dom/document.h"
@@ -436,7 +437,7 @@ Engine::~Engine() {
     audioInference_.reset();
     // Drop the scene-emitter registry's engine pointer before the audio
     // engine dies (the registry itself holds only weak tokens + ids).
-    js::shutdownAudioSceneSync();
+    SceneAudioSync::shutdown();
     // Document before the audio engine, because elements call into it as they
     // go. ~ElVideo runs closeStreamingAudio(), whose first act is
     // audioEngine_->closeStream(id) — a <video> with an audio track holds a

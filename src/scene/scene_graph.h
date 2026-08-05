@@ -238,6 +238,18 @@ public:
     void setCamera(float fovY, float aspect, float nearZ, float farZ,
                    const bromath::Vec3& eye, const bromath::Vec3& target, const bromath::Vec3& up = {0, 1, 0});
 
+    /// Set a full 3D camera using explicit FOV in degrees.
+    void setCameraDegrees(float fovDeg, float aspect, float nearZ, float farZ,
+                          const bromath::Vec3& eye, const bromath::Vec3& target, const bromath::Vec3& up = {0, 1, 0}) {
+        setCamera(fovDeg * (3.14159265358979323846f / 180.0f), aspect, nearZ, farZ, eye, target, up);
+    }
+
+    /// Set a full 3D camera using explicit FOV in radians.
+    void setCameraRadians(float fovRad, float aspect, float nearZ, float farZ,
+                          const bromath::Vec3& eye, const bromath::Vec3& target, const bromath::Vec3& up = {0, 1, 0}) {
+        setCamera(fovRad, aspect, nearZ, farZ, eye, target, up);
+    }
+
     /// When true, setCanvasSize() rebuilds the projection matrix using the
     /// new canvas aspect ratio (and the stored fovY/near/far). Use this when
     /// the caller wants the camera aspect to track the viewport; pin an

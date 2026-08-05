@@ -404,8 +404,8 @@ static JSValue js_splitByPlane(JSContext* ctx, JSValueConst, int argc, JSValueCo
     if (argc > 4) JS_ToFloat64(ctx, &offset, argv[4]);
     auto [front, back] = bromesh::splitByPlane(*w->data, (float)nx, (float)ny, (float)nz, (float)offset);
     JSValue arr = JS_NewArray(ctx);
-    JS_SetPropertyUint32(ctx, arr, 0, wrapMesh(ctx, bromesh::computeCreaseNormals(front)));
-    JS_SetPropertyUint32(ctx, arr, 1, wrapMesh(ctx, bromesh::computeCreaseNormals(back)));
+    JS_SetPropertyUint32(ctx, arr, 0, wrapMesh(ctx, std::move(front)));
+    JS_SetPropertyUint32(ctx, arr, 1, wrapMesh(ctx, std::move(back)));
     return arr;
 }
 
@@ -823,27 +823,7 @@ static const bromesh::CapsuleField* readAvoidField(JSContext* ctx,
     return out;
 }
 
-// Re-encode an L-system module sequence as the compact text form parseable
-// by bromesh::parseModules. Modules with no params emit just the symbol;
-// modules with params append "(p1,p2,...)".
-static std::string serializeLSystemModules(const std::vector<bromesh::Module>& mods) {
-    std::string s;
-    s.reserve(mods.size() * 2);
-    char buf[64];
-    for (const auto& m : mods) {
-        s.push_back(m.symbol);
-        if (!m.params.empty()) {
-            s.push_back('(');
-            for (size_t i = 0; i < m.params.size(); i++) {
-                if (i) s.push_back(',');
-                std::snprintf(buf, sizeof(buf), "%g", (double)m.params[i]);
-                s += buf;
-            }
-            s.push_back(')');
-        }
-    }
-    return s;
-}
+
 
 static JSValue makeModulesArray(JSContext* ctx, const std::vector<bromesh::Module>& mods) {
     JSValue arr = JS_NewArray(ctx);
@@ -1514,31 +1494,9 @@ static bool readSplatCloud(JSContext* ctx, JSValueConst obj,
     cloud.shDegree = objInt(ctx, obj, "shDegree", 0);
 
     if (cloud.positions.empty()) { err = "cloud has no positions"; return false; }
-    if (cloud.positions.size() % 3 != 0) {
-        err = "positions length must be a multiple of 3";
+    if (!cloud.validate()) {
+        err = "invalid GaussianSplatCloud attribute array lengths or topology";
         return false;
-    }
-    const size_t n = cloud.positions.size() / 3;
-
-    // Mirrors GaussianSplatCloud::shStride() for the clamped degree the saver
-    // actually uses, so the bound checked here is the bound it will index.
-    const int degree = std::min(3, std::max(0, cloud.shDegree));
-    const size_t shStride = static_cast<size_t>((degree + 1) * (degree + 1)) * 3;
-
-    struct { const char* name; size_t have; size_t need; } req[] = {
-        { "scales",    cloud.scales.size(),    n * 3 },
-        { "rotations", cloud.rotations.size(), n * 4 },
-        { "opacities", cloud.opacities.size(), n },
-        { "sh",        cloud.sh.size(),        n * shStride },
-    };
-    for (const auto& r : req) {
-        if (r.have < r.need) {
-            err = std::string(r.name) + " has " + std::to_string(r.have) +
-                  " floats, need " + std::to_string(r.need) + " for " +
-                  std::to_string(n) + " splats" +
-                  (r.have == 0 ? " (array missing)" : "");
-            return false;
-        }
     }
     return true;
 }
@@ -1777,15 +1735,15 @@ void MeshBindings::install(JSContext* ctx) {
 
     // ── Subdivision ─────────────────────────────────────────────────────
     .method("subdivideLoop", [](MW* w, std::optional<int> iter) {
-        if (w->data) { auto welded = bromesh::weldVertices(*w->data); *w->data = bromesh::subdivideLoop(welded, iter.value_or(1)); }
+        if (w->data) *w->data = bromesh::subdivideLoop(*w->data, iter.value_or(1));
     }, qjsbind::returns_this)
 
     .method("subdivideCatmullClark", [](MW* w, std::optional<int> iter) {
-        if (w->data) { auto welded = bromesh::weldVertices(*w->data); *w->data = bromesh::subdivideCatmullClark(welded, iter.value_or(1)); }
+        if (w->data) *w->data = bromesh::subdivideCatmullClark(*w->data, iter.value_or(1));
     }, qjsbind::returns_this)
 
     .method("subdivideMidpoint", [](MW* w, std::optional<int> iter) {
-        if (w->data) { auto welded = bromesh::weldVertices(*w->data); *w->data = bromesh::subdivideMidpoint(welded, iter.value_or(1)); }
+        if (w->data) *w->data = bromesh::subdivideMidpoint(*w->data, iter.value_or(1));
     }, qjsbind::returns_this)
 
     // ── Smoothing ───────────────────────────────────────────────────────
@@ -2337,22 +2295,19 @@ void MeshBindings::install(JSContext* ctx) {
         auto* ma = qjsbind::unwrap<MW>(ctx, a);
         auto* mb = qjsbind::unwrap<MW>(ctx, b);
         if (!ma || !ma->data || !mb || !mb->data) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
-        auto r = bromesh::booleanUnion(*ma->data, *mb->data);
-        return wrapMesh(ctx, bromesh::computeCreaseNormals(r));
+        return wrapMesh(ctx, bromesh::booleanUnion(*ma->data, *mb->data));
     })
     .static_method("subtract", [](JSContext* ctx, JSValue a, JSValue b) -> JSValue {
         auto* ma = qjsbind::unwrap<MW>(ctx, a);
         auto* mb = qjsbind::unwrap<MW>(ctx, b);
         if (!ma || !ma->data || !mb || !mb->data) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
-        auto r = bromesh::booleanDifference(*ma->data, *mb->data);
-        return wrapMesh(ctx, bromesh::computeCreaseNormals(r));
+        return wrapMesh(ctx, bromesh::booleanDifference(*ma->data, *mb->data));
     })
     .static_method("intersect", [](JSContext* ctx, JSValue a, JSValue b) -> JSValue {
         auto* ma = qjsbind::unwrap<MW>(ctx, a);
         auto* mb = qjsbind::unwrap<MW>(ctx, b);
         if (!ma || !ma->data || !mb || !mb->data) return JS_ThrowTypeError(ctx, "arguments must be Mesh instances");
-        auto r = bromesh::booleanIntersection(*ma->data, *mb->data);
-        return wrapMesh(ctx, bromesh::computeCreaseNormals(r));
+        return wrapMesh(ctx, bromesh::booleanIntersection(*ma->data, *mb->data));
     })
     .static_raw("splitByPlane", js_splitByPlane, 5)
     .static_raw("polygon2D",    js_triangulatePolygon2D, 3)
@@ -3000,7 +2955,7 @@ void MeshBindings::install(JSContext* ctx) {
     .method("derive", [](LSW* w, JSContext* ctx, int iterations,
                           std::optional<int64_t> seed) -> JSValue {
         auto mods = w->ls->derive(iterations, (uint64_t)seed.value_or(0));
-        return JS_NewString(ctx, serializeLSystemModules(mods).c_str());
+        return JS_NewString(ctx, bromesh::serializeModules(mods).c_str());
     })
     .method("deriveModules", [](LSW* w, JSContext* ctx, int iterations,
                                  std::optional<int64_t> seed) -> JSValue {

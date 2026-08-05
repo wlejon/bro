@@ -64,7 +64,7 @@ public:
     bool hasStroke() const { return hasStroke_; }
     void setHasStroke(bool v) { hasStroke_ = v; }
 
-    void setStrokeWidth(float w) { strokeWidth_ = w; }
+    void setStrokeWidth(float w) { strokeWidth_ = w; if (w > 0.0f) hasStroke_ = true; }
     float strokeWidth() const { return strokeWidth_; }
 
     /// Anchor point (0..1). Default (0.5, 0.5) = center-origin.

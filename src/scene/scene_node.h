@@ -41,6 +41,10 @@ public:
     void setRotationZ(float radians);
     void setScale(float sx, float sy, float sz = 1);
     void setScale(const bromath::Vec3& s);
+    /// Set 2D scale (sx, sy), preserving current scale.z.
+    void setScale2D(float sx, float sy);
+    /// Partial-array scale assignment (e.g. setting scale [x, y] preserves z).
+    void setScalePartial(const float* values, size_t count);
 
     // --- Visibility ---
     bool visible() const { return visible_; }

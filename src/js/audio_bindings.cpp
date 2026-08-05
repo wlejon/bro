@@ -243,11 +243,22 @@ struct AudioCtxData {
     broaudio::Engine* engine;
 };
 
+#include <cassert>
+#include <thread>
+
+static void assertMainAudioThread() {
+#ifndef NDEBUG
+    static const std::thread::id s_mainThreadId = std::this_thread::get_id();
+    assert(std::this_thread::get_id() == s_mainThreadId && "Main-thread affinity violated");
+#endif
+}
+
 // ---------------------------------------------------------------------------
 // AnalyserNode FFT helper
 // ---------------------------------------------------------------------------
 
 static void analyserComputeFFT(AnalyserNodeData* d, std::vector<float>& magnitudes) {
+    assertMainAudioThread();
     int n = d->fftSize;
     int halfN = n / 2;
     magnitudes.resize(halfN);
@@ -337,6 +348,7 @@ static JSValue js_analyser_getByteFrequencyData(JSContext* ctx, JSValueConst thi
 
 static JSValue js_analyser_getFloatTimeDomainData(JSContext* ctx, JSValueConst this_val,
                                                     int argc, JSValueConst* argv) {
+    assertMainAudioThread();
     auto* d = qjsbind::unwrap<AnalyserNodeData>(ctx, this_val);
     if (!d || argc < 1) return JS_UNDEFINED;
 
@@ -362,6 +374,7 @@ static JSValue js_analyser_getFloatTimeDomainData(JSContext* ctx, JSValueConst t
 
 static JSValue js_analyser_getByteTimeDomainData(JSContext* ctx, JSValueConst this_val,
                                                    int argc, JSValueConst* argv) {
+    assertMainAudioThread();
     auto* d = qjsbind::unwrap<AnalyserNodeData>(ctx, this_val);
     if (!d || argc < 1) return JS_UNDEFINED;
 
@@ -2132,6 +2145,7 @@ static JSValue js_audioctx_loadPreset(JSContext* ctx, JSValueConst, int argc, JS
 // is filled in place (up to its length) and returned. Headless only — driving
 // the pipeline from the main thread while a live device callback runs would race.
 static JSValue js_audioctx_renderBlock(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
+    assertMainAudioThread();
     auto* d = qjsbind::unwrap<AudioCtxData>(ctx, this_val);
     if (!d || argc < 1) return JS_UNDEFINED;
     int numFrames; JS_ToInt32(ctx, &numFrames, argv[0]);
