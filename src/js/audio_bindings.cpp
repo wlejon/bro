@@ -17,25 +17,32 @@
 #include <broaudio/node/audio_node.h>
 
 #include <algorithm>
+#include <optional>
 #include <string>
 #include <cstring>
 #include <cmath>
 #include <vector>
 #include <unordered_map>
 #include <memory>
+#include <cassert>
+#include <thread>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
 #endif
 
 namespace bro::js {
+using ::std::optional;
+using ::std::string;
+using ::std::clamp;
+using ::std::min;
 
 // ---------------------------------------------------------------------------
 // Global engine pointer + wavetable registry
 // ---------------------------------------------------------------------------
 
 static broaudio::Engine* s_audioEngine = nullptr;
-static std::unordered_map<int, std::shared_ptr<broaudio::WavetableBank>> s_wavetables;
+static ::std::unordered_map<int, ::std::shared_ptr<broaudio::WavetableBank>> s_wavetables;
 static int s_nextWavetableId = 1;
 
 // ---------------------------------------------------------------------------
@@ -141,7 +148,7 @@ struct AnalyserNodeData {
     float maxDecibels = -30.0f;
     float smoothingTimeConstant = 0.8f;
     int source = 0;
-    std::vector<float> smoothedMagnitudes;
+    ::std::vector<float> smoothedMagnitudes;
 };
 
 struct MicStreamData {
@@ -155,7 +162,7 @@ struct MicSourceData {
 struct OscNodeData {
     broaudio::Engine* engine;
     int voiceId;
-    std::string type = "sine";
+    ::std::string type = "sine";
     broaudio::OscillatorNode node;
 
     ~OscNodeData() {
@@ -179,7 +186,7 @@ struct BiquadFilterNodeData {
 
 struct VoiceAllocatorData {
     broaudio::Engine* engine;
-    std::unique_ptr<broaudio::VoiceAllocator> allocator;
+    ::std::unique_ptr<broaudio::VoiceAllocator> allocator;
     JSContext* ctx;
     JSValue voiceSetupCallback = JS_UNDEFINED;
     JSValue lambdaCbRef = JS_UNDEFINED;
@@ -201,7 +208,7 @@ struct ModMatrixData {
 
 struct MidiInputData {
     broaudio::Engine* engine;
-    std::unique_ptr<broaudio::MidiInput> midi;
+    ::std::unique_ptr<broaudio::MidiInput> midi;
     JSContext* ctx;
     JSValue pitchBendCallback = JS_UNDEFINED;
     JSValue rawCallback = JS_UNDEFINED;
@@ -210,7 +217,7 @@ struct MidiInputData {
     // be reachable from a field, or it can neither be freed nor GC-marked.
     // A default member initializer, not a constructor: the struct is created
     // with aggregate init below, and a user-declared ctor would break that.
-    std::vector<JSValue> ccCallbacks = std::vector<JSValue>(128, JS_UNDEFINED);
+    ::std::vector<JSValue> ccCallbacks = ::std::vector<JSValue>(128, JS_UNDEFINED);
 
     ~MidiInputData() {
         // Close first: the broaudio callbacks below capture `this` and read the
@@ -226,9 +233,9 @@ struct MidiInputData {
 };
 
 struct SequenceData {
-    std::unique_ptr<broaudio::Sequence> seq;
+    ::std::unique_ptr<broaudio::Sequence> seq;
     JSContext* ctx = nullptr;
-    std::vector<JSValue> automationCallbacks;
+    ::std::vector<JSValue> automationCallbacks;
 
     ~SequenceData() {
         seq->clearAutomationLanes();
@@ -246,13 +253,12 @@ struct AudioCtxData {
     broaudio::Engine* engine;
 };
 
-#include <cassert>
-#include <thread>
+
 
 static void assertMainAudioThread() {
 #ifndef NDEBUG
-    static const std::thread::id s_mainThreadId = std::this_thread::get_id();
-    assert(std::this_thread::get_id() == s_mainThreadId && "Main-thread affinity violated");
+    static const ::std::thread::id s_mainThreadId = ::std::this_thread::get_id();
+    assert(::std::this_thread::get_id() == s_mainThreadId && "Main-thread affinity violated");
 #endif
 }
 
@@ -260,18 +266,18 @@ static void assertMainAudioThread() {
 // AnalyserNode FFT helper
 // ---------------------------------------------------------------------------
 
-static void analyserComputeFFT(AnalyserNodeData* d, std::vector<float>& magnitudes) {
+static void analyserComputeFFT(AnalyserNodeData* d, ::std::vector<float>& magnitudes) {
     assertMainAudioThread();
     int n = d->fftSize;
     int halfN = n / 2;
     magnitudes.resize(halfN);
 
-    std::vector<float> real(n), imag(n, 0.0f);
+    ::std::vector<float> real(n), imag(n, 0.0f);
 
     if (d->source == 2) {
         d->engine->outputBuffer().readLatest(real.data(), n);
         if (!d->engine->isMicMuted()) {
-            std::vector<float> mic(n);
+            ::std::vector<float> mic(n);
             d->engine->micBuffer().readLatest(mic.data(), n);
             for (int i = 0; i < n; i++) real[i] += mic[i];
         }
@@ -281,8 +287,8 @@ static void analyserComputeFFT(AnalyserNodeData* d, std::vector<float>& magnitud
     }
 
     for (int i = 0; i < n; i++) {
-        float w = 0.42f - 0.5f * std::cos(2.0f * static_cast<float>(M_PI) * i / (n - 1))
-                        + 0.08f * std::cos(4.0f * static_cast<float>(M_PI) * i / (n - 1));
+        float w = 0.42f - 0.5f * ::std::cos(2.0f * static_cast<float>(M_PI) * i / (n - 1))
+                        + 0.08f * ::std::cos(4.0f * static_cast<float>(M_PI) * i / (n - 1));
         real[i] *= w;
     }
 
@@ -294,8 +300,8 @@ static void analyserComputeFFT(AnalyserNodeData* d, std::vector<float>& magnitud
 
     float smooth = d->smoothingTimeConstant;
     for (int i = 0; i < halfN; i++) {
-        float mag = std::sqrt(real[i] * real[i] + imag[i] * imag[i]) / static_cast<float>(n);
-        float db = (mag > 1e-20f) ? 20.0f * std::log10(mag) : -100.0f;
+        float mag = ::std::sqrt(real[i] * real[i] + imag[i] * imag[i]) / static_cast<float>(n);
+        float db = (mag > 1e-20f) ? 20.0f * ::std::log10(mag) : -100.0f;
         d->smoothedMagnitudes[i] = smooth * d->smoothedMagnitudes[i] + (1.0f - smooth) * db;
         magnitudes[i] = d->smoothedMagnitudes[i];
     }
@@ -312,14 +318,14 @@ static JSValue js_analyser_getFloatFrequencyData(JSContext* ctx, JSValueConst th
     auto* d = qjsbind::unwrap<AnalyserNodeData>(ctx, this_val);
     if (!d || argc < 1) return JS_UNDEFINED;
 
-    std::vector<float> magnitudes;
+    ::std::vector<float> magnitudes;
     analyserComputeFFT(d, magnitudes);
 
     size_t len = 0;
     uint8_t* raw = getTypedArrayPtr(ctx, argv[0], len);
     if (raw) {
         float* dst = reinterpret_cast<float*>(raw);
-        int count = std::min(static_cast<int>(len / sizeof(float)),
+        int count = ::std::min(static_cast<int>(len / sizeof(float)),
                              static_cast<int>(magnitudes.size()));
         for (int i = 0; i < count; i++) dst[i] = magnitudes[i];
     }
@@ -331,18 +337,18 @@ static JSValue js_analyser_getByteFrequencyData(JSContext* ctx, JSValueConst thi
     auto* d = qjsbind::unwrap<AnalyserNodeData>(ctx, this_val);
     if (!d || argc < 1) return JS_UNDEFINED;
 
-    std::vector<float> magnitudes;
+    ::std::vector<float> magnitudes;
     analyserComputeFFT(d, magnitudes);
 
     size_t len = 0;
     uint8_t* dst = getTypedArrayPtr(ctx, argv[0], len);
     if (dst) {
-        int count = std::min(static_cast<int>(len),
+        int count = ::std::min(static_cast<int>(len),
                              static_cast<int>(magnitudes.size()));
         float range = d->maxDecibels - d->minDecibels;
         for (int i = 0; i < count; i++) {
             float scaled = (magnitudes[i] - d->minDecibels) / range;
-            scaled = std::clamp(scaled, 0.0f, 1.0f);
+            scaled = ::std::clamp(scaled, 0.0f, 1.0f);
             dst[i] = static_cast<uint8_t>(scaled * 255.0f);
         }
     }
@@ -359,11 +365,11 @@ static JSValue js_analyser_getFloatTimeDomainData(JSContext* ctx, JSValueConst t
     uint8_t* raw = getTypedArrayPtr(ctx, argv[0], len);
     if (raw) {
         float* dst = reinterpret_cast<float*>(raw);
-        int count = std::min(static_cast<int>(len / sizeof(float)), d->fftSize);
+        int count = ::std::min(static_cast<int>(len / sizeof(float)), d->fftSize);
         if (d->source == 2) {
             d->engine->outputBuffer().readLatest(dst, count);
             if (!d->engine->isMicMuted()) {
-                std::vector<float> mic(count);
+                ::std::vector<float> mic(count);
                 d->engine->micBuffer().readLatest(mic.data(), count);
                 for (int i = 0; i < count; i++) dst[i] += mic[i];
             }
@@ -381,11 +387,11 @@ static JSValue js_analyser_getByteTimeDomainData(JSContext* ctx, JSValueConst th
     auto* d = qjsbind::unwrap<AnalyserNodeData>(ctx, this_val);
     if (!d || argc < 1) return JS_UNDEFINED;
 
-    std::vector<float> samples(d->fftSize);
+    ::std::vector<float> samples(d->fftSize);
     if (d->source == 2) {
         d->engine->outputBuffer().readLatest(samples.data(), d->fftSize);
         if (!d->engine->isMicMuted()) {
-            std::vector<float> mic(d->fftSize);
+            ::std::vector<float> mic(d->fftSize);
             d->engine->micBuffer().readLatest(mic.data(), d->fftSize);
             for (int i = 0; i < d->fftSize; i++) samples[i] += mic[i];
         }
@@ -397,9 +403,9 @@ static JSValue js_analyser_getByteTimeDomainData(JSContext* ctx, JSValueConst th
     size_t len = 0;
     uint8_t* dst = getTypedArrayPtr(ctx, argv[0], len);
     if (dst) {
-        int count = std::min(static_cast<int>(len), d->fftSize);
+        int count = ::std::min(static_cast<int>(len), d->fftSize);
         for (int i = 0; i < count; i++) {
-            dst[i] = static_cast<uint8_t>(std::clamp((samples[i] + 1.0f) * 128.0f, 0.0f, 255.0f));
+            dst[i] = static_cast<uint8_t>(::std::clamp((samples[i] + 1.0f) * 128.0f, 0.0f, 255.0f));
         }
     }
     return JS_UNDEFINED;
@@ -788,7 +794,7 @@ static JSValue js_audioctx_createVoiceAllocator(JSContext* ctx, JSValueConst thi
 
     auto* va = new VoiceAllocatorData{
         d->engine,
-        std::make_unique<broaudio::VoiceAllocator>(*d->engine, maxVoices),
+        ::std::make_unique<broaudio::VoiceAllocator>(*d->engine, maxVoices),
         ctx,
         JS_UNDEFINED,
         JS_UNDEFINED
@@ -808,7 +814,7 @@ static JSValue js_audioctx_createMidiInput(JSContext* ctx, JSValueConst this_val
 
     auto* mi = new MidiInputData{
         d->engine,
-        std::make_unique<broaudio::MidiInput>(*d->engine),
+        ::std::make_unique<broaudio::MidiInput>(*d->engine),
         ctx,
         JS_UNDEFINED,
         JS_UNDEFINED
@@ -824,7 +830,7 @@ static JSValue js_audioctx_createSequence(JSContext* ctx, JSValueConst this_val,
     if (!va) return JS_ThrowTypeError(ctx, "Expected VoiceAllocator argument");
 
     auto* sd = new SequenceData{
-        std::make_unique<broaudio::Sequence>(*va->allocator),
+        ::std::make_unique<broaudio::Sequence>(*va->allocator),
         ctx,
         {}
     };
@@ -884,7 +890,7 @@ static JSValue js_audioctx_createWavetable(JSContext* ctx, JSValueConst this_val
     const char* type = JS_ToCString(ctx, argv[0]);
     if (!type) return JS_UNDEFINED;
 
-    std::shared_ptr<broaudio::WavetableBank> bank;
+    ::std::shared_ptr<broaudio::WavetableBank> bank;
     int sr = d->engine->sampleRate();
     if (strcmp(type, "saw") == 0) bank = broaudio::WavetableBank::createSaw(sr);
     else if (strcmp(type, "square") == 0) bank = broaudio::WavetableBank::createSquare(sr);
@@ -947,7 +953,7 @@ static JSValue js_audioctx_getSpectrum(JSContext* ctx, JSValueConst this_val, in
         if (ptr) {
             auto spectrum = d->engine->getSpectrum(numBins);
             if (!spectrum.empty()) {
-                std::memcpy(ptr + byteOff, spectrum.data(), std::min(spectrum.size() * sizeof(float), viewLen));
+                ::std::memcpy(ptr + byteOff, spectrum.data(), ::std::min(spectrum.size() * sizeof(float), viewLen));
             }
         }
         JS_FreeValue(ctx, abuf);
@@ -987,7 +993,7 @@ static JSValue js_audioctx_processEffectsOffline(JSContext* ctx, JSValueConst th
         size_t abufLen = 0;
         uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
         if (ptr && abufLen >= result.size() * sizeof(float)) {
-            std::memcpy(ptr + byteOff, result.data(), result.size() * sizeof(float));
+            ::std::memcpy(ptr + byteOff, result.data(), result.size() * sizeof(float));
         }
         JS_FreeValue(ctx, abuf);
     }
@@ -1060,7 +1066,7 @@ static JSValue js_audioctx_stopRecording(JSContext* ctx, JSValueConst this_val, 
         size_t abufLen = 0;
         uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
         if (ptr) {
-            std::memcpy(ptr + byteOff, buf.data(), count * sizeof(float));
+            ::std::memcpy(ptr + byteOff, buf.data(), count * sizeof(float));
         }
         JS_FreeValue(ctx, abuf);
     }
@@ -1083,7 +1089,7 @@ static JSValue js_audioctx_createClip(JSContext* ctx, JSValueConst this_val, int
     // engine rate, resample so the clip plays at the right pitch/speed (mirrors
     // decodeAudioData). Without it, the samples are assumed to be at engine rate.
     const float* samples = reinterpret_cast<float*>(raw);
-    std::vector<float> resampled;
+    ::std::vector<float> resampled;
     if (argc >= 3 && JS_IsNumber(argv[2])) {
         int srcRate = 0; JS_ToInt32(ctx, &srcRate, argv[2]);
         const int engRate = d->engine->sampleRate();
@@ -1123,7 +1129,7 @@ static JSValue js_audioctx_getClipWaveform(JSContext* ctx, JSValueConst this_val
         uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
             auto wf = d->engine->getClipWaveform(clipId, numBins);
             if (!wf.empty()) {
-                std::memcpy(ptr + byteOff, wf.data(), std::min(wf.size() * sizeof(float), viewLen));
+                ::std::memcpy(ptr + byteOff, wf.data(), ::std::min(wf.size() * sizeof(float), viewLen));
             }
         JS_FreeValue(ctx, abuf);
     }
@@ -1135,7 +1141,7 @@ static JSValue js_audioctx_createClipFromFile(JSContext* ctx, JSValueConst this_
     if (!d || argc < 1) return JS_UNDEFINED;
     const char* path = JS_ToCString(ctx, argv[0]);
     if (!path) return JS_UNDEFINED;
-    std::string resolved = resolveAssetPath(path);
+    ::std::string resolved = resolveAssetPath(path);
     JS_FreeCString(ctx, path);
     int id = d->engine->createClipFromFile(resolved.c_str());
     return JS_NewInt32(ctx, id);
@@ -1153,7 +1159,7 @@ static JSValue js_audioctx_createClipFromFileAsync(JSContext* ctx, JSValueConst 
     if (!cpath) return JS_EXCEPTION;
     // Resolve on the JS thread — the decode runs on a worker that has no
     // notion of the app directory or the mount table.
-    std::string pathCopy = resolveAssetPath(cpath);
+    ::std::string pathCopy = resolveAssetPath(cpath);
     JS_FreeCString(ctx, cpath);
 
     JSValue resolving[2];
@@ -1162,23 +1168,23 @@ static JSValue js_audioctx_createClipFromFileAsync(JSContext* ctx, JSValueConst 
 
     struct ClipLoadState {
         broaudio::Engine* engine = nullptr;
-        std::string path;
-        std::string error;   // written by the work thread, read in done()
+        ::std::string path;
+        ::std::string error;   // written by the work thread, read in done()
         int clipId = -1;
         JSValue resolve = JS_UNDEFINED;
         JSValue reject = JS_UNDEFINED;
     };
-    auto st = std::make_shared<ClipLoadState>();
+    auto st = ::std::make_shared<ClipLoadState>();
     st->engine  = d->engine;
-    st->path    = std::move(pathCopy);
+    st->path    = ::std::move(pathCopy);
     st->resolve = resolving[0];
     st->reject  = resolving[1];
 
-    auto work = [st](const std::atomic<bool>&) {
+    auto work = [st](const ::std::atomic<bool>&) {
         // createClip locks the control-plane media mutex — safe off-thread.
         st->clipId = st->engine->createClipFromFileEx(st->path.c_str(), &st->error);
     };
-    auto done = [st](JSContext* c, bool cancelled, const std::string& jobError) {
+    auto done = [st](JSContext* c, bool cancelled, const ::std::string& jobError) {
         if (st->clipId >= 0 && !cancelled && jobError.empty()) {
             JSValue v = JS_NewInt32(c, st->clipId);
             JSValue r = JS_Call(c, st->resolve, JS_UNDEFINED, 1, &v);
@@ -1186,7 +1192,7 @@ static JSValue js_audioctx_createClipFromFileAsync(JSContext* ctx, JSValueConst 
             JS_FreeValue(c, r);
             JS_FreeValue(c, v);
         } else {
-            std::string msg = !jobError.empty() ? jobError
+            ::std::string msg = !jobError.empty() ? jobError
                             : !st->error.empty() ? st->error
                             : cancelled          ? "load cancelled"
                                                  : "failed to load audio file";
@@ -1202,7 +1208,7 @@ static JSValue js_audioctx_createClipFromFileAsync(JSContext* ctx, JSValueConst 
         JS_FreeValue(c, st->resolve);
         JS_FreeValue(c, st->reject);
     };
-    JSValue handle = launchAsyncJob(ctx, std::move(work), nullptr, std::move(done));
+    JSValue handle = launchAsyncJob(ctx, ::std::move(work), nullptr, ::std::move(done));
     JS_FreeValue(ctx, handle);  // the promise is the JS-facing handle
     return promise;
 }
@@ -1217,7 +1223,7 @@ static JSValue js_audioctx_createStreamFromFile(JSContext* ctx, JSValueConst thi
         return JS_ThrowTypeError(ctx, "createStreamFromFile: file path required");
     const char* path = JS_ToCString(ctx, argv[0]);
     if (!path) return JS_EXCEPTION;
-    std::string resolvedPath = resolveAssetPath(path);
+    ::std::string resolvedPath = resolveAssetPath(path);
     JS_FreeCString(ctx, path);
 
     broaudio::FileStreamOptions opts;
@@ -1240,7 +1246,7 @@ static JSValue js_audioctx_createStreamFromFile(JSContext* ctx, JSValueConst thi
         JS_FreeValue(ctx, v);
     }
 
-    std::string err;
+    ::std::string err;
     int id = d->engine->createStreamFromFile(resolvedPath.c_str(), opts, &err);
     if (id < 0)
         return JS_ThrowInternalError(ctx, "createStreamFromFile: %s",
@@ -1296,7 +1302,7 @@ static JSValue js_audioctx_decodeAudioData(JSContext* ctx, JSValueConst this_val
     int outFrames = data.numFrames;
     int outChannels = data.channels;
     int outRate = data.sampleRate;
-    std::vector<float> resampled;
+    ::std::vector<float> resampled;
 
     if (data.sampleRate != d->engine->sampleRate()) {
         resampled = broaudio::resample(data.samples.data(), data.numFrames,
@@ -1322,7 +1328,7 @@ static JSValue js_audioctx_decodeAudioData(JSContext* ctx, JSValueConst this_val
             size_t abufLen = 0;
             uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
             if (ptr) {
-                std::memcpy(ptr + byteOff, outSamples, totalFloats * sizeof(float));
+                ::std::memcpy(ptr + byteOff, outSamples, totalFloats * sizeof(float));
             }
             JS_FreeValue(ctx, abuf);
         }
@@ -1342,7 +1348,7 @@ static JSValue js_audioctx_decodeAudioFile(JSContext* ctx, JSValueConst this_val
 
     const char* rawPath = JS_ToCString(ctx, argv[0]);
     if (!rawPath) return JS_NULL;
-    std::string path = resolveAssetPath(rawPath);
+    ::std::string path = resolveAssetPath(rawPath);
     JS_FreeCString(ctx, rawPath);
 
     broaudio::AudioFileData data = broaudio::loadAudioFile(path.c_str());
@@ -1356,7 +1362,7 @@ static JSValue js_audioctx_decodeAudioFile(JSContext* ctx, JSValueConst this_val
     int outFrames = data.numFrames;
     int outChannels = data.channels;
     int outRate = data.sampleRate;
-    std::vector<float> resampled;
+    ::std::vector<float> resampled;
 
     if (data.sampleRate != d->engine->sampleRate()) {
         resampled = broaudio::resample(data.samples.data(), data.numFrames,
@@ -1382,7 +1388,7 @@ static JSValue js_audioctx_decodeAudioFile(JSContext* ctx, JSValueConst this_val
             size_t abufLen = 0;
             uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
             if (ptr) {
-                std::memcpy(ptr + byteOff, outSamples, totalFloats * sizeof(float));
+                ::std::memcpy(ptr + byteOff, outSamples, totalFloats * sizeof(float));
             }
             JS_FreeValue(ctx, abuf);
         }
@@ -1414,8 +1420,8 @@ static JSValue js_audioctx_saveWav(JSContext* ctx, JSValueConst this_val, int ar
     JS_ToInt32(ctx, &channels, argv[2]);
     JS_ToInt32(ctx, &sr, argv[3]);
 
-    int numFrames = static_cast<int>(len / sizeof(float)) / std::max(channels, 1);
-    std::string resolved = resolveAssetWritePath(path);
+    int numFrames = static_cast<int>(len / sizeof(float)) / ::std::max(channels, 1);
+    ::std::string resolved = resolveAssetWritePath(path);
     bool ok = broaudio::saveWav(resolved.c_str(), reinterpret_cast<float*>(raw),
                                 numFrames, channels, sr);
     JS_FreeCString(ctx, path);
@@ -1566,9 +1572,9 @@ static int jsObjInt(JSContext* ctx, JSValueConst o, const char* k, int def) {
     if (JS_IsUndefined(v) || JS_IsNull(v)) { JS_FreeValue(ctx, v); return def; }
     int i = def; JS_ToInt32(ctx, &i, v); JS_FreeValue(ctx, v); return i;
 }
-static std::string jsObjStr(JSContext* ctx, JSValueConst o, const char* k, const char* def) {
+static ::std::string jsObjStr(JSContext* ctx, JSValueConst o, const char* k, const char* def) {
     JSValue v = JS_GetPropertyStr(ctx, o, k);
-    std::string out = def;
+    ::std::string out = def;
     if (!JS_IsUndefined(v) && !JS_IsNull(v)) {
         const char* s = JS_ToCString(ctx, v);
         if (s) { out = s; JS_FreeCString(ctx, s); }
@@ -1607,7 +1613,7 @@ static const char* filterTypeToString(broaudio::BiquadFilter::Type t) {
         default:                                      return "lowpass";
     }
 }
-static broaudio::DistortionMode parseDistortionMode(const std::string& m) {
+static broaudio::DistortionMode parseDistortionMode(const ::std::string& m) {
     if (m == "hardclip") return broaudio::DistortionMode::HardClip;
     if (m == "foldback") return broaudio::DistortionMode::Foldback;
     if (m == "bitcrush") return broaudio::DistortionMode::Bitcrush;
@@ -1621,7 +1627,7 @@ static const char* distortionModeToString(broaudio::DistortionMode m) {
         default:                                 return "softclip";
     }
 }
-static broaudio::EffectSlot parseEffectSlot(const std::string& s, broaudio::EffectSlot def) {
+static broaudio::EffectSlot parseEffectSlot(const ::std::string& s, broaudio::EffectSlot def) {
     if (s == "filter")     return broaudio::EffectSlot::Filter;
     if (s == "delay")      return broaudio::EffectSlot::Delay;
     if (s == "compressor") return broaudio::EffectSlot::Compressor;
@@ -2045,22 +2051,22 @@ static JSValue enginePresetToJs(JSContext* ctx, const broaudio::EnginePreset& p)
 
 static JSValue js_audioctx_voicePresetToJson(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NULL;
-    std::string j = broaudio::toJson(jsToVoicePreset(ctx, argv[0]));
+    ::std::string j = broaudio::toJson(jsToVoicePreset(ctx, argv[0]));
     return JS_NewStringLen(ctx, j.data(), j.size());
 }
 static JSValue js_audioctx_busPresetToJson(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NULL;
-    std::string j = broaudio::toJson(jsToBusPreset(ctx, argv[0]));
+    ::std::string j = broaudio::toJson(jsToBusPreset(ctx, argv[0]));
     return JS_NewStringLen(ctx, j.data(), j.size());
 }
 static JSValue js_audioctx_modPresetToJson(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NULL;
-    std::string j = broaudio::toJson(jsToModPreset(ctx, argv[0]));
+    ::std::string j = broaudio::toJson(jsToModPreset(ctx, argv[0]));
     return JS_NewStringLen(ctx, j.data(), j.size());
 }
 static JSValue js_audioctx_enginePresetToJson(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NULL;
-    std::string j = broaudio::toJson(jsToEnginePreset(ctx, argv[0]));
+    ::std::string j = broaudio::toJson(jsToEnginePreset(ctx, argv[0]));
     return JS_NewStringLen(ctx, j.data(), j.size());
 }
 static JSValue js_audioctx_voicePresetFromJson(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
@@ -2126,7 +2132,7 @@ static JSValue js_audioctx_savePreset(JSContext* ctx, JSValueConst, int argc, JS
 static JSValue js_audioctx_loadPreset(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_NULL;
     const char* path = JS_ToCString(ctx, argv[0]); if (!path) return JS_NULL;
-    std::string s = broaudio::loadPresetFromFile(resolveAssetPath(path).c_str());
+    ::std::string s = broaudio::loadPresetFromFile(resolveAssetPath(path).c_str());
     JS_FreeCString(ctx, path);
     if (s.empty()) return JS_NULL;
     return JS_NewStringLen(ctx, s.data(), s.size());
@@ -2148,13 +2154,13 @@ static JSValue js_audioctx_renderBlock(JSContext* ctx, JSValueConst this_val, in
     d->engine->renderBlock(numFrames);
 
     int cap = d->engine->outputBuffer().capacity();
-    int n = std::min(numFrames, cap);
+    int n = ::std::min(numFrames, cap);
 
     if (argc >= 2 && JS_IsObject(argv[1])) {
         size_t len = 0;
         uint8_t* raw = getTypedArrayPtr(ctx, argv[1], len);
         if (raw) {
-            int rc = std::min(n, static_cast<int>(len / sizeof(float)));
+            int rc = ::std::min(n, static_cast<int>(len / sizeof(float)));
             if (rc > 0) d->engine->outputBuffer().readLatest(reinterpret_cast<float*>(raw), rc);
             return JS_DupValue(ctx, argv[1]);
         }
@@ -2283,7 +2289,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 [](AnalyserNodeData* d, double v) { d->maxDecibels = static_cast<float>(v); })
             .prop("smoothingTimeConstant",
                 [](AnalyserNodeData* d) -> double { return d->smoothingTimeConstant; },
-                [](AnalyserNodeData* d, double v) { d->smoothingTimeConstant = static_cast<float>(std::clamp(v, 0.0, 1.0)); })
+                [](AnalyserNodeData* d, double v) { d->smoothingTimeConstant = static_cast<float>(::std::clamp(v, 0.0, 1.0)); })
             .prop("source",
                 [](AnalyserNodeData* d) -> int { return d->source; },
                 [](AnalyserNodeData* d, int v) { d->source = (v == 2) ? 2 : (v == 1) ? 1 : 0; })
@@ -2462,19 +2468,19 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
             .method("clearNotes",
                 [](SequenceData* d) { d->seq->clearNotes(); })
             .method("play",
-                [](SequenceData* d, std::optional<double> t) {
+                [](SequenceData* d, optional<double> t) {
                     double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
                     d->seq->play(when);
                 })
             .method("stop",
                 [](SequenceData* d) { d->seq->stop(); })
             .method("pause",
-                [](SequenceData* d, std::optional<double> t) {
+                [](SequenceData* d, optional<double> t) {
                     double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
                     d->seq->pause(when);
                 })
             .method("resume",
-                [](SequenceData* d, std::optional<double> t) {
+                [](SequenceData* d, optional<double> t) {
                     double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
                     d->seq->resume(when);
                 })
@@ -2483,12 +2489,12 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
             .method("setLoopRange",
                 [](SequenceData* d, double start, double end) { d->seq->setLoopRange(start, end); })
             .method("currentBeat",
-                [](SequenceData* d, std::optional<double> t) -> double {
+                [](SequenceData* d, optional<double> t) -> double {
                     double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
                     return d->seq->currentBeat(when);
                 })
             .method("update",
-                [](SequenceData* d, std::optional<double> t) {
+                [](SequenceData* d, optional<double> t) {
                     double when = t.value_or(s_audioEngine ? s_audioEngine->currentTime() : 0.0);
                     d->seq->update(when);
                 })
@@ -2560,7 +2566,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 [](AudioCtxData* d, bool v) { d->engine->setMicMuted(v); })
             .prop("micMonitorGain",
                 [](AudioCtxData* d) -> double { return d->engine->micMonitorGain(); },
-                [](AudioCtxData* d, double v) { d->engine->setMicMonitorGain(static_cast<float>(std::clamp(v, 0.0, 1.0))); })
+                [](AudioCtxData* d, double v) { d->engine->setMicMonitorGain(static_cast<float>(clamp(v, 0.0, 1.0))); })
             .prop("micBus",
                 [](AudioCtxData* d) -> int { return d->engine->micBus(); },
                 [](AudioCtxData* d, int v) { d->engine->setMicBus(v); })
@@ -2705,7 +2711,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
             .method("setBusDistortionEnabled",
                 [](AudioCtxData* d, int busId, bool v) { d->engine->setBusDistortionEnabled(busId, v); })
             .method("setBusDistortionMode",
-                [](AudioCtxData* d, int busId, std::string mode) {
+                [](AudioCtxData* d, int busId, string mode) {
                     broaudio::DistortionMode m = broaudio::DistortionMode::SoftClip;
                     if (mode == "softclip") m = broaudio::DistortionMode::SoftClip;
                     else if (mode == "hardclip") m = broaudio::DistortionMode::HardClip;
@@ -2956,7 +2962,7 @@ void AudioBindings::install(JSContext* ctx, broaudio::Engine* engine)
                 [](AudioCtxData* d, JSContext* ctx, JSValue pathVal) -> JSValue {
                     const char* path = JS_ToCString(ctx, pathVal);
                     if (!path) return JS_FALSE;
-                    std::string resolved = resolveAssetWritePath(path);
+                    string resolved = resolveAssetWritePath(path);
                     bool ok = d->engine->exportRecordingToWav(resolved.c_str());
                     JS_FreeCString(ctx, path);
                     return JS_NewBool(ctx, ok);

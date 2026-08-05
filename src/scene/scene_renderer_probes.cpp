@@ -123,10 +123,9 @@ void SceneRenderer::uploadProbeForDraw(SceneNode* node, const ProbeLocs& P) {
 
     const FrameProbe* sel = nullptr;
     if (!probeCaptureActive_ && !frameProbes_.empty()) {
-        bromath::AABB3 wb;
         Vec3 c;
-        if (nodeWorldBounds(node, wb)) {
-            c = (wb.min + wb.max) * 0.5f;
+        if (auto wbOpt = nodeWorldBounds(node)) {
+            c = (wbOpt->min + wbOpt->max) * 0.5f;
         } else {
             const Mat4& w = node->worldMatrix();
             c = Vec3{w.at(0, 3), w.at(1, 3), w.at(2, 3)};

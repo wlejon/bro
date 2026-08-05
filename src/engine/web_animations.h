@@ -26,6 +26,7 @@
 #include <css/cascade.h>
 
 #include <cstdint>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -89,7 +90,7 @@ struct WebAnimation {
 
     double activeDuration() const;               // duration * iterations (inf ok)
     double endTimeMs() const;                    // max(delay + activeDuration + endDelay, 0)
-    bool currentTimeMs(double now, double* out) const; // false = unresolved (idle)
+    std::optional<double> currentTimeMs(double now) const; // nullopt = unresolved (idle)
     bool fillsForwards() const {
         return fill == WebAnimFill::Forwards || fill == WebAnimFill::Both;
     }
@@ -130,6 +131,8 @@ public:
     void reverse(WebAnimation& a, double now);      // flip rate + play
     void seek(WebAnimation& a, double t, double now);
     void setRate(WebAnimation& a, double rate, double now);
+    void setStartTime(WebAnimation& a, double st, double now);
+    void setCurrentTime(WebAnimation& a, double ct, double now);
 
     // Fresh play state including boundary crossings between ticks:
     // "idle" | "running" | "paused" | "finished".

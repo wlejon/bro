@@ -27,10 +27,10 @@ double WebAnimation::endTimeMs() const {
     return end > 0 ? end : 0;
 }
 
-bool WebAnimation::currentTimeMs(double now, double* out) const {
-    if (hasHoldTime) { *out = holdTime; return true; }
-    if (hasStartTime) { *out = (now - startTime) * playbackRate; return true; }
-    return false;
+std::optional<double> WebAnimation::currentTimeMs(double now) const {
+    if (hasHoldTime) return holdTime;
+    if (hasStartTime) return (now - startTime) * playbackRate;
+    return std::nullopt;
 }
 
 // ---------------------------------------------------------------------------
@@ -114,8 +114,9 @@ dom::Element* WebAnimationManager::resolveElement(const WebAnimation& a) const {
 // ---------------------------------------------------------------------------
 
 void WebAnimationManager::play(WebAnimation& a, double now) {
-    double ct = 0;
-    bool has = a.currentTimeMs(now, &ct);
+    auto ctOpt = a.currentTimeMs(now);
+    double ct = ctOpt.value_or(0);
+    bool has = ctOpt.has_value();
     double end = a.endTimeMs();
     if (a.playbackRate >= 0) {
         // Auto-rewind: playing from past-the-end (or idle) restarts at 0.
@@ -139,9 +140,8 @@ void WebAnimationManager::play(WebAnimation& a, double now) {
 
 void WebAnimationManager::pause(WebAnimation& a, double now) {
     if (a.state == WebAnimState::Paused) return;
-    double ct = 0;
-    if (!a.currentTimeMs(now, &ct))
-        ct = a.playbackRate < 0 ? a.endTimeMs() : 0;
+    auto ctOpt = a.currentTimeMs(now);
+    double ct = ctOpt ? *ctOpt : (a.playbackRate < 0 ? a.endTimeMs() : 0);
     a.holdTime = ct;
     a.hasHoldTime = true;
     a.hasStartTime = false;
@@ -198,11 +198,34 @@ void WebAnimationManager::seek(WebAnimation& a, double t, double now) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Properties
+// ---------------------------------------------------------------------------
+
+void WebAnimationManager::setStartTime(WebAnimation& a, double st, double now) {
+    a.startTime = st;
+    a.hasStartTime = true;
+    a.hasHoldTime = false;
+    if (a.state == WebAnimState::Paused) a.state = WebAnimState::Running;
+}
+
+void WebAnimationManager::setCurrentTime(WebAnimation& a, double ct, double now) {
+    if (a.playbackRate != 0) {
+        a.startTime = now - ct / a.playbackRate;
+        a.hasStartTime = true;
+        a.hasHoldTime = false;
+    } else {
+        a.holdTime = ct;
+        a.hasHoldTime = true;
+        a.hasStartTime = false;
+    }
+}
+
 void WebAnimationManager::setRate(WebAnimation& a, double rate, double now) {
-    double ct = 0;
-    bool has = a.currentTimeMs(now, &ct);
+    auto ctOpt = a.currentTimeMs(now);
     a.playbackRate = rate;
-    if (a.state == WebAnimState::Running && has) {
+    if (a.state == WebAnimState::Running && ctOpt) {
+        double ct = *ctOpt;
         if (rate != 0) {
             a.startTime = now - ct / rate;
             a.hasStartTime = true;
@@ -219,8 +242,9 @@ const char* WebAnimationManager::playState(const WebAnimation& a, double now) co
     if (a.state == WebAnimState::Idle) return "idle";
     if (a.state == WebAnimState::Paused) return "paused";
     if (a.state == WebAnimState::Finished) return "finished";
-    double ct = 0;
-    if (!a.currentTimeMs(now, &ct)) return "idle";
+    auto ctOpt = a.currentTimeMs(now);
+    if (!ctOpt) return "idle";
+    double ct = *ctOpt;
     double end = a.endTimeMs();
     // Boundary crossed but tick() hasn't formalized it yet — report fresh.
     if ((a.playbackRate > 0 && std::isfinite(end) && ct >= end) ||
@@ -250,8 +274,8 @@ bool WebAnimationManager::tick(double now) {
         dom::Element* elem = resolveElement(a);
 
         if (a.state == WebAnimState::Running) {
-            double ct = 0;
-            if (a.currentTimeMs(now, &ct)) {
+            if (auto ctOpt = a.currentTimeMs(now)) {
+                double ct = *ctOpt;
                 double end = a.endTimeMs();
                 bool finished =
                     (a.playbackRate > 0 && std::isfinite(end) && ct >= end) ||
@@ -303,8 +327,9 @@ void WebAnimationManager::applyOne(const WebAnimation& a,
                                    double now) const {
     if (a.keyframes.empty()) return;
 
-    double ct = 0;
-    if (!a.currentTimeMs(now, &ct)) return; // idle
+    auto ctOpt = a.currentTimeMs(now);
+    if (!ctOpt) return; // idle
+    double ct = *ctOpt;
 
     double activeDur = a.activeDuration();
     double localT = ct - a.delay;

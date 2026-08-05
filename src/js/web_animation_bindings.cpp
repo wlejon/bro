@@ -215,8 +215,7 @@ void settleFinish(JSContext* ctx, AnimationJS* a, JSValueConst animObj) {
     WebAnimation* rec = recordFor(a);
     JSValue ct = JS_UNDEFINED;
     if (rec) {
-        double v = 0;
-        if (rec->currentTimeMs(nowFor(ctx), &v)) ct = JS_NewFloat64(ctx, v);
+        if (auto ctOpt = rec->currentTimeMs(nowFor(ctx))) ct = JS_NewFloat64(ctx, *ctOpt);
         else ct = JS_NULL;
     } else {
         ct = JS_NULL;
@@ -615,9 +614,9 @@ JSValue js_anim_get_currentTime(JSContext* ctx, JSValueConst this_val) {
     auto* a = self(this_val);
     WebAnimation* rec = recordFor(a);
     if (!rec) return JS_NULL;
-    double ct = 0;
-    if (!rec->currentTimeMs(nowFor(ctx), &ct)) return JS_NULL;
-    return JS_NewFloat64(ctx, ct);
+    auto ctOpt = rec->currentTimeMs(nowFor(ctx));
+    if (!ctOpt) return JS_NULL;
+    return JS_NewFloat64(ctx, *ctOpt);
 }
 
 JSValue js_anim_set_currentTime(JSContext* ctx, JSValueConst this_val, JSValueConst val) {

@@ -320,11 +320,12 @@ void SceneRenderer::uploadMeshGlobals(const MeshDrawLocs& L) {
 // so culling can never pop visible content: skinned meshes use palette-posed
 // bounds, wind sway pads by its max displacement, splats pad by the 3-sigma
 // quad extent the splat shader emits.
-bool SceneRenderer::nodeWorldBounds(SceneNode* n, bromath::AABB3& out) const {
+std::optional<bromath::AABB3> SceneRenderer::nodeWorldBounds(SceneNode* n) const {
+    bromath::AABB3 out;
     switch (n->type()) {
     case SceneNode::Type::Mesh: {
         auto* m = static_cast<MeshNode*>(n);
-        if (!m->hasDrawableMesh()) return false;
+        if (!m->hasDrawableMesh()) return std::nullopt;
         bromath::AABB3 local = m->localBounds();
         auto* sm = m->asSkinnedMesh();
         if (sm && sm->skinReady()) local = sm->posedLocalBounds();
@@ -340,20 +341,20 @@ bool SceneRenderer::nodeWorldBounds(SceneNode* n, bromath::AABB3& out) const {
             out.min = out.min - Vec3{pad, pad, pad};
             out.max = out.max + Vec3{pad, pad, pad};
         }
-        return true;
+        return out;
     }
     case SceneNode::Type::InstancedMesh: {
         auto* m = static_cast<InstancedMeshNode*>(n);
         float lo[3], hi[3];
-        if (!m->computeWorldInstanceBounds(lo, hi)) return false;
+        if (!m->computeWorldInstanceBounds(lo, hi)) return std::nullopt;
         const float pad = m->cullMargin();
         out.min = {lo[0] - pad, lo[1] - pad, lo[2] - pad};
         out.max = {hi[0] + pad, hi[1] + pad, hi[2] + pad};
-        return true;
+        return out;
     }
     case SceneNode::Type::GaussianSplat: {
         auto* s = static_cast<GaussianSplatNode*>(n);
-        if (s->splatCount() == 0) return false;
+        if (s->splatCount() == 0) return std::nullopt;
         // Pad the local center bounds by the quad extent — kSigma = 3 in the
         // splat VS, plus half a sigma of headroom for the low-pass screen
         // dilation — then take the padded box through the node's world matrix
@@ -364,10 +365,12 @@ bool SceneRenderer::nodeWorldBounds(SceneNode* n, bromath::AABB3& out) const {
         local.min = local.min - Vec3{pad, pad, pad};
         local.max = local.max + Vec3{pad, pad, pad};
         out = bromath::atransform(local, s->worldMatrix());
-        return true;
+        return out;
     }
-    case SceneNode::Type::Particles3D:
-        return static_cast<Particles3DNode*>(n)->worldBounds(out);
+    case SceneNode::Type::Particles3D: {
+        if (static_cast<Particles3DNode*>(n)->worldBounds(out)) return out;
+        return std::nullopt;
+    }
     case SceneNode::Type::Decal: {
         // The decal volume is exactly the unit box in local space (node
         // scale IS the size — see DecalNode), so the world AABB is that box
@@ -377,10 +380,10 @@ bool SceneRenderer::nodeWorldBounds(SceneNode* n, bromath::AABB3& out) const {
         local.min = Vec3{-0.5f, -0.5f, -0.5f};
         local.max = Vec3{ 0.5f,  0.5f,  0.5f};
         out = bromath::atransform(local, n->worldMatrix());
-        return true;
+        return out;
     }
     default:
-        return false;
+        return std::nullopt;
     }
 }
 
@@ -405,9 +408,9 @@ const bromath::Mat4& SceneRenderer::viewProjRot() const {
 
 bool SceneRenderer::cameraCulled(SceneNode* n) const {
     if (!cullingActive_) return false;
-    bromath::AABB3 wb;
-    if (!nodeWorldBounds(n, wb)) return false;
-    return !bromath::fintersects(cameraFrustum_, wb);
+    auto wbOpt = nodeWorldBounds(n);
+    if (!wbOpt) return false;
+    return !bromath::fintersects(cameraFrustum_, *wbOpt);
 }
 
 void SceneRenderer::render3D() {
@@ -617,10 +620,9 @@ void SceneRenderer::render3D() {
                                -graph_.viewMatrix_.at(2, 1),
                                -graph_.viewMatrix_.at(2, 2)};
             auto translucentDepth = [&](SceneNode* n) {
-                bromath::AABB3 wb;
                 Vec3 c;
-                if (nodeWorldBounds(n, wb)) {
-                    c = (wb.min + wb.max) * 0.5f;
+                if (auto wbOpt = nodeWorldBounds(n)) {
+                    c = (wbOpt->min + wbOpt->max) * 0.5f;
                 } else {
                     const bromath::Mat4& w = n->worldMatrix();
                     c = Vec3{w.at(0, 3), w.at(1, 3), w.at(2, 3)};

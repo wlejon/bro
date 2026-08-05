@@ -85,6 +85,9 @@ endif()
 if(BRO_WITH_3D)
     target_link_libraries(bro_engine PUBLIC bro_scene)
 endif()
+if(BRO_WITH_GAMEAI)
+    target_link_libraries(bro_engine PUBLIC brogameagent)
+endif()
 
 # Stamp BRO_WITH_* compile definitions so engine_init.cpp can #if on features
 # whose install() takes an engine-owned service pointer (net/audio/physics).

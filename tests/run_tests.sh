@@ -35,10 +35,14 @@ set -uo pipefail
 
 to_win_path() {
     local p="$1"
-    if [[ "$p" =~ ^/mnt/([a-zA-Z])/(.*) ]]; then
-        echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
-    elif [[ "$p" =~ ^/([a-zA-Z])/(.*) ]]; then
-        echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
+    if [[ "${BRO:-}" == *.exe ]]; then
+        if [[ "$p" =~ ^/mnt/([a-zA-Z])/(.*) ]]; then
+            echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
+        elif [[ "$p" =~ ^/([a-zA-Z])/(.*) ]]; then
+            echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
+        else
+            echo "$p"
+        fi
     else
         echo "$p"
     fi

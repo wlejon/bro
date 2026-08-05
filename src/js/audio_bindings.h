@@ -1,5 +1,11 @@
 #pragma once
 
+#include <algorithm>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
 extern "C" {
 #include "quickjs.h"
 }

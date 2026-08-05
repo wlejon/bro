@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -488,7 +489,7 @@ private:
     // InstancedMesh, GaussianSplat, Particles3D). Returns false when the node
     // has no valid bounds — such nodes draw unconditionally. Defined in
     // scene_renderer.cpp.
-    bool nodeWorldBounds(SceneNode* n, bromath::AABB3& out) const;
+    std::optional<bromath::AABB3> nodeWorldBounds(SceneNode* n) const;
 
     // Camera-frustum test for the forward walks: true when the node is
     // provably outside the view and safe to skip. Never true while culling

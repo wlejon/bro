@@ -584,8 +584,14 @@ void SceneRenderer::renderShadowPass() {
     if (cullingActive_) {
         auto cache = [&](auto& casters, std::vector<CasterBounds>& out) {
             out.resize(casters.size());
-            for (size_t i = 0; i < casters.size(); ++i)
-                out[i].valid = nodeWorldBounds(casters[i], out[i].box);
+            for (size_t i = 0; i < casters.size(); ++i) {
+                if (auto wbOpt = nodeWorldBounds(casters[i])) {
+                    out[i].valid = true;
+                    out[i].box = *wbOpt;
+                } else {
+                    out[i].valid = false;
+                }
+            }
         };
         cache(shadowCasters_, staticBounds);
         cache(shadowSkinnedCasters_, skinnedBounds);

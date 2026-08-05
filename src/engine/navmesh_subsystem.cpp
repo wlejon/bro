@@ -27,11 +27,15 @@ void pumpNavMeshObstacles(float dt) {
             }
         }
     }
+#if BROGAMEAGENT_HAS_NAVMESH
     for (auto& m : live) {
         while (m->obstaclesPending()) {
             m->update(dt);
         }
     }
+#else
+    (void)dt;
+#endif
 }
 
 } // namespace bro::engine
