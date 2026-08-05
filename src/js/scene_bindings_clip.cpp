@@ -427,9 +427,9 @@ JSValue js_clip_play(JSContext* ctx, JSValueConst this_val, int argc, JSValueCon
         return JS_ThrowTypeError(ctx, "play(name, options?)");
     scene::ClipPlayer::PlayOptions opts;
     if (argc > 1 && JS_IsObject(argv[1])) {
-        opts.speed = (float)qjsbind::get_prop_number(ctx, argv[1], "speed", 1.0);
-        opts.from  = (float)qjsbind::get_prop_number(ctx, argv[1], "from", NAN);
-        opts.fade  = (float)qjsbind::get_prop_number(ctx, argv[1], "fade", 0.0);
+        opts.speed = (float)qjsbind::get_prop_number(ctx, argv[1], "speed", opts.speed);
+        opts.from  = (float)qjsbind::get_prop_number(ctx, argv[1], "from", opts.from);
+        opts.fade  = (float)qjsbind::get_prop_number(ctx, argv[1], "fade", opts.fade);
     }
     std::string name = jsStr(ctx, argv[0]);
     std::string err;

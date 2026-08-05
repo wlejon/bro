@@ -113,10 +113,10 @@ JSValue js_node_getBoneWorldMatrix(JSContext* ctx, JSValueConst this_val, int ar
 // Shared parser for play()/playLayer() option objects.
 static void readPlayOptions(JSContext* ctx, JSValueConst obj,
                             scene::AnimationPlayer::PlayOptions& opts) {
-    opts.loop     = qjsbind::get_prop_bool(ctx, obj, "loop", true);
-    opts.speed    = (float)qjsbind::get_prop_number(ctx, obj, "speed", 1.0);
-    opts.fadeTime = (float)qjsbind::get_prop_number(ctx, obj, "fadeTime", 0.0);
-    opts.weight   = (float)qjsbind::get_prop_number(ctx, obj, "weight", 1.0);
+    opts.loop     = qjsbind::get_prop_bool(ctx, obj, "loop", opts.loop);
+    opts.speed    = (float)qjsbind::get_prop_number(ctx, obj, "speed", opts.speed);
+    opts.fadeTime = (float)qjsbind::get_prop_number(ctx, obj, "fadeTime", opts.fadeTime);
+    opts.weight   = (float)qjsbind::get_prop_number(ctx, obj, "weight", opts.weight);
     JSValue maskVal = JS_GetPropertyStr(ctx, obj, "mask");
     if (!JS_IsUndefined(maskVal) && !JS_IsNull(maskVal))
         readBoneMask(ctx, maskVal, opts.mask);
@@ -313,8 +313,8 @@ JSValue js_node_setRootMotion(JSContext* ctx, JSValueConst this_val, int argc, J
         return JS_ThrowTypeError(ctx, "setRootMotion({enabled, bone?, extractY?})");
 
     scene::AnimationPlayer::RootMotionOptions opts;
-    opts.enabled  = qjsbind::get_prop_bool(ctx, argv[0], "enabled", false);
-    opts.extractY = qjsbind::get_prop_bool(ctx, argv[0], "extractY", false);
+    opts.enabled  = qjsbind::get_prop_bool(ctx, argv[0], "enabled", opts.enabled);
+    opts.extractY = qjsbind::get_prop_bool(ctx, argv[0], "extractY", opts.extractY);
     JSValue boneVal = JS_GetPropertyStr(ctx, argv[0], "bone");
     if (JS_IsString(boneVal))       opts.boneName = jsStr(ctx, boneVal);
     else if (JS_IsNumber(boneVal))  opts.bone = (int)jsNum(ctx, boneVal);

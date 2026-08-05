@@ -243,9 +243,9 @@ static bool readAreaOverride(JSContext* ctx, JSValueConst o,
     if (hasVec) a.gravity = readVec3(ctx, gv);
     JS_FreeValue(ctx, gv);
 
-    a.pointGravity = qjsbind::get_prop_bool(ctx, o, "gravityPoint", false);
-    a.strength = (float)qjsbind::get_prop_number(ctx, o, "gravityStrength", 0.0);
-    a.falloffDistance = (float)qjsbind::get_prop_number(ctx, o, "falloffDistance", 0.0);
+    a.pointGravity = qjsbind::get_prop_bool(ctx, o, "gravityPoint", a.pointGravity);
+    a.strength = (float)qjsbind::get_prop_number(ctx, o, "gravityStrength", a.strength);
+    a.falloffDistance = (float)qjsbind::get_prop_number(ctx, o, "falloffDistance", a.falloffDistance);
 
     JSValue sv = JS_GetPropertyStr(ctx, o, "gravityScale");
     const bool hasScale = JS_IsNumber(sv);
@@ -255,9 +255,9 @@ static bool readAreaOverride(JSContext* ctx, JSValueConst o,
     }
     JS_FreeValue(ctx, sv);
 
-    a.linearDamping = (float)qjsbind::get_prop_number(ctx, o, "linearDamping", -1.0);
-    a.angularDamping = (float)qjsbind::get_prop_number(ctx, o, "angularDamping", -1.0);
-    a.priority = (int)qjsbind::get_prop_number(ctx, o, "priority", 0.0);
+    a.linearDamping = (float)qjsbind::get_prop_number(ctx, o, "linearDamping", a.linearDamping);
+    a.angularDamping = (float)qjsbind::get_prop_number(ctx, o, "angularDamping", a.angularDamping);
+    a.priority = (int)qjsbind::get_prop_number(ctx, o, "priority", (double)a.priority);
 
     if (mode == "scale" || (mode.empty() && hasScale && !hasVec && !a.pointGravity)) {
         if (!hasScale) { err = "area gravityMode 'scale' requires gravityScale"; return false; }
@@ -313,12 +313,12 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
     out.halfExtents = readVec3(ctx, he, JPH::Vec3(0.5f, 0.5f, 0.5f));
     JS_FreeValue(ctx, he);
 
-    out.radius = (float)qjsbind::get_prop_number(ctx, opts, "radius", 0.5);
-    out.halfHeight = (float)qjsbind::get_prop_number(ctx, opts, "halfHeight", 0.5);
+    out.radius = (float)qjsbind::get_prop_number(ctx, opts, "radius", out.radius);
+    out.halfHeight = (float)qjsbind::get_prop_number(ctx, opts, "halfHeight", out.halfHeight);
 
-    out.isStatic = qjsbind::get_prop_bool(ctx, opts, "static", false);
-    out.isSensor = qjsbind::get_prop_bool(ctx, opts, "sensor", false);
-    out.ccd = qjsbind::get_prop_bool(ctx, opts, "ccd", false);
+    out.isStatic = qjsbind::get_prop_bool(ctx, opts, "static", out.isStatic);
+    out.isSensor = qjsbind::get_prop_bool(ctx, opts, "sensor", out.isSensor);
+    out.ccd = qjsbind::get_prop_bool(ctx, opts, "ccd", out.ccd);
 
     JSValue areaVal = JS_GetPropertyStr(ctx, opts, "area");
     if (JS_IsObject(areaVal)) {
@@ -334,8 +334,8 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
         out.hasArea = true;
     }
     JS_FreeValue(ctx, areaVal);
-    out.friction = (float)qjsbind::get_prop_number(ctx, opts, "friction", 0.5);
-    out.restitution = (float)qjsbind::get_prop_number(ctx, opts, "restitution", 0.3);
+    out.friction = (float)qjsbind::get_prop_number(ctx, opts, "friction", out.friction);
+    out.restitution = (float)qjsbind::get_prop_number(ctx, opts, "restitution", out.restitution);
     std::string fc = qjsbind::get_prop_string(ctx, opts, "frictionCombine");
     if (!fc.empty() && !parseCombineMode(fc, out.frictionCombine)) {
         err = "frictionCombine must be 'average' | 'min' | 'max' | 'multiply'";
@@ -346,16 +346,16 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
         err = "restitutionCombine must be 'average' | 'min' | 'max' | 'multiply'";
         return false;
     }
-    out.density = (float)qjsbind::get_prop_number(ctx, opts, "density", 1000.0);
+    out.density = (float)qjsbind::get_prop_number(ctx, opts, "density", out.density);
     // Direct mass (kg) — wins over density when both are given (inertia still
     // derives from the shape, scaled to this mass). Whole-body only: ignored
     // on compound sub-parts (their density shapes the inertia distribution).
-    out.mass = (float)qjsbind::get_prop_number(ctx, opts, "mass", 0.0);
-    out.gravityFactor = (float)qjsbind::get_prop_number(ctx, opts, "gravityFactor", 1.0);
-    out.linearDamping = (float)qjsbind::get_prop_number(ctx, opts, "linearDamping", 0.05);
-    out.angularDamping = (float)qjsbind::get_prop_number(ctx, opts, "angularDamping", 0.05);
-    out.maxLinearVelocity = (float)qjsbind::get_prop_number(ctx, opts, "maxLinearVelocity", 500.0);
-    out.maxAngularVelocity = (float)qjsbind::get_prop_number(ctx, opts, "maxAngularVelocity", 0.25 * 3.14159265 * 60.0);
+    out.mass = (float)qjsbind::get_prop_number(ctx, opts, "mass", out.mass);
+    out.gravityFactor = (float)qjsbind::get_prop_number(ctx, opts, "gravityFactor", out.gravityFactor);
+    out.linearDamping = (float)qjsbind::get_prop_number(ctx, opts, "linearDamping", out.linearDamping);
+    out.angularDamping = (float)qjsbind::get_prop_number(ctx, opts, "angularDamping", out.angularDamping);
+    out.maxLinearVelocity = (float)qjsbind::get_prop_number(ctx, opts, "maxLinearVelocity", out.maxLinearVelocity);
+    out.maxAngularVelocity = (float)qjsbind::get_prop_number(ctx, opts, "maxAngularVelocity", out.maxAngularVelocity);
     out.userData = jsGetU64(ctx, opts, "userData", 0);
 
     std::string dofs = qjsbind::get_prop_string(ctx, opts, "dofs");
@@ -432,9 +432,9 @@ static bool readBodyOptions(JSContext* ctx, JSValueConst opts,
         }
         for (size_t i = 0; i + 1 < pts.size(); i += 2)
             out.chainPoints.push_back(JPH::Float2(pts[i], pts[i+1]));
-        out.chainDepth = (float)qjsbind::get_prop_number(ctx, opts, "depth", 20.0);
-        out.chainClosed = qjsbind::get_prop_bool(ctx, opts, "closed", false);
-        out.chainFlipNormal = qjsbind::get_prop_bool(ctx, opts, "flipNormal", false);
+        out.chainDepth = (float)qjsbind::get_prop_number(ctx, opts, "depth", out.chainDepth);
+        out.chainClosed = qjsbind::get_prop_bool(ctx, opts, "closed", out.chainClosed);
+        out.chainFlipNormal = qjsbind::get_prop_bool(ctx, opts, "flipNormal", out.chainFlipNormal);
         out.isStatic = true;
     }
 
@@ -935,11 +935,11 @@ static bool readMotorOptions(JSContext* ctx, JSValueConst o,
     else if (type == "off" || type.empty()) m.state = physics::MotorOptions::Off;
     else { err = "motor type must be 'velocity' | 'position' | 'off'"; return false; }
 
-    m.target    = (float)qjsbind::get_prop_number(ctx, o, "target", 0.0);
-    m.maxForce  = (float)qjsbind::get_prop_number(ctx, o, "maxForce", -1.0);
-    m.maxTorque = (float)qjsbind::get_prop_number(ctx, o, "maxTorque", -1.0);
-    m.frequency = (float)qjsbind::get_prop_number(ctx, o, "frequency", -1.0);
-    m.damping   = (float)qjsbind::get_prop_number(ctx, o, "damping", -1.0);
+    m.target    = (float)qjsbind::get_prop_number(ctx, o, "target", m.target);
+    m.maxForce  = (float)qjsbind::get_prop_number(ctx, o, "maxForce", m.maxForce);
+    m.maxTorque = (float)qjsbind::get_prop_number(ctx, o, "maxTorque", m.maxTorque);
+    m.frequency = (float)qjsbind::get_prop_number(ctx, o, "frequency", m.frequency);
+    m.damping   = (float)qjsbind::get_prop_number(ctx, o, "damping", m.damping);
 
     JSValue av = JS_GetPropertyStr(ctx, o, "axis");
     if (JS_IsString(av)) {
@@ -986,9 +986,9 @@ static bool readSixDofAxis(JSContext* ctx, JSValueConst v,
             a.mode = physics::SixDofAxis::Free;
         }
         JS_FreeValue(ctx, minV); JS_FreeValue(ctx, maxV);
-        a.springFrequency = (float)qjsbind::get_prop_number(ctx, v, "frequency", 0.0);
-        a.springDamping   = (float)qjsbind::get_prop_number(ctx, v, "damping", 1.0);
-        a.maxFriction     = (float)qjsbind::get_prop_number(ctx, v, "friction", 0.0);
+        a.springFrequency = (float)qjsbind::get_prop_number(ctx, v, "frequency", a.springFrequency);
+        a.springDamping   = (float)qjsbind::get_prop_number(ctx, v, "damping", a.springDamping);
+        a.maxFriction     = (float)qjsbind::get_prop_number(ctx, v, "friction", a.maxFriction);
         return true;
     }
     err = "axis config must be 'locked' | 'free' | {min,max,...}";
@@ -1037,8 +1037,8 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
     JSValue ax = JS_GetPropertyStr(ctx, o, "axis");
     cs.axis = readVec3(ctx, ax, JPH::Vec3(0, 1, 0)); JS_FreeValue(ctx, ax);
 
-    cs.minDistance = (float)qjsbind::get_prop_number(ctx, o, "minDistance", -1.0);
-    cs.maxDistance = (float)qjsbind::get_prop_number(ctx, o, "maxDistance", -1.0);
+    cs.minDistance = (float)qjsbind::get_prop_number(ctx, o, "minDistance", cs.minDistance);
+    cs.maxDistance = (float)qjsbind::get_prop_number(ctx, o, "maxDistance", cs.maxDistance);
 
     JSValue lmin = JS_GetPropertyStr(ctx, o, "limitMin");
     JSValue lmax = JS_GetPropertyStr(ctx, o, "limitMax");
@@ -1050,8 +1050,8 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
     }
     JS_FreeValue(ctx, lmin); JS_FreeValue(ctx, lmax);
 
-    cs.breakingImpulse = (float)qjsbind::get_prop_number(ctx, o, "breakingImpulse", 0.0);
-    cs.collideConnected = qjsbind::get_prop_bool(ctx, o, "collideConnected", false);
+    cs.breakingImpulse = (float)qjsbind::get_prop_number(ctx, o, "breakingImpulse", cs.breakingImpulse);
+    cs.collideConnected = qjsbind::get_prop_bool(ctx, o, "collideConnected", cs.collideConnected);
 
     if (cs.type == physics::ConstraintOptions::Wheel) {
         JSValue sa = JS_GetPropertyStr(ctx, o, "suspensionAxis");
@@ -1060,8 +1060,8 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
         JSValue ha = JS_GetPropertyStr(ctx, o, "hingeAxis");
         cs.wheelHingeAxis = readVec3(ctx, ha, JPH::Vec3(0, 0, 1));
         JS_FreeValue(ctx, ha);
-        cs.wheelHertz = (float)qjsbind::get_prop_number(ctx, o, "hertz", 2.0);
-        cs.wheelDampingRatio = (float)qjsbind::get_prop_number(ctx, o, "dampingRatio", 0.7);
+        cs.wheelHertz = (float)qjsbind::get_prop_number(ctx, o, "hertz", cs.wheelHertz);
+        cs.wheelDampingRatio = (float)qjsbind::get_prop_number(ctx, o, "dampingRatio", cs.wheelDampingRatio);
         JSValue lo = JS_GetPropertyStr(ctx, o, "lowerTranslation");
         JSValue hi = JS_GetPropertyStr(ctx, o, "upperTranslation");
         if (!JS_IsUndefined(lo) && !JS_IsUndefined(hi)) {
@@ -1072,23 +1072,23 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
             cs.wheelHasTranslationLimits = true;
         }
         JS_FreeValue(ctx, lo); JS_FreeValue(ctx, hi);
-        cs.wheelEnableMotor = qjsbind::get_prop_bool(ctx, o, "enableMotor", false);
-        cs.wheelMotorSpeed = (float)qjsbind::get_prop_number(ctx, o, "motorSpeed", 0.0);
-        cs.wheelMaxMotorTorque = (float)qjsbind::get_prop_number(ctx, o, "maxMotorTorque", 0.0);
+        cs.wheelEnableMotor = qjsbind::get_prop_bool(ctx, o, "enableMotor", cs.wheelEnableMotor);
+        cs.wheelMotorSpeed = (float)qjsbind::get_prop_number(ctx, o, "motorSpeed", cs.wheelMotorSpeed);
+        cs.wheelMaxMotorTorque = (float)qjsbind::get_prop_number(ctx, o, "maxMotorTorque", cs.wheelMaxMotorTorque);
     }
 
     if (cs.type == physics::ConstraintOptions::Cone) {
-        cs.coneHalfAngle = (float)qjsbind::get_prop_number(ctx, o, "halfConeAngle", 0.0);
+        cs.coneHalfAngle = (float)qjsbind::get_prop_number(ctx, o, "halfConeAngle", cs.coneHalfAngle);
     }
 
     if (cs.type == physics::ConstraintOptions::SwingTwist) {
         JSValue pa = JS_GetPropertyStr(ctx, o, "planeAxis");
         cs.planeAxis = readVec3(ctx, pa, JPH::Vec3(0, 1, 0)); JS_FreeValue(ctx, pa);
-        cs.normalHalfConeAngle = (float)qjsbind::get_prop_number(ctx, o, "normalHalfConeAngle", 0.0);
-        cs.planeHalfConeAngle = (float)qjsbind::get_prop_number(ctx, o, "planeHalfConeAngle", 0.0);
-        cs.twistMinAngle = (float)qjsbind::get_prop_number(ctx, o, "twistMinAngle", 0.0);
-        cs.twistMaxAngle = (float)qjsbind::get_prop_number(ctx, o, "twistMaxAngle", 0.0);
-        cs.maxFrictionTorque = (float)qjsbind::get_prop_number(ctx, o, "maxFrictionTorque", 0.0);
+        cs.normalHalfConeAngle = (float)qjsbind::get_prop_number(ctx, o, "normalHalfConeAngle", cs.normalHalfConeAngle);
+        cs.planeHalfConeAngle = (float)qjsbind::get_prop_number(ctx, o, "planeHalfConeAngle", cs.planeHalfConeAngle);
+        cs.twistMinAngle = (float)qjsbind::get_prop_number(ctx, o, "twistMinAngle", cs.twistMinAngle);
+        cs.twistMaxAngle = (float)qjsbind::get_prop_number(ctx, o, "twistMaxAngle", cs.twistMaxAngle);
+        cs.maxFrictionTorque = (float)qjsbind::get_prop_number(ctx, o, "maxFrictionTorque", cs.maxFrictionTorque);
     }
 
     if (cs.type == physics::ConstraintOptions::Pulley) {
@@ -1100,9 +1100,9 @@ static JSValue worldCreateConstraint(JSContext* ctx, JsWorld* w, JSValueConst o)
         cs.bodyPoint2 = readVec3(ctx, bp2); JS_FreeValue(ctx, bp2);
         JSValue fp2 = JS_GetPropertyStr(ctx, o, "fixedPoint2");
         cs.fixedPoint2 = readVec3(ctx, fp2); JS_FreeValue(ctx, fp2);
-        cs.ratio = (float)qjsbind::get_prop_number(ctx, o, "ratio", 1.0);
-        cs.minLength = (float)qjsbind::get_prop_number(ctx, o, "minLength", 0.0);
-        cs.maxLength = (float)qjsbind::get_prop_number(ctx, o, "maxLength", -1.0);
+        cs.ratio = (float)qjsbind::get_prop_number(ctx, o, "ratio", cs.ratio);
+        cs.minLength = (float)qjsbind::get_prop_number(ctx, o, "minLength", cs.minLength);
+        cs.maxLength = (float)qjsbind::get_prop_number(ctx, o, "maxLength", cs.maxLength);
     }
 
     if (cs.type == physics::ConstraintOptions::Gear ||
@@ -1464,15 +1464,15 @@ static JSValue worldCreateCharacter(JSContext* ctx, JsWorld* w, JSValueConst wor
     JSValue upVal = JS_GetPropertyStr(ctx, optsVal, "up");
     opts.up = readVec3(ctx, upVal, JPH::Vec3(0, 1, 0));
     JS_FreeValue(ctx, upVal);
-    opts.radius = (float)qjsbind::get_prop_number(ctx, optsVal, "radius", 0.3);
-    opts.halfHeight = (float)qjsbind::get_prop_number(ctx, optsVal, "halfHeight", 0.6);
-    opts.mass = (float)qjsbind::get_prop_number(ctx, optsVal, "mass", 70.0);
-    opts.maxSlopeAngle = (float)qjsbind::get_prop_number(ctx, optsVal, "maxSlopeAngle", 50.0);
-    opts.maxStrength = (float)qjsbind::get_prop_number(ctx, optsVal, "maxStrength", 100.0);
-    opts.padding = (float)qjsbind::get_prop_number(ctx, optsVal, "padding", 0.02);
-    opts.stepUp = (float)qjsbind::get_prop_number(ctx, optsVal, "stepUp", 0.4);
-    opts.stickToFloor = (float)qjsbind::get_prop_number(ctx, optsVal, "stickToFloor", 0.5);
-    opts.innerBody = qjsbind::get_prop_bool(ctx, optsVal, "innerBody", false);
+    opts.radius = (float)qjsbind::get_prop_number(ctx, optsVal, "radius", opts.radius);
+    opts.halfHeight = (float)qjsbind::get_prop_number(ctx, optsVal, "halfHeight", opts.halfHeight);
+    opts.mass = (float)qjsbind::get_prop_number(ctx, optsVal, "mass", opts.mass);
+    opts.maxSlopeAngle = (float)qjsbind::get_prop_number(ctx, optsVal, "maxSlopeAngle", opts.maxSlopeAngle);
+    opts.maxStrength = (float)qjsbind::get_prop_number(ctx, optsVal, "maxStrength", opts.maxStrength);
+    opts.padding = (float)qjsbind::get_prop_number(ctx, optsVal, "padding", opts.padding);
+    opts.stepUp = (float)qjsbind::get_prop_number(ctx, optsVal, "stepUp", opts.stepUp);
+    opts.stickToFloor = (float)qjsbind::get_prop_number(ctx, optsVal, "stickToFloor", opts.stickToFloor);
+    opts.innerBody = qjsbind::get_prop_bool(ctx, optsVal, "innerBody", opts.innerBody);
 
     JSValue layerVal = JS_GetPropertyStr(ctx, optsVal, "layer");
     if (JS_IsString(layerVal)) {
@@ -1585,23 +1585,23 @@ static void readVehicleWheel(JSContext* ctx, JSValueConst o,
     JSValue sd = JS_GetPropertyStr(ctx, o, "suspensionDirection");
     w.suspensionDirection = readVec3(ctx, sd, JPH::Vec3(0, -1, 0));
     JS_FreeValue(ctx, sd);
-    w.radius = (float)qjsbind::get_prop_number(ctx, o, "radius", 0.3);
-    w.width = (float)qjsbind::get_prop_number(ctx, o, "width", 0.1);
-    w.suspensionMinLength = (float)qjsbind::get_prop_number(ctx, o, "suspensionMinLength", 0.3);
-    w.suspensionMaxLength = (float)qjsbind::get_prop_number(ctx, o, "suspensionMaxLength", 0.5);
-    w.suspensionFrequency = (float)qjsbind::get_prop_number(ctx, o, "suspensionFrequency", 1.5);
-    w.suspensionDamping = (float)qjsbind::get_prop_number(ctx, o, "suspensionDamping", 0.5);
-    w.steerable = qjsbind::get_prop_bool(ctx, o, "steerable", false);
-    w.maxSteerAngle = (float)qjsbind::get_prop_number(ctx, o, "maxSteerAngle", 70.0);
-    w.driven = qjsbind::get_prop_bool(ctx, o, "driven", false);
-    w.maxBrakeTorque = (float)qjsbind::get_prop_number(ctx, o, "maxBrakeTorque", 1500.0);
-    w.maxHandBrakeTorque = (float)qjsbind::get_prop_number(ctx, o, "maxHandBrakeTorque", 0.0);
+    w.radius = (float)qjsbind::get_prop_number(ctx, o, "radius", w.radius);
+    w.width = (float)qjsbind::get_prop_number(ctx, o, "width", w.width);
+    w.suspensionMinLength = (float)qjsbind::get_prop_number(ctx, o, "suspensionMinLength", w.suspensionMinLength);
+    w.suspensionMaxLength = (float)qjsbind::get_prop_number(ctx, o, "suspensionMaxLength", w.suspensionMaxLength);
+    w.suspensionFrequency = (float)qjsbind::get_prop_number(ctx, o, "suspensionFrequency", w.suspensionFrequency);
+    w.suspensionDamping = (float)qjsbind::get_prop_number(ctx, o, "suspensionDamping", w.suspensionDamping);
+    w.steerable = qjsbind::get_prop_bool(ctx, o, "steerable", w.steerable);
+    w.maxSteerAngle = (float)qjsbind::get_prop_number(ctx, o, "maxSteerAngle", w.maxSteerAngle);
+    w.driven = qjsbind::get_prop_bool(ctx, o, "driven", w.driven);
+    w.maxBrakeTorque = (float)qjsbind::get_prop_number(ctx, o, "maxBrakeTorque", w.maxBrakeTorque);
+    w.maxHandBrakeTorque = (float)qjsbind::get_prop_number(ctx, o, "maxHandBrakeTorque", w.maxHandBrakeTorque);
     // Tire friction: scalar multipliers on Jolt's default curves, or full
     // curve overrides as flat [x0,y0, x1,y1, ...] pairs.
     w.longitudinalFrictionScale =
-        (float)qjsbind::get_prop_number(ctx, o, "longitudinalFriction", 1.0);
+        (float)qjsbind::get_prop_number(ctx, o, "longitudinalFriction", w.longitudinalFrictionScale);
     w.lateralFrictionScale =
-        (float)qjsbind::get_prop_number(ctx, o, "lateralFriction", 1.0);
+        (float)qjsbind::get_prop_number(ctx, o, "lateralFriction", w.lateralFrictionScale);
     auto readCurve = [&](const char* prop, std::vector<JPH::Float2>& out) {
         JSValue v = JS_GetPropertyStr(ctx, o, prop);
         std::vector<float> flat;
@@ -1676,7 +1676,7 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
     opts.forward = readVec3(ctx, fwdVal, JPH::Vec3(0, 0, 1));
     JS_FreeValue(ctx, fwdVal);
     opts.maxPitchRollAngle =
-        (float)qjsbind::get_prop_number(ctx, optsVal, "maxPitchRollAngle", 180.0);
+        (float)qjsbind::get_prop_number(ctx, optsVal, "maxPitchRollAngle", opts.maxPitchRollAngle);
 
     // Cleanup for the error paths below: only tear down what we created.
     auto fail = [&](JSValue exception) {
@@ -1723,8 +1723,8 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
         JSValue rgr = JS_GetPropertyStr(ctx, trVal, "reverseGearRatios");
         readFloatArray(ctx, rgr, opts.transmission.reverseGearRatios);
         JS_FreeValue(ctx, rgr);
-        opts.transmission.switchTime = (float)qjsbind::get_prop_number(ctx, trVal, "switchTime", 0.5);
-        opts.transmission.clutchStrength = (float)qjsbind::get_prop_number(ctx, trVal, "clutchStrength", 10.0);
+        opts.transmission.switchTime = (float)qjsbind::get_prop_number(ctx, trVal, "switchTime", opts.transmission.switchTime);
+        opts.transmission.clutchStrength = (float)qjsbind::get_prop_number(ctx, trVal, "clutchStrength", opts.transmission.clutchStrength);
         opts.transmission.shiftUpRPM = (float)qjsbind::get_prop_number(ctx, trVal, "shiftUpRPM", opts.transmission.shiftUpRPM);
         opts.transmission.shiftDownRPM = (float)qjsbind::get_prop_number(ctx, trVal, "shiftDownRPM", opts.transmission.shiftDownRPM);
     }
@@ -1746,11 +1746,11 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
                     if (readFloatArray(ctx, twv, idx))
                         for (float f : idx) trk.wheels.push_back((int)f);
                     JS_FreeValue(ctx, twv);
-                    trk.drivenWheel = (int)qjsbind::get_prop_number(ctx, tv, "drivenWheel", -1.0);
-                    trk.inertia = (float)qjsbind::get_prop_number(ctx, tv, "inertia", 10.0);
-                    trk.angularDamping = (float)qjsbind::get_prop_number(ctx, tv, "angularDamping", 0.5);
-                    trk.maxBrakeTorque = (float)qjsbind::get_prop_number(ctx, tv, "maxBrakeTorque", 15000.0);
-                    trk.differentialRatio = (float)qjsbind::get_prop_number(ctx, tv, "differentialRatio", 6.0);
+                    trk.drivenWheel = (int)qjsbind::get_prop_number(ctx, tv, "drivenWheel", (double)trk.drivenWheel);
+                    trk.inertia = (float)qjsbind::get_prop_number(ctx, tv, "inertia", trk.inertia);
+                    trk.angularDamping = (float)qjsbind::get_prop_number(ctx, tv, "angularDamping", trk.angularDamping);
+                    trk.maxBrakeTorque = (float)qjsbind::get_prop_number(ctx, tv, "maxBrakeTorque", trk.maxBrakeTorque);
+                    trk.differentialRatio = (float)qjsbind::get_prop_number(ctx, tv, "differentialRatio", trk.differentialRatio);
                 }
                 JS_FreeValue(ctx, tv);
                 opts.tracks.push_back(trk);
@@ -1763,16 +1763,16 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
     } else if (opts.controller == physics::VehicleOptions::ControllerMotorcycle) {
         JSValue leanVal = JS_GetPropertyStr(ctx, optsVal, "lean");
         if (JS_IsObject(leanVal)) {
-            opts.lean.maxAngle = (float)qjsbind::get_prop_number(ctx, leanVal, "maxAngle", 45.0);
+            opts.lean.maxAngle = (float)qjsbind::get_prop_number(ctx, leanVal, "maxAngle", opts.lean.maxAngle);
             // -1 = auto: scale to the chassis's roll inertia (see physics_world.h).
-            opts.lean.springConstant = (float)qjsbind::get_prop_number(ctx, leanVal, "springConstant", -1.0);
-            opts.lean.springDamping = (float)qjsbind::get_prop_number(ctx, leanVal, "springDamping", -1.0);
+            opts.lean.springConstant = (float)qjsbind::get_prop_number(ctx, leanVal, "springConstant", opts.lean.springConstant);
+            opts.lean.springDamping = (float)qjsbind::get_prop_number(ctx, leanVal, "springDamping", opts.lean.springDamping);
             opts.lean.springIntegrationCoefficient =
-                (float)qjsbind::get_prop_number(ctx, leanVal, "springIntegrationCoefficient", 0.0);
+                (float)qjsbind::get_prop_number(ctx, leanVal, "springIntegrationCoefficient", opts.lean.springIntegrationCoefficient);
             opts.lean.springIntegrationCoefficientDecay =
-                (float)qjsbind::get_prop_number(ctx, leanVal, "springIntegrationCoefficientDecay", 4.0);
+                (float)qjsbind::get_prop_number(ctx, leanVal, "springIntegrationCoefficientDecay", opts.lean.springIntegrationCoefficientDecay);
             opts.lean.smoothingFactor =
-                (float)qjsbind::get_prop_number(ctx, leanVal, "smoothingFactor", 0.8);
+                (float)qjsbind::get_prop_number(ctx, leanVal, "smoothingFactor", opts.lean.smoothingFactor);
         }
         JS_FreeValue(ctx, leanVal);
     }
@@ -1785,12 +1785,12 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
             JSValue dv = JS_GetPropertyUint32(ctx, diffsVal, i);
             physics::VehicleDifferentialOptions d;
             if (JS_IsObject(dv)) {
-                d.leftWheel = (int)qjsbind::get_prop_number(ctx, dv, "leftWheel", -1.0);
-                d.rightWheel = (int)qjsbind::get_prop_number(ctx, dv, "rightWheel", -1.0);
-                d.ratio = (float)qjsbind::get_prop_number(ctx, dv, "ratio", 3.42);
-                d.leftRightSplit = (float)qjsbind::get_prop_number(ctx, dv, "leftRightSplit", 0.5);
-                d.limitedSlipRatio = (float)qjsbind::get_prop_number(ctx, dv, "limitedSlipRatio", 1.4);
-                d.engineTorqueRatio = (float)qjsbind::get_prop_number(ctx, dv, "engineTorqueRatio", 1.0);
+                d.leftWheel = (int)qjsbind::get_prop_number(ctx, dv, "leftWheel", (double)d.leftWheel);
+                d.rightWheel = (int)qjsbind::get_prop_number(ctx, dv, "rightWheel", (double)d.rightWheel);
+                d.ratio = (float)qjsbind::get_prop_number(ctx, dv, "ratio", d.ratio);
+                d.leftRightSplit = (float)qjsbind::get_prop_number(ctx, dv, "leftRightSplit", d.leftRightSplit);
+                d.limitedSlipRatio = (float)qjsbind::get_prop_number(ctx, dv, "limitedSlipRatio", d.limitedSlipRatio);
+                d.engineTorqueRatio = (float)qjsbind::get_prop_number(ctx, dv, "engineTorqueRatio", d.engineTorqueRatio);
             }
             JS_FreeValue(ctx, dv);
             opts.differentials.push_back(d);
@@ -1798,7 +1798,7 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
     }
     JS_FreeValue(ctx, diffsVal);
     opts.differentialLimitedSlipRatio =
-        (float)qjsbind::get_prop_number(ctx, optsVal, "differentialLimitedSlipRatio", 1.4);
+        (float)qjsbind::get_prop_number(ctx, optsVal, "differentialLimitedSlipRatio", opts.differentialLimitedSlipRatio);
 
     JSValue barsVal = JS_GetPropertyStr(ctx, optsVal, "antiRollBars");
     if (JS_IsArray(barsVal)) {
@@ -1808,9 +1808,9 @@ static JSValue worldCreateVehicle(JSContext* ctx, JsWorld* w, JSValueConst world
             JSValue bv = JS_GetPropertyUint32(ctx, barsVal, i);
             physics::VehicleAntiRollBarOptions bar;
             if (JS_IsObject(bv)) {
-                bar.leftWheel = (int)qjsbind::get_prop_number(ctx, bv, "leftWheel", 0.0);
-                bar.rightWheel = (int)qjsbind::get_prop_number(ctx, bv, "rightWheel", 1.0);
-                bar.stiffness = (float)qjsbind::get_prop_number(ctx, bv, "stiffness", 1000.0);
+                bar.leftWheel = (int)qjsbind::get_prop_number(ctx, bv, "leftWheel", (double)bar.leftWheel);
+                bar.rightWheel = (int)qjsbind::get_prop_number(ctx, bv, "rightWheel", (double)bar.rightWheel);
+                bar.stiffness = (float)qjsbind::get_prop_number(ctx, bv, "stiffness", bar.stiffness);
             }
             JS_FreeValue(ctx, bv);
             opts.antiRollBars.push_back(bar);
@@ -2179,16 +2179,16 @@ static bool readRagdollPart(JSContext* ctx, JSValueConst o,
     else if (shape == "sphere") p.shape = physics::RagdollPartOptions::ShapeSphere;
     else { err = "part shape must be 'capsule' | 'box' | 'sphere'"; return false; }
 
-    p.halfHeight = (float)qjsbind::get_prop_number(ctx, o, "halfHeight", 0.15);
-    p.radius = (float)qjsbind::get_prop_number(ctx, o, "radius", 0.08);
+    p.halfHeight = (float)qjsbind::get_prop_number(ctx, o, "halfHeight", p.halfHeight);
+    p.radius = (float)qjsbind::get_prop_number(ctx, o, "radius", p.radius);
     JSValue heV = JS_GetPropertyStr(ctx, o, "halfExtents");
     p.halfExtents = readVec3(ctx, heV, JPH::Vec3(0.1f, 0.1f, 0.1f));
     JS_FreeValue(ctx, heV);
 
-    p.density = (float)qjsbind::get_prop_number(ctx, o, "density", 1000.0);
-    p.mass = (float)qjsbind::get_prop_number(ctx, o, "mass", 0.0);
-    p.friction = (float)qjsbind::get_prop_number(ctx, o, "friction", 0.5);
-    p.restitution = (float)qjsbind::get_prop_number(ctx, o, "restitution", 0.0);
+    p.density = (float)qjsbind::get_prop_number(ctx, o, "density", p.density);
+    p.mass = (float)qjsbind::get_prop_number(ctx, o, "mass", p.mass);
+    p.friction = (float)qjsbind::get_prop_number(ctx, o, "friction", p.friction);
+    p.restitution = (float)qjsbind::get_prop_number(ctx, o, "restitution", p.restitution);
 
     JSValue jv = JS_GetPropertyStr(ctx, o, "joint");
     if (JS_IsObject(jv)) {
@@ -2251,11 +2251,11 @@ static JSValue worldCreateRagdoll(JSContext* ctx, JsWorld* w, JSValueConst world
     }
     JS_FreeValue(ctx, layerVal);
 
-    opts.gravityFactor = (float)qjsbind::get_prop_number(ctx, optsVal, "gravityFactor", 1.0);
-    opts.linearDamping = (float)qjsbind::get_prop_number(ctx, optsVal, "linearDamping", 0.05);
-    opts.angularDamping = (float)qjsbind::get_prop_number(ctx, optsVal, "angularDamping", 0.05);
-    opts.stabilize = qjsbind::get_prop_bool(ctx, optsVal, "stabilize", true);
-    opts.activate = qjsbind::get_prop_bool(ctx, optsVal, "activate", true);
+    opts.gravityFactor = (float)qjsbind::get_prop_number(ctx, optsVal, "gravityFactor", opts.gravityFactor);
+    opts.linearDamping = (float)qjsbind::get_prop_number(ctx, optsVal, "linearDamping", opts.linearDamping);
+    opts.angularDamping = (float)qjsbind::get_prop_number(ctx, optsVal, "angularDamping", opts.angularDamping);
+    opts.stabilize = qjsbind::get_prop_bool(ctx, optsVal, "stabilize", opts.stabilize);
+    opts.activate = qjsbind::get_prop_bool(ctx, optsVal, "activate", opts.activate);
 
     JSValue motorV = JS_GetPropertyStr(ctx, optsVal, "motor");
     if (JS_IsObject(motorV)) readRagdollMotor(ctx, motorV, opts.motor);
@@ -2609,10 +2609,10 @@ static bool readSoftBodyOptions(JSContext* ctx, JSValueConst optsVal,
 
     if (hasCloth && !hasMesh) {
         o.kind = physics::SoftBodyOptions::Cloth;
-        o.gridX = (int)qjsbind::get_prop_number(ctx, clothV, "gridX", 10);
-        o.gridZ = (int)qjsbind::get_prop_number(ctx, clothV, "gridZ", 10);
-        o.spacing = (float)qjsbind::get_prop_number(ctx, clothV, "spacing", 0.1);
-        o.mass = (float)qjsbind::get_prop_number(ctx, clothV, "mass", 1.0);
+        o.gridX = (int)qjsbind::get_prop_number(ctx, clothV, "gridX", o.gridX);
+        o.gridZ = (int)qjsbind::get_prop_number(ctx, clothV, "gridZ", o.gridZ);
+        o.spacing = (float)qjsbind::get_prop_number(ctx, clothV, "spacing", o.spacing);
+        o.mass = (float)qjsbind::get_prop_number(ctx, clothV, "mass", o.mass);
         if (o.gridX < 2 || o.gridZ < 2) { err = "cloth.gridX/gridZ must be >= 2"; }
         readPinned(clothV);
         if (pinCorners) {
@@ -2632,8 +2632,8 @@ static bool readSoftBodyOptions(JSContext* ctx, JSValueConst optsVal,
         o.vertices.reserve(verts.size() / 3);
         for (size_t i = 0; i + 2 < verts.size(); i += 3)
             o.vertices.emplace_back(verts[i], verts[i + 1], verts[i + 2]);
-        o.mass = (float)qjsbind::get_prop_number(ctx, meshV, "mass", 1.0);
-        o.pressure = (float)qjsbind::get_prop_number(ctx, meshV, "pressure", 0.0);
+        o.mass = (float)qjsbind::get_prop_number(ctx, meshV, "mass", o.mass);
+        o.pressure = (float)qjsbind::get_prop_number(ctx, meshV, "pressure", o.pressure);
         readPinned(meshV);
         if (o.vertices.size() < 3 || o.indices.size() < 3)
             err = "mesh.vertices (xyz triples) and mesh.indices (triangle list) are required";
@@ -2644,18 +2644,18 @@ static bool readSoftBodyOptions(JSContext* ctx, JSValueConst optsVal,
     JS_FreeValue(ctx, meshV);
     if (!err.empty()) return false;
 
-    o.compliance = (float)qjsbind::get_prop_number(ctx, optsVal, "compliance", 0.0);
-    o.shearCompliance = (float)qjsbind::get_prop_number(ctx, optsVal, "shearCompliance", -1.0);
-    o.bendCompliance = (float)qjsbind::get_prop_number(ctx, optsVal, "bendCompliance", -1.0);
-    o.numIterations = (int)qjsbind::get_prop_number(ctx, optsVal, "numIterations", 5);
-    o.friction = (float)qjsbind::get_prop_number(ctx, optsVal, "friction", 0.2);
-    o.restitution = (float)qjsbind::get_prop_number(ctx, optsVal, "restitution", 0.0);
-    o.linearDamping = (float)qjsbind::get_prop_number(ctx, optsVal, "linearDamping", 0.1);
-    o.gravityFactor = (float)qjsbind::get_prop_number(ctx, optsVal, "gravityFactor", 1.0);
-    o.vertexRadius = (float)qjsbind::get_prop_number(ctx, optsVal, "vertexRadius", 0.0);
-    o.updatePosition = qjsbind::get_prop_bool(ctx, optsVal, "updatePosition", true);
-    o.doubleSided = qjsbind::get_prop_bool(ctx, optsVal, "doubleSided", true);
-    o.allowSleeping = qjsbind::get_prop_bool(ctx, optsVal, "allowSleeping", true);
+    o.compliance = (float)qjsbind::get_prop_number(ctx, optsVal, "compliance", o.compliance);
+    o.shearCompliance = (float)qjsbind::get_prop_number(ctx, optsVal, "shearCompliance", o.shearCompliance);
+    o.bendCompliance = (float)qjsbind::get_prop_number(ctx, optsVal, "bendCompliance", o.bendCompliance);
+    o.numIterations = (int)qjsbind::get_prop_number(ctx, optsVal, "numIterations", o.numIterations);
+    o.friction = (float)qjsbind::get_prop_number(ctx, optsVal, "friction", o.friction);
+    o.restitution = (float)qjsbind::get_prop_number(ctx, optsVal, "restitution", o.restitution);
+    o.linearDamping = (float)qjsbind::get_prop_number(ctx, optsVal, "linearDamping", o.linearDamping);
+    o.gravityFactor = (float)qjsbind::get_prop_number(ctx, optsVal, "gravityFactor", o.gravityFactor);
+    o.vertexRadius = (float)qjsbind::get_prop_number(ctx, optsVal, "vertexRadius", o.vertexRadius);
+    o.updatePosition = qjsbind::get_prop_bool(ctx, optsVal, "updatePosition", o.updatePosition);
+    o.doubleSided = qjsbind::get_prop_bool(ctx, optsVal, "doubleSided", o.doubleSided);
+    o.allowSleeping = qjsbind::get_prop_bool(ctx, optsVal, "allowSleeping", o.allowSleeping);
 
     JSValue posV = JS_GetPropertyStr(ctx, optsVal, "position");
     if (JS_IsObject(posV)) o.position = readVec3(ctx, posV);

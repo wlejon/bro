@@ -260,9 +260,9 @@ void applyAgentAvoidanceOpts(JSContext* ctx, JSValueConst val, brogameagent::Age
     if (JS_IsBool(val)) {
         av.enabled = JS_ToBool(ctx, val);
     } else if (JS_IsObject(val)) {
-        av.enabled         = getBoolProp(ctx, val, "enabled", true);
-        av.radius          = (float)getDoubleProp(ctx, val, "radius", -1);
-        av.maxSpeed        = (float)getDoubleProp(ctx, val, "maxSpeed", -1);
+        av.enabled         = getBoolProp(ctx, val, "enabled", av.enabled);
+        av.radius          = (float)getDoubleProp(ctx, val, "radius", av.radius);
+        av.maxSpeed        = (float)getDoubleProp(ctx, val, "maxSpeed", av.maxSpeed);
         av.neighborDist    = (float)getDoubleProp(ctx, val, "neighborDist", av.neighborDist);
         av.maxNeighbors    = getInt32Prop(ctx, val, "maxNeighbors", av.maxNeighbors);
         av.timeHorizon     = (float)getDoubleProp(ctx, val, "timeHorizon", av.timeHorizon);

@@ -26,6 +26,8 @@
 #include <bromesh/analysis/bake_transfer.h>
 #include <bromesh/analysis/convex_decomposition.h>
 #include <bromesh/manipulation/normals.h>
+#include <bromesh/manipulation/transform.h>
+#include <bromesh/manipulation/merge.h>
 #include <bromesh/manipulation/simplify.h>
 #include <bromesh/manipulation/subdivide.h>
 #include <bromesh/manipulation/weld.h>
@@ -1596,12 +1598,7 @@ void MeshBindings::install(JSContext* ctx) {
 
     // ── Transforms ──────────────────────────────────────────────────────
     .method("translate", [](MW* w, double dx, double dy, double dz) {
-        if (!w->data) return;
-        for (size_t i = 0; i < w->data->positions.size(); i += 3) {
-            w->data->positions[i]     += (float)dx;
-            w->data->positions[i + 1] += (float)dy;
-            w->data->positions[i + 2] += (float)dz;
-        }
+        if (w->data) bromesh::translateMesh(*w->data, (float)dx, (float)dy, (float)dz);
     }, qjsbind::returns_this)
 
     .method("scale", [](MW* w, double sx, std::optional<double> sy_opt, std::optional<double> sz_opt) {
@@ -1609,87 +1606,26 @@ void MeshBindings::install(JSContext* ctx) {
         float fsx = (float)sx;
         float fsy = sy_opt ? (float)*sy_opt : fsx;
         float fsz = sz_opt ? (float)*sz_opt : fsx;
-        auto* md = w->data.get();
-        for (size_t i = 0; i < md->positions.size(); i += 3) {
-            md->positions[i]     *= fsx;
-            md->positions[i + 1] *= fsy;
-            md->positions[i + 2] *= fsz;
-        }
-        if (fsx != fsy || fsy != fsz) bromesh::computeNormals(*md);
+        bromesh::scaleMesh(*w->data, fsx, fsy, fsz);
     })
 
     .method("rotate", [](MW* w, double ax, double ay, double az, double angle) {
-        if (!w->data) return;
-        float fax = (float)ax, fay = (float)ay, faz = (float)az;
-        float len = std::sqrt(fax*fax + fay*fay + faz*faz);
-        if (len < 1e-8f) return;
-        fax /= len; fay /= len; faz /= len;
-        float c = std::cos((float)angle), s = std::sin((float)angle), t = 1.0f - c;
-        float m00=t*fax*fax+c,    m01=t*fax*fay-s*faz, m02=t*fax*faz+s*fay;
-        float m10=t*fax*fay+s*faz, m11=t*fay*fay+c,    m12=t*fay*faz-s*fax;
-        float m20=t*fax*faz-s*fay, m21=t*fay*faz+s*fax, m22=t*faz*faz+c;
-        auto rot = [&](std::vector<float>& v) {
-            for (size_t i = 0; i < v.size(); i += 3) {
-                float x = v[i], y = v[i+1], z = v[i+2];
-                v[i]   = m00*x + m01*y + m02*z;
-                v[i+1] = m10*x + m11*y + m12*z;
-                v[i+2] = m20*x + m21*y + m22*z;
-            }
-        };
-        rot(w->data->positions);
-        if (w->data->hasNormals()) rot(w->data->normals);
+        if (w->data) bromesh::rotateMesh(*w->data, (float)ax, (float)ay, (float)az, (float)angle);
     }, qjsbind::returns_this)
 
     .method("center", [](MW* w) {
-        if (!w->data || w->data->positions.empty()) return;
-        auto bbox = bromesh::computeBBox(*w->data);
-        bromath::Vec3 _c = bromath::acenter(bbox);
-        float cx = _c.x, cy = _c.y, cz = _c.z;
-        for (size_t i = 0; i < w->data->positions.size(); i += 3) {
-            w->data->positions[i]     -= cx;
-            w->data->positions[i + 1] -= cy;
-            w->data->positions[i + 2] -= cz;
-        }
+        if (w->data) bromesh::centerMesh(*w->data);
     }, qjsbind::returns_this)
 
     .method("mirror", [](MW* w, int axis) {
-        if (!w->data || axis < 0 || axis > 2) return;
-        auto* md = w->data.get();
-        for (size_t i = 0; i < md->positions.size(); i += 3)
-            md->positions[i + axis] = -md->positions[i + axis];
-        if (md->hasNormals())
-            for (size_t i = 0; i < md->normals.size(); i += 3)
-                md->normals[i + axis] = -md->normals[i + axis];
-        for (size_t i = 0; i + 2 < md->indices.size(); i += 3)
-            std::swap(md->indices[i + 1], md->indices[i + 2]);
+        if (w->data && axis >= 0 && axis <= 2) bromesh::mirrorMesh(*w->data, axis);
     }, qjsbind::returns_this)
 
     .method("transform", [](MW* w, JSContext* ctx, JSValue matArr) -> JSValue {
         if (!w->data) return JS_UNDEFINED;
         std::vector<float> mat;
         if (!readFloatArrayVal(ctx, matArr, mat) || mat.size() < 16) return JS_UNDEFINED;
-        const float* m = mat.data();
-        auto* md = w->data.get();
-        for (size_t i = 0; i < md->positions.size(); i += 3) {
-            float x = md->positions[i], y = md->positions[i+1], z = md->positions[i+2];
-            md->positions[i]   = m[0]*x + m[4]*y + m[8]*z  + m[12];
-            md->positions[i+1] = m[1]*x + m[5]*y + m[9]*z  + m[13];
-            md->positions[i+2] = m[2]*x + m[6]*y + m[10]*z + m[14];
-        }
-        if (md->hasNormals()) {
-            for (size_t i = 0; i < md->normals.size(); i += 3) {
-                float x = md->normals[i], y = md->normals[i+1], z = md->normals[i+2];
-                md->normals[i]   = m[0]*x + m[4]*y + m[8]*z;
-                md->normals[i+1] = m[1]*x + m[5]*y + m[9]*z;
-                md->normals[i+2] = m[2]*x + m[6]*y + m[10]*z;
-                float len = std::sqrt(md->normals[i]*md->normals[i] +
-                                      md->normals[i+1]*md->normals[i+1] +
-                                      md->normals[i+2]*md->normals[i+2]);
-                if (len > 1e-8f) {
-                    md->normals[i] /= len; md->normals[i+1] /= len; md->normals[i+2] /= len;
-                }
-            }
-        }
+        bromesh::transformMesh(*w->data, mat.data());
         return JS_UNDEFINED; // returns_this handles the return
     }, qjsbind::returns_this)
 
@@ -2316,21 +2252,17 @@ void MeshBindings::install(JSContext* ctx) {
         if (!JS_IsArray(meshArr)) return JS_ThrowTypeError(ctx, "merge requires an array of Mesh instances");
         JSValue lenVal = JS_GetPropertyStr(ctx, meshArr, "length");
         int32_t len = 0; JS_ToInt32(ctx, &len, lenVal); JS_FreeValue(ctx, lenVal);
-        bromesh::MeshData result;
+        std::vector<bromesh::MeshData> meshes;
+        meshes.reserve((size_t)len);
         for (int32_t i = 0; i < len; i++) {
             JSValue elem = JS_GetPropertyUint32(ctx, meshArr, (uint32_t)i);
             auto* w = qjsbind::unwrap<MW>(ctx, elem);
             if (w && w->data) {
-                uint32_t base = (uint32_t)(result.positions.size() / 3);
-                result.positions.insert(result.positions.end(), w->data->positions.begin(), w->data->positions.end());
-                result.normals.insert(result.normals.end(), w->data->normals.begin(), w->data->normals.end());
-                result.uvs.insert(result.uvs.end(), w->data->uvs.begin(), w->data->uvs.end());
-                result.colors.insert(result.colors.end(), w->data->colors.begin(), w->data->colors.end());
-                for (auto idx : w->data->indices) result.indices.push_back(idx + base);
+                meshes.push_back(*w->data);
             }
             JS_FreeValue(ctx, elem);
         }
-        return wrapMesh(ctx, std::move(result));
+        return wrapMesh(ctx, bromesh::mergeMeshes(meshes));
     })
 
     // ── Static: Isosurface ──────────────────────────────────────────────
