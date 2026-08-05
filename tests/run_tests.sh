@@ -33,9 +33,20 @@
 
 set -uo pipefail
 
+to_win_path() {
+    local p="$1"
+    if [[ "$p" =~ ^/mnt/([a-zA-Z])/(.*) ]]; then
+        echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
+    elif [[ "$p" =~ ^/([a-zA-Z])/(.*) ]]; then
+        echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
+    else
+        echo "$p"
+    fi
+}
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-TEST_APP="$SCRIPT_DIR/test_app"
+TEST_APP="$(to_win_path "$SCRIPT_DIR/test_app")"
 
 # Find the headless binary. BRO_HEADLESS overrides auto-detection so the suite
 # can run against an arbitrary build dir or a packaged dist binary.
@@ -167,7 +178,7 @@ fi
 # Run one test. Prints the PASS/FAIL lines (identical to the historical serial
 # runner) to stdout. Returns 0 on pass, 1 on fail, 2 on timeout.
 run_one_test() {
-    local TEST_FILE="$1" REL="$2" OUTPUT STATUS
+    local TEST_FILE="$(to_win_path "$1")" REL="$2" OUTPUT STATUS
 
     if [[ -n "$TIMEOUT_BIN" ]]; then
         OUTPUT=$("$TIMEOUT_BIN" -k 10 "$TEST_TIMEOUT" "$BRO" "$TEST_APP" "$TEST_FILE" 2>&1)
