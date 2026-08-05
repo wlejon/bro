@@ -1,12 +1,56 @@
+# --- Where a standalone sibling checkout is looked for ---
+#
+# Every block below prefers a standalone repo and falls back to the git
+# submodule beside this file. `bro_default_sibling_dir()` is what decides where
+# "standalone" means, and it checks two roots in order:
+#
+#   1. beside the top-level project (`${CMAKE_SOURCE_DIR}/..`)
+#   2. beside bro itself           (`${bro_SOURCE_DIR}/..`)
+#
+# (1) is the historical rule and stays first, so nothing about a plain bro build
+# or a host application sited as bro's sibling (../ffmpeg-bro, ../planet-bro)
+# changes: in the documented layout both roots are the same directory.
+#
+# (2) exists because a host application's CMake root is not required to be a
+# sibling of bro. broc generates its project inside the app tree it compiles,
+# so `${CMAKE_SOURCE_DIR}/..` lands somewhere with no libraries in it — and the
+# old single-root lookup then fell through to bro's *submodules*, silently
+# building a different (and, in a non-recursive clone, absent) source tree. The
+# failure surfaced far from its cause, as brokit's FastNoise2 submodule missing
+# a CMakeLists.txt.
+#
+# An explicit `-D<NAME>_DIR=` still wins over both: these only supply the
+# default for a cache entry that CMake leaves alone once it is set. Pointing one
+# at a nonexistent path (`-DBROKIT_DIR=none`) still forces the submodule.
+function(bro_default_sibling_dir _name _out)
+    foreach(_root "${CMAKE_SOURCE_DIR}/.." "${bro_SOURCE_DIR}/..")
+        get_filename_component(_candidate "${_root}/${_name}" ABSOLUTE)
+        if(EXISTS "${_candidate}/CMakeLists.txt")
+            set(${_out} "${_candidate}" PARENT_SCOPE)
+            return()
+        endif()
+    endforeach()
+    # Nothing standalone anywhere: hand back the historical path so the caller's
+    # own EXISTS test fails and the submodule fallback runs exactly as before.
+    get_filename_component(_candidate "${CMAKE_SOURCE_DIR}/../${_name}" ABSOLUTE)
+    set(${_out} "${_candidate}" PARENT_SCOPE)
+endfunction()
+
 # --- QuickJS ---
 # Same standalone-repo-wins pattern as the siblings below, with one wrinkle:
 # the sibling directory is `../quickjs-ng`, not `../quickjs`. Upstream is
 # quickjs-ng, and `../quickjs` is commonly a checkout of Bellard's original
 # quickjs, which is a different project and must not be picked up here.
+# It is also the one sibling not probed by its CMakeLists.txt, so it resolves
+# its own roots rather than going through bro_default_sibling_dir().
 set(QJS_BUILD_CLI OFF CACHE BOOL "" FORCE)
 set(QJS_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 set(BUILD_QJS_LIBC ON CACHE BOOL "" FORCE)
-set(QUICKJS_DIR "${CMAKE_SOURCE_DIR}/../quickjs-ng" CACHE PATH "quickjs-ng standalone repo")
+set(_qjs_default "${CMAKE_SOURCE_DIR}/../quickjs-ng")
+if(NOT EXISTS "${_qjs_default}/quickjs.c" AND EXISTS "${bro_SOURCE_DIR}/../quickjs-ng/quickjs.c")
+    set(_qjs_default "${bro_SOURCE_DIR}/../quickjs-ng")
+endif()
+set(QUICKJS_DIR "${_qjs_default}" CACHE PATH "quickjs-ng standalone repo")
 if(EXISTS "${QUICKJS_DIR}/quickjs.c")
     message(STATUS "QuickJS: building from standalone repo ${QUICKJS_DIR}")
     set(BRO_QUICKJS_SRC "${QUICKJS_DIR}")
@@ -93,8 +137,15 @@ endif()
 if(NOT TARGET FastNoise)
     set(FASTNOISE2_NOISETOOL OFF CACHE BOOL "" FORCE)
     set(FASTNOISE2_TESTS OFF CACHE BOOL "" FORCE)
-    # Resolve via brokit's tree (standalone or submodule).
-    set(_BROKIT_ROOT "${CMAKE_SOURCE_DIR}/../brokit")
+    # Resolve via brokit's tree (standalone or submodule), by the same rule the
+    # brokit block below uses. That block runs *after* this one, so BROKIT_DIR
+    # only has a value here when the caller passed `-DBROKIT_DIR=`; honour it
+    # when they did, and otherwise take the same two-root default.
+    if(BROKIT_DIR)
+        set(_BROKIT_ROOT "${BROKIT_DIR}")
+    else()
+        bro_default_sibling_dir(brokit _BROKIT_ROOT)
+    endif()
     if(NOT EXISTS "${_BROKIT_ROOT}/CMakeLists.txt")
         set(_BROKIT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/brokit")
     endif()
@@ -134,7 +185,8 @@ endif()
 # Guard against double-add — sibling libs (bromesh, brogameagent, etc.)
 # also pull bromath in. First-loader wins.
 if(NOT TARGET bromath)
-    set(BROMATH_DIR "${CMAKE_SOURCE_DIR}/../bromath" CACHE PATH "Path to standalone bromath repo")
+    bro_default_sibling_dir(bromath _bromath_default)
+    set(BROMATH_DIR "${_bromath_default}" CACHE PATH "Path to standalone bromath repo")
     if(EXISTS "${BROMATH_DIR}/CMakeLists.txt")
         message(STATUS "bromath: using standalone repo at ${BROMATH_DIR}")
         add_subdirectory("${BROMATH_DIR}" "${CMAKE_BINARY_DIR}/bromath" EXCLUDE_FROM_ALL)
@@ -157,7 +209,8 @@ endif()
 # vars (BROTENSOR_WITH_CUDA/METAL) are forwarded in the top-level CMakeLists.txt
 # before this file is added, so the backend is fixed at this first load.
 if(BRO_WITH_TENSOR AND NOT TARGET brotensor)
-    set(BROTENSOR_DIR "${CMAKE_SOURCE_DIR}/../brotensor" CACHE PATH "Path to standalone brotensor repo")
+    bro_default_sibling_dir(brotensor _brotensor_default)
+    set(BROTENSOR_DIR "${_brotensor_default}" CACHE PATH "Path to standalone brotensor repo")
     if(EXISTS "${BROTENSOR_DIR}/CMakeLists.txt")
         message(STATUS "brotensor: using standalone repo at ${BROTENSOR_DIR}")
         add_subdirectory("${BROTENSOR_DIR}" "${CMAKE_BINARY_DIR}/brotensor" EXCLUDE_FROM_ALL)
@@ -178,7 +231,8 @@ endif()
 #
 # Must be added before brokit, because brokit's bro.image kernels delegate
 # into broimage.
-set(BROIMAGE_DIR "${CMAKE_SOURCE_DIR}/../broimage" CACHE PATH "Path to standalone broimage repo")
+bro_default_sibling_dir(broimage _broimage_default)
+set(BROIMAGE_DIR "${_broimage_default}" CACHE PATH "Path to standalone broimage repo")
 if(EXISTS "${BROIMAGE_DIR}/CMakeLists.txt")
     message(STATUS "broimage: using standalone repo at ${BROIMAGE_DIR}")
     add_subdirectory("${BROIMAGE_DIR}" "${CMAKE_BINARY_DIR}/broimage" EXCLUDE_FROM_ALL)
@@ -190,7 +244,8 @@ endif()
 # --- brokit (JS runtime APIs) ---
 # Prefer the standalone repo at ../brokit for local development.
 # Falls back to the git submodule at third_party/brokit.
-set(BROKIT_DIR "${CMAKE_SOURCE_DIR}/../brokit" CACHE PATH "Path to standalone brokit repo")
+bro_default_sibling_dir(brokit _brokit_default)
+set(BROKIT_DIR "${_brokit_default}" CACHE PATH "Path to standalone brokit repo")
 if(EXISTS "${BROKIT_DIR}/CMakeLists.txt")
     message(STATUS "brokit: using standalone repo at ${BROKIT_DIR}")
     add_subdirectory("${BROKIT_DIR}" "${CMAKE_BINARY_DIR}/brokit" EXCLUDE_FROM_ALL)
@@ -202,7 +257,8 @@ endif()
 # --- htmlayout (CSS + layout library) ---
 # Prefer the standalone repo at ../htmlayout for local development (edit once, no sync dance).
 # Falls back to the git submodule at third_party/htmlayout.
-set(HTMLAYOUT_DIR "${CMAKE_SOURCE_DIR}/../htmlayout" CACHE PATH "Path to standalone htmlayout repo")
+bro_default_sibling_dir(htmlayout _htmlayout_default)
+set(HTMLAYOUT_DIR "${_htmlayout_default}" CACHE PATH "Path to standalone htmlayout repo")
 if(EXISTS "${HTMLAYOUT_DIR}/CMakeLists.txt")
     message(STATUS "htmlayout: using standalone repo at ${HTMLAYOUT_DIR}")
     add_subdirectory("${HTMLAYOUT_DIR}" "${CMAKE_BINARY_DIR}/htmlayout" EXCLUDE_FROM_ALL)
@@ -223,7 +279,8 @@ add_subdirectory(glad EXCLUDE_FROM_ALL)
 # --- broaudio (audio engine library) ---
 # Prefer the standalone repo at ../broaudio for local development.
 # Falls back to the git submodule at third_party/broaudio.
-set(BROAUDIO_DIR "${CMAKE_SOURCE_DIR}/../broaudio" CACHE PATH "Path to standalone broaudio repo")
+bro_default_sibling_dir(broaudio _broaudio_default)
+set(BROAUDIO_DIR "${_broaudio_default}" CACHE PATH "Path to standalone broaudio repo")
 if(EXISTS "${BROAUDIO_DIR}/CMakeLists.txt")
     message(STATUS "broaudio: using standalone repo at ${BROAUDIO_DIR}")
     add_subdirectory("${BROAUDIO_DIR}" "${CMAKE_BINARY_DIR}/broaudio" EXCLUDE_FROM_ALL)
@@ -234,7 +291,8 @@ endif()
 
 # --- qjsbind (C++20 QuickJS binding library, header-only) ---
 # Prefer the standalone repo at ../qjsbind for local development.
-set(QJSBIND_DIR "${CMAKE_SOURCE_DIR}/../qjsbind" CACHE PATH "Path to standalone qjsbind repo")
+bro_default_sibling_dir(qjsbind _qjsbind_default)
+set(QJSBIND_DIR "${_qjsbind_default}" CACHE PATH "Path to standalone qjsbind repo")
 if(EXISTS "${QJSBIND_DIR}/CMakeLists.txt")
     message(STATUS "qjsbind: using standalone repo at ${QJSBIND_DIR}")
     add_subdirectory("${QJSBIND_DIR}" "${CMAKE_BINARY_DIR}/qjsbind" EXCLUDE_FROM_ALL)
@@ -250,7 +308,8 @@ endif()
 # nodes) and the Mesh JS bindings, all of which are 3D-only. broflora forces
 # 3D on, so its transitive bromesh dependency is always satisfied.
 if(BRO_WITH_3D)
-    set(BROMESH_DIR "${CMAKE_SOURCE_DIR}/../bromesh" CACHE PATH "Path to standalone bromesh repo")
+    bro_default_sibling_dir(bromesh _bromesh_default)
+    set(BROMESH_DIR "${_bromesh_default}" CACHE PATH "Path to standalone bromesh repo")
     if(EXISTS "${BROMESH_DIR}/CMakeLists.txt")
         message(STATUS "bromesh: using standalone repo at ${BROMESH_DIR}")
         add_subdirectory("${BROMESH_DIR}" "${CMAKE_BINARY_DIR}/bromesh" EXCLUDE_FROM_ALL)
@@ -264,7 +323,8 @@ endif()
 # Prefer the standalone repo at ../broflora for local development.
 # Falls back to the git submodule at third_party/broflora.
 if(BRO_WITH_FLORA)
-    set(BROFLORA_DIR "${CMAKE_SOURCE_DIR}/../broflora" CACHE PATH "Path to standalone broflora repo")
+    bro_default_sibling_dir(broflora _broflora_default)
+    set(BROFLORA_DIR "${_broflora_default}" CACHE PATH "Path to standalone broflora repo")
     if(EXISTS "${BROFLORA_DIR}/CMakeLists.txt")
         message(STATUS "broflora: using standalone repo at ${BROFLORA_DIR}")
         add_subdirectory("${BROFLORA_DIR}" "${CMAKE_BINARY_DIR}/broflora" EXCLUDE_FROM_ALL)
@@ -281,7 +341,8 @@ endif()
 # embedded by value in the 3D scene graph (agent binding / world ticker), so 3D
 # forces GAMEAI on and its transitive dependency is always satisfied.
 if(BRO_WITH_GAMEAI)
-    set(BROGAMEAGENT_DIR "${CMAKE_SOURCE_DIR}/../brogameagent" CACHE PATH "Path to standalone brogameagent repo")
+    bro_default_sibling_dir(brogameagent _brogameagent_default)
+    set(BROGAMEAGENT_DIR "${_brogameagent_default}" CACHE PATH "Path to standalone brogameagent repo")
     if(EXISTS "${BROGAMEAGENT_DIR}/CMakeLists.txt")
         message(STATUS "brogameagent: using standalone repo at ${BROGAMEAGENT_DIR}")
         add_subdirectory("${BROGAMEAGENT_DIR}" "${CMAKE_BINARY_DIR}/brogameagent" EXCLUDE_FROM_ALL)
@@ -297,7 +358,8 @@ endif()
 # MUST be added before brodiffusion (which depends on brolm). Guards
 # bromath/brotensor with if(NOT TARGET ...) so it reuses the already-added targets.
 if(BRO_WITH_LM)
-    set(BROLM_DIR "${CMAKE_SOURCE_DIR}/../brolm" CACHE PATH "Path to standalone brolm repo")
+    bro_default_sibling_dir(brolm _brolm_default)
+    set(BROLM_DIR "${_brolm_default}" CACHE PATH "Path to standalone brolm repo")
     if(EXISTS "${BROLM_DIR}/CMakeLists.txt")
         message(STATUS "brolm: using standalone repo at ${BROLM_DIR}")
         add_subdirectory("${BROLM_DIR}" "${CMAKE_BINARY_DIR}/brolm" EXCLUDE_FROM_ALL)
@@ -314,7 +376,8 @@ endif()
 # tokenizer target. Guards bromath/brotensor with if(NOT TARGET ...) so it
 # reuses the already-added targets.
 if(BRO_WITH_SOUNDML)
-    set(BROSOUNDML_DIR "${CMAKE_SOURCE_DIR}/../brosoundml" CACHE PATH "Path to standalone brosoundml repo")
+    bro_default_sibling_dir(brosoundml _brosoundml_default)
+    set(BROSOUNDML_DIR "${_brosoundml_default}" CACHE PATH "Path to standalone brosoundml repo")
     if(EXISTS "${BROSOUNDML_DIR}/CMakeLists.txt")
         message(STATUS "brosoundml: using standalone repo at ${BROSOUNDML_DIR}")
         add_subdirectory("${BROSOUNDML_DIR}" "${CMAKE_BINARY_DIR}/brosoundml" EXCLUDE_FROM_ALL)
@@ -331,7 +394,8 @@ endif()
 # with if(NOT TARGET ...) so it reuses those targets and reads the GPU cache
 # vars instead of re-adding or defaulting them.
 if(BRO_WITH_DIFFUSION)
-    set(BRODIFFUSION_DIR "${CMAKE_SOURCE_DIR}/../brodiffusion" CACHE PATH "Path to standalone brodiffusion repo")
+    bro_default_sibling_dir(brodiffusion _brodiffusion_default)
+    set(BRODIFFUSION_DIR "${_brodiffusion_default}" CACHE PATH "Path to standalone brodiffusion repo")
     if(EXISTS "${BRODIFFUSION_DIR}/CMakeLists.txt")
         message(STATUS "brodiffusion: using standalone repo at ${BRODIFFUSION_DIR}")
         add_subdirectory("${BRODIFFUSION_DIR}" "${CMAKE_BINARY_DIR}/brodiffusion" EXCLUDE_FROM_ALL)
@@ -348,7 +412,8 @@ endif()
 # this point. Guards all three with if(NOT TARGET ...) so it reuses those
 # targets and reads the GPU cache vars.
 if(BRO_WITH_VISION)
-    set(BROVISIONML_DIR "${CMAKE_SOURCE_DIR}/../brovisionml" CACHE PATH "Path to standalone brovisionml repo")
+    bro_default_sibling_dir(brovisionml _brovisionml_default)
+    set(BROVISIONML_DIR "${_brovisionml_default}" CACHE PATH "Path to standalone brovisionml repo")
     if(EXISTS "${BROVISIONML_DIR}/CMakeLists.txt")
         message(STATUS "brovisionml: using standalone repo at ${BROVISIONML_DIR}")
         add_subdirectory("${BROVISIONML_DIR}" "${CMAKE_BINARY_DIR}/brovisionml" EXCLUDE_FROM_ALL)

@@ -21,7 +21,6 @@
 #include <mutex>
 #include <unordered_map>
 #include <algorithm>
-#include <iostream>
 
 namespace bro {
 
@@ -58,7 +57,7 @@ struct WebGLRenderer::Impl {
         if (camera.type() == ObjectType::PerspectiveCamera) {
             auto& pCam = static_cast<PerspectiveCamera&>(camera);
             float fovRad = pCam.fov * static_cast<float>(M_PI) / 180.0f;
-            Vector3 target(pos.x + 0.0f, pos.y + 0.0f, pos.z - 1.0f);
+            Vector3 target = camera.target();
             graph->setCamera(fovRad, pCam.aspect, pCam.nearZ(), pCam.farZ(),
                              bromath::Vec3(pos.x, pos.y, pos.z),
                              bromath::Vec3(target.x, target.y, target.z));
@@ -143,7 +142,6 @@ void WebGLRenderer::setClearColor(const Color& color, float alpha) {
 }
 
 void WebGLRenderer::render(Scene& scene, Camera& camera) {
-    std::cout << "[THREE.WebGLRenderer] Rendered frame (scene children: " << scene.children().size() << ")" << std::endl;
     if (!scene.getImpl() || !scene.getImpl()->sceneGraph) return;
     auto graph = scene.getImpl()->sceneGraph.get();
     graph->setCanvasSize(width_, height_);
@@ -310,15 +308,4 @@ RaycastHit PhysicsWorld::raycast(const Vector3& origin, const Vector3& direction
     return result;
 }
 
-} // namespace bro
-
-extern "C" {
-#include "../../third_party/quickjs/quickjs.h"
-}
-
-namespace bro {
-namespace dom { class Element; class Event; }
-namespace js {
-    void dispatchDomEvent(JSContext*, dom::Element*, dom::Event&, JSValue) {}
-}
 } // namespace bro

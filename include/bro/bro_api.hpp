@@ -451,12 +451,14 @@ public:
     std::shared_ptr<Object3D> parent() const { return parent_.lock(); }
 
     std::shared_ptr<Object3D> getObjectByName(const std::string& name) { return nullptr; }
-    void lookAt(const Vector3& target) {}
-    void lookAt(float x, float y, float z) {}
+    void lookAt(const Vector3& target) { target_ = target; }
+    void lookAt(float x, float y, float z) { target_ = Vector3(x, y, z); }
+    const Vector3& target() const { return target_; }
 
 protected:
     std::string name_;
     Vector3 position_{0, 0, 0};
+    Vector3 target_{0, 0, 0};
     Euler rotation_{0, 0, 0};
     Quaternion quaternion_{0, 0, 0, 1};
     Vector3 scale_{1, 1, 1};
@@ -541,6 +543,43 @@ public:
         return geo;
     }
 
+    static std::shared_ptr<Geometry> createCylinder(float radiusTop = 1.0f, float radiusBottom = 1.0f, float height = 1.0f, int radialSegments = 8, int heightSegments = 1) {
+        auto geo = std::make_shared<Geometry>(GeometryType::Custom);
+        float halfH = height * 0.5f;
+        for (int y = 0; y <= heightSegments; ++y) {
+            float v = static_cast<float>(y) / heightSegments;
+            float py = halfH - v * height;
+            float radius = v * (radiusBottom - radiusTop) + radiusTop;
+            for (int x = 0; x <= radialSegments; ++x) {
+                float u = static_cast<float>(x) / radialSegments;
+                float theta = u * 6.2831853f;
+                float sinTheta = std::sin(theta);
+                float cosTheta = std::cos(theta);
+                geo->positions_.push_back(radius * sinTheta);
+                geo->positions_.push_back(py);
+                geo->positions_.push_back(radius * cosTheta);
+                geo->normals_.push_back(sinTheta);
+                geo->normals_.push_back(0.0f);
+                geo->normals_.push_back(cosTheta);
+                geo->uvs_.push_back(u);
+                geo->uvs_.push_back(1.0f - v);
+            }
+        }
+        for (int y = 0; y < heightSegments; ++y) {
+            for (int x = 0; x < radialSegments; ++x) {
+                uint32_t first = y * (radialSegments + 1) + x;
+                uint32_t second = first + radialSegments + 1;
+                geo->indices_.push_back(first);
+                geo->indices_.push_back(second);
+                geo->indices_.push_back(first + 1);
+                geo->indices_.push_back(second);
+                geo->indices_.push_back(second + 1);
+                geo->indices_.push_back(first + 1);
+            }
+        }
+        return geo;
+    }
+
     static std::shared_ptr<Geometry> createPlane(float width = 1.0f, float height = 1.0f) {
         auto geo = std::make_shared<Geometry>(GeometryType::Plane);
         float hw = width * 0.5f, hh = height * 0.5f;
@@ -579,7 +618,13 @@ private:
 class CylinderGeometry : public Geometry {
 public:
     CylinderGeometry(float radiusTop = 1.0f, float radiusBottom = 1.0f, float height = 1.0f, int radialSegments = 8, int heightSegments = 1)
-        : Geometry(GeometryType::Custom) {}
+        : Geometry(GeometryType::Custom) {
+        auto g = Geometry::createCylinder(radiusTop, radiusBottom, height, radialSegments, heightSegments);
+        setPositions(g->positions());
+        setNormals(g->normals());
+        setUVs(g->uvs());
+        setIndices(g->indices());
+    }
 };
 
 class Material {
