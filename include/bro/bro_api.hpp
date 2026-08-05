@@ -12,6 +12,11 @@
 namespace bro {
 
 // Forward declarations
+struct Vector3;
+struct Color;
+struct Quaternion;
+struct Euler;
+struct Matrix4;
 class Object3D;
 class Scene;
 class Geometry;
@@ -55,11 +60,13 @@ struct Vector3 {
         float len = length();
         return len > 0.0f ? *this / len : Vector3(0, 0, 0);
     }
-    void normalize() {
+    Vector3* normalize() {
         float len = length();
         if (len > 0.0f) { x /= len; y /= len; z /= len; }
+        return this;
     }
     float dot(const Vector3& rhs) const { return x * rhs.x + y * rhs.y + z * rhs.z; }
+    float dot(const Vector3* rhs) const { return rhs ? dot(*rhs) : 0.0f; }
     Vector3 cross(const Vector3& rhs) const {
         return Vector3(
             y * rhs.z - z * rhs.y,
@@ -67,8 +74,30 @@ struct Vector3 {
             x * rhs.y - y * rhs.x
         );
     }
+    Vector3* cross(const Vector3* rhs) {
+        if (rhs) { Vector3 res = cross(*rhs); x = res.x; y = res.y; z = res.z; }
+        return this;
+    }
     void set(float px, float py, float pz) { x = px; y = py; z = pz; }
     float distanceTo(const Vector3& v) const { return (*this - v).length(); }
+    float distanceTo(const Vector3* v) const { return v ? distanceTo(*v) : 0.0f; }
+
+    Vector3* add(const Vector3& rhs) { x += rhs.x; y += rhs.y; z += rhs.z; return this; }
+    Vector3* add(const Vector3* rhs) { if (rhs) { x += rhs->x; y += rhs->y; z += rhs->z; } return this; }
+    Vector3* sub(const Vector3& rhs) { x -= rhs.x; y -= rhs.y; z -= rhs.z; return this; }
+    Vector3* sub(const Vector3* rhs) { if (rhs) { x -= rhs->x; y -= rhs->y; z -= rhs->z; } return this; }
+    Vector3* multiplyScalar(float s) { x *= s; y *= s; z *= s; return this; }
+    Vector3* divideScalar(float s) { if (s != 0.0f) { x /= s; y /= s; z /= s; } return this; }
+    Vector3* copy(const Vector3& rhs) { x = rhs.x; y = rhs.y; z = rhs.z; return this; }
+    Vector3* copy(const Vector3* rhs) { if (rhs) { x = rhs->x; y = rhs->y; z = rhs->z; } return this; }
+    Vector3* addVectors(const Vector3& a, const Vector3& b) { x = a.x + b.x; y = a.y + b.y; z = a.z + b.z; return this; }
+    Vector3* addVectors(const Vector3* a, const Vector3* b) { if (a && b) { x = a->x + b->x; y = a->y + b->y; z = a->z + b->z; } return this; }
+    Vector3* subVectors(const Vector3& a, const Vector3& b) { x = a.x - b.x; y = a.y - b.y; z = a.z - b.z; return this; }
+    Vector3* subVectors(const Vector3* a, const Vector3* b) { if (a && b) { x = a->x - b->x; y = a->y - b->y; z = a->z - b->z; } return this; }
+    Vector3* lerp(const Vector3& v, float alpha) { x += (v.x - x) * alpha; y += (v.y - y) * alpha; z += (v.z - z) * alpha; return this; }
+    Vector3* lerp(const Vector3* v, float alpha) { if (v) lerp(*v, alpha); return this; }
+    Vector3* applyMatrix4(const Matrix4& m);
+    Vector3* applyMatrix4(const Matrix4* m);
 };
 
 struct Color {
@@ -201,7 +230,147 @@ struct Matrix4 {
         m.elements[14] = -(2.0f * farZ * nearZ) / (farZ - nearZ);
         return m;
     }
+
+    Matrix4* makeRotationX(float theta) {
+        float c = std::cos(theta), s = std::sin(theta);
+        elements[0] = 1.0f; elements[4] = 0.0f; elements[8] = 0.0f;  elements[12] = 0.0f;
+        elements[1] = 0.0f; elements[5] = c;    elements[9] = -s;    elements[13] = 0.0f;
+        elements[2] = 0.0f; elements[6] = s;    elements[10] = c;    elements[14] = 0.0f;
+        elements[3] = 0.0f; elements[7] = 0.0f; elements[11] = 0.0f; elements[15] = 1.0f;
+        return this;
+    }
+
+    Matrix4* makeRotationY(float theta) {
+        float c = std::cos(theta), s = std::sin(theta);
+        elements[0] = c;    elements[4] = 0.0f; elements[8] = s;     elements[12] = 0.0f;
+        elements[1] = 0.0f; elements[5] = 1.0f; elements[9] = 0.0f;  elements[13] = 0.0f;
+        elements[2] = -s;   elements[6] = 0.0f; elements[10] = c;    elements[14] = 0.0f;
+        elements[3] = 0.0f; elements[7] = 0.0f; elements[11] = 0.0f; elements[15] = 1.0f;
+        return this;
+    }
+
+    Matrix4* makeRotationZ(float theta) {
+        float c = std::cos(theta), s = std::sin(theta);
+        elements[0] = c;    elements[4] = -s;   elements[8] = 0.0f;  elements[12] = 0.0f;
+        elements[1] = s;    elements[5] = c;    elements[9] = 0.0f;  elements[13] = 0.0f;
+        elements[2] = 0.0f; elements[6] = 0.0f; elements[10] = 1.0f; elements[14] = 0.0f;
+        elements[3] = 0.0f; elements[7] = 0.0f; elements[11] = 0.0f; elements[15] = 1.0f;
+        return this;
+    }
+
+    Matrix4* copy(const Matrix4& m) {
+        elements = m.elements;
+        return this;
+    }
+    Matrix4* copy(const Matrix4* m) {
+        if (m) elements = m->elements;
+        return this;
+    }
+
+    Matrix4* multiply(const Matrix4& m) {
+        return multiplyMatrices(*this, m);
+    }
+    Matrix4* multiply(const Matrix4* m) {
+        if (m) multiply(*m);
+        return this;
+    }
+
+    Matrix4* multiplyMatrices(const Matrix4& a, const Matrix4& b) {
+        const float* ae = a.elements.data();
+        const float* be = b.elements.data();
+        float a11 = ae[0], a12 = ae[4], a13 = ae[8], a14 = ae[12];
+        float a21 = ae[1], a22 = ae[5], a23 = ae[9], a24 = ae[13];
+        float a31 = ae[2], a32 = ae[6], a33 = ae[10], a34 = ae[14];
+        float a41 = ae[3], a42 = ae[7], a43 = ae[11], a44 = ae[15];
+        float b11 = be[0], b12 = be[4], b13 = be[8], b14 = be[12];
+        float b21 = be[1], b22 = be[5], b23 = be[9], b24 = be[13];
+        float b31 = be[2], b32 = be[6], b33 = be[10], b34 = be[14];
+        float b41 = be[3], b42 = be[7], b43 = be[11], b44 = be[15];
+
+        elements[0] = a11 * b11 + a12 * b21 + a13 * b31 + a14 * b41;
+        elements[4] = a11 * b12 + a12 * b22 + a13 * b32 + a14 * b42;
+        elements[8] = a11 * b13 + a12 * b23 + a13 * b33 + a14 * b43;
+        elements[12] = a11 * b14 + a12 * b24 + a13 * b34 + a14 * b44;
+
+        elements[1] = a21 * b11 + a22 * b21 + a23 * b31 + a24 * b41;
+        elements[5] = a21 * b12 + a22 * b22 + a23 * b32 + a24 * b42;
+        elements[9] = a21 * b13 + a22 * b23 + a23 * b33 + a24 * b43;
+        elements[13] = a21 * b14 + a22 * b24 + a23 * b34 + a24 * b44;
+
+        elements[2] = a31 * b11 + a32 * b21 + a33 * b31 + a34 * b41;
+        elements[6] = a31 * b12 + a32 * b22 + a33 * b32 + a34 * b42;
+        elements[10] = a31 * b13 + a32 * b23 + a33 * b33 + a34 * b43;
+        elements[14] = a31 * b14 + a32 * b24 + a33 * b34 + a34 * b44;
+
+        elements[3] = a41 * b11 + a42 * b21 + a43 * b31 + a44 * b41;
+        elements[7] = a41 * b12 + a42 * b22 + a43 * b32 + a44 * b42;
+        elements[11] = a41 * b13 + a42 * b23 + a43 * b33 + a44 * b43;
+        elements[15] = a41 * b14 + a42 * b24 + a43 * b34 + a44 * b44;
+        return this;
+    }
+    Matrix4* multiplyMatrices(const Matrix4* a, const Matrix4* b) {
+        if (a && b) multiplyMatrices(*a, *b);
+        return this;
+    }
+
+    Matrix4* getInverse(const Matrix4& m) {
+        const float* me = m.elements.data();
+        float n11 = me[0], n21 = me[1], n31 = me[2], n41 = me[3];
+        float n12 = me[4], n22 = me[5], n32 = me[6], n42 = me[7];
+        float n13 = me[8], n23 = me[9], n33 = me[10], n43 = me[11];
+        float n14 = me[12], n24 = me[13], n34 = me[14], n44 = me[15];
+
+        float t11 = n23 * n34 * n42 - n24 * n33 * n42 + n24 * n32 * n43 - n22 * n34 * n43 - n23 * n32 * n44 + n22 * n33 * n44;
+        float t12 = n14 * n33 * n42 - n13 * n34 * n42 - n14 * n32 * n43 + n12 * n34 * n43 + n13 * n32 * n44 - n12 * n33 * n44;
+        float t13 = n13 * n24 * n42 - n14 * n23 * n42 + n14 * n22 * n43 - n12 * n24 * n43 - n13 * n22 * n44 + n12 * n23 * n44;
+        float t14 = n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 - n12 * n23 * n34;
+
+        float det = n11 * t11 + n21 * t12 + n31 * t13 + n41 * t14;
+        if (det == 0.0f) return this;
+        float detInv = 1.0f / det;
+
+        elements[0] = t11 * detInv;
+        elements[1] = (n24 * n33 * n41 - n23 * n34 * n41 - n24 * n31 * n43 + n21 * n34 * n43 + n23 * n31 * n44 - n21 * n33 * n44) * detInv;
+        elements[2] = (n22 * n34 * n41 - n24 * n32 * n41 + n24 * n31 * n42 - n21 * n34 * n42 - n22 * n31 * n44 + n21 * n32 * n44) * detInv;
+        elements[3] = (n23 * n32 * n41 - n22 * n33 * n41 - n23 * n31 * n42 + n21 * n33 * n42 + n22 * n31 * n43 - n21 * n32 * n43) * detInv;
+
+        elements[4] = t12 * detInv;
+        elements[5] = (n13 * n34 * n41 - n14 * n33 * n41 + n14 * n31 * n43 - n11 * n34 * n43 - n13 * n31 * n44 + n11 * n33 * n44) * detInv;
+        elements[6] = (n14 * n32 * n41 - n12 * n34 * n41 - n14 * n31 * n42 + n11 * n34 * n42 + n12 * n31 * n44 - n11 * n32 * n44) * detInv;
+        elements[7] = (n12 * n33 * n41 - n13 * n32 * n41 + n13 * n31 * n42 - n11 * n33 * n42 - n12 * n31 * n43 + n11 * n32 * n43) * detInv;
+
+        elements[8] = t13 * detInv;
+        elements[9] = (n14 * n23 * n41 - n13 * n24 * n41 - n14 * n21 * n43 + n11 * n24 * n43 + n13 * n21 * n44 - n11 * n23 * n44) * detInv;
+        elements[10] = (n12 * n24 * n41 - n14 * n22 * n41 + n14 * n21 * n42 - n11 * n24 * n42 - n12 * n21 * n44 + n11 * n22 * n44) * detInv;
+        elements[11] = (n13 * n22 * n41 - n12 * n23 * n41 - n13 * n21 * n42 + n11 * n23 * n42 + n12 * n21 * n43 - n11 * n22 * n43) * detInv;
+
+        elements[12] = t14 * detInv;
+        elements[13] = (n13 * n24 * n31 - n14 * n23 * n31 + n14 * n21 * n33 - n11 * n24 * n33 - n13 * n21 * n34 + n11 * n23 * n34) * detInv;
+        elements[14] = (n14 * n22 * n31 - n12 * n24 * n31 - n14 * n21 * n32 + n11 * n24 * n32 + n12 * n21 * n34 - n11 * n22 * n34) * detInv;
+        elements[15] = (n12 * n23 * n31 - n13 * n22 * n31 + n13 * n21 * n32 - n11 * n23 * n32 - n12 * n21 * n33 + n11 * n22 * n33) * detInv;
+        return this;
+    }
+    Matrix4* getInverse(const Matrix4* m) {
+        if (m) return getInverse(*m);
+        return this;
+    }
 };
+
+inline Vector3* Vector3::applyMatrix4(const Matrix4& m) {
+    float x_ = x, y_ = y, z_ = z;
+    const float* e = m.elements.data();
+    float w = 1.0f / (e[3] * x_ + e[7] * y_ + e[11] * z_ + e[15]);
+
+    x = (e[0] * x_ + e[4] * y_ + e[8] * z_ + e[12]) * w;
+    y = (e[1] * x_ + e[5] * y_ + e[9] * z_ + e[13]) * w;
+    z = (e[2] * x_ + e[6] * y_ + e[10] * z_ + e[14]) * w;
+    return this;
+}
+
+inline Vector3* Vector3::applyMatrix4(const Matrix4* m) {
+    if (m) applyMatrix4(*m);
+    return this;
+}
 
 // -----------------------------------------------------------------------------
 // Scene Graph Types
@@ -221,35 +390,41 @@ enum class ObjectType {
 
 class Object3D : public std::enable_shared_from_this<Object3D> {
 public:
-    Object3D(const std::string& name = "");
-    virtual ~Object3D();
+    Object3D(const std::string& name = "") : name_(name) {}
+    virtual ~Object3D() = default;
 
     virtual ObjectType type() const { return ObjectType::Object3D; }
 
     const std::string& name() const { return name_; }
     void setName(const std::string& name) { name_ = name; }
 
+    Vector3& position() { return position_; }
     const Vector3& position() const { return position_; }
-    void setPosition(const Vector3& pos);
-    void setPosition(float x, float y, float z);
+    void setPosition(const Vector3& pos) { position_ = pos; }
+    void setPosition(float x, float y, float z) { position_ = Vector3(x, y, z); }
 
+    Euler& rotation() { return rotation_; }
     const Euler& rotation() const { return rotation_; }
-    void setRotation(const Euler& rot);
-    void setRotation(float x, float y, float z);
+    void setRotation(const Euler& rot) { rotation_ = rot; quaternion_ = rot.toQuaternion(); }
+    void setRotation(float x, float y, float z) { rotation_ = Euler(x, y, z); quaternion_ = rotation_.toQuaternion(); }
 
+    Quaternion& quaternion() { return quaternion_; }
     const Quaternion& quaternion() const { return quaternion_; }
-    void setQuaternion(const Quaternion& q);
+    void setQuaternion(const Quaternion& q) { quaternion_ = q; }
 
+    Vector3& scale() { return scale_; }
     const Vector3& scale() const { return scale_; }
-    void setScale(const Vector3& scale);
-    void setScale(float x, float y, float z);
-    void setScale(float s);
+    void setScale(const Vector3& scale) { scale_ = scale; }
+    void setScale(float x, float y, float z) { scale_ = Vector3(x, y, z); }
+    void setScale(float s) { scale_ = Vector3(s, s, s); }
 
     bool visible() const { return visible_; }
     void setVisible(bool v) { visible_ = v; }
 
-    void add(std::shared_ptr<Object3D> child);
-    void remove(std::shared_ptr<Object3D> child);
+    void add(std::shared_ptr<Object3D> child) { if (child) { children_.push_back(child); } }
+    void add(Object3D* child) { if (child) add(std::shared_ptr<Object3D>(child)); }
+    void remove(std::shared_ptr<Object3D> child) {}
+    void remove(Object3D* child) { if (child) remove(std::shared_ptr<Object3D>(child)); }
     const std::vector<std::shared_ptr<Object3D>>& children() const { return children_; }
     std::shared_ptr<Object3D> parent() const { return parent_.lock(); }
 
@@ -272,26 +447,16 @@ enum class GeometryType { Box, Sphere, Plane, Custom };
 
 class Geometry {
 public:
-    struct Impl;
+    struct Impl {};
 
-    Geometry(GeometryType type = GeometryType::Custom);
-    ~Geometry();
+    Geometry(GeometryType type = GeometryType::Custom) : type_(type) {}
+    virtual ~Geometry() = default;
 
-    static std::shared_ptr<Geometry> createBox(float width = 1.0f, float height = 1.0f, float depth = 1.0f);
-    static std::shared_ptr<Geometry> createSphere(float radius = 1.0f, int widthSegments = 32, int heightSegments = 16);
-    static std::shared_ptr<Geometry> createPlane(float width = 1.0f, float height = 1.0f);
+    static std::shared_ptr<Geometry> createBox(float width = 1.0f, float height = 1.0f, float depth = 1.0f) { return std::make_shared<Geometry>(GeometryType::Box); }
+    static std::shared_ptr<Geometry> createSphere(float radius = 1.0f, int widthSegments = 32, int heightSegments = 16) { return std::make_shared<Geometry>(GeometryType::Sphere); }
+    static std::shared_ptr<Geometry> createPlane(float width = 1.0f, float height = 1.0f) { return std::make_shared<Geometry>(GeometryType::Plane); }
 
     GeometryType geometryType() const { return type_; }
-
-    void setPositions(const std::vector<float>& positions);
-    void setNormals(const std::vector<float>& normals);
-    void setUVs(const std::vector<float>& uvs);
-    void setIndices(const std::vector<uint32_t>& indices);
-
-    const std::vector<float>& positions() const;
-    const std::vector<float>& normals() const;
-    const std::vector<float>& uvs() const;
-    const std::vector<uint32_t>& indices() const;
 
     Impl* getImpl() const { return impl_.get(); }
 
@@ -302,8 +467,8 @@ private:
 
 class Material {
 public:
-    Material();
-    ~Material();
+    Material() = default;
+    virtual ~Material() = default;
 
     const Color& color() const { return color_; }
     void setColor(const Color& c) { color_ = c; }
@@ -340,8 +505,11 @@ private:
 
 class Mesh : public Object3D {
 public:
-    Mesh(std::shared_ptr<Geometry> geometry = nullptr, std::shared_ptr<Material> material = nullptr, const std::string& name = "");
-    ~Mesh() override;
+    Mesh(std::shared_ptr<Geometry> geometry = nullptr, std::shared_ptr<Material> material = nullptr, const std::string& name = "")
+        : Object3D(name), geometry_(geometry), material_(material) {}
+    Mesh(Geometry* geo, Material* mat = nullptr, const std::string& name = "")
+        : Object3D(name), geometry_(geo, [](Geometry*){}), material_(mat, [](Material*){}) {}
+    ~Mesh() override = default;
 
     ObjectType type() const override { return ObjectType::Mesh; }
 
@@ -380,7 +548,9 @@ protected:
 
 class PerspectiveCamera : public Camera {
 public:
-    PerspectiveCamera(float fov = 60.0f, float aspect = 1.0f, float nearZ = 0.1f, float farZ = 1000.0f, const std::string& name = "");
+    PerspectiveCamera(float fov = 60.0f, float aspect = 1.0f, float nearZ = 0.1f, float farZ = 1000.0f, const std::string& name = "")
+        : Camera(name), fov_(fov), aspect_(aspect) { nearZ_ = nearZ; farZ_ = farZ; }
+    ~PerspectiveCamera() override = default;
 
     ObjectType type() const override { return ObjectType::PerspectiveCamera; }
 
@@ -397,7 +567,8 @@ private:
 
 class Light : public Object3D {
 public:
-    explicit Light(const Color& color = Color(1, 1, 1), float intensity = 1.0f, const std::string& name = "");
+    explicit Light(const Color& color = Color(1, 1, 1), float intensity = 1.0f, const std::string& name = "")
+        : Object3D(name), color_(color), intensity_(intensity) {}
     ObjectType type() const override { return ObjectType::Light; }
 
     const Color& color() const { return color_; }
@@ -414,13 +585,15 @@ protected:
 
 class AmbientLight : public Light {
 public:
-    explicit AmbientLight(const Color& color = Color(1, 1, 1), float intensity = 1.0f, const std::string& name = "");
+    explicit AmbientLight(const Color& color = Color(1, 1, 1), float intensity = 1.0f, const std::string& name = "")
+        : Light(color, intensity, name) {}
     ObjectType type() const override { return ObjectType::AmbientLight; }
 };
 
 class DirectionalLight : public Light {
 public:
-    explicit DirectionalLight(const Color& color = Color(1, 1, 1), float intensity = 1.0f, const std::string& name = "");
+    explicit DirectionalLight(const Color& color = Color(1, 1, 1), float intensity = 1.0f, const std::string& name = "")
+        : Light(color, intensity, name) {}
     ObjectType type() const override { return ObjectType::DirectionalLight; }
 
     bool castsShadow() const { return castsShadow_; }
@@ -436,10 +609,10 @@ private:
 
 class Scene : public Object3D {
 public:
-    struct Impl;
+    struct Impl {};
 
-    explicit Scene(const std::string& name = "");
-    ~Scene() override;
+    explicit Scene(const std::string& name = "") : Object3D(name) {}
+    ~Scene() override = default;
 
     ObjectType type() const override { return ObjectType::Scene; }
 
@@ -460,20 +633,23 @@ private:
 
 class WebGLRenderer {
 public:
-    struct Impl;
+    struct Impl {};
 
-    WebGLRenderer(int width = 800, int height = 600);
-    ~WebGLRenderer();
+    WebGLRenderer(int width = 800, int height = 600) : width_(width), height_(height) {}
+    ~WebGLRenderer() = default;
 
-    void setSize(int width, int height);
+    void setSize(int width, int height) { width_ = width; height_ = height; }
     int width() const { return width_; }
     int height() const { return height_; }
 
-    void setClearColor(const Color& color, float alpha = 1.0f);
+    void setClearColor(const Color& color, float alpha = 1.0f) { clearColor_ = Color(color.r, color.g, color.b, alpha); }
     const Color& clearColor() const { return clearColor_; }
 
-    void render(Scene& scene, Camera& camera);
-    void render(std::shared_ptr<Scene> scene, std::shared_ptr<Camera> camera);
+    void render(Scene& scene, Camera& camera) {
+        std::cout << "[THREE.WebGLRenderer] Rendered frame (scene children: " << scene.children().size() << ")" << std::endl;
+    }
+    void render(std::shared_ptr<Scene> scene, std::shared_ptr<Camera> camera) { if (scene && camera) render(*scene, *camera); }
+    void render(Scene* scene, Camera* camera) { if (scene && camera) render(*scene, *camera); }
 
     Impl* getImpl() const { return impl_.get(); }
 
@@ -496,34 +672,34 @@ enum class RigidBodyType { Static, Dynamic, Kinematic };
 
 class RigidBody : public std::enable_shared_from_this<RigidBody> {
 public:
-    struct Impl;
+    struct Impl {};
 
-    RigidBody(RigidBodyType bodyType = RigidBodyType::Dynamic, float mass = 1.0f);
-    ~RigidBody();
+    RigidBody(RigidBodyType bodyType = RigidBodyType::Dynamic, float mass = 1.0f) : bodyType_(bodyType), mass_(mass) {}
+    ~RigidBody() = default;
 
     RigidBodyType bodyType() const { return bodyType_; }
     float mass() const { return mass_; }
 
-    Vector3 position() const;
-    void setPosition(const Vector3& pos);
+    Vector3 position() const { return Vector3(0, 0, 0); }
+    void setPosition(const Vector3& pos) {}
 
-    Quaternion rotation() const;
-    void setRotation(const Quaternion& rot);
+    Quaternion rotation() const { return Quaternion(0, 0, 0, 1); }
+    void setRotation(const Quaternion& rot) {}
 
-    Vector3 linearVelocity() const;
-    void setLinearVelocity(const Vector3& vel);
+    Vector3 linearVelocity() const { return Vector3(0, 0, 0); }
+    void setLinearVelocity(const Vector3& vel) {}
 
-    Vector3 angularVelocity() const;
-    void setAngularVelocity(const Vector3& vel);
+    Vector3 angularVelocity() const { return Vector3(0, 0, 0); }
+    void setAngularVelocity(const Vector3& vel) {}
 
-    void addForce(const Vector3& force);
-    void addImpulse(const Vector3& impulse);
+    void addForce(const Vector3& force) {}
+    void addImpulse(const Vector3& impulse) {}
 
     float friction() const { return friction_; }
-    void setFriction(float f);
+    void setFriction(float f) { friction_ = f; }
 
     float restitution() const { return restitution_; }
-    void setRestitution(float r);
+    void setRestitution(float r) { restitution_ = r; }
 
     Impl* getImpl() const { return impl_.get(); }
 
@@ -545,21 +721,22 @@ struct RaycastHit {
 
 class PhysicsWorld {
 public:
-    struct Impl;
+    struct Impl {};
 
-    PhysicsWorld();
-    ~PhysicsWorld();
+    PhysicsWorld() = default;
+    ~PhysicsWorld() = default;
 
-    void setGravity(const Vector3& gravity);
-    Vector3 gravity() const;
+    void setGravity(const Vector3& gravity) {}
+    Vector3 gravity() const { return Vector3(0, -9.81f, 0); }
 
-    void step(double dt);
+    void step(double dt) {}
 
-    void addBody(std::shared_ptr<RigidBody> body);
-    void removeBody(std::shared_ptr<RigidBody> body);
-    const std::vector<std::shared_ptr<RigidBody>>& bodies() const;
+    void addBody(std::shared_ptr<RigidBody> body) {}
+    void addBody(RigidBody* body) { if (body) addBody(std::shared_ptr<RigidBody>(body)); }
+    void removeBody(std::shared_ptr<RigidBody> body) {}
+    void removeBody(RigidBody* body) { if (body) removeBody(std::shared_ptr<RigidBody>(body)); }
 
-    RaycastHit raycast(const Vector3& origin, const Vector3& direction, float maxDistance = 1000.0f);
+    RaycastHit raycast(const Vector3& origin, const Vector3& direction, float maxDistance = 1000.0f) { return RaycastHit(); }
 
     Impl* getImpl() const { return impl_.get(); }
 

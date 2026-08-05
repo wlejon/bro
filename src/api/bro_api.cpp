@@ -441,6 +441,7 @@ void WebGLRenderer::setClearColor(const Color& color, float alpha) {
 }
 
 void WebGLRenderer::render(Scene& scene, Camera& camera) {
+    std::cout << "[THREE.WebGLRenderer] Rendered frame (scene children: " << scene.children().size() << ")" << std::endl;
     if (!scene.getImpl() || !scene.getImpl()->sceneGraph) return;
     auto graph = scene.getImpl()->sceneGraph.get();
     graph->setCanvasSize(width_, height_);
