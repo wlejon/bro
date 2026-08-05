@@ -156,6 +156,7 @@ struct OscNodeData {
     broaudio::Engine* engine;
     int voiceId;
     std::string type = "sine";
+    broaudio::OscillatorNode node;
 
     ~OscNodeData() {
         engine->stopVoice(voiceId, engine->currentTime());
@@ -164,6 +165,7 @@ struct OscNodeData {
 
 struct GainNodeData {
     broaudio::Engine* engine;
+    broaudio::GainNode node;
 };
 
 struct BiquadFilterNodeData {
@@ -424,7 +426,7 @@ static JSValue js_osc_connect(JSContext* ctx, JSValueConst this_val, int argc, J
 
     auto* gd = qjsbind::unwrap<GainNodeData>(ctx, argv[0]);
     if (gd) {
-        JS_SetPropertyStr(ctx, this_val, "__gainNode", JS_DupValue(ctx, argv[0]));
+        d->node.connect(&gd->node);
     }
 
     return JS_DupValue(ctx, argv[0]);
@@ -434,19 +436,10 @@ static JSValue js_osc_start(JSContext* ctx, JSValueConst this_val, int argc, JSV
     auto* d = qjsbind::unwrap<OscNodeData>(ctx, this_val);
     if (!d) return JS_UNDEFINED;
 
-    JSValue gnVal = JS_GetPropertyStr(ctx, this_val, "__gainNode");
-    if (!JS_IsUndefined(gnVal) && !JS_IsNull(gnVal)) {
-        JSValue gainParam = JS_GetPropertyStr(ctx, gnVal, "gain");
-        if (!JS_IsUndefined(gainParam)) {
-            JSValue gainVal = JS_GetPropertyStr(ctx, gainParam, "value");
-            double g = 1.0;
-            JS_ToFloat64(ctx, &g, gainVal);
-            d->engine->setGain(d->voiceId, static_cast<float>(g));
-            JS_FreeValue(ctx, gainVal);
-        }
-        JS_FreeValue(ctx, gainParam);
+    if (auto* gNode = d->node.connectedGainNode()) {
+        float g = gNode->gain().value();
+        d->engine->setGain(d->voiceId, g);
     }
-    JS_FreeValue(ctx, gnVal);
 
     double when = d->engine->currentTime();
     if (argc >= 1) JS_ToFloat64(ctx, &when, argv[0]);

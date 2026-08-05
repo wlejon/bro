@@ -33,8 +33,6 @@
 #include "util/asset_mounts.h"
 #include "util/log.h"
 
-#include "impostor_layer.js.h"  // generates `static const char js_impostor_layer[]`
-
 #include <qjsbind/qjsbind.h>
 #include <cstring>
 

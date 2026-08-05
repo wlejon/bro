@@ -95,21 +95,28 @@ struct NodeWrapper {
     }
 };
 
-inline std::unordered_map<const scene::SceneNode*, void*>& nodeJsWrapperMap() {
-    static std::unordered_map<const scene::SceneNode*, void*> map;
+using NodeWrapperKey = std::pair<const scene::SceneGraph::LivenessToken*, uint32_t>;
+struct NodeWrapperKeyHash {
+    size_t operator()(const NodeWrapperKey& k) const {
+        return std::hash<const void*>()(k.first) ^ (std::hash<uint32_t>()(k.second) << 1);
+    }
+};
+
+inline std::unordered_map<NodeWrapperKey, void*, NodeWrapperKeyHash>& nodeJsWrapperMap() {
+    static std::unordered_map<NodeWrapperKey, void*, NodeWrapperKeyHash> map;
     return map;
 }
 
-/// Finalizer for SceneNode wrappers. Clears the node's borrowed back-pointer
-/// before deleting the wrapper, so the cache in wrapNode below can never hand
-/// out an object that is on its way to being collected.
+/// Finalizer for SceneNode wrappers. Clears the node's entry in nodeJsWrapperMap
+/// using the wrapper's {token, id} pair so stale entries never persist.
 inline void nodeWrapperFinalizer(JSRuntime* /*rt*/, JSValue val) {
     auto* w = static_cast<NodeWrapper*>(
         JS_GetOpaque(val, qjsbind::class_id<NodeWrapper>()));
     if (!w) return;
-    if (auto* n = w->node()) {
+    if (auto tok = w->token.lock()) {
+        NodeWrapperKey key{tok.get(), w->id};
         auto& map = nodeJsWrapperMap();
-        auto it = map.find(n);
+        auto it = map.find(key);
         if (it != map.end() && it->second == JS_VALUE_GET_PTR(val)) {
             map.erase(it);
         }
@@ -123,13 +130,16 @@ inline void nodeWrapperFinalizer(JSRuntime* /*rt*/, JSValue val) {
 /// could not be used as Set/Map keys or found with indexOf.
 inline JSValue wrapNode(JSContext* ctx, scene::SceneNode* node, scene::SceneGraph* graph) {
     if (!node || !graph) return JS_NULL;
+    auto tok = graph->livenessToken();
+    if (!tok) return JS_NULL;
+    NodeWrapperKey key{tok.get(), node->id()};
     auto& map = nodeJsWrapperMap();
-    auto it = map.find(node);
+    auto it = map.find(key);
     if (it != map.end())
         return JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, it->second));
     JSValue obj = qjsbind::wrap<NodeWrapper>(
-        ctx, new NodeWrapper{graph->livenessToken(), node->id()});
-    if (JS_IsObject(obj)) map[node] = JS_VALUE_GET_PTR(obj);
+        ctx, new NodeWrapper{tok, node->id()});
+    if (JS_IsObject(obj)) map[key] = JS_VALUE_GET_PTR(obj);
     return obj;
 }
 
