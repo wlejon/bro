@@ -78,6 +78,7 @@ embed_shader(clipmap.frag.glsl     kClipmapFragSrc)
 add_library(bro_scene STATIC
     scene_node.cpp
     scene_graph.cpp
+    impostor_layer.cpp
     depth_policy.cpp
     scene_renderer.cpp
     scene_renderer_mesh.cpp

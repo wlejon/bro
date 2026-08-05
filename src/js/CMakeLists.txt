@@ -26,7 +26,6 @@ embed_js(window_polyfill.js    js_window_polyfill)
 embed_js(dataset_proxy.js      js_dataset_proxy)
 embed_js(image_gpu.js          js_image_gpu)
 embed_js(net_sync.js           js_net_sync)
-embed_js(impostor_layer.js     js_impostor_layer)
 
 ## ── Library ──────────────────────────────────────────────────────────────────
 

@@ -1,12 +1,7 @@
 #include "engine/navmesh_subsystem.h"
-
+#include <brogameagent/nav_mesh.h>
 #include <mutex>
 #include <vector>
-
-#if __has_include(<brogameagent/nav_mesh.h>)
-#include <brogameagent/nav_mesh.h>
-#define BROGAMEAGENT_HAS_NAVMESH 1
-#endif
 
 namespace bro::engine {
 
@@ -19,10 +14,6 @@ void registerNavMeshForPump(const std::shared_ptr<brogameagent::NavMesh>& m) {
 }
 
 void pumpNavMeshObstacles(float dt) {
-#ifdef BROGAMEAGENT_HAS_NAVMESH
-    // Snapshot the live meshes under the lock, run the (potentially tile-
-    // rebuilding) updates outside it. Expired registry entries are pruned by
-    // swap-with-back.
     std::vector<std::shared_ptr<brogameagent::NavMesh>> live;
     {
         std::lock_guard<std::mutex> lock(g_navMeshPumpMutex);
@@ -37,11 +28,10 @@ void pumpNavMeshObstacles(float dt) {
         }
     }
     for (auto& m : live) {
-        if (m->obstaclesPending()) m->update(dt);
+        while (m->obstaclesPending()) {
+            m->update(dt);
+        }
     }
-#else
-    (void)dt;
-#endif
 }
 
 } // namespace bro::engine

@@ -1,4 +1,5 @@
 #include "js/ai_bindings.h"
+#include "engine/navmesh_subsystem.h"
 #if BRO_WITH_GAMEAI  // modular-build feature gate
 #include "util/log.h"
 
@@ -517,12 +518,8 @@ static bool readU32Any(JSContext* ctx, JSValueConst val, std::vector<uint32_t>& 
 // weak_ptr so the pump never extends a mesh's lifetime; expired entries are
 // pruned in place. Mutex is fine here: cold control plane, main thread only
 // contends with a worker creating a mesh.
-static std::mutex g_navMeshPumpMutex;
-static std::vector<std::weak_ptr<brogameagent::NavMesh>> g_navMeshPump;
-
 static void registerNavMeshForPump(const std::shared_ptr<brogameagent::NavMesh>& m) {
-    std::lock_guard<std::mutex> lock(g_navMeshPumpMutex);
-    g_navMeshPump.push_back(m);
+    bro::engine::registerNavMeshForPump(m);
 }
 
 // Parse `physicsLayers` (array of layer names/indices) into a bitmask.
@@ -813,10 +810,11 @@ static JSValue js_loadNavMesh(JSContext* ctx, JSValueConst, int argc, JSValueCon
         data = raw + byteOff;
         size = byteLen;
     }
-    auto mesh = std::make_unique<brogameagent::NavMesh>();
+    auto mesh = std::make_shared<brogameagent::NavMesh>();
     if (!mesh->loadFrom(data, size)) {
         return JS_ThrowInternalError(ctx, "loadNavMesh: %s", mesh->lastError().c_str());
     }
+    if (mesh->supportsObstacles()) registerNavMeshForPump(mesh);
     return qjsbind::wrap<NavMeshData>(ctx, new NavMeshData{std::move(mesh)});
 }
 
@@ -2331,6 +2329,7 @@ void AIBindings::install(JSContext* ctx) {
                     if (id == 0)
                         return JS_ThrowInternalError(ctx, "addObstacle: %s",
                                                      d->mesh->lastError().c_str());
+                    registerNavMeshForPump(d->mesh);
                     return JS_NewUint32(ctx, id);
                 }, 1)
             // removeObstacle(handle) → bool. False for unknown/stale handles
@@ -4008,31 +4007,7 @@ std::shared_ptr<brogameagent::NavMesh> navMeshSharedFromJS(JSContext* ctx, JSVal
 #endif
 }
 
-void pumpNavMeshObstacles(float dt) {
-#ifdef BROGAMEAGENT_HAS_NAVMESH
-    // Snapshot the live meshes under the lock, run the (potentially tile-
-    // rebuilding) updates outside it. Expired registry entries are pruned by
-    // swap-with-back.
-    std::vector<std::shared_ptr<brogameagent::NavMesh>> live;
-    {
-        std::lock_guard<std::mutex> lock(g_navMeshPumpMutex);
-        for (size_t i = 0; i < g_navMeshPump.size();) {
-            if (auto sp = g_navMeshPump[i].lock()) {
-                live.push_back(std::move(sp));
-                i++;
-            } else {
-                g_navMeshPump[i] = std::move(g_navMeshPump.back());
-                g_navMeshPump.pop_back();
-            }
-        }
-    }
-    for (auto& m : live) {
-        if (m->obstaclesPending()) m->update(dt);
-    }
-#else
-    (void)dt;
-#endif
-}
+
 
 JSValue createNavGridJS(JSContext* ctx, float minX, float minZ,
                         float maxX, float maxZ, float cellSize) {

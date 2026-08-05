@@ -14,6 +14,7 @@
 #include <broaudio/sequencer/sequence.h>
 #include <broaudio/io/audio_file.h>
 #include <broaudio/dsp/resampler.h>
+#include <broaudio/node/audio_node.h>
 
 #include <algorithm>
 #include <string>

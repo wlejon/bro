@@ -540,7 +540,7 @@ void Engine::run() {
             // sync, so a batch that finishes this frame repaths them this
             // frame. (Detour ignores dt; rebuilds progress even while
             // bro.time is paused — pending edits shouldn't wedge on pause.)
-            pumpNavMeshObstacles(frameDt);
+            bro::engine::pumpNavMeshObstacles(frameDt);
 #if BRO_WITH_3D
             for (auto& sg : sceneGraphs_) {
                 sg.graph->syncAgents(frameDt);

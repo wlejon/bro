@@ -519,7 +519,7 @@ void Engine::advanceTime(double ms) {
         // Advance dynamic navmesh-obstacle tile rebuilds before agents sync
         // (same ordering as the windowed frame: a batch that finishes this
         // step repaths agents this step).
-        pumpNavMeshObstacles(static_cast<float>(scaledStep * 0.001));
+        bro::engine::pumpNavMeshObstacles(static_cast<float>(scaledStep * 0.001));
 
         // Step AI bindings once per advanceTime step (deterministic, uses the
         // scaled step as dt — agents obey bro.time like everything gameplay).

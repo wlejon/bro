@@ -21,6 +21,7 @@
 #include "scene/tween.h"
 #include "scene/instanced_mesh_node.h"
 #include "scene/gaussian_splat_node.h"
+#include "scene/impostor_layer.h"
 #include "scene/html_node.h"
 #include "scene/light_node.h"
 #include "scene/particle_node.h"
@@ -1821,20 +1822,102 @@ void SceneBindings::install(JSContext* ctx) {
         .method_raw("attachAIWorld", graphAttachAIWorld, 2)
         .method_raw("detachAIWorld", graphDetachAIWorld, 0);
 
-    // --- bro.impostor — camera-facing octahedral impostor billboards as ONE
-    //     merged draw (pure JS over scene.createMesh + a billboard shader).
-    //     Avoids the per-instance GPU cost of the instanced path for high
-    //     counts of tiny billboard quads. See src/js/js/impostor_layer.js. ---
-    JSValue r = JS_Eval(ctx, js_impostor_layer, std::strlen(js_impostor_layer),
-                        "<bro.impostor>", JS_EVAL_TYPE_GLOBAL);
-    if (JS_IsException(r)) {
-        JSValue exc = JS_GetException(ctx);
-        const char* what = JS_ToCString(ctx, exc);
-        LOG_ERROR("[scene] bro.impostor install failed: %s", what ? what : "(unknown)");
-        if (what) JS_FreeCString(ctx, what);
-        JS_FreeValue(ctx, exc);
+    // --- bro.impostor — native C++ camera-facing octahedral impostor billboards ---
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue broVal = JS_GetPropertyStr(ctx, global, "bro");
+    if (!JS_IsUndefined(broVal) && !JS_IsNull(broVal)) {
+        JSValue impostorObj = JS_NewObject(ctx);
+        auto js_impostor_createLayer = [](JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) -> JSValue {
+            if (argc < 3) return JS_UNDEFINED;
+            auto* gw = qjsbind::unwrap<GraphWrapper>(ctx, argv[0]);
+            if (!gw || !gw->graph()) return JS_UNDEFINED;
+
+            scene::ImpostorAtlasInfo atlas;
+            JSValue atlasVal = argv[1];
+            JSValue wVal = JS_GetPropertyStr(ctx, atlasVal, "width");
+            JSValue hVal = JS_GetPropertyStr(ctx, atlasVal, "height");
+            JSValue cVal = JS_GetPropertyStr(ctx, atlasVal, "cols");
+            JSValue rVal = JS_GetPropertyStr(ctx, atlasVal, "rows");
+            if (!JS_IsUndefined(wVal)) JS_ToInt32(ctx, &atlas.width, wVal);
+            if (!JS_IsUndefined(hVal)) JS_ToInt32(ctx, &atlas.height, hVal);
+            if (!JS_IsUndefined(cVal)) JS_ToInt32(ctx, &atlas.cols, cVal);
+            if (!JS_IsUndefined(rVal)) JS_ToInt32(ctx, &atlas.rows, rVal);
+            JS_FreeValue(ctx, wVal); JS_FreeValue(ctx, hVal);
+            JS_FreeValue(ctx, cVal); JS_FreeValue(ctx, rVal);
+
+            JSValue bndVal = JS_GetPropertyStr(ctx, atlasVal, "bounds");
+            if (!JS_IsUndefined(bndVal) && !JS_IsNull(bndVal)) {
+                JSValue radVal = JS_GetPropertyStr(ctx, bndVal, "radius");
+                if (!JS_IsUndefined(radVal)) { double r = 1.0; JS_ToFloat64(ctx, &r, radVal); atlas.boundsRadius = static_cast<float>(r); }
+                JS_FreeValue(ctx, radVal);
+                JSValue ctrVal = JS_GetPropertyStr(ctx, bndVal, "center");
+                if (JS_IsArray(ctrVal)) {
+                    for (int i = 0; i < 3; i++) {
+                        JSValue elem = JS_GetPropertyUint32(ctx, ctrVal, i);
+                        double v = 0.0; JS_ToFloat64(ctx, &v, elem);
+                        if (i == 0) atlas.boundsCenter.x = static_cast<float>(v);
+                        else if (i == 1) atlas.boundsCenter.y = static_cast<float>(v);
+                        else if (i == 2) atlas.boundsCenter.z = static_cast<float>(v);
+                        JS_FreeValue(ctx, elem);
+                    }
+                }
+                JS_FreeValue(ctx, ctrVal);
+            }
+            JS_FreeValue(ctx, bndVal);
+
+            auto extractBuffer = [ctx](JSValue val, size_t& outLen) -> uint8_t* {
+                size_t off = 0, len = 0;
+                JSValue ab = JS_GetTypedArrayBuffer(ctx, val, &off, &len, nullptr);
+                if (JS_IsException(ab)) return nullptr;
+                size_t abLen = 0;
+                uint8_t* base = JS_GetArrayBuffer(ctx, &abLen, ab);
+                JS_FreeValue(ctx, ab);
+                if (!base) return nullptr;
+                outLen = len;
+                return base + off;
+            };
+
+            JSValue rgbaVal = JS_GetPropertyStr(ctx, atlasVal, "atlasRGBA");
+            size_t texLen = 0;
+            uint8_t* texRaw = extractBuffer(rgbaVal, texLen);
+            if (texRaw && texLen > 0) {
+                atlas.textureData.assign(texRaw, texRaw + texLen);
+            }
+            JS_FreeValue(ctx, rgbaVal);
+
+            size_t transformLen = 0;
+            uint8_t* transformRaw = extractBuffer(argv[2], transformLen);
+            if (!transformRaw || transformLen < sizeof(float) * 9) return JS_UNDEFINED;
+            const float* transformData = reinterpret_cast<const float*>(transformRaw);
+            size_t transformFloatCount = transformLen / sizeof(float);
+
+            scene::ImpostorOptions opts;
+            if (argc >= 4 && JS_IsObject(argv[3])) {
+                JSValue mVal = JS_GetPropertyStr(ctx, argv[3], "margin");
+                if (!JS_IsUndefined(mVal)) { double v; JS_ToFloat64(ctx, &v, mVal); opts.margin = static_cast<float>(v); }
+                JS_FreeValue(ctx, mVal);
+                JSValue cnVal = JS_GetPropertyStr(ctx, argv[3], "cullNear");
+                if (!JS_IsUndefined(cnVal)) { double v; JS_ToFloat64(ctx, &v, cnVal); opts.cullNear = static_cast<float>(v); }
+                JS_FreeValue(ctx, cnVal);
+                JSValue cfVal = JS_GetPropertyStr(ctx, argv[3], "cullFar");
+                if (!JS_IsUndefined(cfVal)) { double v; JS_ToFloat64(ctx, &v, cfVal); opts.cullFar = static_cast<float>(v); }
+                JS_FreeValue(ctx, cfVal);
+            }
+
+            auto res = scene::createImpostorLayer(gw->graph(), atlas, transformData, transformFloatCount, opts);
+            if (!res.node) return JS_UNDEFINED;
+
+            JSValue resObj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, resObj, "node", wrapNode(ctx, res.node, gw->graph()));
+            JS_SetPropertyStr(ctx, resObj, "quadCount", JS_NewInt32(ctx, res.quadCount));
+            return resObj;
+        };
+
+        JS_SetPropertyStr(ctx, impostorObj, "createLayer", JS_NewCFunction(ctx, js_impostor_createLayer, "createLayer", 3));
+        JS_SetPropertyStr(ctx, broVal, "impostor", impostorObj);
     }
-    JS_FreeValue(ctx, r);
+    JS_FreeValue(ctx, broVal);
+    JS_FreeValue(ctx, global);
 }
 
 JSValue SceneBindings::wrapSceneGraph(JSContext* ctx, scene::SceneGraph* graph) {
