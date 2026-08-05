@@ -26,6 +26,8 @@
 #include "engine/sub_document.h"
 
 #include "dom/document.h"
+#include "dom/event.h"
+#include "js/event_dispatch.h"
 #include "js/runtime.h"
 #include "js/timers.h"
 #include "js/message_serializer.h"
@@ -503,30 +505,22 @@ void Engine::syncWindowHostBox(WindowHost& h) {
         h.document->setMediaViewport(static_cast<float>(w), static_cast<float>(ht));
         h.document->markDirty();
     }
-    if (!h.jsCtx) return;
     // Per-realm innerWidth/innerHeight + a 'resize' event — the same bridge the
     // app realm gets in handleResize().
-    JSValue global = JS_GetGlobalObject(h.jsCtx);
-    JS_SetPropertyStr(h.jsCtx, global, "innerWidth", JS_NewInt32(h.jsCtx, w));
-    JS_SetPropertyStr(h.jsCtx, global, "innerHeight", JS_NewInt32(h.jsCtx, ht));
-    JS_SetPropertyStr(h.jsCtx, global, "outerWidth", JS_NewInt32(h.jsCtx, w));
-    JS_SetPropertyStr(h.jsCtx, global, "outerHeight", JS_NewInt32(h.jsCtx, ht));
-    JSValue dispatch = JS_GetPropertyStr(h.jsCtx, global,
-                                         "__bro_dispatch_window_event");
-    if (JS_IsFunction(h.jsCtx, dispatch)) {
-        JSValue evtType = JS_NewString(h.jsCtx, "resize");
-        JSValue evt = JS_NewObject(h.jsCtx);
-        JS_SetPropertyStr(h.jsCtx, evt, "type", JS_NewString(h.jsCtx, "resize"));
-        JS_SetPropertyStr(h.jsCtx, evt, "target", JS_DupValue(h.jsCtx, global));
-        JSValue dArgs[2] = {evtType, evt};
-        JSValue ret = JS_Call(h.jsCtx, dispatch, global, 2, dArgs);
-        JS_FreeValue(h.jsCtx, ret);
-        JS_FreeValue(h.jsCtx, evtType);
-        JS_FreeValue(h.jsCtx, evt);
+    if (h.jsCtx) {
+        JSValue global = JS_GetGlobalObject(h.jsCtx);
+        JS_SetPropertyStr(h.jsCtx, global, "innerWidth", JS_NewInt32(h.jsCtx, w));
+        JS_SetPropertyStr(h.jsCtx, global, "innerHeight", JS_NewInt32(h.jsCtx, ht));
+        JS_SetPropertyStr(h.jsCtx, global, "outerWidth", JS_NewInt32(h.jsCtx, w));
+        JS_SetPropertyStr(h.jsCtx, global, "outerHeight", JS_NewInt32(h.jsCtx, ht));
+        JS_FreeValue(h.jsCtx, global);
     }
-    JS_FreeValue(h.jsCtx, dispatch);
-    JS_FreeValue(h.jsCtx, global);
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
+    // A real dom::Event, like the app realm and <iframe> realms get. Fires
+    // this realm's C++ window listeners even without a JSContext.
+    dom::Event resizeEvt("resize", /*bubbles=*/false, /*cancelable=*/false);
+    resizeEvt.setIsTrusted(true);
+    js::dispatchWindowEvent(h.jsCtx, h.document.get(), resizeEvt);
+    if (h.jsCtx && jsRuntime_) jsRuntime_->executePendingJobs();
 }
 
 // Advance every host document's timers + rAF, and report whether any needs

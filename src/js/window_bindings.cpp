@@ -1,4 +1,5 @@
 #include "js/window_bindings.h"
+#include "js/event_dispatch.h"
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
 #include "util/log.h"
@@ -351,6 +352,12 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
     JS_SetPropertyStr(ctx, history, "state", JS_NULL);
     JS_SetPropertyStr(ctx, history, "length", JS_NewInt32(ctx, 1));
     JS_SetPropertyStr(ctx, global, "history", history);
+
+    // __bro_dispatch_window_event + __bro_listener_seq. Installed BEFORE the
+    // polyfill so the polyfill sees the real dispatcher and skips its
+    // standalone fallback; the polyfill supplies the JS listener storage this
+    // dispatcher reads.
+    installWindowEventDispatch(ctx);
 
     // Window events + SPA history/location polyfill
     JSValue r = JS_Eval(ctx, js_window_polyfill, strlen(js_window_polyfill),

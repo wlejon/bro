@@ -2637,6 +2637,11 @@ static JSValue js_element_addEventListener(JSContext* ctx,
     JS_SetPropertyStr(ctx, entry, "capture", JS_NewBool(ctx, capture));
     JS_SetPropertyStr(ctx, entry, "once", JS_NewBool(ctx, once));
     JS_SetPropertyStr(ctx, entry, "passive", JS_NewBool(ctx, passive));
+    // Shared C++/JS registration counter (dom/event_target.h). Dispatch merges
+    // this element's JS listeners with its C++ ones on it, so the two fire in
+    // the order they were added rather than one kind always first.
+    JS_SetPropertyStr(ctx, entry, "seq",
+        JS_NewInt64(ctx, static_cast<int64_t>(bro::dom::nextListenerSeq())));
 
     int64_t len = 0;
     JSValue lenVal = JS_GetPropertyStr(ctx, arr, "length");

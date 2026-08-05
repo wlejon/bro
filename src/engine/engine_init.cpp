@@ -1143,6 +1143,22 @@ size_t Engine::sceneContextCount() const {
 #endif
 }
 
+// Window event listeners for the app realm. The store is the app Document's —
+// one Document is one realm is one window — so these fire from the same
+// js::dispatchWindowEvent that runs the realm's JS window listeners, merged
+// with them in registration order. See engine.h.
+dom::ListenerHandle Engine::addWindowEventListener(const std::string& type,
+                                                   dom::EventCallback cb,
+                                                   dom::ListenerOptions opts) {
+    if (!document_) return dom::ListenerHandle{};
+    return document_->windowListeners().add(type, std::move(cb), opts);
+}
+
+bool Engine::removeWindowEventListener(dom::ListenerHandle handle) {
+    if (!document_) return false;
+    return document_->windowListeners().remove(handle);
+}
+
 // The typed reader for the per-realm engine pointer the DOM bindings already
 // register. See engine.h for why this exists (host binding installers are
 // handed a JSContext* and nothing else).

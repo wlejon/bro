@@ -311,6 +311,22 @@ public:
     void setBasePath(const std::string& path) { basePath_ = path; }
     const std::string& basePath() const { return basePath_; }
 
+    // ---- window event listeners (C++ side) --------------------------------
+    // One Document is one realm, and a realm has one window, so this is the
+    // C++ half of `window.addEventListener` for this document's realm:
+    //
+    //     auto h = doc->windowListeners().add("resize", [](dom::Event&) {...});
+    //     doc->windowListeners().remove(h);
+    //
+    // These fire from js::dispatchWindowEvent, merged with the realm's JS
+    // window listeners in registration order. `window` is not an Element, so
+    // the Event's target() is null for events fired at the window directly;
+    // events that reach the window by bubbling out of the tree keep theirs.
+    //
+    // bro::engine::Engine::addWindowEventListener wraps this for the app realm.
+    NativeListenerList& windowListeners() { return windowListeners_; }
+    const NativeListenerList& windowListeners() const { return windowListeners_; }
+
     // Viewport for @media evaluation. Call before parse() so stylesheets are
     // filtered against the real viewport; calling again later (window resize)
     // re-evaluates every retained sheet against the new size.
@@ -506,6 +522,7 @@ private:
 
     // @media evaluation context + retained parsed sheets so a viewport change
     // can re-evaluate every sheet (cascade rebuild) without re-reading sources.
+    NativeListenerList windowListeners_;
     htmlayout::css::MediaContext mediaContext_;
     bool hasMediaContext_ = false;
     struct RetainedSheet {

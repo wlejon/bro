@@ -143,6 +143,153 @@ is not registered with the engine, so the frame loop never renders it and the
 compositor never sees it; the symptom is a blank canvas that looks like a
 renderer bug. `createSceneContext` is what does the registration.
 
+## Listening for events from C++
+
+The other half of a page `ui/app.js` would have built is the listeners on it.
+`window.addEventListener` and `element.addEventListener` both have a C++ form
+that reaches the *same* dispatch the JS ones reach — same event path, same
+capture/bubble phases, same shadow retargeting, same cancellation.
+
+```cpp
+#include "dom/event_target.h"   // EventCallback, ListenerOptions, ListenerHandle
+#include "dom/event.h"          // Event, MouseEvent, KeyboardEvent, …
+
+// window
+dom::ListenerHandle Engine::addWindowEventListener(const std::string& type,
+                                                   dom::EventCallback cb,
+                                                   dom::ListenerOptions opts = {});
+bool Engine::removeWindowEventListener(dom::ListenerHandle handle);
+
+// element
+dom::ListenerHandle dom::Element::addEventListener(const std::string& type,
+                                                   dom::EventCallback cb,
+                                                   dom::ListenerOptions opts = {});
+bool dom::Element::removeEventListener(dom::ListenerHandle handle);
+```
+
+where
+
+```cpp
+using dom::EventCallback = std::function<void(dom::Event&)>;
+struct dom::ListenerOptions { bool capture = false; bool once = false; };
+struct dom::ListenerHandle  { uint64_t id = 0; explicit operator bool() const; };
+```
+
+The compiled-away app's
+
+```js
+window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+});
+canvas.addEventListener('click', onClick);
+```
+
+becomes
+
+```cpp
+resizeListener_ = engine->addWindowEventListener("resize", [this](dom::Event&) {
+    camera_->setAspect(float(engine_->contentWidth()) / engine_->contentHeight());
+});
+clickListener_ = canvas->addEventListener("click", [this](dom::Event& e) {
+    auto& me = static_cast<dom::MouseEvent&>(e);
+    onClick(me.clientX(), me.clientY());
+});
+```
+
+**Keep the handle.** It is the only way to detach, and a listener attached
+inside a function that runs more than once has to detach first or it stacks up.
+`removeEventListener` returns whether the handle named a live listener, so a
+double-remove is detectable rather than silent. A default-constructed handle is
+falsy and safe to pass.
+
+### Ordering against JS listeners
+
+**Registration order, across both kinds.** Every registration on either side —
+`el.addEventListener(...)` from script, `el->addEventListener(...)` from C++,
+`window.addEventListener` either way — takes a number from one shared counter,
+and dispatch merges the two lists on it. A C++ listener registered between two
+JS ones runs between them:
+
+```js
+el.addEventListener('click', first);   // 1
+```
+```cpp
+el->addEventListener("click", middle); // 2
+```
+```js
+el.addEventListener('click', last);    // 3   →  first, middle, last
+```
+
+The DOM's own ordering rules still apply on top of that, unchanged: capture
+listeners on the way down, bubble listeners on the way up, both at the target,
+and inline `on*` attributes / `el.onclick` properties last on their element.
+
+### The event object
+
+The callback gets a real `dom::Event&`, the same object the JS listeners' event
+mirrors, so:
+
+- `type()`, `timeStamp()`, `bubbles()`, `cancelable()`, `isTrusted()`,
+  `eventPhase()`, `defaultPrevented()` all read what you would expect.
+- `target()` is retargeted per scope exactly as `event.target` is in JS: a
+  listener outside a shadow tree sees the host, not the node that was hit.
+  `currentTarget()` is the element the listener is on.
+- `preventDefault()`, `stopPropagation()` and `stopImmediatePropagation()`
+  affect the rest of dispatch identically to the JS calls — JS listeners
+  later in the same dispatch see `event.defaultPrevented === true`, the walk
+  up the tree stops, and the engine's default actions (form submission,
+  `<details>` toggling, label activation) are suppressed.
+- `dynamic_cast` to `MouseEvent` / `KeyboardEvent` / `WheelEvent` / `DragEvent`
+  / … for the typed payload, the same way `js/event_dispatch.cpp` does. Cast
+  defensively: `click` is a `MouseEvent`, but a `CustomEvent` dispatched from
+  script arrives as a plain `Event`.
+
+Window events are the one place with a caveat. `window` is not an `Element`, so
+for an event fired *at* the window — `resize`, `gamepadconnected`, `message` —
+`target()` and `currentTarget()` are null; an event that reaches the window by
+*bubbling out of the tree* keeps the target it had. And `resize` carries no
+dimensions on either side of the boundary: read the new size from the engine
+(`contentWidth()` / `contentHeight()` / `viewportWidth()`), which is what
+`window.innerWidth` is reporting to the JS listener beside you.
+
+Payload a *script* hung on an event object does not cross into C++.
+`window.dispatchEvent(new CustomEvent('x', { detail }))` reaches a C++ window
+listener with the right `type` and cancellation wired up in both directions,
+but `detail` is a JS value with no C++ representation and is not on the
+`dom::Event`. If the host needs structured data, dispatch the event from the
+host (`js::dispatchWindowEvent`) with an `Event` subclass of your own, or pass
+it through a binding.
+
+### Which realm
+
+`Engine::addWindowEventListener` is the **app realm**. `<iframe>`
+sub-documents, `bro.window.open()` secondary windows and system panels are
+separate realms with separate window listeners; reach those through their own
+document:
+
+```cpp
+doc->windowListeners().add("resize", cb, opts);   // dom::Document
+doc->windowListeners().remove(handle);
+```
+
+Element listeners have no such question — they live on the element.
+
+Listeners are owned by the DOM object they are on and die with it. A
+`location.reload()` builds a new `Document`, so window listeners registered on
+the old one are gone; re-register from `installHostBindings`, which runs again
+on the new realm.
+
+### Without a JS realm
+
+Element and window dispatch both run their C++ listeners with no `JSContext` at
+all (`js::dispatchDomEvent(nullptr, …)`, `js::dispatchWindowEvent(nullptr, doc,
+…)`): same path building, same phases, same retargeting. Only the JS-defined
+parts are skipped, because they cannot exist — registered JS listeners, inline
+`on*` attributes, and `el.onclick` properties. In practice every realm bro
+builds today has a context; this matters only if you drive a `dom::Document`
+yourself.
+
 ## Playing formats bro doesn't ship
 
 `video/media_backend.h` is the seam. Register a demuxer and its decoders and

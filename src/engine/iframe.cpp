@@ -143,29 +143,22 @@ void Engine::syncIframeBox(IframeDoc& d) {
         layout::ElementRefAdapter::setHoveredElement(hoveredElement_.get());
     }
 
-    if (!d.jsCtx) return;
     // Per-realm innerWidth/innerHeight + a 'resize' event — the same bridge the
     // app realm gets in handleResize() and a secondary window gets in
     // syncWindowHostBox().
-    JSValue global = JS_GetGlobalObject(d.jsCtx);
-    JS_SetPropertyStr(d.jsCtx, global, "innerWidth", JS_NewInt32(d.jsCtx, w));
-    JS_SetPropertyStr(d.jsCtx, global, "innerHeight", JS_NewInt32(d.jsCtx, h));
-    JSValue dispatch = JS_GetPropertyStr(d.jsCtx, global,
-                                         "__bro_dispatch_window_event");
-    if (JS_IsFunction(d.jsCtx, dispatch)) {
-        JSValue evtType = JS_NewString(d.jsCtx, "resize");
-        JSValue evt = JS_NewObject(d.jsCtx);
-        JS_SetPropertyStr(d.jsCtx, evt, "type", JS_NewString(d.jsCtx, "resize"));
-        JS_SetPropertyStr(d.jsCtx, evt, "target", JS_DupValue(d.jsCtx, global));
-        JSValue dArgs[2] = {evtType, evt};
-        JSValue ret = JS_Call(d.jsCtx, dispatch, global, 2, dArgs);
-        JS_FreeValue(d.jsCtx, ret);
-        JS_FreeValue(d.jsCtx, evtType);
-        JS_FreeValue(d.jsCtx, evt);
+    if (d.jsCtx) {
+        JSValue global = JS_GetGlobalObject(d.jsCtx);
+        JS_SetPropertyStr(d.jsCtx, global, "innerWidth", JS_NewInt32(d.jsCtx, w));
+        JS_SetPropertyStr(d.jsCtx, global, "innerHeight", JS_NewInt32(d.jsCtx, h));
+        JS_FreeValue(d.jsCtx, global);
     }
-    JS_FreeValue(d.jsCtx, dispatch);
-    JS_FreeValue(d.jsCtx, global);
-    if (jsRuntime_) jsRuntime_->executePendingJobs();
+    // A real dom::Event, so a C++ window listener on this sub-document's
+    // realm gets the same object shape as one on the app realm. Fires the
+    // realm's C++ listeners even when it has no JSContext.
+    dom::Event resizeEvt("resize", /*bubbles=*/false, /*cancelable=*/false);
+    resizeEvt.setIsTrusted(true);
+    js::dispatchWindowEvent(d.jsCtx, d.document.get(), resizeEvt);
+    if (d.jsCtx && jsRuntime_) jsRuntime_->executePendingJobs();
 }
 
 void Engine::syncAllIframeBoxes() {

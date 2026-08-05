@@ -5,6 +5,8 @@
 #include "canvas/canvas_scene.h"
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/event.h"
+#include "js/event_dispatch.h"
 #include "js/runtime.h"
 #include "js/timers.h"
 #include "js/dom_bindings.h"
@@ -512,23 +514,25 @@ void Engine::handleResize(int w, int h) {
             }
         }
 
-        // Dispatch resize event to window listeners
-        JSValue dispatch = JS_GetPropertyStr(ctx, global, "__bro_dispatch_window_event");
-        if (JS_IsFunction(ctx, dispatch)) {
-            JSValue evtType = JS_NewString(ctx, "resize");
-            JSValue evt = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, evt, "type", JS_NewString(ctx, "resize"));
-            JS_SetPropertyStr(ctx, evt, "target", JS_DupValue(ctx, global));
-            JSValue dArgs[2] = { evtType, evt };
-            JSValue ret = JS_Call(ctx, dispatch, global, 2, dArgs);
-            JS_FreeValue(ctx, ret);
-            JS_FreeValue(ctx, evtType);
-            JS_FreeValue(ctx, evt);
-        }
-        JS_FreeValue(ctx, dispatch);
-
         JS_FreeValue(ctx, global);
+
+        // Dispatch resize to the window listeners — the realm's JS ones and
+        // the host's C++ ones (document_->windowListeners() /
+        // Engine::addWindowEventListener), in registration order. A real
+        // dom::Event, so a C++ listener gets an event it can inspect; the new
+        // size is read back from the engine (viewportWidth() / contentWidth()
+        // / contentHeight()), exactly as a JS listener reads window.innerWidth.
+        dom::Event resizeEvt("resize", /*bubbles=*/false, /*cancelable=*/false);
+        resizeEvt.setIsTrusted(true);
+        js::dispatchWindowEvent(ctx, document_.get(), resizeEvt);
+
         jsRuntime_->executePendingJobs();
+    } else if (document_) {
+        // No JS realm (not yet built, or torn down): the C++ window listeners
+        // are still live and still want the event.
+        dom::Event resizeEvt("resize", /*bubbles=*/false, /*cancelable=*/false);
+        resizeEvt.setIsTrusted(true);
+        js::dispatchWindowEvent(nullptr, document_.get(), resizeEvt);
     }
 
     // The app document was restyled synchronously above, so matchMedia change

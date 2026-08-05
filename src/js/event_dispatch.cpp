@@ -1,10 +1,15 @@
 #include "js/event_dispatch.h"
 #include "js/dom_bindings.h"
+#include "js/dom_bindings_internal.h"
 #include "js/runtime.h"
+#include "dom/document.h"
 #include "dom/element.h"
+#include "dom/event_target.h"
 #include "dom/shadow_root.h"
 #include "dom/event.h"
+#include "util/log.h"
 
+#include <algorithm>
 #include <string>
 #include <cstring>
 #include <filesystem>
@@ -495,12 +500,141 @@ static void stashComposedPath(JSContext* ctx, JSValue jsEvent,
     JS_SetPropertyStr(ctx, jsEvent, "_composedPath", arr);
 }
 
+// ---------------------------------------------------------------------------
+// C++ listeners
+//
+// C++ and JS listeners on one target fire in a single registration-ordered
+// sequence: every registration on either side takes a number from
+// dom::nextListenerSeq(), the JS bindings stash it on the listener record as
+// `seq`, and dispatch merges the two lists on it. A C++ listener therefore
+// sees exactly the interleaving the same code written in JS would have seen.
+//
+// preventDefault() / stopPropagation() / stopImmediatePropagation() called on
+// the dom::Event by a C++ listener are mirrored onto the JS event object the
+// remaining JS listeners receive, so cancellation crosses the boundary in
+// both directions (the JS→C++ direction was already there: every JS listener
+// invocation reads the flags back onto the dom::Event).
+// ---------------------------------------------------------------------------
+
+using NativeEntryPtr = bro::dom::NativeListenerList::EntryPtr;
+
+static bool listenerRunsInPhase(int phase, bool capture) {
+    return (phase == AT_TARGET) ||
+           (phase == CAPTURING_PHASE && capture) ||
+           (phase == BUBBLING_PHASE && !capture);
+}
+
+// Push flags a C++ listener set on the dom::Event onto the JS event object, so
+// JS listeners later in the same dispatch observe them. Only ever sets: a JS
+// listener cannot un-prevent an event either.
+static void mirrorNativeFlagsToJs(JSContext* ctx, JSValue jsEvent,
+                                  const bro::dom::Event& event) {
+    if (!ctx || JS_IsUndefined(jsEvent) || !JS_IsObject(jsEvent)) return;
+    if (event.defaultPrevented()) {
+        JS_SetPropertyStr(ctx, jsEvent, "_prevented", JS_TRUE);
+        JS_SetPropertyStr(ctx, jsEvent, "defaultPrevented", JS_TRUE);
+    }
+    if (event.propagationStopped())
+        JS_SetPropertyStr(ctx, jsEvent, "_stopped", JS_TRUE);
+    if (event.immediatePropagationStopped())
+        JS_SetPropertyStr(ctx, jsEvent, "_immediateStopped", JS_TRUE);
+}
+
+// Invoke one C++ listener. Returns false when dispatch at this target must
+// stop immediately (stopImmediatePropagation).
+// `list` may be null; it is only needed to honour ListenerOptions::once.
+static bool invokeNativeEntry(const NativeEntryPtr& entry,
+                              bro::dom::NativeListenerList* list,
+                              bro::dom::Event& event,
+                              JSContext* ctx, JSValue jsEvent) {
+    // Snapshots outlive removal: a listener removed by an earlier listener in
+    // this same dispatch must not run.
+    if (!entry || entry->removed || !entry->cb) return true;
+    if (entry->opts.once && list) list->remove(bro::dom::ListenerHandle{entry->id});
+    entry->cb(event);
+    mirrorNativeFlagsToJs(ctx, jsEvent, event);
+    return !event.immediatePropagationStopped();
+}
+
+// The four methods every JS event object carries. Shared by the element and
+// window paths so a window event is not a poorer object than a DOM one.
+static void installJsEventMethods(JSContext* ctx, JSValue jsEvent) {
+    JS_SetPropertyStr(ctx, jsEvent, "stopPropagation",
+        JS_NewCFunction(ctx, js_ev_stopPropagation, "stopPropagation", 0));
+    JS_SetPropertyStr(ctx, jsEvent, "preventDefault",
+        JS_NewCFunction(ctx, js_ev_preventDefault, "preventDefault", 0));
+    JS_SetPropertyStr(ctx, jsEvent, "stopImmediatePropagation",
+        JS_NewCFunction(ctx, js_ev_stopImmediatePropagation,
+                        "stopImmediatePropagation", 0));
+    JS_SetPropertyStr(ctx, jsEvent, "composedPath",
+        JS_NewCFunction(ctx, js_ev_composedPath, "composedPath", 0));
+}
+
+// Read the flags JS listeners set back onto the dom::Event.
+static void readJsFlagsBack(JSContext* ctx, JSValue jsEvent,
+                            bro::dom::Event& event) {
+    JSValue stoppedVal = JS_GetPropertyStr(ctx, jsEvent, "_stopped");
+    if (JS_ToBool(ctx, stoppedVal)) event.stopPropagation();
+    JS_FreeValue(ctx, stoppedVal);
+
+    JSValue preventedVal = JS_GetPropertyStr(ctx, jsEvent, "_prevented");
+    if (JS_ToBool(ctx, preventedVal)) event.preventDefault();
+    JS_FreeValue(ctx, preventedVal);
+
+    JSValue immVal = JS_GetPropertyStr(ctx, jsEvent, "_immediateStopped");
+    if (JS_ToBool(ctx, immVal)) event.stopImmediatePropagation();
+    JS_FreeValue(ctx, immVal);
+}
+
+// The registration sequence stamped on a JS listener record. Records written
+// before this existed (or by code that did not stamp one) sort first, keeping
+// the pre-existing "JS array order" behaviour for them.
+static uint64_t jsListenerSeq(JSContext* ctx, JSValueConst entry) {
+    JSValue seqVal = JS_GetPropertyStr(ctx, entry, "seq");
+    int64_t seq = 0;
+    if (JS_IsNumber(seqVal)) JS_ToInt64(ctx, &seq, seqVal);
+    JS_FreeValue(ctx, seqVal);
+    return seq < 0 ? 0 : static_cast<uint64_t>(seq);
+}
+
 // phase: CAPTURING_PHASE, AT_TARGET, or BUBBLING_PHASE
 static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
                             bro::dom::Element* retargetedTarget,
                             bro::dom::Event& event,
                             int phase,
                             JSValue originalJsEvent = JS_UNDEFINED) {
+    // --- C++ listeners on this element, for this type and phase -------------
+    // Gathered first: they are the only listeners that can run when the realm
+    // has no JSContext, and their presence decides whether the JS loop below
+    // has to merge or can stay on its existing fast path.
+    auto* nativeList = current->nativeListeners();
+    std::vector<NativeEntryPtr> nativeEntries;
+    if (nativeList) {
+        for (auto& e : nativeList->snapshot(event.type()))
+            if (listenerRunsInPhase(phase, e->opts.capture))
+                nativeEntries.push_back(std::move(e));
+    }
+
+    // A C++ listener sees the target the way this scope sees it — retargeted
+    // to the shadow host outside the shadow tree, exactly like the JS side's
+    // event.target. Restored afterwards so the next scope retargets from the
+    // real target.
+    bro::dom::Element* savedTarget = event.target();
+    struct TargetRestore {
+        bro::dom::Event& ev; bro::dom::Element* saved;
+        ~TargetRestore() { ev.setTarget(saved); }
+    } targetRestore{event, savedTarget};
+    if (retargetedTarget) event.setTarget(retargetedTarget);
+
+    if (!ctx) {
+        // Realm with no JS: C++ listeners are the whole of dispatch. Inline
+        // on* attributes and el.onclick handlers are JS by definition and
+        // cannot run here.
+        for (auto& e : nativeEntries)
+            if (!invokeNativeEntry(e, nativeList, event, nullptr, JS_UNDEFINED)) break;
+        return;
+    }
+
     // Check if this element has registered listeners OR an inline handler
     auto& listeners = current->listeners();
     auto it = listeners.find(event.type());
@@ -534,7 +668,8 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
         JS_FreeValue(ctx, propHandler);
     }
 
-    if (!hasListeners && !hasInlineHandler && !hasPropertyHandler) {
+    if (!hasListeners && !hasInlineHandler && !hasPropertyHandler &&
+        nativeEntries.empty()) {
         JS_FreeValue(ctx, jsElem);
         JS_FreeValue(ctx, global);
         return;
@@ -598,19 +733,14 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
         JS_FreeValue(ctx, tgtGlobal);
     }
 
-    JS_SetPropertyStr(ctx, jsEvent, "stopPropagation",
-        JS_NewCFunction(ctx, js_ev_stopPropagation, "stopPropagation", 0));
-    JS_SetPropertyStr(ctx, jsEvent, "preventDefault",
-        JS_NewCFunction(ctx, js_ev_preventDefault, "preventDefault", 0));
-    JS_SetPropertyStr(ctx, jsEvent, "stopImmediatePropagation",
-        JS_NewCFunction(ctx, js_ev_stopImmediatePropagation, "stopImmediatePropagation", 0));
-    JS_SetPropertyStr(ctx, jsEvent, "composedPath",
-        JS_NewCFunction(ctx, js_ev_composedPath, "composedPath", 0));
+    installJsEventMethods(ctx, jsEvent);
 
     // Collect indices of "once" listeners to remove after dispatch
     std::vector<int64_t> onceIndices;
 
-    for (int64_t i = 0; i < len; i++) {
+    // Invoke the JS listener record at array index `i`. Returns false when
+    // dispatch at this element must stop (stopImmediatePropagation).
+    auto invokeJsEntryAt = [&](int64_t i) -> bool {
         JSValue entry = JS_GetPropertyInt64(ctx, listenersArr, i);
         if (JS_IsObject(entry)) {
             JSValue typeVal = JS_GetPropertyStr(ctx, entry, "type");
@@ -666,14 +796,52 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
                     if (immStopped) {
                         event.stopImmediatePropagation();
                         JS_FreeValue(ctx, entry);
-                        break;
+                        return false;
                     }
                 }
             }
         }
         JS_FreeValue(ctx, entry);
+        return true;
+    };
 
-        if (event.propagationStopped()) break;
+    if (nativeEntries.empty()) {
+        // No C++ listeners here — the ordinary path, unchanged.
+        for (int64_t i = 0; i < len; i++) {
+            if (!invokeJsEntryAt(i)) break;
+            if (event.propagationStopped()) break;
+        }
+    } else {
+        // Merge the two lists on the shared registration sequence so C++ and
+        // JS listeners on this element fire in the order they were added.
+        struct Slot { uint64_t seq; int64_t jsIndex; const NativeEntryPtr* native; };
+        std::vector<Slot> slots;
+        slots.reserve(static_cast<size_t>(len) + nativeEntries.size());
+        for (int64_t i = 0; i < len; i++) {
+            JSValue entry = JS_GetPropertyInt64(ctx, listenersArr, i);
+            if (JS_IsObject(entry)) {
+                JSValue typeVal = JS_GetPropertyStr(ctx, entry, "type");
+                const char* entryType = JS_ToCString(ctx, typeVal);
+                bool match = entryType && event.type() == entryType;
+                JS_FreeCString(ctx, entryType);
+                JS_FreeValue(ctx, typeVal);
+                if (match) slots.push_back({jsListenerSeq(ctx, entry), i, nullptr});
+            }
+            JS_FreeValue(ctx, entry);
+        }
+        for (const auto& e : nativeEntries) slots.push_back({e->seq, -1, &e});
+        std::stable_sort(slots.begin(), slots.end(),
+                         [](const Slot& a, const Slot& b) { return a.seq < b.seq; });
+
+        for (const auto& slot : slots) {
+            if (slot.native) {
+                if (!invokeNativeEntry(*slot.native, nativeList, event, ctx, jsEvent))
+                    break;
+            } else {
+                if (!invokeJsEntryAt(slot.jsIndex)) break;
+            }
+            if (event.propagationStopped()) break;
+        }
     }
 
     // Remove "once" listeners by compacting the array (splice out holes)
@@ -773,18 +941,62 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
     JS_FreeValue(ctx, global);
 }
 
-// Dispatch event to window-level listeners (set on globalThis via
-// addEventListener). Per DOM spec, window is the outermost node in the
-// propagation path: it receives capture first and bubble last. The polyfill
-// stores these listeners in a side map — we invoke them here so window
-// listeners behave like any other EventTarget in the chain.
-static void dispatchToWindow(JSContext* ctx, bro::dom::Element* target,
-                             bro::dom::Event& event,
-                             JSValue originalJsEvent, bool isCapture) {
+// ---------------------------------------------------------------------------
+// Window dispatch
+//
+// A realm's window listeners live in two places: the JS ones in the window
+// polyfill's __bro_win_listeners side map, the C++ ones in the realm
+// Document's windowListeners(). This is the single loop that runs both, in
+// registration order (see the block above invokeListeners).
+//
+// It is also what globalThis.__bro_dispatch_window_event is bound to — the
+// polyfill no longer implements that function — so every existing dispatch
+// site, C++ (resize, gamepad, message, DOMContentLoaded) and JS (popstate,
+// hashchange, visibilitychange, window.dispatchEvent) alike, reaches C++
+// listeners without knowing about them.
+// ---------------------------------------------------------------------------
+
+// captureFilter: 1 = capture listeners only, 0 = bubble listeners only,
+// -1 = both (the legacy one-shot dispatch sites, and window.dispatchEvent).
+static void dispatchWindowEventCore(JSContext* ctx, bro::dom::Document* doc,
+                                    bro::dom::Event& event, JSValue originalJsEvent,
+                                    int captureFilter, bro::dom::Element* target) {
+    if (!doc && ctx) doc = getDocumentForCtx(ctx);
+    // No JS realm to ask: the target element knows its document, and that
+    // document owns the realm's C++ window listeners.
+    if (!doc && target) doc = target->document();
+
+    std::vector<NativeEntryPtr> nativeEntries;
+    if (doc) {
+        for (auto& e : doc->windowListeners().snapshot(event.type())) {
+            if (captureFilter >= 0 && e->opts.capture != (captureFilter == 1)) continue;
+            nativeEntries.push_back(std::move(e));
+        }
+    }
+    auto* nativeList = doc ? &doc->windowListeners() : nullptr;
+
+    if (!ctx) {
+        // Realm with no JS: only the C++ listeners exist.
+        for (auto& e : nativeEntries)
+            if (!invokeNativeEntry(e, nativeList, event, nullptr, JS_UNDEFINED)) break;
+        return;
+    }
+
     JSValue global = JS_GetGlobalObject(ctx);
-    JSValue dispatch = JS_GetPropertyStr(ctx, global, "__bro_dispatch_window_event");
-    if (!JS_IsFunction(ctx, dispatch)) {
-        JS_FreeValue(ctx, dispatch);
+
+    // The realm's JS window listener array for this type.
+    JSValue winMap = JS_GetPropertyStr(ctx, global, "__bro_win_listeners");
+    JSValue liveArr = JS_UNDEFINED;
+    if (JS_IsObject(winMap))
+        liveArr = JS_GetPropertyStr(ctx, winMap, event.type().c_str());
+    JS_FreeValue(ctx, winMap);
+    if (!JS_IsArray(liveArr)) {
+        JS_FreeValue(ctx, liveArr);
+        liveArr = JS_UNDEFINED;
+    }
+
+    if (nativeEntries.empty() && JS_IsUndefined(liveArr)) {
+        JS_FreeValue(ctx, liveArr);
         JS_FreeValue(ctx, global);
         return;
     }
@@ -794,17 +1006,10 @@ static void dispatchToWindow(JSContext* ctx, bro::dom::Element* target,
     if (ownsEvent) {
         jsEvent = JS_NewObject(ctx);
         populateJsEvent(ctx, jsEvent, event);
-        JS_SetPropertyStr(ctx, jsEvent, "stopPropagation",
-            JS_NewCFunction(ctx, js_ev_stopPropagation, "stopPropagation", 0));
-        JS_SetPropertyStr(ctx, jsEvent, "preventDefault",
-            JS_NewCFunction(ctx, js_ev_preventDefault, "preventDefault", 0));
-        JS_SetPropertyStr(ctx, jsEvent, "stopImmediatePropagation",
-            JS_NewCFunction(ctx, js_ev_stopImmediatePropagation,
-                            "stopImmediatePropagation", 0));
-        JS_SetPropertyStr(ctx, jsEvent, "composedPath",
-            JS_NewCFunction(ctx, js_ev_composedPath, "composedPath", 0));
+        installJsEventMethods(ctx, jsEvent);
 
-        // Resolve target to its JS wrapper.
+        // Resolve target to its JS wrapper. Window events fired at the window
+        // itself have no element target; the window is the target then.
         JSValue elemMap = JS_GetPropertyStr(ctx, global, "__bro_elem_map");
         if (!JS_IsUndefined(elemMap) && target) {
             std::string tgtKey = std::to_string(target->nodeId());
@@ -814,8 +1019,10 @@ static void dispatchToWindow(JSContext* ctx, bro::dom::Element* target,
                 tgtElem = DomBindings::wrapElement(ctx, target);
             }
             JS_SetPropertyStr(ctx, jsEvent, "target", tgtElem);
-        } else {
+        } else if (target) {
             JS_SetPropertyStr(ctx, jsEvent, "target", JS_NULL);
+        } else {
+            JS_SetPropertyStr(ctx, jsEvent, "target", JS_DupValue(ctx, global));
         }
         JS_FreeValue(ctx, elemMap);
     } else {
@@ -823,39 +1030,192 @@ static void dispatchToWindow(JSContext* ctx, bro::dom::Element* target,
     }
 
     JS_SetPropertyStr(ctx, jsEvent, "currentTarget", JS_DupValue(ctx, global));
-    JS_SetPropertyStr(ctx, jsEvent, "eventPhase",
-        JS_NewInt32(ctx, isCapture ? CAPTURING_PHASE : BUBBLING_PHASE));
+    if (captureFilter >= 0) {
+        JS_SetPropertyStr(ctx, jsEvent, "eventPhase",
+            JS_NewInt32(ctx, captureFilter == 1 ? CAPTURING_PHASE : BUBBLING_PHASE));
+    }
 
-    JSValue typeStr = JS_NewString(ctx, event.type().c_str());
-    JSValue captureArg = JS_NewBool(ctx, isCapture);
-    JSValue args[3] = { typeStr, jsEvent, captureArg };
-    JSValue ret = Runtime::callJs(ctx, dispatch, global, 3, args,
-        ErrorOrigin::listener(event.type() + " on window"));
-    JS_FreeValue(ctx, ret);
+    // Snapshot the JS listener records the way the polyfill used to: a handler
+    // may add or remove listeners (commonly its own) mid-dispatch, and neither
+    // may corrupt this iteration.
+    struct JsSlot { JSValue entry; uint64_t seq; };
+    std::vector<JsSlot> jsSlots;
+    int64_t liveLen = 0;
+    if (!JS_IsUndefined(liveArr)) {
+        JSValue lenVal = JS_GetPropertyStr(ctx, liveArr, "length");
+        JS_ToInt64(ctx, &liveLen, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (int64_t i = 0; i < liveLen; ++i) {
+            JSValue e = JS_GetPropertyInt64(ctx, liveArr, i);
+            if (JS_IsObject(e)) jsSlots.push_back({e, jsListenerSeq(ctx, e)});
+            else JS_FreeValue(ctx, e);
+        }
+    }
 
-    // Read back propagation/defaultPrevented flags set by JS listeners.
-    JSValue stoppedVal = JS_GetPropertyStr(ctx, jsEvent, "_stopped");
-    if (JS_ToBool(ctx, stoppedVal)) event.stopPropagation();
-    JS_FreeValue(ctx, stoppedVal);
+    // Index of `entry` in the live array, or -1 if it has been removed.
+    auto liveIndexOf = [&](JSValueConst entry) -> int64_t {
+        if (JS_IsUndefined(liveArr)) return -1;
+        int64_t len = 0;
+        JSValue lenVal = JS_GetPropertyStr(ctx, liveArr, "length");
+        JS_ToInt64(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (int64_t i = 0; i < len; ++i) {
+            JSValue e = JS_GetPropertyInt64(ctx, liveArr, i);
+            bool same = JS_VALUE_GET_PTR(e) == JS_VALUE_GET_PTR(entry);
+            JS_FreeValue(ctx, e);
+            if (same) return i;
+        }
+        return -1;
+    };
 
-    JSValue immVal = JS_GetPropertyStr(ctx, jsEvent, "_immediateStopped");
-    if (JS_ToBool(ctx, immVal)) event.stopImmediatePropagation();
-    JS_FreeValue(ctx, immVal);
+    struct Slot { uint64_t seq; int jsSlot; const NativeEntryPtr* native; };
+    std::vector<Slot> slots;
+    slots.reserve(jsSlots.size() + nativeEntries.size());
+    for (size_t i = 0; i < jsSlots.size(); ++i)
+        slots.push_back({jsSlots[i].seq, static_cast<int>(i), nullptr});
+    for (const auto& e : nativeEntries) slots.push_back({e->seq, -1, &e});
+    std::stable_sort(slots.begin(), slots.end(),
+                     [](const Slot& a, const Slot& b) { return a.seq < b.seq; });
 
-    JSValue preventedVal = JS_GetPropertyStr(ctx, jsEvent, "_prevented");
-    if (JS_ToBool(ctx, preventedVal)) event.preventDefault();
-    JS_FreeValue(ctx, preventedVal);
+    for (const auto& slot : slots) {
+        if (slot.native) {
+            if (!invokeNativeEntry(*slot.native, nativeList, event, ctx, jsEvent)) break;
+            continue;
+        }
+        JSValue entry = jsSlots[static_cast<size_t>(slot.jsSlot)].entry;
 
-    JS_FreeValue(ctx, typeStr);
-    JS_FreeValue(ctx, captureArg);
+        if (captureFilter >= 0) {
+            JSValue capVal = JS_GetPropertyStr(ctx, entry, "capture");
+            bool isCapture = JS_ToBool(ctx, capVal);
+            JS_FreeValue(ctx, capVal);
+            if (isCapture != (captureFilter == 1)) continue;
+        }
+        if (liveIndexOf(entry) < 0) continue;   // removed since the snapshot
+
+        JSValue fn = JS_GetPropertyStr(ctx, entry, "fn");
+        if (JS_IsFunction(ctx, fn)) {
+            JSValue ret = Runtime::callJs(ctx, fn, global, 1, &jsEvent,
+                ErrorOrigin::listener(event.type() + " on window"));
+            JS_FreeValue(ctx, ret);
+        }
+        JS_FreeValue(ctx, fn);
+
+        JSValue onceVal = JS_GetPropertyStr(ctx, entry, "once");
+        bool once = JS_ToBool(ctx, onceVal);
+        JS_FreeValue(ctx, onceVal);
+        if (once) {
+            int64_t idx = liveIndexOf(entry);
+            if (idx >= 0) {
+                int64_t len = 0;
+                JSValue lenVal = JS_GetPropertyStr(ctx, liveArr, "length");
+                JS_ToInt64(ctx, &len, lenVal);
+                JS_FreeValue(ctx, lenVal);
+                for (int64_t j = idx; j < len - 1; ++j) {
+                    JSValue next = JS_GetPropertyInt64(ctx, liveArr, j + 1);
+                    JS_SetPropertyInt64(ctx, liveArr, j, next);
+                }
+                JS_SetPropertyStr(ctx, liveArr, "length", JS_NewInt64(ctx, len - 1));
+            }
+        }
+
+        readJsFlagsBack(ctx, jsEvent, event);
+        if (event.immediatePropagationStopped()) break;
+    }
+
+    for (auto& s : jsSlots) JS_FreeValue(ctx, s.entry);
+    JS_FreeValue(ctx, liveArr);
     JS_FreeValue(ctx, jsEvent);
-    JS_FreeValue(ctx, dispatch);
+    JS_FreeValue(ctx, global);
+}
+
+// Dispatch event to window-level listeners (set on globalThis via
+// addEventListener). Per DOM spec, window is the outermost node in the
+// propagation path: it receives capture first and bubble last.
+static void dispatchToWindow(JSContext* ctx, bro::dom::Element* target,
+                             bro::dom::Event& event,
+                             JSValue originalJsEvent, bool isCapture) {
+    dispatchWindowEventCore(ctx, nullptr, event, originalJsEvent,
+                            isCapture ? 1 : 0, target);
+}
+
+void dispatchWindowEvent(JSContext* ctx, bro::dom::Document* doc,
+                         bro::dom::Event& event, JSValue originalJsEvent) {
+    dispatchWindowEventCore(ctx, doc, event, originalJsEvent,
+                            /*captureFilter=*/-1, /*target=*/nullptr);
+}
+
+// globalThis.__bro_listener_seq() — the shared registration counter, so the
+// window polyfill can stamp its listener records with the same sequence C++
+// registrations take. Without it, C++ and JS window listeners could not be
+// ordered against each other.
+static JSValue js_listener_seq(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    return JS_NewInt64(ctx, static_cast<int64_t>(bro::dom::nextListenerSeq()));
+}
+
+// globalThis.__bro_dispatch_window_event(type, event, capture)
+//
+// Same signature the polyfill used to define, so every existing caller is
+// unchanged. C++ listeners get a real dom::Event synthesized from the JS one:
+// its type, bubbles/cancelable and defaultPrevented cross over, and anything
+// the C++ listener does to it (preventDefault, stopImmediatePropagation)
+// crosses back onto the JS object. Payload a JS caller put on the event —
+// CustomEvent.detail, gamepad, PopStateEvent.state — is NOT visible on the
+// C++ side; a C++ listener that needs it must be registered for an event the
+// host itself dispatches (js::dispatchWindowEvent), which carries the real
+// dom::Event through.
+static JSValue js_dispatch_window_event(JSContext* ctx, JSValueConst,
+                                        int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    const char* typeC = JS_ToCString(ctx, argv[0]);
+    if (!typeC) return JS_UNDEFINED;
+    std::string type(typeC);
+    JS_FreeCString(ctx, typeC);
+
+    JSValue jsEvent = (argc >= 2) ? argv[1] : JS_UNDEFINED;
+
+    int captureFilter = -1;
+    if (argc >= 3 && !JS_IsUndefined(argv[2]))
+        captureFilter = JS_ToBool(ctx, argv[2]) ? 1 : 0;
+
+    bool bubbles = false, cancelable = true, trusted = false, prevented = false;
+    if (JS_IsObject(jsEvent)) {
+        JSValue v = JS_GetPropertyStr(ctx, jsEvent, "bubbles");
+        if (!JS_IsUndefined(v)) bubbles = JS_ToBool(ctx, v);
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, jsEvent, "cancelable");
+        if (!JS_IsUndefined(v)) cancelable = JS_ToBool(ctx, v);
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, jsEvent, "isTrusted");
+        trusted = JS_ToBool(ctx, v);
+        JS_FreeValue(ctx, v);
+        v = JS_GetPropertyStr(ctx, jsEvent, "defaultPrevented");
+        prevented = JS_ToBool(ctx, v);
+        JS_FreeValue(ctx, v);
+    }
+
+    bro::dom::Event event(type, bubbles, cancelable);
+    event.setIsTrusted(trusted);
+    if (prevented) event.preventDefault();
+
+    dispatchWindowEventCore(ctx, nullptr, event, jsEvent, captureFilter, nullptr);
+    return JS_UNDEFINED;
+}
+
+void installWindowEventDispatch(JSContext* ctx) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JS_SetPropertyStr(ctx, global, "__bro_listener_seq",
+        JS_NewCFunction(ctx, js_listener_seq, "__bro_listener_seq", 0));
+    JS_SetPropertyStr(ctx, global, "__bro_dispatch_window_event",
+        JS_NewCFunction(ctx, js_dispatch_window_event,
+                        "__bro_dispatch_window_event", 3));
     JS_FreeValue(ctx, global);
 }
 
 void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event& event,
                       JSValue originalJsEvent) {
-    if (!target || !ctx) return;
+    // ctx may be null: a realm with no JS still dispatches to the C++
+    // listeners on the path, through this same algorithm.
+    if (!target) return;
 
     event.setTarget(target);
 
@@ -865,7 +1225,7 @@ void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event
     if (path.empty()) return;
 
     // Stash composed path on the original JS event if provided
-    if (!JS_IsUndefined(originalJsEvent)) {
+    if (ctx && !JS_IsUndefined(originalJsEvent)) {
         stashComposedPath(ctx, originalJsEvent, path);
     }
 

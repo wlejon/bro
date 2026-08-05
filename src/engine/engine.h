@@ -13,6 +13,7 @@
 #include "engine/menu_bar.h"
 #include "engine/overlay.h"
 #include "engine/replaced_elements.h"
+#include "dom/event_target.h"   // dom::EventCallback / ListenerHandle — window listeners
 #include "dom/node_handle.h"
 #include "engine/scrollbar.h"
 #include "engine/settings.h"
@@ -636,6 +637,45 @@ public:
 
     /// Access the renderer.
     render::Renderer* renderer() const { return renderer_.get(); }
+
+    /// Register a C++ listener for a window event on the app realm — the C++
+    /// half of `window.addEventListener(type, fn, opts)`, for a host whose app
+    /// JS was compiled away and has nothing to attach from.
+    ///
+    ///     auto h = engine->addWindowEventListener("resize", [engine](dom::Event&) {
+    ///         camera.setAspect(float(engine->contentWidth()) / engine->contentHeight());
+    ///     });
+    ///     ...
+    ///     engine->removeWindowEventListener(h);   // attaching again? remove first
+    ///
+    /// Fires alongside the realm's JS window listeners, in registration order
+    /// across both kinds. The callback gets a real dom::Event: `type`,
+    /// `timeStamp`, `isTrusted`, and preventDefault() / stopPropagation() /
+    /// stopImmediatePropagation() that cut short the rest of the dispatch
+    /// exactly as they would from JS. `target()` and `currentTarget()` are null
+    /// — the window is not an Element — so a resize listener reads the new size
+    /// from the engine (contentWidth() / contentHeight() / viewportWidth()),
+    /// the way a JS one reads window.innerWidth.
+    ///
+    /// Fires for every event dispatched at this realm's window, whoever fired
+    /// it: engine-generated ones (resize, gamepadconnected, message,
+    /// visibilitychange, DOMContentLoaded), JS `window.dispatchEvent(...)`, and
+    /// events bubbling out of the DOM tree to the window. Payload a JS caller
+    /// hung on the event object (CustomEvent.detail and the like) does not
+    /// cross to the C++ side — see js::dispatchWindowEvent.
+    ///
+    /// This is the app realm only. <iframe> sub-documents and secondary windows
+    /// are separate realms with separate window listeners; reach those through
+    /// their own Document::windowListeners().
+    ///
+    /// Survives nothing that replaces the document: location.reload() builds a
+    /// new Document, and the listeners go with the old one.
+    dom::ListenerHandle addWindowEventListener(const std::string& type,
+                                               dom::EventCallback cb,
+                                               dom::ListenerOptions opts = {});
+
+    /// Unregister a listener from addWindowEventListener. True if it was live.
+    bool removeWindowEventListener(dom::ListenerHandle handle);
 
     /// Give `canvas` a 3D scene rendering context and return its SceneGraph —
     /// the exact thing `canvas.getContext('scene')` hands to JS. This IS the

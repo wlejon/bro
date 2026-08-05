@@ -677,6 +677,18 @@ void Element::removeEventListener(const std::string& type, uint64_t listenerId) 
     }
 }
 
+ListenerHandle Element::addEventListener(const std::string& type, EventCallback cb,
+                                         ListenerOptions opts) {
+    if (!cb) return ListenerHandle{};
+    if (!nativeListeners_) nativeListeners_ = std::make_unique<NativeListenerList>();
+    return nativeListeners_->add(type, std::move(cb), opts);
+}
+
+bool Element::removeEventListener(ListenerHandle handle) {
+    if (!nativeListeners_) return false;
+    return nativeListeners_->remove(handle);
+}
+
 std::vector<Element*> Element::children() const {
     std::vector<Element*> result;
     for (const auto& child : children_) {

@@ -3,7 +3,14 @@
     globalThis.__bro_win_listeners = listeners;
     globalThis.addEventListener = function(type, fn, opts) {
         if (!listeners[type]) listeners[type] = [];
-        var entry = { fn: fn, capture: false, once: false, passive: false };
+        // `seq` is the shared C++/JS registration counter (see
+        // dom/event_target.h): it is what lets __bro_dispatch_window_event
+        // run this listener in registration order against the realm's C++
+        // window listeners. The fallback keeps the polyfill standalone —
+        // unstamped records simply sort ahead of every C++ one.
+        var entry = { fn: fn, capture: false, once: false, passive: false,
+                      seq: (typeof globalThis.__bro_listener_seq === 'function')
+                             ? globalThis.__bro_listener_seq() : 0 };
         if (typeof opts === 'boolean') {
             entry.capture = opts;
         } else if (opts && typeof opts === 'object') {
@@ -26,52 +33,46 @@
             }
         }
     };
+    // __bro_dispatch_window_event is installed from C++
+    // (js::installWindowEventDispatch, called right after this file is
+    // evaluated). It reads the `listeners` map above for the JS listeners and
+    // the realm Document's windowListeners() for the C++ ones, and runs both
+    // in registration order. Keeping one dispatcher — rather than a JS loop
+    // here and a C++ loop elsewhere — is what makes a window listener behave
+    // the same whoever registered it and whoever fired the event.
+    //
+    // The fallback below only runs if the C++ half was not installed (the
+    // polyfill evaluated standalone); it is the loop this file used to have.
+    if (typeof globalThis.__bro_dispatch_window_event !== 'function') {
+        globalThis.__bro_dispatch_window_event = function(type, event, capture) {
+            var arr = listeners[type];
+            if (!arr) return;
+            var filterByCapture = (capture !== undefined);
+            var isCap = !!capture;
+            var snapshot = arr.slice();
+            for (var i = 0; i < snapshot.length; i++) {
+                var entry = snapshot[i];
+                if (filterByCapture && entry.capture !== isCap) continue;
+                if (arr.indexOf(entry) === -1) continue;
+                try {
+                    entry.fn(event);
+                    if (entry.once) {
+                        var idx = arr.indexOf(entry);
+                        if (idx !== -1) arr.splice(idx, 1);
+                    }
+                    if (event && event._immediateStopped) break;
+                } catch(e) { console.error('Event handler error:', e); }
+            }
+        };
+    }
     globalThis.dispatchEvent = function(event) {
         var type = event.type || (typeof event === 'string' ? event : '');
-        var arr = listeners[type];
-        if (!arr) return true;
-        // Snapshot: a handler may add/remove listeners (incl. itself) mid-dispatch.
-        // Iterate the snapshot, but skip any entry already removed from the live
-        // array, and remove `once` entries by identity — never by stale index.
-        var snapshot = arr.slice();
-        for (var i = 0; i < snapshot.length; i++) {
-            var entry = snapshot[i];
-            if (arr.indexOf(entry) === -1) continue;
-            try {
-                entry.fn(event);
-                if (entry.once) {
-                    var idx = arr.indexOf(entry);
-                    if (idx !== -1) arr.splice(idx, 1);
-                }
-            } catch(e) { console.error('Event handler error:', e); }
-        }
+        // One dispatcher, so a JS-dispatched window event reaches C++
+        // listeners exactly as a host-dispatched one does. `capture` is left
+        // undefined: a window event fired directly at the window has no
+        // propagation path, so both capture and bubble listeners run.
+        globalThis.__bro_dispatch_window_event(type, event);
         return !(event && event.defaultPrevented);
-    };
-    // When `capture` is undefined, fires all listeners regardless of flag —
-    // used by legacy one-off dispatch sites (DOMContentLoaded/load/popstate).
-    // When `capture` is true or false, fires only listeners matching that phase
-    // — used by the DOM event pipeline to model capture vs bubble at window.
-    globalThis.__bro_dispatch_window_event = function(type, event, capture) {
-        var arr = listeners[type];
-        if (!arr) return;
-        var filterByCapture = (capture !== undefined);
-        var isCap = !!capture;
-        // Snapshot so a handler removing a listener (commonly itself, e.g. a
-        // one-shot pointerup that ends a drag) can't corrupt the iteration.
-        var snapshot = arr.slice();
-        for (var i = 0; i < snapshot.length; i++) {
-            var entry = snapshot[i];
-            if (filterByCapture && entry.capture !== isCap) continue;
-            if (arr.indexOf(entry) === -1) continue;
-            try {
-                entry.fn(event);
-                if (entry.once) {
-                    var idx = arr.indexOf(entry);
-                    if (idx !== -1) arr.splice(idx, 1);
-                }
-                if (event && event._immediateStopped) break;
-            } catch(e) { console.error('Event handler error:', e); }
-        }
     };
 
     // --- SPA history + location compat ---

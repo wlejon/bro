@@ -1,5 +1,6 @@
 #pragma once
 #include "dom/node.h"
+#include "dom/event_target.h"
 #include "dom/shadow_root.h"
 #include "dom/style_proxy.h"
 #include "dom/string_flat_map.h"
@@ -89,10 +90,31 @@ public:
     StyleProxy& style() { return style_; }
     const StyleProxy& style() const { return style_; }
 
-    // Event listeners
+    // Event listeners — JS side. `listenerId` is the index the binding wrote
+    // into the wrapper's __bro_listeners array; the map is only a "this
+    // element has at least one JS listener of this type" gate for dispatch.
     void addEventListener(const std::string& type, uint64_t listenerId);
     void removeEventListener(const std::string& type, uint64_t listenerId);
     const std::unordered_map<std::string, std::vector<uint64_t>>& listeners() const { return listeners_; }
+
+    // Event listeners — C++ side. A host with no app JS registers here and the
+    // callback is invoked by the same dispatch (js::dispatchDomEvent) the JS
+    // listeners go through: same event path, same shadow-DOM retargeting, same
+    // capture/bubble phases, and preventDefault()/stopPropagation() from the
+    // callback affect the rest of dispatch as they would from JS.
+    //
+    // C++ and JS listeners on one element fire in registration order across
+    // both kinds — see dom/event_target.h.
+    //
+    // The returned handle unregisters the listener. Listeners are NOT copied
+    // by cloneNode (matching the JS side, and the DOM spec) and die with the
+    // element.
+    ListenerHandle addEventListener(const std::string& type, EventCallback cb,
+                                    ListenerOptions opts = {});
+    /// True if the handle named a live listener on this element.
+    bool removeEventListener(ListenerHandle handle);
+    /// The C++ listener list, or nullptr if none was ever registered.
+    NativeListenerList* nativeListeners() const { return nativeListeners_.get(); }
 
     // Tree traversal
     std::vector<Element*> children() const;
@@ -425,6 +447,9 @@ private:
     // "", not null) until removeAttribute("style") is called.
     bool hasStyleAttr_ = false;
     std::unordered_map<std::string, std::vector<uint64_t>> listeners_;
+    // Allocated on the first C++ addEventListener. Most elements never get
+    // one, and Element is instantiated in the millions by big documents.
+    std::unique_ptr<NativeListenerList> nativeListeners_;
     ShadowRoot* shadowRoot_ = nullptr;
     Element* templateContent_ = nullptr;
     bool isTemplateContent_ = false;
