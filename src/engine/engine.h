@@ -637,6 +637,43 @@ public:
     /// Access the renderer.
     render::Renderer* renderer() const { return renderer_.get(); }
 
+    /// Give `canvas` a 3D scene rendering context and return its SceneGraph —
+    /// the exact thing `canvas.getContext('scene')` hands to JS. This IS the
+    /// implementation of that factory branch: the JS binding calls straight
+    /// through here, so a host that builds its scene from C++ and an app that
+    /// builds it from script get identically-registered graphs. There is no
+    /// second construction path, by design.
+    ///
+    /// A scene context is not just a SceneGraph. It is a CanvasScene with
+    /// layout / detached / liveness callbacks aimed at `canvas`, registered
+    /// with the engine; the graph itself parked in sceneGraphs_ so the frame
+    /// loop renders it; and an FBO-texture callback wired back to the element
+    /// so the compositor gets a layer for it. A graph built with make_unique
+    /// outside this function has none of that — it is never rendered and never
+    /// composited, which looks exactly like "the renderer is broken".
+    ///
+    /// Idempotent per element, matching getContext()'s spec'd behaviour: a
+    /// canvas that already has a scene context gets that same SceneGraph back,
+    /// no second registration.
+    ///
+    /// Returns nullptr when there is no scene to give:
+    ///   - `canvas` is null,
+    ///   - the build has BRO_WITH_3D off,
+    ///   - or there is no GL context (--no-gpu, or a headless boot that fell
+    ///     back to raster). The 3D renderer is GL from top to bottom, so this
+    ///     is the same documented "no scene here" null getContext('scene')
+    ///     already returns on that path — callers must branch on it.
+    ///
+    /// Works identically in windowed and headless mode; runHeadless() reaches
+    /// it through the same Engine.
+    scene::SceneGraph* createSceneContext(dom::Element* canvas);
+
+    /// How many scene contexts are registered (i.e. how many SceneGraphs the
+    /// frame loop will render). 0 without BRO_WITH_3D. Diagnostic: the one
+    /// externally visible signal that a createSceneContext call did or did not
+    /// register something.
+    size_t sceneContextCount() const;
+
     /// Bring `doc`'s layout up to date NOW, because JS is about to read
     /// geometry out of it. CSSOM calls this flushing pending layout, and it is
     /// what makes `parent.appendChild(el); el.getBoundingClientRect()` answer
@@ -2007,5 +2044,26 @@ private:
     unsigned int uiQuadVAO_ = 0;
     unsigned int uiQuadVBO_ = 0;
 };
+
+/// The Engine whose realm `ctx` belongs to, or nullptr if `ctx` is not an
+/// engine-owned realm (or the engine has already torn that realm down).
+///
+/// EngineConfig::installHostBindings and HeadlessHooks::installHostBindings are
+/// both `void(JSContext*)` — a host binding is handed a realm and nothing else,
+/// and in headless the host never sees the Engine at all (runHeadless builds it
+/// internally). This is the supported way to get from the one to the other, so
+/// a host binding can reach document(), createSceneContext(), and the rest of
+/// the public Engine surface.
+///
+/// The mapping is the same per-realm engine pointer the engine's own DOM
+/// bindings already use (js::DomBindings::setEngine), so this adds a reader,
+/// not a second registry. Registered for the primary app realm before any
+/// binding — including a host's — is installed, and dropped when that realm is
+/// cleaned up. Sub-document and system-panel realms are NOT engine-owned in
+/// this sense and answer nullptr; callers must check.
+///
+/// Main thread only. Do not cache the result across a location.reload(): the
+/// realm is replaced and the host installer runs again on the new one.
+Engine* engineForContext(JSContext* ctx);
 
 } // namespace bro::engine

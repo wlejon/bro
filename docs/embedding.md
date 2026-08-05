@@ -88,6 +88,61 @@ config.installHostBindings = [](JSContext* ctx) {
 
 Keep it to installing bindings — the Engine is still mid-init when this runs.
 
+## Getting the `Engine*` from a binding
+
+The installer hook is `void(JSContext*)`, and in headless the host never sees
+the Engine at all (`runHeadless` builds it internally). To get from a realm to
+the engine that owns it:
+
+```cpp
+#include "engine/engine.h"
+
+bro::engine::Engine* engine = bro::engine::engineForContext(ctx);
+if (!engine) return JS_ThrowInternalError(ctx, "no Engine for this realm");
+```
+
+Main thread only. Answers for the app realm — including inside the installer
+itself — and `nullptr` for sub-document and system-panel realms, so check it.
+Don't cache it across a `location.reload()`: the realm is replaced and the
+installer runs again on the new one.
+
+## Building the page from C++
+
+An app whose JS was compiled away (an AOT-compiled app has no `app.js` to run)
+has to do from C++ what `ui/app.js` would have done. The DOM half is ordinary
+public API:
+
+```cpp
+auto* doc = engine->document();
+auto* canvas = doc->createElement("canvas");
+canvas->setAttribute("width", "1280");
+canvas->setAttribute("height", "720");
+canvas->style().setProperty("width", "1280px");
+doc->body()->appendChild(canvas);          // enters layout on its own
+```
+
+`dom::Node::appendChild` / `insertBefore` / `removeChild` invalidate layout
+themselves, so nothing else is needed to make the element render. They do not
+run script: custom-element `connectedCallback` and MutationObserver delivery
+belong to the JS bindings, as does cross-document adoption. Host C++ inserting
+nodes it created in the same document needs none of the three.
+
+For a 3D scene, `canvas.getContext('scene')` has a C++ equivalent:
+
+```cpp
+bro::scene::SceneGraph* scene = engine->createSceneContext(canvas);
+if (!scene) { /* no GPU, or BRO_WITH_3D off — same null getContext returns */ }
+```
+
+This is the *same function* the `getContext('scene')` factory calls, so the two
+cannot drift, and it is idempotent per canvas — asking twice, or asking from
+both sides, yields the one SceneGraph.
+
+Do not build a `scene::SceneGraph` yourself. A graph created with `make_unique`
+is not registered with the engine, so the frame loop never renders it and the
+compositor never sees it; the symptom is a blank canvas that looks like a
+renderer bug. `createSceneContext` is what does the registration.
+
 ## Playing formats bro doesn't ship
 
 `video/media_backend.h` is the seam. Register a demuxer and its decoders and

@@ -27,6 +27,11 @@ public:
     /// Set engine pointer so bindings can call engine APIs (e.g. pointer lock).
     static void setEngine(JSContext* ctx, void* engine);
 
+    /// The engine pointer registered for `ctx` by setEngine, or nullptr.
+    /// void* for the same reason setEngine takes one — this header must not
+    /// pull in engine.h. bro::engine::engineForContext() is the typed reader.
+    static void* engineFor(JSContext* ctx);
+
     // -----------------------------------------------------------------------
     // Helpers exposed so other modules can wrap / unwrap DOM objects.
     // -----------------------------------------------------------------------

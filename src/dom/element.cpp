@@ -27,15 +27,6 @@ namespace bro::dom {
 // Node implementations
 // ---------------------------------------------------------------------------
 
-void Node::appendChild(Node* child) {
-    if (!child) return;
-    if (child->parent_) {
-        child->parent_->removeChild(child);
-    }
-    child->parent_ = this;
-    children_.push_back(child);
-}
-
 // Walk up from any node to its owning Document (via the nearest Element).
 static Document* findDocument(Node* node) {
     for (Node* n = node; n; n = n->parentNode()) {
@@ -43,6 +34,48 @@ static Document* findDocument(Node* node) {
             return static_cast<Element*>(n)->document();
     }
     return nullptr;
+}
+
+// A child list changed under `parent` — tell layout.
+//
+// This lives in the DOM layer on purpose. Layout invalidation is a consequence
+// of the tree changing shape, not of *who* changed it, and leaving it to every
+// caller made the raw mutators a trap: a node appended through them never got a
+// layout adapter and silently never rendered. Only the JS bindings remembered
+// to compensate (js_element_appendChild's markChildListChanged), so engine C++
+// hit the trap and patched it locally (input_handling.cpp's caret text node),
+// and any host calling Node::appendChild from C++ hit it with no clue why.
+//
+// What deliberately stays OUT of here, because it is realm-scoped rather than
+// tree-scoped and needs a JSContext the DOM layer does not have:
+//   - custom-element connectedCallback (runs script)
+//   - MutationObserver records (per-realm observer lists, JS callbacks)
+// Those remain in the JS bindings. Document adoption stays with the callers
+// too — it is a pre-insertion step that must run BEFORE the tree changes, so it
+// cannot be expressed as a post-mutation notification.
+//
+// Attributed to the parent element where there is one: Element::
+// markStructureDirty rebuilds that node's children and keeps every other
+// subtree's cached geometry, where the document-wide form throws the whole
+// layout tree away (~150ms on a few-thousand-element document). Idempotent —
+// it sets flags — so a caller that also marks explicitly costs nothing.
+static void notifyChildListChanged(Node* parent) {
+    if (!parent) return;
+    if (parent->nodeType() == NodeType::Element) {
+        static_cast<Element*>(parent)->markStructureDirty();
+    } else if (auto* doc = findDocument(parent)) {
+        doc->markStructureDirty();
+    }
+}
+
+void Node::appendChild(Node* child) {
+    if (!child) return;
+    if (child->parent_) {
+        child->parent_->removeChild(child);
+    }
+    child->parent_ = this;
+    children_.push_back(child);
+    notifyChildListChanged(this);
 }
 
 void Node::removeChild(Node* child) {
@@ -56,13 +89,14 @@ void Node::removeChild(Node* child) {
         }
         (*it)->parent_ = nullptr;
         children_.erase(it);
+        notifyChildListChanged(this);
     }
 }
 
 void Node::insertBefore(Node* newChild, Node* refChild) {
     if (!newChild) return;
     if (!refChild) {
-        appendChild(newChild);
+        appendChild(newChild);  // invalidates
         return;
     }
     if (newChild->parent_) {
@@ -72,6 +106,7 @@ void Node::insertBefore(Node* newChild, Node* refChild) {
     if (it != children_.end()) {
         newChild->parent_ = this;
         children_.insert(it, newChild);
+        notifyChildListChanged(this);
     }
 }
 
@@ -618,13 +653,10 @@ void Element::setOuterHTML(const std::string& html) {
         document_->unregisterElementId(id(), this);
     }
 
-    // Remove this element from parent. Mark the parent, not this element: its
-    // child list is the one that changed, and this element is about to leave the
-    // tree — a mark left on it would never be read.
-    Element* parentEl = parentElement();
+    // Remove this element from parent. removeChild marks the PARENT — its child
+    // list is the one that changed, and a mark left on this element would never
+    // be read since it is leaving the tree.
     parent_->removeChild(this);
-    if (parentEl) parentEl->markStructureDirty();
-    else document_->markStructureDirty();
 
     // Free the temporary container
     document_->freeNode(tempContainer);

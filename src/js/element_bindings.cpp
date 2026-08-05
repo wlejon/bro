@@ -2378,18 +2378,17 @@ static JSValue js_element_hasAttribute(JSContext* ctx, JSValueConst this_val,
 
 // ---- DOM manipulation methods ---------------------------------------------
 
-// A DOM mutation belongs to the element whose child list moved. Attributing it
-// lets the layout tree rebuild just that node's children from the DOM and hand
-// back every other subtree's cached geometry — the document-wide mark throws the
-// whole tree away, which on a few-thousand-element document is ~150ms of layout
-// for one appended chip. Falls back to the document-wide form only when there is
-// no element to pin the change on.
-static void markChildListChanged(bro::dom::Document* doc, bro::dom::Node* parent) {
-    if (parent && parent->nodeType() == bro::dom::NodeType::Element)
-        static_cast<bro::dom::Element*>(parent)->markStructureDirty();
-    else if (doc)
-        doc->markStructureDirty();
-}
+// Layout invalidation used to live here, as markChildListChanged(doc, parent),
+// called by hand after every mutator in this file. It now lives in the DOM
+// layer — Node::appendChild / insertBefore / removeChild invalidate the parent
+// whose child list moved (dom/element.cpp, notifyChildListChanged), which is
+// the same attribution this helper did and is also what makes the mutators
+// safe to call from engine and host C++. The calls here were removed rather
+// than left as harmless duplicates so there is one place that decides.
+//
+// What stays in this file is what genuinely needs a JS realm: cross-document
+// adoption (below), custom-element connected/disconnected callbacks, and
+// MutationObserver delivery.
 
 // DOM "pre-insert" step 2: adopt `node` into `parent`'s document when their
 // owner documents differ. Without this, a node built in a DOMParser document
@@ -2413,7 +2412,6 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
     if (!el || argc < 1) return JS_UNDEFINED;
     auto* child = unwrapNode(ctx, argv[0]);
     if (child) {
-        auto* doc = getDocumentForCtx(ctx);
         if (child->nodeName() == "#DOCUMENT-FRAGMENT" ||
             child->nodeType() == bro::dom::NodeType::DocumentFragment) {
             auto kids = child->childNodes();
@@ -2425,7 +2423,6 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
             uint32_t addedIdx = 0;
             for (auto* kid : kids) {
                 el->appendChild(kid);
-                markChildListChanged(doc, el);
                 JS_SetPropertyUint32(ctx, addedArr, addedIdx++, wrapAnyNode(ctx, kid));
             }
             for (auto* kid : kids) {
@@ -2441,7 +2438,6 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
         } else {
             adoptIntoParentDocument(el, child);
             el->appendChild(child);
-            markChildListChanged(doc, el);
             if (child->nodeType() == bro::dom::NodeType::Element) {
                 JSValue w = DomBindings::wrapElement(ctx, child);
                 fireConnectedCallback(ctx, w);
@@ -2476,7 +2472,6 @@ static JSValue js_element_removeChild(JSContext* ctx, JSValueConst this_val,
             if (doc && !childElem->id().empty())
                 doc->unregisterElementId(childElem->id(), childElem);
         }
-        markChildListChanged(doc, el);
         el->removeChild(child);
         notifyMutationObservers(ctx, this_val, "childList",
             nullptr, nullptr, JS_NULL, removedArr);
@@ -2498,8 +2493,6 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
     if (newChild) {
         adoptIntoParentDocument(el, newChild);
         el->insertBefore(newChild, refChild);
-        auto* doc = getDocumentForCtx(ctx);
-        markChildListChanged(doc, el);
         if (newChild->nodeType() == bro::dom::NodeType::Element) {
             auto* newElem = static_cast<bro::dom::Element*>(newChild);
             JSValue w = DomBindings::wrapElement(ctx, newElem);
@@ -2534,7 +2527,6 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
         }
         adoptIntoParentDocument(el, newChild);
         el->insertBefore(newChild, oldChild);
-        markChildListChanged(doc, el);
         if (oldChild->nodeType() == bro::dom::NodeType::Element) {
             auto* oldElem = static_cast<bro::dom::Element*>(oldChild);
             if (doc && !oldElem->id().empty())
@@ -2587,7 +2579,6 @@ static JSValue js_element_remove(JSContext* ctx, JSValueConst this_val,
         auto* doc = getDocumentForCtx(ctx);
         if (doc && !el->id().empty())
             doc->unregisterElementId(el->id(), el);
-        markChildListChanged(doc, parent);
         invalidateWrapper(ctx, el);
         parent->removeChild(el);
         if (doc) doc->freeNode(el);
@@ -3678,12 +3669,10 @@ static JSValue js_element_append(JSContext* ctx, JSValueConst this_val,
                                  int argc, JSValueConst* argv) {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    auto* doc = getDocumentForCtx(ctx);
     for (int i = 0; i < argc; ++i) {
         auto* node = nodeOrTextFromArg(ctx, argv[i]);
         if (!node) continue;
         el->appendChild(node);
-        markChildListChanged(doc, el);
         fireConnectedIfElement(ctx, node);
     }
     return JS_UNDEFINED;
@@ -3693,13 +3682,11 @@ static JSValue js_element_prepend(JSContext* ctx, JSValueConst this_val,
                                   int argc, JSValueConst* argv) {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    auto* doc = getDocumentForCtx(ctx);
     auto* ref = el->childNodes().empty() ? nullptr : el->childNodes().front();
     for (int i = 0; i < argc; ++i) {
         auto* node = nodeOrTextFromArg(ctx, argv[i]);
         if (!node) continue;
         el->insertBefore(node, ref);
-        markChildListChanged(doc, el);
         fireConnectedIfElement(ctx, node);
     }
     return JS_UNDEFINED;
@@ -3711,12 +3698,10 @@ static JSValue js_element_before(JSContext* ctx, JSValueConst this_val,
     if (!el) return JS_UNDEFINED;
     auto* parent = el->parentNode();
     if (!parent) return JS_UNDEFINED;
-    auto* doc = getDocumentForCtx(ctx);
     for (int i = 0; i < argc; ++i) {
         auto* node = nodeOrTextFromArg(ctx, argv[i]);
         if (!node) continue;
         parent->insertBefore(node, el);
-        markChildListChanged(doc, parent);
         fireConnectedIfElement(ctx, node);
     }
     return JS_UNDEFINED;
@@ -3728,7 +3713,6 @@ static JSValue js_element_after(JSContext* ctx, JSValueConst this_val,
     if (!el) return JS_UNDEFINED;
     auto* parent = el->parentNode();
     if (!parent) return JS_UNDEFINED;
-    auto* doc = getDocumentForCtx(ctx);
     // Find the node after 'el' to use as reference
     bro::dom::Node* ref = nullptr;
     auto& siblings = parent->childNodes();
@@ -3742,7 +3726,6 @@ static JSValue js_element_after(JSContext* ctx, JSValueConst this_val,
         auto* node = nodeOrTextFromArg(ctx, argv[i]);
         if (!node) continue;
         parent->insertBefore(node, ref);
-        markChildListChanged(doc, parent);
         fireConnectedIfElement(ctx, node);
     }
     return JS_UNDEFINED;
@@ -3761,14 +3744,12 @@ static JSValue js_element_replaceWith(JSContext* ctx, JSValueConst this_val,
         auto* node = nodeOrTextFromArg(ctx, argv[i]);
         if (!node) continue;
         parent->insertBefore(node, el);
-        markChildListChanged(doc, parent);
         fireConnectedIfElement(ctx, node);
     }
 
     // Remove the old element
     if (doc && !el->id().empty())
         doc->unregisterElementId(el->id(), el);
-    markChildListChanged(doc, parent);
     JSValue w = DomBindings::wrapElement(ctx, el);
     fireDisconnectedCallback(ctx, w);
     JS_FreeValue(ctx, w);
@@ -3823,16 +3804,14 @@ static JSValue js_element_replaceChildren(JSContext* ctx, JSValueConst this_val,
             if (doc) doc->freeNode(child);
         }
     }
-    // Emptying a container is a structural change even when nothing replaces
-    // it; the append loop below only marks what it adds.
-    if (!oldKids.empty()) markChildListChanged(doc, el);
+    // (Emptying a container is a structural change even when nothing replaces
+    // it. Node::removeChild above marked it; no separate mark needed here.)
 
     // Append new children
     for (int i = 0; i < argc; ++i) {
         auto* node = nodeOrTextFromArg(ctx, argv[i]);
         if (!node) continue;
         el->appendChild(node);
-        markChildListChanged(doc, el);
         fireConnectedIfElement(ctx, node);
     }
     return JS_UNDEFINED;
@@ -3845,7 +3824,6 @@ static JSValue js_element_insertAdjacentElement(JSContext* ctx, JSValueConst thi
     std::string pos = jsToStdString(ctx, argv[0]);
     auto* newEl = unwrapNode(ctx, argv[1]);
     if (!newEl) return JS_NULL;
-    auto* doc = getDocumentForCtx(ctx);
 
     if (pos == "beforebegin") {
         auto* parent = el->parentNode();
@@ -3869,7 +3847,6 @@ static JSValue js_element_insertAdjacentElement(JSContext* ctx, JSValueConst thi
             parent->insertBefore(newEl, ref);
         }
     }
-    markChildListChanged(doc, newEl->parentNode());
     fireConnectedIfElement(ctx, newEl);
     return argc >= 2 ? JS_DupValue(ctx, argv[1]) : JS_NULL;
 }

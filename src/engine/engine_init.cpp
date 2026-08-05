@@ -255,6 +255,14 @@ Engine::Engine(const EngineConfig& config)
     // === Server mode: lightweight init — no rendering, DOM, or audio ===
 
     if (displayMode_ == DisplayMode::Server) {
+        // Same reason as in initAppRealm(): register the realm's engine
+        // back-pointer before installCoreBindings runs the host's installer,
+        // so bro::engine::engineForContext(ctx) answers inside it. Server mode
+        // has no document and never installs the DOM bindings, so this is the
+        // only place it gets registered — shutdown()'s DomBindings::cleanup
+        // drops it for every mode.
+        js::DomBindings::setEngine(jsRuntime_->getContext(), this);
+
         // Mode-independent bindings (brokit, timers, physics, ML tower, net/
         // steam/server). Servers never reload, so this is their only install.
         installCoreBindings(jsRuntime_->getContext());
@@ -553,6 +561,17 @@ void Engine::initAppRealm() {
     // Fresh realm ⇒ the document lifecycle starts over.
     documentReadyState_ = "loading";
 
+    // Register this realm's engine back-pointer FIRST — before any binding is
+    // installed, engine's own or the host's. installCoreBindings() ends by
+    // calling EngineConfig::installHostBindings, and a host installer that
+    // reaches for bro::engine::engineForContext(ctx) (the only way it can get
+    // an Engine* out of a `void(JSContext*)` hook) has to find one already
+    // there. It used to be registered ~150 lines further down, with the rest
+    // of the DOM bindings, which made it null for exactly that caller. The
+    // DOM bindings re-register the same value below; it is an idempotent map
+    // write, not an ordering dependency.
+    js::DomBindings::setEngine(appCtx, this);
+
     // Mode-independent core (brokit, timers, physics, mesh/flora/math/ai,
     // the ML tower, terrain/tile, net/steam/server).
     installCoreBindings(appCtx);
@@ -813,56 +832,12 @@ void Engine::initAppRealm() {
                 }
 #if BRO_WITH_3D
                 if (type == "scene") {
-                    // Create a 2D canvas for the scene graph to render into
-                    auto canvasScene = std::make_unique<canvas::CanvasScene>(renderer_.get());
-                    if (el) {
-                        canvasScene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
-                            auto* elem = static_cast<dom::Element*>(ud);
-                            if (!elem->parentNode()) {
-                                ox = oy = ow = oh = 0;
-                                return;
-                            }
-                            dom::AbsoluteRect r = dom::absoluteContentBox(elem);
-                            ox = r.x; oy = r.y; ow = r.width; oh = r.height;
-                        }, el);
-                        canvasScene->setDetachedCallback([](void* ud) -> bool {
-                            auto* n = static_cast<dom::Element*>(ud);
-                            while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
-                            return n->tagName() != "html" && n->tagName() != "HTML";
-                        }, el);
-                        canvasScene->setLiveCheck([](void* doc, void* node) -> bool {
-                            return static_cast<dom::Document*>(doc)->isNodeLive(
-                                static_cast<dom::Element*>(node));
-                        }, el->document());
-                    }
-                    auto* csPtr = canvasScene.get();
-                    if (el) el->setCanvasScene(csPtr, &canvas::CanvasScene::onBackingElementDestroyed);
-                    addCanvasScene(std::move(canvasScene));
-
-                    // Size to element layout (fall back to viewport)
-                    int cw = viewportWidth_, ch = viewportHeight_;
-                    if (el) {
-                        auto& box = el->layoutBox();
-                        if (box.contentRect.width > 0) cw = static_cast<int>(box.contentRect.width);
-                        if (box.contentRect.height > 0) ch = static_cast<int>(box.contentRect.height);
-                    }
-
-                    auto graph = std::make_unique<scene::SceneGraph>();
-                    graph->setCanvasScene(csPtr);
-                    graph->setPhysicsWorld(physicsWorld_.get());
-                    graph->setCanvasSize(cw, ch);
-                    auto* graphPtr = graph.get();
-                    if (el) {
-                        el->setSceneGraph(graphPtr);
-                        graphPtr->setFBOTextureCallback([el](unsigned int tex) {
-                            el->setSceneGraphFBOTexture(tex);
-                        });
-                    }
-                    graphPtr->setGizmoProvider([this](scene::SceneGraph* g) {
-                        return gizmo_ ? gizmo_->meshesForRender(g)
-                                       : std::vector<scene::MeshNode*>{};
-                    });
-                    sceneGraphs_.push_back({std::move(graph), el});
+                    // The whole scene-context build lives in createSceneContext
+                    // so a C++ host gets *this*, registration and all, rather
+                    // than a make_unique SceneGraph that is never rendered and
+                    // never composited. One code path, no drift.
+                    scene::SceneGraph* graphPtr = createSceneContext(el);
+                    if (!graphPtr) return JS_NULL;
                     return js::SceneBindings::wrapSceneGraph(ctx, graphPtr);
                 }
 #endif  // BRO_WITH_3D
@@ -1053,6 +1028,126 @@ void Engine::initAppRealm() {
     // (first JS-driven flush / first main-loop tick) fires queued
     // loadedmetadata / timeupdate.
     mediaEventsArmed_ = true;
+}
+
+// ---------------------------------------------------------------------------
+// Scene contexts
+// ---------------------------------------------------------------------------
+
+// The one and only place a scene rendering context is built. Both callers go
+// through here: canvas.getContext('scene') from JS (via the getContext factory
+// installed above) and a C++ host calling Engine::createSceneContext directly.
+// See the declaration in engine.h for what a scene context actually consists of
+// and why building a bare SceneGraph instead is not a scene context at all.
+scene::SceneGraph* Engine::createSceneContext(dom::Element* canvas) {
+#if !BRO_WITH_3D
+    (void)canvas;
+    return nullptr;
+#else
+    // No GL, no scene. The 3D renderer is OpenGL from top to bottom, and on the
+    // raster path (--no-gpu, or a headless boot whose SDL video init failed)
+    // every glad entry point is null — a live SceneGraph here looks like it
+    // works right up to the first flush(), which renders it and jumps to
+    // address 0. gl_ is the engine's own form of scene::glFunctionsLoaded();
+    // it is also exactly what gates installation of the GPU getContext factory,
+    // so the JS answer on this path is unchanged (null).
+    if (!gl_) return nullptr;
+
+    // getContext() must hand back the SAME context for the life of the canvas,
+    // and a host calling this twice must not get a second registration either.
+    // Two conditions, and both must hold:
+    //   - the element carries a scene back-pointer, which a brand-new Element
+    //     at a recycled address does not (sceneGraph_ is not cleared when a
+    //     graph is reclaimed, so the pointer alone can be stale — it is only
+    //     ever used as a flag, never dereferenced);
+    //   - sceneGraphs_ still holds an entry for it, which is authoritative and
+    //     is what the frame loop actually renders.
+    // If the flag is set but the entry is gone (the graph was pruned when the
+    // canvas left the DOM), the old context is genuinely dead: fall through and
+    // build a fresh one.
+    if (canvas && canvas->sceneGraph()) {
+        if (auto* existing = sceneGraphForElement(canvas)) return existing;
+    }
+    if (!canvas) return nullptr;
+
+    // A CanvasScene is the surface the scene graph renders through, and the
+    // three callbacks are what tie it to the element: where it is on screen,
+    // whether the element has left the document, and whether the element is
+    // still live at all.
+    auto canvasScene = std::make_unique<canvas::CanvasScene>(renderer_.get());
+    canvasScene->setLayoutCallback([](void* ud, float& ox, float& oy, float& ow, float& oh) {
+        auto* elem = static_cast<dom::Element*>(ud);
+        if (!elem->parentNode()) {
+            ox = oy = ow = oh = 0;
+            return;
+        }
+        dom::AbsoluteRect r = dom::absoluteContentBox(elem);
+        ox = r.x; oy = r.y; ow = r.width; oh = r.height;
+    }, canvas);
+    canvasScene->setDetachedCallback([](void* ud) -> bool {
+        auto* n = static_cast<dom::Element*>(ud);
+        while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+        return n->tagName() != "html" && n->tagName() != "HTML";
+    }, canvas);
+    canvasScene->setLiveCheck([](void* doc, void* node) -> bool {
+        return static_cast<dom::Document*>(doc)->isNodeLive(
+            static_cast<dom::Element*>(node));
+    }, canvas->document());
+
+    auto* csPtr = canvasScene.get();
+    canvas->setCanvasScene(csPtr, &canvas::CanvasScene::onBackingElementDestroyed);
+    addCanvasScene(std::move(canvasScene));
+
+    // Size to element layout (fall back to viewport). A host that appends the
+    // canvas and calls straight through has no layout box yet — hence the
+    // fallback, and hence appendChild invalidating layout (dom/element.cpp) so
+    // the next layout pass gives the element a real box and the layout callback
+    // above starts reporting it.
+    int cw = viewportWidth_, ch = viewportHeight_;
+    {
+        auto& box = canvas->layoutBox();
+        if (box.contentRect.width > 0) cw = static_cast<int>(box.contentRect.width);
+        if (box.contentRect.height > 0) ch = static_cast<int>(box.contentRect.height);
+    }
+
+    auto graph = std::make_unique<scene::SceneGraph>();
+    graph->setCanvasScene(csPtr);
+    graph->setPhysicsWorld(physicsWorld_.get());
+    graph->setCanvasSize(cw, ch);
+    auto* graphPtr = graph.get();
+
+    canvas->setSceneGraph(graphPtr);
+    // Without this the graph renders to an FBO nothing ever reads: the element
+    // never becomes a layer break in draw_traversal, so compositeLayers has
+    // nothing to composite and the scene is simply invisible.
+    graphPtr->setFBOTextureCallback([canvas](unsigned int tex) {
+        canvas->setSceneGraphFBOTexture(tex);
+    });
+    graphPtr->setGizmoProvider([this](scene::SceneGraph* g) {
+        return gizmo_ ? gizmo_->meshesForRender(g)
+                      : std::vector<scene::MeshNode*>{};
+    });
+
+    // Last, and load-bearing: a graph that is not in sceneGraphs_ is never
+    // rendered by the frame loop (engine_frame.cpp) or by flush() (headless).
+    sceneGraphs_.push_back({std::move(graph), canvas});
+    return graphPtr;
+#endif  // BRO_WITH_3D
+}
+
+size_t Engine::sceneContextCount() const {
+#if BRO_WITH_3D
+    return sceneGraphs_.size();
+#else
+    return 0;
+#endif
+}
+
+// The typed reader for the per-realm engine pointer the DOM bindings already
+// register. See engine.h for why this exists (host binding installers are
+// handed a JSContext* and nothing else).
+Engine* engineForContext(JSContext* ctx) {
+    return static_cast<Engine*>(js::DomBindings::engineFor(ctx));
 }
 
 // Mode-independent per-context installs — everything a bro realm gets no

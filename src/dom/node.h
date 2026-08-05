@@ -34,6 +34,16 @@ public:
     std::vector<Node*>& childNodes() { return children_; }
     const std::vector<Node*>& childNodes() const { return children_; }
 
+    // Tree mutation. Each of these invalidates layout for the parent whose
+    // child list moved (see notifyChildListChanged in element.cpp), so a node
+    // inserted from C++ enters layout and renders — callers do NOT need to
+    // follow up with markStructureDirty(). Safe to call from host code.
+    //
+    // They are the tree primitives only. They do not run script: custom-element
+    // connectedCallback and MutationObserver delivery need a JS realm and stay
+    // in the JS bindings, as does cross-document adoption (a pre-insertion step
+    // that has to run before the tree changes). Host C++ inserting nodes it
+    // created in this same document needs none of the three.
     void appendChild(Node* child);
     void removeChild(Node* child);
     void insertBefore(Node* newChild, Node* refChild);

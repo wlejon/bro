@@ -562,6 +562,11 @@ void DomBindings::setEngine(JSContext* ctx, void* engine) {
     s_ctx_engines[ctx] = engine;
 }
 
+void* DomBindings::engineFor(JSContext* ctx) {
+    auto it = s_ctx_engines.find(ctx);
+    return it == s_ctx_engines.end() ? nullptr : it->second;
+}
+
 void DomBindings::cleanup(JSContext* ctx) {
     // Release the strong pins that keep running Animation wrappers alive for
     // finish delivery — they must not survive into JS_FreeRuntime.

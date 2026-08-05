@@ -454,11 +454,10 @@ static bro::dom::TextNode* selectionCaretTextPosition(bro::dom::Document* doc,
         } else {
             el->insertBefore(tn, kids[caretOff]);
         }
-        // Node::appendChild/insertBefore are the raw tree primitives — they
-        // don't mark layout structure. Without this the new text node never
-        // gets a layout adapter, so it renders stale and caret/selection
-        // geometry (getCaretRect / getSelectionRects) can't see it.
-        el->markStructureDirty();
+        // (appendChild/insertBefore mark layout structure themselves now — see
+        // dom/element.cpp. This used to need an explicit markStructureDirty()
+        // or the new text node got no layout adapter and caret/selection
+        // geometry couldn't see it.)
         created = true;
         return tn;
     }
