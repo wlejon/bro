@@ -23,6 +23,7 @@ if(BRO_WITH_VIDEO)
     add_subdirectory(video)
 endif()
 add_subdirectory(engine)
+add_subdirectory(api)
 
 # The three stock executables. A host application that embeds bro (links
 # bro_engine and supplies its own main) turns these off with

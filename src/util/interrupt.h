@@ -2,9 +2,7 @@
 
 #include <atomic>
 
-extern "C" {
-#include "quickjs.h"
-}
+struct JSRuntime;
 
 /// Process-wide interrupt flag + Ctrl+C wiring.
 ///

@@ -10,6 +10,7 @@
 #include "broaudio/dsp/resampler.h"
 #include "dom/element.h"
 #include "dom/event.h"
+#include "../../third_party/quickjs/quickjs.h"
 #include "js/event_dispatch.h"
 #include "util/log.h"
 #include "video/audio_decoder.h"

@@ -1,8 +1,24 @@
 #pragma once
 
+#include <cstdint>
+
+#if defined(QUICKJS_H)
+// quickjs.h already included
+#elif __has_include("quickjs.h")
 extern "C" {
 #include "quickjs.h"
 }
+#else
+struct JSContext;
+#if defined(__x86_64__) || defined(_M_X64)
+typedef uint64_t JSValue;
+#else
+typedef struct JSValue JSValue;
+#endif
+#ifndef JS_UNDEFINED
+#define JS_UNDEFINED 0
+#endif
+#endif
 
 namespace bro::dom { class Element; class Event; class ShadowRoot; }
 

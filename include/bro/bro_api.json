@@ -1,0 +1,383 @@
+{
+  "namespace": "bro",
+  "version": "1.0.0",
+  "dataTypes": [
+    {
+      "name": "Vector3",
+      "kind": "struct",
+      "fields": [
+        { "name": "x", "type": "float" },
+        { "name": "y", "type": "float" },
+        { "name": "z", "type": "float" }
+      ],
+      "constructors": [
+        { "parameters": [] },
+        { "parameters": [{ "name": "x", "type": "float" }, { "name": "y", "type": "float" }, { "name": "z", "type": "float" }] }
+      ],
+      "methods": [
+        { "name": "length", "parameters": [], "returnType": "float" },
+        { "name": "lengthSq", "parameters": [], "returnType": "float" },
+        { "name": "normalized", "parameters": [], "returnType": "bro::Vector3" },
+        { "name": "normalize", "parameters": [], "returnType": "void" },
+        { "name": "dot", "parameters": [{ "name": "rhs", "type": "const bro::Vector3&" }], "returnType": "float" },
+        { "name": "cross", "parameters": [{ "name": "rhs", "type": "const bro::Vector3&" }], "returnType": "bro::Vector3" },
+        { "name": "set", "parameters": [{ "name": "px", "type": "float" }, { "name": "py", "type": "float" }, { "name": "pz", "type": "float" }], "returnType": "void" },
+        { "name": "distanceTo", "parameters": [{ "name": "v", "type": "const bro::Vector3&" }], "returnType": "float" }
+      ]
+    },
+    {
+      "name": "Color",
+      "kind": "struct",
+      "fields": [
+        { "name": "r", "type": "float" },
+        { "name": "g", "type": "float" },
+        { "name": "b", "type": "float" },
+        { "name": "a", "type": "float" }
+      ],
+      "constructors": [
+        { "parameters": [] },
+        { "parameters": [{ "name": "r", "type": "float" }, { "name": "g", "type": "float" }, { "name": "b", "type": "float" }, { "name": "a", "type": "float", "default": "1.0f" }] },
+        { "parameters": [{ "name": "hex", "type": "uint32_t" }, { "name": "a", "type": "float", "default": "1.0f" }] }
+      ],
+      "methods": [
+        { "name": "setRGB", "parameters": [{ "name": "r", "type": "float" }, { "name": "g", "type": "float" }, { "name": "b", "type": "float" }], "returnType": "void" },
+        { "name": "setHex", "parameters": [{ "name": "hex", "type": "uint32_t" }], "returnType": "void" }
+      ]
+    },
+    {
+      "name": "Quaternion",
+      "kind": "struct",
+      "fields": [
+        { "name": "x", "type": "float" },
+        { "name": "y", "type": "float" },
+        { "name": "z", "type": "float" },
+        { "name": "w", "type": "float" }
+      ],
+      "constructors": [
+        { "parameters": [] },
+        { "parameters": [{ "name": "x", "type": "float" }, { "name": "y", "type": "float" }, { "name": "z", "type": "float" }, { "name": "w", "type": "float" }] }
+      ],
+      "staticMethods": [
+        { "name": "fromAxisAngle", "parameters": [{ "name": "axis", "type": "const bro::Vector3&" }, { "name": "angle", "type": "float" }], "returnType": "bro::Quaternion" },
+        { "name": "fromEuler", "parameters": [{ "name": "rx", "type": "float" }, { "name": "ry", "type": "float" }, { "name": "rz", "type": "float" }], "returnType": "bro::Quaternion" }
+      ],
+      "methods": [
+        { "name": "rotateVector", "parameters": [{ "name": "v", "type": "const bro::Vector3&" }], "returnType": "bro::Vector3" },
+        { "name": "set", "parameters": [{ "name": "px", "type": "float" }, { "name": "py", "type": "float" }, { "name": "pz", "type": "float" }, { "name": "pw", "type": "float" }], "returnType": "void" }
+      ]
+    },
+    {
+      "name": "Euler",
+      "kind": "struct",
+      "fields": [
+        { "name": "x", "type": "float" },
+        { "name": "y", "type": "float" },
+        { "name": "z", "type": "float" },
+        { "name": "order", "type": "std::string" }
+      ],
+      "constructors": [
+        { "parameters": [] },
+        { "parameters": [{ "name": "x", "type": "float" }, { "name": "y", "type": "float" }, { "name": "z", "type": "float" }, { "name": "order", "type": "std::string", "default": "\"XYZ\"" }] }
+      ],
+      "methods": [
+        { "name": "toQuaternion", "parameters": [], "returnType": "bro::Quaternion" },
+        { "name": "set", "parameters": [{ "name": "px", "type": "float" }, { "name": "py", "type": "float" }, { "name": "pz", "type": "float" }, { "name": "order", "type": "std::string", "default": "\"XYZ\"" }], "returnType": "void" }
+      ]
+    },
+    {
+      "name": "Matrix4",
+      "kind": "struct",
+      "fields": [
+        { "name": "elements", "type": "std::array<float, 16>" }
+      ],
+      "constructors": [
+        { "parameters": [] }
+      ],
+      "staticMethods": [
+        { "name": "identity", "parameters": [], "returnType": "bro::Matrix4" },
+        { "name": "makeTranslation", "parameters": [{ "name": "x", "type": "float" }, { "name": "y", "type": "float" }, { "name": "z", "type": "float" }], "returnType": "bro::Matrix4" },
+        { "name": "makeScale", "parameters": [{ "name": "sx", "type": "float" }, { "name": "sy", "type": "float" }, { "name": "sz", "type": "float" }], "returnType": "bro::Matrix4" },
+        { "name": "makePerspective", "parameters": [{ "name": "fovRad", "type": "float" }, { "name": "aspect", "type": "float" }, { "name": "nearZ", "type": "float" }, { "name": "farZ", "type": "float" }], "returnType": "bro::Matrix4" }
+      ]
+    }
+  ],
+  "sceneGraphTypes": [
+    {
+      "name": "Object3D",
+      "baseClass": null,
+      "memoryManagement": "std::shared_ptr",
+      "methods": [
+        { "name": "name", "parameters": [], "returnType": "const std::string&" },
+        { "name": "setName", "parameters": [{ "name": "name", "type": "const std::string&" }], "returnType": "void" },
+        { "name": "position", "parameters": [], "returnType": "const bro::Vector3&" },
+        { "name": "setPosition", "parameters": [{ "name": "pos", "type": "const bro::Vector3&" }], "returnType": "void" },
+        { "name": "setPosition", "parameters": [{ "name": "x", "type": "float" }, { "name": "y", "type": "float" }, { "name": "z", "type": "float" }], "returnType": "void" },
+        { "name": "rotation", "parameters": [], "returnType": "const bro::Euler&" },
+        { "name": "setRotation", "parameters": [{ "name": "rot", "type": "const bro::Euler&" }], "returnType": "void" },
+        { "name": "setRotation", "parameters": [{ "name": "x", "type": "float" }, { "name": "y", "type": "float" }, { "name": "z", "type": "float" }], "returnType": "void" },
+        { "name": "quaternion", "parameters": [], "returnType": "const bro::Quaternion&" },
+        { "name": "setQuaternion", "parameters": [{ "name": "q", "type": "const bro::Quaternion&" }], "returnType": "void" },
+        { "name": "scale", "parameters": [], "returnType": "const bro::Vector3&" },
+        { "name": "setScale", "parameters": [{ "name": "scale", "type": "const bro::Vector3&" }], "returnType": "void" },
+        { "name": "setScale", "parameters": [{ "name": "x", "type": "float" }, { "name": "y", "type": "float" }, { "name": "z", "type": "float" }], "returnType": "void" },
+        { "name": "setScale", "parameters": [{ "name": "s", "type": "float" }], "returnType": "void" },
+        { "name": "visible", "parameters": [], "returnType": "bool" },
+        { "name": "setVisible", "parameters": [{ "name": "v", "type": "bool" }], "returnType": "void" },
+        { "name": "add", "parameters": [{ "name": "child", "type": "std::shared_ptr<bro::Object3D>" }], "returnType": "void" },
+        { "name": "remove", "parameters": [{ "name": "child", "type": "std::shared_ptr<bro::Object3D>" }], "returnType": "void" },
+        { "name": "children", "parameters": [], "returnType": "const std::vector<std::shared_ptr<bro::Object3D>>&" },
+        { "name": "parent", "parameters": [], "returnType": "std::shared_ptr<bro::Object3D>" },
+        { "name": "getObjectByName", "parameters": [{ "name": "name", "type": "const std::string&" }], "returnType": "std::shared_ptr<bro::Object3D>" },
+        { "name": "lookAt", "parameters": [{ "name": "target", "type": "const bro::Vector3&" }], "returnType": "void" },
+        { "name": "lookAt", "parameters": [{ "name": "x", "type": "float" }, { "name": "y", "type": "float" }, { "name": "z", "type": "float" }], "returnType": "void" }
+      ]
+    },
+    {
+      "name": "Scene",
+      "baseClass": "bro::Object3D",
+      "memoryManagement": "std::shared_ptr",
+      "constructors": [
+        { "parameters": [{ "name": "name", "type": "const std::string&", "default": "\"\"" }] }
+      ],
+      "methods": [
+        { "name": "background", "parameters": [], "returnType": "const bro::Color&" },
+        { "name": "setBackground", "parameters": [{ "name": "color", "type": "const bro::Color&" }], "returnType": "void" },
+        { "name": "setBackground", "parameters": [{ "name": "r", "type": "float" }, { "name": "g", "type": "float" }, { "name": "b", "type": "float" }], "returnType": "void" }
+      ]
+    },
+    {
+      "name": "Geometry",
+      "baseClass": null,
+      "memoryManagement": "std::shared_ptr",
+      "staticMethods": [
+        { "name": "createBox", "parameters": [{ "name": "width", "type": "float", "default": "1.0f" }, { "name": "height", "type": "float", "default": "1.0f" }, { "name": "depth", "type": "float", "default": "1.0f" }], "returnType": "std::shared_ptr<bro::Geometry>" },
+        { "name": "createSphere", "parameters": [{ "name": "radius", "type": "float", "default": "1.0f" }, { "name": "widthSegments", "type": "int", "default": "32" }, { "name": "heightSegments", "type": "int", "default": "16" }], "returnType": "std::shared_ptr<bro::Geometry>" },
+        { "name": "createPlane", "parameters": [{ "name": "width", "type": "float", "default": "1.0f" }, { "name": "height", "type": "float", "default": "1.0f" }], "returnType": "std::shared_ptr<bro::Geometry>" }
+      ],
+      "methods": [
+        { "name": "geometryType", "parameters": [], "returnType": "bro::GeometryType" },
+        { "name": "setPositions", "parameters": [{ "name": "positions", "type": "const std::vector<float>&" }], "returnType": "void" },
+        { "name": "setNormals", "parameters": [{ "name": "normals", "type": "const std::vector<float>&" }], "returnType": "void" },
+        { "name": "setUVs", "parameters": [{ "name": "uvs", "type": "const std::vector<float>&" }], "returnType": "void" },
+        { "name": "setIndices", "parameters": [{ "name": "indices", "type": "const std::vector<uint32_t>&" }], "returnType": "void" },
+        { "name": "positions", "parameters": [], "returnType": "const std::vector<float>&" },
+        { "name": "normals", "parameters": [], "returnType": "const std::vector<float>&" },
+        { "name": "uvs", "parameters": [], "returnType": "const std::vector<float>&" },
+        { "name": "indices", "parameters": [], "returnType": "const std::vector<uint32_t>&" }
+      ]
+    },
+    {
+      "name": "Material",
+      "baseClass": null,
+      "memoryManagement": "std::shared_ptr",
+      "constructors": [
+        { "parameters": [] }
+      ],
+      "methods": [
+        { "name": "color", "parameters": [], "returnType": "const bro::Color&" },
+        { "name": "setColor", "parameters": [{ "name": "c", "type": "const bro::Color&" }], "returnType": "void" },
+        { "name": "setColor", "parameters": [{ "name": "r", "type": "float" }, { "name": "g", "type": "float" }, { "name": "b", "type": "float" }], "returnType": "void" },
+        { "name": "setColor", "parameters": [{ "name": "hex", "type": "uint32_t" }], "returnType": "void" },
+        { "name": "roughness", "parameters": [], "returnType": "float" },
+        { "name": "setRoughness", "parameters": [{ "name": "r", "type": "float" }], "returnType": "void" },
+        { "name": "metalness", "parameters": [], "returnType": "float" },
+        { "name": "setMetalness", "parameters": [{ "name": "m", "type": "float" }], "returnType": "void" },
+        { "name": "wireframe", "parameters": [], "returnType": "bool" },
+        { "name": "setWireframe", "parameters": [{ "name": "w", "type": "bool" }], "returnType": "void" },
+        { "name": "opacity", "parameters": [], "returnType": "float" },
+        { "name": "setOpacity", "parameters": [{ "name": "o", "type": "float" }], "returnType": "void" },
+        { "name": "transparent", "parameters": [], "returnType": "bool" },
+        { "name": "setTransparent", "parameters": [{ "name": "t", "type": "bool" }], "returnType": "void" },
+        { "name": "map", "parameters": [], "returnType": "const std::string&" },
+        { "name": "setMap", "parameters": [{ "name": "path", "type": "const std::string&" }], "returnType": "void" }
+      ]
+    },
+    {
+      "name": "Mesh",
+      "baseClass": "bro::Object3D",
+      "memoryManagement": "std::shared_ptr",
+      "constructors": [
+        { "parameters": [
+          { "name": "geometry", "type": "std::shared_ptr<bro::Geometry>", "default": "nullptr" },
+          { "name": "material", "type": "std::shared_ptr<bro::Material>", "default": "nullptr" },
+          { "name": "name", "type": "const std::string&", "default": "\"\"" }
+        ]}
+      ],
+      "methods": [
+        { "name": "geometry", "parameters": [], "returnType": "std::shared_ptr<bro::Geometry>" },
+        { "name": "setGeometry", "parameters": [{ "name": "geo", "type": "std::shared_ptr<bro::Geometry>" }], "returnType": "void" },
+        { "name": "material", "parameters": [], "returnType": "std::shared_ptr<bro::Material>" },
+        { "name": "setMaterial", "parameters": [{ "name": "mat", "type": "std::shared_ptr<bro::Material>" }], "returnType": "void" }
+      ]
+    },
+    {
+      "name": "Group",
+      "baseClass": "bro::Object3D",
+      "memoryManagement": "std::shared_ptr",
+      "constructors": [
+        { "parameters": [{ "name": "name", "type": "const std::string&", "default": "\"\"" }] }
+      ]
+    },
+    {
+      "name": "Camera",
+      "baseClass": "bro::Object3D",
+      "memoryManagement": "std::shared_ptr",
+      "constructors": [
+        { "parameters": [{ "name": "name", "type": "const std::string&", "default": "\"\"" }] }
+      ],
+      "methods": [
+        { "name": "nearZ", "parameters": [], "returnType": "float" },
+        { "name": "setNearZ", "parameters": [{ "name": "n", "type": "float" }], "returnType": "void" },
+        { "name": "farZ", "parameters": [], "returnType": "float" },
+        { "name": "setFarZ", "parameters": [{ "name": "f", "type": "float" }], "returnType": "void" }
+      ]
+    },
+    {
+      "name": "PerspectiveCamera",
+      "baseClass": "bro::Camera",
+      "memoryManagement": "std::shared_ptr",
+      "constructors": [
+        { "parameters": [
+          { "name": "fov", "type": "float", "default": "60.0f" },
+          { "name": "aspect", "type": "float", "default": "1.0f" },
+          { "name": "nearZ", "type": "float", "default": "0.1f" },
+          { "name": "farZ", "type": "float", "default": "1000.0f" },
+          { "name": "name", "type": "const std::string&", "default": "\"\"" }
+        ]}
+      ],
+      "methods": [
+        { "name": "fov", "parameters": [], "returnType": "float" },
+        { "name": "setFov", "parameters": [{ "name": "fov", "type": "float" }], "returnType": "void" },
+        { "name": "aspect", "parameters": [], "returnType": "float" },
+        { "name": "setAspect", "parameters": [{ "name": "aspect", "type": "float" }], "returnType": "void" }
+      ]
+    },
+    {
+      "name": "Light",
+      "baseClass": "bro::Object3D",
+      "memoryManagement": "std::shared_ptr",
+      "constructors": [
+        { "parameters": [
+          { "name": "color", "type": "const bro::Color&", "default": "Color(1,1,1)" },
+          { "name": "intensity", "type": "float", "default": "1.0f" },
+          { "name": "name", "type": "const std::string&", "default": "\"\"" }
+        ]}
+      ],
+      "methods": [
+        { "name": "color", "parameters": [], "returnType": "const bro::Color&" },
+        { "name": "setColor", "parameters": [{ "name": "c", "type": "const bro::Color&" }], "returnType": "void" },
+        { "name": "setColor", "parameters": [{ "name": "r", "type": "float" }, { "name": "g", "type": "float" }, { "name": "b", "type": "float" }], "returnType": "void" },
+        { "name": "intensity", "parameters": [], "returnType": "float" },
+        { "name": "setIntensity", "parameters": [{ "name": "i", "type": "float" }], "returnType": "void" }
+      ]
+    },
+    {
+      "name": "AmbientLight",
+      "baseClass": "bro::Light",
+      "memoryManagement": "std::shared_ptr",
+      "constructors": [
+        { "parameters": [
+          { "name": "color", "type": "const bro::Color&", "default": "Color(1,1,1)" },
+          { "name": "intensity", "type": "float", "default": "1.0f" },
+          { "name": "name", "type": "const std::string&", "default": "\"\"" }
+        ]}
+      ]
+    },
+    {
+      "name": "DirectionalLight",
+      "baseClass": "bro::Light",
+      "memoryManagement": "std::shared_ptr",
+      "constructors": [
+        { "parameters": [
+          { "name": "color", "type": "const bro::Color&", "default": "Color(1,1,1)" },
+          { "name": "intensity", "type": "float", "default": "1.0f" },
+          { "name": "name", "type": "const std::string&", "default": "\"\"" }
+        ]}
+      ],
+      "methods": [
+        { "name": "castsShadow", "parameters": [], "returnType": "bool" },
+        { "name": "setCastsShadow", "parameters": [{ "name": "shadow", "type": "bool" }], "returnType": "void" },
+        { "name": "target", "parameters": [], "returnType": "const bro::Vector3&" },
+        { "name": "setTarget", "parameters": [{ "name": "t", "type": "const bro::Vector3&" }], "returnType": "void" }
+      ]
+    }
+  ],
+  "renderTypes": [
+    {
+      "name": "WebGLRenderer",
+      "memoryManagement": "std::unique_ptr / stack",
+      "constructors": [
+        { "parameters": [{ "name": "width", "type": "int", "default": "800" }, { "name": "height", "type": "int", "default": "600" }] }
+      ],
+      "methods": [
+        { "name": "setSize", "parameters": [{ "name": "width", "type": "int" }, { "name": "height", "type": "int" }], "returnType": "void" },
+        { "name": "width", "parameters": [], "returnType": "int" },
+        { "name": "height", "parameters": [], "returnType": "int" },
+        { "name": "setClearColor", "parameters": [{ "name": "color", "type": "const bro::Color&" }, { "name": "alpha", "type": "float", "default": "1.0f" }], "returnType": "void" },
+        { "name": "clearColor", "parameters": [], "returnType": "const bro::Color&" },
+        { "name": "render", "parameters": [{ "name": "scene", "type": "bro::Scene&" }, { "name": "camera", "type": "bro::Camera&" }], "returnType": "void" },
+        { "name": "render", "parameters": [{ "name": "scene", "type": "std::shared_ptr<bro::Scene>" }, { "name": "camera", "type": "std::shared_ptr<bro::Camera>" }], "returnType": "void" }
+      ]
+    }
+  ],
+  "physicsTypes": [
+    {
+      "name": "RigidBody",
+      "memoryManagement": "std::shared_ptr",
+      "constructors": [
+        { "parameters": [{ "name": "bodyType", "type": "bro::RigidBodyType", "default": "bro::RigidBodyType::Dynamic" }, { "name": "mass", "type": "float", "default": "1.0f" }] }
+      ],
+      "methods": [
+        { "name": "bodyType", "parameters": [], "returnType": "bro::RigidBodyType" },
+        { "name": "mass", "parameters": [], "returnType": "float" },
+        { "name": "position", "parameters": [], "returnType": "bro::Vector3" },
+        { "name": "setPosition", "parameters": [{ "name": "pos", "type": "const bro::Vector3&" }], "returnType": "void" },
+        { "name": "rotation", "parameters": [], "returnType": "bro::Quaternion" },
+        { "name": "setRotation", "parameters": [{ "name": "rot", "type": "const bro::Quaternion&" }], "returnType": "void" },
+        { "name": "linearVelocity", "parameters": [], "returnType": "bro::Vector3" },
+        { "name": "setLinearVelocity", "parameters": [{ "name": "vel", "type": "const bro::Vector3&" }], "returnType": "void" },
+        { "name": "angularVelocity", "parameters": [], "returnType": "bro::Vector3" },
+        { "name": "setAngularVelocity", "parameters": [{ "name": "vel", "type": "const bro::Vector3&" }], "returnType": "void" },
+        { "name": "addForce", "parameters": [{ "name": "force", "type": "const bro::Vector3&" }], "returnType": "void" },
+        { "name": "addImpulse", "parameters": [{ "name": "impulse", "type": "const bro::Vector3&" }], "returnType": "void" },
+        { "name": "friction", "parameters": [], "returnType": "float" },
+        { "name": "setFriction", "parameters": [{ "name": "f", "type": "float" }], "returnType": "void" },
+        { "name": "restitution", "parameters": [], "returnType": "float" },
+        { "name": "setRestitution", "parameters": [{ "name": "r", "type": "float" }], "returnType": "void" }
+      ]
+    },
+    {
+      "name": "PhysicsWorld",
+      "memoryManagement": "std::shared_ptr",
+      "constructors": [
+        { "parameters": [] }
+      ],
+      "methods": [
+        { "name": "setGravity", "parameters": [{ "name": "gravity", "type": "const bro::Vector3&" }], "returnType": "void" },
+        { "name": "gravity", "parameters": [], "returnType": "bro::Vector3" },
+        { "name": "step", "parameters": [{ "name": "dt", "type": "double" }], "returnType": "void" },
+        { "name": "addBody", "parameters": [{ "name": "body", "type": "std::shared_ptr<bro::RigidBody>" }], "returnType": "void" },
+        { "name": "removeBody", "parameters": [{ "name": "body", "type": "std::shared_ptr<bro::RigidBody>" }], "returnType": "void" },
+        { "name": "bodies", "parameters": [], "returnType": "const std::vector<std::shared_ptr<bro::RigidBody>>&" },
+        { "name": "raycast", "parameters": [{ "name": "origin", "type": "const bro::Vector3&" }, { "name": "direction", "type": "const bro::Vector3&" }, { "name": "maxDistance", "type": "float", "default": "1000.0f" }], "returnType": "bro::RaycastHit" }
+      ]
+    }
+  ],
+  "globalFunctions": [
+    {
+      "name": "set_render_callback",
+      "parameters": [{ "name": "callback", "type": "std::function<void(double dt)>" }],
+      "returnType": "void"
+    },
+    {
+      "name": "get_render_callback",
+      "parameters": [],
+      "returnType": "std::function<void(double dt)>"
+    },
+    {
+      "name": "tick_render_callback",
+      "parameters": [{ "name": "dt", "type": "double" }],
+      "returnType": "void"
+    }
+  ]
+}

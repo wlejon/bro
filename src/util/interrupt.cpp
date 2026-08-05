@@ -1,5 +1,6 @@
 #include "util/interrupt.h"
 #include "util/log.h"
+#include "quickjs.h"
 
 #include <atomic>
 #include <cstdlib>
