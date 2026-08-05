@@ -474,16 +474,105 @@ public:
     Geometry(GeometryType type = GeometryType::Custom) : type_(type) {}
     virtual ~Geometry() = default;
 
-    static std::shared_ptr<Geometry> createBox(float width = 1.0f, float height = 1.0f, float depth = 1.0f) { return std::make_shared<Geometry>(GeometryType::Box); }
-    static std::shared_ptr<Geometry> createSphere(float radius = 1.0f, int widthSegments = 32, int heightSegments = 16) { return std::make_shared<Geometry>(GeometryType::Sphere); }
-    static std::shared_ptr<Geometry> createPlane(float width = 1.0f, float height = 1.0f) { return std::make_shared<Geometry>(GeometryType::Plane); }
+    static std::shared_ptr<Geometry> createBox(float width = 1.0f, float height = 1.0f, float depth = 1.0f) {
+        auto geo = std::make_shared<Geometry>(GeometryType::Box);
+        float hw = width * 0.5f, hh = height * 0.5f, hd = depth * 0.5f;
+        geo->positions_ = {
+            -hw, -hh,  hd,  hw, -hh,  hd,  hw,  hh,  hd, -hw,  hh,  hd,
+            -hw, -hh, -hd, -hw,  hh, -hd,  hw,  hh, -hd,  hw, -hh, -hd,
+            -hw,  hh, -hd, -hw,  hh,  hd,  hw,  hh,  hd,  hw,  hh, -hd,
+            -hw, -hh, -hd,  hw, -hh, -hd,  hw, -hh,  hd, -hw, -hh,  hd,
+             hw, -hh, -hd,  hw,  hh, -hd,  hw,  hh,  hd,  hw, -hh,  hd,
+            -hw, -hh, -hd, -hw, -hh,  hd, -hw,  hh,  hd, -hw,  hh, -hd
+        };
+        geo->normals_ = {
+             0,  0,  1,   0,  0,  1,   0,  0,  1,   0,  0,  1,
+             0,  0, -1,   0,  0, -1,   0,  0, -1,   0,  0, -1,
+             0,  1,  0,   0,  1,  0,   0,  1,  0,   0,  1,  0,
+             0, -1,  0,   0, -1,  0,   0, -1,  0,   0, -1,  0,
+             1,  0,  0,   1,  0,  0,   1,  0,  0,   1,  0,  0,
+            -1,  0,  0,  -1,  0,  0,  -1,  0,  0,  -1,  0,  0
+        };
+        geo->indices_ = {
+             0,  1,  2,   0,  2,  3,
+             4,  5,  6,   4,  6,  7,
+             8,  9, 10,   8, 10, 11,
+            12, 13, 14,  12, 14, 15,
+            16, 17, 18,  16, 18, 19,
+            20, 21, 22,  20, 22, 23
+        };
+        return geo;
+    }
+
+    static std::shared_ptr<Geometry> createSphere(float radius = 1.0f, int widthSegments = 32, int heightSegments = 16) {
+        auto geo = std::make_shared<Geometry>(GeometryType::Sphere);
+        for (int y = 0; y <= heightSegments; ++y) {
+            float v = static_cast<float>(y) / heightSegments;
+            float phi = v * 3.14159265f;
+            for (int x = 0; x <= widthSegments; ++x) {
+                float u = static_cast<float>(x) / widthSegments;
+                float theta = u * 6.2831853f;
+                float px = -radius * std::cos(theta) * std::sin(phi);
+                float py = radius * std::cos(phi);
+                float pz = radius * std::sin(theta) * std::sin(phi);
+                geo->positions_.push_back(px);
+                geo->positions_.push_back(py);
+                geo->positions_.push_back(pz);
+                float len = std::sqrt(px * px + py * py + pz * pz);
+                geo->normals_.push_back(len > 0 ? px / len : 0);
+                geo->normals_.push_back(len > 0 ? py / len : 1);
+                geo->normals_.push_back(len > 0 ? pz / len : 0);
+                geo->uvs_.push_back(u);
+                geo->uvs_.push_back(1.0f - v);
+            }
+        }
+        for (int y = 0; y < heightSegments; ++y) {
+            for (int x = 0; x < widthSegments; ++x) {
+                uint32_t first = y * (widthSegments + 1) + x;
+                uint32_t second = first + widthSegments + 1;
+                geo->indices_.push_back(first);
+                geo->indices_.push_back(second);
+                geo->indices_.push_back(first + 1);
+                geo->indices_.push_back(second);
+                geo->indices_.push_back(second + 1);
+                geo->indices_.push_back(first + 1);
+            }
+        }
+        return geo;
+    }
+
+    static std::shared_ptr<Geometry> createPlane(float width = 1.0f, float height = 1.0f) {
+        auto geo = std::make_shared<Geometry>(GeometryType::Plane);
+        float hw = width * 0.5f, hh = height * 0.5f;
+        geo->positions_ = {-hw, -hh, 0.0f, hw, -hh, 0.0f, hw, hh, 0.0f, -hw, hh, 0.0f};
+        geo->normals_ = {0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1};
+        geo->uvs_ = {0, 0, 1, 0, 1, 1, 0, 1};
+        geo->indices_ = {0, 1, 2, 0, 2, 3};
+        return geo;
+    }
 
     GeometryType geometryType() const { return type_; }
+
+    const std::vector<float>& positions() const { return positions_; }
+    void setPositions(const std::vector<float>& p) { positions_ = p; }
+
+    const std::vector<float>& normals() const { return normals_; }
+    void setNormals(const std::vector<float>& n) { normals_ = n; }
+
+    const std::vector<float>& uvs() const { return uvs_; }
+    void setUVs(const std::vector<float>& u) { uvs_ = u; }
+
+    const std::vector<uint32_t>& indices() const { return indices_; }
+    void setIndices(const std::vector<uint32_t>& i) { indices_ = i; }
 
     Impl* getImpl() const { return impl_.get(); }
 
 private:
     GeometryType type_;
+    std::vector<float> positions_;
+    std::vector<float> normals_;
+    std::vector<float> uvs_;
+    std::vector<uint32_t> indices_;
     std::unique_ptr<Impl> impl_;
 };
 
@@ -577,14 +666,15 @@ protected:
 class PerspectiveCamera : public Camera {
 public:
     PerspectiveCamera(float fov = 60.0f, float aspect = 1.0f, float nearZ = 0.1f, float farZ = 1000.0f, const std::string& name = "")
-        : Camera(name), fov_(fov), aspect(aspect) { nearZ_ = nearZ; farZ_ = farZ; }
+        : Camera(name), fov(fov), aspect(aspect) { nearZ_ = nearZ; farZ_ = farZ; }
     ~PerspectiveCamera() override = default;
 
     ObjectType type() const override { return ObjectType::PerspectiveCamera; }
 
-    float fov_ = 60.0f;
-    float aspect = 1.0f;
     void updateProjectionMatrix() {}
+
+    float fov = 60.0f;
+    float aspect = 1.0f;
 };
 
 class Light : public Object3D {
@@ -631,10 +721,10 @@ private:
 
 class Scene : public Object3D {
 public:
-    struct Impl {};
+    struct Impl;
 
-    explicit Scene(const std::string& name = "") : Object3D(name) {}
-    ~Scene() override = default;
+    explicit Scene(const std::string& name = "");
+    ~Scene() override;
 
     ObjectType type() const override { return ObjectType::Scene; }
 
@@ -655,22 +745,20 @@ private:
 
 class WebGLRenderer {
 public:
-    struct Impl {};
+    struct Impl;
 
-    WebGLRenderer(int width = 800, int height = 600) : width_(width), height_(height) {}
-    ~WebGLRenderer() = default;
+    WebGLRenderer(int width = 800, int height = 600);
+    ~WebGLRenderer();
 
-    void setSize(int width, int height) { width_ = width; height_ = height; }
+    void setSize(int width, int height);
     int width() const { return width_; }
     int height() const { return height_; }
 
-    void setClearColor(const Color& color, float alpha = 1.0f) { clearColor_ = Color(color.r, color.g, color.b, alpha); }
+    void setClearColor(const Color& color, float alpha = 1.0f);
     const Color& clearColor() const { return clearColor_; }
 
-    void render(Scene& scene, Camera& camera) {
-        std::cout << "[THREE.WebGLRenderer] Rendered frame (scene children: " << scene.children().size() << ")" << std::endl;
-    }
-    void render(std::shared_ptr<Scene> scene, std::shared_ptr<Camera> camera) { if (scene && camera) render(*scene, *camera); }
+    void render(Scene& scene, Camera& camera);
+    void render(std::shared_ptr<Scene> scene, std::shared_ptr<Camera> camera);
     void render(Scene* scene, Camera* camera) { if (scene && camera) render(*scene, *camera); }
 
     void* domElement = nullptr;
@@ -695,34 +783,34 @@ enum class RigidBodyType { Static, Dynamic, Kinematic };
 
 class RigidBody : public std::enable_shared_from_this<RigidBody> {
 public:
-    struct Impl {};
+    struct Impl;
 
-    RigidBody(RigidBodyType bodyType = RigidBodyType::Dynamic, float mass = 1.0f) : bodyType_(bodyType), mass_(mass) {}
-    ~RigidBody() = default;
+    RigidBody(RigidBodyType bodyType = RigidBodyType::Dynamic, float mass = 1.0f);
+    ~RigidBody();
 
     RigidBodyType bodyType() const { return bodyType_; }
     float mass() const { return mass_; }
 
-    Vector3 position() const { return Vector3(0, 0, 0); }
-    void setPosition(const Vector3& pos) {}
+    Vector3 position() const;
+    void setPosition(const Vector3& pos);
 
-    Quaternion rotation() const { return Quaternion(0, 0, 0, 1); }
-    void setRotation(const Quaternion& rot) {}
+    Quaternion rotation() const;
+    void setRotation(const Quaternion& rot);
 
-    Vector3 linearVelocity() const { return Vector3(0, 0, 0); }
-    void setLinearVelocity(const Vector3& vel) {}
+    Vector3 linearVelocity() const;
+    void setLinearVelocity(const Vector3& vel);
 
-    Vector3 angularVelocity() const { return Vector3(0, 0, 0); }
-    void setAngularVelocity(const Vector3& vel) {}
+    Vector3 angularVelocity() const;
+    void setAngularVelocity(const Vector3& vel);
 
-    void addForce(const Vector3& force) {}
-    void addImpulse(const Vector3& impulse) {}
+    void addForce(const Vector3& force);
+    void addImpulse(const Vector3& impulse);
 
     float friction() const { return friction_; }
-    void setFriction(float f) { friction_ = f; }
+    void setFriction(float f);
 
     float restitution() const { return restitution_; }
-    void setRestitution(float r) { restitution_ = r; }
+    void setRestitution(float r);
 
     Impl* getImpl() const { return impl_.get(); }
 
@@ -744,22 +832,24 @@ struct RaycastHit {
 
 class PhysicsWorld {
 public:
-    struct Impl {};
+    struct Impl;
 
-    PhysicsWorld() = default;
-    ~PhysicsWorld() = default;
+    PhysicsWorld();
+    ~PhysicsWorld();
 
-    void setGravity(const Vector3& gravity) {}
-    Vector3 gravity() const { return Vector3(0, -9.81f, 0); }
+    void setGravity(const Vector3& gravity);
+    Vector3 gravity() const;
 
-    void step(double dt) {}
+    void step(double dt);
 
-    void addBody(std::shared_ptr<RigidBody> body) {}
+    void addBody(std::shared_ptr<RigidBody> body);
     void addBody(RigidBody* body) { if (body) addBody(std::shared_ptr<RigidBody>(body)); }
-    void removeBody(std::shared_ptr<RigidBody> body) {}
+    void removeBody(std::shared_ptr<RigidBody> body);
     void removeBody(RigidBody* body) { if (body) removeBody(std::shared_ptr<RigidBody>(body)); }
 
-    RaycastHit raycast(const Vector3& origin, const Vector3& direction, float maxDistance = 1000.0f) { return RaycastHit(); }
+    const std::vector<std::shared_ptr<RigidBody>>& bodies() const;
+
+    RaycastHit raycast(const Vector3& origin, const Vector3& direction, float maxDistance = 1000.0f);
 
     Impl* getImpl() const { return impl_.get(); }
 
