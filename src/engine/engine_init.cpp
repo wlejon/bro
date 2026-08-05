@@ -1056,15 +1056,17 @@ scene::SceneGraph* Engine::createSceneContext(dom::Element* canvas) {
     // getContext() must hand back the SAME context for the life of the canvas,
     // and a host calling this twice must not get a second registration either.
     // Two conditions, and both must hold:
-    //   - the element carries a scene back-pointer, which a brand-new Element
-    //     at a recycled address does not (sceneGraph_ is not cleared when a
-    //     graph is reclaimed, so the pointer alone can be stale — it is only
-    //     ever used as a flag, never dereferenced);
+    //   - the element carries a scene back-pointer. Every path that reclaims a
+    //     graph now clears it (pruneDetachedSceneGraphs / clearSceneGraphs), so
+    //     a set flag means a live graph rather than merely "one existed once";
     //   - sceneGraphs_ still holds an entry for it, which is authoritative and
     //     is what the frame loop actually renders.
-    // If the flag is set but the entry is gone (the graph was pruned when the
-    // canvas left the DOM), the old context is genuinely dead: fall through and
-    // build a fresh one.
+    // The second test is redundant against the first on every path that exists
+    // today, and is kept as the cheap consistency net it has always been: it
+    // costs one pass over a vector that is virtually always shorter than three,
+    // and it is what makes a future reclamation path that forgets to sever show
+    // up as a rebuilt context instead of a returned dangling pointer. If the two
+    // disagree the entry wins — fall through and build a fresh context.
     if (canvas && canvas->sceneGraph()) {
         if (auto* existing = sceneGraphForElement(canvas)) return existing;
     }
@@ -1130,7 +1132,10 @@ scene::SceneGraph* Engine::createSceneContext(dom::Element* canvas) {
 
     // Last, and load-bearing: a graph that is not in sceneGraphs_ is never
     // rendered by the frame loop (engine_frame.cpp) or by flush() (headless).
-    sceneGraphs_.push_back({std::move(graph), canvas});
+    // The document + node id travel with the entry so the prune can validate
+    // `canvas` later without dereferencing it — see SceneGraphEntry.
+    sceneGraphs_.push_back({std::move(graph), canvas,
+                            canvas->document(), canvas->nodeId()});
     return graphPtr;
 #endif  // BRO_WITH_3D
 }
@@ -1142,6 +1147,69 @@ size_t Engine::sceneContextCount() const {
     return 0;
 #endif
 }
+
+#if BRO_WITH_3D
+// ---------------------------------------------------------------------------
+// Scene graph reclamation
+// ---------------------------------------------------------------------------
+
+dom::Element* Engine::liveElementOf(const SceneGraphEntry& entry) const {
+    if (!entry.element || !entry.document) return nullptr;
+    // The document can outlive nothing here — a system panel's or iframe's
+    // Document is destroyed with the panel while this entry survives — so the
+    // document pointer is checked against the live-document registry before it
+    // is used to check the node.
+    if (!dom::Document::isLiveDocument(entry.document)) return nullptr;
+    auto* node = entry.document->resolveNode(entry.element, entry.elementId);
+    return node ? static_cast<dom::Element*>(node) : nullptr;
+}
+
+// Sever an Element's link to a scene graph that is about to be destroyed.
+//
+// Both halves have to go. draw_traversal reads sceneGraph() as "this element is
+// a composited 3D layer", takes its own return path for it, and hands
+// sceneGraphFBOTexture() straight to the compositor — so a back-pointer left
+// set after the graph is gone is enough on its own to make the compositor bind
+// a texture belonging to a destroyed graph, and the first reader that
+// dereferences the pointer rather than testing it is a use-after-free.
+static void severSceneGraphLink(dom::Element* el) {
+    if (!el) return;
+    el->setSceneGraph(nullptr);
+    el->setSceneGraphFBOTexture(0);
+}
+
+void Engine::pruneDetachedSceneGraphs() {
+    sceneGraphs_.erase(
+        std::remove_if(sceneGraphs_.begin(), sceneGraphs_.end(),
+            [this](SceneGraphEntry& sg) {
+                // A graph with no canvas (or none this engine can validate)
+                // cannot be detached from anything: leave it to teardown rather
+                // than guess. Nothing builds one today.
+                if (!sg.element || !sg.document) return false;
+
+                dom::Element* el = liveElementOf(sg);
+                // The canvas has already been freed — via the deferred-free
+                // drain, or with its whole document. There is no back-pointer
+                // left to sever and nothing that could reach the graph again,
+                // so the entry just goes. This is also the case the old
+                // predicate walked parentNode() straight into.
+                if (!el) return true;
+
+                auto* n = el;
+                while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
+                const bool detached =
+                    n->tagName() != "html" && n->tagName() != "HTML";
+                if (detached) severSceneGraphLink(el);
+                return detached;
+            }),
+        sceneGraphs_.end());
+}
+
+void Engine::clearSceneGraphs() {
+    for (auto& sg : sceneGraphs_) severSceneGraphLink(liveElementOf(sg));
+    sceneGraphs_.clear();
+}
+#endif  // BRO_WITH_3D
 
 // Window event listeners for the app realm. The store is the app Document's —
 // one Document is one realm is one window — so these fire from the same

@@ -105,6 +105,46 @@ JSValue hostSceneContextCount(JSContext* ctx, JSValueConst, int, JSValueConst*) 
     return JS_NewInt64(ctx, static_cast<int64_t>(engine->sceneContextCount()));
 }
 
+// __host.sceneLink(canvasElement) -> { graph: bool, fboTexture: number }
+//
+// The engine's two back-pointers from a canvas Element to its scene graph, as
+// booleans/ids rather than addresses. Nothing else can see them: they are
+// opaque void*/GLuint fields the draw traversal reads to decide that this
+// element is a composited 3D layer and which texture to composite. A graph that
+// has been reclaimed must leave both cleared — a set flag over a destroyed
+// graph is a compositor layer break aimed at freed memory.
+JSValue hostSceneLink(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_ThrowTypeError(ctx, "__host.sceneLink(canvas)");
+    auto* el = static_cast<bro::dom::Element*>(
+        bro::js::DomBindings::unwrapElement(ctx, argv[0]));
+    if (!el) return JS_ThrowTypeError(ctx, "__host.sceneLink: not an Element");
+    JSValue out = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, out, "graph", JS_NewBool(ctx, el->sceneGraph() != nullptr));
+    JS_SetPropertyStr(ctx, out, "fboTexture",
+        JS_NewInt64(ctx, static_cast<int64_t>(el->sceneGraphFBOTexture())));
+    return out;
+}
+
+// __host.hasJsListener(element, type) -> bool
+//
+// dom::Element's per-type JS-listener gate — the thing js::dispatchDomEvent
+// consults before it will go near an element's JS wrapper at all. It has no DOM
+// surface (the DOM has no "is anything listening for X" query, by design), and
+// no behaviour distinguishes an accurate gate from one that only ever answers
+// "maybe", which is precisely how it drifted out of step with reality: the
+// removeEventListener binding never told the element anything.
+JSValue hostHasJsListener(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    if (argc < 2) return JS_ThrowTypeError(ctx, "__host.hasJsListener(element, type)");
+    auto* el = static_cast<bro::dom::Element*>(
+        bro::js::DomBindings::unwrapElement(ctx, argv[0]));
+    if (!el) return JS_ThrowTypeError(ctx, "__host.hasJsListener: not an Element");
+    const char* type = JS_ToCString(ctx, argv[1]);
+    if (!type) return JS_EXCEPTION;
+    bool has = el->hasJsListener(type);
+    JS_FreeCString(ctx, type);
+    return JS_NewBool(ctx, has);
+}
+
 // ---------------------------------------------------------------------------
 // __host.*Listener — the C++ event listener API, exercised the way a compiled
 // app uses it.
@@ -343,6 +383,10 @@ void installHostBindings(JSContext* ctx) {
         JS_NewCFunction(ctx, hostSceneContext, "sceneContext", 1));
     JS_SetPropertyStr(ctx, host, "sceneContextCount",
         JS_NewCFunction(ctx, hostSceneContextCount, "sceneContextCount", 0));
+    JS_SetPropertyStr(ctx, host, "sceneLink",
+        JS_NewCFunction(ctx, hostSceneLink, "sceneLink", 1));
+    JS_SetPropertyStr(ctx, host, "hasJsListener",
+        JS_NewCFunction(ctx, hostHasJsListener, "hasJsListener", 2));
     JS_SetPropertyStr(ctx, host, "engineResolvedAtInstall",
         JS_NewCFunction(ctx, hostEngineResolvedAtInstall, "engineResolvedAtInstall", 0));
     JS_SetPropertyStr(ctx, host, "addWindowListener",

@@ -90,12 +90,22 @@ public:
     StyleProxy& style() { return style_; }
     const StyleProxy& style() const { return style_; }
 
-    // Event listeners — JS side. `listenerId` is the index the binding wrote
-    // into the wrapper's __bro_listeners array; the map is only a "this
-    // element has at least one JS listener of this type" gate for dispatch.
-    void addEventListener(const std::string& type, uint64_t listenerId);
-    void removeEventListener(const std::string& type, uint64_t listenerId);
-    const std::unordered_map<std::string, std::vector<uint64_t>>& listeners() const { return listeners_; }
+    // Event listeners — JS side.
+    //
+    // The listeners themselves live in the wrapper's __bro_listeners array,
+    // which is what dispatch walks. All that is kept here is how many of each
+    // type the element currently has, as the fast gate js::dispatchDomEvent
+    // needs before it goes anywhere near the JS wrapper. Nothing id-shaped is
+    // stored on purpose: entries are identified by their index in that array
+    // and removal splices it, so every index past the removed one shifts and no
+    // id recorded here would still name the listener it was written for.
+    //
+    // The count is exact — the binding decrements on removeEventListener and
+    // dispatch decrements when it reaps a `once` listener — so hasJsListener()
+    // means "has one now", not "had one at some point".
+    void addJsListener(const std::string& type);
+    void removeJsListener(const std::string& type);
+    bool hasJsListener(const std::string& type) const;
 
     // Event listeners — C++ side. A host with no app JS registers here and the
     // callback is invoked by the same dispatch (js::dispatchDomEvent) the JS
@@ -380,7 +390,11 @@ public:
     void setWebglContext(void* ctx) { webglContext_ = ctx; }
     void* webglContext() const { return webglContext_; }
 
-    // Scene graph (opaque pointer — set by engine, read by draw traversal for 3D FBO compositing)
+    // Scene graph (opaque pointer — set by engine, read by draw traversal for
+    // 3D FBO compositing). Non-null means the element HAS a live scene graph,
+    // not merely that it once did: every engine path that reclaims a graph
+    // clears this (Engine::pruneDetachedSceneGraphs / clearSceneGraphs), the
+    // same contract canvasScene_ above keeps.
     void setSceneGraph(void* graph) { sceneGraph_ = graph; }
     void* sceneGraph() const { return sceneGraph_; }
 
@@ -446,7 +460,9 @@ private:
     // empty/all-removed declaration block still exists (getAttribute returns
     // "", not null) until removeAttribute("style") is called.
     bool hasStyleAttr_ = false;
-    std::unordered_map<std::string, std::vector<uint64_t>> listeners_;
+    // Per-type count of live JS listeners; a type with none is erased, so
+    // emptiness of a bucket is never a state that has to be reasoned about.
+    std::unordered_map<std::string, uint32_t> jsListenerCounts_;
     // Allocated on the first C++ addEventListener. Most elements never get
     // one, and Element is instantiated in the millions by big documents.
     std::unique_ptr<NativeListenerList> nativeListeners_;

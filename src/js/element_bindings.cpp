@@ -1378,6 +1378,28 @@ void clearRadioGroup(bro::dom::Element* el)
     }
 }
 
+bro::dom::Element* checkedRadioInGroup(bro::dom::Element* el)
+{
+    // Same membership rule as clearRadioGroup — deliberately, since this exists
+    // to be able to undo what that does — except that `el` itself counts: a
+    // press on an already-checked radio must be restorable too.
+    if (!isRadioInput(el)) return nullptr;
+    if (el->hasAttribute("checked")) return el;
+    const std::string name = el->getAttribute("name");
+    if (name.empty()) return nullptr;
+    auto* doc = el->document();
+    auto* root = doc ? doc->documentElement() : nullptr;
+    if (!root) return nullptr;
+    auto* owner = formOwnerOf(el);
+    for (auto* other : root->querySelectorAll("input[type=\"radio\"]")) {
+        if (other == el) continue;
+        if (other->getAttribute("name") != name) continue;
+        if (formOwnerOf(other) != owner) continue;
+        if (other->hasAttribute("checked")) return other;
+    }
+    return nullptr;
+}
+
 static JSValue js_element_set_checked(JSContext* ctx, JSValueConst this_val,
                                       JSValueConst val)
 {
@@ -2652,7 +2674,7 @@ static JSValue js_element_addEventListener(JSContext* ctx,
     JS_FreeValue(ctx, arr);
     JS_FreeAtom(ctx, key);
 
-    el->addEventListener(type, static_cast<int64_t>(len));
+    el->addJsListener(type);
 
     return JS_UNDEFINED;
 }
@@ -2661,6 +2683,7 @@ static JSValue js_element_removeEventListener(JSContext* ctx,
                                               JSValueConst this_val,
                                               int argc, JSValueConst* argv)
 {
+    auto* el = getElement(this_val);
     if (argc < 2 || !JS_IsFunction(ctx, argv[1])) return JS_UNDEFINED;
 
     std::string type = jsToStdString(ctx, argv[0]);
@@ -2717,6 +2740,13 @@ static JSValue js_element_removeEventListener(JSContext* ctx,
                         JS_SetPropertyInt64(ctx, arr, j, next);
                     }
                     JS_SetPropertyStr(ctx, arr, "length", JS_NewInt64(ctx, len - 1));
+                    // Keep the element's dispatch gate in step. This call is
+                    // what was missing: the array shrank but the C++ side never
+                    // heard about it, so a type that had ever been listened for
+                    // took the slow path (wrapper lookup, array walk) for the
+                    // rest of the element's life and Element::listeners() was
+                    // only ever safe to read as "at most".
+                    if (el) el->removeJsListener(type);
                     break;
                 }
             }

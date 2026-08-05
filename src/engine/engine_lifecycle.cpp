@@ -216,8 +216,10 @@ Engine::~Engine() {
         js::TileBindings::cleanup(jsRuntime_->getContext());
     }
 
-    // Destroy scene graphs before canvas scenes (they hold canvas pointers)
-    sceneGraphs_.clear();
+    // Destroy scene graphs before canvas scenes (they hold canvas pointers).
+    // clearSceneGraphs() severs each canvas Element's back-pointer first — the
+    // Document (and its Elements) is still alive here and is reset far below.
+    clearSceneGraphs();
 #endif
 
     // shutdown() already released the threaded scenes' GPU resources on the
@@ -420,7 +422,7 @@ Engine::~Engine() {
     // JsThinkHook which holds JS_DupValue'd refs to world/agent JS objects.
     // If the runtime dies first, those JS_FreeValue calls run on a dead
     // context, refs never release, and JS_FreeRuntime asserts on leaks.
-    sceneGraphs_.clear();
+    clearSceneGraphs();
 #endif
     // Destroy JS runtime BEFORE document — JS_FreeRuntime() runs GC finalizers
     // that dereference Element pointers, so elements must still be alive.

@@ -1614,9 +1614,31 @@ private:
 #if BRO_WITH_3D
     struct SceneGraphEntry {
         std::unique_ptr<scene::SceneGraph> graph;
-        dom::Element* element = nullptr;  // non-owning
+        // Non-owning, and allowed to dangle. Nothing removes the entry when the
+        // canvas Element is destroyed — the deferred-free drain and ~Document
+        // both free Elements without consulting this list — so `element` must
+        // never be dereferenced directly. `document` + `elementId` are what make
+        // it usable: Document::resolveNode is a pointer-value lookup plus a
+        // generation check, so it is safe on freed storage and cannot be fooled
+        // by the allocator handing that address to a new node.
+        dom::Element* element = nullptr;
+        dom::Document* document = nullptr;
+        uint32_t elementId = 0;
     };
     std::vector<SceneGraphEntry> sceneGraphs_;
+
+    /// `entry.element` when it is still a live node of a still-live document,
+    /// nullptr otherwise. Never dereferences a dangling pointer.
+    dom::Element* liveElementOf(const SceneGraphEntry& entry) const;
+    /// Drop every scene graph whose canvas has left the document tree (or has
+    /// been destroyed outright), severing the Element→graph back-pointer before
+    /// the graph goes. Shared by the frame loop and the headless flush; they
+    /// used to carry a copy each, and only one of them can be fixed at a time
+    /// when the rule changes.
+    void pruneDetachedSceneGraphs();
+    /// Drop every scene graph, severing back-pointers first. Teardown and
+    /// app-reload path.
+    void clearSceneGraphs();
 #endif
     double physicsAccumMs_ = 0.0;
     double lastPhysicsTimeMs_ = 0.0;

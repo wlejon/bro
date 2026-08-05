@@ -7,20 +7,33 @@
 
 #include <bro/bro_api.hpp>
 
+// Everything this façade renders through — SceneGraph, MeshNode, bromesh —
+// only exists in a BRO_WITH_3D build. bro_scene is not even added to the build
+// otherwise (src/CMakeLists.txt), and neither is bromesh, so including these
+// unconditionally made bro_core the one target that could not be compiled in a
+// 3D-off configuration: the include chain died on Jolt in physics_node.h, then
+// on bromesh in mesh_node.h, and so on down the scene headers.
+//
+// The public API in bro_api.hpp is unchanged either way: every symbol it
+// declares is still defined below, so a minimal build produces a complete,
+// linkable bro_core. What a 3D-off build loses is rendering, which the
+// scene-graph half provided — WebGLRenderer::render() becomes inert.
+#if BRO_WITH_3D
 #include "scene/scene_graph.h"
 #include "scene/mesh_node.h"
 #include "scene/light_node.h"
 #include "scene/camera_node.h"
 #include "scene/scene_renderer.h"
-#include "physics/physics_world.h"
 
 #include <bromesh/mesh_data.h>
 #include <bromath/vec.h>
 #include <bromath/quat.h>
+#endif  // BRO_WITH_3D
 
+#include <algorithm>
+#include <functional>
 #include <mutex>
 #include <unordered_map>
-#include <algorithm>
 
 namespace bro {
 
@@ -29,9 +42,11 @@ namespace bro {
 // -----------------------------------------------------------------------------
 
 struct Scene::Impl {
+#if BRO_WITH_3D
     std::unique_ptr<bro::scene::SceneGraph> sceneGraph;
 
     Impl() : sceneGraph(std::make_unique<bro::scene::SceneGraph>()) {}
+#endif
 };
 
 Scene::Scene(const std::string& name) : Object3D(name), impl_(std::make_unique<Impl>()) {}
@@ -43,6 +58,7 @@ Scene::~Scene() = default;
 // -----------------------------------------------------------------------------
 
 struct WebGLRenderer::Impl {
+#if BRO_WITH_3D
     std::unordered_map<uint64_t, bro::scene::MeshNode*> nodeMap;
 
     void syncSceneToGraph(Scene& scene, Camera& camera, bro::scene::SceneGraph* graph) {
@@ -125,6 +141,7 @@ struct WebGLRenderer::Impl {
 
         syncObject(scene);
     }
+#endif  // BRO_WITH_3D
 };
 
 WebGLRenderer::WebGLRenderer(int width, int height)
@@ -142,12 +159,20 @@ void WebGLRenderer::setClearColor(const Color& color, float alpha) {
 }
 
 void WebGLRenderer::render(Scene& scene, Camera& camera) {
+#if BRO_WITH_3D
     if (!scene.getImpl() || !scene.getImpl()->sceneGraph) return;
     auto graph = scene.getImpl()->sceneGraph.get();
     graph->setCanvasSize(width_, height_);
 
     impl_->syncSceneToGraph(scene, camera, graph);
     graph->render();
+#else
+    // No scene graph in this build — nothing to render into. The scene object
+    // model above still works, so a host can build and query a scene; it just
+    // cannot be drawn.
+    (void)scene;
+    (void)camera;
+#endif
 }
 
 void WebGLRenderer::render(std::shared_ptr<Scene> scene, std::shared_ptr<Camera> camera) {
@@ -219,12 +244,14 @@ void RigidBody::setRestitution(float r) { restitution_ = r; }
 // PhysicsWorld Implementation
 // -----------------------------------------------------------------------------
 
+// NB: this is the façade's own world, not bro::physics::PhysicsWorld. step()
+// below is a plain semi-implicit Euler integrator over `bodies` — it has never
+// driven Jolt. An unused bro::physics::PhysicsWorld used to be constructed
+// here alongside it, which is what made bro_core depend on Jolt at all; it was
+// dead weight (nothing ever read it) and is gone.
 struct PhysicsWorld::Impl {
     Vector3 gravity{0.0f, -9.81f, 0.0f};
     std::vector<std::shared_ptr<RigidBody>> bodies;
-    std::unique_ptr<bro::physics::PhysicsWorld> internalPhysics;
-
-    Impl() : internalPhysics(std::make_unique<bro::physics::PhysicsWorld>()) {}
 };
 
 PhysicsWorld::PhysicsWorld() : impl_(std::make_unique<Impl>()) {}

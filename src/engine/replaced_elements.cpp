@@ -391,6 +391,7 @@ int pressOrdinal(const MouseDispatchState& state, dom::Element* target,
 
 void focusNewControl(
     const ControlContext& ctx,
+    MouseDispatchState& state,
     dom::Element* target,
     float x, float y,
     PressIntent intent)
@@ -399,11 +400,20 @@ void focusNewControl(
     auto* newTextarea = getElTextarea(target);
     auto* newSelect = getElSelect(target);
 
+    // Only a checkbox/radio press below leaves something to undo. Clearing the
+    // record up front means a press on anything else cannot leave a previous
+    // one armed for the next release to act on.
+    state.activationTarget.reset();
+    state.activationPrevRadio.reset();
+    state.activationWasChecked = false;
+
     if (newInput) {
         newInput->setFocused(true);
         auto itype = newInput->inputType(target);
 
         if (itype == layout::ElInput::InputType::Checkbox) {
+            state.activationTarget.assign(ctx.document, target);
+            state.activationWasChecked = target->hasAttribute("checked");
             if (target->hasAttribute("checked")) {
                 target->removeAttribute("checked");
             } else {
@@ -414,6 +424,12 @@ void focusNewControl(
             dispatchInputEvent(ctx, target);
             *ctx.dirtyFlag = true;
         } else if (itype == layout::ElInput::InputType::Radio) {
+            // Read the group's state BEFORE clearing it — after clearRadioGroup
+            // there is nothing left to say which member had the check.
+            state.activationTarget.assign(ctx.document, target);
+            state.activationWasChecked = target->hasAttribute("checked");
+            state.activationPrevRadio.assign(ctx.document,
+                                             js::checkedRadioInGroup(target));
             js::clearRadioGroup(target);
             target->setAttribute("checked", "");
             dom::Event changeEvt("change");
@@ -690,7 +706,7 @@ bool dispatchDocMousePress(
         armValueChange(target);
     }
 
-    focusNewControl(ctx, target, focusX, focusY, intent);
+    focusNewControl(ctx, state, target, focusX, focusY, intent);
 
     js::dispatchDomEvent(ctx.jsCtx, target, evt);
     state.mouseDownTarget.assign(ctx.document, target);
@@ -768,6 +784,26 @@ void dispatchDocMouseRelease(
         populate(clickEvt);
         clickEvt.setDetail(state.clickCount);
         js::dispatchDomEvent(ctx.jsCtx, target, clickEvt);
+
+        // Checkbox / radio "legacy-canceled-activation behavior": the press
+        // already applied the new checkedness (focusNewControl) so the control
+        // ticks while the button is held; a click whose default was prevented
+        // has to put it back. Same rule, same gate, as the <details>/<summary>
+        // disclosure toggle further down — that one just happens to run its
+        // default action here rather than on press.
+        if (dom::Element* toggled = state.activationTarget.get()) {
+            if (clickEvt.defaultPrevented() && toggled == target) {
+                if (state.activationWasChecked) toggled->setAttribute("checked", "");
+                else                            toggled->removeAttribute("checked");
+                // Radio only: hand the check back to whichever member held it.
+                // Resolves to null if that element has since been removed, in
+                // which case the group is simply left empty — the same place a
+                // browser lands when the previous option is gone.
+                if (auto* prev = state.activationPrevRadio.get())
+                    prev->setAttribute("checked", "");
+                if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
+            }
+        }
 
         // Interactive form submission: a click on <button> or
         // <input type=submit> walks up to the owning form and fires the
@@ -870,6 +906,13 @@ void dispatchDocMouseRelease(
     }
 
     state.mouseDownTarget.reset();
+    // Disarm the activation undo whatever happened above — including the paths
+    // that never reach the click (mouseup on a different element, a disabled
+    // control), where the record would otherwise still be live for the next
+    // release to act on.
+    state.activationTarget.reset();
+    state.activationPrevRadio.reset();
+    state.activationWasChecked = false;
     if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
 }
 

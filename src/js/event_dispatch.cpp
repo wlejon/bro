@@ -636,9 +636,7 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
     }
 
     // Check if this element has registered listeners OR an inline handler
-    auto& listeners = current->listeners();
-    auto it = listeners.find(event.type());
-    bool hasListeners = (it != listeners.end() && !it->second.empty());
+    bool hasListeners = current->hasJsListener(event.type());
     bool hasInlineHandler = false;
     std::string attrName;
     if (phase == AT_TARGET || phase == BUBBLING_PHASE) {
@@ -866,6 +864,13 @@ static void invokeListeners(JSContext* ctx, bro::dom::Element* current,
         }
         // Truncate by setting length
         JS_SetPropertyStr(ctx, listenersArr, "length", JS_NewInt64(ctx, dst));
+        // A reaped `once` listener is gone for the same reasons an explicitly
+        // removed one is, so the element's per-type count has to come down with
+        // it — otherwise firing a one-shot listener would leave its type looking
+        // permanently subscribed. Every index in onceIndices matched
+        // event.type() to be invoked at all.
+        for (size_t k = 0; k < onceIndices.size(); ++k)
+            current->removeJsListener(event.type());
     }
 
     // --- Inline event handler: IDL property (el.onclick = fn) ---

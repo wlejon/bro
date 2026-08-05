@@ -493,10 +493,11 @@ void Engine::run() {
             return n->tagName() != "html" && n->tagName() != "HTML";
         };
 #if BRO_WITH_3D
-        sceneGraphs_.erase(
-            std::remove_if(sceneGraphs_.begin(), sceneGraphs_.end(),
-                [&](auto& sg) { return isDetached(sg.element); }),
-            sceneGraphs_.end());
+        // Scene graphs go through the shared reclamation path: it also severs
+        // the canvas Element's back-pointer to the graph, and it validates the
+        // Element before walking it (isDetached below cannot — see
+        // Engine::pruneDetachedSceneGraphs).
+        pruneDetachedSceneGraphs();
 #endif
         webglEntries_.erase(
             std::remove_if(webglEntries_.begin(), webglEntries_.end(),

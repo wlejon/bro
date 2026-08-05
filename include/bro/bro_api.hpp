@@ -1,5 +1,34 @@
 #pragma once
 
+// ============================================================================
+// WARNING: bro::Scene IS NOT COMPOSITED. Nothing here reaches the screen.
+//
+// This is a Three.js-shaped façade over the engine, and the shape is all it
+// has. Scene::Impl builds a bare scene::SceneGraph with make_unique — a graph
+// that was never registered with the Engine, so the frame loop never renders
+// it and the compositor has no layer for it. WebGLRenderer::render() drives
+// that unregistered graph and WebGLRenderer::domElement is a void* nothing
+// reads. It looks like it works right up to the point where you wonder why the
+// window is empty, and it has already cost one long debugging session plus a
+// glBlitFramebuffer hack that only appeared to help.
+//
+// Other things that are not what they look like: Object3D::remove() and
+// getObjectByName() are no-op stubs; syncSceneToGraph only understands Mesh and
+// DirectionalLight, so every other node type is silently dropped; and
+// Clock::getElapsedTime() is a single function-local `static double t` advanced
+// by a fixed 0.016 per call and shared by every Clock instance in the process.
+//
+// THE SUPPORTED PATH is Engine::createSceneContext(canvas) — the one and only
+// constructor of a real scene context (a CanvasScene with layout/detached/
+// liveness callbacks, an entry in the engine's scene list so the frame loop
+// renders it, and an FBO-texture callback wired to the element so the
+// compositor gets a layer). It is exactly what canvas.getContext('scene')
+// hands to JS. See docs/embedding.md, and the declaration comment on
+// Engine::createSceneContext in src/engine/engine.h.
+//
+// Kept because it is committed public API. Do not build anything new on it.
+// ============================================================================
+
 #include <memory>
 #include <vector>
 #include <string>

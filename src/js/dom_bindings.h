@@ -102,4 +102,12 @@ void activateElement(JSContext* ctx, bro::dom::Element* el);
 /// state and decides whether the change was user-initiated.
 void clearRadioGroup(bro::dom::Element* el);
 
+/// The member of `el`'s radio group that is currently checked, or nullptr — the
+/// same group `clearRadioGroup` would clear, `el` itself included. Callers that
+/// have to be able to put a group back the way they found it (a click whose
+/// default was prevented undoes the whole activation, and for a radio that
+/// means restoring the member that lost its check, not just unchecking the one
+/// that gained it) read this before changing anything.
+bro::dom::Element* checkedRadioInGroup(bro::dom::Element* el);
+
 } // namespace bro::js

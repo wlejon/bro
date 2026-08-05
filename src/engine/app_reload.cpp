@@ -141,7 +141,9 @@ void Engine::performAppReload() {
     js::TerrainBindings::cleanup(oldCtx);
     js::ClipmapBindings::cleanup(oldCtx);
     js::TileBindings::cleanup(oldCtx);
-    sceneGraphs_.clear();
+    // Severs the Element->graph back-pointers on the way out; the old realm's
+    // Elements outlive this point (the document is swapped further down).
+    clearSceneGraphs();
 #endif
 
     // ── Canvas scenes ────────────────────────────────────────────────────────

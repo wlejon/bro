@@ -662,19 +662,24 @@ void Element::setOuterHTML(const std::string& html) {
     document_->freeNode(tempContainer);
 }
 
-void Element::addEventListener(const std::string& type, uint64_t listenerId) {
-    listeners_[type].push_back(listenerId);
+void Element::addJsListener(const std::string& type) {
+    ++jsListenerCounts_[type];
 }
 
-void Element::removeEventListener(const std::string& type, uint64_t listenerId) {
-    auto it = listeners_.find(type);
-    if (it != listeners_.end()) {
-        auto& vec = it->second;
-        vec.erase(std::remove(vec.begin(), vec.end(), listenerId), vec.end());
-        if (vec.empty()) {
-            listeners_.erase(it);
-        }
-    }
+void Element::removeJsListener(const std::string& type) {
+    auto it = jsListenerCounts_.find(type);
+    if (it == jsListenerCounts_.end()) return;
+    // Saturating, not wrapping. The count is kept in step by two independent
+    // callers (the removeEventListener binding and dispatch's `once` reap), and
+    // a listener that removes another listener mid-dispatch can make them
+    // overlap; the gate erring towards "no listener of this type" the moment
+    // there are none left is the safe direction, and underflowing a uint32 to
+    // four billion would pin the slow dispatch path on forever.
+    if (--it->second == 0) jsListenerCounts_.erase(it);
+}
+
+bool Element::hasJsListener(const std::string& type) const {
+    return jsListenerCounts_.find(type) != jsListenerCounts_.end();
 }
 
 ListenerHandle Element::addEventListener(const std::string& type, EventCallback cb,

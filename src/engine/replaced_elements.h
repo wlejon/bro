@@ -76,6 +76,20 @@ struct MouseDispatchState {
     float lastClickX = 0.0f;
     float lastClickY = 0.0f;
     int clickCount = 0;
+
+    // What to put back if the click that follows this press is cancelled.
+    //
+    // A checkbox/radio takes its new checkedness on MOUSEDOWN (focusNewControl)
+    // — that is what makes the box visibly tick while the button is held — but
+    // HTML makes the toggle part of the click's activation behaviour, so a
+    // click with preventDefault() called on it has to undo it again ("legacy-
+    // canceled-activation behavior"). Recorded at press, consumed at release.
+    dom::ElementHandle activationTarget;      // the input the press toggled
+    bool activationWasChecked = false;        // its checkedness before the toggle
+    // The group member that was checked before, for a radio. Unchecking the one
+    // that gained the check is not enough to restore a radio group: the one that
+    // lost it has to get it back, or the group ends up with nothing selected.
+    dom::ElementHandle activationPrevRadio;
 };
 
 /// Populate event.offsetX/Y as clientX/Y relative to the element's padding
@@ -146,8 +160,14 @@ ClickDisposition unfocusPreviousControl(
 /// controls `intent` decides what the press does to the selection: place the
 /// caret, extend from the anchor (shift), take a word (double), or take all
 /// (triple).
+///
+/// `state` carries the checkbox/radio activation-undo record away from here:
+/// the new checkedness is applied on this press, and dispatchDocMouseRelease is
+/// where a cancelled click puts it back. Every press rewrites the record, so a
+/// press on anything else clears it.
 void focusNewControl(
     const ControlContext& ctx,
+    MouseDispatchState& state,
     dom::Element* target,
     float x, float y,
     PressIntent intent = {});

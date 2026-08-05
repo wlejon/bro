@@ -305,15 +305,7 @@ void Engine::flush() {
     // Prune detached scene graphs (elements removed from DOM).
     // Must happen before canvas scene pruning so the scene graph releases
     // its canvasScene_ pointer before the CanvasScene is destroyed.
-    sceneGraphs_.erase(
-        std::remove_if(sceneGraphs_.begin(), sceneGraphs_.end(),
-            [](auto& sg) {
-                if (!sg.element) return false;
-                auto* n = sg.element;
-                while (n->parentNode()) n = static_cast<dom::Element*>(n->parentNode());
-                return n->tagName() != "html" && n->tagName() != "HTML";
-            }),
-        sceneGraphs_.end());
+    pruneDetachedSceneGraphs();
 #endif  // BRO_WITH_3D
 
     // Prune detached WebGL contexts (canvas elements removed from DOM).
@@ -330,7 +322,18 @@ void Engine::flush() {
     // Prune detached canvas scenes (elements removed from DOM)
     for (auto& cs : canvasScenes_) {
         cs->rasterize(gl_.get());  // triggers detached check
-        if (cs->isDetached()) canvasSceneRegistry_.erase(cs->sceneId());
+        if (!cs->isDetached()) continue;
+        canvasSceneRegistry_.erase(cs->sceneId());
+        // Sever the Element->CanvasScene back-pointer before the scene is
+        // destroyed below, exactly as the windowed frame loop does
+        // (engine_frame.cpp). Without it a canvas that outlives its scene —
+        // removeChild() leaves the Element alive and re-insertable — keeps
+        // naming freed memory, and its eventual ~Element fires
+        // CanvasScene::onBackingElementDestroyed on it. backingElement() is
+        // already null when the Element went first, so this only runs in the
+        // scene-reclaimed-first ordering.
+        if (auto* el = static_cast<dom::Element*>(cs->backingElement()))
+            el->setCanvasScene(nullptr);
     }
     canvasScenes_.erase(
         std::remove_if(canvasScenes_.begin(), canvasScenes_.end(),

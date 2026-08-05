@@ -8,7 +8,6 @@ target_include_directories(bro_core PUBLIC
 )
 
 target_link_libraries(bro_core PUBLIC
-    bro_scene
     bro_render
     bro_webgl
     bro_audio_inference
@@ -21,12 +20,16 @@ target_link_libraries(bro_core PUBLIC
     bro_svg
     bro_tile
     bromath
-    bromesh
     glad
 )
 
-if(BRO_WITH_PHYSICS)
-    target_link_libraries(bro_core PUBLIC bro_physics)
+# bro_scene and bromesh are only added to the build when BRO_WITH_3D is on
+# (src/CMakeLists.txt / the root CMakeLists). Naming them unconditionally here
+# was not a configure error — CMake takes an unknown name for a raw library —
+# but it made bro_core unlinkable in a 3D-off build, on top of bro_api.cpp not
+# compiling there at all. The 3D half of the façade is guarded to match.
+if(BRO_WITH_3D)
+    target_link_libraries(bro_core PUBLIC bro_scene bromesh)
 endif()
 
 if(BRO_WITH_WEBP)
