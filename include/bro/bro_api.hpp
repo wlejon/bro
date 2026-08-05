@@ -20,6 +20,7 @@ struct Matrix4;
 class Object3D;
 class Scene;
 class Geometry;
+class CylinderGeometry;
 class Material;
 class Mesh;
 class Camera;
@@ -78,7 +79,7 @@ struct Vector3 {
         if (rhs) { Vector3 res = cross(*rhs); x = res.x; y = res.y; z = res.z; }
         return this;
     }
-    void set(float px, float py, float pz) { x = px; y = py; z = pz; }
+    Vector3* set(float px, float py, float pz) { x = px; y = py; z = pz; return this; }
     float distanceTo(const Vector3& v) const { return (*this - v).length(); }
     float distanceTo(const Vector3* v) const { return v ? distanceTo(*v) : 0.0f; }
 
@@ -108,17 +109,38 @@ struct Color {
 
     constexpr Color() = default;
     constexpr Color(float pr, float pg, float pb, float pa = 1.0f) : r(pr), g(pg), b(pb), a(pa) {}
-    explicit Color(uint32_t hex, float pa = 1.0f)
+    Color(uint32_t hex, float pa = 1.0f)
         : r(((hex >> 16) & 0xFF) / 255.0f),
           g(((hex >> 8) & 0xFF) / 255.0f),
           b((hex & 0xFF) / 255.0f),
           a(pa) {}
 
-    void setRGB(float pr, float pg, float pb) { r = pr; g = pg; b = pb; }
-    void setHex(uint32_t hex) {
+    Color* setRGB(float pr, float pg, float pb) { r = pr; g = pg; b = pb; return this; }
+    Color* setHex(uint32_t hex) {
         r = ((hex >> 16) & 0xFF) / 255.0f;
         g = ((hex >> 8) & 0xFF) / 255.0f;
         b = (hex & 0xFF) / 255.0f;
+        return this;
+    }
+    Color* setHSL(float h, float s, float l) {
+        if (s == 0.0f) {
+            r = g = b = l;
+        } else {
+            auto hue2rgb = [](float p, float q, float t) {
+                if (t < 0.0f) t += 1.0f;
+                if (t > 1.0f) t -= 1.0f;
+                if (t < 1.0f / 6.0f) return p + (q - p) * 6.0f * t;
+                if (t < 1.0f / 2.0f) return q;
+                if (t < 2.0f / 3.0f) return p + (q - p) * (2.0f / 3.0f - t) * 6.0f;
+                return p;
+            };
+            float q = l < 0.5f ? l * (1.0f + s) : l + s - l * s;
+            float p = 2.0f * l - q;
+            r = hue2rgb(p, q, h + 1.0f / 3.0f);
+            g = hue2rgb(p, q, h);
+            b = hue2rgb(p, q, h - 1.0f / 3.0f);
+        }
+        return this;
     }
 };
 
@@ -170,7 +192,7 @@ struct Quaternion {
         return v + (uv * (2.0f * w)) + (uuv * 2.0f);
     }
 
-    void set(float px, float py, float pz, float pw) { x = px; y = py; z = pz; w = pw; }
+    Quaternion* set(float px, float py, float pz, float pw) { x = px; y = py; z = pz; w = pw; return this; }
 };
 
 struct Euler {
@@ -187,8 +209,8 @@ struct Euler {
         return Quaternion::fromEuler(x, y, z);
     }
 
-    void set(float px, float py, float pz, std::string pOrder = "XYZ") {
-        x = px; y = py; z = pz; order = std::move(pOrder);
+    Euler* set(float px, float py, float pz, std::string pOrder = "XYZ") {
+        x = px; y = py; z = pz; order = std::move(pOrder); return this;
     }
 };
 
@@ -428,9 +450,9 @@ public:
     const std::vector<std::shared_ptr<Object3D>>& children() const { return children_; }
     std::shared_ptr<Object3D> parent() const { return parent_.lock(); }
 
-    std::shared_ptr<Object3D> getObjectByName(const std::string& name);
-    void lookAt(const Vector3& target);
-    void lookAt(float x, float y, float z);
+    std::shared_ptr<Object3D> getObjectByName(const std::string& name) { return nullptr; }
+    void lookAt(const Vector3& target) {}
+    void lookAt(float x, float y, float z) {}
 
 protected:
     std::string name_;
@@ -463,6 +485,12 @@ public:
 private:
     GeometryType type_;
     std::unique_ptr<Impl> impl_;
+};
+
+class CylinderGeometry : public Geometry {
+public:
+    CylinderGeometry(float radiusTop = 1.0f, float radiusBottom = 1.0f, float height = 1.0f, int radialSegments = 8, int heightSegments = 1)
+        : Geometry(GeometryType::Custom) {}
 };
 
 class Material {
@@ -549,20 +577,14 @@ protected:
 class PerspectiveCamera : public Camera {
 public:
     PerspectiveCamera(float fov = 60.0f, float aspect = 1.0f, float nearZ = 0.1f, float farZ = 1000.0f, const std::string& name = "")
-        : Camera(name), fov_(fov), aspect_(aspect) { nearZ_ = nearZ; farZ_ = farZ; }
+        : Camera(name), fov_(fov), aspect(aspect) { nearZ_ = nearZ; farZ_ = farZ; }
     ~PerspectiveCamera() override = default;
 
     ObjectType type() const override { return ObjectType::PerspectiveCamera; }
 
-    float fov() const { return fov_; }
-    void setFov(float fov) { fov_ = fov; }
-
-    float aspect() const { return aspect_; }
-    void setAspect(float aspect) { aspect_ = aspect; }
-
-private:
     float fov_ = 60.0f;
-    float aspect_ = 1.0f;
+    float aspect = 1.0f;
+    void updateProjectionMatrix() {}
 };
 
 class Light : public Object3D {
@@ -651,6 +673,7 @@ public:
     void render(std::shared_ptr<Scene> scene, std::shared_ptr<Camera> camera) { if (scene && camera) render(*scene, *camera); }
     void render(Scene* scene, Camera* camera) { if (scene && camera) render(*scene, *camera); }
 
+    void* domElement = nullptr;
     Impl* getImpl() const { return impl_.get(); }
 
 private:
@@ -742,6 +765,11 @@ public:
 
 private:
     std::unique_ptr<Impl> impl_;
+};
+
+class Clock {
+public:
+    double getElapsedTime() { static double t = 0.0; t += 0.016; return t; }
 };
 
 } // namespace bro
