@@ -129,17 +129,24 @@ struct NodeWrapper {
     }
 };
 
+inline std::unordered_map<const scene::SceneNode*, void*>& nodeJsWrapperMap() {
+    static std::unordered_map<const scene::SceneNode*, void*> map;
+    return map;
+}
+
 /// Finalizer for SceneNode wrappers. Clears the node's borrowed back-pointer
 /// before deleting the wrapper, so the cache in wrapNode below can never hand
-/// out an object that is on its way to being collected. Resolving the node can
-/// legitimately fail (the node or its whole graph may already be gone, which is
-/// the common case at teardown) — that just means there is nothing to clear.
+/// out an object that is on its way to being collected.
 inline void nodeWrapperFinalizer(JSRuntime* /*rt*/, JSValue val) {
     auto* w = static_cast<NodeWrapper*>(
         JS_GetOpaque(val, qjsbind::class_id<NodeWrapper>()));
     if (!w) return;
     if (auto* n = w->node()) {
-        if (n->jsWrapper() == JS_VALUE_GET_PTR(val)) n->setJsWrapper(nullptr);
+        auto& map = nodeJsWrapperMap();
+        auto it = map.find(n);
+        if (it != map.end() && it->second == JS_VALUE_GET_PTR(val)) {
+            map.erase(it);
+        }
     }
     delete w;
 }
@@ -150,11 +157,13 @@ inline void nodeWrapperFinalizer(JSRuntime* /*rt*/, JSValue val) {
 /// could not be used as Set/Map keys or found with indexOf.
 inline JSValue wrapNode(JSContext* ctx, scene::SceneNode* node, scene::SceneGraph* graph) {
     if (!node || !graph) return JS_NULL;
-    if (void* cached = node->jsWrapper())
-        return JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, cached));
+    auto& map = nodeJsWrapperMap();
+    auto it = map.find(node);
+    if (it != map.end())
+        return JS_DupValue(ctx, JS_MKPTR(JS_TAG_OBJECT, it->second));
     JSValue obj = qjsbind::wrap<NodeWrapper>(
         ctx, new NodeWrapper{graph->livenessToken(), node->id()});
-    if (JS_IsObject(obj)) node->setJsWrapper(JS_VALUE_GET_PTR(obj));
+    if (JS_IsObject(obj)) map[node] = JS_VALUE_GET_PTR(obj);
     return obj;
 }
 

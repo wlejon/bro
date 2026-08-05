@@ -938,7 +938,10 @@ static JSValue js_audioctx_getSpectrum(JSContext* ctx, JSValueConst this_val, in
         size_t abufLen = 0;
         uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
         if (ptr) {
-            d->engine->getSpectrum(reinterpret_cast<float*>(ptr + byteOff), numBins);
+            auto spectrum = d->engine->getSpectrum(numBins);
+            if (!spectrum.empty()) {
+                std::memcpy(ptr + byteOff, spectrum.data(), std::min(spectrum.size() * sizeof(float), viewLen));
+            }
         }
         JS_FreeValue(ctx, abuf);
     }
@@ -1111,9 +1114,10 @@ static JSValue js_audioctx_getClipWaveform(JSContext* ctx, JSValueConst this_val
     if (!JS_IsException(abuf)) {
         size_t abufLen = 0;
         uint8_t* ptr = JS_GetArrayBuffer(ctx, &abufLen, abuf);
-        if (ptr) {
-            d->engine->getClipWaveform(clipId, reinterpret_cast<float*>(ptr + byteOff), numBins);
-        }
+            auto wf = d->engine->getClipWaveform(clipId, numBins);
+            if (!wf.empty()) {
+                std::memcpy(ptr + byteOff, wf.data(), std::min(wf.size() * sizeof(float), viewLen));
+            }
         JS_FreeValue(ctx, abuf);
     }
     return arr;

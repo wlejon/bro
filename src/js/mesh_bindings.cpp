@@ -438,6 +438,13 @@ static JSValue js_greedyMesh(JSContext* ctx, JSValueConst, int argc, JSValueCons
     int32_t gx = 0, gy = 0, gz = 0; double cs = 1;
     JS_ToInt32(ctx, &gx, argv[1]); JS_ToInt32(ctx, &gy, argv[2]); JS_ToInt32(ctx, &gz, argv[3]);
     if (argc > 4) JS_ToFloat64(ctx, &cs, argv[4]);
+
+    if (argc > 5 && JS_IsNumber(argv[5])) {
+        int32_t filterMat = -1;
+        JS_ToInt32(ctx, &filterMat, argv[5]);
+        return wrapMesh(ctx, bromesh::greedyMesh(voxels.data(), gx, gy, gz, (float)cs, filterMat));
+    }
+
     std::vector<float> palette;
     int palCount = 0;
     if (argc > 5 && JS_IsObject(argv[5])) {
@@ -448,7 +455,6 @@ static JSValue js_greedyMesh(JSContext* ctx, JSValueConst, int argc, JSValueCons
     }
     int32_t filterMat = -1;
     if (argc > 7) JS_ToInt32(ctx, &filterMat, argv[7]);
-    if (palette.empty() && argc > 5 && JS_IsNumber(argv[5])) JS_ToInt32(ctx, &filterMat, argv[5]);
     return wrapMesh(ctx, bromesh::greedyMesh(voxels.data(), gx, gy, gz, (float)cs,
         palette.empty() ? nullptr : palette.data(), palCount, filterMat));
 }
@@ -2823,9 +2829,7 @@ void MeshBindings::install(JSContext* ctx) {
 
     .method("setFaceGroup", [](PolyMW* w, int faceIdx, int group) {
         if (!w->pm || faceIdx < 0 || faceIdx >= (int)w->pm->faceCount()) return;
-        // Direct const_cast: faces() returns const ref but we know the
-        // wrapper owns the mesh and JS can mutate.
-        const_cast<bromesh::PolyMesh::Face&>(w->pm->faces()[faceIdx]).group = group;
+        w->pm->faces()[faceIdx].group = group;
     })
 
     .method("facesInGroup", [](PolyMW* w, JSContext* ctx, int groupId) -> JSValue {

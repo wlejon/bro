@@ -1119,9 +1119,9 @@ void RiggingBindings::install(JSContext* ctx) {
         if (!w->pose) return JS_NULL;
         auto* sk = qjsbind::unwrap<SKW>(ctx, skelVal);
         if (!sk || !sk->skel) return JS_ThrowTypeError(ctx, "first argument must be a Skeleton");
-        float m[16];
-        if (!bromesh::socketWorldMatrix(*sk->skel, *w->pose, name, m)) return JS_NULL;
-        std::vector<float> v(m, m + 16);
+        auto optM = bromesh::socketWorldMatrix(*sk->skel, *w->pose, name);
+        if (!optM) return JS_NULL;
+        std::vector<float> v(optM->begin(), optM->end());
         return make_float32_array(ctx, v);
     })
 

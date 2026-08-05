@@ -83,6 +83,10 @@ set(CMAKE_C_STANDARD 11)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
+if(EXISTS "${CMAKE_BINARY_DIR}/compile_commands.json")
+    file(COPY "${CMAKE_BINARY_DIR}/compile_commands.json" DESTINATION "${CMAKE_SOURCE_DIR}")
+endif()
+
 if(MSVC)
     # Scope to CXX so these don't leak into nvcc-driven CUDA compilation
     # (brogameagent's optional GPU backend). /MP in particular collides with
