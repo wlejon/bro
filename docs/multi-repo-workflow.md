@@ -168,6 +168,31 @@ git commit -m "Update brokit: add new API"
 
 Same shape for `bromath`, `qjsbind`, `htmlayout`, `broaudio`, `bromesh`, `broflora`, `brotensor`, `brogameagent`, `brolm`, `brodiffusion`, `broimage`, `brosoundml`, and `brovisionml`.
 
+## Status, pull, sync across all sixteen repos
+
+`scripts/repo-status.ps1` (Windows) and `scripts/repo-status.sh` (Linux/macOS) are the same tool in two ports. Run either from anywhere; both resolve paths from the script location.
+
+```powershell
+pwsh scripts/repo-status.ps1              # working-tree state + submodule-pointer drift
+pwsh scripts/repo-status.ps1 -ListFiles   # also list changed files in dirty repos
+pwsh scripts/repo-status.ps1 -Pull        # fast-forward everything first, then report
+pwsh scripts/repo-status.ps1 -Pull -Sync  # ...and bump bro's stale pointers + commit
+```
+
+```bash
+scripts/repo-status.sh              # -v / --verbose, -p / --pull, -s / --sync
+scripts/repo-status.sh --pull
+```
+
+**`-Pull` / `--pull`** fast-forwards bro, broworkshop, and every sibling onto its upstream before the report, so what you read reflects the remotes rather than whatever you last fetched. Use it after a round of merges lands on GitHub (dependabot, PRs merged from the web) to bring the whole tree forward in one shot. It is deliberately conservative:
+
+- `--ff-only`, so a repo that has diverged from its upstream is reported and skipped, never merged or rebased. Resolve those by hand.
+- `-c pull.rebase=false`, because a repo configured to rebase on pull refuses outright when the tree is dirty — even for a pure fast-forward. Forcing the merge backend removes that false failure without ever allowing a real merge.
+- `--no-recurse-submodules`, so pulling bro never drags `third_party/<name>` checkouts along. Pointer moves are `-Sync`'s job.
+- Detached HEADs and branches with no upstream are reported and skipped.
+
+**`-Sync` / `--sync`** then bumps bro's stale submodule pointers to the standalone HEADs and records them in a single bro commit. It only acts where the standalone is ahead of (or diverged from) the recorded pointer; a sibling whose standalone is *behind* bro is left alone, since that one needs a pull, not a bump. Note the ordering `-Pull -Sync` implies: pull first so the pointers you record are the real remote HEADs.
+
 ## Overriding Paths
 
 To point at a different location for any sibling:

@@ -6,11 +6,15 @@
 # submodule sync: i.e. the standalone repo you actually build against (../<name>)
 # sits at a different commit than the pointer bro records in third_party/<name>.
 #
-# Usage: scripts/repo-status.sh [-v] [-s]
+# Usage: scripts/repo-status.sh [-v] [-p] [-s]
 #   -v, --verbose   also list changed files for dirty repos
+#   -p, --pull      fast-forward every repo (bro, broworkshop, each sibling) to
+#                   its upstream first, so the status below reflects the remotes
 #   -s, --sync      bump bro's stale submodule pointers up to the standalone
 #                   repos' HEADs and make a single bro commit recording it
 #
+# Pull is --ff-only and never recurses into submodules: a repo that has diverged,
+# is detached, or has no upstream is reported and skipped, never merged.
 # Sync only acts on siblings where the standalone repo is ahead of (or diverged
 # from) bro's recorded pointer. Siblings whose standalone is *behind* bro are
 # left alone (pull the standalone first); the apps tree has no submodule.
@@ -24,13 +28,15 @@ BRO_ROOT="$(pwd)"
 PROJECTS_ROOT="$(cd .. && pwd)"
 
 VERBOSE=0
+PULL=0
 SYNC=0
 for arg in "$@"; do
     case "$arg" in
         -v|--verbose) VERBOSE=1 ;;
+        -p|--pull)    PULL=1 ;;
         -s|--sync)    SYNC=1 ;;
         -h|--help)
-            sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
     esac
@@ -90,6 +96,59 @@ repo_state() {
     fi
 }
 
+# Fast-forward one repo onto its upstream. Never merges, never rebases, and never
+# recurses into submodules (bro's pointers move via --sync, not via a pull).
+# Args: <label> <path>
+repo_pull() {
+    local label="$1" path="$2" branch upstream before after n out
+    if [[ ! -d "$path/.git" && ! -f "$path/.git" ]]; then
+        printf '  %-14s %sno git repo (%s)%s\n' "$label" "$DIM" "$path" "$N"
+        return
+    fi
+
+    branch="$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null)"
+    if [[ "$branch" == "HEAD" ]]; then
+        printf '  %-14s %sskip: detached HEAD%s\n' "$label" "$Y" "$N"
+        return
+    fi
+
+    upstream="$(git -C "$path" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+    if [[ -z "$upstream" ]]; then
+        printf '  %-14s %sskip: no upstream configured%s\n' "$label" "$DIM" "$N"
+        return
+    fi
+
+    before="$(git -C "$path" rev-parse HEAD)"
+    # -c pull.rebase=false: a repo configured to rebase on pull refuses outright
+    # when the tree is dirty, even for a fast-forward. --ff-only never merges, so
+    # forcing the merge backend here only removes that false failure.
+    if ! out="$(git -C "$path" -c pull.rebase=false pull --ff-only --no-recurse-submodules --quiet 2>&1)"; then
+        printf '  %-14s %spull failed%s %s%s%s\n' "$label" "$R" "$N" "$DIM" \
+            "$(printf '%s' "$out" | grep -m1 . || true)" "$N"
+        return
+    fi
+
+    after="$(git -C "$path" rev-parse HEAD)"
+    if [[ "$after" == "$before" ]]; then
+        printf '  %-14s %sup to date%s %s(%s)%s\n' "$label" "$G" "$N" "$DIM" "${before:0:9}" "$N"
+        return
+    fi
+
+    n="$(git -C "$path" rev-list --count "$before..$after" 2>/dev/null || echo '?')"
+    printf '  %-14s %sfast-forwarded +%s%s %s%s -> %s%s\n' \
+        "$label" "$Y" "$n" "$N" "$DIM" "${before:0:9}" "${after:0:9}" "$N"
+}
+
+if [[ "$PULL" -eq 1 ]]; then
+    echo "${BOLD}== Pulling (fast-forward only) ==${N}"
+    repo_pull "bro" "$BRO_ROOT"
+    repo_pull "broworkshop" "$PROJECTS_ROOT/broworkshop"
+    for name in "${SIBLINGS[@]}"; do
+        repo_pull "$name" "$PROJECTS_ROOT/$name"
+    done
+    echo
+fi
+
 echo "${BOLD}== Repo state ==${N}"
 repo_state "bro" "$BRO_ROOT"
 repo_state "broworkshop" "$PROJECTS_ROOT/broworkshop"
@@ -140,7 +199,7 @@ for name in "${SIBLINGS[@]}"; do
             rel="${Y}standalone ahead by ${local_ahead}${N} - bro pointer is stale"
             syncable=1
         else
-            rel="${Y}standalone behind by ${local_behind}${N} - standalone needs a pull"
+            rel="${Y}standalone behind by ${local_behind}${N} - standalone needs a pull (--pull)"
         fi
     else
         # Can't compare, but standalone is the source of truth, so a bump is valid.

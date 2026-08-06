@@ -13,6 +13,12 @@
 .PARAMETER ListFiles
     Also list changed files for dirty repos.
 
+.PARAMETER Pull
+    Fast-forward every repo (bro, broworkshop, and each sibling) to its upstream
+    before reporting, so the status below reflects what's on the remotes. Uses
+    --ff-only and never recurses into submodules: a repo that has diverged, is
+    detached, or has no upstream is reported and skipped, never merged.
+
 .PARAMETER Sync
     Bump bro's stale submodule pointers up to the standalone repos' HEADs and
     make a single bro commit recording it. Only acts on siblings where the
@@ -22,10 +28,11 @@
 .EXAMPLE
     pwsh scripts/repo-status.ps1
     pwsh scripts/repo-status.ps1 -ListFiles
-    pwsh scripts/repo-status.ps1 -Sync
+    pwsh scripts/repo-status.ps1 -Pull
+    pwsh scripts/repo-status.ps1 -Pull -Sync
 #>
 [CmdletBinding()]
-param([switch]$ListFiles, [switch]$Sync)
+param([switch]$ListFiles, [switch]$Pull, [switch]$Sync)
 
 $ErrorActionPreference = 'Continue'
 
@@ -107,6 +114,65 @@ function Repo-State {
     }
 }
 
+# Fast-forward one repo onto its upstream. Never merges, never rebases, and never
+# recurses into submodules (bro's pointers move via -Sync, not via a pull).
+function Repo-Pull {
+    param([string]$Label, [string]$Path)
+
+    Write-Host ("  {0,-14} " -f $Label) -NoNewline
+
+    if (-not (Is-GitRepo $Path)) {
+        Write-Host "no git repo ($Path)" -ForegroundColor DarkGray
+        return
+    }
+
+    $branch = Git-In $Path rev-parse --abbrev-ref HEAD
+    if ($branch -eq 'HEAD') {
+        Write-Host 'skip: detached HEAD' -ForegroundColor Yellow
+        return
+    }
+
+    $upstream = Git-In $Path rev-parse --abbrev-ref --symbolic-full-name '@{u}'
+    if (-not $upstream) {
+        Write-Host 'skip: no upstream configured' -ForegroundColor DarkGray
+        return
+    }
+
+    $before = Git-In $Path rev-parse HEAD
+    # -c pull.rebase=false: a repo configured to rebase on pull refuses outright
+    # when the tree is dirty, even for a fast-forward. --ff-only never merges, so
+    # forcing the merge backend here only removes that false failure.
+    $out = & git -C $Path -c pull.rebase=false pull --ff-only --no-recurse-submodules --quiet 2>&1 |
+        ForEach-Object { $_.ToString() }
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host 'pull failed' -ForegroundColor Red -NoNewline
+        $why = $out | Where-Object { $_ -match '\S' } | Select-Object -First 1
+        if ($why) { Write-Host " - $why" -ForegroundColor DarkGray } else { Write-Host '' }
+        return
+    }
+
+    $after = Git-In $Path rev-parse HEAD
+    if ($after -eq $before) {
+        Write-Host 'up to date ' -ForegroundColor Green -NoNewline
+        Write-Host ("({0})" -f $before.Substring(0, 9)) -ForegroundColor DarkGray
+        return
+    }
+
+    $n = Git-In $Path rev-list --count "$before..$after"
+    Write-Host ("fast-forwarded +{0} " -f $n) -ForegroundColor Yellow -NoNewline
+    Write-Host ("{0} -> {1}" -f $before.Substring(0, 9), $after.Substring(0, 9)) -ForegroundColor DarkGray
+}
+
+if ($Pull) {
+    Write-Host '== Pulling (fast-forward only) ==' -ForegroundColor White
+    Repo-Pull 'bro' $BroRoot
+    Repo-Pull 'broworkshop' (Join-Path $ProjectsRoot 'broworkshop')
+    foreach ($name in $Siblings) {
+        Repo-Pull $name (Join-Path $ProjectsRoot $name)
+    }
+    Write-Host ''
+}
+
 Write-Host '== Repo state ==' -ForegroundColor White
 Repo-State 'bro' $BroRoot
 Repo-State 'broworkshop' (Join-Path $ProjectsRoot 'broworkshop')
@@ -169,7 +235,7 @@ foreach ($name in $Siblings) {
             $syncable = $true
         }
         else {
-            Write-Host "standalone behind by $localBehind - standalone needs a pull" -ForegroundColor Yellow
+            Write-Host "standalone behind by $localBehind - standalone needs a pull (-Pull)" -ForegroundColor Yellow
         }
     }
     else {
