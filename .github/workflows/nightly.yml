@@ -92,7 +92,7 @@ jobs:
 
       - name: Install CUDA Toolkit
         if: matrix.cuda
-        uses: Jimver/cuda-toolkit@v0.2.35
+        uses: Jimver/cuda-toolkit@v0.2.36
         with:
           cuda: "12.6.2"
           method: network
