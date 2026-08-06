@@ -8,3 +8,12 @@ updates:
       interval: weekly
     commit-message:
       prefix: "ci"
+    ignore:
+      # GitHub maintains the `v4` major tag and ships security fixes to it, so
+      # `@v4` is already patched without any PR. Pinning to an exact patch would
+      # trade that automatic patching for a codeql-action PR in every repo on
+      # each release. Major bumps (v4 -> v5) still come through.
+      - dependency-name: "github/codeql-action"
+        update-types:
+          - "version-update:semver-patch"
+          - "version-update:semver-minor"
