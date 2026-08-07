@@ -166,7 +166,6 @@ void VideoPipeline::seekTo(TimeNs pts) {
         recycleCaller(std::move(staged_.front()));
         staged_.pop_front();
     }
-    recycleCaller(std::move(cur_));
 
     pendingSeekPts_ = pts;
     cvWorker_.notify_one();
@@ -192,7 +191,7 @@ void VideoPipeline::flush() {
     }
     cvWorker_.notify_one();
 
-    if (!staged_.empty()) {
+    if (!cur_.valid && !staged_.empty()) {
         recycleCaller(std::move(cur_));
         cur_ = std::move(staged_.front());
         staged_.pop_front();
@@ -361,6 +360,7 @@ void VideoPipeline::refreshRgba() {
     const int cw = (cur_.w + 1) / 2;
     const size_t ySize = static_cast<size_t>(cur_.w) * cur_.h;
     const size_t cSize = static_cast<size_t>(cw) * ((cur_.h + 1) / 2);
+    if (cur_.yuv.size() < ySize + cSize * 2) return;
 
     rgba_.resize(ySize * 4);
     const uint8_t* y = cur_.yuv.data();
