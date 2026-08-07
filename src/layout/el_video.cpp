@@ -145,6 +145,8 @@ bool ElVideo::openStreamingAudio(const std::string& resolvedPath) {
     audioStreamRate_ = static_cast<int>(engineRate);
     audioSourceEnded_ = false;
 
+    updateClockSelection();
+
     // Prime the ring so the first play() starts on sound, not on silence.
     pumpStreamingAudio();
     LOG_INFO("video: audio streaming (%d ch @ %d Hz, %.0f ms ring)",
@@ -164,6 +166,7 @@ void ElVideo::closeStreamingAudio() {
     audioStreamRate_ = 0;
     audioSourceEnded_ = false;
     audioSeekPending_ = -1.0;
+    updateClockSelection();
 }
 
 // AUDIO THREAD FEED POINT:
@@ -214,6 +217,11 @@ void ElVideo::restartStreamingAudio(double fromSeconds) {
     audioEngine_->setPlaybackPlaying(audioStreamId_, false);
     audioEngine_->setPlaybackGain(audioStreamId_, muted_ ? 0.0f : static_cast<float>(volume_));
     audioEngine_->setPlaybackRate(audioStreamId_, static_cast<float>(playbackRate_));
+
+    updateClockSelection();
+    if (pipeline_) {
+        pipeline_->seekTo(static_cast<bro::video::TimeNs>(fromSeconds * 1e9));
+    }
 
     pumpStreamingAudio();
     if (wasPlaying) audioEngine_->setPlaybackPlaying(audioStreamId_, true);
@@ -448,14 +456,42 @@ void ElVideo::setVolume(double v) {
     applyAudioVolume();
 }
 
+void ElVideo::updateClockSelection() {
+    if (!pipeline_) return;
+    const bool audioActive = !muted_ && audioEngine_ &&
+                             (audioStreamId_ >= 0 || audioPlaybackId_ >= 0);
+    if (audioActive) {
+        if (audioStreamId_ >= 0) {
+            auto clock = std::make_unique<bro::video::AudioSlavedClock>(
+                static_cast<uint32_t>(audioStreamRate_),
+                [eng = audioEngine_, id = audioStreamId_]() -> uint64_t {
+                    if (!eng || id < 0) return 0;
+                    auto stats = eng->getStreamStats(id);
+                    return stats.valid ? stats.playedFrames : 0;
+                });
+            pipeline_->setClock(std::move(clock));
+        } else if (audioPlaybackId_ >= 0) {
+            const uint32_t rate = static_cast<uint32_t>(audioEngine_->sampleRate());
+            auto clock = std::make_unique<bro::video::AudioSlavedClock>(
+                rate,
+                [eng = audioEngine_, id = audioPlaybackId_, rate]() -> uint64_t {
+                    if (!eng || id < 0) return 0;
+                    double sec = eng->getPlaybackPositionSeconds(id);
+                    return sec > 0.0 ? static_cast<uint64_t>(sec * rate) : 0;
+                });
+            pipeline_->setClock(std::move(clock));
+        }
+    } else {
+        pipeline_->setClock(std::make_unique<bro::video::FileClock>());
+    }
+}
+
 void ElVideo::setMuted(bool m) {
     if (muted_ == m) return;
     muted_ = m;
+    applyAudioVolume();
+    updateClockSelection();
     if (audioStreamId_ >= 0) {
-        // Gain, not stop: the ring must keep draining in step with the video
-        // clock so unmuting lands at the right place instead of half a
-        // second behind.
-        applyAudioVolume();
         return;
     }
     if (muted_) {

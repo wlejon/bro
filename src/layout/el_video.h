@@ -194,6 +194,7 @@ private:
     void startAudioPlayback(double fromSeconds);
     void stopAudioPlayback();
     void applyAudioVolume();
+    void updateClockSelection();
 
     // HTMLMediaElement IDL state. volume/muted gate audio playback; others
     // are currently informational (playbackRate plumbing into the pipeline

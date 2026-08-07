@@ -138,6 +138,19 @@ void VideoPipeline::setRate(double rate) {
     if (clock_) clock_->setRate(rate);
 }
 
+void VideoPipeline::setClock(std::unique_ptr<MediaClock> clock) {
+    if (!clock) return;
+    if (clock_) {
+        const bool playing = clock_->isPlaying();
+        const double rate = clock_->rate();
+        const TimeNs pos = clock_->nowNs();
+        clock->setRate(rate);
+        clock->seekTo(pos);
+        clock->setPlaying(playing);
+    }
+    clock_ = std::move(clock);
+}
+
 void VideoPipeline::seekTo(TimeNs pts) {
     if (!source_) return;
     if (!vdec_) {

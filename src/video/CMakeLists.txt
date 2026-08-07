@@ -49,3 +49,8 @@ target_link_libraries(bro_videoencodetest PRIVATE bro_video)
 # backends, since the built-in can't demonstrate any of that alone.
 add_executable(bro_mediabackendtest tools/media_backend_test.cpp)
 target_link_libraries(bro_mediabackendtest PRIVATE bro_video)
+
+# Unit test: AudioSlavedClock vs FileClock timing accuracy, +200 ppm skew, underruns, seeks & rate changes.
+add_executable(bro_mediaclocktest tools/media_clock_test.cpp)
+target_link_libraries(bro_mediaclocktest PRIVATE bro_video)
+

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "video/media_packet.h"
+#include <functional>
 #include <mutex>
 
 namespace bro::video {
@@ -60,4 +61,45 @@ private:
     double rate_ = 1.0;
 };
 
+// Audio-slaved clock. When audio is playing, nowNs() is derived from what
+// the audio output/device has actually consumed (played samples * ns_per_sample + anchor PTS).
+// Seeks and rate changes re-anchor the slaved clock. If audio underruns, the clock
+// holds instead of steady_clock walking ahead into desync.
+class AudioSlavedClock final : public MediaClock {
+public:
+    using AudioPositionProvider = std::function<uint64_t()>;
+
+    explicit AudioSlavedClock(uint32_t sampleRate = 48000,
+                              AudioPositionProvider provider = nullptr);
+    ~AudioSlavedClock() override = default;
+
+    TimeNs nowNs() const override;
+    void setPlaying(bool playing) override;
+    bool isPlaying() const override;
+    void seekTo(TimeNs pts) override;
+    void setRate(double rate) override;
+    double rate() const override;
+
+    void setAudioProvider(uint32_t sampleRate, AudioPositionProvider provider);
+    void updatePlayedFrames(uint64_t playedFrames);
+    uint32_t sampleRate() const;
+
+private:
+    TimeNs nowNsLocked() const;
+    uint64_t currentPlayedFramesLocked() const;
+
+    mutable std::mutex m_;
+    bool playing_ = false;
+    uint32_t sampleRate_ = 48000;
+    AudioPositionProvider provider_;
+
+    int64_t fallbackHostAnchorNs_ = 0;
+    int64_t anchorPtsNs_ = 0;
+    mutable uint64_t anchorPlayedFrames_ = 0;
+    int64_t anchorPausedNs_ = 0;
+    double rate_ = 1.0;
+    uint64_t manualPlayedFrames_ = 0;
+};
+
 } // namespace bro::video
+

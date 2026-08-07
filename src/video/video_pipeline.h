@@ -78,6 +78,8 @@ public:
     bool hasFrame() const { return cur_.valid; }
     TimeNs durationNs() const { return duration_; }
     TimeNs clockNs() const { return clock_ ? clock_->nowNs() : 0; }
+    MediaClock* clock() const { return clock_.get(); }
+    void setClock(std::unique_ptr<MediaClock> clock);
     bool hasVideo() const { return vdec_ != nullptr; }
 
     TimeNs currentPts() const;
