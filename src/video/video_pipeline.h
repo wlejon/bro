@@ -75,7 +75,7 @@ public:
     int displayWidth() const { return quarterTurned() ? frameH_ : frameW_; }
     int displayHeight() const { return quarterTurned() ? frameW_ : frameH_; }
 
-    bool hasFrame() const { return cur_.valid; }
+    bool hasFrame() const { return cur_.valid || pendingSeekPts_.load(std::memory_order_relaxed) >= 0 || !staged_.empty(); }
     TimeNs durationNs() const { return duration_; }
     TimeNs clockNs() const { return clock_ ? clock_->nowNs() : 0; }
     MediaClock* clock() const { return clock_.get(); }

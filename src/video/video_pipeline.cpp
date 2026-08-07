@@ -121,7 +121,10 @@ bool VideoPipeline::open(const std::string& path) {
 
 TimeNs VideoPipeline::currentPts() const {
     if (!vdec_) return soundPos_;
-    return cur_.valid ? cur_.pts : 0;
+    if (cur_.valid) return cur_.pts;
+    const int64_t pending = pendingSeekPts_.load(std::memory_order_relaxed);
+    if (pending >= 0) return static_cast<TimeNs>(pending);
+    return 0;
 }
 
 bool VideoPipeline::isEnded() const {
@@ -163,6 +166,7 @@ void VideoPipeline::seekTo(TimeNs pts) {
         recycleCaller(std::move(staged_.front()));
         staged_.pop_front();
     }
+    recycleCaller(std::move(cur_));
 
     pendingSeekPts_ = pts;
     cvWorker_.notify_one();
@@ -188,7 +192,7 @@ void VideoPipeline::flush() {
     }
     cvWorker_.notify_one();
 
-    if (!cur_.valid && !staged_.empty()) {
+    if (!staged_.empty()) {
         recycleCaller(std::move(cur_));
         cur_ = std::move(staged_.front());
         staged_.pop_front();
@@ -394,9 +398,6 @@ void VideoPipeline::performWorkerSeek(TimeNs target) {
             return;
         }
 
-        bool changed = false;
-        if (!pumpOneWorker(&changed)) break;
-
         while (!workerStaged_.empty()) {
             Picture p = std::move(workerStaged_.front());
             workerStaged_.pop_front();
@@ -417,6 +418,14 @@ void VideoPipeline::performWorkerSeek(TimeNs target) {
         }
 
         if (reachedTarget) break;
+
+        if (!workerStaged_.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+
+        bool changed = false;
+        if (!pumpOneWorker(&changed)) break;
     }
 
     workerSeeking_ = false;
@@ -480,7 +489,8 @@ void VideoPipeline::workerLoop() {
             }
         }
 
-        if (decodedQueue_.sizeApprox() < decodedQueue_.capacity() &&
+        if (workerStaged_.empty() &&
+            decodedQueue_.sizeApprox() < decodedQueue_.capacity() &&
             !endOfStream_.load(std::memory_order_relaxed)) {
             bool changed = false;
             pumpOneWorker(&changed);
