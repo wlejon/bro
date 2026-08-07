@@ -5,21 +5,42 @@
 
 #include "util/log.h"
 
+#include <chrono>
 #include <cstring>
 
 namespace bro::video {
+
+static constexpr TimeNs kForwardNudgeNs = 500 * 1000000LL;   // 0.5 s
 
 VideoPipeline::VideoPipeline() {
     clock_ = std::make_unique<FileClock>();
 }
 
-VideoPipeline::~VideoPipeline() = default;
+VideoPipeline::~VideoPipeline() {
+    stopWorker();
+}
 
-// Try one backend against an already-opened source. Returns false if the
-// file has no video track this backend can decode, leaving the pipeline
-// clean for the next candidate.
+void VideoPipeline::startWorker() {
+    if (workerRunning_) return;
+    stopWorker_ = false;
+    workerRunning_ = true;
+    workerThread_ = std::thread([this] { workerLoop(); });
+}
+
+void VideoPipeline::stopWorker() {
+    if (!workerRunning_) return;
+    stopWorker_ = true;
+    cvWorker_.notify_all();
+    if (workerThread_.joinable()) {
+        workerThread_.join();
+    }
+    workerRunning_ = false;
+}
+
 bool VideoPipeline::adoptSource(const MediaBackend& backend,
                                 std::unique_ptr<MediaSource> source) {
+    stopWorker();
+
     videoTrackId_ = 0;
     audioTrackId_ = 0;
     audioRate_ = 0;
@@ -32,6 +53,12 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
     soundPos_ = 0;
     vdec_.reset();
     adec_.reset();
+    staged_.clear();
+    workerStaged_.clear();
+    recycleCaller(std::move(cur_));
+    drained_ = false;
+    endOfStream_ = false;
+    pendingSeekPts_ = -1;
 
     TimeNs videoDuration = 0;
     TimeNs audioDuration = 0;
@@ -39,23 +66,16 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
     for (const auto& t : source->tracks()) {
         if (t.kind == TrackKind::Video && videoTrackId_ == 0) {
             auto dec = backend.makeVideoDecoder ? backend.makeVideoDecoder(t) : nullptr;
-            if (!dec) continue;           // unsupported codec: keep looking
+            if (!dec) continue;
             vdec_ = std::move(dec);
             videoTrackId_ = t.id;
             frameW_ = static_cast<int>(t.width);
             frameH_ = static_cast<int>(t.height);
             videoDuration = t.durationNs;
             frameRate_ = t.frameRate;
-            // Only quarter turns; anything else is a transform this pipeline
-            // cannot express as a display size, and a size that is wrong is
-            // worse than the picture as it was stored. Negative and
-            // out-of-range angles are normalised rather than refused, since a
-            // container is free to say -90.
             const int r = ((t.rotationDegrees % 360) + 360) % 360;
             rotation_ = (r == 90 || r == 180 || r == 270) ? r : 0;
         } else if (t.kind == TrackKind::Audio && audioTrackId_ == 0) {
-            // Audio is optional: a file whose audio codec this backend can't
-            // handle still plays, silently.
             auto dec = backend.makeAudioDecoder ? backend.makeAudioDecoder(t) : nullptr;
             if (!dec) continue;
             adec_ = std::move(dec);
@@ -66,44 +86,26 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
         }
     }
 
-    // Nothing decodable at all: not ours, let the next backend try.
     if (!vdec_ && !adec_) return false;
 
-    // The resource is as long as the longest thing in it, which is NOT the
-    // video track's own length. That is what this used to report whenever
-    // there was a picture, and the two differ by more than a rounding: a
-    // soundtrack routinely runs a fraction of a second past the last picture,
-    // and a second of animation over six seconds of music is an ordinary file.
-    // Measured, before this line existed: 1 s of h264 beside 6 s of aac gave
-    // `<video>.duration === 1`, and the element stopped there with five
-    // seconds of music still to come. The pictures decide which frame is on
-    // screen and nothing else.
     duration_ = videoDuration > audioDuration ? videoDuration : audioDuration;
 
     if (!vdec_) {
-        // Sound only. There is no picture, so there is nothing for this
-        // source to pump — the sound plays from a second demuxer the same way
-        // it does beside a picture (see ElVideo), and this pipeline is reduced
-        // to what it always also was: a clock, a length, and an end. It is
-        // still opened rather than refused, because a file with no video track
-        // is a file that plays, and refusing it here is why one could not.
         source->setActiveTracks({});
         source_ = std::move(source);
         return true;
     }
-    // This source pumps video only — audio plays from a second demuxer (see
-    // ElVideo). Asking for just the video track stops us reading and copying
-    // audio packets we immediately drop.
+
     source->setActiveTracks({videoTrackId_});
     source_ = std::move(source);
+
+    startWorker();
+    flush();
+
     return true;
 }
 
 bool VideoPipeline::open(const std::string& path) {
-    // Highest-priority backend that both recognises the container and can
-    // decode a video track inside it wins. A host application registering an
-    // ffmpeg backend therefore takes over transparently, and with none
-    // registered this is exactly the old WebM/VP9/Opus path.
     for (const auto& backend : mediaBackends()) {
         if (!backend.open) continue;
         auto source = backend.open(path);
@@ -119,14 +121,13 @@ bool VideoPipeline::open(const std::string& path) {
 
 TimeNs VideoPipeline::currentPts() const {
     if (!vdec_) return soundPos_;
-    // The pictures answer for as long as there are any. Once they have run out
-    // the clock takes over — see the header for why that is not a second clock
-    // arbitrating — and it is clamped to the length so a position can never be
-    // reported past the end of the resource it belongs to.
-    if (!clock_ || !clock_->isPlaying() || !isEnded()) return cur_.pts;
-    const TimeNs now = clock_->nowNs();
-    if (now <= cur_.pts) return cur_.pts;
-    return duration_ > 0 && now > duration_ ? duration_ : now;
+    return cur_.valid ? cur_.pts : 0;
+}
+
+bool VideoPipeline::isEnded() const {
+    return endOfStream_.load(std::memory_order_relaxed) &&
+           decodedQueue_.sizeApprox() == 0 &&
+           staged_.empty();
 }
 
 void VideoPipeline::play() { if (clock_) clock_->setPlaying(true); }
@@ -137,42 +138,50 @@ void VideoPipeline::setRate(double rate) {
     if (clock_) clock_->setRate(rate);
 }
 
-// A forward seek shorter than this decodes on from where we are instead of
-// restarting the demuxer. A demuxer seek lands on the keyframe at or BEFORE
-// the target — which for a target just ahead of the playhead is usually
-// BEHIND the playhead, so it decodes a whole GOP to reach a picture that was
-// only a few frames away. Frame stepping is the extreme case: one frame
-// forward cost an entire GOP.
-static constexpr TimeNs kForwardNudgeNs = 500 * 1000000LL;   // 0.5 s
-
 void VideoPipeline::seekTo(TimeNs pts) {
     if (!source_) return;
     if (!vdec_) {
-        // No pictures to throw away and no demuxer of ours to restart: the
-        // clock IS the position, so moving it is the whole of the seek.
         if (clock_) clock_->seekTo(pts);
         advanceTo(pts);
         return;
     }
 
-    const bool nudgeForward = cur_.valid && cur_.pts >= 0 && pts >= cur_.pts &&
-                              (pts - cur_.pts) <= kForwardNudgeNs;
-    if (!nudgeForward) restartAt(pts);
+    while (!staged_.empty()) {
+        recycleCaller(std::move(staged_.front()));
+        staged_.pop_front();
+    }
+
+    pendingSeekPts_ = pts;
+    cvWorker_.notify_one();
     if (clock_) clock_->seekTo(pts);
-    advanceTo(pts);
 }
 
-// Point the demuxer at the keyframe at or before `target` and throw away
-// everything decoded from the old position — frames still in flight belong
-// there, not here.
-void VideoPipeline::restartAt(TimeNs target) {
-    source_->seekTo(target);
-    if (vdec_) vdec_->flush();
-    if (adec_) adec_->flush();
-    while (!staged_.empty()) { recycle(std::move(staged_.front())); staged_.pop_front(); }
-    recycle(std::move(cur_));
-    drained_ = false;
-    endOfStream_ = false;
+void VideoPipeline::flush() {
+    if (!vdec_ || !workerRunning_) return;
+
+    flushRequested_ = true;
+    cvWorker_.notify_one();
+
+    std::unique_lock<std::mutex> lock(mutex_);
+    cvCaller_.wait_for(lock, std::chrono::milliseconds(5000), [this] {
+        return pendingSeekPts_.load(std::memory_order_relaxed) == -1 &&
+               !workerSeeking_.load(std::memory_order_relaxed) &&
+               (workerIdle_.load(std::memory_order_relaxed) || decodedQueue_.sizeApprox() > 0 || endOfStream_.load(std::memory_order_relaxed));
+    });
+
+    Picture incoming;
+    while (decodedQueue_.tryPop(incoming)) {
+        staged_.push_back(std::move(incoming));
+    }
+    cvWorker_.notify_one();
+
+    if (!cur_.valid && !staged_.empty()) {
+        recycleCaller(std::move(cur_));
+        cur_ = std::move(staged_.front());
+        staged_.pop_front();
+        rgbaStale_ = true;
+        refreshRgba();
+    }
 }
 
 bool VideoPipeline::stepFrame(int direction) {
@@ -182,67 +191,113 @@ bool VideoPipeline::stepFrame(int direction) {
         if (!cur_.valid || cur_.pts <= 0) return false;
         const TimeNs was = cur_.pts;
 
-        // Restart the demuxer a little BEFORE the picture on screen, then
-        // decode forward and keep the last frame that is still earlier than
-        // it. Comparing frames is exact — their timestamps are already in ns —
-        // so the only question is where to restart from.
-        //
-        // Not one nanosecond before: a demuxer converts the target into the
-        // container's own timebase, where one nanosecond is far below a tick,
-        // and the rounding puts it back on the current frame. When that frame
-        // is a keyframe the seek then lands on the frame we are trying to
-        // leave, the step reports nothing to do, and stepping back stalls
-        // there for good — which is exactly what a viewer sees as "it won't
-        // go back past this point".
-        //
-        // A wider guard is never wrong, only slower: from wherever we land we
-        // still decode forward to the frame just before `was`. So start at a
-        // couple of frames and widen hard if the file disagrees.
         TimeNs guard = frameRate_ > 0.0
                            ? static_cast<TimeNs>(2e9 / frameRate_)
-                           : 100 * 1000000LL;                     // 100 ms
+                           : 100 * 1000000LL;
         for (int attempt = 0; attempt < 6; ++attempt) {
             const TimeNs target = was > guard ? was - guard : 0;
-            restartAt(target);
-            advanceTo(was - 1);
+            seekTo(target);
+            flush();
 
-            if (cur_.valid && cur_.pts < was) {
+            Picture best;
+            while (true) {
+                Picture incoming;
+                while (decodedQueue_.tryPop(incoming)) {
+                    staged_.push_back(std::move(incoming));
+                }
+                while (!staged_.empty() && staged_.front().pts < was) {
+                    best = std::move(staged_.front());
+                    staged_.pop_front();
+                }
+                if (best.valid) break;
+                if (isEnded() || target == 0) break;
+                flush();
+            }
+
+            if (best.valid && best.pts < was) {
+                recycleCaller(std::move(cur_));
+                cur_ = std::move(best);
+                rgbaStale_ = true;
+                refreshRgba();
                 if (clock_) clock_->seekTo(cur_.pts);
                 return true;
             }
+
             if (target == 0) break;
             guard *= 8;
         }
         return false;
     }
+
     if (direction == 0) return false;
 
-    // Forward: whatever picture comes after the one on screen. Decode until
-    // there is one — the staged queue already holds it during playback.
-    while (staged_.empty() && !endOfStream_) pumpOne(cur_.pts, nullptr);
+    const TimeNs current = cur_.valid ? cur_.pts : -1;
+
+    Picture incoming;
+    while (decodedQueue_.tryPop(incoming)) {
+        staged_.push_back(std::move(incoming));
+    }
+
+    while (!staged_.empty() && staged_.front().pts <= current) {
+        staged_.pop_front();
+    }
+
+    int retries = 0;
+    while (staged_.empty() && !isEnded() && retries < 50) {
+        flush();
+        while (decodedQueue_.tryPop(incoming)) {
+            staged_.push_back(std::move(incoming));
+        }
+        while (!staged_.empty() && staged_.front().pts <= current) {
+            staged_.pop_front();
+        }
+        if (!staged_.empty()) break;
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        retries++;
+    }
+
     if (staged_.empty()) return false;
 
-    const TimeNs t = staged_.front().pts;
-    if (clock_) clock_->seekTo(t);
-    advanceTo(t);
+    recycleCaller(std::move(cur_));
+    cur_ = std::move(staged_.front());
+    staged_.pop_front();
+    rgbaStale_ = true;
+    refreshRgba();
+    if (clock_) clock_->seekTo(cur_.pts);
     return true;
 }
 
-VideoPipeline::Picture VideoPipeline::takePicture() {
-    if (pool_.empty()) return Picture{};
-    Picture p = std::move(pool_.back());
-    pool_.pop_back();
-    return p;
+VideoPipeline::Picture VideoPipeline::takePictureWorker() {
+    Picture p;
+    if (recycleQueue_.tryPop(p)) {
+        p.valid = false;
+        p.pts = -1;
+        return p;
+    }
+    if (!workerPool_.empty()) {
+        p = std::move(workerPool_.back());
+        workerPool_.pop_back();
+        return p;
+    }
+    return Picture{};
 }
 
-void VideoPipeline::recycle(Picture&& p) {
+void VideoPipeline::recycleWorker(Picture&& p) {
     p.valid = false;
     p.pts = -1;
-    if (pool_.size() < 4) pool_.push_back(std::move(p));
+    if (workerPool_.size() < 32) workerPool_.push_back(std::move(p));
     p = Picture{};
 }
 
-// Copy a decoded frame's planes into a picture with tight strides.
+void VideoPipeline::recycleCaller(Picture&& p) {
+    p.valid = false;
+    p.pts = -1;
+    if (p.w > 0 && p.h > 0) {
+        recycleQueue_.tryPush(std::move(p));
+    }
+    p = Picture{};
+}
+
 void VideoPipeline::storeFrame(Picture& dst, const VideoFrame& frame) {
     const int w = static_cast<int>(frame.width);
     const int h = static_cast<int>(frame.height);
@@ -287,69 +342,140 @@ void VideoPipeline::refreshRgba() {
                cur_.w, cw, cw, cur_.w, cur_.h, rgba_.data(), cur_.w * 4);
 }
 
-bool VideoPipeline::decodePacket(const MediaPacket& pkt, TimeNs nowNs) {
-    if (pkt.trackId != videoTrackId_ || !vdec_) {
-        // Audio packets are dropped here — audio playback is driven by a
-        // separate demuxer instance (see ElVideo::openAudioTrack), which
-        // predecodes the whole audio track into one clip up front rather than
-        // pumping packets in lockstep with video. audioDecoder() is exposed
-        // for callers that want to decode Opus packets themselves.
-        return false;
-    }
-    if (!vdec_->decode(pkt)) return false;
-    return collectFrames(nowNs);
-}
+void VideoPipeline::performWorkerSeek(TimeNs target) {
+    if (!source_ || !vdec_) return;
 
-bool VideoPipeline::collectFrames(TimeNs nowNs) {
-    VideoFrame frame;
-    bool changed = false;
-    while (vdec_->nextFrame(frame)) {
-        // Keep the picture, don't convert it. A seek walks the whole GOP to
-        // reach one frame; converting all of them cost 3.3 ms each and was
-        // the entire reason scrubbing felt broken.
-        //
-        // The FRAME's pts, not the packet's. A codec with B-frames emits
-        // pictures in a different order than the packets that carried them,
-        // so the frame coming out of decode() is generally not the one the
-        // packet just fed in. VP8/VP9 don't reorder, which is why the packet
-        // pts was indistinguishable until now.
-        if (cur_.valid && frame.pts > nowNs) {
-            Picture p = takePicture();
-            storeFrame(p, frame);
-            staged_.push_back(std::move(p));
-        } else {
-            Picture p = takePicture();
-            storeFrame(p, frame);
-            recycle(std::move(cur_));
-            cur_ = std::move(p);
-            rgbaStale_ = true;
-            changed = true;
+    workerSeeking_ = true;
+
+    Picture dummy;
+    while (decodedQueue_.tryPop(dummy)) {
+        recycleWorker(std::move(dummy));
+    }
+    while (!workerStaged_.empty()) {
+        recycleWorker(std::move(workerStaged_.front()));
+        workerStaged_.pop_front();
+    }
+
+    source_->seekTo(target);
+    if (vdec_) vdec_->flush();
+    if (adec_) adec_->flush();
+    drained_ = false;
+    endOfStream_ = false;
+
+    const TimeNs targetUpper = target + 100 * 1000000LL;
+    const TimeNs pruneBeforePts = target > 200 * 1000000LL ? target - 200 * 1000000LL : 0;
+
+    bool reachedTarget = false;
+    while (!stopWorker_.load(std::memory_order_relaxed)) {
+        if (pendingSeekPts_.load(std::memory_order_relaxed) >= 0) {
+            workerSeeking_ = false;
+            return;
         }
+
+        bool changed = false;
+        if (!pumpOneWorker(&changed)) break;
+
+        while (!workerStaged_.empty()) {
+            Picture p = std::move(workerStaged_.front());
+            workerStaged_.pop_front();
+
+            if (p.pts >= targetUpper) {
+                reachedTarget = true;
+            }
+
+            if (p.pts < pruneBeforePts && !reachedTarget) {
+                recycleWorker(std::move(p));
+                continue;
+            }
+
+            if (!decodedQueue_.tryPush(std::move(p))) {
+                workerStaged_.push_front(std::move(p));
+                break;
+            }
+        }
+
+        if (reachedTarget || decodedQueue_.sizeApprox() >= 16) break;
     }
-    return changed;
+
+    workerSeeking_ = false;
+    cvCaller_.notify_all();
 }
 
-bool VideoPipeline::pumpOne(TimeNs nowNs, bool* changed) {
+bool VideoPipeline::collectFramesWorker() {
+    VideoFrame frame;
+    bool collectedAny = false;
+    while (vdec_->nextFrame(frame)) {
+        Picture p = takePictureWorker();
+        storeFrame(p, frame);
+        if (!decodedQueue_.tryPush(std::move(p))) {
+            workerStaged_.push_back(std::move(p));
+        }
+        collectedAny = true;
+    }
+    return collectedAny;
+}
+
+bool VideoPipeline::pumpOneWorker(bool* changed) {
     MediaPacket pkt;
     if (!source_->readPacket(pkt)) {
-        // Out of packets is not out of pictures. A codec that reorders is
-        // still holding its whole reorder buffer — sixteen frames for HEVC —
-        // waiting for a packet that will never arrive. Tell it the stream has
-        // ended and take what comes out; only then is the file really over.
-        // Without this the tail of every such file is simply never shown, and
-        // the playhead stops a second short of the end.
         if (!drained_) {
             drained_ = true;
             vdec_->drain();
-            if (collectFrames(nowNs) && changed) *changed = true;
+            if (collectFramesWorker() && changed) *changed = true;
             return true;
         }
         endOfStream_ = true;
         return false;
     }
-    if (pkt.trackId != videoTrackId_) return true;   // not ours; keep going
-    if (decodePacket(pkt, nowNs) && changed) *changed = true;
+    if (pkt.trackId != videoTrackId_) return true;
+    if (vdec_->decode(pkt)) {
+        if (collectFramesWorker() && changed) *changed = true;
+    }
     return true;
+}
+
+void VideoPipeline::workerLoop() {
+    while (!stopWorker_.load(std::memory_order_relaxed)) {
+        int64_t seekTarget = pendingSeekPts_.exchange(-1);
+        if (seekTarget >= 0) {
+            performWorkerSeek(static_cast<TimeNs>(seekTarget));
+            continue;
+        }
+
+        Picture recycled;
+        while (recycleQueue_.tryPop(recycled)) {
+            if (workerPool_.size() < 16) {
+                workerPool_.push_back(std::move(recycled));
+            }
+        }
+
+        while (!workerStaged_.empty()) {
+            Picture p = std::move(workerStaged_.front());
+            if (decodedQueue_.tryPush(std::move(p))) {
+                workerStaged_.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if (decodedQueue_.sizeApprox() < decodedQueue_.capacity() &&
+            !endOfStream_.load(std::memory_order_relaxed)) {
+            bool changed = false;
+            pumpOneWorker(&changed);
+            cvCaller_.notify_all();
+        } else {
+            std::unique_lock<std::mutex> lock(mutex_);
+            workerIdle_ = true;
+            cvCaller_.notify_all();
+            if (!stopWorker_.load(std::memory_order_relaxed) &&
+                pendingSeekPts_.load(std::memory_order_relaxed) == -1 &&
+                !flushRequested_.load(std::memory_order_relaxed)) {
+                cvWorker_.wait_for(lock, std::chrono::milliseconds(5));
+            }
+            workerIdle_ = false;
+            flushRequested_ = false;
+        }
+    }
 }
 
 bool VideoPipeline::advance() {
@@ -360,10 +486,6 @@ bool VideoPipeline::advance() {
 bool VideoPipeline::advanceTo(TimeNs nowNs) {
     if (!source_) return false;
     if (!vdec_) {
-        // Sound only: nothing is decoded here and there is no picture to
-        // promote, so advancing is reading the clock and noticing the end.
-        // Reported as "nothing changed" because nothing on screen did — the
-        // return value is about the picture, and there is none.
         soundPos_ = nowNs < 0 ? 0 : nowNs;
         if (duration_ > 0 && soundPos_ >= duration_) {
             soundPos_ = duration_;
@@ -375,26 +497,31 @@ bool VideoPipeline::advanceTo(TimeNs nowNs) {
         }
         return false;
     }
+
+    Picture incoming;
+    while (decodedQueue_.tryPop(incoming)) {
+        staged_.push_back(std::move(incoming));
+    }
+    cvWorker_.notify_one();
+
     bool changed = false;
 
-    // A staged picture becomes the displayed one as soon as its time comes.
     while (!staged_.empty() && staged_.front().pts <= nowNs) {
-        recycle(std::move(cur_));
+        recycleCaller(std::move(cur_));
         cur_ = std::move(staged_.front());
         staged_.pop_front();
         rgbaStale_ = true;
         changed = true;
     }
 
-    // Then decode until something is staged — proof that the picture now on
-    // screen really is the one `now` falls inside, rather than merely the
-    // newest we happen to have decoded.
-    while (staged_.empty() && !endOfStream_) {
-        if (!pumpOne(nowNs, &changed)) break;
+    if (!cur_.valid && !staged_.empty()) {
+        recycleCaller(std::move(cur_));
+        cur_ = std::move(staged_.front());
+        staged_.pop_front();
+        rgbaStale_ = true;
+        changed = true;
     }
 
-    // One colour conversion per advance, however many frames were decoded to
-    // get here.
     if (changed) refreshRgba();
     return changed;
 }

@@ -166,8 +166,11 @@ void ElVideo::closeStreamingAudio() {
     audioSeekPending_ = -1.0;
 }
 
+// AUDIO THREAD FEED POINT:
 // Top the ring back up to kAudioBufferSeconds. Called once per frame from
-// pumpEvents() — main thread, so decode never runs on the audio thread.
+// pumpEvents() on the main UI thread. Main thread decodes Opus/audio packets
+// from audioSource_ into float PCM samples and pushes them into the broaudio stream
+// ring (audioStreamId_). The broaudio audio device thread consumes from this ring asynchronously.
 void ElVideo::pumpStreamingAudio() {
     if (!audioEngine_ || audioStreamId_ < 0 || !audioSource_ || !audioStreamDec_) return;
     if (audioSourceEnded_) return;
@@ -589,7 +592,10 @@ void ElVideo::draw(render::Renderer* renderer,
 }
 
 void ElVideo::advancePipeline() {
-    if (pipeline_) pipeline_->advance();
+    if (pipeline_) {
+        pipeline_->flush();
+        pipeline_->advance();
+    }
 }
 
 void ElVideo::pumpEvents() {
