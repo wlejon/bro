@@ -204,9 +204,14 @@ bool VideoPipeline::stepFrame(int direction) {
         if (!cur_.valid || cur_.pts <= 0) return false;
         const TimeNs was = cur_.pts;
 
+        while (!staged_.empty()) {
+            recycleCaller(std::move(staged_.front()));
+            staged_.pop_front();
+        }
+
         TimeNs guard = frameRate_ > 0.0
-                           ? static_cast<TimeNs>(2e9 / frameRate_)
-                           : 100 * 1000000LL;
+                           ? static_cast<TimeNs>(1.5e9 / frameRate_)
+                           : 50 * 1000000LL;
         for (int attempt = 0; attempt < 6; ++attempt) {
             const TimeNs target = was > guard ? was - guard : 0;
             seekTo(target);
@@ -228,6 +233,10 @@ bool VideoPipeline::stepFrame(int direction) {
             }
 
             if (best.valid && best.pts < was) {
+                while (!staged_.empty()) {
+                    recycleCaller(std::move(staged_.front()));
+                    staged_.pop_front();
+                }
                 recycleCaller(std::move(cur_));
                 cur_ = std::move(best);
                 rgbaStale_ = true;
@@ -407,7 +416,7 @@ void VideoPipeline::performWorkerSeek(TimeNs target) {
             }
         }
 
-        if (reachedTarget || decodedQueue_.sizeApprox() >= 16) break;
+        if (reachedTarget) break;
     }
 
     workerSeeking_ = false;
