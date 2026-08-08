@@ -230,19 +230,27 @@ int main() {
         VideoPipeline p;
         check(p.open("reorder://clip"), "a reordering source opens");
 
+        // `settleAt` and not `advanceTo`, throughout: the landing rule being
+        // asserted is the same one — the last picture at or before the instant
+        // — but the decode is on a worker thread now, so `advanceTo` answers
+        // with whatever has been handed over by the time it is called. That is
+        // the right answer for a screen and no answer at all for a test, which
+        // would be asserting how far a thread happened to have got. Nothing
+        // about the contract below is weakened by waiting for it.
+
         // Mid-file the buffer hides nothing: pictures come out kHold packets
         // late, which the demuxer stays ahead of.
-        p.advanceTo(10 * kFrameNs);
+        p.settleAt(10 * kFrameNs);
         check(p.currentPts() == 10 * kFrameNs, "mid-stream lands on the right picture");
         check(!p.isEnded(), "and does not think the file is over");
 
         // The tail is the part that only a drain can produce.
-        p.advanceTo(last);
+        p.settleAt(last);
         check(p.currentPts() == last, "the last picture of a reordering file is shown");
         check(p.isEnded(), "and only then is the file ended");
 
         // Asking past the end stays on the last picture rather than losing it.
-        p.advanceTo(last + 5 * kFrameNs);
+        p.settleAt(last + 5 * kFrameNs);
         check(p.currentPts() == last, "advancing past the end holds the last picture");
 
         // Seeking back after the drain has to work: a decoder told the stream
