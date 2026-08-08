@@ -166,6 +166,7 @@ void ElVideo::closeStreamingAudio() {
     audioStreamRate_ = 0;
     audioSourceEnded_ = false;
     audioSeekPending_ = -1.0;
+    dropAudioGate();
     updateClockSelection();
 }
 
@@ -224,7 +225,10 @@ void ElVideo::restartStreamingAudio(double fromSeconds) {
     }
 
     pumpStreamingAudio();
-    if (wasPlaying) audioEngine_->setPlaybackPlaying(audioStreamId_, true);
+    // Held until the picture has caught up with the seek — see `armAudio`. The
+    // ring is full and waiting either way, so what this costs is the wait and
+    // not a gap in the sound.
+    if (wasPlaying) armAudio(fromSeconds);
 }
 
 void ElVideo::openAudioTrack(const std::string& resolvedPath) {
@@ -324,32 +328,87 @@ void ElVideo::stopAudioPlayback() {
     audioPlaybackId_ = -1;
 }
 
-void ElVideo::play() {
-    if (!pipeline_) return;
-    pipeline_->play();
-    if (audioStreamId_ >= 0 && audioEngine_) {
-        // Pay for any seeks made while paused, once, here.
-        if (audioSeekPending_ >= 0.0) {
-            const double at = audioSeekPending_;
-            audioSeekPending_ = -1.0;
-            restartStreamingAudio(at);
-        }
-        // Refill first: starting a drained ring emits silence and counts it
+// ── The sound waits for the picture ────────────────────────────────────────
+//
+// **Audio comes back from a seek at once and the picture does not.** Every audio
+// packet is a keyframe and the decode is around a hundred times realtime, so the
+// ring is refilled at the target in a few milliseconds; the picture has to open,
+// seek and decode forward from the keyframe before the target, on the worker.
+// Started together, those are not together at all — and the deficit is never
+// given back, because a pipeline that is behind is already running flat out.
+// Measured on a six-hour 1440p60 AV1 recording decoded in software, which is
+// about realtime: the picture ran roughly half a second behind the sound after a
+// click at the three-hour mark, and less earlier in the file — the shape of a
+// deficit that is however long the chase took and is then kept for ever. The
+// ring's own half second of pre-fill (kAudioBufferSeconds) is part of that lead.
+//
+// So the sound is held until the picture is there, and the two start from the
+// same instant. `decodedThrough` is the pipeline's own answer and is about a
+// picture having been *made*, not shown — an element nobody is drawing (hidden
+// behind another stage) would otherwise never open its gate and never make a
+// sound. While the gate is shut the audio-slaved clock does not move, because a
+// stream that is not playing has played no frames (AudioSlavedClock::
+// readingLocked) — which is the same rule an underrun already follows, applied
+// at the start rather than in the middle.
+//
+// A file with no video track is not gated: there is nothing to wait for, and
+// `decodedThrough` says so.
+
+void ElVideo::armAudio(double fromSeconds) {
+    audioGateAt_ = fromSeconds > 0.0 ? fromSeconds : 0.0;
+    // Tried at once, so that the ordinary case — a resume where the picture
+    // already is — starts the sound inside the press rather than a frame later.
+    openAudioGate();
+}
+
+void ElVideo::openAudioGate() {
+    if (audioGateAt_ < 0.0) return;
+    if (!audioEngine_ || !pipeline_) { dropAudioGate(); return; }
+    // Paused between arming and opening: there is nothing to start, and the
+    // next play() arms it again from wherever the playhead then is.
+    if (!pipeline_->isPlaying()) { dropAudioGate(); return; }
+
+    const double at = audioGateAt_;
+    if (!pipeline_->decodedThrough(static_cast<bro::video::TimeNs>(at * 1e9))) return;
+    dropAudioGate();
+
+    if (audioStreamId_ >= 0) {
+        // Topped up first: starting a drained ring emits silence and counts it
         // as underrun, which is exactly the "first second is missing" bug.
         pumpStreamingAudio();
         audioEngine_->setPlaybackPlaying(audioStreamId_, true);
         return;
     }
-    // Predecoded route. Both clocks advance off real time independently;
-    // drift over the short clips this route serves is imperceptible.
-    if (audioPlaybackId_ < 0) {
-        startAudioPlayback(currentTime());
-    } else if (audioEngine_) {
-        audioEngine_->setPlaybackPlaying(audioPlaybackId_, true);
+    // Predecoded route. Both clocks advance off real time independently; drift
+    // over the short clips this route serves is imperceptible.
+    if (audioClipId_ < 0) return;
+    if (audioPlaybackId_ < 0) startAudioPlayback(at);
+    else audioEngine_->setPlaybackPlaying(audioPlaybackId_, true);
+}
+
+void ElVideo::play() {
+    if (!pipeline_) return;
+    pipeline_->play();
+    if (audioStreamId_ >= 0 && audioEngine_) {
+        // Pay for any seeks made while paused, once, here. It arms the gate
+        // itself, from the position it is putting the sound at.
+        if (audioSeekPending_ >= 0.0) {
+            const double at = audioSeekPending_;
+            audioSeekPending_ = -1.0;
+            restartStreamingAudio(at);
+            return;
+        }
+        pumpStreamingAudio();
+        armAudio(currentTime());
+        return;
     }
+    armAudio(currentTime());
 }
 void ElVideo::pause() {
     if (pipeline_) pipeline_->pause();
+    // Nothing is waiting for a picture any more. A play() after this arms it
+    // again from wherever the playhead is by then.
+    dropAudioGate();
     if (!audioEngine_) return;
     if (audioStreamId_ >= 0) {
         audioEngine_->setPlaybackPlaying(audioStreamId_, false);
@@ -391,11 +450,16 @@ void ElVideo::reanchorAudio(double seconds, bool deferAudio) {
     // the next play(). This is what makes scrubbing cheap: dragging a playhead
     // is dozens of seeks a second, and each one was tearing down an audio
     // stream and decoding half a second of sound nobody would hear.
+    // Whichever route, a jump is a jump: nothing that was waiting for the
+    // picture at the position being left may open on this one.
+    dropAudioGate();
     if (audioStreamId_ >= 0) {
         if (deferAudio) audioSeekPending_ = seconds;
         else restartStreamingAudio(seconds);
     } else if (pipeline_->isPlaying() && audioClipId_ >= 0) {
-        startAudioPlayback(seconds);
+        // `armAudio` rather than `startAudioPlayback`: the predecoded route has
+        // the same head start over the picture, for the same reason.
+        armAudio(seconds);
     } else {
         stopAudioPlayback();
     }
@@ -655,6 +719,10 @@ void ElVideo::pumpEvents() {
     // Keep the audio ring ahead of the mixer. Deliberately before the jsCtx_
     // guard: a document with no JS listeners still has to make sound.
     pumpStreamingAudio();
+    // And start it once the picture it is waiting for has been made � see
+    // `armAudio`. Here because this is the one call this element gets per frame
+    // on the main thread; the picture arrives on the worker and says nothing.
+    openAudioGate();
     // With no picture nothing drives the clock from the draw path — there is
     // no frame to decode and draw() bows out — so walk it here. Safe on this
     // thread precisely because the raster side is not touching it.
@@ -778,6 +846,8 @@ bool   ElVideo::openStreamingAudio(const std::string&) { return false; }
 void   ElVideo::closeStreamingAudio() {}
 void   ElVideo::pumpStreamingAudio() {}
 void   ElVideo::restartStreamingAudio(double) {}
+void   ElVideo::armAudio(double) {}
+void   ElVideo::openAudioGate() {}
 void   ElVideo::reanchorAudio(double, bool) {}
 void   ElVideo::openAudioTrack(const std::string&) {}
 void   ElVideo::startAudioPlayback(double) {}

@@ -88,6 +88,7 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
     lastPts_ = -1;
     workerInSeek_ = false;
     workerNewestPts_ = -1;
+    decodedThroughNs_ = -1;
     decodeCeiling_ = 0;
     // A different file is a different frame interval, and nothing measured about
     // the last one says anything about this one.
@@ -174,6 +175,18 @@ TimeNs VideoPipeline::currentPts() const {
     return duration_ > 0 && now > duration_ ? duration_ : now;
 }
 
+bool VideoPipeline::decodedThrough(TimeNs pts) const {
+    if (!vdec_) return true;      // no picture to wait for; see the header
+    if (pendingSeekPts_.load(std::memory_order_relaxed) >= 0) return false;
+    if (workerSeeking_.load(std::memory_order_relaxed)) return false;
+    const int64_t made = decodedThroughNs_.load(std::memory_order_relaxed);
+    if (made < 0) return false;
+    // Nothing more is coming, so what has been made is the whole answer: a wait
+    // for a picture past the end of the file would never end.
+    if (endOfStream_.load(std::memory_order_relaxed)) return true;
+    return made >= pts;
+}
+
 bool VideoPipeline::isEnded() const {
     return endOfStream_.load(std::memory_order_relaxed) &&
            decodedQueue_.sizeApprox() == 0 &&
@@ -232,6 +245,12 @@ void VideoPipeline::seekTo(TimeNs pts) {
     // got round to the request, which is an element that will not play again
     // and a transport that has to be pressed twice.
     endOfStream_ = false;
+
+    // Before the request is posted, so that nothing can read "a picture for that
+    // moment has been made" between the two and get the answer for the position
+    // being left — see `decodedThroughNs_`. The worker clears it again as it
+    // takes the seek up.
+    decodedThroughNs_.store(-1, std::memory_order_relaxed);
 
     pendingSeekPts_ = pts;
     cvWorker_.notify_one();
@@ -574,6 +593,7 @@ void VideoPipeline::performWorkerSeek(TimeNs target) {
     drained_ = false;
     endOfStream_ = false;
     workerNewestPts_ = -1;   // the pictures after this one are a new position
+    decodedThroughNs_.store(-1, std::memory_order_relaxed);
 
     const TimeNs targetUpper = target + 100 * 1000000LL;
     const TimeNs pruneBeforePts = target > 200 * 1000000LL ? target - 200 * 1000000LL : 0;
@@ -634,7 +654,12 @@ bool VideoPipeline::collectFramesWorker() {
         // meant a seek only ever examined the pictures the ring had no room
         // for, so it neither pruned nor stopped and simply filled 32 slots
         // from wherever the keyframe was.
-        if (p.pts > workerNewestPts_) workerNewestPts_ = p.pts;
+        if (p.pts > workerNewestPts_) {
+            workerNewestPts_ = p.pts;
+            // Published for `decodedThrough`, which is asked from a thread that
+            // may read nothing else here.
+            decodedThroughNs_.store(p.pts, std::memory_order_relaxed);
+        }
         if (workerInSeek_ || !decodedQueue_.tryPush(std::move(p))) {
             workerStaged_.push_back(std::move(p));
         }

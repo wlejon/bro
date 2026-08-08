@@ -6,10 +6,13 @@
 // the selection rules directly. Not linked into bro.
 
 #include "video/media_backend.h"
+#include "video/media_clock.h"
 #include "video/video_pipeline.h"
 
+#include <chrono>
 #include <cstdio>
 #include <string>
+#include <thread>
 
 using namespace bro::video;
 
@@ -138,6 +141,77 @@ private:
     uint8_t plane_[256 + 64 + 64] = {};
 };
 
+// ── a stream that decodes at about the speed it plays ─────────────────────
+//
+// The condition the audio preroll gate exists for. A seek lands on the keyframe
+// at or before the target — which is what a demuxer does — so the pictures
+// between the two have to be decoded before anything can be shown, and with a
+// decoder that runs at about realtime that chase is time nothing gives back.
+// Audio has no equivalent: every packet is a keyframe, so the ring is refilled
+// at the target immediately.
+
+constexpr int kSlowFrames = 300;
+constexpr int kSlowGop = 30;
+constexpr TimeNs kSlowFrameNs = 33333333;
+constexpr auto kSlowDecode = std::chrono::milliseconds(3);
+
+class SlowSource : public MediaSource {
+public:
+    SlowSource() {
+        TrackInfo t = videoTrack(Codec::H264);
+        t.durationNs = kSlowFrames * kSlowFrameNs;
+        tracks_.push_back(t);
+    }
+    const std::vector<TrackInfo>& tracks() const override { return tracks_; }
+    bool readPacket(MediaPacket& out) override {
+        if (next_ >= kSlowFrames) return false;
+        out.trackId = 1;
+        out.pts = next_ * kSlowFrameNs;
+        out.keyframe = (next_ % kSlowGop) == 0;
+        out.data = std::make_shared<std::vector<uint8_t>>(1, 0);
+        ++next_;
+        return true;
+    }
+    bool seekTo(TimeNs pts) override {
+        int frame = static_cast<int>(pts / kSlowFrameNs);
+        if (frame < 0) frame = 0;
+        next_ = (frame / kSlowGop) * kSlowGop;      // back to the keyframe
+        return true;
+    }
+
+private:
+    std::vector<TrackInfo> tracks_;
+    int next_ = 0;
+};
+
+class SlowDecoder : public VideoDecoder {
+public:
+    bool decode(const MediaPacket& pkt) override {
+        std::this_thread::sleep_for(kSlowDecode);
+        pending_.push_back(pkt.pts);
+        return true;
+    }
+    bool nextFrame(VideoFrame& out) override {
+        if (pending_.empty()) return false;
+        out.width = 16;
+        out.height = 16;
+        out.pts = pending_.front();
+        pending_.erase(pending_.begin());
+        out.y = plane_;
+        out.u = plane_ + 256;
+        out.v = plane_ + 256 + 64;
+        out.strideY = 16;
+        out.strideU = 8;
+        out.strideV = 8;
+        return true;
+    }
+    void flush() override { pending_.clear(); }
+
+private:
+    std::vector<TimeNs> pending_;
+    uint8_t plane_[256 + 64 + 64] = {};
+};
+
 } // namespace
 
 int main() {
@@ -258,6 +332,129 @@ int main() {
         p.seekTo(4 * kFrameNs);
         check(p.currentPts() == 4 * kFrameNs, "seeking back after the end still decodes");
         check(!p.isEnded(), "and the file is no longer ended");
+    }
+
+    // -- the sound does not start ahead of the picture ---------------------
+    //
+    // ElVideo holds the audio stream after a seek until the pipeline has a
+    // picture for the target, and starts the two together. That gate is two
+    // facts, and both of them are here: `decodedThrough`, which is the condition
+    // it waits for, and an audio-slaved clock standing still while the stream it
+    // is slaved to has played nothing, which is what stops the picture being
+    // left behind by a clock running on into silence.
+    //
+    // Both runs below are the same seek on the same source, through the same
+    // pipeline and the same clock; the only difference is whether the sound is
+    // started at the seek or when the picture arrives. The first is what the
+    // element used to do, and what it costs is measured rather than asserted
+    // about: the sound is that far ahead of the first picture there is and stays
+    // there, because a pipeline that is behind is already running flat out.
+    MediaBackend slow;
+    slow.name = "slow";
+    slow.priority = 140;
+    slow.open = [](const std::string& path) -> std::unique_ptr<MediaSource> {
+        return path == "slow://clip" ? std::make_unique<SlowSource>() : nullptr;
+    };
+    slow.makeVideoDecoder = [](const TrackInfo&) -> std::unique_ptr<VideoDecoder> {
+        return std::make_unique<SlowDecoder>();
+    };
+    registerMediaBackend(slow);
+
+    const TimeNs target = 100 * kSlowFrameNs;      // ten frames past a keyframe
+    const uint32_t rate = 48000;
+
+    // Started at the seek, as it was. The counter is the audio device's: it runs
+    // from the moment the stream is let go, whatever the picture is doing.
+    TimeNs aheadUngated = 0;
+    {
+        VideoPipeline p;
+        check(p.open("slow://clip"), "a slow-decoding source opens");
+        const auto began = std::chrono::steady_clock::now();
+        p.setClock(std::make_unique<AudioSlavedClock>(rate, [began]() -> int64_t {
+            const auto ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                std::chrono::steady_clock::now() - began).count();
+            return static_cast<int64_t>(static_cast<double>(ns) * rate / 1e9);
+        }));
+        p.seekTo(target);
+        p.play();
+        while (!p.decodedThrough(target)) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        aheadUngated = p.clock()->nowNs() - target;
+    }
+    check(aheadUngated > 20000000LL,
+          "starting the sound at the seek puts it ahead of the first picture there is");
+    std::printf("    the sound led the picture by %.0f ms\n", aheadUngated / 1e6);
+
+    // Held until the picture is there, which is the gate.
+    {
+        VideoPipeline p;
+        check(p.open("slow://clip"), "the same source, seeked the same way");
+
+        // The sound's own counter: frames the device has played, which is zero
+        // for as long as the stream is held. Exactly what ElVideo hands the
+        // clock -- see updateClockSelection.
+        int64_t playedFrames = 0;
+        p.setClock(std::make_unique<AudioSlavedClock>(
+            rate, [&playedFrames]() -> int64_t { return playedFrames; }));
+
+        p.seekTo(target);
+        p.play();
+
+        check(!p.decodedThrough(target),
+              "the instant a seek is asked for there is no picture for it, which is "
+              "the moment the sound used to start");
+        check(p.clock()->nowNs() == target, "and the clock is at the seek target");
+
+        bool stood = true;
+        int waits = 0;
+        while (!p.decodedThrough(target)) {
+            stood = stood && p.clock()->nowNs() == target;
+            ++waits;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            if (waits > 5000) break;               // never on any machine
+        }
+        check(waits > 0, "the picture for the target takes a chase to produce");
+        check(stood && p.clock()->nowNs() == target,
+              "and the clock stands still for the whole of it rather than walking "
+              "ahead into silence");
+
+        // The gate opens here, which is what the sound starts on. The picture
+        // for that moment is on hand: `advanceTo` shows the last one at or
+        // before it, so the two begin at the same instant.
+        p.advanceTo(p.clock()->nowNs());
+        const TimeNs shown = p.currentPts();
+        check(shown >= 0 && shown <= target,
+              "the picture on the screen is at or before the moment the sound starts");
+        check(shown > target - 2 * kSlowFrameNs,
+              "and it is that moment's picture rather than an older one");
+        check(p.clock()->nowNs() - shown < aheadUngated,
+              "so the first sound is not earlier than the picture it is under, and by "
+              "less than starting it at the seek costs");
+
+        // And from there the two move together: the counter is the clock.
+        playedFrames += rate / 2;                  // half a second played
+        const TimeNs after = p.clock()->nowNs();
+        check(after > target + 400000000LL && after < target + 600000000LL,
+              "once it is running the clock is the sound's own count");
+    }
+
+    // A source with no picture is not gated: there is nothing to wait for.
+    {
+        MediaBackend soundOnly;
+        soundOnly.name = "sound-only";
+        soundOnly.priority = 150;
+        soundOnly.open = [](const std::string& path) -> std::unique_ptr<MediaSource> {
+            if (path != "sound://clip") return nullptr;
+            return std::make_unique<FakeSource>(std::vector<TrackInfo>{audioTrack(Codec::AAC)});
+        };
+        soundOnly.makeAudioDecoder = [](const TrackInfo&) -> std::unique_ptr<AudioDecoder> {
+            return std::make_unique<NullAudioDecoder>();
+        };
+        registerMediaBackend(soundOnly);
+
+        VideoPipeline p;
+        check(p.open("sound://clip"), "a source with no video track opens");
+        check(p.decodedThrough(60 * 1000000000LL),
+              "and never holds a sound waiting for a picture it does not have");
     }
 
     // A path no backend claims still fails cleanly rather than half-opening.

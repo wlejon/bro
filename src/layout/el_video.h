@@ -180,11 +180,23 @@ private:
     // Position a seek-while-paused owes the audio ring, applied on the next
     // play(). Negative when there is nothing outstanding.
     double audioSeekPending_ = -1.0;
+    // Where the sound is waiting for the picture to reach, in seconds, or
+    // negative when it is not waiting. See `armAudio`.
+    double audioGateAt_ = -1.0;
 
     bool openStreamingAudio(const std::string& resolvedPath);
     void closeStreamingAudio();
     void pumpStreamingAudio();
     void restartStreamingAudio(double fromSeconds);
+
+    /// Start the sound at `fromSeconds`, or hold it until the picture is there.
+    void armAudio(double fromSeconds);
+    /// Let it go if the picture has arrived. Called once a frame, and from the
+    /// two places that could make it true at once.
+    void openAudioGate();
+    /// Nothing is waiting any more — the element is paused, muted, closed or
+    /// seeking again.
+    void dropAudioGate() { audioGateAt_ = -1.0; }
 
     /// Shared tail of seekTo()/stepFrame(): put the sound back where the
     /// picture now is, or note that it owes us a move once playback resumes.

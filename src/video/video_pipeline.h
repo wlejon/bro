@@ -115,6 +115,24 @@ public:
     double frameRate() const { return frameRate_; }
     bool isEnded() const;
 
+    // Is there a picture for `pts` — decoded, on hand, and not waiting behind a
+    // seek? Callable from any thread.
+    //
+    // **The question a caller asks when it is holding something else back until
+    // the picture is there**, which is ElVideo's audio preroll gate and nothing
+    // else so far. Neither of the two obvious substitutes answers it.
+    // `currentPts()` reports where the pipeline was *asked* to be while a seek
+    // is in flight, which is the opposite of what a gate needs — it would open
+    // on the promise. `hasFrame()` is true for a seek that has not landed, for
+    // the same reason.
+    //
+    // Deliberately about what has been *made* rather than what has been shown:
+    // `cur_` is placed by the render path, so an element that is not being drawn
+    // — hidden behind another stage, or a preview taken off the canvas — would
+    // never open a gate that waited for it, and the sound would never start.
+    // Decoded is the honest reading of "there is a picture for that moment".
+    bool decodedThrough(TimeNs pts) const;
+
     AudioDecoder* audioDecoder() const { return adec_.get(); }
     uint32_t audioSampleRate() const { return audioRate_; }
     uint32_t audioChannels() const { return audioChannels_; }
@@ -220,6 +238,14 @@ private:
     // It is also the memory: 32 pictures of 4K YUV is 400 MB per element, on a
     // timeline that holds one element per clip near the playhead.
     std::atomic<int64_t> decodeCeiling_{0};
+    // The newest picture the worker has produced for the position the pipeline
+    // is at now, or -1 for "nothing since the last seek". The atomic twin of
+    // `workerNewestPts_`, published for `decodedThrough` — which is asked from
+    // the main thread, where none of the caller-thread picture state may be
+    // read. Cleared by the caller in `seekTo` before the request is posted, and
+    // by the worker as it takes one up: the pictures on either side of a seek
+    // belong to different positions, so one must never answer for the other.
+    std::atomic<int64_t> decodedThroughNs_{-1};
 
     // Worker thread internal state
     std::vector<Picture> workerPool_;

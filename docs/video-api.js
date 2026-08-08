@@ -284,6 +284,16 @@ const v = document.getElementById('clip');
 //   The returned promise is already resolved (no autoplay policy to wait
 //   on), `await v.play()` and fire-and-forget both work.
 //
+//   **Sound and picture start together, after a seek as well as at the
+//   top.** Audio comes back from a seek in a few milliseconds — every packet
+//   is a keyframe — while the picture has to decode forward from the keyframe
+//   before the target, so started at the same moment they are not together at
+//   all, and on a file that decodes at about the speed it plays the head start
+//   is never given back. So the sound waits for the picture and the clock does
+//   not move while it waits. What that costs is the wait itself, deep in a
+//   long file with an expensive codec; what it buys is that the two are in
+//   step from the first frame. A resource with no video track is not held.
+//
 // v.pause()
 //   Freezes the pipeline clock and pauses audio. Fires 'pause' when
 //   transitioning from playing.
