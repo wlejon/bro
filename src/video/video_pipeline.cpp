@@ -89,6 +89,9 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
     workerInSeek_ = false;
     workerNewestPts_ = -1;
     decodeCeiling_ = 0;
+    // A different file is a different frame interval, and nothing measured about
+    // the last one says anything about this one.
+    seenIntervalNs_ = -1;
 
     TimeNs videoDuration = 0;
     TimeNs audioDuration = 0;
@@ -264,6 +267,50 @@ TimeNs VideoPipeline::leadNs() const {
                             : kLeadNsUnknownRate;
 }
 
+/// How long one picture lasts here, declared or measured.
+///
+/// **A container need not say, and the end of the file is where that shows.**
+/// The last picture of a file starts one interval before its duration, so a wait
+/// that has to know whether it is being asked for the final frame has to know
+/// how long a frame is — and with `frameRate_` at zero the answer was "no
+/// interval at all", which put the last picture strictly inside the file and
+/// turned `drainThrough`'s end-of-file wait off. What that looked like: a settle
+/// on the last frame returned the moment that picture arrived, so `isEnded()` on
+/// the line after it was true or false depending on whether the worker had got
+/// round to the two reads that discover the EOF. One test in three.
+///
+/// So it is measured when it is not declared: the smallest positive gap between
+/// two pictures this pipeline has actually handed to the screen, which is the
+/// frame interval by construction — pictures are staged and presented in
+/// presentation order, and a gap larger than one frame is a picture that was
+/// skipped or a seek. Nothing is inferred from one picture, so a file settled at
+/// its own end before anything else has been shown falls back to the same zero
+/// as before and is no worse.
+///
+/// Deliberately not `leadNs`'s fallback, which is a *policy* — how far ahead of
+/// the screen the worker may run — rather than a measurement, and is answered
+/// for a pipeline that has decoded nothing at all.
+TimeNs VideoPipeline::frameIntervalNs() const {
+    if (frameRate_ > 0.0) return static_cast<TimeNs>(1e9 / frameRate_);
+    return seenIntervalNs_ > 0 ? seenIntervalNs_ : 0;
+}
+
+/// Put a picture the worker has handed over on the caller's staging deque.
+///
+/// One place rather than two `push_back`s, because the gap between the picture
+/// going on and the one before it is the only measurement of the frame interval
+/// there is — see `frameIntervalNs`. The picture before it is the back of the
+/// deque, or the one on the screen when the deque is empty.
+void VideoPipeline::stage(Picture&& p) {
+    const TimeNs prev = !staged_.empty() ? staged_.back().pts
+                                         : (cur_.valid ? cur_.pts : -1);
+    if (prev >= 0 && p.pts > prev) {
+        const TimeNs gap = p.pts - prev;
+        if (seenIntervalNs_ < 0 || gap < seenIntervalNs_) seenIntervalNs_ = gap;
+    }
+    staged_.push_back(std::move(p));
+}
+
 void VideoPipeline::drainThrough(TimeNs pts, std::chrono::milliseconds budget) {
     if (!vdec_ || !workerRunning_) return;
 
@@ -283,7 +330,9 @@ void VideoPipeline::drainThrough(TimeNs pts, std::chrono::milliseconds budget) {
     // the end of a file mean the end of the file.
     bool atEnd = false;
     if (duration_ > 0) {
-        const TimeNs frame = frameRate_ > 0.0 ? static_cast<TimeNs>(1e9 / frameRate_) : 0;
+        // `frameIntervalNs`, not `frameRate_` alone: a container that declares
+        // no rate is exactly the case where this went wrong.
+        const TimeNs frame = frameIntervalNs();
         const TimeNs last = duration_ > frame ? duration_ - frame : 0;
         if (pts >= last) {
             pts = last;
@@ -296,7 +345,7 @@ void VideoPipeline::drainThrough(TimeNs pts, std::chrono::milliseconds budget) {
 
     while (true) {
         Picture incoming;
-        while (decodedQueue_.tryPop(incoming)) staged_.push_back(std::move(incoming));
+        while (decodedQueue_.tryPop(incoming)) stage(std::move(incoming));
         cvWorker_.notify_one();
 
         const bool seeking = pendingSeekPts_.load(std::memory_order_relaxed) >= 0 ||
@@ -716,7 +765,7 @@ bool VideoPipeline::advanceTo(TimeNs nowNs) {
 
     Picture incoming;
     while (decodedQueue_.tryPop(incoming)) {
-        staged_.push_back(std::move(incoming));
+        stage(std::move(incoming));
     }
     cvWorker_.notify_one();
 

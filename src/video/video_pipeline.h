@@ -139,6 +139,8 @@ private:
     void allowDecodeThrough(TimeNs from);
     bool presentNext(TimeNs at);
     TimeNs leadNs() const;
+    TimeNs frameIntervalNs() const;
+    void stage(Picture&& p);
     void storeFrame(Picture& dst, const VideoFrame& frame);
     void refreshRgba();
 
@@ -172,6 +174,10 @@ private:
     // like.
     TimeNs pendingTarget_ = -1;
     TimeNs lastPts_ = -1;
+    // How long a picture lasts, measured, for the files that do not say — the
+    // smallest positive gap between two pictures this pipeline has staged. See
+    // `frameIntervalNs`, which is the only reader.
+    TimeNs seenIntervalNs_ = -1;
     // Whether an advance may hand over everything left staged once the source
     // is over — see advanceTo. Off only for the duration of a frame step.
     bool presentTail_ = true;
