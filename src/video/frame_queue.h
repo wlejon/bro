@@ -31,7 +31,16 @@ public:
 
     size_t capacity() const { return capacity_; }
 
-    bool tryPush(T item) {
+    // Takes the item by rvalue reference and moves from it only on success, so
+    // a full ring hands the item BACK to the producer intact. Taking it by
+    // value (`tryPush(T item)`) is the obvious spelling and is the one thing
+    // this must not do: the parameter is move-constructed from the caller's
+    // object before the ring is even looked at, so a rejected push destroyed
+    // the item and left the caller holding an empty husk to re-queue. Every
+    // frame the video pipeline decoded while its ring was full vanished that
+    // way — a picture that never arrived, which is a stall, and a back step
+    // that jumped several frames because the one it wanted was gone.
+    bool tryPush(T&& item) {
         const size_t tail = tail_.load(std::memory_order_relaxed);
         const size_t next = tail + 1;
         if (next - head_.load(std::memory_order_acquire) > capacity_) return false;
