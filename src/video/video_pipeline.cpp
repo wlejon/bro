@@ -761,7 +761,15 @@ bool VideoPipeline::settleAt(TimeNs nowNs) {
     // instant and saying they want the picture at it, which is a question that
     // may cost a whole GOP to answer and is worth what it costs.
     drainThrough(nowNs, kWaitCeiling);
-    return advanceTo(nowNs);
+    // `presentNext` — the landing rule with the end-of-stream tail rule off.
+    // The tail is a playing clock's business: once the pictures have run out,
+    // what is still staged is due, or the last frame of a file is never shown.
+    // Somebody who NAMES an instant is asking a different question, and the tail
+    // answers it with the end of the file. A short clip decodes to EOS in the
+    // time the ask takes, so a seek to 0.3 s of a 0.6 s file landed on 0.5 —
+    // not a frame late, the whole rest of the clip late, and only on a machine
+    // slow enough for the worker to have finished first.
+    return presentNext(nowNs);
 }
 
 bool VideoPipeline::advance() {
