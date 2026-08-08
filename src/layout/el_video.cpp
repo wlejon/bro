@@ -418,12 +418,25 @@ void ElVideo::pause() {
 }
 bool ElVideo::isPlaying() const { return pipeline_ && pipeline_->isPlaying(); }
 
+// `settleAt` and not `advanceTo`: an element's seek is a question somebody
+// asked, and the documented answer is the frame the instant falls inside, read
+// back off `currentTime` on the line after the assignment. `advanceTo` shows
+// whatever the worker has handed over, which for a seek posted one statement
+// earlier is nothing at all — so the position read back was the number that had
+// just been assigned, and the picture was still the one from before the seek
+// until some later frame happened to collect it.
+//
+// This is the same trade a frame step already makes and for the same reason:
+// the decode has to happen before there is an answer, so the caller either
+// waits for it or is told something untrue. A drag is dozens of these a second
+// and pays for exactly the pictures it displays; what it does NOT pay for is
+// the audio ring, which `reanchorAudio` still defers while paused.
 void ElVideo::seekTo(double seconds) {
     if (!pipeline_) return;
     auto ns = static_cast<bro::video::TimeNs>(seconds * 1e9);
     const bool deferAudio = !pipeline_->isPlaying();
     pipeline_->seekTo(ns);
-    pipeline_->advanceTo(ns);
+    pipeline_->settleAt(ns);
     reanchorAudio(seconds, deferAudio);
 }
 
