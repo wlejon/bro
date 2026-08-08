@@ -67,7 +67,16 @@ private:
 // holds instead of steady_clock walking ahead into desync.
 class AudioSlavedClock final : public MediaClock {
 public:
-    using AudioPositionProvider = std::function<uint64_t()>;
+    // How many frames the audio device has ACTUALLY played, or a **negative
+    // number** when the stream cannot say — paused, not open, restarted. That
+    // distinction is the whole of this class's correctness: it used to answer 0
+    // for "cannot say", and 0 is a count. A paused stream therefore pulled the
+    // frame anchor back to the top of the file while the position anchor stayed
+    // where the playhead was, so the first real reading afterwards — a quarter
+    // of a million frames — read as five seconds of elapsed time and the clock
+    // jumped from six seconds to eleven. What that looked like: resuming a
+    // preview after a pause ran it to the end of its range and stopped it.
+    using AudioPositionProvider = std::function<int64_t()>;
 
     explicit AudioSlavedClock(uint32_t sampleRate = 48000,
                               AudioPositionProvider provider = nullptr);
@@ -86,7 +95,9 @@ public:
 
 private:
     TimeNs nowNsLocked() const;
-    uint64_t currentPlayedFramesLocked() const;
+    int64_t currentPlayedFramesLocked() const;
+    int64_t readingLocked() const;
+    void reanchorLocked(TimeNs at);
 
     mutable std::mutex m_;
     bool playing_ = false;
@@ -94,8 +105,20 @@ private:
     AudioPositionProvider provider_;
 
     int64_t fallbackHostAnchorNs_ = 0;
-    int64_t anchorPtsNs_ = 0;
-    mutable uint64_t anchorPlayedFrames_ = 0;
+    mutable int64_t anchorPtsNs_ = 0;
+    // Negative means "not anchored to a reading yet" — the first believable one
+    // becomes the anchor. That happens when a re-anchor lands while the stream
+    // cannot answer, which is what a resume is: an element restarts its pipeline
+    // before it restarts its audio stream.
+    mutable int64_t anchorPlayedFrames_ = -1;
+    // The last position this clock reported. What it re-anchors *to*, so a
+    // restarted counter keeps the position rather than adding itself to it.
+    mutable TimeNs lastNowNs_ = 0;
+    // The highest reading this counter has given. It is cumulative for the life
+    // of the stream, so anything below this is not a position — see
+    // `readingLocked`. Reset only when the provider is replaced, which is a
+    // different counter.
+    mutable int64_t maxSeenFrames_ = -1;
     int64_t anchorPausedNs_ = 0;
     double rate_ = 1.0;
     uint64_t manualPlayedFrames_ = 0;

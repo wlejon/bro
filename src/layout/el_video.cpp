@@ -445,7 +445,20 @@ bool ElVideo::isReady() const {
 bool ElVideo::isEnded() const {
     if (!pipeline_ || !pipeline_->isEnded()) return false;
     const auto durationNs = pipeline_->durationNs();
-    return durationNs <= 0 || pipeline_->clockNs() >= durationNs;
+    if (durationNs <= 0) return true;
+    // The clock reaching the length is the better test — it lets the last
+    // picture stand for its own length rather than the resource ending on it.
+    // But it is not always able to answer: an audio-slaved clock stops when the
+    // sound does, and the sound of a file stops with the file, so waiting for it
+    // to pass the length is waiting for something that has already happened. So
+    // the last picture there is having been shown ends it too. `isEnded()` above
+    // is the half that says nothing more is coming; this is the half that says
+    // it has been seen.
+    if (pipeline_->clockNs() >= durationNs) return true;
+    if (!pipeline_->hasVideo()) return false;
+    const double fps = pipeline_->frameRate();
+    const auto frame = fps > 0.0 ? static_cast<bro::video::TimeNs>(1e9 / fps) : 0;
+    return pipeline_->currentPts() + frame >= durationNs;
 }
 
 void ElVideo::setVolume(double v) {
@@ -464,20 +477,23 @@ void ElVideo::updateClockSelection() {
         if (audioStreamId_ >= 0) {
             auto clock = std::make_unique<bro::video::AudioSlavedClock>(
                 static_cast<uint32_t>(audioStreamRate_),
-                [eng = audioEngine_, id = audioStreamId_]() -> uint64_t {
-                    if (!eng || id < 0) return 0;
+                // Negative for "the stream cannot say", never 0 — a paused
+                // stream answers with nothing and 0 is a count. See
+                // AudioPositionProvider.
+                [eng = audioEngine_, id = audioStreamId_]() -> int64_t {
+                    if (!eng || id < 0) return -1;
                     auto stats = eng->getStreamStats(id);
-                    return stats.valid ? stats.playedFrames : 0;
+                    return stats.valid ? static_cast<int64_t>(stats.playedFrames) : -1;
                 });
             pipeline_->setClock(std::move(clock));
         } else if (audioPlaybackId_ >= 0) {
             const uint32_t rate = static_cast<uint32_t>(audioEngine_->sampleRate());
             auto clock = std::make_unique<bro::video::AudioSlavedClock>(
                 rate,
-                [eng = audioEngine_, id = audioPlaybackId_, rate]() -> uint64_t {
-                    if (!eng || id < 0) return 0;
+                [eng = audioEngine_, id = audioPlaybackId_, rate]() -> int64_t {
+                    if (!eng || id < 0) return -1;
                     double sec = eng->getPlaybackPositionSeconds(id);
-                    return sec > 0.0 ? static_cast<uint64_t>(sec * rate) : 0;
+                    return sec >= 0.0 ? static_cast<int64_t>(sec * rate) : -1;
                 });
             pipeline_->setClock(std::move(clock));
         }
