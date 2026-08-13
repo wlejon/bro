@@ -24,24 +24,81 @@
 #include "embed/embed.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <string>
+
+namespace {
+
+// --headless --frames N [--step MS] is the same host, driven by virtual time
+// instead of a window. It exists so the compiled app can be CHECKED: a windowed
+// run ends when a human closes the window and its frame count depends on how
+// fast the machine is, neither of which a pinned expectation can be written
+// against. Under headless the clock advances by exactly `step` per frame and
+// the run ends after exactly `frames` of them, so the app's output is a
+// function of the app.
+//
+// It is deliberately NOT bro-headless's driver (engine/headless_driver.h):
+// that one's whole surface is JS — a script, a REPL, advanceTime() as a
+// binding — and the app here has no JS realm to evaluate any of it in.
+struct Options {
+    const char* appDir = nullptr;
+    bool headless = false;
+    int frames = 0;
+    double stepMs = 16.0;  // the 60 Hz frame the rest of the engine assumes
+};
+
+bool parseArgs(int argc, char* argv[], Options& out) {
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--headless") {
+            out.headless = true;
+        } else if (arg == "--frames" && i + 1 < argc) {
+            out.frames = std::atoi(argv[++i]);
+        } else if (arg == "--step" && i + 1 < argc) {
+            out.stepMs = std::atof(argv[++i]);
+        } else if (!arg.empty() && arg[0] == '-') {
+            std::fprintf(stderr, "bro-bronze-host: unknown option %s\n", arg.c_str());
+            return false;
+        } else if (!out.appDir) {
+            out.appDir = argv[i];
+        } else {
+            std::fprintf(stderr, "bro-bronze-host: unexpected argument %s\n", arg.c_str());
+            return false;
+        }
+    }
+    if (!out.appDir) return false;
+    if (out.headless && out.frames <= 0) {
+        std::fprintf(stderr, "bro-bronze-host: --headless needs --frames N\n");
+        return false;
+    }
+    return true;
+}
+
+}  // namespace
 
 int main(int argc, char* argv[]) {
     // A bro Engine still boots from an app directory (manifest, settings,
     // asset mounts) even when the app's JS was compiled away — point this at
-    // a minimal app dir whose ui holds an empty page. README.md beside this
-    // file shows the two-line app dir that suffices.
-    if (argc < 2) {
-        std::fprintf(stderr, "usage: bro-bronze-host <appdir>\n");
+    // a minimal app dir whose ui holds an empty page. app/appdir beside this
+    // file is one, and README.md shows what is in it.
+    Options options;
+    if (!parseArgs(argc, argv, options)) {
+        std::fprintf(stderr,
+                     "usage: bro-bronze-host <appdir> [--headless --frames N [--step MS]]\n");
         return 1;
     }
 
     bro::engine::EngineConfig config;
     config.title = "bro-bronze-host";
-    config.displayMode = bro::engine::DisplayMode::Windowed;
+    config.displayMode = options.headless ? bro::engine::DisplayMode::Headless
+                                          : bro::engine::DisplayMode::Windowed;
     config.settingsPath = bro::engine::executableDir() + "/.bro_settings.json";
-    if (!bro::engine::resolveLaunchTarget(argv[1], config)) {
-        std::fprintf(stderr, "bro-bronze-host: %s is not an app directory\n", argv[1]);
+    // Same default bro-headless documents (docs/headless.md): the splash is
+    // visual-only and its canvas animation would be the first thing a pinned
+    // run captured. Windowed keeps it, so a compiled app starts like any other.
+    config.showSplash = !options.headless;
+    if (!bro::engine::resolveLaunchTarget(options.appDir, config)) {
+        std::fprintf(stderr, "bro-bronze-host: %s is not an app directory\n", options.appDir);
         return 1;
     }
     bro::engine::publishLaunchEnv(config);
@@ -57,11 +114,18 @@ int main(int argc, char* argv[]) {
     bronze::embed::runMain();
 
     // The compiled top level has returned; whatever it scheduled through
-    // requestAnimationFrame now runs a frame at a time until the window
-    // closes. Teardown order on return: the Engine (and with it every GL
-    // context) dies at end of scope; bronze's heap statics die at process
-    // exit WITHOUT running handle finalizers (embed.h's contract), so no
-    // finalizer can chase the dead GL context.
+    // requestAnimationFrame now runs a frame at a time. Teardown order on
+    // return: the Engine (and with it every GL context) dies at end of scope;
+    // bronze's heap statics die at process exit WITHOUT running handle
+    // finalizers (embed.h's contract), so no finalizer can chase the dead GL
+    // context.
+    //
+    // run() is called in BOTH modes and is not a branch: windowed it is the
+    // loop, headless it returns at once after rebasing virtual time onto the
+    // wall clock — which advanceTime() below then steps from.
     engine.run();
+    if (options.headless) {
+        for (int i = 0; i < options.frames; ++i) engine.advanceTime(options.stepMs);
+    }
     return 0;
 }

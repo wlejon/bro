@@ -1,0 +1,11 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>bronze host</title></head>
+<!-- The whole app dir a bronze-compiled program needs: an Engine boots from a
+     document even when the program's JS was compiled away, and this is the
+     empty one it boots from. The compiled app appends its own <canvas> here
+     through the host document binding, so the body starts empty on purpose —
+     an element declared here would be a second, unowned one. No <script>: the
+     app is the linked object file, not this page. -->
+<body></body>
+</html>

@@ -2,21 +2,89 @@
 // 2D + cube-map surface three.js's texture system drives: bind/params/upload/
 // mipmap/texStorage2D, plus the compressed 2D uploads a KTX/DDS loader feeds.
 //
-// The 6-arg DOM-source overloads (texImage2D(target, level, internalformat,
-// format, type, image)) are NOT here: a bronze host has no Image or
-// ImageBitmap values to source from yet, so only the 9-arg typed-array/null
-// forms exist, and a 6-arg call is refused by name rather than silently
-// misread as the 9-arg form.
+// The DOM-source overloads are here too — texImage2D(target, level,
+// internalformat, format, type, source) and texSubImage2D(target, level,
+// xoffset, yoffset, format, type, source) — because they are the pair
+// three.js's WebGLTextures actually calls for a texture built from an image:
+// the 9-arg forms are for DataTexture and friends. `source` is a host Image
+// (host_image.cpp) or an ImageData-shaped { width, height, data }.
 //
 // Upload pointers come from embed::typedArrayInfo and live only until the
 // next bronze allocation — each is handed to its GL call (which copies into
 // the driver) in the same statement chain with nothing allocating in between.
+// An Image's pixels are host memory and would survive, but resolveSource
+// deliberately hands both kinds back through one type so no caller can start
+// depending on which it got.
 
 #include "bronze_host/gl_internal.h"
+#include "bronze_host/host_internal.h"
 
 #include "util/log.h"
 
 namespace bro::bronze_host {
+
+namespace {
+
+// The pixels behind a DOM-shaped texture source, as one triple. RGBA8, tightly
+// packed, top-down (row 0 first) — which is what an image decode produces and
+// what the context's UNPACK_FLIP_Y_WEBGL shadow state then flips for a caller
+// that asked, exactly as it does for a client-memory typed array.
+//
+// THE POINTER MAY BE HEAP-BORROWED: for an ImageData-shaped source it points
+// into the bronze heap and dies at the next bronze allocation, so the caller's
+// GL call must be the very next thing that happens.
+struct SourcePixels {
+    const uint8_t* data = nullptr;
+    GLsizei width = 0;
+    GLsizei height = 0;
+    explicit operator bool() const { return data != nullptr; }
+};
+
+SourcePixels resolveSource(Value source, const char* who) {
+    if (const HostImage* img = hostImageOf(source)) {
+        if (img->rgba.empty()) {
+            // A broken image: HTML gives it zero natural dimensions and no
+            // pixels, so there is nothing to upload and the texture keeps
+            // whatever it had. Warned, because a silently unchanged texture is
+            // indistinguishable from a working one that happens to be black.
+            LOG_WARN("bronze_host: %s was given an Image with no pixels (src=%s)", who,
+                     img->src.c_str());
+            return {};
+        }
+        return {img->rgba.data(), img->width, img->height};
+    }
+
+    // ImageData-shaped { width, height, data }: the duck type bro's own canvas
+    // and createImageBitmap paths already consume (src/js/imagebitmap_bindings.cpp),
+    // matched here so a texture built from raw RGBA needs no new object kind.
+    if (ev::isObject(source)) {
+        ev::Persistent root(source);
+        Value widthV = ev::getProperty(root.get(), "width");
+        Value heightV = ev::getProperty(root.get(), "height");
+        if (!ev::isObject(widthV) && !ev::isObject(heightV) && !ev::isUndefined(widthV) &&
+            !ev::isUndefined(heightV)) {
+            const GLsizei w = static_cast<GLsizei>(ev::toDouble(widthV));
+            const GLsizei h = static_cast<GLsizei>(ev::toDouble(heightV));
+            // LAST, and deliberately: every allocating read is above this line,
+            // so the view's pointer is still valid when the caller's GL call
+            // consumes it on the very next statement.
+            Value dataV = ev::getProperty(root.get(), "data");
+            if (auto info = ev::typedArrayInfo(dataV)) {
+                const uint64_t need = static_cast<uint64_t>(w) * static_cast<uint64_t>(h) * 4u;
+                if (w > 0 && h > 0 && info.byteLength >= need) {
+                    return {info.data, w, h};
+                }
+            }
+        }
+    }
+
+    LOG_ERROR("bronze_host: %s DOM-source overload needs an Image or an "
+              "ImageData-shaped { width, height, data }",
+              who);
+    return {};
+}
+
+}  // namespace
 
 void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     b.def("createTexture", 0, [c](Value, std::span<const Value>) {
@@ -51,12 +119,27 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     //            format, type, data|null). Data is a typed array or
     // null/undefined; a 6-arg DOM-source call is a named refusal (above).
     b.def("texImage2D", 9, [c](Value, std::span<const Value> a) {
-        // Short calls are padded to arity with undefined, so a 6-arg DOM-source
-        // call announces itself by an OBJECT where the 9-arg form has `border`
-        // (a number). Refuse it by name instead of misreading it.
+        // Short calls are padded to arity with undefined, so the 6-arg
+        // DOM-source call announces itself by an OBJECT where the 9-arg form
+        // has `border` (a number). That is the whole overload discriminator,
+        // and it is exact: `border` is required to be 0 in both WebGL versions,
+        // so a number there is never a source and a source there is never a
+        // border.
         if (ev::isObject(argAt(a, 5))) {
-            LOG_ERROR("bronze_host: texImage2D 6-arg (DOM source) overload is not bound; "
-                      "use the 9-arg typed-array form");
+            // texImage2D(target, level, internalformat, format, type, source)
+            GLenum domTarget = u32At(a, 0);
+            GLint domLevel = i32At(a, 1);
+            GLint domInternalformat = i32At(a, 2);
+            GLenum domFormat = u32At(a, 3);
+            GLenum domType = u32At(a, 4);
+            SourcePixels src = resolveSource(argAt(a, 5), "texImage2D");
+            if (src) {
+                // Nothing between resolveSource and here allocates on the
+                // bronze heap, which is what keeps an ImageData-backed pointer
+                // valid; the context copies the bytes into the driver.
+                live(c)->texImage2D(domTarget, domLevel, domInternalformat, src.width,
+                                    src.height, /*border=*/0, domFormat, domType, src.data);
+            }
             return ev::undefined();
         }
         GLenum target = u32At(a, 0);
@@ -82,12 +165,25 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
     //               type, data). Same typed-array-only stance.
     b.def("texSubImage2D", 9, [c](Value, std::span<const Value> a) {
         // Same padding logic as texImage2D above: the 7-arg DOM-source call
-        // puts an object where the 9-arg form has `format` — well, it puts its
-        // source at index 6, where the 9-arg form has a numeric enum. An
-        // object there is the 7-arg form; refuse it by name.
+        // puts its source at index 6, where the 9-arg form has `format`, a
+        // numeric enum. An object there is the 7-arg form.
+        //
+        // This is the overload three.js reaches on the WebGL2 path it takes by
+        // default: WebGLTextures allocates with texStorage2D and then fills
+        // level 0 with texSubImage2D(target, 0, 0, 0, format, type, image).
         if (ev::isObject(argAt(a, 6))) {
-            LOG_ERROR("bronze_host: texSubImage2D 7-arg (DOM source) overload is not "
-                      "bound; use the 9-arg typed-array form");
+            // texSubImage2D(target, level, xoffset, yoffset, format, type, source)
+            GLenum domTarget = u32At(a, 0);
+            GLint domLevel = i32At(a, 1);
+            GLint domX = i32At(a, 2);
+            GLint domY = i32At(a, 3);
+            GLenum domFormat = u32At(a, 4);
+            GLenum domType = u32At(a, 5);
+            SourcePixels src = resolveSource(argAt(a, 6), "texSubImage2D");
+            if (src) {
+                live(c)->texSubImage2D(domTarget, domLevel, domX, domY, src.width,
+                                       src.height, domFormat, domType, src.data);
+            }
             return ev::undefined();
         }
         GLenum target = u32At(a, 0);

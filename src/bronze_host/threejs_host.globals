@@ -3,11 +3,13 @@
 # One identifier per line. Compile the app against it with bronze's
 # --host-globals flag:
 #
-#     bronze app.js --host-globals src/bronze_host/threejs_host.globals ...
+#     bronze build app.js -o app.obj --emit-obj \
+#         --host-globals src/bronze_host/threejs_host.globals
 #
 # Every name here is registered, in this order, by
-# installThreejsHostGlobals(engine) (dom_globals.cpp) — the two lists must
-# stay identical, or a compiled read reaches a registry with no value in it.
+# installThreejsHostGlobals(engine) (dom_globals.cpp, plus the per-family
+# install* calls at its foot) — the two lists must stay identical, or a
+# compiled read reaches a registry with no value in it.
 # console is NOT here: bronze's own runtime provides it.
 document
 window
@@ -16,3 +18,9 @@ requestAnimationFrame
 cancelAnimationFrame
 performance
 WebGL2RenderingContext
+setTimeout
+clearTimeout
+setInterval
+clearInterval
+Image
+XMLHttpRequest

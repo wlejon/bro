@@ -10,8 +10,12 @@ namespace bro::bronze_host {
 
 /// Register the browser-shaped host globals a bronze-compiled three.js app
 /// reads — document, window, self, requestAnimationFrame,
-/// cancelAnimationFrame, performance, WebGL2RenderingContext — and hook the
-/// requestAnimationFrame queue into `engine`'s frame loop (Engine::onFrame).
+/// cancelAnimationFrame, performance, WebGL2RenderingContext, the four timer
+/// functions, Image and XMLHttpRequest — and hook the frame seam into
+/// `engine`'s frame loop (Engine::onFrame). That seam is what advances the
+/// clock, delivers host completions, fires timers and rAF, and performs the
+/// microtask checkpoint the compiled program's promises need; without it a
+/// promise queued after the top level would never run.
 ///
 /// The registered names match src/bronze_host/threejs_host.globals line for
 /// line; the app must have been compiled with that manifest

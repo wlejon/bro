@@ -19,6 +19,7 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
+#include "bronze_host/host_internal.h"
 
 #include "engine/engine.h"
 #include "dom/document.h"
@@ -84,42 +85,16 @@ struct HostState {
 HostState* g_host = nullptr;
 
 // ---------------------------------------------------------------------------
-// Error funnel
-// ---------------------------------------------------------------------------
-
-// Where an exception out of compiled code ends up. bro's JS funnel
-// (js::Runtime::callJs) is QuickJS-shaped end to end, so a bronze throw
-// cannot ride it; this is the same report-and-continue behaviour aimed at the
-// same log stream. The Error's own fields are read through embed property
-// reads — the throw was already caught, so running a getter here is safe.
-void reportBronzeError(const char* origin, Value thrown) {
-    if (!ev::isObject(thrown)) {
-        LOG_ERROR("[bronze:%s] uncaught: %s", origin, ev::toUtf8(thrown).c_str());
-        return;
-    }
-    ev::Persistent root(thrown);
-    Value nameV = ev::getProperty(root.get(), "name");
-    Value msgV = ev::getProperty(root.get(), "message");
-    std::string name = ev::isObject(nameV) || ev::isUndefined(nameV)
-                           ? std::string("Error")
-                           : ev::toUtf8(nameV);
-    std::string msg =
-        ev::isObject(msgV) || ev::isUndefined(msgV) ? std::string() : ev::toUtf8(msgV);
-    LOG_ERROR("[bronze:%s] uncaught %s: %s", origin, name.c_str(), msg.c_str());
-}
-
-// ---------------------------------------------------------------------------
 // requestAnimationFrame
 // ---------------------------------------------------------------------------
 
-// Fired once per frame from Engine::onFrame. REENTRANCY: the pending list is
-// MOVED OUT before any callback runs — mirroring js::Timers::
-// fireAnimationFrames — so a callback that registers another rAF appends to
-// the fresh list (fires next frame), and a cancelAnimationFrame from inside a
-// callback affects only not-yet-moved future entries; cancelling a sibling of
-// the currently-firing batch is a no-op, exactly as it is in bro's own rAF.
-void fireAnimationFrames(double dtMs) {
-    g_host->clockMs += dtMs;
+// REENTRANCY: the pending list is MOVED OUT before any callback runs —
+// mirroring js::Timers::fireAnimationFrames — so a callback that registers
+// another rAF appends to the fresh list (fires next frame), and a
+// cancelAnimationFrame from inside a callback affects only not-yet-moved future
+// entries; cancelling a sibling of the currently-firing batch is a no-op,
+// exactly as it is in bro's own rAF.
+void fireAnimationFrames() {
     if (g_host->rafPending.empty()) return;
 
     std::vector<RafEntry> current = std::move(g_host->rafPending);
@@ -133,6 +108,58 @@ void fireAnimationFrames(double dtMs) {
         // siblings or tear the loop down (web semantics).
         if (r.thrown) reportBronzeError("requestAnimationFrame", r.value);
     }
+}
+
+// ---------------------------------------------------------------------------
+// The frame seam
+// ---------------------------------------------------------------------------
+
+// Everything this layer does per frame, in one place, fired from
+// Engine::onFrame — which the engine calls at the point its own rAF fires
+// (engine_frame.cpp step 3a, headless_api.cpp's advanceTime step, and the
+// server tick), under rAF's pause gate, with the delta the scaled clock
+// actually advanced by.
+//
+// THE ORDER, and what each position is answering to:
+//
+//  1. A leftover drain. bro's loop drains QuickJS TWICE — once right after rAF
+//     (step 3b) and again after the late pumps that can resolve a promise
+//     (framePumps_ + tickAsync). This layer is fired at the FIRST of those two
+//     seams and there is no host hook at the second, so anything that could
+//     enqueue a bronze job after we return this frame — a window listener
+//     dispatched during the next frame's event poll, a future canvas event
+//     dispatch — would otherwise wait a whole frame to be seen. Draining here
+//     costs a queue check when there is nothing to do and bounds that wait at
+//     one frame instead of forever. It matters because an unhandled rejection
+//     is only REPORTED at quiescence: a drain that never runs is a rejection
+//     nobody ever hears about.
+//
+//  2. The clock. Advanced before anything reads it, so a timer deadline, an
+//     rAF timestamp and performance.now() inside one frame all agree.
+//
+//  3. Host tasks — image loads, XHR completions. Before rAF, because that is
+//     where the web runs a load event relative to the rendering steps, and
+//     because it lets a texture that finished decoding be uploaded by the very
+//     frame that learns about it rather than the next one.
+//
+//  4. Timers, then 5. rAF. The order bro's own loop uses (timers_->tick at
+//     step 2, fireAnimationFrames at step 3a).
+//
+//  6. The microtask checkpoint. AFTER rAF, not before: an rAF callback is the
+//     main producer of promise jobs in a render loop — three.js's own
+//     `renderer.setAnimationLoop` body, every `await` an app puts in its frame
+//     function — and draining before it would leave every one of those jobs
+//     queued until the next frame. That is not merely late: each frame would
+//     run the PREVIOUS frame's continuations against this frame's state, and a
+//     rejection thrown in the last rAF before shutdown would never be reported
+//     at all, because quiescence would never be reached again.
+void hostFrame(double dtMs) {
+    if (ev::microtasksPending()) ev::drainMicrotasks();  // 1
+    g_host->clockMs += dtMs;                             // 2
+    drainHostTasks();                                    // 3
+    fireHostTimers(g_host->clockMs);                     // 4
+    fireAnimationFrames();                               // 5
+    ev::drainMicrotasks();                               // 6
 }
 
 // ---------------------------------------------------------------------------
@@ -309,13 +336,20 @@ Value createElementImpl(std::span<const Value> a, size_t tagIndex) {
     if (ev::isObject(tagV)) return ev::throwTypeError("createElement: tag must be a string");
     std::string tag = ev::toUtf8(tagV);
     for (char& ch : tag) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    // three.js's ImageLoader builds its element as createElementNS(xhtml,
+    // 'img'), so the factory has to answer for it — and what it answers is the
+    // same object `new Image()` gives, because there is only one image kind
+    // here (host_image.cpp). It is NOT a dom::Element: nothing lays an image out
+    // in this layer, and the only thing three.js does with it is read its size
+    // and hand it to texImage2D.
+    if (tag == "img") return makeImageValue();
     if (tag != "canvas") {
         // The named refusal: this layer models exactly what three.js's
         // renderer touches, and a silent non-canvas stub would fail far from
         // here (bro CLAUDE.md: hard errors over silent fallbacks — bronze
         // agrees).
         return ev::throwTypeError("bronze host document.createElement: only <canvas> "
-                                  "is modelled, got <" + tag + ">");
+                                  "and <img> are modelled, got <" + tag + ">");
     }
     dom::Document* doc = g_host->engine->document();
     if (!doc) return ev::throwError("bronze host: engine has no document");
@@ -516,6 +550,37 @@ Value makePerformanceValue() {
 }  // namespace
 
 // ---------------------------------------------------------------------------
+// The two things every file in this layer shares (host_internal.h)
+// ---------------------------------------------------------------------------
+
+// Where an exception out of compiled code ends up. bro's JS funnel
+// (js::Runtime::callJs) is QuickJS-shaped end to end, so a bronze throw cannot
+// ride it; this is the same report-and-continue behaviour aimed at the same log
+// stream. The Error's own fields are read through embed property reads — the
+// throw was already caught, so running a getter here is safe.
+void reportBronzeError(const char* origin, Value thrown) {
+    if (!ev::isObject(thrown)) {
+        LOG_ERROR("[bronze:%s] uncaught: %s", origin, ev::toUtf8(thrown).c_str());
+        return;
+    }
+    ev::Persistent root(thrown);
+    Value nameV = ev::getProperty(root.get(), "name");
+    Value msgV = ev::getProperty(root.get(), "message");
+    std::string name = ev::isObject(nameV) || ev::isUndefined(nameV)
+                           ? std::string("Error")
+                           : ev::toUtf8(nameV);
+    std::string msg =
+        ev::isObject(msgV) || ev::isUndefined(msgV) ? std::string() : ev::toUtf8(msgV);
+    LOG_ERROR("[bronze:%s] uncaught %s: %s", origin, name.c_str(), msg.c_str());
+}
+
+// Zero before the first frame, which is what a program's top level sees. It is
+// an ELAPSED clock, not a wall clock: three.js's Clock only ever subtracts two
+// readings, and an origin of zero keeps a headless run's output free of the one
+// number that would differ every time it ran.
+double hostClockMs() { return g_host ? g_host->clockMs : 0.0; }
+
+// ---------------------------------------------------------------------------
 // install
 // ---------------------------------------------------------------------------
 
@@ -530,13 +595,15 @@ void installThreejsHostGlobals(engine::Engine& engine) {
 
     // The frame hook, registered exactly once (Engine::onFrame callbacks are
     // never unregistered). It fires at the point the engine's own rAF fires,
-    // with rAF's pause semantics, in every display mode.
-    engine.onFrame([](double dtMs) { fireAnimationFrames(dtMs); });
+    // with rAF's pause semantics, in every display mode. hostFrame above owns
+    // the ordering, drain included, and says why each step sits where it does.
+    engine.onFrame([](double dtMs) { hostFrame(dtMs); });
 
     // Registration order is the manifest's order (threejs_host.globals):
     // document, window, self, requestAnimationFrame, cancelAnimationFrame,
-    // performance, WebGL2RenderingContext. registerGlobal roots each value
-    // for the life of the process.
+    // performance, WebGL2RenderingContext, setTimeout, clearTimeout,
+    // setInterval, clearInterval, Image, XMLHttpRequest. registerGlobal roots
+    // each value for the life of the process.
     {
         Value doc = makeDocumentValue();
         ev::registerGlobal("document", doc);
@@ -571,6 +638,11 @@ void installThreejsHostGlobals(engine::Engine& engine) {
         ctor.set("name", name);
         ev::registerGlobal("WebGL2RenderingContext", ctor.get());
     }
+    // The three families that own their own files, each registering the names
+    // the manifest lists for it, in the manifest's order.
+    installTimerGlobals();
+    installImageGlobal();
+    installXhrGlobal();
 }
 
 }  // namespace bro::bronze_host
