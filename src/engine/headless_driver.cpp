@@ -631,6 +631,11 @@ int bro::engine::runHeadless(int argc, char* argv[], const HeadlessHooks& hooks)
         auto* engine = new bro::engine::Engine(config);
         engine->run();  // initial layout, returns immediately in headless
 
+        // A host whose app is native code runs it here (see the hook's
+        // comment): before the headless globals, because the globals are the
+        // driver's surface and the app is the subject being driven.
+        if (hooks.afterEngine) hooks.afterEngine(*engine);
+
         auto* rt = engine->jsRuntime();
         auto* ctx = rt->getContext();
         bro::js::installHeadlessBindings(ctx, engine);

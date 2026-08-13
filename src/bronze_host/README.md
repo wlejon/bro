@@ -84,6 +84,9 @@ cmake --build build --config Release --target bro-bronze-host
 
 # 3b. or headless for a fixed number of frames, which is what the check does
 ./build/Release/bro-bronze-host src/bronze_host/app/appdir --headless --frames 8
+
+# 3c. or headless under a driver script — bro-headless, scripting THIS app
+./build/Release/bro-bronze-host src/bronze_host/app/appdir --headless drive.js
 ```
 
 `--emit-obj` is what makes step 1 stop before linking: the object is destined
@@ -95,6 +98,44 @@ to the host registry instead of throwing `ReferenceError` — the manifest and
 The app object must export `bronze_main` (bronze's entry convention);
 `installThreejsHostGlobals` runs before `bronze::embed::runMain()`, and the frame
 loop then drives everything the app scheduled.
+
+## Driving a compiled app from a script (3c above)
+
+`--headless` **without** `--frames` is bro-headless
+(`engine/headless_driver.h`), not a second driver: the same argument parsing,
+the same script / `-e` / REPL modes, and the same globals
+[docs/headless.md](../../docs/headless.md) documents.
+
+```bash
+bro-bronze-host <appdir> --headless script.js          # run a script, then exit
+bro-bronze-host <appdir> --headless -e "advanceTime(500)" -e "screenshot('out.png')"
+bro-bronze-host <appdir> --headless                    # interactive REPL
+```
+
+The compiled app has no JS realm — but the **Engine** does, because it still
+boots the app dir's page, and that realm is where the driver script runs.
+Driver and app share the Engine, the document and the clock, which is the whole
+mechanism:
+
+- `advanceTime(ms)` steps the engine, and each step fires `Engine::onFrame` —
+  this layer's frame seam. So one `advanceTime(16)` is one `APP frame=N` from
+  the compiled app, rAF callbacks and microtask checkpoint included.
+- `screenshot()` / `getPixel()` composite the real frame, the app's WebGL
+  canvas in it: the app appended that `<canvas>` to the same document, so
+  `document.querySelector('canvas')` in the script finds it and
+  `getContext('webgl2')` on it hands back the very context the app is drawing
+  through.
+- `assert()` fails the run with a nonzero exit, as in bro-headless.
+
+What the script does **not** get is the app's own JS objects — there are none;
+its scene graph is machine code with no reflective surface. A driver observes
+the app the way a user does: through the DOM, the frame, and the pixels. The
+seam this rides on is `HeadlessHooks::afterEngine`, which runs the host-globals
+install and `runMain()` at the point an interpreted app's own JS would have
+just finished.
+
+`--headless --frames N` is unchanged and stays a separate mode: it is the one
+`tests/bronze_host/` pins, and it must not depend on a script existing.
 
 ### Building the object as part of the bro build
 
