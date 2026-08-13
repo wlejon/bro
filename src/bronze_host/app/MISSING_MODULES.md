@@ -1,5 +1,17 @@
 # What `WebGLRenderer` needs that is not vendored
 
+> **Decided: option 2.** `bronze/tests/oracle/threejs/three.module.js` is r160's
+> published single-file ESM bundle, vendored byte-for-byte
+> (`bronze/tests/oracle/threejs/README.md` has the URL and the sha256), and
+> `main.js`, `main_lit.js` and `main_textured.js` beside this file import the
+> renderer from it. Nothing about the 28-file tree changed: it is still what
+> `oracle-threejs` compiles, still what `main_scenegraph.js` imports, and still
+> the only thing that proves module-graph resolution across relative
+> specifiers.
+>
+> The rest of this file is the survey the decision was made from, kept because
+> the closure it counts is what makes the answer obvious rather than arbitrary.
+
 **`WebGLRenderer` is not in the tree.** `bronze/tests/oracle/threejs/three/` holds
 28 files: the transitive import closure of `Scene`, `PerspectiveCamera`, `Mesh`,
 `BoxGeometry` and `MeshBasicMaterial`, and nothing else. There is no

@@ -1,32 +1,32 @@
 // The cube app: a real three.js WebGLRenderer drawing a rotating
-// MeshBasicMaterial box into a bro-hosted WebGL2 canvas.
+// MeshBasicMaterial box into a bro-hosted WebGL2 canvas, and then READING THE
+// PIXELS BACK to prove it drew.
 //
-// THIS FILE DOES NOT COMPILE TODAY, and that is a fact about the tree, not
-// about the file. `WebGLRenderer` is not vendored — MISSING_MODULES.md beside
-// this file has the exact list and the ~200-module transitive closure behind
-// it. Nothing here works around that: the imports name the modules the program
-// genuinely needs, so the day the renderer closure lands (or the day the
-// single-file `three.module.js` bundle does), this becomes a one-line change to
-// the specifiers and nothing else.
+// THE IMPORT is the single-file r160 ESM bundle vendored in the bronze
+// checkout — `bronze/tests/oracle/threejs/three.module.js`, byte-for-byte as
+// released. That is option 2 in MISSING_MODULES.md beside this file, taken:
+// `WebGLRenderer`'s import closure is ~200 files and the bundle is one, and
+// nothing about the 28-file tree the milestone compiles changes. The path is
+// relative to this file, on the same sibling-checkout assumption
+// main_scenegraph.js documents at length — module resolution is the bronze
+// CLI's, done at compile time against the filesystem, so a -DBRONZE_DIR
+// override moves the C++ and not this specifier.
 //
-// `main_scenegraph.js` beside it is the version that runs against what IS
-// vendored, and it is the integration proof for the host layer today.
+// WHAT IT PRINTS, and the rule behind it: every line is a boolean or an
+// integer. Nothing accumulated is pinned, and no pixel VALUE is printed —
+// what is printed is a predicate over a pixel, which is what survives the
+// several places a color legitimately loses low bits between `0x00ff00` and
+// the framebuffer: three.js converts a hex color sRGB->linear on input and
+// linear->sRGB on output, the rasterizer interpolates, and the driver picks
+// its own rounding. A predicate written far outside that band still fails
+// loudly for the things worth catching — a frame that drew nothing, a cube
+// drawn in the wrong color, a clear that never happened.
 //
-// THE IMPORT PATHS assume the renderer has been vendored INTO the existing
-// tree, at the paths the library's own relative specifiers name — option 1 in
-// MISSING_MODULES.md. For the bundle instead (option 2), every import below
-// collapses to one line:
-//
-//     import * as THREE from '<path>/three.module.js';
-//
-// and the five names come off `THREE.`.
+// Every line is prefixed `APP ` so the checker can separate it from the
+// engine's own log, which shares stdout and is not deterministic.
 
-import { Scene } from '../../../../bronze/tests/oracle/threejs/three/scenes/Scene.js';
-import { PerspectiveCamera } from '../../../../bronze/tests/oracle/threejs/three/cameras/PerspectiveCamera.js';
-import { Mesh } from '../../../../bronze/tests/oracle/threejs/three/objects/Mesh.js';
-import { BoxGeometry } from '../../../../bronze/tests/oracle/threejs/three/geometries/BoxGeometry.js';
-import { MeshBasicMaterial } from '../../../../bronze/tests/oracle/threejs/three/materials/MeshBasicMaterial.js';
-import { WebGLRenderer } from '../../../../bronze/tests/oracle/threejs/three/renderers/WebGLRenderer.js';
+import { Scene, PerspectiveCamera, Mesh, BoxGeometry, MeshBasicMaterial, WebGLRenderer }
+    from '../../../../bronze/tests/oracle/threejs/three.module.js';
 
 const FRAMES = 5;
 // 2:1, so the camera's aspect is exactly 2 rather than a repeating fraction —
@@ -54,12 +54,19 @@ document.body.appendChild(canvas);
 // Passing the canvas rather than letting the renderer create one is what keeps
 // the element the engine composites and the element three.js draws into the
 // same object. `antialias` is off: the host canvas FBO has no multisample path,
-// and asking for one the context cannot give would be a silent downgrade.
+// and asking for one the context cannot give would be a silent downgrade. It is
+// also what makes the pixel checks below meaningful — a resolve would blend the
+// cube's edge into the clear color, and an interior pixel is only reliably
+// interior when nothing is filtering it.
 const renderer = new WebGLRenderer({ canvas: canvas, antialias: false });
 renderer.setPixelRatio(1);            // pinned, not window.devicePixelRatio:
                                       // a DPR-scaled buffer would make the
                                       // printed sizes depend on the display
 renderer.setSize(WIDTH, HEIGHT, false);  // false: do not write canvas.style
+// A dark, unambiguous background. Every channel is far from the cube's, so
+// "this pixel is the clear color" and "this pixel is the cube" are decidable
+// from the bytes alone rather than from a threshold that has to be tuned.
+renderer.setClearColor(0x101010, 1);
 
 // --- The scene ------------------------------------------------------------
 const scene = new Scene();
@@ -82,6 +89,35 @@ say('index.count', geometry.index.count);
 say('renderer.isWebGL2', renderer.capabilities.isWebGL2);
 say('renderer.drawingBufferWidth', renderer.getContext().drawingBufferWidth);
 
+// --- Reading the framebuffer back -----------------------------------------
+// The whole default framebuffer, once per frame, into one buffer allocated
+// here rather than per frame: a fresh 200 KB typed array inside the render
+// loop would make every frame a collection and say nothing extra.
+const gl = renderer.getContext();
+const pixels = new Uint8Array(WIDTH * HEIGHT * 4);
+
+// readPixels' origin is the BOTTOM-left, which does not matter for the two
+// points sampled here — the center is the center either way, and the corner is
+// a corner either way — but it is why these are computed and not guessed.
+const CENTER = ((HEIGHT / 2) * WIDTH + (WIDTH / 2)) * 4;
+const CORNER = 0;
+
+// The cube is 1x1x1 seen from z=5 through a 75-degree lens, so it covers rather
+// less than a fifth of a 320x160 buffer's width and the corner is nowhere near
+// it. Both predicates are therefore about the geometry as much as the color:
+// a cube drawn at the wrong scale fails the corner check, and a cube not drawn
+// at all fails the center one.
+function centerIsGreen() {
+    const r = pixels[CENTER], g = pixels[CENTER + 1], b = pixels[CENTER + 2];
+    return g > 128 && r < 64 && b < 64;
+}
+function cornerIsClearColor() {
+    // 0x101010 is 16 per channel; +-8 covers the sRGB round trip and any
+    // driver rounding, and excludes both black and the cube.
+    const r = pixels[CORNER], g = pixels[CORNER + 1], b = pixels[CORNER + 2];
+    return r > 8 && r < 24 && g > 8 && g < 24 && b > 8 && b < 24;
+}
+
 // --- The frame loop -------------------------------------------------------
 // Plain requestAnimationFrame rather than renderer.setAnimationLoop: the two
 // are the same mechanism here (setAnimationLoop drives WebGLAnimation, which
@@ -102,6 +138,14 @@ function tick() {
     say('render.calls', renderer.info.render.calls);
     say('render.triangles', renderer.info.render.triangles);
     say('memory.geometries', renderer.info.memory.geometries);
+
+    // Immediately after render() and before the host's swap, which is the only
+    // window in which the default framebuffer holds this frame's result.
+    // WebGLInfo counts what the renderer ASKED for; this is what the driver
+    // actually produced, and the two disagreeing is the bug worth catching.
+    gl.readPixels(0, 0, WIDTH, HEIGHT, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    say('pixel.centerIsGreen', centerIsGreen());
+    say('pixel.cornerIsClear', cornerIsClearColor());
 
     frame = frame + 1;
     if (frame < FRAMES) {

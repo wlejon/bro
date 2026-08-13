@@ -273,12 +273,16 @@ would silently pick a winner.
 
 ## The app
 
-`app/main_scenegraph.js` is the runnable one: scene graph, matrix math, the host
-DOM, the WebGL2 context object, timers, rAF and the microtask checkpoint — but
-no renderer. `app/main.js` is the cube app with a real `WebGLRenderer`, and it
-**does not compile today**: the renderer is not in the vendored three.js tree.
-`app/MISSING_MODULES.md` has the exact missing list, the ~200-module transitive
-closure, and the three options for closing it.
+`app/main_scenegraph.js` exercises everything below the renderer: scene graph,
+matrix math, the host DOM, the WebGL2 context object, timers, rAF and the
+microtask checkpoint. The renderer apps import `WebGLRenderer` from r160's
+published `build/three.module.js`, vendored byte-for-byte in the bronze
+checkout (`bronze/tests/oracle/threejs/three.module.js` — origin and sha256 in
+the README beside it): `app/main.js` is the basic cube, `app/main_lit.js` adds
+`MeshStandardMaterial` + lights, `app/main_textured.js` a procedural
+`DataTexture` checkerboard. Each prints `gl.readPixels` predicates after
+`render()`, so a correct frame is checkable from stdout alone.
+`app/MISSING_MODULES.md` records why the bundle, not ~200 vendored modules.
 
 `app/appdir` is the app directory the executable boots from — an Engine still
 needs a document even when the app's JS was compiled away.
