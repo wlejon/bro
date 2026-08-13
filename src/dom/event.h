@@ -49,6 +49,30 @@ private:
     double timeStamp_;
 };
 
+// The C++ carrier for a CustomEvent's `detail`, and the only payload that
+// crosses between a scripted realm and a native (C++ / AOT-compiled) listener.
+//
+// WHY A STRING AND NOTHING ELSE. `detail` on the web is an arbitrary JS value,
+// and an arbitrary JS value belongs to exactly one heap — QuickJS's or
+// bronze's. Handing either heap's value to the other side is the bug class
+// this whole boundary exists to prevent, so what crosses is a copy, and a
+// string is the one shape both sides can copy without agreeing on a type
+// system. A JS caller whose detail is not a string still reaches JS listeners
+// with the real object (dispatch hands them the original event object); it is
+// only the native listeners that see nothing, and they see nothing rather than
+// something wrong.
+class CustomEvent : public Event {
+public:
+    CustomEvent(const std::string& type, bool bubbles = true, bool cancelable = true);
+    ~CustomEvent() override = default;
+
+    const std::string& detail() const { return detail_; }
+    void setDetail(const std::string& v) { detail_ = v; }
+
+private:
+    std::string detail_;
+};
+
 class MouseEvent : public Event {
 public:
     MouseEvent(const std::string& type, bool bubbles = true, bool cancelable = true);

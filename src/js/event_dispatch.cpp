@@ -137,6 +137,17 @@ static void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& ev
     JS_SetPropertyStr(ctx, jsEvent, "defaultPrevented",
                       JS_NewBool(ctx, false));
 
+    // CustomEvent.detail — the string payload a native dispatcher put on the
+    // event. Only reached when dispatch had to BUILD this JS object, i.e. the
+    // event came from C++; a JS-originated CustomEvent arrives as its own
+    // object (originalJsEvent) with the caller's real detail already on it,
+    // whatever type that is.
+    auto* customEvt = dynamic_cast<bro::dom::CustomEvent*>(&event);
+    if (customEvt) {
+        JS_SetPropertyStr(ctx, jsEvent, "detail",
+                          JS_NewString(ctx, customEvt->detail().c_str()));
+    }
+
     // MouseEvent properties
     auto* mouseEvt = dynamic_cast<bro::dom::MouseEvent*>(&event);
     if (mouseEvt) {
@@ -1149,6 +1160,19 @@ void dispatchWindowEvent(JSContext* ctx, bro::dom::Document* doc,
                             /*captureFilter=*/-1, /*target=*/nullptr);
 }
 
+bool jsEventStringDetail(JSContext* ctx, JSValue jsEvent, std::string& out) {
+    if (!ctx || !JS_IsObject(jsEvent)) return false;
+    JSValue detailVal = JS_GetPropertyStr(ctx, jsEvent, "detail");
+    bool isString = JS_IsString(detailVal);
+    if (isString) {
+        const char* s = JS_ToCString(ctx, detailVal);
+        out = s ? s : "";
+        JS_FreeCString(ctx, s);
+    }
+    JS_FreeValue(ctx, detailVal);
+    return isString;
+}
+
 // globalThis.__bro_listener_seq() — the shared registration counter, so the
 // window polyfill can stamp its listener records with the same sequence C++
 // registrations take. Without it, C++ and JS window listeners could not be
@@ -1198,7 +1222,16 @@ static JSValue js_dispatch_window_event(JSContext* ctx, JSValueConst,
         JS_FreeValue(ctx, v);
     }
 
-    bro::dom::Event event(type, bubbles, cancelable);
+    // A string `detail` is promoted to a real dom::CustomEvent so the realm's
+    // C++ window listeners see the payload; anything else stays a plain event
+    // for them, and the JS listeners get the caller's object regardless.
+    std::string detail;
+    const bool hasDetail = jsEventStringDetail(ctx, jsEvent, detail);
+    bro::dom::CustomEvent customEvent(type, bubbles, cancelable);
+    bro::dom::Event plainEvent(type, bubbles, cancelable);
+    bro::dom::Event& event = hasDetail ? static_cast<bro::dom::Event&>(customEvent)
+                                       : plainEvent;
+    if (hasDetail) customEvent.setDetail(detail);
     event.setIsTrusted(trusted);
     if (prevented) event.preventDefault();
 

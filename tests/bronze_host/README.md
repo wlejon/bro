@@ -1,14 +1,22 @@
-# bronze_host integration check
+# bronze_host integration checks
 
-One check, run by hand: boot `bro-bronze-host` headless, advance a fixed number
-of frames, and compare the compiled app's output against
-`expected/main_scenegraph.expected` line for line.
+Two checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip (the
+binary is not built).
 
 ```bash
-tests/bronze_host/run_bronze_host_test.sh
+tests/bronze_host/run_bronze_host_test.sh   # the scene graph, a fixed frame count
+tests/bronze_host/run_events_test.sh        # events, under a driver script
 ```
 
-Exit codes are `0` pass, `1` fail, `77` skip (the binary is not built).
+They pin two different executables, which is why they are two scripts. The
+first boots `bro-bronze-host` headless, advances a fixed number of frames, and
+compares the compiled app's output against
+`expected/main_scenegraph.expected` line for line. The second boots
+`bro-bronze-host-events` under bro-headless's driver — the only mode that can
+produce a click — and compares both worlds' output against
+`expected/events_probe.expected`. The multi-app CMake surface
+(`BRO_BRONZE_APPS`, `src/bronze_host/README.md`) exists so one configured tree
+can hold both.
 
 ## What it actually proves
 
@@ -36,6 +44,38 @@ requires every seam in the layer to be right at once:
 
 A wrong answer on any of them moves or removes a line.
 
+## What the events check proves
+
+Its subject is `apps/events_probe.js` compiled to machine code, linked into
+`bro-bronze-host-events`, booted on `appdir_events/` — a **hybrid** app dir: a
+`bro.json` with `"compiled": true`, and an `index.html` whose own `<script>` is
+interpreted UI JS running beside the compiled program. `drive_events.js` is the
+driver. Three programs, two languages, one Engine, one DOM, one thread.
+
+- a `click(20, 30)` goes through hit testing and the real input pipeline and
+  lands in a listener the **compiled** app registered on the canvas it created
+  — and `event.target === canvas` inside it, the same value the program holds;
+- `mouseMove` and `wheel` reach the same canvas with their payloads intact,
+  and a `keyDown` with nothing focused reaches the compiled app's `document`
+  listener by **bubbling** to `documentElement`, which is where a document
+  registration actually lives;
+- a `CustomEvent` crosses **both** directions with a string `detail`: the page
+  script dispatches `page:toApp`, a compiled listener answers on `app:toPage`,
+  and the page script prints what came back. `PAGE fromApp=pong:one` cannot
+  exist unless both crossings happened;
+- `preventDefault()` from a compiled listener makes the interpreted
+  dispatcher's `dispatchEvent(...)` answer `false`, and `stopPropagation()`
+  from a compiled canvas listener keeps a compiled document listener from ever
+  seeing the same event — so cancellation is one shared walk and not two.
+
+The output is diffed as **two blocks** — every `APP ` line, then every
+interpreted line — because the compiled app prints to stdout and the engine log
+carrying the interpreted `console.log`s is stderr. Two streams, two buffers, so
+their interleaving is not something a byte-for-byte expectation may depend on.
+Each stream's own order is pinned, and causality across the boundary survives
+the split because it is carried in the payload rather than in the interleaving.
+`run_events_test.sh` says the same at the code.
+
 ## Why the expectation is only booleans and integers
 
 Same rule as `bronze/tests/oracle/threejs/README.md`. Nothing accumulated is
@@ -61,8 +101,29 @@ Two reasons, and either alone would be enough:
    whose binary is absent from every default build makes "missing" and "broken"
    the same result.
 
-## Getting the binary
+The events check is not in the suite for reason 2 alone — its driver *is* JS,
+but its binary is just as absent from a default build.
+
+## Getting the binaries
 
 `src/bronze_host/README.md` has the sequence: compile the app with bronze's
-`--emit-obj --host-globals`, configure bro with `-DBRO_WITH_BRONZE=ON
--DBRO_BRONZE_APP_OBJ=<obj>`, build `bro-bronze-host`.
+`--emit-obj --host-globals`, configure bro with `-DBRO_WITH_BRONZE=ON`, build.
+Both at once, from the bro tree, with `<bronze>` the sibling bronze checkout's
+CLI:
+
+```bash
+<bronze> build src/bronze_host/app/main_scenegraph.js -o build/scenegraph.obj \
+    --emit-obj --host-globals src/bronze_host/threejs_host.globals
+<bronze> build tests/bronze_host/apps/events_probe.js -o build/events.obj \
+    --emit-obj --host-globals src/bronze_host/threejs_host.globals
+
+cmake -B build -DBRO_WITH_BRONZE=ON \
+    -DBRO_BRONZE_APP_OBJ=$PWD/build/scenegraph.obj \
+    -DBRO_BRONZE_APPS="events=$PWD/build/events.obj"
+cmake --build build --config Release \
+    --target bro-bronze-host bro-bronze-host-events
+```
+
+Re-running either check after editing its `.js` means recompiling that object
+and relinking its executable — the app is the linked object, so nothing else
+notices the edit.

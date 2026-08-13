@@ -147,6 +147,29 @@ struct EngineConfig {
     /// to dismiss). Can be overridden per-app via bro.json `"splash": false`
     /// or the `--no-splash` / `--splash` CLI flags.
     bool showSplash = true;
+
+    // --- The hybrid (compiled + interpreted) app declaration ---------------
+    //
+    // An app dir can carry an AOT-COMPILED app: its logic is machine code
+    // linked into a host executable (bro-bronze-host, src/bronze_host/), and
+    // the dir supplies only what the Engine still needs — a manifest, assets,
+    // and optionally a page whose own <script> tags are interpreted beside the
+    // compiled program. Both halves share this Engine's DOM on this thread.
+    //
+    // `compiledApp` is bro.json's `"compiled": true`. It is a DECLARATION, not
+    // a switch: nothing in the engine changes behaviour on it. It exists so
+    // the mismatch between an app dir and the binary opening it can be
+    // reported instead of being discovered as an app that silently does half
+    // of nothing — a compiled app dir opened by plain `bro` runs its page and
+    // none of its logic, which looks identical to a broken app.
+    bool compiledApp = false;
+
+    /// Set by a host executable that has a compiled app linked in (host_main.cpp
+    /// does), so the engine can tell "this dir needs a compiled host" from
+    /// "this IS the compiled host". Not a manifest key — it describes the
+    /// binary, not the app.
+    bool hostProvidesCompiledApp = false;
+
     /// Hook for a host application that embeds the engine: called during JS
     /// init, after every built-in binding is installed and before any app
     /// script runs. This is how an executable that links bro_engine adds its
@@ -676,6 +699,26 @@ public:
 
     /// Unregister a listener from addWindowEventListener. True if it was live.
     bool removeWindowEventListener(dom::ListenerHandle handle);
+
+    /// Fire `event` at `target` through the app realm's ONE dispatch walk —
+    /// the C++ half of `element.dispatchEvent(...)`, and the counterpart to
+    /// dom::Element::addEventListener's C++ registration.
+    ///
+    /// This is the same js::dispatchDomEvent every trusted input event goes
+    /// through, not a second path: capture from the window down, at-target,
+    /// bubble back out, shadow retargeting, and both listener kinds merged in
+    /// registration order. `event.defaultPrevented()` afterwards is what a
+    /// caller checks — a listener on either side can have prevented it.
+    ///
+    /// A dom::CustomEvent's `detail` reaches JS listeners as a string property
+    /// on the event object they receive.
+    void dispatchElementEvent(dom::Element* target, dom::Event& event);
+
+    /// The same, aimed at the app realm's window: JS window listeners and
+    /// `Document::windowListeners()` in registration order. Both capture and
+    /// bubble listeners fire, as they do for any event fired directly at the
+    /// window (js::dispatchWindowEvent says why).
+    void dispatchWindowEvent(dom::Event& event);
 
     /// Give `canvas` a 3D scene rendering context and return its SceneGraph —
     /// the exact thing `canvas.getContext('scene')` hands to JS. This IS the
@@ -1873,6 +1916,10 @@ private:
     bool systemSettingsVisible_ = false;
     bool splashVisible_ = false;
     bool splashEnabled_ = true;   // from EngineConfig::showSplash
+    // The hybrid-app declaration and the binary's answer to it, kept only
+    // so init can report a mismatch (EngineConfig::compiledApp).
+    bool compiledApp_ = false;
+    bool hostProvidesCompiledApp_ = false;
     bool splashDismissTriggered_ = false;
     double splashStartMs_ = 0.0;
     double lastSystemRafMs_ = 0.0;

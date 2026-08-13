@@ -19,6 +19,7 @@ Off by default; nothing here is in the default build.
 | `dom_globals.cpp` | `document`, canvas, `window`, rAF, `performance`, **and the frame seam** (`hostFrame`) |
 | `host_internal.h` | the non-GL shared surface: error funnel, clock, task queue, handle tags |
 | `host_events.cpp` | `on<type>` + `addEventListener` for the objects that fire events |
+| `host_dom_events.cpp` | canvas / document / window listeners, wired to the **engine's** dispatch |
 | `host_timers.cpp` | `setTimeout`/`setInterval` and the main-thread task queue |
 | `host_image.cpp` | `Image`, and the decode behind `.src` |
 | `host_xhr.cpp` | `XMLHttpRequest` (text over the app asset path; see its header) |
@@ -55,6 +56,100 @@ than whenever something else happens to drain.
 
 `dom_globals.cpp` carries the same explanation at the code.
 
+## Events, and the one dispatch walk they arrive on
+
+A listener a compiled app registers on its canvas, on `document` or on `window`
+fires from a real click. It does so because it is not this layer's listener at
+all: `canvas.addEventListener` calls `dom::Element::addEventListener`, the
+engine's own C++ registration, and `js::dispatchDomEvent` already walks the
+event path ONCE with both listener kinds merged on a shared registration
+sequence (`dom/event_target.h`). So a compiled handler gets the capture /
+at-target / bubble phases, the shadow retargeting, and its place in
+registration order beside the page's own handlers — for the same reason an
+interpreted one does, not by a parallel arrangement that agrees with it.
+
+`document.addEventListener` is `documentElement.addEventListener`, exactly the
+delegation `src/js/document_bindings.cpp` performs for the interpreted side and
+for its reason: the event path is built from Elements. The visible consequence
+is the one the interpreted side already lives with — `currentTarget` inside a
+document handler is `<html>`, not the document.
+
+### The boundary rule
+
+**Engine objects are shared. Event data is copied. Heap values never cross.**
+
+Both worlds run in one Engine, on one thread, against one DOM, interleaved and
+never concurrent. What they share is the *engine's* objects: the same
+`dom::Element`, the same document, the same clock, the same GL context. What
+crosses the language boundary is a copy:
+
+- A listener is handed a fresh bronze object holding **copies** of the fields
+  its event kind carries — type, coordinates, key, button, deltas, modifiers —
+  never a QuickJS value and never a pointer into either heap.
+- `event.target` is the exception that proves it: a canvas this layer created
+  answers as **itself**, the very value the program holds, because identity is
+  the whole use of a target. Anything else answers a `{tagName, id, nodeId}`
+  descriptor.
+- `preventDefault()` / `stopPropagation()` / `stopImmediatePropagation()` write
+  through to the `dom::Event` dispatch is walking with, so a compiled listener
+  cancels an event for the interpreted listeners after it, and vice versa. The
+  event object is **live only for the duration of the listener call**: calling
+  one of the three on a stored event object afterwards is a named `TypeError`,
+  not a silent no-op and not a write through a dangling pointer.
+
+### CustomEvent, which is the sanctioned channel between the two worlds
+
+`dispatchEvent` from compiled code takes a plain descriptor —
+`{type, bubbles, cancelable, detail}` — because bronze cannot build a value on a
+chosen prototype, so there is no `new CustomEvent(...)` to write (the same limit
+that makes `img instanceof Image` false). `bubbles` and `cancelable` default to
+true.
+
+```js
+// compiled → interpreted
+document.dispatchEvent({ type: 'app:ready', detail: 'v2' });
+
+// interpreted → compiled  (an ordinary page script)
+document.dispatchEvent(new CustomEvent('page:reset', { detail: 'hard' }));
+```
+
+**`detail` is a string and only a string.** A `detail` is an arbitrary JS value
+on the web, and an arbitrary JS value belongs to exactly one heap; a string is
+the one shape both heaps can copy without agreeing on a type system. It is
+carried by `dom::CustomEvent` (`src/dom/event.h`), which is what makes it
+survive the trip in either direction. A compiled `dispatchEvent` whose `detail`
+is an object is a `TypeError` naming the reason, not a stringification — an
+interpreted listener receiving `"[object Object]"` would be worse than being
+told it cannot go. In the other direction an interpreted dispatch with a
+non-string detail still reaches the interpreted listeners with the real value;
+only the compiled ones see no payload.
+
+`tests/bronze_host/` pins a round trip in both directions.
+
+### Not supported, precisely
+
+- **`once` and `capture`** are accepted (`addEventListener(type, fn, true)` or
+  `{capture, once}`) and honoured by the engine's own list — but a `once`
+  listener the engine reaps is not removed from this layer's
+  `removeEventListener` bookkeeping, so removing it afterwards is a no-op
+  rather than an error.
+- **`on<type>` properties** (`canvas.onclick = fn`) are not wired for DOM
+  elements. `addEventListener` is the whole surface here. (`Image` and
+  `XMLHttpRequest` keep their `on<type>` slots — different objects, different
+  file: `host_events.cpp`.)
+- **`click`'s `offsetX` / `offsetY` are 0.** Not this layer: bro synthesizes the
+  `click` event without `applyMouseOffset`, so every listener sees 0, compiled
+  and interpreted alike. `mousedown`, `mouseup`, `mousemove` and `wheel` carry
+  real offsets.
+- **Listeners on arbitrary elements.** This layer creates `<canvas>` and
+  `<img>` and nothing else, so the reachable targets are a canvas it made, the
+  document (i.e. `documentElement`), and the window. There is no
+  `querySelector`.
+- A registration that cannot be delivered **throws**. A type that is not a
+  string, a listener that is not a function, a target element that does not
+  exist yet — each is a `TypeError` or an `Error` naming the object, never a
+  registration that quietly never fires.
+
 ## Configure
 
 ```bash
@@ -88,6 +183,26 @@ cmake --build build --config Release --target bro-bronze-host
 # 3c. or headless under a driver script — bro-headless, scripting THIS app
 ./build/Release/bro-bronze-host src/bronze_host/app/appdir --headless drive.js
 ```
+
+### More than one app in one tree
+
+`BRO_BRONZE_APP_OBJ` names *the* app and builds `bro-bronze-host`.
+`BRO_BRONZE_APPS` is a semicolon list of `name=objpath` pairs, each building
+`bro-bronze-host-<name>`, and the two live side by side — the pinned check
+names `bro-bronze-host` and must keep finding exactly that binary:
+
+```bash
+cmake -B build -DBRO_WITH_BRONZE=ON \
+    -DBRO_BRONZE_APP_OBJ=/tmp/scenegraph.obj \
+    -DBRO_BRONZE_APPS="events=/tmp/events.obj;lit=/tmp/lit.obj"
+cmake --build build --target bro-bronze-host-events
+```
+
+Every one of them is the same `host_main.cpp` linked against a different
+object, because that is what "another app" is here. A pair with no `=`, an
+empty half, a path that does not exist, or a name used twice is a configure
+error naming the pair: a mistyped one would otherwise become a missing target,
+and "the app is broken" would read exactly like "the app was never built".
 
 `--emit-obj` is what makes step 1 stop before linking: the object is destined
 for **bro's** toolchain, and linking belongs to whoever owns the final binary.
@@ -168,6 +283,44 @@ closure, and the three options for closing it.
 `app/appdir` is the app directory the executable boots from — an Engine still
 needs a document even when the app's JS was compiled away.
 
+## The hybrid app dir: `"compiled": true`
+
+An app dir a compiled host boots from declares itself in its `bro.json`:
+
+```json
+{ "title": "my app", "compiled": true }
+```
+
+It is a **declaration, not a switch** — nothing in the engine behaves
+differently on it (`EngineConfig::compiledApp`). It exists so a mismatch
+between an app dir and the binary opening it can be *reported* rather than
+discovered:
+
+- **plain `bro` / `bro-headless` on a `"compiled": true` dir** logs a warning
+  naming the situation and runs anyway. Not a refusal, because the interpreted
+  half of a hybrid dir is real and does run — the page, its styles, its own
+  `<script>` tags. What is missing is the app's logic, and an app that runs its
+  page and none of its logic is otherwise indistinguishable from one that is
+  simply broken. The warning is the difference.
+- **a compiled host on a dir that does not declare it** warns the other way:
+  add the flag, because it is what tells any *other* binary that this dir needs
+  one.
+
+The mechanism is one `LOG_WARN` pair at engine init (`engine_init.cpp` step 6).
+A host executable that has a compiled app linked in says so with
+`EngineConfig::hostProvidesCompiledApp` (or `HeadlessHooks::providesCompiledApp`
+in driver mode); that flag describes the *binary*, and is not a manifest key.
+
+### Why an app dir can carry interpreted JS at all
+
+The engine executes the page's `<script>` tags unconditionally
+(`engine_init.cpp` step 10), before the host runs the compiled top level. So a
+hybrid dir is not a special mode: it is an ordinary app dir whose page happens
+to hold UI script, running in the Engine's QuickJS realm beside a compiled
+program running as machine code. They share the DOM on one thread and talk
+through it — see "The boundary rule" above, and
+`tests/bronze_host/appdir_events/` for a working one.
+
 `tests/bronze_host/` holds the integration check that runs the compiled app and
 diffs its output against a committed expectation.
 
@@ -175,10 +328,11 @@ diffs its output against a committed expectation.
 
 **GL**: samplers, sync, occlusion queries, transform feedback, PBO paths,
 `mapBufferRange`, `getIndexedParameter`, 3D/array textures, non-square matrix
-uniforms, `vertexAttrib*` default-value setters, `getContext('2d')`, and event
-*dispatch* to canvas/document listeners (they are stored, never fired).
+uniforms, `vertexAttrib*` default-value setters, and `getContext('2d')`.
 `getParameter`'s array-shaped answers are pseudo-arrays (indexable, `length`, no
 `Array.prototype`).
+
+**Events**: the exact list is under "Not supported, precisely" above.
 
 **Loading**: `fetch`. It cannot be provided at all today — it returns a Promise,
 and the embed API has no way to create or resolve a bronze Promise from C++.

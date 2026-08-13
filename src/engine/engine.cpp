@@ -192,6 +192,24 @@ void Engine::dispatchEvent(dom::Element* target, dom::Event& event) {
     js::dispatchDomEvent(jsRuntime_->getContext(), target, event);
 }
 
+// The public halves of the same thing. Separate names rather than a public
+// dispatchEvent because the private one is the input pipeline's spelling and
+// is called from a dozen places inside the engine; a host reaching in gets a
+// name that says which target kind it means.
+void Engine::dispatchElementEvent(dom::Element* target, dom::Event& event) {
+    // No jsRuntime_ is not a failure here the way it is above: a realm with no
+    // JS still has C++ listeners, and dispatchDomEvent runs them with a null
+    // ctx (js/event_dispatch.h).
+    if (!target) return;
+    js::dispatchDomEvent(jsRuntime_ ? jsRuntime_->getContext() : nullptr, target, event);
+}
+
+void Engine::dispatchWindowEvent(dom::Event& event) {
+    if (!document_) return;
+    js::dispatchWindowEvent(jsRuntime_ ? jsRuntime_->getContext() : nullptr,
+                            document_.get(), event);
+}
+
 dom::Element* Engine::pointerCaptureFor(int pointerId) const {
     auto it = pointerCaptures_.find(pointerId);
     return it == pointerCaptures_.end() ? nullptr : it->second.get();

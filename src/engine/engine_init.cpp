@@ -127,6 +127,8 @@ Engine::Engine(const EngineConfig& config)
     , uiFrameIntervalMs_(config.graphics.maxFrameIntervalMs) {
 
     splashEnabled_ = config.showSplash;
+    compiledApp_ = config.compiledApp;
+    hostProvidesCompiledApp_ = config.hostProvidesCompiledApp;
     appDir_ = config.appDir;
     titleOverride_ = config.title;
     installHostBindings_ = config.installHostBindings;
@@ -605,6 +607,26 @@ void Engine::initAppRealm() {
 #endif
 
     // 6. Load the application
+    //
+    // Before anything is loaded: does this app dir want a binary this one is
+    // not? A compiled app dir (bro.json `"compiled": true`) carries no script
+    // for its logic — that lives in machine code linked into a host executable
+    // — so plain `bro` opening one runs the page and NONE of the app, which on
+    // screen is indistinguishable from an app that is simply broken. Say so
+    // instead. It is a warning and not a refusal because the interpreted half
+    // of a hybrid app dir is real and does run: the page, its styles, its own
+    // <script> tags. What is missing is named, and the run continues.
+    if (compiledApp_ && !hostProvidesCompiledApp_) {
+        LOG_WARN("App '%s' declares \"compiled\": true — its logic is an AOT-compiled "
+                 "program linked into a host binary (src/bronze_host/). This binary has "
+                 "no compiled app linked in, so only the page's own interpreted scripts "
+                 "will run.", appDir_.c_str());
+    } else if (!compiledApp_ && hostProvidesCompiledApp_) {
+        LOG_WARN("App '%s' is being run by a compiled-app host but its bro.json does not "
+                 "declare \"compiled\": true. Add it — the flag is what tells any other "
+                 "binary that this dir needs one.", appDir_.c_str());
+    }
+
     manifest_ = AppLoader::loadApp(appDir_, &assetMounts_);
     std::string html = AppLoader::loadFile(manifest_.htmlPath);
     if (html.empty()) {

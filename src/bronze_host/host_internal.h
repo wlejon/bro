@@ -25,10 +25,17 @@
 #include <string>
 #include <vector>
 
+namespace bro::engine { class Engine; }
+namespace bro::dom { class Element; class Event; }
+
 namespace bro::bronze_host {
 
 namespace ev = bronze::embed;
 using Value = bronze::Value;
+
+// gl_internal.h owns it; a file that only registers properties does not need
+// the GL headers to say so.
+struct ObjectBuilder;
 
 // ---------------------------------------------------------------------------
 // Handle tags
@@ -54,6 +61,18 @@ inline constexpr uint32_t kHostXhrTag = 0x58485220u;    // 'XHR '
 // and dropped, so one broken callback never silences its siblings or tears the
 // loop down.
 void reportBronzeError(const char* origin, Value thrown);
+
+// The Engine this layer was installed on, or nullptr before install. Every
+// file here reaches the engine through it rather than through a second copy
+// of the pointer.
+engine::Engine* hostEngine();
+
+// The host object this layer handed the program for `el` — the canvas value
+// from document.createElement('canvas') — or undefined for an element it
+// never wrapped. This is what makes `event.target === canvas` true inside a
+// compiled listener, and it is identity, not a rebuild: the same Value the
+// program already holds.
+Value hostValueForElement(dom::Element* el);
 
 // Milliseconds of SCALED engine time since installThreejsHostGlobals: the
 // accumulated Engine::onFrame deltas. This is the clock rAF timestamps and
@@ -105,6 +124,45 @@ void removeHostListener(ev::Persistent& obj, const std::string& type, Value fn);
 // alternative is a host-side registration counter that only a finalizer could
 // own.
 void dispatchHostEvent(ev::Persistent target, const std::string& type);
+
+// ---------------------------------------------------------------------------
+// DOM events (host_dom_events.cpp)
+// ---------------------------------------------------------------------------
+
+// addEventListener / removeEventListener / dispatchEvent on a host object
+// whose real identity is a dom::Element, wired to the ENGINE's listener
+// registry (dom::Element::addEventListener) rather than to a list of this
+// layer's own. That is the whole point: the engine already runs one dispatch
+// walk that merges native and interpreted listeners in registration order
+// (js/event_dispatch.cpp), so a compiled listener registered here fires from
+// a real click, in the right phase, beside the page's own listeners — instead
+// of from a second dispatch system that nothing would ever call.
+//
+// `source` is resolved at each call rather than captured as a pointer: the
+// document's element target is documentElement, which does not exist yet when
+// the globals are registered. `what` names the object in diagnostics.
+using ElementSource = std::function<dom::Element*()>;
+void installElementEventTarget(ObjectBuilder& b, ElementSource source,
+                               const char* what);
+
+// Hand `evt` to one compiled listener as PLAIN DATA — a fresh object carrying
+// the fields for the event's kind (coordinates, key, button, deltas, the
+// string detail of a CustomEvent), the target identity, and the three
+// propagation methods, which write through to the live dom::Event for the
+// duration of this call and refuse afterwards. Nothing from either heap
+// crosses; every field is copied. A throw out of the listener is reported
+// through reportBronzeError under `origin` and dispatch continues.
+void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
+                        dom::Event& evt, const char* origin);
+
+// `dispatchEvent(desc)` from compiled code, where `desc` is a plain
+// `{type, bubbles, cancelable, detail}` object — bronze cannot build a value
+// on a chosen prototype, so there is no `new CustomEvent` to construct here
+// (the same limit that makes `img instanceof Image` false). Answers
+// `!defaultPrevented`, as the web's dispatchEvent does, or a pending
+// TypeError for a descriptor without a string `type`.
+Value hostDispatchToElement(ElementSource source, const char* what, Value desc);
+Value hostDispatchToWindow(Value desc);
 
 // ---------------------------------------------------------------------------
 // Timers (host_timers.cpp)

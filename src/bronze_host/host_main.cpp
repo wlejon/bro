@@ -127,6 +127,10 @@ int main(int argc, char* argv[]) {
         bro::engine::HeadlessHooks hooks;
         hooks.programName = "bro-bronze-host";
         hooks.tagline = "headless driver for a bronze-compiled app";
+        // This binary IS the compiled app's host, which is what lets engine
+        // init tell an app dir that forgot `"compiled": true` from one that
+        // declared it and got opened by a binary with nothing linked in.
+        hooks.providesCompiledApp = true;
         hooks.afterEngine = [](bro::engine::Engine& engine) {
             bro::bronze_host::installThreejsHostGlobals(engine);
             bronze::embed::runMain();
@@ -153,6 +157,7 @@ int main(int argc, char* argv[]) {
     // visual-only and its canvas animation would be the first thing a pinned
     // run captured. Windowed keeps it, so a compiled app starts like any other.
     config.showSplash = !options.headless;
+    config.hostProvidesCompiledApp = true;  // see the driver-mode hook above
     if (!bro::engine::resolveLaunchTarget(appDir, config)) {
         std::fprintf(stderr, "bro-bronze-host: %s is not an app directory\n", appDir);
         return 1;

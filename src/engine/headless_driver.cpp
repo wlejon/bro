@@ -623,6 +623,7 @@ int bro::engine::runHeadless(int argc, char* argv[], const HeadlessHooks& hooks)
         // explicit-off (kept for symmetry with windowed bro).
         config.showSplash = (cliSplash == 1);
         config.installHostBindings = hooks.installHostBindings;
+        config.hostProvidesCompiledApp = hooks.providesCompiledApp;
 
         // Host setup that the first document may depend on — a media backend
         // registration has to be in place before any <video> is parsed.

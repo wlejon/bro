@@ -3292,7 +3292,16 @@ static JSValue js_element_dispatchEvent(JSContext* ctx, JSValueConst this_val,
     bool cancelable = JS_ToBool(ctx, cancelableVal);
     JS_FreeValue(ctx, cancelableVal);
 
-    bro::dom::Event evt(type, bubbles, cancelable);
+    // A string `detail` becomes a real dom::CustomEvent, which is what carries
+    // the payload to the C++ / AOT-compiled listeners on the path; the JS
+    // listeners keep receiving argv[0] itself, so a detail of any other type
+    // still reaches them untouched (js/event_dispatch.h, jsEventStringDetail).
+    std::string detail;
+    const bool hasDetail = bro::js::jsEventStringDetail(ctx, argv[0], detail);
+    bro::dom::CustomEvent customEvt(type, bubbles, cancelable);
+    bro::dom::Event plainEvt(type, bubbles, cancelable);
+    bro::dom::Event& evt = hasDetail ? static_cast<bro::dom::Event&>(customEvt) : plainEvt;
+    if (hasDetail) customEvt.setDetail(detail);
     bro::js::dispatchDomEvent(ctx, el, evt, argv[0]);
 
     return JS_NewBool(ctx, !evt.defaultPrevented());

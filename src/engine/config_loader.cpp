@@ -114,6 +114,12 @@ bool parseConfig(const std::string& path, EngineConfig& config,
     int splash = getBool("splash");
     if (splash >= 0) config.showSplash = (splash == 1);
 
+    // `"compiled": true` — this app dir's logic is an AOT-compiled program
+    // linked into a host binary, not a script in the dir. Declaration only;
+    // EngineConfig::compiledApp says what is done with it.
+    int compiled = getBool("compiled");
+    if (compiled >= 0) config.compiledApp = (compiled == 1);
+
     // Startup window management (runtime control lives in bro.window.*).
     int borderless = getBool("borderless");
     if (borderless >= 0) config.graphics.borderless = (borderless == 1);

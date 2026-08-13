@@ -49,10 +49,9 @@ struct CanvasState {
     ev::Persistent jsObj;  // the host canvas object handed to the program
     ev::Persistent glObj;  // the B2 context object, once getContext ran
     bool hasGl = false;
-    // Stored, never fired: the brief's contract for canvas listeners today
-    // (webglcontextlost has no producer yet). Kept so a later chunk can wire
-    // dispatch without changing the program-facing API.
-    std::vector<std::pair<std::string, ev::Persistent>> listeners;
+    // No listener list here: canvas listeners live in the ENGINE's native
+    // listener list on `el`, which is what makes them fire from a real click
+    // (host_dom_events.cpp).
 };
 
 struct RafEntry {
@@ -78,8 +77,6 @@ struct HostState {
     // (paused while bro.time is paused, virtual under headless advanceTime).
     double clockMs = 0.0;
     std::vector<WindowListener> windowListeners;
-    // Stored, never fired — same stance as canvas listeners.
-    std::vector<std::pair<std::string, ev::Persistent>> documentListeners;
 };
 
 HostState* g_host = nullptr;
@@ -126,9 +123,11 @@ void fireAnimationFrames() {
 //     (step 3b) and again after the late pumps that can resolve a promise
 //     (framePumps_ + tickAsync). This layer is fired at the FIRST of those two
 //     seams and there is no host hook at the second, so anything that could
-//     enqueue a bronze job after we return this frame — a window listener
-//     dispatched during the next frame's event poll, a future canvas event
-//     dispatch — would otherwise wait a whole frame to be seen. Draining here
+//     enqueue a bronze job after we return this frame — any listener the
+//     engine dispatches during the next frame's event poll, on the window or
+//     on an element — would otherwise wait a whole frame to be seen. That is
+//     no longer hypothetical: a compiled click handler runs inside the input
+//     pipeline (host_dom_events.cpp), well outside this seam. Draining here
 //     costs a queue check when there is nothing to do and bounds that wait at
 //     one frame instead of forever. It matters because an unhandled rejection
 //     is only REPORTED at quiescence: a drain that never runs is a rejection
@@ -287,30 +286,12 @@ Value makeCanvasValue(dom::Element* el) {
         return cs->glObj.get();
     });
 
-    b.def("addEventListener", 2, [cs](Value, std::span<const Value> a) {
-        Value typeV = argAt(a, 0);
-        Value fn = argAt(a, 1);
-        if (!ev::isObject(typeV) && ev::isFunction(fn)) {
-            cs->listeners.emplace_back(ev::toUtf8(typeV), ev::Persistent(fn));
-        }
-        return ev::undefined();
-    });
-    b.def("removeEventListener", 2, [cs](Value, std::span<const Value> a) {
-        Value typeV = argAt(a, 0);
-        Value fn = argAt(a, 1);
-        if (ev::isObject(typeV)) return ev::undefined();
-        std::string type = ev::toUtf8(typeV);
-        for (auto it = cs->listeners.begin(); it != cs->listeners.end(); ++it) {
-            // Identity compare of two CURRENT addresses read with no
-            // allocation between them — the one moment raw bits are a valid
-            // identity for heap values.
-            if (it->first == type && ev::toBits(it->second.get()) == ev::toBits(fn)) {
-                cs->listeners.erase(it);
-                break;
-            }
-        }
-        return ev::undefined();
-    });
+    // Real listeners on the engine's own element: a click that hit-tests to
+    // this canvas fires them, in registration order beside any the page's
+    // interpreted script put on the same element (host_dom_events.cpp).
+    // `cs` outlives the program — HostState is never freed — so the element
+    // source can read through it safely for the life of the process.
+    installElementEventTarget(b, [cs]() { return cs->el; }, "canvas");
 
     Value built = b.get();
     cs->jsObj.set(built);
@@ -400,31 +381,21 @@ Value makeDocumentValue() {
         Value body = makeBodyValue();
         b.set("body", body);
     }
-    // Stored, never fired — the same stance as canvas listeners; pointer
-    // events for controls are a later chunk's dispatch problem, and storing
-    // now keeps the program-facing calls from throwing.
-    b.def("addEventListener", 2, [](Value, std::span<const Value> a) {
-        Value typeV = argAt(a, 0);
-        Value fn = argAt(a, 1);
-        if (!ev::isObject(typeV) && ev::isFunction(fn)) {
-            g_host->documentListeners.emplace_back(ev::toUtf8(typeV), ev::Persistent(fn));
-        }
-        return ev::undefined();
-    });
-    b.def("removeEventListener", 2, [](Value, std::span<const Value> a) {
-        Value typeV = argAt(a, 0);
-        Value fn = argAt(a, 1);
-        if (ev::isObject(typeV)) return ev::undefined();
-        std::string type = ev::toUtf8(typeV);
-        auto& list = g_host->documentListeners;
-        for (auto it = list.begin(); it != list.end(); ++it) {
-            if (it->first == type && ev::toBits(it->second.get()) == ev::toBits(fn)) {
-                list.erase(it);
-                break;
-            }
-        }
-        return ev::undefined();
-    });
+    // Document listeners are documentElement's listeners — the exact
+    // delegation js_document_addEventListener performs for the interpreted
+    // side (src/js/document_bindings.cpp), and for its reason: a document is
+    // not an Element, the event path is built from Elements, so an event aimed
+    // at the document has to be registered and dispatched where it will
+    // actually be walked. The visible consequence is the same one the
+    // interpreted side already lives with — `currentTarget` inside such a
+    // handler is <html>, not the document.
+    //
+    // Resolved per call rather than captured: the globals are registered
+    // before anyone has asked the engine for its document element.
+    installElementEventTarget(b, []() -> dom::Element* {
+        dom::Document* doc = g_host->engine->document();
+        return doc ? doc->documentElement() : nullptr;
+    }, "document");
     return b.get();
 }
 
@@ -457,29 +428,40 @@ Value makeWindowValue() {
     // Real listeners, through the same dispatch the engine's JS window
     // listeners ride (Engine::addWindowEventListener) — a compiled app's
     // resize handler fires when a JS app's would, in shared registration
-    // order. The bronze callback gets a minimal {type} event object and reads
-    // sizes from window.innerWidth, exactly as the C++ listener docs tell
-    // native listeners to (the window event carries no dimensions anywhere).
-    b.def("addEventListener", 2, [engine](Value, std::span<const Value> a) {
+    // order. The event object is the same plain-data copy an element listener
+    // gets (host_dom_events.cpp), which is what carries a CustomEvent's string
+    // detail across from an interpreted `window.dispatchEvent`. A window event
+    // has no target and no dimensions anywhere in this DOM, so a resize
+    // handler still reads the new size from window.innerWidth — exactly what
+    // the C++ listener docs tell native listeners to do.
+    b.def("addEventListener", 3, [engine](Value thisValue,
+                                          std::span<const Value> a) {
+        ev::Persistent self(thisValue);
         Value typeV = argAt(a, 0);
         Value fn = argAt(a, 1);
-        if (ev::isObject(typeV) || !ev::isFunction(fn)) return ev::undefined();
+        if (ev::isObject(typeV) || ev::isUndefined(typeV)) {
+            return ev::throwTypeError("window.addEventListener: type must be a string");
+        }
+        if (!ev::isFunction(fn)) {
+            return ev::throwTypeError(
+                "window.addEventListener: listener must be a function");
+        }
         std::string type = ev::toUtf8(typeV);
         ev::Persistent fnP(fn);
+        std::string origin = "window " + type + " listener";
         dom::ListenerHandle handle = engine->addWindowEventListener(
-            type, [fnP](dom::Event& evt) {
-                ObjectBuilder eo;
-                Value t = ev::fromUtf8(evt.type());
-                eo.set("type", t);
-                Value arg = eo.get();
-                ev::CallResult r = ev::call(fnP.get(), ev::undefined(),
-                                            std::span<const Value>(&arg, 1));
-                if (r.thrown) reportBronzeError("window listener", r.value);
+            type, [fnP, self, origin](dom::Event& evt) {
+                callBronzeListener(fnP, self, evt, origin.c_str());
             });
-        if (handle) {
-            g_host->windowListeners.push_back({handle, std::move(type), std::move(fnP)});
+        if (!handle) {
+            return ev::throwError(
+                "window.addEventListener: the engine refused the registration");
         }
+        g_host->windowListeners.push_back({handle, std::move(type), std::move(fnP)});
         return ev::undefined();
+    });
+    b.def("dispatchEvent", 1, [](Value, std::span<const Value> a) {
+        return hostDispatchToWindow(argAt(a, 0));
     });
     b.def("removeEventListener", 2, [engine](Value, std::span<const Value> a) {
         Value typeV = argAt(a, 0);
@@ -579,6 +561,20 @@ void reportBronzeError(const char* origin, Value thrown) {
 // readings, and an origin of zero keeps a headless run's output free of the one
 // number that would differ every time it ran.
 double hostClockMs() { return g_host ? g_host->clockMs : 0.0; }
+
+engine::Engine* hostEngine() { return g_host ? g_host->engine : nullptr; }
+
+// Identity, not a lookup table built for it: the canvas registry is already
+// the list of every element this layer wrapped, and it is short (one canvas in
+// every path an app takes). Scanning it costs less than the map that would
+// have to be kept in step with it.
+Value hostValueForElement(dom::Element* el) {
+    if (!g_host || !el) return ev::undefined();
+    for (auto& cs : g_host->canvases) {
+        if (cs->el == el) return cs->jsObj.get();
+    }
+    return ev::undefined();
+}
 
 // ---------------------------------------------------------------------------
 // install

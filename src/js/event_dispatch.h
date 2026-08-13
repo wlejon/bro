@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 #if defined(QUICKJS_H)
 // quickjs.h already included
@@ -60,6 +61,18 @@ void dispatchDomEvent(JSContext* ctx, bro::dom::Element* target, bro::dom::Event
 void dispatchWindowEvent(JSContext* ctx, bro::dom::Document* doc,
                          bro::dom::Event& event,
                          JSValue originalJsEvent = JS_UNDEFINED);
+
+/// The STRING `detail` a JS event object carries, if it carries one.
+///
+/// A `dispatchEvent` binding calls this to decide which dom::Event subclass to
+/// synthesize: true means build a dom::CustomEvent and setDetail(out), so the
+/// payload reaches the native (C++ / AOT-compiled) listeners on the path.
+/// False — no detail, or a detail that is not a string — means a plain
+/// dom::Event, and native listeners see no payload at all. The JS listeners
+/// are unaffected either way: they receive the caller's own event object,
+/// detail included, whatever its type (see dom::CustomEvent for why a string
+/// is the only shape that crosses).
+bool jsEventStringDetail(JSContext* ctx, JSValue jsEvent, std::string& out);
 
 /// Install `__bro_dispatch_window_event` and `__bro_listener_seq` on `ctx`.
 /// Called by installWindowBindings after the window polyfill is evaluated —

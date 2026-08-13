@@ -37,6 +37,7 @@ add_library(bro_bronze_host STATIC
     gl_context.cpp
     dom_globals.cpp
     host_events.cpp
+    host_dom_events.cpp
     host_timers.cpp
     host_image.cpp
     host_xhr.cpp
@@ -103,6 +104,22 @@ if(BRO_BRONZE_BUILD_APP)
     set(BRO_BRONZE_APP_OBJ "${_bronze_app_obj}")
 endif()
 
+# --- One host executable, given one app object ---
+# host_main.cpp is the whole of every one of them: the app is the linked
+# object, so "another app" is another link of the same source with a different
+# object beside it. Factored into a function rather than repeated because the
+# stack option and the library are properties of the HOST, not of any app, and
+# a second copy of them is a second thing to forget.
+function(bro_bronze_add_host target objPath)
+    add_executable(${target} host_main.cpp "${objPath}")
+    target_link_libraries(${target} PRIVATE bro_bronze_host)
+    if(MSVC)
+        # Same stack headroom as bro.exe: the engine still hosts QuickJS
+        # realms (system panels, iframes) beside the compiled app.
+        target_link_options(${target} PRIVATE /STACK:8388608)
+    endif()
+endfunction()
+
 if(BRO_BRONZE_APP_OBJ)
     # An adopted object must already exist — a path typo is otherwise a link
     # error naming a symbol instead of a configure error naming the path. One
@@ -110,7 +127,7 @@ if(BRO_BRONZE_APP_OBJ)
     if(NOT BRO_BRONZE_BUILD_APP AND NOT EXISTS "${BRO_BRONZE_APP_OBJ}")
         message(FATAL_ERROR "BRO_BRONZE_APP_OBJ does not exist: ${BRO_BRONZE_APP_OBJ}")
     endif()
-    add_executable(bro-bronze-host host_main.cpp "${BRO_BRONZE_APP_OBJ}")
+    bro_bronze_add_host(bro-bronze-host "${BRO_BRONZE_APP_OBJ}")
     if(BRO_BRONZE_BUILD_APP)
         # An object produced by a custom command in the same directory is
         # already an ordering dependency, but naming the target is what makes a
@@ -119,13 +136,44 @@ if(BRO_BRONZE_APP_OBJ)
         set_source_files_properties("${BRO_BRONZE_APP_OBJ}" PROPERTIES
                                     GENERATED TRUE EXTERNAL_OBJECT TRUE)
     endif()
-    target_link_libraries(bro-bronze-host PRIVATE bro_bronze_host)
-    if(MSVC)
-        # Same stack headroom as bro.exe: the engine still hosts QuickJS
-        # realms (system panels, iframes) beside the compiled app.
-        target_link_options(bro-bronze-host PRIVATE /STACK:8388608)
-    endif()
 else()
     message(STATUS "bro-bronze-host: no BRO_BRONZE_APP_OBJ supplied; building the "
                    "bro_bronze_host library only")
 endif()
+
+# --- Additional host executables, one per app ---
+# BRO_BRONZE_APPS is a semicolon list of `name=objpath` pairs, each producing
+# `bro-bronze-host-<name>`. It exists BESIDE BRO_BRONZE_APP_OBJ rather than
+# replacing it: the pinned check names bro-bronze-host and must keep finding
+# exactly that binary, and one app is still the common case. The two are not
+# exclusive — a tree can have the scene-graph app as bro-bronze-host and an
+# events probe as bro-bronze-host-events at the same time, which is what makes
+# a second pinned check possible without reconfiguring between runs.
+#
+#     -DBRO_BRONZE_APPS="events=D:/build/events.obj;lit=D:/build/lit.obj"
+#
+# A pair with no `=`, an empty half, or a path that does not exist is a
+# configure error naming the pair: a mistyped one would otherwise become a
+# missing target, and "the app is broken" and "the app was never built" would
+# read the same at the test.
+set(BRO_BRONZE_APPS "" CACHE STRING
+    "Semicolon list of name=objpath pairs; each builds bro-bronze-host-<name>")
+
+foreach(_app IN LISTS BRO_BRONZE_APPS)
+    if(NOT _app MATCHES "^([^=]+)=(.+)$")
+        message(FATAL_ERROR
+            "BRO_BRONZE_APPS entry is not `name=objpath`: ${_app}")
+    endif()
+    set(_app_name "${CMAKE_MATCH_1}")
+    set(_app_obj "${CMAKE_MATCH_2}")
+    if(NOT EXISTS "${_app_obj}")
+        message(FATAL_ERROR
+            "BRO_BRONZE_APPS entry '${_app_name}': object does not exist: ${_app_obj}")
+    endif()
+    if(TARGET bro-bronze-host-${_app_name})
+        message(FATAL_ERROR
+            "BRO_BRONZE_APPS names '${_app_name}' twice")
+    endif()
+    bro_bronze_add_host(bro-bronze-host-${_app_name} "${_app_obj}")
+    message(STATUS "bro-bronze-host-${_app_name}: ${_app_obj}")
+endforeach()

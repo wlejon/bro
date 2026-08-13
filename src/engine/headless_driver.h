@@ -37,6 +37,13 @@ struct HeadlessHooks {
     /// script that follows then steps a running app rather than starting one.
     std::function<void(Engine&)> afterEngine;
 
+    /// True when this binary has an AOT-compiled app linked in — i.e. when
+    /// `afterEngine` above is going to run one. Forwarded to
+    /// EngineConfig::hostProvidesCompiledApp, which is what lets engine init
+    /// report an app dir and a binary that disagree about which of them owns
+    /// the app's logic. bro-headless leaves it false; bro-bronze-host sets it.
+    bool providesCompiledApp = false;
+
     /// Name used in usage text and diagnostics.
     std::string programName = "bro-headless";
 
