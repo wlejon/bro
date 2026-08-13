@@ -1,5 +1,8 @@
 add_executable(bro-server main.cpp)
-target_link_libraries(bro-server PRIVATE bro_engine brogameagent)
+target_link_libraries(bro-server PRIVATE bro_engine)
+if(BRO_WITH_GAMEAI)
+    target_link_libraries(bro-server PRIVATE brogameagent)
+endif()
 target_include_directories(bro-server PRIVATE ${bro_SOURCE_DIR}/src)
 
 # QuickJS's JS_CallInternal has a large stack frame; deep JS recursion needs

@@ -42,7 +42,10 @@ if(BRO_BUILD_EXECUTABLES)
     # main.cpp calls AttachConsole() at startup so stdout still shows when
     # launched from a terminal. Ignored on non-Windows platforms.
     add_executable(bro WIN32 main.cpp)
-    target_link_libraries(bro PRIVATE bro_engine brogameagent)
+    target_link_libraries(bro PRIVATE bro_engine)
+    if(BRO_WITH_GAMEAI)
+        target_link_libraries(bro PRIVATE brogameagent)
+    endif()
     target_include_directories(bro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
     # QuickJS's JS_CallInternal has a large stack frame; deep JS recursion

@@ -27,7 +27,6 @@ embed_js(observer_check.js  js_observer_check)
 add_library(bro_engine STATIC
     app_reload.cpp
     engine.cpp
-    navmesh_subsystem.cpp
     scene_audio_sync.cpp
     audio_subsystem.cpp
     engine_compositor.cpp
@@ -63,6 +62,10 @@ add_library(bro_engine STATIC
     inspector_highlight.cpp
     ${GENERATED_HEADERS}
 )
+# navmesh_subsystem.cpp needs brogameagent; compile only when BRO_WITH_GAMEAI.
+if(BRO_WITH_GAMEAI)
+    target_sources(bro_engine PRIVATE navmesh_subsystem.cpp)
+endif()
 # gizmo.cpp / gizmo_routing.cpp are 3D-only (scene::MeshNode + bromesh); compile
 # them only when BRO_WITH_3D. Their engine call sites are #if-guarded too.
 if(BRO_WITH_3D)
