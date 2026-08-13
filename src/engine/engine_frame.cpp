@@ -129,10 +129,18 @@ void Engine::run() {
 
             // Advance the bro.time scaled clock; timers run on it in every
             // display mode (pause freezes them, timescale stretches them).
+            double scaledTickDtMs = 0.0;
             if (lastWallTickMs_ > 0.0 && tickStart > lastWallTickMs_)
-                engineNowMs_ += (tickStart - lastWallTickMs_) * effectiveTimeScale();
+                scaledTickDtMs = (tickStart - lastWallTickMs_) * effectiveTimeScale();
+            engineNowMs_ += scaledTickDtMs;
             lastWallTickMs_ = tickStart;
             timers_->tick(engineNowMs_);
+            // Host per-frame callbacks (Engine::onFrame). The server loop has
+            // no rAF, so its equivalent seam is right after the tick's timer
+            // dispatch — same pause gate as rAF (a paused server tick runs its
+            // plumbing but no gameplay hooks), same scaled delta the clock
+            // advanced by.
+            if (!timePaused_) fireFrameCallbacks(scaledTickDtMs);
 
             auto pumpBrokit = [&](const char* fnName) {
                 JSContext* ctx = jsRuntime_->getContext();
@@ -378,7 +386,12 @@ void Engine::run() {
         if (lastWallTickMs_ > 0.0 && frameStart > lastWallTickMs_)
             wallFrameDtMs = frameStart - lastWallTickMs_;
         lastWallTickMs_ = frameStart;
-        engineNowMs_ += wallFrameDtMs * effectiveTimeScale();
+        // Captured once so the clock advance and the onFrame callbacks below
+        // see the SAME delta: an rAF callback can change the timescale
+        // mid-frame, and recomputing the product later would hand the host a
+        // dt the clock never advanced by.
+        const double scaledFrameDtMs = wallFrameDtMs * effectiveTimeScale();
+        engineNowMs_ += scaledFrameDtMs;
 
         // 0. Drain any in-flight layout result so event handlers don't race
         //    layout thread reads. JS handlers can mutate the DOM.
@@ -617,6 +630,10 @@ void Engine::run() {
         //     Timescale does NOT change the firing cadence, only the
         //     timestamp the callback receives.
         if (!timePaused_) timers_->fireAnimationFrames(engineNowMs_);
+        // Host per-frame callbacks (Engine::onFrame): the native rAF, on the
+        // same seam, the same pause gate, and the delta the scaled clock
+        // actually advanced by this frame.
+        if (!timePaused_) fireFrameCallbacks(scaledFrameDtMs);
 
         double tGlSave = util::currentTimeMs();
 

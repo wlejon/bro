@@ -445,6 +445,10 @@ void Engine::advanceTime(double ms) {
         // rAF skips entirely while paused (the web's _process analog);
         // timescale changes only the timestamp, not the firing cadence.
         if (!timePaused_) timers_->fireAnimationFrames(engineNowMs_);
+        // Host per-frame callbacks (Engine::onFrame): the native rAF, fired on
+        // the rAF seam with this step's scaled delta — nothing while paused,
+        // exactly like rAF above.
+        if (!timePaused_) fireFrameCallbacks(scaledStep);
         jsRuntime_->executePendingJobs();
         js::tickWorkers(jsRuntime_->getContext());
         // Run audio-inference models inline on this thread (headless has no

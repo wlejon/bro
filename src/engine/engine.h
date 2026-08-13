@@ -776,6 +776,58 @@ public:
     /// Access the timers.
     js::Timers* timers() const { return timers_.get(); }
 
+    /// Register a host per-frame callback: the native analog of
+    /// requestAnimationFrame, for embedded code the JS runtime doesn't drive.
+    /// Fired once per frame in every display mode — the windowed loop, the
+    /// server tick loop, and each headless advanceTime() step — at the same
+    /// point rAF fires, with rAF's pause semantics (skipped entirely while
+    /// bro.time is paused) and the same scaled-clock delta rAF timestamps
+    /// advanced by that frame (ms; 0 on the first frame). Callbacks run in
+    /// registration order and are never unregistered — register once at
+    /// install time, the framePumps_ convention.
+    void onFrame(std::function<void(double dtMs)> cb) {
+        frameCallbacks_.push_back(std::move(cb));
+    }
+
+    /// The optional per-frame services, as raw pointers that MAY BE NULL:
+    /// server and headless modes don't construct all of them, and the
+    /// BRO_WITH_* builds compile some out entirely (those accessors answer
+    /// null rather than vanishing, so host code compiles against one surface).
+    broaudio::Engine* audioEngine() { return audioEngine_.get(); }
+    const broaudio::Engine* audioEngine() const { return audioEngine_.get(); }
+    AudioInference* audioInference() { return audioInference_.get(); }
+    const AudioInference* audioInference() const { return audioInference_.get(); }
+    steam::SteamService* steamService() { return steamService_.get(); }
+    const steam::SteamService* steamService() const { return steamService_.get(); }
+    physics::PhysicsWorld* physicsWorld() {
+#if BRO_WITH_PHYSICS
+        return physicsWorld_.get();
+#else
+        return nullptr;
+#endif
+    }
+    const physics::PhysicsWorld* physicsWorld() const {
+#if BRO_WITH_PHYSICS
+        return physicsWorld_.get();
+#else
+        return nullptr;
+#endif
+    }
+    net::NetService* netService() {
+#if BRO_WITH_NET
+        return netService_.get();
+#else
+        return nullptr;
+#endif
+    }
+    const net::NetService* netService() const {
+#if BRO_WITH_NET
+        return netService_.get();
+#else
+        return nullptr;
+#endif
+    }
+
     /// True if any system panel content is visible.
     bool isSystemVisible() const;
 
@@ -1604,6 +1656,16 @@ private:
     // once during init and only iterated on the main thread thereafter, so it
     // needs no synchronisation.
     std::vector<std::function<void()>> framePumps_;
+    // Host per-frame callbacks (Engine::onFrame). Same storage-and-iteration
+    // shape as framePumps_ above and the same synchronisation story, but a
+    // separate list on purpose: pumps are engine-internal plumbing that runs
+    // even while bro.time is paused, and these are gameplay hooks with rAF's
+    // pause gate — one list would need a per-entry flag saying which rule it
+    // lives under. Each fire site passes the frame's scaled-clock delta.
+    std::vector<std::function<void(double)>> frameCallbacks_;
+    void fireFrameCallbacks(double dtMs) {
+        for (auto& cb : frameCallbacks_) cb(dtMs);
+    }
 #if BRO_WITH_PHYSICS
     std::unique_ptr<physics::PhysicsWorld> physicsWorld_;
 #endif
