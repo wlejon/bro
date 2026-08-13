@@ -25,3 +25,6 @@ clearInterval
 Image
 XMLHttpRequest
 fetch
+Request
+Headers
+Response

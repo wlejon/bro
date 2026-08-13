@@ -266,6 +266,31 @@ Value makeCanvasValue(dom::Element* el) {
         b.set("style", style);
     }
 
+    b.def("getBoundingClientRect", 0, [cs](Value, std::span<const Value>) {
+        g_host->engine->flushLayoutForRead(cs->el->document());
+        auto& box = cs->el->layoutBox();
+        double w = box.contentRect.width > 0 ? box.contentRect.width : canvasWidthOf(cs);
+        double h = box.contentRect.height > 0 ? box.contentRect.height : canvasHeightOf(cs);
+        double x = box.contentRect.x;
+        double y = box.contentRect.y;
+        ObjectBuilder r;
+        r.set("left", ev::fromDouble(x));
+        r.set("top", ev::fromDouble(y));
+        r.set("right", ev::fromDouble(x + w));
+        r.set("bottom", ev::fromDouble(y + h));
+        r.set("width", ev::fromDouble(w));
+        r.set("height", ev::fromDouble(h));
+        r.set("x", ev::fromDouble(x));
+        r.set("y", ev::fromDouble(y));
+        return r.get();
+    });
+    b.def("setPointerCapture", 1, [](Value, std::span<const Value>) {
+        return ev::undefined();
+    });
+    b.def("releasePointerCapture", 1, [](Value, std::span<const Value>) {
+        return ev::undefined();
+    });
+
     // getContext('webgl2'|'webgl') → the B2 context object, built over the
     // SAME Engine path the QuickJS factory takes (Engine::createWebGL2Context
     // — one construction path, no drift), and cached so a second call answers

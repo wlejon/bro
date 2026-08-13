@@ -104,7 +104,13 @@ Value fetchCall(Value, std::span<const Value> a) {
     if (ev::isUndefined(urlV) || ev::isNull(urlV)) {
         return ev::throwTypeError("fetch: URL is required");
     }
-    const std::string url = ev::toUtf8(urlV);
+    std::string url;
+    if (ev::isObject(urlV)) {
+        Value inner = ev::getProperty(urlV, "url");
+        url = (!ev::isUndefined(inner) && !ev::isNull(inner)) ? ev::toUtf8(inner) : ev::toUtf8(urlV);
+    } else {
+        url = ev::toUtf8(urlV);
+    }
 
     ev::Persistent promise{ev::createPromise()};
     ev::Persistent targetPromise(promise.get());
@@ -154,6 +160,48 @@ Value fetchCall(Value, std::span<const Value> a) {
 void installFetchGlobal() {
     Value fetchFn = ev::makeFunction(fetchCall, 1);
     ev::registerGlobal("fetch", fetchFn);
+
+    Value reqCtor = ev::makeFunction(
+        [](Value, std::span<const Value> a) {
+            Value urlV = argAt(a, 0);
+            std::string url;
+            if (ev::isObject(urlV)) {
+                Value inner = ev::getProperty(urlV, "url");
+                url = (!ev::isUndefined(inner) && !ev::isNull(inner)) ? ev::toUtf8(inner) : ev::toUtf8(urlV);
+            } else {
+                url = ev::toUtf8(urlV);
+            }
+            ObjectBuilder b;
+            b.set("url", ev::fromUtf8(url));
+            b.set("method", ev::fromUtf8("GET"));
+            return b.get();
+        },
+        1);
+    ev::registerGlobal("Request", reqCtor);
+
+    Value headersCtor = ev::makeFunction(
+        [](Value, std::span<const Value>) {
+            ObjectBuilder b;
+            b.def("get", 1, [](Value, std::span<const Value>) { return ev::null(); });
+            b.def("set", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
+            b.def("has", 1, [](Value, std::span<const Value>) { return ev::fromBool(false); });
+            b.def("append", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
+            return b.get();
+        },
+        0);
+    ev::registerGlobal("Headers", headersCtor);
+
+    Value respCtor = ev::makeFunction(
+        [](Value, std::span<const Value>) {
+            auto* resp = new HostResponse();
+            resp->status = 200;
+            resp->statusText = "OK";
+            resp->ok = true;
+            return makeResponseValue(resp);
+        },
+        0);
+    ev::registerGlobal("Response", respCtor);
 }
 
 }  // namespace bro::bronze_host
+

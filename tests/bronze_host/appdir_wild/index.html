@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"><title>bronze wild orbit probe</title>
+<style>
+  /* The compiled app appends its own <canvas>; this is the only thing that
+     decides where it lands. Absolute at the origin with an explicit size means
+     a driver can name a coordinate inside it without measuring anything, which
+     is what makes the click offsets in the expectation derivable by hand
+     instead of recorded from a run. */
+  html, body { margin: 0; padding: 0; }
+  canvas { position: absolute; left: 0; top: 0; width: 320px; height: 240px; }
+</style>
+</head>
+<!-- THE HYBRID APP DIR. Unlike src/bronze_host/app/appdir, this one is not an
+     empty page holding a compiled program's place: it carries interpreted UI
+     JS of its own, running in the Engine's QuickJS realm, beside a compiled
+     app running as machine code — the two halves the bro.json's
+     `"compiled": true` declares.
+
+     They share the Engine's DOM, on one thread, and they talk through it. This
+     script never sees a bronze value and the compiled app never sees a QuickJS
+     one; what crosses is a CustomEvent with a string `detail`, dispatched on a
+     document both of them already have. -->
+<body>
+<script>
+  // Registered BEFORE the compiled top level runs — the page's scripts are
+  // step 10 of engine init, and the compiled program is started afterwards by
+  // the host (HeadlessHooks::afterEngine). So by the time anything is
+  // dispatched, both sides' listeners are in place, in that order.
+  document.addEventListener('app:toPage', function (e) {
+      console.log('PAGE fromApp=' + e.detail);
+  });
+
+  // The interpreted half's contribution to the round trip: the driver calls
+  // this, the page dispatches into the DOM, the compiled listener answers on
+  // 'app:toPage', and the handler above prints what came back.
+  globalThis.pageSend = function (text) {
+      console.log('PAGE send=' + text);
+      document.dispatchEvent(new CustomEvent('page:toApp', {
+          detail: text, bubbles: true, cancelable: true
+      }));
+  };
+</script>
+</body>
+</html>
