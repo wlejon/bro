@@ -185,6 +185,15 @@ void installGlShaders(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::fromDouble(live(c)->getUniformBlockIndex(
             {idOf(argAt(a, 0), GlCell::Program)}, ev::toUtf8(name)));
     });
+    b.def("getActiveUniformBlockName", 2, [c](Value, std::span<const Value> a) {
+        std::string name = live(c)->getActiveUniformBlockName(
+            {idOf(argAt(a, 0), GlCell::Program)}, u32At(a, 1));
+        return ev::fromUtf8(name);
+    });
+    b.def("getActiveUniformBlockParameter", 3, [c](Value, std::span<const Value> a) {
+        return ev::fromDouble(live(c)->getActiveUniformBlockParameteri(
+            {idOf(argAt(a, 0), GlCell::Program)}, u32At(a, 1), u32At(a, 2)));
+    });
     b.def("uniformBlockBinding", 3, [c](Value, std::span<const Value> a) {
         live(c)->uniformBlockBinding({idOf(argAt(a, 0), GlCell::Program)}, u32At(a, 1),
                                      u32At(a, 2));

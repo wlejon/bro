@@ -291,6 +291,44 @@ Value makeCanvasValue(dom::Element* el) {
         return ev::undefined();
     });
 
+    b.def("setAttribute", 2, [cs](Value, std::span<const Value> a) {
+        Value nameV = argAt(a, 0);
+        Value valV = argAt(a, 1);
+        if (!ev::isObject(nameV) && !ev::isUndefined(nameV)) {
+            std::string name = ev::toUtf8(nameV);
+            std::string val = (!ev::isObject(valV) && !ev::isUndefined(valV)) ? ev::toUtf8(valV) : "";
+            cs->el->setAttribute(name, val);
+            if (name == "width") {
+                int w = std::atoi(val.c_str());
+                if (cs->glCtx) cs->glCtx->resize(w, cs->glCtx->canvasHeight());
+            } else if (name == "height") {
+                int h = std::atoi(val.c_str());
+                if (cs->glCtx) cs->glCtx->resize(cs->glCtx->canvasWidth(), h);
+            }
+        }
+        return ev::undefined();
+    });
+    b.def("getAttribute", 1, [cs](Value, std::span<const Value> a) {
+        Value nameV = argAt(a, 0);
+        if (ev::isObject(nameV) || ev::isUndefined(nameV)) return ev::null();
+        std::string name = ev::toUtf8(nameV);
+        const std::string& val = cs->el->getAttribute(name);
+        if (val.empty() && !cs->el->hasAttribute(name)) return ev::null();
+        return ev::fromUtf8(val);
+    });
+    b.def("hasAttribute", 1, [cs](Value, std::span<const Value> a) {
+        Value nameV = argAt(a, 0);
+        if (ev::isObject(nameV) || ev::isUndefined(nameV)) return ev::fromBool(false);
+        return ev::fromBool(cs->el->hasAttribute(ev::toUtf8(nameV)));
+    });
+    b.def("removeAttribute", 1, [cs](Value, std::span<const Value> a) {
+        Value nameV = argAt(a, 0);
+        if (!ev::isObject(nameV) && !ev::isUndefined(nameV)) {
+            cs->el->removeAttribute(ev::toUtf8(nameV));
+        }
+        return ev::undefined();
+    });
+
     // getContext('webgl2'|'webgl') → the B2 context object, built over the
     // SAME Engine path the QuickJS factory takes (Engine::createWebGL2Context
     // — one construction path, no drift), and cached so a second call answers

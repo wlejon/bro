@@ -286,9 +286,43 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
     b.def("copyTexSubImage2D", 8, [c](Value, std::span<const Value> a) {
-        live(c)->copyTexSubImage2D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3),
+        live(c)->copyTexSubImage2D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
                                    i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7));
         return ev::undefined();
+    });
+
+    // --- WebGLSampler ---
+    b.def("createSampler", 0, [c](Value, std::span<const Value>) {
+        return wrapSampler(live(c)->createSampler());
+    });
+    b.def("deleteSampler", 1, [c](Value, std::span<const Value> a) {
+        live(c)->deleteSampler(samplerOf(argAt(a, 0)));
+        return ev::undefined();
+    });
+    b.def("bindSampler", 2, [c](Value, std::span<const Value> a) {
+        live(c)->bindSampler(u32At(a, 0), samplerOf(argAt(a, 1)));
+        return ev::undefined();
+    });
+    b.def("samplerParameteri", 3, [c](Value, std::span<const Value> a) {
+        live(c)->samplerParameteri(samplerOf(argAt(a, 0)), u32At(a, 1), i32At(a, 2));
+        return ev::undefined();
+    });
+    b.def("samplerParameterf", 3, [c](Value, std::span<const Value> a) {
+        live(c)->samplerParameterf(samplerOf(argAt(a, 0)), u32At(a, 1),
+                                   static_cast<float>(numAt(a, 2)));
+        return ev::undefined();
+    });
+    b.def("getSamplerParameter", 2, [c](Value, std::span<const Value> a) {
+        GLenum pname = u32At(a, 1);
+        if (pname == 0x813A /* TEXTURE_MAX_ANISOTROPY_EXT */ ||
+            pname == 0x8501 /* TEXTURE_MIN_LOD */ ||
+            pname == 0x8502 /* TEXTURE_MAX_LOD */) {
+            return ev::fromDouble(live(c)->getSamplerParameterf(samplerOf(argAt(a, 0)), pname));
+        }
+        return ev::fromDouble(live(c)->getSamplerParameteri(samplerOf(argAt(a, 0)), pname));
+    });
+    b.def("isSampler", 1, [c](Value, std::span<const Value> a) {
+        return ev::fromBool(live(c)->isSampler(samplerOf(argAt(a, 0))) != GL_FALSE);
     });
 }
 

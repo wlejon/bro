@@ -50,18 +50,9 @@ to_win_path() {
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-TEST_APP="$(to_win_path "$SCRIPT_DIR/test_app")"
 
 # Find the headless binary. BRO_HEADLESS overrides auto-detection so the suite
 # can run against an arbitrary build dir or a packaged dist binary.
-#
-# Auto-detection picks the NEWEST candidate, not the first one that exists. The
-# old rule ("Debug if present, else Release") silently ran the suite against a
-# Debug binary left over from an earlier commit, so a green run proved nothing
-# about the code actually in the tree. Whichever binary is chosen, it is then
-# checked against the source tree and the run is REFUSED if any source file is
-# newer (see the staleness gate below) — a stale binary must never be able to
-# masquerade as a passing run.
 BRO=""
 BRO_SELECTED_BY=""
 if [[ -n "${BRO_HEADLESS:-}" ]]; then
@@ -94,6 +85,8 @@ else
     done
     BRO_SELECTED_BY="auto-detected (newest of ${#FOUND[@]} candidate(s))"
 fi
+
+TEST_APP="$(to_win_path "$SCRIPT_DIR/test_app")"
 
 # --- Staleness gate ---------------------------------------------------------
 # Refuse to run if any source file is newer than the selected binary. Fails

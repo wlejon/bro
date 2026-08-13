@@ -58,20 +58,24 @@ fi
 APP_DIR="$(to_win_path "$SCRIPT_DIR/appdir_fetch")"
 DRIVER="$(to_win_path "$SCRIPT_DIR/drive_fetch.js")"
 
-RAW="$("$BIN" "$APP_DIR" --headless "$DRIVER" 2>&1)"
+ERR_FILE="/tmp/bronze_fetch_err.$$"
+RAW="$("$BIN" "$APP_DIR" --headless "$DRIVER" 2>"$ERR_FILE")"
 STATUS=$?
+ERR_RAW="$(cat "$ERR_FILE" 2>/dev/null || true)"
+rm -f "$ERR_FILE"
 
-CLEAN="$(printf '%s\n' "$RAW" | tr -d '\r')"
+CLEAN_OUT="$(printf '%s\n' "$RAW" | tr -d '\r')"
+CLEAN_ERR="$(printf '%s\n' "$ERR_RAW" | tr -d '\r')"
 # Block 1: the compiled app, which prints bare lines on stdout.
-APP_LINES="$(printf '%s\n' "$CLEAN" | grep '^APP ' || true)"
+APP_LINES="$(printf '%s\n' "$CLEAN_OUT" | grep '^APP ' || true)"
 # Block 2: the driver, whose console.log lands in the engine log
-JS_LINES="$(printf '%s\n' "$CLEAN" \
+JS_LINES="$(printf '%s\n' "$CLEAN_ERR" \
     | sed -n 's/^.*\[console\] \(\(PAGE\|DRV\) .*\)$/\1/p' || true)"
 ACTUAL="$(printf '%s\n%s\n' "$APP_LINES" "$JS_LINES")"
 
 if [[ $STATUS -ne 0 ]]; then
     echo "  FAIL  bronze_host_fetch  (exit $STATUS)"
-    printf '%s\n' "$CLEAN" | tail -20 | sed 's/^/        /'
+    printf '%s\n' "$CLEAN_ERR" | tail -20 | sed 's/^/        /'
     exit 1
 fi
 

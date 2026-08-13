@@ -87,6 +87,22 @@ void installGlFramebuffers(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         return ev::undefined();
     });
 
+    b.def("invalidateFramebuffer", 2, [c](Value, std::span<const Value> a) {
+        live(c);
+        if (!glad_glInvalidateFramebuffer) {
+            return ev::throwTypeError("WebGL2RenderingContext.invalidateFramebuffer is not supported by the underlying GL driver");
+        }
+        GLenum target = u32At(a, 0);
+        std::vector<uint32_t> storage;
+        const uint32_t* p = nullptr;
+        size_t n = 0;
+        if (uint32Data(argAt(a, 1), storage, &p, &n) && n > 0) {
+            glad_glInvalidateFramebuffer(target, static_cast<GLsizei>(n),
+                                         reinterpret_cast<const GLenum*>(p));
+        }
+        return ev::undefined();
+    });
+
     // --- Renderbuffers ---
     b.def("createRenderbuffer", 0, [c](Value, std::span<const Value>) {
         return wrapGlObj(GlCell::Renderbuffer, live(c)->createRenderbuffer().id);

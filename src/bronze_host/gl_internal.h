@@ -59,9 +59,14 @@ struct GlCell {
         Renderbuffer,
         Vao,
         UniformLoc,
+        Sampler,
+        Sync,
+        Query,
+        TransformFeedback,
     };
     uint32_t kind = 0;
-    GLuint id = 0;          // GL name (every kind but UniformLoc)
+    GLuint id = 0;          // GL name (every kind but UniformLoc and Sync)
+    GLsync sync = nullptr;  // Sync only
     GLenum shaderType = 0;  // Shader only
     GLint location = -1;    // UniformLoc only
     GLuint program = 0;     // UniformLoc only
@@ -94,6 +99,24 @@ inline Value wrapUniformLocation(webgl::WebGLUniformLocation loc) {
     return ev::makeHandle(cell, glCellDtor);
 }
 
+inline Value wrapSampler(webgl::WebGLSampler s) {
+    if (!s.id) return ev::null();
+    return wrapGlObj(GlCell::Sampler, s.id);
+}
+
+inline Value wrapSync(webgl::WebGLSync s) {
+    if (!s.sync) return ev::null();
+    auto* cell = new GlCell{};
+    cell->kind = GlCell::Sync;
+    cell->sync = s.sync;
+    return ev::makeHandle(cell, glCellDtor);
+}
+
+inline Value wrapQuery(webgl::WebGLQuery q) {
+    if (!q.id) return ev::null();
+    return wrapGlObj(GlCell::Query, q.id);
+}
+
 // nullptr for null/undefined/foreign values and kind mismatches — the same
 // id-0 fail-soft the QuickJS unwrap helpers answer, so a wrong argument is a
 // GL no-op rather than a crash.
@@ -112,6 +135,19 @@ inline webgl::WebGLUniformLocation locOf(Value v) {
     auto* cell = cellOf(v, GlCell::UniformLoc);
     if (!cell) return {-1, 0};
     return {cell->location, cell->program};
+}
+
+inline webgl::WebGLSampler samplerOf(Value v) {
+    return {idOf(v, GlCell::Sampler)};
+}
+
+inline webgl::WebGLSync syncOf(Value v) {
+    auto* cell = cellOf(v, GlCell::Sync);
+    return cell ? webgl::WebGLSync{cell->sync} : webgl::WebGLSync{nullptr};
+}
+
+inline webgl::WebGLQuery queryOf(Value v) {
+    return {idOf(v, GlCell::Query)};
 }
 
 // ---------------------------------------------------------------------------

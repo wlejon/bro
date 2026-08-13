@@ -233,6 +233,91 @@ void installGlQueries(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
         o.set("desynchronized", ev::fromBool(false));
         return o.get();
     });
+
+    // --- WebGLSync ---
+    b.def("fenceSync", 2, [c](Value, std::span<const Value> a) {
+        return wrapSync(live(c)->fenceSync(u32At(a, 0), u32At(a, 1)));
+    });
+    b.def("deleteSync", 1, [c](Value, std::span<const Value> a) {
+        live(c)->deleteSync(syncOf(argAt(a, 0)));
+        return ev::undefined();
+    });
+    b.def("clientWaitSync", 3, [c](Value, std::span<const Value> a) {
+        GLenum res = live(c)->clientWaitSync(syncOf(argAt(a, 0)), u32At(a, 1), numAt(a, 2));
+        return ev::fromDouble(res);
+    });
+    b.def("waitSync", 3, [c](Value, std::span<const Value> a) {
+        live(c)->waitSync(syncOf(argAt(a, 0)), u32At(a, 1), numAt(a, 2));
+        return ev::undefined();
+    });
+    b.def("getSyncParameter", 2, [c](Value, std::span<const Value> a) {
+        GLint v = live(c)->getSyncParameter(syncOf(argAt(a, 0)), u32At(a, 1));
+        return ev::fromDouble(v);
+    });
+    b.def("isSync", 1, [c](Value, std::span<const Value> a) {
+        return ev::fromBool(live(c)->isSync(syncOf(argAt(a, 0))) != GL_FALSE);
+    });
+
+    // --- WebGLQuery ---
+    b.def("createQuery", 0, [c](Value, std::span<const Value>) {
+        return wrapQuery(live(c)->createQuery());
+    });
+    b.def("deleteQuery", 1, [c](Value, std::span<const Value> a) {
+        live(c)->deleteQuery(queryOf(argAt(a, 0)));
+        return ev::undefined();
+    });
+    b.def("beginQuery", 2, [c](Value, std::span<const Value> a) {
+        live(c)->beginQuery(u32At(a, 0), queryOf(argAt(a, 1)));
+        return ev::undefined();
+    });
+    b.def("endQuery", 1, [c](Value, std::span<const Value> a) {
+        live(c)->endQuery(u32At(a, 0));
+        return ev::undefined();
+    });
+    b.def("getQueryParameter", 2, [c](Value, std::span<const Value> a) {
+        GLenum pname = u32At(a, 1);
+        GLuint v = live(c)->getQueryParameteru(queryOf(argAt(a, 0)), pname);
+        if (pname == 0x8867 /* QUERY_RESULT_AVAILABLE */) {
+            return ev::fromBool(v != 0);
+        }
+        return ev::fromDouble(v);
+    });
+    b.def("isQuery", 1, [c](Value, std::span<const Value> a) {
+        return ev::fromBool(live(c)->isQuery(queryOf(argAt(a, 0))) != GL_FALSE);
+    });
+
+    // --- Internalformat ---
+    b.def("getInternalformatParameter", 3, [c](Value, std::span<const Value> a) {
+        live(c);
+        if (!glad_glGetInternalformativ) {
+            return ev::throwTypeError("WebGL2RenderingContext.getInternalformatParameter is not supported by the underlying GL driver");
+        }
+        GLenum target = u32At(a, 0);
+        GLenum internalformat = u32At(a, 1);
+        GLenum pname = u32At(a, 2);
+        if (pname == 0x80A9 /* SAMPLES */) {
+            GLint numSampleCounts = 0;
+            glad_glGetInternalformativ(target, internalformat, 0x91A2 /* NUM_SAMPLE_COUNTS */, 1, &numSampleCounts);
+            if (numSampleCounts <= 0) {
+                return makeNumberList(static_cast<const int32_t*>(nullptr), 0);
+            }
+            std::vector<int32_t> samples(numSampleCounts);
+            glad_glGetInternalformativ(target, internalformat, pname, numSampleCounts, samples.data());
+            return makeNumberList(samples.data(), samples.size());
+        }
+        GLint val = 0;
+        glad_glGetInternalformativ(target, internalformat, pname, 1, &val);
+        return ev::fromDouble(val);
+    });
+
+    // --- WebXR ---
+    // WebXR is not supported/unavailable in this desktop host, so makeXRCompatible
+    // resolves to false per instructions.
+    b.def("makeXRCompatible", 0, [](Value, std::span<const Value>) {
+        ev::Persistent p{ev::createPromise()};
+        ev::resolvePromise(p.get(), ev::fromBool(false));
+        return p.get();
+    });
 }
 
 }  // namespace bro::bronze_host
