@@ -206,6 +206,34 @@ void installGlTextures(ObjectBuilder& b, webgl::WebGL2RenderingContext* c) {
                               i32At(a, 4));
         return ev::undefined();
     });
+
+    // The 3D family. Not an optional extra: WebGLState's constructor builds
+    // its empty TEXTURE_2D_ARRAY / TEXTURE_3D textures with texImage3D, so a
+    // renderer cannot even be CONSTRUCTED without it — its absence was the
+    // first compiled WebGLRenderer's "undefined is not a function".
+    b.def("texImage3D", 10, [c](Value, std::span<const Value> a) {
+        const uint8_t* data = nullptr;
+        size_t len = 0, elemSize = 1;
+        bufferBytes(argAt(a, 9), &data, &len, &elemSize);  // null pixels stay null
+        live(c)->texImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3),
+                            i32At(a, 4), i32At(a, 5), i32At(a, 6), u32At(a, 7),
+                            u32At(a, 8), data);
+        return ev::undefined();
+    });
+    b.def("texSubImage3D", 11, [c](Value, std::span<const Value> a) {
+        const uint8_t* data = nullptr;
+        size_t len = 0, elemSize = 1;
+        bufferBytes(argAt(a, 10), &data, &len, &elemSize);
+        live(c)->texSubImage3D(u32At(a, 0), i32At(a, 1), i32At(a, 2), i32At(a, 3),
+                               i32At(a, 4), i32At(a, 5), i32At(a, 6), i32At(a, 7),
+                               u32At(a, 8), u32At(a, 9), data);
+        return ev::undefined();
+    });
+    b.def("texStorage3D", 6, [c](Value, std::span<const Value> a) {
+        live(c)->texStorage3D(u32At(a, 0), i32At(a, 1), u32At(a, 2), i32At(a, 3),
+                              i32At(a, 4), i32At(a, 5));
+        return ev::undefined();
+    });
     b.def("generateMipmap", 1, [c](Value, std::span<const Value> a) {
         live(c)->generateMipmap(u32At(a, 0));
         return ev::undefined();
