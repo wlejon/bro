@@ -24,6 +24,12 @@ if(BRO_WITH_VIDEO)
 endif()
 add_subdirectory(engine)
 
+# bronze AOT host layer — strictly opt-in; the default build never sees it
+# (see the option's comment in the top-level CMakeLists.txt).
+if(BRO_WITH_BRONZE)
+    add_subdirectory(bronze_host)
+endif()
+
 # The three stock executables. A host application that embeds bro (links
 # bro_engine and supplies its own main) turns these off with
 # -DBRO_BUILD_EXECUTABLES=OFF: it wants the libraries, not a second bro.exe

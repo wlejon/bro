@@ -714,6 +714,26 @@ public:
     /// register something.
     size_t sceneContextCount() const;
 
+    /// Give `canvas` a WebGL2 drawing context and return it — the C++ half of
+    /// canvas.getContext('webgl2'), for a host whose app JS was compiled away.
+    /// This IS the implementation of that factory branch (the JS binding calls
+    /// straight through here), the same single-construction-path arrangement
+    /// createSceneContext has: creation registers the context in the engine's
+    /// webglEntries_ so the frame loop composites it, and wires the element
+    /// back-pointer the draw traversal reads to place the layer. A context
+    /// built any other way is never composited, which looks exactly like "the
+    /// renderer is broken".
+    ///
+    /// Idempotent per element: a canvas that already has a WebGL context gets
+    /// that same context back, matching getContext()'s spec'd behaviour.
+    /// `canvas` may be null (an offscreen context sized to the viewport).
+    ///
+    /// Returns nullptr when there is no GL to give (--no-gpu, or a headless
+    /// boot that fell back to raster) — the same documented null the JS
+    /// factory answers on that path. The engine owns the returned context for
+    /// the life of the Engine; callers never delete it.
+    webgl::WebGL2RenderingContext* createWebGL2Context(dom::Element* canvas);
+
     /// Bring `doc`'s layout up to date NOW, because JS is about to read
     /// geometry out of it. CSSOM calls this flushing pending layout, and it is
     /// what makes `parent.appendChild(el); el.getBoundingClientRect()` answer

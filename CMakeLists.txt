@@ -169,6 +169,14 @@ else()
 endif()
 option(BRO_BUILD_EXECUTABLES "Build the bro/bro-headless/bro-server binaries" ${_d_exes})
 
+# Host layer for bronze-compiled (AOT) JavaScript apps: src/bronze_host wraps
+# the engine's WebGL2 context and a minimal DOM as bronze host globals, so a
+# compiled three.js app can render through bro. OFF by default and entirely
+# outside the default configure path — turning it ON resolves a bronze
+# checkout as a sibling working tree (`../bronze`; no submodule fallback) and
+# builds its runtime + embed libraries into this tree.
+option(BRO_WITH_BRONZE "bronze AOT host layer (needs ../bronze sibling checkout)" OFF)
+
 # Services (each pulls a vcpkg dependency).
 option(BRO_WITH_NET      "Game networking (GameNetworkingSockets / vcpkg)"   ${_d_svc})
 option(BRO_WITH_VIDEO    "Video + GIF encode/decode (libvpx/webm / vcpkg)"   ${_d_svc})

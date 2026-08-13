@@ -816,17 +816,11 @@ void Engine::initAppRealm() {
                     return js::CanvasBindings::wrapContext2D(ctx, ptr);
                 }
                 if (type == "webgl2" || type == "webgl") {
-                    // Size to element layout (fall back to viewport if no layout yet)
-                    int cw = viewportWidth_, ch = viewportHeight_;
-                    if (el) {
-                        auto& box = el->layoutBox();
-                        if (box.contentRect.width > 0) cw = static_cast<int>(box.contentRect.width);
-                        if (box.contentRect.height > 0) ch = static_cast<int>(box.contentRect.height);
-                    }
-                    auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch);
-                    auto* webglCtx = ctx2.get();
-                    if (el) el->setWebglContext(webglCtx);
-                    webglEntries_.push_back({std::move(ctx2), el});
+                    // The whole context build lives in createWebGL2Context so
+                    // a C++ host and this factory share one path — same
+                    // registration, same element back-pointer, no drift.
+                    webgl::WebGL2RenderingContext* webglCtx = createWebGL2Context(el);
+                    if (!webglCtx) return JS_NULL;
                     return js::WebGL2Bindings::wrapContext(ctx, webglCtx);
                 }
 #if BRO_WITH_3D
@@ -1027,6 +1021,46 @@ void Engine::initAppRealm() {
     // (first JS-driven flush / first main-loop tick) fires queued
     // loadedmetadata / timeupdate.
     mediaEventsArmed_ = true;
+}
+
+// ---------------------------------------------------------------------------
+// WebGL2 contexts
+// ---------------------------------------------------------------------------
+
+// The one and only place a WebGL2 drawing context is built. Both callers go
+// through here: canvas.getContext('webgl2'|'webgl') from JS (via the
+// getContext factory installed above) and a C++ host calling
+// Engine::createWebGL2Context directly. See the declaration in engine.h.
+webgl::WebGL2RenderingContext* Engine::createWebGL2Context(dom::Element* canvas) {
+    // No GL, no WebGL: on the raster path every glad entry point is null and
+    // the context constructor's first FBO call would jump to address 0. gl_
+    // is also exactly what gates installation of the GPU getContext factory,
+    // so the JS answer on this path is unchanged (null).
+    if (!gl_) return nullptr;
+
+    // getContext() must hand back the SAME context for the life of the
+    // canvas. The element back-pointer is authoritative: every entry in
+    // webglEntries_ set it at creation, and nothing clears it while the
+    // element lives — the engine owns the contexts until teardown.
+    if (canvas && canvas->webglContext()) {
+        return static_cast<webgl::WebGL2RenderingContext*>(canvas->webglContext());
+    }
+
+    // Size to element layout (fall back to viewport if no layout yet). A host
+    // that appends the canvas and calls straight through has no layout box
+    // yet; syncWebGLCanvasSizes() fits the drawing buffer to the element box
+    // on later frames for canvases that never set width/height themselves.
+    int cw = viewportWidth_, ch = viewportHeight_;
+    if (canvas) {
+        auto& box = canvas->layoutBox();
+        if (box.contentRect.width > 0) cw = static_cast<int>(box.contentRect.width);
+        if (box.contentRect.height > 0) ch = static_cast<int>(box.contentRect.height);
+    }
+    auto ctx2 = std::make_unique<webgl::WebGL2RenderingContext>(cw, ch);
+    auto* webglCtx = ctx2.get();
+    if (canvas) canvas->setWebglContext(webglCtx);
+    webglEntries_.push_back({std::move(ctx2), canvas});
+    return webglCtx;
 }
 
 // ---------------------------------------------------------------------------
