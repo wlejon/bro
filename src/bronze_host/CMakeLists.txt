@@ -41,6 +41,7 @@ add_library(bro_bronze_host STATIC
     host_timers.cpp
     host_image.cpp
     host_xhr.cpp
+    host_fetch.cpp
 )
 target_include_directories(bro_bronze_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 # broimage is named explicitly rather than inherited: host_image.cpp includes

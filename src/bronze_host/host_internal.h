@@ -52,6 +52,7 @@ struct ObjectBuilder;
 // bug that reads a Shape* as a Value.
 inline constexpr uint32_t kHostImageTag = 0x494D4147u;  // 'IMAG'
 inline constexpr uint32_t kHostXhrTag = 0x58485220u;    // 'XHR '
+inline constexpr uint32_t kHostFetchTag = 0x52455350u;  // 'RESP'
 
 // ---------------------------------------------------------------------------
 // The error funnel and the frame clock (dom_globals.cpp)
@@ -210,5 +211,11 @@ const HostImage* hostImageOf(Value v);
 // ---------------------------------------------------------------------------
 
 void installXhrGlobal();
+
+// ---------------------------------------------------------------------------
+// fetch (host_fetch.cpp)
+// ---------------------------------------------------------------------------
+
+void installFetchGlobal();
 
 }  // namespace bro::bronze_host

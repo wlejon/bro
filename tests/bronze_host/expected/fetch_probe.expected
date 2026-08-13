@@ -1,0 +1,16 @@
+APP ready=1
+APP text.ok=true
+APP text.status=200
+APP json.ok=true
+APP json.status=200
+APP bin.ok=true
+APP bin.status=200
+APP 404.ok=false
+APP 404.status=404
+APP text.body=hello fetch text
+APP json.name=bro_fetch
+APP json.version=1
+APP json.active=true
+APP bin.byteLength=13
+APP bad_json.caught=true
+DRV done=1

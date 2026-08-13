@@ -1,22 +1,24 @@
 # bronze_host integration checks
 
-Two checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip (the
+Three checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip (the
 binary is not built).
 
 ```bash
 tests/bronze_host/run_bronze_host_test.sh   # the scene graph, a fixed frame count
 tests/bronze_host/run_events_test.sh        # events, under a driver script
+tests/bronze_host/run_fetch_test.sh         # fetch, under a driver script
 ```
 
-They pin two different executables, which is why they are two scripts. The
+They pin three different executables, which is why they are three scripts. The
 first boots `bro-bronze-host` headless, advances a fixed number of frames, and
 compares the compiled app's output against
 `expected/main_scenegraph.expected` line for line. The second boots
 `bro-bronze-host-events` under bro-headless's driver — the only mode that can
 produce a click — and compares both worlds' output against
-`expected/events_probe.expected`. The multi-app CMake surface
-(`BRO_BRONZE_APPS`, `src/bronze_host/README.md`) exists so one configured tree
-can hold both.
+`expected/events_probe.expected`. The third boots `bro-bronze-host-fetch` under
+the headless driver and checks `expected/fetch_probe.expected`. The multi-app
+CMake surface (`BRO_BRONZE_APPS`, `src/bronze_host/README.md`) exists so one
+configured tree can hold all three.
 
 ## What it actually proves
 
@@ -116,14 +118,16 @@ CLI:
     --emit-obj --host-globals src/bronze_host/threejs_host.globals
 <bronze> build tests/bronze_host/apps/events_probe.js -o build/events.obj \
     --emit-obj --host-globals src/bronze_host/threejs_host.globals
+<bronze> build tests/bronze_host/apps/fetch_probe.js -o build/fetch.obj \
+    --emit-obj --host-globals src/bronze_host/threejs_host.globals
 
 cmake -B build -DBRO_WITH_BRONZE=ON \
     -DBRO_BRONZE_APP_OBJ=$PWD/build/scenegraph.obj \
-    -DBRO_BRONZE_APPS="events=$PWD/build/events.obj"
+    -DBRO_BRONZE_APPS="events=$PWD/build/events.obj;fetch=$PWD/build/fetch.obj"
 cmake --build build --config Release \
-    --target bro-bronze-host bro-bronze-host-events
+    --target bro-bronze-host bro-bronze-host-events bro-bronze-host-fetch
 ```
 
-Re-running either check after editing its `.js` means recompiling that object
+Re-running any check after editing its `.js` means recompiling that object
 and relinking its executable — the app is the linked object, so nothing else
 notices the edit.

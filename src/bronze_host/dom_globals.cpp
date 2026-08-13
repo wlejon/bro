@@ -634,11 +634,12 @@ void installThreejsHostGlobals(engine::Engine& engine) {
         ctor.set("name", name);
         ev::registerGlobal("WebGL2RenderingContext", ctor.get());
     }
-    // The three families that own their own files, each registering the names
+    // The four families that own their own files, each registering the names
     // the manifest lists for it, in the manifest's order.
     installTimerGlobals();
     installImageGlobal();
     installXhrGlobal();
+    installFetchGlobal();
 }
 
 }  // namespace bro::bronze_host
