@@ -783,6 +783,7 @@ void dispatchDocMouseRelease(
         dom::MouseEvent clickEvt("click");
         populate(clickEvt);
         clickEvt.setDetail(state.clickCount);
+        if (target) applyMouseOffset(clickEvt, target);
         js::dispatchDomEvent(ctx.jsCtx, target, clickEvt);
 
         // Checkbox / radio "legacy-canceled-activation behavior": the press
@@ -895,12 +896,14 @@ void dispatchDocMouseRelease(
             dom::MouseEvent dblEvt("dblclick", true, true);
             populate(dblEvt);
             dblEvt.setDetail(2);
+            if (target) applyMouseOffset(dblEvt, target);
             js::dispatchDomEvent(ctx.jsCtx, target, dblEvt);
         }
 
         if (button == 2) {
             dom::MouseEvent ctxEvt("contextmenu", true, true);
             populate(ctxEvt);
+            if (target) applyMouseOffset(ctxEvt, target);
             js::dispatchDomEvent(ctx.jsCtx, target, ctxEvt);
         }
     }
