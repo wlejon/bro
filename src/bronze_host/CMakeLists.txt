@@ -69,7 +69,7 @@ set(BRO_BRONZE_APP_OBJ "" CACHE FILEPATH
 #
 # The contract is exactly the one README.md documents by hand, so the two
 # cannot drift: `bronze build <app> -o <obj> --emit-obj --host-globals
-# threejs_host.globals`.
+# web_host.globals`.
 option(BRO_BRONZE_BUILD_APP
        "Compile BRO_BRONZE_APP_SOURCE with the bronze CLI at build time" OFF)
 set(BRO_BRONZE_APP_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/app/main_scenegraph.js"
@@ -94,9 +94,9 @@ if(BRO_BRONZE_BUILD_APP)
         COMMAND bronze build "${BRO_BRONZE_APP_SOURCE}"
                 -o "${_bronze_app_obj}"
                 --emit-obj
-                --host-globals "${CMAKE_CURRENT_SOURCE_DIR}/threejs_host.globals"
+                --host-globals "${CMAKE_CURRENT_SOURCE_DIR}/web_host.globals"
         DEPENDS bronze "${BRO_BRONZE_APP_SOURCE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/threejs_host.globals"
+                "${CMAKE_CURRENT_SOURCE_DIR}/web_host.globals"
         COMMENT "bronze: compiling ${BRO_BRONZE_APP_SOURCE} to an object"
         VERBATIM)
     # DEPENDS on the custom command's OUTPUT is what makes it run: an object

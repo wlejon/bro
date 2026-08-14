@@ -29,8 +29,8 @@ requires every seam in the layer to be right at once:
 - the compiled program's reads of `document`, `window`, `requestAnimationFrame`,
   `performance`, `setTimeout` and `WebGL2RenderingContext` reach the host
   registry — which they only do if the app was compiled against
-  `threejs_host.globals` and that file still matches what
-  `installThreejsHostGlobals` registers;
+  `web_host.globals` and that file still matches what
+  `installWebHostGlobals` registers;
 - `document.createElement('canvas')` builds a real `dom::Element`,
   `body.appendChild` puts it in the engine's document, and
   `canvas.getContext('webgl2')` reaches `Engine::createWebGL2Context`;
@@ -115,11 +115,11 @@ CLI:
 
 ```bash
 <bronze> build src/bronze_host/app/main_scenegraph.js -o build/scenegraph.obj \
-    --emit-obj --host-globals src/bronze_host/threejs_host.globals
+    --emit-obj --host-globals src/bronze_host/web_host.globals
 <bronze> build tests/bronze_host/apps/events_probe.js -o build/events.obj \
-    --emit-obj --host-globals src/bronze_host/threejs_host.globals
+    --emit-obj --host-globals src/bronze_host/web_host.globals
 <bronze> build tests/bronze_host/apps/fetch_probe.js -o build/fetch.obj \
-    --emit-obj --host-globals src/bronze_host/threejs_host.globals
+    --emit-obj --host-globals src/bronze_host/web_host.globals
 
 cmake -B build -DBRO_WITH_BRONZE=ON \
     -DBRO_BRONZE_APP_OBJ=$PWD/build/scenegraph.obj \

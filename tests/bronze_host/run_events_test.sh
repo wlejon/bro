@@ -30,7 +30,7 @@
 #
 # Building it (see src/bronze_host/README.md for the general sequence):
 #   bronze build tests/bronze_host/apps/events_probe.js -o <obj> --emit-obj \
-#       --host-globals src/bronze_host/threejs_host.globals
+#       --host-globals src/bronze_host/web_host.globals
 #   cmake -B build -DBRO_WITH_BRONZE=ON -DBRO_BRONZE_APPS="events=<obj>"
 #   cmake --build build --config Release --target bro-bronze-host-events
 

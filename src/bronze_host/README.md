@@ -28,7 +28,7 @@ Off by default; nothing here is in the default build.
 
 ## The frame seam, which is the thing to understand first
 
-`installThreejsHostGlobals` registers one `Engine::onFrame` callback. The engine
+`installWebHostGlobals` registers one `Engine::onFrame` callback. The engine
 fires it at the point its own `requestAnimationFrame` fires — `engine_frame.cpp`
 step 3a windowed, the equivalent point in each `advanceTime` step headless, and
 after the timer dispatch in the server tick — under rAF's pause gate, with the
@@ -168,7 +168,7 @@ root when bro's configure didn't set one).
 bronze build src/bronze_host/app/main_scenegraph.js \
     -o /tmp/app.obj \
     --emit-obj \
-    --host-globals src/bronze_host/threejs_host.globals
+    --host-globals src/bronze_host/web_host.globals
 
 # 2. link it into the host executable
 cmake -B build -DBRO_WITH_BRONZE=ON -DBRO_BRONZE_APP_OBJ=/tmp/app.obj
@@ -208,10 +208,10 @@ and "the app is broken" would read exactly like "the app was never built".
 for **bro's** toolchain, and linking belongs to whoever owns the final binary.
 `--host-globals` is what makes the app's reads of `document` and friends resolve
 to the host registry instead of throwing `ReferenceError` — the manifest and
-`installThreejsHostGlobals` are two halves of one list and must stay identical.
+`installWebHostGlobals` are two halves of one list and must stay identical.
 
 The app object must export `bronze_main` (bronze's entry convention);
-`installThreejsHostGlobals` runs before `bronze::embed::runMain()`, and the frame
+`installWebHostGlobals` runs before `bronze::embed::runMain()`, and the frame
 loop then drives everything the app scheduled.
 
 ## Driving a compiled app from a script (3c above)

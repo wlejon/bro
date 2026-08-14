@@ -10,22 +10,35 @@
 //   - status (number: 200 on success, 404/500 on fail)
 //   - statusText (string)
 //   - url (string)
+//   - headers (Headers)
 //   - text() -> Promise<string>
 //   - json() -> Promise<any> (parsed via bronze runtime / embed mechanisms)
 //   - arrayBuffer() -> Promise<ArrayBuffer>
 //
-// GC RULE. The Response payload is plain host memory (std::vector<uint8_t>,
-// std::string) owned by the handle cell. It holds no heap references, so the
-// handle finalizer frees C++ memory mid-collection without calling into the
-// embed API.
+// HEADERS. A real case-insensitive header map honoring get, set, has, append,
+// and initialized from an optional Headers instance, sequence of pairs, or object.
+//
+// REQUEST. Carries url, method, and headers initialized from input and init.
+// fetch accepts exactly a URL string or Request object.
+//
+// GC RULE. Payloads are plain host memory (std::vector<uint8_t>, std::string,
+// std::map) owned by handle cells. They hold no heap references, so the handle
+// finalizers free C++ memory mid-collection without calling into the embed API.
 
 #include "bronze_host/host_internal.h"
 #include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt
 
+#include "abi/bronze_abi.h"
+#include "runtime/array.h"
+#include "runtime/heap.h"
+#include "runtime/value.h"
+
 #include "js/asset_path.h"
 #include "util/log.h"
 
+#include <cctype>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -34,6 +47,209 @@
 namespace bro::bronze_host {
 
 namespace {
+
+std::string toLowerAscii(std::string_view s) {
+    std::string result;
+    result.reserve(s.size());
+    for (char c : s) {
+        result.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// Headers
+// ---------------------------------------------------------------------------
+
+struct HostHeaders {
+    uint32_t tag = kHostHeadersTag;
+    std::map<std::string, std::string> entries;
+};
+
+void hostHeadersDtor(void* p) { delete static_cast<HostHeaders*>(p); }
+
+HostHeaders* headersOf(Value v) {
+    auto* h = static_cast<HostHeaders*>(ev::handleData(v));
+    if (!h || h->tag != kHostHeadersTag) return nullptr;
+    return h;
+}
+
+Value headersGet(Value thisValue, std::span<const Value> a) {
+    HostHeaders* h = headersOf(thisValue);
+    if (!h) return ev::throwTypeError("Headers.get: receiver is not a Headers");
+    if (a.empty() || ev::isUndefined(a[0]) || ev::isNull(a[0])) return ev::null();
+    std::string key = toLowerAscii(ev::toUtf8(a[0]));
+    auto it = h->entries.find(key);
+    if (it == h->entries.end()) return ev::null();
+    return ev::fromUtf8(it->second);
+}
+
+Value headersSet(Value thisValue, std::span<const Value> a) {
+    HostHeaders* h = headersOf(thisValue);
+    if (!h) return ev::throwTypeError("Headers.set: receiver is not a Headers");
+    if (a.empty() || ev::isUndefined(a[0]) || ev::isNull(a[0])) {
+        return ev::throwTypeError("Headers.set: name is required");
+    }
+    std::string key = toLowerAscii(ev::toUtf8(a[0]));
+    Value valV = argAt(a, 1);
+    std::string val = (!ev::isUndefined(valV) && !ev::isNull(valV)) ? ev::toUtf8(valV) : "";
+    h->entries[key] = val;
+    return ev::undefined();
+}
+
+Value headersHas(Value thisValue, std::span<const Value> a) {
+    HostHeaders* h = headersOf(thisValue);
+    if (!h) return ev::throwTypeError("Headers.has: receiver is not a Headers");
+    if (a.empty() || ev::isUndefined(a[0]) || ev::isNull(a[0])) return ev::fromBool(false);
+    std::string key = toLowerAscii(ev::toUtf8(a[0]));
+    return ev::fromBool(h->entries.find(key) != h->entries.end());
+}
+
+Value headersAppend(Value thisValue, std::span<const Value> a) {
+    HostHeaders* h = headersOf(thisValue);
+    if (!h) return ev::throwTypeError("Headers.append: receiver is not a Headers");
+    if (a.empty() || ev::isUndefined(a[0]) || ev::isNull(a[0])) {
+        return ev::throwTypeError("Headers.append: name is required");
+    }
+    std::string key = toLowerAscii(ev::toUtf8(a[0]));
+    Value valV = argAt(a, 1);
+    std::string val = (!ev::isUndefined(valV) && !ev::isNull(valV)) ? ev::toUtf8(valV) : "";
+    auto it = h->entries.find(key);
+    if (it == h->entries.end()) {
+        h->entries[key] = val;
+    } else {
+        it->second += ", " + val;
+    }
+    return ev::undefined();
+}
+
+Value makeHeadersValue(HostHeaders* h) {
+    ObjectBuilder b(ev::makeHandle(h, hostHeadersDtor));
+    b.def("get", 1, headersGet);
+    b.def("set", 2, headersSet);
+    b.def("has", 1, headersHas);
+    b.def("append", 2, headersAppend);
+    return b.get();
+}
+
+void initHeadersFromValue(HostHeaders* self, Value initV) {
+    if (ev::isUndefined(initV) || ev::isNull(initV)) return;
+
+    if (auto* other = headersOf(initV)) {
+        self->entries = other->entries;
+        return;
+    }
+
+    if (!ev::isObject(initV)) return;
+
+    ev::Persistent initRoot(initV);
+    uint64_t keysBits = bronze_object_keys(initV.rawBits());
+    Value keysVal(keysBits);
+    if (keysVal.isObject()) {
+        auto* keysArr = keysVal.asObject<bronze::ArrayHeader>();
+        uint32_t len = keysArr->length;
+        bool isArray = initV.asObject<bronze::HeapObjectHeader>()->flags == bronze::HeapKind::Array;
+        if (isArray) {
+            for (uint32_t i = 0; i < len; ++i) {
+                Value pair = ev::getElement(initRoot.get(), i);
+                if (ev::isObject(pair)) {
+                    Value kVal = ev::getElement(pair, 0);
+                    Value vVal = ev::getElement(pair, 1);
+                    if (!ev::isUndefined(kVal) && !ev::isNull(kVal)) {
+                        std::string kStr = toLowerAscii(ev::toUtf8(kVal));
+                        std::string vStr = (!ev::isUndefined(vVal) && !ev::isNull(vVal)) ? ev::toUtf8(vVal) : "";
+                        auto it = self->entries.find(kStr);
+                        if (it == self->entries.end()) {
+                            self->entries[kStr] = vStr;
+                        } else {
+                            it->second += ", " + vStr;
+                        }
+                    }
+                }
+            }
+        } else {
+            for (uint32_t i = 0; i < len; ++i) {
+                Value kVal = keysVal.asObject<bronze::ArrayHeader>()->getElem(i);
+                std::string kStr = ev::toUtf8(kVal);
+                Value vVal = ev::getProperty(initRoot.get(), kStr);
+                std::string vStr = (!ev::isUndefined(vVal) && !ev::isNull(vVal)) ? ev::toUtf8(vVal) : "";
+                self->entries[toLowerAscii(kStr)] = vStr;
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Request
+// ---------------------------------------------------------------------------
+
+struct HostRequest {
+    uint32_t tag = kHostRequestTag;
+    std::string url;
+    std::string method = "GET";
+    HostHeaders headers;
+};
+
+void hostRequestDtor(void* p) { delete static_cast<HostRequest*>(p); }
+
+HostRequest* requestOf(Value v) {
+    auto* req = static_cast<HostRequest*>(ev::handleData(v));
+    if (!req || req->tag != kHostRequestTag) return nullptr;
+    return req;
+}
+
+Value makeRequestValue(HostRequest* req) {
+    ObjectBuilder b(ev::makeHandle(req, hostRequestDtor));
+    b.set("url", ev::fromUtf8(req->url));
+    b.set("method", ev::fromUtf8(req->method));
+
+    auto* h = new HostHeaders(req->headers);
+    b.set("headers", makeHeadersValue(h));
+
+    return b.get();
+}
+
+Value requestCtor(Value, std::span<const Value> a) {
+    Value inputV = argAt(a, 0);
+    if (ev::isUndefined(inputV) || ev::isNull(inputV)) {
+        return ev::throwTypeError("Request: input is required");
+    }
+
+    auto* req = new HostRequest();
+    if (auto* srcReq = requestOf(inputV)) {
+        req->url = srcReq->url;
+        req->method = srcReq->method;
+        req->headers = srcReq->headers;
+    } else if (!ev::isObject(inputV)) {
+        req->url = ev::toUtf8(inputV);
+        req->method = "GET";
+    } else {
+        delete req;
+        return ev::throwTypeError("Request: input must be a URL string or Request object");
+    }
+
+    if (a.size() > 1 && !ev::isUndefined(a[1]) && !ev::isNull(a[1])) {
+        Value initV = a[1];
+        if (ev::isObject(initV)) {
+            Value methodV = ev::getProperty(initV, "method");
+            if (!ev::isUndefined(methodV) && !ev::isNull(methodV)) {
+                std::string m = ev::toUtf8(methodV);
+                for (char& c : m) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                req->method = m;
+            }
+            Value headersV = ev::getProperty(initV, "headers");
+            if (!ev::isUndefined(headersV) && !ev::isNull(headersV)) {
+                initHeadersFromValue(&req->headers, headersV);
+            }
+        }
+    }
+
+    return makeRequestValue(req);
+}
+
+// ---------------------------------------------------------------------------
+// Response
+// ---------------------------------------------------------------------------
 
 struct HostResponse {
     uint32_t tag = kHostFetchTag;
@@ -92,6 +308,9 @@ Value makeResponseValue(HostResponse* resp) {
     b.set("statusText", ev::fromUtf8(resp->statusText));
     b.set("url", ev::fromUtf8(resp->url));
 
+    auto* h = new HostHeaders();
+    b.set("headers", makeHeadersValue(h));
+
     b.def("text", 0, responseText);
     b.def("json", 0, responseJson);
     b.def("arrayBuffer", 0, responseArrayBuffer);
@@ -99,17 +318,44 @@ Value makeResponseValue(HostResponse* resp) {
     return b.get();
 }
 
+// ---------------------------------------------------------------------------
+// fetch
+// ---------------------------------------------------------------------------
+
 Value fetchCall(Value, std::span<const Value> a) {
-    Value urlV = argAt(a, 0);
-    if (ev::isUndefined(urlV) || ev::isNull(urlV)) {
+    Value inputV = argAt(a, 0);
+    if (ev::isUndefined(inputV) || ev::isNull(inputV)) {
         return ev::throwTypeError("fetch: URL is required");
     }
+
     std::string url;
-    if (ev::isObject(urlV)) {
-        Value inner = ev::getProperty(urlV, "url");
-        url = (!ev::isUndefined(inner) && !ev::isNull(inner)) ? ev::toUtf8(inner) : ev::toUtf8(urlV);
+    std::string method = "GET";
+    HostHeaders headers;
+
+    if (auto* req = requestOf(inputV)) {
+        url = req->url;
+        method = req->method;
+        headers = req->headers;
+    } else if (!ev::isObject(inputV)) {
+        url = ev::toUtf8(inputV);
     } else {
-        url = ev::toUtf8(urlV);
+        return ev::throwTypeError("fetch: input must be a URL string or Request object");
+    }
+
+    if (a.size() > 1 && !ev::isUndefined(a[1]) && !ev::isNull(a[1])) {
+        Value initV = a[1];
+        if (ev::isObject(initV)) {
+            Value methodV = ev::getProperty(initV, "method");
+            if (!ev::isUndefined(methodV) && !ev::isNull(methodV)) {
+                std::string m = ev::toUtf8(methodV);
+                for (char& c : m) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+                method = m;
+            }
+            Value headersV = ev::getProperty(initV, "headers");
+            if (!ev::isUndefined(headersV) && !ev::isNull(headersV)) {
+                initHeadersFromValue(&headers, headersV);
+            }
+        }
     }
 
     ev::Persistent promise{ev::createPromise()};
@@ -161,37 +407,21 @@ void installFetchGlobal() {
     Value fetchFn = ev::makeFunction(fetchCall, 1);
     ev::registerGlobal("fetch", fetchFn);
 
-    Value reqCtor = ev::makeFunction(
-        [](Value, std::span<const Value> a) {
-            Value urlV = argAt(a, 0);
-            std::string url;
-            if (ev::isObject(urlV)) {
-                Value inner = ev::getProperty(urlV, "url");
-                url = (!ev::isUndefined(inner) && !ev::isNull(inner)) ? ev::toUtf8(inner) : ev::toUtf8(urlV);
-            } else {
-                url = ev::toUtf8(urlV);
-            }
-            ObjectBuilder b;
-            b.set("url", ev::fromUtf8(url));
-            b.set("method", ev::fromUtf8("GET"));
-            return b.get();
-        },
-        1);
-    ev::registerGlobal("Request", reqCtor);
+    Value reqFn = ev::makeFunction(requestCtor, 1);
+    ev::registerGlobal("Request", reqFn);
 
-    Value headersCtor = ev::makeFunction(
-        [](Value, std::span<const Value>) {
-            ObjectBuilder b;
-            b.def("get", 1, [](Value, std::span<const Value>) { return ev::null(); });
-            b.def("set", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
-            b.def("has", 1, [](Value, std::span<const Value>) { return ev::fromBool(false); });
-            b.def("append", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
-            return b.get();
+    Value headersFn = ev::makeFunction(
+        [](Value, std::span<const Value> a) {
+            auto* h = new HostHeaders();
+            if (!a.empty()) {
+                initHeadersFromValue(h, a[0]);
+            }
+            return makeHeadersValue(h);
         },
         0);
-    ev::registerGlobal("Headers", headersCtor);
+    ev::registerGlobal("Headers", headersFn);
 
-    Value respCtor = ev::makeFunction(
+    Value respFn = ev::makeFunction(
         [](Value, std::span<const Value>) {
             auto* resp = new HostResponse();
             resp->status = 200;
@@ -200,8 +430,7 @@ void installFetchGlobal() {
             return makeResponseValue(resp);
         },
         0);
-    ev::registerGlobal("Response", respCtor);
+    ev::registerGlobal("Response", respFn);
 }
 
 }  // namespace bro::bronze_host
-

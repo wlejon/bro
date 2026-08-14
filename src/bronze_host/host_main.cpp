@@ -132,7 +132,7 @@ int main(int argc, char* argv[]) {
         // declared it and got opened by a binary with nothing linked in.
         hooks.providesCompiledApp = true;
         hooks.afterEngine = [](bro::engine::Engine& engine) {
-            bro::bronze_host::installThreejsHostGlobals(engine);
+            bro::bronze_host::installWebHostGlobals(engine);
             bronze::embed::runMain();
         };
         std::vector<char*> forwarded;
@@ -167,7 +167,7 @@ int main(int argc, char* argv[]) {
     bro::engine::Engine engine(config);
 
     // Globals BEFORE the program: its top level reads them as it runs.
-    bro::bronze_host::installThreejsHostGlobals(engine);
+    bro::bronze_host::installWebHostGlobals(engine);
 
     // runMain, not runProgram: the engine already owns stdio (its console
     // logging is text), so bronze's binary-stdout setup is skipped — a

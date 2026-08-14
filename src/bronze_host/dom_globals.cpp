@@ -284,11 +284,28 @@ Value makeCanvasValue(dom::Element* el) {
         r.set("y", ev::fromDouble(y));
         return r.get();
     });
-    b.def("setPointerCapture", 1, [](Value, std::span<const Value>) {
+    // Pointer capture on the canvas element routes directly to the engine's
+    // pointer capture tracking (Engine::setPointerCapture / releasePointerCapture / hasPointerCapture),
+    // matching js_element_setPointerCapture in src/js/element_bindings.cpp.
+    b.def("setPointerCapture", 1, [cs](Value, std::span<const Value> a) {
+        int pointerId = a.empty() || ev::isUndefined(a[0])
+            ? bro::engine::Engine::kMousePointerId
+            : i32At(a, 0);
+        g_host->engine->setPointerCapture(cs->el, pointerId);
         return ev::undefined();
     });
-    b.def("releasePointerCapture", 1, [](Value, std::span<const Value>) {
+    b.def("releasePointerCapture", 1, [cs](Value, std::span<const Value> a) {
+        int pointerId = a.empty() || ev::isUndefined(a[0])
+            ? bro::engine::Engine::kMousePointerId
+            : i32At(a, 0);
+        g_host->engine->releasePointerCapture(cs->el, pointerId);
         return ev::undefined();
+    });
+    b.def("hasPointerCapture", 1, [cs](Value, std::span<const Value> a) {
+        int pointerId = a.empty() || ev::isUndefined(a[0])
+            ? bro::engine::Engine::kMousePointerId
+            : i32At(a, 0);
+        return ev::fromBool(g_host->engine->hasPointerCapture(cs->el, pointerId));
     });
 
     b.def("setAttribute", 2, [cs](Value, std::span<const Value> a) {
@@ -643,9 +660,9 @@ Value hostValueForElement(dom::Element* el) {
 // install
 // ---------------------------------------------------------------------------
 
-void installThreejsHostGlobals(engine::Engine& engine) {
+void installWebHostGlobals(engine::Engine& engine) {
     if (g_host) {
-        LOG_WARN("bronze_host: installThreejsHostGlobals called twice; ignoring");
+        LOG_WARN("bronze_host: installWebHostGlobals called twice; ignoring");
         return;
     }
     // Never freed — see the lifetime note at the top of this file.
@@ -658,11 +675,11 @@ void installThreejsHostGlobals(engine::Engine& engine) {
     // the ordering, drain included, and says why each step sits where it does.
     engine.onFrame([](double dtMs) { hostFrame(dtMs); });
 
-    // Registration order is the manifest's order (threejs_host.globals):
+    // Registration order is the manifest's order (web_host.globals):
     // document, window, self, requestAnimationFrame, cancelAnimationFrame,
     // performance, WebGL2RenderingContext, setTimeout, clearTimeout,
-    // setInterval, clearInterval, Image, XMLHttpRequest. registerGlobal roots
-    // each value for the life of the process.
+    // setInterval, clearInterval, Image, XMLHttpRequest, fetch, Request,
+    // Headers, Response. registerGlobal roots each value for the life of the process.
     {
         Value doc = makeDocumentValue();
         ev::registerGlobal("document", doc);

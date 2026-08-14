@@ -50,9 +50,11 @@ struct ObjectBuilder;
 // hostImageOf reads a kind of 1..8 and answers nullptr. The alternative — each
 // unwrap trusting that it is only ever passed its own cells — is the shape of
 // bug that reads a Shape* as a Value.
-inline constexpr uint32_t kHostImageTag = 0x494D4147u;  // 'IMAG'
-inline constexpr uint32_t kHostXhrTag = 0x58485220u;    // 'XHR '
-inline constexpr uint32_t kHostFetchTag = 0x52455350u;  // 'RESP'
+inline constexpr uint32_t kHostImageTag = 0x494D4147u;    // 'IMAG'
+inline constexpr uint32_t kHostXhrTag = 0x58485220u;      // 'XHR '
+inline constexpr uint32_t kHostFetchTag = 0x52455350u;    // 'RESP'
+inline constexpr uint32_t kHostHeadersTag = 0x48454144u;  // 'HEAD'
+inline constexpr uint32_t kHostRequestTag = 0x52455155u;  // 'REQU'
 
 // ---------------------------------------------------------------------------
 // The error funnel and the frame clock (dom_globals.cpp)
@@ -75,7 +77,7 @@ engine::Engine* hostEngine();
 // program already holds.
 Value hostValueForElement(dom::Element* el);
 
-// Milliseconds of SCALED engine time since installThreejsHostGlobals: the
+// Milliseconds of SCALED engine time since installWebHostGlobals: the
 // accumulated Engine::onFrame deltas. This is the clock rAF timestamps and
 // performance.now() answer from, and the one timer deadlines are measured
 // against — so it is frozen while bro.time is paused and virtual under
