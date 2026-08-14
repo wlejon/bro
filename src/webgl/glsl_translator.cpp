@@ -6,11 +6,40 @@
 
 namespace bro::webgl {
 
-std::string translateGLSL(const std::string& source, GLenum /*shaderType*/) {
+std::string translateGLSL(const std::string& source, GLenum shaderType) {
     std::istringstream input(source);
     std::ostringstream output;
     std::string line;
     bool versionWritten = false;
+
+    // A source with no #version line is GLSL ES 1.00 — that is WebGL's
+    // definition of version-less source, and authors write for it with the
+    // 1.00 words (attribute/varying/gl_FragColor/texture2D), often behind
+    // their own `#ifdef GL_ES` blocks (pixi's templates map their ES-3-style
+    // text DOWN to 1.00 exactly that way, so the block must fire here as it
+    // does on a real WebGL context — hence GL_ES is defined). The counter-
+    // defines below then lift the 1.00 words back UP to 3.30 core. When a
+    // source's own block and these run into each other (`#define in varying`
+    // meeting `#define varying in`), the preprocessor's recursion rule stops
+    // the ping-pong at the already-expanding name, which lands every
+    // identifier on its 3.30 form — that mutual-definition behavior is
+    // specified (GLSL/C preprocessor macro replacement), not luck.
+    if (source.find("#version") == std::string::npos) {
+        output << "#version 330 core\n"
+                  "#define GL_ES 1\n"
+                  "#define texture2D texture\n"
+                  "#define textureCube texture\n";
+        if (shaderType == GL_FRAGMENT_SHADER) {
+            // 1.00's built-in output, as a declared 3.30 out variable.
+            output << "#define varying in\n"
+                      "out vec4 bro_FragColor;\n"
+                      "#define gl_FragColor bro_FragColor\n";
+        } else {
+            output << "#define attribute in\n"
+                      "#define varying out\n";
+        }
+        versionWritten = true;
+    }
 
     while (std::getline(input, line)) {
         // Replace #version 300 es with #version 330 core

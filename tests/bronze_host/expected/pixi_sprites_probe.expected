@@ -1,0 +1,12 @@
+APP canvas.width=320
+APP canvas.height=240
+APP pixi.initialized=true
+APP pixi.stageChildren=true
+APP pixi.containerChildren=true
+APP ready=1
+APP pixel.spriteLit=true
+APP pixel.rendered=true
+APP done=1
+DRV screenshot_before=1
+DRV screenshot_after=1
+DRV done=1

@@ -1544,7 +1544,12 @@ std::vector<std::string> WebGL2RenderingContext::getSupportedExtensions() {
         "ANGLE_instanced_arrays",
         "OES_texture_half_float",
         "OES_texture_half_float_linear",
-        "WEBGL_lose_context",
+        // WEBGL_lose_context is deliberately NOT here: its object is two
+        // METHODS (loseContext/restoreContext), and this engine has no
+        // context-loss machinery to put behind them (isContextLost is
+        // hard false). Advertising it hands callers a method-less object —
+        // pixi's isWebGLSupported calls loseContext() on it, catches the
+        // TypeError, and concludes WebGL itself is unsupported.
         // bro extension, not a WebGL one: desktop GL 3.0 buffer mapping, which
         // WebGL cannot offer because it must not hand a page a raw pointer into
         // driver memory. Advertised so apps can feature-detect rather than

@@ -265,6 +265,9 @@ Value makeCanvasValue(dom::Element* el) {
         Value style = makeStyleValue(cs);
         b.set("style", style);
     }
+    b.set("tagName", ev::fromUtf8("CANVAS"));
+    b.set("nodeName", ev::fromUtf8("CANVAS"));
+    b.set("nodeType", ev::fromDouble(1));
 
     b.def("getBoundingClientRect", 0, [cs](Value, std::span<const Value>) {
         g_host->engine->flushLayoutForRead(cs->el->document());
@@ -392,6 +395,34 @@ CanvasState* canvasFor(Value v) {
 // document
 // ---------------------------------------------------------------------------
 
+// pixi v8 boots its DOMPipe unconditionally: the pipe's constructor makes one
+// overlay <div> for DOMContainer content and styles it, and with no
+// DOMContainer in the scene the only other things that ever run against it
+// are postrender's `remove()` — legal on a detached element, and this one is
+// never attached — and the CanvasObserver ticker's style.transform write. So
+// a div here is that overlay and nothing more: a style property bag, a
+// truthful no-op remove, a contains() answering for its (empty) children,
+// and a named refusal on appendChild, where real DOMContainer content would
+// start needing a DOM this layer does not model.
+Value makeOverlayDivValue() {
+    ObjectBuilder b;
+    b.set("tagName", ev::fromUtf8("DIV"));
+    b.set("nodeName", ev::fromUtf8("DIV"));
+    b.set("nodeType", ev::fromDouble(1));
+    {
+        ObjectBuilder style;
+        b.set("style", style.get());
+    }
+    b.def("remove", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+    b.def("contains", 1, [](Value, std::span<const Value>) { return ev::fromBool(false); });
+    b.def("appendChild", 1, [](Value, std::span<const Value>) {
+        return ev::throwTypeError(
+            "bronze host div.appendChild: DOMContainer content is not modelled "
+            "(the overlay div exists because pixi's DOMPipe constructs one)");
+    });
+    return b.get();
+}
+
 Value createElementImpl(std::span<const Value> a, size_t tagIndex) {
     Value tagV = argAt(a, tagIndex);
     if (ev::isObject(tagV)) return ev::throwTypeError("createElement: tag must be a string");
@@ -404,13 +435,15 @@ Value createElementImpl(std::span<const Value> a, size_t tagIndex) {
     // in this layer, and the only thing three.js does with it is read its size
     // and hand it to texImage2D.
     if (tag == "img") return makeImageValue();
+    if (tag == "div") return makeOverlayDivValue();
     if (tag != "canvas") {
-        // The named refusal: this layer models exactly what three.js's
-        // renderer touches, and a silent non-canvas stub would fail far from
-        // here (bro CLAUDE.md: hard errors over silent fallbacks — bronze
-        // agrees).
-        return ev::throwTypeError("bronze host document.createElement: only <canvas> "
-                                  "and <img> are modelled, got <" + tag + ">");
+        // The named refusal: this layer models exactly what the renderers it
+        // hosts touch (canvas, img, and the overlay div pixi's DOMPipe
+        // constructs), and a silent stub for anything else would fail far
+        // from here (bro CLAUDE.md: hard errors over silent fallbacks —
+        // bronze agrees).
+        return ev::throwTypeError("bronze host document.createElement: only <canvas>, "
+                                  "<img> and <div> are modelled, got <" + tag + ">");
     }
     dom::Document* doc = g_host->engine->document();
     if (!doc) return ev::throwError("bronze host: engine has no document");
@@ -477,6 +510,36 @@ Value makeDocumentValue() {
         return doc ? doc->documentElement() : nullptr;
     }, "document");
     return b.get();
+}
+
+// The compiled app's navigator answers with the identity the interpreted side
+// already declares (src/js/window_bindings.cpp): one engine, one name — an app
+// must not learn a different browser depending on which compiler ran it, and
+// "Bro/1.0" routes every UA sniff (pixi's isSafari, isMobile) to the desktop
+// path this layer actually implements. maxTouchPoints=0 is the other half of
+// that routing: it keeps pixi's EventSystem on the mouse events
+// host_dom_events.cpp wires.
+Value makeNavigatorValue() {
+    ObjectBuilder b;
+    b.set("userAgent", ev::fromUtf8("Bro/1.0"));
+    b.set("platform", ev::fromUtf8("Win32"));
+    b.set("language", ev::fromUtf8("en-US"));
+    b.set("maxTouchPoints", ev::fromDouble(0));
+    return b.get();
+}
+
+// A DOM constructor this host never constructs, shaped as a callable because
+// `instanceof` demands one of its right operand: a bare object there is a
+// TypeError, a host function answers false (the documented limit that makes
+// `img instanceof Image` false — README.md). pixi only ever brand-tests
+// against these (`gl instanceof WebGLRenderingContext` is how it reads the
+// context's GL version: false is the truthful answer here, this host's
+// context is WebGL2). Calling one is the named error, not a broken instance.
+Value makeBrandConstructor(const char* name) {
+    std::string msg = std::string("bronze host ") + name +
+                      ": an instanceof brand only, not constructible";
+    return ev::makeFunction(
+        [msg](Value, std::span<const Value>) { return ev::throwTypeError(msg); }, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -676,10 +739,13 @@ void installWebHostGlobals(engine::Engine& engine) {
     engine.onFrame([](double dtMs) { hostFrame(dtMs); });
 
     // Registration order is the manifest's order (web_host.globals):
-    // document, window, self, requestAnimationFrame, cancelAnimationFrame,
+    // document, window, self, addEventListener, removeEventListener,
+    // dispatchEvent, requestAnimationFrame, cancelAnimationFrame,
     // performance, WebGL2RenderingContext, setTimeout, clearTimeout,
     // setInterval, clearInterval, Image, XMLHttpRequest, fetch, Request,
-    // Headers, Response. registerGlobal roots each value for the life of the process.
+    // Headers, Response, navigator, HTMLCanvasElement, HTMLImageElement,
+    // WebGLRenderingContext, Intl. registerGlobal roots each value for the
+    // life of the process.
     {
         Value doc = makeDocumentValue();
         ev::registerGlobal("document", doc);
@@ -692,6 +758,15 @@ void installWebHostGlobals(engine::Engine& engine) {
         win.set(ev::setProperty(win.get(), "window", win.get()));
         ev::registerGlobal("window", win.get());
         ev::registerGlobal("self", win.get());
+        // On the web the global object IS the window, so its listener
+        // functions are also global bindings — `globalThis.addEventListener`
+        // is how pixi's EventSystem registers pointerup/mouseup. The same
+        // three values window carries, registered under their own names so
+        // identity holds across both spellings.
+        ev::registerGlobal("addEventListener", ev::getProperty(win.get(), "addEventListener"));
+        ev::registerGlobal("removeEventListener",
+                           ev::getProperty(win.get(), "removeEventListener"));
+        ev::registerGlobal("dispatchEvent", ev::getProperty(win.get(), "dispatchEvent"));
     }
     {
         Value raf = makeRequestAnimationFrame();
@@ -720,6 +795,23 @@ void installWebHostGlobals(engine::Engine& engine) {
     installImageGlobal();
     installXhrGlobal();
     installFetchGlobal();
+
+    {
+        Value nav = makeNavigatorValue();
+        ev::registerGlobal("navigator", nav);
+    }
+    ev::registerGlobal("HTMLCanvasElement", makeBrandConstructor("HTMLCanvasElement"));
+    ev::registerGlobal("HTMLImageElement", makeBrandConstructor("HTMLImageElement"));
+    ev::registerGlobal("WebGLRenderingContext", makeBrandConstructor("WebGLRenderingContext"));
+    {
+        // Intl with no members is a real environment shape — pixi's own
+        // comment names Firefox for the missing Segmenter, and its boot
+        // EVALUATES the binding (`Intl == null ? ...`), so the name must
+        // resolve; the fallback it then takes is the one it documents.
+        // The day this host grows a real Intl member, it goes here.
+        ObjectBuilder intl;
+        ev::registerGlobal("Intl", intl.get());
+    }
 }
 
 }  // namespace bro::bronze_host

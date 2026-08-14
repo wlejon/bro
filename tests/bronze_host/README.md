@@ -1,6 +1,6 @@
 # bronze_host integration checks
 
-Three checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip (the
+Six checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip (the
 binary is not built).
 
 ```bash
@@ -9,6 +9,7 @@ tests/bronze_host/run_events_test.sh        # events, under a driver script
 tests/bronze_host/run_fetch_test.sh         # fetch, under a driver script
 tests/bronze_host/run_wild_test.sh          # wild three.js scene + OrbitControls
 tests/bronze_host/run_instanced_test.sh     # instanced mesh under load (2,500 instances)
+tests/bronze_host/run_pixi_test.sh          # pixi.js v8: WebGL sprites + pixel readback
 ```
 
 They pin different executables, which is why they are separate scripts. The
@@ -22,8 +23,14 @@ the headless driver and checks `expected/fetch_probe.expected`. The fourth boots
 `bro-bronze-host-wild` under the headless driver for a full Three.js scene with
 textures and OrbitControls. The fifth boots `bro-bronze-host-instanced` under
 the headless driver to test high-density `InstancedMesh` matrix and color updates
-under load. The multi-app CMake surface (`BRO_BRONZE_APPS`, `src/bronze_host/README.md`)
-exists so one configured tree can hold all of them.
+under load. The sixth boots `bro-bronze-host-pixi`: the unmodified pixi.js
+v8.19.0 bundle (vendored in bronze, `tests/oracle/pixi/`) initializes a WebGL
+`Application` on a host canvas, renders a tinted sprite through pixi's batcher
+— shader compilation included, via the app's CSP/AOT uniform-sync polyfills
+(the `@pixi/unsafe-eval` approach, inlined) — and proves the pixels with
+`gl.readPixels`. The multi-app CMake surface (`BRO_BRONZE_APPS`,
+`src/bronze_host/README.md`) exists so one configured tree can hold all of
+them.
 
 ## What it actually proves
 
