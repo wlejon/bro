@@ -15,34 +15,60 @@
 #include <brotensor/runtime.h>
 #include <brotensor/tensor.h>
 
+#include <cstdlib>
 #include <cstring>
 #include <string>
 
 namespace bro::js {
 
+// The backend name alone ('cuda'/'metal'/'cpu'), with no device index. This is
+// what `backend` and `devices` report: brotensor now carries a per-device index
+// for multi-GPU, but the probe surface stays backend-shaped, and the index is
+// addressed explicitly through the 'cuda:N' argument form below.
 static const char* deviceName(brotensor::Device d) {
-    switch (d) {
-        case brotensor::Device::CUDA:  return "cuda";
-        case brotensor::Device::Metal: return "metal";
-        case brotensor::Device::CPU:   return "cpu";
+    switch (d.type) {
+        case brotensor::DeviceType::CUDA:  return "cuda";
+        case brotensor::DeviceType::Metal: return "metal";
+        case brotensor::DeviceType::CPU:   return "cpu";
     }
     return "cpu";
 }
 
-// Parses argv[argIdx] as one of 'cuda'/'metal'/'cpu'; falls back to
-// default_device() when the arg is missing or not a string.
+// Parses argv[argIdx] as 'cuda'/'metal'/'cpu', optionally with a device index
+// ('cuda:1'); falls back to default_device() when the arg is missing, not a
+// string, or names no known backend.
 static brotensor::Device parseDeviceArg(JSContext* ctx, int argc, JSValueConst* argv,
                                         int argIdx) {
     if (argc <= argIdx || !JS_IsString(argv[argIdx])) return brotensor::default_device();
     const char* s = JS_ToCString(ctx, argv[argIdx]);
     brotensor::Device d = brotensor::default_device();
     if (s) {
-        if (std::strcmp(s, "cuda") == 0)  d = brotensor::Device::CUDA;
-        else if (std::strcmp(s, "metal") == 0) d = brotensor::Device::Metal;
-        else if (std::strcmp(s, "cpu") == 0)   d = brotensor::Device::CPU;
+        std::string spec(s);
         JS_FreeCString(ctx, s);
+        int index = 0;
+        const std::size_t colon = spec.find(':');
+        if (colon != std::string::npos) {
+            index = std::atoi(spec.c_str() + colon + 1);
+            if (index < 0) index = 0;
+            spec.resize(colon);
+        }
+        if (spec == "cuda")       d = brotensor::Device::cuda(index);
+        else if (spec == "metal") d = brotensor::Device::metal(index);
+        else if (spec == "cpu")   d = brotensor::Device::CPU;
     }
     return d;
+}
+
+// Is this exact device — backend AND card index — registered? The brotensor
+// probes take the index straight to the driver, which for an out-of-range card
+// leaves the current device selected and would answer for the wrong GPU; the
+// probe methods gate on this instead, so 'cuda:9' on a one-card box reports
+// "nothing there" rather than card 0's numbers.
+static bool deviceExists(brotensor::Device want) {
+    for (auto d : brotensor::available_devices()) {
+        if (d == want) return true;
+    }
+    return false;
 }
 
 static JSValue js_gpu_get_available(JSContext* ctx, JSValueConst, int, JSValueConst*) {
@@ -55,14 +81,36 @@ static JSValue js_gpu_get_backend(JSContext* ctx, JSValueConst, int, JSValueCons
     return JS_NewString(ctx, deviceName(brotensor::default_device()));
 }
 
+// devices -> ['cpu', 'cuda', ...]: registered BACKENDS, one entry each. On a
+// multi-GPU box available_devices() lists every card (cuda:0, cuda:1, …), so
+// the names are deduped here — the count lives on `deviceCount`, and a specific
+// card is addressed as 'cuda:N' in memoryInfo/deviceName/trim.
 static JSValue js_gpu_get_devices(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     brotensor::init();
     JSValue arr = JS_NewArray(ctx);
     uint32_t i = 0;
+    const char* last = nullptr;
     for (auto d : brotensor::available_devices()) {
-        JS_SetPropertyUint32(ctx, arr, i++, JS_NewString(ctx, deviceName(d)));
+        const char* name = deviceName(d);
+        if (last && std::strcmp(last, name) == 0) continue;
+        last = name;
+        JS_SetPropertyUint32(ctx, arr, i++, JS_NewString(ctx, name));
     }
     return arr;
+}
+
+// deviceCount(device?) -> number. How many devices of that backend are
+// registered: the multi-GPU count for 'cuda', 1 for 'cpu' (and for a backend
+// that reports no index), 0 when the backend isn't registered at all. The valid
+// indices for the 'cuda:N' argument form are 0 .. deviceCount('cuda') - 1.
+static JSValue js_gpu_deviceCount(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    brotensor::init();
+    brotensor::Device want = parseDeviceArg(ctx, argc, argv, 0);
+    int n = 0;
+    for (auto d : brotensor::available_devices()) {
+        if (d.type == want.type) ++n;
+    }
+    return JS_NewInt32(ctx, n);
 }
 
 // compiledBackends -> ["cpu", ...]. The tensor backends actually COMPILED INTO
@@ -94,6 +142,7 @@ static JSValue js_gpu_get_compiledBackends(JSContext* ctx, JSValueConst, int, JS
 static JSValue js_gpu_memoryInfo(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     brotensor::init();
     brotensor::Device d = parseDeviceArg(ctx, argc, argv, 0);
+    if (!deviceExists(d)) return JS_NULL;
     std::size_t freeBytes = 0, totalBytes = 0;
     if (!brotensor::device_mem_info(d, freeBytes, totalBytes)) return JS_NULL;
     JSValue o = JS_NewObject(ctx);
@@ -109,6 +158,7 @@ static JSValue js_gpu_memoryInfo(JSContext* ctx, JSValueConst, int argc, JSValue
 static JSValue js_gpu_deviceName(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     brotensor::init();
     brotensor::Device d = parseDeviceArg(ctx, argc, argv, 0);
+    if (!deviceExists(d)) return JS_NULL;
     std::string name = brotensor::device_product_name(d);
     if (name.empty()) return JS_NULL;
     return JS_NewString(ctx, name.c_str());
@@ -124,6 +174,7 @@ static JSValue js_gpu_deviceName(JSContext* ctx, JSValueConst, int argc, JSValue
 static JSValue js_gpu_trim(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     brotensor::init();
     brotensor::Device d = parseDeviceArg(ctx, argc, argv, 0);
+    if (!deviceExists(d)) return JS_NewBool(ctx, false);
     std::size_t keepBytes = 0;
     if (argc >= 2 && JS_IsNumber(argv[1])) {
         int64_t v = 0; JS_ToInt64(ctx, &v, argv[1]);
@@ -156,6 +207,8 @@ void installGpuBindings(JSContext* ctx) {
     defineGetter(ctx, gpuObj, "backend",   js_gpu_get_backend);
     defineGetter(ctx, gpuObj, "devices",   js_gpu_get_devices);
     defineGetter(ctx, gpuObj, "compiledBackends", js_gpu_get_compiledBackends);
+    JS_SetPropertyStr(ctx, gpuObj, "deviceCount",
+                      JS_NewCFunction(ctx, js_gpu_deviceCount, "deviceCount", 1));
     JS_SetPropertyStr(ctx, gpuObj, "memoryInfo",
                       JS_NewCFunction(ctx, js_gpu_memoryInfo, "memoryInfo", 1));
     JS_SetPropertyStr(ctx, gpuObj, "deviceName",

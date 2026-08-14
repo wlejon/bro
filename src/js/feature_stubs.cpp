@@ -68,6 +68,7 @@ void installGpuBindings(JSContext* ctx) {
         "(function(){var b=(globalThis.bro=globalThis.bro||{});"
         "b.gpu={available:false,backend:'cpu',devices:['cpu'],compiledBackends:['cpu'],"
         "deviceName:function(){return null;},"
+        "deviceCount:function(d){return (!d||d==='cpu')?1:0;},"
         "memoryInfo:function(){return null;},"
         "trim:function(){return false;}};})();");
 }

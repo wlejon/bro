@@ -235,10 +235,10 @@ JSValue mtGenerate(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst
 void mtRegisterClass(JSContext* ctx) {
     qjsbind::Class<ArdyMotionWrapper>(ctx, "ArdyMotionPipeline", qjsbind::NoGlobal)
         .get("device", [](ArdyMotionWrapper* w) {
-            switch (w->device) {
-                case bt::Device::CUDA:  return std::string("CUDA");
-                case bt::Device::Metal: return std::string("Metal");
-                default:                return std::string("CPU");
+            switch (w->device.type) {
+                case bt::DeviceType::CUDA:  return std::string("CUDA");
+                case bt::DeviceType::Metal: return std::string("Metal");
+                default:                    return std::string("CPU");
             }
         })
         .method_raw("generate", mtGenerate, 2);

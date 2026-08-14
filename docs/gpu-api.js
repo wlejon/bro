@@ -37,10 +37,30 @@ bro.gpu.backend;
 /**
  * Every backend registered in this binary at runtime, e.g. ['cpu'] on a
  * CPU-only build or ['cpu', 'cuda'] when a CUDA device is present. CPU is
- * always included.
+ * always included. One entry per BACKEND, not per card: a two-GPU box still
+ * reports ['cpu', 'cuda'] — see `deviceCount()` for how many cards, and the
+ * 'cuda:N' argument form for addressing a specific one.
  * @type {string[]}
  */
 bro.gpu.devices;
+
+/**
+ * How many devices of `device`'s backend are registered: the card count on a
+ * multi-GPU box, 1 for 'cpu', 0 when that backend isn't registered at all.
+ * The valid indices for the 'cuda:N' form accepted by `memoryInfo`,
+ * `deviceName`, and `trim` are 0 .. deviceCount('cuda') - 1.
+ *
+ * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu'
+ * @returns {number}
+ *
+ * @example
+ *   for (let i = 0; i < bro.gpu.deviceCount('cuda'); i++) {
+ *     const mem = bro.gpu.memoryInfo('cuda:' + i);
+ *     console.log(bro.gpu.deviceName('cuda:' + i),
+ *                 (mem.freeBytes / 1e9).toFixed(1) + ' GB free');
+ *   }
+ */
+bro.gpu.deviceCount(device) {}
 
 /**
  * The tensor backends COMPILED INTO this binary: a static build-time fact from
@@ -63,7 +83,8 @@ bro.gpu.compiledBackends;
  * or gate a large model load on available headroom. Returns `null` when the
  * backend isn't registered or can't report: always `null` for 'cpu'.
  *
- * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu'
+ * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu',
+ *   optionally with a card index on a multi-GPU box: 'cuda:1'
  * @returns {?{freeBytes: number, totalBytes: number}}
  *
  * @example
@@ -80,7 +101,8 @@ bro.gpu.memoryInfo(device) {}
  * isn't registered or can't report: always `null` for 'cpu'. Pair with
  * `memoryInfo()` to label a VRAM budget line with the actual card.
  *
- * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu'
+ * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu',
+ *   optionally with a card index on a multi-GPU box: 'cuda:1'
  * @returns {?string}
  *
  * @example
@@ -103,7 +125,8 @@ bro.gpu.deviceName(device) {}
  * weight read into PCIe traffic. Returns `false` when the backend isn't
  * registered or has no trimmable allocator: always `false` for 'cpu'.
  *
- * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu'
+ * @param {string} [device=bro.gpu.backend] - 'cuda' | 'metal' | 'cpu',
+ *   optionally with a card index on a multi-GPU box: 'cuda:1'
  * @param {number} [keepBytes=0] - bytes to keep cached
  * @returns {boolean}
  *

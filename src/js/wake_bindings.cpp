@@ -194,10 +194,10 @@ bool parseDeviceOpt(JSContext* ctx, JSValueConst opts,
 }
 
 const char* deviceName(brotensor::Device d) {
-    switch (d) {
-        case brotensor::Device::CUDA:  return "CUDA";
-        case brotensor::Device::Metal: return "Metal";
-        case brotensor::Device::CPU:   return "CPU";
+    switch (d.type) {
+        case brotensor::DeviceType::CUDA:  return "CUDA";
+        case brotensor::DeviceType::Metal: return "Metal";
+        case brotensor::DeviceType::CPU:   return "CPU";
     }
     return "?";
 }

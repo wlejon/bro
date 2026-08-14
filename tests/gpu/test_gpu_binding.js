@@ -32,7 +32,17 @@ const KNOWN = ['cuda', 'metal', 'cpu'];
     // Getters are stable across reads (driver probe is cached).
     assert(bro.gpu.backend === bro.gpu.backend, 'backend getter is stable');
 
-    for (const f of ['memoryInfo', 'deviceName', 'trim']) {
+    // deviceCount: cards per backend. 1 for cpu, >=1 for a registered GPU
+    // backend (multi-GPU reports the card count), 0 for an unregistered one.
+    assert(bro.gpu.deviceCount('cpu') === 1, 'deviceCount(cpu) is 1');
+    for (const b of KNOWN) {
+        const n = bro.gpu.deviceCount(b);
+        assert(Number.isInteger(n) && n >= 0, 'deviceCount is a non-negative int: ' + b);
+        assert(devices.includes(b) === (n > 0),
+               'deviceCount(' + b + ')=' + n + ' agrees with devices');
+    }
+
+    for (const f of ['memoryInfo', 'deviceName', 'trim', 'deviceCount']) {
         assert(typeof bro.gpu[f] === 'function', 'bro.gpu.' + f + ' is a function');
     }
 
@@ -63,6 +73,18 @@ const KNOWN = ['cuda', 'metal', 'cpu'];
     // trim: boolean; cpu has no trimmable allocator.
     assert(typeof bro.gpu.trim() === 'boolean', 'trim() returns a boolean');
     assert(bro.gpu.trim('cpu') === false, 'trim(cpu) is false');
+
+    // 'cuda:N' addresses one card of a multi-GPU box; index 0 is the same
+    // device as the bare backend name, and an out-of-range index reports
+    // nothing rather than throwing.
+    if (bro.gpu.backend !== 'cpu') {
+        const b = bro.gpu.backend;
+        assert(bro.gpu.deviceName(b + ':0') === bro.gpu.deviceName(b),
+               b + ':0 names the same card as ' + b);
+        const past = bro.gpu.deviceCount(b);
+        assert(bro.gpu.memoryInfo(b + ':' + past) === null,
+               'memoryInfo past the last card is null');
+    }
 
     // A non-string device arg falls back to the default device, never throws.
     let threw = false;
