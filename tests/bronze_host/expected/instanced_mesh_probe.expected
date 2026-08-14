@@ -1,0 +1,17 @@
+APP canvas.width=320
+APP canvas.height=240
+APP renderer.isWebGL2=true
+APP instanced.count=true
+APP instanced.matrixCount=true
+APP instanced.colorCount=true
+APP ready=1
+APP render.calls=true
+APP render.calls.low=true
+APP render.triangles=true
+APP pixel.instancedLit=true
+APP pixel.cornerClear=true
+APP pixel.rendered=true
+APP done=1
+DRV screenshot_before=1
+DRV screenshot_after=1
+DRV done=1
