@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"><title>bronze dom probe</title>
+<style>
+  /* Everything the probe's geometry lines read is stated here in pixels, with
+     no border and no padding, so the numbers in the expectation are derivable
+     from this file rather than recorded from a run. Absolute at the origin
+     pins the rect's x and y as well as its size. */
+  html, body { margin: 0; padding: 0; }
+  #panel {
+      position: absolute; left: 0; top: 0;
+      width: 300px; height: 120px;
+      margin: 0; padding: 0; border: 0;
+      box-sizing: content-box;
+  }
+</style>
+</head>
+<!-- The compiled app builds its own tree; the page contributes exactly one
+     thing, and it is not decoration. `.row` here is a DECOY: it makes
+     `document.querySelectorAll('.row')` and `panel.querySelectorAll('.row')`
+     return DIFFERENT counts, which is the only way the probe can tell a
+     genuinely element-scoped query from one that quietly searched the whole
+     document and got away with it. -->
+<body>
+<div class="row" id="decoy">decoy</div>
+</body>
+</html>

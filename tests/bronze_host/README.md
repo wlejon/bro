@@ -1,12 +1,13 @@
 # bronze_host integration checks
 
-Six checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip (the
+Seven checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip (the
 binary is not built).
 
 ```bash
 tests/bronze_host/run_bronze_host_test.sh   # the scene graph, a fixed frame count
 tests/bronze_host/run_events_test.sh        # events, under a driver script
 tests/bronze_host/run_fetch_test.sh         # fetch, under a driver script
+tests/bronze_host/run_dom_test.sh           # the element surface: tree, style, forms
 tests/bronze_host/run_wild_test.sh          # wild three.js scene + OrbitControls
 tests/bronze_host/run_instanced_test.sh     # instanced mesh under load (2,500 instances)
 tests/bronze_host/run_pixi_test.sh          # pixi.js v8: WebGL sprites + pixel readback
@@ -28,9 +29,13 @@ v8.19.0 bundle (vendored in bronze, `tests/oracle/pixi/`) initializes a WebGL
 `Application` on a host canvas, renders a tinted sprite through pixi's batcher
 — shader compilation included, via the app's CSP/AOT uniform-sync polyfills
 (the `@pixi/unsafe-eval` approach, inlined) — and proves the pixels with
-`gl.readPixels`. The multi-app CMake surface (`BRO_BRONZE_APPS`,
-`src/bronze_host/README.md`) exists so one configured tree can hold all of
-them.
+`gl.readPixels`. The seventh boots `bro-bronze-host-dom` — no driver, because
+the probe needs no input — and takes the ELEMENT surface apart: identity
+through four different lookups, `children` as a real array, tree edits,
+classList, inline and computed style, form controls, and geometry read from an
+element appended in the same turn that measures it. The multi-app CMake surface
+(`BRO_BRONZE_APPS`, `src/bronze_host/README.md`) exists so one configured tree
+can hold all of them.
 
 ## What it actually proves
 
@@ -132,6 +137,8 @@ CLI:
     --emit-obj --host-globals src/bronze_host/web_host.globals
 <bronze> build tests/bronze_host/apps/fetch_probe.js -o build/fetch.obj \
     --emit-obj --host-globals src/bronze_host/web_host.globals
+<bronze> build tests/bronze_host/apps/dom_probe.js -o build/dom.obj \
+    --emit-obj --host-globals src/bronze_host/web_host.globals
 <bronze> build tests/bronze_host/apps/wild_orbit_probe.js -o build/wild.obj \
     --emit-obj --host-globals src/bronze_host/web_host.globals
 <bronze> build tests/bronze_host/apps/instanced_mesh_probe.js -o build/instanced.obj \
@@ -139,9 +146,9 @@ CLI:
 
 cmake -B build -DBRO_WITH_BRONZE=ON \
     -DBRO_BRONZE_APP_OBJ=$PWD/build/scenegraph.obj \
-    -DBRO_BRONZE_APPS="events=$PWD/build/events.obj;fetch=$PWD/build/fetch.obj;wild=$PWD/build/wild.obj;instanced=$PWD/build/instanced.obj"
+    -DBRO_BRONZE_APPS="events=$PWD/build/events.obj;fetch=$PWD/build/fetch.obj;dom=$PWD/build/dom.obj;wild=$PWD/build/wild.obj;instanced=$PWD/build/instanced.obj"
 cmake --build build --config Release \
-    --target bro-bronze-host bro-bronze-host-events bro-bronze-host-fetch bro-bronze-host-wild bro-bronze-host-instanced
+    --target bro-bronze-host bro-bronze-host-events bro-bronze-host-fetch bro-bronze-host-dom bro-bronze-host-wild bro-bronze-host-instanced
 ```
 
 Re-running any check after editing its `.js` means recompiling that object
