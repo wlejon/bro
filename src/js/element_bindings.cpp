@@ -10,6 +10,7 @@
 #include "engine/engine.h"
 #include "dom/document.h"
 #include "layout/el_input.h"
+#include "layout/form_control.h"
 #include "layout/el_select.h"
 #include "layout/el_textarea.h"
 #include "layout/el_video.h"
@@ -789,64 +790,16 @@ static JSValue expandoSet(JSContext* ctx, JSValueConst this_val, const char* key
     return JS_UNDEFINED;
 }
 
+// The rules themselves live in src/layout/form_control.cpp: the bronze host
+// layer binds the same controls for compiled apps, and one <select> must not
+// have two ideas about where its selection is kept.
 static JSValue js_element_get_value(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    if (!tagIn(el->tagName(), {"input", "textarea", "select", "option",
-                               "button", "progress", "meter", "output",
-                               "li", "data", "param"}))
-        return expandoGet(ctx, this_val, "__broValue");
-    // For <select>, return the value of the selected <option>
-    if (auto* sel = el->selectControl()) {
-        auto opts = sel->getOptions();
-        int idx = sel->selectedIndex();
-        if (idx >= 0 && idx < static_cast<int>(opts.size()))
-            return JS_NewString(ctx, opts[idx].value.c_str());
-        return JS_NewString(ctx, "");
-    }
-    if (el->tagName() == "SELECT" || el->tagName() == "select") {
-        // No ElSelect yet (no layout pass has touched this element) —
-        // read straight off the DOM instead of falling through to the
-        // generic getAttribute("value") below, which is always empty for
-        // a <select> (only its <option> children carry a value). Mirrors
-        // js_element_set_value's DOM-attribute fallback so get/set stay
-        // consistent before first layout — e.g. a headless script that
-        // creates a <select>, sets .value, and reads it back without an
-        // intervening flush()/layout.
-        // Spec: an option's value falls back to its text only when the value
-        // attribute is ABSENT — an explicit value="" stays "" (placeholder
-        // options depend on it).
-        auto optionValue = [](bro::dom::Element* o) {
-            return o->hasAttribute("value") ? o->getAttribute("value")
-                                            : o->textContent();
-        };
-        bro::dom::Element* first = nullptr;
-        for (auto* child : el->children()) {
-            if (child->tagName() != "OPTION" && child->tagName() != "option") continue;
-            if (!first) first = child;
-            if (child->hasAttribute("selected")) {
-                std::string ov = optionValue(child);
-                return JS_NewString(ctx, ov.c_str());
-            }
-        }
-        if (first) {
-            std::string ov = optionValue(first);
-            return JS_NewString(ctx, ov.c_str());
-        }
-        return JS_NewString(ctx, "");
-    }
-    // <textarea>: the live value lives in the "value" attribute once any
-    // edit has happened; before that, fall back to textContent (initial
-    // content from HTML, e.g. `<textarea>foo</textarea>`).
-    const std::string& tag = el->tagName();
-    if (tag == "TEXTAREA" || tag == "textarea") {
-        if (el->hasAttribute("value"))
-            return JS_NewString(ctx, el->getAttribute("value").c_str());
-        std::string t = el->textContent();
-        return JS_NewString(ctx, t.c_str());
-    }
-    return JS_NewString(ctx, el->getAttribute("value").c_str());
+    // A <div>'s `.value` is an ordinary expando and must stay one.
+    if (!bro::layout::reflectsValue(el)) return expandoGet(ctx, this_val, "__broValue");
+    return JS_NewString(ctx, bro::layout::formValue(el).c_str());
 }
 
 static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
@@ -854,57 +807,9 @@ static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
-    if (!tagIn(el->tagName(), {"input", "textarea", "select", "option",
-                               "button", "progress", "meter", "output",
-                               "li", "data", "param"}))
+    if (!bro::layout::reflectsValue(el))
         return expandoSet(ctx, this_val, "__broValue", val);
-    std::string s = jsToStdString(ctx, val);
-    // For <select>, sync the selection with the new value. We do BOTH:
-    //   1. Stamp the `selected` attribute on the matching <option> (and
-    //      clear it from siblings). This is what initSelectedIndex reads
-    //      when the SelectControl is lazily created during the first
-    //      layout pass — required because callers commonly run
-    //      `select.value = "..."` at script-load time, before any render
-    //      has triggered ElSelect construction.
-    //   2. If the SelectControl already exists, also update its
-    //      selectedIndex directly so the displayed selection moves
-    //      immediately without waiting for a re-layout.
-    if (el->tagName() == "SELECT" || el->tagName() == "select") {
-        int matchIdx = -1, idx = 0;
-        for (auto* child : el->children()) {
-            if (child->tagName() != "OPTION" && child->tagName() != "option") continue;
-            // Value-attribute-absent → text fallback; explicit value="" stays
-            // "" (matches the getter and ElSelect::getOptions()).
-            std::string ov = child->hasAttribute("value")
-                                 ? child->getAttribute("value")
-                                 : child->textContent();
-            if (matchIdx < 0 && ov == s) {
-                matchIdx = idx;
-                child->setAttribute("selected", "");
-            } else if (child->hasAttribute("selected")) {
-                child->removeAttribute("selected");
-            }
-            ++idx;
-        }
-        if (auto* sel = el->selectControl(); sel && matchIdx >= 0) {
-            sel->setSelectedIndex(matchIdx);
-        }
-        return JS_UNDEFINED;
-    }
-    // <textarea>: write to the "value" attribute, which is the storage
-    // shared with the typing pipeline (handleKeyDown / handleTextInput).
-    // textContent stays as the initial HTML content (defaultValue).
-    if (el->tagName() == "TEXTAREA" || el->tagName() == "textarea") {
-        el->setAttribute("value", s);
-        // A programmatic value write invalidates the control's undo history
-        // (browser behavior — Ctrl+Z can't cross a script's rewrite). It also
-        // re-arms `change`: the value moved, but nobody *changed* it in the
-        // sense that event is about, so the next click away must be silent.
-        if (auto* ta = el->textareaControl()) { ta->clearHistory(); ta->armChange(el); }
-        return JS_UNDEFINED;
-    }
-    el->setAttribute("value", s);
-    if (auto* inp = el->inputControl()) { inp->clearHistory(); inp->armChange(el); }
+    bro::layout::setFormValue(el, jsToStdString(ctx, val));
     return JS_UNDEFINED;
 }
 
@@ -1571,21 +1476,6 @@ static JSValue js_element_set_selected(JSContext* ctx, JSValueConst this_val,
     return JS_UNDEFINED;
 }
 
-// Recursively gather a <select>'s <option> descendants in document order,
-// descending into <optgroup> per the HTMLOptionsCollection contract.
-static void collectSelectOptions(bro::dom::Element* el,
-                                 std::vector<bro::dom::Element*>& out)
-{
-    for (auto* child : el->children()) {
-        const std::string& tag = child->tagName();
-        if (tag == "OPTION" || tag == "option") {
-            out.push_back(child);
-        } else if (tag == "OPTGROUP" || tag == "optgroup") {
-            collectSelectOptions(child, out);
-        }
-    }
-}
-
 // HTMLSelectElement.options — the list of <option> elements. Returned as a
 // NodeList-shaped collection (indexed + length + iterable), which is all the
 // HTMLOptionsCollection surface app code relies on (Array.from, [i], .length).
@@ -1595,31 +1485,12 @@ static JSValue js_element_get_options(JSContext* ctx, JSValueConst this_val)
     if (!el) return JS_NewArray(ctx);
     const std::string& tag = el->tagName();
     if (tag != "SELECT" && tag != "select") return JS_UNDEFINED;
-    std::vector<bro::dom::Element*> opts;
-    collectSelectOptions(el, opts);
-    return wrapNodeList(ctx, opts);
+    return wrapNodeList(ctx, bro::layout::selectOptions(el));
 }
 
 static JSValue js_element_get_selectedIndex(JSContext* ctx, JSValueConst this_val)
 {
-    auto* el = getElement(this_val);
-    if (!el) return JS_NewInt32(ctx, -1);
-    if (auto* sel = el->selectControl())
-        return JS_NewInt32(ctx, sel->selectedIndex());
-    // No layout control yet (the <select> hasn't been laid out): answer from DOM
-    // state so a value set before the first frame round-trips, and so the
-    // default matches what the control will adopt when it is created.
-    if (el->tagName() != "SELECT") return JS_NewInt32(ctx, -1);
-    if (el->hasPendingSelectedIndex())
-        return JS_NewInt32(ctx, el->pendingSelectedIndex());
-    int idx = -1, i = 0;
-    for (auto* child : el->children()) {
-        if (child->tagName() != "OPTION") continue;
-        if (idx < 0) idx = 0;                      // first option is the default
-        if (child->hasAttribute("selected")) { idx = i; break; }
-        ++i;
-    }
-    return JS_NewInt32(ctx, idx);
+    return JS_NewInt32(ctx, bro::layout::selectedIndex(getElement(this_val)));
 }
 
 static JSValue js_element_set_selectedIndex(JSContext* ctx, JSValueConst this_val,
@@ -1629,13 +1500,24 @@ static JSValue js_element_set_selectedIndex(JSContext* ctx, JSValueConst this_va
     if (!el) return JS_UNDEFINED;
     int idx;
     JS_ToInt32(ctx, &idx, val);
-    if (auto* sel = el->selectControl()) {
-        sel->setSelectedIndex(idx);
-    } else if (el->tagName() == "SELECT") {
-        // No layout control yet; remember the assignment so the control adopts
-        // it on creation and the getter reflects it immediately.
-        el->setPendingSelectedIndex(idx);
-    }
+    bro::layout::setSelectedIndex(el, idx);
+    return JS_UNDEFINED;
+}
+
+// tabIndex, whose default depends on the tag (see layout/form_control.h).
+static JSValue js_element_get_tabIndex(JSContext* ctx, JSValueConst this_val)
+{
+    return JS_NewInt32(ctx, bro::layout::tabIndex(getElement(this_val)));
+}
+
+static JSValue js_element_set_tabIndex(JSContext* ctx, JSValueConst this_val,
+                                       JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    int n;
+    JS_ToInt32(ctx, &n, val);
+    bro::layout::setTabIndex(el, n);
     return JS_UNDEFINED;
 }
 
@@ -4931,6 +4813,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("selectedIndex", js_element_get_selectedIndex, js_element_set_selectedIndex),
     JS_CGETSET_DEF("options",       js_element_get_options,       nullptr),
     JS_CGETSET_DEF("type",        js_element_get_type,        js_element_set_type),
+    JS_CGETSET_DEF("tabIndex",    js_element_get_tabIndex,    js_element_set_tabIndex),
     JS_CGETSET_DEF("disabled",    js_element_get_disabled,    js_element_set_disabled),
     JS_CGETSET_DEF("placeholder", js_element_get_placeholder, js_element_set_placeholder),
     JS_CGETSET_DEF("draggable",   js_element_get_draggable,   js_element_set_draggable),
