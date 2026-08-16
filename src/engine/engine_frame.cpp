@@ -134,6 +134,7 @@ void Engine::run() {
                 scaledTickDtMs = (tickStart - lastWallTickMs_) * effectiveTimeScale();
             engineNowMs_ += scaledTickDtMs;
             lastWallTickMs_ = tickStart;
+            timers_->setWallClockAnchor(tickStart, effectiveTimeScale());
             timers_->tick(engineNowMs_);
             // Host per-frame callbacks (Engine::onFrame). The server loop has
             // no rAF, so its equivalent seam is right after the tick's timer
@@ -392,6 +393,10 @@ void Engine::run() {
         // dt the clock never advanced by.
         const double scaledFrameDtMs = wallFrameDtMs * effectiveTimeScale();
         engineNowMs_ += scaledFrameDtMs;
+        // Anchored to the same wall reading the advance was measured from, so
+        // performance.now() interpolates continuously across the frame boundary
+        // rather than jumping when the clock catches up.
+        timers_->setWallClockAnchor(frameStart, effectiveTimeScale());
 
         // 0. Drain any in-flight layout result so event handlers don't race
         //    layout thread reads. JS handlers can mutate the DOM.

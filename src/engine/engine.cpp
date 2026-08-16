@@ -133,6 +133,8 @@ void Engine::tickTimersOnly()
     if (lastWallTickMs_ > 0.0 && wallNow > lastWallTickMs_)
         engineNowMs_ += (wallNow - lastWallTickMs_) * effectiveTimeScale();
     lastWallTickMs_ = wallNow;
+    if (displayMode_ != DisplayMode::Headless)
+        timers_->setWallClockAnchor(wallNow, effectiveTimeScale());
     timers_->tick(engineNowMs_);
     jsRuntime_->executePendingJobs();
 }

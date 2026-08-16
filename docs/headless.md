@@ -258,7 +258,7 @@ DOM update actually pays for, and the two a screenshot can't show you.
 
 | Function | Description |
 |----------|-------------|
-| `perf.now()` | Real wall-clock milliseconds. **Use this, not `performance.now()`**: that one rides virtual time (see below) and reports 0ms for work that took a second. |
+| `perf.now()` | Real wall-clock milliseconds. **Use this, not `performance.now()`**: in headless that one rides virtual time (see below), so it is frozen between `advanceTime()` calls and reports 0ms for work that took a second. (Windowed and server runs interpolate it from wall time instead, so an app profiling its own render frame there gets a real number; headless stays frozen on purpose, so a test measuring across N virtual milliseconds gets exactly N back.) |
 | `perf.reset()` | Zero the counters. |
 | `perf.stats()` | The counters since the last reset (CPU style/layout only). |
 | `perf.gpuFrameMs()` | **Real GPU milliseconds** for the last `flush()`'s 3D scene render, from a native `GL_TIME_ELAPSED` query wrapped around the scene draw. Blocking: it reads `GL_QUERY_RESULT`, which forces that frame's GPU work to finish, so each call returns an isolated per-frame GPU cost. This is the number to trust for 3D/render perf — wall-clock around `flush()` returns *before* the GPU runs the draws and so measures nothing. Returns `-1` for a 2D-only page, under `--no-gpu`, or before the first scene flush. |

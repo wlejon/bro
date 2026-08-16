@@ -277,13 +277,32 @@ JSValue Timers::js_cancelAnimationFrame(JSContext* ctx, JSValueConst /*this_val*
 JSValue Timers::js_performanceNow(JSContext* ctx, JSValueConst /*this_val*/,
                                   int /*argc*/, JSValueConst* /*argv*/)
 {
-    // Return the last tick time so headless virtual time works correctly.
-    // In windowed mode, tick() is called with currentTimeMs() so this
-    // returns real wall-clock time. In headless, it returns virtual time.
+    // Based on the engine clock, so performance.now() obeys bro.time exactly
+    // like timers and rAF do — a paused app measures no elapsed time.
+    //
+    // In a real-time mode the engine also hands us a wall-clock anchor, and we
+    // interpolate from it. Without that, two calls in the same frame return the
+    // identical value and every in-frame measurement reads 0.00 ms; a profiler
+    // HUD timing its own render is the canonical case. In headless there is no
+    // anchor and the clock stays frozen between advanceTime() calls, which is
+    // the determinism contract tests are written against.
     Timers* t = getTimers(ctx);
-    if (t && t->lastTickMs_ > 0.0)
-        return JS_NewFloat64(ctx, t->lastTickMs_);
-    return JS_NewFloat64(ctx, bro::util::currentTimeMs());
+    if (!t || t->lastTickMs_ <= 0.0)
+        return JS_NewFloat64(ctx, bro::util::currentTimeMs());
+
+    double now = t->lastTickMs_;
+    if (t->anchorScale_ >= 0.0 && t->anchorWallMs_ > 0.0) {
+        double elapsed = bro::util::currentTimeMs() - t->anchorWallMs_;
+        if (elapsed > 0.0) now += elapsed * t->anchorScale_;
+        // The scale is sampled at the frame top but JS can change it inside the
+        // frame, which would re-scale the elapsed part under our feet. The
+        // engine clock absorbs that at the next frame top; this one is read
+        // continuously, so hold it monotonic — a measurement that comes back
+        // negative is worse than one that is briefly coarse.
+        if (now < t->lastReportedMs_) now = t->lastReportedMs_;
+        t->lastReportedMs_ = now;
+    }
+    return JS_NewFloat64(ctx, now);
 }
 
 // ---------------------------------------------------------------------------

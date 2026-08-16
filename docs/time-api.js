@@ -10,7 +10,10 @@
  *     - requestAnimationFrame timestamps, and while paused, rAF callbacks
  *       are skipped entirely (the web's _process analog); timescale changes
  *       only the timestamp a callback receives, never the firing cadence
- *     - performance.now()
+ *     - performance.now() — advances continuously within a frame in windowed
+ *       and server runs (interpolated from wall time at the scale in effect,
+ *       so it freezes exactly while paused); in headless it is the virtual
+ *       clock and holds still between advanceTime() calls
  *     - CSS transitions and animations
  *     - physics stepping (fixed timestep preserved: pause/timescale change
  *       how much sim time accumulates per wall second, so scale 2 runs the

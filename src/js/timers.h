@@ -29,6 +29,20 @@ public:
     /// Advance time – fires any expired timers, reschedules repeating ones.
     void tick(double currentTimeMs);
 
+    /// Let performance.now() advance *within* a frame instead of returning the
+    /// same value until the next tick(). `wallMs` is the wall-clock reading
+    /// taken when the engine clock last advanced, `scale` the bro.time scale in
+    /// effect (0 while paused, so a paused clock still reads frozen).
+    ///
+    /// Real-time modes only. Headless deliberately leaves this off: there the
+    /// engine clock is virtual and advanceTime() owns it, and a test that
+    /// measures across a known number of virtual milliseconds must get exactly
+    /// that number back — see docs/headless.md.
+    void setWallClockAnchor(double wallMs, double scale) {
+        anchorWallMs_ = wallMs;
+        anchorScale_  = scale;
+    }
+
     /// Fire all pending requestAnimationFrame callbacks. Called once per frame.
     void fireAnimationFrames(double timestampMs);
 
@@ -70,6 +84,11 @@ private:
     };
 
     double lastTickMs_ = 0.0;  // last time passed to tick() — used by performance.now()
+    // Sub-frame interpolation for performance.now(); see setWallClockAnchor().
+    // A negative scale means "not anchored" (headless, workers, sub-documents).
+    double anchorWallMs_ = 0.0;
+    double anchorScale_  = -1.0;
+    double lastReportedMs_ = 0.0;  // monotonic floor for the interpolated read
 
     int32_t nextId_ = 1;
     std::map<int32_t, TimerEntry> timers_;

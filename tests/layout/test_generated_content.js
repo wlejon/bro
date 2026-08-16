@@ -27,6 +27,9 @@ style.textContent = `
   .hov:hover::before { content: "XXXXXXXXXXXXXXXX"; }
   .counted > li { display: inline-block; list-style: none; }
   .counted > li::before { content: counter(item) ". "; counter-increment: item; }
+  .old1:before { content: ""; }
+  .old2:before { content: "XXXXXXXXXXXXXXXX"; }
+  .old3:after  { content: "XXXXXXXXXXXXXXXX"; }
 `;
 flush();
 
@@ -93,4 +96,18 @@ root.innerHTML = '<span id="q1">text</span><q id="q2">text</q>';
 flush();
 assert(w('q2') > w('q1'), '<q> gets its quote marks (' + w('q1') + ' -> ' + w('q2') + ')');
 
-console.log('PASS: generated content — literal, attr(), hover, counters, quotes');
+// --- the one-colon spelling ----------------------------------------------
+// :before and :after predate the double colon and are still all over real
+// sheets (the three.js editor draws its outliner type dots with `.type:after`).
+// Selectors L3 §7 requires accepting them, so they must generate content just
+// like the modern spelling — not be parsed as a pseudo-class nothing matches.
+root.innerHTML = '<span id="o1" class="old1">t</span><br>' +
+                 '<span id="o2" class="old2">t</span><br>' +
+                 '<span id="o3" class="old3">t</span>';
+flush();
+assert(w('o2') > w('o1') + 50,
+       ':before with one colon generates content (' + w('o1') + ' -> ' + w('o2') + ')');
+assert(w('o3') > w('o1') + 50,
+       ':after with one colon generates content (' + w('o1') + ' -> ' + w('o3') + ')');
+
+console.log('PASS: generated content — literal, attr(), hover, counters, quotes, one-colon');
