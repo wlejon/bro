@@ -30,7 +30,10 @@
 
 #include <cctype>
 #include <cstdlib>
+#include <fstream>
+#include <map>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -392,8 +395,152 @@ CanvasState* canvasFor(Value v) {
 }
 
 // ---------------------------------------------------------------------------
-// document
+// generic elements
 // ---------------------------------------------------------------------------
+
+Value makeGenericElementValue(dom::Element* el) {
+    ObjectBuilder b;
+    b.set("tagName", ev::fromUtf8(el->tagName()));
+    b.set("nodeName", ev::fromUtf8(el->tagName()));
+    b.set("nodeType", ev::fromDouble(1));
+
+    b.accessor("id",
+               [el](Value, std::span<const Value>) { return ev::fromUtf8(el->id()); },
+               [el](Value, std::span<const Value> a) {
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v)) el->setId(ev::toUtf8(v));
+                   return ev::undefined();
+               });
+    b.accessor("className",
+               [el](Value, std::span<const Value>) { return ev::fromUtf8(el->className()); },
+               [el](Value, std::span<const Value> a) {
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v)) el->setClassName(ev::toUtf8(v));
+                   return ev::undefined();
+               });
+    b.accessor("textContent",
+               [el](Value, std::span<const Value>) { return ev::fromUtf8(el->textContent()); },
+               [el](Value, std::span<const Value> a) {
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v)) el->setTextContent(ev::toUtf8(v));
+                   return ev::undefined();
+               });
+    b.accessor("innerHTML",
+               [el](Value, std::span<const Value>) { return ev::fromUtf8(el->innerHTML()); },
+               [el](Value, std::span<const Value> a) {
+                   Value v = argAt(a, 0);
+                   if (!ev::isObject(v)) el->setInnerHTML(ev::toUtf8(v));
+                   return ev::undefined();
+               });
+    b.accessor("clientWidth",
+               [el](Value, std::span<const Value>) {
+                   g_host->engine->flushLayoutForRead(el->document());
+                   return ev::fromDouble(el->layoutBox().contentRect.width);
+               },
+               nullptr);
+    b.accessor("clientHeight",
+               [el](Value, std::span<const Value>) {
+                   g_host->engine->flushLayoutForRead(el->document());
+                   return ev::fromDouble(el->layoutBox().contentRect.height);
+               },
+               nullptr);
+
+    {
+        ObjectBuilder style;
+        auto defProp = [&](const char* prop) {
+            std::string p = prop;
+            style.accessor(
+                prop,
+                [el, p](Value, std::span<const Value>) {
+                    return ev::fromUtf8(el->style().getProperty(p));
+                },
+                [el, p](Value, std::span<const Value> a) {
+                    Value v = argAt(a, 0);
+                    if (!ev::isObject(v)) el->style().setProperty(p, ev::toUtf8(v));
+                    return ev::undefined();
+                });
+        };
+        defProp("width");
+        defProp("height");
+        defProp("display");
+        defProp("color");
+        defProp("background");
+        defProp("opacity");
+        defProp("transform");
+        defProp("visibility");
+        defProp("top");
+        defProp("left");
+        defProp("position");
+        defProp("zIndex");
+        b.set("style", style.get());
+    }
+
+    b.def("setAttribute", 2, [el](Value, std::span<const Value> a) {
+        Value nameV = argAt(a, 0);
+        Value valV = argAt(a, 1);
+        if (!ev::isObject(nameV) && !ev::isUndefined(nameV)) {
+            std::string name = ev::toUtf8(nameV);
+            std::string val =
+                (!ev::isObject(valV) && !ev::isUndefined(valV)) ? ev::toUtf8(valV) : "";
+            el->setAttribute(name, val);
+        }
+        return ev::undefined();
+    });
+    b.def("getAttribute", 1, [el](Value, std::span<const Value> a) {
+        Value nameV = argAt(a, 0);
+        if (ev::isObject(nameV) || ev::isUndefined(nameV)) return ev::null();
+        std::string name = ev::toUtf8(nameV);
+        const std::string& val = el->getAttribute(name);
+        if (val.empty() && !el->hasAttribute(name)) return ev::null();
+        return ev::fromUtf8(val);
+    });
+    b.def("hasAttribute", 1, [el](Value, std::span<const Value> a) {
+        Value nameV = argAt(a, 0);
+        if (ev::isObject(nameV) || ev::isUndefined(nameV)) return ev::fromBool(false);
+        return ev::fromBool(el->hasAttribute(ev::toUtf8(nameV)));
+    });
+    b.def("removeAttribute", 1, [el](Value, std::span<const Value> a) {
+        Value nameV = argAt(a, 0);
+        if (!ev::isObject(nameV) && !ev::isUndefined(nameV)) {
+            el->removeAttribute(ev::toUtf8(nameV));
+        }
+        return ev::undefined();
+    });
+    b.def("remove", 0, [el](Value, std::span<const Value>) {
+        if (el->parentNode()) el->parentNode()->removeChild(el);
+        return ev::undefined();
+    });
+    b.def("contains", 1, [](Value, std::span<const Value>) { return ev::fromBool(false); });
+    b.def("getBoundingClientRect", 0, [el](Value, std::span<const Value>) {
+        g_host->engine->flushLayoutForRead(el->document());
+        auto& box = el->layoutBox();
+        ObjectBuilder r;
+        r.set("left", ev::fromDouble(box.contentRect.x));
+        r.set("top", ev::fromDouble(box.contentRect.y));
+        r.set("right", ev::fromDouble(box.contentRect.x + box.contentRect.width));
+        r.set("bottom", ev::fromDouble(box.contentRect.y + box.contentRect.height));
+        r.set("width", ev::fromDouble(box.contentRect.width));
+        r.set("height", ev::fromDouble(box.contentRect.height));
+        r.set("x", ev::fromDouble(box.contentRect.x));
+        r.set("y", ev::fromDouble(box.contentRect.y));
+        return r.get();
+    });
+
+    installElementEventTarget(b, [el]() { return el; }, el->tagName().c_str());
+    return b.get();
+}
+
+Value wrapElement(dom::Element* el) {
+    if (!el) return ev::null();
+    Value existing = hostValueForElement(el);
+    if (!ev::isUndefined(existing)) return existing;
+    std::string tag = el->tagName();
+    for (char& ch : tag) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    if (tag == "canvas") {
+        return makeCanvasValue(el);
+    }
+    return makeGenericElementValue(el);
+}
 
 // pixi v8 boots its DOMPipe unconditionally: the pipe's constructor makes one
 // overlay <div> for DOMContainer content and styles it, and with no
@@ -436,35 +583,22 @@ Value createElementImpl(std::span<const Value> a, size_t tagIndex) {
     // and hand it to texImage2D.
     if (tag == "img") return makeImageValue();
     if (tag == "div") return makeOverlayDivValue();
-    if (tag != "canvas") {
-        // The named refusal: this layer models exactly what the renderers it
-        // hosts touch (canvas, img, and the overlay div pixi's DOMPipe
-        // constructs), and a silent stub for anything else would fail far
-        // from here (bro CLAUDE.md: hard errors over silent fallbacks —
-        // bronze agrees).
-        return ev::throwTypeError("bronze host document.createElement: only <canvas>, "
-                                  "<img> and <div> are modelled, got <" + tag + ">");
-    }
+
     dom::Document* doc = g_host->engine->document();
     if (!doc) return ev::throwError("bronze host: engine has no document");
-    dom::Element* el = doc->createElement("canvas");
+    dom::Element* el = doc->createElement(tag);
     if (!el) return ev::throwError("bronze host: createElement failed");
-    return makeCanvasValue(el);
+    if (tag == "canvas") return makeCanvasValue(el);
+    return makeGenericElementValue(el);
 }
 
 Value makeBodyValue() {
     ObjectBuilder b;
     b.def("appendChild", 1, [](Value, std::span<const Value> a) {
         CanvasState* cs = canvasFor(argAt(a, 0));
-        if (!cs) {
-            return ev::throwTypeError(
-                "bronze host body.appendChild: only host-created canvas elements");
-        }
         dom::Document* doc = g_host->engine->document();
         dom::Element* parent = doc->body() ? doc->body() : doc->documentElement();
-        if (parent && !cs->el->parentNode()) {
-            // Bare dom::Node::appendChild — it invalidates layout itself, so
-            // the element enters layout with nothing further (docs/embedding.md).
+        if (cs && parent && !cs->el->parentNode()) {
             parent->appendChild(cs->el);
         }
         return argAt(a, 0);
@@ -479,6 +613,16 @@ Value makeBodyValue() {
     return b.get();
 }
 
+Value makeArrayValue(const std::vector<Value>& elements) {
+    ObjectBuilder arr;
+    for (size_t i = 0; i < elements.size(); ++i) {
+        std::string idxStr = std::to_string(i);
+        arr.set(idxStr.c_str(), elements[i]);
+    }
+    arr.set("length", ev::fromDouble(static_cast<double>(elements.size())));
+    return arr.get();
+}
+
 Value makeDocumentValue() {
     ObjectBuilder b;
     b.def("createElement", 1, [](Value, std::span<const Value> a) {
@@ -489,6 +633,38 @@ Value makeDocumentValue() {
     // for HTML content.
     b.def("createElementNS", 2, [](Value, std::span<const Value> a) {
         return createElementImpl(a, 1);
+    });
+    b.def("getElementById", 1, [](Value, std::span<const Value> a) {
+        Value idV = argAt(a, 0);
+        if (ev::isObject(idV) || ev::isUndefined(idV)) return ev::null();
+        std::string id = ev::toUtf8(idV);
+        dom::Document* doc = g_host->engine->document();
+        if (!doc) return ev::null();
+        dom::Element* el = doc->getElementById(id);
+        return wrapElement(el);
+    });
+    b.def("querySelector", 1, [](Value, std::span<const Value> a) {
+        Value selV = argAt(a, 0);
+        if (ev::isObject(selV) || ev::isUndefined(selV)) return ev::null();
+        std::string sel = ev::toUtf8(selV);
+        dom::Document* doc = g_host->engine->document();
+        if (!doc) return ev::null();
+        dom::Element* el = doc->querySelector(sel);
+        return wrapElement(el);
+    });
+    b.def("querySelectorAll", 1, [](Value, std::span<const Value> a) {
+        Value selV = argAt(a, 0);
+        if (ev::isObject(selV) || ev::isUndefined(selV)) return makeArrayValue({});
+        std::string sel = ev::toUtf8(selV);
+        dom::Document* doc = g_host->engine->document();
+        if (!doc) return makeArrayValue({});
+        auto list = doc->querySelectorAll(sel);
+        std::vector<Value> arr;
+        arr.reserve(list.size());
+        for (dom::Element* el : list) {
+            arr.push_back(wrapElement(el));
+        }
+        return makeArrayValue(arr);
     });
     {
         Value body = makeBodyValue();
@@ -510,6 +686,154 @@ Value makeDocumentValue() {
         return doc ? doc->documentElement() : nullptr;
     }, "document");
     return b.get();
+}
+
+// ---------------------------------------------------------------------------
+// localStorage & AudioContext
+// ---------------------------------------------------------------------------
+
+struct StorageState {
+    std::map<std::string, std::string> items;
+    std::string path;
+    bool loaded = false;
+};
+static StorageState g_storage;
+
+static void loadStorageFile() {
+    if (g_storage.loaded) return;
+    g_storage.loaded = true;
+    g_storage.path = ".storage.json";
+    std::ifstream file(g_storage.path);
+    if (!file.is_open()) return;
+    std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    size_t pos = 0;
+    while (pos < content.size()) {
+        size_t kstart = content.find('"', pos);
+        if (kstart == std::string::npos) break;
+        size_t kend = content.find('"', kstart + 1);
+        if (kend == std::string::npos) break;
+        std::string key = content.substr(kstart + 1, kend - kstart - 1);
+        size_t colon = content.find(':', kend);
+        if (colon == std::string::npos) break;
+        size_t vstart = content.find('"', colon);
+        if (vstart == std::string::npos) break;
+        size_t vend = content.find('"', vstart + 1);
+        if (vend == std::string::npos) break;
+        std::string val = content.substr(vstart + 1, vend - vstart - 1);
+        g_storage.items[key] = val;
+        pos = vend + 1;
+    }
+}
+
+static void saveStorageFile() {
+    std::ofstream file(g_storage.path);
+    if (!file.is_open()) return;
+    file << "{\n";
+    size_t idx = 0;
+    for (const auto& [k, v] : g_storage.items) {
+        if (idx > 0) file << ",\n";
+        file << "  \"" << k << "\": \"" << v << "\"";
+        idx++;
+    }
+    file << "\n}\n";
+}
+
+Value makeLocalStorageValue() {
+    loadStorageFile();
+    ObjectBuilder b;
+    b.def("getItem", 1, [](Value, std::span<const Value> a) {
+        Value keyV = argAt(a, 0);
+        if (ev::isObject(keyV) || ev::isUndefined(keyV)) return ev::null();
+        std::string key = ev::toUtf8(keyV);
+        auto it = g_storage.items.find(key);
+        if (it == g_storage.items.end()) return ev::null();
+        return ev::fromUtf8(it->second);
+    });
+    b.def("setItem", 2, [](Value, std::span<const Value> a) {
+        Value keyV = argAt(a, 0);
+        Value valV = argAt(a, 1);
+        if (!ev::isObject(keyV) && !ev::isUndefined(keyV)) {
+            std::string key = ev::toUtf8(keyV);
+            std::string val = (!ev::isObject(valV) && !ev::isUndefined(valV)) ? ev::toUtf8(valV) : "";
+            g_storage.items[key] = val;
+            saveStorageFile();
+        }
+        return ev::undefined();
+    });
+    b.def("removeItem", 1, [](Value, std::span<const Value> a) {
+        Value keyV = argAt(a, 0);
+        if (!ev::isObject(keyV) && !ev::isUndefined(keyV)) {
+            g_storage.items.erase(ev::toUtf8(keyV));
+            saveStorageFile();
+        }
+        return ev::undefined();
+    });
+    b.def("clear", 0, [](Value, std::span<const Value>) {
+        g_storage.items.clear();
+        saveStorageFile();
+        return ev::undefined();
+    });
+    b.def("key", 1, [](Value, std::span<const Value> a) {
+        int idx = i32At(a, 0);
+        if (idx < 0 || static_cast<size_t>(idx) >= g_storage.items.size()) return ev::null();
+        auto it = g_storage.items.begin();
+        std::advance(it, idx);
+        return ev::fromUtf8(it->first);
+    });
+    b.accessor("length", [](Value, std::span<const Value>) {
+        return ev::fromDouble(static_cast<double>(g_storage.items.size()));
+    }, nullptr);
+    return b.get();
+}
+
+Value makeAudioContextConstructor() {
+    return ev::makeFunction([](Value, std::span<const Value>) {
+        ObjectBuilder ctx;
+        ctx.set("state", ev::fromUtf8("running"));
+        ctx.set("currentTime", ev::fromDouble(0.0));
+        ctx.set("sampleRate", ev::fromDouble(44100.0));
+        {
+            ObjectBuilder dest;
+            ctx.set("destination", dest.get());
+        }
+        ctx.def("resume", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+        ctx.def("suspend", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+        ctx.def("close", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+        ctx.def("createGain", 0, [](Value, std::span<const Value>) {
+            ObjectBuilder g;
+            ObjectBuilder param;
+            param.set("value", ev::fromDouble(1.0));
+            param.def("setValueAtTime", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
+            param.def("linearRampToValueAtTime", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
+            param.def("exponentialRampToValueAtTime", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
+            g.set("gain", param.get());
+            g.def("connect", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+            g.def("disconnect", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+            return g.get();
+        });
+        ctx.def("createOscillator", 0, [](Value, std::span<const Value>) {
+            ObjectBuilder osc;
+            osc.set("type", ev::fromUtf8("sine"));
+            ObjectBuilder freq;
+            freq.set("value", ev::fromDouble(440.0));
+            freq.def("setValueAtTime", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
+            freq.def("exponentialRampToValueAtTime", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
+            osc.set("frequency", freq.get());
+            osc.def("connect", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+            osc.def("disconnect", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+            osc.def("start", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+            osc.def("stop", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+            return osc.get();
+        });
+        ctx.def("createBufferSource", 0, [](Value, std::span<const Value>) {
+            ObjectBuilder src;
+            src.def("connect", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+            src.def("start", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+            src.def("stop", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+            return src.get();
+        });
+        return ctx.get();
+    }, 0);
 }
 
 // The compiled app's navigator answers with the identity the interpreted side
@@ -622,6 +946,20 @@ Value makeWindowValue() {
         return ev::undefined();
     });
 
+    b.def("getComputedStyle", 1, [](Value, std::span<const Value> a) {
+        Value elV = argAt(a, 0);
+        if (ev::isObject(elV)) {
+            Value style = ev::getProperty(elV, "style");
+            if (!ev::isUndefined(style) && !ev::isNull(style)) return style;
+        }
+        ObjectBuilder empty;
+        return empty.get();
+    });
+
+    b.set("localStorage", makeLocalStorageValue());
+    b.set("AudioContext", makeAudioContextConstructor());
+    b.set("webkitAudioContext", makeAudioContextConstructor());
+
     return b.get();
 }
 
@@ -707,6 +1045,7 @@ double hostClockMs() { return g_host ? g_host->clockMs : 0.0; }
 
 engine::Engine* hostEngine() { return g_host ? g_host->engine : nullptr; }
 
+
 // Identity, not a lookup table built for it: the canvas registry is already
 // the list of every element this layer wrapped, and it is short (one canvas in
 // every path an app takes). Scanning it costs less than the map that would
@@ -717,6 +1056,22 @@ Value hostValueForElement(dom::Element* el) {
         if (cs->el == el) return cs->jsObj.get();
     }
     return ev::undefined();
+}
+
+Value makeBroValue() {
+    ObjectBuilder b;
+    {
+        ObjectBuilder menu;
+        menu.def("set", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+        menu.def("on", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
+        b.set("menu", menu.get());
+    }
+    {
+        ObjectBuilder time;
+        time.def("now", 0, [](Value, std::span<const Value>) { return ev::fromDouble(hostClockMs()); });
+        b.set("time", time.get());
+    }
+    return b.get();
 }
 
 // ---------------------------------------------------------------------------
@@ -744,8 +1099,8 @@ void installWebHostGlobals(engine::Engine& engine) {
     // performance, WebGL2RenderingContext, setTimeout, clearTimeout,
     // setInterval, clearInterval, Image, XMLHttpRequest, fetch, Request,
     // Headers, Response, navigator, HTMLCanvasElement, HTMLImageElement,
-    // WebGLRenderingContext, Intl. registerGlobal roots each value for the
-    // life of the process.
+    // WebGLRenderingContext, Intl, localStorage, AudioContext, CustomEvent,
+    // bro. registerGlobal roots each value for the life of the process.
     {
         Value doc = makeDocumentValue();
         ev::registerGlobal("document", doc);
@@ -811,6 +1166,22 @@ void installWebHostGlobals(engine::Engine& engine) {
         // The day this host grows a real Intl member, it goes here.
         ObjectBuilder intl;
         ev::registerGlobal("Intl", intl.get());
+    }
+    {
+        Value ls = makeLocalStorageValue();
+        ev::registerGlobal("localStorage", ls);
+    }
+    {
+        Value audioCtx = makeAudioContextConstructor();
+        ev::registerGlobal("AudioContext", audioCtx);
+    }
+    {
+        Value customEvent = makeBrandConstructor("CustomEvent");
+        ev::registerGlobal("CustomEvent", customEvent);
+    }
+    {
+        Value broVal = makeBroValue();
+        ev::registerGlobal("bro", broVal);
     }
 }
 

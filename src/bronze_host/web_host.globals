@@ -36,3 +36,8 @@ HTMLCanvasElement
 HTMLImageElement
 WebGLRenderingContext
 Intl
+localStorage
+AudioContext
+CustomEvent
+bro
+
