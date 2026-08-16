@@ -141,6 +141,40 @@
 
 
 // -----------------------------------------------------------------------------
+// <input type=file>
+// -----------------------------------------------------------------------------
+//
+// The other way in. Clicking a file input — or calling `.click()` on a hidden
+// one from your own button, which is how nearly every page does it — opens the
+// native picker, and what the user chose reads back as `input.files`: the same
+// real `File` objects a drop produces, `.path` included.
+//
+//   <input type="file" accept=".obj,.gltf" multiple>
+//
+//   input.addEventListener('change', () => {
+//     for (const file of input.files) load(file);
+//   });
+//
+// `accept` filters the picker (extensions, MIME types, and the `image/*`-style
+// wildcards); `multiple` allows more than one. Cancelling selects nothing and
+// fires no events, leaving any earlier selection in place. `input.value` reads
+// as the browser's fake path ("C:\fakepath\model.obj") — the real one is on
+// each File.
+//
+// In headless there is no picker to open: `setPickedFiles(paths)` queues what
+// the next click will choose, and the click consumes it (docs/headless.md).
+
+/** @example
+ *   // The standard hidden-input pattern.
+ *   const input = document.createElement('input');
+ *   input.type = 'file';
+ *   input.accept = 'image/*';
+ *   input.addEventListener('change', () => useTexture(input.files[0]));
+ *   myButton.onclick = () => input.click();
+ */
+
+
+// -----------------------------------------------------------------------------
 // Downloading — <a download>
 // -----------------------------------------------------------------------------
 //

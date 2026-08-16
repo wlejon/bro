@@ -627,6 +627,30 @@ static JSValue js_lastDownload(JSContext* ctx, JSValueConst, int, JSValueConst*)
     return p.empty() ? JS_NULL : JS_NewString(ctx, p.c_str());
 }
 
+// setPickedFiles(paths) — what the next <input type=file> picker returns.
+// There is no native picker to open with no user present, so a script queues
+// the choice and then clicks the input exactly as a user would.
+static JSValue js_setPickedFiles(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    std::vector<std::string> paths;
+    if (argc >= 1 && JS_IsString(argv[0])) {
+        const char* s = JS_ToCString(ctx, argv[0]);
+        if (s) { paths.emplace_back(s); JS_FreeCString(ctx, s); }
+    } else if (argc >= 1 && JS_IsArray(argv[0])) {
+        uint32_t len = 0;
+        JSValue lenVal = JS_GetPropertyStr(ctx, argv[0], "length");
+        JS_ToUint32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (uint32_t i = 0; i < len; i++) {
+            JSValue v = JS_GetPropertyUint32(ctx, argv[0], i);
+            const char* s = JS_ToCString(ctx, v);
+            if (s) { paths.emplace_back(s); JS_FreeCString(ctx, s); }
+            JS_FreeValue(ctx, v);
+        }
+    }
+    DialogBindings::setPickedFiles(std::move(paths));
+    return JS_UNDEFINED;
+}
+
 // setDialogAnswer(accept) — what alert/confirm/prompt do with no user to ask.
 // `true` (the default) means confirm() returns true and prompt() returns its
 // default value, so a script walks through an app's confirmations instead of
@@ -1494,6 +1518,8 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         .function("dropFiles", js_dropFiles, 4)
         // Modal dialogs (alert/confirm/prompt) answer themselves in headless
         .function("setDialogAnswer", js_setDialogAnswer, 1)
+        // What the next <input type=file> picker returns
+        .function("setPickedFiles", js_setPickedFiles, 1)
         // Where the last <a download> click saved its file
         .function("lastDownload", js_lastDownload, 0)
         .function("dropText", js_dropText, 4)

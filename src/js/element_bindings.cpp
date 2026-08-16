@@ -1,5 +1,6 @@
 #include "js/dom_bindings_internal.h"
 #include "js/anchor_download.h"
+#include "js/dialog_bindings.h"
 #include "js/custom_elements.h"
 #include "webgl/webgl2_context.h"
 #include "js/event_dispatch.h"
@@ -2475,20 +2476,76 @@ static JSValue js_form_checkValidity_impl(JSContext* ctx, bro::dom::Element* el)
     return JS_NewBool(ctx, allValid);
 }
 
-// files: FileList for <input type=file>. bro has no native file picker in
-// headless and no engine-driven file drop has been wired to <input> yet, so
-// this always returns null (spec: null for non-file inputs) or an empty
-// array-like for type=file. Extending to a live FileList when file drop
-// wiring lands is a focused follow-up.
+// files: FileList for <input type=file> — the paths the picker returned, as
+// real File objects (bytes, size, type, and the non-standard `.path`; see
+// docs/file-api.js). Null for any other input type, per spec. Empty until the
+// user picks something, which is what a page checks first.
 static JSValue js_element_get_files(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val);
     if (!el) return JS_NULL;
     const std::string& t = el->getAttribute("type");
     if (t != "file") return JS_NULL;
-    // Empty FileList — array with length=0, array-like indexing returns undefined.
+
     JSValue arr = JS_NewArray(ctx);
-    JS_SetPropertyStr(ctx, arr, "length", JS_NewInt32(ctx, 0));
+    const auto& paths = el->selectedFiles();
+    if (paths.empty()) return arr;
+
+    // Same helper the drop path uses, so a picked file and a dropped one are
+    // the same kind of object down to the `.path`.
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue fromPath = JS_GetPropertyStr(ctx, global, "__bro_fileFromPath");
+    uint32_t n = 0;
+    for (const auto& p : paths) {
+        JSValue file = JS_UNDEFINED;
+        if (JS_IsFunction(ctx, fromPath)) {
+            JSValue arg = JS_NewString(ctx, p.c_str());
+            file = JS_Call(ctx, fromPath, JS_UNDEFINED, 1, &arg);
+            JS_FreeValue(ctx, arg);
+            if (JS_IsException(file)) { JS_FreeValue(ctx, JS_GetException(ctx)); file = JS_UNDEFINED; }
+        }
+        if (JS_IsUndefined(file) || JS_IsNull(file)) {
+            // Unreadable (a directory, a permission error): a plain
+            // {name, path} stands in so the list never has a hole in it.
+            JSValue stub = JS_NewObject(ctx);
+            std::string name = p;
+            if (auto slash = name.find_last_of("/\\"); slash != std::string::npos)
+                name.erase(0, slash + 1);
+            JS_SetPropertyStr(ctx, stub, "name", JS_NewString(ctx, name.c_str()));
+            JS_SetPropertyStr(ctx, stub, "path", JS_NewString(ctx, p.c_str()));
+            file = stub;
+        }
+        JS_SetPropertyUint32(ctx, arr, n++, file);
+    }
+    JS_FreeValue(ctx, fromPath);
+    JS_FreeValue(ctx, global);
     return arr;
+}
+
+bool runFilePickerActivation(JSContext* ctx, dom::Element* el) {
+    if (!el) return false;
+    const auto& tag = el->tagName();
+    if (tag != "INPUT" && tag != "input") return false;
+    if (el->getAttribute("type") != "file") return false;
+    if (el->hasAttribute("disabled")) return false;
+
+    auto picked = DialogBindings::pickFiles(el->getAttribute("accept"),
+                                            el->hasAttribute("multiple"));
+    if (picked.empty()) return true;   // cancelled: no events, per spec
+
+    el->setSelectedFiles(std::move(picked));
+    // The value reads as the fake path a browser reports for the first file.
+    std::string first = el->selectedFiles().front();
+    if (auto slash = first.find_last_of("/\\"); slash != std::string::npos)
+        first.erase(0, slash + 1);
+    el->setAttribute("value", "C:\\fakepath\\" + first);
+
+    dom::InputEvent inputEvt("input");
+    inputEvt.setIsTrusted(true);
+    dispatchDomEvent(ctx, el, inputEvt);
+    dom::Event changeEvt("change", true, false);
+    changeEvt.setIsTrusted(true);
+    dispatchDomEvent(ctx, el, changeEvt);
+    return true;
 }
 
 
@@ -3902,6 +3959,10 @@ static void js_element_click_impl(JSContext* ctx, dom::Element* el) {
             dom::InputEvent inputEvt("input");
             inputEvt.setIsTrusted(true);
             dispatchDomEvent(ctx, el, inputEvt);
+        } else if (runFilePickerActivation(ctx, el)) {
+            // <input type=file> activation: open the native picker. A page
+            // hides the input and calls .click() from its own button, which
+            // is the only way it can offer "browse for a file" at all.
         } else if (runAnchorDownload(ctx, el)) {
             // <a download> activation: save the link's bytes instead of
             // navigating. Programmatic clicks matter most here — building a

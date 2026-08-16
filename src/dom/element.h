@@ -313,6 +313,15 @@ public:
     // For shadow DOM children, crosses the shadow boundary to the host.
     Element* layoutParent() const;
 
+    // <input type=file>: the paths the user picked, in order. Held here
+    // rather than as JS File objects because the picker runs in C++ and the
+    // list has to survive between the pick and whenever script reads `.files`
+    // (which may be a different turn, from a change handler).
+    const std::vector<std::string>& selectedFiles() const { return selectedFiles_; }
+    void setSelectedFiles(std::vector<std::string> paths) {
+        selectedFiles_ = std::move(paths);
+    }
+
     // Element-level scroll offset (for overflow:auto/scroll elements)
     float scrollTopValue() const { return scrollTop_; }
     void setScrollTopValue(float v) { scrollTop_ = v; }
@@ -478,6 +487,7 @@ private:
     bool styleSheetAdded_ = false;
     float scrollTop_ = 0.0f;
     uint32_t magic_ = 0xB00E;
+    std::vector<std::string> selectedFiles_;   // <input type=file>
 
     // htmlayout integration
     htmlayout::css::ComputedStyle computedStyle_;

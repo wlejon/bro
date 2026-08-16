@@ -85,6 +85,12 @@ bro::dom::Element* labeledControlFor(bro::dom::Element* label);
 /// wrapped checkbox from toggling twice and cancelling itself out.
 bool forwardLabelActivation(JSContext* ctx, bro::dom::Element* clickTarget);
 
+/// The `<input type=file>` activation behavior: open the native file picker,
+/// store what the user chose (readable as `.files`), and fire input + change.
+/// Returns true when `el` is a file input at all, picked or cancelled — the
+/// caller uses that to stop looking for another default action.
+bool runFilePickerActivation(JSContext* ctx, bro::dom::Element* el);
+
 /// Dispatch a trusted click on `el` and run its default actions (button submit,
 /// checkbox/radio toggle + change/input, <summary> toggle). This is the one
 /// implementation behind element.click(), the hit-tested click path's defaults,

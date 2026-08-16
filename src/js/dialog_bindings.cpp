@@ -341,6 +341,83 @@ static JSValue js_prompt(JSContext* ctx, JSValueConst /*this_val*/,
 }
 
 // ---------------------------------------------------------------------------
+// pickFiles — the picker behind <input type=file>
+// ---------------------------------------------------------------------------
+
+static std::vector<std::string> s_queuedPicks;
+
+void DialogBindings::setPickedFiles(std::vector<std::string> paths)
+{
+    s_queuedPicks = std::move(paths);
+}
+
+std::vector<std::string> DialogBindings::pickFiles(const std::string& accept,
+                                                   bool allowMultiple)
+{
+    if (!s_interactive) {
+        // Nobody to ask: hand back whatever the script queued, once, so a
+        // headless run can drive a file input the way a user would.
+        std::vector<std::string> picked;
+        picked.swap(s_queuedPicks);
+        return picked;
+    }
+
+    // The HTML `accept` attribute is a comma-separated list of extensions
+    // (".obj"), MIME types ("image/png") and wildcards ("image/*"). SDL wants
+    // a semicolon-separated extension pattern, so keep the extensions, expand
+    // the handful of wildcards worth expanding, and drop the rest — a filter
+    // that cannot be expressed is better shown as "all files" than as one
+    // that hides the file the user came for.
+    std::string pattern;
+    auto add = [&pattern](const std::string& ext) {
+        if (ext.empty()) return;
+        if (!pattern.empty()) pattern += ';';
+        pattern += ext;
+    };
+    size_t start = 0;
+    while (start <= accept.size() && !accept.empty()) {
+        size_t comma = accept.find(',', start);
+        std::string tok = accept.substr(start, comma == std::string::npos
+                                                   ? std::string::npos
+                                                   : comma - start);
+        // trim
+        while (!tok.empty() && isspace((unsigned char)tok.front())) tok.erase(tok.begin());
+        while (!tok.empty() && isspace((unsigned char)tok.back())) tok.pop_back();
+        if (!tok.empty()) {
+            if (tok[0] == '.') {
+                add(tok.substr(1));
+            } else if (tok == "image/*") {
+                add("png"); add("jpg"); add("jpeg"); add("gif"); add("webp"); add("bmp");
+            } else if (tok == "audio/*") {
+                add("wav"); add("mp3"); add("ogg"); add("flac");
+            } else if (tok == "video/*") {
+                add("webm"); add("mp4");
+            } else if (auto slash = tok.find('/');
+                       slash != std::string::npos && tok.substr(slash + 1) != "*") {
+                add(tok.substr(slash + 1));   // "image/png" -> "png"
+            }
+        }
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+
+    SDL_DialogFileFilter sdlFilter;
+    bool hasFilter = !pattern.empty();
+    if (hasFilter) {
+        sdlFilter.name = "Accepted files";
+        sdlFilter.pattern = pattern.c_str();
+    }
+
+    DialogResult result;
+    SDL_ShowOpenFileDialog(dialogCallback, &result, s_window,
+                           hasFilter ? &sdlFilter : nullptr,
+                           hasFilter ? 1 : 0,
+                           nullptr, allowMultiple);
+    waitForDialog(result);
+    return std::move(result.files);
+}
+
+// ---------------------------------------------------------------------------
 // Install
 // ---------------------------------------------------------------------------
 

@@ -966,6 +966,12 @@ void dispatchDocMouseRelease(
             }
         }
 
+        // <input type=file> default action: open the native picker. Mirrors
+        // the programmatic element.click() path.
+        if (!clickEvt.defaultPrevented() && target && ctx.jsCtx) {
+            js::runFilePickerActivation(ctx.jsCtx, target);
+        }
+
         // <a download> default action: save the link's bytes rather than
         // navigating to them. Mirrors the programmatic element.click() path.
         if (!clickEvt.defaultPrevented() && target && ctx.jsCtx) {
