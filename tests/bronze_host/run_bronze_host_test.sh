@@ -70,7 +70,7 @@ if [[ -z "$BIN" || ! -f "$BIN" ]]; then
     exit 77   # the automake convention for "skipped", not "passed"
 fi
 
-APP_DIR="$(to_win_path "$PROJECT_DIR/src/bronze_host/app/appdir")"
+APP_DIR="$(to_win_path "$PROJECT_DIR/src/bronze_host/fixtures/appdir")"
 
 # stderr is folded in on purpose: the engine logs there, and a run that failed
 # because a host global was missing says so in the log — swallowing it would

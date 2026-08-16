@@ -164,8 +164,8 @@ root when bro's configure didn't set one).
 ## Compile and run an app
 
 ```bash
-# 1. compile the app to an OBJECT against the manifest (bronze repo, bronze CLI)
-bronze build src/bronze_host/app/main_scenegraph.js \
+# 1. compile a fixture to an OBJECT against the manifest (bronze repo, bronze CLI)
+bronze build src/bronze_host/fixtures/main_scenegraph.js \
     -o /tmp/app.obj \
     --emit-obj \
     --host-globals src/bronze_host/web_host.globals
@@ -174,14 +174,14 @@ bronze build src/bronze_host/app/main_scenegraph.js \
 cmake -B build -DBRO_WITH_BRONZE=ON -DBRO_BRONZE_APP_OBJ=/tmp/app.obj
 cmake --build build --config Release --target bro-bronze-host
 
-# 3a. run it windowed against the minimal app dir
-./build/Release/bro-bronze-host src/bronze_host/app/appdir
+# 3a. run it windowed against the minimal fixture app dir
+./build/Release/bro-bronze-host src/bronze_host/fixtures/appdir
 
 # 3b. or headless for a fixed number of frames, which is what the check does
-./build/Release/bro-bronze-host src/bronze_host/app/appdir --headless --frames 8
+./build/Release/bro-bronze-host src/bronze_host/fixtures/appdir --headless --frames 8
 
 # 3c. or headless under a driver script — bro-headless, scripting THIS app
-./build/Release/bro-bronze-host src/bronze_host/app/appdir --headless drive.js
+./build/Release/bro-bronze-host src/bronze_host/fixtures/appdir --headless drive.js
 ```
 
 ### More than one app in one tree
@@ -260,7 +260,7 @@ compiler should never be something you acquire by configuring bro:
 ```bash
 cmake -B build -DBRO_WITH_BRONZE=ON \
     -DBRO_BRONZE_BUILD_APP=ON \
-    -DBRO_BRONZE_APP_SOURCE=src/bronze_host/app/main_scenegraph.js
+    -DBRO_BRONZE_APP_SOURCE=src/bronze_host/fixtures/main_scenegraph.js
 cmake --build build --target bro-bronze-host
 ```
 
@@ -271,21 +271,25 @@ whenever the source or the manifest changes. `BRO_BRONZE_BUILD_APP=ON` and
 other adopts an object someone else compiled, and a configure that accepted both
 would silently pick a winner.
 
-## The app
+## Test Fixtures vs Real Applications
 
-`app/main_scenegraph.js` exercises everything below the renderer: scene graph,
+> [!IMPORTANT]
+> `fixtures/` contains **internal integration test fixtures** used for CI and CTest checks.
+> Real applications (such as the Three.js Editor or custom tools) live in `broworkshop/tools/<name>`
+> or in standalone app repositories with their own `bro.json` and `index.html`.
+
+`fixtures/main_scenegraph.js` exercises everything below the renderer: scene graph,
 matrix math, the host DOM, the WebGL2 context object, timers, rAF and the
-microtask checkpoint. The renderer apps import `WebGLRenderer` from r160's
+microtask checkpoint. The renderer fixtures import `WebGLRenderer` from r160's
 published `build/three.module.js`, vendored byte-for-byte in the bronze
 checkout (`bronze/tests/oracle/threejs/three.module.js` — origin and sha256 in
-the README beside it): `app/main.js` is the basic cube, `app/main_lit.js` adds
-`MeshStandardMaterial` + lights, `app/main_textured.js` a procedural
+the README beside it): `fixtures/main.js` is the basic cube, `fixtures/main_lit.js` adds
+`MeshStandardMaterial` + lights, `fixtures/main_textured.js` a procedural
 `DataTexture` checkerboard. Each prints `gl.readPixels` predicates after
 `render()`, so a correct frame is checkable from stdout alone.
-`app/MISSING_MODULES.md` records why the bundle, not ~200 vendored modules.
+`fixtures/MISSING_MODULES.md` records why the bundle, not ~200 vendored modules.
 
-`app/appdir` is the app directory the executable boots from — an Engine still
-needs a document even when the app's JS was compiled away.
+`fixtures/appdir` is the minimal fixture directory the test executable boots from.
 
 ## The hybrid app dir: `"compiled": true`
 
