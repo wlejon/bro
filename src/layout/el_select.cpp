@@ -41,6 +41,18 @@ std::vector<ElSelect::Option> ElSelect::getOptions() const {
         // attribute. An explicit value="" stays "" — placeholder options
         // (<option value="">pick one…</option>) rely on select.value === ''.
         if (!child->hasAttribute("value")) opt.value = opt.text;
+
+        // text-transform is a rendering property and inherits into the option,
+        // so it applies to the label the control paints — both the closed
+        // select and the dropdown, which both read this list. Applied after
+        // the value fallback above: the value the page reads back is the
+        // author's string, never the uppercased one.
+        {
+            const auto& style = child->computedStyle();
+            auto tt = style.find("text-transform");
+            if (tt != style.end() && !tt->second.empty())
+                opt.text = DrawTraversal::applyTextTransform(opt.text, tt->second);
+        }
         opts.push_back(std::move(opt));
     }
     return opts;

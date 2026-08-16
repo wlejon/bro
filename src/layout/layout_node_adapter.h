@@ -284,8 +284,35 @@ public:
         }
         if (elem_ && elem_->takeLayoutDirty())
             htmlayout::layout::markDirty(this);
+        // A widget-replaced element keeps its DOM children out of the layout
+        // tree (see buildChildren), so no layout node exists to consume those
+        // children's dirty flags. Rewriting an <option>'s label — or restyling
+        // one, e.g. inheriting a `text-transform` change — would leave this
+        // node clean, and layout would hand back the cached box: the old label,
+        // measured at the old intrinsic width. The node that actually paints
+        // them takes their dirt.
+        if (elem_ && widgetHidesChildren(elem_) && takeSubtreeDirty(elem_))
+            htmlayout::layout::markDirty(this);
         for (auto& child : children_) rebuilds += child->markDirtyFromElements();
         return rebuilds;
+    }
+
+    static bool widgetHidesChildren(dom::Element* elem) {
+        std::string_view tag = elem->tagName();
+        return tag == "select" || tag == "SELECT" ||
+               tag == "textarea" || tag == "TEXTAREA";
+    }
+
+    // Clears every descendant flag (no short-circuit) — a flag left set would
+    // fire on some unrelated later pass.
+    static bool takeSubtreeDirty(dom::Element* elem) {
+        bool dirty = false;
+        for (auto* child : elem->children()) {
+            if (child->takeStructureDirty()) dirty = true;
+            if (child->takeLayoutDirty())    dirty = true;
+            if (takeSubtreeDirty(child))     dirty = true;
+        }
+        return dirty;
     }
 
     // Write layout results back to the DOM element/text node

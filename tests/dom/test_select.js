@@ -169,5 +169,32 @@ v.selectedIndex = Math.min(0, v.options.length - 1);
 assert(v.selectedIndex === 0, 'viz pattern: set 0 after append reads back 0, got: ' + v.selectedIndex);
 document.body.removeChild(v);
 
+// =========================================================================
+// Rewriting an option's label re-measures the control
+// =========================================================================
+// A <select>'s children are deliberately kept out of the layout tree — the
+// control reads them from the DOM — so nothing else consumes their dirty
+// flags. Without the widget node taking that dirt, layout reuses the cached
+// box and the select keeps the width of the text it no longer shows.
+const m = document.createElement('select');
+m.style.font = '16px Arial';
+const mo = document.createElement('option');
+mo.textContent = 'short';
+m.appendChild(mo);
+root.appendChild(m);
+flush();
+const narrow = m.getBoundingClientRect().width;
+mo.textContent = 'a considerably longer label';
+flush();
+const wide = m.getBoundingClientRect().width;
+assert(wide > narrow + 20,
+       'rewriting an option label re-measures the select (' + wide +
+       ' vs ' + narrow + ')');
+mo.textContent = 'short';
+flush();
+assert(Math.abs(m.getBoundingClientRect().width - narrow) < 0.5,
+       'and shrinking the label shrinks it back (' +
+       m.getBoundingClientRect().width + ' vs ' + narrow + ')');
+
 // Cleanup
 root.innerHTML = '';
