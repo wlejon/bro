@@ -138,3 +138,47 @@
  *
  *   document.addEventListener('dragover', e => e.preventDefault());
  */
+
+
+// -----------------------------------------------------------------------------
+// Downloading — <a download>
+// -----------------------------------------------------------------------------
+//
+// The other direction: handing a file *out*. There is exactly one way a page
+// can do it, and every "Export" / "Save as" button on the web is built from it:
+//
+//   const url = URL.createObjectURL(new Blob([bytes], { type }));
+//   const link = document.createElement('a');
+//   link.href = url;
+//   link.download = 'model.obj';
+//   link.click();                 // or link.dispatchEvent(new MouseEvent('click'))
+//   URL.revokeObjectURL(url);
+//
+// The file lands in the user's Downloads folder, named by the `download`
+// attribute (or the URL's own last path segment when the attribute is empty).
+// An existing file is never overwritten — "model (2).obj" and so on are tried.
+// The attribute names a file, never a path: separators in it are replaced, so
+// a page cannot write outside that folder.
+//
+// The href can be an object URL, a `data:` URL, or an app path — anything the
+// runtime can read bytes from. `preventDefault()` on the click cancels the
+// download, and an anchor without a `download` attribute is a plain link and
+// saves nothing.
+//
+// An app that wants the user to choose the location has `showSaveFileDialog()`
+// instead (docs/dialogs-api.js); this path is for code written against the web.
+//
+// In headless, `lastDownload()` returns the absolute path the most recent
+// download wrote, so a test can assert on an export without knowing where the
+// user's Downloads folder is (docs/headless.md).
+
+/** @example
+ *   function exportScene(text) {
+ *     const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }));
+ *     const link = document.createElement('a');
+ *     link.href = url;
+ *     link.download = 'scene.json';
+ *     link.click();
+ *     URL.revokeObjectURL(url);
+ *   }
+ */

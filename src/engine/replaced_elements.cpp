@@ -2,6 +2,7 @@
 // Used by the Engine for both the app document and system panels.
 
 #include "engine/replaced_elements.h"
+#include "js/anchor_download.h"
 
 #include "dom/document.h"
 #include "dom/element.h"
@@ -963,6 +964,12 @@ void dispatchDocMouseRelease(
                 if (ctx.jsCtx) js::dispatchDomEvent(ctx.jsCtx, parent, toggleEvt);
                 break;
             }
+        }
+
+        // <a download> default action: save the link's bytes rather than
+        // navigating to them. Mirrors the programmatic element.click() path.
+        if (!clickEvt.defaultPrevented() && target && ctx.jsCtx) {
+            js::runAnchorDownload(ctx.jsCtx, target);
         }
 
         // <label> default action: a click on the label's text (or an icon, or a

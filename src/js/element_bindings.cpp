@@ -1,4 +1,5 @@
 #include "js/dom_bindings_internal.h"
+#include "js/anchor_download.h"
 #include "js/custom_elements.h"
 #include "webgl/webgl2_context.h"
 #include "js/event_dispatch.h"
@@ -1630,6 +1631,74 @@ static JSValue js_element_set_disabled(JSContext* ctx, JSValueConst this_val,
         el->setAttribute("disabled", "disabled");
     else
         el->removeAttribute("disabled");
+    return JS_UNDEFINED;
+}
+
+// Link attributes reflected as properties. `link.href = url; link.download =
+// name; link.click()` is the shape every "save this file" path on the web
+// takes, and without the reflection the assignments land on a JS expando and
+// the anchor stays empty — the click then downloads nothing.
+static JSValue js_element_get_href(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    return JS_NewString(ctx, el->getAttribute("href").c_str());
+}
+
+static JSValue js_element_set_href(JSContext* ctx, JSValueConst this_val,
+                                   JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    el->setAttribute("href", jsToStdString(ctx, val));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_download(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    return JS_NewString(ctx, el->getAttribute("download").c_str());
+}
+
+static JSValue js_element_set_download(JSContext* ctx, JSValueConst this_val,
+                                       JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    el->setAttribute("download", jsToStdString(ctx, val));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_target(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    return JS_NewString(ctx, el->getAttribute("target").c_str());
+}
+
+static JSValue js_element_set_target(JSContext* ctx, JSValueConst this_val,
+                                     JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    el->setAttribute("target", jsToStdString(ctx, val));
+    return JS_UNDEFINED;
+}
+
+static JSValue js_element_get_rel(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    return JS_NewString(ctx, el->getAttribute("rel").c_str());
+}
+
+static JSValue js_element_set_rel(JSContext* ctx, JSValueConst this_val,
+                                  JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    el->setAttribute("rel", jsToStdString(ctx, val));
     return JS_UNDEFINED;
 }
 
@@ -3663,6 +3732,14 @@ static JSValue js_element_dispatchEvent(JSContext* ctx, JSValueConst this_val,
     if (hasDetail) customEvt.setDetail(detail);
     bro::js::dispatchDomEvent(ctx, el, evt, argv[0]);
 
+    // Activation behavior runs for a dispatched event too, not only a trusted
+    // one (DOM §2.9 runs it on any event whose default was not prevented).
+    // `link.dispatchEvent(new MouseEvent('click'))` is how a good deal of
+    // export code triggers its own download — three.js's editor among them —
+    // so the anchor has to act on it exactly as it does on element.click().
+    if (type == "click" && !evt.defaultPrevented())
+        runAnchorDownload(ctx, el);
+
     return JS_NewBool(ctx, !evt.defaultPrevented());
 }
 
@@ -3825,6 +3902,11 @@ static void js_element_click_impl(JSContext* ctx, dom::Element* el) {
             dom::InputEvent inputEvt("input");
             inputEvt.setIsTrusted(true);
             dispatchDomEvent(ctx, el, inputEvt);
+        } else if (runAnchorDownload(ctx, el)) {
+            // <a download> activation: save the link's bytes instead of
+            // navigating. Programmatic clicks matter most here — building a
+            // Blob, minting an object URL and calling link.click() is how
+            // every "Export" button on the web works.
         } else {
             // <summary> activation: toggle [open] on the parent <details>.
             // Walk up from the clicked element so a click on content inside
@@ -4706,6 +4788,11 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("type",        js_element_get_type,        js_element_set_type),
     JS_CGETSET_DEF("disabled",    js_element_get_disabled,    js_element_set_disabled),
     JS_CGETSET_DEF("placeholder", js_element_get_placeholder, js_element_set_placeholder),
+    // Link properties
+    JS_CGETSET_DEF("href",        js_element_get_href,        js_element_set_href),
+    JS_CGETSET_DEF("download",    js_element_get_download,    js_element_set_download),
+    JS_CGETSET_DEF("target",      js_element_get_target,      js_element_set_target),
+    JS_CGETSET_DEF("rel",         js_element_get_rel,         js_element_set_rel),
     JS_CGETSET_DEF("name",        js_element_get_name,        js_element_set_name),
     JS_CGETSET_DEF("required",    js_element_get_required,    js_element_set_required),
     JS_CGETSET_DEF("readOnly",    js_element_get_readOnly,    js_element_set_readOnly),

@@ -1,5 +1,6 @@
 #include "js/headless_bindings.h"
 #include "js/dialog_bindings.h"
+#include "js/anchor_download.h"
 #include "engine/engine.h"
 #include "engine/capture_path.h"
 #include "engine/gamepad.h"
@@ -617,6 +618,14 @@ static JSValue js_cut(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 }
 
 // --- Drag & drop simulation ---
+
+// lastDownload() — absolute path of the file the most recent <a download>
+// click wrote, or null if nothing has been downloaded. Lets a test assert on
+// an app's export path without knowing where the user's Downloads folder is.
+static JSValue js_lastDownload(JSContext* ctx, JSValueConst, int, JSValueConst*) {
+    const std::string& p = lastDownloadPath();
+    return p.empty() ? JS_NULL : JS_NewString(ctx, p.c_str());
+}
 
 // setDialogAnswer(accept) — what alert/confirm/prompt do with no user to ask.
 // `true` (the default) means confirm() returns true and prompt() returns its
@@ -1485,6 +1494,8 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         .function("dropFiles", js_dropFiles, 4)
         // Modal dialogs (alert/confirm/prompt) answer themselves in headless
         .function("setDialogAnswer", js_setDialogAnswer, 1)
+        // Where the last <a download> click saved its file
+        .function("lastDownload", js_lastDownload, 0)
         .function("dropText", js_dropText, 4)
         // Gamepad simulation
         .function("gamepadConnect", js_gamepadConnect, 1)
