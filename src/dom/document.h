@@ -395,6 +395,22 @@ public:
         nodeDestroyingCb_ = cb;
     }
 
+    // The same two notices, for a wrapper layer that is not the JS realm.
+    //
+    // The two slots above are single pointers because there is exactly one
+    // QuickJS realm per document and it owns them. A NATIVE host that also
+    // wraps elements — the bronze host holds a compiled-side object per
+    // element, keyed by raw Element* — needs the identical warning and cannot
+    // take a slot the realm already has. It is a list rather than a third slot
+    // because none of these observers owns the document, and a second one
+    // arriving must not silently unhook the first.
+    //
+    // Fired after the corresponding single callback, in registration order.
+    // An observer must not mutate the DOM from inside: it is called mid-tear.
+    using NodeObserver = void(*)(Document*, Node*);
+    void addNodeFreedObserver(NodeObserver cb);
+    void removeNodeFreedObserver(NodeObserver cb);
+
     // Fired from cloneNode() for each cloned element, after its attributes and
     // (for a deep clone) its children are in place. Everything the DOM layer
     // can copy on its own already has been; this hook exists for the state
@@ -569,6 +585,7 @@ private:
     SelectionChangeCallback selectionChangeCb_ = nullptr;
     NodeFreedCallback nodeFreedCb_ = nullptr;
     NodeDestroyingCallback nodeDestroyingCb_ = nullptr;
+    std::vector<NodeObserver> nodeFreedObservers_;
     ElementClonedCallback elementClonedCb_ = nullptr;
     NodeAdoptedCallback nodeAdoptedCb_ = nullptr;
 };

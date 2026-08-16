@@ -1450,6 +1450,7 @@ void Document::freeNode(Node* node) {
     // dangle — a later property access or sweepOrphanedWrappers() then reads
     // the freed Element and faults.
     if (nodeFreedCb_) nodeFreedCb_(this, node);
+    for (NodeObserver obs : nodeFreedObservers_) obs(this, node);
 
     // Move the owning unique_ptr into pendingFrees_ rather than destroying
     // it now. The raster thread may still hold a raw pointer from an
@@ -1461,6 +1462,19 @@ void Document::freeNode(Node* node) {
         pendingSet_.insert(node);
         ownedNodes_.erase(it);
     }
+}
+
+void Document::addNodeFreedObserver(NodeObserver cb) {
+    if (!cb) return;
+    for (NodeObserver existing : nodeFreedObservers_)
+        if (existing == cb) return;   // idempotent: installing twice is one hook
+    nodeFreedObservers_.push_back(cb);
+}
+
+void Document::removeNodeFreedObserver(NodeObserver cb) {
+    nodeFreedObservers_.erase(
+        std::remove(nodeFreedObservers_.begin(), nodeFreedObservers_.end(), cb),
+        nodeFreedObservers_.end());
 }
 
 void Document::drainPendingFrees() {
