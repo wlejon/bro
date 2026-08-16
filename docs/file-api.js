@@ -216,3 +216,44 @@
  *     URL.revokeObjectURL(url);
  *   }
  */
+
+
+// -----------------------------------------------------------------------------
+// Dragging inside the page — draggable + DataTransfer
+// -----------------------------------------------------------------------------
+//
+// The drop above comes from outside the window. The other kind starts inside
+// the page — reorder a list, reparent a tree node, drop a layer onto another —
+// and is the HTML5 drag-and-drop sequence:
+//
+//   source:  dragstart → drag … → dragend
+//   target:  dragenter → dragover … → drop   (or dragleave on the way out)
+//
+// An element is a drag source when it carries `draggable="true"`, or when a
+// script sets `el.draggable = true` (the property reflects to the attribute).
+// A press on it that travels more than a few pixels starts the drag; a press
+// that does not is an ordinary click, and a gesture that became a drag does
+// NOT also fire a click.
+//
+// A target must call `preventDefault()` in `dragover` (or `dragenter`) to
+// accept the drop — that inversion is the spec's, and forgetting it is the
+// usual reason no `drop` arrives. `offsetX`/`offsetY` on each event are
+// target-relative, which is how a tree tells "reorder above" from "drop into".
+//
+// One `DataTransfer` lives for the whole gesture: what the source writes in
+// `dragstart` is what the drop handler reads back. `setData`/`getData`/
+// `clearData`/`types`/`dropEffect`/`effectAllowed` all work, and the legacy
+// short names are accepted ("Text" → text/plain, "URL" → text/uri-list).
+// `setDragImage()` is accepted and ignored — bro draws no drag ghost.
+
+/** @example
+ *   row.draggable = true;
+ *   row.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', row.id));
+ *   list.addEventListener('dragover',  e => e.preventDefault());   // required
+ *   list.addEventListener('drop', e => {
+ *     e.preventDefault();
+ *     const moved = document.getElementById(e.dataTransfer.getData('text/plain'));
+ *     const before = e.offsetY < e.target.clientHeight / 2;
+ *     e.target.parentNode.insertBefore(moved, before ? e.target : e.target.nextSibling);
+ *   });
+ */

@@ -1114,6 +1114,10 @@ void Engine::handleMouseDown(float x, float y, int button) {
         htmlNodeMouseDownElement_.reset();
 #endif  // BRO_WITH_3D
 
+        // A press over a draggable element arms a drag; the move that follows
+        // decides whether it becomes one.
+        if (button == 0) dragDrop_.arm(target, x, y);
+
         // App controls anchor and open overlays in content space, so the
         // ControlContext viewport is the content area and the focus point is
         // content-space (matches lastDrawPos_ comparisons in focusNewControl).
@@ -1409,6 +1413,16 @@ void Engine::handleMouseUp(float x, float y, int button) {
                            renderer_.get(), window_.get(), &uiDirty_,
                            &overlayMgr_, OverlayContext::App,
                            contentWidth(), contentHeight()};
+        // A drag ends here: `drop` on whatever accepted it, then `dragend`.
+        // A gesture that was a drag is not also a click, so the release is not
+        // put through the click machinery at all.
+        if (jsRuntime_ &&
+            dragDrop_.finish(jsRuntime_->getContext(), target, x, y)) {
+            jsRuntime_->executePendingJobs();
+            markAppBaseDirty();
+            return;
+        }
+
         // pointerup fires just before mouseup (web platform order).
         dispatchPointerAlias("pointerup", target, upEvt);
         dispatchDocMouseRelease(cctx, appMouseState_, target, upEvt,
@@ -1882,6 +1896,15 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
             dispatchPointerAlias("pointermove", target, moveEvt);
             dispatchEvent(target, moveEvt);
         }
+
+        // HTML5 drag and drop: a press that has travelled far enough over a
+        // draggable element becomes a drag, and from then on this move feeds
+        // dragenter / dragover / dragleave instead of doing anything else.
+        // mousemove still fires above — a browser suppresses it during a drag,
+        // but bro has app code (camera orbit, gizmos) that reads it, and a
+        // page that never marks anything draggable never starts a drag.
+        if (jsRuntime_)
+            dragDrop_.update(jsRuntime_->getContext(), target, x, y, pressedButtons_);
 
         if (jsRuntime_) jsRuntime_->executePendingJobs();
     }

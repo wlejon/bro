@@ -259,3 +259,60 @@
         }
     };
 })();
+
+// ---------------------------------------------------------------------------
+// DataTransfer — the payload of a drag
+//
+// One object lives for the whole gesture: the source fills it in `dragstart`
+// and every later event of that drag — dragover, drop — reads the same one
+// back. That persistence is the whole point of the interface; a fresh object
+// per event would lose whatever the source wrote.
+// ---------------------------------------------------------------------------
+(function () {
+    'use strict';
+    if (typeof globalThis.DataTransfer === 'function') return;
+
+    class DataTransfer {
+        constructor() {
+            this._data = Object.create(null);
+            this.dropEffect = 'none';
+            this.effectAllowed = 'uninitialized';
+            this.files = [];
+            // Not implemented: a drag image is a rendering concern, and bro
+            // draws no drag ghost. Present so setDragImage() in page code does
+            // not throw.
+            this._dragImage = null;
+        }
+
+        get types() { return Object.keys(this._data); }
+
+        setData(format, data) {
+            this._data[normalize(format)] = String(data);
+        }
+
+        getData(format) {
+            const v = this._data[normalize(format)];
+            return v === undefined ? '' : v;
+        }
+
+        clearData(format) {
+            if (format === undefined) this._data = Object.create(null);
+            else delete this._data[normalize(format)];
+        }
+
+        setDragImage(image, x, y) {
+            this._dragImage = { image: image, x: x, y: y };
+        }
+    }
+
+    // The legacy short names every page still uses.
+    function normalize(format) {
+        const f = String(format).toLowerCase();
+        if (f === 'text') return 'text/plain';
+        if (f === 'url') return 'text/uri-list';
+        return f;
+    }
+
+    globalThis.DataTransfer = DataTransfer;
+    globalThis.__bro_newDataTransfer = function () { return new DataTransfer(); };
+})();

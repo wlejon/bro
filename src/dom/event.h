@@ -357,9 +357,17 @@ public:
     const std::string& dataText() const { return dataText_; }
     void setDataText(const std::string& v) { dataText_ = v; }
 
+    // An in-page drag (draggable element, not an OS file drop) carries one
+    // DataTransfer for the whole gesture: the source fills it in dragstart and
+    // every later event reads the same object back. The binding layer swaps in
+    // the session's object instead of building a fresh one per event.
+    bool isSessionDrag() const { return sessionDrag_; }
+    void setSessionDrag(bool v) { sessionDrag_ = v; }
+
 private:
     std::vector<std::string> files_;
     std::string dataText_;
+    bool sessionDrag_ = false;
 };
 
 } // namespace bro::dom

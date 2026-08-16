@@ -19,6 +19,7 @@
 #include "engine/window_host.h"
 #include "dom/event_target.h"
 #include "dom/node_handle.h"
+#include "engine/drag_drop.h"
 #include "js/message_queue.h"
 #include "layout/draw_traversal.h"
 #include "layout/skia_text_metrics.h"
@@ -743,6 +744,10 @@ private:
     dom::ElementHandle hoveredHtmlElement_;
     scene::HtmlNode*   htmlNodeMouseDownNode_ = nullptr;
     dom::ElementHandle htmlNodeMouseDownElement_;
+
+    // HTML5 drag and drop between elements (see engine/drag_drop.h). Distinct
+    // from the OS file drop, which arrives from outside the window.
+    DragDrop dragDrop_;
 
     float lastMouseX_ = 0.0f;
     float lastMouseY_ = 0.0f;

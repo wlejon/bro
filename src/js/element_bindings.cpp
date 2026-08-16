@@ -754,10 +754,49 @@ static JSValue js_element_hasChildNodes(JSContext* ctx, JSValueConst this_val,
 
 // ---- Form control properties ----------------------------------------------
 
+// The IDL properties below live on the shared Element prototype, so every
+// element in the document has them whether or not the HTML spec gives that
+// element such a property. That matters because pages use plain elements as
+// their own data carriers — `row.value = object.id` on a <div> is a staple of
+// hand-rolled list widgets — and a prototype accessor would swallow it into
+// an attribute and hand back a string, quietly breaking an identity compare.
+//
+// So: on an element the property genuinely belongs to, reflect it. On any
+// other element, behave like the ordinary expando a browser would have given
+// them — same value in, same value out, type and all — by parking it under a
+// hidden key on the object itself.
+static bool tagIn(const std::string& tag, std::initializer_list<const char*> names) {
+    for (const char* n : names) {
+        size_t i = 0;
+        bool eq = true;
+        for (; n[i] && i < tag.size(); i++) {
+            if (tolower(static_cast<unsigned char>(tag[i])) != n[i]) { eq = false; break; }
+        }
+        if (eq && !n[i] && i == tag.size()) return true;
+    }
+    return false;
+}
+
+static JSValue expandoGet(JSContext* ctx, JSValueConst this_val, const char* key)
+{
+    return JS_GetPropertyStr(ctx, this_val, key);
+}
+
+static JSValue expandoSet(JSContext* ctx, JSValueConst this_val, const char* key,
+                          JSValueConst val)
+{
+    JS_SetPropertyStr(ctx, this_val, key, JS_DupValue(ctx, val));
+    return JS_UNDEFINED;
+}
+
 static JSValue js_element_get_value(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    if (!tagIn(el->tagName(), {"input", "textarea", "select", "option",
+                               "button", "progress", "meter", "output",
+                               "li", "data", "param"}))
+        return expandoGet(ctx, this_val, "__broValue");
     // For <select>, return the value of the selected <option>
     if (auto* sel = el->selectControl()) {
         auto opts = sel->getOptions();
@@ -815,6 +854,10 @@ static JSValue js_element_set_value(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    if (!tagIn(el->tagName(), {"input", "textarea", "select", "option",
+                               "button", "progress", "meter", "output",
+                               "li", "data", "param"}))
+        return expandoSet(ctx, this_val, "__broValue", val);
     std::string s = jsToStdString(ctx, val);
     // For <select>, sync the selection with the new value. We do BOTH:
     //   1. Stamp the `selected` attribute on the matching <option> (and
@@ -1643,6 +1686,7 @@ static JSValue js_element_get_href(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    if (!tagIn(el->tagName(), {"a", "area", "link", "base"})) return expandoGet(ctx, this_val, "__broHref");
     return JS_NewString(ctx, el->getAttribute("href").c_str());
 }
 
@@ -1651,6 +1695,7 @@ static JSValue js_element_set_href(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    if (!tagIn(el->tagName(), {"a", "area", "link", "base"})) return expandoSet(ctx, this_val, "__broHref", val);
     el->setAttribute("href", jsToStdString(ctx, val));
     return JS_UNDEFINED;
 }
@@ -1659,6 +1704,7 @@ static JSValue js_element_get_download(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    if (!tagIn(el->tagName(), {"a", "area"})) return expandoGet(ctx, this_val, "__broDownload");
     return JS_NewString(ctx, el->getAttribute("download").c_str());
 }
 
@@ -1667,6 +1713,7 @@ static JSValue js_element_set_download(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    if (!tagIn(el->tagName(), {"a", "area"})) return expandoSet(ctx, this_val, "__broDownload", val);
     el->setAttribute("download", jsToStdString(ctx, val));
     return JS_UNDEFINED;
 }
@@ -1675,6 +1722,7 @@ static JSValue js_element_get_target(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    if (!tagIn(el->tagName(), {"a", "area", "form", "base"})) return expandoGet(ctx, this_val, "__broTarget");
     return JS_NewString(ctx, el->getAttribute("target").c_str());
 }
 
@@ -1683,6 +1731,7 @@ static JSValue js_element_set_target(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    if (!tagIn(el->tagName(), {"a", "area", "form", "base"})) return expandoSet(ctx, this_val, "__broTarget", val);
     el->setAttribute("target", jsToStdString(ctx, val));
     return JS_UNDEFINED;
 }
@@ -1691,6 +1740,7 @@ static JSValue js_element_get_rel(JSContext* ctx, JSValueConst this_val)
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    if (!tagIn(el->tagName(), {"a", "area", "link"})) return expandoGet(ctx, this_val, "__broRel");
     return JS_NewString(ctx, el->getAttribute("rel").c_str());
 }
 
@@ -1699,7 +1749,41 @@ static JSValue js_element_set_rel(JSContext* ctx, JSValueConst this_val,
 {
     auto* el = getElement(this_val);
     if (!el) return JS_UNDEFINED;
+    if (!tagIn(el->tagName(), {"a", "area", "link"})) return expandoSet(ctx, this_val, "__broRel", val);
     el->setAttribute("rel", jsToStdString(ctx, val));
+    return JS_UNDEFINED;
+}
+
+// draggable: a boolean IDL attribute over an *enumerated* content attribute,
+// so the property is true/false while the attribute is the string "true" or
+// "false" — `el.draggable = true` has to write "true", not an empty attribute.
+// Pages set it as a property (`row.draggable = true`) far more often than they
+// write the markup, and without the reflection the engine never learns the
+// element can be dragged at all.
+static JSValue js_element_get_draggable(JSContext* ctx, JSValueConst this_val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_FALSE;
+    if (el->hasAttribute("draggable")) {
+        std::string v = el->getAttribute("draggable");
+        for (char& c : v) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+        if (v == "true") return JS_TRUE;
+        if (v == "false") return JS_FALSE;
+    }
+    // The default for everything except images and links with an href, which
+    // browsers let you drag without being asked.
+    const auto& tag = el->tagName();
+    if (tag == "IMG" || tag == "img") return JS_TRUE;
+    if ((tag == "A" || tag == "a") && el->hasAttribute("href")) return JS_TRUE;
+    return JS_FALSE;
+}
+
+static JSValue js_element_set_draggable(JSContext* ctx, JSValueConst this_val,
+                                        JSValueConst val)
+{
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    el->setAttribute("draggable", JS_ToBool(ctx, val) ? "true" : "false");
     return JS_UNDEFINED;
 }
 
@@ -4849,6 +4933,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("type",        js_element_get_type,        js_element_set_type),
     JS_CGETSET_DEF("disabled",    js_element_get_disabled,    js_element_set_disabled),
     JS_CGETSET_DEF("placeholder", js_element_get_placeholder, js_element_set_placeholder),
+    JS_CGETSET_DEF("draggable",   js_element_get_draggable,   js_element_set_draggable),
     // Link properties
     JS_CGETSET_DEF("href",        js_element_get_href,        js_element_set_href),
     JS_CGETSET_DEF("download",    js_element_get_download,    js_element_set_download),

@@ -507,6 +507,17 @@ void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& event) {
 
     // DragEvent — dataTransfer with files and text
     auto* dragEvt = dynamic_cast<bro::dom::DragEvent*>(&event);
+    if (dragEvt && dragEvt->isSessionDrag()) {
+        // An in-page drag: one DataTransfer for the whole gesture, created at
+        // dragstart and stashed on the global. Reusing it is the point — what
+        // the source writes in dragstart is what the drop handler reads back.
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue dt = JS_GetPropertyStr(ctx, global, "__bro_dragDataTransfer");
+        JS_FreeValue(ctx, global);
+        if (JS_IsObject(dt)) JS_SetPropertyStr(ctx, jsEvent, "dataTransfer", dt);
+        else JS_FreeValue(ctx, dt);
+        return;
+    }
     if (dragEvt) {
         JSValue dt = JS_NewObject(ctx);
         // dataTransfer.getData("text/plain")
