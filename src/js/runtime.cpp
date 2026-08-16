@@ -22,7 +22,33 @@ extern "C" {
 #include "quickjs.h"
 }
 
+#include "intl_polyfill.js.h"
+
 namespace bro::js {
+
+namespace {
+
+/// Language-level polyfills every realm gets — the main app context, a
+/// reloaded one, an <iframe> or secondary window, and a Worker (which builds
+/// its own Runtime). These are ECMAScript intrinsics QuickJS does not
+/// implement, not DOM APIs, so they belong here rather than in the DOM
+/// bindings: a Worker formatting a number needs Intl exactly as much as the
+/// document does.
+void installLanguagePolyfills(JSContext* ctx) {
+    if (!ctx) return;
+    JSValue r = JS_Eval(ctx, js_intl_polyfill, std::strlen(js_intl_polyfill),
+                        "<intl-polyfill>", JS_EVAL_TYPE_GLOBAL);
+    if (JS_IsException(r)) {
+        JSValue e = JS_GetException(ctx);
+        const char* msg = JS_ToCString(ctx, e);
+        LOG_ERROR("Intl polyfill failed to install: %s", msg ? msg : "(unknown)");
+        if (msg) JS_FreeCString(ctx, msg);
+        JS_FreeValue(ctx, e);
+    }
+    JS_FreeValue(ctx, r);
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // Module loader helpers (file-based)
@@ -559,6 +585,7 @@ Runtime::Runtime()
         rt_ = nullptr;
         return;
     }
+    installLanguagePolyfills(ctx_);
 }
 
 Runtime::~Runtime()
@@ -705,7 +732,9 @@ void Runtime::executePendingJobs()
 JSContext* Runtime::createContext()
 {
     if (!rt_) return nullptr;
-    return JS_NewContext(rt_);
+    JSContext* ctx = JS_NewContext(rt_);
+    installLanguagePolyfills(ctx);
+    return ctx;
 }
 
 JSContext* Runtime::renewContext()
@@ -725,6 +754,7 @@ JSContext* Runtime::renewContext()
     JS_RunGC(rt_);
     ctx_ = JS_NewContext(rt_);
     if (!ctx_) LOG_ERROR("renewContext: failed to create QuickJS context");
+    installLanguagePolyfills(ctx_);
     return ctx_;
 }
 
