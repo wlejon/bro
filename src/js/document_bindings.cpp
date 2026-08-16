@@ -215,6 +215,67 @@ static JSValue js_document_dispatchEvent(JSContext* ctx,
     return result;
 }
 
+// document.elementFromPoint(x, y) / elementsFromPoint(x, y) — CSSOM View.
+//
+// The same hit test the engine runs for a real click, reached from JS. Layout
+// libraries use it to measure things they cannot ask for directly: CodeMirror
+// probes the element at the far edge of its scroller to work out the native
+// scrollbar width, and a `document.elementFromPoint` that is simply undefined
+// takes the whole editor down with a TypeError.
+//
+// Arguments are client coordinates (the space clientX/clientY and
+// getBoundingClientRect speak); the engine hit-tests in document space, which
+// is that plus the viewport scroll. A point outside the viewport returns null
+// per spec, rather than falling back to the document element.
+static bro::engine::Engine* engineForPointQuery(JSContext* ctx, JSValueConst this_val,
+                                                float& docX, float& docY,
+                                                double x, double y) {
+    auto it = s_ctx_engines.find(ctx);
+    if (it == s_ctx_engines.end() || !it->second) return nullptr;
+    auto* engine = static_cast<bro::engine::Engine*>(it->second);
+    // Only the engine's own document has boxes on screen to hit; a detached
+    // DOMParser document is laid out nowhere.
+    if (getDocument(this_val) != engine->document()) return nullptr;
+    if (x < 0 || y < 0 ||
+        x >= engine->contentWidth() || y >= engine->contentHeight()) return nullptr;
+    engine->flushLayoutForRead(engine->document());
+    docX = static_cast<float>(x);
+    docY = static_cast<float>(y) + engine->viewportScrollY();
+    return engine;
+}
+
+static JSValue js_document_elementFromPoint(JSContext* ctx, JSValueConst this_val,
+                                            int argc, JSValueConst* argv) {
+    double x = 0, y = 0;
+    if (argc < 2 || JS_ToFloat64(ctx, &x, argv[0]) || JS_ToFloat64(ctx, &y, argv[1]))
+        return JS_NULL;
+    float docX = 0, docY = 0;
+    auto* engine = engineForPointQuery(ctx, this_val, docX, docY, x, y);
+    if (!engine) return JS_NULL;
+    auto* hit = engine->hitTest(docX, docY);
+    return hit ? DomBindings::wrapElement(ctx, hit) : JS_NULL;
+}
+
+// The spec's list is "every element the point lands in, topmost first". bro's
+// hit test names the topmost one; the rest of the list is its ancestor chain,
+// which is what callers walk it for. Elements merely *overlapped* by the hit —
+// a lower sibling under a covering box — are not reported.
+static JSValue js_document_elementsFromPoint(JSContext* ctx, JSValueConst this_val,
+                                             int argc, JSValueConst* argv) {
+    JSValue arr = JS_NewArray(ctx);
+    double x = 0, y = 0;
+    if (argc < 2 || JS_ToFloat64(ctx, &x, argv[0]) || JS_ToFloat64(ctx, &y, argv[1]))
+        return arr;
+    float docX = 0, docY = 0;
+    auto* engine = engineForPointQuery(ctx, this_val, docX, docY, x, y);
+    if (!engine) return arr;
+    uint32_t i = 0;
+    for (auto* el = engine->hitTest(docX, docY); el; el = el->parentElement()) {
+        JS_SetPropertyUint32(ctx, arr, i++, DomBindings::wrapElement(ctx, el));
+    }
+    return arr;
+}
+
 static JSValue js_document_exitPointerLock(JSContext* ctx, JSValueConst /*this_val*/,
                                             int /*argc*/, JSValueConst* /*argv*/) {
     auto it = s_ctx_engines.find(ctx);
@@ -459,6 +520,8 @@ void installDocumentBindings(JSContext* ctx) {
         .method_raw("removeEventListener", js_document_removeEventListener, 2)
         .method_raw("dispatchEvent", js_document_dispatchEvent, 1)
         .method_raw("exitPointerLock", js_document_exitPointerLock, 0)
+        .method_raw("elementFromPoint", js_document_elementFromPoint, 2)
+        .method_raw("elementsFromPoint", js_document_elementsFromPoint, 2)
         .method("createRange", [](Doc* d, JSContext* cx) -> JSValue {
             auto* r = new bro::dom::Range();
             r->setDocument(d);

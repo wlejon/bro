@@ -6,12 +6,79 @@
 #include "dom/event.h"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <string>
 #include <vector>
 
 namespace bro::js {
+
+// Legacy `keyCode` for a KeyboardEvent, derived from its `code`/`key`.
+//
+// Deprecated for a decade and still what a great deal of shipped code reads:
+// CodeMirror keys its entire binding table off `e.keyCode`, and so does most
+// library code written before `key` existed. Reporting a constant 0 makes every
+// one of those bindings resolve to the same non-key — no Enter, no Backspace,
+// no arrows, and no way for the page to tell which letter was pressed.
+//
+// The values are the "legacy key code" set the browsers agreed on (Windows
+// virtual-key codes for the most part), so a US layout is the reference. `code`
+// is physical, which is exactly the right input for it; `key` only answers for
+// the printable characters `code` cannot name.
+static int legacyKeyCodeFor(const std::string& code, const std::string& key) {
+    // KeyA..KeyZ → 65..90, Digit0..Digit9 → 48..57, Numpad0..9 → 96..105.
+    if (code.size() == 4 && code.compare(0, 3, "Key") == 0 &&
+        code[3] >= 'A' && code[3] <= 'Z')
+        return code[3];
+    if (code.size() == 6 && code.compare(0, 5, "Digit") == 0 &&
+        code[5] >= '0' && code[5] <= '9')
+        return code[5];
+    if (code.size() == 7 && code.compare(0, 6, "Numpad") == 0 &&
+        code[6] >= '0' && code[6] <= '9')
+        return 96 + (code[6] - '0');
+    // F1..F24 → 112..135.
+    if (code.size() >= 2 && code[0] == 'F' && code[1] >= '0' && code[1] <= '9') {
+        int n = std::atoi(code.c_str() + 1);
+        if (n >= 1 && n <= 24) return 111 + n;
+    }
+
+    static const struct { const char* code; int keyCode; } kMap[] = {
+        {"Backspace", 8},   {"Tab", 9},          {"Enter", 13},
+        {"ShiftLeft", 16},  {"ShiftRight", 16},  {"ControlLeft", 17},
+        {"ControlRight", 17}, {"AltLeft", 18},   {"AltRight", 18},
+        {"Pause", 19},      {"CapsLock", 20},    {"Escape", 27},
+        {"Space", 32},      {"PageUp", 33},      {"PageDown", 34},
+        {"End", 35},        {"Home", 36},        {"ArrowLeft", 37},
+        {"ArrowUp", 38},    {"ArrowRight", 39},  {"ArrowDown", 40},
+        {"PrintScreen", 44},{"Insert", 45},      {"Delete", 46},
+        {"MetaLeft", 91},   {"MetaRight", 92},   {"ContextMenu", 93},
+        {"NumpadMultiply", 106}, {"NumpadAdd", 107}, {"NumpadSubtract", 109},
+        {"NumpadDecimal", 110},  {"NumpadDivide", 111}, {"NumpadEnter", 13},
+        {"NumLock", 144},   {"ScrollLock", 145},
+        {"Semicolon", 186}, {"Equal", 187},      {"Comma", 188},
+        {"Minus", 189},     {"Period", 190},     {"Slash", 191},
+        {"Backquote", 192}, {"BracketLeft", 219},{"Backslash", 220},
+        {"BracketRight", 221}, {"Quote", 222},
+    };
+    for (const auto& e : kMap)
+        if (code == e.code) return e.keyCode;
+
+    // No `code` (a synthesized event, or a key the platform did not name):
+    // fall back to the character itself, uppercased, which is what the legacy
+    // table holds for the letter and digit rows.
+    if (key.size() == 1) {
+        unsigned char c = static_cast<unsigned char>(key[0]);
+        if (c >= 'a' && c <= 'z') return c - 32;
+        if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) return c;
+        if (c == ' ') return 32;
+    }
+    if (key == "Enter") return 13;
+    if (key == "Tab") return 9;
+    if (key == "Escape") return 27;
+    if (key == "Backspace") return 8;
+    return 0;
+}
 
 // Build a short "click on #my-id" / "click on div.foo" / "click on div"
 // description used in JS error log lines for listener invocations.
@@ -152,6 +219,15 @@ void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& event) {
                           JS_NewInt32(ctx, mouseEvt->button()));
         JS_SetPropertyStr(ctx, jsEvent, "buttons",
                           JS_NewInt32(ctx, mouseEvt->buttons()));
+        // Legacy `which`: button + 1 (1 left, 2 middle, 3 right), 0 when no
+        // button is involved. Still the first thing a lot of library code
+        // reads — CodeMirror decides a press is a left click with
+        // `e.which == 1` and ignores it entirely otherwise, so a missing
+        // `which` reads as "some button I don't handle" and the editor never
+        // takes focus or moves its cursor.
+        JS_SetPropertyStr(ctx, jsEvent, "which",
+                          JS_NewInt32(ctx, mouseEvt->button() >= 0
+                                               ? mouseEvt->button() + 1 : 0));
         JS_SetPropertyStr(ctx, jsEvent, "detail",
                           JS_NewInt32(ctx, mouseEvt->detail()));
         JS_SetPropertyStr(ctx, jsEvent, "ctrlKey",
@@ -237,13 +313,16 @@ void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& event) {
                           JS_NewBool(ctx, keyEvt->isComposing()));
         JS_SetPropertyStr(ctx, jsEvent, "location",
                           JS_NewInt32(ctx, keyEvt->location()));
-        // Legacy properties (deprecated but widely used)
+        // Legacy properties (deprecated but widely used). keyCode and which
+        // carry the same value on keydown/keyup; charCode belongs to keypress,
+        // which bro does not fire, so it stays 0.
+        const int legacyCode = legacyKeyCodeFor(keyEvt->code(), keyEvt->key());
         JS_SetPropertyStr(ctx, jsEvent, "keyCode",
-                          JS_NewInt32(ctx, 0));
+                          JS_NewInt32(ctx, legacyCode));
         JS_SetPropertyStr(ctx, jsEvent, "charCode",
                           JS_NewInt32(ctx, 0));
         JS_SetPropertyStr(ctx, jsEvent, "which",
-                          JS_NewInt32(ctx, 0));
+                          JS_NewInt32(ctx, legacyCode));
     }
 
     // FocusEvent properties
@@ -444,22 +523,61 @@ void populateJsEvent(JSContext* ctx, JSValue jsEvent, bro::dom::Event& event) {
                 }
                 return JS_UNDEFINED;
             }, "setData", 2, JS_CFUNC_generic, 0));
-        // dataTransfer.files array
+        // dataTransfer.files — real File objects.
+        //
+        // The engine only knows the dropped paths; what the page expects is
+        // Files it can hand to FileReader, URL.createObjectURL or fetch. The
+        // File API polyfill's __bro_fileFromPath reads the bytes and builds
+        // one. Anything unreadable (a directory, a file that vanished between
+        // the drop and the dispatch, a permission error) falls back to the
+        // name/path descriptor, so a drop never fails outright.
         auto& files = dragEvt->files();
+        JSValue global = JS_GetGlobalObject(ctx);
+        JSValue fileFromPath = JS_GetPropertyStr(ctx, global, "__bro_fileFromPath");
+        bool haveFileFromPath = JS_IsFunction(ctx, fileFromPath);
         JSValue filesArr = JS_NewArray(ctx);
         for (size_t i = 0; i < files.size(); i++) {
-            JSValue fileObj = JS_NewObject(ctx);
-            // `name` is the basename and `path` the full location, as in the
-            // real DataTransfer. Setting both to the path made every app that
-            // displayed file.name — the obvious thing to display — print an
-            // absolute path instead of a filename.
-            JS_SetPropertyStr(ctx, fileObj, "name",
-                JS_NewString(ctx, std::filesystem::path(files[i]).filename().string().c_str()));
-            JS_SetPropertyStr(ctx, fileObj, "path",
-                JS_NewString(ctx, files[i].c_str()));
-            JS_SetPropertyInt64(ctx, filesArr, static_cast<int64_t>(i), fileObj);
+            JSValue fileVal = JS_UNDEFINED;
+            if (haveFileFromPath) {
+                JSValue arg = JS_NewString(ctx, files[i].c_str());
+                fileVal = JS_Call(ctx, fileFromPath, JS_UNDEFINED, 1, &arg);
+                JS_FreeValue(ctx, arg);
+                if (JS_IsException(fileVal)) {
+                    JS_FreeValue(ctx, JS_GetException(ctx));
+                    fileVal = JS_UNDEFINED;
+                } else if (JS_IsNull(fileVal)) {
+                    JS_FreeValue(ctx, fileVal);
+                    fileVal = JS_UNDEFINED;
+                }
+            }
+            if (JS_IsUndefined(fileVal)) {
+                // `name` is the basename and `path` the full location, as in the
+                // real DataTransfer. Setting both to the path made every app that
+                // displayed file.name — the obvious thing to display — print an
+                // absolute path instead of a filename.
+                fileVal = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, fileVal, "name",
+                    JS_NewString(ctx, std::filesystem::path(files[i]).filename().string().c_str()));
+                JS_SetPropertyStr(ctx, fileVal, "path",
+                    JS_NewString(ctx, files[i].c_str()));
+            }
+            JS_SetPropertyInt64(ctx, filesArr, static_cast<int64_t>(i), fileVal);
         }
+        JS_FreeValue(ctx, fileFromPath);
+        JS_FreeValue(ctx, global);
         JS_SetPropertyStr(ctx, dt, "files", filesArr);
+
+        // dataTransfer.types. Drop handlers branch on it before they touch
+        // anything else — "Files" for a file drop, "text/plain" for dragged
+        // text — and reading [0] off an undefined types threw before this.
+        JSValue typesArr = JS_NewArray(ctx);
+        uint32_t typeIdx = 0;
+        if (!files.empty())
+            JS_SetPropertyUint32(ctx, typesArr, typeIdx++, JS_NewString(ctx, "Files"));
+        if (!dragEvt->dataText().empty())
+            JS_SetPropertyUint32(ctx, typesArr, typeIdx++, JS_NewString(ctx, "text/plain"));
+        JS_SetPropertyStr(ctx, dt, "types", typesArr);
+
         JS_SetPropertyStr(ctx, jsEvent, "dataTransfer", dt);
     }
 }

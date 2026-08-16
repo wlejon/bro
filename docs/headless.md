@@ -99,7 +99,7 @@ gamepad/`"action"` stream on the main window (see
 | `paste(text)` | Simulate paste on focused element with the given text (dispatches paste event, inserts into input/textarea) |
 | `copy()` | Simulate copy on focused element (dispatches copy event, returns the selected text, a collapsed caret copies nothing) |
 | `cut()` | Simulate cut on focused element (dispatches cut event, removes the selected range, returns the cut text) |
-| `dropFiles(x, y, paths [, windowId])` | Simulate file drop at coordinates. `paths` is an array of file path strings (a bare string is accepted for one file). Dispatches dragenter → dragover → drop **once** for the whole gesture, with every path in `dataTransfer.files` — matching a real multi-file drop, which SDL delivers as one `DROP_BEGIN`…`DROP_COMPLETE` group. |
+| `dropFiles(x, y, paths [, windowId])` | Simulate file drop at coordinates. `paths` is an array of file path strings (a bare string is accepted for one file). Dispatches dragenter → dragover → drop **once** for the whole gesture, with a real `File` for every path in `dataTransfer.files` (see docs/file-api.js) — matching a real multi-file drop, which SDL delivers as one `DROP_BEGIN`…`DROP_COMPLETE` group. |
 | `dropText(x, y, text [, windowId])` | Simulate text drop at coordinates. Dispatches dragenter → dragover → drop with text data. |
 | `resize(w, h)` | Resize the virtual viewport |
 | `gamepadConnect([id])` | Connect a virtual gamepad; returns its slot index. Fires `gamepadconnected` on window, appears in `navigator.getGamepads()`. |

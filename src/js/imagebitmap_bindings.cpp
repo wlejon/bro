@@ -1,7 +1,14 @@
 #include "js/imagebitmap_bindings.h"
 #include "js/image_bindings.h"
+#include "svg/svg_renderer.h"
 
 #include <qjsbind/qjsbind.h>
+
+#include <api/api.h>  // brokit::api::blobBytes
+#include "broimage/decode.h"
+#if BRO_WITH_WEBP
+#include "render/webp_image.h"
+#endif
 
 #include <include/core/SkData.h>
 #include <include/core/SkImage.h>
@@ -10,6 +17,7 @@
 #include <cstring>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace bro::js {
 
@@ -100,7 +108,57 @@ static sk_sp<SkImage> imageFromSource(JSContext* ctx, JSValueConst src,
         }
     }
 
-    // 3) ImageData-shaped plain object { width, height, data:TypedArray }.
+    // 3) Blob / File — encoded bytes, decoded here.
+    //
+    // This is the spec's canonical source and the one every fetch-based image
+    // path produces: `fetch(url).then(r => r.blob()).then(createImageBitmap)`
+    // is how three.js's ImageBitmapLoader loads a texture, which makes it how
+    // GLTFLoader loads every texture in a model. Without it, a Blob fell
+    // through to the ImageData branch and came back "unsupported source".
+    {
+        const uint8_t* bytes = nullptr;
+        size_t len = 0;
+        if (brokit::api::blobBytes(ctx, src, &bytes, &len) && bytes && len > 0) {
+            broimage::Image decoded;
+            std::string decodeErr;
+            bool ok = broimage::decode_memory(bytes, len, decoded, &decodeErr);
+#if BRO_WITH_WEBP
+            // stb has no WebP; same fallback the other decode paths take.
+            if (!ok) {
+                int w = 0, h = 0;
+                std::vector<uint8_t> rgba;
+                if (render::decodeWebP(bytes, len, w, h, rgba)) {
+                    decoded.width = w;
+                    decoded.height = h;
+                    decoded.channels = 4;
+                    decoded.pixels = std::move(rgba);
+                    ok = true;
+                }
+            }
+#endif
+            if (!ok && svg::looksLikeSvg(reinterpret_cast<const char*>(bytes), len)) {
+                int w = 0, h = 0;
+                std::vector<uint8_t> rgba;
+                if (svg::rasterizeSvgMarkup(reinterpret_cast<const char*>(bytes),
+                                            len, 0, 0, w, h, rgba)) {
+                    decoded.width = w;
+                    decoded.height = h;
+                    decoded.channels = 4;
+                    decoded.pixels = std::move(rgba);
+                    ok = true;
+                }
+            }
+            if (!ok) {
+                err = "createImageBitmap: could not decode the blob (" +
+                      decodeErr + ")";
+                return nullptr;
+            }
+            return buildBitmap(decoded.pixels.data(), decoded.width, decoded.height,
+                               crop, sx, sy, sw, sh, err);
+        }
+    }
+
+    // 4) ImageData-shaped plain object { width, height, data:TypedArray }.
     if (JS_IsObject(src)) {
         JSValue wv = JS_GetPropertyStr(ctx, src, "width");
         JSValue hv = JS_GetPropertyStr(ctx, src, "height");
@@ -299,6 +357,23 @@ void ImageBitmapBindings::install(JSContext* ctx) {
     JSValue global = JS_GetGlobalObject(ctx);
     JS_SetPropertyStr(ctx, global, "createImageBitmap",
         JS_NewCFunction(ctx, js_createImageBitmap, "createImageBitmap", 1));
+
+    // The interface object. ImageBitmap has no usable constructor — only
+    // createImageBitmap makes one — but it is still a global, and code branches
+    // on `x instanceof ImageBitmap` to tell a decoded bitmap from an <img> or a
+    // raw {data,width,height}. With the name absent, three.js's texture
+    // serializer took every ImageBitmap for an unknown source and refused to
+    // save it, so a scene that imported fine came back textureless.
+    {
+        JSValue proto = JS_GetClassProto(ctx, qjsbind::class_id<IB>());
+        JSValue ibCtor = JS_NewCFunction2(ctx,
+            [](JSContext* c, JSValueConst, int, JSValueConst*) -> JSValue {
+                return JS_ThrowTypeError(c, "Illegal constructor: use createImageBitmap()");
+            }, "ImageBitmap", 0, JS_CFUNC_constructor, 0);
+        JS_SetConstructor(ctx, ibCtor, proto);
+        JS_FreeValue(ctx, proto);
+        JS_SetPropertyStr(ctx, global, "ImageBitmap", ibCtor);
+    }
     // ImageData needs a real prototype object paired with the constructor
     // (JS_SetConstructor wires ctor.prototype ↔ proto.constructor). A bare
     // C-function constructor has no "prototype" property at all, which makes

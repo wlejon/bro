@@ -26,6 +26,8 @@
 #include <cmath>
 #include <thread>
 
+#include <SDL3/SDL_keyboard.h>
+
 namespace bro::js {
 
 // ---------------------------------------------------------------------------
@@ -459,6 +461,19 @@ static JSValue js_touchCancel(JSContext* ctx, JSValueConst, int argc, JSValueCon
     return JS_UNDEFINED;
 }
 
+// A scancode for a keycode the caller did not pair one with.
+//
+// `KeyboardEvent.code` is derived from the physical scancode, so a headless
+// keyDown(SDLK_a) with no scancode produced code "Unknown0" — and anything
+// reading `code` (a game's WASD, a library's key table, the legacy keyCode
+// derived from it) saw nothing it recognised. SDL knows the physical key that
+// produces a given keysym on the current layout; ask it.
+static int scancodeForKeycode(int keycode) {
+    if (keycode == 0) return 0;
+    return static_cast<int>(SDL_GetScancodeFromKey(
+        static_cast<SDL_Keycode>(keycode), nullptr));
+}
+
 static JSValue js_keyDown(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 1) return JS_ThrowTypeError(ctx, "keyDown(keycode [, scancode, mod, repeat, windowId])");
     auto* engine = getEngine(ctx);
@@ -470,6 +485,7 @@ static JSValue js_keyDown(JSContext* ctx, JSValueConst, int argc, JSValueConst* 
     if (argc >= 2) JS_ToInt32(ctx, &scancode, argv[1]);
     if (argc >= 3) JS_ToInt32(ctx, &mod, argv[2]);
     if (argc >= 4) repeat = JS_ToBool(ctx, argv[3]);
+    if (scancode == 0) scancode = scancodeForKeycode(keycode);
 
     const uint64_t wid = argWindowId(ctx, argc, argv, 4);
     if (wid) engine->hostKeyDown(wid, keycode, scancode, mod, repeat);
@@ -487,6 +503,7 @@ static JSValue js_keyUp(JSContext* ctx, JSValueConst, int argc, JSValueConst* ar
     JS_ToInt32(ctx, &keycode, argv[0]);
     if (argc >= 2) JS_ToInt32(ctx, &scancode, argv[1]);
     if (argc >= 3) JS_ToInt32(ctx, &mod, argv[2]);
+    if (scancode == 0) scancode = scancodeForKeycode(keycode);
 
     const uint64_t wid = argWindowId(ctx, argc, argv, 3);
     if (wid) engine->hostKeyUp(wid, keycode, scancode, mod, false);

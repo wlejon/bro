@@ -330,6 +330,11 @@ public:
     int viewportWidth() const { return viewportWidth_; }
     int viewportHeight() const { return viewportHeight_; }
 
+    /// How far the app document is scrolled, in CSS px. Client coordinates
+    /// (what an event's clientY carries, and what elementFromPoint takes) are
+    /// this much above document coordinates, which is what hitTest() wants.
+    float viewportScrollY() const { return scrollY_; }
+
     ContentInsets contentInsets() const;
     int contentTop() const { return contentInsets().top; }
     int contentLeft() const { return contentInsets().left; }
@@ -374,11 +379,15 @@ public:
     layout::SkiaTextMetrics* textMetrics() const { return textMetrics_.get(); }
     float docContentOffsetY() const;
 
+    /// Deepest element at a point in document space, or the document element
+    /// when the point lands on no box at all. Public because JS asks the same
+    /// question through document.elementFromPoint().
+    dom::Element* hitTest(float x, float y);
+
 private:
     GraphicsConfig graphicsConfig_;
     InputConfig inputConfig_;
 
-    dom::Element* hitTest(float x, float y);
     void updateCursorFromHover(dom::Element* target);
     scene::SceneGraph* findSceneGraphAt(float x, float y,
                                         float& outLocalX, float& outLocalY) const;

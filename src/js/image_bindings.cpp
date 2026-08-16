@@ -12,6 +12,7 @@
 #include "svg/svg_renderer.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
+#include "util/object_url.h"
 
 #include <fstream>
 #include <sstream>
@@ -110,6 +111,46 @@ static std::string resolvePath(JSContext* ctx, const std::string& src) {
 // Complex property setters/methods needing raw signatures
 // -------------------------------------------------------------------------
 
+// Adopt a decode result and fire the one event it earned. Shared by every way
+// an Image can get its bytes — a file, a data: URL, an object URL — so all of
+// them agree on what a broken image looks like and when the handler runs.
+static JSValue finishImageLoad(JSContext* ctx, JSValueConst this_val, ID* img,
+                               broimage::Image& decoded, bool ok,
+                               const std::string& err) {
+    // A failed decode is a *broken image*, not a 1x1 white one. broimage hands
+    // back a white fallback pixel on failure; adopting it would make a missing
+    // asset indistinguishable from a real image and silently paint white. Per
+    // the HTML spec a broken image has zero natural dimensions and no pixels,
+    // so drawImage/texImage2D of it no-ops (getImagePixels tests pixels.empty)
+    // and createImageBitmap rejects.
+    if (ok) {
+        img->width  = decoded.width;
+        img->height = decoded.height;
+        img->pixels = std::move(decoded.pixels);
+        LOG_INFO("Image loaded: %s (%dx%d)", img->src.c_str(), img->width, img->height);
+    } else {
+        img->width  = 0;
+        img->height = 0;
+        img->pixels.clear();
+        LOG_WARN("Image load failed: %s (%s)", img->src.c_str(), err.c_str());
+    }
+    img->complete = true; // the fetch settled, success or not
+
+    // Fire load/error — exactly one, never both. Route through the error funnel
+    // so a throwing handler is reported and cleared rather than left pending on
+    // the context for an unrelated call to trip over.
+    JSValue handler = ok ? img->onload : img->onerror;
+    if (JS_IsFunction(ctx, handler)) {
+        JSValue func = JS_DupValue(ctx, handler);
+        JSValue ret = Runtime::callJs(ctx, func, this_val, 0, nullptr,
+            ErrorOrigin::listener(std::string(ok ? "load" : "error") +
+                                  " on Image " + img->src));
+        JS_FreeValue(ctx, ret);
+        JS_FreeValue(ctx, func);
+    }
+    return JS_UNDEFINED;
+}
+
 // src setter — decodes the image via broimage and fires onload
 static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val,
                                 int /*argc*/, JSValueConst* argv) {
@@ -120,11 +161,48 @@ static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val,
     img->src = s;
     JS_FreeCString(ctx, s);
 
+    broimage::Image decoded;
+    std::string err;
+
+    // A URL that carries its own bytes — a data: payload or a blob: object URL
+    // — never touches the disk. Both are how a page hands an image to an <img>
+    // it built itself: glTF embeds its textures as data: URLs, and an importer
+    // reading files the user dropped resolves them through createObjectURL.
+    // Going straight to resolvePath() treated the whole URL as a filename, so
+    // both arrived as a missing file and the image came back broken.
+    std::vector<uint8_t> inlineBytes;
+    if (bro::util::isObjectURL(img->src) &&
+        !bro::util::lookupObjectURL(img->src)) {
+        // Revoked, or from a realm that has gone away. Say so, rather than
+        // falling through and reporting that a file named "blob:…" is missing.
+        err = "object URL is not registered (revoked?)";
+        return finishImageLoad(ctx, this_val, img, decoded, false, err);
+    }
+    if (bro::util::inlineURLBytes(img->src, inlineBytes)) {
+        bool ok = !inlineBytes.empty() &&
+                  broimage::decode_memory(inlineBytes.data(), inlineBytes.size(),
+                                          decoded, &err);
+        if (!ok && bro::svg::looksLikeSvg(
+                       reinterpret_cast<const char*>(inlineBytes.data()),
+                       inlineBytes.size())) {
+            int w = 0, h = 0;
+            std::vector<uint8_t> rgba;
+            if (bro::svg::rasterizeSvgMarkup(
+                    reinterpret_cast<const char*>(inlineBytes.data()),
+                    inlineBytes.size(), 0, 0, w, h, rgba)) {
+                decoded.width = w;
+                decoded.height = h;
+                decoded.channels = 4;
+                decoded.pixels = std::move(rgba);
+                ok = true;
+            }
+        }
+        return finishImageLoad(ctx, this_val, img, decoded, ok, err);
+    }
+
     // Resolve path and decode via broimage (stb-backed, RGBA-forced). Decode is
     // synchronous, so load/error fires before the setter returns.
     std::string path = resolvePath(img->ctx, img->src);
-    broimage::Image decoded;
-    std::string err;
     bool ok = broimage::decode_file(path, decoded, &err);
 
 #if BRO_WITH_WEBP
@@ -177,38 +255,7 @@ static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val,
         }
     }
 
-    // A failed decode is a *broken image*, not a 1x1 white one. broimage hands
-    // back a white fallback pixel on failure; adopting it would make a missing
-    // asset indistinguishable from a real image and silently paint white. Per
-    // the HTML spec a broken image has zero natural dimensions and no pixels,
-    // so drawImage/texImage2D of it no-ops (getImagePixels tests pixels.empty)
-    // and createImageBitmap rejects.
-    if (ok) {
-        img->width  = decoded.width;
-        img->height = decoded.height;
-        img->pixels = std::move(decoded.pixels);
-        LOG_INFO("Image loaded: %s (%dx%d)", img->src.c_str(), img->width, img->height);
-    } else {
-        img->width  = 0;
-        img->height = 0;
-        img->pixels.clear();
-        LOG_WARN("Image load failed: %s (%s)", path.c_str(), err.c_str());
-    }
-    img->complete = true; // the fetch settled, success or not
-
-    // Fire load/error — exactly one, never both. Route through the error funnel
-    // so a throwing handler is reported and cleared rather than left pending on
-    // the context for an unrelated call to trip over.
-    JSValue handler = ok ? img->onload : img->onerror;
-    if (JS_IsFunction(ctx, handler)) {
-        JSValue func = JS_DupValue(ctx, handler);
-        JSValue ret = Runtime::callJs(ctx, func, this_val, 0, nullptr,
-            ErrorOrigin::listener(std::string(ok ? "load" : "error") +
-                                  " on Image " + img->src));
-        JS_FreeValue(ctx, ret);
-        JS_FreeValue(ctx, func);
-    }
-    return JS_UNDEFINED;
+    return finishImageLoad(ctx, this_val, img, decoded, ok, err);
 }
 
 // Pick the slot an event type maps to. Image carries one handler per type

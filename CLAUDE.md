@@ -89,7 +89,8 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `math-api.js` | `bro.math`, bromath types in JS (`SpatialHash3D`) |
 | `noise-api.js` | `bro.noise`, FastNoise2 SIMD noise |
 | `image-api.js` | `bro.image` typed-array kernels (CPU, broimage) + `bro.image.gpu.*` WebGL2 renderer (bro-side) |
-| `imagebitmap-api.js` | `ImageBitmap` / `createImageBitmap`: drawImage + texImage2D source, Worker transfer |
+| `imagebitmap-api.js` | `ImageBitmap` / `createImageBitmap`: drawImage + texImage2D source, Blob decode, Worker transfer |
+| `file-api.js` | `Blob`/`File`, `FileReader`, `URL.createObjectURL` (resolves in `<img>` and `fetch`), dropped-file `dataTransfer` |
 | `scene-api.js` | `bro.scene`: 3D scene graph, shapes, sprites, meshes, splats, physics nodes |
 | `animation-api.js` | `scene.createAnimationPlayer()`: data-driven keyframe clips for node properties, plus skeletal blend spaces, layered blending, and an authored state machine |
 | `lighting-api.js` | PBR lighting: LightNode, materials, tonemap, ambient |

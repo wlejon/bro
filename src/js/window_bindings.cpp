@@ -156,6 +156,26 @@ static JSValue js_screen_get_availHeight(JSContext* ctx, JSValueConst, int, JSVa
 // docs/window-api.js). Headless never shells out.
 // ---------------------------------------------------------------------------
 
+// window.focus(): raise this realm's window and ask the OS for input focus.
+// Headless has nothing to raise, and neither does a realm with no window
+// (--no-gpu); both simply do nothing, which is also what a browser does for a
+// call the user did not initiate.
+static JSValue js_window_focus(JSContext* ctx, JSValueConst /*this_val*/,
+                               int /*argc*/, JSValueConst* /*argv*/)
+{
+    if (!realmHeadless(ctx)) {
+        if (platform::Window* win = realmWindow(ctx)) win->raise();
+    }
+    return JS_UNDEFINED;
+}
+
+static JSValue js_window_blur(JSContext* ctx, JSValueConst /*this_val*/,
+                              int /*argc*/, JSValueConst* /*argv*/)
+{
+    (void)ctx;
+    return JS_UNDEFINED;
+}
+
 static JSValue js_window_open(JSContext* ctx, JSValueConst /*this_val*/,
                               int argc, JSValueConst* argv)
 {
@@ -279,6 +299,17 @@ void installWindowBindings(JSContext* ctx, int viewportWidth, int viewportHeight
     // window.open — shell out to the OS URL handler (see js_window_open).
     JS_SetPropertyStr(ctx, global, "open",
                       JS_NewCFunction(ctx, js_window_open, "open", 1));
+
+    // window.focus() / window.blur(). Raising the OS window is what focus()
+    // means; blur() is a no-op, as it is in every browser that still honours
+    // it at all. Both exist mainly because library code calls them mid-handler
+    // and a missing function is a TypeError that takes the rest of the handler
+    // with it — CodeMirror calls window.focus() partway through its mousedown,
+    // so its editor never took focus, moved a cursor, or accepted a keystroke.
+    JS_SetPropertyStr(ctx, global, "focus",
+                      JS_NewCFunction(ctx, js_window_focus, "focus", 0));
+    JS_SetPropertyStr(ctx, global, "blur",
+                      JS_NewCFunction(ctx, js_window_blur, "blur", 0));
 
     // window.screen — live accessors so the values track the display the
     // window actually sits on (constant in practice unless the user drags

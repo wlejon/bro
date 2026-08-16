@@ -19,6 +19,7 @@
 #include "js/event_dispatch.h"
 #include "platform/sdl_window.h"
 #include "svg/svg_renderer.h"
+#include "util/object_url.h"
 #include "util/string_utils.h"
 
 #include "broimage/decode.h"
@@ -87,6 +88,22 @@ bool probeImageSize(dom::Element* elem, const std::string& src,
         if (meta.find(";base64") == std::string::npos) return false;
         const std::vector<uint8_t> bytes = util::base64Decode(body);
         return probeBytes(bytes.data(), bytes.size(), w, h);
+    }
+
+    // blob: URL — bytes the page holds, registered when it minted the URL.
+    // An SVG object URL answers from its markup, the same as an SVG file does.
+    if (util::isObjectURL(src)) {
+        auto data = util::lookupObjectURL(src);
+        if (!data || data->bytes.empty()) return false;
+        const char* chars = reinterpret_cast<const char*>(data->bytes.data());
+        if (svg::looksLikeSvg(chars, data->bytes.size())) {
+            float sw = 0, sh = 0;
+            svg::svgIntrinsicSize(chars, data->bytes.size(), sw, sh);
+            w = static_cast<int>(sw);
+            h = static_cast<int>(sh);
+            return w > 0 && h > 0;
+        }
+        return probeBytes(data->bytes.data(), data->bytes.size(), w, h);
     }
 
     // Resolve against the document's base path, matching the rule
@@ -236,6 +253,43 @@ static bool insideEditableHost(dom::Element* el) {
     return false;
 }
 
+
+// Where a press puts focus.
+//
+// HTML only moves focus to a *focusable* element: a form control, a link with
+// an href, anything carrying tabindex, or an editing host. A press on ordinary
+// content — the <span> inside a syntax-highlighted line, a label, a bare <div>
+// — takes focus away from whatever had it and leaves it on the body. It does
+// not make that span the activeElement.
+//
+// Focusing the raw hit target instead is not a cosmetic difference. A widget
+// that focuses its own element from its mousedown handler — CodeMirror keeps a
+// hidden <textarea> focused and reads keystrokes out of it — had that focus
+// taken straight back by whatever the pointer happened to land on, so the
+// editor accepted no typing at all. Nearest focusable ancestor, or nothing.
+static dom::Element* clickFocusTarget(dom::Element* target) {
+    for (auto* e = target; e; e = e->parentElement()) {
+        const std::string& tag = e->tagName();
+        if (tag == "INPUT" || tag == "input") {
+            // type=hidden has no box to click, but it can be reached through a
+            // label; it is never focusable either way.
+            if (util::toLower(e->getAttribute("type")) == "hidden") continue;
+            return e;
+        }
+        if (tag == "TEXTAREA" || tag == "textarea" ||
+            tag == "SELECT"   || tag == "select"   ||
+            tag == "BUTTON"   || tag == "button")
+            return e;
+        if ((tag == "A" || tag == "a" || tag == "AREA" || tag == "area") &&
+            e->hasAttribute("href"))
+            return e;
+        if (e->hasAttribute("tabindex")) return e;
+        if (e->hasAttribute("contenteditable") &&
+            e->getAttribute("contenteditable") != "false")
+            return e;
+    }
+    return nullptr;
+}
 
 // ---------------------------------------------------------------------------
 // Event dispatch helpers
@@ -675,8 +729,12 @@ bool dispatchDocMousePress(
         return true;
     }
 
-    ctx.document->setActiveElement(target);
-    if (target != prevActive) {
+    // Focus follows the nearest focusable ancestor, not the hit target — but
+    // the press itself still belongs to what was actually clicked, so `target`
+    // keeps driving dispatch and control behaviour below.
+    dom::Element* focusEl = clickFocusTarget(target);
+    ctx.document->setActiveElement(focusEl);
+    if (focusEl != prevActive) {
         // A text control that was edited reports it now, before blur — the
         // order browsers use, and the one that matters: a listener reading the
         // model on blur must already have been told what was typed. Only when
@@ -721,11 +779,12 @@ bool dispatchDocMousePress(
                 if (ctx.dirtyFlag) *ctx.dirtyFlag = true;
                 return false;
             }
-            ctx.document->setActiveElement(target);
+            focusEl = clickFocusTarget(target);
+            ctx.document->setActiveElement(focusEl);
         }
-        dispatchFocusEvents(ctx, prevActive, target);
+        dispatchFocusEvents(ctx, prevActive, focusEl);
         // What the departure will be measured against next time.
-        armValueChange(target);
+        armValueChange(focusEl);
     }
 
     focusNewControl(ctx, state, target, focusX, focusY, intent);

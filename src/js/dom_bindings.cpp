@@ -8,13 +8,20 @@
 #include "dom/document.h"
 #include "dom/event.h"
 #include "util/log.h"
+#include "util/object_url.h"
+
+#include <api/api.h>  // brokit::api::blobBytes
 
 #include <qjsbind/qjsbind.h>
 
 #include "dom_polyfills.js.h"
 #include "observer_polyfills.js.h"
+#include "file_polyfills.js.h"
 
+#include <atomic>
 #include <cstring>
+#include <string>
+#include <vector>
 
 namespace bro::js {
 
@@ -486,6 +493,45 @@ static void fireNodeAdopted(bro::dom::Document* newDoc,
     JS_FreeValue(ctx, global);
 }
 
+// ===========================================================================
+// Object URLs — the native half of URL.createObjectURL
+// ===========================================================================
+//
+// The JS half is in js/file_polyfills.js: it keeps the Blob alive for `fetch`
+// and calls in here so the bytes also reach the C++ consumers of a URL — the
+// <img> size probe, the draw path's image cache — which have no way to read a
+// JS Blob, and in the draw path's case no JSContext to read it with.
+//
+// Minting the URL here rather than reusing brokit's JS-side counter keeps ids
+// unique across realms: an iframe and its parent each run their own copy of
+// the polyfill against this one process-global table.
+static JSValue js_createObjectURL(JSContext* ctx, JSValueConst /*this_val*/,
+                                  int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_NULL;
+    const uint8_t* data = nullptr;
+    size_t len = 0;
+    std::string type;
+    if (!brokit::api::blobBytes(ctx, argv[0], &data, &len, &type))
+        return JS_NULL;   // not a Blob — the JS side falls back
+
+    static std::atomic<uint64_t> counter{1};
+    std::string url = "blob:bro/" +
+                      std::to_string(counter.fetch_add(1, std::memory_order_relaxed));
+    util::registerObjectURL(url, std::vector<uint8_t>(data, data + len),
+                            std::move(type));
+    return JS_NewString(ctx, url.c_str());
+}
+
+static JSValue js_revokeObjectURL(JSContext* ctx, JSValueConst /*this_val*/,
+                                  int argc, JSValueConst* argv) {
+    if (argc < 1) return JS_UNDEFINED;
+    const char* url = JS_ToCString(ctx, argv[0]);
+    if (!url) return JS_UNDEFINED;
+    util::revokeObjectURL(url);
+    JS_FreeCString(ctx, url);
+    return JS_UNDEFINED;
+}
+
 void DomBindings::install(JSContext* ctx, void* document_ptr)
 {
     JSRuntime* rt = JS_GetRuntime(ctx);
@@ -548,6 +594,21 @@ void DomBindings::install(JSContext* ctx, void* document_ptr)
     JSValue r2 = JS_Eval(ctx, js_observer_polyfills, strlen(js_observer_polyfills),
                          "<observer-polyfills>", JS_EVAL_TYPE_GLOBAL);
     JS_FreeValue(ctx, r2);
+
+    // ----- Object URLs: the native half of URL.createObjectURL -----
+    {
+        JSValue g = JS_GetGlobalObject(ctx);
+        JS_SetPropertyStr(ctx, g, "__bro_createObjectURL",
+            JS_NewCFunction(ctx, js_createObjectURL, "__bro_createObjectURL", 1));
+        JS_SetPropertyStr(ctx, g, "__bro_revokeObjectURL",
+            JS_NewCFunction(ctx, js_revokeObjectURL, "__bro_revokeObjectURL", 1));
+        JS_FreeValue(ctx, g);
+    }
+
+    // ----- File API: FileReader, object URLs, dropped paths -> File -----
+    JSValue r3 = JS_Eval(ctx, js_file_polyfills, strlen(js_file_polyfills),
+                         "<file-polyfills>", JS_EVAL_TYPE_GLOBAL);
+    JS_FreeValue(ctx, r3);
 
     // Register native getComputedStyle on window (globalThis)
     {

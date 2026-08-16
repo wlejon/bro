@@ -13,6 +13,7 @@
 #include "dom/node.h"
 #include "svg/svg_renderer.h"
 #include "util/log.h"
+#include "util/object_url.h"
 #include "util/string_utils.h"
 
 #include <algorithm>
@@ -3557,6 +3558,37 @@ void DrawTraversal::loadImage(const std::string& url, const std::string& basePat
             img.height = h;
         }
         img.data = std::move(bytes);
+        imageCache_[url] = std::move(img);
+        return;
+    }
+
+    // blob: URL — bytes the page holds, copied into the object-URL table when
+    // it minted the URL (util/object_url.h). No file to open, and no JSContext
+    // to ask on this thread, which is exactly why the bytes live there.
+    if (bro::util::isObjectURL(url)) {
+        auto data = bro::util::lookupObjectURL(url);
+        CachedImage img;
+        img.id = nextImageId();
+        if (!data || data->bytes.empty()) {
+            imageCache_[url] = CachedImage{};   // revoked or never registered
+            return;
+        }
+        img.data = data->bytes;
+        const char* chars = reinterpret_cast<const char*>(img.data.data());
+        if (bro::svg::looksLikeSvg(chars, img.data.size())) {
+            img.isSvg = true;
+            float sw = 0, sh = 0;
+            bro::svg::svgIntrinsicSize(chars, img.data.size(), sw, sh);
+            img.width = static_cast<int>(sw);
+            img.height = static_cast<int>(sh);
+        } else {
+            int w = 0, h = 0, comp = 0;
+            if (broimage::probe_dimensions_memory(img.data.data(), img.data.size(),
+                                                  &w, &h, &comp)) {
+                img.width = w;
+                img.height = h;
+            }
+        }
         imageCache_[url] = std::move(img);
         return;
     }

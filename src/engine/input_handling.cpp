@@ -1487,6 +1487,32 @@ void Engine::handleMouseMove(float x, float y, float xrel, float yrel) {
         // so a re-record (not a relayout) is what makes the new range paint.
         if (controlDragIsPanel_) systemDirty_ = true;
         else markAppBaseDirty();
+
+        // The page still has to see the drag. A browser extends the control's
+        // selection AND keeps dispatching mousemove, which is what every
+        // drag-to-scrub number field is built on — the three.js editor's
+        // position/rotation/scale fields, lil-gui, dat.GUI: mousedown on an
+        // <input>, then read document mousemove until mouseup. Consuming the
+        // move outright left them with a press and a release and nothing in
+        // between, so dragging a value did nothing at all.
+        //
+        // Only the app document gets this; a drag in a system panel's text
+        // field is engine chrome with no page to notify. Hover bookkeeping
+        // (mouseover/mouseout, :hover) stays frozen for the length of the
+        // drag — the pointer belongs to the control until it is released.
+        if (!controlDragIsPanel_ && document_) {
+            if (dom::Element* target = hitTest(docX, docY)) {
+                int mod = safeGetModState(window_.get(), heldModifierMask_);
+                dom::MouseEvent moveEvt("mousemove", true, true);
+                populateMouseEvent(moveEvt, x, y, -1, pressedButtons_,
+                                   xrel, yrel, scrollY_, mod,
+                                   static_cast<float>(contentTop()));
+                applyMouseOffset(moveEvt, target);
+                dispatchPointerAlias("pointermove", target, moveEvt);
+                dispatchEvent(target, moveEvt);
+                if (jsRuntime_) jsRuntime_->executePendingJobs();
+            }
+        }
         lastMouseX_ = x;
         lastMouseY_ = y;
         return;
@@ -2892,23 +2918,28 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
                 // markDirty via their edits, so this is a harmless superset.
                 markAppBaseDirty();
                 auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
-                if (focusN && focusN->parentNode()) {
-                    auto* parentEl = focusN->nodeType() == dom::NodeType::Element
-                        ? static_cast<dom::Element*>(focusN)
-                        : focusN->parentNode()->nodeType() == dom::NodeType::Element
-                            ? static_cast<dom::Element*>(focusN->parentNode())
-                            : document_->body();
-                    if (parentEl) dispatchEvent(parentEl, evt);
-                }
+                // Same target rule as every other keydown: the focused
+                // element. The caret's own node is where the *edit* happened,
+                // not where the key was aimed — an arrow press with a text
+                // field focused but nothing to move in it used to be
+                // delivered to whatever element the document Selection
+                // happened to sit in, so the field never saw its own key.
+                if (dom::Element* target = document_->activeElement())
+                    dispatchEvent(target, evt);
                 return;
             }
         }
     }
 
-    // Default: dispatch keydown to body
+    // Default: dispatch keydown at the focused element. A key nothing above
+    // consumed still belongs to whatever has focus — that is where the web
+    // aims it, and where a widget listens for its own keys. (Document::
+    // activeElement falls back to <body> when nothing is focused, so an
+    // unfocused page behaves exactly as it did.) The event bubbles from there,
+    // so document- and body-level listeners still see every key.
     auto evt = makeKeyboardEvent("keydown", keycode, scancode, mod, repeat);
     evt.setIsComposing(compositionActive());
-    dom::Element* target = document_->body();
+    dom::Element* target = document_->activeElement();
     if (target) {
         dispatchEvent(target, evt);
     }
@@ -2927,16 +2958,14 @@ void Engine::handleKeyUp(int keycode, int scancode, int mod, bool repeat) {
     }
     if (!document_) return;
 
-    // Dispatch keyup to the focused input if any, otherwise body
+    // Dispatch keyup at the focused element, whatever it is — the same rule
+    // keydown follows, and the one the web states: focus decides the target,
+    // not whether the element happens to be a text control. It falls back to
+    // <body> on its own when nothing is focused.
     auto evt = makeKeyboardEvent("keyup", keycode, scancode, mod, repeat);
     evt.setIsComposing(compositionActive());
 
-    auto* activeEl = document_->activeElement();
-    bool focusedControl = false;
-    if (auto* input = getElInput(activeEl)) focusedControl = input->isFocused();
-    if (auto* ta = getElTextarea(activeEl)) focusedControl = focusedControl || ta->isFocused();
-    if (getElSelect(activeEl)) focusedControl = true;
-    dom::Element* target = focusedControl ? activeEl : document_->body();
+    dom::Element* target = document_->activeElement();
     if (target) {
         dispatchEvent(target, evt);
     }

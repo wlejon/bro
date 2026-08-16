@@ -43,6 +43,10 @@
  *   - An `HTMLCanvasElement`.
  *   - Another `ImageBitmap` (uncropped: shares the immutable image; cropped:
  *     copies the sub-rect).
+ *   - A `Blob` or `File` of encoded image bytes (PNG/JPEG/WebP/SVG). This is
+ *     the fetch-shaped path — `fetch(url).then(r => r.blob())`, or a file the
+ *     user dropped — and it decodes here rather than needing an <img> first.
+ *     Bytes that do not decode reject the promise.
  *
  * The optional (sx, sy, sw, sh) crop rect is clamped to the source bounds.
  *
@@ -68,6 +72,12 @@ function createImageBitmap(source, sx, sy, sw, sh) {}
 // -----------------------------------------------------------------------------
 // ImageBitmap
 // -----------------------------------------------------------------------------
+//
+// `ImageBitmap` is a global interface object, so `x instanceof ImageBitmap`
+// answers — that is how library code tells a decoded bitmap from an <img> or a
+// raw {width, height, data} object. It has no usable constructor: calling
+// `new ImageBitmap()` throws, and createImageBitmap() is the only way to make
+// one.
 
 const ImageBitmap = {
 
