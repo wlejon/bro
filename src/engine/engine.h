@@ -328,6 +328,14 @@ public:
     void onMenuChanged();
 
     DisplayMode displayMode() const { return displayMode_; }
+
+    /// The platform window, or nullptr in Server mode (Headless still has one
+    /// — a hidden SDL window, which is what keeps the GPU path real). Exposed
+    /// because a binding layer that is not the QuickJS realm has no other way
+    /// to reach it: the JS side finds its window through a per-realm map that
+    /// only realms are in.
+    platform::Window* window() const { return window_.get(); }
+
     int viewportWidth() const { return viewportWidth_; }
     int viewportHeight() const { return viewportHeight_; }
 

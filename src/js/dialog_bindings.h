@@ -5,6 +5,7 @@ extern "C" {
 }
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,18 @@ public:
     /// through its confirmation prompts rather than stopping at the first one.
     /// Headless exposes this as `setDialogAnswer()`.
     static void setAutoDialogAnswer(bool accept);
+
+    /// alert / confirm / prompt as engine operations, without a JSContext.
+    /// The QuickJS bindings are thin wrappers over these, and so is the bronze
+    /// host layer's copy (src/bronze_host) — a compiled app's `confirm()` must
+    /// obey the same headless auto-answer a scripted one does, or a test that
+    /// drives a compiled app hangs on the first confirmation it reaches.
+    static void showAlert(const std::string& message);
+    static bool showConfirm(const std::string& message);
+    /// Answers the default text, or nullopt for a cancel — prompt's two
+    /// outcomes are "a string" and "null", and an empty string is the first.
+    static std::optional<std::string> showPrompt(const std::string& message,
+                                                 const std::string& defaultText);
 };
 
 } // namespace bro::js

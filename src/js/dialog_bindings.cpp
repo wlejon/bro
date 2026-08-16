@@ -297,47 +297,69 @@ static bool showMessageBox(const std::string& message, bool withCancel)
     return pressed == kBtnOk;
 }
 
+// The engine-level trio. The JS bindings below are wrappers; so is the bronze
+// host layer's (src/bronze_host/host_platform.cpp). One implementation, so
+// `s_interactive` and `s_autoAccept` mean the same thing to both.
+void DialogBindings::showAlert(const std::string& message)
+{
+    if (!s_interactive) {
+        LOG_INFO("[alert] %s", message.c_str());
+        return;
+    }
+    showMessageBox(message, false);
+}
+
+bool DialogBindings::showConfirm(const std::string& message)
+{
+    if (!s_interactive) {
+        LOG_INFO("[confirm] %s -> %s", message.c_str(),
+                 s_autoAccept ? "OK" : "Cancel");
+        return s_autoAccept;
+    }
+    return showMessageBox(message, true);
+}
+
+std::optional<std::string> DialogBindings::showPrompt(const std::string& message,
+                                                      const std::string& defaultText)
+{
+    if (!s_interactive) {
+        LOG_INFO("[prompt] %s -> %s", message.c_str(),
+                 s_autoAccept ? defaultText.c_str() : "(cancelled)");
+        if (!s_autoAccept) return std::nullopt;
+        return defaultText;
+    }
+    // SDL has no native text-entry dialog, so the box states the value that OK
+    // will return and the user chooses between it and cancelling. An app that
+    // needs real text entry should draw its own field — everything it takes
+    // (input, focus, overlay) is already in the engine.
+    std::string full = message;
+    if (!defaultText.empty()) full += "\n\n[" + defaultText + "]";
+    if (!showMessageBox(full, true)) return std::nullopt;
+    return defaultText;
+}
+
 static JSValue js_alert(JSContext* ctx, JSValueConst /*this_val*/,
                         int argc, JSValueConst* argv)
 {
-    std::string msg = argc >= 1 ? argToString(ctx, argv[0]) : "";
-    if (!s_interactive) {
-        LOG_INFO("[alert] %s", msg.c_str());
-        return JS_UNDEFINED;
-    }
-    showMessageBox(msg, false);
+    DialogBindings::showAlert(argc >= 1 ? argToString(ctx, argv[0]) : "");
     return JS_UNDEFINED;
 }
 
 static JSValue js_confirm(JSContext* ctx, JSValueConst /*this_val*/,
                           int argc, JSValueConst* argv)
 {
-    std::string msg = argc >= 1 ? argToString(ctx, argv[0]) : "";
-    if (!s_interactive) {
-        LOG_INFO("[confirm] %s -> %s", msg.c_str(), s_autoAccept ? "OK" : "Cancel");
-        return JS_NewBool(ctx, s_autoAccept);
-    }
-    return JS_NewBool(ctx, showMessageBox(msg, true));
+    return JS_NewBool(ctx, DialogBindings::showConfirm(
+        argc >= 1 ? argToString(ctx, argv[0]) : ""));
 }
 
 static JSValue js_prompt(JSContext* ctx, JSValueConst /*this_val*/,
                          int argc, JSValueConst* argv)
 {
-    std::string msg = argc >= 1 ? argToString(ctx, argv[0]) : "";
-    std::string def = argc >= 2 ? argToString(ctx, argv[1]) : "";
-    if (!s_interactive) {
-        LOG_INFO("[prompt] %s -> %s", msg.c_str(),
-                 s_autoAccept ? def.c_str() : "(cancelled)");
-        return s_autoAccept ? JS_NewString(ctx, def.c_str()) : JS_NULL;
-    }
-    // SDL has no native text-entry dialog, so the box states the value that
-    // OK will return and the user chooses between it and cancelling. An app
-    // that needs real text entry should draw its own field — everything it
-    // takes (input, focus, overlay) is already in the engine.
-    std::string full = msg;
-    if (!def.empty()) full += "\n\n[" + def + "]";
-    if (!showMessageBox(full, true)) return JS_NULL;
-    return JS_NewString(ctx, def.c_str());
+    std::optional<std::string> answer = DialogBindings::showPrompt(
+        argc >= 1 ? argToString(ctx, argv[0]) : "",
+        argc >= 2 ? argToString(ctx, argv[1]) : "");
+    if (!answer) return JS_NULL;
+    return JS_NewString(ctx, answer->c_str());
 }
 
 // ---------------------------------------------------------------------------
