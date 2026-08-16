@@ -395,6 +395,58 @@ bool isPositioned(const htmlayout::css::ComputedStyle& s) {
     return p == "relative" || p == "absolute" || p == "fixed" || p == "sticky";
 }
 
+// Does this element become the containing block for fixed-position
+// descendants? CSS Transforms §3 and CSS Containment: a transform, a filter, a
+// backdrop-filter, a perspective, a will-change naming one of those, or paint
+// containment all take the job away from the viewport.
+bool establishesFixedContainingBlock(dom::Element* elem) {
+    if (!elem) return false;
+    auto& s = elem->computedStyle();
+    auto has = [&s](const char* prop) {
+        auto it = s.find(prop);
+        return it != s.end() && !it->second.empty() && it->second != "none";
+    };
+    if (has("transform") || has("filter") || has("backdrop-filter") ||
+        has("perspective") || has("rotate") || has("scale") || has("translate"))
+        return true;
+    auto wc = s.find("will-change");
+    if (wc != s.end() && (wc->second.find("transform") != std::string::npos ||
+                          wc->second.find("filter") != std::string::npos ||
+                          wc->second.find("perspective") != std::string::npos))
+        return true;
+    auto ct = s.find("contain");
+    if (ct != s.end() && (ct->second.find("paint") != std::string::npos ||
+                          ct->second.find("layout") != std::string::npos ||
+                          ct->second.find("strict") != std::string::npos ||
+                          ct->second.find("content") != std::string::npos))
+        return true;
+    return false;
+}
+
+// The containing block an absolutely positioned box is laid out and clipped
+// against: its nearest positioned ancestor. Null means the initial containing
+// block, i.e. nothing between it and the document clips it.
+dom::Element* absoluteContainingBlock(dom::Element* elem) {
+    for (auto* e = elem ? elem->parentElement() : nullptr; e; e = e->parentElement()) {
+        if (isPositioned(e->computedStyle())) return e;
+        // A transform (and friends) makes an element the containing block for
+        // *all* positioned descendants, not just fixed ones.
+        if (establishesFixedContainingBlock(e)) return e;
+    }
+    return nullptr;
+}
+
+// The containing block a fixed box is laid out and clipped against: the
+// viewport, unless an ancestor took the job with a transform, a filter, a
+// perspective, or a containment that implies one. Null means the viewport,
+// which is the ordinary case and the reason a fixed box escapes every
+// scrolling ancestor above it.
+dom::Element* fixedContainingBlock(dom::Element* elem) {
+    for (auto* e = elem ? elem->parentElement() : nullptr; e; e = e->parentElement())
+        if (establishesFixedContainingBlock(e)) return e;
+    return nullptr;
+}
+
 // Returns true if z-index is the literal keyword 'auto' (or absent).
 // Out-parameter outZ holds the parsed integer (0 when auto/absent/invalid).
 bool getZIndex(const htmlayout::css::ComputedStyle& s, int& outZ) {
@@ -2981,7 +3033,8 @@ void DrawTraversal::drawBorders(dom::Element* elem, float x, float y, float w, f
 }
 
 // Apply text-transform to a string
-static std::string applyTextTransform(const std::string& text, const std::string& transform) {
+std::string DrawTraversal::applyTextTransform(const std::string& text,
+                                              const std::string& transform) {
     if (transform == "uppercase") {
         std::string r = text;
         for (auto& c : r) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
@@ -3090,7 +3143,7 @@ void DrawTraversal::drawText(dom::Node* textNode, dom::Element* parent,
 
     // Apply text-transform
     auto ttIt = style.find("text-transform");
-    if (ttIt != style.end()) text = applyTextTransform(text, ttIt->second);
+    if (ttIt != style.end()) text = DrawTraversal::applyTextTransform(text, ttIt->second);
 
     // Get text color
     bromath::Color color = cfromColor8({0, 0, 0, 255});
@@ -3884,7 +3937,41 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         out.bw = box.fullWidth();
         out.bh = box.fullHeight();
         out.radii = getRadii(style, out.bw, out.bh);
+        out.owner = elem;
         return true;
+    };
+
+    // Drop the ancestor clips an out-of-flow box escapes.
+    //
+    // CSS: an ancestor's `overflow` clips a descendant only when it is the
+    // descendant's containing block or an ancestor of it. An absolutely
+    // positioned box's containing block is its nearest positioned ancestor, and
+    // a fixed one's is the viewport — so both routinely hang outside a
+    // scrolling ancestor they happen to be nested in. That is not an edge case:
+    // it is how every menu with a submenu is built, and clipping it means the
+    // submenu never appears.
+    //
+    // The clip chain is outermost-first and every owner is an ancestor of
+    // `elem`, so "keep the clips owned by the containing block or above" is a
+    // prefix — but the set test is cheap and does not assume that.
+    auto clipsFor = [](dom::Element* elem, const std::string& position,
+                       const std::vector<ClipRect>& chain) -> std::vector<ClipRect> {
+        if (position != "absolute" && position != "fixed") return chain;
+        if (chain.empty()) return chain;
+
+        dom::Element* cb = (position == "fixed") ? fixedContainingBlock(elem)
+                                                 : absoluteContainingBlock(elem);
+        // No containing block below the viewport: nothing in the chain clips.
+        if (!cb) return {};
+
+        std::unordered_set<const dom::Element*> allowed;
+        for (auto* e = cb; e; e = e->parentElement()) allowed.insert(e);
+
+        std::vector<ClipRect> kept;
+        kept.reserve(chain.size());
+        for (const auto& c : chain)
+            if (c.owner && allowed.count(c.owner)) kept.push_back(c);
+        return kept;
     };
 
     // Recursive collector. `currentSC` is the nearest SC ancestor whose buckets
@@ -3922,6 +4009,12 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
         bool isSC = createsStackingContext(elem, isThisRoot);
         bool positioned = isPositioned(style);
 
+        // Clips this element is actually subject to: an out-of-flow box drops
+        // the ones belonging to ancestors below its containing block.
+        static const std::string kStatic = "static";
+        const std::string& elemPosition = styleProp(style, "position", kStatic);
+        std::vector<ClipRect> ownClips = clipsFor(elem, elemPosition, ancestorClips);
+
         StackingContext* descendantSC = currentSC;
 
         if (isSC && !isThisRoot) {
@@ -3932,7 +4025,7 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
             sc->offsetY = offY;
             sc->zIsAuto = getZIndex(style, sc->zIndex);
             sc->treeOrder = dfsCounter++;
-            sc->ancestorClips = ancestorClips;
+            sc->ancestorClips = ownClips;
             descendantSC = sc.get();
             currentSC->children.push_back(std::move(sc));
             // The SC root itself is painted by paintStackingContext (its own
@@ -3946,7 +4039,7 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
             pe.offsetX = offX;
             pe.offsetY = offY;
             pe.tieBreaker = dfsCounter++;
-            pe.ancestorClips = ancestorClips;
+            pe.ancestorClips = ownClips;
             currentSC->positionedNonSC.push_back(std::move(pe));
             skipSet_.insert(elem);
         }
@@ -3965,7 +4058,10 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
             // by the time step 6 runs).
             if (selfClips) childClips.push_back(selfClip);
         } else {
-            childClips = ancestorClips;
+            // Descendants inherit the chain this element is itself subject to:
+            // once a positioned box has escaped an ancestor's clip, everything
+            // inside it has escaped it too.
+            childClips = ownClips;
             if (selfClips) childClips.push_back(selfClip);
         }
 

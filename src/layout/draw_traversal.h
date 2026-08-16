@@ -22,6 +22,12 @@ namespace bro::layout {
 struct ClipRect {
     float bx, by, bw, bh;
     render::Radii radii;
+    // The element whose `overflow` produced this clip. An out-of-flow box is
+    // only clipped by ancestors of its containing block, so a positioned
+    // descendant has to be able to ask which ancestor each clip came from and
+    // drop the ones it escapes — that is how a `position: fixed` submenu gets
+    // to hang outside the `overflow: auto` panel it is nested in.
+    dom::Element* owner = nullptr;
 };
 
 // One entry in the stacking-context tree (CSS 2.1 Appendix E).
@@ -211,6 +217,12 @@ public:
     // Color parsing helper (public for shared use by element controls)
     static bromath::Color parseColor(const std::string& color);
     static bool tryParseColor(const std::string& color, bromath::Color& out);
+    // CSS text-transform applied to a string. Public because the replaced
+    // controls draw their own text and have to apply it themselves — a
+    // `<select>` under `text-transform: uppercase` has to render its label
+    // uppercase like every other run of text on the page does.
+    static std::string applyTextTransform(const std::string& text,
+                                          const std::string& transform);
 
 private:
 
