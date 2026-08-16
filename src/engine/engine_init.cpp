@@ -748,11 +748,15 @@ void Engine::initAppRealm() {
     //     Works in windowed (SDL gamepad events) and headless (virtual pads).
     js::installGamepadBindings(jsRuntime_->getContext(), this);
 
-    // 9x. Native file dialogs (modal to our SDL window).
+    // 9x. Native file dialogs (modal to our SDL window) plus the three modal
+    //      dialogs a page expects on the global object: alert/confirm/prompt.
     //      Pass a tick callback so JS timers keep running while dialog is open.
+    //      Only a windowed run has someone to answer them; headless and server
+    //      answer themselves instead of blocking on a window nobody sees.
     js::DialogBindings::install(jsRuntime_->getContext(),
                                 window_ ? window_->getSDLWindow() : nullptr,
-                                [this]() { tickTimersOnly(); });
+                                [this]() { tickTimersOnly(); },
+                                displayMode_ == DisplayMode::Windowed);
 
     // 9a. Install DOM JS bindings (after window so polyfills work)
     js::DomBindings::install(jsRuntime_->getContext(), document_.get());

@@ -101,6 +101,7 @@ gamepad/`"action"` stream on the main window (see
 | `cut()` | Simulate cut on focused element (dispatches cut event, removes the selected range, returns the cut text) |
 | `dropFiles(x, y, paths [, windowId])` | Simulate file drop at coordinates. `paths` is an array of file path strings (a bare string is accepted for one file). Dispatches dragenter → dragover → drop **once** for the whole gesture, with a real `File` for every path in `dataTransfer.files` (see docs/file-api.js) — matching a real multi-file drop, which SDL delivers as one `DROP_BEGIN`…`DROP_COMPLETE` group. |
 | `dropText(x, y, text [, windowId])` | Simulate text drop at coordinates. Dispatches dragenter → dragover → drop with text data. |
+| `setDialogAnswer(accept)` | What `alert`/`confirm`/`prompt` do with no user to ask. Headless never blocks on them: the message is logged and the call returns at once, accepting by default (`confirm` → `true`, `prompt` → its default value). Pass `false` to take the cancel branch instead (`confirm` → `false`, `prompt` → `null`) until set back. See docs/dialogs-api.js. |
 | `resize(w, h)` | Resize the virtual viewport |
 | `gamepadConnect([id])` | Connect a virtual gamepad; returns its slot index. Fires `gamepadconnected` on window, appears in `navigator.getGamepads()`. |
 | `gamepadDisconnect(index)` | Disconnect a virtual gamepad. Fires `gamepaddisconnected`. |

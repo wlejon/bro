@@ -4,6 +4,7 @@
 #include <qjsbind/qjsbind.h>
 
 #include <SDL3/SDL_dialog.h>
+#include <SDL3/SDL_messagebox.h>
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_timer.h>
 #include <atomic>
@@ -234,19 +235,134 @@ static JSValue js_showSaveFileDialog(JSContext* ctx, JSValueConst /*this_val*/,
 }
 
 // ---------------------------------------------------------------------------
+// alert / confirm / prompt
+//
+// The three modal dialogs every page assumes exist. Without them a plain
+// `confirm('Are you sure?')` is a ReferenceError, which takes out the whole
+// handler around it — "New document", "Clear history" and every "load this
+// example, you'll lose your work" path in a typical editor.
+//
+// Windowed: SDL's native message box, which is modal and blocking, exactly
+// like the browser's. Nothing else can run meanwhile — a page that alerts in
+// a loop freezes itself, as it does in a browser.
+//
+// Headless/server: there is no one to answer, and blocking would hang a test
+// run forever. The message is logged and the dialog answers itself; see
+// setAutoDialogAnswer().
+// ---------------------------------------------------------------------------
+
+static bool s_interactive = true;
+static bool s_autoAccept = true;
+
+// Message-box button IDs.
+enum : int { kBtnCancel = 0, kBtnOk = 1 };
+
+static std::string argToString(JSContext* ctx, JSValueConst v)
+{
+    if (JS_IsUndefined(v)) return "";
+    const char* s = JS_ToCString(ctx, v);
+    if (!s) return "";
+    std::string out(s);
+    JS_FreeCString(ctx, s);
+    return out;
+}
+
+/// Show a native modal box. Returns true for OK/accept.
+/// `withCancel` false makes it a one-button acknowledgement (alert).
+static bool showMessageBox(const std::string& message, bool withCancel)
+{
+    SDL_MessageBoxButtonData buttons[2];
+    int nButtons = 0;
+    if (withCancel) {
+        buttons[nButtons++] = {SDL_MESSAGEBOX_BUTTON_ESCAPEKEY_DEFAULT,
+                               kBtnCancel, "Cancel"};
+    }
+    buttons[nButtons++] = {SDL_MESSAGEBOX_BUTTON_RETURNKEY_DEFAULT, kBtnOk, "OK"};
+
+    SDL_MessageBoxData data{};
+    data.flags = SDL_MESSAGEBOX_INFORMATION;
+    data.window = s_window;
+    data.title = "";
+    data.message = message.c_str();
+    data.numbuttons = nButtons;
+    data.buttons = buttons;
+
+    int pressed = kBtnCancel;
+    if (!SDL_ShowMessageBox(&data, &pressed)) {
+        // No message box available (no video backend, or the platform
+        // refused): treat it as a dismissal rather than blocking.
+        LOG_WARN("[dialog] message box unavailable: %s", SDL_GetError());
+        return !withCancel;
+    }
+    return pressed == kBtnOk;
+}
+
+static JSValue js_alert(JSContext* ctx, JSValueConst /*this_val*/,
+                        int argc, JSValueConst* argv)
+{
+    std::string msg = argc >= 1 ? argToString(ctx, argv[0]) : "";
+    if (!s_interactive) {
+        LOG_INFO("[alert] %s", msg.c_str());
+        return JS_UNDEFINED;
+    }
+    showMessageBox(msg, false);
+    return JS_UNDEFINED;
+}
+
+static JSValue js_confirm(JSContext* ctx, JSValueConst /*this_val*/,
+                          int argc, JSValueConst* argv)
+{
+    std::string msg = argc >= 1 ? argToString(ctx, argv[0]) : "";
+    if (!s_interactive) {
+        LOG_INFO("[confirm] %s -> %s", msg.c_str(), s_autoAccept ? "OK" : "Cancel");
+        return JS_NewBool(ctx, s_autoAccept);
+    }
+    return JS_NewBool(ctx, showMessageBox(msg, true));
+}
+
+static JSValue js_prompt(JSContext* ctx, JSValueConst /*this_val*/,
+                         int argc, JSValueConst* argv)
+{
+    std::string msg = argc >= 1 ? argToString(ctx, argv[0]) : "";
+    std::string def = argc >= 2 ? argToString(ctx, argv[1]) : "";
+    if (!s_interactive) {
+        LOG_INFO("[prompt] %s -> %s", msg.c_str(),
+                 s_autoAccept ? def.c_str() : "(cancelled)");
+        return s_autoAccept ? JS_NewString(ctx, def.c_str()) : JS_NULL;
+    }
+    // SDL has no native text-entry dialog, so the box states the value that
+    // OK will return and the user chooses between it and cancelling. An app
+    // that needs real text entry should draw its own field — everything it
+    // takes (input, focus, overlay) is already in the engine.
+    std::string full = msg;
+    if (!def.empty()) full += "\n\n[" + def + "]";
+    if (!showMessageBox(full, true)) return JS_NULL;
+    return JS_NewString(ctx, def.c_str());
+}
+
+// ---------------------------------------------------------------------------
 // Install
 // ---------------------------------------------------------------------------
 
+void DialogBindings::setAutoDialogAnswer(bool accept)
+{
+    s_autoAccept = accept;
+}
+
 void DialogBindings::install(JSContext* ctx, SDL_Window* window,
-                             TickCallback tickCb)
+                             TickCallback tickCb, bool interactive)
 {
     s_window = window;
     s_tickCb = std::move(tickCb);
+    s_interactive = interactive;
 
     qjsbind::Global(ctx)
         .function("showOpenFileDialog",   js_showOpenFileDialog,   0)
         .function("showOpenFolderDialog", js_showOpenFolderDialog, 0)
-        .function("showSaveFileDialog",   js_showSaveFileDialog,   0);
+        .function("showSaveFileDialog",   js_showSaveFileDialog,   0)
+        .function("alert",                js_alert,                1)
+        .function("confirm",              js_confirm,              1)
+        .function("prompt",               js_prompt,               2);
 }
 
 } // namespace bro::js

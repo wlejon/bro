@@ -101,3 +101,40 @@ if (typeof showSaveFileDialog !== 'function') {
     // run the dialog and post the path back.
     throw new Error('Save dialog is available in the main app realm only');
 }
+
+
+// =============================================================================
+// alert / confirm / prompt — the browser's three modal dialogs
+// =============================================================================
+//
+//   alert(message)                    → undefined
+//   confirm(message)                  → boolean
+//   prompt(message, defaultValue?)    → string | null
+//
+// Installed on the same global as the file dialogs, so any page that assumes
+// them — and a great deal of shipped code does, usually as the guard in front
+// of a destructive action — works unchanged. They block like a browser's: a
+// windowed run puts up SDL's native message box, modal to the app window, and
+// nothing else advances until the user answers.
+//
+// prompt() has no native text field to offer (SDL's message box is buttons
+// only), so it shows the message with the default value beneath it and the
+// user chooses between accepting that value and cancelling. An app that needs
+// real text entry should draw its own field — input, focus and overlays are
+// all in the engine already.
+//
+// HEADLESS AND SERVER RUNS DO NOT BLOCK. Unlike the file dialogs above, these
+// three answer themselves when there is no one to ask: the message is logged
+// ("[confirm] Are you sure? -> OK") and the call returns immediately. The
+// default is to accept, so a script driving an app walks through its
+// confirmations instead of stopping at the first one:
+//
+//   confirm(...)  → true         prompt(...)  → the default value
+//
+// `setDialogAnswer(false)` (a headless global — see docs/headless.md) flips
+// that for the rest of the run, which is how you test a cancel branch:
+//
+//   setDialogAnswer(false);
+//   clickDeleteButton();          // the app's confirm() returns false
+//   assert(itemStillThere());
+//   setDialogAnswer(true);

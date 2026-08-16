@@ -1,4 +1,5 @@
 #include "js/headless_bindings.h"
+#include "js/dialog_bindings.h"
 #include "engine/engine.h"
 #include "engine/capture_path.h"
 #include "engine/gamepad.h"
@@ -616,6 +617,15 @@ static JSValue js_cut(JSContext* ctx, JSValueConst, int, JSValueConst*) {
 }
 
 // --- Drag & drop simulation ---
+
+// setDialogAnswer(accept) — what alert/confirm/prompt do with no user to ask.
+// `true` (the default) means confirm() returns true and prompt() returns its
+// default value, so a script walks through an app's confirmations instead of
+// stopping at the first one; `false` takes the cancel branch.
+static JSValue js_setDialogAnswer(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    DialogBindings::setAutoDialogAnswer(argc >= 1 ? JS_ToBool(ctx, argv[0]) != 0 : true);
+    return JS_UNDEFINED;
+}
 
 static JSValue js_dropFiles(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     if (argc < 3) return JS_ThrowTypeError(ctx, "dropFiles(x, y, paths [, windowId]) requires x, y, and an array of paths");
@@ -1473,6 +1483,8 @@ void installHeadlessBindings(JSContext* ctx, engine::Engine* engine) {
         .function("cut", js_cut, 0)
         // Drag & drop simulation
         .function("dropFiles", js_dropFiles, 4)
+        // Modal dialogs (alert/confirm/prompt) answer themselves in headless
+        .function("setDialogAnswer", js_setDialogAnswer, 1)
         .function("dropText", js_dropText, 4)
         // Gamepad simulation
         .function("gamepadConnect", js_gamepadConnect, 1)
