@@ -3496,8 +3496,94 @@ static JSValue js_element_get_innerText(JSContext* ctx, JSValueConst this_val) {
 
 // ---- Misc methods ---------------------------------------------------------
 
-static JSValue js_element_scrollIntoView(JSContext* /*ctx*/, JSValueConst /*this_val*/,
-                                         int /*argc*/, JSValueConst* /*argv*/) {
+// scrollIntoView([alignToTop | { block }]) — scroll the element's scrollable
+// ancestors so it is visible. Only the vertical axis moves: element-level
+// horizontal scrolling does not exist in this engine (scrollLeft is fixed at
+// 0), so a `inline` alignment has nothing to act on.
+//
+// The rects come from the current layout, which already has each ancestor's
+// scroll applied, so the correction is a delta on top of the scroll the
+// container holds now. After the nearest scroller is moved, the next one out
+// is asked to bring *that container* into view — the element's own rect is no
+// longer the thing that has to move.
+static JSValue js_element_scrollIntoView(JSContext* ctx, JSValueConst this_val,
+                                         int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    flushLayoutFor(ctx, el);
+
+    // 0 = start (default, and `true`), 1 = center, 2 = end (`false`),
+    // 3 = nearest (scroll only when the element is actually out of view).
+    int align = 0;
+    if (argc >= 1) {
+        if (JS_IsBool(argv[0])) {
+            align = JS_ToBool(ctx, argv[0]) ? 0 : 2;
+        } else if (JS_IsObject(argv[0])) {
+            JSValue blockVal = JS_GetPropertyStr(ctx, argv[0], "block");
+            if (const char* s = JS_ToCString(ctx, blockVal)) {
+                std::string block(s);
+                JS_FreeCString(ctx, s);
+                if (block == "center") align = 1;
+                else if (block == "end") align = 2;
+                else if (block == "nearest") align = 3;
+            }
+            JS_FreeValue(ctx, blockVal);
+        }
+    }
+
+    bro::dom::AbsoluteRect target = bro::dom::absoluteBorderBox(el);
+    bool scrolled = false;
+
+    for (auto* anc = el->parentElement(); anc; anc = anc->parentElement()) {
+        auto& box = anc->layoutBox();
+        float maxScroll = std::max(0.0f, box.naturalHeight - box.contentRect.height);
+        if (maxScroll <= 0.0f) continue;
+        // Only a container that actually clips scrolls; an overflowing
+        // `visible` box just spills, and moving it would move nothing.
+        auto& style = anc->computedStyle();
+        auto overflowOf = [&](const char* prop) -> std::string {
+            auto it = style.find(prop);
+            return it != style.end() ? it->second : std::string();
+        };
+        std::string ov = overflowOf("overflow-y");
+        if (ov.empty()) ov = overflowOf("overflow");
+        if (ov.empty() || ov == "visible") continue;
+
+        bro::dom::AbsoluteRect view = bro::dom::absoluteContentBox(anc);
+        float delta = 0.0f;
+        switch (align) {
+            case 1:  // center
+                delta = (target.y + target.height * 0.5f) -
+                        (view.y + view.height * 0.5f);
+                break;
+            case 2:  // end
+                delta = (target.y + target.height) - (view.y + view.height);
+                break;
+            case 3:  // nearest: the minimum move that puts it inside
+                if (target.y < view.y) delta = target.y - view.y;
+                else if (target.y + target.height > view.y + view.height)
+                    delta = (target.y + target.height) - (view.y + view.height);
+                break;
+            default: // start
+                delta = target.y - view.y;
+                break;
+        }
+
+        float prev = anc->scrollTopValue();
+        float next = std::clamp(prev + delta, 0.0f, maxScroll);
+        if (next != prev) {
+            anc->setScrollTopValue(next);
+            anc->setScrollToBottom(false);
+            scrolled = true;
+            bro::dom::Event evt("scroll", false, false);
+            evt.setIsTrusted(true);
+            dispatchDomEvent(ctx, anc, evt);
+        }
+        // Outer scrollers now work on this container, not the element.
+        target = bro::dom::absoluteBorderBox(anc);
+    }
+
+    if (scrolled && el->document()) el->document()->markDirty();
     return JS_UNDEFINED;
 }
 
@@ -4691,7 +4777,7 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("getContext",                1, js_element_getContext),
     JS_CFUNC_DEF("toDataURL",                 0, js_element_canvas_toDataURL),
     JS_CFUNC_DEF("toBlob",                    1, js_element_canvas_toBlob),
-    JS_CFUNC_DEF("scrollIntoView",            0, js_element_scrollIntoView),
+    JS_CFUNC_DEF("scrollIntoView",            1, js_element_scrollIntoView),
     JS_CFUNC_DEF("getRootNode",              0, js_element_getRootNode),
     JS_CFUNC_DEF("hasChildNodes",            0, js_element_hasChildNodes),
     JS_CFUNC_DEF("attachShadow",              1, js_element_attachShadow),

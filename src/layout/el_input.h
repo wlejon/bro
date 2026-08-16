@@ -137,7 +137,21 @@ public:
     void setRangeValue(float v);
 
     struct DrawPos { float x, y, w, h; };
-    DrawPos lastDrawPos() const { return lastDrawPos_; }
+    // The control's box in the draw pass's surface space — what overlay
+    // anchors and mouse-drag math compare cursor coordinates against.
+    //
+    // Resolved live from the layout tree rather than read back from the last
+    // paint, for the same reason caretIndexFromPoint does: a control can be
+    // clicked before it has ever been painted (a panel revealed and then
+    // driven in one turn, which is ordinary in headless), and a paint-time
+    // anchor is {0,0,0,0} then — so the picker opened in the window corner
+    // and the very next click, aimed at the swatch, counted as "outside" and
+    // dismissed it. Layout is current at every click, since hit-testing just
+    // used it. Falls back to the painted box only if there is no element.
+    DrawPos lastDrawPos() const {
+        if (!elem_) return lastDrawPos_;
+        return contentBox_();
+    }
 
     // Caret rectangle in the draw pass's surface space (content space for the
     // app document), computed live — feeds SDL_SetTextInputArea so the native

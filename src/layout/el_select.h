@@ -44,7 +44,13 @@ public:
     dom::Element* element() const { return elem_; }
 
     struct DrawPos { float x, y, w, h; };
-    DrawPos lastDrawPos() const { return lastDrawPos_; }
+    // Resolved live from the layout tree, not read back from the last paint:
+    // a select can be clicked before it has ever been painted (a panel
+    // revealed and driven in one turn), and a paint-time anchor is
+    // {0,0,0,0} then, which opens the dropdown in the window corner. Layout
+    // is current at every click — hit-testing just used it. See the same
+    // note on ElInput::lastDrawPos().
+    DrawPos lastDrawPos() const;
 
     void getContentSize(float& w, float& h);
 
@@ -55,6 +61,11 @@ private:
     dom::Element* elem_ = nullptr;
     int selectedIndex_ = 0;
     mutable DrawPos lastDrawPos_ = {0, 0, 0, 0};
+    // The draw pass's document→surface translation, captured in draw(). Zero
+    // before the first frame, which is also the correct answer then (nothing
+    // has scrolled yet), so lastDrawPos() works from the very first click.
+    float docOffsetX_ = 0.0f;
+    float docOffsetY_ = 0.0f;
 };
 
 } // namespace bro::layout

@@ -270,7 +270,12 @@ void invokeListeners(JSContext* ctx, bro::dom::Element* current,
         // No C++ listeners here — the ordinary path, unchanged.
         for (int64_t i = 0; i < len; i++) {
             if (!invokeJsEntryAt(i)) break;
-            if (event.propagationStopped()) break;
+            // Only stopImmediatePropagation() cuts the rest of THIS element's
+            // listeners short (DOM §2.9). stopPropagation() stops the event
+            // moving on to the next node, which the caller checks — checking
+            // it here silently dropped every listener registered after one
+            // that called it, a very common pattern in UI toolkits.
+            if (event.immediatePropagationStopped()) break;
         }
     } else {
         // Merge the two lists on the shared registration sequence so C++ and
@@ -301,7 +306,7 @@ void invokeListeners(JSContext* ctx, bro::dom::Element* current,
             } else {
                 if (!invokeJsEntryAt(slot.jsIndex)) break;
             }
-            if (event.propagationStopped()) break;
+            if (event.immediatePropagationStopped()) break;
         }
     }
 

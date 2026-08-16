@@ -106,6 +106,12 @@ void ElSelect::getContentSize(float& w, float& h) {
     h = std::round(lm.ascent) + std::round(lm.descent) + std::round(lm.leading) + 1.0f;
 }
 
+ElSelect::DrawPos ElSelect::lastDrawPos() const {
+    if (!elem_) return lastDrawPos_;
+    auto r = dom::absoluteBorderBox(elem_);
+    return {r.x + docOffsetX_, r.y + docOffsetY_, r.width, r.height};
+}
+
 void ElSelect::draw(render::Renderer* renderer,
                     const htmlayout::layout::LayoutBox& box,
                     const htmlayout::css::ComputedStyle& /*style*/,
@@ -132,6 +138,8 @@ void ElSelect::draw(render::Renderer* renderer,
     // absoluteBorderBox() is document-space; the caller's doc→surface offset
     // (just −scroll for the app document) lands this in the pass's surface
     // space — app content space, where App overlays anchor and receive input.
+    docOffsetX_ = docOffsetX;
+    docOffsetY_ = docOffsetY;
     auto screenRect = dom::absoluteBorderBox(elem_);
     lastDrawPos_ = {screenRect.x + docOffsetX, screenRect.y + docOffsetY,
                     screenRect.width, screenRect.height};
