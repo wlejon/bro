@@ -91,11 +91,16 @@ clickOn(b);
 assert(log.join() === 'a:one!?', 'the same edit is not reported twice (got '
                                  + log.join() + ')');
 
-// ── Escape leaves, and what stands is still an edit ────────────────────────
+// ── Escape does nothing at all ─────────────────────────────────────────────
+// A browser leaves the value, the caret and the focus alone: there is no
+// revert on a plain field, and it is not a dialog to dismiss. The edit stays
+// owed, and the next departure is what reports it.
 log.length = 0;
 typeInto(a, 'esc');
 key(SDLK_ESCAPE);
-assert(log.join() === 'a:one!?esc', 'Escape reports the edit (got ' + log.join() + ')');
+assert(log.length === 0, 'Escape reports nothing (got ' + log.join() + ')');
+assert(document.activeElement === a, 'Escape keeps the focus');
+assert(a.value === 'one!?esc', 'Escape keeps the value (got ' + a.value + ')');
 
 // ── Tab out ────────────────────────────────────────────────────────────────
 log.length = 0;

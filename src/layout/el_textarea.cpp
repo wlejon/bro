@@ -328,9 +328,14 @@ KeyHandleResult ElTextarea::handleKeyDown(dom::Element* el, int keycode, int mod
         }
         r.handled = true;
     } else if (keycode == SDLK_ESCAPE) {
-        setFocused(false);
-        r.handled = true;
-        r.unfocus = true;
+        // Escape does nothing to a text field. A browser leaves the value,
+        // the caret and the focus exactly where they were — there is no
+        // "revert" on a plain input, and the field is not a dialog to
+        // dismiss. Blurring here instead ran the blur commit, so pressing
+        // Escape to back out of a half-typed edit *applied* it: the one
+        // gesture a user makes when they have changed their mind was the one
+        // that committed. Left unhandled so the keydown still reaches the
+        // page, which is where an app's own "escape closes my panel" lives.
     } else if (util::hasPrimaryMod(mod) && keycode == SDLK_A) {
         selectAll();
         r.handled = true;
