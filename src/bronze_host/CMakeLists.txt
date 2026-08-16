@@ -72,7 +72,7 @@ set(BRO_BRONZE_APP_OBJ "" CACHE FILEPATH
 # web_host.globals`.
 option(BRO_BRONZE_BUILD_APP
        "Compile BRO_BRONZE_APP_SOURCE with the bronze CLI at build time" OFF)
-set(BRO_BRONZE_APP_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/app/main_scenegraph.js"
+set(BRO_BRONZE_APP_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/main_scenegraph.js"
     CACHE FILEPATH "App entry .js compiled when BRO_BRONZE_BUILD_APP is ON")
 
 if(BRO_BRONZE_BUILD_APP)
