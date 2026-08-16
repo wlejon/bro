@@ -1,6 +1,7 @@
 #include "js/dom_bindings.h"
 #include "js/dom_bindings_internal.h"
 #include "js/custom_elements.h"
+#include "js/html_interfaces.h"
 #include "js/event_dispatch.h"
 #include "js/web_animation_bindings.h"
 #include "js/matchmedia_bindings.h"
@@ -102,7 +103,14 @@ JSValue DomBindings::wrapElement(JSContext* ctx, void* element_ptr)
     }
     JS_SetOpaque(obj, element_ptr);
 
-    upgradeCustomElementPrototype(ctx, obj, elem->tagName());
+    // A registered custom element wins: its class already extends HTMLElement,
+    // so it carries the built-in chain anyway. Otherwise give the wrapper the
+    // interface prototype for its tag (HTMLCanvasElement, HTMLImageElement,
+    // ...), which is what makes `instanceof` answer the way the web says.
+    if (!upgradeCustomElementPrototype(ctx, obj, elem->tagName())) {
+        JSValue ifaceProto = htmlInterfaceProto(ctx, elem->tagName());
+        if (JS_IsObject(ifaceProto)) JS_SetPrototype(ctx, obj, ifaceProto);
+    }
 
     // Do not resurrect a doomed element into the map. If the document no longer
     // owns this node it was already freed (or is queued in pendingFrees_) — a

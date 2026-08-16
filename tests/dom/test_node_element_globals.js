@@ -39,10 +39,17 @@ assert(threw, 'new Element() throws Illegal constructor');
 // ---------------------------------------------------------------------------
 
 const div = document.createElement('div');
-assert(Object.getPrototypeOf(div) === Element.prototype,
-       'Element.prototype is the prototype of a created element');
+// An element's own prototype is its per-tag interface (see
+// test_html_interfaces.js); Element.prototype is further up the chain, and is
+// still where every element method lives.
+assert(Object.getPrototypeOf(div) === HTMLDivElement.prototype,
+       'a created element starts at its own interface prototype');
+assert(Element.prototype.isPrototypeOf(div),
+       'Element.prototype is in the chain of a created element');
 assert(typeof Element.prototype.querySelector === 'function',
        'Element.prototype carries the element methods');
+assert(typeof div.querySelector === 'function',
+       'and they resolve through the longer chain');
 
 // ---------------------------------------------------------------------------
 // instanceof
@@ -78,10 +85,12 @@ assert(accepts('hello') === 'text', 'the append guard takes the text branch');
 const chain = [];
 let p = Object.getPrototypeOf(div);
 while (p) { chain.push(p); p = Object.getPrototypeOf(p); }
-assert(chain[0] === Element.prototype, 'chain starts at Element.prototype');
-assert(chain[1] === Node.prototype, 'Node.prototype is directly above Element.prototype');
-assert(chain[2] === Object.prototype, 'Object.prototype is above that');
-assert(chain.length === 3, `chain is exactly 3 deep, got ${chain.length}`);
+assert(chain[0] === HTMLDivElement.prototype, 'chain starts at the tag interface');
+assert(chain[1] === HTMLElement.prototype, 'HTMLElement.prototype is above that');
+assert(chain[2] === Element.prototype, 'Element.prototype is above that');
+assert(chain[3] === Node.prototype, 'Node.prototype is directly above Element.prototype');
+assert(chain[4] === Object.prototype, 'Object.prototype tops it off');
+assert(chain.length === 5, `chain is exactly 5 deep, got ${chain.length}`);
 
 // ---------------------------------------------------------------------------
 // nodeType constants

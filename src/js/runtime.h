@@ -9,9 +9,17 @@ extern "C" {
 #include "quickjs.h"
 }
 
-namespace bro::util { class AssetMounts; }
+namespace bro::util { class AssetMounts; class ImportMap; }
 
 namespace bro::js {
+
+/// Everything module specifier resolution consults, in one object so the
+/// loader has a single opaque pointer. Both members are borrowed and may be
+/// null; a null one simply removes that resolution step.
+struct ModuleResolveContext {
+    const util::AssetMounts* mounts = nullptr;
+    const util::ImportMap* importMap = nullptr;
+};
 
 /// Where a JS invocation came from. Used purely for the log line — error
 /// behavior (report-and-continue) does not depend on the origin.
@@ -90,9 +98,17 @@ public:
     /// Install a custom ES-module loader (file-based). When `mounts` is
     /// supplied, `/`-prefixed import specifiers (e.g. `import "/lib/x.js"`)
     /// resolve through the engine's asset mounts; relative specifiers always
-    /// resolve against the importing module's path. `mounts` must outlive any
-    /// module evaluation (it is held as the loader's opaque pointer).
-    void setModuleLoader(const util::AssetMounts* mounts = nullptr);
+    /// resolve against the importing module's path. When `importMap` is
+    /// supplied, a *bare* specifier ("three") is resolved through the page's
+    /// `<script type="importmap">` — the only thing that can give one a
+    /// meaning, since a bare specifier names a package and not a file.
+    ///
+    /// Both pointers are held as the loader's opaque and must outlive any
+    /// module evaluation. They are read at import time rather than copied, so
+    /// an engine may hand over a map it has not filled in yet (the app's
+    /// manifest is not loaded until later in init) and have it take effect.
+    void setModuleLoader(const util::AssetMounts* mounts = nullptr,
+                         const util::ImportMap* importMap = nullptr);
 
     // -----------------------------------------------------------------------
     // The error funnel.
@@ -163,6 +179,12 @@ private:
     JSRuntime* rt_ = nullptr;
     JSContext* ctx_ = nullptr;
     std::vector<PendingRejection> pendingRejections_;
+
+    /// What the module loader resolves against. Held by value so its address is
+    /// stable for the runtime's lifetime — QuickJS keeps the opaque pointer, and
+    /// setModuleLoader is called once, before the app manifest (and so the
+    /// import map) exists.
+    ModuleResolveContext moduleResolve_;
 };
 
 } // namespace bro::js

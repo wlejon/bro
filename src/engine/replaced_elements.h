@@ -29,6 +29,17 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
                             JSContext* jsCtx = nullptr,
                             broaudio::Engine* audioEngine = nullptr);
 
+/// Resolve an `<img>`'s `src` against its document and read the file's header
+/// far enough to learn the image's intrinsic size. Returns false, leaving w/h
+/// at 0, for a missing file or an unreadable one — a broken image, as on the
+/// web. Handles raster formats and SVG alike.
+///
+/// Shared with the JS `img.src =` setter, which needs the same answer for an
+/// image that is never inserted into the document: a loader that builds an
+/// `<img>`, sets `src` and reads the size back without appending it (three.js's
+/// ImageLoader does exactly this) is never reached by the layout walk.
+bool probeImageSize(dom::Element* elem, const std::string& src, int& w, int& h);
+
 // ---------------------------------------------------------------------------
 // Shared replaced-element interaction context
 // ---------------------------------------------------------------------------

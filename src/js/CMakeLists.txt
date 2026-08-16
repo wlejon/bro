@@ -35,7 +35,7 @@ add_library(bro_js STATIC
     dom_bindings.cpp node_bindings.cpp event_bindings.cpp style_bindings.cpp
     element_bindings.cpp shadowroot_bindings.cpp document_bindings.cpp
     range_bindings.cpp selection_bindings.cpp
-    custom_elements.cpp event_dispatch.cpp event_dispatch_populate.cpp event_dispatch_invoke.cpp mutation_observer.cpp
+    custom_elements.cpp html_interfaces.cpp event_dispatch.cpp event_dispatch_populate.cpp event_dispatch_invoke.cpp mutation_observer.cpp
     web_animation_bindings.cpp
     matchmedia_bindings.cpp
     canvas_bindings.cpp audio_bindings.cpp audio_scene_sync.cpp storage_bindings.cpp dialog_bindings.cpp
@@ -120,7 +120,7 @@ target_include_directories(bro_js PRIVATE ${GEN_DIR})
 # brolm is linked explicitly (not just transitively via brodiffusion):
 # diffusion_bindings.cpp uses brolm::clip for diffusion text encoding, and
 # lm_bindings.cpp exposes brolm::qwen as bro.lm.
-target_link_libraries(bro_js PUBLIC qjs qjsbind brokit bro_dom bro_util bro_canvas bro_audio_inference bro_steam broaudio bro_webgl SDL3::SDL3 broimage::broimage)
+target_link_libraries(bro_js PUBLIC qjs qjsbind brokit bro_dom bro_util bro_svg bro_canvas bro_audio_inference bro_steam broaudio bro_webgl SDL3::SDL3 broimage::broimage)
 
 # WebP: `new Image()` decodes here, and the renderer decodes in
 # render/image_cache.cpp. Both go through bro_webp so the two cannot disagree

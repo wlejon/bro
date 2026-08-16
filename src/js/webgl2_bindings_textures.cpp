@@ -50,15 +50,32 @@ static JSValue js_texParameterf(JSContext* ctx, JSValueConst this_val, int argc,
     return JS_UNDEFINED;
 }
 
+// Resolve a CanvasImageSource for a texture upload.
+//
+// Snapshotting a live `<canvas>` runs Ganesh on the shared GL context, and Skia
+// hands the context back in *its* state — viewport sized to the canvas, its own
+// FBO and program bound — leaving the caller to put things back. Do that here,
+// before the upload, so nothing downstream draws against Skia's state: the
+// upload is only the first casualty, and the rest of the frame (everything
+// three.js draws after the first CanvasTexture) is the visible one.
+static bool getUploadPixels(bro::webgl::WebGL2RenderingContext* gl,
+                            JSValueConst val, ImagePixels& img) {
+    if (!ImageBindings::getImagePixels(val, img)) return false;
+    if (img.disturbedGlState) gl->restoreState();
+    return true;
+}
+
 static JSValue js_texImage2D(JSContext* ctx, JSValueConst this_val, int argc, JSValueConst* argv) {
     auto* gl = getCtx(this_val); if (!gl || argc < 6) return JS_UNDEFINED;
 
     // Detect 6-arg overload: texImage2D(target, level, internalformat, format, type, source)
     // vs 9-arg overload: texImage2D(target, level, internalformat, width, height, border, format, type, data)
     // Heuristic: if argc == 6, or if argv[5] is an object (Image), use the 6-arg form.
+    // Resolve the source once — a canvas source costs a GPU readback, so probing
+    // the overload and then fetching again would pay for it twice.
     ImagePixels img;
-    bool is6Arg = (argc == 6) || (argc >= 6 && ImageBindings::getImagePixels(argv[5], img));
-
+    bool haveSource = getUploadPixels(gl, argv[5], img);
+    bool is6Arg = (argc == 6) || haveSource;
 
     if (is6Arg) {
         uint32_t target, format, type;
@@ -67,7 +84,7 @@ static JSValue js_texImage2D(JSContext* ctx, JSValueConst this_val, int argc, JS
         JS_ToInt32(ctx, &internalformat, argv[2]);
         JS_ToUint32(ctx, &format, argv[3]); JS_ToUint32(ctx, &type, argv[4]);
 
-        if (ImageBindings::getImagePixels(argv[5], img)) {
+        if (haveSource) {
             gl->texImage2D(target, level, internalformat, img.width, img.height, 0,
                            format, type, img.data);
         }
@@ -91,8 +108,9 @@ static JSValue js_texImage2D(JSContext* ctx, JSValueConst this_val, int argc, JS
                                   format, type, (GLintptr)offset);
         } else {
             // Try Image object first, then TypedArray
-            if (ImageBindings::getImagePixels(argv[8], img)) {
-                gl->texImage2D(target, level, internalformat, width, height, border, format, type, img.data);
+            ImagePixels src;
+            if (getUploadPixels(gl, argv[8], src)) {
+                gl->texImage2D(target, level, internalformat, width, height, border, format, type, src.data);
             } else {
                 const uint8_t* data = nullptr;
                 size_t len = 0;
@@ -109,8 +127,11 @@ static JSValue js_texSubImage2D(JSContext* ctx, JSValueConst this_val, int argc,
     auto* gl = getCtx(this_val); if (!gl || argc < 7) return JS_UNDEFINED;
 
     // 7-arg overload: texSubImage2D(target, level, xoffset, yoffset, format, type, source)
+    // Resolved once — see getUploadPixels: a canvas source costs a GPU readback
+    // and leaves Skia's GL state behind, which this puts back.
     ImagePixels img;
-    bool is7Arg = (argc == 7) || (argc >= 7 && ImageBindings::getImagePixels(argv[6], img));
+    bool haveSource = getUploadPixels(gl, argv[6], img);
+    bool is7Arg = (argc == 7) || haveSource;
 
     if (is7Arg) {
         uint32_t target, format, type;
@@ -119,7 +140,7 @@ static JSValue js_texSubImage2D(JSContext* ctx, JSValueConst this_val, int argc,
         JS_ToInt32(ctx, &xoffset, argv[2]); JS_ToInt32(ctx, &yoffset, argv[3]);
         JS_ToUint32(ctx, &format, argv[4]); JS_ToUint32(ctx, &type, argv[5]);
 
-        if (ImageBindings::getImagePixels(argv[6], img)) {
+        if (haveSource) {
             // No implicit generateMipmap here — WebGL never regenerates
             // mipmaps as a side effect of texSubImage2D; apps own that.
             gl->texSubImage2D(target, level, xoffset, yoffset, img.width, img.height,
@@ -140,8 +161,8 @@ static JSValue js_texSubImage2D(JSContext* ctx, JSValueConst this_val, int argc,
             int64_t offset; JS_ToInt64(ctx, &offset, argv[8]);
             gl->texSubImage2DFromPBO(target, level, xoffset, yoffset, width, height,
                                      format, type, (GLintptr)offset);
-        } else if (ImageBindings::getImagePixels(argv[8], img)) {
-            gl->texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, img.data);
+        } else if (ImagePixels src; getUploadPixels(gl, argv[8], src)) {
+            gl->texSubImage2D(target, level, xoffset, yoffset, width, height, format, type, src.data);
         } else {
             const uint8_t* data = nullptr;
             size_t len = 0;

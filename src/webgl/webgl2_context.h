@@ -39,6 +39,14 @@ public:
     /// Unbind the canvas FBO (restore default framebuffer).
     void unbindCanvasFBO();
 
+    /// Read the canvas's colour buffer back as tightly packed, top-down RGBA
+    /// (canvasWidth() x canvasHeight()), the row order every image encoder and
+    /// the 2D canvas surface use — GL's own bottom-up rows are flipped here.
+    /// This is what backs toDataURL()/toBlob() on a WebGL canvas. Returns false
+    /// if the context has no colour buffer to read. Leaves the app's GL state
+    /// as it found it.
+    bool readCanvasPixels(std::vector<uint8_t>& out);
+
     // =================================================================
     // Multiple canvases
     //

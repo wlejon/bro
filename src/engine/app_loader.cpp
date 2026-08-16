@@ -1,12 +1,39 @@
 #include "engine/app_loader.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
+#include "util/string_utils.h"
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <regex>
 
 namespace bro::engine {
+
+namespace {
+
+/// Does this `<script type>` name JavaScript? The HTML spec's "JavaScript MIME
+/// type essence match", minus the parameters no page in practice writes. An
+/// empty type means JavaScript — that is the common case, an ordinary
+/// `<script>` with no type at all.
+bool isExecutableScriptType(const std::string& type) {
+    if (type.empty()) return true;
+    static const char* kJavaScriptTypes[] = {
+        "text/javascript",       "application/javascript",
+        "text/ecmascript",       "application/ecmascript",
+        "text/javascript1.0",    "text/javascript1.1",
+        "text/javascript1.2",    "text/javascript1.3",
+        "text/javascript1.4",    "text/javascript1.5",
+        "text/jscript",          "text/livescript",
+        "text/x-ecmascript",     "text/x-javascript",
+        "application/x-ecmascript", "application/x-javascript",
+    };
+    for (const char* t : kJavaScriptTypes) {
+        if (type == t) return true;
+    }
+    return false;
+}
+
+} // namespace
 
 std::string AppLoader::loadFile(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary);
@@ -105,20 +132,68 @@ AppManifest AppLoader::loadApp(const std::string& appDir, const util::AssetMount
         }
     }
 
-    // Extract all <script> tags in document order (both src="..." and inline)
+    // Extract all <script> tags in document order (both src="..." and inline).
+    //
+    // A <script>'s `type` decides whether it is code at all. Only a JavaScript
+    // MIME type (or none) is executable; `module` is executable as an ES
+    // module; `importmap` is *data* that steers module resolution; and
+    // everything else — `application/json`, `text/x-template`,
+    // `speculationrules` — is a data block the HTML spec says a browser must
+    // not run. Running one is not a harmless no-op: an import map is JSON, and
+    // JSON evaluated as JavaScript is a SyntaxError on the first `:`, which is
+    // exactly what the page's real content looks like when it fails.
     {
         std::regex scriptRe(R"(<script([^>]*)>([\s\S]*?)</script>)",
                             std::regex_constants::icase);
         std::regex srcRe(R"(src\s*=\s*["']([^"']+)["'])",
                          std::regex_constants::icase);
-        std::regex moduleRe(R"(type\s*=\s*["']module["'])",
-                            std::regex_constants::icase);
+        std::regex typeRe(R"(type\s*=\s*["']([^"']*)["'])",
+                          std::regex_constants::icase);
         auto begin = std::sregex_iterator(html.begin(), html.end(), scriptRe);
         auto end = std::sregex_iterator();
+        bool haveImportMap = false;
         for (auto it = begin; it != end; ++it) {
             std::string attrs = (*it)[1].str();
             std::string body = (*it)[2].str();
-            bool isModule = std::regex_search(attrs, moduleRe);
+
+            std::string type;
+            std::smatch typeMatch;
+            if (std::regex_search(attrs, typeMatch, typeRe)) {
+                type = util::trim(util::toLower(typeMatch[1].str()));
+            }
+
+            if (type == "importmap") {
+                // One map per document (HTML ignores any later one), and it
+                // only means anything inline — a src'd import map is invalid.
+                if (haveImportMap) {
+                    LOG_WARN("AppLoader: ignoring a second <script type=\"importmap\"> in "
+                             "'%s' — a document has exactly one import map, and it is the "
+                             "first.", manifest.htmlPath.c_str());
+                    continue;
+                }
+                haveImportMap = true;
+                if (!manifest.importMap.parse(body, appDir)) {
+                    LOG_ERROR("AppLoader: <script type=\"importmap\"> in '%s' is not valid "
+                              "JSON — no bare import specifier will resolve.",
+                              manifest.htmlPath.c_str());
+                } else {
+                    LOG_INFO("AppLoader: import map with %zu entr%s",
+                             manifest.importMap.size(),
+                             manifest.importMap.size() == 1 ? "y" : "ies");
+                }
+                continue;
+            }
+
+            const bool isModule = (type == "module");
+            if (!isModule && !isExecutableScriptType(type)) {
+                // A data block. Skipped deliberately, and said out loud, so a
+                // page whose <script type="text/x-template"> never ran does not
+                // have to be discovered by its absence.
+                LOG_INFO("AppLoader: skipping <script type=\"%s\"> (not executable)",
+                         type.c_str());
+                continue;
+            }
+
             std::smatch srcMatch;
             if (std::regex_search(attrs, srcMatch, srcRe)) {
                 // External script

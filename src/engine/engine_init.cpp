@@ -37,6 +37,7 @@
 #include "js/window_host_bindings.h"
 #include "js/gamepad_bindings.h"
 #include "js/custom_elements.h"
+#include "js/html_interfaces.h"
 #include "js/webgl2_bindings.h"
 #include "js/image_bindings.h"
 #include "js/imagebitmap_bindings.h"
@@ -203,7 +204,12 @@ Engine::Engine(const EngineConfig& config)
     //    location.reload() can re-run them against a fresh realm; only the
     //    engine-owned objects (services, worlds, pumps) are created here, once.
     jsRuntime_ = std::make_unique<js::Runtime>();
-    jsRuntime_->setModuleLoader(&assetMounts_);
+    // The import map is borrowed out of manifest_, which is a member: the
+    // address is stable, so installing the loader here — long before
+    // index.html is read at step 6 — still picks up whatever map the page
+    // turns out to declare, and picks up the new one across a
+    // location.reload() that re-runs initAppRealm().
+    jsRuntime_->setModuleLoader(&assetMounts_, &manifest_.importMap);
 
     // Wire brokit logging through bro's LOG_* macros
     brokit::Runtime::setLogCallback([](brokit::Runtime::LogLevel level, const std::string& msg) {
@@ -757,6 +763,12 @@ void Engine::initAppRealm() {
     // 9b. Install custom elements (after DOM bindings — needs element class ID)
     js::installCustomElements(jsRuntime_->getContext(),
                               js::DomBindings::elementClassId(), document_.get());
+
+    // 9c. Built-in HTML element interfaces (after custom elements — chains onto
+    // the HTMLElement they create). Without these every tag wraps as a bare
+    // Element and `instanceof HTMLCanvasElement` throws.
+    js::installHtmlInterfaces(jsRuntime_->getContext(),
+                              js::DomBindings::elementClassId());
 
     // Shared path resolution for every binding that takes a file path, so the
     // audio/image/scene/tile surfaces all accept the same spellings. Must run

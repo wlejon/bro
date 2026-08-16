@@ -1,5 +1,6 @@
 #include "js/runtime.h"
 #include "util/asset_mounts.h"
+#include "util/import_map.h"
 #include "util/interrupt.h"
 #include "util/log.h"
 #include "util/time.h"
@@ -31,7 +32,8 @@ static char* module_normalize(JSContext* ctx, const char* base_name,
 {
     if (!name) return nullptr;
 
-    const auto* mounts = static_cast<const util::AssetMounts*>(opaque);
+    const auto* resolve = static_cast<const ModuleResolveContext*>(opaque);
+    const auto* mounts = resolve ? resolve->mounts : nullptr;
 
     std::string result;
     if (name[0] == '.' && base_name) {
@@ -50,7 +52,17 @@ static char* module_normalize(JSContext* ctx, const char* base_name,
         std::string mounted = mounts->resolve(name);
         result = mounted.empty() ? name : mounted;
     } else {
-        result = name;
+        // A bare specifier — "three", "three/addons/loaders/RGBELoader.js". It
+        // names a package, not a path, so the page's import map is the only
+        // thing that can turn it into a file. A miss falls through to the
+        // literal name, which the loader then fails to open: that keeps the
+        // error the honest one ("could not load module 'three'") instead of
+        // inventing a path the page never asked for.
+        std::string mapped;
+        if (resolve && resolve->importMap) {
+            mapped = resolve->importMap->resolve(name);
+        }
+        result = mapped.empty() ? name : mapped;
     }
 
     // Canonicalize lexically so different spellings of the same file
@@ -686,12 +698,17 @@ JSContext* Runtime::renewContext()
     return ctx_;
 }
 
-void Runtime::setModuleLoader(const util::AssetMounts* mounts)
+void Runtime::setModuleLoader(const util::AssetMounts* mounts,
+                              const util::ImportMap* importMap)
 {
-    // The mounts pointer is handed to QuickJS as the loader opaque and reaches
-    // both module_normalize and module_loader. It must outlive module eval.
-    JS_SetModuleLoaderFunc(rt_, module_normalize, module_loader,
-                           const_cast<util::AssetMounts*>(mounts));
+    // The context is a runtime member, so the address handed to QuickJS as the
+    // loader opaque stays valid for as long as modules can be evaluated. The
+    // pointers inside it are read at import time, which is what lets the engine
+    // install the loader during init and fill in the app's import map later,
+    // once index.html has actually been parsed.
+    moduleResolve_.mounts = mounts;
+    moduleResolve_.importMap = importMap;
+    JS_SetModuleLoaderFunc(rt_, module_normalize, module_loader, &moduleResolve_);
 }
 
 JSValue Runtime::callJs(JSContext* ctx, JSValueConst fn, JSValueConst thisVal,

@@ -27,6 +27,15 @@ struct ImagePixels {
     int width = 0;
     int height = 0;
     std::vector<uint8_t> owned;     // optional; data may point into here
+
+    /// Set when resolving this source ran Ganesh on the shared GL context —
+    /// today, snapshotting a live `<canvas>`. Skia leaves the context in its
+    /// own state (viewport sized to the canvas, its FBO/program bound) and
+    /// documents that the caller must put things back, so a WebGL entry point
+    /// that reads a canvas has to restoreState() before it draws again. Without
+    /// it the *rest of the frame* renders into a canvas-sized corner: the first
+    /// upload of a three.js CanvasTexture blanks everything drawn after it.
+    bool disturbedGlState = false;
 };
 
 class ImageBindings {
@@ -36,6 +45,11 @@ public:
     /// mounts (when non-null) provides engine-supplied prefixes (`/lib`, ...).
     static void install(JSContext* ctx, const std::string& basePath,
                         const util::AssetMounts* mounts = nullptr);
+
+    /// Forget a realm's asset base. Call when its JSContext goes away, so a
+    /// reloaded or closed document does not leave an entry keyed on a freed
+    /// context that a later context could be allocated on top of.
+    static void cleanup(JSContext* ctx);
 
     /// Register only the bro.image function suite (decode/encode, geometric,
     /// color, preproc, ...) onto the brokit-built bro.image — no Image

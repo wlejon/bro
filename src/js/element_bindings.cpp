@@ -13,6 +13,9 @@
 #include "layout/el_video.h"
 #include "canvas/canvas_scene.h"
 #include "js/imagebitmap_bindings.h"
+#include "js/image_bindings.h"
+#include "util/string_utils.h"
+#include <broimage/encode.h>
 #include "css/transform.h"
 #include "dom/element_geometry.h"
 #include "dom/text_offsets.h"
@@ -351,7 +354,17 @@ static JSValue js_element_set_textContent(JSContext* ctx, JSValueConst this_val,
     JS_FreeValue(ctx, observers);
     JS_FreeValue(ctx, global);
 
-    std::string text = jsToStdString(ctx, val);
+    // `textContent` is declared `DOMString?` — a *nullable* string — so WebIDL
+    // converts `undefined` to null, and the setter's first step turns null into
+    // the empty string. Both therefore clear the element. Running them through
+    // the ordinary ToString instead writes the literal words "null" and
+    // "undefined" into the page, which is how a widget built as
+    //     this.dom.textContent = value      // value optional, often omitted
+    // ends up captioned "undefined" here and blank in a browser. The three.js
+    // editor's own UI library builds every icon button exactly that way.
+    std::string text = (JS_IsUndefined(val) || JS_IsNull(val))
+                           ? std::string()
+                           : jsToStdString(ctx, val);
     if (hasObservers) {
         JSValue removedArr = JS_NewArray(ctx);
         uint32_t rmIdx = 0;
@@ -1054,6 +1067,59 @@ static JSValue js_element_video_get_videoRotation(JSContext* ctx, JSValueConst t
     return JS_NewInt32(ctx, 0);
 }
 
+// ---- HTMLImageElement --------------------------------------------------------
+//
+// The decoded size of the image behind an <img>, and whether that fetch has
+// settled. Filled in by the `src` setter above and by the layout walk, which
+// share one probe (engine::probeImageSize). A broken image reports 0/0 and
+// `complete` true — the fetch settled, it just settled badly — exactly as the
+// HTML spec describes it.
+
+static JSValue js_element_img_get_naturalWidth(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    return JS_NewInt32(ctx, el ? el->imageNaturalWidth() : 0);
+}
+
+static JSValue js_element_img_get_naturalHeight(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    return JS_NewInt32(ctx, el ? el->imageNaturalHeight() : 0);
+}
+
+static JSValue js_element_img_get_complete(JSContext* ctx, JSValueConst this_val) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_FALSE;
+    // No src at all is `complete` per spec, and a probed src is complete
+    // whichever way it went.
+    const std::string src = el->getAttribute("src");
+    return JS_NewBool(ctx, src.empty() || src == el->imageProbedSrc());
+}
+
+// `img.decode()` — a promise for "the image is ready to paint". Decoding here
+// is synchronous, so the answer is already known; the promise exists so callers
+// written against it work rather than hanging on a method that isn't there.
+static JSValue js_element_img_decode(JSContext* ctx, JSValueConst this_val,
+                                     int /*argc*/, JSValueConst* /*argv*/) {
+    auto* el = getElement(this_val);
+    const bool ok = el && el->imageNaturalWidth() > 0 && el->imageNaturalHeight() > 0;
+
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    if (JS_IsException(promise)) return promise;
+
+    JSValue arg = ok ? JS_UNDEFINED
+                     : JS_NewError(ctx);
+    if (!ok) {
+        JS_SetPropertyStr(ctx, arg, "message",
+                          JS_NewString(ctx, "EncodingError: the image could not be decoded"));
+    }
+    JSValue r = JS_Call(ctx, resolving[ok ? 0 : 1], JS_UNDEFINED, 1, &arg);
+    JS_FreeValue(ctx, r);
+    JS_FreeValue(ctx, arg);
+    JS_FreeValue(ctx, resolving[0]);
+    JS_FreeValue(ctx, resolving[1]);
+    return promise;
+}
+
 // ---- Attribute-reflected media properties -----------------------------------
 
 static JSValue js_element_video_get_src(JSContext* ctx, JSValueConst this_val) {
@@ -1071,6 +1137,28 @@ static JSValue js_element_video_set_src(JSContext* ctx, JSValueConst this_val,
     // Setting src triggers a fresh resource selection — reload via the pipeline.
     if (auto* v = el->videoControl()) {
         if (!s.empty()) v->load(s);
+    }
+    // <img src=...>: resolve the file now and fire load/error.
+    //
+    // The layout walk probes an <img> too, but only ones that are IN the
+    // document — and the standard way to load an image is to build a detached
+    // one, set src, and wait for the event without ever appending it (three.js's
+    // ImageLoader, and every "preload this texture" helper ever written). Such
+    // an image is never walked, so without this it would never gain a size and
+    // its load event would never arrive. Recording the size here also means the
+    // layout walk skips it if the element IS inserted later: same src, already
+    // probed, no second read.
+    if (!s.empty() && (el->tagName() == "IMG" || el->tagName() == "img")) {
+        int w = 0, h = 0;
+        const bool ok = bro::engine::probeImageSize(el, s, w, h);
+        el->setImageNaturalSize(s, w, h);
+        // Dispatched synchronously, which is what `new Image()` already does
+        // (image_bindings.cpp) — one timing for images rather than two. It
+        // differs from the web, where this is a task: a page that assigns
+        // `onload` AFTER `src` misses the event. Assigning the handler first,
+        // or using addEventListener before src, is the common form and works.
+        bro::dom::Event evt(ok ? "load" : "error", false, false);
+        bro::js::dispatchDomEvent(ctx, el, evt);
     }
     // <iframe src=...>: assigning src (re)loads the embedded sub-document.
     if (el->tagName() == "IFRAME" || el->tagName() == "iframe") {
@@ -2938,6 +3026,16 @@ static JSValue js_element_get_width(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val); if (!el) return JS_UNDEFINED;
     std::string v = el->getAttribute("width");
     if (!v.empty()) return JS_NewInt32(ctx, std::atoi(v.c_str()));
+    // 300×150 is the *canvas* default. An <img>'s width is its rendered width,
+    // or its intrinsic width when it is not being rendered — and an image built
+    // by a loader and never inserted is never rendered. Falling through to the
+    // canvas default told every such reader that the picture was 300 wide;
+    // three.js sizes its textures from exactly this property.
+    if (el->tagName() == "IMG" || el->tagName() == "img") {
+        const float rendered = el->layoutBox().contentRect.width;
+        if (rendered > 0.0f) return JS_NewInt32(ctx, static_cast<int>(rendered));
+        return JS_NewInt32(ctx, el->imageNaturalWidth());
+    }
     return JS_NewInt32(ctx, 300);
 }
 
@@ -2969,6 +3067,12 @@ static JSValue js_element_get_height(JSContext* ctx, JSValueConst this_val) {
     auto* el = getElement(this_val); if (!el) return JS_UNDEFINED;
     std::string v = el->getAttribute("height");
     if (!v.empty()) return JS_NewInt32(ctx, std::atoi(v.c_str()));
+    // See js_element_get_width: the 150 default belongs to <canvas>, not <img>.
+    if (el->tagName() == "IMG" || el->tagName() == "img") {
+        const float rendered = el->layoutBox().contentRect.height;
+        if (rendered > 0.0f) return JS_NewInt32(ctx, static_cast<int>(rendered));
+        return JS_NewInt32(ctx, el->imageNaturalHeight());
+    }
     return JS_NewInt32(ctx, 150);
 }
 
@@ -2983,6 +3087,175 @@ static JSValue js_element_set_height(JSContext* ctx, JSValueConst this_val, JSVa
     if (auto* wg = static_cast<bro::webgl::WebGL2RenderingContext*>(el->webglContext())) {
         if (h > 0 && h != wg->canvasHeight()) wg->resize(wg->canvasWidth(), h);
     }
+    return JS_UNDEFINED;
+}
+
+// ---- Canvas serialization: toDataURL / toBlob -----------------------------
+
+/// Read a `<canvas>`'s drawing buffer as tightly packed top-down RGBA.
+/// Covers both backings: a WebGL canvas reads its own FBO, a 2D one goes
+/// through the same snapshot path drawImage and texImage2D already use.
+static bool canvasPixels(JSContext* /*ctx*/, JSValueConst self,
+                         bro::dom::Element* el,
+                         std::vector<uint8_t>& owned,
+                         const uint8_t*& px, int& w, int& h) {
+    if (auto* wg = static_cast<bro::webgl::WebGL2RenderingContext*>(el->webglContext())) {
+        if (!wg->readCanvasPixels(owned)) return false;
+        px = owned.data();
+        w = wg->canvasWidth();
+        h = wg->canvasHeight();
+        return true;
+    }
+    ImagePixels pix;
+    if (!ImageBindings::getImagePixels(self, pix)) return false;
+    px = pix.data;
+    w = pix.width;
+    h = pix.height;
+    if (!px || w <= 0 || h <= 0) return false;
+    // getImagePixels hands back a pointer into the scene's snapshot cache,
+    // which the next canvas mutation invalidates — copy before encoding.
+    owned.assign(px, px + static_cast<size_t>(w) * h * 4);
+    px = owned.data();
+    return true;
+}
+
+/// Encode RGBA to the requested MIME type. Anything bro cannot encode falls
+/// back to PNG, which is what the HTML spec requires of an unrecognised type.
+/// Returns the type actually used through `outType`.
+static bool encodeCanvas(const uint8_t* px, int w, int h,
+                         const std::string& type, double quality,
+                         std::vector<uint8_t>& out, std::string& outType) {
+    if (type == "image/jpeg" || type == "image/jpg") {
+        // JPEG has no alpha. The spec composites the canvas onto black first;
+        // handing stb the RGBA buffer directly would read alpha as blue.
+        std::vector<uint8_t> rgb(static_cast<size_t>(w) * h * 3);
+        for (size_t i = 0, n = static_cast<size_t>(w) * h; i < n; ++i) {
+            const uint8_t a = px[i * 4 + 3];
+            for (int c = 0; c < 3; ++c) {
+                rgb[i * 3 + c] = static_cast<uint8_t>((px[i * 4 + c] * a + 127) / 255);
+            }
+        }
+        int q = (quality > 0.0 && quality <= 1.0) ? static_cast<int>(quality * 100.0 + 0.5) : 92;
+        if (q < 1) q = 1;
+        if (broimage::encode_jpeg_memory(out, rgb.data(), w, h, 3, q)) {
+            outType = "image/jpeg";
+            return true;
+        }
+        out.clear();
+    }
+    outType = "image/png";
+    return broimage::encode_png_memory(out, px, w, h, 4);
+}
+
+/// Read the (type, quality) argument pair shared by toDataURL and toBlob.
+static void canvasEncodeArgs(JSContext* ctx, int argc, JSValueConst* argv, int base,
+                             std::string& type, double& quality) {
+    type = "image/png";
+    quality = -1.0;
+    if (argc > base && JS_IsString(argv[base])) {
+        if (const char* s = JS_ToCString(ctx, argv[base])) {
+            type = bro::util::toLower(s);
+            JS_FreeCString(ctx, s);
+        }
+    }
+    if (argc > base + 1 && JS_IsNumber(argv[base + 1])) {
+        JS_ToFloat64(ctx, &quality, argv[base + 1]);
+    }
+}
+
+static JSValue js_element_canvas_toDataURL(JSContext* ctx, JSValueConst this_val,
+                                           int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    if (el->tagName() != "canvas" && el->tagName() != "CANVAS") {
+        return JS_ThrowTypeError(ctx, "toDataURL is only available on <canvas>");
+    }
+
+    std::string type; double quality;
+    canvasEncodeArgs(ctx, argc, argv, 0, type, quality);
+
+    std::vector<uint8_t> owned;
+    const uint8_t* px = nullptr; int w = 0, h = 0;
+    // A canvas with no context (or nothing drawn) has no drawing buffer to
+    // serialize. The spec's answer for a zero-size canvas is the string
+    // "data:," — not an error.
+    if (!canvasPixels(ctx, this_val, el, owned, px, w, h)) {
+        return JS_NewString(ctx, "data:,");
+    }
+
+    std::vector<uint8_t> bytes; std::string outType;
+    if (!encodeCanvas(px, w, h, type, quality, bytes, outType) || bytes.empty()) {
+        return JS_NewString(ctx, "data:,");
+    }
+
+    std::string url = "data:" + outType + ";base64," +
+                      bro::util::base64Encode(bytes.data(), bytes.size());
+    return JS_NewString(ctx, url.c_str());
+}
+
+static JSValue js_element_canvas_toBlob(JSContext* ctx, JSValueConst this_val,
+                                        int argc, JSValueConst* argv) {
+    auto* el = getElement(this_val);
+    if (!el) return JS_UNDEFINED;
+    if (el->tagName() != "canvas" && el->tagName() != "CANVAS") {
+        return JS_ThrowTypeError(ctx, "toBlob is only available on <canvas>");
+    }
+    if (argc < 1 || !JS_IsFunction(ctx, argv[0])) {
+        return JS_ThrowTypeError(ctx, "toBlob requires a callback function");
+    }
+
+    std::string type; double quality;
+    canvasEncodeArgs(ctx, argc, argv, 1, type, quality);
+
+    JSValue result = JS_NULL;   // the spec's answer when encoding is impossible
+    std::vector<uint8_t> owned;
+    const uint8_t* px = nullptr; int w = 0, h = 0;
+    if (canvasPixels(ctx, this_val, el, owned, px, w, h)) {
+        std::vector<uint8_t> bytes; std::string outType;
+        if (encodeCanvas(px, w, h, type, quality, bytes, outType) && !bytes.empty()) {
+            JSValue global = JS_GetGlobalObject(ctx);
+            JSValue blobCtor = JS_GetPropertyStr(ctx, global, "Blob");
+            if (JS_IsFunction(ctx, blobCtor)) {
+                JSValue buf = JS_NewArrayBufferCopy(ctx, bytes.data(), bytes.size());
+                JSValue parts = JS_NewArray(ctx);
+                JS_SetPropertyUint32(ctx, parts, 0, buf);
+                JSValue opts = JS_NewObject(ctx);
+                JS_SetPropertyStr(ctx, opts, "type", JS_NewString(ctx, outType.c_str()));
+                JSValue args[2] = { parts, opts };
+                result = JS_CallConstructor(ctx, blobCtor, 2, args);
+                JS_FreeValue(ctx, parts);
+                JS_FreeValue(ctx, opts);
+                if (JS_IsException(result)) result = JS_NULL;
+            }
+            JS_FreeValue(ctx, blobCtor);
+            JS_FreeValue(ctx, global);
+        }
+    }
+
+    // toBlob delivers its callback asynchronously. Hanging it off an
+    // already-resolved promise puts it on the microtask queue that is already
+    // running, rather than inventing a second scheduler here — and keeps a
+    // throwing callback inside promise machinery instead of unwinding into
+    // whatever WebGL or layout call happens to be on the stack.
+    JSValue resolving[2];
+    JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+    if (JS_IsException(promise)) {
+        JS_FreeValue(ctx, result);
+        return JS_EXCEPTION;
+    }
+    JSValue callRet = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, &result);
+    JS_FreeValue(ctx, callRet);
+    JS_FreeValue(ctx, resolving[0]);
+    JS_FreeValue(ctx, resolving[1]);
+    JS_FreeValue(ctx, result);
+
+    JSValue cb = JS_DupValue(ctx, argv[0]);
+    JSAtom thenAtom = JS_NewAtom(ctx, "then");
+    JSValue thenRet = JS_Invoke(ctx, promise, thenAtom, 1, &cb);
+    JS_FreeAtom(ctx, thenAtom);
+    JS_FreeValue(ctx, cb);
+    JS_FreeValue(ctx, thenRet);
+    JS_FreeValue(ctx, promise);
     return JS_UNDEFINED;
 }
 
@@ -4299,6 +4572,11 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CGETSET_DEF("dataset",       js_element_get_dataset, nullptr),
     JS_CGETSET_DEF("ownerDocument", js_element_get_ownerDocument, nullptr),
     JS_CGETSET_DEF("content",      js_element_get_content, nullptr),
+    // HTMLImageElement
+    JS_CGETSET_DEF("naturalWidth",  js_element_img_get_naturalWidth, nullptr),
+    JS_CGETSET_DEF("naturalHeight", js_element_img_get_naturalHeight, nullptr),
+    JS_CGETSET_DEF("complete",      js_element_img_get_complete, nullptr),
+    JS_CFUNC_DEF("decode", 0, js_element_img_decode),
     // HTMLMediaElement / HTMLVideoElement
     JS_CGETSET_DEF("currentTime", js_element_video_get_currentTime, js_element_video_set_currentTime),
     JS_CGETSET_DEF("duration",    js_element_video_get_duration, nullptr),
@@ -4411,6 +4689,8 @@ static const JSCFunctionListEntry js_element_proto_funcs[] = {
     JS_CFUNC_DEF("toggleAttribute",          1, js_element_toggleAttribute),
     JS_CFUNC_DEF("getAttributeNames",        0, js_element_getAttributeNames),
     JS_CFUNC_DEF("getContext",                1, js_element_getContext),
+    JS_CFUNC_DEF("toDataURL",                 0, js_element_canvas_toDataURL),
+    JS_CFUNC_DEF("toBlob",                    1, js_element_canvas_toBlob),
     JS_CFUNC_DEF("scrollIntoView",            0, js_element_scrollIntoView),
     JS_CFUNC_DEF("getRootNode",              0, js_element_getRootNode),
     JS_CFUNC_DEF("hasChildNodes",            0, js_element_hasChildNodes),

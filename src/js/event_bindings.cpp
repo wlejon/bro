@@ -31,6 +31,14 @@ JSValue wrapEvent(JSContext* ctx, const std::string& type,
     return qjsbind::wrap<EventData>(ctx, data);
 }
 
+JSValue createUninitializedEvent(JSContext* ctx)
+{
+    // Deliberately not wrapEvent(): an event from document.createEvent() has
+    // no type and neither flag set until initEvent() names it. wrapEvent's
+    // defaults describe an event that is already being dispatched.
+    return qjsbind::wrap<EventData>(ctx, new EventData());
+}
+
 // ===========================================================================
 // Registration
 // ===========================================================================
@@ -78,6 +86,22 @@ void installEventBindings(JSContext* ctx) {
         })
         .method("stopPropagation", [](EventData* e) {
             e->propagationStopped = true;
+        })
+        // The legacy initializer that goes with document.createEvent(). It is
+        // deprecated on the web and still everywhere in shipped code — the
+        // three.js editor's own UI library builds every one of its `change`
+        // events this way — so an engine that has `new Event()` but not this
+        // one runs the modern half of a page and throws on the rest.
+        // Omitted arguments are false, as the spec says.
+        .method("initEvent", [](EventData* e, std::string type,
+                                bool bubbles, bool cancelable) {
+            e->type       = std::move(type);
+            e->bubbles    = bubbles;
+            e->cancelable = cancelable;
+            // Re-initializing clears the dispatch state, so an event object a
+            // page keeps and re-sends is not still cancelled from last time.
+            e->defaultPrevented   = false;
+            e->propagationStopped = false;
         });
 
     js_event_class_id = qjsbind::class_id<EventData>();

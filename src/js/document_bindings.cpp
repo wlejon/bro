@@ -4,6 +4,7 @@
 #include "engine/engine.h"
 #include "dom/range.h"
 #include "dom/selection.h"
+#include "util/string_utils.h"
 
 #include <qjsbind/qjsbind.h>
 
@@ -32,8 +33,17 @@ static JSValue js_document_createElement(JSContext* ctx,
     auto* doc = getDocument(this_val);
     if (!doc || argc < 1) return JS_NULL;
     std::string tag = jsToStdString(ctx, argv[0]);
-    if (tag == "img" || tag == "IMG")
-        return ImageBindings::createImage(ctx);
+    // `<img>` is a real element here, not the standalone decode helper `new
+    // Image()` hands back. The helper is not a Node: it has no tagName, no
+    // nodeType, and appendChild silently drops it — so the ordinary way a page
+    // builds an icon,
+    //     const i = document.createElement('img'); i.src = …; btn.appendChild(i);
+    // produced an image that never reached the document and never appeared,
+    // with no error to say why. Returning an element makes `.src` reflect to
+    // the attribute (js_element_video_set_src), which is what layout probes for
+    // the intrinsic size and what the paint path loads. `new Image()` keeps its
+    // own object, and getImagePixels now accepts both, so an <img> built this
+    // way is still a valid drawImage / texImage2D source.
     auto* el = doc->createElement(tag);
     if (!el) return JS_NULL;
     JSValue ce = createCustomElement(ctx, el, tag);
@@ -48,8 +58,9 @@ static JSValue js_document_createElementNS(JSContext* ctx,
     auto* doc = getDocument(this_val);
     if (!doc || argc < 2) return JS_NULL;
     std::string tag = jsToStdString(ctx, argv[1]);
-    if (tag == "img" || tag == "IMG")
-        return ImageBindings::createImage(ctx);
+    // `<img>` goes through the ordinary element path, same as createElement —
+    // the two name the same tag and must not hand back two different kinds of
+    // object. three.js's own ImageLoader builds its images through *this* one.
     auto* el = doc->createElement(tag);
     if (!el) return JS_NULL;
     JSValue ce = createCustomElement(ctx, el, tag);
@@ -383,6 +394,36 @@ void installDocumentBindings(JSContext* ctx) {
         .method("createComment", [](Doc* d, JSContext* cx, std::string text) -> JSValue {
             auto* c = d->createComment(text);
             return c ? wrapAnyNode(cx, c) : JS_NULL;
+        })
+        // Legacy event construction: createEvent() makes an uninitialized
+        // event, initEvent() names it, dispatchEvent() sends it. Superseded by
+        // `new Event(...)` and deprecated for a decade, and still how a great
+        // deal of shipped code builds its events — so it is the difference
+        // between running such a page and throwing partway through building
+        // its UI.
+        //
+        // Every interface name answers with the one Event type bro has. The
+        // argument selected an IDL interface on the web, and the ones that
+        // differ (MouseEvent's coordinates, KeyboardEvent's key) only carry
+        // data a *synthetic* event has none of anyway: what the caller does
+        // next is initEvent() and dispatch. An unknown name is still a
+        // NotSupportedError, because a caller asking for an interface nobody
+        // recognises has misspelled something.
+        .method("createEvent", [](Doc*, JSContext* cx, std::string interfaceName) -> JSValue {
+            std::string name = util::toLower(interfaceName);
+            static const char* kKnown[] = {
+                "event", "events", "htmlevents", "svgevents",
+                "customevent", "uievent", "uievents",
+                "mouseevent", "mouseevents", "keyboardevent", "keyevents",
+                "touchevent", "focusevent", "inputevent", "wheelevent",
+                "pointerevent", "dragevent", "compositionevent", "messageevent",
+            };
+            for (const char* k : kKnown) {
+                if (name == k) return createUninitializedEvent(cx);
+            }
+            return JS_ThrowTypeError(
+                cx, "NotSupportedError: document.createEvent('%s') — no such event "
+                    "interface", interfaceName.c_str());
         })
         .method("createDocumentFragment", [](Doc* d, JSContext* cx) -> JSValue {
             // bro::dom::DocumentFragment extends Node, not Element, so the

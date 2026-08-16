@@ -20,4 +20,8 @@ std::string replace(const std::string& str, const std::string& from, const std::
 /// only turn a renderable image into a blank one.
 std::vector<uint8_t> base64Decode(const std::string& s);
 
+/// Encode standard base64, with padding and no line breaks — the form a
+/// `data:` URL wants, which is what canvas.toDataURL() hands back.
+std::string base64Encode(const uint8_t* data, size_t len);
+
 } // namespace bro::util

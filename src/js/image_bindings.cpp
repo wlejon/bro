@@ -9,8 +9,13 @@
 
 #include <qjsbind/qjsbind.h>
 
+#include "svg/svg_renderer.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
+
+#include <fstream>
+#include <sstream>
+#include <unordered_map>
 
 #include "broimage/decode.h"
 
@@ -33,8 +38,28 @@
 
 namespace bro::js {
 
-static std::string s_basePath;  // App directory for resolving relative paths
-static const util::AssetMounts* s_mounts = nullptr;
+// Where relative image paths resolve, per realm.
+//
+// This used to be one process-global pair, but install() runs once per realm —
+// the app, every system panel, every <iframe> sub-document — so whichever
+// loaded last quietly took ownership of path resolution for all of them.
+// System panels load after the app, which left an app's own
+// `<img src="images/x.png">` resolving to `<panel dir>/images/x.png` and
+// failing to open: every DOM image used as a canvas or WebGL source came back
+// empty, with only a load-failure warning naming a path the app never wrote.
+struct AssetBase {
+    std::string path;
+    const util::AssetMounts* mounts = nullptr;
+};
+static std::unordered_map<JSContext*, AssetBase> s_bases;
+// Workers install only the kernels and carry no base of their own (see
+// installKernels), so they fall back to the most recent main-thread install.
+static AssetBase s_fallbackBase;
+
+static const AssetBase& assetBaseFor(JSContext* ctx) {
+    auto it = s_bases.find(ctx);
+    return it != s_bases.end() ? it->second : s_fallbackBase;
+}
 
 struct ImageData {
     int width = 0;
@@ -60,20 +85,25 @@ struct ImageData {
 
 using ID = ImageData;
 
-// Resolve an image src path against the app base directory and engine mounts.
-static std::string resolvePath(const std::string& src) {
+// Resolve an image src path against a base directory and the engine mounts.
+static std::string resolveAgainst(const AssetBase& base, const std::string& src) {
     if (src.size() >= 2 && src[1] == ':') return src;   // Windows C:\...
     if (!src.empty() && (src[0] == '/' || src[0] == '\\')) {
-        if (s_mounts) {
-            std::string m = s_mounts->resolve(src);
+        if (base.mounts) {
+            std::string m = base.mounts->resolve(src);
             if (!m.empty()) return m;
         }
         return src;
     }
-    if (s_basePath.empty()) return src;
-    std::string path = s_basePath;
+    if (base.path.empty()) return src;
+    std::string path = base.path;
     if (path.back() != '/' && path.back() != '\\') path += '/';
     return path + src;
+}
+
+// Resolve against whichever realm the call came from.
+static std::string resolvePath(JSContext* ctx, const std::string& src) {
+    return resolveAgainst(assetBaseFor(ctx), src);
 }
 
 // -------------------------------------------------------------------------
@@ -92,7 +122,7 @@ static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val,
 
     // Resolve path and decode via broimage (stb-backed, RGBA-forced). Decode is
     // synchronous, so load/error fires before the setter returns.
-    std::string path = resolvePath(img->src);
+    std::string path = resolvePath(img->ctx, img->src);
     broimage::Image decoded;
     std::string err;
     bool ok = broimage::decode_file(path, decoded, &err);
@@ -115,6 +145,37 @@ static JSValue js_image_set_src(JSContext* ctx, JSValueConst this_val,
         }
     }
 #endif
+
+    // SVG. broimage is stb-backed and stb decodes bitmaps, so a vector image
+    // arrives here as "unknown image type" — which is how an ordinary
+    // `<img src="icon.svg">` turns into a broken image even though bro has a
+    // full SVG renderer a layer away. Rasterize it at its intrinsic size and
+    // hand back pixels, so it is an image like any other from here on.
+    if (!ok) {
+        std::string markup;
+        {
+            std::ifstream f(path, std::ios::binary);
+            if (f) {
+                std::ostringstream ss;
+                ss << f.rdbuf();
+                markup = ss.str();
+            }
+        }
+        if (bro::svg::looksLikeSvg(markup.data(), markup.size())) {
+            int w = 0, h = 0;
+            std::vector<uint8_t> rgba;
+            if (bro::svg::rasterizeSvgMarkup(markup.data(), markup.size(), 0, 0,
+                                             w, h, rgba)) {
+                decoded.width = w;
+                decoded.height = h;
+                decoded.channels = 4;
+                decoded.pixels = std::move(rgba);
+                ok = true;
+            } else {
+                err = "SVG parse/rasterize failed";
+            }
+        }
+    }
 
     // A failed decode is a *broken image*, not a 1x1 white one. broimage hands
     // back a white fallback pixel on failure; adopting it would make a missing
@@ -381,7 +442,7 @@ static JSValue img_decodeU16(JSContext* ctx, JSValueConst, int argc, JSValueCons
     if (JS_IsString(argv[0])) {
         const char* s = JS_ToCString(ctx, argv[0]);
         if (!s) return JS_EXCEPTION;
-        ok = broimage::decode_file_u16(resolvePath(s), out, &err);
+        ok = broimage::decode_file_u16(resolvePath(ctx, s), out, &err);
         JS_FreeCString(ctx, s);
     } else {
         const uint8_t* p; size_t n;
@@ -404,7 +465,7 @@ static JSValue img_decodeF32(JSContext* ctx, JSValueConst, int argc, JSValueCons
     if (JS_IsString(argv[0])) {
         const char* s = JS_ToCString(ctx, argv[0]);
         if (!s) return JS_EXCEPTION;
-        ok = broimage::decode_file_f32(resolvePath(s), out, &err);
+        ok = broimage::decode_file_f32(resolvePath(ctx, s), out, &err);
         JS_FreeCString(ctx, s);
     } else {
         const uint8_t* p; size_t n;
@@ -427,7 +488,7 @@ static JSValue img_decodeOriented(JSContext* ctx, JSValueConst, int argc, JSValu
     if (JS_IsString(argv[0])) {
         const char* s = JS_ToCString(ctx, argv[0]);
         if (!s) return JS_EXCEPTION;
-        ok = broimage::decode_file_oriented(resolvePath(s), out, &err);
+        ok = broimage::decode_file_oriented(resolvePath(ctx, s), out, &err);
         JS_FreeCString(ctx, s);
     } else {
         const uint8_t* p; size_t n;
@@ -464,7 +525,7 @@ static JSValue img_readExifOrientation(JSContext* ctx, JSValueConst, int argc, J
     if (JS_IsString(argv[0])) {
         const char* s = JS_ToCString(ctx, argv[0]);
         if (!s) return JS_EXCEPTION;
-        o = broimage::read_exif_orientation_file(resolvePath(s));
+        o = broimage::read_exif_orientation_file(resolvePath(ctx, s));
         JS_FreeCString(ctx, s);
     } else {
         const uint8_t* p; size_t n;
@@ -511,7 +572,7 @@ static JSValue img_encodePngFile(JSContext* ctx, JSValueConst, int argc, JSValue
         JS_FreeCString(ctx, path); return JS_EXCEPTION;
     }
     if (argc >= 6 && !JS_IsUndefined(argv[5])) { if (JS_ToInt32(ctx, &stride, argv[5])) { JS_FreeCString(ctx, path); return JS_EXCEPTION; } }
-    bool ok = broimage::encode_png_file(resolvePath(path), px.data, w, h, c, stride);
+    bool ok = broimage::encode_png_file(resolvePath(ctx, path), px.data, w, h, c, stride);
     JS_FreeCString(ctx, path);
     return JS_NewBool(ctx, ok);
 }
@@ -539,7 +600,7 @@ static JSValue img_encodeJpegFile(JSContext* ctx, JSValueConst, int argc, JSValu
         JS_FreeCString(ctx, path); return JS_EXCEPTION;
     }
     if (argc >= 6 && !JS_IsUndefined(argv[5])) { if (JS_ToInt32(ctx, &quality, argv[5])) { JS_FreeCString(ctx, path); return JS_EXCEPTION; } }
-    bool ok = broimage::encode_jpeg_file(resolvePath(path), px.data, w, h, c, quality);
+    bool ok = broimage::encode_jpeg_file(resolvePath(ctx, path), px.data, w, h, c, quality);
     JS_FreeCString(ctx, path);
     return JS_NewBool(ctx, ok);
 }
@@ -1392,8 +1453,8 @@ static void registerImageKernels(JSContext* ctx) {
 
 void ImageBindings::install(JSContext* ctx, const std::string& basePath,
                             const util::AssetMounts* mounts) {
-    s_basePath = basePath;
-    s_mounts = mounts;
+    s_bases[ctx] = AssetBase{ basePath, mounts };
+    s_fallbackBase = AssetBase{ basePath, mounts };
 
     qjsbind::Class<ID>(ctx, "Image")
         .constructor([](JSContext* ctx, int /*argc*/, JSValueConst* /*argv*/) -> ID* {
@@ -1468,11 +1529,37 @@ void ImageBindings::install(JSContext* ctx, const std::string& basePath,
 
     JS_FreeValue(ctx, proto);
 
-    // Register HTMLImageElement as an alias for Image on global
+    // Sit Image.prototype on HTMLImageElement.prototype rather than aliasing the
+    // two constructors together (which would replace the interface object
+    // installHtmlInterfaces put on the global, and leave a DOM <img> failing
+    // `instanceof HTMLImageElement`).
+    //
+    // `new Image()` builds this decode helper, not a DOM element, but the web
+    // says the result is an HTMLImageElement and libraries test for it: three.js
+    // asks `image instanceof HTMLImageElement` to decide whether a texture can
+    // be serialized, and answers "no" by dropping it. Chaining the prototypes
+    // makes both spellings of an image — the helper and a real <img> — pass the
+    // same guard.
     JSValue global = JS_GetGlobalObject(ctx);
-    JSValue imageCtor = JS_GetPropertyStr(ctx, global, "Image");
-    JS_SetPropertyStr(ctx, global, "HTMLImageElement", JS_DupValue(ctx, imageCtor));
-    JS_FreeValue(ctx, imageCtor);
+    JSValue htmlImageCtor = JS_GetPropertyStr(ctx, global, "HTMLImageElement");
+    if (JS_IsFunction(ctx, htmlImageCtor)) {
+        JSValue htmlImageProto = JS_GetPropertyStr(ctx, htmlImageCtor, "prototype");
+        JSValue imageCtor = JS_GetPropertyStr(ctx, global, "Image");
+        JSValue imageProto = JS_GetPropertyStr(ctx, imageCtor, "prototype");
+        if (JS_IsObject(htmlImageProto) && JS_IsObject(imageProto)) {
+            JS_SetPrototype(ctx, imageProto, htmlImageProto);
+        }
+        JS_FreeValue(ctx, imageProto);
+        JS_FreeValue(ctx, imageCtor);
+        JS_FreeValue(ctx, htmlImageProto);
+    } else {
+        // No interface objects in this realm (a worker, say) — keep the old
+        // alias so HTMLImageElement is at least defined.
+        JSValue imageCtor = JS_GetPropertyStr(ctx, global, "Image");
+        JS_SetPropertyStr(ctx, global, "HTMLImageElement", JS_DupValue(ctx, imageCtor));
+        JS_FreeValue(ctx, imageCtor);
+    }
+    JS_FreeValue(ctx, htmlImageCtor);
     JS_FreeValue(ctx, global);
 
     // Augment the brokit-built bro.image with the rest of broimage's surface
@@ -1480,6 +1567,10 @@ void ImageBindings::install(JSContext* ctx, const std::string& basePath,
     // stencil, tiling). brokit::api::installAll() ran earlier and created
     // bro.image with the core verb kernels; this adds onto the same object.
     registerImageKernels(ctx);
+}
+
+void ImageBindings::cleanup(JSContext* ctx) {
+    s_bases.erase(ctx);
 }
 
 void ImageBindings::installKernels(JSContext* ctx) {
@@ -1491,6 +1582,14 @@ JSValue ImageBindings::createImage(JSContext* ctx) {
     img->ctx = ctx;
     return qjsbind::wrap<ID>(ctx, img);
 }
+
+// A decoded <img> element's pixels, kept keyed on its `src` so re-uploading
+// the same texture every frame does not re-decode the file every frame.
+struct DecodedImage {
+    int width = 0;
+    int height = 0;
+    std::vector<uint8_t> pixels;
+};
 
 bool ImageBindings::getImagePixels(JSValue val, ImagePixels& out) {
     // 1) Loaded Image (PNG/JPG decoded via broimage, or 1x1 fallback).
@@ -1521,7 +1620,74 @@ bool ImageBindings::getImagePixels(JSValue val, ImagePixels& out) {
                 out.data   = px;
                 out.width  = w;
                 out.height = h;
+                // A cache hit touches no GL at all, but the miss runs Ganesh on
+                // the shared context and leaves its state behind. Flag both: the
+                // caller pays one restoreState() on a path that just did a GPU
+                // readback, and guessing wrong the other way corrupts the frame.
+                out.disturbedGlState = true;
                 return true;
+            }
+        }
+    }
+
+    // 2b) A DOM <img> element. document.createElement('img') builds one of
+    //     these, so anything a page draws to a canvas or uploads as a texture
+    //     after creating the image the ordinary way arrives here. The bytes are
+    //     read and decoded on demand and cached on the element's src, because a
+    //     texture atlas re-uploaded per frame must not re-decode a PNG per
+    //     frame. SVG goes through the rasterizer, so a vector icon is as usable
+    //     a source as a bitmap one.
+    if (auto* el = getElement(val)) {
+        const std::string& tag = el->tagName();
+        if (tag == "IMG" || tag == "img") {
+            const std::string src = el->getAttribute("src");
+            if (!src.empty()) {
+                // An <img>'s src resolves against its own document, not against
+                // whichever realm happens to be installed last — which is both
+                // what the web says and the only answer available here, since
+                // getImagePixels has no JSContext to ask.
+                AssetBase base = s_fallbackBase;
+                if (auto* doc = el->document(); doc && !doc->basePath().empty()) {
+                    base.path = doc->basePath();
+                }
+                const std::string path = resolveAgainst(base, src);
+
+                // Keyed on the resolved path, not the src: the same
+                // "images/icon.png" names different files in an app and in a
+                // system panel, and one cache shared by every document must not
+                // hand the second one the first one's pixels.
+                static std::unordered_map<std::string, DecodedImage> s_cache;
+                auto it = s_cache.find(path);
+                if (it == s_cache.end()) {
+                    DecodedImage entry;
+                    broimage::Image decoded;
+                    std::string err;
+                    if (broimage::decode_file(path, decoded, &err)) {
+                        entry.width  = decoded.width;
+                        entry.height = decoded.height;
+                        entry.pixels = std::move(decoded.pixels);
+                    } else {
+                        std::string markup;
+                        std::ifstream f(path, std::ios::binary);
+                        if (f) {
+                            std::ostringstream ss;
+                            ss << f.rdbuf();
+                            markup = ss.str();
+                        }
+                        if (bro::svg::looksLikeSvg(markup.data(), markup.size())) {
+                            bro::svg::rasterizeSvgMarkup(markup.data(), markup.size(),
+                                                         0, 0, entry.width, entry.height,
+                                                         entry.pixels);
+                        }
+                    }
+                    it = s_cache.emplace(path, std::move(entry)).first;
+                }
+                if (!it->second.pixels.empty()) {
+                    out.data   = it->second.pixels.data();
+                    out.width  = it->second.width;
+                    out.height = it->second.height;
+                    return true;
+                }
             }
         }
     }

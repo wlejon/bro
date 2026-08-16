@@ -18,6 +18,7 @@
 #include "js/dom_bindings.h"
 #include "js/event_dispatch.h"
 #include "platform/sdl_window.h"
+#include "svg/svg_renderer.h"
 #include "util/string_utils.h"
 
 #include "broimage/decode.h"
@@ -57,11 +58,19 @@ bool probeBytes(const uint8_t* data, size_t len, int& w, int& h) {
     return false;
 }
 
+} // namespace
+
 // Resolve `src` and read enough of it to learn the image's size. Returns
 // false (leaving w/h at 0) for a missing file or an unreadable header, which
 // leaves the <img> zero-sized — the same as a browser showing a broken image.
-bool probeImageSizeImpl(dom::Element* elem, const std::string& src,
-                        int& w, int& h) {
+//
+// Public because the JS `img.src =` setter needs the same answer for an image
+// that is never inserted into the document — three.js's ImageLoader builds one,
+// sets src, and reads the size off it without ever appending it, so nothing
+// here would ever walk to it. One implementation, so a detached image and a
+// laid-out one cannot disagree about how big the same file is.
+bool probeImageSize(dom::Element* elem, const std::string& src,
+                    int& w, int& h) {
     w = 0;
     h = 0;
     if (!elem || src.empty()) return false;
@@ -109,10 +118,23 @@ bool probeImageSizeImpl(dom::Element* elem, const std::string& src,
     ifs.read(reinterpret_cast<char*>(head.data()),
              static_cast<std::streamsize>(head.size()));
     head.resize(static_cast<size_t>(ifs.gcount()));
+
+    // An SVG carries its size in the root tag, not in a binary header, so the
+    // bitmap probe cannot see it. Reading it here is what makes the <img> a
+    // replaced element with a real intrinsic size; otherwise it lays out as an
+    // empty inline box and the icon has nowhere to paint. Same reader the paint
+    // path and the rasterizer use, so all three agree on how big it is.
+    if (svg::looksLikeSvg(reinterpret_cast<const char*>(head.data()), head.size())) {
+        float sw = 0, sh = 0;
+        svg::svgIntrinsicSize(reinterpret_cast<const char*>(head.data()),
+                              head.size(), sw, sh);
+        w = static_cast<int>(sw);
+        h = static_cast<int>(sh);
+        return w > 0 && h > 0;
+    }
+
     return probeBytes(head.data(), head.size(), w, h);
 }
-
-} // namespace
 
 // ---------------------------------------------------------------------------
 // Replaced element initialization
@@ -153,7 +175,7 @@ void ensureReplacedElements(dom::Element* elem, render::Renderer* renderer,
         const std::string src = elem->getAttribute("src");
         if (!src.empty() && src != elem->imageProbedSrc()) {
             int w = 0, h = 0;
-            probeImageSizeImpl(elem, src, w, h);
+            probeImageSize(elem, src, w, h);
             elem->setImageNaturalSize(src, w, h);
         } else if (src.empty() && !elem->imageProbedSrc().empty()) {
             // src removed: drop the stale size rather than keep sizing the

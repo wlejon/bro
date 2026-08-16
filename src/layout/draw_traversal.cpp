@@ -11,6 +11,7 @@
 #include "dom/element_geometry.h"
 #include "dom/text_node.h"
 #include "dom/node.h"
+#include "svg/svg_renderer.h"
 #include "util/log.h"
 #include "util/string_utils.h"
 
@@ -332,6 +333,44 @@ static std::string getOverflowX(const htmlayout::css::ComputedStyle& style) {
     auto oIt = style.find("overflow");
     if (oIt != style.end()) return oIt->second;
     return "visible";
+}
+
+/// Does a value on either overflow axis clip the box?
+///
+/// Per CSS, when one axis is non-visible and the other is visible the visible
+/// one is treated as `auto` — so if either axis clips, both effectively do.
+static bool overflowAxisClips(const std::string& v) {
+    return v == "hidden" || v == "scroll" || v == "auto" || v == "clip";
+}
+
+/// Does this element's `overflow` belong to the *viewport* rather than to its
+/// own box?
+///
+/// CSS 2.1 §11.1.1: the viewport takes its overflow from the root element, or
+/// from `<body>` when the root's own value is `visible`. Whichever element
+/// donates it is then treated as `overflow: visible`, because the clip has
+/// moved to the viewport — and bro's viewport is the window, which the
+/// compositor already bounds every frame.
+///
+/// This is not a corner case. `body { overflow: hidden }` is what nearly every
+/// application-shaped page writes to stop the document scrolling, and such a
+/// page usually positions its whole UI absolutely — which leaves the body box
+/// zero-height. Clipping to that box instead of to the viewport clips the
+/// entire interface away, and the window paints empty with a DOM, a layout and
+/// computed styles that are all perfectly correct.
+static bool overflowBelongsToViewport(dom::Element* elem) {
+    if (!elem) return false;
+    dom::Element* parent = elem->parentElement();
+    if (!parent) return true;                   // the root element itself
+    if (parent->parentElement()) return false;  // deeper than <body>
+
+    const std::string& tag = elem->tagName();
+    if (tag != "BODY" && tag != "body") return false;
+
+    // The root donates first; <body> only gets to when the root is visible.
+    const auto& rootStyle = parent->computedStyle();
+    return !overflowAxisClips(getOverflowX(rootStyle)) &&
+           !overflowAxisClips(getOverflowY(rootStyle));
 }
 
 DrawTraversal::DrawTraversal(render::Renderer* renderer)
@@ -1170,10 +1209,9 @@ void DrawTraversal::drawElementContent(dom::Element* elem, float offsetX, float 
     bool needsClip = false;
     std::string overflowY = getOverflowY(style);
     std::string overflowX = getOverflowX(style);
-    auto axisClips = [](const std::string& v) {
-        return v == "hidden" || v == "scroll" || v == "auto" || v == "clip";
-    };
-    if (axisClips(overflowX) || axisClips(overflowY)) {
+    const auto& axisClips = overflowAxisClips;
+    if ((axisClips(overflowX) || axisClips(overflowY)) &&
+        !overflowBelongsToViewport(elem)) {
         needsClip = true;
         renderer_->save();
         render::Radii clipRadii = getRadii(style, bw, bh);
@@ -3555,6 +3593,23 @@ void DrawTraversal::loadImage(const std::string& url, const std::string& basePat
     img.data.resize(static_cast<size_t>(fileSize));
     ifs.read(reinterpret_cast<char*>(img.data.data()), fileSize);
 
+    // An SVG file is markup, not a raster payload: keep the bytes and let the
+    // paint branch hand them to drawSvgMarkup, exactly as an `image/svg+xml`
+    // data: URL already does above. Without this an `<img src="icon.svg">` —
+    // how essentially every toolbar on the web draws its icons — reaches
+    // broimage, which decodes bitmaps, and comes back sizeless and unpaintable.
+    if (bro::svg::looksLikeSvg(reinterpret_cast<const char*>(img.data.data()),
+                               img.data.size())) {
+        img.isSvg = true;
+        float sw = 0, sh = 0;
+        bro::svg::svgIntrinsicSize(reinterpret_cast<const char*>(img.data.data()),
+                                   img.data.size(), sw, sh);
+        img.width = static_cast<int>(sw);
+        img.height = static_cast<int>(sh);
+        imageCache_[url] = std::move(img);
+        return;
+    }
+
     int w = 0, h = 0, comp = 0;
     if (broimage::probe_dimensions_memory(img.data.data(), img.data.size(), &w, &h, &comp)) {
         img.width = w;
@@ -3785,12 +3840,12 @@ std::unique_ptr<StackingContext> DrawTraversal::buildStackingContextTree(
     auto elementClipRect = [](dom::Element* elem, float offX, float offY,
                               ClipRect& out) -> bool {
         auto& style = elem->computedStyle();
-        auto axisClips = [](const std::string& v) {
-            return v == "hidden" || v == "scroll" || v == "auto" || v == "clip";
-        };
         std::string ox = getOverflowX(style);
         std::string oy = getOverflowY(style);
-        if (!axisClips(ox) && !axisClips(oy)) return false;
+        if (!overflowAxisClips(ox) && !overflowAxisClips(oy)) return false;
+        // Same viewport-propagation rule as the in-flow walker: the donor's
+        // clip is the viewport's, so it contributes no rect here either.
+        if (overflowBelongsToViewport(elem)) return false;
         auto& box = elem->layoutBox();
         out.bx = box.contentRect.x + offX - box.padding.left - box.border.left;
         out.by = box.contentRect.y + offY - box.padding.top - box.border.top;

@@ -89,4 +89,31 @@ std::vector<uint8_t> base64Decode(const std::string& s) {
     return out;
 }
 
+std::string base64Encode(const uint8_t* data, size_t len) {
+    static const char alpha[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    if (!data || len == 0) return out;
+    out.reserve((len + 2) / 3 * 4);
+    size_t i = 0;
+    for (; i + 3 <= len; i += 3) {
+        uint32_t v = (uint32_t(data[i]) << 16) | (uint32_t(data[i + 1]) << 8) | data[i + 2];
+        out.push_back(alpha[(v >> 18) & 0x3f]);
+        out.push_back(alpha[(v >> 12) & 0x3f]);
+        out.push_back(alpha[(v >> 6) & 0x3f]);
+        out.push_back(alpha[v & 0x3f]);
+    }
+    // Tail: 1 or 2 bytes, zero-extended to a full group and padded with '='.
+    if (i < len) {
+        const size_t rem = len - i;
+        uint32_t v = uint32_t(data[i]) << 16;
+        if (rem == 2) v |= uint32_t(data[i + 1]) << 8;
+        out.push_back(alpha[(v >> 18) & 0x3f]);
+        out.push_back(alpha[(v >> 12) & 0x3f]);
+        out.push_back(rem == 2 ? alpha[(v >> 6) & 0x3f] : '=');
+        out.push_back('=');
+    }
+    return out;
+}
+
 } // namespace bro::util

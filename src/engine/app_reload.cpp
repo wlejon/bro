@@ -48,6 +48,8 @@
 #include "js/terrain_bindings.h"
 #include "js/tile_bindings.h"
 #include "js/custom_elements.h"
+#include "js/html_interfaces.h"
+#include "js/image_bindings.h"
 #include "js/wake_bindings.h"
 #include "js/gesture_bindings.h"
 #include "js/kws_bindings.h"
@@ -263,6 +265,8 @@ void Engine::performAppReload() {
         js::WebGL2Bindings::cleanup(oldCtx);
     }
     js::cleanupCustomElements(oldCtx);
+    js::cleanupHtmlInterfaces(oldCtx);
+    js::ImageBindings::cleanup(oldCtx);
 
     // ── Release the old realm's globals, document, and context ──────────────
     // Same scrub ~Engine does: delete document + elem map first (order

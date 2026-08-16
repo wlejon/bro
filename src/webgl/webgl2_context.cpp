@@ -175,6 +175,38 @@ void WebGL2RenderingContext::unbindCanvasFBO() {
     if (sPixelUnpack_) glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0);
 }
 
+bool WebGL2RenderingContext::readCanvasPixels(std::vector<uint8_t>& out) {
+    if (!canvasFBO_ || width_ <= 0 || height_ <= 0) return false;
+
+    // Read straight from the canvas FBO rather than whatever the app last
+    // bound: toDataURL() is defined on the canvas's own drawing buffer, and an
+    // app that leaves a render target bound (three.js does, mid-frame) would
+    // otherwise get that target's contents back instead.
+    glBindFramebuffer(GL_FRAMEBUFFER, canvasFBO_);
+    // A bound PIXEL_PACK buffer would send the read into the buffer object
+    // instead of `out`; the alignment default of 4 mis-strides odd widths.
+    if (sPixelPack_) glBindBuffer(GL_PIXEL_PACK_BUFFER, 0);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+
+    const size_t rowBytes = static_cast<size_t>(width_) * 4;
+    out.assign(rowBytes * static_cast<size_t>(height_), 0);
+    glReadPixels(0, 0, width_, height_, GL_RGBA, GL_UNSIGNED_BYTE, out.data());
+
+    // GL hands back rows bottom-up; encoders and the 2D surface are top-down.
+    std::vector<uint8_t> row(rowBytes);
+    for (int y = 0; y < height_ / 2; ++y) {
+        uint8_t* a = out.data() + static_cast<size_t>(y) * rowBytes;
+        uint8_t* b = out.data() + static_cast<size_t>(height_ - 1 - y) * rowBytes;
+        std::memcpy(row.data(), a, rowBytes);
+        std::memcpy(a, b, rowBytes);
+        std::memcpy(b, row.data(), rowBytes);
+    }
+
+    glPixelStorei(GL_PACK_ALIGNMENT, packAlignment_);
+    restoreState();
+    return true;
+}
+
 // ===========================================================================
 // State
 // ===========================================================================

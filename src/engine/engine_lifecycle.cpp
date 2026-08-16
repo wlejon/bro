@@ -34,6 +34,8 @@
 #include "js/terrain_bindings.h"
 #include "js/tile_bindings.h"
 #include "js/custom_elements.h"
+#include "js/html_interfaces.h"
+#include "js/image_bindings.h"
 #include "js/wake_bindings.h"
 #include "js/gesture_bindings.h"
 #include "js/kws_bindings.h"
@@ -337,6 +339,8 @@ Engine::~Engine() {
             js::WebGL2Bindings::cleanup(ctx);
         }
         js::cleanupCustomElements(ctx);
+        js::cleanupHtmlInterfaces(ctx);
+        js::ImageBindings::cleanup(ctx);
 
         // Free cached compiled function (holds a GC-tracked JSValue).
         if (!JS_IsUndefined(observerCheckFn_)) {

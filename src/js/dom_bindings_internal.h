@@ -129,6 +129,11 @@ void repointNodeWrapper(JSContext* ctx, bro::dom::Node* node,
 // event_bindings.cpp
 JSValue wrapEvent(JSContext* ctx, const std::string& type, bro::dom::Element* target);
 
+/// A fresh, *uninitialized* Event — empty type, no flags set — as
+/// `document.createEvent()` is defined to return. The caller is expected to
+/// name it with `initEvent()` before dispatching it.
+JSValue createUninitializedEvent(JSContext* ctx);
+
 // style_bindings.cpp
 JSValue wrapStyleProxy(JSContext* ctx, bro::dom::StyleProxy* style);
 JSValue wrapTokenList(JSContext* ctx, bro::dom::Element* elem);
