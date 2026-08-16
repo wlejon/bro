@@ -1,6 +1,7 @@
 #include "engine/app_loader.h"
 #include "util/asset_mounts.h"
 #include "util/log.h"
+#include "util/remote_asset.h"
 #include "util/string_utils.h"
 #include <filesystem>
 #include <fstream>
@@ -36,6 +37,17 @@ bool isExecutableScriptType(const std::string& type) {
 } // namespace
 
 std::string AppLoader::loadFile(const std::string& path) {
+    // An absolute URL is a resource on the network, not a file. Everything the
+    // manifest carries — stylesheets, external scripts — funnels through here,
+    // so this one branch is what makes `<script src="https://cdn/…">` mean what
+    // the web says it means. Cached on disk; see util/remote_asset.h.
+    if (util::isHttpUrl(path)) {
+        std::string body = util::fetchRemoteCached(path);
+        if (body.empty())
+            LOG_ERROR("AppLoader::loadFile: cannot fetch '%s'", path.c_str());
+        return body;
+    }
+
     std::ifstream ifs(path, std::ios::binary);
     if (!ifs.is_open()) {
         LOG_ERROR("AppLoader::loadFile: cannot open '%s'", path.c_str());
@@ -51,6 +63,12 @@ std::string AppLoader::resolvePath(const std::string& base,
                                    const util::AssetMounts* mounts)
 {
     if (path.empty()) return base;
+
+    // An absolute URL resolves to itself. It must also skip the lexical
+    // normalization below, which would collapse the "//" after the scheme and
+    // turn separators around on Windows — leaving a string that is neither a
+    // URL nor a path.
+    if (util::hasUrlScheme(path)) return path;
 
     std::string result;
     bool driveAbsolute = path.size() >= 2 && path[1] == ':';

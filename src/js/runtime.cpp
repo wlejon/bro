@@ -3,6 +3,7 @@
 #include "util/import_map.h"
 #include "util/interrupt.h"
 #include "util/log.h"
+#include "util/remote_asset.h"
 #include "util/time.h"
 
 #include <api/api.h>  // brokit::api::uninstallFetch
@@ -36,6 +37,25 @@ static char* module_normalize(JSContext* ctx, const char* base_name,
     const auto* mounts = resolve ? resolve->mounts : nullptr;
 
     std::string result;
+    // A module fetched over the network keeps resolving over the network: its
+    // own relative and root-relative imports are URLs against its URL, not
+    // paths against the app directory. Without this a CDN module's
+    // `import './chunk.js'` would look for a file next to index.html.
+    if (base_name && util::isHttpUrl(base_name) &&
+        (name[0] == '.' || name[0] == '/' || util::hasUrlScheme(name))) {
+        result = util::resolveUrl(base_name, name);
+        char* buf = static_cast<char*>(js_malloc(ctx, result.size() + 1));
+        if (buf) std::memcpy(buf, result.c_str(), result.size() + 1);
+        return buf;
+    }
+    if (util::hasUrlScheme(name)) {
+        // An absolute URL written out in the source, or arrived at through the
+        // import map. Self-resolving, and it must skip the normalization below.
+        char* buf = static_cast<char*>(js_malloc(ctx, std::strlen(name) + 1));
+        if (buf) std::memcpy(buf, name, std::strlen(name) + 1);
+        return buf;
+    }
+
     if (name[0] == '.' && base_name) {
         // Relative specifier — resolve against the importing module's path.
         std::string base(base_name);
@@ -69,8 +89,9 @@ static char* module_normalize(JSContext* ctx, const char* base_name,
     // ("a/./b.js", "a/x/../b.js") collapse to one module name. QuickJS keys its
     // module cache on this string, so without this a module imported two ways
     // is instantiated twice — breaking any module-level singleton state.
-    if (result.find('/') != std::string::npos ||
-        result.find('\\') != std::string::npos) {
+    if (!util::hasUrlScheme(result) &&
+        (result.find('/') != std::string::npos ||
+         result.find('\\') != std::string::npos)) {
         std::error_code ec;
         std::string normalized =
             std::filesystem::path(result).lexically_normal().string();
@@ -87,15 +108,24 @@ static char* module_normalize(JSContext* ctx, const char* base_name,
 static JSModuleDef* module_loader(JSContext* ctx, const char* module_name,
                                   void* /*opaque*/)
 {
-    std::ifstream file(module_name, std::ios::in | std::ios::binary);
-    if (!file) {
-        JS_ThrowReferenceError(ctx, "could not load module '%s'", module_name);
-        return nullptr;
-    }
+    std::string source;
+    if (util::isHttpUrl(module_name)) {
+        source = util::fetchRemoteCached(module_name);
+        if (source.empty()) {
+            JS_ThrowReferenceError(ctx, "could not fetch module '%s'", module_name);
+            return nullptr;
+        }
+    } else {
+        std::ifstream file(module_name, std::ios::in | std::ios::binary);
+        if (!file) {
+            JS_ThrowReferenceError(ctx, "could not load module '%s'", module_name);
+            return nullptr;
+        }
 
-    std::ostringstream ss;
-    ss << file.rdbuf();
-    std::string source = ss.str();
+        std::ostringstream ss;
+        ss << file.rdbuf();
+        source = ss.str();
+    }
 
     JSValue func = JS_Eval(ctx, source.c_str(), source.size(), module_name,
                            JS_EVAL_TYPE_MODULE | JS_EVAL_FLAG_COMPILE_ONLY);

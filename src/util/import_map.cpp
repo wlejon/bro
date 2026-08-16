@@ -1,6 +1,7 @@
 #include "util/import_map.h"
 
 #include "util/log.h"
+#include "util/remote_asset.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -130,6 +131,12 @@ bool isRooted(const std::string& p) {
 std::string resolveTarget(const std::string& target, const std::string& baseDir) {
     if (target.empty()) return {};
 
+    // A target may be an absolute URL — `"three-mesh-bvh": "https://cdn/…"` is
+    // how a page pins a dependency it does not vendor. It resolves to itself,
+    // and must not go through the path normalization below, which would eat the
+    // "//" after the scheme.
+    if (hasUrlScheme(target)) return target;
+
     std::string joined;
     if (isRooted(target)) {
         joined = target;
@@ -230,8 +237,10 @@ std::string ImportMap::resolve(const std::string& specifier) const {
             specifier.compare(0, key.size(), key) == 0) {
             // The target already carries its trailing separator; appending the
             // remainder can still mix '/' with '\' on Windows, so normalize the
-            // join for the same module-cache reason resolveTarget does.
+            // join for the same module-cache reason resolveTarget does — unless
+            // the target is a URL, whose separators are already the right ones.
             std::string joined = target + specifier.substr(key.size());
+            if (hasUrlScheme(target)) return joined;
             std::string normalized =
                 std::filesystem::path(joined).lexically_normal().string();
             return normalized.empty() ? joined : normalized;
