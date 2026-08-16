@@ -1349,6 +1349,10 @@ void WebGL2RenderingContext::readPixels(GLint x, GLint y, GLsizei width, GLsizei
 }
 
 void WebGL2RenderingContext::readBuffer(GLenum src) {
+    // Same emulation as drawBuffers: on the canvas FBO the page names BACK,
+    // which a real FBO does not have.
+    if (sFBO_ == canvasFBO_ && (src == GL_BACK || src == GL_FRONT))
+        src = GL_COLOR_ATTACHMENT0;
     glReadBuffer(src);
 }
 
@@ -1456,6 +1460,19 @@ void WebGL2RenderingContext::copyTexSubImage2D(GLenum target, GLint level,
 }
 
 void WebGL2RenderingContext::drawBuffers(GLsizei n, const GLenum* bufs) {
+    // WebGL's "default framebuffer" is our canvas FBO, so the page's `BACK` —
+    // the only colour buffer the spec lets it name there — has to become the
+    // attachment that FBO actually has. Passing BACK to a real FBO is
+    // GL_INVALID_ENUM, which silently leaves the draw-buffer state from
+    // whatever render target ran last.
+    if (sFBO_ == canvasFBO_) {
+        std::vector<GLenum> mapped(bufs, bufs + n);
+        for (auto& b : mapped)
+            if (b == GL_BACK || b == GL_FRONT || b == GL_FRONT_AND_BACK)
+                b = GL_COLOR_ATTACHMENT0;
+        glDrawBuffers(n, mapped.data());
+        return;
+    }
     glDrawBuffers(n, bufs);
 }
 
@@ -1489,12 +1506,98 @@ void WebGL2RenderingContext::bindRenderbuffer(GLenum target, WebGLRenderbuffer r
 void WebGL2RenderingContext::renderbufferStorage(GLenum target, GLenum internalformat,
                                                   GLsizei width, GLsizei height) {
     glRenderbufferStorage(target, internalformat, width, height);
+    initializeRenderbuffer(internalformat);
 }
 
 void WebGL2RenderingContext::renderbufferStorageMultisample(GLenum target, GLsizei samples,
                                                             GLenum internalformat,
                                                             GLsizei width, GLsizei height) {
     glRenderbufferStorageMultisample(target, samples, internalformat, width, height);
+    initializeRenderbuffer(internalformat);
+}
+
+// WebGL §4.1: a freshly allocated framebuffer attachment reads as the *default
+// clear values* — colour (0,0,0,0), depth 1.0, stencil 0 — where plain GL
+// leaves it undefined. Depth is the one that matters: GL hands back a buffer
+// that in practice reads as 0.0, so with the default `LESS` test every fragment
+// drawn before the first clear is rejected and the target comes out black.
+//
+// That is not a corner case. three.js's PMREMGenerator renders its six cube
+// faces with `autoClear = false`, trusting the spec's 1.0 — so on an
+// uninitialized buffer the environment map is entirely black, and every
+// material lit by it renders black with no error anywhere. Clear it here, at
+// allocation, which is where the spec's guarantee begins.
+void WebGL2RenderingContext::initializeRenderbuffer(GLenum internalformat) {
+    bool hasDepth = false, hasStencil = false;
+    switch (internalformat) {
+        case GL_DEPTH_COMPONENT16: case GL_DEPTH_COMPONENT24:
+        case GL_DEPTH_COMPONENT32F:
+            hasDepth = true; break;
+        case GL_DEPTH24_STENCIL8: case GL_DEPTH32F_STENCIL8:
+            hasDepth = true; hasStencil = true; break;
+        case GL_STENCIL_INDEX8:
+            hasStencil = true; break;
+        default:
+            // Colour renderbuffers already read as zero on every driver we
+            // target, and clearing them here would cost a pass per allocation.
+            return;
+    }
+
+    GLint boundRbo = 0;
+    glGetIntegerv(GL_RENDERBUFFER_BINDING, &boundRbo);
+    if (boundRbo == 0) return;
+
+    GLint prevDraw = 0, prevRead = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prevDraw);
+    glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prevRead);
+
+    const bool freshFbo = (initFbo_ == 0);
+    if (freshFbo) glGenFramebuffers(1, &initFbo_);
+    // Bound to BOTH targets: glDrawBuffers/glReadBuffer below act on whichever
+    // framebuffer is bound to that target, so binding only the draw target
+    // would point the *caller's* read framebuffer at GL_NONE and break the
+    // next readPixels it does.
+    glBindFramebuffer(GL_FRAMEBUFFER, initFbo_);
+    if (freshFbo) {
+        // Depth/stencil only: without this the default draw buffer of
+        // COLOR_ATTACHMENT0 names an attachment that will never exist, and the
+        // framebuffer is INCOMPLETE_DRAW_BUFFER — so the clear below would be
+        // skipped and the whole exercise would silently do nothing.
+        glDrawBuffers(0, nullptr);
+        glReadBuffer(GL_NONE);
+    }
+    const GLenum attachment = (hasDepth && hasStencil) ? GL_DEPTH_STENCIL_ATTACHMENT
+                            : hasDepth                 ? GL_DEPTH_ATTACHMENT
+                                                       : GL_STENCIL_ATTACHMENT;
+    glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, attachment, GL_RENDERBUFFER,
+                              static_cast<GLuint>(boundRbo));
+
+    // A clear obeys the scissor test and the depth/stencil write masks, any of
+    // which the page may have left in a state that would skip part or all of
+    // the buffer. Force them open for the clear and put them back after.
+    GLboolean scissorOn = glIsEnabled(GL_SCISSOR_TEST);
+    GLboolean depthMask = GL_TRUE;
+    GLint stencilMaskFront = 0xFF, stencilMaskBack = 0xFF;
+    glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
+    glGetIntegerv(GL_STENCIL_WRITEMASK, &stencilMaskFront);
+    glGetIntegerv(GL_STENCIL_BACK_WRITEMASK, &stencilMaskBack);
+    if (scissorOn) glDisable(GL_SCISSOR_TEST);
+    if (!depthMask) glDepthMask(GL_TRUE);
+    glStencilMask(0xFF);
+
+    if (glCheckFramebufferStatus(GL_DRAW_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE) {
+        if (hasDepth && hasStencil)  glClearBufferfi(GL_DEPTH_STENCIL, 0, 1.0f, 0);
+        else if (hasDepth)         { const GLfloat one = 1.0f; glClearBufferfv(GL_DEPTH, 0, &one); }
+        else                       { const GLint zero = 0;     glClearBufferiv(GL_STENCIL, 0, &zero); }
+    }
+
+    glFramebufferRenderbuffer(GL_DRAW_FRAMEBUFFER, attachment, GL_RENDERBUFFER, 0);
+    if (scissorOn) glEnable(GL_SCISSOR_TEST);
+    if (!depthMask) glDepthMask(GL_FALSE);
+    glStencilMaskSeparate(GL_FRONT, static_cast<GLuint>(stencilMaskFront));
+    glStencilMaskSeparate(GL_BACK, static_cast<GLuint>(stencilMaskBack));
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, static_cast<GLuint>(prevDraw));
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, static_cast<GLuint>(prevRead));
 }
 
 // ===========================================================================

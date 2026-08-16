@@ -410,6 +410,10 @@ public:
     void renderbufferStorageMultisample(GLenum target, GLsizei samples,
                                         GLenum internalformat,
                                         GLsizei width, GLsizei height);
+    /// Clear a just-allocated depth/stencil renderbuffer to the values WebGL
+    /// §4.1 promises a page will read there (depth 1.0, stencil 0) — plain GL
+    /// leaves them undefined. Called from both storage entry points.
+    void initializeRenderbuffer(GLenum internalformat);
 
     // --- Draw calls ---
     void drawArrays(GLenum mode, GLint first, GLsizei count);
@@ -466,6 +470,9 @@ private:
     std::unordered_set<GLuint> validShaders_;
     std::unordered_set<GLuint> validFramebuffers_;
     std::unordered_set<GLuint> validRenderbuffers_;
+    // Scratch FBO used to clear a freshly allocated depth/stencil renderbuffer
+    // to the default values WebGL guarantees. See initializeRenderbuffer().
+    GLuint initFbo_ = 0;
     std::unordered_set<GLuint> validVAOs_;
     std::unordered_set<GLuint> validSamplers_;
     std::unordered_set<GLuint> validQueries_;
