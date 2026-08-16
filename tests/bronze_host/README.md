@@ -1,9 +1,10 @@
 # bronze_host integration checks
 
-Seven checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip (the
+Eight checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip (the
 binary is not built).
 
 ```bash
+tests/bronze_host/run_loader_test.sh        # the folder loader, on STOCK bro-headless
 tests/bronze_host/run_bronze_host_test.sh   # the scene graph, a fixed frame count
 tests/bronze_host/run_events_test.sh        # events, under a driver script
 tests/bronze_host/run_fetch_test.sh         # fetch, under a driver script
@@ -13,8 +14,15 @@ tests/bronze_host/run_instanced_test.sh     # instanced mesh under load (2,500 i
 tests/bronze_host/run_pixi_test.sh          # pixi.js v8: WebGL sprites + pixel readback
 ```
 
-They pin different executables, which is why they are separate scripts. The
-first boots `bro-bronze-host` headless, advances a fixed number of frames, and
+`run_loader_test.sh` is the odd one out and the only one that will survive
+unchanged: its subject is `src/bronze_host/app_module.h` — the compiled module
+an app *directory* carries — so it runs the **stock** `bro-headless`, the same
+binary every other test in `tests/` uses, against synthetic modules it builds
+itself. The other seven each pin their own `bro-bronze-host-<app>` executable,
+which is the arrangement the folder model exists to replace.
+
+The remaining seven pin different executables, which is why they are separate
+scripts. The first boots `bro-bronze-host` headless, advances a fixed number of frames, and
 compares the compiled app's output against
 `expected/main_scenegraph.expected` line for line. The second boots
 `bro-bronze-host-events` under bro-headless's driver — the only mode that can

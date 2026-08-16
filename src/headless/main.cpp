@@ -23,6 +23,9 @@
 #if BRO_WITH_3D
 #include "js/scene_bindings.h"
 #endif
+#if BRO_WITH_BRONZE
+#include "bronze_host/app_module.h"
+#endif
 
 #include <string>
 #include <vector>
@@ -414,5 +417,22 @@ void installHostBindings(JSContext* ctx) {
 int main(int argc, char* argv[]) {
     bro::engine::HeadlessHooks hooks;
     hooks.installHostBindings = installHostBindings;
+#if BRO_WITH_BRONZE
+    // The compiled half of an app directory, if it carries one. Same two hooks
+    // bro.exe performs by hand around its Engine (src/main.cpp), which is the
+    // point: one binary opens an interpreted app and a compiled one, and a
+    // driver script cannot tell from the outside which it is stepping.
+    //
+    // Asked twice — once to answer the predicate before construction, once to
+    // load — because the two hooks fire either side of the Engine and neither
+    // owns state the other can read. It is one stat() each.
+    hooks.providesCompiledApp = [](const std::string& appDir) {
+        return bro::bronze_host::findAppModule(appDir).has_value();
+    };
+    hooks.afterEngine = [](bro::engine::Engine& engine) {
+        if (auto modulePath = bro::bronze_host::findAppModule(engine.appDir()))
+            bro::bronze_host::runAppModule(engine, *modulePath);
+    };
+#endif
     return bro::engine::runHeadless(argc, argv, hooks);
 }

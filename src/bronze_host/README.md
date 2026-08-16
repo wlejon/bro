@@ -16,6 +16,7 @@ Off by default; nothing here is in the default build.
 
 | File | What it owns |
 |---|---|
+| `app_module.cpp` | **the compiled app a FOLDER carries**: finding it, verifying its ABI, running it |
 | `dom_globals.cpp` | `document`, canvas, `window`, rAF, `performance`, **and the frame seam** (`hostFrame`) |
 | `host_element.cpp` | the element surface an app *builds*: the identity registry, tree ops, `style`, `classList`, geometry, form controls, computed style |
 | `host_platform.cpp` | `btoa`/`atob`, `queueMicrotask`, `screen`, `alert`/`confirm`/`prompt`, and the DOM interface names libraries sniff for |
@@ -27,6 +28,43 @@ Off by default; nothing here is in the default build.
 | `host_xhr.cpp` | `XMLHttpRequest` (text over the app asset path; see its header) |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
 | `host_main.cpp` | `bro-bronze-host`: Engine, globals, `runMain()`, frames |
+
+## Two ways a compiled app gets in, and where each is going
+
+**Loaded from the folder** (`app_module.h`) — the app dir carries `app.dll` /
+`app.so` / `app.dylib` beside its `index.html`, and `bro <folder>` or
+`bro-headless <folder>` finds it, checks it and runs it. The stock binaries do
+this; nothing about the build knows the app exists. This is the model.
+
+**Linked into a host** (`host_main.cpp`) — `bro-bronze-host` is one executable
+per app, produced by naming the app's object file at bro's configure time
+(`BRO_BRONZE_APP_OBJ`, `BRO_BRONZE_APPS`). It is how every check in
+`tests/bronze_host/` still runs, and it is on its way out: a runtime's build
+system has no business enumerating applications, and "another app" should not
+mean another build of bro.
+
+It has not been deleted yet because the folder model needs one thing bronze
+does not offer today. Every bronze module is a **static** library and the
+runtime's state is process-wide (`rt_state.h`: heap, arena, root shapes, key
+registry, host-global registry, "owned by ONE translation unit"). A module that
+statically linked the runtime would get its *own* heap and its *own* registry —
+two collectors, neither tracing the other's roots. So a loadable app needs
+bronze's runtime to be a **shared** library that host and module both import.
+Until then the loader is real and tested (`tests/bronze_host/run_loader_test.sh`)
+but has nothing genuine to load.
+
+What the loader already does *not* need from bronze is the safety check, because
+bronze built it first: the ABI fingerprint is the first 32 bits of
+`bronze_abi.h`'s SHA-256, codegen stamps it into every emitted object as
+`bronze_object_abi_fingerprint`, and the loader compares it before resolving the
+entry point. That matters more here than for a linked object: a stale linked
+object at least forced a relink, whereas a stale module loads happily and then
+reads arguments nobody passed — half-minute stalls at nondeterministic points
+rather than a crash, which is the failure `bronze_abi.h` names as its own
+motivation. The one difference is what happens next. bronze's guard calls
+`fatal()`, correctly, because a linked object's mismatch means the process is
+malformed; the loader *refuses* instead, because a loaded module is data the
+folder supplied and a bad app must not take the runtime down with it.
 
 ## The frame seam, which is the thing to understand first
 

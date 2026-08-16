@@ -3,6 +3,15 @@ target_link_libraries(bro-headless PRIVATE bro_engine)
 if(BRO_WITH_GAMEAI)
     target_link_libraries(bro-headless PRIVATE brogameagent)
 endif()
+# The compiled half of an app directory (bronze_host/app_module.h) — see the
+# matching block for bro.exe in src/CMakeLists.txt. A driver script must be
+# able to step a compiled app, so the loader belongs here too.
+if(BRO_WITH_BRONZE)
+    target_link_libraries(bro-headless PRIVATE bro_bronze_host)
+    target_compile_definitions(bro-headless PRIVATE BRO_WITH_BRONZE=1)
+else()
+    target_compile_definitions(bro-headless PRIVATE BRO_WITH_BRONZE=0)
+endif()
 target_include_directories(bro-headless PRIVATE ${bro_SOURCE_DIR}/src)
 
 # QuickJS's JS_CallInternal has a large stack frame; Vue's template compiler

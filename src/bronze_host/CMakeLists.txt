@@ -35,6 +35,7 @@ add_library(bro_bronze_host STATIC
     gl_framebuffers.cpp
     gl_queries.cpp
     gl_context.cpp
+    app_module.cpp
     dom_globals.cpp
     host_element.cpp
     host_events.cpp

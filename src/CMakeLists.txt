@@ -46,6 +46,16 @@ if(BRO_BUILD_EXECUTABLES)
     if(BRO_WITH_GAMEAI)
         target_link_libraries(bro PRIVATE brogameagent)
     endif()
+    # The compiled half of an app directory (bronze_host/app_module.h). bro.exe
+    # opens an interpreted app and a compiled one with the same binary, so it
+    # needs the loader whenever the host layer is configured at all — the
+    # decision is per-FOLDER at runtime, not per-build.
+    if(BRO_WITH_BRONZE)
+        target_link_libraries(bro PRIVATE bro_bronze_host)
+        target_compile_definitions(bro PRIVATE BRO_WITH_BRONZE=1)
+    else()
+        target_compile_definitions(bro PRIVATE BRO_WITH_BRONZE=0)
+    endif()
     target_include_directories(bro PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
     # QuickJS's JS_CallInternal has a large stack frame; deep JS recursion

@@ -4,6 +4,11 @@
 #include "util/interrupt.h"
 #include "util/log.h"
 
+#if BRO_WITH_BRONZE
+#include "bronze_host/app_module.h"
+#include <optional>
+#endif
+
 #include "broaudio/log.h"
 #include <cstdlib>
 #include <cstring>
@@ -184,12 +189,38 @@ int main(int argc, char* argv[]) {
     if (cliNoSplash) config.showSplash = false;
     if (cliSplash)   config.showSplash = true;
 
+#if BRO_WITH_BRONZE
+    // Does this app directory carry a compiled module? Asked BEFORE the Engine
+    // is constructed because engine init uses the answer: it is what
+    // distinguishes an app that declares `"compiled": true` and was opened by a
+    // host that can run it from one opened by a host that cannot, and the two
+    // want different diagnostics (engine_init.cpp). Loading it is the other
+    // side of the Engine — see below.
+    std::optional<std::string> appModule = bro::bronze_host::findAppModule(config.appDir);
+    config.hostProvidesCompiledApp = appModule.has_value();
+#endif
+
     // Absolutise and publish BRO_EXE_DIR / BRO_APP_DIR / BRO_PROJECT_ROOT so
     // JS and spawned children can locate themselves without guessing from cwd.
     bro::engine::publishLaunchEnv(config);
 
     try {
         bro::engine::Engine engine(config);
+#if BRO_WITH_BRONZE
+        // The compiled top level runs here: after the Engine (the host globals
+        // it reads are backed by it) and before the run loop (what it schedules
+        // is what the run loop then drives).
+        //
+        // A module that cannot be run is logged and stepped over rather than
+        // being made fatal. The window is already up by this point, and a
+        // refused module leaves a real page behind it — the app's own
+        // interpreted scripts still run, so the failure shows as a page that
+        // says something rather than as a process that vanished. app_module.h
+        // says why refusing beats bronze's own fatal() here.
+        if (appModule) {
+            bro::bronze_host::runAppModule(engine, *appModule);
+        }
+#endif
         engine.run();
     } catch (const std::exception& e) {
         LOG_ERROR("Fatal: %s", e.what());
