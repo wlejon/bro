@@ -17,6 +17,8 @@ Off by default; nothing here is in the default build.
 | File | What it owns |
 |---|---|
 | `dom_globals.cpp` | `document`, canvas, `window`, rAF, `performance`, **and the frame seam** (`hostFrame`) |
+| `host_element.cpp` | the element surface an app *builds*: the identity registry, tree ops, `style`, `classList`, geometry, form controls, computed style |
+| `host_platform.cpp` | `btoa`/`atob`, `queueMicrotask`, `screen`, `alert`/`confirm`/`prompt`, and the DOM interface names libraries sniff for |
 | `host_internal.h` | the non-GL shared surface: error funnel, clock, task queue, handle tags |
 | `host_events.cpp` | `on<type>` + `addEventListener` for the objects that fire events |
 | `host_dom_events.cpp` | canvas / document / window listeners, wired to the **engine's** dispatch |
@@ -342,15 +344,21 @@ uniforms, `vertexAttrib*` default-value setters, and `getContext('2d')`.
 
 **Events**: the exact list is under "Not supported, precisely" above.
 
-**Loading**: `fetch`. It cannot be provided at all today — it returns a Promise,
-and the embed API has no way to create or resolve a bronze Promise from C++.
-`XMLHttpRequest` is here instead because it settles through callbacks, but note
-that three.js r160's own `FileLoader` is fetch-based, so this does not unblock
-three's loaders. `XMLHttpRequest` serves only `responseType` `''` and `'text'`
-(an ArrayBuffer is another thing the embed API cannot construct) and only local
-files (the network belongs to brokit, which is QuickJS-native).
+**Loading**: the NETWORK. Both `fetch` and `XMLHttpRequest` are here and both
+read local files only, over the engine's asset mounts (`js/asset_path.h`); an
+http(s) URL settles with status 0 and `ok: false`. The network belongs to
+brokit, which is QuickJS-native. Also absent: `Blob`, `File`, `FileReader`,
+`URL.createObjectURL` — an app that loads a user's file from disk has no path
+through this layer yet.
 
-**Images**: `data:` URLs (no base64 reader), http(s) sources (same reason as
-above), and `ImageBitmap`. `Image` is a host object, not a `dom::Element` — it
-has no layout box, and `img instanceof Image` is false because the embed API
-cannot build an object on a chosen prototype.
+**Images**: `ImageBitmap` and `createImageBitmap`. `Image` is a host object,
+not a `dom::Element` — it has no layout box, and `img instanceof Image` is
+false because the embed API cannot build an object on a chosen prototype.
+
+**The DOM**: text nodes (`createTextNode`, and `firstChild` answering one —
+`host_element.cpp` walks ELEMENTS), `dataset`, `cloneNode`, `MutationObserver`,
+`ResizeObserver`, and `DOMParser`. `style` and `getComputedStyle` carry an
+accessor per property from a curated ~110-name list rather than htmlayout's
+full 363: the embed API has no property trap, and an accessor pair per property
+per element would be paid by every element an app makes. `setProperty` /
+`getPropertyValue` / `cssText` are complete and cover the rest.

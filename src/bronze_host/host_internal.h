@@ -50,6 +50,7 @@ struct ObjectBuilder;
 // hostImageOf reads a kind of 1..8 and answers nullptr. The alternative — each
 // unwrap trusting that it is only ever passed its own cells — is the shape of
 // bug that reads a Shape* as a Value.
+inline constexpr uint32_t kHostElementTag = 0x454C454Du;  // 'ELEM'
 inline constexpr uint32_t kHostImageTag = 0x494D4147u;    // 'IMAG'
 inline constexpr uint32_t kHostXhrTag = 0x58485220u;      // 'XHR '
 inline constexpr uint32_t kHostFetchTag = 0x52455350u;    // 'RESP'
@@ -168,6 +169,62 @@ Value hostDispatchToElement(ElementSource source, const char* what, Value desc);
 Value hostDispatchToWindow(Value desc);
 
 // ---------------------------------------------------------------------------
+// Elements (host_element.cpp)
+// ---------------------------------------------------------------------------
+
+// A REAL JS array of `count` items, `make(i)` supplying each. Real, because
+// what an app does with `children` or `querySelectorAll` is iterate it —
+// `for…of`, `Array.from`, `.map` — and an object with numeric keys and a
+// `length` has neither Array.prototype nor an iterator, so every one of those
+// is a TypeError at the call site rather than an empty result.
+//
+// `make(i)` runs with the array already rooted and its result is stored
+// immediately, which is what keeps this inside the GC rule: a pre-built
+// std::vector<Value> would be stale from its second element onwards.
+Value hostArrayOf(size_t count, const std::function<Value(size_t)>& make);
+
+// THE element wrapper for `el` — built on first ask, the same value every time
+// after that, because identity is what a UI tests (`event.target === this.dom`).
+// Answers null for nullptr, so it can be handed a parent/sibling lookup result
+// directly.
+Value hostElementValue(dom::Element* el);
+
+// The dom::Element behind a wrapper, or nullptr for any other value. This is
+// what makes `parent.appendChild(child)` possible: the wrapper is an embed
+// handle whose data is its registry entry.
+dom::Element* hostElementOf(Value v);
+
+// getComputedStyle(el): the LIVE resolved-value declaration for an element
+// wrapper — used widths off the layout box, lengths in px, colours as rgb() —
+// resolved by layout::computedProperty, the same function bro's own JS
+// bindings answer from. Anything that is not an element wrapper answers an
+// object whose properties are all the empty string, which is what those
+// bindings do too.
+Value hostComputedStyleFor(Value elValue);
+
+// Record a wrapper this file did not build — dom_globals.cpp's canvas, which
+// is an element plus a drawing buffer — so it keeps its identity in the
+// registry like any other.
+void noteHostElementValue(dom::Element* el, Value v);
+
+bool isCanvasTag(const std::string& tag);
+
+// A fresh object that is ALREADY an element handle — what every element
+// wrapper in this layer must be built on, so hostElementOf() can recover the
+// dom::Element* from a value the program hands back to appendChild.
+Value makeElementHandleObject(dom::Element* el);
+
+// The whole element surface — identity, style, classList, attributes, the
+// tree, geometry, focus, and the event target — onto an object under
+// construction. Shared, so a canvas is an element that also has a drawing
+// buffer rather than a separate kind of thing that happens to look like one.
+void installElementCore(ObjectBuilder& b, dom::Element* el);
+
+// An element and nothing more (host_element.cpp); a canvas (dom_globals.cpp).
+Value makePlainElementValue(dom::Element* el);
+Value makeCanvasElementValue(dom::Element* el);
+
+// ---------------------------------------------------------------------------
 // Timers (host_timers.cpp)
 // ---------------------------------------------------------------------------
 
@@ -207,6 +264,15 @@ struct HostImage {
     bool ok = false;            // ... and it settled as a success
 };
 const HostImage* hostImageOf(Value v);
+
+// ---------------------------------------------------------------------------
+// Platform odds and ends (host_platform.cpp)
+// ---------------------------------------------------------------------------
+
+// btoa/atob, queueMicrotask, screen, alert/confirm/prompt, and the DOM
+// interface NAMES libraries test for (`typeof Node !== "undefined"`,
+// `x instanceof HTMLInputElement`). No state, no frame seam.
+void installPlatformGlobals();
 
 // ---------------------------------------------------------------------------
 // XMLHttpRequest (host_xhr.cpp)

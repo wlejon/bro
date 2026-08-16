@@ -36,10 +36,12 @@ add_library(bro_bronze_host STATIC
     gl_queries.cpp
     gl_context.cpp
     dom_globals.cpp
+    host_element.cpp
     host_events.cpp
     host_dom_events.cpp
     host_timers.cpp
     host_image.cpp
+    host_platform.cpp
     host_xhr.cpp
     host_fetch.cpp
 )

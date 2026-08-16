@@ -185,37 +185,18 @@ int canvasHeightOf(CanvasState* cs) {
     return attributeOr(cs->el, "height", 150);
 }
 
-// The style object three.js's setSize writes through. Only the properties the
-// renderer actually assigns are wired to real CSS; a write to anything else
-// lands as a plain property on this object — visible to a debugger, inert to
-// layout.
-Value makeStyleValue(CanvasState* cs) {
-    ObjectBuilder b;
-    auto defStyleProp = [&](const char* cssName) {
-        dom::Element* el = cs->el;
-        std::string prop = cssName;
-        b.accessor(cssName,
-                   [](Value, std::span<const Value>) { return ev::fromUtf8(""); },
-                   [el, prop](Value, std::span<const Value> a) {
-                       Value v = argAt(a, 0);
-                       if (!ev::isObject(v)) el->style().setProperty(prop, ev::toUtf8(v));
-                       return ev::undefined();
-                   });
-    };
-    defStyleProp("width");
-    defStyleProp("height");
-    defStyleProp("display");
-    defStyleProp("touchAction");
-    return b.get();
-}
-
 Value makeCanvasValue(dom::Element* el) {
     auto owned = std::make_unique<CanvasState>();
     CanvasState* cs = owned.get();
     cs->el = el;
     g_host->canvases.push_back(std::move(owned));
 
-    ObjectBuilder b;
+    // A canvas IS an element — it lives in the tree, carries classes, is styled
+    // and is measured — and then it also owns a drawing buffer. The element half
+    // is the shared core (host_element.cpp); what follows overrides only the
+    // handful of members the drawing buffer changes the answer to.
+    ObjectBuilder b(makeElementHandleObject(el));
+    installElementCore(b, el);
 
     // width/height: reads answer the live drawing-buffer size; a write is
     // both the attribute (the HTML source of truth the engine's
@@ -264,14 +245,6 @@ Value makeCanvasValue(dom::Element* el) {
                },
                nullptr);
 
-    {
-        Value style = makeStyleValue(cs);
-        b.set("style", style);
-    }
-    b.set("tagName", ev::fromUtf8("CANVAS"));
-    b.set("nodeName", ev::fromUtf8("CANVAS"));
-    b.set("nodeType", ev::fromDouble(1));
-
     b.def("getBoundingClientRect", 0, [cs](Value, std::span<const Value>) {
         g_host->engine->flushLayoutForRead(cs->el->document());
         auto& box = cs->el->layoutBox();
@@ -290,30 +263,6 @@ Value makeCanvasValue(dom::Element* el) {
         r.set("y", ev::fromDouble(y));
         return r.get();
     });
-    // Pointer capture on the canvas element routes directly to the engine's
-    // pointer capture tracking (Engine::setPointerCapture / releasePointerCapture / hasPointerCapture),
-    // matching js_element_setPointerCapture in src/js/element_bindings.cpp.
-    b.def("setPointerCapture", 1, [cs](Value, std::span<const Value> a) {
-        int pointerId = a.empty() || ev::isUndefined(a[0])
-            ? bro::engine::Engine::kMousePointerId
-            : i32At(a, 0);
-        g_host->engine->setPointerCapture(cs->el, pointerId);
-        return ev::undefined();
-    });
-    b.def("releasePointerCapture", 1, [cs](Value, std::span<const Value> a) {
-        int pointerId = a.empty() || ev::isUndefined(a[0])
-            ? bro::engine::Engine::kMousePointerId
-            : i32At(a, 0);
-        g_host->engine->releasePointerCapture(cs->el, pointerId);
-        return ev::undefined();
-    });
-    b.def("hasPointerCapture", 1, [cs](Value, std::span<const Value> a) {
-        int pointerId = a.empty() || ev::isUndefined(a[0])
-            ? bro::engine::Engine::kMousePointerId
-            : i32At(a, 0);
-        return ev::fromBool(g_host->engine->hasPointerCapture(cs->el, pointerId));
-    });
-
     b.def("setAttribute", 2, [cs](Value, std::span<const Value> a) {
         Value nameV = argAt(a, 0);
         Value valV = argAt(a, 1);
@@ -331,27 +280,6 @@ Value makeCanvasValue(dom::Element* el) {
         }
         return ev::undefined();
     });
-    b.def("getAttribute", 1, [cs](Value, std::span<const Value> a) {
-        Value nameV = argAt(a, 0);
-        if (ev::isObject(nameV) || ev::isUndefined(nameV)) return ev::null();
-        std::string name = ev::toUtf8(nameV);
-        const std::string& val = cs->el->getAttribute(name);
-        if (val.empty() && !cs->el->hasAttribute(name)) return ev::null();
-        return ev::fromUtf8(val);
-    });
-    b.def("hasAttribute", 1, [cs](Value, std::span<const Value> a) {
-        Value nameV = argAt(a, 0);
-        if (ev::isObject(nameV) || ev::isUndefined(nameV)) return ev::fromBool(false);
-        return ev::fromBool(cs->el->hasAttribute(ev::toUtf8(nameV)));
-    });
-    b.def("removeAttribute", 1, [cs](Value, std::span<const Value> a) {
-        Value nameV = argAt(a, 0);
-        if (!ev::isObject(nameV) && !ev::isUndefined(nameV)) {
-            cs->el->removeAttribute(ev::toUtf8(nameV));
-        }
-        return ev::undefined();
-    });
-
     // getContext('webgl2'|'webgl') → the B2 context object, built over the
     // SAME Engine path the QuickJS factory takes (Engine::createWebGL2Context
     // — one construction path, no drift), and cached so a second call answers
@@ -372,24 +300,21 @@ Value makeCanvasValue(dom::Element* el) {
         return cs->glObj.get();
     });
 
-    // Real listeners on the engine's own element: a click that hit-tests to
-    // this canvas fires them, in registration order beside any the page's
-    // interpreted script put on the same element (host_dom_events.cpp).
-    // `cs` outlives the program — HostState is never freed — so the element
-    // source can read through it safely for the life of the process.
-    installElementEventTarget(b, [cs]() { return cs->el; }, "canvas");
-
     Value built = b.get();
     cs->jsObj.set(built);
+    noteHostElementValue(el, built);
     return built;
 }
 
-// The canvas registry answers "which host canvas is this Value?" for
-// document.body.appendChild — identity by current-address compare against
-// each Persistent, valid because nothing allocates during the scan.
+// "Which host canvas is this Value?" — through the element handle every
+// wrapper now carries, rather than by comparing raw Value addresses. The old
+// compare was correct only while nothing allocated during the scan; this asks
+// the value what element it is and looks that up, which has no such condition.
 CanvasState* canvasFor(Value v) {
+    dom::Element* el = hostElementOf(v);
+    if (!el) return nullptr;
     for (auto& cs : g_host->canvases) {
-        if (ev::toBits(cs->jsObj.get()) == ev::toBits(v)) return cs.get();
+        if (cs->el == el) return cs.get();
     }
     return nullptr;
 }
@@ -399,177 +324,17 @@ CanvasState* canvasFor(Value v) {
 // ---------------------------------------------------------------------------
 
 Value makeGenericElementValue(dom::Element* el) {
-    ObjectBuilder b;
-    b.set("tagName", ev::fromUtf8(el->tagName()));
-    b.set("nodeName", ev::fromUtf8(el->tagName()));
-    b.set("nodeType", ev::fromDouble(1));
-
-    b.accessor("id",
-               [el](Value, std::span<const Value>) { return ev::fromUtf8(el->id()); },
-               [el](Value, std::span<const Value> a) {
-                   Value v = argAt(a, 0);
-                   if (!ev::isObject(v)) el->setId(ev::toUtf8(v));
-                   return ev::undefined();
-               });
-    b.accessor("className",
-               [el](Value, std::span<const Value>) { return ev::fromUtf8(el->className()); },
-               [el](Value, std::span<const Value> a) {
-                   Value v = argAt(a, 0);
-                   if (!ev::isObject(v)) el->setClassName(ev::toUtf8(v));
-                   return ev::undefined();
-               });
-    b.accessor("textContent",
-               [el](Value, std::span<const Value>) { return ev::fromUtf8(el->textContent()); },
-               [el](Value, std::span<const Value> a) {
-                   Value v = argAt(a, 0);
-                   if (!ev::isObject(v)) el->setTextContent(ev::toUtf8(v));
-                   return ev::undefined();
-               });
-    b.accessor("innerHTML",
-               [el](Value, std::span<const Value>) { return ev::fromUtf8(el->innerHTML()); },
-               [el](Value, std::span<const Value> a) {
-                   Value v = argAt(a, 0);
-                   if (!ev::isObject(v)) el->setInnerHTML(ev::toUtf8(v));
-                   return ev::undefined();
-               });
-    b.accessor("clientWidth",
-               [el](Value, std::span<const Value>) {
-                   g_host->engine->flushLayoutForRead(el->document());
-                   return ev::fromDouble(el->layoutBox().contentRect.width);
-               },
-               nullptr);
-    b.accessor("clientHeight",
-               [el](Value, std::span<const Value>) {
-                   g_host->engine->flushLayoutForRead(el->document());
-                   return ev::fromDouble(el->layoutBox().contentRect.height);
-               },
-               nullptr);
-
-    {
-        ObjectBuilder style;
-        auto defProp = [&](const char* prop) {
-            std::string p = prop;
-            style.accessor(
-                prop,
-                [el, p](Value, std::span<const Value>) {
-                    return ev::fromUtf8(el->style().getProperty(p));
-                },
-                [el, p](Value, std::span<const Value> a) {
-                    Value v = argAt(a, 0);
-                    if (!ev::isObject(v)) el->style().setProperty(p, ev::toUtf8(v));
-                    return ev::undefined();
-                });
-        };
-        defProp("width");
-        defProp("height");
-        defProp("display");
-        defProp("color");
-        defProp("background");
-        defProp("opacity");
-        defProp("transform");
-        defProp("visibility");
-        defProp("top");
-        defProp("left");
-        defProp("position");
-        defProp("zIndex");
-        b.set("style", style.get());
-    }
-
-    b.def("setAttribute", 2, [el](Value, std::span<const Value> a) {
-        Value nameV = argAt(a, 0);
-        Value valV = argAt(a, 1);
-        if (!ev::isObject(nameV) && !ev::isUndefined(nameV)) {
-            std::string name = ev::toUtf8(nameV);
-            std::string val =
-                (!ev::isObject(valV) && !ev::isUndefined(valV)) ? ev::toUtf8(valV) : "";
-            el->setAttribute(name, val);
-        }
-        return ev::undefined();
-    });
-    b.def("getAttribute", 1, [el](Value, std::span<const Value> a) {
-        Value nameV = argAt(a, 0);
-        if (ev::isObject(nameV) || ev::isUndefined(nameV)) return ev::null();
-        std::string name = ev::toUtf8(nameV);
-        const std::string& val = el->getAttribute(name);
-        if (val.empty() && !el->hasAttribute(name)) return ev::null();
-        return ev::fromUtf8(val);
-    });
-    b.def("hasAttribute", 1, [el](Value, std::span<const Value> a) {
-        Value nameV = argAt(a, 0);
-        if (ev::isObject(nameV) || ev::isUndefined(nameV)) return ev::fromBool(false);
-        return ev::fromBool(el->hasAttribute(ev::toUtf8(nameV)));
-    });
-    b.def("removeAttribute", 1, [el](Value, std::span<const Value> a) {
-        Value nameV = argAt(a, 0);
-        if (!ev::isObject(nameV) && !ev::isUndefined(nameV)) {
-            el->removeAttribute(ev::toUtf8(nameV));
-        }
-        return ev::undefined();
-    });
-    b.def("remove", 0, [el](Value, std::span<const Value>) {
-        if (el->parentNode()) el->parentNode()->removeChild(el);
-        return ev::undefined();
-    });
-    b.def("contains", 1, [](Value, std::span<const Value>) { return ev::fromBool(false); });
-    b.def("getBoundingClientRect", 0, [el](Value, std::span<const Value>) {
-        g_host->engine->flushLayoutForRead(el->document());
-        auto& box = el->layoutBox();
-        ObjectBuilder r;
-        r.set("left", ev::fromDouble(box.contentRect.x));
-        r.set("top", ev::fromDouble(box.contentRect.y));
-        r.set("right", ev::fromDouble(box.contentRect.x + box.contentRect.width));
-        r.set("bottom", ev::fromDouble(box.contentRect.y + box.contentRect.height));
-        r.set("width", ev::fromDouble(box.contentRect.width));
-        r.set("height", ev::fromDouble(box.contentRect.height));
-        r.set("x", ev::fromDouble(box.contentRect.x));
-        r.set("y", ev::fromDouble(box.contentRect.y));
-        return r.get();
-    });
-
-    installElementEventTarget(b, [el]() { return el; }, el->tagName().c_str());
-    return b.get();
+    return makePlainElementValue(el);
 }
 
 Value wrapElement(dom::Element* el) {
-    if (!el) return ev::null();
-    Value existing = hostValueForElement(el);
-    if (!ev::isUndefined(existing)) return existing;
-    std::string tag = el->tagName();
-    for (char& ch : tag) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    if (tag == "canvas") {
-        return makeCanvasValue(el);
-    }
-    return makeGenericElementValue(el);
+    return hostElementValue(el);
 }
 
-// pixi v8 boots its DOMPipe unconditionally: the pipe's constructor makes one
-// overlay <div> for DOMContainer content and styles it, and with no
-// DOMContainer in the scene the only other things that ever run against it
-// are postrender's `remove()` — legal on a detached element, and this one is
-// never attached — and the CanvasObserver ticker's style.transform write. So
-// a div here is that overlay and nothing more: a style property bag, a
-// truthful no-op remove, a contains() answering for its (empty) children,
-// and a named refusal on appendChild, where real DOMContainer content would
-// start needing a DOM this layer does not model.
-Value makeOverlayDivValue() {
-    ObjectBuilder b;
-    b.set("tagName", ev::fromUtf8("DIV"));
-    b.set("nodeName", ev::fromUtf8("DIV"));
-    b.set("nodeType", ev::fromDouble(1));
-    {
-        ObjectBuilder style;
-        b.set("style", style.get());
-    }
-    b.def("remove", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-    b.def("contains", 1, [](Value, std::span<const Value>) { return ev::fromBool(false); });
-    b.def("appendChild", 1, [](Value, std::span<const Value>) {
-        return ev::throwTypeError(
-            "bronze host div.appendChild: DOMContainer content is not modelled "
-            "(the overlay div exists because pixi's DOMPipe constructs one)");
-    });
-    return b.get();
-}
-
+// document.createElement / createElementNS. An unknown tag is not a refusal:
+// every HTML tag is a real dom::Element here, and the element surface is the
+// same one for all of them. `img` is the one exception — it is a host object
+// with a decoder behind `.src`, not a laid-out element (host_image.cpp).
 Value createElementImpl(std::span<const Value> a, size_t tagIndex) {
     Value tagV = argAt(a, tagIndex);
     if (ev::isObject(tagV)) return ev::throwTypeError("createElement: tag must be a string");
@@ -578,49 +343,20 @@ Value createElementImpl(std::span<const Value> a, size_t tagIndex) {
     // three.js's ImageLoader builds its element as createElementNS(xhtml,
     // 'img'), so the factory has to answer for it — and what it answers is the
     // same object `new Image()` gives, because there is only one image kind
-    // here (host_image.cpp). It is NOT a dom::Element: nothing lays an image out
-    // in this layer, and the only thing three.js does with it is read its size
-    // and hand it to texImage2D.
+    // here. It is NOT a dom::Element: nothing lays an image out in this layer,
+    // and the only thing three.js does with it is read its size and hand it to
+    // texImage2D.
     if (tag == "img") return makeImageValue();
-    if (tag == "div") return makeOverlayDivValue();
 
     dom::Document* doc = g_host->engine->document();
     if (!doc) return ev::throwError("bronze host: engine has no document");
     dom::Element* el = doc->createElement(tag);
     if (!el) return ev::throwError("bronze host: createElement failed");
-    if (tag == "canvas") return makeCanvasValue(el);
-    return makeGenericElementValue(el);
-}
-
-Value makeBodyValue() {
-    ObjectBuilder b;
-    b.def("appendChild", 1, [](Value, std::span<const Value> a) {
-        CanvasState* cs = canvasFor(argAt(a, 0));
-        dom::Document* doc = g_host->engine->document();
-        dom::Element* parent = doc->body() ? doc->body() : doc->documentElement();
-        if (cs && parent && !cs->el->parentNode()) {
-            parent->appendChild(cs->el);
-        }
-        return argAt(a, 0);
-    });
-    b.def("removeChild", 1, [](Value, std::span<const Value> a) {
-        CanvasState* cs = canvasFor(argAt(a, 0));
-        if (cs && cs->el->parentNode()) {
-            cs->el->parentNode()->removeChild(cs->el);
-        }
-        return argAt(a, 0);
-    });
-    return b.get();
-}
-
-Value makeArrayValue(const std::vector<Value>& elements) {
-    ObjectBuilder arr;
-    for (size_t i = 0; i < elements.size(); ++i) {
-        std::string idxStr = std::to_string(i);
-        arr.set(idxStr.c_str(), elements[i]);
-    }
-    arr.set("length", ev::fromDouble(static_cast<double>(elements.size())));
-    return arr.get();
+    // Every other tag — div, span, input, select, textarea, button — is a real
+    // dom::Element with the full element surface on it. The `div` special case
+    // that used to live here answered with an overlay stub that refused
+    // appendChild, which was the right shape only while nothing built a tree.
+    return hostElementValue(el);
 }
 
 Value makeDocumentValue() {
@@ -653,23 +389,41 @@ Value makeDocumentValue() {
         return wrapElement(el);
     });
     b.def("querySelectorAll", 1, [](Value, std::span<const Value> a) {
+        auto empty = []() {
+            return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+        };
         Value selV = argAt(a, 0);
-        if (ev::isObject(selV) || ev::isUndefined(selV)) return makeArrayValue({});
-        std::string sel = ev::toUtf8(selV);
+        if (ev::isObject(selV) || ev::isUndefined(selV)) return empty();
         dom::Document* doc = g_host->engine->document();
-        if (!doc) return makeArrayValue({});
-        auto list = doc->querySelectorAll(sel);
-        std::vector<Value> arr;
-        arr.reserve(list.size());
-        for (dom::Element* el : list) {
-            arr.push_back(wrapElement(el));
-        }
-        return makeArrayValue(arr);
+        if (!doc) return empty();
+        std::vector<dom::Element*> list = doc->querySelectorAll(ev::toUtf8(selV));
+        return hostArrayOf(list.size(),
+                           [&list](size_t i) { return hostElementValue(list[i]); });
     });
-    {
-        Value body = makeBodyValue();
-        b.set("body", body);
-    }
+    // body / documentElement / head are ACCESSORS, not values captured at
+    // install time: the globals are registered before the engine has parsed a
+    // document, so there is nothing to capture yet. Each answers the real
+    // element through the registry, which is what makes
+    // `document.body.appendChild(panel)` an ordinary tree insert rather than
+    // the canvas-only special case it used to be.
+    auto defDocElement = [&b](const char* name, dom::Element* (dom::Document::*get)() const) {
+        b.accessor(name,
+                   [get](Value, std::span<const Value>) {
+                       dom::Document* doc = g_host->engine->document();
+                       if (!doc) return ev::null();
+                       return hostElementValue((doc->*get)());
+                   },
+                   nullptr);
+    };
+    defDocElement("body", &dom::Document::body);
+    defDocElement("documentElement", &dom::Document::documentElement);
+    b.accessor("activeElement",
+               [](Value, std::span<const Value>) {
+                   dom::Document* doc = g_host->engine->document();
+                   if (!doc) return ev::null();
+                   return hostElementValue(doc->activeElement());
+               },
+               nullptr);
     // Document listeners are documentElement's listeners — the exact
     // delegation js_document_addEventListener performs for the interpreted
     // side (src/js/document_bindings.cpp), and for its reason: a document is
@@ -870,6 +624,19 @@ Value makeBrandConstructor(const char* name) {
 // window
 // ---------------------------------------------------------------------------
 
+// One function value, installed BOTH on window and as a bare global. Both
+// spellings are how it is reached on the web — `getComputedStyle(el)` and
+// `window.getComputedStyle(el)` — and three.js's editor uses the bare one
+// (editor/js/Sidebar.js), so registering only the window property would leave
+// it a ReferenceError in exactly the code that needs it.
+Value makeGetComputedStyle() {
+    return ev::makeFunction(
+        [](Value, std::span<const Value> a) {
+            return hostComputedStyleFor(argAt(a, 0));
+        },
+        1);
+}
+
 Value makeWindowValue() {
     ObjectBuilder b;
     engine::Engine* engine = g_host->engine;
@@ -946,15 +713,7 @@ Value makeWindowValue() {
         return ev::undefined();
     });
 
-    b.def("getComputedStyle", 1, [](Value, std::span<const Value> a) {
-        Value elV = argAt(a, 0);
-        if (ev::isObject(elV)) {
-            Value style = ev::getProperty(elV, "style");
-            if (!ev::isUndefined(style) && !ev::isNull(style)) return style;
-        }
-        ObjectBuilder empty;
-        return empty.get();
-    });
+    b.set("getComputedStyle", makeGetComputedStyle());
 
     b.set("localStorage", makeLocalStorageValue());
     b.set("AudioContext", makeAudioContextConstructor());
@@ -1045,17 +804,20 @@ double hostClockMs() { return g_host ? g_host->clockMs : 0.0; }
 
 engine::Engine* hostEngine() { return g_host ? g_host->engine : nullptr; }
 
+// The canvas wrapper, reached from host_element.cpp's factory: an element that
+// also owns a drawing buffer and a GL context. It lives here because the GL
+// context does.
+Value makeCanvasElementValue(dom::Element* el) { return makeCanvasValue(el); }
 
-// Identity, not a lookup table built for it: the canvas registry is already
-// the list of every element this layer wrapped, and it is short (one canvas in
-// every path an app takes). Scanning it costs less than the map that would
-// have to be kept in step with it.
+
+// Identity — the value the program already holds for `el`, so
+// `event.target === canvas` is true inside a compiled listener. It asks the
+// element registry (host_element.cpp), which is every element this layer ever
+// wrapped, not just the canvases: a UI tests target identity on every element
+// it built, not only on the one it draws into.
 Value hostValueForElement(dom::Element* el) {
     if (!g_host || !el) return ev::undefined();
-    for (auto& cs : g_host->canvases) {
-        if (cs->el == el) return cs->jsObj.get();
-    }
-    return ev::undefined();
+    return hostElementValue(el);
 }
 
 Value makeBroValue() {
@@ -1122,6 +884,8 @@ void installWebHostGlobals(engine::Engine& engine) {
         ev::registerGlobal("removeEventListener",
                            ev::getProperty(win.get(), "removeEventListener"));
         ev::registerGlobal("dispatchEvent", ev::getProperty(win.get(), "dispatchEvent"));
+        ev::registerGlobal("getComputedStyle",
+                           ev::getProperty(win.get(), "getComputedStyle"));
     }
     {
         Value raf = makeRequestAnimationFrame();
@@ -1144,12 +908,13 @@ void installWebHostGlobals(engine::Engine& engine) {
         ctor.set("name", name);
         ev::registerGlobal("WebGL2RenderingContext", ctor.get());
     }
-    // The four families that own their own files, each registering the names
+    // The families that own their own files, each registering the names
     // the manifest lists for it, in the manifest's order.
     installTimerGlobals();
     installImageGlobal();
     installXhrGlobal();
     installFetchGlobal();
+    installPlatformGlobals();
 
     {
         Value nav = makeNavigatorValue();
