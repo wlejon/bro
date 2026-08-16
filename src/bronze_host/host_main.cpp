@@ -127,10 +127,14 @@ int main(int argc, char* argv[]) {
         bro::engine::HeadlessHooks hooks;
         hooks.programName = "bro-bronze-host";
         hooks.tagline = "headless driver for a bronze-compiled app";
-        // This binary IS the compiled app's host, which is what lets engine
-        // init tell an app dir that forgot `"compiled": true` from one that
-        // declared it and got opened by a binary with nothing linked in.
-        hooks.providesCompiledApp = true;
+        // Unconditionally yes, whatever directory it is pointed at: this
+        // binary has the app LINKED IN, so the compiled logic comes from the
+        // executable rather than from the folder. (bro.exe and bro-headless
+        // answer the same question by looking in the folder instead —
+        // bronze_host/app_module.h.) It is what lets engine init tell an app
+        // dir that forgot `"compiled": true` from one that declared it and got
+        // opened by a binary with nothing to run.
+        hooks.providesCompiledApp = [](const std::string&) { return true; };
         hooks.afterEngine = [](bro::engine::Engine& engine) {
             bro::bronze_host::installWebHostGlobals(engine);
             bronze::embed::runMain();

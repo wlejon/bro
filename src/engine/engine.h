@@ -336,6 +336,13 @@ public:
     /// only realms are in.
     platform::Window* window() const { return window_.get(); }
 
+    /// The app directory this Engine was booted from, absolute. Exposed for
+    /// the same reason as window() above: a host that has to act on the app's
+    /// own files — loading the compiled module a folder carries
+    /// (bronze_host/app_module.h) — is handed the Engine, not the config that
+    /// built it.
+    const std::string& appDir() const { return appDir_; }
+
     int viewportWidth() const { return viewportWidth_; }
     int viewportHeight() const { return viewportHeight_; }
 

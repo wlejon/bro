@@ -37,12 +37,21 @@ struct HeadlessHooks {
     /// script that follows then steps a running app rather than starting one.
     std::function<void(Engine&)> afterEngine;
 
-    /// True when this binary has an AOT-compiled app linked in — i.e. when
-    /// `afterEngine` above is going to run one. Forwarded to
-    /// EngineConfig::hostProvidesCompiledApp, which is what lets engine init
-    /// report an app dir and a binary that disagree about which of them owns
-    /// the app's logic. bro-headless leaves it false; bro-bronze-host sets it.
-    bool providesCompiledApp = false;
+    /// Asked once the app directory is resolved and before the Engine is
+    /// constructed: is `afterEngine` going to run compiled logic for THIS app?
+    /// Forwarded to EngineConfig::hostProvidesCompiledApp, which is what lets
+    /// engine init report an app dir and a binary that disagree about which of
+    /// them owns the app's logic. Unset means no, which is bro-headless's own
+    /// answer.
+    ///
+    /// A predicate rather than a bool because the answer is a property of the
+    /// FOLDER, not of the binary: one bro-headless opens an interpreted app
+    /// and a compiled one, and which it got depends on whether that directory
+    /// carries a module (bronze_host/app_module.h). A host with an app linked
+    /// in answers yes unconditionally; a host that loads one answers by
+    /// looking. Asked before construction because engine init's diagnostic
+    /// needs it — after the fact the warning has already been emitted.
+    std::function<bool(const std::string& appDir)> providesCompiledApp;
 
     /// Name used in usage text and diagnostics.
     std::string programName = "bro-headless";

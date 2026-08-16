@@ -614,19 +614,21 @@ void Engine::initAppRealm() {
 
     // 6. Load the application
     //
-    // Before anything is loaded: does this app dir want a binary this one is
-    // not? A compiled app dir (bro.json `"compiled": true`) carries no script
-    // for its logic — that lives in machine code linked into a host executable
-    // — so plain `bro` opening one runs the page and NONE of the app, which on
-    // screen is indistinguishable from an app that is simply broken. Say so
-    // instead. It is a warning and not a refusal because the interpreted half
-    // of a hybrid app dir is real and does run: the page, its styles, its own
-    // <script> tags. What is missing is named, and the run continues.
+    // Before anything is loaded: does this app dir want compiled logic that is
+    // not going to run? A compiled app dir (bro.json `"compiled": true`)
+    // carries no script for its logic — that lives in machine code, either in
+    // a module beside the page or linked into a host executable — so opening
+    // one without it runs the page and NONE of the app, which on screen is
+    // indistinguishable from an app that is simply broken. Say so instead. It
+    // is a warning and not a refusal because the interpreted half of a hybrid
+    // app dir is real and does run: the page, its styles, its own <script>
+    // tags. What is missing is named, and the run continues.
     if (compiledApp_ && !hostProvidesCompiledApp_) {
-        LOG_WARN("App '%s' declares \"compiled\": true — its logic is an AOT-compiled "
-                 "program linked into a host binary (src/bronze_host/). This binary has "
-                 "no compiled app linked in, so only the page's own interpreted scripts "
-                 "will run.", appDir_.c_str());
+        LOG_WARN("App '%s' declares \"compiled\": true, but nothing here can run its "
+                 "logic: the directory carries no compiled module (app.dll / app.so / "
+                 "app.dylib — see src/bronze_host/app_module.h) and this binary has none "
+                 "linked in. Only the page's own interpreted scripts will run.",
+                 appDir_.c_str());
     } else if (!compiledApp_ && hostProvidesCompiledApp_) {
         LOG_WARN("App '%s' is being run by a compiled-app host but its bro.json does not "
                  "declare \"compiled\": true. Add it — the flag is what tells any other "
