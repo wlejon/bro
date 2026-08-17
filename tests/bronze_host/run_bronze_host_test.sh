@@ -23,7 +23,8 @@
 #   tests/bronze_host/run_bronze_host_test.sh
 #
 # Environment:
-#   BRO_BRONZE_HOST   path to the bro-bronze-host executable (skips the search)
+#   BRO_HEADLESS      path to bro-headless (default: found under build/)
+#   BRONZE            path to the bronze CLI (default: found under build/)
 #   BRO_BRONZE_FRAMES frames to advance (default 8 — the app needs 5, and the
 #                     spare ones must print nothing, which is itself a check:
 #                     an app that keeps drawing after `done` has a rAF it never
@@ -36,46 +37,29 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 EXPECTED="$SCRIPT_DIR/expected/main_scenegraph.expected"
 FRAMES="${BRO_BRONZE_FRAMES:-8}"
 
-# The .exe takes Windows paths; git-bash hands out /d/... ones.
-to_win_path() {
-    local p="$1"
-    if [[ "${BIN:-}" == *.exe ]]; then
-        if [[ "$p" =~ ^/mnt/([a-zA-Z])/(.*) ]]; then echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
-        elif [[ "$p" =~ ^/([a-zA-Z])/(.*) ]]; then echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
-        else echo "$p"; fi
-    else
-        echo "$p"
-    fi
+source "$SCRIPT_DIR/lib.sh"
+
+BIN="$(bh_find_bro_headless "$PROJECT_DIR")" || {
+    echo "  SKIP  bronze_host  (bro-headless not built)"
+    exit 77   # the automake convention for "skipped", not "passed"
 }
 
-BIN=""
-if [[ -n "${BRO_BRONZE_HOST:-}" ]]; then
-    BIN="$BRO_BRONZE_HOST"
-else
-    for CANDIDATE in \
-        "$PROJECT_DIR/build/Debug/bro-bronze-host.exe" \
-        "$PROJECT_DIR/build/Release/bro-bronze-host.exe" \
-        "$PROJECT_DIR/build/bro-bronze-host" \
-        "$PROJECT_DIR/build-release/bro-bronze-host" \
-        "$PROJECT_DIR/build-debug/bro-bronze-host"
-    do
-        [[ -f "$CANDIDATE" ]] && BIN="$CANDIDATE" && break
-    done
-fi
+MODULE="$(bh_ensure_module "$PROJECT_DIR" "$PROJECT_DIR/src/bronze_host/fixtures/appdir"                            "$PROJECT_DIR/src/bronze_host/fixtures/main_scenegraph.js")"
+case $? in
+    0)  ;;
+    77) echo "  SKIP  bronze_host  (no bronze CLI in this tree)"
+        echo "        Configure with -DBRONZE_WITH_LLVM=ON to build one."
+        exit 77 ;;
+    *)  echo "  FAIL  bronze_host  (main_scenegraph.js did not compile)"
+        exit 1 ;;
+esac
 
-if [[ -z "$BIN" || ! -f "$BIN" ]]; then
-    echo "  SKIP  bronze_host  (bro-bronze-host not built)"
-    echo "        Build it: see src/bronze_host/README.md — it needs"
-    echo "        -DBRO_WITH_BRONZE=ON and an app object."
-    exit 77   # the automake convention for "skipped", not "passed"
-fi
-
-APP_DIR="$(to_win_path "$PROJECT_DIR/src/bronze_host/fixtures/appdir")"
+APP_DIR="$(bh_to_win_path "$PROJECT_DIR/src/bronze_host/fixtures/appdir")"
 
 # stderr is folded in on purpose: the engine logs there, and a run that failed
 # because a host global was missing says so in the log — swallowing it would
 # leave a bare diff with no cause.
-RAW="$("$BIN" "$APP_DIR" --headless --frames "$FRAMES" 2>&1)"
+RAW="$("$BIN" "$APP_DIR" -e "advanceTime($((FRAMES * 16)))" 2>&1)"
 STATUS=$?
 
 # `APP ` is the app's own prefix; everything else on the stream is engine log,

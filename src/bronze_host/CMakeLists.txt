@@ -19,6 +19,34 @@ if(NOT EXISTS "${BRONZE_DIR}/CMakeLists.txt")
         "There is no submodule fallback, deliberately.")
 endif()
 
+# bronze builds its runtime as a shared library only when asked, and its own
+# default for the question is "am I the top-level project" — which is OFF here,
+# where it is a subdirectory. bro always needs it ON: an app arrives as a
+# module bro LOADS, and host and module must bind to one runtime image. FORCE
+# rather than a default, because there is no working configuration of bro with
+# it off, so an inherited OFF in a cache would be a link error a long way from
+# its cause.
+set(BRONZE_BUILD_SHARED_RUNTIME ON CACHE BOOL "" FORCE)
+
+# The codegen backend, so this tree can COMPILE an app and not only run one.
+# bronze's own default is OFF and its reason is good — the runtime does not
+# need LLVM and neither does a host that only loads finished modules — but a
+# bro checkout is where apps get built and where the bronze_host checks compile
+# their own probes, and a check that cannot produce its subject is a check that
+# reports "skipped" forever.
+#
+# A plain cache default rather than FORCE: unlike the shared runtime, OFF here
+# is a real configuration (run pre-built apps, build no new ones), so
+# -DBRONZE_WITH_LLVM=OFF stays available to anyone who wants a lighter tree.
+# bronze searches the usual install locations itself when LLVM_DIR is unset.
+#
+# Being a default and not a FORCE, it applies to a FRESH cache only: a tree
+# configured before this line keeps whatever it already decided, and turning
+# the compiler on there is one -DBRONZE_WITH_LLVM=ON. That is the normal
+# meaning of a cached default, and the alternative — FORCE — would take the
+# choice away from every tree on every reconfigure to save that one flag.
+set(BRONZE_WITH_LLVM ON CACHE BOOL "Build bronze's LLVM codegen backend (the app compiler)")
+
 # EXCLUDE_FROM_ALL: only the bronze targets our libraries name get built;
 # bronze's CLI, backend, and test binaries stay out of bro's default target.
 # Note bronze's own configure requires doctest (find_package REQUIRED) — the
@@ -47,137 +75,54 @@ add_library(bro_bronze_host STATIC
     host_fetch.cpp
 )
 target_include_directories(bro_bronze_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
+
+# The runtime is a DLL now, and bronze builds it into its own output directory
+# (BRONZE_SHARED_RUNTIME_DIR) while bro's executables land in bro's. On Windows
+# that is the difference between a program and one that will not start: the
+# loader looks beside the .exe, not wherever the link-time import library came
+# from. So every executable that links this layer gets the runtime copied next
+# to it as a post-build step.
+#
+# A function rather than a property on bro_bronze_host, because the copy has to
+# name a DESTINATION and a static library does not have one — the directory
+# that matters belongs to whichever executable ends up linking it.
+function(bro_bronze_stage_runtime target)
+    add_custom_command(TARGET ${target} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                $<TARGET_FILE:bronze_runtime_shared> $<TARGET_FILE_DIR:${target}>
+        COMMENT "Staging bronze's shared runtime beside ${target}"
+        VERBATIM)
+endfunction()
 # broimage is named explicitly rather than inherited: host_image.cpp includes
 # broimage/decode.h directly, and a dependency that only works because someone
 # else happens to link it is one refactor away from a broken build.
+#
+# bronze::runtime_shared and NOT bronze::embed + bronze::runtime, which is the
+# one link mistake this layer cannot survive: the static archives carry their
+# own copy of state bronze documents as "process-wide, owned by ONE translation
+# unit" (runtime/rt_state.h), so a process holding both has two heaps, two
+# exception cells and two key registries. A value the loaded module allocated
+# would be an address in a semispace bro's collector is free to reuse. embed is
+# INSIDE the shared image — the host↔runtime boundary is a C++ one no export
+# list could carry — so this one target supplies both halves.
 target_link_libraries(bro_bronze_host
-    PUBLIC bro_engine bro_webgl glad broimage::broimage bronze::embed bronze::runtime
+    PUBLIC bro_engine bro_webgl glad broimage::broimage bronze::runtime_shared
 )
 
-# --- The host executable ---
-# A lib-plus-main whose missing piece is the compiled app: bronze emits an
-# object file exporting `bronze_main` (the src/rt/rt.cpp symbol convention;
-# embed_run.cpp holds the one reference), and whoever builds an app points
-# BRO_BRONZE_APP_OBJ at it. Without it the link would fail on that symbol, so
-# the executable simply is not defined until an app object is supplied.
-set(BRO_BRONZE_APP_OBJ "" CACHE FILEPATH
-    "Object file of a bronze-compiled app (exports bronze_main) to link into bro-bronze-host")
-
-# --- Optional: build the app object here instead of by hand ---
-# OFF by default, and it stays that way: a build that shells out to ANOTHER
-# COMPILER is not something anyone should acquire by configuring bro. Turning
-# it on makes the bronze CLI a build dependency of bro-bronze-host and runs it
-# on every configure-clean build, which is a ~1 s compile for the scene-graph
-# app and minutes for a three.js graph.
+# --- No app targets here, deliberately ---
+# What used to live below this line was the link-time app binding:
+# BRO_BRONZE_APP_OBJ, BRO_BRONZE_BUILD_APP, a bro_bronze_add_host() function and
+# a BRO_BRONZE_APPS list that produced one bro-bronze-host-<name> executable per
+# compiled app. All of it existed to answer a question the build no longer asks.
 #
-# The contract is exactly the one README.md documents by hand, so the two
-# cannot drift: `bronze build <app> -o <obj> --emit-obj --host-globals
-# web_host.globals`.
-option(BRO_BRONZE_BUILD_APP
-       "Compile BRO_BRONZE_APP_SOURCE with the bronze CLI at build time" OFF)
-set(BRO_BRONZE_APP_SOURCE "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/main_scenegraph.js"
-    CACHE FILEPATH "App entry .js compiled when BRO_BRONZE_BUILD_APP is ON")
-
-if(BRO_BRONZE_BUILD_APP)
-    if(BRO_BRONZE_APP_OBJ)
-        message(FATAL_ERROR
-            "BRO_BRONZE_BUILD_APP=ON and BRO_BRONZE_APP_OBJ are mutually exclusive: "
-            "one compiles the app here, the other adopts an object someone else "
-            "compiled. Pick whichever names where the object comes from.")
-    endif()
-    if(NOT EXISTS "${BRO_BRONZE_APP_SOURCE}")
-        message(FATAL_ERROR "BRO_BRONZE_APP_SOURCE does not exist: ${BRO_BRONZE_APP_SOURCE}")
-    endif()
-    set(_bronze_app_obj "${CMAKE_CURRENT_BINARY_DIR}/bronze_app.obj")
-    # The bronze CLI is EXCLUDE_FROM_ALL (see the add_subdirectory above), so it
-    # is named as a DEPENDS here to pull it into the build — and only into this
-    # build, when this option is on.
-    add_custom_command(
-        OUTPUT "${_bronze_app_obj}"
-        COMMAND bronze build "${BRO_BRONZE_APP_SOURCE}"
-                -o "${_bronze_app_obj}"
-                --emit-obj
-                --host-globals "${CMAKE_CURRENT_SOURCE_DIR}/web_host.globals"
-        DEPENDS bronze "${BRO_BRONZE_APP_SOURCE}"
-                "${CMAKE_CURRENT_SOURCE_DIR}/web_host.globals"
-        COMMENT "bronze: compiling ${BRO_BRONZE_APP_SOURCE} to an object"
-        VERBATIM)
-    # DEPENDS on the custom command's OUTPUT is what makes it run: an object
-    # listed in add_executable's sources is an input, not a rule.
-    add_custom_target(bro-bronze-app-obj DEPENDS "${_bronze_app_obj}")
-    set(BRO_BRONZE_APP_OBJ "${_bronze_app_obj}")
-endif()
-
-# --- One host executable, given one app object ---
-# host_main.cpp is the whole of every one of them: the app is the linked
-# object, so "another app" is another link of the same source with a different
-# object beside it. Factored into a function rather than repeated because the
-# stack option and the library are properties of the HOST, not of any app, and
-# a second copy of them is a second thing to forget.
-function(bro_bronze_add_host target objPath)
-    add_executable(${target} host_main.cpp "${objPath}")
-    target_link_libraries(${target} PRIVATE bro_bronze_host)
-    if(MSVC)
-        # Same stack headroom as bro.exe: the engine still hosts QuickJS
-        # realms (system panels, iframes) beside the compiled app.
-        target_link_options(${target} PRIVATE /STACK:8388608)
-    endif()
-endfunction()
-
-if(BRO_BRONZE_APP_OBJ)
-    # An adopted object must already exist — a path typo is otherwise a link
-    # error naming a symbol instead of a configure error naming the path. One
-    # this build is about to PRODUCE cannot exist yet, so that case is skipped.
-    if(NOT BRO_BRONZE_BUILD_APP AND NOT EXISTS "${BRO_BRONZE_APP_OBJ}")
-        message(FATAL_ERROR "BRO_BRONZE_APP_OBJ does not exist: ${BRO_BRONZE_APP_OBJ}")
-    endif()
-    bro_bronze_add_host(bro-bronze-host "${BRO_BRONZE_APP_OBJ}")
-    if(BRO_BRONZE_BUILD_APP)
-        # An object produced by a custom command in the same directory is
-        # already an ordering dependency, but naming the target is what makes a
-        # multi-config generator sequence it before the link.
-        add_dependencies(bro-bronze-host bro-bronze-app-obj)
-        set_source_files_properties("${BRO_BRONZE_APP_OBJ}" PROPERTIES
-                                    GENERATED TRUE EXTERNAL_OBJECT TRUE)
-    endif()
-else()
-    message(STATUS "bro-bronze-host: no BRO_BRONZE_APP_OBJ supplied; building the "
-                   "bro_bronze_host library only")
-endif()
-
-# --- Additional host executables, one per app ---
-# BRO_BRONZE_APPS is a semicolon list of `name=objpath` pairs, each producing
-# `bro-bronze-host-<name>`. It exists BESIDE BRO_BRONZE_APP_OBJ rather than
-# replacing it: the pinned check names bro-bronze-host and must keep finding
-# exactly that binary, and one app is still the common case. The two are not
-# exclusive — a tree can have the scene-graph app as bro-bronze-host and an
-# events probe as bro-bronze-host-events at the same time, which is what makes
-# a second pinned check possible without reconfiguring between runs.
+# An app is a directory that carries its own module now (app.dll / app.so /
+# app.dylib, src/bronze_host/app_module.h), which the stock bro and bro-headless
+# load at startup. "Another app" is another folder, not another link of
+# host_main.cpp with a different object beside it — so there is no app-shaped
+# input to this build, no per-app target, and nothing here for an app author to
+# configure.
 #
-#     -DBRO_BRONZE_APPS="events=D:/build/events.obj;lit=D:/build/lit.obj"
-#
-# A pair with no `=`, an empty half, or a path that does not exist is a
-# configure error naming the pair: a mistyped one would otherwise become a
-# missing target, and "the app is broken" and "the app was never built" would
-# read the same at the test.
-set(BRO_BRONZE_APPS "" CACHE STRING
-    "Semicolon list of name=objpath pairs; each builds bro-bronze-host-<name>")
-
-foreach(_app IN LISTS BRO_BRONZE_APPS)
-    if(NOT _app MATCHES "^([^=]+)=(.+)$")
-        message(FATAL_ERROR
-            "BRO_BRONZE_APPS entry is not `name=objpath`: ${_app}")
-    endif()
-    set(_app_name "${CMAKE_MATCH_1}")
-    set(_app_obj "${CMAKE_MATCH_2}")
-    if(NOT EXISTS "${_app_obj}")
-        message(FATAL_ERROR
-            "BRO_BRONZE_APPS entry '${_app_name}': object does not exist: ${_app_obj}")
-    endif()
-    if(TARGET bro-bronze-host-${_app_name})
-        message(FATAL_ERROR
-            "BRO_BRONZE_APPS names '${_app_name}' twice")
-    endif()
-    bro_bronze_add_host(bro-bronze-host-${_app_name} "${_app_obj}")
-    message(STATUS "bro-bronze-host-${_app_name}: ${_app_obj}")
-endforeach()
+# Building an app is `bronze build <entry>.js -o <appdir>/app.dll --emit-shared
+# --host-globals src/bronze_host/web_host.globals`, and this tree can produce
+# the compiler that does it (BRONZE_WITH_LLVM above). src/bronze_host/README.md
+# has the sequence.

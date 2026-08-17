@@ -61,3 +61,15 @@ build.bat
 
 # Test scratch dir (rigging glTF round-trip etc.)
 tests/tmp/
+
+# The compiled module an app directory carries (bronze --emit-shared, loaded by
+# src/bronze_host/app_module.cpp). Build output that happens to live beside the
+# source it was built from, because that is where bro looks for it — and big:
+# a three.js app is tens of megabytes. tests/bronze_host/lib.sh rebuilds these
+# on demand, and a committed one would go stale invisibly against an ABI change.
+app.dll
+app.so
+app.dylib
+app.lib
+app.exp
+app.pdb

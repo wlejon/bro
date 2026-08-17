@@ -146,8 +146,13 @@ void initHeadersFromValue(HostHeaders* self, Value initV) {
     uint64_t keysBits = bronze_object_keys(initV.rawBits());
     Value keysVal(keysBits);
     if (keysVal.isObject()) {
-        auto* keysArr = keysVal.asObject<bronze::ArrayHeader>();
-        uint32_t len = keysArr->length;
+        // Rooted, not held as a raw Value: the loops below allocate on every
+        // iteration (toUtf8 builds a string, getProperty interns a key), and a
+        // collection moves the array out from under an unrooted handle. The
+        // length is read once because it cannot change here, but every element
+        // read goes through the root.
+        ev::Persistent keysRoot(keysVal);
+        uint32_t len = keysVal.asObject<bronze::ArrayHeader>()->length;
         bool isArray = initV.asObject<bronze::HeapObjectHeader>()->flags == bronze::HeapKind::Array;
         if (isArray) {
             for (uint32_t i = 0; i < len; ++i) {
@@ -169,7 +174,11 @@ void initHeadersFromValue(HostHeaders* self, Value initV) {
             }
         } else {
             for (uint32_t i = 0; i < len; ++i) {
-                Value kVal = keysVal.asObject<bronze::ArrayHeader>()->getElem(i);
+                // ev::getElement rather than ArrayHeader::getElem: the latter
+                // is runtime-internal C++, absent from the shared runtime's
+                // export list, and this was the one site in the layer reaching
+                // past the embed API for it.
+                Value kVal = ev::getElement(keysRoot.get(), i);
                 std::string kStr = ev::toUtf8(kVal);
                 Value vVal = ev::getProperty(initRoot.get(), kStr);
                 std::string vStr = (!ev::isUndefined(vVal) && !ev::isNull(vVal)) ? ev::toUtf8(vVal) : "";

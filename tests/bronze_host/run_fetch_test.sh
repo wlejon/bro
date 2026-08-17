@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # Integration check for fetch() in a bronze-compiled app: boot
-# bro-bronze-host-fetch on the app dir under bro-headless's driver,
+# bro-headless on the app dir under bro-headless's driver,
 # and compare what was printed against a committed expectation.
 #
 # Usage:
 #   tests/bronze_host/run_fetch_test.sh
 #
 # Environment:
-#   BRO_BRONZE_HOST_FETCH  path to the bro-bronze-host-fetch executable
+#   BRO_HEADLESS          path to bro-headless (default: found under build/)
+#   BRONZE                path to the bronze CLI (default: found under build/)
 #
 # Building it (see src/bronze_host/README.md for the general sequence):
 #   bronze build tests/bronze_host/apps/fetch_probe.js -o <obj> --emit-obj \
 #       --host-globals src/bronze_host/web_host.globals
 #   cmake -B build -DBRO_WITH_BRONZE=ON -DBRO_BRONZE_APPS="fetch=<obj>"
-#   cmake --build build --config Release --target bro-bronze-host-fetch
+#   cmake --build build --config Release --target bro-headless
 
 set -uo pipefail
 
@@ -21,45 +22,28 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 EXPECTED="$SCRIPT_DIR/expected/fetch_probe.expected"
 
-# The .exe takes Windows paths; git-bash hands out /d/... ones.
-to_win_path() {
-    local p="$1"
-    if [[ "${BIN:-}" == *.exe ]]; then
-        if [[ "$p" =~ ^/mnt/([a-zA-Z])/(.*) ]]; then echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
-        elif [[ "$p" =~ ^/([a-zA-Z])/(.*) ]]; then echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
-        else echo "$p"; fi
-    else
-        echo "$p"
-    fi
+source "$SCRIPT_DIR/lib.sh"
+
+BIN="$(bh_find_bro_headless "$PROJECT_DIR")" || {
+    echo "  SKIP  bronze_host_fetch  (bro-headless not built)"
+    exit 77   # the automake convention for "skipped", not "passed"
 }
 
-BIN=""
-if [[ -n "${BRO_BRONZE_HOST_FETCH:-}" ]]; then
-    BIN="$BRO_BRONZE_HOST_FETCH"
-else
-    for CANDIDATE in \
-        "$PROJECT_DIR/build/Debug/bro-bronze-host-fetch.exe" \
-        "$PROJECT_DIR/build/Release/bro-bronze-host-fetch.exe" \
-        "$PROJECT_DIR/build/bro-bronze-host-fetch" \
-        "$PROJECT_DIR/build-release/bro-bronze-host-fetch" \
-        "$PROJECT_DIR/build-debug/bro-bronze-host-fetch"
-    do
-        [[ -f "$CANDIDATE" ]] && BIN="$CANDIDATE" && break
-    done
-fi
+MODULE="$(bh_ensure_module "$PROJECT_DIR" "$SCRIPT_DIR/appdir_fetch"                            "$SCRIPT_DIR/apps/fetch_probe.js")"
+case $? in
+    0)  ;;
+    77) echo "  SKIP  bronze_host_fetch  (no bronze CLI in this tree)"
+        echo "        Configure with -DBRONZE_WITH_LLVM=ON to build one."
+        exit 77 ;;
+    *)  echo "  FAIL  bronze_host_fetch  (fetch_probe.js did not compile)"
+        exit 1 ;;
+esac
 
-if [[ -z "$BIN" || ! -f "$BIN" ]]; then
-    echo "  SKIP  bronze_host_fetch  (bro-bronze-host-fetch not built)"
-    echo "        Build it: see the header of this script — it needs"
-    echo "        -DBRO_WITH_BRONZE=ON and -DBRO_BRONZE_APPS=\"fetch=<obj>\"."
-    exit 77   # the automake convention for "skipped", not "passed"
-fi
-
-APP_DIR="$(to_win_path "$SCRIPT_DIR/appdir_fetch")"
-DRIVER="$(to_win_path "$SCRIPT_DIR/drive_fetch.js")"
+APP_DIR="$(bh_to_win_path "$SCRIPT_DIR/appdir_fetch")"
+DRIVER="$(bh_to_win_path "$SCRIPT_DIR/drive_fetch.js")"
 
 ERR_FILE="/tmp/bronze_fetch_err.$$"
-RAW="$("$BIN" "$APP_DIR" --headless "$DRIVER" 2>"$ERR_FILE")"
+RAW="$("$BIN" "$APP_DIR" "$DRIVER" 2>"$ERR_FILE")"
 STATUS=$?
 ERR_RAW="$(cat "$ERR_FILE" 2>/dev/null || true)"
 rm -f "$ERR_FILE"

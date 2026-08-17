@@ -27,31 +27,31 @@ Off by default; nothing here is in the default build.
 | `host_image.cpp` | `Image`, and the decode behind `.src` |
 | `host_xhr.cpp` | `XMLHttpRequest` (text over the app asset path; see its header) |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
-| `host_main.cpp` | `bro-bronze-host`: Engine, globals, `runMain()`, frames |
+| `app_module.cpp` | finding, verifying and running the module an app dir carries |
 
-## Two ways a compiled app gets in, and where each is going
+## How a compiled app gets in
 
-**Loaded from the folder** (`app_module.h`) — the app dir carries `app.dll` /
-`app.so` / `app.dylib` beside its `index.html`, and `bro <folder>` or
-`bro-headless <folder>` finds it, checks it and runs it. The stock binaries do
-this; nothing about the build knows the app exists. This is the model.
+The app directory carries `app.dll` / `app.so` / `app.dylib` beside its
+`index.html`, and `bro <folder>` or `bro-headless <folder>` finds it, checks its
+ABI stamp, and runs it (`app_module.h`). The stock binaries do this. Nothing
+about bro's build knows the app exists, which is the point: "another app" is
+another folder, not another build of bro.
 
-**Linked into a host** (`host_main.cpp`) — `bro-bronze-host` is one executable
-per app, produced by naming the app's object file at bro's configure time
-(`BRO_BRONZE_APP_OBJ`, `BRO_BRONZE_APPS`). It is how every check in
-`tests/bronze_host/` still runs, and it is on its way out: a runtime's build
-system has no business enumerating applications, and "another app" should not
-mean another build of bro.
+There used to be a second way — `host_main.cpp` linked one `bro-bronze-host`
+executable per app, with the app named as an object file at bro's configure time
+(`BRO_BRONZE_APP_OBJ`, `BRO_BRONZE_APPS`). It is gone. It existed only because
+every bronze module was a **static** library while the runtime's state is
+process-wide (`rt_state.h`: heap, arena, root shapes, key registry, host-global
+registry, "owned by ONE translation unit") — so a loaded module would have got
+its own heap and its own registry, two collectors neither tracing the other's
+roots. bronze answering that with `bronze_runtime_shared` and `--emit-shared` is
+what let the link-time path be deleted rather than maintained.
 
-It has not been deleted yet because the folder model needs one thing bronze
-does not offer today. Every bronze module is a **static** library and the
-runtime's state is process-wide (`rt_state.h`: heap, arena, root shapes, key
-registry, host-global registry, "owned by ONE translation unit"). A module that
-statically linked the runtime would get its *own* heap and its *own* registry —
-two collectors, neither tracing the other's roots. So a loadable app needs
-bronze's runtime to be a **shared** library that host and module both import.
-Until then the loader is real and tested (`tests/bronze_host/run_loader_test.sh`)
-but has nothing genuine to load.
+Which is why this layer links `bronze::runtime_shared` and must never also link
+`bronze::embed` + `bronze::runtime`: the static archives would put that second
+heap right back, and the failure would not be a link error but a value quietly
+collected out from under the module. `embed` lives inside the shared image, so
+one target supplies both halves.
 
 What the loader already does *not* need from bronze is the safety check, because
 bronze built it first: the ABI fingerprint is the first 32 bits of
@@ -204,45 +204,38 @@ root when bro's configure didn't set one).
 ## Compile and run an app
 
 ```bash
-# 1. compile a fixture to an OBJECT against the manifest (bronze repo, bronze CLI)
-bronze build src/bronze_host/fixtures/main_scenegraph.js \
-    -o /tmp/app.obj \
-    --emit-obj \
-    --host-globals src/bronze_host/web_host.globals
+# 1. compile the app to a MODULE, into the app directory that will carry it
+bronze build src/bronze_host/fixtures/main_scenegraph.js     -o src/bronze_host/fixtures/appdir/app.dll     --emit-shared     --host-globals src/bronze_host/web_host.globals
 
-# 2. link it into the host executable
-cmake -B build -DBRO_WITH_BRONZE=ON -DBRO_BRONZE_APP_OBJ=/tmp/app.obj
-cmake --build build --config Release --target bro-bronze-host
+# 2. there is no step 2 — the stock binaries load it
+./build/Release/bro          src/bronze_host/fixtures/appdir
+./build/Release/bro-headless src/bronze_host/fixtures/appdir -e "advanceTime(128)"
+./build/Release/bro-headless src/bronze_host/fixtures/appdir drive.js
+```
 
-# 3a. run it windowed against the minimal fixture app dir
-./build/Release/bro-bronze-host src/bronze_host/fixtures/appdir
+A tree configured with `-DBRONZE_WITH_LLVM=ON` (bro's default for a fresh cache)
+builds that compiler itself, as `build/Release/bronze.exe`. Under a multi-config
+generator the CLI cannot find the shared runtime's import library on its own —
+it searches `shared/` beside and above itself, and MSBuild puts the library one
+level deeper in `shared/<Config>/` — so pass it:
 
-# 3b. or headless for a fixed number of frames, which is what the check does
-./build/Release/bro-bronze-host src/bronze_host/fixtures/appdir --headless --frames 8
-
-# 3c. or headless under a driver script — bro-headless, scripting THIS app
-./build/Release/bro-bronze-host src/bronze_host/fixtures/appdir --headless drive.js
+```bash
+BRONZE_SHARED_RT_LIB=$PWD/build/shared/Release/bronze_runtime_shared.lib     ./build/Release/bronze.exe build ...
 ```
 
 ### More than one app in one tree
 
-`BRO_BRONZE_APP_OBJ` names *the* app and builds `bro-bronze-host`.
-`BRO_BRONZE_APPS` is a semicolon list of `name=objpath` pairs, each building
-`bro-bronze-host-<name>`, and the two live side by side — the pinned check
-names `bro-bronze-host` and must keep finding exactly that binary:
+Two directories. There is nothing to configure, no target to add, and no limit:
+bro's build does not enumerate applications any more than a browser's build
+enumerates web pages. `tests/bronze_host/lib.sh` is worth reading as the worked
+example — it compiles a probe into its app dir on demand and rebuilds it when
+the module is older than either the probe or the compiler.
 
-```bash
-cmake -B build -DBRO_WITH_BRONZE=ON \
-    -DBRO_BRONZE_APP_OBJ=/tmp/scenegraph.obj \
-    -DBRO_BRONZE_APPS="events=/tmp/events.obj;lit=/tmp/lit.obj"
-cmake --build build --target bro-bronze-host-events
-```
-
-Every one of them is the same `host_main.cpp` linked against a different
-object, because that is what "another app" is here. A pair with no `=`, an
-empty half, a path that does not exist, or a name used twice is a configure
-error naming the pair: a mistyped one would otherwise become a missing target,
-and "the app is broken" would read exactly like "the app was never built".
+`--emit-shared` links the module against bronze's **shared** runtime, so host
+and module share one heap; it exports exactly three names, all derived from the
+entry: `bronze_main`, `bronze_object_abi_fingerprint` and
+`bronze_main_host_globals`. `--emit-obj` still exists for a host that links an
+app in, which bro no longer does.
 
 `--emit-obj` is what makes step 1 stop before linking: the object is destined
 for **bro's** toolchain, and linking belongs to whoever owns the final binary.
@@ -254,17 +247,17 @@ The app object must export `bronze_main` (bronze's entry convention);
 `installWebHostGlobals` runs before `bronze::embed::runMain()`, and the frame
 loop then drives everything the app scheduled.
 
-## Driving a compiled app from a script (3c above)
+## Driving a compiled app from a script
 
-`--headless` **without** `--frames` is bro-headless
-(`engine/headless_driver.h`), not a second driver: the same argument parsing,
-the same script / `-e` / REPL modes, and the same globals
-[docs/headless.md](../../docs/headless.md) documents.
+There is no separate driver and no separate mode: bro-headless
+(`engine/headless_driver.h`) loads a compiled app exactly as it loads an
+interpreted one, with the same argument parsing, the same script / `-e` / REPL
+modes and the same globals [docs/headless.md](../../docs/headless.md) documents.
 
 ```bash
-bro-bronze-host <appdir> --headless script.js          # run a script, then exit
-bro-bronze-host <appdir> --headless -e "advanceTime(500)" -e "screenshot('out.png')"
-bro-bronze-host <appdir> --headless                    # interactive REPL
+bro-headless <appdir> script.js                      # run a script, then exit
+bro-headless <appdir> -e "advanceTime(500)" -e "screenshot('out.png')"
+bro-headless <appdir>                                # interactive REPL
 ```
 
 The compiled app has no JS realm — but the **Engine** does, because it still
@@ -289,27 +282,9 @@ seam this rides on is `HeadlessHooks::afterEngine`, which runs the host-globals
 install and `runMain()` at the point an interpreted app's own JS would have
 just finished.
 
-`--headless --frames N` is unchanged and stays a separate mode: it is the one
-`tests/bronze_host/` pins, and it must not depend on a script existing.
-
-### Building the object as part of the bro build
-
-Off by default, and it stays that way — a build that shells out to another
-compiler should never be something you acquire by configuring bro:
-
-```bash
-cmake -B build -DBRO_WITH_BRONZE=ON \
-    -DBRO_BRONZE_BUILD_APP=ON \
-    -DBRO_BRONZE_APP_SOURCE=src/bronze_host/fixtures/main_scenegraph.js
-cmake --build build --target bro-bronze-host
-```
-
-That runs exactly the command in step 1 above, so the two cannot drift. It makes
-the bronze CLI a build dependency of `bro-bronze-host` and recompiles the app
-whenever the source or the manifest changes. `BRO_BRONZE_BUILD_APP=ON` and
-`BRO_BRONZE_APP_OBJ` are mutually exclusive: one compiles the app here, the
-other adopts an object someone else compiled, and a configure that accepted both
-would silently pick a winner.
+Frame counts come from the driver — `advanceTime(n)` over the virtual clock —
+rather than from a `--frames` flag, because the retired per-app host owned its
+own main loop and bro-headless is driven from JS.
 
 ## Test Fixtures vs Real Applications
 

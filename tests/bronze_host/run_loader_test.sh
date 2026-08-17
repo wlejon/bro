@@ -214,7 +214,10 @@ check "no entry point" "$OUT/noentry$EXT" 'exports no bronze_main'
 
 # Success: host globals installed, the compiled top level called.
 check "loads and runs" "$OUT/good$EXT" 'LOADER: bronze_main called'
-check "success is logged" "$OUT/good$EXT" "(bronze ABI $FP)"
+# Trailing comma, not a closing paren: the success line goes on to name the
+# host-globals manifest the module declared, and pinning the whole line would
+# make this check fail every time that list is worded differently.
+check "success is logged" "$OUT/good$EXT" "(bronze ABI $FP,"
 
 echo "  PASS  $NAME"
 exit 0

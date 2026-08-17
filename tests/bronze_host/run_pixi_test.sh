@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
 # Integration check for a Pixi.js sprite app in a bronze-compiled app:
-# boot bro-bronze-host-pixi on appdir_pixi under bro-headless's driver, and compare
+# boot bro-headless on appdir_pixi under bro-headless's driver, and compare
 # what was printed against a committed expectation.
 #
 # Usage:
 #   tests/bronze_host/run_pixi_test.sh
 #
 # Environment:
-#   BRO_BRONZE_HOST_PIXI  path to the bro-bronze-host-pixi executable
+#   BRO_HEADLESS          path to bro-headless (default: found under build/)
+#   BRONZE                path to the bronze CLI (default: found under build/)
 #
 # Building it (see src/bronze_host/README.md for the general sequence):
 #   bronze build tests/bronze_host/apps/pixi_sprites_probe.js -o <obj> --emit-obj \
 #       --host-globals src/bronze_host/web_host.globals
 #   cmake -B build -DBRO_WITH_BRONZE=ON -DBRO_BRONZE_APPS="pixi=<obj>"
-#   cmake --build build --config Release --target bro-bronze-host-pixi
+#   cmake --build build --config Release --target bro-headless
 
 set -uo pipefail
 
@@ -21,46 +22,29 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 EXPECTED="$SCRIPT_DIR/expected/pixi_sprites_probe.expected"
 
-# The .exe takes Windows paths; git-bash hands out /d/... ones.
-to_win_path() {
-    local p="$1"
-    if [[ "${BIN:-}" == *.exe ]]; then
-        if [[ "$p" =~ ^/mnt/([a-zA-Z])/(.*) ]]; then echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
-        elif [[ "$p" =~ ^/([a-zA-Z])/(.*) ]]; then echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
-        else echo "$p"; fi
-    else
-        echo "$p"
-    fi
+source "$SCRIPT_DIR/lib.sh"
+
+BIN="$(bh_find_bro_headless "$PROJECT_DIR")" || {
+    echo "  SKIP  bronze_host_pixi  (bro-headless not built)"
+    exit 77   # the automake convention for "skipped", not "passed"
 }
 
-BIN=""
-if [[ -n "${BRO_BRONZE_HOST_PIXI:-}" ]]; then
-    BIN="$BRO_BRONZE_HOST_PIXI"
-else
-    for CANDIDATE in \
-        "$PROJECT_DIR/build/Debug/bro-bronze-host-pixi.exe" \
-        "$PROJECT_DIR/build/Release/bro-bronze-host-pixi.exe" \
-        "$PROJECT_DIR/build/bro-bronze-host-pixi" \
-        "$PROJECT_DIR/build-release/bro-bronze-host-pixi" \
-        "$PROJECT_DIR/build-debug/bro-bronze-host-pixi"
-    do
-        [[ -f "$CANDIDATE" ]] && BIN="$CANDIDATE" && break
-    done
-fi
+MODULE="$(bh_ensure_module "$PROJECT_DIR" "$SCRIPT_DIR/appdir_pixi"                            "$SCRIPT_DIR/apps/pixi_sprites_probe.js")"
+case $? in
+    0)  ;;
+    77) echo "  SKIP  bronze_host_pixi  (no bronze CLI in this tree)"
+        echo "        Configure with -DBRONZE_WITH_LLVM=ON to build one."
+        exit 77 ;;
+    *)  echo "  FAIL  bronze_host_pixi  (pixi_sprites_probe.js did not compile)"
+        exit 1 ;;
+esac
 
-if [[ -z "$BIN" || ! -f "$BIN" ]]; then
-    echo "  SKIP  bronze_host_pixi  (bro-bronze-host-pixi not built)"
-    echo "        Build it: see the header of this script — it needs"
-    echo "        -DBRO_WITH_BRONZE=ON and -DBRO_BRONZE_APPS=\"pixi=<obj>\"."
-    exit 77   # the automake convention for "skipped", not "passed"
-fi
-
-APP_DIR="$(to_win_path "$SCRIPT_DIR/appdir_pixi")"
-DRIVER="$(to_win_path "$SCRIPT_DIR/drive_pixi.js")"
+APP_DIR="$(bh_to_win_path "$SCRIPT_DIR/appdir_pixi")"
+DRIVER="$(bh_to_win_path "$SCRIPT_DIR/drive_pixi.js")"
 
 rm -f pixi_before.png pixi_after.png
 
-RAW="$("$BIN" "$APP_DIR" --headless "$DRIVER" 2>&1)"
+RAW="$("$BIN" "$APP_DIR" "$DRIVER" 2>&1)"
 STATUS=$?
 
 CLEAN="$(printf '%s\n' "$RAW" | tr -d '\r')"

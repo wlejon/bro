@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Integration check for event dispatch into a bronze-compiled app: boot
-# bro-bronze-host-events on the hybrid app dir under bro-headless's driver,
+# bro-headless on the hybrid app dir under bro-headless's driver,
 # and compare what the two worlds printed against a committed expectation.
 #
 # WHY A SECOND SCRIPT AND NOT A SECOND MODE OF THE FIRST. The subject is a
 # different executable: run_bronze_host_test.sh pins `bro-bronze-host`, the
 # scene-graph app, in the fixed-frame mode that needs no script. This one pins
-# `bro-bronze-host-events`, the events probe, under a DRIVER script — which is
+# `bro-headless`, the events probe, under a DRIVER script — which is
 # the only mode that can produce a click. Same layer, two binaries, and the
 # multi-app CMake surface (BRO_BRONZE_APPS) exists so both can be in one tree
 # at once. Everything else here follows run_bronze_host_test.sh: exit 0 pass,
@@ -26,13 +26,14 @@
 #   tests/bronze_host/run_events_test.sh
 #
 # Environment:
-#   BRO_BRONZE_HOST_EVENTS  path to the bro-bronze-host-events executable
+#   BRO_HEADLESS          path to bro-headless (default: found under build/)
+#   BRONZE                path to the bronze CLI (default: found under build/)
 #
 # Building it (see src/bronze_host/README.md for the general sequence):
 #   bronze build tests/bronze_host/apps/events_probe.js -o <obj> --emit-obj \
 #       --host-globals src/bronze_host/web_host.globals
 #   cmake -B build -DBRO_WITH_BRONZE=ON -DBRO_BRONZE_APPS="events=<obj>"
-#   cmake --build build --config Release --target bro-bronze-host-events
+#   cmake --build build --config Release --target bro-headless
 
 set -uo pipefail
 
@@ -40,45 +41,28 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 EXPECTED="$SCRIPT_DIR/expected/events_probe.expected"
 
-# The .exe takes Windows paths; git-bash hands out /d/... ones.
-to_win_path() {
-    local p="$1"
-    if [[ "${BIN:-}" == *.exe ]]; then
-        if [[ "$p" =~ ^/mnt/([a-zA-Z])/(.*) ]]; then echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
-        elif [[ "$p" =~ ^/([a-zA-Z])/(.*) ]]; then echo "${BASH_REMATCH[1]}:/${BASH_REMATCH[2]}"
-        else echo "$p"; fi
-    else
-        echo "$p"
-    fi
+source "$SCRIPT_DIR/lib.sh"
+
+BIN="$(bh_find_bro_headless "$PROJECT_DIR")" || {
+    echo "  SKIP  bronze_host_events  (bro-headless not built)"
+    exit 77   # the automake convention for "skipped", not "passed"
 }
 
-BIN=""
-if [[ -n "${BRO_BRONZE_HOST_EVENTS:-}" ]]; then
-    BIN="$BRO_BRONZE_HOST_EVENTS"
-else
-    for CANDIDATE in \
-        "$PROJECT_DIR/build/Debug/bro-bronze-host-events.exe" \
-        "$PROJECT_DIR/build/Release/bro-bronze-host-events.exe" \
-        "$PROJECT_DIR/build/bro-bronze-host-events" \
-        "$PROJECT_DIR/build-release/bro-bronze-host-events" \
-        "$PROJECT_DIR/build-debug/bro-bronze-host-events"
-    do
-        [[ -f "$CANDIDATE" ]] && BIN="$CANDIDATE" && break
-    done
-fi
+MODULE="$(bh_ensure_module "$PROJECT_DIR" "$SCRIPT_DIR/appdir_events"                            "$SCRIPT_DIR/apps/events_probe.js")"
+case $? in
+    0)  ;;
+    77) echo "  SKIP  bronze_host_events  (no bronze CLI in this tree)"
+        echo "        Configure with -DBRONZE_WITH_LLVM=ON to build one."
+        exit 77 ;;
+    *)  echo "  FAIL  bronze_host_events  (events_probe.js did not compile)"
+        exit 1 ;;
+esac
 
-if [[ -z "$BIN" || ! -f "$BIN" ]]; then
-    echo "  SKIP  bronze_host_events  (bro-bronze-host-events not built)"
-    echo "        Build it: see the header of this script — it needs"
-    echo "        -DBRO_WITH_BRONZE=ON and -DBRO_BRONZE_APPS=\"events=<obj>\"."
-    exit 77   # the automake convention for "skipped", not "passed"
-fi
-
-APP_DIR="$(to_win_path "$SCRIPT_DIR/appdir_events")"
-DRIVER="$(to_win_path "$SCRIPT_DIR/drive_events.js")"
+APP_DIR="$(bh_to_win_path "$SCRIPT_DIR/appdir_events")"
+DRIVER="$(bh_to_win_path "$SCRIPT_DIR/drive_events.js")"
 
 ERR_FILE="/tmp/bronze_events_err.$$"
-RAW="$("$BIN" "$APP_DIR" --headless "$DRIVER" 2>"$ERR_FILE")"
+RAW="$("$BIN" "$APP_DIR" "$DRIVER" 2>"$ERR_FILE")"
 STATUS=$?
 ERR_RAW="$(cat "$ERR_FILE" 2>/dev/null || true)"
 rm -f "$ERR_FILE"

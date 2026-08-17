@@ -7,27 +7,17 @@
 
 #include "util/log.h"
 
-#include "runtime/gc.h"
-#include "runtime/microtask.h"
+#include "embed/embed.h"
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <dlfcn.h>
-#endif
-
-// Published PUBLIC on bronze's `abi` target from the SHA-256 of
-// bronze_abi.h (src/abi/CMakeLists.txt), so this file and the runtime read
-// one value from one place. Compiling without it means the definition
-// plumbing broke, and a comparison against a fingerprint that silently
-// defaulted would be worse than no comparison at all — the same reasoning
-// bronze's own abi_guard.cpp applies to itself.
-#ifndef BRONZE_ABI_FINGERPRINT
-#error "BRONZE_ABI_FINGERPRINT is not defined - bro_bronze_host must link bronze::abi (transitively via bronze::runtime)"
 #endif
 
 namespace bro::bronze_host {
@@ -47,11 +37,16 @@ constexpr const char* kModuleName = "app.dylib";
 constexpr const char* kModuleName = "app.so";
 #endif
 
-// Symbols the module must export. Both come from bronze: codegen stamps the
-// fingerprint into every emitted object, and `bronze_main` is the entry
-// convention src/rt/rt.cpp established.
+// Symbols the module must export. bronze_abi.h's "loadable-module surface"
+// names three, all derived from the module's entry symbol; bro compiles apps
+// with the DEFAULT entry, whose stamp keeps the historical spelling
+// `bronze_object_abi_fingerprint` rather than `bronze_main_abi_fingerprint`.
+// The third, `<entry>_host_globals`, is the manifest the module was compiled
+// against — read below only to report it, because bro registers its globals
+// across a dozen call sites and has no single list to diff against yet.
 constexpr const char* kFingerprintSymbol = "bronze_object_abi_fingerprint";
 constexpr const char* kEntrySymbol = "bronze_main";
+constexpr const char* kGlobalsSymbol = "bronze_main_host_globals";
 
 using ModuleHandle = void*;
 
@@ -102,6 +97,34 @@ void* moduleSymbol(ModuleHandle handle, const char* name) {
 #endif
 }
 
+// The `<entry>_host_globals` manifest: a uint32 count, then that many
+// NUL-terminated UTF-8 names back to back (bronze_abi.h, "the loadable-module
+// surface"). A module compiled with no manifest still exports the symbol with
+// count 0, so absence means "not a bronze module" and never "no globals".
+//
+// Reported, not yet enforced. Enforcing it means diffing against the names bro
+// actually registered, and those go in from a dozen call sites in
+// dom_globals.cpp and host_platform.cpp with no list to consult; recording
+// them is a separate change. Until then this turns "the app died reading some
+// global" into a log line naming what the app was promised.
+std::string describeGlobals(ModuleHandle handle) {
+    const auto* base = static_cast<const unsigned char*>(moduleSymbol(handle, kGlobalsSymbol));
+    if (!base) return "none declared (module predates the manifest symbol)";
+
+    uint32_t count = 0;
+    std::memcpy(&count, base, sizeof(count));
+    if (count == 0) return "none";
+
+    std::string out;
+    const char* cursor = reinterpret_cast<const char*>(base + sizeof(count));
+    for (uint32_t i = 0; i < count; ++i) {
+        if (i) out += ", ";
+        out += cursor;
+        cursor += std::strlen(cursor) + 1;
+    }
+    return out;
+}
+
 // --- Reporting ------------------------------------------------------------
 
 // Every refusal path logs and returns the same sentence, so the log and the
@@ -147,7 +170,12 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
                           "the bronze CLI.");
     }
 
-    constexpr uint32_t kRuntimeAbi = static_cast<uint32_t>(BRONZE_ABI_FINGERPRINT);
+    // Asked of the runtime rather than read from BRONZE_ABI_FINGERPRINT: with
+    // a shared runtime the macro is what BRO was compiled against, and the
+    // library answering the module's calls is the one whose value has to
+    // match. The two agree in a tree built together — but the whole purpose of
+    // a stamp is the case where something has been swapped.
+    const uint32_t kRuntimeAbi = bronze::embed::abiFingerprint();
     if (*moduleAbi != kRuntimeAbi) {
         char buf[320];
         std::snprintf(buf, sizeof(buf),
@@ -171,24 +199,26 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
                           "than as an app entry point.");
     }
 
+    // Read before the program runs, so a failure inside it has the list above
+    // it in the log rather than below.
+    const std::string globals = describeGlobals(handle);
+
     // Globals BEFORE the program: its top level reads them as it runs.
     installWebHostGlobals(engine);
 
-    // What bronze::embed::runMain() does for a linked object, with the entry
-    // point resolved by name. Kept in the same order and for the same reasons
-    // (embed_run.cpp): a root frame around the top level so Rooted<> handles
-    // inside runtime helpers have somewhere to register, and the microtask
-    // checkpoint after it, because a program whose top level queued a job has
-    // not finished running until the job has. The ABI check that opens
-    // runMain has already happened above, against the module's exported stamp
-    // instead of a linked constant.
-    {
-        bronze::ShadowStackFrame rootFrame;
-        entry();
-        bronze::runtime::rtDrainMicrotasks();
-    }
+    // The root frame around the top level and the microtask checkpoint after
+    // it, which a program whose top level queued a job needs before it can be
+    // called finished. Both belong to bronze — `runEntry` is `runMain` with
+    // the entry passed in rather than linked — and calling it is not a style
+    // choice: `ShadowStackFrame` and `rtDrainMicrotasks` are runtime-internal
+    // C++, absent from the shared runtime's export list, so open-coding the
+    // sequence does not link at all. The ABI check that opens runMain has
+    // already happened above, against the module's exported stamp instead of a
+    // linked constant.
+    bronze::embed::runEntry(entry);
 
-    LOG_INFO("compiled app: %s (bronze ABI %08x)", modulePath.c_str(), kRuntimeAbi);
+    LOG_INFO("compiled app: %s (bronze ABI %08x, host globals: %s)", modulePath.c_str(),
+             kRuntimeAbi, globals.c_str());
     return AppModuleResult{AppModuleStatus::Ran, {}};
 }
 

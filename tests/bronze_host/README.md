@@ -1,10 +1,9 @@
 # bronze_host integration checks
 
-Eight checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip (the
-binary is not built).
+Eight checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip.
 
 ```bash
-tests/bronze_host/run_loader_test.sh        # the folder loader, on STOCK bro-headless
+tests/bronze_host/run_loader_test.sh        # the folder loader itself
 tests/bronze_host/run_bronze_host_test.sh   # the scene graph, a fixed frame count
 tests/bronze_host/run_events_test.sh        # events, under a driver script
 tests/bronze_host/run_fetch_test.sh         # fetch, under a driver script
@@ -14,41 +13,37 @@ tests/bronze_host/run_instanced_test.sh     # instanced mesh under load (2,500 i
 tests/bronze_host/run_pixi_test.sh          # pixi.js v8: WebGL sprites + pixel readback
 ```
 
-`run_loader_test.sh` is the odd one out and the only one that will survive
-unchanged: its subject is `src/bronze_host/app_module.h` — the compiled module
-an app *directory* carries — so it runs the **stock** `bro-headless`, the same
-binary every other test in `tests/` uses, against synthetic modules it builds
-itself. The other seven each pin their own `bro-bronze-host-<app>` executable,
-which is the arrangement the folder model exists to replace.
+**All eight run the stock `bro-headless`** — the same binary every other test in
+`tests/` uses. Each one's app is a directory carrying a compiled `app.dll` /
+`app.so` / `app.dylib`, which `lib.sh` builds on demand with the bronze CLI and
+rebuilds whenever the module is older than its probe **or than the compiler**
+(a module carries the ABI stamp of the bronze that emitted it, so a rebuilt
+runtime invalidates every module in the tree without any `.js` changing).
 
-The remaining seven pin different executables, which is why they are separate
-scripts. The first boots `bro-bronze-host` headless, advances a fixed number of frames, and
-compares the compiled app's output against
-`expected/main_scenegraph.expected` line for line. The second boots
-`bro-bronze-host-events` under bro-headless's driver — the only mode that can
-produce a click — and compares both worlds' output against
-`expected/events_probe.expected`. The third boots `bro-bronze-host-fetch` under
-the headless driver and checks `expected/fetch_probe.expected`. The fourth boots
-`bro-bronze-host-wild` under the headless driver for a full Three.js scene with
-textures and OrbitControls. The fifth boots `bro-bronze-host-instanced` under
-the headless driver to test high-density `InstancedMesh` matrix and color updates
-under load. The sixth boots `bro-bronze-host-pixi`: the unmodified pixi.js
-v8.19.0 bundle (vendored in bronze, `tests/oracle/pixi/`) initializes a WebGL
-`Application` on a host canvas, renders a tinted sprite through pixi's batcher
-— shader compilation included, via the app's CSP/AOT uniform-sync polyfills
-(the `@pixi/unsafe-eval` approach, inlined) — and proves the pixels with
-`gl.readPixels`. The seventh boots `bro-bronze-host-dom` — no driver, because
-the probe needs no input — and takes the ELEMENT surface apart: identity
-through four different lookups, `children` as a real array, tree edits,
-classList, inline and computed style, form controls, and geometry read from an
-element appended in the same turn that measures it. The multi-app CMake surface
-(`BRO_BRONZE_APPS`, `src/bronze_host/README.md`) exists so one configured tree
-can hold all of them.
+This used to be seven executables — `bro-bronze-host`, `bro-bronze-host-dom`,
+one per app, each `host_main.cpp` linked against a different object file — plus
+the CMake surface that enumerated them. That is what the folder model replaced,
+and the seven scripts' identical copies of "find my binary" became one `lib.sh`.
+
+A check skips rather than fails when `bro-headless` is absent, or when the tree
+has no bronze CLI (`-DBRONZE_WITH_LLVM=OFF`) and no already-built module. Skip
+stays distinct from failure on purpose: "this tree cannot build the subject" and
+"the subject is broken" must never read the same.
+
+## Why these are not in `tests/run_tests.sh`
+
+The suite discovers `test_*.js` and evaluates each through `bro-headless`. A
+compiled app has no JS realm to evaluate anything in — the app is machine code,
+and what the driver scripts here script is the *engine's* realm beside it. The
+second reason has now expired: the binaries used to be absent from every default
+build, and they no longer are, since the binary is just `bro-headless`. What is
+still conditional is the compiler needed to produce a module, which is what the
+77 is for.
 
 ## What it actually proves
 
 The subject is `src/bronze_host/app/main_scenegraph.js` compiled to machine code
-by bronze and linked into `bro-bronze-host`. Getting one matching line out of it
+by bronze into the module `fixtures/appdir` carries. Getting one matching line out of it
 requires every seam in the layer to be right at once:
 
 - the compiled program's reads of `document`, `window`, `requestAnimationFrame`,
@@ -74,7 +69,7 @@ A wrong answer on any of them moves or removes a line.
 ## What the events check proves
 
 Its subject is `apps/events_probe.js` compiled to machine code, linked into
-`bro-bronze-host-events`, booted on `appdir_events/` — a **hybrid** app dir: a
+`appdir_events/app.dll` — a **hybrid** app dir: a
 `bro.json` with `"compiled": true`, and an `index.html` whose own `<script>` is
 interpreted UI JS running beside the compiled program. `drive_events.js` is the
 driver. Three programs, two languages, one Engine, one DOM, one thread.
@@ -116,49 +111,21 @@ The GL query in the app prints a boolean for the same reason from the other
 direction: `MAX_TEXTURE_SIZE` is the driver's number, so what is pinned is that
 the context answered at all.
 
-## Why it is not in `tests/run_tests.sh`
 
-Two reasons, and either alone would be enough:
+## Building the modules by hand
 
-1. The suite discovers `test_*.js` and evaluates each through `bro-headless`.
-   There is no JS realm here to evaluate anything in — the app is a linked
-   object file with no scripting surface.
-2. `bro-bronze-host` does not exist unless somebody configured
-   `-DBRO_WITH_BRONZE=ON` and supplied an app object. Auto-discovering a check
-   whose binary is absent from every default build makes "missing" and "broken"
-   the same result.
-
-The events check is not in the suite for reason 2 alone — its driver *is* JS,
-but its binary is just as absent from a default build.
-
-## Getting the binaries
-
-`src/bronze_host/README.md` has the sequence: compile the app with bronze's
-`--emit-obj --host-globals`, configure bro with `-DBRO_WITH_BRONZE=ON`, build.
-Both at once, from the bro tree, with `<bronze>` the sibling bronze checkout's
-CLI:
+`lib.sh` does this automatically; it is written out here because a check that
+compiles its own subject should not be the only description of how.
 
 ```bash
-<bronze> build src/bronze_host/app/main_scenegraph.js -o build/scenegraph.obj \
-    --emit-obj --host-globals src/bronze_host/web_host.globals
-<bronze> build tests/bronze_host/apps/events_probe.js -o build/events.obj \
-    --emit-obj --host-globals src/bronze_host/web_host.globals
-<bronze> build tests/bronze_host/apps/fetch_probe.js -o build/fetch.obj \
-    --emit-obj --host-globals src/bronze_host/web_host.globals
-<bronze> build tests/bronze_host/apps/dom_probe.js -o build/dom.obj \
-    --emit-obj --host-globals src/bronze_host/web_host.globals
-<bronze> build tests/bronze_host/apps/wild_orbit_probe.js -o build/wild.obj \
-    --emit-obj --host-globals src/bronze_host/web_host.globals
-<bronze> build tests/bronze_host/apps/instanced_mesh_probe.js -o build/instanced.obj \
-    --emit-obj --host-globals src/bronze_host/web_host.globals
-
-cmake -B build -DBRO_WITH_BRONZE=ON \
-    -DBRO_BRONZE_APP_OBJ=$PWD/build/scenegraph.obj \
-    -DBRO_BRONZE_APPS="events=$PWD/build/events.obj;fetch=$PWD/build/fetch.obj;dom=$PWD/build/dom.obj;wild=$PWD/build/wild.obj;instanced=$PWD/build/instanced.obj"
-cmake --build build --config Release \
-    --target bro-bronze-host bro-bronze-host-events bro-bronze-host-fetch bro-bronze-host-dom bro-bronze-host-wild bro-bronze-host-instanced
+BRONZE_SHARED_RT_LIB=$PWD/build/shared/Release/bronze_runtime_shared.lib ./build/Release/bronze.exe build tests/bronze_host/apps/dom_probe.js     -o tests/bronze_host/appdir_dom/app.dll     --emit-shared --host-globals src/bronze_host/web_host.globals
 ```
 
-Re-running any check after editing its `.js` means recompiling that object
-and relinking its executable — the app is the linked object, so nothing else
-notices the edit.
+`BRONZE_SHARED_RT_LIB` is needed under a multi-config generator: bronze searches
+`shared/` beside and above the CLI, and MSBuild writes the import library one
+level deeper, in `shared/<Config>/`.
+
+Two of the probes are slow to compile — `instanced_mesh_probe.js` takes minutes
+and gigabytes, and `pixi_sprites_probe.js` more of both, while `dom_probe.js`
+takes about three seconds. The modules are build output and are not committed,
+so a first run of those two checks pays that cost.
