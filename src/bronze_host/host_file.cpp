@@ -706,7 +706,10 @@ void installFileGlobals() {
     // cannot be spelled any other way — createObjectURL is why this family
     // exists — while the constructor has an exact standard equivalent in
     // `URL.parse`, which is a real 2024 addition to the web platform and
-    // answers null instead of throwing. bronze-requirements.md carries the ask.
+    // answers null instead of throwing. What would close it on the bronze side
+    // is a way to hang a property on a function value at all — an
+    // `embed::setStatic`, or the general `construct` that would also let a host
+    // build the constructor itself.
     ObjectBuilder ns;
     ns.set("createObjectURL", makeCreateObjectURL());
     ns.set("revokeObjectURL", makeRevokeObjectURL());

@@ -468,8 +468,12 @@ node wrapper routinely outlives the document wrapper it came from
 line) where the web keeps the document alive through the node — and since
 registry entries are themselves never freed, rooting the document from a node
 would pin it forever anyway. The cost is a `Document` husk per parse, which is
-real for an app that parses every frame; `bronze-requirements.md` carries what
-would make the finalizer safe.
+real for an app that parses every frame. Two things would make the finalizer
+safe: `~Document` firing the freed-node observer list (a small bro fix — the
+list exists in `dom/document.h` for exactly this kind of wrapper layer, and
+nothing fires it, so every registry entry for one of that document's nodes
+would be left pointing into released storage), and a registry entry that can be
+released at all, which wants a finalizer able to make embed calls.
 
 **Appending a parsed node into the live tree adopts it**, and that step moved
 into `Node::appendChild` / `Node::insertBefore` (`src/dom/element.cpp`) to make
@@ -543,7 +547,7 @@ are not known in advance, so it needs a PROPERTY TRAP, and the embed API has
 none. Everything else about it can be faked; `el.dataset.newKey = 'v'` cannot,
 and a dataset that silently drops that write is worse than no dataset at all.
 `getAttribute('data-k')` / `setAttribute` are the whole surface until a host
-can build one. `bronze-requirements.md` carries the ask.
+can build one.
 
 What is missing is now only the REACH. bronze grew a real `Proxy` with the 10.5
 essential invariants, and those checks read the target and never call a trap —

@@ -21,7 +21,8 @@
 // TWO SHAPES THE WEB HAS THAT THIS CANNOT. `AbortSignal.abort()` and
 // `AbortSignal.timeout()` are statics on a constructor, and a host cannot put a
 // property on a function value — both routes abort the process rather than
-// throwing (bronze-requirements.md §3). So `AbortSignal` is a plain namespace
+// throwing — see the same note in host_file.cpp, where `URL` pays it too. So
+// `AbortSignal` is a plain namespace
 // object here. That costs less than it did for URL: `new AbortSignal()` is
 // illegal on the web anyway, so the only thing lost is `x instanceof
 // AbortSignal`, which is false for every host object in this layer already.

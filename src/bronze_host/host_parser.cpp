@@ -42,7 +42,10 @@
 // the parsed document and into the live one (dom/element.cpp), so what is
 // retained is the husk and whatever the app did not want; and parsing is
 // normally a startup or a per-interaction act rather than a per-frame one.
-// bronze-requirements.md records the shape of the fix.
+// The fix wants `~Document` to fire the freed-node observer list (which exists
+// in dom/document.h for a wrapper layer that is not the JS realm, and which
+// nothing fires today) plus a registry entry that can actually be released;
+// src/bronze_host/README.md carries both halves.
 //
 // ADOPTION IS WHAT MAKES THE RESULT USABLE. `liveEl.appendChild(parsed)` has to
 // move `parsed` out of the parser document's ownership, or the live tree ends
