@@ -322,7 +322,8 @@ void installPlatformGlobals() {
              "Element", "HTMLElement", "HTMLInputElement", "HTMLSelectElement",
              "HTMLTextAreaElement", "HTMLVideoElement", "HTMLMediaElement",
              "HTMLAnchorElement", "HTMLDivElement", "Text", "CharacterData",
-             "Comment", "DocumentFragment",
+             "Comment", "DocumentFragment", "Gamepad", "GamepadButton",
+             "GamepadEvent",
          }) {
         ev::registerGlobal(name, makeInterfaceValue(name));
     }

@@ -127,9 +127,10 @@ bh_ensure_module() {
         return 77
     }
 
+    export BRONZE_SHARED_RT_LIB="$(bh_to_win_path "$rtlib")"
+    export WSLENV="${WSLENV:-}${WSLENV:+:}BRONZE_SHARED_RT_LIB"
     local log
-    log="$(BRONZE_SHARED_RT_LIB="$(bh_to_win_path "$rtlib")" \
-           "$bronze" build "$(bh_to_win_path "$probe")" \
+    log="$("$bronze" build "$(bh_to_win_path "$probe")" \
                 -o "$(bh_to_win_path "$module")" \
                 --emit-shared \
                 --host-globals "$(bh_to_win_path "$project_dir/src/bronze_host/web_host.globals")" 2>&1)" || {

@@ -331,6 +331,10 @@ void installElementCore(ObjectBuilder& b, dom::Element* el);
 Value makePlainElementValue(dom::Element* el);
 Value makeCanvasElementValue(dom::Element* el);
 
+// Fullscreen element tracking (host_element.cpp owns it).
+void setHostFullscreenElement(dom::Element* el);
+dom::Element* hostFullscreenElement();
+
 // ---------------------------------------------------------------------------
 // Timers (host_timers.cpp)
 // ---------------------------------------------------------------------------

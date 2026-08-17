@@ -62,6 +62,9 @@ Text
 CharacterData
 Comment
 DocumentFragment
+Gamepad
+GamepadButton
+GamepadEvent
 navigator
 HTMLCanvasElement
 HTMLImageElement

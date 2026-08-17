@@ -47,6 +47,7 @@
 #include "dom/element_geometry.h"
 #include "dom/node.h"
 #include "engine/engine.h"
+#include "platform/sdl_window.h"
 #include "js/dom_bindings.h"
 #include "layout/computed_style.h"
 #include "layout/form_control.h"
@@ -92,6 +93,8 @@ Registry& registry() {
     return r;
 }
 
+static dom::Element* s_fullscreenElement = nullptr;
+
 // A doomed node's wrapper must stop answering BEFORE the storage goes away.
 //
 // The entry is dropped from the live map — so nothing can reach the dead
@@ -102,6 +105,9 @@ Registry& registry() {
 // wrapper the program still holds is a handle pointing at it, and that pointer
 // has to stay valid. What it points at is now inert.
 void onNodeFreed(dom::Document*, dom::Node* node) {
+    if (s_fullscreenElement == node) {
+        s_fullscreenElement = nullptr;
+    }
     Registry& r = registry();
     auto it = r.live.find(node);
     if (it == r.live.end()) return;
@@ -487,6 +493,14 @@ dom::Element* siblingOf(dom::Element* el, int direction) {
 }
 
 }  // namespace
+
+void setHostFullscreenElement(dom::Element* el) {
+    s_fullscreenElement = el;
+}
+
+dom::Element* hostFullscreenElement() {
+    return s_fullscreenElement;
+}
 
 // ---------------------------------------------------------------------------
 // The pieces other files in this layer use
@@ -945,6 +959,32 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
     b.def("hasPointerCapture", 1, [st, pointerId](Value, std::span<const Value> a) {
         if (!st->el) return ev::fromBool(false);
         return ev::fromBool(hostEngine()->hasPointerCapture(st->el, pointerId(a)));
+    });
+
+    // ---- pointer lock -----------------------------------------------------
+    b.def("requestPointerLock", 0, [st](Value, std::span<const Value>) {
+        if (st->el) {
+            if (auto* e = hostEngine()) {
+                e->requestPointerLock(st->el);
+            }
+        }
+        return ev::undefined();
+    });
+
+    // ---- fullscreen -------------------------------------------------------
+    b.def("requestFullscreen", 0, [st](Value, std::span<const Value>) {
+        if (st->el) {
+            setHostFullscreenElement(st->el);
+        }
+        if (auto* e = hostEngine()) {
+            e->setFullscreenState(true);
+            if (auto* win = e->window()) {
+                win->setFullscreen(true);
+            }
+        }
+        ev::Persistent p{ev::createPromise()};
+        ev::resolvePromise(p.get(), ev::undefined());
+        return p.get();
     });
 
     // ---- focus ------------------------------------------------------------
