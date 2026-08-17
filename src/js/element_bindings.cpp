@@ -2588,24 +2588,15 @@ static JSValue js_element_hasAttribute(JSContext* ctx, JSValueConst this_val,
 // safe to call from engine and host C++. The calls here were removed rather
 // than left as harmless duplicates so there is one place that decides.
 //
-// What stays in this file is what genuinely needs a JS realm: cross-document
-// adoption (below), custom-element connected/disconnected callbacks, and
-// MutationObserver delivery.
+// What stays in this file is what genuinely needs a JS realm: custom-element
+// connected/disconnected callbacks, and MutationObserver delivery.
 
-// DOM "pre-insert" step 2: adopt `node` into `parent`'s document when their
-// owner documents differ. Without this, a node built in a DOMParser document
-// and appended into the live tree stayed owned by the parser document — it
-// rendered until that document was collected, then its holder destroyed a node
-// still sitting in the live tree. Spec says pre-insertion adopts; so do we.
-static void adoptIntoParentDocument(bro::dom::Node* parent, bro::dom::Node* node)
-{
-    if (!parent || !node) return;
-    auto* target = parent->document();
-    if (!target || node->document() == target) return;
-    // adoptNode detaches from the old parent, which is also what insertion
-    // would do — the caller's insertBefore/appendChild then re-parents here.
-    target->adoptNode(node);
-}
+// Cross-document adoption used to live here as adoptIntoParentDocument, called
+// by hand before each of the four insertions below. It moved down to the DOM
+// layer for the same reason layout invalidation did: it is a property of the
+// insertion and not of who performed it, and a bronze-compiled program appends
+// through Node::appendChild without passing through this file at all.
+// dom/element.cpp's adoptIntoParentDocument is now the one that runs.
 
 static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                                       int argc, JSValueConst* argv)
@@ -2616,10 +2607,9 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
     if (child) {
         if (child->nodeName() == "#DOCUMENT-FRAGMENT" ||
             child->nodeType() == bro::dom::NodeType::DocumentFragment) {
+            // The fragment itself is discarded; only its children enter the
+            // tree, each adopted by the appendChild that takes it.
             auto kids = child->childNodes();
-            // Adopt each child individually: the fragment itself is discarded,
-            // only its children enter the tree.
-            for (auto* kid : kids) adoptIntoParentDocument(el, kid);
             // Build addedNodes array for MutationObserver
             JSValue addedArr = JS_NewArray(ctx);
             uint32_t addedIdx = 0;
@@ -2638,7 +2628,6 @@ static JSValue js_element_appendChild(JSContext* ctx, JSValueConst this_val,
                 nullptr, nullptr, addedArr, JS_NULL);
             JS_FreeValue(ctx, addedArr);
         } else {
-            adoptIntoParentDocument(el, child);
             el->appendChild(child);
             if (child->nodeType() == bro::dom::NodeType::Element) {
                 JSValue w = DomBindings::wrapElement(ctx, child);
@@ -2693,7 +2682,6 @@ static JSValue js_element_insertBefore(JSContext* ctx, JSValueConst this_val,
         refChild = unwrapNode(ctx, argv[1]);
     }
     if (newChild) {
-        adoptIntoParentDocument(el, newChild);
         el->insertBefore(newChild, refChild);
         if (newChild->nodeType() == bro::dom::NodeType::Element) {
             auto* newElem = static_cast<bro::dom::Element*>(newChild);
@@ -2727,7 +2715,6 @@ static JSValue js_element_replaceChild(JSContext* ctx, JSValueConst this_val,
             fireDisconnectedCallback(ctx, w);
             JS_FreeValue(ctx, w);
         }
-        adoptIntoParentDocument(el, newChild);
         el->insertBefore(newChild, oldChild);
         if (oldChild->nodeType() == bro::dom::NodeType::Element) {
             auto* oldElem = static_cast<bro::dom::Element*>(oldChild);

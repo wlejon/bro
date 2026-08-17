@@ -141,6 +141,34 @@ Reports `cannot read --help`. Cosmetic.
   `TextEncoder` / `ImageData` / `ImageBitmap` are still unbuilt, but the
   primitive they were waiting on is proven.
 
+### 7. A finalizer that may free a whole DOM subtree
+
+Not a bronze bug — the missing piece is in bro — but it is what decides a
+bronze-visible policy, so it is recorded here beside the rest.
+
+`DOMParser` makes a second `dom::Document` per call (`host_parser.cpp`) and
+this layer never frees any of them, so an app that parses a fragment every
+frame grows without bound. The natural fix is a handle finalizer that deletes
+the document when its wrapper is collected — a finalizer MAY free plain C++
+memory, and a `dom::Document` is plain C++ memory. Two things stop it:
+
+- `~Document` fires only `nodeDestroyingCb_`, the single callback slot the
+  QuickJS realm owns, and only for elements. The freed-node observer *list* —
+  documented in `dom/document.h` as existing precisely for a wrapper layer that
+  is not the JS realm — is never fired from `~Document`, so every registry entry
+  for a node of that document would be left pointing into released storage.
+  This one is a small bro fix and is the reason the policy is a leak rather
+  than a crash.
+- A node wrapper outliving its document wrapper is ordinary code, and the web
+  keeps the document alive through the node. This layer cannot: registry
+  entries are never freed, so a node rooting its document would pin it forever
+  regardless. Fixing it properly wants a registry entry that CAN be released,
+  which wants a finalizer that can make embed calls — the same GC-rule wall
+  everything else in this layer is shaped around.
+
+Until both move, never-freeing is the choice that is only expensive rather
+than also wrong.
+
 ## Fixed during integration
 
 `cmake/bronze_shared_runtime.cmake` used `CMAKE_SOURCE_DIR` for the ABI header

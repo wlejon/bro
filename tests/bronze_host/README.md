@@ -1,6 +1,6 @@
 # bronze_host integration checks
 
-Thirteen checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip.
+Fourteen checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip.
 
 ```bash
 tests/bronze_host/run_loader_test.sh        # the folder loader itself
@@ -13,19 +13,20 @@ tests/bronze_host/run_file_test.sh          # Blob, File, FileReader, object URL
 tests/bronze_host/run_abort_test.sh         # AbortController, AbortSignal, cancelled fetch
 tests/bronze_host/run_observer_test.sh      # MutationObserver, incl. a mutation made by the page
 tests/bronze_host/run_resize_test.sh        # ResizeObserver: the initial report, and the quiet frames
+tests/bronze_host/run_parser_test.sh        # DOMParser: a second document, and adoption out of it
 tests/bronze_host/run_wild_test.sh          # wild three.js scene + OrbitControls
 tests/bronze_host/run_instanced_test.sh     # instanced mesh under load (2,500 instances)
 tests/bronze_host/run_pixi_test.sh          # pixi.js v8: WebGL sprites + pixel readback
 ```
 
-**All thirteen run the stock `bro-headless`** — the same binary every other test in
+**All fourteen run the stock `bro-headless`** — the same binary every other test in
 `tests/` uses. Each one's app is a directory carrying a compiled `app.dll` /
 `app.so` / `app.dylib`, which `lib.sh` builds on demand with the bronze CLI and
 rebuilds whenever the module is older than its probe **or than the compiler**
 (a module carries the ABI stamp of the bronze that emitted it, so a rebuilt
 runtime invalidates every module in the tree without any `.js` changing).
 
-The last five are the newer half of the layer and are written to a stricter
+The last six are the newer half of the layer and are written to a stricter
 rule than their neighbours: every line of output is `APP <name>=<value>` and
 every expectation beside them was derived from the spec and the fixture BEFORE
 the first run, so a passing check is evidence the implementation matches the

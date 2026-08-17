@@ -27,6 +27,7 @@
 
 namespace bro::engine { class Engine; }
 namespace bro::dom {
+class Document;
 class Element;
 class Event;
 class Node;
@@ -460,6 +461,18 @@ void installObserverGlobals();
 // Anything queued from inside a callback waits for the next frame, which is
 // what stops an observer that changes what it observes from re-entering itself.
 void deliverHostObservers();
+
+// ---------------------------------------------------------------------------
+// DOMParser (host_parser.cpp)
+// ---------------------------------------------------------------------------
+
+void installParserGlobal();
+
+// A full document surface — the queries, the factories, the element accessors —
+// bound to `doc` rather than to whatever the engine is currently showing. The
+// `document` global is the one wrapper NOT built this way; dom_globals.cpp's
+// documentFor() says why. Defined there, beside the builder it shares.
+Value hostDocumentValue(dom::Document* doc);
 
 // ---------------------------------------------------------------------------
 // XMLHttpRequest (host_xhr.cpp)

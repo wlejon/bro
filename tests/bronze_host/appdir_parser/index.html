@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>bronze parser probe</title></head>
+<body>
+<!-- Where parsed nodes are adopted to. Empty, and on one line, so its child
+     count after an append follows from the append alone — every newline
+     between tags is a text node. -->
+<div id="host"></div>
+
+<!-- Watched by a MutationObserver in the LIVE document, before the probe
+     observes anything in a parsed one. That order is the point: the host used
+     to remember "the hook is installed" as a single flag, so whichever
+     document was observed first was the only one that ever reported. -->
+<div id="pen"></div>
+
+<!-- An id that exists ONLY here. A parsed document asked for it must answer
+     null: the two documents have separate id maps, and a lookup that fell
+     through to the live page would be the easiest possible way to get this
+     wrong and the hardest to notice. -->
+<div id="live_only"></div>
+</body>
+</html>

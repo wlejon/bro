@@ -338,11 +338,26 @@ Value wrapElement(dom::Element* el) {
     return hostElementValue(el);
 }
 
+// Which document a wrapper speaks for.
+//
+// `fixed` is null for the `document` global and only for it. That global is
+// registered before the engine has parsed anything, so it cannot capture a
+// document — it has to ask for the current one every time, and asking is also
+// what lets it survive a reparse that swaps the whole tree out. Every OTHER
+// document wrapper — the ones DOMParser hands back — names one document for
+// good, and naming it is the point: `parsed.getElementById('x')` must not
+// quietly answer from the live page.
+dom::Document* documentFor(dom::Document* fixed) {
+    if (fixed) return fixed;
+    return (g_host && g_host->engine) ? g_host->engine->document() : nullptr;
+}
+
 // document.createElement / createElementNS. An unknown tag is not a refusal:
 // every HTML tag is a real dom::Element here, and the element surface is the
 // same one for all of them. `img` is the one exception — it is a host object
 // with a decoder behind `.src`, not a laid-out element (host_image.cpp).
-Value createElementImpl(std::span<const Value> a, size_t tagIndex) {
+Value createElementImpl(dom::Document* fixed, std::span<const Value> a,
+                        size_t tagIndex) {
     Value tagV = argAt(a, tagIndex);
     if (ev::isObject(tagV)) return ev::throwTypeError("createElement: tag must be a string");
     std::string tag = ev::toUtf8(tagV);
@@ -355,7 +370,7 @@ Value createElementImpl(std::span<const Value> a, size_t tagIndex) {
     // texImage2D.
     if (tag == "img") return makeImageValue();
 
-    dom::Document* doc = g_host->engine->document();
+    dom::Document* doc = documentFor(fixed);
     if (!doc) return ev::throwError("bronze host: engine has no document");
     dom::Element* el = doc->createElement(tag);
     if (!el) return ev::throwError("bronze host: createElement failed");
@@ -366,83 +381,87 @@ Value createElementImpl(std::span<const Value> a, size_t tagIndex) {
     return hostElementValue(el);
 }
 
-Value makeDocumentValue() {
+Value makeDocumentValue(dom::Document* fixed) {
     ObjectBuilder b;
-    b.def("createElement", 1, [](Value, std::span<const Value> a) {
-        return createElementImpl(a, 0);
+    b.def("createElement", 1, [fixed](Value, std::span<const Value> a) {
+        return createElementImpl(fixed, a, 0);
     });
     // three.js spells it createElementNS('http://www.w3.org/1999/xhtml',
     // 'canvas'); the namespace is accepted and ignored, as bro's own DOM does
     // for HTML content.
-    b.def("createElementNS", 2, [](Value, std::span<const Value> a) {
-        return createElementImpl(a, 1);
+    b.def("createElementNS", 2, [fixed](Value, std::span<const Value> a) {
+        return createElementImpl(fixed, a, 1);
     });
     // The other three node factories. All go through the DOCUMENT so the node
     // lands in Document::ownedNodes_ — which is what makes it freed on teardown
     // and what makes the freed-node observer the registry depends on fire for
     // it (host_element.cpp). A node allocated any other way would outlive its
     // wrapper's ability to notice it died.
-    b.def("createTextNode", 1, [](Value, std::span<const Value> a) {
-        dom::Document* doc = g_host->engine->document();
+    b.def("createTextNode", 1, [fixed](Value, std::span<const Value> a) {
+        dom::Document* doc = documentFor(fixed);
         if (!doc) return ev::throwError("bronze host: engine has no document");
         Value v = argAt(a, 0);
         std::string text =
             (ev::isObject(v) || ev::isUndefined(v)) ? "" : ev::toUtf8(v);
         return hostNodeValue(doc->createTextNode(text));
     });
-    b.def("createComment", 1, [](Value, std::span<const Value> a) {
-        dom::Document* doc = g_host->engine->document();
+    b.def("createComment", 1, [fixed](Value, std::span<const Value> a) {
+        dom::Document* doc = documentFor(fixed);
         if (!doc) return ev::throwError("bronze host: engine has no document");
         Value v = argAt(a, 0);
         std::string text =
             (ev::isObject(v) || ev::isUndefined(v)) ? "" : ev::toUtf8(v);
         return hostNodeValue(doc->createComment(text));
     });
-    b.def("createDocumentFragment", 0, [](Value, std::span<const Value>) {
-        dom::Document* doc = g_host->engine->document();
+    b.def("createDocumentFragment", 0, [fixed](Value, std::span<const Value>) {
+        dom::Document* doc = documentFor(fixed);
         if (!doc) return ev::throwError("bronze host: engine has no document");
         return hostNodeValue(doc->createDocumentFragment());
     });
-    b.def("getElementById", 1, [](Value, std::span<const Value> a) {
+    b.def("getElementById", 1, [fixed](Value, std::span<const Value> a) {
         Value idV = argAt(a, 0);
         if (ev::isObject(idV) || ev::isUndefined(idV)) return ev::null();
         std::string id = ev::toUtf8(idV);
-        dom::Document* doc = g_host->engine->document();
+        dom::Document* doc = documentFor(fixed);
         if (!doc) return ev::null();
         dom::Element* el = doc->getElementById(id);
         return wrapElement(el);
     });
-    b.def("querySelector", 1, [](Value, std::span<const Value> a) {
+    b.def("querySelector", 1, [fixed](Value, std::span<const Value> a) {
         Value selV = argAt(a, 0);
         if (ev::isObject(selV) || ev::isUndefined(selV)) return ev::null();
         std::string sel = ev::toUtf8(selV);
-        dom::Document* doc = g_host->engine->document();
+        dom::Document* doc = documentFor(fixed);
         if (!doc) return ev::null();
         dom::Element* el = doc->querySelector(sel);
         return wrapElement(el);
     });
-    b.def("querySelectorAll", 1, [](Value, std::span<const Value> a) {
+    b.def("querySelectorAll", 1, [fixed](Value, std::span<const Value> a) {
         auto empty = []() {
             return hostArrayOf(0, [](size_t) { return ev::undefined(); });
         };
         Value selV = argAt(a, 0);
         if (ev::isObject(selV) || ev::isUndefined(selV)) return empty();
-        dom::Document* doc = g_host->engine->document();
+        dom::Document* doc = documentFor(fixed);
         if (!doc) return empty();
         std::vector<dom::Element*> list = doc->querySelectorAll(ev::toUtf8(selV));
         return hostArrayOf(list.size(),
                            [&list](size_t i) { return hostElementValue(list[i]); });
     });
-    // body / documentElement / head are ACCESSORS, not values captured at
-    // install time: the globals are registered before the engine has parsed a
-    // document, so there is nothing to capture yet. Each answers the real
-    // element through the registry, which is what makes
-    // `document.body.appendChild(panel)` an ordinary tree insert rather than
-    // the canvas-only special case it used to be.
-    auto defDocElement = [&b](const char* name, dom::Element* (dom::Document::*get)() const) {
+    // body / documentElement are ACCESSORS, not values captured at install
+    // time: the `document` global is registered before the engine has parsed a
+    // document, so there is nothing to capture yet, and a reparse would replace
+    // whatever had been. (A parsed document could capture safely — its tree is
+    // final the moment parseFromString returns — but one builder serves both
+    // and the accessor is correct for each.) Each answers the real element
+    // through the registry, which is what makes `document.body.appendChild
+    // (panel)` an ordinary tree insert rather than the canvas-only special case
+    // it used to be.
+    auto defDocElement = [&b, fixed](const char* name,
+                                     dom::Element* (dom::Document::*get)() const) {
         b.accessor(name,
-                   [get](Value, std::span<const Value>) {
-                       dom::Document* doc = g_host->engine->document();
+                   [get, fixed](Value, std::span<const Value>) {
+                       dom::Document* doc = documentFor(fixed);
                        if (!doc) return ev::null();
                        return hostElementValue((doc->*get)());
                    },
@@ -451,8 +470,8 @@ Value makeDocumentValue() {
     defDocElement("body", &dom::Document::body);
     defDocElement("documentElement", &dom::Document::documentElement);
     b.accessor("activeElement",
-               [](Value, std::span<const Value>) {
-                   dom::Document* doc = g_host->engine->document();
+               [fixed](Value, std::span<const Value>) {
+                   dom::Document* doc = documentFor(fixed);
                    if (!doc) return ev::null();
                    return hostElementValue(doc->activeElement());
                },
@@ -468,8 +487,8 @@ Value makeDocumentValue() {
     //
     // Resolved per call rather than captured: the globals are registered
     // before anyone has asked the engine for its document element.
-    installElementEventTarget(b, []() -> dom::Element* {
-        dom::Document* doc = g_host->engine->document();
+    installElementEventTarget(b, [fixed]() -> dom::Element* {
+        dom::Document* doc = documentFor(fixed);
         return doc ? doc->documentElement() : nullptr;
     }, "document");
     return b.get();
@@ -805,6 +824,22 @@ Value makePerformanceValue() {
 }  // namespace
 
 // ---------------------------------------------------------------------------
+// A document wrapper for a document that is not the engine's
+// ---------------------------------------------------------------------------
+
+// The same surface the `document` global has — createElement, the queries, the
+// element accessors, the event-target delegation — bound to `doc` instead of to
+// whatever the engine is showing. host_parser.cpp hands DOMParser results
+// through here, which is why it exists at all: the builder itself is private to
+// this file, and duplicating it would produce a second document surface that
+// drifted from this one the first time either gained a method.
+//
+// Null `doc` is not defended against here; the only caller has just parsed one.
+Value hostDocumentValue(dom::Document* doc) {
+    return makeDocumentValue(doc);
+}
+
+// ---------------------------------------------------------------------------
 // The two things every file in this layer shares (host_internal.h)
 // ---------------------------------------------------------------------------
 
@@ -897,7 +932,9 @@ void installWebHostGlobals(engine::Engine& engine) {
     // WebGLRenderingContext, Intl, localStorage, AudioContext, CustomEvent,
     // bro. registerGlobal roots each value for the life of the process.
     {
-        Value doc = makeDocumentValue();
+        // Null: the global follows the engine's current document rather than
+        // naming one. documentFor() above has the reason.
+        Value doc = makeDocumentValue(nullptr);
         ev::registerGlobal("document", doc);
     }
     {
@@ -951,6 +988,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     installFileGlobals();
     installAbortGlobals();
     installObserverGlobals();
+    installParserGlobal();
 
     {
         Value nav = makeNavigatorValue();

@@ -30,6 +30,7 @@ Off by default; nothing here is in the default build.
 | `host_file.cpp` | `Blob`, `File`, `FileReader`, and the `URL` namespace — bytes an app holds, and the object URLs that name them |
 | `host_abort.cpp` | `AbortController` / `AbortSignal`, and the cancellation `fetch` obeys |
 | `host_observers.cpp` | `MutationObserver`, over the DOM layer's own mutation notices; `ResizeObserver`, over a per-frame poll of the layout box |
+| `host_parser.cpp` | `DOMParser`: HTML text into a second `dom::Document`, and the lifetime policy for it |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
 | `app_module.cpp` | finding, verifying and running the module an app dir carries |
 
@@ -407,7 +408,7 @@ instead of two.
 not a `dom::Element` — it has no layout box, and `img instanceof Image` is
 false because the embed API cannot build an object on a chosen prototype.
 
-**The DOM**: `dataset` and `DOMParser`.
+**The DOM**: `dataset`.
 
 `MutationObserver` is DONE — `host_observers.cpp`, checked by
 `tests/bronze_host/run_observer_test.sh` — and it is built on a notice fired by
@@ -442,6 +443,50 @@ after `observe()` reports the current size unprompted, which is the behaviour
 code actually reaches for one for. The web runs its observation loop until
 sizes settle; this reports once per frame, so a callback that resizes its own
 target is heard about on the next frame and cannot loop.
+
+`DOMParser` is DONE — `host_parser.cpp`, checked by
+`tests/bronze_host/run_parser_test.sh`. `parseFromString` builds a real
+`dom::Document` through the same gumbo path the app document uses and hands
+back the full document surface bound to it, so the queries, the node factories
+and `body`/`documentElement` all answer from the parsed tree. The mime-type
+argument is read and discarded: bro has no XML parser, and the interpreted side
+made the same choice.
+
+Two things about it are policy rather than plumbing.
+
+**Parsed documents are never freed.** They are owned by a process-lived vector.
+The obvious alternative — a handle finalizer that deletes the document when its
+wrapper is collected, which is exactly what the QuickJS side does — does not
+port. `~Document` severs wrappers through `nodeDestroyingCb_`, a single callback
+slot the JS realm owns, and it visits elements only; the freed-node observer
+LIST this layer's registry depends on is not fired from `~Document` at all, so a
+finalizer would leave a live registry entry pointing into released storage for
+every node of that document this layer had wrapped. And even with that fixed, a
+node wrapper routinely outlives the document wrapper it came from
+(`parser.parseFromString(s).body.firstChild` drops the document on the same
+line) where the web keeps the document alive through the node — and since
+registry entries are themselves never freed, rooting the document from a node
+would pin it forever anyway. The cost is a `Document` husk per parse, which is
+real for an app that parses every frame; `bronze-requirements.md` carries what
+would make the finalizer safe.
+
+**Appending a parsed node into the live tree adopts it**, and that step moved
+into `Node::appendChild` / `Node::insertBefore` (`src/dom/element.cpp`) to make
+it true here. It used to sit in `element_bindings.cpp` under the heading of
+things that "genuinely need a JS realm", which it never did — it is a document
+pointer comparison and a call to `Document::adoptNode`. A compiled program
+appends without passing through the JS bindings at all, so leaving the step
+with the callers meant the live tree held nodes the parser document still owned
+and would eventually destroy. Layout invalidation moved down for the same
+reason and the file comment now says so.
+
+A second document is also what turned two single-document assumptions in this
+layer into bugs, both fixed with it: the mutation hook remembered a bool
+("installed") rather than which documents carried it, so whichever document was
+observed first silenced every later one; and the node registry's freed-node
+observer did the same, which was the more dangerous of the two — if the first
+node this layer ever wrapped came from a parsed document, the LIVE document was
+left unwatched and every wrapper it handed out could outlive its node.
 
 `dataset` is blocked rather than merely unwritten: it is a live view whose keys
 are not known in advance, so it needs a PROPERTY TRAP, and the embed API has

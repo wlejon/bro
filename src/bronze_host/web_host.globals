@@ -79,3 +79,4 @@ AbortController
 AbortSignal
 MutationObserver
 ResizeObserver
+DOMParser

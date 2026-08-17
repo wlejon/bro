@@ -58,6 +58,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -76,7 +77,14 @@ struct Registry {
     // captures its HostNodeState*, and the map rehashes as the tree grows.
     std::vector<std::unique_ptr<HostNodeState>> entries;
     std::unordered_map<const dom::Node*, HostNodeState*> live;
-    bool observing = false;
+    // Which documents we have asked to warn us. A set rather than the single
+    // bool this was: the warning is per-document, and DOMParser makes a second
+    // document reachable. With a bool, whichever document happened to own the
+    // first node this layer ever wrapped was the only one being watched — and
+    // if that was a parsed document, which never frees anything, the LIVE
+    // document was left unwatched and every wrapper it handed out could outlive
+    // its node.
+    std::unordered_set<const dom::Document*> observed;
 };
 
 Registry& registry() {
@@ -120,11 +128,9 @@ HostNodeState* stateFor(dom::Node* node) {
     Registry& r = registry();
     auto it = r.live.find(node);
     if (it != r.live.end()) return it->second;
-    if (!r.observing) {
-        if (dom::Document* doc = node->document()) {
+    if (dom::Document* doc = node->document()) {
+        if (r.observed.insert(doc).second)
             doc->addNodeFreedObserver(&onNodeFreed);
-            r.observing = true;
-        }
     }
     auto owned = std::make_unique<HostNodeState>();
     HostNodeState* st = owned.get();

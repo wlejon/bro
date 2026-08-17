@@ -56,6 +56,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -99,8 +100,16 @@ struct MoEntry {
 // these hold ev::Persistents, and a static destructor running at process exit
 // would release root slots against a runtime whose statics may already be gone.
 std::vector<std::unique_ptr<MoEntry>>* g_observers = nullptr;
-bool g_hookInstalled = false;
 bool g_delivering = false;
+
+// Which documents carry our mutation hook. A set rather than the single bool
+// this used to be: the notice is per-document, and once DOMParser exists an
+// app can observe a node that lives in a document the engine has never heard
+// of. The bool made the first observe() anywhere silence every later document.
+// Entries are never removed — the hook is a function pointer, the documents
+// this layer parses are never freed (host_parser.cpp), and a document that
+// somehow were freed takes its own observer list with it.
+std::unordered_set<dom::Document*>* g_hookedDocs = nullptr;
 
 std::vector<std::unique_ptr<MoEntry>>& observers() {
     if (!g_observers) g_observers = new std::vector<std::unique_ptr<MoEntry>>();
@@ -185,9 +194,12 @@ void onDomMutation(dom::Document*, const dom::Document::MutationNotice& notice) 
 }
 
 void ensureHook(dom::Document* doc) {
-    if (g_hookInstalled || !doc) return;
+    if (!doc) return;
+    if (!g_hookedDocs) g_hookedDocs = new std::unordered_set<dom::Document*>();
+    if (!g_hookedDocs->insert(doc).second) return;
+    // addMutationObserver is itself idempotent; the set is what keeps this from
+    // walking that document's observer vector on every observe() call.
     doc->addMutationObserver(&onDomMutation);
-    g_hookInstalled = true;
 }
 
 // ---------------------------------------------------------------------------

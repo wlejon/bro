@@ -53,9 +53,7 @@ static Document* findDocument(Node* node) {
 // Those remain in the JS bindings. What the tree does now report is the plain
 // NOTICE that a mutation happened — Document::notifyMutation, fired below —
 // because what changed is a property of the tree and not of who changed it;
-// document.h has the argument. Document adoption stays with the callers
-// too — it is a pre-insertion step that must run BEFORE the tree changes, so it
-// cannot be expressed as a post-mutation notification.
+// document.h has the argument.
 //
 // Attributed to the parent element where there is one: Element::
 // markStructureDirty rebuilds that node's children and keeps every other
@@ -88,8 +86,44 @@ static void notifyChildListMutation(Node* parent, Node* added, Node* removed,
     doc->notifyMutation(notice);
 }
 
+// DOM "pre-insert" step 2: a node entering a tree that belongs to a different
+// document is adopted into it first.
+//
+// This is not a notice and could not be one — it is an ACTION that has to
+// happen before the tree changes, which is why it sat in the JS bindings under
+// the heading of things that "genuinely need a JS realm". It never needed one.
+// A document pointer comparison and a call to Document::adoptNode name no
+// context and no realm; what actually kept it up there was that the JS
+// bindings were the only inserter anyone had written.
+//
+// They are not any more. A bronze-compiled program appends through
+// Node::appendChild directly, and without this its DOMParser nodes stayed
+// owned by the parser document while living in the live tree — rendering
+// correctly right up until that document was destroyed and took them with it.
+// Leaving the step with the callers means every future inserter has to know to
+// perform it, and the failure when it doesn't is a use-after-free that looks
+// like a rendering bug.
+//
+// Cost when it does not apply is one pointer comparison, which is what a node
+// created by the document it is being appended to always is.
+static void adoptIntoParentDocument(Node* parent, Node* node) {
+    if (!parent || !node) return;
+    // The parent's own document first, and the walk only as a fallback: a
+    // DocumentFragment and a TextNode are both legal parents here and neither
+    // is an Element, which is all findDocument knows how to read.
+    Document* target = parent->document();
+    if (!target) target = findDocument(parent);
+    // No document to adopt INTO — an offscreen subtree being assembled before
+    // it is attached. Insertion into a real tree adopts the whole thing later.
+    if (!target || node->document() == target) return;
+    // adoptNode detaches from the current parent, which is the same thing the
+    // caller below is about to do; doing it here just means it happens once.
+    target->adoptNode(node);
+}
+
 void Node::appendChild(Node* child) {
     if (!child) return;
+    adoptIntoParentDocument(this, child);
     if (child->parent_) {
         child->parent_->removeChild(child);
     }
@@ -123,9 +157,10 @@ void Node::removeChild(Node* child) {
 void Node::insertBefore(Node* newChild, Node* refChild) {
     if (!newChild) return;
     if (!refChild) {
-        appendChild(newChild);  // invalidates, and fires its own notice
+        appendChild(newChild);  // invalidates, adopts, and fires its own notice
         return;
     }
+    adoptIntoParentDocument(this, newChild);
     if (newChild->parent_) {
         newChild->parent_->removeChild(newChild);
     }
