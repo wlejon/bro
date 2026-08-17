@@ -431,6 +431,42 @@ JSValue js_gifEncoder_addCanvasFrame(JSContext* ctx, JSValueConst this_val,
     return JS_TRUE;
 }
 
+// JS: gif.addViewportFrame()
+//   The composited viewport, same pixel source as screenshot(). The webm
+//   encoder has had this from the start and the gif encoder had not, which
+//   made the two interchangeable from the addFrame side only for apps that
+//   draw into a plain 2D canvas: addCanvasFrame REFUSES a canvas carrying a
+//   3D scene or a WebGL context (its auxiliary CanvasScene would encode a
+//   blank overlay), so "record this to a GIF" had no answer at all for a
+//   WebGL app. It does now, and it is the same answer VideoEncoder gives.
+JSValue js_gifEncoder_addViewportFrame(JSContext* ctx, JSValueConst this_val,
+                                       int /*argc*/, JSValueConst* /*argv*/) {
+    auto* d = qjsbind::unwrap<GD>(ctx, this_val);
+    if (!d || !d->enc) return JS_ThrowInternalError(ctx, "encoder closed");
+
+    auto* engine = getEngineForCtx(ctx);
+    if (!engine) {
+        return JS_ThrowInternalError(ctx, "addViewportFrame: engine not available");
+    }
+    const int w = engine->viewportWidth();
+    const int h = engine->viewportHeight();
+    if (w != d->width || h != d->height) {
+        return JS_ThrowRangeError(ctx,
+            "addViewportFrame: viewport %dx%d does not match encoder %dx%d",
+            w, h, d->width, d->height);
+    }
+    auto pixels = engine->capturePixels();
+    if (pixels.empty()) {
+        return JS_ThrowInternalError(ctx, "addViewportFrame: pixel read failed");
+    }
+    if (!d->enc->addFrameRGBA(pixels.data(), w * 4)) {
+        d->lastErr = d->enc->lastError();
+        return JS_ThrowInternalError(ctx, "addViewportFrame: encode failed: %s",
+                                     d->lastErr.c_str());
+    }
+    return JS_TRUE;
+}
+
 JSValue js_gifEncoder_setNextDelay(JSContext* ctx, JSValueConst this_val,
                                    int argc, JSValueConst* argv) {
     auto* d = qjsbind::unwrap<GD>(ctx, this_val);
@@ -489,6 +525,7 @@ void VideoBindings::install(JSContext* ctx, const std::string& /*basePath*/) {
         })
         .method_raw("addFrameRGBA",       js_gifEncoder_addFrameRGBA, 1)
         .method_raw("addCanvasFrame",     js_gifEncoder_addCanvasFrame, 1)
+        .method_raw("addViewportFrame",   js_gifEncoder_addViewportFrame, 0)
         .method_raw("setNextFrameDelayCs", js_gifEncoder_setNextDelay, 1)
         .method_raw("finish",             js_gifEncoder_finish, 0);
 }

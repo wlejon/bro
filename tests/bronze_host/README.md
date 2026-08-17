@@ -1,6 +1,6 @@
 # bronze_host integration checks
 
-Fourteen checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip.
+Fifteen checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip.
 
 ```bash
 tests/bronze_host/run_loader_test.sh        # the folder loader itself
@@ -14,23 +14,27 @@ tests/bronze_host/run_abort_test.sh         # AbortController, AbortSignal, canc
 tests/bronze_host/run_observer_test.sh      # MutationObserver, incl. a mutation made by the page
 tests/bronze_host/run_resize_test.sh        # ResizeObserver: the initial report, and the quiet frames
 tests/bronze_host/run_parser_test.sh        # DOMParser: a second document, and adoption out of it
+tests/bronze_host/run_video_test.sh          # VideoEncoder, GifEncoder: every pixel source, and every refusal
 tests/bronze_host/run_wild_test.sh          # wild three.js scene + OrbitControls
 tests/bronze_host/run_instanced_test.sh     # instanced mesh under load (2,500 instances)
 tests/bronze_host/run_pixi_test.sh          # pixi.js v8: WebGL sprites + pixel readback
 ```
 
-**All fourteen run the stock `bro-headless`** — the same binary every other test in
+**All fifteen run the stock `bro-headless`** — the same binary every other test in
 `tests/` uses. Each one's app is a directory carrying a compiled `app.dll` /
 `app.so` / `app.dylib`, which `lib.sh` builds on demand with the bronze CLI and
 rebuilds whenever the module is older than its probe **or than the compiler**
 (a module carries the ABI stamp of the bronze that emitted it, so a rebuilt
 runtime invalidates every module in the tree without any `.js` changing).
 
-The last six are the newer half of the layer and are written to a stricter
-rule than their neighbours: every line of output is `APP <name>=<value>` and
-every expectation beside them was derived from the spec and the fixture BEFORE
-the first run, so a passing check is evidence the implementation matches the
-model rather than a recording of what the build happened to print.
+Seven of them — `node`, `file`, `abort`, `observer`, `resize`, `parser` and
+`video`, the newer half of the layer — are written to a stricter rule than
+their neighbours: every line of output is `APP <name>=<value>` and every
+expectation beside them was derived from the spec and the fixture BEFORE the
+first run, so a passing check is evidence the implementation matches the model
+rather than a recording of what the build happened to print. (Named rather than
+counted off the end of the list: the three.js checks sit last and are not
+among them.)
 
 This used to be seven executables — `bro-bronze-host`, `bro-bronze-host-dom`,
 one per app, each `host_main.cpp` linked against a different object file — plus

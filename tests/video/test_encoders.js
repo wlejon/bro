@@ -136,6 +136,50 @@ assert(fs.existsSync(gifPath), 'gif file written');
 const gifStat = fs.statSync(gifPath);
 assert(gifStat.size > 50, 'gif size > 50, got ' + gifStat.size);
 
+// =========================================================================
+// addViewportFrame, on BOTH encoders
+// =========================================================================
+// The composited viewport rather than one canvas — the only capture that sees
+// a 3D scene or a WebGL context, since addCanvasFrame refuses those canvases
+// on purpose. Sized from the viewport itself so the dimension check cannot be
+// what fails; rounded down to even because VP9 wants 4:2:0-divisible frames
+// and the window is not obliged to be.
+const VW = window.innerWidth & ~1;
+const VH = window.innerHeight & ~1;
+assert(VW > 0 && VH > 0, 'viewport has a size: ' + VW + 'x' + VH);
+
+const vpWebmPath = path.join(tmpDir, 'bro_test_vp_' + Date.now() + '.webm');
+const vpenc = new VideoEncoder({ path: vpWebmPath, width: VW, height: VH, fps: 10,
+                                 quality: 'realtime' });
+flush();
+for (let f = 0; f < 3; ++f) vpenc.addViewportFrame();
+vpenc.finish();
+// After finish(), and not before: libvpx buffers, so framesWritten counts
+// muxed packets and only the flush makes it mean "everything I pushed".
+assert(vpenc.framesWritten > 0, 'viewport frames encoded to webm');
+assert(vpenc.lastError === '', 'no viewport encode error: ' + vpenc.lastError);
+assert(fs.statSync(vpWebmPath).size > 100, 'viewport webm has content');
+
+const vpGifPath = path.join(tmpDir, 'bro_test_vp_' + Date.now() + '.gif');
+const vpgif = new GifEncoder({ path: vpGifPath, width: VW, height: VH, fps: 10 });
+// A GIF writes each frame as it arrives, so this one IS exact before finish.
+for (let f = 0; f < 3; ++f) vpgif.addViewportFrame();
+assert(vpgif.framesWritten === 3, 'viewport frames encoded to gif: ' + vpgif.framesWritten);
+vpgif.finish();
+assert(fs.statSync(vpGifPath).size > 50, 'viewport gif has content');
+
+// A size that is not the viewport's is a RangeError, not a silent rescale.
+let vpThrew = false;
+const vpBadPath = path.join(tmpDir, 'bro_test_vpbad_' + Date.now() + '.gif');
+const vpbad = new GifEncoder({ path: vpBadPath, width: VW + 8, height: VH, fps: 10 });
+try { vpbad.addViewportFrame(); } catch (e) { vpThrew = true; }
+assert(vpThrew, 'mismatched viewport size rejected');
+vpbad.finish();
+
+try { fs.unlinkSync(vpWebmPath); } catch (e) {}
+try { fs.unlinkSync(vpGifPath); } catch (e) {}
+try { fs.unlinkSync(vpBadPath); } catch (e) {}
+
 // Cleanup
 try { fs.unlinkSync(webmPath); } catch(e) {}
 try { fs.unlinkSync(webmCanvasPath); } catch(e) {}

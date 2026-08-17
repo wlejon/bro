@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>bronze video probe</title></head>
+<body>
+
+<!-- THE 2D CANVAS, and the reason it is here rather than in the probe: the
+     bronze host's own canvas has no 2D context. getContext answers only
+     'webgl' and 'webgl2' (dom_globals.cpp), so a canvas a compiled program
+     creates for itself either has a WebGL context — which addCanvasFrame
+     refuses on purpose — or has no drawing buffer at all.
+
+     A 2D canvas therefore reaches compiled code exactly one way: the PAGE
+     makes it, and the app finds it by id. That is not a contrivance for the
+     test, it is the only shape the case has, and it is worth covering because
+     a mixed app (interpreted UI, compiled logic) is the whole point of this
+     layer. -->
+<canvas id="paint" width="64" height="48"></canvas>
+
+<!-- A canvas the app gives a WebGL context to. addCanvasFrame must refuse it:
+     a canvas hosting WebGL still carries an auxiliary CanvasScene for overlay
+     compositing, so reading that surface would encode a blank overlay instead
+     of the render, silently. -->
+<canvas id="gl" width="64" height="48"></canvas>
+
+<!-- Not a canvas at all. -->
+<div id="notacanvas"></div>
+
+<script>
+  // Drawn on demand rather than at load: the compiled top level runs after the
+  // page's scripts (HeadlessHooks::afterEngine), so an event the app dispatches
+  // is the only ordering that is not a guess. appdir_observer/index.html has
+  // the same note for the same reason.
+  document.addEventListener('app:paint', function () {
+      const c = document.getElementById('paint');
+      const ctx = c.getContext('2d');
+      ctx.fillStyle = '#204080';
+      ctx.fillRect(0, 0, 64, 48);
+      ctx.fillStyle = '#e0a020';
+      ctx.fillRect(8, 8, 24, 24);
+  });
+</script>
+</body>
+</html>

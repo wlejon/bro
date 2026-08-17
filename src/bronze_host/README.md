@@ -31,6 +31,7 @@ Off by default; nothing here is in the default build.
 | `host_abort.cpp` | `AbortController` / `AbortSignal`, and the cancellation `fetch` obeys |
 | `host_observers.cpp` | `MutationObserver`, over the DOM layer's own mutation notices; `ResizeObserver`, over a per-frame poll of the layout box |
 | `host_parser.cpp` | `DOMParser`: HTML text into a second `dom::Document`, and the lifetime policy for it |
+| `host_video.cpp` | `VideoEncoder` / `GifEncoder`: RGBA frames, a 2D canvas or the composited viewport in; a `.webm` or `.gif` file out |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
 | `app_module.cpp` | finding, verifying and running the module an app dir carries |
 
@@ -488,12 +489,70 @@ observer did the same, which was the more dangerous of the two — if the first
 node this layer ever wrapped came from a parsed document, the LIVE document was
 left unwatched and every wrapper it handed out could outlive its node.
 
+`VideoEncoder` and `GifEncoder` are DONE — `host_video.cpp`, checked by
+`tests/bronze_host/run_video_test.sh`. Same class names, same methods, same
+argument shapes and the same refusals as bro's own bindings
+(`src/js/video_bindings.cpp`), because both wrap the same encoders in
+`src/video`. Recording is worth having here for a reason none of the rest of
+this layer has: an app can write its own observer or its own parser, and it
+cannot write VP9 or read the composited framebuffer.
+
+There is no `VideoFrame`, because bro has none — the name is WebCodecs', whose
+model is a frame object you construct and close. bro's encoders take pixels
+directly and own the copy, and inventing a frame object for the compiled side
+alone would be a surface the interpreted side does not have.
+
+**`addViewportFrame` is the capture that matters here**, and `addCanvasFrame`
+is nearly unreachable from compiled code alone. This layer's canvas answers
+only `webgl` and `webgl2` from `getContext`, and `addCanvasFrame` refuses a
+canvas carrying WebGL or a 3D scene on purpose — such a canvas still has an
+auxiliary `CanvasScene` for overlay compositing, so reading that surface would
+silently encode a blank overlay instead of the render. So the 2D path reaches
+compiled code exactly one way: the PAGE creates the canvas and the app finds it
+by id, which is the mixed app this layer exists to make possible and is what
+the check's `canvas.*` lines exercise. `GifEncoder.addViewportFrame` did not
+exist on the interpreted side and was added there in the same change, since
+without it "record this to a GIF" had no answer at all for a WebGL app.
+
+**`finish()` is not optional here**, and it is the one place this layer's
+behaviour differs from bro's JS rather than merely narrowing it. Both encoders
+finish from their destructor, so on the QuickJS side a forgotten `finish()`
+still yields a complete file when the context is torn down. bronze has no
+teardown sweep: a handle's destructor runs from the post-collection hook of a
+collection that reclaims it, and nothing collects at exit. An encoder dropped on
+the floor is therefore finished only if a GC happens to reach it, and otherwise
+the file keeps whatever the muxer wrote and no trailer.
+
+### A name in `web_host.globals` must be registered in EVERY build
+
+Compiled out is not the same as absent, and this is where the first
+conditionally-compiled feature found the rule. Lowering admits every manifest
+name as a global read. At run time `bronze_global_get` asks the builtins, then
+the host registry, then `globalThis`, and then calls `fatal()`
+(`runtime/rt_state.cpp`) — a miss is not a `ReferenceError` a program can catch
+and not an `undefined` it can test, it aborts the process. So in a
+`BRO_WITH_VIDEO=0` build `host_video.cpp` still registers both names, bound to
+`undefined`. That is explicitly not a miss (`runtime/host_globals.h` says so),
+so the lookup succeeds, `typeof VideoEncoder === 'undefined'` is true, and the
+feature detection bro's own docs tell an app to write keeps working — which is
+also exactly what the interpreted side of a video-less build looks like, where
+the classes are simply not installed.
+
 `dataset` is blocked rather than merely unwritten: it is a live view whose keys
 are not known in advance, so it needs a PROPERTY TRAP, and the embed API has
 none. Everything else about it can be faked; `el.dataset.newKey = 'v'` cannot,
 and a dataset that silently drops that write is worse than no dataset at all.
-`getAttribute('data-k')` / `setAttribute` are the whole surface until bronze
-grows a trap. `bronze-requirements.md` carries the ask.
+`getAttribute('data-k')` / `setAttribute` are the whole surface until a host
+can build one. `bronze-requirements.md` carries the ask.
+
+What is missing is now only the REACH. bronze grew a real `Proxy` with the 10.5
+essential invariants, and those checks read the target and never call a trap —
+so a proxy over an empty extensible object constrains nothing and can answer
+entirely from an element's attributes, `dataset.newKey = 'v'` included. The
+embed API just has no way to reach it: `registerGlobal` writes a global and
+nothing reads one, and there is no `construct`. Either `makeProxy(target,
+traps)` or the general pair `globalValue(name)` + `construct(fn, args)` unblocks
+`dataset` outright.
 
 The same limit is why `style` and `getComputedStyle` carry an accessor per
 property from a curated ~110-name list rather than htmlayout's full 363: an

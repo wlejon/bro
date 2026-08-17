@@ -989,6 +989,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     installAbortGlobals();
     installObserverGlobals();
     installParserGlobal();
+    installVideoGlobals();
 
     {
         Value nav = makeNavigatorValue();

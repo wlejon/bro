@@ -74,6 +74,23 @@ callbacks, or narrower, a "dynamic property" hook on an existing handle object
 consulted only when the ordinary lookup misses. The narrow one is enough for all
 three, and it costs nothing on objects that do not declare it.
 
+**This shrank a lot in bronze `9e40adb`.** The mechanism now exists: a real
+`Proxy` with the 10.5 essential invariants, whose checks read the target and
+never call a trap — so a proxy over an empty EXTENSIBLE object constrains
+nothing and may answer every trap from an element's attributes, the
+`dataset.newKey = 'v'` write included. What is left is purely reach. The embed
+API has `registerGlobal` to WRITE a global and nothing to read one, and no
+`construct`, so a host can hand `Proxy` to an app and still not build one
+itself. Either of these closes it:
+
+- `makeProxy(Value target, traps)`, direct and typed for this use; or
+- `globalValue(std::string_view name)` + `construct(Value fn, args)`, general,
+  and useful well beyond this — every "call the program's own constructor" a
+  host might want is the same two calls.
+
+The second is the smaller surface for the larger gain, and neither needs new
+runtime machinery.
+
 ### 3. A host cannot build a function that carries statics
 
 `URL` on the web is callable AND a namespace: `new URL(href)` and

@@ -67,6 +67,8 @@ inline constexpr uint32_t kHostReaderTag = 0x46524452u;   // 'FRDR'
 inline constexpr uint32_t kHostSignalTag = 0x53474E4Cu;   // 'SGNL'
 inline constexpr uint32_t kHostMutationObserverTag = 0x4D555442u;  // 'MUTB'
 inline constexpr uint32_t kHostResizeObserverTag = 0x52535A42u;    // 'RSZB'
+inline constexpr uint32_t kHostVideoEncoderTag = 0x56454E43u;      // 'VENC'
+inline constexpr uint32_t kHostGifEncoderTag = 0x47454E43u;        // 'GENC'
 
 // ---------------------------------------------------------------------------
 // The error funnel and the frame clock (dom_globals.cpp)
@@ -473,6 +475,16 @@ void installParserGlobal();
 // `document` global is the one wrapper NOT built this way; dom_globals.cpp's
 // documentFor() says why. Defined there, beside the builder it shares.
 Value hostDocumentValue(dom::Document* doc);
+
+// ---------------------------------------------------------------------------
+// VideoEncoder / GifEncoder (host_video.cpp)
+// ---------------------------------------------------------------------------
+
+// Registers both names in EVERY build. Without video compiled in they are
+// registered as `undefined` rather than left out, because a manifest name the
+// host never registers is a process abort and not a catchable miss — the file
+// carries the rule and where it comes from.
+void installVideoGlobals();
 
 // ---------------------------------------------------------------------------
 // XMLHttpRequest (host_xhr.cpp)

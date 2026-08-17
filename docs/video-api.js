@@ -31,6 +31,14 @@
 // Available in both windowed and headless. Output paths are taken as-is
 // (resolved against the engine's cwd), matching how `screenshot()` and
 // `screenshotCanvas()` treat paths, no implicit basePath prepending.
+//
+// Both encoders exist for compiled apps too, with the same names and the same
+// methods (src/bronze_host/host_video.cpp). Two differences worth knowing if
+// you write one: `finish()` is mandatory there rather than merely advisable —
+// bronze has no teardown sweep, so a dropped encoder may never flush — and
+// `addCanvasFrame` is close to unusable, because that host's canvas has no 2D
+// context and a WebGL one is refused. Compiled apps record with
+// `addViewportFrame`.
 // =============================================================================
 
 
@@ -230,6 +238,12 @@ gif.finish();
 // Per-frame delay override:
 gif.setNextFrameDelayCs(50);   // hold the next frame for 0.5 seconds
 gif.addCanvasFrame(canvas);
+
+// gif.addViewportFrame() — the composited viewport, same as VideoEncoder's.
+// Reach for it whenever the picture is a 3D scene or WebGL: addCanvasFrame
+// refuses those canvases (it would capture the auxiliary overlay layer, not
+// the render), so this is the only way to record them.
+gif.addViewportFrame();
 
 // Same canvas-snapshot path as VideoEncoder, gif and webm encoders are
 // interchangeable from the addFrame side.

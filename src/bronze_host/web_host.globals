@@ -80,3 +80,5 @@ AbortSignal
 MutationObserver
 ResizeObserver
 DOMParser
+VideoEncoder
+GifEncoder
