@@ -411,6 +411,58 @@ public:
     void addNodeFreedObserver(NodeObserver cb);
     void removeNodeFreedObserver(NodeObserver cb);
 
+    // ---------- Mutation notices ------------------------------------------
+    //
+    // What just changed in the tree, as plain data.
+    //
+    // notifyChildListChanged() in element.cpp says MutationObserver records
+    // stay in the JS bindings because they are "per-realm observer lists, JS
+    // callbacks". That is true of the DELIVERY and not of the NOTICE. A
+    // function-pointer list carries no realm and no JSContext, and each
+    // wrapper layer above — the QuickJS bindings, the bronze host — turns the
+    // same notice into its own records for its own callbacks. It is the shape
+    // the live-Range notifications above already have, for the same reason:
+    // what changed is a property of the tree, not of who changed it.
+    //
+    // That is the whole point of putting it here. A compiled app observing its
+    // own subtree, a page script mutating that subtree, and the engine's own
+    // C++ all reach the same three mutators, so an observer registered here
+    // sees every mutation rather than only the ones made through one binding
+    // layer.
+    //
+    // Fired AFTER the tree has changed, except for a removal, which fires in
+    // the instant BEFORE the detach — the record names the siblings the node
+    // had, and a record built afterwards would name nothing. `added`/`removed`
+    // are one node per notice because the mutators move one node at a time; a
+    // wrapper that wants the web's array-shaped record coalesces them itself.
+    //
+    // An observer must NOT mutate the DOM from inside one: it is called with
+    // the tree mid-change and every other observer still to run.
+    struct MutationNotice {
+        enum class Kind { ChildList, Attributes, CharacterData };
+        Kind kind = Kind::ChildList;
+        Node* target = nullptr;   // the PARENT for ChildList, the node itself otherwise
+        Node* added = nullptr;
+        Node* removed = nullptr;
+        Node* previousSibling = nullptr;
+        Node* nextSibling = nullptr;
+        // Both borrowed for the duration of the call and never stored: an
+        // observer that wants either past its own return copies it.
+        const std::string* attributeName = nullptr;  // Attributes only
+        const std::string* oldValue = nullptr;       // Attributes / CharacterData
+    };
+    using MutationObserverFn = void(*)(Document*, const MutationNotice&);
+    void addMutationObserver(MutationObserverFn cb);
+    void removeMutationObserver(MutationObserverFn cb);
+    void notifyMutation(const MutationNotice& notice);
+
+    // Every firing site is guarded on this. It is not an optimisation of the
+    // notify call — it is what keeps the cost of the whole feature at zero for
+    // a document nobody is observing: setAttribute would otherwise copy the old
+    // value out on every write, and the HTML parser would build a notice for
+    // every node it appends.
+    bool hasMutationObservers() const { return !mutationObservers_.empty(); }
+
     // Fired from cloneNode() for each cloned element, after its attributes and
     // (for a deep clone) its children are in place. Everything the DOM layer
     // can copy on its own already has been; this hook exists for the state
@@ -586,6 +638,7 @@ private:
     NodeFreedCallback nodeFreedCb_ = nullptr;
     NodeDestroyingCallback nodeDestroyingCb_ = nullptr;
     std::vector<NodeObserver> nodeFreedObservers_;
+    std::vector<MutationObserverFn> mutationObservers_;
     ElementClonedCallback elementClonedCb_ = nullptr;
     NodeAdoptedCallback nodeAdoptedCb_ = nullptr;
 };

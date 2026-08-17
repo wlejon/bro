@@ -1471,6 +1471,27 @@ void Document::addNodeFreedObserver(NodeObserver cb) {
     nodeFreedObservers_.push_back(cb);
 }
 
+void Document::addMutationObserver(MutationObserverFn cb) {
+    if (!cb) return;
+    for (MutationObserverFn existing : mutationObservers_)
+        if (existing == cb) return;   // idempotent: installing twice is one hook
+    mutationObservers_.push_back(cb);
+}
+
+void Document::removeMutationObserver(MutationObserverFn cb) {
+    mutationObservers_.erase(
+        std::remove(mutationObservers_.begin(), mutationObservers_.end(), cb),
+        mutationObservers_.end());
+}
+
+void Document::notifyMutation(const MutationNotice& notice) {
+    // By value into a local copy of the list, not by reference into the member:
+    // an observer is allowed to disconnect itself, and on the web that is the
+    // FIRST thing a one-shot observer does.
+    std::vector<MutationObserverFn> snapshot = mutationObservers_;
+    for (MutationObserverFn obs : snapshot) obs(this, notice);
+}
+
 void Document::removeNodeFreedObserver(NodeObserver cb) {
     nodeFreedObservers_.erase(
         std::remove(nodeFreedObservers_.begin(), nodeFreedObservers_.end(), cb),

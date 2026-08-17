@@ -29,6 +29,7 @@ Off by default; nothing here is in the default build.
 | `host_xhr.cpp` | `XMLHttpRequest` (text over the app asset path; see its header) |
 | `host_file.cpp` | `Blob`, `File`, `FileReader`, and the `URL` namespace — bytes an app holds, and the object URLs that name them |
 | `host_abort.cpp` | `AbortController` / `AbortSignal`, and the cancellation `fetch` obeys |
+| `host_observers.cpp` | `MutationObserver`, over the DOM layer's own mutation notices |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
 | `app_module.cpp` | finding, verifying and running the module an app dir carries |
 
@@ -406,7 +407,30 @@ instead of two.
 not a `dom::Element` — it has no layout box, and `img instanceof Image` is
 false because the embed API cannot build an object on a chosen prototype.
 
-**The DOM**: `dataset`, `MutationObserver`, `ResizeObserver`, and `DOMParser`.
+**The DOM**: `dataset`, `ResizeObserver`, and `DOMParser`.
+
+`MutationObserver` is DONE — `host_observers.cpp`, checked by
+`tests/bronze_host/run_observer_test.sh` — and it is built on a notice fired by
+the DOM layer itself (`Document::notifyMutation`, new in `src/dom/document.h`)
+rather than on this layer's own mutators. That is the difference between an
+observer that sees every change to the tree and one that sees only the changes
+compiled code made: the check's `page.*` assertion is a script in the page's
+QuickJS realm setting an attribute, and the compiled observer hearing about it.
+
+Records are delivered once per frame from the frame seam, after
+requestAnimationFrame and before the closing microtask drain, rather than at the
+microtask checkpoint that follows the mutation. So a mutation made in an rAF
+callback or a timer is reported in the same frame and one made in an event
+handler at the top of the next — the one-frame resolution everything
+asynchronous in this layer has, because there is one host seam per frame.
+Records queued from inside a callback wait for the following delivery, which is
+what stops an observer that mutates what it observes from re-entering itself.
+
+`addedNodes` and `removedNodes` carry at most one node, because the DOM's
+mutators move one node at a time; on the web they are longer only for
+`replaceChildren` and `innerHTML`, neither of which exists here. A comment
+node's `data` is not observed: `dom::CommentNode` has no document notification
+at all, where `TextNode` funnels all five of its mutators through one.
 
 `dataset` is blocked rather than merely unwritten: it is a live view whose keys
 are not known in advance, so it needs a PROPERTY TRAP, and the embed API has

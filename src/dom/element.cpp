@@ -49,8 +49,11 @@ static Document* findDocument(Node* node) {
 // What deliberately stays OUT of here, because it is realm-scoped rather than
 // tree-scoped and needs a JSContext the DOM layer does not have:
 //   - custom-element connectedCallback (runs script)
-//   - MutationObserver records (per-realm observer lists, JS callbacks)
-// Those remain in the JS bindings. Document adoption stays with the callers
+//   - MutationObserver DELIVERY (per-realm observer lists, JS callbacks)
+// Those remain in the JS bindings. What the tree does now report is the plain
+// NOTICE that a mutation happened — Document::notifyMutation, fired below —
+// because what changed is a property of the tree and not of who changed it;
+// document.h has the argument. Document adoption stays with the callers
 // too — it is a pre-insertion step that must run BEFORE the tree changes, so it
 // cannot be expressed as a post-mutation notification.
 //
@@ -68,14 +71,33 @@ static void notifyChildListChanged(Node* parent) {
     }
 }
 
+// A childList notice, if anyone is listening. `added` and `removed` are what
+// this one mutation did; the siblings are read from the tree as it stands,
+// which is why the removal path calls this BEFORE it detaches.
+static void notifyChildListMutation(Node* parent, Node* added, Node* removed,
+                                    Node* prev, Node* next) {
+    Document* doc = findDocument(parent);
+    if (!doc || !doc->hasMutationObservers()) return;
+    Document::MutationNotice notice;
+    notice.kind = Document::MutationNotice::Kind::ChildList;
+    notice.target = parent;
+    notice.added = added;
+    notice.removed = removed;
+    notice.previousSibling = prev;
+    notice.nextSibling = next;
+    doc->notifyMutation(notice);
+}
+
 void Node::appendChild(Node* child) {
     if (!child) return;
     if (child->parent_) {
         child->parent_->removeChild(child);
     }
+    Node* prev = children_.empty() ? nullptr : children_.back();
     child->parent_ = this;
     children_.push_back(child);
     notifyChildListChanged(this);
+    notifyChildListMutation(this, child, nullptr, prev, nullptr);
 }
 
 void Node::removeChild(Node* child) {
@@ -87,6 +109,11 @@ void Node::removeChild(Node* child) {
         if (auto* doc = findDocument(this)) {
             doc->notifyNodeRemoved(child);
         }
+        // Same reason, one step further: the record names the siblings the
+        // node HAD, and a moment from now it has none.
+        Node* prev = it == children_.begin() ? nullptr : *(it - 1);
+        Node* next = (it + 1) == children_.end() ? nullptr : *(it + 1);
+        notifyChildListMutation(this, nullptr, child, prev, next);
         (*it)->parent_ = nullptr;
         children_.erase(it);
         notifyChildListChanged(this);
@@ -96,7 +123,7 @@ void Node::removeChild(Node* child) {
 void Node::insertBefore(Node* newChild, Node* refChild) {
     if (!newChild) return;
     if (!refChild) {
-        appendChild(newChild);  // invalidates
+        appendChild(newChild);  // invalidates, and fires its own notice
         return;
     }
     if (newChild->parent_) {
@@ -104,9 +131,11 @@ void Node::insertBefore(Node* newChild, Node* refChild) {
     }
     auto it = std::find(children_.begin(), children_.end(), refChild);
     if (it != children_.end()) {
+        Node* prev = it == children_.begin() ? nullptr : *(it - 1);
         newChild->parent_ = this;
         children_.insert(it, newChild);
         notifyChildListChanged(this);
+        notifyChildListMutation(this, newChild, nullptr, prev, refChild);
     }
 }
 
@@ -214,6 +243,44 @@ bool Element::hasAttribute(const std::string& name) const {
     return attributes_.find(name) != attributes_.end();
 }
 
+// Fires an Attributes notice when it goes out of scope. setAttribute has three
+// exits and this way it has one notice; the old value is COPIED at
+// construction, because the write that follows can move the map's storage out
+// from under a reference into it.
+//
+// Inert unless the document has observers, which is what keeps the copy out of
+// a hot path — setAttribute runs on every class toggle in every frame.
+namespace {
+struct AttributeNoticeGuard {
+    Document* doc = nullptr;
+    Element* el = nullptr;
+    const std::string* name = nullptr;
+    std::string oldValue;
+    bool hadValue = false;
+
+    AttributeNoticeGuard(Element* element, const std::string& attr,
+                         const std::string* previous)
+        : el(element), name(&attr) {
+        Document* d = element->document();
+        if (!d || !d->hasMutationObservers()) return;
+        doc = d;
+        if (previous) {
+            oldValue = *previous;
+            hadValue = true;
+        }
+    }
+    ~AttributeNoticeGuard() {
+        if (!doc) return;
+        Document::MutationNotice notice;
+        notice.kind = Document::MutationNotice::Kind::Attributes;
+        notice.target = el;
+        notice.attributeName = name;
+        notice.oldValue = hadValue ? &oldValue : nullptr;
+        doc->notifyMutation(notice);
+    }
+};
+}  // namespace
+
 void Element::setAttribute(const std::string& name, const std::string& val) {
     if (name == "style") {
         // The "style" attribute and the .style CSSOM object (StyleProxy) are
@@ -231,6 +298,15 @@ void Element::setAttribute(const std::string& name, const std::string& val) {
 
     auto existing = attributes_.find(name);
     if (existing != attributes_.end() && existing->second == val) return;
+
+    // setAttribute has three exits from here on (the class branch, the src
+    // branch's fallthrough, the plain one), so the notice is fired by a guard
+    // on scope exit rather than written out three times. Inert unless someone
+    // is observing — which is also what keeps the old-value copy out of the
+    // hot path.
+    AttributeNoticeGuard notice(this, name,
+                                existing != attributes_.end() ? &existing->second
+                                                              : nullptr);
 
     if (name == "id" && document_) {
         std::string oldId = getAttribute("id");
@@ -285,7 +361,13 @@ void Element::removeAttribute(const std::string& name) {
         std::string oldId = getAttribute("id");
         if (!oldId.empty()) document_->unregisterElementId(oldId, this);
     }
-    attributes_.erase(name);
+    {
+        auto existing = attributes_.find(name);
+        AttributeNoticeGuard notice(this, name,
+                                    existing != attributes_.end() ? &existing->second
+                                                                  : nullptr);
+        attributes_.erase(name);
+    }
     if (name == "class" || name == "id") markPaintDirty();  // see setAttribute
     else markDirty();
 }

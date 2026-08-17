@@ -1,0 +1,21 @@
+APP fixture.hostFound=true
+APP fixture.sharedFound=true
+APP fixture.hostChildren=2
+APP sync.deliveredInTurn=false
+APP main.batches=1
+APP main.observerArg=true
+APP main.records=6
+APP rec0=childList on #host +1(#box) -0(-) prev=#second next=- attr=- old=-
+APP rec1=attributes on #box +0(-) -0(-) prev=- next=- attr=data-k old=-
+APP rec2=attributes on #box +0(-) -0(-) prev=- next=- attr=data-k old=v1
+APP rec3=childList on #box +1(#text) -0(-) prev=- next=- attr=- old=-
+APP rec4=characterData on #text +0(-) -0(-) prev=- next=- attr=- old=hi
+APP rec5=childList on #host +0(-) -1(#box) prev=#second next=- attr=- old=-
+APP narrow.count=1
+APP gone.count=0
+APP take.count=1
+APP take.again=0
+APP take.delivered=0
+APP page.record=attributes:data-page:#shared
+APP page.value=yes
+APP done=1

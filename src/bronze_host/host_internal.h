@@ -64,6 +64,7 @@ inline constexpr uint32_t kHostRequestTag = 0x52455155u;  // 'REQU'
 inline constexpr uint32_t kHostBlobTag = 0x424C4F42u;     // 'BLOB'
 inline constexpr uint32_t kHostReaderTag = 0x46524452u;   // 'FRDR'
 inline constexpr uint32_t kHostSignalTag = 0x53474E4Cu;   // 'SGNL'
+inline constexpr uint32_t kHostMutationObserverTag = 0x4D555442u;  // 'MUTB'
 
 // ---------------------------------------------------------------------------
 // The error funnel and the frame clock (dom_globals.cpp)
@@ -438,6 +439,20 @@ void hostAbortSignal(Value signal, Value reason);
 // there is no DOMException to construct; `e.name === 'AbortError'` is the check
 // real code writes and it answers correctly.
 Value hostMakeDomError(const char* name, const std::string& message);
+
+// ---------------------------------------------------------------------------
+// MutationObserver (host_observers.cpp)
+// ---------------------------------------------------------------------------
+
+void installObserverGlobals();
+
+// Hand every observer the records it has accumulated, one call per observer
+// with all of them. Called once per frame from the bronze frame seam, AFTER
+// requestAnimationFrame — so a mutation made in an rAF callback is reported in
+// the frame that made it — and before the closing microtask drain, so the
+// promise jobs an observer starts run in the same checkpoint as everything
+// else's. Records queued from inside a callback wait for the next frame.
+void deliverHostObservers();
 
 // ---------------------------------------------------------------------------
 // XMLHttpRequest (host_xhr.cpp)

@@ -77,3 +77,4 @@ FileReader
 URL
 AbortController
 AbortSignal
+MutationObserver

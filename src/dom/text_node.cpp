@@ -14,12 +14,41 @@ static Document* ownerDoc(Node* node) {
     return nullptr;
 }
 
+// Fires a CharacterData notice when it goes out of scope. All five mutators
+// below already funnel their range bookkeeping through notifyTextDataChanged,
+// but a mutation record's oldValue is the WHOLE previous string, which that
+// call's (offset, count, newLen) cannot reconstruct — so the old data is
+// copied here, before the edit, and only when someone is observing.
+namespace {
+struct CharacterDataNoticeGuard {
+    Document* doc = nullptr;
+    Node* node = nullptr;
+    std::string oldValue;
+
+    CharacterDataNoticeGuard(Node* n, const std::string& current) : node(n) {
+        Document* d = ownerDoc(n);
+        if (!d || !d->hasMutationObservers()) return;
+        doc = d;
+        oldValue = current;
+    }
+    ~CharacterDataNoticeGuard() {
+        if (!doc) return;
+        Document::MutationNotice notice;
+        notice.kind = Document::MutationNotice::Kind::CharacterData;
+        notice.target = node;
+        notice.oldValue = &oldValue;
+        doc->notifyMutation(notice);
+    }
+};
+}  // namespace
+
 TextNode::TextNode(const std::string& data)
     : data_(data)
 {
 }
 
 void TextNode::setData(const std::string& text) {
+    CharacterDataNoticeGuard notice(this, data_);
     int oldLen = static_cast<int>(data_.size());
     int newLen = static_cast<int>(text.size());
     data_ = text;
@@ -33,6 +62,7 @@ std::string TextNode::substringData(size_t offset, size_t count) const {
 }
 
 void TextNode::appendData(const std::string& data) {
+    CharacterDataNoticeGuard notice(this, data_);
     int before = static_cast<int>(data_.size());
     data_ += data;
     if (auto* doc = ownerDoc(this))
@@ -40,6 +70,7 @@ void TextNode::appendData(const std::string& data) {
 }
 
 void TextNode::insertData(size_t offset, const std::string& data) {
+    CharacterDataNoticeGuard notice(this, data_);
     if (offset > data_.size()) offset = data_.size();
     data_.insert(offset, data);
     if (auto* doc = ownerDoc(this))
@@ -49,6 +80,9 @@ void TextNode::insertData(size_t offset, const std::string& data) {
 
 void TextNode::deleteData(size_t offset, size_t count) {
     if (offset > data_.size()) return;
+    // After the refusal, not before: a call that changes nothing must not
+    // report that it did.
+    CharacterDataNoticeGuard notice(this, data_);
     size_t actual = std::min(count, data_.size() - offset);
     data_.erase(offset, actual);
     if (auto* doc = ownerDoc(this))
@@ -58,6 +92,9 @@ void TextNode::deleteData(size_t offset, size_t count) {
 
 void TextNode::replaceData(size_t offset, size_t count, const std::string& data) {
     if (offset > data_.size()) return;
+    // After the refusal, not before: a call that changes nothing must not
+    // report that it did.
+    CharacterDataNoticeGuard notice(this, data_);
     size_t eraseCount = std::min(count, data_.size() - offset);
     data_.erase(offset, eraseCount);
     data_.insert(offset, data);

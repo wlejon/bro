@@ -1,0 +1,37 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>bronze observer probe</title></head>
+<body>
+<!-- One line, so the child count follows from the markup rather than from its
+     indentation: every newline between tags is a text node. -->
+<div id="host"><span id="first">one</span><span id="second">two</span></div>
+
+<!-- A container per claim. They exist because the observers in the probe watch
+     overlapping things by design — that IS the feature — so a scratch element
+     appended for the disconnect test would otherwise land in the main
+     observer's record list and make its expectation a record of which test ran
+     first. -->
+<div id="pen_scope"></div>
+<div id="pen_gone"></div>
+<div id="pen_take"></div>
+
+<!-- The cross-realm case, and the reason MutationObserver's notices live in
+     the DOM layer rather than in either wrapper. This listener runs in the
+     PAGE's QuickJS realm; the observer that must see the change runs in
+     compiled code. A host that watched only its own mutators would report
+     nothing here and look perfectly healthy doing it.
+
+     An EVENT rather than a timer, because a timer is not orderable against the
+     compiled program's start: the page's scripts are step 10 of engine init
+     and the compiled top level runs after it (HeadlessHooks::afterEngine), so
+     a setTimeout registered here can — and in this fixture did — fire before
+     there is an observer to see it. The app asking for the mutation puts the
+     order beyond doubt. -->
+<div id="shared" data-page="no"></div>
+<script>
+  document.addEventListener('app:mutatePage', function () {
+      document.getElementById('shared').setAttribute('data-page', 'yes');
+  });
+</script>
+</body>
+</html>

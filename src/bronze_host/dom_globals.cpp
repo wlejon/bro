@@ -147,6 +147,12 @@ void fireAnimationFrames() {
 //  4. Timers, then 5. rAF. The order bro's own loop uses (timers_->tick at
 //     step 2, fireAnimationFrames at step 3a).
 //
+//  5b. Mutation records. After rAF because an rAF callback is where a compiled
+//     app does most of its DOM work, and an observer told about it in the same
+//     frame is an observer that can still act before the frame is drawn.
+//     Before the checkpoint for the same reason step 6 is where it is: whatever
+//     the callback starts should settle with the rest of this frame's jobs.
+//
 //  6. The microtask checkpoint. AFTER rAF, not before: an rAF callback is the
 //     main producer of promise jobs in a render loop — three.js's own
 //     `renderer.setAnimationLoop` body, every `await` an app puts in its frame
@@ -161,6 +167,7 @@ void hostFrame(double dtMs) {
     drainHostTasks();                                    // 3
     fireHostTimers(g_host->clockMs);                     // 4
     fireAnimationFrames();                               // 5
+    deliverHostObservers();                              // 5b
     ev::drainMicrotasks();                               // 6
 }
 
@@ -943,6 +950,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     installPlatformGlobals();
     installFileGlobals();
     installAbortGlobals();
+    installObserverGlobals();
 
     {
         Value nav = makeNavigatorValue();
