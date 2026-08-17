@@ -321,7 +321,8 @@ void installPlatformGlobals() {
              "WheelEvent", "InputEvent", "FocusEvent", "ProgressEvent",
              "Element", "HTMLElement", "HTMLInputElement", "HTMLSelectElement",
              "HTMLTextAreaElement", "HTMLVideoElement", "HTMLMediaElement",
-             "HTMLAnchorElement", "HTMLDivElement", "Text", "DocumentFragment",
+             "HTMLAnchorElement", "HTMLDivElement", "Text", "CharacterData",
+             "Comment", "DocumentFragment",
          }) {
         ev::registerGlobal(name, makeInterfaceValue(name));
     }

@@ -18,7 +18,8 @@ Off by default; nothing here is in the default build.
 |---|---|
 | `app_module.cpp` | **the compiled app a FOLDER carries**: finding it, verifying its ABI, running it |
 | `dom_globals.cpp` | `document`, canvas, `window`, rAF, `performance`, **and the frame seam** (`hostFrame`) |
-| `host_element.cpp` | the element surface an app *builds*: the identity registry, tree ops, `style`, `classList`, geometry, form controls, computed style |
+| `host_element.cpp` | the element surface an app *builds*: the identity registry, `style`, `classList`, geometry, form controls, computed style, the element-only tree views |
+| `host_node.cpp` | the nodes that are not elements — text, comments, fragments — and the tree surface every node shares (`childNodes`, the mutators, `cloneNode`) |
 | `host_platform.cpp` | `btoa`/`atob`, `queueMicrotask`, `screen`, `alert`/`confirm`/`prompt`, and the DOM interface names libraries sniff for |
 | `host_internal.h` | the non-GL shared surface: error funnel, clock, task queue, handle tags |
 | `host_events.cpp` | `on<type>` + `addEventListener` for the objects that fire events |
@@ -368,10 +369,24 @@ through this layer yet.
 not a `dom::Element` — it has no layout box, and `img instanceof Image` is
 false because the embed API cannot build an object on a chosen prototype.
 
-**The DOM**: text nodes (`createTextNode`, and `firstChild` answering one —
-`host_element.cpp` walks ELEMENTS), `dataset`, `cloneNode`, `MutationObserver`,
-`ResizeObserver`, and `DOMParser`. `style` and `getComputedStyle` carry an
-accessor per property from a curated ~110-name list rather than htmlayout's
-full 363: the embed API has no property trap, and an accessor pair per property
-per element would be paid by every element an app makes. `setProperty` /
-`getPropertyValue` / `cssText` are complete and cover the rest.
+**The DOM**: `dataset`, `MutationObserver`, `ResizeObserver`, and `DOMParser`.
+
+`dataset` is blocked rather than merely unwritten: it is a live view whose keys
+are not known in advance, so it needs a PROPERTY TRAP, and the embed API has
+none. Everything else about it can be faked; `el.dataset.newKey = 'v'` cannot,
+and a dataset that silently drops that write is worse than no dataset at all.
+`getAttribute('data-k')` / `setAttribute` are the whole surface until bronze
+grows a trap. `bronze-requirements.md` carries the ask.
+
+The same limit is why `style` and `getComputedStyle` carry an accessor per
+property from a curated ~110-name list rather than htmlayout's full 363: an
+accessor pair per property per element would be paid by every element an app
+makes. `setProperty` / `getPropertyValue` / `cssText` are complete and cover
+the rest.
+
+Text nodes, comments, fragments and `cloneNode` are DONE — `host_node.cpp`,
+checked by `tests/bronze_host/run_node_test.sh`. `childNodes`, `firstChild`,
+`lastChild`, `nextSibling` and `previousSibling` walk NODES; `children`,
+`firstElementChild` and `nextElementSibling` are the element-only views beside
+them. CharacterData offsets are UTF-16, converted at the boundary, because the
+DOM stores UTF-8 and JS string indices are not byte indices.

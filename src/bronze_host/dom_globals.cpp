@@ -370,6 +370,32 @@ Value makeDocumentValue() {
     b.def("createElementNS", 2, [](Value, std::span<const Value> a) {
         return createElementImpl(a, 1);
     });
+    // The other three node factories. All go through the DOCUMENT so the node
+    // lands in Document::ownedNodes_ — which is what makes it freed on teardown
+    // and what makes the freed-node observer the registry depends on fire for
+    // it (host_element.cpp). A node allocated any other way would outlive its
+    // wrapper's ability to notice it died.
+    b.def("createTextNode", 1, [](Value, std::span<const Value> a) {
+        dom::Document* doc = g_host->engine->document();
+        if (!doc) return ev::throwError("bronze host: engine has no document");
+        Value v = argAt(a, 0);
+        std::string text =
+            (ev::isObject(v) || ev::isUndefined(v)) ? "" : ev::toUtf8(v);
+        return hostNodeValue(doc->createTextNode(text));
+    });
+    b.def("createComment", 1, [](Value, std::span<const Value> a) {
+        dom::Document* doc = g_host->engine->document();
+        if (!doc) return ev::throwError("bronze host: engine has no document");
+        Value v = argAt(a, 0);
+        std::string text =
+            (ev::isObject(v) || ev::isUndefined(v)) ? "" : ev::toUtf8(v);
+        return hostNodeValue(doc->createComment(text));
+    });
+    b.def("createDocumentFragment", 0, [](Value, std::span<const Value>) {
+        dom::Document* doc = g_host->engine->document();
+        if (!doc) return ev::throwError("bronze host: engine has no document");
+        return hostNodeValue(doc->createDocumentFragment());
+    });
     b.def("getElementById", 1, [](Value, std::span<const Value> a) {
         Value idV = argAt(a, 0);
         if (ev::isObject(idV) || ev::isUndefined(idV)) return ev::null();

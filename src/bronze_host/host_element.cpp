@@ -42,6 +42,7 @@
 #include "bronze_host/host_internal.h"
 
 #include "dom/document.h"
+#include "dom/document_fragment.h"
 #include "dom/element.h"
 #include "dom/element_geometry.h"
 #include "dom/node.h"
@@ -67,23 +68,14 @@ namespace {
 // The registry
 // ---------------------------------------------------------------------------
 
-struct ElementState {
-    uint32_t tag = kHostElementTag;  // must be first — see host_internal.h
-    dom::Element* el = nullptr;      // nullptr once the node has been freed
-    ev::Persistent jsObj;
-    ev::Persistent styleObj;
-    ev::Persistent classListObj;
-    ev::Persistent computedObj;
-    bool hasStyle = false;
-    bool hasClassList = false;
-    bool hasComputed = false;
-};
-
+// HostNodeState is in host_internal.h: host_node.cpp builds the text, comment
+// and fragment wrappers on the same entries, so the registry is the layer's,
+// not this file's. What stays here is the registry itself.
 struct Registry {
     // unique_ptr so an entry's address is stable: every accessor on the wrapper
-    // captures its ElementState*, and the map rehashes as the tree grows.
-    std::vector<std::unique_ptr<ElementState>> entries;
-    std::unordered_map<const dom::Element*, ElementState*> live;
+    // captures its HostNodeState*, and the map rehashes as the tree grows.
+    std::vector<std::unique_ptr<HostNodeState>> entries;
+    std::unordered_map<const dom::Node*, HostNodeState*> live;
     bool observing = false;
 };
 
@@ -102,13 +94,12 @@ Registry& registry() {
 // wrapper the program still holds is a handle pointing at it, and that pointer
 // has to stay valid. What it points at is now inert.
 void onNodeFreed(dom::Document*, dom::Node* node) {
-    if (node->nodeType() != dom::NodeType::Element) return;
-    auto* el = static_cast<dom::Element*>(node);
     Registry& r = registry();
-    auto it = r.live.find(el);
+    auto it = r.live.find(node);
     if (it == r.live.end()) return;
-    ElementState* st = it->second;
+    HostNodeState* st = it->second;
     r.live.erase(it);
+    st->node = nullptr;
     st->el = nullptr;
     st->jsObj.set(ev::undefined());
     st->styleObj.set(ev::undefined());
@@ -119,22 +110,29 @@ void onNodeFreed(dom::Document*, dom::Node* node) {
     st->hasComputed = false;
 }
 
-ElementState* stateFor(dom::Element* el) {
-    if (!el) return nullptr;
+// Takes a Node rather than an Element so text nodes, comments and fragments
+// land in the SAME map as elements. One registry is what keeps identity a
+// property of the node rather than of the kind of node: `parent.childNodes[0]
+// === textNode` has to hold for the same reason `=== element` does, and a
+// second map keyed on text nodes would be a second answer to the same question.
+HostNodeState* stateFor(dom::Node* node) {
+    if (!node) return nullptr;
     Registry& r = registry();
-    auto it = r.live.find(el);
+    auto it = r.live.find(node);
     if (it != r.live.end()) return it->second;
     if (!r.observing) {
-        if (dom::Document* doc = el->document()) {
+        if (dom::Document* doc = node->document()) {
             doc->addNodeFreedObserver(&onNodeFreed);
             r.observing = true;
         }
     }
-    auto owned = std::make_unique<ElementState>();
-    ElementState* st = owned.get();
-    st->el = el;
+    auto owned = std::make_unique<HostNodeState>();
+    HostNodeState* st = owned.get();
+    st->node = node;
+    st->el = node->nodeType() == dom::NodeType::Element
+                 ? static_cast<dom::Element*>(node) : nullptr;
     r.entries.push_back(std::move(owned));
-    r.live.emplace(el, st);
+    r.live.emplace(node, st);
     return st;
 }
 
@@ -192,7 +190,7 @@ const char* const kStyleProps[] = {
     "objectFit", "objectPosition", "listStyle", "borderCollapse", "tableLayout",
 };
 
-Value makeStyleObject(ElementState* st) {
+Value makeStyleObject(HostNodeState* st) {
     ObjectBuilder b;
     for (const char* camel : kStyleProps) {
         const std::string& css = dashedFor(camel);
@@ -277,7 +275,7 @@ Value makeStyleObject(ElementState* st) {
 // element — so a UI that reads a width, changes a class and reads again must
 // see the second answer, and a snapshot taken at construction would hand back
 // the first.
-Value makeComputedStyleObject(ElementState* st) {
+Value makeComputedStyleObject(HostNodeState* st) {
     ObjectBuilder b;
     auto resolve = [st](const std::string& css) {
         if (!st->el) return std::string();
@@ -353,7 +351,7 @@ bool hasClass(dom::Element* el, const std::string& name) {
 
 // Every mutator takes a variadic list, as DOMTokenList does: `classList.add(a, b)`
 // is one call on the web and widget libraries write it that way.
-Value makeClassListObject(ElementState* st) {
+Value makeClassListObject(HostNodeState* st) {
     ObjectBuilder b;
     b.def("add", 1, [st](Value, std::span<const Value> a) {
         if (!st->el) return ev::undefined();
@@ -532,14 +530,52 @@ Value hostArrayOf(size_t count, const std::function<Value(size_t)>& make) {
 
 dom::Element* hostElementOf(Value v) {
     if (!ev::isObject(v)) return nullptr;
-    auto* st = static_cast<ElementState*>(ev::handleData(v));
+    auto* st = static_cast<HostNodeState*>(ev::handleData(v));
     if (!st || st->tag != kHostElementTag) return nullptr;
     return st->el;
 }
 
+dom::Node* hostNodeOf(Value v) {
+    if (!ev::isObject(v)) return nullptr;
+    auto* st = static_cast<HostNodeState*>(ev::handleData(v));
+    if (!st || st->tag != kHostElementTag) return nullptr;
+    return st->node;
+}
+
+Value hostNodeValue(dom::Node* node) {
+    if (!node) return ev::null();
+    if (node->nodeType() == dom::NodeType::Element)
+        return hostElementValue(static_cast<dom::Element*>(node));
+
+    HostNodeState* st = stateFor(node);
+    Value existing = st->jsObj.get();
+    if (!ev::isUndefined(existing)) return existing;
+
+    Value v;
+    switch (node->nodeType()) {
+        case dom::NodeType::Text:
+        case dom::NodeType::Comment:
+            v = makeCharacterDataValue(node);
+            break;
+        case dom::NodeType::DocumentFragment:
+            v = makeFragmentValue(static_cast<dom::DocumentFragment*>(node));
+            break;
+        default:
+            // A Document reached as some node's parent. There is no wrapper for
+            // it here — `document` is a global built by dom_globals.cpp, not a
+            // registry entry — and answering null is what the web does for
+            // parentElement at the root anyway.
+            return ev::null();
+    }
+    // The make* call allocates, and allocation can grow the registry, so the
+    // entry is re-fetched rather than reused across it.
+    if (HostNodeState* again = stateFor(node)) again->jsObj.set(v);
+    return v;
+}
+
 Value hostElementValue(dom::Element* el) {
     if (!el) return ev::null();
-    ElementState* st = stateFor(el);
+    HostNodeState* st = stateFor(el);
     Value existing = st->jsObj.get();
     if (!ev::isUndefined(existing)) return existing;
     // A canvas is more than an element — it owns a drawing buffer and a GL
@@ -548,18 +584,18 @@ Value hostElementValue(dom::Element* el) {
                                          : makePlainElementValue(el);
     // makeCanvas/makePlain allocate, and allocation can grow the registry, so
     // the entry is re-fetched rather than reused across the call.
-    if (ElementState* again = stateFor(el)) again->jsObj.set(v);
+    if (HostNodeState* again = stateFor(el)) again->jsObj.set(v);
     return v;
 }
 
 void noteHostElementValue(dom::Element* el, Value v) {
-    if (ElementState* st = stateFor(el)) st->jsObj.set(v);
+    if (HostNodeState* st = stateFor(el)) st->jsObj.set(v);
 }
 
 Value hostComputedStyleFor(Value elValue) {
-    ElementState* st = nullptr;
+    HostNodeState* st = nullptr;
     if (ev::isObject(elValue)) {
-        auto* candidate = static_cast<ElementState*>(ev::handleData(elValue));
+        auto* candidate = static_cast<HostNodeState*>(ev::handleData(elValue));
         if (candidate && candidate->tag == kHostElementTag && candidate->el)
             st = candidate;
     }
@@ -578,7 +614,7 @@ Value hostComputedStyleFor(Value elValue) {
         Value c = makeComputedStyleObject(st);
         // makeComputedStyleObject allocates, so the entry pointer is re-taken
         // from the value rather than trusted across the call.
-        st = static_cast<ElementState*>(ev::handleData(elValue));
+        st = static_cast<HostNodeState*>(ev::handleData(elValue));
         st->computedObj.set(c);
         st->hasComputed = true;
     }
@@ -589,13 +625,19 @@ bool isCanvasTag(const std::string& tag) {
     return tag == "CANVAS" || tag == "canvas";
 }
 
-Value makeElementHandleObject(dom::Element* el) {
-    return ev::makeHandle(stateFor(el), [](void*) {
+Value makeNodeHandleObject(dom::Node* node) {
+    return ev::makeHandle(stateFor(node), [](void*) {
         // Deliberately empty. The entry belongs to the registry, and freeing it
         // here would destroy its Persistents from inside a finalizer — the one
         // thing host_internal.h's GC rule forbids.
     });
 }
+
+Value makeElementHandleObject(dom::Element* el) {
+    return makeNodeHandleObject(el);
+}
+
+HostNodeState* hostNodeStateFor(dom::Node* node) { return stateFor(node); }
 
 Value makePlainElementValue(dom::Element* el) {
     ObjectBuilder b(makeElementHandleObject(el));
@@ -604,7 +646,7 @@ Value makePlainElementValue(dom::Element* el) {
 }
 
 void installElementCore(ObjectBuilder& b, dom::Element* el) {
-    ElementState* st = stateFor(el);
+    HostNodeState* st = stateFor(el);
 
     // ---- identity ---------------------------------------------------------
     b.set("nodeType", ev::fromDouble(1));
@@ -707,79 +749,44 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
 
     // ---- the tree ---------------------------------------------------------
     // This is what makes it a DOM rather than a list of styled boxes, and it is
-    // why the registry exists: appendChild has to recover an Element* from the
+    // why the registry exists: appendChild has to recover a Node* from the
     // value the program is holding, and `children` has to hand the same value
     // back.
-    b.def("appendChild", 1, [st](Value, std::span<const Value> a) {
-        dom::Element* child = hostElementOf(argAt(a, 0));
-        if (!st->el || !child)
-            return ev::throwTypeError("appendChild: argument is not an element");
-        if (child->parentNode()) child->parentNode()->removeChild(child);
-        st->el->appendChild(child);
-        return argAt(a, 0);
-    });
-    b.def("removeChild", 1, [st](Value, std::span<const Value> a) {
-        dom::Element* child = hostElementOf(argAt(a, 0));
-        if (!st->el || !child)
-            return ev::throwTypeError("removeChild: argument is not an element");
-        if (child->parentNode() == st->el) st->el->removeChild(child);
-        return argAt(a, 0);
-    });
-    b.def("insertBefore", 2, [st](Value, std::span<const Value> a) {
-        dom::Element* child = hostElementOf(argAt(a, 0));
-        if (!st->el || !child)
-            return ev::throwTypeError("insertBefore: argument is not an element");
-        dom::Element* ref = hostElementOf(argAt(a, 1));
-        if (child->parentNode()) child->parentNode()->removeChild(child);
-        st->el->insertBefore(child, ref);
-        return argAt(a, 0);
-    });
-    b.def("replaceChild", 2, [st](Value, std::span<const Value> a) {
-        dom::Element* fresh = hostElementOf(argAt(a, 0));
-        dom::Element* old = hostElementOf(argAt(a, 1));
-        if (!st->el || !fresh || !old)
-            return ev::throwTypeError("replaceChild: argument is not an element");
-        if (old->parentNode() != st->el) return argAt(a, 1);
-        st->el->insertBefore(fresh, old);
-        st->el->removeChild(old);
-        return argAt(a, 1);
-    });
+    //
+    // The node half — parentNode, childNodes, the mutators, cloneNode — is
+    // installNodeTree (host_node.cpp), shared with text and comment wrappers.
+    // What is left here is the ELEMENT-only half: the views that skip
+    // non-elements. `childNodes` and `firstChild` answer text nodes now;
+    // `children` and `firstElementChild` are the ones that do not, which is the
+    // distinction the web draws and the one an app relies on when it walks a
+    // tree it did not build itself.
+    installNodeTree(b, st);
+
     b.def("append", 1, [st](Value, std::span<const Value> a) {
         if (!st->el) return ev::undefined();
         for (const Value& v : a) {
-            dom::Element* child = hostElementOf(v);
-            if (!child) continue;
-            if (child->parentNode()) child->parentNode()->removeChild(child);
-            st->el->appendChild(child);
+            // A string argument becomes a text node, as the web's append does.
+            // This is the shortest path from compiled code to text in the
+            // document, and without it `append("hi")` would silently do
+            // nothing.
+            if (dom::Node* child = hostNodeOf(v)) {
+                hostInsertNode(st->el, child, nullptr);
+            } else if (!ev::isObject(v) && !ev::isUndefined(v)) {
+                if (dom::Document* doc = st->el->document())
+                    st->el->appendChild(doc->createTextNode(ev::toUtf8(v)));
+            }
         }
         return ev::undefined();
     });
-    b.def("remove", 0, [st](Value, std::span<const Value>) {
-        if (st->el && st->el->parentNode()) st->el->parentNode()->removeChild(st->el);
-        return ev::undefined();
-    });
-    // The real answer, not the constant `false` the earlier wrapper returned: a
-    // UI asks `panel.contains(event.target)` to decide whether a click was its
-    // own, and a wrong answer there closes menus that should have stayed open.
-    b.def("contains", 1, [st](Value, std::span<const Value> a) {
-        dom::Element* other = hostElementOf(argAt(a, 0));
-        if (!st->el || !other) return ev::fromBool(false);
-        for (dom::Node* n = other; n; n = n->parentNode())
-            if (n == st->el) return ev::fromBool(true);
-        return ev::fromBool(false);
-    });
 
-    auto childArray = [st]() {
+    auto elementArray = [st]() {
         if (!st->el) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
         std::vector<dom::Element*> kids = st->el->children();
         return hostArrayOf(kids.size(),
                            [&kids](size_t i) { return hostElementValue(kids[i]); });
     };
     b.accessor("children",
-               [childArray](Value, std::span<const Value>) { return childArray(); },
-               nullptr);
-    b.accessor("childNodes",
-               [childArray](Value, std::span<const Value>) { return childArray(); },
+               [elementArray](Value, std::span<const Value>) { return elementArray(); },
                nullptr);
     b.accessor("childElementCount",
                [st](Value, std::span<const Value>) {
@@ -788,21 +795,13 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
                },
                nullptr);
 
-    auto defParent = [&b, st](const char* name) {
-        b.accessor(name,
-                   [st](Value, std::span<const Value>) {
-                       return st->el ? hostElementValue(st->el->parentElement())
-                                     : ev::null();
-                   },
-                   nullptr);
-    };
-    defParent("parentNode");
-    defParent("parentElement");
+    b.accessor("parentElement",
+               [st](Value, std::span<const Value>) {
+                   return st->el ? hostElementValue(st->el->parentElement())
+                                 : ev::null();
+               },
+               nullptr);
 
-    // firstChild/lastChild answer ELEMENTS here, not text nodes: this layer has
-    // no text-node value to hand back, and a UI reaching for them is walking a
-    // tree it built out of elements. A document of mixed content would see the
-    // difference; nothing that builds its own DOM does.
     auto defEdge = [&b, st](const char* name, bool first) {
         b.accessor(name,
                    [st, first](Value, std::span<const Value>) {
@@ -813,9 +812,7 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
                    },
                    nullptr);
     };
-    defEdge("firstChild", true);
     defEdge("firstElementChild", true);
-    defEdge("lastChild", false);
     defEdge("lastElementChild", false);
 
     auto defSibling = [&b, st](const char* name, int dir) {
@@ -826,9 +823,7 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
                    },
                    nullptr);
     };
-    defSibling("nextSibling", +1);
     defSibling("nextElementSibling", +1);
-    defSibling("previousSibling", -1);
     defSibling("previousElementSibling", -1);
 
     b.def("querySelector", 1, [st](Value, std::span<const Value> a) {

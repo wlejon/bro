@@ -1,0 +1,28 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"><title>bronze node probe</title>
+</head>
+<!-- THE POINT OF THIS PAGE is that the compiled app did not build it. Every
+     other appdir here hands the probe a blank body and lets it construct the
+     tree it then inspects, which is exactly the case where an elements-only
+     DOM is indistinguishable from a correct one: an app that only ever calls
+     createElement never meets a node it did not make.
+
+     #mixed is the opposite. It is authored markup with text between its
+     elements and a comment at the end, so its child list is
+     [text, <b>, text, comment] — four nodes, one of which is an element. A
+     wrapper that walks elements reports one child and a first child of <b>;
+     a wrapper that walks nodes reports four and a first child of "Hello ".
+     The probe prints both, and the difference is the whole subject.
+
+     NO INCIDENTAL WHITESPACE inside #mixed: it is written on one line, with no
+     newline or indentation between its tags. That is deliberate. HTML5 keeps
+     inter-element whitespace as text nodes, so a prettier layout here would
+     add child nodes that the expectation would have to count — and the count
+     would then be a property of this file's indentation rather than of
+     anything the DOM does. -->
+<body>
+<p id="mixed">Hello <b>bold</b> world<!--note--></p>
+</body>
+</html>

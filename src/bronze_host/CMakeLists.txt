@@ -66,6 +66,7 @@ add_library(bro_bronze_host STATIC
     app_module.cpp
     dom_globals.cpp
     host_element.cpp
+    host_node.cpp
     host_events.cpp
     host_dom_events.cpp
     host_timers.cpp

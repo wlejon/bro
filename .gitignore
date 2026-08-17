@@ -73,3 +73,8 @@ app.dylib
 app.lib
 app.exp
 app.pdb
+
+# Screenshots the render checks take to compare frames (run_wild_test.sh and
+# its neighbours). Regenerated on every run, and meaningful only against the
+# machine's own GPU, so a committed one is a diff nobody can act on.
+tests/bronze_host/*.png

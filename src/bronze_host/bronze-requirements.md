@@ -6,9 +6,9 @@ Written from the bro side. Updated 2026-08-17, against bronze `8984e1b`.
 
 The folder load model works end to end: `bronze build app.js -o <appdir>/app.dll
 --emit-shared --host-globals src/bronze_host/web_host.globals`, and the stock
-`bro` / `bro-headless` load it. All eight checks in `tests/bronze_host/` run on
-the stock binary now, and the seven per-app `bro-bronze-host*` executables and
-the CMake surface that enumerated them are deleted.
+`bro` / `bro-headless` load it. Every check in `tests/bronze_host/` runs on the
+stock binary now, and the seven per-app `bro-bronze-host*` executables and the
+CMake surface that enumerated them are deleted.
 
 Four things bro relies on, so they are worth knowing are load-bearing:
 
@@ -53,7 +53,28 @@ about those probes' shape — `InstancedMesh` with `setMatrixAt`/`setColorAt` ov
 This sets the floor on an app author's edit-run loop, and 4.6 GB is close enough
 to a memory ceiling that a bigger app may simply not compile.
 
-### 2. The shared-runtime search misses multi-config layouts
+### 2. A property trap, for the objects whose keys are not known in advance
+
+The embed API can define a named property and a named accessor. It cannot
+define what happens when a key nobody registered is read or written. Three
+things on the web are exactly that shape, and all three are stuck:
+
+- **`el.dataset`** — a live view of the element's `data-*` attributes. Reads and
+  writes of keys that already exist can be faked by rebuilding the object on
+  each read; `el.dataset.newKey = 'v'` cannot be faked at all, and a dataset
+  that silently drops that write is worse than no dataset.
+- **`el.style` and `getComputedStyle`** — today an accessor per property from a
+  curated ~110-name list, because htmlayout has 363 and an accessor PAIR per
+  property per element is paid by every element an app makes. A trap would make
+  this both complete and free.
+- **`localStorage`** — same shape, for the same reason.
+
+What would close it: a `makeProxyHandle`-style call taking get/set/has/delete
+callbacks, or narrower, a "dynamic property" hook on an existing handle object
+consulted only when the ordinary lookup misses. The narrow one is enough for all
+three, and it costs nothing on objects that do not declare it.
+
+### 3. The shared-runtime search misses multi-config layouts
 
 `src/cli/link.cpp` looks for the import library in `shared/` beside the CLI and
 one or two directories above it. Under a multi-config generator (MSBuild, Xcode)
@@ -62,11 +83,11 @@ Windows needs `BRONZE_SHARED_RT_LIB` set by hand. Adding a `<config>` level to
 the existing candidate list would fix the common case; the env override already
 works, so this is friction rather than a blocker.
 
-### 3. `bronze build --help` reads `--help` as a filename
+### 4. `bronze build --help` reads `--help` as a filename
 
 Reports `cannot read --help`. Cosmetic.
 
-### 4. Still open from the original list
+### 5. Still open from the original list
 
 - **A host-globals *lookup* in the embed API.** `rtHostGlobalLookup` exists in
   `runtime/host_globals.h` but is neither in the C ABI registry nor annotated

@@ -59,6 +59,8 @@ HTMLMediaElement
 HTMLAnchorElement
 HTMLDivElement
 Text
+CharacterData
+Comment
 DocumentFragment
 navigator
 HTMLCanvasElement

@@ -26,7 +26,12 @@
 #include <vector>
 
 namespace bro::engine { class Engine; }
-namespace bro::dom { class Element; class Event; }
+namespace bro::dom {
+class Element;
+class Event;
+class Node;
+class DocumentFragment;
+}  // namespace bro::dom
 
 namespace bro::bronze_host {
 
@@ -167,6 +172,81 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
 // TypeError for a descriptor without a string `type`.
 Value hostDispatchToElement(ElementSource source, const char* what, Value desc);
 Value hostDispatchToWindow(Value desc);
+
+// ---------------------------------------------------------------------------
+// The node registry (host_element.cpp owns it; host_node.cpp shares it)
+// ---------------------------------------------------------------------------
+
+// One entry per DOM node this layer has ever wrapped, and the thing every
+// accessor on a wrapper captures. It is reached from a wrapper through
+// embed::handleData, which is why `tag` is first (see the tag note above).
+//
+// `node` is what the wrapper IS; `el` is the same pointer when that node is an
+// element and nullptr otherwise. Keeping both is what lets the element surface
+// guard on `st->el` alone: a text wrapper never has those accessors installed,
+// but a stale one that somehow did would answer inert rather than reinterpret a
+// TextNode* as an Element*.
+//
+// Both go null when the node is freed (Document::addNodeFreedObserver). The
+// entry itself is never freed while the program might still hold the wrapper —
+// it holds Persistents, and ~Persistent is an embed call, which the GC rule
+// above forbids a handle finalizer from making.
+struct HostNodeState {
+    uint32_t tag = kHostElementTag;  // must be first — see the tag note above
+    dom::Node* node = nullptr;
+    dom::Element* el = nullptr;
+    ev::Persistent jsObj;
+    ev::Persistent styleObj;
+    ev::Persistent classListObj;
+    ev::Persistent computedObj;
+    bool hasStyle = false;
+    bool hasClassList = false;
+    bool hasComputed = false;
+};
+
+// The entry for `node`, created on first ask. Never null for a non-null node.
+HostNodeState* hostNodeStateFor(dom::Node* node);
+
+// A fresh object that is already a node handle — what every wrapper in this
+// layer is built on, so hostNodeOf() can recover the dom::Node* from a value
+// the program hands back to appendChild.
+Value makeNodeHandleObject(dom::Node* node);
+
+// THE wrapper for `node`, whatever kind it is: an element through
+// hostElementValue, a text or comment node through host_node.cpp, a fragment.
+// Null for nullptr, so a parent/sibling lookup can be handed straight in.
+Value hostNodeValue(dom::Node* node);
+
+// The dom::Node behind any wrapper this layer made, or nullptr. The node-level
+// counterpart of hostElementOf: appendChild takes this, because a text node is
+// a legal child and is not an element.
+dom::Node* hostNodeOf(Value v);
+
+// ---------------------------------------------------------------------------
+// Text, comment and fragment nodes (host_node.cpp)
+// ---------------------------------------------------------------------------
+
+// The CharacterData surface — `data`, `nodeValue`, `textContent`, `length`,
+// and the five mutators — over a TextNode or a CommentNode. They share every
+// method and no base class, so the wrapper is written once against the pair.
+Value makeCharacterDataValue(dom::Node* node);
+
+// A DocumentFragment: a parent that holds children and vanishes into the tree
+// when inserted. Nothing but the node surface, which is all a fragment has.
+Value makeFragmentValue(dom::DocumentFragment* frag);
+
+// The NODE half of the tree surface — parentNode, childNodes, the child edges
+// and siblings, the four mutators, contains, cloneNode, remove. Installed on
+// every wrapper kind, because every one of them is a Node. The element-only
+// extras (`children`, `firstElementChild`, querySelector…) stay in
+// installElementCore beside it.
+void installNodeTree(ObjectBuilder& b, HostNodeState* st);
+
+// Insert `child` under `parent` before `ref` (append when `ref` is null),
+// unparenting it first and spilling a DocumentFragment's children in its place
+// — the one insertion path all four mutators funnel through, so the fragment
+// rule and the reparent rule are stated once.
+void hostInsertNode(dom::Node* parent, dom::Node* child, dom::Node* ref);
 
 // ---------------------------------------------------------------------------
 // Elements (host_element.cpp)
