@@ -73,6 +73,8 @@ inline constexpr uint32_t kHostAudioContextTag = 0x41435458u;      // 'ACTX'
 inline constexpr uint32_t kHostAudioNodeTag = 0x414E4F44u;         // 'ANOD'
 inline constexpr uint32_t kHostAudioParamTag = 0x41504152u;        // 'APAR'
 inline constexpr uint32_t kHostAudioBufferTag = 0x41425546u;       // 'ABUF'
+inline constexpr uint32_t kHostPhysicsCharacterTag = 0x50434852u;  // 'PCHR'
+inline constexpr uint32_t kHostPhysicsSoftBodyTag = 0x50534259u;   // 'PSBY'
 
 // ---------------------------------------------------------------------------
 // The error funnel and the frame clock (dom_globals.cpp)
@@ -513,5 +515,12 @@ void installFetchGlobal();
 void installAudioGlobals();
 Value makeAudioContextConstructor();
 Value makeBrandConstructor(const char* name);
+
+// ---------------------------------------------------------------------------
+// Physics (host_physics.cpp)
+// ---------------------------------------------------------------------------
+
+void installPhysicsGlobals();
+void drainPhysicsContactEvents();
 
 }  // namespace bro::bronze_host

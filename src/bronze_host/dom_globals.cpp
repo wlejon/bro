@@ -168,6 +168,7 @@ void hostFrame(double dtMs) {
     g_host->clockMs += dtMs;                             // 2
     drainHostTasks();                                    // 3
     fireHostTimers(g_host->clockMs);                     // 4
+    drainPhysicsContactEvents();                         // 4b
     fireAnimationFrames();                               // 5
     deliverHostObservers();                              // 5b
     ev::drainMicrotasks();                               // 6
@@ -1085,6 +1086,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     installObserverGlobals();
     installParserGlobal();
     installVideoGlobals();
+    installPhysicsGlobals();
 
     {
         Value nav = makeNavigatorValue();

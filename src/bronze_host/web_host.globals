@@ -96,3 +96,6 @@ ResizeObserver
 DOMParser
 VideoEncoder
 GifEncoder
+Physics
+PhysicsCharacter
+PhysicsSoftBody
