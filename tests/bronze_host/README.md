@@ -1,6 +1,6 @@
 # bronze_host integration checks
 
-Eight checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip.
+Eleven checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip.
 
 ```bash
 tests/bronze_host/run_loader_test.sh        # the folder loader itself
@@ -8,17 +8,26 @@ tests/bronze_host/run_bronze_host_test.sh   # the scene graph, a fixed frame cou
 tests/bronze_host/run_events_test.sh        # events, under a driver script
 tests/bronze_host/run_fetch_test.sh         # fetch, under a driver script
 tests/bronze_host/run_dom_test.sh           # the element surface: tree, style, forms
+tests/bronze_host/run_node_test.sh          # text nodes, comments, fragments, cloneNode
+tests/bronze_host/run_file_test.sh          # Blob, File, FileReader, object URLs
+tests/bronze_host/run_abort_test.sh         # AbortController, AbortSignal, cancelled fetch
 tests/bronze_host/run_wild_test.sh          # wild three.js scene + OrbitControls
 tests/bronze_host/run_instanced_test.sh     # instanced mesh under load (2,500 instances)
 tests/bronze_host/run_pixi_test.sh          # pixi.js v8: WebGL sprites + pixel readback
 ```
 
-**All eight run the stock `bro-headless`** — the same binary every other test in
+**All eleven run the stock `bro-headless`** — the same binary every other test in
 `tests/` uses. Each one's app is a directory carrying a compiled `app.dll` /
 `app.so` / `app.dylib`, which `lib.sh` builds on demand with the bronze CLI and
 rebuilds whenever the module is older than its probe **or than the compiler**
 (a module carries the ABI stamp of the bronze that emitted it, so a rebuilt
 runtime invalidates every module in the tree without any `.js` changing).
+
+The last three are the newer half of the layer and are written to a stricter
+rule than their neighbours: every line of output is `APP <name>=<value>` and
+every expectation beside them was derived from the spec and the fixture BEFORE
+the first run, so a passing check is evidence the implementation matches the
+model rather than a recording of what the build happened to print.
 
 This used to be seven executables — `bro-bronze-host`, `bro-bronze-host-dom`,
 one per app, each `host_main.cpp` linked against a different object file — plus

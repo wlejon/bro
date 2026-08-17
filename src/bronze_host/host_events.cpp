@@ -18,6 +18,7 @@
 #include "bronze_host/host_internal.h"
 
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -47,6 +48,35 @@ void setListLength(ev::Persistent& list, uint32_t n) {
 
 }  // namespace
 
+void hostListAppend(ev::Persistent& obj, const std::string& key, Value v) {
+    // `v` must survive the getProperty below, which allocates the key string.
+    ev::Persistent vP(v);
+
+    ev::Persistent list(ev::getProperty(obj.get(), key));
+    if (!ev::isObject(list.get())) {
+        list.set(ev::createObject());
+        setListLength(list, 0);
+        obj.set(ev::setProperty(obj.get(), key, list.get()));
+    }
+    const uint32_t n = listLength(list);
+    list.set(ev::setElement(list.get(), n, vP.get()));
+    setListLength(list, n + 1);
+}
+
+std::vector<ev::Persistent> hostListSnapshot(const ev::Persistent& obj,
+                                             const std::string& key) {
+    std::vector<ev::Persistent> out;
+    ev::Persistent list(ev::getProperty(obj.get(), key));
+    if (!ev::isObject(list.get())) return out;
+    const uint32_t n = listLength(list);
+    out.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        Value entry = ev::getElement(list.get(), i);
+        if (!ev::isUndefined(entry)) out.emplace_back(entry);
+    }
+    return out;
+}
+
 void addHostListener(ev::Persistent& obj, const std::string& type, Value fn) {
     if (!ev::isFunction(fn)) return;
     // fn must survive the getProperty below, which allocates the key string.
@@ -54,22 +84,17 @@ void addHostListener(ev::Persistent& obj, const std::string& type, Value fn) {
 
     const std::string key = listenerKey(type);
     ev::Persistent list(ev::getProperty(obj.get(), key));
-    if (!ev::isObject(list.get())) {
-        list.set(ev::createObject());
-        setListLength(list, 0);
-        obj.set(ev::setProperty(obj.get(), key, list.get()));
+    if (ev::isObject(list.get())) {
+        // A repeat registration of the same callback is a no-op on the web, and
+        // three.js's ImageLoader can reach one when two loads share an image.
+        const uint32_t n = listLength(list);
+        for (uint32_t i = 0; i < n; ++i) {
+            Value existing = ev::getElement(list.get(), i);
+            if (ev::toBits(existing) == ev::toBits(fnP.get())) return;
+        }
     }
 
-    // A repeat registration of the same callback is a no-op on the web, and
-    // three.js's ImageLoader can reach one when two loads share an image.
-    const uint32_t n = listLength(list);
-    for (uint32_t i = 0; i < n; ++i) {
-        Value existing = ev::getElement(list.get(), i);
-        if (ev::toBits(existing) == ev::toBits(fnP.get())) return;
-    }
-
-    list.set(ev::setElement(list.get(), n, fnP.get()));
-    setListLength(list, n + 1);
+    hostListAppend(obj, key, fnP.get());
 }
 
 void removeHostListener(ev::Persistent& obj, const std::string& type, Value fn) {
@@ -112,15 +137,8 @@ void dispatchHostEvent(ev::Persistent target, const std::string& type) {
         Value on = ev::getProperty(target.get(), "on" + type);
         if (ev::isFunction(on)) handlers.emplace_back(on);
     }
-    {
-        ev::Persistent list(ev::getProperty(target.get(), listenerKey(type)));
-        if (ev::isObject(list.get())) {
-            const uint32_t n = listLength(list);
-            for (uint32_t i = 0; i < n; ++i) {
-                Value entry = ev::getElement(list.get(), i);
-                if (ev::isFunction(entry)) handlers.emplace_back(entry);
-            }
-        }
+    for (ev::Persistent& entry : hostListSnapshot(target, listenerKey(type))) {
+        if (ev::isFunction(entry.get())) handlers.push_back(std::move(entry));
     }
     if (handlers.empty()) return;
 

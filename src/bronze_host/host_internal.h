@@ -63,6 +63,7 @@ inline constexpr uint32_t kHostHeadersTag = 0x48454144u;  // 'HEAD'
 inline constexpr uint32_t kHostRequestTag = 0x52455155u;  // 'REQU'
 inline constexpr uint32_t kHostBlobTag = 0x424C4F42u;     // 'BLOB'
 inline constexpr uint32_t kHostReaderTag = 0x46524452u;   // 'FRDR'
+inline constexpr uint32_t kHostSignalTag = 0x53474E4Cu;   // 'SGNL'
 
 // ---------------------------------------------------------------------------
 // The error funnel and the frame clock (dom_globals.cpp)
@@ -111,14 +112,33 @@ double hostClockMs();
 void postHostTask(std::function<void()> task);
 void drainHostTasks();
 
+// A DEADLINE for host work, on the same table and the same clock the app's own
+// setTimeout uses — so a host-scheduled abort and an app-scheduled one are
+// ordered against each other rather than against two different notions of now.
+// The callback is host memory freed on the main thread as the entry is erased,
+// never from a finalizer, so unlike a JS listener it may hold Persistents.
+// Answers the id, which nothing needs yet; the symmetry with clearTimeout is
+// the point of returning it rather than a promise of one.
+int32_t hostSetTimeout(std::function<void()> task, double delayMs);
+
 // ---------------------------------------------------------------------------
 // Events (host_events.cpp)
 // ---------------------------------------------------------------------------
 
+// A private list stored ON a host object under `key`: a plain object with
+// numeric keys and a `length`, because the embed API builds plain objects and
+// has no array constructor. This is the shape every "things to call later" list
+// in this layer takes, and it is on the object rather than in host memory for
+// the reason the GC rule gives — a host-side table would need Persistents owned
+// by the object's finalizer, which is the one thing a finalizer may not own.
+// The snapshot is taken whole before anything runs, so a list mutated by one
+// entry does not disturb the run in progress.
+void hostListAppend(ev::Persistent& obj, const std::string& key, Value v);
+std::vector<ev::Persistent> hostListSnapshot(const ev::Persistent& obj,
+                                             const std::string& key);
+
 // The `on<type>` slot plus the addEventListener list, for the host objects that
-// fire events. Both live as ordinary properties ON THE OBJECT — see the GC rule
-// above: a host-side listener table would need Persistents owned by the
-// object's finalizer, which is the one thing a finalizer may not own.
+// fire events. Both live as ordinary properties ON THE OBJECT — see above.
 void addHostListener(ev::Persistent& obj, const std::string& type, Value fn);
 void removeHostListener(ev::Persistent& obj, const std::string& type, Value fn);
 
@@ -380,6 +400,44 @@ const HostBlob* hostBlobOf(Value v);
 // A Blob value over `bytes`. The bytes are MOVED IN: a Blob is immutable on
 // the web, so there is never a second owner to keep in step.
 Value makeBlobValue(std::vector<uint8_t> bytes, std::string type);
+
+// ---------------------------------------------------------------------------
+// AbortController / AbortSignal (host_abort.cpp)
+// ---------------------------------------------------------------------------
+
+void installAbortGlobals();
+
+// The payload behind an AbortSignal. `aborted` is duplicated as a JS property
+// so the program can read `signal.aborted`; this copy is what host code checks,
+// because a fetch deciding whether to reject must not depend on a property the
+// app is free to overwrite.
+struct HostAbortSignal {
+    uint32_t tag = kHostSignalTag;  // must be first — see the tag note above
+    bool aborted = false;
+};
+
+// The signal behind a value, or nullptr for anything that is not one. This is
+// how `init.signal` is recognised: an arbitrary object with an `aborted`
+// property is NOT a signal, and treating one as if it were would make a typo
+// look like a working abort.
+const HostAbortSignal* hostAbortSignalOf(Value v);
+
+// A fresh signal, not yet aborted.
+Value makeAbortSignalValue();
+
+// Abort `signal` with `reason` — the whole algorithm, in one place because
+// three callers need it: controller.abort(), AbortSignal.timeout's deadline,
+// and a source signal propagating into an AbortSignal.any() composite. Setting
+// `reason` to undefined means "the default", an AbortError. Idempotent: a
+// signal already aborted keeps its first reason and fires nothing, which is
+// what makes abort() safe to call from a cleanup path that may run twice.
+void hostAbortSignal(Value signal, Value reason);
+
+// `{name, message}` — what this layer rejects and throws with where the web
+// throws a DOMException. bronze cannot build a value on a chosen prototype, so
+// there is no DOMException to construct; `e.name === 'AbortError'` is the check
+// real code writes and it answers correctly.
+Value hostMakeDomError(const char* name, const std::string& message);
 
 // ---------------------------------------------------------------------------
 // XMLHttpRequest (host_xhr.cpp)

@@ -942,6 +942,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     installFetchGlobal();
     installPlatformGlobals();
     installFileGlobals();
+    installAbortGlobals();
 
     {
         Value nav = makeNavigatorValue();

@@ -45,6 +45,12 @@ namespace {
 
 struct TimerEntry {
     int32_t id = 0;
+    // Exactly one of these fires. `native` is host work scheduled by this layer
+    // (AbortSignal.timeout's deadline); `fn` is the app's own callback. They
+    // share the table so they share the ordering — a host deadline and an app
+    // setTimeout set for the same moment fire in creation order, as two tables
+    // could not have agreed on.
+    std::function<void()> native;
     ev::Persistent fn;
     // setTimeout(fn, delay, a, b) hands a and b to fn. three.js never uses
     // them, but a callback silently called with none is the kind of divergence
@@ -137,6 +143,18 @@ void postHostTask(std::function<void()> task) {
     tasks().push_back(std::move(task));
 }
 
+int32_t hostSetTimeout(std::function<void()> task, double delayMs) {
+    if (!(delayMs > 0.0)) delayMs = 0.0;  // NaN and negatives clamp, as HTML's do
+    TimerEntry entry;
+    entry.id = g_nextTimerId++;
+    entry.native = std::move(task);
+    entry.dueMs = hostClockMs() + delayMs;
+    entry.intervalMs = delayMs;
+    entry.repeating = false;
+    timers().push_back(std::move(entry));
+    return timers().back().id;
+}
+
 void drainHostTasks() {
     auto& queue = tasks();
     if (queue.empty()) return;
@@ -187,6 +205,7 @@ void fireHostTimers(double nowMs) {
         // next deadline, so clearInterval from inside removes a live entry and
         // actually stops it. Settling afterwards would resurrect a timer the
         // callback had just cleared.
+        std::function<void()> native = it->native;
         ev::Persistent fn = it->fn;
         std::vector<ev::Persistent> args = it->args;
         if (it->repeating) {
@@ -204,6 +223,11 @@ void fireHostTimers(double nowMs) {
         // `it` is dead from here on — the call below can push onto `list`
         // (another setTimeout) and reallocate it. Nothing after this point
         // touches the iterator; the next round re-finds by id.
+
+        if (native) {
+            native();
+            continue;
+        }
 
         std::vector<Value> argv;
         argv.reserve(args.size());

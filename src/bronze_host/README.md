@@ -28,6 +28,7 @@ Off by default; nothing here is in the default build.
 | `host_image.cpp` | `Image`, and the decode behind `.src` |
 | `host_xhr.cpp` | `XMLHttpRequest` (text over the app asset path; see its header) |
 | `host_file.cpp` | `Blob`, `File`, `FileReader`, and the `URL` namespace — bytes an app holds, and the object URLs that name them |
+| `host_abort.cpp` | `AbortController` / `AbortSignal`, and the cancellation `fetch` obeys |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
 | `app_module.cpp` | finding, verifying and running the module an app dir carries |
 
@@ -377,6 +378,29 @@ API's `setProperty` calls `fatal()` on a non-plain receiver, and going around
 it through the program's own `Object.assign` is a hard runtime abort in bronze
 (the message is quoted in `host_file.cpp`). `URL.parse` is the standard
 equivalent of the constructor and returns null rather than throwing.
+
+`AbortController` and `AbortSignal` are DONE — `host_abort.cpp`, checked by
+`tests/bronze_host/run_abort_test.sh`. `fetch(url, {signal})` rejects with the
+signal's reason instead of reading the file, `AbortSignal.abort`, `.timeout` and
+`.any` are all present, and `throwIfAborted()` throws the reason untouched.
+
+Two shapes differ from the web and both follow from the same limit as `URL`.
+`AbortSignal` is a NAMESPACE object rather than a constructor, which costs
+nothing real — `new AbortSignal()` is a TypeError on the web too. And `reason`
+defaults to a plain `{name, message}` where the web hands you a `DOMException`,
+because bronze cannot build a value on a chosen prototype; `e.name ===
+'AbortError'` is what real code tests and it answers correctly.
+
+`signal.aborted` is a writable property the app owns, and the host does not
+believe it: cancellation is decided on the payload struct's own copy, so
+assigning `signal.aborted = false` cannot talk a fetch into delivering a
+response the program already cancelled. The abort test pins that.
+
+A bronze `fetch` settles on the next host-task drain, so an abort rejects one
+frame after `abort()` rather than at the moment of the call. Every abort a
+program can express — from a listener, a microtask, a timer — lands inside that
+window, and the outcome is the same rejection; what it buys is one settle path
+instead of two.
 
 **Images**: `ImageBitmap` and `createImageBitmap`. `Image` is a host object,
 not a `dom::Element` — it has no layout box, and `img instanceof Image` is

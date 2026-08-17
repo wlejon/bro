@@ -75,3 +75,5 @@ Blob
 File
 FileReader
 URL
+AbortController
+AbortSignal

@@ -369,6 +369,11 @@ Value fetchCall(Value, std::span<const Value> a) {
         return ev::throwTypeError("fetch: input must be a URL string or Request object");
     }
 
+    // Empty unless init carried a real AbortSignal — an ordinary object with an
+    // `aborted` property is not one, and quietly accepting it would make a
+    // misspelled signal look like a working abort.
+    ev::Persistent signal;
+
     if (a.size() > 1 && !ev::isUndefined(a[1]) && !ev::isNull(a[1])) {
         Value initV = a[1];
         if (ev::isObject(initV)) {
@@ -382,14 +387,41 @@ Value fetchCall(Value, std::span<const Value> a) {
             if (!ev::isUndefined(headersV) && !ev::isNull(headersV)) {
                 initHeadersFromValue(&headers, headersV);
             }
+            Value signalV = ev::getProperty(initV, "signal");
+            if (hostAbortSignalOf(signalV)) signal = ev::Persistent(signalV);
         }
+    }
+
+    // Already aborted: reject now rather than read the file and throw the
+    // result away. `fetch(url, {signal: AbortSignal.abort()})` is what a
+    // cancel-then-restart path produces, and on the web it never touches the
+    // network.
+    if (const HostAbortSignal* s = hostAbortSignalOf(signal.get()); s && s->aborted) {
+        ev::Persistent reason(ev::getProperty(signal.get(), "reason"));
+        ev::Persistent rejected{ev::createPromise()};
+        ev::rejectPromise(rejected.get(), reason.get());
+        return rejected.get();
     }
 
     ev::Persistent promise{ev::createPromise()};
     ev::Persistent targetPromise(promise.get());
 
-    postHostTask([targetPromise, url]() {
+    postHostTask([targetPromise, url, signal]() {
         ev::Persistent p(targetPromise);
+
+        // Aborted since the call: the read has not happened yet, so this is the
+        // whole of cancellation here. The window is one frame wide — a bronze
+        // fetch settles on the next host-task drain — so an abort from a
+        // listener, a microtask or a timer all land inside it. What this layer
+        // does NOT do is reject the moment abort() fires: the promise settles
+        // when the task runs, one frame later, which is observably the same
+        // outcome and one dispatch path instead of two.
+        if (const HostAbortSignal* s = hostAbortSignalOf(signal.get()); s && s->aborted) {
+            ev::Persistent reason(ev::getProperty(signal.get(), "reason"));
+            ev::rejectPromise(p.get(), reason.get());
+            return;
+        }
+
         auto* resp = new HostResponse();
         resp->url = url;
 

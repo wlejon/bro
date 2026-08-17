@@ -106,6 +106,12 @@ that does the constructor's job and answers null instead of throwing. That is a
 good outcome for URL specifically and not a general one: the next namespace with
 this shape may not have a `parse` to fall back on.
 
+`AbortSignal` is the second instance and cost nothing, because `new
+AbortSignal()` is a TypeError on the web too — so a namespace object carrying
+`abort`, `timeout` and `any` is the whole interface. Two for two on a lucky
+escape is not a pattern to plan around; `Promise.resolve`, `Array.from` and
+`Object.assign` are all the same shape and none of them has a way out.
+
 ### 4. The shared-runtime search misses multi-config layouts
 
 `src/cli/link.cpp` looks for the import library in `shared/` beside the CLI and
