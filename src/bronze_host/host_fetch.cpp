@@ -34,6 +34,7 @@
 #include "runtime/value.h"
 
 #include "js/asset_path.h"
+#include "util/object_url.h"
 #include "util/log.h"
 
 #include <cctype>
@@ -266,6 +267,7 @@ struct HostResponse {
     bool ok = false;
     std::string url;
     std::string statusText;
+    std::string contentType;   // from a data:/blob: URL that carried one
     std::vector<uint8_t> body;
 };
 
@@ -318,11 +320,27 @@ Value makeResponseValue(HostResponse* resp) {
     b.set("url", ev::fromUtf8(resp->url));
 
     auto* h = new HostHeaders();
+    // A file read off disk has no headers to report, so the map is normally
+    // empty. An inline URL is the exception: a data: URL states its MIME type
+    // and a blob: URL carries the Blob's, and `resp.headers.get('content-type')`
+    // is how a caller decides whether to parse what it got.
+    if (!resp->contentType.empty()) h->entries["content-type"] = resp->contentType;
     b.set("headers", makeHeadersValue(h));
 
     b.def("text", 0, responseText);
     b.def("json", 0, responseJson);
     b.def("arrayBuffer", 0, responseArrayBuffer);
+    // blob(), so a fetched resource can be handed straight back to
+    // URL.createObjectURL — which is the round trip an app makes when it loads
+    // a texture over one API and shows it through another.
+    b.def("blob", 0, [](Value thisValue, std::span<const Value>) {
+        HostResponse* r = responseOf(thisValue);
+        if (!r) return ev::throwTypeError("Response.blob: receiver is not a Response");
+        ev::Persistent p{ev::createPromise()};
+        Value blob = makeBlobValue(r->body, r->contentType);
+        ev::resolvePromise(p.get(), blob);
+        return p.get();
+    });
 
     return b.get();
 }
@@ -381,6 +399,17 @@ Value fetchCall(Value, std::span<const Value> a) {
             resp->status = 0;
             resp->statusText = "No transport";
             resp->ok = false;
+        } else if (util::inlineURLBytes(url, resp->body, &resp->contentType)) {
+            // A `blob:` or `data:` URL carries its own bytes: no path to
+            // resolve, no disk to touch. Ahead of resolveAssetPath, which would
+            // otherwise turn `blob:bro/7` into a filename under the app
+            // directory and answer 404 for a resource that was never a file.
+            // The table is the process's one table (util/object_url.h), so a
+            // URL minted by URL.createObjectURL in compiled code and one minted
+            // by the page's own JS both land here.
+            resp->status = 200;
+            resp->statusText = "OK";
+            resp->ok = true;
         } else {
             const std::string path = js::resolveAssetPath(url);
             std::ifstream in(path, std::ios::binary);

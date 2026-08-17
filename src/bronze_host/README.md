@@ -27,6 +27,7 @@ Off by default; nothing here is in the default build.
 | `host_timers.cpp` | `setTimeout`/`setInterval` and the main-thread task queue |
 | `host_image.cpp` | `Image`, and the decode behind `.src` |
 | `host_xhr.cpp` | `XMLHttpRequest` (text over the app asset path; see its header) |
+| `host_file.cpp` | `Blob`, `File`, `FileReader`, and the `URL` namespace — bytes an app holds, and the object URLs that name them |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
 | `app_module.cpp` | finding, verifying and running the module an app dir carries |
 
@@ -361,9 +362,21 @@ uniforms, `vertexAttrib*` default-value setters, and `getContext('2d')`.
 **Loading**: the NETWORK. Both `fetch` and `XMLHttpRequest` are here and both
 read local files only, over the engine's asset mounts (`js/asset_path.h`); an
 http(s) URL settles with status 0 and `ok: false`. The network belongs to
-brokit, which is QuickJS-native. Also absent: `Blob`, `File`, `FileReader`,
-`URL.createObjectURL` — an app that loads a user's file from disk has no path
-through this layer yet.
+brokit, which is QuickJS-native.
+
+`Blob`, `File`, `FileReader` and object URLs are DONE — `host_file.cpp`,
+checked by `tests/bronze_host/run_file_test.sh`. `blob:` and `data:` URLs
+resolve in `fetch`, `XMLHttpRequest` and `Image.src`, out of the ENGINE's
+object-URL table (`util/object_url.h`), so a URL minted by compiled code
+resolves in the page's markup and vice versa.
+
+`URL` is a NAMESPACE, not a constructor: `URL.createObjectURL`,
+`URL.revokeObjectURL` and `URL.parse(href, base)` all work, and
+`new URL(href)` does not. A host function cannot carry a static — the embed
+API's `setProperty` calls `fatal()` on a non-plain receiver, and going around
+it through the program's own `Object.assign` is a hard runtime abort in bronze
+(the message is quoted in `host_file.cpp`). `URL.parse` is the standard
+equivalent of the constructor and returns null rather than throwing.
 
 **Images**: `ImageBitmap` and `createImageBitmap`. `Image` is a host object,
 not a `dom::Element` — it has no layout box, and `img instanceof Image` is

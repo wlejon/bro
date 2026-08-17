@@ -61,6 +61,8 @@ inline constexpr uint32_t kHostXhrTag = 0x58485220u;      // 'XHR '
 inline constexpr uint32_t kHostFetchTag = 0x52455350u;    // 'RESP'
 inline constexpr uint32_t kHostHeadersTag = 0x48454144u;  // 'HEAD'
 inline constexpr uint32_t kHostRequestTag = 0x52455155u;  // 'REQU'
+inline constexpr uint32_t kHostBlobTag = 0x424C4F42u;     // 'BLOB'
+inline constexpr uint32_t kHostReaderTag = 0x46524452u;   // 'FRDR'
 
 // ---------------------------------------------------------------------------
 // The error funnel and the frame clock (dom_globals.cpp)
@@ -353,6 +355,31 @@ const HostImage* hostImageOf(Value v);
 // interface NAMES libraries test for (`typeof Node !== "undefined"`,
 // `x instanceof HTMLInputElement`). No state, no frame seam.
 void installPlatformGlobals();
+
+// ---------------------------------------------------------------------------
+// Blob / File / FileReader / URL (host_file.cpp)
+// ---------------------------------------------------------------------------
+
+void installFileGlobals();
+
+// The bytes behind a Blob or File value, or nullptr for anything else. HOST
+// memory (a std::vector owned by the value's handle cell), not heap bytes — so
+// unlike embed::typedArrayInfo's pointer this one survives a bronze allocation
+// and stays valid until the value is collected. hostImageOf has the same
+// contract and for the same reason.
+struct HostBlob {
+    uint32_t tag = kHostBlobTag;  // must be first — see the tag note above
+    std::vector<uint8_t> bytes;
+    std::string type;           // the MIME type; may be empty
+    bool isFile = false;        // a File is a Blob with a name
+    std::string name;
+    double lastModified = 0;    // ms since the epoch, as the web reports it
+};
+const HostBlob* hostBlobOf(Value v);
+
+// A Blob value over `bytes`. The bytes are MOVED IN: a Blob is immutable on
+// the web, so there is never a second owner to keep in step.
+Value makeBlobValue(std::vector<uint8_t> bytes, std::string type);
 
 // ---------------------------------------------------------------------------
 // XMLHttpRequest (host_xhr.cpp)

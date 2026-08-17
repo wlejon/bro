@@ -71,4 +71,7 @@ localStorage
 AudioContext
 CustomEvent
 bro
-
+Blob
+File
+FileReader
+URL

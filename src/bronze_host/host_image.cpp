@@ -30,6 +30,7 @@
 #include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt
 
 #include "js/asset_path.h"
+#include "util/object_url.h"
 #include "util/log.h"
 
 #include "broimage/decode.h"
@@ -99,19 +100,34 @@ Value imageSrcSetter(Value thisValue, std::span<const Value> a) {
     img->ok = false;
 
     std::string err;
-    if (src.rfind("data:", 0) == 0) {
-        // three.js's ImageLoader special-cases data: URLs (it skips crossOrigin
-        // for them), so an app can genuinely hand us one. Decoding it needs a
-        // base64 reader this layer does not have; refuse by name rather than
-        // report a missing file.
-        err = "data: URLs are not decoded by the bronze host image path";
-        LOG_ERROR("bronze_host: Image.src = data: URL is not supported");
-    } else if (src.rfind("http://", 0) == 0 || src.rfind("https://", 0) == 0) {
+    if (src.rfind("http://", 0) == 0 || src.rfind("https://", 0) == 0) {
         // The network belongs to brokit, which is QuickJS-native; there is no
         // bronze-side fetch to route this through (see host_xhr.cpp).
         err = "http(s) image URLs are not fetched by the bronze host image path";
         LOG_ERROR("bronze_host: Image.src = %s needs a network fetch this layer "
                   "does not provide", src.c_str());
+    } else if (std::vector<uint8_t> inline_; util::inlineURLBytes(src, inline_)) {
+        // A `blob:` or `data:` URL carries its own bytes — there is no path to
+        // resolve and no disk to touch. Handled here rather than after the
+        // path resolution, because resolveAssetPath would turn `blob:bro/7`
+        // into a filename under the app directory and the decode would fail
+        // with a message about a missing file that was never meant to exist.
+        //
+        // The table is util::object_url.h's, which is the process's ONE table:
+        // a URL minted by an interpreted script on the page resolves here, and
+        // one minted by URL.createObjectURL in compiled code resolves in the
+        // page's markup (host_file.cpp says why).
+        broimage::Image decoded;
+        if (broimage::decode_memory(inline_.data(), inline_.size(), decoded, &err)) {
+            img->width = decoded.width;
+            img->height = decoded.height;
+            img->rgba = std::move(decoded.pixels);
+            img->ok = true;
+            LOG_INFO("bronze_host: Image loaded from an inline URL (%dx%d)",
+                     img->width, img->height);
+        } else {
+            LOG_WARN("bronze_host: Image inline-URL decode failed (%s)", err.c_str());
+        }
     } else {
         // The shared app-path rules every bro binding uses (js/asset_path.h):
         // drive-qualified passes through, a leading slash resolves against the

@@ -74,7 +74,39 @@ callbacks, or narrower, a "dynamic property" hook on an existing handle object
 consulted only when the ordinary lookup misses. The narrow one is enough for all
 three, and it costs nothing on objects that do not declare it.
 
-### 3. The shared-runtime search misses multi-config layouts
+### 3. A host cannot build a function that carries statics
+
+`URL` on the web is callable AND a namespace: `new URL(href)` and
+`URL.createObjectURL(blob)` are the same object. So are `Promise.resolve`,
+`Array.from`, `Object.assign` — the shape is everywhere. A bro host can build
+neither half onto the other:
+
+- `embed::setProperty` calls `requirePlainObject`, which on a function calls
+  **`fatal()`** — the process aborts, so a host cannot even attempt it and
+  recover.
+- The obvious way around it, the program's own `Object.assign` reached from a
+  throwaway object's `constructor`, is also a hard runtime error:
+
+      unsupported: Object.assign on a function (its own keys come from three
+      places — a `prototype` slot, a `length` and a `name` in the header, and a
+      side object of statics — and only the last is a shape a descriptor could
+      be written to)
+
+  A hard error rather than a throw means there is no probe-and-degrade either:
+  a host that tries it at startup takes the process down.
+
+That message names the mechanism that would work — the side object of statics.
+A `embed::setStatic(Value fn, std::string_view key, Value v)` writing into it
+would close this completely, and it is the same call the runtime must already
+make when compiled code writes `f.x = 1`.
+
+`bro` currently ships `URL` as a plain namespace with `createObjectURL`,
+`revokeObjectURL` and `parse` — `URL.parse` being the standard 2024 addition
+that does the constructor's job and answers null instead of throwing. That is a
+good outcome for URL specifically and not a general one: the next namespace with
+this shape may not have a `parse` to fall back on.
+
+### 4. The shared-runtime search misses multi-config layouts
 
 `src/cli/link.cpp` looks for the import library in `shared/` beside the CLI and
 one or two directories above it. Under a multi-config generator (MSBuild, Xcode)
@@ -83,11 +115,11 @@ Windows needs `BRONZE_SHARED_RT_LIB` set by hand. Adding a `<config>` level to
 the existing candidate list would fix the common case; the env override already
 works, so this is friction rather than a blocker.
 
-### 4. `bronze build --help` reads `--help` as a filename
+### 5. `bronze build --help` reads `--help` as a filename
 
 Reports `cannot read --help`. Cosmetic.
 
-### 5. Still open from the original list
+### 6. Still open from the original list
 
 - **A host-globals *lookup* in the embed API.** `rtHostGlobalLookup` exists in
   `runtime/host_globals.h` but is neither in the C ABI registry nor annotated
@@ -97,9 +129,11 @@ Reports `cannot read --help`. Cosmetic.
   with no list to consult. Either an exported lookup or bro recording its own
   registrations would close it; the exported lookup is smaller and checks the
   thing that actually matters (what the runtime holds, not what bro intended).
-- **`embed::setElement` filling arrays**, and the typed-array constructors —
-  `createTypedArray`/`fillTypedArray` landed; bro has not yet used them to build
-  `TextEncoder` / `ImageData` / `ImageBitmap`.
+- **`embed::setElement` filling arrays**, and the typed-array constructors.
+  `createTypedArray`/`fillTypedArray` are now IN USE — `blob.bytes()` builds its
+  Uint8Array with them (host_file.cpp) and they work exactly as documented.
+  `TextEncoder` / `ImageData` / `ImageBitmap` are still unbuilt, but the
+  primitive they were waiting on is proven.
 
 ## Fixed during integration
 

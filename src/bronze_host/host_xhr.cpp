@@ -39,6 +39,7 @@
 #include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt
 
 #include "js/asset_path.h"
+#include "util/object_url.h"
 #include "util/log.h"
 
 #include <fstream>
@@ -140,6 +141,15 @@ Value xhrSend(Value thisValue, std::span<const Value>) {
                   xhr->url.c_str());
         xhr->status = 0;
         xhr->statusText = "No transport";
+    } else if (std::vector<uint8_t> inline_;
+               util::inlineURLBytes(xhr->url, inline_)) {
+        // A `blob:` or `data:` URL carries its own bytes. Ahead of
+        // resolveAssetPath, which would read `blob:bro/7` as a filename under
+        // the app directory and answer 404 for something that was never a file.
+        xhr->responseText.assign(inline_.begin(), inline_.end());
+        xhr->status = 200;
+        xhr->statusText = "OK";
+        xhr->ok = true;
     } else {
         const std::string path = js::resolveAssetPath(xhr->url);
         if (readWholeFile(path, xhr->responseText)) {

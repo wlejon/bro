@@ -74,6 +74,7 @@ add_library(bro_bronze_host STATIC
     host_platform.cpp
     host_xhr.cpp
     host_fetch.cpp
+    host_file.cpp
 )
 target_include_directories(bro_bronze_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
