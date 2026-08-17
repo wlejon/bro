@@ -99,3 +99,7 @@ GifEncoder
 Physics
 PhysicsCharacter
 PhysicsSoftBody
+AI
+AINavGrid
+AINavMesh
+AIAgent

@@ -75,6 +75,9 @@ inline constexpr uint32_t kHostAudioParamTag = 0x41504152u;        // 'APAR'
 inline constexpr uint32_t kHostAudioBufferTag = 0x41425546u;       // 'ABUF'
 inline constexpr uint32_t kHostPhysicsCharacterTag = 0x50434852u;  // 'PCHR'
 inline constexpr uint32_t kHostPhysicsSoftBodyTag = 0x50534259u;   // 'PSBY'
+inline constexpr uint32_t kHostNavGridTag = 0x4E564744u;  // 'NVGD'
+inline constexpr uint32_t kHostNavMeshTag = 0x4E564D53u;  // 'NVMS'
+inline constexpr uint32_t kHostAgentTag   = 0x41474E54u;  // 'AGNT'
 
 // ---------------------------------------------------------------------------
 // The error funnel and the frame clock (dom_globals.cpp)
@@ -522,5 +525,11 @@ Value makeBrandConstructor(const char* name);
 
 void installPhysicsGlobals();
 void drainPhysicsContactEvents();
+
+// ---------------------------------------------------------------------------
+// AI & Navigation (host_ai.cpp)
+// ---------------------------------------------------------------------------
+
+void installAIGlobals();
 
 }  // namespace bro::bronze_host

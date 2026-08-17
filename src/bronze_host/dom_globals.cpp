@@ -1087,6 +1087,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     installParserGlobal();
     installVideoGlobals();
     installPhysicsGlobals();
+    installAIGlobals();
 
     {
         Value nav = makeNavigatorValue();
