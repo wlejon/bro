@@ -1,4 +1,10 @@
-// MutationObserver for a bronze-compiled app.
+// MutationObserver and ResizeObserver for a bronze-compiled app.
+//
+// Together in one file because they are one thing from the frame seam's point
+// of view — "tell the observers what they missed" — and separate everywhere
+// else: a mutation is an event the tree reports, and a resize is a measurement
+// nobody reports, so one is a notification and the other is a poll. The
+// ResizeObserver half says more about why, further down.
 //
 // WHERE THE NOTICES COME FROM, and why that is the whole design. This does not
 // watch the bronze host's own mutators. It registers with the DOM
@@ -42,7 +48,10 @@
 
 #include "dom/document.h"
 #include "dom/element.h"
+#include "dom/element_geometry.h"
 #include "dom/node.h"
+
+#include "engine/engine.h"
 
 #include <memory>
 #include <span>
@@ -325,13 +334,186 @@ Value makeObserverValue(Value callback) {
     return obj;
 }
 
-}  // namespace
-
 // ---------------------------------------------------------------------------
-// The frame seam
+// ResizeObserver
 // ---------------------------------------------------------------------------
+//
+// A poll, not a notification, and deliberately: a box changes size for reasons
+// that never touch the DOM — a window resize, a font arriving, a sibling
+// growing and pushing this one — so there is no mutation to hang a notice on.
+// bro's own JS ResizeObserver (js/js/observer_polyfills.js) polls too, from the
+// engine's post-layout hook. This one polls from the bronze frame seam and gets
+// current geometry the way every other read in this layer does, through
+// Engine::flushLayoutForRead.
+//
+// The web runs its observation loop until the sizes settle, up to a depth
+// limit; this reports once per frame, so a callback that resizes its target is
+// heard about on the next frame rather than inside this one. Same one-frame
+// resolution as everything else here, and it cannot loop.
 
-void deliverHostObservers() {
+struct RoTarget {
+    HostNodeState* node = nullptr;
+    double width = 0;
+    double height = 0;
+    bool seen = false;   // false until the first report, which is the initial one
+};
+
+struct RoEntry {
+    uint32_t tag = kHostResizeObserverTag;  // must be first
+    ev::Persistent obj;
+    ev::Persistent callback;
+    std::vector<RoTarget> targets;
+};
+
+std::vector<std::unique_ptr<RoEntry>>* g_resizers = nullptr;
+
+std::vector<std::unique_ptr<RoEntry>>& resizers() {
+    if (!g_resizers) g_resizers = new std::vector<std::unique_ptr<RoEntry>>();
+    return *g_resizers;
+}
+
+RoEntry* resizerOf(Value v) {
+    if (!ev::isObject(v)) return nullptr;
+    auto* ro = static_cast<RoEntry*>(ev::handleData(v));
+    if (!ro || ro->tag != kHostResizeObserverTag) return nullptr;
+    return ro;
+}
+
+Value makeSizeArray(double inlineSize, double blockSize) {
+    // A one-element array, because the web's is one element for every element
+    // that is not fragmented across columns — and nothing here fragments.
+    return hostArrayOf(1, [inlineSize, blockSize](size_t) {
+        ObjectBuilder s;
+        s.set("inlineSize", ev::fromDouble(inlineSize));
+        s.set("blockSize", ev::fromDouble(blockSize));
+        return s.get();
+    });
+}
+
+Value makeResizeEntry(dom::Element* el, double contentW, double contentH) {
+    dom::AbsoluteRect border = dom::absoluteBorderBox(el);
+    const double dpr = hostEngine() ? hostEngine()->displayScale() : 1.0;
+
+    ObjectBuilder b;
+    b.set("target", hostElementValue(el));
+    // contentRect is the CONTENT box, and its x/y are the padding offsets
+    // inside the border box rather than a position on the page — which is why
+    // it is built here rather than handed getBoundingClientRect's answer the
+    // way the JS polyfill does.
+    ObjectBuilder rect;
+    rect.set("x", ev::fromDouble(0));
+    rect.set("y", ev::fromDouble(0));
+    rect.set("left", ev::fromDouble(0));
+    rect.set("top", ev::fromDouble(0));
+    rect.set("right", ev::fromDouble(contentW));
+    rect.set("bottom", ev::fromDouble(contentH));
+    rect.set("width", ev::fromDouble(contentW));
+    rect.set("height", ev::fromDouble(contentH));
+    b.set("contentRect", rect.get());
+
+    b.set("contentBoxSize", makeSizeArray(contentW, contentH));
+    b.set("borderBoxSize", makeSizeArray(border.width, border.height));
+    b.set("devicePixelContentBoxSize", makeSizeArray(contentW * dpr, contentH * dpr));
+    return b.get();
+}
+
+Value resizerObserve(Value thisValue, std::span<const Value> a) {
+    RoEntry* entry = resizerOf(thisValue);
+    if (!entry) {
+        return ev::throwTypeError("ResizeObserver.observe: receiver is not an observer");
+    }
+    dom::Element* el = hostElementOf(argAt(a, 0));
+    if (!el) {
+        return ev::throwTypeError("ResizeObserver.observe: target must be an element");
+    }
+    HostNodeState* st = hostNodeStateFor(el);
+    for (const RoTarget& t : entry->targets) {
+        if (t.node == st) return ev::undefined();   // already observed: a no-op
+    }
+    // `seen` false, so the next pass reports the CURRENT size. That initial
+    // delivery is the whole reason most code reaches for a ResizeObserver
+    // instead of a resize listener.
+    entry->targets.push_back(RoTarget{st, 0, 0, false});
+    return ev::undefined();
+}
+
+Value resizerUnobserve(Value thisValue, std::span<const Value> a) {
+    RoEntry* entry = resizerOf(thisValue);
+    if (!entry) return ev::undefined();
+    dom::Element* el = hostElementOf(argAt(a, 0));
+    if (!el) return ev::undefined();
+    HostNodeState* st = hostNodeStateFor(el);
+    for (auto it = entry->targets.begin(); it != entry->targets.end(); ++it) {
+        if (it->node == st) {
+            entry->targets.erase(it);
+            break;
+        }
+    }
+    return ev::undefined();
+}
+
+Value resizerDisconnect(Value thisValue, std::span<const Value>) {
+    RoEntry* entry = resizerOf(thisValue);
+    if (entry) entry->targets.clear();
+    return ev::undefined();
+}
+
+Value makeResizerValue(Value callback) {
+    auto owned = std::make_unique<RoEntry>();
+    RoEntry* entry = owned.get();
+    entry->callback = ev::Persistent(callback);
+    resizers().push_back(std::move(owned));
+
+    ObjectBuilder b(ev::makeHandle(entry, [](void*) {}));   // see makeObserverValue
+    b.def("observe", 2, resizerObserve);
+    b.def("unobserve", 1, resizerUnobserve);
+    b.def("disconnect", 0, resizerDisconnect);
+    Value obj = b.get();
+    entry->obj = ev::Persistent(obj);
+    return obj;
+}
+
+void checkResizeObservers() {
+    if (!g_resizers || g_resizers->empty()) return;
+
+    const size_t count = g_resizers->size();
+    for (size_t i = 0; i < count && i < g_resizers->size(); ++i) {
+        RoEntry* entry = (*g_resizers)[i].get();
+        if (entry->targets.empty()) continue;
+
+        // Which targets changed, decided BEFORE anything is allocated: the
+        // sizes are host doubles and the elements are engine-owned, so nothing
+        // here can be moved by the object building that follows.
+        std::vector<dom::Element*> changed;
+        std::vector<double> widths;
+        std::vector<double> heights;
+        for (RoTarget& t : entry->targets) {
+            dom::Element* el = t.node ? t.node->el : nullptr;
+            if (!el) continue;   // freed since observe()
+            hostEngine()->flushLayoutForRead(el->document());
+            const double w = el->layoutBox().contentRect.width;
+            const double h = el->layoutBox().contentRect.height;
+            if (t.seen && w == t.width && h == t.height) continue;
+            t.seen = true;
+            t.width = w;
+            t.height = h;
+            changed.push_back(el);
+            widths.push_back(w);
+            heights.push_back(h);
+        }
+        if (changed.empty()) continue;
+
+        ev::Persistent entries(hostArrayOf(changed.size(), [&](size_t k) {
+            return makeResizeEntry(changed[k], widths[k], heights[k]);
+        }));
+        Value argv[2] = {entries.get(), entry->obj.get()};
+        ev::CallResult r = ev::call(entry->callback.get(), entry->obj.get(),
+                                    std::span<const Value>(argv, 2));
+        if (r.thrown) reportBronzeError("ResizeObserver", r.value);
+    }
+}
+
+void deliverMutationRecords() {
     if (!g_observers || g_observers->empty()) return;
     // Re-entrancy is not merely guarded, it is the design: a callback that
     // mutates what it observes queues records that are delivered NEXT frame.
@@ -364,6 +546,22 @@ void deliverHostObservers() {
     g_delivering = false;
 }
 
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// The frame seam
+// ---------------------------------------------------------------------------
+
+void deliverHostObservers() {
+    // Records first, sizes second. A mutation can change a box — that is most
+    // of what mutations do — so an observer told about the mutation has
+    // already had its chance to react before the size it caused is measured,
+    // and the resize entry that follows reports the box as it actually ended
+    // up rather than the one it had mid-edit.
+    deliverMutationRecords();
+    checkResizeObservers();
+}
+
 void installObserverGlobals() {
     Value ctor = ev::makeFunction(
         [](Value, std::span<const Value> a) {
@@ -376,6 +574,18 @@ void installObserverGlobals() {
         },
         1);
     ev::registerGlobal("MutationObserver", ctor);
+
+    Value resizeCtor = ev::makeFunction(
+        [](Value, std::span<const Value> a) {
+            Value cb = argAt(a, 0);
+            if (!ev::isFunction(cb)) {
+                return ev::throwTypeError(
+                    "ResizeObserver: the argument must be a function");
+            }
+            return makeResizerValue(cb);
+        },
+        1);
+    ev::registerGlobal("ResizeObserver", resizeCtor);
 }
 
 }  // namespace bro::bronze_host

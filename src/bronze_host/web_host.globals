@@ -78,3 +78,4 @@ URL
 AbortController
 AbortSignal
 MutationObserver
+ResizeObserver

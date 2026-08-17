@@ -65,6 +65,7 @@ inline constexpr uint32_t kHostBlobTag = 0x424C4F42u;     // 'BLOB'
 inline constexpr uint32_t kHostReaderTag = 0x46524452u;   // 'FRDR'
 inline constexpr uint32_t kHostSignalTag = 0x53474E4Cu;   // 'SGNL'
 inline constexpr uint32_t kHostMutationObserverTag = 0x4D555442u;  // 'MUTB'
+inline constexpr uint32_t kHostResizeObserverTag = 0x52535A42u;    // 'RSZB'
 
 // ---------------------------------------------------------------------------
 // The error funnel and the frame clock (dom_globals.cpp)
@@ -441,17 +442,23 @@ void hostAbortSignal(Value signal, Value reason);
 Value hostMakeDomError(const char* name, const std::string& message);
 
 // ---------------------------------------------------------------------------
-// MutationObserver (host_observers.cpp)
+// MutationObserver / ResizeObserver (host_observers.cpp)
 // ---------------------------------------------------------------------------
 
 void installObserverGlobals();
 
-// Hand every observer the records it has accumulated, one call per observer
-// with all of them. Called once per frame from the bronze frame seam, AFTER
-// requestAnimationFrame — so a mutation made in an rAF callback is reported in
-// the frame that made it — and before the closing microtask drain, so the
-// promise jobs an observer starts run in the same checkpoint as everything
-// else's. Records queued from inside a callback wait for the next frame.
+// Hand every observer what it has accumulated: for a MutationObserver the
+// records queued since the last delivery, for a ResizeObserver the targets
+// whose box has changed since it last looked. One call per observer with all
+// of them, because an observer that rebuilds a view from its entries needs
+// them together.
+//
+// Called once per frame from the bronze frame seam, AFTER requestAnimationFrame
+// — so a mutation or a resize caused by a frame callback is reported in the
+// frame that caused it — and before the closing microtask drain, so the promise
+// jobs an observer starts run in the same checkpoint as everything else's.
+// Anything queued from inside a callback waits for the next frame, which is
+// what stops an observer that changes what it observes from re-entering itself.
 void deliverHostObservers();
 
 // ---------------------------------------------------------------------------

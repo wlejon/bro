@@ -1,0 +1,10 @@
+APP fixture.found=true
+APP sync.deliveredInTurn=false
+APP watch.calls=2
+APP watch.observerArg=true
+APP watch.entries=2
+APP e0=#a content=100x50 border=100x50 box=100x50
+APP e1=#a content=200x50 border=200x50 box=200x50
+APP dropped.calls=0
+APP cut.calls=1
+APP done=1

@@ -29,7 +29,7 @@ Off by default; nothing here is in the default build.
 | `host_xhr.cpp` | `XMLHttpRequest` (text over the app asset path; see its header) |
 | `host_file.cpp` | `Blob`, `File`, `FileReader`, and the `URL` namespace — bytes an app holds, and the object URLs that name them |
 | `host_abort.cpp` | `AbortController` / `AbortSignal`, and the cancellation `fetch` obeys |
-| `host_observers.cpp` | `MutationObserver`, over the DOM layer's own mutation notices |
+| `host_observers.cpp` | `MutationObserver`, over the DOM layer's own mutation notices; `ResizeObserver`, over a per-frame poll of the layout box |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
 | `app_module.cpp` | finding, verifying and running the module an app dir carries |
 
@@ -407,7 +407,7 @@ instead of two.
 not a `dom::Element` — it has no layout box, and `img instanceof Image` is
 false because the embed API cannot build an object on a chosen prototype.
 
-**The DOM**: `dataset`, `ResizeObserver`, and `DOMParser`.
+**The DOM**: `dataset` and `DOMParser`.
 
 `MutationObserver` is DONE — `host_observers.cpp`, checked by
 `tests/bronze_host/run_observer_test.sh` — and it is built on a notice fired by
@@ -431,6 +431,17 @@ mutators move one node at a time; on the web they are longer only for
 `replaceChildren` and `innerHTML`, neither of which exists here. A comment
 node's `data` is not observed: `dom::CommentNode` has no document notification
 at all, where `TextNode` funnels all five of its mutators through one.
+
+`ResizeObserver` is DONE too, in the same file and the same frame slot, and it
+is a POLL rather than a notification — a box changes size because a window
+resized, a font arrived or a sibling grew, and none of those is a mutation to
+hang a notice on. bro's own JS ResizeObserver polls too, from the engine's
+post-layout hook; this one polls from the frame seam and gets current geometry
+through `Engine::flushLayoutForRead` like every other read here. The first pass
+after `observe()` reports the current size unprompted, which is the behaviour
+code actually reaches for one for. The web runs its observation loop until
+sizes settle; this reports once per frame, so a callback that resizes its own
+target is heard about on the next frame and cannot loop.
 
 `dataset` is blocked rather than merely unwritten: it is a live view whose keys
 are not known in advance, so it needs a PROPERTY TRAP, and the embed API has
