@@ -4,9 +4,9 @@
 # compiled probe through AbortController, AbortSignal and the fetch that has to
 # obey one.
 #
-# WHY THIS IS ITS OWN CHECK. Every assertion here is a NEGATIVE one — a fetch
+# WHY THIS IS ITS OWN CHECK. Every assertion here is a NEGATIVE one ? a fetch
 # that must not deliver, a listener that must not fire twice, a reason that must
-# not be replaced by a later abort — and every one of them fails silently. A
+# not be replaced by a later abort ? and every one of them fails silently. A
 # signal that does nothing at all looks exactly like a signal that works, right
 # up to the frame where the app renders the resource the user cancelled.
 #

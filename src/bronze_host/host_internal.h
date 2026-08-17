@@ -69,6 +69,10 @@ inline constexpr uint32_t kHostMutationObserverTag = 0x4D555442u;  // 'MUTB'
 inline constexpr uint32_t kHostResizeObserverTag = 0x52535A42u;    // 'RSZB'
 inline constexpr uint32_t kHostVideoEncoderTag = 0x56454E43u;      // 'VENC'
 inline constexpr uint32_t kHostGifEncoderTag = 0x47454E43u;        // 'GENC'
+inline constexpr uint32_t kHostAudioContextTag = 0x41435458u;      // 'ACTX'
+inline constexpr uint32_t kHostAudioNodeTag = 0x414E4F44u;         // 'ANOD'
+inline constexpr uint32_t kHostAudioParamTag = 0x41504152u;        // 'APAR'
+inline constexpr uint32_t kHostAudioBufferTag = 0x41425546u;       // 'ABUF'
 
 // ---------------------------------------------------------------------------
 // The error funnel and the frame clock (dom_globals.cpp)
@@ -501,5 +505,13 @@ void installXhrGlobal();
 // ---------------------------------------------------------------------------
 
 void installFetchGlobal();
+
+// ---------------------------------------------------------------------------
+// Audio (host_audio.cpp)
+// ---------------------------------------------------------------------------
+
+void installAudioGlobals();
+Value makeAudioContextConstructor();
+Value makeBrandConstructor(const char* name);
 
 }  // namespace bro::bronze_host

@@ -72,6 +72,17 @@ WebGLRenderingContext
 Intl
 localStorage
 AudioContext
+webkitAudioContext
+AudioNode
+AudioParam
+GainNode
+OscillatorNode
+AudioBuffer
+AudioBufferSourceNode
+BiquadFilterNode
+AnalyserNode
+PannerNode
+StereoPannerNode
 CustomEvent
 bro
 Blob

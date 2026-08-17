@@ -6,7 +6,7 @@
 # MutationObserver and nothing else: a mutation is something the tree reports,
 # and a size is something nobody reports, so this half is a poll of the layout
 # box. Its two failures are both quiet. One is delivering nothing on the first
-# pass — the initial report is the reason code uses a ResizeObserver at all, and
+# pass ? the initial report is the reason code uses a ResizeObserver at all, and
 # an implementation that only fires on CHANGE looks perfectly correct until the
 # first layout. The other is delivering every frame, which is indistinguishable
 # from working and runs an app's relayout callback sixty times a second forever.

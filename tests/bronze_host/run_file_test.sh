@@ -4,7 +4,7 @@
 # compiled probe build Blobs, mint an object URL, read it back through fetch,
 # and run a FileReader through every one of its outcomes.
 #
-# WHY THIS IS ITS OWN CHECK. Everything else in this layer moves data one way —
+# WHY THIS IS ITS OWN CHECK. Everything else in this layer moves data one way ?
 # the app names a path, the host reads it off disk. This is the only surface
 # where the app HOLDS the bytes and needs somewhere to put them that the rest of
 # the platform accepts. Its central failure is quiet: a `blob:` URL that mints

@@ -79,6 +79,7 @@ add_library(bro_bronze_host STATIC
     host_observers.cpp
     host_parser.cpp
     host_video.cpp
+    host_audio.cpp
 )
 target_include_directories(bro_bronze_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 

@@ -5,22 +5,22 @@
 #
 # WHY THIS CHECK IS DIFFERENT FROM ITS NEIGHBOURS. Every other script here
 # drives a bro-bronze-host-<app> binary with an app LINKED IN, so what they
-# test is the host layer. This one tests the stock binary — the same
-# bro-headless every other test in tests/ uses — because the whole point of
+# test is the host layer. This one tests the stock binary ? the same
+# bro-headless every other test in tests/ uses ? because the whole point of
 # the folder model is that ONE binary opens an interpreted app and a compiled
 # one, and which it got is a property of the directory.
 #
 # WHY THE MODULES ARE SYNTHETIC. The subject is the loader's contract, not
 # bronze's codegen: what a module must export, and what happens when it does
 # not. Four ~3-line C files cover every branch exactly, deterministically, and
-# without a bronze CLI in the loop — a real compiled app could only ever
+# without a bronze CLI in the loop ? a real compiled app could only ever
 # exercise the success path, and the failure paths are the ones that matter.
 # A module whose ABI stamp disagrees is the failure this whole mechanism
 # exists for (bronze_abi.h's "Drift between two BUILDS"): a stale module loads
 # happily where a stale linked object at least forced a relink, and the
 # symptom is nondeterministic stalls rather than a crash. So `wrongabi`'s
 # bronze_main prints a line that must NOT appear, and the check asserts its
-# absence — proving the guard prevents execution rather than reporting it
+# absence ? proving the guard prevents execution rather than reporting it
 # afterwards.
 #
 # WHY THE FINGERPRINT IS RECOMPUTED HERE. It is the first 32 bits of
@@ -29,7 +29,7 @@
 # match and `wrongabi.dll` differ without either value being written down
 # anywhere it could go stale.
 #
-# Exit 0 pass, 1 fail, 77 skip — as its neighbours.
+# Exit 0 pass, 1 fail, 77 skip ? as its neighbours.
 #
 # Usage:
 #   tests/bronze_host/run_loader_test.sh
@@ -67,7 +67,7 @@ fi
 # Everything below is a question about the build THIS BINARY came from, so find
 # that build's cache rather than any cache in the tree. A checkout can hold a
 # dozen build directories pinned to different bronze checkouts, and reading the
-# wrong one would compute a fingerprint the binary under test does not speak —
+# wrong one would compute a fingerprint the binary under test does not speak ?
 # which looks exactly like the ABI-mismatch failure this check is here to
 # detect. Windows multi-config puts the exe one level deeper than Ninja does.
 BUILD_DIR="$(cd "$(dirname "$BIN")" && pwd)"
@@ -196,7 +196,7 @@ check() {  # name, module-path-or-empty, must-contain, [must-not-contain]
 }
 
 # An app dir that declares "compiled": true and carries nothing: the engine's
-# own diagnostic, not the loader's — the loader is never reached.
+# own diagnostic, not the loader's ? the loader is never reached.
 check "no module" "" 'carries no compiled module'
 
 # A file that is not a loadable image at all.

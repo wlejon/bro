@@ -4,25 +4,25 @@
 #
 # WHAT ONLY THIS CHECK CATCHES.
 #
-#   * `refuse.*` — the KIND of every refusal. TypeError for the wrong sort of
+#   * `refuse.*` ? the KIND of every refusal. TypeError for the wrong sort of
 #     argument, RangeError for the wrong size, Error for a state problem. An
 #     app branches on `e.name`, so a layer that answered plain Error to all
 #     three would compile, run, write correct files, and quietly take away the
 #     one distinction that lets a caller recover. Nothing but an explicit
 #     assertion can notice that.
 #
-#   * `canvas.*` — encoding a 2D canvas that the PAGE created. The bronze
+#   * `canvas.*` ? encoding a 2D canvas that the PAGE created. The bronze
 #     host's own canvas has no 2D context (getContext answers only webgl /
 #     webgl2), so this is the only shape the case has: interpreted UI, compiled
 #     recorder. It is also the only path here that crosses realms.
 #
-#   * `gif.frames` / `vp.size` — the viewport capture, which for a compiled app
+#   * `gif.frames` / `vp.size` ? the viewport capture, which for a compiled app
 #     is not one option among several but the only one that can see a WebGL
-#     render. `vp.size` is pinned at bro-headless's own 1920x1080 default —
+#     render. `vp.size` is pinned at bro-headless's own 1920x1080 default ?
 #     which it assigns over the appdir's bro.json, so the fixture's 640x480 is
 #     dead weight and the size is the same on every machine.
 #
-#   * `enc.frames0` / `enc.frames1` — framesWritten before and after finish().
+#   * `enc.frames0` / `enc.frames1` ? framesWritten before and after finish().
 #     libvpx buffers, so the number only means "everything I pushed" after the
 #     flush; pinning both is what keeps a future change from making the
 #     pre-flush number look meaningful.
@@ -35,7 +35,7 @@
 #
 # WHAT THIS CHECK DOES NOT COVER: that the files DECODE. Byte-level muxing is
 # already pinned by tests/video/*, which drives the same two encoders through
-# bro's own bindings — this layer adds argument handling and refusals on top of
+# bro's own bindings ? this layer adds argument handling and refusals on top of
 # them, and that is what is asserted here. A second copy of the muxer's
 # expectations would drift from the first without ever catching anything.
 #
@@ -75,7 +75,7 @@ esac
 APP_DIR="$(bh_to_win_path "$SCRIPT_DIR/appdir_video")"
 
 # The scratch directory the encoders write into. Everything the probe names is
-# a bare filename, so this is what "relative to the cwd" resolves to — and it
+# a bare filename, so this is what "relative to the cwd" resolves to ? and it
 # means a half-finished run leaves its debris here and nowhere near the tree.
 OUT_DIR="$(mktemp -d)"
 trap 'rm -rf "$OUT_DIR"' EXIT
@@ -101,7 +101,7 @@ rm -f /tmp/bronze_video_diff.$$
 
 # The half the probe cannot assert. A size floor rather than an exact byte
 # count: what is being checked is that a real file was muxed and closed, and an
-# exact size would pin libvpx's output for no benefit — tests/video/ owns the
+# exact size would pin libvpx's output for no benefit ? tests/video/ owns the
 # muxing. The floors are "bigger than an empty container's header".
 check_file() {
     local name="$1" floor="$2" path="$OUT_DIR/$1"

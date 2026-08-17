@@ -5,7 +5,7 @@
 # compare what it printed against a committed expectation.
 #
 # WHY A SEPARATE CHECK FROM run_dom_test.sh. That one's subject is the DOM an
-# app BUILDS — createElement, appendChild, read it back — and every tree it
+# app BUILDS ? createElement, appendChild, read it back ? and every tree it
 # looks at is made of elements the probe itself created. This one's subject is
 # the three node kinds that are not elements, and the tree an app is HANDED.
 # They fail differently: the element surface breaks loudly, by losing identity

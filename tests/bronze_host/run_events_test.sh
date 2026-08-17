@@ -6,20 +6,20 @@
 # WHY A SECOND SCRIPT AND NOT A SECOND MODE OF THE FIRST. The subject is a
 # different executable: run_bronze_host_test.sh pins `bro-bronze-host`, the
 # scene-graph app, in the fixed-frame mode that needs no script. This one pins
-# `bro-headless`, the events probe, under a DRIVER script — which is
+# `bro-headless`, the events probe, under a DRIVER script ? which is
 # the only mode that can produce a click. Same layer, two binaries, and the
 # multi-app CMake surface (BRO_BRONZE_APPS) exists so both can be in one tree
 # at once. Everything else here follows run_bronze_host_test.sh: exit 0 pass,
 # 1 fail, 77 skip.
 #
 # WHY THE OUTPUT IS COMPARED AS TWO BLOCKS. The compiled app prints to STDOUT
-# (bronze's console) and the interpreted halves — the appdir's page script and
-# the driver script — print through the ENGINE LOG, which is stderr. Those are
+# (bronze's console) and the interpreted halves ? the appdir's page script and
+# the driver script ? print through the ENGINE LOG, which is stderr. Those are
 # two OS streams with two buffers, so their INTERLEAVING is not something a
 # byte-for-byte expectation may depend on. Each stream's own order is, and that
 # is what is pinned: every `APP ` line in order, then every interpreted line in
 # order. Causality across the boundary survives that split, because it is
-# carried in the payload rather than in the interleaving — `PAGE fromApp=pong:one`
+# carried in the payload rather than in the interleaving ? `PAGE fromApp=pong:one`
 # can only exist if a compiled listener saw `page:toApp` and answered it.
 #
 # Usage:
@@ -73,7 +73,7 @@ CLEAN_ERR="$(printf '%s\n' "$ERR_RAW" | tr -d '\r')"
 APP_LINES="$(printf '%s\n' "$CLEAN_OUT" | grep '^APP ' || true)"
 # Block 2: the page script and the driver, whose console.log lands in the
 # engine log as `[hh:mm:ss.mmm] [INFO] [console] <text>`. The timestamp is
-# stripped, obviously — it is the one part of the line that differs every run.
+# stripped, obviously ? it is the one part of the line that differs every run.
 JS_LINES="$(printf '%s\n' "$CLEAN_ERR" \
     | sed -n 's/^.*\[console\] \(\(PAGE\|DRV\) .*\)$/\1/p' || true)"
 ACTUAL="$(printf '%s\n%s\n' "$APP_LINES" "$JS_LINES")"

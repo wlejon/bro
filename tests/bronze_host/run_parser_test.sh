@@ -6,17 +6,17 @@
 # WHAT ONLY THIS CHECK CATCHES. Parsing a string into a tree is the easy half.
 # The half that can go wrong quietly is that the result is a SECOND DOCUMENT:
 #
-#   * `scope.*` — a query on one document must not answer from the other. A
+#   * `scope.*` ? a query on one document must not answer from the other. A
 #     parsed document whose getElementById fell through to the live page would
 #     look completely healthy until the day two documents used the same id.
 #
-#   * `adopt.*` — appending a parsed node into the live tree has to transfer
+#   * `adopt.*` ? appending a parsed node into the live tree has to transfer
 #     ownership, or the live tree ends up holding a node the parser document
 #     will destroy. That step now lives in Node::appendChild (dom/element.cpp)
 #     rather than in the JS bindings, because a compiled program appends
 #     without passing through them; these lines are what pin it there.
 #
-#   * `obs.*` — a MutationObserver in the live document is installed FIRST, and
+#   * `obs.*` ? a MutationObserver in the live document is installed FIRST, and
 #     one in a parsed document second. Both must report. The host used to
 #     remember only that some document had been hooked, which made the second
 #     one silent; nothing could reach that bug before a second document existed.
@@ -24,7 +24,7 @@
 # What this check does NOT cover, and why: the node registry had the same
 # one-document assumption (host_element.cpp's freed-node observer), and
 # exercising it means wrapping a parsed node before any live one and then
-# freeing a live node — a use-after-free whose symptom is undefined rather than
+# freeing a live node ? a use-after-free whose symptom is undefined rather than
 # a wrong line. It is fixed by inspection.
 #
 # WHY IT ADVANCES SEVERAL FRAMES. Observer records are delivered once per frame

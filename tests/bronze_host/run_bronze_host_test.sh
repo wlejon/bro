@@ -5,7 +5,7 @@
 #
 # WHY THIS IS A SCRIPT AND NOT tests/<group>/test_*.js. bro's suite
 # (tests/run_tests.sh) discovers `test_*.js` files and runs each one through
-# bro-headless — the driver evaluates the file in the app's JS realm. There is
+# bro-headless ? the driver evaluates the file in the app's JS realm. There is
 # no JS realm to evaluate anything in here: the subject IS the executable, an
 # app compiled to machine code and linked into a different binary, and it has
 # no scripting surface at all. So the file is named run_*.sh rather than
@@ -25,7 +25,7 @@
 # Environment:
 #   BRO_HEADLESS      path to bro-headless (default: found under build/)
 #   BRONZE            path to the bronze CLI (default: found under build/)
-#   BRO_BRONZE_FRAMES frames to advance (default 8 — the app needs 5, and the
+#   BRO_BRONZE_FRAMES frames to advance (default 8 ? the app needs 5, and the
 #                     spare ones must print nothing, which is itself a check:
 #                     an app that keeps drawing after `done` has a rAF it never
 #                     stopped rescheduling)
@@ -57,7 +57,7 @@ esac
 APP_DIR="$(bh_to_win_path "$PROJECT_DIR/src/bronze_host/fixtures/appdir")"
 
 # stderr is folded in on purpose: the engine logs there, and a run that failed
-# because a host global was missing says so in the log — swallowing it would
+# because a host global was missing says so in the log ? swallowing it would
 # leave a bare diff with no cause.
 RAW="$("$BIN" "$APP_DIR" -e "advanceTime($((FRAMES * 16)))" 2>&1)"
 STATUS=$?

@@ -5,7 +5,7 @@
 # printed against a committed expectation.
 #
 # WHY A SEPARATE CHECK FROM run_bronze_host_test.sh. That one's subject is the
-# RENDER path — a scene graph drawn frame after frame — and it says nothing
+# RENDER path ? a scene graph drawn frame after frame ? and it says nothing
 # about whether `panel.children[1] === beta`. This one's subject is the DOM
 # itself: identity, real arrays, tree edits, classList, style, geometry. They
 # fail for entirely different reasons, so they are two binaries and two
@@ -13,7 +13,7 @@
 #
 # WHY THERE IS NO DRIVER SCRIPT. The probe needs no input: it prints everything
 # from its top level, which runs after engine init (HeadlessHooks::afterEngine).
-# The frames exist only so the loop has somewhere to go afterwards — an app that
+# The frames exist only so the loop has somewhere to go afterwards ? an app that
 # is still printing on frame 4 has a rAF it never stopped, and the expectation
 # would catch that as extra lines.
 #

@@ -1,6 +1,6 @@
 # bronze_host integration checks
 
-Fifteen checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip.
+Sixteen checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip.
 
 ```bash
 tests/bronze_host/run_loader_test.sh        # the folder loader itself
@@ -15,12 +15,13 @@ tests/bronze_host/run_observer_test.sh      # MutationObserver, incl. a mutation
 tests/bronze_host/run_resize_test.sh        # ResizeObserver: the initial report, and the quiet frames
 tests/bronze_host/run_parser_test.sh        # DOMParser: a second document, and adoption out of it
 tests/bronze_host/run_video_test.sh          # VideoEncoder, GifEncoder: every pixel source, and every refusal
+tests/bronze_host/run_audio_test.sh          # Web Audio & Sound Engine: nodes, params, buffers, decodeAudioData
 tests/bronze_host/run_wild_test.sh          # wild three.js scene + OrbitControls
 tests/bronze_host/run_instanced_test.sh     # instanced mesh under load (2,500 instances)
 tests/bronze_host/run_pixi_test.sh          # pixi.js v8: WebGL sprites + pixel readback
 ```
 
-**All fifteen run the stock `bro-headless`** — the same binary every other test in
+**All sixteen run the stock `bro-headless`** — the same binary every other test in
 `tests/` uses. Each one's app is a directory carrying a compiled `app.dll` /
 `app.so` / `app.dylib`, which `lib.sh` builds on demand with the bronze CLI and
 rebuilds whenever the module is older than its probe **or than the compiler**

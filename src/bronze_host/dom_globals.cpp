@@ -635,56 +635,6 @@ Value makeLocalStorageValue() {
     return b.get();
 }
 
-Value makeAudioContextConstructor() {
-    return ev::makeFunction([](Value, std::span<const Value>) {
-        ObjectBuilder ctx;
-        ctx.set("state", ev::fromUtf8("running"));
-        ctx.set("currentTime", ev::fromDouble(0.0));
-        ctx.set("sampleRate", ev::fromDouble(44100.0));
-        {
-            ObjectBuilder dest;
-            ctx.set("destination", dest.get());
-        }
-        ctx.def("resume", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-        ctx.def("suspend", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-        ctx.def("close", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-        ctx.def("createGain", 0, [](Value, std::span<const Value>) {
-            ObjectBuilder g;
-            ObjectBuilder param;
-            param.set("value", ev::fromDouble(1.0));
-            param.def("setValueAtTime", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
-            param.def("linearRampToValueAtTime", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
-            param.def("exponentialRampToValueAtTime", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
-            g.set("gain", param.get());
-            g.def("connect", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
-            g.def("disconnect", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-            return g.get();
-        });
-        ctx.def("createOscillator", 0, [](Value, std::span<const Value>) {
-            ObjectBuilder osc;
-            osc.set("type", ev::fromUtf8("sine"));
-            ObjectBuilder freq;
-            freq.set("value", ev::fromDouble(440.0));
-            freq.def("setValueAtTime", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
-            freq.def("exponentialRampToValueAtTime", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
-            osc.set("frequency", freq.get());
-            osc.def("connect", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
-            osc.def("disconnect", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-            osc.def("start", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-            osc.def("stop", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-            return osc.get();
-        });
-        ctx.def("createBufferSource", 0, [](Value, std::span<const Value>) {
-            ObjectBuilder src;
-            src.def("connect", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
-            src.def("start", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-            src.def("stop", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
-            return src.get();
-        });
-        return ctx.get();
-    }, 0);
-}
-
 // ---------------------------------------------------------------------------
 // Gamepad snapshot & vibrationActuator
 // ---------------------------------------------------------------------------
@@ -808,19 +758,7 @@ Value makeNavigatorValue() {
     return b.get();
 }
 
-// A DOM constructor this host never constructs, shaped as a callable because
-// `instanceof` demands one of its right operand: a bare object there is a
-// TypeError, a host function answers false (the documented limit that makes
-// `img instanceof Image` false — README.md). pixi only ever brand-tests
-// against these (`gl instanceof WebGLRenderingContext` is how it reads the
-// context's GL version: false is the truthful answer here, this host's
-// context is WebGL2). Calling one is the named error, not a broken instance.
-Value makeBrandConstructor(const char* name) {
-    std::string msg = std::string("bronze host ") + name +
-                      ": an instanceof brand only, not constructible";
-    return ev::makeFunction(
-        [msg](Value, std::span<const Value>) { return ev::throwTypeError(msg); }, 0);
-}
+
 
 // ---------------------------------------------------------------------------
 // window
@@ -987,6 +925,13 @@ Value makePerformanceValue() {
 // Null `doc` is not defended against here; the only caller has just parsed one.
 Value hostDocumentValue(dom::Document* doc) {
     return makeDocumentValue(doc);
+}
+
+Value makeBrandConstructor(const char* name) {
+    std::string msg = std::string("bronze host ") + name +
+                      ": an instanceof brand only, not constructible";
+    return ev::makeFunction(
+        [msg](Value, std::span<const Value>) { return ev::throwTypeError(msg); }, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -1161,10 +1106,7 @@ void installWebHostGlobals(engine::Engine& engine) {
         Value ls = makeLocalStorageValue();
         ev::registerGlobal("localStorage", ls);
     }
-    {
-        Value audioCtx = makeAudioContextConstructor();
-        ev::registerGlobal("AudioContext", audioCtx);
-    }
+    installAudioGlobals();
     {
         Value customEvent = makeBrandConstructor("CustomEvent");
         ev::registerGlobal("CustomEvent", customEvent);

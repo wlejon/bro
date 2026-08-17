@@ -216,6 +216,7 @@ AppModuleResult runAppModule(engine::Engine& engine, const std::string& modulePa
     // already happened above, against the module's exported stamp instead of a
     // linked constant.
     bronze::embed::runEntry(entry);
+    std::fflush(stdout);
 
     LOG_INFO("compiled app: %s (bronze ABI %08x, host globals: %s)", modulePath.c_str(),
              kRuntimeAbi, globals.c_str());

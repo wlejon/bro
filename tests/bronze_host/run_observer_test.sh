@@ -4,9 +4,9 @@
 # on (Document::notifyMutation, src/dom/document.h).
 #
 # WHY THIS IS ITS OWN CHECK, and what only it can catch. This layer could have
-# implemented MutationObserver by watching its OWN mutators — everything a
+# implemented MutationObserver by watching its OWN mutators ? everything a
 # compiled app does to the tree goes through host_element.cpp and host_node.cpp
-# — and every assertion here but one would still pass. The one is `page.*`: a
+# ? and every assertion here but one would still pass. The one is `page.*`: a
 # script in the page's QuickJS realm sets an attribute, and the compiled
 # observer has to hear about it. It only does because the notice is fired by
 # dom::Element itself, which is the whole reason that hook was added rather

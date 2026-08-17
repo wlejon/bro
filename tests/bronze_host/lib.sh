@@ -1,7 +1,7 @@
 # Shared plumbing for the bronze_host checks. Sourced, never executed.
 #
 # WHY THIS FILE EXISTS NOW AND DID NOT BEFORE. Each check used to pin its OWN
-# executable — bro-bronze-host-dom, bro-bronze-host-events, one per app —
+# executable ? bro-bronze-host-dom, bro-bronze-host-events, one per app ?
 # because the app was linked in, so "which app" and "which binary" were the same
 # question. Seven scripts therefore had seven copies of a discovery block that
 # differed only in the name it searched for. Now that an app is a MODULE its
@@ -9,7 +9,7 @@
 # test in tests/ uses, and the only thing that varies is the folder. One copy.
 #
 # Exit codes are the automake convention the checks already used: 0 pass, 1
-# fail, 77 skip. Skip is load-bearing — "the compiler is not in this tree" and
+# fail, 77 skip. Skip is load-bearing ? "the compiler is not in this tree" and
 # "the check found a real defect" must never be the same result.
 
 # The .exe takes Windows paths; git-bash hands out /d/... ones.
@@ -20,7 +20,7 @@ bh_to_win_path() {
     else echo "$p"; fi
 }
 
-# The stock headless binary — the same one tests/run_tests.sh drives. No
+# The stock headless binary ? the same one tests/run_tests.sh drives. No
 # bronze-specific name and no bronze-specific build: if bro-headless exists at
 # all it can load a compiled app, because the loader is in every build.
 bh_find_bro_headless() {
@@ -64,7 +64,7 @@ bh_find_bronze() {
 # The import library a module links against. bronze's own search
 # (src/cli/link.cpp) looks beside the CLI and one or two directories up, which
 # finds it in a single-config tree and misses it under a multi-config generator
-# — there the library is one level deeper, in shared/<Config>/. So the path is
+# ? there the library is one level deeper, in shared/<Config>/. So the path is
 # passed explicitly rather than left to chance.
 bh_find_shared_rt_lib() {
     local project_dir="$1" candidate
@@ -89,7 +89,13 @@ bh_module_name() {
     case "$(uname -s)" in
         Darwin) echo "app.dylib" ;;
         MINGW*|MSYS*|CYGWIN*) echo "app.dll" ;;
-        *) echo "app.so" ;;
+        *)
+            if [[ "${BRO_HEADLESS:-}" == *.exe || -f "${PROJECT_DIR:-}/build/Release/bro-headless.exe" || -f "${PROJECT_DIR:-}/build/Release/bronze.exe" ]]; then
+                echo "app.dll"
+            else
+                echo "app.so"
+            fi
+            ;;
     esac
 }
 
@@ -97,7 +103,7 @@ bh_module_name() {
 #
 # STALENESS IS CHECKED AGAINST THE COMPILER, not just the source. A module
 # carries the ABI fingerprint of the bronze that emitted it, and bro refuses one
-# whose stamp is not its own — so a rebuilt runtime invalidates every module in
+# whose stamp is not its own ? so a rebuilt runtime invalidates every module in
 # the tree even though no .js changed. Rebuilding on a newer bronze.exe is what
 # keeps that from surfacing as a mysterious refusal.
 #
@@ -111,7 +117,7 @@ bh_ensure_module() {
     bronze="$(bh_find_bronze "$project_dir")" || bronze=""
 
     if [[ -z "$bronze" ]]; then
-        # No compiler. A module already sitting there is still worth running —
+        # No compiler. A module already sitting there is still worth running ?
         # it is what a release checkout or a CI artifact would have.
         [[ -f "$module" ]] && { echo "$module"; return 0; }
         return 77
