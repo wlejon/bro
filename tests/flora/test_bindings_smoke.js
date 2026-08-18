@@ -218,6 +218,67 @@ assert(world.plantInfo(lastIdx) === null, 'vacated slot is null');
 assert(world.removePlant(-1) === false, 'removePlant negative OOR fails');
 assert(world.removePlant(999) === false, 'removePlant positive OOR fails');
 
+// ── 7. Leaf Clusters & Phyllotaxy Modes ──────────────────────────────────
+console.log('Testing bro.flora.leafCluster & phyllotaxy...');
+assert(bro.flora.phyllotaxy !== undefined, 'bro.flora.phyllotaxy exists');
+assert(bro.flora.phyllotaxy.alternate === 0, 'phyllotaxy.alternate is 0');
+assert(bro.flora.phyllotaxy.opposite === 1, 'phyllotaxy.opposite is 1');
+assert(bro.flora.phyllotaxy.spiral === 2, 'phyllotaxy.spiral is 2');
+assert(bro.flora.phyllotaxy.fascicle === 3, 'phyllotaxy.fascicle is 3');
+assert(bro.flora.phyllotaxy.compoundPinnate === 4, 'phyllotaxy.compoundPinnate is 4');
+
+// Default invocation
+const clusterDefault = bro.flora.leafCluster();
+assert(clusterDefault && clusterDefault.vertexCount > 0, 'leafCluster() default produces vertices');
+assert(clusterDefault.triangleCount > 0, 'leafCluster() default produces triangles');
+
+// Alternate (distichous / 2-ranked spiral)
+const clusterAlt = bro.flora.leafCluster(bro.flora.phyllotaxy.alternate, {
+    count: 8, twigLength: 0.3, twigRadius: 0.006, petioleLength: 0.04,
+    leafWidth: 0.1, leafLength: 0.2, shape: 'lobed', leafBend: 0.35,
+    leafCurl: 0.15, leafCup: 0.2, droop: 0.25, upBias: 0.65, spread: 0.75,
+    includeTwigMesh: true, shapedSilhouette: true, fullUV: true,
+});
+assert(clusterAlt && clusterAlt.vertexCount > 0 && clusterAlt.triangleCount > 0, 'leafCluster alternate valid');
+
+// Opposite (decussate pairs)
+const clusterOpp = bro.flora.leafCluster(bro.flora.phyllotaxy.opposite, {
+    count: 6, twigLength: 0.2, petioleLength: 0.03, leafWidth: 0.12,
+    leafLength: 0.22, leafShape: 'pointed', leafBend: 0.4, leafCurl: 0.2,
+    leafCup: 0.1, droop: 0.3, upBias: 0.7, spread: 0.8, includeTwigMesh: false,
+    shapedSilhouette: true, fullUV: false,
+});
+assert(clusterOpp && clusterOpp.vertexCount > 0 && clusterOpp.triangleCount > 0, 'leafCluster opposite valid');
+
+// Spiral (golden angle rosette)
+const clusterSpiral = bro.flora.leafCluster('spiral', {
+    count: 10, twigLength: 0.25, leafWidth: 0.14, leafLength: 0.24,
+    shape: 'oval', leafBend: 0.2, upBias: 0.6,
+});
+assert(clusterSpiral && clusterSpiral.vertexCount > 0 && clusterSpiral.triangleCount > 0, 'leafCluster spiral valid');
+
+// Fascicle (pine needle bundle)
+const clusterFascicle = bro.flora.leafCluster(bro.flora.phyllotaxy.fascicle, {
+    count: 5, twigLength: 0.08, leafWidth: 0.015, leafLength: 0.28,
+    shape: 'needle', spread: 0.5,
+});
+assert(clusterFascicle && clusterFascicle.vertexCount > 0 && clusterFascicle.triangleCount > 0, 'leafCluster fascicle valid');
+
+// Compound Pinnate (feather-leaved rachis)
+const clusterPinnate = bro.flora.leafCluster(bro.flora.phyllotaxy.compoundPinnate, {
+    count: 11, twigLength: 0.35, petioleLength: 0.02, leafWidth: 0.07,
+    leafLength: 0.16, shape: 'pointed',
+});
+assert(clusterPinnate && clusterPinnate.vertexCount > 0 && clusterPinnate.triangleCount > 0, 'leafCluster compoundPinnate valid');
+
+// Single-arg object syntax with phyllotaxy option
+const clusterOptObj = bro.flora.leafCluster({
+    phyllotaxy: 'compoundPinnate', count: 7, shape: 'frond',
+});
+assert(clusterOptObj && clusterOptObj.vertexCount > 0 && clusterOptObj.triangleCount > 0, 'leafCluster({phyllotaxy}) valid');
+
+console.log('All leaf cluster phyllotaxy modes verified successfully');
+
 console.log('flora_bindings_smoke ok');
 
 } // runFloraSmoke

@@ -439,3 +439,62 @@ world.validate;
 //   world.plantCount, number of plants.
 //   world.prototypeCount, number of registered prototypes.
 //   world.moduleCount, sum of modules across all plants.
+
+// ── Botanical Leaf Clusters ──────────────────────────────────────────
+/**
+ * Botanical leaf arrangement patterns (phyllotaxy).
+ *
+ *   alternate: 0       Distichous / 2-ranked spiral, alternating sides along twig (oak, elm, birch, beech)
+ *   opposite: 1        Decussate paired leaves opposite each other with 90° node twist (maple, ash, lilac)
+ *   spiral: 2          Golden angle (~137.5°) rosette along shoot axis (magnolia, apple, cherry)
+ *   fascicle: 3        Pine needle bundle: 2–5 needles radiating from a basal sheath (pine)
+ *   compoundPinnate: 4 Paired lateral leaflets along a central rachis with a terminal leaflet (walnut, rowan, acacia)
+ */
+bro.flora.phyllotaxy = {
+  alternate: 0,
+  opposite: 1,
+  spiral: 2,
+  fascicle: 3,
+  compoundPinnate: 4,
+};
+
+/**
+ * Procedural botanical leaf cluster / twig spray with petioles and leaves.
+ * Output mesh is in local space: twig root at (0, 0, 0) extending along +Z.
+ * Vertex colors encode wind bend weight in the R channel (0 at base, 1 at outermost leaf tips).
+ *
+ * @param {number|string} [phyllotaxy=0] Phyllotaxy enum value (0..4) or name ('alternate', 'opposite', 'spiral', 'fascicle', 'compoundPinnate').
+ * @param {Object} [opts] Leaf cluster options.
+ * @param {number} [opts.count=6] Number of leaves / leaflets in cluster.
+ * @param {number} [opts.twigLength=0.25] Length of supporting micro-twig / rachis along local +Z.
+ * @param {number} [opts.twigRadius=0.005] Radius of supporting micro-twig.
+ * @param {number} [opts.petioleLength=0.04] Length of individual leaf stalk (petiole).
+ * @param {number} [opts.leafWidth=0.12] Width of individual leaf cards.
+ * @param {number} [opts.leafLength=0.20] Length of individual leaf cards.
+ * @param {string|number} [opts.leafShape='oval'] Leaf shape ('oval', 'pointed', 'lobed', 'needle', 'frond', 'petal').
+ * @param {string|number} [opts.shape='oval'] Alias for leafShape.
+ * @param {number} [opts.leafBend=0.3] Length-wise bend deflection (radians).
+ * @param {number} [opts.leafCurl=0.1] Axial twist curl (radians).
+ * @param {number} [opts.leafCup=0.2] Bilateral transverse cupping.
+ * @param {number} [opts.droop=0.2] Gravitational sag deflection along petiole and leaf.
+ * @param {number} [opts.upBias=0.6] Phototropic bias turning adaxial surface toward sky (+Y).
+ * @param {number} [opts.spread=0.7] Lateral fan/divergence angle (radians) from central twig axis.
+ * @param {boolean} [opts.includeTwigMesh=true] If true, generates micro-twig stem geometry.
+ * @param {boolean} [opts.shapedSilhouette=true] If true, modulates leaf card width by shape silhouette.
+ * @param {boolean} [opts.fullUV=false] If true, leaf card UVs span full [0, 1] instead of atlas cell.
+ * @returns {Mesh}
+ */
+bro.flora.leafCluster;
+
+// Example: oak leaf spray
+const oakCluster = bro.flora.leafCluster(bro.flora.phyllotaxy.alternate, {
+  count: 6,
+  twigLength: 0.22,
+  leafWidth: 0.12,
+  leafLength: 0.20,
+  shape: 'lobed',
+  leafBend: 0.35,
+  droop: 0.2,
+  upBias: 0.7,
+});
+

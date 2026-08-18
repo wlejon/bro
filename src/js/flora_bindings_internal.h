@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <utility>
@@ -78,7 +79,7 @@ inline void fillFoliageDensity(const std::vector<broflora::FoliageSample>& sampl
         float maturity = std::min(1.0f, f.age01);
         float alive    = 1.0f - f.senescence01;
         float stem     = f.twigGrade01 * f.twigGrade01;        // sharpen the thin-shoot bias
-        if (f.isTerminal) stem = std::min(1.0f, stem * 2.0f);  // shoots leaf out at the growing tips
+        if (!f.isTerminal) stem *= 0.10f;                      // strongly suppress structural scaffold limbs
         opts.densityWeight[i] = exposure * maturity * alive * stem;
     }
 }
@@ -101,6 +102,98 @@ inline bool readUint32Field(JSContext* ctx, JSValueConst obj, const char* prop, 
     if (JS_ToUint32(ctx, &u, v) == 0) out = u;
     JS_FreeValue(ctx, v);
     return true;
+}
+
+inline bool readIntField(JSContext* ctx, JSValueConst obj, const char* prop, int& out) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
+    if (JS_IsUndefined(v) || JS_IsNull(v)) { JS_FreeValue(ctx, v); return false; }
+    int32_t i = 0;
+    if (JS_ToInt32(ctx, &i, v) == 0) out = i;
+    JS_FreeValue(ctx, v);
+    return true;
+}
+
+inline bool readBoolField(JSContext* ctx, JSValueConst obj, const char* prop, bool& out) {
+    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
+    if (JS_IsUndefined(v) || JS_IsNull(v)) { JS_FreeValue(ctx, v); return false; }
+    out = JS_ToBool(ctx, v) != 0;
+    JS_FreeValue(ctx, v);
+    return true;
+}
+
+inline bromesh::LeafShape parseLeafShapeValue(JSContext* ctx, JSValueConst v) {
+    if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        bromesh::LeafShape r = bromesh::LeafShape::Oval;
+        if (s) {
+            if      (!std::strcmp(s, "oval"))    r = bromesh::LeafShape::Oval;
+            else if (!std::strcmp(s, "pointed")) r = bromesh::LeafShape::Pointed;
+            else if (!std::strcmp(s, "lobed"))   r = bromesh::LeafShape::Lobed;
+            else if (!std::strcmp(s, "needle"))  r = bromesh::LeafShape::Needle;
+            else if (!std::strcmp(s, "frond"))   r = bromesh::LeafShape::Frond;
+            else if (!std::strcmp(s, "petal"))   r = bromesh::LeafShape::Petal;
+            JS_FreeCString(ctx, s);
+        }
+        return r;
+    } else if (JS_IsNumber(v)) {
+        int32_t val = 0;
+        JS_ToInt32(ctx, &val, v);
+        if (val >= 0 && val <= 5) return static_cast<bromesh::LeafShape>(val);
+    }
+    return bromesh::LeafShape::Oval;
+}
+
+inline broflora::Phyllotaxy parsePhyllotaxy(JSContext* ctx, JSValueConst v) {
+    if (JS_IsNumber(v)) {
+        int32_t val = 0;
+        JS_ToInt32(ctx, &val, v);
+        if (val >= 0 && val <= 4) return static_cast<broflora::Phyllotaxy>(val);
+    } else if (JS_IsString(v)) {
+        const char* s = JS_ToCString(ctx, v);
+        broflora::Phyllotaxy p = broflora::Phyllotaxy::Alternate;
+        if (s) {
+            if (!std::strcmp(s, "alternate") || !std::strcmp(s, "Alternate")) p = broflora::Phyllotaxy::Alternate;
+            else if (!std::strcmp(s, "opposite") || !std::strcmp(s, "Opposite")) p = broflora::Phyllotaxy::Opposite;
+            else if (!std::strcmp(s, "spiral") || !std::strcmp(s, "Spiral")) p = broflora::Phyllotaxy::Spiral;
+            else if (!std::strcmp(s, "fascicle") || !std::strcmp(s, "Fascicle")) p = broflora::Phyllotaxy::Fascicle;
+            else if (!std::strcmp(s, "compoundPinnate") || !std::strcmp(s, "CompoundPinnate") ||
+                     !std::strcmp(s, "compound_pinnate") || !std::strcmp(s, "pinnate")) p = broflora::Phyllotaxy::CompoundPinnate;
+            JS_FreeCString(ctx, s);
+        }
+        return p;
+    }
+    return broflora::Phyllotaxy::Alternate;
+}
+
+inline void readLeafClusterOptions(JSContext* ctx, JSValueConst obj, broflora::LeafClusterOptions& opts) {
+    if (!JS_IsObject(obj)) return;
+    readIntField  (ctx, obj, "count",            opts.count);
+    readFloatField(ctx, obj, "twigLength",       opts.twigLength);
+    readFloatField(ctx, obj, "twigRadius",       opts.twigRadius);
+    readFloatField(ctx, obj, "petioleLength",    opts.petioleLength);
+    readFloatField(ctx, obj, "leafWidth",        opts.leafWidth);
+    readFloatField(ctx, obj, "leafLength",       opts.leafLength);
+
+    JSValue sv = JS_GetPropertyStr(ctx, obj, "leafShape");
+    if (JS_IsUndefined(sv) || JS_IsNull(sv)) {
+        JS_FreeValue(ctx, sv);
+        sv = JS_GetPropertyStr(ctx, obj, "shape");
+    }
+    if (!JS_IsUndefined(sv) && !JS_IsNull(sv)) {
+        opts.leafShape = parseLeafShapeValue(ctx, sv);
+        opts.shape = opts.leafShape;
+    }
+    JS_FreeValue(ctx, sv);
+
+    readFloatField(ctx, obj, "leafBend",         opts.leafBend);
+    readFloatField(ctx, obj, "leafCurl",         opts.leafCurl);
+    readFloatField(ctx, obj, "leafCup",          opts.leafCup);
+    readFloatField(ctx, obj, "droop",            opts.droop);
+    readFloatField(ctx, obj, "upBias",           opts.upBias);
+    readFloatField(ctx, obj, "spread",           opts.spread);
+    readBoolField (ctx, obj, "includeTwigMesh",  opts.includeTwigMesh);
+    readBoolField (ctx, obj, "shapedSilhouette", opts.shapedSilhouette);
+    readBoolField (ctx, obj, "fullUV",           opts.fullUV);
 }
 
 // ── Species partial application ────────────────────────────────────────

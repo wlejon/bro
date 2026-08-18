@@ -72,6 +72,33 @@ static JSValue protoWeeping(JSContext* ctx, JSValueConst, int argc, JSValueConst
     return protoToSpec(ctx, broflora::weepingModule((float)spread, (float)droop));
 }
 
+// ── Leaf Cluster Factory ───────────────────────────────────────────────
+
+static JSValue jsLeafCluster(JSContext* ctx, JSValueConst /*this_val*/,
+                             int argc, JSValueConst* argv) {
+    broflora::Phyllotaxy phyl = broflora::Phyllotaxy::Alternate;
+    broflora::LeafClusterOptions opts;
+
+    if (argc >= 1) {
+        if (JS_IsObject(argv[0]) && !JS_IsNumber(argv[0]) && !JS_IsString(argv[0])) {
+            readLeafClusterOptions(ctx, argv[0], opts);
+            JSValue pv = JS_GetPropertyStr(ctx, argv[0], "phyllotaxy");
+            if (!JS_IsUndefined(pv) && !JS_IsNull(pv)) {
+                phyl = parsePhyllotaxy(ctx, pv);
+            }
+            JS_FreeValue(ctx, pv);
+        } else {
+            phyl = parsePhyllotaxy(ctx, argv[0]);
+            if (argc >= 2 && JS_IsObject(argv[1])) {
+                readLeafClusterOptions(ctx, argv[1], opts);
+            }
+        }
+    }
+
+    auto md = std::make_unique<bromesh::MeshData>(broflora::leafCluster(phyl, opts));
+    return MeshBindings::wrapMeshData(ctx, std::move(md));
+}
+
 // ── Factory ────────────────────────────────────────────────────────────
 
 static JSValue createWorld(JSContext* ctx, JSValueConst /*this_val*/,
@@ -297,6 +324,25 @@ void FloraBindings::install(JSContext* ctx) {
 
     JSValue createFn = JS_NewCFunction(ctx, createWorld, "createWorld", 1);
     JS_SetPropertyStr(ctx, floraObj, "createWorld", createFn);
+
+    // bro.flora.leafCluster(phyllotaxy, opts)
+    JS_SetPropertyStr(ctx, floraObj, "leafCluster",
+                      JS_NewCFunction(ctx, jsLeafCluster, "leafCluster", 2));
+
+    // bro.flora.phyllotaxy = { alternate: 0, opposite: 1, spiral: 2, fascicle: 3, compoundPinnate: 4 };
+    JSValue phylObj = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, phylObj, "alternate",       JS_NewInt32(ctx, (int32_t)broflora::Phyllotaxy::Alternate));
+    JS_SetPropertyStr(ctx, phylObj, "opposite",        JS_NewInt32(ctx, (int32_t)broflora::Phyllotaxy::Opposite));
+    JS_SetPropertyStr(ctx, phylObj, "spiral",          JS_NewInt32(ctx, (int32_t)broflora::Phyllotaxy::Spiral));
+    JS_SetPropertyStr(ctx, phylObj, "fascicle",        JS_NewInt32(ctx, (int32_t)broflora::Phyllotaxy::Fascicle));
+    JS_SetPropertyStr(ctx, phylObj, "compoundPinnate", JS_NewInt32(ctx, (int32_t)broflora::Phyllotaxy::CompoundPinnate));
+    JS_SetPropertyStr(ctx, phylObj, "Alternate",       JS_NewInt32(ctx, (int32_t)broflora::Phyllotaxy::Alternate));
+    JS_SetPropertyStr(ctx, phylObj, "Opposite",        JS_NewInt32(ctx, (int32_t)broflora::Phyllotaxy::Opposite));
+    JS_SetPropertyStr(ctx, phylObj, "Spiral",          JS_NewInt32(ctx, (int32_t)broflora::Phyllotaxy::Spiral));
+    JS_SetPropertyStr(ctx, phylObj, "Fascicle",        JS_NewInt32(ctx, (int32_t)broflora::Phyllotaxy::Fascicle));
+    JS_SetPropertyStr(ctx, phylObj, "CompoundPinnate", JS_NewInt32(ctx, (int32_t)broflora::Phyllotaxy::CompoundPinnate));
+    JS_SetPropertyStr(ctx, floraObj, "phyllotaxy", JS_DupValue(ctx, phylObj));
+    JS_SetPropertyStr(ctx, floraObj, "Phyllotaxy", phylObj);
 
     // bro.flora.prototypes.* — ready-made specs that drop straight into world.addPrototype(...).
     JSValue protos = JS_NewObject(ctx);
