@@ -146,10 +146,11 @@ crosses the language boundary is a copy:
 ### CustomEvent, which is the sanctioned channel between the two worlds
 
 `dispatchEvent` from compiled code takes a plain descriptor —
-`{type, bubbles, cancelable, detail}` — because bronze cannot build a value on a
-chosen prototype, so there is no `new CustomEvent(...)` to write (the same limit
-that makes `img instanceof Image` false). `bubbles` and `cancelable` default to
-true.
+`{type, bubbles, cancelable, detail}` — rather than a `new CustomEvent(...)`.
+That was forced when nothing here could be built on a chosen prototype, and is
+now merely unwritten: see **Host classes** below. The descriptor is the
+documented channel and compiled code already speaks it, so it stays until
+someone needs the constructor. `bubbles` and `cancelable` default to true.
 
 ```js
 // compiled → interpreted
@@ -195,6 +196,49 @@ only the compiled ones see no payload.
   string, a listener that is not a function, a target element that does not
   exist yet — each is a `TypeError` or an `Error` naming the object, never a
   registration that quietly never fires.
+
+## Host classes
+
+Every object this layer hands a compiled program used to be a bare cell with
+its methods closed over PER INSTANCE. That cost two things, and the second one
+is the one that shows: a copy of every method for every instance, and
+`instanceof` answering false for all of them. A dozen comments in these files
+used to say the same sentence — *bronze cannot build a value on a chosen
+prototype* — and shaped real API around it. `new CustomEvent(...)` does not
+exist because of it.
+
+That is no longer true, and `Image` (`host_image.cpp`) is the worked example.
+The class story is three calls, none of them new:
+
+1. `makeFunction` for the constructor, then **read** `prototype` off it with
+   `getProperty`. Reading MINTS the slot-backed object 10.2.4 describes, as an
+   ordinary plain object. (`setProperty` still refuses `prototype` by name —
+   it is the read that gives you one, not a write.)
+2. Decorate that prototype like any other object: `ObjectBuilder` over it, one
+   copy of each method and accessor for the whole class.
+3. Birth each instance with the 4-argument `makeHandle(data, dtor, when,
+   prototype)`.
+
+Instances then inherit the shared methods, answer `x instanceof Ctor`, and
+share the memoized per-prototype root shape — so property reads keep their
+inline caches. *Born on*, not swapped on: `Object.setPrototypeOf` after the
+fact also works and keeps the payload, but it puts the cell in dictionary mode
+for the rest of its life.
+
+A method reached through the prototype still unwraps its receiver with
+`handleData(thisValue)`, which is the part worth pinning rather than assuming:
+the payload and the handle brand live in internal slots that the prototype does
+not reach. `tests/bronze_host/run_class_test.sh` pins it, along with the shared
+-methods and `instanceof` claims.
+
+`Image` and `HTMLImageElement` are the SAME constructor here, as on the web.
+
+**What is still a bare cell**: everything else — the physics, AI, audio, file,
+fetch, XHR, video, net and observer families all still close over their handle
+per instance. Converting them is mechanical and unstarted. Two names in
+`dom_globals.cpp` (`HTMLCanvasElement`, `WebGLRenderingContext`) are still
+`makeBrandConstructor` stubs, which resolve but cannot brand anything; they
+become real the same way.
 
 ## Configure
 
@@ -381,8 +425,8 @@ resolves in the page's markup and vice versa.
 a static at all; `setProperty` takes a FUNCTION receiver now, so the callable
 shape is available and simply has not been taken. It would buy little:
 `URL.parse` is the standard equivalent of the constructor and returns null
-rather than throwing, and the one thing conversion cannot buy is
-`x instanceof URL`, because `prototype` stays refused by name.
+rather than throwing. `x instanceof URL` is reachable too — see
+**Host classes** — and is the one thing conversion would actually buy.
 
 `AbortController` and `AbortSignal` are DONE — `host_abort.cpp`, checked by
 `tests/bronze_host/run_abort_test.sh`. `fetch(url, {signal})` rejects with the
@@ -408,8 +452,8 @@ window, and the outcome is the same rejection; what it buys is one settle path
 instead of two.
 
 **Images**: `ImageBitmap` and `createImageBitmap`. `Image` is a host object,
-not a `dom::Element` — it has no layout box, and `img instanceof Image` is
-false because the embed API cannot build an object on a chosen prototype.
+not a `dom::Element` — it has no layout box. It IS a real class, though: see
+**Host classes** below.
 
 `MutationObserver` is DONE — `host_observers.cpp`, checked by
 `tests/bronze_host/run_observer_test.sh` — and it is built on a notice fired by

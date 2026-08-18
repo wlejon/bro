@@ -174,11 +174,36 @@ Value imageSrcSetter(Value thisValue, std::span<const Value> a) {
 
 const HostImage* hostImageOf(Value v) { return mutableHostImage(v); }
 
+// The prototype an Image instance is born on, read back from the constructor
+// that installImageGlobal registered. Read per instance rather than cached: a
+// raw Value cannot be held across an allocation (the collector moves objects),
+// and a file-scope Persistent would be destroyed at static-destruction time
+// against a runtime the engine has already torn down. Two lookups is nothing
+// beside the decode that follows.
+//
+// Undefined before install, which is not hypothetical: makeImageValue also
+// serves document.createElement('img'). The bare 3-argument handle is the
+// honest fallback there — no methods, but no fatal either.
+Value imagePrototype() {
+    ev::GlobalValue g = ev::globalValue("Image");
+    if (!g.found) return ev::undefined();
+    ev::Persistent ctor(g.value);
+    return ev::getProperty(ctor.get(), "prototype");
+}
+
 Value makeImageValue() {
     auto* img = new HostImage();
-    // The handle cell is a plain object as far as the program is concerned, so
-    // ObjectBuilder decorates it exactly as it decorates a createObject() one.
-    ObjectBuilder b(ev::makeHandle(img, hostImageDtor));
+    // Born ON Image.prototype, so the instance inherits the shared methods and
+    // answers `instanceof Image`. Born-on rather than swapped-on matters:
+    // instances share the memoized per-prototype root shape, so the property
+    // writes below keep their inline caches. The cell is still a plain object
+    // as far as the program is concerned, so ObjectBuilder decorates it
+    // exactly as it decorates a createObject() one.
+    ev::Persistent proto(imagePrototype());
+    ObjectBuilder b(ev::isObject(proto.get())
+                        ? ev::makeHandle(img, hostImageDtor, ev::Finalize::InSweep,
+                                         proto.get())
+                        : ev::makeHandle(img, hostImageDtor));
 
     // Data properties first, so the shape is fixed before any of them is
     // rewritten by a load: publishImageState assigns the same four names, which
@@ -221,25 +246,9 @@ Value makeImageValue() {
         b.set("crossOrigin", nul);
     }
 
-    b.accessor("src", imageSrcGetter, imageSrcSetter);
-
-    b.def("addEventListener", 2, [](Value thisValue, std::span<const Value> a) {
-        ev::Persistent self(thisValue);
-        Value typeV = argAt(a, 0);
-        if (ev::isObject(typeV)) return ev::undefined();
-        const std::string type = ev::toUtf8(typeV);
-        addHostListener(self, type, argAt(a, 1));
-        return ev::undefined();
-    });
-    b.def("removeEventListener", 2, [](Value thisValue, std::span<const Value> a) {
-        ev::Persistent self(thisValue);
-        Value typeV = argAt(a, 0);
-        if (ev::isObject(typeV)) return ev::undefined();
-        const std::string type = ev::toUtf8(typeV);
-        removeHostListener(self, type, argAt(a, 1));
-        return ev::undefined();
-    });
-
+    // `src` and the two listener methods are NOT here: they are the same for
+    // every Image, so they live once on the prototype (installImageGlobal),
+    // which is where the web puts them too. Only per-instance STATE is own.
     return b.get();
 }
 
@@ -248,20 +257,18 @@ Value makeImageValue() {
 // ---------------------------------------------------------------------------
 
 void installImageGlobal() {
-    // `new Image()` reaches this through bronze_construct, which builds a plain
-    // instance, runs the body with it as the receiver, and then REPLACES the
-    // instance with whatever object the body returns (rt_object.cpp). So the
-    // value the program gets is the one built here, and `Image()` without `new`
-    // answers the same thing.
-    //
-    // The consequence, named because it is observable: `img instanceof Image`
-    // is false, since the returned object's prototype is not Image.prototype.
-    // Nothing on three.js's texture path asks — its one `instanceof
-    // HTMLImageElement` sits inside the resizeImage branch that a WebGL2
-    // context with an in-range texture never enters — and giving the answer
-    // properly needs a way to build an object on a chosen prototype, which the
-    // embed API does not have.
-    Value ctor = ev::makeFunction(
+    // A REAL CLASS, and the first one in this layer. `new Image()` reaches the
+    // body through bronze_construct, which builds an instance, runs the body
+    // with it as the receiver, and then REPLACES that instance with whatever
+    // object the body returns (rt_object.cpp) — so the handle built here
+    // is what the program gets, and `Image()` without `new` answers the same
+    // thing. What changed is that the handle is BORN ON this constructor's own
+    // prototype, so `img instanceof Image` is now true. It used to be false,
+    // and this comment used to say so; three.js's one `instanceof
+    // HTMLImageElement` sits inside a resizeImage branch that a WebGL2 context
+    // with an in-range texture never enters, which is the only reason being
+    // wrong there was survivable.
+    Value ctorV = ev::makeFunction(
         [](Value, std::span<const Value>) {
             // `new Image(width, height)` may pass dimensions. They set the
             // element's layout box, not the decode, and this layer has no
@@ -269,7 +276,39 @@ void installImageGlobal() {
             return makeImageValue();
         },
         0);
-    ev::registerGlobal("Image", ctor);
+    ev::Persistent ctor(ctorV);
+
+    // Reading `prototype` MINTS the slot-backed object 10.2.4 describes, as a
+    // plain object — decorated here exactly like any other.
+    {
+        ObjectBuilder proto(ev::getProperty(ctor.get(), "prototype"));
+        proto.accessor("src", imageSrcGetter, imageSrcSetter);
+        proto.def("addEventListener", 2, [](Value thisValue, std::span<const Value> a) {
+            ev::Persistent self(thisValue);
+            Value typeV = argAt(a, 0);
+            if (ev::isObject(typeV)) return ev::undefined();
+            const std::string type = ev::toUtf8(typeV);
+            addHostListener(self, type, argAt(a, 1));
+            return ev::undefined();
+        });
+        proto.def("removeEventListener", 2, [](Value thisValue, std::span<const Value> a) {
+            ev::Persistent self(thisValue);
+            Value typeV = argAt(a, 0);
+            if (ev::isObject(typeV)) return ev::undefined();
+            const std::string type = ev::toUtf8(typeV);
+            removeHostListener(self, type, argAt(a, 1));
+            return ev::undefined();
+        });
+    }
+
+    ev::registerGlobal("Image", ctor.get());
+    // On the web these are the SAME constructor — `Image` is a named
+    // alias for `HTMLImageElement` — so sharing the object here is the
+    // closer approximation, and it makes `img instanceof HTMLImageElement`
+    // true, which is the form library code actually asks. It also replaces a
+    // makeBrandConstructor stub that could not brand anything: without a
+    // prototype, `x instanceof` it was false for every value in the program.
+    ev::registerGlobal("HTMLImageElement", ctor.get());
 }
 
 }  // namespace bro::bronze_host

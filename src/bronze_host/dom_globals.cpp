@@ -1129,7 +1129,9 @@ void installWebHostGlobals(engine::Engine& engine) {
         ev::registerGlobal("navigator", nav);
     }
     ev::registerGlobal("HTMLCanvasElement", makeBrandConstructor("HTMLCanvasElement"));
-    ev::registerGlobal("HTMLImageElement", makeBrandConstructor("HTMLImageElement"));
+    // HTMLImageElement is NOT here: installImageGlobal above registers it as
+    // the same object as `Image`, the way the web does, and that one is a real
+    // class whose instances answer `instanceof`. These two remain brands.
     ev::registerGlobal("WebGLRenderingContext", makeBrandConstructor("WebGLRenderingContext"));
     {
         // Intl with no members is a real environment shape — pixi's own

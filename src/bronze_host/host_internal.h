@@ -202,9 +202,12 @@ void callBronzeListener(const ev::Persistent& fn, const ev::Persistent& thisObj,
                         dom::Event& evt, const char* origin);
 
 // `dispatchEvent(desc)` from compiled code, where `desc` is a plain
-// `{type, bubbles, cancelable, detail}` object — bronze cannot build a value
-// on a chosen prototype, so there is no `new CustomEvent` to construct here
-// (the same limit that makes `img instanceof Image` false). Answers
+// `{type, bubbles, cancelable, detail}` object rather than a `new
+// CustomEvent(...)`. That was forced when nothing here could be built on a
+// chosen prototype; it no longer is — embed::makeHandle takes one, and
+// host_image.cpp works the shape end to end — so a real CustomEvent class
+// is buildable and merely unwritten. The descriptor stays until it is: it is
+// the documented channel and compiled code already speaks it. Answers
 // `!defaultPrevented`, as the web's dispatchEvent does, or a pending
 // TypeError for a descriptor without a string `type`.
 Value hostDispatchToElement(ElementSource source, const char* what, Value desc);
@@ -483,9 +486,9 @@ Value makeAbortSignalValue();
 void hostAbortSignal(Value signal, Value reason);
 
 // `{name, message}` — what this layer rejects and throws with where the web
-// throws a DOMException. bronze cannot build a value on a chosen prototype, so
-// there is no DOMException to construct; `e.name === 'AbortError'` is the check
-// real code writes and it answers correctly.
+// throws a DOMException. A real DOMException class is buildable now (see
+// host_image.cpp for the shape) and is not written; `e.name === 'AbortError'`
+// is the check real code writes and it answers correctly either way.
 Value hostMakeDomError(const char* name, const std::string& message);
 
 // ---------------------------------------------------------------------------

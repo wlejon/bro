@@ -707,7 +707,9 @@ void installFileGlobals() {
     // object. The constructor has an exact standard equivalent in `URL.parse`,
     // a real 2024 addition to the web platform that answers null instead of
     // throwing. What converting WOULD buy is `x instanceof URL`, and that is
-    // precisely what it cannot buy: `prototype` stays refused by name.
+    // now reachable as well: `prototype` cannot be ASSIGNED on a host function,
+    // but READING it mints the real slot-backed object to decorate and to birth
+    // instances on (host_image.cpp works it end to end for `Image`).
     ObjectBuilder ns;
     ns.set("createObjectURL", makeCreateObjectURL());
     ns.set("revokeObjectURL", makeRevokeObjectURL());

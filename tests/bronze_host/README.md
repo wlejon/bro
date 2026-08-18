@@ -1,6 +1,6 @@
 # bronze_host integration checks
 
-Twenty-one checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip.
+Twenty-two checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip.
 
 ```bash
 tests/bronze_host/run_loader_test.sh        # the folder loader itself
@@ -15,6 +15,7 @@ tests/bronze_host/run_observer_test.sh      # MutationObserver, incl. a mutation
 tests/bronze_host/run_resize_test.sh        # ResizeObserver: the initial report, and the quiet frames
 tests/bronze_host/run_parser_test.sh        # DOMParser: a second document, and adoption out of it
 tests/bronze_host/run_proxy_test.sh         # the four proxy-backed live views: style, computed, dataset, localStorage
+tests/bronze_host/run_class_test.sh         # host classes, via Image: born-on-prototype, shared methods, instanceof
 tests/bronze_host/run_input_test.sh         # pointer lock, fullscreen, Gamepad
 tests/bronze_host/run_video_test.sh          # VideoEncoder, GifEncoder: every pixel source, and every refusal
 tests/bronze_host/run_audio_test.sh          # Web Audio & Sound Engine: nodes, params, buffers, decodeAudioData
@@ -26,15 +27,15 @@ tests/bronze_host/run_instanced_test.sh     # instanced mesh under load (2,500 i
 tests/bronze_host/run_pixi_test.sh          # pixi.js v8: WebGL sprites + pixel readback
 ```
 
-**All twenty-one run the stock `bro-headless`** — the same binary every other test in
+**All twenty-two run the stock `bro-headless`** — the same binary every other test in
 `tests/` uses. Each one's app is a directory carrying a compiled `app.dll` /
 `app.so` / `app.dylib`, which `lib.sh` builds on demand with the bronze CLI and
 rebuilds whenever the module is older than its probe **or than the compiler**
 (a module carries the ABI stamp of the bronze that emitted it, so a rebuilt
 runtime invalidates every module in the tree without any `.js` changing).
 
-Eight of them — `node`, `file`, `abort`, `observer`, `resize`, `parser`,
-`video` and `proxy`, the newer half of the layer — are written to a stricter rule than
+Nine of them — `node`, `file`, `abort`, `observer`, `resize`, `parser`,
+`video`, `proxy` and `class`, the newer half of the layer — are written to a stricter rule than
 their neighbours: every line of output is `APP <name>=<value>` and every
 expectation beside them was derived from the spec and the fixture BEFORE the
 first run, so a passing check is evidence the implementation matches the model

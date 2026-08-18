@@ -7,10 +7,10 @@
 // on its own.
 //
 // THE INTERFACE NAMES deserve a note, because at first sight they look like
-// stubs and they are not. Compiled code cannot build a value on a chosen
-// prototype (the embed API has no prototype argument — see the boundary rule in
-// README.md), so no host value is ever an instance of one of these however they
-// are written. What real code actually does with these names is TEST THEM:
+// stubs and they are not. No host value is an instance of one of them: these
+// are bare names, and the wrapper families they name have not been converted to
+// real classes (`Image` is the one that has — host_image.cpp). What real code
+// actually does with these names is TEST THEM:
 //
 //     if (typeof Node !== 'undefined' && el.nodeType === Node.TEXT_NODE)
 //     if (typeof HTMLInputElement !== 'undefined') ... else ...
@@ -18,10 +18,11 @@
 // Both need the name to RESOLVE, and the first needs the constant to be right.
 // A name that does not resolve is a ReferenceError that takes the whole module
 // down at import time — which is the outcome these prevent. Code that reaches
-// for `instanceof` instead of `typeof` gets a TypeError, and would get one
-// from a stub constructor too: a host function cannot be given a `.prototype`,
-// and `instanceof` against a function without one throws rather than answering
-// false.
+// for `instanceof` instead of `typeof` gets a TypeError today, and would get
+// one from a stub constructor too, because `instanceof` against a function
+// with no `prototype` throws rather than answering false. The fix is not a
+// better stub: it is converting the family behind the name, at which point
+// reading `prototype` mints a real one and the answer is simply true.
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"

@@ -25,11 +25,12 @@
 // pointer: the expectation beside this file is written by hand from what must
 // be true, not recorded from a run (tests/bronze_host/README.md).
 //
-// NO `new CustomEvent(...)`: bronze cannot build a value on a chosen prototype
-// (the same limit that makes `img instanceof Image` false), so a dispatch from
-// compiled code passes a plain descriptor object — `{type, detail, bubbles}` —
-// and the host builds the real dom::CustomEvent behind it. See
-// src/bronze_host/README.md, "The boundary rule".
+// NO `new CustomEvent(...)`: a dispatch from compiled code passes a plain
+// descriptor object — `{type, detail, bubbles}` — and the host builds the real
+// dom::CustomEvent behind it. That was once forced (nothing could be built on
+// a chosen prototype); it is now just unwritten — class_probe.js pins the
+// shape that would build it. See src/bronze_host/README.md, "The boundary
+// rule".
 
 function say(label, value) { console.log('APP ' + label + '=' + value); }
 

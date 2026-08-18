@@ -26,11 +26,13 @@
 // shape is buildable whenever someone wants it, here and for `URL` in
 // host_file.cpp. It costs little either way: `new AbortSignal()` is illegal on
 // the web anyway, so the only thing lost is `x instanceof AbortSignal` — and
-// that stays false regardless, because `prototype` is the one property a host
-// function still cannot be given.
+// that is buildable now too. A host function's `prototype` cannot be ASSIGNED,
+// but READING it mints the real slot-backed object, which is what a host
+// decorates and what makeHandle births instances on; host_image.cpp does
+// exactly that for `Image`.
 //
 // And `reason` is a plain `{name, message}` object where the web hands you a
-// DOMException. bronze cannot build a value on a chosen prototype; `e.name ===
+// DOMException — likewise unwritten rather than impossible. `e.name ===
 // 'AbortError'` is what real code tests, and that answers correctly.
 
 #include "bronze_host/host_internal.h"
