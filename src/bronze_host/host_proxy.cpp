@@ -19,17 +19,14 @@
 // empty is what makes `Object.keys(el.style)` exactly the set properties
 // rather than the set properties plus setProperty/getPropertyValue/cssText.
 //
-// SYMBOL KEYS, AND WHY THE `length` PROBE. A get trap receives every key the
-// program uses, and property keys are strings or SYMBOLS. `toUtf8` of a symbol
-// is a TypeError by spec (rt_convert.cpp says so in as many words), so a trap
-// that stringified its key first would turn `style[Symbol.toPrimitive]` — a
-// question any library may ask — into a thrown error. embed exposes no
-// `isSymbol`, so the discriminator here is `key.length`: every string has one,
-// no symbol does. It runs through embed::getProperty, whose generic path
-// auto-boxes the primitive and, critically, CLEARS the pending cell at the
-// host boundary — so the probe cannot leak an exception even if it trips one.
-// Symbol keys then answer undefined, which is the truthful answer for all
-// three of these objects: none has a symbol-keyed member.
+// SYMBOL KEYS. A get trap receives every key the program uses, and property
+// keys are strings or SYMBOLS. `toUtf8` of a symbol is a TypeError by spec
+// (rt_convert.cpp says so in as many words), so a trap that stringified its key
+// first would turn `style[Symbol.toPrimitive]` — a question any library may
+// ask — into a thrown error. `embed::isSymbol` is the guard. Symbol keys then
+// answer undefined, which is the truthful answer for all three of these
+// objects, since none has a symbol-keyed member; there is no forwarding them to
+// the target either, because getProperty takes a string_view key.
 //
 // LIFETIME. The traps live in a shared_ptr captured by each handler function;
 // embed::makeFunction parks closure state in the function's environment slot
@@ -49,12 +46,6 @@ namespace bro::bronze_host {
 
 namespace {
 
-// A string key has `length`; a symbol does not. See the file header for why
-// this is asked in the roundabout way rather than with toUtf8.
-bool isStringKey(Value key) {
-    return !ev::isUndefined(ev::getProperty(key, "length"));
-}
-
 struct TrapPack {
     HostProxyTraps t;
     ev::Persistent methods;
@@ -72,7 +63,7 @@ Value makeHostProxy(HostProxyTraps traps) {
     // get(target, key, receiver)
     h.def("get", 3, [pack](Value, std::span<const Value> a) -> Value {
         Value key = argAt(a, 1);
-        if (!isStringKey(key)) return ev::undefined();
+        if (ev::isSymbol(key)) return ev::undefined();
         const std::string k = ev::toUtf8(key);
         // Methods first: they are the object's fixed surface, and no CSS
         // property or data-* key exists named `setProperty` to collide.
@@ -91,7 +82,7 @@ Value makeHostProxy(HostProxyTraps traps) {
     // object ignores an unknown property rather than throwing.
     h.def("set", 4, [pack](Value, std::span<const Value> a) -> Value {
         Value key = argAt(a, 1);
-        if (!isStringKey(key)) return ev::fromBool(true);
+        if (ev::isSymbol(key)) return ev::fromBool(true);
         const std::string k = ev::toUtf8(key);
         if (pack->t.set) pack->t.set(k, argAt(a, 2));
         return ev::fromBool(true);
@@ -99,7 +90,7 @@ Value makeHostProxy(HostProxyTraps traps) {
 
     h.def("has", 2, [pack](Value, std::span<const Value> a) -> Value {
         Value key = argAt(a, 1);
-        if (!isStringKey(key)) return ev::fromBool(false);
+        if (ev::isSymbol(key)) return ev::fromBool(false);
         const std::string k = ev::toUtf8(key);
         if (!ev::isUndefined(pack->methods.get()) &&
             !ev::isUndefined(ev::getProperty(pack->methods.get(), k.c_str()))) {
@@ -110,7 +101,7 @@ Value makeHostProxy(HostProxyTraps traps) {
 
     h.def("deleteProperty", 2, [pack](Value, std::span<const Value> a) -> Value {
         Value key = argAt(a, 1);
-        if (!isStringKey(key)) return ev::fromBool(true);
+        if (ev::isSymbol(key)) return ev::fromBool(true);
         const std::string k = ev::toUtf8(key);
         if (pack->t.remove) pack->t.remove(k);
         return ev::fromBool(true);
@@ -134,7 +125,7 @@ Value makeHostProxy(HostProxyTraps traps) {
     // have is exactly what invariant 10.5.5 rejects.
     h.def("getOwnPropertyDescriptor", 2, [pack](Value, std::span<const Value> a) -> Value {
         Value key = argAt(a, 1);
-        if (!isStringKey(key)) return ev::undefined();
+        if (ev::isSymbol(key)) return ev::undefined();
         const std::string k = ev::toUtf8(key);
         if (!(pack->t.has && pack->t.has(k))) return ev::undefined();
         Value out = ev::undefined();
