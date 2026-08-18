@@ -80,7 +80,19 @@ bool VideoPipeline::adoptSource(const MediaBackend& backend,
     adec_.reset();
     staged_.clear();
     workerStaged_.clear();
-    recycleCaller(std::move(cur_));
+    cur_ = Picture{};
+
+    // Both rings, and the pool. A second `src` on the same element shares
+    // nothing with the first: pictures left over are the previous file's,
+    // at the previous file's size, and the epoch that would otherwise tell
+    // them apart is the very one this file is about to be stamped with —
+    // so they would be staged as if they belonged to it. `stopWorker`
+    // above has joined, so this is the only thread here.
+    Picture stale;
+    while (decodedQueue_.tryPop(stale)) {}
+    while (recycleQueue_.tryPop(stale)) {}
+    workerPool_.clear();
+    workerEpoch_ = seekEpoch_.load(std::memory_order_relaxed);
     drained_ = false;
     endOfStream_ = false;
     pendingSeekPts_ = -1;
@@ -252,6 +264,12 @@ void VideoPipeline::seekTo(TimeNs pts) {
     // takes the seek up.
     decodedThroughNs_.store(-1, std::memory_order_relaxed);
 
+    // Before the request, so a worker that takes it up sees the epoch its
+    // pictures are to carry. Anything still stamped with the old one was
+    // made for the position being left and is dropped on the way out of
+    // the ring — see `popCurrent`.
+    seekEpoch_.fetch_add(1, std::memory_order_release);
+
     pendingSeekPts_ = pts;
     cvWorker_.notify_one();
     if (clock_) clock_->seekTo(pts);
@@ -364,7 +382,7 @@ void VideoPipeline::drainThrough(TimeNs pts, std::chrono::milliseconds budget) {
 
     while (true) {
         Picture incoming;
-        while (decodedQueue_.tryPop(incoming)) stage(std::move(incoming));
+        while (popCurrent(incoming)) stage(std::move(incoming));
         cvWorker_.notify_one();
 
         const bool seeking = pendingSeekPts_.load(std::memory_order_relaxed) >= 0 ||
@@ -495,6 +513,27 @@ bool VideoPipeline::stepFrame(int direction) {
     return true;
 }
 
+/// Pop the next picture that belongs to where the pipeline is now.
+///
+/// The caller thread is the ring's only consumer, and this is the only way
+/// a picture leaves it to be *shown* — `seekTo` and the reset in
+/// `adoptSource` empty it wholesale, which is a different question. A
+/// picture stamped with an older epoch was made for a position that has
+/// since been left: it is recycled rather than staged, and rather than
+/// emptied out from under this thread by the worker, which is what used to
+/// happen. See `seekEpoch_`.
+bool VideoPipeline::popCurrent(Picture& out) {
+    const uint32_t want = seekEpoch_.load(std::memory_order_acquire);
+    while (decodedQueue_.tryPop(out)) {
+        if (out.epoch == want) return true;
+        // Never shown, so it is not where the pipeline last was either:
+        // `recycleCaller` reads `valid` to answer that.
+        out.valid = false;
+        recycleCaller(std::move(out));
+    }
+    return false;
+}
+
 VideoPipeline::Picture VideoPipeline::takePictureWorker() {
     Picture p;
     if (recycleQueue_.tryPop(p)) {
@@ -578,10 +617,12 @@ void VideoPipeline::performWorkerSeek(TimeNs target) {
     workerSeeking_ = true;
     workerInSeek_ = true;
 
-    Picture dummy;
-    while (decodedQueue_.tryPop(dummy)) {
-        recycleWorker(std::move(dummy));
-    }
+    // The stamp every picture from here on carries. Adopted before one is
+    // made, so nothing this seek produces can be taken for the position
+    // being left — and nothing already in the ring can be taken for this
+    // one. The ring is deliberately NOT emptied here: it has a single
+    // consumer and this is not that thread. See `seekEpoch_`.
+    workerEpoch_ = seekEpoch_.load(std::memory_order_acquire);
     while (!workerStaged_.empty()) {
         recycleWorker(std::move(workerStaged_.front()));
         workerStaged_.pop_front();
@@ -648,6 +689,7 @@ bool VideoPipeline::collectFramesWorker() {
     while (vdec_->nextFrame(frame)) {
         Picture p = takePictureWorker();
         storeFrame(p, frame);
+        p.epoch = workerEpoch_;
         // During a seek every picture goes through the staging deque, because
         // that is where the seek decides whether it is still behind its target
         // (throw it away) or past it (stop). Pushing into the ring here instead
@@ -797,7 +839,7 @@ bool VideoPipeline::advanceTo(TimeNs nowNs) {
     allowDecodeThrough(nowNs);
 
     Picture incoming;
-    while (decodedQueue_.tryPop(incoming)) {
+    while (popCurrent(incoming)) {
         stage(std::move(incoming));
     }
     cvWorker_.notify_one();

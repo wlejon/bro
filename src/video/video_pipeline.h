@@ -144,6 +144,10 @@ private:
         int h = 0;
         TimeNs pts = -1;
         bool valid = false;
+        // Which position this picture belongs to. Stamped by the worker
+        // from the epoch it last took a seek up at; compared by the caller
+        // against the one it last posted. See `seekEpoch_`.
+        uint32_t epoch = 0;
     };
 
     void startWorker();
@@ -162,6 +166,7 @@ private:
     void storeFrame(Picture& dst, const VideoFrame& frame);
     void refreshRgba();
 
+    bool popCurrent(Picture& out);
     Picture takePictureWorker();
     void recycleWorker(Picture&& p);
     void recycleCaller(Picture&& p);
@@ -246,6 +251,29 @@ private:
     // by the worker as it takes one up: the pictures on either side of a seek
     // belong to different positions, so one must never answer for the other.
     std::atomic<int64_t> decodedThroughNs_{-1};
+    // **Which position the pictures in the ring belong to.**
+    //
+    // `decodedQueue_` is a single-producer single-consumer ring and the
+    // consumer is this thread. The worker used to empty it itself at the
+    // top of `performWorkerSeek`, to be rid of the pictures it had pushed
+    // for the position being left — which made two threads pop one SPSC
+    // ring. `drainThrough` pops in a tight loop from the instant a seek is
+    // posted, which is exactly when the worker takes it up, so the two
+    // overlapped on every step: measured at ~35 genuine simultaneous pops
+    // per run of tests/video/test_frame_step.js. Both threads read the same
+    // `head_`, moved out of the same slot and advanced it twice, so one
+    // picture was move-assigned from two threads at once (its `yuv` vector,
+    // concurrently) and a second was skipped. That is a torn heap — the run
+    // died with STATUS_HEAP_CORRUPTION after the test had passed — and a
+    // picture that silently went missing, which is the frame a back step
+    // was looking for. Roughly one run in thirty, either way.
+    //
+    // So the worker no longer pops: it stamps. The caller raises the epoch
+    // before posting a seek, the worker adopts it as it takes the seek up,
+    // and a popped picture whose stamp is not the current one belongs to a
+    // position that has been left and is recycled instead of staged. The
+    // ring keeps one consumer, and no lock joins the per-frame path.
+    std::atomic<uint32_t> seekEpoch_{0};
 
     // Worker thread internal state
     std::vector<Picture> workerPool_;
@@ -257,6 +285,9 @@ private:
     // ran, because collectFramesWorker pushed into the ring and the seek's loop
     // only ever saw the overflow.
     bool workerInSeek_ = false;
+    // The epoch the worker stamps pictures with: `seekEpoch_` as it stood
+    // when this worker took its last seek up. Worker-thread only.
+    uint32_t workerEpoch_ = 0;
     // The newest picture the worker has produced, so it can tell whether it is
     // already past `decodeCeiling_`. Worker-thread only.
     TimeNs workerNewestPts_ = -1;
