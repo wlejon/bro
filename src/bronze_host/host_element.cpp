@@ -32,10 +32,13 @@
 // call site rather than an empty result. The embed API has no createArray, but
 // it has parseJson, and JSON arrays are real arrays.
 //
-// LAZY SUB-OBJECTS. `style` and `classList` are an object per element with an
-// accessor per property, and a UI makes thousands of elements. Both are built
-// on first read and cached in the registry entry, so an element nobody styles
-// costs nothing.
+// LAZY SUB-OBJECTS. `style`, `classList` and `dataset` are an object per
+// element, and a UI makes thousands of elements. Each is built on first read
+// and cached in the registry entry, so an element nobody styles costs nothing.
+// `style`, `dataset` and the computed declaration are PROXIES (host_proxy.cpp)
+// rather than accessor sets: their keys are not known when the object is built,
+// which is what used to cap `style` at a curated ~110 properties and rule out
+// `dataset` altogether.
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
@@ -46,6 +49,7 @@
 #include "dom/element.h"
 #include "dom/element_geometry.h"
 #include "dom/node.h"
+#include "dom/style_proxy.h"
 #include "engine/engine.h"
 #include "platform/sdl_window.h"
 #include "js/dom_bindings.h"
@@ -119,9 +123,11 @@ void onNodeFreed(dom::Document*, dom::Node* node) {
     st->styleObj.set(ev::undefined());
     st->classListObj.set(ev::undefined());
     st->computedObj.set(ev::undefined());
+    st->datasetObj.set(ev::undefined());
     st->hasStyle = false;
     st->hasClassList = false;
     st->hasComputed = false;
+    st->hasDataset = false;
 }
 
 // Takes a Node rather than an Element so text nodes, comments and fragments
@@ -169,13 +175,12 @@ const std::string& dashedFor(const char* camel) {
     return cache.emplace(camel, std::move(out)).first->second;
 }
 
-// Not htmlayout's full 363-property registry: that is an accessor pair per
-// property per element, and an app with a thousand elements would pay for
-// `scrollbar-color` on every one of them. This is the set real apps assign —
-// what three.js, pixi and the three.js editor's whole widget library write —
-// and anything outside it still goes through setProperty/cssText, which are
-// complete. (The clean fix is a host object with a property trap; the embed
-// API has none today. web_host.globals records the request.)
+// No longer the set of properties that WORK — the proxy below reaches all 363
+// and any custom `--*` besides. What survives of this list is the one job a
+// trap cannot do: enumerating a computed declaration, where the web lists
+// every supported property and htmlayout has no registry to ask for that list.
+// It is the set real apps assign — what three.js, pixi and the three.js
+// editor's widget library write.
 const char* const kStyleProps[] = {
     "display", "position", "top", "right", "bottom", "left", "float", "clear",
     "width", "height", "minWidth", "minHeight", "maxWidth", "maxHeight",
@@ -202,33 +207,17 @@ const char* const kStyleProps[] = {
     "objectFit", "objectPosition", "listStyle", "borderCollapse", "tableLayout",
 };
 
+// The name an app wrote, in the spelling StyleProxy stores. Both are legal JS
+// — `style.backgroundColor` and `style['background-color']` name one property
+// on the web — and a custom property (`--brand`) is neither, so it passes
+// through untouched: kebab-casing it would turn `--fooBar` into `--foo-bar`.
+std::string styleKeyToCss(const std::string& key) {
+    if (key.size() >= 2 && key[0] == '-' && key[1] == '-') return key;
+    return dom::StyleProxy::camelToKebab(key);
+}
+
 Value makeStyleObject(HostNodeState* st) {
     ObjectBuilder b;
-    for (const char* camel : kStyleProps) {
-        const std::string& css = dashedFor(camel);
-        // Both spellings, because both are legal JS: `style.backgroundColor`
-        // and `style['background-color']` name one property on the web.
-        auto define = [&b, st, &css](const char* key) {
-            std::string prop = css;
-            b.accessor(key,
-                       [st, prop](Value, std::span<const Value>) {
-                           if (!st->el) return ev::fromUtf8("");
-                           return ev::fromUtf8(st->el->style().getProperty(prop));
-                       },
-                       [st, prop](Value, std::span<const Value> a) {
-                           Value v = argAt(a, 0);
-                           if (!st->el || ev::isObject(v)) return ev::undefined();
-                           if (ev::isUndefined(v) || ev::isNull(v))
-                               st->el->style().removeProperty(prop);
-                           else
-                               st->el->style().setProperty(prop, ev::toUtf8(v));
-                           return ev::undefined();
-                       });
-        };
-        define(camel);
-        if (css != camel) define(css.c_str());
-    }
-
     b.def("setProperty", 2, [st](Value, std::span<const Value> a) {
         Value nameV = argAt(a, 0), valV = argAt(a, 1);
         if (!st->el || ev::isObject(nameV) || ev::isUndefined(nameV))
@@ -264,7 +253,48 @@ Value makeStyleObject(HostNodeState* st) {
                    st->el->style().setCssText(ev::isUndefined(v) ? "" : ev::toUtf8(v));
                    return ev::undefined();
                });
-    return b.get();
+
+    HostProxyTraps t;
+    t.methods = b.get();
+    // Every CSS property is a property of this object, set or not — that is
+    // what makes `style.gridAutoFlow` readable without a table saying so, and
+    // it is also what the web does: an unset property reads "".
+    t.get = [st](const std::string& key, Value& out) {
+        if (!st->el) return false;
+        out = ev::fromUtf8(st->el->style().getProperty(styleKeyToCss(key)));
+        return true;
+    };
+    t.set = [st](const std::string& key, Value v) {
+        if (!st->el || ev::isObject(v)) return;
+        const std::string css = styleKeyToCss(key);
+        // null and undefined REMOVE, matching the accessor pairs this
+        // replaced; the web instead stringifies, but a UI that clears a
+        // property by assigning null is common enough that the older
+        // behaviour is the one worth keeping.
+        if (ev::isUndefined(v) || ev::isNull(v)) st->el->style().removeProperty(css);
+        else st->el->style().setProperty(css, ev::toUtf8(v));
+    };
+    // Membership and enumeration answer for the SET properties only. `'color'
+    // in el.style` being false on a bare element is what the web says too —
+    // the declaration owns only what was assigned to it — and it is what keeps
+    // `Object.keys(el.style)` the short useful list rather than all 363.
+    t.has = [st](const std::string& key) {
+        if (!st->el) return false;
+        return !st->el->style().getProperty(styleKeyToCss(key)).empty();
+    };
+    t.ownKeys = [st]() {
+        std::vector<std::string> keys;
+        if (!st->el) return keys;
+        for (const auto& [name, value] : st->el->style().properties()) {
+            (void)value;
+            keys.push_back(name);
+        }
+        return keys;
+    };
+    t.remove = [st](const std::string& key) {
+        if (st->el) st->el->style().removeProperty(styleKeyToCss(key));
+    };
+    return makeHostProxy(std::move(t));
 }
 
 // ---------------------------------------------------------------------------
@@ -294,23 +324,6 @@ Value makeComputedStyleObject(HostNodeState* st) {
         hostEngine()->flushLayoutForRead(st->el->document());
         return layout::computedProperty(st->el, css, hostEngine()->textMetrics());
     };
-    for (const char* camel : kStyleProps) {
-        const std::string& css = dashedFor(camel);
-        auto define = [&b, resolve, &css](const char* key) {
-            std::string prop = css;
-            b.accessor(key,
-                       [resolve, prop](Value, std::span<const Value>) {
-                           return ev::fromUtf8(resolve(prop));
-                       },
-                       nullptr);
-        };
-        define(camel);
-        if (css != camel) define(css.c_str());
-    }
-    // The complete surface, for the ~250 properties the curated list leaves out
-    // (see the note above kStyleProps: the embed API has no property trap, so
-    // an accessor per property per element is the only alternative and it is
-    // not one).
     b.def("getPropertyValue", 1, [resolve](Value, std::span<const Value> a) {
         Value nameV = argAt(a, 0);
         if (ev::isObject(nameV) || ev::isUndefined(nameV)) return ev::fromUtf8("");
@@ -325,7 +338,32 @@ Value makeComputedStyleObject(HostNodeState* st) {
     b.def("removeProperty", 1, [](Value, std::span<const Value>) {
         return ev::fromUtf8("");
     });
-    return b.get();
+
+    HostProxyTraps t;
+    t.methods = b.get();
+    t.get = [resolve](const std::string& key, Value& out) {
+        out = ev::fromUtf8(resolve(styleKeyToCss(key)));
+        return true;
+    };
+    // No `set` and no `remove`: the web's computed declaration ignores both,
+    // and leaving the callbacks empty is how this file spells that.
+    t.has = [resolve](const std::string& key) {
+        return !resolve(styleKeyToCss(key)).empty();
+    };
+    // Enumeration is the one place the curated list still earns its keep. The
+    // web enumerates every supported property; htmlayout has no registry to
+    // ask for that list, and resolving all 363 to find the non-empty ones
+    // would run a layout-flushed resolve per property per enumeration. This
+    // list is what an app that enumerates a computed style is looking for.
+    t.ownKeys = [resolve]() {
+        std::vector<std::string> keys;
+        for (const char* camel : kStyleProps) {
+            const std::string& css = dashedFor(camel);
+            if (!resolve(css).empty()) keys.push_back(css);
+        }
+        return keys;
+    };
+    return makeHostProxy(std::move(t));
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +397,66 @@ bool hasClass(dom::Element* el, const std::string& name) {
     for (const std::string& c : classesOf(el))
         if (c == name) return true;
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// dataset
+// ---------------------------------------------------------------------------
+
+// A view over the element's `data-*` attributes, and the surface this layer
+// refused to fake: its keys are whatever attributes exist plus whatever the
+// app invents, so nothing short of a property trap can express it, and a
+// `dataset` that dropped `el.dataset.k = 'v'` would be worse than none. It is
+// a pure view — no state of its own, every read and write going straight to
+// the attribute map — so it stays correct across `setAttribute('data-k', …)`
+// from the other direction, which a snapshot object would not.
+//
+// The name mapping is the web's: `data-user-id` <-> `dataset.userId`. An
+// attribute whose name has an uppercase letter cannot be produced by that map
+// and so is not reachable here, exactly as on the web.
+std::string datasetKeyToAttr(const std::string& key) {
+    return "data-" + dom::StyleProxy::camelToKebab(key);
+}
+
+bool datasetAttrToKey(const std::string& attr, std::string* out) {
+    if (attr.size() <= 5 || attr.compare(0, 5, "data-") != 0) return false;
+    *out = dom::StyleProxy::kebabToCamel(attr.substr(5));
+    return true;
+}
+
+Value makeDatasetObject(HostNodeState* st) {
+    HostProxyTraps t;
+    t.get = [st](const std::string& key, Value& out) {
+        if (!st->el) return false;
+        const std::string attr = datasetKeyToAttr(key);
+        // Absent answers undefined rather than "", which is what the web does
+        // and what `if (el.dataset.role)` depends on.
+        if (!st->el->hasAttribute(attr)) return false;
+        out = ev::fromUtf8(st->el->getAttribute(attr));
+        return true;
+    };
+    t.set = [st](const std::string& key, Value v) {
+        if (!st->el || ev::isObject(v)) return;
+        st->el->setAttribute(datasetKeyToAttr(key),
+                             ev::isUndefined(v) ? "undefined" : ev::toUtf8(v));
+    };
+    t.has = [st](const std::string& key) {
+        return st->el && st->el->hasAttribute(datasetKeyToAttr(key));
+    };
+    t.ownKeys = [st]() {
+        std::vector<std::string> keys;
+        if (!st->el) return keys;
+        for (const auto& [name, value] : st->el->attributes()) {
+            (void)value;
+            std::string key;
+            if (datasetAttrToKey(name, &key)) keys.push_back(key);
+        }
+        return keys;
+    };
+    t.remove = [st](const std::string& key) {
+        if (st->el) st->el->removeAttribute(datasetKeyToAttr(key));
+    };
+    return makeHostProxy(std::move(t));
 }
 
 // Every mutator takes a variadic list, as DOMTokenList does: `classList.add(a, b)`
@@ -733,6 +831,16 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
                        st->hasClassList = true;
                    }
                    return st->classListObj.get();
+               },
+               nullptr);
+    b.accessor("dataset",
+               [st](Value, std::span<const Value>) {
+                   if (!st->hasDataset && st->el) {
+                       Value d = makeDatasetObject(st);
+                       st->datasetObj.set(d);
+                       st->hasDataset = true;
+                   }
+                   return st->datasetObj.get();
                },
                nullptr);
 

@@ -236,9 +236,11 @@ struct HostNodeState {
     ev::Persistent styleObj;
     ev::Persistent classListObj;
     ev::Persistent computedObj;
+    ev::Persistent datasetObj;
     bool hasStyle = false;
     bool hasClassList = false;
     bool hasComputed = false;
+    bool hasDataset = false;
 };
 
 // The entry for `node`, created on first ask. Never null for a non-null node.
@@ -299,6 +301,34 @@ void hostInsertNode(dom::Node* parent, dom::Node* child, dom::Node* ref);
 // immediately, which is what keeps this inside the GC rule: a pre-built
 // std::vector<Value> would be stale from its second element onwards.
 Value hostArrayOf(size_t count, const std::function<Value(size_t)>& make);
+
+// ---------------------------------------------------------------------------
+// Property traps (host_proxy.cpp)
+// ---------------------------------------------------------------------------
+
+// A live view whose keys are not known when it is built: `el.style`,
+// `el.dataset`, the computed declaration, `localStorage`. Each callback is
+// optional; one left empty behaves as the absence of that capability (no keys,
+// no membership, dropped writes) rather than as an error.
+//
+// `get` returns true when it HANDLED the key — false means "no such property",
+// which is how a style object distinguishes an unset CSS property (handled,
+// answers "") from a name that is not a property at all.
+struct HostProxyTraps {
+    // Consulted before `get` and `has`, and never enumerated: the object's
+    // fixed method surface, which on the web would sit on a prototype. May be
+    // undefined for a view that has none.
+    Value methods = ev::undefined();
+    std::function<bool(const std::string& key, Value& out)> get;
+    std::function<void(const std::string& key, Value v)> set;
+    std::function<bool(const std::string& key)> has;
+    std::function<std::vector<std::string>()> ownKeys;
+    std::function<void(const std::string& key)> remove;
+};
+
+// The proxy itself. Builds its own empty target — see host_proxy.cpp for why
+// the target must stay empty for the 10.5 invariants to stay vacuous.
+Value makeHostProxy(HostProxyTraps traps);
 
 // THE element wrapper for `el` — built on first ask, the same value every time
 // after that, because identity is what a UI tests (`event.target === this.dom`).

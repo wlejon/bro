@@ -363,10 +363,11 @@ uniforms, `vertexAttrib*` default-value setters, and `getContext('2d')`.
 
 **Events**: the exact list is under "Not supported, precisely" above.
 
-**Loading**: the NETWORK. Both `fetch` and `XMLHttpRequest` are here and both
-read local files only, over the engine's asset mounts (`js/asset_path.h`); an
-http(s) URL settles with status 0 and `ok: false`. The network belongs to
-brokit, which is QuickJS-native.
+**Loading**: nothing outstanding. `fetch` and `XMLHttpRequest` read the
+engine's asset mounts (`js/asset_path.h`) and take http(s) through
+`util::fetchRemoteCached`, the same remote-asset path both share so they agree
+about what a URL means and what is cached. `WebSocket` and `bro.net` are in
+`host_net.cpp`, checked by `tests/bronze_host/run_net_test.sh`.
 
 `Blob`, `File`, `FileReader` and object URLs are DONE — `host_file.cpp`,
 checked by `tests/bronze_host/run_file_test.sh`. `blob:` and `data:` URLs
@@ -376,22 +377,23 @@ resolves in the page's markup and vice versa.
 
 `URL` is a NAMESPACE, not a constructor: `URL.createObjectURL`,
 `URL.revokeObjectURL` and `URL.parse(href, base)` all work, and
-`new URL(href)` does not. A host function cannot carry a static — the embed
-API's `setProperty` calls `fatal()` on a non-plain receiver, and going around
-it through the program's own `Object.assign` is a hard runtime abort in bronze
-(the message is quoted in `host_file.cpp`). `URL.parse` is the standard
-equivalent of the constructor and returns null rather than throwing.
+`new URL(href)` does not. That was forced when a host function could not carry
+a static at all; `setProperty` takes a FUNCTION receiver now, so the callable
+shape is available and simply has not been taken. It would buy little:
+`URL.parse` is the standard equivalent of the constructor and returns null
+rather than throwing, and the one thing conversion cannot buy is
+`x instanceof URL`, because `prototype` stays refused by name.
 
 `AbortController` and `AbortSignal` are DONE — `host_abort.cpp`, checked by
 `tests/bronze_host/run_abort_test.sh`. `fetch(url, {signal})` rejects with the
 signal's reason instead of reading the file, `AbortSignal.abort`, `.timeout` and
 `.any` are all present, and `throwIfAborted()` throws the reason untouched.
 
-Two shapes differ from the web and both follow from the same limit as `URL`.
-`AbortSignal` is a NAMESPACE object rather than a constructor, which costs
-nothing real — `new AbortSignal()` is a TypeError on the web too. And `reason`
-defaults to a plain `{name, message}` where the web hands you a `DOMException`,
-because bronze cannot build a value on a chosen prototype; `e.name ===
+Two shapes differ from the web, for the same reasons as `URL`. `AbortSignal`
+is a NAMESPACE object rather than a constructor, which costs nothing real —
+`new AbortSignal()` is a TypeError on the web too. And `reason` defaults to a
+plain `{name, message}` where the web hands you a `DOMException`, because
+bronze still cannot build a value on a chosen prototype; `e.name ===
 'AbortError'` is what real code tests and it answers correctly.
 
 `signal.aborted` is a writable property the app owns, and the host does not
@@ -408,8 +410,6 @@ instead of two.
 **Images**: `ImageBitmap` and `createImageBitmap`. `Image` is a host object,
 not a `dom::Element` — it has no layout box, and `img instanceof Image` is
 false because the embed API cannot build an object on a chosen prototype.
-
-**The DOM**: `dataset`.
 
 `MutationObserver` is DONE — `host_observers.cpp`, checked by
 `tests/bronze_host/run_observer_test.sh` — and it is built on a notice fired by
@@ -542,27 +542,33 @@ feature detection bro's own docs tell an app to write keeps working — which is
 also exactly what the interpreted side of a video-less build looks like, where
 the classes are simply not installed.
 
-`dataset` is blocked rather than merely unwritten: it is a live view whose keys
-are not known in advance, so it needs a PROPERTY TRAP, and the embed API has
-none. Everything else about it can be faked; `el.dataset.newKey = 'v'` cannot,
-and a dataset that silently drops that write is worse than no dataset at all.
-`getAttribute('data-k')` / `setAttribute` are the whole surface until a host
-can build one.
+`dataset` is DONE, and so is the reach that blocked it — `host_proxy.cpp`,
+checked by `tests/bronze_host/run_proxy_test.sh`. It was blocked rather than
+merely unwritten: it is a live view whose keys are not known in advance, so it
+needs a PROPERTY TRAP. Everything else about it could be faked;
+`el.dataset.newKey = 'v'` could not, and a dataset that silently drops that
+write is worse than no dataset at all.
 
-What is missing is now only the REACH. bronze grew a real `Proxy` with the 10.5
-essential invariants, and those checks read the target and never call a trap —
-so a proxy over an empty extensible object constrains nothing and can answer
-entirely from an element's attributes, `dataset.newKey = 'v'` included. The
-embed API just has no way to reach it: `registerGlobal` writes a global and
-nothing reads one, and there is no `construct`. Either `makeProxy(target,
-traps)` or the general pair `globalValue(name)` + `construct(fn, args)` unblocks
-`dataset` outright.
+bronze's `Proxy` implements the 10.5 essential invariants, and every one of
+those checks reads the TARGET and never calls a trap — so a proxy over an empty
+extensible object constrains nothing and may answer entirely from an element's
+attributes. What was missing was only the REACH, and the general pair
+`globalValue(name)` + `construct(fn, args)` supplied it: `globalValue("Proxy")`
+finds the constructor on the same builtin ladder a compiled free read walks,
+and `construct` builds the proxy with host functions as its traps.
 
-The same limit is why `style` and `getComputedStyle` carry an accessor per
-property from a curated ~110-name list rather than htmlayout's full 363: an
-accessor pair per property per element would be paid by every element an app
-makes. `setProperty` / `getPropertyValue` / `cssText` are complete and cover
-the rest.
+`makeHostProxy` (`host_internal.h`) is that shape written once, and FOUR live
+views are built on it. `el.style` and `getComputedStyle` reach all 363
+properties plus custom `--*` ones, rather than the curated ~110-name list that
+an accessor pair per property per element forced; `el.dataset` exists;
+and `localStorage` answers named properties (`localStorage.token`) beside its
+methods. The curated list survives in one place only — enumerating a computed
+declaration, where the web lists every supported property and htmlayout has no
+registry to ask for that list.
+
+The per-element cost went the right way with it: a styled element used to build
+an accessor PAIR for each of ~110 names in both spellings, and now builds four
+methods and a trap pack.
 
 Text nodes, comments, fragments and `cloneNode` are DONE — `host_node.cpp`,
 checked by `tests/bronze_host/run_node_test.sh`. `childNodes`, `firstChild`,

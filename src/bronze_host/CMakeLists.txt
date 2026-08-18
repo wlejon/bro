@@ -78,6 +78,7 @@ add_library(bro_bronze_host STATIC
     host_abort.cpp
     host_observers.cpp
     host_parser.cpp
+    host_proxy.cpp
     host_video.cpp
     host_audio.cpp
     host_physics.cpp

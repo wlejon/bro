@@ -634,7 +634,40 @@ Value makeLocalStorageValue() {
     b.accessor("length", [](Value, std::span<const Value>) {
         return ev::fromDouble(static_cast<double>(g_storage.items.size()));
     }, nullptr);
-    return b.get();
+
+    // `localStorage.token` is how half the code on the web reads a stored
+    // value, and a Storage object is specified as exactly that: named
+    // properties over the same map getItem reads. The methods stay the
+    // authority — they are what the proxy consults first — so nothing that
+    // worked before changes shape.
+    HostProxyTraps t;
+    t.methods = b.get();
+    t.get = [](const std::string& key, Value& out) {
+        auto it = g_storage.items.find(key);
+        if (it == g_storage.items.end()) return false;
+        out = ev::fromUtf8(it->second);
+        return true;
+    };
+    t.set = [](const std::string& key, Value v) {
+        if (ev::isObject(v)) return;
+        g_storage.items[key] = ev::isUndefined(v) ? "undefined" : ev::toUtf8(v);
+        saveStorageFile();
+    };
+    t.has = [](const std::string& key) {
+        return g_storage.items.find(key) != g_storage.items.end();
+    };
+    t.ownKeys = []() {
+        std::vector<std::string> keys;
+        for (const auto& [k, v] : g_storage.items) {
+            (void)v;
+            keys.push_back(k);
+        }
+        return keys;
+    };
+    t.remove = [](const std::string& key) {
+        if (g_storage.items.erase(key)) saveStorageFile();
+    };
+    return makeHostProxy(std::move(t));
 }
 
 // ---------------------------------------------------------------------------
