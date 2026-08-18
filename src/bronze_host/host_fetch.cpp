@@ -35,6 +35,7 @@
 
 #include "js/asset_path.h"
 #include "util/object_url.h"
+#include "util/remote_asset.h"
 #include "util/log.h"
 
 #include <cctype>
@@ -421,16 +422,21 @@ Value fetchCall(Value, std::span<const Value> a) {
             ev::rejectPromise(p.get(), reason.get());
             return;
         }
-
         auto* resp = new HostResponse();
         resp->url = url;
 
         if (url.rfind("http://", 0) == 0 || url.rfind("https://", 0) == 0) {
-            LOG_ERROR("bronze_host: fetch has no network transport; %s needs one",
-                      url.c_str());
-            resp->status = 0;
-            resp->statusText = "No transport";
-            resp->ok = false;
+            std::string content = util::fetchRemoteCached(url);
+            if (!content.empty()) {
+                resp->body.assign(content.begin(), content.end());
+                resp->status = 200;
+                resp->statusText = "OK";
+                resp->ok = true;
+            } else {
+                resp->status = 404;
+                resp->statusText = "Not Found";
+                resp->ok = false;
+            }
         } else if (util::inlineURLBytes(url, resp->body, &resp->contentType)) {
             // A `blob:` or `data:` URL carries its own bytes: no path to
             // resolve, no disk to touch. Ahead of resolveAssetPath, which would

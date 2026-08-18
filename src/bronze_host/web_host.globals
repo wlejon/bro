@@ -103,3 +103,6 @@ AI
 AINavGrid
 AINavMesh
 AIAgent
+WebSocket
+CloseEvent
+MessageEvent

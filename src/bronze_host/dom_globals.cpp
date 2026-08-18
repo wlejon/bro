@@ -167,6 +167,7 @@ void hostFrame(double dtMs) {
     if (ev::microtasksPending()) ev::drainMicrotasks();  // 1
     g_host->clockMs += dtMs;                             // 2
     drainHostTasks();                                    // 3
+    drainNetEvents();                                    // 3b
     fireHostTimers(g_host->clockMs);                     // 4
     drainPhysicsContactEvents();                         // 4b
     fireAnimationFrames();                               // 5
@@ -997,6 +998,7 @@ Value makeBroValue() {
         time.def("now", 0, [](Value, std::span<const Value>) { return ev::fromDouble(hostClockMs()); });
         b.set("time", time.get());
     }
+    b.set("net", makeBroNetValue());
     return b.get();
 }
 
@@ -1118,6 +1120,7 @@ void installWebHostGlobals(engine::Engine& engine) {
         Value broVal = makeBroValue();
         ev::registerGlobal("bro", broVal);
     }
+    installNetGlobals();
 }
 
 }  // namespace bro::bronze_host

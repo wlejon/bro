@@ -82,6 +82,7 @@ add_library(bro_bronze_host STATIC
     host_audio.cpp
     host_physics.cpp
     host_ai.cpp
+    host_net.cpp
 )
 target_include_directories(bro_bronze_host PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/..)
 
@@ -115,8 +116,13 @@ endfunction()
 # INSIDE the shared image — the host↔runtime boundary is a C++ one no export
 # list could carry — so this one target supplies both halves.
 target_link_libraries(bro_bronze_host
-    PUBLIC bro_engine bro_webgl glad broimage::broimage brogameagent bronze::runtime_shared
+    PUBLIC bro_engine bro_net bro_webgl glad broimage::broimage brogameagent bronze::runtime_shared
 )
+
+if(TARGET libcurl_static)
+    target_link_libraries(bro_bronze_host PRIVATE libcurl_static)
+    target_compile_definitions(bro_bronze_host PRIVATE BRO_HAVE_CURL)
+endif()
 
 # --- No app targets here, deliberately ---
 # What used to live below this line was the link-time app binding:

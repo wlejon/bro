@@ -78,6 +78,7 @@ inline constexpr uint32_t kHostPhysicsSoftBodyTag = 0x50534259u;   // 'PSBY'
 inline constexpr uint32_t kHostNavGridTag = 0x4E564744u;  // 'NVGD'
 inline constexpr uint32_t kHostNavMeshTag = 0x4E564D53u;  // 'NVMS'
 inline constexpr uint32_t kHostAgentTag   = 0x41474E54u;  // 'AGNT'
+inline constexpr uint32_t kHostWebSocketTag = 0x57534F43u; // 'WSOC'
 
 // ---------------------------------------------------------------------------
 // The error funnel and the frame clock (dom_globals.cpp)
@@ -531,5 +532,13 @@ void drainPhysicsContactEvents();
 // ---------------------------------------------------------------------------
 
 void installAIGlobals();
+
+// ---------------------------------------------------------------------------
+// Networking & Remote Transport (host_net.cpp)
+// ---------------------------------------------------------------------------
+
+void installNetGlobals();
+void drainNetEvents();
+Value makeBroNetValue();
 
 }  // namespace bro::bronze_host

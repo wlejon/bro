@@ -40,6 +40,7 @@
 
 #include "js/asset_path.h"
 #include "util/object_url.h"
+#include "util/remote_asset.h"
 #include "util/log.h"
 
 #include <fstream>
@@ -137,10 +138,17 @@ Value xhrSend(Value thisValue, std::span<const Value>) {
         xhr->status = 405;
         xhr->statusText = "Method Not Allowed";
     } else if (xhr->url.rfind("http://", 0) == 0 || xhr->url.rfind("https://", 0) == 0) {
-        LOG_ERROR("bronze_host: XMLHttpRequest has no network transport; %s needs one",
-                  xhr->url.c_str());
-        xhr->status = 0;
-        xhr->statusText = "No transport";
+        std::string content = util::fetchRemoteCached(xhr->url);
+        if (!content.empty()) {
+            xhr->responseText = std::move(content);
+            xhr->status = 200;
+            xhr->statusText = "OK";
+            xhr->ok = true;
+        } else {
+            xhr->status = 404;
+            xhr->statusText = "Not Found";
+            xhr->ok = false;
+        }
     } else if (std::vector<uint8_t> inline_;
                util::inlineURLBytes(xhr->url, inline_)) {
         // A `blob:` or `data:` URL carries its own bytes. Ahead of
