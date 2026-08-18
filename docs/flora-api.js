@@ -85,20 +85,34 @@ const protoY = world.addPrototype({
  * ordering they require). Each returns a plain spec object that drops
  * straight into world.addPrototype(...).
  *
- *   bro.flora.prototypes.straight()            single segment (juvenile pole)
- *   bro.flora.prototypes.fork()                planar two-terminal "Y"
- *   bro.flora.prototypes.whorl(arms?, spread?) short trunk + `arms` (2..8,
- *                                              default 3) shoots spread in
- *                                              3D and pitched out by `spread`
- *                                              (0..1, default 0.55). The
- *                                              workhorse for full, rounded
- *                                              crowns: every spawn adds
- *                                              `arms` shoots so the crown
- *                                              fills volumetrically.
+ *   bro.flora.prototypes.straight()
+ *       Single straight segment (the "I" pole; juvenile / shade-suppressed).
+ *   bro.flora.prototypes.fork()
+ *       Symmetric planar two-terminal "Y".
+ *   bro.flora.prototypes.whorl(arms = 3, spread = 0.55)
+ *       Short trunk topped by `arms` (2..8) terminals spread evenly in 3D
+ *       and pitched out by `spread` (0..1). Workhorse for full rounded crowns.
+ *   bro.flora.prototypes.monopodial(lateralBranches = 2, lateralSpread = 0.7)
+ *       Central dominant leader extending upward (terminal 0 = apical tip)
+ *       with `lateralBranches` (1..4) side arms branching at acute/spreading
+ *       angles. Leader extends strongly before laterals, giving true
+ *       excurrent / conifer growth.
+ *   bro.flora.prototypes.sympodial(primarySpread = 0.3, lateralSpread = 0.7)
+ *       Asymmetrical fork with dominant primary arm (terminal 0) and secondary
+ *       arm (terminal 1), capturing decurrent spreading crowns (oaks, maples).
+ *   bro.flora.prototypes.horizontalTier(arms = 3, spread = 0.85) / tier(...)
+ *       Horizontal plagiotropic shelf tiers (`arms` 2..8, near-horizontal
+ *       spread). Characteristic of pines, cedars, and dogwoods.
+ *   bro.flora.prototypes.weeping(spread = 0.6, droop = 0.4)
+ *       Pendulous downward-curving lateral shoots (weeping willows, birches).
  */
 bro.flora.prototypes;
 
-const protoWhorl = world.addPrototype(bro.flora.prototypes.whorl(4, 0.7));
+const protoWhorl      = world.addPrototype(bro.flora.prototypes.whorl(4, 0.7));
+const protoMonopodial = world.addPrototype(bro.flora.prototypes.monopodial(3, 0.65));
+const protoSympodial  = world.addPrototype(bro.flora.prototypes.sympodial(0.25, 0.75));
+const protoTier       = world.addPrototype(bro.flora.prototypes.horizontalTier(4, 0.85));
+const protoWeeping    = world.addPrototype(bro.flora.prototypes.weeping(0.6, 0.45));
 
 /**
  * Register a Voronoi site in (determinacy D, apicalControl λ) space.
@@ -112,7 +126,8 @@ const protoWhorl = world.addPrototype(bro.flora.prototypes.whorl(4, 0.7));
  */
 world.addVoronoiSite;
 
-world.addVoronoiSite(protoY, 0.2, 0.85);
+world.addVoronoiSite(protoMonopodial, 0.2, 0.85);
+world.addVoronoiSite(protoSympodial,  0.8, 0.35);
 
 /**
  * Plant a seedling. The plant's initial root module is created from
@@ -136,7 +151,7 @@ world.addPlant;
 world.addPlant({
   origin: [0, 0, 0],
   species: { moduleMatureAge: 0.6, shadeTolerance: 0.5 },
-  prototypeIndex: protoY,
+  prototypeIndex: protoMonopodial,
 });
 
 /**
@@ -222,6 +237,69 @@ const fol  = world.emitFoliage();
 // Zip them: segs[i] and fol[i] describe the same prototype edge.
 
 /**
+ * Fast native C++ foliage scatter mesh generation.
+ * Stamping `leafMesh` along the world's branch skeleton, weighted by
+ * simulation foliage state (light exposure, maturity, senescence, twig grade).
+ *
+ * @param {Mesh} leafMesh  Individual leaf or botanical leaf cluster mesh.
+ * @param {Object} [opts]  Leaf placement and filtering options.
+ * @param {number} [opts.maxRadius=0.05]
+ * @param {number} [opts.minDepth=1]
+ * @param {boolean} [opts.terminalOnly=false]
+ * @param {number} [opts.perUnitLength=20.0]
+ * @param {number} [opts.upBias=0.5]
+ * @param {number} [opts.tiltJitter=0.3]
+ * @param {number} [opts.rollJitter=0.2]
+ * @param {number} [opts.baseScale=1.0]
+ * @param {number} [opts.scaleJitter=0.2]
+ * @param {number} [opts.scaleByRadius=0.0]
+ * @param {number} [opts.dedupRadius=0.0]
+ * @returns {Mesh} Merged foliage mesh.
+ */
+world.emitFoliageMesh;
+
+/**
+ * Fast native C++ foliage transform buffer for InstancedMeshNode.
+ * Returns Float32Array containing 4x4 column-major transforms (16 floats per leaf).
+ *
+ * @param {Object} [opts] LeafPlacementOptions
+ * @returns {Float32Array}
+ */
+world.emitFoliageTransforms;
+
+/**
+ * Compact per-segment records for GPU vertex-shader foliage expansion
+ * (foliage_scatter.vert).
+ *
+ * Returns { segments: Float32Array (segCount*8: [from.xyz, radius, dir.xyz, count]),
+ *           instSeg: Float32Array (instanceCount), segCount, instanceCount,
+ *           boundsMin: number[], boundsMax: number[] }.
+ *
+ * @param {Object} [opts] LeafPlacementOptions
+ * @returns {Object}
+ */
+world.emitScatterSegments;
+
+/**
+ * Compact per-segment tube buffer for the GPU branch-tube node.
+ * Returns { segments: Float32Array (segCount*8: [from.xyz, radiusFrom, to.xyz, radiusTo]),
+ *           segCount, boundsMin, boundsMax }.
+ *
+ * @param {Object} [opts]
+ * @param {number} [opts.minRadius=0.0]
+ * @returns {Object}
+ */
+world.emitBranchTubes;
+
+/**
+ * Fast native C++ branch segment transform buffer (16 floats per segment)
+ * for InstancedMeshNode.
+ *
+ * @returns {Float32Array}
+ */
+world.emitSegmentTransforms;
+
+/**
  * Bloom / fruit anchor candidates: one per terminal node of each
  * terminal module on every flowering plant. Empty for pre-flowering
  * plants. Feed to bromesh.packAnchors to thin overlapping candidates,
@@ -232,6 +310,18 @@ const fol  = world.emitFoliage();
 world.emitBloomAnchors;
 
 const blooms = world.emitBloomAnchors();
+
+/**
+ * Fast native C++ bloom mesh emitter. Returns `[petalsMesh, centersMesh]`.
+ *
+ * @param {Mesh} petalMesh
+ * @param {Mesh} [centerMesh]
+ * @param {Object} [opts]
+ * @param {number} [opts.bloomCap=500]
+ * @param {number} [opts.bloomLightMin=0.18]
+ * @returns {Mesh[]}
+ */
+world.emitBloomMesh;
 
 // ── Per-plant emit ────────────────────────────────────────────────────
 // Same shapes as the world-level emit, restricted to one plant. Useful
@@ -255,6 +345,12 @@ world.emitPlantSegments;
 /** @param {number} plantIdx
  *  @returns {Array<FoliageSample>|null}       */
 world.emitPlantFoliage;
+
+/** @param {number} plantIdx
+ *  @param {Mesh} leafMesh
+ *  @param {Object} [opts]
+ *  @returns {Mesh|null}                       */
+world.emitPlantFoliageMesh;
 
 /** @param {number} plantIdx
  *  @returns {Array<BloomAnchor>|null}         */

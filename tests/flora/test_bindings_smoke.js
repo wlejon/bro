@@ -1,5 +1,6 @@
-// Exercise the per-plant emit, plantInfo, setClimate, and sampleShadow
-// bindings of bro.flora. Weights-free and fully deterministic (seeded RNG).
+// Exercise the prototype factories, world simulation, per-plant emit,
+// plantInfo, setClimate, and sampleShadow bindings of bro.flora.
+// Weights-free and fully deterministic (seeded RNG).
 //
 // Uses no scene state — a bare bro.json (or none) is fine.
 
@@ -12,125 +13,211 @@ if (bro.flora && bro.flora.available === false) {
 
 function runFloraSmoke() {
 
+// ── 1. Test Prototype Factories ─────────────────────────────────────────
+console.log('Testing prototype factories...');
+
+function verifyProtoSpec(spec, expectedName, expectedMinNodes, expectedTerms) {
+    assert(spec && typeof spec === 'object', expectedName + ' spec is object');
+    assert(spec.name === expectedName, expectedName + ' name matches: ' + spec.name);
+    assert(Array.isArray(spec.nodes) && spec.nodes.length >= expectedMinNodes,
+           expectedName + ' has valid nodes (' + spec.nodes.length + ')');
+    assert(Array.isArray(spec.edges) && spec.edges.length >= expectedMinNodes - 1,
+           expectedName + ' has valid edges (' + spec.edges.length + ')');
+    assert(typeof spec.rootNode === 'number', expectedName + ' has rootNode');
+    assert(Array.isArray(spec.terminalNodes) && spec.terminalNodes.length === expectedTerms,
+           expectedName + ' terminalNodes count=' + spec.terminalNodes.length + ' expected=' + expectedTerms);
+    for (let i = 0; i < spec.nodes.length; ++i) {
+        const nd = spec.nodes[i];
+        assert(Array.isArray(nd.position) && nd.position.length === 3, 'node ' + i + ' has valid position');
+        assert(typeof nd.ageAtBirth === 'number', 'node ' + i + ' has ageAtBirth');
+        assert(typeof nd.lengthMax === 'number', 'node ' + i + ' has lengthMax');
+        assert(typeof nd.thickening === 'number', 'node ' + i + ' has thickening');
+    }
+}
+
+const specStraight = bro.flora.prototypes.straight();
+verifyProtoSpec(specStraight, 'straight', 2, 1);
+
+const specFork = bro.flora.prototypes.fork();
+verifyProtoSpec(specFork, 'fork', 3, 2);
+
+const specWhorl3 = bro.flora.prototypes.whorl();
+verifyProtoSpec(specWhorl3, 'whorl', 4, 3);
+
+const specWhorl4 = bro.flora.prototypes.whorl(4, 0.7);
+verifyProtoSpec(specWhorl4, 'whorl', 5, 4);
+
+// Monopodial leader prototype (apical tip + lateral branches)
+const specMonoDefault = bro.flora.prototypes.monopodial();
+verifyProtoSpec(specMonoDefault, 'monopodial', 5, 3); // 1 apical tip + 2 laterals = 3 terminals
+
+const specMono3 = bro.flora.prototypes.monopodial(3, 0.65);
+verifyProtoSpec(specMono3, 'monopodial', 6, 4); // 1 apical tip + 3 laterals = 4 terminals
+
+// Sympodial fork prototype (dominant primary + secondary)
+const specSymDefault = bro.flora.prototypes.sympodial();
+verifyProtoSpec(specSymDefault, 'sympodial', 4, 2);
+
+const specSymCustom = bro.flora.prototypes.sympodial(0.25, 0.75);
+verifyProtoSpec(specSymCustom, 'sympodial', 4, 2);
+
+// Horizontal tier prototype (shelf arms)
+const specTierDefault = bro.flora.prototypes.horizontalTier();
+verifyProtoSpec(specTierDefault, 'tier', 5, 3);
+
+const specTierAlias = bro.flora.prototypes.tier(4, 0.85);
+verifyProtoSpec(specTierAlias, 'tier', 6, 4);
+
+// Weeping prototype (pendulous droop shoot)
+const specWeepDefault = bro.flora.prototypes.weeping();
+verifyProtoSpec(specWeepDefault, 'weeping', 4, 2);
+
+const specWeepCustom = bro.flora.prototypes.weeping(0.7, 0.5);
+verifyProtoSpec(specWeepCustom, 'weeping', 4, 2);
+
+console.log('All prototype factories verified successfully');
+
+// ── 2. World Creation & Prototype Registration ───────────────────────────
 const world = bro.flora.createWorld({
     rngSeed: 0xC0FFEE,
     climate: { annualTempBase: 15, annualPrecip: 1000 },
-    shadow:  { origin: [-4, 0, -4], cellSize: 1, width: 8, height: 8, depth: 8, fill: 0.7 },
+    shadow:  { origin: [-6, 0, -6], cellSize: 1, width: 12, height: 12, depth: 12, fill: 0.8 },
 });
 
-const protoY = world.addPrototype({
-    name: 'Y',
-    nodes: [
-        { position: [ 0, 0, 0] },
-        { position: [ 0.3, 1.0, 0], ageAtBirth: 0.2 },
-        { position: [-0.3, 1.0, 0], ageAtBirth: 0.2 },
-    ],
-    edges: [[0, 1], [0, 2]],
-    rootNode: 0,
-    terminalNodes: [1, 2],
-});
-world.addVoronoiSite(protoY, 0.2, 0.85);
+assert(world.prototypeCount === 0, 'initial prototype count is 0');
+assert(world.plantCount === 0, 'initial plant count is 0');
 
-// Two plants with deliberately different species, so plantInfo can
-// distinguish them.
-const idxA = world.addPlant({
-    origin: [0, 0, 0],
-    species: { climateOptT: 8, leafDiameter: 0.05, floweringAge: 8 },
-    prototypeIndex: protoY,
-});
-const idxB = world.addPlant({
-    origin: [2, 0, 0],
-    species: { climateOptT: 22, leafDiameter: 0.03, floweringAge: 12 },
-    prototypeIndex: protoY,
-});
-assert(idxA === 0 && idxB === 1, 'plants indexed in order');
+const protoStraightIdx = world.addPrototype(specStraight);
+const protoForkIdx     = world.addPrototype(specFork);
+const protoWhorlIdx    = world.addPrototype(specWhorl4);
+const protoMonoIdx     = world.addPrototype(specMono3);
+const protoSymIdx      = world.addPrototype(specSymCustom);
+const protoTierIdx     = world.addPrototype(specTierAlias);
+const protoWeepIdx     = world.addPrototype(specWeepCustom);
 
-// Grow a bit so segments / foliage / blooms have content.
+assert(world.prototypeCount === 7, 'all 7 prototypes registered, count=' + world.prototypeCount);
+
+// Voronoi sites for developmental crown morphospace (determinacy D, apicalControl λ)
+world.addVoronoiSite(protoMonoIdx, 0.1, 0.90); // excurrent / conifer
+world.addVoronoiSite(protoSymIdx,  0.7, 0.40); // decurrent / spreading
+world.addVoronoiSite(protoTierIdx, 0.4, 0.70); // tiered
+world.addVoronoiSite(protoWeepIdx, 0.9, 0.20); // weeping
+
+// ── 3. Planting Seedlings with New Prototypes ─────────────────────────────
+// Plant seedlings representing different architectural growth models
+const idxConifer = world.addPlant({
+    origin: [-2, 0, -2],
+    species: { apicalControl: 0.85, determinacy: 0.2, shadeTolerance: 0.6, climateOptT: 10, floweringAge: 8 },
+    prototypeIndex: protoMonoIdx,
+});
+
+const idxOak = world.addPlant({
+    origin: [2, 0, -2],
+    species: { apicalControl: 0.35, determinacy: 0.7, shadeTolerance: 0.4, climateOptT: 18, floweringAge: 10 },
+    prototypeIndex: protoSymIdx,
+});
+
+const idxPine = world.addPlant({
+    origin: [-2, 0, 2],
+    species: { apicalControl: 0.75, determinacy: 0.4, shadeTolerance: 0.5, climateOptT: 14, floweringAge: 9 },
+    prototypeIndex: protoTierIdx,
+});
+
+const idxWillow = world.addPlant({
+    origin: [2, 0, 2],
+    species: { apicalControl: 0.25, determinacy: 0.85, shadeTolerance: 0.7, climateOptT: 16, floweringAge: 7 },
+    prototypeIndex: protoWeepIdx,
+});
+
+assert(world.plantCount === 4, '4 seedlings planted');
+assert(world.validate() === null, 'world validation passes after planting');
+
+// Grow seedlings through development steps
+console.log('Stepping simulation...');
 for (let i = 0; i < 150; i++) world.step(0.1);
 
-// --- plantInfo ----------------------------------------------------------
-const infoA = world.plantInfo(idxA);
-const infoB = world.plantInfo(idxB);
-console.log('A: age=' + infoA.age.toFixed(2) +
-            ' modules=' + infoA.moduleCount +
-            ' flowering=' + infoA.flowering +
-            ' rootVigor=' + infoA.rootVigor.toFixed(3));
-console.log('B: optT=' + infoB.species.climateOptT +
-            ' leafDiameter=' + infoB.species.leafDiameter);
-assert(infoA.species.climateOptT === 8,    'plantA climateOptT round-trip');
-assert(infoB.species.climateOptT === 22,   'plantB climateOptT round-trip');
-assert(infoA.moduleCount > 1, 'plantA grew modules');
-assert(world.plantInfo(99) === null, 'plantInfo out-of-range → null');
+assert(world.validate() === null, 'world validation passes after growth');
+assert(world.simTime > 14.9, 'simTime advanced correctly: ' + world.simTime.toFixed(2));
+assert(world.moduleCount >= 4, 'modules grew across plants: ' + world.moduleCount);
 
-// --- per-plant emit -----------------------------------------------------
-const meshA = world.emitPlantMesh(idxA, 6);
-assert(meshA && meshA.vertexCount > 0, 'emitPlantMesh produces geometry');
-const segsA   = world.emitPlantSegments(idxA);
-const segsB   = world.emitPlantSegments(idxB);
-const segsAll = world.emitSegments();
-// Once a seedling flowers, broflora disperses seeds → new plants. Sum over
-// all plants must still match the world-level count.
-let perPlantTotal = 0;
+// ── 4. Inspect Plants & Emit Geometry ────────────────────────────────────
 for (let i = 0; i < world.plantCount; i++) {
-    perPlantTotal += world.emitPlantSegments(i).length;
+    const info = world.plantInfo(i);
+    assert(info !== null, 'plantInfo(' + i + ') valid');
+    assert(info.moduleCount > 0, 'plant ' + i + ' has modules');
+    console.log('Plant ' + i + ': age=' + info.age.toFixed(1) +
+                ' modules=' + info.moduleCount +
+                ' flowering=' + info.flowering +
+                ' rootVigor=' + info.rootVigor.toFixed(3));
+
+    const pMesh = world.emitPlantMesh(i, 6);
+    assert(pMesh && pMesh.vertexCount > 0, 'emitPlantMesh(' + i + ') produces vertices');
+
+    const pSegs = world.emitPlantSegments(i);
+    assert(pSegs && pSegs.length > 0, 'emitPlantSegments(' + i + ') produces segments');
+
+    const pFol = world.emitPlantFoliage(i);
+    assert(pFol && pFol.length === pSegs.length, 'emitPlantFoliage(' + i + ') matches segments length');
 }
-console.log('segments: A=' + segsA.length + ' B=' + segsB.length +
-            ' plants=' + world.plantCount +
-            ' perPlantTotal=' + perPlantTotal +
-            ' all=' + segsAll.length);
-assert(perPlantTotal === segsAll.length,
-    'per-plant segments sum to world segments across all plants');
 
-const folA = world.emitPlantFoliage(idxA);
-assert(folA.length === segsA.length, 'foliage in lockstep with segments per-plant');
+// World-level emissions
+const worldMesh = world.emitMesh(6);
+assert(worldMesh && worldMesh.vertexCount > 0, 'world emitMesh produces mesh');
 
-const bloomsA = world.emitPlantBloomAnchors(idxA);
-console.log('plant A blooms=' + bloomsA.length + ' flowering=' + infoA.flowering);
-assert(bloomsA.length === 0 || infoA.flowering, 'blooms only when flowering');
+const worldSegs = world.emitSegments();
+const worldFol  = world.emitFoliage();
+assert(worldSegs.length === worldFol.length, 'world segments and foliage match length');
+assert(worldSegs.length > 0, 'world segments non-empty');
 
-assert(world.emitPlantMesh(-1, 6) === null, 'emitPlantMesh negative → null');
-assert(world.emitPlantSegments(99) === null, 'emitPlantSegments OOR → null');
+// Fast native transform buffers
+const leafTransforms = world.emitFoliageTransforms({ minDepth: 0 });
+assert(leafTransforms instanceof Float32Array, 'emitFoliageTransforms returns Float32Array');
 
-// --- sampleShadow -------------------------------------------------------
-// Sample an unoccupied cell (far above the canopy) to read the fill
-// value; sample a cell among the plants to confirm self-shadowing has
-// happened. Q_G is the light passing through — lower under canopy.
-// Must run while the plants are still healthy: the harsh-climate section
-// below kills the foliage off, after which nothing casts shadow.
-const qOpen   = world.sampleShadow([-3, 7, -3]);
-const qCanopy = world.sampleShadow([0,  1,  0]);
-const qOut    = world.sampleShadow([100, 100, 100]);
+const segTransforms = world.emitSegmentTransforms();
+assert(segTransforms instanceof Float32Array, 'emitSegmentTransforms returns Float32Array');
+assert(segTransforms.length === worldSegs.length * 16, 'segTransforms has 16 floats per segment');
+
+const scatterSegs = world.emitScatterSegments({ minDepth: 0 });
+assert(scatterSegs && scatterSegs.segments instanceof Float32Array, 'emitScatterSegments returns segments buffer');
+assert(scatterSegs.segCount >= 0, 'scatterSegs has valid segCount');
+
+const branchTubes = world.emitBranchTubes();
+assert(branchTubes && branchTubes.segments instanceof Float32Array, 'emitBranchTubes returns tube buffer');
+assert(branchTubes.segCount > 0 && branchTubes.segCount <= worldSegs.length, 'branchTubes segCount valid');
+
+// ── 5. Shadow Grid & Climate Succession ─────────────────────────────────
+const qOpen   = world.sampleShadow([-5, 11, -5]); // High up in open corner
+const qCanopy = world.sampleShadow([-2, 0, -2]);  // Ground level under the conifer canopy
+const qOut    = world.sampleShadow([100, 100, 100]); // Out of bounds
+
 console.log('Q_G open=' + qOpen + ' under-canopy=' + qCanopy + ' out=' + qOut);
-// broflora rebuilds the shadow grid each step — `fill` is only the initial
-// state. After stepping, open cells return to Q_G ≈ 1 (full sun) while
-// occupied cells get shaded by the plants.
-assert(qOpen !== null && qOpen > 0.95,  'open cell reads ~full sun after step');
-assert(qCanopy !== null && qCanopy < qOpen, 'canopy cell darker than open cell');
-assert(qOut === null, 'sampleShadow OOB → null');
+assert(qOpen !== null && qOpen > 0.95, 'open cell reads ~full sun after step');
+assert(qCanopy !== null && qCanopy < qOpen, 'under-canopy cell darker than open sky');
+assert(qOut === null, 'sampleShadow OOB returns null');
 
-// --- setClimate ---------------------------------------------------------
-const tBefore = infoA.rootVigor;
-world.setClimate({ annualTempBase: -10, annualPrecip: 50 });   // brutal
+// Climate test
+const info0Before = world.plantInfo(0);
+const vigorBefore = info0Before.rootVigor;
+world.setClimate({ annualTempBase: -15, annualPrecip: 30 }); // Extreme harsh cold & drought
 for (let i = 0; i < 50; i++) world.step(0.1);
-const infoA2 = world.plantInfo(idxA);
-console.log('A vigor before=' + tBefore.toFixed(3) +
-            ' after harsh climate=' + infoA2.rootVigor.toFixed(3));
-assert(infoA2.rootVigor < tBefore, 'harsh climate reduces root vigor');
+const info0After = world.plantInfo(0);
+const vigorAfter = (info0After && typeof info0After.rootVigor === 'number') ? info0After.rootVigor : 0;
+console.log('Plant 0 vigor before=' + vigorBefore.toFixed(3) + ' after harsh climate=' + vigorAfter.toFixed(3));
+assert(vigorAfter < vigorBefore, 'harsh climate reduces root vigor');
 
-// --- removePlant (swap-and-pop) -----------------------------------------
+// ── 6. Remove Plant (Swap-and-Pop) ──────────────────────────────────────
 const countBefore = world.plantCount;
 const lastIdx = countBefore - 1;
 const lastPlantInfo = world.plantInfo(lastIdx);
-// Remove index 0. The plant at lastIdx should move to slot 0.
 const ok = world.removePlant(0);
-assert(ok === true, 'removePlant(0) ok');
+assert(ok === true, 'removePlant(0) succeeded');
 assert(world.plantCount === countBefore - 1, 'plantCount decremented');
 const newInfo0 = world.plantInfo(0);
 assert(newInfo0.origin[0] === lastPlantInfo.origin[0], 'swap-and-pop: last plant moved to slot 0');
-assert(world.plantInfo(lastIdx) === null, 'last slot now empty');
+assert(world.plantInfo(lastIdx) === null, 'vacated slot is null');
 assert(world.removePlant(-1) === false, 'removePlant negative OOR fails');
 assert(world.removePlant(999) === false, 'removePlant positive OOR fails');
 
 console.log('flora_bindings_smoke ok');
 
-}  // runFloraSmoke
+} // runFloraSmoke

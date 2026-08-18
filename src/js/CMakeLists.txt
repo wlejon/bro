@@ -63,6 +63,7 @@ add_library(bro_js STATIC
     scene_bindings_view.cpp
     mesh_bindings.cpp
     flora_bindings.cpp
+    flora_bindings_emit.cpp
     math_bindings.cpp
     rigging_bindings.cpp
     terrain_bindings.cpp

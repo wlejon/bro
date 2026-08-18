@@ -4,12 +4,12 @@
 #include "js/flora_bindings.h"
 #if BRO_WITH_FLORA
 
+#include "js/flora_bindings_internal.h"
 #include "js/mesh_bindings.h"
 
 #include <qjsbind/qjsbind.h>
 
 #include <broflora/broflora.h>
-
 #include <bromath/vec.h>
 #include <bromesh/mesh_data.h>
 #include <bromesh/procedural/leaf_scatter.h>
@@ -24,297 +24,52 @@
 
 namespace bro::js {
 
-// ── Opaque wrapper ─────────────────────────────────────────────────────
-// The world owns prototypes, voronoi sites, and plants. Module instances
-// inside plants reference prototypes by pointer; the wrapper guarantees
-// the WorldState lives as long as the JS handle does so those pointers
-// stay valid.
-struct FloraWorldWrapper {
-    std::unique_ptr<broflora::WorldState> world;
-};
-using FWW = FloraWorldWrapper;
-
-// ── Vec3 helpers ───────────────────────────────────────────────────────
-
-static bool readVec3Prop(JSContext* ctx, JSValueConst obj, const char* prop,
-                         bromath::Vec3& out) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    if (!JS_IsArray(v)) { JS_FreeValue(ctx, v); return false; }
-    for (int i = 0; i < 3; ++i) {
-        JSValue el = JS_GetPropertyUint32(ctx, v, (uint32_t)i);
-        double d = 0;
-        JS_ToFloat64(ctx, &d, el);
-        JS_FreeValue(ctx, el);
-        (&out.x)[i] = (float)d;
-    }
-    JS_FreeValue(ctx, v);
-    return true;
-}
-
-static JSValue makeVec3(JSContext* ctx, const bromath::Vec3& v) {
-    JSValue arr = JS_NewArray(ctx);
-    JS_SetPropertyUint32(ctx, arr, 0, JS_NewFloat64(ctx, v.x));
-    JS_SetPropertyUint32(ctx, arr, 1, JS_NewFloat64(ctx, v.y));
-    JS_SetPropertyUint32(ctx, arr, 2, JS_NewFloat64(ctx, v.z));
-    return arr;
-}
-
-static JSValue makeFloat32Array(JSContext* ctx, const float* data, size_t count) {
-    size_t size = count * sizeof(float);
-    JSValue abuf = JS_NewArrayBufferCopy(ctx, reinterpret_cast<const uint8_t*>(data), size);
-    if (JS_IsException(abuf)) return abuf;
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue ctor = JS_GetPropertyStr(ctx, global, "Float32Array");
-    JS_FreeValue(ctx, global);
-    JSValue arr = JS_CallConstructor(ctx, ctor, 1, &abuf);
-    JS_FreeValue(ctx, ctor);
-    JS_FreeValue(ctx, abuf);
-    return arr;
-}
-
-// Per-segment leaf density from a plant's foliage samples. Leaves grow on
-// stems — thin current-season shoots — not along the length of woody branches
-// or the trunk, so scattering uniformly by the raw twig grade reads as "fur on
-// a stick." twigGrade01 is broflora's diameter gate (1 at leaf thickness, →0
-// past ~6x leaf diameter); squaring it collapses the medium-branch tail so only
-// genuinely thin shoots carry leaves, and terminal shoots (no child modules,
-// where a real stem actually leafs out) get a boost. lightExposure01 carves by
-// true shade so interior twigs go bare; maturity/senescence gate by age. A
-// caller can still override by passing its own densityWeight.
-static void fillFoliageDensity(const std::vector<broflora::FoliageSample>& samples,
-                               size_t segCount,
-                               bromesh::LeafPlacementOptions& opts) {
-    if (!opts.densityWeight.empty() || samples.size() != segCount) return;
-    opts.densityWeight.resize(samples.size());
-    for (size_t i = 0; i < samples.size(); ++i) {
-        const auto& f = samples[i];
-        float exposure = 0.12f + 0.88f * f.lightExposure01;
-        float maturity = std::min(1.0f, f.age01);
-        float alive    = 1.0f - f.senescence01;
-        float stem     = f.twigGrade01 * f.twigGrade01;        // sharpen the thin-shoot bias
-        if (f.isTerminal) stem = std::min(1.0f, stem * 2.0f);  // shoots leaf out at the growing tips
-        opts.densityWeight[i] = exposure * maturity * alive * stem;
-    }
-}
-
-// ── Optional-field readers ─────────────────────────────────────────────
-
-static bool readFloatField(JSContext* ctx, JSValueConst obj, const char* prop, float& out) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    if (JS_IsUndefined(v) || JS_IsNull(v)) { JS_FreeValue(ctx, v); return false; }
-    double d = 0;
-    if (JS_ToFloat64(ctx, &d, v) == 0) out = (float)d;
-    JS_FreeValue(ctx, v);
-    return true;
-}
-
-static bool readUint32Field(JSContext* ctx, JSValueConst obj, const char* prop, uint32_t& out) {
-    JSValue v = JS_GetPropertyStr(ctx, obj, prop);
-    if (JS_IsUndefined(v) || JS_IsNull(v)) { JS_FreeValue(ctx, v); return false; }
-    uint32_t u = 0;
-    if (JS_ToUint32(ctx, &u, v) == 0) out = u;
-    JS_FreeValue(ctx, v);
-    return true;
-}
-
-// ── Species partial application ────────────────────────────────────────
-// Caller-supplied fields override defaults; missing fields keep Species'
-// in-class defaults.
-static void applySpeciesPartial(JSContext* ctx, JSValueConst spec,
-                                broflora::Species& s) {
-    if (!JS_IsObject(spec)) return;
-    readFloatField(ctx, spec, "maxVigor",            s.maxVigor);
-    readFloatField(ctx, spec, "minVigor",            s.minVigor);
-    readFloatField(ctx, spec, "rootVigorMax",        s.rootVigorMax);
-    readFloatField(ctx, spec, "apicalControl",       s.apicalControl);
-    readFloatField(ctx, spec, "determinacy",         s.determinacy);
-    readFloatField(ctx, spec, "shadeTolerance",      s.shadeTolerance);
-    readFloatField(ctx, spec, "apicalControlMature", s.apicalControlMature);
-    readFloatField(ctx, spec, "determinacyMature",   s.determinacyMature);
-    readVec3Prop  (ctx, spec, "tropismDir",          s.tropismDir);
-    readFloatField(ctx, spec, "tropismG1",           s.tropismG1);
-    readFloatField(ctx, spec, "tropismG2",           s.tropismG2);
-    readFloatField(ctx, spec, "growthScale",         s.growthScale);
-    readFloatField(ctx, spec, "climateOptT",         s.climateOptT);
-    readFloatField(ctx, spec, "climateOptP",         s.climateOptP);
-    readFloatField(ctx, spec, "climateSigT",         s.climateSigT);
-    readFloatField(ctx, spec, "climateSigP",         s.climateSigP);
-    readFloatField(ctx, spec, "maxAge",              s.maxAge);
-    readFloatField(ctx, spec, "floweringAge",        s.floweringAge);
-    readFloatField(ctx, spec, "seedingRadius",       s.seedingRadius);
-    readFloatField(ctx, spec, "moduleMatureAge",     s.moduleMatureAge);
-    readFloatField(ctx, spec, "pipeExp",             s.pipeExp);
-    readFloatField(ctx, spec, "leafDiameter",        s.leafDiameter);
-    readFloatField(ctx, spec, "terrainAnchorWeight", s.terrainAnchorWeight);
-    readFloatField(ctx, spec, "maxSeedingSlope",     s.maxSeedingSlope);
-    readFloatField(ctx, spec, "distributionWeightCollisions", s.distributionWeightCollisions);
-    readFloatField(ctx, spec, "distributionWeightTropism",    s.distributionWeightTropism);
-    readFloatField(ctx, spec, "orthotropy",          s.orthotropy);
-    readFloatField(ctx, spec, "individualVariation", s.individualVariation);
-}
-
-// ── Prototype builder ──────────────────────────────────────────────────
-//   spec: { name?, nodes: [{position:[x,y,z], ageAtBirth?, lengthMax?, thickening?}, ...],
-//           edges: [[a,b], ...] | [{a,b}, ...], rootNode?, terminalNodes: [idx, ...] }
-static bool buildPrototype(JSContext* ctx, JSValueConst spec,
-                           broflora::BranchModulePrototype& out,
-                           std::string& nameStorage) {
-    if (!JS_IsObject(spec)) return false;
-
-    JSValue nameV = JS_GetPropertyStr(ctx, spec, "name");
-    if (JS_IsString(nameV)) {
-        size_t len = 0;
-        const char* cstr = JS_ToCStringLen(ctx, &len, nameV);
-        if (cstr) {
-            nameStorage.assign(cstr, len);
-            out.name = nameStorage.c_str();
-            JS_FreeCString(ctx, cstr);
-        }
-    }
-    JS_FreeValue(ctx, nameV);
-
-    JSValue nodesV = JS_GetPropertyStr(ctx, spec, "nodes");
-    if (JS_IsArray(nodesV)) {
-        JSValue lenV = JS_GetPropertyStr(ctx, nodesV, "length");
-        uint32_t n = 0; JS_ToUint32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
-        out.nodes.reserve(n);
-        for (uint32_t i = 0; i < n; ++i) {
-            JSValue nv = JS_GetPropertyUint32(ctx, nodesV, i);
-            broflora::ModuleNode mn;
-            readVec3Prop  (ctx, nv, "position",    mn.position);
-            readFloatField(ctx, nv, "ageAtBirth",  mn.ageAtBirth);
-            readFloatField(ctx, nv, "lengthMax",   mn.lengthMax);
-            readFloatField(ctx, nv, "thickening",  mn.thickening);
-            out.nodes.push_back(mn);
-            JS_FreeValue(ctx, nv);
-        }
-    }
-    JS_FreeValue(ctx, nodesV);
-
-    JSValue edgesV = JS_GetPropertyStr(ctx, spec, "edges");
-    if (JS_IsArray(edgesV)) {
-        JSValue lenV = JS_GetPropertyStr(ctx, edgesV, "length");
-        uint32_t n = 0; JS_ToUint32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
-        out.edges.reserve(n);
-        for (uint32_t i = 0; i < n; ++i) {
-            JSValue ev = JS_GetPropertyUint32(ctx, edgesV, i);
-            broflora::ModuleEdge e{};
-            if (JS_IsArray(ev)) {
-                JSValue a = JS_GetPropertyUint32(ctx, ev, 0);
-                JSValue b = JS_GetPropertyUint32(ctx, ev, 1);
-                JS_ToUint32(ctx, &e.a, a);
-                JS_ToUint32(ctx, &e.b, b);
-                JS_FreeValue(ctx, a); JS_FreeValue(ctx, b);
-            } else if (JS_IsObject(ev)) {
-                readUint32Field(ctx, ev, "a", e.a);
-                readUint32Field(ctx, ev, "b", e.b);
-            }
-            out.edges.push_back(e);
-            JS_FreeValue(ctx, ev);
-        }
-    }
-    JS_FreeValue(ctx, edgesV);
-
-    readUint32Field(ctx, spec, "rootNode", out.rootNode);
-
-    JSValue termsV = JS_GetPropertyStr(ctx, spec, "terminalNodes");
-    if (JS_IsArray(termsV)) {
-        JSValue lenV = JS_GetPropertyStr(ctx, termsV, "length");
-        uint32_t n = 0; JS_ToUint32(ctx, &n, lenV); JS_FreeValue(ctx, lenV);
-        out.terminalNodes.reserve(n);
-        for (uint32_t i = 0; i < n; ++i) {
-            JSValue v = JS_GetPropertyUint32(ctx, termsV, i);
-            uint32_t idx = 0;
-            JS_ToUint32(ctx, &idx, v);
-            out.terminalNodes.push_back(idx);
-            JS_FreeValue(ctx, v);
-        }
-    }
-    JS_FreeValue(ctx, termsV);
-
-    return !out.nodes.empty();
-}
-
-// ── Climate / shadow ───────────────────────────────────────────────────
-
-// Read climate fields straight off an object (used by setClimate).
-static void readClimateFields(JSContext* ctx, JSValueConst obj, broflora::GlobalClimate& c) {
-    if (!JS_IsObject(obj)) return;
-    readFloatField(ctx, obj, "annualTempBase",   c.annualTempBase);
-    readFloatField(ctx, obj, "annualPrecip",     c.annualPrecip);
-    readFloatField(ctx, obj, "tempLapsePerUnit", c.tempLapsePerUnit);
-}
-
-static void readClimate(JSContext* ctx, JSValueConst opts, broflora::GlobalClimate& c) {
-    JSValue cv = JS_GetPropertyStr(ctx, opts, "climate");
-    readClimateFields(ctx, cv, c);
-    JS_FreeValue(ctx, cv);
-}
-
-static void readShadow(JSContext* ctx, JSValueConst opts, broflora::ShadowGrid& g) {
-    JSValue sv = JS_GetPropertyStr(ctx, opts, "shadow");
-    if (JS_IsObject(sv)) {
-        readVec3Prop(ctx, sv, "origin", g.origin);
-        readFloatField(ctx, sv, "cellSize", g.cellSize);
-        readUint32Field(ctx, sv, "width",  g.width);
-        readUint32Field(ctx, sv, "height", g.height);
-        readUint32Field(ctx, sv, "depth",  g.depth);
-        float fill = 1.0f;
-        readFloatField(ctx, sv, "fill", fill);
-        const size_t n = (size_t)g.width * g.height * g.depth;
-        g.qg.assign(n, fill);
-    }
-    JS_FreeValue(ctx, sv);
-}
-
 // ── Built-in prototypes ────────────────────────────────────────────────
 // Serialise a C++ broflora prototype into the same spec object
 // buildPrototype() reads, so the library factories stay the single source
 // of truth and the returned value drops straight into world.addPrototype().
-static JSValue protoToSpec(JSContext* ctx, const broflora::BranchModulePrototype& p) {
-    JSValue o = JS_NewObject(ctx);
-    if (p.name) JS_SetPropertyStr(ctx, o, "name", JS_NewString(ctx, p.name));
-
-    JSValue nodes = JS_NewArray(ctx);
-    for (uint32_t i = 0; i < p.nodes.size(); ++i) {
-        const auto& nd = p.nodes[i];
-        JSValue nv = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, nv, "position",   makeVec3(ctx, nd.position));
-        JS_SetPropertyStr(ctx, nv, "ageAtBirth", JS_NewFloat64(ctx, nd.ageAtBirth));
-        JS_SetPropertyStr(ctx, nv, "lengthMax",  JS_NewFloat64(ctx, nd.lengthMax));
-        JS_SetPropertyStr(ctx, nv, "thickening", JS_NewFloat64(ctx, nd.thickening));
-        JS_SetPropertyUint32(ctx, nodes, i, nv);
-    }
-    JS_SetPropertyStr(ctx, o, "nodes", nodes);
-
-    JSValue edges = JS_NewArray(ctx);
-    for (uint32_t i = 0; i < p.edges.size(); ++i) {
-        JSValue ev = JS_NewArray(ctx);
-        JS_SetPropertyUint32(ctx, ev, 0, JS_NewInt32(ctx, (int32_t)p.edges[i].a));
-        JS_SetPropertyUint32(ctx, ev, 1, JS_NewInt32(ctx, (int32_t)p.edges[i].b));
-        JS_SetPropertyUint32(ctx, edges, i, ev);
-    }
-    JS_SetPropertyStr(ctx, o, "edges", edges);
-    JS_SetPropertyStr(ctx, o, "rootNode", JS_NewInt32(ctx, (int32_t)p.rootNode));
-
-    JSValue terms = JS_NewArray(ctx);
-    for (uint32_t i = 0; i < p.terminalNodes.size(); ++i)
-        JS_SetPropertyUint32(ctx, terms, i, JS_NewInt32(ctx, (int32_t)p.terminalNodes[i]));
-    JS_SetPropertyStr(ctx, o, "terminalNodes", terms);
-    return o;
-}
 
 static JSValue protoStraight(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return protoToSpec(ctx, broflora::straightModule());
 }
+
 static JSValue protoFork(JSContext* ctx, JSValueConst, int, JSValueConst*) {
     return protoToSpec(ctx, broflora::forkModule());
 }
+
 static JSValue protoWhorl(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
     uint32_t arms = 3; double spread = 0.55;
     if (argc >= 1 && !JS_IsUndefined(argv[0])) JS_ToUint32(ctx, &arms, argv[0]);
     if (argc >= 2 && !JS_IsUndefined(argv[1])) JS_ToFloat64(ctx, &spread, argv[1]);
     return protoToSpec(ctx, broflora::whorlModule(arms, (float)spread));
+}
+
+static JSValue protoMonopodial(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    uint32_t lateralBranches = 2; double lateralSpread = 0.7;
+    if (argc >= 1 && !JS_IsUndefined(argv[0])) JS_ToUint32(ctx, &lateralBranches, argv[0]);
+    if (argc >= 2 && !JS_IsUndefined(argv[1])) JS_ToFloat64(ctx, &lateralSpread, argv[1]);
+    return protoToSpec(ctx, broflora::monopodialLeaderModule(lateralBranches, (float)lateralSpread));
+}
+
+static JSValue protoSympodial(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    double primarySpread = 0.3; double lateralSpread = 0.7;
+    if (argc >= 1 && !JS_IsUndefined(argv[0])) JS_ToFloat64(ctx, &primarySpread, argv[0]);
+    if (argc >= 2 && !JS_IsUndefined(argv[1])) JS_ToFloat64(ctx, &lateralSpread, argv[1]);
+    return protoToSpec(ctx, broflora::sympodialForkModule((float)primarySpread, (float)lateralSpread));
+}
+
+static JSValue protoHorizontalTier(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    uint32_t arms = 3; double spread = 0.85;
+    if (argc >= 1 && !JS_IsUndefined(argv[0])) JS_ToUint32(ctx, &arms, argv[0]);
+    if (argc >= 2 && !JS_IsUndefined(argv[1])) JS_ToFloat64(ctx, &spread, argv[1]);
+    return protoToSpec(ctx, broflora::horizontalTierModule(arms, (float)spread));
+}
+
+static JSValue protoWeeping(JSContext* ctx, JSValueConst, int argc, JSValueConst* argv) {
+    double spread = 0.6; double droop = 0.4;
+    if (argc >= 1 && !JS_IsUndefined(argv[0])) JS_ToFloat64(ctx, &spread, argv[0]);
+    if (argc >= 2 && !JS_IsUndefined(argv[1])) JS_ToFloat64(ctx, &droop, argv[1]);
+    return protoToSpec(ctx, broflora::weepingModule((float)spread, (float)droop));
 }
 
 // ── Factory ────────────────────────────────────────────────────────────
@@ -346,8 +101,12 @@ static JSValue createWorld(JSContext* ctx, JSValueConst /*this_val*/,
 // ── Class registration ─────────────────────────────────────────────────
 
 static void installWorldClass(JSContext* ctx) {
-    qjsbind::Class<FWW>(ctx, "FloraWorld", qjsbind::NoGlobal)
+    qjsbind::Class<FWW> cls(ctx, "FloraWorld", qjsbind::NoGlobal);
 
+    // Register all emit methods (mesh, foliage, scatter, tubes, blooms).
+    registerFloraWorldEmitMethods(cls);
+
+    cls
     // -- prototype builder --
     .method("addPrototype", [](FWW* w, JSContext* ctx, JSValue spec) -> int {
         broflora::BranchModulePrototype proto;
@@ -412,536 +171,6 @@ static void installWorldClass(JSContext* ctx) {
     .method("step", [](FWW* w, double dt) {
         broflora::step(*w->world, (float)dt);
     }, qjsbind::returns_this)
-
-    // -- mesh emit (returns JS Mesh) --
-    .method("emitMesh", [](FWW* w, JSContext* ctx, int sides) -> JSValue {
-        uint32_t s = (sides >= 3) ? (uint32_t)sides : 6u;
-        auto md = std::make_unique<bromesh::MeshData>(
-            broflora::emitWorldMesh(*w->world, s));
-        return MeshBindings::wrapMeshData(ctx, std::move(md));
-    })
-
-    // -- segments --
-    .method("emitSegments", [](FWW* w, JSContext* ctx) -> JSValue {
-        auto segs = broflora::emitWorldSegments(*w->world);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < segs.size(); ++i) {
-            const auto& s = segs[i];
-            JSValue o = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, o, "from",   makeVec3(ctx, s.from));
-            JS_SetPropertyStr(ctx, o, "to",     makeVec3(ctx, s.to));
-            JS_SetPropertyStr(ctx, o, "radius", JS_NewFloat64(ctx, s.radius));
-            JS_SetPropertyStr(ctx, o, "depth",  JS_NewInt32(ctx, (int32_t)s.depth));
-            JS_SetPropertyStr(ctx, o, "parent", JS_NewInt32(ctx, (int32_t)s.parent));
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
-        }
-        return arr;
-    })
-
-    // -- foliage samples --
-    .method("emitFoliage", [](FWW* w, JSContext* ctx) -> JSValue {
-        auto samples = broflora::emitWorldFoliage(*w->world);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < samples.size(); ++i) {
-            const auto& s = samples[i];
-            JSValue o = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, o, "mass",         JS_NewFloat64(ctx, s.mass));
-            JS_SetPropertyStr(ctx, o, "age01",        JS_NewFloat64(ctx, s.age01));
-            JS_SetPropertyStr(ctx, o, "vigor01",      JS_NewFloat64(ctx, s.vigor01));
-            JS_SetPropertyStr(ctx, o, "light01",      JS_NewFloat64(ctx, s.light01));
-            JS_SetPropertyStr(ctx, o, "lightExposure01", JS_NewFloat64(ctx, s.lightExposure01));
-            JS_SetPropertyStr(ctx, o, "senescence01", JS_NewFloat64(ctx, s.senescence01));
-            JS_SetPropertyStr(ctx, o, "isTerminal",   JS_NewBool(ctx, s.isTerminal));
-            JS_SetPropertyStr(ctx, o, "twigGrade01", JS_NewFloat64(ctx, s.twigGrade01));
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
-        }
-        return arr;
-    })
-
-    // -- fast native C++ foliage mesh emitter --
-    .method("emitFoliageMesh", [](FWW* w, JSContext* ctx, JSValueConst leafVal, JSValueConst optsVal) -> JSValue {
-        auto* lw = MeshBindings::getMeshData(ctx, leafVal);
-        if (!lw || lw->empty()) return JS_ThrowTypeError(ctx, "emitFoliageMesh requires valid leaf Mesh");
-
-        auto segs = broflora::emitWorldSegments(*w->world);
-        if (segs.empty()) {
-            return MeshBindings::wrapMeshData(ctx, std::make_unique<bromesh::MeshData>());
-        }
-        auto samples = broflora::emitWorldFoliage(*w->world);
-
-        bromesh::LeafPlacementOptions opts;
-        if (JS_IsObject(optsVal)) readLeafPlacementOptions(ctx, optsVal, opts);
-
-        fillFoliageDensity(samples, segs.size(), opts);
-
-        auto md = std::make_unique<bromesh::MeshData>(
-            bromesh::scatterLeaves(segs, *lw, opts));
-        return MeshBindings::wrapMeshData(ctx, std::move(md));
-    })
-
-    // -- fast native C++ foliage transform buffer for InstancedMeshNode --
-    .method("emitFoliageTransforms", [](FWW* w, JSContext* ctx, JSValueConst optsVal) -> JSValue {
-        auto segs = broflora::emitWorldSegments(*w->world);
-        if (segs.empty()) {
-            return makeFloat32Array(ctx, nullptr, 0);
-        }
-        auto samples = broflora::emitWorldFoliage(*w->world);
-
-        bromesh::LeafPlacementOptions opts;
-        if (JS_IsObject(optsVal)) readLeafPlacementOptions(ctx, optsVal, opts);
-
-        fillFoliageDensity(samples, segs.size(), opts);
-
-        auto pl = bromesh::placeLeavesOnBranches(segs, opts);
-        size_t count = pl.transforms.size();
-        if (count == 0) {
-            return makeFloat32Array(ctx, nullptr, 0);
-        }
-        return makeFloat32Array(ctx, pl.transforms.data(), count);
-    })
-
-    // -- GPU foliage scatter: pack per-segment records for foliage_scatter.vert --
-    // Instead of scattering tens of thousands of leaves on the CPU
-    // (emitFoliageTransforms), emit ONE record per foliage-bearing twig:
-    //   [from.xyz, radius, dir.xyz, leafCount]   (8 floats, dir = to - from)
-    // The leaf count is computed here (length * perUnitLength * densityWeight,
-    // stochastically rounded) so the vertex shader can expand each segment into
-    // exactly that many leaves. Segments that carry no leaves (filtered by
-    // depth/radius/terminalOnly or zeroed by the density weight) are dropped, so
-    // the buffer stays small — the sim uploads a few hundred records, not a few
-    // MB of leaf transforms. Returns { segments, segCount, maxPerSeg,
-    // boundsMin, boundsMax }; feed it (spread with the same opts) to
-    // createInstancedMesh({ scatter }) / node.setScatterSegments().
-    .method("emitScatterSegments", [](FWW* w, JSContext* ctx, JSValueConst optsVal) -> JSValue {
-        auto segs = broflora::emitWorldSegments(*w->world);
-        auto samples = broflora::emitWorldFoliage(*w->world);
-
-        bromesh::LeafPlacementOptions opts;
-        if (JS_IsObject(optsVal)) readLeafPlacementOptions(ctx, optsVal, opts);
-        fillFoliageDensity(samples, segs.size(), opts);
-
-        // Child counts for the terminalOnly filter (leaves only on chain tips).
-        std::vector<int> childCount(segs.size(), 0);
-        for (size_t i = 0; i < segs.size(); ++i) {
-            int p = segs[i].parent;
-            if (p >= 0 && static_cast<size_t>(p) < segs.size()) ++childCount[p];
-        }
-
-        std::vector<float> packed;    // per-segment records (8 floats each)
-        std::vector<float> instSeg;   // per-leaf segment index (into packed)
-        packed.reserve(segs.size() * 8);
-        float bmin[3] = { 1e30f, 1e30f, 1e30f };
-        float bmax[3] = { -1e30f, -1e30f, -1e30f };
-
-        for (size_t i = 0; i < segs.size(); ++i) {
-            const auto& s = segs[i];
-            bromath::Vec3 d = s.to - s.from;
-            float len = bromath::vlen(d);
-            if (len < 1e-6f) continue;
-            if (s.depth < opts.minDepth) continue;
-            if (s.radius > 0.0f && s.radius > opts.maxRadius) continue;
-            if (opts.terminalOnly && childCount[i] > 0) continue;
-
-            float weight = 1.0f;
-            if (!opts.densityWeight.empty()) {
-                weight = (i < opts.densityWeight.size())
-                             ? std::max(0.0f, opts.densityWeight[i]) : 0.0f;
-            }
-            if (weight <= 0.0f) continue;
-
-            // Stochastic round of the expected count, deterministic per segment
-            // (splitmix-style hash for the fractional carry).
-            float expected = len * opts.perUnitLength * weight;
-            uint64_t h = opts.seed ^ (static_cast<uint64_t>(i) * 0x9E3779B97F4A7C15ULL);
-            h ^= h >> 30; h *= 0xBF58476D1CE4E5B9ULL; h ^= h >> 27;
-            float frac = static_cast<float>((h >> 40) * (1.0 / 16777216.0));
-            int count = static_cast<int>(std::floor(expected + frac));
-            if (count <= 0) continue;
-            if (count > 4096) count = 4096;   // sanity clamp
-
-            // This packed segment's index, and one instSeg entry per leaf.
-            float segIdx = static_cast<float>(packed.size() / 8);
-            for (int k = 0; k < count; ++k) instSeg.push_back(segIdx);
-
-            packed.push_back(s.from.x); packed.push_back(s.from.y);
-            packed.push_back(s.from.z); packed.push_back(s.radius);
-            packed.push_back(d.x); packed.push_back(d.y);
-            packed.push_back(d.z); packed.push_back(0.0f);  // reserved
-
-            float tox = s.to.x, toy = s.to.y, toz = s.to.z;
-            bmin[0] = std::min({ bmin[0], s.from.x, tox });
-            bmin[1] = std::min({ bmin[1], s.from.y, toy });
-            bmin[2] = std::min({ bmin[2], s.from.z, toz });
-            bmax[0] = std::max({ bmax[0], s.from.x, tox });
-            bmax[1] = std::max({ bmax[1], s.from.y, toy });
-            bmax[2] = std::max({ bmax[2], s.from.z, toz });
-        }
-
-        size_t segCount = packed.size() / 8;
-        JSValue obj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, obj, "segments",
-                          makeFloat32Array(ctx, packed.empty() ? nullptr : packed.data(),
-                                           packed.size()));
-        JS_SetPropertyStr(ctx, obj, "instSeg",
-                          makeFloat32Array(ctx, instSeg.empty() ? nullptr : instSeg.data(),
-                                           instSeg.size()));
-        JS_SetPropertyStr(ctx, obj, "segCount", JS_NewInt64(ctx, (int64_t)segCount));
-        JS_SetPropertyStr(ctx, obj, "instanceCount", JS_NewInt64(ctx, (int64_t)instSeg.size()));
-        if (segCount == 0) { bmin[0]=bmin[1]=bmin[2]=bmax[0]=bmax[1]=bmax[2]=0.0f; }
-        JSValue bminA = JS_NewArray(ctx), bmaxA = JS_NewArray(ctx);
-        for (int i = 0; i < 3; ++i) {
-            JS_SetPropertyUint32(ctx, bminA, i, JS_NewFloat64(ctx, bmin[i]));
-            JS_SetPropertyUint32(ctx, bmaxA, i, JS_NewFloat64(ctx, bmax[i]));
-        }
-        JS_SetPropertyStr(ctx, obj, "boundsMin", bminA);
-        JS_SetPropertyStr(ctx, obj, "boundsMax", bmaxA);
-        return obj;
-    })
-
-    // Compact per-segment tube buffer for the GPU branch-tube node. Returns
-    // { segments: Float32Array (segCount*8: [from.xyz, radiusFrom, to.xyz,
-    // radiusTo]), segCount, boundsMin, boundsMax }. radiusFrom is the parent
-    // segment's radius (pipe-model taper toward the root); radiusTo is the
-    // segment's own radius. Feed it (spread with { sides, radiusScale }) to
-    // createInstancedMesh({ tube }) / node.setTubeSegments(). See
-    // shaders/branch_tube.vert. opts.minRadius drops hair-thin twigs (default 0).
-    .method("emitBranchTubes", [](FWW* w, JSContext* ctx, JSValueConst optsVal) -> JSValue {
-        auto segs = broflora::emitWorldSegments(*w->world);
-
-        float minRadius = 0.0f;
-        if (JS_IsObject(optsVal))
-            minRadius = (float)qjsbind::get_prop_number(ctx, optsVal, "minRadius", 0.0);
-
-        std::vector<float> packed;   // per-segment records (8 floats each)
-        packed.reserve(segs.size() * 8);
-        float bmin[3] = { 1e30f, 1e30f, 1e30f };
-        float bmax[3] = { -1e30f, -1e30f, -1e30f };
-        float maxR = 0.0f;
-
-        for (size_t i = 0; i < segs.size(); ++i) {
-            const auto& s = segs[i];
-            bromath::Vec3 d = s.to - s.from;
-            if (bromath::vlen(d) < 1e-6f) continue;
-            if (s.radius < minRadius) continue;
-
-            // Pipe-model taper: base radius = parent's radius (thicker toward
-            // the root), tip radius = this segment's own radius.
-            float rTo = s.radius;
-            float rFrom = rTo;
-            int p = s.parent;
-            if (p >= 0 && static_cast<size_t>(p) < segs.size() && segs[p].radius > 0.0f)
-                rFrom = segs[p].radius;
-
-            packed.push_back(s.from.x); packed.push_back(s.from.y);
-            packed.push_back(s.from.z); packed.push_back(rFrom);
-            packed.push_back(s.to.x);   packed.push_back(s.to.y);
-            packed.push_back(s.to.z);   packed.push_back(rTo);
-
-            maxR = std::max({ maxR, rFrom, rTo });
-            bmin[0] = std::min({ bmin[0], s.from.x, s.to.x });
-            bmin[1] = std::min({ bmin[1], s.from.y, s.to.y });
-            bmin[2] = std::min({ bmin[2], s.from.z, s.to.z });
-            bmax[0] = std::max({ bmax[0], s.from.x, s.to.x });
-            bmax[1] = std::max({ bmax[1], s.from.y, s.to.y });
-            bmax[2] = std::max({ bmax[2], s.from.z, s.to.z });
-        }
-
-        size_t segCount = packed.size() / 8;
-        if (segCount == 0) {
-            bmin[0]=bmin[1]=bmin[2]=bmax[0]=bmax[1]=bmax[2]=0.0f;
-        } else {
-            for (int i = 0; i < 3; ++i) { bmin[i] -= maxR; bmax[i] += maxR; }
-        }
-
-        JSValue obj = JS_NewObject(ctx);
-        JS_SetPropertyStr(ctx, obj, "segments",
-                          makeFloat32Array(ctx, packed.empty() ? nullptr : packed.data(),
-                                           packed.size()));
-        JS_SetPropertyStr(ctx, obj, "segCount", JS_NewInt64(ctx, (int64_t)segCount));
-        JSValue bminA = JS_NewArray(ctx), bmaxA = JS_NewArray(ctx);
-        for (int i = 0; i < 3; ++i) {
-            JS_SetPropertyUint32(ctx, bminA, i, JS_NewFloat64(ctx, bmin[i]));
-            JS_SetPropertyUint32(ctx, bmaxA, i, JS_NewFloat64(ctx, bmax[i]));
-        }
-        JS_SetPropertyStr(ctx, obj, "boundsMin", bminA);
-        JS_SetPropertyStr(ctx, obj, "boundsMax", bmaxA);
-        return obj;
-    })
-
-    // -- fast native C++ branch segment transform buffer for InstancedMeshNode --
-    .method("emitSegmentTransforms", [](FWW* w, JSContext* ctx) -> JSValue {
-        auto segs = broflora::emitWorldSegments(*w->world);
-        if (segs.empty()) {
-            return makeFloat32Array(ctx, nullptr, 0);
-        }
-        size_t count = segs.size();
-        std::vector<float> transforms(count * 16);
-
-        #pragma omp parallel for schedule(static) if(count > 64)
-        for (int i = 0; i < static_cast<int>(count); ++i) {
-            const auto& seg = segs[static_cast<size_t>(i)];
-            bromath::Vec3 d = seg.to - seg.from;
-            float len = bromath::vlen(d);
-            if (len < 1e-6f) len = 1e-6f;
-            bromath::Vec3 fwd = d * (1.0f / len);
-
-            bromath::Vec3 worldUp{0, 1, 0};
-            bromath::Vec3 side = bromath::vcross(fwd, worldUp);
-            if (bromath::vdot(side, side) < 1e-8f) {
-                side = bromath::vcross(fwd, bromath::Vec3{1, 0, 0});
-            }
-            side = bromath::vnorm(side);
-            bromath::Vec3 up = bromath::vnorm(bromath::vcross(side, fwd));
-
-            float r = seg.radius > 0.001f ? seg.radius : 0.001f;
-            bromath::Vec3 origin = seg.from;
-
-            float* o = transforms.data() + static_cast<size_t>(i) * 16;
-            o[0] = side.x * r;  o[1] = up.x * r;  o[2] = fwd.x * len;  o[3] = origin.x;
-            o[4] = side.y * r;  o[5] = up.y * r;  o[6] = fwd.y * len;  o[7] = origin.y;
-            o[8] = side.z * r;  o[9] = up.z * r;  o[10] = fwd.z * len; o[11] = origin.z;
-            o[12] = 1.0f;       o[13] = 1.0f;      o[14] = 1.0f;       o[15] = 1.0f;
-        }
-
-        return makeFloat32Array(ctx, transforms.data(), count * 16);
-    })
-
-    .method("emitPlantFoliageMesh", [](FWW* w, JSContext* ctx, int plantIdx, JSValueConst leafVal, JSValueConst optsVal) -> JSValue {
-        if (plantIdx < 0 || (size_t)plantIdx >= w->world->plants.size()) return JS_NULL;
-        auto* lw = MeshBindings::getMeshData(ctx, leafVal);
-        if (!lw || lw->empty()) return JS_ThrowTypeError(ctx, "emitPlantFoliageMesh requires valid leaf Mesh");
-
-        const auto& plant = w->world->plants[(size_t)plantIdx];
-        auto segs = broflora::emitPlantSegments(plant);
-        if (segs.empty()) {
-            return MeshBindings::wrapMeshData(ctx, std::make_unique<bromesh::MeshData>());
-        }
-        auto samples = broflora::emitPlantFoliage(plant);
-
-        bromesh::LeafPlacementOptions opts;
-        if (JS_IsObject(optsVal)) readLeafPlacementOptions(ctx, optsVal, opts);
-
-        fillFoliageDensity(samples, segs.size(), opts);
-
-        auto md = std::make_unique<bromesh::MeshData>(
-            bromesh::scatterLeaves(segs, *lw, opts));
-        return MeshBindings::wrapMeshData(ctx, std::move(md));
-    })
-
-    // -- bloom anchors --
-    .method("emitBloomAnchors", [](FWW* w, JSContext* ctx) -> JSValue {
-        auto anchors = broflora::emitWorldBloomAnchors(*w->world);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < anchors.size(); ++i) {
-            const auto& a = anchors[i];
-            JSValue o = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, o, "position",     makeVec3(ctx, a.position));
-            JS_SetPropertyStr(ctx, o, "normal",       makeVec3(ctx, a.normal));
-            JS_SetPropertyStr(ctx, o, "age01",        JS_NewFloat64(ctx, a.age01));
-            JS_SetPropertyStr(ctx, o, "vigor01",      JS_NewFloat64(ctx, a.vigor01));
-            JS_SetPropertyStr(ctx, o, "lightExposure01", JS_NewFloat64(ctx, a.lightExposure01));
-            JS_SetPropertyStr(ctx, o, "senescence01", JS_NewFloat64(ctx, a.senescence01));
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
-        }
-        return arr;
-    })
-
-    // -- fast native C++ bloom mesh emitter --
-    .method("emitBloomMesh", [](FWW* w, JSContext* ctx, JSValueConst petalVal, JSValueConst centerVal, JSValueConst optsVal) -> JSValue {
-        auto* pw = MeshBindings::getMeshData(ctx, petalVal);
-        auto* cw = MeshBindings::getMeshData(ctx, centerVal);
-        if (!pw || pw->empty()) return JS_ThrowTypeError(ctx, "emitBloomMesh requires valid petal Mesh");
-
-        auto anchors = broflora::emitWorldBloomAnchors(*w->world);
-        if (anchors.empty()) {
-            JSValue arr = JS_NewArray(ctx);
-            JS_SetPropertyUint32(ctx, arr, 0, MeshBindings::wrapMeshData(ctx, std::make_unique<bromesh::MeshData>()));
-            JS_SetPropertyUint32(ctx, arr, 1, MeshBindings::wrapMeshData(ctx, std::make_unique<bromesh::MeshData>()));
-            return arr;
-        }
-
-        uint32_t bloomCap = 500;
-        float bloomLightMin = 0.18f;
-        if (JS_IsObject(optsVal)) {
-            readUint32Field(ctx, optsVal, "bloomCap", bloomCap);
-            readFloatField(ctx, optsVal, "bloomLightMin", bloomLightMin);
-        }
-        if (bloomCap == 0) bloomCap = 1;
-
-        size_t stride = (anchors.size() > bloomCap) ? (anchors.size() + bloomCap - 1) / bloomCap : 1;
-
-        auto mergedPetals = std::make_unique<bromesh::MeshData>();
-        auto mergedCenters = std::make_unique<bromesh::MeshData>();
-
-        auto appendTransformed = [](bromesh::MeshData& target, const bromesh::MeshData& src,
-                                    const bromath::Vec3& pos, const bromath::Vec3& norm, float scale) {
-            if (src.empty()) return;
-            uint32_t baseIndex = static_cast<uint32_t>(target.vertexCount());
-            size_t nv = src.vertexCount();
-
-            bromath::Vec3 n = norm;
-            float len = std::hypot(n.x, std::hypot(n.y, n.z));
-            if (len > 1e-6f) { n.x /= len; n.y /= len; n.z /= len; }
-            else { n = {0.0f, 1.0f, 0.0f}; }
-
-            float ny = std::max(-1.0f, std::min(1.0f, n.y));
-            float ang = std::acos(ny);
-            bromath::Vec3 axis{1.0f, 0.0f, 0.0f};
-            if (ang >= 1e-4f) {
-                if (ang > 3.14159265f - 1e-4f) {
-                    axis = {1.0f, 0.0f, 0.0f};
-                } else {
-                    axis = {n.z, 0.0f, -n.x};
-                    float al = std::hypot(axis.x, axis.z);
-                    if (al > 1e-6f) { axis.x /= al; axis.z /= al; }
-                    else { axis = {1.0f, 0.0f, 0.0f}; }
-                }
-            }
-
-            float c = std::cos(ang), s = std::sin(ang);
-            float omc = 1.0f - c;
-            float R[3][3] = {
-                { c + axis.x*axis.x*omc,          axis.x*axis.y*omc - axis.z*s, axis.x*axis.z*omc + axis.y*s },
-                { axis.y*axis.x*omc + axis.z*s,  c + axis.y*axis.y*omc,          axis.y*axis.z*omc - axis.x*s },
-                { axis.z*axis.x*omc - axis.y*s,  axis.z*axis.y*omc + axis.x*s,  c + axis.z*axis.z*omc          }
-            };
-
-            target.positions.reserve(target.positions.size() + nv * 3);
-            target.normals.reserve(target.normals.size() + nv * 3);
-            if (!src.uvs.empty()) target.uvs.reserve(target.uvs.size() + src.uvs.size());
-            target.indices.reserve(target.indices.size() + src.indices.size());
-
-            for (size_t i = 0; i < nv; ++i) {
-                float px = src.positions[i * 3] * scale;
-                float py = src.positions[i * 3 + 1] * scale;
-                float pz = src.positions[i * 3 + 2] * scale;
-
-                float rx = R[0][0]*px + R[0][1]*py + R[0][2]*pz + pos.x;
-                float ry = R[1][0]*px + R[1][1]*py + R[1][2]*pz + pos.y;
-                float rz = R[2][0]*px + R[2][1]*py + R[2][2]*pz + pos.z;
-
-                target.positions.push_back(rx);
-                target.positions.push_back(ry);
-                target.positions.push_back(rz);
-
-                if (src.hasNormals()) {
-                    float nx = src.normals[i * 3];
-                    float ny_ = src.normals[i * 3 + 1];
-                    float nz = src.normals[i * 3 + 2];
-                    float rnx = R[0][0]*nx + R[0][1]*ny_ + R[0][2]*nz;
-                    float rny = R[1][0]*nx + R[1][1]*ny_ + R[1][2]*nz;
-                    float rnz = R[2][0]*nx + R[2][1]*ny_ + R[2][2]*nz;
-                    target.normals.push_back(rnx);
-                    target.normals.push_back(rny);
-                    target.normals.push_back(rnz);
-                } else {
-                    target.normals.push_back(0.0f);
-                    target.normals.push_back(1.0f);
-                    target.normals.push_back(0.0f);
-                }
-
-                if (src.hasUVs()) {
-                    target.uvs.push_back(src.uvs[i * 2]);
-                    target.uvs.push_back(src.uvs[i * 2 + 1]);
-                }
-            }
-
-            for (size_t i = 0; i < src.indices.size(); ++i) {
-                target.indices.push_back(baseIndex + src.indices[i]);
-            }
-        };
-
-        for (size_t i = 0; i < anchors.size(); i += stride) {
-            const auto& a = anchors[i];
-            if (a.lightExposure01 < bloomLightMin) continue;
-            float s = 0.8f + 0.5f * std::min(1.0f, a.age01);
-
-            appendTransformed(*mergedPetals, *pw, a.position, a.normal, s);
-
-            if (cw && !cw->empty()) {
-                float lift = 0.012f * s;
-                bromath::Vec3 cPos = {
-                    a.position.x + a.normal.x * lift,
-                    a.position.y + a.normal.y * lift,
-                    a.position.z + a.normal.z * lift
-                };
-                appendTransformed(*mergedCenters, *cw, cPos, a.normal, s);
-            }
-        }
-
-        JSValue arr = JS_NewArray(ctx);
-        JS_SetPropertyUint32(ctx, arr, 0, MeshBindings::wrapMeshData(ctx, std::move(mergedPetals)));
-        JS_SetPropertyUint32(ctx, arr, 1, MeshBindings::wrapMeshData(ctx, std::move(mergedCenters)));
-        return arr;
-    })
-
-    // -- per-plant emit (parallel to the world-level ones above) -----------
-    // All four return null when plantIdx is out of range; the array forms
-    // return an empty array for valid-but-empty plants (no segments yet,
-    // pre-flowering for blooms, etc).
-
-    .method("emitPlantMesh", [](FWW* w, JSContext* ctx, int plantIdx, int sides) -> JSValue {
-        if (plantIdx < 0 || (size_t)plantIdx >= w->world->plants.size()) return JS_NULL;
-        uint32_t s = (sides >= 3) ? (uint32_t)sides : 6u;
-        auto md = std::make_unique<bromesh::MeshData>(
-            broflora::emitPlantMesh(w->world->plants[(size_t)plantIdx], s));
-        return MeshBindings::wrapMeshData(ctx, std::move(md));
-    })
-
-    .method("emitPlantSegments", [](FWW* w, JSContext* ctx, int plantIdx) -> JSValue {
-        if (plantIdx < 0 || (size_t)plantIdx >= w->world->plants.size()) return JS_NULL;
-        auto segs = broflora::emitPlantSegments(w->world->plants[(size_t)plantIdx]);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < segs.size(); ++i) {
-            const auto& s = segs[i];
-            JSValue o = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, o, "from",   makeVec3(ctx, s.from));
-            JS_SetPropertyStr(ctx, o, "to",     makeVec3(ctx, s.to));
-            JS_SetPropertyStr(ctx, o, "radius", JS_NewFloat64(ctx, s.radius));
-            JS_SetPropertyStr(ctx, o, "depth",  JS_NewInt32(ctx, (int32_t)s.depth));
-            JS_SetPropertyStr(ctx, o, "parent", JS_NewInt32(ctx, (int32_t)s.parent));
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
-        }
-        return arr;
-    })
-
-    .method("emitPlantFoliage", [](FWW* w, JSContext* ctx, int plantIdx) -> JSValue {
-        if (plantIdx < 0 || (size_t)plantIdx >= w->world->plants.size()) return JS_NULL;
-        auto samples = broflora::emitPlantFoliage(w->world->plants[(size_t)plantIdx]);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < samples.size(); ++i) {
-            const auto& s = samples[i];
-            JSValue o = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, o, "mass",         JS_NewFloat64(ctx, s.mass));
-            JS_SetPropertyStr(ctx, o, "age01",        JS_NewFloat64(ctx, s.age01));
-            JS_SetPropertyStr(ctx, o, "vigor01",      JS_NewFloat64(ctx, s.vigor01));
-            JS_SetPropertyStr(ctx, o, "light01",      JS_NewFloat64(ctx, s.light01));
-            JS_SetPropertyStr(ctx, o, "lightExposure01", JS_NewFloat64(ctx, s.lightExposure01));
-            JS_SetPropertyStr(ctx, o, "senescence01", JS_NewFloat64(ctx, s.senescence01));
-            JS_SetPropertyStr(ctx, o, "isTerminal",   JS_NewBool(ctx, s.isTerminal));
-            JS_SetPropertyStr(ctx, o, "twigGrade01", JS_NewFloat64(ctx, s.twigGrade01));
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
-        }
-        return arr;
-    })
-
-    .method("emitPlantBloomAnchors", [](FWW* w, JSContext* ctx, int plantIdx) -> JSValue {
-        if (plantIdx < 0 || (size_t)plantIdx >= w->world->plants.size()) return JS_NULL;
-        auto anchors = broflora::emitPlantBloomAnchors(w->world->plants[(size_t)plantIdx]);
-        JSValue arr = JS_NewArray(ctx);
-        for (size_t i = 0; i < anchors.size(); ++i) {
-            const auto& a = anchors[i];
-            JSValue o = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, o, "position",     makeVec3(ctx, a.position));
-            JS_SetPropertyStr(ctx, o, "normal",       makeVec3(ctx, a.normal));
-            JS_SetPropertyStr(ctx, o, "age01",        JS_NewFloat64(ctx, a.age01));
-            JS_SetPropertyStr(ctx, o, "vigor01",      JS_NewFloat64(ctx, a.vigor01));
-            JS_SetPropertyStr(ctx, o, "lightExposure01", JS_NewFloat64(ctx, a.lightExposure01));
-            JS_SetPropertyStr(ctx, o, "senescence01", JS_NewFloat64(ctx, a.senescence01));
-            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, o);
-        }
-        return arr;
-    })
 
     // -- per-plant inspect -------------------------------------------------
     // Snapshot of a plant's runtime state + a copy of every Species field.
@@ -1069,8 +298,7 @@ void FloraBindings::install(JSContext* ctx) {
     JSValue createFn = JS_NewCFunction(ctx, createWorld, "createWorld", 1);
     JS_SetPropertyStr(ctx, floraObj, "createWorld", createFn);
 
-    // bro.flora.prototypes.{straight,fork,whorl} — ready-made specs that
-    // drop straight into world.addPrototype(...).
+    // bro.flora.prototypes.* — ready-made specs that drop straight into world.addPrototype(...).
     JSValue protos = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, protos, "straight",
                       JS_NewCFunction(ctx, protoStraight, "straight", 0));
@@ -1078,6 +306,16 @@ void FloraBindings::install(JSContext* ctx) {
                       JS_NewCFunction(ctx, protoFork, "fork", 0));
     JS_SetPropertyStr(ctx, protos, "whorl",
                       JS_NewCFunction(ctx, protoWhorl, "whorl", 2));
+    JS_SetPropertyStr(ctx, protos, "monopodial",
+                      JS_NewCFunction(ctx, protoMonopodial, "monopodial", 2));
+    JS_SetPropertyStr(ctx, protos, "sympodial",
+                      JS_NewCFunction(ctx, protoSympodial, "sympodial", 2));
+    JS_SetPropertyStr(ctx, protos, "horizontalTier",
+                      JS_NewCFunction(ctx, protoHorizontalTier, "horizontalTier", 2));
+    JS_SetPropertyStr(ctx, protos, "tier",
+                      JS_NewCFunction(ctx, protoHorizontalTier, "tier", 2));
+    JS_SetPropertyStr(ctx, protos, "weeping",
+                      JS_NewCFunction(ctx, protoWeeping, "weeping", 2));
     JS_SetPropertyStr(ctx, floraObj, "prototypes", protos);
 
     JS_FreeValue(ctx, floraObj);
