@@ -62,10 +62,10 @@ bh_find_bronze() {
 }
 
 # The import library a module links against. bronze's own search
-# (src/cli/link.cpp) looks beside the CLI and one or two directories up, which
-# finds it in a single-config tree and misses it under a multi-config generator
-# ? there the library is one level deeper, in shared/<Config>/. So the path is
-# passed explicitly rather than left to chance.
+# (src/cli/link.cpp) probes the per-config subdirectory a multi-config generator
+# appends, so a plain `bronze build` in this tree now finds it unaided. The path
+# is still passed explicitly: it pins WHICH build's runtime a check links
+# against, which matters in a tree that has more than one.
 bh_find_shared_rt_lib() {
     local project_dir="$1" candidate
     for candidate in \

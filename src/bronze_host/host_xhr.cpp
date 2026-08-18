@@ -23,17 +23,18 @@
 // still written against XHR, and because a text asset read is the one network
 // shape a host can honestly provide today.
 //
-// RESPONSE TYPES. Only '' and 'text' are served. 'arraybuffer', 'blob',
-// 'json' and 'document' each need something the embed API cannot build: an
-// ArrayBuffer or typed array (embed.h reads them, and has no constructor for
-// one), or a call into a JS intrinsic (JSON.parse). Each is a named refusal on
-// assignment rather than a request that silently answers null.
+// RESPONSE TYPES. Only '' and 'text' are served, and this is now a gap rather
+// than a limit. Every piece the other four needed has since arrived:
+// embed::createArrayBuffer and createTypedArray build the buffers 'arraybuffer'
+// and 'blob' want, embed::parseJson (or globalValue("JSON") + call) serves
+// 'json', and 'document' has a parser in this very layer (host_parser.cpp).
+// Until they are written, each is a named refusal on assignment rather than a
+// request that silently answers null.
 //
-// TRANSPORT. Local files only, through the shared app-path rules
-// (js/asset_path.h). http(s) belongs to brokit, which is QuickJS-native — a
-// bronze-side network client is a chunk of its own, and pretending otherwise
-// with a stub would fail at the point of use rather than the point of the
-// mistake.
+// TRANSPORT. Local files through the shared app-path rules (js/asset_path.h),
+// plus http(s) through util::fetchRemoteCached — the same remote-asset path
+// fetch uses, so the two agree about what a URL means and about what is
+// cached.
 
 #include "bronze_host/host_internal.h"
 #include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt
@@ -275,11 +276,10 @@ Value makeXhrValue() {
                        s->responseType = want;
                        return ev::undefined();
                    }
-                   // Named, with the reason: 'arraybuffer' and 'blob' need an
-                   // ArrayBuffer this layer cannot construct (embed.h reads
-                   // typed arrays and has no constructor for one), 'json' needs
-                   // a call into the JSON intrinsic, and 'document' needs a
-                   // parser. Throwing beats accepting and answering null later.
+                   // Named rather than silently accepted: see the file
+                   // header — all four are buildable now and none is written,
+                   // so throwing at the assignment beats accepting it and
+                   // answering null at the point of use.
                    return ev::throwTypeError(
                        "XMLHttpRequest.responseType '" + want +
                        "' is not served by the bronze host; only '' and 'text' are");

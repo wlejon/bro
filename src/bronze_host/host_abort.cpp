@@ -18,14 +18,16 @@
 // to be freed by this object's handle finalizer, and a finalizer may not call
 // into the embed API.
 //
-// TWO SHAPES THE WEB HAS THAT THIS CANNOT. `AbortSignal.abort()` and
-// `AbortSignal.timeout()` are statics on a constructor, and a host cannot put a
-// property on a function value — both routes abort the process rather than
-// throwing — see the same note in host_file.cpp, where `URL` pays it too. So
-// `AbortSignal` is a plain namespace
-// object here. That costs less than it did for URL: `new AbortSignal()` is
-// illegal on the web anyway, so the only thing lost is `x instanceof
-// AbortSignal`, which is false for every host object in this layer already.
+// TWO SHAPES THE WEB HAS THAT THIS DOES NOT. `AbortSignal.abort()` and
+// `AbortSignal.timeout()` are statics on a constructor, and `AbortSignal` is a
+// plain namespace object here instead. That was once forced — a host could not
+// put a property on a function value at all — and is now merely unconverted:
+// embed::setProperty takes a FUNCTION receiver, so the constructor-with-statics
+// shape is buildable whenever someone wants it, here and for `URL` in
+// host_file.cpp. It costs little either way: `new AbortSignal()` is illegal on
+// the web anyway, so the only thing lost is `x instanceof AbortSignal` — and
+// that stays false regardless, because `prototype` is the one property a host
+// function still cannot be given.
 //
 // And `reason` is a plain `{name, message}` object where the web hands you a
 // DOMException. bronze cannot build a value on a chosen prototype; `e.name ===

@@ -274,11 +274,11 @@ Value makePrompt() {
 // A plain named OBJECT, not a function — see the note at the top of this file
 // for why a name that merely RESOLVES is the whole job.
 //
-// An object rather than a stub constructor because a host function cannot carry
-// properties (embed::setProperty takes a plain object receiver) and cannot be
-// given a `.prototype`. Without a prototype, `x instanceof Fn` is a TypeError
-// anyway — so nothing is lost by being an object, and `Node.TEXT_NODE` is
-// gained.
+// An object rather than a stub constructor. A host function CAN carry
+// properties now (embed::setProperty takes a function receiver), but it still
+// cannot be given a `.prototype` — that one is refused by name — and without a
+// prototype `x instanceof Fn` is a TypeError rather than false. So an object
+// loses nothing that a function would win, and `Node.TEXT_NODE` is gained.
 Value makeInterfaceValue(const char* name) {
     ObjectBuilder b;
     b.set("name", ev::fromUtf8(name));

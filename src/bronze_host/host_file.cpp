@@ -574,10 +574,13 @@ Value makeURLValue(const ParsedURL& u) {
                                      : u.protocol + "//" + u.hostname +
                                            (u.port.empty() ? "" : ":" + u.port)));
 
-    // searchParams, as a snapshot rather than a live view: the embed API has no
-    // property trap, and a URLSearchParams whose set() did not write back to
-    // the URL would be worse than one that plainly reads. get/has/getAll cover
-    // what a library asks of it.
+    // searchParams, as a snapshot rather than a live view. That was forced
+    // when the embed API had no property trap; it no longer is — makeHostProxy
+    // (host_proxy.cpp) is what `dataset` is built on and would serve a live
+    // URLSearchParams too. It stays a snapshot until someone needs the live
+    // one, because a URLSearchParams whose set() did not write back to the URL
+    // would be worse than one that plainly reads. get/has/getAll cover what a
+    // library asks of it.
     {
         std::vector<std::pair<std::string, std::string>> pairs;
         if (u.search.size() > 1) {
@@ -689,27 +692,22 @@ void installFileGlobals() {
     // URL IS A NAMESPACE HERE, NOT A CONSTRUCTOR — `new URL(href)` does not
     // work and `URL.parse(href, base)` does.
     //
-    // On the web URL is both: callable, and carrying createObjectURL. The host
-    // cannot build that. embed::setProperty calls fatal() on any receiver that
-    // is not a plain object, and the obvious way around it — the program's own
-    // Object.assign, reached through a throwaway object's constructor — is a
-    // HARD RUNTIME ERROR in bronze, aborting the process rather than throwing
-    // something a fallback could catch:
+    // On the web URL is both: callable, and carrying createObjectURL. This was
+    // once unbuildable — embed::setProperty called fatal() on any receiver that
+    // was not a plain object, and the way round it (the program's own
+    // Object.assign) was a hard runtime error rather than a catchable throw, so
+    // there was no probing at startup and degrading. That is fixed: setProperty
+    // takes a FUNCTION receiver now, landing the definition where a class
+    // `static` member's would, so the callable-URL-with-statics shape is
+    // available whenever this is converted.
     //
-    //     unsupported: Object.assign on a function (its own keys come from
-    //     three places — a `prototype` slot, a `length` and a `name` in the
-    //     header, and a side object of statics — and only the last is a shape
-    //     a descriptor could be written to)
-    //
-    // So there is no probing it at startup and degrading: a host that tries
-    // takes the process down. Of the two halves, the statics are the ones that
-    // cannot be spelled any other way — createObjectURL is why this family
-    // exists — while the constructor has an exact standard equivalent in
-    // `URL.parse`, which is a real 2024 addition to the web platform and
-    // answers null instead of throwing. What would close it on the bronze side
-    // is a way to hang a property on a function value at all — an
-    // `embed::setStatic`, or the general `construct` that would also let a host
-    // build the constructor itself.
+    // It has not been, because the namespace costs almost nothing. The statics
+    // are the half that cannot be spelled any other way — createObjectURL is
+    // why this family exists — and they work as plain properties of a plain
+    // object. The constructor has an exact standard equivalent in `URL.parse`,
+    // a real 2024 addition to the web platform that answers null instead of
+    // throwing. What converting WOULD buy is `x instanceof URL`, and that is
+    // precisely what it cannot buy: `prototype` stays refused by name.
     ObjectBuilder ns;
     ns.set("createObjectURL", makeCreateObjectURL());
     ns.set("revokeObjectURL", makeRevokeObjectURL());
