@@ -1,5 +1,6 @@
 #include "js/window_bindings.h"
 #include "js/event_dispatch.h"
+#include "platform/clipboard.h"
 #include "platform/event_loop.h"
 #include "platform/sdl_window.h"
 #include "util/log.h"
@@ -12,7 +13,6 @@
 #include <limits>
 #include <unordered_map>
 
-#include <SDL3/SDL_clipboard.h>
 #include <SDL3/SDL_misc.h>   // SDL_OpenURL
 #include <SDL3/SDL_power.h>  // SDL_GetPowerInfo
 #include <SDL3/SDL_stdinc.h> // SDL_free
@@ -89,7 +89,7 @@ static JSValue js_clipboard_write(JSContext* ctx, JSValueConst /*this_val*/,
                                   int argc, JSValueConst* argv)
 {
     const char* text = argc > 0 ? JS_ToCString(ctx, argv[0]) : nullptr;
-    bool ok = SDL_SetClipboardText(text ? text : "");
+    bool ok = bro::platform::setClipboardText(text ? text : "");
     if (text) JS_FreeCString(ctx, text);
     return JS_NewBool(ctx, ok);
 }
@@ -97,10 +97,10 @@ static JSValue js_clipboard_write(JSContext* ctx, JSValueConst /*this_val*/,
 static JSValue js_clipboard_read(JSContext* ctx, JSValueConst /*this_val*/,
                                  int /*argc*/, JSValueConst* /*argv*/)
 {
-    char* text = SDL_GetClipboardText(); // never NULL — "" on empty/failure
-    JSValue s = JS_NewString(ctx, text ? text : "");
-    if (text) SDL_free(text);
-    return s;
+    // Retried: an unretried read answers "" for a clipboard it merely
+    // could not open, which reads back as an empty clipboard.
+    const std::string text = bro::platform::getClipboardText();
+    return JS_NewString(ctx, text.c_str());
 }
 
 // ---------------------------------------------------------------------------

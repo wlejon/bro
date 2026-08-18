@@ -197,10 +197,19 @@ public:
     void handleProgrammaticFocus(dom::Document* doc, dom::Element* oldEl,
                                  dom::Element* newEl);
 
-    // Clipboard simulation (for headless testing — bypasses system clipboard)
+    // Clipboard simulation (for headless testing — these do not touch the
+    // system clipboard themselves; `execCommand` is what pairs them with it)
     void simulatePaste(const std::string& text);
     std::string simulateCopy();
-    std::string simulateCut();
+    // `commit` is handed the text as soon as it is known and BEFORE
+    // anything is deleted; returning false abandons the cut and answers
+    // with an empty string. That is the ordering a clipboard cut needs:
+    // the system clipboard can refuse a write (see
+    // platform::setClipboardText), and a cut that deleted anyway would be
+    // the text gone with nowhere to paste it back from. Headless `cut()`
+    // passes nothing and keeps the old behaviour.
+    std::string simulateCut(
+        const std::function<bool(const std::string&)>& commit = {});
 
     bool execCommand(const std::string& name, bool showUI,
                      const std::string& value);

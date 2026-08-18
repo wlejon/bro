@@ -3,6 +3,7 @@
 
 #include "engine/engine.h"
 #include "engine/key_mapping.h"
+#include "platform/clipboard.h"
 #include "engine/overflow.h"
 #include "engine/overlay.h"
 #include "engine/input_common.h"
@@ -2689,9 +2690,7 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
 
         if (keycode == SDLK_V) {
             // Paste: read system clipboard, dispatch paste event
-            char* clipText = SDL_GetClipboardText();
-            std::string text = clipText ? clipText : "";
-            SDL_free(clipText);
+            std::string text = platform::getClipboardText();
 
             dom::ClipboardEvent pasteEvt("paste", true, true);
             pasteEvt.setClipboardText(text);
@@ -2786,9 +2785,11 @@ void Engine::handleKeyDown(int keycode, int scancode, int mod, bool repeat) {
             clipEvt.setIsTrusted(true);
             dispatchEvent(target, clipEvt);
 
-            if (!clipEvt.defaultPrevented() && !text.empty()) {
-                SDL_SetClipboardText(text.c_str());
-
+            // The store is part of the condition, so a clipboard that would
+            // not take the text does not get the selection deleted out from
+            // under it either. A refused copy simply does nothing.
+            if (!clipEvt.defaultPrevented() && !text.empty() &&
+                platform::setClipboardText(text)) {
                 // Cut: remove the selected range from the field (the whole value
                 // only if the whole value was selected).
                 if (keycode == SDLK_X && fromFormField && activeEl) {
@@ -3410,19 +3411,23 @@ bool Engine::execCommand(const std::string& name, bool /*showUI*/,
         // key press would, or a following paste sees stale text.
         const std::string text = simulateCopy();
         if (text.empty()) return false;
-        SDL_SetClipboardText(text.c_str());
-        return true;
+        // The write can be refused, and a `copy` that answered true anyway
+        // is a paste of somebody else's text later on.
+        return platform::setClipboardText(text);
     }
     if (cmd == "cut") {
-        const std::string text = simulateCut();
-        if (text.empty()) return false;
-        SDL_SetClipboardText(text.c_str());
-        return true;
+        // Through the commit hook rather than after the fact: the text has
+        // to be on the clipboard before it leaves the document, or a
+        // refused write is data the user cannot get back.
+        bool stored = false;
+        const std::string text = simulateCut([&](const std::string& t) {
+            stored = platform::setClipboardText(t);
+            return stored;
+        });
+        return !text.empty() && stored;
     }
     if (cmd == "paste") {
-        char* clip = SDL_GetClipboardText();
-        const std::string text = clip ? clip : "";
-        SDL_free(clip);
+        const std::string text = platform::getClipboardText();
         if (text.empty()) return false;
         if (!editCaretOf(document_.get())) return false;
         simulatePaste(text);
@@ -3862,7 +3867,8 @@ std::string Engine::simulateCopy() {
     return text;
 }
 
-std::string Engine::simulateCut() {
+std::string Engine::simulateCut(
+        const std::function<bool(const std::string&)>& commit) {
     if (!document_) return "";
 
     auto* activeEl = document_->activeElement();
@@ -3895,6 +3901,11 @@ std::string Engine::simulateCut() {
     clipEvt.setClipboardText(text);
     clipEvt.setIsTrusted(true);
     dispatchEvent(target, clipEvt);
+
+    // Whoever is taking this text gets it before a character is deleted.
+    // If they cannot take it, nothing is cut: the two mutations below are
+    // the only copy of it left.
+    if (commit && !text.empty() && !commit(text)) return std::string();
 
     if (!clipEvt.defaultPrevented() && !text.empty() && activeEl) {
         bool cut = false;

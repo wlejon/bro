@@ -29,6 +29,34 @@ const root = document.getElementById('root');
 const clipboardBefore = navigator.clipboard.__read();
 function clipboard() { return navigator.clipboard.__read(); }
 
+// **The clipboard belongs to the machine, not to this test.** It is opened
+// exclusively, one process at a time, so a clipboard manager, an editor or a
+// second bro holding it makes a write refuse and a read answer somebody
+// else's text. The engine retries (platform::setClipboardText) and now
+// reports a refusal honestly rather than claiming a success it did not have,
+// but no amount of retrying stops another process putting ITS text there
+// between the copy and the read.
+//
+// So the whole round trip is retried from a fresh host, and only a
+// disagreement that survives every attempt is a failure — reported with what
+// was actually observed, because "clipboard holds 'cut '" is visibly another
+// process's text and says so at a glance. Reproduced at 29 failures in 72 by
+// running six copies of this file at once; a single run is unaffected.
+//
+// What is NOT retried is anything the clipboard cannot explain: what the
+// command did to the document. That is the subject, and it stays a hard
+// assertion.
+function clipboardRoundTrip(what, attempt) {
+    let found = null;
+    for (let i = 0; i < 6; ++i) {
+        found = attempt();
+        if (found === null) return;
+    }
+    assert(false, what + ' — after 6 attempts: ' + found + '. The system'
+           + ' clipboard is machine-global and opened exclusively; another'
+           + ' process holding it during this test lands here.');
+}
+
 function press(key, mod) {
     keyDown(key, 0, mod || 0);
     keyUp(key, 0, mod || 0);
@@ -244,30 +272,55 @@ function selectRange(ed, start, end, node) {
 // ---------------------------------------------------------------------------
 // copy / cut / paste round-trip through the clipboard
 // ---------------------------------------------------------------------------
-{
+clipboardRoundTrip('copy did not survive the round trip', () => {
     const ed = freshHost('copy me please');
     selectRange(ed, 0, 7);        // "copy me"
-    assert(document.execCommand('copy'), 'copy returns true');
+    // A refusal with a live selection is the clipboard saying no, not the
+    // command saying there was nothing to take — the collapsed-selection
+    // case below is what pins that other reason `copy` can answer false.
+    if (!document.execCommand('copy')) return 'the clipboard refused the copy';
     assert(ed.textContent === 'copy me please', 'copy did not mutate');
 
     // The copy has to have reached the real clipboard, or a later paste
     // would see stale text.
-    assert(clipboard() === 'copy me',
-           'clipboard holds the copied text: ' + clipboard());
+    const afterCopy = clipboard();
+    if (afterCopy !== 'copy me')
+        return 'clipboard holds ' + JSON.stringify(afterCopy);
 
-    // Paste it back at the end.
+    // Paste it back at the end. A refusal here means the clipboard went
+    // empty between the two lines, which is the same interference.
     caret(ed, ed.textContent.length, ed.firstChild);
-    assert(document.execCommand('paste'), 'paste returns true');
-    assert(ed.textContent === 'copy me pleasecopy me',
-           'pasted at caret: ' + ed.textContent);
-}
-{
+    if (!document.execCommand('paste'))
+        return 'paste refused; clipboard holds ' + JSON.stringify(clipboard());
+    if (ed.textContent !== 'copy me pleasecopy me') {
+        // Only interference if the clipboard has since moved. If it still
+        // reads back what was copied, the paste itself is wrong and no
+        // number of retries will make it right.
+        const now = clipboard();
+        if (now !== 'copy me')
+            return 'clipboard moved to ' + JSON.stringify(now) + ' mid-paste';
+        assert(false, 'pasted at caret: ' + ed.textContent);
+    }
+    return null;
+});
+clipboardRoundTrip('cut did not reach the clipboard', () => {
     const ed = freshHost('cut this out');
     selectRange(ed, 0, 4);        // "cut "
-    assert(document.execCommand('cut'), 'cut returns true');
+    if (!document.execCommand('cut')) {
+        // **A refused cut must not have deleted anything.** The clipboard is
+        // written before the document is touched precisely so that a write
+        // the system would not take cannot cost the user their text with
+        // nowhere to paste it back from. That guarantee is what makes
+        // retrying this block safe, so it is checked rather than assumed.
+        assert(ed.textContent === 'cut this out',
+               'a refused cut left the document alone: ' + ed.textContent);
+        return 'the clipboard refused the cut';
+    }
     assert(ed.textContent === 'this out', 'cut removed text: ' + ed.textContent);
-    assert(clipboard() === 'cut ', 'clipboard holds the cut text');
-}
+    const afterCut = clipboard();
+    return afterCut === 'cut ' ? null
+                               : 'clipboard holds ' + JSON.stringify(afterCut);
+});
 
 // copy/cut with a collapsed selection have nothing to take.
 {
