@@ -125,13 +125,23 @@ Value headersAppend(Value thisValue, std::span<const Value> a) {
     return ev::undefined();
 }
 
-Value makeHeadersValue(HostHeaders* h) {
-    ObjectBuilder b(ev::makeHandle(h, hostHeadersDtor));
+// The three classes this file installs. Each carries STATE on the instance and
+// BEHAVIOUR on the prototype — one copy of each method for the whole class
+// rather than a fresh set for every response a program fetches.
+HostClass g_headersClass;
+HostClass g_requestClass;
+HostClass g_responseClass;
+
+void decorateHeadersProto(ObjectBuilder& b) {
     b.def("get", 1, headersGet);
     b.def("set", 2, headersSet);
     b.def("has", 1, headersHas);
     b.def("append", 2, headersAppend);
-    return b.get();
+}
+
+Value makeHeadersValue(HostHeaders* h) {
+    // No own properties at all: a Headers is its payload plus the prototype.
+    return g_headersClass.make(h, hostHeadersDtor);
 }
 
 void initHeadersFromValue(HostHeaders* self, Value initV) {
@@ -210,7 +220,7 @@ HostRequest* requestOf(Value v) {
 }
 
 Value makeRequestValue(HostRequest* req) {
-    ObjectBuilder b(ev::makeHandle(req, hostRequestDtor));
+    ObjectBuilder b(g_requestClass.make(req, hostRequestDtor));
     b.set("url", ev::fromUtf8(req->url));
     b.set("method", ev::fromUtf8(req->method));
 
@@ -312,22 +322,7 @@ Value responseArrayBuffer(Value thisValue, std::span<const Value>) {
     return p.get();
 }
 
-Value makeResponseValue(HostResponse* resp) {
-    ObjectBuilder b(ev::makeHandle(resp, hostResponseDtor));
-
-    b.set("ok", ev::fromBool(resp->ok));
-    b.set("status", ev::fromDouble(resp->status));
-    b.set("statusText", ev::fromUtf8(resp->statusText));
-    b.set("url", ev::fromUtf8(resp->url));
-
-    auto* h = new HostHeaders();
-    // A file read off disk has no headers to report, so the map is normally
-    // empty. An inline URL is the exception: a data: URL states its MIME type
-    // and a blob: URL carries the Blob's, and `resp.headers.get('content-type')`
-    // is how a caller decides whether to parse what it got.
-    if (!resp->contentType.empty()) h->entries["content-type"] = resp->contentType;
-    b.set("headers", makeHeadersValue(h));
-
+void decorateResponseProto(ObjectBuilder& b) {
     b.def("text", 0, responseText);
     b.def("json", 0, responseJson);
     b.def("arrayBuffer", 0, responseArrayBuffer);
@@ -342,6 +337,23 @@ Value makeResponseValue(HostResponse* resp) {
         ev::resolvePromise(p.get(), blob);
         return p.get();
     });
+}
+
+Value makeResponseValue(HostResponse* resp) {
+    ObjectBuilder b(g_responseClass.make(resp, hostResponseDtor));
+
+    b.set("ok", ev::fromBool(resp->ok));
+    b.set("status", ev::fromDouble(resp->status));
+    b.set("statusText", ev::fromUtf8(resp->statusText));
+    b.set("url", ev::fromUtf8(resp->url));
+
+    auto* h = new HostHeaders();
+    // A file read off disk has no headers to report, so the map is normally
+    // empty. An inline URL is the exception: a data: URL states its MIME type
+    // and a blob: URL carries the Blob's, and `resp.headers.get('content-type')`
+    // is how a caller decides whether to parse what it got.
+    if (!resp->contentType.empty()) h->entries["content-type"] = resp->contentType;
+    b.set("headers", makeHeadersValue(h));
 
     return b.get();
 }
@@ -483,30 +495,29 @@ void installFetchGlobal() {
     Value fetchFn = ev::makeFunction(fetchCall, 1);
     ev::registerGlobal("fetch", fetchFn);
 
-    Value reqFn = ev::makeFunction(requestCtor, 1);
-    ev::registerGlobal("Request", reqFn);
+    // Headers first: a Request and a Response both build one during
+    // construction, and make() falls back to a bare cell until its class is
+    // installed.
+    g_headersClass.install("Headers", 0,
+                           [](Value, std::span<const Value> a) {
+                               auto* h = new HostHeaders();
+                               if (!a.empty()) initHeadersFromValue(h, a[0]);
+                               return makeHeadersValue(h);
+                           },
+                           decorateHeadersProto);
 
-    Value headersFn = ev::makeFunction(
-        [](Value, std::span<const Value> a) {
-            auto* h = new HostHeaders();
-            if (!a.empty()) {
-                initHeadersFromValue(h, a[0]);
-            }
-            return makeHeadersValue(h);
-        },
-        0);
-    ev::registerGlobal("Headers", headersFn);
+    // A Request carries state and no methods of its own.
+    g_requestClass.install("Request", 1, requestCtor, nullptr);
 
-    Value respFn = ev::makeFunction(
-        [](Value, std::span<const Value>) {
-            auto* resp = new HostResponse();
-            resp->status = 200;
-            resp->statusText = "OK";
-            resp->ok = true;
-            return makeResponseValue(resp);
-        },
-        0);
-    ev::registerGlobal("Response", respFn);
+    g_responseClass.install("Response", 0,
+                            [](Value, std::span<const Value>) {
+                                auto* resp = new HostResponse();
+                                resp->status = 200;
+                                resp->statusText = "OK";
+                                resp->ok = true;
+                                return makeResponseValue(resp);
+                            },
+                            decorateResponseProto);
 }
 
 }  // namespace bro::bronze_host

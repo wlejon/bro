@@ -328,6 +328,9 @@ Value observerTakeRecords(Value thisValue, std::span<const Value>) {
     return makeRecordArray(taken);
 }
 
+HostClass g_mutationObserverClass;
+HostClass g_resizeObserverClass;
+
 Value makeObserverValue(Value callback) {
     auto owned = std::make_unique<MoEntry>();
     MoEntry* entry = owned.get();
@@ -337,10 +340,7 @@ Value makeObserverValue(Value callback) {
     // The finalizer is deliberately empty: the entry holds Persistents, and
     // ~Persistent is an embed call, which a finalizer may not make. The entry
     // outlives the value on purpose (see the file header).
-    ObjectBuilder b(ev::makeHandle(entry, [](void*) {}));
-    b.def("observe", 2, observerObserve);
-    b.def("disconnect", 0, observerDisconnect);
-    b.def("takeRecords", 0, observerTakeRecords);
+    ObjectBuilder b(g_mutationObserverClass.make(entry, [](void*) {}));
     Value obj = b.get();
     entry->obj = ev::Persistent(obj);
     return obj;
@@ -476,10 +476,7 @@ Value makeResizerValue(Value callback) {
     entry->callback = ev::Persistent(callback);
     resizers().push_back(std::move(owned));
 
-    ObjectBuilder b(ev::makeHandle(entry, [](void*) {}));   // see makeObserverValue
-    b.def("observe", 2, resizerObserve);
-    b.def("unobserve", 1, resizerUnobserve);
-    b.def("disconnect", 0, resizerDisconnect);
+    ObjectBuilder b(g_resizeObserverClass.make(entry, [](void*) {}));  // see above
     Value obj = b.get();
     entry->obj = ev::Persistent(obj);
     return obj;
@@ -575,7 +572,8 @@ void deliverHostObservers() {
 }
 
 void installObserverGlobals() {
-    Value ctor = ev::makeFunction(
+    g_mutationObserverClass.install(
+        "MutationObserver", 1,
         [](Value, std::span<const Value> a) {
             Value cb = argAt(a, 0);
             if (!ev::isFunction(cb)) {
@@ -584,10 +582,14 @@ void installObserverGlobals() {
             }
             return makeObserverValue(cb);
         },
-        1);
-    ev::registerGlobal("MutationObserver", ctor);
+        [](ObjectBuilder& b) {
+            b.def("observe", 2, observerObserve);
+            b.def("disconnect", 0, observerDisconnect);
+            b.def("takeRecords", 0, observerTakeRecords);
+        });
 
-    Value resizeCtor = ev::makeFunction(
+    g_resizeObserverClass.install(
+        "ResizeObserver", 1,
         [](Value, std::span<const Value> a) {
             Value cb = argAt(a, 0);
             if (!ev::isFunction(cb)) {
@@ -596,8 +598,11 @@ void installObserverGlobals() {
             }
             return makeResizerValue(cb);
         },
-        1);
-    ev::registerGlobal("ResizeObserver", resizeCtor);
+        [](ObjectBuilder& b) {
+            b.def("observe", 2, resizerObserve);
+            b.def("unobserve", 1, resizerUnobserve);
+            b.def("disconnect", 0, resizerDisconnect);
+        });
 }
 
 }  // namespace bro::bronze_host

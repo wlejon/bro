@@ -1,18 +1,22 @@
-// HOST CLASSES: what `Image` proves now that a handle can be born on a
-// prototype (embed::makeHandle's 4-argument form).
+// HOST CLASSES: every family this layer has converted to a real class, now
+// that a handle can be born on a prototype (embed::makeHandle's 4-argument
+// form, wrapped as HostClass in src/bronze_host/host_class.cpp).
 //
 // Every object this layer hands the program used to be a bare cell with its
 // methods closed over per instance, which cost two things: a copy of every
 // method for every instance, and a false answer to `instanceof`. bro's own
 // source said so in as many words — host_image.cpp named `img instanceof
-// Image` as observably false, and events_probe.js still names the same limit
-// as the reason `new CustomEvent(...)` does not exist.
+// Image` as observably false.
 //
-// This file pins the three claims that must hold for `Image` to be a real
-// class rather than a decorated object: the chain is right, the methods are
-// SHARED rather than copied, and a method reached THROUGH the prototype still
-// unwraps its receiver (the handle brand survives, which is the part that had
-// a landmine in it).
+// Three claims are pinned per class, because they are the ones that could
+// silently be wrong: the chain is right, the methods are SHARED rather than
+// copied, and a method reached THROUGH the prototype still unwraps its
+// receiver. That last one has a landmine under it — the payload and the
+// handle brand live in internal slots, and bronze had to move the brand out of
+// the shape root to keep it reachable from an inherited method.
+//
+// `Image` is worked in the most detail, including a real decode end to end;
+// the rest share `pinClass` plus whatever is specific to them.
 //
 // Output rule, as everywhere here: `APP <name>=<value>`, one per line, and the
 // expectation beside this file is written by hand from what must be true, not
@@ -73,6 +77,82 @@ say('img.widthInitially', img.width === 0);
 const created = document.createElement('img');
 say('created.instanceofImage', created instanceof Image);
 say('created.methodShared', created.addEventListener === img.addEventListener);
+
+// ---------------------------------------------------------------------------
+// The other converted families
+// ---------------------------------------------------------------------------
+
+// Each of these was a bare cell with per-instance closures and an `instanceof`
+// that answered false. The check is the same three claims every time, so it is
+// written once and applied.
+
+function pinClass(label, instance, ctor) {
+    say(label + '.instanceof', instance instanceof ctor);
+    say(label + '.protoIsCtorProto', Object.getPrototypeOf(instance) === ctor.prototype);
+}
+
+const blob = new Blob(['hello'], { type: 'text/plain' });
+pinClass('blob', blob, Blob);
+// Methods live on the prototype, so two blobs read the same function object.
+say('blob.methodShared', blob.slice === new Blob([]).slice);
+say('blob.methodWorks', blob.size === 5 && blob.type === 'text/plain');
+// A detached method still finds its receiver through the prototype, which the
+// old per-instance closure form got right by accident and this form gets right
+// on purpose.
+const detachedSlice = Blob.prototype.slice;
+say('blob.detachedMethodWorks', detachedSlice.call(blob, 0, 2).size === 2);
+
+// `file instanceof Blob` is true on the web: File extends Blob.
+const file = new File(['abc'], 'note.txt', { type: 'text/plain' });
+pinClass('file', file, File);
+say('file.isABlob', file instanceof Blob);
+say('file.inheritsBlobMethod', typeof file.slice === 'function');
+say('file.name', file.name);
+
+const reader = new FileReader();
+pinClass('reader', reader, FileReader);
+// The readyState constants sit on the prototype AND the constructor, as on
+// the web.
+say('reader.constOnInstance', reader.DONE === 2);
+say('reader.constOnCtor', FileReader.DONE === 2);
+
+const xhr = new XMLHttpRequest();
+pinClass('xhr', xhr, XMLHttpRequest);
+say('xhr.constOnCtor', XMLHttpRequest.DONE === 4);
+say('xhr.accessorWorks', xhr.readyState === 0);
+
+const headers = new Headers();
+pinClass('headers', headers, Headers);
+headers.set('content-type', 'text/plain');
+say('headers.methodWorks', headers.get('content-type') === 'text/plain');
+
+const response = new Response();
+pinClass('response', response, Response);
+say('response.state', response.ok === true && response.status === 200);
+say('response.headersAreHeaders', response.headers instanceof Headers);
+
+const controller = new AbortController();
+pinClass('controller', controller, AbortController);
+say('controller.signalIsSignal', controller.signal instanceof AbortSignal);
+// AbortSignal was a namespace object; it is a class with statics now.
+say('signal.staticAbort', AbortSignal.abort() instanceof AbortSignal);
+say('signal.notConstructible', (function () {
+    try { new AbortSignal(); return false; } catch (e) { return true; }
+})());
+controller.abort();
+say('controller.abortWorks', controller.signal.aborted === true);
+
+const mo = new MutationObserver(function () {});
+pinClass('mo', mo, MutationObserver);
+say('mo.methodShared', mo.observe === new MutationObserver(function () {}).observe);
+
+const ro = new ResizeObserver(function () {});
+pinClass('ro', ro, ResizeObserver);
+
+// WebSocket is not opened here — a connection is not this probe's business —
+// but the class shape is readable without one.
+say('ws.ctorConstants', WebSocket.OPEN === 1 && WebSocket.CLOSED === 3);
+say('ws.protoConstants', WebSocket.prototype.OPEN === 1);
 
 // ---------------------------------------------------------------------------
 // End to end: a load through the inherited accessor

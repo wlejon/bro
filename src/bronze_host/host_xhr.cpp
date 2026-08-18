@@ -200,9 +200,11 @@ Value xhrAbort(Value thisValue, std::span<const Value>) {
     return ev::undefined();
 }
 
+HostClass g_xhrClass;
+
 Value makeXhrValue() {
     auto* xhr = new HostXhr();
-    ObjectBuilder b(ev::makeHandle(xhr, hostXhrDtor));
+    ObjectBuilder b(g_xhrClass.make(xhr, hostXhrDtor));
 
     // Handler slots, present and null so an assignment writes a data property
     // that is already in the shape.
@@ -221,6 +223,13 @@ Value makeXhrValue() {
         b.set("timeout", zero);
     }
 
+    return b.get();
+}
+
+// Everything an XMLHttpRequest can DO or REPORT, decorated once onto
+// XMLHttpRequest.prototype. Every one of these already read its receiver, so
+// moving them off the instance changed nothing but the number of copies.
+void decorateXhrProto(ObjectBuilder& b) {
     // Every piece of live state is an accessor over the payload, so the program
     // cannot desync `status` from what actually happened by assigning to it.
     b.accessor("readyState",
@@ -321,8 +330,6 @@ Value makeXhrValue() {
         removeHostListener(self, type, argAt(a, 1));
         return ev::undefined();
     });
-
-    return b.get();
 }
 
 }  // namespace
@@ -330,11 +337,19 @@ Value makeXhrValue() {
 void installXhrGlobal() {
     // Same construct story as Image (host_image.cpp): bronze_construct replaces
     // the plain instance with the object the body returns, so `new
-    // XMLHttpRequest()` and `XMLHttpRequest()` answer the same thing, and
-    // `instanceof` is false.
-    Value ctor = ev::makeFunction(
-        [](Value, std::span<const Value>) { return makeXhrValue(); }, 0);
-    ev::registerGlobal("XMLHttpRequest", ctor);
+    // XMLHttpRequest()` and `XMLHttpRequest()` answer the same thing — and
+    // since the instance is born on this constructor's prototype, `instanceof`
+    // answers true.
+    g_xhrClass.install(
+        "XMLHttpRequest", 0,
+        [](Value, std::span<const Value>) { return makeXhrValue(); },
+        decorateXhrProto);
+    // The readyState constants, where the web has them.
+    g_xhrClass.setStatic("UNSENT", ev::fromDouble(0));
+    g_xhrClass.setStatic("OPENED", ev::fromDouble(1));
+    g_xhrClass.setStatic("HEADERS_RECEIVED", ev::fromDouble(2));
+    g_xhrClass.setStatic("LOADING", ev::fromDouble(3));
+    g_xhrClass.setStatic("DONE", ev::fromDouble(4));
 }
 
 }  // namespace bro::bronze_host

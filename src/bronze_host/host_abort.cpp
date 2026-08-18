@@ -98,19 +98,27 @@ Value signalThrowIfAborted(Value thisValue, std::span<const Value>) {
 
 // A signal, optionally already aborted. `reason` is applied by the caller
 // through hostAbortSignal so that path is written once.
-Value makeSignal() {
-    auto* s = new HostAbortSignal();
-    ObjectBuilder b(ev::makeHandle(s, hostSignalDtor));
+// The two classes this file installs.
+HostClass g_signalClass;
+HostClass g_controllerClass;
 
-    // Data properties first, so the shape is fixed before an abort rewrites
-    // them — the same reason host_file.cpp seeds readyState up front.
-    b.set("aborted", ev::fromBool(false));
-    b.set("reason", ev::undefined());
-    b.set("onabort", ev::null());
-
+void decorateSignalProto(ObjectBuilder& b) {
     b.def("addEventListener", 2, signalAddListener);
     b.def("removeEventListener", 2, signalRemoveListener);
     b.def("throwIfAborted", 0, signalThrowIfAborted);
+}
+
+Value makeSignal() {
+    auto* s = new HostAbortSignal();
+    ObjectBuilder b(g_signalClass.make(s, hostSignalDtor));
+
+    // Data properties first, so the shape is fixed before an abort rewrites
+    // them — the same reason host_file.cpp seeds readyState up front. The
+    // three methods are NOT here: they are the same for every signal and live
+    // on the prototype.
+    b.set("aborted", ev::fromBool(false));
+    b.set("reason", ev::undefined());
+    b.set("onabort", ev::null());
     return b.get();
 }
 
@@ -127,10 +135,17 @@ Value controllerAbort(Value thisValue, std::span<const Value> a) {
     return ev::undefined();
 }
 
-Value makeController() {
-    ObjectBuilder b;
-    b.set("signal", makeSignal());
+void decorateControllerProto(ObjectBuilder& b) {
     b.def("abort", 1, controllerAbort);
+}
+
+Value makeController() {
+    // A handle with NO payload. An AbortController owns nothing on the C++
+    // side — its whole state is the `signal` property below — but being born
+    // on the class prototype is what makes `x instanceof AbortController`
+    // answer, and that is the form real cleanup code tests.
+    ObjectBuilder b(g_controllerClass.make(nullptr, [](void*) {}));
+    b.set("signal", makeSignal());
     return b.get();
 }
 
@@ -238,21 +253,28 @@ void hostAbortSignal(Value signal, Value reason) {
 }
 
 void installAbortGlobals() {
-    Value ctor = ev::makeFunction(
-        [](Value, std::span<const Value>) { return makeController(); }, 0);
-    ev::registerGlobal("AbortController", ctor);
+    // AbortSignal first: a controller builds one during construction.
+    //
+    // A REAL CLASS now, where this was a namespace object. `new AbortSignal()`
+    // is a TypeError on the web, so the body refuses — but the three statics
+    // land on the constructor where the web has them, and every signal is born
+    // on the prototype, so `x instanceof AbortSignal` answers true.
+    g_signalClass.install("AbortSignal", 0, nullptr, decorateSignalProto);
+    g_signalClass.setStatic(
+        "abort", ev::makeFunction(
+                     [](Value, std::span<const Value> a) {
+                         ev::Persistent signal(makeSignal());
+                         hostAbortSignal(signal.get(), argAt(a, 0));
+                         return signal.get();
+                     },
+                     1));
+    g_signalClass.setStatic("timeout", ev::makeFunction(signalTimeout, 1));
+    g_signalClass.setStatic("any", ev::makeFunction(signalAny, 1));
 
-    // A namespace, not a constructor — see the file header. `new AbortSignal()`
-    // is a TypeError on the web too, so nothing that works there breaks here.
-    ObjectBuilder ns;
-    ns.def("abort", 1, [](Value, std::span<const Value> a) {
-        ev::Persistent signal(makeSignal());
-        hostAbortSignal(signal.get(), argAt(a, 0));
-        return signal.get();
-    });
-    ns.def("timeout", 1, signalTimeout);
-    ns.def("any", 1, signalAny);
-    ev::registerGlobal("AbortSignal", ns.get());
+    g_controllerClass.install(
+        "AbortController", 0,
+        [](Value, std::span<const Value>) { return makeController(); },
+        decorateControllerProto);
 }
 
 }  // namespace bro::bronze_host

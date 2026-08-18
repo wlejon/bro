@@ -627,8 +627,72 @@ static Value js_ws_close(Value thisValue, std::span<const Value> a) {
     return ev::undefined();
 }
 
-static Value makeWebSocketConstructor() {
-    Value ctor = ev::makeFunction([](Value, std::span<const Value> a) -> Value {
+static HostClass g_webSocketClass;
+
+// The whole WebSocket surface except its four handler slots: the readyState
+// constants, five accessors over the payload, send/close, and the listener
+// pair. Every one reads its RECEIVER, so one copy on the prototype serves
+// every socket a program opens.
+static void decorateWebSocketProto(ObjectBuilder& b) {
+    b.set("CONNECTING", ev::fromDouble(0));
+    b.set("OPEN", ev::fromDouble(1));
+    b.set("CLOSING", ev::fromDouble(2));
+    b.set("CLOSED", ev::fromDouble(3));
+
+    b.accessor("url", [](Value thisValue, std::span<const Value>) {
+        HostWebSocket* s = webSocketOf(thisValue);
+        return ev::fromUtf8(s ? s->url : "");
+    }, nullptr);
+
+    b.accessor("readyState", [](Value thisValue, std::span<const Value>) {
+        HostWebSocket* s = webSocketOf(thisValue);
+        return ev::fromDouble(s ? s->readyState : 3);
+    }, nullptr);
+
+    b.accessor("protocol", [](Value thisValue, std::span<const Value>) {
+        HostWebSocket* s = webSocketOf(thisValue);
+        return ev::fromUtf8(s ? s->protocol : "");
+    }, nullptr);
+
+    b.accessor("binaryType", [](Value thisValue, std::span<const Value>) {
+        HostWebSocket* s = webSocketOf(thisValue);
+        return ev::fromUtf8(s ? s->binaryType : "blob");
+    }, [](Value thisValue, std::span<const Value> a) {
+        HostWebSocket* s = webSocketOf(thisValue);
+        if (!s || a.empty()) return ev::undefined();
+        std::string bt = ev::toUtf8(a[0]);
+        if (bt == "blob" || bt == "arraybuffer") s->binaryType = bt;
+        return ev::undefined();
+    });
+
+    b.accessor("bufferedAmount", [](Value thisValue, std::span<const Value>) {
+        HostWebSocket* s = webSocketOf(thisValue);
+        return ev::fromDouble(s ? s->bufferedAmount : 0.0);
+    }, nullptr);
+
+    b.def("send", 1, js_ws_send);
+    b.def("close", 2, js_ws_close);
+
+    b.def("addEventListener", 2, [](Value thisValue, std::span<const Value> a) {
+        if (a.size() < 2) return ev::undefined();
+        std::string type = ev::toUtf8(a[0]);
+        if (type.rfind("on", 0) == 0) type = type.substr(2);
+        ev::Persistent self(thisValue);
+        addHostListener(self, type, a[1]);
+        return ev::undefined();
+    });
+
+    b.def("removeEventListener", 2, [](Value thisValue, std::span<const Value> a) {
+        if (a.size() < 2) return ev::undefined();
+        std::string type = ev::toUtf8(a[0]);
+        if (type.rfind("on", 0) == 0) type = type.substr(2);
+        ev::Persistent self(thisValue);
+        removeHostListener(self, type, a[1]);
+        return ev::undefined();
+    });
+}
+
+static Value webSocketCtor(Value, std::span<const Value> a) {
         if (a.empty() || ev::isUndefined(a[0]) || ev::isNull(a[0])) {
             return ev::throwTypeError("Failed to construct 'WebSocket': 1 argument required, but only 0 present.");
         }
@@ -645,69 +709,13 @@ static Value makeWebSocketConstructor() {
         ws->binaryType = "blob";
         ws->bufferedAmount = 0.0;
 
-        Value handle = ev::makeHandle(ws, hostWebSocketDtor);
-        ObjectBuilder b(handle);
+        ObjectBuilder b(g_webSocketClass.make(ws, hostWebSocketDtor));
 
-        b.set("CONNECTING", ev::fromDouble(0));
-        b.set("OPEN", ev::fromDouble(1));
-        b.set("CLOSING", ev::fromDouble(2));
-        b.set("CLOSED", ev::fromDouble(3));
-
-        b.accessor("url", [](Value thisValue, std::span<const Value>) {
-            HostWebSocket* s = webSocketOf(thisValue);
-            return ev::fromUtf8(s ? s->url : "");
-        }, nullptr);
-
-        b.accessor("readyState", [](Value thisValue, std::span<const Value>) {
-            HostWebSocket* s = webSocketOf(thisValue);
-            return ev::fromDouble(s ? s->readyState : 3);
-        }, nullptr);
-
-        b.accessor("protocol", [](Value thisValue, std::span<const Value>) {
-            HostWebSocket* s = webSocketOf(thisValue);
-            return ev::fromUtf8(s ? s->protocol : "");
-        }, nullptr);
-
-        b.accessor("binaryType", [](Value thisValue, std::span<const Value>) {
-            HostWebSocket* s = webSocketOf(thisValue);
-            return ev::fromUtf8(s ? s->binaryType : "blob");
-        }, [](Value thisValue, std::span<const Value> a) {
-            HostWebSocket* s = webSocketOf(thisValue);
-            if (!s || a.empty()) return ev::undefined();
-            std::string bt = ev::toUtf8(a[0]);
-            if (bt == "blob" || bt == "arraybuffer") s->binaryType = bt;
-            return ev::undefined();
-        });
-
-        b.accessor("bufferedAmount", [](Value thisValue, std::span<const Value>) {
-            HostWebSocket* s = webSocketOf(thisValue);
-            return ev::fromDouble(s ? s->bufferedAmount : 0.0);
-        }, nullptr);
-
+        // The only OWN properties: the four handler slots, present and null so
+        // an assignment writes a property already in the shape.
         for (const char* name : {"onopen", "onmessage", "onerror", "onclose"}) {
             b.set(name, ev::null());
         }
-
-        b.def("send", 1, js_ws_send);
-        b.def("close", 2, js_ws_close);
-
-        b.def("addEventListener", 2, [](Value thisValue, std::span<const Value> a) {
-            if (a.size() < 2) return ev::undefined();
-            std::string type = ev::toUtf8(a[0]);
-            if (type.rfind("on", 0) == 0) type = type.substr(2);
-            ev::Persistent self(thisValue);
-            addHostListener(self, type, a[1]);
-            return ev::undefined();
-        });
-
-        b.def("removeEventListener", 2, [](Value thisValue, std::span<const Value> a) {
-            if (a.size() < 2) return ev::undefined();
-            std::string type = ev::toUtf8(a[0]);
-            if (type.rfind("on", 0) == 0) type = type.substr(2);
-            ev::Persistent self(thisValue);
-            removeHostListener(self, type, a[1]);
-            return ev::undefined();
-        });
 
         Value wsVal = b.get();
         ev::Persistent wsPersistent(wsVal);
@@ -747,14 +755,6 @@ static Value makeWebSocketConstructor() {
 
         g_activeWebSockets.push_back({ ws, wsPersistent });
         return wsVal;
-    }, 1);
-
-    ev::Persistent ctorP(ctor);
-    ctorP.set(ev::setProperty(ctorP.get(), "CONNECTING", ev::fromDouble(0)));
-    ctorP.set(ev::setProperty(ctorP.get(), "OPEN", ev::fromDouble(1)));
-    ctorP.set(ev::setProperty(ctorP.get(), "CLOSING", ev::fromDouble(2)));
-    ctorP.set(ev::setProperty(ctorP.get(), "CLOSED", ev::fromDouble(3)));
-    return ctorP.get();
 }
 
 static void pumpWebSockets() {
@@ -900,7 +900,13 @@ Value makeBroNetValue() {
 }
 
 void installNetGlobals() {
-    ev::registerGlobal("WebSocket", makeWebSocketConstructor());
+    g_webSocketClass.install("WebSocket", 1, webSocketCtor, decorateWebSocketProto);
+    // The readyState constants on the constructor as well as the prototype,
+    // which is where the web has them both.
+    g_webSocketClass.setStatic("CONNECTING", ev::fromDouble(0));
+    g_webSocketClass.setStatic("OPEN", ev::fromDouble(1));
+    g_webSocketClass.setStatic("CLOSING", ev::fromDouble(2));
+    g_webSocketClass.setStatic("CLOSED", ev::fromDouble(3));
     ev::registerGlobal("CloseEvent", makeBrandConstructor("CloseEvent"));
     ev::registerGlobal("MessageEvent", makeBrandConstructor("MessageEvent"));
 }

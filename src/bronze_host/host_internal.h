@@ -44,6 +44,62 @@ using Value = bronze::Value;
 struct ObjectBuilder;
 
 // ---------------------------------------------------------------------------
+// Host classes
+// ---------------------------------------------------------------------------
+
+// One host class: a registered constructor, a prototype minted from it and
+// decorated ONCE, and instances born on that prototype. See host_class.cpp for
+// why each step is what it is, and host_image.cpp for a converted family read
+// end to end.
+//
+// The win over a bare handle is two things at once: one copy of each method
+// per CLASS instead of one per instance, and `x instanceof Name` answering
+// true instead of false.
+//
+// Declare one at file scope per class — the members are pointers, so it is
+// constant-initialised and has no static constructor to order.
+class HostClass {
+public:
+    // Mint, decorate, and register `name`. `body` runs for `new Name(...)`;
+    // pass nullptr for a class the program may name but not construct, which
+    // is what makeBrandConstructor used to be — except that this one brands.
+    // Call once, from the family's install function.
+    void install(const char* name, uint32_t arity, ev::NativeFn body,
+                 const std::function<void(ObjectBuilder&)>& decorate);
+
+    // Register a second name for the same constructor (AudioContext and
+    // webkitAudioContext; Image and HTMLImageElement).
+    void alias(const char* name) const;
+
+    // `class This extends Base`: chain this prototype onto the base's, so an
+    // instance inherits both surfaces and answers `instanceof` for both (a
+    // File IS a Blob; a GainNode IS an AudioNode). Call AFTER both installs.
+    // Prototypes are plain objects, not handle cells, so re-parenting one
+    // costs nothing an instance pays for.
+    void inherit(const HostClass& base) const;
+
+    // An instance born on this class's prototype, or a bare cell if install()
+    // has not run.
+    Value make(void* data, ev::HandleDestructor dtor,
+               ev::Finalize when = ev::Finalize::InSweep) const;
+
+    // A property on the CONSTRUCTOR, where a class `static` member lands
+    // (FileReader.DONE, Node.TEXT_NODE). `name`, `length` and `prototype` are
+    // refused by bronze and must not be passed.
+    void setStatic(const char* name, Value v) const;
+
+    Value prototype() const;
+    Value constructor() const;
+
+private:
+    // Heap-allocated and never freed, on purpose: a static destructor would
+    // run these after the engine has torn the runtime down. host_class.cpp
+    // has the full reasoning.
+    ev::Persistent* proto_ = nullptr;
+    ev::Persistent* ctor_ = nullptr;
+};
+
+// ---------------------------------------------------------------------------
 // Handle tags
 // ---------------------------------------------------------------------------
 

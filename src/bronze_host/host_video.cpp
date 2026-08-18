@@ -302,8 +302,13 @@ Value addFrameFromTypedArray(std::span<const Value> a, int width, int height,
 // VideoEncoder
 // ---------------------------------------------------------------------------
 
-Value makeVideoEncoderValue(HostVideoEncoder* payload) {
-    ObjectBuilder b(ev::makeHandle(payload, videoEncoderDtor));
+HostClass g_videoEncoderClass;
+HostClass g_gifEncoderClass;
+
+// Every member of both encoders is an accessor or a method that reads its
+// RECEIVER, so the whole surface moves to the prototype and an instance owns
+// nothing but its payload.
+void decorateVideoEncoderProto(ObjectBuilder& b) {
 
     // Accessors rather than data properties for all four: framesWritten and
     // lastError change with every frame, and width/height join them so the
@@ -420,8 +425,10 @@ Value makeVideoEncoderValue(HostVideoEncoder* payload) {
         if (!ok) d->lastErr = d->enc->lastError();
         return ev::fromBool(ok);
     });
+}
 
-    return b.get();
+Value makeVideoEncoderValue(HostVideoEncoder* payload) {
+    return g_videoEncoderClass.make(payload, videoEncoderDtor);
 }
 
 Value videoEncoderCtor(Value, std::span<const Value> a) {
@@ -464,8 +471,7 @@ Value videoEncoderCtor(Value, std::span<const Value> a) {
 // GifEncoder
 // ---------------------------------------------------------------------------
 
-Value makeGifEncoderValue(HostGifEncoder* payload) {
-    ObjectBuilder b(ev::makeHandle(payload, gifEncoderDtor));
+void decorateGifEncoderProto(ObjectBuilder& b) {
 
     b.accessor("width", [](Value t, std::span<const Value>) {
         auto* d = gifEncoderOf(t);
@@ -554,8 +560,10 @@ Value makeGifEncoderValue(HostGifEncoder* payload) {
         if (!ok) d->lastErr = d->enc->lastError();
         return ev::fromBool(ok);
     });
+}
 
-    return b.get();
+Value makeGifEncoderValue(HostGifEncoder* payload) {
+    return g_gifEncoderClass.make(payload, gifEncoderDtor);
 }
 
 Value gifEncoderCtor(Value, std::span<const Value> a) {
@@ -595,14 +603,16 @@ Value gifEncoderCtor(Value, std::span<const Value> a) {
 }  // namespace
 
 void installVideoGlobals() {
-    // Reached through bronze_construct, which builds a plain instance, runs the
-    // body with it as the receiver and then REPLACES it with whatever the body
-    // returns — so the program gets the object built above, `VideoEncoder(cfg)`
-    // without `new` does the same thing, and `enc instanceof VideoEncoder` is
-    // false. host_image.cpp carries the full reasoning; it applies unchanged to
-    // every constructor in this layer.
-    ev::registerGlobal("VideoEncoder", ev::makeFunction(videoEncoderCtor, 1));
-    ev::registerGlobal("GifEncoder", ev::makeFunction(gifEncoderCtor, 1));
+    // Reached through bronze_construct, which builds an instance, runs the body
+    // with it as the receiver and then REPLACES it with whatever the body
+    // returns — so the program gets the object built above and
+    // `VideoEncoder(cfg)` without `new` does the same thing. The returned
+    // handle is born on the prototype, so `enc instanceof VideoEncoder` is
+    // true. host_image.cpp carries the full reasoning.
+    g_videoEncoderClass.install("VideoEncoder", 1, videoEncoderCtor,
+                                decorateVideoEncoderProto);
+    g_gifEncoderClass.install("GifEncoder", 1, gifEncoderCtor,
+                              decorateGifEncoderProto);
 }
 
 #else  // !BRO_WITH_VIDEO

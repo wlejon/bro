@@ -187,11 +187,22 @@ Value bytesToUint8Array(const std::vector<uint8_t>& bytes) {
     return view.get();
 }
 
-void installBlobSurface(ObjectBuilder& b, HostBlob* blob) {
+// The per-instance STATE of a Blob. Everything else a Blob can do is the same
+// for every Blob and lives on the prototype below.
+void installBlobState(ObjectBuilder& b, const HostBlob* blob) {
     b.set("size", ev::fromDouble(static_cast<double>(blob->bytes.size())));
     b.set("type", ev::fromUtf8(blob->type));
+}
 
-    b.def("slice", 3, [blob](Value, std::span<const Value> a) {
+// The Blob METHODS, decorated once onto Blob.prototype. Each unwraps its
+// RECEIVER rather than closing over a HostBlob* — which is not only tidier: a
+// closure holding the raw payload of a cell it does not root is a dangling
+// read the moment a detached method outlives its object, and every one of
+// these used to be written that way.
+void decorateBlobProto(ObjectBuilder& b) {
+    b.def("slice", 3, [](Value self, std::span<const Value> a) {
+        const HostBlob* blob = mutableHostBlob(self);
+        if (!blob) return ev::throwTypeError("Blob.slice: the receiver is not a Blob");
         const double n = static_cast<double>(blob->bytes.size());
         // Negative offsets count from the end, as Array.prototype.slice does
         // and as the Blob spec spells out.
@@ -215,17 +226,30 @@ void installBlobSurface(ObjectBuilder& b, HostBlob* blob) {
         return makeBlobValue(std::move(cut), std::move(type));
     });
 
-    b.def("text", 0, [blob](Value, std::span<const Value>) {
+    b.def("text", 0, [](Value self, std::span<const Value>) {
+        const HostBlob* blob = mutableHostBlob(self);
+        if (!blob) return ev::throwTypeError("Blob.text: the receiver is not a Blob");
         return resolvedPromise(ev::fromUtf8(
             std::string(blob->bytes.begin(), blob->bytes.end())));
     });
-    b.def("arrayBuffer", 0, [blob](Value, std::span<const Value>) {
+    b.def("arrayBuffer", 0, [](Value self, std::span<const Value>) {
+        const HostBlob* blob = mutableHostBlob(self);
+        if (!blob) {
+            return ev::throwTypeError("Blob.arrayBuffer: the receiver is not a Blob");
+        }
         return resolvedPromise(bytesToArrayBuffer(blob->bytes));
     });
-    b.def("bytes", 0, [blob](Value, std::span<const Value>) {
+    b.def("bytes", 0, [](Value self, std::span<const Value>) {
+        const HostBlob* blob = mutableHostBlob(self);
+        if (!blob) return ev::throwTypeError("Blob.bytes: the receiver is not a Blob");
         return resolvedPromise(bytesToUint8Array(blob->bytes));
     });
 }
+
+// The three classes this file installs. File EXTENDS Blob, as on the web.
+HostClass g_blobClass;
+HostClass g_fileClass;
+HostClass g_readerClass;
 
 // ---------------------------------------------------------------------------
 // FileReader
@@ -305,7 +329,7 @@ void startRead(Value self, Value blobValue,
 
 Value makeFileReaderValue() {
     auto* reader = new HostReader();
-    ObjectBuilder b(ev::makeHandle(reader, hostReaderDtor));
+    ObjectBuilder b(g_readerClass.make(reader, hostReaderDtor));
 
     // Data properties first, so the shape is fixed before a read rewrites
     // them — the same reason host_image.cpp seeds width/height up front.
@@ -317,10 +341,14 @@ Value makeFileReaderValue() {
         Value n = ev::null();
         b.set(slot, n);
     }
-    // The readyState constants, on the instance. On the web they are also on
-    // FileReader itself — but a host function cannot carry a static at all (see
-    // installFileGlobals), and `reader.DONE` is the spelling a compiled app
-    // reaches for anyway.
+    // The readyState constants are NOT here: they are the same for every
+    // reader, so they sit on the prototype and on the constructor, which is
+    // where the web has them (`reader.DONE` and `FileReader.DONE` both work).
+    return b.get();
+}
+
+// Everything a FileReader can DO, decorated once onto FileReader.prototype.
+void decorateReaderProto(ObjectBuilder& b) {
     b.set("EMPTY", ev::fromDouble(0));
     b.set("LOADING", ev::fromDouble(1));
     b.set("DONE", ev::fromDouble(2));
@@ -390,8 +418,6 @@ Value makeFileReaderValue() {
         removeHostListener(self, ev::toUtf8(typeV), argAt(a, 1));
         return ev::undefined();
     });
-
-    return b.get();
 }
 
 // ---------------------------------------------------------------------------
@@ -643,8 +669,8 @@ Value makeBlobValue(std::vector<uint8_t> bytes, std::string type) {
     auto* blob = new HostBlob();
     blob->bytes = std::move(bytes);
     blob->type = std::move(type);
-    ObjectBuilder b(ev::makeHandle(blob, hostBlobDtor));
-    installBlobSurface(b, blob);
+    ObjectBuilder b(g_blobClass.make(blob, hostBlobDtor));
+    installBlobState(b, blob);
     return b.get();
 }
 
@@ -653,14 +679,16 @@ Value makeBlobValue(std::vector<uint8_t> bytes, std::string type) {
 // ---------------------------------------------------------------------------
 
 void installFileGlobals() {
-    ev::registerGlobal("Blob", ev::makeFunction(
+    g_blobClass.install(
+        "Blob", 2,
         [](Value, std::span<const Value> a) {
             std::vector<uint8_t> bytes = collectParts(argAt(a, 0));
             return makeBlobValue(std::move(bytes), optionType(argAt(a, 1)));
         },
-        2));
+        decorateBlobProto);
 
-    ev::registerGlobal("File", ev::makeFunction(
+    g_fileClass.install(
+        "File", 3,
         [](Value, std::span<const Value> a) {
             auto* blob = new HostBlob();
             blob->bytes = collectParts(argAt(a, 0));
@@ -675,8 +703,8 @@ void installFileGlobals() {
                 if (!ev::isUndefined(lm)) blob->lastModified = ev::toDouble(lm);
             }
 
-            ObjectBuilder b(ev::makeHandle(blob, hostBlobDtor));
-            installBlobSurface(b, blob);
+            ObjectBuilder b(g_fileClass.make(blob, hostBlobDtor));
+            installBlobState(b, blob);
             b.set("name", ev::fromUtf8(blob->name));
             b.set("lastModified", ev::fromDouble(blob->lastModified));
             // webkitRelativePath is empty for a File the program built, and
@@ -684,10 +712,21 @@ void installFileGlobals() {
             b.set("webkitRelativePath", ev::fromUtf8(""));
             return b.get();
         },
-        3));
+        // A File carries no methods of its own: it inherits Blob's, through
+        // the chain below.
+        nullptr);
+    // `file instanceof Blob` is true on the web, and a File really does answer
+    // slice/text/arrayBuffer. One chain buys both.
+    g_fileClass.inherit(g_blobClass);
 
-    ev::registerGlobal("FileReader", ev::makeFunction(
-        [](Value, std::span<const Value>) { return makeFileReaderValue(); }, 0));
+    g_readerClass.install(
+        "FileReader", 0,
+        [](Value, std::span<const Value>) { return makeFileReaderValue(); },
+        decorateReaderProto);
+    // The web has the constants on the constructor too.
+    g_readerClass.setStatic("EMPTY", ev::fromDouble(0));
+    g_readerClass.setStatic("LOADING", ev::fromDouble(1));
+    g_readerClass.setStatic("DONE", ev::fromDouble(2));
 
     // URL IS A NAMESPACE HERE, NOT A CONSTRUCTOR — `new URL(href)` does not
     // work and `URL.parse(href, base)` does.
