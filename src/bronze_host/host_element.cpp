@@ -743,6 +743,23 @@ bool isCanvasTag(const std::string& tag) {
     return tag == "CANVAS" || tag == "canvas";
 }
 
+// The state behind a receiver. Every member below reads this rather than
+// closing over the pointer: one copy of each method lives on the prototype and
+// serves every element, so the only way to know WHICH element is to ask the
+// object the call arrived on.
+HostNodeState* nodeStateOf(Value v) {
+    if (!ev::isObject(v)) return nullptr;
+    auto* st = static_cast<HostNodeState*>(ev::handleData(v));
+    if (!st || st->tag != kHostElementTag) return nullptr;
+    return st;
+}
+
+// Element is a real class: one prototype carrying the whole element surface,
+// with every instance born on it. Before this, an element carried its own copy
+// of all fifty-eight members — a thousand-element UI allocated fifty-eight
+// thousand function objects to say the same fifty-eight things.
+HostClass g_elementClass;
+
 Value makeNodeHandleObject(dom::Node* node) {
     return ev::makeHandle(stateFor(node), [](void*) {
         // Deliberately empty. The entry belongs to the registry, and freeing it
@@ -752,10 +769,17 @@ Value makeNodeHandleObject(dom::Node* node) {
 }
 
 Value makeElementHandleObject(dom::Element* el) {
-    return makeNodeHandleObject(el);
+    // Born on Element.prototype. makeNodeHandleObject stays bare: host_node.cpp
+    // builds Text, Comment and DocumentFragment through it, and none of those
+    // is an Element.
+    return g_elementClass.make(stateFor(el), [](void*) {
+        // Empty for the same reason as makeNodeHandleObject's.
+    });
 }
 
 HostNodeState* hostNodeStateFor(dom::Node* node) { return stateFor(node); }
+
+HostNodeState* hostNodeStateOfValue(Value v) { return nodeStateOf(v); }
 
 Value makePlainElementValue(dom::Element* el) {
     ObjectBuilder b(makeElementHandleObject(el));
@@ -763,49 +787,88 @@ Value makePlainElementValue(dom::Element* el) {
     return b.get();
 }
 
-void installElementCore(ObjectBuilder& b, dom::Element* el) {
-    HostNodeState* st = stateFor(el);
+// The only per-instance properties an element has: its identity. Everything
+// else is the same for every element and lives on the prototype.
+void decorateElementProto(ObjectBuilder& b);
 
-    // ---- identity ---------------------------------------------------------
+void installElementGlobals() {
+    // `new HTMLElement()` is illegal on the web (the [[HTMLConstructor]] rule),
+    // so the body refuses — but every element is born on this prototype, so
+    // `el instanceof HTMLElement` answers true, which is the form real library
+    // code tests. `Element` is registered as the same object: they are distinct
+    // constructors on the web, with HTMLElement extending Element, and one
+    // object answering both is closer than two names that brand nothing.
+    g_elementClass.install("HTMLElement", 0, nullptr, decorateElementProto);
+    g_elementClass.alias("Element");
+}
+
+void installElementCore(ObjectBuilder& b, dom::Element* el) {
     b.set("nodeType", ev::fromDouble(1));
     b.set("tagName", ev::fromUtf8(el->tagName()));
     b.set("nodeName", ev::fromUtf8(el->tagName()));
 
+    // The event-target trio stays per instance, and is the only part of the
+    // element surface that does. installElementEventTarget takes an
+    // ElementSource — a std::function<dom::Element*()> with no receiver to
+    // read — and its error messages name the tag, which is per element too.
+    // Three methods an element owns instead of fifty-eight.
+    installElementEventTarget(b, [st = stateFor(el)]() { return st->el; },
+                              el->tagName().c_str());
+}
+
+void decorateElementProto(ObjectBuilder& b) {
+
     b.accessor("id",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromUtf8(st->el ? st->el->id() : std::string());
                },
-               [st](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    Value v = argAt(a, 0);
                    if (st->el && !ev::isObject(v))
                        st->el->setId(ev::isUndefined(v) ? "" : ev::toUtf8(v));
                    return ev::undefined();
                });
     b.accessor("className",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromUtf8(st->el ? st->el->className() : std::string());
                },
-               [st](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    Value v = argAt(a, 0);
                    if (st->el && !ev::isObject(v))
                        st->el->setClassName(ev::isUndefined(v) ? "" : ev::toUtf8(v));
                    return ev::undefined();
                });
     b.accessor("textContent",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromUtf8(st->el ? st->el->textContent() : std::string());
                },
-               [st](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    Value v = argAt(a, 0);
                    if (st->el && !ev::isObject(v))
                        st->el->setTextContent(ev::isUndefined(v) ? "" : ev::toUtf8(v));
                    return ev::undefined();
                });
     b.accessor("innerHTML",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromUtf8(st->el ? st->el->innerHTML() : std::string());
                },
-               [st](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    Value v = argAt(a, 0);
                    if (st->el && !ev::isObject(v))
                        st->el->setInnerHTML(ev::isUndefined(v) ? "" : ev::toUtf8(v));
@@ -814,7 +877,9 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
 
     // ---- style / classList, both built on first read ----------------------
     b.accessor("style",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    if (!st->hasStyle && st->el) {
                        Value s = makeStyleObject(st);
                        st->styleObj.set(s);
@@ -824,7 +889,9 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
                },
                nullptr);
     b.accessor("classList",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    if (!st->hasClassList && st->el) {
                        Value c = makeClassListObject(st);
                        st->classListObj.set(c);
@@ -834,7 +901,9 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
                },
                nullptr);
     b.accessor("dataset",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    if (!st->hasDataset && st->el) {
                        Value d = makeDatasetObject(st);
                        st->datasetObj.set(d);
@@ -845,7 +914,9 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
                nullptr);
 
     // ---- attributes -------------------------------------------------------
-    b.def("setAttribute", 2, [st](Value, std::span<const Value> a) {
+    b.def("setAttribute", 2, [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
         Value nameV = argAt(a, 0), valV = argAt(a, 1);
         if (!st->el || ev::isObject(nameV) || ev::isUndefined(nameV))
             return ev::undefined();
@@ -854,7 +925,9 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
         st->el->setAttribute(ev::toUtf8(nameV), val);
         return ev::undefined();
     });
-    b.def("getAttribute", 1, [st](Value, std::span<const Value> a) {
+    b.def("getAttribute", 1, [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
         Value nameV = argAt(a, 0);
         if (!st->el || ev::isObject(nameV) || ev::isUndefined(nameV))
             return ev::null();
@@ -862,13 +935,17 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
         if (!st->el->hasAttribute(name)) return ev::null();
         return ev::fromUtf8(st->el->getAttribute(name));
     });
-    b.def("hasAttribute", 1, [st](Value, std::span<const Value> a) {
+    b.def("hasAttribute", 1, [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
         Value nameV = argAt(a, 0);
         if (!st->el || ev::isObject(nameV) || ev::isUndefined(nameV))
             return ev::fromBool(false);
         return ev::fromBool(st->el->hasAttribute(ev::toUtf8(nameV)));
     });
-    b.def("removeAttribute", 1, [st](Value, std::span<const Value> a) {
+    b.def("removeAttribute", 1, [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
         Value nameV = argAt(a, 0);
         if (st->el && !ev::isObject(nameV) && !ev::isUndefined(nameV))
             st->el->removeAttribute(ev::toUtf8(nameV));
@@ -888,9 +965,11 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
     // `children` and `firstElementChild` are the ones that do not, which is the
     // distinction the web draws and the one an app relies on when it walks a
     // tree it did not build itself.
-    installNodeTree(b, st);
+    installNodeTree(b);
 
-    b.def("append", 1, [st](Value, std::span<const Value> a) {
+    b.def("append", 1, [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
         if (!st->el) return ev::undefined();
         for (const Value& v : a) {
             // A string argument becomes a text node, as the web's append does.
@@ -907,33 +986,42 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
         return ev::undefined();
     });
 
-    auto elementArray = [st]() {
-        if (!st->el) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
-        std::vector<dom::Element*> kids = st->el->children();
-        return hostArrayOf(kids.size(),
-                           [&kids](size_t i) { return hostElementValue(kids[i]); });
-    };
     b.accessor("children",
-               [elementArray](Value, std::span<const Value>) { return elementArray(); },
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
+                   if (!st->el) {
+                       return hostArrayOf(0, [](size_t) { return ev::undefined(); });
+                   }
+                   std::vector<dom::Element*> kids = st->el->children();
+                   return hostArrayOf(
+                       kids.size(),
+                       [&kids](size_t i) { return hostElementValue(kids[i]); });
+               },
                nullptr);
     b.accessor("childElementCount",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromDouble(
                        st->el ? static_cast<double>(st->el->children().size()) : 0.0);
                },
                nullptr);
 
     b.accessor("parentElement",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return st->el ? hostElementValue(st->el->parentElement())
                                  : ev::null();
                },
                nullptr);
 
-    auto defEdge = [&b, st](const char* name, bool first) {
+    auto defEdge = [&b](const char* name, bool first) {
         b.accessor(name,
-                   [st, first](Value, std::span<const Value>) {
-                       if (!st->el) return ev::null();
+                   [first](Value self_, std::span<const Value>) {
+                       HostNodeState* st = nodeStateOf(self_);
+                       if (!st || !st->el) return ev::null();
                        std::vector<dom::Element*> kids = st->el->children();
                        if (kids.empty()) return ev::null();
                        return hostElementValue(first ? kids.front() : kids.back());
@@ -943,23 +1031,29 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
     defEdge("firstElementChild", true);
     defEdge("lastElementChild", false);
 
-    auto defSibling = [&b, st](const char* name, int dir) {
+    auto defSibling = [&b](const char* name, int dir) {
         b.accessor(name,
-                   [st, dir](Value, std::span<const Value>) {
-                       return st->el ? hostElementValue(siblingOf(st->el, dir))
-                                     : ev::null();
+                   [dir](Value self_, std::span<const Value>) {
+                       HostNodeState* st = nodeStateOf(self_);
+                       return st && st->el
+                                  ? hostElementValue(siblingOf(st->el, dir))
+                                  : ev::null();
                    },
                    nullptr);
     };
     defSibling("nextElementSibling", +1);
     defSibling("previousElementSibling", -1);
 
-    b.def("querySelector", 1, [st](Value, std::span<const Value> a) {
+    b.def("querySelector", 1, [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
         Value selV = argAt(a, 0);
         if (!st->el || ev::isObject(selV) || ev::isUndefined(selV)) return ev::null();
         return hostElementValue(st->el->querySelector(ev::toUtf8(selV)));
     });
-    b.def("querySelectorAll", 1, [st](Value, std::span<const Value> a) {
+    b.def("querySelectorAll", 1, [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
         Value selV = argAt(a, 0);
         if (!st->el || ev::isObject(selV) || ev::isUndefined(selV))
             return hostArrayOf(0, [](size_t) { return ev::undefined(); });
@@ -969,52 +1063,70 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
     });
 
     // ---- geometry ---------------------------------------------------------
-    b.def("getBoundingClientRect", 0, [st](Value, std::span<const Value>) {
+    b.def("getBoundingClientRect", 0, [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
         if (!st->el) return makeRectValue(0, 0, 0, 0);
         dom::AbsoluteRect r = borderBoxOf(st->el);
         return makeRectValue(r.x, r.y, r.width, r.height);
     });
     b.accessor("clientWidth",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    if (!st->el) return ev::fromDouble(0.0);
                    hostEngine()->flushLayoutForRead(st->el->document());
                    return ev::fromDouble(st->el->layoutBox().contentRect.width);
                },
                nullptr);
     b.accessor("clientHeight",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    if (!st->el) return ev::fromDouble(0.0);
                    hostEngine()->flushLayoutForRead(st->el->document());
                    return ev::fromDouble(st->el->layoutBox().contentRect.height);
                },
                nullptr);
     b.accessor("offsetWidth",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromDouble(st->el ? borderBoxOf(st->el).width : 0.0);
                },
                nullptr);
     b.accessor("offsetHeight",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromDouble(st->el ? borderBoxOf(st->el).height : 0.0);
                },
                nullptr);
     // Document-absolute, not offset-parent-relative: what a UI positioning a
     // popup against an anchor wants, and what bro's own bindings answer.
     b.accessor("offsetLeft",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromDouble(st->el ? borderBoxOf(st->el).x : 0.0);
                },
                nullptr);
     b.accessor("offsetTop",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromDouble(st->el ? borderBoxOf(st->el).y : 0.0);
                },
                nullptr);
     b.accessor("scrollTop",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromDouble(st->el ? st->el->scrollTopValue() : 0.0);
                },
-               [st](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    if (st->el)
                        st->el->setScrollTopValue(
                            static_cast<float>(ev::toDouble(argAt(a, 0))));
@@ -1027,7 +1139,9 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
                [](Value, std::span<const Value>) { return ev::fromDouble(0.0); },
                [](Value, std::span<const Value>) { return ev::undefined(); });
     b.accessor("scrollHeight",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    if (!st->el) return ev::fromDouble(0.0);
                    hostEngine()->flushLayoutForRead(st->el->document());
                    const auto& box = st->el->layoutBox();
@@ -1036,7 +1150,9 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
                },
                nullptr);
     // scrollTo(x, y) and scrollTo({top, left}) are both written by real UI code.
-    b.def("scrollTo", 2, [st](Value, std::span<const Value> a) {
+    b.def("scrollTo", 2, [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
         if (!st->el) return ev::undefined();
         if (!a.empty() && ev::isObject(a[0])) {
             Value top = ev::getProperty(a[0], "top");
@@ -1056,21 +1172,27 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
         return a.empty() || ev::isUndefined(a[0]) ? engine::Engine::kMousePointerId
                                                   : i32At(a, 0);
     };
-    b.def("setPointerCapture", 1, [st, pointerId](Value, std::span<const Value> a) {
-        if (st->el) hostEngine()->setPointerCapture(st->el, pointerId(a));
+    b.def("setPointerCapture", 1, [pointerId](Value self_, std::span<const Value> a) {
+        HostNodeState* st = nodeStateOf(self_);
+        if (st && st->el) hostEngine()->setPointerCapture(st->el, pointerId(a));
         return ev::undefined();
     });
-    b.def("releasePointerCapture", 1, [st, pointerId](Value, std::span<const Value> a) {
-        if (st->el) hostEngine()->releasePointerCapture(st->el, pointerId(a));
-        return ev::undefined();
-    });
-    b.def("hasPointerCapture", 1, [st, pointerId](Value, std::span<const Value> a) {
-        if (!st->el) return ev::fromBool(false);
+    b.def("releasePointerCapture", 1,
+          [pointerId](Value self_, std::span<const Value> a) {
+              HostNodeState* st = nodeStateOf(self_);
+              if (st && st->el) hostEngine()->releasePointerCapture(st->el, pointerId(a));
+              return ev::undefined();
+          });
+    b.def("hasPointerCapture", 1, [pointerId](Value self_, std::span<const Value> a) {
+        HostNodeState* st = nodeStateOf(self_);
+        if (!st || !st->el) return ev::fromBool(false);
         return ev::fromBool(hostEngine()->hasPointerCapture(st->el, pointerId(a)));
     });
 
     // ---- pointer lock -----------------------------------------------------
-    b.def("requestPointerLock", 0, [st](Value, std::span<const Value>) {
+    b.def("requestPointerLock", 0, [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
         if (st->el) {
             if (auto* e = hostEngine()) {
                 e->requestPointerLock(st->el);
@@ -1080,7 +1202,9 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
     });
 
     // ---- fullscreen -------------------------------------------------------
-    b.def("requestFullscreen", 0, [st](Value, std::span<const Value>) {
+    b.def("requestFullscreen", 0, [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
         if (st->el) {
             setHostFullscreenElement(st->el);
         }
@@ -1096,12 +1220,16 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
     });
 
     // ---- focus ------------------------------------------------------------
-    b.def("focus", 0, [st](Value, std::span<const Value>) {
+    b.def("focus", 0, [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
         if (st->el)
             if (dom::Document* doc = st->el->document()) doc->setActiveElement(st->el);
         return ev::undefined();
     });
-    b.def("blur", 0, [st](Value, std::span<const Value>) {
+    b.def("blur", 0, [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
         if (st->el)
             if (dom::Document* doc = st->el->document())
                 if (doc->activeElement() == st->el) doc->setActiveElement(nullptr);
@@ -1117,11 +1245,15 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
     // route to layout::formValue and friends, the same functions bro's own
     // bindings answer from.
     b.accessor("value",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromUtf8(st->el ? layout::formValue(st->el)
                                               : std::string());
                },
-               [st](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    Value v = argAt(a, 0);
                    if (st->el && !ev::isObject(v))
                        layout::setFormValue(st->el,
@@ -1129,15 +1261,21 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
                    return ev::undefined();
                });
     b.accessor("selectedIndex",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromDouble(st->el ? layout::selectedIndex(st->el) : -1);
                },
-               [st](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    if (st->el) layout::setSelectedIndex(st->el, i32At(a, 0));
                    return ev::undefined();
                });
     b.accessor("options",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    if (!st->el) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
                    std::vector<dom::Element*> opts = layout::selectOptions(st->el);
                    return hostArrayOf(opts.size(), [&opts](size_t i) {
@@ -1150,10 +1288,14 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
     // true, not only by a click, and leaving the old member checked would show
     // two picked radios in a group that can only mean one.
     b.accessor("checked",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromBool(st->el && st->el->hasAttribute("checked"));
                },
-               [st](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    if (!st->el) return ev::undefined();
                    if (ev::toBool(argAt(a, 0))) {
                        js::clearRadioGroup(st->el);
@@ -1168,14 +1310,16 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
     // `<input disabled>` (which parses to disabled="") counts. Writing false
     // removes the attribute rather than setting it to "false", which would
     // read back as true.
-    auto defBoolAttr = [&b, st](const char* name, const char* attr) {
+    auto defBoolAttr = [&b](const char* name, const char* attr) {
         std::string a(attr);
         b.accessor(name,
-                   [st, a](Value, std::span<const Value>) {
-                       return ev::fromBool(st->el && st->el->hasAttribute(a));
+                   [a](Value self_, std::span<const Value>) {
+                       HostNodeState* st = nodeStateOf(self_);
+                       return ev::fromBool(st && st->el && st->el->hasAttribute(a));
                    },
-                   [st, a](Value, std::span<const Value> args) {
-                       if (!st->el) return ev::undefined();
+                   [a](Value self_, std::span<const Value> args) {
+                       HostNodeState* st = nodeStateOf(self_);
+                       if (!st || !st->el) return ev::undefined();
                        if (ev::toBool(argAt(args, 0))) st->el->setAttribute(a, "");
                        else st->el->removeAttribute(a);
                        return ev::undefined();
@@ -1192,18 +1336,20 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
 
     // Plain string reflections. `type` is the one with a default — an <input>
     // with no type attribute is a text input, and UI code branches on it.
-    auto defStrAttr = [&b, st](const char* name, const char* attr,
+    auto defStrAttr = [&b](const char* name, const char* attr,
                                const char* fallback) {
         std::string a(attr), f(fallback);
         b.accessor(name,
-                   [st, a, f](Value, std::span<const Value>) {
-                       if (!st->el) return ev::fromUtf8("");
+                   [a, f](Value self_, std::span<const Value>) {
+                       HostNodeState* st = nodeStateOf(self_);
+                       if (!st || !st->el) return ev::fromUtf8("");
                        const std::string& v = st->el->getAttribute(a);
                        return ev::fromUtf8(v.empty() ? f : v);
                    },
-                   [st, a](Value, std::span<const Value> args) {
+                   [a](Value self_, std::span<const Value> args) {
+                       HostNodeState* st = nodeStateOf(self_);
                        Value v = argAt(args, 0);
-                       if (st->el && !ev::isObject(v))
+                       if (st && st->el && !ev::isObject(v))
                            st->el->setAttribute(a, ev::isUndefined(v) ? ""
                                                                       : ev::toUtf8(v));
                        return ev::undefined();
@@ -1229,15 +1375,18 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
     // layout::tabIndex rather than reading the attribute here — see
     // form_control.h for why a flat default is wrong in both directions.
     b.accessor("tabIndex",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    return ev::fromDouble(st->el ? layout::tabIndex(st->el) : -1);
                },
-               [st](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+                   HostNodeState* st = nodeStateOf(self_);
+                   if (!st) return ev::undefined();
                    if (st->el) layout::setTabIndex(st->el, i32At(a, 0));
                    return ev::undefined();
                });
 
-    installElementEventTarget(b, [st]() { return st->el; }, el->tagName().c_str());
 }
 
 }  // namespace bro::bronze_host

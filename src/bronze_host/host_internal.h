@@ -338,7 +338,7 @@ Value makeFragmentValue(dom::DocumentFragment* frag);
 // every wrapper kind, because every one of them is a Node. The element-only
 // extras (`children`, `firstElementChild`, querySelector…) stay in
 // installElementCore beside it.
-void installNodeTree(ObjectBuilder& b, HostNodeState* st);
+void installNodeTree(ObjectBuilder& b);
 
 // Insert `child` under `parent` before `ref` (append when `ref` is null),
 // unparenting it first and spilling a DocumentFragment's children in its place
@@ -425,6 +425,17 @@ Value makeElementHandleObject(dom::Element* el);
 // construction. Shared, so a canvas is an element that also has a drawing
 // buffer rather than a separate kind of thing that happens to look like one.
 void installElementCore(ObjectBuilder& b, dom::Element* el);
+
+// Installs Element/HTMLElement as a real class. Must run BEFORE any element
+// value is built, or those elements are born on the bare handle shape and
+// carry no members at all.
+void installElementGlobals();
+
+// The node state behind a host node VALUE (an element, text or comment
+// wrapper). This is what a member on a shared prototype uses in place of a
+// captured pointer: one copy of the method serves every node, so the receiver
+// is the only thing that says which node the call is about.
+HostNodeState* hostNodeStateOfValue(Value v);
 
 // An element and nothing more (host_element.cpp); a canvas (dom_globals.cpp).
 Value makePlainElementValue(dom::Element* el);

@@ -155,6 +155,77 @@ say('ws.ctorConstants', WebSocket.OPEN === 1 && WebSocket.CLOSED === 3);
 say('ws.protoConstants', WebSocket.prototype.OPEN === 1);
 
 // ---------------------------------------------------------------------------
+// Element, which is the one that actually costs something
+// ---------------------------------------------------------------------------
+
+// An element carried its own copy of fifty-eight members. A thousand-element
+// UI allocated fifty-eight thousand function objects to say the same
+// fifty-eight things; now it allocates fifty-eight, plus three per element
+// (the event-target trio, which needs a per-element source).
+
+const div = document.createElement('div');
+const div2 = document.createElement('div');
+
+pinClass('div', div, HTMLElement);
+say('div.isElement', div instanceof Element);
+say('div.ElementIsHTMLElement', Element === HTMLElement);
+
+// The whole surface is shared between two elements...
+say('div.methodShared', div.setAttribute === div2.setAttribute);
+say('div.accessorShared',
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'id') !== undefined);
+say('div.methodNotOwn', !Object.prototype.hasOwnProperty.call(div, 'setAttribute'));
+
+// ...and the only own properties left are identity plus the event-target trio.
+say('div.ownKeys', Object.keys(div).sort().join(','));
+
+// A shared accessor still writes to the RIGHT element: this is the claim that
+// would break if a member read a captured pointer instead of its receiver.
+div.id = 'first';
+div2.id = 'second';
+say('div.accessorPerInstance', div.id === 'first' && div2.id === 'second');
+
+div.setAttribute('data-x', '1');
+say('div.methodPerInstance',
+    div.getAttribute('data-x') === '1' && div2.getAttribute('data-x') === null);
+
+// The per-instance sub-objects still resolve, and are still per instance:
+// their receiver is the sub-object, not the element, so they keep closing over
+// their own state rather than reading a receiver.
+div.style.color = 'red';
+say('div.styleIsPerInstance', div.style.color === 'red' && div2.style.color === '');
+div.dataset.role = 'button';
+say('div.datasetIsPerInstance',
+    div.dataset.role === 'button' && div2.dataset.role === undefined);
+div.classList.add('on');
+say('div.classListIsPerInstance',
+    div.classList.contains('on') && !div2.classList.contains('on'));
+
+// The tree half comes from the same prototype and still finds its receiver.
+div.appendChild(div2);
+say('div.treeWorks', div.children.length === 1 && div2.parentElement === div);
+
+// A canvas is an element that overrides a few members as OWN properties, so
+// the prototype supplies the rest and the overrides shadow it.
+const canvas = document.createElement('canvas');
+say('canvas.isElement', canvas instanceof HTMLElement);
+// getAttribute comes from the prototype — the same function object every
+// element reads.
+say('canvas.inheritsElementMethod', canvas.getAttribute === div.getAttribute);
+// setAttribute is one it DOES override, because writing width or height has to
+// resize the drawing buffer. The own property shadows the shared one.
+say('canvas.ownOverrideWins',
+    Object.prototype.hasOwnProperty.call(canvas, 'width') &&
+    Object.prototype.hasOwnProperty.call(canvas, 'setAttribute') &&
+    canvas.setAttribute !== div.setAttribute);
+
+// A text node is NOT an element: it is built on the bare handle shape, and
+// giving it Element's prototype would be a lie the tree walkers would believe.
+const text = document.createTextNode('hi');
+say('text.isNotElement', !(text instanceof HTMLElement));
+say('text.treeStillWorks', typeof text.appendChild === 'function');
+
+// ---------------------------------------------------------------------------
 // End to end: a load through the inherited accessor
 // ---------------------------------------------------------------------------
 

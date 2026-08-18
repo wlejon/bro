@@ -187,22 +187,31 @@ void hostInsertNode(dom::Node* parent, dom::Node* child, dom::Node* ref) {
 // The tree surface every wrapper gets
 // ---------------------------------------------------------------------------
 
-void installNodeTree(ObjectBuilder& b, HostNodeState* st) {
-    b.def("appendChild", 1, [st](Value, std::span<const Value> a) {
+// Every member here reads its RECEIVER rather than closing over the state, so
+// the same call serves an element prototype (one copy for every element in the
+// document) and a text or comment wrapper that still carries its own.
+void installNodeTree(ObjectBuilder& b) {
+    b.def("appendChild", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
         dom::Node* child = hostNodeOf(argAt(a, 0));
         if (!st->node || !child)
             return ev::throwTypeError("appendChild: argument is not a node");
         hostInsertNode(st->node, child, nullptr);
         return argAt(a, 0);
     });
-    b.def("removeChild", 1, [st](Value, std::span<const Value> a) {
+    b.def("removeChild", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
         dom::Node* child = hostNodeOf(argAt(a, 0));
         if (!st->node || !child)
             return ev::throwTypeError("removeChild: argument is not a node");
         if (child->parentNode() == st->node) st->node->removeChild(child);
         return argAt(a, 0);
     });
-    b.def("insertBefore", 2, [st](Value, std::span<const Value> a) {
+    b.def("insertBefore", 2, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
         dom::Node* child = hostNodeOf(argAt(a, 0));
         if (!st->node || !child)
             return ev::throwTypeError("insertBefore: argument is not a node");
@@ -214,7 +223,9 @@ void installNodeTree(ObjectBuilder& b, HostNodeState* st) {
         hostInsertNode(st->node, child, ref);
         return argAt(a, 0);
     });
-    b.def("replaceChild", 2, [st](Value, std::span<const Value> a) {
+    b.def("replaceChild", 2, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
         dom::Node* fresh = hostNodeOf(argAt(a, 0));
         dom::Node* old = hostNodeOf(argAt(a, 1));
         if (!st->node || !fresh || !old)
@@ -224,7 +235,9 @@ void installNodeTree(ObjectBuilder& b, HostNodeState* st) {
         st->node->removeChild(old);
         return argAt(a, 1);
     });
-    b.def("remove", 0, [st](Value, std::span<const Value>) {
+    b.def("remove", 0, [](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
         if (st->node && st->node->parentNode())
             st->node->parentNode()->removeChild(st->node);
         return ev::undefined();
@@ -233,7 +246,9 @@ void installNodeTree(ObjectBuilder& b, HostNodeState* st) {
     // a UI asks `panel.contains(event.target)` to decide whether a click was
     // its own, and a wrong answer there closes menus that should have stayed
     // open.
-    b.def("contains", 1, [st](Value, std::span<const Value> a) {
+    b.def("contains", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
         dom::Node* other = hostNodeOf(argAt(a, 0));
         if (!st->node || !other) return ev::fromBool(false);
         return ev::fromBool(nodeContains(st->node, other));
@@ -245,7 +260,9 @@ void installNodeTree(ObjectBuilder& b, HostNodeState* st) {
     // <select> its live selection — neither of which survives the obvious
     // implementation of walking the tree and re-creating elements from their
     // tag names and attributes.
-    b.def("cloneNode", 1, [st](Value, std::span<const Value> a) {
+    b.def("cloneNode", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
         if (!st->node) return ev::null();
         dom::Document* doc = st->node->document();
         if (!doc) return ev::null();
@@ -257,7 +274,9 @@ void installNodeTree(ObjectBuilder& b, HostNodeState* st) {
     });
 
     b.accessor("childNodes",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
                    std::vector<dom::Node*> kids = childrenOf(st->node);
                    return hostArrayOf(kids.size(), [&kids](size_t i) {
                        return hostNodeValue(kids[i]);
@@ -265,22 +284,27 @@ void installNodeTree(ObjectBuilder& b, HostNodeState* st) {
                },
                nullptr);
     b.accessor("hasChildNodes",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
                    return ev::fromBool(st->node && !st->node->childNodes().empty());
                },
                nullptr);
 
     b.accessor("parentNode",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
                    return st->node ? hostNodeValue(st->node->parentNode())
                                    : ev::null();
                },
                nullptr);
 
-    auto defEdge = [&b, st](const char* name, bool first) {
+    auto defEdge = [&b](const char* name, bool first) {
         b.accessor(name,
-                   [st, first](Value, std::span<const Value>) {
-                       if (!st->node) return ev::null();
+                   [first](Value self_, std::span<const Value>) {
+                       HostNodeState* st = hostNodeStateOfValue(self_);
+                       if (!st || !st->node) return ev::null();
                        const std::vector<dom::Node*>& kids = st->node->childNodes();
                        if (kids.empty()) return ev::null();
                        return hostNodeValue(first ? kids.front() : kids.back());
@@ -290,10 +314,11 @@ void installNodeTree(ObjectBuilder& b, HostNodeState* st) {
     defEdge("firstChild", true);
     defEdge("lastChild", false);
 
-    auto defSibling = [&b, st](const char* name, int dir) {
+    auto defSibling = [&b](const char* name, int dir) {
         b.accessor(name,
-                   [st, dir](Value, std::span<const Value>) {
-                       if (!st->node) return ev::null();
+                   [dir](Value self_, std::span<const Value>) {
+                       HostNodeState* st = hostNodeStateOfValue(self_);
+                       if (!st || !st->node) return ev::null();
                        dom::Node* parent = st->node->parentNode();
                        if (!parent) return ev::null();
                        const std::vector<dom::Node*>& kids = parent->childNodes();
@@ -328,10 +353,14 @@ Value makeCharacterDataValue(dom::Node* node) {
     // character-data node, and libraries reach for all three.
     auto defData = [&b, st](const char* name) {
         b.accessor(name,
-                   [st](Value, std::span<const Value>) {
+                   [](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
                        return ev::fromUtf8(charsData(st->node));
                    },
-                   [st](Value, std::span<const Value> a) {
+                   [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
                        Value v = argAt(a, 0);
                        if (st->node && !ev::isObject(v))
                            charsSetData(st->node,
@@ -344,37 +373,49 @@ Value makeCharacterDataValue(dom::Node* node) {
     defData("textContent");
 
     b.accessor("length",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
                    return ev::fromDouble(dom::utf16Length(charsData(st->node)));
                },
                nullptr);
 
-    b.def("appendData", 1, [st](Value, std::span<const Value> a) {
+    b.def("appendData", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
         if (st->node)
             charsSetData(st->node, charsData(st->node) + ev::toUtf8(argAt(a, 0)));
         return ev::undefined();
     });
-    b.def("insertData", 2, [st](Value, std::span<const Value> a) {
+    b.def("insertData", 2, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
         if (!st->node) return ev::undefined();
         ByteRange r = byteRangeOf(charsData(st->node), ev::toDouble(argAt(a, 0)), 0);
         charsInsert(st->node, r.offset, ev::toUtf8(argAt(a, 1)));
         return ev::undefined();
     });
-    b.def("deleteData", 2, [st](Value, std::span<const Value> a) {
+    b.def("deleteData", 2, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
         if (!st->node) return ev::undefined();
         ByteRange r = byteRangeOf(charsData(st->node), ev::toDouble(argAt(a, 0)),
                                   ev::toDouble(argAt(a, 1)));
         charsDelete(st->node, r.offset, r.count);
         return ev::undefined();
     });
-    b.def("replaceData", 3, [st](Value, std::span<const Value> a) {
+    b.def("replaceData", 3, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
         if (!st->node) return ev::undefined();
         ByteRange r = byteRangeOf(charsData(st->node), ev::toDouble(argAt(a, 0)),
                                   ev::toDouble(argAt(a, 1)));
         charsReplace(st->node, r.offset, r.count, ev::toUtf8(argAt(a, 2)));
         return ev::undefined();
     });
-    b.def("substringData", 2, [st](Value, std::span<const Value> a) {
+    b.def("substringData", 2, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
         if (!st->node) return ev::fromUtf8("");
         ByteRange r = byteRangeOf(charsData(st->node), ev::toDouble(argAt(a, 0)),
                                   ev::toDouble(argAt(a, 1)));
@@ -388,7 +429,9 @@ Value makeCharacterDataValue(dom::Node* node) {
     // freed-node observer the registry depends on would never fire for it. The
     // document's own factory is the only allocation path with those properties.
     if (node->nodeType() == dom::NodeType::Text) {
-        b.def("splitText", 1, [st](Value, std::span<const Value> a) {
+        b.def("splitText", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
             if (!st->node) return ev::null();
             auto* text = static_cast<dom::TextNode*>(st->node);
             dom::Document* doc = text->document();
@@ -415,7 +458,7 @@ Value makeCharacterDataValue(dom::Node* node) {
         });
     }
 
-    installNodeTree(b, st);
+    installNodeTree(b);
     return b.get();
 }
 
@@ -431,7 +474,9 @@ Value makeFragmentValue(dom::DocumentFragment* frag) {
     // views too — a UI builds rows into a fragment and then reads
     // `frag.children.length` back before inserting it.
     b.accessor("children",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
                    std::vector<dom::Element*> kids;
                    if (st->node)
                        for (dom::Node* n : st->node->childNodes())
@@ -443,7 +488,9 @@ Value makeFragmentValue(dom::DocumentFragment* frag) {
                },
                nullptr);
 
-    b.def("append", 1, [st](Value, std::span<const Value> a) {
+    b.def("append", 1, [](Value self_, std::span<const Value> a) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
         if (!st->node) return ev::undefined();
         for (const Value& v : a) {
             if (dom::Node* child = hostNodeOf(v)) {
@@ -457,7 +504,9 @@ Value makeFragmentValue(dom::DocumentFragment* frag) {
     });
 
     b.accessor("textContent",
-               [st](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+        HostNodeState* st = hostNodeStateOfValue(self_);
+        if (!st) return ev::undefined();
                    std::string out;
                    if (st->node)
                        for (dom::Node* n : st->node->childNodes())
@@ -467,7 +516,7 @@ Value makeFragmentValue(dom::DocumentFragment* frag) {
                },
                nullptr);
 
-    installNodeTree(b, st);
+    installNodeTree(b);
     return b.get();
 }
 

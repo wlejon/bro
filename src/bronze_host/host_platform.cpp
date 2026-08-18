@@ -317,10 +317,13 @@ void installPlatformGlobals() {
     ev::registerGlobal("Node", makeNodeInterface());
     // The rest, in the manifest's order. Each is a name a real library tests
     // for before deciding what kind of environment it is in.
+    // Element and HTMLElement are NOT here: host_element.cpp registers them as
+    // a real class whose instances answer `instanceof`. These are the names
+    // that still brand nothing.
     for (const char* name : {
              "Event", "UIEvent", "MouseEvent", "PointerEvent", "KeyboardEvent",
              "WheelEvent", "InputEvent", "FocusEvent", "ProgressEvent",
-             "Element", "HTMLElement", "HTMLInputElement", "HTMLSelectElement",
+             "HTMLInputElement", "HTMLSelectElement",
              "HTMLTextAreaElement", "HTMLVideoElement", "HTMLMediaElement",
              "HTMLAnchorElement", "HTMLDivElement", "Text", "CharacterData",
              "Comment", "DocumentFragment", "Gamepad", "GamepadButton",

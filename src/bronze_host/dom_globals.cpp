@@ -1062,6 +1062,10 @@ void installWebHostGlobals(engine::Engine& engine) {
     // Headers, Response, navigator, HTMLCanvasElement, HTMLImageElement,
     // WebGLRenderingContext, Intl, localStorage, AudioContext, CustomEvent,
     // bro. registerGlobal roots each value for the life of the process.
+    // FIRST: every element value is born on this class's prototype, and one
+    // built before the install would carry no members at all.
+    installElementGlobals();
+
     {
         // Null: the global follows the engine's current document rather than
         // naming one. documentFor() above has the reason.
