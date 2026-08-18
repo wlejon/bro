@@ -2,8 +2,9 @@
 
 The host layer for [bronze](../../../bronze)-compiled (AOT) JavaScript:
 registers a browser-shaped set of host globals (`document`, `window`,
-`requestAnimationFrame`, the timers, `Image`, `XMLHttpRequest`) backed by the
-engine, wraps `webgl::WebGL2RenderingContext` as a bronze object covering the
+`requestAnimationFrame`, the timers, `Image`, `XMLHttpRequest`, `fetch`, `Blob`
+and friends, the observers, Web Audio, `Physics`, `AI`, `bro.net`/`WebSocket`)
+backed by the engine, wraps `webgl::WebGL2RenderingContext` as a bronze object covering the
 WebGL2 surface three.js r160's renderer drives, and owns the per-frame seam that
 advances the clock, delivers completions, fires callbacks and performs the
 microtask checkpoint. `src/js/webgl2_bindings*` is the reference for the GL
@@ -32,8 +33,15 @@ Off by default; nothing here is in the default build.
 | `host_observers.cpp` | `MutationObserver`, over the DOM layer's own mutation notices; `ResizeObserver`, over a per-frame poll of the layout box |
 | `host_parser.cpp` | `DOMParser`: HTML text into a second `dom::Document`, and the lifetime policy for it |
 | `host_video.cpp` | `VideoEncoder` / `GifEncoder`: RGBA frames, a 2D canvas or the composited viewport in; a `.webm` or `.gif` file out |
+| `host_fetch.cpp` | `fetch()` over the engine's asset mounts, into a real bronze Promise |
+| `host_class.cpp` | `HostClass`: the ctor/prototype/handle shape every wrapper family is built from |
+| `host_proxy.cpp` | `makeHostProxy`: the property trap behind `style`, computed style, `dataset`, `localStorage` |
+| `host_audio.cpp` | Web Audio ? `AudioContext` and the node/param graph ? over broaudio |
+| `host_physics.cpp` | the `Physics` namespace, `PhysicsCharacter` and `PhysicsSoftBody`, over Jolt |
+| `host_ai.cpp` | the `AI` namespace: nav grid, navmesh, pathfinding, agents, over brogameagent |
+| `host_net.cpp` | `bro.net` over GameNetworkingSockets, and the `WebSocket` client |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
-| `app_module.cpp` | finding, verifying and running the module an app dir carries |
+| `web_host.globals` | the manifest of global names bronze admits; every one must be registered ? an unregistered name is `fatal()`, not a miss |
 
 ## How a compiled app gets in
 
@@ -228,7 +236,7 @@ for the rest of its life.
 A method reached through the prototype still unwraps its receiver with
 `handleData(thisValue)`, which is the part worth pinning rather than assuming:
 the payload and the handle brand live in internal slots that the prototype does
-not reach. `tests/bronze_host/run_class_test.sh` pins it, along with the shared
+not reach. `tests/bronze_host/run_checks.sh class` pins it, along with the shared
 -methods and `instanceof` claims.
 
 `Image` and `HTMLImageElement` are the SAME constructor here, as on the web.
@@ -433,10 +441,10 @@ uniforms, `vertexAttrib*` default-value setters, and `getContext('2d')`.
 engine's asset mounts (`js/asset_path.h`) and take http(s) through
 `util::fetchRemoteCached`, the same remote-asset path both share so they agree
 about what a URL means and what is cached. `WebSocket` and `bro.net` are in
-`host_net.cpp`, checked by `tests/bronze_host/run_net_test.sh`.
+`host_net.cpp`, checked by `tests/bronze_host/run_checks.sh net`.
 
 `Blob`, `File`, `FileReader` and object URLs are DONE — `host_file.cpp`,
-checked by `tests/bronze_host/run_file_test.sh`. `blob:` and `data:` URLs
+checked by `tests/bronze_host/run_checks.sh file`. `blob:` and `data:` URLs
 resolve in `fetch`, `XMLHttpRequest` and `Image.src`, out of the ENGINE's
 object-URL table (`util/object_url.h`), so a URL minted by compiled code
 resolves in the page's markup and vice versa.
@@ -451,7 +459,7 @@ rather than throwing. `x instanceof URL` is reachable too — see
 **Host classes** — and is the one thing conversion would actually buy.
 
 `AbortController` and `AbortSignal` are DONE — `host_abort.cpp`, checked by
-`tests/bronze_host/run_abort_test.sh`. `fetch(url, {signal})` rejects with the
+`tests/bronze_host/run_checks.sh abort`. `fetch(url, {signal})` rejects with the
 signal's reason instead of reading the file, `AbortSignal.abort`, `.timeout` and
 `.any` are all present, and `throwIfAborted()` throws the reason untouched.
 
@@ -478,7 +486,7 @@ not a `dom::Element` — it has no layout box. It IS a real class, though: see
 **Host classes** below.
 
 `MutationObserver` is DONE — `host_observers.cpp`, checked by
-`tests/bronze_host/run_observer_test.sh` — and it is built on a notice fired by
+`tests/bronze_host/run_checks.sh observer` — and it is built on a notice fired by
 the DOM layer itself (`Document::notifyMutation`, new in `src/dom/document.h`)
 rather than on this layer's own mutators. That is the difference between an
 observer that sees every change to the tree and one that sees only the changes
@@ -512,7 +520,7 @@ sizes settle; this reports once per frame, so a callback that resizes its own
 target is heard about on the next frame and cannot loop.
 
 `DOMParser` is DONE — `host_parser.cpp`, checked by
-`tests/bronze_host/run_parser_test.sh`. `parseFromString` builds a real
+`tests/bronze_host/run_checks.sh parser`. `parseFromString` builds a real
 `dom::Document` through the same gumbo path the app document uses and hands
 back the full document surface bound to it, so the queries, the node factories
 and `body`/`documentElement` all answer from the parsed tree. The mime-type
@@ -560,7 +568,7 @@ node this layer ever wrapped came from a parsed document, the LIVE document was
 left unwatched and every wrapper it handed out could outlive its node.
 
 `VideoEncoder` and `GifEncoder` are DONE — `host_video.cpp`, checked by
-`tests/bronze_host/run_video_test.sh`. Same class names, same methods, same
+`tests/bronze_host/run_checks.sh video`. Same class names, same methods, same
 argument shapes and the same refusals as bro's own bindings
 (`src/js/video_bindings.cpp`), because both wrap the same encoders in
 `src/video`. Recording is worth having here for a reason none of the rest of
@@ -609,7 +617,7 @@ also exactly what the interpreted side of a video-less build looks like, where
 the classes are simply not installed.
 
 `dataset` is DONE, and so is the reach that blocked it — `host_proxy.cpp`,
-checked by `tests/bronze_host/run_proxy_test.sh`. It was blocked rather than
+checked by `tests/bronze_host/run_checks.sh proxy`. It was blocked rather than
 merely unwritten: it is a live view whose keys are not known in advance, so it
 needs a PROPERTY TRAP. Everything else about it could be faked;
 `el.dataset.newKey = 'v'` could not, and a dataset that silently drops that
@@ -637,7 +645,7 @@ an accessor PAIR for each of ~110 names in both spellings, and now builds four
 methods and a trap pack.
 
 Text nodes, comments, fragments and `cloneNode` are DONE — `host_node.cpp`,
-checked by `tests/bronze_host/run_node_test.sh`. `childNodes`, `firstChild`,
+checked by `tests/bronze_host/run_checks.sh node`. `childNodes`, `firstChild`,
 `lastChild`, `nextSibling` and `previousSibling` walk NODES; `children`,
 `firstElementChild` and `nextElementSibling` are the element-only views beside
 them. CharacterData offsets are UTF-16, converted at the boundary, because the

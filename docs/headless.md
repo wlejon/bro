@@ -703,7 +703,7 @@ not survive the swap.
 
 - `[INFO]` and `[console.log]` lines go to stderr; REPL output and `-e` print results go to stdout. Separate them with `2>/dev/null`.
 - Screenshots are PNG format.
-- The default viewport is 1920x1080. Override with `--width` and `--height`.
+- The default viewport is 1920x1080. Override with `--width` and `--height`. These are applied *after* the app config loads, so an appdir's `bro.json` `width`/`height` has no effect in headless ? every headless run is 1920x1080 on every machine unless the flags are passed. Derive test expectations from `window.innerWidth`/`innerHeight` rather than from the manifest.
 - Audio engine runs in headless mode; by default no audio device is opened (pass `--audio` to open the real SDL device + mic). `advanceTime()` pumps the audio DSP pipeline, so voices, effects, sequencer, metering, recording, and FFT analysis all work. Use `getBusPeakL/R()`, `getBusRmsL/R()`, `getSpectrum()`, and `stopRecording()` to inspect audio output numerically.
 - In the REPL, the prompt (`bro>`) is printed to stderr so it doesn't contaminate piped output.
 - The REPL supports `quit` and `exit` to terminate.

@@ -30,7 +30,7 @@ macOS: `tests/run_tests.sh` needs bash 4+ (`brew install bash`); system bash is 
 
 ## Architecture
 
-Lightweight app runtime: HTML/CSS/JS apps, GPU-accelerated. ~183K LOC C++20 under `src/` (`src/js/` bindings are about half). Stack: QuickJS + qjsbind + brokit + htmlayout + broaudio + bromesh + Jolt + Skia (Ganesh-GL on GPU, CPU raster otherwise) + SDL3. All GPU work is OpenGL 3.3 core via glad; there is no SDL_GPU, D3D12, or Metal path.
+Lightweight app runtime: HTML/CSS/JS apps, GPU-accelerated. ~215K LOC C++20 under `src/` (`src/js/` bindings are ~92K of it). Stack: QuickJS + qjsbind + brokit + htmlayout + broaudio + bromesh + Jolt + Skia (Ganesh-GL on GPU, CPU raster otherwise) + SDL3. All GPU work is OpenGL 3.3 core via glad; there is no SDL_GPU, D3D12, or Metal path.
 
 Three executables, one `Engine` (via `EngineConfig.displayMode`): `bro` (windowed), `bro-headless` (JS-scripted; GPU by default through a hidden SDL window, same pipeline including WebGL), and `bro-server` (`bro-server <appdir> <script.js>`, a dedicated game server running a fixed-tickrate JS loop with `bro.net`/`bro.physics`/`bro.mesh`/`bro.noise`, no window or renderer). Headless globals: `screenshot()`, `advanceTime(ms)` (virtual time, for deterministic tests), `flush()`, `sleep()`, `assert()`; all standard DOM APIs work. Full reference: [docs/headless.md](docs/headless.md).
 
@@ -38,7 +38,9 @@ Module layering (each names only layers left of it):
 ```
 util → platform (SDL3, event loop) → render (Renderer iface) → svg → layout (htmlayout adapters, DrawTraversal) → dom → canvas | webgl | scene | physics → js (bindings) → engine (main loop)
 ```
-The js/engine edge is in practice a cycle (a dozen `*_bindings` files take `Engine*`, wired in `engine_init.cpp`); scene/canvas stay clean via callbacks.
+The js/engine edge is in practice a cycle (a dozen `*_bindings` files take `Engine*`, wired in `engine_init.cpp`); scene/canvas stay clean via callbacks. `src/svg` is only the `<img src="*.svg">` rasterizer (SkSVGDOM into an RGBA buffer); *inline* `<svg>` is painted by `src/layout/svg_*` — a native traversal emitting `Renderer` primitives with cascaded SVG paint, so SVG children have real `getBoundingClientRect` geometry, falling back to SkSVGDOM only for text/filters/masks/patterns/markers.
+
+`src/bronze_host/` (17K lines, `BRO_WITH_BRONZE=OFF` by default) is a second, parallel binding layer: the same engine exposed to [bronze](../bronze)-compiled AOT JavaScript instead of QuickJS. An app is a folder carrying `app.dll`/`.so`/`.dylib` beside its `index.html`, which the stock `bro`/`bro-headless` load. See `src/bronze_host/README.md` and `tests/bronze_host/README.md`.
 
 Key patterns:
 - **Pipeline:** gumbo parses into a `bro::dom` tree; `htmlayout::css::Cascade` resolves style, `layoutTree()` lays out, `DrawTraversal` issues Skia calls. Mutations `markDirty()`; the loop re-layouts only when dirty. A geometry read from JS (`getBoundingClientRect`, `offsetWidth`, `getComputedStyle`, …) lays the document out first — `Engine::flushLayoutForRead` — so an element appended and measured in one turn measures correctly rather than reporting the box it does not have yet. The flush re-arms the *paint* half of the dirty flag, because the frame still has to draw what was measured; `Document::layoutIsCurrent()` keeps a run of reads to one pass.
@@ -134,7 +136,7 @@ Annotated `.js` files with JSDoc + examples. Read the file before using or chang
 | `video-api.js` | `<video>` playback (HTMLMediaElement subset, WebM/VP9+Opus) incl. `stepFrame`/`frameRate`, `bro.media` waveform + filmstrip analysis, `VideoEncoder` (WebM/VP9) / `GifEncoder`: RGBA in, file out |
 | `iframe-api.js` | `<iframe src=dir>`: isolated sub-document (own realm/DOM/timers), input routed in |
 
-Bindings without a `docs/` file yet: `bro.steam` (`src/js/steam_bindings.cpp`, Steamworks via a runtime-loaded flat C API) and `bro.text` (`src/js/text_bindings.cpp`, shaping diagnostics). Read the binding source for those.
+Bindings without a `docs/` file yet: `bro.steam` (`src/js/steam_bindings.cpp`, Steamworks via a runtime-loaded flat C API), `bro.text` (`src/js/text_bindings.cpp`, shaping diagnostics), and the global `Rig.*` / `IK.*` namespaces (`src/js/rigging_bindings.cpp`, skeleton + IK solvers). Read the binding source for those.
 
 Other docs: `docs/headless.md` (headless reference including input/IME injection and the WebGL2 support matrix), `docs/settings.md`, `docs/inspect.md` (DOM inspector, great in headless), `docs/system-panels.md`, `docs/embedding.md` (linking bro_engine into your own executable: host bindings, media backends, the headless driver), `docs/multi-repo-workflow.md`, `docs/coverage.md` (Windows-only line coverage).
 

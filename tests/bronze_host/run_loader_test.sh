@@ -4,11 +4,11 @@
 # module, and refusing the ones it must refuse.
 #
 # WHY THIS CHECK IS DIFFERENT FROM ITS NEIGHBOURS. Every other script here
-# drives a bro-bronze-host-<app> binary with an app LINKED IN, so what they
-# test is the host layer. This one tests the stock binary ? the same
-# bro-headless every other test in tests/ uses ? because the whole point of
-# the folder model is that ONE binary opens an interpreted app and a compiled
-# one, and which it got is a property of the directory.
+# runs a real compiled app to test the HOST LAYER beneath it. This one tests
+# the LOADER itself, on the same stock bro-headless every other test in tests/
+# uses, because the whole point of the folder model is that ONE binary opens an
+# interpreted app and a compiled one, and which it got is a property of the
+# directory.
 #
 # WHY THE MODULES ARE SYNTHETIC. The subject is the loader's contract, not
 # bronze's codegen: what a module must export, and what happens when it does

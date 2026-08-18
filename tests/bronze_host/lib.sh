@@ -146,3 +146,141 @@ bh_ensure_module() {
     }
     echo "$module"
 }
+
+# Run one check end to end: find the stock binary, ensure the module is built,
+# run the app, cut the pinned lines out of what it printed, and diff them
+# against the committed expectation. Eighteen scripts used to spell this out
+# one at a time, each a near-identical ~90 lines; each is now one call here.
+# Prints the usual "  PASS/FAIL/SKIP  <name>" lines and returns 0 pass, 1 fail,
+# 77 skip — the codes tests/run_tests.sh maps onto its own counters.
+#
+#   bh_run_check <name> <appdir> <probe.js> <expected> [options]
+#
+#   --frames <n>       frames behind the default expression (default 8). The
+#                      env override BRO_BRONZE_FRAMES beats it, as it always
+#                      has. Spare frames past what the app needs must print
+#                      nothing, which is itself a check: an app still drawing
+#                      after `done` has a rAF it never stopped rescheduling.
+#   --expr <js>        run `-e <js>` instead of `-e advanceTime(frames*16)`
+#   --driver <file>    run under a driver script instead of -e — the only mode
+#                      that can produce a click
+#   --split-streams    capture stderr separately and diff TWO blocks: the
+#                      compiled app's `APP ` lines from stdout in order, then
+#                      the interpreted `PAGE `/`DRV ` console lines from the
+#                      engine log in order. The two are different OS streams
+#                      with different buffers, so their INTERLEAVING is not
+#                      something a byte-for-byte expectation may depend on —
+#                      each stream's own order is. Causality across the
+#                      boundary survives the split because it is carried in
+#                      the payload rather than in the interleaving.
+#   --two-block        the same two-block cut, from one merged 2>&1 stream
+#   --pre-clean <str>  rm -f these space-separated CWD-relative files first
+#                      (drivers that call screenshot() write into the CWD)
+#   --run-in <dir>     cd there for the run (the video probe writes its
+#                      encodes into the CWD)
+#   --diff-head <n>    diff lines shown on failure (default 60)
+#   --quiet-pass       return 0 without printing PASS — for a wrapper that has
+#                      its own checks to run after the diff and prints its own
+#
+# CR is stripped from both streams before anything is compared: Windows text
+# mode expands each newline, and the expectations are byte-for-byte.
+bh_run_check() {
+    local name="$1" appdir="$2" probe="$3" expected="$4"; shift 4
+    local frames=8 expr="" driver="" split=0 twoblock=0 preclean="" runin=""
+    local diffhead=60 quietpass=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --frames)        frames="$2";   shift 2 ;;
+            --expr)          expr="$2";     shift 2 ;;
+            --driver)        driver="$2";   shift 2 ;;
+            --split-streams) split=1;       shift ;;
+            --two-block)     twoblock=1;    shift ;;
+            --pre-clean)     preclean="$2"; shift 2 ;;
+            --run-in)        runin="$2";    shift 2 ;;
+            --diff-head)     diffhead="$2"; shift 2 ;;
+            --quiet-pass)    quietpass=1;   shift ;;
+            *) echo "bh_run_check: unknown option '$1'" >&2; return 1 ;;
+        esac
+    done
+    frames="${BRO_BRONZE_FRAMES:-$frames}"
+    [[ -z "$expr" ]] && expr="advanceTime($((frames * 16)))"
+
+    # Global, not local: bh_module_name reads it as a fallback.
+    PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+
+    local bin
+    bin="$(bh_find_bro_headless "$PROJECT_DIR")" || {
+        echo "  SKIP  $name  (bro-headless not built)"
+        return 77
+    }
+
+    bh_ensure_module "$PROJECT_DIR" "$appdir" "$probe" > /dev/null
+    case $? in
+        0)  ;;
+        77) echo "  SKIP  $name  (no bronze CLI in this tree)"
+            echo "        Configure with -DBRONZE_WITH_LLVM=ON to build one."
+            return 77 ;;
+        *)  echo "  FAIL  $name  ($(basename "$probe") did not compile)"
+            return 1 ;;
+    esac
+
+    [[ -n "$preclean" ]] && rm -f $preclean
+
+    local -a cmd=("$bin" "$(bh_to_win_path "$appdir")")
+    if [[ -n "$driver" ]]; then cmd+=("$(bh_to_win_path "$driver")")
+    else cmd+=(-e "$expr"); fi
+
+    local raw err_raw="" status
+    if [[ $split -eq 1 ]]; then
+        local err_file="${TMPDIR:-/tmp}/${name}_err.$$"
+        if [[ -n "$runin" ]]; then raw="$(cd "$runin" && "${cmd[@]}" 2>"$err_file")"
+        else raw="$("${cmd[@]}" 2>"$err_file")"; fi
+        status=$?
+        err_raw="$(cat "$err_file" 2>/dev/null || true)"
+        rm -f "$err_file"
+    else
+        if [[ -n "$runin" ]]; then raw="$(cd "$runin" && "${cmd[@]}" 2>&1)"
+        else raw="$("${cmd[@]}" 2>&1)"; fi
+        status=$?
+    fi
+
+    # `APP ` is the app's own prefix; everything else on the stream is engine
+    # log, which is neither deterministic nor this check's business. The
+    # interpreted halves log as `[hh:mm:ss.mmm] [INFO] [console] <text>`, and
+    # the timestamp is stripped — it is the one part that differs every run.
+    local clean_out clean_err app_lines js_lines actual
+    clean_out="$(printf '%s\n' "$raw" | tr -d '\r')"
+    app_lines="$(printf '%s\n' "$clean_out" | grep '^APP ' || true)"
+    if [[ $split -eq 1 ]]; then
+        clean_err="$(printf '%s\n' "$err_raw" | tr -d '\r')"
+        js_lines="$(printf '%s\n' "$clean_err" \
+            | sed -n 's/^.*\[console\] \(\(PAGE\|DRV\) .*\)$/\1/p' || true)"
+        actual="$(printf '%s\n%s\n' "$app_lines" "$js_lines")"
+    elif [[ $twoblock -eq 1 ]]; then
+        js_lines="$(printf '%s\n' "$clean_out" \
+            | sed -n 's/^.*\[console\] \(\(PAGE\|DRV\) .*\)$/\1/p' || true)"
+        actual="$(printf '%s\n%s\n' "$app_lines" "$js_lines")"
+    else
+        actual="$app_lines"
+    fi
+
+    if [[ $status -ne 0 ]]; then
+        echo "  FAIL  $name  (exit $status)"
+        local diag="$clean_out"
+        [[ $split -eq 1 ]] && diag="$clean_err"
+        printf '%s\n' "$diag" | tail -20 | sed 's/^/        /'
+        return 1
+    fi
+
+    local diff_file="${TMPDIR:-/tmp}/${name}_diff.$$"
+    if diff -u --strip-trailing-cr "$expected" <(printf '%s\n' "$actual") \
+            > "$diff_file" 2>&1; then
+        rm -f "$diff_file"
+        [[ $quietpass -eq 1 ]] || echo "  PASS  $name"
+        return 0
+    fi
+    echo "  FAIL  $name  (output differs from the pinned expectation)"
+    sed 's/^/        /' "$diff_file" | head -"$diffhead"
+    rm -f "$diff_file"
+    return 1
+}

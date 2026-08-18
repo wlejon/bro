@@ -109,7 +109,7 @@ The left-hand `bro.*` names are the whole surface. Each has an annotated JSDoc r
 
 Also uses **GameNetworkingSockets** (Valve's GNS, via vcpkg), **glad** (OpenGL 3.3 Core loader), and **FastNoise2** (via brokit).
 
-C++20, roughly 183K lines under `src/` with the JS bindings in `src/js/` making up about half of it. Three executables over one `Engine`: `bro` (windowed), `bro-headless` (headless JS scripting and testing), and `bro-server` (dedicated game server, a fixed-tickrate JS loop with net, physics, mesh and noise, no window or renderer). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
+C++20, roughly 215K lines under `src/`, with the JS bindings in `src/js/` accounting for ~92K of it. Three executables over one `Engine`: `bro` (windowed), `bro-headless` (headless JS scripting and testing), and `bro-server` (dedicated game server, a fixed-tickrate JS loop with net, physics, mesh and noise, no window or renderer). See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md) for development across the sibling repos.
 
 ## Building
 

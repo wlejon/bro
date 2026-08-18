@@ -4,7 +4,18 @@
 #   filter: optional substring to match test file paths (e.g. "dom" or "click")
 #
 # Discovers all tests/*/test_*.js files, runs each via bro-headless, and reports
-# pass/fail with a summary. Runs on the GPU path (headless's default) so the
+# pass/fail with a summary. Also runs the bronze_host checks, enumerated from
+# tests/bronze_host/run_checks.sh --list — their subject is a bronze-COMPILED
+# app rather than a script a JS realm could evaluate, so each is a shell check
+# rather than a test_*.js. Each runs the same bro-headless and reports its own
+# PASS/FAIL lines; exit 77 (the automake convention) counts as SKIP, which a
+# tree without the bronze CLI (-DBRONZE_WITH_LLVM=OFF) uses so that "this tree
+# cannot build the subject" never reads as "the subject is broken".
+# BRO_TEST_BRONZE=0 leaves them out entirely; their per-check timeout is
+# BRO_TEST_SH_TIMEOUT (default 900 s — a first run compiles its module, and
+# two of the probes take minutes).
+#
+# Runs on the GPU path (headless's default) so the
 # tests exercise the same renderer, WebGL, and layer compositing that ship —
 # CPU-only raster is a different code path and would leave those untested. A
 # test whose engine silently fell back to raster is reported as a FAIL for that
@@ -164,8 +175,15 @@ if command -v timeout >/dev/null 2>&1; then
     TIMEOUT_BIN="timeout"
 fi
 
-# Collect test files
-mapfile -t TEST_FILES < <(find "$SCRIPT_DIR" -path "*/test_app" -prune -o -name "test_*.js" -print | sort)
+# Collect test files: the JS tests, plus the bronze_host checks — enumerated
+# from that folder's manifest (run_checks.sh --list) as `bronze:<name>`
+# entries, in manifest order, so each name is one test here. They skip
+# themselves with exit 77 in a tree that cannot build their subject.
+mapfile -t TEST_FILES < <(
+    find "$SCRIPT_DIR" -path "*/test_app" -prune -o -name "test_*.js" -print | sort
+    if [[ "${BRO_TEST_BRONZE:-1}" != "0" && -f "$SCRIPT_DIR/bronze_host/run_checks.sh" ]]; then
+        bash "$SCRIPT_DIR/bronze_host/run_checks.sh" --list | sed 's/^/bronze:/'
+    fi)
 
 if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
     echo "No test files found."
@@ -173,9 +191,34 @@ if [[ ${#TEST_FILES[@]} -eq 0 ]]; then
 fi
 
 # Run one test. Prints the PASS/FAIL lines (identical to the historical serial
-# runner) to stdout. Returns 0 on pass, 1 on fail, 2 on timeout.
+# runner) to stdout. Returns 0 on pass, 1 on fail, 2 on timeout, 3 on skip.
 run_one_test() {
     local TEST_FILE="$(to_win_path "$1")" REL="$2" OUTPUT STATUS
+
+    # A bronze_host check (a `bronze:<name>` entry from run_checks.sh --list)
+    # runs itself and prints its own PASS/FAIL/SKIP lines; only its exit code
+    # is mapped here. It gets a longer timeout than a JS test because a first
+    # run compiles its module with the bronze CLI, and two of the probes take
+    # minutes.
+    if [[ "$1" == bronze:* ]]; then
+        local SH_TIMEOUT="${BRO_TEST_SH_TIMEOUT:-900}"
+        local CHECK="$SCRIPT_DIR/bronze_host/run_checks.sh" NAME="${1#bronze:}"
+        if [[ -n "$TIMEOUT_BIN" ]]; then
+            OUTPUT=$(BRO_HEADLESS="$BRO" "$TIMEOUT_BIN" -k 10 "$SH_TIMEOUT" bash "$CHECK" "$NAME" 2>&1)
+        else
+            OUTPUT=$(BRO_HEADLESS="$BRO" bash "$CHECK" "$NAME" 2>&1)
+        fi
+        STATUS=$?
+        echo "$OUTPUT"
+        case $STATUS in
+            0)  return 0 ;;
+            77) return 3 ;;
+            124|137)
+                echo "  FAIL  $REL  (TIMEOUT after ${SH_TIMEOUT}s)"
+                return 2 ;;
+            *)  return 1 ;;
+        esac
+    fi
 
     if [[ -n "$TIMEOUT_BIN" ]]; then
         OUTPUT=$("$TIMEOUT_BIN" -k 10 "$TEST_TIMEOUT" "$BRO" "$TEST_APP" "$TEST_FILE" 2>&1)
@@ -222,7 +265,11 @@ run_one_test() {
 FILTERED_FILES=()
 FILTERED_RELS=()
 for TEST_FILE in "${TEST_FILES[@]}"; do
-    REL="${TEST_FILE#$SCRIPT_DIR/}"
+    if [[ "$TEST_FILE" == bronze:* ]]; then
+        REL="bronze_host/${TEST_FILE#bronze:}"
+    else
+        REL="${TEST_FILE#$SCRIPT_DIR/}"
+    fi
     if [[ -n "$FILTER" && "$REL" != *"$FILTER"* ]]; then
         continue
     fi
@@ -284,6 +331,7 @@ fi
 
 PASSED=0
 FAILED=0
+SKIPPED=0
 ERRORS=()
 
 if [[ $JOBS -le 1 || ${#GROUPS_ORDERED[@]} -le 1 ]]; then
@@ -293,6 +341,8 @@ if [[ $JOBS -le 1 || ${#GROUPS_ORDERED[@]} -le 1 ]]; then
         RC=$?
         if [[ $RC -eq 0 ]]; then
             ((PASSED++))
+        elif [[ $RC -eq 3 ]]; then
+            ((SKIPPED++))
         elif [[ $RC -eq 2 ]]; then
             ((FAILED++))
             ERRORS+=("${FILTERED_RELS[$i]} (TIMEOUT)")
@@ -350,7 +400,7 @@ else
     # Run all of a group's tests serially; write display output + counts, then
     # mark the group done (the .done file carries the group's wall seconds).
     run_group() {
-        local G="$1" idx i p=0 f=0 t0 t1
+        local G="$1" idx i p=0 f=0 s=0 t0 t1
         local LOG="$TMPDIR_TESTS/$G.log" ERRF="$TMPDIR_TESTS/$G.errs"
         t0=$SECONDS
         : > "$LOG"; : > "$ERRF"
@@ -360,6 +410,8 @@ else
             local rc=$?
             if [[ $rc -eq 0 ]]; then
                 ((p++))
+            elif [[ $rc -eq 3 ]]; then
+                ((s++))
             elif [[ $rc -eq 2 ]]; then
                 ((f++))
                 echo "${FILTERED_RELS[$i]} (TIMEOUT)" >> "$ERRF"
@@ -369,7 +421,7 @@ else
             fi
         done
         t1=$SECONDS
-        echo "$p $f" > "$TMPDIR_TESTS/$G.counts"
+        echo "$p $f $s" > "$TMPDIR_TESTS/$G.counts"
         echo "$(( t1 - t0 ))" > "$TMPDIR_TESTS/$G.done"
     }
 
@@ -387,9 +439,10 @@ else
             local G="${GROUPS_ORDERED[$FLUSH_IDX]}"
             [[ -f "$TMPDIR_TESTS/$G.done" ]] || break
             cat "$TMPDIR_TESTS/$G.log"
-            read -r GP GF < "$TMPDIR_TESTS/$G.counts"
+            read -r GP GF GS < "$TMPDIR_TESTS/$G.counts"
             PASSED=$(( PASSED + GP ))
             FAILED=$(( FAILED + GF ))
+            SKIPPED=$(( SKIPPED + GS ))
             if [[ -s "$TMPDIR_TESTS/$G.errs" ]]; then
                 while IFS= read -r E; do
                     ERRORS+=("$E")
@@ -425,10 +478,12 @@ else
     fi
 fi
 
-TOTAL=$((PASSED + FAILED))
+TOTAL=$((PASSED + FAILED + SKIPPED))
 echo ""
 echo "────────────────────────────────────"
-echo "  $TOTAL tests: $PASSED passed, $FAILED failed"
+SUMMARY="  $TOTAL tests: $PASSED passed, $FAILED failed"
+[[ $SKIPPED -gt 0 ]] && SUMMARY+=", $SKIPPED skipped"
+echo "$SUMMARY"
 
 if [[ $FAILED -gt 0 ]]; then
     echo ""

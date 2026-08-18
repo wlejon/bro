@@ -131,6 +131,24 @@ and is the single biggest build-time cost. It maps to the existing
 `BROTENSOR_WITH_CUDA` (see the forwarding block in the top-level `CMakeLists.txt`)
 and is turned on explicitly, orthogonal to the feature flags.
 
+### Tier 3: outside the profiles
+
+These three are not seeded by `BRO_PROFILE`; each answers a question the
+feature flags do not.
+
+| Flag | Default | What it does |
+|---|:--:|---|
+| `BRO_BUILD_EXECUTABLES` | ON top-level, **OFF** under `add_subdirectory` | Builds `bro` / `bro-headless` / `bro-server`. An embedder linking `bro_engine` with its own `main` wants the libraries, not a second `bro.exe` in its tree, and gets that without asking. See [embedding.md](embedding.md). |
+| `BRO_WITH_BRONZE` | **OFF** | The host layer for bronze-compiled (AOT) JavaScript: `src/bronze_host` re-exposes the engine's DOM, WebGL2, audio, physics and AI as bronze host globals, so an app compiled to machine code runs on the stock binaries. Entirely outside the default configure path — turning it ON resolves a bronze checkout as a **sibling working tree** (`../bronze`; no submodule fallback) and builds its shared runtime into this tree. `src/bronze_host/README.md` is the reference. |
+| `BRO_QUICKJS_CLANG_CL` | ON when the VS ClangCL toolset is installed (Windows only) | Builds **only** `qjs.lib` with clang-cl, as a nested ExternalProject. MSVC optimises QuickJS's interpreter loop badly; clang-cl is worth ~1.3-1.5x on real-world JS for no source change. Configuring all of bro with `-T ClangCL` does not work (SDL3 fails on a PCH C-standard mismatch), which is why it is scoped to one library. A CI image without the "C++ Clang tools for Windows" component silently gets the slower interpreter. |
+
+An app built for `BRO_WITH_BRONZE` is a **folder** carrying
+`app.dll`/`app.so`/`app.dylib` beside its `index.html`; nothing in bro's build
+knows the app exists. `tests/bronze_host/run_checks.sh` runs the checks —
+`tests/run_tests.sh` discovers them with the rest of the suite, and they skip
+(exit 77, reported as SKIP) when the tree has no bronze CLI to compile a
+module with.
+
 ## Dependency auto-enable
 
 Enabling a flag force-enables its prerequisites (with a status message), so an

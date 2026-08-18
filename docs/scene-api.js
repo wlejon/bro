@@ -479,8 +479,11 @@ class SceneGraph {
    * @param {Object} [opts.emissiveTexture] - emissive map, same shape
    * @param {Float32Array} [opts.positions] - raw vertex positions (xyz, stride 3)
    * @param {Float32Array} [opts.normals] - raw vertex normals (xyz, stride 3)
-   * @param {Float32Array} [opts.colors] - raw per-vertex colors (raw-data path
-   *   only); doubles as the wind-bend channel via its R component
+   * @param {Float32Array} [opts.colors] - raw per-vertex colors (rgba, STRIDE 4
+   *   ? not 3; a stride-3 buffer reads misaligned and the mesh renders as
+   *   near-white garbage under lighting, which looks like a lighting bug and
+   *   is not). Raw-data path only; doubles as the wind-bend channel via its R
+   *   component
    * @param {Uint32Array} [opts.indices] - raw triangle indices
    * @param {boolean} [opts.recomputeNormals=false] - raw-data path only:
    *   derive smooth normals from positions+indices when no normals are given
@@ -641,6 +644,30 @@ class SceneGraph {
    * @param {Object} [opts.metallicRoughnessTexture] - packed MR map, same shape
    * @param {Object} [opts.occlusionTexture] - AO map, same shape
    * @param {Object} [opts.emissiveTexture] - emissive map, same shape
+   * @param {boolean} [opts.staticBatch=false] - bake every instance into ONE
+   *   merged mesh drawn as instanceCount=1 (transforms into vertices, RGB tint
+   *   into vertex colors, atlas cell into UVs). Pixel-identical, and the fix
+   *   for the case hardware instancing is worst at: high counts of TINY
+   *   meshes, where the GPU front-end's fixed per-instance cost dominates
+   *   (20000 two-triangle quads: ~98 ms instanced vs ~0.04 ms batched).
+   *   STATIC instances only ? the bake is not redone ? and ignored when a
+   *   custom shader is set. Create-time only; there is no runtime setter.
+   * @param {Object} [opts.scatter] - GPU foliage scatter: leaf transforms are
+   *   synthesised in the vertex shader from a compact per-segment buffer
+   *   instead of an instance buffer, for procedural foliage that CHANGES.
+   *   Mutually exclusive with `instances`. Feed it the spread of
+   *   `world.emitScatterSegments(opts)`: `{segments}` (Float32Array, 8 floats
+   *   per segment), `{instSeg}` (per-leaf segment index), optional
+   *   `{boundsMin, boundsMax}` (3 floats each; derived from the segment
+   *   endpoints when absent) and the placement params `seed`, `upBias` (0.5),
+   *   `tiltJitter` (0.3), `rollJitter` (0.2), `baseScale` (1), `scaleJitter`
+   *   (0.2), `scaleByRadius` (0), `maxRadius` (0.05), `densityFalloff` (0).
+   * @param {Object} [opts.tube] - GPU procedural branch tubes: tapered stem
+   *   geometry synthesised in the vertex shader, needing no template mesh.
+   *   Mutually exclusive with `instances` and `scatter`. Feed it the spread of
+   *   `world.emitBranchTubes(opts)`: `{segments}` (Float32Array, 8 floats per
+   *   segment ? `[from.xyz, radiusFrom, to.xyz, radiusTo]`), optional
+   *   `{boundsMin, boundsMax}`, `sides` (6) and `radiusScale` (1).
    * @returns {SceneNode} - .type === 'instancedMesh'; see the
    *   "Instanced meshes" section on SceneNode for the runtime surface
    */
@@ -1599,7 +1626,13 @@ class SceneNode {
   get z() {}
   set z(value) {}
 
-  /** Rotation around Z axis in radians (legacy 2D shorthand). */
+  /**
+   * Rotation around Z axis in radians ? a legacy 2D shorthand, and a SCALAR.
+   * Assigning an array (`[x,y,z]` euler or `[x,y,z,w]` quaternion) produces a
+   * NaN transform and the node vanishes from the render with no error thrown.
+   * Use `rotationY` for yaw, or `quaternion` for arbitrary orientation.
+   * @type {number}
+   */
   get rotation() {}
   set rotation(radians) {}
 
@@ -2593,6 +2626,25 @@ class SceneNode {
    * @param {Float32Array} data16
    */
   updateInstance(index, data16) {}
+
+  /** Alias of setInstances(). @param {Float32Array} data */
+  updateInstances(data) {}
+
+  /**
+   * Replace the scatter segments of a node created with `scatter`, when the
+   * simulation grew or moved. Same descriptor shape as the create option.
+   * No-op on a node that is not in scatter mode.
+   * @param {Object} scatter
+   */
+  setScatterSegments(scatter) {}
+
+  /**
+   * Replace the tube segments of a node created with `tube`, when the
+   * skeleton grew. Same descriptor shape as the create option. No-op on a
+   * node that is not in tube mode.
+   * @param {Object} tube
+   */
+  setTubeSegments(tube) {}
 
   /**
    * Swap the replicated mesh, keeping the instance buffer and material.

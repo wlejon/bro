@@ -169,6 +169,25 @@ class Terrain {
     configure(opts) {}
 
     /**
+     * Tell the terrain the height source will now answer differently inside a
+     * world-space XZ rectangle. Chunks overlapping it are regenerated in
+     * place, a few per update(); nothing is destroyed.
+     *
+     * This is what a STREAMING height source calls when data arrives, instead
+     * of configure() ? which wipes every chunk and, if data keeps arriving,
+     * wipes them faster than they can be rebuilt.
+     *
+     *   terrain.setHeightSource(streamingSource);
+     *   onTileArrived(t => terrain.invalidateRegion(t.x0, t.z0, t.x1, t.z1));
+     *
+     * @param {number} x0 - world-space min X
+     * @param {number} z0 - world-space min Z
+     * @param {number} x1 - world-space max X
+     * @param {number} z1 - world-space max Z
+     */
+    invalidateRegion(x0, z0, x1, z1) {}
+
+    /**
      * Supply chunk heights yourself, in place of the built-in FBm generator.
      * Pass null to go back to noise.
      *

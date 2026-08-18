@@ -1,31 +1,46 @@
 # bronze_host integration checks
 
-Twenty-two checks, run by hand. Exit codes are `0` pass, `1` fail, `77` skip.
+Twenty-two checks, one manifest. `tests/run_tests.sh` enumerates them
+(`run_checks.sh --list`) and runs each with the rest of the suite — exit 77
+counts as SKIP there, and `BRO_TEST_BRONZE=0` leaves them out. By hand:
 
 ```bash
-tests/bronze_host/run_loader_test.sh        # the folder loader itself
-tests/bronze_host/run_bronze_host_test.sh   # the scene graph, a fixed frame count
-tests/bronze_host/run_events_test.sh        # events, under a driver script
-tests/bronze_host/run_fetch_test.sh         # fetch, under a driver script
-tests/bronze_host/run_dom_test.sh           # the element surface: tree, style, forms
-tests/bronze_host/run_node_test.sh          # text nodes, comments, fragments, cloneNode
-tests/bronze_host/run_file_test.sh          # Blob, File, FileReader, object URLs
-tests/bronze_host/run_abort_test.sh         # AbortController, AbortSignal, cancelled fetch
-tests/bronze_host/run_observer_test.sh      # MutationObserver, incl. a mutation made by the page
-tests/bronze_host/run_resize_test.sh        # ResizeObserver: the initial report, and the quiet frames
-tests/bronze_host/run_parser_test.sh        # DOMParser: a second document, and adoption out of it
-tests/bronze_host/run_proxy_test.sh         # the four proxy-backed live views: style, computed, dataset, localStorage
-tests/bronze_host/run_class_test.sh         # host classes, via Image: born-on-prototype, shared methods, instanceof
-tests/bronze_host/run_input_test.sh         # pointer lock, fullscreen, Gamepad
-tests/bronze_host/run_video_test.sh          # VideoEncoder, GifEncoder: every pixel source, and every refusal
-tests/bronze_host/run_audio_test.sh          # Web Audio & Sound Engine: nodes, params, buffers, decodeAudioData
-tests/bronze_host/run_physics_test.sh        # Jolt Physics: bodies, character controller, soft bodies, queries
-tests/bronze_host/run_ai_test.sh             # navmesh, nav grid, agents
-tests/bronze_host/run_net_test.sh            # bro.net over GNS, WebSocket, remote HTTP transport
-tests/bronze_host/run_wild_test.sh          # wild three.js scene + OrbitControls
-tests/bronze_host/run_instanced_test.sh     # instanced mesh under load (2,500 instances)
-tests/bronze_host/run_pixi_test.sh          # pixi.js v8: WebGL sprites + pixel readback
+tests/bronze_host/run_checks.sh           # run all, with a summary
+tests/bronze_host/run_checks.sh dom       # run one (exit 0 pass, 1 fail, 77 skip)
+tests/bronze_host/run_checks.sh --list    # the names
 ```
+
+The folder is three files. `lib.sh` holds the mechanics — binary discovery,
+module build, output cut, diff — as `bh_run_check`. `run_checks.sh` is the
+manifest: one short function per check, under a comment saying what only that
+check catches. `run_loader_test.sh` stays its own file (run as the `loader`
+check) because its subject is the loader itself, not a compiled app: it builds
+four synthetic C modules to hit every refusal branch.
+
+| name | subject |
+|---|---|
+| `loader` | the folder loader: ABI guard, missing entry point, non-module files |
+| `scenegraph` | the three.js scene graph, a fixed frame count |
+| `events` | event dispatch, under a driver script, on the hybrid app dir |
+| `fetch` | fetch, under a driver script |
+| `dom` | the element surface: tree, style, forms |
+| `node` | text nodes, comments, fragments, cloneNode |
+| `file` | Blob, File, FileReader, object URLs |
+| `abort` | AbortController, AbortSignal, cancelled fetch |
+| `observer` | MutationObserver, incl. a mutation made by the page |
+| `resize` | ResizeObserver: the initial report, and the quiet frames |
+| `parser` | DOMParser: a second document, and adoption out of it |
+| `proxy` | the four proxy-backed live views: style, computed, dataset, localStorage |
+| `class` | host classes, via Image: born-on-prototype, shared methods, instanceof |
+| `input` | pointer lock, fullscreen, Gamepad |
+| `video` | VideoEncoder, GifEncoder: every pixel source, and every refusal |
+| `audio` | Web Audio & Sound Engine: nodes, params, buffers, decodeAudioData |
+| `physics` | Jolt Physics: bodies, character controller, soft bodies, queries |
+| `ai` | navmesh, nav grid, agents |
+| `net` | bro.net over GNS, WebSocket, remote HTTP transport |
+| `wild` | wild three.js scene + OrbitControls |
+| `instanced` | instanced mesh under load (2,500 instances) |
+| `pixi` | pixi.js v8: WebGL sprites + pixel readback |
 
 **All twenty-two run the stock `bro-headless`** — the same binary every other test in
 `tests/` uses. Each one's app is a directory carrying a compiled `app.dll` /
@@ -53,19 +68,21 @@ has no bronze CLI (`-DBRONZE_WITH_LLVM=OFF`) and no already-built module. Skip
 stays distinct from failure on purpose: "this tree cannot build the subject" and
 "the subject is broken" must never read the same.
 
-## Why these are not in `tests/run_tests.sh`
+## Why these are shell checks and not `test_*.js`
 
-The suite discovers `test_*.js` and evaluates each through `bro-headless`. A
-compiled app has no JS realm to evaluate anything in — the app is machine code,
-and what the driver scripts here script is the *engine's* realm beside it. The
-second reason has now expired: the binaries used to be absent from every default
-build, and they no longer are, since the binary is just `bro-headless`. What is
-still conditional is the compiler needed to produce a module, which is what the
-77 is for.
+The suite evaluates a `test_*.js` inside the app's JS realm. A compiled app
+has no JS realm to evaluate anything in — the app is machine code, and what
+the driver scripts here script is the *engine's* realm beside it. So each
+check is a shell script, and `run_tests.sh` runs it as a process and reads its
+exit code instead. What is conditional is not the binary (every build's
+`bro-headless` can load a module) but the bronze CLI that PRODUCES one: a tree
+configured `-DBRONZE_WITH_LLVM=OFF` has no way to build the subject, and exits
+77 so that "this tree cannot build the subject" never reads as "the subject is
+broken".
 
 ## What it actually proves
 
-The subject is `src/bronze_host/app/main_scenegraph.js` compiled to machine code
+The subject is `src/bronze_host/fixtures/main_scenegraph.js` compiled to machine code
 by bronze into the module `fixtures/appdir` carries. Getting one matching line out of it
 requires every seam in the layer to be right at once:
 
@@ -119,7 +136,7 @@ carrying the interpreted `console.log`s is stderr. Two streams, two buffers, so
 their interleaving is not something a byte-for-byte expectation may depend on.
 Each stream's own order is pinned, and causality across the boundary survives
 the split because it is carried in the payload rather than in the interleaving.
-`run_events_test.sh` says the same at the code.
+`bh_run_check`'s `--split-streams` option says the same at the code.
 
 ## Why the expectation is only booleans and integers
 

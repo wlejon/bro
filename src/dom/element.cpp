@@ -1085,10 +1085,11 @@ void Element::markStyleDirty() {
 
 // Layout does not descend into every element. A <select>/<textarea>/<iframe>
 // owns its children (the control reads them straight from the DOM), and an <svg>
-// subtree is rendered by SkSVGDOM — none of them have layout nodes, so a
-// structural mark left on one would never be consumed and the change would
-// silently never reach the screen. The element layout stops at does have a node,
-// and re-laying it out is what re-measures the control, so redirect there.
+// subtree is painted straight from the DOM by layout/svg_paint — none of them
+// have layout nodes, so a structural mark left on one would never be consumed
+// and the change would silently never reach the screen. The element layout
+// stops at does have a node, and re-laying it out is what re-measures the
+// control, so redirect there.
 static bool layoutOwnsChildren(const Element* e) {
     std::string_view tag = e->tagName();
     return tag != "SELECT" && tag != "TEXTAREA" && tag != "IFRAME" && tag != "SVG";

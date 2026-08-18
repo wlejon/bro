@@ -116,6 +116,7 @@ const GROUPS = [
     ["worker-api.js", "Worker: web worker threads"],
     ["image-api.js", "bro.image: CPU kernels + bro.image.gpu WebGL2 renderer"],
     ["imagebitmap-api.js", "ImageBitmap / createImageBitmap"],
+    ["file-api.js", "Blob / File, FileReader, URL.createObjectURL"],
     ["video-api.js", "&lt;video&gt; playback, VideoEncoder (WebM/VP9), GifEncoder"],
     ["iframe-api.js", "&lt;iframe src=dir&gt;: isolated sub-document"],
     ["window-api.js", "bro.window: multi-window, borderless, displays"],
@@ -170,6 +171,7 @@ const GROUPS = [
     ["dialogs-api.js", "Native open/save file and folder dialogs"],
     ["menu-api.js", "bro.menu: native menu bar"],
     ["math-api.js", "bro.math: bromath types (SpatialHash3D)"],
+    ["paths-api.js", "bro.appDir / bro.resolvePath: real filesystem paths"],
   ]],
 ];
 const GUIDES = [
@@ -180,6 +182,7 @@ const GUIDES = [
   ["projects.md", "Built-in project manager and skeletons"],
   ["build-options.md", "Modular build: profiles, BRO_WITH_* flags, stubs"],
   ["multi-repo-workflow.md", "Working across bro and its sibling repos"],
+  ["embedding.md", "Linking bro_engine into your own executable"],
   ["coverage.md", "OpenCppCoverage line-coverage reports"],
 ];
 

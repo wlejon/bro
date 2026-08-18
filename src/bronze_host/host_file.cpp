@@ -35,10 +35,11 @@
 // not exist yet.
 //
 // `URL` IS A NAMESPACE, NOT A CONSTRUCTOR. On the web it is both — callable and
-// carrying createObjectURL — and the host cannot build that shape at all. The
-// long comment at installFileGlobals() has the reason and the exact runtime
-// message; the short version is that `URL.parse(href, base)` is here and
-// `new URL(href)` is not.
+// carrying createObjectURL — and the callable shape is buildable here; it is
+// simply unbuilt, because the namespace costs almost nothing and `URL.parse`
+// is the standard equivalent of the constructor. The long comment at
+// installFileGlobals() has the full reasoning; the short version is that
+// `URL.parse(href, base)` is here and `new URL(href)` is not.
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
