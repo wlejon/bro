@@ -72,6 +72,13 @@ struct HostAgent {
 // Unwrap Helpers
 // ---------------------------------------------------------------------------
 
+// The three AI classes. None is constructible — a nav grid comes from
+// AI.createNavGrid and an agent from AI.createAgent — so what the conversion
+// buys is `instanceof` plus one copy of each method instead of one per handle.
+HostClass g_navGridClass;
+HostClass g_navMeshClass;
+HostClass g_agentClass;
+
 HostNavGrid* unwrapNavGrid(Value v) {
     void* ptr = ev::handleData(v);
     if (!ptr) return nullptr;
@@ -247,14 +254,7 @@ std::vector<brogameagent::AABB> parseAABBArray(Value v) {
 // AINavGrid Wrapper
 // ---------------------------------------------------------------------------
 
-static Value makeNavGridHandle(std::unique_ptr<brogameagent::NavGrid> grid) {
-    auto* h = new HostNavGrid();
-    h->grid = std::move(grid);
-
-    ObjectBuilder b(ev::makeHandle(h, [](void* p) {
-        delete static_cast<HostNavGrid*>(p);
-    }));
-
+static void decorateNavGridProto(ObjectBuilder& b) {
     b.def("isWalkable", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavGrid(self);
         if (!h || !h->grid) return ev::fromBool(false);
@@ -268,7 +268,6 @@ static Value makeNavGridHandle(std::unique_ptr<brogameagent::NavGrid> grid) {
         }
         return ev::fromBool(h->grid->isWalkable(x, z));
     });
-
     b.def("setWalkable", 3, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavGrid(self);
         if (!h || !h->grid) return ev::undefined();
@@ -284,7 +283,6 @@ static Value makeNavGridHandle(std::unique_ptr<brogameagent::NavGrid> grid) {
         }
         return ev::undefined();
     });
-
     b.def("setCellCost", 3, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavGrid(self);
         if (!h || !h->grid) return ev::undefined();
@@ -300,7 +298,6 @@ static Value makeNavGridHandle(std::unique_ptr<brogameagent::NavGrid> grid) {
         }
         return ev::undefined();
     });
-
     b.def("addObstacle", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavGrid(self);
         if (!h || !h->grid || a.empty()) return ev::undefined();
@@ -308,7 +305,6 @@ static Value makeNavGridHandle(std::unique_ptr<brogameagent::NavGrid> grid) {
         h->grid->addObstacle(parseAABB(a[0]), padding);
         return ev::undefined();
     });
-
     b.def("findPath", 5, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavGrid(self);
         if (!h || !h->grid) return hostArrayOf(0, [](size_t) { return ev::undefined(); });
@@ -343,18 +339,38 @@ static Value makeNavGridHandle(std::unique_ptr<brogameagent::NavGrid> grid) {
         p.set(ev::setProperty(p.get(), "partial", ev::fromBool(res.partial)));
         return p.get();
     });
-
-    b.accessor("width", [h](Value, std::span<const Value>) {
+    b.accessor("width", [](Value self_, std::span<const Value>) {
+        HostNavGrid* h = unwrapNavGrid(self_);
+        if (!h) return ev::undefined();
         return h->grid ? ev::fromDouble(h->grid->width()) : ev::fromDouble(0);
     }, nullptr);
-
-    b.accessor("height", [h](Value, std::span<const Value>) {
+    b.accessor("height", [](Value self_, std::span<const Value>) {
+        HostNavGrid* h = unwrapNavGrid(self_);
+        if (!h) return ev::undefined();
         return h->grid ? ev::fromDouble(h->grid->height()) : ev::fromDouble(0);
     }, nullptr);
-
-    b.accessor("cellSize", [h](Value, std::span<const Value>) {
+    b.accessor("cellSize", [](Value self_, std::span<const Value>) {
+        HostNavGrid* h = unwrapNavGrid(self_);
+        if (!h) return ev::undefined();
         return h->grid ? ev::fromDouble(h->grid->cellSize()) : ev::fromDouble(0);
     }, nullptr);
+}
+
+static Value makeNavGridHandle(std::unique_ptr<brogameagent::NavGrid> grid) {
+    auto* h = new HostNavGrid();
+    h->grid = std::move(grid);
+
+    ObjectBuilder b(g_navGridClass.make(h, [](void* p) {
+        delete static_cast<HostNavGrid*>(p);
+    }));
+
+
+
+
+
+
+
+
 
     return b.get();
 }
@@ -363,18 +379,12 @@ static Value makeNavGridHandle(std::unique_ptr<brogameagent::NavGrid> grid) {
 // AINavMesh Wrapper
 // ---------------------------------------------------------------------------
 
-static Value makeNavMeshHandle(std::shared_ptr<brogameagent::NavMesh> mesh) {
-    auto* h = new HostNavMesh();
-    h->mesh = std::move(mesh);
-
-    ObjectBuilder b(ev::makeHandle(h, [](void* p) {
-        delete static_cast<HostNavMesh*>(p);
-    }));
-
-    b.accessor("valid", [h](Value, std::span<const Value>) {
+static void decorateNavMeshProto(ObjectBuilder& b) {
+    b.accessor("valid", [](Value self_, std::span<const Value>) {
+        HostNavMesh* h = unwrapNavMesh(self_);
+        if (!h) return ev::undefined();
         return ev::fromBool(h->mesh && h->mesh->valid());
     }, nullptr);
-
     b.def("findPath", 3, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavMesh(self);
         if (!h || !h->mesh || a.size() < 2) return ev::null();
@@ -418,7 +428,6 @@ static Value makeNavMeshHandle(std::shared_ptr<brogameagent::NavMesh> mesh) {
 
         return p.get();
     });
-
     b.def("findRandomPoint", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavMesh(self);
         if (!h || !h->mesh) return ev::null();
@@ -427,7 +436,6 @@ static Value makeNavMeshHandle(std::shared_ptr<brogameagent::NavMesh> mesh) {
         if (!h->mesh->randomPoint(seed, out)) return ev::null();
         return makeVec3Value(out.x, out.y, out.z);
     });
-
     b.def("randomPoint", 1, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavMesh(self);
         if (!h || !h->mesh) return ev::null();
@@ -436,7 +444,6 @@ static Value makeNavMeshHandle(std::shared_ptr<brogameagent::NavMesh> mesh) {
         if (!h->mesh->randomPoint(seed, out)) return ev::null();
         return makeVec3Value(out.x, out.y, out.z);
     });
-
     b.def("closestPoint", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavMesh(self);
         if (!h || !h->mesh || a.empty()) return ev::null();
@@ -447,7 +454,6 @@ static Value makeNavMeshHandle(std::shared_ptr<brogameagent::NavMesh> mesh) {
         if (!h->mesh->nearestPoint(pos, out, extents)) return ev::null();
         return makeVec3Value(out.x, out.y, out.z);
     });
-
     b.def("nearestPoint", 2, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavMesh(self);
         if (!h || !h->mesh || a.empty()) return ev::null();
@@ -458,7 +464,6 @@ static Value makeNavMeshHandle(std::shared_ptr<brogameagent::NavMesh> mesh) {
         if (!h->mesh->nearestPoint(pos, out, extents)) return ev::null();
         return makeVec3Value(out.x, out.y, out.z);
     });
-
     b.def("raycast", 3, [](Value self, std::span<const Value> a) -> Value {
         auto* h = unwrapNavMesh(self);
         if (!h || !h->mesh || a.size() < 2) return ev::null();
@@ -475,28 +480,54 @@ static Value makeNavMeshHandle(std::shared_ptr<brogameagent::NavMesh> mesh) {
         res.set("normal", makeVec3Value(hit.normal.x, hit.normal.y, hit.normal.z));
         return res.get();
     });
-
-    b.accessor("supportsObstacles", [h](Value, std::span<const Value>) {
+    b.accessor("supportsObstacles", [](Value self_, std::span<const Value>) {
+        HostNavMesh* h = unwrapNavMesh(self_);
+        if (!h) return ev::undefined();
         return ev::fromBool(h->mesh && h->mesh->supportsObstacles());
     }, nullptr);
-
-    b.accessor("generation", [h](Value, std::span<const Value>) {
+    b.accessor("generation", [](Value self_, std::span<const Value>) {
+        HostNavMesh* h = unwrapNavMesh(self_);
+        if (!h) return ev::undefined();
         return ev::fromDouble(h->mesh ? static_cast<double>(h->mesh->generation()) : 0.0);
     }, nullptr);
-
-    b.accessor("obstacleCount", [h](Value, std::span<const Value>) {
+    b.accessor("obstacleCount", [](Value self_, std::span<const Value>) {
+        HostNavMesh* h = unwrapNavMesh(self_);
+        if (!h) return ev::undefined();
         return ev::fromDouble(h->mesh ? h->mesh->obstacleCount() : 0);
     }, nullptr);
-
-    b.accessor("obstaclesPending", [h](Value, std::span<const Value>) {
+    b.accessor("obstaclesPending", [](Value self_, std::span<const Value>) {
+        HostNavMesh* h = unwrapNavMesh(self_);
+        if (!h) return ev::undefined();
         return ev::fromBool(h->mesh && h->mesh->obstaclesPending());
     }, nullptr);
-
-    b.def("update", 1, [h](Value, std::span<const Value> a) {
+    b.def("update", 1, [](Value self_, std::span<const Value> a) {
+        HostNavMesh* h = unwrapNavMesh(self_);
+        if (!h) return ev::undefined();
         if (!h->mesh) return ev::fromBool(true);
         float dt = (a.empty()) ? (1.0f / 60.0f) : static_cast<float>(numAt(a, 0));
         return ev::fromBool(h->mesh->update(dt));
     });
+}
+
+static Value makeNavMeshHandle(std::shared_ptr<brogameagent::NavMesh> mesh) {
+    auto* h = new HostNavMesh();
+    h->mesh = std::move(mesh);
+
+    ObjectBuilder b(g_navMeshClass.make(h, [](void* p) {
+        delete static_cast<HostNavMesh*>(p);
+    }));
+
+
+
+
+
+
+
+
+
+
+
+
 
     return b.get();
 }
@@ -505,17 +536,17 @@ static Value makeNavMeshHandle(std::shared_ptr<brogameagent::NavMesh> mesh) {
 // AIAgent Wrapper
 // ---------------------------------------------------------------------------
 
-static Value makeAgentHandle(HostAgent* h) {
-    ObjectBuilder b(ev::makeHandle(h, [](void* p) {
-        delete static_cast<HostAgent*>(p);
-    }));
-
+static void decorateAgentProto(ObjectBuilder& b) {
     b.accessor("position",
-        [h](Value, std::span<const Value>) -> Value {
+        [](Value self_, std::span<const Value>) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
             float y = h->navActive ? h->navY : h->agent.elevation();
             return makeVec3Value(h->agent.x(), y, h->agent.z());
         },
-        [h](Value, std::span<const Value> a) -> Value {
+        [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
             if (!a.empty() && ev::isObject(a[0])) {
                 auto p = parseVec3(a[0]);
                 h->agent.setPosition(p.x, p.z);
@@ -524,72 +555,92 @@ static Value makeAgentHandle(HostAgent* h) {
             }
             return ev::undefined();
         });
-
     b.accessor("velocity",
-        [h](Value, std::span<const Value>) -> Value {
+        [](Value self_, std::span<const Value>) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
             auto v = h->agent.velocity();
             return makeVec3Value(v.x, 0.0f, v.y);
         },
         nullptr);
-
     b.accessor("maxSpeed",
-        [h](Value, std::span<const Value>) -> Value {
+        [](Value self_, std::span<const Value>) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
             return ev::fromDouble(h->agent.speed());
         },
-        [h](Value, std::span<const Value> a) -> Value {
+        [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
             if (!a.empty()) h->agent.setSpeed(static_cast<float>(numAt(a, 0)));
             return ev::undefined();
         });
-
     b.accessor("speed",
-        [h](Value, std::span<const Value>) -> Value {
+        [](Value self_, std::span<const Value>) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
             return ev::fromDouble(h->agent.speed());
         },
-        [h](Value, std::span<const Value> a) -> Value {
+        [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
             if (!a.empty()) h->agent.setSpeed(static_cast<float>(numAt(a, 0)));
             return ev::undefined();
         });
-
     b.accessor("radius",
-        [h](Value, std::span<const Value>) -> Value {
+        [](Value self_, std::span<const Value>) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
             return ev::fromDouble(h->agent.radius());
         },
-        [h](Value, std::span<const Value> a) -> Value {
+        [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
             if (!a.empty()) h->agent.setRadius(static_cast<float>(numAt(a, 0)));
             return ev::undefined();
         });
-
     b.accessor("maxAcceleration",
-        [h](Value, std::span<const Value>) -> Value {
+        [](Value self_, std::span<const Value>) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
             return ev::fromDouble(h->agent.unit().moveSpeed);
         },
-        [h](Value, std::span<const Value> a) -> Value {
+        [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
             if (!a.empty()) h->agent.setMaxAccel(static_cast<float>(numAt(a, 0)));
             return ev::undefined();
         });
-
     b.accessor("maxAccel",
-        [h](Value, std::span<const Value>) -> Value {
+        [](Value self_, std::span<const Value>) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
             return ev::fromDouble(h->agent.unit().moveSpeed);
         },
-        [h](Value, std::span<const Value> a) -> Value {
+        [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
             if (!a.empty()) h->agent.setMaxAccel(static_cast<float>(numAt(a, 0)));
             return ev::undefined();
         });
-
-    b.accessor("atTarget", [h](Value, std::span<const Value>) {
+    b.accessor("atTarget", [](Value self_, std::span<const Value>) {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
         return ev::fromBool(h->agent.atTarget());
     }, nullptr);
-
-    b.accessor("hasTarget", [h](Value, std::span<const Value>) {
+    b.accessor("hasTarget", [](Value self_, std::span<const Value>) {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
         return ev::fromBool(h->agent.hasTarget() || h->navActive);
     }, nullptr);
-
-    b.accessor("yaw", [h](Value, std::span<const Value>) {
+    b.accessor("yaw", [](Value self_, std::span<const Value>) {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
         return ev::fromDouble(h->agent.yaw());
     }, nullptr);
-
-    b.def("setGoal", 3, [h](Value, std::span<const Value> a) -> Value {
+    b.def("setGoal", 3, [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
         if (h->destroyed) return ev::undefined();
         bromath::Vec3 target{0, 0, 0};
         if (a.size() >= 3) {
@@ -623,8 +674,9 @@ static Value makeAgentHandle(HostAgent* h) {
         }
         return ev::undefined();
     });
-
-    b.def("setTarget", 2, [h](Value self, std::span<const Value> a) -> Value {
+    b.def("setTarget", 2, [](Value self, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self);
+        if (!h) return ev::undefined();
         if (a.size() >= 2) {
             float x = static_cast<float>(numAt(a, 0));
             float z = static_cast<float>(numAt(a, 1));
@@ -635,8 +687,9 @@ static Value makeAgentHandle(HostAgent* h) {
         }
         return ev::undefined();
     });
-
-    b.def("update", 1, [h](Value, std::span<const Value> a) -> Value {
+    b.def("update", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
         if (h->destroyed) return ev::undefined();
         float dt = a.empty() ? (1.0f / 60.0f) : static_cast<float>(numAt(a, 0));
 
@@ -679,16 +732,18 @@ static Value makeAgentHandle(HostAgent* h) {
         }
         return ev::undefined();
     });
-
-    b.def("stop", 0, [h](Value, std::span<const Value>) -> Value {
+    b.def("stop", 0, [](Value self_, std::span<const Value>) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
         if (h->destroyed) return ev::undefined();
         h->navActive = false;
         h->navPath.clear();
         h->agent.clearTarget();
         return ev::undefined();
     });
-
-    b.def("destroy", 0, [h](Value, std::span<const Value>) -> Value {
+    b.def("destroy", 0, [](Value self_, std::span<const Value>) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
         h->destroyed = true;
         h->navActive = false;
         h->navPath.clear();
@@ -697,8 +752,9 @@ static Value makeAgentHandle(HostAgent* h) {
         h->navMesh.reset();
         return ev::undefined();
     });
-
-    b.def("setPosition", 3, [h](Value, std::span<const Value> a) -> Value {
+    b.def("setPosition", 3, [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
         if (a.size() >= 3) {
             float x = static_cast<float>(numAt(a, 0));
             float y = static_cast<float>(numAt(a, 1));
@@ -718,8 +774,9 @@ static Value makeAgentHandle(HostAgent* h) {
         }
         return ev::undefined();
     });
-
-    b.def("setNavMesh", 1, [h](Value self, std::span<const Value> a) -> Value {
+    b.def("setNavMesh", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self);
+        if (!h) return ev::undefined();
         if (a.empty()) return ev::undefined();
         if (auto* nm = unwrapNavMesh(a[0])) {
             h->navMesh = nm->mesh;
@@ -730,8 +787,9 @@ static Value makeAgentHandle(HostAgent* h) {
         }
         return ev::undefined();
     });
-
-    b.def("setNavGrid", 1, [h](Value self, std::span<const Value> a) -> Value {
+    b.def("setNavGrid", 1, [](Value self, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self);
+        if (!h) return ev::undefined();
         if (a.empty()) return ev::undefined();
         if (auto* ng = unwrapNavGrid(a[0])) {
             h->agent.setNavGrid(ng->grid.get());
@@ -742,8 +800,9 @@ static Value makeAgentHandle(HostAgent* h) {
         }
         return ev::undefined();
     });
-
-    b.def("aimAt", 4, [h](Value, std::span<const Value> a) -> Value {
+    b.def("aimAt", 4, [](Value self_, std::span<const Value> a) -> Value {
+        HostAgent* h = unwrapAgent(self_);
+        if (!h) return ev::undefined();
         float tx = 0.0f, ty = 0.0f, tz = 0.0f, eyeH = 1.6f;
         if (a.size() >= 3) {
             tx = static_cast<float>(numAt(a, 0));
@@ -761,6 +820,31 @@ static Value makeAgentHandle(HostAgent* h) {
         res.set("pitch", ev::fromDouble(aim.pitch));
         return res.get();
     });
+}
+
+static Value makeAgentHandle(HostAgent* h) {
+    ObjectBuilder b(g_agentClass.make(h, [](void* p) {
+        delete static_cast<HostAgent*>(p);
+    }));
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     return b.get();
 }
@@ -1126,9 +1210,9 @@ static Value makeAIObject() {
 void installAIGlobals() {
     Value aiVal = makeAIObject();
     ev::registerGlobal("AI", aiVal);
-    ev::registerGlobal("AINavGrid", makeBrandConstructor("AINavGrid"));
-    ev::registerGlobal("AINavMesh", makeBrandConstructor("AINavMesh"));
-    ev::registerGlobal("AIAgent", makeBrandConstructor("AIAgent"));
+    g_navGridClass.install("AINavGrid", 0, nullptr, decorateNavGridProto);
+    g_navMeshClass.install("AINavMesh", 0, nullptr, decorateNavMeshProto);
+    g_agentClass.install("AIAgent", 0, nullptr, decorateAgentProto);
 }
 
 }  // namespace bro::bronze_host

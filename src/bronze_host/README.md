@@ -233,12 +233,34 @@ not reach. `tests/bronze_host/run_class_test.sh` pins it, along with the shared
 
 `Image` and `HTMLImageElement` are the SAME constructor here, as on the web.
 
-**What is still a bare cell**: everything else — the physics, AI, audio, file,
-fetch, XHR, video, net and observer families all still close over their handle
-per instance. Converting them is mechanical and unstarted. Two names in
-`dom_globals.cpp` (`HTMLCanvasElement`, `WebGLRenderingContext`) are still
-`makeBrandConstructor` stubs, which resolve but cannot brand anything; they
-become real the same way.
+`HostClass` (`host_class.cpp`) wraps the three calls, and every family in this
+layer has been through it: Image, Element/HTMLElement, Blob/File/FileReader,
+XMLHttpRequest, Headers/Request/Response, AbortController/AbortSignal,
+MutationObserver/ResizeObserver, WebSocket, VideoEncoder/GifEncoder, the nine
+Web Audio interfaces, PhysicsCharacter/PhysicsSoftBody and the three AI
+handles. `HostClass::inherit` chains one prototype onto another through the
+program's own `Object.setPrototypeOf`, which is what makes `file instanceof
+Blob` and `gain instanceof AudioNode` true.
+
+Converting forces the members to read their RECEIVER rather than close over the
+payload, which fixed a real hazard on the way past: a detached method holding a
+raw `HostBlob*` it did not root was a dangling read waiting for someone to
+write `const slice = blob.slice`.
+
+**What is deliberately NOT a class:**
+
+- **The WebGL cells** (`gl_internal.h`): `WebGLBuffer`, `WebGLTexture` and
+  friends carry no methods on the web either, so a prototype would save
+  nothing, and the names are not in the manifest to be an instance of.
+- **Text, Comment and DocumentFragment** wrappers: they share
+  `installNodeTree`, which reads its receiver and so serves both, but they are
+  not Elements and giving them that prototype would be a lie every tree walker
+  would believe.
+- **A few names that brand nothing** because this layer builds no instance of
+  them: `HTMLCanvasElement`, `WebGLRenderingContext`, `PannerNode`,
+  `StereoPannerNode`, and the interface table in `host_platform.cpp`. A canvas
+  is an Element whose own properties shadow the shared ones, so it is an
+  `HTMLElement` instance rather than an `HTMLCanvasElement` one.
 
 ## Configure
 

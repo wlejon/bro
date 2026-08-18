@@ -617,7 +617,6 @@ void installFetchGlobal();
 // ---------------------------------------------------------------------------
 
 void installAudioGlobals();
-Value makeAudioContextConstructor();
 Value makeBrandConstructor(const char* name);
 
 // ---------------------------------------------------------------------------

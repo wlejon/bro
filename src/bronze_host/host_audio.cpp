@@ -280,6 +280,44 @@ HostAudioParam* hostAudioParamOf(Value v) {
     return p;
 }
 
+// A node of a PARTICULAR kind, from the receiver. Every node struct begins
+// with `HostAudioNode base`, so hostAudioNodeOf answers for all of them and
+// nodeType is what says which. A wrong-kind receiver answers nullptr rather
+// than reinterpreting one node as another, which is the bug this shape exists
+// to make impossible.
+template <typename T>
+T* nodeOfKind(Value v, AudioNodeType kind) {
+    HostAudioNode* n = hostAudioNodeOf(v);
+    if (!n || n->nodeType != kind) return nullptr;
+    return reinterpret_cast<T*>(n);
+}
+
+// One class per Web Audio interface. Every node class chains onto
+// g_audioNodeClass, so `gain instanceof AudioNode` answers and the base
+// surface exists once for the whole graph rather than once per node.
+HostClass g_audioNodeClass;
+HostClass g_audioParamClass;
+HostClass g_gainNodeClass;
+HostClass g_oscillatorNodeClass;
+HostClass g_biquadFilterNodeClass;
+HostClass g_analyserNodeClass;
+HostClass g_audioBufferClass;
+HostClass g_audioBufferSourceNodeClass;
+HostClass g_audioContextClass;
+
+HostOscillatorNode* oscOf(Value v) {
+    return nodeOfKind<HostOscillatorNode>(v, AudioNodeType::Oscillator);
+}
+HostBiquadFilterNode* filterOf(Value v) {
+    return nodeOfKind<HostBiquadFilterNode>(v, AudioNodeType::BiquadFilter);
+}
+HostAnalyserNode* analyserOf(Value v) {
+    return nodeOfKind<HostAnalyserNode>(v, AudioNodeType::Analyser);
+}
+HostAudioBufferSourceNode* bufSrcOf(Value v) {
+    return nodeOfKind<HostAudioBufferSourceNode>(v, AudioNodeType::BufferSource);
+}
+
 HostAudioBuffer* hostAudioBufferOf(Value v) {
     if (!ev::isObject(v)) return nullptr;
     auto* p = static_cast<HostAudioBuffer*>(ev::handleData(v));
@@ -327,7 +365,15 @@ void syncAudioParamValue(HostAudioParam* p, float val) {
 // AudioNode base surface
 // ---------------------------------------------------------------------------
 
-void installAudioNodeCore(ObjectBuilder& b, HostAudioNode* node) {
+// The AudioNode base surface, decorated once onto AudioNode.prototype. Every
+// node class below chains onto it, so a graph with a hundred nodes carries one
+// copy of this rather than a hundred — and `gain instanceof AudioNode`
+// answers, which is how Web Audio code tests what it has been handed.
+//
+// numberOfInputs and numberOfOutputs read the RECEIVER's nodeType: the answer
+// differs per node kind, and a source node with an input would be a lie a
+// routing helper would act on.
+void decorateAudioNodeProto(ObjectBuilder& b) {
     b.def("connect", 3, [](Value, std::span<const Value> a) -> Value {
         if (a.empty()) return ev::throwTypeError("AudioNode.connect: destination argument required");
         return a[0];
@@ -337,15 +383,19 @@ void installAudioNodeCore(ObjectBuilder& b, HostAudioNode* node) {
         return ev::undefined();
     });
 
-    b.accessor("numberOfInputs", [node](Value, std::span<const Value>) {
-        if (node->nodeType == AudioNodeType::Oscillator || node->nodeType == AudioNodeType::BufferSource) {
+    b.accessor("numberOfInputs", [](Value self_, std::span<const Value>) {
+        HostAudioNode* node = hostAudioNodeOf(self_);
+        if (!node) return ev::fromDouble(1.0);
+        if (node->nodeType == AudioNodeType::Oscillator ||
+            node->nodeType == AudioNodeType::BufferSource) {
             return ev::fromDouble(0.0);
         }
         return ev::fromDouble(1.0);
     }, nullptr);
 
-    b.accessor("numberOfOutputs", [node](Value, std::span<const Value>) {
-        if (node->nodeType == AudioNodeType::Destination) {
+    b.accessor("numberOfOutputs", [](Value self_, std::span<const Value>) {
+        HostAudioNode* node = hostAudioNodeOf(self_);
+        if (node && node->nodeType == AudioNodeType::Destination) {
             return ev::fromDouble(0.0);
         }
         return ev::fromDouble(1.0);
@@ -365,6 +415,64 @@ void installAudioNodeCore(ObjectBuilder& b, HostAudioNode* node) {
 // AudioParam
 // ---------------------------------------------------------------------------
 
+void decorateAudioParamProto(ObjectBuilder& b) {
+    b.accessor("value",
+               [](Value self_, std::span<const Value>) {
+        HostAudioParam* p = hostAudioParamOf(self_);
+        if (!p) return ev::undefined(); return ev::fromDouble(p->value); },
+               [](Value self_, std::span<const Value> a) {
+        HostAudioParam* p = hostAudioParamOf(self_);
+        if (!p) return ev::undefined();
+                   syncAudioParamValue(p, static_cast<float>(numAt(a, 0)));
+                   return ev::undefined();
+               });
+    b.accessor("defaultValue", [](Value self_, std::span<const Value>) {
+        HostAudioParam* p = hostAudioParamOf(self_);
+        if (!p) return ev::undefined();
+        return ev::fromDouble(p->defaultValue);
+    }, nullptr);
+    b.accessor("minValue", [](Value self_, std::span<const Value>) {
+        HostAudioParam* p = hostAudioParamOf(self_);
+        if (!p) return ev::undefined();
+        return ev::fromDouble(p->minValue);
+    }, nullptr);
+    b.accessor("maxValue", [](Value self_, std::span<const Value>) {
+        HostAudioParam* p = hostAudioParamOf(self_);
+        if (!p) return ev::undefined();
+        return ev::fromDouble(p->maxValue);
+    }, nullptr);
+    b.def("setValueAtTime", 2, [](Value thisValue, std::span<const Value> a) -> Value {
+        HostAudioParam* p = hostAudioParamOf(thisValue);
+        if (!p) return ev::undefined();
+        syncAudioParamValue(p, static_cast<float>(numAt(a, 0)));
+        return thisValue;
+    });
+    b.def("linearRampToValueAtTime", 2, [](Value thisValue, std::span<const Value> a) -> Value {
+        HostAudioParam* p = hostAudioParamOf(thisValue);
+        if (!p) return ev::undefined();
+        syncAudioParamValue(p, static_cast<float>(numAt(a, 0)));
+        return thisValue;
+    });
+    b.def("exponentialRampToValueAtTime", 2, [](Value thisValue, std::span<const Value> a) -> Value {
+        HostAudioParam* p = hostAudioParamOf(thisValue);
+        if (!p) return ev::undefined();
+        syncAudioParamValue(p, static_cast<float>(numAt(a, 0)));
+        return thisValue;
+    });
+    b.def("setTargetAtTime", 3, [](Value thisValue, std::span<const Value> a) -> Value {
+        HostAudioParam* p = hostAudioParamOf(thisValue);
+        if (!p) return ev::undefined();
+        syncAudioParamValue(p, static_cast<float>(numAt(a, 0)));
+        return thisValue;
+    });
+    b.def("cancelScheduledValues", 1, [](Value thisValue, std::span<const Value>) -> Value {
+        return thisValue;
+    });
+    b.def("setValueCurveAtTime", 3, [](Value thisValue, std::span<const Value>) -> Value {
+        return thisValue;
+    });
+}
+
 Value makeAudioParamValue(AudioParamTarget target, int targetId,
                           float initialVal, float minVal, float maxVal, float defaultVal) {
     auto* p = new HostAudioParam();
@@ -375,55 +483,18 @@ Value makeAudioParamValue(AudioParamTarget target, int targetId,
     p->minValue = minVal;
     p->maxValue = maxVal;
 
-    ObjectBuilder b(ev::makeHandle(p, hostAudioParamDtor));
+    ObjectBuilder b(g_audioParamClass.make(p, hostAudioParamDtor));
 
-    b.accessor("value",
-               [p](Value, std::span<const Value>) { return ev::fromDouble(p->value); },
-               [p](Value, std::span<const Value> a) {
-                   syncAudioParamValue(p, static_cast<float>(numAt(a, 0)));
-                   return ev::undefined();
-               });
 
-    b.accessor("defaultValue", [p](Value, std::span<const Value>) {
-        return ev::fromDouble(p->defaultValue);
-    }, nullptr);
 
-    b.accessor("minValue", [p](Value, std::span<const Value>) {
-        return ev::fromDouble(p->minValue);
-    }, nullptr);
 
-    b.accessor("maxValue", [p](Value, std::span<const Value>) {
-        return ev::fromDouble(p->maxValue);
-    }, nullptr);
 
     // Automation methods (all return `this` AudioParam)
-    b.def("setValueAtTime", 2, [p](Value thisValue, std::span<const Value> a) -> Value {
-        syncAudioParamValue(p, static_cast<float>(numAt(a, 0)));
-        return thisValue;
-    });
 
-    b.def("linearRampToValueAtTime", 2, [p](Value thisValue, std::span<const Value> a) -> Value {
-        syncAudioParamValue(p, static_cast<float>(numAt(a, 0)));
-        return thisValue;
-    });
 
-    b.def("exponentialRampToValueAtTime", 2, [p](Value thisValue, std::span<const Value> a) -> Value {
-        syncAudioParamValue(p, static_cast<float>(numAt(a, 0)));
-        return thisValue;
-    });
 
-    b.def("setTargetAtTime", 3, [p](Value thisValue, std::span<const Value> a) -> Value {
-        syncAudioParamValue(p, static_cast<float>(numAt(a, 0)));
-        return thisValue;
-    });
 
-    b.def("cancelScheduledValues", 1, [](Value thisValue, std::span<const Value>) -> Value {
-        return thisValue;
-    });
 
-    b.def("setValueCurveAtTime", 3, [](Value thisValue, std::span<const Value>) -> Value {
-        return thisValue;
-    });
 
     return b.get();
 }
@@ -436,8 +507,7 @@ Value makeGainNodeValue() {
     auto* gain = new HostGainNode();
     gain->base.nodeType = AudioNodeType::Gain;
 
-    ObjectBuilder b(ev::makeHandle(gain, hostGainDtor));
-    installAudioNodeCore(b, &gain->base);
+    ObjectBuilder b(g_gainNodeClass.make(gain, hostGainDtor));
 
     Value gainParam = makeAudioParamValue(AudioParamTarget::Gain, -1, 1.0f, -3.402823466e+38f, 3.402823466e+38f, 1.0f);
     b.set("gain", gainParam);
@@ -449,22 +519,16 @@ Value makeGainNodeValue() {
 // OscillatorNode
 // ---------------------------------------------------------------------------
 
-Value makeOscillatorNodeValue() {
-    auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-    int voiceId = e ? e->createVoice() : -1;
-
-    auto* osc = new HostOscillatorNode();
-    osc->base.nodeType = AudioNodeType::Oscillator;
-    osc->voiceId = voiceId;
-
-    ObjectBuilder b(ev::makeHandle(osc, hostOscillatorDtor));
-    installAudioNodeCore(b, &osc->base);
-
+void decorateOscillatorNodeProto(ObjectBuilder& b) {
     b.accessor("type",
-               [osc](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+        HostOscillatorNode* osc = oscOf(self_);
+        if (!osc) return ev::undefined();
                    return ev::fromUtf8(osc->type);
                },
-               [osc](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+        HostOscillatorNode* osc = oscOf(self_);
+        if (!osc) return ev::undefined();
                    if (a.empty() || ev::isObject(a[0]) || ev::isUndefined(a[0])) return ev::undefined();
                    std::string t = ev::toUtf8(a[0]);
                    osc->type = t;
@@ -474,11 +538,9 @@ Value makeOscillatorNodeValue() {
                    }
                    return ev::undefined();
                });
-
-    b.set("frequency", makeAudioParamValue(AudioParamTarget::VoiceFrequency, voiceId, 440.0f, 0.0f, 24000.0f, 440.0f));
-    b.set("detune", makeAudioParamValue(AudioParamTarget::VoiceDetune, voiceId, 0.0f, -153600.0f, 153600.0f, 0.0f));
-
-    b.def("start", 1, [osc](Value, std::span<const Value> a) -> Value {
+    b.def("start", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostOscillatorNode* osc = oscOf(self_);
+        if (!osc) return ev::undefined();
         if (osc->started) return ev::throwError("OscillatorNode cannot be started more than once");
         osc->started = true;
         auto* eng = hostEngine() ? hostEngine()->audioEngine() : nullptr;
@@ -487,8 +549,9 @@ Value makeOscillatorNodeValue() {
         }
         return ev::undefined();
     });
-
-    b.def("stop", 1, [osc](Value, std::span<const Value> a) -> Value {
+    b.def("stop", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostOscillatorNode* osc = oscOf(self_);
+        if (!osc) return ev::undefined();
         osc->stopped = true;
         auto* eng = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (eng && osc->voiceId >= 0) {
@@ -496,6 +559,23 @@ Value makeOscillatorNodeValue() {
         }
         return ev::undefined();
     });
+}
+
+Value makeOscillatorNodeValue() {
+    auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
+    int voiceId = e ? e->createVoice() : -1;
+
+    auto* osc = new HostOscillatorNode();
+    osc->base.nodeType = AudioNodeType::Oscillator;
+    osc->voiceId = voiceId;
+
+    ObjectBuilder b(g_oscillatorNodeClass.make(osc, hostOscillatorDtor));
+
+
+    b.set("frequency", makeAudioParamValue(AudioParamTarget::VoiceFrequency, voiceId, 440.0f, 0.0f, 24000.0f, 440.0f));
+    b.set("detune", makeAudioParamValue(AudioParamTarget::VoiceDetune, voiceId, 0.0f, -153600.0f, 153600.0f, 0.0f));
+
+
 
     return b.get();
 }
@@ -504,22 +584,16 @@ Value makeOscillatorNodeValue() {
 // BiquadFilterNode
 // ---------------------------------------------------------------------------
 
-Value makeBiquadFilterNodeValue() {
-    auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
-    int slot = e ? e->allocateFilterSlot() : -1;
-
-    auto* filter = new HostBiquadFilterNode();
-    filter->base.nodeType = AudioNodeType::BiquadFilter;
-    filter->slot = slot;
-
-    ObjectBuilder b(ev::makeHandle(filter, hostBiquadFilterDtor));
-    installAudioNodeCore(b, &filter->base);
-
+void decorateBiquadFilterNodeProto(ObjectBuilder& b) {
     b.accessor("type",
-               [filter](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+        HostBiquadFilterNode* filter = filterOf(self_);
+        if (!filter) return ev::undefined();
                    return ev::fromUtf8(filter->type);
                },
-               [filter](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+        HostBiquadFilterNode* filter = filterOf(self_);
+        if (!filter) return ev::undefined();
                    if (a.empty() || ev::isObject(a[0]) || ev::isUndefined(a[0])) return ev::undefined();
                    std::string t = ev::toUtf8(a[0]);
                    filter->type = t;
@@ -529,6 +603,18 @@ Value makeBiquadFilterNodeValue() {
                    }
                    return ev::undefined();
                });
+}
+
+Value makeBiquadFilterNodeValue() {
+    auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
+    int slot = e ? e->allocateFilterSlot() : -1;
+
+    auto* filter = new HostBiquadFilterNode();
+    filter->base.nodeType = AudioNodeType::BiquadFilter;
+    filter->slot = slot;
+
+    ObjectBuilder b(g_biquadFilterNodeClass.make(filter, hostBiquadFilterDtor));
+
 
     b.set("frequency", makeAudioParamValue(AudioParamTarget::FilterFrequency, slot, 350.0f, 10.0f, 24000.0f, 350.0f));
     b.set("Q", makeAudioParamValue(AudioParamTarget::FilterQ, slot, 1.0f, 0.0001f, 1000.0f, 1.0f));
@@ -541,18 +627,16 @@ Value makeBiquadFilterNodeValue() {
 // AnalyserNode
 // ---------------------------------------------------------------------------
 
-Value makeAnalyserNodeValue() {
-    auto* analyser = new HostAnalyserNode();
-    analyser->base.nodeType = AudioNodeType::Analyser;
-
-    ObjectBuilder b(ev::makeHandle(analyser, hostAnalyserDtor));
-    installAudioNodeCore(b, &analyser->base);
-
+void decorateAnalyserNodeProto(ObjectBuilder& b) {
     b.accessor("fftSize",
-               [analyser](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+        HostAnalyserNode* analyser = analyserOf(self_);
+        if (!analyser) return ev::undefined();
                    return ev::fromDouble(analyser->fftSize);
                },
-               [analyser](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+        HostAnalyserNode* analyser = analyserOf(self_);
+        if (!analyser) return ev::undefined();
                    int v = i32At(a, 0);
                    if (v >= 32 && v <= 32768 && (v & (v - 1)) == 0) {
                        analyser->fftSize = v;
@@ -560,39 +644,50 @@ Value makeAnalyserNodeValue() {
                    }
                    return ev::undefined();
                });
-
-    b.accessor("frequencyBinCount", [analyser](Value, std::span<const Value>) {
+    b.accessor("frequencyBinCount", [](Value self_, std::span<const Value>) {
+        HostAnalyserNode* analyser = analyserOf(self_);
+        if (!analyser) return ev::undefined();
         return ev::fromDouble(analyser->fftSize / 2);
     }, nullptr);
-
     b.accessor("minDecibels",
-               [analyser](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+        HostAnalyserNode* analyser = analyserOf(self_);
+        if (!analyser) return ev::undefined();
                    return ev::fromDouble(analyser->minDecibels);
                },
-               [analyser](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+        HostAnalyserNode* analyser = analyserOf(self_);
+        if (!analyser) return ev::undefined();
                    analyser->minDecibels = static_cast<float>(numAt(a, 0));
                    return ev::undefined();
                });
-
     b.accessor("maxDecibels",
-               [analyser](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+        HostAnalyserNode* analyser = analyserOf(self_);
+        if (!analyser) return ev::undefined();
                    return ev::fromDouble(analyser->maxDecibels);
                },
-               [analyser](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+        HostAnalyserNode* analyser = analyserOf(self_);
+        if (!analyser) return ev::undefined();
                    analyser->maxDecibels = static_cast<float>(numAt(a, 0));
                    return ev::undefined();
                });
-
     b.accessor("smoothingTimeConstant",
-               [analyser](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+        HostAnalyserNode* analyser = analyserOf(self_);
+        if (!analyser) return ev::undefined();
                    return ev::fromDouble(analyser->smoothingTimeConstant);
                },
-               [analyser](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+        HostAnalyserNode* analyser = analyserOf(self_);
+        if (!analyser) return ev::undefined();
                    analyser->smoothingTimeConstant = static_cast<float>(std::clamp(numAt(a, 0), 0.0, 1.0));
                    return ev::undefined();
                });
-
-    b.def("getFloatFrequencyData", 1, [analyser](Value, std::span<const Value> a) -> Value {
+    b.def("getFloatFrequencyData", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostAnalyserNode* analyser = analyserOf(self_);
+        if (!analyser) return ev::undefined();
         Value arr = argAt(a, 0);
         if (!ev::isTypedArray(arr)) return ev::undefined();
         ev::TypedArrayInfo info = ev::typedArrayInfo(arr);
@@ -632,8 +727,9 @@ Value makeAnalyserNodeValue() {
         std::memcpy(info.data, outData.data(), count * sizeof(float));
         return ev::undefined();
     });
-
-    b.def("getByteFrequencyData", 1, [analyser](Value, std::span<const Value> a) -> Value {
+    b.def("getByteFrequencyData", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostAnalyserNode* analyser = analyserOf(self_);
+        if (!analyser) return ev::undefined();
         Value arr = argAt(a, 0);
         if (!ev::isTypedArray(arr)) return ev::undefined();
         ev::TypedArrayInfo info = ev::typedArrayInfo(arr);
@@ -678,8 +774,9 @@ Value makeAnalyserNodeValue() {
         std::memcpy(info.data, outData.data(), count);
         return ev::undefined();
     });
-
-    b.def("getFloatTimeDomainData", 1, [analyser](Value, std::span<const Value> a) -> Value {
+    b.def("getFloatTimeDomainData", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostAnalyserNode* analyser = analyserOf(self_);
+        if (!analyser) return ev::undefined();
         Value arr = argAt(a, 0);
         if (!ev::isTypedArray(arr)) return ev::undefined();
         ev::TypedArrayInfo info = ev::typedArrayInfo(arr);
@@ -696,8 +793,9 @@ Value makeAnalyserNodeValue() {
         std::memcpy(info.data, real.data(), count * sizeof(float));
         return ev::undefined();
     });
-
-    b.def("getByteTimeDomainData", 1, [analyser](Value, std::span<const Value> a) -> Value {
+    b.def("getByteTimeDomainData", 1, [](Value self_, std::span<const Value> a) -> Value {
+        HostAnalyserNode* analyser = analyserOf(self_);
+        if (!analyser) return ev::undefined();
         Value arr = argAt(a, 0);
         if (!ev::isTypedArray(arr)) return ev::undefined();
         ev::TypedArrayInfo info = ev::typedArrayInfo(arr);
@@ -720,6 +818,22 @@ Value makeAnalyserNodeValue() {
         std::memcpy(info.data, byteData.data(), count);
         return ev::undefined();
     });
+}
+
+Value makeAnalyserNodeValue() {
+    auto* analyser = new HostAnalyserNode();
+    analyser->base.nodeType = AudioNodeType::Analyser;
+
+    ObjectBuilder b(g_analyserNodeClass.make(analyser, hostAnalyserDtor));
+
+
+
+
+
+
+
+
+
 
     return b.get();
 }
@@ -728,41 +842,30 @@ Value makeAnalyserNodeValue() {
 // AudioBuffer
 // ---------------------------------------------------------------------------
 
-Value makeAudioBufferValue(int channels, int length, int sampleRate) {
-    if (channels <= 0) channels = 1;
-    if (length < 0) length = 0;
-    if (sampleRate <= 0) sampleRate = 44100;
-
-    auto* buf = new HostAudioBuffer();
-    buf->numberOfChannels = channels;
-    buf->length = length;
-    buf->sampleRate = sampleRate;
-    buf->channels.resize(channels, std::vector<float>(length, 0.0f));
-
-    ObjectBuilder b(ev::makeHandle(buf, hostAudioBufferDtor));
-
-    for (int c = 0; c < channels; ++c) {
-        Value arr = ev::createTypedArray(ev::elements::Float32, length);
-        b.set(("_ch" + std::to_string(c)).c_str(), arr);
-    }
-
-    b.accessor("numberOfChannels", [buf](Value, std::span<const Value>) {
+void decorateAudioBufferProto(ObjectBuilder& b) {
+    b.accessor("numberOfChannels", [](Value self_, std::span<const Value>) {
+        HostAudioBuffer* buf = hostAudioBufferOf(self_);
+        if (!buf) return ev::undefined();
         return ev::fromDouble(buf->numberOfChannels);
     }, nullptr);
-
-    b.accessor("length", [buf](Value, std::span<const Value>) {
+    b.accessor("length", [](Value self_, std::span<const Value>) {
+        HostAudioBuffer* buf = hostAudioBufferOf(self_);
+        if (!buf) return ev::undefined();
         return ev::fromDouble(buf->length);
     }, nullptr);
-
-    b.accessor("sampleRate", [buf](Value, std::span<const Value>) {
+    b.accessor("sampleRate", [](Value self_, std::span<const Value>) {
+        HostAudioBuffer* buf = hostAudioBufferOf(self_);
+        if (!buf) return ev::undefined();
         return ev::fromDouble(buf->sampleRate);
     }, nullptr);
-
-    b.accessor("duration", [buf](Value, std::span<const Value>) {
+    b.accessor("duration", [](Value self_, std::span<const Value>) {
+        HostAudioBuffer* buf = hostAudioBufferOf(self_);
+        if (!buf) return ev::undefined();
         return ev::fromDouble(buf->sampleRate > 0 ? static_cast<double>(buf->length) / static_cast<double>(buf->sampleRate) : 0.0);
     }, nullptr);
-
-    b.def("getChannelData", 1, [buf](Value thisValue, std::span<const Value> a) -> Value {
+    b.def("getChannelData", 1, [](Value thisValue, std::span<const Value> a) -> Value {
+        HostAudioBuffer* buf = hostAudioBufferOf(thisValue);
+        if (!buf) return ev::undefined();
         int ch = i32At(a, 0);
         if (ch < 0 || ch >= buf->numberOfChannels) {
             return ev::throwRangeError("AudioBuffer.getChannelData: channel index out of range");
@@ -782,8 +885,9 @@ Value makeAudioBufferValue(int channels, int length, int sampleRate) {
         ev::setProperty(root.get(), key, arrRoot.get());
         return arrRoot.get();
     });
-
-    b.def("copyFromChannel", 3, [buf](Value thisValue, std::span<const Value> a) -> Value {
+    b.def("copyFromChannel", 3, [](Value thisValue, std::span<const Value> a) -> Value {
+        HostAudioBuffer* buf = hostAudioBufferOf(thisValue);
+        if (!buf) return ev::undefined();
         Value dst = argAt(a, 0);
         int ch = i32At(a, 1);
         int startInChannel = a.size() >= 3 ? i32At(a, 2) : 0;
@@ -808,8 +912,9 @@ Value makeAudioBufferValue(int channels, int length, int sampleRate) {
         }
         return ev::undefined();
     });
-
-    b.def("copyToChannel", 3, [buf](Value thisValue, std::span<const Value> a) -> Value {
+    b.def("copyToChannel", 3, [](Value thisValue, std::span<const Value> a) -> Value {
+        HostAudioBuffer* buf = hostAudioBufferOf(thisValue);
+        if (!buf) return ev::undefined();
         Value src = argAt(a, 0);
         int ch = i32At(a, 1);
         int startInChannel = a.size() >= 3 ? i32At(a, 2) : 0;
@@ -834,6 +939,32 @@ Value makeAudioBufferValue(int channels, int length, int sampleRate) {
         }
         return ev::undefined();
     });
+}
+
+Value makeAudioBufferValue(int channels, int length, int sampleRate) {
+    if (channels <= 0) channels = 1;
+    if (length < 0) length = 0;
+    if (sampleRate <= 0) sampleRate = 44100;
+
+    auto* buf = new HostAudioBuffer();
+    buf->numberOfChannels = channels;
+    buf->length = length;
+    buf->sampleRate = sampleRate;
+    buf->channels.resize(channels, std::vector<float>(length, 0.0f));
+
+    ObjectBuilder b(g_audioBufferClass.make(buf, hostAudioBufferDtor));
+
+    for (int c = 0; c < channels; ++c) {
+        Value arr = ev::createTypedArray(ev::elements::Float32, length);
+        b.set(("_ch" + std::to_string(c)).c_str(), arr);
+    }
+
+
+
+
+
+
+
 
     return b.get();
 }
@@ -842,19 +973,15 @@ Value makeAudioBufferValue(int channels, int length, int sampleRate) {
 // AudioBufferSourceNode
 // ---------------------------------------------------------------------------
 
-Value makeAudioBufferSourceNodeValue() {
-    auto* src = new HostAudioBufferSourceNode();
-    src->base.nodeType = AudioNodeType::BufferSource;
-
-    ObjectBuilder b(ev::makeHandle(src, hostAudioBufferSourceDtor));
-    installAudioNodeCore(b, &src->base);
-
+void decorateAudioBufferSourceNodeProto(ObjectBuilder& b) {
     b.accessor("buffer",
                [](Value thisValue, std::span<const Value>) {
                    Value buf = ev::getProperty(thisValue, "_buffer");
                    return ev::isObject(buf) ? buf : ev::null();
                },
-               [src](Value thisValue, std::span<const Value> a) {
+               [](Value thisValue, std::span<const Value> a) {
+        HostAudioBufferSourceNode* src = bufSrcOf(thisValue);
+        if (!src) return ev::undefined();
                    Value v = argAt(a, 0);
                    ev::Persistent self(thisValue);
                    ev::Persistent bufVal(v);
@@ -867,12 +994,15 @@ Value makeAudioBufferSourceNodeValue() {
                    }
                    return ev::undefined();
                });
-
     b.accessor("loop",
-               [src](Value, std::span<const Value>) {
+               [](Value self_, std::span<const Value>) {
+        HostAudioBufferSourceNode* src = bufSrcOf(self_);
+        if (!src) return ev::undefined();
                    return ev::fromBool(src->loop);
                },
-               [src](Value, std::span<const Value> a) {
+               [](Value self_, std::span<const Value> a) {
+        HostAudioBufferSourceNode* src = bufSrcOf(self_);
+        if (!src) return ev::undefined();
                    src->loop = boolAt(a, 0);
                    auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
                    if (e && src->playbackId >= 0) {
@@ -880,19 +1010,23 @@ Value makeAudioBufferSourceNodeValue() {
                    }
                    return ev::undefined();
                });
-
     b.accessor("loopStart",
-               [src](Value, std::span<const Value>) { return ev::fromDouble(src->loopStart); },
-               [src](Value, std::span<const Value> a) { src->loopStart = numAt(a, 0); return ev::undefined(); });
-
+               [](Value self_, std::span<const Value>) {
+        HostAudioBufferSourceNode* src = bufSrcOf(self_);
+        if (!src) return ev::undefined(); return ev::fromDouble(src->loopStart); },
+               [](Value self_, std::span<const Value> a) {
+        HostAudioBufferSourceNode* src = bufSrcOf(self_);
+        if (!src) return ev::undefined(); src->loopStart = numAt(a, 0); return ev::undefined(); });
     b.accessor("loopEnd",
-               [src](Value, std::span<const Value>) { return ev::fromDouble(src->loopEnd); },
-               [src](Value, std::span<const Value> a) { src->loopEnd = numAt(a, 0); return ev::undefined(); });
-
-    b.set("playbackRate", makeAudioParamValue(AudioParamTarget::PlaybackRate, -1, 1.0f, 0.0f, 1024.0f, 1.0f));
-    b.set("detune", makeAudioParamValue(AudioParamTarget::PlaybackDetune, -1, 0.0f, -153600.0f, 153600.0f, 0.0f));
-
-    b.def("start", 3, [src](Value thisValue, std::span<const Value> a) -> Value {
+               [](Value self_, std::span<const Value>) {
+        HostAudioBufferSourceNode* src = bufSrcOf(self_);
+        if (!src) return ev::undefined(); return ev::fromDouble(src->loopEnd); },
+               [](Value self_, std::span<const Value> a) {
+        HostAudioBufferSourceNode* src = bufSrcOf(self_);
+        if (!src) return ev::undefined(); src->loopEnd = numAt(a, 0); return ev::undefined(); });
+    b.def("start", 3, [](Value thisValue, std::span<const Value> a) -> Value {
+        HostAudioBufferSourceNode* src = bufSrcOf(thisValue);
+        if (!src) return ev::undefined();
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (!e) return ev::undefined();
         if (src->started) return ev::throwError("AudioBufferSourceNode cannot be started more than once");
@@ -948,8 +1082,9 @@ Value makeAudioBufferSourceNodeValue() {
         }
         return ev::undefined();
     });
-
-    b.def("stop", 1, [src](Value, std::span<const Value>) -> Value {
+    b.def("stop", 1, [](Value self_, std::span<const Value>) -> Value {
+        HostAudioBufferSourceNode* src = bufSrcOf(self_);
+        if (!src) return ev::undefined();
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e && src->playbackId >= 0) {
             e->stopPlayback(src->playbackId);
@@ -958,6 +1093,22 @@ Value makeAudioBufferSourceNodeValue() {
         src->stopped = true;
         return ev::undefined();
     });
+}
+
+Value makeAudioBufferSourceNodeValue() {
+    auto* src = new HostAudioBufferSourceNode();
+    src->base.nodeType = AudioNodeType::BufferSource;
+
+    ObjectBuilder b(g_audioBufferSourceNodeClass.make(src, hostAudioBufferSourceDtor));
+
+
+
+
+
+    b.set("playbackRate", makeAudioParamValue(AudioParamTarget::PlaybackRate, -1, 1.0f, 0.0f, 1024.0f, 1.0f));
+    b.set("detune", makeAudioParamValue(AudioParamTarget::PlaybackDetune, -1, 0.0f, -153600.0f, 153600.0f, 0.0f));
+
+
 
     return b.get();
 }
@@ -966,15 +1117,17 @@ Value makeAudioBufferSourceNodeValue() {
 // Destination Node & AudioListener
 // ---------------------------------------------------------------------------
 
+void decorateDestinationNodeProto(ObjectBuilder& b) {
+    b.accessor("maxChannelCount", [](Value, std::span<const Value>) {
+        return ev::fromDouble(2.0);
+    }, nullptr);
+}
+
 Value makeDestinationNodeValue() {
     auto* dest = new HostAudioNode();
     dest->nodeType = AudioNodeType::Destination;
 
-    ObjectBuilder b(ev::makeHandle(dest, hostAudioNodeDtor));
-    installAudioNodeCore(b, dest);
-    b.accessor("maxChannelCount", [](Value, std::span<const Value>) {
-        return ev::fromDouble(2.0);
-    }, nullptr);
+    ObjectBuilder b(g_audioNodeClass.make(dest, hostAudioNodeDtor));
 
     return b.get();
 }
@@ -1126,32 +1279,24 @@ Value audioCtxDecodeAudioData(Value, std::span<const Value> a) {
 // AudioContext instance builder
 // ---------------------------------------------------------------------------
 
-Value makeAudioContextValue() {
-    auto* ctx = new HostAudioContext();
-    ObjectBuilder b(ev::makeHandle(ctx, hostAudioContextDtor));
-
-    // Standard properties
+void decorateAudioContextProto(ObjectBuilder& b) {
     b.accessor("currentTime", [](Value, std::span<const Value>) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         return ev::fromDouble(e ? e->currentTime() : 0.0);
     }, nullptr);
-
     b.accessor("sampleRate", [](Value, std::span<const Value>) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         return ev::fromDouble(e ? static_cast<double>(e->sampleRate()) : 44100.0);
     }, nullptr);
-
     b.accessor("state", [](Value, std::span<const Value>) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e && e->masterPaused()) return ev::fromUtf8("suspended");
         return ev::fromUtf8("running");
     }, nullptr);
-
     b.accessor("outputLatency", [](Value, std::span<const Value>) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         return ev::fromDouble(e ? e->outputLatencySeconds() : 0.0);
     }, nullptr);
-
     b.accessor("masterGain",
                [](Value, std::span<const Value>) {
                    auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
@@ -1162,27 +1307,18 @@ Value makeAudioContextValue() {
                    if (e) e->setMasterGain(static_cast<float>(numAt(a, 0)));
                    return ev::undefined();
                });
-
-    b.set("destination", makeDestinationNodeValue());
-    b.set("listener", makeListenerValue());
-
-    // Node factories
     b.def("createGain", 0, [](Value, std::span<const Value>) { return makeGainNodeValue(); });
     b.def("createOscillator", 0, [](Value, std::span<const Value>) { return makeOscillatorNodeValue(); });
     b.def("createBiquadFilter", 0, [](Value, std::span<const Value>) { return makeBiquadFilterNodeValue(); });
     b.def("createAnalyser", 0, [](Value, std::span<const Value>) { return makeAnalyserNodeValue(); });
     b.def("createBufferSource", 0, [](Value, std::span<const Value>) { return makeAudioBufferSourceNodeValue(); });
-
     b.def("createBuffer", 3, [](Value, std::span<const Value> a) {
         int channels = i32At(a, 0);
         int length = i32At(a, 1);
         int sampleRate = i32At(a, 2);
         return makeAudioBufferValue(channels, length, sampleRate);
     });
-
     b.def("decodeAudioData", 3, audioCtxDecodeAudioData);
-
-    // Lifecycle methods (return resolved Promises)
     b.def("resume", 0, [](Value, std::span<const Value>) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setMasterPaused(false);
@@ -1190,7 +1326,6 @@ Value makeAudioContextValue() {
         ev::resolvePromise(p.get(), ev::undefined());
         return p.get();
     });
-
     b.def("suspend", 0, [](Value, std::span<const Value>) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setMasterPaused(true);
@@ -1198,213 +1333,175 @@ Value makeAudioContextValue() {
         ev::resolvePromise(p.get(), ev::undefined());
         return p.get();
     });
-
     b.def("close", 0, [](Value, std::span<const Value>) {
         ev::Persistent p(ev::createPromise());
         ev::resolvePromise(p.get(), ev::undefined());
         return p.get();
     });
-
-    // Bro Mix Bus & Effects methods
     b.def("createBus", 0, [](Value, std::span<const Value>) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         return ev::fromDouble(e ? e->createBus() : -1);
     });
-
     b.def("deleteBus", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->deleteBus(i32At(a, 0));
         return ev::undefined();
     });
-
     b.def("setBusGain", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusGain(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusPan", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusPan(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusMuted", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusMuted(i32At(a, 0), boolAt(a, 1));
         return ev::undefined();
     });
-
     b.def("setBusSolo", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusSolo(i32At(a, 0), boolAt(a, 1));
         return ev::undefined();
     });
-
     b.def("getBusSolo", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         return ev::fromBool(e ? e->getBusSolo(i32At(a, 0)) : false);
     });
-
     b.def("setBusDelayEnabled", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusDelayEnabled(i32At(a, 0), boolAt(a, 1));
         return ev::undefined();
     });
-
     b.def("setBusDelayTime", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusDelayTime(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusDelayFeedback", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusDelayFeedback(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusDelayMix", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusDelayMix(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusReverbEnabled", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusReverbEnabled(i32At(a, 0), boolAt(a, 1));
         return ev::undefined();
     });
-
     b.def("setBusReverbRoomSize", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusReverbRoomSize(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusReverbDamping", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusReverbDamping(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusReverbMix", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusReverbMix(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusChorusEnabled", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusChorusEnabled(i32At(a, 0), boolAt(a, 1));
         return ev::undefined();
     });
-
     b.def("setBusChorusRate", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusChorusRate(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusChorusDepth", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusChorusDepth(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusChorusMix", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusChorusMix(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusChorusFeedback", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusChorusFeedback(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusCompressorEnabled", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusCompressorEnabled(i32At(a, 0), boolAt(a, 1));
         return ev::undefined();
     });
-
     b.def("setBusCompressorThreshold", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusCompressorThreshold(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusCompressorRatio", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusCompressorRatio(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusCompressorAttack", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusCompressorAttack(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setBusCompressorRelease", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusCompressorRelease(i32At(a, 0), static_cast<float>(numAt(a, 1)));
         return ev::undefined();
     });
-
     b.def("setDelayEnabled", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setDelayEnabled(boolAt(a, 0));
         return ev::undefined();
     });
-
     b.def("setDelayTime", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setDelayTime(static_cast<float>(numAt(a, 0)));
         return ev::undefined();
     });
-
     b.def("setDelayFeedback", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setDelayFeedback(static_cast<float>(numAt(a, 0)));
         return ev::undefined();
     });
-
     b.def("setDelayMix", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setDelayMix(static_cast<float>(numAt(a, 0)));
         return ev::undefined();
     });
-
     b.def("setReverbEnabled", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setBusReverbEnabled(0, boolAt(a, 0));
         return ev::undefined();
     });
-
     b.def("getBusPeakL", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         return ev::fromDouble(e ? e->getBusPeakL(i32At(a, 0)) : 0.0);
     });
-
     b.def("getBusPeakR", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         return ev::fromDouble(e ? e->getBusPeakR(i32At(a, 0)) : 0.0);
     });
-
     b.def("getBusRmsL", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         return ev::fromDouble(e ? e->getBusRmsL(i32At(a, 0)) : 0.0);
     });
-
     b.def("getBusRmsR", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         return ev::fromDouble(e ? e->getBusRmsR(i32At(a, 0)) : 0.0);
     });
-
-    // Bro Clip API
     b.def("createClip", 3, [](Value, std::span<const Value> a) -> Value {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (!e || a.empty()) return ev::fromDouble(-1);
@@ -1470,13 +1567,11 @@ Value makeAudioContextValue() {
         int clipId = e->createClip(samples, numSamples, channels);
         return ev::fromDouble(clipId);
     });
-
     b.def("deleteClip", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->deleteClip(i32At(a, 0));
         return ev::undefined();
     });
-
     b.def("playClip", 4, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (!e || a.empty()) return ev::fromDouble(-1);
@@ -1500,13 +1595,11 @@ Value makeAudioContextValue() {
         }
         return ev::fromDouble(playbackId);
     });
-
     b.def("stopPlayback", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->stopPlayback(i32At(a, 0));
         return ev::undefined();
     });
-
     b.def("createClipFromFile", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (!e || a.empty()) return ev::fromDouble(-1);
@@ -1514,17 +1607,14 @@ Value makeAudioContextValue() {
         int clipId = e->createClipFromFile(path.c_str());
         return ev::fromDouble(clipId);
     });
-
     b.def("getClipSampleCount", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         return ev::fromDouble(e ? e->getClipSampleCount(i32At(a, 0)) : 0);
     });
-
     b.def("getClipChannels", 1, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         return ev::fromDouble(e ? e->getClipChannels(i32At(a, 0)) : 0);
     });
-
     b.def("getClipWaveform", 2, [](Value, std::span<const Value> a) -> Value {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (!e || a.size() < 2) return ev::null();
@@ -1539,32 +1629,98 @@ Value makeAudioContextValue() {
         ev::fillTypedArray(arr, std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(wf.data()), wf.size() * sizeof(float)));
         return arr;
     });
-
-    // Spatial helpers
     b.def("setListenerPosition", 3, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setListenerPosition(static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)));
         return ev::undefined();
     });
-
     b.def("setListenerOrientation", 6, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setListenerOrientation(static_cast<float>(numAt(a, 0)), static_cast<float>(numAt(a, 1)), static_cast<float>(numAt(a, 2)),
                                          static_cast<float>(numAt(a, 3)), static_cast<float>(numAt(a, 4)), static_cast<float>(numAt(a, 5)));
         return ev::undefined();
     });
-
     b.def("setVoiceBus", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setVoiceBus(i32At(a, 0), i32At(a, 1));
         return ev::undefined();
     });
-
     b.def("setPlaybackBus", 2, [](Value, std::span<const Value> a) {
         auto* e = hostEngine() ? hostEngine()->audioEngine() : nullptr;
         if (e) e->setPlaybackBus(i32At(a, 0), i32At(a, 1));
         return ev::undefined();
     });
+}
+
+Value makeAudioContextValue() {
+    auto* ctx = new HostAudioContext();
+    ObjectBuilder b(g_audioContextClass.make(ctx, hostAudioContextDtor));
+
+    // Standard properties
+
+
+
+
+
+    b.set("destination", makeDestinationNodeValue());
+    b.set("listener", makeListenerValue());
+
+    // Node factories
+
+
+
+    // Lifecycle methods (return resolved Promises)
+
+
+
+    // Bro Mix Bus & Effects methods
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+    // Bro Clip API
+
+
+
+
+
+
+
+
+    // Spatial helpers
+
+
+
 
     return b.get();
 }
@@ -1574,12 +1730,6 @@ Value makeAudioContextValue() {
 // ---------------------------------------------------------------------------
 // Public Constructor & Globals Installer
 // ---------------------------------------------------------------------------
-
-Value makeAudioContextConstructor() {
-    return ev::makeFunction([](Value, std::span<const Value>) {
-        return makeAudioContextValue();
-    }, 0);
-}
 
 Value makeAudioBufferConstructor() {
     return ev::makeFunction([](Value, std::span<const Value> a) -> Value {
@@ -1601,17 +1751,67 @@ Value makeAudioBufferConstructor() {
 }
 
 void installAudioGlobals() {
-    Value audioCtx = makeAudioContextConstructor();
-    ev::registerGlobal("AudioContext", audioCtx);
-    ev::registerGlobal("webkitAudioContext", audioCtx);
-    ev::registerGlobal("AudioNode", makeBrandConstructor("AudioNode"));
-    ev::registerGlobal("AudioParam", makeBrandConstructor("AudioParam"));
-    ev::registerGlobal("GainNode", makeBrandConstructor("GainNode"));
-    ev::registerGlobal("OscillatorNode", makeBrandConstructor("OscillatorNode"));
-    ev::registerGlobal("AudioBuffer", makeAudioBufferConstructor());
-    ev::registerGlobal("AudioBufferSourceNode", makeBrandConstructor("AudioBufferSourceNode"));
-    ev::registerGlobal("BiquadFilterNode", makeBrandConstructor("BiquadFilterNode"));
-    ev::registerGlobal("AnalyserNode", makeBrandConstructor("AnalyserNode"));
+    // AudioNode FIRST: every node class chains onto its prototype, and
+    // inherit() needs the base installed before the derived one asks for it.
+    // None of these is constructible on the web either — a node comes from
+    // an AudioContext factory — so the bodies refuse and the value of the
+    // conversion is entirely `instanceof` plus one copy of each method.
+    g_audioNodeClass.install("AudioNode", 0, nullptr, decorateAudioNodeProto);
+    g_audioParamClass.install("AudioParam", 0, nullptr, decorateAudioParamProto);
+
+    g_gainNodeClass.install("GainNode", 0, nullptr, nullptr);
+    g_gainNodeClass.inherit(g_audioNodeClass);
+
+    g_oscillatorNodeClass.install("OscillatorNode", 0, nullptr,
+                                  decorateOscillatorNodeProto);
+    g_oscillatorNodeClass.inherit(g_audioNodeClass);
+
+    g_biquadFilterNodeClass.install("BiquadFilterNode", 0, nullptr,
+                                    decorateBiquadFilterNodeProto);
+    g_biquadFilterNodeClass.inherit(g_audioNodeClass);
+
+    g_analyserNodeClass.install("AnalyserNode", 0, nullptr,
+                                decorateAnalyserNodeProto);
+    g_analyserNodeClass.inherit(g_audioNodeClass);
+
+    g_audioBufferSourceNodeClass.install("AudioBufferSourceNode", 0, nullptr,
+                                         decorateAudioBufferSourceNodeProto);
+    g_audioBufferSourceNodeClass.inherit(g_audioNodeClass);
+
+    // AudioBuffer is not a node — it is data — and it IS constructible.
+    g_audioBufferClass.install(
+        "AudioBuffer", 1,
+        [](Value, std::span<const Value> a) -> Value {
+            int length = 0;
+            int channels = 1;
+            int sampleRate = 44100;
+            if (!a.empty() && ev::isObject(a[0])) {
+                Value opt = a[0];
+                Value lenV = ev::getProperty(opt, "length");
+                if (!ev::isUndefined(lenV) && !ev::isObject(lenV))
+                    length = static_cast<int>(ev::toDouble(lenV));
+                Value chV = ev::getProperty(opt, "numberOfChannels");
+                if (!ev::isUndefined(chV) && !ev::isObject(chV))
+                    channels = static_cast<int>(ev::toDouble(chV));
+                Value srV = ev::getProperty(opt, "sampleRate");
+                if (!ev::isUndefined(srV) && !ev::isObject(srV))
+                    sampleRate = static_cast<int>(ev::toDouble(srV));
+            }
+            if (length <= 0) {
+                return ev::throwTypeError("AudioBuffer: length must be positive");
+            }
+            return makeAudioBufferValue(channels, length, sampleRate);
+        },
+        decorateAudioBufferProto);
+
+    g_audioContextClass.install(
+        "AudioContext", 0,
+        [](Value, std::span<const Value>) { return makeAudioContextValue(); },
+        decorateAudioContextProto);
+    g_audioContextClass.alias("webkitAudioContext");
+
+    // Still brands: this layer builds neither, so there is nothing to be an
+    // instance of them.
     ev::registerGlobal("PannerNode", makeBrandConstructor("PannerNode"));
     ev::registerGlobal("StereoPannerNode", makeBrandConstructor("StereoPannerNode"));
 }

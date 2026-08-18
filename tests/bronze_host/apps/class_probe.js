@@ -226,6 +226,55 @@ say('text.isNotElement', !(text instanceof HTMLElement));
 say('text.treeStillWorks', typeof text.appendChild === 'function');
 
 // ---------------------------------------------------------------------------
+// Web Audio, which is where the class HIERARCHY earns its keep
+// ---------------------------------------------------------------------------
+
+// Nine interfaces, and every node kind shares one AudioNode base. Before the
+// conversion each node carried its own copy of connect/disconnect/
+// numberOfInputs/numberOfOutputs/channelCount and answered false to every
+// `instanceof` a routing helper might ask.
+
+const ac = new AudioContext();
+pinClass('ac', ac, AudioContext);
+say('ac.aliased', AudioContext === webkitAudioContext);
+say('ac.windowSameObject', window.AudioContext === AudioContext);
+
+const gain = ac.createGain();
+const osc = ac.createOscillator();
+
+pinClass('gain', gain, GainNode);
+pinClass('osc', osc, OscillatorNode);
+
+// The hierarchy: every node IS an AudioNode, and the base surface is one
+// shared copy rather than one per node.
+say('gain.isAudioNode', gain instanceof AudioNode);
+say('osc.isAudioNode', osc instanceof AudioNode);
+say('node.baseShared', gain.connect === osc.connect);
+say('node.baseIsOnBase',
+    Object.prototype.hasOwnProperty.call(AudioNode.prototype, 'connect'));
+// ...but a GainNode is not an OscillatorNode.
+say('gain.isNotOsc', !(gain instanceof OscillatorNode));
+
+// numberOfInputs reads the RECEIVER's node kind, which is the one member of
+// the shared base whose answer differs per node: a source has no input.
+say('node.inputsPerKind', gain.numberOfInputs === 1 && osc.numberOfInputs === 0);
+say('node.outputsPerKind', gain.numberOfOutputs === 1 &&
+                           ac.destination.numberOfOutputs === 0);
+
+// AudioParams are their own class, and each node owns its own.
+pinClass('param', gain.gain, AudioParam);
+say('param.perInstance', gain.gain !== osc.frequency);
+say('param.methodShared', gain.gain.setValueAtTime === osc.frequency.setValueAtTime);
+gain.gain.value = 0.5;
+say('param.valuePerInstance', gain.gain.value === 0.5 && osc.frequency.value === 440);
+
+// AudioBuffer is data rather than a node, and it IS constructible.
+const buffer = new AudioBuffer({ length: 8, numberOfChannels: 2, sampleRate: 44100 });
+pinClass('buffer', buffer, AudioBuffer);
+say('buffer.isNotAudioNode', !(buffer instanceof AudioNode));
+say('buffer.state', buffer.length === 8 && buffer.numberOfChannels === 2);
+
+// ---------------------------------------------------------------------------
 // End to end: a load through the inherited accessor
 // ---------------------------------------------------------------------------
 

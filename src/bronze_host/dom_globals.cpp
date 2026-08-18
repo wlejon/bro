@@ -891,8 +891,20 @@ Value makeWindowValue() {
     b.set("getComputedStyle", makeGetComputedStyle());
 
     b.set("localStorage", makeLocalStorageValue());
-    b.set("AudioContext", makeAudioContextConstructor());
-    b.set("webkitAudioContext", makeAudioContextConstructor());
+    // Read from the global registry rather than captured: the window is built
+    // before installAudioGlobals runs, and AudioContext is a real class now
+    // whose constructor does not exist yet at this point. An accessor is also
+    // the truthful shape — `window.AudioContext` and the bare `AudioContext`
+    // are the same object on the web, not two.
+    for (const char* name : {"AudioContext", "webkitAudioContext"}) {
+        std::string n(name);
+        b.accessor(name,
+                   [n](Value, std::span<const Value>) {
+                       ev::GlobalValue g = ev::globalValue(n.c_str());
+                       return g.found ? g.value : ev::undefined();
+                   },
+                   nullptr);
+    }
 
     return b.get();
 }

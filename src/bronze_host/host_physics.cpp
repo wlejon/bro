@@ -639,6 +639,25 @@ struct HostPhysicsSoftBody {
     int gridZ = 0;
 };
 
+// From the RECEIVER, because the methods live once on a shared prototype now
+// rather than once per character. A wrong-tag receiver answers nullptr instead
+// of reinterpreting a soft body as a character.
+HostPhysicsCharacter* unwrapCharacter(Value v) {
+    auto* h = static_cast<HostPhysicsCharacter*>(ev::handleData(v));
+    return (h && h->tag == kHostPhysicsCharacterTag) ? h : nullptr;
+}
+
+HostPhysicsSoftBody* unwrapSoftBody(Value v) {
+    auto* h = static_cast<HostPhysicsSoftBody*>(ev::handleData(v));
+    return (h && h->tag == kHostPhysicsSoftBodyTag) ? h : nullptr;
+}
+
+// Neither is constructible: a character comes from Physics.createCharacter and
+// a soft body from Physics.createSoftBody. What the conversion buys is
+// `instanceof` and one copy of each method for the whole class.
+HostClass g_characterClass;
+HostClass g_softBodyClass;
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -703,6 +722,174 @@ void drainPhysicsContactEvents() {
 // ---------------------------------------------------------------------------
 // Installation & Surface Definition
 // ---------------------------------------------------------------------------
+
+static void decorateCharacterProto(ObjectBuilder& cb) {
+    cb.def("setVelocity", 3, [](Value self_, std::span<const Value> args) {
+        HostPhysicsCharacter* pc = unwrapCharacter(self_);
+        if (!pc) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        if (w && pc->handle) {
+            JPH::Vec3 v;
+            if (args.size() >= 3) {
+                v = JPH::Vec3(static_cast<float>(numAt(args, 0)), static_cast<float>(numAt(args, 1)), static_cast<float>(numAt(args, 2)));
+            } else if (!args.empty() && ev::isObject(args[0])) {
+                v = readVec3(args[0]);
+            }
+            w->setCharacterVelocity(pc->handle, v);
+        }
+        return ev::undefined();
+    });
+    cb.def("getVelocity", 0, [](Value self_, std::span<const Value>) {
+        HostPhysicsCharacter* pc = unwrapCharacter(self_);
+        if (!pc) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        if (!w || !pc->handle) return ev::null();
+        physics::CharacterState st;
+        if (!w->getCharacterState(pc->handle, st)) return ev::null();
+        return makeVec3Value(st.velocity.GetX(), st.velocity.GetY(), st.velocity.GetZ());
+    });
+    cb.def("setPosition", 3, [](Value self_, std::span<const Value> args) {
+        HostPhysicsCharacter* pc = unwrapCharacter(self_);
+        if (!pc) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        if (w && pc->handle) {
+            JPH::RVec3 p;
+            if (args.size() >= 3) {
+                p = JPH::RVec3(static_cast<float>(numAt(args, 0)), static_cast<float>(numAt(args, 1)), static_cast<float>(numAt(args, 2)));
+            } else if (!args.empty() && ev::isObject(args[0])) {
+                p = readRVec3(args[0]);
+            }
+            w->setCharacterPosition(pc->handle, p);
+        }
+        return ev::undefined();
+    });
+    cb.def("getPosition", 0, [](Value self_, std::span<const Value>) {
+        HostPhysicsCharacter* pc = unwrapCharacter(self_);
+        if (!pc) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        if (!w || !pc->handle) return ev::null();
+        physics::CharacterState st;
+        if (!w->getCharacterState(pc->handle, st)) return ev::null();
+        return makeVec3Value(static_cast<float>(st.position.GetX()),
+                             static_cast<float>(st.position.GetY()),
+                             static_cast<float>(st.position.GetZ()));
+    });
+    cb.def("getState", 0, [](Value self_, std::span<const Value>) {
+        HostPhysicsCharacter* pc = unwrapCharacter(self_);
+        if (!pc) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        if (!w || !pc->handle) return ev::null();
+        physics::CharacterState st;
+        if (!w->getCharacterState(pc->handle, st)) return ev::null();
+        int32_t groundTag = st.groundBody.IsInvalid() ? -1 : g_phys.tagForBodyId(st.groundBody);
+        return makeCharacterStateValue(st, groundTag);
+    });
+    cb.def("setShape", 1, [](Value self_, std::span<const Value> args) {
+        HostPhysicsCharacter* pc = unwrapCharacter(self_);
+        if (!pc) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        if (!w || !pc->handle || args.empty() || !ev::isObject(args[0])) return ev::fromBool(false);
+        physics::BodyOptions shape;
+        std::string err;
+        if (!readBodyOptions(args[0], shape, err)) return ev::throwTypeError("setShape: " + err);
+        return ev::fromBool(w->setCharacterShape(pc->handle, shape));
+    });
+    cb.accessor("innerBody", [](Value self_, std::span<const Value>) {
+        HostPhysicsCharacter* pc = unwrapCharacter(self_);
+        if (!pc) return ev::undefined();
+        return ev::fromDouble(pc->innerTag);
+    }, nullptr);
+    cb.def("destroy", 0, [](Value self_, std::span<const Value>) {
+        HostPhysicsCharacter* pc = unwrapCharacter(self_);
+        if (!pc) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        if (w && pc->handle) {
+            if (pc->innerTag >= 0) g_phys.unregisterBody(pc->innerTag);
+            w->destroyCharacter(pc->handle);
+        }
+        pc->handle = 0;
+        pc->innerTag = -1;
+        return ev::undefined();
+    });
+}
+
+static void decorateSoftBodyProto(ObjectBuilder& sbb) {
+    sbb.accessor("body", [](Value self_, std::span<const Value>) {
+        HostPhysicsSoftBody* sb = unwrapSoftBody(self_);
+        if (!sb) return ev::undefined();
+        return ev::fromDouble(sb->bodyTag);
+    }, nullptr);
+    sbb.accessor("vertexCount", [](Value self_, std::span<const Value>) {
+        HostPhysicsSoftBody* sb = unwrapSoftBody(self_);
+        if (!sb) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        int count = (w && sb->handle) ? w->softBodyVertexCount(sb->handle) : 0;
+        return ev::fromDouble(count < 0 ? 0 : count);
+    }, nullptr);
+    sbb.def("vertices", 0, [](Value self_, std::span<const Value>) {
+        HostPhysicsSoftBody* sb = unwrapSoftBody(self_);
+        if (!sb) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        if (!w || !sb->handle) return ev::null();
+        std::vector<float> flat;
+        if (!w->getSoftBodyVertices(sb->handle, flat)) return ev::null();
+        return makeFloat32Array(flat.data(), flat.size());
+    });
+    sbb.def("topology", 0, [](Value self_, std::span<const Value>) {
+        HostPhysicsSoftBody* sb = unwrapSoftBody(self_);
+        if (!sb) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        if (!w || !sb->handle) return ev::null();
+        std::vector<float> pos;
+        std::vector<uint32_t> idx;
+        if (!w->softBodyTopology(sb->handle, pos, idx)) return ev::null();
+        ObjectBuilder res;
+        res.set("positions", makeFloat32Array(pos.data(), pos.size()));
+        res.set("indices", makeUint32Array(idx.data(), idx.size()));
+        res.set("gridX", ev::fromDouble(sb->gridX));
+        res.set("gridZ", ev::fromDouble(sb->gridZ));
+        return res.get();
+    });
+    sbb.def("setVertex", 4, [](Value self_, std::span<const Value> args) {
+        HostPhysicsSoftBody* sb = unwrapSoftBody(self_);
+        if (!sb) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        if (!w || !sb->handle || args.size() < 4) return ev::fromBool(false);
+        int idx = i32At(args, 0);
+        double x = numAt(args, 1), y = numAt(args, 2), z = numAt(args, 3);
+        return ev::fromBool(w->setSoftBodyVertexPosition(sb->handle, idx, JPH::RVec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z))));
+    });
+    sbb.def("setVertexVelocity", 4, [](Value self_, std::span<const Value> args) {
+        HostPhysicsSoftBody* sb = unwrapSoftBody(self_);
+        if (!sb) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        if (!w || !sb->handle || args.size() < 4) return ev::fromBool(false);
+        int idx = i32At(args, 0);
+        double x = numAt(args, 1), y = numAt(args, 2), z = numAt(args, 3);
+        return ev::fromBool(w->setSoftBodyVertexVelocity(sb->handle, idx, JPH::Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z))));
+    });
+    sbb.def("pin", 2, [](Value self_, std::span<const Value> args) {
+        HostPhysicsSoftBody* sb = unwrapSoftBody(self_);
+        if (!sb) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        if (!w || !sb->handle || args.empty()) return ev::fromBool(false);
+        int idx = i32At(args, 0);
+        bool pinned = args.size() < 2 ? true : boolAt(args, 1);
+        return ev::fromBool(w->pinSoftBodyVertex(sb->handle, idx, pinned));
+    });
+    sbb.def("destroy", 0, [](Value self_, std::span<const Value>) {
+        HostPhysicsSoftBody* sb = unwrapSoftBody(self_);
+        if (!sb) return ev::undefined();
+        auto* w = getPhysicsWorld();
+        if (w && sb->handle) {
+            w->destroySoftBody(sb->handle);
+            g_phys.unregisterBody(sb->bodyTag);
+        }
+        sb->handle = 0;
+        sb->bodyTag = -1;
+        return ev::undefined();
+    });
+}
 
 static Value makePhysicsObject() {
     ObjectBuilder b;
@@ -1388,88 +1575,17 @@ static Value makePhysicsObject() {
             pc->innerTag = g_phys.registerBody(innerId);
         }
 
-        ObjectBuilder cb(ev::makeHandle(pc, [](void* p) {
+        ObjectBuilder cb(g_characterClass.make(pc, [](void* p) {
             delete static_cast<HostPhysicsCharacter*>(p);
         }));
 
-        cb.def("setVelocity", 3, [pc](Value, std::span<const Value> args) {
-            auto* w = getPhysicsWorld();
-            if (w && pc->handle) {
-                JPH::Vec3 v;
-                if (args.size() >= 3) {
-                    v = JPH::Vec3(static_cast<float>(numAt(args, 0)), static_cast<float>(numAt(args, 1)), static_cast<float>(numAt(args, 2)));
-                } else if (!args.empty() && ev::isObject(args[0])) {
-                    v = readVec3(args[0]);
-                }
-                w->setCharacterVelocity(pc->handle, v);
-            }
-            return ev::undefined();
-        });
 
-        cb.def("getVelocity", 0, [pc](Value, std::span<const Value>) {
-            auto* w = getPhysicsWorld();
-            if (!w || !pc->handle) return ev::null();
-            physics::CharacterState st;
-            if (!w->getCharacterState(pc->handle, st)) return ev::null();
-            return makeVec3Value(st.velocity.GetX(), st.velocity.GetY(), st.velocity.GetZ());
-        });
 
-        cb.def("setPosition", 3, [pc](Value, std::span<const Value> args) {
-            auto* w = getPhysicsWorld();
-            if (w && pc->handle) {
-                JPH::RVec3 p;
-                if (args.size() >= 3) {
-                    p = JPH::RVec3(static_cast<float>(numAt(args, 0)), static_cast<float>(numAt(args, 1)), static_cast<float>(numAt(args, 2)));
-                } else if (!args.empty() && ev::isObject(args[0])) {
-                    p = readRVec3(args[0]);
-                }
-                w->setCharacterPosition(pc->handle, p);
-            }
-            return ev::undefined();
-        });
 
-        cb.def("getPosition", 0, [pc](Value, std::span<const Value>) {
-            auto* w = getPhysicsWorld();
-            if (!w || !pc->handle) return ev::null();
-            physics::CharacterState st;
-            if (!w->getCharacterState(pc->handle, st)) return ev::null();
-            return makeVec3Value(static_cast<float>(st.position.GetX()),
-                                 static_cast<float>(st.position.GetY()),
-                                 static_cast<float>(st.position.GetZ()));
-        });
 
-        cb.def("getState", 0, [pc](Value, std::span<const Value>) {
-            auto* w = getPhysicsWorld();
-            if (!w || !pc->handle) return ev::null();
-            physics::CharacterState st;
-            if (!w->getCharacterState(pc->handle, st)) return ev::null();
-            int32_t groundTag = st.groundBody.IsInvalid() ? -1 : g_phys.tagForBodyId(st.groundBody);
-            return makeCharacterStateValue(st, groundTag);
-        });
 
-        cb.def("setShape", 1, [pc](Value, std::span<const Value> args) {
-            auto* w = getPhysicsWorld();
-            if (!w || !pc->handle || args.empty() || !ev::isObject(args[0])) return ev::fromBool(false);
-            physics::BodyOptions shape;
-            std::string err;
-            if (!readBodyOptions(args[0], shape, err)) return ev::throwTypeError("setShape: " + err);
-            return ev::fromBool(w->setCharacterShape(pc->handle, shape));
-        });
 
-        cb.accessor("innerBody", [pc](Value, std::span<const Value>) {
-            return ev::fromDouble(pc->innerTag);
-        }, nullptr);
 
-        cb.def("destroy", 0, [pc](Value, std::span<const Value>) {
-            auto* w = getPhysicsWorld();
-            if (w && pc->handle) {
-                if (pc->innerTag >= 0) g_phys.unregisterBody(pc->innerTag);
-                w->destroyCharacter(pc->handle);
-            }
-            pc->handle = 0;
-            pc->innerTag = -1;
-            return ev::undefined();
-        });
 
         return cb.get();
     });
@@ -1569,76 +1685,17 @@ static Value makePhysicsObject() {
             sb->gridZ = std::max(2, sopts.gridZ);
         }
 
-        ObjectBuilder sbb(ev::makeHandle(sb, [](void* p) {
+        ObjectBuilder sbb(g_softBodyClass.make(sb, [](void* p) {
             delete static_cast<HostPhysicsSoftBody*>(p);
         }));
 
-        sbb.accessor("body", [sb](Value, std::span<const Value>) {
-            return ev::fromDouble(sb->bodyTag);
-        }, nullptr);
 
-        sbb.accessor("vertexCount", [sb](Value, std::span<const Value>) {
-            auto* w = getPhysicsWorld();
-            int count = (w && sb->handle) ? w->softBodyVertexCount(sb->handle) : 0;
-            return ev::fromDouble(count < 0 ? 0 : count);
-        }, nullptr);
 
-        sbb.def("vertices", 0, [sb](Value, std::span<const Value>) {
-            auto* w = getPhysicsWorld();
-            if (!w || !sb->handle) return ev::null();
-            std::vector<float> flat;
-            if (!w->getSoftBodyVertices(sb->handle, flat)) return ev::null();
-            return makeFloat32Array(flat.data(), flat.size());
-        });
 
-        sbb.def("topology", 0, [sb](Value, std::span<const Value>) {
-            auto* w = getPhysicsWorld();
-            if (!w || !sb->handle) return ev::null();
-            std::vector<float> pos;
-            std::vector<uint32_t> idx;
-            if (!w->softBodyTopology(sb->handle, pos, idx)) return ev::null();
-            ObjectBuilder res;
-            res.set("positions", makeFloat32Array(pos.data(), pos.size()));
-            res.set("indices", makeUint32Array(idx.data(), idx.size()));
-            res.set("gridX", ev::fromDouble(sb->gridX));
-            res.set("gridZ", ev::fromDouble(sb->gridZ));
-            return res.get();
-        });
 
-        sbb.def("setVertex", 4, [sb](Value, std::span<const Value> args) {
-            auto* w = getPhysicsWorld();
-            if (!w || !sb->handle || args.size() < 4) return ev::fromBool(false);
-            int idx = i32At(args, 0);
-            double x = numAt(args, 1), y = numAt(args, 2), z = numAt(args, 3);
-            return ev::fromBool(w->setSoftBodyVertexPosition(sb->handle, idx, JPH::RVec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z))));
-        });
 
-        sbb.def("setVertexVelocity", 4, [sb](Value, std::span<const Value> args) {
-            auto* w = getPhysicsWorld();
-            if (!w || !sb->handle || args.size() < 4) return ev::fromBool(false);
-            int idx = i32At(args, 0);
-            double x = numAt(args, 1), y = numAt(args, 2), z = numAt(args, 3);
-            return ev::fromBool(w->setSoftBodyVertexVelocity(sb->handle, idx, JPH::Vec3(static_cast<float>(x), static_cast<float>(y), static_cast<float>(z))));
-        });
 
-        sbb.def("pin", 2, [sb](Value, std::span<const Value> args) {
-            auto* w = getPhysicsWorld();
-            if (!w || !sb->handle || args.empty()) return ev::fromBool(false);
-            int idx = i32At(args, 0);
-            bool pinned = args.size() < 2 ? true : boolAt(args, 1);
-            return ev::fromBool(w->pinSoftBodyVertex(sb->handle, idx, pinned));
-        });
 
-        sbb.def("destroy", 0, [sb](Value, std::span<const Value>) {
-            auto* w = getPhysicsWorld();
-            if (w && sb->handle) {
-                w->destroySoftBody(sb->handle);
-                g_phys.unregisterBody(sb->bodyTag);
-            }
-            sb->handle = 0;
-            sb->bodyTag = -1;
-            return ev::undefined();
-        });
 
         return sbb.get();
     });
@@ -1713,8 +1770,8 @@ void installPhysicsGlobals() {
     Value physVal = makePhysicsObject();
     g_phys.physicsObj.set(physVal);
     ev::registerGlobal("Physics", physVal);
-    ev::registerGlobal("PhysicsCharacter", makeBrandConstructor("PhysicsCharacter"));
-    ev::registerGlobal("PhysicsSoftBody", makeBrandConstructor("PhysicsSoftBody"));
+    g_characterClass.install("PhysicsCharacter", 0, nullptr, decorateCharacterProto);
+    g_softBodyClass.install("PhysicsSoftBody", 0, nullptr, decorateSoftBodyProto);
 }
 
 }  // namespace bro::bronze_host
