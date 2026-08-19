@@ -644,6 +644,7 @@ void installFetchGlobal();
 
 void installAudioGlobals();
 Value makeBrandConstructor(const char* name);
+Value makeEventConstructor(const char* name);
 
 // ---------------------------------------------------------------------------
 // Physics (host_physics.cpp)

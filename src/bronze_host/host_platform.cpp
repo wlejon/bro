@@ -286,6 +286,8 @@ Value makeInterfaceValue(const char* name) {
     return b.get();
 }
 
+
+
 // Node is the one interface whose CONSTANTS are read as often as its name:
 // `el.nodeType === Node.ELEMENT_NODE` is how library code tests a node without
 // assuming a tag. The numbers are the DOM's, and they are not arbitrary.
@@ -304,7 +306,98 @@ Value makeNodeInterface() {
     return p.get();
 }
 
+// ---------------------------------------------------------------------------
+// TextDecoder / TextEncoder
+// ---------------------------------------------------------------------------
+
+Value makeTextDecoder() {
+    return ev::makeFunction(
+        [](Value, std::span<const Value> /*a*/) -> Value {
+            ObjectBuilder b;
+            b.set("encoding", ev::fromUtf8("utf-8"));
+            b.def("decode", 1, [](Value, std::span<const Value> a) -> Value {
+                if (a.empty()) return ev::fromUtf8("");
+                Value v = a[0];
+                if (ev::isTypedArray(v)) {
+                    ev::TypedArrayInfo info = ev::typedArrayInfo(v);
+                    if (info && info.byteLength > 0) {
+                        return ev::fromUtf8(std::string_view(
+                            reinterpret_cast<const char*>(info.data), info.byteLength));
+                    }
+                    return ev::fromUtf8("");
+                }
+                if (ev::isArrayBuffer(v)) {
+                    ev::ArrayBufferInfo info = ev::arrayBufferInfo(v);
+                    if (info && info.byteLength > 0) {
+                        return ev::fromUtf8(std::string_view(
+                            reinterpret_cast<const char*>(info.data), info.byteLength));
+                    }
+                    return ev::fromUtf8("");
+                }
+                return ev::fromUtf8("");
+            });
+            return b.get();
+        },
+        0);
+}
+
+Value makeTextEncoder() {
+    return ev::makeFunction(
+        [](Value, std::span<const Value> /*a*/) -> Value {
+            ObjectBuilder b;
+            b.set("encoding", ev::fromUtf8("utf-8"));
+            b.def("encode", 1, [](Value, std::span<const Value> a) -> Value {
+                std::string s;
+                if (!a.empty() && !ev::isUndefined(a[0]) && !ev::isNull(a[0])) {
+                    s = ev::toUtf8(a[0]);
+                }
+                Value arr = ev::createTypedArray(bronze::embed::elements::Uint8, static_cast<uint32_t>(s.size()));
+                if (!s.empty()) {
+                    ev::fillTypedArray(arr, std::span<const uint8_t>(
+                                                reinterpret_cast<const uint8_t*>(s.data()), s.size()));
+                }
+                return arr;
+            });
+            return b.get();
+        },
+        0);
+}
+
 }  // namespace
+
+Value makeEventConstructor(const char* name) {
+    std::string eventName = name;
+    Value fn = ev::makeFunction(
+        [eventName](Value, std::span<const Value> a) -> Value {
+            ObjectBuilder b;
+            Value typeV = a.empty() ? ev::fromUtf8("") : a[0];
+            b.set("type", typeV);
+            bool bubbles = false;
+            bool cancelable = false;
+            Value detail = ev::null();
+            if (a.size() > 1 && ev::isObject(a[1])) {
+                Value bProp = ev::getProperty(a[1], "bubbles");
+                if (!ev::isUndefined(bProp)) bubbles = ev::toBool(bProp);
+                Value cProp = ev::getProperty(a[1], "cancelable");
+                if (!ev::isUndefined(cProp)) cancelable = ev::toBool(cProp);
+                Value dProp = ev::getProperty(a[1], "detail");
+                if (!ev::isUndefined(dProp)) detail = dProp;
+            }
+            b.set("bubbles", ev::fromBool(bubbles));
+            b.set("cancelable", ev::fromBool(cancelable));
+            b.set("detail", detail);
+            b.set("defaultPrevented", ev::fromBool(false));
+            b.def("preventDefault", 0, [](Value self_, std::span<const Value>) {
+                ev::setProperty(self_, "defaultPrevented", ev::fromBool(true));
+                return ev::undefined();
+            });
+            b.def("stopPropagation", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+            b.def("stopImmediatePropagation", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+            return b.get();
+        },
+        2);
+    return fn;
+}
 
 void installPlatformGlobals() {
     ev::registerGlobal("btoa", makeBtoa());
@@ -324,7 +417,7 @@ void installPlatformGlobals() {
              "Event", "UIEvent", "MouseEvent", "PointerEvent", "KeyboardEvent",
              "WheelEvent", "InputEvent", "FocusEvent", "ProgressEvent",
          }) {
-        ev::registerGlobal(name, makeInterfaceValue(name));
+        ev::registerGlobal(name, makeEventConstructor(name));
     }
     // BEFORE any element value exists: every one of them is born on this
     // class's prototype, and one built ahead of the install would carry no
@@ -343,6 +436,8 @@ void installPlatformGlobals() {
          }) {
         ev::registerGlobal(name, makeInterfaceValue(name));
     }
+    ev::registerGlobal("TextDecoder", makeTextDecoder());
+    ev::registerGlobal("TextEncoder", makeTextEncoder());
 }
 
 }  // namespace bro::bronze_host

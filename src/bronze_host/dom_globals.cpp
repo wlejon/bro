@@ -24,6 +24,7 @@
 
 #include "bronze_host/bronze_host.h"
 #include "bronze_host/gl_internal.h"
+#include "bronze_host/host_canvas2d.h"
 #include "bronze_host/host_internal.h"
 
 #include "engine/engine.h"
@@ -54,6 +55,7 @@ struct CanvasState {
     webgl::WebGL2RenderingContext* glCtx = nullptr;  // owned by the Engine
     ev::Persistent jsObj;  // the host canvas object handed to the program
     ev::Persistent glObj;  // the B2 context object, once getContext ran
+    ev::Persistent ctx2dObj;
     bool hasGl = false;
     // No listener list here: canvas listeners live in the ENGINE's native
     // listener list on `el`, which is what makes them fire from a real click
@@ -295,12 +297,17 @@ Value makeCanvasValue(dom::Element* el) {
     // getContext('webgl2'|'webgl') → the B2 context object, built over the
     // SAME Engine path the QuickJS factory takes (Engine::createWebGL2Context
     // — one construction path, no drift), and cached so a second call answers
-    // the same object, per spec. '2d' and 'scene' are not bound in this layer
-    // and answer null, the factory's own answer for an unknown type.
+    // the same object, per spec. '2d' answers a CanvasRenderingContext2D wrapper.
     b.def("getContext", 1, [cs](Value, std::span<const Value> a) {
         Value typeV = argAt(a, 0);
         if (ev::isObject(typeV)) return ev::null();
         std::string type = ev::toUtf8(typeV);
+        if (type == "2d") {
+            if (ev::isObject(cs->ctx2dObj.get())) return cs->ctx2dObj.get();
+            Value ctx2d = makeCanvas2DContextValue(cs->jsObj.get());
+            cs->ctx2dObj.set(ctx2d);
+            return ctx2d;
+        }
         if (type != "webgl2" && type != "webgl") return ev::null();
         if (cs->hasGl) return cs->glObj.get();
         webgl::WebGL2RenderingContext* ctx = g_host->engine->createWebGL2Context(cs->el);
@@ -367,18 +374,6 @@ Value createElementImpl(dom::Document* fixed, std::span<const Value> a,
     if (ev::isObject(tagV)) return ev::throwTypeError("createElement: tag must be a string");
     std::string tag = ev::toUtf8(tagV);
     for (char& ch : tag) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
-    // three.js's ImageLoader builds its element as createElementNS(xhtml,
-    // 'img'), so the factory has to answer for it — and what it answers is the
-    // same object `new Image()` gives, because there is only one image kind
-    // here. It is NOT a dom::Element: nothing lays an image out in this layer,
-    // and the only thing three.js does with it is read its size and hand it to
-    // texImage2D.
-    if (tag == "img") return makeImageValue();
-
-    // Every other tag — div, span, input, select, textarea, button — is a real
-    // dom::Element with the full element surface on it. The `div` special case
-    // that used to live here answered with an overlay stub that refused
-    // appendChild, which was the right shape only while nothing built a tree.
     dom::Document* doc = documentFor(fixed);
     if (!doc) return ev::throwError("bronze host: engine has no document");
     dom::Element* el = doc->createElement(tag);
@@ -638,6 +633,23 @@ Value makeWindowValue() {
     b.set("getComputedStyle", makeGetComputedStyle());
     b.set("localStorage", makeLocalStorageValue());
 
+    {
+        ObjectBuilder loc;
+        loc.set("hash", ev::fromUtf8(""));
+        loc.set("href", ev::fromUtf8("app://localhost/"));
+        loc.set("origin", ev::fromUtf8("app://localhost"));
+        loc.set("protocol", ev::fromUtf8("app:"));
+        loc.set("host", ev::fromUtf8("localhost"));
+        loc.set("hostname", ev::fromUtf8("localhost"));
+        loc.set("port", ev::fromUtf8(""));
+        loc.set("pathname", ev::fromUtf8("/"));
+        loc.set("search", ev::fromUtf8(""));
+        loc.def("reload", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+        loc.def("replace", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+        loc.def("assign", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+        b.set("location", loc.get());
+    }
+
     // Read from the global registry rather than captured: the window is built
     // before installAudioGlobals runs, and AudioContext is a real class now
     // whose constructor does not exist yet at this point. An accessor is also
@@ -890,12 +902,102 @@ void installWebHostGlobals(engine::Engine& engine) {
     // class whose instances answer `instanceof`. These two remain brands.
     ev::registerGlobal("WebGLRenderingContext", makeBrandConstructor("WebGLRenderingContext"));
     {
-        // Intl with no members is a real environment shape — pixi's own
-        // comment names Firefox for the missing Segmenter, and its boot
-        // EVALUATES the binding (`Intl == null ? ...`), so the name must
-        // resolve; the fallback it then takes is the one it documents.
-        // The day this host grows a real Intl member, it goes here.
+        Value pluralRules = ev::makeFunction(
+            [](Value, std::span<const Value> /*args*/) -> Value {
+                ObjectBuilder b;
+                b.def("select", 1, [](Value, std::span<const Value> a) -> Value {
+                    double n = a.empty() ? 0.0 : ev::toDouble(a[0]);
+                    if (n == 1.0) {
+                        return ev::fromUtf8("one");
+                    }
+                    return ev::fromUtf8("other");
+                });
+                b.def("resolvedOptions", 0, [](Value, std::span<const Value>) -> Value {
+                    ObjectBuilder opts;
+                    opts.set("locale", ev::fromUtf8("en-US"));
+                    opts.set("type", ev::fromUtf8("cardinal"));
+                    return opts.get();
+                });
+                return b.get();
+            },
+            0);
+
+        Value numberFormat = ev::makeFunction(
+            [](Value, std::span<const Value> /*args*/) -> Value {
+                ObjectBuilder b;
+                b.def("format", 1, [](Value, std::span<const Value> a) -> Value {
+                    if (a.empty()) return ev::fromUtf8("NaN");
+                    double n = ev::toDouble(a[0]);
+                    char buf[64];
+                    if (std::floor(n) == n) {
+                        snprintf(buf, sizeof(buf), "%.0f", n);
+                    } else {
+                        snprintf(buf, sizeof(buf), "%g", n);
+                    }
+                    return ev::fromUtf8(buf);
+                });
+                b.def("resolvedOptions", 0, [](Value, std::span<const Value>) -> Value {
+                    ObjectBuilder opts;
+                    opts.set("locale", ev::fromUtf8("en-US"));
+                    return opts.get();
+                });
+                return b.get();
+            },
+            0);
+
+        Value dateTimeFormat = ev::makeFunction(
+            [](Value, std::span<const Value> /*args*/) -> Value {
+                ObjectBuilder b;
+                b.def("format", 1, [](Value, std::span<const Value>) -> Value {
+                    return ev::fromUtf8("");
+                });
+                b.def("resolvedOptions", 0, [](Value, std::span<const Value>) -> Value {
+                    ObjectBuilder opts;
+                    opts.set("locale", ev::fromUtf8("en-US"));
+                    return opts.get();
+                });
+                return b.get();
+            },
+            0);
+
+        Value collator = ev::makeFunction(
+            [](Value, std::span<const Value> /*args*/) -> Value {
+                ObjectBuilder b;
+                b.def("compare", 2, [](Value, std::span<const Value> a) -> Value {
+                    std::string s1 = a.size() > 0 ? ev::toUtf8(a[0]) : "";
+                    std::string s2 = a.size() > 1 ? ev::toUtf8(a[1]) : "";
+                    if (s1 < s2) return ev::fromDouble(-1);
+                    if (s1 > s2) return ev::fromDouble(1);
+                    return ev::fromDouble(0);
+                });
+                return b.get();
+            },
+            0);
+
+        Value displayNames = ev::makeFunction(
+            [](Value, std::span<const Value> /*args*/) -> Value {
+                ObjectBuilder b;
+                b.def("of", 1, [](Value, std::span<const Value> a) -> Value {
+                    if (a.empty()) return ev::fromUtf8("");
+                    std::string code = ev::toUtf8(a[0]);
+                    if (code == "en") return ev::fromUtf8("English");
+                    if (code == "fr") return ev::fromUtf8("Français");
+                    if (code == "zh") return ev::fromUtf8("中文");
+                    if (code == "ja") return ev::fromUtf8("日本語");
+                    if (code == "ko") return ev::fromUtf8("한국어");
+                    if (code == "fa") return ev::fromUtf8("فارسی");
+                    return a[0];
+                });
+                return b.get();
+            },
+            2);
+
         ObjectBuilder intl;
+        intl.set("PluralRules", pluralRules);
+        intl.set("NumberFormat", numberFormat);
+        intl.set("DateTimeFormat", dateTimeFormat);
+        intl.set("Collator", collator);
+        intl.set("DisplayNames", displayNames);
         ev::registerGlobal("Intl", intl.get());
     }
     {
@@ -904,7 +1006,7 @@ void installWebHostGlobals(engine::Engine& engine) {
     }
     installAudioGlobals();
     {
-        Value customEvent = makeBrandConstructor("CustomEvent");
+        Value customEvent = makeEventConstructor("CustomEvent");
         ev::registerGlobal("CustomEvent", customEvent);
     }
     {

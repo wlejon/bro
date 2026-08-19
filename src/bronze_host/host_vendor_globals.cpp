@@ -278,6 +278,32 @@ Value makeCodeMirrorValue() {
         return makeCodeMirrorInstance(argAt(a, 0), argAt(a, 1));
     }, 2)));
 
+    Value ternServerCtor = ev::makeFunction(
+        [](Value, std::span<const Value>) {
+            ObjectBuilder s;
+            s.def("addDoc", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
+            s.def("delDoc", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+            s.def("hideDoc", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+            s.def("complete", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+            s.def("showType", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+            s.def("showDocs", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+            s.def("jumpToDef", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+            s.def("jumpBack", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+            s.def("rename", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+            s.def("selectName", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+            {
+                ObjectBuilder srv;
+                srv.def("addDoc", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
+                srv.def("delDoc", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+                srv.def("reset", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+                srv.set("defs", hostArrayOf(0, [](size_t) { return ev::undefined(); }));
+                s.set("server", srv.get());
+            }
+            return s.get();
+        },
+        1);
+    cmP.set(ev::setProperty(cmP.get(), "TernServer", ternServerCtor));
+
     return cmP.get();
 }
 
@@ -340,6 +366,8 @@ Value makeTernValue() {
         ObjectBuilder s;
         s.def("addDoc", 2, [](Value, std::span<const Value>) { return ev::undefined(); });
         s.def("delDoc", 1, [](Value, std::span<const Value>) { return ev::undefined(); });
+        s.def("reset", 0, [](Value, std::span<const Value>) { return ev::undefined(); });
+        s.set("defs", hostArrayOf(0, [](size_t) { return ev::undefined(); }));
         s.def("request", 2, [](Value, std::span<const Value> a) {
             Value cb = argAt(a, 1);
             if (ev::isFunction(cb)) {

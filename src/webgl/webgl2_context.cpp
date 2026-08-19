@@ -78,13 +78,15 @@ WebGL2RenderingContext::~WebGL2RenderingContext() {
 }
 
 void WebGL2RenderingContext::createCanvasFBO() {
+    int w = std::max(1, width_);
+    int h = std::max(1, height_);
     glGenFramebuffers(1, &canvasFBO_);
     glBindFramebuffer(GL_FRAMEBUFFER, canvasFBO_);
 
     // Color attachment (RGBA8)
     glGenTextures(1, &colorTex_);
     glBindTexture(GL_TEXTURE_2D, colorTex_);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width_, height_, 0,
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0,
                  GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
@@ -93,7 +95,7 @@ void WebGL2RenderingContext::createCanvasFBO() {
     // Depth-stencil renderbuffer
     glGenRenderbuffers(1, &depthStencilRBO_);
     glBindRenderbuffer(GL_RENDERBUFFER, depthStencilRBO_);
-    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, width_, height_);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT,
                               GL_RENDERBUFFER, depthStencilRBO_);
 
