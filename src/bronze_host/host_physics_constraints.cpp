@@ -44,15 +44,14 @@ static bool readMotorOptions(Value oVal, physics::MotorOptions& m, std::string& 
         if (!ev::isObject(av)) {
             std::string s = ev::toUtf8(av);
             int idx = motorAxisIndex(s);
+            int numeric = 0;
             if (idx >= 0) {
                 m.axis = idx;
+            } else if (parseDecimalIndex(s, numeric)) {
+                m.axis = numeric;
             } else {
-                bool isNum = !s.empty() && std::all_of(s.begin(), s.end(), ::isdigit);
-                if (isNum) m.axis = std::stoi(s);
-                else {
-                    err = "motor axis must be translationX..Z / rotationX..Z";
-                    return false;
-                }
+                err = "motor axis must be translationX..Z / rotationX..Z";
+                return false;
             }
         }
     }

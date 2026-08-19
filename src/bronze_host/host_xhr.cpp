@@ -1,4 +1,40 @@
-// XMLHttpRequest for a bronze-compiled app.
+// XMLHttpRequest for a bronze-compiled app: a text or binary asset off disk or
+// off http(s), and named refusals for the rest.
+//
+// WHY XHR AND NOT fetch, since the brief left the choice open and the answer
+// turned out to be forced:
+//
+//   * `fetch` returns a Promise, and the embed API (src/embed/embed.h) had NO
+//     way to create or resolve a bronze Promise from C++ when this was
+//     written - no makePromise, no resolver pair, and no route to the
+//     intrinsic %Promise% constructor. A host `fetch` would therefore have had
+//     to be a JS shim compiled into the app, which is the thing the brief
+//     rules out. XMLHttpRequest settles through callbacks, so it needs nothing
+//     bronze does not already give a host. (`ev::createPromise` exists now and
+//     host_fetch.cpp uses it; this object stays because the callback shape is
+//     still what the XHR-era loaders below want.)
+//
+//   * Nothing at this boundary is promise-shaped as a result: the completion
+//     is a host task (postHostTask), the handlers are ordinary callbacks, and
+//     any Promise the app wants is one the app builds around them.
+//
+// WHAT THIS DOES NOT UNBLOCK, said plainly so nobody plans around it: three.js
+// r160's FileLoader is fetch-based, not XHR-based (the library moved off XHR
+// in r117), so THIS DOES NOT make three's own loaders work. It is here for the
+// loaders - three's older ones, and a great deal of userland code - that are
+// still written against XHR.
+//
+// RESPONSE TYPES. '', 'text', 'arraybuffer', 'blob' and 'json' are all served:
+// embed::createArrayBuffer builds what 'arraybuffer' wants, makeBlobValue what
+// 'blob' wants, and embed::parseJson what 'json' wants. 'document' is the one
+// gap left, and it is a gap rather than a limit - host_parser.cpp has the
+// parser it would need - so it stays a named refusal on assignment rather than
+// a request that silently answers null.
+//
+// TRANSPORT. Local files through the shared app-path rules (js/asset_path.h),
+// plus http(s) through util::fetchRemoteCached - the same remote-asset path
+// fetch uses, so the two agree about what a URL means and about what is
+// cached.
 
 #include "bronze_host/host_internal.h"
 #include "bronze_host/gl_internal.h"  // ObjectBuilder, argAt
@@ -17,6 +53,9 @@ namespace bro::bronze_host {
 
 namespace {
 
+// readyState, the four values this layer can actually be in. HEADERS_RECEIVED
+// and LOADING are not modelled: the read is one synchronous act, so there is no
+// moment at which headers exist and the body does not.
 constexpr int kUnsent = 0;
 constexpr int kOpened = 1;
 constexpr int kDone = 4;
@@ -25,7 +64,7 @@ struct HostXhr {
     uint32_t tag = kHostXhrTag;  // must be first — see host_internal.h
     std::string method;
     std::string url;
-    std::string responseType;
+    std::string responseType;  // "", "text", "arraybuffer", "blob", "json"
     std::string responseText;
     std::string statusText;
     int status = 0;
@@ -42,6 +81,10 @@ HostXhr* xhrOf(Value v) {
     return xhr;
 }
 
+// Read the whole file, or report why not. Kept here rather than reached for
+// through a util because the failure taxonomy is the HTTP one this object has
+// to answer in: a missing file is a 404, a file that will not open is a 500,
+// and neither is an exception.
 bool readWholeFile(const std::string& path, std::string& out) {
     std::ifstream in(path, std::ios::binary);
     if (!in) return false;
@@ -71,6 +114,12 @@ Value xhrOpen(Value thisValue, std::span<const Value> a) {
     xhr->responseText.clear();
     xhr->ok = false;
     xhr->aborted = false;
+    // The third argument is `async`. This transport is synchronous either way
+    // and the EVENTS are asynchronous either way (they are host tasks), so a
+    // request opened with async=false still settles on the next frame. That is
+    // a real divergence from the web, and it is the one a host with a single
+    // per-frame seam can honour - a synchronous fire would re-enter compiled
+    // code from inside send().
     return ev::undefined();
 }
 
@@ -83,6 +132,9 @@ Value xhrSend(Value thisValue, std::span<const Value>) {
     }
 
     if (!xhr->method.empty() && xhr->method != "GET" && xhr->method != "get") {
+        // A write verb has no meaning against a read-only asset path, and
+        // silently doing a GET instead is the kind of fallback that gets
+        // debugged for an hour.
         LOG_ERROR("bronze_host: XMLHttpRequest only serves GET, got %s",
                   xhr->method.c_str());
         xhr->status = 405;
@@ -101,6 +153,9 @@ Value xhrSend(Value thisValue, std::span<const Value>) {
         }
     } else if (std::vector<uint8_t> inline_;
                util::inlineURLBytes(xhr->url, inline_)) {
+        // A `blob:` or `data:` URL carries its own bytes. Ahead of
+        // resolveAssetPath, which would read `blob:bro/7` as a filename under
+        // the app directory and answer 404 for something that was never a file.
         xhr->responseText.assign(inline_.begin(), inline_.end());
         xhr->status = 200;
         xhr->statusText = "OK";
@@ -120,6 +175,8 @@ Value xhrSend(Value thisValue, std::span<const Value>) {
 
     ev::Persistent target(self.get());
     postHostTask([target]() {
+        // The read already happened; this is only the notification, on the
+        // frame seam where re-entering compiled code is expected.
         ev::Persistent local(target);
         HostXhr* state = xhrOf(local.get());
         if (!state || state->aborted) return;
@@ -134,6 +191,9 @@ Value xhrSend(Value thisValue, std::span<const Value>) {
 Value xhrAbort(Value thisValue, std::span<const Value>) {
     HostXhr* xhr = xhrOf(thisValue);
     if (!xhr) return ev::undefined();
+    // The queued completion checks this flag and does nothing, which is the
+    // whole of abort here: the transfer already finished, so there is nothing
+    // in flight to cancel - only an event to suppress.
     xhr->aborted = true;
     xhr->readyState = kUnsent;
     xhr->status = 0;
@@ -147,11 +207,14 @@ Value makeXhrValue() {
     auto* xhr = new HostXhr();
     ObjectBuilder b(g_xhrClass.make(xhr, hostXhrDtor));
 
+    // Handler slots, present and null so an assignment writes a data property
+    // that is already in the shape.
     for (const char* name : {"onload", "onerror", "onabort", "onprogress",
                              "onloadend", "onreadystatechange", "ontimeout"}) {
         Value nul = ev::null();
         b.set(name, nul);
     }
+    // Accepted and ignored: there is no origin and no timer on a file read.
     {
         Value no = ev::fromBool(false);
         b.set("withCredentials", no);
@@ -164,7 +227,12 @@ Value makeXhrValue() {
     return b.get();
 }
 
+// Everything an XMLHttpRequest can DO or REPORT, decorated once onto
+// XMLHttpRequest.prototype. Every one of these already read its receiver, so
+// moving them off the instance changed nothing but the number of copies.
 void decorateXhrProto(ObjectBuilder& b) {
+    // Every piece of live state is an accessor over the payload, so the program
+    // cannot desync `status` from what actually happened by assigning to it.
     b.accessor("readyState",
                [](Value thisValue, std::span<const Value>) {
                    const HostXhr* s = xhrOf(thisValue);
@@ -200,13 +268,21 @@ void decorateXhrProto(ObjectBuilder& b) {
                    return ev::fromUtf8(s->responseText);
                },
                nullptr);
+    // `response` answers the empty STRING, not null, for the text types — that
+    // is what the spec says for a request that is not done, and it is what a
+    // program written against the web reads when a request fails. The binary
+    // and json types answer null in the same state, which is also the spec: the
+    // difference is that "" is a valid text response and there is no valid
+    // empty ArrayBuffer answer to give.
     b.accessor("response",
                [](Value thisValue, std::span<const Value>) {
                    const HostXhr* s = xhrOf(thisValue);
-                   if (!s || s->readyState != kDone || !s->ok) return ev::null();
+                   if (!s) return ev::null();
                    if (s->responseType.empty() || s->responseType == "text") {
-                       return ev::fromUtf8(s->responseText);
+                       return ev::fromUtf8(s->readyState == kDone ? s->responseText
+                                                                 : std::string());
                    }
+                   if (s->readyState != kDone || !s->ok) return ev::null();
                    if (s->responseType == "arraybuffer") {
                        return ev::createArrayBuffer(std::span<const uint8_t>(
                            reinterpret_cast<const uint8_t*>(s->responseText.data()),
@@ -249,12 +325,16 @@ void decorateXhrProto(ObjectBuilder& b) {
     b.def("send", 1, xhrSend);
     b.def("abort", 0, xhrAbort);
     b.def("setRequestHeader", 2, [](Value, std::span<const Value>) {
+        // Accepted and dropped: a file read has no request headers to carry
+        // them. Refusing would break every loader that sets Accept.
         return ev::undefined();
     });
     b.def("overrideMimeType", 1, [](Value, std::span<const Value>) {
         return ev::undefined();
     });
     b.def("getResponseHeader", 1, [](Value, std::span<const Value>) {
+        // No response headers exist, and null is what the web answers for a
+        // header that is absent - so this is the honest answer, not a stub.
         return ev::null();
     });
     b.def("getAllResponseHeaders", 0, [](Value, std::span<const Value>) {
@@ -282,10 +362,16 @@ void decorateXhrProto(ObjectBuilder& b) {
 }  // namespace
 
 void installXhrGlobal() {
+    // Same construct story as Image (host_image.cpp): bronze_construct replaces
+    // the plain instance with the object the body returns, so `new
+    // XMLHttpRequest()` and `XMLHttpRequest()` answer the same thing - and
+    // since the instance is born on this constructor's prototype, `instanceof`
+    // answers true.
     g_xhrClass.install(
         "XMLHttpRequest", 0,
         [](Value, std::span<const Value>) { return makeXhrValue(); },
         decorateXhrProto);
+    // The readyState constants, where the web has them.
     g_xhrClass.setStatic("UNSENT", ev::fromDouble(0));
     g_xhrClass.setStatic("OPENED", ev::fromDouble(1));
     g_xhrClass.setStatic("HEADERS_RECEIVED", ev::fromDouble(2));

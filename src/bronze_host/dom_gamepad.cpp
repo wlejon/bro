@@ -12,6 +12,9 @@
 
 namespace bro::bronze_host {
 
+// ---------------------------------------------------------------------------
+// Gamepad snapshot & vibrationActuator
+// ---------------------------------------------------------------------------
 Value buildGamepadSnapshot(const engine::GamepadState& gp) {
     ObjectBuilder obj;
     obj.set("id", ev::fromUtf8(gp.id));
@@ -104,6 +107,13 @@ Value buildGamepadSnapshot(const engine::GamepadState& gp) {
     return obj.get();
 }
 
+// The compiled app's navigator answers with the identity the interpreted side
+// already declares (src/js/window_bindings.cpp): one engine, one name — an app
+// must not learn a different browser depending on which compiler ran it, and
+// "Bro/1.0" routes every UA sniff (pixi's isSafari, isMobile) to the desktop
+// path this layer actually implements. maxTouchPoints=0 is the other half of
+// that routing: it keeps pixi's EventSystem on the mouse events
+// host_dom_events.cpp wires.
 Value makeNavigatorValue() {
     ObjectBuilder b;
     b.set("userAgent", ev::fromUtf8("Bro/1.0"));

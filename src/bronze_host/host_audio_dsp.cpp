@@ -101,10 +101,20 @@ void decorateWaveShaperNodeProto(ObjectBuilder& b) {
                    Value v = argAt(a, 0);
                    ev::Persistent self(thisValue);
                    if (ev::isTypedArray(v)) {
+                       // Sized off byteLength, never elementCount: the two are
+                       // equal only for a Float32Array, and `elementCount *
+                       // sizeof(float)` reads four bytes per element out of an
+                       // Int8Array that holds one — twelve bytes past the end of
+                       // the buffer. floatData() in gl_internal.h is the same
+                       // rule, and every other typed-array reader here follows
+                       // it. The spec says Float32Array; a program is free to
+                       // pass something else and must not be able to walk the
+                       // heap by doing so.
                        ev::TypedArrayInfo info = ev::typedArrayInfo(v);
-                       if (info && info.data && info.elementCount > 0) {
-                           ws->curve.resize(info.elementCount);
-                           std::memcpy(ws->curve.data(), info.data, info.elementCount * sizeof(float));
+                       if (info && info.data && info.byteLength >= sizeof(float)) {
+                           const size_t count = info.byteLength / sizeof(float);
+                           ws->curve.resize(count);
+                           std::memcpy(ws->curve.data(), info.data, count * sizeof(float));
                            ev::Persistent curveVal(v);
                            ev::setProperty(self.get(), "_curve", curveVal.get());
                        }

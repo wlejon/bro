@@ -326,6 +326,13 @@ void installPlatformGlobals() {
          }) {
         ev::registerGlobal(name, makeInterfaceValue(name));
     }
+    // BEFORE any element value exists: every one of them is born on this
+    // class's prototype, and one built ahead of the install would carry no
+    // members at all. It used to be the first line of installWebHostGlobals for
+    // that reason; it is safe here because nothing between that function's
+    // first line and this call constructs an element — makeDocumentValue and
+    // makeWindowValue only DEFINE methods, and no class in this layer inherits
+    // g_elementClass. Move it later than this and that stops being true.
     installElementGlobals();
     for (const char* name : {
              "HTMLInputElement", "HTMLSelectElement",

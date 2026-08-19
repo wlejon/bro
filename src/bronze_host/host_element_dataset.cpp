@@ -16,6 +16,9 @@ namespace bro::bronze_host {
 
 namespace {
 
+// ---------------------------------------------------------------------------
+// classList
+// ---------------------------------------------------------------------------
 std::vector<std::string> classesOf(dom::Element* el) {
     std::vector<std::string> out;
     if (!el) return out;

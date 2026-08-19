@@ -2,6 +2,25 @@
 //
 // AudioContext, AudioNode base, AudioParam automation, AudioBuffer,
 // AudioDestinationNode, AudioListener, decodeAudioData, and globals installation.
+//
+// WHAT THIS LAYER IS, said plainly so nobody plans around it: a Web Audio
+// SURFACE over broaudio's engine, not a Web Audio graph. `connect()` returns
+// its destination so a chain reads the way the web's does, and routes nothing —
+// there is no node graph behind these objects. What actually reaches the audio
+// engine is the handful of AudioParams that carry a real target id: an
+// oscillator's frequency/detune/pan, a filter's frequency/Q/gain, a buffer
+// source's playbackRate (syncAudioParamValue, host_audio_param.cpp). Everything
+// else stores its own state, reports it back faithfully, and is inaudible —
+// the whole of host_audio_dsp.cpp is in that category, as are the Panner's
+// position params.
+//
+// That is worth having: a library that constructs a compressor, sets its
+// threshold and reads it back gets the answers it expects instead of a crash,
+// and the graph it builds is a graph this layer can be taught to route later
+// without the app changing. It is NOT worth mistaking for working audio, and
+// the audio check (tests/bronze_host/run_checks.sh audio) asserts property
+// round-tripping for exactly that reason — it is evidence about the surface,
+// and it is not evidence about the sound.
 
 #include "bronze_host/host_audio_internal.h"
 

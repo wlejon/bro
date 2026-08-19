@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -129,6 +130,31 @@ extern HostClass g_softBodyClass;
 // ---------------------------------------------------------------------------
 // Helpers: Read JS inputs (Vec3, Quat, Arrays, Properties)
 // ---------------------------------------------------------------------------
+
+// A layer or axis given as a decimal string. Every caller of this used to spell
+// it `all_of(isdigit)` then `std::stoi`, which has two faults and the second is
+// fatal: `isdigit` on a plain `char` is undefined for any byte over 0x7F, and
+// `stoi` THROWS `std::out_of_range` for a string of digits too long to fit an
+// int — so `{ axis: '99999999999999999999' }` from a compiled app took the
+// process down rather than being refused. Returns false for anything that is
+// not a decimal integer in range, and the caller then treats the string as a
+// NAME, which is what it always meant to do.
+inline bool parseDecimalIndex(const std::string& s, int& out) {
+    if (s.empty()) return false;
+    for (const char c : s) {
+        if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+    }
+    try {
+        size_t consumed = 0;
+        const long long v = std::stoll(s, &consumed);
+        if (consumed != s.size()) return false;
+        if (v < 0 || v > std::numeric_limits<int>::max()) return false;
+        out = static_cast<int>(v);
+        return true;
+    } catch (const std::exception&) {
+        return false;  // out_of_range on a 19+ digit string
+    }
+}
 
 inline JPH::Vec3 readVec3(Value v, JPH::Vec3 def = JPH::Vec3::sZero()) {
     if (!ev::isObject(v)) return def;
@@ -402,9 +428,9 @@ inline bool readBodyOptions(Value optsVal, physics::BodyOptions& out, std::strin
     if (!ev::isUndefined(layerVal) && !ev::isNull(layerVal)) {
         if (!ev::isObject(layerVal)) {
             std::string s = ev::toUtf8(layerVal);
-            bool isNumber = !s.empty() && std::all_of(s.begin(), s.end(), ::isdigit);
-            if (isNumber) {
-                out.layer = std::stoi(s);
+            int idx = 0;
+            if (parseDecimalIndex(s, idx)) {
+                out.layer = idx;
             } else if (world) {
                 out.layer = world->layerIndex(s);
             }
@@ -512,8 +538,8 @@ inline void readQueryFilter(Value optsVal, physics::QueryFilter& out) {
                 int32_t idx = -1;
                 if (!ev::isObject(el) && !ev::isUndefined(el)) {
                     std::string s = ev::toUtf8(el);
-                    bool isNumber = !s.empty() && std::all_of(s.begin(), s.end(), ::isdigit);
-                    if (isNumber) idx = std::stoi(s);
+                    int parsed = 0;
+                    if (parseDecimalIndex(s, parsed)) idx = parsed;
                     else if (world) idx = world->layerIndex(s);
                 }
                 if (idx >= 0 && idx < 32) mask |= (1u << idx);

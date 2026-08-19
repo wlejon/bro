@@ -20,6 +20,9 @@ namespace bro::bronze_host {
 
 namespace {
 
+// ---------------------------------------------------------------------------
+// style
+// ---------------------------------------------------------------------------
 // `el.style.backgroundColor` is one property name in JS and another in CSS.
 const std::string& dashedFor(const char* camel) {
     static std::unordered_map<std::string, std::string> cache;
@@ -161,6 +164,22 @@ Value makeStyleObject(HostNodeState* st) {
     return makeHostProxy(std::move(t));
 }
 
+// What getComputedStyle() answers: the RESOLVED value of each property — used
+// widths off the layout box, lengths absolutised to px, colours serialised to
+// rgb() — rather than whatever string the author wrote. The resolution itself
+// is layout::computedProperty, shared with bro's own JS bindings, because two
+// binding layers over one engine must not disagree about what an element's
+// computed width is.
+//
+// Read-only in both directions: the web's computed CSSStyleDeclaration ignores
+// writes, and so do these accessors (no setter at all, which makes an assignment
+// a silent no-op exactly as it is there).
+//
+// Layout is flushed on every read rather than once when the object is built.
+// The object is LIVE — the web hands back a declaration that keeps tracking the
+// element — so a UI that reads a width, changes a class and reads again must
+// see the second answer, and a snapshot taken at construction would hand back
+// the first.
 Value makeComputedStyleObject(HostNodeState* st) {
     ObjectBuilder b;
     auto resolve = [st](const std::string& css) {
@@ -240,6 +259,7 @@ Value hostComputedStyleFor(Value elValue) {
 }
 
 void decorateElementStyle(ObjectBuilder& b) {
+    // ---- style / classList, both built on first read ----------------------
     b.accessor("style",
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = hostNodeStateOfValue(self_);

@@ -128,8 +128,8 @@ Value physicsCreateCharacter(Value, std::span<const Value> a) {
     if (!ev::isUndefined(layerVal) && !ev::isNull(layerVal)) {
         if (!ev::isObject(layerVal)) {
             std::string s = ev::toUtf8(layerVal);
-            bool isNumber = !s.empty() && std::all_of(s.begin(), s.end(), ::isdigit);
-            if (isNumber) copts.layer = std::stoi(s);
+            int idx = 0;
+            if (parseDecimalIndex(s, idx)) copts.layer = idx;
             else copts.layer = world->layerIndex(s);
         }
     }

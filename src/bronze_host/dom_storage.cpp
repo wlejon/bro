@@ -14,6 +14,9 @@ namespace bro::bronze_host {
 
 namespace {
 
+// ---------------------------------------------------------------------------
+// localStorage & AudioContext
+// ---------------------------------------------------------------------------
 struct StorageState {
     std::map<std::string, std::string> items;
     std::string path;
@@ -110,6 +113,11 @@ Value makeLocalStorageValue() {
     }, nullptr);
 
     // Named properties over the same map getItem reads.
+    // `localStorage.token` is how half the code on the web reads a stored
+    // value, and a Storage object is specified as exactly that: named
+    // properties over the same map getItem reads. The methods stay the
+    // authority — they are what the proxy consults first — so nothing that
+    // worked before changes shape.
     HostProxyTraps t;
     t.methods = b.get();
     t.get = [](const std::string& key, Value& out) {

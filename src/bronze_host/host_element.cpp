@@ -24,6 +24,7 @@
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace bro::bronze_host {
@@ -35,8 +36,17 @@ namespace {
 // ---------------------------------------------------------------------------
 
 struct Registry {
+    // unique_ptr so an entry's address is stable: every accessor on the wrapper
+    // captures its HostNodeState*, and the map rehashes as the tree grows.
     std::vector<std::unique_ptr<HostNodeState>> entries;
     std::unordered_map<const dom::Node*, HostNodeState*> live;
+    // Which documents we have asked to warn us. A set rather than the single
+    // bool this was: the warning is per-document, and DOMParser makes a second
+    // document reachable. With a bool, whichever document happened to own the
+    // first node this layer ever wrapped was the only one being watched — and
+    // if that was a parsed document, which never frees anything, the LIVE
+    // document was left unwatched and every wrapper it handed out could outlive
+    // its node.
     std::unordered_set<const dom::Document*> observed;
 };
 
@@ -47,6 +57,15 @@ Registry& registry() {
 
 static dom::Element* s_fullscreenElement = nullptr;
 
+// A doomed node's wrapper must stop answering BEFORE the storage goes away.
+//
+// The entry is dropped from the live map — so nothing can reach the dead
+// Element* through us again, and an element later allocated at the same
+// address gets a fresh entry rather than inheriting this one — and its
+// Persistents are released here, which is a normal call site and therefore
+// allowed to make embed calls. What is NOT done is freeing the entry: a
+// wrapper the program still holds is a handle pointing at it, and that pointer
+// has to stay valid. What it points at is now inert.
 void onNodeFreed(dom::Document*, dom::Node* node) {
     if (s_fullscreenElement == node) {
         s_fullscreenElement = nullptr;
@@ -71,6 +90,11 @@ void onNodeFreed(dom::Document*, dom::Node* node) {
     st->hasDataset = false;
 }
 
+// Takes a Node rather than an Element so text nodes, comments and fragments
+// land in the SAME map as elements. One registry is what keeps identity a
+// property of the node rather than of the kind of node: `parent.childNodes[0]
+// === textNode` has to hold for the same reason `=== element` does, and a
+// second map keyed on text nodes would be a second answer to the same question.
 HostNodeState* stateFor(dom::Node* node) {
     if (!node) return nullptr;
     Registry& r = registry();
@@ -126,6 +150,10 @@ dom::Element* siblingOf(dom::Element* el, int direction) {
 }
 
 // The state behind a receiver.
+// The state behind a receiver. Every member below reads this rather than
+// closing over the pointer: one copy of each method lives on the prototype and
+// serves every element, so the only way to know WHICH element is to ask the
+// object the call arrived on.
 HostNodeState* nodeStateOf(Value v) {
     if (!ev::isObject(v)) return nullptr;
     auto* st = static_cast<HostNodeState*>(ev::handleData(v));
@@ -168,7 +196,10 @@ void installInlineEventHandler(ObjectBuilder& b, const char* propName, const cha
                     });
                 if (handle) {
                     st->inlineHandles[type] = handle.id;
-                    st->inlineFns.emplace(type, fnP);
+                    // insert_or_assign, not emplace: emplace KEEPS the existing
+                    // value on a key collision, so any path that leaves a stale
+                    // entry behind would hand the getter the previous function.
+                    st->inlineFns.insert_or_assign(type, fnP);
                 }
             }
             return ev::undefined();
@@ -185,7 +216,26 @@ dom::Element* hostFullscreenElement() {
     return s_fullscreenElement;
 }
 
+// ---------------------------------------------------------------------------
+// The pieces other files in this layer use
+// ---------------------------------------------------------------------------
 Value hostArrayOf(size_t count, const std::function<Value(size_t)>& make) {
+    // THE ARRAY comes from parseJson, because the embed API has no createArray
+    // and createObject makes a PLAIN object — no Array.prototype, no iterator.
+    //
+    // FILLING IT goes through Array.prototype.push, because embed::setElement
+    // cannot: it is setProperty under a numeric-string key, and setProperty
+    // refuses any receiver that is not a plain object (embed_object.cpp's
+    // requirePlainObject) — an array is exactly what it refuses. push is a real
+    // builtin reached through the same generic property read compiled code
+    // uses, so this is the array's own append path rather than a poke at its
+    // storage.
+    //
+    // One call per element rather than one call with `count` arguments: a
+    // pre-built argument vector would be exactly the bug host_internal.h's GC
+    // rule warns about, since every Value in it past the first allocation is
+    // stale. `make(i)` runs with the array rooted and its result is pushed
+    // immediately.
     ev::CallResult parsed = ev::parseJson("[]");
     if (parsed.thrown) {
         LOG_ERROR("bronze host: could not allocate an array");
@@ -246,6 +296,8 @@ Value hostNodeValue(dom::Node* node) {
         default:
             return ev::null();
     }
+    // The make* call allocates, and allocation can grow the registry, so the
+    // entry is re-fetched rather than reused across it.
     if (HostNodeState* again = stateFor(node)) again->jsObj.set(v);
     return v;
 }
@@ -255,8 +307,12 @@ Value hostElementValue(dom::Element* el) {
     HostNodeState* st = stateFor(el);
     Value existing = st->jsObj.get();
     if (!ev::isUndefined(existing)) return existing;
+    // A canvas is more than an element — it owns a drawing buffer and a GL
+    // context — so dom_globals.cpp builds that one, on top of this same core.
     Value v = isCanvasTag(el->tagName()) ? makeCanvasElementValue(el)
                                          : makePlainElementValue(el);
+    // makeCanvas/makePlain allocate, and allocation can grow the registry, so
+    // the entry is re-fetched rather than reused across the call.
     if (HostNodeState* again = stateFor(el)) again->jsObj.set(v);
     return v;
 }
@@ -269,12 +325,24 @@ bool isCanvasTag(const std::string& tag) {
     return tag == "CANVAS" || tag == "canvas";
 }
 
+// Element is a real class: one prototype carrying the whole element surface,
+// with every instance born on it. Before this, an element carried its own copy
+// of all fifty-eight members — a thousand-element UI allocated fifty-eight
+// thousand function objects to say the same fifty-eight things.
 HostClass g_elementClass;
 
 Value makeNodeHandleObject(dom::Node* node) {
     return ev::makeHandle(stateFor(node), [](void*) {});
 }
 
+// Born on Element.prototype. makeNodeHandleObject stays bare: host_node.cpp
+// builds Text, Comment and DocumentFragment through it, and none of those is an
+// Element.
+//
+// Both finalizers are deliberately empty. The entry belongs to the registry
+// keyed on the dom::Node, not to the wrapper, and freeing it here would destroy
+// its Persistents from inside a finalizer — the one thing host_internal.h's GC
+// rule forbids.
 Value makeElementHandleObject(dom::Element* el) {
     return g_elementClass.make(stateFor(el), [](void*) {});
 }
@@ -289,9 +357,17 @@ Value makePlainElementValue(dom::Element* el) {
     return b.get();
 }
 
+// The only per-instance properties an element has: its identity. Everything
+// else is the same for every element and lives on the prototype.
 void decorateElementProto(ObjectBuilder& b);
 
 void installElementGlobals() {
+    // `new Element()` is illegal on the web (the [[HTMLConstructor]] rule), so
+    // the body refuses — but every element is born on this prototype, so
+    // `el instanceof Element` answers true, which is the form real library code
+    // tests. `HTMLElement` is registered as the same object: they are distinct
+    // constructors on the web, with HTMLElement extending Element, and one
+    // object answering both is closer than two names that brand nothing.
     g_elementClass.install("Element", 0, nullptr, decorateElementProto);
     g_elementClass.alias("HTMLElement");
 }
@@ -301,21 +377,47 @@ void installElementCore(ObjectBuilder& b, dom::Element* el) {
     b.set("tagName", ev::fromUtf8(el->tagName()));
     b.set("nodeName", ev::fromUtf8(el->tagName()));
 
+    // The event-target trio stays per instance, and is the only part of the
+    // element surface that does. installElementEventTarget takes an
+    // ElementSource — a std::function<dom::Element*()> with no receiver to
+    // read — and its error messages name the tag, which is per element too.
+    // Three methods an element owns instead of fifty-eight.
     installElementEventTarget(b, [st = stateFor(el)]() { return st->el; },
                                el->tagName().c_str());
 }
 
 void decorateElementProto(ObjectBuilder& b) {
-    installInlineEventHandler(b, "onclick", "click");
-    installInlineEventHandler(b, "onmousedown", "mousedown");
-    installInlineEventHandler(b, "onmouseup", "mouseup");
-    installInlineEventHandler(b, "onmousemove", "mousemove");
-    installInlineEventHandler(b, "onkeydown", "keydown");
-    installInlineEventHandler(b, "onkeyup", "keyup");
-    installInlineEventHandler(b, "oninput", "input");
-    installInlineEventHandler(b, "onchange", "change");
-    installInlineEventHandler(b, "onfocus", "focus");
-    installInlineEventHandler(b, "onblur", "blur");
+    // One per event type the ENGINE actually dispatches to an element. A name
+    // that is absent reads as `undefined` and an assignment to it goes nowhere,
+    // which is the failure a library hits silently — so the list tracks
+    // event_dispatch.cpp rather than a chosen subset of it.
+    for (const auto& [prop, type] : {
+             std::pair<const char*, const char*>{"onclick", "click"},
+             {"ondblclick", "dblclick"},
+             {"onmousedown", "mousedown"},
+             {"onmouseup", "mouseup"},
+             {"onmousemove", "mousemove"},
+             {"onmouseover", "mouseover"},
+             {"onmouseout", "mouseout"},
+             {"onmouseenter", "mouseenter"},
+             {"onmouseleave", "mouseleave"},
+             {"oncontextmenu", "contextmenu"},
+             {"onwheel", "wheel"},
+             {"onpointerdown", "pointerdown"},
+             {"onpointerup", "pointerup"},
+             {"onpointermove", "pointermove"},
+             {"onkeydown", "keydown"},
+             {"onkeyup", "keyup"},
+             {"onkeypress", "keypress"},
+             {"oninput", "input"},
+             {"onchange", "change"},
+             {"onsubmit", "submit"},
+             {"onscroll", "scroll"},
+             {"onfocus", "focus"},
+             {"onblur", "blur"},
+         }) {
+        installInlineEventHandler(b, prop, type);
+    }
 
     b.accessor("id",
                [](Value self_, std::span<const Value>) {
@@ -424,6 +526,10 @@ void decorateElementProto(ObjectBuilder& b) {
         HostNodeState* st = nodeStateOf(self_);
         if (!st || !st->el) return ev::undefined();
         for (const Value& v : a) {
+            // A string argument becomes a text node, as the web's append does.
+            // This is the shortest path from compiled code to text in the
+            // document, and without it `append("hi")` would silently do
+            // nothing.
             if (dom::Node* child = hostNodeOf(v)) {
                 hostInsertNode(st->el, child, nullptr);
             } else if (!ev::isObject(v) && !ev::isUndefined(v)) {
@@ -456,6 +562,10 @@ void decorateElementProto(ObjectBuilder& b) {
                },
                nullptr);
 
+    // A Document reached as some node's parent answers null: there is no
+    // wrapper for it here — `document` is a global built by dom_globals.cpp,
+    // not a registry entry — and null is what the web answers for
+    // parentElement at the root anyway.
     b.accessor("parentElement",
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = nodeStateOf(self_);
@@ -550,6 +660,8 @@ void decorateElementProto(ObjectBuilder& b) {
                    return ev::fromDouble(st->el ? borderBoxOf(st->el).height : 0.0);
                },
                nullptr);
+    // Document-absolute, not offset-parent-relative: what a UI positioning a
+    // popup against an anchor wants, and what bro's own bindings answer.
     b.accessor("offsetLeft",
                [](Value self_, std::span<const Value>) {
                    HostNodeState* st = nodeStateOf(self_);
@@ -578,6 +690,9 @@ void decorateElementProto(ObjectBuilder& b) {
                            static_cast<float>(ev::toDouble(argAt(a, 0))));
                    return ev::undefined();
                });
+    // bro's DOM tracks vertical scrolling only (dom::Element::scrollTop_), so
+    // the horizontal half answers 0 and swallows a write it cannot honour —
+    // the same answer the interpreted side gives, rather than a second story.
     b.accessor("scrollLeft",
                [](Value, std::span<const Value>) { return ev::fromDouble(0.0); },
                [](Value, std::span<const Value>) { return ev::undefined(); });
@@ -592,6 +707,7 @@ void decorateElementProto(ObjectBuilder& b) {
                        std::max(box.naturalHeight, box.contentRect.height));
                },
                nullptr);
+    // scrollTo(x, y) and scrollTo({top, left}) are both written by real UI code.
     b.def("scrollTo", 2, [](Value self_, std::span<const Value> a) {
         HostNodeState* st = nodeStateOf(self_);
         if (!st || !st->el) return ev::undefined();
@@ -656,6 +772,7 @@ void decorateElementProto(ObjectBuilder& b) {
     });
 
     // ---- focus & blur -----------------------------------------------------
+    // ---- focus ------------------------------------------------------------
     b.def("focus", 0, [](Value self_, std::span<const Value>) {
         HostNodeState* st = nodeStateOf(self_);
         if (st && st->el)

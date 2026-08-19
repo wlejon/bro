@@ -27,8 +27,8 @@ Off by default; nothing here is in the default build.
 | `host_dom_events.cpp` | canvas / document / window listeners, wired to the **engine's** dispatch |
 | `host_timers.cpp` | `setTimeout`/`setInterval` and the main-thread task queue |
 | `host_image.cpp` | `Image`, and the decode behind `.src` |
-| `host_xhr.cpp` | `XMLHttpRequest` (text over the app asset path; see its header) |
-| `host_file.cpp` | `Blob`, `File`, `FileReader`, and the `URL` namespace — bytes an app holds, and the object URLs that name them |
+| `host_xhr.cpp` | `XMLHttpRequest` over the app asset path and http(s); `''`/`text`/`arraybuffer`/`blob`/`json` (see its header) |
+| `host_file.cpp` | `Blob`, `File`, `FileReader`, and `URL` — bytes an app holds, and the object URLs that name them |
 | `host_abort.cpp` | `AbortController` / `AbortSignal`, and the cancellation `fetch` obeys |
 | `host_observers.cpp` | `MutationObserver`, over the DOM layer's own mutation notices; `ResizeObserver`, over a per-frame poll of the layout box |
 | `host_parser.cpp` | `DOMParser`: HTML text into a second `dom::Document`, and the lifetime policy for it |
@@ -36,9 +36,9 @@ Off by default; nothing here is in the default build.
 | `host_fetch.cpp` | `fetch()` over the engine's asset mounts, into a real bronze Promise |
 | `host_class.cpp` | `HostClass`: the ctor/prototype/handle shape every wrapper family is built from |
 | `host_proxy.cpp` | `makeHostProxy`: the property trap behind `style`, computed style, `dataset`, `localStorage` |
-| `host_audio.cpp` | Web Audio ? `AudioContext` and the node/param graph ? over broaudio |
-| `host_physics.cpp` | the `Physics` namespace, `PhysicsCharacter` and `PhysicsSoftBody`, over Jolt |
-| `host_ai.cpp` | the `AI` namespace: nav grid, navmesh, pathfinding, agents, over brogameagent |
+| `host_audio_*.cpp`, `host_audio_internal.h` | the Web Audio SURFACE ? `AudioContext` and the node/param objects ? over broaudio. `connect()` routes nothing and most node state is inaudible; see the header of `host_audio_core.cpp` for what actually reaches the engine. `_core` context + globals install, `_param` AudioParam, `_buffer` AudioBuffer + decode, `_nodes` oscillator/filter/analyser/source, `_spatial` Panner + StereoPanner, `_dsp` Delay/Compressor/WaveShaper/Convolver/Splitter/Merger |
+| `host_physics_*.cpp`, `host_physics_internal.h` | the `Physics` namespace, `PhysicsCharacter` and `PhysicsSoftBody`, over Jolt. `_core` bodies + globals, `_constraints` joints/motors/limits, `_character`, `_softbody`, `_queries` raycast/overlap |
+| `host_ai_*.cpp`, `host_ai_internal.h` | the `AI` namespace, over brogameagent. `_core` globals + aim math, `_navgrid`, `_navmesh`, `_agent` |
 | `host_net.cpp` | `bro.net` over GameNetworkingSockets, and the `WebSocket` client |
 | `gl_*.cpp`, `gl_internal.h` | the WebGL2 binding, one file per call family |
 | `web_host.globals` | the manifest of global names bronze admits; every one must be registered ? an unregistered name is `fatal()`, not a miss |
@@ -188,10 +188,17 @@ only the compiled ones see no payload.
   listener the engine reaps is not removed from this layer's
   `removeEventListener` bookkeeping, so removing it afterwards is a no-op
   rather than an error.
-- **`on<type>` properties** (`canvas.onclick = fn`) are not wired for DOM
-  elements. `addEventListener` is the whole surface here. (`Image` and
-  `XMLHttpRequest` keep their `on<type>` slots — different objects, different
-  file: `host_events.cpp`.)
+- **`on<type>` properties** (`el.onclick = fn`) ARE wired for DOM elements, on
+  `Element.prototype`, one per event type the engine dispatches — the mouse and
+  pointer families, `wheel`, `contextmenu`, the key family, `input`, `change`,
+  `submit`, `scroll`, `focus`, `blur`. Assigning replaces the previous handler,
+  assigning `null` or a non-callable clears it, and the getter answers the
+  function or `null`, as the web does. Two divergences: the handler is
+  registered as an ordinary listener, so reassigning it moves it to the END of
+  the listener order rather than keeping its original position; and `document`
+  and `window` have no `on<type>` slots at all — use `addEventListener` there.
+  (`Image` and `XMLHttpRequest` keep their own `on<type>` slots — different
+  objects, different file: `host_events.cpp`.)
 - **`click`'s `offsetX` / `offsetY` are 0.** Not this layer: bro synthesizes the
   `click` event without `applyMouseOffset`, so every listener sees 0, compiled
   and interpreted alike. `mousedown`, `mouseup`, `mousemove` and `wheel` carry
@@ -449,14 +456,23 @@ resolve in `fetch`, `XMLHttpRequest` and `Image.src`, out of the ENGINE's
 object-URL table (`util/object_url.h`), so a URL minted by compiled code
 resolves in the page's markup and vice versa.
 
-`URL` is a NAMESPACE, not a constructor: `URL.createObjectURL`,
-`URL.revokeObjectURL` and `URL.parse(href, base)` all work, and
-`new URL(href)` does not. That was forced when a host function could not carry
-a static at all; `setProperty` takes a FUNCTION receiver now, so the callable
-shape is available and simply has not been taken. It would buy little:
-`URL.parse` is the standard equivalent of the constructor and returns null
-rather than throwing. `x instanceof URL` is reachable too — see
-**Host classes** — and is the one thing conversion would actually buy.
+`URL` is a CONSTRUCTOR and carries the statics: `new URL(href, base)`,
+`URL.createObjectURL`, `URL.revokeObjectURL`, `URL.parse(href, base)` and
+`x instanceof URL` all work. It was a bare namespace until `setProperty` took a
+FUNCTION receiver — see **Host classes** — because before that a callable URL
+had nowhere to hang `createObjectURL`. `URL.parse` stays beside the constructor
+rather than behind it: it is a real 2024 addition to the web platform, and it
+answers null where the constructor throws.
+
+`url.searchParams` is a LIVE view, and the same object every read —
+`u.searchParams === u.searchParams`, as on the web. `get`, `has`, `getAll`,
+`set`, `append`, `delete` and `toString` are all there, and the mutators write
+back through to `url.search` and `url.href`. Keys and values are
+percent-encoded on the way out and decoded on the way in, so a value carrying
+`&` or `=` survives the round trip instead of re-parsing as extra pairs. The
+view holds the parse, not the URL object, so one kept past its URL
+(`const p = new URL(s).searchParams`) still reads and writes coherently rather
+than dangling. Not present: `sort`, `forEach`, and the iterator protocol.
 
 `AbortController` and `AbortSignal` are DONE — `host_abort.cpp`, checked by
 `tests/bronze_host/run_checks.sh abort`. `fetch(url, {signal})` rejects with the

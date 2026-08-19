@@ -265,8 +265,8 @@ static Value makePhysicsObject() {
         int layer = -1;
         if (!ev::isObject(a[1])) {
             std::string s = ev::toUtf8(a[1]);
-            bool isNumber = !s.empty() && std::all_of(s.begin(), s.end(), ::isdigit);
-            if (isNumber) layer = std::stoi(s);
+            int idx = 0;
+            if (parseDecimalIndex(s, idx)) layer = idx;
             else layer = world->layerIndex(s);
         }
         if (layer < 0) return ev::fromBool(false);
