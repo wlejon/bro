@@ -87,7 +87,11 @@ add_library(bro_bronze_host STATIC
     host_audio_nodes.cpp
     host_audio_spatial.cpp
     host_audio_dsp.cpp
-    host_physics.cpp
+    host_physics_core.cpp
+    host_physics_constraints.cpp
+    host_physics_character.cpp
+    host_physics_softbody.cpp
+    host_physics_queries.cpp
     host_ai.cpp
     host_net.cpp
 )

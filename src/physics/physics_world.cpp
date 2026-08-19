@@ -1930,6 +1930,18 @@ void PhysicsWorld::setConstraintEnabled(uint32_t handle, bool enabled) {
     if (it->second.ref2) it->second.ref2->SetEnabled(enabled);
 }
 
+bool PhysicsWorld::isConstraintEnabled(uint32_t handle) const {
+    auto it = constraints_.find(handle);
+    if (it == constraints_.end() || !it->second.ref) return false;
+    return it->second.ref->GetEnabled();
+}
+
+JPH::Constraint* PhysicsWorld::getConstraint(uint32_t handle) const {
+    auto it = constraints_.find(handle);
+    if (it == constraints_.end()) return nullptr;
+    return it->second.ref.GetPtr();
+}
+
 void PhysicsWorld::setWheelMotor(uint32_t handle, bool enabled, float speed, float maxTorque) {
     auto it = constraints_.find(handle);
     if (it == constraints_.end() || !it->second.ref) return;

@@ -244,7 +244,49 @@ const allTf = Physics.getAllTransforms();
 say('allTransforms.valid', allTf instanceof Float32Array && allTf.length > 0);
 
 // ---------------------------------------------------------------------------
-// 13. Cleanup
+// 13. Constraints & Joints
+// ---------------------------------------------------------------------------
+
+const cBodyA = Physics.createBody({
+    shape: 'box',
+    halfExtents: { x: 1, y: 1, z: 1 },
+    position: { x: 0, y: 10, z: 0 },
+    mass: 1.0
+});
+const cBodyB = Physics.createBody({
+    shape: 'box',
+    halfExtents: { x: 1, y: 1, z: 1 },
+    position: { x: 0, y: 5, z: 0 },
+    mass: 1.0
+});
+
+
+const constraintHandle = Physics.createConstraint({
+    type: 'distance',
+    body1: cBodyA,
+    body2: cBodyB,
+    point1: { x: 0, y: 10, z: 0 },
+    point2: { x: 0, y: 5, z: 0 },
+    minDistance: 1.0,
+    maxDistance: 6.0
+});
+say('constraint.created', constraintHandle > 0);
+say('constraint.isEnabled', Physics.isConstraintEnabled(constraintHandle));
+
+Physics.setConstraintEnabled(constraintHandle, false);
+say('constraint.disabled', Physics.isConstraintEnabled(constraintHandle) === false);
+
+Physics.setConstraintEnabled(constraintHandle, true);
+say('constraint.reEnabled', Physics.isConstraintEnabled(constraintHandle) === true);
+
+Physics.destroyConstraint(constraintHandle);
+say('constraint.destroyed', true);
+
+Physics.destroyBody(cBodyA);
+Physics.destroyBody(cBodyB);
+
+// ---------------------------------------------------------------------------
+// 14. Cleanup
 // ---------------------------------------------------------------------------
 
 Physics.destroyBody(boxTag);

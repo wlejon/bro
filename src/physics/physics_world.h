@@ -23,7 +23,7 @@
 #include <Jolt/Core/JobSystemThreadPool.h>
 
 namespace JPH { class CharacterVirtual; class CharacterVsCharacterCollisionSimple;
-                class VehicleConstraint; class Ragdoll; class RagdollSettings; }
+                class VehicleConstraint; class Ragdoll; class RagdollSettings; class Constraint; }
 
 namespace bro::physics {
 
@@ -899,6 +899,8 @@ public:
     uint32_t createConstraint(const ConstraintOptions& opts);
     void destroyConstraint(uint32_t handle);
     void setConstraintEnabled(uint32_t handle, bool enabled);
+    bool isConstraintEnabled(uint32_t handle) const;
+    JPH::Constraint* getConstraint(uint32_t handle) const;
     /// Adjust a wheel constraint's motor at runtime (no-op for non-wheel handles).
     void setWheelMotor(uint32_t handle, bool enabled, float speed, float maxTorque);
     /// Configure/steer a constraint motor at runtime. Works on hinge and
