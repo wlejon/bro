@@ -60,6 +60,7 @@ say('navgrid.pathPartial', gridPath.partial === false);
 // Line of Sight
 say('navgrid.los_blocked', AI.hasLineOfSight(2, 2, 18, 18, grid));
 say('navgrid.los_clear', AI.hasLineOfSight(2, 2, 2, 18, grid));
+say('navgrid.method_los_clear', grid.hasLineOfSight(2, 2, 2, 18));
 
 // ---------------------------------------------------------------------------
 // 3. NavMesh Baking & Queries
@@ -97,6 +98,9 @@ say('navmesh.closestPoint_x', Math.round(cp.x));
 say('navmesh.closestPoint_y', Math.round(cp.y));
 say('navmesh.closestPoint_z', Math.round(cp.z));
 
+const sp = navMesh.samplePosition({ x: 10, y: 0.5, z: 10 });
+say('navmesh.samplePosition_valid', sp !== null && Math.round(sp.x) === 10);
+
 // Random Point
 const rp = navMesh.findRandomPoint(42);
 say('navmesh.randomPoint_valid', rp !== null && rp.x >= 0 && rp.x <= 20 && rp.z >= 0 && rp.z <= 20);
@@ -127,6 +131,7 @@ const agent = AI.createAgent({
 
 say('agent.pos_x', Math.round(agent.position.x));
 say('agent.pos_z', Math.round(agent.position.z));
+say('agent.getPosition_x', typeof agent.getPosition === 'function' ? Math.round(agent.getPosition().x) : -1);
 say('agent.speed', agent.maxSpeed);
 say('agent.radius', agent.radius);
 
