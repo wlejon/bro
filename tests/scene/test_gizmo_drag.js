@@ -215,47 +215,68 @@ if (!plain) {
     // built or picked them, so they were unreachable; `hovered` could never
     // report them either.
     // =======================================================================
-    function surveyHandles(mode, camera, x0, x1, y0, y1, step) {
+    // One sweep per mode, and it records WHERE each handle answered as well as
+    // that it answered at all. Every later check that needs a point on a
+    // handle reuses these coordinates instead of hunting for its own: the
+    // scene is deterministic, so a second sweep would only rediscover them.
+    // That matters because each injected move drives a full frame, and the
+    // hunts used to cost ~46k of the test's 64k moves — fine on a GPU, two
+    // minutes of llvmpipe in CI.
+    //
+    // `key` splits one handle into several buckets when a caller needs more
+    // than one grab point on it (the rings want a left and a right sample).
+    // Returns { counts, at } keyed by handle name and by bucket respectively.
+    function surveyHandles(mode, camera, x0, x1, y0, y1, step, key) {
         const c = makeCanvas(1);
         const s = c.getContext('scene');
-        if (!s) return {};
+        if (!s) return { counts: {}, at: {} };
         s.setCamera(camera);
         flush();
         bro.gizmo.setMode(mode);
         attachTarget();
 
-        const seen = {};
+        const counts = {}, at = {};
         for (let px = x0; px <= x1; px += step) {
             for (let py = y0; py <= y1; py += step) {
                 mouseMove(px, py);
                 const h = bro.gizmo.hovered;
-                if (h && h !== 'none') seen[h] = (seen[h] || 0) + 1;
+                if (!h || h === 'none') continue;
+                counts[h] = (counts[h] || 0) + 1;
+                const k = key ? key(h, px, py) : h;
+                if (!at[k]) at[k] = [px, py];
             }
         }
-        return seen;
+        return { counts: counts, at: at };
     }
 
     // An off-axis camera so all three planes present some area to the viewer.
     const angled = { fov: 60, near: 0.1, far: 1000,
                      position: [7, 6, 9], target: [0, 0, 0], up: [0, 1, 0] };
 
-    const tHandles = surveyHandles('translate', angled, 130, 270, 80, 220, 2);
+    // The step is 3px: every handle is many pixels wide even foreshortened, so
+    // a finer grid only re-confirms the same hits at nine times the cost.
+    const tSurvey = surveyHandles('translate', angled, 130, 270, 80, 220, 3);
     for (const name of ['x', 'y', 'z', 'xy', 'yz', 'xz']) {
-        assert(tHandles[name] > 0,
+        assert(tSurvey.counts[name] > 0,
                'translate handle "' + name + '" is reachable, saw ' +
-               JSON.stringify(tHandles));
+               JSON.stringify(tSurvey.counts));
     }
 
-    const rHandles = surveyHandles('rotate', angled, 100, 300, 50, 250, 2);
+    // Bucketed by side as well as by handle, because the ring-speed check
+    // below needs two well-separated grab points on each ring.
+    const rSurvey = surveyHandles('rotate', angled, 100, 300, 50, 250, 3,
+                                  (h, px) => h + ':' + (px < 200 ? 'L' : 'R'));
     for (const name of ['x', 'y', 'z', 'view']) {
-        assert(rHandles[name] > 0,
+        assert(rSurvey.counts[name] > 0,
                'rotate handle "' + name + '" is reachable, saw ' +
-               JSON.stringify(rHandles));
+               JSON.stringify(rSurvey.counts));
     }
 
     // A plane drag must move in exactly the two axes it spans and leave the
     // third alone — that constraint is the whole point of the handle.
     function dragPlane(want) {
+        const grab = tSurvey.at[want];
+        if (!grab) return null;
         const c = makeCanvas(1);
         const s = c.getContext('scene');
         if (!s) return null;
@@ -264,15 +285,11 @@ if (!plain) {
         bro.gizmo.setMode('translate');
         const sel = attachTarget();
 
-        let gx = -1, gy = -1;
-        outer:
-        for (let px = 130; px <= 270; px += 1) {
-            for (let py = 80; py <= 220; py += 1) {
-                mouseMove(px, py);
-                if (bro.gizmo.hovered === want) { gx = px; gy = py; break outer; }
-            }
-        }
-        if (gx < 0) return null;
+        const gx = grab[0], gy = grab[1];
+        mouseMove(gx, gy);
+        assert(bro.gizmo.hovered === want,
+               'the ' + want + ' grab point from the survey still hovers it, got ' +
+               bro.gizmo.hovered);
         mouseDown(gx, gy);
         mouseMove(gx + 40, gy + 25);
         mouseUp(gx + 40, gy + 25);
@@ -386,20 +403,11 @@ if (!plain) {
     // rotation for that travel regardless of which way the tangent points.
     {
         const axes = { x: [1, 0, 0], y: [0, 1, 0], z: [0, 0, 1] };
+        // Grab points come from the rotate survey above — same camera, same
+        // deterministic scene, so re-hunting them would find the same pixels.
         const grabs = {};
-        {
-            const h = rotateHarness(angled);
-            assert(h, 'rotate harness built for the angled view');
-            for (let px = 130; px <= 270; px++) {
-                for (let py = 80; py <= 220; py++) {
-                    mouseMove(px, py);
-                    const hv = bro.gizmo.hovered;
-                    if (hv && hv !== 'view' && hv !== 'none') {
-                        const key = hv + ':' + (px < 200 ? 'L' : 'R');
-                        if (!grabs[key]) grabs[key] = [px, py];
-                    }
-                }
-            }
+        for (const key of Object.keys(rSurvey.at)) {
+            if (key.split(':')[0] !== 'view') grabs[key] = rSurvey.at[key];
         }
         const keys = Object.keys(grabs);
         assert(keys.length >= 4,
