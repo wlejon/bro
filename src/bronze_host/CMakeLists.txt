@@ -68,7 +68,29 @@ set(BRONZE_WITH_LLVM ON CACHE BOOL "Build bronze's LLVM codegen backend (the app
 # bronze's CLI, backend, and test binaries stay out of bro's default target.
 # Note bronze's own configure requires doctest (find_package REQUIRED) — the
 # configure fails there, loudly, if the toolchain cannot provide it.
-add_subdirectory("${BRONZE_DIR}" "${CMAKE_BINARY_DIR}/bronze" EXCLUDE_FROM_ALL)
+# The binary directory is bronze-build and NOT bronze, which is not cosmetic:
+# bro sends every executable to ${CMAKE_BINARY_DIR} (top-level CMakeLists.txt),
+# so the CLI wants to be the file build/bronze — and a directory of that name
+# is already there. On Windows the exe is bronze.exe and the two never meet;
+# on Linux and macOS the link fails with "cannot open output file: Is a
+# directory", pointing at ld rather than at the name clash that caused it.
+add_subdirectory("${BRONZE_DIR}" "${CMAKE_BINARY_DIR}/bronze-build" EXCLUDE_FROM_ALL)
+
+# One name for "build the compiler", on every generator. `--target bronze`
+# works under Ninja and Make and CANNOT work under Visual Studio: the targets
+# of an EXCLUDE_FROM_ALL subdirectory are left out of the .sln entirely, and
+# MSBuild then reports the honest but unhelpful "Project file does not exist:
+# bronze.vcxproj". A target declared HERE is in the solution, and naming
+# bronze as its dependency is what pulls bronze.vcxproj in with it — the same
+# mechanism that already puts bronze_runtime_shared there, via bro_bronze_host.
+#
+# Guarded because the compiler is optional: -DBRONZE_WITH_LLVM=OFF is a tree
+# that runs compiled apps without building them, and there is no `bronze`
+# target in it to depend on.
+if(TARGET bronze)
+    add_custom_target(bronze-cli COMMENT "bronze compiler")
+    add_dependencies(bronze-cli bronze)
+endif()
 
 # --- The binding library ---
 add_library(bro_bronze_host STATIC

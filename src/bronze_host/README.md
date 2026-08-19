@@ -307,7 +307,10 @@ bronze build src/bronze_host/fixtures/main_scenegraph.js     -o src/bronze_host/
 ```
 
 A tree configured with `-DBRONZE_WITH_LLVM=ON` (bro's default for a fresh cache)
-builds that compiler itself, as `build/Release/bronze.exe`. Under a multi-config
+builds that compiler itself, as `build/Release/bronze.exe` — `cmake --build
+build --config Release --target bronze-cli` (`bronze-cli`, not `bronze`: the
+Visual Studio generator leaves an `EXCLUDE_FROM_ALL` subdirectory's targets out
+of the solution). Under a multi-config
 generator the CLI cannot find the shared runtime's import library on its own —
 it searches `shared/` beside and above itself, and MSBuild puts the library one
 level deeper in `shared/<Config>/` — so pass it:

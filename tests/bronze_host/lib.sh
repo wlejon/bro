@@ -35,7 +35,11 @@ bh_find_bro_headless() {
         "$project_dir/build-release/bro-headless" \
         "$project_dir/build/bro-headless"
     do
-        [[ -x "$candidate" ]] && { echo "$candidate"; return 0; }
+        # -f as well as -x, here and in the search below: a directory carries
+        # the execute bit too. It is not hypothetical — build/bronze WAS a
+        # directory (bronze's build tree) until that tree moved to
+        # build/bronze-build, and "found it" has to mean a file.
+        [[ -f "$candidate" && -x "$candidate" ]] && { echo "$candidate"; return 0; }
     done
     return 1
 }
@@ -56,7 +60,7 @@ bh_find_bronze() {
         "$project_dir/build-release/bronze" \
         "$project_dir/build/bronze"
     do
-        [[ -x "$candidate" ]] && { echo "$candidate"; return 0; }
+        [[ -f "$candidate" && -x "$candidate" ]] && { echo "$candidate"; return 0; }
     done
     return 1
 }

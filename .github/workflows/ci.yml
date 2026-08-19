@@ -212,10 +212,11 @@ jobs:
       # bronze is added EXCLUDE_FROM_ALL (src/bronze_host/CMakeLists.txt), so
       # the default target does not build its CLI — bro links the runtime, not
       # the compiler. Name it, or the bronze_host checks find no compiler and
-      # skip.
+      # skip. bronze-cli rather than bronze: same binary, one name that every
+      # generator can reach (see the target's comment).
       - name: Build the bronze compiler
         if: matrix.bronze_llvm
-        run: cmake --build build --config Release --parallel 4 --target bronze
+        run: cmake --build build --config Release --parallel 4 --target bronze-cli
 
       # run_tests.sh enumerates the bronze_host checks alongside the JS tests
       # (tests/bronze_host/run_checks.sh --list) and compiles each check's app

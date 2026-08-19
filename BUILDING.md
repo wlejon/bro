@@ -75,8 +75,8 @@ apps whose JavaScript has been compiled ahead of time by
 configure and on in CI and the nightly.
 
 ```bash
-cmake -B build -DBRO_WITH_BRONZE=ON              # binaries that load a compiled app
-cmake --build build --config Release --target bronze   # ...and the compiler that makes one
+cmake -B build -DBRO_WITH_BRONZE=ON                       # binaries that load a compiled app
+cmake --build build --config Release --target bronze-cli # ...and the compiler that makes one
 ```
 
 bronze resolves as a standalone `../bronze` checkout first and the
@@ -86,7 +86,11 @@ build against the pin is never mistaken for a build against the tree you are
 editing. `-DBRONZE_DIR=<path>` overrides both.
 
 The `bronze` target is `EXCLUDE_FROM_ALL` — bro links bronze's *runtime*, not
-its compiler — so building the compiler means naming it, as above. It needs
+its compiler — so building the compiler means naming it, as above. Name
+`bronze-cli` and not `bronze`: it builds the same binary and is the one name
+that works under every generator, because Visual Studio leaves an
+`EXCLUDE_FROM_ALL` subdirectory's targets out of the `.sln` and answers
+`--target bronze` with "Project file does not exist". It needs
 LLVM (`-DBRONZE_WITH_LLVM`, defaulted ON for a fresh cache, autodetected from
 the usual install locations or `$LLVM_DIR`); `-DBRONZE_WITH_LLVM=OFF` gives a
 tree that runs pre-built compiled apps without being able to build new ones.

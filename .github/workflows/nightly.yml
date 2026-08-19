@@ -257,9 +257,10 @@ jobs:
 
       # bronze is added EXCLUDE_FROM_ALL (src/bronze_host/CMakeLists.txt): bro
       # links the runtime, not the compiler, so the default target never builds
-      # the CLI. The package ships it, so name it.
+      # the CLI. The package ships it, so name it — bronze-cli, the generator-
+      # independent name for it (see the target's comment).
       - name: Build the bronze compiler
-        run: cmake --build build --config Release --parallel ${{ matrix.jobs }} --target bronze
+        run: cmake --build build --config Release --parallel ${{ matrix.jobs }} --target bronze-cli
 
       # Prove the shipped binary launches on this runner and — critically — that
       # the GPU tensor backend was actually COMPILED IN. Single-config generators

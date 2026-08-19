@@ -232,7 +232,7 @@ if [[ -x "$BRONZE_EXE" ]]; then
     # unlike the executables these stay in their per-target build directories,
     # with the per-config subdir under a multi-config generator.
     bronze_lib() {
-        local mod="$1" base="$BUILD_DIR/bronze/src/$1" f
+        local mod="$1" base="$BUILD_DIR/bronze-build/src/$1" f
         for f in "$base/$CONFIG/bronze_$mod.lib" "$base/bronze_$mod.lib" \
                  "$base/$CONFIG/libbronze_$mod.a" "$base/libbronze_$mod.a"; do
             [[ -f "$f" ]] && { echo "$f"; return 0; }
@@ -243,7 +243,7 @@ if [[ -x "$BRONZE_EXE" ]]; then
         if src="$(bronze_lib "$mod")"; then
             cp "$src" "$BZ_DIR/"
         else
-            echo "warning: bronze_$mod library not found under $BUILD_DIR/bronze/src/$mod, skipping" >&2
+            echo "warning: bronze_$mod library not found under $BUILD_DIR/bronze-build/src/$mod, skipping" >&2
         fi
     done
 
