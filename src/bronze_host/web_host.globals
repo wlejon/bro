@@ -83,6 +83,13 @@ BiquadFilterNode
 AnalyserNode
 PannerNode
 StereoPannerNode
+DelayNode
+DynamicsCompressorNode
+WaveShaperNode
+ConvolverNode
+ChannelSplitterNode
+ChannelMergerNode
+PeriodicWave
 CustomEvent
 bro
 Blob

@@ -37,6 +37,13 @@ say('global.hasBiquadFilterNode', typeof BiquadFilterNode === 'function');
 say('global.hasAnalyserNode', typeof AnalyserNode === 'function');
 say('global.hasPannerNode', typeof PannerNode === 'function');
 say('global.hasStereoPannerNode', typeof StereoPannerNode === 'function');
+say('global.hasDelayNode', typeof DelayNode === 'function');
+say('global.hasDynamicsCompressorNode', typeof DynamicsCompressorNode === 'function');
+say('global.hasWaveShaperNode', typeof WaveShaperNode === 'function');
+say('global.hasConvolverNode', typeof ConvolverNode === 'function');
+say('global.hasChannelSplitterNode', typeof ChannelSplitterNode === 'function');
+say('global.hasChannelMergerNode', typeof ChannelMergerNode === 'function');
+say('global.hasPeriodicWave', typeof PeriodicWave === 'function');
 
 const ctx = new AudioContext();
 say('ctx.state', ctx.state);
@@ -158,7 +165,103 @@ src.stop(0);
 say('src.lifecycle', true);
 
 // ---------------------------------------------------------------------------
-// 8. Bus API & Effects
+// 8. PannerNode & StereoPannerNode
+// ---------------------------------------------------------------------------
+
+const panner = ctx.createPanner();
+say('panner.panningModel', panner.panningModel);
+say('panner.distanceModel', panner.distanceModel);
+say('panner.posDefault', panner.positionX.value);
+panner.positionX.value = 5.0;
+say('panner.posSet', panner.positionX.value);
+panner.connect(ctx.destination);
+say('panner.connect', true);
+
+const stereoPanner = ctx.createStereoPanner();
+say('stereoPanner.panDefault', stereoPanner.pan.value);
+stereoPanner.pan.value = 0.5;
+say('stereoPanner.panSet', stereoPanner.pan.value);
+stereoPanner.connect(ctx.destination);
+say('stereoPanner.connect', true);
+
+// ---------------------------------------------------------------------------
+// 9. DelayNode
+// ---------------------------------------------------------------------------
+
+const delay = ctx.createDelay(2.0);
+say('delay.default', delay.delayTime.value);
+delay.delayTime.value = 0.25;
+say('delay.set', delay.delayTime.value);
+delay.connect(ctx.destination);
+say('delay.connect', true);
+
+// ---------------------------------------------------------------------------
+// 10. DynamicsCompressorNode
+// ---------------------------------------------------------------------------
+
+const compressor = ctx.createDynamicsCompressor();
+say('compressor.thresholdDefault', compressor.threshold.value);
+compressor.threshold.value = -20;
+say('compressor.thresholdSet', compressor.threshold.value);
+say('compressor.kneeDefault', compressor.knee.value);
+say('compressor.ratioDefault', compressor.ratio.value);
+compressor.connect(ctx.destination);
+say('compressor.connect', true);
+
+// ---------------------------------------------------------------------------
+// 11. WaveShaperNode
+// ---------------------------------------------------------------------------
+
+const shaper = ctx.createWaveShaper();
+say('shaper.oversampleDefault', shaper.oversample);
+shaper.oversample = '4x';
+say('shaper.oversampleSet', shaper.oversample);
+const curve = new Float32Array([-1, 0, 1]);
+shaper.curve = curve;
+say('shaper.hasCurve', shaper.curve !== null);
+shaper.connect(ctx.destination);
+say('shaper.connect', true);
+
+// ---------------------------------------------------------------------------
+// 12. ConvolverNode
+// ---------------------------------------------------------------------------
+
+const convolver = ctx.createConvolver();
+say('convolver.normalizeDefault', convolver.normalize);
+convolver.normalize = false;
+say('convolver.normalizeSet', convolver.normalize);
+convolver.buffer = buffer;
+say('convolver.hasBuffer', convolver.buffer === buffer);
+convolver.connect(ctx.destination);
+say('convolver.connect', true);
+
+// ---------------------------------------------------------------------------
+// 13. ChannelSplitterNode & ChannelMergerNode
+// ---------------------------------------------------------------------------
+
+const splitter = ctx.createChannelSplitter(6);
+say('splitter.outputs', splitter.numberOfOutputs);
+splitter.connect(ctx.destination);
+say('splitter.connect', true);
+
+const merger = ctx.createChannelMerger(6);
+say('merger.inputs', merger.numberOfInputs);
+merger.connect(ctx.destination);
+say('merger.connect', true);
+
+// ---------------------------------------------------------------------------
+// 14. PeriodicWave
+// ---------------------------------------------------------------------------
+
+const real = new Float32Array([0, 1, 0.5]);
+const imag = new Float32Array([0, 0, 0]);
+const pWave = ctx.createPeriodicWave(real, imag);
+say('wave.created', pWave instanceof PeriodicWave);
+osc.setPeriodicWave(pWave);
+say('osc.setPeriodicWave', true);
+
+// ---------------------------------------------------------------------------
+// 15. Bus API & Effects
 // ---------------------------------------------------------------------------
 
 const busId = ctx.createBus();

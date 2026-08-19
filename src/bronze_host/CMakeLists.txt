@@ -81,7 +81,12 @@ add_library(bro_bronze_host STATIC
     host_proxy.cpp
     host_class.cpp
     host_video.cpp
-    host_audio.cpp
+    host_audio_core.cpp
+    host_audio_param.cpp
+    host_audio_buffer.cpp
+    host_audio_nodes.cpp
+    host_audio_spatial.cpp
+    host_audio_dsp.cpp
     host_physics.cpp
     host_ai.cpp
     host_net.cpp
