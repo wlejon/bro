@@ -2,6 +2,8 @@
 
 bro depends on fourteen sibling libraries. Each has a standalone repo at `../<name>` and a git submodule fallback under `third_party/`.
 
+A fifteenth entry, **[bronze](https://github.com/wlejon/bronze)**, follows the same two-tree rule but is not a library bro links: it is the AOT JavaScript compiler, resolved by `src/bronze_host/CMakeLists.txt` under `BRO_WITH_BRONZE=ON` (off by default). Because it is off by default, the configure that resolves it says which of the two trees it picked — a build against the pinned submodule must never be mistaken for a build against the checkout you are editing.
+
 A fifteenth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at `../broworkshop`, is **not** a library. It's the apps tree (launcher, games, tools, demos, AI). It has no CMake hook or submodule fallback; bro just runs it via `bro ../broworkshop` or `bro ../broworkshop/bro.json`. See the [Apps tree](#apps-tree) section below.
 
 | Library | Standalone repo | Submodule fallback |
@@ -20,6 +22,7 @@ A fifteenth sibling, **[broworkshop](https://github.com/wlejon/broworkshop)** at
 | **broimage** | `../broimage` | `third_party/broimage` |
 | **brosoundml** | `../brosoundml` | `third_party/brosoundml` |
 | **brovisionml** | `../brovisionml` | `third_party/brovisionml` |
+| **bronze** (compiler, opt-in) | `../bronze` | `third_party/bronze` |
 
 ## Directory Layout
 
@@ -40,7 +43,8 @@ D:/projects/
 │       ├── brodiffusion/         # submodule (CI / fallback)
 │       ├── broimage/             # submodule (CI / fallback)
 │       ├── brosoundml/           # submodule (CI / fallback)
-│       └── brovisionml/          # submodule (CI / fallback)
+│       ├── brovisionml/          # submodule (CI / fallback)
+│       └── bronze/              # submodule (CI / nightly; BRO_WITH_BRONZE only)
 ├── bromath/                      # standalone repo (preferred for dev)
 ├── qjsbind/                      # standalone repo (preferred for dev)
 ├── brokit/                       # standalone repo (preferred for dev)
@@ -55,6 +59,7 @@ D:/projects/
 ├── broimage/                     # standalone repo (preferred for dev)
 ├── brosoundml/                   # standalone repo (preferred for dev)
 ├── brovisionml/                  # standalone repo (preferred for dev)
+├── bronze/                       # standalone repo (the AOT compiler)
 └── broworkshop/                  # apps tree (launcher + games/tools/demos/ai)
 ```
 

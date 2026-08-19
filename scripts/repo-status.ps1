@@ -40,9 +40,15 @@ $BroRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $ProjectsRoot = (Resolve-Path (Join-Path $BroRoot '..')).Path
 
 # Sibling libraries: <name> => standalone at ..\<name>, submodule at third_party\<name>.
+# bronze is in this list on the same terms as the rest even though it is a
+# compiler rather than a library bro links: bro resolves ..\bronze first and
+# third_party\bronze second (src/bronze_host/CMakeLists.txt), so the standalone
+# tree being ahead of the recorded pointer means exactly what it means for the
+# others - CI and the nightly package are building an older bronze than you are.
 $Siblings = @(
     'bromath', 'qjsbind', 'brokit', 'htmlayout', 'broaudio', 'bromesh', 'broflora',
-    'brotensor', 'brogameagent', 'brolm', 'brodiffusion', 'broimage', 'brosoundml', 'brovisionml'
+    'brotensor', 'brogameagent', 'brolm', 'brodiffusion', 'broimage', 'brosoundml', 'brovisionml',
+    'bronze'
 )
 
 # Run a git command in a repo, returning trimmed stdout (errors swallowed).
@@ -190,7 +196,10 @@ foreach ($name in $Siblings) {
     $subPath = "third_party/$name"
 
     # Commit bro records for this submodule in its HEAD tree.
-    $recorded = Git-In $BroRoot rev-parse "HEAD:$subPath"
+    # --verify: a bare rev-parse echoes an unresolvable argument back on
+    # stdout, so a path that is not a recorded submodule would arrive here as
+    # the literal "HEAD:third_party/<name>" and be compared as if it were a sha.
+    $recorded = Git-In $BroRoot rev-parse --verify --quiet "HEAD:$subPath"
     if (-not $recorded) {
         Write-Host ("  {0,-14} " -f $name) -NoNewline
         Write-Host 'not a recorded submodule' -ForegroundColor DarkGray

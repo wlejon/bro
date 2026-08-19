@@ -10,6 +10,8 @@ Build desktop apps and games in **HTML/CSS/JS** with 3D, physics, audio, and on-
 
 ** this is pre-alpha **
 
+Each nightly zip also carries **[bronze](https://github.com/wlejon/bronze)** under `bronze/`, the AOT JavaScript compiler, and the binaries in the same zip load what it emits: `bronze build app.js -o myapp/app.dll --emit-shared --host-globals bronze/web_host.globals` turns an app's JavaScript into a native module that `bro myapp` runs — same folder, same binary, no interpreter in the hot path.
+
 ## What can I compare it to?
 
 Two familiar yardsticks, plus one that doesn't have a name yet:

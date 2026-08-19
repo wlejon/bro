@@ -67,6 +67,36 @@ cmake -B build -DBRO_PROFILE=minimal -DBRO_WITH_3D=ON # minimal + the 3D scene g
 > the CMake cache. Reconfigure fresh (or clear the specific `BRO_WITH_*` cache
 > entries) to re-baseline.
 
+### Compiled apps (bronze)
+
+Orthogonal to the profiles: `-DBRO_WITH_BRONZE=ON` builds the host layer for
+apps whose JavaScript has been compiled ahead of time by
+[bronze](https://github.com/wlejon/bronze). It is **off by default** in a local
+configure and on in CI and the nightly.
+
+```bash
+cmake -B build -DBRO_WITH_BRONZE=ON              # binaries that load a compiled app
+cmake --build build --config Release --target bronze   # ...and the compiler that makes one
+```
+
+bronze resolves as a standalone `../bronze` checkout first and the
+`third_party/bronze` submodule second; the configure line says which of the two
+it took (`bronze: standalone tree (...)` / `bronze: submodule tree (...)`), so a
+build against the pin is never mistaken for a build against the tree you are
+editing. `-DBRONZE_DIR=<path>` overrides both.
+
+The `bronze` target is `EXCLUDE_FROM_ALL` — bro links bronze's *runtime*, not
+its compiler — so building the compiler means naming it, as above. It needs
+LLVM (`-DBRONZE_WITH_LLVM`, defaulted ON for a fresh cache, autodetected from
+the usual install locations or `$LLVM_DIR`); `-DBRONZE_WITH_LLVM=OFF` gives a
+tree that runs pre-built compiled apps without being able to build new ones.
+`tests/bronze_host/run_checks.sh` skips rather than fails in that case.
+
+A compiled module carries the ABI fingerprint of the bronze that emitted it and
+the host refuses any module whose fingerprint is not its own, so rebuilding
+bronze invalidates every module already built against it. `src/bronze_host/README.md`
+is the reference.
+
 ## Prerequisites
 
 Dependency versions are **pinned** by the `vcpkg.json` manifest at the repo
@@ -121,7 +151,8 @@ git submodule update --init --recursive
 
 Sibling libraries (`brokit`, `htmlayout`, `broaudio`, `bromesh`, `qjsbind`,
 `brogameagent`, …) are also picked up from standalone checkouts at `../<name>`
-if present. See [docs/multi-repo-workflow.md](docs/multi-repo-workflow.md).
+if present — as is `bronze`, under `-DBRO_WITH_BRONZE=ON`. See
+[docs/multi-repo-workflow.md](docs/multi-repo-workflow.md).
 
 ## Skia
 

@@ -43,9 +43,15 @@ for arg in "$@"; do
 done
 
 # Sibling libraries: <name> => standalone at ../<name>, submodule at third_party/<name>.
+# bronze is in this list on the same terms as the rest even though it is a
+# compiler rather than a library bro links: bro resolves ../bronze first and
+# third_party/bronze second (src/bronze_host/CMakeLists.txt), so the standalone
+# tree being ahead of the recorded pointer means exactly what it means for the
+# others — CI and the nightly package are building an older bronze than you are.
 SIBLINGS=(
     bromath qjsbind brokit htmlayout broaudio bromesh broflora
     brotensor brogameagent brolm brodiffusion broimage brosoundml brovisionml
+    bronze
 )
 
 # ANSI colors (disabled when not a tty).
@@ -166,8 +172,11 @@ for name in "${SIBLINGS[@]}"; do
     standalone="$PROJECTS_ROOT/$name"
     sub_path="third_party/$name"
 
-    # Commit bro records for this submodule in its HEAD tree.
-    recorded="$(git -C "$BRO_ROOT" rev-parse "HEAD:$sub_path" 2>/dev/null || true)"
+    # Commit bro records for this submodule in its HEAD tree. --verify, because
+    # a bare rev-parse echoes an argument it could not resolve straight back at
+    # you: a path that is not a recorded submodule would come out as the literal
+    # "HEAD:third_party/<name>" and be compared as though it were a sha.
+    recorded="$(git -C "$BRO_ROOT" rev-parse --verify --quiet "HEAD:$sub_path" 2>/dev/null || true)"
     if [[ -z "$recorded" ]]; then
         printf '  %-14s %snot a recorded submodule%s\n' "$name" "$DIM" "$N"
         continue

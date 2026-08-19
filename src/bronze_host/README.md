@@ -280,11 +280,17 @@ write `const slice = blob.slice`.
 ## Configure
 
 ```bash
-cmake -B build -DBRO_WITH_BRONZE=ON            # needs ../bronze sibling checkout
+cmake -B build -DBRO_WITH_BRONZE=ON            # ../bronze, else third_party/bronze
 ```
 
-Resolves bronze at `../bronze` (`-DBRONZE_DIR=<path>` overrides; a missing
-checkout is a configure error — no submodule fallback). bronze's own configure
+Resolves bronze at `../bronze`, falling back to the `third_party/bronze`
+submodule (`-DBRONZE_DIR=<path>` overrides both; with neither present it is a
+configure error naming the path it looked at). The configure line says which
+tree it took — `bronze: standalone tree (...)` or `bronze: submodule tree
+(...)` — because the whole hazard of having a fallback is building one while
+editing the other. CI and the nightly build the submodule, so the pointer is
+what they ship; `scripts/repo-status.sh --sync` bumps it to your standalone
+HEAD the same way it does for every other sibling. bronze's own configure
 requires doctest, so the toolchain must provide it (bronze auto-detects a vcpkg
 root when bro's configure didn't set one).
 

@@ -2,21 +2,38 @@
 # (src/CMakeLists.txt gates the add_subdirectory), so nothing here can touch
 # the default build.
 
-# --- Resolve the bronze compiler as a sibling working tree ---
+# --- Resolve the bronze compiler: sibling working tree, else submodule ---
 # Same resolution as the bro-* siblings (third_party/CMakeLists.txt's
-# bro_default_sibling_dir — defined before src/ is processed, function scope
-# is global), but with NO submodule fallback: bronze is a peer project, not a
-# vendored dependency, and a silent fallback would build a tree that is not
-# the one being developed. A missing checkout is a configure error naming the
-# path it looked at.
+# bro_default_sibling_dir — defined before src/ is processed, function scope is
+# global): a standalone ../bronze wins, and third_party/bronze is the fallback.
+#
+# The fallback used to be absent, deliberately, on the grounds that bronze is a
+# peer project rather than a vendored dependency and that quietly building some
+# other tree is worse than failing. Both halves of that are still true; what
+# changed is that CI, the nightly package and a fresh clone all need a bronze
+# that arrives with the repo at a pinned commit, and a pin is exactly what a
+# submodule is. So the fallback exists now and the objection is answered by
+# making it LOUD instead: this always reports which of the two trees it picked,
+# so a build against the submodule can never be mistaken for a build against
+# the checkout you are editing.
 bro_default_sibling_dir(bronze _bronze_default)
+if(NOT EXISTS "${_bronze_default}/CMakeLists.txt")
+    set(_bronze_default "${bro_SOURCE_DIR}/third_party/bronze")
+endif()
 set(BRONZE_DIR "${_bronze_default}" CACHE PATH "bronze AOT compiler source tree")
 if(NOT EXISTS "${BRONZE_DIR}/CMakeLists.txt")
     message(FATAL_ERROR
         "BRO_WITH_BRONZE=ON needs a bronze checkout, and none was found at\n"
         "    ${BRONZE_DIR}\n"
-        "Clone it as a sibling of bro (../bronze) or pass -DBRONZE_DIR=<path>. "
-        "There is no submodule fallback, deliberately.")
+        "Initialize the submodule (git submodule update --init third_party/bronze), "
+        "clone it as a sibling of bro (../bronze), or pass -DBRONZE_DIR=<path>.")
+endif()
+get_filename_component(_bronze_submodule "${bro_SOURCE_DIR}/third_party/bronze" ABSOLUTE)
+get_filename_component(_bronze_chosen "${BRONZE_DIR}" ABSOLUTE)
+if(_bronze_chosen STREQUAL _bronze_submodule)
+    message(STATUS "bronze: submodule tree (${BRONZE_DIR})")
+else()
+    message(STATUS "bronze: standalone tree (${BRONZE_DIR})")
 endif()
 
 # bronze builds its runtime as a shared library only when asked, and its own
@@ -123,6 +140,22 @@ function(bro_bronze_stage_runtime target)
                 $<TARGET_FILE:bronze_runtime_shared> $<TARGET_FILE_DIR:${target}>
         COMMENT "Staging bronze's shared runtime beside ${target}"
         VERBATIM)
+    # ELF and Mach-O need to be TOLD that "beside the executable" is a place to
+    # look; only the PE loader searches there by itself. Without this the copy
+    # above is enough in the build tree (CMake adds the library's build
+    # directory to the rpath) and useless the moment the tree is packaged and
+    # moved to another machine — which is precisely what the nightly zip is.
+    # APPEND to both rpath properties rather than setting one: the build-tree
+    # rpath CMake computes stays, and the relative entry rides along with it.
+    if(NOT WIN32)
+        if(APPLE)
+            set(_bronze_rpath "@loader_path")
+        else()
+            set(_bronze_rpath "$ORIGIN")
+        endif()
+        set_property(TARGET ${target} APPEND PROPERTY BUILD_RPATH "${_bronze_rpath}")
+        set_property(TARGET ${target} APPEND PROPERTY INSTALL_RPATH "${_bronze_rpath}")
+    endif()
 endfunction()
 # broimage is named explicitly rather than inherited: host_image.cpp includes
 # broimage/decode.h directly, and a dependency that only works because someone

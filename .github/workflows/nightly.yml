@@ -10,6 +10,15 @@ name: Nightly
 # Friendliness: the CUDA siblings link cudart_static, so one binary launches on
 # any machine — it uses an NVIDIA GPU when the driver is present and falls back
 # to CPU otherwise. macOS uses Metal (always present). Nothing extra to install.
+#
+# The zip carries BOTH halves of the compiled-app story: binaries built with
+# BRO_WITH_BRONZE=ON, which load an app directory's app.dll/.so/.dylib, and the
+# bronze compiler under bronze/, which produces one. They are built from the
+# same third_party/bronze checkout in the same job on purpose — a compiled
+# module carries the ABI fingerprint of the bronze that emitted it and the host
+# refuses to load a module whose fingerprint is not its own, so a compiler and
+# a host from two different bronze commits would ship as a pair that cannot
+# work together. One checkout, one fingerprint, both halves.
 
 on:
   schedule:
@@ -35,6 +44,9 @@ env:
   # writes thrown away). This is the one switch that makes nightly-to-nightly
   # caching actually work. The sccache-action exports the cache service token.
   SCCACHE_GHA_ENABLED: "true"
+  # Which llvm-prebuilt-<ver> release from the bronze repo the bronze compiler
+  # is built against; see the same pin in ci.yml.
+  LLVM_VERSION: "22.1.8"
 
 jobs:
   build:
@@ -52,13 +64,13 @@ jobs:
         include:
           # jobs: bounded -j so a heavy full-profile TU set doesn't OOM the runner.
           # macOS-14 has ~7 GB, so 3; the 16 GB Linux/Windows runners take 4.
-          - { name: linux,   os: ubuntu-24.04, cuda: true,  triplet: x64-linux,   jobs: 4 }
-          - { name: windows, os: windows-2022, cuda: true,  triplet: x64-windows, jobs: 4 }
+          - { name: linux,   os: ubuntu-24.04, cuda: true,  triplet: x64-linux,   jobs: 4, llvm: linux-x64 }
+          - { name: windows, os: windows-2022, cuda: true,  triplet: x64-windows, jobs: 4, llvm: windows-x64 }
           # macos-15: brotensor's Metal offset path calls MPSNDArray
           # -initWithBuffer:offset:descriptor:, which is a macOS-15-only MPS
           # selector — the macos-14 runner's SDK doesn't declare it and the
           # build fails to compile. macos-15 ships the SDK that has it.
-          - { name: macos,   os: macos-15,     cuda: false, triplet: arm64-osx,   jobs: 3 }
+          - { name: macos,   os: macos-15,     cuda: false, triplet: arm64-osx,   jobs: 3, llvm: macos-arm64 }
     steps:
       # The AI-tower + flora submodules use git@github.com: URLs. Rewrite them
       # to HTTPS *before* checkout so the default GITHUB_TOKEN can fetch them
@@ -67,6 +79,8 @@ jobs:
       - name: Rewrite SSH submodule URLs to HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
 
+      # submodules: recursive also brings third_party/bronze, at the commit this
+      # bro records — the compiler shipped in the zip is that pinned one.
       - uses: actions/checkout@v7
         with:
           submodules: recursive
@@ -107,6 +121,38 @@ jobs:
           # its full install already works, so leave it on the default ('[]' =
           # full) there.
           sub-packages: ${{ runner.os == 'Linux' && '["nvcc", "cudart-dev"]' || '[]' }}
+
+      # The LLVM the bronze codegen backend links against — the compiler this
+      # nightly ships cannot be built without it. Cached extracted; on a miss
+      # it downloads from the bronze repo's llvm-prebuilt-<ver> release, which
+      # is a different repo from this one, so plain curl rather than `gh`:
+      # GITHUB_TOKEN is scoped here and bronze is public.
+      - name: LLVM prebuilt cache
+        id: llvm-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/llvm-prebuilt
+          key: llvm-${{ env.LLVM_VERSION }}-${{ matrix.llvm }}
+
+      - name: Fetch LLVM prebuilt
+        if: steps.llvm-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/llvm-prebuilt"
+          TARBALL="bronze-llvm-${LLVM_VERSION}-${{ matrix.llvm }}.tar.gz"
+          # cd first: $RUNNER_TEMP is a D:\... path on Windows, and GNU tar reads
+          # the colon in an -f argument as a remote-host separator.
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o "$TARBALL" \
+            "https://github.com/wlejon/bronze/releases/download/llvm-prebuilt-${LLVM_VERSION}/$TARBALL"
+          tar -xzf "$TARBALL" -C llvm-prebuilt
+
+      # bronze's configure takes LLVM_DIR from the environment when it is set
+      # and only autodetects otherwise, and find_package(LLVM CONFIG) reads the
+      # same name — so this one variable is the whole handoff.
+      - name: Point LLVM_DIR at the prebuilt
+        shell: bash
+        run: echo "LLVM_DIR=$RUNNER_TEMP/llvm-prebuilt/llvm/lib/cmake/llvm" >> "$GITHUB_ENV"
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -197,6 +243,8 @@ jobs:
           cmake -B build \
             -DBRO_PROFILE=full \
             -DBROGAMEAGENT_WITH_NAVMESH=ON \
+            -DBRO_WITH_BRONZE=ON \
+            -DBRONZE_WITH_LLVM=ON \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
@@ -206,6 +254,12 @@ jobs:
 
       - name: Build
         run: cmake --build build --config Release --parallel ${{ matrix.jobs }}
+
+      # bronze is added EXCLUDE_FROM_ALL (src/bronze_host/CMakeLists.txt): bro
+      # links the runtime, not the compiler, so the default target never builds
+      # the CLI. The package ships it, so name it.
+      - name: Build the bronze compiler
+        run: cmake --build build --config Release --parallel ${{ matrix.jobs }} --target bronze
 
       # Prove the shipped binary launches on this runner and — critically — that
       # the GPU tensor backend was actually COMPILED IN. Single-config generators
@@ -256,6 +310,45 @@ jobs:
             scripts/package-release.sh --version "$VERSION" --build-dir build
           fi
 
+      # Prove the two halves in the zip fit each other, from the packaged tree
+      # and nowhere else: compile a tiny app with the SHIPPED compiler,
+      # resolving the runtime libraries beside it, then load the module it
+      # emitted with the SHIPPED bro-headless. This is the check that catches
+      # an ABI-fingerprint mismatch between compiler and host, a package
+      # missing web_host.globals, and (on Linux/macOS) a shared runtime the
+      # binaries cannot find once the tree has moved off the build machine.
+      # It runs before signing so a bad package is never signed.
+      - name: Smoke test (packaged bronze compiler + host)
+        shell: bash
+        run: |
+          d=$(ls -d dist/bro-${VERSION}-* | head -1)
+          PKG="$(pwd)/$d"
+          if [ "$RUNNER_OS" = "Windows" ]; then EXE=".exe"; MOD=".dll";
+          elif [ "$RUNNER_OS" = "macOS" ]; then EXE=""; MOD=".dylib";
+          else EXE=""; MOD=".so"; fi
+          mkdir -p "$PKG/smokeapp"
+          echo '<!doctype html><html><body></body></html>' > "$PKG/smokeapp/index.html"
+          cat > "$PKG/smokeapp/main.js" <<'JS'
+          const c = document.createElement('canvas');
+          c.width = 64; c.height = 64;
+          document.body.appendChild(c);
+          console.log("APP ok=" + (c.width * c.height));
+          JS
+          # From the package directory, the way a user would.
+          cd "$PKG"
+          ./bronze/bronze$EXE build smokeapp/main.js -o "smokeapp/app$MOD" \
+            --emit-shared --host-globals bronze/web_host.globals
+          [ -f "smokeapp/app$MOD" ]
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            OUT="$(xvfb-run -a ./bro-headless smokeapp -e 'advanceTime(64)' || true)"
+          else
+            OUT="$(./bro-headless smokeapp -e 'advanceTime(64)' || true)"
+          fi
+          echo "$OUT"
+          echo "$OUT" | grep -q 'APP ok=4096'
+          # Leave nothing behind: the zip is cut from this directory.
+          rm -rf "$PKG/smokeapp"
+
       # --- Windows code signing ---------------------------------------------
       # Signs the packaged tree before it is zipped, so what users download is
       # what was signed. Authenticode covers PE files only; the Linux and macOS
@@ -301,6 +394,12 @@ jobs:
           # The three executables plus the vcpkg DLLs loaded into our process.
           # Basic SKU allows 5,000 signatures/month; a nightly uses ~20.
           files-folder-filter: exe,dll
+          # Recurse, or bronze/bronze.exe — a compiler users run, and the one
+          # binary here most likely to trip SmartScreen — ships unsigned while
+          # everything beside it is signed. Depth 2 reaches bronze/ without
+          # walking all of system/.
+          files-folder-recurse: true
+          files-folder-depth: 2
           file-digest: SHA256
           timestamp-rfc3161: http://timestamp.acs.microsoft.com
           timestamp-digest: SHA256
@@ -313,7 +412,12 @@ jobs:
         shell: pwsh
         run: |
           $bad = @()
-          foreach ($exe in @('bro.exe','bro-headless.exe','bro-server.exe')) {
+          # bronze\bronze.exe and the shared runtime are in this list because
+          # they are as much a part of what a user runs as bro.exe is, and an
+          # unsigned binary inside a signed package is the one a machine
+          # blocks.
+          foreach ($exe in @('bro.exe','bro-headless.exe','bro-server.exe',
+                             'bronze_runtime_shared.dll','bronze\bronze.exe')) {
             $p = Join-Path $env:PKG_DIR $exe
             if (-not (Test-Path $p)) { Write-Host "MISSING $exe"; $bad += $exe; continue }
             $sig = Get-AuthenticodeSignature $p
@@ -371,7 +475,9 @@ jobs:
           gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
           NOTES="Automated nightly build from \`${GITHUB_SHA::7}\` on $(date -u +%Y-%m-%d).
 
-          Single self-contained binary per platform — uses your NVIDIA GPU when present, falls back to CPU otherwise (macOS uses Metal). bro is pre-alpha; nightly is the current release channel."
+          Single self-contained binary per platform — uses your NVIDIA GPU when present, falls back to CPU otherwise (macOS uses Metal). bro is pre-alpha; nightly is the current release channel.
+
+          Each zip also carries \`bronze/\`, the AOT JavaScript compiler, and the binaries here are built to load what it emits: \`bronze build app.js -o myapp/app.dll --emit-shared --host-globals bronze/web_host.globals\` turns an app's JavaScript into a native module that \`bro myapp\` runs with no flag and no separate runtime. Compiler and host come from the same bronze commit, which is what lets them load each other. A system linker is required for compiling (Windows: MSVC's \`link.exe\`; Linux/macOS: \`clang++\` or \`g++\`)."
           gh release create nightly \
             --target "$GITHUB_SHA" \
             --title "Nightly ($(date -u +%Y-%m-%d))" \

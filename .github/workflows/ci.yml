@@ -3,6 +3,16 @@ name: CI
 # Build check for the default (app) profile on every push/PR: the full renderer
 # + net/video/steam, no AI tower/CUDA so it stays fast. This is the signal
 # behind the "CI" badge. The heavier full+CUDA build runs in nightly.yml.
+#
+# The bronze host layer (src/bronze_host, 17K lines) is built on all three
+# platforms — it is off by default in a local configure, so without this it
+# would compile nowhere until someone noticed. Only Linux also builds the
+# bronze COMPILER (BRONZE_WITH_LLVM=ON, against the prebuilt LLVM hosted on the
+# bronze repo): Linux is the job that runs the test suite, and the twenty-two
+# tests/bronze_host checks need a compiler to produce their subject — without
+# one they report SKIP forever, which is the failure mode this exists to avoid.
+# The other two get the host layer compiled and linked, which is what breaks
+# there. Nightly builds the compiler everywhere, because it ships it.
 
 on:
   push:
@@ -26,6 +36,12 @@ env:
   # Without this sccache silently falls back to per-runner LOCAL DISK, which is
   # wiped between runs — 0% hits, every object recompiled (measured 0/1220).
   SCCACHE_GHA_ENABLED: "true"
+  # Which llvm-prebuilt-<ver> release from the bronze repo to build the bronze
+  # compiler against. Keep in step with LLVM_VERSION in bronze's own ci.yml:
+  # the tarball is what that repo publishes and tests itself against, and a
+  # version it has retired is a version nothing guarantees still builds.
+  # vcpkg would build LLVM from source instead — hours, versus about a minute.
+  LLVM_VERSION: "22.1.8"
 
 jobs:
   build:
@@ -35,16 +51,37 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   test: true }
-          - { name: windows, os: windows-2022, triplet: x64-windows,   test: false }
-          - { name: macos,   os: macos-14,     triplet: arm64-osx,   test: false }
+          # bronze_llvm: build the bronze compiler here, not only the host
+          # layer. llvm: which prebuilt tarball that needs (unused when off).
+          - { name: linux,   os: ubuntu-24.04, triplet: x64-linux,   test: true,  bronze_llvm: true,  llvm: linux-x64 }
+          - { name: windows, os: windows-2022, triplet: x64-windows, test: false, bronze_llvm: false, llvm: windows-x64 }
+          - { name: macos,   os: macos-14,     triplet: arm64-osx,   test: false, bronze_llvm: false, llvm: macos-arm64 }
     steps:
       - name: Rewrite SSH submodule URLs to HTTPS
         run: git config --global url."https://github.com/".insteadOf "git@github.com:"
 
+      # submodules: recursive brings third_party/bronze along with the rest, at
+      # the commit this bro records — so the bronze built here is a pinned one
+      # that moves when someone bumps the pointer, never whatever bronze main
+      # happens to be this morning.
       - uses: actions/checkout@v7
         with:
           submodules: recursive
+
+      # The bronze_host checks compile fixtures that import three.js and pixi.js
+      # OUT OF the bronze tree, by sibling-relative path
+      # (`../../../../bronze/tests/oracle/threejs/three.module.js`, and
+      # node_modules shims whose "main" points the same way) — the layout every
+      # developer has, with bronze checked out beside bro. A runner has the same
+      # tree at third_party/bronze and no sibling, so give it the sibling name.
+      # A symlink, not a copy: one pinned tree under both names, which also
+      # means the configure resolves it as the standalone checkout and the
+      # checks run in exactly the layout they were written for. (Windows and
+      # macOS get no link and so exercise the submodule branch of that
+      # resolution instead.)
+      - name: Link the bronze submodule as the sibling checkout
+        if: matrix.test
+        run: ln -s "$PWD/third_party/bronze" "$PWD/../bronze"
 
       # SDL3 builds from third_party/SDL. Linux also gets xvfb + mesa so the
       # headless test suite can run its GPU (GL) path against llvmpipe software
@@ -63,6 +100,41 @@ jobs:
       - name: Ninja (macOS)
         if: runner.os == 'macOS'
         run: brew install ninja
+
+      # The LLVM the bronze codegen backend links against, cached extracted; on
+      # a miss it downloads from the bronze repo's llvm-prebuilt-<ver> release.
+      # Keyed by version alone — a release's assets are immutable.
+      - name: LLVM prebuilt cache
+        if: matrix.bronze_llvm
+        id: llvm-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/llvm-prebuilt
+          key: llvm-${{ env.LLVM_VERSION }}-${{ matrix.llvm }}
+
+      # curl, not `gh release download`: this asset lives in a DIFFERENT repo
+      # (wlejon/bronze), and GITHUB_TOKEN is scoped to this one. bronze is
+      # public, so its release assets need no credential at all.
+      - name: Fetch LLVM prebuilt
+        if: matrix.bronze_llvm && steps.llvm-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/llvm-prebuilt"
+          TARBALL="bronze-llvm-${LLVM_VERSION}-${{ matrix.llvm }}.tar.gz"
+          # cd first: $RUNNER_TEMP is a D:\... path on Windows, and GNU tar reads
+          # the colon in an -f argument as a remote-host separator.
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o "$TARBALL" \
+            "https://github.com/wlejon/bronze/releases/download/llvm-prebuilt-${LLVM_VERSION}/$TARBALL"
+          tar -xzf "$TARBALL" -C llvm-prebuilt
+
+      # bronze's configure takes LLVM_DIR from the environment when it is set
+      # and only autodetects otherwise, and find_package(LLVM CONFIG) reads the
+      # same name — so this one variable is the whole handoff.
+      - name: Point LLVM_DIR at the prebuilt
+        if: matrix.bronze_llvm
+        shell: bash
+        run: echo "LLVM_DIR=$RUNNER_TEMP/llvm-prebuilt/llvm/lib/cmake/llvm" >> "$GITHUB_ENV"
 
       - name: sccache
         uses: mozilla-actions/sccache-action@v0.0.11
@@ -124,6 +196,8 @@ jobs:
           cmake -B build \
             -DBRO_PROFILE=app \
             -DBROGAMEAGENT_WITH_NAVMESH=ON \
+            -DBRO_WITH_BRONZE=ON \
+            -DBRONZE_WITH_LLVM=${{ matrix.bronze_llvm && 'ON' || 'OFF' }} \
             -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }} \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_C_COMPILER_LAUNCHER=sccache \
@@ -135,6 +209,18 @@ jobs:
         # the runner (exit 143). app profile has no AI tower, so 4 is safe on 16 GB.
         run: cmake --build build --config Release --parallel 4
 
+      # bronze is added EXCLUDE_FROM_ALL (src/bronze_host/CMakeLists.txt), so
+      # the default target does not build its CLI — bro links the runtime, not
+      # the compiler. Name it, or the bronze_host checks find no compiler and
+      # skip.
+      - name: Build the bronze compiler
+        if: matrix.bronze_llvm
+        run: cmake --build build --config Release --parallel 4 --target bronze
+
+      # run_tests.sh enumerates the bronze_host checks alongside the JS tests
+      # (tests/bronze_host/run_checks.sh --list) and compiles each check's app
+      # module with the compiler built above. They are the only coverage that
+      # layer has, so they run here in full rather than being deferred.
       - name: Test (headless, GPU path under Xvfb)
         if: matrix.test
         shell: bash
